@@ -1115,12 +1115,14 @@ pub(crate) fn create_swap_chain(
     if let Some(ctx) = gl_ctx.as_mut() {
         // Taille demandée, ou 0 = zone client de la fenêtre (règle DXGI).
         // Le tampon arrière était toujours créé en 1280x720 (#509).
-        let client = crate::dlls::gui::window_rect(hwnd).map(|r| {
-            (
-                (r.right - r.left).max(0) as u32,
-                (r.bottom - r.top).max(0) as u32,
-            )
-        });
+        let client = crate::dlls::gui::window_rect(hwnd)
+            .or_else(|| crate::dlls::gui::foreign_client_rect(hwnd))
+            .map(|r| {
+                (
+                    (r.right - r.left).max(0) as u32,
+                    (r.bottom - r.top).max(0) as u32,
+                )
+            });
         let pick = |asked: u32, window: Option<u32>| match asked {
             0 => window.filter(|&v| v > 0).unwrap_or(0),
             v => v.min(MAX_BACKBUFFER_DIM),

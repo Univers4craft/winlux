@@ -1011,6 +1011,12 @@ pub struct DcState {
     /// DC de l'écran entier (`GetDC(NULL)`), par opposition à un DC
     /// mémoire, lui aussi sans fenêtre.
     pub screen: bool,
+    /// Origines de fenêtre et de viewport (SetWindowOrgEx,
+    /// SetViewportOrgEx), en MM_TEXT : point logique p → p − fenêtre +
+    /// viewport. La VCL de Delphi s'en sert pour dessiner ses libellés
+    /// dans le DC du parent (#1232).
+    pub window_org: (i32, i32),
+    pub viewport_org: (i32, i32),
 }
 
 /// Pixels d'une DIB section : tampon à nous, ou vue d'une section
@@ -1157,6 +1163,8 @@ pub fn create_dc(hwnd: usize) -> usize {
             stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
             text_align: 0,
             screen: false,
+            window_org: (0, 0),
+            viewport_org: (0, 0),
         },
     );
     hdc
@@ -2329,6 +2337,145 @@ pub fn object_pen_width(handle: usize) -> u16 {
     }
 }
 
+fn dc_state_offset(d: &DcState) -> (i32, i32) {
+    (
+        d.viewport_org.0 - d.window_org.0,
+        d.viewport_org.1 - d.window_org.1,
+    )
+}
+
+/// Décalage logique → périphérique du DC (origines de viewport et de
+/// fenêtre, MM_TEXT).
+pub fn dc_offset(hdc: usize) -> (i32, i32) {
+    lock(dcs()).get(&hdc).map(dc_state_offset).unwrap_or((0, 0))
+}
+
+/// Origines (fenêtre, viewport) du DC.
+pub fn dc_origins(hdc: usize) -> ((i32, i32), (i32, i32)) {
+    lock(dcs())
+        .get(&hdc)
+        .map(|d| (d.window_org, d.viewport_org))
+        .unwrap_or(((0, 0), (0, 0)))
+}
+
+/// Pose l'origine de fenêtre (`viewport` faux) ou de viewport ; rend
+/// l'ancienne, ou `None` si le DC n'existe pas.
+pub fn set_dc_origin(hdc: usize, viewport: bool, x: i32, y: i32) -> Option<(i32, i32)> {
+    let mut m = lock(dcs());
+    let d = m.get_mut(&hdc)?;
+    let slot = if viewport {
+        &mut d.viewport_org
+    } else {
+        &mut d.window_org
+    };
+    Some(std::mem::replace(slot, (x, y)))
+}
+
+/// Rectangle logique → périphérique.
+pub fn rect_to_device(hdc: usize, r: Rect) -> Rect {
+    let (dx, dy) = dc_offset(hdc);
+    offset_rect(r, dx, dy)
+}
+
+fn offset_rect(r: Rect, dx: i32, dy: i32) -> Rect {
+    Rect {
+        left: r.left + dx,
+        top: r.top + dy,
+        right: r.right + dx,
+        bottom: r.bottom + dy,
+    }
+}
+
+/// Commande de dessin passée des coordonnées logiques du DC à ses
+/// coordonnées de périphérique. La source d'une copie reste telle quelle.
+fn translate_cmd(cmd: DrawCmd, (dx, dy): (i32, i32)) -> DrawCmd {
+    if dx == 0 && dy == 0 {
+        return cmd;
+    }
+    let o = |r: Rect| offset_rect(r, dx, dy);
+    match cmd {
+        DrawCmd::FillRect { rect, color } => DrawCmd::FillRect {
+            rect: o(rect),
+            color,
+        },
+        DrawCmd::FrameRect { rect, color, width } => DrawCmd::FrameRect {
+            rect: o(rect),
+            color,
+            width,
+        },
+        DrawCmd::Text {
+            x,
+            y,
+            text,
+            color,
+            bk,
+            font,
+        } => DrawCmd::Text {
+            x: x + dx,
+            y: y + dy,
+            text,
+            color,
+            bk,
+            font,
+        },
+        DrawCmd::Ellipse { rect, color } => DrawCmd::Ellipse {
+            rect: o(rect),
+            color,
+        },
+        DrawCmd::PatternRect { rect, color, rop } => DrawCmd::PatternRect {
+            rect: o(rect),
+            color,
+            rop,
+        },
+        DrawCmd::Blit {
+            source_hwnd,
+            source,
+            destination,
+            stretch,
+            smooth,
+            rop,
+        } => DrawCmd::Blit {
+            source_hwnd,
+            source,
+            destination: o(destination),
+            stretch,
+            smooth,
+            rop,
+        },
+        DrawCmd::Bitmap { rect, pixels, rop } => DrawCmd::Bitmap {
+            rect: o(rect),
+            pixels,
+            rop,
+        },
+        DrawCmd::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            color,
+            width,
+        } => DrawCmd::Line {
+            x1: x1 + dx,
+            y1: y1 + dy,
+            x2: x2 + dx,
+            y2: y2 + dy,
+            color,
+            width,
+        },
+        DrawCmd::RoundRect {
+            rect,
+            color,
+            rx,
+            ry,
+        } => DrawCmd::RoundRect {
+            rect: o(rect),
+            color,
+            rx,
+            ry,
+        },
+    }
+}
+
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
@@ -2336,10 +2483,11 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
     let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
         return true;
     };
-    let (target, bitmap) = match lock(dcs()).get(&hdc) {
-        Some(d) => (d.hwnd, d.bitmap),
+    let (target, bitmap, offset) = match lock(dcs()).get(&hdc) {
+        Some(d) => (d.hwnd, d.bitmap, dc_state_offset(d)),
         None => return false,
     };
+    let cmd = translate_cmd(cmd, offset);
     let cmds = match dc_clip(hdc) {
         Some(clip) => clip_cmd(cmd, &clip),
         None => vec![cmd],
@@ -2979,7 +3127,10 @@ pub fn foreign_client_rect(hwnd: usize) -> Option<Rect> {
 pub fn native_window(hwnd: usize) -> Option<u64> {
     let mut id = None;
     with_backend(|b| id = b.native_window(hwnd));
-    id
+    // Fenêtre d'un autre processus du compte : les fenêtres X11 sont
+    // communes à tous les clients du serveur, Direct3D peut y présenter
+    // (processus GPU de Chromium, #1228).
+    id.or_else(|| foreign_window(hwnd).map(|f| f.xid))
 }
 
 pub fn monitors() -> Vec<Monitor> {

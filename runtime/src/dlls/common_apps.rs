@@ -998,19 +998,14 @@ unsafe extern "win64" fn set_di_bits(
     lines as i32
 }
 
-/// SetWindowOrgEx est sans effet ici : OffsetWindowOrgEx se contente de
-/// rendre l'origine actuelle (0, 0).
+/// OffsetWindowOrgEx : déplace l'origine de fenêtre du DC (#1232).
 unsafe extern "win64" fn offset_window_org_ex(
-    _hdc: usize,
-    _dx: i32,
-    _dy: i32,
-    prev: *mut i32,
+    hdc: usize,
+    dx: i32,
+    dy: i32,
+    prev: *mut crate::dlls::gui::Point,
 ) -> i32 {
-    if !prev.is_null() {
-        *prev = 0;
-        *prev.add(1) = 0;
-    }
-    1
+    crate::dlls::gdi32::offset_origin(hdc, false, dx, dy, prev)
 }
 
 /// RectVisible : la zone de découpe d'un DC couvre tout l'écran.

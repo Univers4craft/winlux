@@ -149,6 +149,17 @@ if test -f "$out/thread32.exe"; then
     check thread32 'Threads 32 bits : tout est correct'
     check thread32_gcc 'Threads 32 bits : tout est correct'
     echo "thread32 : threads x86, TLS statique et émulé, 300 threads, rappel, GetProcAddress"
+    set +e
+    WINLUX_GETPROC_STUBS=1 WINLUX_GUI=headless timeout 120 "$runtime" "$out/thread32.exe" >"$work/stubs.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'Threads 32 bits : tout est correct' "$work/stubs.txt" \
+        || ! grep -q 'kernel32!WinluxFonctionAbsente absente : bouchon rendu' "$work/stubs.txt"; then
+        cat "$work/stubs.txt"
+        echo "thread32.exe (WINLUX_GETPROC_STUBS=1) : code $status" >&2
+        exit 1
+    fi
+    echo "thread32 : WINLUX_GETPROC_STUBS=1 rend un bouchon journalisé pour une fonction absente"
     check load32 'DLL 32 bits : tout est correct'
     echo "load32 : DLL x86 importée (DllMain, TLS, donnée) et chargée par LoadLibrary"
     check fiber32 'Fibres 32 bits : tout est correct'

@@ -538,6 +538,8 @@ struct DcState {
     pos: (i32, i32),
     text_align: u32,
     clip: Option<Vec<gui::Rect>>,
+    /// Origines de fenêtre et de viewport (#1232).
+    origins: ((i32, i32), (i32, i32)),
 }
 
 fn dc_stack() -> &'static Mutex<HashMap<usize, Vec<DcState>>> {
@@ -557,6 +559,7 @@ pub extern "win64" fn save_dc(hdc: usize) -> i32 {
         font: gui::dc_font(hdc),
         text_align: gui::dc_text_align(hdc),
         clip: gui::dc_clip(hdc),
+        origins: gui::dc_origins(hdc),
         pos: pen_pos()
             .lock()
             .unwrap()
@@ -597,6 +600,9 @@ pub extern "win64" fn restore_dc(hdc: usize, saved: i32) -> i32 {
     gui::select_object(hdc, state.font);
     pen_pos().lock().unwrap().insert(hdc, state.pos);
     gui::set_dc_clip(hdc, state.clip);
+    let ((wx, wy), (vx, vy)) = state.origins;
+    gui::set_dc_origin(hdc, false, wx, wy);
+    gui::set_dc_origin(hdc, true, vx, vy);
     1
 }
 
@@ -697,8 +703,13 @@ pub extern "win64" fn set_map_mode(_hdc: usize, _mode: i32) -> i32 {
 pub extern "win64" fn get_map_mode(_hdc: usize) -> i32 {
     1
 } // MM_TEXT
-pub extern "win64" fn offset_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn offset_viewport_org_ex(
+    hdc: usize,
+    x: i32,
+    y: i32,
+    old: *mut gui::Point,
+) -> i32 {
+    crate::dlls::gdi32::offset_origin(hdc, true, x, y, old)
 }
 
 // ── Stretch mode ───────────────────────────────────────────────────

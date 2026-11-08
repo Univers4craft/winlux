@@ -1539,10 +1539,18 @@ extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
         return s as u32;
     }
     let file = format!("{dll}.dll");
-    let stub = override_stub(&file, &symbol).unwrap_or_else(|| {
-        let orig = crate::dlls::lookup(dll, &symbol).unwrap_or(found);
-        import_stub(&file, &symbol, orig, found)
-    });
+    let known = dll != "kernel32"
+        || crate::dlls::kernel32_proc(&symbol, module as usize == crate::dlls::kernelbase_handle())
+            .is_some();
+    let stub = if !known || (dll != "kernel32" && crate::dlls::lookup(dll, &symbol).is_none()) {
+        // Bouchon de WINLUX_GETPROC_STUBS : fonction absente.
+        missing_stub(dll, &symbol, found)
+    } else {
+        override_stub(&file, &symbol).unwrap_or_else(|| {
+            let orig = crate::dlls::lookup(dll, &symbol).unwrap_or(found);
+            import_stub(&file, &symbol, orig, found)
+        })
+    };
     STUBS
         .lock()
         .unwrap_or_else(|e| e.into_inner())

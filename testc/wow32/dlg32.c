@@ -276,6 +276,63 @@ static void tab_vcl(void)
     DestroyWindow(tab);
 }
 
+/* Origine logique du DC (#1232) : la VCL dessine ses libellés dans le DC du
+ * parent avec SaveDC, SetWindowOrgEx(org - position), IntersectClipRect,
+ * DrawTextW en (0, 0), RestoreDC. */
+static DWORD *org_px;
+static int org_dark(int x0, int y0, int x1, int y1)
+{
+    int n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+            if ((org_px[y * 200 + x] & 0xffffff) != 0xffffff) n++;
+    return n;
+}
+static void org_clear(void)
+{
+    for (int i = 0; i < 200 * 100; i++) org_px[i] = 0xffffff;
+}
+
+static void gdi_origin(void)
+{
+    BITMAPINFO bi = {{ sizeof(BITMAPINFOHEADER), 200, -100, 1, 32, BI_RGB }};
+    HDC dc = CreateCompatibleDC(NULL);
+    HBITMAP dib = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, (void **)&org_px, NULL, 0);
+    HGDIOBJ old = SelectObject(dc, dib);
+    SetBkMode(dc, TRANSPARENT);
+    org_clear();
+    RECT r = { 0, 0, 100, 20 };
+    int save = SaveDC(dc);
+    POINT o;
+    CHECK(GetWindowOrgEx(dc, &o) && o.x == 0 && o.y == 0, "GetWindowOrgEx (0, 0)");
+    SetWindowOrgEx(dc, o.x - 60, o.y - 30, NULL);
+    IntersectClipRect(dc, 0, 0, 100, 20);
+    DrawTextW(dc, L"Host name", -1, &r, DT_LEFT | DT_NOPREFIX);
+    RestoreDC(dc, save);
+    CHECK(org_dark(60, 30, 160, 50) > 0 && org_dark(0, 0, 60, 30) == 0, "DrawTextW suit SetWindowOrgEx (libellé VCL)");
+    CHECK(GetWindowOrgEx(dc, &o) && o.x == 0 && o.y == 0, "RestoreDC rend l'origine");
+    org_clear();
+    SetWindowOrgEx(dc, -50, -40, NULL);
+    RECT f = { 0, 0, 10, 10 };
+    FillRect(dc, &f, GetStockObject(BLACK_BRUSH));
+    CHECK(org_dark(50, 40, 60, 50) == 100 && org_dark(0, 0, 10, 10) == 0, "FillRect suit l'origine");
+    CHECK(GetPixel(dc, 1, 1) == 0, "GetPixel en coordonnées logiques");
+    POINT prev;
+    OffsetWindowOrgEx(dc, 10, 0, &prev);
+    CHECK(prev.x == -50 && prev.y == -40, "OffsetWindowOrgEx rend l'ancienne origine");
+    SetWindowOrgEx(dc, 0, 0, NULL);
+    SetViewportOrgEx(dc, 20, 20, NULL);
+    POINT q = { 1, 2 };
+    CHECK(LPtoDP(dc, &q, 1) && q.x == 21 && q.y == 22, "LPtoDP");
+    CHECK(DPtoLP(dc, &q, 1) && q.x == 1 && q.y == 2, "DPtoLP");
+    RECT cb;
+    IntersectClipRect(dc, 0, 0, 5, 5);
+    CHECK(GetClipBox(dc, &cb) != 0 && cb.left == 0 && cb.right == 5, "GetClipBox en coordonnées logiques");
+    SelectObject(dc, old);
+    DeleteObject(dib);
+    DeleteDC(dc);
+}
+
 /* Notifications des contrôles vers une fenêtre x86 (WM_NOTIFY en
  * disposition x86 : NMHDR de 12 octets, NMLISTVIEW, NMTREEVIEW). */
 static int lv_changed = -1, lv_param;
@@ -714,6 +771,7 @@ int main(void)
     tab_control();
     tab_superclass();
     tab_vcl();
+    gdi_origin();
     notifications();
     dialogs();
     winscp();

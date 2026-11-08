@@ -48,6 +48,13 @@ int main(void) {
     HMODULE k = GetModuleHandleA("kernel32.dll");
     DWORD (WINAPI *gtc)(void) = (DWORD (WINAPI *)(void))GetProcAddress(k, "GetTickCount");
     CHECK(8, gtc != NULL && gtc() != 0);
+    /* Fonction absente : NULL, sauf diagnostic WINLUX_GETPROC_STUBS=1 qui
+       rend un bouchon journalisé (jamais appelé ici). */
+    char flag[4] = {0};
+    DWORD fl = GetEnvironmentVariableA("WINLUX_GETPROC_STUBS", flag, sizeof flag);
+    FARPROC absent = GetProcAddress(k, "WinluxFonctionAbsente");
+    if (fl == 1 && flag[0] == '1') CHECK(16, absent != NULL);
+    else CHECK(16, absent == NULL && GetLastError() == ERROR_PROC_NOT_FOUND);
     HANDLE q = CreateTimerQueue();
     CHECK(9, q != NULL);
     tick_event = CreateEventW(NULL, TRUE, FALSE, NULL);
