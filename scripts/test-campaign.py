@@ -1278,6 +1278,8 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
    and "perte_du_focus_garde_les_boutons_de_souris" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Bouton de souris tenu malgré SetFocus pendant le clic : DragDetect démarre le glisser (#1138)")
@@ -1285,12 +1287,20 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
+   and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
+   "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+# #1183 : SslStream de .NET normalise le nom d'hôte par Normaliz.dll!IdnToAscii.
+ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
+   and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
+   and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
 # #1197 : SMBIOS brut pour GetSystemFirmwareTable (Creative Cloud, Photoshop).
 ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls / "apps_win32.rs").read_text(encoding="utf-8")
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
