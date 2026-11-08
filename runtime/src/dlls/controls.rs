@@ -581,8 +581,10 @@ impl Painter {
                     r.top,
                     r.right,
                     r.bottom,
-                    radius * 2,
-                    radius * 2,
+                    // Ellipse des coins de 4 × radius : rendu inchangé depuis
+                    // que RoundRect prend un diamètre comme Windows (#866).
+                    radius * 4,
+                    radius * 4,
                 );
             }
         }

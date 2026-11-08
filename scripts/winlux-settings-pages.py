@@ -804,6 +804,8 @@ PAGE_CERTS = 36
 PAGE_PHONE = 37
 PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
+PAGE_VPN = 40
+PAGE_HOTSPOT = 41
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1426,6 +1428,14 @@ def page_available(page, status=None):
         return have("winlux-backup") or BACKUP_RUN.is_dir()
     if page == PAGE_INSTALLED:
         return installed_apps_module() is not None
+    if page == PAGE_VPN:
+        # NetworkManager et WireGuard (module du noyau) ou le greffon OpenVPN.
+        module = vpn_page()
+        return module is not None and module.available()
+    if page == PAGE_HOTSPOT:
+        # Carte Wi-Fi capable de point d’accès (mode AP), dnsmasq : sinon pas de page.
+        module = hotspot_page()
+        return module is not None and module.available()
     if page == PAGE_PHONE:
         # Rien d’associé : pas de page (l’application Téléphone connecté associe).
         return bool(phone_devices())
@@ -1627,6 +1637,38 @@ def wifi_page():
     return module
 
 
+def _side_module(cache, name, label):
+    """Page livrée à part (winlux-vpn, winlux-hotspot), installée à côté ; None si absente."""
+    if cache: return cache[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name(name + ".py"), here.with_name(name)):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader(label, str(candidate))
+                spec = importlib.util.spec_from_loader(label, loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    cache.append(module)
+    return module
+
+
+_VPN, _HOTSPOT = [], []
+
+
+def vpn_page():
+    return _side_module(_VPN, "winlux-vpn", "winlux_vpn_page")
+
+
+def hotspot_page():
+    return _side_module(_HOTSPOT, "winlux-hotspot", "winlux_hotspot_page")
+
+
 _CERTS = []
 
 
@@ -1721,7 +1763,8 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
-                   PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed"}
+                   PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed",
+                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -3066,6 +3109,18 @@ class ExtraPages:
         button = Gtk.Button(label=_t("Réseaux Wi-Fi…"))
         button.connect("clicked", lambda *_: GLib.idle_add(self.open_page, PAGE_WIFI))
         self.row(box, _t("Wi-Fi"), button, _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion."))
+
+    # ── VPN (winlux-vpn) et point d’accès sans fil mobile (winlux-hotspot), #660 ──
+
+    def page_vpn(self):
+        module = vpn_page()
+        if module is not None:
+            self.vpn_panel = module.page(self)
+
+    def page_hotspot(self):
+        module = hotspot_page()
+        if module is not None:
+            self.hotspot_panel = module.page(self)
 
     # ── Wi-Fi : réseaux, clé de sécurité, WPS, réseaux cachés (winlux-wifi) ──
 

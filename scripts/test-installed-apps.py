@@ -203,7 +203,7 @@ for text in set(re.findall(r'_t\("([^"]+)"', source)):
 # ── Paramètres : page 39 branchée, menu Démarrer sans doublon ──
 settings = (HERE / "winlux-settings.py").read_text()
 pages_source = (HERE / "winlux-settings-pages.py").read_text()
-check('_t("Sauvegarde"), _t("Applications installées")]' in settings, "page 39 = Applications installées")
+check('_t("Sauvegarde"), _t("Applications installées")' in settings, "page 39 = Applications installées")
 check('(_t("Applications"), [39, 1, 10, 11, 15, 30])' in settings, "première page de la catégorie Applications")
 check('"appsfeatures": 39' in settings, "ms-settings:appsfeatures")
 check("PAGE_INSTALLED = 39" in pages_source and 'PAGE_INSTALLED: "page_installed"' in pages_source, "page branchée")
