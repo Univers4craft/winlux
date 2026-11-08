@@ -45,6 +45,7 @@ import tarfile
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -65,13 +66,57 @@ DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
+FLOAT_CORNER = 45  # barre flottante : séparateur gardant le coin droit de la capsule libre (#889)
 NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
-LLAMA_RELEASE_API = os.environ.get("WINLUX_LLAMA_RELEASE_API",
-                                   "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+# Révisions figées, empreinte SHA-256 écrite ici (#911) : jamais « la dernière
+# publiée » (« latest » de llama.cpp, v0.9.0, n'avait même aucun binaire).
+# Relevées le 2026-11-08 sur le portable de test (archive téléchargée, empreinte
+# recalculée, RUNPATH $ORIGIN, besoins système : libstdc++, libgomp1, libssl3).
+LLAMA_TAG = "b12202"
+LLAMA_RELEASES = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}"
+# GitHub répond parfois 504 sur l'adresse de téléchargement : l'API des fichiers
+# (même fichier, même empreinte) sert de secours.
+LLAMA_ASSET_API = f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{LLAMA_TAG}"
+# Moteur selon le PC : processeur seul, ou carte graphique par Vulkan (#928).
+LLAMA_ENGINES = {
+    "cpu": (f"llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz",
+            "9076cf9b2ce5b849384711e85b0c37d18c36b1475106c236941de2b6f0899a88", 23066943),
+    "vulkan": (f"llama-{LLAMA_TAG}-bin-ubuntu-vulkan-x64.tar.gz",
+               "c1eaf8fcaf0b17c1fe9097f7ff08bad484cd451533e7f2075381d18d220694e7", 35880958),
+}
+# Navigateurs livrés par le catalogue Winlux (winlux-browsers) ou installés à part.
+BROWSERS_DIR = Path(os.environ.get("WINLUX_BROWSERS_DIR", "/opt/winlux/browsers"))
+BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
+                    "firefox/root/usr/lib/firefox/firefox")
+BROWSER_COMMANDS = ("firefox", "firefox-esr", "chromium", "chromium-browser", "google-chrome-stable",
+                    "microsoft-edge-stable", "brave-browser", "epiphany", "falkon")
+CODEX_VERSION = "0.167.0"  # relevée le 2026-11-08 (registre npm, empreinte recalculée)
+CODEX_SHA512 = {
+    "linux-x64": "FNc7danfUng9Sp6w+Fh7kofNHHZpA6VMyNKWsWrS3OwHly69gywTWeiuwrUPXpJSho8Df4xqRsHfHRPzj7zYQg==",
+    "linux-arm64": "5cv+sybRWqpRJL6KCv3YSnIx1GHRmjek997C38n1Zfno4HomKDLkNSjWLDOOc2+ISlVNSRRnySWq4zKmzlY12g==",
+}
 HF_BASE = os.environ.get("WINLUX_HF_BASE", "https://huggingface.co").rstrip("/")
-LOCAL_MODEL_REPO = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
-LOCAL_MODEL_FILE = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+# Modèles Qwen2.5 Instruct Q4_K_M (Apache 2.0), du plus léger au plus capable :
+# révision et empreinte figées. Le 7B est en deux morceaux (llama.cpp les lit
+# à partir du premier).
+LOCAL_MODELS = {
+    "1.5b": {"name": "Qwen2.5 1,5B", "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+             "revision": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+             "files": (("qwen2.5-1.5b-instruct-q4_k_m.gguf",
+                        "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e", 1117320736),)},
+    "3b": {"name": "Qwen2.5 3B", "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
+           "revision": "7dabda4d13d513e3e842b20f0d435c732f172cbe",
+           "files": (("qwen2.5-3b-instruct-q4_k_m.gguf",
+                      "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d", 2104932768),)},
+    "7b": {"name": "Qwen2.5 7B", "repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+           "revision": "bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+           "files": (("qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+                      "dfce12e3862a5283ccfb88221b48480e58745165de856439950d0f22590580db", 3993201344),
+                     ("qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
+                      "539cf93f78e887edea1c04e2d7d8cdaca9d01dae9c9025bcb8accbe29df3d72a", 689872288))},
+}
 LOCAL_MIN_RAM_GIB = 3  # modèle 1,1 Go + contexte : au-dessous, l'option est cachée
+LOCAL_IDLE_SECONDS = 120  # sans question pendant 2 minutes : le moteur s'arrête, mémoire rendue
 MAX_AGENTS = 3
 
 
@@ -110,6 +155,28 @@ _TR = {
                                                    "Si la página muestra un código, péguelo aquí:",
                                                    "Wenn die Seite einen Code anzeigt, fügen Sie ihn hier ein:"),
     "Valider": ("Confirm", "Confirmar", "Bestätigen"),
+    "Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un autre ordinateur, "
+    "connectez-vous, puis collez ici le code affiché.":
+        ("No web browser is installed on this PC. Open this link on your phone or another computer, "
+         "sign in, then paste the code shown here.",
+         "No hay ningún navegador instalado en este PC. Abra este enlace en su teléfono u otro ordenador, "
+         "inicie sesión y pegue aquí el código que aparece.",
+         "Auf diesem PC ist kein Browser installiert. Öffnen Sie diesen Link auf Ihrem Telefon oder einem anderen "
+         "Computer, melden Sie sich an und fügen Sie den angezeigten Code hier ein."),
+    "Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un autre ordinateur, "
+    "connectez-vous, puis saisissez ce code :":
+        ("No web browser is installed on this PC. Open this link on your phone or another computer, "
+         "sign in, then enter this code:",
+         "No hay ningún navegador instalado en este PC. Abra este enlace en su teléfono u otro ordenador, "
+         "inicie sesión e introduzca este código:",
+         "Auf diesem PC ist kein Browser installiert. Öffnen Sie diesen Link auf Ihrem Telefon oder einem anderen "
+         "Computer, melden Sie sich an und geben Sie diesen Code ein:"),
+    "Copier le lien": ("Copy the link", "Copiar el enlace", "Link kopieren"),
+    "Lien copié.": ("Link copied.", "Enlace copiado.", "Link kopiert."),
+    "Installer un navigateur": ("Install a browser", "Instalar un navegador", "Browser installieren"),
+    "Le moteur llama.cpp ne peut pas démarrer sur ce PC : {e}":
+        ("The llama.cpp engine cannot start on this PC: {e}", "El motor llama.cpp no puede iniciarse en este PC: {e}",
+         "Die llama.cpp-Engine kann auf diesem PC nicht starten: {e}"),
     "Ouvrir la page de connexion": ("Open the sign-in page", "Abrir la página de inicio de sesión",
                                     "Anmeldeseite öffnen"),
     "La connexion n'a pas abouti : {e}": ("Sign-in did not complete: {e}", "No se completó el inicio de sesión: {e}",
@@ -217,6 +284,57 @@ _TR = {
     'Archive inattendue : {name}': ('Unexpected archive: {name}', 'Archivo inesperado: {name}', 'Unerwartetes Archiv: {name}'),
     "C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des tâches ou appuyez sur Windows+C.": ('All set! Click the assistant button on the taskbar or press Windows+C.', '¡Listo! Haga clic en el botón del asistente en la barra de tareas o pulse Windows+C.', 'Fertig! Klicken Sie auf die Assistent-Schaltfläche in der Taskleiste oder drücken Sie Windows+C.'),
     'Connecté au compte {name}{who}.': ('Signed in to the {name} account{who}.', 'Sesión iniciada en la cuenta de {name}{who}.', 'Beim {name}-Konto angemeldet{who}.'),
+    "Go": ("GB", "GB", "GB"),
+    "Mo": ("MB", "MB", "MB"),
+    "Qwen2.5 1,5B": ("Qwen2.5 1.5B", "Qwen2.5 1,5B", "Qwen2.5 1,5B"),
+    "Qwen2.5 3B": ("Qwen2.5 3B", "Qwen2.5 3B", "Qwen2.5 3B"),
+    "Qwen2.5 7B": ("Qwen2.5 7B", "Qwen2.5 7B", "Qwen2.5 7B"),
+    "Pas encore téléchargé": ("Not downloaded yet", "Aún no descargado", "Noch nicht heruntergeladen"),
+    "sur la carte graphique {gpu}": ("on the {gpu} graphics card", "en la tarjeta gráfica {gpu}", "auf der Grafikkarte {gpu}"),
+    "sur la carte graphique": ("on the graphics card", "en la tarjeta gráfica", "auf der Grafikkarte"),
+    "sur le processeur": ("on the processor", "en el procesador", "auf dem Prozessor"),
+    " de la carte graphique": (" of graphics card memory", " de la tarjeta gráfica", " der Grafikkarte"),
+    " et la carte graphique": (" and the graphics card", " y la tarjeta gráfica", " und die Grafikkarte"),
+    "Télécharger le moteur llama.cpp (environ {size})": ("Download the llama.cpp engine (about {size})",
+                                                         "Descargar el motor llama.cpp (unos {size})",
+                                                         "Die llama.cpp-Engine herunterladen (etwa {size})"),
+    "Télécharger le modèle {name} (environ {size})": ("Download the {name} model (about {size})",
+                                                      "Descargar el modelo {name} (unos {size})",
+                                                      "Das Modell {name} herunterladen (etwa {size})"),
+    "Choisi pour ce PC : {model} ({size}), {where}. Pendant que vous lui écrivez, elle prend environ "
+    "{memory} de mémoire{gpu_memory} et fait travailler l'ordinateur : ce n'est pas l'idéal sur un PC "
+    "déjà occupé. Elle s'arrête seule deux minutes après votre dernière question ; désactivée, elle ne "
+    "fait strictement rien.":
+        ("Chosen for this PC: {model} ({size}), {where}. While you are writing to it, it takes about {memory}"
+         "{gpu_memory} and keeps the computer busy, which is not ideal on a PC that is already working. It stops "
+         "on its own two minutes after your last question; when turned off, it does nothing at all.",
+         "Elegido para este equipo: {model} ({size}), {where}. Mientras le escribe, ocupa unos {memory} de "
+         "memoria{gpu_memory} y hace trabajar al ordenador: no es lo ideal en un equipo ya ocupado. Se detiene "
+         "sola dos minutos después de su última pregunta; desactivada, no hace absolutamente nada.",
+         "Für diesen PC gewählt: {model} ({size}), {where}. Während Sie ihr schreiben, belegt sie etwa {memory} "
+         "Speicher{gpu_memory} und lässt den Computer arbeiten – nicht ideal auf einem PC, der schon ausgelastet "
+         "ist. Sie hält zwei Minuten nach Ihrer letzten Frage von selbst an; ausgeschaltet tut sie gar nichts."),
+    "IA locale en marche : elle prend {memory} de mémoire{gpu} et fait travailler l'ordinateur. Elle "
+    "s'arrête seule deux minutes après votre dernière question.":
+        ("Local AI running: it takes {memory} of memory{gpu} and keeps the computer busy. It stops on its own "
+         "two minutes after your last question.",
+         "IA local en marcha: ocupa {memory} de memoria{gpu} y hace trabajar al ordenador. Se detiene sola dos "
+         "minutos después de su última pregunta.",
+         "Lokale KI läuft: Sie belegt {memory} Speicher{gpu} und lässt den Computer arbeiten. Sie hält zwei "
+         "Minuten nach Ihrer letzten Frage von selbst an."),
+    "IA locale en pause : elle ne prend ni mémoire ni processeur. Elle redémarre à votre prochaine "
+    "question. Rien n'est envoyé sur Internet.":
+        ("Local AI paused: it uses no memory and no processor. It starts again at your next question. "
+         "Nothing is sent over the Internet.",
+         "IA local en pausa: no ocupa memoria ni procesador. Vuelve a arrancar con su próxima pregunta. "
+         "No se envía nada por Internet.",
+         "Lokale KI pausiert: Sie belegt weder Speicher noch Prozessor. Sie startet bei Ihrer nächsten Frage "
+         "neu. Nichts wird ins Internet gesendet."),
+    "Pause : l'IA locale s'est arrêtée pour rendre la mémoire. Elle redémarre à votre prochaine question.":
+        ("Paused: the local AI stopped to free the memory. It starts again at your next question.",
+         "Pausa: la IA local se detuvo para liberar la memoria. Vuelve a arrancar con su próxima pregunta.",
+         "Pause: Die lokale KI hat angehalten, um den Speicher freizugeben. Sie startet bei Ihrer nächsten "
+         "Frage neu."),
     "Démarrage de l'IA locale…": ('Starting the local AI…', 'Iniciando la IA local…', 'Lokale KI wird gestartet…'),
     'Envoyer à {name}': ('Send to {name}', 'Enviar a {name}', 'An {name} senden'),
     "Envoyé à {name} ({company}) : votre question et cette conversation. Rien d'autre sans votre accord.": ('Sent to {name} ({company}): your question and this conversation. Nothing else without your consent.', 'Se envía a {name} ({company}): su pregunta y esta conversación. Nada más sin su permiso.', 'An {name} ({company}) gesendet: Ihre Frage und dieses Gespräch. Nichts anderes ohne Ihre Zustimmung.'),
@@ -242,8 +360,6 @@ _TR = {
     'Téléchargement du modèle': ('Downloading the model', 'Descargando el modelo', 'Modell wird heruntergeladen'),
     'Téléchargement du moteur': ('Downloading the engine', 'Descargando el motor', 'Engine wird heruntergeladen'),
     "Télécharger Codex, l'outil officiel d'OpenAI (environ 170 Mo)": ("Download Codex, OpenAI's official tool (about 170 MB)", 'Descargar Codex, la herramienta oficial de OpenAI (unos 170 MB)', 'Codex herunterladen, das offizielle Werkzeug von OpenAI (etwa 170 MB)'),
-    'Télécharger le modèle Qwen2.5 1,5B (environ 1,1 Go)': ('Download the Qwen2.5 1.5B model (about 1.1 GB)', 'Descargar el modelo Qwen2.5 1,5B (unos 1,1 GB)', 'Das Modell Qwen2.5 1,5B herunterladen (etwa 1,1 GB)'),
-    'Télécharger le moteur llama.cpp (environ 30 Mo)': ('Download the llama.cpp engine (about 30 MB)', 'Descargar el motor llama.cpp (unos 30 MB)', 'Die llama.cpp-Engine herunterladen (etwa 30 MB)'),
     'Voir ce qui a été lu': ('See what was read', 'Ver lo que se leyó', 'Ansehen, was gelesen wurde'),
     "Vous n'êtes pas connecté à votre compte {name}.": ('You are not signed in to your {name} account.', 'No ha iniciado sesión en su cuenta de {name}.', 'Sie sind nicht bei Ihrem {name}-Konto angemeldet.'),
     "ouvrir l'emplacement de {path}": ('open the location of {path}', 'abrir la ubicación de {path}', 'den Speicherort von {path} öffnen'),
@@ -331,24 +447,19 @@ def _machine():
 
 # ── Téléchargements vérifiés (rien de tout cela n'est dans l'ISO) ───────────
 
-def _get(url, timeout=30):
-    request = urllib.request.Request(url, headers={"User-Agent": "Winlux-assistant", "Accept": "application/json, */*"})
+def _get(url, timeout=30, accept="application/json, */*"):
+    request = urllib.request.Request(url, headers={"User-Agent": "Winlux-assistant", "Accept": accept})
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def _get_json(url):
-    with _get(url) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def download(url, target, algorithm, expected, progress=None, cancel=None, label=""):
+def download(url, target, algorithm, expected, progress=None, cancel=None, label="", accept="*/*"):
     """Télécharge `url` dans `target` ; le fichier n'est gardé que si son
     empreinte `algorithm` (sha256, sha512) vaut exactement `expected` (octets)."""
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")
     digest = hashlib.new(algorithm)
     try:
-        with _get(url, timeout=60) as response, open(partial, "wb") as out:
+        with _get(url, timeout=60, accept=accept) as response, open(partial, "wb") as out:
             total = int(response.headers.get("Content-Length") or 0)
             done = 0
             while True:
@@ -409,7 +520,7 @@ class Provider:
     def status(self, launcher=None):
         return {"installed": self.launcher() is not None, "loggedIn": False}
 
-    def login_command(self, launcher):
+    def login_command(self, launcher, browser=True):
         return None
 
     def logout(self):
@@ -445,14 +556,16 @@ class ClaudeProvider(Provider):
     def status(self, launcher=None):
         return auth_status(launcher)
 
-    def login_command(self, launcher):
+    def login_command(self, launcher, browser=True):
+        # Sans navigateur, la page de connexion s'ouvre sur un autre appareil et
+        # son code se colle ici : la page de retour est celle d'Anthropic.
         return [str(launcher), "auth", "login", "--claudeai"]
 
     def logout(self):
         launcher = self.launcher()
         if launcher:
             subprocess.run([str(launcher), "auth", "logout"], capture_output=True, timeout=60, env=claude_env(),
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, cwd=work_dir())
 
     def protect(self):
         return protect_credentials()
@@ -470,7 +583,7 @@ class ClaudeProvider(Provider):
         """La conversation part par l'entrée standard, jamais en argument :
         `ps` la montrerait aux autres comptes."""
         result = subprocess.run(self.command(self.name), input=prompt, capture_output=True, text=True,
-                                timeout=timeout, cwd=WORK, env=claude_env())
+                                timeout=timeout, cwd=work_dir(), env=claude_env())
         output = result.stdout.strip()
         try:
             data = json.loads(output[output.find("{"):]) if "{" in output else {}
@@ -518,13 +631,12 @@ class ChatGPTProvider(Provider):
 
     def install(self, progress, cancel, mark):
         suffix, triple = self.TARGETS[_machine()]
-        package = f"{NPM_REGISTRY}/@openai%2fcodex"
-        version = _get_json(f"{package}/latest")["version"]
-        dist = _get_json(f"{package}/{version}-{suffix}")["dist"]
-        integrity = next((part for part in dist.get("integrity", "").split() if part.startswith("sha512-")), "")
-        expected = base64.b64decode(integrity[7:]) if integrity else b""
+        # Version figée et empreinte SHA-512 écrites ici, comme llama.cpp (#911).
+        version = CODEX_VERSION
+        tarball = f"{NPM_REGISTRY}/@openai/codex/-/codex-{version}-{suffix}.tgz"
+        expected = base64.b64decode(CODEX_SHA512[suffix])
         CODEX_DIR.parent.mkdir(parents=True, exist_ok=True)
-        archive = download(dist["tarball"], CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
+        archive = download(tarball, CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
                            _t("Téléchargement de Codex"))
         staging = CODEX_DIR.with_name("codex.nouveau")
         shutil.rmtree(staging, ignore_errors=True)
@@ -564,21 +676,23 @@ class ChatGPTProvider(Provider):
             return {"installed": False, "loggedIn": False}
         try:
             result = subprocess.run([str(launcher), "login", "status"], capture_output=True, text=True, timeout=30,
-                                    env=self.env(), stdin=subprocess.DEVNULL)
+                                    env=self.env(), stdin=subprocess.DEVNULL, cwd=work_dir())
             out = result.stdout + result.stderr
             logged = result.returncode == 0 and "Logged in" in out
         except (OSError, subprocess.SubprocessError):
             out, logged = "", False
         return {"installed": True, "loggedIn": logged, "account": "ChatGPT" if logged and "ChatGPT" in out else ""}
 
-    def login_command(self, launcher):
-        return [str(launcher), "login"]
+    def login_command(self, launcher, browser=True):
+        # Sans navigateur sur ce PC, le retour sur 127.0.0.1:1455 est impossible :
+        # connexion par code à saisir sur un autre appareil (#912).
+        return [str(launcher), "login"] if browser else [str(launcher), "login", "--device-auth"]
 
     def logout(self):
         launcher = self.launcher()
         if launcher:
             subprocess.run([str(launcher), "logout"], capture_output=True, timeout=60, env=self.env(),
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, cwd=work_dir())
 
     def protect(self):
         """Jeton du compte ChatGPT (auth.json) lisible par le seul propriétaire."""
@@ -611,7 +725,7 @@ class ChatGPTProvider(Provider):
         try:
             result = subprocess.run(self.command(schema_file, out_file),
                                     input=system_prompt(self.name) + "\n\n" + prompt,
-                                    capture_output=True, text=True, timeout=timeout, cwd=WORK, env=self.env())
+                                    capture_output=True, text=True, timeout=timeout, cwd=work_dir(), env=self.env())
             text = out_file.read_text(encoding="utf-8") if out_file.is_file() else ""
         finally:
             out_file.unlink(missing_ok=True)
@@ -642,19 +756,158 @@ class ChatGPTProvider(Provider):
         return answer if isinstance(answer, dict) else {"reponse": str(answer), "demande": "aucune"}
 
 
+def engine_problem(server):
+    """Bibliothèque système manquante au moteur : dit tout de suite, plutôt qu'à
+    l'ouverture du panneau. Chaîne vide si llama-server démarre."""
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = ":".join(filter(None, (str(server.parent), env.get("LD_LIBRARY_PATH"))))
+    try:
+        result = subprocess.run([str(server), "--version"], capture_output=True, text=True, timeout=30, env=env,
+                                stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return ""
+    except OSError as error:
+        return str(error)
+    text = result.stdout + result.stderr
+    found = re.search(r"error while loading shared libraries: ([^:\s]+)", text)
+    return found.group(1) if found else ""
+
+
+# ── IA locale adaptée au PC : mémoire, carte graphique (#928) ─────────────────
+
+DRM_DIR = Path(os.environ.get("WINLUX_DRM_DIR", "/sys/class/drm"))
+VULKAN_ICD_DIRS = tuple(Path(p) for p in os.environ.get(
+    "WINLUX_VULKAN_ICD_DIRS", "/usr/share/vulkan/icd.d:/etc/vulkan/icd.d").split(":") if p)
+GPU_VENDORS = {"0x10de": "NVIDIA", "0x1002": "AMD", "0x8086": "Intel"}
+# Pilote -> fichier Vulkan qui le sert ; nouveau et les cartes intégrées restent au processeur.
+GPU_VULKAN = {"nvidia": "nvidia_icd", "amdgpu": "radeon_icd"}
+
+
+def _read(path):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def _nvidia_vram_gib():
+    tool = shutil.which("nvidia-smi")
+    if not tool:
+        return 0.0
+    try:
+        out = subprocess.run([tool, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10).stdout
+        return max((int(line.strip()) for line in out.splitlines() if line.strip().isdigit()), default=0) / 1024
+    except (OSError, subprocess.SubprocessError):
+        return 0.0
+
+
+def _vulkan_icd(name):
+    return any((folder / f"{name}.json").is_file() or any(folder.glob(f"{name}*.json")) for folder in VULKAN_ICD_DIRS)
+
+
+def graphics_cards():
+    """Cartes graphiques vues par le noyau : [{"vendor", "driver", "vram", "vulkan"}].
+    « vram » en Gio, 0 pour une carte intégrée (mémoire partagée)."""
+    cards = []
+    for card in sorted(DRM_DIR.glob("card[0-9]*")):
+        if "-" in card.name:  # connecteurs (card0-HDMI-A-1)
+            continue
+        device = card / "device"
+        vendor = _read(device / "vendor").lower()
+        try:
+            driver = os.path.basename(os.readlink(device / "driver"))
+        except OSError:
+            driver = ""
+        vram = 0.0
+        if driver == "amdgpu":
+            total = _read(device / "mem_info_vram_total")
+            vram = int(total) / (1 << 30) if total.isdigit() else 0.0
+        elif driver == "nvidia":
+            vram = _nvidia_vram_gib()
+        icd = GPU_VULKAN.get(driver)
+        cards.append({"vendor": GPU_VENDORS.get(vendor, vendor), "driver": driver, "vram": vram,
+                      "vulkan": bool(icd) and _vulkan_icd(icd)})
+    return cards
+
+
+def pc_plan():
+    """Modèle et moteur adaptés à ce PC, choisis sans rien demander, et dits :
+    {"model", "engine", "gpu", "ram", "vram"}.
+    - carte graphique dédiée utilisable par Vulkan, 7 Gio ou plus : 7B sur la carte ;
+    - de 3,5 à 7 Gio : 3B sur la carte ;
+    - sinon processeur seul : 3B avec 12 Gio de mémoire ou plus, 1,5B en dessous."""
+    ram = _mem_total_gib()
+    usable = [card for card in graphics_cards() if card["vulkan"] and card["vram"] >= 3.5]
+    best = max(usable, key=lambda card: card["vram"], default=None)
+    if best is not None:
+        model = "7b" if best["vram"] >= 7 else "3b"
+        return {"model": model, "engine": "vulkan", "gpu": best["vendor"], "ram": ram, "vram": best["vram"]}
+    return {"model": "3b" if ram >= 12 else "1.5b", "engine": "cpu", "gpu": None, "ram": ram, "vram": 0.0}
+
+
+def model_size(key):
+    return sum(size for _, _, size in LOCAL_MODELS[key]["files"])
+
+
+def size_text(size):
+    """1,1 Go ; 450 Mo (séparateur décimal de la langue choisie)."""
+    if size >= 1 << 30:
+        text = f"{size / (1 << 30):.1f}"
+        return (text.replace(".", ",") if _LANG in ("fr", "de", "es") else text) + " " + _t("Go")
+    return f"{max(1, size >> 20)} " + _t("Mo")
+
+
+def plan_text(plan):
+    """Ce qui a été choisi pour ce PC et ce que cela coûte, en clair."""
+    model = LOCAL_MODELS[plan["model"]]
+    where = (_t("sur la carte graphique {gpu}", gpu=plan["gpu"]) if plan["engine"] == "vulkan"
+             else _t("sur le processeur"))
+    memory = size_text(model_size(plan["model"]) + (512 << 20))
+    return _t("Choisi pour ce PC : {model} ({size}), {where}. Pendant que vous lui écrivez, elle prend environ "
+              "{memory} de mémoire{gpu_memory} et fait travailler l'ordinateur : ce n'est pas l'idéal sur un PC "
+              "déjà occupé. Elle s'arrête seule deux minutes après votre dernière question ; désactivée, elle ne "
+              "fait strictement rien.", model=_t(model["name"]), size=size_text(model_size(plan["model"])),
+              where=where, memory=memory,
+              gpu_memory=_t(" de la carte graphique") if plan["engine"] == "vulkan" else "")
+
+
+def local_model_text():
+    """Modèle installé et où il tourne, pour Paramètres > Assistant IA."""
+    local = provider("local")
+    key = local.model_key()
+    if key is None:
+        return _t("Pas encore téléchargé")
+    where = _t("sur la carte graphique") if local.engine_kind() == "vulkan" else _t("sur le processeur")
+    return f"{_t(LOCAL_MODELS[key]['name'])}, {where}"
+
+
 class LocalProvider(Provider):
-    """Petite IA sur ce PC : llama.cpp (llama-server, processeur seul) et
-    Qwen2.5 1,5B Instruct Q4_K_M (1,1 Go, licence Apache 2.0). Bon français,
-    JSON fiable, tourne avec 4 Go de mémoire. Rien ne quitte ce PC."""
+    """Petite IA sur ce PC : llama.cpp (llama-server) et un modèle Qwen2.5
+    Instruct choisi selon le PC (licence Apache 2.0) : 1,5B, 3B ou 7B, sur le
+    processeur ou la carte graphique (Vulkan). Rien ne quitte ce PC, et le moteur
+    ne tourne que pendant qu'on lui écrit."""
     key, name = "local", "IA locale"
     remote = False
 
     def supported(self):
         return _machine() in ("x86_64", "amd64") and _mem_total_gib() >= LOCAL_MIN_RAM_GIB
 
+    def plan(self):
+        return pc_plan()
+
     def steps(self):
-        return (_t("Télécharger le moteur llama.cpp (environ 30 Mo)"),
-                _t("Télécharger le modèle Qwen2.5 1,5B (environ 1,1 Go)"), _t("Ajouter le bouton à la barre des tâches"))
+        plan = self.plan()
+        model = LOCAL_MODELS[plan["model"]]
+        _, _, engine_size = LLAMA_ENGINES[plan["engine"]]
+        return (_t("Télécharger le moteur llama.cpp (environ {size})", size=size_text(engine_size)),
+                _t("Télécharger le modèle {name} (environ {size})", name=_t(model["name"]),
+                   size=size_text(model_size(plan["model"]))),
+                _t("Ajouter le bouton à la barre des tâches"))
+
+    def engine_kind(self):
+        kind = _read(LOCAL_DIR / "moteur/TYPE")
+        return kind if kind in LLAMA_ENGINES else "cpu"
 
     def engine(self):
         forced = os.environ.get("WINLUX_ASSISTANT_LLAMA")
@@ -663,24 +916,47 @@ class LocalProvider(Provider):
         found = sorted(LOCAL_DIR.glob("moteur/**/llama-server"))
         return found[0] if found and os.access(found[0], os.X_OK) else None
 
+    def model_key(self):
+        """Modèle installé : celui retenu à l'installation (assistant.conf)."""
+        key = read_config().get("local_model", "")
+        if key in LOCAL_MODELS and all((LOCAL_DIR / name).is_file() for name, _, _ in LOCAL_MODELS[key]["files"]):
+            return key
+        return next((key for key in LOCAL_MODELS
+                     if all((LOCAL_DIR / name).is_file() for name, _, _ in LOCAL_MODELS[key]["files"])), None)
+
     def model(self):
-        path = LOCAL_DIR / LOCAL_MODEL_FILE
-        return path if path.is_file() else None
+        key = self.model_key()
+        return LOCAL_DIR / LOCAL_MODELS[key]["files"][0][0] if key else None
 
     def launcher(self):
         return self.engine() if self.engine() and self.model() else None
 
-    def install_engine(self, progress, cancel):
-        release = _get_json(LLAMA_RELEASE_API)
-        asset = next((a for a in release.get("assets", [])
-                      if re.search(r"-bin-ubuntu-x64\.(zip|tar\.gz)$", a.get("name", ""))), None)
-        if asset is None:
-            raise RuntimeError(_t("Archive inattendue : {name}", name="llama.cpp"))
-        digest = asset.get("digest") or ""
-        expected = bytes.fromhex(digest[7:]) if digest.startswith("sha256:") else b""
+    def gpu_layers(self):
+        """Toutes les couches sur la carte graphique avec le moteur Vulkan."""
+        return ["-ngl", "99"] if self.engine_kind() == "vulkan" and not os.environ.get("WINLUX_ASSISTANT_LLAMA") else []
+
+    def download_engine(self, kind, progress, cancel):
+        name, sha256, _ = LLAMA_ENGINES[kind]
+        label = _t("Téléchargement du moteur")
+        try:
+            return download(f"{LLAMA_RELEASES}/{name}", LOCAL_DIR / name, "sha256", bytes.fromhex(sha256), progress,
+                            cancel, label)
+        except (OSError, urllib.error.URLError) as error:
+            if cancel is not None and cancel.is_set():
+                raise
+            # 504 de GitHub sur l'adresse de téléchargement : même fichier par l'API.
+            try:
+                with _get(LLAMA_ASSET_API) as response:
+                    assets = json.loads(response.read().decode("utf-8")).get("assets", [])
+                url = next(asset["url"] for asset in assets if asset.get("name") == name)
+            except (OSError, ValueError, StopIteration, KeyError):
+                raise error
+            return download(url, LOCAL_DIR / name, "sha256", bytes.fromhex(sha256), progress, cancel, label,
+                            accept="application/octet-stream")
+
+    def install_engine(self, progress, cancel, kind="cpu"):
         LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-        archive = download(asset["browser_download_url"], LOCAL_DIR / asset["name"], "sha256", expected, progress,
-                           cancel, _t("Téléchargement du moteur"))
+        archive = self.download_engine(kind, progress, cancel)
         staging = LOCAL_DIR / "moteur.nouveau"
         shutil.rmtree(staging, ignore_errors=True)
         try:
@@ -696,26 +972,43 @@ class LocalProvider(Provider):
             for path in servers[0].parent.iterdir():  # zip ne garde pas le droit d'exécution
                 if path.is_file() and (path.name.startswith("llama-") or ".so" in path.name):
                     path.chmod(0o755)
+            missing = engine_problem(servers[0])
+            if missing:
+                raise RuntimeError(_t("Le moteur llama.cpp ne peut pas démarrer sur ce PC : {e}", e=missing))
+            (staging / "TYPE").write_text(kind + "\n", encoding="utf-8")
             _replace_dir(staging, LOCAL_DIR / "moteur")
         finally:
             archive.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
 
-    def install_model(self, progress, cancel):
-        files = _get_json(f"{HF_BASE}/api/models/{LOCAL_MODEL_REPO}/tree/main")
-        entry = next((f for f in files if f.get("path") == LOCAL_MODEL_FILE), None)
-        oid = ((entry or {}).get("lfs") or {}).get("oid", "")
-        if not re.fullmatch(r"[0-9a-f]{64}", oid):
-            raise RuntimeError(_t("Fichier corrompu, empreinte incorrecte : {name}", name=LOCAL_MODEL_FILE))
-        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/main/{LOCAL_MODEL_FILE}", LOCAL_DIR / LOCAL_MODEL_FILE,
-                 "sha256", bytes.fromhex(oid), progress, cancel, _t("Téléchargement du modèle"))
+    def install_model(self, progress, cancel, key="1.5b"):
+        model = LOCAL_MODELS[key]
+        for name, sha256, _ in model["files"]:
+            if not (LOCAL_DIR / name).is_file():
+                download(f"{HF_BASE}/{model['repo']}/resolve/{model['revision']}/{name}", LOCAL_DIR / name,
+                         "sha256", bytes.fromhex(sha256), progress, cancel, _t("Téléchargement du modèle"))
+        write_config(local_model=key)
+        # L'ancien modèle (PC changé, carte graphique ajoutée) ne garde pas sa place sur le disque.
+        keep = {name for name, _, _ in model["files"]}
+        for other in LOCAL_MODELS.values():
+            for name, _, _ in other["files"]:
+                if name not in keep:
+                    (LOCAL_DIR / name).unlink(missing_ok=True)
 
     def install(self, progress, cancel, mark):
-        if self.engine() is None:
-            self.install_engine(progress, cancel)
+        plan = self.plan()
+        if self.engine() is None or self.engine_kind() != plan["engine"]:
+            try:
+                self.install_engine(progress, cancel, plan["engine"])
+            except RuntimeError:
+                if plan["engine"] == "cpu" or (cancel is not None and cancel.is_set()):
+                    raise
+                # Vulkan inutilisable ici : processeur seul, et le modèle qui lui convient.
+                plan = dict(plan, engine="cpu", gpu=None, model="3b" if plan["ram"] >= 12 else "1.5b")
+                self.install_engine(progress, cancel, "cpu")
         mark(0)
-        if self.model() is None:
-            self.install_model(progress, cancel)
+        if self.model_key() != plan["model"]:
+            self.install_model(progress, cancel, plan["model"])
         mark(1)
         return self.launcher()
 
@@ -725,6 +1018,7 @@ class LocalProvider(Provider):
 
     def remove(self):
         shutil.rmtree(LOCAL_DIR, ignore_errors=True)
+        write_config(local_model=None)
 
 
 PROVIDERS = ("claude", "chatgpt", "local")
@@ -768,6 +1062,19 @@ def _private_dir(path):
     path.mkdir(parents=True, exist_ok=True)
     path.chmod(0o700)
     return path
+
+
+def work_dir():
+    """Dossier de travail de claude.exe et codex : jamais un dossier personnel
+    (#913), sinon la couche PE demande l'accès aux fichiers personnels."""
+    return _private_dir(WORK)
+
+
+def has_browser():
+    """Un vrai navigateur est-il installé sur ce PC (#912) ? L'ISO n'en livre aucun."""
+    if any(os.access(BROWSERS_DIR / path, os.X_OK) for path in BROWSER_BINARIES):
+        return True
+    return any(shutil.which(name) for name in BROWSER_COMMANDS)
 
 
 def _runs_pe(launcher):
@@ -823,7 +1130,8 @@ def auth_status(launcher=None, timeout=60):
         return {"loggedIn": False, "installed": False}
     try:
         out = subprocess.run([str(launcher), "auth", "status", "--json"], capture_output=True, text=True,
-                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL).stdout
+                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL,
+                             cwd=work_dir()).stdout
         start = out.find("{")
         status = json.loads(out[start:out.rindex("}") + 1]) if start >= 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -901,14 +1209,18 @@ def panel_add():
         return False
     number = read_config().get("panel_plugin", "")
     if not (number.isdigit() and _plugin_type(number) == "launcher" and _plugin_is_ours(number)):
-        number = next(str(n) for n in range(FIRST_PLUGIN, 400) if _plugin_type(n) is None)
+        # 40 à 49 : marges de la barre flottante (winlux-control, #889).
+        number = next(str(n) for n in range(FIRST_PLUGIN, 400) if not 40 <= n < 50 and _plugin_type(n) is None)
         for prop, kind, value in ((f"/plugins/plugin-{number}", "string", "launcher"),
                                   (f"/plugins/plugin-{number}/show-label", "bool", "false")):
             _xfconf("-p", prop, "-n", "-t", kind, "-s", value)
         _xfconf("-p", f"/plugins/plugin-{number}/items", "-n", "-a", "-t", "string", "-s", DESKTOP_FILE)
     write_config(panel_plugin=number)
     if int(number) not in ids:
-        position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
+        if FLOAT_CORNER in ids:  # barre flottante (#889) : avant la réserve du coin droit
+            position = ids.index(FLOAT_CORNER)
+        else:
+            position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
         ids.insert(position, int(number))
         if not _set_panel_ids(ids):
             return False
@@ -1246,7 +1558,8 @@ class LocalServer:
         WORK.mkdir(parents=True, exist_ok=True)
         with open(WORK / "ia-locale.log", "wb") as log:
             self.process = subprocess.Popen([str(engine), "-m", str(model), "--host", "127.0.0.1",
-                                             "--port", str(self.port), "-c", "4096", "-np", "1"],
+                                             "--port", str(self.port), "-c", "4096", "-np", "1",
+                                             *local.gpu_layers()],
                                             stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
                                             preexec_fn=_die_with_parent)
 
@@ -1271,6 +1584,16 @@ class LocalServer:
     def start(self, timeout=180):
         self.spawn()
         self.wait_ready(timeout)
+
+    def memory(self):
+        """Mémoire vive prise par le moteur (octets), 0 s'il est arrêté (#928)."""
+        process = self.process
+        if process is None or process.poll() is not None:
+            return 0
+        for line in _read(f"/proc/{process.pid}/status").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
+        return 0
 
     def stop(self):
         process, self.process = self.process, None
@@ -1443,15 +1766,15 @@ CSS = b"""
 window.assistant, .assistant-body { background: #1c1b25; color: #ecedf5; }
 .assistant-head { padding: 12px 14px; border-bottom: 1px solid #2f3142; }
 .assistant-title { font-size: 15px; font-weight: bold; }
-.bubble-user { background: #5b4fc4; color: #ffffff; border-radius: 12px; padding: 8px 12px; }
+.bubble-user { background: #6A3DF0; color: #ffffff; border-radius: 12px; padding: 8px 12px; }
 .bubble-claude { background: #2a2c3a; color: #ecedf5; border-radius: 12px; padding: 8px 12px; }
 .bubble-note { color: #aeb3c7; font-size: 12px; }
-.request { background: #262838; border: 1px solid #5b4fc4; border-radius: 10px; padding: 10px; }
+.request { background: #262838; border: 1px solid #6A3DF0; border-radius: 10px; padding: 10px; }
 .hint { color: #9aa0b6; font-size: 11px; }
 .chip { background: #2a2c3a; color: #ecedf5; border: 1px solid #3c3f55; border-radius: 14px; padding: 4px 10px; }
 entry { background: #14131b; color: #ecedf5; border: 1px solid #48536b; border-radius: 8px; padding: 8px; }
 button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 6px 12px; box-shadow: none; }
-button.suggested-action { background: #5b4fc4; border-color: #6f63dc; color: #ffffff; }
+button.suggested-action { background: #6A3DF0; border-color: #B69CFF; color: #ffffff; }
 textview, textview text { background: #14131b; color: #d6d9e6; font-family: monospace; font-size: 11px; }
 """
 
@@ -1483,6 +1806,17 @@ def run_setup(key="claude"):
     backend = provider(key)
     name = display_name(key)
     Gdk, GLib, Gtk = _gtk()
+    # Une seule fenêtre par assistant (#910) : un deuxième clic sur l'interrupteur
+    # ramène celle qui est ouverte (elle a pu passer derrière les Paramètres).
+    from gi.repository import Gio
+    app = Gtk.Application(application_id=f"org.winlux.AssistantSetup.{key}", flags=Gio.ApplicationFlags.FLAGS_NONE)
+    try:
+        app.register(None)
+    except GLib.Error:
+        pass  # pas de bus de session : fenêtre simple
+    if app.get_is_registered() and app.get_is_remote():
+        app.activate()
+        return
     heading_text = _t("Assistant IA : activer {name}", name=name)
     win = Gtk.Window(title=heading_text)
     win.set_role("winlux-assistant-setup")
@@ -1496,6 +1830,11 @@ def run_setup(key="claude"):
     heading = GLib.markup_escape_text(heading_text)
     title.set_markup(f"<span size='x-large' weight='bold'>{heading}</span>")
     box.pack_start(title, False, False, 0)
+    if not backend.remote:
+        # Ce qui sera pris sur ce PC, dit avant le téléchargement (#928).
+        cost = Gtk.Label(label=plan_text(backend.plan()), xalign=0, wrap=True, max_width_chars=62)
+        cost.get_style_context().add_class("hint")
+        box.pack_start(cost, False, False, 0)
     steps = []
     for text in backend.steps():
         label = Gtk.Label(label="○  " + text, xalign=0)
@@ -1514,6 +1853,21 @@ def run_setup(key="claude"):
     code_line.pack_start(send_code, False, False, 0)
     code_box.pack_start(code_line, False, False, 0)
     box.pack_start(code_box, False, False, 0)
+    # Sans navigateur sur ce PC (#912) : le lien à ouvrir sur un autre appareil.
+    link_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    link_text = Gtk.Label(xalign=0, wrap=True, max_width_chars=62)
+    link_url = Gtk.Label(xalign=0, wrap=True, max_width_chars=62, selectable=True)
+    link_url.set_line_wrap_mode(2)  # Pango.WrapMode.CHAR : une URL n'a pas d'espace
+    device_code = Gtk.Label(xalign=0, selectable=True)
+    link_line = Gtk.Box(spacing=8)
+    copy_link = Gtk.Button(label=_t("Copier le lien"))
+    get_browser = Gtk.Button(label=_t("Installer un navigateur"))
+    link_line.pack_start(copy_link, False, False, 0)
+    link_line.pack_start(get_browser, False, False, 0)
+    for widget in (link_text, link_url, device_code, link_line):
+        link_box.pack_start(widget, False, False, 0)
+    box.pack_start(link_box, False, False, 0)
+    box.reorder_child(link_box, box.get_children().index(code_box))  # le lien, puis le code à coller
     buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
     open_page = Gtk.Button(label=_t("Ouvrir la page de connexion"))
     retry = Gtk.Button(label=_t("Réessayer"))
@@ -1524,7 +1878,7 @@ def run_setup(key="claude"):
         buttons.pack_start(button, False, False, 0)
     box.pack_start(buttons, False, False, 0)
     win.add(box)
-    state = {"cancel": threading.Event(), "process": None, "url": None}
+    state = {"cancel": threading.Event(), "process": None, "url": None, "code": None, "browser": True}
 
     def mark(index, done=True):
         label, text = steps[index]
@@ -1542,6 +1896,7 @@ def run_setup(key="claude"):
     def failed(text):
         status.set_text(text)
         code_box.hide()
+        link_box.hide()
         open_page.hide()
         retry.show()
         close.set_label(_t("Fermer"))
@@ -1561,6 +1916,7 @@ def run_setup(key="claude"):
         status.set_text(done + "\n\n" + _t("C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des "
                                            "tâches ou appuyez sur Windows+C."))
         code_box.hide()
+        link_box.hide()
         open_page.hide()
         finish.show()
         finish.grab_focus()
@@ -1568,19 +1924,41 @@ def run_setup(key="claude"):
         return False
 
     def got_url():
-        open_page.show()
         if backend.code_entry:
             code_box.show_all()
-        if backend.open_login_page:
-            open_url(state["url"])
+        if state["browser"]:
+            open_page.show()
+            if backend.open_login_page:
+                open_url(state["url"])
+            return False
+        # Aucun navigateur : rien n'est ouvert ici, le lien part sur un autre appareil.
+        status.set_text("")
+        link_text.set_text(_t("Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un "
+                              "autre ordinateur, connectez-vous, puis collez ici le code affiché.") if backend.code_entry
+                           else _t("Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou "
+                                   "un autre ordinateur, connectez-vous, puis saisissez ce code :"))
+        link_url.set_text(state["url"])
+        link_box.show_all()
+        device_code.set_visible(bool(state["code"]))
+        return False
+
+    def got_code():
+        device_code.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(state['code'])}</span>")
+        device_code.show()
         return False
 
     def login_output(process):
         for line in iter(process.stdout.readline, ""):
+            line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)  # couleurs du terminal
             found = re.search(r"https://\S+", line)
             if found and not state["url"]:
                 state["url"] = found.group(0)
                 GLib.idle_add(got_url)
+            elif state["url"] and not state["code"] and not state["browser"]:
+                code_found = re.search(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b", line)
+                if code_found:
+                    state["code"] = code_found.group(0)
+                    GLib.idle_add(got_code)
         process.wait()
         backend.protect()
         info = backend.status()
@@ -1593,10 +1971,17 @@ def run_setup(key="claude"):
         mark(1, False)
         bar.set_fraction(0.0)
         status.set_text(_t("Connectez-vous dans la page qui vient de s'ouvrir (Google, e-mail…)."))
+        state["browser"] = has_browser()
+        env = backend.env()
+        if not state["browser"]:
+            # Ni claude.exe ni codex n'ouvrent « Ouvrir le lien » par-dessus cette fenêtre.
+            env.update(WINLUX_BROWSER="true", BROWSER="true")
+            status.set_text("")
         try:
-            process = subprocess.Popen(backend.login_command(launcher), stdin=subprocess.PIPE,
+            # Groupe de processus à part : Annuler ferme aussi ce que la connexion a lancé.
+            process = subprocess.Popen(backend.login_command(launcher, state["browser"]), stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                       env=backend.env(), cwd=str(HOME))
+                                       env=env, cwd=work_dir(), start_new_session=True)
         except OSError as error:
             return failed(_t("La connexion n'a pas abouti : {e}", e=error))
         state["process"] = process
@@ -1633,6 +2018,8 @@ def run_setup(key="claude"):
         close.set_label(_t("Annuler"))
         state["cancel"] = threading.Event()
         state["url"] = None
+        state["code"] = None
+        link_box.hide()
         mark(0, False)
         threading.Thread(target=work, daemon=True).start()
 
@@ -1650,21 +2037,42 @@ def run_setup(key="claude"):
         state["cancel"].set()
         process = state["process"]
         if process and process.poll() is None:
-            process.terminate()
+            try:
+                os.killpg(process.pid, 15)  # et le navigateur lancé par la connexion (#912)
+            except OSError:
+                process.terminate()
         Gtk.main_quit()
+
+    def copy_url(*_):
+        if state["url"]:
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(state["url"], -1)
+            status.set_text(_t("Lien copié."))
+
+    def install_browser(*_):
+        # Choix explicite : la page Navigateurs des Paramètres (Edge, Firefox, Chrome).
+        try:
+            subprocess.Popen(["winlux-shell-app", "settings", "11"], start_new_session=True)
+        except OSError:
+            pass
 
     def open_assistant(*_):
         subprocess.Popen([sys.executable, str(Path(__file__).resolve())], start_new_session=True)
         quit_setup()
 
     open_page.connect("clicked", lambda *_: state["url"] and open_url(state["url"]))
+    copy_link.connect("clicked", copy_url)
+    get_browser.connect("clicked", install_browser)
     send_code.connect("clicked", submit_code)
     code.connect("activate", submit_code)
     retry.connect("clicked", start)
     finish.connect("clicked", open_assistant)
     close.connect("clicked", quit_setup)
     win.connect("destroy", quit_setup)
+    app.connect("activate", lambda *_: win.present())
+    app.hold()
     win.show_all()
+    link_box.hide()
+    win.present()
     start()
     Gtk.main()
 
@@ -1687,6 +2095,8 @@ def run_chat():
             self.server = LocalServer()
             self.local = LocalAssistant(self.server)
             self.busy = False
+            self.idle_source = None  # arrêt du moteur après LOCAL_IDLE_SECONDS sans question (#928)
+            self.watch_source = None
             self.place()
             outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             outer.get_style_context().add_class("assistant-body")
@@ -1737,7 +2147,7 @@ def run_chat():
             bottom.pack_start(self.hint, False, False, 0)
             outer.pack_start(bottom, False, False, 0)
             self.connect("key-press-event", self.on_key)
-            self.connect("destroy", lambda *_: self.server.stop())
+            self.connect("destroy", lambda *_: self.stop_local())
             self.start_state()
 
         @property
@@ -1777,8 +2187,56 @@ def run_chat():
             if key and key != self.key and not self.busy:
                 write_config(current=key)
                 self.key = key
-                self.server.stop()
+                self.stop_local()
                 self.reset()
+
+        def stop_local(self):
+            for name in ("idle_source", "watch_source"):
+                source = getattr(self, name)
+                if source is not None:
+                    GLib.source_remove(source)
+                    setattr(self, name, None)
+            self.server.stop()
+
+        def local_hint(self):
+            """Ce que l'IA locale prend en ce moment, dit franchement (#928)."""
+            if provider(self.key).remote:
+                self.watch_source = None
+                return False
+            used = self.server.memory()
+            if used:
+                gpu = _t(" et la carte graphique") if provider("local").gpu_layers() else ""
+                self.hint.set_text(_t("IA locale en marche : elle prend {memory} de mémoire{gpu} et fait travailler "
+                                      "l'ordinateur. Elle s'arrête seule deux minutes après votre dernière question.",
+                                      memory=size_text(used), gpu=gpu))
+            elif self.server.running():
+                self.hint.set_text(_t("Démarrage de l'IA locale…"))
+            else:
+                self.hint.set_text(_t("IA locale en pause : elle ne prend ni mémoire ni processeur. Elle redémarre "
+                                      "à votre prochaine question. Rien n'est envoyé sur Internet."))
+            return True
+
+        def watch_local(self):
+            if self.watch_source is None:
+                self.watch_source = GLib.timeout_add_seconds(3, self.local_hint)
+            self.local_hint()
+
+        def arm_idle(self):
+            if self.idle_source is not None:
+                GLib.source_remove(self.idle_source)
+            self.idle_source = GLib.timeout_add_seconds(LOCAL_IDLE_SECONDS, self.idle_stop)
+
+        def idle_stop(self):
+            self.idle_source = None
+            if self.busy:
+                self.arm_idle()
+                return False
+            if self.server.running():
+                self.server.stop()
+                self.bubble(_t("Pause : l'IA locale s'est arrêtée pour rendre la mémoire. Elle redémarre à votre "
+                               "prochaine question."), "note")
+            self.local_hint()
+            return False
 
         def reset(self):
             self.conversation = Conversation(self.key)
@@ -1794,7 +2252,7 @@ def run_chat():
                 self.hint.set_text(_t("Envoyé à {name} ({company}) : votre question et cette conversation. "
                                       "Rien d'autre sans votre accord.", name=self.name, company=company))
             else:
-                self.hint.set_text(_t("IA locale : tout reste sur ce PC, rien n'est envoyé sur Internet."))
+                self.watch_local()
             if not is_enabled(self.key):
                 self.blocked(_t("L'assistant est désactivé. Activez-le dans Paramètres."))
                 return
@@ -1827,6 +2285,9 @@ def run_chat():
                 self.set_busy(False)
                 if error:
                     self.blocked(_t("L'IA locale n'a pas démarré : {e}", e=error))
+                else:
+                    self.arm_idle()
+                self.local_hint()
                 self.entry.grab_focus()
                 return False
             try:
@@ -1910,11 +2371,21 @@ def run_chat():
         def ask_local(self, text):
             self.set_busy(True)
             waiting = self.bubble(_t("{name} réfléchit…", name=self.name), "note")
+            restart = None
+            if not self.server.running():
+                # En pause après inactivité : relancé ici, dans le fil principal
+                # (le moteur meurt avec l'assistant, PR_SET_PDEATHSIG).
+                try:
+                    self.server.spawn()
+                except Exception as problem:
+                    restart = str(problem)
+            self.local_hint()
 
             def work():
                 try:
-                    if not self.server.running():
-                        raise RuntimeError(_t("Le moteur de l'IA locale ne répond pas."))
+                    if restart:
+                        raise RuntimeError(restart)
+                    self.server.wait_ready()
                     outcome = ("ok", self.local.handle(text))
                 except Exception as error:
                     outcome = ("error", str(error))
@@ -1924,6 +2395,8 @@ def run_chat():
         def answered_local(self, waiting, outcome):
             waiting.destroy()
             self.set_busy(False)
+            self.arm_idle()
+            self.local_hint()
             if outcome[0] == "error":
                 self.bubble(_t("{name} n'a pas répondu : {e}", name=self.name, e=outcome[1]), "note")
                 return False

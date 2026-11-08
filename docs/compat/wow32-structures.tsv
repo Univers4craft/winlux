@@ -78,6 +78,10 @@ d3dcompiler.rs	BlobVTable	a-verifier
 d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
 d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
 d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
+d3dx9_effect.rs	Effect	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 214-222 (ID3DXEffect)
+d3dx9_effect.rs	Pool	x86	objet COM : le programme ne lit que sa table (ID3DXEffectPool)
+d3dx9_mesh.rs	Mesh	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 202-208 (ID3DXMesh)
+d3dx9_shader.rs	Ct	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 198-201 (ID3DXConstantTable)
 dataobject.rs	DataObject	a-verifier	
 dataobject.rs	EnumFormat	a-verifier	
 dataobject.rs	FormatEtc	a-verifier	
@@ -193,6 +197,7 @@ winlux_media.rs	OpenOptions	a-verifier
 winmm_waveout.rs	WaveHdr	a-verifier	
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
+wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)
 ws2_32.rs	WinAddrInfoA	x86	wow64.c n° 73 (ADDRINFOA de 32 octets)
 ws2_32.rs	WinAddrInfoW	x86	ADDRINFOW de 32 octets, même conversion que n° 73
 ws2_32.rs	WinFdSet	x86	wow64.c n° 75 (fd_set à SOCKET de 4 octets)

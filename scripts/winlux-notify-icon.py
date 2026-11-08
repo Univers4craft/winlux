@@ -6,6 +6,7 @@ entrée des lignes séparées par des tabulations :
   set <clé> <exécutable> <infobulle> <visible 0|1>
   delete <clé>
   balloon <clé> <titre> <texte> <drapeaux NIIF_*>
+  menu <clé>      (programme sans menu : menu de Winlux sur l'icône, #927)
 et écrit sur sa sortie « <clé> <événement> <x> <y> » pour chaque clic
 (ldown, lup, ldbl, rdown, rup, mdown, mup, balloon-show). Il se termine quand
 le programme se ferme (fin de l'entrée).
@@ -40,6 +41,50 @@ def catalogue():
 
 CATALOGUE = catalogue()
 ICONS = {}
+NAMES = {}  # clé → nom de l'icône pour la zone de notification
+
+def language():
+    """Langue de l'interface (Paramètres), fr par défaut."""
+    lang = os.environ.get("WINLUX_LANG", "")
+    if not lang:
+        try:
+            for line in Path("/etc/winlux/locale.conf").read_text(encoding="utf-8").splitlines():
+                if line.startswith("LANG="): lang = line[5:].strip().strip('"')
+        except OSError: pass
+    return lang[:2] if lang[:2] in ("en", "es", "de") else "fr"
+
+HIDE = {"fr": "Ranger dans les icônes cachées", "en": "Move to hidden icons",
+        "es": "Mover a iconos ocultos", "de": "In ausgeblendete Symbole verschieben"}
+
+def hide(name):
+    for tray in ("/usr/bin/winlux-tray", str(Path(__file__).resolve().parent / "winlux-tray.py")):
+        if Path(tray).is_file():
+            command = [tray] if not tray.endswith(".py") else [sys.executable, "-B", tray]
+            try: subprocess.Popen(command + ["overflow", "hide", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError: pass
+            return
+
+def own_menu(key, event=None):
+    """Petit menu de Winlux sur l'icône (#927) : programme sans menu, ou
+    Maj + clic droit. « Ranger dans les icônes cachées », annulable depuis
+    Paramètres > Personnalisation."""
+    menu = Gtk.Menu()
+    item = Gtk.MenuItem(label=HIDE[language()])
+    item.connect("activate", lambda *_: hide(NAMES.get(key, GLib.get_prgname() or "")))
+    menu.append(item)
+    menu.show_all()
+    # Placé contre l'icône, comme le menu d'une icône de la zone de
+    # notification (popup_at_pointer refuse de s'ouvrir sans clic en cours).
+    icon = ICONS.get(key)
+    button, when = (event.button, event.time) if event is not None else (3, Gtk.get_current_event_time())
+    if icon is not None:
+        menu.popup(None, None, Gtk.StatusIcon.position_menu, icon, button, when)
+    else:
+        menu.popup(None, None, None, None, button, when)
+    OPEN_MENUS.append(menu)  # gardé en vie le temps de l'affichage
+    menu.connect("deactivate", lambda m: OPEN_MENUS.remove(m) if m in OPEN_MENUS else None)
+
+OPEN_MENUS = []
 BUTTONS = {1: "l", 2: "m", 3: "r"}
 
 def emit(key, event, x=0, y=0):
@@ -58,9 +103,18 @@ def pixbuf_for(executable):
         except (GLib.Error, OSError, ValueError): pass
     return None
 
+def program_name(executable):
+    """Nom de l'icône pour la zone de notification : nom du .exe, en minuscules."""
+    stem = Path(executable.replace("\\", "/")).stem.lower()
+    cleaned = "".join(c if c.isalnum() or c in "-_." else "-" for c in stem).strip("-.")
+    return cleaned or "winlux-programme"
+
 def pressed(icon, event, key):
     prefix = BUTTONS.get(event.button)
     if prefix is None: return False
+    if prefix == "r" and event.state & Gdk.ModifierType.SHIFT_MASK:
+        own_menu(key, event)  # Maj + clic droit : menu de Winlux, pas celui du programme
+        return True
     kind = "dbl" if event.type == Gdk.EventType._2BUTTON_PRESS else "down"
     if kind == "dbl" and prefix != "l": return False
     emit(key, prefix + kind, event.x_root, event.y_root)
@@ -68,6 +122,7 @@ def pressed(icon, event, key):
 
 def released(icon, event, key):
     prefix = BUTTONS.get(event.button)
+    if prefix == "r" and event.state & Gdk.ModifierType.SHIFT_MASK: return True
     if prefix: emit(key, prefix + "up", event.x_root, event.y_root)
     return False
 
@@ -77,6 +132,14 @@ def apply(fields):
         key, executable, tip, visible = fields[1:5]
         icon = ICONS.get(key)
         if icon is None:
+            # Nom propre au programme (putty, filezilla…) : la zone de
+            # notification d'XFCE retient et cache chaque icône par ce nom.
+            # Sans lui, toutes les icônes .exe s'appelaient
+            # « winlux-notify-icon.py » et se cachaient ensemble. Posé avant
+            # la première fenêtre ; un assistant sert un seul programme.
+            if not ICONS:
+                GLib.set_prgname(program_name(executable))
+            NAMES[key] = program_name(executable)
             icon = Gtk.StatusIcon()
             icon.connect("button-press-event", pressed, key)
             icon.connect("button-release-event", released, key)
@@ -87,6 +150,8 @@ def apply(fields):
             icon.set_title(Path(executable).stem or "Winlux")
         icon.set_tooltip_text(tip or Path(executable).stem)
         icon.set_visible(visible == "1")
+    elif command == "menu" and len(fields) >= 2 and fields[1] in ICONS:
+        own_menu(fields[1])  # programme sans menu (pas de message de rappel)
     elif command == "delete" and len(fields) >= 2:
         icon = ICONS.pop(fields[1], None)
         if icon is not None: icon.set_visible(False)

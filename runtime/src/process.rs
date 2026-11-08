@@ -814,6 +814,43 @@ fn start(exe: Module) -> u32 {
     f()
 }
 
+/// Action personnalisée DLL de Windows Installer (#833) : la DLL est le
+/// module principal ; ses dépendances puis elle-même sont initialisées
+/// (rappels TLS, DllMain), puis `UINT Entree(MSIHANDLE)` est appelée.
+pub fn run_dll_export(dll: Module, export: usize, arg: u32) -> ! {
+    let h = std::thread::Builder::new()
+        .name("win-main".into())
+        .stack_size(8 << 20)
+        .spawn(move || {
+            init_thread();
+            crate::crash::install();
+            crate::wow32::wrap_fault_handlers();
+            let mods = loader::MODULES.lock().unwrap().clone();
+            for m in mods.iter().rev() {
+                if !loader::mark_initialized(m.base) {
+                    continue;
+                }
+                run_tls_callbacks(m, DLL_PROCESS_ATTACH);
+                if let Some(e) = m.entry() {
+                    if call_dllmain(e, m.base, DLL_PROCESS_ATTACH, 0) == 0 {
+                        eprintln!("winlux: l'initialisation de {} a échoué", m.name);
+                        return 1603;
+                    }
+                }
+            }
+            let _ = &dll;
+            if crate::wow32::active() {
+                return crate::wow32::call32(export, &[arg]) as u32;
+            }
+            let f: extern "win64" fn(u32) -> u32 = unsafe { std::mem::transmute(export) };
+            f(arg)
+        })
+        .expect("création du thread principal");
+    let code = h.join().unwrap_or(1603);
+    crate::msi::session::save(code);
+    crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+
 /// DllMain d'un module réel, x86 (wow32) ou x64.
 pub fn call_dllmain(entry: usize, base: usize, reason: u32, reserved: usize) -> i32 {
     if crate::wow32::active() {

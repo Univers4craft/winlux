@@ -140,6 +140,12 @@ fn installe_puis_desinstalle() {
         reg("hklm\\software\\winlux exemple", "Niveau").unwrap(),
         7u32.to_le_bytes()
     );
+    // Casse des clés conservée (#830), clé parente créée par le paquet.
+    let names = crate::registry::read(|d| Ok(d.subkeys("hklm\\software\\winlux editeur"))).unwrap();
+    assert!(
+        names.iter().any(|n| n.ends_with("Reglages Exemple")),
+        "{names:?}"
+    );
     let uninstall =
         "hklm\\software\\microsoft\\windows\\currentversion\\uninstall\\{6a1b5c0e-1111-4222-8333-944455556666}";
     assert_eq!(
@@ -168,6 +174,10 @@ fn installe_puis_desinstalle() {
     assert_eq!(code, 0);
     assert!(!dir.exists(), "dossier d'installation retiré");
     assert!(reg("hklm\\software\\winlux exemple", "Chemin").is_none());
+    // Clés créées par le paquet retirées, parent compris (#829).
+    assert!(!crate::dlls::advapi32::registry_key_exists(
+        "hklm\\software\\winlux editeur"
+    ));
     assert!(reg(uninstall, "DisplayName").is_none());
     assert!(install::Manifest::all().is_empty());
     assert_eq!(

@@ -26,6 +26,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const DWRITE_E_FILEFORMAT: i32 = 0x8898_5000u32 as i32;
+const DWRITE_E_FILENOTFOUND: i32 = 0x8898_5003u32 as i32;
+const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const DWRITE_E_NOFONT: i32 = 0x8898_5002u32 as i32;
 
 const fn iid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> Guid {
@@ -219,6 +221,28 @@ fn substitutes(name: &str) -> &'static [&'static str] {
         | "cascadia code" | "monospace" => MONO,
         _ => SANS,
     }
+}
+
+/// Polices livrées avec Windows que les programmes supposent présentes.
+fn is_windows_font(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("segoe ui")
+        || matches!(
+            n.as_str(),
+            "arial"
+                | "tahoma"
+                | "verdana"
+                | "calibri"
+                | "microsoft sans serif"
+                | "times new roman"
+                | "georgia"
+                | "cambria"
+                | "courier new"
+                | "consolas"
+                | "lucida console"
+                | "cascadia mono"
+                | "cascadia code"
+        )
 }
 
 fn pick(fam: &Family, weight: u32, italic: bool) -> FaceInfo {
@@ -627,8 +651,8 @@ static FACTORY_VT: VTable<24> = VTable([
     create_text_layout as *const (),
     gdi_compatible_layout as *const (),
     not_implemented as *const (), // CreateEllipsisTrimmingSign
-    not_implemented as *const (), // CreateTextAnalyzer
-    not_implemented as *const (), // CreateNumberSubstitution
+    super::dwrite_analyzer::create_text_analyzer as *const (), // CreateTextAnalyzer
+    super::dwrite_analyzer::create_number_substitution as *const (), // CreateNumberSubstitution
     not_implemented as *const (), // CreateGlyphRunAnalysis
 ]);
 
@@ -723,12 +747,207 @@ unsafe extern "win64" fn file_analyze(
     }
     S_OK
 }
+unsafe extern "win64" fn file_loader(_this: *mut FileObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    put(out, Com::create(LOADER_VT.ptr(), ()))
+}
+
+// --- Chargeur de fichiers locaux --------------------------------------------------
+//
+// IDWriteLocalFontFileLoader : la clé d'un fichier est son chemin Linux. WPF
+// en tire l'URI de chaque police (`FontFile.GetUriPath`) ; on lui donne le
+// chemin Windows correspondant (#268).
+
+const IID_FONT_FILE_LOADER: Guid = iid(
+    0x727cad4e,
+    0xd6af,
+    0x4c9e,
+    [0x8a, 0x08, 0xd6, 0x95, 0xb1, 0x1c, 0xaa, 0x49],
+);
+const IID_LOCAL_FONT_FILE_LOADER: Guid = iid(
+    0xb2d9f3ec,
+    0xc9fe,
+    0x4a11,
+    [0xa2, 0xec, 0xd8, 0x62, 0x08, 0xf7, 0xc0, 0xa2],
+);
+const IID_FONT_FILE_STREAM: Guid = iid(
+    0x6d4865fe,
+    0x0ab8,
+    0x4d91,
+    [0x8f, 0x62, 0x5d, 0xd6, 0xbe, 0x34, 0xa3, 0xe0],
+);
+
+unsafe fn key_path(key: *const c_void, size: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    if key.is_null() || size == 0 {
+        return None;
+    }
+    let b = std::slice::from_raw_parts(key as *const u8, size as usize);
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(b)))
+}
+fn key_windows_path(key: &std::path::Path) -> Vec<u16> {
+    crate::paths::to_windows(key).encode_utf16().collect()
+}
+unsafe extern "win64" fn loader_qi(
+    this: *mut Com<()>,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_FONT_FILE_LOADER, IID_LOCAL_FONT_FILE_LOADER],
+    )
+}
+unsafe extern "win64" fn loader_stream(
+    _this: *mut Com<()>,
+    key: *const c_void,
+    size: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    match key_path(key, size).and_then(|p| std::fs::read(p).ok()) {
+        Some(data) => put(out, Com::create(STREAM_VT.ptr(), data)),
+        None => {
+            *out = std::ptr::null_mut();
+            DWRITE_E_FILENOTFOUND
+        }
+    }
+}
+unsafe extern "win64" fn loader_path_len(
+    _this: *mut Com<()>,
+    key: *const c_void,
+    size: u32,
+    len: *mut u32,
+) -> i32 {
+    let Some(p) = key_path(key, size) else {
+        return E_INVALIDARG;
+    };
+    if len.is_null() {
+        return E_POINTER;
+    }
+    *len = key_windows_path(&p).len() as u32;
+    S_OK
+}
+unsafe extern "win64" fn loader_path(
+    _this: *mut Com<()>,
+    key: *const c_void,
+    size: u32,
+    buf: *mut u16,
+    cap: u32,
+) -> i32 {
+    let Some(p) = key_path(key, size) else {
+        return E_INVALIDARG;
+    };
+    let w = key_windows_path(&p);
+    if buf.is_null() || (cap as usize) < w.len() + 1 {
+        return E_NOT_SUFFICIENT_BUFFER;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
+    S_OK
+}
+fn file_time(p: &std::path::Path) -> u64 {
+    let secs = std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() / 100);
+    (secs as u64).saturating_add(116_444_736_000_000_000)
+}
+unsafe extern "win64" fn loader_time(
+    _this: *mut Com<()>,
+    key: *const c_void,
+    size: u32,
+    out: *mut u64,
+) -> i32 {
+    let Some(p) = key_path(key, size) else {
+        return E_INVALIDARG;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = file_time(&p);
+    S_OK
+}
+static LOADER_VT: VTable<7> = VTable([
+    loader_qi as *const (),
+    add_ref::<()> as *const (),
+    release::<()> as *const (),
+    loader_stream as *const (),
+    loader_path_len as *const (),
+    loader_path as *const (),
+    loader_time as *const (),
+]);
+
+type StreamObj = Com<Vec<u8>>;
+unsafe extern "win64" fn stream_qi(
+    this: *mut StreamObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_FONT_FILE_STREAM])
+}
+unsafe extern "win64" fn stream_read(
+    this: *mut StreamObj,
+    start: *mut *const c_void,
+    offset: u64,
+    size: u64,
+    ctx: *mut *mut c_void,
+) -> i32 {
+    let data = Com::get(this);
+    if start.is_null() {
+        return E_POINTER;
+    }
+    if !ctx.is_null() {
+        *ctx = std::ptr::null_mut();
+    }
+    match offset.checked_add(size) {
+        Some(end) if end <= data.len() as u64 => {
+            *start = data.as_ptr().add(offset as usize) as *const c_void;
+            S_OK
+        }
+        _ => {
+            *start = std::ptr::null();
+            E_FAIL
+        }
+    }
+}
+unsafe extern "win64" fn stream_size(this: *mut StreamObj, out: *mut u64) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = Com::get(this).len() as u64;
+    S_OK
+}
+unsafe extern "win64" fn stream_time(_this: *mut StreamObj, out: *mut u64) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+static STREAM_VT: VTable<7> = VTable([
+    stream_qi as *const (),
+    add_ref::<Vec<u8>> as *const (),
+    release::<Vec<u8>> as *const (),
+    stream_read as *const (),
+    nothing as *const (), // ReleaseFileFragment
+    stream_size as *const (),
+    stream_time as *const (),
+]);
+
 static FILE_VT: VTable<6> = VTable([
     file_qi as *const (),
     add_ref::<PathBuf> as *const (),
     release::<PathBuf> as *const (),
     file_key as *const (),
-    not_implemented as *const (), // GetLoader
+    file_loader as *const (),
     file_analyze as *const (),
 ]);
 
@@ -772,9 +991,16 @@ unsafe extern "win64" fn collection_find(
     exists: *mut i32,
 ) -> i32 {
     let n = read_wide(name);
-    let pos = Com::get(this)
-        .iter()
-        .position(|f| f.name.eq_ignore_ascii_case(&n));
+    let fams = Com::get(this);
+    let find = |x: &str| fams.iter().position(|f| f.name.eq_ignore_ascii_case(x));
+    // Une police Windows absente (Segoe UI, Arial…) est servie par sa
+    // remplaçante libre, comme pour CreateTextFormat : WPF cherche ses
+    // polices par FindFamilyName et abandonne s'il n'en trouve aucune (#268).
+    let pos = find(&n).or_else(|| {
+        is_windows_font(&n)
+            .then(|| substitutes(&n).iter().find_map(|s| find(s)))
+            .flatten()
+    });
     if !index.is_null() {
         *index = pos.map_or(u32::MAX, |p| p as u32);
     }
@@ -2869,6 +3095,30 @@ pub mod tests {
         );
         method::<Unary>(fmt, 2)(fmt);
         l
+    }
+
+    #[test]
+    fn find_family_name_sert_les_polices_windows_remplacees() {
+        unsafe {
+            let fam = |n: &str| Family {
+                name: n.into(),
+                faces: vec![],
+            };
+            let c = Com::create(
+                COLLECTION_VT.ptr(),
+                vec![fam("DejaVu Sans"), fam("Liberation Sans")],
+            );
+            let find = |n: &str| {
+                let (mut i, mut e) = (0u32, 0i32);
+                let w = wide(n);
+                assert_eq!(collection_find(c, w.as_ptr(), &mut i, &mut e), S_OK);
+                (e, i)
+            };
+            assert_eq!(find("dejavu sans"), (1, 0));
+            assert_eq!(find("Arial"), (1, 1));
+            assert_eq!(find("Segoe UI"), (1, 1));
+            assert_eq!(find("Police Inventée"), (0, u32::MAX));
+        }
     }
 
     #[test]
