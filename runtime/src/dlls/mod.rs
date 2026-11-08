@@ -76,6 +76,7 @@ pub mod electron_win32;
 pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
+pub mod fiber64;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -164,6 +165,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod uiautomationcore;
+pub mod url_moniker;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
@@ -299,6 +301,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
+                    e.extend(fiber64::kernel32_exports());
                     e.extend(console_input::exports());
                     // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
                     e.extend(serial::exports());

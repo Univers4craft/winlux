@@ -1155,6 +1155,8 @@ pub fn urlmon_exports() -> Exports {
         "URLDownloadToCacheFileW" => fn url_download_to_cache_file_w,
         "ObtainUserAgentString" => fn obtain_user_agent_string,
         "FindMimeFromData" => fn find_mime_from_data,
+        "CreateURLMoniker" => fn super::url_moniker::create_url_moniker,
+        "CreateURLMonikerEx" => fn super::url_moniker::create_url_moniker_ex,
     }
 }
 
