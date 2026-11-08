@@ -1043,6 +1043,11 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1090 : Direct3D 11 et DXGI appelables par un programme 32 bits.
+ok((ROOT / "runtime/src/dlls/dx11_x86.rs").exists()
+   and "VTABLE_SIGS" in (ROOT / "runtime/build.rs").read_text()
+   and "d3d1132" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "Direct3D 11 et DXGI en x86 : passerelles tirées des signatures, structures et tableaux convertis (#1090)")
 # #1085 : une cible Direct2D 1.0 répond aussi à ID2D1DeviceContext à 6.
 ok("fn context_view(" in (ROOT / "runtime/src/dlls/d2d1_1.rs").read_text()
    and "v11::context_view(this, out)" in (ROOT / "runtime/src/dlls/d2d1.rs").read_text(),
@@ -1212,6 +1217,9 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+ok("fn create_bitmap_brush(" in (runtime_dlls / "d2d1_brush.rs").read_text(encoding="utf-8")
+   and "bitmap_and_gradient_brushes_paint" in (runtime_dlls / "d2d1.rs").read_text(encoding="utf-8"),
+   "Direct2D : CreateBitmapBrush, CreateImageBrush et dégradés (Notepad++ / Scintilla, #1124)")
 # #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
 # vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
 msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")

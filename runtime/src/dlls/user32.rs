@@ -4322,9 +4322,12 @@ mod tests {
     fn peek_message_rend_wm_timer_comme_get_message() {
         unsafe {
             // Minuteur de thread (hwnd 0), comme SetTimer(NULL, …).
-            let id = set_timer(0, 0, 30, 0);
+            // Période longue : sous la charge de la suite complète, une
+            // période de 30 ms pouvait échoir de nouveau avant la dernière
+            // vérification (#1141).
+            let id = set_timer(0, 0, 300, 0);
             assert_ne!(id, 0);
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            std::thread::sleep(std::time::Duration::from_millis(330));
             // MsgWait voit le minuteur échu…
             assert_eq!(
                 msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
