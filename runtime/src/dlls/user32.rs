@@ -1592,6 +1592,17 @@ pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_co
     }
 }
 
+/// RealGetWindowClass : le type de fenêtre. Winlux ne superclasse pas les
+/// contrôles prédéfinis, donc c'est le nom de classe, comme GetClassName.
+/// Le sélecteur de fichiers de Qt (VLC) l'appelle à la fermeture.
+pub unsafe extern "win64" fn real_get_window_class_w(hwnd: usize, buf: *mut u16, max: u32) -> u32 {
+    get_class_name_w(hwnd, buf, max.min(i32::MAX as u32) as i32) as u32
+}
+
+pub unsafe extern "win64" fn real_get_window_class_a(hwnd: usize, buf: *mut u8, max: u32) -> u32 {
+    get_class_name_a(hwnd, buf, max.min(i32::MAX as u32) as i32) as u32
+}
+
 /// Remplit un WNDCLASSEX (A ou W, même disposition en x64) pour la classe
 /// `name`, enregistrée ou prédéfinie (BUTTON, EDIT…). WinForms en dérive ses
 /// classes « WindowsForms10.BUTTON… » par GetClassInfo (#666).
@@ -3625,6 +3636,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
+        "RealGetWindowClassA"=>fn real_get_window_class_a, "RealGetWindowClassW"=>fn real_get_window_class_w,
         "GetClassInfoExA"=>fn get_class_info_ex_a, "GetClassInfoExW"=>fn get_class_info_ex_w,
         // --- Window text ---
         "SetWindowTextA"=>fn set_window_text_a, "SetWindowTextW"=>fn set_window_text_w,
@@ -4226,6 +4238,41 @@ mod tests_messages {
     unsafe extern "win64" fn crochet_suivant(_code: i32, w: usize, _l: isize) -> isize {
         VUS.with(|v| v.borrow_mut().push((w, 0xFFFF)));
         0
+    }
+
+    #[test]
+    fn real_get_window_class_rend_le_nom_de_classe() {
+        unsafe {
+            let class: Vec<u16> = "BUTTON\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let mut buf = [0u16; 32];
+            let n = real_get_window_class_w(hwnd, buf.as_mut_ptr(), 32);
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..n as usize]).to_ascii_uppercase(),
+                "BUTTON"
+            );
+            let mut a = [0u8; 32];
+            assert_eq!(real_get_window_class_a(hwnd, a.as_mut_ptr(), 32), n);
+            assert_eq!(
+                real_get_window_class_w(0x7777_0000, buf.as_mut_ptr(), 32),
+                0
+            );
+            destroy_window(hwnd);
+        }
     }
 
     #[test]

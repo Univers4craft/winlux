@@ -3134,6 +3134,8 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
+    // Nom et drapeaux demandés, pour WINLUX_TRACE=1 (#1019).
+    crate::trace!("LoadLibraryEx({value}, 0x{flags:x})");
     // LOAD_IGNORE_CODE_AUTHZ_LEVEL : sans effet.
     let flags = flags & !0x10;
     if flags == 0 {
@@ -3157,15 +3159,29 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
-    let path = crate::paths::to_linux(&value);
     let mut directories = Vec::new();
     if flags & (8 | 0x100) != 0 {
-        if !path.is_absolute() {
-            crate::process::set_last_error(87);
-            return 0;
-        }
-        if let Some(parent) = path.parent() {
-            directories.push(parent.to_path_buf());
+        // Converti seulement ici, où le nom doit être un chemin absolu : un
+        // simple nom de DLL (« api-ms-win-core-synch-l1-2-0 » demandé par la
+        // CRT avec LOAD_LIBRARY_SEARCH_SYSTEM32) devenait un chemin relatif
+        // au dossier courant. Lancé depuis le Bureau, claude.exe attendait
+        // alors l'autorisation « fichiers personnels » avant même son main
+        // (#1019).
+        let is_path = value.contains(['\\', '/']) || value.as_bytes().get(1) == Some(&b':');
+        let path = is_path.then(|| crate::paths::to_linux(&value));
+        match path {
+            Some(path) if path.is_absolute() => {
+                if let Some(parent) = path.parent() {
+                    directories.push(parent.to_path_buf());
+                }
+            }
+            // LOAD_WITH_ALTERED_SEARCH_PATH avec un simple nom : recherche
+            // standard, comme Windows.
+            None if flags & 0x100 == 0 => {}
+            _ => {
+                crate::process::set_last_error(87);
+                return 0;
+            }
         }
     }
     if flags & (8 | 0x200 | 0x1000) != 0 {
@@ -5495,6 +5511,8 @@ unsafe fn create_process_common(
     });
     let process_handle = add_sync(SyncHandle::Process(object.clone()), None);
     let thread_handle = add_sync(SyncHandle::Process(object), None);
+    // Lancé par un membre d'un job : l'enfant le rejoint (#19).
+    crate::dlls::jobs::on_child_created(pid as i32, process_handle, creation_flags);
     std::ptr::write(
         info,
         ProcessInformation {
@@ -5855,9 +5873,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle)
-        || crate::dlls::kernel32_node::close_job(handle)
-    {
+    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -6880,6 +6896,7 @@ pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -6888,6 +6905,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
