@@ -494,6 +494,9 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
+      - name: Mémoire au lancement d'un gros .exe (#997)
+        run: python3 -B scripts/test-image-memory.py
+
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
 
