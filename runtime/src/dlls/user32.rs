@@ -764,6 +764,7 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         callback(m.hwnd, m.message, m.wparam, m.time);
         return 0;
     }
+    recheck_own_frame(m.hwnd, m.message);
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
@@ -918,6 +919,11 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
+    pending_frame().retain(|(h, _)| *h != hwnd);
+    OWN_FRAME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|&h| h != hwnd);
     if gui::destroy_window(hwnd) {
         1
     } else {
@@ -1185,18 +1191,110 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     gui::reset_default_nccalcsize();
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    if !own {
+        pending_frame().retain(|(h, _)| *h != hwnd);
+    }
     let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
     let had = list.contains(&hwnd);
     if own && !had {
-        list.push(hwnd);
         drop(list);
-        with_backend(|b| b.set_decorations(hwnd, 0));
+        // Le cadre ne part que si la fenêtre a déjà une barre de titre à
+        // elle (#1211). Sinon il reste, et sera retiré dès qu'elle en aura
+        // une (voir `recheck_own_frame`).
+        if has_own_caption(hwnd) {
+            take_own_frame(hwnd);
+        } else {
+            let mut pending = pending_frame();
+            if !pending.iter().any(|(h, _)| *h == hwnd) {
+                pending.push((hwnd, std::time::Instant::now()));
+            }
+        }
     } else if !own && had {
         list.retain(|&h| h != hwnd);
         drop(list);
         let style = gui::window_style(hwnd).unwrap_or(0);
         let level = popup_decorations(style).unwrap_or(2);
         with_backend(|b| b.set_decorations(hwnd, level));
+    }
+}
+
+/// Fenêtres qui ont demandé à dessiner leur propre cadre mais n'ont pas
+/// encore de barre de titre (Electron dont la page ne s'est pas chargée) :
+/// le cadre du gestionnaire reste, sinon rien ne permettrait de les fermer,
+/// réduire ou déplacer (#1211). Avec l'instant du dernier essai.
+static PENDING_FRAME: std::sync::Mutex<Vec<(usize, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn pending_frame() -> std::sync::MutexGuard<'static, Vec<(usize, std::time::Instant)>> {
+    PENDING_FRAME.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn take_own_frame(hwnd: usize) {
+    pending_frame().retain(|(h, _)| *h != hwnd);
+    let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
+    if !list.contains(&hwnd) {
+        list.push(hwnd);
+        drop(list);
+        with_backend(|b| b.set_decorations(hwnd, 0));
+    }
+}
+
+/// La fenêtre répond-elle à WM_NCHITTEST par une barre de titre ou un
+/// bouton de légende quelque part dans sa bande du haut ? C'est le signe
+/// qu'elle se déplace et se ferme sans le cadre du gestionnaire.
+unsafe fn has_own_caption(hwnd: usize) -> bool {
+    let Some(r) = gui::window_rect(hwnd) else {
+        return false;
+    };
+    let (w, h) = (r.width(), r.height());
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    for dy in [4, 12, 24] {
+        if dy >= h {
+            continue;
+        }
+        for x in [
+            r.left + w / 2,
+            r.left + 60,
+            r.right - 20,
+            r.right - 60,
+            r.right - 110,
+        ] {
+            if x <= r.left || x >= r.right {
+                continue;
+            }
+            let lp = pack_i16_pair(x, r.top + dy);
+            // HTCAPTION, HTSYSMENU, HTMINBUTTON, HTMAXBUTTON, HTCLOSE.
+            if matches!(send_message_w(hwnd, 0x0084, 0, lp), 2 | 3 | 8 | 9 | 20) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Essai de nouveau, au plus deux fois par seconde, sur une fenêtre en
+/// attente quand la souris y passe : la page d'Electron peut se charger
+/// bien après la création de la fenêtre (#1211).
+unsafe fn recheck_own_frame(hwnd: usize, message: u32) {
+    if !matches!(message, 0x0200 | 0x0201 | 0x00A0) {
+        return;
+    }
+    let due = {
+        let mut pending = pending_frame();
+        let Some(entry) = pending.iter_mut().find(|(h, _)| *h == hwnd) else {
+            return;
+        };
+        if entry.1.elapsed() < std::time::Duration::from_millis(500) {
+            false
+        } else {
+            entry.1 = std::time::Instant::now();
+            true
+        }
+    };
+    if due && has_own_caption(hwnd) {
+        take_own_frame(hwnd);
     }
 }
 
@@ -4400,7 +4498,92 @@ mod tests {
         if msg == 0x0083 {
             return 0;
         }
+        // Sa barre de titre maison : HTCAPTION dans la bande du haut.
+        if msg == 0x0084 {
+            return 2;
+        }
         gui::def_window_proc(h, msg, w, l)
+    }
+
+    static PAGE_CHARGEE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    unsafe extern "win64" fn proc_electron_vide(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        // Electron sans cadre : WM_NCCALCSIZE gardé, mais tant que la page
+        // n'est pas chargée, aucune zone glissable ni bouton (HTCLIENT).
+        if msg == 0x0083 {
+            return 0;
+        }
+        if msg == 0x0084 {
+            return if PAGE_CHARGEE.load(std::sync::atomic::Ordering::SeqCst) {
+                2
+            } else {
+                1
+            };
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1211 : une fenêtre sans barre de titre à elle garde le cadre du
+    /// gestionnaire ; il part quand la barre apparaît et que la souris passe.
+    #[test]
+    fn cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre() {
+        unsafe {
+            let name: Vec<u16> = "Winlux1211Electron".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_electron_vide as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let hwnd = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0x00CF_0000,
+                10,
+                10,
+                320,
+                200,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_pos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            );
+            let own = |h: usize| OWN_FRAME.lock().unwrap().contains(&h);
+            assert!(
+                !own(hwnd),
+                "cadre retiré alors que rien ne permet de fermer"
+            );
+            // La page se charge ; la souris passe après le délai.
+            PAGE_CHARGEE.store(true, std::sync::atomic::Ordering::SeqCst);
+            for (h, t) in pending_frame().iter_mut() {
+                if *h == hwnd {
+                    *t -= std::time::Duration::from_secs(1);
+                }
+            }
+            let m = Msg::new(hwnd, 0x0200, 0, 0);
+            dispatch_message_w(&m);
+            assert!(own(hwnd));
+            assert!(!pending_frame().iter().any(|(h, _)| *h == hwnd));
+            destroy_window(hwnd);
+        }
     }
 
     unsafe extern "win64" fn proc_cadre_standard(h: usize, msg: u32, w: usize, l: isize) -> isize {
