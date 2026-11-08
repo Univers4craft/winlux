@@ -163,6 +163,9 @@ step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_d
 # SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
+# Instructions du processeur (#1195, Photoshop exige SSE 4.2) :
+# IsProcessorFeaturePresent suit CPUID pour SSSE3, SSE4.1, SSE4.2, AVX-512F.
+step "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2, AVX-512F (#1195)" cargo test -q -p winlux -- instructions_sse4_et_avx512_suivent_cpuid
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py

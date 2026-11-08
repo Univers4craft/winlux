@@ -465,12 +465,21 @@ pub extern "win64" fn is_processor_feature_present(feature: u32) -> i32 {
             "avx2" => std::arch::is_x86_feature_detected!("avx2"),
             "rdrand" => std::arch::is_x86_feature_detected!("rdrand"),
             "cmpxchg16b" => std::arch::is_x86_feature_detected!("cmpxchg16b"),
+            "ssse3" => std::arch::is_x86_feature_detected!("ssse3"),
+            "sse4.1" => std::arch::is_x86_feature_detected!("sse4.1"),
+            "sse4.2" => std::arch::is_x86_feature_detected!("sse4.2"),
+            "avx512f" => std::arch::is_x86_feature_detected!("avx512f"),
             _ => false,
         };
         return match feature {
             3 | 6 | 7 | 8 | 10 | 12 | 13 | 17 | 23 => 1, // MMX, SSE, SSE2, RDTSC, NX, cmpxchg64, fastfail…
             14 => f("cmpxchg16b") as i32,
             28 => f("rdrand") as i32,
+            // PF_SSSE3, PF_SSE4_1, PF_SSE4_2 (Photoshop l'exige), PF_AVX512F (#1195).
+            36 => f("ssse3") as i32,
+            37 => f("sse4.1") as i32,
+            38 => f("sse4.2") as i32,
+            41 => f("avx512f") as i32,
             39 => f("avx") as i32,
             40 => f("avx2") as i32,
             _ => 0,
@@ -1127,6 +1136,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn instructions_sse4_et_avx512_suivent_cpuid() {
+        // #1195 : chaque constante répond comme CPUID, présente ou non.
+        for (pf, name) in [
+            (36u32, "ssse3"),
+            (37, "sse4.1"),
+            (38, "sse4.2"),
+            (41, "avx512f"),
+        ] {
+            let cpu = match name {
+                "ssse3" => std::arch::is_x86_feature_detected!("ssse3"),
+                "sse4.1" => std::arch::is_x86_feature_detected!("sse4.1"),
+                "sse4.2" => std::arch::is_x86_feature_detected!("sse4.2"),
+                _ => std::arch::is_x86_feature_detected!("avx512f"),
+            };
+            assert_eq!(is_processor_feature_present(pf), cpu as i32, "{name}");
+        }
+        // Numéro inconnu : absent.
+        assert_eq!(is_processor_feature_present(999), 0);
+    }
 
     #[test]
     fn texte_de_debogage_accepte() {
