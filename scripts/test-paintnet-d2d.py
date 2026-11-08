@@ -72,6 +72,7 @@ ok("DXGI_ADAPTER_DESC2_SIZE: usize = 320" in source("dxgi.rs"),
 dwrite = source("dwrite.rs")
 sets = source("dwrite_sets.rs")
 fallback = source("dwrite_fallback.rs")
+custom = source("dwrite_custom.rs")
 ok(vtable(dwrite, "FACTORY_VT") == 57 and "IID_DWRITE_FACTORY7" in sets,
    "IDWriteFactory7 : 57 méthodes, demandé par Paint.NET 5.1")
 ok(vtable(dwrite, "COLLECTION_VT") == 14 and vtable(dwrite, "FAMILY_VT") == 14
@@ -85,6 +86,10 @@ ok(vtable(fallback, "PARAMS_VT") == 11 and "IID_RENDERING_PARAMS3" in fallback
    "IDWriteRenderingParams3, CreateGlyphRunAnalysis et CreateFontFallbackBuilder réels")
 ok("fn raw_table" in source("sfnt.rs") and "raw_table(&tag.to_le_bytes())" in dwrite,
    "TryGetFontTable rend les tables OpenType")
+
+ok("// CreateCustomFontCollection" in dwrite and "not_implemented as *const (), // CreateCustom" not in dwrite
+   and "fn custom_file_reference(" in custom and "fn read_stream(" in custom,
+   "DirectWrite : collections et fichiers de polices fournis par l'appli (#1075)")
 
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,

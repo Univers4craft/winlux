@@ -944,6 +944,10 @@ ok((ROOT / "runtime/src/dlls/dwrite_sets.rs").exists()
    and "VTable<57>" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
    and "IDWriteFactory7 : 57 méthodes" in (SCRIPTS / "test-paintnet-d2d.py").read_text(),
    "DirectWrite : IDWriteFactory7, jeux de polices et faces 1 à 6 (#984)")
+# #1075 : polices livrées par l'appli (FontFamily par URI dans WPF).
+ok("custom::custom_collection as *const ()" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "fn read_stream(" in (ROOT / "runtime/src/dlls/dwrite_custom.rs").read_text(),
+   "DirectWrite : CreateCustomFontCollection et CreateCustomFontFileReference lisent les polices de l'appli (#1075)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas

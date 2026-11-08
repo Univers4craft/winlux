@@ -25,6 +25,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// IDWriteFactory1/2 et police de repli du système (#672).
+#[path = "dwrite_custom.rs"]
+mod custom;
 #[path = "dwrite_fallback.rs"]
 pub(crate) mod fallback;
 
@@ -507,11 +509,10 @@ unsafe extern "win64" fn factory_font_face(
         return E_INVALIDARG;
     }
     *out = std::ptr::null_mut();
-    let file = *files;
-    if file.is_null() || *(file as *const *const ()) != FILE_VT.ptr() {
+    // Fichier Winlux, ou fichier d'un chargeur de l'application (#1075).
+    let Some(path) = custom::file_path(*files) else {
         return E_INVALIDARG;
-    }
-    let path = Com::get(file as *mut FileObj).clone();
+    };
     let Some(font) = sfnt::load(&path, index) else {
         return DWRITE_E_FILEFORMAT;
     };
@@ -657,11 +658,11 @@ static FACTORY_VT: VTable<57> = VTable([
     add_ref::<()> as *const (),
     release::<()> as *const (),
     system_collection as *const (),
-    not_implemented as *const (), // CreateCustomFontCollection
-    register_loader as *const (), // RegisterFontCollectionLoader
-    register_loader as *const (), // UnregisterFontCollectionLoader
+    custom::custom_collection as *const (), // CreateCustomFontCollection
+    register_loader as *const (),           // RegisterFontCollectionLoader
+    register_loader as *const (),           // UnregisterFontCollectionLoader
     font_file_reference as *const (),
-    not_implemented as *const (), // CreateCustomFontFileReference
+    custom::custom_file_reference as *const (), // CreateCustomFontFileReference
     factory_font_face as *const (),
     rendering_params as *const (),
     monitor_rendering_params as *const (),
