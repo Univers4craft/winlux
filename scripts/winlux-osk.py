@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Clavier tactile Winlux, façon Windows 11.
+"""Clavier tactile Winlux.
 
 Utilisable à la souris ou au doigt : dispositions française (AZERTY),
 anglaise (QWERTY), allemande (QWERTZ) et espagnole (QWERTY avec Ñ), page de
