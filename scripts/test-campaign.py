@@ -1200,4 +1200,9 @@ ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_p
 ok("builtin_file_path(module)" in (runtime_dlls / "kernel32.rs").read_text()
    and "dll_integree_a_un_chemin_et_un_fichier_visible" in (SCRIPTS / "test-all.sh").read_text(),
    "DLL système intégrées : chemin System32 par GetModuleFileNameW, visibles par GetFileAttributesExW (#1113)")
+ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
+   and "fn user_locale() -> &'static Locale" in (runtime_dlls / "nls.rs").read_text()
+   and "SetThreadPreferredUILanguages" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "etoile_point_etoile_liste_aussi_les_noms_sans_point" in (SCRIPTS / "test-all.sh").read_text(),
+   "Langue des applications : « *.* » liste les dossiers sans point, locale par nom de la session (#1125)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

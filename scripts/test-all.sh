@@ -100,6 +100,10 @@ step "Fenêtre vivante pendant WM_DESTROY (#1079)" cargo test -q -p winlux la_fe
 # d'un lecteur, chemin et attributs des DLL système intégrées.
 step "Volume et DLL intégrées vues par Paint.NET (#1112, #1113)" cargo test -q -p winlux -- nom_de_volume_d_une_racine_de_lecteur dll_integree_a_un_chemin_et_un_fichier_visible
 
+# Langue des applications wxWidgets (#1125) : « dossier\*.* » liste les
+# dossiers sans point, locale par nom de la session, SetThread*UILanguage(s).
+step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" cargo test -q -p winlux -- etoile_point_etoile_liste_aussi_les_noms_sans_point locale_par_defaut_suit_la_langue_de_la_session langue_d_interface_du_thread_et_langues_preferees
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
