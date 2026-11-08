@@ -288,12 +288,6 @@ pub unsafe extern "win64" fn open_mutex_w(access: u32, inherit: i32, name: *cons
     super::kernel32::open_mutex_a(access, inherit, a.as_ptr())
 }
 
-/// OpenJobObject : aucun objet tâche nommé n'existe.
-pub extern "win64" fn open_job_object(_access: u32, _inherit: i32, _name: usize) -> usize {
-    set_last_error(ERROR_FILE_NOT_FOUND);
-    0
-}
-
 /// GetSystemTimes : temps processeur cumulés (inactif, noyau, utilisateur)
 /// en unités de 100 ns, lus dans /proc/stat. Comme Windows, le temps noyau
 /// inclut le temps inactif.
@@ -350,8 +344,8 @@ pub fn exports() -> super::Exports {
         "IsBadStringPtrA" => fn is_bad_string_ptr_a,
         "IsBadStringPtrW" => fn is_bad_string_ptr_w,
         "OpenMutexW" => fn open_mutex_w,
-        "OpenJobObjectA" => fn open_job_object,
-        "OpenJobObjectW" => fn open_job_object,
+        "OpenJobObjectA" => fn super::jobs::open_job_object_a,
+        "OpenJobObjectW" => fn super::jobs::open_job_object_w,
         "GetSystemTimes" => fn get_system_times,
         "GetStringTypeA" => fn super::common_apps::get_string_type_ex_a,
     }

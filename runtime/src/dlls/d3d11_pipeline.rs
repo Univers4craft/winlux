@@ -1271,6 +1271,28 @@ unsafe fn set_cbs(
     n: u32,
     bufs: *const *mut c_void,
 ) {
+    set_cbs1(
+        this,
+        stage,
+        start,
+        n,
+        bufs,
+        std::ptr::null(),
+        std::ptr::null(),
+    );
+}
+
+/// `*SetConstantBuffers1` (ID3D11DeviceContext1) : chaque tampon peut ne
+/// montrer qu'une fenêtre, comptée en constantes de 16 octets.
+pub(super) unsafe fn set_cbs1(
+    this: *mut DeviceContext,
+    stage: usize,
+    start: u32,
+    n: u32,
+    bufs: *const *mut c_void,
+    first: *const u32,
+    count: *const u32,
+) {
     with_state(this, |s| {
         for i in 0..n as usize {
             let slot = start as usize + i;
@@ -1282,10 +1304,15 @@ unsafe fn set_cbs(
             } else {
                 *bufs.add(i)
             };
+            let (offset, size) = if first.is_null() || count.is_null() {
+                (0, 0)
+            } else {
+                (*first.add(i) as isize * 16, *count.add(i) as isize * 16)
+            };
             s.cbs[stage][slot] = ConstantBuffer {
                 buffer: as_buffer(b).map_or(0, |b| (*b).gl_buffer),
-                offset: 0,
-                size: 0,
+                offset,
+                size,
             };
         }
     });

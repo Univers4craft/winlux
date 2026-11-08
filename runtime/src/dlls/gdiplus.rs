@@ -1002,6 +1002,15 @@ unsafe extern "win64" fn get_image_width(img: usize, w: *mut u32) -> i32 {
     }
 }
 
+/// GdipImageForceValidation (Image.FromStream(…, validateImageData)) :
+/// Winlux décode l'image dès son chargement, elle est donc déjà validée.
+unsafe extern "win64" fn image_force_validation(img: usize) -> i32 {
+    match bitmap(img) {
+        Some(_) => OK,
+        None => INVALID_PARAMETER,
+    }
+}
+
 unsafe extern "win64" fn get_image_height(img: usize, h: *mut u32) -> i32 {
     match bitmap(img) {
         Some(b) => out(h, b.h),
@@ -5302,7 +5311,6 @@ const NOT_YET: &[&str] = &[
     "GdipGetTextureImage",
     "GdipGetTextureTransform",
     "GdipGetTextureWrapMode",
-    "GdipImageForceValidation",
     "GdipIsEqualRegion",
     "GdipIsOutlineVisiblePathPoint",
     "GdipIsOutlineVisiblePathPointI",
@@ -5404,6 +5412,7 @@ pub fn exports() -> Exports {
         "GdipCloneBitmapArea" => fn clone_bitmap_area,
         "GdipCloneBitmapAreaI" => fn clone_bitmap_area_i,
         "GdipGetImageWidth" => fn get_image_width,
+        "GdipImageForceValidation" => fn image_force_validation,
         "GdipGetImageHeight" => fn get_image_height,
         "GdipGetImageDimension" => fn get_image_dimension,
         "GdipGetImageBounds" => fn get_image_bounds,
