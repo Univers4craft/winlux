@@ -113,6 +113,10 @@ CONTROL_POLICY = (
     (r"share-[a-z-]+", "admin"),
     (r"transfer-[a-z-]+", "user"),
     (r"phone-firewall-(on|off)", "user"),
+    # Type de réseau (#1103) : passer en Public ne fait que fermer ; Privé
+    # ouvre partage et découverte, donc un administrateur confirme.
+    (r"firewall-profile-public", "user"),
+    (r"firewall-profile-private", "admin"),
     (r"report-(offer|redact|mode|auto)-[a-z]+", "user"),
     # Envoi automatique des plantages (#438) : le rapport arrive sur l'entrée
     # standard et root le vérifie ; le jeton (lu sur l'entrée) exige un admin.

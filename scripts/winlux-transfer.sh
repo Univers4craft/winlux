@@ -4,8 +4,12 @@
 # ligne.
 #
 # Le fichier « .wlxprofile » est une archive tar.gz qui contient :
-#   - le thème, la couleur d'accent, le fond et la barre des tâches
-#     (personnalisation, épingles, icônes du bureau, accessibilité) ;
+#   - le thème clair ou sombre, la couleur d'accent, la taille de la barre et
+#     le fond d'écran de la session native (user/apparence.conf ; une image
+#     personnelle de 8 Mio au plus voyage dans user/fond.<ext>, un fond livré
+#     avec Winlux par son seul chemin) (#1101) ;
+#   - pour l'ancien bureau PE : personnalisation, épingles, icônes du bureau,
+#     accessibilité ;
 #   - les lecteurs réseau, sans aucun mot de passe (ils restent scellés sur
 #     la machine d'origine : Winlux les redemande à la première connexion) ;
 #   - les applications par défaut (mimeapps.list) ;
@@ -14,6 +18,11 @@
 # Rien d'autre n'est lu à l'import : liste blanche de fichiers, de clés et de
 # valeurs. Avant chaque import, les réglages actuels sont sauvegardés et
 # « undo » les remet.
+#
+# Tourne sous le compte (action locale de winlux-control, #1100) : les
+# réglages et le dossier personnel sont ceux du compte, l'état va dans son
+# dossier d'exécution (WINLUX_TRANSFER_RUN) et les clés de /etc/winlux
+# passent par le relais winlux-root (liste blanche de son côté aussi).
 #
 # Usage (via winlux-control transfer-<action> ...) :
 #   winlux-transfer status          écrit /run/winlux/transfer.txt
@@ -25,13 +34,18 @@ set -eu
 umask 077
 root=${WINLUX_CONTROL_ROOT:-}
 etc="$root/etc/winlux"
-run="$root/run/winlux"
+run=${WINLUX_TRANSFER_RUN:-$root/run/winlux}
 out="$run/transfer.txt"
 home=${HOME:-/root}
 share="$home/.local/share/winlux"
 backup="$share/reglages-avant-import.wlxprofile"
 mkdir -p "$run"
 MAX_BYTES=262144
+WALL_MAX=8388608
+PROFILE_MAX=12582912
+PERSONALIZE=${WINLUX_PERSONALIZE:-winlux-personalize}
+# Bureau sous le compte : /etc/winlux reste à root, le relais écrit les clés.
+relayed() { test -z "$root" && test "$(id -u)" != 0 && test -S "${WINLUX_ROOT_SOCKET:-/run/winlux-root.sock}"; }
 
 fail() { printf 'winlux-transfer : %s\n' "$*" >&2; note "error" "$*"; status; exit 1; }
 note() { printf '%s|%s\n' "$1" "$2" > "$run/transfer-last.txt"; chmod 644 "$run/transfer-last.txt" 2>/dev/null || true; }
@@ -115,6 +129,82 @@ status() {
     mv "$out.tmp.$$" "$out"
 }
 
+# ---------------------------------------------------------------- apparence
+
+# Thème, accent, taille de la barre et fond de la session native (#1101) :
+# ~/.config/winlux/appearance.json, et le fond d'xfdesktop s'il n'y est pas.
+appearance_export() {
+    dir=$1
+    py=$(command -v python3 2>/dev/null || true)
+    test -n "$py" || return 0
+    "$py" -I - "$home/.config/winlux/appearance.json" > "$dir/apparence.conf" <<'PY' || true
+import json, re, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        state = json.load(source)
+except (OSError, ValueError):
+    state = {}
+state = state if isinstance(state, dict) else {}
+# Valeurs par défaut de winlux-personalize : l'annulation d'un import les remet.
+state = {"theme": "dark", "accent": "#6a3df0", "panel-size": "40", **state}
+checks = (("THEME", "theme", r"dark|light"), ("ACCENT", "accent", r"#[0-9A-Fa-f]{6}"),
+          ("PANEL_SIZE", "panel-size", r"32|40|48|56|64"), ("WALLPAPER", "wallpaper", r"/[^\x00-\x1f\x7f]{1,1024}"))
+for key, name, pattern in checks:
+    value = state.get(name)
+    if isinstance(value, (str, int)) and re.fullmatch(pattern, str(value)):
+        print(f"{key}={value}")
+PY
+    if ! grep -q '^WALLPAPER=' "$dir/apparence.conf" 2>/dev/null && command -v xfconf-query >/dev/null 2>&1; then
+        prop=$(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep '/last-image$' | head -n 1)
+        wall=$(test -z "$prop" || xfconf-query -c xfce4-desktop -p "$prop" 2>/dev/null | head -n 1)
+        case "$wall" in /*) printf 'WALLPAPER=%s\n' "$wall" | tr -d '\r' >> "$dir/apparence.conf" ;; esac
+    fi
+    wall=$(sed -n 's/^WALLPAPER=//p' "$dir/apparence.conf" | head -n 1)
+    case "$wall" in
+        # Fond livré avec Winlux : présent sur l'autre PC, le chemin suffit.
+        /usr/share/winlux/*) ;;
+        ?*)
+            sed -i '/^WALLPAPER=/d' "$dir/apparence.conf"
+            ext=$(printf '%s' "${wall##*.}" | tr 'A-Z' 'a-z')
+            case "$ext" in png|jpg|jpeg|webp|bmp|gif) ;; *) ext= ;; esac
+            if test -n "$ext" && test -f "$wall" && ! test -L "$wall" && test "$(wc -c < "$wall")" -le "$WALL_MAX"; then
+                cp "$wall" "$dir/fond.$ext"
+            fi ;;
+    esac
+    test -s "$dir/apparence.conf" || rm -f "$dir/apparence.conf"
+}
+
+# Remet l'apparence par winlux-personalize, qui revérifie chaque valeur
+# (thème, couleur, taille, image lisible par GdkPixbuf).
+appearance_import() {
+    dir=$1
+    command -v "$PERSONALIZE" >/dev/null 2>&1 || return 0
+    f="$dir/apparence.conf"
+    if test -f "$f" && ! test -L "$f" && test "$(wc -c < "$f")" -le 4096; then
+        theme=$(sed -n 's/^THEME=//p' "$f" | head -n 1)
+        case "$theme" in dark|light) "$PERSONALIZE" theme "$theme" >/dev/null 2>&1 || true ;; esac
+        accent=$(sed -n 's/^ACCENT=//p' "$f" | head -n 1)
+        if printf '%s' "$accent" | grep -qE '^#[0-9A-Fa-f]{6}$'; then "$PERSONALIZE" accent "$accent" >/dev/null 2>&1 || true; fi
+        size=$(sed -n 's/^PANEL_SIZE=//p' "$f" | head -n 1)
+        case "$size" in 32|40|48|56|64) "$PERSONALIZE" panel-size "$size" >/dev/null 2>&1 || true ;; esac
+        wall=$(sed -n 's/^WALLPAPER=//p' "$f" | head -n 1)
+    else
+        wall=
+    fi
+    for picture in "$dir"/fond.png "$dir"/fond.jpg "$dir"/fond.jpeg "$dir"/fond.webp "$dir"/fond.bmp "$dir"/fond.gif; do
+        test -f "$picture" && ! test -L "$picture" || continue
+        test "$(wc -c < "$picture")" -le "$WALL_MAX" || continue
+        mkdir -p "$share/fonds"
+        wall="$share/fonds/fond-importe.${picture##*.}"
+        cp "$picture" "$wall.$$" && mv "$wall.$$" "$wall"
+        break
+    done
+    case "$wall" in
+        *..*) ;;
+        /usr/share/winlux/*|"$share"/fonds/*) test -f "$wall" && "$PERSONALIZE" wallpaper "$wall" >/dev/null 2>&1 || true ;;
+    esac
+}
+
 # ---------------------------------------------------------------- export
 
 build() {
@@ -144,6 +234,8 @@ build() {
         test -s "$bwork/system/$file" || rm -f "$bwork/system/$file"
     done
     for f in "$bwork"/system/*; do test -f "$f" && members="$members system/${f##*/}"; done
+    appearance_export "$bwork/user"
+    for f in "$bwork"/user/apparence.conf "$bwork"/user/fond.*; do test -f "$f" && members="$members user/${f##*/}"; done
     # shellcheck disable=SC2086
     (cd "$bwork" && tar -czf "$dest.part" --owner=0 --group=0 $members)
     mv "$dest.part" "$dest"
@@ -176,6 +268,10 @@ filter_keys() {
         value=${line#*=}
         test -n "$line" || continue
         printf '%s' "$value" | grep -qE '^[A-Za-z0-9_.,:/+@ -]{0,64}$' || continue
+        if relayed; then
+            "${WINLUX_ROOT_TOOL:-winlux-root}" conf "$file" "$key" "$value" >/dev/null 2>&1 || true
+            continue
+        fi
         target="$etc/$file"
         tmp="$target.$$"
         if test -r "$target"; then grep -v "^$key=" "$target" > "$tmp" || true; else : > "$tmp"; fi
@@ -201,13 +297,14 @@ import_file() {
     file=$1
     command -v tar >/dev/null 2>&1 || fail "tar est introuvable"
     test -f "$file" && ! test -L "$file" || fail "fichier introuvable"
-    test "$(wc -c < "$file")" -le 1048576 || fail "fichier trop gros pour des réglages"
+    test "$(wc -c < "$file")" -le "$PROFILE_MAX" || fail "fichier trop gros pour des réglages"
     list=$(tar -tzf "$file" 2>/dev/null) || fail "ce fichier n'est pas un fichier de réglages Winlux"
     printf '%s\n' "$list" | grep -qx 'winlux-profile.txt' || fail "ce fichier n'est pas un fichier de réglages Winlux"
     test "$(tar -xzOf "$file" winlux-profile.txt | sed -n 's/^format=//p' | head -n 1)" = 1 || fail "format de réglages inconnu"
     allowed="winlux-profile.txt"
     for rel in $USER_FILES; do allowed="$allowed user/$rel"; done
     for file_keys in $(printf '%s\n' "$SYSTEM_KEYS" | cut -d ' ' -f 1); do allowed="$allowed system/$file_keys"; done
+    allowed="$allowed user/apparence.conf user/fond.png user/fond.jpg user/fond.jpeg user/fond.webp user/fond.bmp user/fond.gif"
     wanted=
     for m in $list; do
         case " $allowed " in *" $m "*) wanted="$wanted $m" ;; esac
@@ -241,14 +338,16 @@ import_file() {
         if test "${2:-}" = undo; then
             if ! test -f "$f"; then : > "$work/empty"; f="$work/empty"; fi
             for key in $keys; do
-                grep -q "^$key=" "$f" || ! test -r "$etc/$name" || sed -i "/^$key=/d" "$etc/$name"
+                # Sous le compte, le relais ne sait qu'écrire : la clé reste.
+                grep -q "^$key=" "$f" || relayed || ! test -r "$etc/$name" || sed -i "/^$key=/d" "$etc/$name"
             done
         fi
         test -f "$f" && ! test -L "$f" || continue
         test "$(wc -c < "$f")" -le 4096 || continue
-        mkdir -p "$etc"
+        relayed || mkdir -p "$etc"
         filter_keys "$f" "$name" "$keys"
     done
+    appearance_import "$work/user"
     rm -rf "$work"
     trap - EXIT HUP INT TERM
     note "imported" "$(windows_path "$file")"
