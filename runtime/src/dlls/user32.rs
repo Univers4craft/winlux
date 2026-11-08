@@ -204,7 +204,52 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
 
 // ---------- Création de fenêtres ----------
 
+/// `WINLUX_WINDOW_DIAG=1` : création, placement et affichage des fenêtres
+/// sur la sortie d'erreur (diagnostic des fenêtres filles absentes).
+fn window_diag() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("WINLUX_WINDOW_DIAG").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
 unsafe fn create_window_common(
+    class: String,
+    title: String,
+    style: u32,
+    ex_style: u32,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    parent: usize,
+    instance: usize,
+    menu: usize,
+    create_params: *mut c_void,
+) -> usize {
+    let diag = window_diag().then(|| format!("{class:?} {title:?} style={style:#x} ex={ex_style:#x} ({x},{y} {cx}x{cy}) parent={parent:#x}"));
+    let hwnd = create_window_inner(
+        class,
+        title,
+        style,
+        ex_style,
+        x,
+        y,
+        cx,
+        cy,
+        parent,
+        instance,
+        menu,
+        create_params,
+    );
+    if let Some(d) = diag {
+        eprintln!("winlux[fenetre] creer {d} -> {hwnd:#x}");
+    }
+    hwnd
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn create_window_inner(
     class: String,
     title: String,
     style: u32,
@@ -811,6 +856,9 @@ pub unsafe extern "win64" fn def_window_proc_w(
 }
 
 pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
+    if window_diag() {
+        eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
+    }
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
@@ -981,6 +1029,9 @@ pub unsafe extern "win64" fn set_window_pos(
     cy: i32,
     flags: u32,
 ) -> i32 {
+    if window_diag() {
+        eprintln!("winlux[fenetre] placer {hwnd:#x} ({x},{y} {cx}x{cy}) flags={flags:#x}");
+    }
     let Some(old) = gui::window_rect(hwnd) else {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
