@@ -206,7 +206,7 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
 
 /// `WINLUX_WINDOW_DIAG=1` : création, placement et affichage des fenêtres
 /// sur la sortie d'erreur (diagnostic des fenêtres filles absentes).
-fn window_diag() -> bool {
+pub(crate) fn window_diag() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         std::env::var_os("WINLUX_WINDOW_DIAG").is_some_and(|v| !v.is_empty() && v != "0")
@@ -2023,6 +2023,9 @@ pub extern "win64" fn get_parent(hwnd: usize) -> usize {
 
 pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     let old = gui::set_window_parent(hwnd, new_parent).unwrap_or(0);
+    if window_diag() {
+        eprintln!("winlux[fenetre] parent {hwnd:#x} : {old:#x} -> {new_parent:#x}");
+    }
     if new_parent != 0 && new_parent != old {
         // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).

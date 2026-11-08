@@ -754,12 +754,22 @@ fn draw_item(
         rc_item: rect,
         item_data: data as usize,
     };
-    send(
+    let r = send(
         parent(hwnd),
         WM_DRAWITEM,
         user32::control_id(hwnd) as usize,
         &dis as *const DrawItemStruct as isize,
     );
+    if user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] WM_DRAWITEM {hwnd:#x} -> parent {:#x} élément {item} état {state:#x} ({},{} {}x{}) hdc {hdc:#x} -> {r}",
+            parent(hwnd),
+            rect.left,
+            rect.top,
+            rect.width(),
+            rect.height()
+        );
+    }
 }
 
 /// Peint le contrôle. `target` : DC fourni par le programme (WM_PAINT avec
@@ -3567,7 +3577,29 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
         Kind::Static => static_proc_impl(hwnd, msg, wp, lp),
         Kind::Edit => edit_proc_impl(hwnd, msg, wp, lp),
         Kind::ListBox => listbox_proc_impl(hwnd, msg, wp, lp),
-        Kind::ComboBox => combobox_proc_impl(hwnd, msg, wp, lp),
+        Kind::ComboBox => {
+            let r = combobox_proc_impl(hwnd, msg, wp, lp);
+            // WINLUX_WINDOW_DIAG : contenu des listes déroulantes (CB_*),
+            // pour une liste vide (#1250).
+            if (0x0140..=0x0165).contains(&msg) && user32::window_diag() {
+                let st = gui::window_style(hwnd).unwrap_or(0);
+                let strings = st & 0x30 == 0 || st & 0x200 != 0; // CBS_HASSTRINGS
+                let text = if matches!(msg, 0x0143 | 0x014A) && lp != 0 && strings {
+                    let s = if message_is_wide(hwnd) {
+                        crate::dlls::wstr(lp as *const u16)
+                    } else {
+                        crate::dlls::cstr(lp as *const u8)
+                    };
+                    format!(" {s:?}")
+                } else {
+                    String::new()
+                };
+                eprintln!(
+                    "winlux[fenetre] liste {hwnd:#x} style={st:#x} msg={msg:#x} wp={wp:#x} lp={lp:#x}{text} -> {r:?}"
+                );
+            }
+            r
+        }
         Kind::ScrollBar => scrollbar_proc_impl(hwnd, msg, wp, lp),
         kind => comctl::proc_impl(kind, hwnd, msg, wp, lp),
     };
