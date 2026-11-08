@@ -866,6 +866,11 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
     }
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
+    // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
+    // fenêtre s'affiche sans prendre le focus (#1127).
+    if matches!(cmd, 4 | 7 | 8) && !was {
+        with_backend(|b| b.set_no_initial_focus(hwnd));
+    }
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
