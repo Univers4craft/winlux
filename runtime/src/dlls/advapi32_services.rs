@@ -133,7 +133,7 @@ fn registered_services() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn parse_command_line(s: &str) -> Vec<String> {
+pub(crate) fn parse_command_line(s: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;

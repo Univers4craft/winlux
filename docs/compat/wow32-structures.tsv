@@ -2,6 +2,7 @@
 # Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
 # fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
 audio_com.rs	Iface	a-verifier	
+com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
@@ -49,6 +50,7 @@ crypt32.rs	SslExtraPara	a-verifier
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
+d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d3d11.rs	Buffer	a-verifier	
 d3d11.rs	BufferVTable	a-verifier	
@@ -157,6 +159,8 @@ ole32.rs	MarshalStream	a-verifier
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
+oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
+oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 schannel.rs	SecBuffer	a-verifier	
