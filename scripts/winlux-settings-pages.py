@@ -341,6 +341,8 @@ _TR = {
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
     'Compte GitHub': ('GitHub account', 'Cuenta de GitHub', 'GitHub-Konto'),
+    'Mes signalements': ('My reports', 'Mis informes', 'Meine Meldungen'),
+    'Envoyer avec mon compte GitHub…': ('Send with my GitHub account…', 'Enviar con mi cuenta de GitHub…', 'Mit meinem GitHub-Konto senden…'),
     'Connecté en tant que': ('Signed in as', 'Conectado como', 'Angemeldet als'),
     'Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer ».':
         ('Your reports go straight to GitHub, under your name, when you click "Send".',
@@ -3506,7 +3508,9 @@ class ExtraPages:
         box = self.card()
         self.actions(box, [(_t("Signaler un problème"), lambda: self.spawn(["winlux-report"])),
                            (_t("Dernier plantage"), lambda: self.spawn(["winlux-report", "--crash", "--force"])),
-                           (_t("Rapports enregistrés"), lambda: self.spawn(["winlux-report", "--open-saved"]))])
+                           (_t("Rapports enregistrés"), lambda: self.spawn(["winlux-report", "--open-saved"])),
+                           # Issues envoyées et leur état (#1052).
+                           (_t("Mes signalements"), lambda: self.spawn(["winlux-report", "--mine"]))])
         # Compte GitHub de l'utilisateur (#725) : connexion dans la fenêtre de
         # winlux-report, qui garde le jeton dans le compte (0600).
         self.section(_t("Compte GitHub"))
@@ -3516,7 +3520,8 @@ class ExtraPages:
             self.row(box, _t("Connecté en tant que"), Gtk.Label(label="@" + login),
                      _t("Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer »."))
             self.actions(box, [(_t("Changer de compte"), lambda: self.tool(["winlux-report", "--account-connect"])),
-                               (_t("Se déconnecter"), lambda: self.tool(["winlux-report", "--account-forget"]))])
+                               # Révoque le jeton chez GitHub après confirmation (#1051).
+                               (_t("Se déconnecter"), lambda: self.tool(["winlux-report", "--account-disconnect"]))])
         else:
             self.hint(_t("Connectez votre compte GitHub pour envoyer vos rapports directement depuis Winlux. Sans compte, chaque rapport s’ouvre, prérempli, sur le site GitHub."), box)
             self.actions(box, [(_t("Se connecter avec GitHub"), lambda: self.tool(["winlux-report", "--account-connect"])),
@@ -3545,6 +3550,11 @@ class ExtraPages:
         if waiting:
             self.row(box, _t("Rapports en attente d’envoi"), Gtk.Label(label=str(waiting)),
                      _t("Ils partiront au prochain démarrage connecté à Internet."))
+            if login and not token and status.get("report_relay") != "1":
+                # Sans jeton du système, le compte relié peut les envoyer,
+                # après une confirmation qui les liste (#1052).
+                self.actions(box, [(_t("Envoyer avec mon compte GitHub…"),
+                                    lambda: self.tool(["winlux-report", "--send-queue"]))])
         if not token and status.get("report_relay") != "1":
             self.hint(_t("Aucun service d’envoi n’est encore configuré : les rapports restent sur ce PC. Un développeur peut ajouter son jeton GitHub ci-dessous."), box)
         self.actions(box, [(_t("Jeton GitHub…"), self.report_token_dialog),

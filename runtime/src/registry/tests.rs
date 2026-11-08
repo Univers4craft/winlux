@@ -727,3 +727,74 @@ fn vue_dynamique_fuseau_pages_clavier_polices() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn vue_dynamique_jamais_ecrite_ni_doublee() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Dossier de polices Windows absent : la clé Fonts existe quand même
+    // (#1045) ; les polices du système y sont, en chemin complet.
+    let mut data = Data::empty();
+    let fonts = std::env::temp_dir().join(format!("winlux-live-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&fonts);
+    live::fonts(&mut data, live::FONTS, &fonts.join("absent"), false);
+    assert!(data.exists(live::FONTS));
+
+    // Un installateur a déjà inscrit le fichier sous son propre nom : la vue
+    // ne l'ajoute pas une seconde fois (#1046).
+    std::fs::create_dir_all(&fonts).unwrap();
+    let source = Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf");
+    if source.is_file() {
+        std::fs::copy(source, fonts.join("DejaVuSerif.ttf")).unwrap();
+        let mut data = Data::empty();
+        data.set(
+            live::FONTS,
+            "Ma Police Serif (TrueType)",
+            REG_SZ,
+            utf16z("DejaVuSerif.ttf"),
+        );
+        live::fonts(&mut data, live::FONTS, &fonts, false);
+        let same: Vec<String> = data
+            .values(live::FONTS)
+            .into_iter()
+            .filter(|v| string_of(&v.bytes).eq_ignore_ascii_case("DejaVuSerif.ttf"))
+            .map(|v| v.name)
+            .collect();
+        assert_eq!(same, vec!["Ma Police Serif (TrueType)".to_string()]);
+    }
+
+    // Les valeurs calculées ne vont jamais dans registry.tsv : une police
+    // supprimée disparaît, une valeur d'installateur reste.
+    let path = fonts.join("registre.tsv");
+    let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+    std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+    write(|d| {
+        d.set(
+            live::FONTS,
+            "Installateur (TrueType)",
+            REG_SZ,
+            utf16z("inst.ttf"),
+        );
+        d.set("hkcu\\Software\\Essai", "x", REG_SZ, utf16z("1"));
+        Ok(())
+    })
+    .unwrap();
+    let stored = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let names: Vec<String> = stored
+        .values(live::FONTS)
+        .into_iter()
+        .map(|v| v.name)
+        .collect();
+    assert_eq!(names, vec!["Installateur (TrueType)".to_string()]);
+    assert!(stored.get(live::TIME_ZONE, "Bias").is_none());
+    assert!(stored.get(live::CODE_PAGE, "ACP").is_none());
+    assert!(stored.get("hkcu\\Software\\Essai", "x").is_some());
+    let seen = read(|d| Ok(d.get(live::TIME_ZONE, "Bias").is_some())).unwrap();
+    assert!(seen, "la vue reste visible à la lecture");
+    match previous {
+        Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
+        None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+    }
+    let _ = std::fs::remove_dir_all(&fonts);
+}

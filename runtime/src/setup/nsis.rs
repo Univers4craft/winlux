@@ -543,7 +543,7 @@ impl<'a, 'b> Vm<'a, 'b> {
     }
 
     fn reg_read(&self, key: &str, name: &str) -> Option<(u32, Vec<u8>)> {
-        if let Some(v) = self.reg.get(&(key.to_string(), name.to_lowercase())) {
+        if let Some(v) = self.reg.get(&(key.to_lowercase(), name.to_lowercase())) {
             return Some((1, super::utf16z(v)));
         }
         let b = crate::dlls::advapi32::read_registry_value_internal(key, name)?;
@@ -552,13 +552,25 @@ impl<'a, 'b> Vm<'a, 'b> {
 
     fn note_uninstall_key(&mut self, key: &str) {
         let marker = "software\\microsoft\\windows\\currentversion\\uninstall\\";
-        if let Some(i) = key.find(marker) {
-            let id = key[i + marker.len()..]
+        let lower = key.to_lowercase();
+        // Identifiant dans sa casse d'origine quand les positions coïncident.
+        let src = if lower.len() == key.len() {
+            key
+        } else {
+            &lower
+        };
+        if let Some(i) = lower.find(marker) {
+            let id = src[i + marker.len()..]
                 .split('\\')
                 .next()
                 .unwrap_or("")
                 .to_string();
-            if !id.is_empty() && !self.uninstall_ids.contains(&id) {
+            if !id.is_empty()
+                && !self
+                    .uninstall_ids
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(&id))
+            {
                 self.uninstall_ids.push(id);
             }
         }
@@ -1109,7 +1121,7 @@ impl<'a, 'b> Vm<'a, 'b> {
                 if let Some(inst) = self.inst.as_deref_mut() {
                     if p[4] == 0 {
                         inst.reg_delete_value(&key, &name);
-                    } else if !key.ends_with("\\software")
+                    } else if !key.to_lowercase().ends_with("\\software")
                         && key.matches('\\').count() >= 2
                         && (!only_if_empty || crate::dlls::advapi32::registry_key_is_empty(&key))
                     {
@@ -1143,7 +1155,8 @@ impl<'a, 'b> Vm<'a, 'b> {
                     }
                 };
                 self.note_uninstall_key(&key);
-                self.reg.insert((key.clone(), name.to_lowercase()), text);
+                self.reg
+                    .insert((key.to_lowercase(), name.to_lowercase()), text);
                 if let Some(inst) = self.inst.as_deref_mut() {
                     inst.reg_set(&key, &name, kind, bytes, true);
                     inst.flush_registry();
