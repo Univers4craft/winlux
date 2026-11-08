@@ -634,7 +634,9 @@ fn arborescence_texte_demande_au_parent() {
         2,
         "TVN_GETDISPINFOW pour chaque élément : {codes:?}"
     );
-    assert!(dark_pixels(bmp) > 0 || crate::dlls::usp10::spec_font(&gui::FontSpec::default()).is_none());
+    assert!(
+        dark_pixels(bmp) > 0 || crate::dlls::usp10::spec_font(&gui::FontSpec::default()).is_none()
+    );
     // TVIF_DI_SETITEM : le second texte est retenu, plus redemandé.
     assert_eq!(text_of(b), "rappel2");
     sendw(tv, 0x0318, dc, 0);

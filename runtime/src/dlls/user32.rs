@@ -4982,7 +4982,10 @@ mod tests {
     #[test]
     fn draw_text_retire_les_prefixes_de_mnemonique() {
         assert_eq!(split_prefix("&Hostname:"), ("Hostname:".into(), Some(0)));
-        assert_eq!(split_prefix("Po&rt number:"), ("Port number:".into(), Some(2)));
+        assert_eq!(
+            split_prefix("Po&rt number:"),
+            ("Port number:".into(), Some(2))
+        );
         assert_eq!(split_prefix("A && B"), ("A & B".into(), None));
         assert_eq!(split_prefix("fin&"), ("fin".into(), None));
         // DT_CALCRECT mesure le texte affiché, sans l'esperluette.
