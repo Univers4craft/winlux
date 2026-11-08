@@ -1,0 +1,116 @@
+{
+  "about": "Logiciels courants publiés pour Linux par leur éditeur lui-même (docs/STORE.md, #1056). Rien n'est fourni dans l'image : le Store lit l'index signé de l'éditeur, montre produit, version, éditeur, source et empreinte, et n'installe qu'après confirmation (Annuler par défaut). index : version et SHA-256 lus dans l'index Packages du dépôt de l'éditeur. deb : fichier épinglé ici (version + SHA-256) ; sans empreinte, l'entrée reste masquée.",
+  "apps": [
+    {
+      "id": "1password", "name": "1Password", "publisher": "AgileBits (1Password)", "category": "utilitaires",
+      "licence": "proprietaire", "package": "1password", "kind": "index",
+      "base": "https://downloads.1password.com/linux/debian/amd64/", "index": "dists/stable/main/binary-amd64/Packages",
+      "hosts": ["downloads.1password.com"], "site": "https://1password.com/downloads/linux",
+      "desc": {"fr": "Gestionnaire de mots de passe (abonnement payant).",
+               "en": "Password manager (paid subscription).",
+               "es": "Gestor de contraseñas (suscripción de pago).",
+               "de": "Passwort-Manager (kostenpflichtiges Abonnement)."}
+    },
+    {
+      "id": "anydesk", "name": "AnyDesk", "publisher": "AnyDesk Software GmbH", "category": "internet",
+      "licence": "proprietaire", "package": "anydesk", "kind": "index",
+      "base": "https://deb.anydesk.com/", "index": "dists/all/main/binary-amd64/Packages",
+      "hosts": ["deb.anydesk.com"], "site": "https://anydesk.com/download?os=linux",
+      "desc": {"fr": "Bureau à distance et assistance (gratuit pour un usage personnel).",
+               "en": "Remote desktop and support (free for personal use).",
+               "es": "Escritorio remoto y asistencia (gratis para uso personal).",
+               "de": "Fernzugriff und Fernwartung (für den privaten Gebrauch kostenlos)."}
+    },
+    {
+      "id": "chatgpt", "name": "ChatGPT", "publisher": "OpenAI", "category": "bureautique",
+      "licence": "proprietaire", "package": "chatgpt", "kind": "index",
+      "base": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/", "index": "dists/stable/main/binary-amd64/Packages",
+      "hosts": ["persistent.oaistatic.com"], "site": "https://learn.chatgpt.com/docs/linux/linux-app",
+      "desc": {"fr": "Assistant IA d'OpenAI, avec Codex (préversion pour Linux).",
+               "en": "OpenAI's AI assistant, with Codex (Linux preview).",
+               "es": "Asistente de IA de OpenAI, con Codex (versión preliminar para Linux).",
+               "de": "KI-Assistent von OpenAI, mit Codex (Vorschauversion für Linux)."}
+    },
+    {
+      "id": "claude", "name": "Claude", "publisher": "Anthropic", "category": "bureautique",
+      "licence": "proprietaire", "package": "claude-desktop", "kind": "index",
+      "base": "https://downloads.claude.ai/claude-desktop/apt/stable/", "index": "dists/stable/main/binary-amd64/Packages",
+      "hosts": ["downloads.claude.ai"], "site": "https://code.claude.com/docs/en/desktop-linux",
+      "desc": {"fr": "Assistant IA d'Anthropic : discussion, rédaction, analyse de fichiers (version Linux en bêta).",
+               "en": "Anthropic's AI assistant: chat, writing, file analysis (Linux version in beta).",
+               "es": "Asistente de IA de Anthropic: conversación, redacción, análisis de archivos (versión para Linux en beta).",
+               "de": "KI-Assistent von Anthropic: Chat, Schreiben, Dateianalyse (Linux-Version in der Beta)."}
+    },
+    {
+      "id": "discord", "name": "Discord", "publisher": "Discord Inc.", "category": "internet",
+      "licence": "proprietaire", "package": "discord", "kind": "deb",
+      "url": "https://stable.dl2.discordapp.net/distro/app/stable/linux/x64/1.0.168/Discord.deb",
+      "version": "1.0.168", "sha256": "93d43ad090825b9edcacfb3841506ea51e7040c60d93a9e377d0caca547bea28", "size": 2387236,
+      "hosts": ["stable.dl2.discordapp.net"], "site": "https://discord.com/download",
+      "desc": {"fr": "Discussions vocales, vidéo et écrites entre amis et communautés.",
+               "en": "Voice, video and text chat for friends and communities.",
+               "es": "Chat de voz, vídeo y texto para amigos y comunidades.",
+               "de": "Sprach-, Video- und Textchat für Freunde und Communities."}
+    },
+    {
+      "id": "element", "name": "Element", "publisher": "Element (New Vector Ltd)", "category": "internet",
+      "licence": "libre", "package": "element-desktop", "kind": "index",
+      "base": "https://packages.element.io/debian/", "index": "dists/default/main/binary-amd64/Packages",
+      "hosts": ["packages.element.io"], "site": "https://element.io/download",
+      "desc": {"fr": "Messagerie Matrix chiffrée et décentralisée.",
+               "en": "Encrypted, decentralised Matrix messaging.",
+               "es": "Mensajería Matrix cifrada y descentralizada.",
+               "de": "Verschlüsselter, dezentraler Matrix-Messenger."}
+    },
+    {
+      "id": "onlyoffice", "name": "ONLYOFFICE", "publisher": "Ascensio System SIA", "category": "bureautique",
+      "licence": "libre", "package": "onlyoffice-desktopeditors", "kind": "index",
+      "base": "https://download.onlyoffice.com/repo/debian/", "index": "dists/squeeze/main/binary-amd64/Packages",
+      "hosts": ["download.onlyoffice.com"], "site": "https://www.onlyoffice.com/download-desktop.aspx",
+      "desc": {"fr": "Documents, tableurs et présentations, très fidèle aux fichiers docx, xlsx et pptx.",
+               "en": "Documents, spreadsheets and presentations, faithful to docx, xlsx and pptx files.",
+               "es": "Documentos, hojas de cálculo y presentaciones, muy fiel a los archivos docx, xlsx y pptx.",
+               "de": "Texte, Tabellen und Präsentationen, sehr treu zu docx-, xlsx- und pptx-Dateien."}
+    },
+    {
+      "id": "signal", "name": "Signal", "publisher": "Signal Messenger LLC", "category": "internet",
+      "licence": "libre", "package": "signal-desktop", "kind": "index",
+      "base": "https://updates.signal.org/desktop/apt/", "index": "dists/xenial/main/binary-amd64/Packages",
+      "hosts": ["updates.signal.org"], "site": "https://signal.org/download/linux/",
+      "desc": {"fr": "Messagerie chiffrée de bout en bout, appels et groupes (relié au téléphone).",
+               "en": "End-to-end encrypted messaging, calls and groups (linked to your phone).",
+               "es": "Mensajería cifrada de extremo a extremo, llamadas y grupos (vinculada al teléfono).",
+               "de": "Ende-zu-Ende-verschlüsselte Nachrichten, Anrufe und Gruppen (mit dem Telefon verknüpft)."}
+    },
+    {
+      "id": "spotify", "name": "Spotify", "publisher": "Spotify AB", "category": "multimedia",
+      "licence": "proprietaire", "package": "spotify-client", "kind": "index",
+      "base": "https://repository.spotify.com/", "index": "dists/stable/non-free/binary-amd64/Packages",
+      "hosts": ["repository.spotify.com"], "site": "https://www.spotify.com/download/linux/",
+      "desc": {"fr": "Musique et podcasts en streaming (compte gratuit ou payant).",
+               "en": "Music and podcast streaming (free or paid account).",
+               "es": "Música y pódcasts en streaming (cuenta gratuita o de pago).",
+               "de": "Musik- und Podcast-Streaming (kostenloses oder bezahltes Konto)."}
+    },
+    {
+      "id": "sublime-text", "name": "Sublime Text", "publisher": "Sublime HQ", "category": "developpement",
+      "licence": "proprietaire", "package": "sublime-text", "kind": "index",
+      "base": "https://download.sublimetext.com/", "index": "apt/stable/Packages",
+      "hosts": ["download.sublimetext.com"], "site": "https://www.sublimetext.com/docs/linux_repositories.html",
+      "desc": {"fr": "Éditeur de texte et de code rapide (évaluation gratuite, licence payante).",
+               "en": "Fast text and code editor (free evaluation, paid licence).",
+               "es": "Editor de texto y código rápido (evaluación gratuita, licencia de pago).",
+               "de": "Schneller Text- und Code-Editor (kostenlose Testphase, kostenpflichtige Lizenz)."}
+    },
+    {
+      "id": "vscodium", "name": "VSCodium", "publisher": "VSCodium", "category": "developpement",
+      "licence": "libre", "package": "codium", "kind": "index",
+      "base": "https://download.vscodium.com/debs/", "index": "dists/vscodium/main/binary-amd64/Packages",
+      "hosts": ["download.vscodium.com"], "site": "https://vscodium.com/#install",
+      "desc": {"fr": "Éditeur de code libre et extensible, sans télémétrie.",
+               "en": "Free, extensible code editor with no telemetry.",
+               "es": "Editor de código libre y ampliable, sin telemetría.",
+               "de": "Freier, erweiterbarer Code-Editor ohne Telemetrie."}
+    }
+  ]
+}

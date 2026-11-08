@@ -2,6 +2,7 @@
 # Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
 # fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
 audio_com.rs	Iface	a-verifier	
+com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
@@ -49,6 +50,7 @@ crypt32.rs	SslExtraPara	a-verifier
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
+d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d3d11.rs	Buffer	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11.rs	BufferVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
@@ -131,6 +133,7 @@ gui.rs	WndClassExA	a-verifier
 gui_x11.rs	XftFont	a-verifier	
 icons.rs	IconInfo	a-verifier	
 image_list_com.rs	Obj	interne	objet IImageList d'une liste système ; en x86 seul le handle sert (ImageList_*), pas la table de méthodes
+jumplist_com.rs	Coll	interne	objet IObjectCollection du runtime ; en x86, la passerelle COM (wow32/com.rs, IOBJECTCOLLECTION) l'enveloppe
 jumplist_com.rs	Obj	interne	objets ICustomDestinationList et IObjectArray du runtime ; en x86, la passerelle COM (wow32/com.rs) les enveloppe
 kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
 kernel32.rs	Entry	interne	test unitaire
@@ -158,6 +161,8 @@ ole32.rs	MarshalStream	a-verifier
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
+oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
+oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 schannel.rs	SecBuffer	a-verifier	

@@ -151,6 +151,8 @@ typedef struct {
 } MIDIHDR;
 typedef struct { WORD wMid, wPid; DWORD vDriverVersion; char szPname[32]; WORD wTechnology,
     wVoices, wNotes, wChannelMask; DWORD dwSupport; } MIDIOUTCAPSA;
+typedef struct { WORD wMid, wPid; DWORD vDriverVersion; char szPname[32]; DWORD dwSupport; }
+    MIDIINCAPSA;
 typedef struct { WORD wFormatTag, nChannels; DWORD nSamplesPerSec, nAvgBytesPerSec;
     WORD nBlockAlign, wBitsPerSample, cbSize; } WAVEFORMATEX;
 typedef struct { UINT wType; DWORD ticks; DWORD pad; } MMTIME;
@@ -159,6 +161,10 @@ typedef struct { UINT wType; DWORD ticks; DWORD pad; } MMTIME;
 #define MOM_CLOSE 0x3C8
 #define MOM_DONE 0x3C9
 #define MOM_POSITIONCB 0x3CA
+#define MIM_OPEN 0x3C1
+#define MIM_CLOSE 0x3C2
+#define MIM_DATA 0x3C3
+#define MIM_LONGDATA 0x3C4
 #define WOM_DONE 0x3BD
 #define MEVT_F_CALLBACK 0x40000000
 #define TIME_PERIODIC 1
@@ -169,6 +175,7 @@ IMP HANDLE WINAPI GetStdHandle(DWORD);
 IMP BOOL WINAPI WriteFile(HANDLE, const void *, DWORD, DWORD *, void *);
 IMP void WINAPI ExitProcess(DWORD);
 IMP void WINAPI Sleep(DWORD);
+IMP DWORD WINAPI GetEnvironmentVariableA(const char *, char *, DWORD);
 IMP DWORD WINAPI GetTickCount(void);
 IMP HINSTANCE WINAPI GetModuleHandleA(const char *);
 IMP WORD WINAPI RegisterClassExA(const WNDCLASSEXA *);
@@ -244,6 +251,16 @@ IMP UINT WINAPI midiStreamRestart(HANDLE);
 IMP UINT WINAPI midiStreamProperty(HANDLE, BYTE *, DWORD);
 IMP UINT WINAPI midiStreamPosition(HANDLE, MMTIME *, UINT);
 IMP UINT WINAPI midiStreamClose(HANDLE);
+IMP UINT WINAPI midiInGetNumDevs(void);
+IMP UINT WINAPI midiInGetDevCapsA(UINT_PTR, MIDIINCAPSA *, UINT);
+IMP UINT WINAPI midiInOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
+IMP UINT WINAPI midiInPrepareHeader(HANDLE, MIDIHDR *, UINT);
+IMP UINT WINAPI midiInUnprepareHeader(HANDLE, MIDIHDR *, UINT);
+IMP UINT WINAPI midiInAddBuffer(HANDLE, MIDIHDR *, UINT);
+IMP UINT WINAPI midiInStart(HANDLE);
+IMP UINT WINAPI midiInStop(HANDLE);
+IMP UINT WINAPI midiInReset(HANDLE);
+IMP UINT WINAPI midiInClose(HANDLE);
 IMP UINT WINAPI timeBeginPeriod(UINT);
 IMP UINT WINAPI timeSetEvent(UINT, UINT, void *, DWORD_PTR, UINT);
 IMP UINT WINAPI timeKillEvent(UINT);
@@ -300,6 +317,24 @@ static void CALLBACK midi_cb(HANDLE h, UINT msg, DWORD_PTR inst, DWORD_PTR p1, D
     if (msg == MOM_CLOSE) mom_close++;
     if (msg == MOM_DONE) mom_done++;
     if (msg == MOM_POSITIONCB) mom_pos++;
+}
+/* Entrée MIDI : messages reçus dans l'ordre, avec leur heure. */
+static volatile int mim_open, mim_close, mim_data, mim_long;
+static volatile DWORD mim_msgs[8], mim_times[8];
+static volatile DWORD_PTR mim_hdr;
+static void CALLBACK midi_in_cb(HANDLE h, UINT msg, DWORD_PTR inst, DWORD_PTR p1, DWORD_PTR p2) {
+    if (inst != 0x56) return;
+    if (msg == MIM_OPEN) mim_open++;
+    if (msg == MIM_CLOSE) mim_close++;
+    if (msg == MIM_DATA && mim_data < 8) {
+        mim_msgs[mim_data] = (DWORD)p1;
+        mim_times[mim_data] = (DWORD)p2;
+        mim_data++;
+    }
+    if (msg == MIM_LONGDATA) {
+        mim_hdr = p1;
+        mim_long++;
+    }
 }
 static void CALLBACK wave_cb(HANDLE h, UINT msg, DWORD_PTR inst, DWORD_PTR p1, DWORD_PTR p2) {
     if (msg == WOM_DONE && inst == 0x66) wom_done++;
@@ -547,6 +582,53 @@ static int midi_tests(void) {
     CHECK(52, midiStreamPosition(h, &mmt, sizeof mmt) == 0 && mmt.ticks >= 95);
     CHECK(53, midiOutUnprepareHeader(h, &hdr, sizeof hdr) == 0);
     CHECK(54, midiStreamClose(h) == 0 && mom_close == 2);
+    return 0;
+}
+
+/* Entrée MIDI (#237) sans matériel : test-wow32.sh met dans
+ * WINLUX_MIDI_IN_DIR un fichier midiC0D0 qui contient ce qu'aurait joué un
+ * clavier : note on 90 3C 7F, statut courant 3C 00, horloge F8, système
+ * exclusif F0 7E 7F 09 01 F7, changement de programme C0 05. */
+static int midi_in_tests(void) {
+    MIDIINCAPSA caps;
+    MIDIHDR hdr, other;
+    HANDLE h = 0;
+    char dir[260];
+    static char sysex[64];
+
+    if (!GetEnvironmentVariableA("WINLUX_MIDI_IN_DIR", dir, sizeof dir)) return 1;
+    zero(&caps, sizeof caps);
+    CHECK(161, midiInGetNumDevs() == 1 && midiInGetDevCapsA(0, &caps, sizeof caps) == 0 &&
+                   caps.szPname[0] && midiInGetDevCapsA(3, &caps, sizeof caps) == 2);
+    CHECK(162, midiInOpen(&h, 0, (DWORD_PTR)midi_in_cb, 0x56, CALLBACK_FUNCTION) == 0 && h &&
+                   mim_open == 1);
+    zero(&hdr, sizeof hdr);
+    hdr.lpData = sysex;
+    hdr.dwBufferLength = sizeof sysex;
+    zero(&other, sizeof other);
+    other.lpData = sysex;
+    other.dwBufferLength = sizeof sysex;
+    /* Tampon non préparé : MIDIERR_UNPREPARED. */
+    CHECK(163, midiInAddBuffer(h, &other, sizeof other) == 64 &&
+                   midiInPrepareHeader(h, &hdr, sizeof hdr) == 0 &&
+                   midiInAddBuffer(h, &hdr, sizeof hdr) == 0 && (hdr.dwFlags & 4));
+    /* Rien n'arrive avant midiInStart, et on ne ferme pas avec un tampon en file. */
+    Sleep(100);
+    CHECK(164, mim_data == 0 && midiInClose(h) == 65);
+    CHECK(165, midiInStart(h) == 0);
+    wait_for(&mim_data, 4, 3000);
+    wait_for(&mim_long, 1, 1000);
+    CHECK(166, mim_data == 4 && mim_msgs[0] == 0x7F3C90 && mim_msgs[1] == 0x003C90 &&
+                   mim_msgs[2] == 0xF8 && mim_msgs[3] == 0x05C0 && mim_times[3] < 3000);
+    CHECK(167, mim_long == 1 && mim_hdr == (DWORD_PTR)&hdr && hdr.dwBytesRecorded == 6 &&
+                   (BYTE)sysex[0] == 0xF0 && (BYTE)sysex[5] == 0xF7 && (hdr.dwFlags & 1) &&
+                   !(hdr.dwFlags & 4));
+    /* Reset rend le tampon remis en file, puis on ferme. */
+    CHECK(168, midiInAddBuffer(h, &hdr, sizeof hdr) == 0 && midiInStop(h) == 0 &&
+                   midiInReset(h) == 0 && mim_long == 2 && hdr.dwBytesRecorded == 0 &&
+                   (hdr.dwFlags & 1));
+    CHECK(169, midiInUnprepareHeader(h, &hdr, sizeof hdr) == 0 && midiInClose(h) == 0 &&
+                   mim_close == 1 && midiInClose(h) == 5);
     return 0;
 }
 
@@ -1443,6 +1525,8 @@ void entry(void) {
     out("DirectPlay 8 : 29 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
+    if (midi_in_tests() == 0) out("Entree MIDI : 9 verifications passees\n");
+    else out("Entree MIDI : WINLUX_MIDI_IN_DIR absent, sautee\n");
     timer_wave_tests();
     out("timeSetEvent et waveOut : 9 verifications passees\n");
     out("Jeux anciens : tout est correct\n");

@@ -1212,6 +1212,9 @@ unsafe extern "win64" fn target_qi(
         iids.extend_from_slice(v11::context_iids());
         return qi_list(this, riid, out, &iids);
     }
+    if !riid.is_null() && v11::context_iids().contains(&*riid) {
+        return v11::context_view(this, out);
+    }
     qi_list(
         this,
         riid,
@@ -2069,6 +2072,60 @@ mod tests {
             S_OK
         );
         (f, bmp, rt)
+    }
+
+    /// Une cible 1.0 répond à ID2D1DeviceContext6 par une vue qui dessine
+    /// sur elle et garde son identité COM (#1085).
+    #[test]
+    fn old_target_answers_device_context6_with_a_view_on_itself() {
+        unsafe {
+            let (f, bmp, rt) = setup();
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let dc6 = v11::context_iids()[6];
+            assert_eq!(dc6.data1, 0x985f_7e37);
+            let mut view = std::ptr::null_mut();
+            assert_eq!(method::<Qi>(rt, 0)(rt, &dc6, &mut view), S_OK);
+            assert!(!view.is_null() && view != rt);
+            let mut again = std::ptr::null_mut();
+            assert_eq!(method::<Qi>(view, 0)(view, &dc6, &mut again), S_OK);
+            assert_eq!(again, view);
+            release_obj(again);
+            let mut unk = std::ptr::null_mut();
+            assert_eq!(method::<Qi>(view, 0)(view, &IID_IUNKNOWN, &mut unk), S_OK);
+            assert_eq!(unk, rt);
+            release_obj(unk);
+            // AddRef et Release de la vue comptent sur la cible.
+            assert_eq!(method::<Unary>(view, 1)(view), 3);
+            assert_eq!(method::<Unary>(rt, 2)(rt), 2);
+            // Méthodes propres au contexte (73 GetDevice, 75 GetTarget).
+            type Get = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void);
+            let mut p = 1usize as *mut c_void;
+            method::<Get>(view, 73)(view, &mut p);
+            assert!(p.is_null());
+            let mut p = 1usize as *mut c_void;
+            method::<Get>(view, 75)(view, &mut p);
+            assert!(p.is_null());
+            // Dessin par la vue : il arrive dans le bitmap WIC de la cible.
+            let red = ColorF {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            method::<Unary>(view, 48)(view);
+            method::<Clear>(view, 47)(view, &red);
+            assert_eq!(
+                method::<End>(view, 49)(view, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(&pixels(bmp)[0..4], &[0, 0, 255, 255]);
+            release_obj(view);
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
+        }
     }
 
     unsafe fn pixels(bmp: *mut c_void) -> Vec<u8> {

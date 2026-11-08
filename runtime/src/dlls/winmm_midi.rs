@@ -10,7 +10,7 @@
 //!   la fin de chaque tampon. Le flux s'ouvre en pause, comme sous Windows.
 //! - Les rappels (fonction, événement, fenêtre, thread) suivent waveOut ;
 //!   la fonction d'un programme 32 bits passe par une passerelle wow32.
-//! - Entrée MIDI : aucun périphérique pour l'instant (midiInGetNumDevs = 0).
+//! - Entrée MIDI : `winmm_midi_in` (claviers branchés, /dev/snd/midiC*D*).
 
 use crate::audio::{self, synth::Synth};
 use crate::dlls::lock;
@@ -31,18 +31,18 @@ macro_rules! api {
     }};
 }
 
-const MMSYSERR_NOERROR: u32 = 0;
-const MMSYSERR_BADDEVICEID: u32 = 2;
-const MMSYSERR_INVALHANDLE: u32 = 5;
+pub(super) const MMSYSERR_NOERROR: u32 = 0;
+pub(super) const MMSYSERR_BADDEVICEID: u32 = 2;
+pub(super) const MMSYSERR_INVALHANDLE: u32 = 5;
 const MMSYSERR_NOTSUPPORTED: u32 = 8;
 const MMSYSERR_INVALFLAG: u32 = 10;
-const MMSYSERR_INVALPARAM: u32 = 11;
-const MIDIERR_UNPREPARED: u32 = 64;
-const MIDIERR_STILLPLAYING: u32 = 65;
+pub(super) const MMSYSERR_INVALPARAM: u32 = 11;
+pub(super) const MIDIERR_UNPREPARED: u32 = 64;
+pub(super) const MIDIERR_STILLPLAYING: u32 = 65;
 
-const MHDR_DONE: u32 = 0x01;
-const MHDR_PREPARED: u32 = 0x02;
-const MHDR_INQUEUE: u32 = 0x04;
+pub(super) const MHDR_DONE: u32 = 0x01;
+pub(super) const MHDR_PREPARED: u32 = 0x02;
+pub(super) const MHDR_INQUEUE: u32 = 0x04;
 const MHDR_ISSTRM: u32 = 0x08;
 
 const CALLBACK_TYPEMASK: u32 = 0x7_0000;
@@ -87,23 +87,23 @@ fn device_name() -> &'static str {
 // dwUser @16, dwFlags @24, lpNext @32, reserved @40, dwOffset @48.
 // MIDIHDR x86 : lpData @0, dwBufferLength @4, dwBytesRecorded @8,
 // dwUser @12, dwFlags @16, lpNext @20, reserved @24, dwOffset @28.
-fn x86() -> bool {
+pub(super) fn x86() -> bool {
     crate::wow32::active()
 }
-unsafe fn hdr_data(h: usize) -> *const u8 {
+pub(super) unsafe fn hdr_data(h: usize) -> *const u8 {
     if x86() {
         *(h as *const u32) as usize as *const u8
     } else {
         *(h as *const *const u8)
     }
 }
-unsafe fn hdr_len(h: usize) -> usize {
+pub(super) unsafe fn hdr_len(h: usize) -> usize {
     *((h + if x86() { 4 } else { 8 }) as *const u32) as usize
 }
-unsafe fn hdr_recorded(h: usize) -> usize {
+pub(super) unsafe fn hdr_recorded(h: usize) -> usize {
     *((h + if x86() { 8 } else { 12 }) as *const u32) as usize
 }
-unsafe fn hdr_flags(h: usize) -> *mut u32 {
+pub(super) unsafe fn hdr_flags(h: usize) -> *mut u32 {
     (h + if x86() { 16 } else { 24 }) as *mut u32
 }
 unsafe fn hdr_offset(h: usize) -> *mut u32 {
@@ -111,7 +111,7 @@ unsafe fn hdr_offset(h: usize) -> *mut u32 {
 }
 /// Taille minimale acceptée pour cbMidiHdr (les anciens programmes
 /// passent la MIDIHDR d'avant dwOffset : 8 champs).
-fn min_hdr() -> u32 {
+pub(super) fn min_hdr() -> u32 {
     if x86() {
         28
     } else {
@@ -120,7 +120,7 @@ fn min_hdr() -> u32 {
 }
 
 #[derive(Clone, Copy)]
-struct Callback {
+pub(super) struct Callback {
     kind: u32,
     target: usize,
     instance: usize,
@@ -187,33 +187,62 @@ struct MidiOut {
     st: Mutex<State>,
 }
 
+/// Envoie un message MOM_*/MIM_* au rappel choisi à l'ouverture.
+pub(super) fn send(cb: Callback, handle: usize, msg: u32, p1: usize, p2: usize) {
+    match cb.kind {
+        CALLBACK_FUNCTION if cb.target != 0 => unsafe {
+            audio::ensure_windows_thread();
+            let f: extern "win64" fn(usize, u32, usize, usize, usize) =
+                std::mem::transmute(cb.target);
+            f(handle, msg, cb.instance, p1, p2);
+        },
+        CALLBACK_EVENT => super::audio_com::signal(cb.target),
+        CALLBACK_WINDOW if cb.target != 0 => unsafe {
+            super::user32::post_message_a(cb.target, msg, handle, p1 as isize);
+        },
+        CALLBACK_THREAD if cb.target != 0 => unsafe {
+            api!(
+                "user32",
+                "PostThreadMessageA",
+                fn(u32, u32, usize, isize) -> i32,
+                cb.target as u32,
+                msg,
+                handle,
+                p1 as isize
+            );
+        },
+        _ => {}
+    }
+}
+
+/// Vérifie le type de rappel et convertit la fonction d'un programme x86.
+pub(super) unsafe fn callback(
+    callback: usize,
+    instance: usize,
+    flags: u32,
+) -> Result<Callback, u32> {
+    let kind = flags & CALLBACK_TYPEMASK;
+    if !matches!(
+        kind,
+        CALLBACK_NULL | CALLBACK_WINDOW | CALLBACK_THREAD | CALLBACK_FUNCTION | CALLBACK_EVENT
+    ) {
+        return Err(MMSYSERR_INVALFLAG);
+    }
+    let target = if kind == CALLBACK_FUNCTION && callback != 0 && x86() {
+        crate::wow32::callback64(callback as u32)
+    } else {
+        callback
+    };
+    Ok(Callback {
+        kind,
+        target,
+        instance,
+    })
+}
+
 impl MidiOut {
     fn notify(&self, msg: u32, p1: usize) {
-        let cb = self.callback;
-        match cb.kind {
-            CALLBACK_FUNCTION if cb.target != 0 => unsafe {
-                audio::ensure_windows_thread();
-                let f: extern "win64" fn(usize, u32, usize, usize, usize) =
-                    std::mem::transmute(cb.target);
-                f(self.handle, msg, cb.instance, p1, 0);
-            },
-            CALLBACK_EVENT => super::audio_com::signal(cb.target),
-            CALLBACK_WINDOW if cb.target != 0 => unsafe {
-                super::user32::post_message_a(cb.target, msg, self.handle, p1 as isize);
-            },
-            CALLBACK_THREAD if cb.target != 0 => unsafe {
-                api!(
-                    "user32",
-                    "PostThreadMessageA",
-                    fn(u32, u32, usize, isize) -> i32,
-                    cb.target as u32,
-                    msg,
-                    self.handle,
-                    p1 as isize
-                );
-            },
-            _ => {}
-        }
+        send(self.callback, self.handle, msg, p1, 0);
     }
 
     fn complete(&self, done: Vec<usize>, positions: Vec<usize>) {
@@ -347,10 +376,6 @@ pub extern "win64" fn midi_out_get_num_devs() -> u32 {
     1
 }
 
-pub extern "win64" fn midi_in_get_num_devs() -> u32 {
-    0
-}
-
 /// MIDIOUTCAPS(A/W) : wMid, wPid, vDriverVersion, szPname[32],
 /// wTechnology, wVoices, wNotes, wChannelMask, dwSupport.
 unsafe fn fill_caps(caps: *mut u8, size: u32, wide: bool) -> u32 {
@@ -399,14 +424,6 @@ pub unsafe extern "win64" fn midi_out_get_dev_caps_w(id: usize, caps: *mut u8, s
     fill_caps(caps, size, true)
 }
 
-pub extern "win64" fn midi_in_bad_device() -> u32 {
-    MMSYSERR_BADDEVICEID
-}
-
-pub extern "win64" fn midi_in_invalid_handle() -> u32 {
-    MMSYSERR_INVALHANDLE
-}
-
 unsafe fn open(
     device: u32,
     callback: usize,
@@ -417,27 +434,12 @@ unsafe fn open(
     if device != 0 && device != MIDI_MAPPER {
         return Err(MMSYSERR_BADDEVICEID);
     }
-    let kind = flags & CALLBACK_TYPEMASK;
-    if !matches!(
-        kind,
-        CALLBACK_NULL | CALLBACK_WINDOW | CALLBACK_THREAD | CALLBACK_FUNCTION | CALLBACK_EVENT
-    ) {
-        return Err(MMSYSERR_INVALFLAG);
-    }
-    let target = if kind == CALLBACK_FUNCTION && callback != 0 && x86() {
-        crate::wow32::callback64(callback as u32)
-    } else {
-        callback
-    };
+    let callback = self::callback(callback, instance, flags)?;
     static NEXT: AtomicUsize = AtomicUsize::new(0x7741_0000);
     let handle = NEXT.fetch_add(4, Ordering::Relaxed);
     let m = Arc::new(MidiOut {
         handle,
-        callback: Callback {
-            kind,
-            target,
-            instance,
-        },
+        callback,
         source: AtomicUsize::new(0),
         st: Mutex::new(State {
             synth: Synth::new(audio::RATE),
@@ -763,7 +765,7 @@ pub extern "win64" fn midi_out_message(_h: usize, _msg: u32, _p1: usize, _p2: us
     MMSYSERR_NOTSUPPORTED
 }
 
-fn error_text(code: u32) -> &'static str {
+pub(super) fn error_text(code: u32) -> &'static str {
     match code {
         MMSYSERR_NOERROR => "No error.",
         MMSYSERR_BADDEVICEID => "The device ID is out of range.",
@@ -827,17 +829,6 @@ pub fn exports() -> crate::dlls::Exports {
         "midiStreamStop" => fn midi_stream_stop,
         "midiStreamProperty" => fn midi_stream_property,
         "midiStreamPosition" => fn midi_stream_position,
-        "midiInGetNumDevs" => fn midi_in_get_num_devs,
-        "midiInOpen" => fn midi_in_bad_device,
-        "midiInGetDevCapsA" => fn midi_in_bad_device,
-        "midiInGetDevCapsW" => fn midi_in_bad_device,
-        "midiInClose" => fn midi_in_invalid_handle,
-        "midiInPrepareHeader" => fn midi_in_invalid_handle,
-        "midiInUnprepareHeader" => fn midi_in_invalid_handle,
-        "midiInAddBuffer" => fn midi_in_invalid_handle,
-        "midiInStart" => fn midi_in_invalid_handle,
-        "midiInStop" => fn midi_in_invalid_handle,
-        "midiInReset" => fn midi_in_invalid_handle,
     }
 }
 

@@ -26,6 +26,7 @@ pub mod audio_com;
 pub mod bcrypt;
 pub mod chromium_win32;
 pub mod clipboard;
+pub mod com_local;
 pub mod com_registry;
 pub mod comctl32;
 pub mod comdlg32;
@@ -154,6 +155,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod oleaut32_disp;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
@@ -215,6 +217,7 @@ pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
 pub mod winmm_midi;
+pub mod winmm_midi_in;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
@@ -605,6 +608,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = winmm::exports();
                     e.extend(winmm_waveout::exports());
                     e.extend(winmm_midi::exports());
+                    e.extend(winmm_midi_in::exports());
                     e
                 },
                 handle: fake_module(),
@@ -664,6 +668,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = oleaut32::exports();
                     e.extend(oleaut32_var::exports());
+                    e.extend(oleaut32_disp::exports());
                     e
                 },
                 handle: fake_module(),
@@ -1799,6 +1804,9 @@ mod tests {
         assert!(lookup("psapi", "GetModuleBaseNameW").is_some());
         assert!(lookup("advapi32", "GetUserNameW").is_some());
         assert!(lookup("user32", "LoadStringW").is_some());
+        // Premier plan : Flow Launcher (#1074).
+        assert!(lookup("user32", "AllowSetForegroundWindow").is_some());
+        assert!(lookup("user32", "LockSetForegroundWindow").is_some());
         // Pas de repli large vers ntdll, msvcrt ou advapi32.
         for name in ["NtQueryInformationProcess", "memcpy", "RegOpenKeyA"] {
             assert!(kernel32_proc(name, false).is_none(), "{name}");

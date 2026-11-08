@@ -213,7 +213,7 @@ fi
 jeux() {
     name=$1; shift
     set +e
-    "$@" WINLUX_DDRAW_MODESWITCH=0 timeout 60 "$runtime" "$out/$name.exe" >"$work/jeux.txt" 2>&1
+    "$@" WINLUX_DDRAW_MODESWITCH=0 WINLUX_MIDI_IN_DIR="$work/midi-in" timeout 60 "$runtime" "$out/$name.exe" >"$work/jeux.txt" 2>&1
     status=$?
     set -e
     if test "$status" -ne 0 || ! grep -q 'Jeux anciens : tout est correct' "$work/jeux.txt"; then
@@ -222,13 +222,16 @@ jeux() {
         exit 1
     fi
 }
+# Entrée MIDI sans clavier : un fichier à la place de /dev/snd/midiC0D0.
+mkdir -p "$work/midi-in"
+printf '\220\074\177\074\000\370\360\176\177\011\001\367\300\005' >"$work/midi-in/midiC0D0"
 for name in jeux32 jeux64; do
     jeux "$name" env WINLUX_GUI=headless
     if command -v xvfb-run >/dev/null 2>&1; then
         jeux "$name" xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
     fi
 done
-echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"
+echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux, entrée), timeSetEvent et waveOut avec rappels, x86 et x64"
 
 # Direct3D 11 et DXGI (#1090) : il faut un contexte OpenGL, donc Xvfb.
 if command -v xvfb-run >/dev/null 2>&1; then

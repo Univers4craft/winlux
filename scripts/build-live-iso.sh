@@ -130,6 +130,11 @@ mkdir -p "$stage/etc/winlux/store-sources.d"
 # rien n'est téléchargé avant le choix de l'utilisateur, aucune n'est cochée.
 cp "$root/scripts/winlux-store-catalogs.py" "$stage/usr/bin/winlux-store-catalogs"
 cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalogs.json"
+# Logiciels publiés pour Linux par leur éditeur (#1056) : seulement leur
+# description ; téléchargés chez l'éditeur après confirmation, jamais dans l'ISO.
+cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeurs.json"
+install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
+install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
 # claude.exe après le premier démarrage ; rien de lourd dans l'ISO.
