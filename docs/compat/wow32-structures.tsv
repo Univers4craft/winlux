@@ -103,6 +103,7 @@ dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 
 dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 223-236 (IDirectPlay8Address)
 dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
+dwrite_fallback.rs	Source	interne	test unitaire
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
 dxgi.rs	DxgiAdapterVTable	a-verifier	

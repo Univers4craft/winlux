@@ -751,7 +751,25 @@ unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
     }
 }
 
+/// Contrôles atteignables par Tab (#28) : le contenu de l'étape, puis le
+/// pied de page dans l'ordre de lecture.
+unsafe fn focus_zones(f: &Frame) {
+    if STEP == S_APPS {
+        for i in 0..APP_MAX {
+            if let Some(r) = app_rect(f, i) {
+                focus_zone(&r);
+            }
+        }
+    }
+    for id in [BTN_ACTION, BTN_DARK, BTN_LIGHT, BTN_CENTER, BTN_LEFT, BTN_INSTALL, BTN_STORE, BTN_BACK, BTN_SKIP, BTN_NEXT] {
+        if visible(id) {
+            focus_zone(&button_rect(f, id));
+        }
+    }
+}
+
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
+    focus_zones(f);
     let p = pal();
     let c = f.client;
     fill(g.hdc, g.b, c.left, c.top, c.right, c.bottom, p.mica);

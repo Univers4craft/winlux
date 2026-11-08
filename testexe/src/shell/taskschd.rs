@@ -859,7 +859,7 @@ unsafe fn draw_library(g: &mut Gfx, h: &mut Hits, a: &Rect) {
     for i in SCROLL..COUNT.min(SCROLL + visible) {
         let it = &ITEMS[i];
         let r = rect(x - 8, y, a.right - 16, y + ROW_H - 2);
-        let hover = h.add(r, ID_ROW + i as u16);
+        let hover = h.row(r, ID_ROW + i as u16);
         if i == SELECTED {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.selected);
         } else if hover {

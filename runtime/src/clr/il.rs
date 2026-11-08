@@ -1,17 +1,33 @@
-//! Interpréteur CIL (Common Intermediate Language).
+//! Interpréteur CIL (Common Intermediate Language, ECMA-335 partition III).
 //!
 //! Machine à pile qui exécute le bytecode .NET instruction par instruction.
 //! Chaque appel managé crée un `CallFrame` et s'exécute dans son propre
 //! `run_loop`, qui rend la main à l'appelant au `ret` de la méthode.
+//!
+//! Mémoire : arguments et variables locales vivent dans une zone propre à
+//! l'appel, qui ne bouge pas tant que la méthode s'exécute ; `ldloca` et
+//! `ldarga` donnent donc de vraies adresses, lues et écrites par `ldind`,
+//! `stind`, `ldfld`… Chaque valeur est rangée selon son type (`Kind`) : un
+//! entier sur sa largeur, une référence sur 8 octets, un type valeur en
+//! place. Sur la pile d'évaluation, un type valeur est une copie temporaire
+//! dans le tas, recopiée à chaque rangement : la sémantique de copie est
+//! respectée.
+
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use super::bcl;
-use super::exceptions::{self, ClrException, Handler};
+use super::delegates::FnTable;
+use super::domain::AsmInfo;
+use super::exceptions::{self, ClrException};
 use super::gc;
 use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
-use super::tables::{CodedIndex, TableId, Token};
-use super::types;
+use super::resolve::{Callee, Target};
+use super::tables::Token;
+use super::types::{self, Kind, TypeId};
 
 /// Profondeur d'appel maximale avant StackOverflowException.
 const MAX_DEPTH: usize = 4000;
@@ -79,90 +95,155 @@ impl Value {
         }
     }
 
-    fn default_for(et: &ElementType) -> Value {
-        match et {
-            ElementType::Boolean
-            | ElementType::I1
-            | ElementType::U1
-            | ElementType::I2
-            | ElementType::U2
-            | ElementType::I4
-            | ElementType::U4
-            | ElementType::Char => Value::I32(0),
-            ElementType::I8 | ElementType::U8 => Value::I64(0),
-            ElementType::R4 => Value::F32(0.0),
-            ElementType::R8 => Value::F64(0.0),
-            ElementType::IntPtr | ElementType::UIntPtr => Value::I64(0),
-            _ => Value::Null,
-        }
+    fn is_float(self) -> bool {
+        matches!(self, Value::F32(_) | Value::F64(_))
+    }
+
+    /// Entier 64 bits ou pointeur (sinon entier 32 bits).
+    fn is_wide(self) -> bool {
+        matches!(self, Value::I64(_) | Value::Ref(_))
     }
 }
 
-/// Lit un emplacement de 8 octets (champ d'objet ou statique) selon son type.
-fn load_slot(ptr: *const u8, et: &ElementType) -> Value {
+/// Lit une valeur de type `kind` rangée à `ptr`. Un type valeur est recopié
+/// dans un objet temporaire du tas.
+pub fn load(ptr: *const u8, kind: Kind) -> Value {
     unsafe {
-        match et {
-            ElementType::R4 => Value::F32(*(ptr as *const f32)),
-            ElementType::R8 => Value::F64(*(ptr as *const f64)),
-            ElementType::I8 | ElementType::U8 | ElementType::IntPtr | ElementType::UIntPtr => {
-                Value::I64(*(ptr as *const i64))
-            }
-            ElementType::Boolean
-            | ElementType::Char
-            | ElementType::I1
-            | ElementType::U1
-            | ElementType::I2
-            | ElementType::U2
-            | ElementType::I4
-            | ElementType::U4 => Value::I32(*(ptr as *const i32)),
-            _ => match *(ptr as *const *mut u8) {
+        match kind {
+            Kind::Bool | Kind::U1 => Value::I32(*ptr as i32),
+            Kind::I1 => Value::I32(*(ptr as *const i8) as i32),
+            Kind::I2 => Value::I32((ptr as *const i16).read_unaligned() as i32),
+            Kind::U2 | Kind::Char => Value::I32((ptr as *const u16).read_unaligned() as i32),
+            Kind::I4 | Kind::U4 => Value::I32((ptr as *const i32).read_unaligned()),
+            Kind::I8 | Kind::U8 | Kind::I => Value::I64((ptr as *const i64).read_unaligned()),
+            Kind::R4 => Value::F32((ptr as *const f32).read_unaligned()),
+            Kind::R8 => Value::F64((ptr as *const f64).read_unaligned()),
+            Kind::Ref => match (ptr as *const *mut u8).read_unaligned() {
                 p if p.is_null() => Value::Null,
                 p => Value::Ref(p),
             },
+            Kind::Struct(id) => {
+                let size = kind.elem_size();
+                let copy = gc::with_gc(|gc| gc.alloc(id, size));
+                std::ptr::copy_nonoverlapping(ptr, copy, size);
+                Value::Ref(copy)
+            }
         }
     }
 }
 
-fn store_slot(ptr: *mut u8, val: Value) {
+/// Range `val` à `ptr` selon `kind`. Un type valeur est recopié depuis son
+/// objet temporaire (une valeur nulle le remet à zéro).
+pub fn store(ptr: *mut u8, kind: Kind, val: Value) {
     unsafe {
-        match val {
-            Value::F32(v) => *(ptr as *mut f32) = v,
-            Value::F64(v) => *(ptr as *mut f64) = v,
-            Value::Ref(p) => *(ptr as *mut *mut u8) = p,
-            Value::Null => *(ptr as *mut u64) = 0,
-            v => *(ptr as *mut i64) = v.as_i64(),
+        match kind {
+            Kind::Bool | Kind::I1 | Kind::U1 => *ptr = val.as_i32() as u8,
+            Kind::I2 | Kind::U2 | Kind::Char => {
+                (ptr as *mut u16).write_unaligned(val.as_i32() as u16)
+            }
+            Kind::I4 | Kind::U4 => (ptr as *mut i32).write_unaligned(val.as_i32()),
+            Kind::I8 | Kind::U8 | Kind::I => (ptr as *mut i64).write_unaligned(val.as_i64()),
+            Kind::R4 => (ptr as *mut f32).write_unaligned(val.as_f64() as f32),
+            Kind::R8 => (ptr as *mut f64).write_unaligned(val.as_f64()),
+            Kind::Ref => (ptr as *mut *mut u8).write_unaligned(match val {
+                Value::Null => std::ptr::null_mut(),
+                v => v.as_ref(),
+            }),
+            Kind::Struct(_) => {
+                let size = kind.elem_size();
+                let src = val.as_ref();
+                if src.is_null() {
+                    std::ptr::write_bytes(ptr, 0, size);
+                } else if src != ptr {
+                    std::ptr::copy(src, ptr, size);
+                }
+            }
         }
     }
 }
 
-fn check_index(arr: *mut u8, idx: usize) -> Result<(), ClrException> {
-    if arr.is_null() {
-        return Err(ClrException::null_reference());
+/// Contexte générique d'une méthode : arguments de type de sa classe (`!0`)
+/// et de la méthode elle-même (`!!0`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Gen {
+    pub t: Vec<TypeId>,
+    pub m: Vec<TypeId>,
+}
+
+/// Zone mémoire d'un appel : emplacements de 8 octets, alignés, qui ne
+/// bougent pas pendant toute la durée de l'appel.
+struct Slots {
+    words: Box<[u64]>,
+    layout: Vec<(usize, Kind)>,
+}
+
+impl Slots {
+    fn new(kinds: &[Kind]) -> Slots {
+        let mut layout = Vec::with_capacity(kinds.len());
+        let mut offset = 0;
+        for &k in kinds {
+            layout.push((offset, k));
+            offset += k.slot_size();
+        }
+        Slots {
+            words: vec![0u64; offset / 8].into_boxed_slice(),
+            layout,
+        }
     }
-    if idx >= unsafe { *(arr as *const u64) } as usize {
-        return Err(ClrException::index_out_of_range());
+
+    fn addr(&mut self, idx: usize) -> Option<(*mut u8, Kind)> {
+        let &(off, kind) = self.layout.get(idx)?;
+        Some((
+            unsafe { (self.words.as_mut_ptr() as *mut u8).add(off) },
+            kind,
+        ))
     }
-    Ok(())
+
+    fn get(&mut self, idx: usize) -> Value {
+        self.addr(idx).map_or(Value::Null, |(p, k)| load(p, k))
+    }
+
+    fn set(&mut self, idx: usize, v: Value) {
+        if let Some((p, k)) = self.addr(idx) {
+            store(p, k, v);
+        }
+    }
 }
 
 struct CallFrame {
     ip: usize,
-    code: Vec<u8>,
-    locals: Vec<Value>,
-    args: Vec<Value>,
+    code: Rc<Vec<u8>>,
+    locals: Slots,
+    args: Slots,
     eval_stack: Vec<Value>,
-    exception_clauses: Vec<metadata::ExceptionClause>,
-    /// Exception à relancer à la fin du finally en cours.
-    pending: Option<ClrException>,
-    /// Destination d'un `leave` en attente de la fin d'un finally.
-    leave_target: Option<usize>,
-    /// Exception traitée par le catch en cours (pour `rethrow`).
-    caught: Option<ClrException>,
+    exception_clauses: Rc<Vec<metadata::ExceptionClause>>,
+    /// Blocs finally/fault en cours, par début de gestionnaire, avec ce
+    /// qu'il faut reprendre à leur `endfinally`.
+    unwinding: Vec<(usize, Unwind)>,
+    /// Exceptions des catch en cours, par début de gestionnaire (pour
+    /// `rethrow`).
+    caught: Vec<(usize, ClrException)>,
+    gen: Rc<Gen>,
+    /// Type du préfixe `constrained.` en attente du `callvirt` suivant.
+    constrained: Option<TypeId>,
 }
 
 pub struct Interpreter {
     frames: Vec<CallFrame>,
+    /// Assembly de la méthode en cours ; les autres attendent dans `parked`.
     pub assembly: Assembly,
+    parked: Vec<Option<Assembly>>,
+    pub(super) current: usize,
+    pub(super) domain: Vec<AsmInfo>,
+    /// Types dont le constructeur statique a été lancé.
+    initialized: HashSet<TypeId>,
+    /// Champs statiques des types de la bibliothèque intégrée.
+    external_statics: HashMap<(usize, u32), Box<[u64; 4]>>,
+    /// Valeurs en transit vers du code natif, gardées en vie par le
+    /// ramasse-miettes.
+    pub(super) pins: Vec<Value>,
+    /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
+    pub(super) fns: FnTable,
 }
 
 pub enum ExecResult {
@@ -170,62 +251,178 @@ pub enum ExecResult {
     Exception(ClrException),
 }
 
-/// Méthode désignée par un jeton d'appel.
-enum Target {
-    Managed(u32),
-    External {
-        namespace: String,
-        class: String,
-        name: String,
-    },
+/// Suite d'un bloc finally à son `endfinally`.
+#[derive(Clone, Copy)]
+enum Unwind {
+    /// Exception à relancer.
+    Exception(ClrException),
+    /// Destination d'un `leave`.
+    Leave(usize),
 }
 
 enum StepResult {
     Continue,
+    /// Fin d'un bloc filtre : vrai si le gestionnaire est retenu.
+    EndFilter(bool),
     Branch(usize),
     Return(Value),
     Throw(ClrException),
 }
 
+fn exception(name: &str, message: &str) -> ClrException {
+    ClrException::new("System", name, message)
+}
+
+fn overflow() -> ClrException {
+    exception(
+        "OverflowException",
+        "Arithmetic operation resulted in an overflow.",
+    )
+}
+
+fn invalid_cast() -> ClrException {
+    exception("InvalidCastException", "Specified cast is not valid.")
+}
+
 impl Interpreter {
-    pub fn new(assembly: Assembly) -> Self {
+    pub fn new(assemblies: Vec<Assembly>, domain: Vec<AsmInfo>) -> Self {
+        let mut parked: Vec<Option<Assembly>> = assemblies.into_iter().map(Some).collect();
+        let assembly = parked[0].take().expect("assembly du programme");
         Interpreter {
             frames: Vec::new(),
             assembly,
+            parked,
+            current: 0,
+            domain,
+            initialized: HashSet::new(),
+            external_statics: HashMap::new(),
+            pins: Vec::new(),
+            fns: FnTable::default(),
         }
     }
 
+    /// Rend `index` assembly courante ; renvoie la précédente.
+    pub(super) fn enter(&mut self, index: usize) -> usize {
+        let previous = self.current;
+        if index != previous {
+            let next = self.parked[index].take().expect("assembly déjà active");
+            let old = std::mem::replace(&mut self.assembly, next);
+            self.parked[previous] = Some(old);
+            self.current = index;
+        }
+        previous
+    }
+
+    pub(super) fn assembly_at(&self, index: usize) -> &Assembly {
+        if index == self.current {
+            &self.assembly
+        } else {
+            self.parked[index].as_ref().expect("assembly du domaine")
+        }
+    }
+
+    /// Contexte générique de la méthode en cours.
+    pub(super) fn current_gen(&self) -> Gen {
+        self.frames
+            .last()
+            .map(|f| (*f.gen).clone())
+            .unwrap_or_default()
+    }
+
+    /// Exécute le point d'entrée (ou une méthode non générique) de
+    /// l'assembly courante.
     pub fn execute_method(&mut self, method_row: u32, args: Vec<Value>) -> ExecResult {
+        self.execute_gen(method_row, args, Gen::default())
+    }
+
+    /// Exécute une méthode d'une assembly quelconque du domaine.
+    fn execute_in(
+        &mut self,
+        asm: usize,
+        method_row: u32,
+        args: Vec<Value>,
+        gen: Gen,
+    ) -> ExecResult {
+        let previous = self.enter(asm);
+        let result = self.execute_gen(method_row, args, gen);
+        self.enter(previous);
+        result
+    }
+
+    /// Type (instancié) qui déclare une méthode de l'assembly courante.
+    fn owner_type(&self, method_row: u32, gen: &Gen) -> Option<TypeId> {
+        let info = &self.domain[self.current];
+        let owner = info
+            .method_owner
+            .get(method_row as usize)
+            .copied()
+            .unwrap_or(0);
+        let id = info.type_ids.get(owner as usize).copied().flatten()?;
+        Some(if gen.t.is_empty() {
+            id
+        } else {
+            self.instantiate(id, gen.t.clone())
+        })
+    }
+
+    /// Lance une seule fois le constructeur statique d'un type, avant son
+    /// premier usage (ECMA-335 §II.10.5.3.1).
+    fn ensure_initialized(&mut self, id: TypeId) -> Result<(), ClrException> {
+        if !self.initialized.insert(id) {
+            return Ok(());
+        }
+        let Some(((asm, row), args)) = types::with_types(|reg| {
+            reg.get(id)
+                .and_then(|t| Some((t.def?, t.type_args.clone())))
+        }) else {
+            return Ok(());
+        };
+        let a = self.assembly_at(asm);
+        let cctor = a.type_methods(row).find(|&m| {
+            let md = a.get_method_def(m);
+            md.is_cctor() && md.rva != 0 && a.get_string(md.name) == ".cctor"
+        });
+        match cctor {
+            Some(m) => match self.execute_in(
+                asm,
+                m,
+                Vec::new(),
+                Gen {
+                    t: args,
+                    m: Vec::new(),
+                },
+            ) {
+                ExecResult::Exception(e) => Err(e),
+                ExecResult::Return(_) => Ok(()),
+            },
+            None => Ok(()),
+        }
+    }
+
+    fn execute_gen(&mut self, method_row: u32, args: Vec<Value>, gen: Gen) -> ExecResult {
+        let owner = self.owner_type(method_row, &gen);
+        if let Some(owner) = owner {
+            if let Err(e) = self.ensure_initialized(owner) {
+                return ExecResult::Exception(e);
+            }
+        }
         let md = self.assembly.get_method_def(method_row);
         let sig = metadata::decode_method_sig(self.assembly.get_blob(md.signature));
 
         if md.is_pinvoke() {
-            let token = Token::new(TableId::MethodDef, method_row);
-            let Some(imp) = self.assembly.find_impl_map(token) else {
-                return ExecResult::Exception(ClrException::new(
-                    "System",
-                    "EntryPointNotFoundException",
-                    "P/Invoke sans ImplMap",
-                ));
-            };
-            let module = self
-                .assembly
-                .get_string(self.assembly.get_module_ref(imp.import_scope).name);
-            let import = pinvoke::Import {
-                module,
-                name: self.assembly.get_string(imp.import_name),
-                unicode: imp.mapping_flags & 0x0004 != 0,
-            };
-            return match pinvoke::call(&import, &args, &sig.param_types, &sig.ret_type) {
+            return match self.call_pinvoke(method_row, args, &sig, &gen) {
                 Ok(v) => ExecResult::Return(v),
-                Err((kind, msg)) => ExecResult::Exception(ClrException::new("System", kind, &msg)),
+                Err(e) => ExecResult::Exception(e),
             };
         }
 
         if md.rva == 0 {
-            let td = self
-                .assembly
-                .get_type_def(self.find_declaring_type(method_row));
+            let owner_row = self.domain[self.current]
+                .method_owner
+                .get(method_row as usize)
+                .copied()
+                .unwrap_or(0);
+            let td = self.assembly.get_type_def(owner_row);
             let namespace = self.assembly.get_string(td.namespace).to_string();
             let class = self.assembly.get_string(td.name).to_string();
             let name = self.assembly.get_string(md.name).to_string();
@@ -239,19 +436,33 @@ impl Interpreter {
             return ExecResult::Exception(ClrException::stack_overflow());
         }
         let Some(body) = self.assembly.method_body(md.rva) else {
-            return ExecResult::Exception(ClrException::new(
-                "System",
+            return ExecResult::Exception(exception(
                 "BadImageFormatException",
                 &format!("corps de méthode illisible (RVA {:#x})", md.rva),
             ));
         };
-        let locals = if body.local_var_sig_token != 0 {
+
+        let mut arg_kinds = Vec::with_capacity(sig.param_types.len() + 1);
+        if sig.has_this() {
+            let value_this = owner
+                .is_some_and(|o| types::with_types(|reg| reg.get(o).is_some_and(|t| t.is_value)));
+            arg_kinds.push(if value_this { Kind::I } else { Kind::Ref });
+        }
+        for p in &sig.param_types {
+            arg_kinds.push(self.kind_of_sig(self.current, p, &gen));
+        }
+        let mut arg_slots = Slots::new(&arg_kinds);
+        for (i, v) in args.into_iter().enumerate().take(arg_kinds.len()) {
+            arg_slots.set(i, v);
+        }
+
+        let local_kinds: Vec<Kind> = if body.local_var_sig_token != 0 {
             let sig = self
                 .assembly
                 .get_standalone_sig(body.local_var_sig_token & 0x00FF_FFFF);
             metadata::decode_locals_sig(self.assembly.get_blob(sig.signature))
                 .iter()
-                .map(Value::default_for)
+                .map(|et| self.kind_of_sig(self.current, et, &gen))
                 .collect()
         } else {
             Vec::new()
@@ -259,42 +470,41 @@ impl Interpreter {
 
         self.frames.push(CallFrame {
             ip: 0,
-            code: body.code,
-            locals,
-            args,
+            code: Rc::new(body.code),
+            locals: Slots::new(&local_kinds),
+            args: arg_slots,
             eval_stack: Vec::with_capacity(body.max_stack as usize),
-            exception_clauses: body.exception_clauses,
-            pending: None,
-            leave_target: None,
-            caught: None,
+            exception_clauses: Rc::new(body.exception_clauses),
+            unwinding: Vec::new(),
+            caught: Vec::new(),
+            gen: Rc::new(gen),
+            constrained: None,
         });
         self.run_loop()
     }
 
-    /// Appelle la méthode désignée par `token`. Avec `virtual_call`, la
-    /// redéfinition du type réel de `this` est choisie.
-    fn invoke(
+    /// Appelle `callee`. Avec `virtual_call`, la redéfinition du type réel de
+    /// `this` est choisie.
+    pub(super) fn invoke(
         &mut self,
         token: u32,
+        callee: Callee,
         args: Vec<Value>,
         virtual_call: bool,
     ) -> Result<Value, ClrException> {
-        let mut target = self.resolve_method(token);
+        let Callee {
+            mut target,
+            mut gen,
+        } = callee;
         if virtual_call {
-            if let Some(Value::Ref(this)) = args.first() {
-                if let Some(type_id) = gc::type_of(*this) {
-                    let (name, argc) = self.method_name_and_arity(token);
-                    let row = types::with_types(|reg| reg.find_override(type_id, &name, argc));
-                    if let Some(row) = row {
-                        target = Target::Managed(Token(row).rid());
-                    }
-                }
-            } else if matches!(args.first(), Some(Value::Null)) {
-                return Err(ClrException::null_reference());
+            match args.first() {
+                Some(Value::Ref(this)) => self.devirtualize(token, *this, &mut target, &mut gen),
+                Some(Value::Null) => return Err(ClrException::null_reference()),
+                _ => {}
             }
         }
         match target {
-            Target::Managed(row) => match self.execute_method(row, args) {
+            Target::Managed(asm, row) => match self.execute_in(asm, row, args, gen) {
                 ExecResult::Return(v) => Ok(v),
                 ExecResult::Exception(e) => Err(e),
             },
@@ -309,107 +519,31 @@ impl Interpreter {
         }
     }
 
-    fn resolve_method(&self, token: u32) -> Target {
-        let row = Token(token).rid();
-        match Token(token).table() {
-            t if t == TableId::MethodDef as u8 => Target::Managed(row),
-            t if t == TableId::MethodSpec as u8 => {
-                let spec = self.assembly.get_method_spec(row);
-                let (table, inner) = CodedIndex::MethodDefOrRef.decode(spec.method);
-                let table = table.map_or(0, |t| t as u32);
-                self.resolve_method((table << 24) | inner)
-            }
-            t if t == TableId::MemberRef as u8 => {
-                let mr = self.assembly.get_member_ref(row);
-                let name = self.assembly.get_string(mr.name).to_string();
-                let (parent, prow) = CodedIndex::MemberRefParent.decode(mr.class);
-                let (namespace, class) = match parent {
-                    Some(TableId::TypeRef) => {
-                        let tr = self.assembly.get_type_ref(prow);
-                        (tr.namespace, tr.name)
-                    }
-                    Some(TableId::TypeDef) => {
-                        let found = self.assembly.type_methods(prow).find(|&m| {
-                            self.assembly
-                                .get_string(self.assembly.get_method_def(m).name)
-                                == name
-                        });
-                        if let Some(m) = found {
-                            return Target::Managed(m);
-                        }
-                        let td = self.assembly.get_type_def(prow);
-                        (td.namespace, td.name)
-                    }
-                    Some(TableId::TypeSpec) => {
-                        let (ns, cls) = self.type_spec_name(prow);
-                        return Target::External {
-                            namespace: ns,
-                            class: cls,
-                            name,
-                        };
-                    }
-                    _ => (0, 0),
-                };
-                Target::External {
-                    namespace: self.assembly.get_string(namespace).to_string(),
-                    class: self.assembly.get_string(class).to_string(),
-                    name,
-                }
-            }
-            _ => Target::External {
-                namespace: String::new(),
-                class: String::new(),
-                name: format!("jeton {token:#010x}"),
-            },
+    /// Remplace la méthode appelée par la redéfinition du type réel de
+    /// `this`.
+    fn devirtualize(&self, token: u32, this: *mut u8, target: &mut Target, gen: &mut Gen) {
+        let Some(type_id) = gc::type_of(this) else {
+            return;
+        };
+        let name = self.method_name(token);
+        let argc = self.get_method_sig(token).param_types.len();
+        let found = types::with_types(|reg| {
+            let (asm, tok, decl) = reg.find_override(type_id, &name, argc)?;
+            Some((
+                asm,
+                tok,
+                reg.get(decl)
+                    .map(|t| t.type_args.clone())
+                    .unwrap_or_default(),
+            ))
+        });
+        if let Some((asm, tok, type_args)) = found {
+            *target = Target::Managed(asm, Token(tok).rid());
+            gen.t = type_args;
         }
     }
 
-    /// Nom du type générique d'une instanciation (`List`1` pour `List<int>`).
-    fn type_spec_name(&self, row: u32) -> (String, String) {
-        let blob = self
-            .assembly
-            .get_blob(self.assembly.get_type_spec(row).signature);
-        let mut off = 0;
-        let coded = match metadata::decode_type(blob, &mut off) {
-            ElementType::GenericInst(inner, _) => match *inner {
-                ElementType::Class(c) | ElementType::ValueType(c) => c,
-                _ => 0,
-            },
-            ElementType::Class(c) | ElementType::ValueType(c) => c,
-            _ => 0,
-        };
-        let (table, r) = CodedIndex::TypeDefOrRef.decode(coded);
-        let (ns, name) = match table {
-            Some(TableId::TypeRef) => {
-                let tr = self.assembly.get_type_ref(r);
-                (tr.namespace, tr.name)
-            }
-            Some(TableId::TypeDef) => {
-                let td = self.assembly.get_type_def(r);
-                (td.namespace, td.name)
-            }
-            _ => (0, 0),
-        };
-        (
-            self.assembly.get_string(ns).to_string(),
-            self.assembly.get_string(name).to_string(),
-        )
-    }
-
-    fn method_name_and_arity(&self, token: u32) -> (String, usize) {
-        let row = Token(token).rid();
-        let name = match Token(token).table() {
-            t if t == TableId::MethodDef as u8 => self.assembly.get_method_def(row).name,
-            t if t == TableId::MemberRef as u8 => self.assembly.get_member_ref(row).name,
-            _ => 0,
-        };
-        (
-            self.assembly.get_string(name).to_string(),
-            self.get_method_sig(token).param_types.len(),
-        )
-    }
-
-    /// Méthode implémentée par le runtime (BCL intégrée).
+    /// Méthode implémentée par le runtime (bibliothèque intégrée).
     fn call_native(
         &mut self,
         namespace: &str,
@@ -418,6 +552,9 @@ impl Interpreter {
         args: Vec<Value>,
         params: &[ElementType],
     ) -> Result<Value, ClrException> {
+        if let Some(r) = self.delegate_call(namespace, class, name, &args, params) {
+            return r;
+        }
         match (namespace, class, name) {
             (_, _, ".ctor") => {
                 // Constructeurs de la BCL (Object, Exception…) : seul le message
@@ -428,6 +565,14 @@ impl Interpreter {
                     {
                         unsafe {
                             *(this.add(exceptions::MESSAGE_SLOT) as *mut *mut u8) = *msg;
+                        }
+                        // Exception(string, Exception) : exception interne.
+                        if let (true, Some(Value::Ref(inner))) =
+                            (class.ends_with("Exception"), args.get(2))
+                        {
+                            unsafe {
+                                *(this.add(exceptions::INNER_SLOT) as *mut *mut u8) = *inner;
+                            }
                         }
                     }
                 }
@@ -441,22 +586,53 @@ impl Interpreter {
                 let msg = ClrException { obj_ptr: this }.message();
                 return Ok(bcl::alloc_managed_string(&msg));
             }
+            (_, c, "get_InnerException") if c.ends_with("Exception") => {
+                let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
+                if this.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                let inner = unsafe { *(this.add(exceptions::INNER_SLOT) as *const *mut u8) };
+                return Ok(if gc::type_of(inner).is_some() {
+                    Value::Ref(inner)
+                } else {
+                    Value::Null
+                });
+            }
+            (
+                "System.Runtime.InteropServices",
+                "Marshal",
+                "GetLastWin32Error" | "GetLastPInvokeError",
+            ) => {
+                return Ok(Value::I32(pinvoke::LAST_ERROR.with(|e| e.get()) as i32));
+            }
             ("System", "GC", "Collect") => {
                 self.collect_garbage();
                 return Ok(Value::Null);
             }
             _ => {}
         }
+        let pinned = self.pins.len();
+        self.pins.extend(args.iter().copied());
         let mut args = args;
         let first_param = args.len() - params.len().min(args.len());
         for (i, param) in params.iter().enumerate() {
             if matches!(param, ElementType::Object) {
-                args[first_param + i] = self.managed_to_string(args[first_param + i])?;
+                match self.managed_to_string(args[first_param + i]) {
+                    Ok(v) => {
+                        args[first_param + i] = v;
+                        self.pins.push(v);
+                    }
+                    Err(e) => {
+                        self.pins.truncate(pinned);
+                        return Err(e);
+                    }
+                }
             }
         }
-        bcl::dispatch_internal_call(namespace, class, name, &args, params).ok_or_else(|| {
-            ClrException::new(
-                "System",
+        let result = bcl::dispatch_internal_call(namespace, class, name, &args, params);
+        self.pins.truncate(pinned);
+        result.ok_or_else(|| {
+            exception(
                 "MissingMethodException",
                 &format!("Method not found: {namespace}.{class}::{name}"),
             )
@@ -470,19 +646,25 @@ impl Interpreter {
         let Some(type_id) = gc::type_of(p) else {
             return Ok(v);
         };
-        match types::with_types(|reg| reg.find_override(type_id, "ToString", 0)) {
-            Some(token) => match self.execute_method(Token(token).rid(), vec![v]) {
-                ExecResult::Return(s) => Ok(s),
-                ExecResult::Exception(e) => Err(e),
-            },
+        let found = types::with_types(|reg| {
+            let (asm, tok, decl) = reg.find_override(type_id, "ToString", 0)?;
+            Some((
+                asm,
+                tok,
+                reg.get(decl)
+                    .map(|t| t.type_args.clone())
+                    .unwrap_or_default(),
+            ))
+        });
+        match found {
+            Some((asm, token, t)) => {
+                match self.execute_in(asm, Token(token).rid(), vec![v], Gen { t, m: Vec::new() }) {
+                    ExecResult::Return(s) => Ok(s),
+                    ExecResult::Exception(e) => Err(e),
+                }
+            }
             None => Ok(v),
         }
-    }
-
-    fn find_declaring_type(&self, method_row: u32) -> u32 {
-        (1..=self.assembly.row_count(TableId::TypeDef))
-            .find(|&i| self.assembly.type_methods(i).contains(&method_row))
-            .unwrap_or(0)
     }
 
     /// Exécute la méthode au sommet de la pile d'appels jusqu'à son retour.
@@ -499,15 +681,18 @@ impl Interpreter {
             let Some(instr) = opcodes::decode(&frame.code, frame.ip) else {
                 let ip = frame.ip;
                 self.frames.pop();
-                return ExecResult::Exception(ClrException::new(
-                    "System",
+                return ExecResult::Exception(exception(
                     "InvalidProgramException",
                     &format!("opcode invalide à IL_{ip:04x}"),
                 ));
             };
             let next_ip = instr.offset + instr.size;
 
-            match self.step(instr.op, instr.offset, next_ip) {
+            let result = match self.step(instr.op, instr.offset, next_ip) {
+                Ok(r) => r,
+                Err(e) => StepResult::Throw(e),
+            };
+            match result {
                 StepResult::Continue => {
                     let f = self.frames.last_mut().unwrap();
                     if f.ip == instr.offset {
@@ -515,6 +700,13 @@ impl Interpreter {
                     }
                 }
                 StepResult::Branch(target) => self.frames.last_mut().unwrap().ip = target,
+                StepResult::EndFilter(_) => {
+                    let exc = exception("InvalidProgramException", "endfilter hors d'un filtre");
+                    if let Some(unhandled) = self.raise(exc, instr.offset) {
+                        self.frames.pop();
+                        return ExecResult::Exception(unhandled);
+                    }
+                }
                 StepResult::Return(v) => {
                     self.frames.pop();
                     return ExecResult::Return(v);
@@ -532,26 +724,90 @@ impl Interpreter {
     /// Cherche un gestionnaire dans la méthode courante ; renvoie l'exception
     /// si elle doit remonter à l'appelant.
     fn raise(&mut self, exc: ClrException, ip: usize) -> Option<ClrException> {
-        let clauses = std::mem::take(&mut self.frames.last_mut().unwrap().exception_clauses);
-        let handler = exceptions::find_handler(&clauses, ip, |class| self.catches(class, &exc));
-        let f = self.frames.last_mut().unwrap();
-        f.exception_clauses = clauses;
-        f.eval_stack.clear();
-        match handler {
-            Some(Handler::Catch(h)) => {
-                f.eval_stack.push(Value::Ref(exc.obj_ptr));
-                f.caught = Some(exc);
-                f.ip = h;
-                None
-            }
-            Some(Handler::Finally(h)) => {
-                f.pending = Some(exc);
-                f.leave_target = None;
-                f.ip = h;
-                None
-            }
-            None => Some(exc),
+        let clauses = self.frames.last().unwrap().exception_clauses.clone();
+        {
+            let f = self.frames.last_mut().unwrap();
+            f.eval_stack.clear();
+            f.constrained = None;
         }
+        // Passe unique : les filtres sont évalués pendant la remontée, dans
+        // l'ordre des clauses (ECMA-335 §I.12.4.2.5 en décrit deux ; seule
+        // la place des finally internes par rapport aux filtres externes
+        // diffère).
+        for clause in clauses.iter().filter(|c| exceptions::try_covers(c, ip)) {
+            let handler = clause.handler_offset as usize;
+            let accepted = if exceptions::is_finally(clause) {
+                true
+            } else if exceptions::is_filter(clause) {
+                self.run_filter(clause.class_token_or_filter as usize, exc)
+            } else {
+                self.catches(clause.class_token_or_filter, &exc)
+            };
+            if !accepted {
+                continue;
+            }
+            let f = self.frames.last_mut().unwrap();
+            // Les gestionnaires que l'exception quitte sont abandonnés.
+            let left = |h: usize| {
+                clauses.iter().any(|c| {
+                    c.handler_offset as usize == h
+                        && exceptions::handler_covers(c, ip)
+                        && !exceptions::handler_covers(c, handler)
+                })
+            };
+            f.caught.retain(|(h, _)| !left(*h));
+            f.unwinding.retain(|(h, _)| !left(*h));
+            f.eval_stack.clear();
+            if exceptions::is_finally(clause) {
+                f.unwinding.push((handler, Unwind::Exception(exc)));
+            } else {
+                f.eval_stack.push(Value::Ref(exc.obj_ptr));
+                f.caught.push((handler, exc));
+            }
+            f.ip = handler;
+            return None;
+        }
+        Some(exc)
+    }
+
+    /// Exécute un bloc filtre jusqu'à son `endfilter`. Une exception levée
+    /// dans le filtre vaut un refus (ECMA-335 §III.3.34).
+    fn run_filter(&mut self, offset: usize, exc: ClrException) -> bool {
+        let depth = self.frames.len();
+        let saved_ip = self.frames[depth - 1].ip;
+        self.pins.push(Value::Ref(exc.obj_ptr));
+        {
+            let f = &mut self.frames[depth - 1];
+            f.ip = offset;
+            f.eval_stack.clear();
+            f.eval_stack.push(Value::Ref(exc.obj_ptr));
+        }
+        let accepted = loop {
+            if gc::with_gc(|gc| gc.should_collect()) {
+                self.collect_garbage();
+            }
+            let f = &self.frames[depth - 1];
+            let Some(instr) = opcodes::decode(&f.code, f.ip) else {
+                break false;
+            };
+            let next_ip = instr.offset + instr.size;
+            match self.step(instr.op, instr.offset, next_ip) {
+                Ok(StepResult::Continue) => {
+                    let f = &mut self.frames[depth - 1];
+                    if f.ip == instr.offset {
+                        f.ip = next_ip;
+                    }
+                }
+                Ok(StepResult::Branch(target)) => self.frames[depth - 1].ip = target,
+                Ok(StepResult::EndFilter(v)) => break v,
+                Ok(StepResult::Return(_) | StepResult::Throw(_)) | Err(_) => break false,
+            }
+        };
+        self.pins.pop();
+        let f = &mut self.frames[depth - 1];
+        f.eval_stack.clear();
+        f.ip = saved_ip;
+        accepted
     }
 
     fn catches(&self, class_token: u32, exc: &ClrException) -> bool {
@@ -564,1077 +820,957 @@ impl Interpreter {
         }
     }
 
-    /// Type désigné par un jeton TypeDef / TypeRef (les types de la BCL sont
-    /// créés à la demande).
-    fn resolve_type_token(&self, token: u32) -> Option<types::TypeId> {
-        let row = Token(token).rid();
-        let (ns, name) = match Token(token).table() {
-            t if t == TableId::TypeDef as u8 => {
-                let td = self.assembly.get_type_def(row);
-                (td.namespace, td.name)
-            }
-            t if t == TableId::TypeRef as u8 => {
-                let tr = self.assembly.get_type_ref(row);
-                (tr.namespace, tr.name)
-            }
-            _ => return None,
+    /// Le type `target` d'un `isinst`/`castclass` accepte-t-il `obj` ?
+    fn is_instance(&self, obj: *mut u8, target: TypeId) -> bool {
+        let Some(actual) = gc::type_of(obj) else {
+            return true;
         };
-        let ns = self.assembly.get_string(ns);
-        let name = self.assembly.get_string(name);
-        Some(types::with_types(|reg| reg.ensure_external(ns, name)))
-    }
-
-    fn is_interface_token(&self, token: u32) -> bool {
-        Token(token).table() == TableId::TypeDef as u8
-            && self
-                .assembly
-                .get_type_def(Token(token).rid())
-                .is_interface()
+        types::with_types(|reg| {
+            let Some(t) = reg.get(target) else {
+                return true;
+            };
+            // Les interfaces implémentées ne sont pas encore suivies, ni la
+            // hiérarchie des types de la bibliothèque intégrée : on accepte.
+            if t.is_interface {
+                return true;
+            }
+            let known = t.def.is_some()
+                || target < types::TYPE_EXCEPTION
+                || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
+            !known || reg.is_subclass_of(actual, target)
+        })
     }
 
     /// Collecte en prenant pour racines tout ce que voient les méthodes en
     /// cours et les champs statiques.
     fn collect_garbage(&mut self) {
-        let mut roots = Vec::new();
+        let mut roots: Vec<usize> = Vec::new();
         for f in &self.frames {
-            let values = f.locals.iter().chain(&f.args).chain(&f.eval_stack);
-            roots.extend(values.map(|v| v.as_i64() as usize));
-            let held = f.pending.iter().chain(&f.caught);
-            roots.extend(held.map(|e| e.obj_ptr as usize));
+            roots.extend(f.locals.words.iter().map(|&w| w as usize));
+            roots.extend(f.args.words.iter().map(|&w| w as usize));
+            roots.extend(f.eval_stack.iter().map(|v| v.as_i64() as usize));
+            roots.extend(f.caught.iter().map(|(_, e)| e.obj_ptr as usize));
+            roots.extend(f.unwinding.iter().filter_map(|(_, u)| match u {
+                Unwind::Exception(e) => Some(e.obj_ptr as usize),
+                Unwind::Leave(_) => None,
+            }));
+        }
+        roots.extend(self.pins.iter().map(|v| v.as_i64() as usize));
+        roots.extend(super::callbacks::roots());
+        for data in self.external_statics.values() {
+            roots.extend(data.iter().map(|&w| w as usize));
         }
         types::with_types(|reg| {
             for data in reg.static_data.values() {
-                roots.extend(
-                    data.as_chunks::<8>()
-                        .0
-                        .iter()
-                        .map(|c| usize::from_le_bytes(*c)),
-                );
+                roots.extend(data.iter().map(|&w| w as usize));
             }
         });
         gc::with_gc(|gc| gc.collect(&roots));
     }
 
-    fn step(&mut self, op: OpCode, offset: usize, next_ip: usize) -> StepResult {
-        let f = self.frames.last_mut().unwrap();
-        let code = &f.code;
+    /// Adresse d'un champ statique, après le constructeur statique de son type.
+    fn static_field(&mut self, token: u32) -> Result<(*mut u8, Kind), ClrException> {
+        let Some(field) = self.resolve_field(token) else {
+            // Champ statique de la bibliothèque intégrée : emplacement propre
+            // au jeton.
+            let slot = self
+                .external_statics
+                .entry((self.current, token))
+                .or_insert_with(|| Box::new([0u64; 4]));
+            return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
+        };
+        self.ensure_initialized(field.owner)?;
+        let ptr = types::with_types(|reg| {
+            reg.static_field_ptr(field.owner, field.info.offset, field.info.kind.slot_size())
+        });
+        Ok((ptr, field.info.kind))
+    }
+
+    /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.
+    fn instance_field(&self, token: u32, base: *mut u8) -> (*mut u8, Kind) {
+        match self.resolve_field(token) {
+            Some(f) => (unsafe { base.add(f.info.offset) }, f.info.kind),
+            // Champ d'un type de la bibliothèque intégrée : seul l'emplacement
+            // réservé (message d'exception) est modélisé.
+            None => (unsafe { base.add(exceptions::MESSAGE_SLOT) }, Kind::Ref),
+        }
+    }
+
+    /// Façon de ranger une valeur du type désigné par un jeton.
+    fn kind_of_token(&self, token: u32) -> (TypeId, Kind) {
+        let id = self.resolve_type_token(token).unwrap_or(types::TYPE_OBJECT);
+        (id, self.kind_of_type(id))
+    }
+
+    /// Objet temporaire qui porte une copie d'une valeur de type valeur.
+    pub(super) fn new_struct(&self, id: TypeId) -> *mut u8 {
+        self.ensure_layout(id);
+        let size = types::with_types(|reg| reg.get(id).map_or(8, |t| t.instance_size));
+        gc::with_gc(|gc| gc.alloc(id, size))
+    }
+
+    fn step(
+        &mut self,
+        op: OpCode,
+        offset: usize,
+        next_ip: usize,
+    ) -> Result<StepResult, ClrException> {
+        let code = self.frames.last().unwrap().code.clone();
+        let code = &code[..];
 
         macro_rules! push {
-            ($v:expr) => {
-                f.eval_stack.push($v)
-            };
+            ($v:expr) => {{
+                let v = $v;
+                self.frames.last_mut().unwrap().eval_stack.push(v)
+            }};
         }
         macro_rules! pop {
             () => {
-                f.eval_stack.pop().unwrap_or(Value::Null)
+                self.frames
+                    .last_mut()
+                    .unwrap()
+                    .eval_stack
+                    .pop()
+                    .unwrap_or(Value::Null)
             };
         }
+        macro_rules! frame {
+            () => {
+                self.frames.last_mut().unwrap()
+            };
+        }
+        let u8_arg = || opcodes::read_u8(code, offset + 1) as usize;
+        let u16_arg = || {
+            opcodes::read_u8(code, offset + 2) as usize
+                | ((opcodes::read_u8(code, offset + 3) as usize) << 8)
+        };
+        let tok1 = || opcodes::read_u32(code, offset + 1);
+        let tok2 = || opcodes::read_u32(code, offset + 2);
+        let br_s = || (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize;
+        let br_l = || (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize;
 
-        match op {
-            OpCode::Nop | OpCode::Break => StepResult::Continue,
+        use OpCode as O;
+        let r = match op {
+            O::Nop | O::Break => StepResult::Continue,
 
-            // --- Chargement d'arguments ---
-            OpCode::Ldarg_0 => {
-                push!(f.args.first().copied().unwrap_or(Value::Null));
+            // --- Arguments et variables locales ---
+            O::Ldarg_0 | O::Ldarg_1 | O::Ldarg_2 | O::Ldarg_3 => {
+                let idx = op as usize - O::Ldarg_0 as usize;
+                let v = frame!().args.get(idx);
+                push!(v);
                 StepResult::Continue
             }
-            OpCode::Ldarg_1 => {
-                push!(f.args.get(1).copied().unwrap_or(Value::Null));
+            O::Ldarg_S | O::Ldarg => {
+                let idx = if op == O::Ldarg_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
+                let v = frame!().args.get(idx);
+                push!(v);
                 StepResult::Continue
             }
-            OpCode::Ldarg_2 => {
-                push!(f.args.get(2).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Ldarg_3 => {
-                push!(f.args.get(3).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Ldarg_S => {
-                let idx = opcodes::read_u8(code, offset + 1) as usize;
-                push!(f.args.get(idx).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Ldarg => {
-                let idx = opcodes::read_u8(code, offset + 2) as usize
-                    | ((opcodes::read_u8(code, offset + 3) as usize) << 8);
-                push!(f.args.get(idx).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Starg_S => {
-                let idx = opcodes::read_u8(code, offset + 1) as usize;
+            O::Starg_S | O::Starg => {
+                let idx = if op == O::Starg_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
                 let v = pop!();
-                if idx < f.args.len() {
-                    f.args[idx] = v;
-                }
+                frame!().args.set(idx, v);
                 StepResult::Continue
             }
-
-            // --- Variables locales ---
-            OpCode::Ldloc_0 => {
-                push!(f.locals.first().copied().unwrap_or(Value::Null));
+            O::Ldarga_S | O::Ldarga => {
+                let idx = if op == O::Ldarga_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
+                let p = frame!()
+                    .args
+                    .addr(idx)
+                    .map_or(Value::Null, |(p, _)| Value::Ref(p));
+                push!(p);
                 StepResult::Continue
             }
-            OpCode::Ldloc_1 => {
-                push!(f.locals.get(1).copied().unwrap_or(Value::Null));
+            O::Ldloc_0 | O::Ldloc_1 | O::Ldloc_2 | O::Ldloc_3 => {
+                let idx = op as usize - O::Ldloc_0 as usize;
+                let v = frame!().locals.get(idx);
+                push!(v);
                 StepResult::Continue
             }
-            OpCode::Ldloc_2 => {
-                push!(f.locals.get(2).copied().unwrap_or(Value::Null));
+            O::Ldloc_S | O::Ldloc => {
+                let idx = if op == O::Ldloc_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
+                let v = frame!().locals.get(idx);
+                push!(v);
                 StepResult::Continue
             }
-            OpCode::Ldloc_3 => {
-                push!(f.locals.get(3).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Ldloc_S => {
-                let idx = opcodes::read_u8(code, offset + 1) as usize;
-                push!(f.locals.get(idx).copied().unwrap_or(Value::Null));
-                StepResult::Continue
-            }
-            OpCode::Stloc_0 => {
+            O::Stloc_0 | O::Stloc_1 | O::Stloc_2 | O::Stloc_3 => {
+                let idx = op as usize - O::Stloc_0 as usize;
                 let v = pop!();
-                if !f.locals.is_empty() {
-                    f.locals[0] = v;
-                }
+                frame!().locals.set(idx, v);
                 StepResult::Continue
             }
-            OpCode::Stloc_1 => {
+            O::Stloc_S | O::Stloc => {
+                let idx = if op == O::Stloc_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
                 let v = pop!();
-                if f.locals.len() > 1 {
-                    f.locals[1] = v;
-                }
+                frame!().locals.set(idx, v);
                 StepResult::Continue
             }
-            OpCode::Stloc_2 => {
-                let v = pop!();
-                if f.locals.len() > 2 {
-                    f.locals[2] = v;
-                }
-                StepResult::Continue
-            }
-            OpCode::Stloc_3 => {
-                let v = pop!();
-                if f.locals.len() > 3 {
-                    f.locals[3] = v;
-                }
-                StepResult::Continue
-            }
-            OpCode::Stloc_S => {
-                let idx = opcodes::read_u8(code, offset + 1) as usize;
-                let v = pop!();
-                if idx < f.locals.len() {
-                    f.locals[idx] = v;
-                }
+            O::Ldloca_S | O::Ldloca => {
+                let idx = if op == O::Ldloca_S {
+                    u8_arg()
+                } else {
+                    u16_arg()
+                };
+                let p = frame!()
+                    .locals
+                    .addr(idx)
+                    .map_or(Value::Null, |(p, _)| Value::Ref(p));
+                push!(p);
                 StepResult::Continue
             }
 
             // --- Constantes ---
-            OpCode::Ldnull => {
+            O::Ldnull => {
                 push!(Value::Null);
                 StepResult::Continue
             }
-            OpCode::Ldc_I4_M1 => {
-                push!(Value::I32(-1));
+            O::Ldc_I4_M1
+            | O::Ldc_I4_0
+            | O::Ldc_I4_1
+            | O::Ldc_I4_2
+            | O::Ldc_I4_3
+            | O::Ldc_I4_4
+            | O::Ldc_I4_5
+            | O::Ldc_I4_6
+            | O::Ldc_I4_7
+            | O::Ldc_I4_8 => {
+                push!(Value::I32(op as i32 - O::Ldc_I4_0 as i32));
                 StepResult::Continue
             }
-            OpCode::Ldc_I4_0 => {
-                push!(Value::I32(0));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_1 => {
-                push!(Value::I32(1));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_2 => {
-                push!(Value::I32(2));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_3 => {
-                push!(Value::I32(3));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_4 => {
-                push!(Value::I32(4));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_5 => {
-                push!(Value::I32(5));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_6 => {
-                push!(Value::I32(6));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_7 => {
-                push!(Value::I32(7));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_8 => {
-                push!(Value::I32(8));
-                StepResult::Continue
-            }
-            OpCode::Ldc_I4_S => {
+            O::Ldc_I4_S => {
                 push!(Value::I32(opcodes::read_i8(code, offset + 1) as i32));
                 StepResult::Continue
             }
-            OpCode::Ldc_I4 => {
+            O::Ldc_I4 => {
                 push!(Value::I32(opcodes::read_i32(code, offset + 1)));
                 StepResult::Continue
             }
-            OpCode::Ldc_I8 => {
+            O::Ldc_I8 => {
                 push!(Value::I64(opcodes::read_i64(code, offset + 1)));
                 StepResult::Continue
             }
-            OpCode::Ldc_R4 => {
+            O::Ldc_R4 => {
                 push!(Value::F32(opcodes::read_f32(code, offset + 1)));
                 StepResult::Continue
             }
-            OpCode::Ldc_R8 => {
+            O::Ldc_R8 => {
                 push!(Value::F64(opcodes::read_f64(code, offset + 1)));
                 StepResult::Continue
             }
 
             // --- Pile ---
-            OpCode::Dup => {
-                let v = f.eval_stack.last().copied().unwrap_or(Value::Null);
+            O::Dup => {
+                let v = frame!().eval_stack.last().copied().unwrap_or(Value::Null);
                 push!(v);
                 StepResult::Continue
             }
-            OpCode::Pop => {
+            O::Pop => {
                 pop!();
                 StepResult::Continue
             }
 
-            // --- Arithmétique ---
-            OpCode::Add => {
+            // --- Arithmétique et logique ---
+            O::Add
+            | O::Sub
+            | O::Mul
+            | O::Div
+            | O::Div_Un
+            | O::Rem
+            | O::Rem_Un
+            | O::And
+            | O::Or
+            | O::Xor
+            | O::Add_Ovf
+            | O::Add_Ovf_Un
+            | O::Sub_Ovf
+            | O::Sub_Ovf_Un
+            | O::Mul_Ovf
+            | O::Mul_Ovf_Un => {
                 let b = pop!();
                 let a = pop!();
-                push!(arith_add(a, b));
+                push!(binary(op, a, b)?);
                 StepResult::Continue
             }
-            OpCode::Sub => {
-                let b = pop!();
+            O::Shl | O::Shr | O::Shr_Un => {
+                let n = pop!().as_i32() as u32;
                 let a = pop!();
-                push!(arith_sub(a, b));
-                StepResult::Continue
-            }
-            OpCode::Mul => {
-                let b = pop!();
-                let a = pop!();
-                push!(arith_mul(a, b));
-                StepResult::Continue
-            }
-            OpCode::Div => {
-                let b = pop!();
-                let a = pop!();
-                if matches!(b, Value::I32(0) | Value::I64(0)) {
-                    return StepResult::Throw(ClrException::divide_by_zero());
-                }
-                push!(arith_div(a, b));
-                StepResult::Continue
-            }
-            OpCode::Div_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(
-                    (a.as_i32() as u32).wrapping_div(b.as_i32().max(1) as u32) as i32
-                ));
-                StepResult::Continue
-            }
-            OpCode::Rem => {
-                let b = pop!();
-                let a = pop!();
-                if matches!(b, Value::I32(0) | Value::I64(0)) {
-                    return StepResult::Throw(ClrException::divide_by_zero());
-                }
-                push!(arith_rem(a, b));
-                StepResult::Continue
-            }
-            OpCode::Rem_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(
-                    (a.as_i32() as u32).wrapping_rem(b.as_i32().max(1) as u32) as i32
-                ));
-                StepResult::Continue
-            }
-            OpCode::Neg => {
-                let v = pop!();
-                push!(match v {
-                    Value::I32(x) => Value::I32(-x),
-                    Value::I64(x) => Value::I64(-x),
-                    Value::F64(x) => Value::F64(-x),
-                    _ => Value::I32(0),
+                push!(match (a.is_wide(), op) {
+                    (true, O::Shl) => Value::I64(a.as_i64().wrapping_shl(n)),
+                    (true, O::Shr) => Value::I64(a.as_i64().wrapping_shr(n)),
+                    (true, _) => Value::I64((a.as_i64() as u64).wrapping_shr(n) as i64),
+                    (false, O::Shl) => Value::I32(a.as_i32().wrapping_shl(n)),
+                    (false, O::Shr) => Value::I32(a.as_i32().wrapping_shr(n)),
+                    (false, _) => Value::I32((a.as_i32() as u32).wrapping_shr(n) as i32),
                 });
                 StepResult::Continue
             }
-            OpCode::And => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(a.as_i32() & b.as_i32()));
-                StepResult::Continue
-            }
-            OpCode::Or => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(a.as_i32() | b.as_i32()));
-                StepResult::Continue
-            }
-            OpCode::Xor => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(a.as_i32() ^ b.as_i32()));
-                StepResult::Continue
-            }
-            OpCode::Not => {
+            O::Neg => {
                 let v = pop!();
-                push!(Value::I32(!v.as_i32()));
+                push!(match v {
+                    Value::I32(x) => Value::I32(x.wrapping_neg()),
+                    Value::F32(x) => Value::F32(-x),
+                    Value::F64(x) => Value::F64(-x),
+                    v => Value::I64(v.as_i64().wrapping_neg()),
+                });
                 StepResult::Continue
             }
-            OpCode::Shl => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(a.as_i32().wrapping_shl(b.as_i32() as u32)));
-                StepResult::Continue
-            }
-            OpCode::Shr => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(a.as_i32().wrapping_shr(b.as_i32() as u32)));
-                StepResult::Continue
-            }
-            OpCode::Shr_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(
-                    (a.as_i32() as u32).wrapping_shr(b.as_i32() as u32) as i32
-                ));
+            O::Not => {
+                let v = pop!();
+                push!(match v {
+                    Value::I32(x) => Value::I32(!x),
+                    v => Value::I64(!v.as_i64()),
+                });
                 StepResult::Continue
             }
 
             // --- Comparaisons ---
-            OpCode::Ceq => {
+            O::Ceq | O::Cgt | O::Cgt_Un | O::Clt | O::Clt_Un => {
                 let b = pop!();
                 let a = pop!();
-                push!(Value::I32(if a.as_i64() == b.as_i64() { 1 } else { 0 }));
-                StepResult::Continue
-            }
-            OpCode::Cgt => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(if a.as_i64() > b.as_i64() { 1 } else { 0 }));
-                StepResult::Continue
-            }
-            OpCode::Cgt_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(if (a.as_i64() as u64) > (b.as_i64() as u64) {
-                    1
-                } else {
-                    0
-                }));
-                StepResult::Continue
-            }
-            OpCode::Clt => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(if a.as_i64() < b.as_i64() { 1 } else { 0 }));
-                StepResult::Continue
-            }
-            OpCode::Clt_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(Value::I32(if (a.as_i64() as u64) < (b.as_i64() as u64) {
-                    1
-                } else {
-                    0
-                }));
-                StepResult::Continue
-            }
-
-            // --- Branchements courts ---
-            OpCode::Br_S => {
-                let target = (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize;
-                StepResult::Branch(target)
-            }
-            OpCode::Brfalse_S => {
-                let v = pop!();
-                if !v.is_truthy() {
-                    StepResult::Branch(
-                        (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize,
-                    )
-                } else {
-                    f.ip = next_ip;
-                    StepResult::Continue
-                }
-            }
-            OpCode::Brtrue_S => {
-                let v = pop!();
-                if v.is_truthy() {
-                    StepResult::Branch(
-                        (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize,
-                    )
-                } else {
-                    f.ip = next_ip;
-                    StepResult::Continue
-                }
-            }
-            OpCode::Beq_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() == b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bge_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() >= b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bgt_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() > b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Ble_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() <= b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Blt_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() < b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bne_Un_S => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond_s(a.as_i64() != b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bge_Un_S | OpCode::Bgt_Un_S | OpCode::Ble_Un_S | OpCode::Blt_Un_S => {
-                let b = pop!();
-                let a = pop!();
-                let au = a.as_i64() as u64;
-                let bu = b.as_i64() as u64;
-                let cond = match op {
-                    OpCode::Bge_Un_S => au >= bu,
-                    OpCode::Bgt_Un_S => au > bu,
-                    OpCode::Ble_Un_S => au <= bu,
-                    _ => au < bu,
+                let r = match op {
+                    O::Ceq => cmp_signed(a, b) == Some(Ordering::Equal),
+                    O::Cgt => cmp_signed(a, b) == Some(Ordering::Greater),
+                    O::Clt => cmp_signed(a, b) == Some(Ordering::Less),
+                    O::Cgt_Un => matches!(cmp_unsigned(a, b), None | Some(Ordering::Greater)),
+                    _ => matches!(cmp_unsigned(a, b), None | Some(Ordering::Less)),
                 };
-                branch_cond_s(cond, code, offset, next_ip)
+                push!(Value::I32(r as i32));
+                StepResult::Continue
             }
 
-            // --- Branchements longs ---
-            OpCode::Br => {
-                let target = (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize;
-                StepResult::Branch(target)
-            }
-            OpCode::Brfalse => {
-                let v = pop!();
-                if !v.is_truthy() {
-                    StepResult::Branch(
-                        (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize,
-                    )
+            // --- Branchements ---
+            O::Br_S => StepResult::Branch(br_s()),
+            O::Br => StepResult::Branch(br_l()),
+            O::Brfalse_S | O::Brtrue_S | O::Brfalse | O::Brtrue => {
+                let v = pop!().is_truthy();
+                let jump = matches!(op, O::Brtrue_S | O::Brtrue) == v;
+                let target = if matches!(op, O::Brfalse_S | O::Brtrue_S) {
+                    br_s()
                 } else {
-                    f.ip = next_ip;
-                    StepResult::Continue
-                }
-            }
-            OpCode::Brtrue => {
-                let v = pop!();
-                if v.is_truthy() {
-                    StepResult::Branch(
-                        (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize,
-                    )
-                } else {
-                    f.ip = next_ip;
-                    StepResult::Continue
-                }
-            }
-            OpCode::Beq => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() == b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bge => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() >= b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bgt => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() > b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Ble => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() <= b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Blt => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() < b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bne_Un => {
-                let b = pop!();
-                let a = pop!();
-                branch_cond(a.as_i64() != b.as_i64(), code, offset, next_ip)
-            }
-            OpCode::Bge_Un | OpCode::Bgt_Un | OpCode::Ble_Un | OpCode::Blt_Un => {
-                let b = pop!();
-                let a = pop!();
-                let au = a.as_i64() as u64;
-                let bu = b.as_i64() as u64;
-                let cond = match op {
-                    OpCode::Bge_Un => au >= bu,
-                    OpCode::Bgt_Un => au > bu,
-                    OpCode::Ble_Un => au <= bu,
-                    _ => au < bu,
+                    br_l()
                 };
-                branch_cond(cond, code, offset, next_ip)
+                if jump {
+                    StepResult::Branch(target)
+                } else {
+                    StepResult::Continue
+                }
             }
-
-            OpCode::Switch => {
+            O::Beq_S
+            | O::Bge_S
+            | O::Bgt_S
+            | O::Ble_S
+            | O::Blt_S
+            | O::Bne_Un_S
+            | O::Bge_Un_S
+            | O::Bgt_Un_S
+            | O::Ble_Un_S
+            | O::Blt_Un_S
+            | O::Beq
+            | O::Bge
+            | O::Bgt
+            | O::Ble
+            | O::Blt
+            | O::Bne_Un
+            | O::Bge_Un
+            | O::Bgt_Un
+            | O::Ble_Un
+            | O::Blt_Un => {
+                let b = pop!();
+                let a = pop!();
+                let short = (O::Beq_S as u16..=O::Blt_Un_S as u16).contains(&(op as u16));
+                use Ordering::*;
+                let s = cmp_signed(a, b);
+                let u = cmp_unsigned(a, b);
+                let cond = match op {
+                    O::Beq_S | O::Beq => s == Some(Equal),
+                    O::Bge_S | O::Bge => matches!(s, Some(Greater | Equal)),
+                    O::Bgt_S | O::Bgt => s == Some(Greater),
+                    O::Ble_S | O::Ble => matches!(s, Some(Less | Equal)),
+                    O::Blt_S | O::Blt => s == Some(Less),
+                    O::Bne_Un_S | O::Bne_Un => u != Some(Equal),
+                    O::Bge_Un_S | O::Bge_Un => matches!(u, None | Some(Greater | Equal)),
+                    O::Bgt_Un_S | O::Bgt_Un => matches!(u, None | Some(Greater)),
+                    O::Ble_Un_S | O::Ble_Un => matches!(u, None | Some(Less | Equal)),
+                    _ => matches!(u, None | Some(Less)),
+                };
+                if cond {
+                    StepResult::Branch(if short { br_s() } else { br_l() })
+                } else {
+                    StepResult::Continue
+                }
+            }
+            O::Switch => {
                 let n = opcodes::read_u32(code, offset + 1) as usize;
                 let v = pop!().as_i32() as u32 as usize;
-                let base = next_ip;
                 if v < n {
                     let target_off = opcodes::read_i32(code, offset + 5 + v * 4);
-                    StepResult::Branch((base as i64 + target_off as i64) as usize)
+                    StepResult::Branch((next_ip as i64 + target_off as i64) as usize)
                 } else {
-                    f.ip = next_ip;
                     StepResult::Continue
                 }
             }
 
             // --- Conversions ---
-            OpCode::Conv_I1 => {
+            O::Conv_I1
+            | O::Conv_I2
+            | O::Conv_I4
+            | O::Conv_I8
+            | O::Conv_U1
+            | O::Conv_U2
+            | O::Conv_U4
+            | O::Conv_U8
+            | O::Conv_I
+            | O::Conv_U
+            | O::Conv_R4
+            | O::Conv_R8
+            | O::Conv_R_Un => {
                 let v = pop!();
-                push!(Value::I32(v.as_i32() as i8 as i32));
+                push!(convert(op, v));
                 StepResult::Continue
             }
-            OpCode::Conv_I2 => {
+            O::Conv_Ovf_I1
+            | O::Conv_Ovf_I2
+            | O::Conv_Ovf_I4
+            | O::Conv_Ovf_I8
+            | O::Conv_Ovf_U1
+            | O::Conv_Ovf_U2
+            | O::Conv_Ovf_U4
+            | O::Conv_Ovf_U8
+            | O::Conv_Ovf_I
+            | O::Conv_Ovf_U
+            | O::Conv_Ovf_I1_Un
+            | O::Conv_Ovf_I2_Un
+            | O::Conv_Ovf_I4_Un
+            | O::Conv_Ovf_I8_Un
+            | O::Conv_Ovf_U1_Un
+            | O::Conv_Ovf_U2_Un
+            | O::Conv_Ovf_U4_Un
+            | O::Conv_Ovf_U8_Un
+            | O::Conv_Ovf_I_Un
+            | O::Conv_Ovf_U_Un => {
                 let v = pop!();
-                push!(Value::I32(v.as_i32() as i16 as i32));
+                push!(convert_checked(op, v)?);
                 StepResult::Continue
             }
-            OpCode::Conv_I4 => {
+            O::Ckfinite => {
                 let v = pop!();
-                push!(Value::I32(v.as_i32()));
-                StepResult::Continue
-            }
-            OpCode::Conv_I8 => {
-                let v = pop!();
-                push!(Value::I64(v.as_i64()));
-                StepResult::Continue
-            }
-            OpCode::Conv_R4 => {
-                let v = pop!();
-                push!(Value::F32(v.as_f64() as f32));
-                StepResult::Continue
-            }
-            OpCode::Conv_R8 => {
-                let v = pop!();
-                push!(Value::F64(v.as_f64()));
-                StepResult::Continue
-            }
-            OpCode::Conv_U1 => {
-                let v = pop!();
-                push!(Value::I32(v.as_i32() as u8 as i32));
-                StepResult::Continue
-            }
-            OpCode::Conv_U2 => {
-                let v = pop!();
-                push!(Value::I32(v.as_i32() as u16 as i32));
-                StepResult::Continue
-            }
-            OpCode::Conv_U4 => {
-                let v = pop!();
-                push!(Value::I32(v.as_i32()));
-                StepResult::Continue
-            }
-            OpCode::Conv_U8 => {
-                let v = pop!();
-                push!(Value::I64(v.as_i64()));
-                StepResult::Continue
-            }
-            OpCode::Conv_I => {
-                let v = pop!();
-                push!(Value::I64(v.as_i64()));
-                StepResult::Continue
-            }
-            OpCode::Conv_U => {
-                let v = pop!();
-                push!(Value::I64(v.as_i64()));
-                StepResult::Continue
-            }
-            OpCode::Conv_R_Un => {
-                let v = pop!();
-                push!(Value::F64(v.as_i64() as u64 as f64));
-                StepResult::Continue
-            }
-            OpCode::Conv_Ovf_I1
-            | OpCode::Conv_Ovf_I2
-            | OpCode::Conv_Ovf_I4
-            | OpCode::Conv_Ovf_I8
-            | OpCode::Conv_Ovf_U1
-            | OpCode::Conv_Ovf_U2
-            | OpCode::Conv_Ovf_U4
-            | OpCode::Conv_Ovf_U8
-            | OpCode::Conv_Ovf_I
-            | OpCode::Conv_Ovf_U
-            | OpCode::Conv_Ovf_I1_Un
-            | OpCode::Conv_Ovf_I2_Un
-            | OpCode::Conv_Ovf_I4_Un
-            | OpCode::Conv_Ovf_I8_Un
-            | OpCode::Conv_Ovf_U1_Un
-            | OpCode::Conv_Ovf_U2_Un
-            | OpCode::Conv_Ovf_U4_Un
-            | OpCode::Conv_Ovf_U8_Un
-            | OpCode::Conv_Ovf_I_Un
-            | OpCode::Conv_Ovf_U_Un => {
-                // Simplifié : pas de vérification de débordement
-                let v = pop!();
-                push!(Value::I64(v.as_i64()));
-                StepResult::Continue
-            }
-            OpCode::Add_Ovf | OpCode::Add_Ovf_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(arith_add(a, b));
-                StepResult::Continue
-            }
-            OpCode::Sub_Ovf | OpCode::Sub_Ovf_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(arith_sub(a, b));
-                StepResult::Continue
-            }
-            OpCode::Mul_Ovf | OpCode::Mul_Ovf_Un => {
-                let b = pop!();
-                let a = pop!();
-                push!(arith_mul(a, b));
+                if !v.as_f64().is_finite() {
+                    return Err(exception("ArithmeticException", "Number is not finite."));
+                }
+                push!(v);
                 StepResult::Continue
             }
 
             // --- Chaînes ---
-            OpCode::Ldstr => {
-                let token = opcodes::read_u32(code, offset + 1);
-                let us_idx = token & 0x00FFFFFF;
-                let s = self.assembly.get_user_string(us_idx);
-                f.eval_stack.push(bcl::alloc_managed_string(&s));
+            O::Ldstr => {
+                let s = self.assembly.get_user_string(tok1() & 0x00FF_FFFF);
+                push!(bcl::alloc_managed_string(&s));
                 StepResult::Continue
             }
 
             // --- Appels ---
-            OpCode::Call | OpCode::Callvirt => {
-                let token = opcodes::read_u32(code, offset + 1);
-                f.ip = next_ip;
+            O::Call | O::Callvirt => {
+                let token = tok1();
+                frame!().ip = next_ip;
                 let sig = self.get_method_sig(token);
-                let f = self.frames.last_mut().unwrap();
+                let f = frame!();
+                let constrained = f.constrained.take();
                 let split = f
                     .eval_stack
                     .len()
                     .saturating_sub(sig.param_types.len() + sig.has_this() as usize);
-                let args = f.eval_stack.split_off(split);
-                match self.invoke(token, args, op == OpCode::Callvirt) {
-                    Ok(v) => {
-                        if !matches!(sig.ret_type, ElementType::Void) {
-                            self.frames.last_mut().unwrap().eval_stack.push(v);
+                let mut args = f.eval_stack.split_off(split);
+                let mut callee = self.resolve_callee(token);
+                let mut virtual_call = op == O::Callvirt;
+                if let (Some(ct), Some(this)) = (constrained, args.first().copied()) {
+                    let kind = self.kind_of_type(ct);
+                    let ptr = this.as_ref();
+                    if kind == Kind::Ref {
+                        args[0] = load(ptr, Kind::Ref);
+                    } else {
+                        let name = self.method_name(token);
+                        let argc = sig.param_types.len();
+                        let own = types::with_types(|reg| {
+                            let t = reg.get(ct)?;
+                            let (asm, tok) = reg.find_own_method(ct, &name, argc)?;
+                            Some((asm, tok, t.type_args.clone()))
+                        });
+                        if let Some((asm, tok, t)) = own {
+                            // Méthode du type valeur lui-même : `this` reste
+                            // l'adresse de la valeur.
+                            callee = Callee {
+                                target: Target::Managed(asm, Token(tok).rid()),
+                                gen: Gen { t, m: callee.gen.m },
+                            };
+                            virtual_call = false;
+                        } else if matches!(kind, Kind::Struct(_)) {
+                            let boxed = self.new_struct(ct);
+                            store(boxed, kind, load(ptr, kind));
+                            args[0] = Value::Ref(boxed);
+                        } else {
+                            args[0] = load(ptr, kind);
+                            virtual_call = false;
                         }
-                        StepResult::Continue
                     }
-                    Err(e) => StepResult::Throw(e),
                 }
+                let v = self.invoke(token, callee, args, virtual_call)?;
+                if !matches!(sig.ret_type, ElementType::Void) {
+                    push!(v);
+                }
+                StepResult::Continue
             }
-
-            OpCode::Newobj => {
-                let token = opcodes::read_u32(code, offset + 1);
-                f.ip = next_ip;
+            O::Newobj => {
+                let token = tok1();
+                frame!().ip = next_ip;
                 let sig = self.get_method_sig(token);
-                let (type_id, size) = self.constructed_type(token);
-                let f = self.frames.last_mut().unwrap();
+                let callee = self.resolve_callee(token);
+                let type_id = match &callee.target {
+                    Target::Managed(asm, row) => {
+                        let info = &self.domain[*asm];
+                        let owner = info.method_owner.get(*row as usize).copied().unwrap_or(0);
+                        let id = info
+                            .type_ids
+                            .get(owner as usize)
+                            .copied()
+                            .flatten()
+                            .unwrap_or(types::TYPE_OBJECT);
+                        self.instantiate(id, callee.gen.t.clone())
+                    }
+                    Target::External {
+                        namespace, class, ..
+                    } => types::with_types(|reg| reg.ensure_external(namespace, class)),
+                };
+                let f = frame!();
                 let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
                 let mut args = f.eval_stack.split_off(split);
-                let obj = gc::with_gc(|gc| gc.alloc(type_id, size));
+                let kind = self.kind_of_type(type_id);
+                let obj = if kind == Kind::Ref {
+                    self.ensure_layout(type_id);
+                    let size = types::with_types(|reg| {
+                        reg.get(type_id)
+                            .map_or(types::EXTERNAL_OBJECT_SIZE, |t| t.instance_size)
+                    });
+                    gc::with_gc(|gc| gc.alloc(type_id, size.max(16)))
+                } else {
+                    self.new_struct(type_id)
+                };
                 args.insert(0, Value::Ref(obj));
-                match self.invoke(token, args, false) {
-                    Ok(_) => {
-                        self.frames
-                            .last_mut()
-                            .unwrap()
-                            .eval_stack
-                            .push(Value::Ref(obj));
-                        StepResult::Continue
-                    }
-                    Err(e) => StepResult::Throw(e),
-                }
+                self.pins.push(Value::Ref(obj));
+                let result = self.invoke(token, callee, args, false);
+                self.pins.pop();
+                result?;
+                push!(match kind {
+                    Kind::Ref | Kind::Struct(_) => Value::Ref(obj),
+                    k => load(obj, k),
+                });
+                StepResult::Continue
             }
-
-            OpCode::Ret => {
-                let ret_val = f.eval_stack.pop().unwrap_or(Value::Null);
-                StepResult::Return(ret_val)
+            O::Ret => StepResult::Return(pop!()),
+            O::Jmp | O::Calli => {
+                return Err(exception(
+                    "InvalidProgramException",
+                    &format!("{op:?} n'est pas encore pris en charge"),
+                ));
             }
 
             // --- Champs ---
-            OpCode::Ldfld | OpCode::Ldflda => {
-                let token = opcodes::read_u32(code, offset + 1);
+            O::Ldfld | O::Ldflda => {
+                let token = tok1();
                 let obj = pop!().as_ref();
                 if obj.is_null() {
-                    return StepResult::Throw(ClrException::null_reference());
+                    return Err(ClrException::null_reference());
                 }
-                let (slot, et) = self.instance_field(token);
-                let ptr = unsafe { obj.add(slot) };
-                let val = if op == OpCode::Ldflda {
+                let (ptr, kind) = self.instance_field(token, obj);
+                push!(if op == O::Ldflda {
                     Value::Ref(ptr)
                 } else {
-                    load_slot(ptr, &et)
-                };
-                self.frames.last_mut().unwrap().eval_stack.push(val);
+                    load(ptr, kind)
+                });
                 StepResult::Continue
             }
-            OpCode::Stfld => {
-                let token = opcodes::read_u32(code, offset + 1);
+            O::Stfld => {
+                let token = tok1();
                 let val = pop!();
                 let obj = pop!().as_ref();
                 if obj.is_null() {
-                    return StepResult::Throw(ClrException::null_reference());
+                    return Err(ClrException::null_reference());
                 }
-                let (slot, _) = self.instance_field(token);
-                store_slot(unsafe { obj.add(slot) }, val);
+                let (ptr, kind) = self.instance_field(token, obj);
+                store(ptr, kind, val);
                 StepResult::Continue
             }
-            OpCode::Ldsfld | OpCode::Ldsflda => {
-                let token = opcodes::read_u32(code, offset + 1);
-                let (ptr, et) = self.static_field(token);
-                let val = if op == OpCode::Ldsflda {
+            O::Ldsfld | O::Ldsflda => {
+                let (ptr, kind) = self.static_field(tok1())?;
+                push!(if op == O::Ldsflda {
                     Value::Ref(ptr)
                 } else {
-                    load_slot(ptr, &et)
-                };
-                self.frames.last_mut().unwrap().eval_stack.push(val);
+                    load(ptr, kind)
+                });
                 StepResult::Continue
             }
-            OpCode::Stsfld => {
-                let token = opcodes::read_u32(code, offset + 1);
+            O::Stsfld => {
                 let val = pop!();
-                let (ptr, _) = self.static_field(token);
-                store_slot(ptr, val);
+                let (ptr, kind) = self.static_field(tok1())?;
+                store(ptr, kind, val);
                 StepResult::Continue
             }
 
             // --- Tableaux ---
-            OpCode::Newarr => {
-                let _type_token = opcodes::read_u32(code, offset + 1);
-                let length = pop!().as_i32() as usize;
-                let ptr = gc::with_gc(|gc| gc.alloc_array(types::TYPE_ARRAY, 8, length));
+            O::Newarr => {
+                let (elem, kind) = self.kind_of_token(tok1());
+                let length = pop!().as_i64();
+                if length < 0 {
+                    return Err(overflow());
+                }
+                let elem = if kind == Kind::Ref { 0 } else { elem };
+                let ptr =
+                    gc::with_gc(|gc| gc.alloc_array_of(elem, kind.elem_size(), length as usize));
                 push!(Value::Ref(ptr));
                 StepResult::Continue
             }
-            OpCode::Ldlen => {
+            O::Ldlen => {
                 let arr = pop!().as_ref();
-                let len = if !arr.is_null() {
-                    unsafe { *(arr as *const u64) as i32 }
-                } else {
-                    0
+                if arr.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                push!(Value::I32(unsafe { *(arr as *const u64) } as i32));
+                StepResult::Continue
+            }
+            O::Ldelem_I1
+            | O::Ldelem_U1
+            | O::Ldelem_I2
+            | O::Ldelem_U2
+            | O::Ldelem_I4
+            | O::Ldelem_U4
+            | O::Ldelem_I8
+            | O::Ldelem_I
+            | O::Ldelem_R4
+            | O::Ldelem_R8
+            | O::Ldelem_Ref
+            | O::Ldelem
+            | O::Ldelema => {
+                let kind = match op {
+                    O::Ldelem_I1 => Kind::I1,
+                    O::Ldelem_U1 => Kind::U1,
+                    O::Ldelem_I2 => Kind::I2,
+                    O::Ldelem_U2 => Kind::U2,
+                    O::Ldelem_I4 => Kind::I4,
+                    O::Ldelem_U4 => Kind::U4,
+                    O::Ldelem_I8 => Kind::I8,
+                    O::Ldelem_I => Kind::I,
+                    O::Ldelem_R4 => Kind::R4,
+                    O::Ldelem_R8 => Kind::R8,
+                    O::Ldelem_Ref => Kind::Ref,
+                    _ => self.kind_of_token(tok1()).1,
                 };
-                push!(Value::I32(len));
-                StepResult::Continue
-            }
-            OpCode::Ldelem_I4 | OpCode::Ldelem_U4 => {
-                let idx = pop!().as_i32() as usize;
+                let idx = pop!().as_i64();
                 let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                let val = if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 4) as *const i32) }
+                let ptr = element(arr, idx, kind)?;
+                push!(if op == O::Ldelema {
+                    Value::Ref(ptr)
                 } else {
-                    0
+                    load(ptr, kind)
+                });
+                StepResult::Continue
+            }
+            O::Stelem_I
+            | O::Stelem_I1
+            | O::Stelem_I2
+            | O::Stelem_I4
+            | O::Stelem_I8
+            | O::Stelem_R4
+            | O::Stelem_R8
+            | O::Stelem_Ref
+            | O::Stelem => {
+                let kind = match op {
+                    O::Stelem_I => Kind::I,
+                    O::Stelem_I1 => Kind::I1,
+                    O::Stelem_I2 => Kind::I2,
+                    O::Stelem_I4 => Kind::I4,
+                    O::Stelem_I8 => Kind::I8,
+                    O::Stelem_R4 => Kind::R4,
+                    O::Stelem_R8 => Kind::R8,
+                    O::Stelem_Ref => Kind::Ref,
+                    _ => self.kind_of_token(tok1()).1,
                 };
-                push!(Value::I32(val));
-                StepResult::Continue
-            }
-            OpCode::Ldelem_I8 => {
-                let idx = pop!().as_i32() as usize;
+                let val = pop!();
+                let idx = pop!().as_i64();
                 let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                let val = if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 8) as *const i64) }
-                } else {
-                    0
-                };
-                push!(Value::I64(val));
-                StepResult::Continue
-            }
-            OpCode::Ldelem_Ref => {
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                let val = if !arr.is_null() {
-                    unsafe { Value::Ref(*(arr.add(8 + idx * 8) as *const *mut u8)) }
-                } else {
-                    Value::Null
-                };
-                push!(val);
-                StepResult::Continue
-            }
-            OpCode::Ldelem_I1 | OpCode::Ldelem_U1 => {
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                let val = if !arr.is_null() {
-                    unsafe { *arr.add(8 + idx) as i32 }
-                } else {
-                    0
-                };
-                push!(Value::I32(val));
-                StepResult::Continue
-            }
-            OpCode::Ldelem_I2 | OpCode::Ldelem_U2 => {
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                let val = if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 2) as *const i16) as i32 }
-                } else {
-                    0
-                };
-                push!(Value::I32(val));
-                StepResult::Continue
-            }
-            OpCode::Stelem_I4 => {
-                let val = pop!().as_i32();
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                if !arr.is_null() {
-                    unsafe {
-                        *(arr.add(8 + idx * 4) as *mut i32) = val;
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Stelem_I8 => {
-                let val = pop!().as_i64();
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                if !arr.is_null() {
-                    unsafe {
-                        *(arr.add(8 + idx * 8) as *mut i64) = val;
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Stelem_Ref => {
-                let val = pop!().as_ref();
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                if !arr.is_null() {
-                    unsafe {
-                        *(arr.add(8 + idx * 8) as *mut *mut u8) = val;
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Stelem_I1 => {
-                let val = pop!().as_i32() as u8;
-                let idx = pop!().as_i32() as usize;
-                let arr = pop!().as_ref();
-                if let Err(e) = check_index(arr, idx) {
-                    return StepResult::Throw(e);
-                }
-                if !arr.is_null() {
-                    unsafe {
-                        *arr.add(8 + idx) = val;
-                    }
-                }
+                let ptr = element(arr, idx, kind)?;
+                store(ptr, kind, val);
                 StepResult::Continue
             }
 
             // --- Indirections ---
-            OpCode::Ldind_I4 | OpCode::Ldind_U4 => {
-                let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() {
-                    unsafe { *(ptr as *const i32) }
-                } else {
-                    0
+            O::Ldind_I1
+            | O::Ldind_U1
+            | O::Ldind_I2
+            | O::Ldind_U2
+            | O::Ldind_I4
+            | O::Ldind_U4
+            | O::Ldind_I8
+            | O::Ldind_I
+            | O::Ldind_R4
+            | O::Ldind_R8
+            | O::Ldind_Ref
+            | O::Ldobj => {
+                let kind = match op {
+                    O::Ldind_I1 => Kind::I1,
+                    O::Ldind_U1 => Kind::U1,
+                    O::Ldind_I2 => Kind::I2,
+                    O::Ldind_U2 => Kind::U2,
+                    O::Ldind_I4 => Kind::I4,
+                    O::Ldind_U4 => Kind::U4,
+                    O::Ldind_I8 => Kind::I8,
+                    O::Ldind_I => Kind::I,
+                    O::Ldind_R4 => Kind::R4,
+                    O::Ldind_R8 => Kind::R8,
+                    O::Ldind_Ref => Kind::Ref,
+                    _ => self.kind_of_token(tok1()).1,
                 };
-                push!(Value::I32(val));
+                let ptr = pop!().as_ref();
+                if ptr.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                push!(load(ptr, kind));
                 StepResult::Continue
             }
-            OpCode::Ldind_I8 => {
-                let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() {
-                    unsafe { *(ptr as *const i64) }
-                } else {
-                    0
+            O::Stind_I1
+            | O::Stind_I2
+            | O::Stind_I4
+            | O::Stind_I8
+            | O::Stind_I
+            | O::Stind_R4
+            | O::Stind_R8
+            | O::Stind_Ref
+            | O::Stobj => {
+                let kind = match op {
+                    O::Stind_I1 => Kind::I1,
+                    O::Stind_I2 => Kind::I2,
+                    O::Stind_I4 => Kind::I4,
+                    O::Stind_I8 => Kind::I8,
+                    O::Stind_I => Kind::I,
+                    O::Stind_R4 => Kind::R4,
+                    O::Stind_R8 => Kind::R8,
+                    O::Stind_Ref => Kind::Ref,
+                    _ => self.kind_of_token(tok1()).1,
                 };
-                push!(Value::I64(val));
+                let val = pop!();
+                let ptr = pop!().as_ref();
+                if ptr.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                store(ptr, kind, val);
                 StepResult::Continue
             }
-            OpCode::Ldind_I | OpCode::Ldind_Ref => {
-                let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() {
-                    unsafe { Value::Ref(*(ptr as *const *mut u8)) }
-                } else {
-                    Value::Null
-                };
-                push!(val);
+            O::Cpobj => {
+                let (_, kind) = self.kind_of_token(tok1());
+                let src = pop!().as_ref();
+                let dst = pop!().as_ref();
+                if src.is_null() || dst.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                unsafe { std::ptr::copy(src, dst, kind.elem_size()) };
                 StepResult::Continue
             }
-            OpCode::Stind_I4 => {
-                let val = pop!().as_i32();
+            O::Initobj => {
+                let (_, kind) = self.kind_of_token(tok2());
                 let ptr = pop!().as_ref();
-                if !ptr.is_null() {
-                    unsafe {
-                        *(ptr as *mut i32) = val;
+                if ptr.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                unsafe { std::ptr::write_bytes(ptr, 0, kind.elem_size()) };
+                StepResult::Continue
+            }
+            O::Sizeof => {
+                let (_, kind) = self.kind_of_token(tok2());
+                push!(Value::I32(kind.elem_size() as i32));
+                StepResult::Continue
+            }
+            O::Cpblk | O::Initblk => {
+                let size = pop!().as_i64() as usize;
+                let second = pop!();
+                let dst = pop!().as_ref();
+                if dst.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                unsafe {
+                    if op == O::Cpblk {
+                        std::ptr::copy(second.as_ref(), dst, size);
+                    } else {
+                        std::ptr::write_bytes(dst, second.as_i32() as u8, size);
                     }
                 }
                 StepResult::Continue
             }
-            OpCode::Stind_I8 => {
-                let val = pop!().as_i64();
-                let ptr = pop!().as_ref();
-                if !ptr.is_null() {
-                    unsafe {
-                        *(ptr as *mut i64) = val;
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Stind_Ref | OpCode::Stind_I => {
-                let val = pop!().as_ref();
-                let ptr = pop!().as_ref();
-                if !ptr.is_null() {
-                    unsafe {
-                        *(ptr as *mut *mut u8) = val;
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Ldind_I1
-            | OpCode::Ldind_U1
-            | OpCode::Ldind_I2
-            | OpCode::Ldind_U2
-            | OpCode::Ldind_R4
-            | OpCode::Ldind_R8
-            | OpCode::Stind_I1
-            | OpCode::Stind_I2
-            | OpCode::Stind_R4
-            | OpCode::Stind_R8 => {
-                // Simplifié
+            O::Localloc => {
+                let size = pop!().as_i64() as usize;
+                let ptr = gc::with_gc(|gc| gc.alloc(0, size));
+                push!(Value::Ref(ptr));
                 StepResult::Continue
             }
 
             // --- Objets ---
-            OpCode::Castclass | OpCode::Isinst => {
-                let token = opcodes::read_u32(code, offset + 1);
+            O::Castclass | O::Isinst => {
+                let (target, _) = self.kind_of_token(tok1());
                 let obj = pop!();
                 let fits = match obj {
-                    Value::Ref(p) => self.is_instance(p, token),
+                    Value::Ref(p) => self.is_instance(p, target),
                     _ => true,
                 };
-                let f = self.frames.last_mut().unwrap();
                 if fits {
-                    f.eval_stack.push(obj);
-                } else if op == OpCode::Isinst {
-                    f.eval_stack.push(Value::Null);
+                    push!(obj);
+                } else if op == O::Isinst {
+                    push!(Value::Null);
                 } else {
-                    return StepResult::Throw(ClrException::new(
-                        "System",
-                        "InvalidCastException",
-                        "Specified cast is not valid.",
-                    ));
+                    return Err(invalid_cast());
                 }
                 StepResult::Continue
             }
-            OpCode::Box => {
-                let token = opcodes::read_u32(code, offset + 1);
+            O::Box => {
+                let (id, kind) = self.kind_of_token(tok1());
                 let val = pop!();
-                // Les structures sont déjà représentées par une référence.
-                let boxed = if let Value::Ref(_) = val {
-                    val
-                } else {
-                    let type_id = self.resolve_type_token(token).unwrap_or(types::TYPE_OBJECT);
-                    let p = gc::with_gc(|gc| gc.alloc(type_id, 8));
-                    store_slot(p, val);
-                    Value::Ref(p)
+                let boxed = match kind {
+                    Kind::Ref => val,
+                    Kind::Struct(_) => {
+                        let b = self.new_struct(id);
+                        store(b, kind, val);
+                        Value::Ref(b)
+                    }
+                    k => {
+                        let b = gc::with_gc(|gc| gc.alloc(id, 8));
+                        store(b, k, val);
+                        Value::Ref(b)
+                    }
                 };
-                self.frames.last_mut().unwrap().eval_stack.push(boxed);
+                push!(boxed);
                 StepResult::Continue
             }
-            OpCode::Unbox | OpCode::Unbox_Any => {
-                let obj = pop!().as_ref();
-                let val = match gc::type_of(obj) {
-                    None => return StepResult::Throw(ClrException::null_reference()),
-                    Some(id) if (types::TYPE_INT32..=types::TYPE_INTPTR).contains(&id) => {
-                        if op == OpCode::Unbox {
-                            Value::Ref(obj)
-                        } else {
-                            bcl::unbox(obj, id)
+            O::Unbox | O::Unbox_Any => {
+                let (id, kind) = self.kind_of_token(tok1());
+                let obj = pop!();
+                if kind == Kind::Ref {
+                    // unbox.any d'un type référence : castclass.
+                    if let Value::Ref(p) = obj {
+                        if !self.is_instance(p, id) {
+                            return Err(invalid_cast());
                         }
                     }
-                    Some(_) => Value::Ref(obj),
+                    push!(obj);
+                    return Ok(StepResult::Continue);
+                }
+                let p = obj.as_ref();
+                let Some(actual) = gc::type_of(p) else {
+                    return Err(ClrException::null_reference());
                 };
-                self.frames.last_mut().unwrap().eval_stack.push(val);
+                if actual != id && self.kind_of_type(actual) != kind {
+                    return Err(invalid_cast());
+                }
+                push!(if op == O::Unbox {
+                    Value::Ref(p)
+                } else {
+                    load(p, kind)
+                });
                 StepResult::Continue
             }
 
             // --- Exceptions ---
-            OpCode::Throw => match pop!() {
+            O::Throw => match pop!() {
                 Value::Ref(p) if gc::type_of(p).is_some() => {
                     StepResult::Throw(ClrException { obj_ptr: p })
                 }
                 _ => StepResult::Throw(ClrException::null_reference()),
             },
-            OpCode::Rethrow => match f.caught {
-                Some(exc) => StepResult::Throw(exc),
-                None => StepResult::Throw(ClrException::null_reference()),
-            },
-            OpCode::Leave | OpCode::Leave_S => {
-                let target = if op == OpCode::Leave_S {
-                    (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize
-                } else {
-                    (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize
-                };
+            O::Rethrow => {
+                let f = frame!();
+                let handler = exceptions::enclosing_handler(
+                    &f.exception_clauses,
+                    offset,
+                    exceptions::is_catch,
+                )
+                .map(|c| c.handler_offset as usize);
+                let exc = f
+                    .caught
+                    .iter()
+                    .rev()
+                    .find(|(h, _)| Some(*h) == handler)
+                    .map(|(_, e)| *e);
+                match exc {
+                    Some(exc) => StepResult::Throw(exc),
+                    None => {
+                        return Err(exception(
+                            "InvalidProgramException",
+                            "rethrow hors d'un gestionnaire catch",
+                        ))
+                    }
+                }
+            }
+            O::Leave | O::Leave_S => {
+                let target = if op == O::Leave_S { br_s() } else { br_l() };
+                let f = frame!();
                 f.eval_stack.clear();
-                f.caught = None;
-                match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
+                let clauses = f.exception_clauses.clone();
+                // Sortie des catch qui contiennent le `leave` sans contenir
+                // sa destination.
+                f.caught.retain(|(h, _)| {
+                    !clauses.iter().any(|c| {
+                        c.handler_offset as usize == *h
+                            && exceptions::handler_covers(c, offset)
+                            && !exceptions::handler_covers(c, target)
+                    })
+                });
+                match exceptions::find_leave_target(&clauses, offset, target) {
                     Some(handler) => {
-                        f.leave_target = Some(target);
+                        f.unwinding.push((handler, Unwind::Leave(target)));
                         StepResult::Branch(handler)
                     }
                     None => StepResult::Branch(target),
                 }
             }
-            OpCode::Endfinally => {
-                if let Some(exc) = f.pending.take() {
-                    return StepResult::Throw(exc);
-                }
-                match f.leave_target.take() {
-                    Some(target) => {
-                        match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
-                            Some(handler) => {
-                                f.leave_target = Some(target);
-                                StepResult::Branch(handler)
+            O::Endfinally => {
+                let f = frame!();
+                let clauses = f.exception_clauses.clone();
+                let Some(handler) =
+                    exceptions::enclosing_handler(&clauses, offset, exceptions::is_finally)
+                        .map(|c| c.handler_offset as usize)
+                else {
+                    return Err(exception(
+                        "InvalidProgramException",
+                        "endfinally hors d'un bloc finally",
+                    ));
+                };
+                let entry = f
+                    .unwinding
+                    .iter()
+                    .rposition(|(h, _)| *h == handler)
+                    .map(|i| f.unwinding.remove(i).1);
+                match entry {
+                    Some(Unwind::Exception(exc)) => StepResult::Throw(exc),
+                    Some(Unwind::Leave(target)) => {
+                        match exceptions::find_leave_target(&clauses, offset, target) {
+                            Some(next) => {
+                                f.unwinding.push((next, Unwind::Leave(target)));
+                                StepResult::Branch(next)
                             }
                             None => StepResult::Branch(target),
                         }
@@ -1642,260 +1778,284 @@ impl Interpreter {
                     None => StepResult::Continue,
                 }
             }
+            O::Endfilter => StepResult::EndFilter(pop!().as_i32() != 0),
 
-            // --- Tokens ---
-            OpCode::Ldtoken => {
-                let _token = opcodes::read_u32(code, offset + 1);
-                push!(Value::I64(0));
-                StepResult::Continue
-            }
-
-            // --- Divers ---
-            OpCode::Initobj => {
-                let _token = opcodes::read_u32(code, offset + 2);
-                let ptr = pop!().as_ref();
-                if !ptr.is_null() {
-                    unsafe {
-                        std::ptr::write_bytes(ptr, 0, 16);
-                    }
-                }
-                StepResult::Continue
-            }
-            OpCode::Sizeof => {
-                let _token = opcodes::read_u32(code, offset + 2);
-                push!(Value::I32(8));
-                StepResult::Continue
-            }
-            OpCode::Localloc => {
-                let size = pop!().as_i32() as usize;
-                let ptr = gc::with_gc(|gc| gc.alloc(0, size));
-                push!(Value::Ref(ptr));
-                StepResult::Continue
-            }
-
-            // Préfixes (ignorés)
-            OpCode::Volatile
-            | OpCode::Unaligned
-            | OpCode::Tail
-            | OpCode::Readonly
-            | OpCode::Constrained => StepResult::Continue,
-
-            OpCode::Ldloc
-            | OpCode::Ldloca
-            | OpCode::Stloc
-            | OpCode::Starg
-            | OpCode::Ldarga
-            | OpCode::Ldarga_S
-            | OpCode::Ldloca_S => {
-                // Formes longues et adresses
-                let idx = match op {
-                    OpCode::Ldloc | OpCode::Stloc | OpCode::Ldloca => {
-                        opcodes::read_u8(code, offset + 2) as usize
-                            | ((opcodes::read_u8(code, offset + 3) as usize) << 8)
-                    }
-                    _ => opcodes::read_u8(code, offset + 1) as usize,
+            // --- Jetons ---
+            O::Ldtoken => {
+                let token = tok1();
+                let handle = match self.resolve_type_token(token) {
+                    Some(id) => id as i64,
+                    None => token as i64,
                 };
-                match op {
-                    OpCode::Ldloc => {
-                        push!(f.locals.get(idx).copied().unwrap_or(Value::Null));
-                    }
-                    OpCode::Stloc => {
-                        let v = pop!();
-                        if idx < f.locals.len() {
-                            f.locals[idx] = v;
-                        }
-                    }
-                    OpCode::Ldloca | OpCode::Ldloca_S => {
-                        if idx < f.locals.len() {
-                            push!(Value::Ref(&mut f.locals[idx] as *mut Value as *mut u8));
-                        } else {
-                            push!(Value::Null);
-                        }
-                    }
-                    OpCode::Ldarga | OpCode::Ldarga_S => {
-                        if idx < f.args.len() {
-                            push!(Value::Ref(&mut f.args[idx] as *mut Value as *mut u8));
-                        } else {
-                            push!(Value::Null);
-                        }
-                    }
-                    OpCode::Starg => {
-                        let v = pop!();
-                        if idx < f.args.len() {
-                            f.args[idx] = v;
-                        }
-                    }
+                push!(Value::I64(handle));
+                StepResult::Continue
+            }
+
+            // --- Pointeurs de méthode ---
+            O::Ldftn => {
+                let token = tok2();
+                let callee = self.resolve_callee(token);
+                push!(Value::I64(self.fn_handle(token, callee)));
+                StepResult::Continue
+            }
+            O::Ldvirtftn => {
+                let token = tok2();
+                let Callee {
+                    mut target,
+                    mut gen,
+                } = self.resolve_callee(token);
+                match pop!() {
+                    Value::Ref(this) => self.devirtualize(token, this, &mut target, &mut gen),
+                    Value::Null => return Err(ClrException::null_reference()),
                     _ => {}
                 }
+                push!(Value::I64(self.fn_handle(token, Callee { target, gen })));
                 StepResult::Continue
             }
+
+            // --- Préfixes ---
+            O::Constrained => {
+                let ct = self.resolve_type_token(tok2());
+                frame!().constrained = ct;
+                StepResult::Continue
+            }
+            O::Volatile | O::Unaligned | O::Tail | O::Readonly => StepResult::Continue,
 
             _ => {
                 crate::log_warn!("clr-il", "opcode non implémenté : {:?} à IP={}", op, offset);
-                StepResult::Continue
+                return Err(exception(
+                    "InvalidProgramException",
+                    &format!("{op:?} n'est pas encore pris en charge"),
+                ));
             }
-        }
+        };
+        Ok(r)
     }
+}
 
-    fn get_method_sig(&self, token: u32) -> metadata::MethodSig {
-        let row = Token(token).rid();
-        let blob = match Token(token).table() {
-            t if t == TableId::MethodDef as u8 => self.assembly.get_method_def(row).signature,
-            t if t == TableId::MemberRef as u8 => self.assembly.get_member_ref(row).signature,
-            t if t == TableId::MethodSpec as u8 => {
-                let spec = self.assembly.get_method_spec(row);
-                let (table, inner) = CodedIndex::MethodDefOrRef.decode(spec.method);
-                return self.get_method_sig((table.map_or(0, |t| t as u32) << 24) | inner);
+/// Adresse d'un élément de tableau, après vérification de l'indice.
+fn element(arr: *mut u8, idx: i64, kind: Kind) -> Result<*mut u8, ClrException> {
+    if arr.is_null() {
+        return Err(ClrException::null_reference());
+    }
+    let len = unsafe { *(arr as *const u64) } as i64;
+    if idx < 0 || idx >= len {
+        return Err(ClrException::index_out_of_range());
+    }
+    Ok(unsafe { arr.add(8 + idx as usize * kind.elem_size()) })
+}
+
+/// Comparaison signée (ordre partiel pour les flottants : NaN n'est pas
+/// ordonné).
+fn cmp_signed(a: Value, b: Value) -> Option<Ordering> {
+    if a.is_float() || b.is_float() {
+        return a.as_f64().partial_cmp(&b.as_f64());
+    }
+    Some(a.as_i64().cmp(&b.as_i64()))
+}
+
+/// Comparaison non signée (ou non ordonnée pour les flottants).
+fn cmp_unsigned(a: Value, b: Value) -> Option<Ordering> {
+    if a.is_float() || b.is_float() {
+        return a.as_f64().partial_cmp(&b.as_f64());
+    }
+    if a.is_wide() || b.is_wide() {
+        Some((a.as_i64() as u64).cmp(&(b.as_i64() as u64)))
+    } else {
+        Some((a.as_i32() as u32).cmp(&(b.as_i32() as u32)))
+    }
+}
+
+/// Opération binaire (ECMA-335 §III.1.5) : flottant si l'un des opérandes
+/// l'est, 64 bits si l'un l'est (ou est un pointeur), sinon 32 bits.
+fn binary(op: OpCode, a: Value, b: Value) -> Result<Value, ClrException> {
+    use OpCode as O;
+    if a.is_float() || b.is_float() {
+        let (x, y) = (a.as_f64(), b.as_f64());
+        let r = match op {
+            O::Add | O::Add_Ovf | O::Add_Ovf_Un => x + y,
+            O::Sub | O::Sub_Ovf | O::Sub_Ovf_Un => x - y,
+            O::Mul | O::Mul_Ovf | O::Mul_Ovf_Un => x * y,
+            O::Div | O::Div_Un => x / y,
+            O::Rem | O::Rem_Un => x % y,
+            _ => {
+                return Err(exception(
+                    "InvalidProgramException",
+                    "opération logique sur un flottant",
+                ))
             }
-            _ => 0,
         };
-        metadata::decode_method_sig(self.assembly.get_blob(blob))
-    }
-
-    /// Type et taille de l'objet que construit le constructeur `token`.
-    fn constructed_type(&self, token: u32) -> (types::TypeId, usize) {
-        let (ns, name) = match self.resolve_method(token) {
-            Target::Managed(row) => {
-                let td = self.assembly.get_type_def(self.find_declaring_type(row));
-                (
-                    self.assembly.get_string(td.namespace).to_string(),
-                    self.assembly.get_string(td.name).to_string(),
-                )
-            }
-            Target::External {
-                namespace, class, ..
-            } => (namespace, class),
-        };
-        types::with_types(|reg| {
-            let id = reg.ensure_external(&ns, &name);
-            let size = reg
-                .get(id)
-                .map_or(types::EXTERNAL_OBJECT_SIZE, |t| t.instance_size);
-            (id, size.max(16))
-        })
-    }
-
-    fn is_instance(&self, obj: *mut u8, token: u32) -> bool {
-        let Some(actual) = gc::type_of(obj) else {
-            return true;
-        };
-        // Les interfaces implémentées ne sont pas suivies : on accepte.
-        if self.is_interface_token(token) {
-            return true;
-        }
-        match self.resolve_type_token(token) {
-            Some(target) => types::with_types(|reg| {
-                let known_class = reg.get(target).is_some_and(|t| !t.methods.is_empty())
-                    || reg.is_subclass_of(target, types::TYPE_EXCEPTION)
-                    || target < types::TYPE_EXCEPTION;
-                !known_class || reg.is_subclass_of(actual, target)
-            }),
-            None => true,
-        }
-    }
-
-    fn field_type(&self, field_row: u32) -> ElementType {
-        let blob = self
-            .assembly
-            .get_blob(self.assembly.get_field(field_row).signature);
-        let mut off = 1;
-        metadata::decode_type(blob, &mut off)
-    }
-
-    fn owner_type_id(&self, field_row: u32) -> Option<types::TypeId> {
-        let owner = (1..=self.assembly.row_count(TableId::TypeDef))
-            .find(|&i| self.assembly.type_fields(i).contains(&field_row))?;
-        let td = self.assembly.get_type_def(owner);
-        let ns = self.assembly.get_string(td.namespace);
-        let name = self.assembly.get_string(td.name);
-        types::with_types(|reg| reg.find_by_name(ns, name))
-    }
-
-    /// Décalage et type d'un champ d'instance. Les champs des types de la BCL
-    /// (MemberRef) ne sont pas modélisés : on utilise l'emplacement réservé.
-    fn instance_field(&self, token: u32) -> (usize, ElementType) {
-        let row = Token(token).rid();
-        if Token(token).table() != TableId::Field as u8 {
-            return (exceptions::MESSAGE_SLOT, ElementType::Object);
-        }
-        let offset = self.owner_type_id(row).and_then(|id| {
-            types::with_types(|reg| {
-                reg.get(id)?
-                    .fields
-                    .iter()
-                    .find(|f| f.metadata_row == row)
-                    .map(|f| f.offset)
-            })
+        return Ok(if matches!((a, b), (Value::F32(_), Value::F32(_))) {
+            Value::F32(r as f32)
+        } else {
+            Value::F64(r)
         });
-        (offset.unwrap_or(0), self.field_type(row))
     }
+    let divide_by_zero = || ClrException::divide_by_zero();
+    let arith = || {
+        exception(
+            "ArithmeticException",
+            "Arithmetic operation resulted in an overflow.",
+        )
+    };
+    if a.is_wide() || b.is_wide() {
+        let (x, y) = (a.as_i64(), b.as_i64());
+        let (ux, uy) = (x as u64, y as u64);
+        let r = match op {
+            O::Add => x.wrapping_add(y),
+            O::Sub => x.wrapping_sub(y),
+            O::Mul => x.wrapping_mul(y),
+            O::Div => {
+                if y == 0 {
+                    return Err(divide_by_zero());
+                }
+                x.checked_div(y).ok_or_else(arith)?
+            }
+            O::Rem => {
+                if y == 0 {
+                    return Err(divide_by_zero());
+                }
+                x.checked_rem(y).ok_or_else(arith)?
+            }
+            O::Div_Un => ux.checked_div(uy).ok_or_else(divide_by_zero)? as i64,
+            O::Rem_Un => ux.checked_rem(uy).ok_or_else(divide_by_zero)? as i64,
+            O::And => x & y,
+            O::Or => x | y,
+            O::Xor => x ^ y,
+            O::Add_Ovf => x.checked_add(y).ok_or_else(overflow)?,
+            O::Sub_Ovf => x.checked_sub(y).ok_or_else(overflow)?,
+            O::Mul_Ovf => x.checked_mul(y).ok_or_else(overflow)?,
+            O::Add_Ovf_Un => ux.checked_add(uy).ok_or_else(overflow)? as i64,
+            O::Sub_Ovf_Un => ux.checked_sub(uy).ok_or_else(overflow)? as i64,
+            _ => ux.checked_mul(uy).ok_or_else(overflow)? as i64,
+        };
+        return Ok(Value::I64(r));
+    }
+    let (x, y) = (a.as_i32(), b.as_i32());
+    let (ux, uy) = (x as u32, y as u32);
+    let r = match op {
+        O::Add => x.wrapping_add(y),
+        O::Sub => x.wrapping_sub(y),
+        O::Mul => x.wrapping_mul(y),
+        O::Div => {
+            if y == 0 {
+                return Err(divide_by_zero());
+            }
+            x.checked_div(y).ok_or_else(arith)?
+        }
+        O::Rem => {
+            if y == 0 {
+                return Err(divide_by_zero());
+            }
+            x.checked_rem(y).ok_or_else(arith)?
+        }
+        O::Div_Un => ux.checked_div(uy).ok_or_else(divide_by_zero)? as i32,
+        O::Rem_Un => ux.checked_rem(uy).ok_or_else(divide_by_zero)? as i32,
+        O::And => x & y,
+        O::Or => x | y,
+        O::Xor => x ^ y,
+        O::Add_Ovf => x.checked_add(y).ok_or_else(overflow)?,
+        O::Sub_Ovf => x.checked_sub(y).ok_or_else(overflow)?,
+        O::Mul_Ovf => x.checked_mul(y).ok_or_else(overflow)?,
+        O::Add_Ovf_Un => ux.checked_add(uy).ok_or_else(overflow)? as i32,
+        O::Sub_Ovf_Un => ux.checked_sub(uy).ok_or_else(overflow)? as i32,
+        _ => ux.checked_mul(uy).ok_or_else(overflow)? as i32,
+    };
+    Ok(Value::I32(r))
+}
 
-    fn static_field(&self, token: u32) -> (*mut u8, ElementType) {
-        let row = Token(token).rid();
-        let owner = self.owner_type_id(row).unwrap_or(0);
-        let ptr = types::with_types(|reg| reg.static_field_ptr(owner, row as usize * 8));
-        (ptr, self.field_type(row))
+/// Entier porté par une valeur, flottant tronqué vers zéro.
+fn integer(v: Value) -> i64 {
+    match v {
+        Value::F32(f) => f as i64,
+        Value::F64(f) => f as i64,
+        v => v.as_i64(),
     }
 }
 
-fn branch_cond_s(cond: bool, code: &[u8], offset: usize, next_ip: usize) -> StepResult {
-    if cond {
-        StepResult::Branch((next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize)
-    } else {
-        StepResult::Continue
+/// Conversions sans contrôle (`conv.*`) : les `u` étendent par des zéros,
+/// les `i` par le signe.
+fn convert(op: OpCode, v: Value) -> Value {
+    use OpCode as O;
+    let unsigned_source = |v: Value| -> u64 {
+        match v {
+            Value::I32(x) => x as u32 as u64,
+            Value::F32(f) => f as u64,
+            Value::F64(f) => f as u64,
+            v => v.as_i64() as u64,
+        }
+    };
+    match op {
+        O::Conv_I1 => Value::I32(integer(v) as i8 as i32),
+        O::Conv_I2 => Value::I32(integer(v) as i16 as i32),
+        O::Conv_I4 => Value::I32(integer(v) as i32),
+        O::Conv_U1 => Value::I32(integer(v) as u8 as i32),
+        O::Conv_U2 => Value::I32(integer(v) as u16 as i32),
+        O::Conv_U4 => Value::I32(unsigned_source(v) as u32 as i32),
+        O::Conv_I8 | O::Conv_I => Value::I64(integer(v)),
+        O::Conv_U8 | O::Conv_U => Value::I64(unsigned_source(v) as i64),
+        O::Conv_R4 => Value::F32(v.as_f64() as f32),
+        O::Conv_R8 => Value::F64(v.as_f64()),
+        _ => Value::F64(match v {
+            Value::I32(x) => x as u32 as f64,
+            v if v.is_float() => v.as_f64(),
+            v => v.as_i64() as u64 as f64,
+        }),
     }
 }
 
-fn branch_cond(cond: bool, code: &[u8], offset: usize, next_ip: usize) -> StepResult {
-    if cond {
-        StepResult::Branch((next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize)
-    } else {
-        StepResult::Continue
+/// Conversions avec contrôle de débordement (`conv.ovf.*`).
+fn convert_checked(op: OpCode, v: Value) -> Result<Value, ClrException> {
+    use OpCode as O;
+    let unsigned_source = matches!(
+        op,
+        O::Conv_Ovf_I1_Un
+            | O::Conv_Ovf_I2_Un
+            | O::Conv_Ovf_I4_Un
+            | O::Conv_Ovf_I8_Un
+            | O::Conv_Ovf_U1_Un
+            | O::Conv_Ovf_U2_Un
+            | O::Conv_Ovf_U4_Un
+            | O::Conv_Ovf_U8_Un
+            | O::Conv_Ovf_I_Un
+            | O::Conv_Ovf_U_Un
+    );
+    let x: i128 = match v {
+        Value::F32(_) | Value::F64(_) => {
+            let f = v.as_f64().trunc();
+            if !f.is_finite() || f.abs() > 1e20 {
+                return Err(overflow());
+            }
+            f as i128
+        }
+        Value::I32(i) if unsigned_source => i as u32 as i128,
+        v if unsigned_source => v.as_i64() as u64 as i128,
+        v => v.as_i64() as i128,
+    };
+    let (lo, hi): (i128, i128) = match op {
+        O::Conv_Ovf_I1 | O::Conv_Ovf_I1_Un => (i8::MIN as i128, i8::MAX as i128),
+        O::Conv_Ovf_I2 | O::Conv_Ovf_I2_Un => (i16::MIN as i128, i16::MAX as i128),
+        O::Conv_Ovf_I4 | O::Conv_Ovf_I4_Un => (i32::MIN as i128, i32::MAX as i128),
+        O::Conv_Ovf_U1 | O::Conv_Ovf_U1_Un => (0, u8::MAX as i128),
+        O::Conv_Ovf_U2 | O::Conv_Ovf_U2_Un => (0, u16::MAX as i128),
+        O::Conv_Ovf_U4 | O::Conv_Ovf_U4_Un => (0, u32::MAX as i128),
+        O::Conv_Ovf_U8 | O::Conv_Ovf_U8_Un | O::Conv_Ovf_U | O::Conv_Ovf_U_Un => {
+            (0, u64::MAX as i128)
+        }
+        _ => (i64::MIN as i128, i64::MAX as i128),
+    };
+    if x < lo || x > hi {
+        return Err(overflow());
     }
-}
-
-fn arith_add(a: Value, b: Value) -> Value {
-    match (a, b) {
-        (Value::I32(x), Value::I32(y)) => Value::I32(x.wrapping_add(y)),
-        (Value::I64(x), Value::I64(y)) => Value::I64(x.wrapping_add(y)),
-        (Value::F64(x), Value::F64(y)) => Value::F64(x + y),
-        (Value::F32(x), Value::F32(y)) => Value::F32(x + y),
-        _ => Value::I64(a.as_i64().wrapping_add(b.as_i64())),
-    }
-}
-
-fn arith_sub(a: Value, b: Value) -> Value {
-    match (a, b) {
-        (Value::I32(x), Value::I32(y)) => Value::I32(x.wrapping_sub(y)),
-        (Value::I64(x), Value::I64(y)) => Value::I64(x.wrapping_sub(y)),
-        (Value::F64(x), Value::F64(y)) => Value::F64(x - y),
-        _ => Value::I64(a.as_i64().wrapping_sub(b.as_i64())),
-    }
-}
-
-fn arith_mul(a: Value, b: Value) -> Value {
-    match (a, b) {
-        (Value::I32(x), Value::I32(y)) => Value::I32(x.wrapping_mul(y)),
-        (Value::I64(x), Value::I64(y)) => Value::I64(x.wrapping_mul(y)),
-        (Value::F64(x), Value::F64(y)) => Value::F64(x * y),
-        _ => Value::I64(a.as_i64().wrapping_mul(b.as_i64())),
-    }
-}
-
-fn arith_div(a: Value, b: Value) -> Value {
-    match (a, b) {
-        (Value::I32(x), Value::I32(y)) if y != 0 => Value::I32(x.wrapping_div(y)),
-        (Value::I64(x), Value::I64(y)) if y != 0 => Value::I64(x.wrapping_div(y)),
-        (Value::F64(x), Value::F64(y)) => Value::F64(x / y),
-        _ => Value::I32(0),
-    }
-}
-
-fn arith_rem(a: Value, b: Value) -> Value {
-    match (a, b) {
-        (Value::I32(x), Value::I32(y)) if y != 0 => Value::I32(x.wrapping_rem(y)),
-        (Value::I64(x), Value::I64(y)) if y != 0 => Value::I64(x.wrapping_rem(y)),
-        (Value::F64(x), Value::F64(y)) => Value::F64(x % y),
-        _ => Value::I32(0),
-    }
+    Ok(match op {
+        O::Conv_Ovf_I8
+        | O::Conv_Ovf_I8_Un
+        | O::Conv_Ovf_U8
+        | O::Conv_Ovf_U8_Un
+        | O::Conv_Ovf_I
+        | O::Conv_Ovf_I_Un
+        | O::Conv_Ovf_U
+        | O::Conv_Ovf_U_Un => Value::I64(x as i64),
+        _ => Value::I32(x as i64 as i32),
+    })
 }

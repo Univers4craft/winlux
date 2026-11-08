@@ -365,6 +365,44 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         State::Cleaning => draw_cleaning(g, r.left, r.top, w, h),
         State::Done => draw_done(g, r.left, r.top, w, h),
     }
+    focus_zones(f);
+}
+
+/// Contrôles atteignables par Tab (#28), aux mêmes positions que `mouse`.
+unsafe fn focus_zones(f: &Frame) {
+    let r = f.client;
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    match CURRENT_STATE {
+        State::Initial => {
+            let x = r.left + w / 2 - 80;
+            let y = r.top + h / 2 + 20;
+            focus_zone(&rect(x, y, x + 160, y + 36));
+        }
+        State::Ready => {
+            let content_y = r.top + 81;
+            let content_h = h - 80 - 52;
+            for i in 0..CAT_COUNT as i32 {
+                let y = content_y + i * 36;
+                if y + 36 > content_y + content_h {
+                    break;
+                }
+                // La case à cocher : Espace la coche ou la décoche.
+                focus_zone(&rect(r.left + 8, y, r.left + 36, y + 36));
+            }
+            let y = r.top + h - 38;
+            let clean_x = r.left + w - 140 - 16;
+            let cancel_x = clean_x - 100 - 12;
+            focus_zone(&rect(cancel_x, y, cancel_x + 100, y + 32));
+            focus_zone(&rect(clean_x, y, clean_x + 140, y + 32));
+        }
+        State::Done => {
+            let x = r.left + w / 2 - 60;
+            let y = r.top + h / 2 + 30;
+            focus_zone(&rect(x, y, x + 120, y + 36));
+        }
+        _ => {}
+    }
 }
 
 unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
