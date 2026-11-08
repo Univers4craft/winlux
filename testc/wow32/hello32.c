@@ -28,6 +28,7 @@ __declspec(dllimport) BOOL WINAPI QueryPerformanceFrequency(LARGE_INTEGER *);
 __declspec(dllimport) DWORD WINAPI GetCurrentProcessId(void);
 __declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
 __declspec(dllimport) DWORD WINAPI GetEnvironmentVariableA(const char *, char *, DWORD);
+__declspec(dllimport) BOOL WINAPI GetPhysicallyInstalledSystemMemory(ULONGLONG *);
 
 static DWORD fs_read(DWORD off) {
     DWORD v;
@@ -106,6 +107,9 @@ void __stdcall entry(void) {
         GetTickCount();
     }
     if ((DWORD)&n != before) ExitProcess(14);
+    /* Mémoire installée en Kio (#1205 : installeur Creative Cloud). */
+    ULONGLONG kb = 0;
+    if (!GetPhysicallyInstalledSystemMemory(&kb) || kb < 65536) fail(17, (DWORD)kb);
     /* FS x86 intact après des passerelles (y compris en pas à pas). */
     if (fs_read(0x18) != teb || fs_read(0x00) != 0xffffffffu) ExitProcess(16);
     say("Tout est correct.\r\n");

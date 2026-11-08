@@ -401,6 +401,21 @@ fn class_of(hwnd: usize) -> String {
         .unwrap_or(lower)
 }
 
+thread_local! {
+    /// Classe du contrôle dont la procédure va recevoir le message, quand
+    /// le nom de classe de la fenêtre ne la dit pas : CallWindowProc vers
+    /// la procédure d'un contrôle prédéfini depuis une sous-classe x86. La
+    /// VCL de Delphi enregistre TThemePageControl avec sa propre
+    /// InitWndProc et garde la procédure de SysTabControl32 pour
+    /// CallWindowProc (#1129). Consommée par le premier convert_message.
+    static CLASS_HINT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Annonce la classe du prochain message converti (voir CLASS_HINT).
+pub(super) fn hint_class(class: Option<&'static str>) {
+    CLASS_HINT.with(|h| h.set(class));
+}
+
 /// Message x86 vers un contrôle commun : structures converties en 64
 /// bits. `None` : rien à convertir (le message passe tel quel).
 pub(super) fn convert_message(
@@ -428,7 +443,10 @@ pub(super) fn convert_message(
     if msg < 0x400 {
         return None;
     }
-    let class = class_of(hwnd);
+    let class = CLASS_HINT
+        .with(|h| h.take())
+        .map(str::to_string)
+        .unwrap_or_else(|| class_of(hwnd));
     let wp = widen(wparam) as usize;
     match class.as_str() {
         "syslistview32" => match msg {

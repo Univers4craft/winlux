@@ -298,6 +298,7 @@ GetOEMCP
 GetOverlappedResult
 GetOverlappedResultEx
 GetPackageFamilyName
+GetPhysicallyInstalledSystemMemory
 GetPriorityClass
 GetPrivateProfileIntA
 GetPrivateProfileIntW
