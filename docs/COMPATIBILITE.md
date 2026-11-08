@@ -222,7 +222,7 @@ Limites honnêtes de la mesure :
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
 | .NET | CLR maison (interpréteur CIL, DLL .NET privées de l'appli chargées depuis #926) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) ; plan en 9 étapes dans [compat/dotnet-framework.md](compat/dotnet-framework.md) |
-| Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, effets D3DX déjà compilés (fx_2_0 binaire), `d3dcompiler_47` |
+| Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte et déjà compilés fx_2_0), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, préshaders des effets fx_2_0, `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
 | Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison, `midiIn*` sur les claviers branchés), `msacm32` (conversions PCM, décodeurs IMA ADPCM et ADPCM MS) sur un mixeur PipeWire/Pulse/ALSA | encodeurs et autres codecs de `msacm32` |
@@ -585,9 +585,13 @@ Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
-Les effets D3DX livrés déjà compilés (fx_2_0 binaire, #909), la chaîne Media Foundation de lecture (#23),
+La chaîne Media Foundation de lecture (#23),
 les encodeurs et autres codecs de `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
 toujours en 32 bits (point 3).
+
+Fait (#909) : effets D3DX livrés déjà compilés (fx_2_0 binaire, `.fxo`) : paramètres, annotations,
+techniques, passes, états de rendu et d'échantillonneur, shaders. Les préshaders et les états d'étage de
+texture, de transformation et de lumière des effets binaires ne sont pas évalués.
 
 Fait (#237) : `ddraw.dll` maison (DirectDraw 1, 2, 4 et 7 : surfaces 8, 16,
 24 et 32 bits, palettes, clés de couleur, `Blt`/`BltFast`, chaînes de `Flip`
