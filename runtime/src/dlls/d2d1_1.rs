@@ -541,8 +541,10 @@ unsafe fn read_stream(stream: *mut c_void) -> String {
     }
     if all.starts_with(&[0xff, 0xfe]) {
         let w: Vec<u16> = all[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
             .collect();
         return String::from_utf16_lossy(&w);
     }

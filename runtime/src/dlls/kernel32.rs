@@ -8100,76 +8100,6 @@ pub unsafe extern "win64" fn compare_string_ordinal(
     }
 }
 
-/// FindStringOrdinal : position (en unités UTF-16) de `value` dans
-/// `source`, comparaison ordinale, -1 si absente. Drapeaux FIND_FROMSTART
-/// (0x400000), FIND_FROMEND (0x800000), FIND_STARTSWITH (0x100000),
-/// FIND_ENDSWITH (0x200000). Un .NET s'en sert pour IndexOf ordinal.
-pub unsafe extern "win64" fn find_string_ordinal(
-    flags: u32,
-    src: *const u16,
-    n_src: i32,
-    val: *const u16,
-    n_val: i32,
-    ignore_case: i32,
-) -> i32 {
-    const FROMEND: u32 = 0x0080_0000;
-    const STARTSWITH: u32 = 0x0010_0000;
-    const ENDSWITH: u32 = 0x0020_0000;
-    if src.is_null() || val.is_null() || n_src < -1 || n_val < -1 {
-        set_last_error(87);
-        return -1;
-    }
-    let units = |p: *const u16, n: i32| -> Vec<u16> {
-        let len = if n < 0 {
-            let mut k = 0;
-            while *p.add(k) != 0 {
-                k += 1;
-            }
-            k
-        } else {
-            n as usize
-        };
-        std::slice::from_raw_parts(p, len).to_vec()
-    };
-    let fold = |v: Vec<u16>| -> Vec<u16> {
-        if ignore_case == 0 {
-            return v;
-        }
-        // Majuscules simples, unité par unité, comme le fait la comparaison
-        // ordinale insensible à la casse de Windows.
-        v.into_iter()
-            .map(|c| {
-                char::from_u32(c as u32)
-                    .and_then(|ch| {
-                        let mut up = ch.to_uppercase();
-                        match (up.next(), up.next()) {
-                            (Some(u), None) if (u as u32) < 0x10000 => Some(u as u16),
-                            _ => None,
-                        }
-                    })
-                    .unwrap_or(c)
-            })
-            .collect()
-    };
-    let (s, v) = (fold(units(src, n_src)), fold(units(val, n_val)));
-    set_last_error(0);
-    if v.len() > s.len() {
-        return -1;
-    }
-    let last = s.len() - v.len();
-    let hit = |i: usize| s[i..i + v.len()] == v[..];
-    let found = if flags & STARTSWITH != 0 {
-        hit(0).then_some(0)
-    } else if flags & ENDSWITH != 0 {
-        hit(last).then_some(last)
-    } else if flags & FROMEND != 0 {
-        (0..=last).rev().find(|&i| hit(i))
-    } else {
-        (0..=last).find(|&i| hit(i))
-    };
-    found.map_or(-1, |i| i as i32)
-}
-
 // --- GetStringTypeA/W ---
 pub unsafe extern "win64" fn get_string_type_w(
     _info_type: u32,
@@ -8926,7 +8856,7 @@ pub fn exports() -> crate::dlls::Exports {
      "GetUserNameA"=>fn get_user_name_a,
      "GetPrivateProfileStringA"=>fn get_private_profile_string_a,"WritePrivateProfileStringA"=>fn write_private_profile_string_a,
      "GetLongPathNameA"=>fn get_long_path_name_a,"GetLongPathNameW"=>fn get_long_path_name_w,"GetShortPathNameA"=>fn get_short_path_name_a,"GetShortPathNameW"=>fn get_short_path_name_w,
-     "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,"FindStringOrdinal"=>fn find_string_ordinal,
+     "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
      "GetStringTypeW"=>fn get_string_type_w,
      "LCMapStringW"=>fn lc_map_string_w,
      "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,

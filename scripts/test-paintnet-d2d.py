@@ -6,7 +6,7 @@ sont en place et gardent la taille de table de méthodes publiée par Windows :
 Direct3D 11.1 à 11.4, Direct2D 1.1 à 1.3 (fabrique 7, contexte de dessin),
 effets personnalisés (ID2D1EffectContext, ID2D1TransformGraph,
 ID2D1DrawInfo, pixel shaders), gestionnaire d'animations Windows,
-FindStringOrdinal et GdipImageForceValidation. Les tests unitaires Rust
+et GdipImageForceValidation. Les tests unitaires Rust
 (cargo test) contrôlent le comportement de chaque pièce.
 """
 from pathlib import Path
@@ -65,9 +65,6 @@ ok("ext: ext::DeviceExt" in source("d3d11.rs") and "ext: ext::ContextExt" in sou
 ok("DXGI_ADAPTER_DESC2_SIZE: usize = 320" in source("dxgi.rs"),
    "IDXGIAdapter4::GetDesc3 écrit 320 octets, pas 324")
 
-ok("\"FindStringOrdinal\"" in source("kernel32.rs")
-   and "FindStringOrdinal" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(encoding="utf-8"),
-   "kernel32!FindStringOrdinal exporté et inscrit à la surface")
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,
    "GdipImageForceValidation (Image.FromStream avec validation) ne répond plus NotImplemented")
