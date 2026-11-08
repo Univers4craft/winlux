@@ -927,6 +927,14 @@ ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_a
    and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
 
+# #24 : FreeLibrary décharge vraiment (démappage, index TLS rendu, dépendances relâchées).
+_deps = (ROOT / "testexe/src/bin/dll_deps.rs").read_text()
+ok("image neuve après rechargement" in _deps and "la DLL et sa dépendance sont toutes deux déchargées" in _deps
+   and "fn unload(" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "fn release_module_tls(" in (ROOT / "runtime/src/process.rs").read_text()
+   and "dll_deps" in (ROOT / "scripts/test-runtime.sh").read_text(),
+   "FreeLibrary : DLL démappée, TLS libéré, dépendances relâchées, rechargement à neuf (#24)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
