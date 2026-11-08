@@ -237,6 +237,45 @@ static void tab_superclass(void)
     DestroyWindow(tab);
 }
 
+/* Comme la VCL de Delphi (#1129, WinSCP) : la classe est enregistrée avec
+ * une procédure x86 (InitWndProc), la procédure de SysTabControl32 obtenue
+ * par GetClassInfoW n'est connue que du programme, qui lui passe tout par
+ * CallWindowProcW. */
+static WNDPROC vcl_default;
+static LRESULT CALLBACK vcl_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    return CallWindowProcW(vcl_default, h, m, w, l);
+}
+
+static void tab_vcl(void)
+{
+    WNDCLASSW wc;
+    CHECK(GetClassInfoW(NULL, WC_TABCONTROLW, &wc), "GetClassInfoW (VCL)");
+    vcl_default = wc.lpfnWndProc;
+    wc.lpfnWndProc = vcl_proc;
+    wc.lpszClassName = L"TThemePageDeTest";
+    wc.hInstance = GetModuleHandleW(NULL);
+    CHECK(RegisterClassW(&wc) != 0, "classe VCL d'onglets");
+    HWND tab = CreateWindowExW(0, L"TThemePageDeTest", L"", WS_POPUP, 0, 0, 300, 200, NULL, NULL, NULL, NULL);
+    CHECK(tab != NULL, "fenêtre VCL d'onglets");
+    TCITEMW t = {0};
+    t.mask = TCIF_TEXT | TCIF_PARAM;
+    t.pszText = L"Sessions";
+    t.lParam = 0x5678;
+    CHECK(SendMessageW(tab, TCM_INSERTITEMW, 0, (LPARAM)&t) == 0, "TCM_INSERTITEMW (VCL)");
+    struct {
+        TCITEMW it;
+        DWORD canary[4];
+    } q;
+    memset(&q, 0x77, sizeof q);
+    q.it.mask = TCIF_PARAM;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&q.it) != 0 && q.it.lParam == 0x5678,
+          "TCM_GETITEMW (classe VCL)");
+    CHECK(q.canary[0] == 0x77777777u && q.canary[1] == 0x77777777u && q.canary[2] == 0x77777777u,
+          "rien d'écrit après le TCITEM x86 (VCL)");
+    DestroyWindow(tab);
+}
+
 /* Notifications des contrôles vers une fenêtre x86 (WM_NOTIFY en
  * disposition x86 : NMHDR de 12 octets, NMLISTVIEW, NMTREEVIEW). */
 static int lv_changed = -1, lv_param;
@@ -674,6 +713,7 @@ int main(void)
     tool_bar();
     tab_control();
     tab_superclass();
+    tab_vcl();
     notifications();
     dialogs();
     winscp();

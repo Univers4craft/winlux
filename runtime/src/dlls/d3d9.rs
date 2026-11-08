@@ -3282,6 +3282,41 @@ unsafe extern "win64" fn dev_get_rt_data(this: *mut Obj, rt: *mut Obj, dst: *mut
     dev_update_surface(this, rt, std::ptr::null(), dst, std::ptr::null())
 }
 
+/// Texture GL d'une surface tenue par le GPU : (cible GL, identifiant,
+/// niveau, largeur, hauteur). Une surface seule n'en a que si c'est une
+/// cible de rendu ; un niveau de texture de rendu (D3DUSAGE_RENDERTARGET)
+/// renvoie la texture parente, envoyée au GPU si besoin (#1167 : les copies
+/// et effacements de WPF dans ses couches d'opacité passaient par la copie
+/// CPU, périmée, puis la renvoyaient par-dessus le rendu).
+unsafe fn gl_surface(
+    gs: &GlState,
+    g: &gl::GlFunctions,
+    o: *mut Obj,
+) -> Option<(u32, u32, i32, u32, u32)> {
+    let Kind::Surface(m) = &(*o).kind else {
+        return None;
+    };
+    let s = lock(m);
+    if let Some((parent, face, level)) = s.parent {
+        let tm = tex_data(parent)?;
+        let mut t = lock(tm);
+        if t.usage & D3DUSAGE_RENDERTARGET == 0 {
+            return None;
+        }
+        let (target, id) = upload_texture(&mut t, g, gs.legacy);
+        if id == 0 {
+            return None;
+        }
+        let ft = if target == glc::GL_TEXTURE_CUBE_MAP {
+            glc::GL_TEXTURE_CUBE_MAP_POSITIVE_X + face
+        } else {
+            gl::GL_TEXTURE_2D
+        };
+        return Some((ft, id, level as i32, s.width, s.height));
+    }
+    (s.gl_tex != 0).then_some((gl::GL_TEXTURE_2D, s.gl_tex, 0, s.width, s.height))
+}
+
 unsafe extern "win64" fn dev_stretch_rect(
     this: *mut Obj,
     src: *mut Obj,
@@ -3297,18 +3332,18 @@ unsafe extern "win64" fn dev_stretch_rect(
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
-    // Copie GPU si les deux surfaces sont des cibles GL.
-    let tex_of = |o: *mut Obj| -> (u32, u32, u32) {
-        if let Kind::Surface(m) = &(*o).kind {
-            let s = lock(m);
-            (s.gl_tex, s.width, s.height)
-        } else {
-            (0, 0, 0)
+    // Copie GPU si les deux surfaces sont des cibles GL (surface seule ou
+    // niveau d'une texture de rendu, #1167).
+    let gpu = match (d.gl.as_ref(), gl::gl()) {
+        (Some(gs), Some(g)) => {
+            gs.make_current();
+            gl_surface(gs, g, src).zip(gl_surface(gs, g, dst))
         }
+        _ => None,
     };
-    let (st, sw, sh) = tex_of(src);
-    let (dt, dw, dh) = tex_of(dst);
-    if let (Some(gs), Some(g), true) = (d.gl.as_ref(), gl::gl(), st != 0 && dt != 0) {
+    if let (Some(gs), Some(g), Some((s_gl, d_gl))) = (d.gl.as_ref(), gl::gl(), gpu) {
+        let (st_target, st, st_level, sw, sh) = s_gl;
+        let (dt_target, dt, dt_level, dw, dh) = d_gl;
         let r = |p: *const Rect32, w: u32, h: u32| {
             if p.is_null() {
                 (0, 0, w as i32, h as i32)
@@ -3325,17 +3360,17 @@ unsafe extern "win64" fn dev_stretch_rect(
         (g.FramebufferTexture2D)(
             gl::GL_READ_FRAMEBUFFER,
             gl::GL_COLOR_ATTACHMENT0,
-            gl::GL_TEXTURE_2D,
+            st_target,
             st,
-            0,
+            st_level,
         );
         (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, gs.fbo);
         (g.FramebufferTexture2D)(
             gl::GL_DRAW_FRAMEBUFFER,
             gl::GL_COLOR_ATTACHMENT0,
-            gl::GL_TEXTURE_2D,
+            dt_target,
             dt,
-            0,
+            dt_level,
         );
         (g.Disable)(gl::GL_SCISSOR_TEST);
         (g.BlitFramebuffer)(
@@ -3373,23 +3408,20 @@ unsafe extern "win64" fn dev_color_fill(
     let Some((w, h, fmt, pitch, mut data)) = surface_bytes(surf) else {
         return D3DERR_INVALIDCALL;
     };
-    let gl_target = if let Kind::Surface(m) = &(*surf).kind {
-        lock(m).gl_tex
-    } else {
-        0
-    };
-    if gl_target != 0 {
-        // Cible GPU : effacement par Clear sur la surface.
-        let d = dev!(this);
-        if let (Some(gs), Some(g)) = (d.gl.as_ref(), gl::gl()) {
-            gs.make_current();
+    let d = dev!(this);
+    if let (Some(gs), Some(g)) = (d.gl.as_ref(), gl::gl()) {
+        gs.make_current();
+        if let Some((target, id, level, _, _)) = gl_surface(gs, g, surf) {
+            // Cible GPU (surface seule ou niveau d'une texture de rendu,
+            // #1167) : effacement par Clear, sans passer par la copie CPU
+            // qui serait ensuite renvoyée par-dessus ce qui est déjà dessiné.
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, gs.fbo);
             (g.FramebufferTexture2D)(
                 gl::GL_FRAMEBUFFER,
                 gl::GL_COLOR_ATTACHMENT0,
-                gl::GL_TEXTURE_2D,
-                gl_target,
-                0,
+                target,
+                id,
+                level,
             );
             if rect.is_null() {
                 (g.Disable)(gl::GL_SCISSOR_TEST);
@@ -3407,9 +3439,10 @@ unsafe extern "win64" fn dev_color_fill(
             (g.ColorMask)(1, 1, 1, 1);
             (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
             (g.Disable)(gl::GL_SCISSOR_TEST);
+            return S_OK;
         }
-        return S_OK;
     }
+    drop(d);
     let Some(fi) = format_info(fmt) else {
         return D3DERR_INVALIDCALL;
     };

@@ -114,7 +114,7 @@ step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q 
 
 # Sockets .NET (#1146) : port de complétion, ConnectEx, WSASend/WSARecv avec
 # OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
-step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur
+step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur mode_sans_paquet_si_fin_immediate_pour_libuv
 
 # Listes : clic droit, Maj+F10, renommage en place (#1139) ; 7-Zip montré
 # par SetWindowPlacement (#1159) ; extensions de Notepad++ (#1152) ;
@@ -127,6 +127,10 @@ step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- r
 # Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux -- glisser_depuis_une_liste_ou_une_arborescence perte_du_focus_garde_les_boutons_de_souris
+step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- icone_standard_par_son_emplacement
+step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
+step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
+step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l_icone_pour_get_rect
 
 # Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064

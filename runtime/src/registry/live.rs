@@ -12,6 +12,10 @@
 //!   sont gardées ; Winlux n'ajoute que les fichiers qui manquent.
 //! - `HKLM\Software\Microsoft\TPG\System Recognizers\{BED9A940-…}` :
 //!   chemin du moteur de gestes intégré (mshwgst.dll), lu par WPF (#1132).
+//! - `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` :
+//!   mode clair des applis et du système, transparence. Flow Launcher lit
+//!   AppsUseLightTheme par Registry.GetValue, qui rend null sans la clé
+//!   (#1170). Une valeur déjà posée est gardée.
 
 use super::{utf16z, Data, REG_BINARY, REG_DWORD, REG_SZ};
 use std::path::{Path, PathBuf};
@@ -23,6 +27,8 @@ pub const CODE_PAGE: &str = "hklm\\System\\CurrentControlSet\\Control\\Nls\\Code
 pub const KEYBOARD: &str = "hkcu\\Keyboard Layout\\Preload";
 pub const FONTS: &str = "hklm\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
 pub const USER_FONTS: &str = "hkcu\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
+pub const PERSONALIZE: &str =
+    "hkcu\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 
 fn dword(data: &mut Data, key: &str, name: &str, value: u32) {
     data.raw_set(key, name, REG_DWORD, value.to_le_bytes().to_vec());
@@ -257,13 +263,14 @@ fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 
 /// Clés calculées : leurs valeurs ne sont jamais enregistrées sur le disque
 /// (#1046), seulement recalculées au chargement.
-pub const MANAGED: [&str; 6] = [
+pub const MANAGED: [&str; 7] = [
     TIME_ZONE,
     CODE_PAGE,
     KEYBOARD,
     FONTS,
     USER_FONTS,
     crate::dlls::mshwgst::REGISTRY_KEY,
+    PERSONALIZE,
 ];
 
 /// Valeurs posées par la vue dynamique : (clé, nom, contenu).
@@ -318,6 +325,7 @@ fn apply(data: &mut Data) {
         add_fonts(data, FONTS, &dir, true, list);
     }
     gesture_recognizer(data);
+    personalize(data);
 }
 
 /// Moteur de gestes intégré : WPF lit ici le chemin de mshwgst.dll et ne
@@ -326,4 +334,18 @@ pub fn gesture_recognizer(data: &mut Data) {
     use crate::dlls::mshwgst::{DLL_PATH, REGISTRY_KEY, REGISTRY_VALUE};
     data.raw_ensure(REGISTRY_KEY);
     text(data, REGISTRY_KEY, REGISTRY_VALUE, DLL_PATH);
+}
+
+/// Mode clair (comme ShouldAppsUseDarkMode, uxtheme) et transparence : les
+/// valeurs manquantes seulement.
+pub fn personalize(data: &mut Data) {
+    for (name, value) in [
+        ("AppsUseLightTheme", 1),
+        ("SystemUsesLightTheme", 1),
+        ("EnableTransparency", 1),
+    ] {
+        if data.raw_get(PERSONALIZE, name).is_none() {
+            dword(data, PERSONALIZE, name, value);
+        }
+    }
 }
