@@ -144,6 +144,10 @@ step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_de
 # IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
 step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
 
+# Effets Direct2D personnalisés (#1206, Paint.NET) : le contexte passé à
+# Initialize répond à ID2D1EffectContext1 et ID2D1EffectContext2.
+step "Contexte d'effet Direct2D en version 2 (#1206)" cargo test -q -p winlux -- initialize_obtient_le_contexte_d_effet_2 vtables_have_windows_sizes
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
