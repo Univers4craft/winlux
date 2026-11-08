@@ -315,14 +315,34 @@ def snap(window, zone, area=None):
     x, y, w, h = client_geometry(zone_rect(zone, area), frame_extents(window))
     _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
     # Changer de case quitte le groupe d'ancrage ; la même case (groupe restauré) le garde.
-    if state != zone: set_prop(window, "_WINLUX_SNAP_GROUP", "")
+    if state != zone: leave_group(window)
     set_prop(window, "_WINLUX_SNAP", zone)
 
 
 def leave_snap(window):
     """Fenêtre décrochée, agrandie ou remise à sa taille : plus ancrée ni groupée."""
     set_prop(window, "_WINLUX_SNAP", "")
+    leave_group(window)
+
+
+def leave_group(window):
+    """window quitte son groupe ; la fenêtre qui y resterait seule le quitte aussi."""
+    group = get_prop(window, "_WINLUX_SNAP_GROUP")
+    if not group: return
     set_prop(window, "_WINLUX_SNAP_GROUP", "")
+    prune_groups({group})
+
+
+def prune_groups(groups):
+    """Efface les groupes qui n'ont plus qu'une fenêtre (tous bureaux confondus)."""
+    holders = {group: [] for group in groups if group}
+    if not holders: return
+    for line in _run(["wmctrl", "-l"]).splitlines():
+        window = line.split(None, 1)[0] if line.strip() else ""
+        group = get_prop(window, "_WINLUX_SNAP_GROUP") if window else ""
+        if group in holders: holders[group].append(window)
+    for members in holders.values():
+        if len(members) == 1: set_prop(members[0], "_WINLUX_SNAP_GROUP", "")
 
 
 def restore(window):
@@ -686,7 +706,10 @@ def form_group(windows):
         if window_number(item) not in {window_number(other) for other in unique}: unique.append(item)
     if len(unique) < 2: return None
     group = f"{window_number(unique[0]):x}.{os.getpid()}"
+    previous = {get_prop(item, "_WINLUX_SNAP_GROUP") for item in unique} - {group}
     for item in unique: set_prop(item, "_WINLUX_SNAP_GROUP", group)
+    # Une fenêtre reprise d'un autre groupe n'y laisse pas une fenêtre seule.
+    prune_groups(previous)
     return group
 
 
@@ -717,6 +740,17 @@ def group_props(desktop=None):
             continue
         found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
     return found
+
+
+def groups_signature(x11):
+    """État des groupes d'ancrage lu par Xlib, sans lancer de programme :
+    change dès qu'une fenêtre entre dans un groupe, en sort ou change de case."""
+    if x11 is None: return None
+    found = []
+    for client in x11.prop(x11.root, "_NET_CLIENT_LIST") or []:
+        group = x11.prop(client, "_WINLUX_SNAP_GROUP")
+        if group: found.append((client, group, x11.prop(client, "_WINLUX_SNAP")))
+    return tuple(found)
 
 
 def find_member(window, props):
@@ -783,10 +817,15 @@ def _icons(Gtk, GdkPixbuf, Gio, theme, window, small, large):
     if klass:
         for value in (klass.group(2), klass.group(1)):
             names += [value, value.lower()]
-    for value in names:
-        info = None
-        try: info = Gio.DesktopAppInfo.new(value + ".desktop")
-        except TypeError: info = None
+    # Le lanceur qui déclare cette fenêtre (StartupWMClass) passe avant, par
+    # son nom d'instance d'abord : le Terminal Winlux est un xterm
+    # (winlux-terminal, XTerm) et debian-xterm.desktop déclare XTerm.
+    declared = desktop_for_class(Gio.AppInfo.get_all(), [klass.group(1), klass.group(2)] if klass else [])
+    for value in ([""] if declared else []) + names:
+        info = declared if not value else None
+        if value:
+            try: info = Gio.DesktopAppInfo.new(value + ".desktop")
+            except TypeError: info = None
         icon = info.get_icon() if info else None
         if icon is None and value and theme.has_icon(value): icon = Gio.ThemedIcon.new(value)
         if icon is not None:
@@ -808,6 +847,16 @@ def _icons(Gtk, GdkPixbuf, Gio, theme, window, small, large):
         if w != size: pixbuf = pixbuf.scale_simple(size, size, GdkPixbuf.InterpType.BILINEAR)
         images.append(Gtk.Image.new_from_pixbuf(pixbuf))
     return images[0], images[1]
+
+
+def desktop_for_class(entries, names):
+    """Le lanceur dont StartupWMClass est le premier des noms WM_CLASS
+    (instance, puis classe) à en avoir un, sinon None."""
+    declared = {}
+    for entry in entries:
+        value = getattr(entry, "get_startup_wm_class", lambda: None)()
+        if value: declared.setdefault(value, entry)
+    return next((declared[name] for name in names if name in declared), None)
 
 
 def _sized(image, size):
@@ -876,27 +925,33 @@ def group_popup(window, button):
     hint = Gtk.Label(label=_t("Cliquez pour remettre le groupe au premier plan"), xalign=0, ellipsize=3)
     hint.get_style_context().add_class("subtitle")
     box.pack_start(hint, False, False, 0)
-    titles = {item: title for item, title in other_windows(None)}
-    for item in members:
-        if item not in titles:
-            titles[item] = _run(["xdotool", "getwindowname", str(window_number(item))]).strip()
     chosen = {}
     theme = Gtk.IconTheme.get_default()
-    for item in members:
-        fx, fy, fw, fh = ZONES[props[item][1]]
-        cell = Gtk.Button()
-        cell.get_style_context().add_class("window")
-        cell.set_size_request(max(20, round(fw * map_w) - 4), max(20, round(fh * map_h) - 4))
-        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
-        small, _ = _icons(Gtk, GdkPixbuf, Gio, theme, item, 20, 32)
-        inner.pack_start(small, False, False, 0)
-        label = Gtk.Label(label=titles.get(item) or _t("Sans titre"), ellipsize=3, max_width_chars=14)
-        label.get_style_context().add_class("card-title")
-        inner.pack_start(label, False, False, 0)
-        cell.add(inner)
-        cell.set_tooltip_text(titles.get(item) or "")
-        cell.connect("clicked", lambda _, it=item: (chosen.setdefault("window", it), Gtk.main_quit()))
-        layout.put(cell, 2 + round(fx * map_w), 2 + round(fy * map_h))
+
+    def fill(members, props):
+        for old in layout.get_children(): layout.remove(old)
+        titles = {item: title for item, title in other_windows(None)}
+        for item in members:
+            if item not in titles:
+                titles[item] = _run(["xdotool", "getwindowname", str(window_number(item))]).strip()
+        for item in members:
+            fx, fy, fw, fh = ZONES[props[item][1]]
+            cell = Gtk.Button()
+            cell.get_style_context().add_class("window")
+            cell.set_size_request(max(20, round(fw * map_w) - 4), max(20, round(fh * map_h) - 4))
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
+            small, _ = _icons(Gtk, GdkPixbuf, Gio, theme, item, 20, 32)
+            inner.pack_start(small, False, False, 0)
+            label = Gtk.Label(label=titles.get(item) or _t("Sans titre"), ellipsize=3, max_width_chars=14)
+            label.get_style_context().add_class("card-title")
+            inner.pack_start(label, False, False, 0)
+            cell.add(inner)
+            cell.set_tooltip_text(titles.get(item) or "")
+            cell.connect("clicked", lambda _, it=item: (chosen.setdefault("window", it), Gtk.main_quit()))
+            layout.put(cell, 2 + round(fx * map_w), 2 + round(fy * map_h))
+        layout.show_all()
+
+    fill(members, props)
     popup.connect("key-press-event", lambda _, event: event.keyval == Gdk.KEY_Escape and (Gtk.main_quit() or True))
     popup.show_all()
     scale = max(1, popup.get_scale_factor())
@@ -908,9 +963,27 @@ def group_popup(window, button):
     x, y = popup_origin(button, (width * scale, height * scale), monitor, gap)
     popup.move(x // scale, y // scale)
     popup.present()
-    state = {"away": 0}
+    try: x11 = _X()
+    except OSError: x11 = None
+    state = {"away": 0, "ticks": 0, "groups": groups_signature(x11)}
+
+    def follow_group():
+        """Le groupe a changé vignette ouverte (case remplie au clavier, fenêtre
+        décrochée) : la vignette se refait, ou se ferme s'il n'y a plus de groupe."""
+        signature = groups_signature(x11)
+        if signature == state["groups"]: return
+        state["groups"] = signature
+        props = group_props()
+        key = find_member(window, props)
+        members = group_members(key, props) if key else []
+        if not members:
+            Gtk.main_quit()
+            return
+        fill(members, props)
 
     def pointer_left():
+        state["ticks"] += 1
+        if x11 is not None and state["ticks"] % 2 == 0: follow_group()
         _, px, py = popup.get_display().get_default_seat().get_pointer().get_position()
         px, py = px * scale, py * scale
         ox, oy = popup.get_position()
