@@ -492,8 +492,10 @@ def test_page(work, env):
     ok(any("Sécurisé (WPA2)" in text and "Signal" in text for text in labels), "page : sécurité et force du signal affichées")
     ok(any(text == "Aucun réseau enregistré." for text in labels), "page : réseaux enregistrés (aucun au départ)")
     window.open_page(2)
-    buttons = [w.get_label() for w in walk(window.body, Gtk) if isinstance(w, Gtk.Button)]
-    ok("Réseaux Wi-Fi…" in buttons, "page Réseau : renvoi vers la page Wi-Fi")
+    # Ligne « Wi-Fi › » de la carte Réseau (#898), qui ouvre la page Wi-Fi.
+    rows = [w for w in walk(window.body, Gtk) if isinstance(w, Gtk.Button) and w.get_style_context().has_class("nav-row")]
+    wifi_row = next((w for w in rows if "Wi-Fi" in [x.get_text() for x in walk(w, Gtk) if isinstance(x, Gtk.Label)]), None)
+    ok(wifi_row is not None, "page Réseau : renvoi vers la page Wi-Fi")
     window.open_page(35)
     panel = window.wifi_panel
     deadline = time.time() + 20
