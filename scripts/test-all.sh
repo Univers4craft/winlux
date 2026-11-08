@@ -164,6 +164,18 @@ step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_d
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
 
+# Étapes déposées dans scripts/test-all.d/ : un fichier par issue
+# (« 1234-sujet.sh »), lu par « . » dans l'ordre des noms, qui appelle step ou
+# skip et peut tester $quick. Deux PR n'ajoutent plus leur étape au même
+# endroit de ce fichier, donc ne sont plus en conflit entre elles.
+deposees=0
+for depot in scripts/test-all.d/*.sh; do
+    test -f "$depot" || continue
+    deposees=$((deposees + 1))
+    . "./$depot"
+done
+step "scripts/test-all.d chargé ($deposees fichier(s))" test -f scripts/test-all.d/0000-dossier-charge.sh -a "$deposees" -ge 1
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
