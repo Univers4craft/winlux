@@ -478,8 +478,20 @@ if [ "$kind" = console ]; then
     exec "$winlux" "$exe" "$@"
 fi
 started=$(date +%s)
-"$winlux" "$exe" "$@" 2>"$log"
+# Code de sortie Windows complet (#1205) : le statut Linux n'en garde que
+# l'octet de poids faible (0x780148E0 devenait « code 224 »). Le runtime
+# l'écrit ici en hexadécimal, sans le transmettre aux programmes qu'il lance.
+exit_file=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || exit_file=
+WINLUX_EXIT_CODE_FILE=$exit_file "$winlux" "$exe" "$@" 2>"$log"
 status=$?
+code=$status
+if [ -n "$exit_file" ]; then
+    full=$(head -c 16 "$exit_file" 2>/dev/null)
+    case $full in 0x[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]) code=$full ;; esac
+    rm -f "$exit_file"
+fi
+# 0x100, 0x200… : statut Linux 0, mais échec pour Windows.
+if [ "$status" -eq 0 ] && [ "$code" != 0 ] && [ "$code" != 0x00000000 ]; then status=1; fi
 if [ "$status" -ne 0 ]; then
     # Un plantage enregistré depuis le lancement : la boîte « Signaler un
     # problème » explique la cause et propose l'envoi (jamais automatique).
@@ -505,6 +517,6 @@ if [ "$status" -ne 0 ]; then
         && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' "$crashes" | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
-    show_error "$(explain_failure "$(basename -- "$exe")" "$status" "$log")" "$detail"
+    show_error "$(explain_failure "$(basename -- "$exe")" "$code" "$log")" "$detail"
 fi
 exit "$status"

@@ -25,6 +25,8 @@ for src in "$root"/testc/*.c; do
     test "$name" = msxml_suite && libs="-lole32 -loleaut32 -luuid -lmsxml2"
     # accprop_suite : annotations d'accessibilité AccPropServices (#1114).
     test "$name" = accprop_suite && libs="-lole32 -loleaut32 -luuid"
+    # wmi_suite : WMI en lecture, WbemLocator et requêtes Win32_* (#1198).
+    test "$name" = wmi_suite && libs="-lole32 -loleaut32 -lwbemuuid"
     # com_local_suite : serveur COM hors processus, LocalServer32 (#16).
     test "$name" = com_local_suite && libs="-loleaut32 -lole32 -luuid -ladvapi32"
     # shellcheck disable=SC2086
