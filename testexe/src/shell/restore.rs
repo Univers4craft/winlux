@@ -392,6 +392,32 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     if DIALOG > 0 {
         draw_dialog(g, &cl);
     }
+    focus_zones(&cl);
+}
+
+/// Contrôles atteignables par Tab (#28), aux mêmes positions que `mouse`.
+/// La liste des points se parcourt aux flèches.
+unsafe fn focus_zones(cl: &Rect) {
+    if DIALOG > 0 {
+        focus_modal();
+        let dx = (cl.left + cl.right - 360) / 2;
+        let by = (cl.top + cl.bottom - 160) / 2 + 160 - 48;
+        if DIALOG == 1 || DIALOG == 2 {
+            focus_zone(&rect(dx + 24, by, dx + 144, by + BTN_H));
+            focus_zone(&rect(dx + 160, by, dx + 280, by + BTN_H));
+        } else if DIALOG == 4 {
+            focus_zone(&rect(dx + 130, by, dx + 230, by + BTN_H));
+        }
+        return;
+    }
+    let y = cl.top + HEADER_H;
+    for i in 0..3 {
+        if i > 0 && SELECTED < 0 {
+            break; // Restaurer et Supprimer demandent un point choisi
+        }
+        let x = cl.left + 16 + (BTN_W + BTN_GAP) * i;
+        focus_zone(&rect(x, y, x + BTN_W, y + BTN_H));
+    }
 }
 
 unsafe fn draw_dialog(g: &mut Gfx, cl: &Rect) {

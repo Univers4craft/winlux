@@ -457,6 +457,12 @@ unsafe fn hit_add(id: i32, r: Rect) {
         HITS[HIT_COUNT] = (id, r);
         HIT_COUNT += 1;
     }
+    // Atteignable par Tab (#28) ; les ids 1000+ sont les champs de saisie.
+    if (1000..1100).contains(&id) {
+        focus_field(&r);
+    } else {
+        focus_zone(&r);
+    }
 }
 fn hit_at(x: i32, y: i32) -> i32 {
     unsafe {

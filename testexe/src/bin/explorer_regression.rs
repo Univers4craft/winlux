@@ -97,6 +97,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         welcome::regression_checks();
         a11y::regression_checks();
         notepad::regression_checks();
+        wm::focus_regression_checks();
     }
     finish()
 }

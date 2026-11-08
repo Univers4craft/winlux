@@ -788,6 +788,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
 
+# #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
+_wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
+ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
+   and "wm::focus_regression_checks();" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text()
+   and "#28" in (ROOT / "scripts/test-explorer-fixes.py").read_text(),
+   "Tab entre les contrôles : cadre d'accent, boîtes modales, champs, quinze fenêtres du shell (#28)")
+
 # ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
 ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
    and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
