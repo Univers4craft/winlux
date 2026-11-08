@@ -652,11 +652,17 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
 assistant_source = (SCRIPTS / "winlux-assistant.py").read_text()
 ok("assistant_setups" in (SCRIPTS / "winlux-settings-pages.py").read_text()
    and "org.winlux.AssistantSetup." in assistant_source
-   and 'LLAMA_SHA256 = "' in assistant_source and 'LOCAL_MODEL_REVISION = "' in assistant_source
+   and "LLAMA_ENGINES = {" in assistant_source and '"revision": "' in assistant_source
    and 'CODEX_VERSION = "' in assistant_source and "releases/latest" not in assistant_source
    and "def has_browser" in assistant_source and '"--device-auth"' in assistant_source
    and "cwd=work_dir()" in assistant_source and "cwd=str(HOME)" not in assistant_source,
    "Assistant IA : trois activations possibles, IA locale téléchargeable, connexion sans navigateur, sans question de fichiers")
+# #928 : IA locale choisie selon le PC (mémoire, carte graphique Vulkan), moteur
+# arrêté deux minutes après la dernière question, ressources dites.
+ok("def pc_plan" in assistant_source and '"vulkan": (f"llama-{LLAMA_TAG}-bin-ubuntu-vulkan-x64.tar.gz"' in assistant_source
+   and "LOCAL_IDLE_SECONDS = 120" in assistant_source and "def idle_stop" in assistant_source
+   and "def memory(self)" in assistant_source and "def plan_text" in assistant_source,
+   "IA locale : modèle adapté au PC, zéro ressource sans question, ressources affichées")
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
    and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
