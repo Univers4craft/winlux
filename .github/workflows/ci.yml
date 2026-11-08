@@ -176,6 +176,12 @@ jobs:
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
+      - name: Vérifier les mises à jour signées Ed25519 (#31)
+        run: python3 -B scripts/test-update-signature.py
+
+      - name: Vérifier les mises à jour A/B (emplacement B, bascule et réserve)
+        run: python3 -B scripts/test-ab-update.py
+
       - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
         run: python3 -B scripts/test-update-page-names.py
 

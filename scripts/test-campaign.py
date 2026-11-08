@@ -891,6 +891,11 @@ ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
    "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+# #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
+   and '"Deprecat" not in out.stderr' in (SCRIPTS / "test-speech.py").read_text(),
+   "voix : arrêt sur SIGTERM sans avertissement de dépréciation de PyGObject")
 
 # Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
 # politique effective quand display_policy= est vide.

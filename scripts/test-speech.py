@@ -183,6 +183,8 @@ with tempfile.TemporaryDirectory() as folder:
             run_env = dict(env, WINLUX_SPEECH_INPUT=str(recording), WINLUX_SPEECH_TYPED=str(typed))
             out = subprocess.run([sys.executable, str(SCRIPT), command], env=run_env, capture_output=True, text=True, timeout=120)
             assert out.returncode == 0, (command, out.stderr[-2000:])
+            # #1003 : aucun avertissement de dépréciation (GLib.unix_signal_add…).
+            assert "Deprecat" not in out.stderr, (command, out.stderr[-2000:])
             lines = typed.read_text().splitlines()
             assert lines and lines[0] == "Bonjour, ceci est un essai.", (command, lines)
             if command == "dictate": assert lines[1:] == [" Bonjour, ceci est un essai."], lines
@@ -213,5 +215,6 @@ assert body.index("if mic:") < body.index("_t(\"Dictée vocale\")")
 assert '"speech": 12' in (HERE / "winlux-settings.py").read_text()
 # Rien n'est envoyé en ligne : le seul réseau est le téléchargement du modèle.
 source = SCRIPT.read_text()
+assert "GLibUnix.signal_add" in source and source.count("GLib.unix_signal_add") == 1
 assert source.count("urlopen(") == 1 and "huggingface.co/ggerganov/whisper.cpp/resolve/{revision}/" in source
 print("test-speech : OK")

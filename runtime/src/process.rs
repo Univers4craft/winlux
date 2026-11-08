@@ -708,6 +708,7 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     }
     run_tls_callbacks(m, DLL_PROCESS_ATTACH);
     if let Some(entry) = m.entry() {
+        trace!("DllMain de {} (chargement dynamique)", m.name);
         let dllmain =
             |base: usize, reason: u32, reserved: usize| call_dllmain(entry, base, reason, reserved);
         if dllmain(m.base, DLL_PROCESS_ATTACH, 0) == 0 {
