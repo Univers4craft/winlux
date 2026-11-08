@@ -1156,6 +1156,10 @@ class Start(Gtk.Application):
                 tile = self.app_button(app, True)
                 tile.get_style_context().add_class("card")
                 tile.set_size_request(-1, 76)
+                # Trois tuiles dans un volet de 320 px : un nom long (« Traitement
+                # de texte ») ne doit pas élargir le volet ni décentrer le menu.
+                for label in [w for w in tile.get_child().get_children() if isinstance(w, Gtk.Label)]:
+                    label.set_max_width_chars(8)
                 tiles.attach(tile, index, 0, 1, 1)
             for index in range(len(habits[:3]), 3): tiles.attach(Gtk.Box(), index, 0, 1, 1)
             body.pack_start(tiles, False, False, 0)
