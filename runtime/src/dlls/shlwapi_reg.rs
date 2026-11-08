@@ -1298,8 +1298,16 @@ struct StreamState {
     data: Vec<u8>,
     pos: usize,
     dirty: bool,
-    /// Clé et valeur où réécrire les données ; `None` : flux en lecture seule.
-    target: Option<(String, String)>,
+    /// Où réécrire les données ; `None` : flux en lecture seule.
+    target: Option<Target>,
+}
+
+/// Destination d'un flux modifiable.
+enum Target {
+    /// Clé et valeur du registre (SHOpenRegStream).
+    Reg(String, String),
+    /// Fichier Linux (SHCreateStreamOnFile).
+    File(std::path::PathBuf),
 }
 
 #[repr(C)]
@@ -1320,15 +1328,18 @@ fn flush(state: &mut StreamState) -> i32 {
     if !state.dirty {
         return S_OK;
     }
-    let Some((key, name)) = &state.target else {
-        return STG_E_ACCESSDENIED;
-    };
-    match store(key, name, reg::REG_BINARY, state.data.clone()) {
-        ERROR_SUCCESS => {
-            state.dirty = false;
-            S_OK
+    let ok = match &state.target {
+        None => return STG_E_ACCESSDENIED,
+        Some(Target::Reg(key, name)) => {
+            store(key, name, reg::REG_BINARY, state.data.clone()) == ERROR_SUCCESS
         }
-        _ => STG_E_ACCESSDENIED,
+        Some(Target::File(path)) => std::fs::write(path, &state.data).is_ok(),
+    };
+    if ok {
+        state.dirty = false;
+        S_OK
+    } else {
+        STG_E_ACCESSDENIED
     }
 }
 
@@ -1517,7 +1528,7 @@ static STREAM_VTBL: StreamVtbl = StreamVtbl {
     clone: rs_clone,
 };
 
-fn new_stream(data: Vec<u8>, target: Option<(String, String)>) -> *mut c_void {
+fn new_stream(data: Vec<u8>, target: Option<Target>) -> *mut c_void {
     Box::into_raw(Box::new(RegStream {
         vtbl: &STREAM_VTBL,
         refs: AtomicU32::new(1),
@@ -1545,7 +1556,7 @@ fn open_stream(root: usize, sub: &str, name: &str, mode: u32) -> Option<*mut c_v
         (None, false) => None,
         (data, true) => Some(new_stream(
             data.unwrap_or_default(),
-            Some((path, name.to_string())),
+            Some(Target::Reg(path, name.to_string())),
         )),
         (Some(data), false) => Some(new_stream(data, None)),
     }
@@ -1585,6 +1596,87 @@ pub unsafe extern "win64" fn sh_open_reg_stream_w(
 ) -> *mut c_void {
     open_stream(root, &text_w(sub), &text_w(name), mode)
         .unwrap_or_else(|| new_stream(Vec::new(), None))
+}
+
+const STGM_CREATE: u32 = 0x1000;
+const HRESULT_FILE_NOT_FOUND: i32 = 0x8007_0002u32 as i32;
+const HRESULT_FILE_EXISTS: i32 = 0x8007_0050u32 as i32;
+const HRESULT_ACCESS_DENIED: i32 = 0x8007_0005u32 as i32;
+
+/// SHCreateStreamOnFileEx : flux sur un fichier. Le contenu est lu en
+/// mémoire et réécrit au Commit ou à la dernière libération ; STGM_CREATE
+/// crée ou vide le fichier tout de suite, comme Windows (#687 : WinSCP
+/// lit et écrit ses réglages et ses journaux par ce flux).
+pub fn file_stream(path: &str, mode: u32, create: bool) -> Result<*mut c_void, i32> {
+    if path.is_empty() {
+        return Err(0x8007_0057u32 as i32); // E_INVALIDARG
+    }
+    let linux = crate::paths::to_linux(path);
+    let writable = mode & (STGM_WRITE | STGM_READWRITE) != 0;
+    let exists = linux.is_file();
+    if linux.is_dir() {
+        return Err(HRESULT_ACCESS_DENIED);
+    }
+    let data = if mode & STGM_CREATE != 0 {
+        if !writable {
+            return Err(0x8003_0006u32 as i32); // STG_E_INVALIDFLAG
+        }
+        std::fs::write(&linux, []).map_err(|_| HRESULT_ACCESS_DENIED)?;
+        Vec::new()
+    } else if exists {
+        if create && writable {
+            // FAILIFTHERE avec fCreate : le fichier ne doit pas exister.
+            return Err(HRESULT_FILE_EXISTS);
+        }
+        std::fs::read(&linux).map_err(|_| HRESULT_ACCESS_DENIED)?
+    } else if create && writable {
+        std::fs::write(&linux, []).map_err(|_| HRESULT_ACCESS_DENIED)?;
+        Vec::new()
+    } else {
+        return Err(HRESULT_FILE_NOT_FOUND);
+    };
+    Ok(new_stream(data, writable.then_some(Target::File(linux))))
+}
+
+unsafe fn put_stream(out: *mut *mut c_void, r: Result<*mut c_void, i32>) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    match r {
+        Ok(p) => {
+            *out = p;
+            S_OK
+        }
+        Err(hr) => {
+            *out = std::ptr::null_mut();
+            hr
+        }
+    }
+}
+
+pub unsafe extern "win64" fn sh_create_stream_on_file_a(
+    path: *const u8,
+    mode: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    put_stream(out, file_stream(&text_a(path), mode, false))
+}
+pub unsafe extern "win64" fn sh_create_stream_on_file_w(
+    path: *const u16,
+    mode: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    put_stream(out, file_stream(&text_w(path), mode, false))
+}
+pub unsafe extern "win64" fn sh_create_stream_on_file_ex(
+    path: *const u16,
+    mode: u32,
+    _attributes: u32,
+    create: i32,
+    _template: *mut c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    put_stream(out, file_stream(&text_w(path), mode, create != 0))
 }
 
 // ── AssocQueryString / AssocQueryKey ───────────────────────────────
@@ -1821,6 +1913,9 @@ pub unsafe extern "win64" fn assoc_query_key_w(
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "SHGetValueA" => fn sh_get_value_a,
+        "SHCreateStreamOnFileA" => fn sh_create_stream_on_file_a,
+        "SHCreateStreamOnFileW" => fn sh_create_stream_on_file_w,
+        "SHCreateStreamOnFileEx" => fn sh_create_stream_on_file_ex,
         "SHGetValueW" => fn sh_get_value_w,
         "SHSetValueA" => fn sh_set_value_a,
         "SHSetValueW" => fn sh_set_value_w,

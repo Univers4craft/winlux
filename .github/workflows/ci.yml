@@ -152,6 +152,9 @@ jobs:
       - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
         run: python3 -B scripts/test-gpl-sources.py
 
+      - name: Vérifier les notices et licences du paquet winlux-desktop (#33)
+        run: python3 -B scripts/test-notices.py
+
       - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
         run: python3 -B scripts/test-image-identity.py
 
@@ -659,6 +662,9 @@ jobs:
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
+
+      - name: Navigateurs, éditeur, version et source montrés avant l'installation (#923)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-browser-confirm.py
 
       - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
         run: |

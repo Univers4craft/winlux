@@ -727,6 +727,15 @@ ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in setti
    and (SCRIPTS / "test-settings-redesign.py").exists(),
    "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
 
+# #847 : WPF dessine son texte par IDWriteGlyphRunAnalysis et choisit le thème
+# Aero2 (styles visuels actifs), sans thémer les fenêtres Win32 classiques.
+uxtheme = (runtime_dlls / "uxtheme.rs").read_text()
+ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
+   and (runtime_dlls / "dwrite_glyphs.rs").exists()
+   and "fn IsThemeActive() -> i32 {\n    1\n}" in uxtheme
+   and "fn IsAppThemed() -> i32 {\n    0\n}" in uxtheme
+   and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
@@ -791,6 +800,11 @@ ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
    and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
    and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
    "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+# #923 : Paramètres > Navigateurs, éditeur, version et source avant l'installation.
+ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
+   and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
+   and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
