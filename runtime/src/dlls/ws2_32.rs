@@ -6,6 +6,8 @@ use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+mod overlapped;
+
 #[link(name = "c")]
 unsafe extern "C" {
     #[link_name = "inet_pton"]
@@ -685,8 +687,12 @@ fn sockets() -> &'static Mutex<HashSet<usize>> {
     SOCKETS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 use super::lock;
+/// Sous Windows, WSAGetLastError et GetLastError lisent la même valeur
+/// (celle du TEB) : .NET relit l'erreur d'une socket par GetLastError
+/// (Marshal.GetLastPInvokeError). La copie par fil sert hors TEB (tests).
 fn set_error(e: i32) {
     LAST_WSA_ERROR.with(|x| x.set(e));
+    crate::process::set_last_error(e as u32);
 }
 fn error_from_errno(e: i32) -> i32 {
     match e {
@@ -864,7 +870,19 @@ pub extern "win64" fn wsa_cleanup() -> i32 {
     }
 }
 pub extern "win64" fn wsa_get_last_error() -> i32 {
-    LAST_WSA_ERROR.with(|x| x.get())
+    if crate::process::teb() != 0 {
+        crate::process::last_error() as i32
+    } else {
+        LAST_WSA_ERROR.with(|x| x.get())
+    }
+}
+/// Le handle est-il une socket ouverte ? (CreateIoCompletionPort, CancelIoEx)
+pub(crate) fn is_socket(s: usize) -> bool {
+    valid_socket(s)
+}
+/// CancelIo / CancelIoEx sur une socket.
+pub(crate) fn cancel_overlapped(s: usize, overlapped: usize) -> bool {
+    overlapped::cancel(s, overlapped)
 }
 pub extern "win64" fn wsa_set_last_error(e: i32) {
     set_error(e)
@@ -888,12 +906,16 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
         set_error(10038);
         return SOCKET_ERROR;
     }
+    // Les opérations en cours se terminent en WSA_OPERATION_ABORTED, leur
+    // paquet parti, avant que le numéro de socket ne puisse resservir.
+    overlapped::close(s);
     let r = unsafe { libc::close(s as i32) };
     if r < 0 {
         set_error(last_error());
         SOCKET_ERROR
     } else {
         lock(sockets()).remove(&s);
+        crate::dlls::kernel32::forget_completion_port(s);
         // Un fd réutilisé ne doit pas hériter du masque WSAEventSelect.
         lock(event_assoc()).remove(&s);
         lock(async_sel()).remove(&s);
@@ -1722,6 +1744,12 @@ pub unsafe extern "win64" fn setsockopt(
         return SOCKET_ERROR;
     }
     if level == WIN_SOL_SOCKET && optname == WIN_SO_EXCLUSIVEADDRUSE {
+        return 0;
+    }
+    // SO_UPDATE_ACCEPT_CONTEXT / SO_UPDATE_CONNECT_CONTEXT : après AcceptEx
+    // ou ConnectEx, Windows met la socket à jour ; Linux l'est déjà. .NET
+    // tient la connexion pour ratée si l'appel échoue.
+    if level == WIN_SOL_SOCKET && (optname == 0x700B || optname == 0x7010) {
         return 0;
     }
     let Some((l, o)) = translate_sockopt(level, optname) else {
@@ -2687,8 +2715,8 @@ pub unsafe extern "win64" fn wsa_send(
     buf_count: u32,
     bytes_sent: *mut u32,
     flags: u32,
-    _overlapped: usize,
-    _completion: usize,
+    overlapped: usize,
+    completion: usize,
 ) -> i32 {
     if !valid_socket(s) {
         set_error(WSAENOTSOCK);
@@ -2697,6 +2725,9 @@ pub unsafe extern "win64" fn wsa_send(
     if bufs.is_null() || buf_count == 0 {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
+    }
+    if overlapped::wanted(overlapped, completion) {
+        return overlapped::send(s, bufs, buf_count, bytes_sent, flags, overlapped);
     }
     let n = buf_count as usize;
     let mut iovs: Vec<libc::iovec> = Vec::with_capacity(n);
@@ -2732,8 +2763,8 @@ pub unsafe extern "win64" fn wsa_recv(
     buf_count: u32,
     bytes_recv: *mut u32,
     flags: *mut u32,
-    _overlapped: usize,
-    _completion: usize,
+    overlapped: usize,
+    completion: usize,
 ) -> i32 {
     if !valid_socket(s) {
         set_error(WSAENOTSOCK);
@@ -2743,6 +2774,9 @@ pub unsafe extern "win64" fn wsa_recv(
     if bufs.is_null() || buf_count == 0 {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
+    }
+    if overlapped::wanted(overlapped, completion) {
+        return overlapped::recv(s, bufs, buf_count, bytes_recv, flags, overlapped);
     }
     let n = buf_count as usize;
     let mut iovs: Vec<libc::iovec> = Vec::with_capacity(n);
@@ -3156,6 +3190,9 @@ pub unsafe extern "win64" fn wsa_ioctl(
         }
         // Réglages de performance sans équivalent Linux (le noyau gère déjà
         // le délai initial de retransmission et la boucle locale rapide).
+        overlapped::SIO_GET_EXTENSION_FUNCTION_POINTER => {
+            overlapped::extension_function(in_buf, in_len, out_buf, out_len, bytes_returned)
+        }
         SIO_LOOPBACK_FAST_PATH | SIO_TCP_INITIAL_RTO => {
             if !bytes_returned.is_null() {
                 *bytes_returned = 0;
@@ -3472,6 +3509,7 @@ fn named_exports() -> crate::dlls::Exports {
      "WSASend"=>fn wsa_send,"WSARecv"=>fn wsa_recv,
      "WSAConnect"=>fn wsa_connect,
      "WSAIoctl"=>fn wsa_ioctl,
+     "WSAGetOverlappedResult"=>fn overlapped::get_result,
      "WSADuplicateSocketW"=>fn wsa_duplicate_socket_w,
      "WSAStringToAddressW"=>fn wsa_string_to_address_w,
      "WSAAddressToStringW"=>fn wsa_address_to_string_w,
@@ -4057,5 +4095,308 @@ mod tests {
             closesocket(srv);
         }
         cleanup();
+    }
+
+    // ── E/S avec OVERLAPPED et port de complétion (#1146) ───────────────
+
+    type ConnectEx =
+        unsafe extern "win64" fn(usize, *const u8, i32, *const u8, u32, *mut u32, usize) -> i32;
+
+    fn new_overlapped() -> Box<crate::dlls::kernel32::Overlapped> {
+        Box::new(crate::dlls::kernel32::Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: 0,
+        })
+    }
+
+    /// Socket d'écoute sur 127.0.0.1, port libre.
+    unsafe fn listener() -> (usize, libc::sockaddr_in) {
+        let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        let mut addr: libc::sockaddr_in = std::mem::zeroed();
+        addr.sin_family = libc::AF_INET as u16;
+        addr.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+        assert_eq!(bind(srv, &addr as *const _ as *const u8, 16), 0);
+        let mut len: i32 = 16;
+        get_socket_name(srv, &mut addr as *mut _ as *mut u8, &mut len);
+        assert_eq!(listen(srv, 4), 0);
+        (srv, addr)
+    }
+
+    /// Socket comme celle de .NET : WSASocketW avec WSA_FLAG_OVERLAPPED,
+    /// liée à 127.0.0.1 et au port de complétion `port` (clé 7).
+    unsafe fn overlapped_client(port: usize) -> usize {
+        let cli = wsa_socket_w(libc::AF_INET, libc::SOCK_STREAM, 6, 0, 0, 1);
+        assert_ne!(cli, INVALID_SOCKET);
+        let mut any: libc::sockaddr_in = std::mem::zeroed();
+        any.sin_family = libc::AF_INET as u16;
+        any.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+        assert_eq!(bind(cli, &any as *const _ as *const u8, 16), 0);
+        assert_eq!(
+            crate::dlls::kernel32::create_io_completion_port(cli, port, 7, 0),
+            port,
+            "une socket doit pouvoir se lier à un port de complétion"
+        );
+        cli
+    }
+
+    unsafe fn connect_ex_of(s: usize) -> ConnectEx {
+        let guid: [u8; 16] = [
+            0xB9, 0x07, 0xA2, 0x25, 0xF3, 0xDD, 0x60, 0x46, 0x8E, 0xE9, 0x76, 0xE5, 0x8C, 0x74,
+            0x06, 0x3E,
+        ];
+        let mut ptr = 0usize;
+        let mut returned = 0u32;
+        assert_eq!(
+            wsa_ioctl(
+                s,
+                0xC800_0006,
+                guid.as_ptr(),
+                16,
+                &mut ptr as *mut usize as *mut u8,
+                8,
+                &mut returned,
+                0,
+                0
+            ),
+            0
+        );
+        assert_eq!(returned, 8);
+        std::mem::transmute::<usize, ConnectEx>(ptr)
+    }
+
+    /// Paquet suivant du port (au plus deux secondes) :
+    /// (succès, octets, clé, OVERLAPPED).
+    unsafe fn next_packet(port: usize) -> (i32, u32, usize, usize) {
+        let mut bytes = 0u32;
+        let mut key = 0usize;
+        let mut ov: *mut c_void = std::ptr::null_mut();
+        let ok = crate::dlls::kernel32::get_queued_completion_status(
+            port, &mut bytes, &mut key, &mut ov, 2000,
+        );
+        (ok, bytes, key, ov as usize)
+    }
+
+    #[test]
+    fn connectex_wsasend_wsarecv_terminent_par_le_port_de_completion() {
+        let _wsa = init();
+        unsafe {
+            let (srv, addr) = listener();
+            let port = crate::dlls::kernel32::create_io_completion_port(usize::MAX, 0, 0, 0);
+            let cli = overlapped_client(port);
+            let connect_ex = connect_ex_of(cli);
+
+            let ov = new_overlapped();
+            let ovp = &*ov as *const _ as usize;
+            let rc = connect_ex(
+                cli,
+                &addr as *const _ as *const u8,
+                16,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                ovp,
+            );
+            assert!(
+                rc == 1 || wsa_get_last_error() == 997,
+                "ConnectEx : {rc}, {}",
+                wsa_get_last_error()
+            );
+            // Terminée tout de suite ou non, la connexion poste un paquet.
+            assert_eq!(next_packet(port), (1, 0, 7, ovp));
+            let (mut n, mut fl) = (99u32, 0u32);
+            assert_eq!(
+                overlapped::get_result(cli, ovp as *const u8, &mut n, 0, &mut fl),
+                1
+            );
+            assert_eq!(n, 0);
+            assert_eq!(
+                setsockopt(cli, WIN_SOL_SOCKET, 0x7010, std::ptr::null(), 0),
+                0
+            );
+            let acc = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(acc, INVALID_SOCKET);
+
+            // Réception sans données : en attente, puis paquet à l'arrivée.
+            let mut data = [0u8; 16];
+            let mut wb = WsaBuf {
+                len: 16,
+                buf: data.as_mut_ptr(),
+            };
+            let rov = new_overlapped();
+            let rovp = &*rov as *const _ as usize;
+            let mut flags = 0u32;
+            assert_eq!(
+                wsa_recv(cli, &mut wb, 1, std::ptr::null_mut(), &mut flags, rovp, 0),
+                SOCKET_ERROR
+            );
+            assert_eq!(wsa_get_last_error(), 997, "WSA_IO_PENDING attendu");
+            assert_eq!(next_packet(port).0, 0, "rien avant l'envoi : délai dépassé");
+            assert_eq!(
+                libc::send(acc as i32, b"bonjour".as_ptr() as *const c_void, 7, 0),
+                7
+            );
+            assert_eq!(next_packet(port), (1, 7, 7, rovp));
+            assert_eq!(&data[..7], b"bonjour");
+
+            // Envoi immédiat : rendu 0, et un paquet quand même.
+            let msg = b"salut";
+            let sb = WsaBuf {
+                len: 5,
+                buf: msg.as_ptr() as *mut u8,
+            };
+            let sov = new_overlapped();
+            let sovp = &*sov as *const _ as usize;
+            let mut sent = 0u32;
+            assert_eq!(wsa_send(cli, &sb, 1, &mut sent, 0, sovp, 0), 0);
+            assert_eq!(sent, 5);
+            assert_eq!(next_packet(port), (1, 5, 7, sovp));
+            let mut back = [0u8; 8];
+            assert_eq!(
+                libc::recv(acc as i32, back.as_mut_ptr() as *mut c_void, 8, 0),
+                5
+            );
+
+            // Réception de zéro octet (.NET) : attend que des données soient là.
+            let mut nothing = WsaBuf {
+                len: 0,
+                buf: data.as_mut_ptr(),
+            };
+            assert_eq!(
+                wsa_recv(
+                    cli,
+                    &mut nothing,
+                    1,
+                    std::ptr::null_mut(),
+                    &mut flags,
+                    rovp,
+                    0
+                ),
+                SOCKET_ERROR
+            );
+            assert_eq!(wsa_get_last_error(), 997);
+            assert_eq!(
+                libc::send(acc as i32, b"x".as_ptr() as *const c_void, 1, 0),
+                1
+            );
+            assert_eq!(next_packet(port), (1, 0, 7, rovp));
+
+            closesocket(acc);
+            closesocket(cli);
+            closesocket(srv);
+            crate::dlls::kernel32::close_handle(port);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un() {
+        let _wsa = init();
+        unsafe {
+            // Port libéré : personne n'écoute plus.
+            let (srv, addr) = listener();
+            closesocket(srv);
+            let port = crate::dlls::kernel32::create_io_completion_port(usize::MAX, 0, 0, 0);
+            let cli = overlapped_client(port);
+            let connect_ex = connect_ex_of(cli);
+            let ov = new_overlapped();
+            let ovp = &*ov as *const _ as usize;
+            let rc = connect_ex(
+                cli,
+                &addr as *const _ as *const u8,
+                16,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                ovp,
+            );
+            if rc == 0 && wsa_get_last_error() == 997 {
+                let (ok, _, key, at) = next_packet(port);
+                assert_eq!((ok, key, at), (0, 7, ovp), "paquet d'échec attendu");
+                let (mut n, mut fl) = (0u32, 0u32);
+                assert_eq!(
+                    overlapped::get_result(cli, ovp as *const u8, &mut n, 0, &mut fl),
+                    0
+                );
+            } else {
+                assert_eq!(rc, 0, "la connexion ne peut pas réussir");
+            }
+            assert_eq!(wsa_get_last_error(), 10061, "WSAECONNREFUSED attendu");
+            closesocket(cli);
+            crate::dlls::kernel32::close_handle(port);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn fermeture_et_cancelioex_annulent_les_receptions_en_attente() {
+        let _wsa = init();
+        unsafe {
+            let (srv, addr) = listener();
+            let port = crate::dlls::kernel32::create_io_completion_port(usize::MAX, 0, 0, 0);
+            let cli = overlapped_client(port);
+            assert_eq!(connect(cli, &addr as *const _ as *const u8, 16), 0);
+            let acc = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            let mut data = [0u8; 8];
+            let mut wb = WsaBuf {
+                len: 8,
+                buf: data.as_mut_ptr(),
+            };
+            let mut flags = 0u32;
+
+            // CancelIoEx sur cette opération.
+            let ov = new_overlapped();
+            let ovp = &*ov as *const _ as usize;
+            assert_eq!(
+                wsa_recv(cli, &mut wb, 1, std::ptr::null_mut(), &mut flags, ovp, 0),
+                SOCKET_ERROR
+            );
+            assert_eq!(wsa_get_last_error(), 997);
+            assert_eq!(crate::dlls::kernel32::cancel_io_ex(cli, ovp as *mut _), 1);
+            let (ok, _, _, at) = next_packet(port);
+            assert_eq!((ok, at), (0, ovp));
+            let (mut n, mut fl) = (0u32, 0u32);
+            assert_eq!(
+                overlapped::get_result(cli, ovp as *const u8, &mut n, 0, &mut fl),
+                0
+            );
+            assert_eq!(wsa_get_last_error(), 995, "WSA_OPERATION_ABORTED attendu");
+
+            // closesocket : le paquet d'annulation part avant le retour.
+            assert_eq!(
+                wsa_recv(cli, &mut wb, 1, std::ptr::null_mut(), &mut flags, ovp, 0),
+                SOCKET_ERROR
+            );
+            assert_eq!(closesocket(cli), 0);
+            let mut bytes = 0u32;
+            let mut key = 0usize;
+            let mut got: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                crate::dlls::kernel32::get_queued_completion_status(
+                    port, &mut bytes, &mut key, &mut got, 0
+                ),
+                0
+            );
+            assert_eq!(got as usize, ovp, "paquet d'annulation déjà posté");
+            assert!(!is_socket(cli));
+
+            closesocket(acc);
+            closesocket(srv);
+            crate::dlls::kernel32::close_handle(port);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn wsagetlasterror_et_getlasterror_partagent_la_meme_valeur() {
+        // Sans TEB (tests), la copie par fil suffit ; avec un TEB, les deux
+        // lisent la même case.
+        set_error(10061);
+        assert_eq!(wsa_get_last_error(), 10061);
+        if crate::process::teb() != 0 {
+            assert_eq!(crate::process::last_error(), 10061);
+        }
     }
 }

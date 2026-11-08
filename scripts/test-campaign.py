@@ -1257,6 +1257,12 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+# #1146 : le HttpClient de .NET (ScreenToGif, Flow Launcher) se connecte par
+# ConnectEx et un port de complétion ; une erreur rend un code Winsock.
+ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
+   and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
+   "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
 ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
    and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
    and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
