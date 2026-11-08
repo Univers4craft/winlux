@@ -404,12 +404,84 @@ pub extern "win64" fn raise_exception(code: u32, flags: u32, nargs: u32, args: u
         "wow32 : RaiseException 0x{code:08x} depuis 0x{:x}",
         site.eip
     );
+    if code == DELPHI_EXCEPTION
+        && params.len() >= 2
+        && crate::log::enabled(crate::log::Level::Trace)
+    {
+        if let Some((class, message)) = delphi_exception(params[1]) {
+            crate::trace!("wow32 :   exception Delphi {class} : « {message} »");
+        }
+    }
     let r = rec.as_ptr() as usize as u32;
     let c = ctx.as_ptr() as usize as u32;
     if !dispatch(r, c) {
         unhandled(&rec, c)
     }
     // Continuer : retour à l'appelant de RaiseException.
+}
+
+/// Code des exceptions du langage Delphi (et de la VCL de C++Builder).
+const DELPHI_EXCEPTION: u32 = 0x0EED_FADE;
+
+/// Lit `len` octets du processus sans risquer de faute (adresse invalide :
+/// `None`).
+fn read_bytes(addr: u32, len: usize) -> Option<Vec<u8>> {
+    if addr < 0x1_0000 || len == 0 || len > 4096 {
+        return None;
+    }
+    let mut out = vec![0u8; len];
+    let local = libc::iovec {
+        iov_base: out.as_mut_ptr().cast(),
+        iov_len: len,
+    };
+    let remote = libc::iovec {
+        iov_base: addr as usize as *mut libc::c_void,
+        iov_len: len,
+    };
+    // SAFETY: process_vm_readv vérifie l'adresse et échoue proprement.
+    let n = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+    (n == len as isize).then_some(out)
+}
+
+fn read_u32(addr: u32) -> Option<u32> {
+    read_bytes(addr, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// Nom de classe et message d'un objet exception Delphi (paramètre 1 de
+/// l'exception 0x0EEDFADE), pour la trace : le nom est la ShortString
+/// pointée par l'entrée vmtClassName de la VMT (-56 depuis Delphi 2009,
+/// -44 avant), le message le champ FMessage juste après la VMT (chaîne
+/// UTF-16 depuis Delphi 2009, octets avant). Documentation publique de
+/// l'unité System de Delphi.
+fn delphi_exception(object: u32) -> Option<(String, String)> {
+    let vmt = read_u32(object)?;
+    let class = [56u32, 44].iter().find_map(|off| {
+        let name = read_u32(vmt.wrapping_sub(*off))?;
+        let len = *read_bytes(name, 1)?.first()? as usize;
+        let text = read_bytes(name.wrapping_add(1), len)?;
+        let ok = len > 1
+            && matches!(text[0], b'E' | b'T')
+            && text.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_');
+        ok.then(|| String::from_utf8_lossy(&text).into_owned())
+    })?;
+    let text = read_u32(object.wrapping_add(4)).filter(|p| *p != 0);
+    let message = text
+        .and_then(|p| {
+            let len = (read_u32(p.wrapping_sub(4))? as usize).min(1024);
+            let wide = read_bytes(p.wrapping_sub(10), 2).is_some_and(|b| b == [2, 0]);
+            if wide {
+                let b = read_bytes(p, len * 2)?;
+                let units: Vec<u16> = b
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                Some(String::from_utf16_lossy(&units))
+            } else {
+                Some(String::from_utf8_lossy(&read_bytes(p, len)?).into_owned())
+            }
+        })
+        .unwrap_or_default();
+    Some((class, message))
 }
 
 /// `RtlUnwind(TargetFrame, TargetIp, ExceptionRecord, ReturnValue)` : appelle
@@ -638,6 +710,43 @@ pub extern "win64" fn local_unwind4(cookie: u32, frame: u32, stop: u32) {
 
 #[cfg(test)]
 mod tests {
+    /// Trace des exceptions Delphi : classe et message lus dans l'objet.
+    #[test]
+    fn nom_et_message_d_une_exception_delphi() {
+        unsafe {
+            let low = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            ) as usize;
+            assert_ne!(low as isize, -1);
+            let base = low as u32;
+            let put = |at: u32, v: u32| ((at as usize) as *mut u32).write_unaligned(v);
+            // ShortString « EOSError » à +0x10.
+            let name = b"\x08EOSError";
+            std::ptr::copy_nonoverlapping(name.as_ptr(), (low + 0x10) as *mut u8, name.len());
+            // VMT à +0x100, vmtClassName à -56.
+            put(base + 0x100 - 56, base + 0x10);
+            // Chaîne UTF-16 « Accès refusé » à +0x210 : élément 2 à -10, longueur à -4.
+            let text: Vec<u16> = "Accès refusé".encode_utf16().collect();
+            ((low + 0x210 - 10) as *mut u16).write_unaligned(2);
+            put(base + 0x210 - 4, text.len() as u32);
+            std::ptr::copy_nonoverlapping(text.as_ptr(), (low + 0x210) as *mut u16, text.len());
+            // Objet à +0x300 : VMT puis FMessage.
+            put(base + 0x300, base + 0x100);
+            put(base + 0x304, base + 0x210);
+            assert_eq!(
+                delphi_exception(base + 0x300),
+                Some(("EOSError".to_string(), "Accès refusé".to_string()))
+            );
+            assert_eq!(delphi_exception(0), None);
+            libc::munmap(low as *mut libc::c_void, 4096);
+        }
+    }
+
     use super::*;
 
     #[test]
