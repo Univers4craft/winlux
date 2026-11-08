@@ -1018,4 +1018,21 @@ translation_test = (SCRIPTS / "test-translation-keys.py").read_text(encoding="ut
 ok("def inconsistent_page_names" in translation_test and "#1039" in translation_test
    and "'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir'" in (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8"),
    "Paramètres : noms de page traduits pareil partout, quatre langues (#1039)")
+# Shell PE, fiche 28 : Échap redessine (#1023), flèches dans le menu du
+# Gestionnaire des tâches (#1024), titre traduit (#1025), WINLUX_LANG lu
+# (#1026), Bloc-notes ouvrable seul (#1027). Vérifiés dans le vrai runtime
+# par explorer_regression (test-runtime.sh).
+pe_wm = (ROOT / "testexe/src/shell/wm.rs").read_text(encoding="utf-8")
+pe_lib = (ROOT / "testexe/src/lib.rs").read_text(encoding="utf-8")
+ok("frame_shown && !crate::gfx::focus_state(app).1" in pe_wm and "(#1023)" in pe_wm,
+   "Shell PE : Échap efface le cadre de focus et redessine (#1023)")
+ok("focus_step(FOCUS_APP" in (ROOT / "testexe/src/shell/taskmgr.rs").read_text(encoding="utf-8") and "(#1024)" in pe_wm,
+   "Shell PE : Haut/Bas dans le menu contextuel du Gestionnaire des tâches (#1024)")
+ok("wm::title_of(app)" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(encoding="utf-8") and "(#1025)" in pe_wm,
+   "Shell PE : titre de fenêtre dans la langue de l'interface (#1025)")
+ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testexe/src/shell/locale.rs").read_text(encoding="utf-8")
+   and "language_regression_checks" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text(encoding="utf-8"),
+   "Shell PE : WINLUX_LANG choisit la langue (#1026)")
+ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
+   "Shell PE : winlux-shell-app notepad (#1027)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

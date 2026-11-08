@@ -21,7 +21,10 @@ pub unsafe fn lang() -> Lang {
     }
     let mut v = [0u8; 64];
     let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr().cast(), 64);
-    let l = if (2..64).contains(&n) {
+    let l = if let Some(index) = winlux_testexe::winlux_lang_env() {
+        // WINLUX_LANG prime sur LANG (#1026).
+        crate::locale::lang_of_index(index)
+    } else if (2..64).contains(&n) {
         crate::locale::lang_from_code(&v[..2])
     } else {
         Lang::Fr
