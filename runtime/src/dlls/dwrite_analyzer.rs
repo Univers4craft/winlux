@@ -46,7 +46,7 @@ unsafe fn slot(obj: *mut c_void, index: usize) -> *const () {
 // --- Lecture de la source (IDWriteTextAnalysisSource) ----------------------------------
 
 /// Texte complet [pos, pos + len) lu par GetTextAtPosition, par morceaux.
-unsafe fn source_text(source: *mut c_void, pos: u32, len: u32) -> Option<Vec<u16>> {
+pub(crate) unsafe fn source_text(source: *mut c_void, pos: u32, len: u32) -> Option<Vec<u16>> {
     type GetText = unsafe extern "win64" fn(*mut c_void, u32, *mut *const u16, *mut u32) -> i32;
     let get: GetText = std::mem::transmute(slot(source, 3));
     let mut out = Vec::with_capacity(len as usize);
