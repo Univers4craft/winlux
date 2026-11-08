@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod abslots;
 mod admin;
 mod archive;
 mod audio;
@@ -122,6 +123,10 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
     }
+    if exe == "--ab-boot" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(abslots::cli(&rest));
+    }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(bootsplash::cli(&rest));
@@ -206,6 +211,9 @@ fn main() {
     // charge par Winlux lui-même (module setup), sans exécuter leur code.
     if exe.as_os_str() == "--msi-dll-action" {
         msi_dll_action(&rest);
+    }
+    if exe.as_os_str() == "--msi-script-action" {
+        msi_script_action(&rest);
     }
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
@@ -393,6 +401,21 @@ fn msi_dll_action(args: &[String]) -> ! {
     dlls::kernel32::init();
     process::init_process(&image, &[]);
     process::run_dll_export(image, export, msi::session::SESSION_HANDLE)
+}
+
+/// `winlux --msi-script-action LANGAGE FICHIER [FONCTION]` : action
+/// personnalisée VBScript ou JScript d'un paquet MSI (#973), avec l'objet
+/// Session ; le code Windows Installer revient par le fichier de session.
+fn msi_script_action(args: &[String]) -> ! {
+    let (Some(lang), Some(file)) = (args.first(), args.get(1)) else {
+        eprintln!("usage : winlux --msi-script-action JScript|VBScript FICHIER [FONCTION]");
+        std::process::exit(1639);
+    };
+    paths::install_windows_env();
+    let function = args.get(2).map(String::as_str).unwrap_or("");
+    let code = msi::script::msi_action(lang, file, function);
+    msi::session::save(code);
+    std::process::exit(code as i32)
 }
 
 /// Vrai si le fichier existe et commence par la signature MZ d'un PE.
