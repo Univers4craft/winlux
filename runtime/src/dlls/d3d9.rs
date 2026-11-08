@@ -4708,6 +4708,135 @@ unsafe fn setup_arrays(
     (pretransformed, has_color, has_normal)
 }
 
+/// `WINLUX_D3D9_TRACE=1` : chaque dessin écrit son état sur la sortie
+/// d'erreur (shaders, états de rendu et d'étages, textures, sommets).
+fn trace_enabled() -> bool {
+    static T: OnceLock<bool> = OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("WINLUX_D3D9_TRACE").is_some())
+}
+
+unsafe fn trace_draw(
+    d: &Dev,
+    prog: Option<u32>,
+    vs_active: bool,
+    ps_active: bool,
+    base_vertex: i32,
+    up: Option<(*const u8, u32)>,
+) {
+    static SEEN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    let mut out = String::new();
+    use std::fmt::Write;
+    for (name, sh) in [("vs", d.s.vs), ("ps", d.s.ps)] {
+        if sh.is_null() {
+            continue;
+        }
+        let (Kind::VertexShader(s) | Kind::PixelShader(s)) = &(*sh).kind else {
+            continue;
+        };
+        let _ = write!(
+            out,
+            "{}={:p}{} ",
+            name,
+            sh,
+            if s.translated.is_some() {
+                ""
+            } else {
+                "(non traduit)"
+            }
+        );
+        let mut seen = lock(&SEEN);
+        if !seen.contains(&(sh as usize)) {
+            seen.push(sh as usize);
+            let toks: Vec<String> = s.tokens.iter().map(|t| format!("{t:08x}")).collect();
+            eprintln!("[d3d9-trace] {} {:p} jetons {}", name, sh, toks.join(" "));
+            if let Some(t) = &s.translated {
+                eprintln!("[d3d9-trace] {} {:p} GLSL :\n{}", name, sh, t.glsl);
+            }
+        }
+    }
+    let _ = write!(
+        out,
+        "prog={:?} vs_actif={} ps_actif={} ",
+        prog, vs_active, ps_active
+    );
+    let rs = &d.s.rs;
+    let _ = write!(
+        out,
+        "blend={} src={} dst={} sep={} srcA={} dstA={} op={} write={:x} atest={} cull={} z={} stencil={} scissor={} srgb={} ",
+        rs[27], rs[19], rs[20], rs[206], rs[207], rs[208], rs[171], rs[168], rs[15], rs[22], rs[7], rs[52], rs[174], rs[194]
+    );
+    for st in 0..4 {
+        let t = &d.s.tss[st];
+        let _ = write!(
+            out,
+            "| t{} c{}({:x},{:x}) a{}({:x},{:x}) tci={:x} ttf={} ",
+            st, t[1], t[2], t[3], t[4], t[5], t[6], t[11], t[24]
+        );
+        let tex = d.s.textures[st];
+        if !tex.is_null() {
+            if let Kind::Texture(m) = &(*tex).kind {
+                let td = lock(m);
+                let l0 = &td.levels[0];
+                let _ = write!(out, "tex fmt={} {}x{} ", td.format, l0.width, l0.height);
+            }
+            let sp = &d.s.samp[st];
+            let _ = write!(
+                out,
+                "addr={},{} filt={},{},{} ",
+                sp[1], sp[2], sp[5], sp[6], sp[7]
+            );
+        }
+    }
+    let _ = write!(out, "| fvf={:x} ", d.s.fvf);
+    let elems = if !d.s.decl.is_null() {
+        match &(*d.s.decl).kind {
+            Kind::Decl(e) => e.clone(),
+            _ => Vec::new(),
+        }
+    } else {
+        fvf_to_decl(d.s.fvf).0
+    };
+    for e in &elems {
+        let _ = write!(
+            out,
+            "[s{} +{} t{} u{}.{}] ",
+            e.stream, e.offset, e.ty, e.usage, e.usage_index
+        );
+    }
+    // Premier sommet en flottants (les 12 premiers mots du flux 0).
+    let base = match up {
+        Some((p, _)) => Some((p, 0)),
+        None => {
+            let (vb, off, stride, _) = d.s.streams[0];
+            if vb.is_null() {
+                None
+            } else {
+                buf_data(vb).map(|m| {
+                    (
+                        lock(m).data.as_ptr().add(off as usize),
+                        (base_vertex as isize * stride as isize) as usize,
+                    )
+                })
+            }
+        }
+    };
+    if let Some((p, o)) = base {
+        let w: Vec<String> = (0..12)
+            .map(|i| {
+                let v = p.add(o + 4 * i).cast::<u32>().read_unaligned();
+                format!("{:.3}/{:08x}", f32::from_bits(v), v)
+            })
+            .collect();
+        let _ = write!(out, "v0 {}", w.join(" "));
+    }
+    let used: Vec<String> = d.s.ps_f[..8]
+        .iter()
+        .map(|c| format!("({:.3},{:.3},{:.3},{:.3})", c[0], c[1], c[2], c[3]))
+        .collect();
+    let _ = write!(out, " psc0-7 {}", used.join(" "));
+    eprintln!("[d3d9-trace] draw {}", out);
+}
+
 /// Prépare tout l'état GL d'un dessin ; `None` en mode sans rendu.
 unsafe fn prepare_draw(d: &mut Dev, base_vertex: i32, up: Option<(*const u8, u32)>) -> Option<()> {
     let g = gl::gl()?;
@@ -4730,6 +4859,9 @@ unsafe fn prepare_draw(d: &mut Dev, base_vertex: i32, up: Option<(*const u8, u32
         && matches!(&(*d.s.ps).kind, Kind::PixelShader(s) if s.gl_shader != 0);
     bind_samplers(d, g, l, !ps_active);
     let (pre, color, normal) = setup_arrays(d, l, prog, base_vertex, up);
+    if trace_enabled() {
+        trace_draw(d, prog, vs_active, ps_active, base_vertex, up);
+    }
     if !vs_active {
         apply_fixed_function(d, l, pre, color, normal);
     }

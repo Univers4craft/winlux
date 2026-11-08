@@ -449,6 +449,15 @@ fn coupure_des_lignes_et_marques_de_raccourci() {
     let lines = wrap(font, "mot mot mot", one * 2);
     assert!(lines.len() >= 2, "{lines:?}");
     assert_eq!(wrap(font, "a\r\nb", 1000), vec!["a", "b"]);
+    // #951 : un mot trop large reste entier (DT_WORDBREAK ne coupe pas
+    // dans un mot), les mots suivants passent à la ligne.
+    let long = "SHA256:ABdT8Bs52isQHqLDwfvFHv1NyYJRY4VAZ3UpHJT/Ds";
+    let narrow = measure(font, long).0 - 3;
+    assert_eq!(wrap(font, long, narrow), vec![long]);
+    assert_eq!(
+        wrap(font, &format!("{long} fin"), narrow),
+        vec![long.to_string(), "fin".to_string()]
+    );
 }
 
 // ---------- comctl32 ----------
@@ -1409,4 +1418,48 @@ fn roundrect_prend_la_largeur_de_l_ellipse() {
     assert_eq!(px(6, 0), 0);
     gdi32::delete_object(brush);
     gdi32::delete_object(bmp);
+}
+
+/// #952 : wxWidgets pose l'icône de ses boîtes (point d'interrogation,
+/// avertissement) par STM_SETIMAGE sur un statique SS_ICON ; elle doit être
+/// gardée et dessinée.
+#[test]
+fn statique_ss_icon_garde_et_dessine_son_icone() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let parent = parent_window();
+    let st = child(parent, "STATIC", "", 0x03, 50, (10, 10, 32, 32));
+    let icon = unsafe { crate::dlls::icons::load_icon_w(0, 32514 as *const u16) }; // IDI_QUESTION
+    assert_ne!(icon, 0);
+    unsafe {
+        assert_eq!(user32::send_message_w(st, 0x0172, 1, icon as isize), 0);
+        assert_eq!(user32::send_message_w(st, 0x0173, 1, 0), icon as isize);
+        assert_eq!(user32::send_message_w(st, 0x0171, 0, 0), icon as isize);
+    }
+    // Dessin dans un DC mémoire blanc : des pixels de l'icône apparaissent.
+    let dc = gui::create_dc(0);
+    let bmp = gui::create_compatible_bitmap(32, 32).unwrap();
+    gui::select_object(dc, bmp);
+    gui::record(
+        dc,
+        gui::DrawCmd::FillRect {
+            rect: Rect::from_size(0, 0, 32, 32),
+            color: 0x00FF_FFFF,
+        },
+    );
+    let p = Painter { hdc: dc, font: 0 };
+    paint_static_image(st, &p, Rect::from_size(0, 0, 32, 32), true, 0);
+    let snap = gui::bitmap_snapshot(dc, Rect::from_size(0, 0, 32, 32)).unwrap();
+    let drawn = snap
+        .pixels
+        .iter()
+        .filter(|&&px| px & 0x00FF_FFFF != 0x00FF_FFFF)
+        .count();
+    assert!(drawn > 20, "icône non dessinée ({drawn} pixels)");
+    gui::select_object(dc, gui::DEFAULT_BITMAP);
+    gui::delete_object(bmp);
+    gui::free_dc(dc);
+    unsafe {
+        user32::destroy_window(parent);
+    }
+    assert_eq!(static_image(st), 0);
 }

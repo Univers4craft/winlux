@@ -105,6 +105,7 @@ dxgi.rs	DxgiSwapChainDesc	a-verifier
 dxgi.rs	DxgiSwapChainVTable	a-verifier	
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
+fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 games_win32.rs	WsaBuf	a-verifier	
 gdi32.rs	BitmapObject	a-verifier	
 gdi32.rs	LogBrush	a-verifier	
@@ -154,6 +155,7 @@ shlwapi_reg.rs	StreamVtbl	a-verifier
 taskschd.rs	Obj	a-verifier	
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
+url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte
@@ -191,6 +193,7 @@ vk_bindings.rs	VkSwapchainCreateInfoKHR	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
 vulkan1.rs	Callback	a-verifier	
 vulkan1.rs	Xlib	a-verifier	
+webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
 winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)

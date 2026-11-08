@@ -68,6 +68,7 @@ pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dwrite_analyzer;
+pub mod dwrite_glyphs;
 pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
@@ -75,6 +76,7 @@ pub mod electron_win32;
 pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
+pub mod fiber64;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -91,6 +93,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod handle_broker;
 pub mod hid;
 pub mod hlsl;
 pub mod hostcall;
@@ -162,6 +165,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod uiautomationcore;
+pub mod url_moniker;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
@@ -174,6 +178,8 @@ pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
+pub mod webview2;
+pub mod webview2_iids;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
@@ -295,6 +301,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
+                    e.extend(fiber64::kernel32_exports());
                     e.extend(console_input::exports());
                     // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
                     e.extend(serial::exports());
@@ -657,6 +664,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "webview2loader",
+                exports: webview2::exports(),
                 handle: fake_module(),
             },
             Builtin {

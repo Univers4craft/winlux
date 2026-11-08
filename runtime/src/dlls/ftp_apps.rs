@@ -372,23 +372,7 @@ extern "win64" fn sh_auto_complete(_hwnd: usize, _flags: u32) -> i32 {
     S_OK
 }
 
-// ---------- uxtheme (thème classique : rien n'est défini) ----------
-
-unsafe extern "win64" fn get_current_theme_name(
-    name: *mut u16,
-    name_len: i32,
-    color: *mut u16,
-    color_len: i32,
-    size: *mut u16,
-    size_len: i32,
-) -> i32 {
-    for (p, n) in [(name, name_len), (color, color_len), (size, size_len)] {
-        if !p.is_null() && n > 0 {
-            *p = 0;
-        }
-    }
-    E_NOTIMPL
-}
+// ---------- uxtheme (fenêtres Win32 non thémées : rien n'est défini) ----------
 
 unsafe extern "win64" fn get_theme_background_extent(
     _theme: usize,
@@ -553,7 +537,6 @@ pub fn all() -> Vec<(&'static str, Exports)> {
         (
             "uxtheme",
             crate::exports! {
-                "GetCurrentThemeName" => fn get_current_theme_name,
                 "GetThemeBackgroundExtent" => fn get_theme_background_extent,
                 "GetThemeInt" => fn get_theme_int,
                 "GetThemeMargins" => fn get_theme_margins,
