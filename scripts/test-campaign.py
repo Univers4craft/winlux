@@ -939,6 +939,11 @@ ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
    "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+# #984 : DirectWrite 3 à 7 (IDWriteFactory7 de Paint.NET 5.1), jeux de polices.
+ok((ROOT / "runtime/src/dlls/dwrite_sets.rs").exists()
+   and "VTable<57>" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "IDWriteFactory7 : 57 méthodes" in (SCRIPTS / "test-paintnet-d2d.py").read_text(),
+   "DirectWrite : IDWriteFactory7, jeux de polices et faces 1 à 6 (#984)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas
