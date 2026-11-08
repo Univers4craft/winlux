@@ -50,27 +50,27 @@ cxx_eh.rs	ExceptionPointers	a-verifier
 d2d1.rs	HwndProps	a-verifier	
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
-d3d11.rs	Buffer	a-verifier	
-d3d11.rs	BufferVTable	a-verifier	
-d3d11.rs	D3D11InputElementDesc	a-verifier	
-d3d11.rs	D3D11MappedSubresource	a-verifier	
-d3d11.rs	D3D11SubresourceData	a-verifier	
-d3d11.rs	Device	a-verifier	
-d3d11.rs	DeviceContext	a-verifier	
-d3d11.rs	DeviceContextVTable	a-verifier	
-d3d11.rs	DeviceVTable	a-verifier	
-d3d11.rs	DxgiDevice	a-verifier	
-d3d11.rs	DxgiDeviceVTable	a-verifier	
-d3d11.rs	Texture2D	a-verifier	
-d3d11.rs	Texture2DVTable	a-verifier	
-d3d11_ext.rs	Annotation	a-verifier	
-d3d11_ext.rs	AnnotationVTable	a-verifier	
-d3d11_ext.rs	ContextExt	a-verifier	vtable ID3D11DeviceContext1-4
-d3d11_ext.rs	DeviceExt	a-verifier	vtable ID3D11Device1-5
-d3d11_ext.rs	Fence	a-verifier	
-d3d11_ext.rs	FenceVTable	a-verifier	
-d3d11_ext.rs	Multithread	a-verifier	
-d3d11_ext.rs	MultithreadVTable	a-verifier	
+d3d11.rs	Buffer	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	BufferVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	D3D11InputElementDesc	x86	28 octets en x86, converti par dx11_x86::create_il
+d3d11.rs	D3D11MappedSubresource	x86	12 octets en x86, converti par dx11_x86::map ; d3d1132.c n° 5-12
+d3d11.rs	D3D11SubresourceData	x86	12 octets en x86, converti par dx11_x86::create_res ; d3d1132.c n° 4-12
+d3d11.rs	Device	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	DeviceContext	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	DeviceContextVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	DeviceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	DxgiDevice	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	DxgiDeviceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	Texture2D	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11.rs	Texture2DVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	Annotation	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	AnnotationVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	ContextExt	x86	vtable ID3D11DeviceContext1-4 : passerelles x86 tirées des signatures (dx11_x86.rs)
+d3d11_ext.rs	DeviceExt	x86	vtable ID3D11Device1-5 : passerelles x86 tirées des signatures (dx11_x86.rs)
+d3d11_ext.rs	Fence	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	FenceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	Multithread	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_ext.rs	MultithreadVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d12.rs	Barrier	a-verifier	
 d3d12.rs	CopyLocation	a-verifier	
 d3d12.rs	Descriptor	a-verifier	
@@ -107,14 +107,16 @@ dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226
 dwrite.rs	GlyphRun	a-verifier	
 dwrite_fallback.rs	Source	interne	test unitaire
 dwrite_sets.rs	FontProperty	a-verifier	
-dxgi.rs	DxgiAdapter	a-verifier	
-dxgi.rs	DxgiAdapterDesc	a-verifier	
-dxgi.rs	DxgiAdapterVTable	a-verifier	
-dxgi.rs	DxgiFactory	a-verifier	
-dxgi.rs	DxgiFactoryVTable	a-verifier	
-dxgi.rs	DxgiSwapChain	a-verifier	
-dxgi.rs	DxgiSwapChainDesc	a-verifier	
-dxgi.rs	DxgiSwapChainVTable	a-verifier	
+dx11_x86.rs	InputElement	x86	disposition 64 bits de D3D11_INPUT_ELEMENT_DESC (x86 : 28 octets, lus un à un)
+dx11_x86.rs	SoEntry	x86	disposition 64 bits de D3D11_SO_DECLARATION_ENTRY (x86 : 16 octets, lus un à un)
+dxgi.rs	DxgiAdapter	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+dxgi.rs	DxgiAdapterDesc	x86	292 à 304 octets en x86 (SIZE_T), converti par dx11_x86::adapter_desc ; d3d1132.c n° 24-25
+dxgi.rs	DxgiAdapterVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+dxgi.rs	DxgiFactory	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+dxgi.rs	DxgiFactoryVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+dxgi.rs	DxgiSwapChain	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+dxgi.rs	DxgiSwapChainDesc	x86	60 octets en x86 (HWND), converti par dx11_x86::swap_desc_in/out ; d3d1132.c n° 27-35
+dxgi.rs	DxgiSwapChainVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
 fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
@@ -154,6 +156,7 @@ ole32.rs	IMallocVTable	a-verifier
 ole32.rs	IStreamVTable	a-verifier	
 ole32.rs	MarshalStream	a-verifier	
 ole32.rs	MarshalVtbl	a-verifier	
+ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
@@ -226,4 +229,3 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
-ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32

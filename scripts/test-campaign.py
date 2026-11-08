@@ -1019,6 +1019,11 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1090 : Direct3D 11 et DXGI appelables par un programme 32 bits.
+ok((ROOT / "runtime/src/dlls/dx11_x86.rs").exists()
+   and "VTABLE_SIGS" in (ROOT / "runtime/build.rs").read_text()
+   and "d3d1132" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "Direct3D 11 et DXGI en x86 : passerelles tirées des signatures, structures et tableaux convertis (#1090)")
 # #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
 ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()

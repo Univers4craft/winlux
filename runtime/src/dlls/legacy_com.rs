@@ -127,6 +127,41 @@ pub fn x86_table(name: &'static str, methods: &[(usize, usize, &str)]) -> usize 
     v
 }
 
+/// Comme `x86_table`, mais la table x86 est recopiée dans un bloc d'au moins
+/// `bytes` octets : un objet dont le champ `vtable` est un pointeur vers une
+/// structure win64 de N méthodes (8 octets chacune) peut ainsi pointer sa
+/// table x86 (4 octets par méthode) sans désigner de mémoire hors du bloc
+/// (Direct3D 11, DXGI, #1090).
+pub fn x86_table_sized(
+    name: &'static str,
+    methods: &[(usize, usize, &str)],
+    bytes: usize,
+) -> usize {
+    static CACHE: Mutex<Option<HashMap<&'static str, usize>>> = Mutex::new(None);
+    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(HashMap::new);
+    if let Some(&v) = map.get(name) {
+        return v;
+    }
+    let stubs: Vec<(usize, &str)> = methods.iter().map(|m| (m.0, m.2)).collect();
+    let small = crate::wow32::x86_vtable_sig(name, &stubs) as usize;
+    let words = bytes.max(methods.len() * 4).div_ceil(8);
+    let block: &'static mut [u64] = Box::leak(vec![0u64; words].into_boxed_slice());
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            small as *const u8,
+            block.as_mut_ptr() as *mut u8,
+            methods.len() * 4,
+        );
+    }
+    let v = block.as_ptr() as usize;
+    let mut t = X86_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    t.get_or_insert_with(HashMap::new)
+        .insert(v, methods.iter().map(|m| m.1).collect());
+    map.insert(name, v);
+    v
+}
+
 /// Table de méthodes pour l'ABI du programme, avec la signature x86 de
 /// chaque méthode (`wow32::x86_vtable_sig` : `i`, `p`, `q`, `d`, `>f`).
 /// Pour les interfaces qui passent des valeurs de 8 octets ou rendent des
@@ -166,6 +201,24 @@ pub unsafe fn method(obj: usize, idx: usize) -> usize {
     }
     let vt = (obj as *const usize).read_unaligned();
     *(vt as *const usize).add(idx)
+}
+
+/// Appelle la méthode `idx` (sans argument : AddRef, Release) d'un objet
+/// COM quelconque : objet du runtime (table win64 ou passerelles x86) ou
+/// objet écrit par un programme x86, appelé alors en stdcall (#1090).
+///
+/// # Safety
+/// `obj` est un objet COM vivant.
+pub unsafe fn unknown_call(obj: usize, idx: usize) -> u32 {
+    if obj == 0 {
+        return 0;
+    }
+    if x86() && !is_x86_object(obj) && obj < 1 << 32 {
+        let f = rd32(rd32(obj) as usize + 4 * idx) as usize;
+        return call_back(f, &[obj]) as u32;
+    }
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(method(obj, idx));
+    f(obj)
 }
 
 /// L'objet `obj` (adresse sous 4 Go) a-t-il une table x86 construite ici ?
