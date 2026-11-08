@@ -333,13 +333,19 @@ fn windows() -> &'static Mutex<HashMap<usize, Window>> {
     W.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn next_hwnd() -> &'static std::sync::atomic::AtomicUsize {
-    static N: OnceLock<std::sync::atomic::AtomicUsize> = OnceLock::new();
-    N.get_or_init(|| std::sync::atomic::AtomicUsize::new(0x0004_0000))
+/// Nouveau HWND : unique entre les processus du compte, comme sous Windows
+/// où une fenêtre vaut pour tous (#1228).
+pub fn alloc_hwnd() -> usize {
+    super::gui_shared::alloc_hwnd()
 }
 
-pub fn alloc_hwnd() -> usize {
-    next_hwnd().fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// Fenêtre d'un autre processus du compte (processus GPU de Chromium qui
+/// reçoit le HWND du navigateur, #1228).
+pub fn foreign_window(hwnd: usize) -> Option<super::gui_shared::Foreign> {
+    if lock(windows()).contains_key(&hwnd) {
+        return None;
+    }
+    super::gui_shared::foreign(hwnd)
 }
 
 // ---------- Files de messages par thread ----------
@@ -2759,6 +2765,10 @@ pub trait GuiBackend: Send {
         self.create_window(hwnd, "", rect);
     }
     fn destroy_window(&mut self, _hwnd: usize) {}
+    /// Taille logique d'une fenêtre X11 d'un autre processus (#1228).
+    fn foreign_size(&mut self, _xid: u64) -> Option<(i32, i32)> {
+        None
+    }
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
@@ -2925,6 +2935,21 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
             font.height.abs()
         };
         (text.chars().count() as i32 * h * 55 / 100, h)
+    })
+}
+
+/// Zone client d'une fenêtre d'un autre processus : taille de sa fenêtre
+/// X11, lue sur le serveur (#1228).
+pub fn foreign_client_rect(hwnd: usize) -> Option<Rect> {
+    let f = foreign_window(hwnd)?;
+    let mut size = None;
+    with_backend(|b| size = b.foreign_size(f.xid));
+    let (w, h) = size?;
+    Some(Rect {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
     })
 }
 
@@ -3377,6 +3402,7 @@ pub fn destroy_window(hwnd: usize) -> bool {
         destroy_window(c);
     }
     with_backend(|b| b.destroy_window(hwnd));
+    super::gui_shared::withdraw(hwnd);
     // Plus aucun rappel sur une HWND morte : minuteurs, capture de la souris,
     // ordre Z et messages encore en file pour cette fenêtre.
     remove_window_timers(hwnd);

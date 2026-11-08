@@ -160,6 +160,10 @@ step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_de
 # HTTPS des applications .NET (#1183) : normaliz.dll, IdnToAscii et
 # IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
 step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
+
+# Fenêtres visibles entre processus (#1228, processus GPU de Chromium) :
+# HWND uniques, annuaire du compte, IsWindow d'une fenêtre étrangère.
+step "Fenêtres d'un autre processus (#1228)" cargo test -q -p winlux -- deux_processus_n_ont_jamais_le_meme_hwnd fenetre_d_un_autre_processus_dans_l_annuaire is_window_voit_la_fenetre_d_un_autre_processus
 # SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau

@@ -109,6 +109,7 @@ pub mod gl_legacy;
 pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
+mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
 pub mod hid;

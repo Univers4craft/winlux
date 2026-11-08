@@ -4220,6 +4220,14 @@ impl gui::GuiBackend for X11Backend {
         self.windows.get(&hwnd).map(|w| w.window as u64)
     }
 
+    fn foreign_size(&mut self, xid: u64) -> Option<(i32, i32)> {
+        let g = self.conn.get_geometry(xid as u32).ok()?.reply().ok()?;
+        Some((
+            self.logical(g.width as i32).max(1),
+            self.logical(g.height as i32).max(1),
+        ))
+    }
+
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         // La géométrie de la racine est relue à chaque appel : après un
         // changement de mode RandR, la valeur du setup initial est périmée.
