@@ -10,10 +10,10 @@
 //! bitmap créé sur une surface DXGI (texture Direct3D 11 Winlux) recopie ses
 //! pixels dans la texture à chaque EndDraw.
 //!
-//! Effets : les objets ID2D1Effect gardent leurs entrées et leurs propriétés
-//! ; DrawImage d'une sortie d'effet dessine aujourd'hui l'entrée 0 sans la
-//! transformer (le calcul des effets, dont les effets personnalisés à pixel
-//! shader enregistrés par RegisterEffectFromString, est l'étape suivante).
+//! Effets : les objets ID2D1Effect gardent leurs entrées et leurs propriétés.
+//! Les effets personnalisés enregistrés par RegisterEffectFromString sont
+//! calculés (module `custom`, pixel shaders exécutés sur OpenGL) ; les effets
+//! intégrés de Direct2D dessinent encore leur entrée 0 telle quelle.
 
 use super::{
     add_ref, draw_bitmap_pixels, draw_glyph_run, draw_text, draw_text_layout, get_factory, method,
@@ -25,7 +25,10 @@ use crate::dlls::audio_com::{guid, put, Com, VTable, E_INVALIDARG, E_POINTER, S_
 use crate::dlls::d2d_raster::Matrix;
 use crate::dlls::ole32::Guid;
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
+
+#[path = "d2d1_effects.rs"]
+mod custom;
 
 const D2DERR_EFFECT_IS_NOT_REGISTERED: i32 = 0x8899_0028u32 as i32;
 const D2DERR_INSUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
@@ -479,8 +482,8 @@ pub(super) unsafe extern "win64" fn factory_state_block1(
     new_state_block(this, desc, STATE_DESC1_SIZE, params, out)
 }
 
-/// Effets enregistrés par l'application : identifiant, description XML.
-static EFFECTS: Mutex<Vec<(Guid, String)>> = Mutex::new(Vec::new());
+/// Effets enregistrés par l'application : identifiant, description lue.
+static EFFECTS: Mutex<Vec<(Guid, Arc<custom::Registration>)>> = Mutex::new(Vec::new());
 
 unsafe fn wide(p: *const u16) -> String {
     if p.is_null() {
@@ -493,37 +496,79 @@ unsafe fn wide(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
 }
 
-unsafe fn register_effect(clsid: *const Guid, xml: String) -> i32 {
+unsafe fn register_effect(
+    clsid: *const Guid,
+    xml: String,
+    bindings: *const usize,
+    n: u32,
+    create: usize,
+) -> i32 {
     let Some(id) = clsid.as_ref().copied() else {
         return E_INVALIDARG;
     };
-    crate::log_info!("d2d1", "effet personnalisé {:?} enregistré", id);
+    let mut reg = custom::parse(&xml);
+    reg.create = create;
+    custom::bind(&mut reg, bindings, n);
+    crate::log_info!(
+        "d2d1",
+        "effet personnalisé {:?} enregistré ({} propriété(s), {} entrée(s))",
+        id,
+        reg.props.len(),
+        reg.inputs
+    );
     let mut list = crate::dlls::lock(&EFFECTS);
     list.retain(|(g, _)| *g != id);
-    list.push((id, xml));
+    list.push((id, Arc::new(reg)));
     S_OK
+}
+
+/// Contenu d'un IStream (ISequentialStream::Read), en texte UTF-8 ou UTF-16.
+unsafe fn read_stream(stream: *mut c_void) -> String {
+    if stream.is_null() {
+        return String::new();
+    }
+    let read =
+        method::<unsafe extern "win64" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32>(stream, 3);
+    let mut all = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let mut got = 0u32;
+        let hr = read(stream, buf.as_mut_ptr(), buf.len() as u32, &mut got);
+        all.extend_from_slice(&buf[..got as usize]);
+        if hr != S_OK || got == 0 || all.len() > 16 << 20 {
+            break;
+        }
+    }
+    if all.starts_with(&[0xff, 0xfe]) {
+        let w: Vec<u16> = all[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&w);
+    }
+    String::from_utf8_lossy(all.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&all)).into_owned()
 }
 
 pub(super) unsafe extern "win64" fn factory_register_stream(
     _this: *mut FactoryObj,
     clsid: *const Guid,
-    _stream: *mut c_void,
-    _bindings: *const c_void,
-    _n: u32,
-    _create: *const c_void,
+    stream: *mut c_void,
+    bindings: *const usize,
+    n: u32,
+    create: usize,
 ) -> i32 {
-    register_effect(clsid, String::new())
+    register_effect(clsid, read_stream(stream), bindings, n, create)
 }
 
 pub(super) unsafe extern "win64" fn factory_register_string(
     _this: *mut FactoryObj,
     clsid: *const Guid,
     xml: *const u16,
-    _bindings: *const c_void,
-    _n: u32,
-    _create: *const c_void,
+    bindings: *const usize,
+    n: u32,
+    create: usize,
 ) -> i32 {
-    register_effect(clsid, wide(xml))
+    register_effect(clsid, wide(xml), bindings, n, create)
 }
 
 pub(super) unsafe extern "win64" fn factory_unregister(
@@ -571,11 +616,51 @@ pub(super) unsafe extern "win64" fn factory_registered(
     }
 }
 
-/// Nombre d'entrées déclarées par la description XML d'un effet enregistré.
-fn registered_inputs(clsid: &Guid) -> Option<usize> {
+/// ID2D1Factory1::GetEffectProperties : propriétés d'un effet enregistré
+/// (ou intégré), sans instance du code de l'effet.
+pub(super) unsafe extern "win64" fn factory_effect_properties(
+    this: *mut FactoryObj,
+    clsid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let Some(id) = clsid.as_ref().copied() else {
+        return E_INVALIDARG;
+    };
+    let reg = registration(&id);
+    if reg.is_none() && !is_builtin_effect(&id) {
+        return D2DERR_EFFECT_IS_NOT_REGISTERED;
+    }
+    let n = reg
+        .as_ref()
+        .map_or_else(|| builtin_inputs(&id), |r| r.inputs);
+    let mut props = std::collections::BTreeMap::new();
+    if let Some(r) = &reg {
+        for (i, p) in r.props.iter().enumerate() {
+            props.insert(i as u32, p.default.clone());
+        }
+    }
+    Com::add_ref(this);
+    let e = Effect {
+        clsid: id,
+        inputs: Mutex::new(vec![std::ptr::null_mut(); n]),
+        props: Mutex::new(props),
+        factory: this,
+        custom: OnceLock::new(),
+        desc: reg,
+    };
+    put(out, Com::create(EFFECT_VT.ptr(), e))
+}
+
+/// Description d'un effet enregistré par l'application.
+fn registration(clsid: &Guid) -> Option<Arc<custom::Registration>> {
     let list = crate::dlls::lock(&EFFECTS);
-    let (_, xml) = list.iter().find(|(g, _)| g == clsid)?;
-    Some(xml.matches("<Input ").count() + xml.matches("<Input/").count())
+    list.iter()
+        .find(|(g, _)| g == clsid)
+        .map(|(_, r)| r.clone())
 }
 
 // --- ID2D1Multithread ------------------------------------------------------------------
@@ -906,6 +991,17 @@ pub(super) struct Effect {
     inputs: Mutex<Vec<*mut c_void>>,
     props: Mutex<std::collections::BTreeMap<u32, Vec<u8>>>,
     factory: *mut FactoryObj,
+    /// Code de l'application pour un effet personnalisé.
+    custom: OnceLock<custom::Custom>,
+    /// Description seule (GetEffectProperties d'un effet enregistré).
+    desc: Option<Arc<custom::Registration>>,
+}
+
+impl Effect {
+    /// Description de l'effet personnalisé, s'il en est un.
+    fn reg(&self) -> Option<&custom::Registration> {
+        self.custom.get().map(|c| &*c.reg).or(self.desc.as_deref())
+    }
 }
 
 impl Drop for Effect {
@@ -921,13 +1017,93 @@ impl Drop for Effect {
 
 type EffectObj = Com<Effect>;
 
-/// Nombre d'entrées des effets intégrés les plus courants ; 1 sinon.
+/// Effets intégrés de Direct2D, reconnus au premier mot de leur CLSID :
+/// ceux de `d2d1effects.h` (MinGW-w64) puis ceux de Windows 8.1 et 10.
+const BUILTIN_EFFECTS: &[u32] = &[
+    0x6aa9_7485,
+    0xc284_4d0b,
+    0xe846_7b04,
+    0xfc15_1437,
+    0x913e_2be4,
+    0x5fb6_c24d,
+    0x81c5_b77b,
+    0x2a2d_49c0,
+    0x8cea_8d1e,
+    0x1a28_524c,
+    0x921f_03d6,
+    0x48fc_9f51,
+    0x407f_8c08,
+    0xe23f_7110,
+    0x1743_19a6,
+    0x9086_6fcd,
+    0xedc4_8364,
+    0x3e7e_fd62,
+    0x428c_1ee5,
+    0x6c26_c5c7,
+    0x61c2_3c20,
+    0x4094_44c4,
+    0x1feb_6d69,
+    0x9daf_9369,
+    0x881d_b7d0,
+    0x0f44_58ec,
+    0xad47_c8fd,
+    0x4125_1ab7,
+    0xeae6_c40d,
+    0x6c53_006a,
+    0xb9e3_03c3,
+    0x09c3_ca26,
+    0x06ea_b419,
+    0x5cb2_d9cf,
+    0xc67e_a361,
+    0x818a_1105,
+    0xedae_421e,
+    0x5bf8_18c3,
+    0xb078_4138,
+    0xcf2b_b6ae,
+    0xfb9a_c489,
+    // Windows 8.1 et 10 : YCbCr, contraste, teinte ↔ RVB, incrustation,
+    // relief, exposition, niveaux de gris, inversion, postérisation, sépia,
+    // netteté, redressement, température, vignette, contours, ombres et
+    // lumières, table 3D, opacité, masque alpha, fondu, teinte, niveau de
+    // blanc, tons HDR.
+    0x9950_3cc1,
+    0xb648_a78a,
+    0x23f3_e5ec,
+    0x7b78_a6bd,
+    0x74c0_1f5b,
+    0xb1c5_eb2b,
+    0xb56c_8cfa,
+    0x36dd_e0eb,
+    0xe0c3_784d,
+    0x2188_945e,
+    0x3a1a_f410,
+    0xc9b8_87cb,
+    0x4da4_7b12,
+    0x8917_6087,
+    0xc00c_40be,
+    0xeff5_83ca,
+    0xcadc_8384,
+    0x349e_0eda,
+    0x811d_79a4,
+    0xc80e_cff0,
+    0x12f5_75e8,
+    0x3631_2b17,
+    0x44a1_cadb,
+    0x7b0b_748d,
+];
+
+fn is_builtin_effect(clsid: &Guid) -> bool {
+    BUILTIN_EFFECTS.contains(&clsid.data1)
+}
+
+/// Nombre d'entrées des effets intégrés ; 1 pour la plupart.
 fn builtin_inputs(clsid: &Guid) -> usize {
     match clsid.data1 {
-        0x61c2_3c20 => 0, // Flood
-        0x48fc_9f51 => 2, // Composite
-        0xfc1a_8b1f => 2, // Blend
-        0x5fb6_c24d => 2, // ArithmeticComposite
+        // Flood, source bitmap, turbulence.
+        0x61c2_3c20 | 0x5fb6_c24d | 0xcf2b_b6ae => 0,
+        // Composite, mélange, composition arithmétique, déplacement,
+        // masque alpha, fondu.
+        0x48fc_9f51 | 0x81c5_b77b | 0xfc15_1437 | 0xedc4_8364 | 0xc80e_cff0 | 0x12f5_75e8 => 2,
         _ => 1,
     }
 }
@@ -941,20 +1117,49 @@ unsafe extern "win64" fn dc_create_effect(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
+    create_effect(Com::get(this).factory, clsid, out)
+}
+
+/// ID2D1DeviceContext::CreateEffect et ID2D1EffectContext::CreateEffect.
+unsafe fn create_effect(
+    factory: *mut FactoryObj,
+    clsid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
     let Some(id) = clsid.as_ref().copied() else {
         return E_INVALIDARG;
     };
-    let n = registered_inputs(&id).unwrap_or_else(|| builtin_inputs(&id));
-    let factory = Com::get(this).factory;
+    let reg = registration(&id);
+    if reg.is_none() && !is_builtin_effect(&id) {
+        crate::log_debug!("d2d1", "CreateEffect {:?} : effet non enregistré", id);
+        return D2DERR_EFFECT_IS_NOT_REGISTERED;
+    }
+    let n = reg
+        .as_ref()
+        .map_or_else(|| builtin_inputs(&id), |r| r.inputs);
     Com::add_ref(factory);
     let e = Effect {
         clsid: id,
         inputs: Mutex::new(vec![std::ptr::null_mut(); n]),
         props: Mutex::new(Default::default()),
         factory,
+        custom: OnceLock::new(),
+        desc: None,
     };
     crate::log_debug!("d2d1", "CreateEffect {:?} ({} entrée(s))", id, n);
-    put(out, Com::create(EFFECT_VT.ptr(), e))
+    let obj = Com::create(EFFECT_VT.ptr(), e);
+    if let Some(reg) = reg {
+        let hr = custom::instantiate(reg, obj);
+        if hr < 0 {
+            Com::release(obj);
+            return hr;
+        }
+    }
+    put(out, obj)
 }
 
 unsafe extern "win64" fn effect_qi(
@@ -964,37 +1169,94 @@ unsafe extern "win64" fn effect_qi(
 ) -> i32 {
     qi_list(this, riid, out, &[IID_D2D1_PROPERTIES, IID_D2D1_EFFECT])
 }
+/// Noms des propriétés système (D2D1_PROPERTY_CLSID = 0x80000000 et suivantes).
+const SYSTEM_PROPS: [(&str, u32); 10] = [
+    ("CLSID", custom::ty::CLSID),
+    ("DisplayName", custom::ty::STRING),
+    ("Author", custom::ty::STRING),
+    ("Category", custom::ty::STRING),
+    ("Description", custom::ty::STRING),
+    ("Inputs", custom::ty::ARRAY),
+    ("Cached", custom::ty::BOOL),
+    ("Precision", custom::ty::ENUM),
+    ("MinInputs", custom::ty::UINT32),
+    ("MaxInputs", custom::ty::UINT32),
+];
+
+/// Nom et type d'une propriété (personnalisée ou système).
+fn prop_info(e: &Effect, index: u32) -> Option<(String, u32)> {
+    if index >= PROP_CLSID {
+        let (n, t) = SYSTEM_PROPS.get((index - PROP_CLSID) as usize)?;
+        return Some((n.to_string(), *t));
+    }
+    let p = e.reg()?.props.get(index as usize)?;
+    Some((p.name.clone(), p.ty))
+}
+
+unsafe fn prop_by_name(e: &Effect, name: *const u16) -> u32 {
+    let name = wide(name);
+    if let Some(r) = e.reg() {
+        if let Some(i) = r.props.iter().position(|p| p.name == name) {
+            return i as u32;
+        }
+    }
+    SYSTEM_PROPS
+        .iter()
+        .position(|(n, _)| *n == name)
+        .map_or(u32::MAX, |i| PROP_CLSID + i as u32)
+}
+
 unsafe extern "win64" fn effect_prop_count(this: *mut EffectObj) -> u32 {
-    crate::dlls::lock(&Com::get(this).props).len() as u32
+    let e = Com::get(this);
+    match e.reg() {
+        Some(r) => r.props.len() as u32,
+        None => crate::dlls::lock(&e.props)
+            .keys()
+            .filter(|&&k| k < PROP_CLSID)
+            .count() as u32,
+    }
 }
 unsafe extern "win64" fn effect_prop_name(
-    _: *mut EffectObj,
-    _: u32,
+    this: *mut EffectObj,
+    index: u32,
     name: *mut u16,
     n: u32,
 ) -> i32 {
-    if !name.is_null() && n > 0 {
-        *name = 0;
+    let Some((s, _)) = prop_info(Com::get(this), index) else {
+        if !name.is_null() && n > 0 {
+            *name = 0;
+        }
+        return E_INVALIDARG;
+    };
+    let w: Vec<u16> = s.encode_utf16().collect();
+    if name.is_null() || (n as usize) <= w.len() {
+        return D2DERR_INSUFFICIENT_BUFFER;
     }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), name, w.len());
+    *name.add(w.len()) = 0;
     S_OK
 }
-unsafe extern "win64" fn effect_zero(_: *mut EffectObj) -> u32 {
-    0
+unsafe extern "win64" fn effect_name_length(this: *mut EffectObj, index: u32) -> u32 {
+    prop_info(Com::get(this), index).map_or(0, |(s, _)| s.encode_utf16().count() as u32)
 }
-unsafe extern "win64" fn effect_prop_type(_: *mut EffectObj, _: u32) -> u32 {
-    0 // D2D1_PROPERTY_TYPE_UNKNOWN
+unsafe extern "win64" fn effect_prop_type(this: *mut EffectObj, index: u32) -> u32 {
+    prop_info(Com::get(this), index).map_or(0, |(_, t)| t) // 0 : D2D1_PROPERTY_TYPE_UNKNOWN
 }
-unsafe extern "win64" fn effect_prop_index(_: *mut EffectObj, _: *const u16) -> u32 {
-    u32::MAX // D2D1_INVALID_PROPERTY_INDEX
+unsafe extern "win64" fn effect_prop_index(this: *mut EffectObj, name: *const u16) -> u32 {
+    prop_by_name(Com::get(this), name) // u32::MAX : D2D1_INVALID_PROPERTY_INDEX
 }
 unsafe extern "win64" fn effect_set_by_name(
-    _: *mut EffectObj,
-    _: *const u16,
-    _: u32,
-    _: *const u8,
-    _: u32,
+    this: *mut EffectObj,
+    name: *const u16,
+    ty: u32,
+    data: *const u8,
+    size: u32,
 ) -> i32 {
-    S_OK
+    let i = prop_by_name(Com::get(this), name);
+    if i == u32::MAX {
+        return E_INVALIDARG;
+    }
+    effect_set_value(this, i, ty, data, size)
 }
 unsafe extern "win64" fn effect_set_value(
     this: *mut EffectObj,
@@ -1011,26 +1273,37 @@ unsafe extern "win64" fn effect_set_value(
     } else {
         Vec::new()
     };
-    crate::dlls::lock(&Com::get(this).props).insert(index, v);
+    let e = Com::get(this);
+    if let Some(hr) = custom::set_value(e, index, &v) {
+        return hr;
+    }
+    crate::dlls::lock(&e.props).insert(index, v);
     S_OK
 }
 unsafe extern "win64" fn effect_get_by_name(
-    _: *mut EffectObj,
-    _: *const u16,
-    _: u32,
+    this: *mut EffectObj,
+    name: *const u16,
+    ty: u32,
     data: *mut u8,
     size: u32,
 ) -> i32 {
-    if !data.is_null() {
-        std::ptr::write_bytes(data, 0, size as usize);
+    let i = prop_by_name(Com::get(this), name);
+    if i == u32::MAX {
+        if !data.is_null() {
+            std::ptr::write_bytes(data, 0, size as usize);
+        }
+        return E_INVALIDARG;
     }
-    E_INVALIDARG
+    effect_get_value(this, i, ty, data, size)
 }
 unsafe fn system_prop(e: &Effect, index: u32) -> Option<Vec<u8>> {
     let n = crate::dlls::lock(&e.inputs).len() as u32;
     let bytes = |v: u32| v.to_le_bytes().to_vec();
     Some(match index {
         PROP_CLSID => std::slice::from_raw_parts(&e.clsid as *const Guid as *const u8, 16).to_vec(),
+        0x8000_0001..=0x8000_0004 => {
+            custom::system_string(e, (index - 0x8000_0001) as usize).unwrap_or_else(|| vec![0, 0])
+        }
         PROP_CACHED => bytes(0),
         PROP_PRECISION => bytes(0),
         PROP_MIN_INPUTS | PROP_MAX_INPUTS | PROP_INPUTS => bytes(n),
@@ -1048,6 +1321,9 @@ unsafe extern "win64" fn effect_get_value(
         return E_INVALIDARG;
     }
     let e = Com::get(this);
+    if let Some((hr, _)) = custom::get_value(e, index, data, size) {
+        return hr;
+    }
     let v = crate::dlls::lock(&e.props)
         .get(&index)
         .cloned()
@@ -1059,6 +1335,9 @@ unsafe extern "win64" fn effect_get_value(
 }
 unsafe extern "win64" fn effect_value_size(this: *mut EffectObj, index: u32) -> u32 {
     let e = Com::get(this);
+    if let Some((_, n)) = custom::get_value(e, index, std::ptr::null_mut(), 0) {
+        return n;
+    }
     crate::dlls::lock(&e.props)
         .get(&index)
         .map(|v| v.len())
@@ -1086,6 +1365,8 @@ unsafe extern "win64" fn effect_set_input(
         com_add_ref(input);
     }
     let old = std::mem::replace(&mut inputs[i], input);
+    drop(inputs);
+    custom::inputs_changed(Com::get(this));
     if !old.is_null() {
         com_release(old);
     }
@@ -1099,6 +1380,8 @@ unsafe extern "win64" fn effect_set_input_count(this: *mut EffectObj, n: u32) ->
         }
     }
     inputs.resize(n as usize, std::ptr::null_mut());
+    drop(inputs);
+    custom::inputs_changed(Com::get(this));
     S_OK
 }
 unsafe extern "win64" fn effect_get_input(this: *mut EffectObj, index: u32, out: *mut *mut c_void) {
@@ -1133,7 +1416,7 @@ static EFFECT_VT: VTable<19> = VTable([
     release::<Effect> as *const (),
     effect_prop_count as *const (),
     effect_prop_name as *const (),
-    effect_zero as *const (), // GetPropertyNameLength
+    effect_name_length as *const (),
     effect_prop_type as *const (),
     effect_prop_index as *const (),
     effect_set_by_name as *const (),
@@ -1175,24 +1458,54 @@ static EFFECT_IMAGE_VT: VTable<4> = VTable([
     get_factory::<EffectImage> as *const (),
 ]);
 
-/// Pixels BGRA prémultipliés d'une image (bitmap ou sortie d'effet).
-/// Les effets rendent pour l'instant leur première entrée telle quelle.
-unsafe fn image_pixels(image: *mut c_void, depth: u32) -> Option<(u32, u32, Vec<u8>)> {
+/// Image calculée : pixels BGRA prémultipliés et position dans la scène.
+pub(super) struct Img {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub px: Vec<u8>,
+}
+
+/// Pixels d'une image (bitmap ou sortie d'effet). `hint` : taille de la
+/// cible, qui borne les sorties sans limite.
+unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32)) -> Option<Img> {
     if image.is_null() || depth > 32 {
         return None;
     }
     let vt = *(image as *const *const ());
     if vt == BITMAP_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
-        return Some((b.w, b.h, crate::dlls::lock(&b.px).clone()));
+        return Some(Img {
+            x: 0,
+            y: 0,
+            w: b.w,
+            h: b.h,
+            px: crate::dlls::lock(&b.px).clone(),
+        });
     }
     if vt == EFFECT_IMAGE_VT.ptr() {
-        let e = Com::get(Com::get(image as *mut Com<Res<EffectImage>>).data.effect);
-        warn_effect_once(&e.clsid);
-        let first = crate::dlls::lock(&e.inputs).first().copied()?;
-        return image_pixels(first, depth + 1);
+        let e = Com::get(image as *mut Com<Res<EffectImage>>).data.effect;
+        return image_of_effect(e.cast(), depth, hint);
     }
     None
+}
+
+/// Sortie d'un ID2D1Effect.
+unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> Option<Img> {
+    if effect.is_null() || *(effect as *const *const ()) != EFFECT_VT.ptr() {
+        return None;
+    }
+    let obj = effect as *mut EffectObj;
+    let e = Com::get(obj);
+    if e.custom.get().is_some() {
+        if let Some(img) = custom::render(obj, depth, hint) {
+            return Some(img);
+        }
+    }
+    warn_effect_once(&e.clsid);
+    let first = crate::dlls::lock(&e.inputs).first().copied()?;
+    image_img(first, depth + 1, hint)
 }
 
 fn warn_effect_once(id: &Guid) {
@@ -1221,23 +1534,45 @@ unsafe extern "win64" fn dc_draw_image(
     interp: u32,
     _composite: u32,
 ) {
-    let Some((w, h, px)) = image_pixels(image, 0) else {
+    let hint = {
+        let t = target(this);
+        (t.w, t.h)
+    };
+    let Some(img) = image_img(image, 0, hint) else {
         return;
     };
+    // Rectangle source dans l'espace de l'image (son origine peut ne pas
+    // être 0, 0 pour une sortie d'effet).
+    let (ix, iy) = (img.x as f32, img.y as f32);
     let src = rect.as_ref().copied().unwrap_or(RectF {
-        l: 0.0,
-        t: 0.0,
-        r: w as f32,
-        b: h as f32,
+        l: ix,
+        t: iy,
+        r: ix + img.w as f32,
+        b: iy + img.h as f32,
     });
     let (ox, oy) = offset.as_ref().map_or((0.0, 0.0), |o| (o[0], o[1]));
     let dst = RectF {
-        l: ox,
-        t: oy,
-        r: ox + (src.r - src.l),
-        b: oy + (src.b - src.t),
+        l: ox + src.l,
+        t: oy + src.t,
+        r: ox + src.r,
+        b: oy + src.b,
     };
-    draw_bitmap_pixels(this, &px, w, h, &dst, 1.0, interpolation(interp), &src);
+    let local = RectF {
+        l: src.l - ix,
+        t: src.t - iy,
+        r: src.r - ix,
+        b: src.b - iy,
+    };
+    draw_bitmap_pixels(
+        this,
+        &img.px,
+        img.w,
+        img.h,
+        &dst,
+        1.0,
+        interpolation(interp),
+        &local,
+    );
 }
 
 unsafe extern "win64" fn dc_blend_image(
@@ -1273,13 +1608,24 @@ unsafe extern "win64" fn dc_image_local_bounds(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let (w, h) = image_pixels(image, 0).map_or((0, 0), |(w, h, _)| (w, h));
-    *out = RectF {
-        l: 0.0,
-        t: 0.0,
-        r: w as f32,
-        b: h as f32,
+    let hint = {
+        let t = target(_this);
+        (t.w, t.h)
     };
+    *out = image_img(image, 0, hint).map_or(
+        RectF {
+            l: 0.0,
+            t: 0.0,
+            r: 0.0,
+            b: 0.0,
+        },
+        |i| RectF {
+            l: i.x as f32,
+            t: i.y as f32,
+            r: (i.x + i.w as i32) as f32,
+            b: (i.y + i.h as i32) as f32,
+        },
+    );
     S_OK
 }
 
@@ -2205,6 +2551,8 @@ mod tests {
                     inputs: Mutex::new(vec![std::ptr::null_mut()]),
                     props: Mutex::new(Default::default()),
                     factory: f,
+                    custom: OnceLock::new(),
+                    desc: None,
                 },
             );
             let v = 7u32.to_le_bytes();

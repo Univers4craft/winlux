@@ -16,7 +16,7 @@ use super::{
     as_simple, create_dummy_com_obj, ctx_clear_rtv, ctx_copy_subresource, ctx_flush,
     ctx_update_subresource, dev_check_ms, dev_create_rtv, dev_create_srv, dev_create_stub,
     dev_create_tex2d, dev_create_uav, dev_get_immediate_context, gl_here, Device, DeviceContext,
-    E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, IID_IUNKNOWN, S_OK,
+    E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
 };
 use crate::dlls::gl_bindings as gl;
 use crate::dlls::ole32::Guid;
@@ -237,7 +237,7 @@ unsafe extern "win64" fn dev_open_shared1(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device1::OpenSharedResource1")
 }
 
 unsafe extern "win64" fn dev_open_by_name(
@@ -250,7 +250,7 @@ unsafe extern "win64" fn dev_open_by_name(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device1::OpenSharedResourceByName")
 }
 
 unsafe extern "win64" fn dev_resource_tiling(
@@ -346,7 +346,7 @@ unsafe extern "win64" fn dev_open_fence(_: *mut Device, _: usize, _: *const Guid
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device5::OpenSharedFence")
 }
 
 unsafe extern "win64" fn dev_create_fence(
@@ -489,7 +489,7 @@ unsafe extern "win64" fn fence_shared_handle(
     if !out.is_null() {
         *out = 0;
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Fence::CreateSharedHandle")
 }
 unsafe extern "win64" fn fence_completed(this: *mut Fence) -> u64 {
     (*this).value.load(Ordering::Acquire)

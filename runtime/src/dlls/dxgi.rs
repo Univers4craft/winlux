@@ -756,7 +756,7 @@ unsafe extern "win64" fn adapter_get_desc2(
     adapter_get_desc1(this, out)
 }
 unsafe extern "win64" fn adapter_notimpl() -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIAdapter (méthode non prise en charge)")
 }
 unsafe extern "win64" fn adapter_ok() -> i32 {
     S_OK
@@ -1069,7 +1069,7 @@ unsafe extern "win64" fn sc_get_output(_: *mut DxgiSwapChain, _: *mut *mut c_voi
     DXGI_ERROR_NOT_FOUND
 }
 unsafe extern "win64" fn sc_get_stats(_: *mut DxgiSwapChain, _: *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGISwapChain::GetFrameStatistics")
 }
 unsafe extern "win64" fn sc_get_present_count(this: *mut DxgiSwapChain, out: *mut u32) -> i32 {
     if out.is_null() {
@@ -1384,7 +1384,7 @@ unsafe extern "win64" fn fac_zero(_: *mut DxgiFactory) -> i32 {
     0
 }
 unsafe extern "win64" fn fac_notimpl() -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIFactory (méthode non prise en charge)")
 }
 unsafe extern "win64" fn fac_ok() -> i32 {
     S_OK
@@ -1651,6 +1651,6 @@ mod adapter_desc_tests {
         // DXGI_ADAPTER_DESC 304 octets, DESC1 312 ; DESC2/3 = 320.
         assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc>(), 304);
         assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc1>(), 312);
-        assert!(super::DXGI_ADAPTER_DESC2_SIZE >= 312 + 8);
+        assert_eq!(super::DXGI_ADAPTER_DESC2_SIZE, 320);
     }
 }

@@ -2,6 +2,17 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+/// Méthode absente : rend E_NOTIMPL et le note une fois dans le journal, avec
+/// son nom, pour savoir ce qu'une application attend encore.
+macro_rules! unsupported {
+    ($name:literal) => {{
+        unsafe extern "win64" fn f() -> i32 {
+            $crate::dlls::d2d1::unsupported_call($name)
+        }
+        f as *const ()
+    }};
+}
+
 pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
@@ -154,6 +165,7 @@ pub mod spirv;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
+pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod user32;
 pub mod user32_ext;

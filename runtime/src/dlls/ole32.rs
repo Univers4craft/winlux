@@ -858,6 +858,15 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
+        if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
+        crate::log_warn!(
+            "com",
+            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG)",
+            guid_text(&guid)
+        );
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
@@ -901,6 +910,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
+        crate::log_warn!(
+            "com",
+            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG)",
+            guid_text(&guid)
+        );
         return REGDB_E_CLASSNOTREG;
     };
     let entry = Arc::clone(entry);

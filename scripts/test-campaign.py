@@ -685,4 +685,10 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
 
+# #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
+ok((SCRIPTS / "test-paintnet-d2d.py").exists()
+   and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
+   "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

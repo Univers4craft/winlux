@@ -145,6 +145,7 @@ FindResourceA
 FindResourceExA
 FindResourceExW
 FindResourceW
+FindStringOrdinal
 FindVolumeClose
 FlsAlloc
 FlsFree

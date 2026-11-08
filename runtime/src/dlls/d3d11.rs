@@ -13,6 +13,8 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
+#[path = "d2d1_shader.rs"]
+pub(crate) mod d2d_shader;
 #[path = "d3d11_ext.rs"]
 mod ext;
 #[path = "d3d11_pipeline.rs"]
@@ -2067,7 +2069,7 @@ unsafe extern "win64" fn ctx_get_flags(_: *mut DeviceContext) -> u32 {
     0
 }
 unsafe extern "win64" fn ctx_finish_cl(_: *mut DeviceContext, _: i32, _: *mut *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11DeviceContext::FinishCommandList")
 }
 unsafe extern "win64" fn ctx_noop_copy_struct(
     _: *mut DeviceContext,
@@ -3433,7 +3435,7 @@ unsafe extern "win64" fn dxdev_create_surface(
     if !out.is_null() {
         unsafe { *out = std::ptr::null_mut() };
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIDevice::CreateSurface")
 }
 unsafe extern "win64" fn dxdev_residency(
     _: *mut DxgiDevice,
@@ -3656,7 +3658,7 @@ unsafe extern "win64" fn dev_create_stub(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device (création non prise en charge)")
 }
 
 unsafe extern "win64" fn dev_create_srv(
@@ -3828,7 +3830,7 @@ unsafe extern "win64" fn dev_create_gs_so(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateGeometryShaderWithStreamOutput")
 }
 
 unsafe extern "win64" fn dev_create_ps(
@@ -3859,7 +3861,7 @@ unsafe extern "win64" fn dev_create_hs(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateHullShader")
 }
 unsafe extern "win64" fn dev_create_ds(
     _: *mut Device,
@@ -3871,7 +3873,7 @@ unsafe extern "win64" fn dev_create_ds(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDomainShader")
 }
 unsafe extern "win64" fn dev_create_cs(
     _: *mut Device,
@@ -3894,7 +3896,7 @@ unsafe extern "win64" fn dev_create_cl(_: *mut Device, out: *mut *mut c_void) ->
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateClassLinkage")
 }
 
 fn create_dummy_com_obj() -> *mut c_void {
@@ -3922,7 +3924,7 @@ unsafe extern "win64" fn dev_create_state(
 }
 
 unsafe extern "win64" fn dev_create_deferred(_: *mut Device, _: u32, _: *mut *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDeferredContext")
 }
 unsafe extern "win64" fn dev_open_shared(
     _: *mut Device,
@@ -3930,7 +3932,7 @@ unsafe extern "win64" fn dev_open_shared(
     _: *const Guid,
     _: *mut *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
 }
 
 unsafe extern "win64" fn dev_check_format(_: *mut Device, _format: u32, out: *mut u32) -> i32 {
@@ -3962,7 +3964,7 @@ unsafe extern "win64" fn dev_check_counter(
     _: *mut u8,
     _: *mut u32,
 ) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CheckCounter")
 }
 
 /// CheckFeatureSupport : la structure demandée est toujours remplie ; ce que
@@ -4308,7 +4310,8 @@ mod vtable_tests {
             core::mem::offset_of!(DeviceContextVTable, finish_command_list),
             114 * 8
         );
-        assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 115 * 8);
+        // ID3D11DeviceContext1 à 4 : 34 méthodes de plus (115 à 148).
+        assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 149 * 8);
     }
 
     #[test]

@@ -18,23 +18,12 @@ use super::ole32::Guid;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-/// Méthode absente : rend E_NOTIMPL et le note une fois dans le journal, avec
-/// son nom, pour savoir ce qu'une application attend encore.
-macro_rules! unsupported {
-    ($name:literal) => {{
-        unsafe extern "win64" fn f() -> i32 {
-            $crate::dlls::d2d1::unsupported_call($name)
-        }
-        f as *const ()
-    }};
-}
-
 pub(crate) fn unsupported_call(name: &'static str) -> i32 {
     static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     let mut seen = crate::dlls::lock(&SEEN);
     if !seen.contains(&name) {
         seen.push(name);
-        crate::log_warn!("d2d1", "{} non pris en charge (E_NOTIMPL)", name);
+        crate::log_warn!("com", "méthode {} non prise en charge (E_NOTIMPL)", name);
     }
     E_NOTIMPL
 }
@@ -198,9 +187,6 @@ pub(super) unsafe extern "win64" fn add_ref<T>(this: *mut Com<T>) -> u32 {
 }
 pub(super) unsafe extern "win64" fn release<T>(this: *mut Com<T>) -> u32 {
     Com::release(this)
-}
-pub(super) unsafe extern "win64" fn not_implemented() -> i32 {
-    E_NOTIMPL
 }
 pub(super) unsafe extern "win64" fn nothing() {}
 
@@ -487,7 +473,7 @@ static FACTORY_VT: VTable<33> = VTable([
     v11::factory_register_string as *const (),
     v11::factory_unregister as *const (),
     v11::factory_registered as *const (),
-    unsupported!("GetEffectProperties"),
+    v11::factory_effect_properties as *const (),
     // ID2D1Factory2 à 7 : CreateDevice rend ID2D1Device1 à 6.
     v11::factory_create_device as *const (),
     v11::factory_create_device as *const (),

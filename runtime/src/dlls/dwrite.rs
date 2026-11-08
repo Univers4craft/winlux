@@ -15,7 +15,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::audio_com::{guid, put, Com, VTable, E_INVALIDARG, E_POINTER, S_OK};
-use super::d2d1::{add_ref, method, not_implemented, nothing, qi_list, release};
+use super::d2d1::{add_ref, method, nothing, qi_list, release};
 use super::d2d_raster::{Path, Pt};
 use super::gdi32_fonts::FontFace;
 use super::ole32::Guid;
@@ -610,11 +610,11 @@ static FACTORY_VT: VTable<24> = VTable([
     add_ref::<()> as *const (),
     release::<()> as *const (),
     system_collection as *const (),
-    not_implemented as *const (), // CreateCustomFontCollection
+    unsupported!("CreateCustomFontCollection"),
     register_loader as *const (), // RegisterFontCollectionLoader
     register_loader as *const (), // UnregisterFontCollectionLoader
     font_file_reference as *const (),
-    not_implemented as *const (), // CreateCustomFontFileReference
+    unsupported!("CreateCustomFontFileReference"),
     factory_font_face as *const (),
     rendering_params as *const (),
     monitor_rendering_params as *const (),
@@ -622,14 +622,14 @@ static FACTORY_VT: VTable<24> = VTable([
     register_loader as *const (), // RegisterFontFileLoader
     register_loader as *const (), // UnregisterFontFileLoader
     create_text_format as *const (),
-    not_implemented as *const (), // CreateTypography
-    not_implemented as *const (), // GetGdiInterop
+    unsupported!("CreateTypography"),
+    unsupported!("GetGdiInterop"),
     create_text_layout as *const (),
     gdi_compatible_layout as *const (),
-    not_implemented as *const (), // CreateEllipsisTrimmingSign
-    not_implemented as *const (), // CreateTextAnalyzer
-    not_implemented as *const (), // CreateNumberSubstitution
-    not_implemented as *const (), // CreateGlyphRunAnalysis
+    unsupported!("CreateEllipsisTrimmingSign"),
+    unsupported!("CreateTextAnalyzer"),
+    unsupported!("CreateNumberSubstitution"),
+    unsupported!("CreateGlyphRunAnalysis"),
 ]);
 
 // Paramètres de rendu : valeurs par défaut de Windows.
@@ -728,7 +728,7 @@ static FILE_VT: VTable<6> = VTable([
     add_ref::<PathBuf> as *const (),
     release::<PathBuf> as *const (),
     file_key as *const (),
-    not_implemented as *const (), // GetLoader
+    unsupported!("GetLoader"),
     file_analyze as *const (),
 ]);
 
