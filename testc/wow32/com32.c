@@ -358,6 +358,24 @@ int main(void)
     IObjectArray_Release(removed);
     CHECK(ICustomDestinationList_AppendKnownCategory(jl, KDC_RECENT) == S_OK, "AppendKnownCategory");
     CHECK(ICustomDestinationList_CommitList(jl) == S_OK, "CommitList");
+    /* Collection d'objets x86 (tâches de la liste, #905). */
+    IObjectCollection *coll = NULL;
+    CHECK(CoCreateInstance(&CLSID_EnumerableObjectCollection, NULL, CLSCTX_INPROC_SERVER, &IID_IObjectCollection,
+                           (void **)&coll) == S_OK && coll, "CoCreateInstance(CLSID_EnumerableObjectCollection)");
+    CHECK(IObjectCollection_AddObject(coll, (IUnknown *)&the_test) == S_OK, "AddObject d'un objet x86");
+    UINT ncoll = 0;
+    CHECK(IObjectCollection_GetCount(coll, &ncoll) == S_OK && ncoll == 1, "GetCount");
+    IUnknown *got_back = NULL;
+    CHECK(IObjectCollection_GetAt(coll, 0, &IID_IUnknown, (void **)&got_back) == S_OK && got_back == (IUnknown *)&the_test,
+          "GetAt rend l'objet x86 lui-même");
+    IUnknown_Release(got_back);
+    IObjectArray *as_array = NULL;
+    CHECK(IObjectCollection_QueryInterface(coll, &IID_IObjectArray, (void **)&as_array) == S_OK && as_array,
+          "QI IObjectArray");
+    CHECK(ICustomDestinationList_AddUserTasks(jl, as_array) == S_OK, "AddUserTasks");
+    IObjectArray_Release(as_array);
+    CHECK(IObjectCollection_Clear(coll) == S_OK, "Clear");
+    IObjectCollection_Release(coll);
     ICustomDestinationList_Release(jl);
 
     /* uxtheme demandé par la VCL : aucune fonction ne manque. */
