@@ -1169,4 +1169,7 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+ok("TEXT_FORMAT3" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8")
+   and "format3_and_layout4_answer_and_keep_their_settings" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 et IDWriteTextLayout4 (Paint.NET 5.1, #1118)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
