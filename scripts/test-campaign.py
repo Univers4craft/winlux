@@ -1391,6 +1391,16 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+# #1198 : WMI en lecture (WbemLocator, ROOT\\CIMV2, WQL, classes Win32_*),
+# CoInitializeSecurity / CoSetProxyBlanket, en 64 et en 32 bits.
+wbem_rs = (runtime_dlls / "wbem.rs").read_text(encoding="utf-8")
+ok("CLSID_WBEM_LOCATOR" in wbem_rs and '"Win32_VideoController"' in wbem_rs
+   and '"CoSetProxyBlanket"=>fn' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
+   and "IWBEMCLASSOBJECT" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "wmi_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "wmi32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
+   and "wmi_par_com" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "WMI : WbemLocator, WQL et dix classes Win32_*, en x64 et en x86 (#1198)")
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")

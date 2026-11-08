@@ -241,7 +241,7 @@ impl Builder {
 }
 
 /// Nom d'adaptateur stable, au format GUID comme sous Windows.
-fn adapter_guid(a: &Adapter) -> String {
+pub(crate) fn adapter_guid(a: &Adapter) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in a.name.bytes() {
         hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3);
