@@ -16,6 +16,10 @@
 //!   mode clair des applis et du système, transparence. Flow Launcher lit
 //!   AppsUseLightTheme par Registry.GetValue, qui rend null sans la clé
 //!   (#1170). Une valeur déjà posée est gardée.
+//! - `HKLM\Software\Microsoft\Cryptography\MachineGuid` : identifiant de
+//!   la machine (licences, inventaire), dérivé de /etc/machine-id. Posé
+//!   seulement s'il manque, puis enregistré comme une valeur ordinaire :
+//!   il ne change plus, même si machine-id change (#1196).
 
 use super::{utf16z, Data, REG_BINARY, REG_DWORD, REG_SZ};
 use std::path::{Path, PathBuf};
@@ -326,6 +330,50 @@ fn apply(data: &mut Data) {
     }
     gesture_recognizer(data);
     personalize(data);
+    machine_guid(data, &linux_machine_id());
+}
+
+pub const CRYPTOGRAPHY: &str = "hklm\\Software\\Microsoft\\Cryptography";
+
+/// Contenu de /etc/machine-id (ou de celui de D-Bus), sans espaces.
+fn linux_machine_id() -> String {
+    ["/etc/machine-id", "/var/lib/dbus/machine-id"]
+        .iter()
+        .find_map(|p| {
+            let s = std::fs::read_to_string(p).ok()?;
+            let s = s.trim().to_string();
+            (!s.is_empty()).then_some(s)
+        })
+        .unwrap_or_default()
+}
+
+/// GUID au format de MachineGuid, dérivé de `machine_id` par SHA-256 :
+/// l'identifiant Linux lui-même n'est pas exposé aux programmes.
+pub fn machine_guid_of(machine_id: &str) -> String {
+    let h = crate::dlls::bcrypt::sha256(format!("winlux MachineGuid {machine_id}").as_bytes());
+    let x: String = h[..16].iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &x[..8],
+        &x[8..12],
+        &x[12..16],
+        &x[16..20],
+        &x[20..32]
+    )
+}
+
+/// Pose MachineGuid s'il manque ; une valeur existante n'est jamais changée.
+pub fn machine_guid(data: &mut Data, machine_id: &str) {
+    if machine_id.is_empty() || data.raw_get(CRYPTOGRAPHY, "MachineGuid").is_some() {
+        return;
+    }
+    data.raw_ensure(CRYPTOGRAPHY);
+    text(
+        data,
+        CRYPTOGRAPHY,
+        "MachineGuid",
+        &machine_guid_of(machine_id),
+    );
 }
 
 /// Moteur de gestes intégré : WPF lit ici le chemin de mshwgst.dll et ne

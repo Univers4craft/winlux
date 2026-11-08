@@ -166,6 +166,9 @@ step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_b
 # Instructions du processeur (#1195, Photoshop exige SSE 4.2) :
 # IsProcessorFeaturePresent suit CPUID pour SSSE3, SSE4.1, SSE4.2, AVX-512F.
 step "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2, AVX-512F (#1195)" cargo test -q -p winlux -- instructions_sse4_et_avx512_suivent_cpuid
+# Identifiant de la machine (#1196, licences, inventaire) : MachineGuid
+# dérivé de machine-id, au format GUID, jamais remplacé une fois posé.
+step "MachineGuid dans le registre (#1196)" cargo test -q -p winlux -- machine_guid_derive_de_machine_id_et_stable
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
