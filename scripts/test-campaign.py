@@ -1062,4 +1062,8 @@ ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_t
    "Shell PE : winlux-shell-app notepad (#1027)")
 ok('"AllowSetForegroundWindow"=>fn allow_set_foreground_window' in (runtime_dlls / "user32.rs").read_text(),
    "user32 : AllowSetForegroundWindow et LockSetForegroundWindow exportées (#1074, Flow Launcher)")
+gui_source = (runtime_dlls / "gui.rs").read_text()
+ok("fn la_fenetre_existe_encore_pendant_wm_destroy" in gui_source
+   and "la_fenetre_existe_encore_pendant_wm_destroy" in (SCRIPTS / "test-all.sh").read_text(),
+   "DestroyWindow : la fenêtre et son fil restent connus pendant WM_DESTROY et WM_NCDESTROY (#1079, Paint.NET)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

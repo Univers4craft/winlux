@@ -7,7 +7,7 @@
 //! boucle de messages d'une application sans serveur graphique. Un backend
 //! X11 branchera ici.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
@@ -3014,15 +3014,29 @@ pub fn request_paint(hwnd: usize) {
 /// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
 const SYSTEM_PAINT: u32 = 0x5750;
 
+/// Fenêtres en cours de destruction : encore dans la table (IsWindow,
+/// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
+/// Windows, mais un second DestroyWindow ne les reprend pas (#1079).
+fn destroying() -> &'static Mutex<HashSet<usize>> {
+    static S: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 pub fn destroy_window(hwnd: usize) -> bool {
-    // Capture du wndproc et du parent avant retrait de la table.
-    let (wnd_proc, parent, owner) = {
-        let mut map = lock(windows());
-        match map.remove(&hwnd) {
-            Some(w) => (Some(w.wnd_proc), w.parent, Some(w.owner)),
-            None => (None, 0, None),
+    // La fenêtre reste dans la table pendant WM_DESTROY et WM_NCDESTROY :
+    // WinForms y compare le fil de la fenêtre au fil appelant (#1079).
+    let (wnd_proc, owner) = {
+        let map = lock(windows());
+        match map.get(&hwnd) {
+            Some(w) => (w.wnd_proc, w.owner),
+            None => return false,
         }
     };
+    if !lock(destroying()).insert(hwnd) {
+        // DestroyWindow rappelé pendant la destruction de la même fenêtre.
+        return true;
+    }
+    let (wnd_proc, owner) = (Some(wnd_proc), Some(owner));
     // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
     lock(dcs()).retain(|_, d| d.hwnd != hwnd);
     discard_key_chars(hwnd);
@@ -3067,8 +3081,9 @@ pub fn destroy_window(hwnd: usize) -> bool {
     if let Some(wp) = wnd_proc {
         unsafe { call_wndproc(wp, hwnd, 0x0082, 0, 0) }; // WM_NCDESTROY
     }
-    let _ = parent;
-    let _ = owner;
+    // La HWND n'est plus valide qu'à partir d'ici.
+    lock(windows()).remove(&hwnd);
+    lock(destroying()).remove(&hwnd);
     true
 }
 
@@ -4440,6 +4455,57 @@ mod tests {
         post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
         assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         destroy_window(hwnd);
+    }
+
+    /// (fenêtre, message, fil rendu par GetWindowThreadProcessId, IsWindow).
+    static DESTRUCTION: Mutex<Vec<(usize, u32, u32, i32)>> = Mutex::new(Vec::new());
+
+    extern "win64" fn wnd_proc_destruction(hwnd: usize, msg: u32, _: usize, _: isize) -> isize {
+        if msg == WM_DESTROY || msg == 0x0082 {
+            let tid = unsafe {
+                crate::dlls::user32::get_window_thread_process_id(hwnd, std::ptr::null_mut())
+            };
+            let alive = unsafe { crate::dlls::user32::is_window(hwnd) };
+            lock(&DESTRUCTION).push((hwnd, msg, tid, alive));
+            // WinForms détruit parfois de nouveau la fenêtre pendant WM_DESTROY.
+            if msg == WM_DESTROY {
+                assert!(destroy_window(hwnd));
+            }
+        }
+        0
+    }
+
+    #[test]
+    fn la_fenetre_existe_encore_pendant_wm_destroy() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_destruction;
+        let parent = fenetre_de_test();
+        let enfant = fenetre_de_test();
+        for h in [parent, enfant] {
+            lock(windows()).get_mut(&h).unwrap().wnd_proc = proc_addr as usize;
+        }
+        lock(windows()).get_mut(&enfant).unwrap().parent = parent;
+        let tid = crate::dlls::kernel32::get_current_thread_id();
+        assert!(destroy_window(parent));
+        let vus: Vec<_> = lock(&DESTRUCTION)
+            .iter()
+            .filter(|e| e.0 == parent || e.0 == enfant)
+            .copied()
+            .collect();
+        // Ordre Win32 : WM_DESTROY du parent, puis de l'enfant, puis les
+        // WM_NCDESTROY ; la fenêtre et son fil restent connus jusqu'au bout.
+        assert_eq!(
+            vus,
+            vec![
+                (parent, WM_DESTROY, tid, 1),
+                (enfant, WM_DESTROY, tid, 1),
+                (enfant, 0x0082, tid, 1),
+                (parent, 0x0082, tid, 1),
+            ]
+        );
+        for h in [parent, enfant] {
+            assert_eq!(unsafe { crate::dlls::user32::is_window(h) }, 0);
+            assert!(!destroy_window(h));
+        }
     }
 
     fn fenetre_de_test() -> usize {
