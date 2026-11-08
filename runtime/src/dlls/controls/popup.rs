@@ -470,6 +470,34 @@ pub unsafe fn track(menu: usize, flags: u32, x: i32, y: i32, owner: usize) -> u3
     if depth() > 0 {
         return 0; // un seul menu à la fois, comme sous Windows
     }
+    // Menu ouvert par un clic droit sur l'icône du programme dans la zone de
+    // notification (#927) : « Ranger dans les icônes cachées » ajouté au bout,
+    // retiré à la fermeture. Le menu du programme est le même objet : ce que
+    // le programme y change pendant WM_INITMENUPOPUP reste visible.
+    let tray = crate::dlls::notifyicon::take_tray_menu();
+    let kept = menus::items(menu).map_or(0, |items| items.len());
+    if tray.is_some() {
+        menus::append(menu, MF_SEPARATOR, 0, None);
+        menus::append(
+            menu,
+            0,
+            crate::dlls::notifyicon::TRAY_HIDE_ID as usize,
+            Some(crate::dlls::notifyicon::hide_label().to_string()),
+        );
+    }
+    let picked = track_menu(menu, flags, x, y, owner);
+    if let Some(name) = tray {
+        menus::truncate(menu, kept);
+        if picked == crate::dlls::notifyicon::TRAY_HIDE_ID {
+            crate::dlls::notifyicon::hide_in_overflow(&name);
+            return 0;
+        }
+    }
+    finish(menu, flags, owner, picked)
+}
+
+/// Boucle du menu ; renvoie l'identifiant choisi (0 si annulé).
+unsafe fn track_menu(menu: usize, flags: u32, x: i32, y: i32, owner: usize) -> u32 {
     let notify = flags & TPM_NONOTIFY == 0 && owner != 0;
     if notify {
         user32::send_message_w(owner, WM_ENTERMENULOOP, 1, 0);
@@ -508,6 +536,11 @@ pub unsafe fn track(menu: usize, flags: u32, x: i32, y: i32, owner: usize) -> u3
     if notify {
         user32::send_message_w(owner, WM_EXITMENULOOP, 1, 0);
     }
+    picked
+}
+
+/// Commande choisie : renvoyée (TPM_RETURNCMD) ou envoyée au propriétaire.
+unsafe fn finish(menu: usize, flags: u32, owner: usize, picked: u32) -> u32 {
     if picked == 0 {
         return 0;
     }
@@ -668,6 +701,20 @@ mod tests {
             std::env::remove_var("WINLUX_POPUPMENU");
             assert_eq!(track(m, TPM_RETURNCMD, 10, 10, 0), 0);
             assert_eq!(track(0xDEAD, TPM_RETURNCMD, 0, 0, 0), 0);
+            // Clic droit sur l'icône du programme (#927) : l'entrée « Ranger
+            // dans les icônes cachées » est proposée, choisie sans renvoyer
+            // de commande au programme, puis retirée ; une seule fois.
+            let hide = crate::dlls::notifyicon::TRAY_HIDE_ID;
+            crate::dlls::notifyicon::note_tray_menu("putty");
+            std::env::set_var("WINLUX_POPUPMENU", hide.to_string());
+            assert_eq!(track(m, TPM_RETURNCMD, 10, 10, 0), 0);
+            assert_eq!(menus::items(m).unwrap().len(), 3);
+            assert_eq!(track(m, TPM_RETURNCMD, 10, 10, 0), 0);
+            crate::dlls::notifyicon::note_tray_menu("putty");
+            std::env::set_var("WINLUX_POPUPMENU", "41");
+            assert_eq!(track(m, TPM_RETURNCMD, 10, 10, 0), 41);
+            assert_eq!(menus::items(m).unwrap().len(), 3);
+            std::env::remove_var("WINLUX_POPUPMENU");
         }
     }
 }

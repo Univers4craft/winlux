@@ -10,6 +10,9 @@ notification derrière la flèche, à côté du réseau, et l'en ressortir.
    de son .exe (putty, filezilla).
 2. `winlux-tray overflow list|hide|show` lit et écrit hidden-legacy-items
    (XEmbed) et hidden-items (StatusNotifier), sans toucher nm-applet.
+   Clic droit : le menu du programme (TrackPopupMenu du runtime) reçoit
+   « Ranger dans les icônes cachées » (tests Rust de popup.rs) ; un programme
+   sans menu, ou Maj + clic droit, ouvre le petit menu de Winlux.
 3. Paramètres > Personnalisation : « Autres icônes de la barre d’état
    système », un interrupteur par icône, en quatre langues.
 4. Sous X (xvfb-run) avec xfce4-panel : deux programmes, deux noms retenus par
@@ -45,6 +48,12 @@ name = scope["program_name"]
 ok(name("/opt/apps/putty.exe") == "putty" and name("C:\\Programmes\\FileZilla.exe") == "filezilla"
    and name("Mon Appli (x86).exe") == "mon-appli--x86" and name("") == "winlux-programme",
    "nom de l'icône = nom du .exe en minuscules, chemin Windows compris")
+ok('elif command == "menu"' in source and "SHIFT_MASK" in source
+   and all(f'"{lang}": "' in source for lang in ("fr", "en", "es", "de")),
+   "menu de Winlux : programme sans menu ou Maj + clic droit, en quatre langues")
+popup = (HERE.parent / "runtime/src/dlls/controls/popup.rs").read_text(encoding="utf-8")
+ok("take_tray_menu()" in popup and "menus::truncate(menu, kept)" in popup,
+   "menu du programme : entrée ajoutée après un clic droit sur son icône, retirée à la fermeture")
 ok("GLib.set_prgname(program_name(executable))" in source and source.index("set_prgname") < source.index("Gtk.StatusIcon()"),
    "nom posé avant la première icône (la zone de notification le lit à la création)")
 
@@ -130,7 +139,7 @@ else:
                    WINLUX_TRAY_DIR=str(home / "tray"), WINLUX_LANG="fr")
         notify, tray_script = HERE / "winlux-notify-icon.py", HERE / "winlux-tray.py"
         script = f"""openbox & sleep 1; xfce4-panel --disable-wm-check & sleep 3
-( printf 'set\\tk1\\t/opt/apps/putty.exe\\tPuTTY\\t1\\n'; sleep 30 ) | {sys.executable} -B {notify} >/dev/null 2>&1 &
+( printf 'set\\tk1\\t/opt/apps/putty.exe\\tPuTTY\\t1\\n'; sleep 10; printf 'menu\\tk1\\n'; sleep 30 ) | {sys.executable} -B {notify} >/dev/null 2>&1 &
 ( printf 'set\\tk2\\tC:\\\\Programmes\\\\FileZilla.exe\\tFileZilla\\t1\\n'; sleep 30 ) | {sys.executable} -B {notify} >/dev/null 2>&1 &
 sleep 5
 {sys.executable} -B {tray_script} overflow list > "{temp}/avant.json"
@@ -139,6 +148,13 @@ pid=$(pgrep -nx xfce4-panel)
 sleep 2
 {sys.executable} -B {tray_script} overflow list > "{temp}/apres.json"
 test "$(pgrep -nx xfce4-panel)" = "$pid" && echo meme > "{temp}/barre"
+{sys.executable} -B {tray_script} overflow show putty
+sleep 5
+# Programme sans menu : l'assistant ouvre le menu de Winlux ; Entrée choisit
+# « Ranger dans les icônes cachées ».
+xdotool key Down Return 2>/dev/null
+sleep 2
+{sys.executable} -B {tray_script} overflow list > "{temp}/menu.json"
 xfce4-panel -q; kill 0"""
         subprocess.run(["timeout", "-k", "3", "60", "dbus-run-session", "--", "sh", "-c", script], env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -149,6 +165,10 @@ xfce4-panel -q; kill 0"""
         ok({item["name"]: item["hidden"] for item in after} == {"putty": True, "filezilla": False}
            and (Path(temp) / "barre").exists(),
            f"vraie barre : PuTTY caché en direct, FileZilla reste, barre non relancée ({after})")
+        menu = json.loads((Path(temp) / "menu.json").read_text() or "[]") if (Path(temp) / "menu.json").exists() else []
+        if shutil.which("xdotool"):
+            ok({item["name"]: item["hidden"] for item in menu} == {"putty": True, "filezilla": False},
+               f"vraie barre : menu de Winlux sur l'icône, « Ranger dans les icônes cachées » ({menu})")
 
 if failures:
     raise SystemExit(f"{len(failures)} échec(s)")
