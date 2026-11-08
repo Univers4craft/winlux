@@ -1372,4 +1372,8 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+# #996 : registres et code autour de rip au journal de trace d'une faute matérielle.
+ok("fn describe_registers" in (runtime_dlls / "seh.rs").read_text(encoding="utf-8")
+   and "registres_d_une_faute_pour_le_journal" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Faute matérielle : registres et octets de code au journal de trace (#996)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

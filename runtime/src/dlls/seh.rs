@@ -1475,6 +1475,52 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
     line
 }
 
+/// Registres généraux et octets de code autour de `rip`, pour diagnostiquer
+/// une faute dans un module tiers sans débogueur (#996, journal de trace).
+pub fn describe_registers(ctx: &Context) -> String {
+    const NAMES: [(&str, usize); 16] = [
+        ("rax", 0x78),
+        ("rcx", 0x80),
+        ("rdx", 0x88),
+        ("rbx", 0x90),
+        ("rsp", 0x98),
+        ("rbp", 0xA0),
+        ("rsi", 0xA8),
+        ("rdi", 0xB0),
+        ("r8", 0xB8),
+        ("r9", 0xC0),
+        ("r10", 0xC8),
+        ("r11", 0xD0),
+        ("r12", 0xD8),
+        ("r13", 0xE0),
+        ("r14", 0xE8),
+        ("r15", 0xF0),
+    ];
+    let mut out = String::from("registres :");
+    for (name, off) in NAMES {
+        let v = ctx.get(off) as usize;
+        out.push_str(&format!(" {name}={v:#x}"));
+        let site = crate::thunks::describe_site(v);
+        if v > 0x10000 && site.contains('+') {
+            out.push_str(&format!(" ({site})"));
+        }
+    }
+    let rip = ctx.get(CTX_RIP) as usize;
+    // Octets de code : seulement dans un module chargé, donc lisibles.
+    if crate::thunks::describe_site(rip).contains('+')
+        && crate::thunks::describe_site(rip.wrapping_sub(32)).contains('+')
+    {
+        let bytes = unsafe { std::slice::from_raw_parts((rip - 32) as *const u8, 48) };
+        let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        out.push_str(&format!(
+            "; code rip-32 : {} | {}",
+            hex[..32].join(" "),
+            hex[32..].join(" ")
+        ));
+    }
+    out
+}
+
 /// Adresses de retour probables à partir de `rsp` : les mots de la pile du
 /// thread qui tombent dans un module chargé (au plus `max`).
 pub fn stack_calls(rsp: usize, max: usize) -> Vec<String> {
@@ -1999,6 +2045,18 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn registres_d_une_faute_pour_le_journal() {
+        let mut ctx = Context::zeroed();
+        ctx.set(CTX_RAX, 0);
+        ctx.set(0x80, 0x1234); // rcx
+        ctx.set(0xF0, 0xdead_beef); // r15
+        let line = describe_registers(&ctx);
+        assert!(line.starts_with("registres : rax=0x0 rcx=0x1234"), "{line}");
+        assert!(line.contains("r15=0xdeadbeef"), "{line}");
+        // rip nul : hors module, pas d'octets de code lus.
+        assert!(!line.contains("code"), "{line}");
+    }
 
     #[test]
     fn ligne_avant_le_filtre_de_l_appli() {

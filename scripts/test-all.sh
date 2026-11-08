@@ -158,6 +158,10 @@ step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_de
 # HTTPS des applications .NET (#1183) : normaliz.dll, IdnToAscii et
 # IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
 step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
+
+# Faute matérielle dans un module tiers (#996, ANGLE de Chromium) : le
+# journal de trace donne les registres et les octets de code autour de rip.
+step "Registres d'une faute matérielle au journal (#996)" cargo test -q -p winlux -- registres_d_une_faute_pour_le_journal
 # SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
