@@ -260,7 +260,7 @@ ok(data["/plugins/plugin-3/expand"] == "false" and data["/plugins/plugin-8/expan
    "barre flottante : aucun séparateur extensible (elle épouse son contenu)")
 xfconf_from(ids, {"/plugins/plugin-3/expand": "false", "/plugins/plugin-8/expand": "false"})
 result, after, data = align("left", "STYLE=classic\nSEARCH=box\n")
-ok(after == "3 1 15 14 2 8 10 12 4 7 9 13" and data["/plugins/plugin-8/expand"] == "true",
+ok(after == "3 13 1 15 14 2 8 10 12 4 7 9" and data["/plugins/plugin-8/expand"] == "true",
    f"retour au style classique : séparateur 8 de nouveau extensible ({after})")
 xfconf_from([*"3 13 1 15 14 2 8 10 12 4 5 6 9 7".split()], {"/plugins/plugin-5": "genmon", "/plugins/plugin-6": "genmon"})
 result, after, data = align("center")
@@ -289,7 +289,7 @@ ok(not migration["refresh_account_theme"](user, HERE / "winlux-personalize.py"),
 # ── 7. Modèle livré et Paramètres ───────────────────────────────────────────
 template = ET.parse(ROOT / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
 template_ids = [value.get("value") for value in template.find(".//property[@name='plugin-ids']")]
-ok(template_ids == "3 1 15 14 2 8 10 4 7 9 13".split(), f"modèle : barre de #703 ({' '.join(template_ids)})")
+ok(template_ids == "3 13 1 15 14 2 8 10 4 7 9".split(), f"modèle : barre de #703, contrepoids à sa place des deux alignements (#920) ({' '.join(template_ids)})")
 rc = ROOT / "integration/native/config/xfce4/panel"
 ok("winlux-tray status" in (rc / "genmon-4.rc").read_text() and "winlux-tray search" in (rc / "genmon-15.rc").read_text()
    and not (rc / "genmon-5.rc").exists() and not (rc / "genmon-6.rc").exists(), "modèle : genmon état et recherche")

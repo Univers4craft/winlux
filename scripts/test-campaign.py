@@ -652,4 +652,10 @@ ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text
    and "deux capsules" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre flottante : capsule centrale et capsule d'état en bas à droite, marge transparente, retour au classique sans perte (#889)")
 
+# ── Bascule gauche ↔ centre sans relancer la barre (#920) ──────────────────
+ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
+   "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

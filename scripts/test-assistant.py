@@ -259,9 +259,9 @@ for alignment in ("align-left", "align-center"):
     store.write_text(json.dumps(data))
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)
-    # Greffon 13 : contrepoids juste après le séparateur 3 en barre centrée, au bout sinon.
+    # Greffon 13 : contrepoids juste après le séparateur 3, dans les deux alignements (#920).
     # Depuis #703 : réseau/son/batterie = genmon 4 seul (5 et 6 absents), l'heure avant la cloche.
-    expected = [3, 13, 1, 2, 8, 30, 10, 4, 7, 9] if alignment == "align-center" else [3, 1, 2, 8, 30, 10, 4, 7, 9, 13]
+    expected = [3, 13, 1, 2, 8, 30, 10, 4, 7, 9] if alignment == "align-center" else [3, 13, 1, 2, 8, 30, 10, 4, 7, 9]
     assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == expected, alignment
 
 # Avec le bouton Widgets (greffon 11, #293) : les deux restent.
@@ -281,7 +281,7 @@ data = json.loads(store.read_text())
 data["/plugins/plugin-15"] = "launcher"
 data["/plugins/plugin-15/items"] = ["/usr/share/applications/winlux-taskview.desktop"]
 store.write_text(json.dumps(data))
-for alignment, expected in (("align-left", [3, 1, 15, 2, 8, 30, 10, 4, 7, 9, 13]),
+for alignment, expected in (("align-left", [3, 13, 1, 15, 2, 8, 30, 10, 4, 7, 9]),
                             ("align-center", [3, 13, 1, 15, 2, 8, 30, 10, 4, 7, 9])):
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)

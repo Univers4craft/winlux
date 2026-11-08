@@ -45,8 +45,9 @@ ok(session.index('if test "$primary" != 1 && test -x /usr/bin/winlux-control') >
 
 # ── 2. État de camille corrigé par winlux-control ───────────────────────────
 template = (ROOT / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").read_text()
-ok('value="13"/></property>' in template and 'name="plugin-3" type="string" value="separator"><property name="expand" type="bool" value="true"/>' in template,
-   "copie figée du modèle : séparateur 3 étiré et contrepoids 13 au bout (la cause)")
+ok('<value type="int" value="3"/><value type="int" value="13"/>' in template
+   and 'name="plugin-3" type="string" value="separator"><property name="expand" type="bool" value="true"/>' in template,
+   "modèle : contrepoids 13 juste après le séparateur 3, à sa place dans les deux alignements (#920)")
 
 FAKE = r'''#!/usr/bin/python3
 import json, os, sys
@@ -107,7 +108,7 @@ with tempfile.TemporaryDirectory() as directory:
     camille()
     result, ids, expand = align("left")
     ok(result.returncode == 0, f"align-left réussit ({result.stderr.strip()[:200]})")
-    ok(ids == "3 1 2 8 10 12 4 7 9 13" and expand == "false",
+    ok(ids == "3 13 1 2 8 10 12 4 7 9" and expand == "false",
        f"à gauche : séparateur 3 non étiré, Démarrer contre le bord (ids {ids}, expand {expand})")
     ok("xfce4-panel -r" not in log.read_text(), "pas de relance de la barre (13 déjà chargé)")
 
@@ -231,7 +232,7 @@ with tempfile.TemporaryDirectory() as directory:
         "X-XFCE-Source=file:///usr/share/applications/winlux-taskview.desktop\n")
     (panel / "launcher-16/123.desktop").write_text("[Desktop Entry]\nName=Rechercher\nExec=winlux-search\n")
     store, log = work / "xfconf.json", work / "xfconf.log"
-    for how, expected in (("center", "3 13 1 16 15 2 8 10 12 4 7 9"), ("left", "3 1 16 15 2 8 10 12 4 7 9 13")):
+    for how, expected in (("center", "3 13 1 16 15 2 8 10 12 4 7 9"), ("left", "3 13 1 16 15 2 8 10 12 4 7 9")):
         state = {"/panels/panel-1/plugin-ids": "3 1 2 8 10 12 4 7 9 13".split(),
                  "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
                  "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon",
@@ -337,6 +338,47 @@ with tempfile.TemporaryDirectory() as directory:
     ok(result.returncode == 0 and state["/panels"] == ["1"] and main == "3 13 1 2 8 10 12 4 7 9"
        and state["/panels/panel-1/length"] == "100" and state["/panels/panel-1/position"] == "p=10;x=0;y=0",
        f"retour au style classique : un seul panneau pleine largeur, rien de perdu ({main})")
+
+# ── 8. Bascule gauche ↔ centre en direct, sans relance (#920) ──────────────
+# Portable de damien : chaque bascule relançait la barre (~0,9 s) puis le
+# contrepoids sautait. Même ordre dans les deux alignements : seuls
+# plugin-3/expand et le contrepoids (rafraîchi tout de suite) changent.
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    for sub in ("bin", "root/etc/winlux", "home/.config"):
+        (work / sub).mkdir(parents=True)
+    fake = work / "bin/xfconf-query"
+    fake.write_text(FAKE)
+    fake.chmod(0o755)
+    store, log = work / "xfconf.json", work / "xfconf.log"
+    # Barre lancée : pgrep la trouve, xfce4-panel note ses appels.
+    (work / "bin/pgrep").write_text("#!/bin/sh\necho 4242\n")
+    (work / "bin/xfce4-panel").write_text('#!/bin/sh\necho "xfce4-panel $*" >> "$FAKE_XFCONF_LOG"\n')
+    for tool in ("pgrep", "xfce4-panel"):
+        (work / "bin" / tool).chmod(0o755)
+    state = {"/panels/panel-1/plugin-ids": "3 13 1 2 8 10 12 4 7 9".split(),
+             "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
+             "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon"}
+    for number in (4, 7, 9, 13):
+        state[f"/plugins/plugin-{number}"] = "genmon"
+    store.write_text(json.dumps(state))
+    env = {**os.environ, "PATH": f"{work}/bin:/usr/bin:/bin", "WINLUX_CONTROL_ROOT": str(work / "root"),
+           "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "home/.config"),
+           "WINLUX_CONTROL_NO_STATUS": "1", "WINLUX_ROOT_SOCKET": str(work / "absent.sock"),
+           "FAKE_XFCONF": str(store), "FAKE_XFCONF_LOG": str(log)}
+    for how, expand in (("left", "false"), ("center", "true"), ("left", "false")):
+        log.write_text("")
+        result = subprocess.run(["sh", str(ROOT / "scripts/winlux-control.sh"), f"align-{how}"], env=env,
+                                capture_output=True, text=True, timeout=30)
+        data = json.loads(store.read_text())
+        calls = log.read_text()
+        saved = (work / "root/etc/winlux/preferences.conf").read_text()
+        ok(result.returncode == 0 and " ".join(data["/panels/panel-1/plugin-ids"]) == "3 13 1 2 8 10 12 4 7 9"
+           and data["/plugins/plugin-3/expand"] == expand,
+           f"align-{how} en direct : même ordre, séparateur 3 étiré = {expand} {result.stderr.strip()[:200]}")
+        ok("xfce4-panel -r" not in calls and "--plugin-event=genmon-13:refresh:bool:true" in calls,
+           f"align-{how} en direct : barre pas relancée, contrepoids rafraîchi tout de suite")
+        ok(f"TASKBAR_ALIGN={how}" in saved, f"align-{how} : alignement enregistré pour le contrepoids")
 
 if failures:
     raise SystemExit(f"{len(failures)} échec(s)")

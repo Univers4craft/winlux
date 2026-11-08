@@ -284,6 +284,23 @@ def taskbar_preferences():
     return values
 
 
+def taskbar_alignment():
+    """Alignement choisi (TASKBAR_ALIGN), à défaut l'étirement du séparateur 3."""
+    path = Path(os.environ.get("WINLUX_CONTROL_ROOT", "") + "/etc/winlux/preferences.conf")
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN=") and line[14:].strip() in ("left", "center"):
+                return line[14:].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        expand = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/plugins/plugin-3/expand"],
+                                capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        expand = ""
+    return "left" if expand == "false" else "center"
+
+
 def panel_dark():
     """La barre suit le thème GTK du compte (thème clair = barre claire)."""
     forced = os.environ.get("WINLUX_PANEL_THEME")
@@ -518,6 +535,11 @@ elif kind == "balance":
         ids = []
     # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
     floating = taskbar_preferences()["STYLE"] == "floating"
+    # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
+    # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
+    # greffon, puis seulement étire ou non le séparateur 3.
+    if taskbar_alignment() == "left":
+        floating = True
     if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
         right = set(ids[ids.index(8) + 1:])
         width = _settled_balance(ids, right, set(ids[:ids.index(3)]))

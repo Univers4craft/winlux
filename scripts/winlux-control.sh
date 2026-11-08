@@ -583,7 +583,8 @@ perform() {
                 # Greffon 13 : contrepoids de largeur égale au bloc de droite
                 # (winlux-tray balance), sans quoi le groupe centré tombe trop
                 # à gauche de la moitié de ce bloc. Barre à gauche : il reste
-                # au bout, d'un pixel, pour ne pas relancer la barre.
+                # à la même place, large d'un pixel, pour ne pas relancer la
+                # barre (#920).
                 status_ids=
                 if test "$floating" = 1; then
                     # Barre flottante (#889), maquette 5-B : deux capsules. Au
@@ -608,7 +609,11 @@ perform() {
                 elif test "$alignment" = center; then
                     ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 else
-                    ids="3 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right 13"
+                    # Même ordre qu'au centre (#920) : la bascule ne change que
+                    # plugin-3/expand et la largeur du contrepoids (1 px à
+                    # gauche), sans relancer la barre. Seul le bouton Widgets
+                    # change de côté, comme sous Windows 11.
+                    ids="3 13 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 panels=$(xfconf-query -c xfce4-panel -p /panels 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
@@ -649,6 +654,15 @@ perform() {
                     fi
                 fi
                 expand=false; test "$alignment" != center || expand=true
+                # Bascule en direct (#920) : l'alignement est enregistré d'abord,
+                # puis le contrepoids (genmon 13) est rafraîchi tout de suite,
+                # sans attendre sa période de 2 s, juste avant d'étirer ou non
+                # le séparateur 3 : les deux changements arrivent ensemble.
+                save "$config/preferences.conf" TASKBAR_ALIGN "$alignment"
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand" &&
+                    pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+                    xfce4-panel --plugin-event=genmon-13:refresh:bool:true >/dev/null 2>&1 || true
+                fi
                 # Barre flottante : elle épouse son contenu (aucun séparateur
                 # extensible) et se centre d'elle-même.
                 spread=true
