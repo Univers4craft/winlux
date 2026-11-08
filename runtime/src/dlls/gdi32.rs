@@ -571,10 +571,21 @@ fn blit_common(
         } else {
             gui::capture_window(src_hwnd, source)
         };
-        let Some(snapshot) = snapshot else {
+        let Some(mut snapshot) = snapshot else {
             crate::process::set_last_error(1400); // source bitmap/window unavailable
             return 0;
         };
+        let src_bitmap = if src_hwnd == 0 {
+            gui::dc_bitmap(src_hdc)
+        } else {
+            0
+        };
+        if dst_hwnd == 0
+            && gui::is_monochrome(gui::dc_bitmap(dst_hdc))
+            && !gui::is_monochrome(src_bitmap)
+        {
+            to_monochrome(&mut snapshot.pixels, gui::dc_bk_color(src_hdc));
+        }
         let Some(pixels) = resize_bitmap(snapshot, width as usize, height as usize) else {
             crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
             return 0;
@@ -589,6 +600,23 @@ fn blit_common(
         1
     } else {
         0
+    }
+}
+
+/// Copie couleur → monochrome (documentation de BitBlt, Remarks) : les
+/// pixels de la couleur de fond du DC source deviennent blancs, tous les
+/// autres noirs. wxWidgets fabrique ainsi le masque d'une bitmap
+/// (#1121 : la graduation des vumètres d'Audacity était recouverte).
+fn to_monochrome(pixels: &mut [u32], bk_colorref: u32) {
+    // Les bitmaps gardent des COLORREF ; le fond peut être un PALETTERGB
+    // (0x02BBGGRR) : seule la couleur compte.
+    let bk = bk_colorref & 0x00FF_FFFF;
+    for p in pixels {
+        *p = if *p & 0x00FF_FFFF == bk {
+            0x00FF_FFFF
+        } else {
+            0
+        };
     }
 }
 
