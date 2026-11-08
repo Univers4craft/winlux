@@ -58,9 +58,43 @@ def managed_desktop(path, text):
     text = text.replace("[Desktop Entry]\n", f"[Desktop Entry]\nX-Winlux-Generated-Hash={digest}\n", 1)
     save(path, text)
 
+# Dossiers connus du profil Windows → clés XDG, comme paths.rs du runtime.
+KNOWN_FOLDERS = {"desktop": ("XDG_DESKTOP_DIR", "Desktop"), "documents": ("XDG_DOCUMENTS_DIR", "Documents"),
+                 "my documents": ("XDG_DOCUMENTS_DIR", "Documents"), "downloads": ("XDG_DOWNLOAD_DIR", "Downloads"),
+                 "music": ("XDG_MUSIC_DIR", "Music"), "my music": ("XDG_MUSIC_DIR", "Music"),
+                 "pictures": ("XDG_PICTURES_DIR", "Pictures"), "my pictures": ("XDG_PICTURES_DIR", "Pictures"),
+                 "videos": ("XDG_VIDEOS_DIR", "Videos"), "my videos": ("XDG_VIDEOS_DIR", "Videos")}
+
+def known_folder(home, name):
+    entry = KNOWN_FOLDERS.get(name.lower())
+    if entry is None: return None
+    key, default = entry
+    try:
+        for line in (home / ".config/user-dirs.dirs").read_text().splitlines():
+            if line.startswith(key + "="):
+                value = line.split("=", 1)[1].strip().strip('"')
+                if value.startswith("$HOME"): return home / value[5:].lstrip("/")
+                if value.startswith("/"): return Path(value)
+    except OSError: pass
+    return home / default
+
+def account_names(home):
+    names = {home.name.lower()}
+    try:
+        import pwd
+        names.add(pwd.getpwuid(os.getuid()).pw_name.lower())
+    except (ImportError, KeyError): pass
+    return names
+
 def windows_path(value, home):
     value = value.strip().strip('"').replace("\\", "/")
     if value[:2].lower() == "c:":
+        parts = [part for part in value[2:].split("/") if part]
+        # C:\Users\<compte> est le dossier personnel lui-même (#1188, #1189) :
+        # sinon ~/Users/<compte>/AppData/… introuvable, raccourci ignoré.
+        if len(parts) >= 2 and parts[0].lower() == "users" and parts[1].lower() in account_names(home):
+            folder = known_folder(home, parts[2]) if len(parts) >= 3 else None
+            return folder.joinpath(*parts[3:]) if folder else home.joinpath(*parts[2:])
         return home / value[2:].lstrip("/")
     if value[:2].lower() == "z:":
         return Path("/") / value[2:].lstrip("/")
