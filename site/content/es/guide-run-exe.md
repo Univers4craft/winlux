@@ -27,7 +27,7 @@ Cuando un instalador pide derechos de administrador, Winlux abre una ventana de 
 
 | Mensaje | Qué significa |
 |---|---|
-| «Programa de Windows de 32 bits» | Hoy solo se admiten programas de 64 bits. Busque la versión de 64 bits del programa. |
+| «Programa de Windows de 32 bits» | La compatibilidad con programas de 32 bits todavía es parcial y este tipo aún no se acepta. Busque la versión de 64 bits del programa. |
 | «Función que falta» | El programa usa una función de Windows que Winlux todavía no ofrece. Infórmenos: es lo que nos dice qué escribir a continuación. |
 | El programa se cierra sin decir nada | Abra el Visor de eventos desde el menú Inicio: allí está anotada la causa. |
 

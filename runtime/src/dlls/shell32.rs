@@ -595,14 +595,64 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
 }
 
 pub unsafe extern "win64" fn shell_execute_ex_a(info: *mut ShellExecuteInfo) -> i32 {
-    execute_ex(info, false)
+    execute_ex_any(info, false)
 }
 pub unsafe extern "win64" fn shell_execute_ex_w(info: *mut ShellExecuteInfo) -> i32 {
-    execute_ex(info, true)
+    execute_ex_any(info, true)
 }
+
+/// `SHELLEXECUTEINFO` d'un programme x86 : 60 octets, toutes les cases sur
+/// 4 octets (cbSize 0, fMask 4, hwnd 8, lpVerb 12, lpFile 16,
+/// lpParameters 20, lpDirectory 24, nShow 28, hInstApp 32, lpIDList 36,
+/// lpClass 40, hkeyClass 44, dwHotKey 48, hIcon 52, hProcess 56).
+const SEI32_SIZE: u32 = 60;
+
+unsafe fn execute_ex_any(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
+    if info.is_null() || crate::wow32::pointer_size() != 4 {
+        return execute_ex(info, wide);
+    }
+    let f = |i: usize| (info as *const u32).add(i).read_unaligned();
+    let size = f(0);
+    let mut wide_info = ShellExecuteInfo {
+        // hProcess n'est demandé que si la structure x86 le contient.
+        size: if size >= SEI32_SIZE {
+            SEI_WITH_PROCESS
+        } else {
+            size
+        },
+        mask: f(1),
+        hwnd: f(2) as usize,
+        verb: f(3) as usize,
+        file: f(4) as usize,
+        parameters: f(5) as usize,
+        directory: f(6) as usize,
+        show: f(7) as i32,
+        inst_app: 0,
+        id_list: f(9) as usize,
+        class: f(10) as usize,
+        hkey_class: f(11) as usize,
+        hot_key: f(12),
+        icon: f(13) as usize,
+        process: 0,
+    };
+    let r = execute_ex(&mut wide_info, wide);
+    let o = info as *mut u32;
+    o.add(8).write_unaligned(wide_info.inst_app as u32);
+    if size >= SEI32_SIZE && wide_info.mask & SEE_MASK_NOCLOSEPROCESS != 0 {
+        o.add(14).write_unaligned(wide_info.process as u32);
+    }
+    r
+}
+
+/// SHAddToRecentDocs(uFlags, pv) : ajoute un fichier aux documents récents
+/// de Windows. Winlux n'a pas encore de liste « Récents » propre aux
+/// programmes Windows ; l'appel est accepté sans effet (VLC quittait sur
+/// cette fonction absente, #849).
+pub unsafe extern "win64" fn sh_add_to_recent_docs(_flags: u32, _item: *const std::ffi::c_void) {}
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "SHAddToRecentDocs"=>fn sh_add_to_recent_docs,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
         "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,

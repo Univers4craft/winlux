@@ -67,6 +67,20 @@ assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768), 
     "place laissée à l'infobulle du bouton (#675)"
 assert snap["popup_origin"]((0, 0, 150, 27), (300, 200), (0, 0, 1366, 768)) == (0, 35), "en dessous d'un bouton du haut"
 assert snap["popup_origin"]((1300, 728, 60, 40), (300, 200), (0, 0, 1366, 768))[0] == 1066, "sans sortir de l'écran"
+
+
+class Entry:
+    def __init__(self, name, wm_class): self.name, self.wm_class = name, wm_class
+    def get_startup_wm_class(self): return self.wm_class
+
+
+entries = [Entry("debian-xterm", "XTerm"), Entry("winlux-terminal", "winlux-terminal"), Entry("vide", None)]
+assert snap["desktop_for_class"](entries, ["winlux-terminal", "XTerm"]).name == "winlux-terminal", \
+    "Terminal Winlux : son lanceur, pas celui d'xterm (fiche 597)"
+assert snap["desktop_for_class"](entries, ["xterm", "XTerm"]).name == "debian-xterm"
+assert snap["desktop_for_class"](entries, ["mousepad", "Mousepad"]) is None
+assert "-name winlux-terminal" in (ROOT / "integration/winlux-terminal").read_text() \
+    and "StartupWMClass=winlux-terminal\n" in (ROOT / "integration/winlux-terminal.desktop").read_text()
 print("assistant d'ancrage (logique) : OK")
 
 if not os.environ.get("DISPLAY") or not all(shutil.which(tool) for tool in ("openbox", "xdotool", "wmctrl", "xwininfo", "xprop")):
@@ -75,6 +89,7 @@ if not os.environ.get("DISPLAY") or not all(shutil.which(tool) for tool in ("ope
 try:
     import gi
     gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
 except (ImportError, ValueError):
     print("GTK absent : assistant réel non vérifié")
     raise SystemExit(0)
@@ -248,6 +263,7 @@ try:
     assert subprocess.run(TOOL + ["drop", two, "maximize"], env=env, timeout=10).returncode == 0
     assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP") and subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, \
         "agrandie : le groupe est défait"
+    assert not snap["get_prop"](one, "_WINLUX_SNAP_GROUP"), "la fenêtre restée seule quitte aussi le groupe (fiche 597)"
     # Agrandie par openbox lui-même (bouton Agrandir, double-clic sur la barre
     # de titre), sans winlux-snap : le groupe est défait aussi (#696).
     snap["restore"](two)
@@ -262,6 +278,7 @@ try:
     assert not wait(group_window, snap["HOVER_DELAY"] + 1.5), "agrandie par openbox : plus de vignette de groupe (#696)"
     assert subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, "agrandie par openbox : groupe défait (#696)"
     assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP"), "agrandie par openbox : plus de groupe sur la fenêtre (#696)"
+    assert not snap["get_prop"](one, "_WINLUX_SNAP_GROUP"), "agrandie par openbox : la fenêtre restée seule non plus (fiche 597)"
 
     # 6. Fenêtre plus large que sa moitié (Paramètres : 720 px minimum en
     #    1366x768, #647) : elle occupe quand même la gauche, aucun quart
@@ -278,6 +295,40 @@ try:
     processes.append(helper)
     assert helper.wait(timeout=10) == 0
     assert not wait(assist_window, 1.5), "gauche occupée par une fenêtre large : pas d'assistant à gauche (#647)"
+
+    # 7. Vignette ouverte pendant qu'on remplit les quarts au clavier (fiche
+    #    597, étape 6) : elle se refait avec la rangée du bas.
+    for window in (one, two, three, wide):
+        snap["restore"](window)
+    for window, zone in ((one, "quarter:tl"), (two, "quarter:tr")):
+        assert subprocess.run(TOOL + ["place", zone, window], env=env, timeout=10).returncode == 0
+    snap["form_group"]([one, two])
+    x("xdotool", "mousemove", "600", "300")
+    time.sleep(0.8)
+    x("xdotool", "mousemove", "170", "740")
+    card = wait(group_window)
+    assert card, "groupe de deux quarts : vignette attendue"
+    from gi.repository import Gdk, Gtk  # noqa: F401 (Gtk ouvre l'affichage)
+
+    def cell_rows():
+        """Rangées de cases dans la colonne de gauche de la vignette (couleur de button.window)."""
+        left_, top_, width_, height_ = frame(card)
+        column = left_ + width_ // 2 - 124
+        shot = Gdk.pixbuf_get_from_window(Gdk.get_default_root_window(), column, top_, 1, height_)
+        pixels, stride, step = shot.get_pixels(), shot.get_rowstride(), shot.get_n_channels()
+        rows, run = 0, 0
+        for y in range(height_):
+            r, g, b = pixels[y * stride:y * stride + 3]
+            inside = abs(r - 0x2a) < 8 and abs(g - 0x30) < 8 and abs(b - 0x40) < 8
+            run = run + 1 if inside else 0
+            if run == 20: rows += 1
+        return rows
+
+    assert wait(lambda: cell_rows() == 1, 3), f"rangée du haut seule, {cell_rows()}"
+    assert subprocess.run(TOOL + ["place", "quarter:bl", three], env=env, timeout=10).returncode == 0
+    snap["form_group"]([one, two, three])
+    assert wait(lambda: cell_rows() == 2, 4), f"vignette ouverte : la case du bas apparaît (fiche 597), {cell_rows()}"
+    assert group_windows() == [card], "la même vignette, refaite"
 finally:
     for process in reversed(processes):
         if process.poll() is None: process.terminate()

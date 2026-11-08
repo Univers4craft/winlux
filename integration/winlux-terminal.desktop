@@ -12,3 +12,4 @@ Exec=/usr/bin/winlux-terminal
 Icon=utilities-terminal
 Terminal=false
 Categories=System;TerminalEmulator;
+StartupWMClass=winlux-terminal

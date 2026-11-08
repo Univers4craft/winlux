@@ -18,6 +18,19 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
 
+class FixedWidthBox(Gtk.Box):
+    """Boîte dont la largeur est celle demandée par set_size_request, quel que
+    soit son contenu : le volet « Pour vous » garde 320 ou 360 px même quand un
+    nom d'application long (« Textverarbeitung ») voudrait l'élargir (#869).
+    Les libellés se coupent alors avec « … » dans la place donnée."""
+
+    def do_get_preferred_width(self):
+        width = self.get_size_request()[0]
+        if width <= 0:
+            return Gtk.Box.do_get_preferred_width(self)
+        return width, width
+
+
 # ── Recherche : ni casse ni accents (« parametres » trouve « Paramètres ») ──
 
 _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
@@ -675,7 +688,7 @@ class Start(Gtk.Application):
         footer.pack_end(power, False, False, 0)
         self.left.pack_end(footer, False, False, 0)
         # Volet « Pour vous » : rempli par render_side().
-        self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.side = FixedWidthBox(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.side.get_style_context().add_class("side")
         self.side.set_no_show_all(True)
         panes.pack_end(self.side, False, False, 0)
@@ -793,6 +806,9 @@ class Start(Gtk.Application):
         label.set_max_width_chars(12 if grid else 50)
         if grid:
             label.set_line_wrap(True)
+            # Un mot plus long que la tuile (« Textverarbeitungsprogramm ») se
+            # coupe aussi en deux lignes au lieu d'élargir le menu (#869).
+            label.set_line_wrap_mode(2)  # Pango.WrapMode.WORD_CHAR
             label.set_lines(2)
         label.get_style_context().add_class("app-name")
         box.pack_start(label, not badge, not badge, 0)
