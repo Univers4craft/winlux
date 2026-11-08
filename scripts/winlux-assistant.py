@@ -65,6 +65,7 @@ DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
+FLOAT_CORNER = 45  # barre flottante : séparateur gardant le coin droit de la capsule libre (#889)
 NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
 LLAMA_RELEASE_API = os.environ.get("WINLUX_LLAMA_RELEASE_API",
                                    "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
@@ -901,14 +902,18 @@ def panel_add():
         return False
     number = read_config().get("panel_plugin", "")
     if not (number.isdigit() and _plugin_type(number) == "launcher" and _plugin_is_ours(number)):
-        number = next(str(n) for n in range(FIRST_PLUGIN, 400) if _plugin_type(n) is None)
+        # 40 à 49 : marges de la barre flottante (winlux-control, #889).
+        number = next(str(n) for n in range(FIRST_PLUGIN, 400) if not 40 <= n < 50 and _plugin_type(n) is None)
         for prop, kind, value in ((f"/plugins/plugin-{number}", "string", "launcher"),
                                   (f"/plugins/plugin-{number}/show-label", "bool", "false")):
             _xfconf("-p", prop, "-n", "-t", kind, "-s", value)
         _xfconf("-p", f"/plugins/plugin-{number}/items", "-n", "-a", "-t", "string", "-s", DESKTOP_FILE)
     write_config(panel_plugin=number)
     if int(number) not in ids:
-        position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
+        if FLOAT_CORNER in ids:  # barre flottante (#889) : avant la réserve du coin droit
+            position = ids.index(FLOAT_CORNER)
+        else:
+            position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
         ids.insert(position, int(number))
         if not _set_panel_ids(ids):
             return False

@@ -241,6 +241,15 @@ assistant.disable("chatgpt")
 assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"].count(30) == 1
 assert assistant.current_provider() == "claude"
 
+# Barre flottante (#889) : le bouton reste dans la capsule, avant la réserve du coin droit 45.
+data = json.loads(store.read_text())
+data["/panels/panel-1/plugin-ids"] = [3, 44, 1, 2, 45, 8]
+store.write_text(json.dumps(data))
+assistant.panel_add()
+assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 44, 1, 2, 30, 45, 8]
+data["/panels/panel-1/plugin-ids"] = [3, 1, 2, 8, 30, 10, 4, 5, 6, 9, 7]
+store.write_text(json.dumps(data))
+
 # winlux-control align-* réécrit l'ordre de la barre : le bouton reste.
 root = work / "root"
 env = dict(os.environ, WINLUX_CONTROL_ROOT=str(root), WINLUX_CONTROL_TEST_LOG=str(work / "commands"))

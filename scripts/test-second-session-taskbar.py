@@ -280,6 +280,64 @@ with tempfile.TemporaryDirectory() as directory:
     ok(width == 317 and _time.monotonic() - began < 1,
        f"même écran, même ordre : contrepoids du cache rendu sans attendre ({width}, {_time.monotonic() - began:.1f} s)")
 
+# ── 7. Barre flottante en deux capsules (#889, maquette 5-B) ────────────────
+# STYLE=floating : Démarrer, Rechercher, Vue des tâches et fenêtres dans le
+# panneau 1 (longueur ajustée, centré ou en bas à gauche) ; zone de
+# notification, état, heure et cloche dans un panneau 2 en bas à droite.
+# Retour au style classique : panneau 2 retiré, rien de perdu.
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    for sub in ("bin", "root/etc/winlux", "home/.config/winlux"):
+        (work / sub).mkdir(parents=True)
+    fake = work / "bin/xfconf-query"
+    fake.write_text(FAKE)
+    fake.chmod(0o755)
+    for tool in ("pgrep", "xfce4-panel"):
+        (work / "bin" / tool).write_text("#!/bin/sh\nexit 1\n")
+        (work / "bin" / tool).chmod(0o755)
+    store, log = work / "xfconf.json", work / "xfconf.log"
+    conf = work / "home/.config/winlux/taskbar.conf"
+    state = {"/panels": ["1"], "/panels/panel-1/plugin-ids": "3 13 1 2 8 10 12 4 7 9".split(),
+             "/panels/panel-1/size": "40", "/panels/panel-1/length": "100",
+             "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
+             "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon"}
+    for number in (4, 7, 9, 13):
+        state[f"/plugins/plugin-{number}"] = "genmon"
+    store.write_text(json.dumps(state))
+
+    def run(how):
+        log.write_text("")
+        result = subprocess.run(
+            ["sh", str(ROOT / "scripts/winlux-control.sh"), f"align-{how}"],
+            env={**os.environ, "PATH": f"{work}/bin:/usr/bin:/bin", "WINLUX_CONTROL_ROOT": str(work / "root"),
+                 "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "home/.config"),
+                 "WINLUX_CONTROL_NO_STATUS": "1", "WINLUX_ROOT_SOCKET": str(work / "absent.sock"),
+                 "FAKE_XFCONF": str(store), "FAKE_XFCONF_LOG": str(log)},
+            capture_output=True, text=True, timeout=30)
+        return result, json.loads(store.read_text())
+
+    for how, anchor in (("center", "p=10;x=0;y=0"), ("left", "p=8;x=0;y=0")):
+        conf.write_text(f"STYLE=floating\nALIGN={how}\n")
+        result, state = run(how)
+        main, side = " ".join(state["/panels/panel-1/plugin-ids"]), " ".join(state.get("/panels/panel-2/plugin-ids", []))
+        ok(result.returncode == 0 and main == "3 44 1 2 45 8" and side == "40 42 10 12 4 7 9 43 41"
+           and state["/panels"] == ["1", "2"],
+           f"flottante {how} : deux capsules ({main} | {side}) {result.stderr.strip()[:200]}")
+        ok(state["/panels/panel-1/length"] == "1" and state["/panels/panel-1/length-adjust"] == "true"
+           and state["/panels/panel-1/position"] == anchor,
+           f"flottante {how} : capsule principale à la longueur de son contenu, ancrée {anchor}")
+        ok(state["/panels/panel-2/position"] == "p=4;x=0;y=0" and state["/panels/panel-2/size"] == "40"
+           and state["/panels/panel-2/length-adjust"] == "true",
+           "flottante : capsule d'état en bas à droite, même hauteur")
+        ok(all(state[f"/plugins/plugin-{n}"] == "separator" for n in range(40, 46)),
+           "flottante : marges et réserves des coins (40 à 45) créées")
+    conf.write_text("STYLE=classic\nALIGN=center\n")
+    result, state = run("center")
+    main = " ".join(state["/panels/panel-1/plugin-ids"])
+    ok(result.returncode == 0 and state["/panels"] == ["1"] and main == "3 13 1 2 8 10 12 4 7 9"
+       and state["/panels/panel-1/length"] == "100" and state["/panels/panel-1/position"] == "p=10;x=0;y=0",
+       f"retour au style classique : un seul panneau pleine largeur, rien de perdu ({main})")
+
 if failures:
     raise SystemExit(f"{len(failures)} échec(s)")
 print("OK: barre d'une 2e session alignée comme la 1re")

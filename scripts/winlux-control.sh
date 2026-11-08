@@ -584,13 +584,57 @@ perform() {
                 # (winlux-tray balance), sans quoi le groupe centré tombe trop
                 # à gauche de la moitié de ce bloc. Barre à gauche : il reste
                 # au bout, d'un pixel, pour ne pas relancer la barre.
-                if test "$alignment" = center; then
+                status_ids=
+                if test "$floating" = 1; then
+                    # Barre flottante (#889), maquette 5-B : deux capsules. Au
+                    # centre (ou à gauche) Démarrer, Rechercher, Vue des tâches
+                    # et les fenêtres ; en bas à droite, un second panneau avec
+                    # la zone de notification, l'état, l'heure et la cloche ; pas
+                    # de contrepoids 13. Les greffons sont posés sur toute la
+                    # largeur du panneau, marge transparente comprise : aux
+                    # deux bouts, un séparateur (3, 8, 40, 41) occupe cette
+                    # marge et un second (44, 45, 42, 43) garde le coin arrondi
+                    # libre, qu'un greffon externe (genmon) peindrait en carré.
+                    ids="3 44 ${widgets:+11 }1 ${buttons}2 ${assistant:+$assistant }45 8"
+                    status_ids="40 42 ${tray:+10 }${keyboard:+12 }$right 43 41"
+                    for number in 40 41 42 43 44 45; do
+                        for spec in "plugin-$number:string:separator" "plugin-$number/style:uint:0" "plugin-$number/expand:bool:false"; do
+                            property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
+                            if ! xfconf-query -c xfce4-panel -p "/plugins/$property" >/dev/null 2>&1; then
+                                xfconf-query -c xfce4-panel -p "/plugins/$property" -n -t "$kind" -s "$setting" || return
+                            fi
+                        done
+                    done
+                elif test "$alignment" = center; then
                     ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 else
                     ids="3 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right 13"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
-                if test "$current" != "$ids "; then
+                panels=$(xfconf-query -c xfce4-panel -p /panels 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
+                status_current=
+                case " $panels" in *' 2 '*) status_current=$(xfconf-query -c xfce4-panel -p /panels/panel-2/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true) ;; esac
+                if test "$current" != "$ids " || test "$status_current" != "${status_ids:+$status_ids }"; then
+                    if test -n "$status_ids"; then
+                        # Panneau 2 : longueur ajustée à son contenu, ancré en bas
+                        # à droite (p=4), même hauteur que la barre.
+                        size=$(xfconf-query -c xfce4-panel -p /panels/panel-1/size 2>/dev/null || echo 40)
+                        for spec in "position:string:p=4;x=0;y=0" "position-locked:bool:true" "length:uint:1" \
+                            "length-adjust:bool:true" "size:uint:$size" "nrows:uint:1" "mode:uint:0"; do
+                            property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
+                            xfconf-query -c xfce4-panel -p "/panels/panel-2/$property" -s "$setting" 2>/dev/null ||
+                                xfconf-query -c xfce4-panel -p "/panels/panel-2/$property" -n -t "$kind" -s "$setting" || return
+                        done
+                        set --
+                        for id in $status_ids; do set -- "$@" -t int -s "$id"; done
+                        xfconf-query -c xfce4-panel -p /panels/panel-2/plugin-ids -n -a "$@" 2>/dev/null ||
+                            xfconf-query -c xfce4-panel -p /panels/panel-2/plugin-ids -a "$@" || return
+                        test "$panels" = "1 2 " || xfconf-query -c xfce4-panel -p /panels -a -t int -s 1 -t int -s 2 || return
+                    elif test -n "$status_current"; then
+                        # Retour au style classique : le panneau 2 disparaît, son
+                        # contenu revient dans la barre (ids ci-dessus).
+                        xfconf-query -c xfce4-panel -p /panels -a -t int -s 1 || return
+                    fi
                     set --
                     for id in $ids; do set -- "$@" -t int -s "$id"; done
                     xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a "$@" || return
@@ -615,6 +659,22 @@ perform() {
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-8/expand 2>/dev/null || true)" != "$spread"; then
                     xfconf-query -c xfce4-panel -p /plugins/plugin-8/expand -s "$spread" || return
                 fi
+                # Longueur et ancrage de la barre : capsule à la longueur de son
+                # contenu (au centre, ou en bas à gauche) en flottant, toute la
+                # largeur sinon. Réécrits seulement s'ils changent.
+                if test "$floating" = 1; then
+                    length=1 adjust=true position='p=10;x=0;y=0'
+                    test "$alignment" = center || position='p=8;x=0;y=0'
+                else
+                    length=100 adjust=false position='p=10;x=0;y=0'
+                fi
+                for spec in "length:uint:$length" "length-adjust:bool:$adjust" "position:string:$position"; do
+                    property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
+                    if test "$(xfconf-query -c xfce4-panel -p "/panels/panel-1/$property" 2>/dev/null || true)" != "$setting"; then
+                        xfconf-query -c xfce4-panel -p "/panels/panel-1/$property" -s "$setting" 2>/dev/null ||
+                            xfconf-query -c xfce4-panel -p "/panels/panel-1/$property" -n -t "$kind" -s "$setting" || return
+                    fi
+                done
             fi
             # Windows + X s'ouvre au-dessus du bouton Démarrer, pas sous le
             # pointeur : position réécrite dans le rc.xml du compte.

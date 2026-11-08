@@ -129,8 +129,9 @@ ok(".tasklist button:checked" in dark_css and "linear-gradient(#6a3df0,#6a3df0)"
    "repère de la fenêtre active à la couleur d'accent")
 ok("#XfcePanelWindow.xfce4-panel" not in dark_css, "style classique : pas de capsule")
 floating = personalize["panel_css"](True, "#6a3df0", True)
-ok("#XfcePanelWindow.xfce4-panel" in floating and "border-radius:14px 14px 0 0" in floating,
-   "style flottant : capsule à coins arrondis")
+ok("#XfcePanelWindow.xfce4-panel" in floating and "border-radius:16px / 11px 11px 14px 14px;" in floating
+   and "background-clip:padding-box" in floating and "border-color:transparent" in floating,
+   "style flottant : capsule à coins arrondis détachée des bords par une marge transparente (#889)")
 ok("panel_css(dark,accent,floating)" in (HERE / "winlux-personalize.py").read_text(), "le thème GTK du compte inclut la barre")
 taskbar = Path(os.environ["HOME"]) / ".config/winlux/taskbar.conf"
 taskbar.parent.mkdir(parents=True)

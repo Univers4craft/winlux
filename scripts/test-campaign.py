@@ -645,4 +645,11 @@ ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
    and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
 
+# ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
+ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
+   and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "FLOAT_MARGIN" in (SCRIPTS / "winlux-personalize.py").read_text()
+   and "deux capsules" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre flottante : capsule centrale et capsule d'état en bas à droite, marge transparente, retour au classique sans perte (#889)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
