@@ -400,7 +400,10 @@ mod tests {
     #[test]
     fn icone_standard() {
         unsafe {
-            let mut info = [0u8; 544];
+            #[repr(C, align(8))]
+            struct Info([u8; 544]);
+            let mut buf = Info([0u8; 544]);
+            let info = &mut buf.0;
             info[..4].copy_from_slice(&544u32.to_le_bytes());
             assert_eq!(
                 SHGetStockIconInfo(3, SHGSI_SYSICONINDEX | SHGSI_ICON, info.as_mut_ptr()),

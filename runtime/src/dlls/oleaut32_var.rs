@@ -1255,17 +1255,17 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
 
-    unsafe fn var(vt: u16, bits: u64) -> [u8; 24] {
-        let mut v = [0u8; 24];
-        v[..2].copy_from_slice(&vt.to_le_bytes());
-        v[8..16].copy_from_slice(&bits.to_le_bytes());
+    unsafe fn var(vt: u16, bits: u64) -> [u64; 3] {
+        let mut v = [0u64; 3];
+        v[0] = vt as u64;
+        v[1] = bits;
         v
     }
 
-    unsafe fn bstr_var(s: &str) -> [u8; 24] {
-        let mut v = [0u8; 24];
+    unsafe fn bstr_var(s: &str) -> [u64; 3] {
+        let mut v = [0u64; 3];
         let w: Vec<u16> = s.encode_utf16().collect();
-        v[..2].copy_from_slice(&VT_BSTR.to_le_bytes());
+        v[0] = VT_BSTR as u64;
         let b = sys_alloc_string_len(w.as_ptr(), w.len() as u32);
         crate::wow32::write_ptr(v.as_mut_ptr() as usize + 8, b as usize);
         v
@@ -1276,13 +1276,13 @@ mod tests {
         unsafe {
             let a = var(VT_I4, 40);
             let b = var(VT_I2, 2);
-            let mut r = [0u8; 24];
+            let mut r = [0u64; 3];
             assert_eq!(
                 VarAdd(a.as_ptr().cast(), b.as_ptr().cast(), r.as_mut_ptr().cast()),
                 0
             );
             assert_eq!(read(r.as_ptr().cast()), Some(Val::Int(42)));
-            assert_eq!(u16::from_le_bytes([r[0], r[1]]), VT_I4);
+            assert_eq!(r[0] as u16, VT_I4);
             // Débordement d'un I4 : le résultat passe en R8.
             let big = var(VT_I4, i32::MAX as u32 as u64);
             VarAdd(
@@ -1311,7 +1311,7 @@ mod tests {
             // Null se propage.
             let n = var(VT_NULL, 0);
             VarSub(a.as_ptr().cast(), n.as_ptr().cast(), r.as_mut_ptr().cast());
-            assert_eq!(u16::from_le_bytes([r[0], r[1]]), VT_NULL);
+            assert_eq!(r[0] as u16, VT_NULL);
             assert_eq!(
                 VarCmp(a.as_ptr().cast(), n.as_ptr().cast(), 0, 0),
                 VARCMP_NULL
@@ -1399,7 +1399,7 @@ mod tests {
 
             // VariantChangeTypeEx : R8 → I4 arrondi au pair, BSTR → DATE.
             let src = var(VT_R8, 2.5f64.to_bits());
-            let mut dst = [0u8; 24];
+            let mut dst = [0u64; 3];
             assert_eq!(
                 VariantChangeTypeEx(
                     dst.as_mut_ptr().cast(),
