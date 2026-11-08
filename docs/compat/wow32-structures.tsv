@@ -63,6 +63,8 @@ d3d11.rs	DxgiDevice	a-verifier
 d3d11.rs	DxgiDeviceVTable	a-verifier	
 d3d11.rs	Texture2D	a-verifier	
 d3d11.rs	Texture2DVTable	a-verifier	
+d3d11_ext.rs	Annotation	a-verifier	
+d3d11_ext.rs	AnnotationVTable	a-verifier	
 d3d11_ext.rs	ContextExt	a-verifier	vtable ID3D11DeviceContext1-4
 d3d11_ext.rs	DeviceExt	a-verifier	vtable ID3D11Device1-5
 d3d11_ext.rs	Fence	a-verifier	

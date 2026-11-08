@@ -975,6 +975,94 @@ static MULTITHREAD_VTABLE: MultithreadVTable = MultithreadVTable {
     get_multithread_protected: mt_get,
 };
 
+// ────────────────────── ID3DUserDefinedAnnotation ──────────────────────
+// Marqueurs d'événements pour les outils de profilage, demandés au contexte
+// par ANGLE et les moteurs de rendu de Chromium. Sans outil de profilage,
+// Windows répond -1 à BeginEvent et EndEvent et FALSE à GetStatus : c'est
+// exactement ce que fait cet objet.
+
+/// ID3DUserDefinedAnnotation {b2daad8b-03d4-4dbf-95eb-32ab4b63d0ab}.
+pub(super) const IID_ANNOTATION: Guid = Guid {
+    data1: 0xb2da_ad8b,
+    data2: 0x03d4,
+    data3: 0x4dbf,
+    data4: [0x95, 0xeb, 0x32, 0xab, 0x4b, 0x63, 0xd0, 0xab],
+};
+
+#[repr(C)]
+struct AnnotationVTable {
+    query_interface: unsafe extern "win64" fn(*mut Annotation, *const Guid, Out) -> i32,
+    add_ref: unsafe extern "win64" fn(*mut Annotation) -> u32,
+    release: unsafe extern "win64" fn(*mut Annotation) -> u32,
+    begin_event: unsafe extern "win64" fn(*mut Annotation, *const u16) -> i32,
+    end_event: unsafe extern "win64" fn(*mut Annotation) -> i32,
+    set_marker: unsafe extern "win64" fn(*mut Annotation, *const u16),
+    get_status: unsafe extern "win64" fn(*mut Annotation) -> i32,
+}
+
+/// Objet d'annotation : garde une référence sur son contexte.
+#[repr(C)]
+struct Annotation {
+    vtable: *const AnnotationVTable,
+    refs: AtomicU32,
+    context: *mut DeviceContext,
+}
+
+/// Répond à QueryInterface(ID3DUserDefinedAnnotation) sur un contexte.
+pub(super) unsafe fn annotation_for(context: *mut DeviceContext, out: Out) -> i32 {
+    super::ctx_addref(context);
+    let obj = Box::new(Annotation {
+        vtable: &ANNOTATION_VTABLE,
+        refs: AtomicU32::new(1),
+        context,
+    });
+    *out = Box::into_raw(obj).cast();
+    S_OK
+}
+
+unsafe extern "win64" fn ann_qi(this: *mut Annotation, riid: *const Guid, out: Out) -> i32 {
+    if out.is_null() || riid.is_null() {
+        return E_INVALIDARG;
+    }
+    if *riid == IID_ANNOTATION {
+        (*this).refs.fetch_add(1, Ordering::Relaxed);
+        *out = this.cast();
+        return S_OK;
+    }
+    super::ctx_qi((*this).context, riid, out)
+}
+unsafe extern "win64" fn ann_addref(this: *mut Annotation) -> u32 {
+    (*this).refs.fetch_add(1, Ordering::Relaxed) + 1
+}
+unsafe extern "win64" fn ann_release(this: *mut Annotation) -> u32 {
+    let left = (*this).refs.fetch_sub(1, Ordering::AcqRel) - 1;
+    if left == 0 {
+        let obj = Box::from_raw(this);
+        super::ctx_release(obj.context);
+    }
+    left
+}
+unsafe extern "win64" fn ann_begin(_: *mut Annotation, _name: *const u16) -> i32 {
+    -1
+}
+unsafe extern "win64" fn ann_end(_: *mut Annotation) -> i32 {
+    -1
+}
+unsafe extern "win64" fn ann_marker(_: *mut Annotation, _name: *const u16) {}
+unsafe extern "win64" fn ann_status(_: *mut Annotation) -> i32 {
+    0
+}
+
+static ANNOTATION_VTABLE: AnnotationVTable = AnnotationVTable {
+    query_interface: ann_qi,
+    add_ref: ann_addref,
+    release: ann_release,
+    begin_event: ann_begin,
+    end_event: ann_end,
+    set_marker: ann_marker,
+    get_status: ann_status,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +1076,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<ContextExt>(), (149 - 115) * ptr);
         assert_eq!(std::mem::size_of::<MultithreadVTable>(), 7 * ptr);
         assert_eq!(std::mem::size_of::<FenceVTable>(), 10 * ptr);
+        assert_eq!(std::mem::size_of::<AnnotationVTable>(), 7 * ptr);
     }
 
     #[test]
@@ -1003,6 +1092,23 @@ mod tests {
             fence_signal(f, 9);
             assert_eq!(fence_completed(f), 9);
             assert_eq!(fence_release(f), 0);
+        }
+    }
+
+    #[test]
+    fn context_answers_user_defined_annotation_like_without_profiler() {
+        unsafe {
+            let ctx = super::super::create_device_context();
+            let mut out = std::ptr::null_mut();
+            assert_eq!(super::super::ctx_qi(ctx, &IID_ANNOTATION, &mut out), S_OK);
+            let a: *mut Annotation = out.cast();
+            let name: Vec<u16> = "image".encode_utf16().chain([0]).collect();
+            assert_eq!(ann_begin(a, name.as_ptr()), -1);
+            ann_marker(a, name.as_ptr());
+            assert_eq!(ann_end(a), -1);
+            assert_eq!(ann_status(a), 0);
+            assert_eq!(ann_release(a), 0);
+            assert_eq!(super::super::ctx_release(ctx), 0);
         }
     }
 

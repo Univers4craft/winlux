@@ -62,6 +62,8 @@ ok("uianimation::create_builtin" in source("ole32.rs"),
 
 ok("ext: ext::DeviceExt" in source("d3d11.rs") and "ext: ext::ContextExt" in source("d3d11.rs"),
    "ID3D11Device5 et ID3D11DeviceContext4")
+ok("IID_ANNOTATION" in source("d3d11_ext.rs") and "ext::annotation_for" in source("d3d11.rs"),
+   "ID3DUserDefinedAnnotation servi par le contexte (ANGLE, Chromium)")
 ok("DXGI_ADAPTER_DESC2_SIZE: usize = 320" in source("dxgi.rs"),
    "IDXGIAdapter4::GetDesc3 écrit 320 octets, pas 324")
 

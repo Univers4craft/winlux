@@ -1799,6 +1799,9 @@ unsafe extern "win64" fn ctx_qi(
     if *riid == ext::IID_MULTITHREAD && !dev.is_null() {
         return dev_qi(dev, riid, out);
     }
+    if *riid == ext::IID_ANNOTATION {
+        return ext::annotation_for(this, out);
+    }
     crate::dlls::comobj::log_no_interface("d3d11 (contexte)", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
