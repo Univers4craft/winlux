@@ -22,6 +22,7 @@ controls/tests.rs	LvItemW	interne	test unitaire
 controls/tests.rs	TbButtonT	interne	test unitaire
 controls/tests.rs	TcItemW	interne	test unitaire
 controls/tests.rs	TestTcItem	interne	test unitaire
+controls/tests.rs	TextRange	interne	test unitaire
 controls/tests.rs	TvInsert	interne	test unitaire
 coremessaging.rs	Controller	a-verifier	
 coremessaging.rs	Handler	a-verifier	
