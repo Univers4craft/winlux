@@ -2,6 +2,9 @@
 //! GetProcAddress. Le bac à sable de Chromium (Claude, Electron) parcourt
 //! lui-même cette table ; sans elle, NtQueryInformationProcess restait nul et
 //! le courtier sautait à l'adresse 0.
+//!
+//! #852 : les renderers de Chromium vérifient aussi les en-têtes PE (MZ, PE,
+//! taille 0xF0, PE32+) d'autres DLL système avant d'en parcourir les imports.
 
 #![no_std]
 #![no_main]
@@ -66,6 +69,34 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 );
             }
         }
+    }
+    for dll in [
+        c"kernel32.dll",
+        c"user32.dll",
+        c"gdi32.dll",
+        c"advapi32.dll",
+    ] {
+        unsafe {
+            let base = GetModuleHandleA(dll.as_ptr()) as usize;
+            check!(base != 0, "GetModuleHandle d'une DLL système");
+            if base != 0 {
+                let pe = base + rd32(base + 0x3c);
+                check!(
+                    rd16(base) == 0x5A4D
+                        && rd32(pe) == 0x4550
+                        && rd16(pe + 20) == 0xF0
+                        && rd16(pe + 24) == 0x20b,
+                    "en-têtes PE32+ d'une DLL système"
+                );
+            }
+        }
+    }
+    unsafe {
+        let k32 = GetModuleHandleA(c"kernel32.dll".as_ptr()) as usize;
+        check!(
+            k32 != 0 && export(k32, b"GetProcAddress") != 0,
+            "kernel32!GetProcAddress dans la table"
+        );
     }
     finish()
 }

@@ -11,6 +11,8 @@
 
 use crate::dlls::{cstr, lookup, wstr};
 use crate::process::set_last_error;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_INVALID_HANDLE: u32 = 6;
@@ -1276,14 +1278,56 @@ pub unsafe extern "win64" fn tabbed_text_out_a(
     tabbed_text_out(hdc, x, y, &w, stops, origin)
 }
 
+/// Attributs posés par SetLayeredWindowAttributes, relus par
+/// GetLayeredWindowAttributes : (couleur clé, alpha, options).
+fn layered_attributes() -> &'static Mutex<HashMap<usize, (u32, u8, u32)>> {
+    static M: OnceLock<Mutex<HashMap<usize, (u32, u8, u32)>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// SetLayeredWindowAttributes : la transparence par fenêtre n'est pas encore
-/// appliquée ; la fenêtre reste opaque et visible.
+/// appliquée ; la fenêtre reste opaque et visible. Les valeurs sont gardées
+/// pour GetLayeredWindowAttributes.
 pub extern "win64" fn set_layered_window_attributes(
-    _hwnd: usize,
-    _key: u32,
-    _alpha: u8,
-    _flags: u32,
+    hwnd: usize,
+    key: u32,
+    alpha: u8,
+    flags: u32,
 ) -> i32 {
+    if hwnd == 0 {
+        set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    layered_attributes()
+        .lock()
+        .unwrap()
+        .insert(hwnd, (key, alpha, flags));
+    1
+}
+
+/// GetLayeredWindowAttributes : rend les valeurs de SetLayeredWindowAttributes.
+/// Chromium (Claude, Electron) l'importe en chargement différé et s'arrête
+/// net si la fonction manque (#852). Comme sous Windows, l'appel échoue
+/// pour une fenêtre dont les attributs n'ont jamais été posés.
+pub unsafe extern "win64" fn get_layered_window_attributes(
+    hwnd: usize,
+    key: *mut u32,
+    alpha: *mut u8,
+    flags: *mut u32,
+) -> i32 {
+    let Some((k, a, f)) = layered_attributes().lock().unwrap().get(&hwnd).copied() else {
+        set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    };
+    if !key.is_null() {
+        *key = k;
+    }
+    if !alpha.is_null() {
+        *alpha = a;
+    }
+    if !flags.is_null() {
+        *flags = f;
+    }
     1
 }
 
@@ -1302,7 +1346,7 @@ pub unsafe extern "win64" fn update_layered_window(
     _flags: u32,
 ) -> i32 {
     let Some(rect) = super::gui::window_rect(hwnd) else {
-        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     };
     let (x, y) = pt_dst
@@ -1827,6 +1871,7 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "TabbedTextOutA" => fn tabbed_text_out_a,
         "TabbedTextOutW" => fn tabbed_text_out_w,
         "SetLayeredWindowAttributes" => fn set_layered_window_attributes,
+        "GetLayeredWindowAttributes" => fn get_layered_window_attributes,
         "UpdateLayeredWindow" => fn update_layered_window,
         "UpdateLayeredWindowIndirect" => fn update_layered_window_indirect,
     }
@@ -1889,6 +1934,27 @@ pub fn crt_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attributs_de_fenetre_superposee_relus() {
+        let hwnd = 0x7e57_1a7e;
+        let (mut k, mut a, mut f) = (0u32, 0u8, 0u32);
+        unsafe {
+            assert_eq!(
+                get_layered_window_attributes(hwnd, &mut k, &mut a, &mut f),
+                0
+            );
+            assert_eq!(set_layered_window_attributes(hwnd, 0x00ff00, 200, 3), 1);
+            assert_eq!(
+                get_layered_window_attributes(hwnd, &mut k, &mut a, &mut f),
+                1
+            );
+            assert_eq!((k, a, f), (0x00ff00, 200, 3));
+            let p = std::ptr::null_mut();
+            assert_eq!(get_layered_window_attributes(hwnd, p, &mut a, p), 1);
+        }
+        assert!(lookup("user32", "GetLayeredWindowAttributes").is_some());
+    }
 
     #[test]
     fn mul_div_rounds_like_windows() {
