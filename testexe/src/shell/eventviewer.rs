@@ -902,7 +902,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     for (slot, k) in (SCROLL..VISIBLE_COUNT).take(ROWS_SHOWN).enumerate() {
         let e = &list[vis[k] as usize];
         let rr = rect(x - 8, ry, right, ry + row_h);
-        let hover = h.add(rr, ID_ROW + slot as u16);
+        let hover = h.row(rr, ID_ROW + slot as u16);
         if SELECTED == k {
             fill(
                 g.hdc,

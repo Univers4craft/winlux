@@ -170,6 +170,9 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         | "CreateDialogIndirectParamA"
         | "CreateDialogIndirectParamW" => spec(with_proc, t?, 5, 3),
         "TrackMouseEvent" | "_TrackMouseEvent" => raw(track_mouse_event, t?, 1),
+        // Une procédure de crochet x86 ne peut pas être appelée en win64 :
+        // handle factice, sans enregistrement, comme avant #938.
+        "SetWindowsHookExA" | "SetWindowsHookExW" => raw(inert_hook, 0, 4),
         _ => return None,
     })
 }
@@ -940,6 +943,11 @@ extern "win64" fn with_proc(args: u32, s: usize) -> u64 {
 
 /// TRACKMOUSEEVENT : cbSize, dwFlags, hwndTrack, dwHoverTime (16 octets en
 /// x86, 24 en x64).
+extern "win64" fn inert_hook(_args: u32, _aux: usize) -> u64 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x00F8_0000);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64
+}
+
 extern "win64" fn track_mouse_event(args: u32, target: usize) -> u64 {
     let t = arg(args, 0);
     if t == 0 {

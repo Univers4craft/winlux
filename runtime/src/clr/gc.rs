@@ -10,6 +10,8 @@ use std::sync::Mutex;
 
 const OBJ_ALIGN: usize = 8;
 const MARK_BIT: u32 = 1;
+/// Objet construit comme délégué (ECMA-335 §II.14.6).
+const DELEGATE_BIT: u32 = 2;
 const HEADER: usize = std::mem::size_of::<ObjHeader>();
 
 #[repr(C)]
@@ -17,7 +19,8 @@ pub struct ObjHeader {
     pub type_id: u32,
     pub flags: u32,
     pub size: u32,
-    _pad: u32,
+    /// Type des éléments d'un tableau (0 : références).
+    pub extra: u32,
 }
 
 pub struct GcHeap {
@@ -58,6 +61,28 @@ impl GcHeap {
             *(ptr as *mut u64) = length as u64;
         }
         ptr
+    }
+
+    /// Tableau dont les éléments sont du type `elem` (taille `elem_size`).
+    pub fn alloc_array_of(&mut self, elem: u32, elem_size: usize, length: usize) -> *mut u8 {
+        let ptr = self.alloc_array(super::types::TYPE_ARRAY, elem_size, length);
+        unsafe { (*(ptr.sub(HEADER) as *mut ObjHeader)).extra = elem };
+        ptr
+    }
+
+    /// Copie superficielle d'un objet : même type, même taille, mêmes
+    /// marques (hors marquage de collecte).
+    pub fn clone_object(&mut self, data: *mut u8) -> *mut u8 {
+        let hdr = unsafe { &*(data.sub(HEADER) as *const ObjHeader) };
+        let (type_id, flags, extra, size) = (hdr.type_id, hdr.flags, hdr.extra, hdr.size as usize);
+        let copy = self.alloc(type_id, size - HEADER);
+        unsafe {
+            std::ptr::copy_nonoverlapping(data, copy, size - HEADER);
+            let new_hdr = &mut *(copy.sub(HEADER) as *mut ObjHeader);
+            new_hdr.flags = flags & !MARK_BIT;
+            new_hdr.extra = extra;
+        }
+        copy
     }
 
     pub fn is_object(&self, data_ptr: usize) -> bool {
@@ -156,6 +181,19 @@ pub fn type_of(ptr: *mut u8) -> Option<u32> {
         return None;
     }
     Some(unsafe { (*(ptr.sub(HEADER) as *const ObjHeader)).type_id })
+}
+
+/// Marque un objet comme délégué.
+pub fn set_delegate(ptr: *mut u8) {
+    if with_gc(|gc| gc.is_object(ptr as usize)) {
+        unsafe { (*(ptr.sub(HEADER) as *mut ObjHeader)).flags |= DELEGATE_BIT };
+    }
+}
+
+/// Vrai si l'objet a été construit comme délégué.
+pub fn is_delegate(ptr: *mut u8) -> bool {
+    with_gc(|gc| gc.is_object(ptr as usize))
+        && unsafe { (*(ptr.sub(HEADER) as *const ObjHeader)).flags } & DELEGATE_BIT != 0
 }
 
 fn align_up(v: usize, a: usize) -> usize {

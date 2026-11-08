@@ -13,6 +13,8 @@
 #     l'installation, type 17 (DLL installée) à REMOVE="ALL" qui l'efface ;
 #   - base du paquet lue par une DLL (vue SQL avec paramètre ?) puis
 #     action différée planifiée par MsiDoAction avec son CustomActionData ;
+#   - écriture d'une DLL dans la base (ligne temporaire par MsiViewModify,
+#     relue par une requête) et flux de la table Binary (MsiRecordReadStream) ;
 #   - jamais lancés : un programme Linux (/bin/sh), cmd.exe ;
 #   - service (ServiceInstall) inscrit dans le registre puis retiré ;
 #   - paquet conservé retiré avec l'application.
@@ -81,6 +83,39 @@ UINT __stdcall Efface(MSIHANDLE h) {
     return DeleteFileW(path) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
 }
 UINT __stdcall Echoue(MSIHANDLE h) { (void)h; return ERROR_INSTALL_FAILURE; }
+/* Ajoute une propriété temporaire à la base, la relit, lit le flux d'une
+   DLL de la table Binary, puis écrit base-<valeur>-<taille>-<MZ>.txt. */
+UINT __stdcall Base(MSIHANDLE h) {
+    MSIHANDLE db = MsiGetActiveDatabase(h), view = 0, rec, row = 0;
+    WCHAR dir[MAX_PATH], value[32], path[2 * MAX_PATH]; DWORD n = MAX_PATH, vn = 32, w;
+    char head[2] = {0, 0}; DWORD hn = 2, size;
+    if (!db) return ERROR_INSTALL_FAILURE;
+    if (MsiDatabaseOpenViewW(db, L"SELECT `Property`, `Value` FROM `Property`", &view) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    rec = MsiCreateRecord(2);
+    MsiRecordSetStringW(rec, 1, L"WinluxTemporaire");
+    MsiRecordSetStringW(rec, 2, L"42");
+    if (MsiViewModify(view, MSIMODIFY_INSERT_TEMPORARY, rec) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    if (MsiViewModify(view, MSIMODIFY_INSERT_TEMPORARY, rec) == ERROR_SUCCESS) return ERROR_INSTALL_FAILURE; /* doublon */
+    MsiCloseHandle(rec); MsiCloseHandle(view);
+    if (MsiDatabaseOpenViewW(db, L"SELECT `Value` FROM `Property` WHERE `Property` = 'WinluxTemporaire'", &view) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    MsiViewExecute(view, 0);
+    if (MsiViewFetch(view, &row) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    MsiRecordGetStringW(row, 1, value, &vn);
+    MsiCloseHandle(row); MsiCloseHandle(view);
+    if (MsiDatabaseOpenViewW(db, L"SELECT `Data` FROM `Binary` WHERE `Name` = 'CaDll64'", &view) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    MsiViewExecute(view, 0);
+    if (MsiViewFetch(view, &row) != ERROR_SUCCESS) return ERROR_INSTALL_FAILURE;
+    size = MsiRecordDataSize(row, 1);
+    if (MsiRecordReadStream(row, 1, head, &hn) != ERROR_SUCCESS || hn != 2) return ERROR_INSTALL_FAILURE;
+    MsiCloseHandle(row); MsiCloseHandle(view); MsiCloseHandle(db);
+    MsiGetPropertyW(h, L"INSTALLDIR", dir, &n);
+    wsprintfW(path, L"%sbase-%s-%s-%c%c.txt", dir, value, size > 1000 ? L"taille" : L"vide", head[0], head[1]);
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return ERROR_INSTALL_FAILURE;
+    WriteFile(f, "ok\n", 3, &w, NULL);
+    CloseHandle(f);
+    return ERROR_SUCCESS;
+}
 /* Lit la table File (vue SQL, paramètre ?) puis planifie EcritPlan. */
 UINT __stdcall Planifie(MSIHANDLE h) {
     MSIHANDLE db = MsiGetActiveDatabase(h), view = 0, param, row;
@@ -151,6 +186,7 @@ printf '%s\t%s\t%s\n' \
     EcritDll 'NOT Installed' 4070 \
     EchoueDll 'NOT Installed' 4080 \
     PlanifieDll 'NOT Installed' 4090 \
+    BaseDll 'NOT Installed' 4095 \
     DonneesEfface 'REMOVE="ALL"' 3420 \
     EffaceDll 'REMOVE="ALL"' 3430 >>idt/InstallExecuteSequence.idt
 {
@@ -173,6 +209,7 @@ printf '%s\t%s\t%s\n' \
     # Immédiate x86 qui lit la base puis planifie EcritPlan (hors séquence).
     printf 'PlanifieDll\t1\tCaDll32\tPlanifie\n'
     printf 'EcritPlan\t1025\tCaDll64\tEcrit\n'
+    printf 'BaseDll\t1\tCaDll64\tBase\n'
     printf 'DonneesEfface\t51\tEffaceDll\t[INSTALLDIR]ca-dll.txt\n'
     printf 'EffaceDll\t1041\tcadll\tEfface\n'
 } >idt/CustomAction.idt
@@ -197,6 +234,7 @@ grep -q 'Action personnalisée Linux non lancée' "$work/out.txt" || fail "actio
 grep -qF 'Préparation dans C:\Program Files\Winlux Actions\ (42)' "$work/out.txt" || fail "DLL x86 : MsiProcessMessage absent du journal"
 test -f "$pf/Winlux Actions/ca-dll.txt" || fail "DLL x64 différée : CustomActionData (propriété posée par la DLL x86) non reçue"
 grep -q 'Action personnalisée DLL EchoueDll (Echoue) en échec (code 1603)' "$work/out.txt" || fail "DLL en échec non signalée"
+test -f "$pf/Winlux Actions/base-42-taille-MZ.txt" || fail "écriture dans la base (MsiViewModify) ou flux Binary (MsiRecordReadStream) : $(ls "$pf/Winlux Actions")"
 test -f "$pf/Winlux Actions/plan-3.txt" || fail "vue SQL (3 fichiers du composant) ou MsiDoAction d'une action différée : $(ls "$pf/Winlux Actions")"
 ls "$work/home/.local/share/winlux/msi/"*.msi >/dev/null 2>&1 || fail "paquet non conservé pour la désinstallation"
 svc='HKLM\SYSTEM\CurrentControlSet\Services\WinluxDemoSvc'
@@ -212,4 +250,4 @@ test -f "$pf/Prerequis Demo/outil.txt" || fail "le prérequis est parti avec l'a
 grep -q 'Action personnalisée Nettoie non lancée : outil système' "$work/out.txt" || fail "cmd.exe non signalé"
 if run reg.exe query "$svc" >/dev/null 2>&1; then fail "service resté inscrit après désinstallation"; fi
 if ls "$work/home/.local/share/winlux/msi/"*.msi >/dev/null 2>&1; then fail "paquet conservé resté"; fi
-echo "msi-actions : DLL x86 et x64 (types 1 et 17, propriétés, CustomActionData, vue SQL, MsiDoAction), types 2, 18, 34 et WixQuietExec lancés (installation et REMOVE=ALL), service inscrit puis retiré, Linux et cmd refusés, paquet conservé puis retiré"
+echo "msi-actions : DLL x86 et x64 (types 1 et 17, propriétés, CustomActionData, vue SQL, MsiViewModify, flux Binary, MsiDoAction), types 2, 18, 34 et WixQuietExec lancés (installation et REMOVE=ALL), service inscrit puis retiré, Linux et cmd refusés, paquet conservé puis retiré"

@@ -536,7 +536,41 @@ fn format_u64(buf: &mut [u8], v: u64) -> usize {
 
 // ---------- Dessin ----------
 
+/// Contrôles atteignables par Tab (#28), aux mêmes positions que `mouse`.
+/// Les partitions se parcourent aux flèches, Ctrl+Tab change d'onglet.
+unsafe fn focus_zones(c: &Rect) {
+    for i in 0..TAB_NAMES.len() as i32 {
+        let ty = c.top + 60 + i * 36;
+        focus_zone(&rect(c.left + 4, ty, c.left + NAV_W - 4, ty + 32));
+    }
+    let content_x = c.left + NAV_W + 1;
+    let content_w = c.right - content_x;
+    if TAB == 0 {
+        let y = c.bottom - 52;
+        let right = content_x + content_w;
+        if repair_shown() {
+            focus_zone(&rect(right - 412, y, right - 288, y + 32));
+        }
+        focus_zone(&rect(right - 280, y, right - 156, y + 32));
+        focus_zone(&rect(right - 148, y, right - 24, y + 32));
+    } else if TAB == 1 {
+        let mut row = 0;
+        for i in 0..PART_COUNT {
+            if !PARTS[i].is_disk {
+                continue;
+            }
+            let cy = c.top + 56 + row * 132;
+            if cy + 120 > c.bottom {
+                break;
+            }
+            focus_zone(&rect(content_x + 12, cy, content_x + content_w.min(312), cy + 120));
+            row += 1;
+        }
+    }
+}
+
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
+    focus_zones(&f.client);
     let c = &f.client;
     let p = pal();
 

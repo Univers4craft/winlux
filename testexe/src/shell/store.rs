@@ -788,6 +788,12 @@ unsafe fn hit(r: Rect, a: Action) {
         HITS[HIT_COUNT] = (r, a);
         HIT_COUNT += 1;
     }
+    // Atteignable par Tab (#28) ; la recherche est un champ de saisie.
+    if matches!(a, Action::Search) {
+        focus_field(&r);
+    } else {
+        focus_zone(&r);
+    }
 }
 unsafe fn hot(r: &Rect) -> bool {
     inside(r, MX, MY)
