@@ -1474,7 +1474,12 @@ pub unsafe extern "win64" fn create_bitmap(
     bpp: u32,
     bits: *const c_void,
 ) -> usize {
+    // Largeur ou hauteur nulle : bitmap 1x1 monochrome, comme Windows.
+    if width == 0 || height == 0 {
+        return gui::create_compatible_bitmap(1, 1).unwrap_or(0);
+    }
     let Some(handle) = gui::create_compatible_bitmap(width, height) else {
+        crate::process::set_last_error(87);
         return 0;
     };
     let depth = planes.max(1) * bpp;
