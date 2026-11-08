@@ -166,7 +166,7 @@ SHELL_APP_ICONS = {
     "store": "system-software-install", "programs": "system-software-install",
     "fonts": "font-x-generic", "taskschd": "x-office-calendar", "firewall": "security-high",
     "welcome": "winlux-welcome", "regedit": "preferences-system", "taskmgr": "utilities-system-monitor",
-    "eventviewer": "utilities-system-monitor", "msinfo32": "computer",
+    "eventviewer": "utilities-system-monitor", "msinfo32": "computer", "notepad": "accessories-text-editor",
 }
 ICON_ROOT = Path(os.environ.get("WINLUX_ICON_ROOT", "/usr/share/icons"))
 
