@@ -7438,9 +7438,60 @@ pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
     }
     1
 }
+/// Fichier où écrire le code de sortie Windows complet (`WINLUX_EXIT_CODE_FILE`,
+/// posé par winlux-open, #1205) : le statut de sortie Linux n'en garde que
+/// l'octet de poids faible (0x780148E0 affiché « code 224 »).
+static EXIT_CODE_FILE: OnceLock<std::ffi::CString> = OnceLock::new();
+
+/// Lu une fois au démarrage, tant qu'il n'y a qu'un fil, puis retiré de
+/// l'environnement : un programme lancé par celui-ci n'y écrit pas son code.
+pub fn exit_code_file_init() {
+    if let Some(path) = std::env::var_os("WINLUX_EXIT_CODE_FILE") {
+        // Appelé au début de main, avant tout autre fil.
+        std::env::remove_var("WINLUX_EXIT_CODE_FILE");
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(path) = std::ffi::CString::new(path.as_bytes()) {
+            if !path.as_bytes().is_empty() {
+                let _ = EXIT_CODE_FILE.set(path);
+            }
+        }
+    }
+}
+
+/// Texte écrit pour un code : « 0x780148E0 ». Sans allocation.
+fn exit_code_text(code: u32) -> [u8; 11] {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut text = *b"0x00000000\n";
+    for i in 0..8 {
+        text[9 - i] = HEX[((code >> (4 * i)) & 0xF) as usize];
+    }
+    text
+}
+
+/// Écrit le code complet ; sûr dans un gestionnaire de signal (open/write).
+pub fn record_exit_code(code: u32) {
+    let Some(path) = EXIT_CODE_FILE.get() else {
+        return;
+    };
+    let text = exit_code_text(code);
+    // SAFETY: chemin terminé par NUL, tampon local ; appels sûrs en signal.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+            0o600,
+        );
+        if fd >= 0 {
+            libc::write(fd, text.as_ptr().cast(), text.len());
+            libc::close(fd);
+        }
+    }
+}
+
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -7458,6 +7509,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
+    record_exit_code(code as u32);
     std::process::exit(code)
 }
 
@@ -9923,6 +9975,14 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn code_de_sortie_complet_en_hexadecimal() {
+        // #1205 : 0x780148E0, pas l'octet de poids faible (224).
+        assert_eq!(&super::exit_code_text(0x7801_48E0), b"0x780148E0\n");
+        assert_eq!(&super::exit_code_text(0), b"0x00000000\n");
+        assert_eq!(&super::exit_code_text(0xC000_0005), b"0xC0000005\n");
+    }
+
     #[test]
     fn programme_windows_absent_echoue_sans_lancer_de_runtime() {
         // #1133 : ScreenToGif lance Powershell.exe ; CreateProcess doit

@@ -898,6 +898,11 @@ ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_service
    and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
    and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
    "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
+# #1205 : code de sortie Windows complet (0x780148E0), pas son dernier octet (« code 224 »).
+ok("WINLUX_EXIT_CODE_FILE" in (ROOT / "integration/winlux-open").read_text()
+   and "fn record_exit_code" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "#1205" in (SCRIPTS / "test-integration.sh").read_text(),
+   "message de fin d'un .exe : code de sortie complet en hexadécimal (#1205)")
 # #1188/#1189 : C:\\Users\\<compte> = dossier personnel (raccourcis de Claude pour Windows).
 ok("def account_names" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#1189" in (SCRIPTS / "test-native-catalogue.py").read_text(),
