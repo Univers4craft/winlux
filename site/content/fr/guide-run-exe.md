@@ -27,7 +27,7 @@ Quand un installateur demande les droits d'administrateur, Winlux ouvre une fen�
 
 | Message | Ce que ça veut dire |
 |---|---|
-| « Programme Windows 32 bits » | Seuls les programmes 64 bits sont pris en charge aujourd'hui. Cherchez la version 64 bits du logiciel. |
+| « Programme Windows 32 bits » | La prise en charge des programmes 32 bits est encore partielle et ce type-là n'est pas encore accepté. Cherchez la version 64 bits du logiciel. |
 | « Fonction manquante » | Le programme utilise une fonction de Windows que Winlux ne fournit pas encore. Signalez-le : c'est ce qui nous dit quoi écrire ensuite. |
 | Le programme se ferme sans rien dire | Ouvrez l'Observateur d'événements depuis le menu Démarrer : la cause y est notée. |
 

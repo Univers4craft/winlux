@@ -135,19 +135,16 @@ pub extern "win64" fn flush_process_write_buffers() {
     }
 }
 
-/// OpenThreadToken : un thread Winlux n'emprunte jamais d'identité, il n'a
-/// donc pas de jeton propre (ERROR_NO_TOKEN), comme sous Windows.
+/// OpenThreadToken : un thread Winlux n'a de jeton propre que s'il en a
+/// reçu un (SetThreadToken, ImpersonateSelf) ; sinon ERROR_NO_TOKEN, comme
+/// sous Windows.
 pub unsafe extern "win64" fn open_thread_token(
-    _thread: usize,
+    thread: usize,
     _access: u32,
     _self: i32,
     token: *mut usize,
 ) -> i32 {
-    if !token.is_null() {
-        *token = 0;
-    }
-    set_last_error(1008);
-    0
+    crate::dlls::security::open_thread_token(thread, token)
 }
 
 // --- Vérification de version ------------------------------------------------

@@ -241,6 +241,10 @@ def two_panes():
     area = app.workarea()
     large = area.width >= 1600 and area.height >= 900
     centred((640 + 360) if large else (560 + 320))
+    # Largeur du volet indépendante de son contenu, quelle que soit l'heure (#869).
+    side_width = 360 if large else 320
+    assert app.side.get_preferred_width() == (side_width, side_width), app.side.get_preferred_width()
+    assert abs(app.side.get_allocated_width() - side_width) <= 2, app.side.get_allocated_width()
     left = texts(app.content)
     assert "Utilisées souvent" in left and "Traitement de texte" in left, left
     assert "WinSCP" not in left or True

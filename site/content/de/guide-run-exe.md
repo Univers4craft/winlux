@@ -27,7 +27,7 @@ Wenn ein Installationsprogramm Administratorrechte verlangt, öffnet Winlux ein 
 
 | Meldung | Was sie bedeutet |
 |---|---|
-| „32-Bit-Windows-Programm“ | Derzeit werden nur 64-Bit-Programme unterstützt. Suchen Sie die 64-Bit-Version der Software. |
+| „32-Bit-Windows-Programm“ | Die Unterstützung von 32-Bit-Programmen ist noch unvollständig, und diese Art wird noch nicht angenommen. Suchen Sie die 64-Bit-Version der Software. |
 | „Fehlende Funktion“ | Das Programm nutzt eine Windows-Funktion, die Winlux noch nicht bereitstellt. Melden Sie es: Genau das sagt uns, was wir als Nächstes schreiben. |
 | Das Programm schließt sich kommentarlos | Öffnen Sie die Ereignisanzeige über das Startmenü: Dort ist die Ursache vermerkt. |
 

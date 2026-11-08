@@ -397,6 +397,7 @@ GlobalFlags
 GlobalFree
 GlobalGetAtomNameA
 GlobalGetAtomNameW
+GlobalHandle
 GlobalLock
 GlobalMemoryStatus
 GlobalMemoryStatusEx
@@ -416,6 +417,7 @@ HeapSize
 HeapUnlock
 HeapValidate
 HeapWalk
+IdnToAscii
 InitAtomTable
 InitOnceBeginInitialize
 InitOnceComplete
@@ -540,6 +542,7 @@ ReOpenFile
 ReadConsoleA
 ReadConsoleInputA
 ReadConsoleInputW
+ReadConsoleOutputCharacterA
 ReadConsoleW
 ReadDirectoryChangesExW
 ReadDirectoryChangesW

@@ -38,7 +38,11 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
 - « Winlux Nuit » et « Winlux Aube » : calculés au pixel dans
   `shell/personalize.rs`, et rendus en PNG pour la session XFCE.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.
-- L'ancien fond `Fond ecran.png` reste proposé sous le nom « Winlux classique ».
+- L'ancien fond `Fond ecran.png` est retiré (#590) : son motif central, une
+  fenêtre à quatre carreaux, évoquait le logo Windows. `wallpaper.bmp`
+  (écran de verrouillage, shell PE) est désormais tiré de « Winlux Aurore », et
+  `test-no-microsoft-branding.py` refuse tout fond qui ne sort pas de
+  `scripts/render-brand.py`.
 
 ## Écran de démarrage du noyau
 

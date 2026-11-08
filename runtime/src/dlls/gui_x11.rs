@@ -1328,7 +1328,15 @@ impl X11Backend {
 
     fn scaled_font(&self, spec: &FontSpec) -> FontSpec {
         let mut scaled = spec.clone();
-        scaled.height = self.scaled(spec.height).max(1);
+        // Hauteur négative (taille des caractères, la forme habituelle des
+        // LOGFONT) : on garde le signe. `max(1)` la ramenait à 1, donc à la
+        // taille plancher de 9 pixels : le texte des applications était
+        // dessiné et mesuré trop petit (onglets de FileZilla, #798).
+        scaled.height = if spec.height < 0 {
+            -self.scaled(-spec.height).max(1)
+        } else {
+            self.scaled(spec.height).max(1)
+        };
         if spec.width != 0 {
             scaled.width = self.scaled(spec.width).max(1);
         }
@@ -3189,8 +3197,16 @@ fn keysym_to_char(sym: u32) -> u16 {
 }
 
 /// `lParam` d'un message clavier : une répétition, code matériel, transition.
+/// lParam d'un WM_KEYDOWN/UP : bits 16-23 = scancode PS/2 (jeu 1), comme
+/// sous Windows, et non le keycode X (evdev + 8) ; bit 24 = touche étendue.
+/// ToAscii/ToUnicode lisent ce scancode : PuTTY le leur repasse, et un
+/// keycode X brut y faisait taper « l » pour « a » (#773).
 fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
-    let scan = ((keycode as isize) << 16) | if extended { 1 << 24 } else { 0 };
+    let (code, e0) = (keycode as u16)
+        .checked_sub(8)
+        .and_then(crate::dlls::rawinput::scancode)
+        .unwrap_or((0, false));
+    let scan = ((code as isize & 0xFF) << 16) | if extended || e0 { 1 << 24 } else { 0 };
     if up {
         scan | (1 << 30) | (1 << 31)
     } else {
@@ -3357,10 +3373,12 @@ mod tests {
         assert_eq!(keysym_to_char(0xFF0D), 0x0D); // Entrée
         assert_eq!(keysym_to_char(0xFF51), 0); // flèche : pas de WM_CHAR
 
-        assert_eq!(key_lparam(38, false, false), (38isize << 16) | 1);
+        // Keycode X 38 = evdev 30 = scancode 0x1E (touche A en QWERTY).
+        assert_eq!(key_lparam(38, false, false), (0x1Eisize << 16) | 1);
+        // Keycode X 113 = evdev 105 = flèche gauche, E0 4B.
         assert_eq!(
             key_lparam(113, true, true),
-            (113isize << 16) | (1 << 24) | (1 << 30) | (1 << 31),
+            (0x4Bisize << 16) | (1 << 24) | (1 << 30) | (1 << 31),
         );
     }
 
@@ -4150,6 +4168,46 @@ impl gui::GuiBackend for X11Backend {
             self.before_x11();
             let _ = self.conn.flush();
         }
+    }
+
+    fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        // Rien de peint encore, ou tampon à refaire (taille changée) : il
+        // n'y a pas de contenu sur lequel poser ces commandes.
+        let ready = self.content.contains_key(&hwnd)
+            && self
+                .back
+                .get(&hwnd)
+                .is_some_and(|&(_, width, height)| width == w.width && height == w.height);
+        if !ready {
+            let mut all = self.content.get(&hwnd).cloned().unwrap_or_default();
+            all.extend_from_slice(cmds);
+            gui::GuiBackend::draw(self, hwnd, &all);
+            return;
+        }
+        // La liste rejouée sans tampon arrière grandit avec chaque dessin
+        // partiel : au-delà d'un plafond, on garde les plus récents.
+        const CONTENT_MAX: usize = 50_000;
+        if let Some(content) = self.content.get_mut(&hwnd) {
+            content.extend_from_slice(cmds);
+            if content.len() > CONTENT_MAX {
+                let excess = content.len() - CONTENT_MAX;
+                content.drain(..excess);
+            }
+        }
+        let Some(pixmap) = self.back_buffer(hwnd, &w) else {
+            return;
+        };
+        let target = XWin {
+            window: pixmap,
+            ..w
+        };
+        self.paint_cmds(&target, cmds);
+        self.overlay.frame(hwnd);
+        self.paint_overlay(&target, hwnd);
+        self.present(&w, pixmap, 0, 0, w.width, w.height);
     }
 
     fn set_menu_bar(

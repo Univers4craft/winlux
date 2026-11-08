@@ -2,8 +2,12 @@
 Type=Application
 Name=Planificateur de tâches
 Name[en]=Task Scheduler
+Name[de]=Aufgabenplanung
+Name[es]=Programador de tareas
 Comment=Lancer des programmes à heure fixe, au démarrage ou sur un événement
 Comment[en]=Run programs on a schedule, at startup or on an event
+Comment[de]=Programme zu festen Zeiten, beim Start oder bei einem Ereignis ausführen
+Comment[es]=Ejecutar programas a una hora fija, al iniciar o ante un evento
 Exec=/usr/bin/winlux-shell-app taskschd
 Icon=x-office-calendar
 StartupWMClass=winlux-taskschd

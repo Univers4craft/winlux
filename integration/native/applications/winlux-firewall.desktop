@@ -2,8 +2,12 @@
 Type=Application
 Name=Pare-feu Winlux
 Name[en]=Winlux Firewall
+Name[de]=Winlux-Firewall
+Name[es]=Firewall de Winlux
 Comment=Règles entrantes et sortantes, profils réseau et connexions bloquées
 Comment[en]=Inbound and outbound rules, network profiles and blocked connections
+Comment[de]=Eingehende und ausgehende Regeln, Netzwerkprofile und blockierte Verbindungen
+Comment[es]=Reglas de entrada y salida, perfiles de red y conexiones bloqueadas
 Exec=/usr/bin/winlux-shell-app firewall
 Icon=security-high
 StartupWMClass=winlux-firewall
