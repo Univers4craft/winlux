@@ -637,4 +637,12 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
+# ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
+ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre centrée : Vue des tâches et Rechercher reconnus à leur lanceur recopié (#885)")
+ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
