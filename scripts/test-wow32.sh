@@ -26,6 +26,10 @@
 # messages, WM_PAINT et GDI, clavier, souris, minuteurs, sous-classement,
 # WINDOWPOS recopiée, DIB section, GetObject, boîte de dialogue), sans écran
 # puis sous un vrai serveur X (Xvfb) quand il est là.
+# jeux32.exe et jeux64.exe (#237, #777) : Direct3D 8, DirectDraw (surfaces 8/16/32 bits,
+# Lock, Blt, BltFast, clés de couleur, GetDC, palette, découpeur, plein écran
+# exclusif et Flip), MIDI (midiOut*, midiStream* et leurs rappels),
+# timeSetEvent et waveOut avec rappel, en x86 puis en x64.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -35,7 +39,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -203,3 +207,23 @@ if command -v xvfb-run >/dev/null 2>&1; then
 else
     echo "gui32 : xvfb-run absent, essai X11 sauté"
 fi
+
+jeux() {
+    name=$1; shift
+    set +e
+    "$@" WINLUX_DDRAW_MODESWITCH=0 timeout 60 "$runtime" "$out/$name.exe" >"$work/jeux.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'Jeux anciens : tout est correct' "$work/jeux.txt"; then
+        cat "$work/jeux.txt"
+        echo "$name.exe ($*) : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+}
+for name in jeux32 jeux64; do
+    jeux "$name" env WINLUX_GUI=headless
+    if command -v xvfb-run >/dev/null 2>&1; then
+        jeux "$name" xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
+    fi
+done
+echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"

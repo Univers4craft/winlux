@@ -236,6 +236,10 @@ pub(crate) fn surface_fits(f: u32, w: u32, h: u32) -> bool {
         && (level_layout(f, w, h).1 as u64) <= MAX_SURFACE_BYTES
 }
 
+/// Tables x86 des objets pour les programmes 32 bits (#778).
+#[path = "d3d9_x86.rs"]
+mod x86;
+
 // ── Objets COM ─────────────────────────────────────────────────────────────
 
 /// Tous les objets D3D9 partagent cet en-tête : vtable, compteur, appareil.
@@ -492,7 +496,7 @@ fn new_obj(vtbl: &'static [usize], device: *mut Obj, kind: Kind) -> *mut Obj {
         }
     }
     Box::into_raw(Box::new(Obj {
-        vtbl: vtbl.as_ptr(),
+        vtbl: x86::abi(vtbl),
         refs: AtomicU32::new(1),
         device,
         kind,
@@ -1243,7 +1247,7 @@ unsafe fn create_device(
         gamma: Vec::new(),
     };
     let device = Box::into_raw(Box::new(Obj {
-        vtbl: device_vtable().as_ptr(),
+        vtbl: x86::abi(device_vtable()),
         refs: AtomicU32::new(1),
         device: std::ptr::null_mut(),
         kind: Kind::Device(Box::new(Mutex::new(dev))),
@@ -1284,7 +1288,7 @@ unsafe fn create_device(
             d.ds = ds;
         }
         d.swapchain = Box::into_raw(Box::new(Obj {
-            vtbl: swapchain_vtable().as_ptr(),
+            vtbl: x86::abi(swapchain_vtable()),
             refs: AtomicU32::new(1),
             device,
             kind: Kind::SwapChain,
@@ -2498,7 +2502,7 @@ unsafe extern "win64" fn dev_reset(this: *mut Obj, pp: *mut PresentParams) -> i3
         d.ds = ds;
     }
     d.swapchain = Box::into_raw(Box::new(Obj {
-        vtbl: swapchain_vtable().as_ptr(),
+        vtbl: x86::abi(swapchain_vtable()),
         refs: AtomicU32::new(1),
         device: this,
         kind: Kind::SwapChain,
@@ -5043,7 +5047,7 @@ pub(crate) unsafe fn test_device() -> *mut c_void {
 }
 
 pub(crate) unsafe fn is_device(p: *mut c_void) -> bool {
-    !p.is_null() && *(p as *const *const usize) == device_vtable().as_ptr()
+    !p.is_null() && *(p as *const *const usize) == x86::abi(device_vtable())
 }
 
 pub fn exports() -> crate::dlls::Exports {

@@ -597,5 +597,18 @@ ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.
 # #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
 ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
    "relais root : vrai code de retour malgré SIGCHLD ignoré")
+# #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
+# en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
+runtime_dlls = ROOT / "runtime/src/dlls"
+ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exists()
+   and (runtime_dlls / "d3d8.rs").exists()
+   and (runtime_dlls / "d3dx9.rs").exists() and (runtime_dlls / "dsound_x86.rs").exists()
+   and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
+   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (ROOT / "runtime/src/audio/synth.rs").exists()
+   and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
+   and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

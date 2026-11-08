@@ -13,6 +13,10 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+/// Tables x86 des objets pour les programmes 32 bits (#778).
+#[path = "dsound_x86.rs"]
+mod x86;
+
 const DSERR_CONTROLUNAVAIL: i32 = 0x8878_001Eu32 as i32;
 const DSERR_INVALIDCALL: i32 = 0x8878_0032u32 as i32;
 const DSERR_PRIOLEVELNEEDED: i32 = 0x8878_0046u32 as i32;
@@ -216,7 +220,7 @@ struct Device {
 
 fn new_device() -> *mut Com<Device> {
     Com::create(
-        DS_VT.ptr(),
+        x86::abi(&DS_VT, "IDirectSound8"),
         Device {
             sh: Arc::new(DevShared {
                 coop: AtomicU32::new(1),
@@ -309,8 +313,10 @@ unsafe extern "win64" fn ds_create_sound_buffer(
     if !outer.is_null() {
         return CLASS_E_NOAGGREGATION;
     }
+    // DSBUFFERDESC1 / DSBUFFERDESC : 24 / 40 octets en 64 bits (#859) ; 20
+    // et 36 (tailles 32 bits) restent acceptées, disposition 64 bits.
     let size = *(desc as *const u32);
-    if size != 20 && size != 36 {
+    if ![20, 24, 36, 40].contains(&size) {
         return E_INVALIDARG;
     }
     let flags = *(desc.add(4) as *const u32);
@@ -636,15 +642,15 @@ fn new_buffer(
         audio::add_source(sh.clone())
     };
     let b = Com::create(
-        BUF_VT.ptr(),
+        x86::abi(&BUF_VT, "IDirectSoundBuffer8"),
         Buffer {
             sh,
             primary,
             flags,
             source,
-            notify: Iface::new(NOTIFY_VT.ptr()),
-            b3d: Iface::new(B3D_VT.ptr()),
-            listener: Iface::new(LISTENER_VT.ptr()),
+            notify: Iface::new(x86::abi(&NOTIFY_VT, "IDirectSoundNotify")),
+            b3d: Iface::new(x86::abi(&B3D_VT, "IDirectSound3DBuffer")),
+            listener: Iface::new(x86::abi(&LISTENER_VT, "IDirectSound3DListener")),
         },
     );
     unsafe {
@@ -1580,7 +1586,7 @@ impl Drop for CapBuffer {
 
 fn new_capture() -> *mut Com<Capture> {
     Com::create(
-        DSC_VT.ptr(),
+        x86::abi(&DSC_VT, "IDirectSoundCapture"),
         Capture {
             initialized: AtomicBool::new(false),
         },
@@ -1658,12 +1664,12 @@ unsafe extern "win64" fn dsc_create_buffer(
     });
     let source = audio::add_source(sh.clone());
     let b = Com::create(
-        CAPBUF_VT.ptr(),
+        x86::abi(&CAPBUF_VT, "IDirectSoundCaptureBuffer8"),
         CapBuffer {
             sh,
             flags,
             source,
-            notify: Iface::new(CAPNOTIFY_VT.ptr()),
+            notify: Iface::new(x86::abi(&CAPNOTIFY_VT, "IDirectSoundCaptureNotify")),
         },
     );
     (*b).inner.notify.owner = b as *mut c_void;
@@ -1983,22 +1989,26 @@ pub unsafe extern "win64" fn direct_sound_capture_create(
     create_initialized(new_capture(), dsc_initialize, dev, out)
 }
 
-type EnumA = unsafe extern "win64" fn(*const Guid, *const u8, *const u8, usize) -> i32;
-type EnumW = unsafe extern "win64" fn(*const Guid, *const u16, *const u16, usize) -> i32;
-
 unsafe fn enumerate_a(cb: usize, ctx: usize, primary: &str, dev: &Guid, name: &str) -> i32 {
     if cb == 0 {
         return E_INVALIDARG;
     }
     audio::ensure_windows_thread();
-    let f: EnumA = std::mem::transmute(cb);
+    // Copies sur le tas (sous 4 Go pour un programme 32 bits), rappel dans
+    // l'ABI du programme (#778).
     let mut p = super::encode_ansi(primary);
     p.push(0);
     let mut n = super::encode_ansi(name);
     n.push(0);
-    let empty = [0u8];
-    if f(std::ptr::null(), p.as_ptr(), empty.as_ptr(), ctx) != 0 {
-        f(dev, n.as_ptr(), c"winlux".as_ptr() as *const u8, ctx);
+    let m = b"winlux\0".to_vec();
+    let empty = vec![0u8];
+    let g = Box::new(*dev);
+    let call = |a: usize, b: &[u8], c: &[u8]| {
+        super::legacy_com::call_back(cb, &[a, b.as_ptr() as usize, c.as_ptr() as usize, ctx]) as u32
+            != 0
+    };
+    if call(0, &p, &empty) {
+        call(&*g as *const Guid as usize, &n, &m);
     }
     S_OK
 }
@@ -2006,11 +2016,15 @@ unsafe fn enumerate_w(cb: usize, ctx: usize, primary: &str, dev: &Guid, name: &s
     if cb == 0 {
         return E_INVALIDARG;
     }
-    let f: EnumW = std::mem::transmute(cb);
     let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let (p, n, m, e) = (w(primary), w(name), w("winlux"), w(""));
-    if f(std::ptr::null(), p.as_ptr(), e.as_ptr(), ctx) != 0 {
-        f(dev, n.as_ptr(), m.as_ptr(), ctx);
+    let g = Box::new(*dev);
+    let call = |a: usize, b: &[u16], c: &[u16]| {
+        super::legacy_com::call_back(cb, &[a, b.as_ptr() as usize, c.as_ptr() as usize, ctx]) as u32
+            != 0
+    };
+    if call(0, &p, &e) {
+        call(&*g as *const Guid as usize, &n, &m);
     }
     S_OK
 }
