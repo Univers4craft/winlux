@@ -476,9 +476,7 @@ mod remote {
             .flatten()
             .filter(|e| {
                 let n = e.file_name().to_string_lossy().into_owned();
-                // Le fichier de verrou partage le préfixe : ce n'est pas une
-                // instance (le prendre pour une instance donnait 231, #803).
-                n.starts_with(&prefix) && !n.starts_with(&mine) && !n.ends_with(".verrou")
+                n.starts_with(&prefix) && !n.starts_with(&mine)
             })
             .map(|e| e.path())
             .collect();
@@ -504,24 +502,19 @@ mod remote {
             .open(d.join(format!("{}.verrou", key(name))))
             .map_err(|_| false)?;
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
-        // Une entrée dont personne n'écoute plus (processus disparu) ne
-        // compte pas : le tube n'existe pas, ERROR_FILE_NOT_FOUND (#803).
-        let mut seen = false;
-        for path in candidates(name) {
+        let list = candidates(name);
+        let seen = !list.is_empty();
+        for path in list {
             let (Some(s), Some((a, len))) = (socket(), address(&path)) else {
                 continue;
             };
             let rc = unsafe {
                 libc::connect(s.as_raw_fd(), (&a as *const libc::sockaddr_un).cast(), len)
             };
-            let errno = std::io::Error::last_os_error().raw_os_error();
             // Pris, ou abandonné par un processus disparu : on l'efface.
             let _ = std::fs::remove_file(&path);
             if rc == 0 {
                 return Ok(s);
-            }
-            if !matches!(errno, Some(libc::ECONNREFUSED | libc::ENOENT)) {
-                seen = true;
             }
         }
         Err(seen)
@@ -629,17 +622,5 @@ mod tests {
         );
         assert_eq!(pipe_name("\\\\?\\PIPE\\Truc").as_deref(), Some("truc"));
         assert_eq!(pipe_name("C:\\pipe\\x"), None);
-    }
-
-    /// #803 : un tube que personne n'a créé n'existe pas. Le fichier de
-    /// verrou laissé par une première tentative ne le rend pas « occupé ».
-    #[test]
-    fn tube_absent_donne_fichier_introuvable() {
-        let _teb = crate::process::test_teb();
-        let name = format!("winlux-test-absent-{}", std::process::id());
-        for _ in 0..2 {
-            assert_eq!(open_client(&name, 0), usize::MAX);
-            assert_eq!(crate::process::last_error(), ERROR_FILE_NOT_FOUND);
-        }
     }
 }

@@ -7,8 +7,6 @@ static NOTES: StdMutex<Vec<(u16, u16)>> = StdMutex::new(Vec::new());
 static SERIAL: StdMutex<()> = StdMutex::new(());
 /// Codes WM_NOTIFY reçus par la fenêtre parente.
 static NOTIFY: StdMutex<Vec<i32>> = StdMutex::new(Vec::new());
-/// URL des NM_CLICK de SysLink reçus par la fenêtre parente.
-static LINK_URLS: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
 /// WM_DRAWITEM reçus par la fenêtre parente : (type de contrôle, élément, donnée).
 static DRAWN: StdMutex<Vec<(u32, u32, usize)>> = StdMutex::new(Vec::new());
 
@@ -31,23 +29,6 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
     if msg == 0x004E && lp != 0 {
         let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
         NOTIFY.lock().unwrap().push(code);
-        if code == -2
-            && crate::dlls::gui::window_class(unsafe { *(lp as *const usize) })
-                .is_some_and(|c| c.eq_ignore_ascii_case("SysLink"))
-        {
-            // NMLINK : szUrl à 24 + 112.
-            let url: Vec<u16> = unsafe {
-                let p = (lp as *const u8).add(136) as *const u16;
-                (0..2084)
-                    .map(|k| *p.add(k))
-                    .take_while(|&c| c != 0)
-                    .collect()
-            };
-            LINK_URLS
-                .lock()
-                .unwrap()
-                .push(String::from_utf16_lossy(&url));
-        }
         if code == -177 {
             // LVN_GETDISPINFOW : NMHDR (24 octets) puis LVITEMW
             unsafe {
@@ -348,29 +329,6 @@ fn liste_ajout_tri_selection_double_clic() {
         1,
         "la sélection suit la suppression"
     );
-    gui::destroy_window(p);
-}
-
-/// #841 : comme sous Windows, SetWindowPos sur une liste déroulante fermée
-/// ne change que la hauteur de la liste ouverte ; le champ garde la sienne
-/// (wxWidgets relit cette taille pour régler le champ).
-#[test]
-fn liste_deroulante_garde_la_hauteur_du_champ() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let p = parent_window();
-    let cb = child(p, "COMBOBOX", "", 0x2, 32, (0, 0, 150, 200));
-    let h = gui::window_rect(cb).unwrap().height();
-    unsafe { user32::set_window_pos(cb, 0, 0, 0, 300, 170, 0x0002 | 0x0004) };
-    let r = gui::window_rect(cb).unwrap();
-    assert_eq!((r.width(), r.height()), (300, h));
-    // Champ plus haut : la fenêtre fermée suit.
-    sendw(cb, 0x153, usize::MAX, 30);
-    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
-    // La liste ouverte reprend la hauteur demandée.
-    sendw(cb, 0x14F, 1, 0);
-    assert_eq!(gui::window_rect(cb).unwrap().height(), 170);
-    sendw(cb, 0x14F, 0, 0);
-    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
     gui::destroy_window(p);
 }
 
@@ -1358,38 +1316,4 @@ fn ctrl_a_selectionne_tout_le_champ() {
         user32::destroy_window(e);
         user32::destroy_window(p);
     }
-}
-
-/// #865 : SysLink existe (wxHyperlinkCtrl), donne sa taille idéale et
-/// signale un clic sur un lien par NM_CLICK avec l'URL.
-#[test]
-fn syslink_taille_et_clic() {
-    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let p = parent_window();
-    let link = child(
-        p,
-        "SysLink",
-        "Voir <A HREF=\"https://exemple.org/aide\">l'aide</A>",
-        0x5001_0000,
-        40,
-        (0, 0, 300, 20),
-    );
-    assert_ne!(link, 0, "SysLink créé");
-    let mut size = [0i32; 2];
-    let h = sendw(link, 0x0701, 0, size.as_mut_ptr() as isize);
-    assert!(
-        size[0] > 20 && size[1] > 5 && h == size[1] as isize,
-        "{size:?}"
-    );
-    LINK_URLS.lock().unwrap().clear();
-    // Clic sur « Voir » : rien ; clic au bout du texte, dans le lien.
-    sendw(link, WM_LBUTTONUP, 0, (5 << 16) | 2);
-    assert!(LINK_URLS.lock().unwrap().is_empty());
-    let x = (size[0] - 3) as isize;
-    sendw(link, WM_LBUTTONUP, 0, (5 << 16) | x);
-    assert_eq!(
-        *LINK_URLS.lock().unwrap(),
-        vec!["https://exemple.org/aide".to_string()]
-    );
-    gui::destroy_window(p);
 }

@@ -318,7 +318,6 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "scrollbar" => scrollbar_proc,
             "#32768" => popup::popup_proc,
             n if richedit::is_rich_class(n) => richedit::rich_edit_proc,
-            n if syslink::is_link_class(n) => syslink::syslink_proc,
             _ => match comctl::class_kind(&lower).or_else(|| bars::class_kind(&lower))? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
@@ -796,24 +795,9 @@ const BS_NOTIFY: u32 = 0x4000;
 /// voisins ; en X11, où chaque contrôle est une fenêtre opaque, ils doivent
 /// rester derrière.
 /// Hauteur imposée par un contrôle qui se dimensionne seul (ReBar).
-pub fn forced_height(hwnd: usize, requested: i32) -> Option<i32> {
+pub fn forced_height(hwnd: usize) -> Option<i32> {
     match kind_of(hwnd)? {
         Kind::ReBar => bars::rebar_forced_height(hwnd),
-        // Une liste déroulante fermée garde la hauteur de son champ ; la
-        // hauteur demandée devient celle de la liste ouverte. wxWidgets pose
-        // ainsi ses combos puis relit leur taille pour régler le champ : sans
-        // cela, le champ mesurait 170 pixels et le texte, centré dedans,
-        // tombait sous l'arbre voisin (« Remote site » de FileZilla, #841).
-        Kind::ComboBox if combo_type(hwnd) != CBS_SIMPLE => {
-            let c = snapshot(hwnd)?;
-            if c.dropped || c.closed_h <= 0 {
-                return None;
-            }
-            if requested > c.closed_h {
-                with_ctl(hwnd, |c| c.full_h = requested);
-            }
-            Some(c.closed_h)
-        }
         _ => None,
     }
 }
@@ -921,12 +905,10 @@ fn paint_button(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             }
         }
         let tr = if left_text {
-            Rect { right: bx - 4, ..r }
+            Rect { right: bx - 6, ..r }
         } else {
-            // Écart de Windows entre la case et le libellé : les programmes
-            // réservent largeur du texte + case + un caractère (#801, #842).
             Rect {
-                left: bx + size + 4,
+                left: bx + size + 8,
                 ..r
             }
         };
@@ -3036,13 +3018,7 @@ unsafe fn combobox_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Opt
         0x0153 => {
             // CB_SETITEMHEIGHT : wp = -1 pour le champ, sinon les éléments
             if wp as isize == -1 {
-                let h = (lp as i32).clamp(8, 200) + 6;
-                with_ctl(hwnd, |c| c.closed_h = h);
-                // La fenêtre fermée prend la nouvelle hauteur du champ.
-                if combo_type(hwnd) != CBS_SIMPLE && !c.dropped {
-                    let w = client(hwnd).width();
-                    user32::set_window_pos(hwnd, 0, 0, 0, w, h, 0x0002 | 0x0004 | 0x0010);
-                }
+                with_ctl(hwnd, |c| c.closed_h = (lp as i32).clamp(8, 200) + 6);
             } else {
                 with_ctl(hwnd, |c| c.item_h = (lp as i32).clamp(1, 255));
             }
@@ -3553,7 +3529,6 @@ mod bars;
 mod comctl;
 pub(crate) mod popup;
 mod richedit;
-mod syslink;
 
 #[cfg(test)]
 mod tests;
