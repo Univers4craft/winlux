@@ -12,6 +12,11 @@
 //! - chaque ressource a une copie CPU ; les cibles de rendu ont en plus une
 //!   image GPU (Vulkan ou texture GL). Un drapeau indique quelle copie est
 //!   la plus récente, la synchronisation se fait à la demande ;
+//! - un tas (`CreateHeap`) a sa propre mémoire CPU : les ressources placées
+//!   y vivent à leur décalage, deux alias partagent donc leurs octets, et une
+//!   barrière d'alias rend l'image GPU de l'ancienne ressource au tas (#1179) ;
+//! - le tampon de profondeur (DSV) reçoit une image GPU au premier dessin
+//!   dont le PSO active le test de profondeur (D32, D24S8, D16 ; #1179) ;
 //! - `ExecuteCommandLists` rejoue les commandes de façon synchrone : une
 //!   barrière de clôture signalée par la file est donc atteinte dès le
 //!   retour, ce qui rend `SetEventOnCompletion` immédiat ;
@@ -206,6 +211,8 @@ const PSO_INPUT_LAYOUT: usize = 552;
 const PSO_TOPOLOGY_TYPE: usize = 572;
 const PSO_NUM_RT: usize = 576;
 const PSO_RT_FORMATS: usize = 580;
+/// D3D12_DEPTH_STENCIL_DESC : DepthEnable, DepthWriteMask, DepthFunc (#1179).
+const PSO_DEPTH: usize = 496;
 
 // ── Formats ────────────────────────────────────────────────────────────────
 
@@ -390,7 +397,7 @@ enum Kind {
     RootSig(Box<shader::RootLayout>),
     Pso(Box<Pso>),
     Resource(Box<Res>),
-    Heap(u64, HeapProperties),
+    Heap(Box<HeapMem>),
     QueryHeap,
     CmdSig,
     Blob(Vec<u8>),
@@ -421,9 +428,23 @@ impl Gpu {
     }
 }
 
+/// Tas mémoire (`ID3D12Heap`) : une copie CPU que partagent les ressources
+/// placées dedans, alias compris (#1179).
+pub(crate) struct HeapMem {
+    size: u64,
+    props: HeapProperties,
+    cpu: *mut u8,
+    /// Ressources placées vivantes : (objet, décalage, taille).
+    placed: Mutex<Vec<(usize, u64, u64)>>,
+}
+
 pub(crate) struct Res {
     desc: ResourceDesc,
     heap: HeapProperties,
+    /// Tas d'une ressource placée (référence tenue) et décalage dedans ;
+    /// nul pour une ressource « committed ».
+    placed_in: *mut Obj,
+    placed_at: u64,
     va: u64,
     cpu: *mut u8,
     len: usize,
@@ -492,6 +513,16 @@ struct Pso {
     /// (chemin OpenGL, #1177).
     shaders: Option<std::sync::Arc<shader::Translated>>,
     elements: Vec<shader::Element>,
+    /// Test de profondeur du PSO (#1179).
+    depth: Option<DepthState>,
+}
+
+/// Test de profondeur : fonction D3D12_COMPARISON_FUNC (1 = NEVER à
+/// 8 = ALWAYS) et écriture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DepthState {
+    pub func: u32,
+    pub write: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -540,6 +571,8 @@ struct DrawCall {
     /// Textures (SRV des tables) et états d'échantillonnage.
     textures: Vec<shader::DescBinding>,
     samplers: Vec<(u32, u32, shader::SamplerState)>,
+    /// Tampon de profondeur (DSV) et test du PSO, quand les deux existent.
+    depth: Option<(*mut Obj, DepthState)>,
 }
 
 enum Cmd {
@@ -550,6 +583,8 @@ enum Cmd {
     CopyTexture(Loc, [u32; 3], Loc, Option<[u32; 6]>),
     Draw(Box<DrawCall>),
     Barrier,
+    /// Barrière d'alias (ressource avant, ressource après) d'un tas (#1179).
+    Alias(*mut Obj, *mut Obj),
 }
 
 unsafe impl Send for List {}
@@ -1020,9 +1055,22 @@ unsafe fn destroy(this: *mut Obj) {
             if let Some(img) = gpu {
                 free_image(obj.device, img);
             }
-            if !r.cpu.is_null() {
+            if !r.placed_in.is_null() {
+                if let Kind::Heap(h) = &(*r.placed_in).kind {
+                    lock(&h.placed).retain(|e| e.0 != this as usize);
+                }
+                obj_release(r.placed_in);
+            } else if !r.cpu.is_null() {
                 drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                     r.cpu, r.len,
+                )));
+            }
+        }
+        Kind::Heap(h) => {
+            if !h.cpu.is_null() {
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                    h.cpu,
+                    h.size as usize,
                 )));
             }
         }
@@ -1242,6 +1290,13 @@ unsafe extern "win64" fn dev_create_gfx_pso(
         topology_type: rd(PSO_TOPOLOGY_TYPE),
         shaders: shader::translate(code(8), code(24)).map(std::sync::Arc::new),
         elements: input_elements(elems, count),
+        depth: (rd(PSO_DEPTH) != 0).then(|| DepthState {
+            func: match rd(PSO_DEPTH + 8) {
+                f @ 1..=8 => f,
+                _ => 2,
+            },
+            write: rd(PSO_DEPTH + 4) != 0,
+        }),
     };
     hand_out(
         new_obj(pso_vtable(), this, Kind::Pso(Box::new(pso))),
@@ -1266,6 +1321,7 @@ unsafe extern "win64" fn dev_create_compute_pso(
         topology_type: 0,
         shaders: None,
         elements: Vec::new(),
+        depth: None,
     };
     hand_out(
         new_obj(pso_vtable(), this, Kind::Pso(Box::new(pso))),
@@ -1674,6 +1730,7 @@ unsafe fn create_resource(
     dev: *mut Obj,
     heap: HeapProperties,
     desc: &ResourceDesc,
+    placement: Option<(*mut Obj, u64)>,
 ) -> Result<*mut Obj, i32> {
     if !(DIM_BUFFER..=DIM_TEX3D).contains(&desc.dimension) || desc.width == 0 {
         return Err(E_INVALIDARG);
@@ -1685,12 +1742,26 @@ unsafe fn create_resource(
         return Err(E_OUTOFMEMORY);
     }
     let len = size as usize;
-    let mut v: Vec<u8> = Vec::new();
-    if v.try_reserve_exact(len.max(1)).is_err() {
-        return Err(E_OUTOFMEMORY);
-    }
-    v.resize(len.max(1), 0);
-    let cpu = Box::into_raw(v.into_boxed_slice()) as *mut u8;
+    let cpu = match placement {
+        // Ressource placée : sa mémoire est celle du tas, au décalage donné.
+        Some((h, off)) => {
+            let Kind::Heap(m) = &(*h).kind else {
+                return Err(E_INVALIDARG);
+            };
+            if off.checked_add(size.max(1)).is_none_or(|end| end > m.size) {
+                return Err(E_INVALIDARG);
+            }
+            m.cpu.add(off as usize)
+        }
+        None => {
+            let mut v: Vec<u8> = Vec::new();
+            if v.try_reserve_exact(len.max(1)).is_err() {
+                return Err(E_OUTOFMEMORY);
+            }
+            v.resize(len.max(1), 0);
+            Box::into_raw(v.into_boxed_slice()) as *mut u8
+        }
+    };
     let va = if desc.dimension == DIM_BUFFER {
         va_alloc(size)
     } else {
@@ -1701,9 +1772,18 @@ unsafe fn create_resource(
     } else {
         None
     };
+    let (placed_in, placed_at) = match placement {
+        Some((h, off)) => {
+            obj_addref(h);
+            (h, off)
+        }
+        None => (std::ptr::null_mut(), 0),
+    };
     let res = Res {
         desc,
         heap,
+        placed_in,
+        placed_at,
         va,
         cpu,
         len: len.max(1),
@@ -1715,6 +1795,11 @@ unsafe fn create_resource(
         }),
     };
     let obj = new_obj(resource_vtable(), dev, Kind::Resource(Box::new(res)));
+    if let Some((h, off)) = placement {
+        if let Kind::Heap(m) = &(*h).kind {
+            lock(&m.placed).push((obj as usize, off, size.max(1)));
+        }
+    }
     if va != 0 {
         lock(va_registry()).push((va, size, obj as usize));
     }
@@ -1734,7 +1819,7 @@ unsafe extern "win64" fn dev_create_committed(
     if props.is_null() || desc.is_null() {
         return E_INVALIDARG;
     }
-    match create_resource(this, *props, &*desc) {
+    match create_resource(this, *props, &*desc, None) {
         Ok(o) => hand_out(o, iid, out),
         Err(e) => e,
     }
@@ -1751,19 +1836,38 @@ unsafe extern "win64" fn dev_create_heap(
     }
     let size = std::ptr::read_unaligned(desc as *const u64);
     let props = std::ptr::read_unaligned(desc.add(8) as *const HeapProperties);
+    if size == 0 || size > (4u64 << 30) {
+        return if size == 0 {
+            E_INVALIDARG
+        } else {
+            E_OUTOFMEMORY
+        };
+    }
+    // Mémoire du tas, partagée par ses ressources placées (#1179).
+    let mut v: Vec<u8> = Vec::new();
+    if v.try_reserve_exact(size as usize).is_err() {
+        return E_OUTOFMEMORY;
+    }
+    v.resize(size as usize, 0);
+    let mem = HeapMem {
+        size,
+        props,
+        cpu: Box::into_raw(v.into_boxed_slice()) as *mut u8,
+        placed: Mutex::new(Vec::new()),
+    };
     hand_out(
-        new_obj(heap_vtable(), this, Kind::Heap(size, props)),
+        new_obj(heap_vtable(), this, Kind::Heap(Box::new(mem))),
         iid,
         out,
     )
 }
 
-/// Ressource « placed » : mémoire propre (le recouvrement d'alias entre
-/// ressources d'un même tas n'est pas émulé).
+/// Ressource « placed » : sa copie CPU est la mémoire du tas au décalage
+/// donné ; deux ressources placées au même endroit sont des alias (#1179).
 unsafe extern "win64" fn dev_create_placed(
     this: *mut Obj,
     heap: *mut Obj,
-    _offset: u64,
+    offset: u64,
     desc: *const ResourceDesc,
     _state: u32,
     _clear: *const c_void,
@@ -1774,10 +1878,10 @@ unsafe extern "win64" fn dev_create_placed(
         return E_INVALIDARG;
     }
     let props = match &(*heap).kind {
-        Kind::Heap(_, p) => *p,
+        Kind::Heap(m) => m.props,
         _ => return E_INVALIDARG,
     };
-    match create_resource(this, props, &*desc) {
+    match create_resource(this, props, &*desc, Some((heap, offset))) {
         Ok(o) => hand_out(o, iid, out),
         Err(e) => e,
     }
@@ -2071,10 +2175,10 @@ unsafe extern "win64" fn heap_gpu_start(this: *mut Obj, out: *mut u64) -> *mut u
     out
 }
 unsafe extern "win64" fn memheap_desc(this: *mut Obj, out: *mut u8) -> *mut u8 {
-    if let Kind::Heap(size, props) = &(*this).kind {
+    if let Kind::Heap(m) = &(*this).kind {
         std::ptr::write_bytes(out, 0, 48);
-        std::ptr::write_unaligned(out as *mut u64, *size);
-        std::ptr::write_unaligned(out.add(8) as *mut HeapProperties, *props);
+        std::ptr::write_unaligned(out as *mut u64, m.size);
+        std::ptr::write_unaligned(out.add(8) as *mut HeapProperties, m.props);
         std::ptr::write_unaligned(out.add(32) as *mut u64, 0x1_0000);
     }
     out
@@ -2307,11 +2411,18 @@ unsafe fn push_draw(
         return;
     }
     let pso = st.pso as *mut Obj;
-    let (layout, shaders, elements) = match (!pso.is_null()).then(|| &(*pso).kind) {
-        Some(Kind::Pso(p)) if !p.compute => {
-            (p.layout.clone(), p.shaders.clone(), p.elements.clone())
-        }
+    let (layout, shaders, elements, depth_state) = match (!pso.is_null()).then(|| &(*pso).kind) {
+        Some(Kind::Pso(p)) if !p.compute => (
+            p.layout.clone(),
+            p.shaders.clone(),
+            p.elements.clone(),
+            p.depth,
+        ),
         _ => return,
+    };
+    let depth = match (st.dsv, depth_state) {
+        (d, Some(ds)) if d != 0 => Some((d as *mut Obj, ds)),
+        _ => None,
     };
     let (cbs, textures, samplers) = match (&shaders, &l.root) {
         (Some(_), Some(root)) => (
@@ -2348,6 +2459,7 @@ unsafe fn push_draw(
         cbs,
         textures,
         samplers,
+        depth,
     })));
 }
 
@@ -2498,9 +2610,27 @@ unsafe extern "win64" fn list_set_pso(this: *mut Obj, pso: *mut Obj) {
         l.st.pso = pso as usize;
     }
 }
-unsafe extern "win64" fn list_barrier(this: *mut Obj, n: u32, _b: *const Barrier) {
-    if n > 0 {
-        record(this, Cmd::Barrier);
+/// D3D12_RESOURCE_BARRIER_TYPE_ALIASING.
+const BARRIER_ALIASING: u32 = 1;
+
+unsafe extern "win64" fn list_barrier(this: *mut Obj, n: u32, b: *const Barrier) {
+    if n == 0 {
+        return;
+    }
+    record(this, Cmd::Barrier);
+    if b.is_null() {
+        return;
+    }
+    for i in 0..n.min(4096) as usize {
+        // D3D12_RESOURCE_BARRIER : 32 octets, lus sans supposer d'alignement.
+        let raw = (b as *const u8).add(i * 32);
+        if std::ptr::read_unaligned(raw as *const u32) == BARRIER_ALIASING {
+            // D3D12_RESOURCE_ALIASING_BARRIER : pResourceBefore (8) et
+            // pResourceAfter (16).
+            let before = std::ptr::read_unaligned(raw.add(8) as *const *mut Obj);
+            let after = std::ptr::read_unaligned(raw.add(16) as *const *mut Obj);
+            record(this, Cmd::Alias(before, after));
+        }
     }
 }
 unsafe extern "win64" fn list_ib(this: *mut Obj, view: *const IndexBufferView) {
@@ -2614,6 +2744,39 @@ unsafe fn execute(dev: &Device, c: &Cmd) {
         // Chaque soumission Vulkan attend sa barrière de clôture et GL
         // ordonne ses commandes : rien à faire de plus.
         Cmd::Barrier => {}
+        Cmd::Alias(before, after) => alias(dev, *before, *after),
+    }
+}
+
+/// Barrière d'alias : les ressources placées qui recouvrent la nouvelle
+/// ressource rendent leur image GPU à la mémoire du tas, puis la nouvelle
+/// repart de cette mémoire (#1179). Une ressource nulle désigne toutes
+/// celles du tas.
+unsafe fn alias(dev: &Device, before: *mut Obj, after: *mut Obj) {
+    let pick = if after.is_null() { before } else { after };
+    let Some(r) = res_of(pick) else { return };
+    if r.placed_in.is_null() {
+        return;
+    }
+    let Kind::Heap(h) = &(*r.placed_in).kind else {
+        return;
+    };
+    let (lo, hi) = if after.is_null() {
+        (0, h.size)
+    } else {
+        (r.placed_at, r.placed_at + r.len as u64)
+    };
+    let others: Vec<(usize, u64, u64)> = lock(&h.placed).clone();
+    for (o, off, len) in others {
+        if o == after as usize || off >= hi || off + len <= lo {
+            continue;
+        }
+        if let Some(x) = res_of(o as *mut Obj) {
+            ensure_cpu(dev, x);
+        }
+    }
+    if let Some(a) = res_of(after) {
+        mark_cpu(a);
     }
 }
 
@@ -2773,8 +2936,20 @@ unsafe fn clear_ds(dev: &Device, res: *mut Obj, depth: f32, stencil: u8, flags: 
                 }
             }
         }
+        55 if flags & 1 != 0 => {
+            let dq = ((depth.clamp(0.0, 1.0) as f64 * 65_535.0).round() as u32).min(0xFFFF) as u16;
+            for i in 0..n {
+                let o = l.offset as usize + i * 2;
+                if let Some(c) = bytes.get_mut(o..o + 2) {
+                    c.copy_from_slice(&dq.to_le_bytes());
+                }
+            }
+        }
         44 | 45 => {
-            let dq = (depth.clamp(0.0, 1.0) * 16_777_215.0 + 0.5) as u32;
+            // En f64 : 1,0 × 16 777 215 + 0,5 arrondi en f32 donnait 2^24,
+            // qui débordait sur l'octet de stencil (profondeur 0, #1179).
+            let dq =
+                ((depth.clamp(0.0, 1.0) as f64 * 16_777_215.0).round() as u32).min(0x00FF_FFFF);
             for i in 0..n {
                 let o = l.offset as usize + i * 4;
                 let Some(c) = bytes.get_mut(o..o + 4) else {
@@ -2810,11 +2985,25 @@ unsafe fn ensure_cpu(dev: &Device, r: &Res) {
                 ctx.copy_image_to_buffer(cmd, img, st.buffer, 0, l.width);
             });
             if ok {
-                std::ptr::copy_nonoverlapping(
-                    st.mapped,
-                    r.cpu.add(l.offset as usize),
-                    size.min(r.len),
-                );
+                let dst =
+                    std::slice::from_raw_parts_mut(r.cpu.add(l.offset as usize), size.min(r.len));
+                let src = std::slice::from_raw_parts(st.mapped as *const u8, dst.len());
+                if r.desc.format == 45 {
+                    // Aspect profondeur seul : l'octet de stencil reste celui
+                    // de la copie CPU.
+                    let pairs = dst
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(src.as_chunks::<4>().0.iter());
+                    for (d4, s4) in pairs {
+                        let z = u32::from_le_bytes(*s4) & 0x00FF_FFFF;
+                        let old = u32::from_le_bytes(*d4);
+                        d4.copy_from_slice(&((old & 0xFF00_0000) | z).to_le_bytes());
+                    }
+                } else {
+                    dst.copy_from_slice(src);
+                }
             }
             ctx.destroy_buffer(&st);
             Some(ok)
@@ -2827,7 +3016,7 @@ unsafe fn ensure_cpu(dev: &Device, r: &Res) {
             }),
         ) => {
             let mut b = lock(m);
-            b.current()
+            let ok = b.current()
                 && gl_read(
                     *fbo,
                     l.width,
@@ -2835,7 +3024,14 @@ unsafe fn ensure_cpu(dev: &Device, r: &Res) {
                     *format,
                     *ty,
                     r.cpu.add(l.offset as usize),
-                )
+                );
+            if ok && r.desc.format == 45 {
+                d24s8_from_gl(std::slice::from_raw_parts_mut(
+                    r.cpu.add(l.offset as usize),
+                    size.min(r.len),
+                ));
+            }
+            ok
         }
         _ => false,
     };
@@ -2871,15 +3067,14 @@ unsafe fn ensure_gpu(dev: &Device, r: &Res) {
             }),
         ) => {
             let mut b = lock(m);
-            b.current()
-                && gl_upload(
-                    *tex,
-                    l.width,
-                    l.height,
-                    *format,
-                    *ty,
-                    r.cpu.add(l.offset as usize),
-                )
+            let src = r.cpu.add(l.offset as usize);
+            if r.desc.format == 45 {
+                let mut tmp = std::slice::from_raw_parts(src, size.min(r.len)).to_vec();
+                d24s8_to_gl(&mut tmp);
+                b.current() && gl_upload(*tex, l.width, l.height, *format, *ty, tmp.as_ptr())
+            } else {
+                b.current() && gl_upload(*tex, l.width, l.height, *format, *ty, src)
+            }
         }
         _ => false,
     };
@@ -2950,12 +3145,46 @@ unsafe fn draw(dev: &Device, dc: &DrawCall) {
     } else {
         Vec::new()
     };
+    // Tampon de profondeur (#1179) : image GPU créée à la demande et
+    // remplie depuis la copie CPU (effacement, alias d'un tas…).
+    let depth = dc.depth.and_then(|(o, ds)| {
+        let r = res_of(o)?;
+        if std::ptr::eq(r, t) || !is_depth_format(r.desc.format) {
+            return None;
+        }
+        if !gpu_image_of(dev, r) {
+            static NO_DEPTH: AtomicU32 = AtomicU32::new(0);
+            warn_once(
+                &NO_DEPTH,
+                "tampon de profondeur sans image GPU : test de profondeur ignoré",
+            );
+            return None;
+        }
+        Some((r, ds))
+    });
+    let mut dd = depth.map(|(r, ds)| (lock(&r.data), r.desc.format, ds));
     let mut d = lock(&t.data);
     let done = match (&dev.gpu, d.gpu.as_ref()) {
-        (Gpu::Vk(ctx), Some(GpuImage::Vk(img))) => vk_draw(ctx, img, dc, vb, ib),
+        (Gpu::Vk(ctx), Some(GpuImage::Vk(img))) => {
+            let z = match dd.as_ref() {
+                Some((g, _, ds)) => match g.gpu.as_ref() {
+                    Some(GpuImage::Vk(zi)) => Some((zi, *ds)),
+                    _ => None,
+                },
+                None => None,
+            };
+            vk_draw(ctx, img, dc, vb, ib, z)
+        }
         (Gpu::Gl(m), Some(GpuImage::Gl { fbo, .. })) => {
+            let z = match dd.as_ref() {
+                Some((g, f, ds)) => match g.gpu.as_ref() {
+                    Some(GpuImage::Gl { tex, .. }) => Some((*tex, *f, *ds)),
+                    _ => None,
+                },
+                None => None,
+            };
             let mut b = lock(m);
-            b.current() && b.draw(*fbo, dc, vb, ib, &textures)
+            b.current() && b.draw(*fbo, dc, vb, ib, &textures, z)
         }
         _ => {
             warn_once(
@@ -2968,7 +3197,37 @@ unsafe fn draw(dev: &Device, dc: &DrawCall) {
     if done {
         d.gpu_newer = true;
         d.cpu_newer = false;
+        if let Some((z, _, ds)) = dd.as_mut() {
+            if ds.write {
+                z.gpu_newer = true;
+                z.cpu_newer = false;
+            }
+        }
     }
+}
+
+/// Image GPU d'une ressource (créée au premier usage depuis la copie CPU),
+/// à jour de cette copie.
+unsafe fn gpu_image_of(dev: &Device, r: &Res) -> bool {
+    {
+        let mut d = lock(&r.data);
+        if d.gpu.is_none() {
+            match create_image(dev, &r.desc) {
+                Some(img) => {
+                    d.gpu = Some(img);
+                    d.cpu_newer = true;
+                }
+                None => return false,
+            }
+        }
+    }
+    ensure_gpu(dev, r);
+    true
+}
+
+/// VkCompareOp d'une fonction D3D12_COMPARISON_FUNC (1 = NEVER à 8 = ALWAYS).
+fn vk_compare(func: u32) -> u32 {
+    func.clamp(1, 8) - 1
 }
 
 fn vk_draw(
@@ -2977,6 +3236,7 @@ fn vk_draw(
     dc: &DrawCall,
     vb: &[u8],
     ib: Option<(&[u8], u32)>,
+    depth: Option<(&VkImageAlloc, DepthState)>,
 ) -> bool {
     static WARN: AtomicU32 = AtomicU32::new(0);
     let topology = match dc.topology {
@@ -3001,6 +3261,7 @@ fn vk_draw(
     }
     let key = PipelineKey {
         color_format: img.format,
+        depth: depth.map(|(z, ds)| (z.format, vk_compare(ds.func), ds.write)),
         with_color: attributes.iter().any(|a| a.0 == 1),
         attributes,
     };
@@ -3047,6 +3308,7 @@ fn vk_draw(
             (vbuf.buffer, 0, dc.vb.2 as u64),
             ibuf.as_ref().map(|(b, t)| (b.buffer, 0, *t)),
             (dc.count, dc.instances, dc.first, dc.base, dc.first_instance),
+            depth.map(|(z, _)| z),
         );
         ctx.memory_barrier(cmd);
     });
@@ -3091,13 +3353,22 @@ unsafe fn create_image(dev: &Device, desc: &ResourceDesc) -> Option<GpuImage> {
             (g.TexParameteri)(gl::GL_TEXTURE_2D, gl::GL_TEXTURE_MIN_FILTER, gl::GL_NEAREST);
             (g.GenFramebuffers)(1, &mut fbo);
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
+            let depth = is_depth_format(desc.format);
             (g.FramebufferTexture2D)(
                 gl::GL_FRAMEBUFFER,
-                gl::GL_COLOR_ATTACHMENT0,
+                if depth {
+                    gl_depth_attachment(desc.format)
+                } else {
+                    gl::GL_COLOR_ATTACHMENT0
+                },
                 gl::GL_TEXTURE_2D,
                 tex,
                 0,
             );
+            if depth {
+                // Tampon de profondeur seul : aucune couleur à écrire.
+                (g.DrawBuffers)(1, &0);
+            }
             let complete =
                 (g.CheckFramebufferStatus)(gl::GL_FRAMEBUFFER) == gl::GL_FRAMEBUFFER_COMPLETE;
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
@@ -3142,8 +3413,51 @@ fn gl_format(f: u32) -> Option<(u32, u32, u32)> {
         87 | 90 | 91 => (gl::GL_RGBA8, gl::GL_BGRA, gl::GL_UNSIGNED_BYTE),
         1 | 2 => (gl::GL_RGBA32F, gl::GL_RGBA, gl::GL_FLOAT),
         9 | 10 => (gl::GL_RGBA16F, gl::GL_RGBA, gl::GL_HALF_FLOAT),
+        // Profondeur (#1179) : D32_FLOAT, D24_UNORM_S8_UINT, D16_UNORM.
+        40 => (
+            gl::GL_DEPTH_COMPONENT32F,
+            gl::GL_DEPTH_COMPONENT,
+            gl::GL_FLOAT,
+        ),
+        45 => (
+            gl::GL_DEPTH24_STENCIL8,
+            gl::GL_DEPTH_STENCIL,
+            gl::GL_UNSIGNED_INT_24_8,
+        ),
+        55 => (
+            gl::GL_DEPTH_COMPONENT16,
+            gl::GL_DEPTH_COMPONENT,
+            gl::GL_UNSIGNED_SHORT,
+        ),
         _ => return None,
     })
+}
+
+/// Format DXGI de profondeur (D32_FLOAT, D24_UNORM_S8_UINT, D16_UNORM).
+fn is_depth_format(f: u32) -> bool {
+    matches!(f, 40 | 45 | 55)
+}
+
+/// Point d'attache GL d'une image de profondeur.
+fn gl_depth_attachment(f: u32) -> u32 {
+    if f == 45 {
+        gl::GL_DEPTH_STENCIL_ATTACHMENT
+    } else {
+        gl::GL_DEPTH_ATTACHMENT
+    }
+}
+
+/// D24_UNORM_S8_UINT : Direct3D range la profondeur dans les 24 bits bas et
+/// le stencil dans l'octet haut ; GL_UNSIGNED_INT_24_8 fait l'inverse.
+fn d24s8_to_gl(texels: &mut [u8]) {
+    for c in texels.as_chunks_mut::<4>().0 {
+        *c = u32::from_le_bytes(*c).rotate_left(8).to_le_bytes();
+    }
+}
+fn d24s8_from_gl(texels: &mut [u8]) {
+    for c in texels.as_chunks_mut::<4>().0 {
+        *c = u32::from_le_bytes(*c).rotate_right(8).to_le_bytes();
+    }
 }
 
 /// (composantes, type GL, normalisé) d'un attribut de sommet.
@@ -3259,6 +3573,7 @@ impl GlBackend {
         vb: &[u8],
         ib: Option<(&[u8], u32)>,
         textures: &[(u32, u32, u32)],
+        depth: Option<(u32, u32, DepthState)>,
     ) -> bool {
         let mode = match dc.topology {
             1 => gl::GL_POINTS,
@@ -3294,6 +3609,21 @@ impl GlBackend {
         ] {
             (g.Disable)(cap);
         }
+        // Profondeur (#1179) : la texture du DSV est attachée à la cible le
+        // temps du dessin, avec la fonction et l'écriture du PSO.
+        if let Some((tex, format, ds)) = depth {
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl_depth_attachment(format),
+                gl::GL_TEXTURE_2D,
+                tex,
+                0,
+            );
+            (g.Enable)(gl::GL_DEPTH_TEST);
+            (g.DepthFunc)(gl::GL_NEVER + ds.func.clamp(1, 8) - 1);
+            (g.DepthMask)(ds.write as u8);
+            (g.DepthRange)(vp[4] as f64, vp[5] as f64);
+        }
         (g.BindBuffer)(gl::GL_ARRAY_BUFFER, self.vbo);
         (g.BufferData)(
             gl::GL_ARRAY_BUFFER,
@@ -3320,6 +3650,17 @@ impl GlBackend {
             ) {
                 Some(e) => enabled = e,
                 None => {
+                    if let Some((_, format, _)) = depth {
+                        (g.Disable)(gl::GL_DEPTH_TEST);
+                        (g.DepthMask)(1);
+                        (g.FramebufferTexture2D)(
+                            gl::GL_FRAMEBUFFER,
+                            gl_depth_attachment(format),
+                            gl::GL_TEXTURE_2D,
+                            0,
+                            0,
+                        );
+                    }
                     (g.BindBuffer)(gl::GL_ARRAY_BUFFER, 0);
                     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
                     return false;
@@ -3372,6 +3713,18 @@ impl GlBackend {
         }
         for loc in enabled {
             (g.DisableVertexAttribArray)(loc);
+        }
+        if let Some((_, format, _)) = depth {
+            (g.Disable)(gl::GL_DEPTH_TEST);
+            (g.DepthMask)(1);
+            (g.DepthRange)(0.0, 1.0);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl_depth_attachment(format),
+                gl::GL_TEXTURE_2D,
+                0,
+                0,
+            );
         }
         (g.BindBuffer)(gl::GL_ARRAY_BUFFER, 0);
         (g.UseProgram)(0);
@@ -3467,7 +3820,7 @@ unsafe fn make_buffers(dev_obj: *mut Obj, d: &SwapDesc1) -> Result<Vec<*mut Obj>
     };
     let mut out = Vec::new();
     for _ in 0..d.count {
-        match create_resource(dev_obj, heap, &desc) {
+        match create_resource(dev_obj, heap, &desc, None) {
             Ok(o) => out.push(o),
             Err(e) => {
                 for o in out {
@@ -4874,6 +5227,363 @@ mod tests {
             obj_release(sc);
             obj_release(q);
             assert_eq!(obj_release(dev), 0);
+        }
+    }
+
+    // ── Tas, alias et profondeur des ressources placées (#1179) ──
+
+    /// D3D12_HEAP_DESC : taille, propriétés, alignement, drapeaux.
+    fn heap_desc(size: u64, ty: u32) -> [u8; 48] {
+        let mut d = [0u8; 48];
+        d[..8].copy_from_slice(&size.to_le_bytes());
+        d[8..12].copy_from_slice(&ty.to_le_bytes());
+        d
+    }
+
+    unsafe fn new_heap(dev: *mut Obj, size: u64, ty: u32) -> *mut Obj {
+        let d = heap_desc(size, ty);
+        create(|i, o| dev_create_heap(dev, d.as_ptr(), i, o), 0x6b3b_2502)
+    }
+
+    unsafe fn placed(dev: *mut Obj, heap: *mut Obj, off: u64, desc: &ResourceDesc) -> *mut Obj {
+        create(
+            |i, o| dev_create_placed(dev, heap, off, desc, 0, std::ptr::null(), i, o),
+            0x6964_42be,
+        )
+    }
+
+    #[test]
+    fn ressources_placees_au_meme_endroit_partagent_leur_memoire() {
+        unsafe {
+            let dev = new_device(Gpu::Cpu);
+            let heap = new_heap(dev, 1 << 16, HEAP_UPLOAD);
+            let a = placed(dev, heap, 0, &buffer(256));
+            let b = placed(dev, heap, 0, &buffer(256));
+            let c = placed(dev, heap, 256, &buffer(256));
+            let mut pa: *mut u8 = std::ptr::null_mut();
+            let mut pb: *mut u8 = std::ptr::null_mut();
+            let mut pc: *mut u8 = std::ptr::null_mut();
+            assert_eq!(res_map(a, 0, std::ptr::null(), &mut pa), S_OK);
+            assert_eq!(res_map(b, 0, std::ptr::null(), &mut pb), S_OK);
+            assert_eq!(res_map(c, 0, std::ptr::null(), &mut pc), S_OK);
+            *pa.add(10) = 0x5a;
+            assert_eq!(*pb.add(10), 0x5a, "l'alias voit l'écriture");
+            assert_eq!(*pc.add(10), 0, "la ressource voisine ne la voit pas");
+            // Hors du tas : refusé.
+            let mut out = std::ptr::null_mut();
+            let g = iid(0x6964_42be);
+            assert_eq!(
+                dev_create_placed(
+                    dev,
+                    heap,
+                    1 << 16,
+                    &buffer(256),
+                    0,
+                    std::ptr::null(),
+                    &g,
+                    &mut out
+                ),
+                E_INVALIDARG
+            );
+            // Le tas vit tant qu'une ressource placée le tient.
+            obj_release(heap);
+            *pc.add(1) = 7;
+            for o in [a, b, c] {
+                obj_release(o);
+            }
+            assert_eq!(obj_release(dev), 0, "toutes les références rendues");
+        }
+    }
+
+    /// Profondeur placée dans un tas : rouge à z = 0,5, puis vert à z = 0,8
+    /// qui doit être rejeté par le test LESS. Rend (pixel du centre, profondeur).
+    unsafe fn scenario_profondeur(gpu: Gpu, format: u32) -> ([u8; 4], f32) {
+        let dev = new_device(gpu);
+        let q: *mut Obj = create(
+            |i, o| dev_create_queue(dev, &QueueDesc::default(), i, o),
+            0x0ec8_70a6,
+        );
+        let alloc: *mut Obj = create(|i, o| dev_create_allocator(dev, 0, i, o), 0x6102_dee4);
+        let list: *mut Obj = create(
+            |i, o| dev_create_list(dev, 0, 0, alloc, std::ptr::null_mut(), i, o),
+            0x5b16_0d0f,
+        );
+        let desc_heap = |ty: u32| HeapDesc {
+            ty,
+            count: 1,
+            flags: 0,
+            node_mask: 0,
+        };
+        let rtv_heap: *mut Obj = create(
+            |i, o| dev_create_desc_heap(dev, &desc_heap(2), i, o),
+            0x8efb_471d,
+        );
+        let dsv_heap: *mut Obj = create(
+            |i, o| dev_create_desc_heap(dev, &desc_heap(3), i, o),
+            0x8efb_471d,
+        );
+        let (mut rtv, mut dsv) = (0usize, 0usize);
+        heap_cpu_start(rtv_heap, &mut rtv);
+        heap_cpu_start(dsv_heap, &mut dsv);
+        let mut rt_desc = tex(8, 8, 1, 28);
+        rt_desc.flags = FLAG_RENDER_TARGET;
+        let mem = new_heap(dev, 1 << 16, HEAP_DEFAULT);
+        let rt = placed(dev, mem, 0, &rt_desc);
+        let mut z_desc = tex(8, 8, 1, format);
+        z_desc.flags = FLAG_DEPTH_STENCIL;
+        let z = placed(dev, mem, 1 << 15, &z_desc);
+        dev_create_rtv(dev, rt, std::ptr::null(), rtv);
+        dev_create_dsv(dev, z, std::ptr::null(), dsv);
+
+        let up = new_heap(dev, 1 << 16, HEAP_UPLOAD);
+        let vb = placed(dev, up, 0, &buffer(96));
+        // Deux grands triangles : (x, y, z) puis couleur RGBA8.
+        let tri = |zv: f32, col: u32| -> Vec<u8> {
+            let mut v = Vec::new();
+            for (x, y) in [(-1.0f32, -1.0f32), (3.0, -1.0), (-1.0, 3.0)] {
+                for f in [x, y, zv] {
+                    v.extend(f.to_le_bytes());
+                }
+                v.extend(col.to_le_bytes());
+            }
+            v
+        };
+        let mut verts = tri(0.5, 0xff00_00ff);
+        verts.extend(tri(0.8, 0xff00_ff00));
+        let mut p: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(vb, 0, std::ptr::null(), &mut p), S_OK);
+        std::ptr::copy_nonoverlapping(verts.as_ptr(), p, verts.len());
+        let rb = placed(dev, up, 4096, &buffer(256 * 8));
+
+        let elems = [
+            InputElement {
+                semantic: c"POSITION".as_ptr(),
+                semantic_index: 0,
+                format: 6,
+                slot: 0,
+                offset: 0,
+                class: 0,
+                step: 0,
+            },
+            InputElement {
+                semantic: c"COLOR".as_ptr(),
+                semantic_index: 0,
+                format: 28,
+                slot: 0,
+                offset: 12,
+                class: 0,
+                step: 0,
+            },
+        ];
+        let mut pso_desc = [0u8; 656];
+        let w32 = |d: &mut [u8; 656], o: usize, v: u32| {
+            std::ptr::write_unaligned(d.as_mut_ptr().add(o) as *mut u32, v)
+        };
+        std::ptr::write_unaligned(
+            pso_desc.as_mut_ptr().add(PSO_INPUT_LAYOUT) as *mut *const InputElement,
+            elems.as_ptr(),
+        );
+        w32(&mut pso_desc, PSO_INPUT_LAYOUT + 8, 2);
+        w32(&mut pso_desc, PSO_TOPOLOGY_TYPE, 3);
+        w32(&mut pso_desc, PSO_NUM_RT, 1);
+        w32(&mut pso_desc, PSO_RT_FORMATS, 28);
+        // DepthEnable, DepthWriteMask ALL, DepthFunc LESS.
+        w32(&mut pso_desc, PSO_DEPTH, 1);
+        w32(&mut pso_desc, PSO_DEPTH + 4, 1);
+        w32(&mut pso_desc, PSO_DEPTH + 8, 2);
+        let pso: *mut Obj = create(
+            |i, o| dev_create_gfx_pso(dev, pso_desc.as_ptr(), i, o),
+            0x765a_30f3,
+        );
+
+        list_om_rts(list, 1, &rtv, 0, &dsv);
+        list_clear_rtv(list, rtv, &[0.0, 0.0, 0.0, 1.0], 0, std::ptr::null());
+        list_clear_dsv(list, dsv, 1, 1.0, 0, 0, std::ptr::null());
+        list_set_pso(list, pso);
+        list_topology(list, 4);
+        list_viewports(list, 1, &[0.0, 0.0, 8.0, 8.0, 0.0, 1.0]);
+        let view = VertexBufferView {
+            location: res_va(vb),
+            size: 96,
+            stride: 16,
+        };
+        list_vbs(list, 0, 1, &view);
+        list_draw(list, 3, 1, 0, 0);
+        list_draw(list, 3, 1, 3, 0);
+        let dst = CopyLocation {
+            resource: rb,
+            ty: 1,
+            placed: PlacedFootprint {
+                offset: 0,
+                footprint: Footprint {
+                    format: 28,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            },
+        };
+        let src = CopyLocation {
+            resource: rt,
+            ty: 0,
+            placed: PlacedFootprint::default(),
+        };
+        list_copy_texture(list, &dst, 0, 0, 0, &src, std::ptr::null());
+        assert_eq!(list_close(list), S_OK);
+        queue_execute(q, 1, &list);
+
+        let mut out: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(rb, 0, std::ptr::null(), &mut out), S_OK);
+        let px: [u8; 4] = std::slice::from_raw_parts(out.add(4 * 256 + 16), 4)
+            .try_into()
+            .unwrap();
+        let mut zp: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(z, 0, std::ptr::null(), &mut zp), S_OK);
+        // Texel (4, 4) ; lignes serrées dans la copie CPU.
+        let bpp = if format == 55 { 2 } else { 4 };
+        let raw = std::slice::from_raw_parts(zp.add((4 * 8 + 4) * bpp), bpp);
+        let depth = match format {
+            40 => f32::from_le_bytes(raw.try_into().unwrap()),
+            55 => u16::from_le_bytes(raw.try_into().unwrap()) as f32 / 65_535.0,
+            _ => (u32::from_le_bytes(raw.try_into().unwrap()) & 0x00FF_FFFF) as f32 / 16_777_215.0,
+        };
+        for o in [
+            pso, rb, vb, up, z, rt, mem, dsv_heap, rtv_heap, list, alloc, q,
+        ] {
+            obj_release(o);
+        }
+        assert_eq!(obj_release(dev), 0, "toutes les références rendues");
+        (px, depth)
+    }
+
+    #[test]
+    fn profondeur_placee_opengl_si_disponible() {
+        if !gpu_caps::caps().opengl {
+            return;
+        }
+        for format in [40, 45, 55] {
+            let Some(b) = GlBackend::create() else { return };
+            let (px, z) = unsafe { scenario_profondeur(Gpu::Gl(Mutex::new(b)), format) };
+            assert_eq!(
+                px,
+                [255, 0, 0, 255],
+                "le vert plus loin est rejeté ({format})"
+            );
+            assert!((z - 0.5).abs() < 0.01, "profondeur écrite : {z} ({format})");
+        }
+    }
+
+    #[test]
+    fn profondeur_placee_vulkan_si_disponible() {
+        std::env::set_var("WINLUX_GFX_BACKEND", "vulkan");
+        let Some(ctx) = VkContext::create() else {
+            return;
+        };
+        for format in [40, 45, 55] {
+            let (px, z) = unsafe { scenario_profondeur(Gpu::Vk(ctx.clone()), format) };
+            assert_eq!(
+                px,
+                [255, 0, 0, 255],
+                "le vert plus loin est rejeté ({format})"
+            );
+            assert!((z - 0.5).abs() < 0.01, "profondeur écrite : {z} ({format})");
+        }
+    }
+
+    #[test]
+    fn profondeur_placee_processeur() {
+        // Sans GPU : effacements et copies seulement ; la profondeur effacée
+        // à 1 est lue dans la mémoire du tas.
+        let (px, z) = unsafe { scenario_profondeur(Gpu::Cpu, 40) };
+        assert_eq!(px, [0, 0, 0, 255]);
+        assert_eq!(z, 1.0);
+    }
+
+    /// Barrière d'alias : la cible A, effacée en bleu sur le GPU, rend son
+    /// image à la mémoire du tas ; la cible B placée au même endroit la lit.
+    unsafe fn scenario_alias(gpu: Gpu) -> [u8; 4] {
+        let dev = new_device(gpu);
+        let q: *mut Obj = create(
+            |i, o| dev_create_queue(dev, &QueueDesc::default(), i, o),
+            0x0ec8_70a6,
+        );
+        let alloc: *mut Obj = create(|i, o| dev_create_allocator(dev, 0, i, o), 0x6102_dee4);
+        let list: *mut Obj = create(
+            |i, o| dev_create_list(dev, 0, 0, alloc, std::ptr::null_mut(), i, o),
+            0x5b16_0d0f,
+        );
+        let hd = HeapDesc {
+            ty: 2,
+            count: 1,
+            flags: 0,
+            node_mask: 0,
+        };
+        let rtv_heap: *mut Obj = create(|i, o| dev_create_desc_heap(dev, &hd, i, o), 0x8efb_471d);
+        let mut rtv = 0usize;
+        heap_cpu_start(rtv_heap, &mut rtv);
+        let mut d = tex(8, 8, 1, 28);
+        d.flags = FLAG_RENDER_TARGET;
+        let mem = new_heap(dev, 1 << 16, HEAP_DEFAULT);
+        let a = placed(dev, mem, 0, &d);
+        let b = placed(dev, mem, 0, &d);
+        dev_create_rtv(dev, a, std::ptr::null(), rtv);
+        list_clear_rtv(list, rtv, &[0.0, 0.0, 1.0, 1.0], 0, std::ptr::null());
+        // D3D12_RESOURCE_BARRIER de type ALIASING (32 octets).
+        let mut bar = [0u8; 32];
+        bar[..4].copy_from_slice(&BARRIER_ALIASING.to_le_bytes());
+        bar[8..16].copy_from_slice(&(a as usize).to_le_bytes());
+        bar[16..24].copy_from_slice(&(b as usize).to_le_bytes());
+        list_barrier(list, 1, bar.as_ptr() as *const Barrier);
+        let up = new_heap(dev, 1 << 16, HEAP_READBACK);
+        let rb = placed(dev, up, 0, &buffer(256 * 8));
+        let dst = CopyLocation {
+            resource: rb,
+            ty: 1,
+            placed: PlacedFootprint {
+                offset: 0,
+                footprint: Footprint {
+                    format: 28,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            },
+        };
+        let src = CopyLocation {
+            resource: b,
+            ty: 0,
+            placed: PlacedFootprint::default(),
+        };
+        list_copy_texture(list, &dst, 0, 0, 0, &src, std::ptr::null());
+        assert_eq!(list_close(list), S_OK);
+        queue_execute(q, 1, &list);
+        let mut out: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(rb, 0, std::ptr::null(), &mut out), S_OK);
+        let px: [u8; 4] = std::slice::from_raw_parts(out.add(3 * 256 + 12), 4)
+            .try_into()
+            .unwrap();
+        for o in [rb, up, b, a, mem, rtv_heap, list, alloc, q] {
+            obj_release(o);
+        }
+        assert_eq!(obj_release(dev), 0, "toutes les références rendues");
+        px
+    }
+
+    #[test]
+    fn barriere_d_alias_rend_l_image_au_tas() {
+        assert_eq!(unsafe { scenario_alias(Gpu::Cpu) }, [0, 0, 255, 255]);
+        if gpu_caps::caps().opengl {
+            if let Some(b) = GlBackend::create() {
+                let px = unsafe { scenario_alias(Gpu::Gl(Mutex::new(b))) };
+                assert_eq!(px, [0, 0, 255, 255], "OpenGL");
+            }
+        }
+        std::env::set_var("WINLUX_GFX_BACKEND", "vulkan");
+        if let Some(ctx) = VkContext::create() {
+            let px = unsafe { scenario_alias(Gpu::Vk(ctx)) };
+            assert_eq!(px, [0, 0, 255, 255], "Vulkan");
         }
     }
 }
