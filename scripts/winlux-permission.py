@@ -246,6 +246,10 @@ def ask(cap, name, exe):
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk, GLib, Gtk
 
+    # Affichage injoignable : « impossible de demander » (code 2, refus pour
+    # cette fois), jamais un plantage lu comme « Refuser » et mémorisé (#1038).
+    if not Gtk.init_check(sys.argv)[0] or Gdk.Screen.get_default() is None:
+        return 2
     question, detail, icon = QUESTIONS[cap]
     result = {"code": 2}
     css = Gtk.CssProvider()
