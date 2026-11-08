@@ -986,6 +986,23 @@ fn usage() -> i32 {
     2
 }
 
+/// Sortie d'une sous-commande : un lecteur qui ferme le tube (`| head`)
+/// arrête la commande proprement, sans la panique de `println!` (#1105).
+fn print_out(text: &str) -> i32 {
+    write_out(&mut std::io::stdout().lock(), text)
+}
+
+fn write_out(out: &mut impl std::io::Write, text: &str) -> i32 {
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => 0,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
 /// Point d'entrée de `winlux --firewall …`.
 pub fn cli(args: &[String]) -> i32 {
     match args.first().map(String::as_str).unwrap_or("") {
@@ -999,31 +1016,34 @@ pub fn cli(args: &[String]) -> i32 {
         },
         "status" => {
             let cfg = Config::load();
-            println!("profil={}", PROFILES[cfg.profile]);
+            let mut text = format!("profil={}\n", PROFILES[cfg.profile]);
             if let Some(s) = admin::read_text(&admin::path(RUN_DIR).join("status.txt")) {
-                print!("{s}");
+                text.push_str(&s);
             }
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
-                Some(r) => print!("{r}"),
-                None => println!("pare-feu désactivé pour ce profil"),
+                Some(r) => text.push_str(&r),
+                None => text.push_str("pare-feu désactivé pour ce profil\n"),
             }
-            0
+            print_out(&text)
         }
         "ports" => {
+            let mut text = String::new();
             for p in crate::netports::open_ports() {
-                println!("{}", crate::netports::port_line(&p));
+                text.push_str(&crate::netports::port_line(&p));
+                text.push('\n');
             }
-            0
+            print_out(&text)
         }
         "listening" => {
+            let mut text = String::new();
             for (prog, ports) in listening_programs() {
                 let list: Vec<String> = ports
                     .iter()
                     .map(|l| format!("{}/{}", l.port, if l.udp { "udp" } else { "tcp" }))
                     .collect();
-                println!("{}\t{}", prog.display(), list.join(" "));
+                text.push_str(&format!("{}\t{}\n", prog.display(), list.join(" ")));
             }
-            0
+            print_out(&text)
         }
         "answer" => match answer(args.get(1).map(String::as_str) == Some("allow")) {
             Ok(()) => 0,
@@ -1044,6 +1064,25 @@ pub fn cli(args: &[String]) -> i32 {
 mod tests {
     use super::*;
     use crate::admin::test_root::Root;
+
+    /// Lecteur qui a fermé le tube, comme `| head` (#1105).
+    struct ClosedPipe;
+    impl std::io::Write for ClosedPipe {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn closed_pipe_ends_output_quietly() {
+        assert_eq!(write_out(&mut ClosedPipe, "profil=public\n"), 0);
+        let mut text = Vec::new();
+        assert_eq!(write_out(&mut text, "profil=private\n"), 0);
+        assert_eq!(text, b"profil=private\n");
+    }
 
     fn rule(id: u32, dir: Dir, verdict: Verdict, proto: Proto, ports: &str, program: &str) -> Rule {
         Rule {

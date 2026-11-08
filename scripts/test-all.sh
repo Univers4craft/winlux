@@ -96,6 +96,10 @@ fi
 # test unitaire ciblé, lancé aussi en mode rapide.
 step "Fenêtre vivante pendant WM_DESTROY (#1079)" cargo test -q -p winlux la_fenetre_existe_encore_pendant_wm_destroy
 
+# Diagnostic et boîte d'erreur de Paint.NET (#1112, #1113) : nom de volume
+# d'un lecteur, chemin et attributs des DLL système intégrées.
+step "Volume et DLL intégrées vues par Paint.NET (#1112, #1113)" cargo test -q -p winlux -- nom_de_volume_d_une_racine_de_lecteur dll_integree_a_un_chemin_et_un_fichier_visible
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

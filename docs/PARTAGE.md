@@ -27,7 +27,10 @@ les Mac (`smb://NOM-DU-PC`) et les autres Linux.
 - **Sécurité** : SMB1 désactivé (`server min protocol = SMB2_10`), NTLMv2
   seulement. Le pare-feu Winlux ouvre 445/5357 (TCP) et 3702/5353 (UDP) sur
   les profils Privé et Domaine uniquement (règles 9445 et 9446) ; sur un
-  réseau public la page l'indique.
+  réseau public, la page Partage et transfert l'indique et propose de passer
+  en privé (#1104). Le type de réseau se choisit dans **Paramètres > Réseau
+  et Internet** (« Type de profil réseau », #1103) : passer en Public est
+  libre, passer en Privé demande un administrateur.
 - **Découverte** : `wsdd` (WS-Discovery) fait apparaître le PC dans le
   panneau Réseau de l'Explorateur Windows ; Avahi, s'il est présent, l'annonce
   au Finder ; le module `fruit` de Samba gère les métadonnées macOS.
@@ -53,12 +56,21 @@ sur une clé USB. Sur l'autre PC, la page liste les fichiers `.wlxprofile`
 trouvés dans Documents, Bureau, Téléchargements et sur les clés USB :
 **Importer**, puis fermer et rouvrir la session.
 
-Contenu (`scripts/winlux-transfer.sh`) : personnalisation (thème, accent, fond,
-barre des tâches), épingles et icônes du bureau, accessibilité, lecteurs
+Contenu (`scripts/winlux-transfer.sh`) : apparence de la session native
+(thème clair ou sombre, couleur d'accent, taille de la barre et fond d'écran,
+lus dans `~/.config/winlux/appearance.json` et xfdesktop ; une image
+personnelle de 8 Mio au plus voyage avec le fichier, un fond livré avec Winlux
+par son seul chemin), réglages de l'ancien bureau PE (personnalisation,
+épingles, icônes du bureau, accessibilité), lecteurs
 réseau **sans mot de passe** (ils restent scellés sur la machine d'origine et
 sont redemandés), applications par défaut (`mimeapps.list`), et les clés
 système THEME, TASKBAR_ALIGN, XKB_LAYOUT, TAP_TO_CLICK, MOUSE_SPEED, LANG et
 les choix de confidentialité.
+
+L'export et l'import tournent **sous le compte** (#1100) : ce sont ses
+réglages et son dossier personnel, son état va dans
+`/run/winlux/control-<uid>/transfer.txt`, et les clés système passent par le
+relais `winlux-root conf`, qui garde sa propre liste blanche.
 
 L'import ne fait confiance à rien : seuls les membres attendus de l'archive
 sont extraits, les liens symboliques et les fichiers trop gros sont ignorés,

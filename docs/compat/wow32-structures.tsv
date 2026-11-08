@@ -172,6 +172,8 @@ seh.rs	DispatcherContext	a-verifier
 seh.rs	ExceptionPointers	a-verifier	
 seh.rs	ExceptionRecord	a-verifier	
 shell32.rs	ShellExecuteInfo	x86	SHELLEXECUTEINFO de 60 octets converti par execute_ex_any
+shell_folder_com.rs	Enum	interne	objet IEnumIDList du runtime ; en x86, la passerelle COM (wow32/com.rs, IENUMIDLIST) l'enveloppe
+shell_folder_com.rs	Folder	interne	objet IShellFolder du runtime ; en x86, la passerelle COM (wow32/com.rs, ISHELLFOLDER) l'enveloppe
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskschd.rs	Obj	a-verifier	
