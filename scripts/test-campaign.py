@@ -1352,4 +1352,7 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+ok("fn to_monochrome" in (runtime_dlls / "gdi32.rs").read_text()
+   and "masque_monochrome_tire_de_la_couleur_de_fond" in (SCRIPTS / "test-all.sh").read_text(),
+   "Masques monochromes (couleur de fond → blanc) : graduation des vumètres d'Audacity (#1121)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

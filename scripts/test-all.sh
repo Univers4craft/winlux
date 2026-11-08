@@ -133,6 +133,10 @@ step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p win
 # passent par scripts/test-wow32.sh.
 step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_descs_round_trip mip_chain_counts so_entry_has_the_d3d11_layout device_table_has_101_methods
 
+# Masques monochromes de wxWidgets (#1121) : une copie couleur vers une
+# bitmap 1 bit rend blanc le fond du DC source ; graduation des vumètres.
+step "Masque monochrome tiré de la couleur de fond (#1121)" cargo test -q -p winlux -- masque_monochrome_tire_de_la_couleur_de_fond maskblt_ne_copie_que_les_pixels_du_masque
+
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports

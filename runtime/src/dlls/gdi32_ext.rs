@@ -1485,6 +1485,9 @@ pub unsafe extern "win64" fn create_bitmap(
         return 0;
     };
     let depth = planes.max(1) * bpp;
+    if depth == 1 {
+        gui::mark_monochrome(handle);
+    }
     if !bits.is_null() {
         let (w, h) = (width as usize, height as usize);
         let stride = (w * depth as usize).div_ceil(16) * 2;

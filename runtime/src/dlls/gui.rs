@@ -2063,6 +2063,22 @@ fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
     S.get_or_init(Default::default)
 }
 
+/// Bitmaps monochromes (`CreateBitmap` à 1 bit par pixel) : une copie
+/// couleur vers elles suit la règle de Windows (couleur de fond du DC
+/// source → blanc, toute autre → noir). wxWidgets en tire ses masques.
+fn monochrome() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+pub fn mark_monochrome(handle: usize) {
+    lock(monochrome()).insert(handle);
+}
+
+pub fn is_monochrome(handle: usize) -> bool {
+    lock(monochrome()).contains(&handle)
+}
+
 /// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
 pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     let h = bitmap_from_pixels(width, height, pixels)?;
@@ -2264,6 +2280,7 @@ pub fn delete_object(obj: usize) -> bool {
         Some(GdiObject::SystemBrush(_)) => false,
         Some(_) => {
             lock(device_dependent()).remove(&obj);
+            lock(monochrome()).remove(&obj);
             map.remove(&obj).is_some()
         }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
