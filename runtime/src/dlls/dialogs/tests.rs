@@ -227,7 +227,7 @@ fn boite_de_message_sans_affichage_et_boutons() {
         assert_eq!(unsafe { message_box(0, "Fichier ?", "Test", 4 | 0x100) }, 7);
         assert_eq!(unsafe { message_box(0, "Info", "", 0) }, 1);
     }
-    let t = message_box_template("Une ligne\nDeux", "Titre", 1);
+    let t = message_box_template("Une ligne\nDeux", "Titre", 1, gui::work_area());
     let parsed = parse_template(&t).expect("modèle de MessageBox lisible");
     assert_eq!(parsed.title, "Titre");
     assert_eq!(parsed.items.len(), 3);
@@ -242,4 +242,67 @@ fn retour_chariot_seul_coupe_la_ligne_d_une_boite_de_message() {
         message_box_lines("\"a.txt\"\r\rModifié.\r\nRecharger ?"),
         "\"a.txt\"\n\nModifié.\nRecharger ?"
     );
+}
+
+#[test]
+fn longue_boite_de_message_tient_dans_l_ecran() {
+    // #1161 : la pile d'appels de Paint.NET donnait une boîte de 1492 px.
+    let measure = |s: &str| s.chars().count() as i32 * 8;
+    assert_eq!(message_box_wrap("un deux trois", 1000, &measure), (1, 104));
+    // 40 px par ligne : « un deux » (56) ne tient pas, trois lignes.
+    assert_eq!(message_box_wrap("un deux trois", 40, &measure).0, 3);
+    // Un mot plus long que la ligne n'en prend qu'une.
+    assert_eq!(message_box_wrap("abcdefghij", 40, &measure), (1, 40));
+    assert_eq!(message_box_wrap("a\nb\r\nc", 40, &measure).0, 3);
+
+    let line = "   at PaintDotNet.Interop.ComObject.GetInterfacePointer(Void* pObject) in D:\\src\\pdn\\ComObject.cs:line 49";
+    let text = vec![line; 120].join("\n");
+    let font = crate::dlls::gdi32::get_stock_object(17);
+    // Écran de bureau et portable 1366 x 768 (barre des tâches de 48 px).
+    for area in [
+        Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1032,
+        },
+        Rect {
+            left: 0,
+            top: 0,
+            right: 1366,
+            bottom: 720,
+        },
+    ] {
+        let t = message_box_template(&text, "Erreur", 0x10, area);
+        let cy = u16::from_le_bytes([t[16], t[17]]) as i32;
+        let px = cy * base_units(font).1 / 8;
+        assert!(
+            px + 40 <= area.height() + 8,
+            "{px} px pour {} px",
+            area.height()
+        );
+        let cx = u16::from_le_bytes([t[14], t[15]]) as i32 * base_units(font).0 / 4;
+        assert!(cx > 508 && cx <= area.width(), "boîte élargie : {cx} px");
+    }
+    // Deuxième écran : la boîte reste dans sa zone de travail.
+    let second = Rect {
+        left: 1920,
+        top: 0,
+        right: 3286,
+        bottom: 768,
+    };
+    let work = Rect {
+        left: 0,
+        top: 0,
+        right: 3286,
+        bottom: 1032,
+    };
+    assert_eq!(clip_to_work_area(second, work), second);
+    let work = Rect {
+        left: 0,
+        top: 0,
+        right: 3286,
+        bottom: 720,
+    };
+    assert_eq!(clip_to_work_area(second, work).bottom, 720);
 }

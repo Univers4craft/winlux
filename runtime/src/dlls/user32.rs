@@ -3150,7 +3150,25 @@ pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPl
     1
 }
 
-pub extern "win64" fn set_window_placement(_hwnd: usize, _wp: *const c_void) -> i32 {
+/// SetWindowPlacement : place la fenêtre sur rcNormalPosition puis l'affiche
+/// selon showCmd, comme ShowWindow. 7-Zip ne montre sa fenêtre principale
+/// que par cet appel : sans affichage, elle restait invisible dès que
+/// GetWindowPlacement a réussi (#1159).
+pub unsafe extern "win64" fn set_window_placement(hwnd: usize, wp: *const WindowPlacement) -> i32 {
+    if wp.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if gui::screen_rect(hwnd).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    let p = std::ptr::read_unaligned(wp);
+    let r = p.normal;
+    if r.right > r.left && r.bottom > r.top {
+        move_window(hwnd, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
+    }
+    show_window(hwnd, p.show_cmd as i32);
     1
 }
 
@@ -4729,6 +4747,45 @@ mod tests_messages {
                 real_get_window_class_w(0x7777_0000, buf.as_mut_ptr(), 32),
                 0
             );
+            destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn placement_de_fenetre_deplace_et_affiche() {
+        // #1159 : 7-Zip ne montre sa fenêtre que par SetWindowPlacement.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0x00CF_0000,
+                0,
+                0,
+                100,
+                50,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            assert!(!gui::is_window_visible(hwnd));
+            let mut wp = std::mem::zeroed::<WindowPlacement>();
+            assert_eq!(get_window_placement(hwnd, &mut wp), 1);
+            wp.show_cmd = 1; // SW_SHOWNORMAL
+            wp.normal = Rect {
+                left: 40,
+                top: 30,
+                right: 340,
+                bottom: 230,
+            };
+            assert_eq!(set_window_placement(hwnd, &wp), 1);
+            assert!(gui::is_window_visible(hwnd));
+            let r = gui::window_rect(hwnd).unwrap();
+            assert_eq!((r.width(), r.height()), (300, 200));
+            assert_eq!(set_window_placement(hwnd, std::ptr::null()), 0);
             destroy_window(hwnd);
         }
     }
