@@ -771,6 +771,13 @@ ok("struct ImageFile" in loader_source and "fn map_pages" in loader_source
    and "scripts/test-image-memory.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and (ROOT / "docs/compat/memoire-au-lancement.md").exists(),
    "claude.exe : image projetée sans copie du fichier, connexion tuée faute de mémoire dite clairement (#997)")
+# #1019 : un simple nom de DLL (LoadLibraryExW + SEARCH_SYSTEM32, CRT MSVC) n'est
+# plus un chemin relatif au dossier courant : claude.exe lancé du Bureau attendait
+# la demande « fichiers personnels » avant son main.
+ok("let is_path = value.contains(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and (ROOT / "testexe/src/bin/loadlib_search.rs").exists()
+   and "test-loadlibrary-personal-cwd.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "LoadLibraryExW d'une DLL système depuis le Bureau sans demande d'autorisation (#1019)")
 # #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
 ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
    "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")

@@ -3019,6 +3019,8 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
+    // Nom et drapeaux demandés, pour WINLUX_TRACE=1 (#1019).
+    crate::trace!("LoadLibraryEx({value}, 0x{flags:x})");
     // LOAD_IGNORE_CODE_AUTHZ_LEVEL : sans effet.
     let flags = flags & !0x10;
     if flags == 0 {
@@ -3042,15 +3044,29 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
-    let path = crate::paths::to_linux(&value);
     let mut directories = Vec::new();
     if flags & (8 | 0x100) != 0 {
-        if !path.is_absolute() {
-            crate::process::set_last_error(87);
-            return 0;
-        }
-        if let Some(parent) = path.parent() {
-            directories.push(parent.to_path_buf());
+        // Converti seulement ici, où le nom doit être un chemin absolu : un
+        // simple nom de DLL (« api-ms-win-core-synch-l1-2-0 » demandé par la
+        // CRT avec LOAD_LIBRARY_SEARCH_SYSTEM32) devenait un chemin relatif
+        // au dossier courant. Lancé depuis le Bureau, claude.exe attendait
+        // alors l'autorisation « fichiers personnels » avant même son main
+        // (#1019).
+        let is_path = value.contains(['\\', '/']) || value.as_bytes().get(1) == Some(&b':');
+        let path = is_path.then(|| crate::paths::to_linux(&value));
+        match path {
+            Some(path) if path.is_absolute() => {
+                if let Some(parent) = path.parent() {
+                    directories.push(parent.to_path_buf());
+                }
+            }
+            // LOAD_WITH_ALTERED_SEARCH_PATH avec un simple nom : recherche
+            // standard, comme Windows.
+            None if flags & 0x100 == 0 => {}
+            _ => {
+                crate::process::set_last_error(87);
+                return 0;
+            }
         }
     }
     if flags & (8 | 0x200 | 0x1000) != 0 {
