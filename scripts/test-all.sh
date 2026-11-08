@@ -175,6 +175,10 @@ step "Stylet, WM_POINTER et wintab32 (#1199)" cargo test -q -p winlux -- stylet_
 # Initialize répond à ID2D1EffectContext1 et ID2D1EffectContext2.
 step "Contexte d'effet Direct2D en version 2 (#1206)" cargo test -q -p winlux -- initialize_obtient_le_contexte_d_effet_2 vtables_have_windows_sizes
 
+# Vérification des certificats HTTPS de .NET (#1207) : X509Chain.Build remplit
+# un magasin en mémoire par CertAddCertificateLinkToStore.
+step "CertAddCertificateLinkToStore pour X509Chain (#1207)" cargo test -q -p winlux -- chemin_schannel_de_curl
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
