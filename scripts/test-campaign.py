@@ -1133,6 +1133,9 @@ ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
 ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
    and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
    "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+ok("cabinet_lz" in runtime_tests and '"FDICopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text()
+   and '"LZCopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text(),
+   "cabinet.dll (FDI) et lz32.dll (SZDD) réelles, testées par cabinet_lz.exe (#26)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
