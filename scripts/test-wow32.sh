@@ -186,6 +186,8 @@ if test -f "$out/com32.exe"; then
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
     check msxml32 'MSXML : tout est correct'
     echo "msxml32 : DOMDocument MSXML en x86 (VARIANT par valeur, nœuds, XPath, save/load)"
+    check accprop32 'AccPropServices : tout est correct'
+    echo "accprop32 : annotations d'accessibilité en x86 (MSAAPROPID et VARIANT par valeur, IAccPropServer)"
 fi
 
 gui() {

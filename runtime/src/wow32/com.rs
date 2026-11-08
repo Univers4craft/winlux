@@ -59,6 +59,9 @@ pub(super) enum A {
     /// VARIANT passé par valeur : 16 octets sur la pile x86, adresse
     /// d'une copie de 24 octets en x64.
     VarIn,
+    /// Structure de 16 octets passée par valeur (GUID, MSAAPROPID) :
+    /// quatre cases de la pile x86, adresse d'une copie en x64.
+    GuidIn,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -288,6 +291,39 @@ pub(super) static IOBJECTCOLLECTION: Iface = Iface {
         Some(&[In(&IOBJECTARRAY)]), // AddFromArray
         Some(&[I]),                 // RemoveObjectAt
         Some(&[]),                  // Clear
+    ],
+};
+
+/// IAccPropServer : serveur d'annotations d'accessibilité fourni par le
+/// programme (oleacc.h).
+pub(super) static IACCPROPSERVER: Iface = Iface {
+    name: "IAccPropServer",
+    iid: crate::dlls::oleacc_props::IID_IACC_PROP_SERVER,
+    parent: Some(&IUNKNOWN),
+    methods: &[Some(&[I, I, GuidIn, Var, I])], // GetPropValue
+};
+
+/// IAccPropServices : service d'annotations (CLSID_AccPropServices, #1114).
+pub(super) static IACCPROPSERVICES: Iface = Iface {
+    name: "IAccPropServices",
+    iid: crate::dlls::oleacc_props::IID_IACC_PROP_SERVICES,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, GuidIn, VarIn]),                   // SetPropValue
+        Some(&[I, I, I, I, In(&IACCPROPSERVER), I]),    // SetPropServer
+        Some(&[I, I, I, I]),                            // ClearProps
+        Some(&[I, I, I, GuidIn, VarIn]),                // SetHwndProp
+        Some(&[I, I, I, GuidIn, I]),                    // SetHwndPropStr
+        Some(&[I, I, I, I, I, In(&IACCPROPSERVER), I]), // SetHwndPropServer
+        Some(&[I, I, I, I, I]),                         // ClearHwndProps
+        Some(&[I, I, I, OutPtr, I]),                    // ComposeHwndIdentityString
+        Some(&[I, I, OutPtr, I, I]),                    // DecomposeHwndIdentityString
+        Some(&[I, I, GuidIn, VarIn]),                   // SetHmenuProp
+        Some(&[I, I, GuidIn, I]),                       // SetHmenuPropStr
+        Some(&[I, I, I, I, In(&IACCPROPSERVER), I]),    // SetHmenuPropServer
+        Some(&[I, I, I, I]),                            // ClearHmenuProps
+        Some(&[I, I, OutPtr, I]),                       // ComposeHmenuIdentityString
+        Some(&[I, I, OutPtr, I]),                       // DecomposeHmenuIdentityString
     ],
 };
 
@@ -575,6 +611,8 @@ static ALL: &[&Iface] = &[
     &IOBJECTARRAY,
     &IOBJECTCOLLECTION,
     &ICUSTOMDESTINATIONLIST,
+    &IACCPROPSERVER,
+    &IACCPROPSERVICES,
     &IXMLDOMNODE,
     &IXMLDOMDOCUMENT,
     &IXMLDOMDOCUMENT2,
@@ -719,7 +757,7 @@ fn slots(kinds: &[A]) -> usize {
         .iter()
         .map(|k| match k {
             Q => 2,
-            VarIn => 4,
+            VarIn | GuidIn => 4,
             _ => 1,
         })
         .sum()
@@ -1027,6 +1065,13 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 p += 12;
                 slots.push(t as u64);
             }
+            GuidIn => {
+                temps.push([0; 10]);
+                let t = temps.last_mut().unwrap().as_mut_ptr() as *mut u8;
+                std::ptr::copy_nonoverlapping((p - 4) as usize as *const u8, t, 16);
+                p += 12;
+                slots.push(t as u64);
+            }
             OutQ | Out(_) | OutPtr | Stat | Var => {
                 if v == 0 {
                     slots.push(0);
@@ -1163,6 +1208,17 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     }
                     let x = std::slice::from_raw_parts(t as *const u32, 4);
                     a.extend_from_slice(x);
+                }
+                GuidIn => {
+                    let mut x = [0u32; 4];
+                    if v != 0 {
+                        std::ptr::copy_nonoverlapping(
+                            v as usize as *const u8,
+                            x.as_mut_ptr() as *mut u8,
+                            16,
+                        );
+                    }
+                    a.extend_from_slice(&x);
                 }
                 OutQ | Out(_) | OutPtr | Stat | Var => {
                     if v == 0 {

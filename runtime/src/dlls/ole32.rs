@@ -877,6 +877,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Annotations d'accessibilité (AccPropServices, VCL, #1114).
+        if let Some(hr) = super::oleacc_props::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Documents XML MSXML (DOMDocument 2.6 à 6.0, #1084).
         if let Some(hr) = super::msxml::create_builtin(&guid, &iid, out) {
             return hr;

@@ -93,6 +93,17 @@ cat "$work/msxml.txt"
 test "$msxml_status" -eq 0 || { echo "msxml_suite.exe : code $msxml_status" >&2; exit 1; }
 grep -q '^MSXML : tout est correct$' "$work/msxml.txt" || { echo "msxml_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# Annotations d'accessibilité AccPropServices (#1114) : fenêtres, menus,
+# serveurs retenus, chaînes d'identité.
+test -f "$dir/accprop_suite.exe" || { echo "accprop_suite.exe absent" >&2; exit 1; }
+set +e
+WINLUX_GUI=headless timeout 120 "$runtime" "$dir/accprop_suite.exe" >"$work/accprop.txt" 2>&1
+accprop_status=$?
+set -e
+cat "$work/accprop.txt"
+test "$accprop_status" -eq 0 || { echo "accprop_suite.exe : code $accprop_status" >&2; exit 1; }
+grep -q '^AccPropServices : tout est correct$' "$work/accprop.txt" || { echo "accprop_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }

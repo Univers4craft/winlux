@@ -1173,4 +1173,12 @@ ok("fn create_builtin" in msxml_rs and "msxml::create_builtin" in (ROOT / "runti
    and "msxml_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
    and "msxml32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
    "MSXML : DOMDocument intégré, x64 et x86 (#1084)")
+# #1114 : annotations d'accessibilité (CLSID_AccPropServices) de la VCL,
+# vérifiées par accprop_suite.exe (test-mingw.sh) et accprop32.exe (test-wow32.sh).
+accprop_rs = (ROOT / "runtime/src/dlls/oleacc_props.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in accprop_rs and "oleacc_props::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IACCPROPSERVICES" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "accprop_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "accprop32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "AccPropServices : annotations d'accessibilité, x64 et x86 (#1114)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
