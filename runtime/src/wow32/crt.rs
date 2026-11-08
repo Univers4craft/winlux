@@ -1033,6 +1033,8 @@ const HANDLE_ARRAYS: &[(&str, usize, usize, usize)] = &[
     ("WaitForMultipleObjectsEx", 5, 0, 1),
     ("MsgWaitForMultipleObjects", 5, 0, 1),
     ("MsgWaitForMultipleObjectsEx", 5, 0, 1),
+    // WSAEVENT est un HANDLE : tableau de cases de 4 octets en x86 (#779).
+    ("WSAWaitForMultipleEvents", 5, 0, 1),
 ];
 
 fn handle_array_override(n: &str, func: &str) -> Option<Override> {

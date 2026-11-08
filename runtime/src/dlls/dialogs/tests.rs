@@ -235,3 +235,11 @@ fn boite_de_message_sans_affichage_et_boutons() {
     assert_eq!(mnemonic("&Ouvrir"), Some('o'));
     assert_eq!(mnemonic("A && B"), None);
 }
+
+#[test]
+fn retour_chariot_seul_coupe_la_ligne_d_une_boite_de_message() {
+    assert_eq!(
+        message_box_lines("\"a.txt\"\r\rModifié.\r\nRecharger ?"),
+        "\"a.txt\"\n\nModifié.\nRecharger ?"
+    );
+}

@@ -1,7 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=Tuyaux 3D — écran de veille
+Name[en]=3D Pipes — screen saver
+Name[de]=3D-Rohre — Bildschirmschoner
+Name[es]=Tuberías 3D — protector de pantalla
 Comment=Aperçu de l’écran de veille animé, retour avec la souris ou le clavier
+Comment[en]=Preview of the animated screen saver; move the mouse or press a key to return
+Comment[de]=Vorschau des animierten Bildschirmschoners; Maus oder Tastatur beendet sie
+Comment[es]=Vista previa del protector de pantalla animado; vuelva con el ratón o el teclado
 Exec=/usr/bin/winlux-desktop-action screensaver
 Icon=preferences-desktop-screensaver
 Terminal=false

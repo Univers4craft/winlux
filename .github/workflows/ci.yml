@@ -114,6 +114,21 @@ jobs:
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
 
+      - name: Inventaire des structures à taille x86 (#232)
+        run: python3 -B scripts/test-wow32-structures.py
+
+      - name: Vérifier les fonctions importées par les vrais jeux (docs/jeux/imports-jeux.tsv)
+        run: python3 -B scripts/test-games-imports.py
+
+      - name: Vérifier les lanceurs .desktop en quatre langues (#786)
+        run: python3 -B scripts/test-desktop-languages.py
+
+      - name: Vérifier l'accent violet par défaut (#790)
+        run: python3 -B scripts/test-default-accent.py
+
+      - name: Vérifier les tables de traduction (aucune clé en double)
+        run: python3 -B scripts/test-translation-keys.py
+
       - name: Vérifier les navigateurs hors ligne
         run: |
           sh scripts/test-browsers.sh
@@ -177,6 +192,11 @@ jobs:
 
       - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py
+
+      - name: Vérifier les types de fichiers traduits (Thunar, fr/en/de/es)
+        run: |
+          sudo apt-get install -y -q shared-mime-info
+          /usr/bin/python3 -B scripts/test-mime-translations.py
 
       - name: Vérifier les icônes Prisme claires et sombres (thèmes Winlux et Winlux-Sombre)
         run: xvfb-run -a -s '-screen 0 1366x768x24' sh scripts/test-icones.sh integration/native/icons

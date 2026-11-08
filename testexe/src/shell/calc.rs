@@ -707,6 +707,24 @@ unsafe fn calc_key(key: &[u8]) {
                 CALC_NEW = true;
             }
         }
+        b"\xB1" => {
+            // ± : change le signe du nombre affiché, comme la Calculatrice de Windows.
+            let value = parse_display();
+            if value != 0.0 {
+                set_display(-value);
+            }
+        }
+        b"%" => {
+            // % : avec + ou -, pourcentage du premier terme (200 + 10 % = 220) ;
+            // avec × ou ÷, ou sans opération, le nombre divisé par cent.
+            let current = parse_display();
+            let value = match CALC_OPERATOR {
+                1 | 2 => CALC_PREV * current / 100.0,
+                _ => current / 100.0,
+            };
+            set_display(value);
+            CALC_NEW = true;
+        }
         b"." => {
             if CALC_NEW {
                 CALC_DISPLAY = [0; 32];
@@ -739,9 +757,12 @@ unsafe fn parse_display() -> f64 {
     let mut result = 0.0;
     let mut decimal = false;
     let mut divisor = 1.0;
+    let mut negative = false;
     for i in 0..CALC_DISPLAY_LEN {
         let byte = CALC_DISPLAY[i];
-        if byte == b'.' {
+        if byte == b'-' && i == 0 {
+            negative = true;
+        } else if byte == b'.' {
             decimal = true;
         } else if byte.is_ascii_digit() {
             let digit = (byte - b'0') as f64;
@@ -753,7 +774,11 @@ unsafe fn parse_display() -> f64 {
             }
         }
     }
-    result
+    if negative {
+        -result
+    } else {
+        result
+    }
 }
 
 unsafe fn set_display(value: f64) {
@@ -1020,4 +1045,30 @@ unsafe fn alarm_mouse(ev: Mouse, _x: i32, _y: i32, f: &Frame) -> bool {
     }
 
     false
+}
+
+/// Contrôle sans fenêtre (`calc.exe --selftest`, test-runtime.sh) : signes,
+/// ± et %, comme la Calculatrice de Windows (#209).
+#[allow(dead_code)]
+pub unsafe fn selftest() -> bool {
+    let cases: [(&[&[u8]], f64); 6] = [
+        (&[b"2", b"-", b"5", b"="], -3.0),
+        (&[b"2", b"-", b"5", b"=", b"*", b"2", b"="], -6.0),
+        (&[b"7", b"\xB1"], -7.0),
+        (&[b"7", b"\xB1", b"\xB1"], 7.0),
+        (&[b"2", b"0", b"0", b"+", b"1", b"0", b"%", b"="], 220.0),
+        (&[b"5", b"0", b"%"], 0.5),
+    ];
+    for (keys, expected) in cases {
+        calc_key(b"C");
+        for k in keys {
+            calc_key(k);
+        }
+        let got = parse_display();
+        if (got - expected).abs() > 1e-9 {
+            return false;
+        }
+    }
+    calc_key(b"C");
+    true
 }

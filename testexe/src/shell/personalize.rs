@@ -163,7 +163,7 @@ pub struct Wallpaper {
 }
 pub const WALLPAPERS: [Wallpaper; 15] = [
     Wallpaper {
-        name: b"Winlux classique",
+        name: b"Winlux Aurore",
         slug: b"winlux",
         category: 2,
         accent: hex(0x7C4DFF),
@@ -3188,7 +3188,7 @@ const PERSO_LABELS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
         b"La firma de Winlux: un acorde que se ilumina de grave a agudo.",
         b"Die Winlux-Signatur: ein Akkord, der sich von tief nach hoch aufhellt.",
     ),
-    (b"Winlux classique", b"Winlux classic", b"Winlux cl\xE1sico", b"Winlux klassisch"),
+    (b"Winlux Aurore", b"Winlux Aurora", b"Winlux Aurora", b"Winlux Polarlicht"),
     (b"Winlux Nuit", b"Winlux Night", b"Winlux Noche", b"Winlux Nacht"),
     (b"Winlux Aube", b"Winlux Dawn", b"Winlux Amanecer", b"Winlux Morgengrauen"),
     (b"Cristal", b"Crystal", b"Cristal", b"Kristall"),

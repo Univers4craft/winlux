@@ -238,6 +238,9 @@ impl OutlineSink for ToPath<'_> {
     }
 }
 
+/// Côté maximal d'un glyphe dessiné, en pixels.
+const MAX_GLYPH_PX: usize = 4096;
+
 /// Dessine un glyphe à la taille de la police.
 pub fn rasterize(f: &GdiFont, gid: u16) -> Raster {
     let s = f.scale();
@@ -258,6 +261,18 @@ pub fn rasterize(f: &GdiFont, gid: u16) -> Raster {
     let t = (y1 as f32 * s).ceil();
     let w = ((r - l) as usize).max(1);
     let h = ((t - b) as usize).max(1);
+    // Taille absurde (police demandée à des millions de pixels, échelle
+    // infinie) : glyphe vide plutôt qu'une allocation impossible (#766).
+    if !s.is_finite() || w > MAX_GLYPH_PX || h > MAX_GLYPH_PX {
+        return Raster {
+            w: 1,
+            h: 1,
+            origin: (0, 0),
+            advance,
+            cov: vec![0],
+            empty: true,
+        };
+    }
     let mut path = Path::default();
     let mut sink = ToPath {
         path: &mut path,
@@ -951,13 +966,21 @@ unsafe extern "win64" fn get_font_data(
 
 /// Largeurs ABC d'un glyphe en pixels : approche gauche, largeur dessinée,
 /// approche droite (A + B + C = avance).
+/// Largeurs ABC d'après la boîte englobante du glyphe, sans le dessiner :
+/// Qt les demande pour toute une plage de caractères, parfois à une taille
+/// énorme (métriques « de conception »), et dessiner chaque glyphe pouvait
+/// réclamer des exaoctets (VLC, #766).
 fn abc_of(f: &GdiFont, gid: u16) -> [i32; 3] {
-    let r = rasterize(f, gid);
     let adv = f.advance_px(gid);
-    if r.empty || r.w == 0 {
+    let s = f.scale();
+    let Some([x0, _, x1, _]) = f.font.bbox(gid) else {
+        return [0, adv.max(0), 0];
+    };
+    if x1 <= x0 || !s.is_finite() {
         return [0, adv.max(0), 0];
     }
-    let (a, b) = (r.origin.0, r.w as i32);
+    let a = (x0 as f32 * s).floor() as i32;
+    let b = ((x1 as f32 * s).ceil() as i32 - a).max(1);
     [a, b, adv - a - b]
 }
 
@@ -1184,6 +1207,23 @@ mod tests {
         assert_eq!(a + b + c, f.advance_px(gid), "A + B + C = avance");
         let r = rasterize(&f, gid);
         assert!(!r.empty);
+        // #766 : police demandée à une taille démesurée, ni dessin géant ni
+        // allocation impossible.
+        let huge = GdiFont {
+            font: sfnt::load(&path, 0).unwrap(),
+            em: 5.0e7,
+            family: "Test".into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            path: path.clone(),
+            index: 0,
+        };
+        assert!(rasterize(&huge, gid).empty);
+        let [_, hb, _] = abc_of(&huge, gid);
+        assert!(hb > 0);
         assert!(r.w > 4 && r.h > 10, "{}x{}", r.w, r.h);
         assert!(
             r.cov.iter().any(|&c| c == 255),
