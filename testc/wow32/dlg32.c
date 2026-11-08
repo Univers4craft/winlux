@@ -205,6 +205,87 @@ static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+/* FindText / ReplaceText (#712) : le propriétaire x86 reçoit
+   « commdlg_FindReplace » avec SA FINDREPLACE de 40 octets. */
+static UINT find_msg;
+static int find_count;
+static DWORD find_flags;
+static LPARAM find_lp, hook_lp;
+static LRESULT CALLBACK find_owner_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (find_msg && msg == find_msg) {
+        find_count++;
+        find_lp = lp;
+        find_flags = ((FINDREPLACEW *)lp)->Flags;
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+
+static UINT_PTR CALLBACK find_hook(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    (void)h; (void)wp;
+    if (msg == WM_INITDIALOG)
+        hook_lp = lp;
+    return 0;
+}
+
+static void find_replace32(void)
+{
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = find_owner_proc;
+    wc.lpszClassName = L"Dlg32Find";
+    RegisterClassW(&wc);
+    HWND owner = CreateWindowExW(0, L"Dlg32Find", L"Recherche", WS_OVERLAPPEDWINDOW, 0, 0, 300, 200,
+                                 NULL, NULL, NULL, NULL);
+    find_msg = RegisterWindowMessageW(FINDMSGSTRINGW);
+    CHECK(find_msg >= 0xC000 && find_msg != RegisterWindowMessageW(L"TaskbarCreated"),
+          "RegisterWindowMessageW(FINDMSGSTRING) x86");
+    CHECK(sizeof(FINDREPLACEW) == 40, "FINDREPLACE x86 de 40 octets");
+
+    WCHAR what[32] = L"abc", with[32] = L"";
+    FINDREPLACEW fr;
+    memset(&fr, 0, sizeof fr);
+    fr.lStructSize = sizeof fr;
+    fr.hwndOwner = owner;
+    fr.Flags = FR_DOWN | FR_ENABLEHOOK;
+    fr.lpfnHook = find_hook;
+    fr.lpstrFindWhat = what;
+    fr.wFindWhatLen = 32;
+    HWND fd = FindTextW(&fr);
+    CHECK(fd != NULL && IsWindow(fd), "FindTextW x86 ouvre la boîte");
+    if (!fd)
+        return;
+    CHECK(hook_lp == (LPARAM)&fr, "crochet x86 : WM_INITDIALOG avec la FINDREPLACE");
+    WCHAR got[32];
+    GetDlgItemTextW(fd, 0x480, got, 32);
+    CHECK(wcscmp(got, L"abc") == 0, "texte de départ x86");
+    SetDlgItemTextW(fd, 0x480, L"Winlux");
+    SendMessageW(GetDlgItem(fd, 0x411), BM_SETCHECK, BST_CHECKED, 0);
+    SendMessageW(fd, WM_COMMAND, IDOK, 0);
+    CHECK(find_count == 1 && find_lp == (LPARAM)&fr, "Suivant x86 : le propriétaire reçoit sa structure");
+    CHECK((find_flags & (FR_FINDNEXT | FR_MATCHCASE | FR_DOWN)) == (FR_FINDNEXT | FR_MATCHCASE | FR_DOWN)
+              && wcscmp(what, L"Winlux") == 0,
+          "Suivant x86 : options et texte");
+    SendMessageW(fd, WM_COMMAND, IDCANCEL, 0);
+    CHECK((find_flags & FR_DIALOGTERM) && !IsWindow(fd), "fermeture x86 : FR_DIALOGTERM");
+
+    fr.Flags = 0;
+    fr.lpfnHook = NULL;
+    fr.lpstrReplaceWith = with;
+    fr.wReplaceWithLen = 32;
+    HWND rd = ReplaceTextW(&fr);
+    CHECK(rd != NULL, "ReplaceTextW x86");
+    if (!rd)
+        return;
+    SetDlgItemTextW(rd, 0x481, L"Ersatz");
+    SendMessageW(rd, WM_COMMAND, 0x401, 0);
+    CHECK((find_flags & FR_REPLACEALL) && wcscmp(with, L"Ersatz") == 0, "Remplacer tout x86");
+    SendMessageW(rd, WM_COMMAND, IDCANCEL, 0);
+    DestroyWindow(owner);
+    find_msg = 0;
+}
+
 static void notifications(void)
 {
     WNDCLASSW wc = {0};
@@ -388,15 +469,8 @@ static void winscp(void)
     DeleteObject(bmp);
     ReleaseDC(NULL, screen);
 
-    /* Recherche : la boîte non modale n'existe pas encore, NULL propre. */
-    WCHAR what[32] = L"abc";
-    FINDREPLACEW fr = { sizeof fr };
-    fr.lpstrFindWhat = what;
-    fr.wFindWhatLen = 32;
-    HWND fd = FindTextW(&fr);
-    CHECK(fd != NULL || CommDlgExtendedError() != 0, "FindTextW");
-    if (fd)
-        DestroyWindow(fd);
+    /* Recherche et remplacement : boîtes non modales (#712). */
+    find_replace32();
 
     /* shell32. */
     APPBARDATA abd = { sizeof abd };

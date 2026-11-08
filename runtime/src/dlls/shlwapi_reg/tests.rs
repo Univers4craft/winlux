@@ -617,3 +617,51 @@ fn reg_get_value_et_chemins() {
     let dup = sh_reg_duplicate_hkey(HKCU);
     assert_eq!(dup, HKCU);
 }
+
+/// #687 : SHCreateStreamOnFile lit un fichier, écrit au Commit, crée avec
+/// STGM_CREATE et refuse un fichier absent en lecture.
+#[test]
+fn flux_sur_fichier() {
+    let dir = std::env::temp_dir().join(format!("winlux-flux-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("WinSCP.ini");
+    let win = format!("Z:{}", path.to_string_lossy().replace('/', "\\"));
+    unsafe {
+        type Rw = unsafe extern "win64" fn(*mut c_void, *mut u8, u32, *mut u32) -> i32;
+        type Commit = unsafe extern "win64" fn(*mut c_void, u32) -> i32;
+        type Release = unsafe extern "win64" fn(*mut c_void) -> u32;
+        let slot = |s: *mut c_void, i: usize| *(*(s as *const *const usize)).add(i);
+        // Absent, en lecture : HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND).
+        assert_eq!(
+            file_stream(&win, 0, false).err(),
+            Some(0x8007_0002u32 as i32)
+        );
+        // STGM_CREATE | STGM_WRITE : créé tout de suite, rempli au Commit.
+        let s = file_stream(&win, 0x1001, false).unwrap();
+        assert!(path.is_file());
+        let write: Rw = std::mem::transmute(slot(s, 4));
+        let mut n = 0;
+        let text = b"[Configuration]\r\n";
+        assert_eq!(
+            write(s, text.as_ptr().cast_mut(), text.len() as u32, &mut n),
+            0
+        );
+        let commit: Commit = std::mem::transmute(slot(s, 8));
+        assert_eq!(commit(s, 0), 0);
+        assert_eq!(std::fs::read(&path).unwrap(), text);
+        let release: Release = std::mem::transmute(slot(s, 2));
+        assert_eq!(release(s), 0);
+        // Relecture.
+        let s = file_stream(&win, 0, false).unwrap();
+        let read: Rw = std::mem::transmute(slot(s, 3));
+        let mut buf = [0u8; 64];
+        assert_eq!(read(s, buf.as_mut_ptr(), 64, &mut n), 0);
+        assert_eq!(&buf[..n as usize], text);
+        // En lecture seule, l'écriture est refusée.
+        let write: Rw = std::mem::transmute(slot(s, 4));
+        assert_ne!(write(s, text.as_ptr().cast_mut(), 1, &mut n), 0);
+        let release: Release = std::mem::transmute(slot(s, 2));
+        release(s);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

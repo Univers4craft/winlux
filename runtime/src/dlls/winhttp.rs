@@ -741,6 +741,67 @@ pub unsafe extern "win64" fn query_headers(
     }
     result
 }
+/// Schémas d'authentification annoncés par `WWW-Authenticate` (401,
+/// cible serveur) ou `Proxy-Authenticate` (407, cible mandataire) :
+/// masque WINHTTP_AUTH_SCHEME_*, premier schéma proposé, et cible.
+fn auth_schemes(status: u32, headers: &[(String, String)]) -> Option<(u32, u32, u32)> {
+    let (header, target) = match status {
+        407 => ("Proxy-Authenticate", 1),
+        _ => ("WWW-Authenticate", 0),
+    };
+    let mut all = 0u32;
+    let mut first = 0u32;
+    for (_, value) in headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case(header))
+    {
+        let word = value
+            .split([' ', ','])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let bit = match word.as_str() {
+            "basic" => 1,
+            "ntlm" => 2,
+            "passport1.4" => 4,
+            "digest" => 8,
+            "negotiate" => 0x10,
+            _ => 0,
+        };
+        if bit != 0 && first == 0 {
+            first = bit;
+        }
+        all |= bit;
+    }
+    (all != 0).then_some((all, first, target))
+}
+
+/// WinHttpQueryAuthSchemes : après une réponse 401 ou 407.
+pub unsafe extern "win64" fn query_auth_schemes(
+    handle: usize,
+    supported: *mut u32,
+    first: *mut u32,
+    target: *mut u32,
+) -> i32 {
+    if supported.is_null() || first.is_null() || target.is_null() {
+        return fail(87);
+    }
+    let response = match response(handle) {
+        Ok(value) => value,
+        Err(error) => return fail(error),
+    };
+    let response = lock(&response);
+    match auth_schemes(response.status, &response.headers) {
+        Some((all, one, to)) => {
+            *supported = all;
+            *first = one;
+            *target = to;
+            1
+        }
+        // ERROR_INVALID_OPERATION : aucun en-tête d'authentification.
+        None => fail(4317),
+    }
+}
 pub unsafe extern "win64" fn close(handle: usize) -> i32 {
     let mut entries = lock(handles());
     if entries.remove(&handle).is_none() {
@@ -952,6 +1013,7 @@ pub fn exports() -> crate::dlls::Exports {
         "WinHttpOpenRequest" => fn open_request, "WinHttpAddRequestHeaders" => fn add_request_headers,
         "WinHttpSendRequest" => fn send_request, "WinHttpWriteData" => fn write_data,
         "WinHttpReceiveResponse" => fn receive_response, "WinHttpQueryHeaders" => fn query_headers,
+        "WinHttpQueryAuthSchemes" => fn query_auth_schemes,
         "WinHttpQueryDataAvailable" => fn query_data_available, "WinHttpReadData" => fn read_data,
         "WinHttpCloseHandle" => fn close, "WinHttpSetTimeouts" => fn set_timeouts,
         "WinHttpSetOption" => fn set_option, "WinHttpQueryOption" => fn query_option,
@@ -963,6 +1025,21 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// #687 : schémas proposés par WWW-Authenticate et Proxy-Authenticate.
+    #[test]
+    fn schemas_d_authentification() {
+        let h = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let server = [
+            h("WWW-Authenticate", "Negotiate"),
+            h("www-authenticate", "NTLM"),
+            h("WWW-Authenticate", "Basic realm=\"x\""),
+        ];
+        assert_eq!(auth_schemes(401, &server), Some((0x13, 0x10, 0)));
+        let proxy = [h("Proxy-Authenticate", "Digest realm=\"p\", nonce=\"n\"")];
+        assert_eq!(auth_schemes(407, &proxy), Some((8, 8, 1)));
+        assert_eq!(auth_schemes(200, &[h("Content-Type", "text/html")]), None);
+    }
+
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::{TcpListener, TcpStream};
