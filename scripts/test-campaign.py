@@ -1315,6 +1315,26 @@ ok("fn mark_gpu_written(" in (runtime_dlls / "d3d11.rs").read_text(encoding="utf
    and "#1184" in (ROOT / "testc/msvc/hlsl_msvc.c").read_text(encoding="utf-8")
    and "#1184" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "Direct3D 11 : Map WRITE d'un tampon écrit par le GPU ne renvoie plus de copie périmée (#1184)")
+# #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
+# (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
+ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
+   and "icone_standard_par_son_emplacement" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Icônes standard : SHGetStockIconInfo + SHDefExtractIcon rendent une vraie icône (#1169)")
+# #1170 : Themes\Personalize présent (Flow Launcher, Theme.ColorizeWindow).
+ok("fn personalize" in (ROOT / "runtime/src/registry/live.rs").read_text(encoding="utf-8")
+   and "vue_dynamique_personnalisation_presente" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Registre : Themes\\Personalize (AppsUseLightTheme…) toujours présent (#1170)")
+# #1168 : RegisterHotKey prend vraiment la combinaison (XGrabKey sur la racine),
+# WM_HOTKEY, refus ERROR_HOTKEY_ALREADY_REGISTERED si openbox la tient.
+ok("fn grab_hotkey" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
+   and "gui::register_hotkey" in (runtime_dlls / "electron_win32.rs").read_text(encoding="utf-8")
+   and "raccourci_global_unique_et_wm_hotkey" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "RegisterHotKey : prise réelle, WM_HOTKEY, refus si la combinaison est déjà tenue (#1168)")
+# #1191 : Chromium cherche Shell_NotifyIconGetRect au clic droit sur l'icône
+# de notification et s'arrête (CHECK) si shell32 ne l'exporte pas.
+ok('"Shell_NotifyIconGetRect"=>fn' in (runtime_dlls / "shell32.rs").read_text(encoding="utf-8")
+   and "rectangle_de_l_icone_pour_get_rect" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Zone de notification : Shell_NotifyIconGetRect exportée (clic droit de Claude pour Windows, #1191)")
 # #1177 : Direct3D 12 sur OpenGL, shaders DXBC traduits et tampons de
 # constantes liés d'après la signature racine (RTS0).
 d3d12_shader_rs = (runtime_dlls / "d3d12_shader.rs").read_text(encoding="utf-8")
@@ -1333,6 +1353,20 @@ ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+ok("fn lv_edit_label" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "clic_droit_menu_contextuel_et_renommage_dans_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes : clic droit (NM_RCLICK, WM_CONTEXTMENU), Maj+F10 et renommage en place (#1139)")
+ok("placement_de_fenetre_deplace_et_affiche" in (SCRIPTS / "test-all.sh").read_text()
+   and "show_window(hwnd, p.show_cmd as i32)" in (runtime_dlls / "user32.rs").read_text(),
+   "SetWindowPlacement affiche la fenêtre : 7-Zip s'ouvre (#1159)")
+ok("en_tetes_nt_d_une_image_projetee" in (SCRIPTS / "test-all.sh").read_text(),
+   "ImageNtHeader : les extensions livrées avec Notepad++ se chargent (#1152)")
+ok("LVS_EX_CHECKBOXES" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "cases_a_cocher_des_lignes_d_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes à cases à cocher (LVS_EX_CHECKBOXES) : récupération d'Audacity (#1153)")
+ok("fn message_box_wrap" in (runtime_dlls / "dialogs.rs").read_text()
+   and "longue_boite_de_message_tient_dans_l_ecran" in (SCRIPTS / "test-all.sh").read_text(),
+   "Boîte de message longue : élargie puis limitée à la zone de travail, boutons visibles (#1161)")
 # #1183 : SslStream de .NET normalise le nom d'hôte par Normaliz.dll!IdnToAscii.
 ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
