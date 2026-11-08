@@ -378,6 +378,64 @@ int main(void)
     IObjectCollection_Release(coll);
     ICustomDestinationList_Release(jl);
 
+    /* Dossier racine du Shell (WinSCP x86, #1107) : analyse d'un chemin,
+       nom affiché (STRRET x86), attributs et énumération. */
+    IShellFolder *desk = NULL;
+    CHECK(SHGetDesktopFolder(&desk) == S_OK && desk, "SHGetDesktopFolder");
+    WCHAR tmpdir[MAX_PATH];
+    DWORD tlen = GetTempPathW(MAX_PATH, tmpdir);
+    while (tlen > 3 && tmpdir[tlen - 1] == L'\\')
+        tmpdir[--tlen] = 0;
+    WCHAR subdir[MAX_PATH + 32];
+    wsprintfW(subdir, L"%s\\winlux-com32-%lu", tmpdir, GetCurrentProcessId());
+    CreateDirectoryW(subdir, NULL);
+    WCHAR subfile[MAX_PATH + 48];
+    wsprintfW(subfile, L"%s\\b.txt", subdir);
+    HANDLE hf = CreateFileW(subfile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    CloseHandle(hf);
+    LPITEMIDLIST pidl = NULL;
+    ULONG eaten = 0, sfgao = SFGAO_FOLDER | SFGAO_FILESYSTEM;
+    CHECK(IShellFolder_ParseDisplayName(desk, NULL, NULL, subdir, &eaten, &pidl, &sfgao) == S_OK && pidl
+          && sfgao == (SFGAO_FOLDER | SFGAO_FILESYSTEM), "IShellFolder::ParseDisplayName");
+    STRRET sr;
+    memset(&sr, 0xcc, sizeof sr);
+    WCHAR shown[MAX_PATH] = { 0 };
+    CHECK(IShellFolder_GetDisplayNameOf(desk, pidl, SHGDN_FORPARSING, &sr) == S_OK && sr.uType == STRRET_WSTR
+          && sr.pOleStr && lstrcmpiW(sr.pOleStr, subdir) == 0, "GetDisplayNameOf (STRRET x86)");
+    if (sr.uType == STRRET_WSTR && sr.pOleStr) {
+        lstrcpynW(shown, sr.pOleStr, MAX_PATH);
+        CoTaskMemFree(sr.pOleStr);
+    }
+    WCHAR shown_path[MAX_PATH] = { 0 };
+    CHECK(SHGetPathFromIDListW(pidl, shown_path) && lstrcmpiW(shown_path, subdir) == 0, "SHGetPathFromIDListW");
+    IShellFolder *sub = NULL;
+    CHECK(IShellFolder_BindToObject(desk, pidl, NULL, &IID_IShellFolder, (void **)&sub) == S_OK && sub,
+          "BindToObject");
+    IEnumIDList *en = NULL;
+    CHECK(sub && IShellFolder_EnumObjects(sub, NULL, SHCONTF_FOLDERS | SHCONTF_NONFOLDERS, &en) == S_OK && en,
+          "EnumObjects");
+    LPITEMIDLIST items[3] = { NULL, NULL, NULL };
+    ULONG fetched = 9;
+    CHECK(en && IEnumIDList_Next(en, 3, items, &fetched) == S_FALSE && fetched == 1 && items[0] && !items[1],
+          "IEnumIDList::Next (tableau x86)");
+    ULONG fattr = SFGAO_FOLDER | SFGAO_FILESYSTEM;
+    CHECK(sub && IShellFolder_GetAttributesOf(sub, 1, (LPCITEMIDLIST *)items, &fattr) == S_OK
+          && fattr == SFGAO_FILESYSTEM, "GetAttributesOf (tableau x86)");
+    memset(&sr, 0, sizeof sr);
+    CHECK(sub && IShellFolder_GetDisplayNameOf(sub, items[0], SHGDN_INFOLDER, &sr) == S_OK
+          && sr.uType == STRRET_WSTR && lstrcmpW(sr.pOleStr, L"b.txt") == 0, "nom de l'élément");
+    if (sr.uType == STRRET_WSTR && sr.pOleStr)
+        CoTaskMemFree(sr.pOleStr);
+    CoTaskMemFree(items[0]);
+    if (en)
+        IEnumIDList_Release(en);
+    if (sub)
+        IShellFolder_Release(sub);
+    CoTaskMemFree(pidl);
+    IShellFolder_Release(desk);
+    DeleteFileW(subfile);
+    RemoveDirectoryW(subdir);
+
     /* uxtheme demandé par la VCL : aucune fonction ne manque. */
     HMODULE ux = LoadLibraryA("uxtheme.dll");
     static const char *const ux_names[] = { "GetThemeMetric", "DrawThemeEdge", "GetWindowTheme",
