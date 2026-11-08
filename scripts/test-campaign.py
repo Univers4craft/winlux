@@ -900,6 +900,14 @@ ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object
    and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
 
+# #20 : objets nommés partagés entre processus du même compte (sections, événements, mutex, sémaphores).
+_named = (ROOT / "runtime/src/dlls/named_objects.rs").read_text()
+ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_au_compte" in _named
+   and "meta.uid() == uid()" in _named and "winlux-objets-{}" in _named
+   and "fn sections_nommees_de_ntdll_et_de_kernel32" in (ROOT / "runtime/src/dlls/ntdll.rs").read_text()
+   and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
