@@ -351,12 +351,13 @@ codex_tgz = tar_bytes({"package/package.json": b"{}",
                        "package/vendor/x86_64-unknown-linux-musl/codex-path/rg": b"rg",
                        "package/vendor/x86_64-unknown-linux-musl/codex-resources/voice/big.bin": b"v" * 1000,
                        "package/vendor/aarch64-unknown-linux-musl/bin/codex": b"arm"})
-integrity = "sha512-" + base64.b64encode(hashlib.sha512(codex_tgz).digest()).decode()
-routes["/@openai%2fcodex/latest"] = json.dumps({"version": "9.9.9"}).encode()
-routes["/@openai%2fcodex/9.9.9-linux-x64"] = json.dumps(
-    {"dist": {"tarball": f"{base}/codex.tgz", "integrity": integrity}}).encode()
+# Version figée et empreinte écrite dans le code, jamais « latest » du registre (#911).
+assert assistant.CODEX_VERSION == "0.167.0" and set(assistant.CODEX_SHA512) == {"linux-x64", "linux-arm64"}
+assistant.CODEX_VERSION = "9.9.9"
+assistant.CODEX_SHA512 = dict(assistant.CODEX_SHA512, **{"linux-x64": base64.b64encode(hashlib.sha512(codex_tgz).digest()).decode()})
 assistant.NPM_REGISTRY = base
-routes["/codex.tgz"] = codex_tgz[:-1] + bytes([codex_tgz[-1] ^ 1])  # archive altérée
+codex_path = "/@openai/codex/-/codex-9.9.9-linux-x64.tgz"
+routes[codex_path] = codex_tgz[:-1] + bytes([codex_tgz[-1] ^ 1])  # archive altérée
 try:
     chatgpt.install(None, None, lambda index: None)
     raise AssertionError("archive Codex altérée acceptée")
@@ -364,7 +365,7 @@ except RuntimeError as error:
     assert "empreinte" in str(error)
 assert chatgpt.launcher() is None and not assistant.CODEX_DIR.exists()
 assert not list(assistant.DATA.glob("codex*")), "aucun reste du téléchargement refusé"
-routes["/codex.tgz"] = codex_tgz
+routes[codex_path] = codex_tgz
 steps = []
 launcher = chatgpt.install(None, None, steps.append)
 assert steps == [0] and launcher == assistant.CODEX_DIR / "bin/codex" and os.access(launcher, os.X_OK)
@@ -447,30 +448,27 @@ assistant._mem_total_gib = lambda: 2.0
 assert not local.supported(), "moins de 3 Gio de mémoire : option cachée"
 assistant._mem_total_gib = lambda: 3.8
 assert local.supported() and local.launcher() is None and not local.remote
-engine_zip = io.BytesIO()
-with zipfile.ZipFile(engine_zip, "w") as bundle:
-    bundle.writestr("build/bin/llama-server", "#!/bin/sh\n")
-    bundle.writestr("build/bin/libllama.so", "so")
-engine_zip = engine_zip.getvalue()
+# #911 : révisions figées, empreintes écrites dans le code (jamais « latest » de GitHub ni « main »).
+assert assistant.LLAMA_TAG == "b12202" and "/releases/download/b12202/" in assistant.LLAMA_URL
+assert len(assistant.LLAMA_SHA256) == 64 and len(assistant.LOCAL_MODEL_SHA256) == 64
+assert len(assistant.LOCAL_MODEL_REVISION) == 40
+engine_tgz = io.BytesIO()
+with tarfile.open(fileobj=engine_tgz, mode="w:gz") as tar:
+    for name, content in (("llama-b9999/llama-server", b"#!/bin/sh\n"), ("llama-b9999/libllama.so.0.9.0", b"so")):
+        info = tarfile.TarInfo(name)
+        info.size, info.mode = len(content), 0o644
+        tar.addfile(info, io.BytesIO(content))
+    link = tarfile.TarInfo("llama-b9999/libllama.so.0")
+    link.type, link.linkname = tarfile.SYMTYPE, "libllama.so.0.9.0"
+    tar.addfile(link)
+engine_tgz = engine_tgz.getvalue()
 model = b"GGUF" + b"\0" * 4096
-# #911 : la publication la plus récente peut n'avoir aucun binaire (v0.9.0 = nightly-tag.txt).
-assert assistant.llama_asset([{"tag_name": "v0.9.0", "assets": [{"name": "nightly-tag.txt", "digest": "sha256:" + "1" * 64}]},
-                              {"tag_name": "b12202", "prerelease": True, "assets": [
-                                  {"name": "llama-b12202-bin-ubuntu-x64.tar.gz", "digest": "sha256:" + "2" * 64}]}]
-                             )["name"] == "llama-b12202-bin-ubuntu-x64.tar.gz"
-assert assistant.llama_asset([{"assets": [{"name": "nightly-tag.txt"}]}]) is None
-assert assistant.llama_asset([{"draft": True, "assets": [{"name": "llama-b1-bin-ubuntu-x64.zip", "digest": "sha256:" + "3" * 64}]}]) is None
-assert "releases?per_page=" in assistant.LLAMA_RELEASE_API and "latest" not in assistant.LLAMA_RELEASE_API
-routes["/releases"] = json.dumps([{"tag_name": "v0.9.0", "assets": [{"name": "nightly-tag.txt"}]}, {"assets": [
-    {"name": "llama-b9999-bin-win-cpu-x64.zip", "browser_download_url": f"{base}/win.zip", "digest": "sha256:" + "0" * 64},
-    {"name": "llama-b9999-bin-ubuntu-x64.zip", "browser_download_url": f"{base}/engine.zip",
-     "digest": "sha256:" + hashlib.sha256(engine_zip).hexdigest()}]}]).encode()
-routes["/engine.zip"] = engine_zip
-routes[f"/api/models/{assistant.LOCAL_MODEL_REPO}/tree/main"] = json.dumps([
-    {"type": "file", "path": "qwen2.5-1.5b-instruct-q8_0.gguf", "lfs": {"oid": "1" * 64}},
-    {"type": "file", "path": assistant.LOCAL_MODEL_FILE, "lfs": {"oid": hashlib.sha256(model).hexdigest()}}]).encode()
-routes[f"/{assistant.LOCAL_MODEL_REPO}/resolve/main/{assistant.LOCAL_MODEL_FILE}"] = model[:-1] + b"X"  # altéré
-assistant.LLAMA_RELEASE_API = f"{base}/releases"
+assistant.LLAMA_URL = f"{base}/engine.tar.gz"
+assistant.LLAMA_SHA256 = hashlib.sha256(engine_tgz).hexdigest()
+assistant.LOCAL_MODEL_SHA256 = hashlib.sha256(model).hexdigest()
+model_path = f"/{assistant.LOCAL_MODEL_REPO}/resolve/{assistant.LOCAL_MODEL_REVISION}/{assistant.LOCAL_MODEL_FILE}"
+routes["/engine.tar.gz"] = engine_tgz
+routes[model_path] = model[:-1] + b"X"  # altéré
 assistant.HF_BASE = base
 progress = []
 try:
@@ -480,10 +478,11 @@ except RuntimeError as error:
     assert "empreinte" in str(error)
 assert local.engine() is not None and os.access(local.engine(), os.X_OK), "le moteur, lui, était bon"
 assert local.model() is None and not list(assistant.LOCAL_DIR.glob("*.part"))
-routes[f"/{assistant.LOCAL_MODEL_REPO}/resolve/main/{assistant.LOCAL_MODEL_FILE}"] = model
+routes[model_path] = model
 steps = []
 assert local.install(lambda f, t: progress.append(t), None, steps.append) == local.engine()
 assert steps == [0, 1] and local.model().read_bytes() == model and progress
+assert (local.engine().parent / "libllama.so.0").is_symlink(), "liens des bibliothèques gardés"
 assert local.status() == {"installed": True, "loggedIn": True}
 
 # Faux llama-server : vérifie la clé, répond selon le schéma demandé (comme la grammaire JSON).

@@ -66,20 +66,31 @@ MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
 NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
-# Toutes les publications récentes, pas « latest » (#911) : « latest » peut
-# n'avoir aucun binaire (v0.9.0 du 04/11/2026 = nightly-tag.txt seul).
-LLAMA_RELEASE_API = os.environ.get("WINLUX_LLAMA_RELEASE_API",
-                                   "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30")
-LLAMA_ASSET = re.compile(r"-bin-ubuntu-x64\.(zip|tar\.gz)$")
+# Révisions figées, empreinte SHA-256 écrite ici (#911) : jamais « la dernière
+# publiée » (« latest » de llama.cpp, v0.9.0, n'avait même aucun binaire).
+# Relevées le 2026-11-08 sur le portable de test (archive téléchargée, empreinte
+# recalculée, RUNPATH $ORIGIN, besoins système : libstdc++, libgomp1, libssl3).
+LLAMA_TAG = "b12202"
+LLAMA_ARCHIVE = f"llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+LLAMA_URL = os.environ.get("WINLUX_LLAMA_URL",
+                           f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/{LLAMA_ARCHIVE}")
+LLAMA_SHA256 = "9076cf9b2ce5b849384711e85b0c37d18c36b1475106c236941de2b6f0899a88"  # 23 066 943 octets
 # Navigateurs livrés par le catalogue Winlux (winlux-browsers) ou installés à part.
 BROWSERS_DIR = Path(os.environ.get("WINLUX_BROWSERS_DIR", "/opt/winlux/browsers"))
 BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
                     "firefox/root/usr/lib/firefox/firefox")
 BROWSER_COMMANDS = ("firefox", "firefox-esr", "chromium", "chromium-browser", "google-chrome-stable",
                     "microsoft-edge-stable", "brave-browser", "epiphany", "falkon")
+CODEX_VERSION = "0.167.0"  # relevée le 2026-11-08 (registre npm, empreinte recalculée)
+CODEX_SHA512 = {
+    "linux-x64": "FNc7danfUng9Sp6w+Fh7kofNHHZpA6VMyNKWsWrS3OwHly69gywTWeiuwrUPXpJSho8Df4xqRsHfHRPzj7zYQg==",
+    "linux-arm64": "5cv+sybRWqpRJL6KCv3YSnIx1GHRmjek997C38n1Zfno4HomKDLkNSjWLDOOc2+ISlVNSRRnySWq4zKmzlY12g==",
+}
 HF_BASE = os.environ.get("WINLUX_HF_BASE", "https://huggingface.co").rstrip("/")
 LOCAL_MODEL_REPO = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
 LOCAL_MODEL_FILE = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+LOCAL_MODEL_REVISION = "91cad51170dc346986eccefdc2dd33a9da36ead9"  # 2024-09-20
+LOCAL_MODEL_SHA256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"  # 1 117 320 736 octets
 LOCAL_MIN_RAM_GIB = 3  # modèle 1,1 Go + contexte : au-dessous, l'option est cachée
 MAX_AGENTS = 3
 
@@ -367,11 +378,6 @@ def _get(url, timeout=30):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def _get_json(url):
-    with _get(url) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def download(url, target, algorithm, expected, progress=None, cancel=None, label=""):
     """Télécharge `url` dans `target` ; le fichier n'est gardé que si son
     empreinte `algorithm` (sha256, sha512) vaut exactement `expected` (octets)."""
@@ -551,13 +557,12 @@ class ChatGPTProvider(Provider):
 
     def install(self, progress, cancel, mark):
         suffix, triple = self.TARGETS[_machine()]
-        package = f"{NPM_REGISTRY}/@openai%2fcodex"
-        version = _get_json(f"{package}/latest")["version"]
-        dist = _get_json(f"{package}/{version}-{suffix}")["dist"]
-        integrity = next((part for part in dist.get("integrity", "").split() if part.startswith("sha512-")), "")
-        expected = base64.b64decode(integrity[7:]) if integrity else b""
+        # Version figée et empreinte SHA-512 écrites ici, comme llama.cpp (#911).
+        version = CODEX_VERSION
+        tarball = f"{NPM_REGISTRY}/@openai/codex/-/codex-{version}-{suffix}.tgz"
+        expected = base64.b64decode(CODEX_SHA512[suffix])
         CODEX_DIR.parent.mkdir(parents=True, exist_ok=True)
-        archive = download(dist["tarball"], CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
+        archive = download(tarball, CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
                            _t("Téléchargement de Codex"))
         staging = CODEX_DIR.with_name("codex.nouveau")
         shutil.rmtree(staging, ignore_errors=True)
@@ -677,20 +682,6 @@ class ChatGPTProvider(Provider):
         return answer if isinstance(answer, dict) else {"reponse": str(answer), "demande": "aucune"}
 
 
-def llama_asset(releases):
-    """Archive Linux x86-64 de la publication llama.cpp la plus récente qui en a
-    une (#911), avec son empreinte SHA-256 ; None sinon."""
-    if isinstance(releases, dict):
-        releases = [releases]
-    for release in releases if isinstance(releases, list) else []:
-        if not isinstance(release, dict) or release.get("draft"):
-            continue
-        for asset in release.get("assets", []):
-            if LLAMA_ASSET.search(asset.get("name", "")) and str(asset.get("digest", "")).startswith("sha256:"):
-                return asset
-    return None
-
-
 def engine_problem(server):
     """Bibliothèque système manquante au moteur : dit tout de suite, plutôt qu'à
     l'ouverture du panneau. Chaîne vide si llama-server démarre."""
@@ -737,13 +728,8 @@ class LocalProvider(Provider):
         return self.engine() if self.engine() and self.model() else None
 
     def install_engine(self, progress, cancel):
-        asset = llama_asset(_get_json(LLAMA_RELEASE_API))
-        if asset is None:
-            raise RuntimeError(_t("Archive inattendue : {name}", name="llama.cpp"))
-        digest = asset.get("digest") or ""
-        expected = bytes.fromhex(digest[7:]) if digest.startswith("sha256:") else b""
         LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-        archive = download(asset["browser_download_url"], LOCAL_DIR / asset["name"], "sha256", expected, progress,
+        archive = download(LLAMA_URL, LOCAL_DIR / LLAMA_ARCHIVE, "sha256", bytes.fromhex(LLAMA_SHA256), progress,
                            cancel, _t("Téléchargement du moteur"))
         staging = LOCAL_DIR / "moteur.nouveau"
         shutil.rmtree(staging, ignore_errors=True)
@@ -769,13 +755,9 @@ class LocalProvider(Provider):
             shutil.rmtree(staging, ignore_errors=True)
 
     def install_model(self, progress, cancel):
-        files = _get_json(f"{HF_BASE}/api/models/{LOCAL_MODEL_REPO}/tree/main")
-        entry = next((f for f in files if f.get("path") == LOCAL_MODEL_FILE), None)
-        oid = ((entry or {}).get("lfs") or {}).get("oid", "")
-        if not re.fullmatch(r"[0-9a-f]{64}", oid):
-            raise RuntimeError(_t("Fichier corrompu, empreinte incorrecte : {name}", name=LOCAL_MODEL_FILE))
-        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/main/{LOCAL_MODEL_FILE}", LOCAL_DIR / LOCAL_MODEL_FILE,
-                 "sha256", bytes.fromhex(oid), progress, cancel, _t("Téléchargement du modèle"))
+        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/{LOCAL_MODEL_REVISION}/{LOCAL_MODEL_FILE}",
+                 LOCAL_DIR / LOCAL_MODEL_FILE, "sha256", bytes.fromhex(LOCAL_MODEL_SHA256), progress, cancel,
+                 _t("Téléchargement du modèle"))
 
     def install(self, progress, cancel, mark):
         if self.engine() is None:
