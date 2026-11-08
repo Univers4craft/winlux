@@ -117,6 +117,7 @@ step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- r
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux -- glisser_depuis_une_liste_ou_une_arborescence perte_du_focus_garde_les_boutons_de_souris
 step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- icone_standard_par_son_emplacement
 step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
+step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
 
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.

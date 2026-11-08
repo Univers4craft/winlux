@@ -1285,4 +1285,10 @@ ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encodi
 ok("fn personalize" in (ROOT / "runtime/src/registry/live.rs").read_text(encoding="utf-8")
    and "vue_dynamique_personnalisation_presente" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Registre : Themes\\Personalize (AppsUseLightTheme…) toujours présent (#1170)")
+# #1168 : RegisterHotKey prend vraiment la combinaison (XGrabKey sur la racine),
+# WM_HOTKEY, refus ERROR_HOTKEY_ALREADY_REGISTERED si openbox la tient.
+ok("fn grab_hotkey" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
+   and "gui::register_hotkey" in (runtime_dlls / "electron_win32.rs").read_text(encoding="utf-8")
+   and "raccourci_global_unique_et_wm_hotkey" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "RegisterHotKey : prise réelle, WM_HOTKEY, refus si la combinaison est déjà tenue (#1168)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

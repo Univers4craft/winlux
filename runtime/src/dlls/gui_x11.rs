@@ -898,6 +898,9 @@ pub struct X11Backend {
     scale: f32,
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
+    /// Raccourcis globaux pris sur la racine : (keycode, modificateurs X) →
+    /// (MOD_* Win32, VK).
+    hotkeys: HashMap<(u8, u16), (u32, u32)>,
     keyboard: Option<XkbKeyboard>,
     /// Touche morte en attente (^, ¨…), composée avec la frappe suivante.
     dead_keys: crate::intl::keyboard::DeadKeys,
@@ -1012,6 +1015,7 @@ impl X11Backend {
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
+            hotkeys: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
@@ -1600,6 +1604,21 @@ impl X11Backend {
     }
 
     /// Keysyms X11 associés à un keycode (table de niveaux chargée à la demande).
+    /// Touche physique d'un VK (niveau non modifié), pour XGrabKey.
+    fn vk_keycode(&mut self, vk: u32) -> Option<u8> {
+        let (min, max) = {
+            let setup = self.conn.setup();
+            (setup.min_keycode, setup.max_keycode)
+        };
+        (min..=max).find(|&kc| {
+            self.key_syms(kc).is_some_and(|syms| {
+                syms.first().is_some_and(|&b| b != 0)
+                    && key_levels_to_vk(syms[0], syms.get(1).copied().unwrap_or(0))
+                        == Some(vk as usize)
+            })
+        })
+    }
+
     fn key_syms(&mut self, keycode: u8) -> Option<Vec<u32>> {
         if !self.keymap.contains_key(&keycode) {
             let reply = self
@@ -2612,6 +2631,16 @@ impl X11Backend {
             }
             Event::KeyPress(e) => {
                 crate::power::note_activity();
+                let state = u16::from(e.state) & !(LOCK_MASK | NUM_LOCK_MASK);
+                if let Some(&(mods, vk)) = self.hotkeys.get(&(e.detail, state)) {
+                    // Raccourci global : WM_HOTKEY, jamais de WM_KEYDOWN.
+                    return Some(PendingEvent {
+                        hwnd: 0,
+                        message: gui::WM_HOTKEY,
+                        wparam: vk as usize,
+                        lparam: mods as isize,
+                    });
+                }
                 gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
@@ -3246,6 +3275,27 @@ fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
         return Some(shifted as usize);
     }
     keysym_to_vk(base)
+}
+
+const LOCK_MASK: u16 = 1 << 1;
+const NUM_LOCK_MASK: u16 = 1 << 4;
+
+/// MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN → Mod1, Control, Shift, Mod4.
+fn hotkey_x_mods(mods: u32) -> u16 {
+    let mut x = 0;
+    if mods & 1 != 0 {
+        x |= 1 << 3;
+    }
+    if mods & 2 != 0 {
+        x |= 1 << 2;
+    }
+    if mods & 4 != 0 {
+        x |= 1;
+    }
+    if mods & 8 != 0 {
+        x |= 1 << 6;
+    }
+    x
 }
 
 fn vk_is_extended(vk: usize) -> bool {
@@ -4682,6 +4732,53 @@ impl gui::GuiBackend for X11Backend {
             | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
         let _ = self.conn.send_event(false, root, mask, ev);
         let _ = self.conn.flush();
+    }
+
+    fn grab_hotkey(&mut self, mods: u32, vk: u32, grab: bool) -> bool {
+        use x11rb::protocol::xproto::{GrabMode, ModMask};
+        let Some(keycode) = self.vk_keycode(vk) else {
+            return false;
+        };
+        let root = self.conn.setup().roots[self.screen].root;
+        let base = hotkey_x_mods(mods);
+        // Verr. Maj et Verr. Num ne doivent pas empêcher le raccourci.
+        let variants = [0, LOCK_MASK, NUM_LOCK_MASK, LOCK_MASK | NUM_LOCK_MASK];
+        if !grab {
+            for extra in variants {
+                let _ = self
+                    .conn
+                    .ungrab_key(keycode, root, ModMask::from(base | extra));
+            }
+            self.hotkeys.remove(&(keycode, base));
+            let _ = self.conn.flush();
+            return true;
+        }
+        for (done, extra) in variants.iter().enumerate() {
+            // BadAccess : un autre client (openbox, un autre programme) tient
+            // déjà la combinaison.
+            let taken = self
+                .conn
+                .grab_key(
+                    false,
+                    root,
+                    ModMask::from(base | extra),
+                    keycode,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                )
+                .map_or(true, |cookie| cookie.check().is_err());
+            if taken {
+                for undo in &variants[..done] {
+                    let _ = self
+                        .conn
+                        .ungrab_key(keycode, root, ModMask::from(base | undo));
+                }
+                let _ = self.conn.flush();
+                return false;
+            }
+        }
+        self.hotkeys.insert((keycode, base), (mods, vk));
+        true
     }
 
     fn grab_pointer(&mut self, hwnd: usize, grab: bool) {
