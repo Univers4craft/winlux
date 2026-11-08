@@ -45,12 +45,6 @@ pub unsafe extern "win64" fn GetCurrentThreadStackLimits(low: *mut usize, high: 
     }
 }
 
-/// Winlux n'implémente pas les fibres en mode « thread converti » : aucun
-/// thread n'est une fibre tant que ConvertThreadToFiber n'a pas réussi.
-pub unsafe extern "win64" fn IsThreadAFiber() -> i32 {
-    0
-}
-
 /// `DebugBreak` : lève EXCEPTION_BREAKPOINT comme sous Windows. Sans
 /// débogueur, le gestionnaire de plantage de Winlux la rapporte.
 pub unsafe extern "win64" fn DebugBreak() {
@@ -1238,7 +1232,6 @@ pub extern "win64" fn nt_not_supported() -> u32 {
 pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetCurrentThreadStackLimits" => fn GetCurrentThreadStackLimits,
-        "IsThreadAFiber" => fn IsThreadAFiber,
         "DebugBreak" => fn DebugBreak,
         "WaitOnAddress" => fn WaitOnAddress,
         "WakeByAddressSingle" => fn WakeByAddressSingle,

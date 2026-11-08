@@ -61,12 +61,32 @@ pub(crate) struct TextMetricW {
 
 fn font_metrics(hdc: usize) -> (i32, i32, i32, i32, i32, i32, i32, bool, bool, bool) {
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    // Métriques réelles du fichier TrueType, les mêmes que celles du rendu
+    // (ExtTextOut, GetGlyphOutlineW) : avec une estimation, Qt (VLC)
+    // coupait le bas des lignes et TA_BASELINE plaçait le texte trop bas.
+    if let Some(f) = super::usp10::dc_font(hdc) {
+        let mut tm = [0u8; 60];
+        super::usp10::text_metrics(&f, &mut tm);
+        let at = |i: usize| i32::from_le_bytes(tm[i * 4..i * 4 + 4].try_into().unwrap());
+        return (
+            at(0),
+            at(1),
+            at(2),
+            at(3),
+            at(4),
+            at(5),
+            font.weight,
+            font.italic,
+            font.underline,
+            font.strikeout,
+        );
+    }
     let h = if font.height != 0 {
         font.height.abs()
     } else {
         16
     };
-    // Métriques plus précises basées sur les polices Windows courantes
+    // Estimation quand aucune police TrueType n'est trouvée
     let ascent = (h * 73) / 100; // ~73% de la hauteur est l'ascent
     let descent = h - ascent; // ~27% pour le descent
     let internal_leading = (h * 5) / 100; // espace interne pour accents
@@ -1589,6 +1609,26 @@ mod text_align_tests {
         gui::free_dc(hdc);
         assert_eq!(set_text_align(hdc, 0), u32::MAX);
     }
+    /// GetTextMetricsW donne les métriques du fichier TrueType (Segoe UI
+    /// 9 pt : 16 px de haut, 13 au-dessus de la ligne de base), pas une
+    /// estimation : Qt (VLC) en tire la hauteur de ses lignes.
+    #[test]
+    fn metriques_de_texte_reelles() {
+        let hdc = gui::create_dc(0);
+        let Some(f) = crate::dlls::usp10::dc_font(hdc) else {
+            gui::free_dc(hdc);
+            return;
+        };
+        let mut tm = [0u8; 60];
+        crate::dlls::usp10::text_metrics(&f, &mut tm);
+        let real = i32::from_le_bytes(tm[0..4].try_into().unwrap());
+        let m = font_metrics(hdc);
+        assert_eq!(m.0, real);
+        assert_eq!(m.0, m.1 + m.2, "hauteur = ascent + descent");
+        assert!(m.1 > m.2);
+        gui::free_dc(hdc);
+    }
+
     /// Qt (VLC) dessine chaque glyphe dans une DIB avec
     /// ExtTextOutW(ETO_GLYPH_INDEX) puis en lit les pixels : sans dessin,
     /// tout le texte de l'interface restait invisible.

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Clavier tactile Winlux, façon Windows 11.
+"""Clavier tactile Winlux.
 
 Utilisable à la souris ou au doigt : dispositions française (AZERTY),
 anglaise (QWERTY), allemande (QWERTZ) et espagnole (QWERTY avec Ñ), page de
@@ -510,10 +510,19 @@ def set_panel(enabled):
     """Ajoute (réglage auto ou toujours) ou retire (jamais) le greffon de la barre."""
     if not shutil.which("xfconf-query"):
         return False
-    output = _xfconf("-p", "/panels/panel-1/plugin-ids") or ""
-    ids = [int(line) for line in output.splitlines() if line.strip().isdigit()]
+    # Barre flottante (#889) : l'état et l'heure sont dans le panneau 2.
+    # L'icône va dans le panneau qui porte le réseau (4) ; retirée, elle
+    # quitte tous les panneaux.
+    panels = [int(line) for line in (_xfconf("-p", "/panels") or "").splitlines() if line.strip().isdigit()] or [1]
+    lists = {}
+    for number in panels:
+        output = _xfconf("-p", f"/panels/panel-{number}/plugin-ids") or ""
+        lists[number] = [int(line) for line in output.splitlines() if line.strip().isdigit()]
+    home = next((number for number in panels if 4 in lists[number]), 1)
+    ids = lists.get(home, [])
     if not ids:
         return False
+    others = [number for number in panels if number != home and PLUGIN in lists[number]]
     if enabled:
         command = "/usr/bin/winlux-osk tray" if Path("/usr/bin/winlux-osk").exists() else f"python3 {Path(__file__).resolve()} tray"
         for prop, kind, value in (("", "string", "genmon"), ("/command", "string", command),
@@ -525,14 +534,16 @@ def set_panel(enabled):
         wanted = ids_with_icon(ids)
     else:
         wanted = [value for value in ids if value != PLUGIN]
-    if wanted != ids:
-        args = ["-p", "/panels/panel-1/plugin-ids", "-a"]
-        for value in wanted:
-            args += ["-t", "int", "-s", str(value)]
-        _xfconf(*args)
+    changed = wanted != ids or bool(others)
+    for number, values in [(home, wanted)] + [(other, [v for v in lists[other] if v != PLUGIN]) for other in others]:
+        if number != home or wanted != ids:
+            args = ["-p", f"/panels/panel-{number}/plugin-ids", "-a"]
+            for value in values:
+                args += ["-t", "int", "-s", str(value)]
+            _xfconf(*args)
     if not enabled:
         _xfconf("-p", f"/plugins/plugin-{PLUGIN}", "-r", "-R")
-    if wanted != ids and os.environ.get("WINLUX_OSK_NO_RESTART") != "1":
+    if changed and os.environ.get("WINLUX_OSK_NO_RESTART") != "1":
         restart_panel()
     return True
 

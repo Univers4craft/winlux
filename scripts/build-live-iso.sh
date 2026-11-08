@@ -1350,6 +1350,9 @@ INIT
 chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
+    # Notices, licence GPL et licences des bibliothèques Rust dans le paquet
+    # winlux-desktop (#33) ; échoue si NOTICES oublie une bibliothèque.
+    python3 "$root/scripts/stage-notices.py" "$stage"
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
     # Nom et logos Winlux à la place de ceux d'Ubuntu (politique de Canonical).
     sh "$root/scripts/winlux-brand-image.sh" "$stage"

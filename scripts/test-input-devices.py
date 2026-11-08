@@ -162,6 +162,15 @@ check(restarts.exists() and restarts.read_text().strip() == "-r", "barre déjà 
 restarts.unlink()
 subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "panel"], env=panel_env, timeout=20)
 check(not restarts.exists(), "barre relancée sans changement")
+# Barre flottante (#889) : réseau et heure dans le panneau 2, l'icône y va
+# aussi (avant le réseau), jamais en double dans la capsule du centre.
+store.write_text(json.dumps({"/panels": [1, 2], "/panels/panel-1/plugin-ids": [3, 44, 1, 2, 45, 8],
+                             "/panels/panel-2/plugin-ids": [40, 42, 10, 4, 7, 9, 43, 41]}))
+subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "panel"], env=dict(panel_env, WINLUX_OSK_NO_RESTART="1"),
+               timeout=20)
+data = json.loads(store.read_text())
+check(data["/panels/panel-2/plugin-ids"] == [40, 42, 10, 12, 4, 7, 9, 43, 41] and data["/panels/panel-1/plugin-ids"] == [3, 44, 1, 2, 45, 8],
+      f"barre flottante : icône dans le panneau 2, avant le réseau ({data})")
 for script in ("winlux-user-session.sh", "winlux-native-session.sh"):
     text = (HERE / script).read_text(encoding="utf-8")
     osk_at = text.find("winlux-osk panel")

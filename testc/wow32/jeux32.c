@@ -203,6 +203,34 @@ IMP HRESULT WINAPI D3DXCreateSprite(void *, void **);
 IMP HRESULT WINAPI D3DXCreateFontA(void *, int, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD,
     const char *, void **);
 IMP HRESULT WINAPI D3DXCreateBuffer(DWORD, void **);
+IMP HRESULT WINAPI D3DXAssembleShader(const char *, UINT, void *, void *, DWORD, void **, void **);
+IMP HRESULT WINAPI D3DXGetShaderConstantTable(const DWORD *, void **);
+IMP HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *, DWORD *, UINT *);
+IMP HRESULT WINAPI D3DXCreateBox(void *, float, float, float, void **, void **);
+IMP HRESULT WINAPI D3DXCreateSphere(void *, float, UINT, UINT, void **, void **);
+IMP HRESULT WINAPI D3DXComputeNormals(void *, const DWORD *);
+IMP HRESULT WINAPI D3DXCompileShader(const char *, UINT, void *, void *, const char *, const char *,
+    DWORD, void **, void **, void **);
+IMP HRESULT WINAPI D3DXCreateEffect(void *, const void *, UINT, void *, void *, DWORD, void *, void **,
+    void **);
+typedef void *(WINAPI *GETH1)(void *, const char *);
+typedef HRESULT(WINAPI *SETFLOATFX)(void *, void *, float);
+typedef struct {
+    const char *Name, *Semantic;
+    UINT Class, Type, Rows, Columns, Elements, Annotations, StructMembers, Flags, Bytes;
+} D3DXPARAMETER_DESC;
+IMP HRESULT WINAPI D3DXLoadMeshFromXInMemory(const void *, DWORD, DWORD, void *, void **, void **,
+    void **, DWORD *, void **);
+typedef void *(WINAPI *GETBYNAME)(void *, void *, const char *);
+typedef void *(WINAPI *GETPTR)(void *);
+#define BUFPTR(b) (((GETPTR)VT(b)[3])(b))
+typedef HRESULT(WINAPI *SETFLOATCT)(void *, void *, void *, float);
+typedef struct {
+    const char *Name;
+    UINT RegisterSet, RegisterIndex, RegisterCount, Class, Type, Rows, Columns, Elements,
+        StructMembers, Bytes;
+    const void *DefaultValue;
+} D3DXCONSTANT_DESC;
 IMP UINT WINAPI midiOutGetNumDevs(void);
 IMP UINT WINAPI midiOutGetDevCapsA(UINT_PTR, MIDIOUTCAPSA *, UINT);
 IMP UINT WINAPI midiOutOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
@@ -735,6 +763,169 @@ static int d3dx_tests(HWND hwnd) {
                    CALL0(dev, 42) == 0);
     CHECK(125, D3DXCreateBuffer(16, &buf) == 0 && buf && CALL0(buf, 4) == 16);
 
+    /* #834 : assembleur, sémantiques, table des constantes. */
+    {
+        static const char vs[] = "vs_2_0\n"
+                                 "dcl_position v0\n"
+                                 "dcl_texcoord1 v1\n"
+                                 "m4x4 oPos, v0, c0 // transformation\n"
+                                 "mov oT0.xy, v1\n";
+        static const char ps[] = "ps_2_0\ndef c1, 1, 0.5, 0, 1\nmul r0, c3, c1\nmov oC0, r0\n";
+        /* ps_2_0 avec table CTAB : float4 gColor en c3, puis mov oC0, c3. */
+        static const DWORD ctab[] = {
+            0xFFFF0200, 0x0013FFFE, 0x42415443, 28, 48, 0xFFFF0200, 1, 28, 0, 0,
+            48, 0x00030002, 1, 56, 0, 0x6C6F4367, 0x0000726F,
+            0x00030001, 0x00040001, 1, 0,
+            0x02000001, 0x800F0800, 0xA0E40003, 0x0000FFFF};
+        void *code = 0, *err = 0, *vsh = 0, *psh = 0, *ct = 0, *h;
+        DWORD sem[8];
+        UINT n = 0;
+        D3DXCONSTANT_DESC desc;
+        float v[4] = {0.25f, 0.5f, 0.75f, 1.0f}, got[4] = {0, 0, 0, 0};
+
+        CHECK(193, D3DXAssembleShader(vs, sizeof vs - 1, 0, 0, 0, &code, &err) == 0 && code &&
+                       !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(194, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        CHECK(195, D3DXGetShaderInputSemantics((DWORD *)BUFPTR(code), sem, &n) == 0 &&
+                       n == 2 && sem[0] == 0 && sem[2] == 5 && sem[3] == 1);
+        CALL0(code, 2);
+        CHECK(196, D3DXAssembleShader(ps, sizeof ps - 1, 0, 0, 0, &code, 0) == 0 &&
+                       CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(197, D3DXAssembleShader("ps_2_0\nfoo r0", 13, 0, 0, 0, &code, &err) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        CHECK(198, D3DXGetShaderConstantTable(ctab, &ct) == 0 && ct);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "gColor");
+        zero(&desc, sizeof desc);
+        n = 1;
+        CHECK(199, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 3 &&
+                       desc.Bytes == 16 && desc.Name[0] == 'g');
+        CHECK(200, CALL3(ct, 19, dev, h, v) == 0 && CALL3(dev, 110, 3, got, 1) == 0 &&
+                       got[0] == 0.25f && got[3] == 1.0f);
+        CHECK(201, ((SETFLOATCT)VT(ct)[17])(ct, dev, "gColor", 2.5f) == 0 &&
+                       CALL3(dev, 110, 3, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
+    /* Maillages (#834) : D3DXCreateBox, fichier .x texte en mémoire, matériaux,
+     * table d'attributs, DrawSubset, sphère et D3DXComputeNormals. */
+    {
+        static const char xfile[] =
+            "xof 0303txt 0032\n"
+            "Material Rouge { 1.0;0.0;0.0;1.0;; 10.0; 1.0;1.0;1.0;; 0.0;0.0;0.0;;"
+            " TextureFilename { \"rouge.bmp\"; } }\n"
+            "Mesh Quad { 4; -1;-1;0;, 1;-1;0;, 1;1;0;, -1;1;0;;\n"
+            " 1; 4;0,1,2,3;;\n"
+            " MeshNormals { 1; 0;0;1;; 1; 4;0,0,0,0;; }\n"
+            " MeshTextureCoords { 4; 0;1;, 1;1;, 1;0;, 0;0;; }\n"
+            " MeshMaterialList { 1; 1; 0;; { Rouge } } }\n";
+        void *box = 0, *quad = 0, *sphere = 0, *adjb = 0, *mats = 0;
+        float *vtx = 0;
+        DWORD nmat = 0, nattr = 0;
+        unsigned char *mat;
+
+        CHECK(202, D3DXCreateBox(dev, 1.0f, 2.0f, 3.0f, &box, 0) == 0 && box &&
+                       CALL0(box, 4) == 12 && CALL0(box, 5) == 24 && CALL0(box, 6) == 0x12);
+        CHECK(203, CALL2(box, 15, 0, &vtx) == 0 && vtx && vtx[0] == -0.5f && vtx[1] == -1.0f &&
+                       vtx[2] == -1.5f && vtx[3] == -1.0f && CALL0(box, 16) == 0);
+        CHECK(204, CALL0(dev, 41) == 0 && CALL1(box, 3, 0) == 0 && CALL0(dev, 42) == 0);
+        CHECK(205, D3DXLoadMeshFromXInMemory(xfile, sizeof xfile - 1, 0x220, dev, &adjb, &mats, 0,
+                                             &nmat, &quad) == 0 &&
+                       quad && nmat == 1 && CALL0(quad, 4) == 2 && CALL0(quad, 5) == 4);
+        mat = (unsigned char *)BUFPTR(mats);
+        /* D3DXMATERIAL : D3DMATERIAL9 (68 octets) puis le nom de texture, aligné sur 8 en x64. */
+        CHECK(206, ((float *)mat)[0] == 1.0f && ((float *)mat)[1] == 0.0f &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[0] == 'r' &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[5] == '.' &&
+                       adjb && CALL0(adjb, 4) == 24);
+        CHECK(207, CALL2(quad, 19, 0, &nattr) == 0 && nattr == 1);
+        CHECK(208, D3DXCreateSphere(dev, 1.0f, 8, 4, &sphere, 0) == 0 && sphere &&
+                       CALL0(sphere, 4) > 0 && D3DXComputeNormals(sphere, 0) == 0);
+        /* DrawSubset laisse ses tampons liés à l'appareil : on les délie. */
+        CALL4(dev, 100, 0, 0, 0, 0);
+        CALL1(dev, 104, 0);
+        CALL0(sphere, 2);
+        CALL0(adjb, 2);
+        CALL0(mats, 2);
+        CALL0(quad, 2);
+        CALL0(box, 2);
+    }
+
+    /* Compilation HLSL et effets (#834). */
+    {
+        static const char vs[] = "float4x4 WVP;\nfloat Scale;\n"
+                                 "struct O { float4 p : POSITION; float2 t : TEXCOORD0; };\n"
+                                 "O main(float4 p : POSITION, float2 t : TEXCOORD0) {\n"
+                                 "  O o; o.p = mul(p, WVP); o.t = t * Scale; return o; }\n";
+        static const char ps[] = "sampler2D S;\n"
+                                 "float4 main(float2 uv : TEXCOORD0) : COLOR {\n"
+                                 "  float4 c = tex2D(S, uv);\n"
+                                 "  if (c.a < 0.1) discard;\n"
+                                 "  return saturate(c * 2); }\n";
+        static const char fxsrc[] =
+            "float4x4 WVP;\n"
+            "float Intensity < string UIName = \"Intensite\"; > = 1.0;\n"
+            "float4 VS(float4 p : POSITION) : POSITION { return mul(p, WVP); }\n"
+            "float4 PS() : COLOR { return float4(Intensity, Intensity, Intensity, 1); }\n"
+            "technique Rendu {\n"
+            "  pass P0 { VertexShader = compile vs_2_0 VS(); PixelShader = compile ps_2_0 PS();\n"
+            "            AlphaBlendEnable = TRUE; SrcBlend = SrcAlpha; }\n"
+            "}\n";
+        void *code = 0, *err = 0, *ct = 0, *vsh = 0, *psh = 0, *fx = 0, *h, *hw, *t, *a;
+        D3DXCONSTANT_DESC desc;
+        D3DXPARAMETER_DESC pd;
+        UINT n = 1, np = 0;
+        DWORD rs = 0;
+        float got[4] = {0, 0, 0, 0}, fv = 0;
+        const char *str = 0;
+
+        CHECK(209, D3DXCompileShader(vs, sizeof vs - 1, 0, 0, "main", "vs_2_0", 0, &code, &err, &ct) == 0 &&
+                       code && ct && !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(210, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "Scale");
+        zero(&desc, sizeof desc);
+        CHECK(211, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 4 &&
+                       ((SETFLOATCT)VT(ct)[17])(ct, dev, h, 2.5f) == 0 &&
+                       CALL3(dev, 95, 4, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(212, D3DXCompileShader(ps, sizeof ps - 1, 0, 0, "main", "ps_2_0", 0, &code, 0, 0) == 0 &&
+                       code && CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(213, D3DXCompileShader("float4 main() : COLOR { return x; }", 34, 0, 0, "main", "ps_2_0",
+                                     0, &code, &err, 0) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        err = 0;
+        CHECK(214, D3DXCreateEffect(dev, fxsrc, sizeof fxsrc - 1, 0, 0, 0, 0, &fx, &err) == 0 && fx && !err);
+        t = ((GETH1)VT(fx)[13])(fx, "Rendu");
+        CHECK(215, t && CALL1(fx, 58, t) == 0);
+        h = ((GETBYNAME)VT(fx)[9])(fx, 0, "Intensity");
+        CHECK(216, h && ((SETFLOATFX)VT(fx)[30])(fx, h, 0.75f) == 0 && CALL2(fx, 31, h, &fv) == 0 &&
+                       fv == 0.75f);
+        hw = ((GETBYNAME)VT(fx)[9])(fx, 0, "WVP");
+        zero(&pd, sizeof pd);
+        CHECK(217, hw && CALL2(fx, 4, hw, &pd) == 0 && pd.Rows == 4 && pd.Columns == 4 &&
+                       pd.Class == 3 && pd.Type == 3 && pd.Name[0] == 'W');
+        a = ((GETBYNAME)VT(fx)[19])(fx, h, "UIName");
+        CHECK(218, a && CALL2(fx, 51, a, &str) == 0 && str && str[0] == 'I');
+        CHECK(219, CALL2(fx, 63, &np, 0) == 0 && np == 1 && CALL1(fx, 64, 0) == 0 &&
+                       CALL2(dev, 58, 27, &rs) == 0 && rs == 1);
+        CHECK(220, CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.75f &&
+                       ((SETFLOATFX)VT(fx)[30])(fx, h, 0.5f) == 0 && CALL0(fx, 65) == 0 &&
+                       CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.5f);
+        CHECK(221, CALL0(fx, 66) == 0 && CALL0(fx, 67) == 0 && CALL2(dev, 58, 27, &rs) == 0 && rs == 0);
+        CHECK(222, CALL0(fx, 2) == 0);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
     CALL0(buf, 2);
     CALL0(font, 2);
     CALL0(sp, 2);
@@ -990,6 +1181,240 @@ static int dplay_tests(void) {
     return 0;
 }
 
+/* DirectPlay 8 (#863) : deux pairs dans le même programme, sur 127.0.0.1. */
+__declspec(dllimport) HRESULT WINAPI DirectPlay8Create(const GUID *, void **, void *);
+__declspec(dllimport) HRESULT WINAPI DirectPlay8AddressCreate(const GUID *, void **, void *);
+typedef HRESULT(WINAPI *M11)(void *, void *, void *, void *, void *, void *, void *, void *, void *,
+                             void *, void *, void *);
+#define CALL11(o, i, a, b, c, d, e, f, g, h, j, k, l) \
+    ((M11)VT(o)[i])(o, P(a), P(b), P(c), P(d), P(e), P(f), P(g), P(h), P(j), P(k), P(l))
+static const GUID CLSID_DirectPlay8Peer = {
+    0x286f484d, 0x375e, 0x4458, {0xa2, 0x72, 0xb1, 0x38, 0xe2, 0xf8, 0x0a, 0x6a}};
+static const GUID IID_IDirectPlay8Peer = {
+    0x5102dacf, 0x241b, 0x11d3, {0xae, 0xa7, 0x00, 0x60, 0x97, 0xb0, 0x14, 0x11}};
+static const GUID IID_IDirectPlay8Address = {
+    0x83783300, 0x4063, 0x4c8a, {0x9d, 0xb3, 0x82, 0x83, 0x0a, 0x7f, 0xeb, 0x31}};
+static const GUID CLSID_DP8SP_TCPIP = {
+    0xebfe7ba0, 0x628d, 0x11d2, {0xae, 0x0f, 0x00, 0x60, 0x97, 0xb0, 0x14, 0x11}};
+typedef unsigned short WCH;
+typedef struct {
+    DWORD dwSize, dwFlags;
+    GUID guidInstance, guidApplication;
+    DWORD dwMaxPlayers, dwCurrentPlayers;
+    WCH *pwszSessionName, *pwszPassword;
+    void *pvReservedData;
+    DWORD dwReservedDataSize;
+    void *pvApplicationReservedData;
+    DWORD dwApplicationReservedDataSize;
+} DPN_APPLICATION_DESC;
+typedef struct {
+    DWORD dwSize, dwInfoFlags;
+    WCH *pwszName;
+    void *pvData;
+    DWORD dwDataSize, dwPlayerFlags;
+} DPN_PLAYER_INFO;
+typedef struct { DWORD dwBufferSize; unsigned char *pBufferData; } DPN_BUFFER_DESC;
+typedef struct { DWORD dwSize, dpnid; void *pvPlayerContext; } DPNMSG_PLAYER;
+typedef struct {
+    DWORD dwSize, dpnidSender;
+    void *pvPlayerContext;
+    unsigned char *pReceiveData;
+    DWORD dwReceiveDataSize, hBufferHandle;
+} DPNMSG_RECEIVE;
+typedef struct {
+    DWORD dwSize, hAsyncOp;
+    void *pvUserContext;
+    HRESULT hResultCode;
+    void *pvApplicationReplyData;
+    DWORD dwApplicationReplyDataSize, dpnidLocal;
+} DPNMSG_CONNECT_COMPLETE;
+typedef struct {
+    DWORD dwSize;
+    void *pAddressSender, *pAddressDevice;
+    const DPN_APPLICATION_DESC *pApplicationDescription;
+    void *pvResponseData;
+    DWORD dwResponseDataSize;
+    void *pvUserContext;
+    DWORD dwRoundTripLatencyMS;
+} DPNMSG_ENUM_HOSTS_RESPONSE;
+typedef struct {
+    DWORD dwSize;
+    void *pvUserConnectData;
+    DWORD dwUserConnectDataSize;
+    void *pvReplyData;
+    DWORD dwReplyDataSize;
+    void *pvReplyContext, *pvPlayerContext, *pAddressPlayer, *pAddressDevice;
+} DPNMSG_INDICATE_CONNECT;
+enum {
+    P8_INITIALIZE = 3, P8_CONNECT = 6, P8_SENDTO = 7, P8_HOST = 9, P8_GETAPPDESC = 10,
+    P8_ENUMPLAYERS = 18, P8_SETPEERINFO = 20, P8_GETPEERINFO = 21, P8_LOCALADDRESSES = 23,
+    P8_CLOSE = 24, P8_ENUMHOSTS = 25, A8_BUILDA = 4, A8_GETURLA = 10, A8_SETSP = 13,
+    A8_GETCOMPONENT = 16, A8_ADDCOMPONENT = 18
+};
+#define DP8_SYNC 0x80000000u
+static volatile int h8_create, h8_indicate, h8_recv, h8_destroy, c8_create, c8_recv, c8_done,
+    c8_enum;
+static volatile DWORD h8_from, c8_from, c8_local;
+static HRESULT WINAPI dp8_handler(void *ctx, DWORD id, void *msg) {
+    int host = ctx == (void *)0x8001;
+    switch (id) {
+    case 0xFFFF0007: /* CREATE_PLAYER */
+        ((DPNMSG_PLAYER *)msg)->pvPlayerContext = (void *)(UINT_PTR)(0x700 + h8_create);
+        if (host) h8_create++; else c8_create++;
+        break;
+    case 0xFFFF0009: /* DESTROY_PLAYER */
+        if (host) h8_destroy++;
+        break;
+    case 0xFFFF000E: { /* INDICATE_CONNECT */
+        DPNMSG_INDICATE_CONNECT *m = msg;
+        if (m->dwUserConnectDataSize == 4 && *(DWORD *)m->pvUserConnectData == 0x4A4F494E)
+            h8_indicate++;
+        break;
+    }
+    case 0xFFFF0011: { /* RECEIVE */
+        DPNMSG_RECEIVE *m = msg;
+        if (host && m->dwReceiveDataSize == 8 && m->pReceiveData[0] == 'b') {
+            h8_from = m->dpnidSender;
+            h8_recv++;
+        } else if (!host && m->dwReceiveDataSize == 6 && m->pReceiveData[0] == 's') {
+            c8_from = m->dpnidSender;
+            c8_recv++;
+        }
+        break;
+    }
+    case 0xFFFF0005: { /* CONNECT_COMPLETE */
+        DPNMSG_CONNECT_COMPLETE *m = msg;
+        if (m->hResultCode == 0 && m->pvUserContext == (void *)0x55) {
+            c8_local = m->dpnidLocal;
+            c8_done++;
+        }
+        break;
+    }
+    case 0xFFFF000B: { /* ENUM_HOSTS_RESPONSE */
+        DPNMSG_ENUM_HOSTS_RESPONSE *m = msg;
+        if (m->pvUserContext == (void *)0x66 && m->pApplicationDescription->pwszSessionName[0] == 'W' &&
+            m->pApplicationDescription->dwCurrentPlayers == 1)
+            c8_enum++;
+        break;
+    }
+    }
+    return 0;
+}
+static void dp8_name(DPN_PLAYER_INFO *pi, WCH *name) {
+    zero(pi, sizeof *pi);
+    pi->dwSize = sizeof *pi;
+    pi->dwInfoFlags = 1; /* DPNINFO_NAME */
+    pi->pwszName = name;
+}
+
+static int dplay8_tests(void) {
+    void *host = 0, *client = 0, *dev = 0, *haddr = 0, *locals[4] = {0};
+    DPN_APPLICATION_DESC ad;
+    DPN_PLAYER_INFO pi;
+    DPN_BUFFER_DESC bd;
+    DWORD n, size, type, port = 0, h = 0, ids[8], join = 0x4A4F494E;
+    char url[256];
+    unsigned char buf[512];
+    static WCH hote[] = {'H', 'o', 't', 'e', 0}, cli[] = {'C', 'l', 'i', 0},
+               session[] = {'W', 'i', 'n', 'l', 'u', 'x', 0},
+               kport[] = {'p', 'o', 'r', 't', 0},
+               khost[] = {'h', 'o', 's', 't', 'n', 'a', 'm', 'e', 0},
+               loop[] = {'1', '2', '7', '.', '0', '.', '0', '.', '1', 0};
+
+    /* Adresses : URL DirectPlay aller-retour. */
+    CHECK(223, DirectPlay8AddressCreate(&IID_IDirectPlay8Address, &haddr, 0) == 0 && haddr);
+    CHECK(224, CALL1(haddr, A8_BUILDA,
+                     "x-directplay:/provider=%7BEBFE7BA0-628D-11D2-AE0F-006097B01411%7D;"
+                     "hostname=127.0.0.1;port=2302") == 0);
+    n = sizeof url;
+    size = sizeof port;
+    CHECK(225, CALL2(haddr, A8_GETURLA, url, &n) == 0 && url[0] == 'x' &&
+                   CALL4(haddr, A8_GETCOMPONENT, kport, &port, &size, &type) == 0 &&
+                   port == 2302 && type == 2);
+
+    /* Hôte. */
+    CHECK(226, DirectPlay8Create(&IID_IDirectPlay8Peer, &host, 0) == 0 && host);
+    CHECK(227, CALL3(host, P8_INITIALIZE, 0x8001, dp8_handler, 0) == 0);
+    dp8_name(&pi, hote);
+    CHECK(228, CALL4(host, P8_SETPEERINFO, &pi, 0, 0, DP8_SYNC) == 0);
+    CHECK(229, DirectPlay8AddressCreate(&IID_IDirectPlay8Address, &dev, 0) == 0 &&
+                   CALL1(dev, A8_SETSP, &CLSID_DP8SP_TCPIP) == 0);
+    zero(&ad, sizeof ad);
+    ad.dwSize = sizeof ad;
+    ad.guidApplication = APP_JEUX;
+    ad.dwMaxPlayers = 4;
+    ad.pwszSessionName = session;
+    CHECK(230, CALL7(host, P8_HOST, &ad, &dev, 1, 0, 0, 0x11, 0) == 0);
+    wait_for(&h8_create, 1, 2000);
+    CHECK(231, h8_create == 1);
+    /* Port réel de la partie, lu sur l'adresse locale de l'hôte. */
+    n = 4;
+    size = sizeof port;
+    port = 0;
+    CHECK(232, CALL3(host, P8_LOCALADDRESSES, locals, &n, 0) == 0 && n >= 1 &&
+                   CALL4(locals[0], A8_GETCOMPONENT, kport, &port, &size, &type) == 0 && port);
+    for (h = 0; h < n; h++) CALL0(locals[h], 2);
+
+    /* Client par CoCreateInstance, recherche puis connexion. */
+    CHECK(233, CoCreateInstance(&CLSID_DirectPlay8Peer, 0, 1, &IID_IDirectPlay8Peer, &client) == 0 &&
+                   client);
+    CHECK(234, CALL3(client, P8_INITIALIZE, 0x8002, dp8_handler, 0) == 0);
+    dp8_name(&pi, cli);
+    CHECK(235, CALL4(client, P8_SETPEERINFO, &pi, 0, 0, DP8_SYNC) == 0);
+    CALL0(haddr, 8); /* Clear */
+    CHECK(236, CALL1(haddr, A8_SETSP, &CLSID_DP8SP_TCPIP) == 0 &&
+                   CALL4(haddr, A8_ADDCOMPONENT, khost, loop, sizeof loop, 1) == 0 &&
+                   CALL4(haddr, A8_ADDCOMPONENT, kport, &port, 4, 2) == 0);
+    zero(&ad, sizeof ad);
+    ad.dwSize = sizeof ad;
+    ad.guidApplication = APP_JEUX;
+    CHECK(237, CALL11(client, P8_ENUMHOSTS, &ad, haddr, dev, 0, 0, 1, 0, 800, 0x66, &h, DP8_SYNC) ==
+                       0 &&
+                   c8_enum >= 1);
+    CHECK(238, CALL11(client, P8_CONNECT, &ad, haddr, dev, 0, 0, &join, 4, 0, 0x55, &h, DP8_SYNC) ==
+                   0);
+    wait_for(&c8_done, 1, 3000);
+    wait_for(&c8_create, 2, 3000);
+    CHECK(239, c8_done == 1 && c8_local != 0 && c8_create == 2);
+    wait_for(&h8_create, 2, 3000);
+    CHECK(240, h8_indicate == 1 && h8_create == 2);
+
+    /* Messages dans les deux sens. */
+    bd.dwBufferSize = 8;
+    bd.pBufferData = (unsigned char *)"bonjour";
+    CHECK(241, CALL7(client, P8_SENDTO, 0, &bd, 1, 0, 0, &h, DP8_SYNC | 0x10) == 0);
+    wait_for(&h8_recv, 1, 3000);
+    CHECK(242, h8_recv == 1 && h8_from == c8_local);
+    bd.dwBufferSize = 6;
+    bd.pBufferData = (unsigned char *)"salut";
+    CHECK(243, CALL7(host, P8_SENDTO, h8_from, &bd, 1, 0, 0, &h, DP8_SYNC) == 0);
+    wait_for(&c8_recv, 1, 3000);
+    CHECK(244, c8_recv == 1 && c8_from != 0 && c8_from != c8_local);
+
+    /* Le client voit le nom et le rôle de l'hôte, la partie et ses joueurs. */
+    size = sizeof buf;
+    CHECK(245, CALL4(client, P8_GETPEERINFO, c8_from, buf, &size, 0) == 0 &&
+                   ((DPN_PLAYER_INFO *)buf)->pwszName[0] == 'H' &&
+                   (((DPN_PLAYER_INFO *)buf)->dwPlayerFlags & 4));
+    size = sizeof buf;
+    CHECK(246, CALL3(client, P8_GETAPPDESC, buf, &size, 0) == 0 &&
+                   ((DPN_APPLICATION_DESC *)buf)->dwCurrentPlayers == 2 &&
+                   ((DPN_APPLICATION_DESC *)buf)->pwszSessionName[0] == 'W');
+    n = 8;
+    CHECK(247, CALL3(client, P8_ENUMPLAYERS, ids, &n, 1) == 0 && n == 2);
+
+    /* Départ du client : l'hôte détruit son joueur. */
+    CHECK(248, CALL1(client, P8_CLOSE, 0) == 0);
+    wait_for(&h8_destroy, 1, 3000);
+    CHECK(249, h8_destroy == 1);
+    CHECK(250, CALL1(host, P8_CLOSE, 0) == 0);
+    CALL0(client, 2);
+    CALL0(host, 2);
+    CALL0(dev, 2);
+    CHECK(251, CALL0(haddr, 2) == 0);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -1007,13 +1432,15 @@ void entry(void) {
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
-    out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
+    out("Direct3D 9 et D3DX9 : 47 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();
     out("DirectShow : 11 verifications passees\n");
     dplay_tests();
     out("DirectPlay : 23 verifications passees\n");
+    dplay8_tests();
+    out("DirectPlay 8 : 29 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

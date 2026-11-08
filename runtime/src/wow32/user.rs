@@ -967,6 +967,9 @@ const OBJ_BITMAP: u32 = 7;
 
 /// GetObject : BITMAP (bmBits) et LOGBRUSH (lbHatch) sont plus courts en
 /// x86 ; les autres descriptions (LOGFONT, LOGPEN…) sont identiques.
+/// Taille d'un DIBSECTION en x86.
+const DIBSECTION32: u64 = 84;
+
 extern "win64" fn get_object(args: u32, target: usize) -> u64 {
     let (obj, size, out) = (ext(arg(args, 0)), arg(args, 1) as i32, arg(args, 2));
     let kind = crate::dlls::lookup("gdi32", "GetObjectType")
@@ -990,6 +993,24 @@ extern "win64" fn get_object(args: u32, target: usize) -> u64 {
         return 0;
     }
     match kind {
+        // DIBSECTION x64 (104 octets) → x86 (84) quand l'appelant a prévu la
+        // place : BITMAP (24), BITMAPINFOHEADER (40), dsBitfields (12),
+        // dshSection (4), dsOffset (4). La VCL (TBitmap, TPngImageList de
+        // WinSCP) recopie dsBmih pour recréer la DIB (#905).
+        OBJ_BITMAP if r == 104 && size >= DIBSECTION32 as i32 => {
+            unsafe {
+                std::ptr::copy_nonoverlapping(p as *const u8, out as usize as *mut u8, 20);
+                std::ptr::copy_nonoverlapping(
+                    (p + 32) as *const u8,
+                    (out + 24) as usize as *mut u8,
+                    52,
+                );
+            }
+            wr(out + 20, low(q64(p, 24), "bmBits"));
+            wr(out + 76, q64(p, 88) as u32);
+            wr(out + 80, r64(p, 96));
+            return DIBSECTION32;
+        }
         OBJ_BITMAP => {
             // bmType, bmWidth, bmHeight, bmWidthBytes, bmPlanes et
             // bmBitsPixel (16 + 4 octets), puis bmBits.

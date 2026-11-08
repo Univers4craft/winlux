@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Arrêt et redémarrage de Winlux, au style de Windows 11.
+"""Arrêt et redémarrage de Winlux.
 
   winlux-power ask shutdown|reboot   confirmation, fermeture des applications, écran d'arrêt
   winlux-power now shutdown|reboot   sans confirmation (bouton d'alimentation, anciens appels)

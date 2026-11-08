@@ -246,6 +246,71 @@ def _settled_balance(ids, right_ids, left_ids):
 
 
 kind = sys.argv[1]
+
+# Icônes cachées derrière la flèche de la zone de notification : le greffon
+# systray d'XFCE retient chaque icône vue (known-legacy-items pour XEmbed,
+# known-items pour StatusNotifier) et masque celles de hidden-*. Écrit en
+# direct dans xfconf, appliqué sans relancer la barre.
+#   winlux-tray overflow list            → JSON [{name, hidden, kind}]
+#   winlux-tray overflow hide|show NOM
+OVERFLOW_KINDS = (("legacy", "known-legacy-items", "hidden-legacy-items"), ("sni", "known-items", "hidden-items"))
+# Toujours cachées, jamais proposées : nm-applet double l'icône réseau de
+# Winlux ; winlux-notify-icon.py était le nom commun des icônes .exe d'avant.
+OVERFLOW_SKIP = {"nm-applet", "winlux-notify-icon.py", "winlux-notify-icon"}
+
+
+def _overflow_values(prop):
+    try:
+        result = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{prop}"],
+                                capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode:
+        return []
+    lines = result.stdout.splitlines()
+    # « Value is an array with N items: » puis une ligne vide, traduits.
+    return [line.strip() for line in lines[2:] if line.strip()] if lines and ":" in lines[0] else [line.strip() for line in lines if line.strip()]
+
+
+def overflow_list():
+    items = []
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        hidden_names = set(_overflow_values(hidden))
+        for name in _overflow_values(known):
+            if name not in OVERFLOW_SKIP and all(item["name"] != name for item in items):
+                items.append({"name": name, "hidden": name in hidden_names, "kind": kind_name})
+    return items
+
+
+def overflow_set(name, hide):
+    changed = False
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        if name not in _overflow_values(known):
+            continue
+        values = [value for value in _overflow_values(hidden) if value != name] + ([name] if hide else [])
+        args = ["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{hidden}"]
+        if values:
+            command = args + ["-n", "-a"] + [part for value in values for part in ("-t", "string", "-s", value)]
+            if subprocess.run(command, capture_output=True, timeout=3).returncode:
+                subprocess.run(args + ["-a"] + [part for value in values for part in ("-t", "string", "-s", value)],
+                               capture_output=True, timeout=3)
+        else:
+            subprocess.run(args + ["-r"], capture_output=True, timeout=3)
+        changed = True
+    return changed
+
+
+if kind == "overflow":
+    import json as _json
+    action = sys.argv[2] if len(sys.argv) > 2 else "list"
+    if action == "list":
+        print(_json.dumps(overflow_list(), ensure_ascii=False))
+        raise SystemExit(0)
+    if action in ("hide", "show") and len(sys.argv) == 4 and sys.argv[3] not in OVERFLOW_SKIP:
+        raise SystemExit(0 if overflow_set(sys.argv[3], action == "hide") else 1)
+    raise SystemExit(2)
+
+
 def tray_directory():
     """Icônes de la barre : un dossier par compte. /run/winlux est collant et
     /run/winlux/tray appartenait au premier compte (0755) : un second compte
@@ -282,6 +347,23 @@ def taskbar_preferences():
     except (OSError, UnicodeDecodeError):
         pass
     return values
+
+
+def taskbar_alignment():
+    """Alignement choisi (TASKBAR_ALIGN), à défaut l'étirement du séparateur 3."""
+    path = Path(os.environ.get("WINLUX_CONTROL_ROOT", "") + "/etc/winlux/preferences.conf")
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN=") and line[14:].strip() in ("left", "center"):
+                return line[14:].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        expand = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/plugins/plugin-3/expand"],
+                                capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        expand = ""
+    return "left" if expand == "false" else "center"
 
 
 def panel_dark():
@@ -542,6 +624,11 @@ elif kind == "balance":
         ids = []
     # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
     floating = taskbar_preferences()["STYLE"] == "floating"
+    # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
+    # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
+    # greffon, puis seulement étire ou non le séparateur 3.
+    if taskbar_alignment() == "left":
+        floating = True
     if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
         right = set(ids[ids.index(8) + 1:])
         width = _settled_balance(ids, right, set(ids[:ids.index(3)]))

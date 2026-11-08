@@ -155,10 +155,29 @@ def main():
             width, height = root.get_width(), root.get_height()
             start, last = settle(Gdk, root, width, height)
             print(f"barre livrée : Démarrer x={start}, bord droit x={last}")
-            for action in ("align-center", "align-left", "perdue-align-center"):
+            def panel_pids():
+                found = subprocess.run(["pgrep", "-x", "xfce4-panel"], capture_output=True, text=True).stdout
+                return set(found.split())
+
+            for action in ("align-center", "align-left", "align-center", "align-left", "perdue-align-center"):
+                before = panel_pids()
                 with open(fifo, "w") as pipe:
                     pipe.write(action + "\n")
+                # Bascule en direct (#920) : positions de Démarrer relevées
+                # pendant 3 s ; une relance faisait disparaître la barre.
+                seen, began = [], time.monotonic()
+                while time.monotonic() - began < 3:
+                    position = layout(Gdk, root, width, height)[0]
+                    if not seen or seen[-1][0] != position:
+                        seen.append((position, round(time.monotonic() - began, 2)))
+                    time.sleep(0.02)
                 start, last = settle(Gdk, root, width, height)
+                print(f"{action} en direct : positions de Démarrer {seen}")
+                if not action.startswith("perdue-"):
+                    if panel_pids() != before:
+                        problems.append(f"{action} en direct : barre relancée (#920)")
+                    if any(position is None for position, _ in seen):
+                        problems.append(f"{action} en direct : barre disparue pendant la bascule ({seen})")
                 print(f"{action} en direct : Démarrer x={start}, bord droit x={last}")
                 # Rechercher (genmon 15) et Vue des tâches (lanceur 14) juste
                 # après Démarrer, dans les deux alignements.

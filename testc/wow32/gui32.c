@@ -193,6 +193,21 @@ static void CALLBACK timer_proc(HWND hwnd, UINT msg, UINT id, DWORD time) {
     KillTimer(hwnd, 2);
 }
 
+/* Comme InitWndProc de la VCL Delphi (WinSCP) : la procédure de classe
+ * sous-classe la fenêtre au premier message ; WM_CREATE doit aller à la
+ * nouvelle procédure, pas revenir à celle de la classe (#822). */
+static int init_calls, init_saw_create, real_saw_create;
+static LRESULT CALLBACK real_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_CREATE) real_saw_create++;
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+static LRESULT CALLBACK init_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    init_calls++;
+    if (msg == WM_CREATE) init_saw_create++;
+    SetWindowLongA(hwnd, GWL_WNDPROC, (LONG)real_proc);
+    return CallWindowProcA(real_proc, hwnd, msg, wp, lp);
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_NCCREATE:
@@ -380,6 +395,23 @@ void __stdcall entry(void) {
     CHECK(55, GetObjectA(bmp, sizeof bm, &bm) == sizeof bm, GetObjectA(bmp, sizeof bm, &bm));
     CHECK(56, bm.bmWidth == 16 && bm.bmBitsPixel == 32 && bm.bmBits == bits, bm.bmBits);
     CHECK(57, GetObjectA(red, 0, 0) == sizeof(LOGBRUSH), GetObjectA(red, 0, 0));
+    /* DIBSECTION x86 (84 octets) : la VCL recopie dsBmih pour recréer la
+     * DIB (TBitmap, listes d'images PNG de WinSCP, #905). */
+    struct {
+        BITMAP dsBm;
+        BITMAPINFOHEADER dsBmih;
+        DWORD dsBitfields[3];
+        HANDLE dshSection;
+        DWORD dsOffset;
+    } ds;
+    int ds_size = GetObjectA(bmp, sizeof ds, &ds);
+    CHECK(58, ds_size == 84 && sizeof ds == 84 && ds.dsBm.bmBits == bits && ds.dsBmih.biSize == 40 &&
+                  ds.dsBmih.biWidth == 16 && ds.dsBmih.biHeight == -16 && ds.dsBmih.biBitCount == 32,
+          ds_size);
+    void *bits2 = 0;
+    HBITMAP copy = CreateDIBSection(mem, &ds.dsBmih, 0, &bits2, 0, 0);
+    CHECK(59, copy != 0 && bits2 != 0, copy);
+    DeleteObject(copy);
     DeleteObject(red);
     DeleteDC(mem);
     DeleteObject(bmp);
@@ -416,6 +448,21 @@ void __stdcall entry(void) {
     HDC sdc = CreateCompatibleDC(0);
     CHECK(78, SetDCBrushColor(sdc, RGB(9, 9, 9)) == RGB(255, 255, 255) && SetDCBrushColor(sdc, 0) == RGB(9, 9, 9), 0);
     DeleteDC(sdc);
+
+    /* 79-80 : sous-classement dès le premier message (VCL, #822). */
+    {
+        WNDCLASSEXA ic = {0};
+        ic.cbSize = sizeof ic;
+        ic.lpfnWndProc = init_proc;
+        ic.hInstance = inst;
+        ic.lpszClassName = "Winlux32Init";
+        CHECK(79, RegisterClassExA(&ic) != 0, 0);
+        HWND w = CreateWindowExA(0, "Winlux32Init", "", WS_OVERLAPPEDWINDOW, 0, 0, 50, 50, 0, 0, inst, 0);
+        CHECK(79, w != 0, 0);
+        CHECK(80, init_calls >= 1 && init_saw_create == 0 && real_saw_create == 1,
+              init_calls * 256 + init_saw_create * 16 + real_saw_create);
+        DestroyWindow(w);
+    }
 
     /* Fin : WM_DESTROY, PostQuitMessage(7), GetMessage rend 0. */
     DestroyWindow(hwnd);
