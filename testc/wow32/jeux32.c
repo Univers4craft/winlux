@@ -708,6 +708,70 @@ static int acm_tests(void) {
     return 0;
 }
 
+/* Décodeurs ADPCM de msacm32 (#1122) : un bloc IMA ADPCM et un bloc
+ * ADPCM MS, valeurs calculées d'après les spécifications publiques. */
+static void put16(BYTE *p, int v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); }
+static int adpcm_tests(void) {
+    static BYTE ima[20], ms[50], block[8], out[64];
+    static const short coefs[14] = {256, 0, 512, -256, 0, 0, 192, 64, 240, 0, 460, -208, 392, -232};
+    static const short want_ima[9] = {0, 11, 41, -22, -13, -5, 2, 8, 14};
+    static const short want_ms[4] = {50, 100, 116, 100};
+    WAVEFORMATEX pcm = {1, 1, 22050, 44100, 2, 16, 0}, sug;
+    ACMFORMATTAGDETAILSA tag;
+    ACMSTREAMHEADER hdr;
+    HANDLE h = 0;
+    DWORD n = 0;
+    int i, ok;
+
+    put16(ima, 0x11); put16(ima + 2, 1); put16(ima + 4, 22050); put16(ima + 12, 8);
+    put16(ima + 14, 4); put16(ima + 16, 2); put16(ima + 18, 9);
+    put16(ms, 2); put16(ms + 2, 1); put16(ms + 4, 22050); put16(ms + 12, 8);
+    put16(ms + 14, 4); put16(ms + 16, 32); put16(ms + 18, 4); put16(ms + 20, 7);
+    for (i = 0; i < 14; i++) put16(ms + 22 + 2 * i, coefs[i]);
+    zero(&sug, sizeof sug);
+    zero(&tag, sizeof tag);
+    tag.cbStruct = sizeof tag;
+    tag.dwFormatTag = 0x11;
+    CHECK(127, acmMetrics(0, 50, &n) == 0 && n == 50 &&
+                   acmFormatSuggest(0, (WAVEFORMATEX *)ima, &sug, sizeof sug, 0) == 0 &&
+                   sug.wFormatTag == 1 && sug.wBitsPerSample == 16 && sug.nSamplesPerSec == 22050 &&
+                   acmFormatTagDetailsA(0, &tag, 1) == 0 && tag.cbFormatSize == 20 &&
+                   tag.szFormatTag[0] == 'I');
+
+    /* IMA : échantillon 0, pas n° 0, quartets 7 7 F 0 0 0 0 0. */
+    zero(block, sizeof block);
+    block[4] = 0x77;
+    block[5] = 0x0F;
+    zero(&hdr, sizeof hdr);
+    hdr.cbStruct = sizeof hdr;
+    hdr.pbSrc = block;
+    hdr.cbSrcLength = sizeof block;
+    hdr.pbDst = out;
+    hdr.cbDstLength = sizeof out;
+    ok = acmStreamOpen(&h, 0, (WAVEFORMATEX *)ima, &pcm, 0, 0, 0, 0) == 0 &&
+         acmStreamSize(h, 8, &n, 0) == 0 && n == 18 &&
+         acmStreamPrepareHeader(h, &hdr, 0) == 0 && acmStreamConvert(h, &hdr, 0) == 0 &&
+         hdr.cbSrcLengthUsed == 8 && hdr.cbDstLengthUsed == 18;
+    for (i = 0; ok && i < 9; i++) ok = ((short *)out)[i] == want_ima[i];
+    CHECK(128, ok && acmStreamUnprepareHeader(h, &hdr, 0) == 0 && acmStreamClose(h, 0) == 0);
+
+    /* ADPCM MS : prédicteur 0, delta 16, s1 = 100, s2 = 50, quartets 1 puis F. */
+    zero(block, sizeof block);
+    put16(block + 1, 16);
+    put16(block + 3, 100);
+    put16(block + 5, 50);
+    block[7] = 0x1F;
+    zero(out, sizeof out);
+    hdr.fdwStatus = 0;
+    hdr.cbSrcLengthUsed = hdr.cbDstLengthUsed = 0;
+    ok = acmStreamOpen(&h, 0, (WAVEFORMATEX *)ms, &pcm, 0, 0, 0, 0) == 0 &&
+         acmStreamPrepareHeader(h, &hdr, 0) == 0 && acmStreamConvert(h, &hdr, 0) == 0 &&
+         hdr.cbSrcLengthUsed == 8 && hdr.cbDstLengthUsed == 8;
+    for (i = 0; ok && i < 4; i++) ok = ((short *)out)[i] == want_ms[i];
+    CHECK(129, ok && acmStreamUnprepareHeader(h, &hdr, 0) == 0 && acmStreamClose(h, 0) == 0);
+    return 0;
+}
+
 static int timer_wave_tests(void) {
     static BYTE pcm[800];
     WAVEFORMATEX wf = {1, 1, 8000, 8000, 1, 8, 0};
@@ -1603,6 +1667,8 @@ void entry(void) {
     out("MIDI : 15 verifications passees\n");
     acm_tests();
     out("msacm32 : 9 verifications passees\n");
+    adpcm_tests();
+    out("msacm32 ADPCM : 3 verifications passees\n");
     if (midi_in_tests() == 0) out("Entree MIDI : 9 verifications passees\n");
     else out("Entree MIDI : WINLUX_MIDI_IN_DIR absent, sautee\n");
     timer_wave_tests();
