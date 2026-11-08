@@ -255,22 +255,58 @@ def local_asset(manifest_path, asset):
     if not source.is_file(): raise RuntimeError(f"Paquet local introuvable : {source}")
     return source
 
+# Clé publique Ed25519 des mises à jour (#31). Tant qu'elle est absente de
+# l'image, les manifestes ne sont pas vérifiés ; dès qu'elle y est, un
+# manifeste sans signature valide est refusé.
+PUBLIC_KEY = Path(os.environ.get("WINLUX_UPDATE_PUBLIC_KEY") or "/usr/share/winlux/update-signing.pub")
+
+def signature_tool():
+    import runpy
+    for candidate in (Path("/usr/bin/winlux-signature"), Path(__file__).resolve().with_name("winlux-signature.py")):
+        if candidate.is_file(): return runpy.run_path(str(candidate))
+    raise RuntimeError("Outil de vérification des signatures introuvable (winlux-signature)")
+
+def check_signature(metadata, signature):
+    """Vérifie metadata (manifeste téléchargé) avec le fichier signature."""
+    if not PUBLIC_KEY.is_file():
+        return False
+    if not signature.is_file():
+        raise RuntimeError("Le manifeste de mise à jour n’est pas signé : mise à jour refusée par sécurité.")
+    try: good = signature_tool()["verify_file"](PUBLIC_KEY, metadata, signature)
+    except ValueError: good = False
+    if not good:
+        raise RuntimeError("La signature du manifeste de mise à jour est invalide : mise à jour refusée par sécurité.")
+    print("Signature Ed25519 du manifeste vérifiée.", flush=True)
+    return True
+
 def release_metadata(work):
     """Manifeste de la dernière release, ou repli sur l'API GitHub s'il n'a pas été publié."""
     metadata = work / "manifest"
+    signature = work / "manifest.sig"
     local = local_manifest()
     if local:
         print(f"Manifeste local utilisé : {local}", flush=True)
         text = local.read_text()
         data = manifest(text)
         metadata.write_text(text)
+        local_signature = local.with_name(local.name + ".sig")
+        if local_signature.is_file(): shutil.copyfile(local_signature, signature)
+        check_signature(metadata, signature)
         return data, text
     try:
         download(MANIFEST_URL, metadata)
+        if PUBLIC_KEY.is_file():
+            try: download(MANIFEST_URL + ".sig", signature)
+            except subprocess.CalledProcessError as error:
+                offline = offline_error(error)
+                if offline: raise offline from None
+        check_signature(metadata, signature)
         return manifest(metadata.read_text()), metadata.read_text()
     except subprocess.CalledProcessError as error:
         offline = offline_error(error)
         if offline: raise offline from None
+    if PUBLIC_KEY.is_file():
+        raise RuntimeError("La dernière version ne publie pas de manifeste signé : mise à jour refusée par sécurité.")
     print("Manifeste absent de la dernière version : informations lues dans la release GitHub.", flush=True)
     listing_file = work / "release.json"
     try: download(RELEASE_API, listing_file, "application/vnd.github+json")

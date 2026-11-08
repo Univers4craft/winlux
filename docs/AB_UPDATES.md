@@ -2,8 +2,8 @@
 
 > **État : conception préliminaire.** Ce document décrit l'architecture cible
 > pour les mises à jour résistantes aux coupures d'alimentation. L'implémentation
-> actuelle utilise une mise à jour transactionnelle avec retour arrière, mais ne
-> possède pas encore de véritable schéma A/B ni de signature cryptographique.
+> actuelle utilise une mise à jour transactionnelle avec retour arrière et des
+> manifestes signés (Ed25519), mais pas encore de véritable schéma A/B.
 
 ## Objectif
 
@@ -97,13 +97,29 @@ L'outil `winlux-update` :
       interactif sans validation. La version quittée est notée dans `update-blocked` :
       `--auto-run` ne la réinstalle pas, `--apply` manuel reste possible.
 
+- [x] Signature Ed25519 du manifeste (#31) : `scripts/sign-update-manifest.sh` signe
+      `winlux-update-manifest.txt` en CI avec le secret `WINLUX_UPDATE_SIGNING_KEY`
+      (graine de 32 octets en hexadécimal) et publie `winlux-update-manifest.txt.sig`.
+      `winlux-update-apt` vérifie la signature avec `/usr/share/winlux/update-signing.pub`
+      (copie de `integration/native/keys/update-signing.pub`) grâce à
+      `winlux-signature`, une implémentation d'Ed25519 écrite d'après la RFC 8032 ;
+      le manifeste couvre le SHA-256 du paquet. Dès que la clé publique est dans
+      l'image, un manifeste absent, non signé ou falsifié est refusé, et le repli
+      sur l'API GitHub aussi. Tests : `scripts/test-update-signature.py`.
+
 Audit du 25 octobre 2026 : `scripts/test-updater.sh` couvre les transactions et
-retours arrière. Aucune case A/B ou signature n'est cochée : le schéma ci-dessus
-est une conception cible, pas le comportement du client actuel.
+retours arrière. Les cases A/B ci-dessous restent une conception cible.
+
+### Mise en service de la clé
+
+1. Créer la graine sur un PC de confiance : `winlux-signature new graine.hex`
+   (affiche la clé publique ; le fichier est en 0600).
+2. Mettre le contenu de `graine.hex` dans le secret GitHub `WINLUX_UPDATE_SIGNING_KEY`.
+3. Committer la clé publique dans `integration/native/keys/update-signing.pub`.
+   À partir de là, `release.yml` échoue si le secret manque ou ne correspond pas.
 
 ### À implémenter (P1)
 
-- [ ] Signature Ed25519 du manifeste (génération en CI, vérification côté client)
 - [ ] Partitionnement A/B réel avec deux slots sur le disque
 - [ ] Bascule atomique dans la configuration GRUB
 - [ ] Validation automatique du slot après démarrage réussi
