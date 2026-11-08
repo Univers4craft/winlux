@@ -886,6 +886,12 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
+   and '"Deprecat" not in out.stderr' in (SCRIPTS / "test-speech.py").read_text(),
+   "voix : arrêt sur SIGTERM sans avertissement de dépréciation de PyGObject")
+
 # Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
 # politique effective quand display_policy= est vide.
 ok("def display_policy" in settings_source and "display_policy(screens)" in settings_source
