@@ -5,8 +5,10 @@
 //! qui renferme le script compilé : sections, instructions (`entries`),
 //! chaînes, tables de langues, puis les données des fichiers. Winlux lit ce
 //! script et l'interprète lui-même : extraction des fichiers, registre,
-//! raccourcis, désinstalleur. Les appels aux greffons Windows (DLL) et les
-//! programmes externes sont ignorés et notés dans le journal.
+//! raccourcis, désinstalleur. Les greffons courants sont reproduits
+//! (`plugin_call`) ; les programmes que le script lance (`Exec`,
+//! `ExecWait`, `ExecShell`, `nsExec`) passent par `run` : prérequis,
+//! msiexec, ancien désinstalleur… Le reste est noté dans le journal.
 
 use super::lzma::{BcjReader, LzmaReader};
 use super::{le_u32, Folders, Info, Installer, Kind, Options};
@@ -562,6 +564,41 @@ impl<'a, 'b> Vm<'a, 'b> {
         }
     }
 
+    /// Journal d'un programme lancé (ou non) par le script.
+    fn note_run(&mut self, what: &str, outcome: &super::run::Outcome) {
+        let line = super::run::describe(what, outcome);
+        if let Some(inst) = self.inst.as_mut() {
+            inst.log.log(&line);
+        }
+    }
+
+    /// nsExec::Exec, ExecToLog, ExecToStack : la commande est lancée et
+    /// attendue ; code de sortie (« error », « timeout ») au sommet de la
+    /// pile, précédé de la sortie pour ExecToStack.
+    fn nsexec(&mut self, func: &str) -> PluginDone {
+        let func = func.to_ascii_lowercase();
+        let mut line = self.stack.pop().unwrap_or_default();
+        while line.starts_with('/') {
+            // /TIMEOUT=…, /OEM : options avant la commande.
+            line = self.stack.pop().unwrap_or_default();
+        }
+        let dir = self.vars[V_OUTDIR].clone();
+        let (outcome, output) = super::run::command_line(&line, &dir, true, func != "exec");
+        self.note_run(line.trim(), &outcome);
+        use super::run::Outcome;
+        let code = match outcome {
+            Outcome::Exited(c) => c.to_string(),
+            Outcome::TimedOut => "timeout".into(),
+            Outcome::Failed(_) => "error".into(),
+            Outcome::Started | Outcome::Skipped(_) => "0".into(),
+        };
+        if func == "exectostack" {
+            self.stack.push(output);
+        }
+        self.stack.push(code);
+        PluginDone::default()
+    }
+
     fn skip(&mut self, what: String) {
         if !self.skipped.contains(&what) {
             self.skipped.push(what);
@@ -903,16 +940,60 @@ impl<'a, 'b> Vm<'a, 'b> {
             35 => self.set_var(p[0], "0".into()),
             36 | 37 | 39 => {}
             38 => self.set_var(p[0], "0".into()),
-            40 | 41 => {
-                // ShellExec / Exec : programmes externes non lancés.
-                let what = if e[0] == 40 {
-                    format!("{} {}", self.string(p[2]), self.string(p[3]))
+            40 => {
+                // EW_SHELLEXEC : verbe, fichier, paramètres, affichage, masque
+                // SEE_MASK (0x40 NOCLOSEPROCESS : ExecShellWait).
+                let file = self.string(p[1]);
+                let params = self.string(p[2]);
+                let wait = p[4] & 0x40 != 0;
+                let what = format!("{file} {params}").trim().to_string();
+                if self.inst.is_none() {
+                    self.skip(format!("programme non lancé (simulation) : {what}"));
                 } else {
-                    self.string(p[0])
-                };
-                self.skip(format!("programme ignoré : {}", what.trim()));
-                if e[0] == 41 && p[2] >= 0 && p[1] != 0 {
-                    self.set_var(p[2], "0".into());
+                    let dir = self.vars[V_OUTDIR].clone();
+                    let outcome = super::run::program(&file, &params, &dir, wait, true);
+                    self.note_run(&what, &outcome);
+                    if matches!(outcome, super::run::Outcome::Failed(_)) {
+                        self.error();
+                    }
+                }
+            }
+            41 => {
+                // EW_EXECUTE : commande, variable du code de sortie (ou -1),
+                // attente (ExecWait). Sans variable, un code non nul lève
+                // le drapeau d'erreur.
+                let line = self.string(p[0]);
+                let wait = p[2] != 0;
+                if self.inst.is_none() {
+                    self.skip(format!(
+                        "programme non lancé (simulation) : {}",
+                        line.trim()
+                    ));
+                    if wait && p[1] >= 0 {
+                        self.set_var(p[1], "0".into());
+                    }
+                } else {
+                    let dir = self.vars[V_OUTDIR].clone();
+                    let (outcome, _) = super::run::command_line(&line, &dir, wait, false);
+                    self.note_run(line.trim(), &outcome);
+                    use super::run::Outcome;
+                    match outcome {
+                        Outcome::Exited(code) if wait => {
+                            if p[1] >= 0 {
+                                self.set_var(p[1], code.to_string());
+                            } else if code != 0 {
+                                self.error();
+                            }
+                        }
+                        Outcome::Failed(_) => self.error(),
+                        // Ignoré ou toujours en cours : réussite supposée,
+                        // pour que l'installation continue.
+                        _ => {
+                            if wait && p[1] >= 0 {
+                                self.set_var(p[1], "0".into());
+                            }
+                        }
+                    }
                 }
             }
             42 | 43 => {
@@ -926,11 +1007,14 @@ impl<'a, 'b> Vm<'a, 'b> {
                 let func = self.string(p[1]);
                 let name = dll.rsplit('\\').next().unwrap_or("").to_string();
                 let lang = crate::dlls::dialogs::session_lang();
-                let known = if self.in_plugins(&dll) {
-                    plugin_call(&name, &func, &mut self.stack, &lang)
-                } else {
-                    None
-                };
+                let known =
+                    if self.in_plugins(&dll) && self.inst.is_some() && is_nsexec(&name, &func) {
+                        Some(self.nsexec(&func))
+                    } else if self.in_plugins(&dll) {
+                        plugin_call(&name, &func, &mut self.stack, &lang)
+                    } else {
+                        None
+                    };
                 match known {
                     Some(done) => {
                         for (var, value) in done.vars {
@@ -1016,14 +1100,19 @@ impl<'a, 'b> Vm<'a, 'b> {
                 }
             }
             50 => {
-                // EW_DELREG
-                let root = self.hive(p[0]);
-                let key = super::reg_key(root, &self.string(p[1]));
-                let name = self.string(p[2]);
+                // EW_DELREG : (réservé), racine, clé, valeur, drapeaux (0 :
+                // DeleteRegValue ; sinon DeleteRegKey, bit 1 : /ifempty).
+                let root = self.hive(p[1]);
+                let key = super::reg_key(root, &self.string(p[2]));
+                let name = self.string(p[3]);
+                let only_if_empty = (p[4] >> 1) & 1 != 0;
                 if let Some(inst) = self.inst.as_deref_mut() {
-                    if p[3] == 0 {
+                    if p[4] == 0 {
                         inst.reg_delete_value(&key, &name);
-                    } else if !key.ends_with("\\software") && key.matches('\\').count() >= 2 {
+                    } else if !key.ends_with("\\software")
+                        && key.matches('\\').count() >= 2
+                        && (!only_if_empty || crate::dlls::advapi32::registry_key_is_empty(&key))
+                    {
                         inst.reg_delete_tree(&key);
                     }
                     inst.flush_registry();
@@ -1061,11 +1150,11 @@ impl<'a, 'b> Vm<'a, 'b> {
                 }
             }
             52 => {
-                // EW_READREGSTR
-                let root = self.hive(p[0]);
-                let key = super::reg_key(root, &self.string(p[1]));
-                let name = self.string(p[2]);
-                let want_int = p[3] != 0;
+                // EW_READREGSTR : variable, racine, clé, valeur, DWORD voulu.
+                let root = self.hive(p[1]);
+                let key = super::reg_key(root, &self.string(p[2]));
+                let name = self.string(p[3]);
+                let want_int = p[4] != 0;
                 match self.reg_read(&key, &name) {
                     Some((_, b)) => {
                         let v = if want_int && b.len() == 4 {
@@ -1612,6 +1701,14 @@ pub fn install(
         inst.manifest.uninstall_key = key;
     }
     Ok(())
+}
+
+fn is_nsexec(dll: &str, func: &str) -> bool {
+    dll.to_ascii_lowercase().trim_end_matches(".dll") == "nsexec"
+        && matches!(
+            func.to_ascii_lowercase().as_str(),
+            "exec" | "exectolog" | "exectostack"
+        )
 }
 
 /// Effet d'un greffon NSIS reproduit par Winlux.

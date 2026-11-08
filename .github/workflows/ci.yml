@@ -495,6 +495,21 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Programmes lancés par les installeurs NSIS (#179)
+        run: |
+          sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
+          sh scripts/test-setup-run.sh
+
+      - name: Actions personnalisées et services msiexec (#833)
+        run: |
+          sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
+          sh scripts/test-msi-actions.sh
+
+      - name: Assistant d'installation au double-clic (#833)
+        run: |
+          sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
+          sh scripts/test-setup-wizard.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
