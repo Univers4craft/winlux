@@ -20,7 +20,7 @@ use std::rc::Rc;
 use super::bcl;
 use super::delegates::FnTable;
 use super::domain::AsmInfo;
-use super::exceptions::{self, ClrException, Handler};
+use super::exceptions::{self, ClrException};
 use super::gc;
 use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
@@ -217,12 +217,12 @@ struct CallFrame {
     args: Slots,
     eval_stack: Vec<Value>,
     exception_clauses: Rc<Vec<metadata::ExceptionClause>>,
-    /// Exception à relancer à la fin du finally en cours.
-    pending: Option<ClrException>,
-    /// Destination d'un `leave` en attente de la fin d'un finally.
-    leave_target: Option<usize>,
-    /// Exception traitée par le catch en cours (pour `rethrow`).
-    caught: Option<ClrException>,
+    /// Blocs finally/fault en cours, par début de gestionnaire, avec ce
+    /// qu'il faut reprendre à leur `endfinally`.
+    unwinding: Vec<(usize, Unwind)>,
+    /// Exceptions des catch en cours, par début de gestionnaire (pour
+    /// `rethrow`).
+    caught: Vec<(usize, ClrException)>,
     gen: Rc<Gen>,
     /// Type du préfixe `constrained.` en attente du `callvirt` suivant.
     constrained: Option<TypeId>,
@@ -251,8 +251,19 @@ pub enum ExecResult {
     Exception(ClrException),
 }
 
+/// Suite d'un bloc finally à son `endfinally`.
+#[derive(Clone, Copy)]
+enum Unwind {
+    /// Exception à relancer.
+    Exception(ClrException),
+    /// Destination d'un `leave`.
+    Leave(usize),
+}
+
 enum StepResult {
     Continue,
+    /// Fin d'un bloc filtre : vrai si le gestionnaire est retenu.
+    EndFilter(bool),
     Branch(usize),
     Return(Value),
     Throw(ClrException),
@@ -479,9 +490,8 @@ impl Interpreter {
             args: arg_slots,
             eval_stack: Vec::with_capacity(body.max_stack as usize),
             exception_clauses: Rc::new(body.exception_clauses),
-            pending: None,
-            leave_target: None,
-            caught: None,
+            unwinding: Vec::new(),
+            caught: Vec::new(),
             gen: Rc::new(gen),
             constrained: None,
         });
@@ -571,6 +581,14 @@ impl Interpreter {
                         unsafe {
                             *(this.add(exceptions::MESSAGE_SLOT) as *mut *mut u8) = *msg;
                         }
+                        // Exception(string, Exception) : exception interne.
+                        if let (true, Some(Value::Ref(inner))) =
+                            (class.ends_with("Exception"), args.get(2))
+                        {
+                            unsafe {
+                                *(this.add(exceptions::INNER_SLOT) as *mut *mut u8) = *inner;
+                            }
+                        }
                     }
                 }
                 return Ok(Value::Null);
@@ -582,6 +600,18 @@ impl Interpreter {
                 }
                 let msg = ClrException { obj_ptr: this }.message();
                 return Ok(bcl::alloc_managed_string(&msg));
+            }
+            (_, c, "get_InnerException") if c.ends_with("Exception") => {
+                let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
+                if this.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                let inner = unsafe { *(this.add(exceptions::INNER_SLOT) as *const *mut u8) };
+                return Ok(if gc::type_of(inner).is_some() {
+                    Value::Ref(inner)
+                } else {
+                    Value::Null
+                });
             }
             ("System", "GC", "Collect") => {
                 self.collect_garbage();
@@ -678,6 +708,13 @@ impl Interpreter {
                     }
                 }
                 StepResult::Branch(target) => self.frames.last_mut().unwrap().ip = target,
+                StepResult::EndFilter(_) => {
+                    let exc = exception("InvalidProgramException", "endfilter hors d'un filtre");
+                    if let Some(unhandled) = self.raise(exc, instr.offset) {
+                        self.frames.pop();
+                        return ExecResult::Exception(unhandled);
+                    }
+                }
                 StepResult::Return(v) => {
                     self.frames.pop();
                     return ExecResult::Return(v);
@@ -696,25 +733,89 @@ impl Interpreter {
     /// si elle doit remonter à l'appelant.
     fn raise(&mut self, exc: ClrException, ip: usize) -> Option<ClrException> {
         let clauses = self.frames.last().unwrap().exception_clauses.clone();
-        let handler = exceptions::find_handler(&clauses, ip, |class| self.catches(class, &exc));
-        let f = self.frames.last_mut().unwrap();
-        f.eval_stack.clear();
-        f.constrained = None;
-        match handler {
-            Some(Handler::Catch(h)) => {
-                f.eval_stack.push(Value::Ref(exc.obj_ptr));
-                f.caught = Some(exc);
-                f.ip = h;
-                None
-            }
-            Some(Handler::Finally(h)) => {
-                f.pending = Some(exc);
-                f.leave_target = None;
-                f.ip = h;
-                None
-            }
-            None => Some(exc),
+        {
+            let f = self.frames.last_mut().unwrap();
+            f.eval_stack.clear();
+            f.constrained = None;
         }
+        // Passe unique : les filtres sont évalués pendant la remontée, dans
+        // l'ordre des clauses (ECMA-335 §I.12.4.2.5 en décrit deux ; seule
+        // la place des finally internes par rapport aux filtres externes
+        // diffère).
+        for clause in clauses.iter().filter(|c| exceptions::try_covers(c, ip)) {
+            let handler = clause.handler_offset as usize;
+            let accepted = if exceptions::is_finally(clause) {
+                true
+            } else if exceptions::is_filter(clause) {
+                self.run_filter(clause.class_token_or_filter as usize, exc)
+            } else {
+                self.catches(clause.class_token_or_filter, &exc)
+            };
+            if !accepted {
+                continue;
+            }
+            let f = self.frames.last_mut().unwrap();
+            // Les gestionnaires que l'exception quitte sont abandonnés.
+            let left = |h: usize| {
+                clauses.iter().any(|c| {
+                    c.handler_offset as usize == h
+                        && exceptions::handler_covers(c, ip)
+                        && !exceptions::handler_covers(c, handler)
+                })
+            };
+            f.caught.retain(|(h, _)| !left(*h));
+            f.unwinding.retain(|(h, _)| !left(*h));
+            f.eval_stack.clear();
+            if exceptions::is_finally(clause) {
+                f.unwinding.push((handler, Unwind::Exception(exc)));
+            } else {
+                f.eval_stack.push(Value::Ref(exc.obj_ptr));
+                f.caught.push((handler, exc));
+            }
+            f.ip = handler;
+            return None;
+        }
+        Some(exc)
+    }
+
+    /// Exécute un bloc filtre jusqu'à son `endfilter`. Une exception levée
+    /// dans le filtre vaut un refus (ECMA-335 §III.3.34).
+    fn run_filter(&mut self, offset: usize, exc: ClrException) -> bool {
+        let depth = self.frames.len();
+        let saved_ip = self.frames[depth - 1].ip;
+        self.pins.push(Value::Ref(exc.obj_ptr));
+        {
+            let f = &mut self.frames[depth - 1];
+            f.ip = offset;
+            f.eval_stack.clear();
+            f.eval_stack.push(Value::Ref(exc.obj_ptr));
+        }
+        let accepted = loop {
+            if gc::with_gc(|gc| gc.should_collect()) {
+                self.collect_garbage();
+            }
+            let f = &self.frames[depth - 1];
+            let Some(instr) = opcodes::decode(&f.code, f.ip) else {
+                break false;
+            };
+            let next_ip = instr.offset + instr.size;
+            match self.step(instr.op, instr.offset, next_ip) {
+                Ok(StepResult::Continue) => {
+                    let f = &mut self.frames[depth - 1];
+                    if f.ip == instr.offset {
+                        f.ip = next_ip;
+                    }
+                }
+                Ok(StepResult::Branch(target)) => self.frames[depth - 1].ip = target,
+                Ok(StepResult::EndFilter(v)) => break v,
+                Ok(StepResult::Return(_) | StepResult::Throw(_)) | Err(_) => break false,
+            }
+        };
+        self.pins.pop();
+        let f = &mut self.frames[depth - 1];
+        f.eval_stack.clear();
+        f.ip = saved_ip;
+        accepted
     }
 
     fn catches(&self, class_token: u32, exc: &ClrException) -> bool {
@@ -756,8 +857,11 @@ impl Interpreter {
             roots.extend(f.locals.words.iter().map(|&w| w as usize));
             roots.extend(f.args.words.iter().map(|&w| w as usize));
             roots.extend(f.eval_stack.iter().map(|v| v.as_i64() as usize));
-            let held = f.pending.iter().chain(&f.caught);
-            roots.extend(held.map(|e| e.obj_ptr as usize));
+            roots.extend(f.caught.iter().map(|(_, e)| e.obj_ptr as usize));
+            roots.extend(f.unwinding.iter().filter_map(|(_, u)| match u {
+                Unwind::Exception(e) => Some(e.obj_ptr as usize),
+                Unwind::Leave(_) => None,
+            }));
         }
         roots.extend(self.pins.iter().map(|v| v.as_i64() as usize));
         for data in self.external_statics.values() {
@@ -1604,18 +1708,47 @@ impl Interpreter {
                 }
                 _ => StepResult::Throw(ClrException::null_reference()),
             },
-            O::Rethrow => match frame!().caught {
-                Some(exc) => StepResult::Throw(exc),
-                None => StepResult::Throw(ClrException::null_reference()),
-            },
+            O::Rethrow => {
+                let f = frame!();
+                let handler = exceptions::enclosing_handler(
+                    &f.exception_clauses,
+                    offset,
+                    exceptions::is_catch,
+                )
+                .map(|c| c.handler_offset as usize);
+                let exc = f
+                    .caught
+                    .iter()
+                    .rev()
+                    .find(|(h, _)| Some(*h) == handler)
+                    .map(|(_, e)| *e);
+                match exc {
+                    Some(exc) => StepResult::Throw(exc),
+                    None => {
+                        return Err(exception(
+                            "InvalidProgramException",
+                            "rethrow hors d'un gestionnaire catch",
+                        ))
+                    }
+                }
+            }
             O::Leave | O::Leave_S => {
                 let target = if op == O::Leave_S { br_s() } else { br_l() };
                 let f = frame!();
                 f.eval_stack.clear();
-                f.caught = None;
-                match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
+                let clauses = f.exception_clauses.clone();
+                // Sortie des catch qui contiennent le `leave` sans contenir
+                // sa destination.
+                f.caught.retain(|(h, _)| {
+                    !clauses.iter().any(|c| {
+                        c.handler_offset as usize == *h
+                            && exceptions::handler_covers(c, offset)
+                            && !exceptions::handler_covers(c, target)
+                    })
+                });
+                match exceptions::find_leave_target(&clauses, offset, target) {
                     Some(handler) => {
-                        f.leave_target = Some(target);
+                        f.unwinding.push((handler, Unwind::Leave(target)));
                         StepResult::Branch(handler)
                     }
                     None => StepResult::Branch(target),
@@ -1623,15 +1756,28 @@ impl Interpreter {
             }
             O::Endfinally => {
                 let f = frame!();
-                if let Some(exc) = f.pending.take() {
-                    return Ok(StepResult::Throw(exc));
-                }
-                match f.leave_target.take() {
-                    Some(target) => {
-                        match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
-                            Some(handler) => {
-                                f.leave_target = Some(target);
-                                StepResult::Branch(handler)
+                let clauses = f.exception_clauses.clone();
+                let Some(handler) =
+                    exceptions::enclosing_handler(&clauses, offset, exceptions::is_finally)
+                        .map(|c| c.handler_offset as usize)
+                else {
+                    return Err(exception(
+                        "InvalidProgramException",
+                        "endfinally hors d'un bloc finally",
+                    ));
+                };
+                let entry = f
+                    .unwinding
+                    .iter()
+                    .rposition(|(h, _)| *h == handler)
+                    .map(|i| f.unwinding.remove(i).1);
+                match entry {
+                    Some(Unwind::Exception(exc)) => StepResult::Throw(exc),
+                    Some(Unwind::Leave(target)) => {
+                        match exceptions::find_leave_target(&clauses, offset, target) {
+                            Some(next) => {
+                                f.unwinding.push((next, Unwind::Leave(target)));
+                                StepResult::Branch(next)
                             }
                             None => StepResult::Branch(target),
                         }
@@ -1639,6 +1785,7 @@ impl Interpreter {
                     None => StepResult::Continue,
                 }
             }
+            O::Endfilter => StepResult::EndFilter(pop!().as_i32() != 0),
 
             // --- Jetons ---
             O::Ldtoken => {

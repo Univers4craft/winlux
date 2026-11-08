@@ -793,6 +793,14 @@ ok((clr / "delegates.rs").exists()
    and "ldvirtftn_func_et_evenements" in (clr / "tests.rs").read_text(),
    "CLR : ldftn/ldvirtftn, Invoke, délégués multicast, Combine/Remove, Interlocked des événements (#971)")
 
+# ── Moteur .NET Framework, étape 4 (#972) : filtres, finally imbriqués, rethrow ──
+ok("fn run_filter" in (clr / "il.rs").read_text()
+   and "O::Endfilter" in (clr / "il.rs").read_text()
+   and "INNER_SLOT" in (clr / "exceptions.rs").read_text()
+   and "filtres_finally_et_rethrow" in (clr / "tests.rs").read_text()
+   and "le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse" in (clr / "tests.rs").read_text(),
+   "CLR : filtres when, finally imbriqués traversés par leave et par une exception, rethrow, InnerException (#972)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()

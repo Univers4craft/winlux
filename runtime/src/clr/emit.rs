@@ -54,6 +54,10 @@ pub struct Body {
     pub code: Vec<u8>,
     pub max_stack: u16,
     pub locals: Vec<Vec<u8>>,
+    /// Clauses d'exception (ECMA-335 §II.25.4.6) : drapeaux, début et
+    /// longueur du try, début et longueur du gestionnaire, jeton de classe
+    /// ou début du filtre.
+    pub clauses: Vec<[u32; 6]>,
 }
 
 impl Body {
@@ -62,6 +66,7 @@ impl Body {
             code,
             max_stack: 8,
             locals: Vec::new(),
+            clauses: Vec::new(),
         }
     }
 }
@@ -282,12 +287,27 @@ impl Builder {
                 text.push(0);
             }
             rvas.push(SECTION_RVA + text.len() as u32);
-            let flags: u16 = 0x3003 | if locals != 0 { 0x10 } else { 0 };
+            let more = if body.clauses.is_empty() { 0 } else { 0x08 };
+            let flags: u16 = 0x3003 | more | if locals != 0 { 0x10 } else { 0 };
             text.extend_from_slice(&flags.to_le_bytes());
             text.extend_from_slice(&body.max_stack.to_le_bytes());
             text.extend_from_slice(&(body.code.len() as u32).to_le_bytes());
             text.extend_from_slice(&locals.to_le_bytes());
             text.extend_from_slice(&body.code);
+            if !body.clauses.is_empty() {
+                while !text.len().is_multiple_of(4) {
+                    text.push(0);
+                }
+                // Section EH au format long : 0x41, taille sur 3 octets.
+                let size = 4 + 24 * body.clauses.len() as u32;
+                text.push(0x41);
+                text.extend_from_slice(&size.to_le_bytes()[..3]);
+                for clause in &body.clauses {
+                    for v in clause {
+                        text.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+            }
         }
         while !text.len().is_multiple_of(4) {
             text.push(0);

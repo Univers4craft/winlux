@@ -816,3 +816,294 @@ fn ldvirtftn_func_et_evenements() {
     let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(code.body()));
     assert_eq!(lancer(&b.build(main), None), 212);
 }
+
+// ── Étape 4 : exceptions complètes (#972) ──
+
+const THROW: u8 = 0x7A;
+const ENDFINALLY: u8 = 0xDC;
+const CL_CATCH: u32 = 0;
+const CL_FILTER: u32 = 1;
+const CL_FINALLY: u32 = 2;
+
+/// Code IL avec étiquettes, pour placer les `leave` et les clauses.
+#[derive(Default)]
+struct Prog {
+    code: Vec<u8>,
+    labels: std::collections::HashMap<&'static str, u32>,
+    fixups: Vec<(usize, &'static str)>,
+}
+
+impl Il {
+    fn op2(mut self, b: u8) -> Il {
+        self.0.extend_from_slice(&[0xFE, b]);
+        self
+    }
+}
+
+impl Prog {
+    fn il(&mut self, il: Il) -> &mut Prog {
+        self.code.extend_from_slice(&il.0);
+        self
+    }
+    fn label(&mut self, name: &'static str) -> &mut Prog {
+        self.labels.insert(name, self.code.len() as u32);
+        self
+    }
+    fn leave(&mut self, name: &'static str) -> &mut Prog {
+        self.code.push(0xDD);
+        self.fixups.push((self.code.len(), name));
+        self.code.extend_from_slice(&[0; 4]);
+        self
+    }
+    fn at(&self, name: &str) -> u32 {
+        self.labels[name]
+    }
+    /// Clause de `try` à `try_end`, gestionnaire de `h` à `h_end`.
+    fn clause(
+        &self,
+        flags: u32,
+        t: &str,
+        t_end: &str,
+        h: &str,
+        h_end: &str,
+        extra: u32,
+    ) -> [u32; 6] {
+        let (t, h) = (self.at(t), self.at(h));
+        [flags, t, self.at(t_end) - t, h, self.at(h_end) - h, extra]
+    }
+    fn finish(mut self) -> Vec<u8> {
+        for (pos, name) in std::mem::take(&mut self.fixups) {
+            let rel = self.labels[name] as i32 - (pos as i32 + 4);
+            self.code[pos..pos + 4].copy_from_slice(&rel.to_le_bytes());
+        }
+        self.code
+    }
+}
+
+/// Filtres `when`, finally imbriqués traversés par un `leave` et par une
+/// exception relancée, `rethrow`, `InnerException`. Chaque étape ajoute un
+/// chiffre à `Trace` : l'ordre attendu est 1 2 3 4 5 6 7 8, puis la longueur
+/// du message interne (4).
+#[test]
+fn filtres_finally_et_rethrow() {
+    let mut b = Builder::new("Exceptions");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let exc = b.type_ref(Scope::Assembly(mscorlib), "System", "Exception");
+    let string = b.type_ref(Scope::Assembly(mscorlib), "System", "String");
+    let exc_ctor = b.member_ref(exc, ".ctor", &method_sig(true, &[T_VOID], &[&[T_STRING]]));
+    let exc_ctor2 = b.member_ref(
+        exc,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[&[T_STRING], &class(exc)]),
+    );
+    let message = b.member_ref(exc, "get_Message", &method_sig(true, &[T_STRING], &[]));
+    let inner = b.member_ref(
+        exc,
+        "get_InnerException",
+        &method_sig(true, &class(exc), &[]),
+    );
+    let length = b.member_ref(string, "get_Length", &method_sig(true, &[T_I4], &[]));
+    let abc = b.user_string("abc");
+    let ab = b.user_string("ab");
+    let abcd = b.user_string("abcd");
+
+    b.type_def(PUBLIC, "Exceptions", "P", object);
+    let trace = b.field(F_PUBLIC | F_STATIC, "Trace", &[T_I4]);
+    let mark = |d: i32| {
+        Il::default()
+            .ldsfld(trace)
+            .i4(10)
+            .op(MUL)
+            .i4(d)
+            .op(ADD)
+            .stsfld(trace)
+    };
+    let jeter = |s: u32| Il::default().ldstr(s).newobj(exc_ctor).op(THROW);
+    // Filtre : longueur du message == n (ceq ; endfilter)
+    let filtre = |n: i32| {
+        Il::default()
+            .tok(CASTCLASS, exc)
+            .callvirt(message)
+            .callvirt(length)
+            .i4(n)
+            .op2(0x01)
+            .op2(0x11)
+    };
+    let mut p = Prog::default();
+
+    // A : le filtre interne refuse (longueur 2), l'externe accepte (3).
+    p.label("a_to")
+        .label("a_ti")
+        .il(jeter(abc))
+        .label("a_ti_end");
+    p.label("a_fi").il(filtre(2));
+    p.label("a_hi")
+        .il(Il::default().op(POP))
+        .il(mark(9))
+        .leave("a_fin")
+        .label("a_hi_end");
+    p.label("a_fo").il(filtre(3));
+    p.label("a_ho")
+        .il(Il::default().op(POP))
+        .il(mark(1))
+        .leave("a_fin")
+        .label("a_ho_end");
+    p.label("a_fin");
+
+    // B : catch qui relance, deux finally traversés par l'exception, catch externe.
+    p.label("b_c").label("b_f2").label("b_f1").label("b_r");
+    p.il(jeter(abc)).label("b_r_end");
+    p.label("b_rh")
+        .il(Il::default().op(POP))
+        .il(mark(2))
+        .il(Il::default().op2(0x1A));
+    p.label("b_rh_end").label("b_f1_end");
+    p.label("b_f1h")
+        .il(mark(3))
+        .il(Il::default().op(ENDFINALLY))
+        .label("b_f1h_end");
+    p.label("b_f2_end");
+    p.label("b_f2h")
+        .il(mark(4))
+        .il(Il::default().op(ENDFINALLY))
+        .label("b_f2h_end");
+    p.label("b_c_end");
+    p.label("b_ch")
+        .il(Il::default().op(POP))
+        .il(mark(5))
+        .leave("b_fin")
+        .label("b_ch_end");
+    p.label("b_fin");
+
+    // C : un `leave` traverse deux finally.
+    p.label("c_g2")
+        .label("c_g1")
+        .il(mark(6))
+        .leave("c_fin")
+        .label("c_g1_end");
+    p.label("c_g1h")
+        .il(mark(7))
+        .il(Il::default().op(ENDFINALLY))
+        .label("c_g1h_end");
+    p.label("c_g2_end");
+    p.label("c_g2h")
+        .il(mark(8))
+        .il(Il::default().op(ENDFINALLY))
+        .label("c_g2h_end");
+    p.label("c_fin");
+
+    // D : InnerException.
+    p.il(Il::default()
+        .ldsfld(trace)
+        .i4(10)
+        .op(MUL)
+        .ldstr(ab)
+        .ldstr(abcd)
+        .newobj(exc_ctor)
+        .newobj(exc_ctor2)
+        .callvirt(inner)
+        .callvirt(message)
+        .callvirt(length)
+        .op(ADD)
+        .ret());
+
+    let clauses = vec![
+        p.clause(
+            CL_FILTER,
+            "a_ti",
+            "a_ti_end",
+            "a_hi",
+            "a_hi_end",
+            p.at("a_fi"),
+        ),
+        p.clause(
+            CL_FILTER,
+            "a_to",
+            "a_hi_end",
+            "a_ho",
+            "a_ho_end",
+            p.at("a_fo"),
+        ),
+        p.clause(CL_CATCH, "b_r", "b_r_end", "b_rh", "b_rh_end", exc),
+        p.clause(CL_FINALLY, "b_f1", "b_f1_end", "b_f1h", "b_f1h_end", 0),
+        p.clause(CL_FINALLY, "b_f2", "b_f2_end", "b_f2h", "b_f2h_end", 0),
+        p.clause(CL_CATCH, "b_c", "b_c_end", "b_ch", "b_ch_end", exc),
+        p.clause(CL_FINALLY, "c_g1", "c_g1_end", "c_g1h", "c_g1h_end", 0),
+        p.clause(CL_FINALLY, "c_g2", "c_g2_end", "c_g2h", "c_g2h_end", 0),
+    ];
+    let mut body = Body::new(p.finish());
+    body.clauses = clauses;
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(body));
+    assert_eq!(lancer(&b.build(main), None), 123_456_784);
+}
+
+/// Une exception qui quitte une méthode exécute son finally, puis un filtre
+/// qui lève lui-même une exception vaut un refus.
+#[test]
+fn le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse() {
+    let mut b = Builder::new("Remontee");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let exc = b.type_ref(Scope::Assembly(mscorlib), "System", "Exception");
+    let exc_ctor = b.member_ref(exc, ".ctor", &method_sig(true, &[T_VOID], &[&[T_STRING]]));
+    let abc = b.user_string("abc");
+    b.type_def(PUBLIC, "Remontee", "P", object);
+    let trace = b.field(F_PUBLIC | F_STATIC, "Trace", &[T_I4]);
+    let mark = |d: i32| {
+        Il::default()
+            .ldsfld(trace)
+            .i4(10)
+            .op(MUL)
+            .i4(d)
+            .op(ADD)
+            .stsfld(trace)
+    };
+
+    let mut f = Prog::default();
+    f.label("t")
+        .il(Il::default().ldstr(abc).newobj(exc_ctor).op(THROW))
+        .label("t_end");
+    f.label("h")
+        .il(mark(1))
+        .il(Il::default().op(ENDFINALLY))
+        .label("h_end");
+    f.il(Il::default().ret());
+    let clause = f.clause(CL_FINALLY, "t", "t_end", "h", "h_end", 0);
+    let mut body = Body::new(f.finish());
+    body.clauses = vec![clause];
+    let fuite = b.method(
+        M_PUBLIC | M_STATIC,
+        "Fuite",
+        &method_sig(false, &[T_VOID], &[]),
+        Some(body),
+    );
+
+    let mut p = Prog::default();
+    p.label("c")
+        .label("i")
+        .il(Il::default().call(fuite))
+        .leave("fin")
+        .label("i_end");
+    p.label("f").il(Il::default().op(POP).op(LDNULL).op(THROW));
+    p.label("ih")
+        .il(Il::default().op(POP))
+        .il(mark(9))
+        .leave("fin")
+        .label("ih_end");
+    p.label("c_end");
+    p.label("ch")
+        .il(Il::default().op(POP))
+        .il(mark(2))
+        .leave("fin")
+        .label("ch_end");
+    p.label("fin").il(Il::default().ldsfld(trace).ret());
+    let clauses = vec![
+        p.clause(CL_FILTER, "i", "i_end", "ih", "ih_end", p.at("f")),
+        p.clause(CL_CATCH, "c", "c_end", "ch", "ch_end", exc),
+    ];
+    let mut body = Body::new(p.finish());
+    body.clauses = clauses;
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(body));
+    assert_eq!(lancer(&b.build(main), None), 12);
+}
