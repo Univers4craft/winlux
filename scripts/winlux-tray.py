@@ -155,6 +155,19 @@ def _balance_log(message):
             pass
 
 
+def _genmon_blank(command):
+    """Vrai si la commande d'un genmon ne produit ni image ni texte."""
+    if not command:
+        return False
+    try:
+        output = subprocess.run(command.split(), capture_output=True, text=True, timeout=1).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    image = re.search(r"<img>\s*\S", output)
+    text = re.search(r"<txt>(.*?)</txt>", output, re.S)
+    return not image and not (text and text.group(1).strip())
+
+
 def _settled_balance(ids, right_ids, left_ids, parent=None):
     """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
 
@@ -184,11 +197,23 @@ def _settled_balance(ids, right_ids, left_ids, parent=None):
         except (OSError, subprocess.SubprocessError):
             listing = ""
         genmon = {int(found[1]) for found in re.finditer(r"^/plugins/plugin-(\d+)\s+genmon\s*$", listing, re.M)}
-        expected = (genmon & set(right_ids)) - {13}
+        # Un genmon qui n'affiche rien (clavier tactile sans écran tactile,
+        # greffon 12) garde une largeur de 1 px : l'attendre bloquait la
+        # mesure 4 s à chaque relance et le cache n'était jamais repris.
+        # Ceux-là ne comptent pas dans le bloc de droite (#887).
+        commands = {int(found[1]): found[2].strip() for found in
+                    re.finditer(r"^/plugins/plugin-(\d+)/command\s+(.+)$", listing, re.M)}
+        expected = {plugin for plugin in (genmon & set(right_ids)) - {13}
+                    if not _genmon_blank(commands.get(plugin))}
         try:
             cached = _balance_cache().read_text().split()
         except OSError:
             cached = []
+        # Même écran, même ordre de greffons : la valeur gardée est la bonne,
+        # rendue tout de suite. Attendre que le bloc de droite soit affiché
+        # laissait le groupe centré décalé le temps de la relance de la barre (#887).
+        if len(cached) == 2 and cached[0] == key and cached[1].isdigit():
+            return int(cached[1])
         deadline, previous = time.monotonic() + 4, None
         while screen and expected and time.monotonic() < deadline:
             present = {plugin for plugin, _, width in children if width > 1}
