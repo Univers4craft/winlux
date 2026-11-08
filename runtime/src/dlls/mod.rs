@@ -106,6 +106,7 @@ pub mod kernel32_ext;
 pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
+pub mod fiber64;
 pub mod kernel32_node;
 pub mod knownfolders;
 pub mod legacy_com;
@@ -295,6 +296,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
+                    e.extend(fiber64::kernel32_exports());
                     e.extend(console_input::exports());
                     // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
                     e.extend(serial::exports());
