@@ -104,6 +104,16 @@ cat "$work/accprop.txt"
 test "$accprop_status" -eq 0 || { echo "accprop_suite.exe : code $accprop_status" >&2; exit 1; }
 grep -q '^AccPropServices : tout est correct$' "$work/accprop.txt" || { echo "accprop_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# WMI en lecture (#1198) : WbemLocator, ROOT\CIMV2, WQL, classes Win32_*.
+test -f "$dir/wmi_suite.exe" || { echo "wmi_suite.exe absent" >&2; exit 1; }
+set +e
+WINLUX_GUI=headless timeout 120 "$runtime" "$dir/wmi_suite.exe" >"$work/wmi.txt" 2>&1
+wmi_status=$?
+set -e
+cat "$work/wmi.txt"
+test "$wmi_status" -eq 0 || { echo "wmi_suite.exe : code $wmi_status" >&2; exit 1; }
+grep -q '^WMI : tout est correct$' "$work/wmi.txt" || { echo "wmi_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }

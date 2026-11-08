@@ -3,7 +3,9 @@
 # l'événement Loaded arrive, le bouton « Fermer » reçoit le clic et l'appli
 # se termine avec le code 0. Si xwd et ImageMagick sont là, le rendu est
 # aussi vérifié avant le clic (#847) : bouton du thème Aero2 (fond #DDDDDD,
-# bordure #707070) et texte « Fermer » foncé dessiné dans le bouton.
+# bordure #707070) et texte « Fermer » foncé dessiné dans le bouton ; carré
+# rouge intact sous un effet d'ombre qui contient un élément semi-transparent
+# (#1167, ruban de l'Éditeur de ScreenToGif).
 # Deux passes : rendu matériel par Direct3D 9 (niveau de rendu 2 exigé,
 # #931), puis rendu logiciel forcé par l'appli (RenderMode.SoftwareOnly).
 #
@@ -79,7 +81,18 @@ public class Bonjour {
       W = new Window(); W.Title = "Bonjour"; W.Width = 320; W.Height = 200;
       W.WindowStartupLocation = WindowStartupLocation.Manual; W.Left = 100; W.Top = 100;
       var b = new Button(); b.Content = "Fermer"; b.Width = 80; b.Height = 26; b.Click += Clic;
-      W.Content = b; W.Loaded += Charge;
+      // #1167 : un effet d'ombre contenant un élément semi-transparent
+      // (couche d'opacité dans la texture de l'effet) ne doit pas effacer ce
+      // qui a été dessiné avant lui : carré rouge, puis vert à 60 %.
+      var g = new Grid(); g.Children.Add(b);
+      var sp = new StackPanel(); sp.Orientation = Orientation.Horizontal;
+      sp.HorizontalAlignment = HorizontalAlignment.Left; sp.VerticalAlignment = VerticalAlignment.Top;
+      sp.Margin = new Thickness(10);
+      sp.Effect = new System.Windows.Media.Effects.DropShadowEffect();
+      var rouge = new Border(); rouge.Width = 20; rouge.Height = 20; rouge.Background = System.Windows.Media.Brushes.Red;
+      var vert = new Border(); vert.Width = 20; vert.Height = 20; vert.Background = System.Windows.Media.Brushes.Lime; vert.Opacity = 0.6;
+      sp.Children.Add(rouge); sp.Children.Add(vert); g.Children.Add(sp);
+      W.Content = g; W.Loaded += Charge;
       app.Run(W);
       Note("fin");
     } catch (Exception e) { Note(e.ToString()); }
@@ -134,8 +147,13 @@ for passe in materiel logiciel; do
         texte=$(printf '%s\n' "$couleurs" | awk 'function h(c) { return index("0123456789ABCDEF", c) - 1 }
             { v = h(substr($2, 2, 1)) * 16 + h(substr($2, 3, 1)); if (v < 96) n += $1 }
             END { print n + 0 }')
-        if test "${fond:-0}" -lt 800 || test "${bord:-0}" -lt 150 || test "$texte" -lt 15; then
-            rendu="fond=${fond:-0} bordure=${bord:-0} texte=$texte"
+        # Carré rouge de l'effet d'ombre (#1167) : client en (100, 100),
+        # marge 10, carré de 20 : centre 10×10 en (115, 115).
+        rouge=$(convert "$work/state.xwd" -crop 10x10+115+115 +repage txt:- 2>/dev/null |
+            awk 'NR > 1 && $3 == "#FF0000" { n++ } END { print n + 0 }')
+        if test "${fond:-0}" -lt 800 || test "${bord:-0}" -lt 150 || test "$texte" -lt 15 ||
+            test "$rouge" -lt 90; then
+            rendu="fond=${fond:-0} bordure=${bord:-0} texte=$texte rouge(#1167)=$rouge/100"
         fi
     else
         echo "rendu non vérifié (xwd ou ImageMagick absent)" >&2
