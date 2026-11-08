@@ -199,6 +199,11 @@ for depot in scripts/test-all.d/*.sh; do
 done
 step "scripts/test-all.d chargé ($deposees fichier(s))" test -f scripts/test-all.d/0000-dossier-charge.sh -a "$deposees" -ge 1
 
+# Bibliothèques de types (#1108) : CreateTypeLib2/ICreateTypeInfo2, LayOut,
+# ITypeLib/ITypeInfo, RegisterTypeLib puis LoadRegTypeLib, LoadTypeLib
+# (stdole2.tlb intégrée) et Invoke d'une interface double.
+step "Bibliothèques de types créées, inscrites et appelées (#1108)" cargo test -q -p winlux -- bibliotheque_de_types_creee_inscrite_et_appelee
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

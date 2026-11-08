@@ -165,6 +165,7 @@ pub mod ole32;
 pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
+pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
@@ -714,6 +715,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = oleaut32::exports();
                     e.extend(oleaut32_var::exports());
                     e.extend(oleaut32_disp::exports());
+                    e.extend(oleaut32_typelib::exports());
                     e
                 },
                 handle: 0,

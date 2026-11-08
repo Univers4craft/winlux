@@ -553,53 +553,100 @@ use super::errorinfo::{create_error_info, get_error_info, set_error_info};
 
 // ── Bibliothèques de types ──────────────────────────────────────────
 //
-// Aucune bibliothèque de types n'est enregistrée : les appelants (Chromium,
-// accessibilité, automatisation) reçoivent l'erreur documentée et continuent
-// sans elle.
+// Les bibliothèques créées par CreateTypeLib2 (oleaut32_typelib.rs) et
+// inscrites par RegisterTypeLib sont retrouvées par LoadRegTypeLib,
+// QueryPathOfRegTypeLib et LoadTypeLib dans le processus ; stdole2.tlb
+// est intégrée. Le format binaire .tlb n'étant pas publié, un fichier
+// .tlb inconnu reste TYPE_E_CANTLOADLIBRARY (#1108).
 
-const TYPE_E_LIBNOTREGISTERED: i32 = 0x8002_801Du32 as i32;
-const TYPE_E_CANTLOADLIBRARY: i32 = 0x8002_9C4Au32 as i32;
+use super::oleaut32_typelib as typelib;
 
-pub unsafe extern "win64" fn load_type_lib(_file: *const u16, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+unsafe fn read_guid(p: *const u8) -> Option<super::ole32::Guid> {
+    if p.is_null() {
+        return None;
     }
-    TYPE_E_CANTLOADLIBRARY
+    Some(std::ptr::read_unaligned(p as *const super::ole32::Guid))
+}
+
+pub unsafe extern "win64" fn load_type_lib(file: *const u16, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG_TL;
+    }
+    *out = 0;
+    if crate::wow32::active() {
+        return typelib::NOT_LOADED;
+    }
+    match typelib::load_by_path(&typelib::wide(file)) {
+        Some(t) => {
+            *out = t;
+            0
+        }
+        None => typelib::NOT_LOADED,
+    }
 }
 pub unsafe extern "win64" fn load_type_lib_ex(
-    _file: *const u16,
+    file: *const u16,
     _kind: u32,
     out: *mut usize,
 ) -> i32 {
-    load_type_lib(_file, out)
+    load_type_lib(file, out)
 }
 pub unsafe extern "win64" fn load_reg_type_lib(
-    _guid: *const u8,
-    _major: u16,
+    guid: *const u8,
+    major: u16,
     _minor: u16,
     _lcid: u32,
     out: *mut usize,
 ) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    if out.is_null() {
+        return E_INVALIDARG_TL;
     }
-    TYPE_E_LIBNOTREGISTERED
+    *out = 0;
+    let Some(g) = read_guid(guid) else {
+        return E_INVALIDARG_TL;
+    };
+    if crate::wow32::active() {
+        return typelib::NOT_REGISTERED;
+    }
+    match typelib::load_registered(&g, major) {
+        Some(t) => {
+            *out = t;
+            0
+        }
+        None => typelib::NOT_REGISTERED,
+    }
 }
 pub unsafe extern "win64" fn query_path_of_reg_type_lib(
-    _guid: *const u8,
-    _major: u16,
+    guid: *const u8,
+    major: u16,
     _minor: u16,
     _lcid: u32,
     out: *mut usize,
 ) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    if out.is_null() {
+        return E_INVALIDARG_TL;
     }
-    TYPE_E_LIBNOTREGISTERED
+    *out = 0;
+    let Some(g) = read_guid(guid) else {
+        return E_INVALIDARG_TL;
+    };
+    match typelib::registered_path(&g, major) {
+        Some(path) => {
+            let w: Vec<u16> = path.encode_utf16().collect();
+            *out = sys_alloc_string_len(w.as_ptr(), w.len() as u32) as usize;
+            0
+        }
+        None => typelib::NOT_REGISTERED,
+    }
 }
-pub extern "win64" fn register_type_lib(_lib: usize, _path: usize, _help: usize) -> i32 {
-    TYPE_E_CANTLOADLIBRARY
+pub unsafe extern "win64" fn register_type_lib(lib: usize, path: *const u16, _help: usize) -> i32 {
+    if lib == 0 || crate::wow32::active() {
+        return typelib::NOT_LOADED;
+    }
+    typelib::register(lib, &typelib::wide(path)).unwrap_or(typelib::NOT_LOADED)
 }
+
+const E_INVALIDARG_TL: i32 = 0x8007_0057u32 as i32;
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
