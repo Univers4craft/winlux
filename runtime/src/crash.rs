@@ -59,7 +59,18 @@ fn is_stack_overflow(addr: usize, rsp: usize) -> bool {
     // passes the last valid page and the next touch faults.
     let page = 4096usize;
     let margin = 16 * page;
-    addr < rsp && rsp.saturating_sub(addr) <= margin
+    if addr < rsp && rsp.saturating_sub(addr) <= margin {
+        return true;
+    }
+    // Faute dans la dernière page de la pile d'un thread Windows, même
+    // au-dessus de RSP (`sub rsp, N` puis écriture dans la nouvelle trame) :
+    // limites lues dans le TEB (#15). arch_prctl est async-signal-safe.
+    let teb = crate::process::teb();
+    if teb == 0 {
+        return false;
+    }
+    let limit = unsafe { safe_read(teb + crate::process::TEB_STACK_LIMIT) }.unwrap_or(0);
+    limit != 0 && addr < limit + page && addr + 64 * page >= limit && rsp < limit + 64 * page
 }
 
 /// Lit un mot mémoire sans risquer une nouvelle faute : `write` sur un tube
