@@ -658,6 +658,7 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         Some(libc::ENOTEMPTY) => return 145,    // ERROR_DIR_NOT_EMPTY
         Some(libc::EISDIR) | Some(libc::EPERM) => return 5, // ERROR_ACCESS_DENIED
         Some(libc::EBUSY) | Some(libc::ETXTBSY) => return 32, // ERROR_SHARING_VIOLATION
+        Some(libc::EFAULT) => return 998,       // ERROR_NOACCESS : tampon invalide (#18)
         _ => {}
     }
     match e.kind() {
@@ -706,8 +707,12 @@ unsafe fn sync_io_at_overlapped(
     overlapped: usize,
     is_write: bool,
 ) -> i32 {
-    if !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>()) || (len != 0 && buffer == 0) {
+    if !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>()) {
         crate::process::set_last_error(87);
+        return 0;
+    }
+    if len != 0 && buffer == 0 {
+        crate::process::set_last_error(998); // ERROR_NOACCESS, comme Windows (#18)
         return 0;
     }
     let file = {
@@ -1519,7 +1524,7 @@ pub unsafe extern "win64" fn write_file(
         return sync_io_at_overlapped(h, buf as usize, len, written, ov, true);
     }
     let Some(s) = bytes(buf, len as usize) else {
-        crate::process::set_last_error(87);
+        crate::process::set_last_error(998); // ERROR_NOACCESS (#18)
         return 0;
     };
     if h == (-11isize) as usize {
@@ -1595,7 +1600,7 @@ pub unsafe extern "win64" fn read_file(
         return sync_io_at_overlapped(h, buf as usize, len, read, ov, false);
     }
     let Some(b) = bytes_mut(buf, len as usize) else {
-        crate::process::set_last_error(87);
+        crate::process::set_last_error(998); // ERROR_NOACCESS (#18)
         return 0;
     };
     if h == (-10isize) as usize {

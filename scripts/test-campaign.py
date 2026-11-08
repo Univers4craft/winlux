@@ -900,4 +900,10 @@ ok("fn resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh.rs").read_tex
    and "t_main_overflow" in (ROOT / "testc/msvc/hwexc_msvc.c").read_text()
    and "overflow-thread" in (SCRIPTS / "test-hw-exceptions.sh").read_text(),
    "débordement de pile : rattrapé sur tout thread, sinon rapport EXCEPTION_STACK_OVERFLOW (#15)")
+# ── Annulation des E/S et handles ou tampons invalides (#18) ──
+ok("CancelIoEx(server, &ov) == 1" in (ROOT / "testc/msvc/io_msvc.c").read_text()
+   and "test-io-cancel.sh" in (SCRIPTS / "test-mingw.sh").read_text()
+   and "test-io-cancel.sh" in (SCRIPTS / "test-all.sh").read_text()
+   and "Some(libc::EFAULT) => return 998" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "E/S : lecture commencée annulée, handles invalides et tampons invalides (ERROR_NOACCESS) (#18)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -98,6 +98,11 @@ if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"
 fi
 
+# Annulation des E/S, handles et tampons invalides (#18), bloquant.
+if test -f "$dir/io_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-io-cancel.sh"
+fi
+
 # Entrée brute : souris relative et clavier en WM_INPUT (#271), bloquant.
 if test -f "$dir/rawinput_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-rawinput.sh"

@@ -81,6 +81,7 @@ done <"$logs/steps.txt"
 # ici aussi sans MinGW, dès que clang et le runtime compilé sont là.
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
     step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
+    step "scripts/test-io-cancel.sh" sh scripts/test-io-cancel.sh
 fi
 # DuplicateHandle et mémoire entre processus (Chromium, Electron, #236) :
 # lancé en CI par test-mingw.sh ; ici aussi dès que clang est là.
