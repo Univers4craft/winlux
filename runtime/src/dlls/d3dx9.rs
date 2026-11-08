@@ -2847,31 +2847,6 @@ unsafe extern "win64" fn compile_shader_from_file_a(
     put_ptr(table, 0);
     not_yet("D3DXCompileShaderFromFile", errors)
 }
-/// D3DXAssembleShader(pSrcData, SrcDataLen, pDefines, pInclude, Flags,
-/// ppShader, ppErrorMsgs).
-unsafe extern "win64" fn assemble_shader(
-    _src: usize,
-    _len: u32,
-    _defines: usize,
-    _include: usize,
-    _flags: u32,
-    shader: usize,
-    errors: usize,
-) -> i32 {
-    put_ptr(shader, 0);
-    not_yet("D3DXAssembleShader", errors)
-}
-unsafe extern "win64" fn assemble_shader_from_file(
-    _path: usize,
-    _defines: usize,
-    _include: usize,
-    _flags: u32,
-    shader: usize,
-    errors: usize,
-) -> i32 {
-    put_ptr(shader, 0);
-    not_yet("D3DXAssembleShaderFromFile", errors)
-}
 /// D3DXCreateEffect(pDevice, pSrcData, SrcDataLen, pDefines, pInclude,
 /// Flags, pPool, ppEffect, ppCompilationErrors).
 unsafe extern "win64" fn create_effect(
@@ -2900,6 +2875,39 @@ unsafe extern "win64" fn create_effect_from_file(
 ) -> i32 {
     put_ptr(effect, 0);
     not_yet("D3DXCreateEffectFromFile", errors)
+}
+/// D3DXCreateEffectFromFileEx(pDevice, pSrcFile, pDefines, pInclude,
+/// pSkipConstants, Flags, pPool, ppEffect, ppCompilationErrors).
+unsafe extern "win64" fn create_effect_from_file_ex(
+    _dev: usize,
+    _path: usize,
+    _defines: usize,
+    _include: usize,
+    _skip: usize,
+    _flags: u32,
+    _pool: usize,
+    effect: usize,
+    errors: usize,
+) -> i32 {
+    put_ptr(effect, 0);
+    not_yet("D3DXCreateEffectFromFileEx", errors)
+}
+/// D3DXCreateEffectEx(pDevice, pSrcData, SrcDataLen, pDefines, pInclude,
+/// pSkipConstants, Flags, pPool, ppEffect, ppCompilationErrors).
+unsafe extern "win64" fn create_effect_ex(
+    _dev: usize,
+    _src: usize,
+    _len: u32,
+    _defines: usize,
+    _include: usize,
+    _skip: usize,
+    _flags: u32,
+    _pool: usize,
+    effect: usize,
+    errors: usize,
+) -> i32 {
+    put_ptr(effect, 0);
+    not_yet("D3DXCreateEffectEx", errors)
 }
 unsafe extern "win64" fn create_effect_from_resource(
     _dev: usize,
@@ -3028,18 +3036,18 @@ pub fn exports() -> crate::dlls::Exports {
         "D3DXCompileShader" => fn compile_shader,
         "D3DXCompileShaderFromFileA" => fn compile_shader_from_file_a,
         "D3DXCompileShaderFromFileW" => fn compile_shader_from_file_a,
-        "D3DXAssembleShader" => fn assemble_shader,
-        "D3DXAssembleShaderFromFileA" => fn assemble_shader_from_file,
-        "D3DXAssembleShaderFromFileW" => fn assemble_shader_from_file,
         "D3DXCreateEffect" => fn create_effect,
         "D3DXCreateEffectFromFileA" => fn create_effect_from_file,
         "D3DXCreateEffectFromFileW" => fn create_effect_from_file,
-        "D3DXCreateEffectFromFileExA" => fn create_effect_from_file,
+        "D3DXCreateEffectFromFileExA" => fn create_effect_from_file_ex,
+        "D3DXCreateEffectFromFileExW" => fn create_effect_from_file_ex,
+        "D3DXCreateEffectEx" => fn create_effect_ex,
         "D3DXCreateEffectFromResourceA" => fn create_effect_from_resource,
         "D3DXCreateEffectFromResourceW" => fn create_effect_from_resource,
         "D3DXCreateEffectPool" => fn create_effect_pool,
     };
     e.extend(super::d3dx9_draw::exports());
+    e.extend(super::d3dx9_shader::exports());
     e
 }
 

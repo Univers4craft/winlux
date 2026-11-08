@@ -203,6 +203,19 @@ IMP HRESULT WINAPI D3DXCreateSprite(void *, void **);
 IMP HRESULT WINAPI D3DXCreateFontA(void *, int, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD,
     const char *, void **);
 IMP HRESULT WINAPI D3DXCreateBuffer(DWORD, void **);
+IMP HRESULT WINAPI D3DXAssembleShader(const char *, UINT, void *, void *, DWORD, void **, void **);
+IMP HRESULT WINAPI D3DXGetShaderConstantTable(const DWORD *, void **);
+IMP HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *, DWORD *, UINT *);
+typedef void *(WINAPI *GETBYNAME)(void *, void *, const char *);
+typedef void *(WINAPI *GETPTR)(void *);
+#define BUFPTR(b) (((GETPTR)VT(b)[3])(b))
+typedef HRESULT(WINAPI *SETFLOATCT)(void *, void *, void *, float);
+typedef struct {
+    const char *Name;
+    UINT RegisterSet, RegisterIndex, RegisterCount, Class, Type, Rows, Columns, Elements,
+        StructMembers, Bytes;
+    const void *DefaultValue;
+} D3DXCONSTANT_DESC;
 IMP UINT WINAPI midiOutGetNumDevs(void);
 IMP UINT WINAPI midiOutGetDevCapsA(UINT_PTR, MIDIOUTCAPSA *, UINT);
 IMP UINT WINAPI midiOutOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
@@ -735,6 +748,54 @@ static int d3dx_tests(HWND hwnd) {
                    CALL0(dev, 42) == 0);
     CHECK(125, D3DXCreateBuffer(16, &buf) == 0 && buf && CALL0(buf, 4) == 16);
 
+    /* #834 : assembleur, sémantiques, table des constantes. */
+    {
+        static const char vs[] = "vs_2_0\n"
+                                 "dcl_position v0\n"
+                                 "dcl_texcoord1 v1\n"
+                                 "m4x4 oPos, v0, c0 // transformation\n"
+                                 "mov oT0.xy, v1\n";
+        static const char ps[] = "ps_2_0\ndef c1, 1, 0.5, 0, 1\nmul r0, c3, c1\nmov oC0, r0\n";
+        /* ps_2_0 avec table CTAB : float4 gColor en c3, puis mov oC0, c3. */
+        static const DWORD ctab[] = {
+            0xFFFF0200, 0x0013FFFE, 0x42415443, 28, 48, 0xFFFF0200, 1, 28, 0, 0,
+            48, 0x00030002, 1, 56, 0, 0x6C6F4367, 0x0000726F,
+            0x00030001, 0x00040001, 1, 0,
+            0x02000001, 0x800F0800, 0xA0E40003, 0x0000FFFF};
+        void *code = 0, *err = 0, *vsh = 0, *psh = 0, *ct = 0, *h;
+        DWORD sem[8];
+        UINT n = 0;
+        D3DXCONSTANT_DESC desc;
+        float v[4] = {0.25f, 0.5f, 0.75f, 1.0f}, got[4] = {0, 0, 0, 0};
+
+        CHECK(127, D3DXAssembleShader(vs, sizeof vs - 1, 0, 0, 0, &code, &err) == 0 && code &&
+                       !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(128, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        CHECK(129, D3DXGetShaderInputSemantics((DWORD *)BUFPTR(code), sem, &n) == 0 &&
+                       n == 2 && sem[0] == 0 && sem[2] == 5 && sem[3] == 1);
+        CALL0(code, 2);
+        CHECK(130, D3DXAssembleShader(ps, sizeof ps - 1, 0, 0, 0, &code, 0) == 0 &&
+                       CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(131, D3DXAssembleShader("ps_2_0\nfoo r0", 13, 0, 0, 0, &code, &err) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        CHECK(132, D3DXGetShaderConstantTable(ctab, &ct) == 0 && ct);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "gColor");
+        zero(&desc, sizeof desc);
+        n = 1;
+        CHECK(133, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 3 &&
+                       desc.Bytes == 16 && desc.Name[0] == 'g');
+        CHECK(134, CALL3(ct, 19, dev, h, v) == 0 && CALL3(dev, 110, 3, got, 1) == 0 &&
+                       got[0] == 0.25f && got[3] == 1.0f);
+        CHECK(135, ((SETFLOATCT)VT(ct)[17])(ct, dev, "gColor", 2.5f) == 0 &&
+                       CALL3(dev, 110, 3, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
     CALL0(buf, 2);
     CALL0(font, 2);
     CALL0(sp, 2);
@@ -1007,7 +1068,7 @@ void entry(void) {
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
-    out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
+    out("Direct3D 9 et D3DX9 : 26 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();
