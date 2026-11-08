@@ -263,7 +263,9 @@ pub unsafe fn round_rect(
         note_fill(hdc, l, t, r, bt, chrome(color));
     }
     SelectObject(hdc, b.get(color));
-    RoundRect(hdc, l, t, r, bt, radius * 2, radius * 2);
+    // Le shell a été dessiné avec des coins de rayon 2 × radius ; RoundRect
+    // prend maintenant la largeur de l'ellipse comme Windows (#866).
+    RoundRect(hdc, l, t, r, bt, radius * 4, radius * 4);
 }
 /// Surface flottante : liseré fin et fond, sans ombre lourde.
 pub unsafe fn panel(

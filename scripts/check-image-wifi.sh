@@ -18,11 +18,11 @@ missing=""
 #   pile 802.11 : cfg80211, mac80211 ; tablettes : brcmfmac_cyw, r8723bs,
 #   mwifiex_sdio, rtw88_8723cs ; pare-feu et NAT : nf_tables, nft_chain_nat,
 #   nf_conntrack ; partage de connexion : cdc_ether, rndis_host, ipheth, bnep,
-#   bridge, veth.
+#   bridge, veth ; VPN (#660) : wireguard, tun (OpenVPN).
 for name in libarc4 michael_mic ccm gcm ghash_generic cmac aesni_intel cfg80211 mac80211 \
             brcmfmac_cyw r8723bs mwifiex_sdio rtw88_8723cs \
             nf_tables nft_chain_nat nf_conntrack nf_nat \
-            cdc_ether rndis_host ipheth bnep bridge veth; do
+            cdc_ether rndis_host ipheth bnep bridge veth wireguard tun; do
     file=$(find "$host/$release/kernel" -name "$name.ko*" -print -quit 2>/dev/null || true)
     if test -z "$file"; then
         alt=$(echo "$name" | tr _ -)
@@ -65,6 +65,18 @@ done
 for binary in usr/sbin/NetworkManager usr/bin/nmcli; do
     test -f "$stage/$binary" || { echo "Wi-Fi : $binary absent" >&2; exit 1; }
 done
+# VPN et point d'accès sans fil mobile (#660) : greffon OpenVPN de
+# NetworkManager, dnsmasq (adresses des appareils du point d'accès, mode
+# « shared »), nft (traduction d'adresses), iw (cartes capables de point
+# d'accès, appareils connectés). Sans eux les pages restent cachées.
+for binary in usr/sbin/openvpn usr/lib/NetworkManager/VPN/nm-openvpn-service.name usr/sbin/dnsmasq usr/sbin/nft \
+              usr/sbin/iw usr/bin/winlux-vpn usr/bin/winlux-hotspot; do
+    found=""
+    for candidate in "$stage/$binary" "$stage/${binary#usr/}"; do
+        test -e "$candidate" && found=1
+    done
+    test -n "$found" || { echo "VPN/point d'accès : $binary absent" >&2; exit 1; }
+done
 # Certificats : magasin complet (Wi-Fi d'entreprise, sites, mises à jour,
 # Boutique). Un magasin vide ou rachitique fait refuser des connexions.
 test -s "$stage/etc/ssl/certs/ca-certificates.crt" || { echo "Certificats : magasin racine absent" >&2; exit 1; }
@@ -99,5 +111,5 @@ if test -f "$config" && ! grep -q '^CONFIG_RTC_HCTOSYS=y' "$config"; then
     echo "Heure : noyau sans CONFIG_RTC_HCTOSYS (horloge matérielle non lue au démarrage)" >&2
     exit 1
 fi
-echo "Wi-Fi : sécurités WEP à WPA3 et Entreprise, pilotes, regulatory.db, pare-feu et partage de connexion présents"
+echo "Wi-Fi : sécurités WEP à WPA3 et Entreprise, pilotes, regulatory.db, pare-feu, partage de connexion et VPN présents"
 echo "Certificats : $roots autorités racine, ajout d'autorités et heure automatique présents"

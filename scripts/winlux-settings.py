@@ -346,7 +346,7 @@ GRAPHICS_PAGE = 24
 # Pages 29 à 42 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
-              (_t("Réseau et Internet"), [35, 2, 20, 28]),
+              (_t("Réseau et Internet"), [35, 2, 40, 41, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [39, 1, 10, 11, 15, 30]),
               (_t("Comptes"), [33, 38, 42]),
@@ -360,9 +360,6 @@ CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
 # Anciennes pages fondues dans une autre : Son (3) dans Son, Souris (5) dans
 # Clavier et souris, Personnalisation (6) dans Fond d’écran et couleurs.
 MERGED = {3: 16, 5: 4, 6: 21}
-# 40 (VPN) et 41 (point d’accès) sont réservées par la PR #807 (#660) : tant
-# qu’elle n’est pas fusionnée, ces numéros ouvrent Réseau et Wi-Fi.
-MERGED.update({40: 2, 41: 35})
 SOUND_PAGE = 16
 
 
@@ -705,6 +702,7 @@ SETTINGS_CSS = """
   combobox button, combobox button label, menu, menuitem, menuitem label {{ background: {button}; color: {fg}; }}
   menuitem:hover, menuitem:hover label {{ background: {selected}; color: {selected_fg}; }}
   progressbar text {{ color: {fg}; }}
+  switch:checked {{ background: {accent}; border-color: {accent}; }}
   .heading {{ font-size: 24px; font-weight: bold; }}
   .subtitle, label.subtitle {{ color: {dim}; }}
   .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; }}
@@ -1285,6 +1283,9 @@ PAGE_NAMES = {
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
     # ms-settings:appsfeatures ouvre « Applications installées » (#722).
     "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
+    # VPN et point d’accès sans fil mobile (#660), noms de Windows compris.
+    "network-vpn": 40, "vpn": 40, "network-mobilehotspot": 41, "mobilehotspot": 41, "hotspot": 41,
+    "point-d-acces": 41, "partage-de-connexion": 41,
     # ms-settings:family-group : contrôle parental local (#661).
     "family-group": 42, "family": 42, "parental": 42, "controle-parental": 42,
 }
