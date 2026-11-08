@@ -995,7 +995,7 @@ mod tests {
         std::fs::create_dir_all(&dir).ok()?;
         let key = dir.join("k.pem");
         let crt = dir.join("c.pem");
-        let ok = std::process::Command::new("openssl")
+        let ok = std::process::Command::new(openssl_bin())
             .args([
                 "req",
                 "-x509",
@@ -1026,7 +1026,7 @@ mod tests {
             .local_addr()
             .ok()?
             .port();
-        let child = std::process::Command::new("openssl")
+        let child = std::process::Command::new(openssl_bin())
             .args(["s_server", "-quiet", "-www", "-accept"])
             .arg(port.to_string())
             .arg("-cert")
@@ -1102,8 +1102,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Chemin absolu d'openssl, lu une fois sous TEST_ENV_LOCK : les tests de
+    /// shell32 remplacent PATH le temps d'un appel, et un `openssl` cherché
+    /// pendant ce temps-là n'était plus trouvé (échec NotFound aléatoire).
+    fn openssl_bin() -> &'static std::path::Path {
+        static BIN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        BIN.get_or_init(|| {
+            let _env = crate::launch::TEST_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::env::var_os("PATH")
+                .and_then(|p| {
+                    std::env::split_paths(&p)
+                        .map(|d| d.join("openssl"))
+                        .find(|f| f.is_file())
+                })
+                .unwrap_or_else(|| "openssl".into())
+        })
+    }
+
     fn openssl(args: &[&str], dir: &std::path::Path) -> bool {
-        std::process::Command::new("openssl")
+        std::process::Command::new(openssl_bin())
             .args(args)
             .current_dir(dir)
             .stdout(std::process::Stdio::null())
@@ -1223,7 +1242,7 @@ mod tests {
                 .local_addr()
                 .unwrap()
                 .port();
-            let mut child = std::process::Command::new("openssl")
+            let mut child = std::process::Command::new(openssl_bin())
                 .args([
                     "s_server",
                     "-quiet",
