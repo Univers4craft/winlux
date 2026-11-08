@@ -144,6 +144,7 @@ pub mod mouse;
 pub mod mpr;
 pub mod msacm32;
 pub mod mscoree;
+pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
 pub(crate) mod named_objects;
@@ -532,6 +533,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "version",
                 exports: version::exports(),
+                handle: fake_module(),
+            },
+            // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
+            Builtin {
+                name: "mshwgst",
+                exports: mshwgst::exports(),
                 handle: fake_module(),
             },
             Builtin {

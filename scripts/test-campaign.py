@@ -1208,4 +1208,8 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
+   and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
+   and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
+   "WPF InkCanvas : moteur de gestes mshwgst.dll intégré, l'Éditeur de ScreenToGif s'ouvre (#1132)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
