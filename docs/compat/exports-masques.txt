@@ -275,8 +275,6 @@ RedrawWindow  user32_ext  ←  user32
 RegisterDragDrop  ole32  ←  dataobject
 RegisterEventSourceA  advapi32  ←  apps_win32
 RegisterRawInputDevices  games_win32  ←  rawinput
-RegisterWindowMessageA  user32_ext  ←  user32
-RegisterWindowMessageW  user32_ext  ←  user32
 ReleaseCapture  user32_ext  ←  user32
 RemoveMenu  user32  ←  menus
 RemoveMenu  user32_ext  ←  menus
