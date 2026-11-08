@@ -698,4 +698,11 @@ ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
    and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
    "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
 
+# ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
+ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
+   and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
+   and "def tray_icon_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -58,6 +58,12 @@ def pixbuf_for(executable):
         except (GLib.Error, OSError, ValueError): pass
     return None
 
+def program_name(executable):
+    """Nom de l'icône pour la zone de notification : nom du .exe, en minuscules."""
+    stem = Path(executable.replace("\\", "/")).stem.lower()
+    cleaned = "".join(c if c.isalnum() or c in "-_." else "-" for c in stem).strip("-.")
+    return cleaned or "winlux-programme"
+
 def pressed(icon, event, key):
     prefix = BUTTONS.get(event.button)
     if prefix is None: return False
@@ -77,6 +83,13 @@ def apply(fields):
         key, executable, tip, visible = fields[1:5]
         icon = ICONS.get(key)
         if icon is None:
+            # Nom propre au programme (putty, filezilla…) : la zone de
+            # notification d'XFCE retient et cache chaque icône par ce nom.
+            # Sans lui, toutes les icônes .exe s'appelaient
+            # « winlux-notify-icon.py » et se cachaient ensemble. Posé avant
+            # la première fenêtre ; un assistant sert un seul programme.
+            if not ICONS:
+                GLib.set_prgname(program_name(executable))
             icon = Gtk.StatusIcon()
             icon.connect("button-press-event", pressed, key)
             icon.connect("button-release-event", released, key)
