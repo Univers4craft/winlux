@@ -764,10 +764,13 @@ pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i3
         crate::process::set_last_error(87);
         return 0;
     }
-    // Largeur ou hauteur nulle : Windows rend une bitmap 1x1 monochrome
-    // (documentation de CreateCompatibleBitmap). La VCL de Delphi le fait
-    // pour toute TBitmap encore vide ; un échec levait EOutOfResources
-    // dans WinSCP x86 (#905).
+    // Largeur ou hauteur nulle : Windows rend une bitmap 1x1 monochrome,
+    // pas une erreur (documentation de CreateCompatibleBitmap, Remarks :
+    // « If either the width or the height of the bitmap is zero,
+    // CreateCompatibleBitmap returns the handle to a 1-by-1 pixel,
+    // monochrome bitmap »). La VCL de Delphi en dépend pour toute TBitmap
+    // vide ; un échec levait EOutOfResources dans WinSCP x86 (#905).
+    // Voir docs/compat/gdi32-comportements.md : ne pas refuser ce cas.
     let (width, height) = if width == 0 || height == 0 {
         (1, 1)
     } else {
