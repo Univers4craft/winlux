@@ -345,8 +345,13 @@ unsafe fn create_window_common(
 
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
+    // La procédure est relue avant chaque message : un programme peut sous-
+    // classer la fenêtre dès WM_NCCREATE (WinForms y appelle AssignHandle,
+    // puis SetWindowLongPtr(GWLP_WNDPROC) ; lui renvoyer WM_CREATE par la
+    // procédure de classe lève « Window handle already exists. », #666).
+    let current_proc = || gui::wnd_proc_of(hwnd).unwrap_or(info.wnd_proc);
     let nc = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        current_proc(),
         hwnd,
         WM_NCCREATE,
         0,
@@ -358,7 +363,7 @@ unsafe fn create_window_common(
         return 0;
     }
     let created = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        current_proc(),
         hwnd,
         gui::WM_CREATE,
         0,
