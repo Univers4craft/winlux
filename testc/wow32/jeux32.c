@@ -203,6 +203,34 @@ IMP HRESULT WINAPI D3DXCreateSprite(void *, void **);
 IMP HRESULT WINAPI D3DXCreateFontA(void *, int, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD,
     const char *, void **);
 IMP HRESULT WINAPI D3DXCreateBuffer(DWORD, void **);
+IMP HRESULT WINAPI D3DXAssembleShader(const char *, UINT, void *, void *, DWORD, void **, void **);
+IMP HRESULT WINAPI D3DXGetShaderConstantTable(const DWORD *, void **);
+IMP HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *, DWORD *, UINT *);
+IMP HRESULT WINAPI D3DXCreateBox(void *, float, float, float, void **, void **);
+IMP HRESULT WINAPI D3DXCreateSphere(void *, float, UINT, UINT, void **, void **);
+IMP HRESULT WINAPI D3DXComputeNormals(void *, const DWORD *);
+IMP HRESULT WINAPI D3DXCompileShader(const char *, UINT, void *, void *, const char *, const char *,
+    DWORD, void **, void **, void **);
+IMP HRESULT WINAPI D3DXCreateEffect(void *, const void *, UINT, void *, void *, DWORD, void *, void **,
+    void **);
+typedef void *(WINAPI *GETH1)(void *, const char *);
+typedef HRESULT(WINAPI *SETFLOATFX)(void *, void *, float);
+typedef struct {
+    const char *Name, *Semantic;
+    UINT Class, Type, Rows, Columns, Elements, Annotations, StructMembers, Flags, Bytes;
+} D3DXPARAMETER_DESC;
+IMP HRESULT WINAPI D3DXLoadMeshFromXInMemory(const void *, DWORD, DWORD, void *, void **, void **,
+    void **, DWORD *, void **);
+typedef void *(WINAPI *GETBYNAME)(void *, void *, const char *);
+typedef void *(WINAPI *GETPTR)(void *);
+#define BUFPTR(b) (((GETPTR)VT(b)[3])(b))
+typedef HRESULT(WINAPI *SETFLOATCT)(void *, void *, void *, float);
+typedef struct {
+    const char *Name;
+    UINT RegisterSet, RegisterIndex, RegisterCount, Class, Type, Rows, Columns, Elements,
+        StructMembers, Bytes;
+    const void *DefaultValue;
+} D3DXCONSTANT_DESC;
 IMP UINT WINAPI midiOutGetNumDevs(void);
 IMP UINT WINAPI midiOutGetDevCapsA(UINT_PTR, MIDIOUTCAPSA *, UINT);
 IMP UINT WINAPI midiOutOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
@@ -735,6 +763,169 @@ static int d3dx_tests(HWND hwnd) {
                    CALL0(dev, 42) == 0);
     CHECK(125, D3DXCreateBuffer(16, &buf) == 0 && buf && CALL0(buf, 4) == 16);
 
+    /* #834 : assembleur, sémantiques, table des constantes. */
+    {
+        static const char vs[] = "vs_2_0\n"
+                                 "dcl_position v0\n"
+                                 "dcl_texcoord1 v1\n"
+                                 "m4x4 oPos, v0, c0 // transformation\n"
+                                 "mov oT0.xy, v1\n";
+        static const char ps[] = "ps_2_0\ndef c1, 1, 0.5, 0, 1\nmul r0, c3, c1\nmov oC0, r0\n";
+        /* ps_2_0 avec table CTAB : float4 gColor en c3, puis mov oC0, c3. */
+        static const DWORD ctab[] = {
+            0xFFFF0200, 0x0013FFFE, 0x42415443, 28, 48, 0xFFFF0200, 1, 28, 0, 0,
+            48, 0x00030002, 1, 56, 0, 0x6C6F4367, 0x0000726F,
+            0x00030001, 0x00040001, 1, 0,
+            0x02000001, 0x800F0800, 0xA0E40003, 0x0000FFFF};
+        void *code = 0, *err = 0, *vsh = 0, *psh = 0, *ct = 0, *h;
+        DWORD sem[8];
+        UINT n = 0;
+        D3DXCONSTANT_DESC desc;
+        float v[4] = {0.25f, 0.5f, 0.75f, 1.0f}, got[4] = {0, 0, 0, 0};
+
+        CHECK(193, D3DXAssembleShader(vs, sizeof vs - 1, 0, 0, 0, &code, &err) == 0 && code &&
+                       !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(194, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        CHECK(195, D3DXGetShaderInputSemantics((DWORD *)BUFPTR(code), sem, &n) == 0 &&
+                       n == 2 && sem[0] == 0 && sem[2] == 5 && sem[3] == 1);
+        CALL0(code, 2);
+        CHECK(196, D3DXAssembleShader(ps, sizeof ps - 1, 0, 0, 0, &code, 0) == 0 &&
+                       CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(197, D3DXAssembleShader("ps_2_0\nfoo r0", 13, 0, 0, 0, &code, &err) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        CHECK(198, D3DXGetShaderConstantTable(ctab, &ct) == 0 && ct);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "gColor");
+        zero(&desc, sizeof desc);
+        n = 1;
+        CHECK(199, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 3 &&
+                       desc.Bytes == 16 && desc.Name[0] == 'g');
+        CHECK(200, CALL3(ct, 19, dev, h, v) == 0 && CALL3(dev, 110, 3, got, 1) == 0 &&
+                       got[0] == 0.25f && got[3] == 1.0f);
+        CHECK(201, ((SETFLOATCT)VT(ct)[17])(ct, dev, "gColor", 2.5f) == 0 &&
+                       CALL3(dev, 110, 3, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
+    /* Maillages (#834) : D3DXCreateBox, fichier .x texte en mémoire, matériaux,
+     * table d'attributs, DrawSubset, sphère et D3DXComputeNormals. */
+    {
+        static const char xfile[] =
+            "xof 0303txt 0032\n"
+            "Material Rouge { 1.0;0.0;0.0;1.0;; 10.0; 1.0;1.0;1.0;; 0.0;0.0;0.0;;"
+            " TextureFilename { \"rouge.bmp\"; } }\n"
+            "Mesh Quad { 4; -1;-1;0;, 1;-1;0;, 1;1;0;, -1;1;0;;\n"
+            " 1; 4;0,1,2,3;;\n"
+            " MeshNormals { 1; 0;0;1;; 1; 4;0,0,0,0;; }\n"
+            " MeshTextureCoords { 4; 0;1;, 1;1;, 1;0;, 0;0;; }\n"
+            " MeshMaterialList { 1; 1; 0;; { Rouge } } }\n";
+        void *box = 0, *quad = 0, *sphere = 0, *adjb = 0, *mats = 0;
+        float *vtx = 0;
+        DWORD nmat = 0, nattr = 0;
+        unsigned char *mat;
+
+        CHECK(202, D3DXCreateBox(dev, 1.0f, 2.0f, 3.0f, &box, 0) == 0 && box &&
+                       CALL0(box, 4) == 12 && CALL0(box, 5) == 24 && CALL0(box, 6) == 0x12);
+        CHECK(203, CALL2(box, 15, 0, &vtx) == 0 && vtx && vtx[0] == -0.5f && vtx[1] == -1.0f &&
+                       vtx[2] == -1.5f && vtx[3] == -1.0f && CALL0(box, 16) == 0);
+        CHECK(204, CALL0(dev, 41) == 0 && CALL1(box, 3, 0) == 0 && CALL0(dev, 42) == 0);
+        CHECK(205, D3DXLoadMeshFromXInMemory(xfile, sizeof xfile - 1, 0x220, dev, &adjb, &mats, 0,
+                                             &nmat, &quad) == 0 &&
+                       quad && nmat == 1 && CALL0(quad, 4) == 2 && CALL0(quad, 5) == 4);
+        mat = (unsigned char *)BUFPTR(mats);
+        /* D3DXMATERIAL : D3DMATERIAL9 (68 octets) puis le nom de texture, aligné sur 8 en x64. */
+        CHECK(206, ((float *)mat)[0] == 1.0f && ((float *)mat)[1] == 0.0f &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[0] == 'r' &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[5] == '.' &&
+                       adjb && CALL0(adjb, 4) == 24);
+        CHECK(207, CALL2(quad, 19, 0, &nattr) == 0 && nattr == 1);
+        CHECK(208, D3DXCreateSphere(dev, 1.0f, 8, 4, &sphere, 0) == 0 && sphere &&
+                       CALL0(sphere, 4) > 0 && D3DXComputeNormals(sphere, 0) == 0);
+        /* DrawSubset laisse ses tampons liés à l'appareil : on les délie. */
+        CALL4(dev, 100, 0, 0, 0, 0);
+        CALL1(dev, 104, 0);
+        CALL0(sphere, 2);
+        CALL0(adjb, 2);
+        CALL0(mats, 2);
+        CALL0(quad, 2);
+        CALL0(box, 2);
+    }
+
+    /* Compilation HLSL et effets (#834). */
+    {
+        static const char vs[] = "float4x4 WVP;\nfloat Scale;\n"
+                                 "struct O { float4 p : POSITION; float2 t : TEXCOORD0; };\n"
+                                 "O main(float4 p : POSITION, float2 t : TEXCOORD0) {\n"
+                                 "  O o; o.p = mul(p, WVP); o.t = t * Scale; return o; }\n";
+        static const char ps[] = "sampler2D S;\n"
+                                 "float4 main(float2 uv : TEXCOORD0) : COLOR {\n"
+                                 "  float4 c = tex2D(S, uv);\n"
+                                 "  if (c.a < 0.1) discard;\n"
+                                 "  return saturate(c * 2); }\n";
+        static const char fxsrc[] =
+            "float4x4 WVP;\n"
+            "float Intensity < string UIName = \"Intensite\"; > = 1.0;\n"
+            "float4 VS(float4 p : POSITION) : POSITION { return mul(p, WVP); }\n"
+            "float4 PS() : COLOR { return float4(Intensity, Intensity, Intensity, 1); }\n"
+            "technique Rendu {\n"
+            "  pass P0 { VertexShader = compile vs_2_0 VS(); PixelShader = compile ps_2_0 PS();\n"
+            "            AlphaBlendEnable = TRUE; SrcBlend = SrcAlpha; }\n"
+            "}\n";
+        void *code = 0, *err = 0, *ct = 0, *vsh = 0, *psh = 0, *fx = 0, *h, *hw, *t, *a;
+        D3DXCONSTANT_DESC desc;
+        D3DXPARAMETER_DESC pd;
+        UINT n = 1, np = 0;
+        DWORD rs = 0;
+        float got[4] = {0, 0, 0, 0}, fv = 0;
+        const char *str = 0;
+
+        CHECK(209, D3DXCompileShader(vs, sizeof vs - 1, 0, 0, "main", "vs_2_0", 0, &code, &err, &ct) == 0 &&
+                       code && ct && !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(210, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "Scale");
+        zero(&desc, sizeof desc);
+        CHECK(211, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 4 &&
+                       ((SETFLOATCT)VT(ct)[17])(ct, dev, h, 2.5f) == 0 &&
+                       CALL3(dev, 95, 4, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(212, D3DXCompileShader(ps, sizeof ps - 1, 0, 0, "main", "ps_2_0", 0, &code, 0, 0) == 0 &&
+                       code && CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(213, D3DXCompileShader("float4 main() : COLOR { return x; }", 34, 0, 0, "main", "ps_2_0",
+                                     0, &code, &err, 0) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        err = 0;
+        CHECK(214, D3DXCreateEffect(dev, fxsrc, sizeof fxsrc - 1, 0, 0, 0, 0, &fx, &err) == 0 && fx && !err);
+        t = ((GETH1)VT(fx)[13])(fx, "Rendu");
+        CHECK(215, t && CALL1(fx, 58, t) == 0);
+        h = ((GETBYNAME)VT(fx)[9])(fx, 0, "Intensity");
+        CHECK(216, h && ((SETFLOATFX)VT(fx)[30])(fx, h, 0.75f) == 0 && CALL2(fx, 31, h, &fv) == 0 &&
+                       fv == 0.75f);
+        hw = ((GETBYNAME)VT(fx)[9])(fx, 0, "WVP");
+        zero(&pd, sizeof pd);
+        CHECK(217, hw && CALL2(fx, 4, hw, &pd) == 0 && pd.Rows == 4 && pd.Columns == 4 &&
+                       pd.Class == 3 && pd.Type == 3 && pd.Name[0] == 'W');
+        a = ((GETBYNAME)VT(fx)[19])(fx, h, "UIName");
+        CHECK(218, a && CALL2(fx, 51, a, &str) == 0 && str && str[0] == 'I');
+        CHECK(219, CALL2(fx, 63, &np, 0) == 0 && np == 1 && CALL1(fx, 64, 0) == 0 &&
+                       CALL2(dev, 58, 27, &rs) == 0 && rs == 1);
+        CHECK(220, CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.75f &&
+                       ((SETFLOATFX)VT(fx)[30])(fx, h, 0.5f) == 0 && CALL0(fx, 65) == 0 &&
+                       CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.5f);
+        CHECK(221, CALL0(fx, 66) == 0 && CALL0(fx, 67) == 0 && CALL2(dev, 58, 27, &rs) == 0 && rs == 0);
+        CHECK(222, CALL0(fx, 2) == 0);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
     CALL0(buf, 2);
     CALL0(font, 2);
     CALL0(sp, 2);
@@ -1007,7 +1198,7 @@ void entry(void) {
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
-    out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
+    out("Direct3D 9 et D3DX9 : 47 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();

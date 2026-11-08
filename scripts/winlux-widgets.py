@@ -442,6 +442,9 @@ def panel_ids():
 def ids_with_button(ids, centered):
     """Windows 11 : à gauche de la barre centrée, à droite de la barre à gauche."""
     ids = [value for value in ids if value != PLUGIN]
+    if 44 in ids:  # barre flottante (#889) : au début de la capsule, après la réserve du coin gauche
+        at = ids.index(44) + 1
+        return ids[:at] + [PLUGIN] + ids[at:]
     if centered:
         return [PLUGIN] + ids
     tray = next((index for index, value in enumerate(ids) if value in (10, 4)), len(ids))
