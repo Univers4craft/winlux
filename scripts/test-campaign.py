@@ -1138,6 +1138,9 @@ ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
 ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
    and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
    "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+ok("cabinet_lz" in runtime_tests and '"FDICopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text()
+   and '"LZCopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text(),
+   "cabinet.dll (FDI) et lz32.dll (SZDD) réelles, testées par cabinet_lz.exe (#26)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
@@ -1254,6 +1257,10 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
+   and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
+   and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
+   "WPF InkCanvas : moteur de gestes mshwgst.dll intégré, l'Éditeur de ScreenToGif s'ouvre (#1132)")
 # #1138 : glisser-déposer OLE depuis une liste (FileZilla) : DragDetect,
 # LVN_BEGINDRAG / TVN_BEGINDRAGW, puis dépôt sur la cible OLE sous le pointeur.
 controls_rs = (runtime_dlls / "controls/comctl.rs").read_text(encoding="utf-8")
@@ -1270,4 +1277,8 @@ ok("fn D3D10CreateDeviceAndSwapChain1" in d3d10_rs and "fn device_table" in d3d1
    and "d3d1032" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
    and "device_table_has_101_methods" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Direct3D 10 et 10.1 sur Direct3D 11, x86 et x64 (#1090, étape 2)")
+# #1147 : CoIncrementMTAUsage / CoDecrementMTAUsage (WinRT côté .NET, Flow Launcher).
+ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
+   and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

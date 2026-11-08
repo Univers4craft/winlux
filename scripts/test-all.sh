@@ -108,6 +108,10 @@ step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" c
 # ERROR_FILE_NOT_FOUND, sans runtime enfant qui écrit sur stderr.
 step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- programme_windows_absent_echoue_sans_lancer_de_runtime
 
+# Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
+# TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
+step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- reconnaissance_de_gestes_disponible_sans_geste_reconnu moteur_de_gestes_declare_pour_wpf
+
 # Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
@@ -116,6 +120,10 @@ step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p win
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
 # passent par scripts/test-wow32.sh.
 step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_descs_round_trip mip_chain_counts so_entry_has_the_d3d11_layout device_table_has_101_methods
+
+# Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
+# CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
+step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
