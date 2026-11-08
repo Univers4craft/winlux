@@ -237,10 +237,14 @@ jobs:
         run: python3 -B scripts/test-tray-wifi-name.py
       - name: Fenêtres .exe, icône trouvée pour un chemin relatif ou Windows (#915)
         run: python3 -B scripts/test-window-icon-target.py
+      - name: Paint.NET, Direct3D 11.1 et Direct2D 1.1 avec effets personnalisés (#561)
+        run: python3 -B scripts/test-paintnet-d2d.py
       - name: Vérifier Bluetooth (rfkill), OpenGL et bus d'accessibilité dans l'image
         run: python3 -B scripts/test-session-plumbing.py
       - name: Son du lecteur multimédia et des enregistrements nommé dans le mélangeur (#1010)
         run: python3 -B scripts/test-audio-stream-names.py
+      - name: Lecteur multimédia, un seul flux audio par lecture (#1013)
+        run: python3 -B scripts/test-media-one-stream.py
       - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
         run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)

@@ -19,7 +19,6 @@ use super::ole32::Guid;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const WINCODEC_ERR_NOTINITIALIZED: i32 = 0x8898_2F0Cu32 as i32;
 const WINCODEC_ERR_CODECNOTHUMBNAIL: i32 = 0x8898_2F44u32 as i32;
@@ -806,10 +805,6 @@ unsafe extern "win64" fn create_bitmap_from_memory(
     new_source(Kind::Bitmap, Some(pix), out)
 }
 
-unsafe extern "win64" fn not_implemented() -> i32 {
-    E_NOTIMPL
-}
-
 static FACTORY_VT: VTable<29> = VTable([
     factory_qi as *const (),
     add_ref::<Factory> as *const (),
@@ -817,29 +812,29 @@ static FACTORY_VT: VTable<29> = VTable([
     create_decoder_from_filename as *const (),
     create_decoder_from_stream as *const (),
     create_decoder_from_file_handle as *const (),
-    not_implemented as *const (), // CreateComponentInfo
+    unsupported!("CreateComponentInfo"),
     create_decoder as *const (),
-    not_implemented as *const (), // CreateEncoder
-    not_implemented as *const (), // CreatePalette
+    unsupported!("CreateEncoder"),
+    unsupported!("CreatePalette"),
     create_format_converter as *const (),
     create_bitmap_scaler as *const (),
     create_bitmap_clipper as *const (),
     create_bitmap_flip_rotator as *const (),
     create_stream as *const (),
-    not_implemented as *const (), // CreateColorContext
-    not_implemented as *const (), // CreateColorTransformer
+    unsupported!("CreateColorContext"),
+    unsupported!("CreateColorTransformer"),
     create_bitmap as *const (),
     create_bitmap_from_source as *const (),
     create_bitmap_from_source_rect as *const (),
     create_bitmap_from_memory as *const (),
-    not_implemented as *const (), // CreateBitmapFromHBITMAP
-    not_implemented as *const (), // CreateBitmapFromHICON
-    not_implemented as *const (), // CreateComponentEnumerator
-    not_implemented as *const (), // CreateFastMetadataEncoderFromDecoder
-    not_implemented as *const (), // CreateFastMetadataEncoderFromFrameDecode
-    not_implemented as *const (), // CreateQueryWriter
-    not_implemented as *const (), // CreateQueryWriterFromReader
-    not_implemented as *const (), // CreateImageEncoder (IWICImagingFactory2)
+    unsupported!("CreateBitmapFromHBITMAP"),
+    unsupported!("CreateBitmapFromHICON"),
+    unsupported!("CreateComponentEnumerator"),
+    unsupported!("CreateFastMetadataEncoderFromDecoder"),
+    unsupported!("CreateFastMetadataEncoderFromFrameDecode"),
+    unsupported!("CreateQueryWriter"),
+    unsupported!("CreateQueryWriterFromReader"),
+    unsupported!("CreateImageEncoder"),
 ]);
 
 // --- Décodeur ---------------------------------------------------------------------
@@ -965,7 +960,7 @@ static DECODER_VT: VTable<14> = VTable([
     decoder_query_capability as *const (),
     decoder_initialize as *const (),
     decoder_container as *const (),
-    not_implemented as *const (), // GetDecoderInfo
+    unsupported!("GetDecoderInfo"),
     palette_unavailable as *const (),
     unsupported_operation as *const (), // GetMetadataQueryReader
     unsupported_operation as *const (), // GetPreview
@@ -1676,13 +1671,13 @@ static STREAM_VT: VTable<18> = VTable([
     stream_write as *const (),
     stream_seek as *const (),
     stream_set_size as *const (),
-    not_implemented as *const (), // CopyTo
+    unsupported!("CopyTo"),
     stream_commit as *const (),
-    not_implemented as *const (),  // Revert
+    unsupported!("Revert"),
     invalid_function as *const (), // LockRegion
     invalid_function as *const (), // UnlockRegion
     stream_stat as *const (),
-    not_implemented as *const (), // Clone
+    unsupported!("Clone"),
     stream_init_from_istream as *const (),
     stream_init_from_filename as *const (),
     stream_init_from_memory as *const (),

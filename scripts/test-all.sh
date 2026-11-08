@@ -95,6 +95,7 @@ fi
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 step "scripts/test-notices.py" python3 -B scripts/test-notices.py
+step "scripts/test-native-catalogue.py (raccourcis du menu, #992)" python3 -B scripts/test-native-catalogue.py
 step "scripts/test-update-signature.py" python3 -B scripts/test-update-signature.py
 step "scripts/test-ab-update.py (mises à jour A/B)" python3 -B scripts/test-ab-update.py
 
