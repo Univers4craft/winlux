@@ -831,6 +831,7 @@ PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
 PAGE_VPN = 40
 PAGE_HOTSPOT = 41
+PAGE_PARENTAL = 42
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1463,6 +1464,9 @@ def page_available(page, status=None):
         # NetworkManager et WireGuard (module du noyau) ou le greffon OpenVPN.
         module = vpn_page()
         return module is not None and module.available()
+    if page == PAGE_PARENTAL:
+        module = parental_module()
+        return module is not None and module.available()
     if page == PAGE_HOTSPOT:
         # Carte Wi-Fi capable de point d’accès (mode AP), dnsmasq : sinon pas de page.
         module = hotspot_page()
@@ -1762,6 +1766,30 @@ def installed_apps_module():
     return None
 
 
+_PARENTAL = []
+
+
+def parental_module():
+    """winlux-parental (#661), installé à côté ou dans scripts/ du dépôt."""
+    if _PARENTAL: return _PARENTAL[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-parental.py"), here.with_name("winlux-parental")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_parental_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_parental_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _PARENTAL.append(module)
+    return module
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1795,7 +1823,8 @@ class ExtraPages:
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
                    PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed",
-                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot"}
+                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot",
+                   PAGE_PARENTAL: "page_parental"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -3807,6 +3836,12 @@ class ExtraPages:
         kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
         self.installed_filter = None
         self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def page_parental(self):
+        """Contrôle parental (#661) : temps d’écran, applications et sites, activité."""
+        module = parental_module()
+        if module is not None:
+            self.parental_panel = module.page(self)
 
     def open_installed_windows(self):
         self.installed_filter = "windows"

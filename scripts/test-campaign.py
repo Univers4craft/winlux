@@ -463,7 +463,7 @@ with tempfile.TemporaryDirectory() as directory:
 
 # ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
 backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
-ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38' in settings,
    "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
 ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
    "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
@@ -625,13 +625,23 @@ root_relay = (SCRIPTS / "winlux-root.py").read_text()
 ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exists()
    and (SCRIPTS / "test-vpn-hotspot.py").exists()
    and 'if tool == "winlux-vpn":' in root_relay and 'if tool == "winlux-hotspot":' in root_relay
-   and '_t("VPN"), _t("Point d’accès sans fil mobile")]' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("VPN"), _t("Point d’accès sans fil mobile")' in (SCRIPTS / "winlux-settings.py").read_text()
    and "def tunnels():" in (SCRIPTS / "winlux-tray.py").read_text()
    and '"vpn": side_available("winlux-vpn")' in (SCRIPTS / "winlux-popup.py").read_text(),
    "Paramètres > VPN et Point d'accès sans fil mobile, relais root, zone de notification, Réglages rapides")
 # #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
 ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
    "Paramètres : interrupteurs activés à la couleur d'accent")
+# #661 : contrôle parental. Le compte surveillé ne lit ni ne modifie ses
+# réglages par le relais root, et ne déverrouille pas hors du temps permis.
+parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py")], capture_output=True, text=True,
+                          timeout=600)
+ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
+   and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
+   "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
+ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
+   "relais root : vrai code de retour malgré SIGCHLD ignoré")
 # #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
 # en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
 runtime_dlls = ROOT / "runtime/src/dlls"

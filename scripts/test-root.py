@@ -114,6 +114,15 @@ try:
     run = client("control", "share-add", str(work), extra_env={"DISPLAY": ""})
     check(run.returncode == 3, f"partage après élévation : {run}")
     check(log.read_text().splitlines()[-1].endswith(f"share-add {work}"), "partage exécuté")
+    # « Changer d'utilisateur » (#811) : la bascule échoue (code 3), le relais
+    # ne doit pas répondre « réussi » malgré SIGCHLD ignoré.
+    import json as _json
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.connect(str(work / "root.sock"))
+        sock.sendall(b'{"op": "switch", "user": "bob", "password": "bob"}\n')
+        answer = _json.loads(sock.makefile().readline())
+    check(answer.get("ok") is False and log.read_text().splitlines()[-1].endswith("session-switch bob"),
+          f"bascule ratée signalée comme ratée : {answer}")
     # La Boutique : refus d'une commande hors liste, même élevé.
     check(client("exec", "sh", "-c", "id").returncode != 0, "commande quelconque refusée par le serveur")
 finally:
