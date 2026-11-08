@@ -422,7 +422,7 @@ unsafe fn put_variant_str(out: *mut u8, s: Option<&str>) -> i32 {
     match s {
         Some(s) => {
             *(out as *mut u16) = VT_BSTR;
-            *(out.add(8) as *mut *mut u16) = bstr(s);
+            std::ptr::write_unaligned(out.add(8) as *mut *mut u16, bstr(s));
             S_OK
         }
         None => {
@@ -437,11 +437,13 @@ unsafe fn variant_text(v: *const u8) -> Option<String> {
     if v.is_null() {
         return None;
     }
-    let mut tmp = [0u8; 24];
+    // Aligné sur 8 octets, comme un vrai VARIANT.
+    let mut buf = [0u64; 3];
+    let tmp = &mut *(buf.as_mut_ptr() as *mut [u8; 24]);
     if super::oleaut32_var::change_type(tmp.as_mut_ptr().cast(), v.cast(), 0x409, 0, VT_BSTR) < 0 {
         return None;
     }
-    let s = read_bstr(*(tmp.as_ptr().add(8) as *const *const u16));
+    let s = read_bstr(std::ptr::read_unaligned(tmp.as_ptr().add(8) as *const *const u16));
     super::oleaut32::variant_clear(tmp.as_mut_ptr().cast());
     Some(s)
 }
@@ -453,9 +455,9 @@ unsafe fn variant_object(v: *const u8) -> Option<usize> {
     }
     let vt = *(v as *const u16);
     let p = match vt {
-        VT_UNKNOWN | VT_DISPATCH => *(v.add(8) as *const usize),
+        VT_UNKNOWN | VT_DISPATCH => std::ptr::read_unaligned(v.add(8) as *const usize),
         x if x == VT_BYREF | VT_UNKNOWN || x == VT_BYREF | VT_DISPATCH => {
-            let r = *(v.add(8) as *const *const usize);
+            let r = std::ptr::read_unaligned(v.add(8) as *const *const usize);
             if r.is_null() {
                 0
             } else {
@@ -1096,12 +1098,14 @@ unsafe extern "win64" fn d_create_node(
         return E_INVALIDARG;
     }
     // Type en nombre (NODE_ELEMENT…) ou en chaîne (« element »…).
-    let mut tmp = [0u8; 24];
+    // Aligné sur 8 octets, comme un vrai VARIANT.
+    let mut buf = [0u64; 3];
+    let tmp = &mut *(buf.as_mut_ptr() as *mut [u8; 24]);
     let k =
         if super::oleaut32_var::change_type(tmp.as_mut_ptr().cast(), kind.cast(), 0x409, 0, VT_I4)
             >= 0
         {
-            *(tmp.as_ptr().add(8) as *const i32)
+            std::ptr::read_unaligned(tmp.as_ptr().add(8) as *const i32)
         } else {
             match variant_text(kind).unwrap_or_default().as_str() {
                 "element" => 1,
@@ -1857,7 +1861,8 @@ mod tests {
             assert_eq!(get_root(doc, &mut root), S_OK);
             let get_attr: unsafe extern "win64" fn(*mut Obj, *const u16, *mut u8) -> i32 =
                 call(root, 44);
-            let mut v = [0u8; 24];
+            let mut buf = [0u64; 3];
+            let v = &mut *(buf.as_mut_ptr() as *mut [u8; 24]);
             let a = bstr("a");
             assert_eq!(get_attr(root, a, v.as_mut_ptr()), S_OK);
             assert_eq!(variant_text(v.as_ptr()).as_deref(), Some("1"));
