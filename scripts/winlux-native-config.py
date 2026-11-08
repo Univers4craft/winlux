@@ -172,15 +172,16 @@ def migrate_picom(shipped, target):
 
     Les fenêtres agrandies gardaient leurs coins arrondis et laissaient voir le
     fond d'écran aux quatre coins (#582) : la règle _WINLUX_MAXIMIZED manquait.
-    Un picom.conf personnel (qui ne commence pas par l'en-tête Winlux) est
+    Les fenêtres GTK à décorations côté client avaient une double ombre (#583) :
+    la règle _WINLUX_CSD manquait. Un picom.conf personnel (qui ne commence pas par l'en-tête Winlux) est
     toujours laissé tel quel.
     """
     try:
         current = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return
-    if current.startswith("# Compositeur de la session Winlux") and "_WINLUX_MAXIMIZED" not in current \
-            and shipped.is_file():
+    outdated = "_WINLUX_MAXIMIZED" not in current or "_WINLUX_CSD" not in current
+    if current.startswith("# Compositeur de la session Winlux") and outdated and shipped.is_file():
         shutil.copyfile(shipped, target)
 
 

@@ -6,6 +6,8 @@ Sources (chacune n'apparaît que si elle est utilisable sur la machine) :
   flatpak   dépôts Flatpak configurés (Flathub...), métadonnées AppStream XML
   snap      Snap Store, via l'API locale de snapd
   appimage  catalogue AppImageHub, AppImage installées dans ~/Applications
+  editeur   logiciels publiés pour Linux par leur éditeur (Claude, Spotify…),
+            integration/store-editeurs.json ; confirmation avant téléchargement
   windows   catalogues de logiciels Windows interchangeables (voir docs/STORE.md),
             exécutés par le runtime Winlux
 
@@ -112,7 +114,24 @@ T = {
            "apt_unpack": "Décompression de {name}...", "apt_configure": "Configuration de {name}...",
            "apt_installed": "{name} installé", "apt_remove": "Suppression de {name}...",
            "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...", "apt_working": "Opération en cours...",
-           "installed_version": "installé"},
+           "installed_version": "installé",
+           "ed_label": "Site de l'éditeur",
+           "ed_title": "Installer {name} ?",
+           "ed_update_title": "Mettre à jour {name} ?",
+           "ed_publisher": "Éditeur : {publisher}",
+           "ed_version": "Version : {version}",
+           "ed_source": "Source : {source}",
+           "ed_size": "Taille : {size} Mo",
+           "ed_licence_free": "Licence : logiciel libre",
+           "ed_licence_owner": "Licence : logiciel propriétaire de l'éditeur",
+           "ed_sha": "Empreinte SHA-256 vérifiée avant l'installation : {sha}",
+           "ed_repo": "Le paquet de l'éditeur peut ajouter son dépôt pour les mises à jour ; la désinstallation retire le logiciel et ce dépôt.",
+           "ed_ok": "Installer",
+           "ed_ok_update": "Mettre à jour",
+           "ed_cancel": "Annuler",
+           "ed_waiting": "En attente de votre confirmation...",
+           "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
+           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
            "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
@@ -129,7 +148,24 @@ T = {
            "apt_unpack": "Unpacking {name}...", "apt_configure": "Configuring {name}...",
            "apt_installed": "{name} installed", "apt_remove": "Removing {name}...",
            "apt_removed": "{name} removed", "apt_finish": "Finishing...", "apt_working": "Working...",
-           "installed_version": "installed"},
+           "installed_version": "installed",
+           "ed_label": "Publisher's website",
+           "ed_title": "Install {name}?",
+           "ed_update_title": "Update {name}?",
+           "ed_publisher": "Publisher: {publisher}",
+           "ed_version": "Version: {version}",
+           "ed_source": "Source: {source}",
+           "ed_size": "Size: {size} MB",
+           "ed_licence_free": "Licence: free software",
+           "ed_licence_owner": "Licence: publisher's proprietary software",
+           "ed_sha": "SHA-256 fingerprint checked before installation: {sha}",
+           "ed_repo": "The publisher's package may add its repository for updates; uninstalling removes the software and that repository.",
+           "ed_ok": "Install",
+           "ed_ok_update": "Update",
+           "ed_cancel": "Cancel",
+           "ed_waiting": "Waiting for your confirmation...",
+           "ed_cancelled": "Installation cancelled: nothing was downloaded.",
+           "ed_mismatch": "The file received is not the announced version: installation refused."},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
            "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
@@ -146,7 +182,24 @@ T = {
            "apt_unpack": "Desempaquetando {name}...", "apt_configure": "Configurando {name}...",
            "apt_installed": "{name} instalado", "apt_remove": "Eliminando {name}...",
            "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...", "apt_working": "Operación en curso...",
-           "installed_version": "instalado"},
+           "installed_version": "instalado",
+           "ed_label": "Sitio del editor",
+           "ed_title": "¿Instalar {name}?",
+           "ed_update_title": "¿Actualizar {name}?",
+           "ed_publisher": "Editor: {publisher}",
+           "ed_version": "Versión: {version}",
+           "ed_source": "Origen: {source}",
+           "ed_size": "Tamaño: {size} MB",
+           "ed_licence_free": "Licencia: software libre",
+           "ed_licence_owner": "Licencia: software propietario del editor",
+           "ed_sha": "Huella SHA-256 comprobada antes de la instalación: {sha}",
+           "ed_repo": "El paquete del editor puede añadir su repositorio para las actualizaciones; al desinstalar se quitan el programa y ese repositorio.",
+           "ed_ok": "Instalar",
+           "ed_ok_update": "Actualizar",
+           "ed_cancel": "Cancelar",
+           "ed_waiting": "Esperando su confirmación...",
+           "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
+           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
            "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
@@ -164,7 +217,24 @@ T = {
            "apt_unpack": "{name} wird entpackt...", "apt_configure": "{name} wird eingerichtet...",
            "apt_installed": "{name} installiert", "apt_remove": "{name} wird entfernt...",
            "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...", "apt_working": "Vorgang läuft...",
-           "installed_version": "installiert"},
+           "installed_version": "installiert",
+           "ed_label": "Website des Herausgebers",
+           "ed_title": "{name} installieren?",
+           "ed_update_title": "{name} aktualisieren?",
+           "ed_publisher": "Herausgeber: {publisher}",
+           "ed_version": "Version: {version}",
+           "ed_source": "Quelle: {source}",
+           "ed_size": "Größe: {size} MB",
+           "ed_licence_free": "Lizenz: freie Software",
+           "ed_licence_owner": "Lizenz: proprietäre Software des Herausgebers",
+           "ed_sha": "SHA-256-Fingerabdruck vor der Installation geprüft: {sha}",
+           "ed_repo": "Das Paket des Herausgebers kann seine Paketquelle für Updates hinzufügen; beim Deinstallieren werden das Programm und diese Quelle entfernt.",
+           "ed_ok": "Installieren",
+           "ed_ok_update": "Aktualisieren",
+           "ed_cancel": "Abbrechen",
+           "ed_waiting": "Warten auf Ihre Bestätigung...",
+           "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
+           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
 }
 
 
@@ -1246,6 +1316,257 @@ class AppImage(Source):
         return self.update(list(load_json(STATE, {}).get("appimage", {})), progress)
 
 
+# ---------------------------------------------------------------------------
+# Logiciels publiés pour Linux par leur éditeur (Claude, ChatGPT, Spotify…)
+# ---------------------------------------------------------------------------
+
+EDITEURS = Path(os.environ.get("WINLUX_STORE_EDITEURS", ROOT + "/usr/share/winlux/store-editeurs.json"))
+# Fenêtre de confirmation (produit, version, éditeur, source, empreinte ;
+# Annuler par défaut) : rien n'est téléchargé sans elle (#1056).
+CONFIRM = os.environ.get("WINLUX_STORE_CONFIRM", "/usr/lib/winlux/winlux-store-confirm")
+REPOS_TOOL = "winlux-store-repos"
+DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]{0,127}")
+DEB_VERSION = re.compile(r"[A-Za-z0-9.+:~_-]{1,128}")
+
+
+def editeur_defs():
+    """Entrées valides du catalogue des éditeurs ; une entrée « deb » sans
+    version ni empreinte épinglées reste masquée."""
+    out = []
+    for e in load_json(EDITEURS, {}).get("apps", []):
+        if not isinstance(e, dict) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", str(e.get("id", ""))):
+            continue
+        if not DEB_NAME.fullmatch(str(e.get("package", ""))):
+            continue
+        if e.get("kind") == "index" and str(e.get("base", "")).startswith(("https://", "file:")) and e.get("index"):
+            out.append(e)
+        elif e.get("kind") == "deb" and str(e.get("url", "")).startswith(("https://", "file:")) \
+                and re.fullmatch(r"[0-9a-f]{64}", str(e.get("sha256", ""))) and DEB_VERSION.fullmatch(str(e.get("version", ""))):
+            out.append(e)
+    return out
+
+
+def compare_versions(a, op, b):
+    try:
+        return subprocess.run(["dpkg", "--compare-versions", a, op, b], timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return a != b if op == "ne" else False
+
+
+def index_select(data, package):
+    """Paquet amd64 (ou all) le plus récent d'un index Packages d'éditeur :
+    nom de fichier, version et empreinte contrôlés avant tout usage."""
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+    best = None
+    for stanza in data.decode("utf-8", "replace").split("\n\n"):
+        f = dict(l.split(": ", 1) for l in stanza.splitlines() if ": " in l and not l.startswith(" "))
+        if f.get("Package") != package or f.get("Architecture") not in ("amd64", "all"):
+            continue
+        name = f.get("Filename", "")
+        if ".." in name.split("/") or name.startswith("/") or not re.fullmatch(r"[A-Za-z0-9_+~./:%-]+\.deb", name):
+            continue
+        if not re.fullmatch(r"[0-9a-f]{64}", f.get("SHA256", "")) or not DEB_VERSION.fullmatch(f.get("Version", "")):
+            continue
+        if best is None or compare_versions(f["Version"], "gt", best["Version"]):
+            best = f
+    return best
+
+
+def editeur_url(entry, filename):
+    """Adresse du paquet : relative à la racine du dépôt, y compris pour un
+    dépôt « plat » (Sublime Text : files/… sous download.sublimetext.com)."""
+    url = urllib.parse.urljoin(entry["base"], filename.removeprefix("./"))
+    host = urllib.parse.urlparse(url).hostname or ""
+    if url.startswith("file:") and entry["base"].startswith("file:"):
+        return url
+    return url if url.startswith("https://") and host in entry.get("hosts", []) else ""
+
+
+def editeur_info(entry, force=False):
+    """Version, adresse, empreinte et taille de ce que le Store installerait."""
+    if entry["kind"] == "deb":
+        return {"version": entry["version"], "source": entry["url"], "sha256": entry["sha256"],
+                "size": str(entry.get("size", ""))}
+    url = urllib.parse.urljoin(entry["base"], entry["index"])
+    data = fetch(url, 20) if force else cached_fetch(url, f"editeur-{entry['id']}.Packages")
+    if not data:
+        return {}
+    try:
+        f = index_select(data, entry["package"])
+    except (OSError, EOFError, ValueError):
+        return {}
+    if not f:
+        return {}
+    source = editeur_url(entry, f["Filename"])
+    if not source:
+        return {}
+    return {"version": f["Version"], "source": source, "sha256": f["SHA256"],
+            "size": f.get("Size", "") if f.get("Size", "").isdigit() else ""}
+
+
+def confirmation_text(entry, info, update=False):
+    """(titre, texte) montrés avant le téléchargement, dans la langue de l'interface."""
+    size = info.get("size", "")
+    lines = [tr("ed_publisher", publisher=entry["publisher"]), tr("ed_version", version=info["version"]),
+             tr("ed_source", source=info["source"])]
+    if size.isdigit():
+        lines.append(tr("ed_size", size=max(1, round(int(size) / 1_000_000))))
+    lines.append(tr("ed_licence_free" if entry.get("licence") == "libre" else "ed_licence_owner"))
+    lines.append(tr("ed_sha", sha=info["sha256"]))
+    lines.append(tr("ed_repo"))
+    return tr("ed_update_title" if update else "ed_title", name=entry["name"]), "\n".join(lines)
+
+
+def confirm(entry, info, update=False):
+    """True seulement si la personne a cliqué « Installer » ; Annuler, fermer
+    la fenêtre ou l'absence d'affichage valent refus."""
+    title, text = confirmation_text(entry, info, update)
+    try:
+        return subprocess.run([sys.executable, "-I", CONFIRM, "--title", title, "--text", text,
+                               "--ok", tr("ed_ok_update" if update else "ed_ok"), "--cancel", tr("ed_cancel")]
+                              if CONFIRM.endswith(".py") else
+                              [CONFIRM, "--title", title, "--text", text,
+                               "--ok", tr("ed_ok_update" if update else "ed_ok"), "--cancel", tr("ed_cancel")],
+                              timeout=3600).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class Editeur(Source):
+    """Paquet .deb de l'éditeur : index lu chez lui, confirmation, empreinte
+    vérifiée, puis apt-get sur le fichier ; désinstallation par purge, et le
+    dépôt que le paquet de l'éditeur a ajouté est retiré."""
+    name = "editeur"
+
+    @property
+    def label(self):
+        return tr("ed_label")
+
+    def available(self):
+        return have("dpkg-query") and have("apt-get") and bool(editeur_defs())
+
+    def entry(self, ref):
+        return next((e for e in editeur_defs() if e["id"] == ref), None)
+
+    def installed(self, package):
+        code, out = run(["dpkg-query", "-W", "-f", "${db:Status-Abbrev}\t${Version}", package], 15)
+        status, _, version = out.partition("\t")
+        return version.strip() if code == 0 and status.startswith("ii") else ""
+
+    def apps(self, force=False):
+        out, defs, infos = [], editeur_defs(), {}
+        def read(e):
+            infos[e["id"]] = editeur_info(e, False)
+        # Index des éditeurs lus en parallèle : un dépôt lent n'attend pas les autres.
+        threads = [threading.Thread(target=read, args=(e,), daemon=True) for e in ([] if OFFLINE else defs)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        for e in defs:
+            info = dict(infos.get(e["id"]) or {})
+            ver = self.installed(e["package"])
+            latest = info.get("version", "")
+            update = bool(ver and latest and compare_versions(latest, "gt", ver))
+            desc = e.get("desc", {})
+            app = App("editeur", e["id"], e["name"], summary=desc.get(LANG) or desc.get("fr", ""),
+                      category=known_category(e.get("category", "")), publisher=e["publisher"],
+                      license=tr("ed_licence_free" if e.get("licence") == "libre" else "ed_licence_owner"),
+                      homepage=e.get("site", ""), version=ver, available=latest or ver,
+                      state="u" if update else ("i" if ver else "a"), rank=1)
+            if info.get("size", "").isdigit():
+                app.size_kb = int(info["size"]) // 1024
+            out.append(app)
+        return out
+
+    def details(self, app):
+        e = self.entry(app.ref)
+        if e:
+            desc = e.get("desc", {})
+            info = editeur_info(e, False)
+            app.description = [desc.get(LANG) or desc.get("fr", "")]
+            if info:
+                app.description.append(tr("ed_source", source=info["source"]))
+                app.description.append(tr("ed_sha", sha=info["sha256"]))
+            app.description.append(tr("ed_repo"))
+        return app
+
+    def fetch_deb(self, e, info, progress):
+        """Téléchargement dans un dossier neuf et vide ; version, nom du paquet
+        et empreinte contrôlés. Rend le chemin du fichier ou un code d'erreur."""
+        CACHE.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="editeur-", dir=CACHE))
+        path = work / f"{e['package']}.deb"
+        progress(10, tr("download", name=e["name"]))
+        try:
+            subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https,file",
+                            "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
+                            "--retry", "3", "--max-filesize", "1073741824", "--output", str(path), info["source"]],
+                           check=True, timeout=7200, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            shutil.rmtree(work, ignore_errors=True)
+            return 7
+        if sha256_file(path) != info["sha256"]:
+            shutil.rmtree(work, ignore_errors=True)
+            return 5
+        try:
+            fields = subprocess.run(["dpkg-deb", "-f", str(path), "Package", "Version"], capture_output=True,
+                                    text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            fields = ""
+        got = dict(l.split(": ", 1) for l in fields.splitlines() if ": " in l)
+        if got.get("Package") != e["package"] or got.get("Version") != info["version"]:
+            shutil.rmtree(work, ignore_errors=True)
+            return 10
+        return path
+
+    def install(self, ref, progress, update=False):
+        e = self.entry(ref)
+        if e is None:
+            return 2
+        progress(2, tr("latest"))
+        info = editeur_info(e, True)
+        if not info:
+            return 7
+        progress(5, tr("ed_waiting"))
+        if not confirm(e, info, update):
+            return 9
+        path = self.fetch_deb(e, info, progress)
+        if isinstance(path, int):
+            return path
+        try:
+            return SOURCE_BY_NAME["apt"].apt(["install", "--", str(path)], progress)
+        finally:
+            shutil.rmtree(path.parent, ignore_errors=True)
+
+    def remove(self, ref, progress):
+        e = self.entry(ref)
+        if e is None:
+            return 2
+        code = SOURCE_BY_NAME["apt"].apt(["purge", "--autoremove", "--", e["package"]], progress)
+        if code == 0:
+            # Le paquet de l'éditeur a pu déclarer son dépôt et sa clé : partis aussi.
+            cmd = admin([REPOS_TOOL, "clean", e["id"]])
+            if cmd:
+                run(cmd, 120)
+        return code
+
+    def update(self, refs, progress):
+        code = 0
+        for ref in refs:
+            code = self.install(ref, progress, update=True) or code
+        return code
+
+
 class WindowsCatalog:
     """Fournisseur de catalogue Windows interchangeable.
 
@@ -1657,9 +1978,9 @@ def install_windows_file(path, progress, args=(), entry=None):
 
 
 FLATPAK = Flatpak()
-SOURCES = [Apt(), FLATPAK, Snap(), AppImage(), Windows()]
+SOURCES = [Apt(), Editeur(), FLATPAK, Snap(), AppImage(), Windows()]
 SOURCE_BY_NAME = {s.name: s for s in SOURCES}
-PRIORITY = {"apt": 0, "flatpak": 1, "snap": 2, "appimage": 3, "windows": 4}
+PRIORITY = {"apt": 0, "editeur": 0.5, "flatpak": 1, "snap": 2, "appimage": 3, "windows": 4}
 
 # ---------------------------------------------------------------------------
 # Index de la bibliothèque
@@ -1843,7 +2164,7 @@ class Progress:
         if self.hook:
             self.hook(percent)
 
-MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha"}
+MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch"}
 
 def apt_candidate(name):
     """Le paquet existe dans les dépôts APT configurés (version candidate)."""

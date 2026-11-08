@@ -1,13 +1,16 @@
 #!/usr/bin/python3
-"""Fenêtres agrandies à coins carrés (#582).
+"""Fenêtres agrandies à coins carrés (#582) et ombre unique des fenêtres GTK
+à décorations côté client (#583).
 
-Hors affichage : la règle _WINLUX_MAXIMIZED est dans le picom.conf livré, le
+Hors affichage : les règles _WINLUX_MAXIMIZED et _WINLUX_CSD sont dans le
+picom.conf livré (plus de « _GTK_FRAME_EXTENTS@ », sans effet sur picom 12.5), le
 veilleur est installé et lancé par les deux sessions, et la migration remplace
 un ancien picom.conf Winlux sans toucher à un picom.conf personnel.
 
 Avec un affichage (xvfb-run) et openbox : une fenêtre agrandie reçoit
 _WINLUX_MAXIMIZED = 1 sur son cadre (veilleur en --once puis en continu), et
-la perd quand elle est restaurée.
+la perd quand elle est restaurée ; une fenêtre qui pose _GTK_FRAME_EXTENTS
+reçoit _WINLUX_CSD = 1 sur son cadre et la perd quand la propriété disparaît.
 """
 import ast
 import os
@@ -36,6 +39,10 @@ def offline_checks():
     check(text.startswith("# Compositeur de la session Winlux"), "picom.conf livré : en-tête Winlux absent (migration impossible)")
     check(re.search(r'\{ match = "_WINLUX_MAXIMIZED = 1"; corner-radius = 0;', text) is not None,
           "picom.conf livré : règle _WINLUX_MAXIMIZED absente")
+    check(re.search(r'\{ match = "_WINLUX_CSD = 1"; shadow = false;', text) is not None,
+          "picom.conf livré : règle _WINLUX_CSD absente (double ombre GTK, #583)")
+    check("_GTK_FRAME_EXTENTS@" not in text,
+          "picom.conf livré : règle « _GTK_FRAME_EXTENTS@ » sans effet sur picom 12.5 (#583)")
     stage = (HERE / "stage-desktop-components.sh").read_text(encoding="utf-8")
     check(" winlux-maximized-watch " in stage, "winlux-maximized-watch non installé dans l'image")
     for session in ("winlux-user-session.sh", "winlux-native-session.sh"):
@@ -59,6 +66,13 @@ def offline_checks():
                                  if "_WINLUX_MAXIMIZED" not in line) + "\n", encoding="utf-8")
         migrate(SHIPPED, old)
         check(old.read_bytes() == SHIPPED.read_bytes(), "migration : ancien picom.conf Winlux non remplacé")
+        # picom.conf de la 0.2.20 : règle _WINLUX_MAXIMIZED, mais « _GTK_FRAME_EXTENTS@ ».
+        before_583 = folder / "avant-583.conf"
+        before_583.write_text("\n".join(line for line in SHIPPED.read_text(encoding="utf-8").splitlines()
+                                        if "_WINLUX_CSD" not in line) + "\n"
+                              + '  { match = "_GTK_FRAME_EXTENTS@"; shadow = false; },\n', encoding="utf-8")
+        migrate(SHIPPED, before_583)
+        check(before_583.read_bytes() == SHIPPED.read_bytes(), "migration : picom.conf sans _WINLUX_CSD non remplacé")
         personal = folder / "perso.conf"
         mine = "# Mon picom\ncorner-radius = 12;\n"
         personal.write_text(mine, encoding="utf-8")
@@ -90,8 +104,15 @@ def frame_of(window):
     return None
 
 
-def marker(frame):
-    return "_WINLUX_MAXIMIZED(CARDINAL) = 1" in run("xprop", "-id", frame, "_WINLUX_MAXIMIZED")
+def marker(frame, name="_WINLUX_MAXIMIZED"):
+    return f"{name}(CARDINAL) = 1" in run("xprop", "-id", frame, name)
+
+
+def csd(window, on):
+    if on:
+        run("xprop", "-id", window, "-f", "_GTK_FRAME_EXTENTS", "32c", "-set", "_GTK_FRAME_EXTENTS", "12,12,12,12")
+    else:
+        run("xprop", "-id", window, "-remove", "_GTK_FRAME_EXTENTS")
 
 
 def wait_for(predicate, seconds=5):
@@ -176,6 +197,13 @@ def display_checks():
             time.sleep(0.5)
             subprocess.run([sys.executable, "-B", str(WATCH), "--once"], timeout=10)
             check(not marker(frame), "--once : marque restée après restauration")
+            check(not marker(frame, "_WINLUX_CSD"), "--once : fenêtre sans _GTK_FRAME_EXTENTS marquée CSD")
+            csd(window, True)
+            subprocess.run([sys.executable, "-B", str(WATCH), "--once"], timeout=10)
+            check(marker(frame, "_WINLUX_CSD"), "--once : _GTK_FRAME_EXTENTS non recopiée en _WINLUX_CSD sur le cadre")
+            csd(window, False)
+            subprocess.run([sys.executable, "-B", str(WATCH), "--once"], timeout=10)
+            check(not marker(frame, "_WINLUX_CSD"), "--once : _WINLUX_CSD restée sans _GTK_FRAME_EXTENTS")
 
             # En continu : suit l'agrandissement et la restauration.
             watch = subprocess.Popen([sys.executable, "-B", str(WATCH)])
@@ -185,6 +213,10 @@ def display_checks():
             check(wait_for(lambda: marker(frame)), "veilleur : marque non posée à l'agrandissement")
             maximize(title, False)
             check(wait_for(lambda: not marker(frame)), "veilleur : marque non retirée à la restauration")
+            csd(window, True)
+            check(wait_for(lambda: marker(frame, "_WINLUX_CSD")), "veilleur : _WINLUX_CSD non posée")
+            csd(window, False)
+            check(wait_for(lambda: not marker(frame, "_WINLUX_CSD")), "veilleur : _WINLUX_CSD non retirée")
             check(watch.poll() is None, "veilleur arrêté en cours de route")
         finally:
             for process in reversed(processes):
@@ -205,7 +237,7 @@ def main():
     for problem in problems:
         print("ÉCHEC : " + problem, file=sys.stderr)
     if not problems:
-        print("OK: coins carrés des fenêtres agrandies (règle picom, veilleur, migration)")
+        print("OK: coins carrés des fenêtres agrandies et ombre unique des fenêtres GTK CSD (règles picom, veilleur, migration)")
     return 1 if problems else 0
 
 

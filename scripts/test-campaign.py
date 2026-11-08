@@ -753,6 +753,12 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
+# #237 : entrée MIDI sur les claviers branchés, testée sans matériel par jeux32/jeux64.
+ok((runtime_dlls / "winmm_midi_in.rs").exists()
+   and "/dev/snd" in (runtime_dlls / "winmm_midi_in.rs").read_text()
+   and "WINLUX_MIDI_IN_DIR" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "midi_in_tests" in (ROOT / "testc/wow32/jeux32.c").read_text(),
+   "entrée MIDI : midiIn* lit /dev/snd/midiC*D* (statut courant, temps réel, système exclusif)")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
@@ -959,6 +965,13 @@ ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
    and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
    and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
+
+# #1056 : logiciels publiés pour Linux par leur éditeur (Claude, ChatGPT…) dans le Store.
+ok("class Editeur(Source)" in (SCRIPTS / "winlux-store.py").read_text()
+   and "set_default_response(Gtk.ResponseType.CANCEL)" in (SCRIPTS / "winlux-store-confirm.py").read_text()
+   and '"winlux-store-repos"' in (SCRIPTS / "winlux-root.py").read_text()
+   and "test-store-editeurs.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "Store : logiciels des éditeurs, confirmation (Annuler par défaut), SHA-256, purge et dépôt retiré (#1056)")
 
 # ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
 clr = ROOT / "runtime/src/clr"

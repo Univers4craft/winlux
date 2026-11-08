@@ -3,11 +3,23 @@
 
 Windows 11 arrondit les fenêtres, sauf quand elles sont agrandies : elles
 touchent alors les bords de l'écran et un coin arrondi laisserait voir le fond
-d'écran aux quatre coins. picom 12 ne lit pas les propriétés de la fenêtre de
-l'application dans ses règles (seulement celles du cadre d'openbox) : sa
-règle ne peut donc pas tester _NET_WM_STATE. Ce veilleur recopie l'état
+d'écran aux quatre coins. Le manuel de picom dit qu'une règle lit la fenêtre
+de l'application avec le suffixe « @ » ; en pratique, picom 12.5 ne retrouvait
+pas _NET_WM_STATE du client, même avec « @ » (essai sur un vrai PC, 07/11/2026,
+journal « Property _NET_WM_STATE not found on window <cadre> ») : seules les
+propriétés du cadre d'openbox correspondaient. Ce veilleur recopie donc l'état
 « agrandie » sur le cadre, sous la forme _WINLUX_MAXIMIZED = 1, et la règle
 de ~/.config/picom/picom.conf met alors corner-radius à 0.
+
+Même chose pour les fenêtres GTK à décorations côté client, qui dessinent
+leur propre ombre et posent _GTK_FRAME_EXTENTS sur leur fenêtre : recopié en
+_WINLUX_CSD = 1 sur le cadre, la règle picom retire alors l'ombre de picom
+(double ombre sinon, #583). La règle « _GTK_FRAME_EXTENTS@ » d'avant ne
+correspondait pas, pour la même raison.
+
+Ne pas remplacer ce veilleur par une règle « @ » sans l'avoir vue marcher sur
+une vraie fenêtre, capture prise après picom (QEMU screendump) à l'appui :
+une capture de la racine par Gdk ou xwd ne voit pas le rendu de picom.
 
     winlux-maximized-watch          veille (lancé par la session)
     winlux-maximized-watch --once   synchronise une fois puis quitte (tests)
@@ -60,6 +72,8 @@ def main():
     max_vert = atom("_NET_WM_STATE_MAXIMIZED_VERT")
     max_horz = atom("_NET_WM_STATE_MAXIMIZED_HORZ")
     marker = atom("_WINLUX_MAXIMIZED")
+    gtk_extents = atom("_GTK_FRAME_EXTENTS")
+    csd_marker = atom("_WINLUX_CSD")
 
     def read_list(window, prop, kind):
         real_type, real_format = ulong(), C.c_int()
@@ -93,20 +107,25 @@ def main():
 
     marked = {}
 
+    def mark(frame, prop, on):
+        if on:
+            one = ulong(1)
+            X.XChangeProperty(display, frame, prop, XA_CARDINAL, 32, 0, C.byref(one), 1)
+        else:
+            X.XDeleteProperty(display, frame, prop)
+
     def update(window):
         states = read_list(window, wm_state, XA_ATOM)
         maximized = max_vert in states and max_horz in states
+        csd = bool(read_list(window, gtk_extents, XA_CARDINAL))
         frame = frame_of(window)
         if frame is None or frame == window:
             return
-        if marked.get(window) == (frame, maximized):
+        if marked.get(window) == (frame, maximized, csd):
             return
-        if maximized:
-            one = ulong(1)
-            X.XChangeProperty(display, frame, marker, XA_CARDINAL, 32, 0, C.byref(one), 1)
-        else:
-            X.XDeleteProperty(display, frame, marker)
-        marked[window] = (frame, maximized)
+        mark(frame, marker, maximized)
+        mark(frame, csd_marker, csd)
+        marked[window] = (frame, maximized, csd)
 
     watched = set()
 
@@ -136,7 +155,7 @@ def main():
         window, prop = ulong(event[4]).value, ulong(event[5]).value
         if window == root and prop == client_list:
             rescan()
-        elif prop == wm_state and window in watched:
+        elif prop in (wm_state, gtk_extents) and window in watched:
             update(window)
         X.XFlush(display)
 
