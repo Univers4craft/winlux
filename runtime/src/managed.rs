@@ -87,6 +87,45 @@ pub fn managed_image(exe: &Path, bytes: &[u8]) -> Option<Vec<u8>> {
     has_clr_header(&assembly).then_some(assembly)
 }
 
+/// Update.exe de Squirrel (applis Electron : Claude, Discord…) : l'assembly
+/// s'appelle « Update » et embarque l'espace de noms `Squirrel`. Winlux le
+/// sert par l'outil natif `winlux-squirrel-update` plutôt que par le CLR, qui
+/// n'a pas encore la BCL qu'il réclame (#1190).
+pub fn is_squirrel_update(assembly: &[u8]) -> bool {
+    use crate::clr::metadata::Assembly;
+    use crate::clr::tables::TableId;
+    let Ok(a) = Assembly::parse(assembly.to_vec()) else {
+        return false;
+    };
+    if a.row_count(TableId::Assembly) == 0
+        || !a
+            .get_string(a.get_assembly(1).name)
+            .eq_ignore_ascii_case("Update")
+    {
+        return false;
+    }
+    (1..=a.row_count(TableId::TypeDef)).any(|t| {
+        let ns = a.get_string(a.get_type_def(t).namespace);
+        ns == "Squirrel" || ns.starts_with("Squirrel.")
+    })
+}
+
+/// Remplace le processus par `winlux-squirrel-update RACINE ARGS…`, RACINE
+/// étant le dossier d'Update.exe. Ne revient qu'en cas d'échec.
+pub fn exec_squirrel_update(exe: &Path) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let tool = std::env::var_os("WINLUX_SQUIRREL_UPDATE")
+        .unwrap_or_else(|| "/usr/lib/winlux/winlux-squirrel-update".into());
+    let root = std::fs::canonicalize(exe)
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| Path::new(".").to_path_buf());
+    std::process::Command::new(tool)
+        .arg(root)
+        .args(std::env::args_os().skip(2))
+        .exec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +186,20 @@ mod tests {
         assert!(bundles_own_runtime(&exe));
         assert!(managed_image(&exe, b"MZ natif").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn update_exe_de_squirrel_est_reconnu() {
+        use crate::clr::emit::{Builder, PUBLIC};
+        let image = |asm: &str, ns: &str| {
+            let mut b = Builder::new(asm);
+            b.type_def(PUBLIC, ns, "UpdateManager", 0);
+            b.build(0)
+        };
+        assert!(is_squirrel_update(&image("Update", "Squirrel")));
+        assert!(is_squirrel_update(&image("update", "Squirrel.Update")));
+        assert!(!is_squirrel_update(&image("Update", "Autre")));
+        assert!(!is_squirrel_update(&image("Programme", "Squirrel")));
+        assert!(!is_squirrel_update(b"MZ"));
     }
 }
