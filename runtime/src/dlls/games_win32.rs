@@ -706,7 +706,7 @@ pub fn user32_exports() -> Exports {
         "CopyImage" => fn CopyImage,
         "CreateIconFromResource" => fn new_icon, "CreateIconFromResourceEx" => fn new_icon, "CreateIconIndirect" => fn new_icon,
         "CreateIcon" => fn new_icon, "CreateCursor" => fn new_icon,
-        "GetClipCursor" => fn GetClipCursor, "GetMessageExtraInfo" => fn zero, "SetMessageExtraInfo" => fn zero,
+        "GetClipCursor" => fn GetClipCursor,
         "RegisterRawInputDevices" => fn ok1, "GetRegisteredRawInputDevices" => fn GetRegisteredRawInputDevices,
         "GetRawInputDeviceList" => fn GetRawInputDeviceList,
         "GetRawInputDeviceInfoA" => fn GetRawInputDeviceInfo, "GetRawInputDeviceInfoW" => fn GetRawInputDeviceInfo,

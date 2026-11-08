@@ -172,6 +172,8 @@ ole32.rs	StatStg	a-verifier
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
+oleaut32_typelib.rs	InfoObj	interne	ICreateTypeInfo2/ITypeInfo de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
+oleaut32_typelib.rs	LibObj	interne	ICreateTypeLib2/ITypeLib de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 schannel.rs	SecBuffer	a-verifier	
@@ -248,3 +250,4 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
+d2d1_effects.rs	Imp	interne	test unitaire (#1206)
