@@ -44,19 +44,19 @@ const IID_IOLEADVISEHOLDER: Guid = ole_guid(0x111);
 const IID_IOLEOBJECT: Guid = ole_guid(0x112);
 const IID_IRUNNABLEOBJECT: Guid = ole_guid(0x126);
 
-unsafe fn slot(obj: usize, n: usize) -> usize {
+pub(super) unsafe fn slot(obj: usize, n: usize) -> usize {
     *(*(obj as *const *const usize)).add(n)
 }
 unsafe fn add_ref(obj: usize) {
     let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(slot(obj, 1));
     f(obj);
 }
-unsafe fn release(obj: usize) {
+pub(super) unsafe fn release(obj: usize) {
     let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(slot(obj, 2));
     f(obj);
 }
 /// QueryInterface : l'interface demandée, ou 0.
-unsafe fn query(obj: usize, iid: &Guid) -> usize {
+pub(super) unsafe fn query(obj: usize, iid: &Guid) -> usize {
     let f: unsafe extern "win64" fn(usize, *const Guid, *mut usize) -> i32 =
         std::mem::transmute(slot(obj, 0));
     let mut out = 0usize;
@@ -70,7 +70,7 @@ unsafe fn query(obj: usize, iid: &Guid) -> usize {
 // ── Création, chargement, enregistrement ────────────────────────────
 
 /// Donne son site client à l'objet (IOleObject::SetClientSite).
-unsafe fn set_client_site(unk: usize, site: usize) -> i32 {
+pub(super) unsafe fn set_client_site(unk: usize, site: usize) -> i32 {
     if site == 0 {
         return S_OK;
     }
@@ -85,7 +85,7 @@ unsafe fn set_client_site(unk: usize, site: usize) -> i32 {
 }
 
 /// Rend l'interface demandée de l'objet créé, qui est relâché ensuite.
-unsafe fn hand_out(unk: usize, riid: *const Guid, out: *mut usize) -> i32 {
+pub(super) unsafe fn hand_out(unk: usize, riid: *const Guid, out: *mut usize) -> i32 {
     let iid = std::ptr::read_unaligned(riid);
     let q = query(unk, &iid);
     release(unk);

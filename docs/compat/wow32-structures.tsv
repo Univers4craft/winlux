@@ -176,6 +176,7 @@ ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), 
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
+ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
