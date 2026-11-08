@@ -59,6 +59,8 @@ pub struct FieldInfo {
 #[derive(Debug, Clone)]
 pub struct MethodInfo {
     pub name: String,
+    /// Assembly qui déclare la méthode (indice dans le domaine chargé).
+    pub assembly: usize,
     pub token: u32,
     pub is_virtual: bool,
     pub param_count: usize,
@@ -184,7 +186,13 @@ impl TypeRegistry {
 
     /// Redéfinition la plus dérivée d'une méthode virtuelle, recherchée par nom
     /// et nombre de paramètres en remontant la hiérarchie depuis `type_id`.
-    pub fn find_override(&self, type_id: TypeId, name: &str, param_count: usize) -> Option<u32> {
+    /// Redéfinition virtuelle la plus dérivée : (assembly, jeton MethodDef).
+    pub fn find_override(
+        &self,
+        type_id: TypeId,
+        name: &str,
+        param_count: usize,
+    ) -> Option<(usize, u32)> {
         let mut current = type_id;
         while let Some(ti) = self.get(current) {
             let found = ti
@@ -192,7 +200,7 @@ impl TypeRegistry {
                 .iter()
                 .find(|m| m.is_virtual && m.name == name && m.param_count == param_count);
             if let Some(m) = found {
-                return Some(m.token);
+                return Some((m.assembly, m.token));
             }
             current = ti.parent;
         }

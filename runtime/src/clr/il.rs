@@ -5,6 +5,7 @@
 //! `run_loop`, qui rend la main à l'appelant au `ret` de la méthode.
 
 use super::bcl;
+use super::domain::AsmInfo;
 use super::exceptions::{self, ClrException, Handler};
 use super::gc;
 use super::metadata::{self, Assembly, ElementType};
@@ -12,6 +13,7 @@ use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::tables::{CodedIndex, TableId, Token};
 use super::types;
+use std::collections::HashSet;
 
 /// Profondeur d'appel maximale avant StackOverflowException.
 const MAX_DEPTH: usize = 4000;
@@ -162,7 +164,13 @@ struct CallFrame {
 
 pub struct Interpreter {
     frames: Vec<CallFrame>,
+    /// Assembly de la méthode en cours ; les autres attendent dans `parked`.
     pub assembly: Assembly,
+    parked: Vec<Option<Assembly>>,
+    current: usize,
+    domain: Vec<AsmInfo>,
+    /// Types dont le constructeur statique a été lancé.
+    initialized: HashSet<types::TypeId>,
 }
 
 pub enum ExecResult {
@@ -172,7 +180,8 @@ pub enum ExecResult {
 
 /// Méthode désignée par un jeton d'appel.
 enum Target {
-    Managed(u32),
+    /// Méthode IL : (assembly, ligne MethodDef).
+    Managed(usize, u32),
     External {
         namespace: String,
         class: String,
@@ -188,14 +197,74 @@ enum StepResult {
 }
 
 impl Interpreter {
-    pub fn new(assembly: Assembly) -> Self {
+    pub fn new(assemblies: Vec<Assembly>, domain: Vec<AsmInfo>) -> Self {
+        let mut parked: Vec<Option<Assembly>> = assemblies.into_iter().map(Some).collect();
+        let assembly = parked[0].take().expect("assembly du programme");
         Interpreter {
             frames: Vec::new(),
             assembly,
+            parked,
+            current: 0,
+            domain,
+            initialized: HashSet::new(),
         }
     }
 
+    /// Rend `index` assembly courante ; renvoie la précédente.
+    fn enter(&mut self, index: usize) -> usize {
+        let previous = self.current;
+        if index != previous {
+            let next = self.parked[index].take().expect("assembly déjà active");
+            let old = std::mem::replace(&mut self.assembly, next);
+            self.parked[previous] = Some(old);
+            self.current = index;
+        }
+        previous
+    }
+
+    /// Exécute une méthode d'une assembly quelconque du domaine.
+    fn execute_in(&mut self, asm: usize, method_row: u32, args: Vec<Value>) -> ExecResult {
+        let previous = self.enter(asm);
+        let result = self.execute_method(method_row, args);
+        self.enter(previous);
+        result
+    }
+
+    /// Lance une seule fois le constructeur statique d'un type de l'assembly
+    /// `asm`, avant son premier usage (ECMA-335 §II.10.5.3.1).
+    fn ensure_initialized(&mut self, asm: usize, type_row: u32) -> Result<(), ClrException> {
+        let Some(id) = self.domain[asm]
+            .type_ids
+            .get(type_row as usize)
+            .copied()
+            .flatten()
+        else {
+            return Ok(());
+        };
+        if !self.initialized.insert(id) {
+            return Ok(());
+        }
+        let previous = self.enter(asm);
+        let cctor = self.assembly.type_methods(type_row).find(|&m| {
+            let md = self.assembly.get_method_def(m);
+            md.is_cctor() && md.rva != 0 && self.assembly.get_string(md.name) == ".cctor"
+        });
+        let result = match cctor {
+            Some(m) => match self.execute_method(m, Vec::new()) {
+                ExecResult::Exception(e) => Err(e),
+                ExecResult::Return(_) => Ok(()),
+            },
+            None => Ok(()),
+        };
+        self.enter(previous);
+        result
+    }
+
     pub fn execute_method(&mut self, method_row: u32, args: Vec<Value>) -> ExecResult {
+        let owner = self.find_declaring_type(method_row);
+        if let Err(e) = self.ensure_initialized(self.current, owner) {
+            return ExecResult::Exception(e);
+        }
         let md = self.assembly.get_method_def(method_row);
         let sig = metadata::decode_method_sig(self.assembly.get_blob(md.signature));
 
@@ -284,9 +353,9 @@ impl Interpreter {
             if let Some(Value::Ref(this)) = args.first() {
                 if let Some(type_id) = gc::type_of(*this) {
                     let (name, argc) = self.method_name_and_arity(token);
-                    let row = types::with_types(|reg| reg.find_override(type_id, &name, argc));
-                    if let Some(row) = row {
-                        target = Target::Managed(Token(row).rid());
+                    let found = types::with_types(|reg| reg.find_override(type_id, &name, argc));
+                    if let Some((asm, row)) = found {
+                        target = Target::Managed(asm, Token(row).rid());
                     }
                 }
             } else if matches!(args.first(), Some(Value::Null)) {
@@ -294,7 +363,7 @@ impl Interpreter {
             }
         }
         match target {
-            Target::Managed(row) => match self.execute_method(row, args) {
+            Target::Managed(asm, row) => match self.execute_in(asm, row, args) {
                 ExecResult::Return(v) => Ok(v),
                 ExecResult::Exception(e) => Err(e),
             },
@@ -312,7 +381,7 @@ impl Interpreter {
     fn resolve_method(&self, token: u32) -> Target {
         let row = Token(token).rid();
         match Token(token).table() {
-            t if t == TableId::MethodDef as u8 => Target::Managed(row),
+            t if t == TableId::MethodDef as u8 => Target::Managed(self.current, row),
             t if t == TableId::MethodSpec as u8 => {
                 let spec = self.assembly.get_method_spec(row);
                 let (table, inner) = CodedIndex::MethodDefOrRef.decode(spec.method);
@@ -325,6 +394,12 @@ impl Interpreter {
                 let (parent, prow) = CodedIndex::MemberRefParent.decode(mr.class);
                 let (namespace, class) = match parent {
                     Some(TableId::TypeRef) => {
+                        if let Some((asm, type_row)) = self.resolve_type_ref(prow) {
+                            if let Some(m) = self.find_method_in(asm, type_row, &name, mr.signature)
+                            {
+                                return Target::Managed(asm, m);
+                            }
+                        }
                         let tr = self.assembly.get_type_ref(prow);
                         (tr.namespace, tr.name)
                     }
@@ -335,7 +410,7 @@ impl Interpreter {
                                 == name
                         });
                         if let Some(m) = found {
-                            return Target::Managed(m);
+                            return Target::Managed(self.current, m);
                         }
                         let td = self.assembly.get_type_def(prow);
                         (td.namespace, td.name)
@@ -471,7 +546,7 @@ impl Interpreter {
             return Ok(v);
         };
         match types::with_types(|reg| reg.find_override(type_id, "ToString", 0)) {
-            Some(token) => match self.execute_method(Token(token).rid(), vec![v]) {
+            Some((asm, token)) => match self.execute_in(asm, Token(token).rid(), vec![v]) {
                 ExecResult::Return(s) => Ok(s),
                 ExecResult::Exception(e) => Err(e),
             },
@@ -480,9 +555,127 @@ impl Interpreter {
     }
 
     fn find_declaring_type(&self, method_row: u32) -> u32 {
-        (1..=self.assembly.row_count(TableId::TypeDef))
-            .find(|&i| self.assembly.type_methods(i).contains(&method_row))
+        self.domain[self.current]
+            .method_owner
+            .get(method_row as usize)
+            .copied()
             .unwrap_or(0)
+    }
+
+    /// Assembly chargée qui définit le type d'une TypeRef de l'assembly
+    /// courante : (assembly, ligne TypeDef).
+    fn resolve_type_ref(&self, row: u32) -> Option<(usize, u32)> {
+        self.resolve_type_ref_in(&self.assembly, row, 0)
+    }
+
+    fn resolve_type_ref_in(&self, a: &Assembly, row: u32, depth: u32) -> Option<(usize, u32)> {
+        if depth > 16 || row == 0 || row > a.row_count(TableId::TypeRef) {
+            return None;
+        }
+        let tr = a.get_type_ref(row);
+        let ns = a.get_string(tr.namespace);
+        let name = a.get_string(tr.name);
+        let (scope, srow) = CodedIndex::ResolutionScope.decode(tr.resolution_scope);
+        match scope {
+            Some(TableId::AssemblyRef) => {
+                let wanted = a
+                    .get_string(a.get_assembly_ref(srow).name)
+                    .to_ascii_lowercase();
+                let asm = self.domain.iter().position(|i| i.name == wanted)?;
+                let target = self.assembly_at(asm);
+                let t = (1..=target.row_count(TableId::TypeDef)).find(|&t| {
+                    let td = target.get_type_def(t);
+                    target.get_string(td.name) == name
+                        && target.get_string(td.namespace) == ns
+                        && !self.is_nested(target, t)
+                })?;
+                Some((asm, t))
+            }
+            Some(TableId::TypeRef) => {
+                let (asm, outer) = self.resolve_type_ref_in(a, srow, depth + 1)?;
+                let target = self.assembly_at(asm);
+                let t = (1..=target.row_count(TableId::NestedClass)).find_map(|n| {
+                    let nc = target.get_nested_class(n);
+                    (nc.enclosing_class == outer
+                        && target.get_string(target.get_type_def(nc.nested_class).name) == name)
+                        .then_some(nc.nested_class)
+                })?;
+                Some((asm, t))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_nested(&self, a: &Assembly, type_row: u32) -> bool {
+        (1..=a.row_count(TableId::NestedClass))
+            .any(|n| a.get_nested_class(n).nested_class == type_row)
+    }
+
+    fn assembly_at(&self, index: usize) -> &Assembly {
+        if index == self.current {
+            &self.assembly
+        } else {
+            self.parked[index].as_ref().expect("assembly du domaine")
+        }
+    }
+
+    /// Méthode `name` du type `type_row` de l'assembly `asm` dont la
+    /// signature correspond à `sig_blob` (blob de l'assembly courante).
+    fn find_method_in(&self, asm: usize, type_row: u32, name: &str, sig_blob: u32) -> Option<u32> {
+        let wanted = self.sig_key(&self.assembly, self.assembly.get_blob(sig_blob));
+        let target = self.assembly_at(asm);
+        target.type_methods(type_row).find(|&m| {
+            let md = target.get_method_def(m);
+            target.get_string(md.name) == name
+                && self.sig_key(target, target.get_blob(md.signature)) == wanted
+        })
+    }
+
+    /// Signature de méthode réduite aux noms complets de ses types, pour
+    /// comparer des signatures écrites dans deux assemblies différentes.
+    fn sig_key(&self, a: &Assembly, blob: &[u8]) -> String {
+        let sig = metadata::decode_method_sig(blob);
+        let mut key = format!(
+            "{}:{}(",
+            sig.calling_convention & 0x3F,
+            sig.generic_param_count
+        );
+        key += &self.type_key(a, &sig.ret_type);
+        for p in &sig.param_types {
+            key.push(',');
+            key += &self.type_key(a, p);
+        }
+        key
+    }
+
+    fn type_key(&self, a: &Assembly, et: &ElementType) -> String {
+        let named = |coded: u32| {
+            let (table, row) = CodedIndex::TypeDefOrRef.decode(coded);
+            let (ns, name) = match table {
+                Some(TableId::TypeDef) => {
+                    let td = a.get_type_def(row);
+                    (td.namespace, td.name)
+                }
+                Some(TableId::TypeRef) => {
+                    let tr = a.get_type_ref(row);
+                    (tr.namespace, tr.name)
+                }
+                _ => return format!("spec{row}"),
+            };
+            format!("{}.{}", a.get_string(ns), a.get_string(name))
+        };
+        match et {
+            ElementType::Class(c) | ElementType::ValueType(c) => named(*c),
+            ElementType::Ptr(i) => format!("{}*", self.type_key(a, i)),
+            ElementType::ByRef(i) => format!("{}&", self.type_key(a, i)),
+            ElementType::SzArray(i) => format!("{}[]", self.type_key(a, i)),
+            ElementType::Array(i) => format!("{}[,]", self.type_key(a, i)),
+            ElementType::GenericInst(i, args) => {
+                let args: Vec<String> = args.iter().map(|t| self.type_key(a, t)).collect();
+                format!("{}<{}>", self.type_key(a, i), args.join(","))
+            }
+            other => format!("{other:?}"),
+        }
     }
 
     /// Exécute la méthode au sommet de la pile d'appels jusqu'à son retour.
@@ -570,10 +763,23 @@ impl Interpreter {
         let row = Token(token).rid();
         let (ns, name) = match Token(token).table() {
             t if t == TableId::TypeDef as u8 => {
+                if let Some(id) = self.domain[self.current]
+                    .type_ids
+                    .get(row as usize)
+                    .copied()
+                    .flatten()
+                {
+                    return Some(id);
+                }
                 let td = self.assembly.get_type_def(row);
                 (td.namespace, td.name)
             }
             t if t == TableId::TypeRef as u8 => {
+                if let Some((asm, t)) = self.resolve_type_ref(row) {
+                    if let Some(id) = self.domain[asm].type_ids.get(t as usize).copied().flatten() {
+                        return Some(id);
+                    }
+                }
                 let tr = self.assembly.get_type_ref(row);
                 (tr.namespace, tr.name)
             }
@@ -1307,7 +1513,10 @@ impl Interpreter {
             }
             OpCode::Ldsfld | OpCode::Ldsflda => {
                 let token = opcodes::read_u32(code, offset + 1);
-                let (ptr, et) = self.static_field(token);
+                let (ptr, et) = match self.static_field(token) {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Throw(e),
+                };
                 let val = if op == OpCode::Ldsflda {
                     Value::Ref(ptr)
                 } else {
@@ -1319,7 +1528,10 @@ impl Interpreter {
             OpCode::Stsfld => {
                 let token = opcodes::read_u32(code, offset + 1);
                 let val = pop!();
-                let (ptr, _) = self.static_field(token);
+                let (ptr, _) = match self.static_field(token) {
+                    Ok(v) => v,
+                    Err(e) => return StepResult::Throw(e),
+                };
                 store_slot(ptr, val);
                 StepResult::Continue
             }
@@ -1755,11 +1967,21 @@ impl Interpreter {
     /// Type et taille de l'objet que construit le constructeur `token`.
     fn constructed_type(&self, token: u32) -> (types::TypeId, usize) {
         let (ns, name) = match self.resolve_method(token) {
-            Target::Managed(row) => {
-                let td = self.assembly.get_type_def(self.find_declaring_type(row));
+            Target::Managed(asm, row) => {
+                let info = &self.domain[asm];
+                let owner = info.method_owner.get(row as usize).copied().unwrap_or(0);
+                if let Some(id) = info.type_ids.get(owner as usize).copied().flatten() {
+                    let size = types::with_types(|reg| {
+                        reg.get(id)
+                            .map_or(types::EXTERNAL_OBJECT_SIZE, |t| t.instance_size)
+                    });
+                    return (id, size.max(16));
+                }
+                let a = self.assembly_at(asm);
+                let td = a.get_type_def(owner);
                 (
-                    self.assembly.get_string(td.namespace).to_string(),
-                    self.assembly.get_string(td.name).to_string(),
+                    a.get_string(td.namespace).to_string(),
+                    a.get_string(td.name).to_string(),
                 )
             }
             Target::External {
@@ -1794,31 +2016,60 @@ impl Interpreter {
         }
     }
 
-    fn field_type(&self, field_row: u32) -> ElementType {
-        let blob = self
-            .assembly
-            .get_blob(self.assembly.get_field(field_row).signature);
-        let mut off = 1;
-        metadata::decode_type(blob, &mut off)
+    /// Champ désigné par un jeton Field ou MemberRef : (assembly, ligne
+    /// Field), y compris un champ d'une autre assembly du domaine.
+    fn resolve_field(&self, token: u32) -> Option<(usize, u32)> {
+        let row = Token(token).rid();
+        match Token(token).table() {
+            t if t == TableId::Field as u8 => Some((self.current, row)),
+            t if t == TableId::MemberRef as u8 => {
+                let mr = self.assembly.get_member_ref(row);
+                let (parent, prow) = CodedIndex::MemberRefParent.decode(mr.class);
+                let name = self.assembly.get_string(mr.name);
+                let (asm, type_row) = match parent {
+                    Some(TableId::TypeRef) => self.resolve_type_ref(prow)?,
+                    Some(TableId::TypeDef) => (self.current, prow),
+                    _ => return None,
+                };
+                let a = self.assembly_at(asm);
+                a.type_fields(type_row)
+                    .find(|&f| a.get_string(a.get_field(f).name) == name)
+                    .map(|f| (asm, f))
+            }
+            _ => None,
+        }
     }
 
-    fn owner_type_id(&self, field_row: u32) -> Option<types::TypeId> {
-        let owner = (1..=self.assembly.row_count(TableId::TypeDef))
-            .find(|&i| self.assembly.type_fields(i).contains(&field_row))?;
-        let td = self.assembly.get_type_def(owner);
-        let ns = self.assembly.get_string(td.namespace);
-        let name = self.assembly.get_string(td.name);
-        types::with_types(|reg| reg.find_by_name(ns, name))
+    /// Type déclaré du champ, lu dans la signature visible depuis l'assembly
+    /// courante (Field ou MemberRef).
+    fn field_type_of_token(&self, token: u32) -> ElementType {
+        let row = Token(token).rid();
+        let blob = match Token(token).table() {
+            t if t == TableId::Field as u8 => self.assembly.get_field(row).signature,
+            t if t == TableId::MemberRef as u8 => self.assembly.get_member_ref(row).signature,
+            _ => return ElementType::Object,
+        };
+        let mut off = 1;
+        metadata::decode_type(self.assembly.get_blob(blob), &mut off)
+    }
+
+    fn field_owner(&self, asm: usize, field_row: u32) -> (u32, Option<types::TypeId>) {
+        let info = &self.domain[asm];
+        let owner = info
+            .field_owner
+            .get(field_row as usize)
+            .copied()
+            .unwrap_or(0);
+        (owner, info.type_ids.get(owner as usize).copied().flatten())
     }
 
     /// Décalage et type d'un champ d'instance. Les champs des types de la BCL
-    /// (MemberRef) ne sont pas modélisés : on utilise l'emplacement réservé.
+    /// intégrée ne sont pas modélisés : on utilise l'emplacement réservé.
     fn instance_field(&self, token: u32) -> (usize, ElementType) {
-        let row = Token(token).rid();
-        if Token(token).table() != TableId::Field as u8 {
+        let Some((asm, row)) = self.resolve_field(token) else {
             return (exceptions::MESSAGE_SLOT, ElementType::Object);
-        }
-        let offset = self.owner_type_id(row).and_then(|id| {
+        };
+        let offset = self.field_owner(asm, row).1.and_then(|id| {
             types::with_types(|reg| {
                 reg.get(id)?
                     .fields
@@ -1827,14 +2078,24 @@ impl Interpreter {
                     .map(|f| f.offset)
             })
         });
-        (offset.unwrap_or(0), self.field_type(row))
+        (offset.unwrap_or(0), self.field_type_of_token(token))
     }
 
-    fn static_field(&self, token: u32) -> (*mut u8, ElementType) {
-        let row = Token(token).rid();
-        let owner = self.owner_type_id(row).unwrap_or(0);
-        let ptr = types::with_types(|reg| reg.static_field_ptr(owner, row as usize * 8));
-        (ptr, self.field_type(row))
+    /// Emplacement d'un champ statique, après le constructeur statique de
+    /// son type.
+    fn static_field(&mut self, token: u32) -> Result<(*mut u8, ElementType), ClrException> {
+        let et = self.field_type_of_token(token);
+        let Some((asm, row)) = self.resolve_field(token) else {
+            // Champ statique de la BCL intégrée : emplacement propre au jeton.
+            let ptr =
+                types::with_types(|reg| reg.static_field_ptr(0, (token & 0xFF_FFFF) as usize * 8));
+            return Ok((ptr, et));
+        };
+        let (owner_row, owner) = self.field_owner(asm, row);
+        self.ensure_initialized(asm, owner_row)?;
+        let ptr =
+            types::with_types(|reg| reg.static_field_ptr(owner.unwrap_or(0), row as usize * 8));
+        Ok((ptr, et))
     }
 }
 

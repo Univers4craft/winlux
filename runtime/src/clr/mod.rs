@@ -3,6 +3,9 @@
 //! intégrées. Aucun runtime .NET extérieur n'est utilisé.
 
 pub mod bcl;
+pub mod domain;
+#[cfg(test)]
+pub mod emit;
 pub mod exceptions;
 pub mod gc;
 pub mod il;
@@ -17,8 +20,10 @@ use metadata::Assembly;
 use tables::{CodedIndex, TableId, Token};
 use types::TypeId;
 
-/// Exécute le point d'entrée d'une assembly .NET et renvoie le code de sortie.
-pub fn execute_assembly(pe_data: &[u8]) -> i32 {
+/// Exécute le point d'entrée d'une assembly .NET et renvoie le code de
+/// sortie. Les assemblies privées référencées sont cherchées dans `app_dir`,
+/// le dossier du programme.
+pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) -> i32 {
     types::init();
     gc::init();
     crate::dlls::kernel32::init();
@@ -43,11 +48,13 @@ pub fn execute_assembly(pe_data: &[u8]) -> i32 {
         return 1;
     }
 
-    load_types(&assembly);
-    let mut interp = Interpreter::new(assembly);
-    if let Err(exc) = run_cctors(&mut interp) {
-        return unhandled(&exc);
+    let (assemblies, mut infos) = domain::load(assembly, app_dir);
+    // Les assemblies référencées d'abord : une classe du programme qui dérive
+    // d'une classe d'une bibliothèque y trouve son parent déjà enregistré.
+    for idx in (0..assemblies.len()).rev() {
+        load_types(&assemblies[idx], idx, &mut infos[idx]);
     }
+    let mut interp = Interpreter::new(assemblies, infos);
 
     let row = Token(entry).rid();
     let sig = interp.assembly.get_method_def(row).signature;
@@ -81,7 +88,7 @@ fn unhandled(exc: &exceptions::ClrException) -> i32 {
 
 /// Enregistre les types de l'assembly : parents, méthodes (pour la
 /// répartition virtuelle) et disposition des champs d'instance.
-fn load_types(assembly: &Assembly) {
+fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo) {
     let count = assembly.row_count(TableId::TypeDef);
     let mut ids: Vec<Option<TypeId>> = vec![None; count as usize + 1];
 
@@ -114,6 +121,7 @@ fn load_types(assembly: &Assembly) {
                 let md = assembly.get_method_def(m);
                 types::MethodInfo {
                     name: assembly.get_string(md.name).to_string(),
+                    assembly: asm_index,
                     token: Token::new(TableId::MethodDef, m).0,
                     is_virtual: md.is_virtual(),
                     param_count: metadata::decode_method_sig(assembly.get_blob(md.signature))
@@ -134,6 +142,7 @@ fn load_types(assembly: &Assembly) {
         layout(assembly, row, &ids, &mut done);
     }
     crate::log_debug!("clr", "{} types enregistrés", ids.iter().flatten().count());
+    info.type_ids = ids;
 }
 
 /// Chaque champ d'instance occupe 8 octets à la suite de ceux du parent ; le
@@ -182,14 +191,5 @@ fn resolve_type(assembly: &Assembly, coded: u32, ids: &[Option<TypeId>]) -> Opti
     }
 }
 
-fn run_cctors(interp: &mut Interpreter) -> Result<(), exceptions::ClrException> {
-    for row in 1..=interp.assembly.row_count(TableId::MethodDef) {
-        let md = interp.assembly.get_method_def(row);
-        if md.is_cctor() && interp.assembly.get_string(md.name) == ".cctor" && md.rva != 0 {
-            if let ExecResult::Exception(exc) = interp.execute_method(row, Vec::new()) {
-                return Err(exc);
-            }
-        }
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod tests;

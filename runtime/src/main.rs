@@ -243,7 +243,10 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let code = clr::execute_assembly(&assembly);
+        let app_dir = std::fs::canonicalize(&exe)
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),

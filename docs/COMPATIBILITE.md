@@ -210,7 +210,7 @@ Limites honnêtes de la mesure :
 | Fenêtres et GDI (`user32`, `gdi32`) | 287 + 154 fonctions, backend X11, Xft | rectangles, icônes, fenêtres en couches, régions, chemins GDI, transformations, entrée brute, écrans |
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
-| .NET | CLR maison (interpréteur CIL) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) |
+| .NET | CLR maison (interpréteur CIL, DLL .NET privées de l'appli chargées depuis #926) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) ; plan en 9 étapes dans [compat/dotnet-framework.md](compat/dotnet-framework.md) |
 | Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, compilation de shaders et effets D3DX (#834), `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |

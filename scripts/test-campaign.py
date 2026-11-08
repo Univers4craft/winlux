@@ -654,4 +654,13 @@ ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
    and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
 
+# ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
+clr = ROOT / "runtime/src/clr"
+ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text()
+   and "fn resolve_type_ref" in (clr / "il.rs").read_text()
+   and "fn ensure_initialized" in (clr / "il.rs").read_text()
+   and "une_bibliotheque_livree_avec_le_programme_est_chargee" in (clr / "tests.rs").read_text()
+   and "execute_assembly_in" in (ROOT / "runtime/src/main.rs").read_text(),
+   "CLR : DLL .NET privées du dossier de l'appli chargées, appels, héritage, champs et .cctor entre assemblies (#926)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
