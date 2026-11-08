@@ -5521,6 +5521,8 @@ unsafe fn create_process_common(
     });
     let process_handle = add_sync(SyncHandle::Process(object.clone()), None);
     let thread_handle = add_sync(SyncHandle::Process(object), None);
+    // Lancé par un membre d'un job : l'enfant le rejoint (#19).
+    crate::dlls::jobs::on_child_created(pid as i32, process_handle, creation_flags);
     std::ptr::write(
         info,
         ProcessInformation {
@@ -5881,9 +5883,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle)
-        || crate::dlls::kernel32_node::close_job(handle)
-    {
+    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -6906,6 +6906,7 @@ pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -6914,6 +6915,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();

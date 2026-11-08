@@ -300,7 +300,7 @@ def listed(app):
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""
-    if (app.get_id() or "").startswith("winlux-pe-"): return _t("Programmes Windows")
+    if (app.get_id() or "").startswith(("winlux-pe-", "winlux-link-")): return _t("Programmes Windows")
     categories = set((app.get_categories() or "").split(";")) if hasattr(app, "get_categories") else set()
     for key, label in [("Settings", _t("Paramètres")), ("Network", "Internet"),
                        ("Office", _t("Bureautique")), ("Graphics", _t("Graphisme")),
@@ -1295,6 +1295,9 @@ class Start(Gtk.Application):
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
+            # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            if "/Start Menu/Programs" in directory + "/":
+                files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
             for name in folders + files:
                 visited += 1
                 if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
