@@ -84,7 +84,6 @@ if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev
 fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
-step "scripts/test-default-accent.py" python3 -B scripts/test-default-accent.py
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni

@@ -811,8 +811,8 @@ pub unsafe extern "win64" fn get_icon_info(icon: usize, info: *mut IconInfo) -> 
         icon: 1,
         x_hot: (img.w / 2) as u32,
         y_hot: (img.h / 2) as u32,
-        mask: gui::bitmap_from_pixels(img.w, img.h, &mask).unwrap_or(0),
-        color: gui::bitmap_from_pixels(img.w, img.h, &img.px).unwrap_or(0),
+        mask: gui::ddb_from_pixels(img.w, img.h, &mask).unwrap_or(0),
+        color: gui::ddb_from_pixels(img.w, img.h, &img.px).unwrap_or(0),
     };
     std::ptr::write_unaligned(info, out);
     1
@@ -1703,6 +1703,71 @@ mod tests {
         assert_eq!(image_list_add_masked(list, bmp, magenta), 0);
         assert_eq!(list_image(list, 0).unwrap().px[0] >> 24, 0);
         assert_eq!(list_image(list, 1).unwrap().px[0], 0xFF00_00FF);
+    }
+
+    /// #793 : GetIconInfo rend des bitmaps vues comme des DDB (pas de
+    /// DIBSECTION, bmBits nul) dont GetDIBits recopie les pixels et l'alpha ;
+    /// une vraie DIB section se décrit en DIBSECTION de 104 octets.
+    #[test]
+    fn get_icon_info_rend_des_ddb_lisibles_par_get_dibits() {
+        // 2 x 2 : haut = rouge opaque, bleu à moitié transparent ; bas = vert, rien.
+        let img = Image {
+            w: 2,
+            h: 2,
+            px: vec![0xFF00_00FF, 0x80FF_0000, 0xFF00_FF00, 0],
+        };
+        let icon = new_icon(img);
+        let mut info = IconInfo {
+            icon: 0,
+            x_hot: 0,
+            y_hot: 0,
+            mask: 0,
+            color: 0,
+        };
+        assert_eq!(unsafe { get_icon_info(icon, &mut info) }, 1);
+        let mut ds = [0u8; 104];
+        let n =
+            unsafe { crate::dlls::gdi32::get_object_w(info.color, 104, ds.as_mut_ptr().cast()) };
+        assert_eq!(n, 32, "une DDB ne se décrit qu'en BITMAP");
+        assert_eq!(&ds[24..32], &[0; 8], "bmBits nul pour une DDB");
+        // BITMAPINFOHEADER 32 bits BI_RGB, bas-haut.
+        let mut bi = [0u8; 40];
+        bi[..4].copy_from_slice(&40u32.to_le_bytes());
+        bi[4..8].copy_from_slice(&2i32.to_le_bytes());
+        bi[8..12].copy_from_slice(&2i32.to_le_bytes());
+        bi[12..14].copy_from_slice(&1u16.to_le_bytes());
+        bi[14..16].copy_from_slice(&32u16.to_le_bytes());
+        let mut bits = [0u8; 16];
+        let lines = unsafe {
+            crate::dlls::gdi32_ext::get_dib_its(
+                0,
+                info.color,
+                0,
+                2,
+                bits.as_mut_ptr().cast(),
+                bi.as_mut_ptr().cast(),
+                0,
+            )
+        };
+        assert_eq!(lines, 2);
+        // Première ligne du tampon = ligne du bas : vert opaque (BGRA), puis vide.
+        assert_eq!(&bits[0..8], &[0, 0xFF, 0, 0xFF, 0, 0, 0, 0]);
+        // Ligne du haut : rouge opaque, bleu alpha 0x80.
+        assert_eq!(&bits[8..16], &[0, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0x80]);
+        // Une DIB section ordinaire se décrit en DIBSECTION.
+        let dib = gui::bitmap_from_pixels(2, 2, &[0; 4]).unwrap();
+        let n = unsafe { crate::dlls::gdi32::get_object_w(dib, 104, ds.as_mut_ptr().cast()) };
+        assert_eq!(n, 104);
+        assert_ne!(&ds[24..32], &[0; 8], "bmBits d'une DIB section");
+        assert_eq!(
+            i32::from_le_bytes(ds[40..44].try_into().unwrap()),
+            2,
+            "bas-haut"
+        );
+        for h in [info.color, info.mask, dib] {
+            gui::delete_object(h);
+        }
+        destroy_icon(icon);
     }
 
     #[test]

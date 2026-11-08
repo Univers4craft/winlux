@@ -24,7 +24,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 tool = runpy.run_path(str(ROOT / "scripts/winlux-screensaver-inhibit.py"), run_name="veille_test")
-DisplayHold, Inhibitors = tool["DisplayHold"], tool["Inhibitors"]
+DisplayHold, Inhibitors, SaverDpms = tool["DisplayHold"], tool["Inhibitors"], tool["SaverDpms"]
 
 
 class FakeX:
@@ -97,6 +97,56 @@ with tempfile.TemporaryDirectory() as tmp:
     assert x.enabled and not box.items and not (tmp / "inhibit" / "1-screensaver").exists(), x.calls
 print("DisplayHold : marque perdue, seconde instance, DPMS de l'utilisateur, demandes multiples et client mort")
 
+# 4b. #749 : xscreensaver-auth --init coupe toujours le DPMS au démarrage
+# d'XScreenSaver ; Winlux le remet une fois --init terminé.
+x, state, clock = FakeX(), {"daemons": set(), "init": False, "held": False, "wanted": True}, [0.0]
+saver = SaverDpms(xset=x, processes=lambda: (state["daemons"], state["init"]), wanted=lambda: state["wanted"],
+                  held=lambda: state["held"], clock=lambda: clock[0])
+saver.tick(); assert x.enabled and x.calls == [], "sans XScreenSaver : rien"
+state["daemons"], state["init"] = {4242}, True
+x.enabled = False; saver.tick()
+assert not x.enabled, "--init encore en cours : on attend"
+state["init"] = False; clock[0] = 2; saver.tick()
+assert x.enabled, f"--init terminé : DPMS non rétabli ({x.calls})"
+x.enabled = False; clock[0] = 10; state["held"] = True; saver.tick()
+assert not x.enabled, "une vidéo tient l'écran : le DPMS reste suspendu"
+state["held"] = False; state["wanted"] = False; saver.tick()
+assert not x.enabled, "dpmsEnabled: False choisi : respecté"
+state["wanted"] = True; clock[0] = 100; saver.tick()
+assert not x.enabled, "hors de la minute qui suit le démarrage : plus d'intervention"
+state["daemons"] = {5151}; saver.tick()
+assert x.enabled, "XScreenSaver relancé : DPMS remis à nouveau"
+with tempfile.TemporaryDirectory() as tmp:
+    proc = Path(tmp)
+    for pid, argv in ((10, b"/usr/bin/xscreensaver\0-no-splash\0"), (11, b"/usr/libexec/xscreensaver/xscreensaver-auth\0--init\0"),
+                      (12, b"/usr/bin/xscreensaver-command\0-deactivate\0"), (13, b"python3\0xscreensaver\0")):
+        (proc / str(pid)).mkdir(); (proc / str(pid) / "cmdline").write_bytes(argv)
+    (proc / "self").mkdir()
+    assert tool["saver_processes"](str(proc)) == ({10}, True), tool["saver_processes"](str(proc))
+    (proc / "11/cmdline").write_bytes(b"/usr/libexec/xscreensaver/xscreensaver-auth\0--splash\0")
+    assert tool["saver_processes"](str(proc)) == ({10}, False)
+    rc = Path(tmp) / "rc"
+    assert tool["dpms_wanted"](rc), "sans fichier : actif"
+    rc.write_text("timeout: 0:10:00\ndpmsEnabled:    False\n"); assert not tool["dpms_wanted"](rc)
+    rc.write_text("dpmsEnabled: True\n"); assert tool["dpms_wanted"](rc)
+source_tool = (ROOT / "scripts/winlux-screensaver-inhibit.py").read_text(encoding="utf-8")
+assert "saver = SaverDpms()" in source_tool.split("def watch_updates")[1], "SaverDpms non lancé avec la session"
+print("#749 : DPMS remis après xscreensaver-auth --init (vidéo en cours et choix de l'utilisateur respectés)")
+
+# 4c. #750 : sortie vers /dev/null (dbus-daemon --fork) : journal propre au service.
+with tempfile.TemporaryDirectory() as tmp:
+    code = f"""import runpy, sys
+tool = runpy.run_path({str(ROOT / "scripts/winlux-screensaver-inhibit.py")!r}, run_name="x")
+print(tool["own_log"](directory={tmp!r}), file=open({tmp + "/path"!r}, "w"))
+tool["log"]("Économiseur bloqué (1) : firefox — video-playing")
+"""
+    subprocess.run([sys.executable, "-B", "-c", code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    text = (Path(tmp) / "screensaver-inhibit.log").read_text()
+    assert "Économiseur bloqué (1)" in text, text
+    out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, check=True)
+    assert "Économiseur bloqué (1)" in out.stdout and (Path(tmp) / "path").read_text().strip() == "None", "sortie visible : pas de redirection"
+print("#750 : service activé par D-Bus : screensaver-inhibit.log dans les journaux de session")
+
 # 5. XScreenSaver ne coupe plus le DPMS (dpmsEnabled: True), comptes déjà copiés compris.
 template = ROOT / "integration/native/xscreensaver"
 keys = dict(line.split(":", 1) for line in template.read_text().splitlines() if ":" in line)
@@ -167,7 +217,8 @@ def wait_for(wanted, what):
         if dpms() == wanted: return
         time.sleep(0.1)
     raise SystemExit(f"{{what}} : DPMS {{dpms()}} au lieu de {{wanted}}")
-service = subprocess.Popen([sys.executable, "-B", {str(ROOT / "scripts/winlux-screensaver-inhibit.py")!r}])
+service = subprocess.Popen([sys.executable, "-B", {str(ROOT / "scripts/winlux-screensaver-inhibit.py")!r}],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # comme sous dbus-daemon --fork
 time.sleep(1)
 def client(name):
     p = subprocess.Popen([sys.executable, "-B", {str(client)!r}, name], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -191,7 +242,10 @@ video.kill(); video.wait()
 print("scénario réel OK")
 ''')
     env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", WINLUX_POWER_INHIBIT_DIR=str(tmp / "inhibit"),
-               XDG_RUNTIME_DIR=str(tmp), DISPLAY=":735")
+               XDG_RUNTIME_DIR=str(tmp), DISPLAY=":735", WINLUX_SESSION_LOGS=str(tmp / "logs"))
     out = subprocess.run(["dbus-run-session", "--", sys.executable, "-B", str(script)], env=env, capture_output=True, text=True, timeout=90)
     assert out.returncode == 0 and "scénario réel OK" in out.stdout, out.stdout + out.stderr
+    journal = (tmp / "logs/screensaver-inhibit.log").read_text()
+    for line in ("Économiseur bloqué (1) : firefox", "Programme parti sans libérer", "Demande libérée", "Veille de l'écran rétablie"):
+        assert line in journal, journal
 print("Service réel : deux demandes, client tué sans libérer, libération de la dernière, arrêt par SIGTERM : la veille revient")

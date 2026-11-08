@@ -87,10 +87,27 @@ __declspec(dllimport) BOOL WINAPI GetLogicalProcessorInformation(void *, DWORD *
 __declspec(dllimport) int WINAPI WSAStartup(WORD, void *);
 __declspec(dllimport) long WINAPI RegSetKeySecurity(void *, DWORD, void *);
 __declspec(dllimport) void *WINAPI gethostbyname(const char *);
+__declspec(dllimport) int WINAPI getaddrinfo(const char *, const char *, const void *, void **);
+__declspec(dllimport) void WINAPI freeaddrinfo(void *);
+__declspec(dllimport) void *WINAPI getservbyname(const char *, const char *);
+__declspec(dllimport) DWORD WINAPI socket(int, int, int);
+__declspec(dllimport) int WINAPI closesocket(DWORD);
+__declspec(dllimport) int WINAPI select(int, void *, void *, void *, const void *);
+__declspec(dllimport) int WINAPI WSAPoll(void *, DWORD, int);
+__declspec(dllimport) int WINAPI WinHttpGetIEProxyConfigForCurrentUser(void *);
+__declspec(dllimport) int WINAPI WinHttpGetDefaultProxyConfiguration(void *);
 __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
 __declspec(dllimport) BOOL WINAPI EnumCalendarInfoW(BOOL(WINAPI *)(unsigned short *), DWORD, DWORD, DWORD);
 __declspec(dllimport) HANDLE WINAPI LoadIconW(HANDLE, const unsigned short *);
 __declspec(dllimport) BOOL WINAPI GetIconInfo(HANDLE, void *);
+__declspec(dllimport) HANDLE WINAPI CreatePopupMenu(void);
+__declspec(dllimport) BOOL WINAPI K32EnumProcessModules(HANDLE, HANDLE *, DWORD, DWORD *);
+__declspec(dllimport) HANDLE WINAPI GetModuleHandleA(const char *);
+__declspec(dllimport) BOOL WINAPI InsertMenuItemW(HANDLE, DWORD, BOOL, const void *);
+__declspec(dllimport) BOOL WINAPI GetMenuItemInfoW(HANDLE, DWORD, BOOL, void *);
+__declspec(dllimport) HANDLE WINAPI CreateCompatibleDC(HANDLE);
+__declspec(dllimport) HANDLE WINAPI CreateCompatibleBitmap(HANDLE, int, int);
+__declspec(dllimport) HANDLE WINAPI SelectObject(HANDLE, HANDLE);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
 int _fltused = 0;
@@ -413,8 +430,15 @@ __attribute__((used)) void __stdcall entry(void) {
     /* 64-65 : HOSTENT x86 (16 octets : h_name, h_aliases, h_addrtype et
      * h_length sur 2 octets, h_addr_list). */
     {
-        static char wsa[512];
+        static unsigned char wsa[512];
+        volatile unsigned char *fill = wsa; /* pas de memset : sans CRT */
+        for (int i = 0; i < 512; i++) fill[i] = 0xA5;
         if (WSAStartup(0x0202, wsa) != 0) fail(64, 0);
+        /* 72 : WSADATA x86 de 400 octets (#779), szDescription à +4 ;
+         * rien d'écrit au-delà (WinSCP y perdait son adresse de retour). */
+        if (*(unsigned short *)wsa != 0x0202 || wsa[4] == 0 || wsa[4] == 0xA5) fail(72, wsa[4]);
+        for (int i = 400; i < 512; i++)
+            if (wsa[i] != 0xA5) fail(72, i);
         unsigned char *h = gethostbyname("localhost");
         if (!h) fail(64, 1);
         if (*(short *)(h + 8) != 2 || *(short *)(h + 10) != 4) fail(65, *(DWORD *)(h + 8));
@@ -455,6 +479,89 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!GetIconInfo(icon, info)) fail(68, 1);
         if (info[5] != GUARD) fail(68, info[5]);
         if (info[0] != 1 || info[4] == 0) fail(68, info[0]);
+    }
+
+    /* 69 : MENUITEMINFOW de 48 octets (7zFM lit le texte de ses menus). */
+    {
+        static const unsigned short name[] = {'F', 'i', 'c', 'h', 'i', 'e', 'r', 0};
+        HANDLE menu = CreatePopupMenu();
+        HANDLE sub = CreatePopupMenu();
+        DWORD in[12] = {48, 0x40 | 0x4 | 0x2 | 0x20, 0, 0, 77, (DWORD)sub, 0, 0, 0x99,
+                        (DWORD)name, 7, 0};
+        if (!menu || !InsertMenuItemW(menu, 0, 1, in)) fail(69, 0);
+        unsigned short text[16];
+        DWORD out[13] = {48, 0x40 | 0x4 | 0x2 | 0x20, 0, 0, 0, 0, 0, 0, 0, (DWORD)text, 16, 0,
+                         GUARD};
+        if (!GetMenuItemInfoW(menu, 0, 1, out)) fail(69, 1);
+        if (out[12] != GUARD) fail(69, out[12]);
+        if (out[4] != 77 || out[5] != (DWORD)sub || out[8] != 0x99) fail(69, out[4]);
+        if (out[10] != 7 || text[0] != 'F' || text[6] != 'r' || text[7] != 0) fail(69, out[10]);
+    }
+
+    /* 70 : SelectObject d'une bitmap dans un DC mémoire neuf rend la bitmap
+     * 1x1 du stock, jamais 0 (la VCL de WinSCP y voyait un échec). */
+    {
+        HANDLE dc = CreateCompatibleDC(0);
+        HANDLE bmp = CreateCompatibleBitmap(dc, 8, 8);
+        if (!dc || !bmp) fail(70, 0);
+        HANDLE old = SelectObject(dc, bmp);
+        if (!old) fail(70, 1);
+        if (SelectObject(dc, old) != bmp) fail(70, 2);
+    }
+
+    /* 71 : K32EnumProcessModules remplit un tableau de HMODULE de 4 octets
+     * (WinSCP lisait « base, 0, base, 0… »). */
+    {
+        HANDLE mods[3] = {0, 0, (HANDLE)GUARD};
+        DWORD need = 0;
+        if (!K32EnumProcessModules(GetCurrentProcess(), mods, 2 * sizeof(HANDLE), &need)) fail(71, 0);
+        if (mods[0] != GetModuleHandleA(0)) fail(71, (DWORD)mods[0]);
+        if (need % 4 != 0 || need < 4 || (need >= 8 && mods[1] == 0)) fail(71, need);
+        if (mods[2] != (HANDLE)GUARD) fail(71, (DWORD)mods[2]);
+    }
+
+    /* 73-77 : structures écrites par ws2_32 et winhttp à la disposition
+     * x86 (#779 : un WSADATA 64 bits débordait sur l'adresse de retour).
+     * Chaque tampon est suivi d'un garde qui ne doit pas bouger. */
+    {
+        /* 73 : ADDRINFOA x86, 32 octets : ai_addrlen +16, ai_canonname
+         * +20, ai_addr +24, ai_next +28. */
+        DWORD hints[8] = {0, 2 /* AF_INET */, 1 /* SOCK_STREAM */, 0, 0, 0, 0, 0};
+        DWORD *ai = 0;
+        if (getaddrinfo("127.0.0.1", "22", hints, (void **)&ai) != 0 || !ai) fail(73, 0);
+        if (ai[1] != 2 || ai[4] != 16) fail(73, ai[4]);
+        unsigned char *sa = (unsigned char *)ai[6];
+        if (!sa || sa[0] != 2 || sa[2] != 0 || sa[3] != 22 || sa[4] != 127) fail(73, (DWORD)sa);
+        freeaddrinfo(ai);
+
+        /* 74 : SERVENT x86 : s_port (+8) avant s_proto (+12). */
+        DWORD *se = getservbyname("ssh", "tcp");
+        if (se) {
+            unsigned short port = (unsigned short)se[2];
+            if (port != 0x1600 /* htons(22) */) fail(74, se[2]);
+            const char *proto = (const char *)se[3];
+            if (!proto || proto[0] != 't') fail(74, (DWORD)proto);
+        }
+
+        /* 75 : fd_set x86 : SOCKET sur 4 octets à partir de +4. */
+        DWORD s = socket(2, 1, 6);
+        if (s == (DWORD)-1) fail(75, 0);
+        DWORD wset[4] = {1, s, GUARD, GUARD};
+        DWORD tv[2] = {0, 0};
+        int n = select(0, 0, wset, 0, tv);
+        if (n < 0 || wset[0] > 1 || (wset[0] == 1 && wset[1] != s) || wset[3] != GUARD) fail(75, n);
+
+        /* 76 : WSAPOLLFD x86 : { SOCKET fd; SHORT events; SHORT revents }. */
+        DWORD pfd[3] = {s, 0x10 /* POLLWRNORM */, GUARD};
+        if (WSAPoll(pfd, 1, 0) < 0 || pfd[0] != s || pfd[2] != GUARD) fail(76, pfd[1]);
+        closesocket(s);
+
+        /* 77 : WINHTTP_CURRENT_USER_IE_PROXY_CONFIG (16 octets) et
+         * WINHTTP_PROXY_INFO (12 octets) x86. */
+        DWORD ie[5] = {GUARD, GUARD, GUARD, GUARD, GUARD};
+        if (!WinHttpGetIEProxyConfigForCurrentUser(ie) || ie[4] != GUARD || ie[0] > 1) fail(77, ie[4]);
+        DWORD pi[4] = {GUARD, GUARD, GUARD, GUARD};
+        if (!WinHttpGetDefaultProxyConfiguration(pi) || pi[3] != GUARD || (pi[0] != 1 && pi[0] != 3)) fail(77, pi[0]);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

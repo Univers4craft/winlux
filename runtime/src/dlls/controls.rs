@@ -317,6 +317,7 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
             "#32768" => popup::popup_proc,
+            n if richedit::is_rich_class(n) => richedit::rich_edit_proc,
             _ => match comctl::class_kind(&lower).or_else(|| bars::class_kind(&lower))? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
@@ -454,6 +455,34 @@ pub(crate) fn strip_prefix(s: &str) -> String {
 
 /// Coupe un texte en lignes qui tiennent dans `width` (retours à la ligne
 /// explicites conservés, mots trop longs coupés au caractère).
+/// Tabulations remplacées par des espaces jusqu'au prochain multiple de 8
+/// caractères, comme DT_EXPANDTABS (#818).
+fn expand_tabs(text: &str) -> String {
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut col = 0;
+    for ch in text.chars() {
+        match ch {
+            '\t' => {
+                let n = 8 - col % 8;
+                out.extend(std::iter::repeat_n(' ', n));
+                col += n;
+            }
+            '\n' => {
+                out.push(ch);
+                col = 0;
+            }
+            _ => {
+                out.push(ch);
+                col += 1;
+            }
+        }
+    }
+    out
+}
+
 fn wrap(font: usize, text: &str, width: i32) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in text.split('\n') {
@@ -1109,10 +1138,17 @@ fn paint_static(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
                 _ => 0,
             };
             let lh = line_height(p.font);
-            let lines = if kind == 0x0B || kind == 0x0C {
-                vec![text] // SS_SIMPLE, SS_LEFTNOWORDWRAP
-            } else {
-                wrap(p.font, &text, r.width())
+            // DrawText des statiques : DT_EXPANDTABS.
+            let text = expand_tabs(&text);
+            let lines = match kind {
+                0x0B => vec![text.replace(['\r', '\n'], "")], // SS_SIMPLE : une ligne
+                // SS_LEFTNOWORDWRAP : pas de coupure automatique, mais les
+                // fins de ligne du texte comptent (boîte « Copier » de 7-Zip).
+                0x0C => text
+                    .split('\n')
+                    .map(|l| l.trim_end_matches('\r').to_string())
+                    .collect(),
+                _ => wrap(p.font, &text, r.width()),
             };
             let total = lh * lines.len() as i32;
             let mut y = if s & 0x200 != 0 {
@@ -1241,7 +1277,10 @@ fn line_text(text: &[char], starts: &[usize], line: usize) -> String {
 fn displayed(edit: &EditState, s: &str) -> String {
     match edit.password {
         Some(mask) => std::iter::repeat_n(mask, s.chars().count()).collect(),
-        None => s.to_string(),
+        // Une tabulation s'affiche comme un blanc (une case par caractère,
+        // pour garder les positions du curseur) et non comme un glyphe
+        // manquant : journal de FileZilla, « Status:\tConnecting… ».
+        None => s.replace('\t', " "),
     }
 }
 
@@ -1647,6 +1686,13 @@ fn edit_key(hwnd: usize, vk: usize) -> bool {
             }
         })
     };
+    // Ctrl+A, C, V, X : Winlux ne produit pas de WM_CHAR de contrôle pour
+    // Ctrl+lettre (les raccourcis des applis passent par WM_KEYDOWN), donc
+    // le champ les traite ici, comme le ferait l'EDIT de Windows (#802).
+    if ctrl && !shift && matches!(vk, 0x41 | 0x43 | 0x56 | 0x58) {
+        edit_char(hwnd, (vk - 0x40) as u32);
+        return true;
+    }
     let new_caret = match vk {
         VK_LEFT if ctrl => Some(word_left(caret)),
         VK_LEFT => Some(if !shift && c.edit.anchor != caret {
@@ -1921,6 +1967,21 @@ unsafe fn edit_common(hwnd: usize, msg: u32, wp: usize, lp: isize, area: Rect) -
     }
 }
 
+/// Première ligne visible la plus basse permise. L'EDIT de Windows peut
+/// remonter jusqu'à mettre la dernière ligne en haut ; RichEdit s'arrête
+/// quand la dernière ligne touche le bas (sinon le journal de FileZilla, qui
+/// fait défiler jusqu'à sa dernière ligne, ne montrait qu'une ligne, #795).
+fn max_top_line(hwnd: usize, area: Rect) -> usize {
+    let lines = title(hwnd).matches('\n').count();
+    if !richedit::is_rich(hwnd) {
+        return lines;
+    }
+    let visible = snapshot(hwnd).map_or(1, |c| {
+        (area.height() / line_height(font_of(&c)).max(1)).max(1)
+    }) as usize;
+    (lines + 1).saturating_sub(visible)
+}
+
 unsafe fn edit_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
     let s = style(hwnd);
     let multiline = s & ES_MULTILINE != 0;
@@ -1956,7 +2017,7 @@ unsafe fn edit_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<
         }
         WM_MOUSEWHEEL if multiline => {
             let delta = (wp >> 16) as u16 as i16;
-            let lines = title(hwnd).matches('\n').count();
+            let lines = max_top_line(hwnd, area);
             with_ctl(hwnd, |c| {
                 if delta > 0 {
                     c.edit.top_line = c.edit.top_line.saturating_sub(3);
@@ -2054,12 +2115,35 @@ unsafe fn edit_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<
         0x00CE => Some(with_ctl(hwnd, |c| c.edit.top_line as isize).unwrap_or(0)), // EM_GETFIRSTVISIBLELINE
         0x00B6 => {
             // EM_LINESCROLL
-            let lines = title(hwnd).matches('\n').count();
+            let max = max_top_line(hwnd, area);
             with_ctl(hwnd, |c| {
-                c.edit.top_line = (c.edit.top_line as isize + lp).clamp(0, lines as isize) as usize;
+                c.edit.top_line = (c.edit.top_line as isize + lp).clamp(0, max as isize) as usize;
             });
             invalidate(hwnd);
             Some(1)
+        }
+        WM_VSCROLL if multiline => {
+            // SB_LINEUP/DOWN, SB_PAGEUP/DOWN, SB_THUMBPOSITION/TRACK, SB_TOP, SB_BOTTOM.
+            let max = max_top_line(hwnd, area) as isize;
+            let page = snapshot(hwnd).map_or(1, |c| {
+                (area.height() / line_height(font_of(&c)).max(1)).max(1)
+            }) as isize;
+            with_ctl(hwnd, |c| {
+                let top = c.edit.top_line as isize;
+                let new = match wp & 0xFFFF {
+                    0 => top - 1,
+                    1 => top + 1,
+                    2 => top - page,
+                    3 => top + page,
+                    4 | 5 => (wp >> 16) as isize,
+                    6 => 0,
+                    7 => max,
+                    _ => top,
+                };
+                c.edit.top_line = new.clamp(0, max) as usize;
+            });
+            invalidate(hwnd);
+            Some(0)
         }
         _ => None,
     }
@@ -3444,6 +3528,7 @@ pub fn user32_overrides() -> Exports {
 mod bars;
 mod comctl;
 pub(crate) mod popup;
+mod richedit;
 
 #[cfg(test)]
 mod tests;

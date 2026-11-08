@@ -181,6 +181,9 @@ _TR = {
     'Annuler le dernier import': ('Undo the last import', 'Deshacer la última importación', 'Letzten Import rückgängig machen'),
     'Annuler les impressions': ('Cancel print jobs', 'Cancelar las impresiones', 'Druckaufträge abbrechen'),
     'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation.': ('Full list of Linux apps and Windows programs, with their size and uninstall.', 'Lista completa de aplicaciones de Linux y programas de Windows, con su tamaño y la desinstalación.', 'Vollständige Liste der Linux-Apps und Windows-Programme, mit Größe und Deinstallation.'),
+    'Voir les applications installées': ('See installed apps', 'Ver aplicaciones instaladas', 'Installierte Apps anzeigen'),
     'Arrêter le partage': ('Stop sharing', 'Dejar de compartir', 'Freigabe beenden'),
     'Aucun programme ne démarre avec la session.': ('No program starts with the session.', 'Ningún programa se inicia con la sesión.', 'Kein Programm startet mit der Sitzung.'),
     'Aucun réseau Wi-Fi visible pour l’instant.': ('No Wi-Fi network visible right now.', 'Ninguna red Wi-Fi visible por ahora.', 'Zurzeit ist kein WLAN sichtbar.'),
@@ -195,7 +198,6 @@ _TR = {
     'Ce PC': ('This PC', 'Este equipo', 'Dieser PC'),
     'Choisir un dossier': ('Choose a folder', 'Elegir una carpeta', 'Ordner auswählen'),
     'Parcourir…': ('Browse…', 'Examinar…', 'Durchsuchen…'),
-    'Images': ('Pictures', 'Imágenes', 'Bilder'),
     'Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support.': ('Choose “Winlux recovery” at startup, or start from the installation USB drive. Keep a copy of your documents on another drive.', 'Elija «Winlux recuperación» al arrancar o inicie desde la memoria USB de instalación. Guarde una copia de sus documentos en otro soporte.', 'Wählen Sie beim Start „Winlux-Wiederherstellung“ oder starten Sie vom Installations-USB-Stick. Bewahren Sie eine Kopie Ihrer Dokumente auf einem anderen Datenträger auf.'),
     'Clic droit à deux doigts': ('Two-finger right-click', 'Clic derecho con dos dedos', 'Rechtsklick mit zwei Fingern'),
     'Compatibilité VNC classique': ('Classic VNC compatibility', 'Compatibilidad con VNC clásico', 'Klassische VNC-Kompatibilität'),
@@ -234,7 +236,6 @@ _TR = {
     'Créer le jeton sur GitHub': ('Create the token on GitHub', 'Crear el token en GitHub', 'Token auf GitHub erstellen'),
     'Seul le système le lit : ni votre compte ni les programmes Windows n’y ont accès.': ('Only the system reads it: neither your account nor Windows programs can access it.', 'Solo el sistema lo lee: ni su cuenta ni los programas de Windows tienen acceso.', 'Nur das System liest es: Weder Ihr Konto noch Windows-Programme haben Zugriff.'),
     'Envoi du rapport': ('Sending the report', 'Envío del informe', 'Senden des Berichts'),
-    'Explorateur': ('File Explorer', 'Explorador', 'Explorer'),
     'Exporter mes réglages': ('Export my settings', 'Exportar mi configuración', 'Meine Einstellungen exportieren'),
     'Exporter vers': ('Export to', 'Exportar a', 'Exportieren nach'),
     'Icônes du bureau': ('Desktop icons', 'Iconos del escritorio', 'Desktopsymbole'),
@@ -380,11 +381,7 @@ _TR = {
     "Clair": ("Light", "Claro", "Hell"),
     "Couleur d’accentuation": ("Accent color", "Color de énfasis", "Akzentfarbe"),
     "Personnalisée…": ("Custom…", "Personalizado…", "Benutzerdefiniert…"),
-    "Icônes du bureau": ("Desktop icons", "Iconos del escritorio", "Desktopsymbole"),
-    "Corbeille": ("Recycle Bin", "Papelera de reciclaje", "Papierkorb"),
-    "Ce PC": ("This PC", "Este equipo", "Dieser PC"),
     "Explorateur": ("File Explorer", "Explorador de archivos", "Explorer"),
-    "Documents": ("Documents", "Documentos", "Dokumente"),
     "Barre des tâches": ("Taskbar", "Barra de tareas", "Taskleiste"),
     "Ce PC (système de fichiers)": ("This PC (file system)", "Este equipo (sistema de archivos)", "Dieser PC (Dateisystem)"),
     "Dossier de l’utilisateur": ("User's files", "Archivos del usuario", "Benutzerdateien"),
@@ -457,7 +454,6 @@ _TR = {
     "Dernière recherche : {date}": ("Last checked: {date}", "Última búsqueda: {date}", "Zuletzt gesucht: {date}"),
     "jamais": ("never", "nunca", "nie"),
     "Aucune recherche pour l’instant.": ("Not checked yet.", "Todavía no se ha buscado.", "Noch nicht gesucht."),
-    "Parcourir…": ("Browse…", "Examinar…", "Durchsuchen…"),
     "Votre système est à jour.": ("Your system is up to date.", "El sistema está actualizado.", "Ihr System ist auf dem neuesten Stand."),
     "{count} mise(s) à jour disponible(s)": ("{count} update(s) available", "{count} actualización(es) disponible(s)", "{count} Update(s) verfügbar"),
     "Rechercher des mises à jour": ("Check for updates", "Buscar actualizaciones", "Nach Updates suchen"),
@@ -652,7 +648,6 @@ _TR = {
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
     'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
-    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
     'Claude et ChatGPT : seuls votre question et la conversation en cours partent vers Anthropic ou OpenAI. Rien n’est gardé sur ce PC une fois la fenêtre fermée.': ('Claude and ChatGPT: only your question and the current conversation go to Anthropic or OpenAI. Nothing is kept on this PC once the window is closed.', 'Claude y ChatGPT: solo su pregunta y la conversación actual se envían a Anthropic u OpenAI. No se guarda nada en este equipo al cerrar la ventana.', 'Claude und ChatGPT: Nur Ihre Frage und das aktuelle Gespräch gehen an Anthropic oder OpenAI. Nach dem Schließen des Fensters bleibt nichts auf diesem PC gespeichert.'),
     'Ils ne lisent rien et ne changent rien tout seuls : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi.': ('They read and change nothing on their own: each read (a program’s log, a file search) shows you the exact text before it is sent.', 'No leen ni cambian nada por sí solos: cada lectura (registro de un programa, búsqueda de archivos) le muestra el texto exacto antes del envío.', 'Sie lesen und ändern nichts von selbst: Jeder Lesezugriff (Protokoll eines Programms, Dateisuche) zeigt Ihnen vor dem Senden den genauen Text.'),
@@ -808,6 +803,7 @@ PAGE_WIFI = 35
 PAGE_CERTS = 36
 PAGE_PHONE = 37
 PAGE_BACKUP = 38
+PAGE_INSTALLED = 39
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1369,7 +1365,7 @@ def wallpapers():
     for name, title in (("wallpapers/winlux-prisme-aurore.png", "Winlux Aurore"),
                         ("wallpapers/winlux-prisme-aurore-clair.png", "Winlux Aurore claire"),
                         ("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
-                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube"), ("wallpaper.bmp", "Classique")):
+                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube")):
         path = WALLPAPERS / name
         if path.is_file(): found.append((wallpaper_variant(path), title))
     return found
@@ -1428,6 +1424,8 @@ def page_available(page, status=None):
         return module is not None and module.available()
     if page == PAGE_BACKUP:
         return have("winlux-backup") or BACKUP_RUN.is_dir()
+    if page == PAGE_INSTALLED:
+        return installed_apps_module() is not None
     if page == PAGE_PHONE:
         # Rien d’associé : pas de page (l’application Téléphone connecté associe).
         return bool(phone_devices())
@@ -1673,6 +1671,24 @@ def phone_devices():
 
 
 
+def installed_apps_module():
+    """winlux-installed-apps (#722), installé à côté ou dans scripts/ du dépôt."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-installed-apps.py"), here.with_name("winlux-installed-apps")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_installed_apps", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_installed_apps", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1705,7 +1721,7 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
-                   PAGE_BACKUP: "page_backup"}
+                   PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -2436,7 +2452,12 @@ class ExtraPages:
         programs = installed_programs(module)
         self.hybrid = gpu_hybrid()
         self.hint(_t("Les réglages s’appliquent au prochain lancement du programme."))
-        self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
+        # Une seule liste des applications installées, avec les vraies icônes
+        # des .exe (#756) ; la fenêtre du shell PE n'en montrait aucune.
+        if installed_apps_module() is not None:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), self.open_installed_windows)])
+        else:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
         exes = Gtk.FileFilter()
         exes.set_name(_t("Programmes Windows (.exe)"))
         exes.add_pattern("*.exe")
@@ -3620,7 +3641,26 @@ class ExtraPages:
                         lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
         self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
 
+    def page_installed(self):
+        """Applications installées (#722) : tout ce qui est installé, Linux et
+        Windows, avec recherche, tri, taille et Désinstaller."""
+        module = installed_apps_module()
+        if module is None: return
+        # « Installer ou désinstaller des programmes » (Programmes Windows,
+        # winlux-shell-app programs) : liste filtrée sur Windows (#756).
+        kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
+        self.installed_filter = None
+        self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def open_installed_windows(self):
+        self.installed_filter = "windows"
+        self.open_page(PAGE_INSTALLED)
+
     def page_apps(self):
+        if installed_apps_module() is not None:
+            box = self.card()
+            self.row(box, _t("Applications installées"), None, _t("Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation."))
+            self.actions(box, [(_t("Voir les applications installées"), lambda: self.open_page(PAGE_INSTALLED))])
         self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:

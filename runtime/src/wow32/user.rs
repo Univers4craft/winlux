@@ -24,6 +24,7 @@
 //!   Les contrôles communs (WM_NOTIFY, LVITEM…) viendront de `comctl`.
 
 use super::crt::{Fix, Override};
+use super::layout::{Layout, F};
 use super::{call32, rd, wr, Desc};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -129,6 +130,11 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "TranslateAcceleratorA" | "TranslateAcceleratorW" | "TranslateAccelerator" => {
             spec(msg_in, t?, 3, 2)
         }
+        // MENUITEMINFO : 48 octets en x86, 80 en x64 (#752, 7zFM).
+        "GetMenuItemInfoA" | "GetMenuItemInfoW" => spec(menu_item_info, t?, 4, 1),
+        "SetMenuItemInfoA" | "SetMenuItemInfoW" | "InsertMenuItemA" | "InsertMenuItemW" => {
+            spec(menu_item_info, t?, 4, 0)
+        }
         // ICONINFO : 20 octets en x86 (deux HBITMAP de 4), 32 en x64.
         "GetIconInfo" => raw(get_icon_info, t?, 2),
         "CreateIconIndirect" => raw(create_icon_indirect, t?, 1),
@@ -140,8 +146,10 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "SetClassLongA" | "SetClassLongW" => raw(set_class_long, t?, 3),
         "CallWindowProcA" | "CallWindowProcW" => raw(call_window_proc, 0, 5),
         // Messages qui peuvent porter une structure : conversion 32 → 64.
-        "SendMessageA" | "SendMessageW" | "DefWindowProcA" | "DefWindowProcW" | "DefDlgProcA"
-        | "DefDlgProcW" | "SendNotifyMessageA" | "SendNotifyMessageW" | "DefFrameProcA"
+        "SendMessageA" | "SendMessageW" | "SendNotifyMessageA" | "SendNotifyMessageW" => {
+            spec(send_message, t?, 4, TO_WINDOW)
+        }
+        "DefWindowProcA" | "DefWindowProcW" | "DefDlgProcA" | "DefDlgProcW" | "DefFrameProcA"
         | "DefFrameProcW" | "DefMDIChildProcA" | "DefMDIChildProcW" => {
             let (nargs, at) = if func.starts_with("DefFrameProc") {
                 (5, 1)
@@ -403,8 +411,26 @@ fn send_conv(
     lp: u32,
     call: &mut dyn FnMut(usize, isize) -> isize,
 ) -> u32 {
+    send_conv_with(hwnd, msg, wp, lp, true, call)
+}
+
+/// `comctl` faux : la structure d'un contrôle commun reste en x86 (la
+/// procédure qui la reçoit est du code x86).
+fn send_conv_with(
+    hwnd: usize,
+    msg: u32,
+    wp: u32,
+    lp: u32,
+    comctl: bool,
+    call: &mut dyn FnMut(usize, isize) -> isize,
+) -> u32 {
     // Contrôles communs (LVITEM, TVINSERTSTRUCT, TBBUTTON…) : comctl.rs.
-    if let Some(c) = super::comctl::convert_message(hwnd, msg, wp, lp) {
+    let converted = if comctl {
+        super::comctl::convert_message(hwnd, msg, wp, lp)
+    } else {
+        None
+    };
+    if let Some(c) = converted {
         let r = call(c.wparam, c.lparam);
         return match c.done {
             Some(done) => done(r),
@@ -811,18 +837,37 @@ extern "win64" fn call_window_proc(args: u32, _aux: usize) -> u64 {
     }
 }
 
+/// `Spec.at` de SendMessage : le message va à la procédure de la fenêtre,
+/// qui peut être du code x86 (sous-classement).
+const TO_WINDOW: u32 = 0x100;
+
+/// Fenêtre dont la procédure est du code x86 : un contrôle du runtime
+/// sous-classé par le programme (SetWindowLong GWL_WNDPROC). Elle doit
+/// recevoir les structures des contrôles communs en disposition x86 ; elle
+/// les passe ensuite à la procédure d'origine par CallWindowProc, qui
+/// convertit (#762 : 7zFM, liste et barre d'adresse sans texte, les
+/// structures étaient converties deux fois).
+fn x86_window(hwnd: usize) -> bool {
+    let proc_ = get_ptr(hwnd, GWL_WNDPROC);
+    proc_ != 0 && with_procs(|p| p.from64.contains_key(&proc_))
+}
+
 /// SendMessage, DefWindowProc… : hwnd au rang `s.at`, puis message,
 /// wParam, lParam.
 extern "win64" fn send_message(args: u32, s: usize) -> u64 {
     let s = unsafe { &*(s as *const Spec) };
     let mut slots: Vec<u64> = (0..s.nargs).map(|i| ext(arg(args, i)) as u64).collect();
-    let at = s.at;
+    let to_window = s.at & TO_WINDOW != 0;
+    let at = s.at & !TO_WINDOW;
     let msg = arg(args, at + 1);
-    send_conv(
-        ext(arg(args, at)),
+    let hwnd = ext(arg(args, at));
+    let comctl = !(to_window && x86_window(hwnd));
+    send_conv_with(
+        hwnd,
         msg,
         arg(args, at + 2),
         arg(args, at + 3),
+        comctl,
         &mut |wp, lp| {
             slots[at as usize + 2] = wp as u64;
             slots[at as usize + 3] = lp as u64;
@@ -834,12 +879,20 @@ extern "win64" fn send_message(args: u32, s: usize) -> u64 {
 extern "win64" fn send_dlg_item_message(args: u32, target: usize) -> u64 {
     let (dlg, id, msg) = (ext(arg(args, 0)), arg(args, 1), arg(args, 2));
     let item = crate::dlls::user32::get_dlg_item(dlg, id as i32);
-    send_conv(item, msg, arg(args, 3), arg(args, 4), &mut |wp, lp| {
-        call64(
-            target,
-            &[dlg as u64, id as u64, msg as u64, wp as u64, lp as u64],
-        ) as isize
-    }) as u64
+    let comctl = !x86_window(item);
+    send_conv_with(
+        item,
+        msg,
+        arg(args, 3),
+        arg(args, 4),
+        comctl,
+        &mut |wp, lp| {
+            call64(
+                target,
+                &[dlg as u64, id as u64, msg as u64, wp as u64, lp as u64],
+            ) as isize
+        },
+    ) as u64
 }
 
 /// SendMessageTimeout : le résultat (DWORD_PTR) est écrit sur 8 octets en x64.
@@ -848,21 +901,29 @@ extern "win64" fn send_message_timeout(args: u32, target: usize) -> u64 {
     let (flags, timeout, out) = (arg(args, 4), arg(args, 5), arg(args, 6));
     let mut result = 0u64;
     let mut ok = 0u64;
-    send_conv(hwnd, msg, arg(args, 2), arg(args, 3), &mut |wp, lp| {
-        ok = call64(
-            target,
-            &[
-                hwnd as u64,
-                msg as u64,
-                wp as u64,
-                lp as u64,
-                flags as u64,
-                timeout as u64,
-                &mut result as *mut u64 as u64,
-            ],
-        );
-        result as isize
-    });
+    let comctl = !x86_window(hwnd);
+    send_conv_with(
+        hwnd,
+        msg,
+        arg(args, 2),
+        arg(args, 3),
+        comctl,
+        &mut |wp, lp| {
+            ok = call64(
+                target,
+                &[
+                    hwnd as u64,
+                    msg as u64,
+                    wp as u64,
+                    lp as u64,
+                    flags as u64,
+                    timeout as u64,
+                    &mut result as *mut u64 as u64,
+                ],
+            );
+            result as isize
+        },
+    );
     if out != 0 {
         wr(out, result as u32);
     }
@@ -979,6 +1040,58 @@ extern "win64" fn create_brush_indirect(args: u32, target: usize) -> u64 {
     call64(target, &[b.as_ptr() as u64])
 }
 
+/// MENUITEMINFO jusqu'à hbmpItem : hSubMenu, hbmpChecked, hbmpUnchecked,
+/// dwItemData, dwTypeData et hbmpItem ont 8 octets en x64. cbSize vaut 44
+/// (sans hbmpItem) ou 48 en x86.
+static MENUITEMINFO: Layout = Layout {
+    size32: 48,
+    size64: 80,
+    fields: &[
+        F::Size(0, 0),
+        F::D(4, 4),
+        F::D(8, 8),
+        F::D(12, 12),
+        F::D(16, 16),
+        F::P(20, 24),
+        F::P(24, 32),
+        F::P(28, 40),
+        F::P(32, 48),
+        F::P(36, 56),
+        F::D(40, 64),
+        F::P(44, 72),
+    ],
+};
+
+/// Get/SetMenuItemInfo, InsertMenuItem : (menu, item, byPosition, info).
+/// `spec.at` vaut 1 quand la structure est recopiée au retour.
+extern "win64" fn menu_item_info(args: u32, s: usize) -> u64 {
+    let s = unsafe { &*(s as *const Spec) };
+    let info = arg(args, 3);
+    let head = [
+        ext(arg(args, 0)) as u64,
+        arg(args, 1) as u64,
+        arg(args, 2) as u64,
+    ];
+    if info == 0 {
+        return call64(s.target, &[head[0], head[1], head[2], 0]);
+    }
+    let given = (rd(info) as usize).clamp(44, MENUITEMINFO.size32);
+    let mut x86 = [0u8; 48];
+    unsafe { std::ptr::copy_nonoverlapping(info as usize as *const u8, x86.as_mut_ptr(), given) };
+    let mut wide = unsafe { MENUITEMINFO.boxed64(x86.as_ptr() as usize) };
+    let r = call64(
+        s.target,
+        &[head[0], head[1], head[2], wide.as_mut_ptr() as u64],
+    );
+    if s.at == 1 && r != 0 {
+        unsafe {
+            MENUITEMINFO.to32(wide.as_ptr() as *const u8, x86.as_mut_ptr() as usize);
+            std::ptr::copy_nonoverlapping(x86.as_ptr(), info as usize as *mut u8, given);
+        }
+    }
+    r
+}
+
 /// ICONINFO x64 : fIcon, xHotspot, yHotspot, 4 octets de remplissage,
 /// hbmMask (+16), hbmColor (+24). En x86 : hbmMask +12, hbmColor +16.
 fn iconinfo_to_x86(p: usize, out: u32) {
@@ -1025,6 +1138,25 @@ extern "win64" fn create_icon_indirect(args: u32, target: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menuiteminfo_x86() {
+        // 7zFM : MIIM_STRING|MIIM_SUBMENU, texte dans un tampon x86.
+        let low = crate::wow32::alloc_low(4096, false);
+        let x86 = unsafe { std::slice::from_raw_parts_mut(low as *mut u32, 12) };
+        let buf = (low + 1024) as u32;
+        x86.copy_from_slice(&[48, 0x44, 0, 0, 7, 0x1234, 0, 0, 0x99, buf, 64, 0]);
+        let w = unsafe { MENUITEMINFO.boxed64(low) };
+        let p = w.as_ptr() as usize;
+        assert_eq!(r64(p, 0), 80, "cbSize x64");
+        assert_eq!(q64(p, 24), 0x1234, "hSubMenu");
+        assert_eq!(q64(p, 48), 0x99, "dwItemData");
+        assert_eq!(q64(p, 56), buf as u64, "dwTypeData");
+        assert_eq!(r64(p, 64), 64, "cch");
+        let mut back = [0u32; 12];
+        unsafe { MENUITEMINFO.to32(p as *const u8, back.as_mut_ptr() as usize) };
+        assert_eq!(&back[1..], &x86[1..]);
+    }
 
     #[test]
     fn iconinfo_x86() {

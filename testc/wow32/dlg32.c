@@ -416,6 +416,82 @@ static void winscp(void)
     CHECK(id != 0 && SHChangeNotifyDeregister(id), "SHChangeNotifyRegister");
 }
 
+/* Contrôles sous-classés par une procédure x86, comme le panneau de
+ * 7zFM : les messages LVM_* et CBEM_* passent par la procédure x86 puis
+ * par CallWindowProc vers celle du contrôle (structures converties une
+ * seule fois). */
+static WNDPROC lv_old, cbex_old;
+static int lv_seen, cbex_seen;
+
+static LRESULT CALLBACK lv_sub(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == LVM_INSERTITEMW) {
+        const LVITEMW *it = (const LVITEMW *)l;
+        if (it->pszText && it->pszText != LPSTR_TEXTCALLBACKW && it->pszText[0] == L's')
+            lv_seen++;
+    }
+    return CallWindowProcW(lv_old, h, m, w, l);
+}
+
+static LRESULT CALLBACK cbex_sub(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == CBEM_INSERTITEMW && ((const COMBOBOXEXITEMW *)l)->iItem == 0)
+        cbex_seen++;
+    return CallWindowProcW(cbex_old, h, m, w, l);
+}
+
+static void subclassed(void)
+{
+    HWND lv = control(WC_LISTVIEWW, LVS_REPORT);
+    lv_old = (WNDPROC)SetWindowLongW(lv, GWL_WNDPROC, (LONG)lv_sub);
+    CHECK(lv_old != NULL, "sous-classement de la liste");
+    LVCOLUMNW col = {0};
+    col.mask = LVCF_TEXT | LVCF_WIDTH;
+    col.cx = 120;
+    col.pszText = L"Nom";
+    CHECK(SendMessageW(lv, LVM_INSERTCOLUMNW, 0, (LPARAM)&col) == 0, "colonne d'une liste sous-classée");
+    LVITEMW it = {0};
+    it.mask = LVIF_TEXT;
+    it.pszText = L"sous-classe.txt";
+    CHECK(SendMessageW(lv, LVM_INSERTITEMW, 0, (LPARAM)&it) == 0 && lv_seen == 1,
+          "élément d'une liste sous-classée (structure x86 dans la procédure x86)");
+    WCHAR text[64] = {0}, ctext[32] = {0};
+    LVITEMW get = {0};
+    get.pszText = text;
+    get.cchTextMax = 64;
+    CHECK(SendMessageW(lv, LVM_GETITEMTEXTW, 0, (LPARAM)&get) > 0 && wcscmp(text, L"sous-classe.txt") == 0,
+          "texte d'une liste sous-classée");
+    LVCOLUMNW gc = {0};
+    gc.mask = LVCF_TEXT;
+    gc.pszText = ctext;
+    gc.cchTextMax = 32;
+    CHECK(SendMessageW(lv, LVM_GETCOLUMNW, 0, (LPARAM)&gc) != 0 && wcscmp(ctext, L"Nom") == 0,
+          "en-tête d'une liste sous-classée");
+    DestroyWindow(lv);
+
+    HWND cb = CreateWindowExW(0, WC_COMBOBOXEXW, L"", WS_POPUP | CBS_DROPDOWN, 0, 0, 300, 200,
+                              NULL, NULL, NULL, NULL);
+    CHECK(cb != NULL, "ComboBoxEx32");
+    cbex_old = (WNDPROC)SetWindowLongW(cb, GWL_WNDPROC, (LONG)cbex_sub);
+    COMBOBOXEXITEMW ci = {0};
+    ci.mask = CBEIF_TEXT | CBEIF_IMAGE | CBEIF_SELECTEDIMAGE;
+    ci.iItem = 0;
+    ci.pszText = L"C:\\Users";
+    ci.iImage = 0;
+    ci.iSelectedImage = 1;
+    CHECK(SendMessageW(cb, CBEM_INSERTITEMW, 0, (LPARAM)&ci) == 0 && cbex_seen == 1,
+          "CBEM_INSERTITEMW d'une ComboBoxEx sous-classée");
+    WCHAR ctx[32] = {0};
+    COMBOBOXEXITEMW cg = {0};
+    cg.mask = CBEIF_TEXT;
+    cg.iItem = 0;
+    cg.pszText = ctx;
+    cg.cchTextMax = 32;
+    CHECK(SendMessageW(cb, CBEM_GETITEMW, 0, (LPARAM)&cg) != 0 && wcscmp(ctx, L"C:\\Users") == 0,
+          "texte d'une ComboBoxEx sous-classée");
+    DestroyWindow(cb);
+}
+
 int main(void)
 {
     INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_WIN95_CLASSES | ICC_TAB_CLASSES };
@@ -424,6 +500,7 @@ int main(void)
     CHECK(il != NULL && ImageList_GetImageCount(il) == 0, "ImageList_Create");
     ImageList_Destroy(il);
     list_view();
+    subclassed();
     tree_view();
     tool_bar();
     tab_control();
