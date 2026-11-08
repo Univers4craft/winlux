@@ -1007,6 +1007,57 @@ pub struct DcState {
     pub screen: bool,
 }
 
+/// Pixels d'une DIB section : tampon à nous, ou vue d'une section
+/// (CreateDIBSection avec hSection, #996) que l'appelant partage avec un
+/// autre processus. La vue est rendue à la destruction de la bitmap.
+pub enum DibBits {
+    Owned(Vec<u8>),
+    /// `base` : adresse rendue par MapViewOfFile, `ptr` : premier pixel.
+    View {
+        base: usize,
+        ptr: *mut u8,
+        len: usize,
+    },
+}
+
+// La vue appartient à la bitmap, protégée par le verrou des objets GDI.
+unsafe impl Send for DibBits {}
+
+impl std::ops::Deref for DibBits {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            DibBits::Owned(v) => v,
+            DibBits::View { ptr, len, .. } => unsafe { std::slice::from_raw_parts(*ptr, *len) },
+        }
+    }
+}
+
+impl std::ops::DerefMut for DibBits {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self {
+            DibBits::Owned(v) => v,
+            DibBits::View { ptr, len, .. } => unsafe { std::slice::from_raw_parts_mut(*ptr, *len) },
+        }
+    }
+}
+
+impl Clone for DibBits {
+    fn clone(&self) -> Self {
+        DibBits::Owned(self.to_vec())
+    }
+}
+
+impl Drop for DibBits {
+    fn drop(&mut self) {
+        if let DibBits::View { base, .. } = self {
+            unsafe {
+                crate::dlls::mmap::unmap_view_of_file(*base);
+            }
+        }
+    }
+}
+
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
 #[derive(Clone)]
 pub enum GdiObject {
@@ -1023,7 +1074,7 @@ pub enum GdiObject {
         width: usize,
         height: usize,
         pixels: Vec<u32>,
-        dib_bits: Option<Vec<u8>>,
+        dib_bits: Option<DibBits>,
         dib_bit_count: u16,
         dib_stride: usize,
         top_down: bool,
@@ -1715,7 +1766,20 @@ pub fn create_dib_section_with_palette(
     height: i32,
     bit_count: u16,
     top_down: bool,
+    palette: Vec<u32>,
+) -> Option<(usize, *mut u8)> {
+    create_dib_section_in(width, height, bit_count, top_down, palette, None)
+}
+
+/// Comme `create_dib_section_with_palette`, les pixels pouvant vivre dans
+/// une section (`hSection`, `offset`) projetée pour la durée de la bitmap.
+pub fn create_dib_section_in(
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    top_down: bool,
     mut palette: Vec<u32>,
+    section: Option<(usize, u32)>,
 ) -> Option<(usize, *mut u8)> {
     if width <= 0 || height <= 0 || !matches!(bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
         return None;
@@ -1733,7 +1797,32 @@ pub fn create_dib_section_with_palette(
     }
     let stride = (width as usize * bit_count as usize).div_ceil(32) * 4;
     let bytes = stride.checked_mul(height as usize)?;
-    let mut dib_bits = vec![0u8; bytes];
+    let mut dib_bits = match section {
+        None => DibBits::Owned(vec![0u8; bytes]),
+        Some((handle, offset)) => {
+            // FILE_MAP_READ | FILE_MAP_WRITE ; le contenu de la section est
+            // gardé tel quel, comme sous Windows. L'offset (multiple de 4)
+            // est ramené à la granularité d'allocation de MapViewOfFile.
+            let skip = (offset % 0x1_0000) as usize;
+            let base = unsafe {
+                crate::dlls::mmap::map_view_of_file(
+                    handle,
+                    0x6,
+                    0,
+                    offset - skip as u32,
+                    bytes + skip,
+                )
+            };
+            if base == 0 {
+                return None;
+            }
+            DibBits::View {
+                base,
+                ptr: (base + skip) as *mut u8,
+                len: bytes,
+            }
+        }
+    };
     let bits_ptr = dib_bits.as_mut_ptr();
     {
         let mut palettes = lock(dib_palettes());
@@ -1844,7 +1933,7 @@ fn set_bitmap_color(
     width: usize,
     height: usize,
     pixels: &mut [u32],
-    dib_bits: &mut Option<Vec<u8>>,
+    dib_bits: &mut Option<DibBits>,
     dib_bit_count: u16,
     dib_stride: usize,
     top_down: bool,
