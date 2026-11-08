@@ -207,71 +207,116 @@ pub fn run_phase(
         if !wanted || !ctx.eval(cond) {
             continue;
         }
-        if a.kind & 0x400 != 0 && a.kind & 0x300 != 0 {
-            continue; // retour arrière ou validation
+        let mut scheduled = Vec::new();
+        if run_one(db, ctx, name, a, phase, &temp, skip, log, &mut scheduled) {
+            launched += 1;
         }
-        if is_quiet_exec(a) {
-            let line = ctx.get(name);
-            if line.trim().is_empty() {
-                continue;
-            }
-            let (outcome, _) = run::command_line(&line, "", true, true);
-            if matches!(outcome, Outcome::Exited(_)) {
-                launched += 1;
-            }
-            log.log(&format!(
-                "Action personnalisée {name} ({}) : {}",
-                a.target,
-                run::describe(line.trim(), &outcome)
-            ));
-            continue;
-        }
-        if matches!(base, 1 | 17) {
-            if let Some(m) = dll_action(db, ctx, name, a, phase, &temp) {
-                if m.lines().next().is_some_and(|l| l.ends_with(": terminée")) {
+        // Actions demandées par MsiDoAction (souvent une action différée
+        // préparée par son action « Sched… » de WiX) : lancées tout de suite.
+        let mut depth = 0;
+        while !scheduled.is_empty() && depth < 8 {
+            depth += 1;
+            for sub in std::mem::take(&mut scheduled) {
+                let Some(b) = actions.get(&sub) else {
+                    log.log(&format!(
+                        "MsiDoAction {sub} : action standard, déjà faite par msiexec"
+                    ));
+                    continue;
+                };
+                if b.kind & 0x3F == 51 {
+                    let value = ctx.format(&b.target);
+                    ctx.props.insert(b.source.clone(), value);
+                } else if run_one(db, ctx, &sub, b, phase, &temp, skip, log, &mut scheduled) {
                     launched += 1;
                 }
-                for line in m.lines() {
-                    log.log(line);
-                }
             }
-            continue;
-        }
-        let (target, params, dir) = match command(db, ctx, name, a, &temp) {
-            Ok(c) => c,
-            Err(e) => {
-                log.log(&format!("Action personnalisée {name} non lancée : {e}"));
-                continue;
-            }
-        };
-        if let (Some(s), Target::Pe(p)) = (skip, &target) {
-            if crate::paths::to_linux(s) == *p {
-                continue;
-            }
-        }
-        let wait = a.kind & 0x80 == 0;
-        let (outcome, _) = run::spawn(&target, &params, &dir, wait, false);
-        let what = match &target {
-            Target::Pe(p) => format!("{} {params}", p.display()),
-            Target::Builtin(b) => format!("{b} {params}"),
-        };
-        match &outcome {
-            Outcome::Exited(c) if *c != 0 && a.kind & 0x40 == 0 => log.log(&format!(
-                "Action personnalisée {name} en échec (code {c}), installation poursuivie : {}",
-                what.trim()
-            )),
-            Outcome::Exited(_) | Outcome::Started => {
-                launched += 1;
-                log.log(&format!("Action personnalisée {name} : {}", what.trim()))
-            }
-            other => log.log(&format!(
-                "Action personnalisée {name} : {}",
-                run::describe(what.trim(), other)
-            )),
         }
     }
     let _ = std::fs::remove_dir_all(&temp);
     launched
+}
+
+/// Lance une action EXE ou DLL ; vrai si elle a été lancée. `scheduled`
+/// reçoit les actions demandées par MsiDoAction depuis une DLL.
+#[allow(clippy::too_many_arguments)]
+fn run_one(
+    db: &Database,
+    ctx: &mut Context,
+    name: &str,
+    a: &Action,
+    phase: Phase,
+    temp: &std::path::Path,
+    skip: Option<&str>,
+    log: &mut Logger,
+    scheduled: &mut Vec<String>,
+) -> bool {
+    let base = a.kind & 0x3F;
+    if base == 1 && is_shell_exec(a) {
+        return false;
+    }
+    if a.kind & 0x400 != 0 && a.kind & 0x300 != 0 {
+        return false; // retour arrière ou validation
+    }
+    if is_quiet_exec(a) {
+        let line = ctx.get(name);
+        if line.trim().is_empty() {
+            return false;
+        }
+        let (outcome, _) = run::command_line(&line, "", true, true);
+        log.log(&format!(
+            "Action personnalisée {name} ({}) : {}",
+            a.target,
+            run::describe(line.trim(), &outcome)
+        ));
+        return matches!(outcome, Outcome::Exited(_));
+    }
+    if matches!(base, 1 | 17) {
+        let Some(m) = dll_action(db, ctx, name, a, phase, temp, scheduled) else {
+            return false;
+        };
+        for line in m.lines() {
+            log.log(line);
+        }
+        return m.lines().next().is_some_and(|l| l.ends_with(": terminée"));
+    }
+    let (target, params, dir) = match command(db, ctx, name, a, temp) {
+        Ok(c) => c,
+        Err(e) => {
+            log.log(&format!("Action personnalisée {name} non lancée : {e}"));
+            return false;
+        }
+    };
+    if let (Some(s), Target::Pe(p)) = (skip, &target) {
+        if crate::paths::to_linux(s) == *p {
+            return false;
+        }
+    }
+    let wait = a.kind & 0x80 == 0;
+    let (outcome, _) = run::spawn(&target, &params, &dir, wait, false);
+    let what = match &target {
+        Target::Pe(p) => format!("{} {params}", p.display()),
+        Target::Builtin(b) => format!("{b} {params}"),
+    };
+    match &outcome {
+        Outcome::Exited(c) if *c != 0 && a.kind & 0x40 == 0 => {
+            log.log(&format!(
+                "Action personnalisée {name} en échec (code {c}), installation poursuivie : {}",
+                what.trim()
+            ));
+            false
+        }
+        Outcome::Exited(_) | Outcome::Started => {
+            log.log(&format!("Action personnalisée {name} : {}", what.trim()));
+            true
+        }
+        other => {
+            log.log(&format!(
+                "Action personnalisée {name} : {}",
+                run::describe(what.trim(), other)
+            ));
+            false
+        }
+    }
 }
 
 /// Action DLL (1, 17) exécutée par `winlux --msi-dll-action` : propriétés
@@ -284,6 +329,7 @@ fn dll_action(
     a: &Action,
     phase: Phase,
     temp: &std::path::Path,
+    scheduled: &mut Vec<String>,
 ) -> Option<String> {
     let dll = match a.kind & 0x3F {
         1 => {
@@ -359,6 +405,9 @@ fn dll_action(
     let code = back
         .remove(super::session::CODE_KEY)
         .and_then(|c| c.parse::<i32>().ok());
+    if let Some(list) = back.remove(super::session::DO_KEY) {
+        scheduled.extend(list.split('\n').filter(|s| !s.is_empty()).map(String::from));
+    }
     let outcome = match (outcome, code) {
         (Outcome::Exited(_), Some(c)) => Outcome::Exited(c),
         (o, _) => o,

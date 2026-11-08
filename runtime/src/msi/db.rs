@@ -74,6 +74,7 @@ impl Row<'_> {
     }
 }
 
+#[derive(Default)]
 pub struct Database {
     pub tables: HashMap<String, Table>,
     pub streams: HashMap<String, Vec<u8>>,

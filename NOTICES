@@ -25,14 +25,21 @@ Dépendances transitives compilées statiquement :
   bitflags 2          — MIT OR Apache-2.0
   cfg-if              — MIT OR Apache-2.0
   crc32fast           — MIT OR Apache-2.0
+  errno               — MIT OR Apache-2.0
   fdeflate            — MIT OR Apache-2.0
   flate2              — MIT OR Apache-2.0
   gethostname         — Apache-2.0
+  linux-raw-sys       — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
   miniz_oxide         — MIT OR Zlib OR Apache-2.0
-  rustix              — MIT OR Apache-2.0
+  rustix              — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
   simd-adler32        — MIT
   x11rb-protocol      — MIT OR Apache-2.0
   zlib-rs             — Zlib
+
+Le texte de licence et les mentions de copyright de chacune de ces
+bibliothèques sont livrés dans /usr/share/doc/winlux-desktop/crates/ ; le
+fichier /usr/share/doc/winlux-desktop/copyright les récapitule. La liste est
+vérifiée à chaque construction par scripts/stage-notices.py.
 
 L'image ISO contient aussi des centaines de paquets Ubuntu non modifiés,
 chacun sous sa propre licence (texte complet dans
