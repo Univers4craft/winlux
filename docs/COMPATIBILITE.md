@@ -216,7 +216,7 @@ Limites honnêtes de la mesure :
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
 | Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison) sur un mixeur PipeWire/Pulse/ALSA | entrée MIDI (`midiIn*`), `msacm32` |
 | Vidéo | MP3/AAC décodés, DXVA2 H.264, DirectShow (graphe de lecture `CLSID_FilterGraph` sur le moteur multimédia) | chaîne Media Foundation (#23), filtres DirectShow fournis par le programme, `avicap32`, `evr` |
-| Réseau | Winsock TCP/UDP de base, DirectPlay 4 (`dplayx`, parties entre PC Winlux), WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
+| Réseau | Winsock TCP/UDP de base, DirectPlay 4 et 8 (`dplayx`, `dpnet`, parties entre PC Winlux), WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
 | Sécurité et crypto | bcrypt, une partie de crypt32, jetons simplifiés | CryptoAPI ancienne (`CryptAcquireContext`…), `ncrypt`, magasins de certificats, ACL réelles |
 | Impression | winspool → PDF → CUPS (IPP) | pilotes, XPS, polices de l'appli dans le PDF |
 | Installeurs | NSIS, Inno Setup, MSI maison | plugins NSIS, actions MSI en DLL, WiX Burn, InstallShield (#179) |
@@ -574,8 +574,7 @@ Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
-DirectPlay 8 (`dpnet`, #863), les effets D3DX livrés déjà compilés
-(fx_2_0 binaire), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
+Les effets D3DX livrés déjà compilés (fx_2_0 binaire, #909), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
 `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
 toujours en 32 bits (point 3).
 
@@ -596,10 +595,14 @@ Direct3D 9 et DirectSound pour les programmes 32 bits (#778, #859) ;
 DirectShow (`quartz.dll`, #835 : `RenderFile`, contrôle, événements,
 fenêtre vidéo, volume, position, sur le moteur multimédia de Winlux) ;
 DirectPlay 4 (`dplayx.dll`/`dplay.dll`, #836 : fournisseur TCP/IP, recherche
-et création de parties, joueurs, groupes, messages). DirectPlay passe par un
-protocole propre à Winlux (annonce UDP sur le port 47624, jeu en TCP via
-l'hôte) : deux PC Winlux jouent ensemble, un PC Windows ne voit pas ces
-parties. Test : `scripts/test-wow32.sh` (`jeux32.exe` et `jeux64.exe`).
+et création de parties, joueurs, groupes, messages) ; DirectPlay 8
+(`dpnet.dll`/`dpnaddr.dll`, #863 : `IDirectPlay8Peer`, `Client`, `Server`,
+`IDirectPlay8Address` et ses URL `x-directplay:/`, recherche de parties,
+connexion acceptée ou refusée par l'hôte, joueurs, groupes, messages,
+informations, fin de partie). DirectPlay passe par un protocole propre à
+Winlux (annonce UDP sur le port 47624 pour DirectPlay 4, sur le port de la
+partie et le 6073 pour DirectPlay 8, jeu en TCP via l'hôte) : deux PC Winlux
+jouent ensemble, un PC Windows ne voit pas ces parties. Test : `scripts/test-wow32.sh` (`jeux32.exe` et `jeux64.exe`).
 
 Ampleur : **L**. Suivi : #237, et #23 pour la vidéo.
 

@@ -858,6 +858,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // DirectPlay 8 (dpnet.dll, #863).
+        if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
