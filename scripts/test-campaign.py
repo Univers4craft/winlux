@@ -1315,6 +1315,11 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1155 : libuv (Node d'Electron) pose SetFileCompletionNotificationModes
+# sur chaque socket ; un refus devenait « connect EISDIR ».
+ok("set_completion_modes(h, flags)" in (runtime_dlls / "kernel32_node.rs").read_text(encoding="utf-8")
+   and "mode_sans_paquet_si_fin_immediate_pour_libuv" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Sockets Node/Electron : SetFileCompletionNotificationModes, plus de « connect EISDIR » (#1155)")
 # #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
 # (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
 ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
