@@ -28,6 +28,23 @@ ou qui a moins de 3 Gio de mémoire.
   Plusieurs assistants activés : on choisit dans l'en-tête du panneau, le
   choix est retenu. Le bouton part quand le dernier est désactivé.
   `winlux-control align-left/center` garde le bouton.
+- Chaque assistant a **sa propre** fenêtre d'activation, unique : en activer
+  un deuxième pendant que la première est ouverte marche, et un nouveau clic
+  sur un interrupteur ramène sa fenêtre devant (#910).
+- **Sans navigateur sur ce PC** (l'ISO n'en livre pas, #912) : rien n'est
+  ouvert ici. La fenêtre montre le lien de connexion à ouvrir sur un
+  téléphone ou un autre ordinateur, avec « Copier le lien » et « Installer un
+  navigateur » (page Navigateurs, choix explicite). Claude : on colle ensuite
+  le code affiché par la page. ChatGPT : `codex login --device-auth`, le code
+  à saisir est affiché en grand. Annuler ferme aussi ce que la connexion a
+  lancé (groupe de processus).
+- `claude.exe` et `codex` tournent toujours dans `~/.local/share/winlux/assistant`,
+  jamais dans le dossier courant : lancés depuis le Bureau, la couche PE
+  demandait l'accès aux fichiers personnels et l'activation restait figée (#913).
+- llama.cpp : l'archive `-bin-ubuntu-x64` est prise dans la publication la
+  plus récente qui en a une (`releases?per_page=30`), pas dans « latest »,
+  qui peut n'avoir aucun binaire (#911). Une bibliothèque système manquante au
+  moteur est dite dès l'installation.
 - **Claude et ChatGPT n'ont aucun outil.** Claude tourne en `claude -p
   --tools "" --setting-sources "" --strict-mcp-config
   --no-session-persistence` ; Codex en `codex exec --ephemeral

@@ -102,6 +102,7 @@ fake.write_text(f"""#!{sys.executable}
 import json, os, sys
 mode = os.environ.get("FAKE_CLAUDE", "ok")
 if sys.argv[1:3] == ["auth", "status"]:
+    open({str(work / "claude-status-cwd.txt")!r}, "w").write(os.getcwd())
     print(json.dumps({{"loggedIn": mode != "logout", "authMethod": "claude.ai", "email": "damien@example.org"}}))
     sys.exit(0)
 data = sys.stdin.read()
@@ -117,8 +118,14 @@ print(json.dumps({{"type": "result", "is_error": False, "result": json.dumps(ans
 """)
 fake.chmod(0o755)
 os.environ["WINLUX_ASSISTANT_CLAUDE"] = str(fake)
+(home / "Bureau").mkdir()
+previous_cwd = os.getcwd()
+os.chdir(home / "Bureau")  # Paramètres lancés depuis le Bureau (#913)
 status = assistant.auth_status()
+os.chdir(previous_cwd)
 assert status["loggedIn"] and assistant.account_name(status) == "damien@example.org"
+assert (work / "claude-status-cwd.txt").read_text() == str(assistant.WORK), \
+    "claude.exe jamais lancé dans un dossier personnel : la couche PE demanderait l'accès aux fichiers (#913)"
 
 conversation = assistant.Conversation()
 question = "Pourquoi putty.exe ne s'ouvre pas ? Mon dossier secret-perso"
@@ -446,16 +453,24 @@ with zipfile.ZipFile(engine_zip, "w") as bundle:
     bundle.writestr("build/bin/libllama.so", "so")
 engine_zip = engine_zip.getvalue()
 model = b"GGUF" + b"\0" * 4096
-routes["/releases/latest"] = json.dumps({"assets": [
+# #911 : la publication la plus récente peut n'avoir aucun binaire (v0.9.0 = nightly-tag.txt).
+assert assistant.llama_asset([{"tag_name": "v0.9.0", "assets": [{"name": "nightly-tag.txt", "digest": "sha256:" + "1" * 64}]},
+                              {"tag_name": "b12202", "prerelease": True, "assets": [
+                                  {"name": "llama-b12202-bin-ubuntu-x64.tar.gz", "digest": "sha256:" + "2" * 64}]}]
+                             )["name"] == "llama-b12202-bin-ubuntu-x64.tar.gz"
+assert assistant.llama_asset([{"assets": [{"name": "nightly-tag.txt"}]}]) is None
+assert assistant.llama_asset([{"draft": True, "assets": [{"name": "llama-b1-bin-ubuntu-x64.zip", "digest": "sha256:" + "3" * 64}]}]) is None
+assert "releases?per_page=" in assistant.LLAMA_RELEASE_API and "latest" not in assistant.LLAMA_RELEASE_API
+routes["/releases"] = json.dumps([{"tag_name": "v0.9.0", "assets": [{"name": "nightly-tag.txt"}]}, {"assets": [
     {"name": "llama-b9999-bin-win-cpu-x64.zip", "browser_download_url": f"{base}/win.zip", "digest": "sha256:" + "0" * 64},
     {"name": "llama-b9999-bin-ubuntu-x64.zip", "browser_download_url": f"{base}/engine.zip",
-     "digest": "sha256:" + hashlib.sha256(engine_zip).hexdigest()}]}).encode()
+     "digest": "sha256:" + hashlib.sha256(engine_zip).hexdigest()}]}]).encode()
 routes["/engine.zip"] = engine_zip
 routes[f"/api/models/{assistant.LOCAL_MODEL_REPO}/tree/main"] = json.dumps([
     {"type": "file", "path": "qwen2.5-1.5b-instruct-q8_0.gguf", "lfs": {"oid": "1" * 64}},
     {"type": "file", "path": assistant.LOCAL_MODEL_FILE, "lfs": {"oid": hashlib.sha256(model).hexdigest()}}]).encode()
 routes[f"/{assistant.LOCAL_MODEL_REPO}/resolve/main/{assistant.LOCAL_MODEL_FILE}"] = model[:-1] + b"X"  # altéré
-assistant.LLAMA_RELEASE_API = f"{base}/releases/latest"
+assistant.LLAMA_RELEASE_API = f"{base}/releases"
 assistant.HF_BASE = base
 progress = []
 try:
@@ -554,6 +569,41 @@ os.environ.pop("WINLUX_ASSISTANT_LLAMA")
 assert assistant.main(["winlux-assistant", "--supprimer", "local"]) == 0
 assert not assistant.LOCAL_DIR.exists() and not assistant.is_enabled()
 assert assistant.main(["winlux-assistant", "--activer", "inconnu"]) == 2
+
+# Moteur à qui il manque une bibliothèque : dit à l'installation, pas à l'ouverture du panneau.
+broken = work / "broken-llama-server"
+broken.write_text("#!/bin/sh\necho 'llama-server: error while loading shared libraries: libgomp.so.1: cannot open "
+                  "shared object file: No such file or directory' >&2\nexit 127\n")
+broken.chmod(0o755)
+assert assistant.engine_problem(broken) == "libgomp.so.1"
+
+# ── Sans navigateur sur ce PC (#912) : lien pour un autre appareil, rien n'est ouvert ici ──
+browsers = work / "navigateurs"
+assistant.BROWSERS_DIR = browsers
+saved_commands = assistant.BROWSER_COMMANDS
+assistant.BROWSER_COMMANDS = ("navigateur-inexistant-winlux",)
+assert not assistant.has_browser()
+codex_provider = assistant.provider("chatgpt")
+assert codex_provider.login_command(Path("/x/codex"), False) == ["/x/codex", "login", "--device-auth"]
+assert codex_provider.login_command(Path("/x/codex"), True) == ["/x/codex", "login"]
+assert assistant.provider("claude").login_command(Path("/x/claude"), False)[1:] == ["auth", "login", "--claudeai"]
+firefox = browsers / "firefox/root/usr/lib/firefox/firefox"
+firefox.parent.mkdir(parents=True)
+firefox.write_text("#!/bin/sh\n")
+firefox.chmod(0o755)
+assert assistant.has_browser(), "Firefox du catalogue Winlux"
+assistant.BROWSER_COMMANDS = saved_commands
+setup = (project / "scripts/winlux-assistant.py").read_text(encoding="utf-8")
+assert 'WINLUX_BROWSER="true"' in setup and "os.killpg" in setup and "start_new_session=True" in setup
+assert '"settings", "11"' in setup, "Installer un navigateur : page Navigateurs, choix explicite"
+for text in ("Copier le lien", "Installer un navigateur", "Lien copié."):
+    assert text in assistant._TR and len(assistant._TR[text]) == 3, text
+
+# ── Une fenêtre d'activation par assistant (#910), unique : un 2e clic la ramène ──
+assert 'org.winlux.AssistantSetup.{key}' in setup and "app.get_is_remote()" in setup
+pages = (project / "scripts/winlux-settings-pages.py").read_text(encoding="utf-8")
+toggle = pages[pages.index("    def assistant_toggle"):pages.index("    # ── Partage et transfert")]
+assert "assistant_setups" in toggle and "if getattr(self, \"assistant_setup\", None)" not in toggle
 httpd.shutdown()
 
 # ── L'IA parle la langue choisie pour Winlux (Paramètres > Langue, /etc/winlux/locale.conf) ──
