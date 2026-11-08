@@ -14,6 +14,7 @@ réseau disponible).
 | `flatpak` | AppStream XML des remotes configurées (Flathub quand l'utilisateur l'a choisi) | `flatpak install --user`, `update`, `uninstall` |
 | `snap` | API locale de snapd (`/run/snapd.socket`) | `snap install/refresh/remove` |
 | `appimage` | flux AppImageHub, dernière version sur GitHub ; lu seulement pour un compte qui a déjà installé une AppImage (catalogue ni examiné ni signé, `docs/BOUTIQUES.md`) | `~/Applications` + lanceur `.desktop` |
+| `editeur` | `integration/store-editeurs.json` : index du dépôt de l'éditeur, en HTTPS (Claude, Spotify, Signal…) | confirmation, SHA-256 vérifié, `apt-get install -- <fichier>` ; purge + dépôt retiré |
 | `windows` | catalogues interchangeables, Scoop Extras par défaut (voir plus bas) | runtime Winlux (`winlux setup.exe`, msiexec intégré, applications portables) |
 
 Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
@@ -70,6 +71,50 @@ sinon `/run/winlux` ; partagé, l'index d'un premier compte bloquait celui d'un 
 
 Commandes : `refresh [--force]`, `details <clé>`, `install|remove|update <clé>`,
 `update-all`, `install-file <fichier>` (.exe, .msi, .deb, .AppImage, .flatpakref).
+
+### Logiciels publiés pour Linux par leur éditeur (#1056)
+
+Source `editeur` : les logiciels courants dont l'éditeur publie lui-même un
+paquet .deb pour Linux, listés dans `integration/store-editeurs.json`
+(`/usr/share/winlux/store-editeurs.json`), par ordre alphabétique : 1Password,
+AnyDesk, ChatGPT, Claude, Discord, Element, ONLYOFFICE, Signal, Spotify,
+Sublime Text, VSCodium. Rien n'est fourni dans l'ISO.
+
+- `kind: index` : le Store lit l'index `Packages` du dépôt de l'éditeur
+  (`base` + `index`) et prend la version la plus récente du paquet, avec son
+  empreinte SHA-256. L'adresse du fichier doit rester sur un des `hosts` de
+  l'éditeur.
+- `kind: deb` : fichier unique épinglé dans le catalogue (`url`, `version`,
+  `sha256`). Sans version ni empreinte, l'entrée reste masquée.
+
+**Installer.** Une fenêtre (`/usr/lib/winlux/winlux-store-confirm`) montre le
+produit, la version, l'éditeur, l'adresse exacte, la taille, la licence et
+l'empreinte, dans la langue de l'interface, avec **Annuler** par défaut ;
+Annuler, Échap, fermer la fenêtre ou l'absence d'affichage valent refus, et
+rien n'est téléchargé. Après « Installer » : téléchargement dans un dossier
+neuf et vide du cache, empreinte comparée à celle montrée, nom et version du
+paquet contrôlés (`dpkg-deb -f`), puis `apt-get install -- <fichier>` par le
+relais root (Contrôle de compte d'utilisateur). Le dossier est effacé ensuite.
+Une mise à jour (`u`) repasse par la même confirmation.
+
+**Désinstaller.** `apt-get purge --autoremove`, puis `winlux-store-repos clean
+<id>` (administrateur, relais root) : le paquet d'un éditeur peut déclarer son
+dépôt pour les mises à jour ; tout fichier de `/etc/apt/sources.list.d` dont
+toutes les sources pointent vers ses `hosts` est retiré, avec sa clé
+`signed-by` quand plus aucune source ne s'en sert. Refus tant que le paquet
+est installé. Les documents et réglages de l'utilisateur restent dans son
+dossier personnel.
+
+**Sonde.** `scripts/check-store-editeurs.py` (étape non bloquante de la CI)
+donne pour chaque éditeur la version et l'empreinte du jour, et pour une
+entrée `deb` l'adresse finale, l'empreinte à épingler et les lignes de dépôt
+déclarées par les scripts du paquet (lues comme du texte).
+
+Écartés : WinRAR (sous Linux, seulement RAR en ligne de commande, payant ;
+7-Zip, Gestionnaire d'archives et Ark sont dans la sélection), Steam (le
+lanceur de Valve exige l'architecture i386 en plus), et les logiciels sans
+dépôt ni empreinte publiés (Zoom, Slack, Telegram, Obsidian, Bitwarden),
+proposés par Flathub quand on l'a choisi.
 
 ### Logiciels courants (appli Bienvenue)
 

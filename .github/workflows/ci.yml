@@ -414,6 +414,11 @@ jobs:
         run: |
           WINLUX_STORE_CATALOGS_DEFS=integration/store-catalogs.json python3 -B scripts/winlux-store-catalogs.py --check-key flathub
 
+      - name: Sonder les dépôts des éditeurs du Store (informatif)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: python3 -I scripts/check-store-editeurs.py
+
       - name: Valider le réseau et les commandes des paramètres
         run: |
           sh scripts/test-install-safety.sh
@@ -430,6 +435,7 @@ jobs:
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
+          python3 -B scripts/test-store-editeurs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
