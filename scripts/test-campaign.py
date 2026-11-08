@@ -836,6 +836,10 @@ ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
    and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
+# #1045/#1046 : clé Fonts toujours présente, vue dynamique jamais écrite ni doublée.
+ok("fn vue_dynamique_jamais_ecrite_ni_doublee" in (ROOT / "runtime/src/registry/tests.rs").read_text()
+   and "live::strip" in (ROOT / "runtime/src/registry/mod.rs").read_text(),
+   "registre : clé Fonts toujours là, ni doublon ni police fantôme, vue dynamique hors de registry.tsv (#1045, #1046)")
 # #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
 ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
    and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()

@@ -932,11 +932,17 @@ fn overlay_network(data: &mut Data) {
 }
 
 fn load_from_disk(path: &Path) -> Result<Data, i32> {
+    Ok(load_with_live(path)?.0)
+}
+
+/// Registre du disque plus les vues calculées ; rend aussi les valeurs de
+/// la vue dynamique, à ne pas réécrire sur le disque (#1046).
+fn load_with_live(path: &Path) -> Result<(Data, live::LiveValues), i32> {
     let mut data = load_file(path)?;
     overlay_proxy(&mut data);
     overlay_network(&mut data);
-    live::overlay(&mut data);
-    Ok(data)
+    let values = live::overlay(&mut data);
+    Ok((data, values))
 }
 
 fn load_file(path: &Path) -> Result<Data, i32> {
@@ -1015,11 +1021,13 @@ pub fn write<T>(f: impl FnOnce(&mut Data) -> Result<T, i32>) -> Result<T, i32> {
     let mut cache = crate::dlls::lock(&CACHE);
     let path = store_path();
     let _lock = file_lock(&path)?;
-    let mut data = load_from_disk(&path)?;
+    let (mut data, values) = load_with_live(&path)?;
     let proxy_before = proxy_values(&data);
     let out = f(&mut data)?;
     sync_proxy(&proxy_before, &data);
-    write_to_disk(&path, &data)?;
+    let mut stored = data.clone();
+    live::strip(&mut stored, &values);
+    write_to_disk(&path, &stored)?;
     *cache = Some(Cache {
         stamp: stamp(&path),
         proxy: stamp(&crate::admin::path(crate::proxy::CONFIG)),
