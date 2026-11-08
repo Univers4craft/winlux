@@ -690,8 +690,10 @@ pub unsafe extern "win64" fn co_register_class_object(
     if clsid.is_null() || punk == 0 || ctx == 0 {
         return E_INVALIDARG;
     }
-    // Seules les fabriques multi-usages sont actuellement prises en charge.
-    if _flags != 1 {
+    // REGCLS_SINGLEUSE (0), MULTIPLEUSE (1), MULTI_SEPARATE (2), avec ou
+    // sans REGCLS_SUSPENDED (4) : chaque création passe par la fabrique,
+    // et une inscription suspendue est servie aussitôt.
+    if _flags & !4 > 2 {
         return E_NOTIMPL;
     }
     let guid = *clsid;
@@ -709,6 +711,14 @@ pub unsafe extern "win64" fn co_register_class_object(
             punk,
             context: ctx,
         }));
+    // Serveur hors processus : canal ouvert aux autres processus (#16).
+    if ctx & super::com_local::CLSCTX_LOCAL_SERVER != 0 {
+        let hr = super::com_local::serve(c, &guid, punk);
+        if hr < 0 {
+            co_revoke_class_object(c);
+            return hr;
+        }
+    }
     *cookie = c;
     S_OK
 }
@@ -722,6 +732,7 @@ pub unsafe extern "win64" fn co_revoke_class_object(cookie: u32) -> i32 {
         return E_INVALIDARG;
     };
     let entry = factories.remove(index);
+    super::com_local::revoke(cookie);
     // Release peut réentrer dans COM : ne pas garder le verrou du registre.
     drop(factories);
     drop(entry);
@@ -873,6 +884,12 @@ pub unsafe extern "win64" fn co_create_instance(
         // Serveur en processus inscrit au registre (InprocServer32, #16).
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
             if let Some(hr) = create_from_registry(&guid, &iid, out) {
+                return hr;
+            }
+        }
+        // Serveur hors processus (LocalServer32) : mandataire IDispatch.
+        if ctx & super::com_local::CLSCTX_LOCAL_SERVER != 0 {
+            if let Some(hr) = super::com_local::create(&guid, &iid, out) {
                 return hr;
             }
         }
@@ -1467,6 +1484,29 @@ pub extern "win64" fn co_free_unused_libraries() {
     }
 }
 
+static SERVER_PROCESS_REFS: AtomicU32 = AtomicU32::new(0);
+
+/// CoAddRefServerProcess : compteur global du serveur hors processus.
+pub extern "win64" fn co_add_ref_server_process() -> u32 {
+    SERVER_PROCESS_REFS.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// CoReleaseServerProcess : à zéro, le serveur va s'arrêter.
+pub extern "win64" fn co_release_server_process() -> u32 {
+    SERVER_PROCESS_REFS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            Some(n.saturating_sub(1))
+        })
+        .map(|n| n.saturating_sub(1))
+        .unwrap_or(0)
+}
+
+/// CoResumeClassObjects / CoSuspendClassObjects : les inscriptions sont
+/// servies dès CoRegisterClassObject.
+pub extern "win64" fn co_resume_class_objects() -> i32 {
+    S_OK
+}
+
 /// CoFreeUnusedLibrariesEx : le délai demandé n'est pas observé.
 pub extern "win64" fn co_free_unused_libraries_ex(_delay: u32, _reserved: u32) {
     co_free_unused_libraries();
@@ -1580,7 +1620,9 @@ pub fn exports() -> crate::dlls::Exports {
         // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
         // (MinGW les importe d'ole32).
     "IsEqualGUID"=>fn is_equal_guid,"CoDisconnectObject"=>fn co_disconnect_object,
-        "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,"CreateBindCtx"=>fn create_bind_ctx,
+        "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,
+        "CoAddRefServerProcess"=>fn co_add_ref_server_process,"CoReleaseServerProcess"=>fn co_release_server_process,
+        "CoResumeClassObjects"=>fn co_resume_class_objects,"CoSuspendClassObjects"=>fn co_resume_class_objects,"CreateBindCtx"=>fn create_bind_ctx,
         "IsAccelerator"=>fn is_accelerator,"OleDraw"=>fn ole_draw,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
         "OleSetMenuDescriptor"=>fn ole_set_menu_descriptor,
         "CreateErrorInfo"=>fn super::errorinfo::create_error_info,

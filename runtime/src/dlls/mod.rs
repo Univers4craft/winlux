@@ -26,6 +26,7 @@ pub mod audio_com;
 pub mod bcrypt;
 pub mod chromium_win32;
 pub mod clipboard;
+pub mod com_local;
 pub mod com_registry;
 pub mod comctl32;
 pub mod comdlg32;
@@ -153,6 +154,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod oleaut32_disp;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
@@ -663,6 +665,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = oleaut32::exports();
                     e.extend(oleaut32_var::exports());
+                    e.extend(oleaut32_disp::exports());
                     e
                 },
                 handle: fake_module(),

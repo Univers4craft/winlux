@@ -546,18 +546,7 @@ pub unsafe extern "win64" fn variant_copy_ind(dest: *mut c_void, src: *const c_v
     variant_copy(dest, tmp.as_ptr() as *const c_void)
 }
 
-/// GetActiveObject : aucun objet n'est inscrit dans la table des objets
-/// actifs (pas de RegisterActiveObject) : MK_E_UNAVAILABLE.
-pub unsafe extern "win64" fn get_active_object(
-    _clsid: *const u8,
-    _reserved: usize,
-    out: *mut usize,
-) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    0x8004_01E3u32 as i32
-}
+// GetActiveObject, RegisterActiveObject, IDispatch standard : oleaut32_disp.rs.
 
 // GetErrorInfo, SetErrorInfo, CreateErrorInfo : voir errorinfo.rs.
 use super::errorinfo::{create_error_info, get_error_info, set_error_info};
@@ -649,7 +638,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SafeArrayPtrOfIndex" => fn safe_array_ptr_of_index,
         "SafeArrayRedim" => fn safe_array_redim,
         "VariantCopyInd" => fn variant_copy_ind,
-        "GetActiveObject" => fn get_active_object,
         "GetErrorInfo" => fn get_error_info,
         "SetErrorInfo" => fn set_error_info,
         "CreateErrorInfo" => fn create_error_info,
@@ -660,7 +648,7 @@ pub fn exports() -> crate::dlls::Exports {
         "#6" => fn sys_free_string, "#7" => fn sys_string_len,
         "#8" => fn variant_init, "#9" => fn variant_clear, "#10" => fn variant_copy,
         "#11" => fn variant_copy_ind, "#12" => fn variant_change_type,
-        "#35" => fn get_active_object, "#40" => fn safe_array_redim,
+        "#40" => fn safe_array_redim,
         "#148" => fn safe_array_ptr_of_index,
         "#15" => fn safe_array_create, "#16" => fn safe_array_destroy,
         "#17" => fn safe_array_get_dim, "#18" => fn safe_array_get_elem_size,

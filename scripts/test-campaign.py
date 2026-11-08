@@ -1116,4 +1116,17 @@ ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
    and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
    and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
+# #16 : OLE Automation (IDispatch standard, DispCallFunc, objets actifs) ;
+# vérifiée par automation_suite.exe.
+oleaut_disp = (ROOT / "runtime/src/dlls/oleaut32_disp.rs").read_text(encoding="utf-8")
+ok("fn create_std_dispatch" in oleaut_disp and "fn disp_call_func" in oleaut_disp
+   and "fn register_active_object" in oleaut_disp
+   and "automation_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : automatisation (CreateStdDispatch, DispInvoke, DispCallFunc, objets actifs) (#16)")
+# #16 : serveurs COM hors processus (LocalServer32, mandataire IDispatch) ;
+# vérifiés par com_local_suite.exe.
+com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
+ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
+   and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
