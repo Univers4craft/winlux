@@ -578,6 +578,16 @@ fi
 /bin/busybox awk '$2 == "/run" {mounted=1} END {exit !mounted}' /proc/mounts || /bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
 /bin/busybox mkdir -p /run/winlux
+# Mises à jour A/B (#31) : la version préparée dans /.winlux-ab/b remplace
+# celle-ci, ou la réserve revient (essai jamais validé, retour demandé), avant
+# que quoi que ce soit ne tourne. Code 10 : /init a changé, on le relance.
+if test -f /.winlux-ab/state && test -x /usr/bin/winlux; then
+    /usr/bin/winlux --ab-boot >>/run/winlux/ab-boot.log 2>&1
+    if test $? = 10; then
+        /bin/busybox umount /tmp /dev/pts /dev/shm 2>/dev/null || true
+        exec /init
+    fi
+fi
 # Temps de démarrage : chaque étape note l'instant écoulé depuis l'allumage du
 # noyau (Paramètres > Processeur, `winlux --boot-time`).
 boot_mark() {
