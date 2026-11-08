@@ -2121,14 +2121,29 @@ pub extern "win64" fn get_top_window(hwnd: usize) -> usize {
 // Input : capture, timers, curseur, clavier
 // =====================================================================
 
+/// WM_CAPTURECHANGED, envoyé à la fenêtre qui perd la capture (#1254) :
+/// sans lui, WPF croit garder la capture sur l'élément cliqué et route les
+/// clics des autres fenêtres vers lui.
+const WM_CAPTURECHANGED: u32 = 0x0215;
+
+fn capture_lost(old: usize, new: usize) {
+    if old != 0 && old != new && gui::is_window(old) {
+        unsafe { send_message_w(old, WM_CAPTURECHANGED, 0, new as isize) };
+    }
+}
+
 pub extern "win64" fn set_capture(hwnd: usize) -> usize {
-    gui::set_capture(hwnd)
+    let old = gui::set_capture(hwnd);
+    capture_lost(old, hwnd);
+    old
 }
 
 /// ReleaseCapture réussit aussi quand aucune fenêtre n'a la capture : WPF
 /// lève une Win32Exception sur un FALSE (#268).
 pub extern "win64" fn release_capture() -> i32 {
+    let old = gui::get_capture();
     gui::release_capture();
+    capture_lost(old, 0);
     1
 }
 
@@ -2231,6 +2246,52 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
     let (x, y) = gui::cursor_screen_pos();
     (*point).x = x;
     (*point).y = y;
+    1
+}
+
+/// TrackMouseEvent (#1254) : TME_LEAVE fait poster WM_MOUSELEAVE quand le
+/// pointeur quitte la fenêtre. TME_HOVER et TME_NONCLIENT sont acceptés
+/// sans effet. La structure fait 24 octets en 64 bits et 16 en 32 bits.
+pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
+    const TME_LEAVE: u32 = 0x2;
+    const TME_NONCLIENT: u32 = 0x10;
+    const TME_QUERY: u32 = 0x4000_0000;
+    const TME_CANCEL: u32 = 0x8000_0000;
+    if tme.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let size = std::ptr::read_unaligned(tme as *const u32);
+    let flags = std::ptr::read_unaligned(tme.add(4) as *const u32);
+    let hwnd_at = |p: *mut u8| -> usize {
+        if size == 16 {
+            std::ptr::read_unaligned(p.add(8) as *const u32) as usize
+        } else {
+            std::ptr::read_unaligned(p.add(8) as *const usize)
+        }
+    };
+    if size != 16 && size != 24 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let hwnd = hwnd_at(tme);
+    if flags & TME_QUERY != 0 {
+        let tracked = gui::mouse_leave_tracked(hwnd);
+        std::ptr::write_unaligned(tme.add(4) as *mut u32, if tracked { TME_LEAVE } else { 0 });
+        return 1;
+    }
+    if flags & TME_LEAVE == 0 || flags & TME_NONCLIENT != 0 {
+        return 1;
+    }
+    if flags & TME_CANCEL != 0 {
+        gui::cancel_mouse_leave(hwnd);
+        return 1;
+    }
+    if !gui::is_window(hwnd) {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    gui::track_mouse_leave(hwnd, gui::pointer_over(hwnd));
     1
 }
 
@@ -4086,6 +4147,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
         "AdjustWindowRect"=>fn adjust_window_rect, "AdjustWindowRectEx"=>fn adjust_window_rect_ex,
         "MapWindowPoints"=>fn map_window_points,
+        "TrackMouseEvent"=>fn track_mouse_event,
         "ScreenToClient"=>fn screen_to_client, "ClientToScreen"=>fn client_to_screen,
         // --- Window navigation ---
         "GetParent"=>fn get_parent, "SetParent"=>fn set_parent,
@@ -4552,6 +4614,79 @@ mod tests {
         assert!(get_system_metrics(60) >= get_system_metrics(1));
         assert_eq!((get_system_metrics(34), get_system_metrics(35)), (136, 39));
         assert_eq!((get_system_metrics(11), get_system_metrics(49)), (32, 16));
+    }
+
+    static CAPTURE_CHANGES: std::sync::Mutex<Vec<(usize, isize)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_capture(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_CAPTURECHANGED {
+            CAPTURE_CHANGES.lock().unwrap().push((h, l));
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// La fenêtre qui perd la capture reçoit WM_CAPTURECHANGED avec la
+    /// nouvelle (ou 0), et TrackMouseEvent rend compte du suivi (#1254).
+    #[test]
+    fn capture_et_sortie_du_pointeur_signalees() {
+        let name: Vec<u16> = "Winlux1254Capture".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_capture as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let make = || {
+                create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    50,
+                    50,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let (a, b) = (make(), make());
+            assert!(a != 0 && b != 0);
+            set_capture(a);
+            set_capture(b);
+            release_capture();
+            let seen = CAPTURE_CHANGES.lock().unwrap().clone();
+            assert!(seen.contains(&(a, b as isize)), "{seen:?}");
+            assert!(seen.contains(&(b, 0)), "{seen:?}");
+
+            // TRACKMOUSEEVENT 64 bits : cbSize, dwFlags, hwndTrack, dwHoverTime.
+            let mut tme = [0u8; 24];
+            tme[..4].copy_from_slice(&24u32.to_le_bytes());
+            tme[4..8].copy_from_slice(&2u32.to_le_bytes()); // TME_LEAVE
+            tme[8..16].copy_from_slice(&0x7777_0000usize.to_le_bytes());
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 0);
+            gui::track_mouse_leave(a, true);
+            tme[4..8].copy_from_slice(&0x4000_0000u32.to_le_bytes()); // TME_QUERY
+            tme[8..16].copy_from_slice(&a.to_le_bytes());
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 1);
+            assert_eq!(u32::from_le_bytes(tme[4..8].try_into().unwrap()), 2);
+            tme[4..8].copy_from_slice(&0x8000_0002u32.to_le_bytes()); // TME_CANCEL | TME_LEAVE
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 1);
+            assert!(!gui::mouse_leave_tracked(a));
+            destroy_window(a);
+            destroy_window(b);
+        }
     }
 
     static CREATE_SEEN_BY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
