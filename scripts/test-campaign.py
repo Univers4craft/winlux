@@ -1120,6 +1120,20 @@ ok("CancelIoEx(server, &ov) == 1" in (ROOT / "testc/msvc/io_msvc.c").read_text()
    and "Some(libc::EFAULT) => return 998" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "E/S : lecture commencée annulée, handles invalides et tampons invalides (ERROR_NOACCESS) (#18)")
 
+# #851, #852, #996 : Claude pour Windows (Chromium) ; les .exe de test
+# tournent dans test-runtime.sh.
+runtime_tests = (SCRIPTS / "test-runtime.sh").read_text()
+ok(all(t in runtime_tests for t in ("ntdll_exports", "register_wait", "chromium_compat")),
+   "Claude pour Windows : table d'exports, attentes annulées et processus GPU testés (#851, #852, #996)")
+ok("Some(d) if d.screen" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "WindowFromDC(GetDC(NULL)) rend le bureau, ANGLE accepte l'affichage (#996)")
+ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "#767" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "même .exe dans un enfant : même adresse d'image, exigée par le bac à sable de Chromium (#767)")
+ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
+   and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
 update_apt = (SCRIPTS / "winlux-update-apt.py").read_text(encoding="utf-8")
