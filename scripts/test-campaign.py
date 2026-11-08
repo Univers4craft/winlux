@@ -1036,6 +1036,12 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
    and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
    "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
 
+# #1190 : une méthode de base pas encore écrite lève MissingMethodException.
+ok("fn missing(class: &str, method: &str)" in (clr / "bcl.rs").read_text()
+   and "non implémenté\", method)" not in (clr / "bcl.rs").read_text()
+   and "une_methode_de_base_absente_leve_missing_method" in (clr / "tests.rs").read_text(),
+   "CLR : un appel de BCL absent lève MissingMethodException au lieu de rendre null (#1190)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'argv[1] == "overflow"' in (SCRIPTS / "winlux-tray.py").read_text()
