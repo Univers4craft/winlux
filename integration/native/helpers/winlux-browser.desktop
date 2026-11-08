@@ -2,6 +2,9 @@
 Type=X-XFCE-Helper
 X-XFCE-Category=WebBrowser
 Name=Navigateur Winlux
+Name[en]=Winlux Browser
+Name[de]=Winlux-Browser
+Name[es]=Navegador de Winlux
 Icon=web-browser
 X-XFCE-Binaries=winlux-browser;
 X-XFCE-Commands=/usr/bin/winlux-browser;

@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Personnalisation Winlux
+Name[en]=Winlux Personalization
+Name[de]=Winlux-Personalisierung
+Name[es]=Personalización de Winlux
 Exec=/usr/bin/winlux-shell-app settings 21
 Icon=preferences-desktop-theme
 Categories=Settings;

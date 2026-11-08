@@ -799,8 +799,9 @@ pub unsafe extern "win64" fn set_option(
     if value.is_null() {
         return fail(87);
     }
-    if option == 45 && size as usize == std::mem::size_of::<usize>() {
-        options_mut(&mut entry.kind).context = value.cast::<usize>().read_unaligned();
+    // WINHTTP_OPTION_CONTEXT_VALUE : DWORD_PTR, 4 octets en x86.
+    if option == 45 && size as usize == crate::wow32::pointer_size() {
+        options_mut(&mut entry.kind).context = crate::wow32::read_ptr(value as usize);
         return 1;
     }
     // In particular, do not silently honor certificate-validation bypass flags.
@@ -818,7 +819,8 @@ pub unsafe extern "win64" fn query_option(
     };
     if option == 45 {
         let bytes = options_mut(&mut entry.kind).context.to_le_bytes();
-        return output_bytes(buffer, size, &bytes, bytes.len());
+        let n = crate::wow32::pointer_size();
+        return output_bytes(buffer, size, &bytes[..n], n);
     }
     if option == 9 {
         let value: u32 = match entry.kind {
@@ -879,7 +881,15 @@ pub unsafe extern "win64" fn default_proxy(out: *mut ProxyInfo) -> i32 {
             bypass: std::ptr::null_mut(),
         },
     };
-    out.write(info);
+    if crate::wow32::pointer_size() == 4 {
+        // WINHTTP_PROXY_INFO x86 : 12 octets (#779).
+        let o = out as *mut u32;
+        o.write_unaligned(info.access);
+        o.add(1).write_unaligned(info.proxy as usize as u32);
+        o.add(2).write_unaligned(info.bypass as usize as u32);
+    } else {
+        out.write(info);
+    }
     1
 }
 pub unsafe extern "win64" fn ie_proxy(out: *mut IeProxyConfig) -> i32 {
@@ -887,12 +897,22 @@ pub unsafe extern "win64" fn ie_proxy(out: *mut IeProxyConfig) -> i32 {
         return fail(87);
     }
     let (server, bypass) = system_proxy_strings().unwrap_or_default();
-    out.write(IeProxyConfig {
+    let cfg = IeProxyConfig {
         autodetect: 0,
         url: std::ptr::null_mut(),
         proxy: alloc_wide(&server),
         bypass: alloc_wide(&bypass),
-    });
+    };
+    if crate::wow32::pointer_size() == 4 {
+        // WINHTTP_CURRENT_USER_IE_PROXY_CONFIG x86 : 16 octets (#779).
+        let o = out as *mut u32;
+        o.write_unaligned(cfg.autodetect as u32);
+        o.add(1).write_unaligned(cfg.url as usize as u32);
+        o.add(2).write_unaligned(cfg.proxy as usize as u32);
+        o.add(3).write_unaligned(cfg.bypass as usize as u32);
+    } else {
+        out.write(cfg);
+    }
     1
 }
 pub unsafe extern "win64" fn proxy_for_url(
