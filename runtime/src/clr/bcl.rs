@@ -42,6 +42,14 @@ pub fn dispatch_internal_call(
     }
 }
 
+/// Méthode connue de la classe mais pas encore écrite : l'appel lève une
+/// `MissingMethodException` qui la nomme, au lieu de rendre une valeur vide
+/// qui finirait en `NullReferenceException` trompeuse (#1190).
+fn missing(class: &str, method: &str) -> Option<Value> {
+    crate::log_warn!("clr-bcl", "{}.{} non implémenté", class, method);
+    None
+}
+
 /// Chaîne managée : longueur (u64) suivie des unités UTF-16.
 pub fn alloc_managed_string(s: &str) -> Value {
     let utf16: Vec<u16> = s.encode_utf16().collect();
@@ -177,10 +185,7 @@ fn console_dispatch(method: &str, args: &[Value], params: &[ElementType]) -> Opt
         "get_Out" | "get_Error" | "get_In" => Some(Value::Null),
         "SetOut" | "SetError" | "SetIn" => Some(Value::I32(0)),
         "Beep" => Some(Value::I32(0)),
-        _ => {
-            crate::log_debug!("clr-bcl", "Console.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Console", method),
     }
 }
 
@@ -238,10 +243,7 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "get_Is64BitProcess" => Some(Value::I32(1)),
         "get_Is64BitOperatingSystem" => Some(Value::I32(1)),
         "GetCommandLineArgs" => Some(Value::Null),
-        _ => {
-            crate::log_debug!("clr-bcl", "Environment.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Environment", method),
     }
 }
 
@@ -349,10 +351,7 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         }
         "get_PI" | "PI" => Some(Value::F64(std::f64::consts::PI)),
         "get_E" | "E" => Some(Value::F64(std::f64::consts::E)),
-        _ => {
-            crate::log_debug!("clr-bcl", "Math.{} non implémenté", method);
-            Some(Value::F64(0.0))
-        }
+        _ => missing("Math", method),
     }
 }
 
@@ -510,10 +509,7 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             Some(v) => Some(alloc_managed_string(&value_to_string(v))),
             None => Some(alloc_managed_string("")),
         },
-        _ => {
-            crate::log_debug!("clr-bcl", "String.{} non implémenté", method);
-            Some(Value::Null)
-        }
+        _ => missing("String", method),
     }
 }
 
@@ -558,10 +554,7 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         ".ctor" => Some(Value::I32(0)),
         "MemberwiseClone" => args.first().cloned().or(Some(Value::Null)),
         "Finalize" => Some(Value::I32(0)),
-        _ => {
-            crate::log_debug!("clr-bcl", "Object.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Object", method),
     }
 }
 
@@ -581,10 +574,7 @@ fn array_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "Reverse" => Some(Value::I32(0)),
         "Sort" => Some(Value::I32(0)),
         "get_Rank" => Some(Value::I32(1)),
-        _ => {
-            crate::log_debug!("clr-bcl", "Array.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Array", method),
     }
 }
 
@@ -658,10 +648,7 @@ fn convert_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             Value::I32(v) => Some(Value::I32((*v as u16) as i32)),
             _ => Some(Value::I32(0)),
         },
-        _ => {
-            crate::log_debug!("clr-bcl", "Convert.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Convert", method),
     }
 }
 
@@ -673,10 +660,7 @@ fn type_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "get_Name" | "get_FullName" => Some(alloc_managed_string("System.Object")),
         "get_IsValueType" => Some(Value::I32(0)),
         "get_IsClass" => Some(Value::I32(1)),
-        _ => {
-            crate::log_debug!("clr-bcl", "Type.{} non implémenté", method);
-            Some(Value::Null)
-        }
+        _ => missing("Type", method),
     }
 }
 
@@ -730,10 +714,7 @@ fn file_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             let _ = std::fs::remove_file(&path);
             Some(Value::I32(0))
         }
-        _ => {
-            crate::log_debug!("clr-bcl", "File.{} non implémenté", method);
-            Some(Value::Null)
-        }
+        _ => missing("File", method),
     }
 }
 
@@ -773,10 +754,7 @@ fn path_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 .unwrap_or_default();
             Some(alloc_managed_string(&dir))
         }
-        _ => {
-            crate::log_debug!("clr-bcl", "Path.{} non implémenté", method);
-            Some(Value::Null)
-        }
+        _ => missing("Path", method),
     }
 }
 
@@ -816,9 +794,6 @@ fn marshal_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 Some(Value::Ref(std::ptr::null_mut()))
             }
         }
-        _ => {
-            crate::log_debug!("clr-bcl", "Marshal.{} non implémenté", method);
-            Some(Value::I32(0))
-        }
+        _ => missing("Marshal", method),
     }
 }

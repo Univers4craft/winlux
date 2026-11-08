@@ -124,13 +124,25 @@ step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- r
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux -- glisser_depuis_une_liste_ou_une_arborescence perte_du_focus_garde_les_boutons_de_souris
 
+# Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
+# structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
+# passent par scripts/test-wow32.sh.
+step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_descs_round_trip mip_chain_counts so_entry_has_the_d3d11_layout device_table_has_101_methods
+
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
 
+# Barre de titre dessinée par l'appli (#1131) : WM_NCCALCSIZE traité sans
+# DefWindowProc retire le cadre du gestionnaire (WindowChrome de WPF).
+step "Cadre retiré pour une barre de titre maison (#1131)" cargo test -q -p winlux -- wm_nccalcsize_traite_par_l_appli_retire_le_cadre
 # Liste des processus pour .NET (#1162) : NtQuerySystemInformation 5 et 88,
 # d'où Process.GetProcesses et le contrôle d'instance unique.
 step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_des_processus_comme_la_lit_dotnet
+
+# HTTPS des applications .NET (#1183) : normaliz.dll, IdnToAscii et
+# IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
+step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py

@@ -382,10 +382,23 @@ fn keep(wparam: usize, lparam: isize, buf: Vec<u64>) -> Converted {
 }
 
 /// Classe (en minuscules) de la fenêtre visée.
+///
+/// Une superclasse d'un contrôle commun (classe enregistrée avec la
+/// procédure d'un contrôle prédéfini, comme TThemePageControl de WinSCP)
+/// prend le nom du contrôle d'origine : ses structures se convertissent
+/// pareil. Sans cela, TCM_GETITEMW passé par CallWindowProcW écrivait le
+/// TCITEM en disposition 64 bits dans la pile x86, lParam par-dessus
+/// l'adresse de retour (#1129).
 fn class_of(hwnd: usize) -> String {
-    crate::dlls::gui::window_class(hwnd)
-        .unwrap_or_default()
-        .to_ascii_lowercase()
+    let name = crate::dlls::gui::window_class(hwnd).unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    if crate::dlls::controls::builtin_class(&lower).is_some() {
+        return lower;
+    }
+    crate::dlls::gui::lookup_class(&name)
+        .and_then(|c| crate::dlls::controls::builtin_class_of_proc(c.wnd_proc))
+        .map(str::to_string)
+        .unwrap_or(lower)
 }
 
 /// Message x86 vers un contrôle commun : structures converties en 64

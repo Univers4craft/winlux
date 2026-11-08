@@ -192,6 +192,51 @@ static void tab_control(void)
     DestroyWindow(tab);
 }
 
+/* Superclasse sous-classée, comme TPageControl de la VCL (#1129) : classe
+ * enregistrée avec la procédure de SysTabControl32, puis procédure x86 qui
+ * passe tout par CallWindowProcW. Le TCITEM de 28 octets est juste sous
+ * des données de la pile : rien ne doit être écrit au-delà. */
+static WNDPROC page_old;
+static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    return CallWindowProcW(page_old, h, m, w, l);
+}
+
+static void tab_superclass(void)
+{
+    WNDCLASSW wc;
+    CHECK(GetClassInfoW(NULL, WC_TABCONTROLW, &wc), "GetClassInfoW(SysTabControl32)");
+    wc.lpszClassName = L"TPageDeTest";
+    wc.hInstance = GetModuleHandleW(NULL);
+    CHECK(RegisterClassW(&wc) != 0, "superclasse d'onglets");
+    HWND tab = CreateWindowExW(0, L"TPageDeTest", L"", WS_POPUP, 0, 0, 300, 200, NULL, NULL, NULL, NULL);
+    CHECK(tab != NULL, "fenêtre de la superclasse");
+    page_old = (WNDPROC)SetWindowLongPtrW(tab, GWLP_WNDPROC, (LONG_PTR)page_proc);
+    TCITEMW t = {0};
+    t.mask = TCIF_TEXT | TCIF_PARAM;
+    t.pszText = L"Session";
+    t.lParam = 0x1234;
+    CHECK(SendMessageW(tab, TCM_INSERTITEMW, 0, (LPARAM)&t) == 0, "TCM_INSERTITEMW (superclasse)");
+    struct {
+        TCITEMW it;
+        DWORD canary[4];
+    } q;
+    memset(&q, 0x77, sizeof q);
+    q.it.mask = TCIF_PARAM;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&q.it) != 0 && q.it.lParam == 0x1234,
+          "TCM_GETITEMW (superclasse sous-classée)");
+    CHECK(q.canary[0] == 0x77777777u && q.canary[1] == 0x77777777u && q.canary[2] == 0x77777777u,
+          "rien d'écrit après le TCITEM x86");
+    WCHAR text[16] = {0};
+    TCITEMW g = {0};
+    g.mask = TCIF_TEXT;
+    g.pszText = text;
+    g.cchTextMax = 16;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&g) != 0 && wcscmp(text, L"Session") == 0,
+          "texte relu (superclasse)");
+    DestroyWindow(tab);
+}
+
 /* Notifications des contrôles vers une fenêtre x86 (WM_NOTIFY en
  * disposition x86 : NMHDR de 12 octets, NMLISTVIEW, NMTREEVIEW). */
 static int lv_changed = -1, lv_param;
@@ -628,6 +673,7 @@ int main(void)
     tree_view();
     tool_bar();
     tab_control();
+    tab_superclass();
     notifications();
     dialogs();
     winscp();

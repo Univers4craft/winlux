@@ -51,6 +51,7 @@ pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_raster;
+pub mod d3d10;
 pub mod d3d11;
 pub mod d3d12;
 pub mod d3d8;
@@ -155,6 +156,7 @@ pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod nls;
+pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
@@ -409,6 +411,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(normaliz::kernel32_exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -550,6 +553,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 name: "version",
                 exports: version::exports(),
                 handle: 0,
+            },
+            // Noms de domaine internationaux : SslStream de .NET (#1183).
+            Builtin {
+                name: "normaliz",
+                exports: normaliz::exports(),
+                handle: fake_module(),
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
             Builtin {
@@ -750,6 +759,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dxgi",
                 exports: dxgi::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "d3d10",
+                exports: d3d10::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "d3d10_1",
+                exports: d3d10::exports_1(),
                 handle: 0,
             },
             Builtin {

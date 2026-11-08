@@ -429,6 +429,7 @@ HeapUnlock
 HeapValidate
 HeapWalk
 IdnToAscii
+IdnToUnicode
 InitAtomTable
 InitOnceBeginInitialize
 InitOnceComplete
