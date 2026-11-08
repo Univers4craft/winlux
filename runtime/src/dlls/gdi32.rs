@@ -830,8 +830,8 @@ pub unsafe extern "win64" fn create_dib_section(
         || !matches!(header.bit_count, 1 | 4 | 8 | 16 | 24 | 32)
         || (header.compression != 0 && !bitfields_ok) // BI_RGB ou BI_BITFIELDS BGRX
         || usage != 0 // DIB_RGB_COLORS
-        || section != 0
-        || offset != 0
+        || (section == 0 && offset != 0)
+        || !offset.is_multiple_of(4)
     {
         // Diagnostic (WINLUX_TRACE=1) : une DIB refusée fait lever
         // EOutOfResources aux programmes Delphi sans dire laquelle.
@@ -860,12 +860,15 @@ pub unsafe extern "win64" fn create_dib_section(
             palette.push(u32::from(q[0]) << 16 | u32::from(q[1]) << 8 | u32::from(q[2]));
         }
     }
-    let Some((bitmap, pixel_bits)) = gui::create_dib_section_with_palette(
+    // hSection : les pixels vivent dans la section, à `offset` (Chromium y
+    // dessine sa sortie logicielle et la partage avec le navigateur, #996).
+    let Some((bitmap, pixel_bits)) = gui::create_dib_section_in(
         header.width,
         header.height.abs(),
         header.bit_count,
         header.height < 0,
         palette,
+        (section != 0).then_some((section, offset)),
     ) else {
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;
