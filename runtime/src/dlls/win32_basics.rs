@@ -1653,18 +1653,6 @@ pub extern "win64" fn time_end_period(period: u32) -> u32 {
     time_begin_period(period)
 }
 
-/// MIDI : aucun périphérique MIDI n'est proposé pour l'instant. Les logiciels
-/// voient « 0 périphérique » et MMSYSERR_BADDEVICEID au lieu de s'arrêter.
-pub extern "win64" fn midi_get_num_devs() -> u32 {
-    0
-}
-pub extern "win64" fn midi_bad_device() -> u32 {
-    2 // MMSYSERR_BADDEVICEID
-}
-pub extern "win64" fn midi_invalid_handle() -> u32 {
-    5 // MMSYSERR_INVALHANDLE
-}
-
 // ── Runtime Visual C++ (vcruntime140 → ucrtbase) ───────────────────────
 
 /// __std_type_info_destroy_list : libère les noms décorés mis en cache par
@@ -1870,27 +1858,6 @@ pub fn winmm_exports() -> crate::dlls::Exports {
     crate::exports! {
         "timeBeginPeriod" => fn time_begin_period,
         "timeEndPeriod" => fn time_end_period,
-        "midiOutGetNumDevs" => fn midi_get_num_devs,
-        "midiInGetNumDevs" => fn midi_get_num_devs,
-        "midiOutOpen" => fn midi_bad_device,
-        "midiInOpen" => fn midi_bad_device,
-        "midiOutClose" => fn midi_invalid_handle,
-        "midiInClose" => fn midi_invalid_handle,
-        "midiOutShortMsg" => fn midi_invalid_handle,
-        "midiOutLongMsg" => fn midi_invalid_handle,
-        "midiOutPrepareHeader" => fn midi_invalid_handle,
-        "midiOutUnprepareHeader" => fn midi_invalid_handle,
-        "midiOutReset" => fn midi_invalid_handle,
-        "midiInPrepareHeader" => fn midi_invalid_handle,
-        "midiInUnprepareHeader" => fn midi_invalid_handle,
-        "midiInAddBuffer" => fn midi_invalid_handle,
-        "midiInStart" => fn midi_invalid_handle,
-        "midiInStop" => fn midi_invalid_handle,
-        "midiInReset" => fn midi_invalid_handle,
-        "midiOutGetDevCapsA" => fn midi_bad_device,
-        "midiOutGetDevCapsW" => fn midi_bad_device,
-        "midiInGetDevCapsA" => fn midi_bad_device,
-        "midiInGetDevCapsW" => fn midi_bad_device,
     }
 }
 

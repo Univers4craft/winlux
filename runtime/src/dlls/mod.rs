@@ -38,13 +38,17 @@ pub mod d2d1;
 pub mod d2d_raster;
 pub mod d3d11;
 pub mod d3d12;
+pub mod d3d8;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod d3dcompiler;
+pub mod d3dx9;
+pub mod d3dx9_draw;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
+pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
@@ -52,6 +56,7 @@ pub mod dinput8;
 pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
+pub mod dplayx;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -96,6 +101,7 @@ pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
 pub mod knownfolders;
+pub mod legacy_com;
 pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -170,6 +176,7 @@ pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_midi;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
@@ -540,6 +547,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = winmm::exports();
                     e.extend(winmm_waveout::exports());
+                    e.extend(winmm_midi::exports());
                     e
                 },
                 handle: fake_module(),
@@ -600,6 +608,16 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "dplayx",
+                exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dplay",
+                exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "quartz",
                 exports: quartz::exports(),
                 handle: fake_module(),
@@ -642,6 +660,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dxva2",
                 exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ddraw",
+                exports: ddraw::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3dx9",
+                exports: d3dx9::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d8",
+                exports: d3d8::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -1126,6 +1159,10 @@ pub fn normalize(dll: &str) -> String {
     // Compilateur HLSL : toutes les versions servies par le même d3dcompiler_47.
     if base.starts_with("d3dcompiler_") {
         return "d3dcompiler_47".into();
+    }
+    // D3DX9 (#834) : d3dx9_24 … d3dx9_43 servies par la même bibliothèque.
+    if base.starts_with("d3dx9_") {
+        return "d3dx9".into();
     }
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {

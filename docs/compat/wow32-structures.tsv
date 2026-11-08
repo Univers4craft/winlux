@@ -66,19 +66,28 @@ d3d12.rs	CopyLocation	a-verifier
 d3d12.rs	Descriptor	a-verifier	
 d3d12.rs	InputElement	a-verifier	
 d3d12.rs	Obj	a-verifier	
+d3d8.rs	D3d8	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
+d3d8.rs	Device	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
+d3d8.rs	Res	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
 d3d9.rs	CreationParams	a-verifier	
 d3d9.rs	LockedRect	a-verifier	
 d3d9.rs	Obj	a-verifier	
 d3d9.rs	PresentParams	a-verifier	
 d3dcompiler.rs	Blob	a-verifier	
 d3dcompiler.rs	BlobVTable	a-verifier	
+d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
+d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
+d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
 dataobject.rs	DataObject	a-verifier	
 dataobject.rs	EnumFormat	a-verifier	
 dataobject.rs	FormatEtc	a-verifier	
 dataobject.rs	StgMedium	a-verifier	
+ddraw.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 1-36
 dinput8.rs	DevObj	a-verifier	
 dinput8.rs	DiObj	a-verifier	
 dpapi.rs	DataBlob	a-verifier	
+dplayx.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 170-192 (IDirectPlay4A)
+dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 174-176 (IDirectPlayLobby3A)
 dwrite.rs	GlyphRun	a-verifier	
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
@@ -125,6 +134,8 @@ ole32.rs	IStreamVTable	a-verifier
 ole32.rs	MarshalStream	a-verifier	
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	StatStg	a-verifier	
+quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
+quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 schannel.rs	SecBuffer	a-verifier	
 schannel.rs	SecBufferDesc	a-verifier	
 schannel.rs	SecHandle	a-verifier	
