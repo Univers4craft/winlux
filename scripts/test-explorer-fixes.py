@@ -246,6 +246,16 @@ ok("fn begin_move_resize" in gui and "_NET_WM_MOVERESIZE" in x11 and "WM_CHANGE_
    "#888 : runtime — WM_NCLBUTTONDOWN/WM_SYSCOMMAND et ShowWindow réduire/agrandir via le gestionnaire")
 ok('c"Explorateur de fichiers"' in demo and 'c"Datei-Explorer"' in demo,
    "#888 : titre de fenêtre traduit, plus « Explorer Winlux »")
+# Les tests de session cherchent la fenêtre sous ses titres traduits : l'ancien
+# titre « Explorer Winlux » faisait échouer le contrôle « release » (session invitée).
+_titled = [p.name for p in (ROOT / "scripts").glob("*.py")
+           if p.name != "test-explorer-fixes.py"
+           and any(k in p.read_text(encoding="utf-8")
+                   for k in ('wait_title("Explorer Winlux")', '"Explorer Winlux" in title'))]
+guest = (ROOT / "scripts/test-native-session-guest.py").read_text(encoding="utf-8")
+ok(not _titled and 'wait_title("Explorer Winlux")' not in guest and "EXPLORER_TITLES" in guest
+   and '"Datei-Explorer"' in guest,
+   "#888 : la session invitée cherche l'Explorateur sous ses quatre titres traduits")
 ok("Cmd::More" in explorer and "Cmd::Share" in explorer and "fn view_label" in explorer,
    "#888 : barre de commandes compacte (Partager, affichage courant ▾, « … »)")
 ok('const NET: &[u8] = b"::net";' in explorer and "push(net_label(), Glyph::NetDrive, NET, 0);" in explorer,
