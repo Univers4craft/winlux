@@ -16,6 +16,7 @@ const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const DXGI_ERROR_NOT_FOUND: i32 = 0x887A_0002u32 as i32;
+const DXGI_ERROR_INVALID_CALL: i32 = 0x887a_0001u32 as i32;
 
 const IID_IUNKNOWN: Guid = Guid {
     data1: 0,
@@ -52,6 +53,13 @@ const IID_IDXGI_SWAP_CHAIN: Guid = Guid {
     data2: 0xd2e7,
     data3: 0x4c0a,
     data4: [0xaa, 0x04, 0x6a, 0x9d, 0x23, 0xb8, 0x88, 0x6a],
+};
+/// IDXGISwapChain1 (DXGI 1.2), demandé par ANGLE et Chromium (#1244).
+const IID_IDXGI_SWAP_CHAIN1: Guid = Guid {
+    data1: 0x790a45f7,
+    data2: 0x0d42,
+    data3: 0x4876,
+    data4: [0x98, 0x3a, 0x0a, 0x55, 0xcf, 0xe6, 0xf4, 0xaa],
 };
 
 // ────────────────────── DXGI_ADAPTER_DESC ──────────────────────
@@ -885,8 +893,44 @@ struct DxgiSwapChainVTable {
     resize_buffers: unsafe extern "win64" fn(*mut DxgiSwapChain, u32, u32, u32, u32, u32) -> i32,
     resize_target: unsafe extern "win64" fn(*mut DxgiSwapChain, *const DxgiModeDesc) -> i32,
     get_containing_output: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut *mut c_void) -> i32,
-    get_frame_statistics: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut c_void) -> i32,
+    get_frame_statistics: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut FrameStatistics) -> i32,
     get_last_present_count: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut u32) -> i32,
+    // IDXGISwapChain1 (#1244)
+    get_desc1:
+        unsafe extern "win64" fn(*mut DxgiSwapChain, *mut crate::dlls::d3d12::SwapDesc1) -> i32,
+    get_fullscreen_desc: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut FullscreenDesc) -> i32,
+    get_hwnd: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut usize) -> i32,
+    get_core_window:
+        unsafe extern "win64" fn(*mut DxgiSwapChain, *const Guid, *mut *mut c_void) -> i32,
+    present1: unsafe extern "win64" fn(*mut DxgiSwapChain, u32, u32, *const c_void) -> i32,
+    is_temporary_mono_supported: unsafe extern "win64" fn(*mut DxgiSwapChain) -> i32,
+    get_restrict_to_output: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut *mut c_void) -> i32,
+    set_background_color: unsafe extern "win64" fn(*mut DxgiSwapChain, *const [f32; 4]) -> i32,
+    get_background_color: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut [f32; 4]) -> i32,
+    set_rotation: unsafe extern "win64" fn(*mut DxgiSwapChain, u32) -> i32,
+    get_rotation: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut u32) -> i32,
+}
+
+/// DXGI_SWAP_CHAIN_FULLSCREEN_DESC (20 octets, sans pointeur).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FullscreenDesc {
+    refresh_numerator: u32,
+    refresh_denominator: u32,
+    scanline_ordering: u32,
+    scaling: u32,
+    windowed: i32,
+}
+
+/// DXGI_FRAME_STATISTICS (32 octets).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FrameStatistics {
+    present_count: u32,
+    present_refresh_count: u32,
+    sync_refresh_count: u32,
+    sync_qpc_time: i64,
+    sync_gpu_time: i64,
 }
 
 #[repr(C)]
@@ -897,6 +941,11 @@ pub(crate) struct DxgiSwapChain {
     pub gl_ctx: Mutex<Option<GlContext>>,
     device: *mut c_void,
     present_count: AtomicU32,
+    /// Champs de DXGI_SWAP_CHAIN_DESC1 absents de DXGI_SWAP_CHAIN_DESC.
+    scaling: u32,
+    alpha: u32,
+    background: Mutex<[f32; 4]>,
+    rotation: AtomicU32,
 }
 
 unsafe impl Send for DxgiSwapChain {}
@@ -912,7 +961,8 @@ impl DxgiSwapChain {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        if *riid == IID_IUNKNOWN || *riid == IID_IDXGI_SWAP_CHAIN {
+        if *riid == IID_IUNKNOWN || *riid == IID_IDXGI_SWAP_CHAIN || *riid == IID_IDXGI_SWAP_CHAIN1
+        {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
@@ -984,7 +1034,13 @@ unsafe extern "win64" fn sc_get_device(
     qi(dev, riid, out)
 }
 
-unsafe extern "win64" fn sc_present(this: *mut DxgiSwapChain, _sync: u32, _flags: u32) -> i32 {
+/// DXGI_PRESENT_TEST : vérifier sans présenter.
+const DXGI_PRESENT_TEST: u32 = 0x1;
+
+unsafe extern "win64" fn sc_present(this: *mut DxgiSwapChain, _sync: u32, flags: u32) -> i32 {
+    if flags & DXGI_PRESENT_TEST != 0 {
+        return S_OK;
+    }
     let guard = (*this).gl_ctx.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref ctx) = *guard {
         ctx.present();
@@ -1073,8 +1129,140 @@ unsafe extern "win64" fn sc_resize_target(_: *mut DxgiSwapChain, _: *const DxgiM
 unsafe extern "win64" fn sc_get_output(_: *mut DxgiSwapChain, _: *mut *mut c_void) -> i32 {
     DXGI_ERROR_NOT_FOUND
 }
-unsafe extern "win64" fn sc_get_stats(_: *mut DxgiSwapChain, _: *mut c_void) -> i32 {
-    crate::dlls::d2d1::unsupported_call("IDXGISwapChain::GetFrameStatistics")
+/// Statistiques de présentation : nombre de Present et instant courant,
+/// sur une cadence de 60 Hz (#1244).
+unsafe extern "win64" fn sc_get_stats(this: *mut DxgiSwapChain, out: *mut FrameStatistics) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let (mut now, mut freq) = (0i64, 0i64);
+    crate::dlls::kernel32::query_performance_counter(&mut now);
+    crate::dlls::kernel32::query_performance_frequency(&mut freq);
+    let count = (*this).present_count.load(Ordering::Relaxed);
+    let refresh = if freq > 0 {
+        (now as i128 * 60 / freq as i128) as u32
+    } else {
+        count
+    };
+    *out = FrameStatistics {
+        present_count: count,
+        present_refresh_count: refresh,
+        sync_refresh_count: refresh,
+        sync_qpc_time: now,
+        sync_gpu_time: 0,
+    };
+    S_OK
+}
+
+// ── IDXGISwapChain1 (#1244) ──
+
+unsafe extern "win64" fn sc_get_desc1(
+    this: *mut DxgiSwapChain,
+    out: *mut crate::dlls::d3d12::SwapDesc1,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let d = &(*this).desc;
+    *out = crate::dlls::d3d12::SwapDesc1 {
+        width: d.buffer_desc.width,
+        height: d.buffer_desc.height,
+        format: d.buffer_desc.format,
+        stereo: 0,
+        sample: d.sample_desc,
+        usage: d.buffer_usage,
+        count: d.buffer_count,
+        scaling: (*this).scaling,
+        effect: d.swap_effect,
+        alpha: (*this).alpha,
+        flags: d.flags,
+    };
+    S_OK
+}
+unsafe extern "win64" fn sc_get_fullscreen_desc(
+    this: *mut DxgiSwapChain,
+    out: *mut FullscreenDesc,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = &(*this).desc.buffer_desc;
+    *out = FullscreenDesc {
+        refresh_numerator: m.refresh_rate_numerator,
+        refresh_denominator: m.refresh_rate_denominator,
+        scanline_ordering: m.scanline_ordering,
+        scaling: m.scaling,
+        windowed: 1,
+    };
+    S_OK
+}
+unsafe extern "win64" fn sc_get_hwnd(this: *mut DxgiSwapChain, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = (*this).desc.output_window;
+    S_OK
+}
+unsafe extern "win64" fn sc_get_core_window(
+    _: *mut DxgiSwapChain,
+    _: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    // Chaîne d'échange d'une fenêtre HWND : pas de CoreWindow.
+    if !out.is_null() {
+        *out = std::ptr::null_mut();
+    }
+    DXGI_ERROR_INVALID_CALL
+}
+/// Present1 : les rectangles modifiés et le défilement de
+/// DXGI_PRESENT_PARAMETERS sont des indications ; le tampon entier est
+/// présenté, ce qui les respecte toujours.
+unsafe extern "win64" fn sc_present1(
+    this: *mut DxgiSwapChain,
+    sync: u32,
+    flags: u32,
+    _params: *const c_void,
+) -> i32 {
+    sc_present(this, sync, flags)
+}
+unsafe extern "win64" fn sc_temporary_mono(_: *mut DxgiSwapChain) -> i32 {
+    0
+}
+unsafe extern "win64" fn sc_restrict_output(_: *mut DxgiSwapChain, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = std::ptr::null_mut();
+    S_OK
+}
+unsafe extern "win64" fn sc_set_background(this: *mut DxgiSwapChain, c: *const [f32; 4]) -> i32 {
+    if c.is_null() {
+        return E_INVALIDARG;
+    }
+    *(*this).background.lock().unwrap_or_else(|e| e.into_inner()) = *c;
+    S_OK
+}
+unsafe extern "win64" fn sc_get_background(this: *mut DxgiSwapChain, c: *mut [f32; 4]) -> i32 {
+    if c.is_null() {
+        return E_INVALIDARG;
+    }
+    *c = *(*this).background.lock().unwrap_or_else(|e| e.into_inner());
+    S_OK
+}
+unsafe extern "win64" fn sc_set_rotation(this: *mut DxgiSwapChain, r: u32) -> i32 {
+    // DXGI_MODE_ROTATION_UNSPECIFIED (0) à ROTATE270 (4).
+    if r > 4 {
+        return E_INVALIDARG;
+    }
+    (*this).rotation.store(r, Ordering::Relaxed);
+    S_OK
+}
+unsafe extern "win64" fn sc_get_rotation(this: *mut DxgiSwapChain, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = (*this).rotation.load(Ordering::Relaxed);
+    S_OK
 }
 unsafe extern "win64" fn sc_get_present_count(this: *mut DxgiSwapChain, out: *mut u32) -> i32 {
     if out.is_null() {
@@ -1103,6 +1291,17 @@ static SWAP_CHAIN_VTABLE: DxgiSwapChainVTable = DxgiSwapChainVTable {
     get_containing_output: sc_get_output,
     get_frame_statistics: sc_get_stats,
     get_last_present_count: sc_get_present_count,
+    get_desc1: sc_get_desc1,
+    get_fullscreen_desc: sc_get_fullscreen_desc,
+    get_hwnd: sc_get_hwnd,
+    get_core_window: sc_get_core_window,
+    present1: sc_present1,
+    is_temporary_mono_supported: sc_temporary_mono,
+    get_restrict_to_output: sc_restrict_output,
+    set_background_color: sc_set_background,
+    get_background_color: sc_get_background,
+    set_rotation: sc_set_rotation,
+    get_rotation: sc_get_rotation,
 };
 
 pub(crate) fn create_swap_chain(
@@ -1149,6 +1348,10 @@ pub(crate) fn create_swap_chain(
         gl_ctx: Mutex::new(gl_ctx),
         device,
         present_count: AtomicU32::new(0),
+        scaling: 0,
+        alpha: 0,
+        background: Mutex::new([0.0; 4]),
+        rotation: AtomicU32::new(0),
     }))
 }
 
@@ -1438,7 +1641,15 @@ unsafe extern "win64" fn fac_create_sc_hwnd(
         swap_effect: d.effect,
         flags: d.flags,
     };
-    fac_create_sc(this, device, &legacy, out)
+    let hr = fac_create_sc(this, device, &legacy, out);
+    // DXGI_SWAP_CHAIN_DESC1 garde l'échelle et le mode alpha, que GetDesc1
+    // rend tels quels (#1244).
+    if hr == S_OK && !(*out).is_null() {
+        let sc = *out as *mut DxgiSwapChain;
+        (*sc).scaling = d.scaling;
+        (*sc).alpha = d.alpha;
+    }
+    hr
 }
 
 unsafe extern "win64" fn fac_shared_luid(_: *mut DxgiFactory, _h: usize, out: *mut u64) -> i32 {
@@ -1659,5 +1870,106 @@ mod adapter_desc_tests {
         assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc>(), 304);
         assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc1>(), 312);
         assert_eq!(super::DXGI_ADAPTER_DESC2_SIZE, 320);
+    }
+}
+
+#[cfg(test)]
+mod swap_chain1_tests {
+    use super::*;
+
+    /// Méthode `i` de la table de l'objet COM `p`.
+    unsafe fn slot(p: *mut c_void, i: usize) -> usize {
+        *(*(p as *const *const usize)).add(i)
+    }
+
+    #[test]
+    fn chaine_d_echange_direct3d11_en_idxgiswapchain1() {
+        unsafe {
+            let f = create_factory();
+            // Appareil fictif : seul le test « file Direct3D 12 ? » le lit.
+            let mut fake_device = [0usize; 4];
+            let desc = crate::dlls::d3d12::SwapDesc1 {
+                width: 64,
+                height: 32,
+                format: 87,
+                stereo: 0,
+                sample: DxgiSampleDesc {
+                    count: 1,
+                    quality: 0,
+                },
+                usage: 0x20,
+                count: 2,
+                scaling: 1,
+                effect: 3,
+                alpha: 0,
+                flags: 0,
+            };
+            let mut sc = std::ptr::null_mut();
+            assert_eq!(
+                fac_create_sc_hwnd(
+                    f,
+                    fake_device.as_mut_ptr().cast(),
+                    0x4_0000,
+                    &desc,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    &mut sc,
+                ),
+                S_OK
+            );
+            let mut sc1 = std::ptr::null_mut();
+            assert_eq!(
+                DxgiSwapChain::query_interface(sc.cast(), &IID_IDXGI_SWAP_CHAIN1, &mut sc1),
+                S_OK,
+                "IDXGISwapChain1 accepté"
+            );
+            assert_eq!(sc1, sc);
+            // GetDesc1 (18) rend l'échelle et l'effet demandés.
+            let get_desc1: unsafe extern "win64" fn(
+                *mut c_void,
+                *mut crate::dlls::d3d12::SwapDesc1,
+            ) -> i32 = std::mem::transmute(slot(sc1, 18));
+            let mut d1: crate::dlls::d3d12::SwapDesc1 = std::mem::zeroed();
+            assert_eq!(get_desc1(sc1, &mut d1), S_OK);
+            assert_eq!((d1.format, d1.scaling, d1.effect, d1.count), (87, 1, 3, 2));
+            // GetHwnd (20).
+            let get_hwnd: unsafe extern "win64" fn(*mut c_void, *mut usize) -> i32 =
+                std::mem::transmute(slot(sc1, 20));
+            let mut h = 0usize;
+            assert_eq!(get_hwnd(sc1, &mut h), S_OK);
+            assert_eq!(h, 0x4_0000);
+            // Present1 (22) compte comme Present ; DXGI_PRESENT_TEST ne compte pas.
+            let present1: unsafe extern "win64" fn(*mut c_void, u32, u32, *const c_void) -> i32 =
+                std::mem::transmute(slot(sc1, 22));
+            assert_eq!(present1(sc1, 1, 0, std::ptr::null()), S_OK);
+            assert_eq!(present1(sc1, 0, DXGI_PRESENT_TEST, std::ptr::null()), S_OK);
+            // GetFrameStatistics (16) rend le nombre de présentations.
+            let stats: unsafe extern "win64" fn(*mut c_void, *mut FrameStatistics) -> i32 =
+                std::mem::transmute(slot(sc1, 16));
+            let mut st = FrameStatistics::default();
+            assert_eq!(stats(sc1, &mut st), S_OK);
+            assert_eq!(st.present_count, 1);
+            assert!(st.sync_qpc_time > 0);
+            // SetRotation (27) / GetRotation (28).
+            let set_rot: unsafe extern "win64" fn(*mut c_void, u32) -> i32 =
+                std::mem::transmute(slot(sc1, 27));
+            let get_rot: unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32 =
+                std::mem::transmute(slot(sc1, 28));
+            assert_eq!(set_rot(sc1, 1), S_OK);
+            let mut r = 0;
+            assert_eq!(get_rot(sc1, &mut r), S_OK);
+            assert_eq!(r, 1);
+            assert_eq!(DxgiSwapChain::release(sc1.cast()), 1);
+            assert_eq!(DxgiSwapChain::release(sc.cast()), 0);
+            DxgiFactory::release(f);
+        }
+    }
+
+    #[test]
+    fn tables_dxgi_aux_tailles_de_windows() {
+        assert_eq!(std::mem::size_of::<DxgiSwapChainVTable>() / 8, 29);
+        assert_eq!(std::mem::size_of::<FrameStatistics>(), 32);
+        assert_eq!(std::mem::size_of::<FullscreenDesc>(), 20);
+        assert_eq!(std::mem::size_of::<crate::dlls::d3d12::SwapDesc1>(), 48);
     }
 }
