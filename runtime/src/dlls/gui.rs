@@ -3070,6 +3070,64 @@ fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
         .max()
 }
 
+pub const WM_MOUSELEAVE: u32 = 0x02A3;
+
+/// Fenêtres qui ont demandé WM_MOUSELEAVE par TrackMouseEvent(TME_LEAVE)
+/// (#1254). Le suivi est à usage unique, comme sous Windows : il s'arrête
+/// dès que le message est posté.
+fn leave_tracking() -> &'static Mutex<Vec<usize>> {
+    static T: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Dernière fenêtre qui a reçu un message souris (0 : aucune).
+static LAST_MOUSE_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Le pointeur est-il sur `hwnd`, d'après le dernier message souris ?
+pub fn pointer_over(hwnd: usize) -> bool {
+    LAST_MOUSE_HWND.load(std::sync::atomic::Ordering::Relaxed) == hwnd
+}
+
+/// TrackMouseEvent(TME_LEAVE) : suivre `hwnd`, ou poster tout de suite
+/// WM_MOUSELEAVE si le pointeur n'est déjà plus dessus.
+pub fn track_mouse_leave(hwnd: usize, pointer_inside: bool) {
+    let mut t = lock(leave_tracking());
+    t.retain(|&h| h != hwnd);
+    if pointer_inside {
+        t.push(hwnd);
+    } else {
+        drop(t);
+        post_to_window(hwnd, Msg::new(hwnd, WM_MOUSELEAVE, 0, 0));
+    }
+}
+
+/// TME_CANCEL : ne plus suivre `hwnd`.
+pub fn cancel_mouse_leave(hwnd: usize) {
+    lock(leave_tracking()).retain(|&h| h != hwnd);
+}
+
+/// TME_QUERY : `hwnd` attend-il un WM_MOUSELEAVE ?
+pub fn mouse_leave_tracked(hwnd: usize) -> bool {
+    lock(leave_tracking()).contains(&hwnd)
+}
+
+/// Le pointeur est maintenant sur `now` (0 : hors de toute fenêtre du
+/// programme) : les fenêtres suivies qu'il a quittées reçoivent
+/// WM_MOUSELEAVE. Sans lui, WPF rapportait la souris à la première
+/// fenêtre survolée et ignorait les clics dans les suivantes.
+fn mouse_moved_to(now: usize) {
+    LAST_MOUSE_HWND.store(now, std::sync::atomic::Ordering::Relaxed);
+    let left: Vec<usize> = {
+        let mut t = lock(leave_tracking());
+        let left = t.iter().copied().filter(|&h| h != now).collect();
+        t.retain(|&h| h == now);
+        left
+    };
+    for h in left {
+        post_to_window(h, Msg::new(h, WM_MOUSELEAVE, 0, 0));
+    }
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
@@ -3112,6 +3170,18 @@ pub fn pump_backend() {
         let mouse = (0x0200..=0x020E).contains(&e.message)
             || (0x00A0..=0x00AD).contains(&e.message)
             || (0x0245..=0x024A).contains(&e.message);
+        // Souris sur une autre fenêtre (hors molette, livrée à la fenêtre
+        // qui a le focus), ou sortie de la fenêtre signalée par le backend.
+        if e.message == WM_MOUSELEAVE {
+            if mouse_leave_tracked(e.hwnd) {
+                cancel_mouse_leave(e.hwnd);
+                post_to_window(e.hwnd, Msg::new(e.hwnd, WM_MOUSELEAVE, 0, 0));
+            }
+            continue;
+        }
+        if mouse && !matches!(e.message, 0x020A | 0x020E) {
+            mouse_moved_to(e.hwnd);
+        }
         if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
             let press = matches!(
                 e.message,
