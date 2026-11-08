@@ -138,6 +138,10 @@ step "WMI : WQL, classes Win32_*, parcours COM (#1198)" cargo test -q -p winlux 
 # passent par scripts/test-wow32.sh.
 step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_descs_round_trip mip_chain_counts so_entry_has_the_d3d11_layout device_table_has_101_methods
 
+# Masques monochromes de wxWidgets (#1121) : une copie couleur vers une
+# bitmap 1 bit rend blanc le fond du DC source ; graduation des vumètres.
+step "Masque monochrome tiré de la couleur de fond (#1121)" cargo test -q -p winlux -- masque_monochrome_tire_de_la_couleur_de_fond maskblt_ne_copie_que_les_pixels_du_masque
+
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
@@ -161,12 +165,44 @@ step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_de
 # IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
 step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
 
-# Faute matérielle dans un module tiers (#996, ANGLE de Chromium) : le
-# journal de trace donne les registres et les octets de code autour de rip.
-step "Registres d'une faute matérielle au journal (#996)" cargo test -q -p winlux -- registres_d_une_faute_pour_le_journal
+# Fenêtres visibles entre processus (#1228, processus GPU de Chromium) :
+# HWND uniques, annuaire du compte, IsWindow d'une fenêtre étrangère.
+step "Fenêtres d'un autre processus (#1228)" cargo test -q -p winlux -- deux_processus_n_ont_jamais_le_meme_hwnd fenetre_d_un_autre_processus_dans_l_annuaire is_window_voit_la_fenetre_d_un_autre_processus
 # SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
+# Instructions du processeur (#1195, Photoshop exige SSE 4.2) :
+# IsProcessorFeaturePresent suit CPUID pour SSSE3, SSE4.1, SSE4.2, AVX-512F.
+step "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2, AVX-512F (#1195)" cargo test -q -p winlux -- instructions_sse4_et_avx512_suivent_cpuid
+
+# Stylet (#1199) : WM_POINTER* avec pression et inclinaison depuis les
+# valuateurs XInput, promotion souris de Windows, wintab32 maison.
+step "Stylet, WM_POINTER et wintab32 (#1199)" cargo test -q -p winlux -- stylet_en_messages_pointeur_avec_pression valuateurs_du_stylet_depuis_xinput tablette_wintab_paquets_avec_pression
+
+# Effets Direct2D personnalisés (#1206, Paint.NET) : le contexte passé à
+# Initialize répond à ID2D1EffectContext1 et ID2D1EffectContext2.
+step "Contexte d'effet Direct2D en version 2 (#1206)" cargo test -q -p winlux -- initialize_obtient_le_contexte_d_effet_2 vtables_have_windows_sizes
+
+# Vérification des certificats HTTPS de .NET (#1207) : X509Chain.Build remplit
+# un magasin en mémoire par CertAddCertificateLinkToStore.
+step "CertAddCertificateLinkToStore pour X509Chain (#1207)" cargo test -q -p winlux -- chemin_schannel_de_curl
+
+# Étapes déposées dans scripts/test-all.d/ : un fichier par issue
+# (« 1234-sujet.sh »), lu par « . » dans l'ordre des noms, qui appelle step ou
+# skip et peut tester $quick. Deux PR n'ajoutent plus leur étape au même
+# endroit de ce fichier, donc ne sont plus en conflit entre elles.
+deposees=0
+for depot in scripts/test-all.d/*.sh; do
+    test -f "$depot" || continue
+    deposees=$((deposees + 1))
+    . "./$depot"
+done
+step "scripts/test-all.d chargé ($deposees fichier(s))" test -f scripts/test-all.d/0000-dossier-charge.sh -a "$deposees" -ge 1
+
+# Bibliothèques de types (#1108) : CreateTypeLib2/ICreateTypeInfo2, LayOut,
+# ITypeLib/ITypeInfo, RegisterTypeLib puis LoadRegTypeLib, LoadTypeLib
+# (stdole2.tlb intégrée) et Invoke d'une interface double.
+step "Bibliothèques de types créées, inscrites et appelées (#1108)" cargo test -q -p winlux -- bibliotheque_de_types_creee_inscrite_et_appelee
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py

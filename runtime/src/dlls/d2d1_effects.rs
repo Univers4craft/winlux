@@ -36,6 +36,18 @@ const IID_EFFECT_CONTEXT: Guid = guid(
     0x4ad7,
     [0xb4, 0xf1, 0x64, 0x94, 0x53, 0x40, 0xf5, 0x63],
 );
+const IID_EFFECT_CONTEXT1: Guid = guid(
+    0x84ab595a,
+    0xfc81,
+    0x4546,
+    [0xba, 0xcd, 0xe8, 0xef, 0x4d, 0x8a, 0xbe, 0x7a],
+);
+const IID_EFFECT_CONTEXT2: Guid = guid(
+    0x577ad2a0,
+    0x9fc7,
+    0x4dda,
+    [0x8b, 0x18, 0xda, 0xb8, 0x10, 0x14, 0x00, 0x52],
+);
 const IID_TRANSFORM_GRAPH: Guid = guid(
     0x13d29038,
     0xc3e6,
@@ -979,7 +991,13 @@ unsafe extern "win64" fn ctx_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_EFFECT_CONTEXT])
+    // Paint.NET 5 demande ID2D1EffectContext2 dans Initialize (#1206).
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_EFFECT_CONTEXT, IID_EFFECT_CONTEXT1, IID_EFFECT_CONTEXT2],
+    )
 }
 unsafe extern "win64" fn ctx_dpi(_: *mut ContextObj, x: *mut f32, y: *mut f32) {
     if !x.is_null() {
@@ -1131,27 +1149,78 @@ unsafe extern "win64" fn ctx_vertex_buffer(
     }
     crate::dlls::d2d1::unsupported_call("ID2D1EffectContext::CreateVertexBuffer")
 }
-unsafe extern "win64" fn ctx_color_context(
-    _: *mut ContextObj,
-    _: usize,
-    _: usize,
-    _: usize,
-    out: *mut *mut c_void,
-) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
-    }
-    crate::dlls::d2d1::unsupported_call("ID2D1EffectContext::CreateColorContext")
+unsafe fn ctx_factory(this: *mut ContextObj) -> *mut super::FactoryObj {
+    Com::get(Com::get(this).effect).factory
 }
-unsafe extern "win64" fn ctx_color_context2(
+unsafe extern "win64" fn ctx_color_context(
+    this: *mut ContextObj,
+    space: u32,
+    profile: *const u8,
+    size: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    let profile = if profile.is_null() || size == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(profile, size as usize).to_vec()
+    };
+    let dxgi = if space == 2 { 10 } else { 0 };
+    super::new_color_in(ctx_factory(this), space, profile, dxgi, out)
+}
+unsafe extern "win64" fn ctx_color_context_file(
+    this: *mut ContextObj,
+    path: *const u16,
+    out: *mut *mut c_void,
+) -> i32 {
+    match super::read_profile(path) {
+        Some(bytes) => super::new_color_in(ctx_factory(this), 0, bytes, 0, out),
+        None => {
+            if !out.is_null() {
+                *out = std::ptr::null_mut();
+            }
+            0x8007_0002u32 as i32
+        }
+    }
+}
+unsafe extern "win64" fn ctx_color_context_wic(
+    this: *mut ContextObj,
+    _wic: *mut c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    // Profil WIC non lu : traité comme sRGB, comme le contexte de dessin.
+    super::new_color_in(ctx_factory(this), 1, Vec::new(), 0, out)
+}
+/// ID2D1EffectContext2::CreateColorContextFromDxgiColorSpace.
+unsafe extern "win64" fn ctx_color_context_dxgi(
+    this: *mut ContextObj,
+    space: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    let d2d = if space == 1 { 2 } else { 1 };
+    super::new_color_in(ctx_factory(this), d2d, Vec::new(), space, out)
+}
+/// ID2D1EffectContext2::CreateColorContextFromSimpleColorProfile.
+unsafe extern "win64" fn ctx_color_context_simple(
+    this: *mut ContextObj,
+    _profile: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    super::new_color_in(ctx_factory(this), 0, Vec::new(), 0, out)
+}
+/// ID2D1EffectContext1::CreateLookupTable3D : pas de table 3D pour l'instant.
+unsafe extern "win64" fn ctx_lookup_table(
     _: *mut ContextObj,
-    _: usize,
+    _: u32,
+    _: *const u32,
+    _: *const u8,
+    _: u32,
+    _: *const u32,
     out: *mut *mut c_void,
 ) -> i32 {
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    crate::dlls::d2d1::unsupported_call("ID2D1EffectContext::CreateColorContextFrom*")
+    crate::dlls::d2d1::unsupported_call("ID2D1EffectContext1::CreateLookupTable3D")
 }
 unsafe extern "win64" fn ctx_feature(_: *mut ContextObj, _: u32, data: *mut u8, n: u32) -> i32 {
     if data.is_null() {
@@ -1166,7 +1235,7 @@ unsafe extern "win64" fn ctx_precision(_: *mut ContextObj, p: u32) -> i32 {
     matches!(p, 1 | 2 | 4 | 6) as i32
 }
 
-static CONTEXT_VT: VTable<24> = VTable([
+static CONTEXT_VT: VTable<27> = VTable([
     ctx_qi as *const (),
     add_ref::<Context> as *const (),
     release::<Context> as *const (),
@@ -1187,10 +1256,15 @@ static CONTEXT_VT: VTable<24> = VTable([
     ctx_vertex_buffer as *const (),
     ctx_find as *const (), // FindVertexBuffer
     ctx_color_context as *const (),
-    ctx_color_context2 as *const (), // FromFilename
-    ctx_color_context2 as *const (), // FromWicColorContext
+    ctx_color_context_file as *const (),
+    ctx_color_context_wic as *const (),
     ctx_feature as *const (),
     ctx_precision as *const (),
+    // ID2D1EffectContext1
+    ctx_lookup_table as *const (),
+    // ID2D1EffectContext2
+    ctx_color_context_dxgi as *const (),
+    ctx_color_context_simple as *const (),
 ]);
 
 // --- Calcul ------------------------------------------------------------------------------
@@ -1444,10 +1518,118 @@ mod tests {
 
     #[test]
     fn vtables_have_windows_sizes() {
-        assert_eq!(CONTEXT_VT.0.len(), 24);
+        assert_eq!(CONTEXT_VT.0.len(), 27);
         assert_eq!(GRAPH_VT.0.len(), 12);
         assert_eq!(DRAW_INFO_VT.0.len(), 12);
         assert_eq!(BORDER_VT.0.len(), 10);
+    }
+
+    /// Effet d'essai : son Initialize demande ID2D1EffectContext2 puis crée
+    /// un contexte de couleur, comme le CheckerboardEffect de Paint.NET (#1206).
+    mod essai {
+        use super::*;
+        pub static INIT_HR: Mutex<Option<i32>> = Mutex::new(None);
+        #[repr(C)]
+        pub struct Imp {
+            vt: *const (),
+        }
+        unsafe extern "win64" fn qi(
+            this: *mut Imp,
+            riid: *const Guid,
+            out: *mut *mut c_void,
+        ) -> i32 {
+            if *riid == IID_EFFECT_IMPL || *riid == crate::dlls::d2d1::IID_IUNKNOWN {
+                *out = this.cast();
+                return S_OK;
+            }
+            *out = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+        unsafe extern "win64" fn one(_: *mut Imp) -> u32 {
+            1
+        }
+        unsafe extern "win64" fn init(_: *mut Imp, ctx: *mut c_void, _graph: *mut c_void) -> i32 {
+            let q = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(ctx, 0);
+            let mut ctx2 = std::ptr::null_mut();
+            let mut hr = q(ctx, &IID_EFFECT_CONTEXT2, &mut ctx2);
+            if hr >= 0 {
+                // CreateColorContextFromDxgiColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709).
+                let create = method::<
+                    unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32,
+                >(ctx2, 25);
+                let mut color = std::ptr::null_mut();
+                hr = create(ctx2, 0, &mut color);
+                if hr >= 0 && color.is_null() {
+                    hr = E_FAIL;
+                }
+                if !color.is_null() {
+                    com_release(color);
+                }
+                com_release(ctx2);
+            }
+            *crate::dlls::lock(&INIT_HR) = Some(hr);
+            hr
+        }
+        unsafe extern "win64" fn ok(_: *mut Imp, _: usize) -> i32 {
+            S_OK
+        }
+        static VT: VTable<6> = VTable([
+            qi as *const (),
+            one as *const (),
+            one as *const (),
+            init as *const (),
+            ok as *const (),
+            ok as *const (),
+        ]);
+        static mut IMP: Imp = Imp {
+            vt: std::ptr::null(),
+        };
+        pub unsafe extern "win64" fn create(out: *mut *mut c_void) -> i32 {
+            let p = std::ptr::addr_of_mut!(IMP);
+            (*p).vt = VT.ptr();
+            *out = p.cast();
+            S_OK
+        }
+    }
+
+    #[test]
+    fn initialize_obtient_le_contexte_d_effet_2() {
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1206_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Damier'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs/></Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    essai::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            let hr = super::super::create_effect(f, &id, &mut e);
+            assert_eq!(*crate::dlls::lock(&essai::INIT_HR), Some(S_OK));
+            assert_eq!(hr, S_OK);
+            assert!(!e.is_null());
+            com_release(e);
+            Com::release(f);
+        }
     }
 
     #[test]

@@ -88,6 +88,13 @@ static const char hlsl[] =
     "Texture2DArray texa : register(t1);\n"
     "float4 ps_main(VSOut i) : SV_Target {\n"
     "    return teinte(tex.Sample(smp, i.uv)) * texa.Sample(smp, float3(i.uv, 1));\n"
+    "}\n"
+    "struct Gbuf { float4 a : SV_Target0; float4 b : SV_Target1; };\n"
+    "Gbuf ps_mrt(VSOut i) {\n"
+    "    Gbuf o;\n"
+    "    o.a = float4(1, 0, 0, 1);\n"
+    "    o.b = float4(0, i.uv.y < 2.0 ? 1.0 : 0.0, 0, 1);\n"
+    "    return o;\n"
     "}\n";
 
 // Compute shader (#580) : image RWTexture2D, tampons structurés en
@@ -258,6 +265,16 @@ void entry(void) {
     CALL(ctx, 50, ClearRT, rtv, blue);
     Viewport vp = {0, 0, SIZE, SIZE, 0, 1};
     CALL(ctx, 44, SetVP, 1, &vp);
+    // RSGetViewports rend la fenêtre posée (il rendait 0, #1175).
+    {
+        typedef void(__stdcall * GetVP)(void *, u32 *, void *);
+        u32 nvp = 0;
+        CALL(ctx, 95, GetVP, &nvp, 0);
+        Viewport got[2] = {{0}};
+        u32 room = 2;
+        CALL(ctx, 95, GetVP, &room, got);
+        if (nvp != 1 || room != 1 || got[0].w != SIZE || got[0].zmax != 1.0f) ExitProcess(98);
+    }
     u32 stride = 16, offset = 0;
     CALL(ctx, 17, SetOne, il);
     CALL(ctx, 18, SetVB, 0, 1, &vbuf, &stride, &offset);
@@ -323,6 +340,51 @@ void entry(void) {
     if (zr[4] < 0.99f || zr[20] < 0.99f) ExitProcess(55);
     CALL(ctx, 15, Unmap, zstaging, 1);
     CALL(ctx, 33, SetRT, 1, &rtv, dsv);
+
+    // Cibles multiples (#531) : ps_mrt écrit SV_Target0 en rouge dans la
+    // première vue et SV_Target1 en vert dans la seconde. Seule la première
+    // était gardée : la seconde restait noire.
+    {
+        void *g0 = 0, *g1 = 0, *v0 = 0, *v1 = 0, *mps = 0;
+        if (CALL(dev, 5, CreateTex, &td, 0, &g0) < 0 || !g0) ExitProcess(90);
+        if (CALL(dev, 5, CreateTex, &td, 0, &g1) < 0 || !g1) ExitProcess(90);
+        if (CALL(dev, 9, CreateView, g0, 0, &v0) < 0 || !v0) ExitProcess(91);
+        if (CALL(dev, 9, CreateView, g1, 0, &v1) < 0 || !v1) ExitProcess(91);
+        void *mpsb = compile("ps_mrt", "ps_5_0", 92);
+        void *mps_blob = ((BlobPtr)VT(mpsb, 3))(mpsb);
+        u64 mps_len = ((BlobSize)VT(mpsb, 4))(mpsb);
+        if (CALL(dev, 15, CreateShader, mps_blob, mps_len, 0, &mps) < 0 || !mps) ExitProcess(92);
+        static const float black[4] = {0, 0, 0, 0};
+        void *views[2] = {v0, v1};
+        CALL(ctx, 33, SetRT, 2, views, 0);
+        CALL(ctx, 50, ClearRT, v0, black);
+        CALL(ctx, 50, ClearRT, v1, black);
+        CALL(ctx, 9, SetShader, mps, 0, 0);
+        CALL(ctx, 12, DrawIndexed, 6, 0, 0);
+        // OMGetRenderTargets rend les deux vues liées.
+        typedef void(__stdcall * GetRT)(void *, u32, void **, void **);
+        void *got[2] = {0, 0}, *gotd = (void *)1;
+        CALL(ctx, 89, GetRT, 2, got, &gotd);
+        if (got[0] != v0 || got[1] != v1 || gotd != 0) ExitProcess(93);
+        typedef u32(__stdcall * Rel)(void *);
+        ((Rel)VT(v0, 2))(v0);
+        ((Rel)VT(v1, 2))(v1);
+        void *gs_[2] = {g0, g1};
+        for (int k = 0; k < 2; k++) {
+            CALL(ctx, 47, Copy, staging, gs_[k]);
+            Mapped g = {0};
+            if (CALL(ctx, 14, Map, staging, 0, 1, 0, &g) < 0 || !g.data) ExitProcess(94);
+            const u8 *in = (const u8 *)g.data + (SIZE / 2) * g.row + (SIZE - 5) * 4;
+            const u8 *out = (const u8 *)g.data + (SIZE / 2) * g.row + 4 * 4;
+            // Quad à droite : rouge dans la vue 0, vert dans la vue 1 ; à
+            // gauche, le noir de l'effacement.
+            if (in[k] < 250 || in[1 - k] > 5 || in[3] < 250) ExitProcess(95 + k);
+            if (out[0] > 5 || out[1] > 5) ExitProcess(97);
+            CALL(ctx, 15, Unmap, staging, 0);
+        }
+        CALL(ctx, 9, SetShader, ps, 0, 0);
+        CALL(ctx, 33, SetRT, 1, &rtv, dsv);
+    }
 
     // Calcul (#580) : grille 64x64 en groupes 8x8. Image : rouge à
     // gauche, bleu en haut ; sortie[i] = entree[i] * 3 + (63 - i % 8) ;
