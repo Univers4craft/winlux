@@ -847,6 +847,19 @@ pub fn call32(target: usize, args: &[u32]) -> u64 {
     assert!(target < limit(), "wow32 : appel 32 bits vers 0x{target:x}");
     let f: extern "win64" fn(usize, *const u32, usize) -> u64 =
         unsafe { std::mem::transmute(blob().call32) };
+    if history_on() {
+        let mut a = [0u32; 4];
+        for (d, s) in a.iter_mut().zip(args) {
+            *d = *s;
+        }
+        note(Passage {
+            desc: 0,
+            target: target as u32,
+            esp: 0,
+            ret: 0,
+            args: a,
+        });
+    }
     let marker = 0u8;
     let here = std::ptr::addr_of!(marker) as u64;
     let depth = CALLS32.with(|c| {
@@ -1538,9 +1551,115 @@ fn widen(v: u32) -> u64 {
     }
 }
 
+// ---------------------------------------------------------------------
+// Historique des passages (WINLUX_WOW32_HISTORY)
+// ---------------------------------------------------------------------
+
+/// Passage noté : appel x86 d'une passerelle (`desc`) ou rappel 64 → 32
+/// d'une fonction x86 (`desc` = 0, `target`).
+#[derive(Clone, Copy)]
+struct Passage {
+    desc: u32,
+    target: u32,
+    /// esp x86 à l'appel (adresse de retour), et cette adresse de retour.
+    esp: u32,
+    ret: u32,
+    args: [u32; 4],
+}
+
+const HISTORY_LEN: usize = 64;
+
+thread_local! {
+    static HISTORY: std::cell::RefCell<std::collections::VecDeque<Passage>> =
+        std::cell::RefCell::new(std::collections::VecDeque::with_capacity(HISTORY_LEN));
+}
+
+/// `WINLUX_WOW32_HISTORY=1` : chaque fil garde ses 64 derniers passages
+/// entre le code x86 et le runtime (passerelles, y compris SendMessage et
+/// CallWindowProc que WINLUX_APITRACE ne voit pas, et rappels de fonctions
+/// x86) ; une faute x86 les écrit dans la trace. Sert à trouver l'appel
+/// qui a laissé la pile x86 décalée (#1129).
+fn history_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("WINLUX_WOW32_HISTORY").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+fn note(p: Passage) {
+    HISTORY.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.len() == HISTORY_LEN {
+            h.pop_front();
+        }
+        h.push_back(p);
+    });
+}
+
+/// Passages notés, du plus ancien au plus récent, en texte.
+fn history_lines() -> Vec<String> {
+    HISTORY.with(|h| {
+        h.borrow()
+            .iter()
+            .map(|p| {
+                let what = if p.desc != 0 {
+                    let d = unsafe { &*(p.desc as usize as *const Desc) };
+                    d.label.clone()
+                } else {
+                    format!("rappel x86 0x{:x}", p.target)
+                };
+                format!(
+                    "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}",
+                    p.esp, p.ret, p.args
+                )
+            })
+            .collect()
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn historique_borne() {
+    for i in 0..(HISTORY_LEN as u32 + 5) {
+        note(Passage {
+            desc: 0,
+            target: 0x40_0000 + i,
+            esp: 0,
+            ret: 0,
+            args: [i, 0, 0, 0],
+        });
+    }
+    let lines = history_lines();
+    assert_eq!(lines.len(), HISTORY_LEN);
+    assert!(lines[0].starts_with("rappel x86 0x400005"), "{}", lines[0]);
+    assert!(lines[HISTORY_LEN - 1].contains("0x400044"));
+}
+
+/// Écrit l'historique du fil dans la trace (faute x86).
+pub(super) fn trace_history() {
+    if !history_on() {
+        return;
+    }
+    let lines = history_lines();
+    crate::trace!("wow32 : {} derniers passages x86 ↔ runtime :", lines.len());
+    for (i, l) in lines.iter().enumerate() {
+        crate::trace!("wow32 :   {i:2} {l}");
+    }
+}
+
 /// Relit les arguments x86 et appelle la fonction win64.
 extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let d = unsafe { &*(desc as usize as *const Desc) };
+    if history_on() {
+        let rd = |a: u32| unsafe { (a as usize as *const u32).read_unaligned() };
+        note(Passage {
+            desc,
+            target: 0,
+            esp: args - 4,
+            ret: rd(args - 4),
+            args: [rd(args), rd(args + 4), rd(args + 8), rd(args + 12)],
+        });
+    }
     if !d.supported {
         eprintln!(
             "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).",

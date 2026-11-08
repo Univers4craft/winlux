@@ -147,6 +147,8 @@ pub mod mscoree;
 pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
+pub mod msxml;
+pub mod msxml_dom;
 pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
@@ -155,17 +157,20 @@ pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
+pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
+pub mod pe_image;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
+pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
 pub mod rtti;
@@ -330,7 +335,7 @@ pub fn shadowed_exports() -> Vec<String> {
 struct Builtin {
     name: &'static str,
     exports: Exports,
-    /// Fausse image (une page commençant par « MZ ») servant de HMODULE.
+    /// Image PE minimale servant de HMODULE (voir `pe_image`).
     handle: usize,
 }
 
@@ -410,7 +415,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(serial::exports());
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ntdll",
@@ -426,17 +431,17 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "msvcrt",
                 exports: crt,
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ucrtbase",
                 exports: ucrt,
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "user32",
@@ -471,12 +476,12 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "shcore",
                 exports: chromium_win32::shcore_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "advapi32",
@@ -496,22 +501,22 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "rpcrt4",
                 exports: rpcrt4::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winhttp",
                 exports: winhttp::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "bcryptprimitives",
                 exports: bcrypt::primitives_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ole32",
@@ -523,17 +528,17 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "bcrypt",
                 exports: bcrypt::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "version",
                 exports: version::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
             Builtin {
@@ -550,12 +555,12 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(dataobject::shell32_exports());
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mscoree",
                 exports: mscoree::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ncrypt",
@@ -570,22 +575,22 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "uiautomationcore",
                 exports: uiautomationcore::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "gdiplus",
                 exports: gdiplus::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ws2_32",
                 exports: ws2_32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "gdi32",
@@ -603,12 +608,12 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mfplat",
                 exports: mfplat::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winmm",
@@ -619,57 +624,57 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winmm_midi_in::exports());
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dsound",
                 exports: dsound::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mmdevapi",
                 exports: mmdevapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "audioses",
                 exports: mmdevapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3dcompiler_47",
                 exports: d3dcompiler::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "avrt",
                 exports: mmdevapi::avrt_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "xaudio2_9",
                 exports: xaudio2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "xaudio2_8",
                 exports: xaudio2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "xaudio2_7",
                 exports: xaudio2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "comctl32",
                 exports: comctl32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "shlwapi",
                 exports: shlwapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "oleaut32",
@@ -679,17 +684,17 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(oleaut32_disp::exports());
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dplayx",
                 exports: dplayx::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dplay",
                 exports: dplayx::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dpnet",
@@ -709,82 +714,82 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "quartz",
                 exports: quartz::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mfreadwrite",
                 exports: mfplat::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mf",
                 exports: mfplat::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "crypt32",
                 exports: crypt32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dpapi",
                 exports: dpapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dxgi",
                 exports: dxgi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3d11",
                 exports: d3d11::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3d12",
                 exports: d3d12::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dxva2",
                 exports: dxva2::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "ddraw",
                 exports: ddraw::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3dx9",
                 exports: d3dx9::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3d8",
                 exports: d3d8::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d3d9",
                 exports: d3d9::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dbghelp",
                 exports: dbghelp::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "powrprof",
                 exports: powrprof::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "webview2loader",
@@ -794,37 +799,37 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "winusb",
                 exports: winusb::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "setupapi",
                 exports: setupapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "fwpuclnt",
                 exports: sandbox_dlls::fwpuclnt_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "netapi32",
                 exports: sandbox_dlls::netapi32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "wtsapi32",
                 exports: sandbox_dlls::wtsapi32_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "wintrust",
                 exports: wintrust::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "iphlpapi",
                 exports: iphlpapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "userenv",
@@ -833,27 +838,27 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(knownfolders::userenv_exports());
                     e
                 },
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "windowscodecs",
                 exports: windowscodecs::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "d2d1",
                 exports: d2d1::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dwrite",
                 exports: dwrite::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "uxtheme",
                 exports: uxtheme::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
             // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
@@ -861,170 +866,170 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "msftedit",
                 exports: Exports::new(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "riched20",
                 exports: Exports::new(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "riched32",
                 exports: Exports::new(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "pdh",
                 exports: pdh::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winscard",
                 exports: absent_devices::winscard_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "bthprops.cpl",
                 exports: absent_devices::bthprops_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dcomp",
                 exports: absent_devices::dcomp_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "fontsub",
                 exports: absent_devices::fontsub_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
             Builtin {
                 name: "msimg32",
                 exports: Exports::new(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Accessibilité (wxWidgets, Audacity), complétée par common_apps.
             Builtin {
                 name: "oleacc",
                 exports: Exports::new(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "coremessaging",
                 exports: coremessaging::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dwmapi",
                 exports: dwmapi::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "mpr",
                 exports: mpr::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "propsys",
                 exports: propsys::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "sechost",
                 exports: sechost::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "xinput1_4",
                 exports: xinput::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dinput8",
                 exports: dinput8::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dinput",
                 exports: dinput8::legacy_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "winspool",
                 exports: winspool::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "comdlg32",
                 exports: comdlg32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "libgcc_s_seh-1",
                 exports: libgcc::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "libstdc++-6",
                 exports: libstdcpp::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "imm32",
                 exports: imm32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "secur32",
                 exports: secur32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "wininet",
                 exports: wininet::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "urlmon",
                 exports: wininet::urlmon_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "msvcp140",
                 exports: msvcp140::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "opengl32",
                 exports: opengl32::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "vulkan-1",
                 exports: vulkan1::exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "dnsapi",
                 exports: games_win32::dnsapi_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             Builtin {
                 name: "usp10",
                 exports: usp10::usp10_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
             // Client DHCP (WPAD de Chromium), importé par claude.exe.
             Builtin {
                 name: "dhcpcsvc",
                 exports: electron_win32::dhcpcsvc_exports(),
-                handle: fake_module(),
+                handle: 0,
             },
         ];
         add_basics(&mut all);
@@ -1038,8 +1043,16 @@ fn builtins() -> &'static Vec<Builtin> {
             all.push(Builtin {
                 name,
                 exports,
-                handle: fake_module(),
+                handle: 0,
             });
+        }
+        // Chaque DLL intégrée a de vrais en-têtes PE et une table d'exports :
+        // le bac à sable de Chromium lit lui-même celle de ntdll au lieu
+        // d'appeler GetProcAddress (#851), et ses renderers vérifient les
+        // en-têtes PE des modules système avant d'en parcourir les imports
+        // (#852).
+        for b in all.iter_mut() {
+            b.handle = pe_image::build(b.name, &b.exports);
         }
         all
     })
@@ -1094,7 +1107,7 @@ fn add_psapi(all: &mut Vec<Builtin>) {
     all.push(Builtin {
         name: "psapi",
         exports,
-        handle: fake_module(),
+        handle: 0,
     });
 }
 

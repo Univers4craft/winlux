@@ -763,8 +763,13 @@ ok((runtime_dlls / "winmm_midi_in.rs").exists()
 ok((runtime_dlls / "msacm32.rs").exists()
    and '"msacm32"' in (runtime_dlls / "mod.rs").read_text()
    and "acm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
-   and "msacm32 (conversions PCM)" in (SCRIPTS / "test-wow32.sh").read_text(),
+   and "msacm32 (conversions PCM" in (SCRIPTS / "test-wow32.sh").read_text(),
    "msacm32 : acmStream* convertit le PCM (8/16/24/32 bits, flottant, canaux, fréquence)")
+# #1122 : décodeurs IMA ADPCM et ADPCM MS dans msacm32, testés par jeux32/jeux64.
+ok("fn decode_block" in (runtime_dlls / "msacm32.rs").read_text()
+   and "adpcm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
+   and "décodeurs ADPCM" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "msacm32 : sons IMA ADPCM et ADPCM MS décodés en PCM")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
@@ -1115,6 +1120,20 @@ ok("CancelIoEx(server, &ov) == 1" in (ROOT / "testc/msvc/io_msvc.c").read_text()
    and "Some(libc::EFAULT) => return 998" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "E/S : lecture commencée annulée, handles invalides et tampons invalides (ERROR_NOACCESS) (#18)")
 
+# #851, #852, #996 : Claude pour Windows (Chromium) ; les .exe de test
+# tournent dans test-runtime.sh.
+runtime_tests = (SCRIPTS / "test-runtime.sh").read_text()
+ok(all(t in runtime_tests for t in ("ntdll_exports", "register_wait", "chromium_compat")),
+   "Claude pour Windows : table d'exports, attentes annulées et processus GPU testés (#851, #852, #996)")
+ok("Some(d) if d.screen" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "WindowFromDC(GetDC(NULL)) rend le bureau, ANGLE accepte l'affichage (#996)")
+ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "#767" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "même .exe dans un enfant : même adresse d'image, exigée par le bac à sable de Chromium (#767)")
+ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
+   and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
 update_apt = (SCRIPTS / "winlux-update-apt.py").read_text(encoding="utf-8")
@@ -1193,6 +1212,22 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+# #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
+# vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
+msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in msxml_rs and "msxml::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IXMLDOMDOCUMENT3" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "msxml_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "msxml32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "MSXML : DOMDocument intégré, x64 et x86 (#1084)")
+# #1114 : annotations d'accessibilité (CLSID_AccPropServices) de la VCL,
+# vérifiées par accprop_suite.exe (test-mingw.sh) et accprop32.exe (test-wow32.sh).
+accprop_rs = (ROOT / "runtime/src/dlls/oleacc_props.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in accprop_rs and "oleacc_props::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IACCPROPSERVICES" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "accprop_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "accprop32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "AccPropServices : annotations d'accessibilité, x64 et x86 (#1114)")
 ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w'
    in (runtime_dlls / "win32_basics.rs").read_text()
    and "GetVolumeNameForVolumeMountPointW" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(),
