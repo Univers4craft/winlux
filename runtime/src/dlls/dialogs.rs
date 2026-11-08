@@ -1261,30 +1261,102 @@ fn message_box_lines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// Zone de travail de l'écran où s'ouvre la boîte : celui qui contient le
+/// centre de la fenêtre propriétaire, sinon l'écran principal, limité à la
+/// zone de travail publiée (barre des tâches exclue). Une boîte longue doit
+/// tenir sur un portable en 1366 x 768 comme sur un écran 1920 x 1080 (#1161).
+fn message_box_area(owner: usize) -> Rect {
+    let work = gui::work_area();
+    let monitors = gui::monitors();
+    let center = gui::screen_rect(owner).map(|r| ((r.left + r.right) / 2, (r.top + r.bottom) / 2));
+    let monitor = center
+        .and_then(|(x, y)| {
+            monitors.iter().find(|m| {
+                (m.rect.left..m.rect.right).contains(&x) && (m.rect.top..m.rect.bottom).contains(&y)
+            })
+        })
+        .or_else(|| monitors.iter().find(|m| m.primary))
+        .or(monitors.first());
+    let Some(m) = monitor else {
+        return work;
+    };
+    clip_to_work_area(m.rect, work)
+}
+
+/// Écran `monitor` privé de ce que la zone de travail en exclut ; l'écran
+/// entier si les deux ne se recouvrent pas.
+fn clip_to_work_area(monitor: Rect, work: Rect) -> Rect {
+    let r = Rect {
+        left: monitor.left.max(work.left),
+        top: monitor.top.max(work.top),
+        right: monitor.right.min(work.right),
+        bottom: monitor.bottom.min(work.bottom),
+    };
+    if r.width() > 0 && r.height() > 0 {
+        r
+    } else {
+        monitor
+    }
+}
+
+/// Nombre de lignes et largeur de la plus longue d'un texte de boîte de
+/// message coupé aux espaces à `max_w` pixels. Un mot plus long que la
+/// ligne en occupe une à lui seul.
+fn message_box_wrap(text: &str, max_w: i32, measure: &dyn Fn(&str) -> i32) -> (i32, i32) {
+    let space = measure(" ");
+    let mut lines = 0;
+    let mut widest = 0;
+    for raw in text.split('\n') {
+        let mut cur = 0;
+        let mut first = true;
+        for word in raw.trim_end_matches('\r').split(' ') {
+            let w = measure(word);
+            if first {
+                cur = w;
+                first = false;
+            } else if cur + space + w <= max_w {
+                cur += space + w;
+            } else {
+                lines += 1;
+                widest = widest.max(cur.min(max_w));
+                cur = w;
+            }
+        }
+        lines += 1;
+        widest = widest.max(cur.min(max_w));
+    }
+    (lines, widest)
+}
+
 /// Construit un DLGTEMPLATE en mémoire pour une boîte de message.
-fn message_box_template(text: &str, caption: &str, kind: u32) -> Vec<u8> {
+fn message_box_template(text: &str, caption: &str, kind: u32, area: Rect) -> Vec<u8> {
     let font = super::gdi32::get_stock_object(17);
     let spec = gui::font_spec(font).unwrap_or_default();
     let base = base_units(font);
     let to_du_x = |px: i32| (px * 4 + base.0 - 1) / base.0;
     let to_du_y = |px: i32| (px * 8 + base.1 - 1) / base.1;
-    // Texte coupé à 420 pixels environ.
-    let max_w = 420;
-    let mut lines = 0;
-    let mut widest = 0;
-    for raw in text.split('\n') {
-        let (w, _) = gui::measure_text(&spec, raw.trim_end_matches('\r'));
-        lines += (w / max_w + 1).max(1);
-        widest = widest.max(w.min(max_w));
-    }
+    let icon = if kind & 0xF0 != 0 { 40 } else { 0 };
+    // Texte coupé à 420 pixels pour un message court ; un long texte (pile
+    // d'appels de Paint.NET) élargit la boîte jusqu'aux 5/8 de la zone de
+    // travail, comme sous Windows, au lieu de s'allonger sans fin (#1161).
+    let measure = |s: &str| gui::measure_text(&spec, s).0;
+    let mut max_w = 420;
+    let (mut lines, mut widest) = message_box_wrap(text, max_w, &measure);
+    let wide = (area.width() * 5 / 8 - 48 - icon).max(420);
     let lh = gui::measure_text(&spec, "Ag").1.max(12);
+    if lines * lh > area.height() / 2 && wide > max_w {
+        max_w = wide;
+        (lines, widest) = message_box_wrap(text, max_w, &measure);
+    }
     let buttons = message_box_buttons(kind);
     let bw = 88;
     let gap = 8;
     let row = buttons.len() as i32 * (bw + gap) - gap;
-    let icon = if kind & 0xF0 != 0 { 40 } else { 0 };
     let width = (widest + icon).max(row).max(200) + 48;
-    let text_h = lines * lh;
+    // La boîte tient dans la zone de travail (barre de titre comprise) : le
+    // texte trop long est coupé, les boutons restent visibles.
+    let room = (area.height() - 40 - (24 + 24 + 32 + 16)).max(lh);
+    let text_h = (lines * lh).min(room);
     let height = 24 + text_h + 24 + 32 + 16;
 
     let mut out: Vec<u8> = Vec::new();
@@ -1474,8 +1546,8 @@ pub unsafe fn message_box(owner: usize, text: &str, caption: &str, kind: u32) ->
         let default = ((kind >> 8) & 0xF) as usize;
         return buttons.get(default).or(buttons.first()).map_or(1, |b| b.0) as i32;
     }
-    let data = message_box_template(text, caption, kind);
     let owner = if owner != 0 { top_level(owner) } else { 0 };
+    let data = message_box_template(text, caption, kind, message_box_area(owner));
     let dlg = create_indirect(
         0,
         &data,

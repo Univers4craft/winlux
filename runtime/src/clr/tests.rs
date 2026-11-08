@@ -168,6 +168,24 @@ fn sans_la_bibliotheque_l_appel_echoue_proprement() {
     assert_eq!(code, 0xE0434352u32 as i32);
 }
 
+/// #1190 : une méthode de la BCL pas encore écrite (`Path.GetTempPath`) lève
+/// une `MissingMethodException` au lieu de rendre `null` en silence.
+#[test]
+fn une_methode_de_base_absente_leve_missing_method() {
+    let mut b = Builder::new("Absente");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let path = b.type_ref(Scope::Assembly(mscorlib), "System.IO", "Path");
+    let temp = b.member_ref(path, "GetTempPath", &method_sig(false, &[T_STRING], &[]));
+    b.type_def(PUBLIC, "Absente", "Programme", 0);
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(Il::default().call(temp).op(POP).i4(5).ret().body()),
+    );
+    assert_eq!(lancer(&b.build(main), None), 0xE0434352u32 as i32);
+}
+
 #[test]
 fn le_constructeur_statique_ne_tourne_qu_une_fois() {
     let mut b = Builder::new("Statique");

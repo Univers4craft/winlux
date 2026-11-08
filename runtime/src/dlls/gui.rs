@@ -3926,6 +3926,38 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             }
             0
         }
+        // Menu contextuel (#1139) : DefWindowProc le demande au relâchement
+        // du bouton droit (coordonnées écran), à Maj+F10 et à la touche
+        // Applications (-1 : au clavier). Une fenêtre enfant qui ne le traite
+        // pas le passe à son parent.
+        WM_RBUTTONUP => {
+            let x = lparam as u32 as u16 as i16 as i32;
+            let y = (lparam as u32 >> 16) as u16 as i16 as i32;
+            let (ox, oy) = screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            send_context_menu(hwnd, hwnd, pack_point(x + ox, y + oy));
+            0
+        }
+        0x00A5 => {
+            // WM_NCRBUTTONUP : déjà en coordonnées écran.
+            send_context_menu(hwnd, hwnd, lparam);
+            0
+        }
+        WM_KEYDOWN | 0x0104 if wparam == 0x79 && get_key_state(0x10) < 0 => {
+            send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        0x0101 if wparam == 0x5D => {
+            send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        WM_CONTEXTMENU => {
+            let child = window_style(hwnd).is_some_and(|s| s & 0x4000_0000 != 0);
+            let parent = window_parent(hwnd).unwrap_or(0);
+            if child && parent != 0 {
+                send_context_menu(parent, wparam, lparam);
+            }
+            0
+        }
         // WM_NCCREATE : accepter la création (FALSE l'annulerait).
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
@@ -3944,6 +3976,16 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         }
         _ => 0,
     }
+}
+
+pub const WM_CONTEXTMENU: u32 = 0x007B;
+
+fn pack_point(x: i32, y: i32) -> isize {
+    (((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize
+}
+
+fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
+    unsafe { crate::dlls::user32::send_message_w(target, WM_CONTEXTMENU, hwnd, lparam) };
 }
 
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------

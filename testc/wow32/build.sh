@@ -462,6 +462,33 @@ clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "
 lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
     "$tmp/d3d1164/d3d1164.obj" "$tmp/d3d1164/d3d11_k32.lib" "$tmp/d3d1164/d3d11_user32.lib" \
     "$tmp/d3d1164/d3d11_d3d11.lib" "$tmp/d3d1164/d3d11_dxgi.lib" /out:"$out/d3d1164.exe"
+# Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : d3d1032.exe (x86)
+# et d3d1064.exe (x64).
+cat >"$tmp/d3d10_d3d10.def" <<'DEF'
+LIBRARY d3d10.dll
+EXPORTS
+D3D10CreateDevice@24
+D3D10CreateDeviceAndSwapChain@32
+DEF
+cat >"$tmp/d3d10_d3d10_1.def" <<'DEF'
+LIBRARY d3d10_1.dll
+EXPORTS
+D3D10CreateDevice1@28
+DEF
+mkdir -p "$tmp/d3d1064"
+for lib in d3d10_d3d10 d3d10_d3d10_1; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/d3d1064/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/d3d1064/$lib.def" -l "$tmp/d3d1064/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/d3d1032.c" -o "$tmp/d3d1032.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
+    "$tmp/d3d1032.obj" "$tmp/d3d11_k32.lib" "$tmp/d3d11_user32.lib" "$tmp/d3d10_d3d10.lib" \
+    "$tmp/d3d10_d3d10_1.lib" /out:"$out/d3d1032.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/d3d1032.c" -o "$tmp/d3d1064/d3d1064.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
+    "$tmp/d3d1064/d3d1064.obj" "$tmp/d3d1164/d3d11_k32.lib" "$tmp/d3d1164/d3d11_user32.lib" \
+    "$tmp/d3d1064/d3d10_d3d10.lib" "$tmp/d3d1064/d3d10_d3d10_1.lib" /out:"$out/d3d1064.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.

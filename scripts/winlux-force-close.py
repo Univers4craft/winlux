@@ -3,7 +3,7 @@
 
     winlux-force-close [--hung] [WID]   demande confirmation puis ferme le programme
     winlux-force-close menu             menu de fenêtre d'Openbox (clic droit sur
-                                        la barre de titre, Alt+Espace), traduit
+                                        la barre de titre), traduit
 
 Un programme bloqué reçoit bien WM_DELETE_WINDOW quand on clique sur la croix,
 mais ne le traite jamais ; s'il répond encore à _NET_WM_PING, Openbox ne

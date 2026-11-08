@@ -12,8 +12,9 @@
   <resize><drawContents>yes</drawContents><popupShow>Nonpixel</popupShow></resize>
   <keyboard>
     <keybind key="A-F4"><action name="Close"/><action name="Execute"><command>winlux-close-watch $wid</command></action></keybind>
-    <!-- Alt+Espace : menu de la fenêtre, même sans barre de titre (dont « Forcer la fermeture »). -->
-    <keybind key="A-space"><action name="ShowMenu"><menu>winlux-window-menu</menu></action></keybind>
+    <!-- Alt+Espace n'est pas pris ici (#1168) : sous Windows c'est l'application qui
+         le reçoit (Flow Launcher, PowerToys Run l'enregistrent par RegisterHotKey).
+         Le menu de fenêtre reste au clic droit sur la barre de titre. -->
     <keybind key="A-Tab"><action name="NextWindow"/></keybind>
     <keybind key="A-S-Tab"><action name="PreviousWindow"/></keybind>
     <keybind key="W-d"><action name="ToggleShowDesktop"/></keybind>

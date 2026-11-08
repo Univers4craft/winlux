@@ -898,6 +898,15 @@ ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_service
    and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
    and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
    "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
+# #1188/#1189 : C:\\Users\\<compte> = dossier personnel (raccourcis de Claude pour Windows).
+ok("def account_names" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "#1189" in (SCRIPTS / "test-native-catalogue.py").read_text(),
+   "raccourcis : C:\\Users\\<compte> traduit en dossier personnel, Claude trouvé par Démarrer (#1188, #1189)")
+# #1168 : Alt+Espace laissé aux applications (RegisterHotKey), plus pris par openbox.
+ok('key="A-space"' not in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
+   and '"A-space"' in (SCRIPTS / "winlux-native-config.py").read_text()
+   and "#1168" in (SCRIPTS / "test-force-close.py").read_text(),
+   "openbox : Alt+Espace rendu aux applications, copies des comptes migrées (#1168)")
 # #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
 ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
@@ -1035,6 +1044,12 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
    and "quatre_fils_sous_verrou" in (clr / "tests.rs").read_text()
    and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
    "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
+
+# #1190 : une méthode de base pas encore écrite lève MissingMethodException.
+ok("fn missing(class: &str, method: &str)" in (clr / "bcl.rs").read_text()
+   and "non implémenté\", method)" not in (clr / "bcl.rs").read_text()
+   and "une_methode_de_base_absente_leve_missing_method" in (clr / "tests.rs").read_text(),
+   "CLR : un appel de BCL absent lève MissingMethodException au lieu de rendre null (#1190)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
@@ -1278,6 +1293,14 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+# #1090, étape 2 : d3d10.dll et d3d10_1.dll sur Direct3D 11, x86 et x64.
+d3d10_rs = (runtime_dlls / "d3d10.rs").read_text(encoding="utf-8")
+ok("fn D3D10CreateDeviceAndSwapChain1" in d3d10_rs and "fn device_table" in d3d10_rs
+   and '"d3d10_1"' in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
+   and "d3d10::wrap_backbuffer" in (runtime_dlls / "dxgi.rs").read_text(encoding="utf-8")
+   and "d3d1032" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
+   and "device_table_has_101_methods" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Direct3D 10 et 10.1 sur Direct3D 11, x86 et x64 (#1090, étape 2)")
 ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
    "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
@@ -1287,6 +1310,15 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1177 : Direct3D 12 sur OpenGL, shaders DXBC traduits et tampons de
+# constantes liés d'après la signature racine (RTS0).
+d3d12_shader_rs = (runtime_dlls / "d3d12_shader.rs").read_text(encoding="utf-8")
+ok("fn parse_root(" in d3d12_shader_rs and "fn constant_buffers(" in d3d12_shader_rs
+   and "list_root_constants" in (runtime_dlls / "d3d12.rs").read_text(encoding="utf-8")
+   and "fn table_bindings(" in d3d12_shader_rs and "fn gl_sampler(" in d3d12_shader_rs
+   and "shaders_traduits_et_constantes_racine_opengl" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8")
+   and "texture_et_echantillonneur_statique_opengl" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine, tampons de constantes, textures et échantillonneurs (#1177)")
 ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
    and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
    "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
@@ -1296,11 +1328,30 @@ ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+ok("fn lv_edit_label" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "clic_droit_menu_contextuel_et_renommage_dans_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes : clic droit (NM_RCLICK, WM_CONTEXTMENU), Maj+F10 et renommage en place (#1139)")
+ok("placement_de_fenetre_deplace_et_affiche" in (SCRIPTS / "test-all.sh").read_text()
+   and "show_window(hwnd, p.show_cmd as i32)" in (runtime_dlls / "user32.rs").read_text(),
+   "SetWindowPlacement affiche la fenêtre : 7-Zip s'ouvre (#1159)")
+ok("en_tetes_nt_d_une_image_projetee" in (SCRIPTS / "test-all.sh").read_text(),
+   "ImageNtHeader : les extensions livrées avec Notepad++ se chargent (#1152)")
+ok("LVS_EX_CHECKBOXES" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "cases_a_cocher_des_lignes_d_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes à cases à cocher (LVS_EX_CHECKBOXES) : récupération d'Audacity (#1153)")
+ok("fn message_box_wrap" in (runtime_dlls / "dialogs.rs").read_text()
+   and "longue_boite_de_message_tient_dans_l_ecran" in (SCRIPTS / "test-all.sh").read_text(),
+   "Boîte de message longue : élargie puis limitée à la zone de travail, boutons visibles (#1161)")
 # #1183 : SslStream de .NET normalise le nom d'hôte par Normaliz.dll!IdnToAscii.
 ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
+# #1197 : SMBIOS brut pour GetSystemFirmwareTable (Creative Cloud, Photoshop).
+ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls / "apps_win32.rs").read_text(encoding="utf-8")
+   and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
+   and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
