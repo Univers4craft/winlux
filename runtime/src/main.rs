@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod abslots;
 mod admin;
 mod archive;
 mod audio;
@@ -122,6 +123,10 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
     }
+    if exe == "--ab-boot" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(abslots::cli(&rest));
+    }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(bootsplash::cli(&rest));
@@ -217,7 +222,8 @@ fn main() {
     }
     // Variables d'environnement Windows écrites par les installateurs.
     msi::extra::apply_registry_environment();
-    let source = match std::fs::read(&exe) {
+    // Projeté plutôt que lu : rien n'est copié en mémoire (#997).
+    let source = match loader::ImageFile::open(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("winlux: lecture impossible de {} : {error}", exe.display());
@@ -265,6 +271,9 @@ fn main() {
             wow32::init(pe.characteristics & 0x0020 != 0);
         }
     }
+    // La copie lue du fichier ne sert plus : sans ce drop, elle restait en
+    // mémoire toute la vie du programme (300 Mo pour claude.exe, #997).
+    drop(source);
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {

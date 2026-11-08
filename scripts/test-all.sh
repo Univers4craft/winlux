@@ -66,7 +66,7 @@ while IFS= read -r command; do
         *xvfb-run*) command -v xvfb-run >/dev/null 2>&1 || { skip "$script" "xvfb-run absent"; continue; } ;;
     esac
     case "$script" in
-        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-integration.sh|scripts/test-mingw.sh)
+        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-image-memory.py|scripts/test-integration.sh|scripts/test-mingw.sh)
             if test "$quick" = 1; then skip "$script" "mode rapide"; continue; fi
             test -d target/x86_64-pc-windows-msvc/release || { skip "$script" "programmes PE non compilés"; continue; } ;;
     esac
@@ -93,6 +93,8 @@ fi
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 step "scripts/test-notices.py" python3 -B scripts/test-notices.py
+step "scripts/test-update-signature.py" python3 -B scripts/test-update-signature.py
+step "scripts/test-ab-update.py (mises à jour A/B)" python3 -B scripts/test-ab-update.py
 
 # Applis WinForms et WPF .NET autonomes (#664–#666, #268) : télécharge une fois le runtime
 # .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.

@@ -179,6 +179,22 @@ _TR = {
          "Die llama.cpp-Engine kann auf diesem PC nicht starten: {e}"),
     "Ouvrir la page de connexion": ("Open the sign-in page", "Abrir la página de inicio de sesión",
                                     "Anmeldeseite öffnen"),
+    "Le système a arrêté la connexion faute de mémoire. Fermez des applications, puis réessayez.":
+        ("The system stopped the sign-in because memory ran out. Close some apps, then try again.",
+         "El sistema detuvo el inicio de sesión por falta de memoria. Cierre algunas aplicaciones y vuelva a intentarlo.",
+         "Das System hat die Anmeldung wegen Speichermangels beendet. Schließen Sie Apps und versuchen Sie es erneut."),
+    "Tant que l'activation n'est pas terminée, {name} reste désactivé. Fermer cette fenêtre l'arrête.":
+        ("{name} stays off until activation is complete. Closing this window stops it.",
+         "{name} seguirá desactivado hasta que termine la activación. Cerrar esta ventana la detiene.",
+         "{name} bleibt deaktiviert, bis die Aktivierung abgeschlossen ist. Wenn Sie dieses Fenster schließen, wird sie beendet."),
+    "Arrêter l'activation de {name} ?": ("Stop activating {name}?", "¿Detener la activación de {name}?",
+                                          "Aktivierung von {name} beenden?"),
+    "{name} restera désactivé. Vous pourrez le réactiver plus tard dans Paramètres > Assistant IA.":
+        ("{name} will stay off. You can turn it on later in Settings > AI assistant.",
+         "{name} seguirá desactivado. Puede activarlo más tarde en Configuración > Asistente de IA.",
+         "{name} bleibt deaktiviert. Sie können es später unter Einstellungen > KI-Assistent aktivieren."),
+    "Continuer l'activation": ("Continue activation", "Continuar la activación", "Aktivierung fortsetzen"),
+    "Arrêter": ("Stop", "Detener", "Beenden"),
     "La connexion n'a pas abouti : {e}": ("Sign-in did not complete: {e}", "No se completó el inicio de sesión: {e}",
                                           "Die Anmeldung wurde nicht abgeschlossen: {e}"),
     "Ouvrir l'assistant": ("Open the assistant", "Abrir el asistente", "Assistent öffnen"),
@@ -1064,6 +1080,14 @@ def _private_dir(path):
     return path
 
 
+def login_failure(returncode):
+    """Message d'une connexion qui s'arrête seule. -9 : processus tué par le
+    système, faute de mémoire (#997), jamais par l'assistant hors « Annuler »."""
+    if returncode == -9:
+        return _t("Le système a arrêté la connexion faute de mémoire. Fermez des applications, puis réessayez.")
+    return _t("La connexion n'a pas abouti : {e}", e=f"code {returncode}")
+
+
 def work_dir():
     """Dossier de travail de claude.exe et codex : jamais un dossier personnel
     (#913), sinon la couche PE demande l'accès aux fichiers personnels."""
@@ -1638,6 +1662,14 @@ def user_folder(key):
     return HOME / _FOLDER_DEFAULTS[key]
 
 
+# Demande de fichier reconnue sans le modèle, dans les quatre langues : « Où est
+# mon fichier » allait à l'agent aide, qui proposait une page sans rapport (#1002).
+FILE_WORDS = re.compile(r"\b(fichiers?|documents?|dossiers?|photos?|files?|folders?|dateien|datei|ordner|"
+                        r"archivos?|carpetas?|documentos?|fotos?)\b")
+# Mots qui ne sont pas un nom de fichier : chercher « fichier » ne trouve rien d'utile.
+GENERIC_TERMS = {"fichier", "fichiers", "document", "documents", "mon fichier", "file", "my file", "datei",
+                 "meine datei", "archivo", "mi archivo", "documento", "dossier", "folder", "ordner", "carpeta"}
+
 AGENTS = ("fichiers", "reglages", "aide")
 assert len(AGENTS) <= MAX_AGENTS
 ROUTER_SCHEMA = {"type": "object", "properties": {"agent": {"type": "string", "enum": list(AGENTS)}},
@@ -1653,6 +1685,27 @@ HELP_SCHEMA = {"type": "object", "properties": {
     "reponse": {"type": "string"},
     "page": {"type": "string", "enum": ["aucune", *(str(n) for n in SETTINGS_PAGES)]}},
     "required": ["reponse", "page"], "additionalProperties": False}
+
+
+# Mots qui rendent une page des Paramètres pertinente pour l'agent aide (#1002).
+PAGE_WORDS = {2: ("reseau", "wifi", "wi-fi", "internet", "network", "netzwerk", "red"),
+              8: ("ecran", "display", "screen", "bildschirm", "pantalla", "resolution"),
+              12: ("accessibilite", "accessibility", "barrierefreiheit", "accesibilidad"),
+              16: ("son", "audio", "sound", "ton", "sonido", "volume"),
+              22: ("bluetooth",), 23: ("batterie", "battery", "akku", "bateria", "alimentation"),
+              26: ("imprimante", "printer", "drucker", "impresora", "scanner")}
+
+
+def page_relevant(number, question, program=False):
+    """L'agent aide ne propose une page que si elle a un rapport avec la
+    question : Programmes Windows pour un .exe nommé, sinon un mot de la
+    page dans la question. À défaut, aucune action (#1002)."""
+    if number == 10:
+        return program
+    words = fold(question)
+    names = PAGE_WORDS.get(number, ()) + tuple(w for w in re.split(r"[\s’']+", fold(SETTINGS_PAGES.get(number, "")))
+                                               if len(w) > 3)
+    return any(re.search(rf"\b{re.escape(name)}\b", words) for name in names)
 
 
 class LocalAssistant:
@@ -1672,6 +1725,8 @@ class LocalAssistant:
         text = fold(question)
         if re.search(r"\S+\.exe\b", text):
             return "aide"
+        if FILE_WORDS.search(text):
+            return "fichiers"
         system = ("Tu aiguilles la demande d'un utilisateur de Winlux (bureau façon Windows 11) vers un agent. "
                   "fichiers : chercher, trouver ou ouvrir un fichier, un document, une photo ou un dossier. "
                   "reglages : changer un réglage (thème sombre ou clair, son, Bluetooth, réseau, barre des tâches, "
@@ -1698,6 +1753,8 @@ class LocalAssistant:
                   "« dossier » vaut aucun.")
         answer = self.server.chat(system, question, FILES_SCHEMA, max_tokens=60)
         term = str(answer.get("terme") or "").strip().strip("«»\"' ")
+        if fold(term) in GENERIC_TERMS:
+            term = ""
         folder = answer.get("dossier")
         if folder in FOLDERS and not term:
             action = describe_action("ouvrir_dossier", str(user_folder(folder)))
@@ -1754,7 +1811,7 @@ class LocalAssistant:
         user = question + (f"\n\nJournal :\n{data[-3000:]}" if data else "")
         answer = self.server.chat(system, user, HELP_SCHEMA, max_tokens=300)
         result["reply"] = str(answer.get("reponse") or "").strip() or _t("Je ne sais pas.")
-        if str(answer.get("page")).isdigit():
+        if str(answer.get("page")).isdigit() and page_relevant(int(answer["page"]), question, bool(program)):
             action = describe_action("ouvrir_parametres", str(answer.get("page")))
             if action:
                 result["actions"].append(action)
@@ -1877,8 +1934,16 @@ def run_setup(key="claude"):
     for button in (open_page, retry, finish, close):
         buttons.pack_start(button, False, False, 0)
     box.pack_start(buttons, False, False, 0)
+    # Fermer avant la fin laisse l'assistant désactivé : c'est dit, et (#1001)
+    # confirmé avant d'arrêter (pas de réglage caché).
+    notice = Gtk.Label(label=_t("Tant que l'activation n'est pas terminée, {name} reste désactivé. "
+                                "Fermer cette fenêtre l'arrête.", name=name),
+                       xalign=0, wrap=True, max_width_chars=62)
+    notice.get_style_context().add_class("hint")
+    box.pack_start(notice, False, False, 0)
     win.add(box)
-    state = {"cancel": threading.Event(), "process": None, "url": None, "code": None, "browser": True}
+    state = {"cancel": threading.Event(), "process": None, "url": None, "code": None, "browser": True,
+             "finished": False}
 
     def mark(index, done=True):
         label, text = steps[index]
@@ -1894,6 +1959,7 @@ def run_setup(key="claude"):
         return False
 
     def failed(text):
+        state["finished"] = True
         status.set_text(text)
         code_box.hide()
         link_box.hide()
@@ -1903,6 +1969,8 @@ def run_setup(key="claude"):
         return False
 
     def ready(status_info):
+        state["finished"] = True
+        notice.hide()
         for index in range(len(steps) - 1):
             mark(index)
         enable(key)
@@ -1965,7 +2033,7 @@ def run_setup(key="claude"):
         if info.get("loggedIn"):
             GLib.idle_add(ready, info)
         elif not state["cancel"].is_set():
-            GLib.idle_add(failed, _t("La connexion n'a pas abouti : {e}", e=f"code {process.returncode}"))
+            GLib.idle_add(failed, login_failure(process.returncode))
 
     def login(launcher):
         mark(1, False)
@@ -2016,6 +2084,7 @@ def run_setup(key="claude"):
         open_page.hide()
         code_box.hide()
         close.set_label(_t("Annuler"))
+        state["finished"] = False  # « Réessayer » : une nouvelle activation en cours
         state["cancel"] = threading.Event()
         state["url"] = None
         state["code"] = None
@@ -2043,6 +2112,26 @@ def run_setup(key="claude"):
                 process.terminate()
         Gtk.main_quit()
 
+    def stop_confirmed():
+        """Vrai si la fenêtre peut se fermer : activation finie, ou arrêt
+        confirmé. « Continuer l'activation » est le choix par défaut."""
+        if state["finished"]:
+            return True
+        dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   text=_t("Arrêter l'activation de {name} ?", name=name))
+        dialog.format_secondary_text(_t("{name} restera désactivé. Vous pourrez le réactiver plus tard dans "
+                                        "Paramètres > Assistant IA.", name=name))
+        dialog.add_button(_t("Arrêter"), Gtk.ResponseType.REJECT)
+        dialog.add_button(_t("Continuer l'activation"), Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+        answer = dialog.run()
+        dialog.destroy()
+        return answer == Gtk.ResponseType.REJECT
+
+    def request_close(*_):
+        if stop_confirmed():
+            win.destroy()
+
     def copy_url(*_):
         if state["url"]:
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(state["url"], -1)
@@ -2066,7 +2155,8 @@ def run_setup(key="claude"):
     code.connect("activate", submit_code)
     retry.connect("clicked", start)
     finish.connect("clicked", open_assistant)
-    close.connect("clicked", quit_setup)
+    close.connect("clicked", request_close)
+    win.connect("delete-event", lambda *_: not stop_confirmed())
     win.connect("destroy", quit_setup)
     app.connect("activate", lambda *_: win.present())
     app.hold()

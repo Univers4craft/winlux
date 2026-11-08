@@ -629,6 +629,15 @@ try:
     assert result["agent"] == "aide" and result["reply"] == "Il manque imm32.dll."
     assert "le journal du programme putty.exe" == result["reads"][0][0] and "imm32.dll" in result["reads"][0][1]
     assert result["actions"][0][1] == ["winlux-shell-app", "settings", "10"]
+    # #1002 : « Où est mon fichier » va à l'agent fichiers, qui demande le nom ;
+    # l'agent aide ne propose plus une page sans rapport avec la question.
+    result = helper.handle("Où est mon fichier")
+    assert result["agent"] == "fichiers" and result["actions"] == [], result
+    assert result["reply"] == assistant._t("Quel fichier cherchez-vous ? Donnez une partie de son nom.")
+    result = helper.handle("Comment ça va ?")
+    assert result["agent"] == "aide" and result["actions"] == [], "page 10 sans .exe nommé : rien proposé"
+    assert assistant.page_relevant(2, "Mon wifi ne marche plus") and not assistant.page_relevant(2, "Bonjour")
+    assert assistant.page_relevant(26, "Mon imprimante n'imprime rien")
 finally:
     server.stop()
 assert not server.running() and server.memory() == 0
@@ -694,6 +703,19 @@ setup = (project / "scripts/winlux-assistant.py").read_text(encoding="utf-8")
 assert 'WINLUX_BROWSER="true"' in setup and "os.killpg" in setup and "start_new_session=True" in setup
 assert '"settings", "11"' in setup, "Installer un navigateur : page Navigateurs, choix explicite"
 for text in ("Copier le lien", "Installer un navigateur", "Lien copié."):
+    assert text in assistant._TR and len(assistant._TR[text]) == 3, text
+
+# #997 : connexion tuée par le système (mémoire) dite comme telle, pas « code -9 ».
+assert "mémoire" in assistant.login_failure(-9) and "code -9" not in assistant.login_failure(-9)
+assert "code 1" in assistant.login_failure(1)
+# #1001 : fermer avant la fin est annoncé et demande confirmation, « Continuer » par défaut.
+assert 'win.connect("delete-event", lambda *_: not stop_confirmed())' in setup
+assert 'close.connect("clicked", request_close)' in setup
+assert "dialog.set_default_response(Gtk.ResponseType.ACCEPT)" in setup
+for text in ("Le système a arrêté la connexion faute de mémoire. Fermez des applications, puis réessayez.",
+             "Tant que l'activation n'est pas terminée, {name} reste désactivé. Fermer cette fenêtre l'arrête.",
+             "Arrêter l'activation de {name} ?", "Continuer l'activation", "Arrêter",
+             "{name} restera désactivé. Vous pourrez le réactiver plus tard dans Paramètres > Assistant IA."):
     assert text in assistant._TR and len(assistant._TR[text]) == 3, text
 
 # ── Une fenêtre d'activation par assistant (#910), unique : un 2e clic la ramène ──
