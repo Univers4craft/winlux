@@ -325,6 +325,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
 
+    // SharedUserData!SystemCall avant tout code du programme : les relais
+    // Nt* de ntdll en dépendent (#767).
+    crate::dlls::pe_image::map_shared_user_data();
     let peb = alloc_peb();
     let params = alloc_zeroed(0x1000);
     unsafe {
