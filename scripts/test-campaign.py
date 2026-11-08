@@ -264,6 +264,15 @@ for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un 
                       ("RENAME_ALL", "Ctrl+A en renommage"),
                       ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
     ok(marker in explorer, f"Explorateur : {label}")
+# #886/#890/#891 : icônes Prisme par type, Terminal au trait, thème suivi en direct.
+for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)"),
+                      ("fn windows_program", "pastille Windows réservée aux .exe/.msi (#890)"),
+                      ("Kind::Script", "scripts shell à part des programmes (#890)")):
+    ok(marker in explorer, f"Explorateur : {label}")
+ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
+   "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
+   "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
 # ── Widgets Windows+W (#293, passage en VM) ────────────────────────────────
 widgets = (SCRIPTS / "winlux-widgets.py").read_text()
