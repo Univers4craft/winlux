@@ -102,6 +102,11 @@ ok("// CreateCustomFontCollection" in dwrite and "not_implemented as *const (), 
    and "fn custom_file_reference(" in custom and "fn read_stream(" in custom,
    "DirectWrite : collections et fichiers de polices fournis par l'appli (#1075)")
 
+text = source("dwrite_text.rs")
+ok(vtable(dwrite, "FORMAT_VT") == 43 and vtable(dwrite, "LAYOUT_VT") == 89
+   and "TEXT_FORMAT3" in text and "TEXT_LAYOUT4" in text,
+   "IDWriteTextFormat1-3 et IDWriteTextLayout1-4 servis par CreateTextFormat et CreateTextLayout (#1118)")
+
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,
    "GdipImageForceValidation (Image.FromStream avec validation) ne répond plus NotImplemented")

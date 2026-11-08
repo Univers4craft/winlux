@@ -111,9 +111,17 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 # AltGr (#1151) : Ctrl gauche + Alt droit comme sous Windows, sans quoi
 # AltGr+3 (« # ») déclenche le raccourci Alt+3 de Notepad++.
 step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q -p winlux -- altgr_est_ctrl_gauche_plus_alt_droit
+# Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
+# TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
+step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- reconnaissance_de_gestes_disponible_sans_geste_reconnu moteur_de_gestes_declare_pour_wpf
+
 # Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
+
+# Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
+# CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
+step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
