@@ -275,6 +275,19 @@ pub(super) static IOBJECTARRAY: Iface = Iface {
     methods: &[Some(&[I]), Some(&[I, Iid, OutQ])],
 };
 
+/// IObjectCollection : IObjectArray que le programme remplit.
+pub(super) static IOBJECTCOLLECTION: Iface = Iface {
+    name: "IObjectCollection",
+    iid: crate::dlls::jumplist_com::IID_IOBJECT_COLLECTION,
+    parent: Some(&IOBJECTARRAY),
+    methods: &[
+        Some(&[In(&IUNKNOWN)]),     // AddObject
+        Some(&[In(&IOBJECTARRAY)]), // AddFromArray
+        Some(&[I]),                 // RemoveObjectAt
+        Some(&[]),                  // Clear
+    ],
+};
+
 /// ICustomDestinationList : listes de raccourcis de la barre des tâches.
 pub(super) static ICUSTOMDESTINATIONLIST: Iface = Iface {
     name: "ICustomDestinationList",
@@ -309,6 +322,7 @@ static ALL: &[&Iface] = &[
     &IDISPATCH,
     &ITYPELIB,
     &IOBJECTARRAY,
+    &IOBJECTCOLLECTION,
     &ICUSTOMDESTINATIONLIST,
 ];
 
