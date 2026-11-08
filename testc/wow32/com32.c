@@ -13,6 +13,7 @@
 #include <shlobj.h>
 #include <commctrl.h>
 #include <knownfolders.h>
+#include <shobjidl.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -342,6 +343,32 @@ int main(void)
     CHECK(SHGetKnownFolderIDList(&FOLDERID_Documents, 0, NULL, &kpidl) == S_OK && kpidl != NULL,
           "SHGetKnownFolderIDList");
     CoTaskMemFree(kpidl);
+
+    /* Listes de raccourcis de la barre des tâches (WinSCP, #905). */
+    ICustomDestinationList *jl = NULL;
+    CHECK(CoCreateInstance(&CLSID_DestinationList, NULL, CLSCTX_INPROC_SERVER, &IID_ICustomDestinationList,
+                           (void **)&jl) == S_OK && jl, "CoCreateInstance(CLSID_DestinationList)");
+    CHECK(ICustomDestinationList_SetAppID(jl, L"Winlux.Test") == S_OK, "SetAppID");
+    UINT slots = 0;
+    IObjectArray *removed = NULL;
+    CHECK(ICustomDestinationList_BeginList(jl, &slots, &IID_IObjectArray, (void **)&removed) == S_OK
+          && slots > 0 && removed, "BeginList");
+    UINT nremoved = 9;
+    CHECK(IObjectArray_GetCount(removed, &nremoved) == S_OK && nremoved == 0, "liste des éléments retirés vide");
+    IObjectArray_Release(removed);
+    CHECK(ICustomDestinationList_AppendKnownCategory(jl, KDC_RECENT) == S_OK, "AppendKnownCategory");
+    CHECK(ICustomDestinationList_CommitList(jl) == S_OK, "CommitList");
+    ICustomDestinationList_Release(jl);
+
+    /* uxtheme demandé par la VCL : aucune fonction ne manque. */
+    HMODULE ux = LoadLibraryA("uxtheme.dll");
+    static const char *const ux_names[] = { "GetThemeMetric", "DrawThemeEdge", "GetWindowTheme",
+        "GetThemeTextExtent", "HitTestThemeBackground", "GetThemeSysSize", "EnableTheming" };
+    for (unsigned k = 0; k < sizeof ux_names / sizeof *ux_names; k++)
+        CHECK(ux && GetProcAddress(ux, ux_names[k]) != NULL, ux_names[k]);
+    typedef int (WINAPI *sys_size_fn)(HANDLE, int);
+    sys_size_fn sys_size = (sys_size_fn)(void *)GetProcAddress(ux, "GetThemeSysSize");
+    CHECK(sys_size(NULL, SM_CXVSCROLL) == GetSystemMetrics(SM_CXVSCROLL), "GetThemeSysSize");
 
     CoUninitialize();
     printf("com32 : COM 32 bits, %d vérifications passées. Tout est correct\n", step);

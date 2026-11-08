@@ -163,6 +163,187 @@ pub unsafe extern "win64" fn GetThemeSysFont(_theme: usize, _id: i32, _font: usi
     E_NOTIMPL
 }
 
+// ── Fonctions que la VCL de Delphi demande par GetProcAddress ──────────
+//
+// Winapi.UxTheme les cherche toutes au démarrage (WinSCP x86, #905) ; une
+// absente est un pointeur nul appelé plus tard. `OpenThemeData` ne rend
+// jamais de thème : celles qui prennent un HTHEME refusent donc le handle
+// (E_HANDLE), comme Windows pour un handle de thème invalide. Les
+// variantes « Sys » acceptent un HTHEME nul et rendent alors les valeurs
+// du système (documentation Microsoft Learn de GetThemeSysSize et
+// GetThemeSysColorBrush).
+
+const E_HANDLE: i32 = 0x8007_0006u32 as i32;
+const S_OK: i32 = 0;
+
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn GetThemeTextExtent(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _text: *const u16,
+    _cch: i32,
+    _flags: u32,
+    _bounds: usize,
+    _extent: usize,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeTextMetrics(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _tm: usize,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeBackgroundRegion(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _rect: usize,
+    _region: usize,
+) -> i32 {
+    E_HANDLE
+}
+/// HitTestThemeBackground : POINT passé par valeur (8 octets).
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn HitTestThemeBackground(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _options: u32,
+    _rect: usize,
+    _region: usize,
+    _point: u64,
+    _code: usize,
+) -> i32 {
+    E_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn DrawThemeEdge(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _dest: usize,
+    _edge: u32,
+    _flags: u32,
+    _content: usize,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn DrawThemeIcon(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _rect: usize,
+    _himl: usize,
+    _index: i32,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeMetric(
+    _theme: usize,
+    _hdc: usize,
+    _part: i32,
+    _state: i32,
+    _prop: i32,
+    _val: usize,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeString(
+    _theme: usize,
+    _part: i32,
+    _state: i32,
+    _prop: i32,
+    _buf: usize,
+    _cch: i32,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeFilename(
+    _theme: usize,
+    _part: i32,
+    _state: i32,
+    _prop: i32,
+    _buf: usize,
+    _cch: i32,
+) -> i32 {
+    E_HANDLE
+}
+/// GetThemeBool, GetThemeEnumValue, GetThemePosition, GetThemeRect,
+/// GetThemeIntList, GetThemePropertyOrigin : même forme (thème, partie,
+/// état, propriété, valeur rendue).
+pub extern "win64" fn GetThemeBool(_t: usize, _p: i32, _s: i32, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeEnumValue(_t: usize, _p: i32, _s: i32, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemePosition(_t: usize, _p: i32, _s: i32, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeRect(_t: usize, _p: i32, _s: i32, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeIntList(_t: usize, _p: i32, _s: i32, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemePropertyOrigin(
+    _t: usize,
+    _p: i32,
+    _s: i32,
+    _id: i32,
+    _out: usize,
+) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeSysColorBrush(_theme: usize, id: i32) -> usize {
+    super::user32::get_sys_color_brush(id)
+}
+pub extern "win64" fn GetThemeSysBool(_theme: usize, _id: i32) -> i32 {
+    0
+}
+pub extern "win64" fn GetThemeSysSize(_theme: usize, id: i32) -> i32 {
+    super::user32::get_system_metrics(id)
+}
+pub extern "win64" fn GetThemeSysString(_theme: usize, _id: i32, _buf: usize, _cch: i32) -> i32 {
+    E_HANDLE
+}
+pub extern "win64" fn GetThemeSysInt(_theme: usize, _id: i32, _out: usize) -> i32 {
+    E_HANDLE
+}
+/// Aucune fenêtre n'a de thème ouvert (voir OpenThemeData).
+pub extern "win64" fn GetWindowTheme(_hwnd: usize) -> usize {
+    0
+}
+pub extern "win64" fn IsThemeDialogTextureEnabled(_hwnd: usize) -> i32 {
+    0
+}
+/// Aucun STAP_ALLOW_* : cohérent avec IsAppThemed faux.
+pub extern "win64" fn GetThemeAppProperties() -> u32 {
+    0
+}
+pub extern "win64" fn SetThemeAppProperties(_flags: u32) {}
+pub extern "win64" fn GetThemeDocumentationProperty(
+    _theme: *const u16,
+    _name: *const u16,
+    _buf: usize,
+    _cch: i32,
+) -> i32 {
+    E_NOTIMPL
+}
+pub extern "win64" fn EnableTheming(_enable: i32) -> i32 {
+    S_OK
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "IsThemeActive" => fn IsThemeActive,
@@ -185,6 +366,32 @@ pub fn exports() -> crate::dlls::Exports {
         "BeginBufferedPaint" => fn BeginBufferedPaint,
         "EndBufferedPaint" => fn EndBufferedPaint,
         "GetThemeFont" => fn GetThemeFont,
+        "GetThemeTextExtent" => fn GetThemeTextExtent,
+        "GetThemeTextMetrics" => fn GetThemeTextMetrics,
+        "GetThemeBackgroundRegion" => fn GetThemeBackgroundRegion,
+        "HitTestThemeBackground" => fn HitTestThemeBackground,
+        "DrawThemeEdge" => fn DrawThemeEdge,
+        "DrawThemeIcon" => fn DrawThemeIcon,
+        "GetThemeMetric" => fn GetThemeMetric,
+        "GetThemeString" => fn GetThemeString,
+        "GetThemeFilename" => fn GetThemeFilename,
+        "GetThemeBool" => fn GetThemeBool,
+        "GetThemeEnumValue" => fn GetThemeEnumValue,
+        "GetThemePosition" => fn GetThemePosition,
+        "GetThemeRect" => fn GetThemeRect,
+        "GetThemeIntList" => fn GetThemeIntList,
+        "GetThemePropertyOrigin" => fn GetThemePropertyOrigin,
+        "GetThemeSysColorBrush" => fn GetThemeSysColorBrush,
+        "GetThemeSysBool" => fn GetThemeSysBool,
+        "GetThemeSysSize" => fn GetThemeSysSize,
+        "GetThemeSysString" => fn GetThemeSysString,
+        "GetThemeSysInt" => fn GetThemeSysInt,
+        "GetWindowTheme" => fn GetWindowTheme,
+        "IsThemeDialogTextureEnabled" => fn IsThemeDialogTextureEnabled,
+        "GetThemeAppProperties" => fn GetThemeAppProperties,
+        "SetThemeAppProperties" => fn SetThemeAppProperties,
+        "GetThemeDocumentationProperty" => fn GetThemeDocumentationProperty,
+        "EnableTheming" => fn EnableTheming,
     }
 }
 
