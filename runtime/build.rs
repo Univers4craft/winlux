@@ -271,6 +271,130 @@ fn main() {
         }
     }
     out.push_str("];\n");
+
+    // Tables de méthodes écrites comme des structures dont chaque champ est
+    // un `unsafe extern "win64" fn(…)` (Direct3D 11, DXGI) : signature de
+    // chaque champ dans l'ordre, pour leurs passerelles x86 (#1090).
+    out.push_str("pub static VTABLE_SIGS: &[(&str, &str, &[&str])] = &[\n");
+    for (module, t) in &texts {
+        let mut from = 0;
+        while let Some(pos) = t[from..].find("struct ") {
+            let start = from + pos + "struct ".len();
+            from = start;
+            let rest = &t[start..];
+            let name_end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            let name = &rest[..name_end];
+            let after = rest[name_end..].trim_start();
+            if name.is_empty() || !after.starts_with('{') {
+                continue;
+            }
+            let open = start + name_end + (rest[name_end..].len() - after.len());
+            let bytes = t.as_bytes();
+            let mut depth = 0i32;
+            let mut j = open;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            if j >= bytes.len() {
+                break;
+            }
+            let fields = split_top(&t[open + 1..j]);
+            let mut sigs = Vec::new();
+            let mut all_fns = !fields.is_empty();
+            for f in &fields {
+                let f = f.trim();
+                if f.is_empty() {
+                    continue;
+                }
+                let Some((_, ty)) = f.split_once(':') else {
+                    all_fns = false;
+                    break;
+                };
+                let mut ty = ty.trim();
+                // Type de fonction nommé (`type SetCb1 = unsafe extern "win64" fn(…)`).
+                if let Some(target) = aliases.get(ty.rsplit("::").next().unwrap_or(ty)) {
+                    if target.contains("extern \"win64\" fn") {
+                        ty = target.as_str();
+                    }
+                }
+                let Some(at) = ty.find("extern \"win64\" fn") else {
+                    // Table prolongée par une sous-structure (`ext: ext::DeviceExt`) :
+                    // ses champs suivent, résolus à l'exécution.
+                    let last = ty.rsplit("::").next().unwrap_or(ty);
+                    if last.starts_with(|c: char| c.is_ascii_uppercase())
+                        && last.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        sigs.push(format!("@{last}"));
+                        continue;
+                    }
+                    all_fns = false;
+                    break;
+                };
+                let sig = &ty[at + "extern \"win64\" fn".len()..];
+                let Some(op) = sig.find('(') else {
+                    all_fns = false;
+                    break;
+                };
+                let sb = sig.as_bytes();
+                let mut d = 0i32;
+                let mut k = op;
+                while k < sb.len() {
+                    match sb[k] {
+                        b'(' => d += 1,
+                        b')' => {
+                            d -= 1;
+                            if d == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                let params = &sig[op + 1..k.min(sig.len())];
+                let tail = sig.get(k + 1..).unwrap_or("").trim();
+                let ret = match tail.strip_prefix("->") {
+                    None => 'v',
+                    Some(r) => {
+                        let r = r.trim();
+                        if r == "()" {
+                            'v'
+                        } else {
+                            match classify(r, &aliases, 0) {
+                                'c' | 'p' => 'i',
+                                k => k,
+                            }
+                        }
+                    }
+                };
+                let mut kinds = String::new();
+                for p in split_top(params) {
+                    let p = p.trim();
+                    if !p.is_empty() {
+                        kinds.push(classify(p, &aliases, 0));
+                    }
+                }
+                sigs.push(format!("{kinds}>{ret}"));
+            }
+            if all_fns && sigs.iter().filter(|s| !s.starts_with('@')).count() >= 3 {
+                let list: Vec<String> = sigs.iter().map(|s| format!("{s:?}")).collect();
+                let _ = writeln!(out, "    ({module:?}, {name:?}, &[{}]),", list.join(", "));
+            }
+        }
+    }
+    out.push_str("];\n");
     let dest = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("win64_sigs.rs");
     std::fs::write(dest, out).unwrap();
 }

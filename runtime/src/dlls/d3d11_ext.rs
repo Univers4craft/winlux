@@ -360,7 +360,7 @@ unsafe extern "win64" fn dev_create_fence(
         return E_INVALIDARG;
     }
     let f = Box::into_raw(Box::new(Fence {
-        vtable: &FENCE_VTABLE,
+        vtable: crate::dlls::dx11_x86::abi(&FENCE_VTABLE, "dlls::d3d11_ext", "FenceVTable"),
         refs: AtomicU32::new(1),
         value: AtomicU64::new(initial),
         waiting: Mutex::new(Vec::new()),
@@ -911,7 +911,11 @@ pub(super) struct Multithread {
 impl Multithread {
     pub(super) fn new() -> Self {
         Multithread {
-            vtable: &MULTITHREAD_VTABLE,
+            vtable: crate::dlls::dx11_x86::abi(
+                &MULTITHREAD_VTABLE,
+                "dlls::d3d11_ext",
+                "MultithreadVTable",
+            ),
             owner: std::ptr::null_mut(),
             protected: AtomicU32::new(1),
             lock: Mutex::new((0, 0)),
@@ -1012,7 +1016,11 @@ struct Annotation {
 pub(super) unsafe fn annotation_for(context: *mut DeviceContext, out: Out) -> i32 {
     super::ctx_addref(context);
     let obj = Box::new(Annotation {
-        vtable: &ANNOTATION_VTABLE,
+        vtable: crate::dlls::dx11_x86::abi(
+            &ANNOTATION_VTABLE,
+            "dlls::d3d11_ext",
+            "AnnotationVTable",
+        ),
         refs: AtomicU32::new(1),
         context,
     });

@@ -111,6 +111,9 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 # AltGr (#1151) : Ctrl gauche + Alt droit comme sous Windows, sans quoi
 # AltGr+3 (« # ») déclenche le raccourci Alt+3 de Notepad++.
 step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q -p winlux -- altgr_est_ctrl_gauche_plus_alt_droit
+# Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
+# DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
+step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
