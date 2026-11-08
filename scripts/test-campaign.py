@@ -559,6 +559,17 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
    "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
+# Relier Winlux à GitHub (#1049 à #1052) : rien ne part sans confirmation
+# « quoi / où » (Annuler par défaut), aucun journal sans case cochée,
+# déconnexion qui révoque vraiment le jeton, suivi de ses signalements.
+ok("def confirm_send" in report_tool and "set_default_response(Gtk.ResponseType.CANCEL)" in report_tool
+   and "check.set_active(False)" in report_tool and '"network" in self.attach' in report_tool,
+   "rapport : confirmation de ce qui part et où, journaux joints seulement sur accord")
+ok("/credentials/revoke" in report_tool and '"--account-disconnect"' in (SCRIPTS / "winlux-settings-pages.py").read_text(),
+   "compte GitHub : « Se déconnecter » révoque le jeton chez GitHub")
+ok("def refresh_reports" in report_tool and '"--mine"' in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "def send_queue_gui" in report_tool,
+   "compte GitHub : « Mes signalements » et envoi des plantages en attente avec son compte")
 
 # ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
 tray_source = (SCRIPTS / "winlux-tray.py").read_text()

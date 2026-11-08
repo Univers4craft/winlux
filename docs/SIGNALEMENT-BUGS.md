@@ -72,8 +72,8 @@ proposées. Le relais refait cette recherche de son côté.
 Sous la description, des cases « Réseau et Wi-Fi », « Son », « Démarrage » et
 « Mises à jour » joignent les journaux correspondants, repliés en `<details>`
 (80 dernières lignes chacun, raccourcis si le rapport dépasse la taille
-d'une issue). Cochées d'office pour un signalement libre ou un arrêt du
-système, décochées pour le plantage d'un programme.
+d'une issue). Toujours décochées à l'ouverture (#1050) : aucun journal, pas même
+celui du réseau, ne part sans que l'utilisateur coche la case.
 
 - Réseau : `/run/winlux/network*.log`, `wpa-supplicant.log`,
   `network-probe.json`, `time-sync.*`, plus `nmcli` (appareils, sans nom de
@@ -174,11 +174,35 @@ considérées :
 
 Limites : tant que le relais n'est pas déployé, le chemin sans compte n'existe
 pas et Winlux utilise le navigateur. Paramètres l'indique, et au clic sur
-« Envoyer » une fenêtre explique qu'un compte GitHub gratuit est nécessaire,
-avec trois choix : ouvrir GitHub, créer un compte, ou seulement enregistrer. Le relais est un
+« Envoyer » la confirmation explique qu'un compte GitHub gratuit est nécessaire,
+avec trois choix : Annuler (par défaut), créer un compte, ouvrir sur GitHub. Le relais est un
 service en ligne à héberger et surveiller ; la limitation de débit freine le
 spam sans l'empêcher totalement. Un mode « Fichier » enregistre seulement le
 rapport, pour l'envoyer autrement.
+
+## Relier son compte GitHub (#1049 à #1052)
+
+- **Confirmation avant tout envoi** : au clic sur « Envoyer », une fenêtre dit
+  où part le rapport (dépôt public Univers4craft/winlux sous `@compte`, jeton
+  de la machine, relais ou formulaire du navigateur), ce qui part (titre,
+  taille, journaux joints ou non, masquage) et que la recherche de doublons
+  envoie la signature ou quelques mots du résumé. Annuler est le bouton par
+  défaut ; la recherche de doublons n'a lieu qu'après accord.
+- **Connexion** : par code (flux « device » de GitHub) dès que
+  `GITHUB_CLIENT_ID` contient l'identifiant public de l'application GitHub
+  Winlux ; sinon par jeton « classic » `public_repo`. Le jeton reste dans
+  `~/.config/winlux/github-account.json` (0600).
+- **Se déconnecter** : après confirmation, le jeton est envoyé au service
+  public de révocation de GitHub (`POST /credentials/revoke`, sans
+  authentification), puis effacé de ce PC. Si GitHub ne confirme pas, la page
+  où le révoquer à la main s'ouvre.
+- **Mes signalements** (Paramètres > Signaler un problème) : les issues
+  envoyées depuis ce PC (`~/.local/state/winlux/sent-reports.json`) et celles
+  ouvertes par le compte relié ; « Actualiser depuis GitHub » demande leur
+  état (ouvert, corrigé, fermé sans suite), seulement sur clic.
+- **Plantages en attente** : sans jeton du système, « Envoyer avec mon compte
+  GitHub… » les publie sous le nom du compte, après une confirmation qui les
+  liste. Jamais en arrière-plan.
 
 ## Déployer le relais
 
