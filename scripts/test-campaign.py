@@ -754,6 +754,17 @@ ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "test-start-pin-move.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : épingle déplacée par clic droit (Déplacer) et glisser-déposer, ordre gardé (#925)")
 
+# #712 : boîtes non modales Rechercher et Remplacer (FindText, ReplaceText).
+_find = (ROOT / "runtime/src/dlls/comdlg32_find.rs").read_text()
+ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
+   and "fn find32" in (ROOT / "runtime/src/wow32/comdlg.rs").read_text()
+   and "registered_id" in (ROOT / "runtime/src/dlls/user32.rs").read_text()
+   and "find_replace()" in (ROOT / "testexe/src/bin/commdlg_suite.rs").read_text()
+   and "find_replace32()" in (ROOT / "testc/wow32/dlg32.c").read_text(),
+   "Rechercher/Remplacer : boîte non modale, FINDMSGSTRING au propriétaire, x86 et crochet (#712)")
+ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
+   "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
+
 # ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
 ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
    and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
