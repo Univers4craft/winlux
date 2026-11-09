@@ -13,6 +13,7 @@
 #include <locale.h>
 #include <windows.h>
 #include <io.h>
+#include <wchar.h>
 
 static int ctor_ran;
 __attribute__((constructor)) static void ctor(void) { ctor_ran = 42; }
@@ -208,6 +209,43 @@ int main(int argc, char **argv) {
         if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
         DeleteFileW(path);
         CHECK(39, ok3);
+    }
+    {
+        /* tkinter x86 (#1474) : TCL_LIBRARY posée par _wputenv après le
+         * démarrage doit apparaître dans _wenviron et _environ, que Tcl
+         * parcourt. */
+        int seen_w = 0, seen_a = 0;
+        _wputenv(L"WINLUX_T1474=ok");
+        for (wchar_t **e = _wenviron; e && *e; e++)
+            if (!wcscmp(*e, L"WINLUX_T1474=ok")) seen_w = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strcmp(*e, "WINLUX_T1474=ok")) seen_a = 1;
+        _putenv("WINLUX_T1474=");
+        int gone = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strncmp(*e, "WINLUX_T1474=", 13)) gone = 0;
+        CHECK(40, seen_w && seen_a && gone && !getenv("WINLUX_T1474"));
+    }
+    {
+        /* Steam x86 (#1475) : MoveFileTransactedW et DeleteFileTransactedW
+         * trouvées par GetProcAddress, déplacement puis suppression faits. */
+        typedef BOOL (WINAPI *mv_t)(LPCWSTR, LPCWSTR, void *, void *, DWORD, HANDLE);
+        typedef BOOL (WINAPI *del_t)(LPCWSTR, HANDLE);
+        HMODULE k = GetModuleHandleA("kernel32.dll");
+        mv_t mv = (mv_t)GetProcAddress(k, "MoveFileTransactedW");
+        del_t del = (del_t)GetProcAddress(k, "DeleteFileTransactedW");
+        wchar_t dir[MAX_PATH], a[MAX_PATH], b[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        GetTempFileNameW(dir, L"tx", 0, a);
+        wcscpy(b, a);
+        wcscat(b, L"_dest");
+        int ok = mv && del && mv(a, b, NULL, NULL, MOVEFILE_REPLACE_EXISTING, INVALID_HANDLE_VALUE)
+                 && GetFileAttributesW(a) == INVALID_FILE_ATTRIBUTES
+                 && GetFileAttributesW(b) != INVALID_FILE_ATTRIBUTES
+                 && del(b, INVALID_HANDLE_VALUE) && GetFileAttributesW(b) == INVALID_FILE_ATTRIBUTES;
+        DeleteFileW(a);
+        DeleteFileW(b);
+        CHECK(41, ok);
     }
     return fails;
 }
