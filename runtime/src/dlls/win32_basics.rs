@@ -1430,7 +1430,7 @@ const MAX_SHAPE_RECTS: usize = 16_384;
 /// visibles (alpha d'au moins 50 %, ou couleur différente de la clé), lignes
 /// identiques fusionnées. `None` : tout est visible, ou trop de morceaux.
 /// `pixels` : COLORREF avec l'alpha dans l'octet haut, ligne du haut d'abord.
-fn layered_shape(
+pub(crate) fn layered_shape(
     width: usize,
     height: usize,
     pixels: &[u32],

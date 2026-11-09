@@ -3035,6 +3035,8 @@ pub trait GuiBackend: Send {
     /// seuls ces rectangles (coordonnées client) restent visibles et
     /// cliquables ; `None` rend la fenêtre rectangulaire.
     fn set_shape(&mut self, _hwnd: usize, _rects: Option<&[Rect]>) {}
+    /// Forme X (SHAPE) posée sur la fenêtre X11 d'un autre processus (#1357).
+    fn shape_foreign(&mut self, _xid: u64, _rects: Option<&[Rect]>) {}
     /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
