@@ -385,6 +385,7 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-accounts.py
+          xvfb-run -a -s '-screen 0 2732x768x24' /usr/bin/python3 -B scripts/test-lock-monitors.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-signin.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-signin-page.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
@@ -563,6 +564,11 @@ jobs:
 
       - name: Tester l'intégration bureau (double-clic)
         run: sh scripts/test-integration.sh
+
+      - name: Installer Winlux sur l'hôte Ubuntu (binfmt, ./hello.exe, association, désinstallation, #27)
+        run: |
+          sudo apt-get install -y -q binfmt-support xdg-utils || { sudo apt-get update -q && sudo apt-get install -y -q binfmt-support xdg-utils; }
+          sudo sh scripts/test-host-install.sh
 
       - name: Installer MinGW-w64
         run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-i686 clang lld llvm xvfb xauth libgl1-mesa-dri

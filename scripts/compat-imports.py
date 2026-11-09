@@ -60,6 +60,10 @@ def normalize(dll: str) -> str:
         return "msvcrt"
     if base == "wsock32":
         return "ws2_32"
+    if base == "shcore" or base.startswith("api-ms-win-shcore-"):
+        return "shcore"
+    if base == "imagehlp":
+        return "dbghelp"
     if base == "sspicli":
         return "secur32"
     if base == "cfgmgr32" or base.startswith("api-ms-win-devices-config-"):

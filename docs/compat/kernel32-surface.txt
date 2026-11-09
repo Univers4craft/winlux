@@ -42,6 +42,7 @@ ConvertFiberToThread
 ConvertThreadToFiber
 ConvertThreadToFiberEx
 CopyContext
+CopyFile2
 CopyFileA
 CopyFileExW
 CopyFileW
@@ -404,6 +405,7 @@ GetVolumeInformationW
 GetVolumeNameForVolumeMountPointA
 GetVolumeNameForVolumeMountPointW
 GetVolumePathNameW
+GetVolumePathNamesForVolumeNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
 GetWriteWatch
@@ -564,6 +566,9 @@ PrefetchVirtualMemory
 Process32FirstW
 Process32NextW
 ProcessIdToSessionId
+PssCaptureSnapshot
+PssFreeSnapshot
+PssQuerySnapshot
 PurgeComm
 QueryActCtxW
 QueryDepthSList
@@ -732,6 +737,7 @@ SetThreadpoolWait
 SetTimerQueueTimer
 SetUnhandledExceptionFilter
 SetWaitableTimer
+SetWaitableTimerEx
 SetXStateFeaturesMask
 SetupComm
 SignalObjectAndWait

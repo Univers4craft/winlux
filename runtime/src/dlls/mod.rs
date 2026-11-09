@@ -43,6 +43,7 @@ pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
 pub mod crt_more;
+pub mod crt_proc;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -133,6 +134,7 @@ pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
+pub mod kernel32_path;
 pub mod knownfolders;
 pub mod legacy_com;
 pub mod legacy_dlls;
@@ -202,6 +204,7 @@ pub mod shell_folder_com;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod sysdlls;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod thread_ctl;
@@ -385,6 +388,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e
@@ -399,6 +403,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(cxx_eh::exports());
         ucrt.extend(rtti::exports());
         ucrt.extend(crt_more::exports());
+        ucrt.extend(crt_proc::exports());
         ucrt.extend(crate::intl::api::crt_exports());
         ucrt.extend(crt_extra::exports());
         let mut all = vec![
@@ -425,6 +430,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
+                    e.extend(kernel32_path::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -934,6 +940,57 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: Exports::new(),
                 handle: 0,
             },
+            // Petites DLL système du corpus de mesure (#26).
+            Builtin {
+                name: "authz",
+                exports: sysdlls::authz_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "avicap32",
+                exports: sysdlls::avicap32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "credui",
+                exports: sysdlls::credui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "evr",
+                exports: sysdlls::evr_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ktmw32",
+                exports: sysdlls::ktmw32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "sfc",
+                exports: sysdlls::sfc_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "loadperf",
+                exports: sysdlls::loadperf_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "rasapi32",
+                exports: sysdlls::rasapi32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ntdsapi",
+                exports: sysdlls::ntdsapi_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "query",
+                exports: sysdlls::query_exports(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
@@ -1349,6 +1406,10 @@ pub fn normalize(dll: &str) -> String {
     if base == "sspicli" {
         return "secur32".into();
     }
+    // imagehlp : sous-ensemble historique de dbghelp (#26, #1392).
+    if base == "imagehlp" {
+        return "dbghelp".into();
+    }
     // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
     if base == "wsock32" {
         return "ws2_32".into();
@@ -1553,6 +1614,9 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // KernelBase et les API-sets, jamais par kernel32.
     "LoadStringA",
     "LoadStringW",
+    // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
+    "PathCchCombineEx",
+    "PathCchSkipRoot",
 ];
 
 /// Fonctions rangées dans la table kernel32 de Winlux pour servir des

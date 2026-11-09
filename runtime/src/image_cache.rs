@@ -69,8 +69,9 @@ fn fnv(bytes: &[u8]) -> u64 {
 fn names(image: &Path, meta: &std::fs::Metadata, offset: usize, len: usize) -> (String, String) {
     use std::os::unix::ffi::OsStrExt;
     let prefix = format!("{:016x}", fnv(image.as_os_str().as_bytes()));
-    let name = format!(
-        "{prefix}-{:x}-{:x}-{:x}.{:x}-{:x}.{:x}-{offset:x}-{len:x}.sec",
+    // Version du .exe : toutes ses sections la partagent (#1404).
+    let version = format!(
+        "{prefix}-{:x}-{:x}-{:x}.{:x}-{:x}.{:x}-",
         meta.ino(),
         meta.size(),
         meta.mtime(),
@@ -78,7 +79,17 @@ fn names(image: &Path, meta: &std::fs::Metadata, offset: usize, len: usize) -> (
         meta.ctime(),
         meta.ctime_nsec()
     );
-    (prefix, name)
+    let name = format!("{version}{offset:x}-{len:x}.sec");
+    (version, name)
+}
+
+/// Fichier d'une autre version du même .exe (même chemin, identité
+/// différente) : il ne sera plus jamais lu. Les autres sections de la
+/// même version restent, sinon chaque processus effaçait celles que le
+/// précédent venait d'écrire, et rien n'était partagé (#1404).
+fn stale(file: &str, version: &str) -> bool {
+    let prefix = &version[..17]; // empreinte du chemin et son tiret
+    file.starts_with(prefix) && file.ends_with(".sec") && !file.starts_with(version)
 }
 
 /// Fichier de cache de `len` octets de `image` à partir de `offset`,
@@ -100,7 +111,7 @@ fn section_file_in(
     offset: usize,
     bytes: &[u8],
 ) -> Option<std::fs::File> {
-    let (prefix, name) = names(image, meta, offset, bytes.len());
+    let (version, name) = names(image, meta, offset, bytes.len());
     let path = dir.join(&name);
     if let Ok(f) = std::fs::File::open(&path) {
         if f.metadata().ok()?.len() == bytes.len() as u64 {
@@ -131,7 +142,7 @@ fn section_file_in(
         for e in rd.flatten() {
             let n = e.file_name();
             let n = n.to_string_lossy();
-            if n.starts_with(&prefix) && n.ends_with(".sec") && n != name.as_str() {
+            if stale(&n, &version) {
                 let _ = std::fs::remove_file(e.path());
             }
         }
@@ -163,7 +174,9 @@ mod tests {
         std::fs::write(&exe, b"MZ deux, plus long").unwrap();
         let m2 = std::fs::metadata(&exe).unwrap();
         let (p2, c) = names(&exe, &m2, 0x400, 0x1000);
-        assert_eq!(p1, p2, "même chemin, même préfixe");
+        assert_eq!(p1[..17], p2[..17], "même chemin, même préfixe");
+        assert_ne!(p1, p2, "autre version");
+        assert!(stale(&c, &p1) && !stale(&b, &p1));
         assert_ne!(a, c, "le .exe réécrit change le nom");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -186,7 +199,10 @@ mod tests {
         let again = section_file_in(&cache, &exe, &m1, 0x200, &bytes).unwrap();
         assert_eq!(again.metadata().unwrap().len(), 0x2000);
         assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
-        // Nouvelle version du .exe : l'ancienne section disparaît.
+        // Seconde section de la même version : la première reste (#1404).
+        section_file_in(&cache, &exe, &m1, 0x2200, &bytes).unwrap();
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 2);
+        // Nouvelle version du .exe : les anciennes sections disparaissent.
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&exe, vec![8u8; 0x3400]).unwrap();
         let m2 = std::fs::metadata(&exe).unwrap();

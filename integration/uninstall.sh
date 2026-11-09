@@ -25,6 +25,11 @@ web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xh
 
 # Désenregistre d'abord binfmt pour que le noyau ne pointe plus vers un
 # interpréteur supprimé.
+# Sans systemd, l'entrée peut être tenue par binfmt-support (#27).
+if [ -z "$destdir" ] && command -v update-binfmts >/dev/null 2>&1 && \
+        update-binfmts --display winlux >/dev/null 2>&1; then
+    update-binfmts --package winlux --remove winlux "$bin/winlux" >/dev/null 2>&1 || true
+fi
 if [ -z "$destdir" ] && [ -w /proc/sys/fs/binfmt_misc/winlux ]; then
     echo -1 >/proc/sys/fs/binfmt_misc/winlux || true
 fi
