@@ -202,6 +202,7 @@ pub mod shell_folder_com;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod sysdlls;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod thread_ctl;
@@ -934,6 +935,57 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: Exports::new(),
                 handle: 0,
             },
+            // Petites DLL système du corpus de mesure (#26).
+            Builtin {
+                name: "authz",
+                exports: sysdlls::authz_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "avicap32",
+                exports: sysdlls::avicap32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "credui",
+                exports: sysdlls::credui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "evr",
+                exports: sysdlls::evr_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ktmw32",
+                exports: sysdlls::ktmw32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "sfc",
+                exports: sysdlls::sfc_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "loadperf",
+                exports: sysdlls::loadperf_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "rasapi32",
+                exports: sysdlls::rasapi32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ntdsapi",
+                exports: sysdlls::ntdsapi_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "query",
+                exports: sysdlls::query_exports(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
@@ -1348,6 +1400,10 @@ pub fn normalize(dll: &str) -> String {
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {
         return "secur32".into();
+    }
+    // imagehlp : sous-ensemble historique de dbghelp (#26, #1392).
+    if base == "imagehlp" {
+        return "dbghelp".into();
     }
     // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
     if base == "wsock32" {
