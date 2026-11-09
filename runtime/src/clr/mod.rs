@@ -145,7 +145,9 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
         // moteur.
         if info.name == domain::CORLIB && namespace == "System" {
             let builtin = types::with_types(|reg| {
-                let id = reg.find_by_name(namespace, name).filter(|&id| types::is_builtin(id))?;
+                let id = reg
+                    .find_by_name(namespace, name)
+                    .filter(|&id| types::is_builtin(id))?;
                 let t = reg.get_mut(id)?;
                 t.methods = methods.clone();
                 t.def = Some((asm_index, row));
