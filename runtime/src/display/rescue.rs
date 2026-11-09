@@ -131,62 +131,78 @@ pub fn bring_back(monitors: &[Rect], primary: usize) -> Result<usize, String> {
     let wa = cardinals(root, workarea_atom, AtomEnum::CARDINAL.into());
     let workarea =
         (wa.len() >= 4).then(|| (wa[0] as i32, wa[1] as i32, wa[2] as i32, wa[3] as i32));
-    let mut moved = 0;
-    for w in cardinals(root, client_list, AtomEnum::WINDOW.into()) {
-        let states = cardinals(w, wm_state, AtomEnum::ATOM.into());
-        if states.iter().any(|s| skip_states.contains(s)) {
-            continue;
+    // Le gestionnaire de fenêtres peut encore replacer une fenêtre après
+    // notre demande (changement d'écrans en cours, fenêtre qui vient de
+    // redemander sa position) : on vérifie et on redemande, trois fois au
+    // plus (#1429).
+    let mut moved: Vec<Window> = Vec::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(400));
         }
-        let types = cardinals(w, wm_type, AtomEnum::ATOM.into());
-        if !types.is_empty() && !types.iter().any(|t| kept_types.contains(t)) {
-            continue;
+        let mut pending = 0;
+        for w in cardinals(root, client_list, AtomEnum::WINDOW.into()) {
+            let states = cardinals(w, wm_state, AtomEnum::ATOM.into());
+            if states.iter().any(|s| skip_states.contains(s)) {
+                continue;
+            }
+            let types = cardinals(w, wm_type, AtomEnum::ATOM.into());
+            if !types.is_empty() && !types.iter().any(|t| kept_types.contains(t)) {
+                continue;
+            }
+            let Some(g) = conn.get_geometry(w).ok().and_then(|c| c.reply().ok()) else {
+                continue;
+            };
+            let Some(t) = conn
+                .translate_coordinates(w, root, 0, 0)
+                .ok()
+                .and_then(|c| c.reply().ok())
+            else {
+                continue;
+            };
+            let e = cardinals(w, extents, AtomEnum::CARDINAL.into());
+            let (l, r, top, b) = if e.len() >= 4 {
+                (e[0] as i32, e[1] as i32, e[2] as i32, e[3] as i32)
+            } else {
+                (0, 0, 0, 0)
+            };
+            let frame = (
+                t.dst_x as i32 - l,
+                t.dst_y as i32 - top,
+                g.width as i32 + l + r,
+                g.height as i32 + top + b,
+            );
+            let Some((x, y, fw, fh)) = rescue_frame(frame, monitors, primary, workarea) else {
+                continue;
+            };
+            // Gravité NorthWest (1) : x, y = coin du cadre ; largeur et hauteur
+            // = zone cliente. Source 2 = outil du bureau (EWMH).
+            let mut flags = 1 | (1 << 8) | (1 << 9) | (2 << 12);
+            if fw != frame.2 || fh != frame.3 {
+                flags |= (1 << 10) | (1 << 11);
+            }
+            let data = [
+                flags,
+                x as u32,
+                y as u32,
+                (fw - l - r).max(1) as u32,
+                (fh - top - b).max(1) as u32,
+            ];
+            let ev = ClientMessageEvent::new(32, w, moveresize, data);
+            let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            if conn.send_event(false, root, mask, ev).is_ok() {
+                pending += 1;
+                if !moved.contains(&w) {
+                    moved.push(w);
+                }
+            }
         }
-        let Some(g) = conn.get_geometry(w).ok().and_then(|c| c.reply().ok()) else {
-            continue;
-        };
-        let Some(t) = conn
-            .translate_coordinates(w, root, 0, 0)
-            .ok()
-            .and_then(|c| c.reply().ok())
-        else {
-            continue;
-        };
-        let e = cardinals(w, extents, AtomEnum::CARDINAL.into());
-        let (l, r, top, b) = if e.len() >= 4 {
-            (e[0] as i32, e[1] as i32, e[2] as i32, e[3] as i32)
-        } else {
-            (0, 0, 0, 0)
-        };
-        let frame = (
-            t.dst_x as i32 - l,
-            t.dst_y as i32 - top,
-            g.width as i32 + l + r,
-            g.height as i32 + top + b,
-        );
-        let Some((x, y, fw, fh)) = rescue_frame(frame, monitors, primary, workarea) else {
-            continue;
-        };
-        // Gravité NorthWest (1) : x, y = coin du cadre ; largeur et hauteur
-        // = zone cliente. Source 2 = outil du bureau (EWMH).
-        let mut flags = 1 | (1 << 8) | (1 << 9) | (2 << 12);
-        if fw != frame.2 || fh != frame.3 {
-            flags |= (1 << 10) | (1 << 11);
-        }
-        let data = [
-            flags,
-            x as u32,
-            y as u32,
-            (fw - l - r).max(1) as u32,
-            (fh - top - b).max(1) as u32,
-        ];
-        let ev = ClientMessageEvent::new(32, w, moveresize, data);
-        let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
-        if conn.send_event(false, root, mask, ev).is_ok() {
-            moved += 1;
+        conn.flush().map_err(|e| e.to_string())?;
+        if pending == 0 {
+            break;
         }
     }
-    conn.flush().map_err(|e| e.to_string())?;
-    Ok(moved)
+    Ok(moved.len())
 }
 
 #[cfg(test)]
