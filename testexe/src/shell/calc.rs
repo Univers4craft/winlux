@@ -72,9 +72,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
     let tabs: [&[u8]; 4] = [
         tr4(&[b"Calculatrice", b"Calculator", b"Calculadora", b"Rechner"]),
-        tr4(&[b"Chronometre", b"Stopwatch", b"Cron\xF3metro", b"Stoppuhr"]),
+        tr4(&[b"Chronom\xE8tre", b"Stopwatch", b"Cron\xF3metro", b"Stoppuhr"]),
         tr4(&[b"Minuteur", b"Timer", b"Temporizador", b"Timer"]),
-        tr4(&[b"Reveil", b"Alarm", b"Alarma", b"Wecker"]),
+        tr4(&[b"R\xE9veil", b"Alarm", b"Alarma", b"Wecker"]),
     ];
     let tab_w = (r.right - r.left) / 4;
     for i in 0..4 {
@@ -237,7 +237,7 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
         ]
     } else {
         [
-            tr4(&[b"Demarrer", b"Start", b"Iniciar", b"Start"]),
+            tr4(&[b"D\xE9marrer", b"Start", b"Iniciar", b"Start"]),
             tr4(&[b"Tour", b"Lap", b"Vuelta", b"Runde"]),
             tr4(&[b"Reset", b"Reset", b"Reiniciar", b"Reset"]),
         ]
@@ -386,7 +386,7 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
     let start_btn: &[u8] = if TIMER_RUNNING {
         tr4(&[b"Pause", b"Pause", b"Pausa", b"Pause"])
     } else {
-        tr4(&[b"Demarrer", b"Start", b"Iniciar", b"Start"])
+        tr4(&[b"D\xE9marrer", b"Start", b"Iniciar", b"Start"])
     };
     round_rect(
         g.hdc,
@@ -460,10 +460,10 @@ unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
         if ALARM_TRIGGERED {
             tr4(&[b"ALARME !", b"ALARM!", b"\xA1ALARMA!", b"ALARM!"])
         } else {
-            tr4(&[b"Active", b"On", b"Activada", b"Ein"])
+            tr4(&[b"Activ\xE9e", b"On", b"Activada", b"Ein"])
         }
     } else {
-        tr4(&[b"Desactive", b"Off", b"Desactivada", b"Aus"])
+        tr4(&[b"D\xE9sactiv\xE9e", b"Off", b"Desactivada", b"Aus"])
     };
     text_centered(
         g.hdc,
@@ -539,7 +539,7 @@ unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
     );
 
     let toggle_label: &[u8] = if ALARM_ENABLED {
-        tr4(&[b"Desactiver", b"Turn off", b"Desactivar", b"Ausschalten"])
+        tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Ausschalten"])
     } else {
         tr4(&[b"Activer", b"Turn on", b"Activar", b"Einschalten"])
     };

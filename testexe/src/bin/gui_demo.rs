@@ -723,7 +723,7 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
             !background.is_null() && !surface.is_null() && !accent.is_null(),
             "CreateSolidBrush"
         );
-        check!(filled == 1, "FillRect surfaces Windows 11");
+        check!(filled == 1, "FillRect : surfaces du thème");
         check!(framed == 1, "FrameRect cartes");
         check!(previous == 0, "SetTextColor ancienne valeur");
         check!(previous_bk == 2, "SetBkMode ancien mode opague");

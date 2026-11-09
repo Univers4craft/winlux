@@ -688,6 +688,7 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-brightness.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-display-page-follow.py
           /usr/bin/python3 -B scripts/test-brightness.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-certificates.py
           /usr/bin/python3 -B scripts/test-boot-journaux.py

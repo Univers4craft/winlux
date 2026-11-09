@@ -1181,6 +1181,13 @@ def clipboard_tool():
 DISPLAY_SCALES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
 
 
+def display_signature(status):
+    """Ce qui fait la page Écran : écrans branchés, disposition, principal,
+    définitions… Change au branchement ou au débranchement d’un écran, et la
+    page se reconstruit seule (#1442)."""
+    return tuple(sorted((k, v) for k, v in status.items() if k.startswith("display_")))
+
+
 def rate_label(rate):
     """« 143.97 » → « 144 Hz », comme Windows."""
     try: return f"{round(float(rate))} Hz"
