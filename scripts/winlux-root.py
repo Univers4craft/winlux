@@ -303,8 +303,21 @@ def exec_level(args):
     if tool == "winlux-store-repos":
         # Dépôt d'un logiciel d'éditeur désinstallé par le Store (#1056).
         # « check » : autorisation demandée avant le téléchargement (#1451).
-        if len(rest) == 2 and rest[0] in ("clean", "check") and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", rest[1]):
+        ident = r"[a-z0-9][a-z0-9-]{0,40}"
+        if len(rest) == 2 and rest[0] in ("clean", "check") and re.fullmatch(ident, rest[1]):
             return "admin"
+        # « grant » laisse un accord à usage unique pour ce logiciel et cette
+        # empreinte ; « install » l'utilise (#1453) ; « revoke » le retire.
+        if len(rest) == 3 and rest[0] == "grant" and re.fullmatch(ident, rest[1]) \
+                and re.fullmatch(r"[0-9a-f]{64}", rest[2]):
+            return "admin"
+        if len(rest) in (4, 5) and rest[0] == "install" and re.fullmatch(ident, rest[1]) \
+                and re.fullmatch(r"[0-9a-f]{64}", rest[2]) and re.fullmatch(r"/[^\n\r\0]{1,400}\.deb", rest[3]) \
+                and ".." not in rest[3].split("/") \
+                and (len(rest) == 4 or re.fullmatch(r"APT::Status-Fd=[0-9]{1,3}", rest[4])):
+            return "admin"
+        if len(rest) == 2 and rest[0] == "revoke" and re.fullmatch(ident, rest[1]):
+            return "user"
         return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
@@ -533,6 +546,42 @@ def check_request(uid, name, request):
     else:
         FAILURES[uid] = FAILURES.get(uid, 0) + 1
     return {"ok": ok}
+
+
+# Accords de la Boutique (#1453) : compte → (logiciel, SHA-256, échéance).
+# Donné par « winlux-store-repos grant » sous élévation, il ne permet qu'un
+# seul « winlux-store-repos install » du même logiciel avec la même empreinte,
+# que winlux-store-repos revérifie sur sa propre copie du paquet. Gardé en
+# mémoire seulement : jamais écrit dans un fichier ni un journal.
+STORE_GRANTS = {}
+STORE_GRANT_SECONDS = 3600
+
+
+def store_grant(uid, args, allowed):
+    """Tient les accords de la Boutique ; vrai si un accord admet la commande."""
+    if len(args) < 2 or args[0] != "winlux-store-repos":
+        return False
+    now = time.monotonic()
+    for key in [k for k, v in STORE_GRANTS.items() if v[2] <= now]:
+        del STORE_GRANTS[key]
+    verb = args[1]
+    if verb == "grant" and allowed and len(args) == 4:
+        STORE_GRANTS[uid] = (args[2], args[3], now + STORE_GRANT_SECONDS)
+    elif verb == "revoke" and len(args) == 3 and STORE_GRANTS.get(uid, ("",))[0] == args[2]:
+        del STORE_GRANTS[uid]
+    elif verb == "install" and len(args) >= 5 and STORE_GRANTS.get(uid, ("", ""))[:2] == (args[2], args[3]):
+        # Consommé à la première utilisation.
+        del STORE_GRANTS[uid]
+        return True
+    return False
+
+
+def admitted(op, args, uid, name, level):
+    """La demande passe : niveau suffisant, élévation en cours ou accord de la Boutique."""
+    allowed = level != "admin" or elevated(uid, name)
+    if op == "exec":
+        allowed = store_grant(uid, args, allowed) or allowed
+    return allowed
 
 
 def elevated(uid, name):
@@ -858,7 +907,7 @@ def effective_level(op, args, uid, name):
     return level
 
 
-def handle(connection, uid, name, request, fds):
+def handle(connection, uid, name, request, fds, admitted_here=False):
     op = request.get("op")
     if op in ("check", "elevate"):
         return check_request(uid, name, request)
@@ -881,7 +930,7 @@ def handle(connection, uid, name, request, fds):
         level = effective_level(op, args, uid, name)
         if level is None:
             return {"error": "Action non autorisée : " + (args[0] if args else "?")}
-        if level == "admin" and not elevated(uid, name):
+        if level == "admin" and not admitted_here and not elevated(uid, name):
             return {"auth": "required"}
         if len(fds) < 3:
             return {"error": "Descripteurs manquants"}
@@ -993,7 +1042,7 @@ def serve():
                     # est décidée ici, dans le processus qui la mémorise.
                     args = request.get("args") if isinstance(request.get("args"), list) else []
                     level = effective_level(request.get("op"), args, uid, name) if args else None
-                    if level == "admin" and not elevated(uid, name):
+                    if level is not None and not admitted(request.get("op"), args, uid, name, level):
                         reply(connection, {"auth": "required"})
                         close_all(fds)
                         continue
@@ -1002,7 +1051,7 @@ def serve():
                             signal.signal(signal.SIGCHLD, signal.SIG_DFL)
                             server.close()
                             connection.settimeout(None)
-                            reply(connection, handle(connection, uid, name, request, fds))
+                            reply(connection, handle(connection, uid, name, request, fds, level is not None))
                         finally:
                             os._exit(0)
                     close_all(fds)

@@ -965,9 +965,14 @@ class Apt(Source):
         return out
 
     def apt(self, args, progress):
+        return self.watch(lambda w: admin(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o",
+                                           "Dpkg::Use-Pty=0", "-o", f"APT::Status-Fd={w}", *args]), progress)
+
+    def watch(self, build, progress):
+        """Lance la commande rendue par build(fd) et suit l'avancement qu'apt
+        écrit sur ce descripteur (APT::Status-Fd)."""
         r, w = os.pipe()
-        cmd = admin(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o", "Dpkg::Use-Pty=0",
-                     "-o", f"APT::Status-Fd={w}", *args])
+        cmd = build(w)
         if cmd is None:
             os.close(r)
             os.close(w)
@@ -1582,10 +1587,11 @@ class Editeur(Source):
         progress(None, tr("ed_waiting"))
         if not confirm(e, info, update):
             return 9
-        # Autorisation d'un administrateur avant de télécharger (#1451) : un
-        # refus ne coûte plus 180 Mo. Le relais garde l'accord 5 minutes ; un
-        # téléchargement plus long la redemande au moment d'installer.
-        cmd = admin([REPOS_TOOL, "check", e["id"]])
+        # Autorisation d'un administrateur avant de télécharger (#1451). Elle
+        # laisse au relais un accord à usage unique pour ce logiciel et cette
+        # empreinte (#1453) : un téléchargement de plus de 5 minutes ne la
+        # redemande pas, et l'accord n'ouvre rien d'autre que ce paquet-là.
+        cmd = admin([REPOS_TOOL, "grant", e["id"], info["sha256"]])
         if cmd is None:
             return 126
         progress(None, tr("ed_authorize"))
@@ -1594,13 +1600,29 @@ class Editeur(Source):
             return DENIED
         if code:
             return code
-        path = self.fetch_deb(e, info, progress)
-        if isinstance(path, int):
-            return path
+        handed = False
         try:
-            return SOURCE_BY_NAME["apt"].apt(["install", "--", str(path)], progress)
+            path = self.fetch_deb(e, info, progress)
+            if isinstance(path, int):
+                return path
+            try:
+                handed = True
+                return self.install_deb(e, info, path, progress)
+            finally:
+                shutil.rmtree(path.parent, ignore_errors=True)
         finally:
-            shutil.rmtree(path.parent, ignore_errors=True)
+            if not handed:
+                # Annulé ou échoué avant l'installation : l'accord est retiré.
+                revoke = admin([REPOS_TOOL, "revoke", e["id"]])
+                if revoke:
+                    run(revoke, 30)
+
+    def install_deb(self, e, info, path, progress):
+        """Installation en administrateur par winlux-store-repos, qui recopie
+        le paquet hors de portée du compte et revérifie son empreinte avant apt."""
+        return SOURCE_BY_NAME["apt"].watch(
+            lambda w: admin([REPOS_TOOL, "install", e["id"], info["sha256"], str(path), f"APT::Status-Fd={w}"]),
+            progress)
 
     def remove(self, ref, progress):
         e = self.entry(ref)
