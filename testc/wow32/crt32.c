@@ -159,5 +159,14 @@ int main(int argc, char **argv) {
         memset(st, 0, sizeof st);
         CHECK(36, wstat_ && wstat_(L"C:\\", st) == 0 && (*(unsigned short *)(st + 6) & 0x4000));
     }
+    {
+        /* 7-Zip (#1413) : FORMAT_MESSAGE_ALLOCATE_BUFFER écrit un pointeur
+         * de 4 octets, sans toucher au mot suivant. */
+        struct { wchar_t *p; DWORD garde; } b = { NULL, 0xA5A5A5A5u };
+        DWORD n = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+                                 | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 5, 0, (LPWSTR)&b.p, 0, NULL);
+        CHECK(37, n > 0 && b.p && b.garde == 0xA5A5A5A5u && wcslen(b.p) == n);
+        LocalFree(b.p);
+    }
     return fails;
 }
