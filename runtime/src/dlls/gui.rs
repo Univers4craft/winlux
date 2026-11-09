@@ -3343,6 +3343,26 @@ fn input_disabled(hwnd: usize) -> bool {
     false
 }
 
+/// Message du backend qu'une fenêtre désactivée par une boîte modale ne doit
+/// pas recevoir : `None` s'il est livré, `Some(true)` s'il est refusé et
+/// ramène la boîte au premier plan, `Some(false)` s'il est seulement refusé.
+///
+/// La croix du gestionnaire de fenêtres (WM_DELETE_WINDOW, traduit en
+/// WM_CLOSE) en fait partie : sous Windows, la croix d'une fenêtre désactivée
+/// est inerte. Audacity fermait sinon le projet sous sa boîte « Attention »
+/// encore modale ; la boucle modale de la boîte reprenait ensuite sur des
+/// objets libérés et le tas était corrompu (#1376).
+fn refused_while_disabled(hwnd: usize, message: u32) -> Option<bool> {
+    let mouse = (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message);
+    if !(mouse || message == WM_SETFOCUS || message == WM_CLOSE) || !input_disabled(hwnd) {
+        return None;
+    }
+    let press = matches!(message, 0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7);
+    Some(press || message == WM_SETFOCUS || message == WM_CLOSE)
+}
+
 /// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
 /// active la plus récente (la boîte modale qui l'a désactivée).
 fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
@@ -3476,12 +3496,8 @@ pub fn pump_backend() {
         if mouse && !matches!(e.message, 0x020A | 0x020E) {
             mouse_moved_to(e.hwnd);
         }
-        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
-            let press = matches!(
-                e.message,
-                0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
-            );
-            if press || e.message == WM_SETFOCUS {
+        if let Some(raise) = refused_while_disabled(e.hwnd, e.message) {
+            if raise {
                 if let Some(popup) = enabled_owned_popup(e.hwnd) {
                     let mut b = lock(backend());
                     b.raise_window(popup);
@@ -5970,7 +5986,19 @@ pub(crate) mod tests {
         );
         assert!(!input_disabled(boite));
         assert_eq!(enabled_owned_popup(fille), Some(boite));
+        // #1376 : la croix d'une fenêtre désactivée ne la ferme pas, elle
+        // ramène la boîte ; la boîte elle-même se ferme normalement.
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0201), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0200), Some(false));
+        assert_eq!(refused_while_disabled(boite, WM_CLOSE), None);
+        assert_eq!(
+            refused_while_disabled(main, 0x0100),
+            None,
+            "clavier : focus déjà sur la boîte"
+        );
         set_window_style(main, 0);
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), None);
         for h in [fille, boite, main] {
             destroy_window(h);
         }
