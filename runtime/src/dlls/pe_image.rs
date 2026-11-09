@@ -146,6 +146,11 @@ fn map_image(size: usize) -> *mut libc::c_void {
         if p != libc::MAP_FAILED {
             libc::munmap(p, size);
         }
+        // Le bac à sable de Chromium suppose la même adresse dans l'enfant.
+        crate::log_warn!(
+            "pe",
+            "image intégrée hors de sa région fixe ({want:#x} occupée)"
+        );
         libc::mmap(
             std::ptr::null_mut(),
             size,
