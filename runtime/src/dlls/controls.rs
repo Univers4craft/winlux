@@ -754,12 +754,14 @@ fn draw_item(
         rc_item: rect,
         item_data: data as usize,
     };
-    let r = send(
-        parent(hwnd),
-        WM_DRAWITEM,
-        user32::control_id(hwnd) as usize,
-        &dis as *const DrawItemStruct as isize,
-    );
+    let r = gui::watch_draws(user32::window_diag(), || {
+        send(
+            parent(hwnd),
+            WM_DRAWITEM,
+            user32::control_id(hwnd) as usize,
+            &dis as *const DrawItemStruct as isize,
+        )
+    });
     if user32::window_diag() {
         eprintln!(
             "winlux[fenetre] WM_DRAWITEM {hwnd:#x} -> parent {:#x} élément {item} état {state:#x} ({},{} {}x{}) hdc {hdc:#x} -> {r}",

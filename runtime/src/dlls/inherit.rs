@@ -272,6 +272,11 @@ pub(crate) fn describe(h: usize, move_pipe: bool) -> Option<(String, Vec<OwnedFd
     if let Some((fd, manual)) = crate::dlls::kernel32::share_event(h) {
         return Some((format!("e,{h:x},#0,{}", u8::from(manual)), vec![dup(fd)?]));
     }
+    if let Some((fd, semaphore)) = crate::dlls::kernel32::share_sync(h) {
+        // Mutex ou sémaphore : sa page partagée (#767).
+        let kind = if semaphore { "s" } else { "x" };
+        return Some((format!("{kind},{h:x},#0"), vec![dup(fd)?]));
+    }
     if let Some((fd, size, access)) = crate::dlls::mmap::export(h) {
         return Some((format!("m,{h:x},#0,{size},{access:x}"), vec![dup(fd)?]));
     }
@@ -365,6 +370,17 @@ pub(crate) fn adopt_one(
                 crate::dlls::kernel32::EventObject::adopt(flag(3), w),
             );
         }
+        "x" => {
+            let w = SharedWord::map(field(2)?)?;
+            crate::dlls::kernel32::insert_sync_at(h, crate::dlls::kernel32::MutexObject::adopt(w));
+        }
+        "s" => {
+            let w = SharedWord::map(field(2)?)?;
+            crate::dlls::kernel32::insert_sync_at(
+                h,
+                crate::dlls::kernel32::SemaphoreObject::adopt(w),
+            );
+        }
         "m" => {
             let file = field(2)?;
             let size = f.get(3)?.parse::<u64>().ok()?;
@@ -431,6 +447,72 @@ mod tests {
             "n,1c,40,41,1,0,6162"
         );
         assert_eq!(substitute("p,8,1234", |_| None), "p,8,1234");
+    }
+
+    /// Mutex sans nom possédé puis copié vers « un autre processus » (le
+    /// mutex vivant du bac à sable de Chromium, #767) : la copie le voit
+    /// possédé, libre après ReleaseMutex, abandonné quand son propriétaire
+    /// disparaît ; un sémaphore garde son compteur.
+    #[test]
+    fn mutex_et_semaphore_transmissibles() {
+        use crate::dlls::kernel32 as k;
+        let round_trip = |h: usize| -> usize {
+            let (desc, fds) = describe(h, false).expect("transmissible");
+            let mut fds: Vec<Option<OwnedFd>> = fds.into_iter().map(Some).collect();
+            let zero = {
+                let mut f: Vec<&str> = desc.split(',').collect();
+                f[1] = "0";
+                f.join(",")
+            };
+            adopt_one(&zero, 0, |s| {
+                fds.get_mut(s.strip_prefix('#')?.parse::<usize>().ok()?)?
+                    .take()
+            })
+            .expect("adopté")
+        };
+        let h = unsafe { k::create_mutex_w(0, 1, std::ptr::null()) };
+        assert_ne!(h, 0);
+        let copy = round_trip(h);
+        assert!(describe(h, false).unwrap().0.starts_with("x,"));
+        let other = |c: usize| {
+            std::thread::spawn(move || k::wait_for_single_object(c, 0))
+                .join()
+                .unwrap()
+        };
+        assert_eq!(other(copy), 258, "possédé par ce thread");
+        assert_eq!(
+            k::wait_for_single_object(h, 0),
+            0,
+            "récursion du propriétaire"
+        );
+        assert_eq!(k::release_mutex(h), 1);
+        assert_eq!(k::release_mutex(copy), 1);
+        assert_eq!(k::release_mutex(h), 0, "plus possédé");
+        // Pris par un thread qui se termine sans le rendre : abandonné.
+        std::thread::spawn(move || assert_eq!(k::wait_for_single_object(copy, 0), 0))
+            .join()
+            .unwrap();
+        assert_eq!(k::wait_for_single_object(h, 1000), 0x80);
+        assert_eq!(k::release_mutex(h), 1);
+        k::close_handle(copy);
+        k::close_handle(h);
+
+        let s = unsafe { k::create_semaphore_w(0, 2, 3, std::ptr::null()) };
+        let sc = round_trip(s);
+        assert_eq!(k::wait_for_single_object(sc, 0), 0);
+        assert_eq!(k::wait_for_single_object(s, 0), 0);
+        assert_eq!(k::wait_for_single_object(sc, 0), 258);
+        assert_eq!(
+            unsafe { k::release_semaphore(s, 3, std::ptr::null_mut()) },
+            1
+        );
+        assert_eq!(
+            unsafe { k::release_semaphore(sc, 1, std::ptr::null_mut()) },
+            0,
+            "maximum"
+        );
+        k::close_handle(sc);
+        k::close_handle(s);
     }
 
     #[test]

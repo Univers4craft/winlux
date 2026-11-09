@@ -1645,7 +1645,41 @@ fn history_on() -> bool {
     })
 }
 
+/// `WINLUX_WOW32_HISTORY=flux` (ou `flux:motif`) : chaque passage est en
+/// plus écrit tout de suite sur la sortie d'erreur, filtré sur le motif
+/// (« SetWindowPos », « user32 »…). Sert à suivre ce qu'un programme x86
+/// demande sans attendre une faute (champ du port de WinSCP, #1251).
+fn history_stream() -> Option<&'static str> {
+    static FILTER: OnceLock<Option<String>> = OnceLock::new();
+    FILTER
+        .get_or_init(|| {
+            let v = std::env::var("WINLUX_WOW32_HISTORY").ok()?;
+            let rest = v.strip_prefix("flux")?;
+            Some(rest.strip_prefix(':').unwrap_or("").to_ascii_lowercase())
+        })
+        .as_deref()
+}
+
+fn passage_line(p: &Passage) -> String {
+    let what = if p.desc != 0 {
+        let d = unsafe { &*(p.desc as usize as *const Desc) };
+        d.label.clone()
+    } else {
+        format!("rappel x86 0x{:x}", p.target)
+    };
+    format!(
+        "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}",
+        p.esp, p.ret, p.args
+    )
+}
+
 fn note(p: Passage) {
+    if let Some(filter) = history_stream() {
+        let line = passage_line(&p);
+        if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+            eprintln!("winlux[wow32] {line}");
+        }
+    }
     HISTORY.with(|h| {
         let mut h = h.borrow_mut();
         if h.len() == HISTORY_LEN {
@@ -1657,23 +1691,7 @@ fn note(p: Passage) {
 
 /// Passages notés, du plus ancien au plus récent, en texte.
 fn history_lines() -> Vec<String> {
-    HISTORY.with(|h| {
-        h.borrow()
-            .iter()
-            .map(|p| {
-                let what = if p.desc != 0 {
-                    let d = unsafe { &*(p.desc as usize as *const Desc) };
-                    d.label.clone()
-                } else {
-                    format!("rappel x86 0x{:x}", p.target)
-                };
-                format!(
-                    "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}",
-                    p.esp, p.ret, p.args
-                )
-            })
-            .collect()
-    })
+    HISTORY.with(|h| h.borrow().iter().map(passage_line).collect())
 }
 
 #[cfg(test)]
