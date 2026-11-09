@@ -382,6 +382,15 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
                 }
             }
 
+            // Fil fautif et carte mémoire : une adresse hors des modules PE
+            // (bibliothèque Linux, Winlux lui-même, tas) devient lisible
+            // (#1376). open/read/write seulement : sûrs dans un gestionnaire
+            // de signal.
+            write_crash_fd(fd, b"\nThread: ");
+            copy_file_to_fd(c"/proc/thread-self/comm", fd);
+            write_crash_fd(fd, b"\nMemory map:\n");
+            copy_file_to_fd(c"/proc/self/maps", fd);
+
             libc::close(fd);
         }
 
@@ -403,6 +412,23 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
 
         libc::_exit(exception_code as i32);
     }
+}
+
+/// Recopie un fichier dans `out` sans allouer (gestionnaire de signal).
+unsafe fn copy_file_to_fd(path: &std::ffi::CStr, out: i32) {
+    let fd = libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+    if fd < 0 {
+        return;
+    }
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+        if n <= 0 {
+            break;
+        }
+        write_crash_fd(out, &buf[..n as usize]);
+    }
+    libc::close(fd);
 }
 
 fn install_crash_handler() {

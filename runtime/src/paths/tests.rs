@@ -398,3 +398,27 @@ fn chemin_linux_absolu_meme_quand_le_dossier_courant_est_sur_c() {
     assert_eq!(to_linux("\\winlux-racine"), c.join("winlux-racine"));
     drop(env);
 }
+
+#[test]
+fn programme_lance_par_un_chemin_windows() {
+    // `winlux "C:\Program Files (x86)\Steam\steam.exe"` (#1381).
+    let env = Env::new("lanceur");
+    let d = env.home.join("Program Files (x86)/Steam");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("Steam.exe"), b"MZ").unwrap();
+    let exe = d.join("Steam.exe");
+    assert_eq!(
+        launch_path("C:\\Program Files (x86)\\Steam\\steam.exe".as_ref()),
+        exe
+    );
+    assert_eq!(
+        launch_path("c:/program files (x86)/steam/STEAM.EXE".as_ref()),
+        exe
+    );
+    // Un chemin Linux existant ou relatif reste tel quel.
+    assert_eq!(launch_path(exe.as_os_str()), exe);
+    assert_eq!(
+        launch_path("absent.exe".as_ref()),
+        PathBuf::from("absent.exe")
+    );
+}
