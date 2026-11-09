@@ -1637,7 +1637,10 @@ mod tests {
             std::fs::read_to_string("/proc/self/status")
                 .unwrap_or_default()
                 .lines()
-                .find_map(|l| l.strip_prefix("Threads:").map(|v| v.trim().parse::<i64>().unwrap_or(0)))
+                .find_map(|l| {
+                    l.strip_prefix("Threads:")
+                        .map(|v| v.trim().parse::<i64>().unwrap_or(0))
+                })
                 .unwrap_or(0)
         };
         let sub = CString::new("Software\\WinluxNotify").unwrap();
@@ -1667,7 +1670,10 @@ mod tests {
             }
             assert!(threads() - before < 50, "un thread par appel");
             assert_eq!(
-                lock(watches()).iter().filter(|w| w.0 == h && w.1 == event).count(),
+                lock(watches())
+                    .iter()
+                    .filter(|w| w.0 == h && w.1 == event)
+                    .count(),
                 1
             );
             assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 0), 258);
@@ -1676,7 +1682,10 @@ mod tests {
                 reg_set_value_ex_a(h, name.as_ptr() as *const u8, 0, 4, data.as_ptr(), 4),
                 0
             );
-            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 5000), 0);
+            assert_eq!(
+                crate::dlls::kernel32::wait_for_single_object(event, 5000),
+                0
+            );
             assert!(!lock(watches()).iter().any(|w| w.0 == h && w.1 == event));
             assert_eq!(reg_close_key(h), 0);
             crate::dlls::kernel32::close_handle(event);
