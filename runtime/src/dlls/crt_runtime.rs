@@ -82,6 +82,24 @@ fn init_args() {
     });
 }
 
+/// `_putenv` et `_wputenv_s` mettent aussi à jour `_environ` et `_wenviron`,
+/// comme la CRT Microsoft. Tcl (tkinter) cherche TCL_LIBRARY, posée par
+/// PyInstaller après le démarrage, en parcourant `_wenviron` (#1474).
+/// Les anciens tableaux restent valides : un appelant peut encore les lire.
+pub fn refresh_environ() {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    init_args();
+    let env = environment();
+    unsafe {
+        ENVIRON = leak_narrow(&env);
+        WENVIRON = leak_wide(&env);
+    }
+    crate::wow32::refresh_environ();
+}
+
 pub unsafe extern "win64" fn getmainargs(
     argc: *mut i32,
     argv: *mut *mut *mut u8,
@@ -828,6 +846,7 @@ fn putenv_str(s: &str) -> i32 {
     } else {
         std::env::set_var(k, v);
     }
+    refresh_environ();
     0
 }
 pub unsafe extern "win64" fn putenv(s: *const u8) -> i32 {

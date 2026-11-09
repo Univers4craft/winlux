@@ -88,6 +88,13 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
+pub fn refresh_environ() {
+    if active() {
+        crt::refresh_environ();
+    }
+}
+
 /// Adresse au-delà de laquelle le programme 32 bits ne voit rien.
 pub fn limit() -> usize {
     LIMIT.load(Ordering::Relaxed)

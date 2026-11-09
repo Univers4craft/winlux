@@ -204,6 +204,19 @@ pub fn fill_process_data() {
     }
 }
 
+/// Après `_putenv` : `_environ` et `_wenviron` x86 suivent les tableaux
+/// 64 bits reconstruits (#1474). `__initenv` garde l'instantané du début.
+pub fn refresh_environ() {
+    use crate::dlls::crt_runtime as rt;
+    let d = data();
+    unsafe {
+        let env = low_ptr_array(*rt::p_environ() as *const usize, false);
+        let wenv = low_ptr_array(*rt::p_wenviron() as *const usize, true);
+        *((d + D_ENVIRON) as *mut u32) = env;
+        *((d + D_WENVIRON) as *mut u32) = wenv;
+    }
+}
+
 /// Copie basse d'une donnée scalaire exportée (instantané).
 fn scalar_copy(dll: &str, name: &str, len: usize) -> Option<usize> {
     let a = crate::dlls::lookup(dll, name)?;
