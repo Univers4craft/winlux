@@ -102,7 +102,12 @@ pub fn count() -> i32 {
 /// MonitorFromPoint reçoit un POINT par valeur : sur x64 les deux i32 sont
 /// regroupés dans un seul registre.
 pub extern "win64" fn monitor_from_point_packed(pt: u64, flags: u32) -> usize {
-    from_point_in(&list(), pt as u32 as i32, (pt >> 32) as u32 as i32, flags)
+    let (x, y) = (pt as u32 as i32, (pt >> 32) as u32 as i32);
+    let m = from_point_in(&list(), x, y, flags);
+    if super::user32::window_diag() {
+        eprintln!("winlux[fenetre] MonitorFromPoint({x},{y}) -> {m}");
+    }
+    m
 }
 
 pub unsafe extern "win64" fn monitor_from_rect(rect: *const Rect, flags: u32) -> usize {
@@ -113,11 +118,16 @@ pub unsafe extern "win64" fn monitor_from_rect(rect: *const Rect, flags: u32) ->
 }
 
 pub extern "win64" fn monitor_from_window(hwnd: usize, flags: u32) -> usize {
-    match gui::window_rect(hwnd) {
+    let rect = gui::window_rect(hwnd);
+    let m = match rect {
         Some(r) => from_rect_in(&list(), &r, flags),
         None if flags == MONITOR_DEFAULTTONULL => 0,
         None => 1,
+    };
+    if super::user32::window_diag() {
+        eprintln!("winlux[fenetre] MonitorFromWindow({hwnd:#x}) fenêtre {rect:?} -> {m}");
     }
+    m
 }
 
 /// Zone de travail d'un écran : son rectangle coupé par la zone de travail
@@ -156,6 +166,13 @@ pub unsafe fn fill_info(monitor: usize, info: *mut u8, wide: bool) -> i32 {
     // notification débordait sous le bas de l'écran (#1267).
     let work = work_rect(&m.rect, &gui::work_area());
     std::ptr::write_unaligned(info.add(20) as *mut Rect, work);
+    if super::user32::window_diag() {
+        let (r, w) = (m.rect, work);
+        eprintln!(
+            "winlux[fenetre] GetMonitorInfo({monitor}) rcMonitor=({},{})-({},{}) rcWork=({},{})-({},{})",
+            r.left, r.top, r.right, r.bottom, w.left, w.top, w.right, w.bottom
+        );
+    }
     *(info.add(36) as *mut u32) = if m.primary { MONITORINFOF_PRIMARY } else { 0 };
     // szDevice : « \\.\DISPLAY1 », comme Windows.
     let name = format!("\\\\.\\DISPLAY{monitor}");
