@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod rescue;
 #[cfg(test)]
 mod tests;
 
@@ -1051,7 +1052,7 @@ const USAGE: &str = "usage: winlux --display status | sync | watch | session-sca
   | layout extend|duplicate | layout only ECRAN | primary ECRAN\n\
   | mode [ECRAN] LxH | rate [ECRAN] HZ|auto | place ECRAN right|left|above|below\n\
   | scale [ECRAN] 1|1.25|1.5|1.75|2|2.5|3|auto | scale-step ECRAN up|down\n\
-  | follow | fixed";
+  | follow | fixed | bring-back [LxH+X+Y ...]";
 
 /// Boucle de surveillance (lancée par la session) : réapplique la
 /// configuration au branchement, au débranchement, à la fermeture du capot
@@ -1064,10 +1065,28 @@ pub fn watch(root: &Path) -> i32 {
     // dans sysfs : repli toutes les 2 s. Sur une vraie machine, on ne sonde
     // jamais les écrans en boucle (lecture EDID, clignotements).
     let virtual_machine = crate::power::is_virtual_at(&crate::power::root());
+    // Écrans allumés au dernier passage : quand l'ensemble change, les
+    // fenêtres restées hors des écrans restants sont ramenées (#1412).
+    let mut screens: Option<Vec<rescue::Rect>> = None;
     loop {
         let sig = hardware_signature(root);
         if sig != last || ticks == 0 || virtual_machine && ticks.is_multiple_of(2) {
-            match sync(root) {
+            let result = sync(root);
+            if sig != last || matches!(result, Ok(true)) || screens.is_none() {
+                if let Ok(outputs) = query() {
+                    let (now, primary) = rescue::monitors(&outputs);
+                    if screens.as_ref().is_some_and(|before| *before != now) && !now.is_empty() {
+                        // Laisser le gestionnaire de fenêtres prendre en
+                        // compte la nouvelle disposition.
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if let Err(e) = rescue::bring_back(&now, primary) {
+                            eprintln!("winlux-display : {e}");
+                        }
+                    }
+                    screens = Some(now);
+                }
+            }
+            match result {
                 Ok(_) => lost = 0,
                 // Serveur X parti (fin de session) : on s'arrête, la session
                 // suivante relance la surveillance.
@@ -1115,6 +1134,41 @@ pub fn main(args: &[String]) -> i32 {
             }
         },
         ["watch"] => watch(&root),
+        ["bring-back", zones @ ..] => {
+            // Ramène les fenêtres hors écran ; zones « LxH+X+Y » données
+            // (tests), sinon les écrans allumés.
+            let (rects, primary) = if zones.is_empty() {
+                match query() {
+                    Ok(o) => rescue::monitors(&o),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return 1;
+                    }
+                }
+            } else {
+                let parsed: Option<Vec<rescue::Rect>> = zones
+                    .iter()
+                    .map(|z| parse_geometry(z).map(|(w, h, x, y)| (x, y, w as i32, h as i32)))
+                    .collect();
+                match parsed {
+                    Some(r) => (r, 0),
+                    None => {
+                        eprintln!("{USAGE}");
+                        return 2;
+                    }
+                }
+            };
+            match rescue::bring_back(&rects, primary) {
+                Ok(n) => {
+                    println!("{n}");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    1
+                }
+            }
+        }
         ["session-scale"] => {
             // Au lancement du bureau : la plus grande échelle demandée.
             let g = query().map_or(1.0, |outputs| {
