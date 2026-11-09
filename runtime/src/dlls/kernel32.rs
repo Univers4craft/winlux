@@ -7636,6 +7636,7 @@ pub fn record_exit_code(code: u32) {
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -7654,6 +7655,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
+    crate::trace!("ExitProcess : fin, code {:#x}", code as u32);
     record_exit_code(code as u32);
     std::process::exit(code)
 }
