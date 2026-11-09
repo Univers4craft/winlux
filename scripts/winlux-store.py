@@ -129,6 +129,8 @@ T = {
            "ed_ok": "Installer",
            "ed_ok_update": "Mettre à jour",
            "ed_cancel": "Annuler",
+           "ed_authorize": "En attente de l'autorisation d'un administrateur...",
+           "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
            "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
@@ -163,6 +165,8 @@ T = {
            "ed_ok": "Install",
            "ed_ok_update": "Update",
            "ed_cancel": "Cancel",
+           "ed_authorize": "Waiting for an administrator's permission...",
+           "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
            "ed_mismatch": "The file received is not the announced version: installation refused."},
@@ -197,6 +201,8 @@ T = {
            "ed_ok": "Instalar",
            "ed_ok_update": "Actualizar",
            "ed_cancel": "Cancelar",
+           "ed_authorize": "Esperando la autorización de un administrador...",
+           "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
            "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
@@ -232,6 +238,8 @@ T = {
            "ed_ok": "Installieren",
            "ed_ok_update": "Aktualisieren",
            "ed_cancel": "Abbrechen",
+           "ed_authorize": "Warten auf die Zustimmung eines Administrators...",
+           "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
            "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
@@ -1325,6 +1333,9 @@ EDITEURS = Path(os.environ.get("WINLUX_STORE_EDITEURS", ROOT + "/usr/share/winlu
 # Annuler par défaut) : rien n'est téléchargé sans elle (#1056).
 CONFIRM = os.environ.get("WINLUX_STORE_CONFIRM", "/usr/lib/winlux/winlux-store-confirm")
 REPOS_TOOL = "winlux-store-repos"
+# Code de winlux-root quand le Contrôle de compte d'utilisateur est refusé
+# (ERROR_CANCELLED 1223, modulo 256).
+DENIED = 1223 % 256
 DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]{0,127}")
 DEB_VERSION = re.compile(r"[A-Za-z0-9.+:~_-]{1,128}")
 
@@ -1540,6 +1551,18 @@ class Editeur(Source):
         progress(5, tr("ed_waiting"))
         if not confirm(e, info, update):
             return 9
+        # Autorisation d'un administrateur avant de télécharger (#1451) : un
+        # refus ne coûte plus 180 Mo. Le relais garde l'accord 5 minutes ; un
+        # téléchargement plus long la redemande au moment d'installer.
+        cmd = admin([REPOS_TOOL, "check", e["id"]])
+        if cmd is None:
+            return 126
+        progress(6, tr("ed_authorize"))
+        code = run(cmd, 3600)[0]
+        if code == DENIED:
+            return DENIED
+        if code:
+            return code
         path = self.fetch_deb(e, info, progress)
         if isinstance(path, int):
             return path
@@ -2164,7 +2187,8 @@ class Progress:
         if self.hook:
             self.hook(percent)
 
-MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch"}
+MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
+            1223 % 256: "denied"}
 
 def apt_candidate(name):
     """Le paquet existe dans les dépôts APT configurés (version candidate)."""
