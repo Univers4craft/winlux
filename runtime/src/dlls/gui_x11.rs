@@ -2613,7 +2613,7 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
-                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                if input_diag() {
                     eprintln!("Winlux X11 button {} at {x},{y} hwnd {hwnd:#x}", e.detail);
                 }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
@@ -2705,6 +2705,9 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if input_diag() {
+                    eprintln!("Winlux X11 release {} at {x},{y} hwnd {hwnd:#x}", e.detail);
+                }
                 if wheel_message(e.detail).is_some() {
                     return None;
                 }
@@ -2730,6 +2733,9 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if input_diag() && button_state(e.state) != 0 {
+                    eprintln!("Winlux X11 drag {x},{y} hwnd {hwnd:#x}");
+                }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 Some(PendingEvent {
                     hwnd,
@@ -2739,6 +2745,15 @@ impl X11Backend {
                 })
             }
             Event::FocusIn(e) => {
+                if input_diag() {
+                    eprintln!(
+                        "Winlux X11 focus-in xwin {:#x} hwnd {:#x} mode {:?} detail {:?}",
+                        e.event,
+                        self.by_xwin.get(&e.event).copied().unwrap_or(0),
+                        e.mode,
+                        e.detail
+                    );
+                }
                 // NotifyGrab/NotifyUngrab : focus temporairement pris par un
                 // menu ou un glisser (grab du clavier) ; la fenêtre ne perd
                 // pas réellement le focus, ne pas le signaler.
@@ -2778,6 +2793,15 @@ impl X11Backend {
                 })
             }
             Event::FocusOut(e) => {
+                if input_diag() {
+                    eprintln!(
+                        "Winlux X11 focus-out xwin {:#x} hwnd {:#x} mode {:?} detail {:?}",
+                        e.event,
+                        self.by_xwin.get(&e.event).copied().unwrap_or(0),
+                        e.mode,
+                        e.detail
+                    );
+                }
                 if focus_is_grab(e.mode) {
                     return None;
                 }
@@ -2840,7 +2864,7 @@ impl X11Backend {
                 }
                 gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                if input_diag() {
                     eprintln!("Winlux X11 keycode {}", e.detail);
                 }
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
@@ -3351,6 +3375,13 @@ fn double_click_message(down: u32) -> u32 {
 
 /// Boutons X11 4/5 (molette verticale) et 6/7 (horizontale) : un cran vaut
 /// `WHEEL_DELTA` (120), positif vers le haut ou vers la droite.
+/// WINLUX_INPUT_DIAG : journal des boutons, relâchements et changements de
+/// focus X reçus (#1286, glisser de Sumatra au banc).
+fn input_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()))
+}
+
 fn wheel_message(detail: u8) -> Option<(u32, i16)> {
     match detail {
         4 => Some((gui::WM_MOUSEWHEEL, 120)),

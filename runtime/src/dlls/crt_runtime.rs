@@ -1416,6 +1416,7 @@ pub unsafe extern "win64" fn close(fd: i32) -> i32 {
     if fd <= 2 {
         return 0;
     }
+    forget_osfhandle(fd);
     let r = libc::close(fd);
     if r < 0 {
         set_errno_from_os();
@@ -1618,17 +1619,58 @@ pub extern "win64" fn setmaxstdio(n: i32) -> i32 {
     n
 }
 
+/// Handles Windows rendus par _get_osfhandle, par descripteur CRT.
+fn osf_handles() -> &'static Mutex<HashMap<i32, usize>> {
+    static M: OnceLock<Mutex<HashMap<i32, usize>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// _get_osfhandle : le handle Windows d'un descripteur CRT. Les descripteurs
+/// de Winlux sont ceux de Linux : le handle tient une copie (dup) du
+/// descripteur, qui partage sa position, et reste le même d'un appel à
+/// l'autre jusqu'au _close. Il renvoyait -1 pour tout fichier : libsndfile
+/// (sf_open_fd) prenait le fichier pour un tube et l'export WAV d'Audacity
+/// restait vide (#1283).
 pub extern "win64" fn get_osfhandle(fd: i32) -> isize {
     match fd {
-        0 => -10,
-        1 => -11,
-        2 => -12,
-        _ => {
-            unsafe {
-                *errno() = 9;
-            }
-            -1
+        0 => return -10,
+        1 => return -11,
+        2 => return -12,
+        _ => {}
+    }
+    let bad = || {
+        unsafe {
+            *errno() = 9;
         }
+        -1
+    };
+    if fd < 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        return bad();
+    }
+    let mut map = osf_handles().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&h) = map.get(&fd) {
+        if crate::dlls::kernel32::fd_of_handle(h).is_some() {
+            return h as isize;
+        }
+    }
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if copy < 0 {
+        return bad();
+    }
+    let file = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(copy) };
+    let h = crate::dlls::kernel32::insert_file(file);
+    map.insert(fd, h);
+    h as isize
+}
+
+/// Le descripteur est fermé : son handle de _get_osfhandle aussi.
+fn forget_osfhandle(fd: i32) {
+    let h = osf_handles()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&fd);
+    if let Some(h) = h.filter(|&h| crate::dlls::kernel32::fd_of_handle(h).is_some()) {
+        crate::dlls::kernel32::close_handle(h);
     }
 }
 pub extern "win64" fn getpid() -> i32 {
@@ -1991,6 +2033,35 @@ mod tests {
             assert_eq!(unlink(c.as_ptr()), 0);
             assert_eq!(open(c.as_ptr(), 0, 0), -1);
             assert_eq!(*errno(), 2);
+        }
+    }
+
+    /// #1283 : libsndfile (sf_open_fd) écrit par le handle de
+    /// _get_osfhandle ; il doit désigner le même fichier, à la même position.
+    #[test]
+    fn get_osfhandle_d_un_fichier() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!("winlux-osf-{}", std::process::id()));
+            let c = format!("{}\0", path.display());
+            let fd = open(c.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            assert!(fd > 2);
+            let h = get_osfhandle(fd);
+            assert!(h > 0);
+            assert_eq!(get_osfhandle(fd), h, "même handle d'un appel à l'autre");
+            assert_eq!(crate::dlls::kernel32::get_file_type(h as usize), 1); // FILE_TYPE_DISK
+            let mut n = 0u32;
+            let ok = crate::dlls::kernel32::write_file(h as usize, b"RIFF".as_ptr(), 4, &mut n, 0);
+            assert!(ok != 0 && n == 4);
+            assert_eq!(lseek(fd, 0, 1), 4, "position partagée avec le descripteur");
+            assert_eq!(close(fd), 0);
+            assert_eq!(
+                crate::dlls::kernel32::get_file_type(h as usize),
+                0,
+                "handle fermé avec le descripteur"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"RIFF");
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(get_osfhandle(fd), -1);
         }
     }
 }

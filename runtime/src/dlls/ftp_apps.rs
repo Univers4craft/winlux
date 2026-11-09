@@ -554,6 +554,10 @@ pub fn all() -> Vec<(&'static str, Exports)> {
             crate::exports! {
                 "ExtractIconW" => fn extract_icon_w,
                 "SHDefExtractIconW" => fn sh_def_extract_icon_w,
+                // Ordinal 6 : SHDefExtractIconW, importé ainsi par
+                // wxmsw313u_core (fermeture d'une fenêtre de projet
+                // d'Audacity, #1284).
+                "#6" => fn sh_def_extract_icon_w,
                 "SHGetIconOverlayIndexW" => fn sh_get_icon_overlay_index_w,
             },
         ),
@@ -614,5 +618,13 @@ mod tests {
         let g = parse_guid("{6B29FC40-CA47-1067-B31D-00DD010662DA}").unwrap();
         assert_eq!(guid_text(&g), "6b29fc40-ca47-1067-b31d-00dd010662da");
         assert!(parse_guid("6b29fc40-ca47-1067-b31d").is_none());
+    }
+
+    /// #1284 : wxmsw313u_core importe SHDefExtractIconW par son ordinal 6.
+    #[test]
+    fn shell32_ordinal_6_est_sh_def_extract_icon_w() {
+        let par_nom = crate::dlls::lookup("shell32", "SHDefExtractIconW");
+        assert!(par_nom.is_some());
+        assert_eq!(crate::dlls::lookup("shell32", "#6"), par_nom);
     }
 }
