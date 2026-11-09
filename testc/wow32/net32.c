@@ -5,6 +5,7 @@
 #include <mswsock.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 static int fails;
 #define CHECK(n, c) do { if (!(c)) { printf("echec %d : %s (WSA %d)\n", n, #c, WSAGetLastError()); fails = n; } } while (0)
@@ -80,6 +81,12 @@ int main(void) {
     closesocket(c);
     closesocket(in);
     closesocket(l);
+    /* #1438 : programme « large address aware » ; comme sous WOW64, rien
+     * n'est placé dans les 64 derniers Ko sous 4 Go. */
+    CHECK(11, VirtualAlloc((void *)0xffff0000u, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == NULL);
+    wchar_t *env = GetEnvironmentStringsW();
+    CHECK(12, env && (ULONG_PTR)env < 0xffff0000u && wcschr(env, L'=') != NULL);
+    FreeEnvironmentStringsW(env);
     if (!fails) printf("Réseau 32 bits : tout est correct\n");
     return fails;
 }

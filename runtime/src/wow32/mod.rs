@@ -587,6 +587,13 @@ fn reserve_high(limit: usize) {
             );
         }
     };
+    // Comme WOW64, les 64 derniers Ko sous 4 Go restent inaccessibles : une
+    // adresse x86 de 0xffff0000 à 0xffffffff se confondrait avec un entier
+    // négatif (`widen` l'étend par le signe) ; wcschr de pygame32 recevait
+    // ainsi 0xffffffffffffec90 (#1438).
+    if limit == 0x1_0000_0000 {
+        reserve(0xffff_0000, limit);
+    }
     let mut cursor = limit;
     for &(a, b) in &used[..count] {
         // La pile principale grandit vers le bas : on lui laisse sa limite.
