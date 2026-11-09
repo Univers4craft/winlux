@@ -5600,6 +5600,16 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn stack_below(&mut self, hwnd: usize, sibling: usize) {
+        if let (Some(w), Some(s)) = (self.windows.get(&hwnd), self.windows.get(&sibling)) {
+            let aux = ConfigureWindowAux::new()
+                .sibling(Self::top_xwin(s))
+                .stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
     fn raise_window(&mut self, hwnd: usize) {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
