@@ -873,6 +873,19 @@ pub unsafe fn call_wndproc(
     lparam: isize,
 ) -> isize {
     let f: extern "win64" fn(usize, u32, usize, isize) -> isize = std::mem::transmute(wnd_proc);
+    // WINLUX_WINDOW_DIAG=1 : messages d'état de fenêtre reçus par le
+    // programme (affichage, taille, activation, focus), pour les jeux qui
+    // se croient cachés ou réduits (#1421).
+    if crate::dlls::user32::window_diag()
+        && matches!(
+            msg,
+            0x0003 | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0018 | 0x001C | 0x0046 | 0x0047 | 0x0086
+        )
+    {
+        eprintln!(
+            "winlux[fenetre] message {hwnd:#x} {msg:#06x} wparam={wparam:#x} lparam={lparam:#x}"
+        );
+    }
     f(hwnd, msg, wparam, lparam)
 }
 

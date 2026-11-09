@@ -2237,7 +2237,11 @@ pub unsafe extern "win64" fn adjust_window_rect_ex(
 // =====================================================================
 
 pub unsafe extern "win64" fn is_window_visible(hwnd: usize) -> i32 {
-    gui::is_window_visible(hwnd) as i32
+    let v = gui::is_window_visible(hwnd) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsWindowVisible({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 const WS_DISABLED: u32 = 0x0800_0000;
@@ -2271,7 +2275,11 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
 pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
     let mut state = gui::WINDOW_NORMAL;
     with_backend(|b| state = b.window_state(hwnd));
-    (state == gui::WINDOW_MINIMIZED) as i32
+    let v = (state == gui::WINDOW_MINIMIZED) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsIconic({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {
