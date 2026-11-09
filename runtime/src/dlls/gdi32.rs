@@ -2899,6 +2899,7 @@ mod foreign_window_tests {
                 pid: other,
                 tid: 7,
                 xid,
+                ..Default::default()
             },
         ) {
             eprintln!("annuaire des fenêtres indisponible : test sauté");

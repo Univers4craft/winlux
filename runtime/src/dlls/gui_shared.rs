@@ -27,11 +27,15 @@ const LAST_HWND: usize = 0x7fff_0000;
 const BLOCK: usize = 256;
 
 /// Fenêtre d'un autre processus, lue dans l'annuaire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Foreign {
     pub pid: u32,
     pub tid: u32,
     pub xid: u64,
+    /// Styles WS_* et WS_EX_* : le processus GPU de Chromium choisit son
+    /// chemin de peinture d'après WS_EX_LAYERED (#1357).
+    pub style: u32,
+    pub ex_style: u32,
 }
 
 fn dir() -> Option<PathBuf> {
@@ -103,7 +107,7 @@ fn entry(dir: &Path, hwnd: usize) -> PathBuf {
 
 fn publish_in(dir: &Path, hwnd: usize, f: Foreign) {
     let tmp = dir.join(format!(".{hwnd:x}-{}", f.pid));
-    let text = format!("{} {} {}\n", f.pid, f.tid, f.xid);
+    let text = format!("{} {} {} {} {}\n", f.pid, f.tid, f.xid, f.style, f.ex_style);
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -128,10 +132,18 @@ fn withdraw_in(dir: &Path, hwnd: usize, pid: u32) {
 fn read_in(dir: &Path, hwnd: usize) -> Option<Foreign> {
     let text = std::fs::read_to_string(entry(dir, hwnd)).ok()?;
     let mut it = text.split_whitespace().map(|s| s.parse::<u64>().ok());
+    let pid = it.next()?? as u32;
+    let tid = it.next()?? as u32;
+    let xid = it.next()??;
+    // Styles absents (entrée d'un Winlux antérieur) : 0.
+    let style = it.next().flatten().unwrap_or(0) as u32;
+    let ex_style = it.next().flatten().unwrap_or(0) as u32;
     Some(Foreign {
-        pid: it.next()?? as u32,
-        tid: it.next()?? as u32,
-        xid: it.next()??,
+        pid,
+        tid,
+        xid,
+        style,
+        ex_style,
     })
 }
 
@@ -155,8 +167,9 @@ fn lookup_in(dir: &Path, hwnd: usize, me: u32) -> Option<Foreign> {
     Some(f)
 }
 
-/// Inscrit une fenêtre de ce processus qui a une fenêtre X11.
-pub fn publish(hwnd: usize, tid: u32, xid: u64) {
+/// Inscrit une fenêtre de ce processus qui a une fenêtre X11, ou met à
+/// jour ses styles.
+pub fn publish(hwnd: usize, tid: u32, xid: u64, style: u32, ex_style: u32) {
     if let Some(d) = dir() {
         publish_in(
             &d,
@@ -165,6 +178,8 @@ pub fn publish(hwnd: usize, tid: u32, xid: u64) {
                 pid: std::process::id(),
                 tid,
                 xid,
+                style,
+                ex_style,
             },
         );
     }
@@ -219,6 +234,7 @@ mod tests {
             pid: other,
             tid: 42,
             xid: 0x1c0_0005,
+            ..Default::default()
         };
         publish_in(&d, 0x40123, f);
         assert_eq!(lookup_in(&d, 0x40123, me), Some(f));
@@ -256,6 +272,7 @@ mod tests {
                 pid: other,
                 tid: 7,
                 xid: 1,
+                ..Default::default()
             },
         );
         assert_eq!(unsafe { crate::dlls::user32::is_window(h) }, 1);
@@ -264,6 +281,38 @@ mod tests {
         assert_eq!((tid, pid), (7, other));
         withdraw_in(&d, h, other);
         assert_eq!(unsafe { crate::dlls::user32::is_window(h) }, 0);
+    }
+
+    /// #1357 : le processus GPU de Chromium lit WS_EX_LAYERED sur la
+    /// fenêtre surgissante du navigateur pour choisir UpdateLayeredWindow.
+    #[test]
+    fn styles_de_la_fenetre_d_un_autre_processus() {
+        let Some(d) = dir() else { return };
+        let other = unsafe { libc::getppid() } as u32;
+        let h = alloc_hwnd();
+        let f = Foreign {
+            pid: other,
+            tid: 7,
+            xid: 0x1c0_0043,
+            style: 0x8400_0000,    // WS_POPUP | WS_CLIPSIBLINGS
+            ex_style: 0x0008_0088, // WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
+        };
+        publish_in(&d, h, f);
+        assert_eq!(lookup_in(&d, h, std::process::id()), Some(f));
+        unsafe {
+            assert_eq!(
+                crate::dlls::user32::get_window_long_ptr_w(h, -20),
+                0x0008_0088
+            );
+            assert_eq!(
+                crate::dlls::user32::get_window_long_w(h, -16),
+                0x8400_0000u32 as i32
+            );
+        }
+        // Entrée d'un Winlux antérieur, sans styles : 0.
+        std::fs::write(entry(&d, h), format!("{other} 7 5\n")).unwrap();
+        assert_eq!(read_in(&d, h).map(|f| (f.style, f.ex_style)), Some((0, 0)));
+        withdraw_in(&d, h, other);
     }
 
     #[test]
@@ -278,6 +327,7 @@ mod tests {
                 pid: other,
                 tid: 7,
                 xid: 0x1c0_0042,
+                ..Default::default()
             },
         );
         assert_eq!(crate::dlls::gui::native_window(h), Some(0x1c0_0042));
