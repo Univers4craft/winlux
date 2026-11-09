@@ -90,7 +90,8 @@ jobs:
             libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
             libqt6core6t64 libqt6gui6 libqt6widgets6 \
             python3-gi gir1.2-gtk-3.0 \
-            clang lld llvm
+            clang lld llvm \
+            dotnet-runtime-10.0
           sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
           # UEFI 32 bits pour QEMU : Ubuntu 26.04 n a plus ovmf-ia32 (paquet 24.04 vérifié par SHA-256).
           ovmf32=$(sh scripts/fetch-ovmf-ia32.sh "$RUNNER_TEMP/ovmf-ia32")

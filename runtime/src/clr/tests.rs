@@ -186,6 +186,54 @@ fn une_methode_de_base_absente_leve_missing_method() {
     assert_eq!(lancer(&b.build(main), None), 0xE0434352u32 as i32);
 }
 
+/// Étape 7 : une mscorlib à nous (ici écrite par emit) définit `System.String`
+/// avec une méthode en IL. La méthode s'exécute, le type reste le `String`
+/// intégré (une chaîne littérale garde sa disposition) et ce que notre
+/// mscorlib ne définit pas (`get_Length`) reste servi par bcl.rs.
+#[test]
+fn notre_mscorlib_s_attache_aux_types_integres() {
+    let mut c = Builder::new("mscorlib");
+    let object = c.type_def(PUBLIC, "System", "Object", 0);
+    let string = c.type_def(PUBLIC, "System", "String", object);
+    let _ = string;
+    c.method(
+        M_PUBLIC | M_STATIC,
+        "Deux",
+        &method_sig(false, &[T_I4], &[]),
+        Some(Il::default().i4(2).ret().body()),
+    );
+    let corlib = c.build(0);
+
+    let mut b = Builder::new("Programme");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let string = b.type_ref(Scope::Assembly(mscorlib), "System", "String");
+    let deux = b.member_ref(string, "Deux", &method_sig(false, &[T_I4], &[]));
+    let length = b.member_ref(string, "get_Length", &method_sig(true, &[T_I4], &[]));
+    let abc = b.user_string("abc");
+    b.type_def(PUBLIC, "Programme", "Programme", 0);
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(
+            Il::default()
+                .call(deux)
+                .i4(10)
+                .op(MUL)
+                .ldstr(abc)
+                .callvirt(length)
+                .op(ADD)
+                .ret()
+                .body(),
+        ),
+    );
+    let dir = dossier("corlib");
+    std::fs::write(dir.join("mscorlib.dll"), corlib).unwrap();
+    let code = lancer(&b.build(main), Some(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 23);
+}
+
 #[test]
 fn le_constructeur_statique_ne_tourne_qu_une_fois() {
     let mut b = Builder::new("Statique");

@@ -31,6 +31,9 @@ impl Interpreter {
                 })
                 .collect();
             for (id, extends) in rows {
+                if types::is_builtin(id) {
+                    continue;
+                }
                 let parent = if CodedIndex::TypeDefOrRef.decode(extends).1 == 0 {
                     0
                 } else {
@@ -48,6 +51,7 @@ impl Interpreter {
                 .domain
                 .iter()
                 .flat_map(|d| d.type_ids.iter().flatten().copied())
+                .filter(|&id| !types::is_builtin(id))
                 .collect();
             for id in ids {
                 let parent = reg.get(id).map_or(0, |t| t.parent);
