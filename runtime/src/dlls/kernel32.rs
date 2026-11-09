@@ -7813,7 +7813,16 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     crate::trace!("ExitProcess : fin, code {:#x}", code as u32);
     record_exit_code(code as u32);
-    std::process::exit(code)
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    // ExitProcess ne rend jamais la main au code de l'invité : pas de
+    // `exit()` de la glibc, dont les gestionnaires atexit et destructeurs TLS
+    // tournaient pendant que les autres threads x86 continuaient. Steam et
+    // PyInstaller x86 y plantaient en lisant [0+8] après « fin » (#1440).
+    // SAFETY : sorties vidées ci-dessus, _exit termine tout le processus.
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+        libc::_exit(code)
+    }
 }
 
 // ---------- Fonctions supplémentaires kernel32 ----------
