@@ -769,6 +769,13 @@ fn recv_flags(win: i32) -> i32 {
 fn last_error() -> i32 {
     unsafe { error_from_errno(*libc::__errno_location()) }
 }
+/// Enregistre une socket neuve. Son numéro de descripteur a pu servir à une
+/// socket fermée sans closesocket : ses modes de complétion ne la suivent
+/// pas (FILE_SKIP_SET_EVENT_ON_HANDLE empêchait de signaler hEvent, #1360).
+fn register_socket(s: usize) {
+    overlapped::forget_modes(s);
+    lock(sockets()).insert(s);
+}
 fn valid_socket(s: usize) -> bool {
     lock(sockets()).contains(&s)
 }
@@ -786,7 +793,7 @@ pub(crate) fn adopt_socket(fd: std::os::fd::OwnedFd, want: usize) -> usize {
     } else {
         fd.into_raw_fd() as usize
     };
-    lock(sockets()).insert(h);
+    register_socket(h);
     h
 }
 fn gai_error(e: i32) -> i32 {
@@ -953,7 +960,7 @@ pub extern "win64" fn socket(af: i32, kind: i32, protocol: i32) -> usize {
         set_error(last_error());
         usize::MAX
     } else {
-        lock(sockets()).insert(s as usize);
+        register_socket(s as usize);
         s as usize
     }
 }
@@ -1077,7 +1084,27 @@ pub unsafe extern "win64" fn accept(s: usize, name: *mut u8, len: *mut i32) -> u
     if !len.is_null() {
         *len = n as i32;
     }
-    lock(sockets()).insert(r as usize);
+    register_socket(r as usize);
+    // La socket acceptée garde l'association WSAEventSelect de la socket
+    // d'écoute, comme sous Windows (#1360).
+    {
+        let mut assoc = lock(event_assoc());
+        if let Some(a) = assoc.get(&s).copied() {
+            // WSAEventSelect rend aussi la socket non bloquante.
+            libc::fcntl(
+                r,
+                libc::F_SETFL,
+                libc::fcntl(r, libc::F_GETFL) | libc::O_NONBLOCK,
+            );
+            assoc.insert(
+                r as usize,
+                EventAssoc {
+                    write_armed: true,
+                    ..a
+                },
+            );
+        }
+    }
     r as usize
 }
 pub unsafe extern "win64" fn send(s: usize, b: *const u8, n: i32, flags: i32) -> i32 {
@@ -2760,7 +2787,7 @@ pub extern "win64" fn wsa_socket_w(
         set_error(last_error());
         INVALID_SOCKET
     } else {
-        lock(sockets()).insert(s as usize);
+        register_socket(s as usize);
         s as usize
     }
 }
@@ -2883,7 +2910,9 @@ pub extern "win64" fn wsa_create_event() -> usize {
         set_error(last_error());
         return WSA_INVALID_EVENT;
     }
-    let handle = fd as usize;
+    // Numéro de handle de kernel32, multiple de 4, et non le descripteur :
+    // un numéro impair passé en OVERLAPPED.hEvent perdait son bit 0 (#1360).
+    let handle = crate::dlls::kernel32::new_handle_number();
     lock(events()).insert(
         handle,
         EventState {
@@ -2918,6 +2947,11 @@ pub extern "win64" fn wsa_set_event(h: usize) -> i32 {
         }
         1
     } else {
+        drop(ev);
+        // Événement de CreateEvent : WSASetEvent agit aussi sur lui (#1360).
+        if crate::dlls::kernel32::is_event_handle(h) {
+            return crate::dlls::kernel32::set_event(h);
+        }
         set_error(WSAEINVAL);
         0
     }
@@ -2933,6 +2967,11 @@ pub extern "win64" fn wsa_reset_event(h: usize) -> i32 {
         }
         1
     } else {
+        drop(ev);
+        // WSAEnumNetworkEvents de PuTTY passe un événement de CreateEvent.
+        if crate::dlls::kernel32::is_event_handle(h) {
+            return crate::dlls::kernel32::reset_event(h);
+        }
         set_error(WSAEINVAL);
         0
     }
@@ -3940,6 +3979,75 @@ mod tests {
             closesocket(srv);
             wsa_close_event(ev);
             kernel32::close_handle(other);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn evenements_wsa_et_kernel32_interchangeables() {
+        use crate::dlls::kernel32;
+        let _g = init();
+        unsafe {
+            // Serveur DevTools de Chromium (#1360) : écoute, accept, lecture
+            // par WSAEventSelect et écriture WSASend avec un OVERLAPPED dont
+            // hEvent vient de WSACreateEvent.
+            let (srv, addr) = listener();
+            let accept_ev = wsa_create_event();
+            assert_eq!(wsa_event_select(srv, accept_ev, FD_ACCEPT), 0);
+            let cli = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            libc::connect(cli, &addr as *const _ as *const libc::sockaddr, 16);
+            assert_eq!(kernel32::wait_for_single_object(accept_ev, 1000), 0);
+            let peer = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(peer, usize::MAX);
+            // La socket acceptée garde l'association de la socket d'écoute.
+            assert!(lock(event_assoc())
+                .get(&peer)
+                .is_some_and(|a| a.event == accept_ev));
+            let read_ev = wsa_create_event();
+            assert_eq!(wsa_event_select(peer, read_ev, FD_READ | FD_CLOSE), 0);
+            libc::send(cli, b"GET".as_ptr() as *const c_void, 3, 0);
+            assert_eq!(kernel32::wait_for_single_object(read_ev, 1000), 0);
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(peer, read_ev, &mut ne), 0);
+            assert_eq!(ne.network_events & FD_READ, FD_READ);
+
+            let write_ev = wsa_create_event();
+            let mut ov = new_overlapped();
+            ov.event = write_ev;
+            let mut data = *b"HTTP/1.1 101";
+            let buf = WsaBuf {
+                len: data.len() as u32,
+                buf: data.as_mut_ptr(),
+            };
+            let mut sent = 0u32;
+            let rc = wsa_send(peer, &buf, 1, &mut sent, 0, &mut *ov as *mut _ as usize, 0);
+            if rc != 0 {
+                assert_eq!(wsa_get_last_error(), 997);
+                assert_eq!(kernel32::wait_for_single_object(write_ev, 1000), 0);
+            }
+            // Ce que fait Chromium : l'événement est signalé, ResetEvent
+            // le remet à zéro.
+            assert_eq!(kernel32::wait_for_single_object(write_ev, 0), 0);
+            assert_eq!(kernel32::reset_event(write_ev), 1);
+            assert_eq!(kernel32::wait_for_single_object(write_ev, 0), 258);
+            assert_eq!(kernel32::set_event(write_ev), 1);
+            assert_eq!(kernel32::wait_for_single_object(write_ev, 0), 0);
+            assert_eq!(kernel32::close_handle(write_ev), 1);
+            assert!(!is_wsa_event(write_ev));
+
+            // Et dans l'autre sens : WSASetEvent/WSAResetEvent sur CreateEvent.
+            let k = kernel32::create_event_w(0, 1, 0, std::ptr::null());
+            assert_eq!(wsa_set_event(k), 1);
+            assert_eq!(kernel32::wait_for_single_object(k, 0), 0);
+            assert_eq!(wsa_reset_event(k), 1);
+            assert_eq!(kernel32::wait_for_single_object(k, 0), 258);
+            kernel32::close_handle(k);
+
+            libc::close(cli);
+            closesocket(peer);
+            closesocket(srv);
+            wsa_close_event(accept_ev);
+            wsa_close_event(read_ev);
         }
         cleanup();
     }

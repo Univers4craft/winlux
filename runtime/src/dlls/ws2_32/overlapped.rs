@@ -70,6 +70,10 @@ fn modes() -> &'static Mutex<HashMap<usize, u8>> {
 
 const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 1;
 
+pub(super) fn forget_modes(s: usize) {
+    lock(modes()).remove(&s);
+}
+
 pub(super) fn set_modes(s: usize, flags: u8) {
     lock(modes()).insert(s, flags);
 }
