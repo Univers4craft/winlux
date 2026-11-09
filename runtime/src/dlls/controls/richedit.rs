@@ -124,16 +124,25 @@ const SF_USECODEPAGE: u32 = 0x20;
 /// EDITSTREAMCALLBACK(dwCookie, pbBuff, cb, pcb) -> 0 pour continuer.
 type StreamCallback = unsafe extern "win64" fn(usize, *mut u8, i32, *mut i32) -> u32;
 
-/// EDITSTREAM en 64 bits : dwCookie (8), dwError (4 + 4 de remplissage),
-/// pfnCallback (8). Les programmes 32 bits ne sont pas encore servis.
 /// EDITSTREAM est déclarée sous `pack(4)` dans richedit.h : en x64,
 /// dwCookie (8 octets) à 0, dwError (4) à 8 et pfnCallback à 12, sans
 /// remplissage (20 octets). Lire le rappel à 16 donnait la moitié haute du
 /// pointeur, et Paint.NET sautait à 0x7288 (#1454).
 const EDITSTREAM_CALLBACK: usize = 12;
+const ERROR_CALL_NOT_IMPLEMENTED: u32 = 120;
 
 unsafe fn edit_stream(lp: isize) -> Option<(usize, StreamCallback)> {
-    if lp == 0 || crate::wow32::pointer_size() != 8 {
+    if lp == 0 {
+        return None;
+    }
+    if crate::wow32::pointer_size() != 8 {
+        // x86 : dwError à 4. Sans passerelle vers le rappel stdcall (#1457),
+        // le flux est refusé proprement au lieu d'appeler un pointeur 32 bits.
+        ((lp as *mut u8).add(4) as *mut u32).write_unaligned(ERROR_CALL_NOT_IMPLEMENTED);
+        crate::log_warn!(
+            "richedit",
+            "EM_STREAMIN/EM_STREAMOUT d'un programme 32 bits : non servi (#1457)"
+        );
         return None;
     }
     let p = lp as *mut u8;
