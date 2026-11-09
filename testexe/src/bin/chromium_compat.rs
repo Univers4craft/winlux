@@ -63,6 +63,31 @@ extern "system" {
 #[link(name = "ntdll", kind = "raw-dylib")]
 extern "system" {
     fn NtQueryObject(h: Handle, class: u32, buf: *mut u8, len: u32, ret: *mut u32) -> i32;
+    fn NtQueryInformationProcess(
+        p: Handle,
+        class: u32,
+        buf: *mut u8,
+        len: u32,
+        ret: *mut u32,
+    ) -> i32;
+}
+
+/// Lit un mot de 64 bits dans un autre processus, ou 0.
+unsafe fn read_u64(p: Handle, addr: usize) -> usize {
+    let mut v = 0usize;
+    let mut n = 0usize;
+    if ReadProcessMemory(
+        p,
+        addr as *const u8,
+        &mut v as *mut usize as *mut u8,
+        8,
+        &mut n,
+    ) == 0
+        || n != 8
+    {
+        return 0;
+    }
+    v
 }
 
 unsafe fn env_is(name: &core::ffi::CStr, expected: &[u8]) -> bool {
@@ -275,6 +300,28 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 check!(
                     VirtualFreeEx(p, mem, 0, 0x8000) != 0,
                     "VirtualFreeEx(MEM_RELEASE) dans l'enfant"
+                );
+            }
+            // #1314 : comme le crashpad de Chromium, PEB de l'enfant par
+            // NtQueryInformationProcess, puis PEB->Ldr et la première entrée
+            // de InLoadOrderModuleList : son DllBase est l'image du programme.
+            let mut pbi = [0usize; 6];
+            let mut ret = 0u32;
+            let st = NtQueryInformationProcess(p, 0, pbi.as_mut_ptr() as *mut u8, 48, &mut ret);
+            let ldr = if st == 0 {
+                read_u64(p, pbi[1] + 0x18)
+            } else {
+                0
+            };
+            check!(ldr != 0, "PEB->Ldr de l'enfant lisible (#1314)");
+            if ldr != 0 {
+                let first = read_u64(p, ldr + 0x10);
+                check!(
+                    first != 0
+                        && first != ldr + 0x10
+                        && read_u64(p, first + 0x30)
+                            == GetModuleHandleA(core::ptr::null()) as usize,
+                    "InLoadOrderModuleList commence par l'image du programme (#1314)"
                 );
             }
             // L'enfant n'a pas souffert : relancé, il se termine normalement.
