@@ -993,6 +993,41 @@ mod tests {
     }
 
     #[test]
+    fn round_rect_sans_pinceau_garde_l_interieur() {
+        // #1379 : Sumatra encadre ses vignettes d'un RoundRect sous
+        // NULL_BRUSH ; l'intérieur était rempli de noir.
+        type Dc = unsafe extern "win64" fn(usize) -> usize;
+        type Sel = unsafe extern "win64" fn(usize, usize) -> usize;
+        type Stock = unsafe extern "win64" fn(i32) -> usize;
+        type Pen = unsafe extern "win64" fn(i32, i32, u32) -> usize;
+        type Round = unsafe extern "win64" fn(usize, i32, i32, i32, i32, i32, i32) -> i32;
+        let f = |name: &str| crate::dlls::lookup("gdi32", name).unwrap();
+        unsafe {
+            let dc: Dc = std::mem::transmute(f("CreateCompatibleDC"));
+            let select: Sel = std::mem::transmute(f("SelectObject"));
+            let stock: Stock = std::mem::transmute(f("GetStockObject"));
+            let pen: Pen = std::mem::transmute(f("CreatePen"));
+            let round: Round = std::mem::transmute(f("RoundRect"));
+            let w = 0x00FF_FFFF;
+            let bmp = super::super::gui::bitmap_from_pixels(10, 10, &[w; 100]).unwrap();
+            let hdc = dc(0);
+            select(hdc, bmp);
+            select(hdc, stock(5)); // NULL_BRUSH
+            select(hdc, pen(0, 1, 0x0000_00FF));
+            assert_eq!(round(hdc, 0, 0, 10, 10, 4, 4), 1);
+            let px: Vec<u32> = super::super::gui::bitmap_pixels(bmp)
+                .unwrap()
+                .2
+                .iter()
+                .map(|p| p & 0x00FF_FFFF)
+                .collect();
+            assert_eq!(px[5 * 10 + 5], w, "intérieur intact");
+            assert_ne!(px[5], w, "bord haut tracé à la plume");
+            assert_eq!(px[0], w, "coin arrondi laissé tel quel");
+        }
+    }
+
+    #[test]
     fn rectangle_sans_plume_commence_au_coin_haut_gauche() {
         // #1239 : sans plume, Rectangle remplit de (left, top) à
         // (right - 1, bottom - 1) exclus ; rogner aussi le haut et la gauche

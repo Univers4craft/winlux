@@ -460,6 +460,27 @@ pub fn to_linux(w: &str) -> PathBuf {
     guard(to_linux_inner(w, true))
 }
 
+/// Programme donné à `winlux` sur la ligne de commande : un chemin Linux
+/// existant est gardé tel quel, un chemin Windows absolu
+/// (`C:\\Program Files (x86)\\Steam\\steam.exe`, `\\\\serveur\\partage\\…`)
+/// est traduit, composant par composant sans tenir compte de la casse
+/// (#1381). C'est l'utilisateur qui l'a désigné : pas de garde des dossiers
+/// personnels ici.
+pub fn launch_path(arg: &std::ffi::OsStr) -> PathBuf {
+    let p = PathBuf::from(arg);
+    if p.symlink_metadata().is_ok() {
+        return p;
+    }
+    let s = arg.to_string_lossy();
+    let drive =
+        s.len() >= 3 && drive_prefix(&s).is_some() && matches!(s.as_bytes()[2], b'\\' | b'/');
+    if drive || s.starts_with("\\\\") {
+        to_linux_inner(&s, false)
+    } else {
+        p
+    }
+}
+
 /// Dossiers personnels : l'application doit en avoir reçu l'autorisation.
 fn guard(p: PathBuf) -> PathBuf {
     if crate::permissions::path_allowed(&p) {

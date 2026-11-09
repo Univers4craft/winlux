@@ -3549,6 +3549,27 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFFE5 => gui::VK_CAPITAL,
         0xFF7F => gui::VK_NUMLOCK,
         0xFF14 => gui::VK_SCROLL,
+        // Pavé numérique (#1378) : opérateurs, Entrée, chiffres et, sans
+        // Verr. Num, touches de déplacement.
+        0xFF8D => gui::VK_RETURN,                          // KP_Enter
+        0xFFAA => 0x6A,                                    // VK_MULTIPLY
+        0xFFAB => 0x6B,                                    // VK_ADD
+        0xFFAC => 0x6C,                                    // VK_SEPARATOR
+        0xFFAD => 0x6D,                                    // VK_SUBTRACT
+        0xFFAE => 0x6E,                                    // VK_DECIMAL
+        0xFFAF => 0x6F,                                    // VK_DIVIDE
+        0xFFB0..=0xFFB9 => 0x60 + (sym - 0xFFB0) as usize, // VK_NUMPAD0..9
+        0xFF95 => 0x24,                                    // KP_Home
+        0xFF96 => 0x25,                                    // KP_Left
+        0xFF97 => 0x26,                                    // KP_Up
+        0xFF98 => 0x27,                                    // KP_Right
+        0xFF99 => 0x28,                                    // KP_Down
+        0xFF9A => 0x21,                                    // KP_Prior
+        0xFF9B => 0x22,                                    // KP_Next
+        0xFF9C => 0x23,                                    // KP_End
+        0xFF9D => 0x0C,                                    // KP_Begin / VK_CLEAR
+        0xFF9E => 0x2D,                                    // KP_Insert
+        0xFF9F => 0x2E,                                    // KP_Delete
         // ASCII imprimable : VK_A..VK_Z, chiffres et touches OEM Windows.
         0x20 => gui::VK_SPACE,
         0x21..=0x7E => {
@@ -3844,6 +3865,12 @@ mod tests {
     fn dispositions_azerty_et_altgr_preservent_raccourcis_et_texte() {
         assert_eq!(key_levels_to_vk(b'&' as u32, b'1' as u32), Some(0x31));
         assert_eq!(key_levels_to_vk(0xE9, b'2' as u32), Some(0x32));
+        // Pavé numérique : « + » donne VK_ADD, pas la touche V (#1378).
+        assert_eq!(keysym_to_vk(0xFFAB), Some(0x6B));
+        assert_eq!(keysym_to_vk(0xFFAD), Some(0x6D));
+        assert_eq!(keysym_to_vk(0xFFB7), Some(0x67));
+        assert_eq!(keysym_to_vk(0xFF8D), Some(gui::VK_RETURN));
+        assert_eq!(key_levels_to_vk(0xFF9C, 0xFFB1), Some(0x23));
         assert_eq!(key_levels_to_vk(b'a' as u32, b'A' as u32), Some(0x41));
         let french_e = [b'e' as u32, b'E' as u32, 0x20AC, 0x0100_00A2];
         assert_eq!(
