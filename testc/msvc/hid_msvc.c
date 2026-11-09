@@ -66,8 +66,12 @@ int entry() {
     HidD_GetHidGuid(hid_guid);
     // 1. Le GUID HID est bien {4D1E55B2-F16F-11CF-88CB-001111000030}.
     if (hid_guid[0] != 0xB2 || hid_guid[3] != 0x4D || hid_guid[15] != 0x30) ExitProcess(1);
-    // 2. Une autre classe : pas de liste (comme avant, pour Electron).
-    if (SetupDiGetClassDevsW(other, 0, 0, 0x12) != INVALID) ExitProcess(2);
+    // 2. Une autre classe : ensemble vide, comme sous Windows (#1370).
+    void *empty = SetupDiGetClassDevsW(other, 0, 0, 0x12);
+    if (empty == INVALID) ExitProcess(2);
+    IfaceData nothing = {sizeof nothing};
+    if (SetupDiEnumDeviceInterfaces(empty, 0, other, 0, &nothing) || GetLastError() != 259) ExitProcess(2);
+    SetupDiDestroyDeviceInfoList(empty);
     // 3. Une seule interface HID présente.
     void *set = SetupDiGetClassDevsW(hid_guid, 0, 0, 0x12); // PRESENT | DEVICEINTERFACE
     if (set == INVALID) ExitProcess(3);
