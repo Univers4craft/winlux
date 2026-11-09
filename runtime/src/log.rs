@@ -292,9 +292,20 @@ pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
     if let Some(file_mutex) = log_file() {
         if let Ok(mut f) = file_mutex.lock() {
             let ts = timestamp();
-            let _ = writeln!(f, "{} [{}] {}: {}", ts, level.as_str(), target, message);
+            let _ = writeln!(f, "{}", file_line(&ts, level, target, message));
         }
     }
+}
+
+/// Ligne de WINLUX_LOG_FILE. Programme et pid : tous les processus d'une
+/// appli (enfants GPU de Chromium, lancés sans sortie d'erreur) écrivent
+/// dans le même fichier et doivent rester distincts (#1313).
+fn file_line(ts: &str, level: Level, target: &str, message: impl std::fmt::Display) -> String {
+    format!(
+        "{ts} [{}] {} {target}: {message}",
+        level.as_str(),
+        journal_origin()
+    )
 }
 
 fn write_json_string(w: &mut impl Write, s: &str) {
@@ -368,4 +379,26 @@ macro_rules! trace {
             $crate::log::emit($crate::log::Level::Trace, "runtime", &format_args!($($arg)*));
         }
     };
+}
+
+#[cfg(test)]
+mod file_line_tests {
+    use super::*;
+
+    #[test]
+    fn journal_fichier_porte_le_programme_et_le_pid() {
+        let line = file_line(
+            "2026-11-09T10:00:00.000Z",
+            Level::Trace,
+            "runtime",
+            "chargement",
+        );
+        let pid = format!("[{}]", std::process::id());
+        assert!(
+            line.starts_with("2026-11-09T10:00:00.000Z [trace] "),
+            "{line}"
+        );
+        assert!(line.contains(&pid), "{line}");
+        assert!(line.ends_with(" runtime: chargement"), "{line}");
+    }
 }
