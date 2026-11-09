@@ -27,6 +27,76 @@ pub fn with_dll_search<T>(directories: Vec<PathBuf>, operation: impl FnOnce() ->
     operation()
 }
 
+/// Dossiers de recherche réglés par le programme (#1417) :
+/// SetDllDirectory (un seul, `Some("")` retire le dossier courant),
+/// AddDllDirectory (cookies) et SetDefaultDllDirectories.
+#[derive(Default)]
+struct UserDllSearch {
+    directory: Option<PathBuf>,
+    added: Vec<(usize, PathBuf)>,
+    next_cookie: usize,
+    default_flags: u32,
+}
+static USER_DLL_SEARCH: Mutex<Option<UserDllSearch>> = Mutex::new(None);
+
+fn user_search<T>(f: impl FnOnce(&mut UserDllSearch) -> T) -> T {
+    let mut g = USER_DLL_SEARCH.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(UserDllSearch::default))
+}
+
+/// Chemin Windows d'un dossier de recherche ; relatif = au dossier courant.
+fn search_dir(dir: &str) -> PathBuf {
+    let p = crate::paths::to_linux(dir);
+    if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p)
+    }
+}
+
+/// SetDllDirectory : `None` rétablit l'ordre par défaut.
+pub fn set_dll_directory(dir: Option<&str>) {
+    let d = dir.map(|d| {
+        if d.is_empty() {
+            PathBuf::new()
+        } else {
+            search_dir(d)
+        }
+    });
+    user_search(|u| u.directory = d);
+}
+
+/// AddDllDirectory : chemin absolu exigé ; rend le cookie (0 = refus).
+pub fn add_dll_directory(dir: &str) -> usize {
+    let p = crate::paths::to_linux(dir);
+    if !p.is_absolute() {
+        return 0;
+    }
+    user_search(|u| {
+        u.next_cookie += 1;
+        let c = 0x1000 + u.next_cookie;
+        u.added.push((c, p));
+        c
+    })
+}
+
+pub fn remove_dll_directory(cookie: usize) -> bool {
+    user_search(|u| {
+        let n = u.added.len();
+        u.added.retain(|(c, _)| *c != cookie);
+        u.added.len() != n
+    })
+}
+
+pub fn set_default_dll_directories(flags: u32) {
+    user_search(|u| u.default_flags = flags);
+}
+
+/// Dossiers d'AddDllDirectory (LOAD_LIBRARY_SEARCH_USER_DIRS).
+pub fn user_dll_directories() -> Vec<PathBuf> {
+    user_search(|u| u.added.iter().map(|(_, p)| p.clone()).collect())
+}
+
 const PAGE: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -997,11 +1067,30 @@ pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
                 dirs.push(d);
             }
         }
+        // SetDllDirectory : son dossier vient juste après celui de
+        // l'appli et retire le dossier courant de la recherche (Xonotic
+        // range zlib1.dll et ses autres DLL dans bin64\). Avec
+        // SetDefaultDllDirectories(USER_DIRS ou DEFAULT_DIRS), les dossiers
+        // d'AddDllDirectory sont cherchés eux aussi.
+        let (directory, user_dirs) = user_search(|u| {
+            let user = if u.default_flags & (0x400 | 0x1000) != 0 {
+                u.added.iter().map(|(_, p)| p.clone()).collect()
+            } else {
+                Vec::new()
+            };
+            (u.directory.clone(), user)
+        });
+        if let Some(d) = directory.as_ref().filter(|d| !d.as_os_str().is_empty()) {
+            dirs.push(d.clone());
+        }
+        dirs.extend(user_dirs);
         // Ordre de Windows : dossier de l'appli, puis System32 (où les
         // installeurs déposent les redistribuables), puis le dossier courant.
         dirs.push(system32_dir());
-        if let Ok(c) = std::env::current_dir() {
-            dirs.push(c);
+        if directory.is_none() {
+            if let Ok(c) = std::env::current_dir() {
+                dirs.push(c);
+            }
         }
         if let Some(path) = std::env::var_os("PATH") {
             dirs.extend(std::env::split_paths(&path));
@@ -1379,6 +1468,46 @@ pub fn mark_initialized(base: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1417 : SetDllDirectory("bin64") puis LoadLibrary("zlib1.dll") :
+    /// la DLL rangée dans ce dossier est trouvée, et plus après le retour à
+    /// l'ordre par défaut. AddDllDirectory ne compte qu'avec
+    /// SetDefaultDllDirectories(USER_DIRS).
+    #[test]
+    fn set_dll_directory_and_user_dirs_are_searched() {
+        let base = std::env::temp_dir().join(format!("winlux-dlldir-{}", std::process::id()));
+        let sub = base.join("bin64");
+        let other = base.join("plugins");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(sub.join("ZLIB1.dll"), b"MZ").unwrap();
+        std::fs::write(other.join("plug.dll"), b"MZ").unwrap();
+        let importer = base.join("xonotic.exe");
+        let win = |p: &Path| format!("Z:{}", p.display()).replace('/', "\\");
+        assert_eq!(find_dll_file("zlib1.dll", &importer), None);
+        set_dll_directory(Some(&win(&sub)));
+        assert_eq!(
+            find_dll_file("zlib1.dll", &importer),
+            Some(sub.join("ZLIB1.dll"))
+        );
+        set_dll_directory(None);
+        assert_eq!(find_dll_file("zlib1.dll", &importer), None);
+
+        let cookie = add_dll_directory(&win(&other));
+        assert_ne!(cookie, 0);
+        assert_eq!(add_dll_directory("relatif\\dossier"), 0);
+        assert_eq!(find_dll_file("plug", &importer), None);
+        set_default_dll_directories(0x1000);
+        assert_eq!(
+            find_dll_file("plug", &importer),
+            Some(other.join("plug.dll"))
+        );
+        assert!(remove_dll_directory(cookie));
+        assert!(!remove_dll_directory(cookie));
+        assert_eq!(find_dll_file("plug", &importer), None);
+        set_default_dll_directories(0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// #997 : le fichier PE est projeté, pas copié, et une grande section
     /// alignée est projetée depuis le disque en copie privée.

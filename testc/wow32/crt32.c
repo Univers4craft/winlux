@@ -138,5 +138,35 @@ int main(int argc, char **argv) {
         CHECK(33, sh && ws && GetProcAddress(sh, MAKEINTRESOURCEA(680))
                   && GetProcAddress(ws, MAKEINTRESOURCEA(1142)));
     }
+    {
+        /* python312.dll x86 (#1407) : __timezone et __tzname rendent des
+         * pointeurs lisibles, fonctions mathématiques C99 et _wstat64i32. */
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        long *(*tz)(void) = (long *(*)(void))GetProcAddress(u, "__timezone");
+        char **(*tzn)(void) = (char **(*)(void))GetProcAddress(u, "__tzname");
+        CHECK(34, tz && tzn && tz() && *tz() >= -50400 && *tz() <= 50400
+                  && tzn() && tzn()[0] && strlen(tzn()[0]) < 64);
+        double (*acosh_)(double) = (double (*)(double))GetProcAddress(u, "acosh");
+        double (*cbrt_)(double) = (double (*)(double))GetProcAddress(u, "cbrt");
+        double (*round_)(double) = (double (*)(double))GetProcAddress(u, "round");
+        double (*log2_)(double) = (double (*)(double))GetProcAddress(u, "log2");
+        double (*copysign_)(double, double) = (double (*)(double, double))GetProcAddress(u, "copysign");
+        CHECK(35, acosh_ && cbrt_ && round_ && log2_ && copysign_
+                  && acosh_(1.0) == 0.0 && cbrt_(27.0) == 3.0 && round_(2.5) == 3.0
+                  && log2_(8.0) == 3.0 && copysign_(2.0, -1.0) == -2.0);
+        int (*wstat_)(const wchar_t *, void *) = (int (*)(const wchar_t *, void *))GetProcAddress(u, "_wstat64i32");
+        unsigned char st[48];
+        memset(st, 0, sizeof st);
+        CHECK(36, wstat_ && wstat_(L"C:\\", st) == 0 && (*(unsigned short *)(st + 6) & 0x4000));
+    }
+    {
+        /* 7-Zip (#1413) : FORMAT_MESSAGE_ALLOCATE_BUFFER écrit un pointeur
+         * de 4 octets, sans toucher au mot suivant. */
+        struct { wchar_t *p; DWORD garde; } b = { NULL, 0xA5A5A5A5u };
+        DWORD n = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+                                 | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 5, 0, (LPWSTR)&b.p, 0, NULL);
+        CHECK(37, n > 0 && b.p && b.garde == 0xA5A5A5A5u && wcslen(b.p) == n);
+        LocalFree(b.p);
+    }
     return fails;
 }

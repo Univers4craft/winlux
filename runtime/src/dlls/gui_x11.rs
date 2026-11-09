@@ -3744,6 +3744,34 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
     }
 }
 
+/// Logo Winlux en 16, 32 et 48 px au format _NET_WM_ICON (largeur, hauteur,
+/// puis pixels ARGB), décodé une fois.
+pub(crate) fn winlux_window_icon() -> &'static [u32] {
+    static ICON: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let mut out = Vec::new();
+        for png in [
+            &include_bytes!("../../../assets/brand/winlux-logo-16.png")[..],
+            &include_bytes!("../../../assets/brand/winlux-logo-32.png")[..],
+            &include_bytes!("../../../assets/brand/winlux-logo-48.png")[..],
+        ] {
+            let Some(image) = super::icons::decode_png_bytes(png) else {
+                continue;
+            };
+            out.push(image.w as u32);
+            out.push(image.h as u32);
+            // Image : 0xAABBGGRR ; _NET_WM_ICON : 0xAARRGGBB.
+            out.extend(
+                image
+                    .px
+                    .iter()
+                    .map(|&p| (p & 0xFF00_FF00) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF)),
+            );
+        }
+        out
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -3754,6 +3782,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn icone_winlux_publiee_en_trois_tailles() {
+        // #1425 : _NET_WM_ICON = largeur, hauteur, pixels ARGB, 16/32/48 px.
+        let icon = super::winlux_window_icon();
+        let mut at = 0;
+        let mut sizes = Vec::new();
+        while at + 2 <= icon.len() {
+            let (w, h) = (icon[at] as usize, icon[at + 1] as usize);
+            sizes.push((w, h));
+            at += 2 + w * h;
+        }
+        assert_eq!(sizes, [(16, 16), (32, 32), (48, 48)]);
+        assert_eq!(at, icon.len());
+        // Le logo a des pixels opaques et transparents (fond non rempli).
+        let pixels = &icon[2 + 16 * 16 + 2..2 + 16 * 16 + 2 + 32 * 32];
+        assert!(pixels.iter().any(|p| p >> 24 == 0xFF));
+        assert!(pixels.iter().any(|p| p >> 24 == 0));
+    }
 
     #[test]
     fn altgr_est_ctrl_gauche_plus_alt_droit() {
@@ -4878,6 +4925,21 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::STRING,
             class.as_bytes(),
         );
+        // Icône de la fenêtre hors de la session Winlux (#1425) : sous KDE ou
+        // un XFCE ordinaire, personne ne publie _NET_WM_ICON et la barre des
+        // tâches montrait l'icône X11 par défaut. La session Winlux publie
+        // elle-même l'icône extraite du programme (winlux-applications).
+        if std::env::var("XDG_SESSION_DESKTOP").as_deref() != Ok("winlux") {
+            if let Some(icon) = atom(b"_NET_WM_ICON") {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    win,
+                    icon,
+                    AtomEnum::CARDINAL,
+                    winlux_window_icon(),
+                );
+            }
+        }
         if title == "Winlux Desktop" && std::env::var_os("WINLUX_NATIVE_SHELL").is_some() {
             if let (Some(kind), Some(desktop)) = (
                 atom(b"_NET_WM_WINDOW_TYPE"),
@@ -5595,6 +5657,16 @@ impl gui::GuiBackend for X11Backend {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
                 ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn stack_below(&mut self, hwnd: usize, sibling: usize) {
+        if let (Some(w), Some(s)) = (self.windows.get(&hwnd), self.windows.get(&sibling)) {
+            let aux = ConfigureWindowAux::new()
+                .sibling(Self::top_xwin(s))
+                .stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
             let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }

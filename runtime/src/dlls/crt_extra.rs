@@ -1130,24 +1130,75 @@ unsafe fn stat_fd(fd: i32, out: *mut u8, size64: bool, time64: bool) -> i32 {
     store_stat(out, &stat_of(&st), size64, time64);
     0
 }
-macro_rules! stat_variants {
-    ($($n:ident, $w:ident, $f:ident: $s64:expr, $t64:expr;)*) => {$(
-        unsafe extern "win64" fn $n(p: *const u8, out: *mut u8) -> i32 {
-            if p.is_null() { *errno() = 22; return -1; }
-            stat_path(&crate::dlls::cstr(p), out, $s64, $t64)
-        }
-        unsafe extern "win64" fn $w(p: *const u16, out: *mut u8) -> i32 {
-            if p.is_null() { *errno() = 22; return -1; }
-            stat_path(&crate::dlls::wstr(p), out, $s64, $t64)
-        }
-        unsafe extern "win64" fn $f(fd: i32, out: *mut u8) -> i32 { stat_fd(fd, out, $s64, $t64) }
-    )*};
+// Écrites une à une (et non par macro) : wow32 lit leur signature dans
+// le source pour les servir aux programmes x86 (#1407).
+unsafe extern "win64" fn stat64(p: *const u8, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::cstr(p), out, true, true)
 }
-stat_variants! {
-    stat64, wstat64, fstat64: true, true;
-    stat64i32, wstat64i32, fstat64i32: false, true;
-    stat32i64, wstat32i64, fstat32i64: true, false;
-    stat32, wstat32, fstat32: false, false;
+unsafe extern "win64" fn wstat64(p: *const u16, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::wstr(p), out, true, true)
+}
+unsafe extern "win64" fn fstat64(fd: i32, out: *mut u8) -> i32 {
+    stat_fd(fd, out, true, true)
+}
+unsafe extern "win64" fn stat64i32(p: *const u8, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::cstr(p), out, false, true)
+}
+unsafe extern "win64" fn wstat64i32(p: *const u16, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::wstr(p), out, false, true)
+}
+unsafe extern "win64" fn fstat64i32(fd: i32, out: *mut u8) -> i32 {
+    stat_fd(fd, out, false, true)
+}
+unsafe extern "win64" fn stat32i64(p: *const u8, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::cstr(p), out, true, false)
+}
+unsafe extern "win64" fn wstat32i64(p: *const u16, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::wstr(p), out, true, false)
+}
+unsafe extern "win64" fn fstat32i64(fd: i32, out: *mut u8) -> i32 {
+    stat_fd(fd, out, true, false)
+}
+unsafe extern "win64" fn stat32(p: *const u8, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::cstr(p), out, false, false)
+}
+unsafe extern "win64" fn wstat32(p: *const u16, out: *mut u8) -> i32 {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    stat_path(&crate::dlls::wstr(p), out, false, false)
+}
+unsafe extern "win64" fn fstat32(fd: i32, out: *mut u8) -> i32 {
+    stat_fd(fd, out, false, false)
 }
 
 unsafe fn ok_or_errno(r: std::io::Result<()>) -> i32 {

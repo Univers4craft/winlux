@@ -3755,7 +3755,7 @@ mod tests {
         assert_eq!((r, rn), (buf.as_ptr() as usize + 36, 16));
         let e = exports();
         assert_eq!(e.get("#1142"), e.get("GetAcceptExSockaddrs"));
-        assert!(e.get("#1142").is_some());
+        assert!(e.contains_key("#1142"));
     }
 
     #[test]
@@ -3819,6 +3819,71 @@ mod tests {
     }
     fn cleanup() {
         wsa_cleanup();
+    }
+
+    #[test]
+    fn accept_ex_par_wsaioctl_range_la_connexion_et_les_adresses() {
+        // #1408 : Steam demande AcceptEx et ses voisines à WSAIoctl.
+        let _g = init();
+        unsafe {
+            let l = socket(2, 1, 6);
+            let mut a = [0u8; 16];
+            a[0] = 2;
+            a[4..8].copy_from_slice(&[127, 0, 0, 1]);
+            assert_eq!(bind(l, a.as_ptr(), 16), 0);
+            assert_eq!(listen(l, 4), 0);
+            let mut alen = 16i32;
+            assert_eq!(get_socket_name(l, a.as_mut_ptr(), &mut alen), 0);
+            let mut f = 0usize;
+            let mut got = 0u32;
+            let guid: [u8; 16] = [
+                0xF1, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48,
+                0xA1, 0x92,
+            ];
+            assert_eq!(
+                overlapped::extension_function(
+                    guid.as_ptr(),
+                    16,
+                    &mut f as *mut usize as *mut u8,
+                    8,
+                    &mut got
+                ),
+                0
+            );
+            assert_eq!((f, got), (overlapped::accept_ex as *const () as usize, 8));
+            let c = socket(2, 1, 6);
+            assert_eq!(connect(c, a.as_ptr(), 16), 0);
+            let inc = socket(2, 1, 6);
+            let mut buf = [0u8; 64];
+            let mut n = 7u32;
+            assert_eq!(
+                overlapped::accept_ex(l, inc, buf.as_mut_ptr(), 0, 32, 32, &mut n, 0),
+                1
+            );
+            assert_eq!(n, 0);
+            let (mut lp, mut rp) = (0usize, 0usize);
+            let (mut ll, mut rl) = (0i32, 0i32);
+            get_accept_ex_sockaddrs(
+                buf.as_ptr(),
+                0,
+                32,
+                32,
+                &mut lp as *mut usize as usize,
+                &mut ll,
+                &mut rp as *mut usize as usize,
+                &mut rl,
+            );
+            assert_eq!((ll, rl), (16, 16));
+            let local = std::slice::from_raw_parts(lp as *const u8, 16);
+            assert_eq!(&local[2..4], &a[2..4]);
+            assert_eq!(send(c, b"ok".as_ptr(), 2, 0), 2);
+            let mut r = [0u8; 2];
+            assert_eq!(recv(inc, r.as_mut_ptr(), 2, 0), 2);
+            assert_eq!(&r, b"ok");
+            for s in [c, inc, l] {
+                closesocket(s);
+            }
+        }
     }
 
     #[test]

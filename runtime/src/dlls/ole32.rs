@@ -877,6 +877,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Bouton de la barre des tâches : progression, icône superposée (#1434).
+        if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Annotations d'accessibilité (AccPropServices, VCL, #1114).
         if let Some(hr) = super::oleacc_props::create_builtin(&guid, &iid, out) {
             return hr;

@@ -1279,6 +1279,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
         if self.page == 2: self.refresh_network_hero(status)
+        # Écran branché ou débranché pendant que la page Écran est ouverte :
+        # elle suit la configuration réelle sans rechargement (#1442).
+        if (self.page == 8 and self.process is None and status.get("display_count")
+                and EXTRA.display_signature(status) != EXTRA.display_signature(getattr(self, "status", {}) or {})):
+            GLib.idle_add(lambda: (self.select(self.nav, self.nav.get_selected_row()), False)[1])
         if self.process is not None and self.process.poll() is not None:
             result = self.process.returncode
             action = self.active_action

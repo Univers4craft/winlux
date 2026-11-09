@@ -1314,6 +1314,14 @@ pub unsafe extern "win64" fn set_window_pos(
         }
     }
 
+    // Ordre des enfants : HWND_TOP passe devant les voisins, HWND_BOTTOM
+    // derrière, une HWND sœur place juste derrière elle. Le champ « Page »
+    // de Sumatra, créé après son cadre, se remet ainsi devant lui (#1377).
+    // Les fenêtres de premier niveau restent au gestionnaire de fenêtres.
+    if flags & SWP_NOZORDER == 0 {
+        restack_child(hwnd, _insert_after);
+    }
+
     let mut visibility_changed = false;
     if flags & SWP_SHOWWINDOW != 0 {
         visibility_changed = !gui::set_visible(hwnd, true);
@@ -1362,6 +1370,23 @@ pub unsafe extern "win64" fn set_window_pos(
         }
     }
     1
+}
+
+/// Applique l'ordre demandé à SetWindowPos pour une fenêtre enfant.
+fn restack_child(hwnd: usize, insert_after: usize) {
+    let parent = gui::window_parent(hwnd).unwrap_or(0);
+    if parent == 0 || gui::window_style(hwnd).is_none_or(|s| s & WS_CHILD == 0) {
+        return;
+    }
+    let backdrop = super::controls::is_backdrop(hwnd);
+    match insert_after {
+        0 if !backdrop => with_backend(|b| b.raise_window(hwnd)), // HWND_TOP
+        1 => with_backend(|b| b.lower_window(hwnd)),              // HWND_BOTTOM
+        s if s != hwnd && !backdrop && gui::window_parent(s) == Some(parent) => {
+            with_backend(|b| b.stack_below(hwnd, s))
+        }
+        _ => {}
+    }
 }
 
 const WM_WINDOWPOSCHANGING: u32 = 0x0046;
