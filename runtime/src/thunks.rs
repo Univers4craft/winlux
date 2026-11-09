@@ -345,6 +345,163 @@ pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
     t
 }
 
+/// Fragments de `WINLUX_COMTRACE` (vide : toutes les tables), ou `None`
+/// quand la trace des méthodes COM est éteinte.
+fn com_trace_filter() -> Option<&'static [String]> {
+    static F: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| {
+        let raw = std::env::var("WINLUX_COMTRACE").ok()?;
+        if raw.is_empty() || raw == "0" {
+            return None;
+        }
+        Some(
+            raw.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty() && s != "1")
+                .collect(),
+        )
+    })
+    .as_deref()
+}
+
+/// Méthode COM tracée : sa table et sa case.
+struct ComTraced {
+    label: String,
+    slot: usize,
+}
+
+/// Appels COM tracés depuis le démarrage (pour les tests).
+static COM_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Journal d'une méthode COM tracée, après son retour : table et case,
+/// `this` et les trois arguments suivants, valeur rendue (HRESULT dans
+/// eax), appelant. Pour QueryInterface (case 0), l'IID demandé.
+extern "win64" fn com_traced(
+    info: *const ComTraced,
+    ret: usize,
+    args: *const usize,
+    caller: usize,
+) {
+    COM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let info = unsafe { &*info };
+    let a = unsafe { std::slice::from_raw_parts(args, 4) };
+    let mut extra = String::new();
+    if info.slot == 0 && a[1] != 0 {
+        let g = unsafe { std::ptr::read_unaligned(a[1] as *const [u8; 16]) };
+        let d1 = u32::from_le_bytes([g[0], g[1], g[2], g[3]]);
+        let d2 = u16::from_le_bytes([g[4], g[5]]);
+        let d3 = u16::from_le_bytes([g[6], g[7]]);
+        extra = format!(
+            " iid={d1:08x}-{d2:04x}-{d3:04x}-{:02x}{:02x}-{}",
+            g[8],
+            g[9],
+            g[10..]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+    }
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    let site = describe_site(caller);
+    let line = format!(
+        "winlux[com] {tid} {}#{} this={:#x} ({:#x}, {:#x}, {:#x}){extra} = {:#x} (eax {:#010x}) <- {site}",
+        info.label, info.slot, a[0], a[1], a[2], a[3], ret, ret as u32
+    );
+    #[cfg(test)]
+    {
+        *COM_LAST.lock().unwrap_or_else(|e| e.into_inner()) = line;
+    }
+    #[cfg(not(test))]
+    api_log(&line);
+}
+
+#[cfg(test)]
+static COM_LAST: Mutex<String> = Mutex::new(String::new());
+
+/// Pont qui appelle `target` (jusqu'à 20 arguments win64, xmm0 rendu
+/// intact) puis journalise l'appel par [`com_traced`].
+fn com_trace_thunk(info: *const ComTraced, target: usize) -> usize {
+    let mut c: Vec<u8> = Vec::with_capacity(320);
+    // push rbp; mov rbp, rsp; sub rsp, 0xE0
+    c.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x81, 0xEC, 0xE0, 0, 0, 0]);
+    // Arguments 5 à 20 recopiés : mov rax, [rbp+0x30+8i]; mov [rsp+0x20+8i], rax
+    for i in 0..16u32 {
+        c.extend_from_slice(&[0x48, 0x8B, 0x85]);
+        c.extend_from_slice(&(0x30 + 8 * i).to_le_bytes());
+        c.extend_from_slice(&[0x48, 0x89, 0x84, 0x24]);
+        c.extend_from_slice(&(0x20 + 8 * i).to_le_bytes());
+    }
+    // mov [rsp+0xA0..0xB8], rcx/rdx/r8/r9
+    c.extend_from_slice(&[0x48, 0x89, 0x8C, 0x24, 0xA0, 0, 0, 0]);
+    c.extend_from_slice(&[0x48, 0x89, 0x94, 0x24, 0xA8, 0, 0, 0]);
+    c.extend_from_slice(&[0x4C, 0x89, 0x84, 0x24, 0xB0, 0, 0, 0]);
+    c.extend_from_slice(&[0x4C, 0x89, 0x8C, 0x24, 0xB8, 0, 0, 0]);
+    // mov rax, target; call rax
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(target as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]);
+    // mov [rsp+0xC0], rax; movdqu [rsp+0xD0], xmm0
+    c.extend_from_slice(&[0x48, 0x89, 0x84, 0x24, 0xC0, 0, 0, 0]);
+    c.extend_from_slice(&[0xF3, 0x0F, 0x7F, 0x84, 0x24, 0xD0, 0, 0, 0]);
+    // mov rcx, info; mov rdx, rax; lea r8, [rsp+0xA0]; mov r9, [rbp+8]
+    c.extend_from_slice(&[0x48, 0xB9]);
+    c.extend_from_slice(&(info as u64).to_le_bytes());
+    c.extend_from_slice(&[0x48, 0x89, 0xC2]);
+    c.extend_from_slice(&[0x4C, 0x8D, 0x84, 0x24, 0xA0, 0, 0, 0]);
+    c.extend_from_slice(&[0x4C, 0x8B, 0x4D, 0x08]);
+    // mov rax, com_traced; call rax
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(com_traced as *const () as usize as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]);
+    // mov rax, [rsp+0xC0]; movdqu xmm0, [rsp+0xD0]; mov rsp, rbp; pop rbp; ret
+    c.extend_from_slice(&[0x48, 0x8B, 0x84, 0x24, 0xC0, 0, 0, 0]);
+    c.extend_from_slice(&[0xF3, 0x0F, 0x6F, 0x84, 0x24, 0xD0, 0, 0, 0]);
+    c.extend_from_slice(&[0x48, 0x89, 0xEC, 0x5D, 0xC3]);
+    alloc_code(&c)
+}
+
+/// Copie tracée d'une table de méthodes COM win64 (`label` : nom de sa
+/// structure) quand `WINLUX_COMTRACE` la vise, sinon `None`. Chaque case
+/// sauf AddRef et Release devient un pont qui journalise l'appel dans le
+/// journal d'API du processus (voir [`api_log_dir`]). Diagnostic de #996 :
+/// voir quelle méthode DXGI ou Direct3D 11 rend une valeur refusée.
+pub fn com_trace_table<T>(t: &'static T, module: &str, label: &str) -> Option<*const T> {
+    let filter = com_trace_filter()?;
+    let full = format!("{module}::{label}").to_ascii_lowercase();
+    if !filter.is_empty() && !filter.iter().any(|f| full.contains(f.as_str())) {
+        return None;
+    }
+    Some(com_trace_table_for(t, label) as *const T)
+}
+
+fn com_trace_table_for<T>(t: &'static T, label: &str) -> usize {
+    static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    let key = t as *const T as usize;
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, v)) = cache.iter().find(|(k, _)| *k == key) {
+        return v;
+    }
+    let n = std::mem::size_of::<T>() / 8;
+    let fns = unsafe { std::slice::from_raw_parts(key as *const usize, n) };
+    let table: Vec<usize> = fns
+        .iter()
+        .enumerate()
+        .map(|(slot, &f)| {
+            if slot == 1 || slot == 2 || f == 0 {
+                return f;
+            }
+            let info = Box::into_raw(Box::new(ComTraced {
+                label: label.to_string(),
+                slot,
+            }));
+            com_trace_thunk(info, f)
+        })
+        .collect();
+    let v = Box::leak(table.into_boxed_slice()).as_ptr() as usize;
+    cache.push((key, v));
+    v
+}
+
 /// Vrai si `addr` est dans une projection exécutable du processus
 /// (d'après /proc/self/maps, relu quand l'adresse n'est pas connue).
 fn is_executable(addr: usize) -> bool {
@@ -521,5 +678,73 @@ mod tests {
         assert!(dir.join("b.log").exists() && dir.join("c.log").exists());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!api_log_dir().unwrap().starts_with("/tmp"));
+    }
+
+    /// Table d'essai : QueryInterface, AddRef, Release, une méthode à six
+    /// arguments et une méthode qui rend un flottant.
+    #[repr(C)]
+    struct EssaiVt {
+        qi: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> i32,
+        add_ref: unsafe extern "win64" fn(usize) -> u32,
+        release: unsafe extern "win64" fn(usize) -> u32,
+        somme: unsafe extern "win64" fn(usize, u64, u64, u64, u64, u64) -> u64,
+        flottant: unsafe extern "win64" fn(usize, f32) -> f32,
+    }
+    unsafe extern "win64" fn e_qi(_: usize, _: *const u8, out: *mut usize) -> i32 {
+        *out = 0;
+        0x8000_4002u32 as i32
+    }
+    unsafe extern "win64" fn e_one(_: usize) -> u32 {
+        1
+    }
+    unsafe extern "win64" fn e_somme(this: usize, a: u64, b: u64, c: u64, d: u64, e: u64) -> u64 {
+        this as u64 + a + 10 * b + 100 * c + 1000 * d + 10000 * e
+    }
+    unsafe extern "win64" fn e_flottant(_: usize, x: f32) -> f32 {
+        x * 2.0
+    }
+    static ESSAI_VT: EssaiVt = EssaiVt {
+        qi: e_qi,
+        add_ref: e_one,
+        release: e_one,
+        somme: e_somme,
+        flottant: e_flottant,
+    };
+
+    #[test]
+    fn trace_com_rend_les_valeurs_et_journalise() {
+        let t = com_trace_table_for(&ESSAI_VT, "EssaiVt") as *const EssaiVt;
+        assert_ne!(t, &ESSAI_VT as *const EssaiVt);
+        // Même table rendue au second appel.
+        assert_eq!(
+            com_trace_table_for(&ESSAI_VT, "EssaiVt") as *const EssaiVt,
+            t
+        );
+        unsafe {
+            let vt = &*t;
+            // AddRef et Release gardent la fonction d'origine.
+            assert_eq!(vt.add_ref as usize, e_one as usize);
+            let avant = COM_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(
+                (vt.somme)(7, 1, 2, 3, 4, 5),
+                7 + 1 + 20 + 300 + 4000 + 50000
+            );
+            assert_eq!((vt.flottant)(0, 1.5), 3.0);
+            let iid = [
+                0xf7, 0x45, 0x0a, 0x79, 0x42, 0x0d, 0x76, 0x48, 0x98, 0x3a, 0x0a, 0x55, 0xcf, 0xe6,
+                0xf4, 0xaa,
+            ];
+            let mut out = 1usize;
+            assert_eq!((vt.qi)(9, iid.as_ptr(), &mut out), 0x8000_4002u32 as i32);
+            assert_eq!(out, 0);
+            assert!(COM_CALLS.load(std::sync::atomic::Ordering::Relaxed) >= avant + 3);
+        }
+        let last = COM_LAST.lock().unwrap().clone();
+        assert!(last.contains("EssaiVt#0 this=0x9"), "{last}");
+        assert!(
+            last.contains("iid=790a45f7-0d42-4876-983a-0a55cfe6f4aa"),
+            "{last}"
+        );
+        assert!(last.contains("eax 0x80004002"), "{last}");
     }
 }

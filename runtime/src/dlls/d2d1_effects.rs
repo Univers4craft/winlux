@@ -424,12 +424,6 @@ pub(super) unsafe fn instantiate(reg: Arc<Registration>, effect: *mut EffectObj)
         pending: Mutex::new(1),
     };
     let _ = e.custom.set(custom);
-    // Valeurs par défaut des propriétés liées, passées par leur fonction.
-    for (i, p) in reg.props.iter().enumerate() {
-        if p.set != 0 && !p.default.is_empty() {
-            set_value(e, i as u32, &p.default);
-        }
-    }
     let init =
         method::<unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) -> i32>(imp, 3);
     let hr = init(imp, context.cast(), graph.cast());
@@ -439,6 +433,24 @@ pub(super) unsafe fn instantiate(reg: Arc<Registration>, effect: *mut EffectObj)
             "effet personnalisé : Initialize a échoué ({:#x})",
             hr
         );
+        return hr;
+    }
+    // Valeurs par défaut des propriétés liées, passées par leur fonction
+    // une fois l'effet initialisé : Paint.NET ne relie son objet .NET qu'à
+    // Initialize et son setter lève NullReferenceException avant (#1268).
+    for (i, p) in reg.props.iter().enumerate() {
+        if p.set != 0 && !p.default.is_empty() {
+            if let Some(h) = set_value(e, i as u32, &p.default) {
+                if h < 0 {
+                    crate::log_warn!(
+                        "d2d1",
+                        "effet personnalisé : valeur par défaut de « {} » refusée ({:#x})",
+                        p.name,
+                        h
+                    );
+                }
+            }
+        }
     }
     hr
 }
@@ -1627,6 +1639,125 @@ mod tests {
             assert_eq!(*crate::dlls::lock(&essai::INIT_HR), Some(S_OK));
             assert_eq!(hr, S_OK);
             assert!(!e.is_null());
+            com_release(e);
+            Com::release(f);
+        }
+    }
+
+    /// Effet d'essai dont le setter exige qu'Initialize ait déjà eu lieu,
+    /// comme l'effet personnalisé .NET de Paint.NET (#1268).
+    mod ordre {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        pub static INIT: AtomicBool = AtomicBool::new(false);
+        pub static AVANT_INIT: AtomicU32 = AtomicU32::new(0);
+        pub static VALEUR: AtomicU32 = AtomicU32::new(0);
+        #[repr(C)]
+        pub struct Imp {
+            vt: *const (),
+        }
+        unsafe extern "win64" fn qi(
+            this: *mut Imp,
+            riid: *const Guid,
+            out: *mut *mut c_void,
+        ) -> i32 {
+            if *riid == IID_EFFECT_IMPL || *riid == crate::dlls::d2d1::IID_IUNKNOWN {
+                *out = this.cast();
+                return S_OK;
+            }
+            *out = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+        unsafe extern "win64" fn one(_: *mut Imp) -> u32 {
+            1
+        }
+        unsafe extern "win64" fn init(_: *mut Imp, _: *mut c_void, _: *mut c_void) -> i32 {
+            INIT.store(true, Ordering::SeqCst);
+            S_OK
+        }
+        unsafe extern "win64" fn ok(_: *mut Imp, _: usize) -> i32 {
+            S_OK
+        }
+        pub unsafe extern "win64" fn set(_: *mut c_void, data: *const u8, n: u32) -> i32 {
+            if !INIT.load(Ordering::SeqCst) {
+                AVANT_INIT.fetch_add(1, Ordering::SeqCst);
+                return E_FAIL;
+            }
+            if n == 4 {
+                VALEUR.store(
+                    u32::from_le_bytes(*data.cast::<[u8; 4]>()),
+                    Ordering::SeqCst,
+                );
+            }
+            S_OK
+        }
+        pub unsafe extern "win64" fn get(_: *mut c_void, _: *mut u8, _: u32, n: *mut u32) -> i32 {
+            if !n.is_null() {
+                *n = 4;
+            }
+            S_OK
+        }
+        static VT: VTable<6> = VTable([
+            qi as *const (),
+            one as *const (),
+            one as *const (),
+            init as *const (),
+            ok as *const (),
+            ok as *const (),
+        ]);
+        static mut IMP: Imp = Imp {
+            vt: std::ptr::null(),
+        };
+        pub unsafe extern "win64" fn create(out: *mut *mut c_void) -> i32 {
+            let p = std::ptr::addr_of_mut!(IMP);
+            (*p).vt = VT.ptr();
+            *out = p.cast();
+            S_OK
+        }
+    }
+
+    #[test]
+    fn valeurs_par_defaut_posees_apres_initialize() {
+        use std::sync::atomic::Ordering;
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1268_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Damier'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs/>\
+                <Property name='Taille' type='uint32' value='8'/>\
+                </Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            let nom: Vec<u16> = "Taille".encode_utf16().chain([0]).collect();
+            let liaisons = [
+                nom.as_ptr() as usize,
+                ordre::set as *const () as usize,
+                ordre::get as *const () as usize,
+            ];
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    liaisons.as_ptr().cast(),
+                    1,
+                    ordre::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            let hr = super::super::create_effect(f, &id, &mut e);
+            assert_eq!(hr, S_OK);
+            assert_eq!(ordre::AVANT_INIT.load(Ordering::SeqCst), 0);
+            assert_eq!(ordre::VALEUR.load(Ordering::SeqCst), 8);
             com_release(e);
             Com::release(f);
         }
