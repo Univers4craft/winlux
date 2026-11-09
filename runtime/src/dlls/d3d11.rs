@@ -302,7 +302,11 @@ impl Texture2D {
         }
         prev - 1
     }
-    unsafe extern "win64" fn get_device(_this: *mut Self, _out: *mut *mut c_void) {}
+    /// Appareil parent, AddRef compris : Chromium le vérifie juste après
+    /// CreateTexture2D et tombait sur son int3 avec une case vide (#1290).
+    unsafe extern "win64" fn get_device(_this: *mut Self, out: *mut *mut c_void) {
+        child_get_device(std::ptr::null_mut(), out)
+    }
     unsafe extern "win64" fn get_priv(
         this: *mut Self,
         g: *const Guid,
@@ -681,7 +685,9 @@ impl Buffer {
         }
         prev - 1
     }
-    unsafe extern "win64" fn get_device(_: *mut Self, _: *mut *mut c_void) {}
+    unsafe extern "win64" fn get_device(_: *mut Self, out: *mut *mut c_void) {
+        child_get_device(std::ptr::null_mut(), out)
+    }
     unsafe extern "win64" fn get_priv(
         this: *mut Self,
         g: *const Guid,
@@ -4528,6 +4534,47 @@ mod vtable_tests {
             5 * 8
         );
         assert_eq!(core::mem::size_of::<SimpleComVTable>(), 9 * 8);
+    }
+
+    #[test]
+    fn texture_et_tampon_rendent_leur_appareil() {
+        use super::*;
+        unsafe {
+            // Appareil factice (sans contexte OpenGL) pris comme parent.
+            let dev = Box::into_raw(Box::new(Device {
+                vtable: device_vt(),
+                ref_count: AtomicU32::new(1),
+                context: std::ptr::null_mut(),
+                feature_level: D3D_FEATURE_LEVEL_11_0,
+                flags: 0,
+                dxgi: DxgiDevice {
+                    vtable: dxgi_device_vt(),
+                    owner: std::ptr::null_mut(),
+                    frame_latency: AtomicU32::new(3),
+                },
+                multithread: ext::Multithread::new(),
+            }));
+            LAST_DEVICE.store(dev, Ordering::Release);
+            let tex = create_backbuffer_texture(0, 4, 4);
+            // Chromium lit la case sans l'initialiser (#1290).
+            let mut out = 0xaaaa_aaaa_aaaa_aaaau64 as usize as *mut c_void;
+            Texture2D::get_device(tex, &mut out);
+            assert_ne!(out as usize, 0xaaaa_aaaa_aaaa_aaaa);
+            let mut out_buf = 0xaaaa_aaaa_aaaa_aaaau64 as usize as *mut c_void;
+            Buffer::get_device(std::ptr::null_mut(), &mut out_buf);
+            assert_ne!(out_buf as usize, 0xaaaa_aaaa_aaaa_aaaa);
+            // Un autre test a pu créer son propre appareil entre-temps.
+            if out == dev.cast() {
+                assert!((*dev).ref_count.load(Ordering::Relaxed) >= 2);
+            }
+            let _ = LAST_DEVICE.compare_exchange(
+                dev,
+                std::ptr::null_mut(),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            );
+            drop(Box::from_raw(tex));
+        }
     }
 
     #[test]
