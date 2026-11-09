@@ -21,9 +21,13 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime=${WINLUX_BIN:-$root/target/release/winlux}
-test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
+# WINLUX_MSI_OUT=<dossier> : construit seulement le paquet de la fiche de
+# banc 833 dans ce dossier, sans le runtime (scripts/construire-paquets-833.sh).
+out=${WINLUX_MSI_OUT:-}
+if [ -n "$out" ]; then mkdir -p "$out"; out=$(CDPATH= cd -- "$out" && pwd); fi
+test -n "$out" || test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 for tool in makensis wixl msibuild msiinfo x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
-    command -v "$tool" >/dev/null || { echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : test sauté"; exit 0; }
+    command -v "$tool" >/dev/null || { [ -n "$out" ] && { echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : paquet non construit" >&2; exit 1; }; echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : test sauté"; exit 0; }
 done
 
 work=$(mktemp -d)
@@ -218,6 +222,7 @@ cp ca32.dll idt/Binary/CaDll32.dll
 cp ca64.dll idt/Binary/CaDll64.dll
 printf 'Name\tData\ns72\tv0\nBinary\tName\nPrerequis\tPrerequis.exe\nWixCA\tWixCA.dll\nCaDll32\tCaDll32.dll\nCaDll64\tCaDll64.dll\n' >idt/Binary.idt
 (cd idt && for t in *.idt; do msibuild ../ca.msi -i "$t"; done)
+if [ -n "$out" ]; then cp ca.msi "$out/actions-dll-exe.msi"; echo "$out/actions-dll-exe.msi"; exit 0; fi
 
 mkdir home
 run() { HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_SETUP_RUN_TIMEOUT=120 "$runtime" "$@"; }

@@ -14,9 +14,13 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime=${WINLUX_BIN:-$root/target/release/winlux}
-test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
+# WINLUX_MSI_OUT=<dossier> : construit seulement le paquet de la fiche de
+# banc 833 dans ce dossier, sans le runtime (scripts/construire-paquets-833.sh).
+out=${WINLUX_MSI_OUT:-}
+if [ -n "$out" ]; then mkdir -p "$out"; out=$(CDPATH= cd -- "$out" && pwd); fi
+test -n "$out" || test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 for tool in wixl msibuild msiinfo; do
-    command -v "$tool" >/dev/null || { echo "$tool absent (paquets wixl, msitools) : test sauté"; exit 0; }
+    command -v "$tool" >/dev/null || { [ -n "$out" ] && { echo "$tool absent (paquets wixl, msitools) : paquet non construit" >&2; exit 1; }; echo "$tool absent (paquets wixl, msitools) : test sauté"; exit 0; }
 done
 
 work=$(mktemp -d)
@@ -137,6 +141,7 @@ printf '%s\t%s\t%s\n' \
 } >idt/CustomAction.idt
 printf 'Name\tData\ns72\tv0\nBinary\tName\nVerifie\tVerifie.vbs\nEchoue\tEchoue.js\n' >idt/Binary.idt
 (cd idt && for t in *.idt; do msibuild ../scripts.msi -i "$t"; done)
+if [ -n "$out" ]; then cp scripts.msi "$out/actions-script.msi"; echo "$out/actions-script.msi"; exit 0; fi
 
 run() { HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_SETUP_RUN_TIMEOUT=120 "$runtime" "$@"; }
 fail() { echo "$1" >&2; cat "$work/out.txt" >&2 2>/dev/null || true; exit 1; }
