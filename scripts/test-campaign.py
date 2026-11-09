@@ -1355,6 +1355,9 @@ ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
 ok("unsafe fn has_own_caption" in (runtime_dlls / "user32.rs").read_text()
    and "cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre" in (SCRIPTS / "test-all.sh").read_text(),
    "Fenêtre sans barre de titre à elle (Electron sans page) : cadre du gestionnaire gardé, toujours fermable (#1211)")
+ok("pub fn work_rect" in (runtime_dlls / "monitors.rs").read_text()
+   and "zone_de_travail_sans_le_panneau" in (SCRIPTS / "test-all.sh").read_text(),
+   "GetMonitorInfo : rcWork sans le panneau, menus de la zone de notification au-dessus du curseur (#1267)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
