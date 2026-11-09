@@ -779,8 +779,12 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
     1
 }
 
+/// Comme sous Windows, un handle est un multiple de 4 : le bit 0 de
+/// `OVERLAPPED.hEvent` dit « pas de paquet au port de complétion ». Avec un
+/// numéro impair, la fin d'une E/S signalait le handle voisin et l'événement
+/// attendu ne l'était jamais (#1360).
 fn next_handle() -> usize {
-    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+    NEXT_HANDLE.fetch_add(4, Ordering::Relaxed)
 }
 /// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
 pub(crate) fn new_handle_number() -> usize {
@@ -799,7 +803,7 @@ pub(crate) fn insert_sync_at(h: usize, obj: SyncHandle) {
 }
 /// Les prochains handles seront au-dessus de `h` (handles hérités).
 pub(crate) fn reserve_handles_up_to(h: usize) {
-    NEXT_HANDLE.fetch_max(h + 1, Ordering::Relaxed);
+    NEXT_HANDLE.fetch_max((h + 4) & !3, Ordering::Relaxed);
 }
 /// Événement transmissible à un enfant : (descripteur de sa page partagée,
 /// réinitialisation manuelle).
@@ -4708,6 +4712,10 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
         SyncHandle::Semaphore(_) => "Semaphore",
     })
 }
+/// Le handle est-il un événement de CreateEvent ?
+pub(crate) fn is_event_handle(h: usize) -> bool {
+    matches!(lookup_sync(h), Some(SyncHandle::Event(_)))
+}
 pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&h)
@@ -6441,6 +6449,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if matches!(handle as isize, -6..=-1) {
         return 1;
     }
+    // Événement de WSACreateEvent fermé par CloseHandle (#1360).
+    if lookup_sync(handle).is_none() && crate::dlls::ws2_32::is_wsa_event(handle) {
+        return crate::dlls::ws2_32::wsa_close_event(handle);
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6498,6 +6510,11 @@ pub unsafe extern "win64" fn create_event_a(
 }
 pub extern "win64" fn set_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : hEvent d'un WSASend de Chromium,
+        // signalé à la fin de l'E/S (#1360).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_set_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
@@ -6515,6 +6532,9 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
 }
 pub extern "win64" fn reset_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_reset_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
