@@ -97,6 +97,7 @@ pub fn unload(base: usize) -> Option<Module> {
         }
         mods.remove(pos)
     };
+    crate::ldr::sync();
     libc_munmap(m.base, m.size);
     Some(m)
 }
@@ -574,6 +575,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
     };
     if let Err(e) = linked {
         remove_module(m.base);
+        crate::ldr::sync();
         if let Some(t) = &m.tls {
             free_tls_slot(t.slot);
         }
@@ -733,6 +735,7 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         // Ni relocations, ni imports (mscoree), ni point d'entrée : le CLR
         // lit les métadonnées directement dans l'image projetée.
         MODULES.lock().unwrap().push(m.clone());
+        crate::ldr::sync();
         return Ok(m);
     }
     let delta = base.wrapping_sub(m.pe.image_base as usize);
@@ -759,6 +762,7 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
     });
 
     MODULES.lock().unwrap().push(m.clone());
+    crate::ldr::sync();
     Ok(m)
 }
 

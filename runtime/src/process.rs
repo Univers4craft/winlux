@@ -362,6 +362,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     PEB.store(peb, Ordering::Relaxed);
     if crate::wow32::active() {
         crate::wow32::init_peb32(exe.base);
+    } else {
+        // PEB->Ldr : modules lus par un autre processus (crashpad, #1314).
+        crate::ldr::install(peb);
     }
     let _ = PROCESS.set(ProcessInfo {
         command_line_w,
