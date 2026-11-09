@@ -2317,6 +2317,45 @@ unsafe extern "win64" fn bind_dc(this: *mut TargetObj, hdc: usize, rect: *const 
     S_OK
 }
 
+// --- Pour la composition WinRT ---------------------------------------------------------
+
+/// Pixels BGRA prémultipliés d'une ID2D1Bitmap de Winlux (surfaces de
+/// dessin de Windows.UI.Composition, #1416).
+pub(crate) unsafe fn bitmap_pixels(b: *mut c_void) -> Option<(u32, u32, Vec<u8>)> {
+    if b.is_null() || *(b as *const *const ()) != BITMAP_VT.ptr() {
+        return None;
+    }
+    let bm = &Com::get(b as *mut BitmapObj).data;
+    Some((bm.w, bm.h, crate::dlls::lock(&bm.px).clone()))
+}
+
+/// ID2D1Device à partir de l'appareil de rendu donné à la composition :
+/// l'appareil Direct2D lui-même, ou un appareil D3D/DXGI pour lequel une
+/// fabrique 1.1 en crée un. Pointeur tenu (à libérer) ou nul.
+pub(crate) unsafe fn device_for(render: *mut c_void) -> *mut c_void {
+    if render.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut dev = std::ptr::null_mut();
+    let qi: unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
+        method(render, 0);
+    if qi(render, &v11::device_iid(), &mut dev) >= 0 && !dev.is_null() {
+        return dev;
+    }
+    let mut f = std::ptr::null_mut();
+    if d2d1_create_factory(0, &v11::factory1_iid(), std::ptr::null(), &mut f) < 0 {
+        return std::ptr::null_mut();
+    }
+    let create: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> i32 =
+        method(f, 17);
+    let mut dev = std::ptr::null_mut();
+    if create(f, render, &mut dev) < 0 {
+        dev = std::ptr::null_mut();
+    }
+    method::<unsafe extern "win64" fn(*mut c_void) -> u32>(f, 2)(f);
+    dev
+}
+
 // --- Point d'entrée -----------------------------------------------------------------
 
 /// D2D1CreateFactory(type, riid, options, out) : une fabrique (mono ou
