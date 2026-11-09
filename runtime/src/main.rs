@@ -16,6 +16,7 @@ mod dlls;
 mod firewall;
 mod gamemode;
 mod gpu;
+mod image_cache;
 mod imaging;
 mod intl;
 mod journal;
