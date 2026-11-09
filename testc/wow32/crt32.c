@@ -107,6 +107,36 @@ int main(int argc, char **argv) {
                              : "eax", "ecx", "edx", "memory");
             CHECK(25, r == 0.0);
         }
+        /* Python 3.12 x86 (#1383) : _CI* à un opérande, log en SSE2 et
+         * __fpe_flt_rounds (arrondi au plus proche : 1). */
+        void *ci_sinh = (void *)GetProcAddress(u, "_CIsinh");
+        void *log2 = (void *)GetProcAddress(u, "_libm_sse2_log_precise");
+        int (*flt_rounds)(void) = (int (*)(void))GetProcAddress(u, "__fpe_flt_rounds");
+        CHECK(26, ci_sinh && log2 && flt_rounds);
+        if (ci_sinh && log2 && flt_rounds) {
+            double z = 0.0, one = 1.0, r;
+            __asm__ volatile("fldl %1\n\tcall *%2\n\tfstpl %0"
+                             : "=m"(r) : "m"(z), "r"(ci_sinh) : "eax", "ecx", "edx", "memory");
+            CHECK(27, r == 0.0);
+            __asm__ volatile("movsd %1, %%xmm0\n\tcall *%2\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(one), "r"(log2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(28, r == 0.0);
+            CHECK(29, flt_rounds() == 1);
+        }
+    }
+    {
+        /* Steam.exe (#1380) : masques d'affinité sur 4 octets, variable
+         * cachée « =C: » écrite par _wchdir, imports par ordinal. */
+        struct { DWORD_PTR p, s; DWORD garde; } m = { 0, 0, 0xA5A5A5A5u };
+        CHECK(30, GetProcessAffinityMask(GetCurrentProcess(), &m.p, &m.s) && m.p && m.garde == 0xA5A5A5A5u);
+        CHECK(31, SetProcessAffinityMask(GetCurrentProcess(), m.p));
+        wchar_t v[64] = L"";
+        CHECK(32, SetEnvironmentVariableW(L"=C:", L"C:\\Steam")
+                  && GetEnvironmentVariableW(L"=C:", v, 64) == 8 && !wcscmp(v, L"C:\\Steam"));
+        HMODULE sh = LoadLibraryA("shell32.dll"), ws = LoadLibraryA("wsock32.dll");
+        CHECK(33, sh && ws && GetProcAddress(sh, MAKEINTRESOURCEA(680))
+                  && GetProcAddress(ws, MAKEINTRESOURCEA(1142)));
     }
     return fails;
 }

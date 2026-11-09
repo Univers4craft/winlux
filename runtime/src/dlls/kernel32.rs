@@ -6878,7 +6878,24 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
+/// Variables cachées « =C: » (dossier courant de chaque lecteur) : Windows
+/// les admet en tête de nom, l'environnement Linux non. `_wchdir` du CRT
+/// Microsoft écrit « =C: » après SetCurrentDirectoryW et échoue si
+/// SetEnvironmentVariableW refuse (Steam, #1380).
+fn hidden_env() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
+    static V: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+    V.lock().unwrap_or_else(|e| e.into_inner())
+}
+fn is_hidden_env_name(name: &str) -> bool {
+    name.len() > 1 && name.starts_with('=') && !name[1..].contains('=')
+}
 pub(crate) fn env_value(name: &str) -> Option<String> {
+    if is_hidden_env_name(name) {
+        return hidden_env()
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone());
+    }
     std::env::var_os(name)
         .or_else(|| {
             std::env::vars_os()
@@ -6888,7 +6905,15 @@ pub(crate) fn env_value(name: &str) -> Option<String> {
         .map(|v| v.to_string_lossy().into_owned())
 }
 fn set_env_value(name: &str, value: Option<&str>) -> Result<(), u32> {
-    if name.is_empty() || name.contains('=') {
+    if is_hidden_env_name(name) {
+        let mut v = hidden_env();
+        v.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+        if let Some(val) = value {
+            v.push((name.to_string(), val.to_string()));
+        }
+        return Ok(());
+    }
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
         return Err(87);
     }
     if let Some(v) = value {
@@ -10375,6 +10400,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn variable_cachee_dossier_du_lecteur() {
+        // `_wchdir` (CRT Microsoft) : SetCurrentDirectoryW puis « =C: » (#1380).
+        let name: Vec<u16> = "=C:".encode_utf16().chain([0]).collect();
+        let val: Vec<u16> = "C:\\Program Files (x86)\\Steam"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        unsafe {
+            assert_eq!(set_environment_variable_w(name.as_ptr(), val.as_ptr()), 1);
+            let mut out = [0u16; 64];
+            let n = get_environment_variable_w(name.as_ptr(), out.as_mut_ptr(), 64);
+            assert_eq!(
+                String::from_utf16_lossy(&out[..n as usize]),
+                "C:\\Program Files (x86)\\Steam"
+            );
+            assert!(std::env::var_os("=C:").is_none());
+            assert_eq!(
+                set_environment_variable_w(name.as_ptr(), std::ptr::null()),
+                1
+            );
+            assert_eq!(
+                get_environment_variable_w(name.as_ptr(), out.as_mut_ptr(), 64),
+                0
+            );
+            let bad: Vec<u16> = "A=B".encode_utf16().chain([0]).collect();
+            assert_eq!(set_environment_variable_w(bad.as_ptr(), val.as_ptr()), 0);
+        }
+    }
     use std::ffi::CString;
 
     #[test]

@@ -113,12 +113,13 @@ pub unsafe extern "win64" fn set_thread_stack_guarantee(size: *mut u32) -> i32 {
     1
 }
 
+/// Les masques sont des DWORD_PTR : 4 octets en x86 (#1380).
 pub unsafe extern "win64" fn get_process_affinity_mask(
     h: usize,
-    process: *mut u64,
-    system: *mut u64,
+    process: usize,
+    system: usize,
 ) -> i32 {
-    if process.is_null() || system.is_null() {
+    if process == 0 || system == 0 {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
@@ -130,12 +131,16 @@ pub unsafe extern "win64" fn get_process_affinity_mask(
             return 0;
         }
     };
-    *process = if mask == 0 { system_mask() } else { mask };
-    *system = system_mask();
+    let mask = if mask == 0 { system_mask() } else { mask };
+    crate::wow32::write_ptr(process, mask as usize);
+    crate::wow32::write_ptr(system, system_mask() as usize);
     1
 }
 
-pub extern "win64" fn set_process_affinity_mask(h: usize, mask: u64) -> i32 {
+/// `mask` est un DWORD_PTR : 4 octets en x86, sinon wow32 lirait le mot
+/// suivant de la pile comme moitié haute (#1380).
+pub extern "win64" fn set_process_affinity_mask(h: usize, mask: usize) -> i32 {
+    let mask = mask as u64;
     if mask == 0 || mask & !system_mask() != 0 {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
@@ -158,7 +163,10 @@ pub extern "win64" fn set_process_affinity_mask(h: usize, mask: u64) -> i32 {
 }
 
 /// Retourne l'ancien masque, 0 en cas d'échec (comme Windows).
-pub extern "win64" fn set_thread_affinity_mask(h: usize, mask: u64) -> u64 {
+pub extern "win64" fn set_thread_affinity_mask(h: usize, mask: usize) -> usize {
+    set_thread_affinity(h, mask as u64) as usize
+}
+fn set_thread_affinity(h: usize, mask: u64) -> u64 {
     let process = process_mask();
     if mask == 0 || mask & !process != 0 {
         set_last_error(ERROR_INVALID_PARAMETER);
@@ -237,7 +245,7 @@ pub unsafe extern "win64" fn set_thread_group_affinity(
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let old = set_thread_affinity_mask(h, (*affinity).mask);
+    let old = set_thread_affinity(h, (*affinity).mask);
     if old == 0 {
         return 0;
     }
@@ -856,20 +864,27 @@ mod tests {
         assert_eq!(cpus_to_mask(&mask_to_cpus(system)), system);
         let (mut p, mut s) = (0u64, 0u64);
         unsafe {
-            assert_eq!(get_process_affinity_mask(usize::MAX, &mut p, &mut s), 1);
+            assert_eq!(
+                get_process_affinity_mask(
+                    usize::MAX,
+                    &mut p as *mut u64 as usize,
+                    &mut s as *mut u64 as usize
+                ),
+                1
+            );
         }
         assert_eq!(s, system);
         assert_ne!(p & s, 0);
         // Masque hors du système : refusé sans rien modifier.
         if system != u64::MAX {
-            assert_eq!(set_thread_affinity_mask(usize::MAX - 1, !system), 0);
+            assert_eq!(set_thread_affinity(usize::MAX - 1, !system), 0);
             assert_eq!(crate::process::last_error(), ERROR_INVALID_PARAMETER);
         }
         assert_eq!(set_thread_affinity_mask(usize::MAX - 1, 0), 0);
         // Épingler le thread courant sur le premier processeur autorisé puis
         // restaurer : l'ancien masque est renvoyé.
         let first = p & p.wrapping_neg();
-        let old = set_thread_affinity_mask(usize::MAX - 1, first);
+        let old = set_thread_affinity(usize::MAX - 1, first);
         assert_ne!(old, 0);
         let mut g = GroupAffinity {
             mask: 0,
@@ -880,7 +895,7 @@ mod tests {
             assert_eq!(get_thread_group_affinity(usize::MAX - 1, &mut g), 1);
         }
         assert_eq!((g.mask, g.group), (first, 0));
-        assert_eq!(set_thread_affinity_mask(usize::MAX - 1, old), first);
+        assert_eq!(set_thread_affinity(usize::MAX - 1, old), first);
         assert_eq!(set_thread_affinity_mask(0x1234_5678, 1), 0);
         assert_eq!(crate::process::last_error(), ERROR_INVALID_HANDLE);
     }
@@ -976,7 +991,7 @@ mod tests {
                 &mut tid,
             );
             assert_ne!(h, 0);
-            assert_eq!(set_thread_affinity_mask(h, first), process);
+            assert_eq!(set_thread_affinity(h, first), process);
             assert_eq!(set_thread_priority(h, -1), 1);
             assert_eq!(get_thread_priority(h), -1);
             super::super::kernel32::resume_thread(h);
