@@ -1200,6 +1200,100 @@ unsafe extern "win64" fn GestureOk(_a: usize, _b: usize, _c: usize, _d: usize, _
     1
 }
 
+/// Réglages de retour visuel tactile par fenêtre (FEEDBACK_TYPE 1 à 11,
+/// valeur BOOL) posés par `SetWindowFeedbackSetting` (#1431). Winlux ne
+/// dessine pas ces retours ; les réglages sont gardés pour les relire.
+static FEEDBACK: std::sync::Mutex<Vec<(usize, u32, i32)>> = std::sync::Mutex::new(Vec::new());
+
+const GWFS_INCLUDE_ANCESTORS: u32 = 1;
+
+fn feedback_args_ok(hwnd: usize, kind: u32) -> bool {
+    if !crate::dlls::gui::is_window(hwnd) {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return false;
+    }
+    if !(1..=11).contains(&kind) {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return false;
+    }
+    true
+}
+
+/// SetWindowFeedbackSetting(hwnd, type, flags, size, config) : config nul
+/// et size 0 rendent le réglage par défaut ; sinon un BOOL (4 octets).
+unsafe extern "win64" fn SetWindowFeedbackSetting(
+    hwnd: usize,
+    kind: u32,
+    _flags: u32,
+    size: u32,
+    config: *const i32,
+) -> i32 {
+    if !feedback_args_ok(hwnd, kind) {
+        return 0;
+    }
+    let mut map = crate::dlls::lock(&FEEDBACK);
+    map.retain(|&(h, k, _)| !(h == hwnd && k == kind));
+    if config.is_null() {
+        if size != 0 {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+        return 1;
+    }
+    if size != 4 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    map.push((hwnd, kind, (config.read_unaligned() != 0) as i32));
+    1
+}
+
+/// GetWindowFeedbackSetting(hwnd, type, flags, *size, config) : le réglage
+/// de la fenêtre, sinon (GWFS_INCLUDE_ANCESTORS) celui d'un parent ou le
+/// défaut du système (retour activé).
+unsafe extern "win64" fn GetWindowFeedbackSetting(
+    hwnd: usize,
+    kind: u32,
+    flags: u32,
+    size: *mut u32,
+    config: *mut i32,
+) -> i32 {
+    if !feedback_args_ok(hwnd, kind) {
+        return 0;
+    }
+    if size.is_null() || config.is_null() || *size < 4 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let found = {
+        let map = crate::dlls::lock(&FEEDBACK);
+        let mut h = hwnd;
+        let mut found = None;
+        while h != 0 {
+            if let Some(&(_, _, v)) = map.iter().find(|&&(w, k, _)| w == h && k == kind) {
+                found = Some(v);
+                break;
+            }
+            if flags & GWFS_INCLUDE_ANCESTORS == 0 {
+                break;
+            }
+            h = crate::dlls::user32::get_parent(h);
+        }
+        found
+    };
+    let value = match found {
+        Some(v) => v,
+        None if flags & GWFS_INCLUDE_ANCESTORS != 0 => 1,
+        None => {
+            *size = 0;
+            return 0;
+        }
+    };
+    config.write_unaligned(value);
+    *size = 4;
+    1
+}
+
 unsafe extern "win64" fn IsWindowArranged(_hwnd: usize) -> i32 {
     0
 }
@@ -1278,6 +1372,8 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "UnregisterHotKey" => fn UnregisterHotKey,
         "RegisterPointerDeviceNotifications" => fn WindowOk2,
         "IsWindowArranged" => fn IsWindowArranged,
+        "SetWindowFeedbackSetting" => fn SetWindowFeedbackSetting,
+        "GetWindowFeedbackSetting" => fn GetWindowFeedbackSetting,
         "ChangeWindowMessageFilterEx" => fn ChangeWindowMessageFilterEx,
         "GetPointerType" => fn GetPointerType,
         "SystemParametersInfoForDpi" => fn SystemParametersInfoForDpi,
@@ -2393,6 +2489,68 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fenetre(parent: usize) -> usize {
+        let hwnd = crate::dlls::gui::alloc_hwnd();
+        crate::dlls::gui::insert_window(
+            hwnd,
+            crate::dlls::gui::Window {
+                class: "Test".to_string(),
+                wnd_proc: 0,
+                background: 0,
+                title: String::new(),
+                rect: crate::dlls::gui::Rect::from_size(0, 0, 10, 10),
+                visible: false,
+                parent,
+                owner: std::thread::current().id(),
+                needs_paint: false,
+                paint_queued: false,
+                style: if parent != 0 { 0x4000_0000 } else { 0 },
+                ex_style: 0,
+                pending: Vec::new(),
+                menu_bar: 0,
+                painting: false,
+            },
+        );
+        hwnd
+    }
+
+    #[test]
+    fn retour_tactile_par_fenetre() {
+        unsafe {
+            let parent = fenetre(0);
+            let child = fenetre(parent);
+            let off = 0i32;
+            // FEEDBACK_GESTURE_PRESSANDTAP (11) coupé sur le parent.
+            assert_eq!(SetWindowFeedbackSetting(parent, 11, 0, 4, &off), 1);
+            let (mut size, mut v) = (4u32, -1i32);
+            assert_eq!(
+                GetWindowFeedbackSetting(parent, 11, 0, &mut size, &mut v),
+                1
+            );
+            assert_eq!((size, v), (4, 0));
+            // L'enfant n'a rien à lui ; avec les ancêtres, il hérite.
+            assert_eq!(GetWindowFeedbackSetting(child, 11, 0, &mut size, &mut v), 0);
+            size = 4;
+            assert_eq!(GetWindowFeedbackSetting(child, 11, 1, &mut size, &mut v), 1);
+            assert_eq!(v, 0);
+            // Autre type : défaut du système, activé.
+            assert_eq!(GetWindowFeedbackSetting(child, 2, 1, &mut size, &mut v), 1);
+            assert_eq!(v, 1);
+            // Retour au défaut, puis paramètres refusés.
+            assert_eq!(
+                SetWindowFeedbackSetting(parent, 11, 0, 0, std::ptr::null()),
+                1
+            );
+            assert_eq!(
+                GetWindowFeedbackSetting(parent, 11, 0, &mut size, &mut v),
+                0
+            );
+            assert_eq!(SetWindowFeedbackSetting(parent, 12, 0, 4, &off), 0);
+            assert_eq!(SetWindowFeedbackSetting(parent, 11, 0, 2, &off), 0);
+            assert_eq!(SetWindowFeedbackSetting(0x7fff_0000, 11, 0, 4, &off), 0);
+        }
+    }
 
     #[test]
     fn acl_valide_ou_non() {
