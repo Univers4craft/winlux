@@ -493,7 +493,19 @@ pub(super) unsafe fn get_value(
         return Some((hr, actual));
     }
     let props = crate::dlls::lock(&e.props);
-    let v = props.get(&index).map_or(&[][..], |v| &v[..]);
+    // Interface jamais posée : pointeur nul de taille pointeur, que
+    // GetValueSize annonce déjà (#1367).
+    const NUL: [u8; 8] = [0; 8];
+    let v = props.get(&index).map_or_else(
+        || {
+            if p.ty == ty::IUNKNOWN || p.ty == ty::COLOR_CONTEXT {
+                &NUL[..]
+            } else {
+                &[][..]
+            }
+        },
+        |v| &v[..],
+    );
     if !data.is_null() {
         if (size as usize) < v.len() {
             return Some((D2DERR_INSUFFICIENT_BUFFER, v.len() as u32));
@@ -1779,6 +1791,60 @@ mod tests {
             assert_eq!(ordre::AVANT_INIT.load(Ordering::SeqCst), 0);
             assert_eq!(ordre::VALEUR.load(Ordering::SeqCst), 8);
             com_release(e);
+            Com::release(f);
+        }
+    }
+
+    /// #1367 : une propriété contexte de couleur jamais posée vaut un
+    /// pointeur nul de taille pointeur.
+    #[test]
+    fn contexte_de_couleur_non_pose_vaut_un_pointeur_nul() {
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1367_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Couleurs'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs minimum='1' maximum='1'><Input name='Source'/></Inputs>\
+                <Property name='SourceColorContext' type='colorcontext'/>\
+                </Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    ordre::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            assert_eq!(super::super::create_effect(f, &id, &mut e), S_OK);
+            let e = e.cast();
+            assert_eq!(super::super::effect_prop_type(e, 0), ty::COLOR_CONTEXT);
+            assert_eq!(super::super::effect_value_size(e, 0), 8);
+            let mut p: usize = 0xdead;
+            assert_eq!(
+                super::super::effect_get_value(
+                    e,
+                    0,
+                    ty::COLOR_CONTEXT,
+                    &mut p as *mut usize as *mut u8,
+                    8
+                ),
+                S_OK
+            );
+            assert_eq!(p, 0);
+            com_release(e.cast());
             Com::release(f);
         }
     }
