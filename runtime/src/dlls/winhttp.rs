@@ -994,6 +994,16 @@ pub unsafe extern "win64" fn proxy_for_url(
     // No PAC engine or WPAD discovery, hence no fabricated successful answer.
     fail(12180)
 }
+/// WinHttpDetectAutoProxyConfigUrl : sans découverte WPAD (DHCP ni DNS),
+/// réponse documentée ERROR_WINHTTP_AUTODETECTION_FAILED et URL nulle.
+/// Steam x86 la cherche par GetProcAddress au démarrage (#1439).
+pub unsafe extern "win64" fn detect_auto_proxy_config_url(flags: u32, out: *mut *mut u16) -> i32 {
+    if out.is_null() || flags & 3 == 0 {
+        return fail(87);
+    }
+    crate::wow32::write_ptr(out as usize, 0);
+    fail(12180)
+}
 pub unsafe extern "win64" fn status_callback(
     handle: usize,
     _callback: usize,
@@ -1020,11 +1030,30 @@ pub fn exports() -> crate::dlls::Exports {
         "WinHttpGetDefaultProxyConfiguration" => fn default_proxy,
         "WinHttpGetIEProxyConfigForCurrentUser" => fn ie_proxy,
         "WinHttpGetProxyForUrl" => fn proxy_for_url, "WinHttpSetStatusCallback" => fn status_callback,
+        "WinHttpDetectAutoProxyConfigUrl" => fn detect_auto_proxy_config_url,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// #1439 : pas de WPAD, échec documenté et URL nulle.
+    #[test]
+    fn detection_auto_du_proxy_echoue_proprement() {
+        let _teb = crate::process::test_teb();
+        let mut url = 1usize as *mut u16;
+        assert_eq!(
+            unsafe { super::detect_auto_proxy_config_url(3, &mut url) },
+            0
+        );
+        assert!(url.is_null());
+        assert_eq!(crate::process::last_error(), 12180);
+        assert_eq!(
+            unsafe { super::detect_auto_proxy_config_url(0, &mut url) },
+            0
+        );
+        assert_eq!(crate::process::last_error(), 87);
+    }
+
     /// #687 : schémas proposés par WWW-Authenticate et Proxy-Authenticate.
     #[test]
     fn schemas_d_authentification() {
