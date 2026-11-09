@@ -343,6 +343,10 @@ pub unsafe fn button(g: &mut Gfx, x: i32, y: i32, label: &[u8], primary: bool, h
 pub unsafe fn progress_bar(g: &mut Gfx, x: i32, y: i32, w: i32, pct: i32) {
     let p = pal();
     round_rect(g.hdc, g.b, x, y, x + w, y + 4, 2, p.border);
+    if pct < 0 {
+        // Avancement inconnu : la piste seule, jamais un chiffre inventé.
+        return;
+    }
     let fill_w = (w * pct.clamp(0, 100) / 100).max(4);
     round_rect(g.hdc, g.b, x, y, x + fill_w, y + 4, 2, p.accent);
 }
@@ -599,7 +603,8 @@ unsafe fn poll_progress() -> bool {
         if let Some(v) = line.strip_prefix(b"state=") {
             state = v;
         } else if let Some(v) = line.strip_prefix(b"percent=") {
-            OP_PERCENT = parse_num(v) as i32;
+            // Vide : étape sans avancement mesurable, aucun pourcentage (#1455).
+            OP_PERCENT = if v.is_empty() { -1 } else { parse_num(v) as i32 };
         } else if let Some(v) = line.strip_prefix(b"message=") {
             OP_MESSAGE.clear();
             OP_MESSAGE.push(v);
@@ -878,7 +883,7 @@ unsafe fn operate(verb: &[u8], key: &[u8]) {
         RESULT.clear();
         OP_ACTIVE = true;
         OP_STARTED = GetTickCount();
-        OP_PERCENT = 0;
+        OP_PERCENT = -1;
         OP_TARGET.clear();
         OP_TARGET.push(key);
         OP_MESSAGE.clear();
@@ -1105,7 +1110,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             b.right - b.left - 120,
         );
         let mut pct: Buf<8> = Buf::new();
-        pct.num(OP_PERCENT as u64).push(b" %");
+        if OP_PERCENT >= 0 {
+            pct.num(OP_PERCENT as u64).push(b" %");
+        }
         text(
             g.hdc,
             g.f.semibold,

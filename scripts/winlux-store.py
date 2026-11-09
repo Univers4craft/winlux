@@ -130,6 +130,7 @@ T = {
            "ed_ok_update": "Mettre à jour",
            "ed_cancel": "Annuler",
            "ed_authorize": "En attente de l'autorisation d'un administrateur...",
+           "ed_mb": "{got} Mo / {total} Mo",
            "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
@@ -166,6 +167,7 @@ T = {
            "ed_ok_update": "Update",
            "ed_cancel": "Cancel",
            "ed_authorize": "Waiting for an administrator's permission...",
+           "ed_mb": "{got} MB / {total} MB",
            "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
@@ -202,6 +204,7 @@ T = {
            "ed_ok_update": "Actualizar",
            "ed_cancel": "Cancelar",
            "ed_authorize": "Esperando la autorización de un administrador...",
+           "ed_mb": "{got} MB / {total} MB",
            "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
@@ -239,6 +242,7 @@ T = {
            "ed_ok_update": "Aktualisieren",
            "ed_cancel": "Abbrechen",
            "ed_authorize": "Warten auf die Zustimmung eines Administrators...",
+           "ed_mb": "{got} MB / {total} MB",
            "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
@@ -1517,13 +1521,40 @@ class Editeur(Source):
         CACHE.mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix="editeur-", dir=CACHE))
         path = work / f"{e['package']}.deb"
-        progress(10, tr("download", name=e["name"]))
+        size = int(info["size"]) if str(info.get("size", "")).isdigit() else 0
+        progress(0 if size else None, tr("download", name=e["name"]))
         try:
-            subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https,file",
-                            "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
-                            "--retry", "3", "--max-filesize", "1073741824", "--output", str(path), info["source"]],
-                           check=True, timeout=7200, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
+            proc = subprocess.Popen(["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https,file",
+                                     "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
+                                     "--retry", "3", "--max-filesize", "1073741824", "--output", str(path),
+                                     info["source"]], stdin=subprocess.DEVNULL)
+        except OSError:
+            shutil.rmtree(work, ignore_errors=True)
+            return 7
+        # Avancement réel : octets reçus sur la taille annoncée par l'index
+        # (0 à 50 %, apt fait le reste). Sans taille connue, aucun pourcentage.
+        deadline, shown = time.monotonic() + 7200, -1
+        while True:
+            try:
+                code = proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                code = -1
+                break
+            try:
+                got = path.stat().st_size
+            except OSError:
+                got = 0
+            pct = min(50, got * 50 // size) if size else None
+            if pct != shown or not size:
+                shown = pct
+                progress(pct, tr("download", name=e["name"]) + " "
+                         + tr("ed_mb", got=got // 1_000_000, total=max(1, size // 1_000_000) if size else "?"))
+        if code != 0:
             shutil.rmtree(work, ignore_errors=True)
             return 7
         if sha256_file(path) != info["sha256"]:
@@ -1544,11 +1575,11 @@ class Editeur(Source):
         e = self.entry(ref)
         if e is None:
             return 2
-        progress(2, tr("latest"))
+        progress(None, tr("latest"))
         info = editeur_info(e, True)
         if not info:
             return 7
-        progress(5, tr("ed_waiting"))
+        progress(None, tr("ed_waiting"))
         if not confirm(e, info, update):
             return 9
         # Autorisation d'un administrateur avant de télécharger (#1451) : un
@@ -1557,7 +1588,7 @@ class Editeur(Source):
         cmd = admin([REPOS_TOOL, "check", e["id"]])
         if cmd is None:
             return 126
-        progress(6, tr("ed_authorize"))
+        progress(None, tr("ed_authorize"))
         code = run(cmd, 3600)[0]
         if code == DENIED:
             return DENIED
@@ -2180,12 +2211,15 @@ class Progress:
         self.op, self.target, self.hook = op, target, hook
 
     def __call__(self, percent, message, state="running"):
-        percent = max(0, min(100, int(percent)))
+        # percent None : étape sans avancement mesurable (attente d'une
+        # autorisation, recherche) ; la boutique n'affiche alors aucun
+        # pourcentage plutôt qu'un chiffre figé (#1455).
+        shown = "" if percent is None else max(0, min(100, int(percent)))
         atomic_write(STORE_RUN / "store-progress.txt",
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
-                     f"percent={percent}\nmessage={field(message, 200)}\n")
+                     f"percent={shown}\nmessage={field(message, 200)}\n")
         if self.hook:
-            self.hook(percent)
+            self.hook(0 if percent is None else shown)
 
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
             1223 % 256: "denied"}

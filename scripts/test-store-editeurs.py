@@ -156,8 +156,19 @@ with tempfile.TemporaryDirectory() as tmp:
     real_fetch = ed.fetch_deb
     ed.fetch_deb = lambda *a: order.append("téléchargement") or real_fetch(*a)
     m["admin"].__globals__["admin"] = lambda cmd: order.append("autorisation") or admin_calls.append(cmd) or cmd
-    check(ed.install("claude", lambda *a: None) == 0, "installation confirmée")
+    steps = []
+    check(ed.install("claude", lambda pct, msg, *a: steps.append((len(order), pct, msg))) == 0,
+          "installation confirmée")
     check(order == ["autorisation", "téléchargement"], f"autorisation puis téléchargement ({order})")
+    # #1455 : aucun pourcentage avant le vrai téléchargement (pas de 10 % figé
+    # pendant l'attente de l'autorisation) ; ensuite un avancement mesuré.
+    before = [s for s in steps if s[0] < 2]
+    check(before and all(pct is None for _, pct, _ in before), f"pas de pourcentage avant le téléchargement ({before})")
+    check(any("autorisation" in msg for _, _, msg in before), "attente de l'autorisation affichée")
+    check(not any("Téléchargement" in msg for _, _, msg in before), "pas de « Téléchargement » avant l'autorisation")
+    m["STORE_RUN"].mkdir(parents=True, exist_ok=True)
+    m["Progress"]("install", "editeur:claude")(None, "x")
+    check("percent=\n" in (m["STORE_RUN"] / "store-progress.txt").read_text(), "avancement inconnu : percent vide")
     ed.fetch_deb = real_fetch
     check(calls and calls[-1][:2] == ["install", "--"], "apt-get install -- <fichier>")
     check(not list(cache.glob("editeur-*")), "dossier de téléchargement retiré")
@@ -241,6 +252,8 @@ labels = re.search(r"fn rail_refresh_label\(\).*?\n}", rs, re.S).group(0)
 for label in re.findall(r'=> b"([^"]*)"', labels):
     check(len(label.encode("latin-1").decode("unicode_escape")) <= 11, f"barre latérale : « {label} » tient en 88 px (#1450)")
 check('b"Neu laden"' in labels, "barre latérale allemande : « Neu laden »")
+check("OP_PERCENT = if v.is_empty() { -1 }" in rs and "if pct < 0" in rs and "if OP_PERCENT >= 0" in rs,
+      "avancement inconnu : ni chiffre ni barre remplie (#1455)")
 r = subprocess.run([sys.executable, "-I", str(project / "scripts/winlux-store-confirm.py"), "--title", "t", "--text", "x",
                     "--ok", "o", "--cancel", "c"], env={k: v for k, v in os.environ.items()
                                                        if k not in ("DISPLAY", "WAYLAND_DISPLAY")},
