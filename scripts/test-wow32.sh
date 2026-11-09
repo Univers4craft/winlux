@@ -44,7 +44,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
 names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032"
-command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32 com32 dlg32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
@@ -128,7 +128,7 @@ if test -f "$out/crt32.exe"; then
             exit 1
         fi
     done
-    echo "crt32 : CRT msvcrt 32 bits, 33 vérifications (printf de MinGW et de msvcrt)"
+    echo "crt32 : CRT msvcrt 32 bits, 36 vérifications (printf de MinGW et de msvcrt)"
 else
     echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
 fi
@@ -145,6 +145,10 @@ check() {
         exit 1
     fi
 }
+if test -f "$out/net32.exe"; then
+    check net32 'Réseau 32 bits : tout est correct'
+    echo "net32 : Winsock x86 (AcceptEx, ConnectEx, GetAcceptExSockaddrs, OVERLAPPED x86 et port de complétion)"
+fi
 if test -f "$out/thread32.exe"; then
     check thread32 'Threads 32 bits : tout est correct'
     check thread32_gcc 'Threads 32 bits : tout est correct'
