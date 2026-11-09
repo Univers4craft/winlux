@@ -1436,4 +1436,12 @@ for extra in loaded:
     runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
 ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
    f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
+# Transfert des réglages (fiche 171 point 7) : épingles du menu Démarrer
+# emportées (#1458), archive et fichiers importés au nom du compte (#1459).
+transfer_script = (SCRIPTS / "winlux-transfer.sh").read_text(encoding="utf-8")
+transfer_test = (SCRIPTS / "test-transfer.sh").read_text(encoding="utf-8")
+ok("pins_export" in transfer_script and "user/epingles.json" in transfer_script and "(#1458)" in transfer_test,
+   "Transfert des réglages : épingles du menu Démarrer exportées et restaurées (#1458)")
+ok("--owner=0" not in transfer_script and 'own "$home/$rel"' in transfer_script and "(#1459)" in transfer_test,
+   "Transfert des réglages : archive et fichiers importés au nom du compte (#1459)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
