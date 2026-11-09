@@ -269,6 +269,7 @@ struct Glx {
     x_default_screen: unsafe extern "C" fn(usize) -> i32,
     x_get_window_attributes: unsafe extern "C" fn(usize, u64, *mut u8) -> i32,
     x_visual_id: unsafe extern "C" fn(usize) -> u64,
+    x_sync: Option<unsafe extern "C" fn(usize, i32) -> i32>,
 }
 
 unsafe impl Send for Glx {}
@@ -322,6 +323,10 @@ fn glx() -> Option<&'static Glx> {
             x_default_screen: need!(x, "XDefaultScreen"),
             x_get_window_attributes: need!(x, "XGetWindowAttributes"),
             x_visual_id: need!(x, "XVisualIDFromVisual"),
+            x_sync: {
+                let p = hostcall::sym(x, b"XSync\0");
+                (p != 0).then(|| std::mem::transmute::<usize, _>(p))
+            },
         })
     })
     .as_ref()
@@ -331,6 +336,28 @@ fn glx() -> Option<&'static Glx> {
 fn dc_drawable(hdc: usize) -> Option<(usize, u64)> {
     let hwnd = super::gui::dc_window(hdc).filter(|&h| h != 0)?;
     super::gui::native_window(hwnd).map(|w| (hwnd, w))
+}
+
+/// Journal WGL de WINLUX_WINDOW_DIAG, borné pour ne pas noyer la sortie.
+fn gl_diag(msg: std::fmt::Arguments) {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if super::user32::window_diag() && N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 400 {
+        eprintln!("winlux[gl] {msg} (thread {})", unsafe { libc::gettid() });
+    }
+}
+
+/// Visuel X d'une fenêtre (0 si inconnu).
+unsafe fn window_visual(g: &Glx, window: u64) -> u64 {
+    let mut attrs = [0u8; 256];
+    if window == 0 || (g.x_get_window_attributes)(g.dpy, window, attrs.as_mut_ptr()) == 0 {
+        return 0;
+    }
+    let visual = usize::from_ne_bytes(attrs[24..32].try_into().unwrap_or_default());
+    if visual == 0 {
+        0
+    } else {
+        (g.x_visual_id)(visual)
+    }
 }
 
 /// FBConfig GLX pour un format, de préférence avec le visuel de la fenêtre.
@@ -359,16 +386,7 @@ unsafe fn fbconfig(g: &Glx, f: Format, window: u64) -> Option<usize> {
         a.extend_from_slice(&[GLX_SAMPLE_BUFFERS, 1, GLX_SAMPLES, f.samples as i32]);
     }
     a.push(0);
-    let mut wanted = 0u64;
-    if window != 0 {
-        let mut attrs = [0u8; 256];
-        if (g.x_get_window_attributes)(g.dpy, window, attrs.as_mut_ptr()) != 0 {
-            let visual = usize::from_ne_bytes(attrs[24..32].try_into().unwrap_or_default());
-            if visual != 0 {
-                wanted = (g.x_visual_id)(visual);
-            }
-        }
-    }
+    let wanted = window_visual(g, window);
     let screen = (g.x_default_screen)(g.dpy);
     let mut n = 0;
     let list = (g.choose_fbconfig)(g.dpy, screen, a.as_ptr(), &mut n);
@@ -388,6 +406,13 @@ unsafe fn fbconfig(g: &Glx, f: Format, window: u64) -> Option<usize> {
         }
     }
     (g.x_free)(list.cast());
+    if super::user32::window_diag() {
+        let mut v = 0;
+        (g.get_fbconfig_attrib)(g.dpy, pick, GLX_VISUAL_ID, &mut v);
+        gl_diag(format_args!(
+            "fbconfig x={window:#x} visuel fenêtre {wanted:#x}, visuel choisi {v:#x} ({n} candidats)"
+        ));
+    }
     Some(pick)
 }
 
@@ -470,6 +495,9 @@ unsafe fn create_context(hdc: usize, share: usize, attribs: &[i32]) -> usize {
         return 0;
     }
     let h = NEXT_HGLRC.fetch_add(0x10, std::sync::atomic::Ordering::Relaxed);
+    gl_diag(format_args!(
+        "wglCreateContext hdc={hdc:#x} x={window:#x} format {format} partage {share:#x} -> {h:#x} (glx {ctx:#x})"
+    ));
     lock(contexts()).insert(
         h,
         Context {
@@ -519,6 +547,10 @@ extern "win64" fn wgl_delete_context(h: usize) -> i32 {
     let Some(c) = lock(contexts()).remove(&h) else {
         return 0;
     };
+    gl_diag(format_args!(
+        "wglDeleteContext {h:#x} (glx {:#x}, x={:#x})",
+        c.glx, c.window
+    ));
     CURRENT.with(|cur| {
         if cur.get().1 == h {
             unsafe { (g.make_current)(g.dpy, 0, 0) };
@@ -549,7 +581,12 @@ pub extern "win64" fn wgl_make_current(hdc: usize, h: usize) -> i32 {
         }
         c.glx
     };
-    if unsafe { (g.make_current)(g.dpy, window, ctx) } == 0 {
+    let ok = unsafe { (g.make_current)(g.dpy, window, ctx) };
+    gl_diag(format_args!(
+        "wglMakeCurrent hdc={hdc:#x} hwnd={:#x} x={window:#x} {h:#x} (glx {ctx:#x}) -> {ok}",
+        super::gui::dc_window(hdc).unwrap_or(0)
+    ));
+    if ok == 0 {
         crate::log_warn!("opengl32", "glXMakeCurrent a échoué");
         return 0;
     }
@@ -622,6 +659,22 @@ pub extern "win64" fn swap_buffers(hdc: usize) -> i32 {
         return 0;
     };
     unsafe { (g.swap_buffers)(g.dpy, window) };
+    if super::user32::window_diag() {
+        static SWAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SWAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 5 || n.is_multiple_of(1000) {
+            let cur = CURRENT.with(|c| c.get());
+            gl_diag(format_args!(
+                "SwapBuffers n°{n} hdc={hdc:#x} x={window:#x}, courant hdc={:#x} {:#x}",
+                cur.0, cur.1
+            ));
+            // Fait remonter les erreurs X en attente sur la connexion GLX,
+            // qu'aucune boucle d'événements ne lit (#1421).
+            if let Some(sync) = g.x_sync {
+                unsafe { sync(g.dpy, 0) };
+            }
+        }
+    }
     1
 }
 
@@ -660,13 +713,18 @@ pub extern "win64" fn set_pixel_format(hdc: usize, i: i32, _pfd: *const u8) -> i
     };
     let mut map = lock(window_formats());
     // Comme sous Windows : le format d'une fenêtre ne change plus.
-    match map.get(&hwnd) {
+    let r = match map.get(&hwnd) {
         Some(&old) => (old == i) as i32,
         None => {
             map.insert(hwnd, i);
             1
         }
-    }
+    };
+    gl_diag(format_args!(
+        "SetPixelFormat hdc={hdc:#x} hwnd={hwnd:#x} x={:#x} format {i} -> {r}",
+        super::gui::native_window(hwnd).unwrap_or(0)
+    ));
+    r
 }
 
 pub extern "win64" fn get_pixel_format(hdc: usize) -> i32 {

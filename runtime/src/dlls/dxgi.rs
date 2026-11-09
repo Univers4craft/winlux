@@ -146,8 +146,20 @@ pub(crate) fn install_x_error_guard() {
     ONCE.call_once(|| unsafe {
         unsafe extern "C" fn on_error(_d: *mut c_void, ev: *mut u8) -> libc::c_int {
             // XErrorEvent : type, display*, resourceid, serial, error_code (u8)…
-            let code = if ev.is_null() { 0 } else { *ev.add(32) };
-            log_warn!("dxgi", "erreur X11 ignorée (code {})", code);
+            if ev.is_null() {
+                return 0;
+            }
+            // XErrorEvent : resourceid à 16, error_code, request_code et
+            // minor_code à 32, 33 et 34.
+            let resource = std::ptr::read_unaligned(ev.add(16) as *const u64);
+            log_warn!(
+                "dxgi",
+                "erreur X11 ignorée (code {}, requête {}.{}, ressource {:#x})",
+                *ev.add(32),
+                *ev.add(33),
+                *ev.add(34),
+                resource
+            );
             0
         }
         let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
