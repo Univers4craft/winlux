@@ -2235,10 +2235,13 @@ unsafe fn create_file_opened(
     };
     // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
     // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
-    // l'erreur d'une tentative précédente ne doit pas rester (#905).
-    if creation == 2 || creation == 4 {
-        crate::process::set_last_error(if existed { 183 } else { 0 });
-    }
+    // l'erreur d'une tentative précédente ne doit pas rester (#905). Les
+    // autres dispositions réussies rendent 0 aussi (#1315).
+    crate::process::set_last_error(if (creation == 2 || creation == 4) && existed {
+        183
+    } else {
+        0
+    });
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
@@ -10415,6 +10418,55 @@ mod tests {
         let _ = std::fs::remove_file(linux);
     }
 
+    #[test]
+    fn create_file_reussi_remet_l_erreur_a_zero() {
+        // #1315 : un CreateFileW réussi ne laisse pas l'erreur d'un appel
+        // précédent (Claude pour Windows : 122 puis 50 sur config.json).
+        init();
+        let _teb = crate::process::test_teb();
+        let path = format!(
+            "Z:\\tmp\\winlux-k32err-{}-{}.json",
+            std::process::id(),
+            next_handle()
+        );
+        let path_c = CString::new(path).unwrap();
+        let p = path_c.as_ptr() as *const u8;
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        unsafe { close_handle(h) };
+        for (creation, flags, expected) in
+            [(3, 0x80, 0), (5, 0x80, 0), (4, 0x80, 183), (2, 0x80, 183)]
+        {
+            crate::process::set_last_error(122);
+            let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, creation, flags, 0) };
+            assert_ne!(h, usize::MAX, "disposition {creation}");
+            assert_eq!(
+                crate::process::last_error(),
+                expected,
+                "disposition {creation}"
+            );
+            unsafe { close_handle(h) };
+        }
+        let dir = CString::new("Z:\\tmp").unwrap();
+        crate::process::set_last_error(50);
+        let h = unsafe { create_file_a(dir.as_ptr() as *const u8, 0x80, 7, 0, 3, 0x0200_0000, 0) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            0,
+            "dossier (FILE_FLAG_BACKUP_SEMANTICS)"
+        );
+        unsafe { close_handle(h) };
+        crate::process::set_last_error(0);
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 1, 0x80, 0) };
+        assert_eq!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            80,
+            "CREATE_NEW sur un fichier existant"
+        );
+        unsafe { delete_file_a(p) };
+    }
     #[test]
     fn informations_etendues_d_un_handle_de_fichier() {
         init();
