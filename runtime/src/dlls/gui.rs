@@ -4057,6 +4057,22 @@ pub fn set_visible(hwnd: usize, visible: bool) -> bool {
     }
 }
 
+/// Fenêtres de premier niveau visibles du fil appelant, du sommet vers le
+/// fond, avec leur style : candidates à l'activation quand la fenêtre qui
+/// avait le focus disparaît (#1311).
+pub fn thread_visible_top_levels() -> Vec<(usize, u32)> {
+    let tid = std::thread::current().id();
+    let map = lock(windows());
+    top_level_in_z_order(&map)
+        .into_iter()
+        .filter_map(|h| {
+            map.get(&h)
+                .filter(|w| w.owner == tid && w.visible)
+                .map(|w| (h, w.style))
+        })
+        .collect()
+}
+
 /// Fenêtre de premier niveau au sommet de l'ordre Z (visible de préférence).
 pub fn first_window() -> Option<usize> {
     let map = lock(windows());
