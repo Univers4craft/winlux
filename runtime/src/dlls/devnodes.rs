@@ -1193,22 +1193,27 @@ mod tests {
             "Processeur"
         );
 
-        let dir = std::env::temp_dir().join(format!("winlux-cpuinfo-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("cpuinfo");
-        std::fs::write(&file, text).unwrap();
-        std::env::set_var("WINLUX_CPUINFO", &file);
-        // Classe Processor : un appareil par processeur logique, nom lisible.
-        let set = get_class_devs(Some(PROCESSOR_CLASS), None, 0x2).expect("ensemble");
-        let nodes = set_nodes(set).unwrap();
-        assert_eq!(nodes.len(), 2);
-        let name = nodes[0].property(0xC).unwrap().1;
+        // Nœud Processor : nom lisible, classe et fabricant.
+        let node = Node {
+            id: "ACPI\\ACPI0007\\0".into(),
+            parent: Some(ROOT.into()),
+            kind: Kind::Processor(cpus[0].clone()),
+        };
+        let name = node.property(0xC).unwrap().1;
         assert_eq!(
             String::from_utf16_lossy(&name[..name.len() - 1]),
             cpus[0].name
         );
-        assert_eq!(nodes[0].property(7).unwrap().1, wide("Processor"));
-        assert_eq!(nodes[0].property(0xB).unwrap().1, wide("Intel"));
+        assert_eq!(node.property(7).unwrap().1, wide("Processor"));
+        assert_eq!(node.property(0xB).unwrap().1, wide("Intel"));
+        assert_eq!(node.class(), PROCESSOR_CLASS);
+        // Classe Processor : un appareil par processeur logique de la machine
+        // (sans variable d'environnement : les tests tournent en parallèle).
+        let expected = std::fs::read_to_string("/proc/cpuinfo")
+            .map(|t| parse_cpuinfo(&t).len())
+            .unwrap_or(0);
+        let set = get_class_devs(Some(PROCESSOR_CLASS), None, 0x2).expect("ensemble");
+        assert_eq!(set_nodes(set).unwrap().len(), expected);
         destroy(set);
         // Classe sans appareil : ensemble vide, pas INVALID_HANDLE_VALUE.
         let unknown = guid(
@@ -1221,8 +1226,6 @@ mod tests {
         assert!(set_nodes(set).unwrap().is_empty());
         destroy(set);
         assert!(get_class_devs(None, None, 0x2).is_none());
-        std::env::remove_var("WINLUX_CPUINFO");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
