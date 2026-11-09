@@ -248,13 +248,28 @@ unsafe extern "win64" fn tmpnam(buf: *mut u8) -> *mut u8 {
 
 // --- Console --------------------------------------------------------------------------
 
-unsafe extern "win64" fn kbhit() -> i32 {
-    let mut fds = libc::pollfd {
-        fd: 0,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    (libc::poll(&mut fds, 1, 0) > 0 && fds.revents & libc::POLLIN != 0) as i32
+/// _kbhit : sous Windows, seules les touches en attente dans la console
+/// comptent ; sans console (entrée redirigée, lancement depuis le bureau),
+/// la réponse est 0. Ici, seule une entrée standard qui est un terminal peut
+/// avoir une touche en attente : /dev/null ou un fichier sont toujours
+/// « lisibles » pour poll (fin de fichier), et Xonotic tournait sans fin dans
+/// `while (_kbhit()) _getch();` sans plus jamais dessiner (#1421).
+fn key_waiting(fd: i32) -> bool {
+    unsafe {
+        if libc::isatty(fd) != 1 {
+            return false;
+        }
+        let mut fds = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        libc::poll(&mut fds, 1, 0) > 0 && fds.revents & libc::POLLIN != 0
+    }
+}
+
+extern "win64" fn kbhit() -> i32 {
+    key_waiting(0) as i32
 }
 
 unsafe extern "win64" fn getch() -> i32 {
@@ -371,6 +386,19 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kbhit_sans_console_repond_zero() {
+        // /dev/null et un tube fermé sont « lisibles » (fin de fichier) mais
+        // ne portent aucune touche, comme une appli sans console (#1421).
+        let null = std::fs::File::open("/dev/null").unwrap();
+        assert!(!key_waiting(std::os::fd::AsRawFd::as_raw_fd(&null)));
+        let mut p = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(p.as_mut_ptr()) }, 0);
+        unsafe { libc::close(p[1]) };
+        assert!(!key_waiting(p[0]));
+        unsafe { libc::close(p[0]) };
+    }
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().chain([0]).collect()
