@@ -111,6 +111,11 @@ jobs:
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
+      - name: BCL Winlux en C# et ses témoins (étape 7 du moteur .NET)
+        run: |
+          sudo apt-get install -y -q dotnet-runtime-10.0
+          bash scripts/test-bcl.sh
+
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
       - name: Pages de code asiatiques, modules gconv gardés dans l'ISO (#183)

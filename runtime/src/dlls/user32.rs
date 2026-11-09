@@ -278,6 +278,17 @@ unsafe fn create_window_common(
     hwnd
 }
 
+/// Taille d'une fenêtre de premier niveau créée en CW_USEDEFAULT : les
+/// trois quarts de la zone de travail, au moins 800 × 600 sans dépasser
+/// l'écran. Un 800 × 600 fixe faisait passer le ruban de l'Éditeur de
+/// ScreenToGif sur deux lignes (#1277).
+fn default_window_size() -> (i32, i32) {
+    let area = gui::work_area();
+    let (aw, ah) = (area.right - area.left, area.bottom - area.top);
+    let pick = |full: i32, min: i32| (full * 3 / 4).max(min).min(full.max(1));
+    (pick(aw, 800), pick(ah, 600))
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn create_window_inner(
     class: String,
@@ -313,17 +324,26 @@ unsafe fn create_window_inner(
         let pos = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v };
         (size(cx), size(cy), pos(x), pos(y))
     } else {
+        // CW_USEDEFAULT en largeur : taille par défaut, la hauteur est alors
+        // ignorée (comme sous Windows). Une taille nulle demandée reste
+        // nulle : la fenêtre cachée de TApplication (VCL) est créée en 0×0
+        // puis « affichée » par SWP_SHOWWINDOW ; elle devenait une fenêtre
+        // vide de 800×600 sans titre (WinSCP, #1276).
+        let (w, h) = if cx == gui::CW_USEDEFAULT {
+            default_window_size()
+        } else {
+            (
+                cx.max(0),
+                if cy == gui::CW_USEDEFAULT {
+                    default_window_size().1
+                } else {
+                    cy.max(0)
+                },
+            )
+        };
         (
-            if cx == gui::CW_USEDEFAULT || cx <= 0 {
-                800
-            } else {
-                cx
-            },
-            if cy == gui::CW_USEDEFAULT || cy <= 0 {
-                600
-            } else {
-                cy
-            },
+            w,
+            h,
             if x == gui::CW_USEDEFAULT { 100 } else { x },
             if y == gui::CW_USEDEFAULT { 100 } else { y },
         )
@@ -495,7 +515,7 @@ unsafe fn create_window_inner(
         if rect != initial {
             b.set_window_rect(hwnd, rect);
         }
-        if shown {
+        if shown && !empty_top_level(hwnd) {
             b.show_window(hwnd, true);
         }
     });
@@ -934,6 +954,15 @@ pub unsafe extern "win64" fn def_window_proc_w(
     gui::def_window_proc(hwnd, message, wparam, lparam)
 }
 
+/// Fenêtre de premier niveau sans surface (largeur ou hauteur nulle) : elle
+/// peut être « visible » pour le programme, mais n'est pas montrée au
+/// gestionnaire de fenêtres (X11 n'accepte pas de fenêtre de taille nulle,
+/// le cadre seul apparaissait). Elle l'est dès qu'elle reçoit une taille.
+fn empty_top_level(hwnd: usize) -> bool {
+    gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD == 0)
+        && gui::window_rect(hwnd).is_some_and(|r| r.width() <= 0 || r.height() <= 0)
+}
+
 pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if window_diag() {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
@@ -944,7 +973,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if matches!(cmd, 4 | 7 | 8) && !was {
         with_backend(|b| b.set_no_initial_focus(hwnd));
     }
-    with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
+    // SW_MAXIMIZE (3) donne une taille à la fenêtre : elle est montrée.
+    let map = cmd != gui::SW_HIDE && (cmd == 3 || !empty_top_level(hwnd));
+    with_backend(|b| b.show_window(hwnd, map));
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
     if gui::window_parent(hwnd).unwrap_or(0) == 0 {
@@ -1169,6 +1200,18 @@ pub unsafe extern "win64" fn set_window_pos(
         }
         // Le verrou de la table HWND est relâché avant celui du backend.
         with_backend(|backend| backend.set_window_rect(hwnd, rect));
+        // Une fenêtre visible sans surface est montrée dès qu'elle en a une,
+        // et retirée quand elle la perd (#1276).
+        let was_empty = old.width() <= 0 || old.height() <= 0;
+        let empty = width <= 0 || height <= 0;
+        if resized
+            && was_empty != empty
+            && flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW) == 0
+            && gui::is_window_visible(hwnd)
+            && gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD == 0)
+        {
+            with_backend(|backend| backend.show_window(hwnd, !empty));
+        }
         if resized {
             gui::post_to_window(
                 hwnd,
@@ -1191,7 +1234,8 @@ pub unsafe extern "win64" fn set_window_pos(
     let mut visibility_changed = false;
     if flags & SWP_SHOWWINDOW != 0 {
         visibility_changed = !gui::set_visible(hwnd, true);
-        with_backend(|backend| backend.show_window(hwnd, true));
+        let map = !empty_top_level(hwnd);
+        with_backend(|backend| backend.show_window(hwnd, map));
     } else if flags & SWP_HIDEWINDOW != 0 {
         visibility_changed = gui::set_visible(hwnd, false);
         with_backend(|backend| backend.show_window(hwnd, false));
@@ -4763,6 +4807,38 @@ mod tests {
         assert_eq!((get_system_metrics(11), get_system_metrics(49)), (32, 16));
     }
 
+    /// CW_USEDEFAULT suit la zone de travail au lieu d'un 800 × 600 fixe (#1277).
+    #[test]
+    fn taille_par_defaut_suit_la_zone_de_travail() {
+        let area = gui::work_area();
+        let (aw, ah) = (area.right - area.left, area.bottom - area.top);
+        let (w, h) = default_window_size();
+        assert!(w <= aw && h <= ah, "{w}x{h} dans {aw}x{ah}");
+        assert!(w >= 800.min(aw) && h >= 600.min(ah));
+        assert_eq!(w, (aw * 3 / 4).max(800).min(aw));
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let r = gui::screen_rect(hwnd).expect("rectangle");
+            assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
+            destroy_window(hwnd);
+        }
+    }
+
     static CAPTURE_CHANGES: std::sync::Mutex<Vec<(usize, isize)>> =
         std::sync::Mutex::new(Vec::new());
 
@@ -5167,6 +5243,51 @@ mod tests {
         // Pointeurs nuls : rien d'écrit.
         let args: [u64; 2] = [0, fmt.as_ptr() as u64];
         assert_eq!(unsafe { imp_wsprintfa(args.as_ptr()) }, 0);
+    }
+
+    /// Fenêtre de premier niveau créée en 0×0 (TApplication de la VCL) : elle
+    /// garde sa taille nulle ; seul CW_USEDEFAULT donne 800×600 (#1276).
+    #[test]
+    fn fenetre_de_taille_nulle_reste_nulle() {
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        let make = |cx: i32, cy: i32| unsafe {
+            create_window_ex_w(
+                0x80,
+                class.as_ptr(),
+                class.as_ptr(),
+                0x84ca_0000u32,
+                960,
+                540,
+                cx,
+                cy,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        let nulle = make(0, 0);
+        assert_ne!(nulle, 0);
+        assert_eq!(
+            gui::window_rect(nulle).map(|r| (r.width(), r.height())),
+            Some((0, 0))
+        );
+        assert!(empty_top_level(nulle));
+        unsafe {
+            // SWP_SHOWWINDOW : visible pour le programme, sans surface.
+            set_window_pos(nulle, 0, 0, 0, 0, 0, 0x57);
+            assert!(gui::is_window_visible(nulle));
+            set_window_pos(nulle, 0, 0, 0, 200, 100, 0x16);
+        }
+        assert!(!empty_top_level(nulle));
+        let defaut = make(gui::CW_USEDEFAULT, 0);
+        // Taille par défaut (au moins 800×600, ou selon l'écran avec #1277).
+        let (w, h) = gui::window_rect(defaut).map_or((0, 0), |r| (r.width(), r.height()));
+        assert!(w >= 600 && h >= 400, "{w}x{h}");
+        unsafe {
+            destroy_window(nulle);
+            destroy_window(defaut);
+        }
     }
 
     #[test]

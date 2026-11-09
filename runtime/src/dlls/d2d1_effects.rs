@@ -1764,6 +1764,64 @@ mod tests {
     }
 
     #[test]
+    fn effet_rend_sa_fabrique_par_id2d1resource() {
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1291_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Damier'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs/></Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    essai::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            assert_eq!(super::super::create_effect(f, &id, &mut e), S_OK);
+            // QueryInterface(ID2D1Resource) puis GetFactory (case 3), comme
+            // Paint.NET (#1291).
+            let qi = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(e, 0);
+            let mut res = std::ptr::null_mut();
+            assert_eq!(qi(e, &super::super::IID_D2D1_RESOURCE, &mut res), S_OK);
+            assert!(!res.is_null());
+            let get_factory =
+                method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void)>(res, 3);
+            let mut got = std::ptr::null_mut();
+            get_factory(res, &mut got);
+            assert_eq!(got, f.cast());
+            com_release(got);
+            // La facette rend l'effet pour ID2D1Effect.
+            let qi2 = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(res, 0);
+            let mut back = std::ptr::null_mut();
+            assert_eq!(qi2(res, &super::super::IID_D2D1_EFFECT, &mut back), S_OK);
+            assert_eq!(back, e);
+            com_release(back);
+            com_release(res);
+            com_release(e);
+            Com::release(f);
+        }
+    }
+
+    #[test]
     fn infinite_output_is_bounded_by_target() {
         assert_eq!(
             clamp_rect(

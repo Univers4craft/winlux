@@ -31,6 +31,12 @@ pub const TYPE_VALUETYPE: TypeId = 20;
 pub const TYPE_ENUM: TypeId = 21;
 const FIRST_USER_TYPE: TypeId = 256;
 
+/// Type intégré au moteur (Object, String, primitives…) : sa disposition
+/// mémoire est fixée par le runtime, même quand notre mscorlib le définit.
+pub fn is_builtin(id: TypeId) -> bool {
+    id < FIRST_USER_TYPE
+}
+
 pub const EXTERNAL_OBJECT_SIZE: usize = 64;
 
 /// Façon dont une valeur d'un type est rangée en mémoire (champ, variable

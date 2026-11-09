@@ -346,6 +346,7 @@ static void gdi_origin(void)
 static int lv_changed = -1, lv_param;
 static LPARAM tv_param;
 static UINT tv_code;
+static int tv_dispinfo;
 static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_NOTIFY) {
@@ -355,6 +356,19 @@ static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (nm->uNewState & LVIS_SELECTED) {
                 lv_changed = nm->iItem;
                 lv_param = (int)nm->lParam;
+            }
+        } else if (hdr->code == TVN_GETDISPINFOW && hdr->idFrom == 53) {
+            /* Comme le TTreeView de la VCL : nœud retrouvé par TVM_GETITEM
+               (TVIF_PARAM) puis texte copié dans pszText (#1249). */
+            NMTVDISPINFOW *di = (NMTVDISPINFOW *)lp;
+            TVITEMW q = {0};
+            q.mask = TVIF_PARAM | TVIF_HANDLE;
+            q.hItem = di->item.hItem;
+            SendMessageW(hdr->hwndFrom, TVM_GETITEMW, 0, (LPARAM)&q);
+            tv_dispinfo++;
+            if ((di->item.mask & TVIF_TEXT) && q.lParam == 88 && di->item.pszText && di->item.cchTextMax > 8) {
+                wcscpy(di->item.pszText, L"New Site");
+                di->item.mask |= TVIF_DI_SETITEM;
             }
         } else if ((hdr->code == TVN_SELCHANGEDW || hdr->code == TVN_SELCHANGEDA) && hdr->idFrom == 52) {
             NMTREEVIEWW *nm = (NMTREEVIEWW *)lp;
@@ -489,6 +503,33 @@ static void notifications(void)
     HTREEITEM h = (HTREEITEM)SendMessageW(tv, TVM_INSERTITEMW, 0, (LPARAM)&ins);
     SendMessageW(tv, TVM_SELECTITEM, TVGN_CARET, (LPARAM)h);
     CHECK(tv_code != 0 && tv_param == 77, "TVN_SELCHANGED reçu en x86 (NMTREEVIEW)");
+
+    /* Arbre de la VCL : éléments LPSTR_TEXTCALLBACKW (#1249). */
+    HWND vt = CreateWindowExW(0, WC_TREEVIEWW, L"", WS_CHILD | TVS_HASLINES, 0, 0, 200, 200, parent, (HMENU)53, NULL, NULL);
+    TVINSERTSTRUCTW vi = {0};
+    vi.hParent = TVI_ROOT;
+    vi.hInsertAfter = TVI_LAST;
+    vi.item.mask = TVIF_TEXT | TVIF_PARAM;
+    vi.item.pszText = LPSTR_TEXTCALLBACKW;
+    vi.item.lParam = 88;
+    HTREEITEM site = (HTREEITEM)SendMessageW(vt, TVM_INSERTITEMW, 0, (LPARAM)&vi);
+    CHECK(site != NULL, "élément LPSTR_TEXTCALLBACKW");
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP canvas = CreateCompatibleBitmap(screen, 200, 200);
+    SelectObject(mem, canvas);
+    SendMessageW(vt, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
+    WCHAR got[32] = { 0 };
+    TVITEMW gi = {0};
+    gi.mask = TVIF_TEXT | TVIF_HANDLE;
+    gi.hItem = site;
+    gi.pszText = got;
+    gi.cchTextMax = 32;
+    SendMessageW(vt, TVM_GETITEMW, 0, (LPARAM)&gi);
+    CHECK(tv_dispinfo > 0 && wcscmp(got, L"New Site") == 0, "TVN_GETDISPINFOW en x86, texte retenu (TVIF_DI_SETITEM)");
+    DeleteDC(mem);
+    DeleteObject(canvas);
+    ReleaseDC(NULL, screen);
     DestroyWindow(parent);
 }
 
