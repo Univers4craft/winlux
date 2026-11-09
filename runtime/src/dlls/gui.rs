@@ -3027,6 +3027,8 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// Place une fenêtre juste derrière sa voisine `sibling` (SetWindowPos).
+    fn stack_below(&mut self, _hwnd: usize, _sibling: usize) {}
     /// SetParent entre deux fenêtres connues : la sous-fenêtre suit son
     /// nouveau parent, à la place `rect` (coordonnées client du parent).
     fn reparent_window(&mut self, _hwnd: usize, _parent: usize, _rect: Rect) {}

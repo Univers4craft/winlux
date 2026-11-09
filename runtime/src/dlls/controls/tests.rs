@@ -294,6 +294,25 @@ fn champ_de_saisie_texte_selection_et_notifications() {
 }
 
 #[test]
+fn champ_marges_em_setmargins() {
+    // #1377 : marges de la police par défaut, puis celles d'EM_SETMARGINS ;
+    // le texte aligné à droite ne touche plus le bord du champ.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "Edit", "1", 0x2002, 12, (10, 10, 42, 15));
+    let m = sendw(e, 0x00D4, 0, 0); // EM_GETMARGINS
+    let (l, r) = (m & 0xFFFF, m >> 16);
+    assert!(l > 0 && r > 0, "marges de la police : {l}, {r}");
+    sendw(e, 0x00D3, 2, 7 << 16); // EC_RIGHTMARGIN = 7
+    assert_eq!(sendw(e, 0x00D4, 0, 0), (7 << 16) | l);
+    let area = edit_area(e, client(e));
+    assert_eq!((area.left, area.right), (l as i32, 42 - 7));
+    sendw(e, 0x00D3, 0xFFFF, 0); // EC_USEFONTINFO
+    assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    gui::destroy_window(p);
+}
+
+#[test]
 fn champ_multiligne_lignes_et_touches() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let p = parent_window();
