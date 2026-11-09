@@ -829,7 +829,7 @@ pub fn serialize(data: &Data) -> String {
 }
 
 /// Empreinte du fichier pour savoir si une autre appli l'a modifié.
-type Stamp = Option<(u64, i64, i64, u64)>;
+pub type Stamp = Option<(u64, i64, i64, u64)>;
 
 fn stamp(path: &Path) -> Stamp {
     use std::os::unix::fs::MetadataExt;
