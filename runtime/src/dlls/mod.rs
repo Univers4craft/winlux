@@ -116,6 +116,7 @@ pub mod hid;
 pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
+pub mod icc;
 pub mod icons;
 pub mod image_list_com;
 pub mod imm32;

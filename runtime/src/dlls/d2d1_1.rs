@@ -2474,6 +2474,14 @@ pub(super) unsafe fn new_color_in(
     if out.is_null() {
         return E_POINTER;
     }
+    // sRGB et scRGB se créent sans profil, mais GetProfile rend le profil
+    // ICC de l'espace : Paint.NET le hache et refuse moins de 128 octets
+    // (#1354).
+    let profile = match (space, profile.is_empty()) {
+        (1, true) => crate::dlls::icc::srgb(),
+        (2, true) => crate::dlls::icc::scrgb(),
+        _ => profile,
+    };
     put(
         out,
         new_res(
@@ -2793,6 +2801,46 @@ mod tests {
     /// Paint.NET (ColorsForm.SetColorAddIcon) : CreateCommandList, dessin
     /// dans la liste prise pour cible, Close, puis la liste comme image
     /// (#1331).
+    /// #1354 : un contexte sRGB créé sans profil rend un profil ICC complet
+    /// (Paint.NET refuse moins de 128 octets).
+    #[test]
+    fn contexte_srgb_rend_un_profil_icc() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            for (space, expected) in [
+                (1, crate::dlls::icc::srgb()),
+                (2, crate::dlls::icc::scrgb()),
+            ] {
+                let mut cc = std::ptr::null_mut();
+                assert_eq!(
+                    dc_color_context(dc, space, std::ptr::null(), 0, &mut cc),
+                    S_OK
+                );
+                let cc: *mut ColorObj = cc.cast();
+                let size = color_profile_size(cc);
+                assert!(size > 128);
+                let mut buf = vec![0u8; size as usize];
+                assert_eq!(color_profile(cc, buf.as_mut_ptr(), size), S_OK);
+                assert_eq!(buf, expected);
+                assert_eq!(color_space(cc), space);
+                Com::release(cc);
+            }
+            // Un profil fourni est gardé tel quel.
+            let own = [7u8; 200];
+            let mut cc = std::ptr::null_mut();
+            assert_eq!(dc_color_context(dc, 0, own.as_ptr(), 200, &mut cc), S_OK);
+            assert_eq!(color_profile_size(cc.cast()), 200);
+            Com::release(cc.cast::<ColorObj>());
+        }
+    }
+
     #[test]
     fn liste_de_commandes_dessinee_puis_lue_comme_image() {
         unsafe {
