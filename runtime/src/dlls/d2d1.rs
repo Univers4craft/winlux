@@ -1082,6 +1082,8 @@ impl Target {
             Output::Dc { hdc, x, y } => {
                 if to_wic && hdc != 0 {
                     self.present(hdc, x, y);
+                } else if hdc != 0 {
+                    self.load_dc(hdc, x, y);
                 }
                 return S_OK;
             }
@@ -1160,6 +1162,33 @@ impl Target {
     }
 
     /// Pose les pixels (BGRA prémultipliés, rendus opaques) sur `hdc`.
+    /// BeginDraw d'une cible de DC : elle part du contenu actuel du DC, et
+    /// ce qui n'est pas dessiné garde le fond posé par GDI (#1368). Sans
+    /// cela, la zone non peinte d'un bouton de Paint.NET devenait noire.
+    fn load_dc(&mut self, hdc: usize, x: i32, y: i32) {
+        if self.w == 0 || self.h == 0 {
+            return;
+        }
+        let rect = super::gui::Rect {
+            left: x,
+            top: y,
+            right: x + self.w as i32,
+            bottom: y + self.h as i32,
+        };
+        let snap = match super::gui::dc_window(hdc) {
+            Some(hwnd) if hwnd != 0 => super::gui::capture_window(hwnd, rect),
+            _ => super::gui::bitmap_snapshot(hdc, rect),
+        };
+        let Some(snap) = snap else { return };
+        if snap.width != self.w as usize || snap.height != self.h as usize {
+            return;
+        }
+        for (p, &c) in self.px.as_chunks_mut::<4>().0.iter_mut().zip(&snap.pixels) {
+            // COLORREF 0x00BBGGRR → BGRA opaque.
+            *p = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+        }
+    }
+
     unsafe fn present(&self, hdc: usize, x: i32, y: i32) {
         if self.w == 0 || self.h == 0 {
             return;
@@ -2698,6 +2727,16 @@ mod tests {
             let at = |x: usize, y: usize| *(bits as *const u32).add(y * 8 + x) & 0xFF_FFFF;
             assert_eq!(at(3, 3), 0x00_00FF, "bleu dans le rectangle lié");
             assert_eq!(at(0, 0), 0, "rien hors du rectangle");
+            // #1368 : un tracé suivant part du contenu du DC ; ce qui n'est
+            // pas dessiné garde le fond posé par GDI au lieu de noircir.
+            *(bits as *mut u32).add(4 * 8 + 4) = 0x0033_6699;
+            method::<Unary>(dct, 48)(dct);
+            assert_eq!(
+                method::<End>(dct, 49)(dct, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(at(4, 4), 0x33_6699, "fond GDI conservé");
+            assert_eq!(at(3, 3), 0x00_00FF, "tracé précédent conservé");
             release_obj(dct);
             release_obj(rt);
             release_obj(bmp);

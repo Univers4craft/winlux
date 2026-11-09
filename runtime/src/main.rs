@@ -16,6 +16,7 @@ mod dlls;
 mod firewall;
 mod gamemode;
 mod gpu;
+mod image_cache;
 mod imaging;
 mod intl;
 mod journal;
@@ -220,7 +221,7 @@ fn main() {
             eprintln!("winlux: usage: winlux --inspect PROGRAM.exe");
             std::process::exit(2);
         };
-        std::process::exit(inspect(&PathBuf::from(path)));
+        std::process::exit(inspect(&paths::launch_path(&path)));
     }
     if exe == "--image-info" {
         let Some(path) = args.next() else {
@@ -232,7 +233,7 @@ fn main() {
     if let Some(code) = gpu_command(&exe, &mut args) {
         std::process::exit(code);
     }
-    let exe = PathBuf::from(exe);
+    let exe = paths::launch_path(exe.as_ref());
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
     // msiexec.exe est fourni par Winlux lui-même (module msi).
     if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {

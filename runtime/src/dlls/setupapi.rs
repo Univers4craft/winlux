@@ -1,8 +1,8 @@
 //! setupapi.dll — énumération de périphériques, sur l'arbre de
 //! `devnodes.rs` : interface et classe HID (manettes, volants, joysticks,
 //! via hidraw), classe Ports et interface COMPORT (ports COM), appareils USB
-//! parents. Les autres classes restent INVALID_HANDLE_VALUE (Electron et
-//! Chromium s'en contentent pour les GPU).
+//! parents, processeurs (classe Processor, #1370). Une classe sans appareil
+//! donne un ensemble vide, comme sous Windows.
 #![allow(non_snake_case)]
 
 use crate::dlls::devnodes;

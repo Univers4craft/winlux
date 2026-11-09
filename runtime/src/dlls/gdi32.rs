@@ -1822,25 +1822,80 @@ pub unsafe extern "win64" fn round_rect(
     width: i32,
     height: i32,
 ) -> i32 {
+    if gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
     let (rx, ry) = (width.max(0) / 2, height.max(0) / 2);
-    let brush = gui::dc_brush(hdc);
-    let color = gui::object_color(brush).unwrap_or(0);
     let rect = Rect {
         left,
         top,
         right,
         bottom,
     };
-    gui::record(
-        hdc,
-        DrawCmd::RoundRect {
-            rect,
-            color,
-            rx,
-            ry,
-        },
-    );
+    // Intérieur au pinceau, contour à la plume, comme Rectangle : sous
+    // NULL_BRUSH l'intérieur reste intact. Le remplir de noir masquait les
+    // vignettes de Sumatra, encadrées par un RoundRect (#1379).
+    if let Some(color) = gui::object_color(gui::dc_brush(hdc)) {
+        gui::record(
+            hdc,
+            DrawCmd::RoundRect {
+                rect,
+                color,
+                rx,
+                ry,
+            },
+        );
+    }
+    let pen = gui::dc_pen(hdc);
+    if let Some(color) = gui::object_color(pen) {
+        let width = gui::object_pen_width(pen).max(1);
+        let pts = round_rect_outline(&rect, rx, ry);
+        for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+            gui::record(
+                hdc,
+                DrawCmd::Line {
+                    x1: a.0,
+                    y1: a.1,
+                    x2: b.0,
+                    y2: b.1,
+                    color,
+                    width,
+                },
+            );
+        }
+    }
     1
+}
+
+/// Contour fermé d'un rectangle arrondi (bords droite et bas exclus, comme
+/// Rectangle) : chaque coin est approché par quelques segments.
+fn round_rect_outline(rect: &Rect, rx: i32, ry: i32) -> Vec<(i32, i32)> {
+    let (l, t, r, b) = (rect.left, rect.top, rect.right - 1, rect.bottom - 1);
+    let rx = rx.min((r - l) / 2).max(0);
+    let ry = ry.min((b - t) / 2).max(0);
+    if rx == 0 || ry == 0 {
+        return vec![(l, t), (r, t), (r, b), (l, b)];
+    }
+    const STEPS: i32 = 6;
+    let mut pts = Vec::new();
+    // Coins dans le sens horaire : haut droit, bas droit, bas gauche, haut gauche.
+    for (cx, cy, start) in [
+        (r - rx, t + ry, -90.0f64),
+        (r - rx, b - ry, 0.0),
+        (l + rx, b - ry, 90.0),
+        (l + rx, t + ry, 180.0),
+    ] {
+        for i in 0..=STEPS {
+            let a = (start + 90.0 * f64::from(i) / f64::from(STEPS)).to_radians();
+            pts.push((
+                cx + (f64::from(rx) * a.cos()).round() as i32,
+                cy + (f64::from(ry) * a.sin()).round() as i32,
+            ));
+        }
+    }
+    pts.dedup();
+    pts
 }
 
 // =====================================================================
