@@ -605,11 +605,87 @@ fn blit_common(
             rop: operation,
         }
     };
-    if gui::record(dst_hdc, cmd) {
-        1
-    } else {
-        0
+    if !gui::record(dst_hdc, cmd) {
+        return 0;
     }
+    if dst_foreign && src_hwnd == 0 && !stretch {
+        shape_foreign_popup(dst_hwnd, src_hdc, src_x, src_y, x, y, width, height);
+    }
+    1
+}
+
+/// Surgissant d'un autre processus peint en entier depuis une bitmap 32 bits
+/// à alpha (processus GPU de Chromium, sortie logicielle) : sous Windows le
+/// compositeur respecte l'alpha de ces fenêtres translucides, et la marge
+/// d'ombre laisse voir le dessous. Le serveur X ne compose pas l'alpha :
+/// les pixels transparents sont découpés par une forme X, comme pour
+/// UpdateLayeredWindow (#1220, #1357).
+#[allow(clippy::too_many_arguments)]
+fn shape_foreign_popup(
+    hwnd: usize,
+    src_hdc: usize,
+    src_x: i32,
+    src_y: i32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
+    let Some(f) = gui::foreign_window(hwnd) else {
+        return;
+    };
+    if f.style & WS_POPUP == 0 && f.ex_style & WS_EX_LAYERED == 0 {
+        return;
+    }
+    // Taille de la fenêtre X11, ou à défaut (sans serveur) celle de l'image.
+    let client = gui::foreign_client_rect(hwnd).unwrap_or(gui::Rect {
+        left: 0,
+        top: 0,
+        right: x + width,
+        bottom: y + height,
+    });
+    // Seule une image de toute la fenêtre décide de la forme : une mise à
+    // jour partielle garde la précédente.
+    if x > 0 || y > 0 || x + width < client.right || y + height < client.bottom {
+        return;
+    }
+    let Some((bw, bh, pixels, true)) = gui::bitmap_pixels(gui::dc_bitmap(src_hdc)) else {
+        return;
+    };
+    let (cw, ch) = (client.right as usize, client.bottom as usize);
+    let mut area = vec![0u32; cw * ch];
+    for row in 0..ch {
+        for col in 0..cw {
+            let px = src_x as i64 - x as i64 + col as i64;
+            let py = src_y as i64 - y as i64 + row as i64;
+            if px >= 0 && py >= 0 && (px as usize) < bw && (py as usize) < bh {
+                area[row * cw + col] = pixels[py as usize * bw + px as usize];
+            }
+        }
+    }
+    let shape = super::win32_basics::layered_shape(cw, ch, &area, true, None);
+    // La même forme n'est pas renvoyée à chaque image.
+    static LAST: std::sync::Mutex<Option<(u64, Option<Vec<gui::Rect>>)>> =
+        std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last
+        .as_ref()
+        .is_some_and(|(xid, s)| *xid == f.xid && *s == shape)
+    {
+        return;
+    }
+    #[cfg(test)]
+    FOREIGN_SHAPES.with(|v| v.borrow_mut().push((f.xid, shape.clone())));
+    gui::with_backend_public(|b| b.shape_foreign(f.xid, shape.as_deref()));
+    *last = Some((f.xid, shape));
+}
+
+#[cfg(test)]
+thread_local! {
+    static FOREIGN_SHAPES: std::cell::RefCell<Vec<(u64, Option<Vec<gui::Rect>>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Copie couleur → monochrome (documentation de BitBlt, Remarks) : les
@@ -2929,6 +3005,68 @@ mod foreign_window_tests {
         unsafe { crate::dlls::user32::release_dc(hwnd, dc) };
         delete_dc(mem);
         delete_object(bitmap);
+        gui_shared::withdraw_for_test(hwnd, other);
+    }
+
+    /// #1357 : un surgissant d'un autre processus peint depuis une DIB
+    /// 32 bits à alpha reçoit une forme X qui découpe la marge transparente.
+    #[test]
+    fn surgissant_etranger_decoupe_selon_l_alpha() {
+        let hwnd = gui::alloc_hwnd();
+        let other = unsafe { libc::getppid() } as u32;
+        let xid = 0x1c0_0077;
+        if !gui_shared::publish_for_test(
+            hwnd,
+            Foreign {
+                pid: other,
+                tid: 7,
+                xid,
+                style: 0x8400_0000, // WS_POPUP | WS_CLIPSIBLINGS
+                ex_style: 0,
+            },
+        ) {
+            return;
+        }
+        FOREIGN_SHAPES.with(|v| v.borrow_mut().clear());
+        unsafe {
+            let info = BitmapInfoHeader {
+                size: 40,
+                width: 4,
+                height: -2, // de haut en bas
+                planes: 1,
+                bit_count: 32,
+                compression: 0,
+                size_image: 0,
+                x_pels_per_meter: 0,
+                y_pels_per_meter: 0,
+                colors_used: 0,
+                colors_important: 0,
+            };
+            let mut bits: *mut c_void = std::ptr::null_mut();
+            let dib = create_dib_section(0, &info, 0, &mut bits, 0, 0);
+            assert_ne!(dib, 0);
+            // Colonne de gauche transparente (marge), le reste opaque.
+            let px = std::slice::from_raw_parts_mut(bits as *mut u32, 8);
+            for (i, p) in px.iter_mut().enumerate() {
+                *p = if i % 4 == 0 { 0 } else { 0xFF20_4060 };
+            }
+            let mem = create_compatible_dc(0);
+            select_object(mem, dib);
+            let dc = crate::dlls::user32::get_dc(hwnd);
+            assert_eq!(bit_blt(dc, 0, 0, 4, 2, mem, 0, 0, 0x00CC_0020), 1);
+            let shapes = FOREIGN_SHAPES.with(|v| v.borrow().clone());
+            assert_eq!(shapes.len(), 1);
+            let (to, rects) = &shapes[0];
+            assert_eq!(*to, xid);
+            let rects = rects.as_ref().expect("forme partielle");
+            assert!(rects.iter().all(|r| r.left >= 1 && r.right <= 4));
+            // Même image : la forme n'est pas renvoyée.
+            assert_eq!(bit_blt(dc, 0, 0, 4, 2, mem, 0, 0, 0x00CC_0020), 1);
+            assert_eq!(FOREIGN_SHAPES.with(|v| v.borrow().len()), 1);
+            crate::dlls::user32::release_dc(hwnd, dc);
+            delete_dc(mem);
+            delete_object(dib);
+        }
         gui_shared::withdraw_for_test(hwnd, other);
     }
 }

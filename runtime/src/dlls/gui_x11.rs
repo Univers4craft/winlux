@@ -2167,6 +2167,42 @@ impl X11Backend {
         );
     }
 
+    /// Forme X de `window` : les rectangles logiques visibles, ou toute la
+    /// fenêtre (`None`).
+    fn apply_shape(&self, window: Window, width: u16, height: u16, rects: Option<&[Rect]>) {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
+            Some(list) => list
+                .iter()
+                .map(|r| {
+                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
+                    x11rb::protocol::xproto::Rectangle {
+                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
+                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
+                    }
+                })
+                .collect(),
+            None => vec![x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }],
+        };
+        let _ = self.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            window,
+            0,
+            0,
+            &rects,
+        );
+        let _ = self.conn.flush();
+    }
+
     fn paint_bitmap(
         &self,
         window: &XWin,
@@ -4221,6 +4257,53 @@ mod tests {
         backend.conn.free_pixmap(pixmap).unwrap();
     }
 
+    /// #1357 : forme X posée sur la fenêtre d'un autre client X.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn forme_posee_sur_une_fenetre_etrangere_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::shape::ConnectionExt as _;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let win = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_window(
+                0,
+                win,
+                root.root,
+                0,
+                0,
+                40,
+                20,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        let s = backend.scaled(1);
+        let rect = Rect {
+            left: 10,
+            top: 0,
+            right: 30,
+            bottom: 20,
+        };
+        backend.shape_foreign(win as u64, Some(&[rect]));
+        let got = backend
+            .conn
+            .shape_get_rectangles(win, x11rb::protocol::shape::SK::BOUNDING)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(got.rectangles.len(), 1);
+        assert_eq!(got.rectangles[0].x as i32, 10 * s);
+        assert_eq!(got.rectangles[0].width as i32, 20 * s);
+        backend.conn.destroy_window(win).unwrap();
+    }
+
     /// #1345 : image posée par un autre processus (processus GPU de
     /// Chromium) sur un drawable X11 qui ne lui appartient pas.
     #[test]
@@ -5045,43 +5128,28 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_shape(&mut self, hwnd: usize, rects: Option<&[Rect]>) {
-        use x11rb::protocol::shape::{self, ConnectionExt as _};
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
         if w.frame != 0 {
             return; // cadre Winlux (barre de menus) : jamais en couches
         }
-        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
-            Some(list) => list
-                .iter()
-                .map(|r| {
-                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
-                    x11rb::protocol::xproto::Rectangle {
-                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
-                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
-                    }
-                })
-                .collect(),
-            None => vec![x11rb::protocol::xproto::Rectangle {
-                x: 0,
-                y: 0,
-                width: w.width,
-                height: w.height,
-            }],
+        self.apply_shape(w.window, w.width, w.height, rects);
+    }
+
+    fn shape_foreign(&mut self, xid: u64, rects: Option<&[Rect]>) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
         };
-        let _ = self.conn.shape_rectangles(
-            shape::SO::SET,
-            shape::SK::BOUNDING,
-            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
-            w.window,
-            0,
-            0,
-            &rects,
-        );
-        let _ = self.conn.flush();
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return;
+        };
+        self.apply_shape(xid, g.width, g.height, rects);
     }
 
     fn set_decorations(&mut self, hwnd: usize, level: u8) {
