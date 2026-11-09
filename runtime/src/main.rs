@@ -49,6 +49,36 @@ mod wow32;
 
 use std::path::PathBuf;
 
+/// Ligne de `winlux --version` : version et commit de construction (#1266),
+/// par exemple « winlux v0.2.20 (commit 2e22875042ab) ».
+fn version_line() -> String {
+    format!(
+        "winlux {} (commit {})",
+        include_str!("../../VERSION").trim(),
+        env!("WINLUX_BUILD_COMMIT")
+    )
+}
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn version_affiche_le_commit_de_construction() {
+        let line = super::version_line();
+        let commit = env!("WINLUX_BUILD_COMMIT");
+        assert!(line.starts_with("winlux v"), "{line}");
+        assert!(line.ends_with(&format!("(commit {commit})")), "{line}");
+        assert!(!commit.is_empty());
+        // Construit dans le dépôt git : un vrai commit, pas « inconnu ».
+        if std::env::var_os("WINLUX_COMMIT").is_none() {
+            let head = commit.trim_end_matches("+modifié");
+            assert!(
+                head.len() >= 7 && head.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{commit}"
+            );
+        }
+    }
+}
+
 fn main() {
     // Journal du compte (#633), fixé tant qu'il n'y a qu'un fil.
     journal::init();
@@ -107,7 +137,8 @@ fn main() {
         return;
     }
     if exe == "--version" {
-        println!("winlux {}", include_str!("../../VERSION").trim());
+        // Commit compris (#1266) : deux têtes de master se distinguent.
+        println!("{}", version_line());
         return;
     }
     if exe == "--power" {
