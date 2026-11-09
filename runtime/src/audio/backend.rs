@@ -132,6 +132,16 @@ pub trait Output: Send {
     fn kind(&self) -> Kind;
     /// Renvoie `false` si le périphérique a disparu.
     fn write(&mut self, stereo: &[f32]) -> bool;
+    /// Met le flux en pause sans le fermer (« bouchonné » dans le
+    /// mélangeur) ; `false` si le pilote ne sait pas le faire.
+    fn set_paused(&mut self, _paused: bool) -> bool {
+        false
+    }
+    /// Règle le volume du flux lui-même (visible dans le mélangeur) ;
+    /// `false` si le pilote ne sait pas : le moteur l'applique au signal.
+    fn set_volume(&mut self, _gain: f32, _muted: bool) -> bool {
+        false
+    }
 }
 
 /// Flux d'entrée (micro) : remplit des périodes stéréo f32 à `RATE` Hz.
