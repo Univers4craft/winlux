@@ -952,6 +952,25 @@ static void vcl_bounds(void)
     RECT r;
     GetWindowRect(e, &r);
     CHECK(r.right - r.left == 300, "largeur corrigée dans WM_WINDOWPOSCHANGING");
+    /* 7-Zip : hauteur de la barre = GetWindowRect + rcNormalPosition.top,
+     * relatif au parent pour une fenêtre enfant (#1326). */
+    WINDOWPLACEMENT pl = { sizeof pl };
+    CHECK(GetWindowPlacement(e, &pl) && pl.rcNormalPosition.left == 280 && pl.rcNormalPosition.top == 87,
+          "GetWindowPlacement d'un enfant relatif au parent");
+    /* LVM_FINDITEM avec LVFI_PARAM seul : psz n'est pas lu (#1325). */
+    HWND lv = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | LVS_REPORT, 0, 120, 200, 100,
+                              parent, NULL, NULL, NULL);
+    LVITEMW it = { LVIF_TEXT | LVIF_PARAM };
+    for (int i = 0; i < 3; i++) {
+        it.iItem = i;
+        it.pszText = L"fichier";
+        it.lParam = 700 + i;
+        SendMessageW(lv, LVM_INSERTITEMW, 0, (LPARAM)&it);
+    }
+    LVFINDINFOW fi = { LVFI_PARAM };
+    fi.psz = (LPCWSTR)1;
+    fi.lParam = 701;
+    CHECK(SendMessageW(lv, LVM_FINDITEMW, -1, (LPARAM)&fi) == 1, "LVM_FINDITEM par lParam sans texte");
     DestroyWindow(parent);
 }
 
