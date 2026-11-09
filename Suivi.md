@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **312**
+- Réalisé : **313**
 - À faire ou en cours : **46**
-- Total : **358**
+- Total : **359**
 - Progression : **87.2%**
 - Dernière mise à jour : 08/11/2026 (applis .NET autonomes et WinForms #269 : suspension de threads, contexte, WaitMessage, page de garde de pile, MEM_WRITE_WATCH, issues #954 à #965) ; 07/11/2026 (installateurs NSIS/Inno/MSI : actions personnalisées EXE et DLL, services, assistant au double-clic, PR #813 ; anciens jeux #237 : DirectDraw, Direct3D 8, MIDI, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay ; tri des issues GitHub sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées comme livrées, #498 doublon de #521 ; PR #564 pour #209, #214, #14, #26, #575, #590, #591, #592 ; 14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
@@ -153,6 +153,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Infobulle de la zone de notification (09/11/2026, #1371) : un clic sur l'icône retire son infobulle, qui ne reste plus par-dessus le menu du programme ; elle revient une fois le pointeur sorti de l'icône.
 - [x] Zone de travail réelle (09/11/2026, #1267) : GetMonitorInfo rend dans rcWork l'écran sans le panneau (_NET_WORKAREA), au lieu de l'écran entier ; le menu de l'icône de Claude ne doit plus déborder sous le bas de l'écran.
 - [x] Fenêtre toujours fermable (08/11/2026, #1211) : une fenêtre qui traite WM_NCCALCSIZE elle-même ne perd le cadre du gestionnaire que si WM_NCHITTEST montre sa propre barre de titre ou ses boutons ; sinon (Claude pour Windows sans page chargée) le cadre reste, et part au passage de la souris dès que la barre apparaît.
 - [x] WebView2 maison (07/11/2026, #236, #827) : `WebView2Loader.dll` intégrée au runtime (`dlls/webview2.rs`, tables `ICoreWebView2*` d'après l'IDL public du SDK), moteur WebKitGTK piloté par `winlux-webview` (scripts/winlux-webview.py) et incrusté dans la fenêtre de l'appli ; `window.chrome.webview`, messages, ExecuteScript, scripts de document, hôtes virtuels. WebKitGTK (gir1.2-webkit2-4.1) proposé au téléchargement à la première appli qui en a besoin (relais root), pas dans l'ISO. Test : `scripts/test-webview2.sh` (Xvfb).
