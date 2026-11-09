@@ -33,6 +33,13 @@ type StreamConnect =
 type Dequeue = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
 type Queue = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type StreamState = unsafe extern "C" fn(*mut c_void, *mut *const c_char) -> c_int;
+type SetActive = unsafe extern "C" fn(*mut c_void, bool) -> c_int;
+/// `pw_stream_set_control(stream, id, n_values, values, ..., 0)`.
+type SetControl = unsafe extern "C" fn(*mut c_void, u32, u32, *const f32, ...) -> c_int;
+
+/// `SPA_PROP_mute` et `SPA_PROP_channelVolumes` (spa/param/props.h).
+const SPA_PROP_MUTE: u32 = 0x10004;
+const SPA_PROP_CHANNEL_VOLUMES: u32 = 0x10008;
 
 struct Api {
     _lib: Lib,
@@ -50,6 +57,8 @@ struct Api {
     queue: Queue,
     state: StreamState,
     destroy: LoopFn,
+    set_active: Option<SetActive>,
+    set_control: Option<SetControl>,
 }
 
 fn api() -> Option<&'static Api> {
@@ -74,6 +83,8 @@ fn api() -> Option<&'static Api> {
             queue: load!(lib, "pw_stream_queue_buffer"),
             state: load!(lib, "pw_stream_get_state"),
             destroy: load!(lib, "pw_stream_destroy"),
+            set_active: super::backend::func(&lib, "pw_stream_set_active"),
+            set_control: super::backend::func(&lib, "pw_stream_set_control"),
             _lib: lib,
         })
     })
@@ -212,7 +223,7 @@ impl Stream {
             let props = format!(
                 "media.type=Audio media.category={} media.role={} \
                  application.name=\"{app}\" application.process.binary=\"{binary}\" \
-                 node.name=\"{app}\" node.description=\"{app}\" \
+                 media.name=\"{app}\" node.name=\"{app}\" node.description=\"{app}\" \
                  node.latency={PERIOD}/{RATE}",
                 if capture { "Capture" } else { "Playback" },
                 if capture { "Communication" } else { "Game" },
@@ -311,6 +322,39 @@ impl Drop for Stream {
 impl Output for Stream {
     fn kind(&self) -> Kind {
         Kind::PipeWire
+    }
+    fn set_paused(&mut self, paused: bool) -> bool {
+        let Some(set_active) = self.api.set_active else {
+            return false;
+        };
+        unsafe {
+            (self.api.loop_lock)(self.thread_loop);
+            let rc = set_active(self.stream, !paused);
+            (self.api.loop_unlock)(self.thread_loop);
+            rc >= 0
+        }
+    }
+    fn set_volume(&mut self, gain: f32, muted: bool) -> bool {
+        let Some(set_control) = self.api.set_control else {
+            return false;
+        };
+        let vols = [gain; 2];
+        let mute = [if muted { 1.0f32 } else { 0.0 }];
+        unsafe {
+            (self.api.loop_lock)(self.thread_loop);
+            let rc = set_control(
+                self.stream,
+                SPA_PROP_CHANNEL_VOLUMES,
+                2u32,
+                vols.as_ptr(),
+                SPA_PROP_MUTE,
+                1u32,
+                mute.as_ptr(),
+                0u32,
+            );
+            (self.api.loop_unlock)(self.thread_loop);
+            rc >= 0
+        }
     }
     fn write(&mut self, stereo: &[f32]) -> bool {
         if self.failed.load(Ordering::Relaxed) {
