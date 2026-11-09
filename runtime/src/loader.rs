@@ -448,6 +448,38 @@ impl ImageFile {
         }
         len
     }
+
+    /// Comme `map_pages`, pour une section mal alignée dans le .exe : elle
+    /// est projetée depuis sa copie alignée de `~/.cache/winlux/images`,
+    /// partagée par tous les processus du même programme (#1388).
+    fn map_cached(&self, image: &Path, at: usize, offset: usize, len: usize) -> usize {
+        use std::os::fd::AsRawFd;
+        if len == 0 || !at.is_multiple_of(PAGE) || offset + len > self.len {
+            return 0;
+        }
+        let Ok(meta) = self.file.metadata() else {
+            return 0;
+        };
+        let Some(cache) =
+            crate::image_cache::section_file(image, &meta, offset, &self[offset..offset + len])
+        else {
+            return 0;
+        };
+        let p = unsafe {
+            libc::mmap(
+                at as *mut _,
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_FIXED,
+                cache.as_raw_fd(),
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED || p as usize != at {
+            return 0;
+        }
+        len
+    }
 }
 
 impl std::ops::Deref for ImageFile {
@@ -706,12 +738,16 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
             // projetées depuis le fichier, comme le fait Windows pour une
             // image. Le noyau ne les lit qu'au besoin et peut les rendre sous
             // pression mémoire ; une écriture en fait une copie privée.
-            let mapped =
-                if n >= FILE_BACKED_MIN && d.is_multiple_of(PAGE) && start.is_multiple_of(PAGE) {
-                    file.map_pages(base + d, start, n / PAGE * PAGE)
-                } else {
-                    0
-                };
+            // Section mal alignée dans le fichier (le code de claude.exe,
+            // 161 Mo) : projetée depuis une copie alignée en cache, au lieu
+            // d'une copie anonyme par processus (#1388).
+            let mapped = if n < FILE_BACKED_MIN || !d.is_multiple_of(PAGE) {
+                0
+            } else if start.is_multiple_of(PAGE) {
+                file.map_pages(base + d, start, n / PAGE * PAGE)
+            } else {
+                file.map_cached(path, base + d, start, n / PAGE * PAGE)
+            };
             dst[d + mapped..d + n].copy_from_slice(&file[start + mapped..start + n]);
         }
     }

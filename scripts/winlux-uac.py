@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 """Contrôle de compte d'utilisateur Winlux.
 
-Usage : winlux-uac [--elevate] --app NOM [--path CHEMIN_WINDOWS]
+Usage : winlux-uac [--elevate] --app NOM [--path CHEMIN_WINDOWS] [--publisher ÉDITEUR]
 
+--publisher : éditeur dont le runtime a vérifié la signature Authenticode
+(sinon « Éditeur : inconnu »).
 --elevate : demandé par le relais root (winlux-root) avant une action
 système du bureau ; le mot de passe est vérifié par le relais, qui accorde
 alors 5 minutes d'élévation à ce compte.
@@ -50,6 +52,8 @@ _TR = {
         "Möchten Sie zulassen, dass durch diese App Änderungen an Ihrem Gerät vorgenommen werden?"),
     "Éditeur : inconnu": ("Publisher: Unknown", "Editor: desconocido", "Herausgeber: Unbekannt"),
     "Éditeur vérifié : Winlux": ("Verified publisher: Winlux", "Editor comprobado: Winlux", "Verifizierter Herausgeber: Winlux"),
+    "Éditeur vérifié : {name}": (
+        "Verified publisher: {name}", "Editor comprobado: {name}", "Verifizierter Herausgeber: {name}"),
     "Origine du fichier : disque dur de cet ordinateur": (
         "File origin: Hard drive on this computer",
         "Origen del archivo: unidad de disco duro de este equipo",
@@ -149,7 +153,7 @@ def verify(user, password):
     return False
 
 
-def run_dialog(app, win_path, elevate=False):
+def run_dialog(app, win_path, elevate=False, publisher=""):
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
@@ -208,8 +212,15 @@ def run_dialog(app, win_path, elevate=False):
     body.pack_start(name, False, False, 0)
     # --elevate : un outil de Winlux lui-même (Store, Paramètres) passe par le
     # relais root ; comme Windows pour ses composants, l'éditeur est connu.
-    publisher = _t("Éditeur vérifié : Winlux") if elevate else _t("Éditeur : inconnu")
-    for line in (publisher, _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
+    # Sinon, l'éditeur est celui dont le runtime a vérifié la signature
+    # Authenticode (#1382) ; un binaire non signé ou mal signé reste inconnu.
+    if elevate:
+        shown = _t("Éditeur vérifié : Winlux")
+    elif publisher:
+        shown = _t("Éditeur vérifié : {name}", name=publisher)
+    else:
+        shown = _t("Éditeur : inconnu")
+    for line in (shown, _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
         if line:
             label = Gtk.Label(label=line, xalign=0, wrap=True)
             label.get_style_context().add_class("uac-info")
@@ -299,7 +310,7 @@ def osk_run(command, verb):
 
 
 def main(argv):
-    app, win_path, elevate = "", "", False
+    app, win_path, elevate, publisher = "", "", False, ""
     args = list(argv[1:])
     while args:
         flag = args.pop(0)
@@ -309,10 +320,12 @@ def main(argv):
             app = args.pop(0)
         elif flag == "--path" and args:
             win_path = args.pop(0)
+        elif flag == "--publisher" and args:
+            publisher = args.pop(0)
         else:
             print(__doc__.strip(), file=sys.stderr)
             return 2
-    return 0 if run_dialog(app or "?", win_path, elevate) else 1
+    return 0 if run_dialog(app or "?", win_path, elevate, publisher) else 1
 
 
 if __name__ == "__main__":

@@ -204,14 +204,31 @@ const CONTAINER_DDS: Guid = guid(
     [0x8c, 0xa2, 0x83, 0xd7, 0xcc, 0xd4, 0x25, 0xc9],
 );
 
-/// Octets par pixel des formats que Winlux sait lire et produire.
+use super::wic_pixels::{self, FMT_RGB32};
+
+/// Octets par pixel des formats que Winlux sait lire et produire : 8 bits
+/// par canal ici, plus larges dans `wic_pixels` (#1384).
 fn bytes_per_pixel(fmt: &Guid) -> Option<u32> {
     Some(match *fmt {
         FMT_GRAY8 => 1,
         FMT_BGR24 | FMT_RGB24 => 3,
-        FMT_BGR32 | FMT_BGRA32 | FMT_PBGRA32 | FMT_RGBA32 | FMT_PRGBA32 => 4,
-        _ => return None,
+        FMT_BGR32 | FMT_RGB32 | FMT_BGRA32 | FMT_PBGRA32 | FMT_RGBA32 | FMT_PRGBA32 => 4,
+        _ => return wic_pixels::layout(fmt).map(|l| l.bpp),
     })
+}
+
+/// Nom lisible d'un GUID de format, pour le journal.
+fn format_name(fmt: &Guid) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{}}}",
+        fmt.data1,
+        fmt.data2,
+        fmt.data3,
+        fmt.data4
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    )
 }
 
 // --- Pixels -------------------------------------------------------------------
@@ -271,6 +288,13 @@ impl Pix {
 
     /// Pixels en RGBA 8 bits non prémultiplié, ligne à ligne sans marge.
     fn to_rgba(&self) -> Vec<u8> {
+        if wic_pixels::layout(&self.fmt).is_some() {
+            return self
+                .to_raw()
+                .iter()
+                .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+                .collect();
+        }
         let bpp = bytes_per_pixel(&self.fmt).unwrap_or(4) as usize;
         let mut out = Vec::with_capacity(self.w as usize * self.h as usize * 4);
         for y in 0..self.h as usize {
@@ -282,6 +306,7 @@ impl Pix {
                     FMT_BGR24 => [p[2], p[1], p[0], 255],
                     FMT_RGB24 => [p[0], p[1], p[2], 255],
                     FMT_BGR32 => [p[2], p[1], p[0], 255],
+                    FMT_RGB32 => [p[0], p[1], p[2], 255],
                     FMT_BGRA32 => [p[2], p[1], p[0], p[3]],
                     FMT_RGBA32 => [p[0], p[1], p[2], p[3]],
                     FMT_PBGRA32 => unpremultiply([p[2], p[1], p[0], p[3]]),
@@ -294,6 +319,15 @@ impl Pix {
     }
 
     fn from_rgba(w: u32, h: u32, rgba: &[u8], fmt: Guid, dpi: (f64, f64)) -> Option<Pix> {
+        if wic_pixels::layout(&fmt).is_some() {
+            let raw: Vec<[f32; 4]> = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p.map(|v| v as f32 / 255.0))
+                .collect();
+            return Pix::from_raw(w, h, &raw, fmt, dpi);
+        }
         let mut pix = Pix::zeroed(w, h, fmt)?;
         pix.dpi = dpi;
         let bpp = bytes_per_pixel(&fmt)? as usize;
@@ -309,6 +343,7 @@ impl Pix {
                     FMT_BGR24 => d.copy_from_slice(&[s[2], s[1], s[0]]),
                     FMT_RGB24 => d.copy_from_slice(&[s[0], s[1], s[2]]),
                     FMT_BGR32 => d.copy_from_slice(&[s[2], s[1], s[0], 255]),
+                    FMT_RGB32 => d.copy_from_slice(&[s[0], s[1], s[2], 255]),
                     FMT_BGRA32 => d.copy_from_slice(&[s[2], s[1], s[0], s[3]]),
                     FMT_RGBA32 => d.copy_from_slice(s),
                     FMT_PBGRA32 => {
@@ -326,12 +361,88 @@ impl Pix {
         if fmt == self.fmt {
             return Some(self.clone());
         }
-        Pix::from_rgba(self.w, self.h, &self.to_rgba(), fmt, self.dpi)
+        bytes_per_pixel(&fmt)?;
+        let wide = |f: &Guid| wic_pixels::layout(f).is_some();
+        if !wide(&self.fmt) && !wide(&fmt) {
+            return Pix::from_rgba(self.w, self.h, &self.to_rgba(), fmt, self.dpi);
+        }
+        // Au moins un format large : passage par des valeurs linéaires en
+        // flottant, sans perdre la précision ni les valeurs hors 0..1.
+        let lin: Vec<[f32; 4]> = self
+            .to_raw()
+            .into_iter()
+            .map(|c| {
+                if format_linear(&self.fmt) {
+                    c
+                } else {
+                    let f = wic_pixels::srgb_to_linear;
+                    [f(c[0]), f(c[1]), f(c[2]), c[3]]
+                }
+            })
+            .collect();
+        let raw: Vec<[f32; 4]> = if format_linear(&fmt) {
+            lin
+        } else {
+            let f = wic_pixels::linear_to_srgb;
+            lin.into_iter()
+                .map(|c| [f(c[0]), f(c[1]), f(c[2]), c[3]])
+                .collect()
+        };
+        Pix::from_raw(self.w, self.h, &raw, fmt, self.dpi)
+    }
+
+    /// Pixels RVBA droits, valeurs telles que stockées par le format
+    /// (0..1 pour les entiers ; sans changement de courbe).
+    fn to_raw(&self) -> Vec<[f32; 4]> {
+        let Some(l) = wic_pixels::layout(&self.fmt) else {
+            return self
+                .to_rgba()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p.map(|v| v as f32 / 255.0))
+                .collect();
+        };
+        let bpp = l.bpp as usize;
+        let mut out = Vec::with_capacity(self.w as usize * self.h as usize);
+        for y in 0..self.h as usize {
+            let row = &self.data[y * self.stride as usize..];
+            for x in 0..self.w as usize {
+                out.push(wic_pixels::read(&l, &row[x * bpp..x * bpp + bpp]));
+            }
+        }
+        out
+    }
+
+    /// Inverse de `to_raw`.
+    fn from_raw(w: u32, h: u32, raw: &[[f32; 4]], fmt: Guid, dpi: (f64, f64)) -> Option<Pix> {
+        let Some(l) = wic_pixels::layout(&fmt) else {
+            let rgba: Vec<u8> = raw
+                .iter()
+                .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+                .collect();
+            return Pix::from_rgba(w, h, &rgba, fmt, dpi);
+        };
+        let mut pix = Pix::zeroed(w, h, fmt)?;
+        pix.dpi = dpi;
+        let bpp = l.bpp as usize;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let d = &mut pix.data[y * pix.stride as usize + x * bpp..][..bpp];
+                wic_pixels::write(&l, d, raw[y * w as usize + x]);
+            }
+        }
+        Some(pix)
     }
 
     fn from_raster(r: &crate::imaging::Raster) -> Pix {
         Pix::from_rgba(r.w, r.h, &r.px, FMT_BGRA32, (96.0, 96.0)).expect("format connu")
     }
+}
+
+/// Valeurs linéaires (formats flottants) plutôt qu'encodées sRGB.
+fn format_linear(fmt: &Guid) -> bool {
+    wic_pixels::layout(fmt).is_some_and(|l| l.linear())
 }
 
 fn premultiply(p: [u8; 4]) -> [u8; 4] {
@@ -706,6 +817,7 @@ unsafe fn new_source(kind: Kind, pix: Option<Pix>, out: *mut *mut c_void) -> i32
         Kind::Frame => FRAME_VT.ptr(),
         Kind::Bitmap => BITMAP_VT.ptr(),
         Kind::Converter => CONVERTER_VT.ptr(),
+        Kind::ColorTransform => COLOR_TRANSFORM_VT.ptr(),
         Kind::Scaler | Kind::Clipper | Kind::FlipRotator => TRANSFORM_VT.ptr(),
     };
     put(
@@ -732,6 +844,7 @@ macro_rules! creator_of {
     };
 }
 creator_of!(create_format_converter, Kind::Converter);
+creator_of!(create_color_transformer, Kind::ColorTransform);
 creator_of!(create_bitmap_scaler, Kind::Scaler);
 creator_of!(create_bitmap_clipper, Kind::Clipper);
 creator_of!(create_bitmap_flip_rotator, Kind::FlipRotator);
@@ -763,7 +876,16 @@ unsafe extern "win64" fn create_bitmap(
     }
     match Pix::zeroed(w, h, *fmt) {
         Some(p) => new_source(Kind::Bitmap, Some(p), out),
-        None => WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT,
+        None => {
+            crate::log_warn!(
+                "wic",
+                "CreateBitmap {}×{} : format de pixel {} non pris en charge",
+                w,
+                h,
+                format_name(&*fmt)
+            );
+            WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT
+        }
     }
 }
 
@@ -869,7 +991,7 @@ static FACTORY_VT: VTable<29> = VTable([
     create_bitmap_flip_rotator as *const (),
     create_stream as *const (),
     create_color_context as *const (),
-    unsupported!("CreateColorTransformer"),
+    create_color_transformer as *const (),
     create_bitmap as *const (),
     create_bitmap_from_source as *const (),
     create_bitmap_from_source_rect as *const (),
@@ -903,7 +1025,7 @@ static COMPONENT_FACTORY_VT: VTable<35> = VTable([
     create_bitmap_flip_rotator as *const (),
     create_stream as *const (),
     create_color_context as *const (),
-    unsupported!("CreateColorTransformer"),
+    create_color_transformer as *const (),
     create_bitmap as *const (),
     create_bitmap_from_source as *const (),
     create_bitmap_from_source_rect as *const (),
@@ -1971,6 +2093,7 @@ enum Kind {
     Frame,
     Bitmap,
     Converter,
+    ColorTransform,
     Scaler,
     Clipper,
     FlipRotator,
@@ -1993,6 +2116,7 @@ unsafe extern "win64" fn source_qi(
         Kind::Frame => IID_BITMAP_FRAME_DECODE,
         Kind::Bitmap => IID_BITMAP,
         Kind::Converter => IID_FORMAT_CONVERTER,
+        Kind::ColorTransform => IID_COLOR_TRANSFORM,
         Kind::Scaler => IID_BITMAP_SCALER,
         Kind::Clipper => IID_BITMAP_CLIPPER,
         Kind::FlipRotator => IID_BITMAP_FLIP_ROTATOR,
@@ -2329,6 +2453,86 @@ source_vtable!(
     [converter_initialize, converter_can_convert]
 );
 source_vtable!(TRANSFORM_VT, 9, [transform_initialize]);
+source_vtable!(COLOR_TRANSFORM_VT, 9, [color_transform_initialize]);
+
+/// IWICColorTransform {B66F034F-D0E2-40AB-B436-6DE39E321A94} (wincodec.h).
+const IID_COLOR_TRANSFORM: Guid = guid(
+    0xb66f_034f,
+    0xd0e2,
+    0x40ab,
+    [0xb4, 0x36, 0x6d, 0xe3, 0x9e, 0x32, 0x1a, 0x94],
+);
+
+/// Profil matrice + courbes d'un IWICColorContext de Winlux.
+unsafe fn context_shaper(ctx: *mut c_void) -> Option<crate::dlls::icc::Shaper> {
+    if ctx.is_null() || !std::ptr::eq(*(ctx as *const *const ()), COLOR_CONTEXT_VT.ptr()) {
+        return None;
+    }
+    match &*crate::dlls::lock(Com::get(ctx as *mut ColorContextObj)) {
+        ColorContext::Profile(bytes) => crate::dlls::icc::shaper(bytes),
+        ColorContext::Exif(1) => crate::dlls::icc::shaper(&crate::dlls::icc::srgb()),
+        ColorContext::Exif(2) => Some(crate::dlls::icc::adobe_rgb_shaper()),
+        _ => None,
+    }
+}
+
+/// IWICColorTransform::Initialize : convertit la source du profil source
+/// au profil de destination (profils RVB matrice + courbes), puis au
+/// format demandé (#1384). Les profils non lus (tables LUT…) laissent les
+/// couleurs telles quelles, avec un avertissement.
+unsafe extern "win64" fn color_transform_initialize(
+    this: *mut SourceObj,
+    src: *mut c_void,
+    ctx_src: *mut c_void,
+    ctx_dst: *mut c_void,
+    fmt: *const Guid,
+) -> i32 {
+    if src.is_null() || ctx_src.is_null() || ctx_dst.is_null() || fmt.is_null() {
+        return E_INVALIDARG;
+    }
+    if bytes_per_pixel(&*fmt).is_none() {
+        crate::log_warn!(
+            "wic",
+            "ColorTransform : format de pixel {} non pris en charge",
+            format_name(&*fmt)
+        );
+        return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+    }
+    let pix = match read_source(src) {
+        Ok(p) => p,
+        Err(hr) => return hr,
+    };
+    let transform = match (context_shaper(ctx_src), context_shaper(ctx_dst)) {
+        (Some(a), Some(b)) => crate::dlls::icc::Transform::new(a, b),
+        _ => None,
+    };
+    let Some(transform) = transform else {
+        crate::log_warn!(
+            "wic",
+            "ColorTransform : profil non matrice + courbes, couleurs inchangées"
+        );
+        let Some(p) = pix.convert(*fmt) else {
+            return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+        };
+        *crate::dlls::lock(&Com::get(this).pix) = Some(p);
+        return S_OK;
+    };
+    let raw: Vec<[f32; 4]> = pix
+        .to_raw()
+        .into_iter()
+        .map(|c| {
+            let o = transform.apply([c[0], c[1], c[2]]);
+            [o[0], o[1], o[2], c[3]]
+        })
+        .collect();
+    match Pix::from_raw(pix.w, pix.h, &raw, *fmt, pix.dpi) {
+        Some(p) => {
+            *crate::dlls::lock(&Com::get(this).pix) = Some(p);
+            S_OK
+        }
+        None => WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT,
+    }
+}
 
 // --- Verrou de bitmap -----------------------------------------------------------------
 
@@ -3169,6 +3373,81 @@ mod tests {
             assert_eq!(pix.data[12], 9);
             release_obj(bmp);
             release_obj(f);
+        }
+    }
+
+    /// #1384 : Paint.NET (ColorProfile.CanWicColorConvertFrom) crée un
+    /// bitmap flottant puis le convertit d'un profil à l'autre.
+    #[test]
+    fn bitmap_flottant_et_transformation_de_couleur() {
+        use crate::dlls::wic_pixels::{FMT_PRGBA_FLOAT128, FMT_RGBA64, FMT_RGBA_FLOAT128};
+        type CreateBmp = unsafe extern "win64" fn(
+            *mut c_void,
+            u32,
+            u32,
+            *const Guid,
+            u32,
+            *mut *mut c_void,
+        ) -> i32;
+        type InitU32 = unsafe extern "win64" fn(*mut c_void, u32) -> i32;
+        type InitMem = unsafe extern "win64" fn(*mut c_void, *const u8, u32) -> i32;
+        type Init = unsafe extern "win64" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *const Guid,
+        ) -> i32;
+        type Copy = unsafe extern "win64" fn(*mut c_void, *const WicRect, u32, u32, *mut u8) -> i32;
+        unsafe {
+            let f = factory();
+            for fmt in [FMT_RGBA_FLOAT128, FMT_PRGBA_FLOAT128, FMT_RGBA64] {
+                let mut bmp = std::ptr::null_mut();
+                assert_eq!(method::<CreateBmp>(f, 17)(f, 2, 1, &fmt, 0, &mut bmp), S_OK);
+                release_obj(bmp);
+            }
+            // Un format inconnu reste refusé.
+            let mut bmp = std::ptr::null_mut();
+            let inconnu = guid(1, 2, 3, [4; 8]);
+            assert_eq!(
+                method::<CreateBmp>(f, 17)(f, 1, 1, &inconnu, 0, &mut bmp),
+                WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT
+            );
+            // Gris sRGB 50 % → scRGB (profil linéaire) en flottant : ≈ 0,214.
+            let src =
+                Pix::from_rgba(1, 1, &[128, 128, 128, 255], FMT_BGRA32, (96.0, 96.0)).unwrap();
+            let mut sb = std::ptr::null_mut();
+            assert_eq!(new_source(Kind::Bitmap, Some(src), &mut sb), S_OK);
+            let (mut cs, mut cd) = (std::ptr::null_mut(), std::ptr::null_mut());
+            assert_eq!(method::<Create>(f, 15)(f, &mut cs), S_OK);
+            assert_eq!(method::<Create>(f, 15)(f, &mut cd), S_OK);
+            assert_eq!(method::<InitU32>(cs, 5)(cs, 1), S_OK);
+            let lin = crate::dlls::icc::scrgb();
+            assert_eq!(
+                method::<InitMem>(cd, 4)(cd, lin.as_ptr(), lin.len() as u32),
+                S_OK
+            );
+            let mut t = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 16)(f, &mut t), S_OK);
+            assert_eq!(
+                method::<Init>(t, 8)(t, sb, cs, cd, &FMT_RGBA_FLOAT128),
+                S_OK
+            );
+            let mut px = [0u8; 16];
+            assert_eq!(
+                method::<Copy>(t, 7)(t, std::ptr::null(), 16, 16, px.as_mut_ptr()),
+                S_OK
+            );
+            let r = f32::from_le_bytes(px[0..4].try_into().unwrap());
+            let a = f32::from_le_bytes(px[12..16].try_into().unwrap());
+            assert!((r - 0.2158).abs() < 0.003, "{r}");
+            assert_eq!(a, 1.0);
+            // Conversion de format seule : flottant linéaire → BGRA sRGB.
+            let p = read_source(t).unwrap().convert(FMT_BGRA32).unwrap();
+            assert!((p.data[0] as i32 - 128).abs() <= 1, "{}", p.data[0]);
+            for o in [t, cs, cd, sb, f] {
+                release_obj(o);
+            }
         }
     }
 
