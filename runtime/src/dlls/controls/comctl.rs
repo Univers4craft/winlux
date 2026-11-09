@@ -331,9 +331,19 @@ fn tree_text(hwnd: usize, n: &TreeNode) -> String {
     } else {
         TVN_GETDISPINFOA
     };
-    notify_struct(hwnd, code, &mut nm);
+    let r = notify_struct(hwnd, code, &mut nm);
     // Le parent peut remplir notre tampon ou pointer vers le sien.
     let text = unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default();
+    if user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] TVN_GETDISPINFO{} {hwnd:#x} élément {:#x} lParam {:#x} -> {r}, mask {:#x}, texte {:#x} {text:?}",
+            if wide { "W" } else { "A" },
+            n.handle,
+            n.param,
+            nm.item.mask,
+            nm.item.text
+        );
+    }
     if nm.item.mask & TVIF_DI_SETITEM != 0 {
         let h = n.handle;
         let keep = text.clone();
