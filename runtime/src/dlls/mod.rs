@@ -1557,6 +1557,9 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // KernelBase et les API-sets, jamais par kernel32.
     "LoadStringA",
     "LoadStringW",
+    // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
+    "PathCchCombineEx",
+    "PathCchSkipRoot",
 ];
 
 /// Fonctions rangées dans la table kernel32 de Winlux pour servir des
