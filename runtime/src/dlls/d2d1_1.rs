@@ -1275,6 +1275,84 @@ unsafe extern "win64" fn effect_resource_qi(
     effect_qi(Com::get(this).data.effect, riid, out)
 }
 
+// --- Listes de commandes (#1331) ---------------------------------------------------
+
+/// ID2D1CommandList {B4F34A19-2383-4D76-94F6-EC343657C3DC} (d2d1_1.h).
+const IID_D2D1_COMMAND_LIST: Guid = guid(
+    0xb4f34a19,
+    0x2383,
+    0x4d76,
+    [0x94, 0xf6, 0xec, 0x34, 0x36, 0x57, 0xc3, 0xdc],
+);
+
+/// Taille d'une liste de commandes créée sans cible : la liste n'a pas de
+/// bornes chez Direct2D, ici elle est rendue dans une surface fixe.
+const COMMAND_LIST_DEFAULT_SIZE: u32 = 1024;
+
+/// Une liste de commandes est rendue au fil de l'eau dans des pixels,
+/// comme un bitmap cible : SetTarget l'accepte, EndDraw y recopie le
+/// dessin, et elle sert d'image (DrawImage, entrée d'effet, pinceau).
+/// Stream n'est pas rejouable : E_NOTIMPL.
+pub(super) static COMMAND_LIST_VT: VTable<6> = VTable([
+    command_list_qi as *const (),
+    add_ref::<Res<Bitmap>> as *const (),
+    release::<Res<Bitmap>> as *const (),
+    get_factory::<Bitmap> as *const (),
+    unsupported!("ID2D1CommandList::Stream"),
+    command_list_close as *const (),
+]);
+
+unsafe extern "win64" fn command_list_qi(
+    this: *mut BitmapObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_D2D1_RESOURCE, IID_D2D1_IMAGE, IID_D2D1_COMMAND_LIST],
+    )
+}
+
+unsafe extern "win64" fn command_list_close(_: *mut BitmapObj) -> i32 {
+    S_OK
+}
+
+/// Bitmap ou liste de commandes : objets dont les pixels sont tenus ici.
+pub(super) unsafe fn is_pixel_image(image: *mut c_void) -> bool {
+    if image.is_null() {
+        return false;
+    }
+    let vt = *(image as *const *const ());
+    vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr()
+}
+
+/// CreateCommandList : surface de la taille de la cible courante.
+unsafe extern "win64" fn dc_create_command_list(
+    this: *mut TargetObj,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let (w, h) = {
+        let t = target(this);
+        (t.w, t.h)
+    };
+    let (w, h) = if w == 0 || h == 0 {
+        (COMMAND_LIST_DEFAULT_SIZE, COMMAND_LIST_DEFAULT_SIZE)
+    } else {
+        (w, h)
+    };
+    let b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    put(
+        out,
+        new_res(Com::get(this).factory, COMMAND_LIST_VT.ptr(), b),
+    )
+}
+
 static EFFECT_RESOURCE_VT: VTable<4> = VTable([
     effect_resource_qi as *const (),
     add_ref::<Res<EffectImage>> as *const (),
@@ -1586,7 +1664,7 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
         return None;
     }
     let vt = *(image as *const *const ());
-    if vt == BITMAP_VT.ptr() {
+    if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
         return Some(Img {
             x: 0,
@@ -1799,7 +1877,7 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
         crate::log_warn!("d2d1", "SetTarget refusé sur une cible fenêtre ou HDC");
         return;
     }
-    let new_out = if !image.is_null() && *(image as *const *const ()) == BITMAP_VT.ptr() {
+    let new_out = if is_pixel_image(image) {
         let b = &Com::get(image as *mut BitmapObj).data;
         t.w = b.w;
         t.h = b.h;
@@ -1808,7 +1886,10 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
         Output::Bitmap(image)
     } else {
         if !image.is_null() {
-            crate::log_warn!("d2d1", "SetTarget : seule une ID2D1Bitmap1 peut être cible");
+            crate::log_warn!(
+                "d2d1",
+                "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
+            );
         }
         t.w = 0;
         t.h = 0;
@@ -2035,7 +2116,7 @@ const DC_EXTRA: [*const (); 63] = [
     dc_gradient_stops1 as *const (),                   // 64 CreateGradientStopCollection
     super::brushes::create_image_brush as *const (),   // 65 CreateImageBrush
     super::brushes::create_bitmap_brush1 as *const (), // 66 CreateBitmapBrush
-    unsupported!("CreateCommandList"),                 // 67
+    dc_create_command_list as *const (),               // 67 CreateCommandList
     dc_format_supported as *const (),                  // 68 IsDxgiFormatSupported
     dc_precision_supported as *const (),               // 69 IsBufferPrecisionSupported
     dc_image_local_bounds as *const (),                // 70 GetImageLocalBounds
@@ -2702,6 +2783,78 @@ mod tests {
             dc_get_target(dc, &mut back);
             assert_eq!(back, bmp);
             com_release(back);
+            com_release(bmp);
+            com_release(dc.cast());
+            com_release(dev);
+            Com::release(f);
+        }
+    }
+
+    /// Paint.NET (ColorsForm.SetColorAddIcon) : CreateCommandList, dessin
+    /// dans la liste prise pour cible, Close, puis la liste comme image
+    /// (#1331).
+    #[test]
+    fn liste_de_commandes_dessinee_puis_lue_comme_image() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            // Cible 8×6, puis la liste prend sa taille.
+            let mut bmp = std::ptr::null_mut();
+            let size = 8u64 | (6u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(dc, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let create = method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32>(
+                dc.cast(),
+                67,
+            );
+            let mut list = std::ptr::null_mut();
+            assert_eq!(create(dc.cast(), &mut list), S_OK);
+            assert!(!list.is_null());
+            // QueryInterface : ID2D1CommandList et ID2D1Image.
+            let qi = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(list, 0);
+            for iid in [IID_D2D1_COMMAND_LIST, IID_D2D1_IMAGE] {
+                let mut p = std::ptr::null_mut();
+                assert_eq!(qi(list, &iid, &mut p), S_OK);
+                assert_eq!(p, list);
+                com_release(p);
+            }
+            // Dessin dans la liste.
+            dc_set_target(dc, list);
+            let mut back = std::ptr::null_mut();
+            dc_get_target(dc, &mut back);
+            assert_eq!(back, list);
+            com_release(back);
+            super::super::begin_draw(dc);
+            let green = super::super::ColorF {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(dc, &green);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let close = method::<unsafe extern "win64" fn(*mut c_void) -> i32>(list, 5);
+            assert_eq!(close(list), S_OK);
+            // La liste se lit comme une image de la taille de la cible.
+            let img = image_img(list, 0, (8, 6)).expect("image de la liste");
+            assert_eq!((img.w, img.h), (8, 6));
+            assert_eq!(&img.px[0..4], &[0, 255, 0, 255]);
+            dc_set_target(dc, std::ptr::null_mut());
+            com_release(list);
             com_release(bmp);
             com_release(dc.cast());
             com_release(dev);
