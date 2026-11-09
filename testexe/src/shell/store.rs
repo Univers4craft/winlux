@@ -343,6 +343,10 @@ pub unsafe fn button(g: &mut Gfx, x: i32, y: i32, label: &[u8], primary: bool, h
 pub unsafe fn progress_bar(g: &mut Gfx, x: i32, y: i32, w: i32, pct: i32) {
     let p = pal();
     round_rect(g.hdc, g.b, x, y, x + w, y + 4, 2, p.border);
+    if pct < 0 {
+        // Avancement inconnu : la piste seule, jamais un chiffre inventé.
+        return;
+    }
     let fill_w = (w * pct.clamp(0, 100) / 100).max(4);
     round_rect(g.hdc, g.b, x, y, x + fill_w, y + 4, 2, p.accent);
 }
@@ -580,6 +584,13 @@ static mut OP_ACTIVE: bool = false;
 static mut OP_TARGET: Buf<160> = Buf::new();
 static mut OP_PERCENT: i32 = 0;
 static mut OP_MESSAGE: Buf<200> = Buf::new();
+/// Résultat de la dernière opération, gardé dans le Store (#1449) : une
+/// réussite 12 s, un échec ou une annulation jusqu'à la croix ou l'opération
+/// suivante (la bulle seule disparaissait avant d'être lue).
+static mut RESULT: Buf<200> = Buf::new();
+static mut RESULT_ERROR: bool = false;
+static mut RESULT_AT: u32 = 0;
+pub const RESULT_MS: u32 = 12_000;
 static mut OP_STARTED: u32 = 0;
 
 unsafe fn poll_progress() -> bool {
@@ -592,7 +603,8 @@ unsafe fn poll_progress() -> bool {
         if let Some(v) = line.strip_prefix(b"state=") {
             state = v;
         } else if let Some(v) = line.strip_prefix(b"percent=") {
-            OP_PERCENT = parse_num(v) as i32;
+            // Vide : étape sans avancement mesurable, aucun pourcentage (#1455).
+            OP_PERCENT = if v.is_empty() { -1 } else { parse_num(v) as i32 };
         } else if let Some(v) = line.strip_prefix(b"message=") {
             OP_MESSAGE.clear();
             OP_MESSAGE.push(v);
@@ -611,6 +623,10 @@ unsafe fn poll_progress() -> bool {
     }
     if state == b"done" || state == b"error" {
         OP_ACTIVE = false;
+        RESULT.clear();
+        RESULT.push(OP_MESSAGE.get());
+        RESULT_ERROR = state == b"error";
+        RESULT_AT = GetTickCount();
         crate::desktop::toast(OP_MESSAGE.get());
         load_index();
         if VIEW == View::Detail {
@@ -655,6 +671,7 @@ enum Action {
     DetailInstall,
     DetailRemove,
     DetailUpdate,
+    DismissResult,
 }
 
 const MAX_HITS: usize = 320;
@@ -863,9 +880,10 @@ unsafe fn operate(verb: &[u8], key: &[u8]) {
     let n = cp1252_to_utf8(args.get(), &mut raw);
     DeleteFileA(run_file(b"store-progress.txt").as_ptr().cast());
     if spawn(c"winlux-store", &raw[..n]) {
+        RESULT.clear();
         OP_ACTIVE = true;
         OP_STARTED = GetTickCount();
-        OP_PERCENT = 0;
+        OP_PERCENT = -1;
         OP_TARGET.clear();
         OP_TARGET.push(key);
         OP_MESSAGE.clear();
@@ -1032,15 +1050,19 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             SEARCH.get(),
             sw - 70,
         );
-        let cr = rect(sr.right - 30, sr.top + 6, sr.right - 6, sr.bottom - 6);
-        glyph(g.hdc, g.b, g.f, Glyph::Close, cr.left + 4, cr.top + 4, 14);
-        hit(cr, Action::ClearSearch);
     }
     if SEARCH_FOCUS && (GetTickCount() / 500) % 2 == 0 {
         let cx = sr.left + 36 + text_width(SEARCH.get(), 13).min(sw - 70);
         fill(g.hdc, g.b, cx, sr.top + 8, cx + 1, sr.bottom - 8, p.text);
     }
     hit(sr, Action::Search);
+    if SEARCH.n > 0 {
+        // Après le champ : la dernière zone enregistrée l'emporte au clic, la
+        // croix captait sinon « Search » et n'effaçait rien (#1447).
+        let cr = rect(sr.right - 30, sr.top + 6, sr.right - 6, sr.bottom - 6);
+        glyph(g.hdc, g.b, g.f, Glyph::Close, cr.left + 4, cr.top + 4, 14);
+        hit(cr, Action::ClearSearch);
+    }
     set_glyph_bg(Some(p.window));
 
     let mut body = rect(area.left + 28, area.top + 64, area.right - 28, area.bottom);
@@ -1088,7 +1110,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             b.right - b.left - 120,
         );
         let mut pct: Buf<8> = Buf::new();
-        pct.num(OP_PERCENT as u64).push(b" %");
+        if OP_PERCENT >= 0 {
+            pct.num(OP_PERCENT as u64).push(b" %");
+        }
         text(
             g.hdc,
             g.f.semibold,
@@ -1104,8 +1128,33 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             b.right - b.left - 48,
             OP_PERCENT,
         );
+    } else if result_shown() {
+        let b = rect(area.left, area.bottom - 44, area.right, area.bottom);
+        fill(g.hdc, g.b, b.left, b.top, b.right, b.bottom, p.surface);
+        fill(g.hdc, g.b, b.left, b.top, b.right, b.top + 1, p.border);
+        if RESULT_ERROR {
+            fill(g.hdc, g.b, b.left, b.top + 1, b.left + 4, b.bottom, p.accent);
+        }
+        text_fit(
+            g.hdc,
+            g.f.body,
+            13,
+            p.text,
+            b.left + 24,
+            b.top + 13,
+            RESULT.get(),
+            b.right - b.left - 84,
+        );
+        let cr = rect(b.right - 40, b.top + 10, b.right - 16, b.top + 34);
+        glyph(g.hdc, g.b, g.f, Glyph::Close, cr.left + 5, cr.top + 5, 14);
+        hit(cr, Action::DismissResult);
     }
     set_glyph_bg(None);
+}
+
+/// Bandeau de résultat visible (#1449).
+pub unsafe fn result_shown() -> bool {
+    RESULT.n > 0 && (RESULT_ERROR || GetTickCount().wrapping_sub(RESULT_AT) < RESULT_MS)
 }
 
 /// Barre d'icônes de gauche : Accueil, Applications, Jeux, Programmes
@@ -1206,16 +1255,29 @@ unsafe fn draw_rail(g: &mut Gfx, f: &Frame) {
         5,
         c.bottom - 68,
         Glyph::Refresh,
-        if REFRESHING {
-            t(b"Actualisation...", b"Refreshing...")
-        } else {
-            t(b"Actualiser", b"Refresh")
-        },
+        rail_refresh_label(),
         false,
         false,
         Action::Refresh,
     );
     set_glyph_bg(Some(p.mica));
+}
+
+/// Libellé du bouton Actualiser de la barre latérale : au plus 11 caractères,
+/// la barre fait 88 px (« Aktualisieren » et « Actualisation... » étaient
+/// coupés, #1450).
+pub fn rail_refresh_label() -> &'static [u8] {
+    let busy = unsafe { REFRESHING };
+    match (lang(), busy) {
+        (0, false) => b"Actualiser",
+        (0, true) => b"En cours...",
+        (2, false) => b"Actualizar",
+        (2, true) => b"Cargando...",
+        (3, false) => b"Neu laden",
+        (3, true) => b"L\xE4dt...",
+        (_, false) => b"Refresh",
+        (_, true) => b"Loading...",
+    }
 }
 
 /// Libellé du bouton d'une carte selon l'état de l'application.
@@ -2526,6 +2588,7 @@ unsafe fn act(a: Action) -> bool {
             }
         }
         Action::Search => SEARCH_FOCUS = true,
+        Action::DismissResult => RESULT.clear(),
         Action::ClearSearch => {
             SEARCH.clear();
             SCROLL = 0;

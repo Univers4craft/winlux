@@ -37,7 +37,9 @@ printf '[Default Applications]\napplication/x-msdownload=autre.desktop;\ntext/pl
 cp "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant"
 DESTDIR="$dest" WINLUX_VERSION=test sh "$root/integration/install.sh" /usr >/dev/null
 for f in usr/bin/winlux usr/bin/winlux-open usr/bin/winlux-update usr/share/applications/winlux.desktop \
-         usr/share/mime/packages/winlux.xml usr/share/winlux/uninstall.sh etc/binfmt.d/winlux.conf; do
+         usr/share/mime/packages/winlux.xml usr/share/winlux/uninstall.sh etc/binfmt.d/winlux.conf \
+         usr/share/icons/hicolor/scalable/mimetypes/application-x-ms-dos-executable.svg \
+         usr/bin/winlux-applications usr/share/thumbnailers/winlux-windows.thumbnailer; do
     test -e "$dest/$f" || fail "$f non installé"
 done
 grep -q '^Exec=/usr/bin/winlux-open %f$' "$dest/usr/share/applications/winlux.desktop" || fail "Exec incorrect"
@@ -58,6 +60,11 @@ ok "installation DESTDIR et associations MIME"
 DESTDIR="$dest" sh "$dest/usr/share/winlux/uninstall.sh" /usr >/dev/null
 test ! -e "$dest/usr/bin/winlux" || fail "winlux non désinstallé"
 test ! -e "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt non désinstallé"
+# Icônes et miniatures des .exe (#1425) retirées aussi.
+for f in usr/bin/winlux-applications usr/share/thumbnailers/winlux-windows.thumbnailer \
+         usr/share/icons/hicolor/scalable/mimetypes/application-x-ms-dos-executable.svg; do
+    test ! -e "$dest/$f" || fail "$f non désinstallé"
+done
 cmp -s "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant" || fail "mimeapps.list non restauré"
 ok "désinstallation et restauration de mimeapps.list"
 

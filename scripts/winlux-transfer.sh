@@ -12,9 +12,13 @@
 #     accessibilité ;
 #   - les lecteurs réseau, sans aucun mot de passe (ils restent scellés sur
 #     la machine d'origine : Winlux les redemande à la première connexion) ;
+#   - les applications épinglées au menu Démarrer (clé « pins » de
+#     ~/.config/winlux/start.json, dans user/epingles.json) (#1458) ;
 #   - les applications par défaut (mimeapps.list) ;
 #   - la langue, la disposition du clavier, la souris, le thème et
 #     l'alignement de la barre, les choix de confidentialité.
+# L'archive et tout ce que l'import écrit dans le dossier personnel
+# appartiennent au compte, même quand le script tourne en root (#1459).
 # Rien d'autre n'est lu à l'import : liste blanche de fichiers, de clés et de
 # valeurs. Avant chaque import, les réglages actuels sont sauvegardés et
 # « undo » les remet.
@@ -47,6 +51,22 @@ PERSONALIZE=${WINLUX_PERSONALIZE:-winlux-personalize}
 # Bureau sous le compte : /etc/winlux reste à root, le relais écrit les clés.
 relayed() { test -z "$root" && test "$(id -u)" != 0 && test -S "${WINLUX_ROOT_SOCKET:-/run/winlux-root.sock}"; }
 
+# Propriétaire du dossier personnel : l'archive porte son nom, et ce que le
+# script crée chez lui lui est rendu s'il tourne en root (#1459).
+home_uid=$(stat -c %u "$home" 2>/dev/null || id -u)
+home_gid=$(stat -c %g "$home" 2>/dev/null || id -g)
+own() {
+    test "$(id -u)" = 0 && test "$home_uid" != 0 || return 0
+    for path in "$@"; do
+        # Le fichier, puis chaque dossier parent créé sous le dossier personnel.
+        while case "$path" in "$home"/*) true ;; *) false ;; esac; do
+            if test -e "$path" || test -L "$path"; then
+                chown -h "$home_uid:$home_gid" "$path" 2>/dev/null || true
+            fi
+            path=$(dirname "$path")
+        done
+    done
+}
 fail() { printf 'winlux-transfer : %s\n' "$*" >&2; note "error" "$*"; status; exit 1; }
 note() { printf '%s|%s\n' "$1" "$2" > "$run/transfer-last.txt"; chmod 644 "$run/transfer-last.txt" 2>/dev/null || true; }
 
@@ -197,12 +217,76 @@ appearance_import() {
         mkdir -p "$share/fonds"
         wall="$share/fonds/fond-importe.${picture##*.}"
         cp "$picture" "$wall.$$" && mv "$wall.$$" "$wall"
+        own "$wall"
         break
     done
     case "$wall" in
         *..*) ;;
         /usr/share/winlux/*|"$share"/fonds/*) test -f "$wall" && "$PERSONALIZE" wallpaper "$wall" >/dev/null 2>&1 || true ;;
     esac
+}
+
+# ---------------------------------------------------------------- épingles
+
+# Applications épinglées au menu Démarrer (#1458) : la seule clé « pins » de
+# ~/.config/winlux/start.json, des identifiants .desktop, 100 au plus.
+PINS_CHECK='
+import json, re, sys
+def valid(pins):
+    return (isinstance(pins, list) and len(pins) <= 100
+            and all(isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.desktop", p) for p in pins))
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as source:
+            data = json.load(source)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+'
+pins_export() {
+    py=$(command -v python3 2>/dev/null || true)
+    test -n "$py" || return 0
+    "$py" -I -c "$PINS_CHECK
+state = load(sys.argv[1])
+if valid(state.get('pins')):
+    json.dump({'pins': state['pins']}, sys.stdout)
+" "$home/.config/winlux/start.json" > "$1/epingles.json" || true
+    test -s "$1/epingles.json" || rm -f "$1/epingles.json"
+}
+
+# Fusionne les épingles dans start.json sans toucher aux autres clés.
+# Annulation (« undo ») sans épingles sauvegardées : le menu reprend ses
+# épingles par défaut.
+pins_import() {
+    py=$(command -v python3 2>/dev/null || true)
+    test -n "$py" || return 0
+    f="$1/epingles.json"
+    if ! test -f "$f" || test -L "$f"; then
+        test "${2:-}" = undo || return 0
+        f=
+    fi
+    test -z "$f" || test "$(wc -c < "$f")" -le 65536 || return 0
+    state="$home/.config/winlux/start.json"
+    mkdir -p "$home/.config/winlux"
+    "$py" -I -c "$PINS_CHECK
+import os
+target, source = sys.argv[1], sys.argv[2]
+state = load(target)
+if source:
+    pins = load(source).get('pins')
+    if not valid(pins):
+        sys.exit(0)
+    state['pins'] = pins
+elif 'pins' in state:
+    del state['pins']
+else:
+    sys.exit(0)
+temporary = target + '.import.' + str(os.getpid())
+with open(temporary, 'w', encoding='utf-8') as out:
+    json.dump(state, out)
+os.replace(temporary, target)
+" "$state" "$f" || true
+    own "$state"
 }
 
 # ---------------------------------------------------------------- export
@@ -235,10 +319,13 @@ build() {
     done
     for f in "$bwork"/system/*; do test -f "$f" && members="$members system/${f##*/}"; done
     appearance_export "$bwork/user"
-    for f in "$bwork"/user/apparence.conf "$bwork"/user/fond.*; do test -f "$f" && members="$members user/${f##*/}"; done
+    pins_export "$bwork/user"
+    for f in "$bwork"/user/apparence.conf "$bwork"/user/epingles.json "$bwork"/user/fond.*; do test -f "$f" && members="$members user/${f##*/}"; done
+    # Membres au nom du compte, jamais root (#1459).
     # shellcheck disable=SC2086
-    (cd "$bwork" && tar -czf "$dest.part" --owner=0 --group=0 $members)
+    (cd "$bwork" && tar -czf "$dest.part" --owner="$home_uid" --group="$home_gid" --numeric-owner $members)
     mv "$dest.part" "$dest"
+    own "$dest"
     rm -rf "$bwork"
     trap - EXIT HUP INT TERM
 }
@@ -304,9 +391,10 @@ import_file() {
     allowed="winlux-profile.txt"
     for rel in $USER_FILES; do allowed="$allowed user/$rel"; done
     for file_keys in $(printf '%s\n' "$SYSTEM_KEYS" | cut -d ' ' -f 1); do allowed="$allowed system/$file_keys"; done
-    allowed="$allowed user/apparence.conf user/fond.png user/fond.jpg user/fond.jpeg user/fond.webp user/fond.bmp user/fond.gif"
+    allowed="$allowed user/apparence.conf user/epingles.json user/fond.png user/fond.jpg user/fond.jpeg user/fond.webp user/fond.bmp user/fond.gif"
     wanted=
     for m in $list; do
+        case " $wanted " in *" $m "*) continue ;; esac
         case " $allowed " in *" $m "*) wanted="$wanted $m" ;; esac
     done
     work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-transfer.XXXXXX")
@@ -331,6 +419,7 @@ import_file() {
         mkdir -p "$home/$(dirname "$rel")"
         cp "$f" "$home/$rel.import.$$"
         mv "$home/$rel.import.$$" "$home/$rel"
+        own "$home/$rel"
         count=$((count + 1))
     done
     printf '%s\n' "$SYSTEM_KEYS" | while read -r name keys; do
@@ -348,6 +437,7 @@ import_file() {
         filter_keys "$f" "$name" "$keys"
     done
     appearance_import "$work/user"
+    pins_import "$work/user" "${2:-}"
     rm -rf "$work"
     trap - EXIT HUP INT TERM
     note "imported" "$(windows_path "$file")"
