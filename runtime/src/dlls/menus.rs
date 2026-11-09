@@ -322,7 +322,7 @@ extern "win64" fn get_menu_item_id(menu: usize, pos: i32) -> u32 {
             |it| if it.submenu != 0 { u32::MAX } else { it.id },
         )
 }
-extern "win64" fn get_sub_menu(menu: usize, pos: i32) -> usize {
+pub(crate) extern "win64" fn get_sub_menu(menu: usize, pos: i32) -> usize {
     let m = lock(menus());
     m.menus
         .get(&menu)

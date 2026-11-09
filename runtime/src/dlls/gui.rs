@@ -3225,6 +3225,64 @@ fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
         .max()
 }
 
+pub const WM_MOUSELEAVE: u32 = 0x02A3;
+
+/// Fenêtres qui ont demandé WM_MOUSELEAVE par TrackMouseEvent(TME_LEAVE)
+/// (#1254). Le suivi est à usage unique, comme sous Windows : il s'arrête
+/// dès que le message est posté.
+fn leave_tracking() -> &'static Mutex<Vec<usize>> {
+    static T: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Dernière fenêtre qui a reçu un message souris (0 : aucune).
+static LAST_MOUSE_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Le pointeur est-il sur `hwnd`, d'après le dernier message souris ?
+pub fn pointer_over(hwnd: usize) -> bool {
+    LAST_MOUSE_HWND.load(std::sync::atomic::Ordering::Relaxed) == hwnd
+}
+
+/// TrackMouseEvent(TME_LEAVE) : suivre `hwnd`, ou poster tout de suite
+/// WM_MOUSELEAVE si le pointeur n'est déjà plus dessus.
+pub fn track_mouse_leave(hwnd: usize, pointer_inside: bool) {
+    let mut t = lock(leave_tracking());
+    t.retain(|&h| h != hwnd);
+    if pointer_inside {
+        t.push(hwnd);
+    } else {
+        drop(t);
+        post_to_window(hwnd, Msg::new(hwnd, WM_MOUSELEAVE, 0, 0));
+    }
+}
+
+/// TME_CANCEL : ne plus suivre `hwnd`.
+pub fn cancel_mouse_leave(hwnd: usize) {
+    lock(leave_tracking()).retain(|&h| h != hwnd);
+}
+
+/// TME_QUERY : `hwnd` attend-il un WM_MOUSELEAVE ?
+pub fn mouse_leave_tracked(hwnd: usize) -> bool {
+    lock(leave_tracking()).contains(&hwnd)
+}
+
+/// Le pointeur est maintenant sur `now` (0 : hors de toute fenêtre du
+/// programme) : les fenêtres suivies qu'il a quittées reçoivent
+/// WM_MOUSELEAVE. Sans lui, WPF rapportait la souris à la première
+/// fenêtre survolée et ignorait les clics dans les suivantes.
+fn mouse_moved_to(now: usize) {
+    LAST_MOUSE_HWND.store(now, std::sync::atomic::Ordering::Relaxed);
+    let left: Vec<usize> = {
+        let mut t = lock(leave_tracking());
+        let left = t.iter().copied().filter(|&h| h != now).collect();
+        t.retain(|&h| h == now);
+        left
+    };
+    for h in left {
+        post_to_window(h, Msg::new(h, WM_MOUSELEAVE, 0, 0));
+    }
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
@@ -3267,6 +3325,18 @@ pub fn pump_backend() {
         let mouse = (0x0200..=0x020E).contains(&e.message)
             || (0x00A0..=0x00AD).contains(&e.message)
             || (0x0245..=0x024A).contains(&e.message);
+        // Souris sur une autre fenêtre (hors molette, livrée à la fenêtre
+        // qui a le focus), ou sortie de la fenêtre signalée par le backend.
+        if e.message == WM_MOUSELEAVE {
+            if mouse_leave_tracked(e.hwnd) {
+                cancel_mouse_leave(e.hwnd);
+                post_to_window(e.hwnd, Msg::new(e.hwnd, WM_MOUSELEAVE, 0, 0));
+            }
+            continue;
+        }
+        if mouse && !matches!(e.message, 0x020A | 0x020E) {
+            mouse_moved_to(e.hwnd);
+        }
         if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
             let press = matches!(
                 e.message,
@@ -5793,6 +5863,10 @@ pub fn raw_keys() -> [bool; 256] {
 /// (mouvements et clics reçus par une fenêtre Winlux).
 static CURSOR_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 
+/// Tests qui posent puis relisent la position du pointeur (partagée).
+#[cfg(test)]
+pub static CURSOR_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn set_cursor_screen_pos(x: i32, y: i32) {
     *lock(&CURSOR_POS) = Some((x, y));
 }
@@ -5800,10 +5874,39 @@ pub fn set_cursor_screen_pos(x: i32, y: i32) {
 /// Position du pointeur pour GetCursorPos ; centre de l'écran tant que la
 /// souris n'a encore rien fait sur une fenêtre Winlux.
 pub fn cursor_screen_pos() -> (i32, i32) {
-    lock(&CURSOR_POS).unwrap_or_else(|| {
+    let pos = lock(&CURSOR_POS).unwrap_or_else(|| {
         let (w, h) = screen_size();
         (w / 2, h / 2)
-    })
+    });
+    if crate::thunks::api_trace_active() {
+        // Une note à chaque changement seulement : GetCursorPos est appelé
+        // à chaque survol (#1222).
+        static LAST: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+        let mut last = lock(&LAST);
+        if *last != Some(pos) {
+            *last = Some(pos);
+            crate::thunks::api_note(&format!("GetCursorPos → ({}, {}) (#1222)", pos.0, pos.1));
+        }
+    }
+    pos
+}
+
+/// Échelle de l'affichage en millièmes (1000 = 100 %), posée par le moteur
+/// X11 à sa création ; lue sans prendre le verrou du moteur.
+static DISPLAY_SCALE_MILLI: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+
+pub fn set_display_scale(scale: f32) {
+    let milli = (scale * 1000.0).round().clamp(1.0, 100_000.0) as u32;
+    DISPLAY_SCALE_MILLI.store(milli, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Point de l'écran X (pixels réels) en coordonnées écran logiques de Win32.
+pub fn logical_point(x: i32, y: i32) -> (i32, i32) {
+    let scale = DISPLAY_SCALE_MILLI.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
+    (
+        (x as f32 / scale).round() as i32,
+        (y as f32 / scale).round() as i32,
+    )
 }
 
 pub fn raw_mouse_motion(x: i32, y: i32) {

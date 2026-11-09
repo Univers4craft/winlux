@@ -236,7 +236,7 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
 
 /// `WINLUX_WINDOW_DIAG=1` : création, placement et affichage des fenêtres
 /// sur la sortie d'erreur (diagnostic des fenêtres filles absentes).
-fn window_diag() -> bool {
+pub(crate) fn window_diag() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         std::env::var_os("WINLUX_WINDOW_DIAG").is_some_and(|v| !v.is_empty() && v != "0")
@@ -2075,6 +2075,9 @@ pub extern "win64" fn get_parent(hwnd: usize) -> usize {
 
 pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     let old = gui::set_window_parent(hwnd, new_parent).unwrap_or(0);
+    if window_diag() {
+        eprintln!("winlux[fenetre] parent {hwnd:#x} : {old:#x} -> {new_parent:#x}");
+    }
     if new_parent != 0 && new_parent != old {
         // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).
@@ -2173,14 +2176,29 @@ pub extern "win64" fn get_top_window(hwnd: usize) -> usize {
 // Input : capture, timers, curseur, clavier
 // =====================================================================
 
+/// WM_CAPTURECHANGED, envoyé à la fenêtre qui perd la capture (#1254) :
+/// sans lui, WPF croit garder la capture sur l'élément cliqué et route les
+/// clics des autres fenêtres vers lui.
+const WM_CAPTURECHANGED: u32 = 0x0215;
+
+fn capture_lost(old: usize, new: usize) {
+    if old != 0 && old != new && gui::is_window(old) {
+        unsafe { send_message_w(old, WM_CAPTURECHANGED, 0, new as isize) };
+    }
+}
+
 pub extern "win64" fn set_capture(hwnd: usize) -> usize {
-    gui::set_capture(hwnd)
+    let old = gui::set_capture(hwnd);
+    capture_lost(old, hwnd);
+    old
 }
 
 /// ReleaseCapture réussit aussi quand aucune fenêtre n'a la capture : WPF
 /// lève une Win32Exception sur un FALSE (#268).
 pub extern "win64" fn release_capture() -> i32 {
+    let old = gui::get_capture();
     gui::release_capture();
+    capture_lost(old, 0);
     1
 }
 
@@ -2283,6 +2301,52 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
     let (x, y) = gui::cursor_screen_pos();
     (*point).x = x;
     (*point).y = y;
+    1
+}
+
+/// TrackMouseEvent (#1254) : TME_LEAVE fait poster WM_MOUSELEAVE quand le
+/// pointeur quitte la fenêtre. TME_HOVER et TME_NONCLIENT sont acceptés
+/// sans effet. La structure fait 24 octets en 64 bits et 16 en 32 bits.
+pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
+    const TME_LEAVE: u32 = 0x2;
+    const TME_NONCLIENT: u32 = 0x10;
+    const TME_QUERY: u32 = 0x4000_0000;
+    const TME_CANCEL: u32 = 0x8000_0000;
+    if tme.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let size = std::ptr::read_unaligned(tme as *const u32);
+    let flags = std::ptr::read_unaligned(tme.add(4) as *const u32);
+    let hwnd_at = |p: *mut u8| -> usize {
+        if size == 16 {
+            std::ptr::read_unaligned(p.add(8) as *const u32) as usize
+        } else {
+            std::ptr::read_unaligned(p.add(8) as *const usize)
+        }
+    };
+    if size != 16 && size != 24 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let hwnd = hwnd_at(tme);
+    if flags & TME_QUERY != 0 {
+        let tracked = gui::mouse_leave_tracked(hwnd);
+        std::ptr::write_unaligned(tme.add(4) as *mut u32, if tracked { TME_LEAVE } else { 0 });
+        return 1;
+    }
+    if flags & TME_LEAVE == 0 || flags & TME_NONCLIENT != 0 {
+        return 1;
+    }
+    if flags & TME_CANCEL != 0 {
+        gui::cancel_mouse_leave(hwnd);
+        return 1;
+    }
+    if !gui::is_window(hwnd) {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    gui::track_mouse_leave(hwnd, gui::pointer_over(hwnd));
     1
 }
 
@@ -2739,17 +2803,83 @@ pub unsafe extern "win64" fn draw_text_w(
     draw_text_impl(hdc, &s, &mut *rect, format)
 }
 
+/// DrawTextEx : même rendu que DrawText ; les marges de DRAWTEXTPARAMS
+/// ne sont pas appliquées (le bouchon précédent ignorait tout le format).
+pub unsafe extern "win64" fn draw_text_ex_a(
+    hdc: usize,
+    text: *const u8,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_a(hdc, text, count, rect, format)
+}
+
+pub unsafe extern "win64" fn draw_text_ex_w(
+    hdc: usize,
+    text: *const u16,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_w(hdc, text, count, rect, format)
+}
+
+/// Retire les préfixes de mnémonique de DrawText : « &F » affiche « F »
+/// souligné, « && » affiche « & ». Rend le texte affiché et la position (en
+/// caractères) de la lettre à souligner.
+pub(crate) fn split_prefix(text: &str) -> (String, Option<usize>) {
+    let mut out = String::with_capacity(text.len());
+    let mut underline = None;
+    let mut count = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            match chars.next() {
+                Some('&') => {
+                    out.push('&');
+                    count += 1;
+                }
+                Some(c) => {
+                    if underline.is_none() {
+                        underline = Some(count);
+                    }
+                    out.push(c);
+                    count += 1;
+                }
+                None => {}
+            }
+            continue;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    (out, underline)
+}
+
 fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     const DT_CALCRECT: u32 = 0x0400;
     const DT_CENTER: u32 = 0x0001;
+    const DT_RIGHT: u32 = 0x0002;
     const DT_VCENTER: u32 = 0x0004;
+    const DT_BOTTOM: u32 = 0x0008;
     const DT_SINGLELINE: u32 = 0x0020;
-    const DT_NOCLIP: u32 = 0x0100;
     const DT_NOPREFIX: u32 = 0x0800;
+    const DT_HIDEPREFIX: u32 = 0x0010_0000;
+    const DT_PREFIXONLY: u32 = 0x0020_0000;
 
     let font_handle = gui::dc_font(hdc);
     let font = gui::font_spec(font_handle).unwrap_or_default();
-    let (tw, th) = gui::measure_text(&font, text);
+    // Sans DT_NOPREFIX, « & » marque la lettre de raccourci (libellés de la
+    // VCL : « &Hostname: » s'affichait tel quel, #1248).
+    let (shown, underline) = if format & DT_NOPREFIX != 0 {
+        (text.to_string(), None)
+    } else {
+        split_prefix(text)
+    };
+    let (tw, th) = gui::measure_text(&font, &shown);
 
     if format & DT_CALCRECT != 0 {
         rect.right = rect.left + tw;
@@ -2762,9 +2892,15 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
 
     if format & DT_CENTER != 0 {
         x = rect.left + (rect.width() - tw) / 2;
+    } else if format & DT_RIGHT != 0 {
+        x = rect.right - tw;
     }
-    if format & DT_SINGLELINE != 0 && format & DT_VCENTER != 0 {
-        y = rect.top + (rect.height() - th) / 2;
+    if format & DT_SINGLELINE != 0 {
+        if format & DT_VCENTER != 0 {
+            y = rect.top + (rect.height() - th) / 2;
+        } else if format & DT_BOTTOM != 0 {
+            y = rect.bottom - th;
+        }
     }
 
     let color = gui::dc_text_color(hdc);
@@ -2775,18 +2911,37 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         None
     };
 
-    let _ = (DT_NOCLIP, DT_NOPREFIX);
-    gui::record(
-        hdc,
-        gui::DrawCmd::Text {
-            x,
-            y,
-            text: text.to_string(),
-            color,
-            bk,
-            font,
-        },
-    );
+    if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
+        let before: String = shown.chars().take(k).collect();
+        let upto: String = shown.chars().take(k + 1).collect();
+        let x1 = x + gui::measure_text(&font, &before).0;
+        let x2 = x + gui::measure_text(&font, &upto).0;
+        let base = y + th - 2;
+        gui::record(
+            hdc,
+            gui::DrawCmd::Line {
+                x1,
+                y1: base,
+                x2: x2 - 1,
+                y2: base,
+                color,
+                width: 1,
+            },
+        );
+    }
+    if format & DT_PREFIXONLY == 0 {
+        gui::record(
+            hdc,
+            gui::DrawCmd::Text {
+                x,
+                y,
+                text: shown,
+                color,
+                bk,
+                font,
+            },
+        );
+    }
 
     th
 }
@@ -4138,6 +4293,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
         "AdjustWindowRect"=>fn adjust_window_rect, "AdjustWindowRectEx"=>fn adjust_window_rect_ex,
         "MapWindowPoints"=>fn map_window_points,
+        "TrackMouseEvent"=>fn track_mouse_event,
         "ScreenToClient"=>fn screen_to_client, "ClientToScreen"=>fn client_to_screen,
         // --- Window navigation ---
         "GetParent"=>fn get_parent, "SetParent"=>fn set_parent,
@@ -4156,6 +4312,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ReleaseDC"=>fn release_dc,
         "FillRect"=>fn fill_rect, "FrameRect"=>fn frame_rect,
         "DrawTextA"=>fn draw_text_a, "DrawTextW"=>fn draw_text_w,
+        "DrawTextExA"=>fn draw_text_ex_a, "DrawTextExW"=>fn draw_text_ex_w,
         "GetUpdateRect"=>fn get_update_rect, "GetUpdateRgn"=>fn get_update_rgn,
         "RedrawWindow"=>fn redraw_window,
         // --- Keyboard input ---
@@ -4582,6 +4739,9 @@ mod tests {
 
     #[test]
     fn position_du_pointeur_suivie() {
+        let _guard = gui::CURSOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             gui::set_cursor_screen_pos(260, 200);
             let mut p = Point { x: 0, y: 0 };
@@ -4601,6 +4761,79 @@ mod tests {
         assert!(get_system_metrics(60) >= get_system_metrics(1));
         assert_eq!((get_system_metrics(34), get_system_metrics(35)), (136, 39));
         assert_eq!((get_system_metrics(11), get_system_metrics(49)), (32, 16));
+    }
+
+    static CAPTURE_CHANGES: std::sync::Mutex<Vec<(usize, isize)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_capture(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_CAPTURECHANGED {
+            CAPTURE_CHANGES.lock().unwrap().push((h, l));
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// La fenêtre qui perd la capture reçoit WM_CAPTURECHANGED avec la
+    /// nouvelle (ou 0), et TrackMouseEvent rend compte du suivi (#1254).
+    #[test]
+    fn capture_et_sortie_du_pointeur_signalees() {
+        let name: Vec<u16> = "Winlux1254Capture".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_capture as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let make = || {
+                create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    50,
+                    50,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let (a, b) = (make(), make());
+            assert!(a != 0 && b != 0);
+            set_capture(a);
+            set_capture(b);
+            release_capture();
+            let seen = CAPTURE_CHANGES.lock().unwrap().clone();
+            assert!(seen.contains(&(a, b as isize)), "{seen:?}");
+            assert!(seen.contains(&(b, 0)), "{seen:?}");
+
+            // TRACKMOUSEEVENT 64 bits : cbSize, dwFlags, hwndTrack, dwHoverTime.
+            let mut tme = [0u8; 24];
+            tme[..4].copy_from_slice(&24u32.to_le_bytes());
+            tme[4..8].copy_from_slice(&2u32.to_le_bytes()); // TME_LEAVE
+            tme[8..16].copy_from_slice(&0x7777_0000usize.to_le_bytes());
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 0);
+            gui::track_mouse_leave(a, true);
+            tme[4..8].copy_from_slice(&0x4000_0000u32.to_le_bytes()); // TME_QUERY
+            tme[8..16].copy_from_slice(&a.to_le_bytes());
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 1);
+            assert_eq!(u32::from_le_bytes(tme[4..8].try_into().unwrap()), 2);
+            tme[4..8].copy_from_slice(&0x8000_0002u32.to_le_bytes()); // TME_CANCEL | TME_LEAVE
+            assert_eq!(track_mouse_event(tme.as_mut_ptr()), 1);
+            assert!(!gui::mouse_leave_tracked(a));
+            destroy_window(a);
+            destroy_window(b);
+        }
     }
 
     static CREATE_SEEN_BY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -4934,6 +5167,32 @@ mod tests {
         // Pointeurs nuls : rien d'écrit.
         let args: [u64; 2] = [0, fmt.as_ptr() as u64];
         assert_eq!(unsafe { imp_wsprintfa(args.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn draw_text_retire_les_prefixes_de_mnemonique() {
+        assert_eq!(split_prefix("&Hostname:"), ("Hostname:".into(), Some(0)));
+        assert_eq!(
+            split_prefix("Po&rt number:"),
+            ("Port number:".into(), Some(2))
+        );
+        assert_eq!(split_prefix("A && B"), ("A & B".into(), None));
+        assert_eq!(split_prefix("fin&"), ("fin".into(), None));
+        // DT_CALCRECT mesure le texte affiché, sans l'esperluette.
+        const DT_CALCRECT: u32 = 0x0400;
+        const DT_NOPREFIX: u32 = 0x0800;
+        let avec = b"&Port\0";
+        let sans = b"Port\0";
+        let mut r1 = Rect::default();
+        let mut r2 = Rect::default();
+        let mut r3 = Rect::default();
+        unsafe {
+            draw_text_a(0, avec.as_ptr(), -1, &mut r1, DT_CALCRECT);
+            draw_text_a(0, sans.as_ptr(), -1, &mut r2, DT_CALCRECT);
+            draw_text_a(0, avec.as_ptr(), -1, &mut r3, DT_CALCRECT | DT_NOPREFIX);
+        }
+        assert_eq!(r1.right, r2.right);
+        assert!(r3.right > r2.right, "DT_NOPREFIX garde « & »");
     }
 
     #[test]

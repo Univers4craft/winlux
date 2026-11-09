@@ -41,7 +41,7 @@ fn new_table(entries: Vec<Accel>) -> usize {
     h
 }
 
-fn table(h: usize) -> Option<Vec<Accel>> {
+pub(crate) fn table(h: usize) -> Option<Vec<Accel>> {
     super::lock(tables()).get(&h).cloned()
 }
 

@@ -124,6 +124,9 @@ struct TreeNode {
     param: isize,
     state: u32,
     children_hint: i32,
+    /// Texte donné en LPSTR_TEXTCALLBACK : demandé au parent par
+    /// TVN_GETDISPINFO à chaque dessin (TTreeView de la VCL, #1249).
+    callback: bool,
 }
 
 #[derive(Clone, Default)]
@@ -289,6 +292,61 @@ struct NmTreeView {
     pt: [i32; 2],
 }
 
+/// Texte affiché d'un élément : celui qui est retenu, ou, pour un élément
+/// LPSTR_TEXTCALLBACK, celui que le parent rend à TVN_GETDISPINFO.
+/// TVIF_DI_SETITEM demande de le retenir et de ne plus redemander.
+fn tree_text(hwnd: usize, n: &TreeNode) -> String {
+    const TVIF_DI_SETITEM: u32 = 0x1000;
+    const TVN_GETDISPINFOA: i32 = -403;
+    const TVN_GETDISPINFOW: i32 = -452;
+    if !n.callback {
+        return n.text.clone();
+    }
+    #[repr(C)]
+    struct DispInfo {
+        hdr: NmHdr,
+        item: TvItem,
+    }
+    let wide = snapshot(hwnd).is_none_or(|c| c.wide);
+    let mut buf = [0u16; 520];
+    let mut nm = DispInfo {
+        hdr: NmHdr {
+            hwnd_from: 0,
+            id_from: 0,
+            code: 0,
+        },
+        item: TvItem {
+            mask: TVIF_TEXT,
+            item: n.handle,
+            state: n.state,
+            state_mask: u32::MAX,
+            text: buf.as_mut_ptr() as usize,
+            text_max: if wide { 260 } else { 520 },
+            param: n.param,
+            ..Default::default()
+        },
+    };
+    let code = if wide {
+        TVN_GETDISPINFOW
+    } else {
+        TVN_GETDISPINFOA
+    };
+    notify_struct(hwnd, code, &mut nm);
+    // Le parent peut remplir notre tampon ou pointer vers le sien.
+    let text = unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default();
+    if nm.item.mask & TVIF_DI_SETITEM != 0 {
+        let h = n.handle;
+        let keep = text.clone();
+        with_common(hwnd, |s| {
+            if let Some(m) = s.tree.iter_mut().find(|m| m.handle == h) {
+                m.text = keep;
+                m.callback = false;
+            }
+        });
+    }
+    text
+}
+
 fn tree_node(s: &CommonState, h: usize) -> Option<&TreeNode> {
     s.tree.iter().find(|n| n.handle == h)
 }
@@ -390,14 +448,15 @@ fn paint_tree(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             ..row
         };
         let color = if enabled(hwnd) { TEXT } else { TEXT_DISABLED };
-        p.text(tr, &n.text, color, 0);
+        let label = tree_text(hwnd, n);
+        p.text(tr, &label, color, 0);
         if n.state & TVIS_BOLD != 0 {
             p.text(
                 Rect {
                     left: tr.left + 1,
                     ..tr
                 },
-                &n.text,
+                &label,
                 color,
                 0,
             );
@@ -573,6 +632,7 @@ unsafe fn tree_insert(hwnd: usize, lp: isize, wide: bool) -> isize {
         let node = TreeNode {
             handle,
             parent: parent_h,
+            callback: item.mask & TVIF_TEXT != 0 && item.text == LPSTR_TEXTCALLBACK,
             text: text.clone(),
             param: if item.mask & TVIF_PARAM != 0 {
                 item.param
@@ -726,6 +786,9 @@ unsafe fn tree_set_item(hwnd: usize, lp: isize, wide: bool) -> isize {
         let Some(n) = s.tree.iter_mut().find(|n| n.handle == it.item) else {
             return 0;
         };
+        if it.mask & TVIF_TEXT != 0 {
+            n.callback = it.text == LPSTR_TEXTCALLBACK;
+        }
         if let Some(t) = text {
             n.text = t;
         }

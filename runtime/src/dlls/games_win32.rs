@@ -719,7 +719,7 @@ pub fn user32_exports() -> Exports {
         "RegisterDeviceNotificationW" => fn RegisterDeviceNotification,
         "RegisterDeviceNotificationA" => fn RegisterDeviceNotification,
         "UnregisterDeviceNotification" => fn ok1,
-        "SetWindowRgn" => fn ok1, "TrackMouseEvent" => fn ok1,
+        "SetWindowRgn" => fn ok1,
         // SetWindowRgn est sans effet : aucune fenêtre n'a de région, donc
         // GetWindowRgn(Box) répond ERROR (0), comme Windows dans ce cas (#747).
         "GetWindowRgn" => fn zero, "GetWindowRgnBox" => fn zero,

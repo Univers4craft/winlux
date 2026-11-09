@@ -87,27 +87,40 @@ pub fn managed_image(exe: &Path, bytes: &[u8]) -> Option<Vec<u8>> {
     has_clr_header(&assembly).then_some(assembly)
 }
 
-/// Update.exe de Squirrel (applis Electron : Claude, Discord…) : l'assembly
-/// s'appelle « Update » et embarque l'espace de noms `Squirrel`. Winlux le
+/// Update.exe de Squirrel (applis Electron : Claude, Discord…). Winlux le
 /// sert par l'outil natif `winlux-squirrel-update` plutôt que par le CLR, qui
 /// n'a pas encore la BCL qu'il réclame (#1190).
+///
+/// L'Update.exe livré est passé par ILMerge : son assembly s'appelle
+/// « Update.exe » (celui de Claude 0.14.10) et non « Update ». On le
+/// reconnaît donc à son nom sans extension, ou à son point d'entrée
+/// `Squirrel.Update.Program`, avec l'espace de noms `Squirrel`.
 pub fn is_squirrel_update(assembly: &[u8]) -> bool {
     use crate::clr::metadata::Assembly;
     use crate::clr::tables::TableId;
     let Ok(a) = Assembly::parse(assembly.to_vec()) else {
         return false;
     };
-    if a.row_count(TableId::Assembly) == 0
-        || !a
-            .get_string(a.get_assembly(1).name)
-            .eq_ignore_ascii_case("Update")
-    {
-        return false;
+    let name = if a.row_count(TableId::Assembly) > 0 {
+        a.get_string(a.get_assembly(1).name).to_ascii_lowercase()
+    } else {
+        String::new()
+    };
+    let stem = name
+        .strip_suffix(".exe")
+        .or_else(|| name.strip_suffix(".dll"))
+        .unwrap_or(&name);
+    let mut squirrel = false;
+    let mut program = false;
+    for t in 1..=a.row_count(TableId::TypeDef) {
+        let td = a.get_type_def(t);
+        let ns = a.get_string(td.namespace);
+        if ns == "Squirrel" || ns.starts_with("Squirrel.") {
+            squirrel = true;
+            program |= ns == "Squirrel.Update" && a.get_string(td.name) == "Program";
+        }
     }
-    (1..=a.row_count(TableId::TypeDef)).any(|t| {
-        let ns = a.get_string(a.get_type_def(t).namespace);
-        ns == "Squirrel" || ns.starts_with("Squirrel.")
-    })
+    squirrel && (stem == "update" || program)
 }
 
 /// Remplace le processus par `winlux-squirrel-update RACINE ARGS…`, RACINE
@@ -197,9 +210,31 @@ mod tests {
             b.build(0)
         };
         assert!(is_squirrel_update(&image("Update", "Squirrel")));
+        // ILMerge : l'assembly de Claude 0.14.10 s'appelle « Update.exe ».
+        assert!(is_squirrel_update(&image("Update.exe", "Squirrel")));
+        // Renommée, elle reste reconnue par son point d'entrée.
+        let mut b = Builder::new("Programme");
+        b.type_def(PUBLIC, "Squirrel.Update", "Program", 0);
+        assert!(is_squirrel_update(&b.build(0)));
         assert!(is_squirrel_update(&image("update", "Squirrel.Update")));
         assert!(!is_squirrel_update(&image("Update", "Autre")));
         assert!(!is_squirrel_update(&image("Programme", "Squirrel")));
         assert!(!is_squirrel_update(b"MZ"));
+    }
+}
+
+/// Contrôle sur le vrai Update.exe de Squirrel (MIT, non versionné) :
+/// `WINLUX_SQUIRREL_SAMPLE=…/Update.exe cargo test -- --ignored`.
+#[cfg(test)]
+mod echantillon {
+    #[test]
+    #[ignore]
+    fn le_vrai_update_exe_est_reconnu() {
+        let Some(path) = std::env::var_os("WINLUX_SQUIRREL_SAMPLE") else {
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let image = super::managed_image(std::path::Path::new("Update.exe"), &bytes).unwrap();
+        assert!(super::is_squirrel_update(&image));
     }
 }

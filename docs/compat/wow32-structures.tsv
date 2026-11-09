@@ -93,6 +93,9 @@ d3d9.rs	Obj	a-verifier
 d3d9.rs	PresentParams	a-verifier	
 d3dcompiler.rs	Blob	a-verifier	
 d3dcompiler.rs	BlobVTable	a-verifier	
+d3dcompiler_reflect.rs	CbObj	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
+d3dcompiler_reflect.rs	Reflection	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
+d3dcompiler_reflect.rs	VarObj	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
 d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
 d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
 d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
@@ -176,6 +179,7 @@ ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), 
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
+ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
@@ -219,6 +223,7 @@ vk_bindings.rs	VkMemoryBarrier	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceDynamicRenderingFeatures	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceExtendedDynamicStateFeaturesEXT	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineColorBlendStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineDepthStencilStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineDynamicStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineInputAssemblyStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineLayoutCreateInfo	interne	liaison Vulkan côté hôte
