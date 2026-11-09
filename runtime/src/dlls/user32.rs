@@ -3041,12 +3041,110 @@ pub(crate) fn split_prefix(text: &str) -> (String, Option<usize>) {
     (out, underline)
 }
 
+/// Découpe le texte affiché de DrawText en lignes : coupure sur CR, LF et
+/// CR LF hors DT_SINGLELINE, puis, avec DT_WORDBREAK, retour à la ligne aux
+/// espaces quand une ligne dépasse `width` (boîte « Information » de WinSCP,
+/// #1341). Un mot plus large que `width` reste seul sur sa ligne. Rend
+/// chaque ligne avec la position de la lettre soulignée qu'elle contient.
+pub(crate) fn draw_text_lines(
+    shown: &str,
+    underline: Option<usize>,
+    single: bool,
+    width: Option<i32>,
+    measure: &dyn Fn(&str) -> i32,
+) -> Vec<(String, Option<usize>)> {
+    let chars: Vec<char> = shown.chars().collect();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    if single {
+        ranges.push((0, chars.len()));
+    } else {
+        let mut start = 0;
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '\r' => {
+                    ranges.push((start, i));
+                    i += if chars.get(i + 1) == Some(&'\n') {
+                        2
+                    } else {
+                        1
+                    };
+                    start = i;
+                }
+                '\n' => {
+                    ranges.push((start, i));
+                    i += 1;
+                    start = i;
+                }
+                _ => i += 1,
+            }
+        }
+        ranges.push((start, chars.len()));
+    }
+    let text_of = |a: usize, b: usize| -> String { chars[a..b].iter().collect() };
+    let mut wrapped: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in ranges {
+        let Some(w) = width.filter(|w| *w > 0) else {
+            wrapped.push((s, e));
+            continue;
+        };
+        if measure(&text_of(s, e)) <= w {
+            wrapped.push((s, e));
+            continue;
+        }
+        let mut start = s;
+        while start < e {
+            // Fin de ligne la plus lointaine, à une frontière de mot, qui tient.
+            let mut best = None;
+            let mut first_word = None;
+            let mut j = start;
+            while j <= e {
+                if j == e || chars[j] == ' ' {
+                    let mut end = j;
+                    while end > start && chars[end - 1] == ' ' {
+                        end -= 1;
+                    }
+                    if end > start {
+                        if first_word.is_none() {
+                            first_word = Some(j);
+                        }
+                        if measure(&text_of(start, end)) <= w {
+                            best = Some(j);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                j += 1;
+            }
+            let cut = best.or(first_word).unwrap_or(e);
+            let mut end = cut;
+            while end > start && chars[end - 1] == ' ' {
+                end -= 1;
+            }
+            wrapped.push((start, end));
+            start = cut;
+            while start < e && chars[start] == ' ' {
+                start += 1;
+            }
+        }
+    }
+    wrapped
+        .into_iter()
+        .map(|(a, b)| {
+            let u = underline.filter(|k| *k >= a && *k < b).map(|k| k - a);
+            (text_of(a, b), u)
+        })
+        .collect()
+}
+
 fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     const DT_CALCRECT: u32 = 0x0400;
     const DT_CENTER: u32 = 0x0001;
     const DT_RIGHT: u32 = 0x0002;
     const DT_VCENTER: u32 = 0x0004;
     const DT_BOTTOM: u32 = 0x0008;
+    const DT_WORDBREAK: u32 = 0x0010;
     const DT_SINGLELINE: u32 = 0x0020;
     const DT_NOPREFIX: u32 = 0x0800;
     const DT_HIDEPREFIX: u32 = 0x0010_0000;
@@ -3061,7 +3159,20 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     } else {
         split_prefix(text)
     };
-    let (tw, th) = gui::measure_text(&font, &shown);
+    let single = format & DT_SINGLELINE != 0;
+    let width = (format & DT_WORDBREAK != 0 && !single).then(|| rect.width());
+    let measure = |s: &str| gui::measure_text(&font, s).0;
+    let lines = draw_text_lines(&shown, underline, single, width, &measure);
+    // Hauteur d'une ligne : celle du texte entier sur une seule ligne, sinon
+    // celle d'une ligne type (une ligne vide compte aussi).
+    let lh = if lines.len() == 1 {
+        gui::measure_text(&font, &shown).1
+    } else {
+        gui::measure_text(&font, "Ag").1
+    };
+    let widths: Vec<i32> = lines.iter().map(|(l, _)| measure(l)).collect();
+    let tw = widths.iter().copied().max().unwrap_or(0);
+    let th = lh * lines.len() as i32;
 
     if format & DT_CALCRECT != 0 {
         rect.right = rect.left + tw;
@@ -3069,15 +3180,8 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         return th;
     }
 
-    let mut x = rect.left;
     let mut y = rect.top;
-
-    if format & DT_CENTER != 0 {
-        x = rect.left + (rect.width() - tw) / 2;
-    } else if format & DT_RIGHT != 0 {
-        x = rect.right - tw;
-    }
-    if format & DT_SINGLELINE != 0 {
+    if single {
         if format & DT_VCENTER != 0 {
             y = rect.top + (rect.height() - th) / 2;
         } else if format & DT_BOTTOM != 0 {
@@ -3093,36 +3197,46 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         None
     };
 
-    if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
-        let before: String = shown.chars().take(k).collect();
-        let upto: String = shown.chars().take(k + 1).collect();
-        let x1 = x + gui::measure_text(&font, &before).0;
-        let x2 = x + gui::measure_text(&font, &upto).0;
-        let base = y + th - 2;
-        gui::record(
-            hdc,
-            gui::DrawCmd::Line {
-                x1,
-                y1: base,
-                x2: x2 - 1,
-                y2: base,
-                color,
-                width: 1,
-            },
-        );
-    }
-    if format & DT_PREFIXONLY == 0 {
-        gui::record(
-            hdc,
-            gui::DrawCmd::Text {
-                x,
-                y,
-                text: shown,
-                color,
-                bk,
-                font,
-            },
-        );
+    for ((line, underline), lw) in lines.into_iter().zip(widths) {
+        let x = if format & DT_CENTER != 0 {
+            rect.left + (rect.width() - lw) / 2
+        } else if format & DT_RIGHT != 0 {
+            rect.right - lw
+        } else {
+            rect.left
+        };
+        if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
+            let before: String = line.chars().take(k).collect();
+            let upto: String = line.chars().take(k + 1).collect();
+            let x1 = x + measure(&before);
+            let x2 = x + measure(&upto);
+            let base = y + lh - 2;
+            gui::record(
+                hdc,
+                gui::DrawCmd::Line {
+                    x1,
+                    y1: base,
+                    x2: x2 - 1,
+                    y2: base,
+                    color,
+                    width: 1,
+                },
+            );
+        }
+        if format & DT_PREFIXONLY == 0 && !line.is_empty() {
+            gui::record(
+                hdc,
+                gui::DrawCmd::Text {
+                    x,
+                    y,
+                    text: line,
+                    color,
+                    bk,
+                    font: font.clone(),
+                },
+            );
+        }
+        y += lh;
     }
 
     th
@@ -5817,6 +5931,58 @@ mod tests {
         }
         assert_eq!(r1.right, r2.right);
         assert!(r3.right > r2.right, "DT_NOPREFIX garde « & »");
+    }
+
+    #[test]
+    fn draw_text_coupe_les_lignes_et_les_mots() {
+        // Chaque caractère mesure 10 : le découpage est indépendant de la police.
+        let m = |s: &str| s.chars().count() as i32 * 10;
+        let l = |v: Vec<(String, Option<usize>)>| v.into_iter().map(|x| x.0).collect::<Vec<_>>();
+        // CR LF, CR et LF coupent hors DT_SINGLELINE (#1341).
+        assert_eq!(
+            l(draw_text_lines("ab\r\ncd\ref\ngh", None, false, None, &m)),
+            vec!["ab", "cd", "ef", "gh"]
+        );
+        assert_eq!(
+            l(draw_text_lines("a\n\nb", None, false, None, &m)),
+            vec!["a", "", "b"]
+        );
+        // DT_SINGLELINE garde une seule ligne.
+        assert_eq!(draw_text_lines("ab\ncd", None, true, None, &m).len(), 1);
+        // DT_WORDBREAK coupe aux espaces ; un mot trop long reste seul.
+        assert_eq!(
+            l(draw_text_lines(
+                "un deux trois quatre",
+                None,
+                false,
+                Some(90),
+                &m
+            )),
+            vec!["un deux", "trois", "quatre"]
+        );
+        assert_eq!(
+            l(draw_text_lines(
+                "anticonstitutionnel ok",
+                None,
+                false,
+                Some(50),
+                &m
+            )),
+            vec!["anticonstitutionnel", "ok"]
+        );
+        // La lettre soulignée suit sa ligne.
+        let v = draw_text_lines("Hôte\nPort", Some(5), false, None, &m);
+        assert_eq!(v[0].1, None);
+        assert_eq!(v[1].1, Some(0));
+        // DT_CALCRECT : largeur de la ligne la plus longue, hauteur de toutes.
+        const DT_CALCRECT: u32 = 0x0400;
+        let mut une = Rect::default();
+        let mut deux = Rect::default();
+        let h1 = unsafe { draw_text_a(0, b"abcdef\0".as_ptr(), -1, &mut une, DT_CALCRECT) };
+        let h2 = unsafe { draw_text_a(0, b"abcdef\r\nab\0".as_ptr(), -1, &mut deux, DT_CALCRECT) };
+        assert_eq!(une.right, deux.right);
+        assert_eq!(h2, 2 * h1);
+        assert_eq!(deux.bottom, 2 * une.bottom);
     }
 
     #[test]
