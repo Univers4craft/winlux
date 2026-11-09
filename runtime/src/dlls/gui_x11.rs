@@ -907,9 +907,19 @@ pub fn renders_itself(imports: &[String]) -> bool {
     })
 }
 
+/// WINLUX_WINDOW_DIAG=1 : journal borné (200 lignes) des peintures X11
+/// faites par Winlux, pour trouver ce qui recouvre une image GPU (#1421).
+fn diag_paint(what: &str, hwnd: usize, xid: u32) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    if crate::dlls::user32::window_diag() && N.fetch_add(1, Ordering::Relaxed) < 200 {
+        eprintln!("winlux[fenetre] peinture {what} hwnd={hwnd:#x} x={xid:#x}");
+    }
+}
+
 /// SDL ou GLFW liés en statique (Xonotic : ni SDL2.dll ni opengl32.dll
-/// dans les imports) : la classe de fenêtre qu'ils enregistrent, L"SDL_app"
-/// ou L"GLFW30", figure dans l'image (#1421).
+/// dans les imports) : le nom de la classe de fenêtre qu'ils enregistrent,
+/// « SDL_app » ou « GLFW30 », figure dans l'image (#1421).
 pub fn statically_linked_renderer(image: &[u8]) -> bool {
     fn utf16(s: &str) -> Vec<u8> {
         s.encode_utf16()
@@ -917,9 +927,14 @@ pub fn statically_linked_renderer(image: &[u8]) -> bool {
             .flat_map(u16::to_le_bytes)
             .collect()
     }
+    // SDL 2 garde son nom de classe en UTF-8 (SDL_Appname) et ne le
+    // convertit qu'à l'exécution : on cherche les deux formes.
     ["SDL_app", "GLFW30"].iter().any(|class| {
-        let needle = utf16(class);
-        image.windows(needle.len()).any(|w| w == needle.as_slice())
+        let wide = utf16(class);
+        let narrow: Vec<u8> = class.bytes().chain([0]).collect();
+        [wide, narrow]
+            .iter()
+            .any(|needle| image.windows(needle.len()).any(|w| w == needle.as_slice()))
     })
 }
 
@@ -1657,6 +1672,7 @@ impl X11Backend {
 
     /// Recopie une zone du tampon arrière vers la fenêtre.
     fn present(&self, w: &XWin, pixmap: u32, x: i16, y: i16, width: u16, height: u16) {
+        diag_paint("tampon", 0, w.window);
         self.before_x11();
         let _ = self
             .conn
@@ -2596,6 +2612,7 @@ impl X11Backend {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                diag_paint("expose", hwnd, e.window);
                 if self.presented_by_direct3d(e.window) {
                     // Image de Direct3D : ni tampon GDI ni thème par-dessus,
                     // le programme redessine sur WM_PAINT (#1374).
@@ -3776,7 +3793,8 @@ mod tests {
         );
         image.extend([1, 2, 3]);
         assert!(statically_linked_renderer(&image));
-        assert!(!statically_linked_renderer(b"SDL_app\0 en ASCII seulement"));
+        assert!(statically_linked_renderer(b"..SDL_app\0.."));
+        assert!(!statically_linked_renderer(b"SDL_application"));
     }
 
     #[test]
@@ -5766,6 +5784,7 @@ impl gui::GuiBackend for X11Backend {
             return;
         }
         if let Some(w) = self.windows.get(&hwnd) {
+            diag_paint("effacement", hwnd, w.window);
             let _ = self.conn.clear_area(false, w.window, 0, 0, 0, 0);
             let _ = self.conn.flush();
         }

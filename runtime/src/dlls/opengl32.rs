@@ -609,6 +609,9 @@ fn mark_gl_window(window: u64) {
     static MARKED: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
     let first = lock(MARKED.get_or_init(Default::default)).insert(window);
     if first {
+        if super::user32::window_diag() {
+            eprintln!("winlux[fenetre] OpenGL présente sur x={window:#x}");
+        }
         super::gui::mark_direct3d_window(window);
     }
 }
