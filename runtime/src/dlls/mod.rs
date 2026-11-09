@@ -226,6 +226,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod windowscodecs_proxy;
