@@ -278,6 +278,17 @@ unsafe fn create_window_common(
     hwnd
 }
 
+/// Taille d'une fenêtre de premier niveau créée en CW_USEDEFAULT : les
+/// trois quarts de la zone de travail, au moins 800 × 600 sans dépasser
+/// l'écran. Un 800 × 600 fixe faisait passer le ruban de l'Éditeur de
+/// ScreenToGif sur deux lignes (#1277).
+fn default_window_size() -> (i32, i32) {
+    let area = gui::work_area();
+    let (aw, ah) = (area.right - area.left, area.bottom - area.top);
+    let pick = |full: i32, min: i32| (full * 3 / 4).max(min).min(full.max(1));
+    (pick(aw, 800), pick(ah, 600))
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn create_window_inner(
     class: String,
@@ -315,12 +326,12 @@ unsafe fn create_window_inner(
     } else {
         (
             if cx == gui::CW_USEDEFAULT || cx <= 0 {
-                800
+                default_window_size().0
             } else {
                 cx
             },
             if cy == gui::CW_USEDEFAULT || cy <= 0 {
-                600
+                default_window_size().1
             } else {
                 cy
             },
@@ -4787,6 +4798,38 @@ mod tests {
         assert!(get_system_metrics(60) >= get_system_metrics(1));
         assert_eq!((get_system_metrics(34), get_system_metrics(35)), (136, 39));
         assert_eq!((get_system_metrics(11), get_system_metrics(49)), (32, 16));
+    }
+
+    /// CW_USEDEFAULT suit la zone de travail au lieu d'un 800 × 600 fixe (#1277).
+    #[test]
+    fn taille_par_defaut_suit_la_zone_de_travail() {
+        let area = gui::work_area();
+        let (aw, ah) = (area.right - area.left, area.bottom - area.top);
+        let (w, h) = default_window_size();
+        assert!(w <= aw && h <= ah, "{w}x{h} dans {aw}x{ah}");
+        assert!(w >= 800.min(aw) && h >= 600.min(ah));
+        assert_eq!(w, (aw * 3 / 4).max(800).min(aw));
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                gui::CW_USEDEFAULT,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let r = gui::screen_rect(hwnd).expect("rectangle");
+            assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
+            destroy_window(hwnd);
+        }
     }
 
     static CAPTURE_CHANGES: std::sync::Mutex<Vec<(usize, isize)>> =
