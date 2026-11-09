@@ -77,6 +77,14 @@ pub const USB_CLASS: [u8; 16] = guid(
     [0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
 );
 
+/// {50127DC3-0F36-415E-A6CC-4CB3BE910B65} : classe Processor (#1370).
+pub const PROCESSOR_CLASS: [u8; 16] = guid(
+    0x50127DC3,
+    0x0F36,
+    0x415E,
+    [0xA6, 0xCC, 0x4C, 0xB3, 0xBE, 0x91, 0x0B, 0x65],
+);
+
 const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
     let a = a.to_le_bytes();
     let b = b.to_le_bytes();
@@ -140,6 +148,74 @@ pub enum Kind {
         usb: Option<Usb>,
     },
     UsbDevice(Usb),
+    /// Processeur logique, tiré de /proc/cpuinfo (#1370).
+    Processor(Cpu),
+}
+
+/// Processeur logique : numéro, nom (« model name ») et fabricant.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cpu {
+    pub index: u32,
+    pub name: String,
+    pub vendor: String,
+}
+
+/// Processeurs logiques décrits par le texte de /proc/cpuinfo. Sur ARM,
+/// sans « model name », le nom vient de « Hardware » ou reste générique.
+pub fn parse_cpuinfo(text: &str) -> Vec<Cpu> {
+    let mut out: Vec<Cpu> = Vec::new();
+    let mut hardware = String::new();
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        match key {
+            "processor" => out.push(Cpu {
+                index: value.parse().unwrap_or(out.len() as u32),
+                ..Cpu::default()
+            }),
+            "model name" | "cpu model" => {
+                if let Some(c) = out.last_mut() {
+                    c.name = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                }
+            }
+            "vendor_id" | "CPU implementer" => {
+                if let Some(c) = out.last_mut() {
+                    c.vendor = value.to_string();
+                }
+            }
+            "Hardware" => hardware = value.to_string(),
+            _ => {}
+        }
+    }
+    for c in &mut out {
+        if c.name.is_empty() {
+            c.name = if hardware.is_empty() {
+                "Processeur".into()
+            } else {
+                hardware.clone()
+            };
+        }
+    }
+    out
+}
+
+fn processors() -> Vec<Cpu> {
+    let path = std::env::var_os("WINLUX_CPUINFO").unwrap_or_else(|| "/proc/cpuinfo".into());
+    std::fs::read_to_string(path)
+        .map(|t| parse_cpuinfo(&t))
+        .unwrap_or_default()
+}
+
+/// Fabricant affiché : « GenuineIntel » → Intel, « AuthenticAMD » → AMD.
+fn cpu_manufacturer(vendor: &str) -> &str {
+    match vendor {
+        "GenuineIntel" => "Intel",
+        "AuthenticAMD" | "HygonGenuine" => "AMD",
+        "" => "(Standard)",
+        v => v,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -259,6 +335,13 @@ pub fn nodes() -> Vec<Node> {
         }
         out.push(node);
     }
+    for c in processors() {
+        out.push(Node {
+            id: format!("ACPI\\ACPI0007\\{}", c.index),
+            parent: Some(ROOT.into()),
+            kind: Kind::Processor(c),
+        });
+    }
     // Les autres appareils USB (ceux que winusb ou libusb ouvrent).
     for u in usb_devices() {
         let id = u.device_id();
@@ -331,6 +414,7 @@ impl Node {
             Kind::Hid(_) => HID_CLASS,
             Kind::Port { .. } => PORTS_CLASS,
             Kind::UsbDevice(_) | Kind::Root => USB_CLASS,
+            Kind::Processor(_) => PROCESSOR_CLASS,
         }
     }
     fn interface(&self) -> Option<[u8; 16]> {
@@ -338,7 +422,7 @@ impl Node {
             Kind::Hid(_) => Some(HID_GUID),
             Kind::Port { .. } => Some(COMPORT_INTERFACE),
             Kind::UsbDevice(_) => Some(USB_DEVICE_INTERFACE),
-            Kind::Root => None,
+            Kind::Root | Kind::Processor(_) => None,
         }
     }
     /// Chemin rendu par `SetupDiGetDeviceInterfaceDetailW`.
@@ -355,7 +439,7 @@ impl Node {
                 self.id.to_ascii_lowercase().replace('\\', "#"),
                 guid_text(&USB_DEVICE_INTERFACE)
             )),
-            Kind::Root => None,
+            Kind::Root | Kind::Processor(_) => None,
         }
     }
     fn description(&self) -> String {
@@ -368,6 +452,7 @@ impl Node {
             Kind::Port { .. } => "Communications Port".into(),
             Kind::UsbDevice(u) if !u.name.is_empty() => u.name.clone(),
             Kind::UsbDevice(_) => "USB Composite Device".into(),
+            Kind::Processor(c) => c.name.clone(),
         }
     }
     /// Propriété SPDRP_* : (type de registre, chaîne(s) UTF-16 terminées).
@@ -406,6 +491,7 @@ impl Node {
                     multi(&["ACPI\\PNP0501".into(), "*PNP0501".into()])
                 }
                 Kind::Port { .. } => multi(&["ROOT\\PORTS".into()]),
+                Kind::Processor(_) => multi(&["ACPI\\ACPI0007".into(), "*ACPI0007".into()]),
                 Kind::Root => return None,
             },
             4 => sz(match &self.kind {
@@ -413,11 +499,15 @@ impl Node {
                 Kind::Port { usb: Some(_), .. } => "usbser",
                 Kind::Port { .. } => "Serial",
                 Kind::UsbDevice(_) => "usbccgp",
+                Kind::Processor(c) if c.vendor == "GenuineIntel" => "intelppm",
+                Kind::Processor(c) if c.vendor == "AuthenticAMD" => "amdppm",
+                Kind::Processor(_) => "Processor",
                 Kind::Root => return None,
             }),
             7 => sz(match self.kind {
                 Kind::Hid(_) => "HIDClass",
                 Kind::Port { .. } => "Ports",
+                Kind::Processor(_) => "Processor",
                 _ => "USB",
             }),
             8 => sz(&guid_text(&self.class())),
@@ -429,6 +519,7 @@ impl Node {
                     sz(&u.manufacturer)
                 }
                 Kind::Port { .. } => sz("(Types de ports standard)"),
+                Kind::Processor(c) => sz(cpu_manufacturer(&c.vendor)),
                 _ => sz("(Standard)"),
             },
             0xE => match &self.kind {
@@ -505,8 +596,9 @@ fn set_nodes(set: usize) -> Option<Vec<Node>> {
         .map(|(_, d)| d.clone())
 }
 
-/// `SetupDiGetClassDevs` : `None` pour une classe sans appareil connu
-/// (INVALID_HANDLE_VALUE, ce dont Electron et Chromium se contentent).
+/// `SetupDiGetClassDevs` : comme sous Windows, une classe sans appareil
+/// donne un ensemble vide, pas INVALID_HANDLE_VALUE (#1370). `None` reste
+/// pour un appel invalide (ni classe ni DIGCF_ALLCLASSES).
 pub fn get_class_devs(
     guid: Option<[u8; 16]>,
     enumerator: Option<&str>,
@@ -525,19 +617,8 @@ pub fn get_class_devs(
         // L'interface HID est acceptée dans les deux modes (SDL, hidapi).
         n.interface() == Some(g) || (!interfaces && n.class() == g)
     };
-    let known = all
-        || guid.is_some_and(|g| {
-            [
-                HID_GUID,
-                HID_CLASS,
-                PORTS_CLASS,
-                COMPORT_INTERFACE,
-                USB_CLASS,
-                USB_DEVICE_INTERFACE,
-            ]
-            .contains(&g)
-        });
-    if !known {
+    if !all && guid.is_none() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return None;
     }
     let list: Vec<Node> = nodes()
@@ -553,6 +634,7 @@ pub fn get_class_devs(
         .collect();
     let h = NEXT_SET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::dlls::lock(&SETS).push((h, list));
+    crate::process::set_last_error(0);
     Some(h)
 }
 
@@ -787,6 +869,7 @@ unsafe fn class_guids(name: &str, list: *mut u8, size: u32, required: *mut u32) 
         "ports" => Some(PORTS_CLASS),
         "hidclass" => Some(HID_CLASS),
         "usb" => Some(USB_CLASS),
+        "processor" => Some(PROCESSOR_CLASS),
         _ => None,
     };
     let count = g.is_some() as u32;
@@ -1091,6 +1174,56 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classe_processor_depuis_cpuinfo() {
+        let text = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM)  i7-1165G7 @ 2.80GHz\n\n\
+                    processor\t: 1\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM)  i7-1165G7 @ 2.80GHz\n";
+        let cpus = parse_cpuinfo(text);
+        assert_eq!(cpus.len(), 2);
+        assert_eq!(cpus[1].index, 1);
+        assert_eq!(cpus[0].name, "Intel(R) Core(TM) i7-1165G7 @ 2.80GHz");
+        assert_eq!(
+            guid_text(&PROCESSOR_CLASS).to_ascii_lowercase(),
+            "{50127dc3-0f36-415e-a6cc-4cb3be910b65}"
+        );
+        // ARM sans « model name » : nom générique.
+        assert_eq!(
+            parse_cpuinfo("processor : 0\nCPU implementer : 0x41\n")[0].name,
+            "Processeur"
+        );
+
+        let dir = std::env::temp_dir().join(format!("winlux-cpuinfo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cpuinfo");
+        std::fs::write(&file, text).unwrap();
+        std::env::set_var("WINLUX_CPUINFO", &file);
+        // Classe Processor : un appareil par processeur logique, nom lisible.
+        let set = get_class_devs(Some(PROCESSOR_CLASS), None, 0x2).expect("ensemble");
+        let nodes = set_nodes(set).unwrap();
+        assert_eq!(nodes.len(), 2);
+        let name = nodes[0].property(0xC).unwrap().1;
+        assert_eq!(
+            String::from_utf16_lossy(&name[..name.len() - 1]),
+            cpus[0].name
+        );
+        assert_eq!(nodes[0].property(7).unwrap().1, wide("Processor"));
+        assert_eq!(nodes[0].property(0xB).unwrap().1, wide("Intel"));
+        destroy(set);
+        // Classe sans appareil : ensemble vide, pas INVALID_HANDLE_VALUE.
+        let unknown = guid(
+            0x4D36E968,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        );
+        let set = get_class_devs(Some(unknown), None, 0x2).expect("ensemble vide");
+        assert!(set_nodes(set).unwrap().is_empty());
+        destroy(set);
+        assert!(get_class_devs(None, None, 0x2).is_none());
+        std::env::remove_var("WINLUX_CPUINFO");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn guids_au_format_windows() {
