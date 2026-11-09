@@ -35,6 +35,13 @@ def main():
     dialog.set_default_response(Gtk.ResponseType.CANCEL)
     dialog.set_keep_above(True)
     dialog.set_position(Gtk.WindowPosition.CENTER)
+    # Bouton actif visible (#1448) : Annuler, le choix par défaut, est mis en
+    # couleur d'accent et garde son cadre de focus dès l'ouverture (GTK ne le
+    # dessine sinon qu'après une première touche du clavier).
+    cancel.get_style_context().add_class("suggested-action")
+    cancel.set_can_default(True)
+    cancel.grab_default()
+    dialog.set_focus_visible(True)
     cancel.grab_focus()
     answer = dialog.run()
     dialog.destroy()
