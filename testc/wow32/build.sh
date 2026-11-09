@@ -181,14 +181,17 @@ GetStdHandle@4
 WriteFile@20
 ExitProcess@4
 lstrlenA@4
+RaiseException@16
 DEF
-printf 'LIBRARY msvcrt.dll\nEXPORTS\n__CxxFrameHandler3\n_CxxThrowException@8\n' >"$tmp/msvcrt_cxx.def"
+printf 'LIBRARY msvcrt.dll\nEXPORTS\n__CxxFrameHandler3\n_CxxThrowException@8\n_except_handler3\n' >"$tmp/msvcrt_cxx.def"
 llvm-dlltool -m i386 -k -d "$tmp/kernel32_cxx.def" -l "$tmp/kernel32_cxx.lib"
 llvm-dlltool -m i386 -k -d "$tmp/msvcrt_cxx.def" -l "$tmp/msvcrt_cxx.lib"
 clang++ --target=i686-pc-windows-msvc -O1 -fexceptions -fcxx-exceptions -fno-builtin -fno-stack-protector \
     -fno-rtti -c "$src/cxx32.cpp" -o "$tmp/cxx32.obj"
+clang++ --target=i686-pc-windows-msvc -O1 -fexceptions -fcxx-exceptions -fasync-exceptions -fms-extensions -fno-builtin \
+    -fno-stack-protector -fno-rtti -c "$src/cxx32_seh.cpp" -o "$tmp/cxx32_seh.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
-    "$tmp/cxx32.obj" "$tmp/kernel32_cxx.lib" "$tmp/msvcrt_cxx.lib" /out:"$out/cxx32.exe"
+    "$tmp/cxx32.obj" "$tmp/cxx32_seh.obj" "$tmp/kernel32_cxx.lib" "$tmp/msvcrt_cxx.lib" /out:"$out/cxx32.exe"
 # Fenêtres (#232, étape 5) : user32 et gdi32 en x86, toujours sans CRT.
 cat >"$tmp/kernel32_gui.def" <<'DEF'
 LIBRARY kernel32.dll
@@ -496,6 +499,8 @@ lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
 if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     i686-w64-mingw32-gcc -O1 "$src/crt32.c" -o "$out/crt32.exe"
     i686-w64-mingw32-gcc -O1 -D__USE_MINGW_ANSI_STDIO=0 "$src/crt32.c" -o "$out/crt32_msvcrt.exe"
+    # Winsock x86 (#1408) : AcceptEx, ConnectEx, port de complétion.
+    i686-w64-mingw32-gcc -O1 "$src/net32.c" -o "$out/net32.exe" -lws2_32
 else
     echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
 fi

@@ -36,6 +36,7 @@ pub mod comdlg32_find;
 pub mod comdlg32_ui;
 pub mod common_apps;
 pub mod comobj;
+pub mod composition;
 pub mod console_input;
 pub mod controls;
 pub mod coremessaging;

@@ -132,18 +132,45 @@ pub unsafe extern "win64" fn wait_named_pipe_a(name: *const u8, timeout: u32) ->
     .unwrap_or(0)
 }
 
-/// AddDllDirectory / SetDefaultDllDirectories / SetDllDirectory : le
-/// chargeur cherche déjà à côté du programme puis dans les DLL intégrées.
-pub extern "win64" fn add_dll_directory(_dir: *const u16) -> usize {
+/// AddDllDirectory / RemoveDllDirectory / SetDefaultDllDirectories /
+/// SetDllDirectory : dossiers que le chargeur ajoute à sa recherche.
+pub unsafe extern "win64" fn add_dll_directory(dir: *const u16) -> usize {
+    if dir.is_null() {
+        set_last_error(87);
+        return 0;
+    }
+    let c = crate::loader::add_dll_directory(&wstr(dir));
+    if c == 0 {
+        set_last_error(87);
+    }
+    c
+}
+pub extern "win64" fn remove_dll_directory(cookie: usize) -> i32 {
+    if crate::loader::remove_dll_directory(cookie) {
+        1
+    } else {
+        set_last_error(87);
+        0
+    }
+}
+pub extern "win64" fn set_default_dll_directories(flags: u32) -> i32 {
+    // LOAD_LIBRARY_SEARCH_APPLICATION_DIR | USER_DIRS | SYSTEM32 | DEFAULT_DIRS
+    // (et SYSTEM32_NO_FORWARDER) : rien d'autre n'est admis.
+    if flags == 0 || flags & !(0x200 | 0x400 | 0x800 | 0x1000 | 0x4000) != 0 {
+        set_last_error(87);
+        return 0;
+    }
+    crate::loader::set_default_dll_directories(flags);
     1
 }
-pub extern "win64" fn remove_dll_directory(_cookie: usize) -> i32 {
+pub unsafe extern "win64" fn set_dll_directory_w(dir: *const u16) -> i32 {
+    let d = (!dir.is_null()).then(|| wstr(dir));
+    crate::loader::set_dll_directory(d.as_deref());
     1
 }
-pub extern "win64" fn set_default_dll_directories(_flags: u32) -> i32 {
-    1
-}
-pub extern "win64" fn set_dll_directory(_dir: *const u16) -> i32 {
+pub unsafe extern "win64" fn set_dll_directory_a(dir: *const u8) -> i32 {
+    let d = (!dir.is_null()).then(|| cstr(dir));
+    crate::loader::set_dll_directory(d.as_deref());
     1
 }
 
@@ -1986,8 +2013,8 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "AddDllDirectory" => fn add_dll_directory,
         "RemoveDllDirectory" => fn remove_dll_directory,
         "SetDefaultDllDirectories" => fn set_default_dll_directories,
-        "SetDllDirectoryA" => fn set_dll_directory,
-        "SetDllDirectoryW" => fn set_dll_directory,
+        "SetDllDirectoryA" => fn set_dll_directory_a,
+        "SetDllDirectoryW" => fn set_dll_directory_w,
         "GetLogicalDriveStringsA" => fn get_logical_drive_strings_a,
         "GetLogicalDriveStringsW" => fn get_logical_drive_strings_w,
         "GetVolumePathNameW" => fn get_volume_path_name_w,

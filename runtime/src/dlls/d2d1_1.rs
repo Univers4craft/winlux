@@ -246,6 +246,16 @@ const IID_D2D1_COLOR_CONTEXT1: Guid = guid(
     [0xbd, 0x85, 0x9c, 0xd7, 0x8d, 0x6f, 0x55, 0xee],
 );
 
+/// ID2D1Factory1 (fabrique créée pour un appareil de composition).
+pub(super) fn factory1_iid() -> Guid {
+    FACTORY_IIDS[0]
+}
+
+/// ID2D1Device.
+pub(super) fn device_iid() -> Guid {
+    DEVICE_IIDS[0]
+}
+
 /// La fabrique répond aux interfaces 1.1 à 1.3 en plus de ID2D1Factory.
 pub(super) fn is_factory_n_iid(riid: &Guid) -> bool {
     FACTORY_IIDS.contains(riid)

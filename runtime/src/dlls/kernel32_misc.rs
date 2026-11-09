@@ -798,7 +798,7 @@ pub unsafe extern "win64" fn format_message_a(
         }
         let p = crate::dlls::kernel32::heap_alloc(0, 0, bytes.len()) as *mut u8;
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
-        *(buf as *mut *mut u8) = p;
+        crate::wow32::write_ptr(buf as usize, p as usize);
         return n;
     }
     if buf.is_null() || size < n + 1 {
@@ -829,7 +829,7 @@ pub unsafe extern "win64" fn format_message_w(
         }
         let p = crate::dlls::kernel32::heap_alloc(0, 0, w.len() * 2) as *mut u16;
         std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
-        *(buf as *mut *mut u16) = p;
+        crate::wow32::write_ptr(buf as usize, p as usize);
         return n;
     }
     if buf.is_null() || size < n + 1 {

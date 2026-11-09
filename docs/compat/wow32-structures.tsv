@@ -7,6 +7,10 @@ com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulem
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
+composition.rs	BitmapProps1	a-verifier	
+composition.rs	Factory	a-verifier	
+composition.rs	Handler	a-verifier	
+composition.rs	Slot	a-verifier	
 controls.rs	DrawItemStruct	a-verifier	
 controls/bars.rs	CbeItem	a-verifier	
 controls/bars.rs	NmHdr	a-verifier	

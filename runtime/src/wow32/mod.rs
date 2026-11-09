@@ -2344,6 +2344,25 @@ pub fn x86_vtable_sig(name: &str, methods: &[(usize, &str)]) -> u32 {
     Box::leak(table.into_boxed_slice()).as_ptr() as usize as u32
 }
 
+/// Passerelle x86 (stdcall) vers une fonction win64 du runtime qui n'est
+/// pas exportée par nom, comme les fonctions d'extension de Winsock rendues
+/// par WSAIoctl (#1408) : `n` arguments de 4 octets, étendus à 64 bits.
+pub fn x86_stdcall(name: &str, target: usize, n: u8) -> u32 {
+    make_stub(
+        Desc {
+            ret: b'i',
+            supported: true,
+            target,
+            kinds: vec![b'i'; n as usize],
+            label: name.to_string(),
+            fix: crt::Fix::None,
+            raw: None,
+            callbacks: 0,
+        },
+        Some(n as u16 * 4),
+    ) as u32
+}
+
 pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {
     let table: Vec<u32> = methods
         .iter()

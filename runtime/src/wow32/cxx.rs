@@ -106,6 +106,9 @@ struct Handler {
 
 /// Type capturable du ThrowInfo `ti` qui correspond à `h`.
 fn find_catchable(ti: u32, h: &Handler) -> Option<u32> {
+    if ti == 0 {
+        return None;
+    }
     let cta = rd(ti + 12);
     let n = rdi(cta).clamp(0, 256) as u32;
     (0..n).map(|i| rd(cta + 4 + i * 4)).find(|&ct| {
@@ -198,6 +201,9 @@ struct Active {
     frame: u32,
     obj: u32,
     ti: u32,
+    /// Exception SEH prise par `catch(...)` : code, drapeaux et paramètres,
+    /// relancés tels quels par `throw;` (7-Zip, #1413).
+    seh: Option<(u32, u32, Vec<u32>)>,
 }
 
 thread_local! {
@@ -208,8 +214,16 @@ thread_local! {
 /// `catch` en cours.
 pub extern "win64" fn cxx_throw_exception(obj: u32, ti: u32) {
     let (obj, ti) = if ti == 0 {
-        match ACTIVE.with(|a| a.borrow().last().map(|e| (e.obj, e.ti))) {
-            Some(p) => p,
+        match ACTIVE.with(|a| a.borrow().last().map(|e| (e.obj, e.ti, e.seh.clone()))) {
+            Some((_, _, Some((code, flags, args)))) => {
+                // Sur la pile du thread, donc sous 4 Go.
+                let mut params = [0u32; 15];
+                let n = args.len().min(15);
+                params[..n].copy_from_slice(&args[..n]);
+                seh::raise_exception(code, flags, n as u32, params.as_ptr() as usize as u32);
+                return;
+            }
+            Some((obj, ti, None)) => (obj, ti),
             None => terminate(),
         }
     } else {
@@ -247,6 +261,14 @@ extern "win64" fn frame_handler(rec: u32, frame: u32, ctx: u32, _dc: u32, fi: u3
     if !cxx && !seh_catchable {
         return 1;
     }
+    let seh_record = (!cxx).then(|| {
+        let n = rd(rec + 16).min(15);
+        (
+            rd(rec),
+            rd(rec + 4),
+            (0..n).map(|i| rd(rec + 20 + i * 4)).collect(),
+        )
+    });
     let ebp = frame + 12;
     let level = state(frame);
     for i in 0..fi.try_count {
@@ -288,7 +310,12 @@ extern "win64" fn frame_handler(rec: u32, frame: u32, ctx: u32, _dc: u32, fi: u3
                 let mut a = a.borrow_mut();
                 // Les `catch` des cadres plus bas sur la pile sont abandonnés.
                 a.retain(|e| e.frame >= frame);
-                a.push(Active { frame, obj, ti });
+                a.push(Active {
+                    frame,
+                    obj,
+                    ti,
+                    seh: seh_record.clone(),
+                });
             });
             // Pile de reprise : celle que le cadre a enregistrée avant le
             // bloc `catch` (le code d'un `catch` peut y mettre la sienne,
