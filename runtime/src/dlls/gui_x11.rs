@@ -128,6 +128,12 @@ fn focus_taken_by_wm(
     detail == x11rb::protocol::xproto::NotifyDetail::ANCESTOR && child && asked_focus == xwin
 }
 
+/// FocusIn d'un contrôle qui n'est pas la dernière cible de SetFocus :
+/// écho périmé d'une remise du focus, sans effet côté Win32 (#1286).
+fn stale_child_focus(child: bool, asked_focus: u32, xwin: u32) -> bool {
+    child && asked_focus != xwin
+}
+
 #[derive(Clone, Copy)]
 struct XFont {
     id: u32,
@@ -2766,6 +2772,16 @@ impl X11Backend {
                 {
                     return None;
                 }
+                // FocusIn périmé d'un contrôle : seul Winlux donne le focus X
+                // à un contrôle, et sa dernière demande vise une autre fenêtre.
+                // C'est l'écho d'une remise du focus (#1137) arrivé après un
+                // clic sur un autre bouton : le traiter rendait le focus Win32
+                // au bouton par défaut pendant l'appui, et le clic était perdu
+                // (#1286).
+                let child = self.windows.get(&hwnd).is_some_and(|w| w.child);
+                if stale_child_focus(child, self.asked_focus, e.event) {
+                    return None;
+                }
                 // Focus remonté d'un contrôle à sa fenêtre de premier niveau
                 // sans SetFocus de Winlux : c'est le gestionnaire de fenêtres
                 // (clic pour activer). Le contrôle garde le focus Win32 ; son
@@ -3676,6 +3692,17 @@ mod tests {
         assert!(!focus_taken_by_wm(NotifyDetail::NONLINEAR, 7, 7, true));
         // Fenêtre de premier niveau : pas concernée.
         assert!(!focus_taken_by_wm(NotifyDetail::ANCESTOR, 7, 7, false));
+    }
+
+    #[test]
+    fn focus_perime_d_un_controle_ignore() {
+        // « Oui » (7) reprend le focus X après que le clic sur « Non » (9)
+        // l'a demandé : l'écho est périmé et ne rend pas le focus à « Oui ».
+        assert!(stale_child_focus(true, 9, 7));
+        // Focus X donné au contrôle visé par le dernier SetFocus.
+        assert!(!stale_child_focus(true, 9, 9));
+        // Fenêtre de premier niveau : le gestionnaire peut l'activer.
+        assert!(!stale_child_focus(false, 9, 7));
     }
 
     #[test]
