@@ -3290,6 +3290,15 @@ fn input_disabled(hwnd: usize) -> bool {
     false
 }
 
+/// Événement du backend (souris, focus, croix du gestionnaire de fenêtres)
+/// refusé parce que sa fenêtre de premier niveau est désactivée (#1120, #1376).
+fn refused_while_disabled(message: u32, hwnd: usize) -> bool {
+    let mouse = (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message);
+    (mouse || message == WM_CLOSE || message == WM_SETFOCUS) && input_disabled(hwnd)
+}
+
 /// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
 /// active la plus récente (la boîte modale qui l'a désactivée).
 fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
@@ -3423,12 +3432,18 @@ pub fn pump_backend() {
         if mouse && !matches!(e.message, 0x020A | 0x020E) {
             mouse_moved_to(e.hwnd);
         }
-        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
+        // La croix du gestionnaire de fenêtres (WM_CLOSE) est refusée de même :
+        // sous Windows, le bouton Fermer d'une fenêtre désactivée ne fait
+        // rien. Audacity fermait sinon son projet sous l'avertissement modal
+        // « L'audio enregistré a été perdu », puis libérait la boîte, posée
+        // dans la pile de la boucle modale encore en cours (#1376).
+        let close = e.message == WM_CLOSE;
+        if refused_while_disabled(e.message, e.hwnd) {
             let press = matches!(
                 e.message,
                 0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
             );
-            if press || e.message == WM_SETFOCUS {
+            if press || close || e.message == WM_SETFOCUS {
                 if let Some(popup) = enabled_owned_popup(e.hwnd) {
                     let mut b = lock(backend());
                     b.raise_window(popup);
@@ -5910,6 +5925,12 @@ pub(crate) mod tests {
         );
         assert!(!input_disabled(boite));
         assert_eq!(enabled_owned_popup(fille), Some(boite));
+        // #1376 : la croix de la fenêtre désactivée ne la ferme pas ; celle
+        // de la boîte, active, reste servie.
+        assert!(refused_while_disabled(WM_CLOSE, main));
+        assert!(refused_while_disabled(0x0201, fille));
+        assert!(!refused_while_disabled(WM_CLOSE, boite));
+        assert!(!refused_while_disabled(WM_PAINT, main));
         set_window_style(main, 0);
         for h in [fille, boite, main] {
             destroy_window(h);
