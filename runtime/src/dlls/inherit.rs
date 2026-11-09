@@ -280,6 +280,10 @@ pub(crate) fn describe(h: usize, move_pipe: bool) -> Option<(String, Vec<OwnedFd
     if let Some((fd, size, access)) = crate::dlls::mmap::export(h) {
         return Some((format!("m,{h:x},#0,{size},{access:x}"), vec![dup(fd)?]));
     }
+    if crate::dlls::ws2_32::is_socket(h) {
+        // Socket Winsock marquée héritable : son descripteur (#1347).
+        return Some((format!("k,{h:x},#0"), vec![dup(h as i32)?]));
+    }
     if let Some(pid) = crate::dlls::kernel32::inheritable_process_pid(h) {
         return Some((format!("p,{h:x},{pid}"), Vec::new()));
     }
@@ -355,6 +359,11 @@ pub(crate) fn adopt_one(
         "f" => {
             let file = field(2)?;
             crate::dlls::kernel32::insert_file_at(h, std::fs::File::from(file), flag(3));
+        }
+        "k" => {
+            // Le numéro d'une socket est son descripteur : il peut différer
+            // de `h` si ce numéro est déjà pris ici.
+            return Some(crate::dlls::ws2_32::adopt_socket(field(2)?, h));
         }
         "n" => {
             let server = field(2)?;

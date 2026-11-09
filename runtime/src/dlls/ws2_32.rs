@@ -751,6 +751,23 @@ fn last_error() -> i32 {
 fn valid_socket(s: usize) -> bool {
     lock(sockets()).contains(&s)
 }
+/// Reprend une socket transmise par un autre processus (héritage,
+/// DuplicateHandle). Le handle garde la valeur `want` quand ce numéro de
+/// descripteur est libre ; sinon il prend celui du descripteur reçu.
+pub(crate) fn adopt_socket(fd: std::os::fd::OwnedFd, want: usize) -> usize {
+    use std::os::fd::{AsRawFd, IntoRawFd};
+    let n = fd.as_raw_fd();
+    let free = want != 0
+        && want <= i32::MAX as usize
+        && unsafe { libc::fcntl(want as i32, libc::F_GETFD) } < 0;
+    let h = if free && unsafe { libc::dup3(n, want as i32, libc::O_CLOEXEC) } == want as i32 {
+        want
+    } else {
+        fd.into_raw_fd() as usize
+    };
+    lock(sockets()).insert(h);
+    h
+}
 fn gai_error(e: i32) -> i32 {
     if e == libc::EAI_AGAIN {
         WSATRY_AGAIN
@@ -908,7 +925,9 @@ pub extern "win64" fn socket(af: i32, kind: i32, protocol: i32) -> usize {
         set_error(WSA_NOT_INITIALISED);
         return usize::MAX;
     }
-    let s = unsafe { libc::socket(af_in(af), kind, protocol) };
+    // SOCK_CLOEXEC : un enfant n'hérite d'une socket que si elle est
+    // marquée héritable, et `inherit` la lui passe alors (#1347).
+    let s = unsafe { libc::socket(af_in(af), kind | libc::SOCK_CLOEXEC, protocol) };
     if s < 0 {
         set_error(last_error());
         usize::MAX
@@ -1028,7 +1047,7 @@ pub unsafe extern "win64" fn accept(s: usize, name: *mut u8, len: *mut i32) -> u
     } else {
         name as *mut libc::sockaddr
     };
-    let r = libc::accept(s as i32, ptr, &mut n);
+    let r = libc::accept4(s as i32, ptr, &mut n, libc::SOCK_CLOEXEC);
     if r < 0 {
         set_error(last_error());
         return usize::MAX;
@@ -2714,7 +2733,8 @@ pub extern "win64" fn wsa_socket_w(
     // les appels : il ne rend pas la socket non bloquante (ioctlsocket FIONBIO
     // s'en charge).
     let _ = flags;
-    let s = unsafe { libc::socket(af_in(af), kind, protocol) };
+    // Non héritable par défaut, comme sous Windows (#1347).
+    let s = unsafe { libc::socket(af_in(af), kind | libc::SOCK_CLOEXEC, protocol) };
     if s < 0 {
         set_error(last_error());
         INVALID_SOCKET
@@ -3666,6 +3686,7 @@ mod tests {
     /// socket a des données (WinSCP x86 en SFTP, #1340).
     #[test]
     fn attente_kernel32_sur_l_evenement_d_une_socket() {
+        let _g = serialise();
         use crate::dlls::kernel32;
         let mut fds = [0i32; 2];
         unsafe {
@@ -3698,7 +3719,65 @@ mod tests {
     }
 
     #[test]
+    fn sockets_non_heritables_par_defaut_et_fd_accept_vu_par_kernel32() {
+        use crate::dlls::kernel32;
+        let _g = init();
+        unsafe {
+            let (srv, addr) = listener();
+            // Ni socket() ni accept() ne laissent un descripteur à l'enfant
+            // (#1347).
+            assert_ne!(libc::fcntl(srv as i32, libc::F_GETFD) & libc::FD_CLOEXEC, 0);
+            let ev = kernel32::create_event_w(0, 0, 0, std::ptr::null());
+            assert_eq!(wsa_event_select(srv, ev, FD_ACCEPT), 0);
+            assert_eq!(kernel32::wait_for_single_object(ev, 0), 258);
+            let cli = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert_eq!(
+                libc::connect(cli, &addr as *const _ as *const libc::sockaddr, 16),
+                0
+            );
+            // DevTools de Chromium : FD_ACCEPT attendu par WaitForSingleObject.
+            assert_eq!(kernel32::wait_for_single_object(ev, 1000), 0);
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(srv, ev, &mut ne), 0);
+            assert_eq!(ne.network_events & FD_ACCEPT, FD_ACCEPT);
+            assert_eq!(wsa_event_select(srv, 0, 0), 0);
+            let peer = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(peer, usize::MAX);
+            assert_ne!(
+                libc::fcntl(peer as i32, libc::F_GETFD) & libc::FD_CLOEXEC,
+                0
+            );
+
+            // Marquée héritable, la socket est transmise et reprise.
+            let (text, fds) = crate::dlls::inherit::describe(srv, false).expect("socket");
+            assert!(text.starts_with("k,"), "{text}");
+            let mut fds = fds.into_iter();
+            let h = crate::dlls::inherit::adopt_one(&text, 0, |_| fds.next()).expect("reprise");
+            assert_ne!(h, srv, "numéro déjà pris ici : un autre descripteur");
+            assert!(is_socket(h));
+            let mut on = 0i32;
+            let mut len = 4u32;
+            libc::getsockopt(
+                h as i32,
+                libc::SOL_SOCKET,
+                libc::SO_ACCEPTCONN,
+                &mut on as *mut i32 as *mut c_void,
+                &mut len,
+            );
+            assert_eq!(on, 1, "la copie est bien la socket d'écoute");
+
+            closesocket(h);
+            closesocket(peer);
+            closesocket(srv);
+            libc::close(cli);
+            kernel32::close_handle(ev);
+        }
+        cleanup();
+    }
+
+    #[test]
     fn ideal_send_backlog_rend_une_taille() {
+        let _g = serialise();
         let mut fds = [0i32; 2];
         unsafe {
             libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr());
