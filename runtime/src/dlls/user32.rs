@@ -3655,7 +3655,18 @@ pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPl
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
     }
-    let Some(rect) = gui::screen_rect(hwnd) else {
+    // Fenêtre enfant : rcNormalPosition est relatif à la zone cliente du
+    // parent. 7-Zip ajoute son « top » à la hauteur de la barre d'outils
+    // pour placer son panneau : en coordonnées d'écran, la zone d'adresse
+    // tombait 200 pixels trop bas (#1326).
+    let child = gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0)
+        && gui::window_parent(hwnd).unwrap_or(0) != 0;
+    let rect = if child {
+        gui::window_rect(hwnd)
+    } else {
+        gui::screen_rect(hwnd)
+    };
+    let Some(rect) = rect else {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     };

@@ -51,7 +51,9 @@ fn notify_simple(hwnd: usize, code: i32) -> isize {
 
 /// Texte d'une structure TVITEM/LVITEM/TCITEM (A ou W selon le message).
 unsafe fn read_text_ptr(ptr: usize, wide: bool) -> Option<String> {
-    if ptr == 0 || ptr == usize::MAX {
+    // LPSTR_TEXTCALLBACK (-1, ou 0xFFFFFFFF venu d'un programme 32 bits) et
+    // toute valeur sous 64 Kio ne sont pas des chaînes.
+    if ptr < 0x10000 || ptr == usize::MAX || ptr == u32::MAX as usize {
         return None;
     }
     Some(if wide {
@@ -2166,9 +2168,16 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             let flags = *(lp as *const u32);
             let text_ptr = *((lp as *const usize).add(1));
             let param = *((lp as *const isize).add(2));
-            let needle = read_text_ptr(text_ptr, msg == 0x1053)
-                .unwrap_or_default()
-                .to_lowercase();
+            // psz n'est lu qu'avec LVFI_STRING, LVFI_SUBSTRING ou
+            // LVFI_PARTIAL : avec LVFI_PARAM seul, il ne vaut rien (WinSCP
+            // x86 y laissait 1, #1325).
+            let needle = if flags & 0xE != 0 {
+                read_text_ptr(text_ptr, msg == 0x1053)
+                    .unwrap_or_default()
+                    .to_lowercase()
+            } else {
+                String::new()
+            };
             let s = common_snapshot(hwnd);
             s.rows
                 .iter()

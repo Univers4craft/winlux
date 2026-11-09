@@ -1938,3 +1938,57 @@ fn enum_child_windows_parcourt_tous_les_descendants() {
     unsafe { user32::enum_child_windows(parent, cb, 1) };
     assert_eq!(ENUMERES.lock().unwrap().len(), 1);
 }
+
+/// LVM_FINDITEM avec LVFI_PARAM seul : psz n'est pas lu (WinSCP x86 y
+/// laisse 1, #1325).
+#[test]
+fn liste_recherche_par_parametre_sans_texte() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 52, (0, 0, 300, 200));
+    for i in 0..3 {
+        let t = w("fichier");
+        let mut it = LvItemW {
+            mask: 0x1 | 0x4,
+            item: i,
+            sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            text: t.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 500 + i as isize,
+        };
+        assert_eq!(
+            sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize),
+            i as isize
+        );
+    }
+    // LVFINDINFOW 64 bits : flags, psz, lParam, pt, vkDirection.
+    let mut find = [0usize; 5];
+    find[0] = 0x1; // LVFI_PARAM
+    find[1] = 1; // psz quelconque
+    find[2] = 502;
+    assert_eq!(sendw(lv, 0x1053, usize::MAX, find.as_mut_ptr() as isize), 2);
+    find[2] = 9;
+    assert_eq!(
+        sendw(lv, 0x1053, usize::MAX, find.as_mut_ptr() as isize),
+        -1
+    );
+    // GetWindowPlacement d'une fenêtre enfant : relatif à son parent (#1326).
+    let tb = child(p, "Static", "", 0, 53, (0, 40, 120, 55));
+    let mut wp = user32::WindowPlacement::default();
+    assert_eq!(unsafe { user32::get_window_placement(tb, &mut wp) }, 1);
+    assert_eq!(
+        (
+            wp.normal.left,
+            wp.normal.top,
+            wp.normal.right,
+            wp.normal.bottom
+        ),
+        (0, 40, 120, 95)
+    );
+    unsafe {
+        user32::destroy_window(p);
+    }
+}
