@@ -120,6 +120,23 @@ pub extern "win64" fn monitor_from_window(hwnd: usize, flags: u32) -> usize {
     }
 }
 
+/// Zone de travail d'un écran : son rectangle coupé par la zone de travail
+/// du bureau (_NET_WORKAREA). Sans intersection (zone publiée pour un autre
+/// écran), l'écran entier.
+pub fn work_rect(monitor: &Rect, area: &Rect) -> Rect {
+    let r = Rect {
+        left: monitor.left.max(area.left),
+        top: monitor.top.max(area.top),
+        right: monitor.right.min(area.right),
+        bottom: monitor.bottom.min(area.bottom),
+    };
+    if r.right > r.left && r.bottom > r.top {
+        r
+    } else {
+        *monitor
+    }
+}
+
 /// Remplit MONITORINFO (40 octets) ou MONITORINFOEX (A : 72, W : 104).
 pub unsafe fn fill_info(monitor: usize, info: *mut u8, wide: bool) -> i32 {
     if info.is_null() {
@@ -134,7 +151,11 @@ pub unsafe fn fill_info(monitor: usize, info: *mut u8, wide: bool) -> i32 {
         return 0;
     };
     std::ptr::write_unaligned(info.add(4) as *mut Rect, m.rect);
-    std::ptr::write_unaligned(info.add(20) as *mut Rect, m.rect);
+    // rcWork : l'écran sans les panneaux (barre des tâches). Chromium y
+    // place ses menus ; avec l'écran entier, le menu de la zone de
+    // notification débordait sous le bas de l'écran (#1267).
+    let work = work_rect(&m.rect, &gui::work_area());
+    std::ptr::write_unaligned(info.add(20) as *mut Rect, work);
     *(info.add(36) as *mut u32) = if m.primary { MONITORINFOF_PRIMARY } else { 0 };
     // szDevice : « \\.\DISPLAY1 », comme Windows.
     let name = format!("\\\\.\\DISPLAY{monitor}");
@@ -197,6 +218,32 @@ pub unsafe extern "win64" fn enum_display_monitors(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> Rect {
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// #1267 : rcWork exclut le panneau du bas ; un écran que la zone ne
+    /// touche pas garde son rectangle entier.
+    #[test]
+    fn zone_de_travail_sans_le_panneau() {
+        let ecran = rect(0, 0, 1920, 1080);
+        assert_eq!(
+            work_rect(&ecran, &rect(0, 0, 1920, 1040)),
+            rect(0, 0, 1920, 1040)
+        );
+        let second = rect(1920, 0, 3840, 1080);
+        assert_eq!(
+            work_rect(&second, &rect(0, 0, 3840, 1040)),
+            rect(1920, 0, 3840, 1040)
+        );
+        assert_eq!(work_rect(&second, &rect(0, 0, 1920, 1040)), second);
+    }
 
     fn mon(l: i32, t: i32, r: i32, b: i32, primary: bool) -> gui::Monitor {
         gui::Monitor {

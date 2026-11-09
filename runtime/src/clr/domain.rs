@@ -4,8 +4,27 @@
 //! puis `Nom.exe`), comme le fait le sondage d'un .NET Framework pour les
 //! assemblies privées (dossier de base de l'application). Une référence non
 //! trouvée reste servie par la bibliothèque intégrée (`bcl.rs`).
+//!
+//! Les assemblies de base (`mscorlib`…) viennent d'abord de la BCL Winlux,
+//! écrite en C# et compilée à la construction (`bcl/`, étape 7). Elle est
+//! cherchée dans `WINLUX_BCL_DIR`, sinon dans `/opt/winlux/bcl`. Ce qu'elle
+//! ne définit pas encore reste servi par `bcl.rs`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Nom (en minuscules) de l'assembly de base.
+pub const CORLIB: &str = "mscorlib";
+
+/// Assemblies fournies par la BCL Winlux plutôt que par le dossier de l'appli.
+const BCL_ASSEMBLIES: [&str; 1] = [CORLIB];
+
+/// Dossier de la BCL Winlux compilée, s'il existe.
+fn bcl_dir() -> Option<PathBuf> {
+    let dir = std::env::var_os("WINLUX_BCL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/opt/winlux/bcl"));
+    dir.is_dir().then_some(dir)
+}
 
 use super::metadata::Assembly;
 use super::tables::TableId;
@@ -72,13 +91,17 @@ pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmIn
                 .collect()
         };
         next += 1;
-        let Some(dir) = app_dir else { continue };
         for name in refs {
             let key = name.to_ascii_lowercase();
             if infos.iter().any(|i| i.name == key) {
                 continue;
             }
-            let Some(path) = probe(dir, &name) else {
+            let from_bcl = BCL_ASSEMBLIES
+                .contains(&key.as_str())
+                .then(bcl_dir)
+                .flatten()
+                .and_then(|d| probe(&d, &name));
+            let Some(path) = from_bcl.or_else(|| app_dir.and_then(|d| probe(d, &name))) else {
                 continue;
             };
             match std::fs::read(&path)

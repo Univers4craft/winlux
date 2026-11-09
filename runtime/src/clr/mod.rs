@@ -124,7 +124,7 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
         if name == "<Module>" {
             continue;
         }
-        let methods = assembly
+        let methods: Vec<types::MethodInfo> = assembly
             .type_methods(row)
             .map(|m| {
                 let md = assembly.get_method_def(m);
@@ -139,6 +139,25 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
                 }
             })
             .collect();
+        let namespace = assembly.get_string(td.namespace);
+        // Notre mscorlib définit aussi Object, String, Int32… : ses méthodes
+        // s'attachent au type intégré, dont la disposition reste celle du
+        // moteur.
+        if info.name == domain::CORLIB && namespace == "System" {
+            let builtin = types::with_types(|reg| {
+                let id = reg
+                    .find_by_name(namespace, name)
+                    .filter(|&id| types::is_builtin(id))?;
+                let t = reg.get_mut(id)?;
+                t.methods = methods.clone();
+                t.def = Some((asm_index, row));
+                Some(id)
+            });
+            if builtin.is_some() {
+                ids[row as usize] = builtin;
+                continue;
+            }
+        }
         let info = types::TypeInfo {
             name: name.to_string(),
             namespace: assembly.get_string(td.namespace).to_string(),

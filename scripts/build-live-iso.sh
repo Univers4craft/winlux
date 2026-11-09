@@ -83,6 +83,11 @@ cargo build --release -p winlux
 bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
+# BCL Winlux écrite en C# (étape 7 du moteur .NET) : seule la mscorlib.dll
+# compilée entre dans l'ISO ; Roslyn et le runtime qui le fait tourner restent
+# sur la machine de construction.
+bash scripts/build-bcl.sh
+install -D -m 644 "$root/build/bcl/mscorlib.dll" "$stage/opt/winlux/bcl/mscorlib.dll"
 # Lecteurs réseau (FTP, SFTP, SMB, NFS, WebDAV, S3) : même binaire.
 ln -sf winlux "$stage/usr/bin/winlux-drives"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
