@@ -72,12 +72,62 @@ for type in $mime_types; do
     fi
 done
 
+# Lancement direct des .exe (« ./programme.exe ») par binfmt_misc. systemd
+# relit /etc/binfmt.d ; sans systemd (Devuan, Void, Alpine, Gentoo OpenRC),
+# rien n'était enregistré avant le redémarrage (#27) : binfmt-support
+# (update-binfmts, aussi au démarrage) s'il est là, sinon écriture directe
+# dans /proc/sys/fs/binfmt_misc/register. WINLUX_BINFMT force la méthode
+# (tests) : auto, systemd, update-binfmts ou proc.
+binfmt=/proc/sys/fs/binfmt_misc
+binfmt_line() { grep -v '^#' "$etc/binfmt.d/winlux.conf" | grep -m 1 .; }
+binfmt_mount() {
+    test -e "$binfmt/register" && return 0
+    modprobe binfmt_misc 2>/dev/null || true
+    test -d "$binfmt" && mount -t binfmt_misc binfmt_misc "$binfmt" 2>/dev/null || true
+    test -e "$binfmt/register"
+}
+binfmt_proc() {
+    binfmt_mount || return 1
+    # Une ancienne entrée (autre préfixe) est remplacée par la nouvelle.
+    if [ -e "$binfmt/winlux" ]; then echo -1 >"$binfmt/winlux" || return 1; fi
+    binfmt_line >"$binfmt/register"
+}
+register_binfmt() {
+    method=${WINLUX_BINFMT:-auto}
+    if [ "$method" = auto ]; then
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then method=systemd
+        elif command -v update-binfmts >/dev/null 2>&1; then method=update-binfmts
+        else method=proc; fi
+    fi
+    case "$method" in
+        systemd)
+            binfmt_mount || true
+            systemctl restart systemd-binfmt.service 2>/dev/null || true
+            # systemd-binfmt absent ou en échec : enregistrement direct.
+            [ -e "$binfmt/winlux" ] || binfmt_proc || true ;;
+        update-binfmts)
+            binfmt_mount || true
+            # Gardé par binfmt-support, réenregistré à chaque démarrage.
+            if [ -e "$binfmt/winlux" ]; then echo -1 >"$binfmt/winlux" || true; fi
+            update-binfmts --package winlux --remove winlux "$bin/winlux" >/dev/null 2>&1 || true
+            update-binfmts --package winlux --install winlux "$bin/winlux" --magic MZ --fix-binary yes \
+                || binfmt_proc || true ;;
+        proc)
+            binfmt_proc || true
+            echo "Note : sans systemd ni binfmt-support, /etc/binfmt.d/winlux.conf n'est relu au démarrage que si le système d'init le gère (service binfmt d'OpenRC par exemple)." >&2 ;;
+        *) echo "WINLUX_BINFMT inconnu : $method" >&2; exit 2 ;;
+    esac
+    if [ -e "$binfmt/winlux" ]; then
+        echo "Lancement direct des .exe actif ($binfmt/winlux)"
+    else
+        echo "Attention : lancement direct des .exe non enregistré ; « winlux programme.exe » et le double-clic restent disponibles." >&2
+    fi
+}
+
 if [ -z "$destdir" ]; then
     update-mime-database "$share/mime" 2>/dev/null || true
     update-desktop-database "$share/applications" 2>/dev/null || true
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
-    if [ -d /proc/sys/fs/binfmt_misc ]; then
-        systemctl restart systemd-binfmt.service 2>/dev/null || true
-    fi
+    register_binfmt
 fi
 echo "Winlux $version installé dans $prefix/bin (double-clic : $prefix/bin/winlux-open)"
