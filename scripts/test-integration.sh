@@ -188,7 +188,7 @@ mkdir -p "$crashbin" "$journal"
 cat >"$crashbin/winlux" <<EOF
 #!/bin/sh
 if [ "\$1" = --inspect ]; then echo gui; exit 0; fi
-printf '[CRASH] ts=%s sig=11 stop=IRQL_NOT_LESS_OR_EQUAL exe=plante.exe pid=%s\n' "\$(date +%s)" "\$\$" >>"$journal/crash.log"
+printf '[CRASH] ts=%s sig=11 stop=APPLICATION_FAILURE exe=plante.exe pid=%s\n' "\$(date +%s)" "\$\$" >>"$journal/crash.log"
 exit 5
 EOF
 chmod +x "$crashbin/winlux"
