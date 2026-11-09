@@ -206,6 +206,7 @@ pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod sysdlls;
+pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod thread_ctl;

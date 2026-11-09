@@ -15,6 +15,7 @@ etc="$destdir/etc"
 version=${WINLUX_VERSION:-$(git -C "$root" describe --tags --always 2>/dev/null || printf 'development')}
 mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec application/x-msi application/x-ms-shortcut"
 web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml"
+mime_icons="application-x-ms-dos-executable application-x-msdownload application-vnd.microsoft.portable-executable application-x-dosexec application-x-msi"
 
 test -x "$root/target/release/winlux" || {
     echo "target/release/winlux absent : lancez d'abord cargo build --release -p winlux" >&2
@@ -38,6 +39,17 @@ sed "s|/usr/bin/winlux-open|$prefix/bin/winlux-open|" "$root/integration/winlux.
 sed "s|/usr/bin/winlux-browser|$prefix/bin/winlux-browser|" "$root/integration/winlux-browser.desktop" \
     | install -Dm644 /dev/stdin "$share/applications/winlux-browser.desktop"
 install -Dm644 "$root/integration/x-ms-dos-executable.xml" "$share/mime/packages/winlux.xml"
+# Icône des .exe dans le gestionnaire de fichiers d'une distribution ordinaire
+# (#1425) : celle de Winlux en repli (hicolor), et la vraie icône du programme
+# en miniature (Tumbler sous XFCE, GNOME), extraite par winlux-applications.
+for icon in $mime_icons; do
+    install -Dm644 "$root/integration/native/icons/Winlux/scalable/mimetypes/$icon.svg" \
+        "$share/icons/hicolor/scalable/mimetypes/$icon.svg"
+done
+install -Dm755 "$root/scripts/winlux-applications.py" "$bin/winlux-applications"
+sed "s|/usr/bin/winlux-applications|$prefix/bin/winlux-applications|g" \
+    "$root/integration/native/thumbnailers/winlux-windows.thumbnailer" \
+    | install -Dm644 /dev/stdin "$share/thumbnailers/winlux-windows.thumbnailer"
 sed "s|/usr/bin/winlux|$prefix/bin/winlux|" "$root/integration/winlux-binfmt.conf" \
     | install -Dm644 /dev/stdin "$etc/binfmt.d/winlux.conf"
 # Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
@@ -127,6 +139,7 @@ register_binfmt() {
 if [ -z "$destdir" ]; then
     update-mime-database "$share/mime" 2>/dev/null || true
     update-desktop-database "$share/applications" 2>/dev/null || true
+    gtk-update-icon-cache -q -t "$share/icons/hicolor" 2>/dev/null || true
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
     register_binfmt
 fi

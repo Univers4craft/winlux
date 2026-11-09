@@ -110,6 +110,22 @@ for path in (ROOT / "scripts").glob("*.py"):
     check("Fond ecran" not in path.read_text(errors="replace") or path.name == Path(__file__).name,
           f"{path.name} : référence à l'ancien fond retiré")
 
+# Programmes d'essai PE (#1427) : aucun texte affiché ne cite une marque
+# (« FillRect surfaces Windows 11 » dans gui_demo). Seuls les littéraux de
+# chaîne hors commentaires comptent ; les noms d'API Windows restent permis.
+LITERAL = re.compile(r'b?"(?:[^"\\]|\\.)*"')
+VISIBLE_BRAND = re.compile(r"windows\s*(?:1[01]|xp|vista)\b|microsoft|\bedge\b|\bbing\b", re.I)
+API_NAMES = {'b"Microsoft Unified Security Protocol Provider"'}  # nom du paquet SSPI (Schannel)
+for path in sorted((ROOT / "testexe/src/bin").glob("*.rs")):
+    for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        if line.lstrip().startswith("//"):
+            continue
+        for match in LITERAL.finditer(line):
+            if "//" in line[:match.start()]:
+                break
+            if VISIBLE_BRAND.search(match.group()) and match.group() not in API_NAMES:
+                check(False, f"{path.relative_to(ROOT)}:{number} : marque dans un texte affiché {match.group()}")
+
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
     sys.exit(1)
