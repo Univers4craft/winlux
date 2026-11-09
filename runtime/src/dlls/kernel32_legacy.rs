@@ -139,7 +139,7 @@ fn delete_atom(atom: u16) -> u16 {
     0
 }
 
-fn atom_name(atom: u16) -> Option<String> {
+pub(crate) fn atom_name(atom: u16) -> Option<String> {
     if atom == 0 {
         return None;
     }

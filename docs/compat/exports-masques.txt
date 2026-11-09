@@ -169,8 +169,6 @@ GetPointerDevices  electron_win32  ←  pointer
 GetPointerType  electron_win32  ←  pointer
 GetPrivateProfileStringA  kernel32  ←  inifile
 GetPrivateProfileStringW  electron_win32  ←  inifile
-GetPropA  user32_ext  ←  user32
-GetPropW  user32_ext  ←  user32
 GetROP2  gdi32  ←  gdi32_ext
 GetRawInputBuffer  games_win32  ←  rawinput
 GetRawInputData  games_win32  ←  rawinput
@@ -282,8 +280,6 @@ RegisterRawInputDevices  games_win32  ←  rawinput
 ReleaseCapture  user32_ext  ←  user32
 RemoveMenu  user32  ←  menus
 RemoveMenu  user32_ext  ←  menus
-RemovePropA  user32_ext  ←  user32
-RemovePropW  user32_ext  ←  user32
 ReplyMessage  user32_ext  ←  user32
 RestoreDC  gdi32  ←  gdi32_ext
 RevokeDragDrop  ole32  ←  dataobject
@@ -316,8 +312,6 @@ SetPaletteEntries  win32_basics  ←  gdi32_palette
 SetParent  user32_ext  ←  user32
 SetPixel  gdi32  ←  gdi32_ext
 SetPixelV  gdi32  ←  gdi32_ext
-SetPropA  user32_ext  ←  user32
-SetPropW  user32_ext  ←  user32
 SetROP2  gdi32  ←  gdi32_ext
 SetRectRgn  gdi32  ←  gdi32_ext
 SetScrollInfo  user32_ext  ←  user32
