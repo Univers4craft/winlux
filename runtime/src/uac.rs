@@ -96,12 +96,20 @@ fn ask(exe: &Path) -> Answer {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let status = std::process::Command::new(helper)
-        .arg("--app")
+    let mut cmd = std::process::Command::new(helper);
+    cmd.arg("--app")
         .arg(&name)
         .arg("--path")
-        .arg(crate::paths::to_windows(exe))
-        .status();
+        .arg(crate::paths::to_windows(exe));
+    // Éditeur vérifié par sa signature Authenticode (#1382) ; sinon la
+    // fenêtre dit « Éditeur : inconnu », comme Windows.
+    use crate::setup::appx_signature::{examine_pe, Signature};
+    let signature = examine_pe(exe);
+    crate::log_info!("uac", "signature de {} : {signature:?}", exe.display());
+    if let Signature::Verified { signer } = signature {
+        cmd.arg("--publisher").arg(signer);
+    }
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => Answer::Allowed,
         Ok(_) => Answer::Refused,

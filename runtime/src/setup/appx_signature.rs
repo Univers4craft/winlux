@@ -126,32 +126,8 @@ fn check(p: &Parsed, publisher: &str, a: &mut Archive) -> Signature {
         signer: name.clone(),
         reason: reason.into(),
     };
-    if hostssl::ssl().is_none() {
-        return unverified("la bibliothèque OpenSSL du système est absente : la signature n'a pas pu être vérifiée");
-    }
-
-    // 1. Signature des attributs signés par la clé du certificat.
-    let Some(content_digest) = hostssl::digest(p.signer_md, &p.content) else {
-        return unverified("son algorithme de condensat n'est pas pris en charge");
-    };
-    let signed: Vec<u8> = match &p.signed_attrs {
-        Some(attrs) => {
-            if attrs.message_digest != content_digest {
-                return Signature::Invalid(
-                    "le condensat signé ne correspond pas au contenu de la signature : signature altérée".into(),
-                );
-            }
-            attrs.der.clone()
-        }
-        None => p.content.clone(),
-    };
-    match hostssl::verify_signature(&signer.der, p.signer_md, &p.signature, &signed) {
-        Some(true) => {}
-        Some(false) => return Signature::Invalid(
-            "la signature ne correspond pas à la clé du certificat : signature fausse ou altérée"
-                .into(),
-        ),
-        None => return unverified("la clé de son certificat n'a pas pu être lue"),
+    if let Some(failure) = check_signer(p, signer, &name) {
+        return failure;
     }
 
     // 2. Condensats du paquet reçu.
@@ -212,7 +188,53 @@ fn check(p: &Parsed, publisher: &str, a: &mut Archive) -> Signature {
         );
     }
 
-    // 3. Usage du certificat et chaîne de confiance.
+    check_chain(p, signer, name)
+}
+
+/// Signature des attributs signés par la clé du certificat du signataire
+/// (commun aux paquets et aux exécutables) : Some(échec), None si elle est
+/// juste.
+fn check_signer(p: &Parsed, signer: &Cert, name: &str) -> Option<Signature> {
+    let unverified = |reason: &str| {
+        Some(Signature::Unverified {
+            signer: name.to_string(),
+            reason: reason.into(),
+        })
+    };
+    if hostssl::ssl().is_none() {
+        return unverified("la bibliothèque OpenSSL du système est absente : la signature n'a pas pu être vérifiée");
+    }
+    let Some(content_digest) = hostssl::digest(p.signer_md, &p.content) else {
+        return unverified("son algorithme de condensat n'est pas pris en charge");
+    };
+    let signed: Vec<u8> = match &p.signed_attrs {
+        Some(attrs) => {
+            if attrs.message_digest != content_digest {
+                return Some(Signature::Invalid(
+                    "le condensat signé ne correspond pas au contenu de la signature : signature altérée".into(),
+                ));
+            }
+            attrs.der.clone()
+        }
+        None => p.content.clone(),
+    };
+    match hostssl::verify_signature(&signer.der, p.signer_md, &p.signature, &signed) {
+        Some(true) => {}
+        Some(false) => return Some(Signature::Invalid(
+            "la signature ne correspond pas à la clé du certificat : signature fausse ou altérée"
+                .into(),
+        )),
+        None => return unverified("la clé de son certificat n'a pas pu être lue"),
+    }
+    None
+}
+
+/// Usage du certificat et chaîne de confiance.
+fn check_chain(p: &Parsed, signer: &Cert, name: String) -> Signature {
+    let unverified = |reason: &str| Signature::Unverified {
+        signer: name.clone(),
+        reason: reason.into(),
+    };
     if signer
         .eku
         .as_ref()
@@ -415,10 +437,12 @@ struct Parsed {
     certs: Vec<Cert>,
     /// Octets dont `messageDigest` est le condensat.
     content: Vec<u8>,
-    /// Algorithme des condensats `APPX`.
+    /// Algorithme du condensat signé (`APPX` d'un paquet, image d'un .exe).
     appx_md: &'static CStr,
     /// Condensats `APPX` : (étiquette, valeur).
     appx: Vec<([u8; 4], Vec<u8>)>,
+    /// Condensat signé tel quel (`SpcIndirectDataContent.messageDigest`).
+    indirect: Vec<u8>,
     signer_id: SignerId,
     signer_md: &'static CStr,
     signed_attrs: Option<SignedAttrs>,
@@ -433,6 +457,8 @@ fn digest_name(alg_id: &[u8]) -> Result<(&'static CStr, usize), String> {
     let oid = expect(alg_id, 0x06)?.body;
     match oid {
         [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01] => Ok((c"SHA256", 32)),
+        // SHA-1 : encore courant sur les exécutables signés avant 2016.
+        [0x2B, 0x0E, 0x03, 0x02, 0x1A] => Ok((c"SHA1", 20)),
         [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02] => Ok((c"SHA384", 48)),
         [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03] => Ok((c"SHA512", 64)),
         _ => Err(format!(
@@ -446,6 +472,38 @@ fn parse_p7x(data: &[u8]) -> Result<Parsed, String> {
     let der = data
         .strip_prefix(b"PKCX")
         .ok_or("ne commence pas par PKCX")?;
+    let mut p = parse_signed_data(der)?;
+    if p.appx_md.to_bytes() == b"SHA1" {
+        return Err("condensats APPX en SHA-1, algorithme refusé".into());
+    }
+    let body = p
+        .indirect
+        .strip_prefix(b"APPX")
+        .ok_or("condensats APPX absents")?;
+    // Les condensats APPX ont la taille de l'algorithme annoncé.
+    let hlen = digest_len(p.appx_md);
+    if body.is_empty() || body.len() % (4 + hlen) != 0 {
+        return Err("condensats APPX de taille invalide".into());
+    }
+    p.appx = body
+        .chunks(4 + hlen)
+        .map(|c| ([c[0], c[1], c[2], c[3]], c[4..].to_vec()))
+        .collect();
+    Ok(p)
+}
+
+fn digest_len(md: &CStr) -> usize {
+    match md.to_bytes() {
+        b"SHA1" => 20,
+        b"SHA384" => 48,
+        b"SHA512" => 64,
+        _ => 32,
+    }
+}
+
+/// PKCS #7 SignedData Authenticode (DER) : certificats, signataire et
+/// condensat signé du `SpcIndirectDataContent`.
+fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
     let content_info = expect(der, 0x30)?;
     let oid = expect(content_info.body, 0x06)?;
     if oid.body != OID_SIGNED_DATA {
@@ -475,18 +533,8 @@ fn parse_p7x(data: &[u8]) -> Result<Parsed, String> {
     let attr = expect(spc, 0x30)?; // SpcAttributeTypeAndOptionalValue
     let digest_info = expect(attr.rest, 0x30)?;
     let alg = expect(digest_info.body, 0x30)?;
-    let (appx_md, hlen) = digest_name(alg.body)?;
-    let value = expect(alg.rest, 0x04)?.body;
-    let body = value
-        .strip_prefix(b"APPX")
-        .ok_or("condensats APPX absents")?;
-    if body.is_empty() || body.len() % (4 + hlen) != 0 {
-        return Err("condensats APPX de taille invalide".into());
-    }
-    let appx = body
-        .chunks(4 + hlen)
-        .map(|c| ([c[0], c[1], c[2], c[3]], c[4..].to_vec()))
-        .collect();
+    let (appx_md, _) = digest_name(alg.body)?;
+    let indirect = expect(alg.rest, 0x04)?.body.to_vec();
 
     // Certificats.
     let certs_tlv = expect(d, 0xA0).map_err(|_| "aucun certificat dans la signature")?;
@@ -554,7 +602,8 @@ fn parse_p7x(data: &[u8]) -> Result<Parsed, String> {
         certs,
         content,
         appx_md,
-        appx,
+        appx: Vec::new(),
+        indirect,
         signer_id,
         signer_md,
         signed_attrs,
@@ -798,9 +847,275 @@ fn format_dn(v: &[(String, String)]) -> String {
         .join(", ")
 }
 
+// ============================================================
+//  Exécutables signés (Authenticode d'un PE)
+// ============================================================
+
+/// Taille au-delà de laquelle un exécutable n'est pas lu en entier pour
+/// vérifier sa signature (il est alors « éditeur inconnu »).
+const PE_MAX: u64 = 512 << 20;
+
+/// Signature Authenticode d'un exécutable ou d'une DLL : table de sécurité
+/// du PE (WIN_CERTIFICATE, PKCS #7 SignedData), selon la spécification
+/// publique « Windows Authenticode Portable Executable Signature Format ».
+/// Vérifie le condensat de l'image, la signature du signataire et sa chaîne
+/// (#1382). `Verified.signer` / `Unverified.signer` : nom à afficher (CN du
+/// certificat, sinon O).
+pub fn examine_pe(path: &Path) -> Signature {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size == 0 || size > PE_MAX {
+        return Signature::Absent;
+    }
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(e) => return Signature::Invalid(format!("{} : {e}", path.display())),
+    };
+    examine_pe_bytes(&data)
+}
+
+/// Zones de l'image : (somme de contrôle, entrée « sécurité » du répertoire
+/// des données, table des certificats (début, taille)).
+fn pe_layout(d: &[u8]) -> Option<(usize, usize, usize, usize)> {
+    let u16_at = |o: usize| Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?));
+    let u32_at = |o: usize| Some(u32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?));
+    if d.get(..2)? != b"MZ" {
+        return None;
+    }
+    let pe = u32_at(0x3C)? as usize;
+    if d.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let opt = pe + 24;
+    let dirs = match u16_at(opt)? {
+        0x10B => opt + 96,
+        0x20B => opt + 112,
+        _ => return None,
+    };
+    let count = u32_at(dirs - 4)? as usize;
+    if count < 5 {
+        return Some((opt + 64, 0, 0, 0));
+    }
+    let entry = dirs + 4 * 8;
+    let start = u32_at(entry)? as usize;
+    let len = u32_at(entry + 4)? as usize;
+    Some((opt + 64, entry, start, len))
+}
+
+fn examine_pe_bytes(d: &[u8]) -> Signature {
+    let Some((checksum, entry, start, len)) = pe_layout(d) else {
+        return Signature::Absent;
+    };
+    if len == 0 || entry == 0 {
+        return Signature::Absent;
+    }
+    let Some(table) = start.checked_add(len).and_then(|end| d.get(start..end)) else {
+        return Signature::Invalid("table des certificats hors du fichier".into());
+    };
+    // WIN_CERTIFICATE : dwLength, wRevision, wCertificateType (2 = PKCS #7).
+    if table.len() < 8 {
+        return Signature::Invalid("table des certificats tronquée".into());
+    }
+    let cert_len = u32::from_le_bytes([table[0], table[1], table[2], table[3]]) as usize;
+    let kind = u16::from_le_bytes([table[6], table[7]]);
+    if kind != 2 || cert_len < 8 || cert_len > table.len() {
+        return Signature::Invalid("certificat Authenticode illisible".into());
+    }
+    let parsed = match parse_signed_data(&table[8..cert_len]) {
+        Ok(p) => p,
+        Err(e) => return Signature::Invalid(format!("signature illisible : {e}")),
+    };
+    let Some(signer) = parsed.certs.iter().find(|c| parsed.signer_id.matches(c)) else {
+        return Signature::Invalid("le certificat du signataire est absent de la signature".into());
+    };
+    let name = display_name(&signer.subject);
+    if let Some(failure) = check_signer(&parsed, signer, &name) {
+        return failure;
+    }
+    // Condensat de l'image : tout le fichier sauf la somme de contrôle,
+    // l'entrée « sécurité » du répertoire et la table des certificats.
+    if !(checksum + 4 <= entry && entry + 8 <= start && start + len <= d.len()) {
+        return Signature::Invalid("disposition de l'image inattendue".into());
+    }
+    let mut image = Vec::with_capacity(d.len());
+    image.extend_from_slice(&d[..checksum]);
+    image.extend_from_slice(&d[checksum + 4..entry]);
+    image.extend_from_slice(&d[entry + 8..start]);
+    image.extend_from_slice(&d[start + len..]);
+    match hostssl::digest(parsed.appx_md, &image) {
+        Some(h) if h == parsed.indirect => {}
+        Some(_) => return Signature::Invalid("le fichier a été modifié après sa signature".into()),
+        None => {
+            return Signature::Unverified {
+                signer: name,
+                reason: "son algorithme de condensat n'est pas pris en charge".into(),
+            }
+        }
+    }
+    check_chain(&parsed, signer, name)
+}
+
+/// Nom d'éditeur affiché : CN du certificat, sinon O, sinon le nom complet.
+fn display_name(subject: &[(String, String)]) -> String {
+    ["CN", "O"]
+        .iter()
+        .find_map(|k| subject.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()))
+        .unwrap_or_else(|| format_dn(subject))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exécutable minimal (PE32+, sans section), long d'un multiple de 8.
+    fn pe_minimal() -> Vec<u8> {
+        let mut d = vec![0u8; 0x200];
+        d[..2].copy_from_slice(b"MZ");
+        d[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        d[0x40..0x44].copy_from_slice(b"PE\0\0");
+        d[0x44..0x46].copy_from_slice(&0x8664u16.to_le_bytes());
+        d[0x54..0x56].copy_from_slice(&240u16.to_le_bytes());
+        let opt = 0x58;
+        d[opt..opt + 2].copy_from_slice(&0x20Bu16.to_le_bytes());
+        d[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+        d[0x180..0x190].copy_from_slice(b"contenu du test!");
+        d
+    }
+
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        match body.len() {
+            n if n < 0x80 => out.push(n as u8),
+            n if n < 0x100 => out.extend([0x81, n as u8]),
+            n => out.extend([0x82, (n >> 8) as u8, n as u8]),
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
+    /// Signature d'essai faite par la commande openssl (certificat
+    /// autosigné : signature juste mais autorité inconnue).
+    #[test]
+    fn executable_signe_lu_et_verifie() {
+        let pe = pe_minimal();
+        assert_eq!(examine_pe_bytes(&pe), Signature::Absent);
+        if hostssl::ssl().is_none() {
+            eprintln!("OpenSSL du système absent : vérification non testée");
+            return;
+        }
+        let (checksum, entry, _, _) = pe_layout(&pe).unwrap();
+        let mut image = pe[..checksum].to_vec();
+        image.extend_from_slice(&pe[checksum + 4..entry]);
+        image.extend_from_slice(&pe[entry + 8..]);
+        let digest = hostssl::digest(c"SHA256", &image).unwrap();
+        // SpcIndirectDataContent : { { SPC_PE_IMAGE_DATAOBJ, SpcPeImageData },
+        // { { sha256, NULL }, condensat } }.
+        let oid_pe = der(
+            0x06,
+            &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F],
+        );
+        let attr = der(0x30, &[oid_pe, der(0x30, &der(0x03, &[0]))].concat());
+        let sha256 = der(
+            0x06,
+            &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+        );
+        let alg = der(0x30, &[sha256, vec![0x05, 0x00]].concat());
+        let digest_info = der(0x30, &[alg, der(0x04, &digest)].concat());
+        let spc = der(0x30, &[attr, digest_info].concat());
+
+        let dir = std::env::temp_dir().join(format!("winlux-authenticode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("openssl")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "openssl {args:?}");
+        };
+        if std::process::Command::new("openssl")
+            .arg("version")
+            .output()
+            .is_err()
+        {
+            eprintln!("commande openssl absente : vérification non testée");
+            return;
+        }
+        std::fs::write(dir.join("spc.der"), &spc).unwrap();
+        run(&[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "cle.pem",
+            "-out",
+            "cert.pem",
+            "-days",
+            "2",
+            "-subj",
+            "/CN=Testeur Winlux/O=Essai",
+            "-addext",
+            "extendedKeyUsage=codeSigning",
+        ]);
+        run(&[
+            "cms",
+            "-sign",
+            "-binary",
+            "-nodetach",
+            "-outform",
+            "DER",
+            "-md",
+            "sha256",
+            "-econtent_type",
+            "1.3.6.1.4.1.311.2.1.4",
+            "-signer",
+            "cert.pem",
+            "-inkey",
+            "cle.pem",
+            "-in",
+            "spc.der",
+            "-out",
+            "sig.der",
+        ]);
+        let sig = std::fs::read(dir.join("sig.der")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut table = Vec::new();
+        let padded = (8 + sig.len()).div_ceil(8) * 8;
+        table.extend_from_slice(&(padded as u32).to_le_bytes());
+        table.extend_from_slice(&0x0200u16.to_le_bytes());
+        table.extend_from_slice(&2u16.to_le_bytes());
+        table.extend_from_slice(&sig);
+        table.resize(padded, 0);
+        let mut signed = pe.clone();
+        let start = signed.len();
+        signed.extend_from_slice(&table);
+        signed[entry..entry + 4].copy_from_slice(&(start as u32).to_le_bytes());
+        signed[entry + 4..entry + 8].copy_from_slice(&(padded as u32).to_le_bytes());
+
+        match examine_pe_bytes(&signed) {
+            Signature::Unverified { signer, reason } => {
+                assert_eq!(signer, "Testeur Winlux");
+                assert!(reason.contains("autorité"), "{reason}");
+            }
+            other => panic!("attendu : signature juste, autorité inconnue ; obtenu {other:?}"),
+        }
+        // Un octet changé après la signature : refusé.
+        let mut altered = signed.clone();
+        altered[0x185] ^= 1;
+        assert!(matches!(examine_pe_bytes(&altered), Signature::Invalid(_)));
+        // La somme de contrôle n'est pas couverte, comme sous Windows.
+        let mut patched = signed;
+        patched[checksum] ^= 0xFF;
+        assert!(matches!(
+            examine_pe_bytes(&patched),
+            Signature::Unverified { .. }
+        ));
+    }
 
     #[test]
     fn noms_distingues() {
@@ -845,7 +1160,11 @@ mod tests {
             attribute_name(&[0x2B, 0x06, 0x01, 0x04, 0x01]),
             "OID.1.3.6.1.4.1"
         );
-        assert!(digest_name(&[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]).is_err());
+        // MD5 : refusé ; SHA-1 n'est lu que pour les exécutables.
+        assert!(
+            digest_name(&[0x06, 0x08, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x05]).is_err()
+        );
+        assert!(digest_name(&[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]).is_ok());
         assert_eq!(
             digest_name(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
                 .unwrap()
