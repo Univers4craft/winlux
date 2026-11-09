@@ -601,7 +601,7 @@ fn cgroups_available() -> bool {
     cgroup_root().join("cgroup.controllers").exists()
 }
 
-fn write_status(active: bool, error: &str, rules: usize) {
+fn write_status(cfg: &Config, active: bool, error: &str, rules: usize) {
     let backend = if error.starts_with("nft absent") {
         "absent"
     } else {
@@ -610,7 +610,8 @@ fn write_status(active: bool, error: &str, rules: usize) {
     let _ = admin::write_text(
         &admin::path(RUN_DIR).join("status.txt"),
         &format!(
-            "backend={backend}\nactive={}\nrules={rules}\nerror={}\napplied={}\n",
+            "backend={backend}\nprofile={}\nactive={}\nrules={rules}\nerror={}\napplied={}\n",
+            PROFILES[cfg.profile],
             active as u8,
             clean(error.lines().next().unwrap_or("")),
             admin::format_time(admin::now())
@@ -647,7 +648,7 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
         Ok(c) => c,
         Err(e) => {
             let msg = format!("nft absent : {e}");
-            write_status(false, &msg, 0);
+            write_status(cfg, false, &msg, 0);
             return Err(msg);
         }
     };
@@ -668,11 +669,11 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
         } else {
             ""
         };
-        write_status(rules.is_some(), note, count);
+        write_status(cfg, rules.is_some(), note, count);
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        write_status(false, &msg, count);
+        write_status(cfg, false, &msg, count);
         Err(msg)
     }
 }
@@ -933,6 +934,8 @@ pub fn daemon() -> ! {
     if let Err(e) = apply(&cfg, &apps) {
         eprintln!("winlux-firewall : {e}");
     }
+    let mut published = None;
+    publish_profile(&cfg, &mut published);
     let mut tick = 0u64;
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -955,6 +958,7 @@ pub fn daemon() -> ! {
         if reload || (program_rules && new_apps != apps) {
             let _ = apply(&cfg, &new_apps);
         }
+        publish_profile(&cfg, &mut published);
         assign_cgroups(&cfg);
         write_ports();
         if cfg.notify && cfg.enabled[cfg.profile] && !prompt_file().exists() {
@@ -965,6 +969,25 @@ pub fn daemon() -> ! {
             }
         }
         apps = new_apps;
+    }
+}
+
+/// Le profil vient de changer (Paramètres, `winlux-control` ou
+/// `firewall.conf` modifié à la main) : `/run/winlux/shares.txt` est
+/// republié pour que tout ce qui le lit voie le profil réellement appliqué.
+fn publish_profile(cfg: &Config, published: &mut Option<usize>) {
+    if *published == Some(cfg.profile) {
+        return;
+    }
+    *published = Some(cfg.profile);
+    let share = std::env::var("WINLUX_SHARE").unwrap_or_else(|_| "/usr/bin/winlux-share".into());
+    if std::path::Path::new(&share).exists() {
+        let _ = std::process::Command::new(share)
+            .arg("status")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 
@@ -1321,5 +1344,35 @@ mod tests {
         assert!(script.starts_with("table inet winlux_fw\ndelete table inet winlux_fw\n"));
         let status = admin::read_text(&r.dir.join(RUN_DIR).join("status.txt")).unwrap();
         assert!(status.contains("active=1"));
+    }
+
+    #[test]
+    fn profile_change_republishes_shares() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Root::new("firewall-profile");
+        let calls = r.dir.join("calls.txt");
+        let tool = r.dir.join("winlux-share");
+        std::fs::write(
+            &tool,
+            format!("#!/bin/sh\necho \"$1\" >> '{}'\n", calls.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("WINLUX_SHARE", &tool);
+        let mut cfg = Config::default();
+        let mut published = None;
+        publish_profile(&cfg, &mut published);
+        publish_profile(&cfg, &mut published);
+        cfg.profile = 2;
+        publish_profile(&cfg, &mut published);
+        std::env::remove_var("WINLUX_SHARE");
+        assert_eq!(
+            std::fs::read_to_string(&calls).unwrap(),
+            "status\nstatus\n",
+            "un seul relevé par changement de profil"
+        );
+        write_status(&cfg, true, "", 0);
+        let status = admin::read_text(&r.dir.join(RUN_DIR).join("status.txt")).unwrap();
+        assert!(status.contains("profile=public\n"));
     }
 }
