@@ -1650,6 +1650,8 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
 pub fn shell32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "IsUserAnAdmin" => fn IsUserAnAdmin,
+        // Ordinal documenté de IsUserAnAdmin ; Steam.exe l'importe ainsi (#1380).
+        "#680" => fn IsUserAnAdmin,
     }
 }
 

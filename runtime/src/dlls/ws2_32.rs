@@ -3542,6 +3542,53 @@ pub extern "win64" fn wsa_async_select(s: usize, hwnd: usize, msg: u32, mask: i3
     0
 }
 
+/// Longueur d'une adresse rangée par AcceptEx, d'après sa famille.
+fn accept_ex_sockaddr_len(block: &[u8]) -> usize {
+    let len = match block.get(..2).map(|f| u16::from_le_bytes([f[0], f[1]])) {
+        Some(2) => 16,  // AF_INET : sockaddr_in
+        Some(23) => 28, // AF_INET6 : sockaddr_in6
+        _ => 0,
+    };
+    len.min(block.len())
+}
+
+/// `GetAcceptExSockaddrs` (mswsock, wsock32 ordinal 1142) : après les
+/// `data_len` octets reçus, AcceptEx range l'adresse locale puis
+/// l'adresse distante, chacune dans un bloc de `local_len` /
+/// `remote_len` octets. Rend des pointeurs vers ces adresses et leurs
+/// longueurs (#1380 : Steam.exe l'importe par ordinal).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn get_accept_ex_sockaddrs(
+    buf: *const u8,
+    data_len: u32,
+    local_len: u32,
+    remote_len: u32,
+    local: usize,
+    local_size: *mut i32,
+    remote: usize,
+    remote_size: *mut i32,
+) {
+    if buf.is_null() {
+        return;
+    }
+    let local_at = buf.add(data_len as usize);
+    let remote_at = local_at.add(local_len as usize);
+    let blocks = [
+        (local_at, local_len, local, local_size),
+        (remote_at, remote_len, remote, remote_size),
+    ];
+    for (at, len, out, size) in blocks {
+        let block = std::slice::from_raw_parts(at, len as usize);
+        let n = accept_ex_sockaddr_len(block);
+        if out != 0 {
+            crate::wow32::write_ptr(out, if n == 0 { 0 } else { at as usize });
+        }
+        if !size.is_null() {
+            std::ptr::write_unaligned(size, n as i32);
+        }
+    }
+}
+
 // ── __WSAFDIsSet (FD_ISSET helper) ──────────────────────────────────────
 pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i32 {
     if set.is_null() {
@@ -3606,6 +3653,8 @@ const WINSOCK_ORDINALS: &[(u16, &str)] = &[
     (115, "WSAStartup"),
     (116, "WSACleanup"),
     (151, "__WSAFDIsSet"),
+    // wsock32 : fonctions de mswsock exportées par ordinal (#1380).
+    (1142, "GetAcceptExSockaddrs"),
 ];
 
 pub fn exports() -> crate::dlls::Exports {
@@ -3656,6 +3705,7 @@ fn named_exports() -> crate::dlls::Exports {
      // select / poll
      "select"=>fn select,"WSAPoll"=>fn wsa_poll,
      "__WSAFDIsSet"=>fn wsa_fd_is_set,
+     "GetAcceptExSockaddrs"=>fn get_accept_ex_sockaddrs,
      // WSA extended
      "WSASocketW"=>fn wsa_socket_w,"WSASocketA"=>fn wsa_socket_w,
      "WSASend"=>fn wsa_send,"WSARecv"=>fn wsa_recv,
@@ -3678,6 +3728,35 @@ fn named_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adresses_rangees_par_accept_ex() {
+        // 4 octets de données, puis deux blocs de 32 octets (sockaddr_in + 16).
+        let mut buf = [0u8; 4 + 32 + 32];
+        buf[4..6].copy_from_slice(&2u16.to_le_bytes());
+        buf[6..8].copy_from_slice(&8080u16.to_be_bytes());
+        buf[36..38].copy_from_slice(&2u16.to_le_bytes());
+        buf[38..40].copy_from_slice(&443u16.to_be_bytes());
+        let (mut l, mut r) = (0usize, 0usize);
+        let (mut ln, mut rn) = (0i32, 0i32);
+        unsafe {
+            get_accept_ex_sockaddrs(
+                buf.as_ptr(),
+                4,
+                32,
+                32,
+                &mut l as *mut usize as usize,
+                &mut ln,
+                &mut r as *mut usize as usize,
+                &mut rn,
+            );
+        }
+        assert_eq!((l, ln), (buf.as_ptr() as usize + 4, 16));
+        assert_eq!((r, rn), (buf.as_ptr() as usize + 36, 16));
+        let e = exports();
+        assert_eq!(e.get("#1142"), e.get("GetAcceptExSockaddrs"));
+        assert!(e.get("#1142").is_some());
+    }
 
     #[test]
     fn hostent_aux_deux_dispositions() {

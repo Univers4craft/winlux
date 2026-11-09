@@ -125,5 +125,18 @@ int main(int argc, char **argv) {
             CHECK(29, flt_rounds() == 1);
         }
     }
+    {
+        /* Steam.exe (#1380) : masques d'affinité sur 4 octets, variable
+         * cachée « =C: » écrite par _wchdir, imports par ordinal. */
+        struct { DWORD_PTR p, s; DWORD garde; } m = { 0, 0, 0xA5A5A5A5u };
+        CHECK(30, GetProcessAffinityMask(GetCurrentProcess(), &m.p, &m.s) && m.p && m.garde == 0xA5A5A5A5u);
+        CHECK(31, SetProcessAffinityMask(GetCurrentProcess(), m.p));
+        wchar_t v[64] = L"";
+        CHECK(32, SetEnvironmentVariableW(L"=C:", L"C:\\Steam")
+                  && GetEnvironmentVariableW(L"=C:", v, 64) == 8 && !wcscmp(v, L"C:\\Steam"));
+        HMODULE sh = LoadLibraryA("shell32.dll"), ws = LoadLibraryA("wsock32.dll");
+        CHECK(33, sh && ws && GetProcAddress(sh, MAKEINTRESOURCEA(680))
+                  && GetProcAddress(ws, MAKEINTRESOURCEA(1142)));
+    }
     return fails;
 }
