@@ -1254,12 +1254,38 @@ fn stream_io(
 /// Opération réussie tout de suite sur un handle en
 /// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS : OVERLAPPED rempli, événement
 /// signalé si `signal`, aucun paquet au port de complétion.
+/// Écrit Internal et InternalHigh d'un OVERLAPPED, en disposition x86
+/// (champs de 4 octets) pour un programme 32 bits (#1408).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_set(ov: usize, internal: usize, high: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::write_volatile(ov as *mut u32, internal as u32);
+        std::ptr::write_volatile((ov + 4) as *mut u32, high as u32);
+    } else {
+        let p = ov as *mut Overlapped;
+        std::ptr::write_volatile(&mut (*p).internal, internal);
+        std::ptr::write_volatile(&mut (*p).internal_high, high);
+    }
+}
+
+/// hEvent d'un OVERLAPPED (décalage 16 en x86, 24 en x64).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_event(ov: usize) -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::read_unaligned((ov + 16) as *const u32) as usize
+    } else {
+        (*(ov as *const Overlapped)).event
+    }
+}
+
 pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: bool) {
     unsafe {
-        let p = overlapped as *mut Overlapped;
-        (*p).internal = 0;
-        (*p).internal_high = bytes as usize;
-        let raw = (*p).event;
+        ov_set(overlapped, 0, bytes as usize);
+        let raw = ov_event(overlapped);
         if signal && raw & !1 != 0 {
             let _ = set_event(raw & !1);
         }
@@ -1268,10 +1294,12 @@ pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: 
 
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
-        let p = overlapped as *mut Overlapped;
-        let raw = (*p).event;
-        (*p).internal = ntstatus_of_win32(error) as usize;
-        (*p).internal_high = bytes as usize;
+        let raw = ov_event(overlapped);
+        ov_set(
+            overlapped,
+            ntstatus_of_win32(error) as usize,
+            bytes as usize,
+        );
         if raw & !1 != 0 {
             let _ = set_event(raw & !1);
         }

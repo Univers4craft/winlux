@@ -654,6 +654,45 @@ extern "win64" fn ret_aux(_args: u32, aux: usize) -> u64 {
     aux as u64
 }
 
+/// Copie basse des variables de fuseau horaire (`_timezone`, `_daylight`,
+/// `_dstbias`, `_tzname`), relue à chaque appel de `__timezone()`… : la
+/// version 64 bits rend l'adresse d'une donnée de l'image, au-dessus de
+/// 4 Go (python312.dll x86, #1407). `aux` : 0 à 2 pour les entiers,
+/// 3 pour `_tzname` (deux pointeurs de chaîne).
+fn tz_low(which: usize) -> usize {
+    const NAMES: [&str; 4] = ["__timezone", "__daylight", "__dstbias", "__tzname"];
+    static LOW: OnceLock<usize> = OnceLock::new();
+    // 4 entiers de 4 octets, puis _tzname (deux pointeurs x86).
+    let base = *LOW.get_or_init(|| unsafe { libc::calloc(1, 32) as usize });
+    let Some(f) = crate::dlls::lookup("ucrtbase", NAMES[which]) else {
+        return 0;
+    };
+    // SAFETY : fonction 64 bits sans argument qui rend un pointeur.
+    let f: extern "win64" fn() -> usize = unsafe { std::mem::transmute(f) };
+    let p = f();
+    if p == 0 || base == 0 {
+        return 0;
+    }
+    unsafe {
+        if which < 3 {
+            let at = base + which * 4;
+            std::ptr::write_unaligned(at as *mut i32, std::ptr::read_unaligned(p as *const i32));
+            at
+        } else {
+            let at = base + 16;
+            for i in 0..2 {
+                let s = std::ptr::read_unaligned((p + i * 8) as *const usize);
+                std::ptr::write_unaligned((at + i * 4) as *mut u32, low_str(s, false));
+            }
+            at
+        }
+    }
+}
+
+extern "win64" fn ret_tz(_args: u32, aux: usize) -> u64 {
+    tz_low(aux) as u64
+}
+
 extern "win64" fn ret_deref(_args: u32, aux: usize) -> u64 {
     rd(aux as u32) as u64
 }
@@ -1305,6 +1344,11 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_timezone" | "_daylight" | "_dstbias" | "_sys_nerr" => {
             Override::Data(scalar_copy(n, func, 4)?)
         }
+        "__timezone" | "__p__timezone" => raw(ret_tz, 0),
+        "__daylight" | "__p__daylight" => raw(ret_tz, 1),
+        "__dstbias" | "__p__dstbias" => raw(ret_tz, 2),
+        "__tzname" | "__p__tzname" => raw(ret_tz, 3),
+        "_tzname" => Override::Data(tz_low(3)),
         "__p___argc" => raw(ret_aux, d + D_ARGC),
         "__p___argv" => raw(ret_aux, d + D_ARGV),
         "__p___wargv" => raw(ret_aux, d + D_WARGV),
