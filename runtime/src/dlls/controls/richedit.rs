@@ -126,13 +126,19 @@ type StreamCallback = unsafe extern "win64" fn(usize, *mut u8, i32, *mut i32) ->
 
 /// EDITSTREAM en 64 bits : dwCookie (8), dwError (4 + 4 de remplissage),
 /// pfnCallback (8). Les programmes 32 bits ne sont pas encore servis.
+/// EDITSTREAM est déclarée sous `pack(4)` dans richedit.h : en x64,
+/// dwCookie (8 octets) à 0, dwError (4) à 8 et pfnCallback à 12, sans
+/// remplissage (20 octets). Lire le rappel à 16 donnait la moitié haute du
+/// pointeur, et Paint.NET sautait à 0x7288 (#1454).
+const EDITSTREAM_CALLBACK: usize = 12;
+
 unsafe fn edit_stream(lp: isize) -> Option<(usize, StreamCallback)> {
     if lp == 0 || crate::wow32::pointer_size() != 8 {
         return None;
     }
     let p = lp as *mut u8;
     let cookie = (p as *const usize).read_unaligned();
-    let cb = (p.add(16) as *const usize).read_unaligned();
+    let cb = (p.add(EDITSTREAM_CALLBACK) as *const usize).read_unaligned();
     if cb == 0 {
         return None;
     }
