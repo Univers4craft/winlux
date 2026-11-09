@@ -40,7 +40,7 @@ for f in usr/bin/winlux usr/bin/winlux-open usr/bin/winlux-update usr/share/appl
          usr/share/mime/packages/winlux.xml usr/share/winlux/uninstall.sh etc/binfmt.d/winlux.conf; do
     test -e "$dest/$f" || fail "$f non installé"
 done
-grep -q '^Exec=/usr/bin/winlux-open %f$' "$dest/usr/share/applications/winlux.desktop" || fail "Exec incorrect"
+grep -q '^Exec=env WINLUX_DESKTOP_LAUNCH=1 /usr/bin/winlux-open %f$' "$dest/usr/share/applications/winlux.desktop" || fail "Exec incorrect"
 grep -q '^Terminal=false$' "$dest/usr/share/applications/winlux.desktop" || fail "Terminal doit être false"
 grep -q ':/usr/bin/winlux:F$' "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt incorrect"
 grep -q '^application/x-msdownload=winlux.desktop;autre.desktop;$' "$dest/etc/xdg/mimeapps.list" || fail "association existante non prioritaire"
@@ -157,6 +157,31 @@ finally:
     os.close(slave)
 PY
 ok "console heritee du bureau : le double-clic conserve une sortie visible"
+
+# Gestionnaire de fichiers lancé depuis un terminal (« nautilus & », #1424) :
+# il hérite d'un tty, et le double-clic doit quand même ouvrir un terminal
+# pour un .exe console. La ligne Exec de winlux.desktop est exécutée telle
+# quelle, sans WINLUX_DESKTOP_LAUNCH dans l'environnement.
+rm -f "$work/terminal.log"
+python3 - "$root/integration/winlux.desktop" "$open" "$apps/Bonjour monde.exe" "$fake" "$work/tty-state" <<'PY'
+import os, pty, shlex, subprocess, sys
+desktop, launcher, exe, fake, state = sys.argv[1:]
+line = next(l for l in open(desktop, encoding="utf-8") if l.startswith("Exec="))
+argv = [launcher if a == "/usr/bin/winlux-open" else exe if a == "%f" else a
+        for a in shlex.split(line[len("Exec="):].strip())]
+env = {k: v for k, v in os.environ.items() if k not in ("WINLUX_DESKTOP_LAUNCH", "WINLUX_NO_TERMINAL")}
+env.update(PATH=f"{fake}:{env['PATH']}", DISPLAY=":99", WINLUX_GUI="headless",
+           WINLUX_TERMINAL="faux-terminal", XDG_STATE_HOME=state)
+master, slave = pty.openpty()
+try:
+    result = subprocess.run(argv, env=env, stdin=slave, stdout=slave, stderr=slave, timeout=30)
+    assert result.returncode == 0, result.returncode
+finally:
+    os.close(master)
+    os.close(slave)
+PY
+grep -q 'terminal' "$work/terminal.log" || fail "double-clic depuis un gestionnaire lancé dans un terminal : aucun terminal (#1424)"
+ok "gestionnaire de fichiers lancé dans un terminal : un .exe console ouvre quand même son terminal (#1424)"
 
 set +e
 launch "$apps/code.exe"; status=$?
