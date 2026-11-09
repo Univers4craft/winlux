@@ -2476,9 +2476,38 @@ fn translate_cmd(cmd: DrawCmd, (dx, dy): (i32, i32)) -> DrawCmd {
     }
 }
 
+thread_local! {
+    /// Diagnostic WINLUX_WINDOW_DIAG : vrai pendant un WM_DRAWITEM ou un
+    /// TVN_GETDISPINFO, chaque commande de dessin est alors journalisée.
+    static WATCH_DRAWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Journalise les commandes de dessin pendant `f` (WINLUX_WINDOW_DIAG).
+pub fn watch_draws<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let old = WATCH_DRAWS.with(|w| w.replace(on));
+    let r = f();
+    WATCH_DRAWS.with(|w| w.set(old));
+    r
+}
+
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    if WATCH_DRAWS.with(|w| w.get()) {
+        let known = lock(dcs())
+            .get(&hdc)
+            .map(|d| (d.hwnd, d.bitmap, dc_state_offset(d)));
+        let clip = dc_clip(hdc);
+        let mut desc = format!("{cmd:?}");
+        if desc.len() > 160 {
+            let mut cut = 160;
+            while !desc.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            desc.truncate(cut);
+        }
+        eprintln!("winlux[fenetre]   dessin hdc {hdc:#x} dc {known:?} découpe {clip:?} : {desc}");
+    }
     // DC imprimante : la commande part dans la page en cours (PDF).
     let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
         return true;
