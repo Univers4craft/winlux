@@ -148,6 +148,7 @@ pub mod monitors;
 pub mod mouse;
 pub mod mpr;
 pub mod msacm32;
+pub mod mscms;
 pub mod mscoree;
 pub mod mshwgst;
 pub mod msvcp140;
@@ -988,6 +989,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "coremessaging",
                 exports: coremessaging::exports(),
+                handle: 0,
+            },
+            // Profils de couleur ICM (Paint.NET, #1363).
+            Builtin {
+                name: "mscms",
+                exports: mscms::exports(),
                 handle: 0,
             },
             Builtin {
