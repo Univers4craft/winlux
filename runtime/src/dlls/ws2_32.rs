@@ -169,6 +169,27 @@ const FD_OOB: i32 = 0x04;
 const FD_ACCEPT: i32 = 0x08;
 const FD_CONNECT: i32 = 0x10;
 const FD_CLOSE: i32 = 0x20;
+// Indices de WSANETWORKEVENTS.iErrorCode : FD_READ_BIT 0, FD_WRITE_BIT 1,
+// FD_OOB_BIT 2, FD_ACCEPT_BIT 3, FD_CONNECT_BIT 4, FD_CLOSE_BIT 5.
+const FD_CONNECT_BIT: usize = 4;
+const FD_CLOSE_BIT: usize = 5;
+
+/// La socket écoute-t-elle (listen) ?
+fn socket_listening(s: usize) -> bool {
+    let mut on = 0i32;
+    let mut len = 4 as libc::socklen_t;
+    // SAFETY : tampon de 4 octets à nous.
+    let rc = unsafe {
+        libc::getsockopt(
+            s as i32,
+            libc::SOL_SOCKET,
+            libc::SO_ACCEPTCONN,
+            &mut on as *mut i32 as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    rc == 0 && on != 0
+}
 
 // NI flags
 const NI_NUMERICHOST: i32 = 1;
@@ -3073,37 +3094,77 @@ pub unsafe extern "win64" fn wsa_enum_network_events(
     let write_armed = assoc.map(|a| a.write_armed).unwrap_or(false);
     let mut result = WsaNetworkEvents::default();
 
-    // poll the socket to determine which events are ready
+    // État de la socket, sans attente.
     let mut pfd = libc::pollfd {
         fd: s as i32,
-        events: libc::POLLIN | libc::POLLOUT | libc::POLLPRI | libc::POLLHUP | libc::POLLERR,
+        events: libc::POLLIN
+            | libc::POLLOUT
+            | libc::POLLPRI
+            | libc::POLLRDHUP
+            | libc::POLLHUP
+            | libc::POLLERR,
         revents: 0,
     };
     libc::poll(&mut pfd, 1, 0);
+    let r = pfd.revents;
 
-    if pfd.revents & libc::POLLIN != 0 && mask & FD_READ != 0 {
-        result.network_events |= FD_READ;
-    }
-    if pfd.revents & libc::POLLOUT != 0 && mask & FD_WRITE != 0 && write_armed {
-        result.network_events |= FD_WRITE;
-    }
-    if pfd.revents & libc::POLLPRI != 0 && mask & FD_OOB != 0 {
-        result.network_events |= FD_OOB;
-    }
-    if pfd.revents & libc::POLLIN != 0 && mask & FD_ACCEPT != 0 {
-        result.network_events |= FD_ACCEPT;
-    }
-    if pfd.revents & libc::POLLOUT != 0 && mask & FD_CONNECT != 0 && write_armed {
-        result.network_events |= FD_CONNECT;
-    }
-    if result.network_events & (FD_WRITE | FD_CONNECT) != 0 {
-        // Signalés une fois : réarmés par le prochain envoi en WSAEWOULDBLOCK.
-        if let Some(a) = lock(event_assoc()).get_mut(&s) {
-            a.write_armed = false;
+    // FD_ACCEPT ne concerne qu'une socket d'écoute, FD_READ, FD_WRITE,
+    // FD_CONNECT et FD_CLOSE qu'une socket connectée. PuTTY (WinSCP) demande
+    // les six sur chaque socket : annoncer FD_ACCEPT sur sa connexion SSH
+    // lui faisait appeler accept() puis suivre un pointeur nul (#1350).
+    if socket_listening(s) {
+        if r & libc::POLLIN != 0 && mask & FD_ACCEPT != 0 {
+            result.network_events |= FD_ACCEPT;
         }
-    }
-    if pfd.revents & libc::POLLHUP != 0 && mask & FD_CLOSE != 0 {
-        result.network_events |= FD_CLOSE;
+    } else {
+        // Erreur en attente (connexion refusée…) : rendue dans iErrorCode,
+        // indice FD_CONNECT_BIT (4) tant que la connexion n'a pas abouti.
+        let pending_error = if r & libc::POLLERR != 0 {
+            let mut e = 0i32;
+            let mut len = 4 as libc::socklen_t;
+            libc::getsockopt(
+                s as i32,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                &mut e as *mut i32 as *mut c_void,
+                &mut len,
+            );
+            (e != 0).then(|| error_from_errno(e))
+        } else {
+            None
+        };
+        if r & libc::POLLIN != 0 && mask & FD_READ != 0 {
+            result.network_events |= FD_READ;
+        }
+        if r & libc::POLLPRI != 0 && mask & FD_OOB != 0 {
+            result.network_events |= FD_OOB;
+        }
+        if write_armed && mask & FD_CONNECT != 0 {
+            if let Some(e) = pending_error {
+                result.network_events |= FD_CONNECT;
+                result.error_code[FD_CONNECT_BIT] = e;
+            } else if r & libc::POLLOUT != 0 {
+                result.network_events |= FD_CONNECT;
+            }
+        }
+        if r & libc::POLLOUT != 0 && mask & FD_WRITE != 0 && write_armed {
+            result.network_events |= FD_WRITE;
+        }
+        if result.network_events & (FD_WRITE | FD_CONNECT) != 0 {
+            // Signalés une fois : réarmés par le prochain envoi en WSAEWOULDBLOCK.
+            if let Some(a) = lock(event_assoc()).get_mut(&s) {
+                a.write_armed = false;
+            }
+        }
+        if r & (libc::POLLRDHUP | libc::POLLHUP) != 0
+            && mask & FD_CLOSE != 0
+            && result.network_events & FD_CONNECT == 0
+        {
+            result.network_events |= FD_CLOSE;
+            if let Some(e) = pending_error {
+                result.error_code[FD_CLOSE_BIT] = e;
+            }
+        }
     }
 
     std::ptr::write_unaligned(net_events, result);
@@ -3771,6 +3832,114 @@ mod tests {
             closesocket(srv);
             libc::close(cli);
             kernel32::close_handle(ev);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn evenements_reseau_selon_le_role_de_la_socket() {
+        use crate::dlls::kernel32;
+        let _g = init();
+        const TOUS: i32 = FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE;
+        unsafe {
+            let (srv, addr) = listener();
+            // Comme PuTTY : les six événements demandés sur chaque socket.
+            let ev_srv = kernel32::create_event_w(0, 0, 0, std::ptr::null());
+            assert_eq!(wsa_event_select(srv, ev_srv, TOUS), 0);
+            let cli = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            let ev_cli = kernel32::create_event_w(0, 0, 0, std::ptr::null());
+            assert_eq!(wsa_event_select(cli, ev_cli, TOUS), 0);
+            let rc = connect(cli, &addr as *const _ as *const u8, 16);
+            assert!(rc == 0 || wsa_get_last_error() == 10035);
+            assert_eq!(kernel32::wait_for_single_object(ev_srv, 1000), 0);
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(srv, ev_srv, &mut ne), 0);
+            assert_eq!(ne.network_events, FD_ACCEPT, "écoute : FD_ACCEPT seul");
+            let peer = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(peer, usize::MAX);
+            libc::send(
+                peer as i32,
+                b"SSH-2.0-x\r\n".as_ptr() as *const c_void,
+                11,
+                0,
+            );
+            assert_eq!(kernel32::wait_for_single_object(ev_cli, 1000), 0);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(cli, ev_cli, &mut ne), 0);
+            assert_eq!(
+                ne.network_events & FD_ACCEPT,
+                0,
+                "connectée : jamais FD_ACCEPT (#1350)"
+            );
+            assert_eq!(ne.network_events & FD_READ, FD_READ);
+            assert_eq!(ne.error_code, [0; 10]);
+            // Fermeture par le pair : FD_CLOSE.
+            closesocket(peer);
+            let mut buf = [0u8; 32];
+            libc::recv(cli as i32, buf.as_mut_ptr() as *mut c_void, 32, 0);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(cli, ev_cli, &mut ne), 0);
+            assert_eq!(ne.network_events & FD_CLOSE, FD_CLOSE);
+            assert_eq!(ne.network_events & FD_ACCEPT, 0);
+            closesocket(cli);
+
+            // Connexion refusée : FD_CONNECT avec WSAECONNREFUSED à
+            // l'indice FD_CONNECT_BIT (4).
+            let mut libre = addr;
+            closesocket(srv);
+            libre.sin_port = addr.sin_port;
+            let c2 = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert_eq!(wsa_event_select(c2, ev_cli, TOUS), 0);
+            let rc = connect(c2, &libre as *const _ as *const u8, 16);
+            // Le refus peut aussi être immédiat sur la boucle locale.
+            if rc != 0 && wsa_get_last_error() == 10035 {
+                assert_eq!(kernel32::wait_for_single_object(ev_cli, 1000), 0);
+                let mut ne = WsaNetworkEvents::default();
+                assert_eq!(wsa_enum_network_events(c2, ev_cli, &mut ne), 0);
+                assert_eq!(ne.network_events & FD_CONNECT, FD_CONNECT);
+                assert_eq!(ne.error_code[4], 10061);
+                assert_eq!(ne.network_events & FD_ACCEPT, 0);
+            }
+            closesocket(c2);
+            kernel32::close_handle(ev_srv);
+            kernel32::close_handle(ev_cli);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn evenement_wsa_attendu_par_kernel32() {
+        use crate::dlls::kernel32;
+        let _g = init();
+        unsafe {
+            let (srv, addr) = listener();
+            // Serveur DevTools de Chromium : WSACreateEvent, FD_ACCEPT, puis
+            // WaitForSingleObject par ObjectWatcher (#1351).
+            let ev = wsa_create_event();
+            assert_eq!(wsa_event_select(srv, ev, FD_ACCEPT), 0);
+            assert_eq!(kernel32::wait_for_single_object(ev, 0), 258);
+            let other = kernel32::create_event_w(0, 0, 0, std::ptr::null());
+            let both = [other, ev];
+            assert_eq!(
+                kernel32::wait_for_multiple_objects(2, both.as_ptr(), 0, 10),
+                258
+            );
+            let cli = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            libc::connect(cli, &addr as *const _ as *const libc::sockaddr, 16);
+            assert_eq!(kernel32::wait_for_single_object(ev, 1000), 0);
+            assert_eq!(
+                kernel32::wait_for_multiple_objects(2, both.as_ptr(), 0, 1000),
+                1
+            );
+            let peer = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(peer, usize::MAX);
+            closesocket(peer);
+            libc::close(cli);
+            closesocket(srv);
+            wsa_close_event(ev);
+            kernel32::close_handle(other);
         }
         cleanup();
     }
