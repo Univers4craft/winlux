@@ -526,7 +526,12 @@ fn blit_common(
         crate::process::set_last_error(1400);
         return 0;
     };
-    if (dst_hwnd != 0 && gui::wnd_proc_of(dst_hwnd).is_none())
+    // Destination dans un autre processus (#1345) : elle ne reçoit que des
+    // images, la source étant lue ici.
+    let dst_foreign = dst_hwnd != 0
+        && gui::wnd_proc_of(dst_hwnd).is_none()
+        && gui::foreign_window(dst_hwnd).is_some();
+    if (dst_hwnd != 0 && gui::wnd_proc_of(dst_hwnd).is_none() && !dst_foreign)
         || (src_hwnd != 0 && gui::wnd_proc_of(src_hwnd).is_none())
     {
         crate::process::set_last_error(1400);
@@ -560,7 +565,7 @@ fn blit_common(
         right: dst_right,
         bottom: dst_bottom,
     };
-    let cmd = if src_hwnd != 0 && dst_hwnd != 0 {
+    let cmd = if src_hwnd != 0 && dst_hwnd != 0 && !dst_foreign {
         DrawCmd::Blit {
             source_hwnd: src_hwnd,
             source,
@@ -2871,5 +2876,58 @@ mod round_rect_region_tests {
             assert_ne!(get_rgn_box(rgn, &mut r), REGION_ERROR);
         }
         assert_eq!((r.left, r.top, r.right, r.bottom), (0, 0, 300, 200));
+    }
+}
+
+#[cfg(test)]
+mod foreign_window_tests {
+    use super::*;
+    use crate::dlls::gui_shared::{self, Foreign};
+
+    /// #1345 : le processus GPU de Chromium peint les surgissants du
+    /// navigateur par GetDC sur leur HWND, puis BitBlt depuis une DIB.
+    /// Winlux refusait le DC (erreur 1400) et rien ne s'affichait.
+    #[test]
+    fn dessin_gdi_sur_la_fenetre_d_un_autre_processus() {
+        let hwnd = gui::alloc_hwnd();
+        // Le processus parent du test joue le navigateur : il est vivant.
+        let other = unsafe { libc::getppid() } as u32;
+        let xid = 0x1c0_0042;
+        if !gui_shared::publish_for_test(
+            hwnd,
+            Foreign {
+                pid: other,
+                tid: 7,
+                xid,
+            },
+        ) {
+            eprintln!("annuaire des fenêtres indisponible : test sauté");
+            return;
+        }
+        gui::FOREIGN_PAINTS.with(|p| p.borrow_mut().clear());
+        let dc = crate::dlls::user32::get_dc(hwnd);
+        assert_ne!(dc, 0, "GetDC sur une fenêtre étrangère");
+
+        let mem = create_compatible_dc(0);
+        let bitmap = create_compatible_bitmap(mem, 4, 3);
+        select_object(mem, bitmap);
+        assert_eq!(bit_blt(dc, 10, 20, 4, 3, mem, 0, 0, 0x00CC_0020), 1);
+        let painted = gui::FOREIGN_PAINTS.with(|p| p.borrow().clone());
+        assert_eq!(painted.len(), 1);
+        let (to, rect, count) = painted[0];
+        assert_eq!(to, xid);
+        assert_eq!(
+            (rect.left, rect.top, rect.right, rect.bottom),
+            (10, 20, 14, 23)
+        );
+        assert_eq!(count, 12);
+
+        // Une fenêtre inconnue reste refusée.
+        assert_eq!(crate::dlls::user32::get_dc(0x7ffe_fff0), 0);
+
+        unsafe { crate::dlls::user32::release_dc(hwnd, dc) };
+        delete_dc(mem);
+        delete_object(bitmap);
+        gui_shared::withdraw_for_test(hwnd, other);
     }
 }
