@@ -553,6 +553,10 @@ pub extern "win64" fn wgl_make_current(hdc: usize, h: usize) -> i32 {
         crate::log_warn!("opengl32", "glXMakeCurrent a échoué");
         return 0;
     }
+    // Fenêtre présentée par OpenGL : le dessin GDI de Winlux (thème, tampon
+    // arrière) ne doit plus la recouvrir. La fenêtre SDL de Xonotic restait
+    // figée sur sa première image, recopiée à chaque peinture (#1421).
+    mark_gl_window(window);
     CURRENT.with(|c| c.set((hdc, h)));
     1
 }
@@ -598,6 +602,15 @@ extern "win64" fn wgl_share_lists(src: usize, dst: usize) -> i32 {
 
 extern "win64" fn wgl_copy_context(_src: usize, _dst: usize, _mask: u32) -> i32 {
     0
+}
+
+/// Signale une fois au backend la fenêtre X où OpenGL présente.
+fn mark_gl_window(window: u64) {
+    static MARKED: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    let first = lock(MARKED.get_or_init(Default::default)).insert(window);
+    if first {
+        super::gui::mark_direct3d_window(window);
+    }
 }
 
 pub extern "win64" fn swap_buffers(hdc: usize) -> i32 {

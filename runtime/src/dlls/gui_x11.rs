@@ -907,6 +907,22 @@ pub fn renders_itself(imports: &[String]) -> bool {
     })
 }
 
+/// SDL ou GLFW liés en statique (Xonotic : ni SDL2.dll ni opengl32.dll
+/// dans les imports) : la classe de fenêtre qu'ils enregistrent, L"SDL_app"
+/// ou L"GLFW30", figure dans l'image (#1421).
+pub fn statically_linked_renderer(image: &[u8]) -> bool {
+    fn utf16(s: &str) -> Vec<u8> {
+        s.encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    }
+    ["SDL_app", "GLFW30"].iter().any(|class| {
+        let needle = utf16(class);
+        image.windows(needle.len()).any(|w| w == needle.as_slice())
+    })
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -3746,6 +3762,18 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
 
 #[cfg(test)]
 mod tests {
+    /// #1421 : SDL lié en statique est reconnu à sa classe de fenêtre.
+    #[test]
+    fn sdl_statique_reconnu() {
+        use super::statically_linked_renderer;
+        let mut image = vec![0u8; 64];
+        assert!(!statically_linked_renderer(&image));
+        image.extend("SDL_app".encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        image.extend([1, 2, 3]);
+        assert!(statically_linked_renderer(&image));
+        assert!(!statically_linked_renderer(b"SDL_app\0 en ASCII seulement"));
+    }
+
     #[test]
     fn symboles_remplaces_par_un_equivalent() {
         assert_eq!(super::symbol_substitute('\u{FF0B}'), Some('+'));
@@ -5029,6 +5057,16 @@ impl gui::GuiBackend for X11Backend {
         if self.see_through.contains(&hwnd) {
             return;
         }
+        // Fenêtre où OpenGL ou Direct3D présente : la peinture GDI (thème,
+        // tampon arrière) effacerait son image (#1421, #1374).
+        if self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|w| self.direct3d.contains(&w.window))
+        {
+            self.content.insert(hwnd, cmds.to_vec());
+            return;
+        }
         self.content.insert(hwnd, cmds.to_vec());
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
@@ -5055,6 +5093,13 @@ impl gui::GuiBackend for X11Backend {
 
     fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
         if self.see_through.contains(&hwnd) {
+            return;
+        }
+        if self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|w| self.direct3d.contains(&w.window))
+        {
             return;
         }
         let Some(w) = self.windows.get(&hwnd).copied() else {
