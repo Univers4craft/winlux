@@ -458,6 +458,12 @@ pub(crate) fn is_wsa_event(h: usize) -> bool {
 /// WSAEventSelect (même un événement CreateEvent, comme PuTTY) qui est prête.
 /// Sous Windows la pile réseau signale l'événement ; ici on interroge les
 /// sockets au moment de l'attente.
+/// Le handle est-il l'événement d'au moins une socket (WSAEventSelect) ?
+/// Les attentes de kernel32 l'interrogent alors elles-mêmes (#1340).
+pub(crate) fn has_socket_assoc(h: usize) -> bool {
+    h != 0 && lock(event_assoc()).values().any(|a| a.event == h)
+}
+
 pub(crate) fn handle_ready(h: usize) -> bool {
     {
         let ev = lock(events());
@@ -3091,6 +3097,7 @@ const SIO_BSP_HANDLE: u32 = 0x4800001B;
 const SIO_BSP_HANDLE_SELECT: u32 = 0x4800001C;
 const SIO_BSP_HANDLE_POLL: u32 = 0x4800001D;
 const SIO_LOOPBACK_FAST_PATH: u32 = 0x98000010;
+const SIO_IDEAL_SEND_BACKLOG_QUERY: u32 = 0x4004747B;
 const SIO_TCP_INITIAL_RTO: u32 = 0x98000011;
 
 pub unsafe extern "win64" fn wsa_ioctl(
@@ -3202,6 +3209,21 @@ pub unsafe extern "win64" fn wsa_ioctl(
         // le délai initial de retransmission et la boucle locale rapide).
         overlapped::SIO_GET_EXTENSION_FUNCTION_POINTER => {
             overlapped::extension_function(in_buf, in_len, out_buf, out_len, bytes_returned)
+        }
+        // SIO_IDEAL_SEND_BACKLOG_QUERY : quantité idéale de données en
+        // attente d'envoi ; le tampon d'envoi du noyau en tient lieu.
+        // PuTTY et WinSCP la demandent à chaque tour de boucle.
+        SIO_IDEAL_SEND_BACKLOG_QUERY => {
+            if out_buf.is_null() || out_len < 4 {
+                set_error(WSAEFAULT);
+                return SOCKET_ERROR;
+            }
+            let v = sock_flag(s as i32, libc::SO_SNDBUF).max(0) as u32;
+            std::ptr::write_unaligned(out_buf as *mut u32, v);
+            if !bytes_returned.is_null() {
+                *bytes_returned = 4;
+            }
+            0
         }
         SIO_LOOPBACK_FAST_PATH | SIO_TCP_INITIAL_RTO => {
             if !bytes_returned.is_null() {
@@ -3634,6 +3656,69 @@ mod tests {
         lock(event_assoc()).remove(&(fds[0] as usize));
         assert!(!handle_ready(h));
         unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
+
+    /// WaitForSingleObject / WaitForMultipleObjects de kernel32 sur un
+    /// événement CreateEvent associé par WSAEventSelect : prêt quand la
+    /// socket a des données (WinSCP x86 en SFTP, #1340).
+    #[test]
+    fn attente_kernel32_sur_l_evenement_d_une_socket() {
+        use crate::dlls::kernel32;
+        let mut fds = [0i32; 2];
+        unsafe {
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            lock(sockets()).insert(fds[0] as usize);
+            let ev = kernel32::create_event_w(0, 0, 0, std::ptr::null());
+            assert_ne!(ev, 0);
+            assert_eq!(wsa_event_select(fds[0] as usize, ev, FD_READ | FD_CLOSE), 0);
+            assert_eq!(kernel32::wait_for_single_object(ev, 0), 258);
+            assert_eq!(kernel32::wait_for_multiple_objects(1, &ev, 0, 20), 258);
+            libc::write(fds[1], b"SSH-2.0-x\r\n".as_ptr() as *const c_void, 11);
+            assert_eq!(kernel32::wait_for_single_object(ev, 1000), 0);
+            assert_eq!(kernel32::wait_for_multiple_objects(1, &ev, 0, 1000), 0);
+            assert_eq!(kernel32::wait_for_multiple_objects(1, &ev, 1, 1000), 0);
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(fds[0] as usize, ev, &mut ne), 0);
+            assert_eq!(ne.network_events & FD_READ, FD_READ);
+            let mut buf = [0u8; 32];
+            libc::read(fds[0], buf.as_mut_ptr() as *mut c_void, 32);
+            assert_eq!(kernel32::wait_for_single_object(ev, 0), 258);
+            assert_eq!(wsa_event_select(fds[0] as usize, 0, 0), 0);
+            lock(sockets()).remove(&(fds[0] as usize));
+            kernel32::close_handle(ev);
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
+
+    #[test]
+    fn ideal_send_backlog_rend_une_taille() {
+        let mut fds = [0i32; 2];
+        unsafe {
+            libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr());
+            lock(sockets()).insert(fds[0] as usize);
+            let mut v = 0u32;
+            let mut n = 0u32;
+            let rc = wsa_ioctl(
+                fds[0] as usize,
+                SIO_IDEAL_SEND_BACKLOG_QUERY,
+                std::ptr::null(),
+                0,
+                &mut v as *mut u32 as *mut u8,
+                4,
+                &mut n,
+                0,
+                0,
+            );
+            assert_eq!((rc, n), (0, 4));
+            assert!(v > 0);
+            lock(sockets()).remove(&(fds[0] as usize));
             libc::close(fds[0]);
             libc::close(fds[1]);
         }

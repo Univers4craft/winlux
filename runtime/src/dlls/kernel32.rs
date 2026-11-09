@@ -6670,6 +6670,20 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         return u32::MAX;
     };
     match obj {
+        // Événement associé à une socket par WSAEventSelect : la pile réseau
+        // de Windows le signale ; ici, l'attente interroge la socket.
+        SyncHandle::Event(e) if crate::dlls::ws2_32::has_socket_assoc(h) => {
+            let start = std::time::Instant::now();
+            loop {
+                if crate::dlls::ws2_32::handle_ready(h) || wait_event(&e, 0) == 0 {
+                    return 0;
+                }
+                if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+                    return 258;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         SyncHandle::Event(e) => wait_event(&e, timeout),
         SyncHandle::Mutex(m) => wait_mutex(&m, timeout),
         SyncHandle::Thread(t) => wait_thread(&t, timeout),
@@ -6708,8 +6722,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         loop {
             let gate = sync_gate();
             let me = std::thread::current().id();
-            let ready = objects.iter().all(|o| match o {
-                SyncHandle::Event(e) => e.is_set(&lock(&e.signaled)),
+            let ready = objects.iter().zip(hs).all(|(o, &h)| match o {
+                SyncHandle::Event(e) => {
+                    e.is_set(&lock(&e.signaled)) || crate::dlls::ws2_32::handle_ready(h)
+                }
                 SyncHandle::Mutex(m) => match m.shared.get() {
                     Some(w) => MutexObject::shared_ready(w),
                     None => {
@@ -6771,7 +6787,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
     loop {
         for (i, obj) in objects.iter().enumerate() {
             let ready = match obj {
-                SyncHandle::Event(e) => wait_event(e, 0) == 0,
+                // WinSCP (PuTTY) attend ainsi ses sockets (#1340).
+                SyncHandle::Event(e) => {
+                    wait_event(e, 0) == 0 || crate::dlls::ws2_32::handle_ready(hs[i])
+                }
                 SyncHandle::Mutex(m) => match wait_mutex(m, 0) {
                     0 => true,
                     0x80 => return 0x80 + i as u32,

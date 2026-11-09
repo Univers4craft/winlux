@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <time.h>
 #include <locale.h>
+#include <windows.h>
 
 static int ctor_ran;
 __attribute__((constructor)) static void ctor(void) { ctor_ran = 42; }
@@ -77,5 +78,35 @@ int main(int argc, char **argv) {
     if (fails == 20) printf("obtenu : %s\n", buf);
     atexit(bye);
     if (!fails) printf("CRT 32 bits : tout est correct\n");
+    {
+        /* Aides mathématiques du CRT x86 (#1333) : convention x87 (_CI*) et
+         * SSE2 (_libm_sse2_*), appelées comme le code de MSVC. */
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        void *ci_fmod = (void *)GetProcAddress(u, "_CIfmod");
+        void *ci_atan2 = (void *)GetProcAddress(u, "_CIatan2");
+        void *pow2 = (void *)GetProcAddress(u, "_libm_sse2_pow_precise");
+        void *sin2 = (void *)GetProcAddress(u, "_libm_sse2_sin_precise");
+        CHECK(21, ci_fmod && ci_atan2 && pow2 && sin2);
+        if (ci_fmod && ci_atan2 && pow2 && sin2) {
+            double a = 7.5, b = 2.0, r;
+            __asm__ volatile("fldl %1\n\tfldl %2\n\tcall *%3\n\tfstpl %0"
+                             : "=m"(r) : "m"(a), "m"(b), "r"(ci_fmod) : "eax", "ecx", "edx", "memory");
+            CHECK(22, r == 1.5);
+            double y = 1.0, x = -1.0;
+            __asm__ volatile("fldl %1\n\tfldl %2\n\tcall *%3\n\tfstpl %0"
+                             : "=m"(r) : "m"(y), "m"(x), "r"(ci_atan2) : "eax", "ecx", "edx", "memory");
+            CHECK(23, r > 2.356 && r < 2.357);
+            double p = 2.0, e = 10.0;
+            __asm__ volatile("movsd %1, %%xmm0\n\tmovsd %2, %%xmm1\n\tcall *%3\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(p), "m"(e), "r"(pow2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(24, r == 1024.0);
+            double z = 0.0;
+            __asm__ volatile("movsd %1, %%xmm0\n\tcall *%2\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(z), "r"(sin2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(25, r == 0.0);
+        }
+    }
     return fails;
 }

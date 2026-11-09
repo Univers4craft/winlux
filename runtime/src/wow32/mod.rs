@@ -1517,6 +1517,16 @@ extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
         crate::dlls::kernel32::get_proc_address(module as usize, name as usize as *const u8)
     };
     if found == 0 {
+        // Fonction propre au CRT x86 (_CIfmod, _libm_sse2_*…) : pas
+        // d'export 64 bits, mais un remplacement x86, comme à l'import (#1333).
+        if let Some(dll) = crate::dlls::builtin_by_handle(module as usize) {
+            if name > 0xffff {
+                let symbol = unsafe { crate::dlls::cstr(name as usize as *const u8) };
+                if let Some(stub) = override_stub(&format!("{dll}.dll"), &symbol) {
+                    return stub as u32;
+                }
+            }
+        }
         return 0;
     }
     let Some(dll) = crate::dlls::builtin_by_handle(module as usize) else {
