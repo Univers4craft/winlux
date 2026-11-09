@@ -19,8 +19,12 @@ pub(crate) mod d2d_shader;
 mod dxgi_res;
 #[path = "d3d11_ext.rs"]
 mod ext;
+#[path = "d3d11_formats.rs"]
+mod formats;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
+#[path = "d3d11_query.rs"]
+mod query;
 
 /// Images présentées (toutes chaînes d'échange), pour WINLUX_D3D11_TRACE.
 pub(crate) static FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -2151,15 +2155,6 @@ unsafe extern "win64" fn ctx_noop_uav(
     _: *const u32,
 ) {
 }
-unsafe extern "win64" fn ctx_get_data(
-    _: *mut DeviceContext,
-    _: *mut c_void,
-    _: *mut c_void,
-    _: u32,
-    _: u32,
-) -> i32 {
-    S_OK
-}
 unsafe extern "win64" fn ctx_get_type(_: *mut DeviceContext) -> u32 {
     0
 } // D3D11_DEVICE_CONTEXT_IMMEDIATE
@@ -3223,8 +3218,8 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     vs_set_shader_resources: pipeline::vs_set_srvs,
     vs_set_samplers: pipeline::vs_set_samplers,
     begin: ctx_noop_1ptr,
-    end: ctx_noop_1ptr,
-    get_data: ctx_get_data,
+    end: query::ctx_end,
+    get_data: query::ctx_get_data,
     set_predication: ctx_noop_pred,
     gs_set_shader_resources: pipeline::gs_set_srvs,
     gs_set_samplers: pipeline::gs_set_samplers,
@@ -4111,6 +4106,15 @@ unsafe extern "win64" fn dev_create_state(
     S_OK
 }
 
+/// CreateQuery et CreatePredicate : requête typée (#1317).
+unsafe extern "win64" fn dev_create_query(
+    _: *mut Device,
+    desc: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    query::create(desc.cast(), false, out)
+}
+
 unsafe extern "win64" fn dev_create_deferred(_: *mut Device, _: u32, _: *mut *mut c_void) -> i32 {
     crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDeferredContext")
 }
@@ -4132,11 +4136,16 @@ unsafe extern "win64" fn dev_open_shared(
     crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
 }
 
-unsafe extern "win64" fn dev_check_format(_: *mut Device, _format: u32, out: *mut u32) -> i32 {
+/// CheckFormatSupport : capacités réelles du format (#1304), E_FAIL pour
+/// DXGI_FORMAT_UNKNOWN.
+unsafe extern "win64" fn dev_check_format(_: *mut Device, format: u32, out: *mut u32) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0x1 | 0x2 | 0x4 | 0x10 | 0x20; // basic support flags
+    *out = formats::format_support(format);
+    if *out == 0 {
+        return E_FAIL;
+    }
     S_OK
 }
 
@@ -4290,8 +4299,8 @@ static DEVICE_VTABLE: DeviceVTable = DeviceVTable {
     create_depth_stencil_state: pipeline::dev_create_depth,
     create_rasterizer_state: pipeline::dev_create_raster,
     create_sampler_state: pipeline::dev_create_sampler,
-    create_query: dev_create_state,
-    create_predicate: dev_create_state,
+    create_query: dev_create_query,
+    create_predicate: dev_create_query,
     create_counter: dev_create_state,
     create_deferred_context: dev_create_deferred,
     open_shared_resource: dev_open_shared,

@@ -10,6 +10,7 @@ use std::ffi::c_void;
 
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOREDRAW: u32 = 0x0008;
 const SWP_SHOWWINDOW: u32 = 0x0040;
 const SWP_HIDEWINDOW: u32 = 0x0080;
@@ -444,9 +445,7 @@ unsafe fn create_window_inner(
     });
     // Visible des autres processus du compte (#1228) : le processus GPU de
     // Chromium reçoit ce HWND et ANGLE le vérifie par IsWindow.
-    if let Some(xid) = gui::native_window(hwnd) {
-        super::gui_shared::publish(hwnd, super::kernel32::get_current_thread_id(), xid);
-    }
+    publish_shared(hwnd);
 
     // Barre de menus d'une fenêtre de premier niveau : hMenu, sinon le
     // menu de la classe (Notepad++ le déclare dans WNDCLASSEX).
@@ -1024,11 +1023,71 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|&h| h != hwnd);
+    // Fenêtre possédée qui a le focus (elle ou une de ses filles) : comme
+    // Windows, sa destruction rend la main à son propriétaire. Qt 5 donne
+    // le focus à la fenêtre cachée de sa boîte de fichiers native avant de
+    // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
+    // barre de menus gardait les libellés grisés de l'attente (#1311).
+    let owner = owner_to_refocus(hwnd);
     if gui::destroy_window(hwnd) {
+        if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
+            crate::thunks::api_note(&format!(
+                "DestroyWindow {hwnd:#x} : focus rendu à {owner:#x} (#1311)"
+            ));
+            set_focus(owner);
+        }
         1
     } else {
         0
     }
+}
+
+/// Fenêtre à qui rendre le focus quand `hwnd` est détruite : seulement pour
+/// une fenêtre de premier niveau qui a le focus du fil. Son propriétaire s'il
+/// est visible et activé, sinon la fenêtre visible et activée suivante du fil
+/// dans l'ordre Z (#1311).
+unsafe fn owner_to_refocus(hwnd: usize) -> usize {
+    let Some(style) = gui::window_style(hwnd) else {
+        return 0;
+    };
+    if style & WS_CHILD != 0 {
+        return 0;
+    }
+    let focus = gui::focused_window();
+    let mut inside = focus;
+    for _ in 0..64 {
+        if inside == 0 || inside == hwnd {
+            break;
+        }
+        inside = gui::window_parent(inside).unwrap_or(0);
+    }
+    if focus == 0 || inside != hwnd {
+        return 0;
+    }
+    // Le propriétaire d'abord, comme Windows.
+    let owner = owner_top_level(get_window_long_ptr_w(hwnd, GWLP_HWNDPARENT) as usize);
+    let candidates = gui::thread_visible_top_levels();
+    if owner != 0
+        && owner != hwnd
+        && candidates
+            .iter()
+            .any(|&(h, s)| h == owner && s & WS_DISABLED == 0)
+    {
+        return owner;
+    }
+    // Sinon la fenêtre suivante dans l'ordre Z : Qt 5 retire le propriétaire
+    // de la fenêtre de sa boîte native (SetWindowLongPtr(GWLP_HWNDPARENT, 0))
+    // juste avant de la détruire. Une fenêtre à barre de titre ou sans
+    // WS_POPUP, pas un menu ni une bulle.
+    candidates
+        .into_iter()
+        .find(|&(h, s)| {
+            h != hwnd
+                && s & WS_DISABLED == 0
+                && (s & 0x00C0_0000 == 0x00C0_0000 || s & 0x8000_0000 == 0)
+        })
+        .map(|(h, _)| h)
+        .unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn is_window(hwnd: usize) -> i32 {
@@ -1156,6 +1215,30 @@ pub unsafe extern "win64" fn set_window_pos(
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     };
+    // WM_WINDOWPOSCHANGING, envoyé avant tout changement : la fenêtre peut
+    // y corriger la position ou la taille demandées (contraintes de la VCL,
+    // de WinForms…), comme sous Windows (#1251).
+    let (x, y, cx, cy, flags) = {
+        let mut pos = WindowPos {
+            hwnd,
+            insert_after: _insert_after,
+            x,
+            y,
+            cx,
+            cy,
+            flags,
+        };
+        if flags & (SWP_NOMOVE | SWP_NOSIZE) != (SWP_NOMOVE | SWP_NOSIZE) {
+            send_message_w(hwnd, WM_WINDOWPOSCHANGING, 0, &mut pos as *mut _ as isize);
+            if gui::window_rect(hwnd).is_none() {
+                crate::process::set_last_error(1400);
+                return 0;
+            }
+        }
+        // La fenêtre ne peut que retirer des changements, pas en ajouter.
+        let keep = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOREDRAW;
+        (pos.x, pos.y, pos.cx, pos.cy, flags | (pos.flags & keep))
+    };
     let left = if flags & SWP_NOMOVE != 0 { old.left } else { x };
     let top = if flags & SWP_NOMOVE != 0 { old.top } else { y };
     let width = if flags & SWP_NOSIZE != 0 {
@@ -1245,6 +1328,30 @@ pub unsafe extern "win64" fn set_window_pos(
         frame_changed(hwnd, rect, flags);
     }
 
+    // WM_WINDOWPOSCHANGED, envoyé une fois la fenêtre placée : la VCL n'y
+    // relit qu'ainsi ses Left/Top/Width/Height. Sans lui, chaque propriété
+    // lue du DFM effaçait la précédente et le champ du port de WinSCP
+    // restait en (0,0) (#1251). WM_SIZE et WM_MOVE restent postés.
+    if moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0 {
+        let mut done = flags;
+        if !moved {
+            done |= SWP_NOMOVE;
+        }
+        if !resized {
+            done |= SWP_NOSIZE;
+        }
+        let mut pos = WindowPos {
+            hwnd,
+            insert_after: _insert_after,
+            x: rect.left,
+            y: rect.top,
+            cx: rect.width(),
+            cy: rect.height(),
+            flags: done,
+        };
+        send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
+    }
+
     if flags & SWP_NOREDRAW == 0
         && gui::window_rect(hwnd).is_some()
         && (moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0)
@@ -1256,6 +1363,9 @@ pub unsafe extern "win64" fn set_window_pos(
     }
     1
 }
+
+const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 
 /// Fenêtres dont le cadre du gestionnaire a été retiré par `frame_changed`.
 static OWN_FRAME: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
@@ -1514,8 +1624,10 @@ pub unsafe extern "win64" fn end_paint(hwnd: usize, ps: *const PaintStruct) -> i
 // ---------- DC et primitives de dessin ----------
 
 /// DC ciblant une fenêtre (le `hwnd` 0 désigne le bureau, sans rendu).
+/// Une fenêtre d'un autre processus du compte est valable aussi : le
+/// processus GPU de Chromium peint ainsi les surgissants (#1345).
 pub extern "win64" fn get_dc(hwnd: usize) -> usize {
-    if hwnd != 0 && gui::wnd_proc_of(hwnd).is_none() {
+    if hwnd != 0 && gui::wnd_proc_of(hwnd).is_none() && gui::foreign_window(hwnd).is_none() {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
@@ -1825,7 +1937,37 @@ pub fn forget_window_longs(hwnd: usize) {
 
 use super::lock;
 
+/// Inscrit (ou met à jour) une fenêtre de ce processus dans l'annuaire
+/// partagé avec ses styles (#1228, #1357). Les fenêtres sans fenêtre X11
+/// n'y figurent pas.
+fn publish_shared(hwnd: usize) {
+    if gui::foreign_window(hwnd).is_some() {
+        return;
+    }
+    if let Some(xid) = gui::native_window(hwnd) {
+        super::gui_shared::publish(
+            hwnd,
+            gui::window_thread_id(hwnd).unwrap_or_else(|| super::kernel32::get_current_thread_id()),
+            xid,
+            gui::window_style(hwnd).unwrap_or(0),
+            gui::window_ex_style(hwnd).unwrap_or(0),
+        );
+    }
+}
+
 unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
+    // Fenêtre d'un autre processus : ses styles publiés. Le processus GPU de
+    // Chromium y cherche WS_EX_LAYERED pour choisir son chemin de peinture
+    // (#1357).
+    if matches!(index, GWL_STYLE | GWL_EXSTYLE) && gui::window_style(hwnd).is_none() {
+        if let Some(f) = gui::foreign_window(hwnd) {
+            return if index == GWL_STYLE {
+                f.style as isize
+            } else {
+                f.ex_style as isize
+            };
+        }
+    }
     match index {
         GWL_STYLE => gui::window_style(hwnd).unwrap_or(0) as isize,
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
@@ -1854,10 +1996,14 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            gui::set_window_style(hwnd, value as u32);
+            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+                publish_shared(hwnd);
+            }
         }
         GWL_EXSTYLE => {
-            gui::set_window_ex_style(hwnd, value as u32);
+            if gui::set_window_ex_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+                publish_shared(hwnd);
+            }
         }
         GWL_WNDPROC => {
             gui::set_wnd_proc(hwnd, value as usize);
@@ -2929,12 +3075,110 @@ pub(crate) fn split_prefix(text: &str) -> (String, Option<usize>) {
     (out, underline)
 }
 
+/// Découpe le texte affiché de DrawText en lignes : coupure sur CR, LF et
+/// CR LF hors DT_SINGLELINE, puis, avec DT_WORDBREAK, retour à la ligne aux
+/// espaces quand une ligne dépasse `width` (boîte « Information » de WinSCP,
+/// #1341). Un mot plus large que `width` reste seul sur sa ligne. Rend
+/// chaque ligne avec la position de la lettre soulignée qu'elle contient.
+pub(crate) fn draw_text_lines(
+    shown: &str,
+    underline: Option<usize>,
+    single: bool,
+    width: Option<i32>,
+    measure: &dyn Fn(&str) -> i32,
+) -> Vec<(String, Option<usize>)> {
+    let chars: Vec<char> = shown.chars().collect();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    if single {
+        ranges.push((0, chars.len()));
+    } else {
+        let mut start = 0;
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '\r' => {
+                    ranges.push((start, i));
+                    i += if chars.get(i + 1) == Some(&'\n') {
+                        2
+                    } else {
+                        1
+                    };
+                    start = i;
+                }
+                '\n' => {
+                    ranges.push((start, i));
+                    i += 1;
+                    start = i;
+                }
+                _ => i += 1,
+            }
+        }
+        ranges.push((start, chars.len()));
+    }
+    let text_of = |a: usize, b: usize| -> String { chars[a..b].iter().collect() };
+    let mut wrapped: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in ranges {
+        let Some(w) = width.filter(|w| *w > 0) else {
+            wrapped.push((s, e));
+            continue;
+        };
+        if measure(&text_of(s, e)) <= w {
+            wrapped.push((s, e));
+            continue;
+        }
+        let mut start = s;
+        while start < e {
+            // Fin de ligne la plus lointaine, à une frontière de mot, qui tient.
+            let mut best = None;
+            let mut first_word = None;
+            let mut j = start;
+            while j <= e {
+                if j == e || chars[j] == ' ' {
+                    let mut end = j;
+                    while end > start && chars[end - 1] == ' ' {
+                        end -= 1;
+                    }
+                    if end > start {
+                        if first_word.is_none() {
+                            first_word = Some(j);
+                        }
+                        if measure(&text_of(start, end)) <= w {
+                            best = Some(j);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                j += 1;
+            }
+            let cut = best.or(first_word).unwrap_or(e);
+            let mut end = cut;
+            while end > start && chars[end - 1] == ' ' {
+                end -= 1;
+            }
+            wrapped.push((start, end));
+            start = cut;
+            while start < e && chars[start] == ' ' {
+                start += 1;
+            }
+        }
+    }
+    wrapped
+        .into_iter()
+        .map(|(a, b)| {
+            let u = underline.filter(|k| *k >= a && *k < b).map(|k| k - a);
+            (text_of(a, b), u)
+        })
+        .collect()
+}
+
 fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     const DT_CALCRECT: u32 = 0x0400;
     const DT_CENTER: u32 = 0x0001;
     const DT_RIGHT: u32 = 0x0002;
     const DT_VCENTER: u32 = 0x0004;
     const DT_BOTTOM: u32 = 0x0008;
+    const DT_WORDBREAK: u32 = 0x0010;
     const DT_SINGLELINE: u32 = 0x0020;
     const DT_NOPREFIX: u32 = 0x0800;
     const DT_HIDEPREFIX: u32 = 0x0010_0000;
@@ -2949,7 +3193,20 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     } else {
         split_prefix(text)
     };
-    let (tw, th) = gui::measure_text(&font, &shown);
+    let single = format & DT_SINGLELINE != 0;
+    let width = (format & DT_WORDBREAK != 0 && !single).then(|| rect.width());
+    let measure = |s: &str| gui::measure_text(&font, s).0;
+    let lines = draw_text_lines(&shown, underline, single, width, &measure);
+    // Hauteur d'une ligne : celle du texte entier sur une seule ligne, sinon
+    // celle d'une ligne type (une ligne vide compte aussi).
+    let lh = if lines.len() == 1 {
+        gui::measure_text(&font, &shown).1
+    } else {
+        gui::measure_text(&font, "Ag").1
+    };
+    let widths: Vec<i32> = lines.iter().map(|(l, _)| measure(l)).collect();
+    let tw = widths.iter().copied().max().unwrap_or(0);
+    let th = lh * lines.len() as i32;
 
     if format & DT_CALCRECT != 0 {
         rect.right = rect.left + tw;
@@ -2957,15 +3214,8 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         return th;
     }
 
-    let mut x = rect.left;
     let mut y = rect.top;
-
-    if format & DT_CENTER != 0 {
-        x = rect.left + (rect.width() - tw) / 2;
-    } else if format & DT_RIGHT != 0 {
-        x = rect.right - tw;
-    }
-    if format & DT_SINGLELINE != 0 {
+    if single {
         if format & DT_VCENTER != 0 {
             y = rect.top + (rect.height() - th) / 2;
         } else if format & DT_BOTTOM != 0 {
@@ -2981,36 +3231,46 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         None
     };
 
-    if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
-        let before: String = shown.chars().take(k).collect();
-        let upto: String = shown.chars().take(k + 1).collect();
-        let x1 = x + gui::measure_text(&font, &before).0;
-        let x2 = x + gui::measure_text(&font, &upto).0;
-        let base = y + th - 2;
-        gui::record(
-            hdc,
-            gui::DrawCmd::Line {
-                x1,
-                y1: base,
-                x2: x2 - 1,
-                y2: base,
-                color,
-                width: 1,
-            },
-        );
-    }
-    if format & DT_PREFIXONLY == 0 {
-        gui::record(
-            hdc,
-            gui::DrawCmd::Text {
-                x,
-                y,
-                text: shown,
-                color,
-                bk,
-                font,
-            },
-        );
+    for ((line, underline), lw) in lines.into_iter().zip(widths) {
+        let x = if format & DT_CENTER != 0 {
+            rect.left + (rect.width() - lw) / 2
+        } else if format & DT_RIGHT != 0 {
+            rect.right - lw
+        } else {
+            rect.left
+        };
+        if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
+            let before: String = line.chars().take(k).collect();
+            let upto: String = line.chars().take(k + 1).collect();
+            let x1 = x + measure(&before);
+            let x2 = x + measure(&upto);
+            let base = y + lh - 2;
+            gui::record(
+                hdc,
+                gui::DrawCmd::Line {
+                    x1,
+                    y1: base,
+                    x2: x2 - 1,
+                    y2: base,
+                    color,
+                    width: 1,
+                },
+            );
+        }
+        if format & DT_PREFIXONLY == 0 && !line.is_empty() {
+            gui::record(
+                hdc,
+                gui::DrawCmd::Text {
+                    x,
+                    y,
+                    text: line,
+                    color,
+                    bk,
+                    font: font.clone(),
+                },
+            );
+        }
+        y += lh;
     }
 
     th
@@ -3543,7 +3803,18 @@ pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPl
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
     }
-    let Some(rect) = gui::screen_rect(hwnd) else {
+    // Fenêtre enfant : rcNormalPosition est relatif à la zone cliente du
+    // parent. 7-Zip ajoute son « top » à la hauteur de la barre d'outils
+    // pour placer son panneau : en coordonnées d'écran, la zone d'adresse
+    // tombait 200 pixels trop bas (#1326).
+    let child = gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0)
+        && gui::window_parent(hwnd).unwrap_or(0) != 0;
+    let rect = if child {
+        gui::window_rect(hwnd)
+    } else {
+        gui::screen_rect(hwnd)
+    };
+    let Some(rect) = rect else {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     };
@@ -3572,6 +3843,64 @@ pub unsafe extern "win64" fn set_window_placement(hwnd: usize, wp: *const Window
         move_window(hwnd, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
     }
     show_window(hwnd, p.show_cmd as i32);
+    1
+}
+
+/// Raisons de blocage de l'arrêt (ShutdownBlockReasonCreate) : gardées par
+/// fenêtre pour ShutdownBlockReasonQuery. Les chargeurs PyInstaller en posent
+/// une au démarrage (#1332). La session Winlux ne les montre pas encore.
+fn shutdown_reasons() -> &'static std::sync::Mutex<HashMap<usize, String>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, String>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+pub unsafe extern "win64" fn shutdown_block_reason_create(hwnd: usize, reason: *const u16) -> i32 {
+    if gui::window_rect(hwnd).is_none() {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    let text = if reason.is_null() {
+        String::new()
+    } else {
+        super::wstr(reason)
+    };
+    super::lock(shutdown_reasons()).insert(hwnd, text);
+    1
+}
+
+pub extern "win64" fn shutdown_block_reason_destroy(hwnd: usize) -> i32 {
+    super::lock(shutdown_reasons()).remove(&hwnd);
+    1
+}
+
+/// ShutdownBlockReasonQuery : avec un tampon nul, *pcch reçoit la longueur
+/// à prévoir (zéro compris).
+pub unsafe extern "win64" fn shutdown_block_reason_query(
+    hwnd: usize,
+    buf: *mut u16,
+    cch: *mut u32,
+) -> i32 {
+    if cch.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(text) = super::lock(shutdown_reasons()).get(&hwnd).cloned() else {
+        crate::process::set_last_error(2); // ERROR_FILE_NOT_FOUND : aucune raison
+        return 0;
+    };
+    let w: Vec<u16> = text.encode_utf16().collect();
+    if buf.is_null() {
+        *cch = w.len() as u32 + 1;
+        return 1;
+    }
+    if (*cch as usize) < w.len() + 1 {
+        *cch = w.len() as u32 + 1;
+        crate::process::set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
     1
 }
 
@@ -4129,30 +4458,79 @@ pub extern "win64" fn get_caret_blink_time() -> u32 {
     530
 }
 
-// ---------- Property stubs ----------
+// ---------- SetProp / GetProp ----------
 
-pub unsafe extern "win64" fn get_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
+/// Clé d'une propriété : un atome (MAKEINTATOM) et la chaîne qu'il nomme
+/// désignent la même propriété, sans distinction de casse, comme sous Windows.
+unsafe fn prop_key(name: usize, wide: bool) -> Option<String> {
+    if name == 0 {
+        return None;
+    }
+    if name < 0x10000 {
+        let atom = name as u16;
+        if atom >= 0xC000 {
+            if let Some(n) = super::kernel32_legacy::atom_name(atom) {
+                return Some(n.to_lowercase());
+            }
+        }
+        return Some(format!("#{atom}"));
+    }
+    let s = if wide {
+        super::wstr(name as *const u16)
+    } else {
+        super::cstr(name as *const u8)
+    };
+    if let Some(n) = s.strip_prefix('#').and_then(|d| d.parse::<u16>().ok()) {
+        if n > 0 && n < 0xC000 {
+            return Some(format!("#{n}"));
+        }
+    }
+    Some(s.to_lowercase())
 }
 
-pub unsafe extern "win64" fn get_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
-}
-
-pub unsafe extern "win64" fn set_prop_a(_hwnd: usize, _name: *const u8, _data: usize) -> i32 {
+unsafe fn set_prop(hwnd: usize, name: usize, wide: bool, data: usize) -> i32 {
+    let Some(key) = prop_key(name, wide) else {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    };
+    if hwnd == 0 {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    gui::set_window_prop(hwnd, key, data);
     1
 }
 
-pub unsafe extern "win64" fn set_prop_w(_hwnd: usize, _name: *const u16, _data: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn get_prop_a(hwnd: usize, name: *const u8) -> usize {
+    prop_key(name as usize, false)
+        .and_then(|k| gui::window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn remove_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
+pub unsafe extern "win64" fn get_prop_w(hwnd: usize, name: *const u16) -> usize {
+    prop_key(name as usize, true)
+        .and_then(|k| gui::window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn remove_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
+pub unsafe extern "win64" fn set_prop_a(hwnd: usize, name: *const u8, data: usize) -> i32 {
+    set_prop(hwnd, name as usize, false, data)
+}
+
+pub unsafe extern "win64" fn set_prop_w(hwnd: usize, name: *const u16, data: usize) -> i32 {
+    set_prop(hwnd, name as usize, true, data)
+}
+
+pub unsafe extern "win64" fn remove_prop_a(hwnd: usize, name: *const u8) -> usize {
+    prop_key(name as usize, false)
+        .and_then(|k| gui::remove_window_prop(hwnd, &k))
+        .unwrap_or(0)
+}
+
+pub unsafe extern "win64" fn remove_prop_w(hwnd: usize, name: *const u16) -> usize {
+    prop_key(name as usize, true)
+        .and_then(|k| gui::remove_window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
 // ---------- Misc ----------
@@ -4373,6 +4751,9 @@ pub fn exports() -> crate::dlls::Exports {
         "GetWindow"=>fn get_window, "GetTopWindow"=>fn get_top_window,
         "GetWindowThreadProcessId"=>fn get_window_thread_process_id,
         "GetWindowPlacement"=>fn get_window_placement,
+        "ShutdownBlockReasonCreate"=>fn shutdown_block_reason_create,
+        "ShutdownBlockReasonDestroy"=>fn shutdown_block_reason_destroy,
+        "ShutdownBlockReasonQuery"=>fn shutdown_block_reason_query,
         "SetWindowPlacement"=>fn set_window_placement,
         // --- Painting ---
         "BeginPaint"=>fn begin_paint, "EndPaint"=>fn end_paint,
@@ -4607,6 +4988,72 @@ mod tests {
         assert!(!floating_popup(0x8000_0000, 0));
         assert!(!floating_popup(0x80C0_0000, 0x0800_0080));
         assert!(!floating_popup(0x0000_0000, 0x0800_0080));
+    }
+
+    /// #1311 : Qt 5 donne le focus à la fenêtre cachée de sa boîte de
+    /// fichiers native puis la détruit ; le propriétaire doit le retrouver
+    /// (WM_SETFOCUS), sinon VLC reste inactif et sa barre de menus grisée.
+    #[test]
+    fn focus_rendu_au_proprietaire_a_la_destruction() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SETFOCUS: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == gui::WM_SETFOCUS {
+                SETFOCUS.fetch_add(1, Ordering::SeqCst);
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let got = std::thread::spawn(|| unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    80,
+                    60,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x10CF_0000);
+            set_window_long_ptr_w(main, -4, proc_ as *const () as isize);
+            let dialog = make(0x86CC_0000);
+            set_window_long_ptr_w(dialog, GWLP_HWNDPARENT, main as isize);
+            set_focus(main);
+            let before = SETFOCUS.load(Ordering::SeqCst);
+            set_focus(dialog);
+            assert_eq!(get_focus(), dialog);
+            destroy_window(dialog);
+            let r = (
+                get_focus() == main,
+                SETFOCUS.load(Ordering::SeqCst) - before,
+            );
+            // Propriétaire retiré avant la destruction (Qt 5) : la fenêtre
+            // suivante du fil dans l'ordre Z reprend le focus.
+            let hidden = make(0x86CC_0000);
+            set_window_long_ptr_w(hidden, GWLP_HWNDPARENT, main as isize);
+            set_focus(hidden);
+            set_window_long_ptr_w(hidden, GWLP_HWNDPARENT, 0);
+            destroy_window(hidden);
+            assert_eq!(get_focus(), main, "propriétaire retiré");
+            // Une fenêtre détruite sans le focus ne le déplace pas.
+            let other = make(0x86CC_0000);
+            set_window_long_ptr_w(other, GWLP_HWNDPARENT, main as isize);
+            set_focus(0);
+            destroy_window(other);
+            let r2 = get_focus();
+            destroy_window(main);
+            (r, r2)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(got, ((true, 1), 0));
     }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
@@ -4862,6 +5309,138 @@ mod tests {
             let r = gui::screen_rect(hwnd).expect("rectangle");
             assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
             destroy_window(hwnd);
+        }
+    }
+
+    /// ShutdownBlockReasonCreate/Query/Destroy (chargeurs PyInstaller, #1332).
+    #[test]
+    fn raison_de_blocage_de_l_arret() {
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        let raison: Vec<u16> = "Sauvegarde en cours\0".encode_utf16().collect();
+        unsafe {
+            let h = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            let mut n = 0u32;
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                0
+            );
+            assert_eq!(shutdown_block_reason_create(h, raison.as_ptr()), 1);
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                1
+            );
+            assert_eq!(n, 20);
+            let mut buf = [0u16; 32];
+            n = 32;
+            assert_eq!(shutdown_block_reason_query(h, buf.as_mut_ptr(), &mut n), 1);
+            assert_eq!(&buf[..20], &raison[..20]);
+            assert_eq!(shutdown_block_reason_destroy(h), 1);
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                0
+            );
+            assert_eq!(
+                shutdown_block_reason_create(0x7777_0000, raison.as_ptr()),
+                0
+            );
+            destroy_window(h);
+        }
+    }
+
+    static POS_CHANGES: std::sync::Mutex<Vec<(i32, i32, i32, i32, u32)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_vcl_bornes(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_WINDOWPOSCHANGING {
+            // Contrainte de largeur maximale, comme Constraints.MaxWidth.
+            let pos = &mut *(l as *mut WindowPos);
+            if pos.cx > 300 {
+                pos.cx = 300;
+            }
+        }
+        if msg == WM_WINDOWPOSCHANGED {
+            // UpdateBounds de la VCL : relit la fenêtre déjà placée.
+            let pos = &*(l as *const WindowPos);
+            let r = gui::window_rect(h).unwrap();
+            assert_eq!(
+                (pos.x, pos.y, pos.cx, pos.cy),
+                (r.left, r.top, r.width(), r.height())
+            );
+            POS_CHANGES
+                .lock()
+                .unwrap()
+                .push((r.left, r.top, r.width(), r.height(), pos.flags));
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// SetWindowPos envoie WM_WINDOWPOSCHANGING puis WM_WINDOWPOSCHANGED :
+    /// la VCL y relit ses bornes, sinon le Top lu du DFM effaçait le Left
+    /// (champ du port de WinSCP en (0,0), #1251).
+    #[test]
+    fn placement_annonce_a_la_fenetre() {
+        let name: Vec<u16> = "Winlux1251Bornes".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_vcl_bornes as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let h = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                0,
+                121,
+                14,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            POS_CHANGES.lock().unwrap().clear();
+            // Left := 280, puis Top := 87 avec le Left relu.
+            assert_eq!(set_window_pos(h, 0, 280, 0, 121, 14, 0x14), 1);
+            let r = gui::window_rect(h).unwrap();
+            assert_eq!(set_window_pos(h, 0, r.left, 87, 121, 14, 0x14), 1);
+            assert_eq!(set_window_pos(h, 0, 0, 0, 500, 23, 0x16), 1);
+            // Rien ne change : pas de WM_WINDOWPOSCHANGED.
+            assert_eq!(set_window_pos(h, 0, 0, 0, 300, 23, 0x16), 1);
+            let seen = POS_CHANGES.lock().unwrap().clone();
+            assert_eq!(seen.len(), 3, "{seen:?}");
+            assert_eq!((seen[0].0, seen[0].1), (280, 0));
+            assert_eq!((seen[1].0, seen[1].1), (280, 87));
+            assert_eq!(seen[1].4 & SWP_NOSIZE, SWP_NOSIZE);
+            // La contrainte posée dans WM_WINDOWPOSCHANGING est appliquée.
+            assert_eq!(
+                (seen[2].0, seen[2].1, seen[2].2, seen[2].3),
+                (280, 87, 300, 23)
+            );
+            destroy_window(h);
         }
     }
 
@@ -5274,6 +5853,52 @@ mod tests {
     /// Fenêtre de premier niveau créée en 0×0 (TApplication de la VCL) : elle
     /// garde sa taille nulle ; seul CW_USEDEFAULT donne 800×600 (#1276).
     #[test]
+    fn proprietes_de_fenetre_gardees() {
+        // La VCL (WinSCP x86) range son objet sous un atome et le relit pour
+        // refléter WM_NOTIFY / WM_DRAWITEM à ses contrôles (#1249, #1250).
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        let hwnd = unsafe {
+            create_window_ex_w(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(hwnd, 0);
+        let nom: Vec<u16> = "ControlOfs0040000000000123\0".encode_utf16().collect();
+        let atom = super::super::kernel32_legacy::add_atom_w(nom.as_ptr() as usize);
+        assert!(atom >= 0xC000);
+        let autre: Vec<u16> = "CONTROLOFS0040000000000123\0".encode_utf16().collect();
+        let int7 = b"#7\0";
+        unsafe {
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0);
+            assert_eq!(
+                set_prop_w(hwnd, atom as usize as *const u16, 0xfee3_54a0),
+                1
+            );
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0xfee3_54a0);
+            // Le nom, quelle que soit sa casse, désigne la même propriété.
+            assert_eq!(get_prop_w(hwnd, autre.as_ptr()), 0xfee3_54a0);
+            assert_eq!(set_prop_a(hwnd, 7 as *const u8, 42), 1);
+            assert_eq!(get_prop_a(hwnd, int7.as_ptr()), 42);
+            assert_eq!(remove_prop_w(hwnd, nom.as_ptr()), 0xfee3_54a0);
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0);
+            destroy_window(hwnd);
+            // Détruite : ses propriétés partent avec elle.
+            assert_eq!(gui::window_prop(hwnd, "#7"), None);
+        }
+    }
+
+    #[test]
     fn fenetre_de_taille_nulle_reste_nulle() {
         let class: Vec<u16> = "Static\0".encode_utf16().collect();
         let make = |cx: i32, cy: i32| unsafe {
@@ -5340,6 +5965,58 @@ mod tests {
         }
         assert_eq!(r1.right, r2.right);
         assert!(r3.right > r2.right, "DT_NOPREFIX garde « & »");
+    }
+
+    #[test]
+    fn draw_text_coupe_les_lignes_et_les_mots() {
+        // Chaque caractère mesure 10 : le découpage est indépendant de la police.
+        let m = |s: &str| s.chars().count() as i32 * 10;
+        let l = |v: Vec<(String, Option<usize>)>| v.into_iter().map(|x| x.0).collect::<Vec<_>>();
+        // CR LF, CR et LF coupent hors DT_SINGLELINE (#1341).
+        assert_eq!(
+            l(draw_text_lines("ab\r\ncd\ref\ngh", None, false, None, &m)),
+            vec!["ab", "cd", "ef", "gh"]
+        );
+        assert_eq!(
+            l(draw_text_lines("a\n\nb", None, false, None, &m)),
+            vec!["a", "", "b"]
+        );
+        // DT_SINGLELINE garde une seule ligne.
+        assert_eq!(draw_text_lines("ab\ncd", None, true, None, &m).len(), 1);
+        // DT_WORDBREAK coupe aux espaces ; un mot trop long reste seul.
+        assert_eq!(
+            l(draw_text_lines(
+                "un deux trois quatre",
+                None,
+                false,
+                Some(90),
+                &m
+            )),
+            vec!["un deux", "trois", "quatre"]
+        );
+        assert_eq!(
+            l(draw_text_lines(
+                "anticonstitutionnel ok",
+                None,
+                false,
+                Some(50),
+                &m
+            )),
+            vec!["anticonstitutionnel", "ok"]
+        );
+        // La lettre soulignée suit sa ligne.
+        let v = draw_text_lines("Hôte\nPort", Some(5), false, None, &m);
+        assert_eq!(v[0].1, None);
+        assert_eq!(v[1].1, Some(0));
+        // DT_CALCRECT : largeur de la ligne la plus longue, hauteur de toutes.
+        const DT_CALCRECT: u32 = 0x0400;
+        let mut une = Rect::default();
+        let mut deux = Rect::default();
+        let h1 = unsafe { draw_text_a(0, b"abcdef\0".as_ptr(), -1, &mut une, DT_CALCRECT) };
+        let h2 = unsafe { draw_text_a(0, b"abcdef\r\nab\0".as_ptr(), -1, &mut deux, DT_CALCRECT) };
+        assert_eq!(une.right, deux.right);
+        assert_eq!(h2, 2 * h1);
+        assert_eq!(deux.bottom, 2 * une.bottom);
     }
 
     #[test]

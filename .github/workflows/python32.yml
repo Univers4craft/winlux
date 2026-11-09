@@ -1,0 +1,68 @@
+name: Programmes de test Python win32
+
+# Construit, à la demande, les deux programmes de test de #1346 : un
+# exécutable PyInstaller et un programme pygame, en Python 3.12 32 bits.
+# Paquets publics épinglés par sha256 (testc/python32/requirements.txt) ;
+# les .exe ne vont que dans l'artefact, jamais dans le dépôt.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  construire:
+    name: Construire (win32)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x86
+
+      - name: Installer les paquets épinglés
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary :all: --require-hashes -r testc/python32/requirements.txt
+
+      - name: Construire les deux programmes
+        shell: pwsh
+        run: |
+          python -m PyInstaller --onefile --clean --noconfirm --distpath dist --workpath build-pyi --specpath build-pyi testc/python32/pyi32.py
+          python -m PyInstaller --onefile --clean --noconfirm --distpath dist --workpath build-pyi --specpath build-pyi testc/python32/pygame32.py
+
+      - name: Vérifier qu'ils sont en 32 bits et qu'ils tournent
+        shell: pwsh
+        run: |
+          foreach ($exe in "dist/pyi32.exe", "dist/pygame32.exe") {
+            $b = [IO.File]::ReadAllBytes($exe)
+            $pe = [BitConverter]::ToInt32($b, 0x3c)
+            $machine = [BitConverter]::ToUInt16($b, $pe + 4)
+            if ($machine -ne 0x14c) { throw "$exe n'est pas un PE32 (machine $machine)" }
+          }
+          $env:SDL_VIDEODRIVER = "dummy"
+          $env:SDL_AUDIODRIVER = "dummy"
+          & dist/pygame32.exe
+          if ($LASTEXITCODE -ne 0) { throw "pygame32.exe a rendu $LASTEXITCODE" }
+
+      - name: Empreintes
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii dist/SHA256SUMS
+          Get-Content dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: programmes-python-win32
+          path: |
+            dist/pyi32.exe
+            dist/pygame32.exe
+            dist/SHA256SUMS
+          retention-days: 30

@@ -1520,13 +1520,14 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
     WindowsSubstringWithSpecifiedLength(h, start, n - start, out)
 }
 
-/// Aucune classe Windows Runtime n'est inscrite : Chromium (notifications,
-/// réglages d'accessibilité, UI Automation) se rabat sur l'API Win32.
-unsafe extern "win64" fn RoGetActivationFactory(
-    _class: usize,
-    _iid: usize,
-    out: *mut usize,
-) -> i32 {
+/// Seule `Windows.System.DispatcherQueue` est inscrite (#1355). Pour les
+/// autres classes, Chromium (notifications, réglages d'accessibilité, UI
+/// Automation) se rabat sur l'API Win32.
+unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
+    let name = String::from_utf16_lossy(hstring_slice(class));
+    if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if !out.is_null() {
         *out = 0;
     }

@@ -860,6 +860,88 @@ pub unsafe extern "win64" fn add_font_resource_ex_w(
 ) -> i32 {
     add_font_resource_w(name)
 }
+/// Polices passées en mémoire (AddFontMemResourceEx) : chaque police est
+/// écrite dans un fichier privé du processus (répertoire 0700, supprimé avec
+/// la police), puis ajoutée comme un fichier. Le handle rendu est un numéro.
+fn mem_fonts() -> &'static Mutex<Vec<(usize, PathBuf)>> {
+    static M: OnceLock<Mutex<Vec<(usize, PathBuf)>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn mem_font_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = std::env::temp_dir().join(format!("winlux-polices-{}", std::process::id()));
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => Some(dir),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            use std::os::unix::fs::MetadataExt;
+            // Le répertoire doit être à nous et fermé aux autres.
+            let m = std::fs::symlink_metadata(&dir).ok()?;
+            (m.is_dir() && m.uid() == unsafe { libc::getuid() } && m.mode() & 0o077 == 0)
+                .then_some(dir)
+        }
+        Err(_) => None,
+    }
+}
+
+/// AddFontMemResourceEx : handle non nul et nombre de faces dans *pcFonts,
+/// ou 0 si les données ne sont pas une police (#1334).
+pub unsafe extern "win64" fn add_font_mem_resource_ex(
+    data: *const u8,
+    len: u32,
+    _reserved: *mut c_void,
+    count: *mut u32,
+) -> usize {
+    if data.is_null() || len == 0 || count.is_null() {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let bytes = std::slice::from_raw_parts(data, len as usize);
+    let Some(dir) = mem_font_dir() else {
+        return 0;
+    };
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("{id}.ttf"));
+    let written = {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut f| f.write_all(bytes))
+    };
+    if written.is_err() {
+        let _ = std::fs::remove_file(&path);
+        return 0;
+    }
+    let n = add_font_file(&path);
+    if n == 0 {
+        let _ = std::fs::remove_file(&path);
+        return 0;
+    }
+    *count = n as u32;
+    lock(mem_fonts()).push((id, path));
+    id
+}
+
+/// RemoveFontMemResourceEx : retire la police et son fichier privé.
+pub extern "win64" fn remove_font_mem_resource_ex(handle: usize) -> i32 {
+    let path = {
+        let mut list = lock(mem_fonts());
+        let Some(i) = list.iter().position(|(id, _)| *id == handle) else {
+            crate::process::set_last_error(87);
+            return 0;
+        };
+        list.remove(i).1
+    };
+    remove_font_file(&path);
+    let _ = std::fs::remove_file(&path);
+    1
+}
+
 pub unsafe extern "win64" fn remove_font_resource_a(name: *const u8) -> i32 {
     remove_font_file(&resolve_font_path(&cstr(name))) as i32
 }
@@ -897,12 +979,50 @@ pub fn exports() -> crate::dlls::Exports {
         "RemoveFontResourceW" => fn remove_font_resource_w,
         "RemoveFontResourceExA" => fn remove_font_resource_ex_a,
         "RemoveFontResourceExW" => fn remove_font_resource_ex_w,
+        "AddFontMemResourceEx" => fn add_font_mem_resource_ex,
+        "RemoveFontMemResourceEx" => fn remove_font_mem_resource_ex,
     }
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// AddFontMemResourceEx : police en mémoire ajoutée puis retirée avec
+    /// son fichier privé (SDL2_ttf de pygame, #1334).
+    #[test]
+    fn police_en_memoire_ajoutee_puis_retiree() {
+        let data = sample_font("Winlux Memoire", "Regular", 400, false, false);
+        let mut n = 0u32;
+        let h = unsafe {
+            add_font_mem_resource_ex(
+                data.as_ptr(),
+                data.len() as u32,
+                std::ptr::null_mut(),
+                &mut n,
+            )
+        };
+        assert_ne!(h, 0);
+        assert_eq!(n, 1);
+        let path = lock(mem_fonts())
+            .iter()
+            .find(|(id, _)| *id == h)
+            .unwrap()
+            .1
+            .clone();
+        assert!(path.exists());
+        assert!(lock(added()).iter().any(|f| f.family == "Winlux Memoire"));
+        assert_eq!(remove_font_mem_resource_ex(h), 1);
+        assert!(!path.exists());
+        assert!(!lock(added()).iter().any(|f| f.family == "Winlux Memoire"));
+        assert_eq!(remove_font_mem_resource_ex(h), 0);
+        // Des octets qui ne sont pas une police : refusés, rien ne reste.
+        let junk = [0u8; 64];
+        assert_eq!(
+            unsafe { add_font_mem_resource_ex(junk.as_ptr(), 64, std::ptr::null_mut(), &mut n) },
+            0
+        );
+    }
 
     /// Construit une police TrueType minimale (tables name/OS/2/head/hhea/post).
     pub fn sample_font(

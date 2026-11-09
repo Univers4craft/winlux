@@ -215,37 +215,21 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         let rcx = (*uc).uc_mcontext.gregs[libc::REG_RCX as usize] as usize;
         let rdx = (*uc).uc_mcontext.gregs[libc::REG_RDX as usize] as usize;
         let addr = (*info).si_addr() as usize;
-        let (what, stop_code, code) = match sig {
-            libc::SIGSEGV | libc::SIGBUS if is_stack_overflow(addr, rsp) => (
-                b"EXCEPTION_STACK_OVERFLOW".as_slice(),
-                b"KERNEL_STACK_INPAGE_ERROR".as_slice(),
-                0xC000_00FDu32,
-            ),
-            libc::SIGSEGV | libc::SIGBUS => (
-                b"EXCEPTION_ACCESS_VIOLATION".as_slice(),
-                b"IRQL_NOT_LESS_OR_EQUAL".as_slice(),
-                0xC000_0005u32,
-            ),
-            libc::SIGILL => (
-                b"EXCEPTION_ILLEGAL_INSTRUCTION".as_slice(),
-                b"KMODE_EXCEPTION_NOT_HANDLED".as_slice(),
-                0xC000_001D,
-            ),
-            libc::SIGTRAP => (
-                b"EXCEPTION_BREAKPOINT".as_slice(),
-                b"CRITICAL_PROCESS_DIED".as_slice(),
-                0x8000_0003,
-            ),
-            libc::SIGFPE => (
-                b"EXCEPTION_INT_DIVIDE_BY_ZERO".as_slice(),
-                b"DIVIDE_BY_ZERO_ERROR".as_slice(),
-                0xC000_0094,
-            ),
-            _ => (
-                b"UNEXPECTED_SIGNAL".as_slice(),
-                b"UNEXPECTED_KERNEL_MODE_TRAP".as_slice(),
-                0xC000_0001,
-            ),
+        // Faute d'un programme en espace utilisateur : aucun arrêt du noyau
+        // n'a lieu, d'où un seul « stop code » APPLICATION_FAILURE ; le type
+        // de faute est dans `what` (#1308).
+        let stop_code = APPLICATION_STOP_CODE;
+        let (what, code) = match sig {
+            libc::SIGSEGV | libc::SIGBUS if is_stack_overflow(addr, rsp) => {
+                (b"EXCEPTION_STACK_OVERFLOW".as_slice(), 0xC000_00FDu32)
+            }
+            libc::SIGSEGV | libc::SIGBUS => {
+                (b"EXCEPTION_ACCESS_VIOLATION".as_slice(), 0xC000_0005u32)
+            }
+            libc::SIGILL => (b"EXCEPTION_ILLEGAL_INSTRUCTION".as_slice(), 0xC000_001D),
+            libc::SIGTRAP => (b"EXCEPTION_BREAKPOINT".as_slice(), 0x8000_0003),
+            libc::SIGFPE => (b"EXCEPTION_INT_DIVIDE_BY_ZERO".as_slice(), 0xC000_0094),
+            _ => (b"UNEXPECTED_SIGNAL".as_slice(), 0xC000_0001),
         };
 
         let mut module = [0u8; 96];
@@ -265,7 +249,7 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         );
 
         // Afficher le diagnostic sur stderr
-        write_literal(b"\nwinlux: le programme a plante : ");
+        write_literal(CRASH_HEADLINE.as_bytes());
         write_literal(what);
         write_literal(b"\nwinlux: stop code: ");
         write_literal(stop_code);
@@ -322,6 +306,26 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         if module_len > 0 {
             write_literal(b"winlux: module=");
             write_literal(&module[..module_len]);
+            write_literal(b"\n");
+        }
+        // Mot au sommet de la pile : l'adresse de retour de l'appelant quand
+        // la faute suit un appel vers une adresse invalide (rip = addr), même
+        // hors de tout module connu (code produit par un JIT) ; puis la pile
+        // d'appels, aussi écrite dans le journal (#1308).
+        if !is_stack_overflow(addr, rsp) {
+            if let Some(top) = safe_read(rsp & !7) {
+                write_literal(b"winlux: [rsp]=0x");
+                write_hex(top);
+                write_place(top);
+                write_literal(b"\n");
+            }
+        }
+        for (i, &(frame, sure)) in frames[..frame_count].iter().enumerate().skip(1) {
+            write_literal(b"winlux: cadre ");
+            write_fd_dec(2, i as u64);
+            write_literal(if sure { b" 0x" } else { b" ?0x" });
+            write_hex(frame);
+            write_place(frame);
             write_literal(b"\n");
         }
         code
@@ -472,6 +476,22 @@ unsafe fn write_fd_dec(fd: i32, mut n: u64) {
         n /= 10;
     }
     write_fd(fd, &b[i..]);
+}
+
+/// Stop code d'une faute en espace utilisateur (#1308).
+const APPLICATION_STOP_CODE: &[u8] = b"APPLICATION_FAILURE";
+
+/// Première ligne du diagnostic sur stderr, accentuée (#1307).
+const CRASH_HEADLINE: &str = "\nwinlux: le programme a planté : ";
+
+/// « module+décalage » d'une adresse, précédé d'une espace, si connu.
+unsafe fn write_place(addr: usize) {
+    let mut place = [0u8; 96];
+    let n = locate(addr, &mut place);
+    if n > 0 {
+        write_literal(b" ");
+        write_literal(&place[..n]);
+    }
 }
 
 unsafe fn write_literal(s: &[u8]) {
@@ -653,5 +673,17 @@ pub fn install() {
         ] {
             libc::sigaction(s, &sa, std::ptr::null_mut());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plantage_d_application_bien_nomme() {
+        assert_eq!(APPLICATION_STOP_CODE, b"APPLICATION_FAILURE");
+        assert!(CRASH_HEADLINE.contains("a planté"));
+        assert!(!CRASH_HEADLINE.contains("a plante "));
     }
 }

@@ -779,8 +779,12 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
     1
 }
 
+/// Comme sous Windows, un handle est un multiple de 4 : le bit 0 de
+/// `OVERLAPPED.hEvent` dit « pas de paquet au port de complétion ». Avec un
+/// numéro impair, la fin d'une E/S signalait le handle voisin et l'événement
+/// attendu ne l'était jamais (#1360).
 fn next_handle() -> usize {
-    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+    NEXT_HANDLE.fetch_add(4, Ordering::Relaxed)
 }
 /// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
 pub(crate) fn new_handle_number() -> usize {
@@ -799,7 +803,7 @@ pub(crate) fn insert_sync_at(h: usize, obj: SyncHandle) {
 }
 /// Les prochains handles seront au-dessus de `h` (handles hérités).
 pub(crate) fn reserve_handles_up_to(h: usize) {
-    NEXT_HANDLE.fetch_max(h + 1, Ordering::Relaxed);
+    NEXT_HANDLE.fetch_max((h + 4) & !3, Ordering::Relaxed);
 }
 /// Événement transmissible à un enfant : (descripteur de sa page partagée,
 /// réinitialisation manuelle).
@@ -2235,10 +2239,13 @@ unsafe fn create_file_opened(
     };
     // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
     // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
-    // l'erreur d'une tentative précédente ne doit pas rester (#905).
-    if creation == 2 || creation == 4 {
-        crate::process::set_last_error(if existed { 183 } else { 0 });
-    }
+    // l'erreur d'une tentative précédente ne doit pas rester (#905). Les
+    // autres dispositions réussies rendent 0 aussi (#1315).
+    crate::process::set_last_error(if (creation == 2 || creation == 4) && existed {
+        183
+    } else {
+        0
+    });
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
@@ -4705,6 +4712,10 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
         SyncHandle::Semaphore(_) => "Semaphore",
     })
 }
+/// Le handle est-il un événement de CreateEvent ?
+pub(crate) fn is_event_handle(h: usize) -> bool {
+    matches!(lookup_sync(h), Some(SyncHandle::Event(_)))
+}
 pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&h)
@@ -6438,6 +6449,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if matches!(handle as isize, -6..=-1) {
         return 1;
     }
+    // Événement de WSACreateEvent fermé par CloseHandle (#1360).
+    if lookup_sync(handle).is_none() && crate::dlls::ws2_32::is_wsa_event(handle) {
+        return crate::dlls::ws2_32::wsa_close_event(handle);
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6495,6 +6510,11 @@ pub unsafe extern "win64" fn create_event_a(
 }
 pub extern "win64" fn set_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : hEvent d'un WSASend de Chromium,
+        // signalé à la fin de l'E/S (#1360).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_set_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
@@ -6512,6 +6532,9 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
 }
 pub extern "win64" fn reset_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_reset_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
@@ -6663,16 +6686,67 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         };
     }
     let Some(obj) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : Chromium (serveur DevTools) l'attend
+        // par ObjectWatcher, donc par WaitForSingleObject (#1351).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return wait_wsa_events(&[h], timeout);
+        }
         crate::process::set_last_error(6);
         return u32::MAX;
     };
     match obj {
+        // Événement associé à une socket par WSAEventSelect : la pile réseau
+        // de Windows le signale ; ici, l'attente interroge la socket.
+        SyncHandle::Event(e) if crate::dlls::ws2_32::has_socket_assoc(h) => {
+            let start = std::time::Instant::now();
+            loop {
+                if crate::dlls::ws2_32::handle_ready(h) || wait_event(&e, 0) == 0 {
+                    return 0;
+                }
+                if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+                    return 258;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         SyncHandle::Event(e) => wait_event(&e, timeout),
         SyncHandle::Mutex(m) => wait_mutex(&m, timeout),
         SyncHandle::Thread(t) => wait_thread(&t, timeout),
         SyncHandle::Process(p) => wait_process(&p, timeout),
         SyncHandle::CompletionPort(p) => wait_iocp(&p, timeout),
         SyncHandle::Semaphore(sem) => wait_semaphore(&sem, timeout),
+    }
+}
+/// Attente « un seul parmi » qui contient des événements de WSACreateEvent
+/// (#1351) : ceux-ci, et les autres handles, sont interrogés sans attente
+/// jusqu'au premier prêt. Un événement WSA est à réinitialisation manuelle :
+/// l'interroger ne le consomme pas.
+fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
+    let start = std::time::Instant::now();
+    loop {
+        for (i, &h) in hs.iter().enumerate() {
+            let ready = if lookup_sync(h).is_none() {
+                if !crate::dlls::ws2_32::is_wsa_event(h) {
+                    crate::process::set_last_error(6);
+                    return u32::MAX;
+                }
+                crate::dlls::ws2_32::handle_ready(h)
+            } else {
+                match wait_for_single_object(h, 0) {
+                    0 => true,
+                    0x80 => return 0x80 + i as u32,
+                    u32::MAX => return u32::MAX,
+                    _ => false,
+                }
+            };
+            if ready {
+                return i as u32;
+            }
+        }
+        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+            return 258;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
@@ -6686,6 +6760,13 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         return u32::MAX;
     }
     let hs = std::slice::from_raw_parts(handles, count as usize);
+    if wait_all == 0
+        && hs
+            .iter()
+            .any(|&h| lookup_sync(h).is_none() && crate::dlls::ws2_32::is_wsa_event(h))
+    {
+        return wait_wsa_events(hs, timeout);
+    }
     let mut objects = Vec::with_capacity(hs.len());
     for &h in hs {
         let Some(o) = lookup_sync(h) else {
@@ -6705,8 +6786,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         loop {
             let gate = sync_gate();
             let me = std::thread::current().id();
-            let ready = objects.iter().all(|o| match o {
-                SyncHandle::Event(e) => e.is_set(&lock(&e.signaled)),
+            let ready = objects.iter().zip(hs).all(|(o, &h)| match o {
+                SyncHandle::Event(e) => {
+                    e.is_set(&lock(&e.signaled)) || crate::dlls::ws2_32::handle_ready(h)
+                }
                 SyncHandle::Mutex(m) => match m.shared.get() {
                     Some(w) => MutexObject::shared_ready(w),
                     None => {
@@ -6768,7 +6851,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
     loop {
         for (i, obj) in objects.iter().enumerate() {
             let ready = match obj {
-                SyncHandle::Event(e) => wait_event(e, 0) == 0,
+                // WinSCP (PuTTY) attend ainsi ses sockets (#1340).
+                SyncHandle::Event(e) => {
+                    wait_event(e, 0) == 0 || crate::dlls::ws2_32::handle_ready(hs[i])
+                }
                 SyncHandle::Mutex(m) => match wait_mutex(m, 0) {
                     0 => true,
                     0x80 => return 0x80 + i as u32,
@@ -7633,6 +7719,7 @@ pub fn record_exit_code(code: u32) {
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -7651,6 +7738,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
+    crate::trace!("ExitProcess : fin, code {:#x}", code as u32);
     record_exit_code(code as u32);
     std::process::exit(code)
 }
@@ -10415,6 +10503,55 @@ mod tests {
         let _ = std::fs::remove_file(linux);
     }
 
+    #[test]
+    fn create_file_reussi_remet_l_erreur_a_zero() {
+        // #1315 : un CreateFileW réussi ne laisse pas l'erreur d'un appel
+        // précédent (Claude pour Windows : 122 puis 50 sur config.json).
+        init();
+        let _teb = crate::process::test_teb();
+        let path = format!(
+            "Z:\\tmp\\winlux-k32err-{}-{}.json",
+            std::process::id(),
+            next_handle()
+        );
+        let path_c = CString::new(path).unwrap();
+        let p = path_c.as_ptr() as *const u8;
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        unsafe { close_handle(h) };
+        for (creation, flags, expected) in
+            [(3, 0x80, 0), (5, 0x80, 0), (4, 0x80, 183), (2, 0x80, 183)]
+        {
+            crate::process::set_last_error(122);
+            let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, creation, flags, 0) };
+            assert_ne!(h, usize::MAX, "disposition {creation}");
+            assert_eq!(
+                crate::process::last_error(),
+                expected,
+                "disposition {creation}"
+            );
+            unsafe { close_handle(h) };
+        }
+        let dir = CString::new("Z:\\tmp").unwrap();
+        crate::process::set_last_error(50);
+        let h = unsafe { create_file_a(dir.as_ptr() as *const u8, 0x80, 7, 0, 3, 0x0200_0000, 0) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            0,
+            "dossier (FILE_FLAG_BACKUP_SEMANTICS)"
+        );
+        unsafe { close_handle(h) };
+        crate::process::set_last_error(0);
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 1, 0x80, 0) };
+        assert_eq!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            80,
+            "CREATE_NEW sur un fichier existant"
+        );
+        unsafe { delete_file_a(p) };
+    }
     #[test]
     fn informations_etendues_d_un_handle_de_fichier() {
         init();

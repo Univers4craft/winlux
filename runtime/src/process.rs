@@ -362,6 +362,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     PEB.store(peb, Ordering::Relaxed);
     if crate::wow32::active() {
         crate::wow32::init_peb32(exe.base);
+    } else {
+        // PEB->Ldr : modules lus par un autre processus (crashpad, #1314).
+        crate::ldr::install(peb);
     }
     let _ = PROCESS.set(ProcessInfo {
         command_line_w,
@@ -485,7 +488,7 @@ fn remove_signal_stack() {
 /// Libère le TEB du thread courant (blocs TLS statiques, tableau
 /// d'expansion, pile de signal) et détache GS : plus aucun code Windows ne
 /// tourne sur ce thread.
-fn free_current_teb() {
+pub fn free_current_teb() {
     let t = teb();
     if t == 0 {
         return;
@@ -523,6 +526,16 @@ fn free_current_teb() {
         libc::munmap(t as *mut libc::c_void, TEB_SIZE);
     }
     remove_signal_stack();
+}
+
+/// Le TEB `t` appartient-il encore à un thread vivant ? (tests, #1361)
+#[cfg(test)]
+pub fn teb_known(t: usize) -> bool {
+    THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&t)
 }
 
 /// Lit une valeur TLS Win32 du TEB courant.

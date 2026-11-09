@@ -299,11 +299,8 @@ unsafe extern "win64" fn dev_tex2d1(
 }
 
 unsafe extern "win64" fn dev_create_query1(_: *mut Device, desc: *const c_void, out: Out) -> i32 {
-    if out.is_null() || desc.is_null() {
-        return E_INVALIDARG;
-    }
-    *out = create_dummy_com_obj();
-    S_OK
+    // D3D11_QUERY_DESC1 : D3D11_QUERY_DESC suivi de ContextType (#1317).
+    super::query::create(desc.cast(), true, out)
 }
 
 unsafe extern "win64" fn dev_write_sub(

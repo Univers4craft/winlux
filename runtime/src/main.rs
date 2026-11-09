@@ -20,6 +20,7 @@ mod imaging;
 mod intl;
 mod journal;
 mod launch;
+mod ldr;
 mod loader;
 pub mod log;
 mod managed;

@@ -2531,14 +2531,44 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
         }
         return ok;
     }
-    let mut map = lock(windows());
-    match map.get_mut(&target) {
-        Some(w) => {
+    {
+        let mut map = lock(windows());
+        if let Some(w) = map.get_mut(&target) {
             w.pending.extend(cmds);
+            return true;
+        }
+    }
+    // Fenêtre d'un autre processus du compte : le processus GPU de Chromium
+    // peint les surgissants du navigateur en logiciel (GetDC, puis BitBlt
+    // depuis une section DIB). Les images vont tout de suite sur sa fenêtre
+    // X11, commune à tous les clients du serveur (#1345).
+    match foreign_window(target) {
+        Some(f) => {
+            for cmd in &cmds {
+                paint_foreign(f.xid, cmd);
+            }
             true
         }
         None => false,
     }
+}
+
+/// Peint une commande sur la fenêtre X11 d'un autre processus. Seules les
+/// images (BitBlt, StretchBlt, SetDIBitsToDevice, StretchDIBits depuis la
+/// mémoire) passent : c'est ce qu'envoie une sortie logicielle.
+fn paint_foreign(xid: u64, cmd: &DrawCmd) {
+    if let DrawCmd::Bitmap { rect, pixels, rop } = cmd {
+        #[cfg(test)]
+        FOREIGN_PAINTS.with(|p| p.borrow_mut().push((xid, *rect, pixels.len())));
+        with_backend(|b| b.paint_foreign(xid, *rect, pixels, *rop));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Images envoyées à des fenêtres étrangères (xid, rectangle, pixels).
+    pub(crate) static FOREIGN_PAINTS: std::cell::RefCell<Vec<(u64, Rect, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
@@ -2947,6 +2977,17 @@ pub const WINDOW_NORMAL: u8 = 0;
 pub const WINDOW_MINIMIZED: u8 = 1;
 pub const WINDOW_MAXIMIZED: u8 = 2;
 
+/// wParam de WM_SIZE selon l'état de la fenêtre : SIZE_RESTORED (0),
+/// SIZE_MINIMIZED (1), SIZE_MAXIMIZED (2). WPF ne tient son WindowState
+/// qu'ainsi : sans lui, le bouton « Restaurer » restait sans effet (#1328).
+pub fn size_kind(state: u8) -> usize {
+    match state {
+        WINDOW_MAXIMIZED => 2,
+        WINDOW_MINIMIZED => 1,
+        _ => 0,
+    }
+}
+
 pub trait GuiBackend: Send {
     /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
     fn pump(&mut self) -> Vec<PendingEvent> {
@@ -2963,6 +3004,9 @@ pub trait GuiBackend: Send {
     fn foreign_size(&mut self, _xid: u64) -> Option<(i32, i32)> {
         None
     }
+    /// Image (pixels COLORREF, rectangle logique) posée sur la fenêtre X11
+    /// d'un autre processus (#1345).
+    fn paint_foreign(&mut self, _xid: u64, _rect: Rect, _pixels: &[u32], _rop: RasterOp) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
@@ -2991,6 +3035,8 @@ pub trait GuiBackend: Send {
     /// seuls ces rectangles (coordonnées client) restent visibles et
     /// cliquables ; `None` rend la fenêtre rectangulaire.
     fn set_shape(&mut self, _hwnd: usize, _rects: Option<&[Rect]>) {}
+    /// Forme X (SHAPE) posée sur la fenêtre X11 d'un autre processus (#1357).
+    fn shape_foreign(&mut self, _xid: u64, _rects: Option<&[Rect]>) {}
     /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
@@ -3698,7 +3744,29 @@ pub fn destroy_window(hwnd: usize) -> bool {
     // La HWND n'est plus valide qu'à partir d'ici.
     lock(windows()).remove(&hwnd);
     lock(destroying()).remove(&hwnd);
+    lock(window_props()).retain(|(h, _), _| *h != hwnd);
     true
+}
+
+/// Propriétés de fenêtre (SetProp/GetProp) : clé = nom en minuscules, ou
+/// `#n` pour un atome entier. La VCL y range l'objet Delphi de chaque
+/// contrôle (ControlAtom) et le retrouve pour refléter WM_NOTIFY,
+/// WM_DRAWITEM… (#1249, #1250).
+fn window_props() -> &'static Mutex<HashMap<(usize, String), usize>> {
+    static S: OnceLock<Mutex<HashMap<(usize, String), usize>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_window_prop(hwnd: usize, key: String, data: usize) {
+    lock(window_props()).insert((hwnd, key), data);
+}
+
+pub fn window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).get(&(hwnd, key.to_string())).copied()
+}
+
+pub fn remove_window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).remove(&(hwnd, key.to_string()))
 }
 
 pub fn register_class(name: &str, info: ClassInfo) -> bool {
@@ -4022,6 +4090,22 @@ pub fn set_visible(hwnd: usize, visible: bool) -> bool {
         }
         None => false,
     }
+}
+
+/// Fenêtres de premier niveau visibles du fil appelant, du sommet vers le
+/// fond, avec leur style : candidates à l'activation quand la fenêtre qui
+/// avait le focus disparaît (#1311).
+pub fn thread_visible_top_levels() -> Vec<(usize, u32)> {
+    let tid = std::thread::current().id();
+    let map = lock(windows());
+    top_level_in_z_order(&map)
+        .into_iter()
+        .filter_map(|h| {
+            map.get(&h)
+                .filter(|w| w.owner == tid && w.visible)
+                .map(|w| (h, w.style))
+        })
+        .collect()
 }
 
 /// Fenêtre de premier niveau au sommet de l'ordre Z (visible de préférence).
@@ -4481,6 +4565,21 @@ pub fn window_style(hwnd: usize) -> Option<u32> {
     lock(windows()).get(&hwnd).map(|w| w.style)
 }
 
+/// Enfant transparent qui laisse voir son parent : WS_CHILD et
+/// WS_EX_TRANSPARENT, hors contrôles intégrés (qui peignent eux-mêmes).
+/// Sous Windows, la chaîne d'échange présentée dans le parent passe devant
+/// le contenu GDI d'un tel enfant ; en X11 sa fenêtre la masquerait. La
+/// « Chrome Legacy Window » de Chromium couvre ainsi toute la zone client
+/// où le processus GPU présente la page (#1337).
+pub fn is_see_through_child(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TRANSPARENT: u32 = 0x20;
+    let see_through = lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.style & WS_CHILD != 0 && w.ex_style & WS_EX_TRANSPARENT != 0);
+    see_through && super::controls::kind_of(hwnd).is_none()
+}
+
 /// Renvoie le style étendu WS_EX_* de la fenêtre.
 pub fn window_ex_style(hwnd: usize) -> Option<u32> {
     lock(windows()).get(&hwnd).map(|w| w.ex_style)
@@ -4881,7 +4980,14 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    #[test]
+    fn wm_size_dit_l_etat_de_la_fenetre() {
+        assert_eq!(size_kind(WINDOW_NORMAL), 0);
+        assert_eq!(size_kind(WINDOW_MINIMIZED), 1);
+        assert_eq!(size_kind(WINDOW_MAXIMIZED), 2);
+    }
+
     use super::*;
     use std::sync::atomic::Ordering;
 
@@ -4952,6 +5058,50 @@ mod tests {
         let popup = fenetre(haut, 0, Rect::from_size(300, 300, 50, 50));
         assert_eq!(screen_rect(popup), Some(Rect::from_size(300, 300, 50, 50)));
         for h in [bouton, groupe, popup, haut] {
+            destroy_window(h);
+        }
+    }
+
+    pub(crate) fn fenetre_essai(style: u32, ex_style: u32, parent: usize) -> Window {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        Window {
+            class: "Chrome_RenderWidgetHostHWND".to_string(),
+            wnd_proc: proc_addr as usize,
+            background: 6,
+            title: String::new(),
+            rect: Rect::from_size(0, 37, 1000, 763),
+            visible: true,
+            parent,
+            owner: std::thread::current().id(),
+            needs_paint: false,
+            paint_queued: false,
+            style,
+            ex_style,
+            pending: Vec::new(),
+            menu_bar: 0,
+            painting: false,
+        }
+    }
+
+    /// « Chrome Legacy Window » : WS_CHILD | WS_VISIBLE, WS_EX_TRANSPARENT,
+    /// au-dessus de la zone client où le processus GPU présente (#1337).
+    #[test]
+    fn enfant_transparent_laisse_voir_le_parent() {
+        // Fenêtres de premier niveau : l'ordre Z est global aux tests.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let parent = alloc_hwnd();
+        insert_window(parent, fenetre_essai(0x06c8_0000, 0, 0));
+        let legacy = alloc_hwnd();
+        insert_window(legacy, fenetre_essai(0x4600_0000, 0x20, parent));
+        let opaque = alloc_hwnd();
+        insert_window(opaque, fenetre_essai(0x4600_0000, 0, parent));
+        let haut = alloc_hwnd();
+        insert_window(haut, fenetre_essai(0x06c8_0000, 0x20, 0));
+        assert!(is_see_through_child(legacy));
+        assert!(!is_see_through_child(opaque));
+        assert!(!is_see_through_child(haut));
+        assert!(!is_see_through_child(parent));
+        for h in [legacy, opaque, haut, parent] {
             destroy_window(h);
         }
     }

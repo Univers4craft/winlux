@@ -57,7 +57,7 @@ pub unsafe extern "win64" fn bcrypt_gen_random(
     if buf.is_null() || _flags & !2 != 0 || (_flags & 2 != 0 && _alg != 0) {
         return STATUS_INVALID_PARAMETER;
     }
-    if _flags & 2 == 0 && _alg != 1 {
+    if _flags & 2 == 0 && resolve(_alg) != ALG_RNG {
         return STATUS_INVALID_PARAMETER;
     }
     let slice = std::slice::from_raw_parts_mut(buf, len as usize);
@@ -91,6 +91,27 @@ fn alg_from_name(name: &str) -> Option<usize> {
 
 /// Les poignées HMAC valent l'algorithme + 0x10 (BCRYPT_ALG_HANDLE_HMAC_FLAG).
 const HMAC_BIT: usize = 0x10;
+
+/// Pseudo-handles d'algorithme (documentation CNG, « CNG Algorithm
+/// Pseudo-handles ») : utilisables sans BCryptOpenAlgorithmProvider.
+/// .NET hache en un coup avec eux (SHA1.HashData, IID des délégués
+/// CsWinRT dans Paint.NET, #1364).
+fn resolve(alg: usize) -> usize {
+    match alg {
+        0x21 => ALG_MD5,
+        0x31 => ALG_SHA1,
+        0x41 => ALG_SHA256,
+        0x51 => ALG_SHA384,
+        0x61 => ALG_SHA512,
+        0x81 => ALG_RNG,
+        0x91 => ALG_MD5 | HMAC_BIT,
+        0xa1 => ALG_SHA1 | HMAC_BIT,
+        0xb1 => ALG_SHA256 | HMAC_BIT,
+        0xc1 => ALG_SHA384 | HMAC_BIT,
+        0xd1 => ALG_SHA512 | HMAC_BIT,
+        other => other,
+    }
+}
 
 fn hash_length(alg: usize) -> Option<u32> {
     match alg & !HMAC_BIT {
@@ -151,6 +172,7 @@ pub unsafe extern "win64" fn bcrypt_get_property(
     if prop.is_null() || result_len.is_null() {
         return 0xC000_000Du32 as i32;
     }
+    let h = resolve(h);
     let name = crate::dlls::wstr(prop);
     if name == "HashDigestLength" {
         if let Some(len) = hash_length(h) {
@@ -180,6 +202,7 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
     secret_len: u32,
     _flags: u32,
 ) -> i32 {
+    let alg = resolve(alg);
     if hash_handle.is_null() || hash_length(alg).is_none() {
         return 0xC000_000Du32 as i32;
     }
@@ -320,6 +343,7 @@ pub unsafe extern "win64" fn bcrypt_hash(
     output: *mut u8,
     output_len: u32,
 ) -> i32 {
+    let alg = resolve(alg);
     if output.is_null() {
         return 0xC000_000Du32 as i32;
     }
@@ -406,6 +430,61 @@ mod tests {
             0xC000000Du32 as i32
         );
         assert_eq!(bcrypt_close_algorithm_provider(h, 0), 0);
+    }
+
+    /// #1364 : hachage en un coup avec un pseudo-handle (SHA1.HashData de
+    /// .NET, utilisé par CsWinRT dans Paint.NET).
+    #[test]
+    fn pseudo_handle_sha1_en_un_coup() {
+        let mut out = [0u8; 20];
+        let r = unsafe {
+            bcrypt_hash(
+                0x31,
+                std::ptr::null(),
+                0,
+                b"abc".as_ptr(),
+                3,
+                out.as_mut_ptr(),
+                20,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(out[..4], [0xa9, 0x99, 0x3e, 0x36]);
+        assert_eq!(out[16..], [0x9c, 0xd0, 0xd8, 0x9d]);
+        // SHA-256 par pseudo-handle, et longueur du condensat.
+        let mut out = [0u8; 32];
+        let r = unsafe {
+            bcrypt_hash(
+                0x41,
+                std::ptr::null(),
+                0,
+                b"abc".as_ptr(),
+                3,
+                out.as_mut_ptr(),
+                32,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(out[..4], [0xba, 0x78, 0x16, 0xbf]);
+        let prop: Vec<u16> = "HashDigestLength".encode_utf16().chain([0]).collect();
+        let (mut len, mut got) = (0u32, 0u32);
+        let r = unsafe {
+            bcrypt_get_property(
+                0x31,
+                prop.as_ptr(),
+                (&mut len as *mut u32).cast(),
+                4,
+                &mut got,
+                0,
+            )
+        };
+        assert_eq!((r, len), (0, 20));
+        // Générateur par pseudo-handle.
+        let mut bytes = [0u8; 16];
+        assert_eq!(
+            unsafe { bcrypt_gen_random(0x81, bytes.as_mut_ptr(), 16, 0) },
+            0
+        );
     }
 
     #[test]
