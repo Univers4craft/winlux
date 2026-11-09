@@ -40,7 +40,8 @@ pub(crate) fn abi_named<T>(
     label: &'static str,
 ) -> *const T {
     if !x86() {
-        return t;
+        // WINLUX_COMTRACE : chaque appel de méthode journalisé (#996).
+        return crate::thunks::com_trace_table(t, module, label).unwrap_or(t);
     }
     static CACHE: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
     let key = t as *const T as usize;
