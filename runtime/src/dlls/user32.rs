@@ -10,6 +10,7 @@ use std::ffi::c_void;
 
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOREDRAW: u32 = 0x0008;
 const SWP_SHOWWINDOW: u32 = 0x0040;
 const SWP_HIDEWINDOW: u32 = 0x0080;
@@ -1024,8 +1025,50 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|&h| h != hwnd);
+    // Fenêtre possédée qui a le focus (elle ou une de ses filles) : comme
+    // Windows, sa destruction rend la main à son propriétaire. Qt 5 donne
+    // le focus à la fenêtre cachée de sa boîte de fichiers native avant de
+    // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
+    // barre de menus gardait les libellés grisés de l'attente (#1311).
+    let owner = owner_to_refocus(hwnd);
     if gui::destroy_window(hwnd) {
+        if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
+            set_focus(owner);
+        }
         1
+    } else {
+        0
+    }
+}
+
+/// Propriétaire à qui rendre le focus quand `hwnd` est détruite : seulement
+/// pour une fenêtre de premier niveau possédée qui a le focus du fil, si ce
+/// propriétaire est visible et activé.
+unsafe fn owner_to_refocus(hwnd: usize) -> usize {
+    let Some(style) = gui::window_style(hwnd) else {
+        return 0;
+    };
+    if style & WS_CHILD != 0 {
+        return 0;
+    }
+    let focus = gui::focused_window();
+    let mut inside = focus;
+    for _ in 0..64 {
+        if inside == 0 || inside == hwnd {
+            break;
+        }
+        inside = gui::window_parent(inside).unwrap_or(0);
+    }
+    if focus == 0 || inside != hwnd {
+        return 0;
+    }
+    let owner = owner_top_level(get_window_long_ptr_w(hwnd, GWLP_HWNDPARENT) as usize);
+    if owner == 0 || owner == hwnd {
+        return 0;
+    }
+    let ok = gui::window_style(owner).is_some_and(|s| s & WS_DISABLED == 0 && s & 0x1000_0000 != 0);
+    if ok {
+        owner
     } else {
         0
     }
@@ -1156,6 +1199,30 @@ pub unsafe extern "win64" fn set_window_pos(
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     };
+    // WM_WINDOWPOSCHANGING, envoyé avant tout changement : la fenêtre peut
+    // y corriger la position ou la taille demandées (contraintes de la VCL,
+    // de WinForms…), comme sous Windows (#1251).
+    let (x, y, cx, cy, flags) = {
+        let mut pos = WindowPos {
+            hwnd,
+            insert_after: _insert_after,
+            x,
+            y,
+            cx,
+            cy,
+            flags,
+        };
+        if flags & (SWP_NOMOVE | SWP_NOSIZE) != (SWP_NOMOVE | SWP_NOSIZE) {
+            send_message_w(hwnd, WM_WINDOWPOSCHANGING, 0, &mut pos as *mut _ as isize);
+            if gui::window_rect(hwnd).is_none() {
+                crate::process::set_last_error(1400);
+                return 0;
+            }
+        }
+        // La fenêtre ne peut que retirer des changements, pas en ajouter.
+        let keep = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOREDRAW;
+        (pos.x, pos.y, pos.cx, pos.cy, flags | (pos.flags & keep))
+    };
     let left = if flags & SWP_NOMOVE != 0 { old.left } else { x };
     let top = if flags & SWP_NOMOVE != 0 { old.top } else { y };
     let width = if flags & SWP_NOSIZE != 0 {
@@ -1245,6 +1312,30 @@ pub unsafe extern "win64" fn set_window_pos(
         frame_changed(hwnd, rect, flags);
     }
 
+    // WM_WINDOWPOSCHANGED, envoyé une fois la fenêtre placée : la VCL n'y
+    // relit qu'ainsi ses Left/Top/Width/Height. Sans lui, chaque propriété
+    // lue du DFM effaçait la précédente et le champ du port de WinSCP
+    // restait en (0,0) (#1251). WM_SIZE et WM_MOVE restent postés.
+    if moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0 {
+        let mut done = flags;
+        if !moved {
+            done |= SWP_NOMOVE;
+        }
+        if !resized {
+            done |= SWP_NOSIZE;
+        }
+        let mut pos = WindowPos {
+            hwnd,
+            insert_after: _insert_after,
+            x: rect.left,
+            y: rect.top,
+            cx: rect.width(),
+            cy: rect.height(),
+            flags: done,
+        };
+        send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
+    }
+
     if flags & SWP_NOREDRAW == 0
         && gui::window_rect(hwnd).is_some()
         && (moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0)
@@ -1256,6 +1347,9 @@ pub unsafe extern "win64" fn set_window_pos(
     }
     1
 }
+
+const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 
 /// Fenêtres dont le cadre du gestionnaire a été retiré par `frame_changed`.
 static OWN_FRAME: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
@@ -4129,30 +4223,79 @@ pub extern "win64" fn get_caret_blink_time() -> u32 {
     530
 }
 
-// ---------- Property stubs ----------
+// ---------- SetProp / GetProp ----------
 
-pub unsafe extern "win64" fn get_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
+/// Clé d'une propriété : un atome (MAKEINTATOM) et la chaîne qu'il nomme
+/// désignent la même propriété, sans distinction de casse, comme sous Windows.
+unsafe fn prop_key(name: usize, wide: bool) -> Option<String> {
+    if name == 0 {
+        return None;
+    }
+    if name < 0x10000 {
+        let atom = name as u16;
+        if atom >= 0xC000 {
+            if let Some(n) = super::kernel32_legacy::atom_name(atom) {
+                return Some(n.to_lowercase());
+            }
+        }
+        return Some(format!("#{atom}"));
+    }
+    let s = if wide {
+        super::wstr(name as *const u16)
+    } else {
+        super::cstr(name as *const u8)
+    };
+    if let Some(n) = s.strip_prefix('#').and_then(|d| d.parse::<u16>().ok()) {
+        if n > 0 && n < 0xC000 {
+            return Some(format!("#{n}"));
+        }
+    }
+    Some(s.to_lowercase())
 }
 
-pub unsafe extern "win64" fn get_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
-}
-
-pub unsafe extern "win64" fn set_prop_a(_hwnd: usize, _name: *const u8, _data: usize) -> i32 {
+unsafe fn set_prop(hwnd: usize, name: usize, wide: bool, data: usize) -> i32 {
+    let Some(key) = prop_key(name, wide) else {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    };
+    if hwnd == 0 {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    gui::set_window_prop(hwnd, key, data);
     1
 }
 
-pub unsafe extern "win64" fn set_prop_w(_hwnd: usize, _name: *const u16, _data: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn get_prop_a(hwnd: usize, name: *const u8) -> usize {
+    prop_key(name as usize, false)
+        .and_then(|k| gui::window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn remove_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
+pub unsafe extern "win64" fn get_prop_w(hwnd: usize, name: *const u16) -> usize {
+    prop_key(name as usize, true)
+        .and_then(|k| gui::window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn remove_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
+pub unsafe extern "win64" fn set_prop_a(hwnd: usize, name: *const u8, data: usize) -> i32 {
+    set_prop(hwnd, name as usize, false, data)
+}
+
+pub unsafe extern "win64" fn set_prop_w(hwnd: usize, name: *const u16, data: usize) -> i32 {
+    set_prop(hwnd, name as usize, true, data)
+}
+
+pub unsafe extern "win64" fn remove_prop_a(hwnd: usize, name: *const u8) -> usize {
+    prop_key(name as usize, false)
+        .and_then(|k| gui::remove_window_prop(hwnd, &k))
+        .unwrap_or(0)
+}
+
+pub unsafe extern "win64" fn remove_prop_w(hwnd: usize, name: *const u16) -> usize {
+    prop_key(name as usize, true)
+        .and_then(|k| gui::remove_window_prop(hwnd, &k))
+        .unwrap_or(0)
 }
 
 // ---------- Misc ----------
@@ -4609,6 +4752,64 @@ mod tests {
         assert!(!floating_popup(0x0000_0000, 0x0800_0080));
     }
 
+    /// #1311 : Qt 5 donne le focus à la fenêtre cachée de sa boîte de
+    /// fichiers native puis la détruit ; le propriétaire doit le retrouver
+    /// (WM_SETFOCUS), sinon VLC reste inactif et sa barre de menus grisée.
+    #[test]
+    fn focus_rendu_au_proprietaire_a_la_destruction() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SETFOCUS: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == gui::WM_SETFOCUS {
+                SETFOCUS.fetch_add(1, Ordering::SeqCst);
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let got = std::thread::spawn(|| unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    80,
+                    60,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x10CF_0000);
+            set_window_long_ptr_w(main, -4, proc_ as *const () as isize);
+            let dialog = make(0x86CC_0000);
+            set_window_long_ptr_w(dialog, GWLP_HWNDPARENT, main as isize);
+            set_focus(main);
+            let before = SETFOCUS.load(Ordering::SeqCst);
+            set_focus(dialog);
+            assert_eq!(get_focus(), dialog);
+            destroy_window(dialog);
+            let r = (
+                get_focus() == main,
+                SETFOCUS.load(Ordering::SeqCst) - before,
+            );
+            // Une fenêtre détruite sans le focus ne le déplace pas.
+            let other = make(0x86CC_0000);
+            set_window_long_ptr_w(other, GWLP_HWNDPARENT, main as isize);
+            set_focus(0);
+            destroy_window(other);
+            let r2 = get_focus();
+            destroy_window(main);
+            (r, r2)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(got, ((true, 1), 0));
+    }
+
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
     /// de cases à cocher ; à 0, ils étaient tronqués.
     #[test]
@@ -4862,6 +5063,90 @@ mod tests {
             let r = gui::screen_rect(hwnd).expect("rectangle");
             assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
             destroy_window(hwnd);
+        }
+    }
+
+    static POS_CHANGES: std::sync::Mutex<Vec<(i32, i32, i32, i32, u32)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_vcl_bornes(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_WINDOWPOSCHANGING {
+            // Contrainte de largeur maximale, comme Constraints.MaxWidth.
+            let pos = &mut *(l as *mut WindowPos);
+            if pos.cx > 300 {
+                pos.cx = 300;
+            }
+        }
+        if msg == WM_WINDOWPOSCHANGED {
+            // UpdateBounds de la VCL : relit la fenêtre déjà placée.
+            let pos = &*(l as *const WindowPos);
+            let r = gui::window_rect(h).unwrap();
+            assert_eq!(
+                (pos.x, pos.y, pos.cx, pos.cy),
+                (r.left, r.top, r.width(), r.height())
+            );
+            POS_CHANGES
+                .lock()
+                .unwrap()
+                .push((r.left, r.top, r.width(), r.height(), pos.flags));
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// SetWindowPos envoie WM_WINDOWPOSCHANGING puis WM_WINDOWPOSCHANGED :
+    /// la VCL y relit ses bornes, sinon le Top lu du DFM effaçait le Left
+    /// (champ du port de WinSCP en (0,0), #1251).
+    #[test]
+    fn placement_annonce_a_la_fenetre() {
+        let name: Vec<u16> = "Winlux1251Bornes".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_vcl_bornes as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let h = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                0,
+                121,
+                14,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            POS_CHANGES.lock().unwrap().clear();
+            // Left := 280, puis Top := 87 avec le Left relu.
+            assert_eq!(set_window_pos(h, 0, 280, 0, 121, 14, 0x14), 1);
+            let r = gui::window_rect(h).unwrap();
+            assert_eq!(set_window_pos(h, 0, r.left, 87, 121, 14, 0x14), 1);
+            assert_eq!(set_window_pos(h, 0, 0, 0, 500, 23, 0x16), 1);
+            // Rien ne change : pas de WM_WINDOWPOSCHANGED.
+            assert_eq!(set_window_pos(h, 0, 0, 0, 300, 23, 0x16), 1);
+            let seen = POS_CHANGES.lock().unwrap().clone();
+            assert_eq!(seen.len(), 3, "{seen:?}");
+            assert_eq!((seen[0].0, seen[0].1), (280, 0));
+            assert_eq!((seen[1].0, seen[1].1), (280, 87));
+            assert_eq!(seen[1].4 & SWP_NOSIZE, SWP_NOSIZE);
+            // La contrainte posée dans WM_WINDOWPOSCHANGING est appliquée.
+            assert_eq!(
+                (seen[2].0, seen[2].1, seen[2].2, seen[2].3),
+                (280, 87, 300, 23)
+            );
+            destroy_window(h);
         }
     }
 
@@ -5273,6 +5558,52 @@ mod tests {
 
     /// Fenêtre de premier niveau créée en 0×0 (TApplication de la VCL) : elle
     /// garde sa taille nulle ; seul CW_USEDEFAULT donne 800×600 (#1276).
+    #[test]
+    fn proprietes_de_fenetre_gardees() {
+        // La VCL (WinSCP x86) range son objet sous un atome et le relit pour
+        // refléter WM_NOTIFY / WM_DRAWITEM à ses contrôles (#1249, #1250).
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        let hwnd = unsafe {
+            create_window_ex_w(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(hwnd, 0);
+        let nom: Vec<u16> = "ControlOfs0040000000000123\0".encode_utf16().collect();
+        let atom = super::super::kernel32_legacy::add_atom_w(nom.as_ptr() as usize);
+        assert!(atom >= 0xC000);
+        let autre: Vec<u16> = "CONTROLOFS0040000000000123\0".encode_utf16().collect();
+        let int7 = b"#7\0";
+        unsafe {
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0);
+            assert_eq!(
+                set_prop_w(hwnd, atom as usize as *const u16, 0xfee3_54a0),
+                1
+            );
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0xfee3_54a0);
+            // Le nom, quelle que soit sa casse, désigne la même propriété.
+            assert_eq!(get_prop_w(hwnd, autre.as_ptr()), 0xfee3_54a0);
+            assert_eq!(set_prop_a(hwnd, 7 as *const u8, 42), 1);
+            assert_eq!(get_prop_a(hwnd, int7.as_ptr()), 42);
+            assert_eq!(remove_prop_w(hwnd, nom.as_ptr()), 0xfee3_54a0);
+            assert_eq!(get_prop_w(hwnd, atom as usize as *const u16), 0);
+            destroy_window(hwnd);
+            // Détruite : ses propriétés partent avec elle.
+            assert_eq!(gui::window_prop(hwnd, "#7"), None);
+        }
+    }
+
     #[test]
     fn fenetre_de_taille_nulle_reste_nulle() {
         let class: Vec<u16> = "Static\0".encode_utf16().collect();
