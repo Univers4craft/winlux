@@ -961,6 +961,9 @@ pub struct X11Backend {
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
     back: HashMap<usize, (u32, u16, u16)>,
+    /// Fenêtres X où Direct3D présente (ce processus ou un autre : processus
+    /// GPU de Chromium) : leur contenu ne vient pas du dessin GDI (#1374).
+    direct3d: std::collections::HashSet<u32>,
     /// Enfants transparents (WS_CHILD et WS_EX_TRANSPARENT, hors
     /// contrôles intégrés) : fenêtres X « InputOnly », qui reçoivent la souris
     /// sans masquer ce qu'un autre processus présente dans le parent
@@ -1177,6 +1180,7 @@ impl X11Backend {
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
+            direct3d: std::collections::HashSet::new(),
             see_through: std::collections::HashSet::new(),
             menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
@@ -2576,6 +2580,16 @@ impl X11Backend {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if self.presented_by_direct3d(e.window) {
+                    // Image de Direct3D : ni tampon GDI ni thème par-dessus,
+                    // le programme redessine sur WM_PAINT (#1374).
+                    return (e.count == 0).then_some(PendingEvent {
+                        hwnd,
+                        message: gui::WM_PAINT,
+                        wparam: 0,
+                        lparam: 0,
+                    });
+                }
                 if self.is_frame(hwnd, e.window) {
                     if e.count == 0 {
                         self.paint_menu_bar(hwnd);
@@ -3206,6 +3220,36 @@ impl X11Backend {
         }
         self.before_x11();
         let _ = self.conn.flush();
+    }
+
+    fn direct3d_atom(&self) -> Option<Atom> {
+        self.conn
+            .intern_atom(false, b"_WINLUX_DIRECT3D")
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    }
+
+    /// La fenêtre X reçoit-elle les images d'une chaîne d'échange Direct3D,
+    /// d'après la marque `_WINLUX_DIRECT3D` posée par le présentateur (#1374) ?
+    fn presented_by_direct3d(&mut self, xwin: u32) -> bool {
+        if self.direct3d.contains(&xwin) {
+            return true;
+        }
+        let Some(atom) = self.direct3d_atom() else {
+            return false;
+        };
+        let marked = self
+            .conn
+            .get_property(false, xwin, atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|r| r.value_len > 0);
+        if marked {
+            self.direct3d.insert(xwin);
+        }
+        marked
     }
 
     /// Crée, déplace ou retire la zone client placée sous la barre de menus.
@@ -4331,6 +4375,43 @@ mod tests {
         backend.conn.destroy_window(win).unwrap();
     }
 
+    /// #1374 : la marque Direct3D posée par un client (processus GPU) est
+    /// lue par le propriétaire de la fenêtre, sur une autre connexion.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn marque_direct3d_lue_par_le_proprietaire_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut owner = X11Backend::connect().expect("X11");
+        let mut gpu = X11Backend::connect().expect("X11");
+        let root = owner.conn.setup().roots[owner.screen].root;
+        let win = owner.conn.generate_id().unwrap();
+        owner
+            .conn
+            .create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                40,
+                20,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new().background_pixel(0xF3F3F3),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(!owner.presented_by_direct3d(win));
+        gpu.mark_direct3d(win as u64);
+        assert!(
+            owner.presented_by_direct3d(win),
+            "marque invisible du propriétaire"
+        );
+        owner.conn.destroy_window(win).unwrap();
+    }
+
     /// #1345 : image posée par un autre processus (processus GPU de
     /// Chromium) sur un drawable X11 qui ne lui appartient pas.
     #[test]
@@ -4497,6 +4578,31 @@ impl gui::GuiBackend for X11Backend {
 
     fn native_window(&mut self, hwnd: usize) -> Option<u64> {
         self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
+    fn mark_direct3d(&mut self, xid: u64) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
+        };
+        let Some(atom) = self.direct3d_atom() else {
+            return;
+        };
+        use x11rb::wrapper::ConnectionExt as _;
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            xid,
+            atom,
+            AtomEnum::CARDINAL,
+            &[1],
+        );
+        // Fond « None » : une exposition ne repeint pas le fond gris par-dessus
+        // la dernière image présentée.
+        let _ = self.conn.change_window_attributes(
+            xid,
+            &x11rb::protocol::xproto::ChangeWindowAttributesAux::new().background_pixmap(0),
+        );
+        let _ = self.conn.flush();
+        self.direct3d.insert(xid);
     }
 
     fn paint_foreign(&mut self, xid: u64, rect: Rect, pixels: &[u32], rop: gui::RasterOp) {

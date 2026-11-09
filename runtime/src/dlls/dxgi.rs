@@ -365,6 +365,9 @@ impl GlContext {
             } else {
                 (glx.XDefaultRootWindow)(display) as u64
             };
+            if hwnd != 0 {
+                crate::dlls::gui::mark_direct3d_window(drawable);
+            }
 
             if (glx.MakeCurrent)(display, drawable, context) == 0 {
                 log_error!("dxgi", "glXMakeCurrent a échoué");
