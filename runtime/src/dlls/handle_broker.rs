@@ -529,7 +529,16 @@ fn request(pid: i32, text: &str, fds: &[OwnedFd]) -> Result<(String, Vec<OwnedFd
 /// l'appelant) dans le processus `pid`. `suspended` : enfant pas encore
 /// démarré, on choisit son numéro et on dépose sans attendre.
 pub(crate) fn put(pid: i32, h: usize, inherit: bool, suspended: bool) -> Result<usize, u32> {
-    let (desc, fds) = crate::dlls::inherit::describe(h, false).ok_or(ERROR_NOT_SUPPORTED)?;
+    let Some((desc, fds)) = crate::dlls::inherit::describe(h, false) else {
+        // Toujours journalisé : le type d'objet dit quoi rendre
+        // transmissible (#767).
+        let kind = crate::dlls::kernel32::object_type_name(h).unwrap_or("inconnu");
+        crate::log_warn!(
+            "process",
+            "DuplicateHandle({h:#x}) vers le processus {pid} : objet {kind} non transmissible"
+        );
+        return Err(ERROR_NOT_SUPPORTED);
+    };
     put_described(pid, &desc, fds, inherit, suspended)
 }
 

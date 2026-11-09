@@ -246,6 +246,9 @@ impl EventObject {
 }
 struct MutexState {
     owner: Option<ThreadId>,
+    /// Tid Linux du propriétaire, pour passer le mutex dans une page
+    /// partagée (DuplicateHandle vers un autre processus, #767).
+    owner_os: u32,
     recursion: usize,
 }
 pub(crate) struct MutexObject {
@@ -273,6 +276,7 @@ impl MutexObject {
         MutexObject {
             state: Mutex::new(MutexState {
                 owner: owned.then(|| std::thread::current().id()),
+                owner_os: if owned { os_thread_id() } else { 0 },
                 recursion: usize::from(owned),
             }),
             changed: Condvar::new(),
@@ -300,6 +304,34 @@ impl MutexObject {
         }
         None
     }
+    /// Rend le mutex partageable avec un autre processus (DuplicateHandle
+    /// du mutex « vivant » du bac à sable de Chromium, #767) : son état
+    /// passe dans une page partagée, comme celui d'un mutex nommé (#20).
+    pub(crate) fn share(&self) -> Option<i32> {
+        let _gate = sync_gate();
+        let st = lock(&self.state);
+        if self.shared.get().is_none() {
+            let w = crate::dlls::inherit::SharedWord::create(false)?;
+            let (owner, depth) = match st.owner {
+                Some(_) => (st.owner_os, st.recursion as u32),
+                None => (0, 0),
+            };
+            w.slot(0).store(owner, Ordering::Release);
+            w.slot(1).store(depth, Ordering::Release);
+            w.slot(2).store(SHARED_KIND_MUTEX, Ordering::Release);
+            let _ = self.shared.set(w);
+            // Les attentes locales en cours repartent sur la page partagée.
+            self.changed.notify_all();
+        }
+        self.shared.get().map(|w| w.fd())
+    }
+    /// Mutex dont l'état vit dans une page partagée reçue d'un autre
+    /// processus.
+    pub(crate) fn adopt(word: crate::dlls::inherit::SharedWord) -> SyncHandle {
+        let m = MutexObject::new(false);
+        let _ = m.shared.set(word);
+        SyncHandle::Mutex(Arc::new(m))
+    }
     fn shared_ready(w: &crate::dlls::inherit::SharedWord) -> bool {
         let owner = w.slot(0).load(Ordering::Acquire);
         owner == 0 || owner == os_thread_id() || !os_process_alive(owner as i32)
@@ -313,6 +345,27 @@ impl SemaphoreObject {
             changed: Condvar::new(),
             shared: std::sync::OnceLock::new(),
         }
+    }
+    /// Rend le sémaphore partageable avec un autre processus : compteur et
+    /// maximum passent dans une page partagée.
+    pub(crate) fn share(&self) -> Option<i32> {
+        let _gate = sync_gate();
+        let c = lock(&self.count);
+        if self.shared.get().is_none() {
+            let w = crate::dlls::inherit::SharedWord::create(false)?;
+            w.slot(0).store(c.0.max(0) as u32, Ordering::Release);
+            w.slot(1).store(c.1.max(0) as u32, Ordering::Release);
+            w.slot(2).store(SHARED_KIND_SEMAPHORE, Ordering::Release);
+            let _ = self.shared.set(w);
+            self.changed.notify_all();
+        }
+        self.shared.get().map(|w| w.fd())
+    }
+    pub(crate) fn adopt(word: crate::dlls::inherit::SharedWord) -> SyncHandle {
+        let max = word.slot(1).load(Ordering::Acquire) as i32;
+        let sem = SemaphoreObject::new(0, max);
+        let _ = sem.shared.set(word);
+        SyncHandle::Semaphore(Arc::new(sem))
     }
     fn shared_try(w: &crate::dlls::inherit::SharedWord) -> bool {
         let c = w.slot(0);
@@ -753,6 +806,15 @@ pub(crate) fn reserve_handles_up_to(h: usize) {
 pub(crate) fn share_event(h: usize) -> Option<(i32, bool)> {
     match lookup_sync(h)? {
         SyncHandle::Event(e) => Some((e.share()?, e.manual_reset)),
+        _ => None,
+    }
+}
+/// Mutex ou sémaphore transmissible à un autre processus : (descripteur
+/// de sa page partagée, vrai pour un sémaphore).
+pub(crate) fn share_sync(h: usize) -> Option<(i32, bool)> {
+    match lookup_sync(h)? {
+        SyncHandle::Mutex(m) => Some((m.share()?, false)),
+        SyncHandle::Semaphore(s) => Some((s.share()?, true)),
         _ => None,
     }
 }
@@ -4544,17 +4606,8 @@ fn share_named(
             let manual = w.slot(3).load(Ordering::Acquire) != 0;
             EventObject::adopt(manual, w)
         }
-        SHARED_KIND_MUTEX => {
-            let m = MutexObject::new(false);
-            let _ = m.shared.set(w);
-            SyncHandle::Mutex(Arc::new(m))
-        }
-        _ => {
-            let max = w.slot(1).load(Ordering::Acquire) as i32;
-            let sem = SemaphoreObject::new(0, max);
-            let _ = sem.shared.set(w);
-            SyncHandle::Semaphore(Arc::new(sem))
-        }
+        SHARED_KIND_MUTEX => MutexObject::adopt(w),
+        _ => SemaphoreObject::adopt(w),
     };
     Some(Ok((found, true)))
 }
@@ -4733,6 +4786,11 @@ fn wait_semaphore(sem: &SemaphoreObject, timeout: u32) -> u32 {
     loop {
         let gate = sync_gate();
         let mut state = lock(&sem.count);
+        if sem.shared.get().is_some() {
+            drop(state);
+            drop(gate);
+            return wait_semaphore(sem, time_left(start, timeout).unwrap_or(0));
+        }
         if state.0 > 0 {
             state.0 -= 1;
             return 0;
@@ -4782,12 +4840,19 @@ fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
     loop {
         let gate = sync_gate();
         let mut s = lock(&m.state);
+        if m.shared.get().is_some() {
+            // Passé dans une page partagée pendant l'attente (#767).
+            drop(s);
+            drop(gate);
+            return wait_mutex(m, time_left(start, timeout).unwrap_or(0));
+        }
         if s.owner.as_ref() == Some(&me) {
             s.recursion = s.recursion.saturating_add(1);
             return 0;
         }
         if s.owner.is_none() {
             s.owner = Some(me);
+            s.owner_os = os_thread_id();
             s.recursion = 1;
             return 0;
         }
@@ -4886,6 +4951,7 @@ fn try_mutex(m: &MutexObject) -> bool {
         true
     } else if s.owner.is_none() {
         s.owner = Some(me);
+        s.owner_os = os_thread_id();
         s.recursion = 1;
         true
     } else {
@@ -4908,9 +4974,14 @@ fn leave_mutex(m: &MutexObject) -> bool {
         }
         return true;
     }
-    let _gate = sync_gate();
+    let gate = sync_gate();
     let me = std::thread::current().id();
     let mut s = lock(&m.state);
+    if m.shared.get().is_some() {
+        drop(s);
+        drop(gate);
+        return leave_mutex(m);
+    }
     if s.owner.as_ref() != Some(&me) {
         crate::process::set_last_error(288);
         return false;
@@ -6638,6 +6709,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                                 s.recursion = s.recursion.saturating_add(1);
                             } else {
                                 s.owner = Some(me);
+                                s.owner_os = os_thread_id();
                                 s.recursion = 1;
                             }
                         }
@@ -9813,8 +9885,13 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
         w.wake();
         return 1;
     }
-    let _gate = sync_gate();
+    let gate = sync_gate();
     let mut state = lock(&sem.count);
+    if sem.shared.get().is_some() {
+        drop(state);
+        drop(gate);
+        return release_semaphore(h, count, prev);
+    }
     if state.0.checked_add(count).is_none_or(|n| n > state.1) {
         crate::process::set_last_error(298);
         return 0;
