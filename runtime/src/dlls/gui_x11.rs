@@ -3328,10 +3328,17 @@ impl X11Backend {
                     lparam: pack_i16_pair(self.logical(x), self.logical(y)),
                 });
             }
+            // SIZE_MAXIMIZED ou SIZE_MINIMIZED quand le gestionnaire a
+            // agrandi ou réduit la fenêtre (#1328).
+            let wparam = if child {
+                0
+            } else {
+                gui::size_kind(gui::GuiBackend::window_state(self, hwnd))
+            };
             return Some(PendingEvent {
                 hwnd,
                 message: gui::WM_SIZE,
-                wparam: 0,
+                wparam,
                 lparam,
             });
         }

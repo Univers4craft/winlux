@@ -2947,6 +2947,17 @@ pub const WINDOW_NORMAL: u8 = 0;
 pub const WINDOW_MINIMIZED: u8 = 1;
 pub const WINDOW_MAXIMIZED: u8 = 2;
 
+/// wParam de WM_SIZE selon l'état de la fenêtre : SIZE_RESTORED (0),
+/// SIZE_MINIMIZED (1), SIZE_MAXIMIZED (2). WPF ne tient son WindowState
+/// qu'ainsi : sans lui, le bouton « Restaurer » restait sans effet (#1328).
+pub fn size_kind(state: u8) -> usize {
+    match state {
+        WINDOW_MAXIMIZED => 2,
+        WINDOW_MINIMIZED => 1,
+        _ => 0,
+    }
+}
+
 pub trait GuiBackend: Send {
     /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
     fn pump(&mut self) -> Vec<PendingEvent> {
@@ -4920,6 +4931,13 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wm_size_dit_l_etat_de_la_fenetre() {
+        assert_eq!(size_kind(WINDOW_NORMAL), 0);
+        assert_eq!(size_kind(WINDOW_MINIMIZED), 1);
+        assert_eq!(size_kind(WINDOW_MAXIMIZED), 2);
+    }
+
     use super::*;
     use std::sync::atomic::Ordering;
 
