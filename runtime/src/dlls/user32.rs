@@ -852,7 +852,7 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         callback(m.hwnd, m.message, m.wparam, m.time);
         return 0;
     }
-    recheck_own_frame(m.hwnd, m.message);
+    recheck_own_frame();
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
@@ -1018,7 +1018,7 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
-    pending_frame().retain(|(h, _)| *h != hwnd);
+    pending_frame().retain(|(h, _, _)| *h != hwnd);
     OWN_FRAME
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1440,7 +1440,7 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
     if !own {
-        pending_frame().retain(|(h, _)| *h != hwnd);
+        pending_frame().retain(|(h, _, _)| *h != hwnd);
     }
     let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
     let had = list.contains(&hwnd);
@@ -1453,8 +1453,9 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
             take_own_frame(hwnd);
         } else {
             let mut pending = pending_frame();
-            if !pending.iter().any(|(h, _)| *h == hwnd) {
-                pending.push((hwnd, std::time::Instant::now()));
+            if !pending.iter().any(|(h, _, _)| *h == hwnd) {
+                let now = std::time::Instant::now();
+                pending.push((hwnd, now, now));
             }
         }
     } else if !own && had {
@@ -1473,16 +1474,18 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
 /// Fenêtres qui ont demandé à dessiner leur propre cadre mais n'ont pas
 /// encore de barre de titre (Electron dont la page ne s'est pas chargée) :
 /// le cadre du gestionnaire reste, sinon rien ne permettrait de les fermer,
-/// réduire ou déplacer (#1211). Avec l'instant du dernier essai.
-static PENDING_FRAME: std::sync::Mutex<Vec<(usize, std::time::Instant)>> =
+/// réduire ou déplacer (#1211). Avec l'instant du dernier essai et celui de
+/// la mise en attente.
+static PENDING_FRAME: std::sync::Mutex<Vec<(usize, std::time::Instant, std::time::Instant)>> =
     std::sync::Mutex::new(Vec::new());
 
-fn pending_frame() -> std::sync::MutexGuard<'static, Vec<(usize, std::time::Instant)>> {
+fn pending_frame(
+) -> std::sync::MutexGuard<'static, Vec<(usize, std::time::Instant, std::time::Instant)>> {
     PENDING_FRAME.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn take_own_frame(hwnd: usize) {
-    pending_frame().retain(|(h, _)| *h != hwnd);
+    pending_frame().retain(|(h, _, _)| *h != hwnd);
     let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
     if !list.contains(&hwnd) {
         list.push(hwnd);
@@ -1526,28 +1529,56 @@ unsafe fn has_own_caption(hwnd: usize) -> bool {
     false
 }
 
-/// Essai de nouveau, au plus deux fois par seconde, sur une fenêtre en
-/// attente quand la souris y passe : la page d'Electron peut se charger
-/// bien après la création de la fenêtre (#1211).
-unsafe fn recheck_own_frame(hwnd: usize, message: u32) {
-    if !matches!(message, 0x0200 | 0x0201 | 0x00A0) {
+/// Délai entre deux essais sur une fenêtre en attente : deux fois par
+/// seconde pendant la première minute, puis toutes les trois secondes.
+fn frame_retry_delay(waiting: std::time::Duration) -> std::time::Duration {
+    if waiting < std::time::Duration::from_secs(60) {
+        std::time::Duration::from_millis(500)
+    } else {
+        std::time::Duration::from_secs(3)
+    }
+}
+
+/// Essai de nouveau sur les fenêtres en attente du thread qui distribue un
+/// message, quel que soit ce message et la fenêtre qui le reçoit : la page
+/// d'Electron peut se charger bien après la création de la fenêtre (#1211),
+/// et attendre que la souris passe sur la fenêtre laissait deux barres de
+/// titre à l'écran tant qu'on n'y touchait pas (#1444). La pompe de
+/// Chromium distribue sans cesse des messages à sa fenêtre cachée : c'est
+/// l'occasion de réessayer.
+unsafe fn recheck_own_frame() {
+    thread_local! {
+        static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if BUSY.with(|b| b.replace(true)) {
         return;
     }
-    let due = {
+    let due: Vec<usize> = {
         let mut pending = pending_frame();
-        let Some(entry) = pending.iter_mut().find(|(h, _)| *h == hwnd) else {
+        if pending.is_empty() {
+            BUSY.with(|b| b.set(false));
             return;
-        };
-        if entry.1.elapsed() < std::time::Duration::from_millis(500) {
-            false
-        } else {
-            entry.1 = std::time::Instant::now();
-            true
         }
+        let tid = crate::dlls::kernel32::get_current_thread_id();
+        let now = std::time::Instant::now();
+        pending
+            .iter_mut()
+            .filter(|(h, last, since)| {
+                now.duration_since(*last) >= frame_retry_delay(now.duration_since(*since))
+                    && gui::window_thread_id(*h) == Some(tid)
+            })
+            .map(|e| {
+                e.1 = now;
+                e.0
+            })
+            .collect()
     };
-    if due && has_own_caption(hwnd) {
-        take_own_frame(hwnd);
+    for h in due {
+        if has_own_caption(h) {
+            take_own_frame(h);
+        }
     }
+    BUSY.with(|b| b.set(false));
 }
 
 /// Déplace/redimensionne une fenêtre (raccourci Win32 de `SetWindowPos`).
@@ -5683,15 +5714,33 @@ mod tests {
             );
             // La page se charge ; la souris passe après le délai.
             PAGE_CHARGEE.store(true, std::sync::atomic::Ordering::SeqCst);
-            for (h, t) in pending_frame().iter_mut() {
+            for (h, t, _) in pending_frame().iter_mut() {
                 if *h == hwnd {
                     *t -= std::time::Duration::from_secs(1);
                 }
             }
-            let m = Msg::new(hwnd, 0x0200, 0, 0);
+            // Sans que la souris y passe : n'importe quel message distribué
+            // par le thread de la fenêtre, ici à une autre fenêtre (#1444).
+            let autre = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(autre, 0);
+            let m = Msg::new(autre, 0x0400, 0, 0);
             dispatch_message_w(&m);
             assert!(own(hwnd));
-            assert!(!pending_frame().iter().any(|(h, _)| *h == hwnd));
+            assert!(!pending_frame().iter().any(|(h, _, _)| *h == hwnd));
+            destroy_window(autre);
             destroy_window(hwnd);
         }
     }
