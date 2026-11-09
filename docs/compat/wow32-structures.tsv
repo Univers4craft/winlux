@@ -53,6 +53,7 @@ d2d1.rs	HwndProps	a-verifier
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
 d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
+d2d1_effects.rs	Imp	interne	test unitaire (#1206)
 d3d10.rs	Dev	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
 d3d10.rs	Mapped	interne	D3D11_MAPPED_SUBRESOURCE rendu par Direct3D 11 (disposition 64 bits) ; recopié en x86 par tex2d_map, d3d1032.c n° 10-13
 d3d10.rs	Obj	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
@@ -134,6 +135,7 @@ dxgi.rs	DxgiSwapChainVTable	x86	objet COM : passerelles x86 tirées des signatur
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
 fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
+filedialog_com.rs	FakeSink	interne	test unitaire (faux IFileDialogEvents, #1288)
 games_win32.rs	WsaBuf	a-verifier	
 gdi32.rs	BitmapObject	a-verifier	
 gdi32.rs	LogBrush	a-verifier	
@@ -174,14 +176,14 @@ ole32.rs	MarshalStream	a-verifier
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
-ole32_storage.rs	EnumObj	interne	IEnumSTATSTG du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
-ole32_storage.rs	LockBytesObj	interne	ILockBytes de CreateILockBytesOnHGlobal (#1235), x64 seulement (refusé si wow32 actif)
-ole32_storage.rs	StgObj	interne	IStorage du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
-ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), x64 seulement (refusé si wow32 actif)
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
 ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
+ole32_storage.rs	EnumObj	interne	IEnumSTATSTG du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	LockBytesObj	interne	ILockBytes de CreateILockBytesOnHGlobal (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	StgObj	interne	IStorage du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), x64 seulement (refusé si wow32 actif)
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
@@ -264,4 +266,3 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
-d2d1_effects.rs	Imp	interne	test unitaire (#1206)
