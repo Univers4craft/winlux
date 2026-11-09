@@ -54,6 +54,7 @@ d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
 d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d2d1_effects.rs	Imp	interne	test unitaire (#1206)
+d2d1_effects.rs	Facette	interne	test unitaire (#1319)
 d3d10.rs	Dev	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
 d3d10.rs	Mapped	interne	D3D11_MAPPED_SUBRESOURCE rendu par Direct3D 11 (disposition 64 bits) ; recopié en x86 par tex2d_map, d3d1032.c n° 10-13
 d3d10.rs	Obj	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
