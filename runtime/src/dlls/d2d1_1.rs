@@ -960,7 +960,7 @@ unsafe extern "win64" fn dc_create_bitmap(
         return E_INVALIDARG;
     }
     let (format, options) = props_options(props);
-    if !matches!(format, 0 | 87 | 91 | 28 | 29) {
+    if !matches!(format, 0 | 87 | 91 | 28 | 29 | super::DXGI_FORMAT_A8_UNORM) {
         crate::log_warn!(
             "d2d1",
             "CreateBitmap : format DXGI {} traité comme BGRA 8 bits",
@@ -969,6 +969,7 @@ unsafe extern "win64" fn dc_create_bitmap(
     }
     let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
     b.options = options;
+    b.alpha_only = format == super::DXGI_FORMAT_A8_UNORM;
     let obj = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b);
     if !src.is_null() {
         super::bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
