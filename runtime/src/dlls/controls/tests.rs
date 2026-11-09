@@ -2011,3 +2011,75 @@ fn liste_recherche_par_parametre_sans_texte() {
         user32::destroy_window(p);
     }
 }
+
+/// Source d'un flux EM_STREAMIN / puits d'EM_STREAMOUT pour les tests.
+struct Flux {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+unsafe extern "win64" fn flux_lire(cookie: usize, buf: *mut u8, cb: i32, pcb: *mut i32) -> u32 {
+    let f = &mut *(cookie as *mut Flux);
+    // Morceaux de 7 octets : le contrôle doit rappeler jusqu'à la fin.
+    let n = (f.data.len() - f.pos).min(cb as usize).min(7);
+    std::ptr::copy_nonoverlapping(f.data.as_ptr().add(f.pos), buf, n);
+    f.pos += n;
+    *pcb = n as i32;
+    0
+}
+
+unsafe extern "win64" fn flux_ecrire(cookie: usize, buf: *mut u8, cb: i32, pcb: *mut i32) -> u32 {
+    let f = &mut *(cookie as *mut Flux);
+    f.data
+        .extend_from_slice(std::slice::from_raw_parts(buf, cb as usize));
+    *pcb = cb;
+    0
+}
+
+/// #1433 : RichTextBox.Text de WinForms passe par EM_STREAMIN
+/// (SF_TEXT | SF_UNICODE) ; la zone de détails de Paint.NET restait vide.
+#[test]
+fn richedit_flux_texte_et_rtf() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "RICHEDIT50W", "", 0x4 | 0x800, 12, (10, 10, 300, 90));
+    let texte = "Exception:\r\n\r\nSystem.EntryPointNotFoundException: é";
+    let mut src = Flux {
+        data: texte.encode_utf16().flat_map(|u| u.to_le_bytes()).collect(),
+        pos: 0,
+    };
+    // EDITSTREAM : dwCookie, dwError (+ remplissage), pfnCallback.
+    let mut es = [0usize; 3];
+    es[0] = &mut src as *mut Flux as usize;
+    es[2] = flux_lire as usize;
+    let n = sendw(e, 0x0449, 0x1 | 0x10, es.as_mut_ptr() as isize);
+    assert_eq!(n as usize, texte.chars().count());
+    assert_eq!(title(e), texte);
+    // EM_STREAMOUT rend le même texte.
+    let mut dst = Flux {
+        data: Vec::new(),
+        pos: 0,
+    };
+    let mut es = [0usize; 3];
+    es[0] = &mut dst as *mut Flux as usize;
+    es[2] = flux_ecrire as usize;
+    sendw(e, 0x044A, 0x1 | 0x10, es.as_mut_ptr() as isize);
+    let units: Vec<u16> = dst
+        .data
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    assert_eq!(String::from_utf16_lossy(&units), texte);
+    // RTF : tables ignorées, \par, \'e9 et \u.
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\colortbl;\red0\green0\blue0;}\f0 Caf\'e9\par Pile \{1\}\tab \u8364?}";
+    let mut src = Flux {
+        data: rtf.to_vec(),
+        pos: 0,
+    };
+    let mut es = [0usize; 3];
+    es[0] = &mut src as *mut Flux as usize;
+    es[2] = flux_lire as usize;
+    sendw(e, 0x0449, 0x2, es.as_mut_ptr() as isize);
+    assert_eq!(title(e), "Café\r\nPile {1}\t€");
+    gui::destroy_window(p);
+}
