@@ -82,6 +82,7 @@ pub struct Ssl {
     pub X509_STORE_CTX_init: unsafe extern "C" fn(P, P, P, P) -> c_int,
     pub X509_STORE_CTX_get_error: unsafe extern "C" fn(P) -> c_int,
     pub X509_STORE_CTX_get1_chain: unsafe extern "C" fn(P) -> P,
+    pub X509_STORE_CTX_set_time: unsafe extern "C" fn(P, std::ffi::c_ulong, libc::time_t),
     pub X509_verify_cert: unsafe extern "C" fn(P) -> c_int,
     pub X509_check_host:
         unsafe extern "C" fn(P, *const c_char, usize, u32, *mut *mut c_char) -> c_int,
@@ -230,6 +231,7 @@ pub fn ssl() -> Option<&'static Ssl> {
             X509_STORE_CTX_init: f!(c, "X509_STORE_CTX_init"),
             X509_STORE_CTX_get_error: f!(c, "X509_STORE_CTX_get_error"),
             X509_STORE_CTX_get1_chain: f!(c, "X509_STORE_CTX_get1_chain"),
+            X509_STORE_CTX_set_time: f!(c, "X509_STORE_CTX_set_time"),
             X509_verify_cert: f!(c, "X509_verify_cert"),
             X509_check_host: f!(c, "X509_check_host"),
             X509_check_ip_asc: f!(c, "X509_check_ip_asc"),
@@ -445,6 +447,12 @@ pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Veri
     verify_with(leaf, extra, None, false, host)
 }
 
+/// Comme `verify`, mais la validité des certificats est jugée à la date
+/// `at` (secondes Unix) : signature horodatée d'un exécutable (#1387).
+pub fn verify_at(leaf: &[u8], extra: &[Vec<u8>], at: i64) -> Option<Verified> {
+    verify_inner(leaf, extra, None, false, None, Some(at))
+}
+
 /// Comme `verify`, mais avec des racines de confiance données (`roots`) à la
 /// place de celles du système ; `partial` accepte une chaîne qui s'arrête sur
 /// n'importe quel certificat de `roots` (X509_V_FLAG_PARTIAL_CHAIN).
@@ -454,6 +462,17 @@ pub fn verify_with(
     roots: Option<&[Vec<u8>]>,
     partial: bool,
     host: Option<&str>,
+) -> Option<Verified> {
+    verify_inner(leaf, extra, roots, partial, host, None)
+}
+
+fn verify_inner(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    roots: Option<&[Vec<u8>]>,
+    partial: bool,
+    host: Option<&str>,
+    at: Option<i64>,
 ) -> Option<Verified> {
     let s = ssl()?;
     unsafe {
@@ -485,6 +504,9 @@ pub fn verify_with(
         }
         let ctx = (s.X509_STORE_CTX_new)();
         (s.X509_STORE_CTX_init)(ctx, store, x, untrusted);
+        if let Some(t) = at {
+            (s.X509_STORE_CTX_set_time)(ctx, 0, t as libc::time_t);
+        }
         let ok = (s.X509_verify_cert)(ctx);
         let mut error = if ok == 1 {
             0

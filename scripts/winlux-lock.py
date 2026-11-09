@@ -582,6 +582,19 @@ def clock_css(scale):
             f".lock-hint {{ font-size: {max(11, round(13 * scale))}px; }}\n")
 
 
+def cover_plan(covered, monitors):
+    """Écrans à couvrir après un branchement ou un débranchement (#158).
+
+    `covered` : géométries (x, y, largeur, hauteur) déjà couvertes par une
+    fenêtre de l'écran verrouillé ; `monitors` : géométries des écrans
+    présents. Rend (à ajouter, à retirer) : aucun écran ne doit montrer le
+    bureau, et aucune fenêtre ne doit rester sur un écran disparu."""
+    covered, monitors = list(covered), list(monitors)
+    add = [geo for geo in monitors if geo not in covered]
+    remove = [geo for geo in covered if geo not in monitors]
+    return add, remove
+
+
 def run_lock(start="clock"):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -655,12 +668,55 @@ def run_lock(start="clock"):
             for index in range(display.get_n_monitors()):
                 monitor = display.get_monitor(index)
                 self.windows.append(self.make_window(monitor.get_geometry(), monitor == primary))
+            # Écran branché, débranché ou redéfini (xrandr, retour de veille)
+            # pendant le verrouillage : chaque écran reste couvert (#158).
+            display.connect("monitor-added", lambda *_: GLib.idle_add(self.cover_monitors))
+            display.connect("monitor-removed", lambda *_: GLib.idle_add(self.cover_monitors))
+            Gdk.Screen.get_default().connect("monitors-changed", lambda *_: GLib.idle_add(self.cover_monitors))
             self.grab_tries = 0
             GLib.timeout_add(100, self.grab)
             GLib.timeout_add(1000, self.tick)
             self.tick()
             if start == "signin":
                 self.show_signin()
+
+        @staticmethod
+        def _geo(rect):
+            return (rect.x, rect.y, rect.width, rect.height)
+
+        def cover_monitors(self):
+            display = Gdk.Display.get_default()
+            monitors = [display.get_monitor(i) for i in range(display.get_n_monitors())]
+            primary = display.get_primary_monitor() or (monitors[0] if monitors else None)
+            geos = [self._geo(m.get_geometry()) for m in monitors]
+            # La fenêtre principale suit l'écran principal s'il a bougé ou changé.
+            if primary is not None:
+                main_geo = self._geo(primary.get_geometry())
+                if self.main_geo != main_geo:
+                    x, y, width, height = main_geo
+                    self.main.move(x, y)
+                    self.main.set_size_request(width, height)
+                    self.main.resize(width, height)
+                    self.main_geo = main_geo
+            covers = {geo: window for geo, window in self.covers.items()}
+            # Un cache resté sur l'écran où la fenêtre principale vient d'aller
+            # la masquerait : il part.
+            stale = covers.pop(self.main_geo, None)
+            if stale is not None:
+                stale.destroy()
+            add, remove = cover_plan(list(covers) + [self.main_geo], geos)
+            for geo in remove:
+                window = covers.pop(geo, None)
+                if window is not None:
+                    window.destroy()
+            for geo in add:
+                rect = Gdk.Rectangle()
+                rect.x, rect.y, rect.width, rect.height = geo
+                covers[geo] = self.make_window(rect, False)
+            self.covers = covers
+            self.windows = [self.main] + list(covers.values())
+            self.main.present()
+            return False
 
         def make_window(self, geo, main):
             window = Gtk.Window(type=Gtk.WindowType.POPUP)
@@ -673,8 +729,11 @@ def run_lock(start="clock"):
             area = Gtk.DrawingArea()
             area.connect("draw", self.draw_background)
             overlay.add(area)
+            if not hasattr(self, "covers"):
+                self.covers = {}
             if main:
                 self.main = window
+                self.main_geo = (geo.x, geo.y, geo.width, geo.height)
                 self.area = area
                 overlay.add_overlay(self.clock_view(geo.width, geo.height))
                 overlay.add_overlay(self.signin_view())
@@ -684,6 +743,8 @@ def run_lock(start="clock"):
                 window.connect("key-press-event", self.on_key)
                 window.connect("button-press-event", self.on_click)
             window.show_all()
+            if not main:
+                self.covers[(geo.x, geo.y, geo.width, geo.height)] = window
             if main:
                 self.signin.hide()
                 self.accounts.hide()

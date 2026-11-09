@@ -251,7 +251,116 @@ fn check_chain(p: &Parsed, signer: &Cert, name: String) -> Signature {
     match hostssl::verify(&signer.der, &others, None) {
         None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
         Some(v) if v.error == 0 => Signature::Verified { signer: name },
+        // Certificat expiré (ou pas encore valide) : comme Windows, une
+        // signature horodatée pendant sa validité reste valable (#1387).
+        Some(v) if v.error == 9 || v.error == 10 => match timestamp(p) {
+            Ok(Some(at)) => match hostssl::verify_at(&signer.der, &others, at) {
+                Some(w) if w.error == 0 => Signature::Verified { signer: name },
+                Some(w) => unverified(chain_reason(w.error)),
+                None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
+            },
+            Ok(None) => unverified(chain_reason(v.error)),
+            Err(e) => unverified(&format!(
+                "{}, et son horodatage est refusé ({e})",
+                chain_reason(v.error)
+            )),
+        },
         Some(v) => unverified(chain_reason(v.error)),
+    }
+}
+
+/// Date (secondes Unix) de l'horodatage de la signature `p`, vérifié :
+/// jeton RFC 3161 ou contre-signature PKCS #9 dont le condensat est celui
+/// de la signature, signés par une autorité d'horodatage reconnue à cette
+/// date. Ok(None) : pas d'horodatage.
+fn timestamp(p: &Parsed) -> Result<Option<i64>, String> {
+    if let Some(token) = &p.rfc3161 {
+        return rfc3161_time(p, token).map(Some);
+    }
+    if let Some(body) = &p.countersignature {
+        return countersignature_time(p, body).map(Some);
+    }
+    Ok(None)
+}
+
+fn rfc3161_time(p: &Parsed, token: &[u8]) -> Result<i64, String> {
+    let ts = parse_signed_any(token)?;
+    if ts.content_type != OID_TST_INFO {
+        return Err("jeton d'horodatage sans TSTInfo".into());
+    }
+    let tsa = ts
+        .certs
+        .iter()
+        .chain(p.certs.iter())
+        .find(|c| ts.signer_id.matches(c))
+        .ok_or("certificat de l'autorité d'horodatage absent")?;
+    if let Some(failure) = check_signer(&ts, tsa, "horodatage") {
+        return Err(match failure {
+            Signature::Invalid(e) => e,
+            Signature::Unverified { reason, .. } => reason,
+            _ => "signature d'horodatage refusée".into(),
+        });
+    }
+    // TSTInfo : version, politique, messageImprint, numéro, genTime…
+    let mut t = expect(&ts.econtent, 0x02)?.rest;
+    t = expect(t, 0x06)?.rest;
+    let imprint = expect(t, 0x30)?;
+    t = imprint.rest;
+    let alg = expect(imprint.body, 0x30)?;
+    let (md, _) = digest_name(alg.body)?;
+    let hashed = expect(alg.rest, 0x04)?.body;
+    t = expect(t, 0x02)?.rest;
+    let gen = expect(t, 0x18)?;
+    let at = der_time(0x18, gen.body).ok_or("date d'horodatage illisible")?;
+    if hostssl::digest(md, &p.signature).as_deref() != Some(hashed) {
+        return Err("l'horodatage porte sur une autre signature".into());
+    }
+    let extra: Vec<Vec<u8>> = ts
+        .certs
+        .iter()
+        .chain(p.certs.iter())
+        .map(|c| c.der.clone())
+        .collect();
+    check_tsa(tsa, &extra, at)?;
+    Ok(at)
+}
+
+fn countersignature_time(p: &Parsed, body: &[u8]) -> Result<i64, String> {
+    let si = parse_signer_info(body)?;
+    let tsa = p
+        .certs
+        .iter()
+        .find(|c| si.signer_id.matches(c))
+        .ok_or("certificat de l'autorité d'horodatage absent")?;
+    let attrs = si
+        .signed_attrs
+        .as_ref()
+        .ok_or("contre-signature sans attributs signés")?;
+    if hostssl::digest(si.signer_md, &p.signature).as_deref() != Some(&attrs.message_digest[..]) {
+        return Err("l'horodatage porte sur une autre signature".into());
+    }
+    if hostssl::verify_signature(&tsa.der, si.signer_md, &si.signature, &attrs.der) != Some(true) {
+        return Err("signature d'horodatage fausse".into());
+    }
+    let at = attrs.signing_time.ok_or("contre-signature sans date")?;
+    let extra: Vec<Vec<u8>> = p.certs.iter().map(|c| c.der.clone()).collect();
+    check_tsa(tsa, &extra, at)?;
+    Ok(at)
+}
+
+/// Autorité d'horodatage : prévue pour horodater et reconnue à la date `at`.
+fn check_tsa(tsa: &Cert, extra: &[Vec<u8>], at: i64) -> Result<(), String> {
+    if tsa
+        .eku
+        .as_ref()
+        .is_some_and(|u| !u.iter().any(|o| o == OID_TIME_STAMPING))
+    {
+        return Err("certificat non prévu pour horodater".into());
+    }
+    match hostssl::verify_at(&tsa.der, extra, at) {
+        Some(v) if v.error == 0 => Ok(()),
+        Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason(v.error))),
+        None => Err("chaîne de l'autorité d'horodatage non vérifiable".into()),
     }
 }
 
@@ -400,6 +509,16 @@ fn read_entry(f: &mut File, e: &ZipEntry) -> Result<Vec<u8>, String> {
 const OID_SIGNED_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
 const OID_SPC_INDIRECT_DATA: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04];
 const OID_MESSAGE_DIGEST: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x04];
+const OID_SIGNING_TIME: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
+const OID_COUNTERSIGNATURE: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x06];
+/// Jeton d'horodatage RFC 3161 d'Authenticode (1.3.6.1.4.1.311.3.3.1).
+const OID_RFC3161_TIMESTAMP: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x03, 0x03, 0x01];
+/// id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4).
+const OID_TST_INFO: &[u8] = &[
+    0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x10, 0x01, 0x04,
+];
+/// Usage étendu « horodatage » (1.3.6.1.5.5.7.3.8).
+const OID_TIME_STAMPING: &[u8] = &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08];
 const OID_CODE_SIGNING: &[u8] = &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03];
 
 /// Certificat de la signature.
@@ -431,12 +550,18 @@ struct SignedAttrs {
     /// Attributs ré-étiquetés en SET (0x31), tels qu'ils sont signés.
     der: Vec<u8>,
     message_digest: Vec<u8>,
+    /// Attribut signingTime (secondes Unix), s'il est présent.
+    signing_time: Option<i64>,
 }
 
 struct Parsed {
     certs: Vec<Cert>,
     /// Octets dont `messageDigest` est le condensat.
     content: Vec<u8>,
+    /// Type du contenu signé (OID).
+    content_type: Vec<u8>,
+    /// Corps de la SEQUENCE du contenu signé.
+    econtent: Vec<u8>,
     /// Algorithme du condensat signé (`APPX` d'un paquet, image d'un .exe).
     appx_md: &'static CStr,
     /// Condensats `APPX` : (étiquette, valeur).
@@ -447,6 +572,10 @@ struct Parsed {
     signer_md: &'static CStr,
     signed_attrs: Option<SignedAttrs>,
     signature: Vec<u8>,
+    /// Jeton d'horodatage RFC 3161 (ContentInfo SignedData), non signé.
+    rfc3161: Option<Vec<u8>>,
+    /// Contre-signature PKCS #9 (corps du SignerInfo), non signée.
+    countersignature: Option<Vec<u8>>,
 }
 
 fn raw<'a>(d: &'a [u8], t: &Tlv<'a>) -> &'a [u8] {
@@ -504,6 +633,23 @@ fn digest_len(md: &CStr) -> usize {
 /// PKCS #7 SignedData Authenticode (DER) : certificats, signataire et
 /// condensat signé du `SpcIndirectDataContent`.
 fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
+    let mut p = parse_signed_any(der)?;
+    if p.content_type != OID_SPC_INDIRECT_DATA {
+        return Err("le contenu signé n'est pas un SpcIndirectDataContent".into());
+    }
+    let spc = p.econtent.clone();
+    let attr = expect(&spc, 0x30)?; // SpcAttributeTypeAndOptionalValue
+    let digest_info = expect(attr.rest, 0x30)?;
+    let alg = expect(digest_info.body, 0x30)?;
+    let (appx_md, _) = digest_name(alg.body)?;
+    p.appx_md = appx_md;
+    p.indirect = expect(alg.rest, 0x04)?.body.to_vec();
+    Ok(p)
+}
+
+/// SignedData quel que soit son contenu (Authenticode, jeton d'horodatage
+/// RFC 3161) : certificats, contenu signé et premier signataire.
+fn parse_signed_any(der: &[u8]) -> Result<Parsed, String> {
     let content_info = expect(der, 0x30)?;
     let oid = expect(content_info.body, 0x06)?;
     if oid.body != OID_SIGNED_DATA {
@@ -514,27 +660,23 @@ fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
     let mut d = expect(signed.body, 0x02)?.rest; // version
     d = expect(d, 0x31)?.rest; // digestAlgorithms
 
-    // encapContentInfo : SpcIndirectDataContent.
     let encap = expect(d, 0x30)?;
     d = encap.rest;
     let ctype = expect(encap.body, 0x06)?;
-    if ctype.body != OID_SPC_INDIRECT_DATA {
-        return Err("le contenu signé n'est pas un SpcIndirectDataContent".into());
-    }
     let wrapped = expect(ctype.rest, 0xA0).map_err(|_| "contenu signé absent")?;
     let inner = tlv(wrapped.body)?;
     // PKCS #7 (Authenticode) : la SEQUENCE elle-même, condensat de son
     // corps ; CMS : une OCTET STRING, condensat de sa valeur.
-    let (content, spc) = match inner.tag {
-        0x30 => (inner.body.to_vec(), inner.body),
-        0x04 => (inner.body.to_vec(), expect(inner.body, 0x30)?.body),
+    let (content, econtent) = match inner.tag {
+        0x30 => (inner.body.to_vec(), inner.body.to_vec()),
+        0x04 => (
+            inner.body.to_vec(),
+            expect(inner.body, 0x30)
+                .map(|t| t.body.to_vec())
+                .unwrap_or_default(),
+        ),
         t => return Err(format!("contenu signé d'étiquette {t:#04x}")),
     };
-    let attr = expect(spc, 0x30)?; // SpcAttributeTypeAndOptionalValue
-    let digest_info = expect(attr.rest, 0x30)?;
-    let alg = expect(digest_info.body, 0x30)?;
-    let (appx_md, _) = digest_name(alg.body)?;
-    let indirect = expect(alg.rest, 0x04)?.body.to_vec();
 
     // Certificats.
     let certs_tlv = expect(d, 0xA0).map_err(|_| "aucun certificat dans la signature")?;
@@ -559,7 +701,36 @@ fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
     // Premier SignerInfo.
     let infos = expect(d, 0x31)?;
     let info = expect(infos.body, 0x30).map_err(|_| "aucun signataire")?;
-    let mut s = expect(info.body, 0x02)?.rest; // version
+    let si = parse_signer_info(info.body)?;
+    Ok(Parsed {
+        certs,
+        content,
+        content_type: ctype.body.to_vec(),
+        econtent,
+        appx_md: si.signer_md,
+        appx: Vec::new(),
+        indirect: Vec::new(),
+        signer_id: si.signer_id,
+        signer_md: si.signer_md,
+        signed_attrs: si.signed_attrs,
+        signature: si.signature,
+        rfc3161: si.rfc3161,
+        countersignature: si.countersignature,
+    })
+}
+
+/// Un SignerInfo (corps de la SEQUENCE).
+struct SignerInfo {
+    signer_id: SignerId,
+    signer_md: &'static CStr,
+    signed_attrs: Option<SignedAttrs>,
+    signature: Vec<u8>,
+    rfc3161: Option<Vec<u8>>,
+    countersignature: Option<Vec<u8>>,
+}
+
+fn parse_signer_info(body: &[u8]) -> Result<SignerInfo, String> {
+    let mut s = expect(body, 0x02)?.rest; // version
     let sid = tlv(s)?;
     s = sid.rest;
     let signer_id = match sid.tag {
@@ -580,35 +751,91 @@ fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
         let mut der = raw(s, &t).to_vec();
         der[0] = 0x31;
         let mut message_digest = None;
+        let mut signing_time = None;
         let mut a = t.body;
         while !a.is_empty() {
             let at = expect(a, 0x30)?;
             a = at.rest;
             let oid = expect(at.body, 0x06)?;
+            let set = expect(oid.rest, 0x31)?;
             if oid.body == OID_MESSAGE_DIGEST {
-                let set = expect(oid.rest, 0x31)?;
                 message_digest = Some(expect(set.body, 0x04)?.body.to_vec());
+            } else if oid.body == OID_SIGNING_TIME {
+                signing_time = tlv(set.body).ok().and_then(|v| der_time(v.tag, v.body));
             }
         }
         signed_attrs = Some(SignedAttrs {
             der,
             message_digest: message_digest.ok_or("attribut messageDigest absent")?,
+            signing_time,
         });
         s = t.rest;
     }
     s = expect(s, 0x30)?.rest; // signatureAlgorithm
-    let signature = expect(s, 0x04)?.body.to_vec();
-    Ok(Parsed {
-        certs,
-        content,
-        appx_md,
-        appx: Vec::new(),
-        indirect,
+    let sig = expect(s, 0x04)?;
+    s = sig.rest;
+    // Attributs non signés : contre-signature d'horodatage (#1387).
+    let mut rfc3161 = None;
+    let mut countersignature = None;
+    if s.first() == Some(&0xA1) {
+        let mut a = tlv(s)?.body;
+        while !a.is_empty() {
+            let at = expect(a, 0x30)?;
+            a = at.rest;
+            let oid = expect(at.body, 0x06)?;
+            let set = expect(oid.rest, 0x31)?;
+            let first = tlv(set.body)?;
+            let whole = raw(set.body, &first).to_vec();
+            if oid.body == OID_RFC3161_TIMESTAMP {
+                rfc3161 = Some(whole);
+            } else if oid.body == OID_COUNTERSIGNATURE && first.tag == 0x30 {
+                countersignature = Some(first.body.to_vec());
+            }
+        }
+    }
+    Ok(SignerInfo {
         signer_id,
         signer_md,
         signed_attrs,
-        signature,
+        signature: sig.body.to_vec(),
+        rfc3161,
+        countersignature,
     })
+}
+
+/// Date ASN.1 (UTCTime 0x17 ou GeneralizedTime 0x18) en secondes Unix.
+fn der_time(tag: u8, body: &[u8]) -> Option<i64> {
+    let t = std::str::from_utf8(body).ok()?;
+    let t = t.strip_suffix('Z')?;
+    let (year, rest) = match tag {
+        0x17 => {
+            let yy: i64 = t.get(..2)?.parse().ok()?;
+            (if yy < 50 { 2000 + yy } else { 1900 + yy }, t.get(2..)?)
+        }
+        0x18 => (t.get(..4)?.parse().ok()?, t.get(4..)?),
+        _ => return None,
+    };
+    let rest = rest.split('.').next()?;
+    if rest.len() != 10 || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |i: usize| rest[i..i + 2].parse::<i64>().ok();
+    let (month, day, h, m, sec) = (n(0)?, n(2)?, n(4)?, n(6)?, n(8)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Jours depuis 1970-01-01 (calendrier grégorien proleptique).
+    let (y, mo) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * mo + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + m * 60 + sec)
 }
 
 fn parse_cert(whole: &[u8], body: &[u8]) -> Result<Cert, String> {
@@ -990,6 +1217,267 @@ mod tests {
         }
         out.extend_from_slice(body);
         out
+    }
+
+    /// Condensat de l'image d'un PE et SpcIndirectDataContent qui le porte.
+    fn spc_for(pe: &[u8]) -> Vec<u8> {
+        let (checksum, entry, _, _) = pe_layout(pe).unwrap();
+        let mut image = pe[..checksum].to_vec();
+        image.extend_from_slice(&pe[checksum + 4..entry]);
+        image.extend_from_slice(&pe[entry + 8..]);
+        let digest = hostssl::digest(c"SHA256", &image).unwrap();
+        let oid_pe = der(
+            0x06,
+            &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F],
+        );
+        let attr = der(0x30, &[oid_pe, der(0x30, &der(0x03, &[0]))].concat());
+        let digest_info = der(0x30, &[sha256_alg(), der(0x04, &digest)].concat());
+        der(0x30, &[attr, digest_info].concat())
+    }
+
+    fn sha256_alg() -> Vec<u8> {
+        let sha256 = der(
+            0x06,
+            &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+        );
+        der(0x30, &[sha256, vec![0x05, 0x00]].concat())
+    }
+
+    /// Ajoute la table des certificats (signature `sig`) à la fin du PE.
+    fn attach(pe: &[u8], sig: &[u8]) -> Vec<u8> {
+        let (_, entry, _, _) = pe_layout(pe).unwrap();
+        let padded = (8 + sig.len()).div_ceil(8) * 8;
+        let mut table = (padded as u32).to_le_bytes().to_vec();
+        table.extend_from_slice(&0x0200u16.to_le_bytes());
+        table.extend_from_slice(&2u16.to_le_bytes());
+        table.extend_from_slice(sig);
+        table.resize(padded, 0);
+        let mut signed = pe.to_vec();
+        let start = signed.len();
+        signed.extend_from_slice(&table);
+        signed[entry..entry + 4].copy_from_slice(&(start as u32).to_le_bytes());
+        signed[entry + 4..entry + 8].copy_from_slice(&(padded as u32).to_le_bytes());
+        signed
+    }
+
+    /// Ajoute l'attribut non signé `attr` (SEQUENCE complète) au premier
+    /// SignerInfo d'un ContentInfo SignedData.
+    fn with_unsigned_attr(sig: &[u8], attr: &[u8]) -> Vec<u8> {
+        let ci = expect(sig, 0x30).unwrap();
+        let oid = expect(ci.body, 0x06).unwrap();
+        let explicit = expect(oid.rest, 0xA0).unwrap();
+        let sd = expect(explicit.body, 0x30).unwrap();
+        // Tout ce qui précède le SET des SignerInfo reste tel quel.
+        let mut d = sd.body;
+        let mut head = Vec::new();
+        loop {
+            let t = tlv(d).unwrap();
+            if t.tag == 0x31 && t.rest.is_empty() {
+                break;
+            }
+            head.extend_from_slice(raw(d, &t));
+            d = t.rest;
+        }
+        let infos = expect(d, 0x31).unwrap();
+        let info = expect(infos.body, 0x30).unwrap();
+        let body = [info.body, &der(0xA1, attr)].concat();
+        let infos = der(0x31, &der(0x30, &body));
+        let sd = der(0x30, &[head, infos].concat());
+        der(
+            0x30,
+            &[raw(ci.body, &oid).to_vec(), der(0xA0, &sd)].concat(),
+        )
+    }
+
+    /// #1387 : certificat expiré mais signature horodatée (jeton RFC 3161)
+    /// pendant sa validité : éditeur vérifié, comme sous Windows (Steam).
+    /// Autorité de test datée de 2020 avec `openssl ca`, désignée par
+    /// SSL_CERT_FILE le temps du test.
+    #[test]
+    fn signature_horodatee_au_certificat_expire() {
+        if hostssl::ssl().is_none()
+            || std::process::Command::new("openssl")
+                .arg("version")
+                .output()
+                .is_err()
+        {
+            eprintln!("OpenSSL absent : horodatage non testé");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-horodatage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.txt"), "").unwrap();
+        std::fs::write(dir.join("serial"), "1000\n").unwrap();
+        std::fs::write(
+            dir.join("ca.cnf"),
+            "[ca]\ndefault_ca=d\n[d]\ndir=.\ndatabase=index.txt\nnew_certs_dir=.\nserial=serial\n\
+             default_md=sha256\npolicy=p\nunique_subject=no\n[p]\ncommonName=supplied\n\
+             [racine]\nbasicConstraints=critical,CA:true\nkeyUsage=keyCertSign,cRLSign\n\
+             [code]\nbasicConstraints=CA:false\nextendedKeyUsage=codeSigning\n\
+             [horodatage]\nbasicConstraints=CA:false\nextendedKeyUsage=critical,timeStamping\n",
+        )
+        .unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("openssl")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "openssl {args:?} : {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        let cert = |name: &str, cn: &str, end: &str, ext: &str, selfsign: bool| {
+            let key = format!("{name}.key");
+            let csr = format!("{name}.csr");
+            let pem = format!("{name}.pem");
+            let subj = format!("/CN={cn}");
+            run(&[
+                "req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", &key, "-out", &csr,
+                "-subj", &subj,
+            ]);
+            let mut args = vec![
+                "ca",
+                "-batch",
+                "-config",
+                "ca.cnf",
+                "-notext",
+                "-in",
+                &csr,
+                "-out",
+                &pem,
+                "-startdate",
+                "20200101000000Z",
+                "-enddate",
+                end,
+                "-extensions",
+                ext,
+            ];
+            if selfsign {
+                args.extend(["-selfsign", "-keyfile", &key]);
+                run(&args);
+            } else {
+                args.extend(["-cert", "racine.pem", "-keyfile", "racine.key"]);
+                run(&args);
+            }
+        };
+        cert("racine", "Racine Winlux", "20400101000000Z", "racine", true);
+        cert("code", "Testeur Winlux", "20220101000000Z", "code", false);
+        cert(
+            "tsa",
+            "Horodatage Winlux",
+            "20400101000000Z",
+            "horodatage",
+            false,
+        );
+
+        let pe = pe_minimal();
+        std::fs::write(dir.join("spc.der"), spc_for(&pe)).unwrap();
+        run(&[
+            "cms",
+            "-sign",
+            "-binary",
+            "-nodetach",
+            "-outform",
+            "DER",
+            "-md",
+            "sha256",
+            "-econtent_type",
+            "1.3.6.1.4.1.311.2.1.4",
+            "-signer",
+            "code.pem",
+            "-inkey",
+            "code.key",
+            "-in",
+            "spc.der",
+            "-out",
+            "sig.der",
+        ]);
+        let sig = std::fs::read(dir.join("sig.der")).unwrap();
+        let outer = parse_signed_data(&sig).unwrap();
+        // TSTInfo daté de 2021 (certificat encore valide), sur la signature.
+        let tst = |imprint: &[u8]| {
+            der(
+                0x30,
+                &[
+                    der(0x02, &[1]),
+                    der(0x06, &[0x2A, 0x03, 0x04]),
+                    der(0x30, &[sha256_alg(), der(0x04, imprint)].concat()),
+                    der(0x02, &[7]),
+                    der(0x18, b"20210601120000Z"),
+                ]
+                .concat(),
+            )
+        };
+        let token = |imprint: &[u8]| {
+            std::fs::write(dir.join("tst.der"), tst(imprint)).unwrap();
+            run(&[
+                "cms",
+                "-sign",
+                "-binary",
+                "-nodetach",
+                "-outform",
+                "DER",
+                "-md",
+                "sha256",
+                "-econtent_type",
+                "1.2.840.113549.1.9.16.1.4",
+                "-signer",
+                "tsa.pem",
+                "-inkey",
+                "tsa.key",
+                "-in",
+                "tst.der",
+                "-out",
+                "ts.der",
+            ]);
+            let ts = std::fs::read(dir.join("ts.der")).unwrap();
+            let attr = der(
+                0x30,
+                &[der(0x06, OID_RFC3161_TIMESTAMP), der(0x31, &ts)].concat(),
+            );
+            attach(&pe, &with_unsigned_attr(&sig, &attr))
+        };
+        let good = token(&hostssl::digest(c"SHA256", &outer.signature).unwrap());
+        let wrong = token(&[0u8; 32]);
+
+        let previous = std::env::var_os("SSL_CERT_FILE");
+        std::env::set_var("SSL_CERT_FILE", dir.join("racine.pem"));
+        let plain = examine_pe_bytes(&attach(&pe, &sig));
+        let stamped = examine_pe_bytes(&good);
+        let mismatched = examine_pe_bytes(&wrong);
+        match previous {
+            Some(v) => std::env::set_var("SSL_CERT_FILE", v),
+            None => std::env::remove_var("SSL_CERT_FILE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(&plain, Signature::Unverified { reason, .. } if reason.contains("expiré")),
+            "{plain:?}"
+        );
+        assert_eq!(
+            stamped,
+            Signature::Verified {
+                signer: "Testeur Winlux".into()
+            }
+        );
+        assert!(
+            matches!(&mismatched, Signature::Unverified { reason, .. } if reason.contains("autre signature")),
+            "{mismatched:?}"
+        );
+    }
+
+    #[test]
+    fn dates_asn1() {
+        assert_eq!(der_time(0x18, b"19700101000000Z"), Some(0));
+        assert_eq!(der_time(0x18, b"20210601120000.123Z"), Some(1_622_548_800));
+        assert_eq!(der_time(0x17, b"210601120000Z"), Some(1_622_548_800));
+        assert_eq!(der_time(0x17, b"991231235959Z"), Some(946_684_799));
+        assert_eq!(der_time(0x18, b"2021060112Z"), None);
     }
 
     /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
