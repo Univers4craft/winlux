@@ -27,7 +27,7 @@
 ---
 
 > [!IMPORTANT]
-> **Winlux est une préversion technique.** Il démarre, s'installe et se met à jour, et beaucoup de choses fonctionnent déjà, mais **tous les `.exe` ne se lancent pas** et les gros logiciels Windows (Paint.NET, Photoshop, jeux DirectX récents, applications WPF) ne sont pas encore utilisables. Testez-le d'abord dans une machine virtuelle, ou sur un PC qui ne contient pas de données importantes.
+> **Winlux est un projet en cours, en préversion technique.** Il démarre, s'installe et se met à jour, et une quinzaine de logiciels Windows courants fonctionnent déjà (VLC, 7-Zip, Notepad++, Audacity, FileZilla, PuTTY…), mais **tous les `.exe` ne se lancent pas**. Les gros logiciels comme Paint.NET, Steam ou Photoshop avancent sans être encore utilisables de bout en bout. Testez-le d'abord dans une machine virtuelle, ou sur un PC qui ne contient pas de données importantes.
 
 ## Sommaire
 
@@ -75,15 +75,15 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.19**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.19) (4 novembre 2026) : heure juste dès l'installation et à chaque démarrage, Edge et Chrome qui s'installent même sur une connexion lente, liens ouverts dans le navigateur installé, barre des tâches vraiment centrée, éclair de charge sur la batterie, Téléphone connecté, `su` qui passe par `sudo`. |
-| **Version en préparation** | **v0.2.20** : premiers programmes Windows 32 bits, barres de menus des logiciels classiques, 7-Zip utilisable, Warzone 2100 en Direct3D 11 grâce au compilateur HLSL maison, paquets MSIX, manettes et entrée brute, Explorateur « Prisme » unique pour le bureau et les `.exe`, fond « Aurore » et icônes Prisme, assistant d'ancrage, menu Démarrer à deux volets, envoi automatique des plantages, sauvegarde de mes fichiers. |
+| **Dernière version publiée** | [**v0.2.20**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.20) (8 novembre 2026) : premiers programmes Windows 32 bits, vraies barres de menus des logiciels classiques, 7-Zip, PuTTY et FileZilla utilisables, Warzone 2100 en Direct3D 11 grâce au compilateur HLSL maison, paquets MSIX, manettes, Explorateur « Prisme » unique pour le bureau et les `.exe`, fond « Aurore » et icônes Prisme, menu Démarrer à deux volets. Notes complètes : [docs/releases/v0.2.20.md](docs/releases/v0.2.20.md). |
+| **En cours** | Une **ISO de test 0.2.21** (pas une release publiée) sert à valider en VM et sur un portable les derniers correctifs : VLC, Audacity, Claude Code, Notepad++, SumatraPDF, SuperTuxKart et Xonotic, programmes 32 bits, écrans multiples. La prochaine version publiée sera la **v0.3**, une fois une ISO complète validée en VM et sur matériel réel. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
-| **Programmes Windows** | Exécutables **64 bits**. Les `.exe` **32 bits** (x86) démarrent depuis la v0.2.20, avec une prise en charge encore partielle. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
+| **Programmes Windows** | Exécutables **64 bits** et **32 bits** (x86, depuis la v0.2.20, encore partiel : PuTTY, 7-Zip et WinSCP 32 bits fonctionnent, Steam et Python 32 bits pas encore). Les programmes .NET passent par le CLR maison ou par le runtime qu'ils embarquent. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
-| **Matériel réel** | Testé surtout en machine virtuelle (QEMU/KVM, VirtualBox, VMware). La validation sur une large gamme de PC réels reste à faire. |
+| **Matériel réel** | Chaque ISO est installée et testée en machine virtuelle (QEMU/KVM, VirtualBox, VMware) et sur un vrai PC portable. La validation sur une large gamme de PC reste à faire. |
 
 > [!WARNING]
-> **Mise à jour depuis une ancienne version.** Une installation **v0.2.6 ou plus ancienne** ne peut pas passer à la nouvelle base en place : il faut la **réinstaller une fois** avec l'ISO récente. Une installation **v0.2.12** doit aussi être réinstallée une fois avec l'ISO v0.2.13 ou plus récente, car l'outil de mise à jour de la v0.2.12 contient un défaut qui l'empêche d'installer quoi que ce soit (corrigé dans la v0.2.13). Ensuite, les mises à jour se font depuis **Paramètres › Mises à jour**, sans réinstaller. Vos documents ne sont pas concernés par ce défaut, mais sauvegardez-les avant toute réinstallation.
+> **Mise à jour depuis une ancienne version.** Une installation **v0.2.13 ou plus récente** se met à jour directement. Une installation **v0.2.6 ou plus ancienne** ne peut pas passer à la nouvelle base en place : il faut la **réinstaller une fois** avec l'ISO récente. Une installation **v0.2.12** doit aussi être réinstallée une fois avec l'ISO v0.2.13 ou plus récente, car l'outil de mise à jour de la v0.2.12 contient un défaut qui l'empêche d'installer quoi que ce soit (corrigé dans la v0.2.13). Ensuite, les mises à jour se font depuis **Paramètres › Mise à jour OS**, sans réinstaller. Vos documents ne sont pas concernés par ce défaut, mais sauvegardez-les avant toute réinstallation.
 
 ## Comment ça marche
 
@@ -123,13 +123,27 @@ Le détail de chaque couche est expliqué dans la page [Architecture](wiki/Archi
 
 Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus récentes que la dernière ISO publiée.
 
+### Logiciels Windows vérifiés
+
+Ces logiciels, dans leur version Windows officielle, ont été installés et utilisés sur Winlux, au banc de test en VM :
+
+| Catégorie | Logiciels |
+|---|---|
+| Multimédia | **VLC**, **Audacity**, **ScreenToGif** |
+| Fichiers et documents | **7-Zip**, **Notepad++**, **SumatraPDF**, **Flow Launcher** |
+| Réseau | **PuTTY** (64 et 32 bits), **FileZilla**, **WinSCP** (32 bits) |
+| Développement | **Claude Code** |
+| Jeux | **Warzone 2100** (Direct3D 11), **SuperTuxKart 1.5** (version Windows), **Xonotic** (OpenGL/WGL) |
+
+**En cours, pas encore utilisables de bout en bout** : Paint.NET (le runtime .NET, Direct2D, WIC et la composition démarrent, il reste des fonctions manquantes avant que la fenêtre s'ouvre), Steam (il s'installe et télécharge son client, mais ne passe pas encore en ligne), le client Claude pour Windows (il démarre, son affichage reste à valider), Photoshop (pas encore testé jusqu'au bout). Chaque blocage a son issue sur GitHub.
+
 ### Système et installation
 
 - **ISO Live hybride** (BIOS, UEFI, clé USB) avec racine SquashFS compressée en xz et couche d'écriture en mémoire.
 - **Installateur graphique** : installation automatique sur tout le disque par défaut, partitionnement manuel complet (créer, supprimer, redimensionner, formater) derrière un mode avancé, **chiffrement LUKS**, double démarrage avec un Windows existant, compte local avec avatar, Wi-Fi et proxy, import des données d'une partition Windows, test des performances du matériel et profils d'utilisation, installation silencieuse par fichier de réponses. L'installateur s'adapte à la définition et au DPI de l'écran, du 1366×768 à la 4K. Six langues.
 - **Secure Boot** : chaîne shim → GRUB → noyau signés, avec la possibilité d'utiliser ses propres clés ([docs/SECURE-BOOT.md](docs/SECURE-BOOT.md)).
 - **Mode récupération** dans le menu GRUB : réparer le démarrage, revenir au point de restauration précédent, terminal de secours, vérification du système de fichiers ([docs/RECOVERY.md](docs/RECOVERY.md)).
-- **Mises à jour** depuis les releases GitHub publiques, vérifiées par SHA-256, avec point de restauration et retour arrière.
+- **Mises à jour** depuis les releases GitHub publiques, avec manifeste **signé en Ed25519** et vérification SHA-256, installées dans un **second emplacement système (A/B)** : si la nouvelle version ne démarre pas trois fois de suite, Winlux revient seul à la précédente ([docs/AB_UPDATES.md](docs/AB_UPDATES.md)).
 - **Détection du matériel** au démarrage (GPU, hyperviseur, Bluetooth, batterie, capteurs) ; pilotes d'affichage pour QEMU, VirtualBox et VMware.
 - Plusieurs utilisateurs connectés en même temps avec changement rapide, **bureau à distance** (serveur RFB/VNC maison), **historique des fichiers**, points de restauration, écran bleu de diagnostic et journal centralisé.
 
@@ -148,7 +162,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 
 ### Compatibilité Windows
 
-- Chargeur **PE32+ x86-64** : sections, relocations, imports et imports différés, vraies DLL chargées avec `LoadLibrary`, callbacks TLS, `DllMain`, ressources, manifestes.
+- Chargeur **PE32+ x86-64** et **PE32 x86** (programmes 32 bits, dans le même processus, sans bibliothèques i386) : sections, relocations, imports et imports différés, vraies DLL chargées avec `LoadLibrary`, callbacks TLS, `DllMain`, ressources, manifestes.
 - Environ **100 modules de DLL** réimplémentés, dont `kernel32`, `ntdll`, `user32`, `gdi32`, `advapi32`, `shell32`, `shlwapi`, `ole32`, `oleaut32`, `comctl32`, `comdlg32`, `ws2_32`, `winhttp`, `iphlpapi`, `bcrypt`, `crypt32`, `winmm`, `dsound`, `xaudio2`, `mmdevapi`, `xinput`, `dinput8`, `winspool`, `msvcrt`/`ucrtbase`, `libstdc++`/`libgcc` (MinGW).
 - **Exceptions** : SEH x64 et exceptions C++ MSVC (`__CxxFrameHandler3`, `__try/__except/__finally`).
 - **Graphismes** : fenêtres et messages Win32 sur X11, GDI avec polices Xft, **Direct2D** et **DirectWrite** logiciels maison, **WIC** (BMP, PNG, JPEG, GIF, TIFF, WebP…), **Direct3D 11 traduit vers OpenGL**, **Direct3D 9 et 12** avec un backend **Vulkan**, décodage vidéo matériel DXVA2 (H.264).
@@ -164,14 +178,13 @@ Ce qu'il reste à faire, mesuré et classé par impact, est dans [docs/COMPATIBI
 
 Liste honnête des limites actuelles, tenue à jour dans [Suivi.md](Suivi.md) :
 
-- **Programmes 32 bits** : non pris en charge (sauf .NET managé).
-- **Gros logiciels** : Paint.NET démarre son runtime .NET mais ne s'ouvre pas encore ([docs/PAINTNET.md](docs/PAINTNET.md)) ; WPF et WinForms ne sont pas encore disponibles ; les clients Windows de ChatGPT et Claude ne démarrent pas ([docs/CLAUDE-CHATGPT-WINDOWS.md](docs/CLAUDE-CHATGPT-WINDOWS.md)) ; Photoshop et les jeux Direct3D récents ne sont pas utilisables.
-- **CLR maison** : pas encore de génériques de la bibliothèque de base (`List<T>`, `Dictionary`), ni de délégués ou LINQ.
-- **COM** : pas d'activation depuis le registre, ni de serveurs hors processus ni d'automatisation. **Media Foundation et DirectShow** ne décodent pas encore la vidéo pour les `.exe` (le lecteur multimédia intégré, lui, lit tous les formats).
-- **Processus** : pas d'héritage des handles entre processus ; `FreeLibrary` ne décharge pas réellement les DLL ; services Windows sans `StartServiceCtrlDispatcher`.
-- **Sécurité** : le bureau de l'ISO doit encore passer en utilisateur non privilégié ; les mises à jour sont vérifiées par SHA-256 mais **pas encore signées** (Ed25519 prévu) ; pas encore de partitions système A/B résistantes à une coupure de courant ([docs/AB_UPDATES.md](docs/AB_UPDATES.md)).
-- **Bureau** : corbeille encore incomplète (restaurer, vider), pas de barre de progression pour les copies, navigation clavier à compléter, identité visuelle à terminer (écran de chargement du noyau, sons système, jeu d'icônes).
-- **Matériel réel** : veille prolongée, capot de portable et large gamme de PC encore à valider.
+- **Programmes 32 bits** : beaucoup démarrent, mais pas tous ; Steam et Python 32 bits butent encore sur des fonctions manquantes.
+- **Gros logiciels** : Paint.NET n'ouvre pas encore sa fenêtre ([docs/PAINTNET.md](docs/PAINTNET.md)) ; Steam ne passe pas encore en ligne ; le client Claude pour Windows démarre mais son affichage reste à valider ([docs/CLAUDE-CHATGPT-WINDOWS.md](docs/CLAUDE-CHATGPT-WINDOWS.md)) ; Photoshop et les jeux Direct3D récents ne sont pas utilisables. Le CLR .NET maison reste un prototype : les applications .NET qui embarquent leur propre runtime vont beaucoup plus loin que celles qui comptent sur lui.
+- **COM et vidéo** : la couverture COM suffit à VLC et à Paint.NET jusqu'où ils vont, mais pas encore à tous les logiciels. **Media Foundation et DirectShow** ne décodent pas encore toute la vidéo pour les `.exe` (le lecteur multimédia intégré, lui, lit tous les formats).
+- **Processus** : `FreeLibrary` laisse la DLL en mémoire jusqu'à la fin du processus.
+- **Sécurité** : le bureau de l'ISO doit encore passer en utilisateur non privilégié.
+- **Bureau** : taille maximale et purge automatique de la corbeille, navigation clavier à compléter, finitions visuelles en cours.
+- **Matériel réel** : veille, capot de portable, débranchement d'un écran externe et large gamme de PC encore à valider.
 
 ## Installer Winlux
 
@@ -191,7 +204,7 @@ Le guide pas à pas, avec la configuration matérielle conseillée, le double d�
 
 ## Mettre à jour
 
-- **Depuis le bureau** : Paramètres › Mises à jour, puis « Rechercher des mises à jour » et « Installer ». Les mises à jour automatiques peuvent être activées sur la même page.
+- **Depuis le bureau** : Paramètres › Mise à jour OS, puis « Rechercher des mises à jour » et « Installer ». Les mises à jour automatiques peuvent être activées sur la même page.
 - **En ligne de commande** :
 
 ```sh
@@ -201,7 +214,7 @@ winlux-update --rollback   # revenir à la version précédente
 winlux-update --auto enable
 ```
 
-Winlux interroge uniquement la **dernière release publique** du dépôt GitHub (jamais les commits de `master`, jamais les préversions), sans jeton ni compte. Depuis la base APT, la mise à jour est un paquet Debian `winlux-desktop` installé par APT, avec vérification de la taille et du SHA-256, sauvegarde de la version précédente et retour arrière. Les applications et documents de l'utilisateur sont conservés. Voir la page [Publication et mises à jour](wiki/Publication-et-mises-a-jour.md).
+Winlux interroge uniquement la **dernière release publique** du dépôt GitHub (jamais les commits de `master`, jamais les préversions), sans jeton ni compte. Depuis la base APT, la mise à jour est un paquet Debian `winlux-desktop` installé par APT, avec vérification de la signature Ed25519 du manifeste, de la taille et du SHA-256, puis installation dans le second emplacement système et retour arrière automatique. Les applications et documents de l'utilisateur sont conservés. Voir la page [Publication et mises à jour](wiki/Publication-et-mises-a-jour.md).
 
 ## Utiliser seulement le runtime sur un Linux existant
 
