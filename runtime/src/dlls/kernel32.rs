@@ -3426,9 +3426,9 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         return load_as_data(&value, flags);
     }
     // Never execute DLL entry points for resource/data-only loading requests.
-    // AddDllDirectory/user search directories and signature flags are not yet
-    // supported; return an error rather than searching an unsafe fallback path.
-    const SEARCH: u32 = 0x100 | 0x200 | 0x800 | 0x1000;
+    // Signature flags are not supported; return an error rather than
+    // searching an unsafe fallback path. 0x400 = AddDllDirectory dirs.
+    const SEARCH: u32 = 0x100 | 0x200 | 0x400 | 0x800 | 0x1000;
     if flags & !(SEARCH | 8) != 0 {
         crate::process::set_last_error(50);
         return 0;
@@ -3468,6 +3468,9 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
                 directories.push(parent.to_path_buf());
             }
         }
+    }
+    if flags & (0x400 | 0x1000) != 0 {
+        directories.extend(crate::loader::user_dll_directories());
     }
     if flags & (8 | 0x800 | 0x1000) != 0 {
         directories.push(crate::paths::to_linux("C:\\Windows\\System32"));
