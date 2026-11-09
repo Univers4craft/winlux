@@ -1033,6 +1033,9 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
     let owner = owner_to_refocus(hwnd);
     if gui::destroy_window(hwnd) {
         if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
+            crate::thunks::api_note(&format!(
+                "DestroyWindow {hwnd:#x} : focus rendu à {owner:#x} (#1311)"
+            ));
             set_focus(owner);
         }
         1
@@ -1041,9 +1044,10 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
     }
 }
 
-/// Propriétaire à qui rendre le focus quand `hwnd` est détruite : seulement
-/// pour une fenêtre de premier niveau possédée qui a le focus du fil, si ce
-/// propriétaire est visible et activé.
+/// Fenêtre à qui rendre le focus quand `hwnd` est détruite : seulement pour
+/// une fenêtre de premier niveau qui a le focus du fil. Son propriétaire s'il
+/// est visible et activé, sinon la fenêtre visible et activée suivante du fil
+/// dans l'ordre Z (#1311).
 unsafe fn owner_to_refocus(hwnd: usize) -> usize {
     let Some(style) = gui::window_style(hwnd) else {
         return 0;
@@ -1062,16 +1066,30 @@ unsafe fn owner_to_refocus(hwnd: usize) -> usize {
     if focus == 0 || inside != hwnd {
         return 0;
     }
+    // Le propriétaire d'abord, comme Windows.
     let owner = owner_top_level(get_window_long_ptr_w(hwnd, GWLP_HWNDPARENT) as usize);
-    if owner == 0 || owner == hwnd {
-        return 0;
+    let candidates = gui::thread_visible_top_levels();
+    if owner != 0
+        && owner != hwnd
+        && candidates
+            .iter()
+            .any(|&(h, s)| h == owner && s & WS_DISABLED == 0)
+    {
+        return owner;
     }
-    let ok = gui::window_style(owner).is_some_and(|s| s & WS_DISABLED == 0 && s & 0x1000_0000 != 0);
-    if ok {
-        owner
-    } else {
-        0
-    }
+    // Sinon la fenêtre suivante dans l'ordre Z : Qt 5 retire le propriétaire
+    // de la fenêtre de sa boîte native (SetWindowLongPtr(GWLP_HWNDPARENT, 0))
+    // juste avant de la détruire. Une fenêtre à barre de titre ou sans
+    // WS_POPUP, pas un menu ni une bulle.
+    candidates
+        .into_iter()
+        .find(|&(h, s)| {
+            h != hwnd
+                && s & WS_DISABLED == 0
+                && (s & 0x00C0_0000 == 0x00C0_0000 || s & 0x8000_0000 == 0)
+        })
+        .map(|(h, _)| h)
+        .unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn is_window(hwnd: usize) -> i32 {
@@ -4796,6 +4814,14 @@ mod tests {
                 get_focus() == main,
                 SETFOCUS.load(Ordering::SeqCst) - before,
             );
+            // Propriétaire retiré avant la destruction (Qt 5) : la fenêtre
+            // suivante du fil dans l'ordre Z reprend le focus.
+            let hidden = make(0x86CC_0000);
+            set_window_long_ptr_w(hidden, GWLP_HWNDPARENT, main as isize);
+            set_focus(hidden);
+            set_window_long_ptr_w(hidden, GWLP_HWNDPARENT, 0);
+            destroy_window(hidden);
+            assert_eq!(get_focus(), main, "propriétaire retiré");
             // Une fenêtre détruite sans le focus ne le déplace pas.
             let other = make(0x86CC_0000);
             set_window_long_ptr_w(other, GWLP_HWNDPARENT, main as isize);
