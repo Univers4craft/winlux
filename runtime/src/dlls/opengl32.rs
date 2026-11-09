@@ -23,6 +23,7 @@ use super::{lock, Exports};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 // ---------- Table des formats de pixel ----------
@@ -581,6 +582,8 @@ pub extern "win64" fn wgl_make_current(hdc: usize, h: usize) -> i32 {
         }
         c.glx
     };
+    MAKE_CURRENT_CALLS.fetch_add(1, Ordering::Relaxed);
+    start_gl_report();
     let ok = unsafe { (g.make_current)(g.dpy, window, ctx) };
     gl_diag(format_args!(
         "wglMakeCurrent hdc={hdc:#x} hwnd={:#x} x={window:#x} {h:#x} (glx {ctx:#x}) -> {ok}",
@@ -653,26 +656,60 @@ fn mark_gl_window(window: u64) {
     }
 }
 
+/// Entrées et sorties de glXSwapBuffers, et appels de wglMakeCurrent, lus
+/// par le bilan périodique de WINLUX_WINDOW_DIAG (#1421).
+static SWAP_IN: AtomicU64 = AtomicU64::new(0);
+static SWAP_OUT: AtomicU64 = AtomicU64::new(0);
+static MAKE_CURRENT_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Sous WINLUX_WINDOW_DIAG, un fil note toutes les 2 s les compteurs : un
+/// SwapBuffers entré mais jamais ressorti se voit sans débogueur.
+fn start_gl_report() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if !super::user32::window_diag() {
+        return;
+    }
+    ONCE.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("gl-bilan".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                eprintln!(
+                    "winlux[gl] bilan : SwapBuffers {} entrés, {} sortis ; wglMakeCurrent {} ; intervalle {}",
+                    SWAP_IN.load(Ordering::Relaxed),
+                    SWAP_OUT.load(Ordering::Relaxed),
+                    MAKE_CURRENT_CALLS.load(Ordering::Relaxed),
+                    SWAP_INTERVAL.load(Ordering::Relaxed)
+                );
+            });
+    });
+}
+
 pub extern "win64" fn swap_buffers(hdc: usize) -> i32 {
     let Some(g) = glx() else { return 0 };
     let Some((_, window)) = dc_drawable(hdc) else {
         return 0;
     };
+    let n = SWAP_IN.fetch_add(1, Ordering::Relaxed);
+    let diag = super::user32::window_diag() && (n < 5 || n.is_multiple_of(1000));
+    if diag {
+        start_gl_report();
+        let cur = CURRENT.with(|c| c.get());
+        gl_diag(format_args!(
+            "SwapBuffers n°{n} hdc={hdc:#x} x={window:#x}, courant hdc={:#x} {:#x}",
+            cur.0, cur.1
+        ));
+    }
+    let t = std::time::Instant::now();
     unsafe { (g.swap_buffers)(g.dpy, window) };
-    if super::user32::window_diag() {
-        static SWAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = SWAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n < 5 || n.is_multiple_of(1000) {
-            let cur = CURRENT.with(|c| c.get());
-            gl_diag(format_args!(
-                "SwapBuffers n°{n} hdc={hdc:#x} x={window:#x}, courant hdc={:#x} {:#x}",
-                cur.0, cur.1
-            ));
-            // Fait remonter les erreurs X en attente sur la connexion GLX,
-            // qu'aucune boucle d'événements ne lit (#1421).
-            if let Some(sync) = g.x_sync {
-                unsafe { sync(g.dpy, 0) };
-            }
+    SWAP_OUT.fetch_add(1, Ordering::Relaxed);
+    let took = t.elapsed();
+    if super::user32::window_diag() && (diag || took > std::time::Duration::from_millis(100)) {
+        gl_diag(format_args!("SwapBuffers n°{n} rendu en {took:?}"));
+        // Fait remonter les erreurs X en attente sur la connexion GLX,
+        // qu'aucune boucle d'événements ne lit (#1421).
+        if let Some(sync) = g.x_sync {
+            unsafe { sync(g.dpy, 0) };
         }
     }
     1
@@ -809,6 +846,7 @@ extern "win64" fn wgl_choose_pixel_format_arb(
 extern "win64" fn wgl_swap_interval(interval: i32) -> i32 {
     let Some(g) = glx() else { return 0 };
     SWAP_INTERVAL.store(interval, std::sync::atomic::Ordering::Relaxed);
+    gl_diag(format_args!("wglSwapIntervalEXT({interval})"));
     let hdc = CURRENT.with(|c| c.get().0);
     unsafe {
         if let (Some(f), Some((_, w))) = (g.swap_interval_ext, dc_drawable(hdc)) {
