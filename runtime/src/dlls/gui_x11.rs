@@ -961,6 +961,11 @@ pub struct X11Backend {
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
     back: HashMap<usize, (u32, u16, u16)>,
+    /// Enfants transparents (WS_CHILD et WS_EX_TRANSPARENT, hors
+    /// contrôles intégrés) : fenêtres X « InputOnly », qui reçoivent la souris
+    /// sans masquer ce qu'un autre processus présente dans le parent
+    /// (fenêtre « Chrome Legacy Window » de Chromium, #1337).
+    see_through: std::collections::HashSet<usize>,
     /// Barre de menus de chaque fenêtre qui en a une, et menu ouvert.
     menu_bars: HashMap<usize, (Vec<gui::MenuBarItem>, Option<usize>)>,
     /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
@@ -1172,6 +1177,7 @@ impl X11Backend {
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
+            see_through: std::collections::HashSet::new(),
             menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -2159,6 +2165,42 @@ impl X11Backend {
             destination.gc,
             &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
         );
+    }
+
+    /// Forme X de `window` : les rectangles logiques visibles, ou toute la
+    /// fenêtre (`None`).
+    fn apply_shape(&self, window: Window, width: u16, height: u16, rects: Option<&[Rect]>) {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
+            Some(list) => list
+                .iter()
+                .map(|r| {
+                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
+                    x11rb::protocol::xproto::Rectangle {
+                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
+                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
+                    }
+                })
+                .collect(),
+            None => vec![x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }],
+        };
+        let _ = self.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            window,
+            0,
+            0,
+            &rects,
+        );
+        let _ = self.conn.flush();
     }
 
     fn paint_bitmap(
@@ -3328,10 +3370,17 @@ impl X11Backend {
                     lparam: pack_i16_pair(self.logical(x), self.logical(y)),
                 });
             }
+            // SIZE_MAXIMIZED ou SIZE_MINIMIZED quand le gestionnaire a
+            // agrandi ou réduit la fenêtre (#1328).
+            let wparam = if child {
+                0
+            } else {
+                gui::size_kind(gui::GuiBackend::window_state(self, hwnd))
+            };
             return Some(PendingEvent {
                 hwnd,
                 message: gui::WM_SIZE,
-                wparam: 0,
+                wparam,
                 lparam,
             });
         }
@@ -3938,6 +3987,45 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
     }
 
+    /// Un enfant WS_EX_TRANSPARENT devient une fenêtre X InputOnly : il ne
+    /// masque pas l'image qu'un autre processus présente dans le parent
+    /// (Chromium, #1337).
+    #[test]
+    #[ignore = "requires an X11 server"]
+    fn enfant_transparent_en_inputonly_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::xproto::WindowClass;
+        let mut backend = X11Backend::connect().expect("X11");
+        let parent = gui::alloc_hwnd();
+        gui::insert_window(parent, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(parent, "essai", Rect::from_size(0, 0, 200, 150));
+        let legacy = gui::alloc_hwnd();
+        gui::insert_window(legacy, gui::tests::fenetre_essai(0x4600_0000, 0x20, parent));
+        backend.create_child_window(legacy, parent, Rect::from_size(0, 37, 200, 113));
+        let opaque = gui::alloc_hwnd();
+        gui::insert_window(opaque, gui::tests::fenetre_essai(0x4600_0000, 0, parent));
+        backend.create_child_window(opaque, parent, Rect::from_size(0, 0, 20, 20));
+        let class = |b: &X11Backend, h: usize| {
+            let w = b.windows[&h].window;
+            b.conn
+                .get_window_attributes(w)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .class
+        };
+        assert_eq!(class(&backend, legacy), WindowClass::INPUT_ONLY);
+        assert_eq!(class(&backend, opaque), WindowClass::INPUT_OUTPUT);
+        // Aucun dessin ne va dans la fenêtre InputOnly (pas d'erreur X).
+        backend.draw(legacy, &[]);
+        backend.conn.sync().unwrap();
+        for h in [legacy, opaque, parent] {
+            backend.destroy_window(h);
+            gui::destroy_window(h);
+        }
+        backend.conn.sync().unwrap();
+    }
+
     #[test]
     #[ignore = "requires an X11 server with Cairo and Xft"]
     fn contours_anticreneles_x11() {
@@ -4168,6 +4256,111 @@ mod tests {
         backend.conn.free_gc(gc).unwrap();
         backend.conn.free_pixmap(pixmap).unwrap();
     }
+
+    /// #1357 : forme X posée sur la fenêtre d'un autre client X.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn forme_posee_sur_une_fenetre_etrangere_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::shape::ConnectionExt as _;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let win = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_window(
+                0,
+                win,
+                root.root,
+                0,
+                0,
+                40,
+                20,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        let s = backend.scaled(1);
+        let rect = Rect {
+            left: 10,
+            top: 0,
+            right: 30,
+            bottom: 20,
+        };
+        backend.shape_foreign(win as u64, Some(&[rect]));
+        let got = backend
+            .conn
+            .shape_get_rectangles(win, x11rb::protocol::shape::SK::BOUNDING)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(got.rectangles.len(), 1);
+        assert_eq!(got.rectangles[0].x as i32, 10 * s);
+        assert_eq!(got.rectangles[0].width as i32, 20 * s);
+        backend.conn.destroy_window(win).unwrap();
+    }
+
+    /// #1345 : image posée par un autre processus (processus GPU de
+    /// Chromium) sur un drawable X11 qui ne lui appartient pas.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn image_posee_sur_un_drawable_etranger_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let pixmap = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_pixmap(root.root_depth, pixmap, root.root, 64, 64)
+            .unwrap()
+            .check()
+            .unwrap();
+        let rect = Rect {
+            left: 2,
+            top: 2,
+            right: 6,
+            bottom: 5,
+        };
+        let scaled = backend.scaled_rect(&rect);
+        backend.paint_foreign(pixmap as u64, rect, &[0x0000_00ff; 12], gui::RasterOp::Copy);
+        let pixel = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                scaled.left as i16,
+                scaled.top as i16,
+                1,
+                1,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        let visual = root
+            .allowed_depths
+            .iter()
+            .flat_map(|d| &d.visuals)
+            .find(|v| v.visual_id == root.root_visual)
+            .unwrap();
+        let mut value = [0u8; 4];
+        let len = pixel.data.len().min(4);
+        value[..len].copy_from_slice(&pixel.data[..len]);
+        let value = if backend.conn.setup().image_byte_order
+            == x11rb::protocol::xproto::ImageOrder::LSB_FIRST
+        {
+            u32::from_le_bytes(value)
+        } else {
+            u32::from_be_bytes(value) >> (8 * (4 - len))
+        };
+        assert_eq!(value & visual.red_mask, visual.red_mask);
+        assert_eq!(value & visual.green_mask, 0);
+        backend.conn.free_pixmap(pixmap).unwrap();
+    }
 }
 
 /// Agrandit/réduit une image ZPixmap. `src`/`dst` = (largeur, hauteur, pas).
@@ -4277,6 +4470,49 @@ impl gui::GuiBackend for X11Backend {
 
     fn native_window(&mut self, hwnd: usize) -> Option<u64> {
         self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
+    fn paint_foreign(&mut self, xid: u64, rect: Rect, pixels: &[u32], rop: gui::RasterOp) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
+        };
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return; // fenêtre détruite entre-temps
+        };
+        // L'image est encodée pour la profondeur de la racine.
+        if g.depth != self.conn.setup().roots[self.screen].root_depth {
+            return;
+        }
+        let Ok(gc) = self.conn.generate_id() else {
+            return;
+        };
+        if !self
+            .conn
+            .create_gc(gc, xid, &CreateGCAux::new())
+            .is_ok_and(|c| c.check().is_ok())
+        {
+            return;
+        }
+        let window = XWin {
+            window: xid,
+            gc,
+            x: 0,
+            y: 0,
+            width: g.width,
+            height: g.height,
+            child: false,
+            frame: 0,
+            bar: 0,
+        };
+        let destination = self.scaled_rect(&rect);
+        self.paint_bitmap(&window, &rect, &destination, pixels, rop);
+        let _ = self.conn.free_gc(gc);
+        let _ = self.conn.flush();
     }
 
     fn foreign_size(&mut self, xid: u64) -> Option<(i32, i32)> {
@@ -4575,9 +4811,22 @@ impl gui::GuiBackend for X11Backend {
         let Ok(win) = self.conn.generate_id() else {
             return;
         };
-        let bg = self.alloc_color(theme::BG_DEEP);
-        let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+        let see_through = gui::is_see_through_child(hwnd);
+        let aux = if see_through {
+            // InputOnly : ni fond ni dessin, la souris seulement.
+            CreateWindowAux::new()
+        } else {
+            let bg = self.alloc_color(theme::BG_DEEP);
+            CreateWindowAux::new().background_pixel(bg)
+        };
+        // Une fenêtre InputOnly n'est jamais exposée.
+        let exposure = if see_through {
+            x11rb::protocol::xproto::EventMask::NO_EVENT
+        } else {
             x11rb::protocol::xproto::EventMask::EXPOSURE
+        };
+        let aux = aux.event_mask(
+            exposure
                 | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
                 | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
                 | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
@@ -4601,8 +4850,12 @@ impl gui::GuiBackend for X11Backend {
                 w,
                 h,
                 0,
-                WindowClass::INPUT_OUTPUT,
-                visual,
+                if see_through {
+                    WindowClass::INPUT_ONLY
+                } else {
+                    WindowClass::INPUT_OUTPUT
+                },
+                if see_through { 0 } else { visual },
                 &aux,
             )
             .is_err()
@@ -4612,9 +4865,15 @@ impl gui::GuiBackend for X11Backend {
         let Ok(gc) = self.conn.generate_id() else {
             return;
         };
+        // Un GC ne se crée pas sur une fenêtre InputOnly : celui du parent
+        // (jamais utilisé, aucun dessin n'y va).
+        let gc_drawable = if see_through { parent_win } else { win };
         let _ = self
             .conn
-            .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+            .create_gc(gc, gc_drawable, &CreateGCAux::new().graphics_exposures(0));
+        if see_through {
+            self.see_through.insert(hwnd);
+        }
         let _ = self.conn.flush();
         self.windows.insert(
             hwnd,
@@ -4634,6 +4893,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
         self.content.insert(hwnd, cmds.to_vec());
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
@@ -4659,6 +4921,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
@@ -4720,6 +4985,7 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
+        self.see_through.remove(&hwnd);
         self.owners.remove(&hwnd);
         self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
@@ -4862,43 +5128,28 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_shape(&mut self, hwnd: usize, rects: Option<&[Rect]>) {
-        use x11rb::protocol::shape::{self, ConnectionExt as _};
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
         if w.frame != 0 {
             return; // cadre Winlux (barre de menus) : jamais en couches
         }
-        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
-            Some(list) => list
-                .iter()
-                .map(|r| {
-                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
-                    x11rb::protocol::xproto::Rectangle {
-                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
-                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
-                    }
-                })
-                .collect(),
-            None => vec![x11rb::protocol::xproto::Rectangle {
-                x: 0,
-                y: 0,
-                width: w.width,
-                height: w.height,
-            }],
+        self.apply_shape(w.window, w.width, w.height, rects);
+    }
+
+    fn shape_foreign(&mut self, xid: u64, rects: Option<&[Rect]>) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
         };
-        let _ = self.conn.shape_rectangles(
-            shape::SO::SET,
-            shape::SK::BOUNDING,
-            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
-            w.window,
-            0,
-            0,
-            &rects,
-        );
-        let _ = self.conn.flush();
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return;
+        };
+        self.apply_shape(xid, g.width, g.height, rects);
     }
 
     fn set_decorations(&mut self, hwnd: usize, level: u8) {

@@ -1088,6 +1088,17 @@ impl Drop for Effect {
                 unsafe { com_release(i) };
             }
         }
+        if self.reg().is_none() {
+            let props = crate::dlls::lock(&self.props);
+            for (i, &(_, t, _)) in builtin_props(&self.clsid).iter().enumerate() {
+                let p = props
+                    .get(&(i as u32))
+                    .map_or(std::ptr::null_mut(), |v| stored_interface(v));
+                if is_interface_type(t) && !p.is_null() {
+                    unsafe { com_release(p) };
+                }
+            }
+        }
         unsafe { Com::release(self.factory) };
     }
 }
@@ -1275,6 +1286,84 @@ unsafe extern "win64" fn effect_resource_qi(
     effect_qi(Com::get(this).data.effect, riid, out)
 }
 
+// --- Listes de commandes (#1331) ---------------------------------------------------
+
+/// ID2D1CommandList {B4F34A19-2383-4D76-94F6-EC343657C3DC} (d2d1_1.h).
+const IID_D2D1_COMMAND_LIST: Guid = guid(
+    0xb4f34a19,
+    0x2383,
+    0x4d76,
+    [0x94, 0xf6, 0xec, 0x34, 0x36, 0x57, 0xc3, 0xdc],
+);
+
+/// Taille d'une liste de commandes créée sans cible : la liste n'a pas de
+/// bornes chez Direct2D, ici elle est rendue dans une surface fixe.
+const COMMAND_LIST_DEFAULT_SIZE: u32 = 1024;
+
+/// Une liste de commandes est rendue au fil de l'eau dans des pixels,
+/// comme un bitmap cible : SetTarget l'accepte, EndDraw y recopie le
+/// dessin, et elle sert d'image (DrawImage, entrée d'effet, pinceau).
+/// Stream n'est pas rejouable : E_NOTIMPL.
+pub(super) static COMMAND_LIST_VT: VTable<6> = VTable([
+    command_list_qi as *const (),
+    add_ref::<Res<Bitmap>> as *const (),
+    release::<Res<Bitmap>> as *const (),
+    get_factory::<Bitmap> as *const (),
+    unsupported!("ID2D1CommandList::Stream"),
+    command_list_close as *const (),
+]);
+
+unsafe extern "win64" fn command_list_qi(
+    this: *mut BitmapObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_D2D1_RESOURCE, IID_D2D1_IMAGE, IID_D2D1_COMMAND_LIST],
+    )
+}
+
+unsafe extern "win64" fn command_list_close(_: *mut BitmapObj) -> i32 {
+    S_OK
+}
+
+/// Bitmap ou liste de commandes : objets dont les pixels sont tenus ici.
+pub(super) unsafe fn is_pixel_image(image: *mut c_void) -> bool {
+    if image.is_null() {
+        return false;
+    }
+    let vt = *(image as *const *const ());
+    vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr()
+}
+
+/// CreateCommandList : surface de la taille de la cible courante.
+unsafe extern "win64" fn dc_create_command_list(
+    this: *mut TargetObj,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let (w, h) = {
+        let t = target(this);
+        (t.w, t.h)
+    };
+    let (w, h) = if w == 0 || h == 0 {
+        (COMMAND_LIST_DEFAULT_SIZE, COMMAND_LIST_DEFAULT_SIZE)
+    } else {
+        (w, h)
+    };
+    let b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    put(
+        out,
+        new_res(Com::get(this).factory, COMMAND_LIST_VT.ptr(), b),
+    )
+}
+
 static EFFECT_RESOURCE_VT: VTable<4> = VTable([
     effect_resource_qi as *const (),
     add_ref::<Res<EffectImage>> as *const (),
@@ -1295,11 +1384,58 @@ const SYSTEM_PROPS: [(&str, u32); 10] = [
     ("MaxInputs", custom::ty::UINT32),
 ];
 
-/// Nom et type d'une propriété (personnalisée ou système).
+/// Propriétés publiques d'un effet intégré : nom, type, valeur par défaut
+/// (énumérations ; nul pour les interfaces). Gestion des couleurs d'après
+/// `D2D1_COLORMANAGEMENT_PROP` de `d2d1effects_1.h` (MinGW-w64) : contextes
+/// source et destination, intentions perceptuelles, alpha prémultiplié,
+/// qualité normale (#1367).
+fn builtin_props(clsid: &Guid) -> &'static [(&'static str, u32, u32)] {
+    use custom::ty::{COLOR_CONTEXT, ENUM};
+    match clsid.data1 {
+        0x1a28_524c => &[
+            ("SourceColorContext", COLOR_CONTEXT, 0),
+            ("SourceRenderingIntent", ENUM, 0),
+            ("DestinationColorContext", COLOR_CONTEXT, 0),
+            ("DestinationRenderingIntent", ENUM, 0),
+            ("AlphaMode", ENUM, 1),
+            ("Quality", ENUM, 1),
+        ],
+        _ => &[],
+    }
+}
+
+/// Type interface : la valeur est un pointeur COM (IUnknown, contexte de couleur).
+fn is_interface_type(t: u32) -> bool {
+    t == custom::ty::IUNKNOWN || t == custom::ty::COLOR_CONTEXT
+}
+
+/// Valeur par défaut d'une propriété publique d'un effet intégré.
+fn builtin_default(e: &Effect, index: u32) -> Option<Vec<u8>> {
+    let &(_, t, d) = builtin_props(&e.clsid).get(index as usize)?;
+    Some(if is_interface_type(t) {
+        vec![0; std::mem::size_of::<usize>()]
+    } else {
+        d.to_le_bytes().to_vec()
+    })
+}
+
+/// Pointeur COM rangé dans une valeur de propriété interface.
+fn stored_interface(v: &[u8]) -> *mut c_void {
+    match <[u8; 8]>::try_from(v) {
+        Ok(b) => usize::from_le_bytes(b) as *mut c_void,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Nom et type d'une propriété (personnalisée, intégrée ou système).
 fn prop_info(e: &Effect, index: u32) -> Option<(String, u32)> {
     if index >= PROP_CLSID {
         let (n, t) = SYSTEM_PROPS.get((index - PROP_CLSID) as usize)?;
         return Some((n.to_string(), *t));
+    }
+    if e.reg().is_none() {
+        let &(n, t, _) = builtin_props(&e.clsid).get(index as usize)?;
+        return Some((n.to_string(), t));
     }
     let p = e.reg()?.props.get(index as usize)?;
     Some((p.name.clone(), p.ty))
@@ -1311,6 +1447,11 @@ unsafe fn prop_by_name(e: &Effect, name: *const u16) -> u32 {
         if let Some(i) = r.props.iter().position(|p| p.name == name) {
             return i as u32;
         }
+    } else if let Some(i) = builtin_props(&e.clsid)
+        .iter()
+        .position(|(n, _, _)| *n == name)
+    {
+        return i as u32;
     }
     SYSTEM_PROPS
         .iter()
@@ -1325,7 +1466,8 @@ unsafe extern "win64" fn effect_prop_count(this: *mut EffectObj) -> u32 {
         None => crate::dlls::lock(&e.props)
             .keys()
             .filter(|&&k| k < PROP_CLSID)
-            .count() as u32,
+            .count()
+            .max(builtin_props(&e.clsid).len()) as u32,
     }
 }
 unsafe extern "win64" fn effect_prop_name(
@@ -1389,7 +1531,27 @@ unsafe extern "win64" fn effect_set_value(
     if let Some(hr) = custom::set_value(e, index, &v) {
         return hr;
     }
-    crate::dlls::lock(&e.props).insert(index, v);
+    let interface = e.reg().is_none()
+        && builtin_props(&e.clsid)
+            .get(index as usize)
+            .is_some_and(|p| is_interface_type(p.1));
+    if interface {
+        // Pointeur COM : l'effet garde sa propre référence.
+        if size as usize != std::mem::size_of::<usize>() {
+            return E_INVALIDARG;
+        }
+        let p = stored_interface(&v);
+        if !p.is_null() {
+            com_add_ref(p);
+        }
+    }
+    let old = crate::dlls::lock(&e.props).insert(index, v);
+    if interface {
+        let p = old.map_or(std::ptr::null_mut(), |o| stored_interface(&o));
+        if !p.is_null() {
+            com_release(p);
+        }
+    }
     S_OK
 }
 unsafe extern "win64" fn effect_get_by_name(
@@ -1440,9 +1602,22 @@ unsafe extern "win64" fn effect_get_value(
         .get(&index)
         .cloned()
         .or_else(|| system_prop(e, index))
+        .or_else(|| builtin_default(e, index))
         .unwrap_or_default();
     std::ptr::write_bytes(data, 0, size as usize);
     std::ptr::copy_nonoverlapping(v.as_ptr(), data, v.len().min(size as usize));
+    if e.reg().is_none()
+        && size as usize >= v.len()
+        && builtin_props(&e.clsid)
+            .get(index as usize)
+            .is_some_and(|p| is_interface_type(p.1))
+    {
+        // Comme tout paramètre de sortie COM, l'appelant reçoit une référence.
+        let p = stored_interface(&v);
+        if !p.is_null() {
+            com_add_ref(p);
+        }
+    }
     S_OK
 }
 unsafe extern "win64" fn effect_value_size(this: *mut EffectObj, index: u32) -> u32 {
@@ -1454,6 +1629,7 @@ unsafe extern "win64" fn effect_value_size(this: *mut EffectObj, index: u32) -> 
         .get(&index)
         .map(|v| v.len())
         .or_else(|| system_prop(e, index).map(|v| v.len()))
+        .or_else(|| builtin_default(e, index).map(|v| v.len()))
         .unwrap_or(0) as u32
 }
 unsafe extern "win64" fn effect_sub_props(_: *mut EffectObj, _: u32, out: *mut *mut c_void) -> i32 {
@@ -1586,7 +1762,7 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
         return None;
     }
     let vt = *(image as *const *const ());
-    if vt == BITMAP_VT.ptr() {
+    if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
         return Some(Img {
             x: 0,
@@ -1799,7 +1975,7 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
         crate::log_warn!("d2d1", "SetTarget refusé sur une cible fenêtre ou HDC");
         return;
     }
-    let new_out = if !image.is_null() && *(image as *const *const ()) == BITMAP_VT.ptr() {
+    let new_out = if is_pixel_image(image) {
         let b = &Com::get(image as *mut BitmapObj).data;
         t.w = b.w;
         t.h = b.h;
@@ -1808,7 +1984,10 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
         Output::Bitmap(image)
     } else {
         if !image.is_null() {
-            crate::log_warn!("d2d1", "SetTarget : seule une ID2D1Bitmap1 peut être cible");
+            crate::log_warn!(
+                "d2d1",
+                "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
+            );
         }
         t.w = 0;
         t.h = 0;
@@ -2035,7 +2214,7 @@ const DC_EXTRA: [*const (); 63] = [
     dc_gradient_stops1 as *const (),                   // 64 CreateGradientStopCollection
     super::brushes::create_image_brush as *const (),   // 65 CreateImageBrush
     super::brushes::create_bitmap_brush1 as *const (), // 66 CreateBitmapBrush
-    unsupported!("CreateCommandList"),                 // 67
+    dc_create_command_list as *const (),               // 67 CreateCommandList
     dc_format_supported as *const (),                  // 68 IsDxgiFormatSupported
     dc_precision_supported as *const (),               // 69 IsBufferPrecisionSupported
     dc_image_local_bounds as *const (),                // 70 GetImageLocalBounds
@@ -2393,6 +2572,14 @@ pub(super) unsafe fn new_color_in(
     if out.is_null() {
         return E_POINTER;
     }
+    // sRGB et scRGB se créent sans profil, mais GetProfile rend le profil
+    // ICC de l'espace : Paint.NET le hache et refuse moins de 128 octets
+    // (#1354).
+    let profile = match (space, profile.is_empty()) {
+        (1, true) => crate::dlls::icc::srgb(),
+        (2, true) => crate::dlls::icc::scrgb(),
+        _ => profile,
+    };
     put(
         out,
         new_res(
@@ -2702,6 +2889,185 @@ mod tests {
             dc_get_target(dc, &mut back);
             assert_eq!(back, bmp);
             com_release(back);
+            com_release(bmp);
+            com_release(dc.cast());
+            com_release(dev);
+            Com::release(f);
+        }
+    }
+
+    /// Paint.NET (ColorsForm.SetColorAddIcon) : CreateCommandList, dessin
+    /// dans la liste prise pour cible, Close, puis la liste comme image
+    /// (#1331).
+    /// #1354 : un contexte sRGB créé sans profil rend un profil ICC complet
+    /// (Paint.NET refuse moins de 128 octets).
+    #[test]
+    fn contexte_srgb_rend_un_profil_icc() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            for (space, expected) in [
+                (1, crate::dlls::icc::srgb()),
+                (2, crate::dlls::icc::scrgb()),
+            ] {
+                let mut cc = std::ptr::null_mut();
+                assert_eq!(
+                    dc_color_context(dc, space, std::ptr::null(), 0, &mut cc),
+                    S_OK
+                );
+                let cc: *mut ColorObj = cc.cast();
+                let size = color_profile_size(cc);
+                assert!(size > 128);
+                let mut buf = vec![0u8; size as usize];
+                assert_eq!(color_profile(cc, buf.as_mut_ptr(), size), S_OK);
+                assert_eq!(buf, expected);
+                assert_eq!(color_space(cc), space);
+                Com::release(cc);
+            }
+            // Un profil fourni est gardé tel quel.
+            let own = [7u8; 200];
+            let mut cc = std::ptr::null_mut();
+            assert_eq!(dc_color_context(dc, 0, own.as_ptr(), 200, &mut cc), S_OK);
+            assert_eq!(color_profile_size(cc.cast()), 200);
+            Com::release(cc.cast::<ColorObj>());
+        }
+    }
+
+    /// #1367 : l'effet intégré de gestion des couleurs décrit ses propriétés
+    /// (Paint.NET lit ses contextes de couleur par GetValueRef).
+    #[test]
+    fn gestion_des_couleurs_decrit_ses_contextes() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            let id = guid(
+                0x1a28_524c,
+                0xfdd6,
+                0x4aa4,
+                [0xae, 0x8f, 0x83, 0x7e, 0xb8, 0x26, 0x7b, 0x37],
+            );
+            let mut e = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &id, &mut e), S_OK);
+            let e: *mut EffectObj = e.cast();
+            assert_eq!(effect_prop_count(e), 6);
+            assert_eq!(effect_prop_type(e, 0), custom::ty::COLOR_CONTEXT);
+            assert_eq!(effect_prop_type(e, 1), custom::ty::ENUM);
+            assert_eq!(effect_prop_type(e, 2), custom::ty::COLOR_CONTEXT);
+            let nom: Vec<u16> = "DestinationColorContext"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(effect_prop_index(e, nom.as_ptr()), 2);
+            assert_eq!(effect_value_size(e, 0), 8);
+            assert_eq!(effect_value_size(e, 4), 4);
+            let mut p: usize = 0xdead;
+            let pp = &mut p as *mut usize as *mut u8;
+            assert_eq!(
+                effect_get_value(e, 0, custom::ty::COLOR_CONTEXT, pp, 8),
+                S_OK
+            );
+            assert_eq!(p, 0);
+            let mut alpha = 0u32;
+            let pa = &mut alpha as *mut u32 as *mut u8;
+            assert_eq!(effect_get_value(e, 4, custom::ty::ENUM, pa, 4), S_OK);
+            assert_eq!(alpha, 1);
+            // Contexte posé : l'effet garde une référence, la lecture en rend une.
+            let mut cc = std::ptr::null_mut();
+            assert_eq!(dc_color_context(dc, 1, std::ptr::null(), 0, &mut cc), S_OK);
+            let v = (cc as usize).to_le_bytes();
+            assert_eq!(
+                effect_set_value(e, 0, custom::ty::COLOR_CONTEXT, v.as_ptr(), 8),
+                S_OK
+            );
+            assert_eq!(
+                effect_get_value(e, 0, custom::ty::COLOR_CONTEXT, pp, 8),
+                S_OK
+            );
+            assert_eq!(p, cc as usize);
+            com_release(cc); // celle de la lecture
+            assert_eq!(com_add_ref(cc), 3); // création + effet + celle-ci
+            com_release(cc);
+            Com::release(e);
+            assert_eq!(com_release(cc), 0);
+            Com::release(dc);
+            Com::release(f);
+        }
+    }
+
+    #[test]
+    fn liste_de_commandes_dessinee_puis_lue_comme_image() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            // Cible 8×6, puis la liste prend sa taille.
+            let mut bmp = std::ptr::null_mut();
+            let size = 8u64 | (6u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(dc, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let create = method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32>(
+                dc.cast(),
+                67,
+            );
+            let mut list = std::ptr::null_mut();
+            assert_eq!(create(dc.cast(), &mut list), S_OK);
+            assert!(!list.is_null());
+            // QueryInterface : ID2D1CommandList et ID2D1Image.
+            let qi = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(list, 0);
+            for iid in [IID_D2D1_COMMAND_LIST, IID_D2D1_IMAGE] {
+                let mut p = std::ptr::null_mut();
+                assert_eq!(qi(list, &iid, &mut p), S_OK);
+                assert_eq!(p, list);
+                com_release(p);
+            }
+            // Dessin dans la liste.
+            dc_set_target(dc, list);
+            let mut back = std::ptr::null_mut();
+            dc_get_target(dc, &mut back);
+            assert_eq!(back, list);
+            com_release(back);
+            super::super::begin_draw(dc);
+            let green = super::super::ColorF {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(dc, &green);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let close = method::<unsafe extern "win64" fn(*mut c_void) -> i32>(list, 5);
+            assert_eq!(close(list), S_OK);
+            // La liste se lit comme une image de la taille de la cible.
+            let img = image_img(list, 0, (8, 6)).expect("image de la liste");
+            assert_eq!((img.w, img.h), (8, 6));
+            assert_eq!(&img.px[0..4], &[0, 255, 0, 255]);
+            dc_set_target(dc, std::ptr::null_mut());
+            com_release(list);
             com_release(bmp);
             com_release(dc.cast());
             com_release(dev);

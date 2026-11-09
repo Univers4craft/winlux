@@ -564,13 +564,17 @@ static WAITS: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 static NEXT_WAIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5741_0000);
 
-/// Un thread Winlux prêt à exécuter du code Windows (TEB, GS).
+/// Un thread Winlux prêt à exécuter du code Windows (TEB, GS). Son TEB et
+/// ses blocs TLS sont libérés à la fin : Chromium enregistre et retire des
+/// centaines d'attentes par seconde, et chacune laissait sinon ses
+/// mappages derrière elle (#1361).
 pub(super) fn spawn_windows_thread(f: impl FnOnce() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .stack_size(1 << 20)
         .spawn(move || {
             crate::process::init_thread();
             f();
+            crate::process::free_current_teb();
         })
         .is_ok()
 }
@@ -1420,5 +1424,25 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "NtSetSecurityObject" => fn nt_not_supported,
         "NtOpenDirectoryObject" => fn nt_not_supported,
         "NtCreateNamedPipeFile" => fn nt_not_supported,
+    }
+}
+
+#[cfg(test)]
+mod fils_windows_tests {
+    /// Un thread de la réserve (RegisterWaitForSingleObject,
+    /// QueueUserWorkItem, minuteries) rend son TEB en finissant (#1361).
+    #[test]
+    fn thread_de_reserve_libere_son_teb() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(super::spawn_windows_thread(move || {
+            tx.send(crate::process::teb()).unwrap();
+        }));
+        let teb = rx.recv().unwrap();
+        assert_ne!(teb, 0);
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::process::teb_known(teb) && std::time::Instant::now() < fin {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!crate::process::teb_known(teb), "TEB jamais libéré");
     }
 }

@@ -473,16 +473,50 @@ unsafe fn qi_list<T>(
     E_NOINTERFACE
 }
 
+/// IWICComponentFactory {412D0C3A-9650-44FA-AF5B-DD2A06C8E8FB}
+/// (wincodecsdk.h) : IWICImagingFactory suivie des méthodes de
+/// métadonnées. IWICImagingFactory2 ajoute une autre méthode à la même
+/// case : la fabrique de composants est donc une facette à part (#1343).
+const IID_COMPONENT_FACTORY: Guid = guid(
+    0x412d_0c3a,
+    0x9650,
+    0x44fa,
+    [0xaf, 0x5b, 0xdd, 0x2a, 0x06, 0xc8, 0xe8, 0xfb],
+);
+
 unsafe extern "win64" fn factory_qi(
     this: *mut Com<Factory>,
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    if !out.is_null() && !riid.is_null() && *riid == IID_COMPONENT_FACTORY {
+        *out = std::ptr::null_mut();
+        return put(out, Com::create(COMPONENT_FACTORY_VT.ptr(), Factory));
+    }
     qi_list(
         this,
         riid,
         out,
         &[IID_IMAGING_FACTORY, IID_IMAGING_FACTORY2],
+    )
+}
+
+/// QueryInterface de la facette IWICComponentFactory : elle-même pour son
+/// IID et IWICImagingFactory ; la fabrique complète pour IWICImagingFactory2.
+unsafe extern "win64" fn component_factory_qi(
+    this: *mut Com<Factory>,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !out.is_null() && !riid.is_null() && *riid == IID_IMAGING_FACTORY2 {
+        *out = std::ptr::null_mut();
+        return put(out, Com::create(FACTORY_VT.ptr(), Factory));
+    }
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_COMPONENT_FACTORY, IID_IMAGING_FACTORY],
     )
 }
 
@@ -834,7 +868,7 @@ static FACTORY_VT: VTable<29> = VTable([
     create_bitmap_clipper as *const (),
     create_bitmap_flip_rotator as *const (),
     create_stream as *const (),
-    unsupported!("CreateColorContext"),
+    create_color_context as *const (),
     unsupported!("CreateColorTransformer"),
     create_bitmap as *const (),
     create_bitmap_from_source as *const (),
@@ -849,6 +883,191 @@ static FACTORY_VT: VTable<29> = VTable([
     unsupported!("CreateQueryWriterFromReader"),
     unsupported!("CreateImageEncoder"),
 ]);
+
+/// IWICComponentFactory : les 28 méthodes d'IWICImagingFactory, puis les
+/// sept méthodes de métadonnées (non prises en charge).
+static COMPONENT_FACTORY_VT: VTable<35> = VTable([
+    component_factory_qi as *const (),
+    add_ref::<Factory> as *const (),
+    release::<Factory> as *const (),
+    create_decoder_from_filename as *const (),
+    create_decoder_from_stream as *const (),
+    create_decoder_from_file_handle as *const (),
+    create_component_info as *const (),
+    create_decoder as *const (),
+    unsupported!("CreateEncoder"),
+    create_palette as *const (),
+    create_format_converter as *const (),
+    create_bitmap_scaler as *const (),
+    create_bitmap_clipper as *const (),
+    create_bitmap_flip_rotator as *const (),
+    create_stream as *const (),
+    create_color_context as *const (),
+    unsupported!("CreateColorTransformer"),
+    create_bitmap as *const (),
+    create_bitmap_from_source as *const (),
+    create_bitmap_from_source_rect as *const (),
+    create_bitmap_from_memory as *const (),
+    unsupported!("CreateBitmapFromHBITMAP"),
+    unsupported!("CreateBitmapFromHICON"),
+    unsupported!("CreateComponentEnumerator"),
+    unsupported!("CreateFastMetadataEncoderFromDecoder"),
+    unsupported!("CreateFastMetadataEncoderFromFrameDecode"),
+    unsupported!("CreateQueryWriter"),
+    unsupported!("CreateQueryWriterFromReader"),
+    // IWICComponentFactory
+    unsupported!("CreateMetadataReader"),
+    unsupported!("CreateMetadataReaderFromContainer"),
+    unsupported!("CreateMetadataWriter"),
+    unsupported!("CreateMetadataWriterFromReader"),
+    unsupported!("CreateQueryReaderFromBlockReader"),
+    unsupported!("CreateQueryWriterFromBlockWriter"),
+    unsupported!("CreateEncoderPropertyBag"),
+]);
+
+// --- Contexte de couleur (#1343) ----------------------------------------------------
+
+/// IWICColorContext {3C613A02-34B2-44EA-9A7C-45AEA9C6FD6D} (wincodec.h).
+const IID_COLOR_CONTEXT: Guid = guid(
+    0x3c61_3a02,
+    0x34b2,
+    0x44ea,
+    [0x9a, 0x7c, 0x45, 0xae, 0xa9, 0xc6, 0xfd, 0x6d],
+);
+/// WICColorContextType.
+const COLOR_CONTEXT_PROFILE: u32 = 1;
+const COLOR_CONTEXT_EXIF: u32 = 2;
+
+/// Contexte : non initialisé, profil ICC (octets) ou espace EXIF (1 sRGB,
+/// 2 Adobe RGB). Aucune conversion n'est faite : le contenu est rendu tel
+/// qu'il a été donné.
+enum ColorContext {
+    Uninitialized,
+    Profile(Vec<u8>),
+    Exif(u32),
+}
+
+type ColorContextObj = Com<Mutex<ColorContext>>;
+
+static COLOR_CONTEXT_VT: VTable<9> = VTable([
+    color_context_qi as *const (),
+    add_ref::<Mutex<ColorContext>> as *const (),
+    release::<Mutex<ColorContext>> as *const (),
+    cc_init_filename as *const (),
+    cc_init_memory as *const (),
+    cc_init_exif as *const (),
+    cc_get_type as *const (),
+    cc_get_profile_bytes as *const (),
+    cc_get_exif as *const (),
+]);
+
+unsafe extern "win64" fn create_color_context(_this: *mut c_void, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    put(
+        out,
+        Com::create(
+            COLOR_CONTEXT_VT.ptr(),
+            Mutex::new(ColorContext::Uninitialized),
+        ),
+    )
+}
+
+unsafe extern "win64" fn color_context_qi(
+    this: *mut ColorContextObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_COLOR_CONTEXT])
+}
+
+unsafe fn cc_set(this: *mut ColorContextObj, c: ColorContext) -> i32 {
+    *crate::dlls::lock(Com::get(this)) = c;
+    S_OK
+}
+
+unsafe extern "win64" fn cc_init_filename(this: *mut ColorContextObj, name: *const u16) -> i32 {
+    if name.is_null() {
+        return E_INVALIDARG;
+    }
+    let path = crate::paths::to_linux(&crate::dlls::wstr(name));
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => cc_set(this, ColorContext::Profile(bytes)),
+        Ok(_) => E_INVALIDARG,
+        Err(_) => 0x8007_0002u32 as i32, // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+    }
+}
+
+unsafe extern "win64" fn cc_init_memory(
+    this: *mut ColorContextObj,
+    data: *const u8,
+    size: u32,
+) -> i32 {
+    if data.is_null() || size == 0 {
+        return E_INVALIDARG;
+    }
+    let bytes = std::slice::from_raw_parts(data, size as usize).to_vec();
+    cc_set(this, ColorContext::Profile(bytes))
+}
+
+unsafe extern "win64" fn cc_init_exif(this: *mut ColorContextObj, value: u32) -> i32 {
+    // 1 : sRGB ; 2 : Adobe RGB.
+    if !matches!(value, 1 | 2) {
+        return E_INVALIDARG;
+    }
+    cc_set(this, ColorContext::Exif(value))
+}
+
+unsafe extern "win64" fn cc_get_type(this: *mut ColorContextObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = match &*crate::dlls::lock(Com::get(this)) {
+        ColorContext::Uninitialized => 0,
+        ColorContext::Profile(_) => COLOR_CONTEXT_PROFILE,
+        ColorContext::Exif(_) => COLOR_CONTEXT_EXIF,
+    };
+    S_OK
+}
+
+/// GetProfileBytes(cbBuffer, pbBuffer, pcbActual) : sans tampon, la taille.
+unsafe extern "win64" fn cc_get_profile_bytes(
+    this: *mut ColorContextObj,
+    size: u32,
+    buf: *mut u8,
+    actual: *mut u32,
+) -> i32 {
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    let guard = crate::dlls::lock(Com::get(this));
+    let ColorContext::Profile(bytes) = &*guard else {
+        *actual = 0;
+        return WINCODEC_ERR_NOTINITIALIZED;
+    };
+    *actual = bytes.len() as u32;
+    if buf.is_null() {
+        return S_OK;
+    }
+    if (size as usize) < bytes.len() {
+        return E_INVALIDARG;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    S_OK
+}
+
+unsafe extern "win64" fn cc_get_exif(this: *mut ColorContextObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    // Un contexte qui n'est pas EXIF répond 0xFFFFFFFF (non calibré).
+    *out = match &*crate::dlls::lock(Com::get(this)) {
+        ColorContext::Exif(v) => *v,
+        _ => 0xFFFF_FFFF,
+    };
+    S_OK
+}
 
 // --- Décodeur ---------------------------------------------------------------------
 
@@ -2565,6 +2784,70 @@ mod tests {
         let mut f = std::ptr::null_mut();
         assert_eq!(create_factory(&IID_IMAGING_FACTORY, &mut f), S_OK);
         f
+    }
+
+    /// Paint.NET (ImagingFactoryWrapper, ColorContexts.Srgb) : la fabrique
+    /// répond à IWICComponentFactory, puis crée des contextes de couleur
+    /// (#1343).
+    #[test]
+    fn fabrique_de_composants_et_contextes_de_couleur() {
+        type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+        type InitU32 = unsafe extern "win64" fn(*mut c_void, u32) -> i32;
+        type GetU32 = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+        type InitMem = unsafe extern "win64" fn(*mut c_void, *const u8, u32) -> i32;
+        type Bytes = unsafe extern "win64" fn(*mut c_void, u32, *mut u8, *mut u32) -> i32;
+        unsafe {
+            let f = factory();
+            let mut cf = std::ptr::null_mut();
+            assert_eq!(method::<Qi>(f, 0)(f, &IID_COMPONENT_FACTORY, &mut cf), S_OK);
+            assert!(!cf.is_null());
+            // La facette a 35 cases : la 15 est CreateColorContext.
+            let mut back = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(cf, 0)(cf, &IID_COMPONENT_FACTORY, &mut back),
+                S_OK
+            );
+            assert_eq!(back, cf);
+            release_obj(back);
+            let mut f2 = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(cf, 0)(cf, &IID_IMAGING_FACTORY2, &mut f2),
+                S_OK
+            );
+            release_obj(f2);
+            let mut cc = std::ptr::null_mut();
+            assert_eq!(method::<Create>(cf, 15)(cf, &mut cc), S_OK);
+            let mut kind = 9;
+            assert_eq!(method::<GetU32>(cc, 6)(cc, &mut kind), S_OK);
+            assert_eq!(kind, 0);
+            // sRGB par l'espace EXIF.
+            assert_eq!(method::<InitU32>(cc, 5)(cc, 1), S_OK);
+            assert_eq!(method::<GetU32>(cc, 6)(cc, &mut kind), S_OK);
+            assert_eq!(kind, COLOR_CONTEXT_EXIF);
+            let mut exif = 0;
+            assert_eq!(method::<GetU32>(cc, 8)(cc, &mut exif), S_OK);
+            assert_eq!(exif, 1);
+            assert_eq!(method::<InitU32>(cc, 5)(cc, 7), E_INVALIDARG);
+            // Profil ICC en mémoire, relu octet pour octet.
+            let profil = [1u8, 2, 3, 4, 5];
+            assert_eq!(method::<InitMem>(cc, 4)(cc, profil.as_ptr(), 5), S_OK);
+            let mut n = 0;
+            assert_eq!(
+                method::<Bytes>(cc, 7)(cc, 0, std::ptr::null_mut(), &mut n),
+                S_OK
+            );
+            assert_eq!(n, 5);
+            let mut lu = [0u8; 5];
+            assert_eq!(method::<Bytes>(cc, 7)(cc, 5, lu.as_mut_ptr(), &mut n), S_OK);
+            assert_eq!(lu, profil);
+            release_obj(cc);
+            // La fabrique principale crée aussi des contextes.
+            let mut cc2 = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 15)(f, &mut cc2), S_OK);
+            release_obj(cc2);
+            release_obj(cf);
+            release_obj(f);
+        }
     }
 
     /// #1063 : PresentationCore appelle WIC par les fonctions exportées
