@@ -445,9 +445,7 @@ unsafe fn create_window_inner(
     });
     // Visible des autres processus du compte (#1228) : le processus GPU de
     // Chromium reçoit ce HWND et ANGLE le vérifie par IsWindow.
-    if let Some(xid) = gui::native_window(hwnd) {
-        super::gui_shared::publish(hwnd, super::kernel32::get_current_thread_id(), xid);
-    }
+    publish_shared(hwnd);
 
     // Barre de menus d'une fenêtre de premier niveau : hMenu, sinon le
     // menu de la classe (Notepad++ le déclare dans WNDCLASSEX).
@@ -1939,7 +1937,37 @@ pub fn forget_window_longs(hwnd: usize) {
 
 use super::lock;
 
+/// Inscrit (ou met à jour) une fenêtre de ce processus dans l'annuaire
+/// partagé avec ses styles (#1228, #1357). Les fenêtres sans fenêtre X11
+/// n'y figurent pas.
+fn publish_shared(hwnd: usize) {
+    if gui::foreign_window(hwnd).is_some() {
+        return;
+    }
+    if let Some(xid) = gui::native_window(hwnd) {
+        super::gui_shared::publish(
+            hwnd,
+            gui::window_thread_id(hwnd).unwrap_or_else(|| super::kernel32::get_current_thread_id()),
+            xid,
+            gui::window_style(hwnd).unwrap_or(0),
+            gui::window_ex_style(hwnd).unwrap_or(0),
+        );
+    }
+}
+
 unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
+    // Fenêtre d'un autre processus : ses styles publiés. Le processus GPU de
+    // Chromium y cherche WS_EX_LAYERED pour choisir son chemin de peinture
+    // (#1357).
+    if matches!(index, GWL_STYLE | GWL_EXSTYLE) && gui::window_style(hwnd).is_none() {
+        if let Some(f) = gui::foreign_window(hwnd) {
+            return if index == GWL_STYLE {
+                f.style as isize
+            } else {
+                f.ex_style as isize
+            };
+        }
+    }
     match index {
         GWL_STYLE => gui::window_style(hwnd).unwrap_or(0) as isize,
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
@@ -1968,10 +1996,14 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
         GWL_STYLE => {
-            gui::set_window_style(hwnd, value as u32);
+            if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+                publish_shared(hwnd);
+            }
         }
         GWL_EXSTYLE => {
-            gui::set_window_ex_style(hwnd, value as u32);
+            if gui::set_window_ex_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
+                publish_shared(hwnd);
+            }
         }
         GWL_WNDPROC => {
             gui::set_wnd_proc(hwnd, value as usize);
