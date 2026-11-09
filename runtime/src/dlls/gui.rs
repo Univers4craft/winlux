@@ -3695,7 +3695,29 @@ pub fn destroy_window(hwnd: usize) -> bool {
     // La HWND n'est plus valide qu'à partir d'ici.
     lock(windows()).remove(&hwnd);
     lock(destroying()).remove(&hwnd);
+    lock(window_props()).retain(|(h, _), _| *h != hwnd);
     true
+}
+
+/// Propriétés de fenêtre (SetProp/GetProp) : clé = nom en minuscules, ou
+/// `#n` pour un atome entier. La VCL y range l'objet Delphi de chaque
+/// contrôle (ControlAtom) et le retrouve pour refléter WM_NOTIFY,
+/// WM_DRAWITEM… (#1249, #1250).
+fn window_props() -> &'static Mutex<HashMap<(usize, String), usize>> {
+    static S: OnceLock<Mutex<HashMap<(usize, String), usize>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_window_prop(hwnd: usize, key: String, data: usize) {
+    lock(window_props()).insert((hwnd, key), data);
+}
+
+pub fn window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).get(&(hwnd, key.to_string())).copied()
+}
+
+pub fn remove_window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).remove(&(hwnd, key.to_string()))
 }
 
 pub fn register_class(name: &str, info: ClassInfo) -> bool {
