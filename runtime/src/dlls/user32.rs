@@ -3698,6 +3698,64 @@ pub unsafe extern "win64" fn set_window_placement(hwnd: usize, wp: *const Window
     1
 }
 
+/// Raisons de blocage de l'arrêt (ShutdownBlockReasonCreate) : gardées par
+/// fenêtre pour ShutdownBlockReasonQuery. Les chargeurs PyInstaller en posent
+/// une au démarrage (#1332). La session Winlux ne les montre pas encore.
+fn shutdown_reasons() -> &'static std::sync::Mutex<HashMap<usize, String>> {
+    static R: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, String>>> =
+        std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+pub unsafe extern "win64" fn shutdown_block_reason_create(hwnd: usize, reason: *const u16) -> i32 {
+    if gui::window_rect(hwnd).is_none() {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    let text = if reason.is_null() {
+        String::new()
+    } else {
+        super::wstr(reason)
+    };
+    super::lock(shutdown_reasons()).insert(hwnd, text);
+    1
+}
+
+pub extern "win64" fn shutdown_block_reason_destroy(hwnd: usize) -> i32 {
+    super::lock(shutdown_reasons()).remove(&hwnd);
+    1
+}
+
+/// ShutdownBlockReasonQuery : avec un tampon nul, *pcch reçoit la longueur
+/// à prévoir (zéro compris).
+pub unsafe extern "win64" fn shutdown_block_reason_query(
+    hwnd: usize,
+    buf: *mut u16,
+    cch: *mut u32,
+) -> i32 {
+    if cch.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(text) = super::lock(shutdown_reasons()).get(&hwnd).cloned() else {
+        crate::process::set_last_error(2); // ERROR_FILE_NOT_FOUND : aucune raison
+        return 0;
+    };
+    let w: Vec<u16> = text.encode_utf16().collect();
+    if buf.is_null() {
+        *cch = w.len() as u32 + 1;
+        return 1;
+    }
+    if (*cch as usize) < w.len() + 1 {
+        *cch = w.len() as u32 + 1;
+        crate::process::set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
+    1
+}
+
 pub extern "win64" fn get_last_active_popup(hwnd: usize) -> usize {
     hwnd
 }
@@ -4545,6 +4603,9 @@ pub fn exports() -> crate::dlls::Exports {
         "GetWindow"=>fn get_window, "GetTopWindow"=>fn get_top_window,
         "GetWindowThreadProcessId"=>fn get_window_thread_process_id,
         "GetWindowPlacement"=>fn get_window_placement,
+        "ShutdownBlockReasonCreate"=>fn shutdown_block_reason_create,
+        "ShutdownBlockReasonDestroy"=>fn shutdown_block_reason_destroy,
+        "ShutdownBlockReasonQuery"=>fn shutdown_block_reason_query,
         "SetWindowPlacement"=>fn set_window_placement,
         // --- Painting ---
         "BeginPaint"=>fn begin_paint, "EndPaint"=>fn end_paint,
@@ -5100,6 +5161,54 @@ mod tests {
             let r = gui::screen_rect(hwnd).expect("rectangle");
             assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
             destroy_window(hwnd);
+        }
+    }
+
+    /// ShutdownBlockReasonCreate/Query/Destroy (chargeurs PyInstaller, #1332).
+    #[test]
+    fn raison_de_blocage_de_l_arret() {
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        let raison: Vec<u16> = "Sauvegarde en cours\0".encode_utf16().collect();
+        unsafe {
+            let h = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            let mut n = 0u32;
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                0
+            );
+            assert_eq!(shutdown_block_reason_create(h, raison.as_ptr()), 1);
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                1
+            );
+            assert_eq!(n, 20);
+            let mut buf = [0u16; 32];
+            n = 32;
+            assert_eq!(shutdown_block_reason_query(h, buf.as_mut_ptr(), &mut n), 1);
+            assert_eq!(&buf[..20], &raison[..20]);
+            assert_eq!(shutdown_block_reason_destroy(h), 1);
+            assert_eq!(
+                shutdown_block_reason_query(h, std::ptr::null_mut(), &mut n),
+                0
+            );
+            assert_eq!(
+                shutdown_block_reason_create(0x7777_0000, raison.as_ptr()),
+                0
+            );
+            destroy_window(h);
         }
     }
 
