@@ -23,12 +23,22 @@ test ! -e "$binfmt/winlux" || fail "une entrée binfmt winlux existe déjà : ma
 test ! -e "$prefix/bin/winlux" || fail "$prefix/bin/winlux existe déjà : machine non vierge"
 
 work=$(mktemp -d)
+# Le runtime lancé en root crée /run/winlux (root, 0755) : les tests suivants
+# du même runner, en compte ordinaire, ne pouvaient plus y créer leurs
+# sockets de service. ./hello.exe est lancé par le compte qui a appelé sudo,
+# et tout dossier d'état apparu pendant le test est retiré à la fin.
+had_run=0; test -e /run/winlux && had_run=1
+as_user=
+if test -n "${SUDO_USER:-}" && test "$SUDO_USER" != root && command -v runuser >/dev/null 2>&1; then
+    as_user="runuser -u $SUDO_USER --"
+fi
 mimeapps=/etc/xdg/mimeapps.list
 had_mimeapps=0
 if test -f "$mimeapps"; then had_mimeapps=1; cp -p "$mimeapps" "$work/mimeapps.avant"; fi
 cleanup() {
     sh "$root/integration/uninstall.sh" "$prefix" >/dev/null 2>&1 || true
     if test "$had_mimeapps" = 1; then cp -p "$work/mimeapps.avant" "$mimeapps"; fi
+    if test "$had_run" = 0; then rm -rf /run/winlux; fi
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -40,7 +50,7 @@ chmod 755 "$work"
 methods=proc
 if test -d /run/systemd/system && command -v systemctl >/dev/null 2>&1; then methods="systemd $methods"; fi
 if command -v update-binfmts >/dev/null 2>&1; then methods="$methods update-binfmts"; fi
-echo "Méthodes binfmt essayées : $methods"
+echo "Méthodes binfmt essayées : $methods${as_user:+ (.exe lancé par $SUDO_USER)}"
 
 for method in $methods; do
     WINLUX_BINFMT=$method WINLUX_VERSION=test sh "$root/integration/install.sh" "$prefix" >"$work/install.log" 2>&1 \
@@ -51,7 +61,7 @@ for method in $methods; do
     grep -q '^flags: .*F' "$binfmt/winlux" || fail "$method : drapeau F (fix-binary) absent"
     ok "$method : binfmt enregistré et actif ($prefix/bin/winlux)"
 
-    out=$(cd "$work" && ./hello.exe | head -n 1)
+    out=$(cd "$work" && $as_user ./hello.exe | head -n 1)
     case "$out" in *"Bonjour depuis un .exe Windows"*) ;; *) fail "$method : ./hello.exe direct : « $out »" ;; esac
     ok "$method : ./hello.exe lancé directement par le noyau"
 
@@ -79,7 +89,7 @@ for method in $methods; do
     else
         test ! -e "$mimeapps" || fail "$method : $mimeapps créé et laissé"
     fi
-    if (cd "$work" && ./hello.exe >/dev/null 2>&1); then fail "$method : ./hello.exe se lance encore"; fi
+    if (cd "$work" && $as_user ./hello.exe >/dev/null 2>&1); then fail "$method : ./hello.exe se lance encore"; fi
     ok "$method : désinstallation propre (binfmt, fichiers, mimeapps.list)"
 done
 echo "OK: installation sur un Linux ordinaire ($methods)"
