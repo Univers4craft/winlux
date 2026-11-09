@@ -1816,6 +1816,18 @@ mod tests {
             assert_eq!(back, e);
             com_release(back);
             com_release(res);
+            // QueryInterface(ID2D1Image) rend la sortie de l'effet, comme
+            // GetOutput : Paint.NET la passe à DrawImage (#1297).
+            let mut img = std::ptr::null_mut();
+            assert_eq!(qi(e, &super::super::IID_D2D1_IMAGE, &mut img), S_OK);
+            assert!(!img.is_null());
+            let get_factory =
+                method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void)>(img, 3);
+            let mut f2 = std::ptr::null_mut();
+            get_factory(img, &mut f2);
+            assert_eq!(f2, f.cast());
+            com_release(f2);
+            com_release(img);
             com_release(e);
             Com::release(f);
         }
