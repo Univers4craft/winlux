@@ -1075,6 +1075,111 @@ fn ftol_code() -> usize {
     })
 }
 
+// ---------------------------------------------------------------------
+// Aides mathématiques du CRT x86 (#1333)
+// ---------------------------------------------------------------------
+//
+// `_CIfmod`, `_CIatan2` : opérandes sur la pile x87 (le premier poussé en
+// ST1, le second en ST0), résultat dans ST0. `_libm_sse2_*_precise` :
+// opérandes dans xmm0 (et xmm1), résultat dans xmm0. Les calculs vont à
+// la bibliothèque mathématique du runtime par une passerelle « d>d ».
+
+extern "win64" fn m_sin(x: f64) -> f64 {
+    x.sin()
+}
+extern "win64" fn m_cos(x: f64) -> f64 {
+    x.cos()
+}
+extern "win64" fn m_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
+extern "win64" fn m_asin(x: f64) -> f64 {
+    x.asin()
+}
+extern "win64" fn m_acos(x: f64) -> f64 {
+    x.acos()
+}
+extern "win64" fn m_pow(x: f64, y: f64) -> f64 {
+    x.powf(y)
+}
+extern "win64" fn m_fmod(x: f64, y: f64) -> f64 {
+    x % y
+}
+extern "win64" fn m_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
+/// Code x86 qui pose ses opérandes sur la pile, appelle la passerelle
+/// `stub` (cdecl, résultat dans ST0) et rend le résultat dans xmm0.
+fn sse2_code(stub: usize, binary: bool) -> usize {
+    let size: u8 = if binary { 16 } else { 8 };
+    let mut c = vec![0x83, 0xEC, size]; // sub esp, size
+    c.extend_from_slice(&[0xF2, 0x0F, 0x11, 0x04, 0x24]); // movsd [esp], xmm0
+    if binary {
+        c.extend_from_slice(&[0xF2, 0x0F, 0x11, 0x4C, 0x24, 0x08]); // movsd [esp+8], xmm1
+    }
+    c.push(0xB8); // mov eax, stub
+    c.extend_from_slice(&(stub as u32).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]); // call eax
+    c.extend_from_slice(&[0xDD, 0x1C, 0x24]); // fstp qword [esp]
+    c.extend_from_slice(&[0xF2, 0x0F, 0x10, 0x04, 0x24]); // movsd xmm0, [esp]
+    c.extend_from_slice(&[0x83, 0xC4, size, 0xC3]); // add esp, size ; ret
+    super::alloc_code(&c) as usize
+}
+
+/// Code x86 de `_CIfmod` / `_CIatan2` : les deux opérandes x87 vont sur la
+/// pile x86 dans l'ordre d'appel, puis la passerelle rend ST0.
+fn ci_code(stub: usize) -> usize {
+    let c = [
+        0x83, 0xEC, 0x10, // sub esp, 16
+        0xDD, 0x5C, 0x24, 0x08, // fstp qword [esp+8]  (second opérande, ST0)
+        0xDD, 0x1C, 0x24, // fstp qword [esp]    (premier, ex-ST1)
+        0xB8, 0, 0, 0, 0, // mov eax, stub
+        0xFF, 0xD0, // call eax
+        0x83, 0xC4, 0x10, // add esp, 16
+        0xC3, // ret
+    ];
+    let mut c = c.to_vec();
+    c[11..15].copy_from_slice(&(stub as u32).to_le_bytes());
+    super::alloc_code(&c) as usize
+}
+
+fn math_code(func: &str) -> Option<usize> {
+    static CODES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    let codes = CODES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(&c) = codes.lock().unwrap_or_else(|e| e.into_inner()).get(func) {
+        return Some(c);
+    }
+    let unary = |f: extern "win64" fn(f64) -> f64| {
+        sse2_code(
+            super::native_stub(f as *const () as usize, "d>d", func),
+            false,
+        )
+    };
+    let binary = |f: extern "win64" fn(f64, f64) -> f64| {
+        super::native_stub(f as *const () as usize, "dd>d", func)
+    };
+    let code = match func {
+        "_libm_sse2_sin_precise" | "_libm_sse2_sin" => unary(m_sin),
+        "_libm_sse2_cos_precise" | "_libm_sse2_cos" => unary(m_cos),
+        "_libm_sse2_sqrt_precise" | "_libm_sse2_sqrt" => unary(m_sqrt),
+        "_libm_sse2_asin_precise" | "_libm_sse2_asin" => unary(m_asin),
+        "_libm_sse2_acos_precise" | "_libm_sse2_acos" => unary(m_acos),
+        "_libm_sse2_pow_precise" | "_libm_sse2_pow" => sse2_code(binary(m_pow), true),
+        "_CIfmod" => ci_code(binary(m_fmod)),
+        "_CIatan2" => ci_code(binary(m_atan2)),
+        // _except1(flags, opcode, arg, résultat, cw, …) : appelée sur une
+        // erreur de calcul ; rend le résultat déjà calculé (ST0).
+        "_except1" => super::alloc_code(&[0xDD, 0x44, 0x24, 0x14, 0xC3]) as usize, // fld qword [esp+20] ; ret
+        _ => return None,
+    };
+    codes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(func.to_string(), code);
+    Some(code)
+}
+
 /// Fonction x86 vide (`ret`).
 fn ret_code() -> usize {
     static CODE: OnceLock<usize> = OnceLock::new();
@@ -1123,6 +1228,8 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_wcmdln" => Override::Data(d + D_WCMDLN),
         "_iob" => Override::Data(d + D_IOB),
         "_adjust_fdiv" => Override::Data(d + D_ADJUST_FDIV),
+        "_CIfmod" | "_CIatan2" | "_except1" => Override::Data(math_code(func)?),
+        f if f.starts_with("_libm_sse2_") => Override::Data(math_code(func)?),
         // Aides du compilateur MSVC x86 : code x86 direct (valeur dans ST0).
         "_ftol" | "_ftol2" | "_ftol2_sse" => Override::Data(ftol_code()),
         // type_info::~type_info (thiscall, sans argument sur la pile) : le
