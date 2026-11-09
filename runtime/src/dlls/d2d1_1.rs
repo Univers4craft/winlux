@@ -1244,8 +1244,37 @@ unsafe extern "win64" fn effect_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    // ID2D1Resource : Paint.NET relie ses objets à leur fabrique par
+    // GetFactory, effets compris (#1291). La table de l'effet suit
+    // ID2D1Properties, d'où une facette à part qui tient l'effet.
+    if !out.is_null() && !riid.is_null() && *riid == IID_D2D1_RESOURCE {
+        Com::add_ref(this);
+        let f = Com::get(this).factory;
+        *out = new_res(f, EFFECT_RESOURCE_VT.ptr(), EffectImage { effect: this }).cast();
+        return S_OK;
+    }
     qi_list(this, riid, out, &[IID_D2D1_PROPERTIES, IID_D2D1_EFFECT])
 }
+
+/// ID2D1Resource d'un effet : GetFactory rend sa fabrique, les autres
+/// interfaces viennent de l'effet lui-même.
+unsafe extern "win64" fn effect_resource_qi(
+    this: *mut Com<Res<EffectImage>>,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !riid.is_null() && *riid == IID_D2D1_RESOURCE {
+        return qi_list(this, riid, out, &[IID_D2D1_RESOURCE]);
+    }
+    effect_qi(Com::get(this).data.effect, riid, out)
+}
+
+static EFFECT_RESOURCE_VT: VTable<4> = VTable([
+    effect_resource_qi as *const (),
+    add_ref::<Res<EffectImage>> as *const (),
+    release::<Res<EffectImage>> as *const (),
+    get_factory::<EffectImage> as *const (),
+]);
 /// Noms des propriétés système (D2D1_PROPERTY_CLSID = 0x80000000 et suivantes).
 const SYSTEM_PROPS: [(&str, u32); 10] = [
     ("CLSID", custom::ty::CLSID),
