@@ -19,6 +19,8 @@ pub(crate) mod d2d_shader;
 mod dxgi_res;
 #[path = "d3d11_ext.rs"]
 mod ext;
+#[path = "d3d11_formats.rs"]
+mod formats;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
 
@@ -4132,11 +4134,16 @@ unsafe extern "win64" fn dev_open_shared(
     crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
 }
 
-unsafe extern "win64" fn dev_check_format(_: *mut Device, _format: u32, out: *mut u32) -> i32 {
+/// CheckFormatSupport : capacités réelles du format (#1304), E_FAIL pour
+/// DXGI_FORMAT_UNKNOWN.
+unsafe extern "win64" fn dev_check_format(_: *mut Device, format: u32, out: *mut u32) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0x1 | 0x2 | 0x4 | 0x10 | 0x20; // basic support flags
+    *out = formats::format_support(format);
+    if *out == 0 {
+        return E_FAIL;
+    }
     S_OK
 }
 
