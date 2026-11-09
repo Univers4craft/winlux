@@ -3564,10 +3564,13 @@ pub fn request_paint(hwnd: usize) {
         let mut map = lock(windows());
         match map.get_mut(&hwnd) {
             Some(w) => {
+                // La zone est invalidée même si un WM_PAINT attend déjà : une
+                // ValidateRect entre les deux l'aurait sinon fait sauter, et
+                // cette nouvelle invalidation était perdue.
+                w.needs_paint = true;
                 if w.paint_queued {
                     return;
                 }
-                w.needs_paint = true;
                 w.paint_queued = true;
                 Some(w.owner)
             }
@@ -4123,11 +4126,14 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
         // via UpdateWindow, ValidateRect) n'existe plus sous Windows : le
         // délivrer relançait une peinture de trop (#796).
-        if m.message == WM_PAINT
-            && m.l_private == SYSTEM_PAINT
-            && lock(windows()).get(&m.hwnd).is_some_and(|w| !w.needs_paint)
-        {
-            continue;
+        if m.message == WM_PAINT && m.l_private == SYSTEM_PAINT {
+            let mut map = lock(windows());
+            if let Some(w) = map.get_mut(&m.hwnd).filter(|w| !w.needs_paint) {
+                // Le WM_PAINT quitte la file : sans cela, `request_paint`
+                // le croyait toujours en attente et n'en postait plus aucun.
+                w.paint_queued = false;
+                continue;
+            }
         }
         // Message souris promu d'un WM_POINTER* que la fenêtre a traité
         // elle-même : Windows ne le produit pas (#1199).
@@ -5205,6 +5211,28 @@ mod tests {
         assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
         // Un WM_PAINT posté par l'appli elle-même reste délivré.
         post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        destroy_window(hwnd);
+    }
+
+    /// InvalidateRect, ValidateRect puis InvalidateRect : la seconde
+    /// invalidation donne bien un WM_PAINT, même si le premier attendait
+    /// encore dans la file.
+    #[test]
+    fn invalidation_apres_validation_repeint() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        request_paint(hwnd);
+        validate_window(hwnd);
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        assert!(begin_paint(hwnd).is_some());
+        // Message sauté (fenêtre déjà validée) : une invalidation suivante
+        // en poste un nouveau.
+        request_paint(hwnd);
+        validate_window(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        request_paint(hwnd);
         assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         destroy_window(hwnd);
     }

@@ -1879,3 +1879,33 @@ fn wm_setcursor_applique_le_curseur_de_classe() {
         0
     );
 }
+
+static ENUMERES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+unsafe extern "win64" fn enum_collecte(hwnd: usize, limite: isize) -> i32 {
+    let mut v = ENUMERES.lock().unwrap();
+    v.push(hwnd);
+    i32::from(v.len() < limite as usize)
+}
+
+#[test]
+fn enum_child_windows_parcourt_tous_les_descendants() {
+    // Sumatra PDF invalide chaque enfant par EnumChildWindows en passant à
+    // l'onglet d'accueil ; le bouchon ne rappelait jamais.
+    let parent = parent_window();
+    let a = child(parent, "Static", "a", 0, 1, (0, 0, 10, 10));
+    let b = child(parent, "Static", "b", 0, 2, (0, 20, 10, 10));
+    let petit = child(a, "Static", "petit", 0, 3, (0, 0, 5, 5));
+    let cb = enum_collecte as *const () as usize;
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 100) };
+    let mut vus = ENUMERES.lock().unwrap().clone();
+    vus.sort_unstable();
+    let mut attendus = vec![a, b, petit];
+    attendus.sort_unstable();
+    assert_eq!(vus, attendus);
+    // FALSE arrête l'énumération.
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 1) };
+    assert_eq!(ENUMERES.lock().unwrap().len(), 1);
+}
