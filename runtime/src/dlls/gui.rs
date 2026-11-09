@@ -50,6 +50,7 @@ pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 #[allow(dead_code)]
 pub const WM_SHOWWINDOW: u32 = 0x0018;
+pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 #[allow(dead_code)]
@@ -3283,6 +3284,45 @@ fn activate_app(active: bool) {
     }
 }
 
+/// Fenêtre de premier niveau active du programme (0 : aucune).
+static ACTIVE_TOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fenêtre de premier niveau qui contient `hwnd`.
+fn top_level_of(hwnd: usize) -> usize {
+    let map = lock(windows());
+    let mut h = hwnd;
+    for _ in 0..64 {
+        match map.get(&h) {
+            Some(w) if w.parent != 0 && w.style & 0x4000_0000 != 0 => h = w.parent,
+            Some(_) => return h,
+            None => return 0,
+        }
+    }
+    h
+}
+
+/// Changement de fenêtre active, comme Windows : l'ancienne reçoit
+/// WM_NCACTIVATE(FALSE) puis WM_ACTIVATE(WA_INACTIVE), la nouvelle
+/// WM_NCACTIVATE(TRUE) puis WM_ACTIVATE(WA_ACTIVE), avant WM_SETFOCUS.
+/// SDL ne donne le focus clavier à sa fenêtre qu'à WM_ACTIVATE : sans lui,
+/// Xonotic se croyait inactif et ne présentait plus que son écran de
+/// chargement (#1421).
+fn change_active_top(new_top: usize) {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    if old == new_top {
+        return;
+    }
+    if old != 0 && is_window(old) {
+        post_to_window(old, Msg::new(old, WM_NCACTIVATE, 0, 0));
+        post_to_window(old, Msg::new(old, WM_ACTIVATE, 0, new_top as isize));
+    }
+    if new_top != 0 {
+        post_to_window(new_top, Msg::new(new_top, WM_NCACTIVATE, 1, 0));
+        post_to_window(new_top, Msg::new(new_top, WM_ACTIVATE, 1, old as isize));
+    }
+}
+
 /// Fenêtre de premier niveau désactivée (propriétaire d'une boîte modale) :
 /// sous Windows, ni elle ni ses filles ne reçoivent clic ou clavier. Une
 /// fille seule désactivée garde le comportement des contrôles.
@@ -3452,6 +3492,7 @@ pub fn pump_backend() {
         }
         if e.message == WM_SETFOCUS {
             activate_app(true);
+            change_active_top(top_level_of(e.hwnd));
             let change = set_focus_from_backend(e.hwnd);
             if let Some(old) = change {
                 if old != 0 {
@@ -3469,6 +3510,7 @@ pub fn pump_backend() {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
             }
             if !refocused {
+                change_active_top(0);
                 activate_app(false);
             }
             continue;
@@ -4104,6 +4146,11 @@ pub fn set_title(hwnd: usize, title: &str) -> bool {
 }
 
 /// Change la visibilité ; renvoie l'état précédent.
+/// Drapeau « visible » propre à la fenêtre (sans regarder ses parents).
+pub fn visible_flag(hwnd: usize) -> Option<bool> {
+    lock(windows()).get(&hwnd).map(|w| w.visible)
+}
+
 pub fn set_visible(hwnd: usize, visible: bool) -> bool {
     let mut map = lock(windows());
     match map.get_mut(&hwnd) {
