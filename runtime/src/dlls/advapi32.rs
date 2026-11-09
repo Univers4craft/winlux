@@ -12,6 +12,9 @@ use crate::registry::{
 const REG_CREATED_NEW_KEY: u32 = 1;
 const REG_OPENED_EXISTING_KEY: u32 = 2;
 const ERROR_UNSUPPORTED_TYPE: i32 = 1630;
+const ERROR_NOT_ENOUGH_MEMORY: i32 = 8;
+use crate::dlls::lock;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
 pub(crate) use crate::registry::TEST_LOCK as REGISTRY_TEST_LOCK;
@@ -829,6 +832,61 @@ pub unsafe extern "win64" fn reg_flush_key(handle: usize) -> i32 {
     }
 }
 
+/// Abonnements asynchrones de RegNotifyChangeKeyValue en attente : (clé,
+/// événement, empreinte du registre au moment de l'abonnement).
+type Watch = (usize, usize, reg::Stamp);
+fn watches() -> &'static Mutex<Vec<Watch>> {
+    static W: OnceLock<Mutex<Vec<Watch>>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Un seul thread surveille le registre pour tous les abonnements (#1300) :
+/// un thread par appel s'accumulait par milliers chez Chromium (surveillance
+/// de la configuration DNS) jusqu'à épuiser RLIMIT_NPROC.
+fn start_watcher() -> bool {
+    static STARTED: OnceLock<bool> = OnceLock::new();
+    *STARTED.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("winlux-registre".into())
+            .spawn(|| loop {
+                reg::wait_for_change(Some(std::time::Duration::from_secs(1)));
+                let now = reg::store_stamp();
+                let fired = {
+                    let mut list = lock(watches());
+                    let mut fired = Vec::new();
+                    list.retain(|&(key, event, armed)| {
+                        if armed != now {
+                            fired.push(event);
+                            return false;
+                        }
+                        // Clé fermée : l'abonnement s'arrête, comme sous Windows.
+                        reg::handle_path(key).is_ok()
+                    });
+                    fired
+                };
+                for event in fired {
+                    crate::dlls::kernel32::set_event(event);
+                }
+            })
+            .is_ok()
+    })
+}
+
+/// Abonne `event` aux changements suivants du registre. Un même couple
+/// (clé, événement) réarmé avant d'avoir été signalé n'est compté qu'une
+/// fois. Faux si le thread de surveillance n'a pas pu démarrer.
+fn watch_key(key: usize, event: usize) -> bool {
+    if !start_watcher() {
+        return false;
+    }
+    let stamp = reg::store_stamp();
+    let mut list = lock(watches());
+    if !list.iter().any(|&(k, e, _)| k == key && e == event) {
+        list.push((key, event, stamp));
+    }
+    true
+}
+
 /// RegNotifyChangeKeyValue : prévient quand une appli modifie le registre.
 /// Le suivi porte sur tout le fichier partagé (plus large que la clé
 /// demandée, ce qui est permis : l'appli relit alors ses valeurs).
@@ -846,21 +904,9 @@ pub unsafe extern "win64" fn reg_notify_change_key_value(
         if event == 0 {
             return ERROR_INVALID_PARAMETER;
         }
-        std::thread::spawn(move || {
-            // S'arrête quand la clé est fermée (comme Windows) au lieu de
-            // rester bloqué à vie si le registre ne change jamais.
-            loop {
-                let before = reg::store_stamp();
-                reg::wait_for_change(Some(std::time::Duration::from_secs(1)));
-                if reg::store_stamp() != before {
-                    crate::dlls::kernel32::set_event(event);
-                    return;
-                }
-                if reg::handle_path(handle).is_err() {
-                    return;
-                }
-            }
-        });
+        if !watch_key(handle, event) {
+            return ERROR_NOT_ENOUGH_MEMORY;
+        }
     } else {
         reg::wait_for_change(None);
     }
@@ -1575,6 +1621,72 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
     use std::ffi::CString;
+
+    /// #1300 : réarmer RegNotifyChangeKeyValue ne crée plus un thread par
+    /// appel ; l'événement est signalé au changement suivant du registre.
+    #[test]
+    fn surveillance_du_registre_sans_thread_par_appel() {
+        let _serial = REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path =
+            std::env::temp_dir().join(format!("winlux-registry-notify-{}.tsv", std::process::id()));
+        let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+        std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+        let threads = || {
+            std::fs::read_to_string("/proc/self/status")
+                .unwrap_or_default()
+                .lines()
+                .find_map(|l| l.strip_prefix("Threads:").map(|v| v.trim().parse::<i64>().unwrap_or(0)))
+                .unwrap_or(0)
+        };
+        let sub = CString::new("Software\\WinluxNotify").unwrap();
+        let name = CString::new("Valeur").unwrap();
+        let mut h = 0usize;
+        let mut disp = 0u32;
+        unsafe {
+            assert_eq!(
+                reg_create_key_ex_a(
+                    0x8000_0001usize,
+                    sub.as_ptr() as *const u8,
+                    0,
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    &mut h,
+                    &mut disp
+                ),
+                0
+            );
+            let event = crate::dlls::kernel32::create_event_w(0, 1, 0, std::ptr::null());
+            assert_eq!(reg_notify_change_key_value(h, 1, 4, event, 1), 0);
+            let before = threads();
+            for _ in 0..300 {
+                assert_eq!(reg_notify_change_key_value(h, 1, 4, event, 1), 0);
+            }
+            assert!(threads() - before < 50, "un thread par appel");
+            assert_eq!(
+                lock(watches()).iter().filter(|w| w.0 == h && w.1 == event).count(),
+                1
+            );
+            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 0), 258);
+            let data = 1u32.to_le_bytes();
+            assert_eq!(
+                reg_set_value_ex_a(h, name.as_ptr() as *const u8, 0, 4, data.as_ptr(), 4),
+                0
+            );
+            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 5000), 0);
+            assert!(!lock(watches()).iter().any(|w| w.0 == h && w.1 == event));
+            assert_eq!(reg_close_key(h), 0);
+            crate::dlls::kernel32::close_handle(event);
+        }
+        match previous {
+            Some(p) => std::env::set_var("WINLUX_REGISTRY_PATH", p),
+            None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn persiste_valeurs_binaires_et_respecte_la_casse_insensible() {
