@@ -2531,14 +2531,44 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
         }
         return ok;
     }
-    let mut map = lock(windows());
-    match map.get_mut(&target) {
-        Some(w) => {
+    {
+        let mut map = lock(windows());
+        if let Some(w) = map.get_mut(&target) {
             w.pending.extend(cmds);
+            return true;
+        }
+    }
+    // Fenêtre d'un autre processus du compte : le processus GPU de Chromium
+    // peint les surgissants du navigateur en logiciel (GetDC, puis BitBlt
+    // depuis une section DIB). Les images vont tout de suite sur sa fenêtre
+    // X11, commune à tous les clients du serveur (#1345).
+    match foreign_window(target) {
+        Some(f) => {
+            for cmd in &cmds {
+                paint_foreign(f.xid, cmd);
+            }
             true
         }
         None => false,
     }
+}
+
+/// Peint une commande sur la fenêtre X11 d'un autre processus. Seules les
+/// images (BitBlt, StretchBlt, SetDIBitsToDevice, StretchDIBits depuis la
+/// mémoire) passent : c'est ce qu'envoie une sortie logicielle.
+fn paint_foreign(xid: u64, cmd: &DrawCmd) {
+    if let DrawCmd::Bitmap { rect, pixels, rop } = cmd {
+        #[cfg(test)]
+        FOREIGN_PAINTS.with(|p| p.borrow_mut().push((xid, *rect, pixels.len())));
+        with_backend(|b| b.paint_foreign(xid, *rect, pixels, *rop));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Images envoyées à des fenêtres étrangères (xid, rectangle, pixels).
+    pub(crate) static FOREIGN_PAINTS: std::cell::RefCell<Vec<(u64, Rect, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
@@ -2974,6 +3004,9 @@ pub trait GuiBackend: Send {
     fn foreign_size(&mut self, _xid: u64) -> Option<(i32, i32)> {
         None
     }
+    /// Image (pixels COLORREF, rectangle logique) posée sur la fenêtre X11
+    /// d'un autre processus (#1345).
+    fn paint_foreign(&mut self, _xid: u64, _rect: Rect, _pixels: &[u32], _rop: RasterOp) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}

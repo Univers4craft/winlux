@@ -4220,6 +4220,64 @@ mod tests {
         backend.conn.free_gc(gc).unwrap();
         backend.conn.free_pixmap(pixmap).unwrap();
     }
+
+    /// #1345 : image posée par un autre processus (processus GPU de
+    /// Chromium) sur un drawable X11 qui ne lui appartient pas.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn image_posee_sur_un_drawable_etranger_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let pixmap = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_pixmap(root.root_depth, pixmap, root.root, 64, 64)
+            .unwrap()
+            .check()
+            .unwrap();
+        let rect = Rect {
+            left: 2,
+            top: 2,
+            right: 6,
+            bottom: 5,
+        };
+        let scaled = backend.scaled_rect(&rect);
+        backend.paint_foreign(pixmap as u64, rect, &[0x0000_00ff; 12], gui::RasterOp::Copy);
+        let pixel = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                scaled.left as i16,
+                scaled.top as i16,
+                1,
+                1,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        let visual = root
+            .allowed_depths
+            .iter()
+            .flat_map(|d| &d.visuals)
+            .find(|v| v.visual_id == root.root_visual)
+            .unwrap();
+        let mut value = [0u8; 4];
+        let len = pixel.data.len().min(4);
+        value[..len].copy_from_slice(&pixel.data[..len]);
+        let value = if backend.conn.setup().image_byte_order
+            == x11rb::protocol::xproto::ImageOrder::LSB_FIRST
+        {
+            u32::from_le_bytes(value)
+        } else {
+            u32::from_be_bytes(value) >> (8 * (4 - len))
+        };
+        assert_eq!(value & visual.red_mask, visual.red_mask);
+        assert_eq!(value & visual.green_mask, 0);
+        backend.conn.free_pixmap(pixmap).unwrap();
+    }
 }
 
 /// Agrandit/réduit une image ZPixmap. `src`/`dst` = (largeur, hauteur, pas).
@@ -4329,6 +4387,49 @@ impl gui::GuiBackend for X11Backend {
 
     fn native_window(&mut self, hwnd: usize) -> Option<u64> {
         self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
+    fn paint_foreign(&mut self, xid: u64, rect: Rect, pixels: &[u32], rop: gui::RasterOp) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
+        };
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return; // fenêtre détruite entre-temps
+        };
+        // L'image est encodée pour la profondeur de la racine.
+        if g.depth != self.conn.setup().roots[self.screen].root_depth {
+            return;
+        }
+        let Ok(gc) = self.conn.generate_id() else {
+            return;
+        };
+        if !self
+            .conn
+            .create_gc(gc, xid, &CreateGCAux::new())
+            .is_ok_and(|c| c.check().is_ok())
+        {
+            return;
+        }
+        let window = XWin {
+            window: xid,
+            gc,
+            x: 0,
+            y: 0,
+            width: g.width,
+            height: g.height,
+            child: false,
+            frame: 0,
+            bar: 0,
+        };
+        let destination = self.scaled_rect(&rect);
+        self.paint_bitmap(&window, &rect, &destination, pixels, rop);
+        let _ = self.conn.free_gc(gc);
+        let _ = self.conn.flush();
     }
 
     fn foreign_size(&mut self, xid: u64) -> Option<(i32, i32)> {

@@ -1626,8 +1626,10 @@ pub unsafe extern "win64" fn end_paint(hwnd: usize, ps: *const PaintStruct) -> i
 // ---------- DC et primitives de dessin ----------
 
 /// DC ciblant une fenêtre (le `hwnd` 0 désigne le bureau, sans rendu).
+/// Une fenêtre d'un autre processus du compte est valable aussi : le
+/// processus GPU de Chromium peint ainsi les surgissants (#1345).
 pub extern "win64" fn get_dc(hwnd: usize) -> usize {
-    if hwnd != 0 && gui::wnd_proc_of(hwnd).is_none() {
+    if hwnd != 0 && gui::wnd_proc_of(hwnd).is_none() && gui::foreign_window(hwnd).is_none() {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }

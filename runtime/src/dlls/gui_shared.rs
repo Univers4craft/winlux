@@ -285,3 +285,23 @@ mod tests {
         assert_eq!(crate::dlls::gui::native_window(h), None);
     }
 }
+
+/// Inscrit dans l'annuaire réel une fenêtre jouée par un autre processus
+/// (tests des appels GDI vers une fenêtre étrangère, #1345).
+#[cfg(test)]
+pub(crate) fn publish_for_test(hwnd: usize, f: Foreign) -> bool {
+    match dir() {
+        Some(d) => {
+            publish_in(&d, hwnd, f);
+            true
+        }
+        None => false,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn withdraw_for_test(hwnd: usize, pid: u32) {
+    if let Some(d) = dir() {
+        withdraw_in(&d, hwnd, pid);
+    }
+}
