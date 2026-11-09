@@ -476,6 +476,46 @@ pub unsafe extern "win64" fn mci_send_string_a(
     crate::process::set_last_error(50);
     277
 }
+/// mciSendCommandA/W : aucun périphérique MCI (lecteur de CD audio,
+/// séquenceur…) n'est fourni. MCI_OPEN répond « périphérique non
+/// installé », comme un PC sans lecteur : Darkplaces (xonotic-wgl.exe)
+/// continue alors sans musique de CD (#1423).
+pub extern "win64" fn mci_send_command(_id: u32, _msg: u32, _flags: usize, _params: usize) -> u32 {
+    MCIERR_DEVICE_NOT_INSTALLED
+}
+const MCIERR_DEVICE_NOT_INSTALLED: u32 = 256 + 50;
+
+fn mci_error_text(code: u32) -> &'static str {
+    match code {
+        0 => "L'opération demandée a réussi.",
+        MCIERR_DEVICE_NOT_INSTALLED => "Le périphérique demandé n'est pas installé.",
+        _ => "Erreur MCI inconnue.",
+    }
+}
+
+/// mciGetErrorStringA : texte de l'erreur, tronqué à `len` caractères.
+pub unsafe extern "win64" fn mci_get_error_string_a(code: u32, buf: *mut u8, len: u32) -> i32 {
+    if buf.is_null() || len == 0 {
+        return 0;
+    }
+    let bytes = crate::dlls::encode_ansi(mci_error_text(code));
+    let n = bytes.len().min(len as usize - 1);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    1
+}
+
+pub unsafe extern "win64" fn mci_get_error_string_w(code: u32, buf: *mut u16, len: u32) -> i32 {
+    if buf.is_null() || len == 0 {
+        return 0;
+    }
+    let w: Vec<u16> = mci_error_text(code).encode_utf16().collect();
+    let n = w.len().min(len as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    1
+}
+
 pub extern "win64" fn time_get_time() -> u32 {
     crate::dlls::kernel32::get_tick_count()
 }
@@ -1098,7 +1138,7 @@ pub unsafe extern "win64" fn wave_in_get_error_text_w(err: u32, buf: *mut u16, c
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close,"waveInGetDevCapsA"=>fn wave_in_get_dev_caps_a,"waveInGetDevCapsW"=>fn wave_in_get_dev_caps_w,"waveInGetPosition"=>fn wave_in_get_position,"waveInGetID"=>fn wave_in_get_id,"waveInMessage"=>fn wave_in_message,"waveInGetErrorTextA"=>fn wave_in_get_error_text_a,"waveInGetErrorTextW"=>fn wave_in_get_error_text_w}
+    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"mciSendCommandA"=>fn mci_send_command,"mciSendCommandW"=>fn mci_send_command,"mciGetErrorStringA"=>fn mci_get_error_string_a,"mciGetErrorStringW"=>fn mci_get_error_string_w,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close,"waveInGetDevCapsA"=>fn wave_in_get_dev_caps_a,"waveInGetDevCapsW"=>fn wave_in_get_dev_caps_w,"waveInGetPosition"=>fn wave_in_get_position,"waveInGetID"=>fn wave_in_get_id,"waveInMessage"=>fn wave_in_message,"waveInGetErrorTextA"=>fn wave_in_get_error_text_a,"waveInGetErrorTextW"=>fn wave_in_get_error_text_w}
 }
 
 #[cfg(test)]
@@ -1115,6 +1155,18 @@ mod tests {
         f[12..14].copy_from_slice(&align.to_le_bytes());
         f[14..16].copy_from_slice(&bits.to_le_bytes());
         f
+    }
+
+    /// #1423 : pas de périphérique MCI, une erreur lisible.
+    #[test]
+    fn mci_sans_peripherique() {
+        assert_eq!(mci_send_command(0, 0x0803, 0, 0), 306);
+        let mut b = [0u8; 8];
+        unsafe {
+            assert_eq!(mci_get_error_string_a(306, b.as_mut_ptr(), 8), 1);
+        }
+        assert_eq!(b[7], 0);
+        assert_eq!(&b[..3], b"Le ");
     }
 
     #[test]

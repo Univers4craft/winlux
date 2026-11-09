@@ -966,7 +966,13 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if window_diag() {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
     }
-    let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
+    // WM_SHOWWINDOW avant le changement de visibilité, comme Windows (SDL
+    // en tire ses évènements SHOWN et HIDDEN, #1421).
+    let show = cmd != gui::SW_HIDE;
+    if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+        send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
+    }
+    let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
     if matches!(cmd, 4 | 7 | 8) && !was {
@@ -2237,7 +2243,11 @@ pub unsafe extern "win64" fn adjust_window_rect_ex(
 // =====================================================================
 
 pub unsafe extern "win64" fn is_window_visible(hwnd: usize) -> i32 {
-    gui::is_window_visible(hwnd) as i32
+    let v = gui::is_window_visible(hwnd) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsWindowVisible({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 const WS_DISABLED: u32 = 0x0800_0000;
@@ -2271,7 +2281,11 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
 pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
     let mut state = gui::WINDOW_NORMAL;
     with_backend(|b| state = b.window_state(hwnd));
-    (state == gui::WINDOW_MINIMIZED) as i32
+    let v = (state == gui::WINDOW_MINIMIZED) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsIconic({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {

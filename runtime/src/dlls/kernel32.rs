@@ -3337,6 +3337,25 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
     }
     load_library_str(&crate::dlls::cstr(name))
 }
+/// Programme qui charge lui-même OpenGL, Vulkan ou Direct3D (SDL lié en
+/// statique, comme Xonotic) : il dessine sa fenêtre, qui reste donc à
+/// l'échelle 1, comme pour un import direct de ces DLL (#1421). SDL charge
+/// opengl32 avant de créer sa fenêtre.
+fn note_renders_itself(name: &str) {
+    let base = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let base = if base.contains('.') {
+        base
+    } else {
+        format!("{base}.dll")
+    };
+    if crate::dlls::gui_x11::renders_itself(&[base]) {
+        crate::dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// Corps commun de `load_library_a` et `load_library_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn load_library_str(name: &str) -> usize {
@@ -3345,6 +3364,7 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
+    note_renders_itself(n);
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());

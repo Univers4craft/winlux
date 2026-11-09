@@ -227,7 +227,7 @@ impl Module {
     pub fn contains(&self, addr: usize) -> bool {
         addr >= self.base && addr < self.base + self.size
     }
-    fn bytes(&self) -> &'static [u8] {
+    pub(crate) fn bytes(&self) -> &'static [u8] {
         unsafe { std::slice::from_raw_parts(self.base as *const u8, self.size) }
     }
     fn cstr_at(&self, rva: u32) -> Option<String> {
