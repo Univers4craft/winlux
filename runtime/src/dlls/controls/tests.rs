@@ -2036,6 +2036,16 @@ unsafe extern "win64" fn flux_ecrire(cookie: usize, buf: *mut u8, cb: i32, pcb: 
     0
 }
 
+/// EDITSTREAM x64 telle que richedit.h la déclare sous pack(4) : dwCookie à 0,
+/// dwError à 8, pfnCallback à 12, 20 octets (#1454). Les octets qui suivent
+/// restent nuls : relire le rappel à 16 donnerait un pointeur faux.
+fn edit_stream(f: &mut Flux, callback: usize) -> [u8; 24] {
+    let mut es = [0u8; 24];
+    es[..8].copy_from_slice(&(f as *mut Flux as usize).to_le_bytes());
+    es[12..20].copy_from_slice(&callback.to_le_bytes());
+    es
+}
+
 /// #1433 : RichTextBox.Text de WinForms passe par EM_STREAMIN
 /// (SF_TEXT | SF_UNICODE) ; la zone de détails de Paint.NET restait vide.
 #[test]
@@ -2048,10 +2058,8 @@ fn richedit_flux_texte_et_rtf() {
         data: texte.encode_utf16().flat_map(|u| u.to_le_bytes()).collect(),
         pos: 0,
     };
-    // EDITSTREAM : dwCookie, dwError (+ remplissage), pfnCallback.
-    let mut es = [0usize; 3];
-    es[0] = &mut src as *mut Flux as usize;
-    es[2] = flux_lire as usize;
+    // EDITSTREAM (pack(4)) : dwCookie, dwError, pfnCallback.
+    let mut es = edit_stream(&mut src, flux_lire as usize);
     let n = sendw(e, 0x0449, 0x1 | 0x10, es.as_mut_ptr() as isize);
     assert_eq!(n as usize, texte.chars().count());
     assert_eq!(title(e), texte);
@@ -2060,9 +2068,7 @@ fn richedit_flux_texte_et_rtf() {
         data: Vec::new(),
         pos: 0,
     };
-    let mut es = [0usize; 3];
-    es[0] = &mut dst as *mut Flux as usize;
-    es[2] = flux_ecrire as usize;
+    let mut es = edit_stream(&mut dst, flux_ecrire as usize);
     sendw(e, 0x044A, 0x1 | 0x10, es.as_mut_ptr() as isize);
     let units: Vec<u16> = dst
         .data
@@ -2076,9 +2082,7 @@ fn richedit_flux_texte_et_rtf() {
         data: rtf.to_vec(),
         pos: 0,
     };
-    let mut es = [0usize; 3];
-    es[0] = &mut src as *mut Flux as usize;
-    es[2] = flux_lire as usize;
+    let mut es = edit_stream(&mut src, flux_lire as usize);
     sendw(e, 0x0449, 0x2, es.as_mut_ptr() as isize);
     assert_eq!(title(e), "Café\r\nPile {1}\t€");
     gui::destroy_window(p);

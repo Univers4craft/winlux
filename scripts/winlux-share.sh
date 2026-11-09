@@ -33,6 +33,7 @@ out="$run/shares.txt"
 pidfile="$run/samba/smbd.pid"
 wsdd_pid="$run/samba/wsdd.pid"
 firewall="$etc/firewall.conf"
+fw_status="$run/firewall/status.txt"
 avahi_dir="$root/etc/avahi/services"
 mkdir -p "$etc" "$run"
 # Règles réservées dans le pare-feu Winlux (SMB, découverte Windows et Mac).
@@ -346,7 +347,10 @@ status() {
         if running; then printf 'running=1\n'; else printf 'running=0\n'; fi
         printf 'host=%s\n' "$(host_name)"
         printf 'address=%s\n' "$(address)"
-        profile=$(test -r "$firewall" && sed -n 's/^profile=//p' "$firewall" | tail -n 1 || true)
+        # Profil réellement appliqué par le pare-feu (#1103) ; sinon celui
+        # demandé dans firewall.conf (pare-feu pas encore démarré).
+        profile=$(test -r "$fw_status" && sed -n 's/^profile=//p' "$fw_status" | tail -n 1 || true)
+        test -n "$profile" || profile=$(test -r "$firewall" && sed -n 's/^profile=//p' "$firewall" | tail -n 1 || true)
         printf 'firewall_profile=%s\n' "${profile:-private}"
         discovery=
         test ! -d "$avahi_dir" || discovery=mac
