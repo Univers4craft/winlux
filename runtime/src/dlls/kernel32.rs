@@ -6666,6 +6666,11 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         };
     }
     let Some(obj) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : Chromium (serveur DevTools) l'attend
+        // par ObjectWatcher, donc par WaitForSingleObject (#1351).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return wait_wsa_events(&[h], timeout);
+        }
         crate::process::set_last_error(6);
         return u32::MAX;
     };
@@ -6692,6 +6697,38 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         SyncHandle::Semaphore(sem) => wait_semaphore(&sem, timeout),
     }
 }
+/// Attente « un seul parmi » qui contient des événements de WSACreateEvent
+/// (#1351) : ceux-ci, et les autres handles, sont interrogés sans attente
+/// jusqu'au premier prêt. Un événement WSA est à réinitialisation manuelle :
+/// l'interroger ne le consomme pas.
+fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
+    let start = std::time::Instant::now();
+    loop {
+        for (i, &h) in hs.iter().enumerate() {
+            let ready = if lookup_sync(h).is_none() {
+                if !crate::dlls::ws2_32::is_wsa_event(h) {
+                    crate::process::set_last_error(6);
+                    return u32::MAX;
+                }
+                crate::dlls::ws2_32::handle_ready(h)
+            } else {
+                match wait_for_single_object(h, 0) {
+                    0 => true,
+                    0x80 => return 0x80 + i as u32,
+                    u32::MAX => return u32::MAX,
+                    _ => false,
+                }
+            };
+            if ready {
+                return i as u32;
+            }
+        }
+        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+            return 258;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
 pub unsafe extern "win64" fn wait_for_multiple_objects(
     count: u32,
     handles: *const usize,
@@ -6703,6 +6740,13 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         return u32::MAX;
     }
     let hs = std::slice::from_raw_parts(handles, count as usize);
+    if wait_all == 0
+        && hs
+            .iter()
+            .any(|&h| lookup_sync(h).is_none() && crate::dlls::ws2_32::is_wsa_event(h))
+    {
+        return wait_wsa_events(hs, timeout);
+    }
     let mut objects = Vec::with_capacity(hs.len());
     for &h in hs {
         let Some(o) = lookup_sync(h) else {
