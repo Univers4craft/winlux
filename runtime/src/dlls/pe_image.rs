@@ -12,9 +12,150 @@
 //! octets (`jmp [rip+2]` vers la fonction Rust) : une RVA ne peut désigner
 //! qu'une adresse de l'image. Les exports de données, hors du code de Winlux,
 //! ne sont pas publiés dans cette table (GetProcAddress les rend toujours).
+//!
+//! Bac à sable de Chromium (#767) : avant de reprendre un enfant suspendu, le
+//! courtier intercepte des fonctions Nt* de sa ntdll. Il vérifie que chacune
+//! a la forme d'un relais d'appel système de Windows x64, recopie ce relais
+//! dans l'enfant et écrit un saut par-dessus, à la même adresse que chez lui.
+//! D'où deux règles :
+//! - les images intégrées sont placées à des adresses fixes, identiques dans
+//!   tous les processus, comme les DLL système de Windows ;
+//! - les fonctions Nt* et Zw* de ntdll ont un relais au format Windows,
+//!   variante « int 2e » : `mov r10, rcx ; mov eax, N ; test byte ptr
+//!   [7FFE0308h], 1 ; jne ; syscall ; ret ; int 2Eh ; ret`. L'octet
+//!   SharedUserData!SystemCall vaut 1, donc le relais exécute `int 2Eh` (et
+//!   jamais `syscall`, qui irait au noyau Linux). Le `int 2Eh` lève une faute
+//!   que [`redirect_service`] reprend : RIP passe à la fonction Rust du
+//!   service N, sans toucher à la pile, comme un saut direct depuis
+//!   l'appelant. La copie du relais faite par Chromium marche de même.
 
 const PAGE: usize = 0x1000;
-const STUB: usize = 16;
+const STUB: usize = 32;
+
+/// Région des images intégrées : même ordre, mêmes tailles, donc mêmes
+/// adresses dans chaque processus (sous le PEB fixe, `process::PEB_FIXED`).
+const IMAGES_FIXED: usize = 0x5FF0_0000_0000;
+const GRANULARITY: usize = 0x10000;
+static NEXT_IMAGE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(IMAGES_FIXED);
+
+/// KUSER_SHARED_DATA : adresse publique de la page partagée de Windows.
+pub const SHARED_USER_DATA: usize = 0x7FFE_0000;
+/// SharedUserData!SystemCall : 1 = les relais de ntdll passent par `int 2Eh`.
+const SYSTEM_CALL: usize = 0x308;
+
+/// Service N → fonction Rust de ntdll, rempli à la construction de ntdll.
+static SERVICES: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+
+/// Relais d'appel système de Windows x64 (variante « int 2e »), 32 octets.
+fn service_stub(id: u32) -> [u8; STUB] {
+    let mut s = [0u8; STUB];
+    s[..4].copy_from_slice(&[0x4C, 0x8B, 0xD1, 0xB8]); // mov r10, rcx ; mov eax,
+    s[4..8].copy_from_slice(&id.to_le_bytes());
+    // test byte ptr [7FFE0308h], 1
+    s[8..16].copy_from_slice(&[0xF6, 0x04, 0x25, 0x08, 0x03, 0xFE, 0x7F, 0x01]);
+    s[16..18].copy_from_slice(&[0x75, 0x03]); // jne +3
+    s[18..20].copy_from_slice(&[0x0F, 0x05]); // syscall
+    s[20] = 0xC3; // ret
+    s[21..23].copy_from_slice(&[0xCD, 0x2E]); // int 2Eh
+    s[23] = 0xC3; // ret
+    s[24..32].copy_from_slice(&[0x0F, 0x1F, 0x84, 0, 0, 0, 0, 0]); // nop
+    s
+}
+
+fn is_service(dll: &str, name: &str) -> bool {
+    dll == "ntdll" && (name.starts_with("Nt") || name.starts_with("Zw"))
+}
+
+/// Pose la page SharedUserData avec SystemCall = 1, une fois par processus,
+/// avant tout code du programme.
+pub fn map_shared_user_data() {
+    unsafe {
+        let p = libc::mmap(
+            SHARED_USER_DATA as *mut libc::c_void,
+            PAGE,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED {
+            return;
+        }
+        if p as usize != SHARED_USER_DATA {
+            // Noyau ancien : l'adresse n'était qu'un indice.
+            libc::munmap(p, PAGE);
+            return;
+        }
+        ((SHARED_USER_DATA + SYSTEM_CALL) as *mut u32).write(1);
+        libc::mprotect(p, PAGE, libc::PROT_READ);
+    }
+}
+
+/// Faute levée par un relais de service de ntdll (ou sa copie) : reprend
+/// à la fonction du service, avec la pile et les registres de l'appelant.
+/// Appelée depuis le gestionnaire de SIGSEGV.
+pub unsafe fn redirect_service(info: *const libc::siginfo_t, uc: *mut libc::ucontext_t) -> bool {
+    let Some(table) = SERVICES.get() else {
+        return false;
+    };
+    let g = &mut (*uc).uc_mcontext.gregs;
+    let rip = g[libc::REG_RIP as usize] as usize;
+    let at = |o: usize| *((rip + o) as *const u8);
+    let hit = match g[libc::REG_TRAPNO as usize] {
+        // int 2Eh : faute de protection générale, RIP sur l'instruction.
+        13 => at(0) == 0xCD && at(1) == 0x2E && at(2) == 0xC3,
+        // Page SharedUserData absente : faute sur le `test` lui-même.
+        14 => {
+            (*info).si_addr() as usize == SHARED_USER_DATA + SYSTEM_CALL
+                && rip != SHARED_USER_DATA + SYSTEM_CALL
+                && (0..8).all(|i| at(i) == service_stub(0)[8 + i])
+        }
+        _ => false,
+    };
+    if !hit {
+        return false;
+    }
+    let id = g[libc::REG_RAX as usize] as u32 as usize;
+    match table.get(id) {
+        Some(&f) if f != 0 => {
+            g[libc::REG_RIP as usize] = f as i64;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Réserve `size` octets à la prochaine adresse fixe de la région, ou
+/// ailleurs si elle est prise.
+fn map_image(size: usize) -> *mut libc::c_void {
+    let span = size.div_ceil(GRANULARITY) * GRANULARITY;
+    let want = NEXT_IMAGE.fetch_add(span, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let p = libc::mmap(
+            want as *mut libc::c_void,
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        if p != libc::MAP_FAILED && p as usize == want {
+            return p;
+        }
+        if p != libc::MAP_FAILED {
+            libc::munmap(p, size);
+        }
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    }
+}
 
 /// Plages exécutables du binaire Winlux, pour distinguer fonctions et données.
 fn code_ranges() -> &'static [(usize, usize)] {
@@ -84,16 +225,7 @@ pub fn build(dll: &str, exports: &super::Exports) -> usize {
     let stubs = (export_end + 15) & !15;
     let size = (stubs + STUB * n).div_ceil(PAGE) * PAGE;
 
-    let base = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-    };
+    let base = map_image(size);
     if base == libc::MAP_FAILED {
         // Repli : l'ancienne page « MZ » seule.
         return super::fake_module();
@@ -149,16 +281,29 @@ pub fn build(dll: &str, exports: &super::Exports) -> usize {
     put32(img, dir + 32, name_ptrs as u32);
     put32(img, dir + 36, ords as u32);
     img[dll_name_rva..dll_name_rva + dll_name.len()].copy_from_slice(dll_name.as_bytes());
+    let mut services = Vec::new();
     for (i, ((name, addr), name_rva)) in names.iter().zip(&name_rvas).enumerate() {
         let stub = stubs + STUB * i;
         put32(img, funcs + 4 * i, stub as u32);
         put32(img, name_ptrs + 4 * i, *name_rva as u32);
         put16(img, ords + 2 * i, i as u16);
         img[*name_rva..*name_rva + name.len()].copy_from_slice(name.as_bytes());
+        if is_service(dll, name) {
+            // Service N = rang de l'export : identique dans chaque processus.
+            if services.len() <= i {
+                services.resize(i + 1, 0);
+            }
+            services[i] = *addr;
+            img[stub..stub + STUB].copy_from_slice(&service_stub(i as u32));
+            continue;
+        }
         // jmp qword ptr [rip+2] ; ud2 ; .quad addr
         img[stub..stub + 6].copy_from_slice(&[0xFF, 0x25, 0x02, 0, 0, 0]);
         img[stub + 6..stub + 8].copy_from_slice(&[0x0F, 0x0B]);
         put64(img, stub + 8, *addr as u64);
+    }
+    if !services.is_empty() {
+        let _ = SERVICES.set(services);
     }
     unsafe {
         libc::mprotect(base, PAGE, libc::PROT_READ);
@@ -217,6 +362,77 @@ mod tests {
             assert_eq!(f(40, 2), 42);
             assert!(manual_lookup(base, "WinluxData").is_none());
             assert!(manual_lookup(base, "Absent").is_none());
+        }
+    }
+
+    /// Relais Nt* de ntdll (#767) : forme vérifiée par le bac à sable de
+    /// Chromium, adresse fixe, et appel réel par `int 2Eh`, depuis l'image
+    /// comme depuis une copie du relais.
+    #[test]
+    fn relais_de_service_au_format_windows() {
+        let ntdll = super::super::module_handle("ntdll").expect("ntdll intégrée");
+        assert!(ntdll >= super::IMAGES_FIXED && ntdll < crate::process::PEB_FIXED);
+        let stub = unsafe { manual_lookup(ntdll, "NtClose") }.expect("NtClose exporté");
+        let bytes = unsafe { std::slice::from_raw_parts(stub as *const u8, super::STUB) };
+        assert_eq!(&bytes[..4], &[0x4C, 0x8B, 0xD1, 0xB8]);
+        assert_eq!(
+            &bytes[8..16],
+            &[0xF6, 0x04, 0x25, 0x08, 0x03, 0xFE, 0x7F, 0x01]
+        );
+        assert_eq!(
+            &bytes[16..24],
+            &[0x75, 0x03, 0x0F, 0x05, 0xC3, 0xCD, 0x2E, 0xC3]
+        );
+        let id = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        assert_eq!(
+            super::SERVICES.get().and_then(|t| t.get(id)).copied(),
+            Some(super::super::ntdll::nt_close as *const () as usize)
+        );
+        // Les autres fonctions gardent le relais par saut.
+        let rtl = unsafe { manual_lookup(ntdll, "RtlInitializeSRWLock") }.expect("export Rtl");
+        assert_eq!(unsafe { *(rtl as *const u16) }, 0x25FF);
+
+        // Appel réel dans un processus fils, seul à poser son gestionnaire.
+        extern "C" fn on_segv(_: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+            unsafe {
+                if !super::redirect_service(info, ctx.cast()) {
+                    libc::_exit(90);
+                }
+            }
+        }
+        unsafe {
+            let pid = libc::fork();
+            assert!(pid >= 0);
+            if pid == 0 {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = on_segv as *const () as usize;
+                sa.sa_flags = libc::SA_SIGINFO;
+                libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+                // Sans la page SharedUserData, la faute tombe sur le `test`.
+                let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(stub);
+                let absent = f(0xDEAD_0000);
+                super::map_shared_user_data();
+                let present = f(0xDEAD_0000);
+                // Copie du relais ailleurs, comme le fait le courtier.
+                let copy = libc::mmap(
+                    std::ptr::null_mut(),
+                    0x1000,
+                    libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                std::ptr::copy_nonoverlapping(stub as *const u8, copy as *mut u8, super::STUB);
+                let g: extern "win64" fn(usize) -> u32 = std::mem::transmute(copy);
+                let copied = g(0xDEAD_0000);
+                let invalid = 0xC000_0008; // STATUS_INVALID_HANDLE
+                let ok = absent == invalid && present == invalid && copied == invalid;
+                libc::_exit(if ok { 0 } else { 1 });
+            }
+            let mut st = 0;
+            libc::waitpid(pid, &mut st, 0);
+            assert!(libc::WIFEXITED(st), "fils tué : {st:#x}");
+            assert_eq!(libc::WEXITSTATUS(st), 0);
         }
     }
 }

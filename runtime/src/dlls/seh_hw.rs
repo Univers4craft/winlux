@@ -408,6 +408,15 @@ pub fn enabled() -> bool {
 }
 
 pub unsafe fn on_fault(sig: i32, info: *mut libc::siginfo_t, ctx: *mut c_void) -> bool {
+    // Relais de service de ntdll (`int 2Eh`) : reprise à la fonction du
+    // service, ce n'est pas une exception (#767).
+    if sig == libc::SIGSEGV
+        && !info.is_null()
+        && !ctx.is_null()
+        && super::pe_image::redirect_service(info, ctx as *mut libc::ucontext_t)
+    {
+        return true;
+    }
     if !ENABLED.load(Ordering::Relaxed) || info.is_null() || ctx.is_null() {
         return false;
     }
