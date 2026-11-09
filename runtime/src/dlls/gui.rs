@@ -4530,6 +4530,21 @@ pub fn window_style(hwnd: usize) -> Option<u32> {
     lock(windows()).get(&hwnd).map(|w| w.style)
 }
 
+/// Enfant transparent qui laisse voir son parent : WS_CHILD et
+/// WS_EX_TRANSPARENT, hors contrôles intégrés (qui peignent eux-mêmes).
+/// Sous Windows, la chaîne d'échange présentée dans le parent passe devant
+/// le contenu GDI d'un tel enfant ; en X11 sa fenêtre la masquerait. La
+/// « Chrome Legacy Window » de Chromium couvre ainsi toute la zone client
+/// où le processus GPU présente la page (#1337).
+pub fn is_see_through_child(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TRANSPARENT: u32 = 0x20;
+    let see_through = lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.style & WS_CHILD != 0 && w.ex_style & WS_EX_TRANSPARENT != 0);
+    see_through && super::controls::kind_of(hwnd).is_none()
+}
+
 /// Renvoie le style étendu WS_EX_* de la fenêtre.
 pub fn window_ex_style(hwnd: usize) -> Option<u32> {
     lock(windows()).get(&hwnd).map(|w| w.ex_style)
@@ -4930,7 +4945,7 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #[test]
     fn wm_size_dit_l_etat_de_la_fenetre() {
         assert_eq!(size_kind(WINDOW_NORMAL), 0);
@@ -5008,6 +5023,50 @@ mod tests {
         let popup = fenetre(haut, 0, Rect::from_size(300, 300, 50, 50));
         assert_eq!(screen_rect(popup), Some(Rect::from_size(300, 300, 50, 50)));
         for h in [bouton, groupe, popup, haut] {
+            destroy_window(h);
+        }
+    }
+
+    pub(crate) fn fenetre_essai(style: u32, ex_style: u32, parent: usize) -> Window {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        Window {
+            class: "Chrome_RenderWidgetHostHWND".to_string(),
+            wnd_proc: proc_addr as usize,
+            background: 6,
+            title: String::new(),
+            rect: Rect::from_size(0, 37, 1000, 763),
+            visible: true,
+            parent,
+            owner: std::thread::current().id(),
+            needs_paint: false,
+            paint_queued: false,
+            style,
+            ex_style,
+            pending: Vec::new(),
+            menu_bar: 0,
+            painting: false,
+        }
+    }
+
+    /// « Chrome Legacy Window » : WS_CHILD | WS_VISIBLE, WS_EX_TRANSPARENT,
+    /// au-dessus de la zone client où le processus GPU présente (#1337).
+    #[test]
+    fn enfant_transparent_laisse_voir_le_parent() {
+        // Fenêtres de premier niveau : l'ordre Z est global aux tests.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let parent = alloc_hwnd();
+        insert_window(parent, fenetre_essai(0x06c8_0000, 0, 0));
+        let legacy = alloc_hwnd();
+        insert_window(legacy, fenetre_essai(0x4600_0000, 0x20, parent));
+        let opaque = alloc_hwnd();
+        insert_window(opaque, fenetre_essai(0x4600_0000, 0, parent));
+        let haut = alloc_hwnd();
+        insert_window(haut, fenetre_essai(0x06c8_0000, 0x20, 0));
+        assert!(is_see_through_child(legacy));
+        assert!(!is_see_through_child(opaque));
+        assert!(!is_see_through_child(haut));
+        assert!(!is_see_through_child(parent));
+        for h in [legacy, opaque, haut, parent] {
             destroy_window(h);
         }
     }

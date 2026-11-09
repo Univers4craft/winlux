@@ -961,6 +961,11 @@ pub struct X11Backend {
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
     back: HashMap<usize, (u32, u16, u16)>,
+    /// Enfants transparents (WS_CHILD et WS_EX_TRANSPARENT, hors
+    /// contrôles intégrés) : fenêtres X « InputOnly », qui reçoivent la souris
+    /// sans masquer ce qu'un autre processus présente dans le parent
+    /// (fenêtre « Chrome Legacy Window » de Chromium, #1337).
+    see_through: std::collections::HashSet<usize>,
     /// Barre de menus de chaque fenêtre qui en a une, et menu ouvert.
     menu_bars: HashMap<usize, (Vec<gui::MenuBarItem>, Option<usize>)>,
     /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
@@ -1172,6 +1177,7 @@ impl X11Backend {
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
+            see_through: std::collections::HashSet::new(),
             menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -3945,6 +3951,45 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
     }
 
+    /// Un enfant WS_EX_TRANSPARENT devient une fenêtre X InputOnly : il ne
+    /// masque pas l'image qu'un autre processus présente dans le parent
+    /// (Chromium, #1337).
+    #[test]
+    #[ignore = "requires an X11 server"]
+    fn enfant_transparent_en_inputonly_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::xproto::WindowClass;
+        let mut backend = X11Backend::connect().expect("X11");
+        let parent = gui::alloc_hwnd();
+        gui::insert_window(parent, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(parent, "essai", Rect::from_size(0, 0, 200, 150));
+        let legacy = gui::alloc_hwnd();
+        gui::insert_window(legacy, gui::tests::fenetre_essai(0x4600_0000, 0x20, parent));
+        backend.create_child_window(legacy, parent, Rect::from_size(0, 37, 200, 113));
+        let opaque = gui::alloc_hwnd();
+        gui::insert_window(opaque, gui::tests::fenetre_essai(0x4600_0000, 0, parent));
+        backend.create_child_window(opaque, parent, Rect::from_size(0, 0, 20, 20));
+        let class = |b: &X11Backend, h: usize| {
+            let w = b.windows[&h].window;
+            b.conn
+                .get_window_attributes(w)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .class
+        };
+        assert_eq!(class(&backend, legacy), WindowClass::INPUT_ONLY);
+        assert_eq!(class(&backend, opaque), WindowClass::INPUT_OUTPUT);
+        // Aucun dessin ne va dans la fenêtre InputOnly (pas d'erreur X).
+        backend.draw(legacy, &[]);
+        backend.conn.sync().unwrap();
+        for h in [legacy, opaque, parent] {
+            backend.destroy_window(h);
+            gui::destroy_window(h);
+        }
+        backend.conn.sync().unwrap();
+    }
+
     #[test]
     #[ignore = "requires an X11 server with Cairo and Xft"]
     fn contours_anticreneles_x11() {
@@ -4582,9 +4627,22 @@ impl gui::GuiBackend for X11Backend {
         let Ok(win) = self.conn.generate_id() else {
             return;
         };
-        let bg = self.alloc_color(theme::BG_DEEP);
-        let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+        let see_through = gui::is_see_through_child(hwnd);
+        let aux = if see_through {
+            // InputOnly : ni fond ni dessin, la souris seulement.
+            CreateWindowAux::new()
+        } else {
+            let bg = self.alloc_color(theme::BG_DEEP);
+            CreateWindowAux::new().background_pixel(bg)
+        };
+        // Une fenêtre InputOnly n'est jamais exposée.
+        let exposure = if see_through {
+            x11rb::protocol::xproto::EventMask::NO_EVENT
+        } else {
             x11rb::protocol::xproto::EventMask::EXPOSURE
+        };
+        let aux = aux.event_mask(
+            exposure
                 | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
                 | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
                 | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
@@ -4608,8 +4666,12 @@ impl gui::GuiBackend for X11Backend {
                 w,
                 h,
                 0,
-                WindowClass::INPUT_OUTPUT,
-                visual,
+                if see_through {
+                    WindowClass::INPUT_ONLY
+                } else {
+                    WindowClass::INPUT_OUTPUT
+                },
+                if see_through { 0 } else { visual },
                 &aux,
             )
             .is_err()
@@ -4619,9 +4681,15 @@ impl gui::GuiBackend for X11Backend {
         let Ok(gc) = self.conn.generate_id() else {
             return;
         };
+        // Un GC ne se crée pas sur une fenêtre InputOnly : celui du parent
+        // (jamais utilisé, aucun dessin n'y va).
+        let gc_drawable = if see_through { parent_win } else { win };
         let _ = self
             .conn
-            .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+            .create_gc(gc, gc_drawable, &CreateGCAux::new().graphics_exposures(0));
+        if see_through {
+            self.see_through.insert(hwnd);
+        }
         let _ = self.conn.flush();
         self.windows.insert(
             hwnd,
@@ -4641,6 +4709,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
         self.content.insert(hwnd, cmds.to_vec());
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
@@ -4666,6 +4737,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
@@ -4727,6 +4801,7 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
+        self.see_through.remove(&hwnd);
         self.owners.remove(&hwnd);
         self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
