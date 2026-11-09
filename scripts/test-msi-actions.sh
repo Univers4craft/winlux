@@ -221,6 +221,13 @@ cp prerequis.exe idt/Binary/WixCA.dll
 cp ca32.dll idt/Binary/CaDll32.dll
 cp ca64.dll idt/Binary/CaDll64.dll
 printf 'Name\tData\ns72\tv0\nBinary\tName\nPrerequis\tPrerequis.exe\nWixCA\tWixCA.dll\nCaDll32\tCaDll32.dll\nCaDll64\tCaDll64.dll\n' >idt/Binary.idt
+# Fichiers écrits par les actions personnalisées : comme sous Windows,
+# seule la table RemoveFile les retire à la désinstallation (mode 2).
+{
+    printf 'FileKey\tComponent_\tFileName\tDirProperty\tInstallMode\ns72\ts72\tL255\ts72\ti2\nRemoveFile\tFileKey\n'
+    printf 'Plan\tPrincipal\tplan-*.txt\tINSTALLDIR\t2\n'
+    printf 'Base\tPrincipal\tbase-*.txt\tINSTALLDIR\t2\n'
+} >idt/RemoveFile.idt
 (cd idt && for t in *.idt; do msibuild ../ca.msi -i "$t"; done)
 if [ -n "$out" ]; then cp ca.msi "$out/actions-dll-exe.msi"; echo "$out/actions-dll-exe.msi"; exit 0; fi
 
@@ -249,6 +256,7 @@ grep -q 'Start .*(2)' "$work/svc.txt" || fail "service non automatique : $(cat "
 
 run msiexec.exe /x '{7B2C6D1F-2222-4333-8444-955566667777}' /qn >"$work/out.txt" 2>&1 || fail "désinstallation en échec"
 test ! -e "$pf/Winlux Actions/outil.exe" || fail "fichier resté après désinstallation"
+test ! -e "$pf/Winlux Actions" || fail "RemoveFile (mode 2, jokers) : Winlux Actions non vidé : $(ls "$pf/Winlux Actions")"
 test ! -e "$pf/Outil Demo/outil.txt" || fail "type 34 à REMOVE=\"ALL\" : outil non désinstallé"
 grep -q 'Action personnalisée DLL EffaceDll (Efface) : terminée' "$work/out.txt" || fail "type 17 à REMOVE=\"ALL\" : DLL installée non appelée"
 test -f "$pf/Prerequis Demo/outil.txt" || fail "le prérequis est parti avec l'application"

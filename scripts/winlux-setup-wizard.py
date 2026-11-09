@@ -6,7 +6,7 @@ Comme l'assistant d'un programme d'installation sous Windows : une page
 d'accueil (nom, version, éditeur, dossier d'installation modifiable pour
 NSIS et Inno, raccourci sur le Bureau), la progression, puis la fin
 (réussite ou erreur avec le journal). Le travail lui-même est fait par le
-runtime sans exécuter le code de l'installateur :
+runtime (actions personnalisées et programmes lancés par l'installateur compris) :
   winlux --setup FICHIER.exe [/D=dossier] [/nodesktop]
   winlux --msiexec /i FICHIER.msi /qn
 
@@ -45,10 +45,9 @@ _TR = {
          "Willkommen beim Setup-Assistenten von {name}"),
     "Version {version}": ("Version {version}", "Versión {version}", "Version {version}"),
     "Éditeur : {publisher}": ("Publisher: {publisher}", "Editor: {publisher}", "Herausgeber: {publisher}"),
-    "Winlux installe ce programme lui-même, sans exécuter le code de l'installateur.":
-        ("Winlux installs this program itself, without running the installer's code.",
-         "Winlux instala este programa por sí mismo, sin ejecutar el código del instalador.",
-         "Winlux installiert dieses Programm selbst, ohne den Code des Installationsprogramms auszuführen."),
+    "Winlux installe ce programme lui-même.":
+        ("Winlux installs this program itself.", "Winlux instala este programa por sí mismo.",
+         "Winlux installiert dieses Programm selbst."),
     "Dossier d'installation": ("Install location", "Carpeta de instalación", "Installationsordner"),
     "Parcourir…": ("Browse…", "Examinar…", "Durchsuchen…"),
     "Créer un raccourci sur le Bureau": ("Create a desktop shortcut", "Crear un acceso directo en el escritorio",
@@ -126,6 +125,21 @@ def command(runtime, path, info, folder=None, desktop=True):
     return argv
 
 
+def menu_entries():
+    """Lanceurs du menu Démarrer du compte (nom -> date de modification)."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    entries = {}
+    for root, _dirs, files in os.walk(os.path.join(base, "applications")):
+        for name in files:
+            if name.endswith(".desktop"):
+                full = os.path.join(root, name)
+                try:
+                    entries[full] = os.stat(full).st_mtime_ns
+                except OSError:
+                    pass
+    return entries
+
+
 def main(argv):
     args = [a for a in argv[1:]]
     runtime = os.environ.get("WINLUX_BIN", "/usr/bin/winlux")
@@ -190,7 +204,9 @@ def main(argv):
         text(welcome, tr("Version {version}", version=info["version"]))
     if info["publisher"]:
         text(welcome, tr("Éditeur : {publisher}", publisher=info["publisher"]))
-    text(welcome, tr("Winlux installe ce programme lui-même, sans exécuter le code de l'installateur."), dim=True)
+    # Rien sur le code de l'installateur : les actions
+    # personnalisées des .msi et les programmes lancés par NSIS tournent.
+    text(welcome, tr("Winlux installe ce programme lui-même."), dim=True)
     folder_entry = Gtk.Entry(hexpand=True)
     desktop = Gtk.CheckButton(label=tr("Créer un raccourci sur le Bureau"), active=True)
     frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=8)
@@ -255,7 +271,9 @@ def main(argv):
         if code in (0, 3010):
             done_title.set_markup("<span size='x-large' weight='bold'>%s</span>"
                                   % GLib.markup_escape_text(tr("{name} est installé.", name=info["name"])))
-            done_text.set_text(tr("Vous le trouverez dans le menu Démarrer."))
+            # Seulement si l'installation a posé ou refait un lanceur.
+            if menu_entries() != state["menu"]:
+                done_text.set_text(tr("Vous le trouverez dans le menu Démarrer."))
         else:
             done_title.set_markup("<span size='x-large' weight='bold'>%s</span>"
                                   % GLib.markup_escape_text(tr("L'installation a échoué (code {code}).", code=code)))
@@ -293,6 +311,7 @@ def main(argv):
         argv = command(runtime, path, info, folder_entry.get_text().strip() or None, desktop.get_active())
         if os.environ.get("WINLUX_SETUP_WIZARD_TRACE"):
             Path(os.environ["WINLUX_SETUP_WIZARD_TRACE"]).write_text("\n".join(argv) + "\n")
+        state["menu"] = menu_entries()
         install.hide()
         cancel.set_sensitive(False)
         stack.set_visible_child_name("progress")

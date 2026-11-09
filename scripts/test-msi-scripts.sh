@@ -140,6 +140,12 @@ printf '%s\t%s\t%s\n' \
     printf 'VbsRetire\t22\tretire\tRetire\n'
 } >idt/CustomAction.idt
 printf 'Name\tData\ns72\tv0\nBinary\tName\nVerifie\tVerifie.vbs\nEchoue\tEchoue.js\n' >idt/Binary.idt
+# Fichiers écrits par les actions personnalisées : comme sous Windows,
+# seule la table RemoveFile les retire à la désinstallation (mode 2).
+{
+    printf 'FileKey\tComponent_\tFileName\tDirProperty\tInstallMode\ns72\ts72\tL255\ts72\ti2\nRemoveFile\tFileKey\n'
+    printf 'Differe\tPrincipal\tdiffere.txt\tINSTALLDIR\t2\n'
+} >idt/RemoveFile.idt
 (cd idt && for t in *.idt; do msibuild ../scripts.msi -i "$t"; done)
 if [ -n "$out" ]; then cp scripts.msi "$out/actions-script.msi"; echo "$out/actions-script.msi"; exit 0; fi
 
@@ -163,5 +169,7 @@ if grep -q 'Actions personnalisées non exécutées\|script, type' "$work/out.tx
 run msiexec.exe /x '{5A1B2C3D-3333-4444-8555-966677778888}' /qn >"$work/out.txt" 2>&1 || fail "désinstallation en échec"
 grep -q 'Action personnalisée VBScript VbsRetire (Retire) : terminée' "$work/out.txt" || fail "type 22 (VBScript installé) non exécuté à REMOVE=\"ALL\""
 test ! -e "$dir/vbs-js-1036-2-p2.txt" || fail "type 22 : fichier non retiré par le script"
+test ! -e "$dir/differe.txt" || fail "RemoveFile (mode 2) : fichier écrit par une action resté"
+test ! -e "$dir" || fail "dossier d'installation resté : $(ls "$dir")"
 if run reg.exe query 'HKCU\Software\WinluxScripts' >/dev/null 2>&1; then fail "type 22 : clé de registre restée (RegDelete)"; fi
 echo "msi-scripts : JScript (types 5, 37, 53, différé) et VBScript (types 6, 22, 38) exécutés avec Session, vues SQL, FileSystemObject, Dictionary et WScript.Shell ; échecs 1603 et 1720 signalés sans arrêter l'installation"
