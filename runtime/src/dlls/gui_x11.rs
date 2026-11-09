@@ -3768,7 +3768,12 @@ mod tests {
         use super::statically_linked_renderer;
         let mut image = vec![0u8; 64];
         assert!(!statically_linked_renderer(&image));
-        image.extend("SDL_app".encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        image.extend(
+            "SDL_app"
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes),
+        );
         image.extend([1, 2, 3]);
         assert!(statically_linked_renderer(&image));
         assert!(!statically_linked_renderer(b"SDL_app\0 en ASCII seulement"));
