@@ -2251,12 +2251,38 @@ pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32
     1
 }
 
+/// EnumChildWindows : chaque descendant de `parent` (enfants, puis leurs
+/// propres enfants), jusqu'à ce que le rappel renvoie FALSE. Parent NULL :
+/// comme EnumWindows. La liste est relevée avant les appels, une fenêtre
+/// créée pendant l'énumération n'y figure pas. Le bouchon ne rappelait
+/// jamais : Sumatra PDF n'invalidait pas sa zone de document en passant à
+/// l'onglet d'accueil, qui restait affiché avec l'ancienne page.
 pub unsafe extern "win64" fn enum_child_windows(
-    _parent: usize,
-    _callback: usize,
-    _lparam: isize,
+    parent: usize,
+    callback: usize,
+    lparam: isize,
 ) -> i32 {
-    // Stub : pas d'enfants réels
+    if parent == 0 {
+        return enum_windows(callback, lparam);
+    }
+    if callback == 0 {
+        return 0;
+    }
+    fn descendants(parent: usize, out: &mut Vec<usize>) {
+        for child in gui::child_windows(parent) {
+            out.push(child);
+            descendants(child, out);
+        }
+    }
+    let mut all = Vec::new();
+    descendants(parent, &mut all);
+    type EnumCallback = unsafe extern "win64" fn(usize, isize) -> i32;
+    let cb: EnumCallback = std::mem::transmute(callback);
+    for hwnd in all {
+        if gui::is_window(hwnd) && cb(hwnd, lparam) == 0 {
+            break;
+        }
+    }
     1
 }
 

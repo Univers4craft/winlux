@@ -129,6 +129,54 @@ type Shared = Arc<Mutex<DialogState>>;
 
 pub(crate) struct Dialog {
     state: Shared,
+    /// Récepteurs IFileDialogEvents inscrits par Advise : (cookie, objet).
+    events: Mutex<Vec<(u32, usize)>>,
+}
+
+impl Drop for Dialog {
+    fn drop(&mut self) {
+        let sinks = std::mem::take(&mut *self.events.lock().unwrap_or_else(|e| e.into_inner()));
+        for (_, sink) in sinks {
+            // SAFETY : chaque récepteur a reçu un AddRef dans Advise.
+            unsafe { sink_call_release(sink) };
+        }
+    }
+}
+
+/// Méthode `slot` de la table d'un objet COM.
+unsafe fn vslot(obj: usize, slot: usize) -> usize {
+    *(*(obj as *const *const usize)).add(slot)
+}
+
+unsafe fn sink_call_add_ref(sink: usize) {
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(vslot(sink, 1));
+    f(sink);
+}
+
+unsafe fn sink_call_release(sink: usize) {
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(vslot(sink, 2));
+    f(sink);
+}
+
+/// IFileDialogEvents::OnFileOk (méthode 3, shobjidl.h de mingw-w64) de
+/// chaque récepteur. Rend le premier refus (S_FALSE ou erreur), sinon S_OK.
+unsafe fn notify_file_ok(this: *mut Com<Dialog>) -> i32 {
+    let sinks: Vec<usize> = (*this)
+        .inner
+        .events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|&(_, s)| s)
+        .collect();
+    for sink in sinks {
+        let f: unsafe extern "win64" fn(usize, usize) -> i32 = std::mem::transmute(vslot(sink, 3));
+        let hr = f(sink, this as usize);
+        if hr != S_OK {
+            return hr;
+        }
+    }
+    S_OK
 }
 
 struct Customize {
@@ -219,7 +267,13 @@ pub unsafe fn create_builtin(clsid: &Guid, riid: &Guid, out: *mut *mut c_void) -
         },
         ..Default::default()
     }));
-    let d = Com::create(DIALOG_VT.ptr(), Dialog { state });
+    let d = Com::create(
+        DIALOG_VT.ptr(),
+        Dialog {
+            state,
+            events: Mutex::new(Vec::new()),
+        },
+    );
     let hr = dialog_qi(d, riid, out);
     Com::release(d);
     Some(hr)
@@ -279,6 +333,20 @@ unsafe extern "win64" fn dialog_show(this: *mut Com<Dialog>, owner: usize) -> i3
                 s.filter_index = filter as u32 + 1;
             }
             s.results = paths;
+            let count = s.results.len();
+            drop(s);
+            // Comme Windows, la boîte prévient ses récepteurs que le choix
+            // est validé, avant de se fermer. Qt 5 (VLC) ne garde le choix
+            // qu'à ce moment-là : sans OnFileOk, il le jugeait vide, rendait
+            // « annulé » et VLC ne lisait rien (#1288).
+            let hr = notify_file_ok(this);
+            crate::thunks::api_note(&format!(
+                "IFileDialog::Show : {count} chemin(s), OnFileOk → {hr:#x} (#1288)"
+            ));
+            if hr != S_OK {
+                lock(&state).results.clear();
+                return HR_CANCELLED;
+            }
             S_OK
         }
         Err(hr) => hr,
@@ -486,20 +554,45 @@ unsafe extern "win64" fn dialog_get_file_type_index(this: *mut Com<Dialog>, out:
     S_OK
 }
 
+/// IFileDialog::Advise : garde le récepteur IFileDialogEvents (AddRef).
 unsafe extern "win64" fn dialog_advise(
-    _this: *mut Com<Dialog>,
+    this: *mut Com<Dialog>,
     events: usize,
     cookie: *mut u32,
 ) -> i32 {
     if events == 0 || cookie.is_null() {
         return E_INVALIDARG;
     }
-    *cookie = 1;
+    let mut list = (*this)
+        .inner
+        .events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let next = list.iter().map(|&(c, _)| c).max().unwrap_or(0) + 1;
+    sink_call_add_ref(events);
+    list.push((next, events));
+    *cookie = next;
     S_OK
 }
 
-unsafe extern "win64" fn dialog_unadvise(_this: *mut Com<Dialog>, _cookie: u32) -> i32 {
-    S_OK
+/// IFileDialog::Unadvise : relâche le récepteur du cookie.
+unsafe extern "win64" fn dialog_unadvise(this: *mut Com<Dialog>, cookie: u32) -> i32 {
+    let sink = {
+        let mut list = (*this)
+            .inner
+            .events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let i = list.iter().position(|&(c, _)| c == cookie);
+        i.map(|i| list.remove(i).1)
+    };
+    match sink {
+        Some(s) => {
+            sink_call_release(s);
+            S_OK
+        }
+        None => E_INVALIDARG,
+    }
 }
 
 unsafe extern "win64" fn dialog_set_options(this: *mut Com<Dialog>, options: u32) -> i32 {
@@ -1238,12 +1331,48 @@ mod tests {
             custom_get_check(c, 7, &mut checked);
             assert_eq!(checked, 1);
             custom_release(c);
+            // Récepteur IFileDialogEvents : OnFileOk relit le choix pendant
+            // Show, comme Qt 5 (#1288).
+            let sink = FakeSink::new(S_OK);
+            let mut cookie = 0;
+            assert_eq!(dialog_advise(d, sink as usize, &mut cookie), S_OK);
+            assert_ne!(cookie, 0);
+            assert_eq!((*sink).refs, 2);
             // Sans affichage : WINLUX_FILEDLG choisit le fichier, comme
             // pour GetOpenFileNameW.
             std::env::set_var("WINLUX_FILEDLG", "lisez.txt");
             let hr = dialog_show(d, 0);
-            std::env::remove_var("WINLUX_FILEDLG");
             assert_eq!(hr, S_OK);
+            assert_eq!((*sink).file_ok_calls, 1);
+            assert_eq!((*sink).seen_results, 1);
+            assert_eq!(dialog_unadvise(d, cookie), S_OK);
+            assert_eq!((*sink).refs, 1);
+            assert_eq!(dialog_unadvise(d, cookie), E_INVALIDARG);
+            // Un récepteur qui refuse (S_FALSE) : la boîte rend « annulé ».
+            let refuse = FakeSink::new(1);
+            let mut d3: *mut c_void = std::ptr::null_mut();
+            create_builtin(&CLSID_FILE_OPEN_DIALOG, &IID_IFILE_DIALOG, &mut d3);
+            let d3 = d3 as *mut Com<Dialog>;
+            assert_eq!(
+                dialog_set_folder(d3, {
+                    let mut it: *mut c_void = std::ptr::null_mut();
+                    sh_create_item_from_parsing_name(w.as_ptr(), 0, &IID_ISHELL_ITEM, &mut it);
+                    it as usize
+                }),
+                S_OK
+            );
+            assert_eq!(dialog_advise(d3, refuse as usize, &mut cookie), S_OK);
+            assert_eq!(dialog_show(d3, 0), HR_CANCELLED);
+            assert_eq!((*refuse).file_ok_calls, 1);
+            let mut none: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                dialog_slot27(d3, &mut none as *mut _ as usize),
+                E_UNEXPECTED
+            );
+            // La fin de la boîte relâche les récepteurs encore inscrits.
+            dialog_release(d3);
+            assert_eq!((*refuse).refs, 1);
+            std::env::remove_var("WINLUX_FILEDLG");
             let mut res: *mut c_void = std::ptr::null_mut();
             assert_eq!(dialog_get_result(d, &mut res), S_OK);
             let mut p: *mut u16 = std::ptr::null_mut();
@@ -1264,7 +1393,70 @@ mod tests {
             assert_eq!(dialog_show(d2 as *mut Com<Dialog>, 0), HR_CANCELLED);
             dialog_release(d2 as *mut Com<Dialog>);
             dialog_release(d);
+            assert_eq!((*sink).refs, 1);
+            drop(Box::from_raw(sink));
+            drop(Box::from_raw(refuse));
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// IFileDialogEvents minimal : compte ses références et ses OnFileOk.
+    #[repr(C)]
+    struct FakeSink {
+        vtbl: *const usize,
+        refs: u32,
+        answer: i32,
+        file_ok_calls: u32,
+        seen_results: u32,
+    }
+
+    static FAKE_SINK_VT: [unsafe extern "win64" fn(); 4] = unsafe {
+        [
+            std::mem::transmute::<unsafe extern "win64" fn(*mut FakeSink) -> i32, _>(sink_qi),
+            std::mem::transmute::<unsafe extern "win64" fn(*mut FakeSink) -> u32, _>(sink_add_ref),
+            std::mem::transmute::<unsafe extern "win64" fn(*mut FakeSink) -> u32, _>(sink_release),
+            std::mem::transmute::<unsafe extern "win64" fn(*mut FakeSink, usize) -> i32, _>(
+                sink_file_ok,
+            ),
+        ]
+    };
+
+    impl FakeSink {
+        fn new(answer: i32) -> *mut FakeSink {
+            Box::into_raw(Box::new(FakeSink {
+                vtbl: FAKE_SINK_VT.as_ptr() as *const usize,
+                refs: 1,
+                answer,
+                file_ok_calls: 0,
+                seen_results: 0,
+            }))
+        }
+    }
+
+    unsafe extern "win64" fn sink_qi(_this: *mut FakeSink) -> i32 {
+        E_NOINTERFACE
+    }
+
+    unsafe extern "win64" fn sink_add_ref(this: *mut FakeSink) -> u32 {
+        (*this).refs += 1;
+        (*this).refs
+    }
+
+    unsafe extern "win64" fn sink_release(this: *mut FakeSink) -> u32 {
+        (*this).refs -= 1;
+        (*this).refs
+    }
+
+    /// Comme Qt 5 : GetResults pendant OnFileOk.
+    unsafe extern "win64" fn sink_file_ok(this: *mut FakeSink, pfd: usize) -> i32 {
+        (*this).file_ok_calls += 1;
+        let mut arr: *mut c_void = std::ptr::null_mut();
+        if dialog_slot27(pfd as *mut Com<Dialog>, &mut arr as *mut _ as usize) == S_OK {
+            let mut n = 0;
+            array_get_count(arr as *mut Com<ItemArray>, &mut n);
+            (*this).seen_results = n;
+            array_release(arr as *mut Com<ItemArray>);
+        }
+        (*this).answer
     }
 }

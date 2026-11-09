@@ -809,6 +809,28 @@ pub(crate) fn share_event(h: usize) -> Option<(i32, bool)> {
         _ => None,
     }
 }
+/// Gestionnaire de plantage de crashpad lancé par ce processus ou désigné
+/// par notre parent (variable `WINLUX_CRASH_HANDLER_PID`).
+static CRASH_HANDLER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+pub(crate) const CRASH_HANDLER_ENV: &str = "WINLUX_CRASH_HANDLER_PID";
+fn crash_handler_pid() -> Option<i32> {
+    Some(CRASH_HANDLER.load(Ordering::Relaxed)).filter(|&p| p > 1)
+}
+/// Au démarrage : les enfants de Chromium (GPU, réseau, rendu) ne sont pas
+/// des descendants du gestionnaire de crashpad, que Linux (Yama) empêche
+/// alors de lire leur mémoire ; sous Windows, il l'ouvre comme tout
+/// processus du même compte (#767). L'enfant le désigne donc lui-même.
+pub(crate) fn adopt_crash_handler() {
+    let Some(pid) = std::env::var(CRASH_HANDLER_ENV)
+        .ok()
+        .and_then(|p| p.parse::<i32>().ok())
+        .filter(|&p| p > 1 && p != std::process::id() as i32)
+    else {
+        return;
+    };
+    CRASH_HANDLER.store(pid, Ordering::Relaxed);
+    unsafe { libc::prctl(libc::PR_SET_PTRACER, pid as libc::c_ulong, 0, 0, 0) };
+}
 /// Mutex ou sémaphore transmissible à un autre processus : (descripteur
 /// de sa page partagée, vrai pour un sémaphore).
 pub(crate) fn share_sync(h: usize) -> Option<(i32, bool)> {
@@ -5139,52 +5161,52 @@ pub unsafe extern "win64" fn create_thread(
         builder = builder.stack_size(stack.max(64 * 1024));
     }
     let thread = state.clone();
-    if builder
-        .spawn(move || {
-            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
-            let _ = thread.rust_id.set(std::thread::current().id());
-            super::thread_ctl::register(os_tid, &thread.slot);
-            register_thread_object(os_tid, &thread);
-            let mut s = lock(&thread.state);
-            // L'identifiant rendu par CreateThread est celui que
-            // GetCurrentThreadId donnera dans le thread : le créateur attend
-            // qu'il soit connu, même pour un thread créé suspendu.
-            s.win_tid = os_tid as u32;
-            thread.changed.notify_all();
-            while s.suspend_count != 0 {
-                s = thread
-                    .changed
-                    .wait(s)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Err(e) = builder.spawn(move || {
+        let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+        let _ = thread.rust_id.set(std::thread::current().id());
+        super::thread_ctl::register(os_tid, &thread.slot);
+        register_thread_object(os_tid, &thread);
+        let mut s = lock(&thread.state);
+        // L'identifiant rendu par CreateThread est celui que
+        // GetCurrentThreadId donnera dans le thread : le créateur attend
+        // qu'il soit connu, même pour un thread créé suspendu.
+        s.win_tid = os_tid as u32;
+        thread.changed.notify_all();
+        while s.suspend_count != 0 {
+            s = thread
+                .changed
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        s.running = true;
+        drop(s);
+        {
+            // Même verrou que SetThreadAffinityMask/SetThreadPriority :
+            // une demande faite pendant le démarrage n'est jamais perdue.
+            let mut pending = lock(&thread.pending_cpus);
+            if let Some(cpus) = pending.take() {
+                crate::cpu::set_affinity(os_tid, &cpus);
             }
-            s.running = true;
-            drop(s);
-            {
-                // Même verrou que SetThreadAffinityMask/SetThreadPriority :
-                // une demande faite pendant le démarrage n'est jamais perdue.
-                let mut pending = lock(&thread.pending_cpus);
-                if let Some(cpus) = pending.take() {
-                    crate::cpu::set_affinity(os_tid, &cpus);
-                }
-                super::kernel32_cpu::thread_started(
-                    os_tid,
-                    thread.priority.load(Ordering::Relaxed),
-                );
-                thread.os_tid.store(os_tid, Ordering::Release);
-            }
-            CURRENT_THREAD.with(|c| *c.borrow_mut() = Some(thread.clone()));
-            crate::process::thread_attach_current();
-            let jump: *mut u64 = lock(&thread.exit_jump).as_mut_ptr();
-            // Second retour (valeur 1) : ExitThread a déjà enregistré le code
-            // et signalé le handle ; le thread se termine simplement ici.
-            if winlux_thread_setjmp(jump) == 0 {
-                let code = super::thread_ctl::root_call(start, param);
-                finish_current_thread(code);
-            }
-            std::hint::black_box(&thread);
-        })
-        .is_err()
-    {
+            super::kernel32_cpu::thread_started(os_tid, thread.priority.load(Ordering::Relaxed));
+            thread.os_tid.store(os_tid, Ordering::Release);
+        }
+        CURRENT_THREAD.with(|c| *c.borrow_mut() = Some(thread.clone()));
+        crate::process::thread_attach_current();
+        let jump: *mut u64 = lock(&thread.exit_jump).as_mut_ptr();
+        // Second retour (valeur 1) : ExitThread a déjà enregistré le code
+        // et signalé le handle ; le thread se termine simplement ici.
+        if winlux_thread_setjmp(jump) == 0 {
+            let code = super::thread_ctl::root_call(start, param);
+            finish_current_thread(code);
+        }
+        std::hint::black_box(&thread);
+    }) {
+        // Toujours journalisé, avec les limites en cause (#767).
+        crate::log_warn!(
+            "process",
+            "CreateThread refusé ({e}) : {}",
+            crate::crash::thread_limits_report()
+        );
         remove_sync(handle);
         crate::process::set_last_error(8);
         return 0;
@@ -5990,6 +6012,12 @@ unsafe fn create_process_common(
     // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
     // suspendu) : ouvert ici, hérité, renommé d'après son PID.
     cmd.env_remove(crate::dlls::handle_broker::ENV);
+    // Gestionnaire de crashpad connu : l'enfant le désigne à son tour pour
+    // qu'il puisse lire sa mémoire (#767).
+    cmd.env_remove(CRASH_HANDLER_ENV);
+    if let Some(pid) = crash_handler_pid() {
+        cmd.env(CRASH_HANDLER_ENV, pid.to_string());
+    }
     let desk = if is_pe {
         crate::dlls::handle_broker::prepare_child()
     } else {
@@ -6018,6 +6046,7 @@ unsafe fn create_process_common(
     if let Ok(c) = spawned.as_ref() {
         if is_pe && line.contains("--type=crashpad-handler") {
             libc::prctl(libc::PR_SET_PTRACER, c.id() as libc::c_ulong, 0, 0, 0);
+            CRASH_HANDLER.store(c.id() as i32, Ordering::Relaxed);
         }
     }
     let mut child = match spawned {
@@ -10093,6 +10122,22 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// #767 : un enfant de Chromium désigne le gestionnaire de crashpad
+    /// reçu de son parent, et le transmet à ses propres enfants.
+    #[test]
+    fn gestionnaire_de_crashpad_designe_par_l_enfant() {
+        let parent = unsafe { libc::getppid() };
+        std::env::set_var(super::CRASH_HANDLER_ENV, parent.to_string());
+        super::adopt_crash_handler();
+        std::env::remove_var(super::CRASH_HANDLER_ENV);
+        assert_eq!(super::crash_handler_pid(), Some(parent));
+        let report = crate::crash::thread_limits_report();
+        assert!(
+            report.contains("threads ") && report.contains("RLIMIT_NPROC"),
+            "{report}"
+        );
+    }
+
     #[test]
     fn code_de_sortie_complet_en_hexadecimal() {
         // #1205 : 0x780148E0, pas l'octet de poids faible (224).

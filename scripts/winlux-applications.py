@@ -87,7 +87,31 @@ def account_names(home):
     except (ImportError, KeyError): pass
     return names
 
+def fix_case(path):
+    """Chemin réel sans tenir compte de la casse, comme fix_case() de paths.rs (#1285).
+
+    Windows ignore la casse : un raccourci vers …\\audacity.exe désigne Audacity.exe.
+    Un composant absent laisse la suite telle quelle.
+    """
+    if path.exists() or not path.is_absolute(): return path
+    current = Path(path.anchor)
+    parts = path.parts[1:]
+    for index, part in enumerate(parts):
+        exact = current / part
+        if exact.exists():
+            current = exact
+            continue
+        lower = part.casefold()
+        try: found = sorted(entry.name for entry in os.scandir(current) if entry.name.casefold() == lower)
+        except OSError: found = []
+        if not found: return current.joinpath(*parts[index:])
+        current = current / found[0]
+    return current
+
 def windows_path(value, home):
+    return fix_case(_windows_path(value, home))
+
+def _windows_path(value, home):
     value = value.strip().strip('"').replace("\\", "/")
     if value[:2].lower() == "c:":
         parts = [part for part in value[2:].split("/") if part]

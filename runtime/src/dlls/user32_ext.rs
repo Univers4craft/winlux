@@ -702,8 +702,12 @@ pub extern "win64" fn set_class_long_ptr_w(_hwnd: usize, _index: i32, _new: isiz
 pub extern "win64" fn enum_windows(_callback: usize, _lparam: isize) -> i32 {
     1
 }
-pub extern "win64" fn enum_child_windows(_parent: usize, _callback: usize, _lparam: isize) -> i32 {
-    1
+pub unsafe extern "win64" fn enum_child_windows(
+    parent: usize,
+    callback: usize,
+    lparam: isize,
+) -> i32 {
+    crate::dlls::user32::enum_child_windows(parent, callback, lparam)
 }
 pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize {
     crate::dlls::user32::get_dc(_hwnd)

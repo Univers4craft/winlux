@@ -1475,9 +1475,12 @@ pub unsafe extern "win64" fn image_list_get_image_info(himl: usize, i: i32, info
     let color = gui::bitmap_from_pixels(img.w, img.h, &img.px).unwrap_or(0);
     std::ptr::write_unaligned(info as *mut usize, color);
     std::ptr::write_unaligned(info.add(8) as *mut usize, 0);
-    std::ptr::write_unaligned(info.add(16) as *mut [i32; 4], [0; 4]);
+    // IMAGEINFO (x64) : hbmImage 0, hbmMask 8, Unused1/2 16, rcImage 24 ;
+    // 40 octets en tout. rcImage était écrit à 32 : Notepad++ lisait une
+    // largeur nulle et posait le libellé de l'onglet sur l'icône (#1287).
+    std::ptr::write_unaligned(info.add(16) as *mut [i32; 2], [0; 2]);
     std::ptr::write_unaligned(
-        info.add(32) as *mut [i32; 4],
+        info.add(24) as *mut [i32; 4],
         [0, 0, img.w as i32, img.h as i32],
     );
     1
@@ -1934,6 +1937,29 @@ mod tests {
         assert_eq!(list_image(himl, 2).unwrap().w, 2);
         assert_eq!(image_list_remove(himl, 0), 1);
         assert_eq!(image_list_get_image_count(himl), 2);
+        assert_eq!(image_list_destroy(himl), 1);
+    }
+
+    #[test]
+    fn image_info_place_rc_image_a_l_offset_24() {
+        // IMAGEINFO x64 fait 40 octets ; rcImage commence à 24 (#1287).
+        let himl = image_list_create(16, 16, 0x21, 0, 1);
+        let strip = Image {
+            w: 16,
+            h: 16,
+            px: vec![0xFF00_00FF; 256],
+        };
+        assert_eq!(list_add_strip(himl, &strip), 0);
+        let mut info = [0xAAu8; 48];
+        assert_eq!(
+            unsafe { image_list_get_image_info(himl, 0, info.as_mut_ptr()) },
+            1
+        );
+        let rect: Vec<i32> = (0..4)
+            .map(|k| i32::from_le_bytes(info[24 + 4 * k..28 + 4 * k].try_into().unwrap()))
+            .collect();
+        assert_eq!(rect, [0, 0, 16, 16]);
+        assert_eq!(info[40..], [0xAA; 8], "écriture au-delà des 40 octets");
         assert_eq!(image_list_destroy(himl), 1);
     }
 
