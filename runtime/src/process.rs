@@ -328,6 +328,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     // SharedUserData!SystemCall avant tout code du programme : les relais
     // Nt* de ntdll en dépendent (#767).
     crate::dlls::pe_image::map_shared_user_data();
+    crate::dlls::kernel32::adopt_crash_handler();
     let peb = alloc_peb();
     let params = alloc_zeroed(0x1000);
     unsafe {

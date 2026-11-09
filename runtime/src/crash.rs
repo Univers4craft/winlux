@@ -531,6 +531,75 @@ pub fn record_failure(exception: &str, detail: &str) {
     let _ = std::fs::write(dir.join("crash-offer"), format!("{ts}\n{exe}\n"));
 }
 
+/// Limites qui font refuser la création d'un thread (EAGAIN) : threads du
+/// processus, mémoire, nombre de zones mappées (une pile mmap refusée rend
+/// aussi EAGAIN), RLIMIT_NPROC/AS/STACK, cgroup pids, réglages du
+/// noyau (#767). Une ligne, pour le journal.
+pub fn thread_limits_report() -> String {
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
+    let field = |text: &str, key: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_else(|| "?".into())
+    };
+    let limit = |r: libc::__rlimit_resource_t| {
+        let mut rl = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let show = |v: libc::rlim_t| {
+            if v == libc::RLIM_INFINITY {
+                "illimité".to_string()
+            } else {
+                v.to_string()
+            }
+        };
+        if unsafe { libc::getrlimit(r, &mut rl) } == 0 {
+            format!("{}/{}", show(rl.rlim_cur), show(rl.rlim_max))
+        } else {
+            "?".into()
+        }
+    };
+    let status = read("/proc/self/status");
+    let meminfo = read("/proc/meminfo");
+    // cgroup v2 : « 0::/chemin ».
+    let cgroup = read("/proc/self/cgroup")
+        .lines()
+        .find_map(|l| l.strip_prefix("0::").map(str::to_string))
+        .unwrap_or_default();
+    let pids = |f: &str| {
+        let v = read(&format!("/sys/fs/cgroup{cgroup}/{f}"));
+        if v.is_empty() {
+            "?".into()
+        } else {
+            v.trim().to_string()
+        }
+    };
+    format!(
+        "limites des threads : threads {} ; VmSize {} ; VmRSS {} ; \
+         zones {} sur max_map_count {} ; RLIMIT_NPROC {} ; RLIMIT_AS {} ; RLIMIT_STACK {} ; threads-max {} ; pid_max {} ; \
+         overcommit {} ; MemAvailable {} ; Committed_AS {} ; CommitLimit {} ; \
+         cgroup {cgroup} pids {}/{}",
+        field(&status, "Threads:"),
+        field(&status, "VmSize:"),
+        field(&status, "VmRSS:"),
+        read("/proc/self/maps").lines().count(),
+        read("/proc/sys/vm/max_map_count").trim(),
+        limit(libc::RLIMIT_NPROC),
+        limit(libc::RLIMIT_AS),
+        limit(libc::RLIMIT_STACK),
+        read("/proc/sys/kernel/threads-max").trim(),
+        read("/proc/sys/kernel/pid_max").trim(),
+        read("/proc/sys/vm/overcommit_memory").trim(),
+        field(&meminfo, "MemAvailable:"),
+        field(&meminfo, "Committed_AS:"),
+        field(&meminfo, "CommitLimit:"),
+        pids("pids.current"),
+        pids("pids.max"),
+    )
+}
+
 pub fn install() {
     crate::dlls::seh_hw::init();
     crate::journal::prepare_signal_paths();
@@ -541,7 +610,16 @@ pub fn install() {
         }
         // Erreur interne du runtime (panique Rust) : même chemin de signalement.
         std::panic::set_hook(Box::new(|info| {
-            let detail = format!("{info}");
+            let mut detail = format!("{info}");
+            // Thread refusé par le noyau (#767) : dire quelle limite et où.
+            if detail.contains("failed to spawn thread") {
+                detail.push('\n');
+                detail.push_str(&thread_limits_report());
+                detail.push_str(&format!(
+                    "\nappelant : {}",
+                    std::backtrace::Backtrace::force_capture()
+                ));
+            }
             eprintln!("winlux: erreur interne : {detail}");
             record_failure("WINLUX_INTERNAL_ERROR", &detail);
         }));
