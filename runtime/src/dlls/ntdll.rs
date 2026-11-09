@@ -1343,6 +1343,20 @@ pub unsafe extern "win64" fn nt_query_information_process(
             }
             STATUS_SUCCESS
         }
+        58 if crate::dlls::kernel32::process_os_pid(handle)
+            .is_none_or(|pid| pid == std::process::id() as i32) =>
+        {
+            // ProcessHandleTable du processus courant : une liste de ULONG.
+            // Les handles de Winlux ne sont pas des objets du noyau et aucun
+            // n'est de ceux que la fermeture des handles du bac à sable de
+            // Chromium recherche (port de csrss, sections nommées) : la liste
+            // rendue est vide. Sans cette classe, chaque renderer s'arrêtait
+            // aussitôt (SBOX_FATAL_CLOSEHANDLES, code 7010, #1352).
+            if !return_length.is_null() {
+                *return_length = 0;
+            }
+            STATUS_SUCCESS
+        }
         _ => STATUS_NOT_IMPLEMENTED,
     }
 }
@@ -2595,6 +2609,25 @@ mod section_tests {
 #[cfg(test)]
 mod process_information_tests {
     use super::*;
+
+    /// Bac à sable de Chromium (#1352) : ProcessHandleTable sur soi-même
+    /// réussit avec une liste vide, sinon le renderer se termine en 7010.
+    #[test]
+    fn table_des_handles_du_processus_courant_vide() {
+        let mut buf = [0u32; 16];
+        let mut ret = 0xffu32;
+        let st = unsafe {
+            nt_query_information_process(
+                usize::MAX,
+                58,
+                buf.as_mut_ptr() as *mut c_void,
+                64,
+                &mut ret,
+            )
+        };
+        assert_eq!(st, STATUS_SUCCESS);
+        assert_eq!(ret, 0);
+    }
 
     /// Process.GetProcesses de .NET (#1162) : la liste chaînée contient ce
     /// processus, ses fils et un nom lisible dans le tampon de l'appelant.

@@ -235,7 +235,21 @@ fn token_info(class: u32) -> Option<(Vec<u8>, Vec<(usize, usize)>)> {
             }
             Some((b, fix))
         }
-        3 => dword(0), // TokenPrivileges : aucun privilège listé
+        3 => {
+            // TokenPrivileges : ceux d'un compte standard de Windows
+            // (SeShutdown, SeChangeNotify activé, SeUndock,
+            // SeIncreaseWorkingSet, SeTimeZone). Le courtier du bac à sable
+            // de Chromium refuse une liste plus courte qu'un
+            // TOKEN_PRIVILEGES (16 octets) et n'a alors aucun renderer (#1352).
+            const PRIVS: [(u32, u32); 5] = [(19, 0), (23, 3), (25, 0), (33, 0), (34, 0)];
+            let mut b = (PRIVS.len() as u32).to_le_bytes().to_vec();
+            for (luid, attrs) in PRIVS {
+                b.extend_from_slice(&luid.to_le_bytes());
+                b.extend_from_slice(&0u32.to_le_bytes());
+                b.extend_from_slice(&attrs.to_le_bytes());
+            }
+            Some((b, vec![]))
+        }
         6 => {
             // TokenDefaultDacl : pointeur vers une ACL vide (révision 2).
             let mut b = vec![0u8; 8];
@@ -286,6 +300,7 @@ pub unsafe extern "win64" fn GetTokenInformation(
     ret: *mut u32,
 ) -> i32 {
     let Some((bytes, fix)) = token_info(class) else {
+        crate::trace!("GetTokenInformation : classe {class} non prise en charge");
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
@@ -1111,6 +1126,19 @@ pub unsafe extern "win64" fn AddAccessDeniedAce(
     add_ace(acl, 1, 0, mask, sid)
 }
 
+/// AddMandatoryAce : étiquette d'intégrité (SYSTEM_MANDATORY_LABEL_ACE,
+/// type 0x11), le masque portant la politique (NO_WRITE_UP…). Le bac à
+/// sable de Chromium en pose une sur l'objet de ses renderers (#1352).
+pub unsafe extern "win64" fn AddMandatoryAce(
+    acl: *mut u8,
+    _rev: u32,
+    flags: u32,
+    policy: u32,
+    sid: *const u8,
+) -> i32 {
+    add_ace(acl, 0x11, flags as u8, policy, sid)
+}
+
 /// SetEntriesInAcl : nouvelle ACL = entrées de l'ancienne + EXPLICIT_ACCESS
 /// (GRANT/SET → autorisation, DENY → refus ; REVOKE retire le SID). Seuls
 /// les administrés désignés par SID (TRUSTEE_IS_SID) ou par nom de compte
@@ -1587,6 +1615,7 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "AddAccessAllowedAce" => fn AddAccessAllowedAce,
         "AddAccessAllowedAceEx" => fn AddAccessAllowedAceEx,
         "AddAccessDeniedAce" => fn AddAccessDeniedAce,
+        "AddMandatoryAce" => fn AddMandatoryAce,
         "SetEntriesInAclA" => fn SetEntriesInAclA,
         "SetEntriesInAclW" => fn SetEntriesInAclW,
         "GetSecurityInfo" => fn GetSecurityInfo,
