@@ -128,7 +128,7 @@ if test -f "$out/crt32.exe"; then
             exit 1
         fi
     done
-    echo "crt32 : CRT msvcrt 32 bits, 25 vérifications (printf de MinGW et de msvcrt)"
+    echo "crt32 : CRT msvcrt 32 bits, 29 vérifications (printf de MinGW et de msvcrt)"
 else
     echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
 fi

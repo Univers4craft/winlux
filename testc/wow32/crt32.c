@@ -107,6 +107,23 @@ int main(int argc, char **argv) {
                              : "eax", "ecx", "edx", "memory");
             CHECK(25, r == 0.0);
         }
+        /* Python 3.12 x86 (#1383) : _CI* à un opérande, log en SSE2 et
+         * __fpe_flt_rounds (arrondi au plus proche : 1). */
+        void *ci_sinh = (void *)GetProcAddress(u, "_CIsinh");
+        void *log2 = (void *)GetProcAddress(u, "_libm_sse2_log_precise");
+        int (*flt_rounds)(void) = (int (*)(void))GetProcAddress(u, "__fpe_flt_rounds");
+        CHECK(26, ci_sinh && log2 && flt_rounds);
+        if (ci_sinh && log2 && flt_rounds) {
+            double z = 0.0, one = 1.0, r;
+            __asm__ volatile("fldl %1\n\tcall *%2\n\tfstpl %0"
+                             : "=m"(r) : "m"(z), "r"(ci_sinh) : "eax", "ecx", "edx", "memory");
+            CHECK(27, r == 0.0);
+            __asm__ volatile("movsd %1, %%xmm0\n\tcall *%2\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(one), "r"(log2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(28, r == 0.0);
+            CHECK(29, flt_rounds() == 1);
+        }
     }
     return fails;
 }

@@ -43,6 +43,7 @@ pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
 pub mod crt_more;
+pub mod crt_proc;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -133,6 +134,7 @@ pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
+pub mod kernel32_path;
 pub mod knownfolders;
 pub mod legacy_com;
 pub mod legacy_dlls;
@@ -384,6 +386,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e
@@ -398,6 +401,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(cxx_eh::exports());
         ucrt.extend(rtti::exports());
         ucrt.extend(crt_more::exports());
+        ucrt.extend(crt_proc::exports());
         ucrt.extend(crate::intl::api::crt_exports());
         ucrt.extend(crt_extra::exports());
         let mut all = vec![
@@ -424,6 +428,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
+                    e.extend(kernel32_path::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }

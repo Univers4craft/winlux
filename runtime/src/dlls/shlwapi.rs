@@ -96,15 +96,9 @@ pub unsafe extern "win64" fn path_combine_a(
     out
 }
 
-/// PathCombineW
-pub unsafe extern "win64" fn path_combine_w(
-    out: *mut u16,
-    dir: *const u16,
-    file: *const u16,
-) -> *mut u16 {
-    if out.is_null() {
-        return std::ptr::null_mut();
-    }
+/// Résultat de PathCombine (canonique), sans limite de taille ; sert aussi
+/// à PathCchCombineEx (#1383).
+pub(crate) unsafe fn path_combine_units(dir: *const u16, file: *const u16) -> Vec<u16> {
     let d = if dir.is_null() {
         String::new()
     } else {
@@ -127,10 +121,22 @@ pub unsafe extern "win64" fn path_combine_w(
     };
     // Le résultat est canonique (documentation de PathCombine).
     let units: Vec<u32> = combined.encode_utf16().map(u32::from).collect();
-    let w: Vec<u16> = canonicalize_units(&units)
+    canonicalize_units(&units)
         .iter()
         .map(|&c| c as u16)
-        .collect();
+        .collect()
+}
+
+/// PathCombineW
+pub unsafe extern "win64" fn path_combine_w(
+    out: *mut u16,
+    dir: *const u16,
+    file: *const u16,
+) -> *mut u16 {
+    if out.is_null() {
+        return std::ptr::null_mut();
+    }
+    let w = path_combine_units(dir, file);
     let n = w.len().min(259);
     std::ptr::copy_nonoverlapping(w.as_ptr(), out, n);
     *out.add(n) = 0;

@@ -1099,6 +1099,30 @@ extern "win64" fn m_asin(x: f64) -> f64 {
 extern "win64" fn m_acos(x: f64) -> f64 {
     x.acos()
 }
+extern "win64" fn m_atan(x: f64) -> f64 {
+    x.atan()
+}
+extern "win64" fn m_tan(x: f64) -> f64 {
+    x.tan()
+}
+extern "win64" fn m_exp(x: f64) -> f64 {
+    x.exp()
+}
+extern "win64" fn m_log(x: f64) -> f64 {
+    x.ln()
+}
+extern "win64" fn m_log10(x: f64) -> f64 {
+    x.log10()
+}
+extern "win64" fn m_sinh(x: f64) -> f64 {
+    x.sinh()
+}
+extern "win64" fn m_cosh(x: f64) -> f64 {
+    x.cosh()
+}
+extern "win64" fn m_tanh(x: f64) -> f64 {
+    x.tanh()
+}
 extern "win64" fn m_pow(x: f64, y: f64) -> f64 {
     x.powf(y)
 }
@@ -1144,6 +1168,21 @@ fn ci_code(stub: usize) -> usize {
     super::alloc_code(&c) as usize
 }
 
+/// Code x86 d'un `_CI*` à un opérande (`_CIsinh`, `_CIexp`…) : ST0 va sur
+/// la pile x86, la passerelle rend le résultat dans ST0 (#1383).
+fn ci1_code(stub: usize) -> usize {
+    let mut c = vec![
+        0x83, 0xEC, 0x08, // sub esp, 8
+        0xDD, 0x1C, 0x24, // fstp qword [esp]
+        0xB8, 0, 0, 0, 0, // mov eax, stub
+        0xFF, 0xD0, // call eax
+        0x83, 0xC4, 0x08, // add esp, 8
+        0xC3, // ret
+    ];
+    c[7..11].copy_from_slice(&(stub as u32).to_le_bytes());
+    super::alloc_code(&c) as usize
+}
+
 fn math_code(func: &str) -> Option<usize> {
     static CODES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
     let codes = CODES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -1156,6 +1195,8 @@ fn math_code(func: &str) -> Option<usize> {
             false,
         )
     };
+    let one =
+        |f: extern "win64" fn(f64) -> f64| super::native_stub(f as *const () as usize, "d>d", func);
     let binary = |f: extern "win64" fn(f64, f64) -> f64| {
         super::native_stub(f as *const () as usize, "dd>d", func)
     };
@@ -1166,7 +1207,26 @@ fn math_code(func: &str) -> Option<usize> {
         "_libm_sse2_asin_precise" | "_libm_sse2_asin" => unary(m_asin),
         "_libm_sse2_acos_precise" | "_libm_sse2_acos" => unary(m_acos),
         "_libm_sse2_pow_precise" | "_libm_sse2_pow" => sse2_code(binary(m_pow), true),
+        "_libm_sse2_atan_precise" | "_libm_sse2_atan" => unary(m_atan),
+        "_libm_sse2_tan_precise" | "_libm_sse2_tan" => unary(m_tan),
+        "_libm_sse2_exp_precise" | "_libm_sse2_exp" => unary(m_exp),
+        "_libm_sse2_log_precise" | "_libm_sse2_log" => unary(m_log),
+        "_libm_sse2_log10_precise" | "_libm_sse2_log10" => unary(m_log10),
         "_CIfmod" => ci_code(binary(m_fmod)),
+        "_CIpow" => ci_code(binary(m_pow)),
+        "_CIsin" => ci1_code(one(m_sin)),
+        "_CIcos" => ci1_code(one(m_cos)),
+        "_CItan" => ci1_code(one(m_tan)),
+        "_CIasin" => ci1_code(one(m_asin)),
+        "_CIacos" => ci1_code(one(m_acos)),
+        "_CIatan" => ci1_code(one(m_atan)),
+        "_CIsqrt" => ci1_code(one(m_sqrt)),
+        "_CIexp" => ci1_code(one(m_exp)),
+        "_CIlog" => ci1_code(one(m_log)),
+        "_CIlog10" => ci1_code(one(m_log10)),
+        "_CIsinh" => ci1_code(one(m_sinh)),
+        "_CIcosh" => ci1_code(one(m_cosh)),
+        "_CItanh" => ci1_code(one(m_tanh)),
         "_CIatan2" => ci_code(binary(m_atan2)),
         // _except1(flags, opcode, arg, résultat, cw, …) : appelée sur une
         // erreur de calcul ; rend le résultat déjà calculé (ST0).
@@ -1228,7 +1288,8 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_wcmdln" => Override::Data(d + D_WCMDLN),
         "_iob" => Override::Data(d + D_IOB),
         "_adjust_fdiv" => Override::Data(d + D_ADJUST_FDIV),
-        "_CIfmod" | "_CIatan2" | "_except1" => Override::Data(math_code(func)?),
+        f if f.starts_with("_CI") => Override::Data(math_code(func)?),
+        "_except1" => Override::Data(math_code(func)?),
         f if f.starts_with("_libm_sse2_") => Override::Data(math_code(func)?),
         // Aides du compilateur MSVC x86 : code x86 direct (valeur dans ST0).
         "_ftol" | "_ftol2" | "_ftol2_sse" => Override::Data(ftol_code()),
