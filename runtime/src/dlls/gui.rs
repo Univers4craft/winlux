@@ -3007,6 +3007,8 @@ pub trait GuiBackend: Send {
     /// Image (pixels COLORREF, rectangle logique) posée sur la fenêtre X11
     /// d'un autre processus (#1345).
     fn paint_foreign(&mut self, _xid: u64, _rect: Rect, _pixels: &[u32], _rop: RasterOp) {}
+    /// Marque une fenêtre X où une chaîne d'échange Direct3D présente (#1374).
+    fn mark_direct3d(&mut self, _xid: u64) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
@@ -3206,6 +3208,13 @@ pub fn native_window(hwnd: usize) -> Option<u64> {
     // communes à tous les clients du serveur, Direct3D peut y présenter
     // (processus GPU de Chromium, #1228).
     id.or_else(|| foreign_window(hwnd).map(|f| f.xid))
+}
+
+/// Une chaîne d'échange Direct3D présente dans la fenêtre X `xid`, de ce
+/// processus ou d'un autre : son propriétaire ne doit plus la repeindre en
+/// GDI à chaque exposition, seulement demander WM_PAINT (#1374).
+pub fn mark_direct3d_window(xid: u64) {
+    with_backend(|b| b.mark_direct3d(xid));
 }
 
 pub fn monitors() -> Vec<Monitor> {
