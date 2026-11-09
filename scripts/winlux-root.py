@@ -302,7 +302,8 @@ def exec_level(args):
         return parental_level(rest)
     if tool == "winlux-store-repos":
         # Dépôt d'un logiciel d'éditeur désinstallé par le Store (#1056).
-        if len(rest) == 2 and rest[0] == "clean" and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", rest[1]):
+        # « check » : autorisation demandée avant le téléchargement (#1451).
+        if len(rest) == 2 and rest[0] in ("clean", "check") and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", rest[1]):
             return "admin"
         return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:

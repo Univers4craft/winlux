@@ -2,6 +2,11 @@
 """Retire le dépôt APT qu'un logiciel d'éditeur a déclaré (Store, #1056).
 
     winlux-store-repos clean <id>
+    winlux-store-repos check <id>
+
+« check » ne modifie rien : le Store le lance en administrateur juste après la
+confirmation, pour que le Contrôle de compte d'utilisateur vienne avant le
+téléchargement (#1451) ; l'autorisation vaut ensuite pour apt-get.
 
 Lancé en administrateur (relais winlux-root) après la purge du paquet. Les
 adresses autorisées viennent de /usr/share/winlux/store-editeurs.json (champ
@@ -89,9 +94,19 @@ def clean(ident):
     return 0
 
 
+def check(ident):
+    known = any(e.get("id") == ident for e in json.loads(DEFS.read_text()).get("apps", []))
+    if not known:
+        print(f"logiciel inconnu : {ident}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv):
     if len(argv) == 2 and argv[0] == "clean" and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", argv[1]):
         return clean(argv[1])
+    if len(argv) == 2 and argv[0] == "check" and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", argv[1]):
+        return check(argv[1])
     print(__doc__, file=sys.stderr)
     return 64
 

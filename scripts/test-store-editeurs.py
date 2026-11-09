@@ -108,6 +108,9 @@ with tempfile.TemporaryDirectory() as tmp:
         return 0
     m["SOURCE_BY_NAME"]["apt"].apt = fake_apt
     ed.installed = lambda package: ""
+    admin_calls, run_answer = [], {"code": 0}
+    m["admin"].__globals__["admin"] = lambda cmd: admin_calls.append(cmd) or cmd
+    m["run"].__globals__["run"] = lambda cmd, *a, **k: (run_answer["code"], "")
     apps = ed.apps()
     check(len(apps) == 1 and apps[0].state == "a" and apps[0].available == "1.2.3", "version la plus récente de l'index")
     check(apps[0].summary == "desc-fr" and apps[0].publisher == "Anthropic", "description et éditeur")
@@ -134,9 +137,39 @@ with tempfile.TemporaryDirectory() as tmp:
     check(not list(cache.glob("editeur-*")), "Annuler : rien n'est téléchargé")
     check("--cancel" in confirm_log.read_text() and "Annuler" in confirm_log.read_text(), "bouton Annuler proposé")
 
-    # Accord : téléchargé, vérifié, installé, dossier nettoyé.
+    check(not admin_calls, "Annuler : aucune autorisation demandée")
+
+    # Autorisation refusée (#1451) : demandée juste après la confirmation,
+    # avant tout téléchargement ; rien n'est téléchargé, message clair.
     os.environ["CONFIRM_ANSWER"] = "0"
-    check(ed.install("claude", lambda *a: None) == 0, "installation confirmée")
+    run_answer["code"] = 1223 % 256
+    check(ed.install("claude", lambda *a: None) == 1223 % 256 and not calls, "autorisation refusée : rien installé")
+    check(admin_calls == [["winlux-store-repos", "check", "claude"]], "autorisation demandée avant le téléchargement")
+    check(not list(cache.glob("editeur-*")), "autorisation refusée : rien téléchargé")
+    check(m["MESSAGES"][1223 % 256] == "denied" and "rien n'a été téléchargé" in m["tr"]("denied"),
+          "refus de l'autorisation expliqué")
+    run_answer["code"] = 0
+    admin_calls.clear()
+
+    # Accord : téléchargé, vérifié, installé, dossier nettoyé.
+    order = []
+    real_fetch = ed.fetch_deb
+    ed.fetch_deb = lambda *a: order.append("téléchargement") or real_fetch(*a)
+    m["admin"].__globals__["admin"] = lambda cmd: order.append("autorisation") or admin_calls.append(cmd) or cmd
+    steps = []
+    check(ed.install("claude", lambda pct, msg, *a: steps.append((len(order), pct, msg))) == 0,
+          "installation confirmée")
+    check(order == ["autorisation", "téléchargement"], f"autorisation puis téléchargement ({order})")
+    # #1455 : aucun pourcentage avant le vrai téléchargement (pas de 10 % figé
+    # pendant l'attente de l'autorisation) ; ensuite un avancement mesuré.
+    before = [s for s in steps if s[0] < 2]
+    check(before and all(pct is None for _, pct, _ in before), f"pas de pourcentage avant le téléchargement ({before})")
+    check(any("autorisation" in msg for _, _, msg in before), "attente de l'autorisation affichée")
+    check(not any("Téléchargement" in msg for _, _, msg in before), "pas de « Téléchargement » avant l'autorisation")
+    m["STORE_RUN"].mkdir(parents=True, exist_ok=True)
+    m["Progress"]("install", "editeur:claude")(None, "x")
+    check("percent=\n" in (m["STORE_RUN"] / "store-progress.txt").read_text(), "avancement inconnu : percent vide")
+    ed.fetch_deb = real_fetch
     check(calls and calls[-1][:2] == ["install", "--"], "apt-get install -- <fichier>")
     check(not list(cache.glob("editeur-*")), "dossier de téléchargement retiré")
 
@@ -162,9 +195,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # Mise à jour visible, puis désinstallation : purge + dépôt retiré.
     ed.installed = lambda package: "1.0"
     check(ed.apps()[0].state == "u", "mise à jour visible")
-    admin_calls = []
+    admin_calls.clear()
     m["admin"].__globals__["admin"] = lambda cmd: admin_calls.append(cmd) or cmd
-    m["run"].__globals__["run"] = lambda cmd, *a, **k: (0, "")
     check(ed.remove("claude", lambda *a: None) == 0, "désinstallation")
     check(calls[-1] == ["purge", "--autoremove", "--", "claude-desktop"], "purge du paquet")
     check(["winlux-store-repos", "clean", "claude"] in admin_calls, "dépôt de l'éditeur retiré")
@@ -201,10 +233,27 @@ with tempfile.TemporaryDirectory() as tmp:
 wr = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="test_editeurs")
 check(wr["exec_level"](["winlux-store-repos", "clean", "claude"]) == "admin", "relais : nettoyage en administrateur")
 check(wr["exec_level"](["winlux-store-repos", "clean", "../etc"]) is None, "relais : chemin refusé")
+check(wr["exec_level"](["winlux-store-repos", "check", "claude"]) == "admin", "relais : autorisation avant téléchargement")
 check(wr["exec_level"](["winlux-store-repos", "rm", "claude"]) is None, "relais : autre commande refusée")
 confirm = (project / "scripts/winlux-store-confirm.py").read_text()
 check("set_default_response(Gtk.ResponseType.CANCEL)" in confirm and "cancel.grab_focus()" in confirm,
       "Annuler par défaut")
+check('cancel.get_style_context().add_class("suggested-action")' in confirm and "set_focus_visible(True)" in confirm,
+      "bouton actif visible (#1448)")
+
+# --- 5. Store (shell) : croix de recherche, résultat gardé, barre latérale ---
+rs = (project / "testexe/src/shell/store.rs").read_text(encoding="latin-1")
+draw = rs[rs.index("hit(sr, Action::Search);"):]
+check(draw.index("hit(sr, Action::Search);") < draw.index("hit(cr, Action::ClearSearch);"),
+      "croix enregistrée après le champ : elle l'emporte au clic (#1447)")
+check("Action::DismissResult => RESULT.clear()" in rs and "RESULT_ERROR || GetTickCount().wrapping_sub(RESULT_AT) < RESULT_MS" in rs
+      and "RESULT_MS: u32 = 12_000" in rs, "résultat gardé dans le Store, échec jusqu'à la croix (#1449)")
+labels = re.search(r"fn rail_refresh_label\(\).*?\n}", rs, re.S).group(0)
+for label in re.findall(r'=> b"([^"]*)"', labels):
+    check(len(label.encode("latin-1").decode("unicode_escape")) <= 11, f"barre latérale : « {label} » tient en 88 px (#1450)")
+check('b"Neu laden"' in labels, "barre latérale allemande : « Neu laden »")
+check("OP_PERCENT = if v.is_empty() { -1 }" in rs and "if pct < 0" in rs and "if OP_PERCENT >= 0" in rs,
+      "avancement inconnu : ni chiffre ni barre remplie (#1455)")
 r = subprocess.run([sys.executable, "-I", str(project / "scripts/winlux-store-confirm.py"), "--title", "t", "--text", "x",
                     "--ok", "o", "--cancel", "c"], env={k: v for k, v in os.environ.items()
                                                        if k not in ("DISPLAY", "WAYLAND_DISPLAY")},
