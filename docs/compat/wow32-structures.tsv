@@ -53,8 +53,8 @@ d2d1.rs	HwndProps	a-verifier
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
 d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
-d2d1_effects.rs	Imp	interne	test unitaire (#1206)
 d2d1_effects.rs	Facette	interne	test unitaire (#1319)
+d2d1_effects.rs	Imp	interne	test unitaire (#1206)
 d3d10.rs	Dev	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
 d3d10.rs	Mapped	interne	D3D11_MAPPED_SUBRESOURCE rendu par Direct3D 11 (disposition 64 bits) ; recopié en x86 par tex2d_map, d3d1032.c n° 10-13
 d3d10.rs	Obj	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
@@ -75,8 +75,6 @@ d3d11.rs	Texture2D	x86	objet COM : passerelles x86 tirées des signatures (dx11_
 d3d11.rs	Texture2DVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_dxgi_resource.rs	DxgiResource	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
 d3d11_dxgi_resource.rs	DxgiResourceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
-d3d11_query.rs	Query	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
-d3d11_query.rs	QueryVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
 d3d11_ext.rs	Annotation	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	AnnotationVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	ContextExt	x86	vtable ID3D11DeviceContext1-4 : passerelles x86 tirées des signatures (dx11_x86.rs)
@@ -85,6 +83,8 @@ d3d11_ext.rs	Fence	x86	objet COM : passerelles x86 tirées des signatures (dx11_
 d3d11_ext.rs	FenceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	Multithread	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	MultithreadVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
+d3d11_query.rs	Query	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
+d3d11_query.rs	QueryVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
 d3d12.rs	Barrier	a-verifier	
 d3d12.rs	CopyLocation	a-verifier	
 d3d12.rs	Descriptor	a-verifier	
@@ -168,6 +168,7 @@ mfcapture.rs	MemBuf	a-verifier
 mfcapture.rs	MfObj	a-verifier	
 mfcapture.rs	Reader	a-verifier	
 mfreader.rs	Reader	a-verifier	
+mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_profile)
 msvcp140.rs	Thrd	a-verifier	
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 ole32.rs	ComStream	a-verifier	
