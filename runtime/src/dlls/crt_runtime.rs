@@ -1476,6 +1476,8 @@ pub unsafe extern "win64" fn dup(fd: i32) -> i32 {
     r
 }
 pub unsafe extern "win64" fn dup2(a: i32, b: i32) -> i32 {
+    // `b` est fermé puis remplacé : son handle de _get_osfhandle aussi.
+    forget_osfhandle(b);
     let r = libc::dup2(a, b);
     if r < 0 {
         set_errno_from_os();
@@ -1649,9 +1651,17 @@ pub extern "win64" fn get_osfhandle(fd: i32) -> isize {
     }
     let mut map = osf_handles().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(&h) = map.get(&fd) {
-        if crate::dlls::kernel32::fd_of_handle(h).is_some() {
-            return h as isize;
+        // Le numéro de descripteur a pu être réutilisé pour un autre fichier
+        // (fermé par fclose ou remplacé par _dup2 sans passer par _close) :
+        // le handle n'est rendu que s'il désigne toujours le même fichier.
+        match crate::dlls::kernel32::fd_of_handle(h) {
+            Some(copy) if same_file(fd, copy) => return h as isize,
+            Some(_) => {
+                crate::dlls::kernel32::close_handle(h);
+            }
+            None => {}
         }
+        map.remove(&fd);
     }
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
     if copy < 0 {
@@ -1661,6 +1671,15 @@ pub extern "win64" fn get_osfhandle(fd: i32) -> isize {
     let h = crate::dlls::kernel32::insert_file(file);
     map.insert(fd, h);
     h as isize
+}
+
+/// Deux descripteurs désignent le même fichier (périphérique et inœud).
+fn same_file(a: i32, b: i32) -> bool {
+    let stat = |fd: i32| unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        (libc::fstat(fd, &mut st) == 0).then_some((st.st_dev, st.st_ino))
+    };
+    matches!((stat(a), stat(b)), (Some(x), Some(y)) if x == y)
 }
 
 /// Le descripteur est fermé : son handle de _get_osfhandle aussi.
@@ -2061,7 +2080,41 @@ mod tests {
             );
             assert_eq!(std::fs::read(&path).unwrap(), b"RIFF");
             let _ = std::fs::remove_file(&path);
-            assert_eq!(get_osfhandle(fd), -1);
+            // Le numéro `fd` peut déjà resservir à un test qui tourne en
+            // parallèle (#1320) : on vérifie l'oubli dans la table, pas un
+            // appel à get_osfhandle(fd).
+            assert!(osf_handles().lock().unwrap().get(&fd).is_none());
+        }
+    }
+
+    #[test]
+    fn get_osfhandle_suit_un_numero_reutilise() {
+        // Un numéro de descripteur repris pour un autre fichier sans passer
+        // par _close (fclose, _dup2) ne rend pas l'ancien handle (#1320).
+        unsafe {
+            let dir = std::env::temp_dir();
+            let a = dir.join(format!("winlux-osf-a-{}", std::process::id()));
+            let b = dir.join(format!("winlux-osf-b-{}", std::process::id()));
+            let ca = format!("{}\0", a.display());
+            let cb = format!("{}\0", b.display());
+            let fd = open(ca.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            let autre = open(cb.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            assert!(fd > 2 && autre > 2);
+            let h = get_osfhandle(fd);
+            assert!(h > 0);
+            // Remplacement brut, sans _close ni _dup2 : la table garde l'entrée.
+            assert_eq!(libc::dup2(autre, fd), fd);
+            let h2 = get_osfhandle(fd);
+            assert!(h2 > 0 && h2 != h, "nouveau handle pour le nouveau fichier");
+            let mut n = 0u32;
+            let ok = crate::dlls::kernel32::write_file(h2 as usize, b"B".as_ptr(), 1, &mut n, 0);
+            assert!(ok != 0 && n == 1);
+            assert_eq!(close(fd), 0);
+            assert_eq!(close(autre), 0);
+            assert_eq!(std::fs::read(&b).unwrap(), b"B");
+            assert_eq!(std::fs::read(&a).unwrap(), b"");
+            let _ = std::fs::remove_file(&a);
+            let _ = std::fs::remove_file(&b);
         }
     }
 }
