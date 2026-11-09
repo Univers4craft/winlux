@@ -20,7 +20,7 @@ os.environ["WINLUX_REPORT_ACCOUNT"] = str(tmp / "config/winlux/github-account.js
 (tmp / "run").mkdir()
 r = runpy.run_path(str(Path(__file__).with_name("winlux-report.py")), run_name="report_test")
 
-LOG = """[CRASH] ts=100 sig=11 stop=IRQL_NOT_LESS_OR_EQUAL exception=EXCEPTION_ACCESS_VIOLATION code=0x00000000c0000005 exe=Setup.exe module=setup.exe+0x1a2b pid=42
+LOG = """[CRASH] ts=100 sig=11 stop=APPLICATION_FAILURE exception=EXCEPTION_ACCESS_VIOLATION code=0x00000000c0000005 exe=Setup.exe module=setup.exe+0x1a2b pid=42
   path=/home/alice/Téléchargements/Setup.exe
   rip=0x0000000140001a2b rsp=0x00007f0000001000 rbp=0x0
   rax=0x0 rcx=0x0 rdx=0x0 addr=0x0000000000000018
