@@ -1247,6 +1247,12 @@ unsafe extern "win64" fn effect_qi(
     // ID2D1Resource : Paint.NET relie ses objets à leur fabrique par
     // GetFactory, effets compris (#1291). La table de l'effet suit
     // ID2D1Properties, d'où une facette à part qui tient l'effet.
+    // ID2D1Image : la sortie de l'effet, comme GetOutput ; Paint.NET passe
+    // ainsi ses effets à DrawImage (#1297).
+    if !out.is_null() && !riid.is_null() && *riid == IID_D2D1_IMAGE {
+        effect_get_output(this, out);
+        return S_OK;
+    }
     if !out.is_null() && !riid.is_null() && *riid == IID_D2D1_RESOURCE {
         Com::add_ref(this);
         let f = Com::get(this).factory;
@@ -1590,9 +1596,13 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
             px: crate::dlls::lock(&b.px).clone(),
         });
     }
-    if vt == EFFECT_IMAGE_VT.ptr() {
+    if vt == EFFECT_IMAGE_VT.ptr() || vt == EFFECT_RESOURCE_VT.ptr() {
         let e = Com::get(image as *mut Com<Res<EffectImage>>).data.effect;
         return image_of_effect(e.cast(), depth, hint);
+    }
+    // L'effet lui-même (DrawImage(ID2D1Effect*) des en-têtes C++).
+    if vt == EFFECT_VT.ptr() {
+        return image_of_effect(image, depth, hint);
     }
     None
 }

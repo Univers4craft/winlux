@@ -42,7 +42,52 @@ pub fn log_no_interface<T>(object: &str, iid: *const T) {
     }
     // SAFETY: un IID pointe toujours sur 16 octets.
     let g = unsafe { std::ptr::read_unaligned(iid as *const Guid) };
-    crate::log_warn!("com", "{object} : QueryInterface {} refusée", guid_str(&g));
+    // Un programme qui sonde la même interface sur chaque objet (Paint.NET :
+    // plus de 900 000 refus) ne doit pas noyer le journal ni le ralentir :
+    // les premiers refus de chaque IID sont notés, puis un rappel par
+    // puissance de dix.
+    let key = unsafe { std::ptr::read_unaligned(iid as *const [u8; 16]) };
+    let n = {
+        static SEEN: std::sync::Mutex<Vec<([u8; 16], u64)>> = std::sync::Mutex::new(Vec::new());
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        match seen.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, c)) => {
+                *c += 1;
+                *c
+            }
+            None => {
+                seen.push((key, 1));
+                1
+            }
+        }
+    };
+    if !refusal_worth_logging(n) {
+        return;
+    }
+    if n <= REFUSALS_LOGGED {
+        crate::log_warn!("com", "{object} : QueryInterface {} refusée", guid_str(&g));
+    } else {
+        crate::log_warn!(
+            "com",
+            "{object} : QueryInterface {} refusée ({n} fois)",
+            guid_str(&g)
+        );
+    }
+}
+
+/// Refus notés en entier pour chaque IID avant le seul rappel périodique.
+const REFUSALS_LOGGED: u64 = 4;
+
+/// Vrai pour les premiers refus puis pour chaque puissance de dix.
+fn refusal_worth_logging(n: u64) -> bool {
+    if n <= REFUSALS_LOGGED {
+        return true;
+    }
+    let mut p = 10;
+    while p < n {
+        p *= 10;
+    }
+    p == n
 }
 
 /// Lit un GUID passé par pointeur (`REFGUID`) ; `None` si nul.
@@ -89,6 +134,14 @@ pub unsafe fn write_fixed_str(dst: *mut u8, chars: usize, s: &str, wide: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refus_d_interface_notes_avec_parcimonie() {
+        let notes: Vec<u64> = (1..=100_000)
+            .filter(|&n| super::refusal_worth_logging(n))
+            .collect();
+        assert_eq!(notes, [1, 2, 3, 4, 10, 100, 1000, 10_000, 100_000]);
+    }
 
     #[test]
     fn guid_en_memoire_windows() {

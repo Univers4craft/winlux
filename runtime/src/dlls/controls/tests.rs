@@ -937,6 +937,35 @@ struct TbButtonT {
 }
 
 #[test]
+fn tb_addbitmap_nul_ne_consomme_pas_d_index() {
+    // Notepad++ passe un HBITMAP nul pour chaque séparateur ; ses boutons
+    // numérotent leurs images sans les compter (#1287).
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let tb = child(p, "ToolbarWindow32", "", 0x0800, 61, (0, 0, 0, 0));
+    assert!(tb != 0);
+    sendw(tb, 0x0420, 0, 0x0010_0010); // TB_SETBITMAPSIZE 16×16
+                                       // Premier pixel blanc : couleur de transparence, le reste de la couleur.
+    let bmp = |c: u32| {
+        let mut px = [c; 256];
+        px[0] = 0xFFFF_FFFF;
+        gui::bitmap_from_pixels(16, 16, &px).unwrap()
+    };
+    let rouge = [0usize, bmp(0xFF00_00FF)];
+    let nul = [0usize, 0];
+    let vert = [0usize, bmp(0xFF00_FF00)];
+    assert_eq!(sendw(tb, 0x0413, 1, rouge.as_ptr() as isize), 0);
+    assert_eq!(sendw(tb, 0x0413, 1, nul.as_ptr() as isize), -1);
+    assert_eq!(sendw(tb, 0x0413, 1, vert.as_ptr() as isize), 1);
+    let list = sendw(tb, 0x0431, 0, 0) as usize; // TB_GETIMAGELIST
+    assert_eq!(crate::dlls::icons::image_list_get_image_count(list), 2);
+    let premier = crate::dlls::icons::list_image(list, 0).unwrap();
+    let second = crate::dlls::icons::list_image(list, 1).unwrap();
+    assert!(second.px.iter().any(|q| q >> 24 != 0), "image 1 vide");
+    assert_ne!(premier.px[8 * 16 + 8], second.px[8 * 16 + 8]);
+}
+
+#[test]
 fn barre_d_outils_bandes_et_liste_etendue() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for name in ["ToolbarWindow32", "ReBarWindow32", "ComboBoxEx32"] {
@@ -1878,4 +1907,34 @@ fn wm_setcursor_applique_le_curseur_de_classe() {
         unsafe { user32::send_message_w(bare, WM_SETCURSOR, bare, lp) },
         0
     );
+}
+
+static ENUMERES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+unsafe extern "win64" fn enum_collecte(hwnd: usize, limite: isize) -> i32 {
+    let mut v = ENUMERES.lock().unwrap();
+    v.push(hwnd);
+    i32::from(v.len() < limite as usize)
+}
+
+#[test]
+fn enum_child_windows_parcourt_tous_les_descendants() {
+    // Sumatra PDF invalide chaque enfant par EnumChildWindows en passant à
+    // l'onglet d'accueil ; le bouchon ne rappelait jamais.
+    let parent = parent_window();
+    let a = child(parent, "Static", "a", 0, 1, (0, 0, 10, 10));
+    let b = child(parent, "Static", "b", 0, 2, (0, 20, 10, 10));
+    let petit = child(a, "Static", "petit", 0, 3, (0, 0, 5, 5));
+    let cb = enum_collecte as *const () as usize;
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 100) };
+    let mut vus = ENUMERES.lock().unwrap().clone();
+    vus.sort_unstable();
+    let mut attendus = vec![a, b, petit];
+    attendus.sort_unstable();
+    assert_eq!(vus, attendus);
+    // FALSE arrête l'énumération.
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 1) };
+    assert_eq!(ENUMERES.lock().unwrap().len(), 1);
 }
