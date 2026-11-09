@@ -75,6 +75,8 @@ d3d11.rs	Texture2D	x86	objet COM : passerelles x86 tirées des signatures (dx11_
 d3d11.rs	Texture2DVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_dxgi_resource.rs	DxgiResource	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
 d3d11_dxgi_resource.rs	DxgiResourceVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
+d3d11_query.rs	Query	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
+d3d11_query.rs	QueryVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs)
 d3d11_ext.rs	Annotation	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	AnnotationVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11_ext.rs	ContextExt	x86	vtable ID3D11DeviceContext1-4 : passerelles x86 tirées des signatures (dx11_x86.rs)
