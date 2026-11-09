@@ -1024,8 +1024,50 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|&h| h != hwnd);
+    // Fenêtre possédée qui a le focus (elle ou une de ses filles) : comme
+    // Windows, sa destruction rend la main à son propriétaire. Qt 5 donne
+    // le focus à la fenêtre cachée de sa boîte de fichiers native avant de
+    // la détruire ; sans ce retour, la fenêtre de VLC restait inactive et sa
+    // barre de menus gardait les libellés grisés de l'attente (#1311).
+    let owner = owner_to_refocus(hwnd);
     if gui::destroy_window(hwnd) {
+        if owner != 0 && gui::focused_window() == 0 && gui::is_window(owner) {
+            set_focus(owner);
+        }
         1
+    } else {
+        0
+    }
+}
+
+/// Propriétaire à qui rendre le focus quand `hwnd` est détruite : seulement
+/// pour une fenêtre de premier niveau possédée qui a le focus du fil, si ce
+/// propriétaire est visible et activé.
+unsafe fn owner_to_refocus(hwnd: usize) -> usize {
+    let Some(style) = gui::window_style(hwnd) else {
+        return 0;
+    };
+    if style & WS_CHILD != 0 {
+        return 0;
+    }
+    let focus = gui::focused_window();
+    let mut inside = focus;
+    for _ in 0..64 {
+        if inside == 0 || inside == hwnd {
+            break;
+        }
+        inside = gui::window_parent(inside).unwrap_or(0);
+    }
+    if focus == 0 || inside != hwnd {
+        return 0;
+    }
+    let owner = owner_top_level(get_window_long_ptr_w(hwnd, GWLP_HWNDPARENT) as usize);
+    if owner == 0 || owner == hwnd {
+        return 0;
+    }
+    let ok = gui::window_style(owner).is_some_and(|s| s & WS_DISABLED == 0 && s & 0x1000_0000 != 0);
+    if ok {
+        owner
     } else {
         0
     }
@@ -4607,6 +4649,64 @@ mod tests {
         assert!(!floating_popup(0x8000_0000, 0));
         assert!(!floating_popup(0x80C0_0000, 0x0800_0080));
         assert!(!floating_popup(0x0000_0000, 0x0800_0080));
+    }
+
+    /// #1311 : Qt 5 donne le focus à la fenêtre cachée de sa boîte de
+    /// fichiers native puis la détruit ; le propriétaire doit le retrouver
+    /// (WM_SETFOCUS), sinon VLC reste inactif et sa barre de menus grisée.
+    #[test]
+    fn focus_rendu_au_proprietaire_a_la_destruction() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SETFOCUS: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "win64" fn proc_(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == gui::WM_SETFOCUS {
+                SETFOCUS.fetch_add(1, Ordering::SeqCst);
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let got = std::thread::spawn(|| unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    80,
+                    60,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x10CF_0000);
+            set_window_long_ptr_w(main, -4, proc_ as *const () as isize);
+            let dialog = make(0x86CC_0000);
+            set_window_long_ptr_w(dialog, GWLP_HWNDPARENT, main as isize);
+            set_focus(main);
+            let before = SETFOCUS.load(Ordering::SeqCst);
+            set_focus(dialog);
+            assert_eq!(get_focus(), dialog);
+            destroy_window(dialog);
+            let r = (
+                get_focus() == main,
+                SETFOCUS.load(Ordering::SeqCst) - before,
+            );
+            // Une fenêtre détruite sans le focus ne le déplace pas.
+            let other = make(0x86CC_0000);
+            set_window_long_ptr_w(other, GWLP_HWNDPARENT, main as isize);
+            set_focus(0);
+            destroy_window(other);
+            let r2 = get_focus();
+            destroy_window(main);
+            (r, r2)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(got, ((true, 1), 0));
     }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
