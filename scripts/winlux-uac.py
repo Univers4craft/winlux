@@ -51,6 +51,7 @@ _TR = {
         "¿Quieres permitir que esta aplicación haga cambios en el dispositivo?",
         "Möchten Sie zulassen, dass durch diese App Änderungen an Ihrem Gerät vorgenommen werden?"),
     "Éditeur : inconnu": ("Publisher: Unknown", "Editor: desconocido", "Herausgeber: Unbekannt"),
+    "Éditeur vérifié : Winlux": ("Verified publisher: Winlux", "Editor comprobado: Winlux", "Verifizierter Herausgeber: Winlux"),
     "Éditeur vérifié : {name}": (
         "Verified publisher: {name}", "Editor comprobado: {name}", "Verifizierter Herausgeber: {name}"),
     "Origine du fichier : disque dur de cet ordinateur": (
@@ -213,8 +214,12 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     # relais root ; comme Windows pour ses composants, l'éditeur est connu.
     # Sinon, l'éditeur est celui dont le runtime a vérifié la signature
     # Authenticode (#1382) ; un binaire non signé ou mal signé reste inconnu.
-    signer = "Winlux" if elevate else publisher
-    shown = _t("Éditeur vérifié : {name}", name=signer) if signer else _t("Éditeur : inconnu")
+    if elevate:
+        shown = _t("Éditeur vérifié : Winlux")
+    elif publisher:
+        shown = _t("Éditeur vérifié : {name}", name=publisher)
+    else:
+        shown = _t("Éditeur : inconnu")
     for line in (shown, _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
         if line:
             label = Gtk.Label(label=line, xalign=0, wrap=True)
