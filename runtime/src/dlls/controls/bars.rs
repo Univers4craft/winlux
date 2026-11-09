@@ -985,6 +985,15 @@ unsafe fn toolbar_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
         0x0413 => {
             // TB_ADDBITMAP : index de la première image ajoutée. Les
             // images vont dans une liste interne (cases de TB_SETBITMAPSIZE).
+            // Un HBITMAP nul n'ajoute rien et ne consomme aucun index :
+            // Notepad++ en passe un pour chaque séparateur, et ses boutons
+            // numérotent leurs images sans compter ces séparateurs (#1287).
+            if lp == 0 || {
+                let p = lp as *const usize;
+                *p == 0 && *p.add(1) == 0
+            } {
+                return Some(-1);
+            }
             let strip = if lp != 0 {
                 let p = lp as *const usize;
                 tb_bitmap_image(*p, *p.add(1))
