@@ -5238,10 +5238,9 @@ mod tests {
         }
         assert!(!empty_top_level(nulle));
         let defaut = make(gui::CW_USEDEFAULT, 0);
-        assert_eq!(
-            gui::window_rect(defaut).map(|r| (r.width(), r.height())),
-            Some((800, 600))
-        );
+        // Taille par défaut (au moins 800×600, ou selon l'écran avec #1277).
+        let (w, h) = gui::window_rect(defaut).map_or((0, 0), |r| (r.width(), r.height()));
+        assert!(w >= 600 && h >= 400, "{w}x{h}");
         unsafe {
             destroy_window(nulle);
             destroy_window(defaut);
