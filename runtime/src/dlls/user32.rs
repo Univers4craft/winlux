@@ -1206,6 +1206,37 @@ pub unsafe extern "win64" fn get_keyboard_state(out: *mut u8) -> i32 {
     1
 }
 
+/// Avant de donner le focus à `hwnd`, active sa fenêtre de premier niveau
+/// comme SetActiveWindow sous Windows : l'ancienne reçoit WM_NCACTIVATE(FALSE)
+/// puis WM_ACTIVATE(WA_INACTIVE), la nouvelle WM_NCACTIVATE(TRUE) puis
+/// WM_ACTIVATE(WA_ACTIVE), envoyés et non postés. Le FocusIn de X11 qui suit
+/// trouve la fenêtre déjà active et ne poste plus rien (#1504).
+unsafe fn activate_for_focus(hwnd: usize) {
+    let top = gui::top_level_of(hwnd);
+    if top == 0 {
+        return;
+    }
+    let Some(prev) = gui::activate_top_for_focus(top) else {
+        return;
+    };
+    let me = std::thread::current().id();
+    let deliver = |h: usize, msg: u32, wparam: usize, lparam: isize| {
+        if gui::window_owner(h).as_ref() == Some(&me) {
+            if let Some(wp) = gui::wnd_proc_of(h) {
+                gui::call_wndproc(wp, h, msg, wparam, lparam);
+            }
+        } else {
+            gui::post_to_window(h, gui::Msg::new(h, msg, wparam, lparam));
+        }
+    };
+    if prev != 0 && gui::is_window(prev) {
+        deliver(prev, gui::WM_NCACTIVATE, 0, 0);
+        deliver(prev, gui::WM_ACTIVATE, 0, top as isize);
+    }
+    deliver(top, gui::WM_NCACTIVATE, 1, 0);
+    deliver(top, gui::WM_ACTIVATE, 1, prev as isize);
+}
+
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
     if hwnd != 0 {
         let Some(owner) = gui::window_owner(hwnd) else {
@@ -1216,6 +1247,9 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
             crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
             return 0;
         }
+    }
+    if hwnd != 0 && gui::focused_window() != hwnd {
+        activate_for_focus(hwnd);
     }
     let Some(old) = gui::set_focus(hwnd) else {
         crate::process::set_last_error(87);
