@@ -17,6 +17,7 @@ pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
+pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
@@ -994,6 +995,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "odbc32",
                 exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "activeds",
+                exports: activeds_aclui::activeds_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "aclui",
+                exports: activeds_aclui::aclui_exports(),
                 handle: fake_module(),
             },
             Builtin {
