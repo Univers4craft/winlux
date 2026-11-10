@@ -351,7 +351,9 @@ fn main() {
     uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
-    if dlls::gui_x11::renders_itself(&imports) {
+    if dlls::gui_x11::renders_itself(&imports)
+        || dlls::gui_x11::statically_linked_renderer(image.bytes())
+    {
         dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     if cpu::is_heavy(&imports) {

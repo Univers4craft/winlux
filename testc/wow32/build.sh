@@ -500,7 +500,8 @@ if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     i686-w64-mingw32-gcc -O1 "$src/crt32.c" -o "$out/crt32.exe"
     i686-w64-mingw32-gcc -O1 -D__USE_MINGW_ANSI_STDIO=0 "$src/crt32.c" -o "$out/crt32_msvcrt.exe"
     # Winsock x86 (#1408) : AcceptEx, ConnectEx, port de complétion.
-    i686-w64-mingw32-gcc -O1 "$src/net32.c" -o "$out/net32.exe" -lws2_32
+    # « large address aware » : mémoire x86 jusqu'à 4 Go (#1438).
+    i686-w64-mingw32-gcc -O1 "$src/net32.c" -o "$out/net32.exe" -lws2_32 -Wl,--large-address-aware
 else
     echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
 fi

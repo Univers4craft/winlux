@@ -12,6 +12,8 @@
 #include <time.h>
 #include <locale.h>
 #include <windows.h>
+#include <io.h>
+#include <wchar.h>
 
 static int ctor_ran;
 __attribute__((constructor)) static void ctor(void) { ctor_ran = 42; }
@@ -167,6 +169,83 @@ int main(int argc, char **argv) {
                                  | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 5, 0, (LPWSTR)&b.p, 0, NULL);
         CHECK(37, n > 0 && b.p && b.garde == 0xA5A5A5A5u && wcslen(b.p) == n);
         LocalFree(b.p);
+    }
+    {
+        /* Python 3.12 x86 (#1436) : GetFileInformationByHandle sur la sortie
+         * standard, redirigée vers un fichier par test-wow32.sh. */
+        BY_HANDLE_FILE_INFORMATION fi;
+        memset(&fi, 0xEE, sizeof fi);
+        HANDLE out = (HANDLE)_get_osfhandle(1);
+        CHECK(38, GetFileType(out) != FILE_TYPE_DISK
+                  || (GetFileInformationByHandle(out, &fi) && fi.nNumberOfLinks >= 1
+                      && !(fi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)));
+    }
+    {
+        /* Steam x86 (#1439) : manifeste écrit par CreateFileW (CREATE_ALWAYS),
+         * GetFileType, sonde à -1 depuis la fin (ERROR_NEGATIVE_SEEK
+         * attendu), SetFilePointerEx puis WriteFile. Le LARGE_INTEGER
+         * passe par valeur sur 8 octets de pile. */
+        wchar_t dir[MAX_PATH], path[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        GetTempFileNameW(dir, L"spx", 0, path);
+        HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+        LARGE_INTEGER z, pos, sz;
+        z.QuadPart = 0;
+        pos.QuadPart = -1;
+        DWORD w = 0;
+        z.QuadPart = -1;
+        int neg = h != INVALID_HANDLE_VALUE && !SetFilePointerEx(h, z, &pos, FILE_END)
+                  && GetLastError() == ERROR_NEGATIVE_SEEK;
+        z.QuadPart = 0;
+        int ok1 = neg && GetFileType(h) == FILE_TYPE_DISK
+                  && SetFilePointerEx(h, z, &pos, FILE_END) && pos.QuadPart == 0
+                  && WriteFile(h, "abcde", 5, &w, NULL) && w == 5;
+        z.QuadPart = -2;
+        int ok2 = ok1 && SetFilePointerEx(h, z, &pos, FILE_CURRENT) && pos.QuadPart == 3;
+        z.QuadPart = 1;
+        int ok3 = ok2 && SetFilePointerEx(h, z, NULL, FILE_BEGIN)
+                  && GetFileSizeEx(h, &sz) && sz.QuadPart == 5;
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        DeleteFileW(path);
+        CHECK(39, ok3);
+    }
+    {
+        /* tkinter x86 (#1474) : TCL_LIBRARY posée par _wputenv après le
+         * démarrage doit apparaître dans _wenviron et _environ, que Tcl
+         * parcourt. */
+        int seen_w = 0, seen_a = 0;
+        _wputenv(L"WINLUX_T1474=ok");
+        for (wchar_t **e = _wenviron; e && *e; e++)
+            if (!wcscmp(*e, L"WINLUX_T1474=ok")) seen_w = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strcmp(*e, "WINLUX_T1474=ok")) seen_a = 1;
+        _putenv("WINLUX_T1474=");
+        int gone = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strncmp(*e, "WINLUX_T1474=", 13)) gone = 0;
+        CHECK(40, seen_w && seen_a && gone && !getenv("WINLUX_T1474"));
+    }
+    {
+        /* Steam x86 (#1475) : MoveFileTransactedW et DeleteFileTransactedW
+         * trouvées par GetProcAddress, déplacement puis suppression faits. */
+        typedef BOOL (WINAPI *mv_t)(LPCWSTR, LPCWSTR, void *, void *, DWORD, HANDLE);
+        typedef BOOL (WINAPI *del_t)(LPCWSTR, HANDLE);
+        HMODULE k = GetModuleHandleA("kernel32.dll");
+        mv_t mv = (mv_t)GetProcAddress(k, "MoveFileTransactedW");
+        del_t del = (del_t)GetProcAddress(k, "DeleteFileTransactedW");
+        wchar_t dir[MAX_PATH], a[MAX_PATH], b[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        GetTempFileNameW(dir, L"tx", 0, a);
+        wcscpy(b, a);
+        wcscat(b, L"_dest");
+        int ok = mv && del && mv(a, b, NULL, NULL, MOVEFILE_REPLACE_EXISTING, INVALID_HANDLE_VALUE)
+                 && GetFileAttributesW(a) == INVALID_FILE_ATTRIBUTES
+                 && GetFileAttributesW(b) != INVALID_FILE_ATTRIBUTES
+                 && del(b, INVALID_HANDLE_VALUE) && GetFileAttributesW(b) == INVALID_FILE_ATTRIBUTES;
+        DeleteFileW(a);
+        DeleteFileW(b);
+        CHECK(41, ok);
     }
     return fails;
 }

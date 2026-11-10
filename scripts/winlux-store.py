@@ -129,6 +129,9 @@ T = {
            "ed_ok": "Installer",
            "ed_ok_update": "Mettre à jour",
            "ed_cancel": "Annuler",
+           "ed_authorize": "En attente de l'autorisation d'un administrateur...",
+           "ed_mb": "{got} Mo / {total} Mo",
+           "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
            "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
@@ -163,6 +166,9 @@ T = {
            "ed_ok": "Install",
            "ed_ok_update": "Update",
            "ed_cancel": "Cancel",
+           "ed_authorize": "Waiting for an administrator's permission...",
+           "ed_mb": "{got} MB / {total} MB",
+           "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
            "ed_mismatch": "The file received is not the announced version: installation refused."},
@@ -197,6 +203,9 @@ T = {
            "ed_ok": "Instalar",
            "ed_ok_update": "Actualizar",
            "ed_cancel": "Cancelar",
+           "ed_authorize": "Esperando la autorización de un administrador...",
+           "ed_mb": "{got} MB / {total} MB",
+           "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
            "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
@@ -232,6 +241,9 @@ T = {
            "ed_ok": "Installieren",
            "ed_ok_update": "Aktualisieren",
            "ed_cancel": "Abbrechen",
+           "ed_authorize": "Warten auf die Zustimmung eines Administrators...",
+           "ed_mb": "{got} MB / {total} MB",
+           "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
            "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
@@ -953,9 +965,14 @@ class Apt(Source):
         return out
 
     def apt(self, args, progress):
+        return self.watch(lambda w: admin(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o",
+                                           "Dpkg::Use-Pty=0", "-o", f"APT::Status-Fd={w}", *args]), progress)
+
+    def watch(self, build, progress):
+        """Lance la commande rendue par build(fd) et suit l'avancement qu'apt
+        écrit sur ce descripteur (APT::Status-Fd)."""
         r, w = os.pipe()
-        cmd = admin(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o", "Dpkg::Use-Pty=0",
-                     "-o", f"APT::Status-Fd={w}", *args])
+        cmd = build(w)
         if cmd is None:
             os.close(r)
             os.close(w)
@@ -1325,6 +1342,9 @@ EDITEURS = Path(os.environ.get("WINLUX_STORE_EDITEURS", ROOT + "/usr/share/winlu
 # Annuler par défaut) : rien n'est téléchargé sans elle (#1056).
 CONFIRM = os.environ.get("WINLUX_STORE_CONFIRM", "/usr/lib/winlux/winlux-store-confirm")
 REPOS_TOOL = "winlux-store-repos"
+# Code de winlux-root quand le Contrôle de compte d'utilisateur est refusé
+# (ERROR_CANCELLED 1223, modulo 256).
+DENIED = 1223 % 256
 DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]{0,127}")
 DEB_VERSION = re.compile(r"[A-Za-z0-9.+:~_-]{1,128}")
 
@@ -1506,13 +1526,40 @@ class Editeur(Source):
         CACHE.mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix="editeur-", dir=CACHE))
         path = work / f"{e['package']}.deb"
-        progress(10, tr("download", name=e["name"]))
+        size = int(info["size"]) if str(info.get("size", "")).isdigit() else 0
+        progress(0 if size else None, tr("download", name=e["name"]))
         try:
-            subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https,file",
-                            "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
-                            "--retry", "3", "--max-filesize", "1073741824", "--output", str(path), info["source"]],
-                           check=True, timeout=7200, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
+            proc = subprocess.Popen(["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https,file",
+                                     "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
+                                     "--retry", "3", "--max-filesize", "1073741824", "--output", str(path),
+                                     info["source"]], stdin=subprocess.DEVNULL)
+        except OSError:
+            shutil.rmtree(work, ignore_errors=True)
+            return 7
+        # Avancement réel : octets reçus sur la taille annoncée par l'index
+        # (0 à 50 %, apt fait le reste). Sans taille connue, aucun pourcentage.
+        deadline, shown = time.monotonic() + 7200, -1
+        while True:
+            try:
+                code = proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                code = -1
+                break
+            try:
+                got = path.stat().st_size
+            except OSError:
+                got = 0
+            pct = min(50, got * 50 // size) if size else None
+            if pct != shown or not size:
+                shown = pct
+                progress(pct, tr("download", name=e["name"]) + " "
+                         + tr("ed_mb", got=got // 1_000_000, total=max(1, size // 1_000_000) if size else "?"))
+        if code != 0:
             shutil.rmtree(work, ignore_errors=True)
             return 7
         if sha256_file(path) != info["sha256"]:
@@ -1533,20 +1580,49 @@ class Editeur(Source):
         e = self.entry(ref)
         if e is None:
             return 2
-        progress(2, tr("latest"))
+        progress(None, tr("latest"))
         info = editeur_info(e, True)
         if not info:
             return 7
-        progress(5, tr("ed_waiting"))
+        progress(None, tr("ed_waiting"))
         if not confirm(e, info, update):
             return 9
-        path = self.fetch_deb(e, info, progress)
-        if isinstance(path, int):
-            return path
+        # Autorisation d'un administrateur avant de télécharger (#1451). Elle
+        # laisse au relais un accord à usage unique pour ce logiciel et cette
+        # empreinte (#1453) : un téléchargement de plus de 5 minutes ne la
+        # redemande pas, et l'accord n'ouvre rien d'autre que ce paquet-là.
+        cmd = admin([REPOS_TOOL, "grant", e["id"], info["sha256"]])
+        if cmd is None:
+            return 126
+        progress(None, tr("ed_authorize"))
+        code = run(cmd, 3600)[0]
+        if code == DENIED:
+            return DENIED
+        if code:
+            return code
+        handed = False
         try:
-            return SOURCE_BY_NAME["apt"].apt(["install", "--", str(path)], progress)
+            path = self.fetch_deb(e, info, progress)
+            if isinstance(path, int):
+                return path
+            try:
+                handed = True
+                return self.install_deb(e, info, path, progress)
+            finally:
+                shutil.rmtree(path.parent, ignore_errors=True)
         finally:
-            shutil.rmtree(path.parent, ignore_errors=True)
+            if not handed:
+                # Annulé ou échoué avant l'installation : l'accord est retiré.
+                revoke = admin([REPOS_TOOL, "revoke", e["id"]])
+                if revoke:
+                    run(revoke, 30)
+
+    def install_deb(self, e, info, path, progress):
+        """Installation en administrateur par winlux-store-repos, qui recopie
+        le paquet hors de portée du compte et revérifie son empreinte avant apt."""
+        return SOURCE_BY_NAME["apt"].watch(
+            lambda w: admin([REPOS_TOOL, "install", e["id"], info["sha256"], str(path), f"APT::Status-Fd={w}"]),
+            progress)
 
     def remove(self, ref, progress):
         e = self.entry(ref)
@@ -2157,14 +2233,18 @@ class Progress:
         self.op, self.target, self.hook = op, target, hook
 
     def __call__(self, percent, message, state="running"):
-        percent = max(0, min(100, int(percent)))
+        # percent None : étape sans avancement mesurable (attente d'une
+        # autorisation, recherche) ; la boutique n'affiche alors aucun
+        # pourcentage plutôt qu'un chiffre figé (#1455).
+        shown = "" if percent is None else max(0, min(100, int(percent)))
         atomic_write(STORE_RUN / "store-progress.txt",
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
-                     f"percent={percent}\nmessage={field(message, 200)}\n")
+                     f"percent={shown}\nmessage={field(message, 200)}\n")
         if self.hook:
-            self.hook(percent)
+            self.hook(0 if percent is None else shown)
 
-MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch"}
+MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
+            1223 % 256: "denied"}
 
 def apt_candidate(name):
     """Le paquet existe dans les dépôts APT configurés (version candidate)."""

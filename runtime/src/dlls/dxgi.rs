@@ -146,8 +146,20 @@ pub(crate) fn install_x_error_guard() {
     ONCE.call_once(|| unsafe {
         unsafe extern "C" fn on_error(_d: *mut c_void, ev: *mut u8) -> libc::c_int {
             // XErrorEvent : type, display*, resourceid, serial, error_code (u8)…
-            let code = if ev.is_null() { 0 } else { *ev.add(32) };
-            log_warn!("dxgi", "erreur X11 ignorée (code {})", code);
+            if ev.is_null() {
+                return 0;
+            }
+            // XErrorEvent : resourceid à 16, error_code, request_code et
+            // minor_code à 32, 33 et 34.
+            let resource = std::ptr::read_unaligned(ev.add(16) as *const u64);
+            log_warn!(
+                "dxgi",
+                "erreur X11 ignorée (code {}, requête {}.{}, ressource {:#x})",
+                *ev.add(32),
+                *ev.add(33),
+                *ev.add(34),
+                resource
+            );
             0
         }
         let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
@@ -1596,9 +1608,34 @@ unsafe extern "win64" fn fac_is_current(_: *mut DxgiFactory) -> i32 {
 unsafe extern "win64" fn fac_zero(_: *mut DxgiFactory) -> i32 {
     0
 }
-unsafe extern "win64" fn fac_notimpl() -> i32 {
-    crate::dlls::d2d1::unsupported_call("IDXGIFactory (méthode non prise en charge)")
+/// Méthode de fabrique absente, nommée au journal pour savoir laquelle
+/// écrire ensuite (#1470).
+macro_rules! fac_notimpl {
+    ($f:ident, $name:literal) => {
+        unsafe extern "win64" fn $f() -> i32 {
+            crate::dlls::d2d1::unsupported_call(concat!("IDXGIFactory::", $name))
+        }
+    };
 }
+fac_notimpl!(
+    fac_create_sc_for_core_window,
+    "CreateSwapChainForCoreWindow"
+);
+fac_notimpl!(fac_register_stereo_window, "RegisterStereoStatusWindow");
+fac_notimpl!(fac_register_stereo_event, "RegisterStereoStatusEvent");
+fac_notimpl!(
+    fac_register_occlusion_window,
+    "RegisterOcclusionStatusWindow"
+);
+fac_notimpl!(fac_register_occlusion_event, "RegisterOcclusionStatusEvent");
+fac_notimpl!(
+    fac_create_sc_for_composition,
+    "CreateSwapChainForComposition"
+);
+fac_notimpl!(
+    fac_register_adapters_changed,
+    "RegisterAdaptersChangedEvent"
+);
 unsafe extern "win64" fn fac_ok() -> i32 {
     S_OK
 }
@@ -1758,21 +1795,21 @@ static FACTORY_VTABLE: DxgiFactoryVTable = DxgiFactoryVTable {
     is_current: fac_is_current,
     is_windowed_stereo: fac_zero,
     create_sc_for_hwnd: fac_create_sc_hwnd,
-    create_sc_for_core_window: fac_notimpl,
+    create_sc_for_core_window: fac_create_sc_for_core_window,
     get_shared_luid: fac_shared_luid,
-    register_stereo_window: fac_notimpl,
-    register_stereo_event: fac_notimpl,
+    register_stereo_window: fac_register_stereo_window,
+    register_stereo_event: fac_register_stereo_event,
     unregister_stereo: fac_ok,
-    register_occlusion_window: fac_notimpl,
-    register_occlusion_event: fac_notimpl,
+    register_occlusion_window: fac_register_occlusion_window,
+    register_occlusion_event: fac_register_occlusion_event,
     unregister_occlusion: fac_ok,
-    create_sc_for_composition: fac_notimpl,
+    create_sc_for_composition: fac_create_sc_for_composition,
     get_creation_flags: fac_flags,
     enum_adapter_by_luid: fac_by_luid,
     enum_warp_adapter: fac_warp,
     check_feature_support: fac_check_feature,
     enum_adapter_by_pref: fac_by_pref,
-    register_adapters_changed: fac_notimpl,
+    register_adapters_changed: fac_register_adapters_changed,
     unregister_adapters_changed: fac_ok,
 };
 

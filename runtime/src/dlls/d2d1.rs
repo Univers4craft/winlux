@@ -42,6 +42,7 @@ pub(crate) fn tear_off_vt() -> *const () {
 }
 
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
+const DXGI_FORMAT_A8_UNORM: u32 = 65;
 const D2DERR_WRONG_STATE: i32 = 0x8899_0001u32 as i32;
 const D2DERR_UNSUPPORTED_PIXEL_FORMAT: i32 = 0x8898_2F80u32 as i32;
 
@@ -673,6 +674,26 @@ unsafe extern "win64" fn geometry_bounds(
     S_OK
 }
 
+/// Point (x, y) dans des polygones, selon la règle de remplissage.
+fn polys_contain(polys: &[Vec<Pt>], rule: FillRule, x: f32, y: f32) -> bool {
+    let mut wind = 0i32;
+    for poly in polys {
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (a.1 <= y) != (b.1 <= y) {
+                let t = (y - a.1) / (b.1 - a.1);
+                if a.0 + t * (b.0 - a.0) > x {
+                    wind += if b.1 > a.1 { 1 } else { -1 };
+                }
+            }
+        }
+    }
+    match rule {
+        FillRule::EvenOdd => wind % 2 != 0,
+        FillRule::NonZero => wind != 0,
+    }
+}
+
 /// FillContainsPoint(point, transform, tolérance, *BOOL) : test pair-impair
 /// ou non nul sur les polygones aplatis.
 unsafe extern "win64" fn geometry_fill_contains(
@@ -690,23 +711,112 @@ unsafe extern "win64" fn geometry_fill_contains(
     let polys = crate::dlls::lock(&g.path).fill_polys(&m);
     let rule = *crate::dlls::lock(&g.rule);
     let (x, y) = point(pt);
-    let mut wind = 0i32;
-    for poly in &polys {
-        for i in 0..poly.len() {
+    *out = i32::from(polys_contain(&polys, rule, x, y));
+    S_OK
+}
+
+/// Polygones du trait d'épaisseur `width` (jointures et extrémités rondes ;
+/// le style de trait n'est pas appliqué), à unir par la règle non nulle.
+unsafe fn widened_polys(this: *mut GeometryObj, width: f32, m: *const Matrix) -> Vec<Vec<Pt>> {
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    crate::dlls::lock(&Com::get(this).data.path).stroke_polys(&m, width.max(0.0))
+}
+
+/// GetWidenedBounds(largeur, style, transform, tolérance, *rect) (#1470).
+unsafe extern "win64" fn geometry_widened_bounds(
+    this: *mut GeometryObj,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut RectF,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut r = RectF {
+        l: f32::MAX,
+        t: f32::MAX,
+        r: f32::MIN,
+        b: f32::MIN,
+    };
+    for p in widened_polys(this, width, m).iter().flatten() {
+        r.l = r.l.min(p.0);
+        r.t = r.t.min(p.1);
+        r.r = r.r.max(p.0);
+        r.b = r.b.max(p.1);
+    }
+    *out = r;
+    S_OK
+}
+
+/// StrokeContainsPoint(point, largeur, style, transform, tolérance, *BOOL).
+unsafe extern "win64" fn geometry_stroke_contains(
+    this: *mut GeometryObj,
+    pt: u64,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut i32,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let (x, y) = point(pt);
+    let polys = widened_polys(this, width, m);
+    *out = i32::from(polys_contain(&polys, FillRule::NonZero, x, y));
+    S_OK
+}
+
+/// ComputeLength(transform, tolérance, *longueur) : somme des segments
+/// des figures aplaties.
+unsafe extern "win64" fn geometry_length(
+    this: *mut GeometryObj,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut f32,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
+    let mut len = 0.0;
+    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
+        let n = if *closed {
+            poly.len()
+        } else {
+            poly.len().saturating_sub(1)
+        };
+        for i in 0..n {
             let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-            if (a.1 <= y) != (b.1 <= y) {
-                let t = (y - a.1) / (b.1 - a.1);
-                if a.0 + t * (b.0 - a.0) > x {
-                    wind += if b.1 > a.1 { 1 } else { -1 };
-                }
-            }
+            len += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
         }
     }
-    *out = i32::from(match rule {
-        FillRule::EvenOdd => wind % 2 != 0,
-        FillRule::NonZero => wind != 0,
-    });
+    *out = len;
     S_OK
+}
+
+/// Widen(largeur, style, transform, tolérance, puits) : le trait de la
+/// géométrie, envoyé en figures fermées à unir par la règle non nulle
+/// (#1470). Paint.NET en tire les limites de ses éléments dessinés.
+unsafe extern "win64" fn geometry_widen(
+    this: *mut GeometryObj,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    if sink.is_null() {
+        return E_INVALIDARG;
+    }
+    let figures: Vec<(Vec<Pt>, bool)> = widened_polys(this, width, m)
+        .into_iter()
+        .map(|p| (p, true))
+        .collect();
+    emit_figures(sink, &figures, FillRule::NonZero)
 }
 
 unsafe extern "win64" fn path_open(this: *mut GeometryObj, out: *mut *mut c_void) -> i32 {
@@ -857,8 +967,8 @@ macro_rules! geometry_vtable {
             release::<Res<Geometry>> as *const (),
             get_factory::<Geometry> as *const (),
             geometry_bounds as *const (),
-            unsupported!("GetWidenedBounds"),
-            unsupported!("StrokeContainsPoint"),
+            geometry_widened_bounds as *const (),
+            geometry_stroke_contains as *const (),
             geometry_fill_contains as *const (),
             unsupported!("CompareWithGeometry"),
             geometry_simplify as *const (),
@@ -866,9 +976,9 @@ macro_rules! geometry_vtable {
             unsupported!("CombineWithGeometry"),
             unsupported!("Outline"),
             unsupported!("ComputeArea"),
-            unsupported!("ComputeLength"),
+            geometry_length as *const (),
             unsupported!("ComputePointAtLength"),
-            unsupported!("Widen"),
+            geometry_widen as *const (),
             $($extra),*
         ]);
     };
@@ -899,8 +1009,8 @@ static GEOMETRY_VT: VTable<22> = VTable([
     release::<Res<Geometry>> as *const (),
     get_factory::<Geometry> as *const (),
     geometry_bounds as *const (),
-    unsupported!("GetWidenedBounds"),
-    unsupported!("StrokeContainsPoint"),
+    geometry_widened_bounds as *const (),
+    geometry_stroke_contains as *const (),
     geometry_fill_contains as *const (),
     unsupported!("CompareWithGeometry"),
     geometry_simplify as *const (),
@@ -908,9 +1018,9 @@ static GEOMETRY_VT: VTable<22> = VTable([
     unsupported!("CombineWithGeometry"),
     unsupported!("Outline"),
     unsupported!("ComputeArea"),
-    unsupported!("ComputeLength"),
+    geometry_length as *const (),
     unsupported!("ComputePointAtLength"),
-    unsupported!("Widen"),
+    geometry_widen as *const (),
     path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
     path_stream as *const (),
     path_figure_count as *const (), // GetSegmentCount (approché)
@@ -1120,6 +1230,9 @@ struct Bitmap {
     options: u32,
     /// Texture D3D11 sous-jacente (CreateBitmapFromDxgiSurface), tenue.
     surface: *mut c_void,
+    /// DXGI_FORMAT_A8_UNORM : la mémoire de l'appelant n'a qu'un octet
+    /// d'alpha par pixel (#1471).
+    alpha_only: bool,
 }
 
 impl Bitmap {
@@ -1130,6 +1243,7 @@ impl Bitmap {
             px: Mutex::new(px),
             options: 0,
             surface: std::ptr::null_mut(),
+            alpha_only: false,
         }
     }
 }
@@ -1230,10 +1344,18 @@ unsafe extern "win64" fn bitmap_copy_from_memory(
         return E_INVALIDARG;
     }
     let mut px = crate::dlls::lock(&b.px);
-    let row = (r.r - r.l) as usize * 4;
+    let cols = (r.r - r.l) as usize;
     for y in 0..(r.b - r.t) as usize {
         let d = ((r.t as usize + y) * b.w as usize + r.l as usize) * 4;
-        std::ptr::copy_nonoverlapping(src.add(y * pitch as usize), px[d..].as_mut_ptr(), row);
+        let line = src.add(y * pitch as usize);
+        if b.alpha_only {
+            // Un octet d'alpha par pixel : noir prémultiplié de cette opacité.
+            for x in 0..cols {
+                px[d + x * 4..d + x * 4 + 4].copy_from_slice(&[0, 0, 0, *line.add(x)]);
+            }
+        } else {
+            std::ptr::copy_nonoverlapping(line, px[d..].as_mut_ptr(), cols * 4);
+        }
     }
     S_OK
 }
@@ -1520,7 +1642,7 @@ unsafe extern "win64" fn target_create_bitmap(
     size: u64,
     src: *const u8,
     pitch: u32,
-    _props: *const c_void,
+    props: *const u32,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
@@ -1530,7 +1652,9 @@ unsafe extern "win64" fn target_create_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    // D2D1_BITMAP_PROPERTIES commence par le format DXGI.
+    b.alpha_only = !props.is_null() && props.read_unaligned() == DXGI_FORMAT_A8_UNORM;
     let obj = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b);
     if !src.is_null() {
         bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
@@ -3251,6 +3375,170 @@ mod tests {
             rien as *const (),
             fermer as *const (),
         ]);
+    }
+
+    /// #1471 : une bitmap A8 lit un octet d'alpha par pixel.
+    #[test]
+    fn bitmap_a8_lit_un_octet_par_pixel() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            let mut b = Bitmap::new(3, 2, vec![0xEE; 3 * 2 * 4]);
+            b.alpha_only = true;
+            let obj = new_res(f, BITMAP_VT.ptr(), b);
+            // Pas de 4 octets par ligne, trois utiles.
+            let src = [10u8, 20, 30, 0xFF, 40, 50, 60, 0xFF];
+            assert_eq!(
+                bitmap_copy_from_memory(obj, std::ptr::null(), src.as_ptr(), 4),
+                S_OK
+            );
+            let (w, h, px) = bitmap_pixels(obj.cast()).unwrap();
+            assert_eq!((w, h), (3, 2));
+            assert_eq!(&px[0..4], &[0, 0, 0, 10]);
+            assert_eq!(&px[20..24], &[0, 0, 0, 60]);
+            Com::release(obj);
+            Com::release(f);
+        }
+    }
+
+    /// #1470 : Widen, GetWidenedBounds, StrokeContainsPoint et ComputeLength.
+    #[test]
+    fn geometrie_elargie() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            let mut g = std::ptr::null_mut();
+            assert_eq!(
+                method::<RectGeo>(f.cast(), 5)(
+                    f.cast(),
+                    &RectF {
+                        l: 0.0,
+                        t: 0.0,
+                        r: 10.0,
+                        b: 10.0
+                    },
+                    &mut g
+                ),
+                S_OK
+            );
+            // Géométrie transformée (échelle 2), comme chez Paint.NET.
+            type Transformed = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const Matrix,
+                *mut *mut c_void,
+            ) -> i32;
+            let m = Matrix {
+                m11: 2.0,
+                m22: 2.0,
+                ..Matrix::IDENTITY
+            };
+            let mut tg = std::ptr::null_mut();
+            assert_eq!(
+                method::<Transformed>(f.cast(), 9)(f.cast(), g, &m, &mut tg),
+                S_OK
+            );
+            type WBounds = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut RectF,
+            ) -> i32;
+            let mut r = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 0.0,
+                b: 0.0,
+            };
+            assert_eq!(
+                method::<WBounds>(tg, 5)(
+                    tg,
+                    4.0,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0.25,
+                    &mut r
+                ),
+                S_OK
+            );
+            assert!(
+                (r.l + 2.0).abs() < 0.1 && (r.r - 22.0).abs() < 0.1,
+                "{:?}",
+                (r.l, r.r)
+            );
+            type SContains = unsafe extern "win64" fn(
+                *mut c_void,
+                u64,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut i32,
+            ) -> i32;
+            let mut inside = 0;
+            method::<SContains>(tg, 6)(
+                tg,
+                pt(21.0, 10.0),
+                4.0,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0.25,
+                &mut inside,
+            );
+            assert_eq!(inside, 1, "sur le bord droit");
+            method::<SContains>(tg, 6)(
+                tg,
+                pt(10.0, 10.0),
+                4.0,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0.25,
+                &mut inside,
+            );
+            assert_eq!(inside, 0, "au centre");
+            type Length =
+                unsafe extern "win64" fn(*mut c_void, *const Matrix, f32, *mut f32) -> i32;
+            let mut len = 0.0;
+            assert_eq!(
+                method::<Length>(tg, 14)(tg, std::ptr::null(), 0.25, &mut len),
+                S_OK
+            );
+            assert!((len - 80.0).abs() < 0.01, "{len}");
+            // Widen : figures fermées, règle non nulle, Close appelé.
+            puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
+            let mut sink = puits::VT.ptr();
+            let sink_ptr = &mut sink as *mut *const () as *mut c_void;
+            type Widen = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut c_void,
+            ) -> i32;
+            assert_eq!(
+                method::<Widen>(tg, 16)(
+                    tg,
+                    4.0,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0.25,
+                    sink_ptr
+                ),
+                S_OK
+            );
+            puits::RECU.with(|r| {
+                let r = r.borrow();
+                assert!(r.0 >= 8, "figures : {}", r.0);
+                assert_eq!((r.2, r.3), (1, true));
+            });
+            for o in [tg, g] {
+                release_obj(o);
+            }
+            Com::release(f);
+        }
     }
 
     /// #1400 : groupe de géométries, géométrie transformée, Simplify et Stream.

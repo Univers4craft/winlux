@@ -11,6 +11,7 @@ use std::ffi::c_void;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_NOREDRAW: u32 = 0x0008;
 const SWP_SHOWWINDOW: u32 = 0x0040;
 const SWP_HIDEWINDOW: u32 = 0x0080;
@@ -852,11 +853,88 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         callback(m.hwnd, m.message, m.wparam, m.time);
         return 0;
     }
-    recheck_own_frame(m.hwnd, m.message);
+    recheck_own_frame();
+    if m.l_private == gui::BACKEND_GEOMETRY {
+        geometry_changed(m.hwnd, m.message);
+    }
+    let (message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam);
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
-        Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
-        None => gui::def_window_proc(m.hwnd, m.message, m.wparam, m.lparam),
+        Some(wp) => gui::call_wndproc(wp, m.hwnd, message, wparam, lparam),
+        None => gui::def_window_proc(m.hwnd, message, wparam, lparam),
+    }
+}
+
+/// Le gestionnaire de fenêtres a agrandi, restauré, déplacé ou
+/// redimensionné une fenêtre de premier niveau : Windows le fait par
+/// SetWindowPos, qui envoie WM_WINDOWPOSCHANGED avant WM_SIZE et WM_MOVE.
+/// Chromium ne recalcule sa zone cliente (et la taille de sa surface de
+/// rendu) que sur WM_WINDOWPOSCHANGED : sans lui, Claude agrandi gardait son
+/// contenu en 1000x800 dans un coin, le reste noir, et ses boutons ne
+/// répondaient plus (#1476).
+unsafe fn geometry_changed(hwnd: usize, message: u32) {
+    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    let Some(rect) = gui::window_rect(hwnd) else {
+        return;
+    };
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    flags |= if message == gui::WM_SIZE {
+        SWP_NOMOVE
+    } else {
+        SWP_NOSIZE
+    };
+    let mut pos = WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: rect.left,
+        y: rect.top,
+        cx: rect.width(),
+        cy: rect.height(),
+        flags,
+    };
+    send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
+}
+
+/// Clic gauche dans une fenêtre qui dessine sa propre barre de titre (son
+/// cadre a été retiré, voir `frame_changed`) : comme Windows, le point est
+/// soumis à WM_NCHITTEST, et sur la légende ou un bord le clic devient
+/// WM_NCLBUTTONDOWN (ou WM_NCLBUTTONDBLCLK) en coordonnées écran.
+/// DefWindowProc lance alors le déplacement ou le redimensionnement par le
+/// gestionnaire de fenêtres. Sans cela, glisser la barre de Claude ne
+/// déplaçait pas la fenêtre (#1477). Les boutons de légende (HTMINBUTTON,
+/// HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium les traite
+/// lui-même.
+unsafe fn caption_click(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> (u32, usize, isize) {
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONDBLCLK: u32 = 0x0203;
+    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK)
+        || !OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return (message, wparam, lparam);
+    }
+    let Some(r) = gui::window_rect(hwnd) else {
+        return (message, wparam, lparam);
+    };
+    let x = lparam as u32 as u16 as i16 as i32;
+    let y = (lparam as u32 >> 16) as u16 as i16 as i32;
+    let screen = pack_i16_pair(r.left + x, r.top + y);
+    let hit = send_message_w(hwnd, 0x0084, 0, screen);
+    let caption = hit == 2;
+    let border = (10..=17).contains(&hit);
+    match message {
+        WM_LBUTTONDOWN if caption || border => (0x00A1, hit as usize, screen),
+        WM_LBUTTONDBLCLK if caption => (0x00A3, hit as usize, screen),
+        _ => (message, wparam, lparam),
     }
 }
 
@@ -966,7 +1044,13 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if window_diag() {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
     }
-    let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
+    // WM_SHOWWINDOW avant le changement de visibilité, comme Windows (SDL
+    // en tire ses évènements SHOWN et HIDDEN, #1421).
+    let show = cmd != gui::SW_HIDE;
+    if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
+        send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
+    }
+    let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
     if matches!(cmd, 4 | 7 | 8) && !was {
@@ -1018,7 +1102,7 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
-    pending_frame().retain(|(h, _)| *h != hwnd);
+    pending_frame().retain(|(h, _, _)| *h != hwnd);
     OWN_FRAME
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1440,7 +1524,7 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
     if !own {
-        pending_frame().retain(|(h, _)| *h != hwnd);
+        pending_frame().retain(|(h, _, _)| *h != hwnd);
     }
     let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
     let had = list.contains(&hwnd);
@@ -1453,8 +1537,9 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
             take_own_frame(hwnd);
         } else {
             let mut pending = pending_frame();
-            if !pending.iter().any(|(h, _)| *h == hwnd) {
-                pending.push((hwnd, std::time::Instant::now()));
+            if !pending.iter().any(|(h, _, _)| *h == hwnd) {
+                let now = std::time::Instant::now();
+                pending.push((hwnd, now, now));
             }
         }
     } else if !own && had {
@@ -1473,16 +1558,18 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
 /// Fenêtres qui ont demandé à dessiner leur propre cadre mais n'ont pas
 /// encore de barre de titre (Electron dont la page ne s'est pas chargée) :
 /// le cadre du gestionnaire reste, sinon rien ne permettrait de les fermer,
-/// réduire ou déplacer (#1211). Avec l'instant du dernier essai.
-static PENDING_FRAME: std::sync::Mutex<Vec<(usize, std::time::Instant)>> =
+/// réduire ou déplacer (#1211). Avec l'instant du dernier essai et celui de
+/// la mise en attente.
+static PENDING_FRAME: std::sync::Mutex<Vec<(usize, std::time::Instant, std::time::Instant)>> =
     std::sync::Mutex::new(Vec::new());
 
-fn pending_frame() -> std::sync::MutexGuard<'static, Vec<(usize, std::time::Instant)>> {
+fn pending_frame(
+) -> std::sync::MutexGuard<'static, Vec<(usize, std::time::Instant, std::time::Instant)>> {
     PENDING_FRAME.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn take_own_frame(hwnd: usize) {
-    pending_frame().retain(|(h, _)| *h != hwnd);
+    pending_frame().retain(|(h, _, _)| *h != hwnd);
     let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
     if !list.contains(&hwnd) {
         list.push(hwnd);
@@ -1526,28 +1613,56 @@ unsafe fn has_own_caption(hwnd: usize) -> bool {
     false
 }
 
-/// Essai de nouveau, au plus deux fois par seconde, sur une fenêtre en
-/// attente quand la souris y passe : la page d'Electron peut se charger
-/// bien après la création de la fenêtre (#1211).
-unsafe fn recheck_own_frame(hwnd: usize, message: u32) {
-    if !matches!(message, 0x0200 | 0x0201 | 0x00A0) {
+/// Délai entre deux essais sur une fenêtre en attente : deux fois par
+/// seconde pendant la première minute, puis toutes les trois secondes.
+fn frame_retry_delay(waiting: std::time::Duration) -> std::time::Duration {
+    if waiting < std::time::Duration::from_secs(60) {
+        std::time::Duration::from_millis(500)
+    } else {
+        std::time::Duration::from_secs(3)
+    }
+}
+
+/// Essai de nouveau sur les fenêtres en attente du thread qui distribue un
+/// message, quel que soit ce message et la fenêtre qui le reçoit : la page
+/// d'Electron peut se charger bien après la création de la fenêtre (#1211),
+/// et attendre que la souris passe sur la fenêtre laissait deux barres de
+/// titre à l'écran tant qu'on n'y touchait pas (#1444). La pompe de
+/// Chromium distribue sans cesse des messages à sa fenêtre cachée : c'est
+/// l'occasion de réessayer.
+unsafe fn recheck_own_frame() {
+    thread_local! {
+        static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if BUSY.with(|b| b.replace(true)) {
         return;
     }
-    let due = {
+    let due: Vec<usize> = {
         let mut pending = pending_frame();
-        let Some(entry) = pending.iter_mut().find(|(h, _)| *h == hwnd) else {
+        if pending.is_empty() {
+            BUSY.with(|b| b.set(false));
             return;
-        };
-        if entry.1.elapsed() < std::time::Duration::from_millis(500) {
-            false
-        } else {
-            entry.1 = std::time::Instant::now();
-            true
         }
+        let tid = crate::dlls::kernel32::get_current_thread_id();
+        let now = std::time::Instant::now();
+        pending
+            .iter_mut()
+            .filter(|(h, last, since)| {
+                now.duration_since(*last) >= frame_retry_delay(now.duration_since(*since))
+                    && gui::window_thread_id(*h) == Some(tid)
+            })
+            .map(|e| {
+                e.1 = now;
+                e.0
+            })
+            .collect()
     };
-    if due && has_own_caption(hwnd) {
-        take_own_frame(hwnd);
+    for h in due {
+        if has_own_caption(h) {
+            take_own_frame(h);
+        }
     }
+    BUSY.with(|b| b.set(false));
 }
 
 /// Déplace/redimensionne une fenêtre (raccourci Win32 de `SetWindowPos`).
@@ -2237,7 +2352,11 @@ pub unsafe extern "win64" fn adjust_window_rect_ex(
 // =====================================================================
 
 pub unsafe extern "win64" fn is_window_visible(hwnd: usize) -> i32 {
-    gui::is_window_visible(hwnd) as i32
+    let v = gui::is_window_visible(hwnd) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsWindowVisible({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 const WS_DISABLED: u32 = 0x0800_0000;
@@ -2271,7 +2390,11 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
 pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
     let mut state = gui::WINDOW_NORMAL;
     with_backend(|b| state = b.window_state(hwnd));
-    (state == gui::WINDOW_MINIMIZED) as i32
+    let v = (state == gui::WINDOW_MINIMIZED) as i32;
+    if window_diag() {
+        eprintln!("winlux[fenetre] IsIconic({hwnd:#x}) -> {v}");
+    }
+    v
 }
 
 pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {
@@ -5683,15 +5806,33 @@ mod tests {
             );
             // La page se charge ; la souris passe après le délai.
             PAGE_CHARGEE.store(true, std::sync::atomic::Ordering::SeqCst);
-            for (h, t) in pending_frame().iter_mut() {
+            for (h, t, _) in pending_frame().iter_mut() {
                 if *h == hwnd {
                     *t -= std::time::Duration::from_secs(1);
                 }
             }
-            let m = Msg::new(hwnd, 0x0200, 0, 0);
+            // Sans que la souris y passe : n'importe quel message distribué
+            // par le thread de la fenêtre, ici à une autre fenêtre (#1444).
+            let autre = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(autre, 0);
+            let m = Msg::new(autre, 0x0400, 0, 0);
             dispatch_message_w(&m);
             assert!(own(hwnd));
-            assert!(!pending_frame().iter().any(|(h, _)| *h == hwnd));
+            assert!(!pending_frame().iter().any(|(h, _, _)| *h == hwnd));
+            destroy_window(autre);
             destroy_window(hwnd);
         }
     }
@@ -5762,6 +5903,125 @@ mod tests {
             for h in fenetres {
                 destroy_window(h);
             }
+        }
+    }
+
+    static VUS_1476: std::sync::Mutex<Vec<(u32, usize, isize, i32, i32)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_claude_1476(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        match msg {
+            0x0083 => return 0,
+            // Barre glissable sur les 30 premiers pixels, client ailleurs.
+            0x0084 => {
+                let y = (l as u32 >> 16) as u16 as i16 as i32;
+                let top = gui::window_rect(h).map_or(0, |r| r.top);
+                return if y - top < 30 { 2 } else { 1 };
+            }
+            0x0047 => {
+                let pos = &*(l as *const WindowPos);
+                VUS_1476
+                    .lock()
+                    .unwrap()
+                    .push((msg, pos.flags as usize, 0, pos.cx, pos.cy));
+                return 0;
+            }
+            0x0005 | 0x0201 | 0x0203 | 0x00A1 | 0x00A3 => {
+                VUS_1476.lock().unwrap().push((msg, w, l, 0, 0));
+                return 0;
+            }
+            _ => {}
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1476 : un WM_SIZE venu du gestionnaire (agrandir) est précédé de
+    /// WM_WINDOWPOSCHANGED, sur lequel Chromium redimensionne son rendu ;
+    /// celui de SetWindowPos ne l'est pas une seconde fois. #1477 : un clic
+    /// sur la barre maison devient WM_NCLBUTTONDOWN(HTCAPTION), un clic
+    /// dans la page reste un clic client.
+    #[test]
+    fn fenetre_sans_cadre_agrandie_et_glissee() {
+        unsafe {
+            let name: Vec<u16> = "Winlux1476Claude".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_claude_1476 as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let hwnd = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0x00CF_0000,
+                100,
+                50,
+                1000,
+                800,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_pos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            );
+            assert!(OWN_FRAME.lock().unwrap().contains(&hwnd));
+            let vus = || std::mem::take(&mut *VUS_1476.lock().unwrap());
+            vus();
+
+            // Agrandie par le gestionnaire : 1920x1039.
+            gui::set_window_rect(
+                hwnd,
+                Rect {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1039,
+                },
+            );
+            let mut m = Msg::new(hwnd, gui::WM_SIZE, 2, pack_i16_pair(1920, 1039));
+            m.l_private = gui::BACKEND_GEOMETRY;
+            dispatch_message_w(&m);
+            let got = vus();
+            assert_eq!(got.len(), 2, "{got:?}");
+            assert_eq!(got[0].0, 0x0047);
+            assert_eq!(got[0].1 as u32 & SWP_NOSIZE, 0);
+            assert_eq!((got[0].3, got[0].4), (1920, 1039));
+            assert_eq!(got[1].0, gui::WM_SIZE);
+
+            // WM_SIZE posté par SetWindowPos : WM_WINDOWPOSCHANGED déjà envoyé.
+            dispatch_message_w(&Msg::new(hwnd, gui::WM_SIZE, 0, pack_i16_pair(1920, 1039)));
+            let got = vus();
+            assert_eq!(got.iter().map(|v| v.0).collect::<Vec<_>>(), [gui::WM_SIZE]);
+
+            // Clic dans la barre maison (y = 10) : légende, coordonnées écran.
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
+            dispatch_message_w(&Msg::new(hwnd, 0x0203, 1, pack_i16_pair(500, 10)));
+            // Clic dans la page (y = 400) : clic client inchangé.
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 400)));
+            let got = vus();
+            assert_eq!(
+                got.iter().map(|v| (v.0, v.1)).collect::<Vec<_>>(),
+                [(0x00A1, 2), (0x00A3, 2), (0x0201, 1)]
+            );
+            assert_eq!(got[0].2, pack_i16_pair(500, 10));
+            destroy_window(hwnd);
         }
     }
 

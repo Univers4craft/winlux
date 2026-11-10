@@ -67,6 +67,25 @@ grep -qx 'enabled=0' "$state" || fail "désactivation non publiée"
 share enable
 grep -q '^\[Photos été\]$' "$conf" || fail "réactivation sans effet"
 
+# Profil réseau publié (#1103) : celui que le pare-feu a appliqué, pas
+# une valeur par défaut ni une demande pas encore prise en compte.
+fwc="$root/etc/winlux/firewall.conf"
+fws="$root/run/winlux/firewall/status.txt"
+grep -v '^profile=' "$fwc" > "$fwc.tmp" || true; mv "$fwc.tmp" "$fwc"
+share status
+grep -qx 'firewall_profile=private' "$state" || fail "profil par défaut non privé"
+printf 'profile=public\n' >> "$fwc"
+share status
+grep -qx 'firewall_profile=public' "$state" || fail "profil Public de firewall.conf non publié"
+mkdir -p "${fws%/*}"
+printf 'backend=nftables\nprofile=private\nactive=1\n' > "$fws"
+share status
+grep -qx 'firewall_profile=private' "$state" || fail "profil appliqué par le pare-feu ignoré"
+printf 'backend=nftables\nprofile=public\nactive=1\n' > "$fws"
+share status
+grep -qx 'firewall_profile=public' "$state" || fail "profil Public appliqué mais shares.txt dit privé"
+rm -f "$fws"; grep -v '^profile=' "$fwc" > "$fwc.tmp" || true; mv "$fwc.tmp" "$fwc"
+
 export WINLUX_SHARE_AVAILABLE=0 PATH=/usr/bin:/bin
 if ! command -v smbd >/dev/null 2>&1 && ! test -x /usr/sbin/smbd; then
     share status

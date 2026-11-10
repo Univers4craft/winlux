@@ -57,7 +57,22 @@ fn xrandr_bin() -> String {
     std::env::var("WINLUX_XRANDR").unwrap_or_else(|_| "xrandr".into())
 }
 
+/// Dernier `xrandr --query` et son heure. Un jeu SDL énumère les modes par
+/// EnumDisplaySettingsW(i) jusqu'à l'échec, souvent à chaque image : un
+/// processus xrandr par appel (~30 ms) figeait Xonotic sur « Loading »
+/// (#1421). Le résultat sert donc deux secondes, et tout changement de mode
+/// l'oublie aussitôt.
+static QUERY_CACHE: Mutex<Option<(std::time::Instant, Vec<Screen>)>> = Mutex::new(None);
+const QUERY_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn forget_query() {
+    *QUERY_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 fn xrandr(args: &[String]) -> Option<String> {
+    if args.first().map(String::as_str) != Some("--query") {
+        forget_query();
+    }
     let out = std::process::Command::new(xrandr_bin())
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -146,9 +161,21 @@ pub fn parse(text: &str) -> Vec<Screen> {
 }
 
 pub fn screens() -> Vec<Screen> {
-    xrandr(&["--query".into()])
+    if let Some((at, list)) = QUERY_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        if at.elapsed() < QUERY_TTL {
+            return list.clone();
+        }
+    }
+    let list = xrandr(&["--query".into()])
         .map(|t| parse(&t))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    *QUERY_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((std::time::Instant::now(), list.clone()));
+    list
 }
 
 /// \\.\DISPLAY1 = écran principal, puis les autres écrans allumés.
@@ -752,6 +779,17 @@ DP-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 
    1920x1080i    60.00
 HDMI-1 disconnected (normal left inverted right x axis y axis)
 ";
+
+    #[test]
+    fn query_en_cache_puis_oubliee_au_changement() {
+        let seeded = parse(QUERY);
+        *QUERY_CACHE.lock().unwrap() = Some((std::time::Instant::now(), seeded.clone()));
+        // Pas de nouveau processus xrandr pendant la durée du cache (#1421).
+        assert_eq!(screens(), seeded);
+        assert_eq!(screen_for(None).map(|s| s.name), Some("DP-1".into()));
+        forget_query();
+        assert!(QUERY_CACHE.lock().unwrap().is_none());
+    }
 
     #[test]
     fn analyse_les_modes_et_frequences() {

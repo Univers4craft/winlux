@@ -181,6 +181,27 @@ unsafe extern "win64" fn move_file_with_progress_w(
     .unwrap_or(0)
 }
 
+/// MoveFileTransactedW et DeleteFileTransactedW (Transactional NTFS) :
+/// CreateTransaction n'est pas pris en charge ici (ktmw32), donc aucune
+/// transaction n'existe ; l'opération est faite directement, comme
+/// MoveFileWithProgressW et DeleteFileW. Le programme d'installation de
+/// Steam x86 cherche ces deux fonctions par GetProcAddress et, faute de
+/// les trouver, ne déplaçait aucun fichier extrait (#1475).
+unsafe extern "win64" fn move_file_transacted_w(
+    src: *const u16,
+    dst: *const u16,
+    progress: usize,
+    data: usize,
+    flags: u32,
+    _transaction: usize,
+) -> i32 {
+    move_file_with_progress_w(src, dst, progress, data, flags)
+}
+
+unsafe extern "win64" fn delete_file_transacted_w(path: *const u16, _transaction: usize) -> i32 {
+    api!("kernel32", "DeleteFileW", fn(*const u16) -> i32, path).unwrap_or(0)
+}
+
 /// FindFirstStreamW : les systèmes de fichiers Linux n'ont pas de flux
 /// alternatifs NTFS. Windows répond ERROR_HANDLE_EOF quand un fichier n'a
 /// aucun flux à énumérer ; 7-Zip comprend « pas de flux supplémentaire ».
@@ -1812,6 +1833,8 @@ pub fn kernel32_exports() -> Exports {
         "GetSystemFirmwareTable" => fn get_system_firmware_table,
         "SetFileApisToOEM" => fn set_file_apis_to_oem,
         "MoveFileWithProgressW" => fn move_file_with_progress_w,
+        "MoveFileTransactedW" => fn move_file_transacted_w,
+        "DeleteFileTransactedW" => fn delete_file_transacted_w,
         "FindFirstStreamW" => fn find_first_stream_w,
         "FindNextStreamW" => fn find_next_stream_w,
         "GetCompressedFileSizeW" => fn get_compressed_file_size_w,

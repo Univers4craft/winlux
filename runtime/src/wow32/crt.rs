@@ -204,6 +204,19 @@ pub fn fill_process_data() {
     }
 }
 
+/// Après `_putenv` : `_environ` et `_wenviron` x86 suivent les tableaux
+/// 64 bits reconstruits (#1474). `__initenv` garde l'instantané du début.
+pub fn refresh_environ() {
+    use crate::dlls::crt_runtime as rt;
+    let d = data();
+    unsafe {
+        let env = low_ptr_array(*rt::p_environ() as *const usize, false);
+        let wenv = low_ptr_array(*rt::p_wenviron() as *const usize, true);
+        *((d + D_ENVIRON) as *mut u32) = env;
+        *((d + D_WENVIRON) as *mut u32) = wenv;
+    }
+}
+
 /// Copie basse d'une donnée scalaire exportée (instantané).
 fn scalar_copy(dll: &str, name: &str, len: usize) -> Option<usize> {
     let a = crate::dlls::lookup(dll, name)?;
@@ -687,6 +700,29 @@ fn tz_low(which: usize) -> usize {
             at
         }
     }
+}
+
+/// Copie basse de `_sys_errlist` : tableau de pointeurs x86 vers des
+/// copies basses des messages (#1437).
+fn errlist_low(dll: &str) -> Option<usize> {
+    static LOW: OnceLock<usize> = OnceLock::new();
+    let nerr = crate::dlls::lookup(dll, "_sys_nerr")?;
+    let list = crate::dlls::lookup(dll, "_sys_errlist")?;
+    // `__sys_errlist()` remplit les tables au premier appel.
+    if let Some(f) = crate::dlls::lookup(dll, "__sys_errlist") {
+        // SAFETY : fonction 64 bits sans argument.
+        let f: extern "win64" fn() -> usize = unsafe { std::mem::transmute(f) };
+        f();
+    }
+    Some(*LOW.get_or_init(|| unsafe {
+        let n = std::ptr::read_unaligned(nerr as *const i32).clamp(0, 1024) as usize;
+        let at = libc::calloc(n.max(1), 4) as usize;
+        for i in 0..n {
+            let s = std::ptr::read_unaligned((list + i * 8) as *const usize);
+            std::ptr::write_unaligned((at + i * 4) as *mut u32, low_str(s, false));
+        }
+        at
+    }))
 }
 
 extern "win64" fn ret_tz(_args: u32, aux: usize) -> u64 {
@@ -1341,9 +1377,19 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         }
         "_pctype" => Override::Data(d + D_PCTYPE_PTR),
         "_pwctype" => Override::Data(d + D_PWCTYPE_PTR),
-        "_timezone" | "_daylight" | "_dstbias" | "_sys_nerr" => {
+        "_timezone" | "_daylight" | "_dstbias" => Override::Data(scalar_copy(n, func, 4)?),
+        "_sys_nerr" => {
+            // Tables remplies avant la copie basse (#1437).
+            errlist_low(n)?;
             Override::Data(scalar_copy(n, func, 4)?)
         }
+        "__sys_nerr" => {
+            // Remplit les tables avant la copie basse.
+            errlist_low(n)?;
+            raw(ret_aux, scalar_copy(n, "_sys_nerr", 4)?)
+        }
+        "__sys_errlist" => raw(ret_aux, errlist_low(n)?),
+        "_sys_errlist" => Override::Data(errlist_low(n)?),
         "__timezone" | "__p__timezone" => raw(ret_tz, 0),
         "__daylight" | "__p__daylight" => raw(ret_tz, 1),
         "__dstbias" | "__p__dstbias" => raw(ret_tz, 2),
