@@ -95,6 +95,17 @@
                "de": "Texte, Tabellen und Präsentationen, sehr treu zu docx-, xlsx- und pptx-Dateien."}
     },
     {
+      "id": "proton-mail", "name": "Proton Mail", "publisher": "Proton AG", "category": "internet",
+      "licence": "libre", "package": "proton-mail", "kind": "deb",
+      "url": "https://proton.me/download/mail/linux/1.16.1/ProtonMail-desktop-beta.deb",
+      "version": "1.16.1", "sha256": "acceccd9d38c2684f0457b08289a4a4db5cef8688e0d0c371ba77e631239c19e", "size": 92122992,
+      "hosts": ["proton.me"], "site": "https://proton.me/mail/download",
+      "desc": {"fr": "Courriel chiffré de bout en bout, avec agenda.",
+               "en": "End-to-end encrypted email, with calendar.",
+               "es": "Correo cifrado de extremo a extremo, con calendario.",
+               "de": "Ende-zu-Ende-verschlüsselte E-Mail mit Kalender."}
+    },
+    {
       "id": "signal", "name": "Signal", "publisher": "Signal Messenger LLC", "category": "internet",
       "licence": "libre", "package": "signal-desktop", "kind": "index",
       "base": "https://updates.signal.org/desktop/apt/", "index": "dists/xenial/main/binary-amd64/Packages",

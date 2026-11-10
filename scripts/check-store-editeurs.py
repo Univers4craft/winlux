@@ -84,8 +84,7 @@ def main(argv):
 # Logiciels proposés pour la boutique (10 nov.) : version et empreinte relevées
 # ici, puisque seule la CI atteint les sites des éditeurs.
 CANDIDATS = [
-    {"id": "protonmail", "url": "https://proton.me/download/mail/linux/1.16.1/ProtonMail-desktop-beta.deb"},
-    {"id": "warzone2100", "github": "Warzone2100/warzone2100", "tag": "4.", "asset": r"(?i)^warzone2100.*win.*x64.*\.exe$"},
+    {"id": "warzone2100", "github": "Warzone2100/warzone2100", "tag": "4.", "asset": r"^warzone2100_win_installer\.exe$"},
 ]
 
 
