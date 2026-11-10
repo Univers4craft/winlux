@@ -54,6 +54,17 @@ la section « Applications » de la popup volume du shell
 `IAudioEndpointVolume` et le volume du tampon primaire DirectSound règlent le
 volume de ce flux, pas celui de tout le système.
 
+Avec PipeWire, ce volume est celui du flux lui-même (`pw_stream_set_control`) :
+le mélangeur du système l'affiche et peut le changer. Le moteur ne l'impose
+que si le programme en a réglé un, pour ne pas écraser le réglage mémorisé
+par le mélangeur. Quand toutes les sources du processus sont en pause, le flux
+est bouchonné (`pw_stream_set_active`) au lieu d'être fermé. Les autres pilotes
+appliquent le volume au signal et jouent du silence pendant la pause.
+
+Le lecteur multimédia du shell fait passer le son de ffmpeg par ce moteur
+(PCM sur le descripteur 3) : un seul flux par lecture, « Bouchonné : oui » en
+pause, et le pourcentage du lecteur est celui du mélangeur (#1013).
+
 ## API prises en charge
 
 | API | DLL | Contenu |

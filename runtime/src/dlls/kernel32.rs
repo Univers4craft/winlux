@@ -2578,7 +2578,7 @@ pub unsafe extern "win64" fn set_file_pointer(
     let from = match method {
         0 if d >= 0 => SeekFrom::Start(d as u64),
         0 => {
-            crate::process::set_last_error(87);
+            crate::process::set_last_error(ERROR_NEGATIVE_SEEK);
             return u32::MAX;
         }
         1 => SeekFrom::Current(d),
@@ -2596,9 +2596,22 @@ pub unsafe extern "win64" fn set_file_pointer(
             n as u32
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(seek_error_code(&e));
             u32::MAX
         }
+    }
+}
+
+/// ERROR_NEGATIVE_SEEK : d'après la documentation de SetFilePointer(Ex),
+/// une position résultante négative échoue avec ce code. lseek() rend
+/// EINVAL dans ce cas ; le CRT de Steam x86, qui sonde la fin d'un fichier
+/// neuf à -1, ne tolère que 131 et fermait son manifeste vide (#1439).
+const ERROR_NEGATIVE_SEEK: u32 = 131;
+fn seek_error_code(e: &std::io::Error) -> u32 {
+    if e.raw_os_error() == Some(libc::EINVAL) {
+        ERROR_NEGATIVE_SEEK
+    } else {
+        io_error_code(e)
     }
 }
 pub extern "win64" fn flush_file_buffers(h: usize) -> i32 {
@@ -2703,6 +2716,10 @@ pub unsafe extern "win64" fn set_file_pointer_ex(
     };
     let from = match method {
         0 if distance >= 0 => SeekFrom::Start(distance as u64),
+        0 => {
+            crate::process::set_last_error(ERROR_NEGATIVE_SEEK);
+            return 0;
+        }
         1 => SeekFrom::Current(distance),
         2 => SeekFrom::End(distance),
         _ => {
@@ -2720,7 +2737,7 @@ pub unsafe extern "win64" fn set_file_pointer_ex(
             1
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(seek_error_code(&e));
             0
         }
     }
@@ -3320,6 +3337,25 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
     }
     load_library_str(&crate::dlls::cstr(name))
 }
+/// Programme qui charge lui-même OpenGL, Vulkan ou Direct3D (SDL lié en
+/// statique, comme Xonotic) : il dessine sa fenêtre, qui reste donc à
+/// l'échelle 1, comme pour un import direct de ces DLL (#1421). SDL charge
+/// opengl32 avant de créer sa fenêtre.
+fn note_renders_itself(name: &str) {
+    let base = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let base = if base.contains('.') {
+        base
+    } else {
+        format!("{base}.dll")
+    };
+    if crate::dlls::gui_x11::renders_itself(&[base]) {
+        crate::dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// Corps commun de `load_library_a` et `load_library_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn load_library_str(name: &str) -> usize {
@@ -3328,6 +3364,7 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
+    note_renders_itself(n);
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -7796,7 +7833,16 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     crate::trace!("ExitProcess : fin, code {:#x}", code as u32);
     record_exit_code(code as u32);
-    std::process::exit(code)
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    // ExitProcess ne rend jamais la main au code de l'invité : pas de
+    // `exit()` de la glibc, dont les gestionnaires atexit et destructeurs TLS
+    // tournaient pendant que les autres threads x86 continuaient. Steam et
+    // PyInstaller x86 y plantaient en lisant [0+8] après « fin » (#1440).
+    // SAFETY : sorties vidées ci-dessus, _exit termine tout le processus.
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+        libc::_exit(code)
+    }
 }
 
 // ---------- Fonctions supplémentaires kernel32 ----------
@@ -8603,6 +8649,10 @@ pub struct ByHandleFileInformation {
     pub file_index_low: u32,
 }
 
+/// GetFileInformationByHandle, lu par fstat sur le descripteur du handle :
+/// fichier, dossier, mais aussi handle standard redirigé vers un fichier,
+/// /dev/null ou un terminal (Python 3.12 x86, #1436). Seuls les
+/// fichiers ouverts par CreateFile étaient reconnus.
 pub unsafe extern "win64" fn get_file_information_by_handle(
     handle: usize,
     info: *mut ByHandleFileInformation,
@@ -8611,24 +8661,44 @@ pub unsafe extern "win64" fn get_file_information_by_handle(
         crate::process::set_last_error(87);
         return 0;
     }
-    let handles = lock(HANDLES.get().unwrap());
-    let Some(FileHandle::File(file)) = handles.get(&handle) else {
+    let fd = handle_to_fd(handle);
+    if fd < 0 {
         crate::process::set_last_error(6);
         return 0;
-    };
-    let f = lock(file);
-    let Ok(meta) = f.metadata() else {
+    }
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut st) != 0 {
         crate::process::set_last_error(6);
         return 0;
+    }
+    let is_dir = st.st_mode & libc::S_IFMT == libc::S_IFDIR;
+    let mut attrs = if is_dir { 0x10 } else { 0 };
+    if st.st_mode & libc::S_IFMT == libc::S_IFREG && st.st_mode & 0o222 == 0 {
+        attrs |= 0x1;
+    }
+    if attrs == 0 {
+        attrs = 0x80;
+    }
+    let ft = |t: i64| -> [u32; 2] { [t as u32, (t >> 32) as u32] };
+    let modified = unix_to_filetime(st.st_mtime, st.st_mtime_nsec);
+    let changed = unix_to_filetime(st.st_ctime, st.st_ctime_nsec);
+    let size = if st.st_mode & libc::S_IFMT == libc::S_IFREG {
+        st.st_size as u64
+    } else {
+        0
     };
-    drop(f);
-    drop(handles);
-    let size = meta.len();
     std::ptr::write_bytes(info, 0, 1);
-    (*info).attributes = if meta.is_dir() { 0x10 } else { 0x80 };
-    (*info).file_size_low = size as u32;
-    (*info).file_size_high = (size >> 32) as u32;
-    (*info).number_of_links = 1;
+    let i = &mut *info;
+    i.attributes = attrs;
+    i.creation_time = ft(modified.min(changed));
+    i.last_access_time = ft(unix_to_filetime(st.st_atime, st.st_atime_nsec));
+    i.last_write_time = ft(modified);
+    i.volume_serial = st.st_dev as u32;
+    i.file_size_high = (size >> 32) as u32;
+    i.file_size_low = size as u32;
+    i.number_of_links = (st.st_nlink as u32).max(1);
+    i.file_index_high = (st.st_ino >> 32) as u32;
+    i.file_index_low = st.st_ino as u32;
     1
 }
 
@@ -12004,6 +12074,31 @@ mod audit_tests {
         let c = std::ffi::CString::new(path).unwrap();
         let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
         assert_eq!(get_file_type(h), 1);
+        close_handle(h);
+        unsafe { delete_file_a(c.as_ptr() as *const u8) };
+    }
+
+    #[test]
+    fn position_negative_rend_error_negative_seek() {
+        // #1439 : sonde à -1 depuis la fin d'un fichier vide (CRT de Steam).
+        init();
+        let _teb = crate::process::test_teb();
+        let path = format!("Z:\\tmp\\winlux-negseek-{}.bin", std::process::id());
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0x80, 0) };
+        assert_ne!(h, usize::MAX);
+        let mut pos = 7i64;
+        assert_eq!(unsafe { set_file_pointer_ex(h, -1, &mut pos, 2) }, 0);
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(unsafe { set_file_pointer_ex(h, -1, &mut pos, 0) }, 0);
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(
+            unsafe { set_file_pointer(h, -1, std::ptr::null_mut(), 1) },
+            u32::MAX
+        );
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(unsafe { set_file_pointer_ex(h, 0, &mut pos, 2) }, 1);
+        assert_eq!(pos, 0);
         close_handle(h);
         unsafe { delete_file_a(c.as_ptr() as *const u8) };
     }

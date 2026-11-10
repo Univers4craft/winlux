@@ -88,6 +88,13 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
+pub fn refresh_environ() {
+    if active() {
+        crt::refresh_environ();
+    }
+}
+
 /// Adresse au-delà de laquelle le programme 32 bits ne voit rien.
 pub fn limit() -> usize {
     LIMIT.load(Ordering::Relaxed)
@@ -587,6 +594,13 @@ fn reserve_high(limit: usize) {
             );
         }
     };
+    // Comme WOW64, les 64 derniers Ko sous 4 Go restent inaccessibles : une
+    // adresse x86 de 0xffff0000 à 0xffffffff se confondrait avec un entier
+    // négatif (`widen` l'étend par le signe) ; wcschr de pygame32 recevait
+    // ainsi 0xffffffffffffec90 (#1438).
+    if limit == 0x1_0000_0000 {
+        reserve(0xffff_0000, limit);
+    }
     let mut cursor = limit;
     for &(a, b) in &used[..count] {
         // La pile principale grandit vers le bas : on lui laisse sa limite.
@@ -874,6 +888,7 @@ pub fn call32(target: usize, args: &[u32]) -> u64 {
             esp: 0,
             ret: 0,
             args: a,
+            result: None,
         });
     }
     let marker = 0u8;
@@ -1634,6 +1649,9 @@ struct Passage {
     esp: u32,
     ret: u32,
     args: [u32; 4],
+    /// edx:eax rendu par la passerelle, une fois revenue (#1440) : la
+    /// valeur nulle qui fait fauter le code x86 vient souvent de là.
+    result: Option<u64>,
 }
 
 const HISTORY_LEN: usize = 64;
@@ -1677,10 +1695,30 @@ fn passage_line(p: &Passage) -> String {
     } else {
         format!("rappel x86 0x{:x}", p.target)
     };
+    let rendu = match p.result {
+        Some(r) => format!(" = 0x{:x}", r as u32),
+        None => String::new(),
+    };
     format!(
-        "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}",
+        "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}{rendu}",
         p.esp, p.ret, p.args
     )
+}
+
+/// Note la valeur rendue par la passerelle `desc` appelée à `esp` : le
+/// passage le plus récent qui lui correspond (des rappels x86 ont pu être
+/// notés entre-temps).
+fn note_result(desc: u32, esp: u32, r: u64) {
+    HISTORY.with(|h| {
+        let mut h = h.borrow_mut();
+        if let Some(p) = h
+            .iter_mut()
+            .rev()
+            .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
+        {
+            p.result = Some(r);
+        }
+    });
 }
 
 fn note(p: Passage) {
@@ -1730,10 +1768,21 @@ fn historique_borne() {
             esp: 0,
             ret: 0,
             args: [i, 0, 0, 0],
+            result: None,
         });
     }
     let lines = history_lines();
     assert_eq!(lines.len(), HISTORY_LEN);
+    note(Passage {
+        desc: 0,
+        target: 0x41_0000,
+        esp: 0x1000,
+        ret: 0,
+        args: [0; 4],
+        result: None,
+    });
+    note_result(0, 0x1000, 0x1234);
+    assert!(history_lines().last().unwrap().ends_with("= 0x1234"));
     assert!(lines[0].starts_with("rappel x86 0x400005"), "{}", lines[0]);
     assert!(lines[HISTORY_LEN - 1].contains("0x400044"));
 }
@@ -1868,6 +1917,9 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let d = unsafe { &*(desc as usize as *const Desc) };
     let step = step_target().is_some() && step_wanted(d, args);
     let r = dispatch_inner(d, desc, args, xmm0);
+    if history_on() {
+        note_result(desc, args - 4, r);
+    }
     if step {
         step_arm();
     }
@@ -1883,6 +1935,7 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
             esp: args - 4,
             ret: rd(args - 4),
             args: [rd(args), rd(args + 4), rd(args + 8), rd(args + 12)],
+            result: None,
         });
     }
     if !d.supported {

@@ -12,26 +12,17 @@ Winlux ouvre les programmes Windows grâce à une couche de compatibilité écri
 | Programme 64 bits simple (outils, utilitaires, programmes en ligne de commande) | Fonctionne en général |
 | Installateur `.msi`, NSIS ou Inno Setup | Fonctionne |
 | Application .NET qui embarque son propre runtime | Démarre, mais son interface ne s'ouvre pas toujours |
-| Interfaces WinForms et WPF | Pas encore |
+| Interfaces WinForms et WPF | Partiel : ScreenToGif et Flow Launcher (WPF) fonctionnent, beaucoup d'autres pas encore |
 | Jeux Direct3D 9, 11 et 12 | Partiel, à valider jeu par jeu |
-| Programme 32 bits | Partiel : les premiers programmes 32 bits démarrent, beaucoup ne s'ouvrent pas encore |
+| Programme 32 bits | Partiel : PuTTY, 7-Zip et WinSCP en 32 bits fonctionnent, beaucoup d'autres ne s'ouvrent pas encore |
 | Pilotes, antivirus, anti-triche au niveau du système | Non pris en charge |
 | Applications en paquet MSIX ou AppX | Installation, raccourcis et désinstallation |
 
 ## Logiciels essayés
 
-| Logiciel | Résultat |
-|---|---|
-| Notepad++ 8.6 | Installation et désinstallation propres |
-| WinMerge 2.16 | Installation et désinstallation propres |
-| ShareX 16.1 | Installation et désinstallation propres |
-| Audacity 3.6 | Installation et désinstallation propres |
-| Applications intégrées (Explorateur, Gestionnaire des tâches, Éditeur du Registre…) | Fonctionnent : ce sont elles-mêmes des `.exe` lancés par Winlux |
-| Paint.NET 5.1 | L'installeur officiel s'installe et se désinstalle ; l'interface ne s'ouvre pas encore |
-| Claude pour Windows | En cours, pas encore utilisable |
-| Photoshop | Non pris en charge |
+La liste des logiciels et des jeux vérifiés un par un, avec ce qui fonctionne et ce qui est encore en cours, est sur la page [Logiciels et jeux](page:software).
 
-Cette liste grandit à chaque version. Le détail fonction par fonction et l'ordre des prochains chantiers sont dans le wiki : [Compatibilité des applications](wiki:Compatibilite-des-applications).
+Le détail fonction par fonction et l'ordre des prochains chantiers sont dans le wiki : [Compatibilité des applications](wiki:Compatibilite-des-applications).
 
 ## Ce qui arrive ensuite
 

@@ -554,6 +554,16 @@ jobs:
           sudo apt-get install -y -q wixl msitools || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools; }
           sh scripts/test-msi-scripts.sh
 
+      - name: Construire les paquets MSI de la fiche de banc 833
+        run: sh scripts/construire-paquets-833.sh build/paquets-833
+
+      - name: Conserver les paquets MSI de la fiche de banc 833
+        uses: actions/upload-artifact@v4
+        with:
+          name: paquets-833
+          path: build/paquets-833
+          retention-days: 30
+
       - name: Assistant d'installation au double-clic (#833)
         run: |
           sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }

@@ -396,3 +396,22 @@ fn dernier_point_et_points_entiers_du_chemin() {
         delete_path(p);
     }
 }
+
+/// #1486 : GdipGetNearestColor rend la couleur telle quelle en 32 bits.
+#[test]
+fn couleur_la_plus_proche() {
+    unsafe {
+        let b = new_bitmap(4, 4);
+        let g = graphics_of(b);
+        let mut c = 0x80C0_A060u32;
+        assert_eq!(get_nearest_color(g, &mut c), OK);
+        assert_eq!(c, 0x80C0_A060);
+        assert_eq!(
+            get_nearest_color(g, std::ptr::null_mut()),
+            INVALID_PARAMETER
+        );
+        assert_eq!(get_nearest_color(0, &mut c), INVALID_PARAMETER);
+        delete_graphics(g);
+        dispose_image(b);
+    }
+}

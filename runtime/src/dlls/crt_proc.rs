@@ -202,6 +202,7 @@ pub unsafe extern "win64" fn wputenv_s(name: *const u16, value: *const u16) -> i
     } else {
         std::env::set_var(&k, &v);
     }
+    super::crt_runtime::refresh_environ();
     0
 }
 

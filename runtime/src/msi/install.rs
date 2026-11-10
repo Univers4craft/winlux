@@ -1344,6 +1344,10 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
     for f in &m.files {
         let _ = std::fs::remove_file(f);
     }
+    // RemoveFile (mode 2) et fichiers INI avant les dossiers, comme
+    // RemoveFiles avant RemoveFolders sous Windows : un dossier vidé par
+    // la table RemoveFile disparaît avec l'application.
+    let undo_edits = super::extra::undo(m);
     let mut dirs = m.dirs.clone();
     dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     for d in dirs {
@@ -1357,7 +1361,7 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
             name: n.clone(),
         })
         .collect();
-    edits.extend(super::extra::undo(m));
+    edits.extend(undo_edits);
     edits.push(RegEdit::DeleteTree(uninstall_key(&m.product)));
     apply_registry_edits(&edits);
     let mut keys = m.keys.clone();

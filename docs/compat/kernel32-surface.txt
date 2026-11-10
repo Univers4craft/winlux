@@ -99,6 +99,7 @@ DeleteAtom
 DeleteCriticalSection
 DeleteFiber
 DeleteFileA
+DeleteFileTransactedW
 DeleteFileW
 DeleteProcThreadAttributeList
 DeleteTimerQueue
@@ -535,6 +536,7 @@ Module32NextW
 MoveFileA
 MoveFileExA
 MoveFileExW
+MoveFileTransactedW
 MoveFileW
 MoveFileWithProgressW
 MulDiv
