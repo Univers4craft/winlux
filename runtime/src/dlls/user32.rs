@@ -11,6 +11,7 @@ use std::ffi::c_void;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_NOREDRAW: u32 = 0x0008;
 const SWP_SHOWWINDOW: u32 = 0x0040;
 const SWP_HIDEWINDOW: u32 = 0x0080;
@@ -853,10 +854,87 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         return 0;
     }
     recheck_own_frame();
+    if m.l_private == gui::BACKEND_GEOMETRY {
+        geometry_changed(m.hwnd, m.message);
+    }
+    let (message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam);
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
-        Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
-        None => gui::def_window_proc(m.hwnd, m.message, m.wparam, m.lparam),
+        Some(wp) => gui::call_wndproc(wp, m.hwnd, message, wparam, lparam),
+        None => gui::def_window_proc(m.hwnd, message, wparam, lparam),
+    }
+}
+
+/// Le gestionnaire de fenêtres a agrandi, restauré, déplacé ou
+/// redimensionné une fenêtre de premier niveau : Windows le fait par
+/// SetWindowPos, qui envoie WM_WINDOWPOSCHANGED avant WM_SIZE et WM_MOVE.
+/// Chromium ne recalcule sa zone cliente (et la taille de sa surface de
+/// rendu) que sur WM_WINDOWPOSCHANGED : sans lui, Claude agrandi gardait son
+/// contenu en 1000x800 dans un coin, le reste noir, et ses boutons ne
+/// répondaient plus (#1476).
+unsafe fn geometry_changed(hwnd: usize, message: u32) {
+    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    let Some(rect) = gui::window_rect(hwnd) else {
+        return;
+    };
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    flags |= if message == gui::WM_SIZE {
+        SWP_NOMOVE
+    } else {
+        SWP_NOSIZE
+    };
+    let mut pos = WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: rect.left,
+        y: rect.top,
+        cx: rect.width(),
+        cy: rect.height(),
+        flags,
+    };
+    send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
+}
+
+/// Clic gauche dans une fenêtre qui dessine sa propre barre de titre (son
+/// cadre a été retiré, voir `frame_changed`) : comme Windows, le point est
+/// soumis à WM_NCHITTEST, et sur la légende ou un bord le clic devient
+/// WM_NCLBUTTONDOWN (ou WM_NCLBUTTONDBLCLK) en coordonnées écran.
+/// DefWindowProc lance alors le déplacement ou le redimensionnement par le
+/// gestionnaire de fenêtres. Sans cela, glisser la barre de Claude ne
+/// déplaçait pas la fenêtre (#1477). Les boutons de légende (HTMINBUTTON,
+/// HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium les traite
+/// lui-même.
+unsafe fn caption_click(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> (u32, usize, isize) {
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONDBLCLK: u32 = 0x0203;
+    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK)
+        || !OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return (message, wparam, lparam);
+    }
+    let Some(r) = gui::window_rect(hwnd) else {
+        return (message, wparam, lparam);
+    };
+    let x = lparam as u32 as u16 as i16 as i32;
+    let y = (lparam as u32 >> 16) as u16 as i16 as i32;
+    let screen = pack_i16_pair(r.left + x, r.top + y);
+    let hit = send_message_w(hwnd, 0x0084, 0, screen);
+    let caption = hit == 2;
+    let border = (10..=17).contains(&hit);
+    match message {
+        WM_LBUTTONDOWN if caption || border => (0x00A1, hit as usize, screen),
+        WM_LBUTTONDBLCLK if caption => (0x00A3, hit as usize, screen),
+        _ => (message, wparam, lparam),
     }
 }
 
@@ -5825,6 +5903,125 @@ mod tests {
             for h in fenetres {
                 destroy_window(h);
             }
+        }
+    }
+
+    static VUS_1476: std::sync::Mutex<Vec<(u32, usize, isize, i32, i32)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_claude_1476(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        match msg {
+            0x0083 => return 0,
+            // Barre glissable sur les 30 premiers pixels, client ailleurs.
+            0x0084 => {
+                let y = (l as u32 >> 16) as u16 as i16 as i32;
+                let top = gui::window_rect(h).map_or(0, |r| r.top);
+                return if y - top < 30 { 2 } else { 1 };
+            }
+            0x0047 => {
+                let pos = &*(l as *const WindowPos);
+                VUS_1476
+                    .lock()
+                    .unwrap()
+                    .push((msg, pos.flags as usize, 0, pos.cx, pos.cy));
+                return 0;
+            }
+            0x0005 | 0x0201 | 0x0203 | 0x00A1 | 0x00A3 => {
+                VUS_1476.lock().unwrap().push((msg, w, l, 0, 0));
+                return 0;
+            }
+            _ => {}
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1476 : un WM_SIZE venu du gestionnaire (agrandir) est précédé de
+    /// WM_WINDOWPOSCHANGED, sur lequel Chromium redimensionne son rendu ;
+    /// celui de SetWindowPos ne l'est pas une seconde fois. #1477 : un clic
+    /// sur la barre maison devient WM_NCLBUTTONDOWN(HTCAPTION), un clic
+    /// dans la page reste un clic client.
+    #[test]
+    fn fenetre_sans_cadre_agrandie_et_glissee() {
+        unsafe {
+            let name: Vec<u16> = "Winlux1476Claude".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_claude_1476 as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let hwnd = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0x00CF_0000,
+                100,
+                50,
+                1000,
+                800,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            set_window_pos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            );
+            assert!(OWN_FRAME.lock().unwrap().contains(&hwnd));
+            let vus = || std::mem::take(&mut *VUS_1476.lock().unwrap());
+            vus();
+
+            // Agrandie par le gestionnaire : 1920x1039.
+            gui::set_window_rect(
+                hwnd,
+                Rect {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1039,
+                },
+            );
+            let mut m = Msg::new(hwnd, gui::WM_SIZE, 2, pack_i16_pair(1920, 1039));
+            m.l_private = gui::BACKEND_GEOMETRY;
+            dispatch_message_w(&m);
+            let got = vus();
+            assert_eq!(got.len(), 2, "{got:?}");
+            assert_eq!(got[0].0, 0x0047);
+            assert_eq!(got[0].1 as u32 & SWP_NOSIZE, 0);
+            assert_eq!((got[0].3, got[0].4), (1920, 1039));
+            assert_eq!(got[1].0, gui::WM_SIZE);
+
+            // WM_SIZE posté par SetWindowPos : WM_WINDOWPOSCHANGED déjà envoyé.
+            dispatch_message_w(&Msg::new(hwnd, gui::WM_SIZE, 0, pack_i16_pair(1920, 1039)));
+            let got = vus();
+            assert_eq!(got.iter().map(|v| v.0).collect::<Vec<_>>(), [gui::WM_SIZE]);
+
+            // Clic dans la barre maison (y = 10) : légende, coordonnées écran.
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
+            dispatch_message_w(&Msg::new(hwnd, 0x0203, 1, pack_i16_pair(500, 10)));
+            // Clic dans la page (y = 400) : clic client inchangé.
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 400)));
+            let got = vus();
+            assert_eq!(
+                got.iter().map(|v| (v.0, v.1)).collect::<Vec<_>>(),
+                [(0x00A1, 2), (0x00A3, 2), (0x0201, 1)]
+            );
+            assert_eq!(got[0].2, pack_i16_pair(500, 10));
+            destroy_window(hwnd);
         }
     }
 
