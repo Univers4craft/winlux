@@ -7,7 +7,7 @@ use crate::dlls::gl_bindings as gl;
 use crate::dlls::ole32::Guid;
 use crate::{log_debug, log_error, log_info, log_warn};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const S_OK: i32 = 0;
@@ -313,6 +313,9 @@ pub(crate) struct GlContext {
     pub framebuffer: gl::GLuint,
     /// Présentations faites : la première est décrite dans le journal.
     presented: AtomicU32,
+    /// Taille de la fenêtre X à la dernière présentation (largeur << 32 |
+    /// hauteur), pour voir qu'elle a changé (#1542).
+    window_size: AtomicU64,
 }
 
 unsafe impl Send for GlContext {}
@@ -410,6 +413,7 @@ impl GlContext {
                 back_texture: 0,
                 framebuffer: 0,
                 presented: AtomicU32::new(0),
+                window_size: AtomicU64::new(0),
             };
             ctx.create_backbuffer(g);
             Some(ctx)
@@ -482,23 +486,37 @@ impl GlContext {
             if first {
                 self.describe(g, &previous, switched);
             }
-            (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
-            (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
-            // Le rendu D3D11 garde la ligne 0 en haut (voir d3d11_pipeline.rs) :
-            // l'image est retournée en la copiant vers la fenêtre.
-            (g.BlitFramebuffer)(
-                0,
-                0,
-                self.width as i32,
-                self.height as i32,
-                0,
-                self.height as i32,
-                self.width as i32,
-                0,
-                gl::GL_COLOR_BUFFER_BIT,
-                gl::GL_LINEAR as u32,
-            );
-            (glx.SwapBuffers)(self.display, self.drawable);
+            // Taille réelle de la fenêtre : elle a pu changer (agrandie,
+            // restaurée) avant que le programme ne redimensionne sa chaîne.
+            let (dw, dh) = self.drawable_size(glx).unwrap_or((self.width, self.height));
+            let packed = (u64::from(dw) << 32) | u64::from(dh);
+            let changed = self.window_size.swap(packed, Ordering::Relaxed) != packed;
+            // Taille changée : Mesa ne relit celle de la fenêtre qu'après un
+            // échange. La première image serait placée et coupée d'après
+            // l'ancienne taille (contenu décalé d'autant, bande noire), et
+            // restait ainsi tant que la page ne redessinait pas (#1542) :
+            // l'image est présentée une seconde fois, à la bonne taille.
+            for _ in 0..if changed { 2 } else { 1 } {
+                (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
+                (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
+                // Le rendu D3D11 garde la ligne 0 en haut (voir
+                // d3d11_pipeline.rs) : l'image est retournée en la copiant.
+                // Elle couvre toute la fenêtre, comme DXGI_SCALING_STRETCH :
+                // jamais d'ancienne image ni de noir autour.
+                (g.BlitFramebuffer)(
+                    0,
+                    0,
+                    self.width as i32,
+                    self.height as i32,
+                    0,
+                    dh as i32,
+                    dw as i32,
+                    0,
+                    gl::GL_COLOR_BUFFER_BIT,
+                    gl::GL_LINEAR as u32,
+                );
+                (glx.SwapBuffers)(self.display, self.drawable);
+            }
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
             // Rendre au thread le contexte qu'il avait (le sien n'est pas
             // lié ailleurs, la reprise réussit).
@@ -510,6 +528,25 @@ impl GlContext {
                 );
             }
         }
+    }
+
+    /// Taille de la fenêtre X où l'on présente (XGetGeometry).
+    unsafe fn drawable_size(&self, glx: &gl::GlxFunctions) -> Option<(u32, u32)> {
+        let get = glx.XGetGeometry?;
+        let (mut root, mut x, mut y) = (0, 0, 0);
+        let (mut w, mut h, mut border, mut depth) = (0, 0, 0, 0);
+        let ok = get(
+            self.display.cast(),
+            self.drawable as libc::c_ulong,
+            &mut root,
+            &mut x,
+            &mut y,
+            &mut w,
+            &mut h,
+            &mut border,
+            &mut depth,
+        );
+        (ok != 0 && w > 0 && h > 0).then_some((w, h))
     }
 
     /// Décrit la première présentation : taille, fenêtre, contexte et un
@@ -2011,5 +2048,78 @@ mod swap_chain1_tests {
         assert_eq!(std::mem::size_of::<FrameStatistics>(), 32);
         assert_eq!(std::mem::size_of::<FullscreenDesc>(), 20);
         assert_eq!(std::mem::size_of::<crate::dlls::d3d12::SwapDesc1>(), 48);
+    }
+}
+
+#[cfg(test)]
+mod presentation_x11_tests {
+    use super::*;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, ImageFormat,
+    };
+    use x11rb::wrapper::ConnectionExt as _;
+
+    /// #1542 : la fenêtre change de taille avant la chaîne d'échange
+    /// (agrandie par le gestionnaire). L'image présentée couvre toute la
+    /// fenêtre, à sa nouvelle taille : ni noir, ni ancienne image, ni
+    /// décalage. Il faut un serveur X avec GLX (Xvfb + Mesa).
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn image_presentee_couvre_la_fenetre_redimensionnee_x11() {
+        let (conn, screen) = x11rb::connect(None).expect("X11");
+        let root = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            root.root_depth,
+            win,
+            root.root,
+            0,
+            0,
+            200,
+            100,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+            root.root_visual,
+            &CreateWindowAux::new().background_pixel(root.black_pixel),
+        )
+        .unwrap();
+        conn.map_window(win).unwrap();
+        conn.sync().unwrap();
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        let mut ctx = GlContext::create_for_window(0).expect("contexte GL");
+        ctx.drawable = u64::from(win);
+        let pixel = |x: i16, y: i16| -> u32 {
+            let img = conn
+                .get_image(ImageFormat::Z_PIXMAP, win, x, y, 1, 1, !0)
+                .unwrap()
+                .reply()
+                .unwrap();
+            u32::from_le_bytes([img.data[0], img.data[1], img.data[2], 0])
+        };
+        unsafe {
+            assert_ne!((glx.MakeCurrent)(ctx.display, ctx.drawable, ctx.context), 0);
+            ctx.resize(200, 100);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, ctx.framebuffer);
+            (g.ClearColor)(1.0, 0.0, 0.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            ctx.present();
+            (g.Finish)();
+            assert_eq!(pixel(10, 10), 0xFF0000);
+            // Agrandie : la chaîne garde 200x100 pour l'instant.
+            conn.configure_window(win, &ConfigureWindowAux::new().width(400).height(300))
+                .unwrap();
+            conn.sync().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            ctx.present();
+            (g.Finish)();
+            for (x, y) in [(10, 10), (390, 10), (10, 290), (390, 290)] {
+                assert_eq!(pixel(x, y), 0xFF0000, "pixel ({x},{y})");
+            }
+        }
+        conn.destroy_window(win).unwrap();
+        conn.sync().unwrap();
     }
 }
