@@ -129,34 +129,67 @@ type StreamCallback = unsafe extern "win64" fn(usize, *mut u8, i32, *mut i32) ->
 /// remplissage (20 octets). Lire le rappel à 16 donnait la moitié haute du
 /// pointeur, et Paint.NET sautait à 0x7288 (#1454).
 const EDITSTREAM_CALLBACK: usize = 12;
-const ERROR_CALL_NOT_IMPLEMENTED: u32 = 120;
 
-unsafe fn edit_stream(lp: isize) -> Option<(usize, StreamCallback)> {
+/// Rappel EDITSTREAMCALLBACK du programme : x64, ou x86 en stdcall pour
+/// un programme 32 bits (#1457).
+#[derive(Clone, Copy)]
+enum Stream {
+    X64(usize, StreamCallback),
+    X86(u32, u32),
+}
+
+impl Stream {
+    /// Appelle le rappel : rend son code (0 pour continuer). En x86, le
+    /// tampon et le compteur sont dans la mémoire basse (programme x86),
+    /// leurs adresses tiennent en 32 bits.
+    unsafe fn call(self, buf: *mut u8, cb: i32, pcb: &mut i32) -> u32 {
+        match self {
+            Stream::X64(cookie, f) => f(cookie, buf, cb, pcb),
+            Stream::X86(cookie, f) => {
+                let pcb = pcb as *mut i32 as usize;
+                debug_assert!(buf as usize >> 32 == 0 && pcb >> 32 == 0);
+                crate::wow32::call32(f as usize, &[cookie, buf as u32, cb as u32, pcb as u32])
+                    as u32
+            }
+        }
+    }
+}
+
+/// Lit l'EDITSTREAM (dwError remis à 0). En x86, sous `pack(4)` :
+/// dwCookie (4) à 0, dwError à 4, pfnCallback à 8 (12 octets).
+unsafe fn edit_stream(lp: isize) -> Option<Stream> {
     if lp == 0 {
         return None;
     }
-    if crate::wow32::pointer_size() != 8 {
-        // x86 : dwError à 4. Sans passerelle vers le rappel stdcall (#1457),
-        // le flux est refusé proprement au lieu d'appeler un pointeur 32 bits.
-        ((lp as *mut u8).add(4) as *mut u32).write_unaligned(ERROR_CALL_NOT_IMPLEMENTED);
-        crate::log_warn!(
-            "richedit",
-            "EM_STREAMIN/EM_STREAMOUT d'un programme 32 bits : non servi (#1457)"
-        );
-        return None;
-    }
     let p = lp as *mut u8;
+    if crate::wow32::pointer_size() != 8 {
+        let cookie = (p as *const u32).read_unaligned();
+        let cb = (p.add(8) as *const u32).read_unaligned();
+        if cb == 0 {
+            return None;
+        }
+        (p.add(4) as *mut u32).write_unaligned(0);
+        return Some(Stream::X86(cookie, cb));
+    }
     let cookie = (p as *const usize).read_unaligned();
     let cb = (p.add(EDITSTREAM_CALLBACK) as *const usize).read_unaligned();
     if cb == 0 {
         return None;
     }
     (p.add(8) as *mut u32).write_unaligned(0);
-    Some((cookie, std::mem::transmute::<usize, StreamCallback>(cb)))
+    Some(Stream::X64(
+        cookie,
+        std::mem::transmute::<usize, StreamCallback>(cb),
+    ))
 }
 
 unsafe fn set_stream_error(lp: isize, err: u32) {
-    ((lp as *mut u8).add(8) as *mut u32).write_unaligned(err);
+    let at = if crate::wow32::pointer_size() != 8 {
+        4
+    } else {
+        8
+    };
+    ((lp as *mut u8).add(at) as *mut u32).write_unaligned(err);
 }
 
 /// EM_STREAMIN : le programme fournit le texte par son rappel, en texte
@@ -164,14 +197,14 @@ unsafe fn set_stream_error(lp: isize, err: u32) {
 /// WinForms (RichTextBox.Text) passe par là : sans lui, la zone de détails
 /// de la boîte de plantage de Paint.NET restait vide (#1433).
 unsafe fn stream_in(hwnd: usize, flags: u32, lp: isize) -> isize {
-    let Some((cookie, cb)) = edit_stream(lp) else {
+    let Some(cb) = edit_stream(lp) else {
         return 0;
     };
     let mut bytes = Vec::new();
     let mut buf = vec![0u8; 4096];
     loop {
         let mut got = 0i32;
-        let err = cb(cookie, buf.as_mut_ptr(), buf.len() as i32, &mut got);
+        let err = cb.call(buf.as_mut_ptr(), buf.len() as i32, &mut got);
         if err != 0 {
             set_stream_error(lp, err);
             break;
@@ -218,7 +251,7 @@ unsafe fn stream_in(hwnd: usize, flags: u32, lp: isize) -> isize {
 /// EM_STREAMOUT : rend le texte (ou la sélection) par le rappel, en texte
 /// brut ; le RTF demandé est un RTF minimal autour du même texte.
 unsafe fn stream_out(hwnd: usize, flags: u32, lp: isize) -> isize {
-    let Some((cookie, cb)) = edit_stream(lp) else {
+    let Some(cb) = edit_stream(lp) else {
         return 0;
     };
     let text = if flags & SFF_SELECTION != 0 {
@@ -240,7 +273,7 @@ unsafe fn stream_out(hwnd: usize, flags: u32, lp: isize) -> isize {
     while off < total {
         let chunk = (total - off).min(4096);
         let mut done = 0i32;
-        let err = cb(cookie, bytes[off..].as_mut_ptr(), chunk as i32, &mut done);
+        let err = cb.call(bytes[off..].as_mut_ptr(), chunk as i32, &mut done);
         if err != 0 {
             set_stream_error(lp, err);
             break;
