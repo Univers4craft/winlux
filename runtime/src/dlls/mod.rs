@@ -166,6 +166,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
@@ -986,6 +987,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "ntdsapi",
                 exports: sysdlls::ntdsapi_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "odbc32",
+                exports: odbc32::exports(),
                 handle: fake_module(),
             },
             Builtin {
