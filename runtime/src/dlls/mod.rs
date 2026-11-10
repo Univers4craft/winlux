@@ -17,6 +17,7 @@ pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
+pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
@@ -45,6 +46,7 @@ pub mod crt;
 pub mod crt_extra;
 pub mod crt_more;
 pub mod crt_proc;
+pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -52,6 +54,7 @@ pub mod crt_ucrt;
 pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
+pub mod d2d_combine;
 pub mod d2d_raster;
 pub mod d3d10;
 pub mod d3d11;
@@ -74,6 +77,7 @@ pub mod ddeml;
 pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
+pub mod devnotify;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
@@ -115,6 +119,7 @@ mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
 pub mod hid;
+pub mod hid_report;
 pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
@@ -166,6 +171,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
@@ -232,6 +238,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
@@ -394,6 +401,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
+            e.extend(crt_releve::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -987,6 +995,26 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "ntdsapi",
                 exports: sysdlls::ntdsapi_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "odbc32",
+                exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "activeds",
+                exports: activeds_aclui::activeds_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "aclui",
+                exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wevtapi",
+                exports: wevtapi::exports(),
                 handle: fake_module(),
             },
             Builtin {

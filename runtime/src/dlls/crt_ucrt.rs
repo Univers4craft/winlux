@@ -33,7 +33,7 @@ fn opts(options: u64, wide: bool) -> crate::printf::Opts {
     }
 }
 
-unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8> {
+pub(crate) unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8> {
     let mut v = crate::thunks::VaList::new(va);
     crate::printf::format(
         std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
@@ -42,7 +42,7 @@ unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8>
     )
 }
 
-unsafe fn format_wide(options: u64, fmt: *const u16, va: *const u64) -> Vec<u16> {
+pub(crate) unsafe fn format_wide(options: u64, fmt: *const u16, va: *const u64) -> Vec<u16> {
     let mut v = crate::thunks::VaList::new(va);
     let text = String::from_utf16_lossy(std::slice::from_raw_parts(
         fmt,
@@ -252,7 +252,7 @@ pub unsafe extern "win64" fn stdio_common_vfwprintf(
     }
 }
 pub unsafe extern "win64" fn stdio_common_vsscanf(
-    _options: u64,
+    options: u64,
     buf: *const u8,
     len: usize,
     fmt: *const u8,
@@ -269,11 +269,14 @@ pub unsafe extern "win64" fn stdio_common_vsscanf(
         (0..len).position(|i| *buf.add(i) == 0).unwrap_or(len)
     };
     let mut v = crate::thunks::VaList::new(va);
-    crate::dlls::crt_scan::scan(
-        std::slice::from_raw_parts(buf, n),
-        std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
-        &mut v,
-    )
+    // Bit 0 : _CRT_INTERNAL_SCANF_SECURECRT (sscanf_s).
+    crate::dlls::crt_scan::secure_if(options & 1 != 0, || {
+        crate::dlls::crt_scan::scan(
+            std::slice::from_raw_parts(buf, n),
+            std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
+            &mut v,
+        )
+    })
 }
 
 /// Format de scanf large → format étroit du moteur : %s, %c et %[ sans
@@ -344,7 +347,7 @@ pub(crate) fn wide_scan_format(fmt: &[u16]) -> Vec<u8> {
 /// __stdio_common_vswscanf : le texte large passe au moteur octet par
 /// octet (Latin-1 ; au-delà, « ? »).
 pub unsafe extern "win64" fn stdio_common_vswscanf(
-    _options: u64,
+    options: u64,
     buf: *const u16,
     len: usize,
     fmt: *const u16,
@@ -369,7 +372,9 @@ pub unsafe extern "win64" fn stdio_common_vswscanf(
         crate::printf::wide_len(fmt),
     ));
     let mut v = crate::thunks::VaList::new(va);
-    crate::dlls::crt_scan::scan(&input, &f, &mut v)
+    crate::dlls::crt_scan::secure_if(options & 1 != 0, || {
+        crate::dlls::crt_scan::scan(&input, &f, &mut v)
+    })
 }
 
 // ---------- Flux ----------
