@@ -276,11 +276,7 @@ pub fn parse(d: &[u8]) -> Descriptor {
             (2, 2) => {
                 if let Some(min) = usage_min.take() {
                     let (p, lo) = ((min >> 16) as u16, min as u16);
-                    let hi = if size == 4 {
-                        value as u16
-                    } else {
-                        value as u16
-                    };
+                    let hi = value as u16;
                     usages.push(UsageRange {
                         page: if size == 4 { (value >> 16) as u16 } else { p },
                         min: lo,
@@ -1137,14 +1133,14 @@ pub unsafe extern "win64" fn HidP_UsageListDifference(
 //  hidpi.dll : valeurs
 // ============================================================
 
-fn find_value<'a>(
-    t: &'a Tlc,
+fn find_value(
+    t: &Tlc,
     kind: u8,
     page: u16,
     link: u16,
     usage: u16,
     id: u8,
-) -> Result<(&'a Cap, u32), u32> {
+) -> Result<(&Cap, u32), u32> {
     let mut wrong_id = false;
     for c in t.caps.iter().filter(|c| c.kind == kind && !c.button) {
         if c.page != page || (link != 0 && c.link != link) {
