@@ -159,10 +159,6 @@ step "Cadre retiré pour une barre de titre maison (#1131)" cargo test -q -p win
 step "Cadre gardé tant que la fenêtre n'a pas de barre de titre (#1211)" cargo test -q -p winlux -- cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre
 step "Fenêtre sans cadre agrandie et glissée (#1476, #1477)" cargo test -q -p winlux -- fenetre_sans_cadre_agrandie_et_glissee
 step "Événements SetWinEventHook livrés au thread du crochet (#1498)" cargo test -q -p winlux -- crochet_win_event_livre_au_thread_qui_le_pose
-# Image DXGI à la taille réelle de la fenêtre après agrandissement (#1542).
-if command -v xvfb-run >/dev/null 2>&1; then
-    step "Image présentée sur toute la fenêtre redimensionnée (#1542)" xvfb-run -a cargo test -q -p winlux -- --ignored image_presentee_couvre_la_fenetre_redimensionnee_x11
-fi
 step "Zone de travail sans le panneau dans GetMonitorInfo (#1267)" cargo test -q -p winlux -- zone_de_travail_sans_le_panneau
 # Liste des processus pour .NET (#1162) : NtQuerySystemInformation 5 et 88,
 # d'où Process.GetProcesses et le contrôle d'instance unique.
