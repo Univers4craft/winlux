@@ -84,7 +84,8 @@ def main(argv):
 # Logiciels proposés pour la boutique (10 nov.) : version et empreinte relevées
 # ici, puisque seule la CI atteint les sites des éditeurs.
 CANDIDATS = [
-    {"id": "warzone2100", "github": "Warzone2100/warzone2100", "tag": "4.", "asset": r"^warzone2100_win_installer\.exe$"},
+    # Ajouter ici un logiciel à relever, par exemple
+    # {"id": "x", "github": "org/depot", "tag": "v", "asset": r"^x_[0-9.]+_amd64\\.deb$"},
 ]
 
 

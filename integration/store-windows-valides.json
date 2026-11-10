@@ -128,6 +128,22 @@
     "sha256": "9742689a50e96ddc04d80ceff046b28da2beefd617be18166f8c5e715ec60c59",
     "type": "exe"
    }
+  },
+  {
+   "id": "warzone2100",
+   "name": "Warzone 2100",
+   "version": "4.7.0",
+   "publisher": "Warzone 2100 Project",
+   "category": "jeux",
+   "license": "GPL-2.0",
+   "summary": "Stratégie en temps réel, campagne et parties en ligne.",
+   "homepage": "https://wz2100.net",
+   "size_kb": 380336,
+   "installer": {
+    "url": "https://github.com/Warzone2100/warzone2100/releases/download/4.7.0/warzone2100_win_installer.exe",
+    "sha256": "80ee0913413bdf9b6edef8c53a31f89e6613db3b7324cdd98cae8d3cd571b7cf",
+    "type": "exe"
+   }
   }
  ]
 }
