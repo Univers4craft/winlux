@@ -3183,6 +3183,19 @@ pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
+    let r = move_file_ex_inner(src, dst, flags);
+    crate::trace!(
+        "MoveFileEx({src} -> {dst}, {flags:#x}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+
+fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     let s = crate::paths::to_linux(src);
     let d = crate::paths::to_linux(dst);
     if d.exists() {
@@ -7197,6 +7210,18 @@ pub unsafe extern "win64" fn delete_file_a(path: *const u8) -> i32 {
 /// Corps commun de `delete_file_a` et `delete_file_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn delete_file_str(path: &str) -> i32 {
+    let r = delete_file_str_inner(path);
+    crate::trace!(
+        "DeleteFile({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn delete_file_str_inner(path: &str) -> i32 {
     match std::fs::remove_file(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7215,6 +7240,18 @@ pub unsafe extern "win64" fn create_directory_a(path: *const u8, _sec: usize) ->
 /// Corps commun de `create_directory_a` et `create_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
+    let r = create_directory_str_inner(path, _sec);
+    crate::trace!(
+        "CreateDirectory({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
     match std::fs::create_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
