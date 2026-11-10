@@ -13,9 +13,9 @@ Every program on this page was installed from its official website, in its Windo
 | Software | Category | Checked |
 |---|---|---|
 | VLC | Multimedia | Installs, plays videos and music |
-| Audacity 3.6 | Multimedia | Installs and uninstalls cleanly, opens, records and edits sound |
+| Audacity 3.6 | Multimedia | Installs and uninstalls cleanly, opens and is usable |
 | ScreenToGif | Multimedia | Opens and records the screen |
-| 7-Zip (64 and 32 bit) | Files | Installs, opens and creates archives |
+| 7-Zip (64 and 32 bit) | Files | Installs, opens and creates archives; in a console, `7z.exe` still exits with code 5 ([#1479](issue:1479)) |
 | Notepad++ 8.6 | Documents | Installs and uninstalls cleanly, edits files |
 | SumatraPDF 3.6 | Documents | Opens and displays PDF files |
 | Flow Launcher | Tools | Installs and searches for programs and files |
@@ -43,11 +43,11 @@ Every program on this page was installed from its official website, in its Windo
 
 | Software | Status |
 |---|---|
-| Claude for Windows | Installs, opens, minimizes and closes; the “Maximize” button does not work yet ([#1476](issue:1476)) |
+| Claude for Windows | Installs, opens, minimizes and closes; the “Maximize” button ([#1476](issue:1476)) and moving by the title bar ([#1477](issue:1477)) do not work yet |
 | Paint.NET 5.1 | Installs and uninstalls; opening the main window is being checked ([#138](issue:138)) |
-| Steam | Installs and downloads its client, does not connect yet ([#285](issue:285)) |
+| Steam | Installs and downloads its client, does not connect yet ([#285](issue:285)) and sometimes crashes when closing ([#1440](issue:1440)) |
 | IrfanView | Not fully tried yet ([#488](issue:488)) |
-| Photoshop | Not supported for now |
+| Photoshop | Not fully tried yet |
 
 ## Your software or game is not on the list?
 

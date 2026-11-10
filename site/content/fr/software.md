@@ -13,9 +13,9 @@ Chaque logiciel de cette page a été installé depuis son site officiel, dans s
 | Logiciel | Catégorie | Vérifié |
 |---|---|---|
 | VLC | Multimédia | S'installe, lit vidéos et musique |
-| Audacity 3.6 | Multimédia | S'installe et se désinstalle proprement, s'ouvre, enregistre et modifie du son |
+| Audacity 3.6 | Multimédia | S'installe et se désinstalle proprement, s'ouvre et s'utilise |
 | ScreenToGif | Multimédia | S'ouvre et enregistre l'écran |
-| 7-Zip (64 et 32 bits) | Fichiers | S'installe, ouvre et crée des archives |
+| 7-Zip (64 et 32 bits) | Fichiers | S'installe, ouvre et crée des archives ; en console, `7z.exe` sort encore avec le code 5 ([#1479](issue:1479)) |
 | Notepad++ 8.6 | Documents | S'installe et se désinstalle proprement, édite des fichiers |
 | SumatraPDF 3.6 | Documents | Ouvre et affiche les PDF |
 | Flow Launcher | Outils | S'installe et recherche des programmes et des fichiers |
@@ -43,11 +43,11 @@ Chaque logiciel de cette page a été installé depuis son site officiel, dans s
 
 | Logiciel | Où on en est |
 |---|---|
-| Claude pour Windows | S'installe, s'ouvre, se réduit et se ferme ; le bouton « Agrandir » ne fonctionne pas encore ([#1476](issue:1476)) |
+| Claude pour Windows | S'installe, s'ouvre, se réduit et se ferme ; le bouton « Agrandir » ([#1476](issue:1476)) et le déplacement par la barre de titre ([#1477](issue:1477)) ne fonctionnent pas encore |
 | Paint.NET 5.1 | S'installe et se désinstalle ; l'ouverture de la fenêtre principale est en cours de vérification ([#138](issue:138)) |
-| Steam | S'installe et télécharge son client, ne se connecte pas encore ([#285](issue:285)) |
+| Steam | S'installe et télécharge son client, ne se connecte pas encore ([#285](issue:285)) et plante parfois en se fermant ([#1440](issue:1440)) |
 | IrfanView | Pas encore essayé jusqu'au bout ([#488](issue:488)) |
-| Photoshop | Non pris en charge pour l'instant |
+| Photoshop | Pas encore essayé jusqu'au bout |
 
 ## Votre logiciel ou votre jeu n'est pas dans la liste ?
 

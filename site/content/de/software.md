@@ -13,9 +13,9 @@ Jedes Programm auf dieser Seite wurde von seiner offiziellen Website in der Wind
 | Software | Kategorie | Geprüft |
 |---|---|---|
 | VLC | Multimedia | Installiert sich, spielt Videos und Musik ab |
-| Audacity 3.6 | Multimedia | Saubere Installation und Deinstallation, öffnet sich, nimmt Ton auf und bearbeitet ihn |
+| Audacity 3.6 | Multimedia | Saubere Installation und Deinstallation, öffnet sich und ist benutzbar |
 | ScreenToGif | Multimedia | Öffnet sich und nimmt den Bildschirm auf |
-| 7-Zip (64 und 32 Bit) | Dateien | Installiert sich, öffnet und erstellt Archive |
+| 7-Zip (64 und 32 Bit) | Dateien | Installiert sich, öffnet und erstellt Archive; in der Konsole endet `7z.exe` noch mit Code 5 ([#1479](issue:1479)) |
 | Notepad++ 8.6 | Dokumente | Saubere Installation und Deinstallation, bearbeitet Dateien |
 | SumatraPDF 3.6 | Dokumente | Öffnet und zeigt PDF-Dateien an |
 | Flow Launcher | Werkzeuge | Installiert sich und sucht Programme und Dateien |
@@ -43,11 +43,11 @@ Jedes Programm auf dieser Seite wurde von seiner offiziellen Website in der Wind
 
 | Software | Stand |
 |---|---|
-| Claude für Windows | Installiert sich, öffnet sich, lässt sich minimieren und schließen; die Schaltfläche „Maximieren“ funktioniert noch nicht ([#1476](issue:1476)) |
+| Claude für Windows | Installiert sich, öffnet sich, lässt sich minimieren und schließen; die Schaltfläche „Maximieren“ ([#1476](issue:1476)) und das Verschieben über die Titelleiste ([#1477](issue:1477)) funktionieren noch nicht |
 | Paint.NET 5.1 | Installiert und deinstalliert sich; das Öffnen des Hauptfensters wird gerade geprüft ([#138](issue:138)) |
-| Steam | Installiert sich und lädt seinen Client herunter, verbindet sich noch nicht ([#285](issue:285)) |
+| Steam | Installiert sich und lädt seinen Client herunter, verbindet sich noch nicht ([#285](issue:285)) und stürzt beim Beenden manchmal ab ([#1440](issue:1440)) |
 | IrfanView | Noch nicht vollständig ausprobiert ([#488](issue:488)) |
-| Photoshop | Derzeit nicht unterstützt |
+| Photoshop | Noch nicht vollständig ausprobiert |
 
 ## Ihre Software oder Ihr Spiel fehlt in der Liste?
 

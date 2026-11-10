@@ -13,9 +13,9 @@ Cada programa de esta página se instaló desde su sitio oficial, en su versión
 | Programa | Categoría | Comprobado |
 |---|---|---|
 | VLC | Multimedia | Se instala, reproduce vídeos y música |
-| Audacity 3.6 | Multimedia | Instalación y desinstalación limpias, se abre, graba y edita sonido |
+| Audacity 3.6 | Multimedia | Instalación y desinstalación limpias, se abre y se puede usar |
 | ScreenToGif | Multimedia | Se abre y graba la pantalla |
-| 7-Zip (64 y 32 bits) | Archivos | Se instala, abre y crea archivos comprimidos |
+| 7-Zip (64 y 32 bits) | Archivos | Se instala, abre y crea archivos comprimidos; en consola, `7z.exe` todavía termina con el código 5 ([#1479](issue:1479)) |
 | Notepad++ 8.6 | Documentos | Instalación y desinstalación limpias, edita archivos |
 | SumatraPDF 3.6 | Documentos | Abre y muestra archivos PDF |
 | Flow Launcher | Herramientas | Se instala y busca programas y archivos |
@@ -43,11 +43,11 @@ Cada programa de esta página se instaló desde su sitio oficial, en su versión
 
 | Programa | Estado |
 |---|---|
-| Claude para Windows | Se instala, se abre, se minimiza y se cierra; el botón «Maximizar» todavía no funciona ([#1476](issue:1476)) |
+| Claude para Windows | Se instala, se abre, se minimiza y se cierra; el botón «Maximizar» ([#1476](issue:1476)) y el desplazamiento por la barra de título ([#1477](issue:1477)) todavía no funcionan |
 | Paint.NET 5.1 | Se instala y se desinstala; se está comprobando la apertura de la ventana principal ([#138](issue:138)) |
-| Steam | Se instala y descarga su cliente, todavía no se conecta ([#285](issue:285)) |
+| Steam | Se instala y descarga su cliente, todavía no se conecta ([#285](issue:285)) y a veces falla al cerrarse ([#1440](issue:1440)) |
 | IrfanView | Todavía no probado a fondo ([#488](issue:488)) |
-| Photoshop | No compatible por ahora |
+| Photoshop | Todavía no probado a fondo |
 
 ## ¿Tu programa o juego no está en la lista?
 
