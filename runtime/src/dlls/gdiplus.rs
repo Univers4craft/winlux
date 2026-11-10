@@ -1838,6 +1838,17 @@ unsafe extern "win64" fn get_dpi(g: usize, v: *mut f32) -> i32 {
     }
 }
 
+/// GdipGetNearestColor(graphics, *ARGB) : la couleur la plus proche que la
+/// surface sait rendre. Toutes nos surfaces sont en 32 bits par pixel, donc
+/// la couleur reste telle quelle (#1486). WinForms s'en sert pour les
+/// couleurs de ses menus (ProfessionalColorTable).
+unsafe extern "win64" fn get_nearest_color(g: usize, argb: *mut u32) -> i32 {
+    if graphics(g).is_none() || argb.is_null() {
+        return INVALID_PARAMETER;
+    }
+    OK
+}
+
 /// Facteur des unités de page vers les pixels (96 ppp).
 fn unit_scale(unit: i32) -> f32 {
     match unit {
@@ -5307,7 +5318,6 @@ const NOT_YET: &[&str] = &[
     "GdipGetMetafileHeaderFromFile",
     "GdipGetMetafileHeaderFromMetafile",
     "GdipGetMetafileHeaderFromStream",
-    "GdipGetNearestColor",
     "GdipGetPathData",
     "GdipGetPathGradientBlend",
     "GdipGetPathGradientBlendCount",
@@ -5528,6 +5538,7 @@ pub fn exports() -> Exports {
         "GdipSetRenderingOrigin" => fn set_ignored,
         "GdipGetDpiX" => fn get_dpi,
         "GdipGetDpiY" => fn get_dpi,
+        "GdipGetNearestColor" => fn get_nearest_color,
         "GdipSetWorldTransform" => fn set_world_transform,
         "GdipGetWorldTransform" => fn get_world_transform,
         "GdipResetWorldTransform" => fn reset_world_transform,

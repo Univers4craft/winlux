@@ -196,6 +196,17 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, out: *mut TextMetric
     1
 }
 
+/// GetTextCharset : jeu de caractères de la police du DC, celui que rend
+/// GetTextMetricsW (ANSI_CHARSET : Winlux dessine en Unicode). DC
+/// invalide : DEFAULT_CHARSET (Tk, #1491).
+pub unsafe extern "win64" fn get_text_charset(hdc: usize) -> i32 {
+    let mut tm = std::mem::MaybeUninit::<TextMetricW>::zeroed();
+    if get_text_metrics_w(hdc, tm.as_mut_ptr()) == 0 {
+        return 1;
+    }
+    tm.assume_init().char_set as i32
+}
+
 // ── ExtTextOut ──────────────────────────────────────────────────────
 
 pub unsafe extern "win64" fn ext_text_out_a(
@@ -1580,6 +1591,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetTextMetricsA" => fn get_text_metrics_a,
         "GetTextMetricsW" => fn get_text_metrics_w,
+        "GetTextCharset" => fn get_text_charset,
         "ExtTextOutA" => fn ext_text_out_a,
         "ExtTextOutW" => fn ext_text_out_w,
         "TextOutW" => fn text_out_w,
