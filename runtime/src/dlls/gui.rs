@@ -3540,6 +3540,10 @@ pub fn pump_backend() {
             let y = ((packed >> 16) as u16 as i16) as i32;
             update_window_position(e.hwnd, x, y);
         }
+        // Taille ou position changée par le gestionnaire de fenêtres (agrandir,
+        // restaurer, glisser) : marquée pour que DispatchMessage envoie
+        // d'abord WM_WINDOWPOSCHANGED, comme Windows (#1476).
+        let geometry = matches!(e.message, WM_SIZE | WM_MOVE) && promoted == 0;
         let m = Msg {
             hwnd: e.hwnd,
             message: e.message,
@@ -3547,7 +3551,7 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: promoted,
+            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -3753,6 +3757,9 @@ pub fn request_paint(hwnd: usize) {
 /// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
 /// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
 const SYSTEM_PAINT: u32 = 0x5750;
+/// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
+/// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
+pub const BACKEND_GEOMETRY: u32 = 0x5751;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
@@ -4550,6 +4557,18 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         // déplace ou redimensionne, comme la boucle modale de Windows.
         0x00A1 if wparam == 2 || (10..=17).contains(&wparam) => {
             with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
+            0
+        }
+        // WM_NCLBUTTONDBLCLK sur la légende : agrandir ou restaurer (#1477).
+        0x00A3 if wparam == 2 => {
+            with_backend(|b| {
+                let state = if b.window_state(hwnd) == WINDOW_MAXIMIZED {
+                    WINDOW_NORMAL
+                } else {
+                    WINDOW_MAXIMIZED
+                };
+                b.set_window_state(hwnd, state)
+            });
             0
         }
         // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
