@@ -12,26 +12,17 @@ Winlux abre los programas de Windows gracias a una capa de compatibilidad escrit
 | Programa sencillo de 64 bits (herramientas, utilidades, programas de línea de comandos) | Suele funcionar |
 | Instalador `.msi`, NSIS o Inno Setup | Funciona |
 | Aplicación .NET que incluye su propio entorno de ejecución | Arranca, pero su interfaz no siempre se abre |
-| Interfaces WinForms y WPF | Todavía no |
+| Interfaces WinForms y WPF | Parcial: ScreenToGif y Flow Launcher (WPF) funcionan, muchas otras todavía no |
 | Juegos Direct3D 9, 11 y 12 | Parcial, a comprobar juego por juego |
-| Programa de 32 bits | Parcial: los primeros programas de 32 bits arrancan, muchos todavía no se abren |
+| Programa de 32 bits | Parcial: PuTTY, 7-Zip y WinSCP en 32 bits funcionan, muchos otros todavía no se abren |
 | Controladores, antivirus, antitrampas a nivel de sistema | No compatible |
 | Aplicaciones en paquete MSIX o AppX | Instalación, accesos directos y desinstalación |
 
 ## Programas probados
 
-| Programa | Resultado |
-|---|---|
-| Notepad++ 8.6 | Instalación y desinstalación limpias |
-| WinMerge 2.16 | Instalación y desinstalación limpias |
-| ShareX 16.1 | Instalación y desinstalación limpias |
-| Audacity 3.6 | Instalación y desinstalación limpias |
-| Aplicaciones integradas (Explorador, Administrador de tareas, Editor del Registro…) | Funcionan: ellas mismas son `.exe` ejecutados por Winlux |
-| Paint.NET 5.1 | El instalador oficial se instala y se desinstala; la interfaz todavía no se abre |
-| Claude para Windows | En curso, todavía no utilizable |
-| Photoshop | No compatible |
+La lista de programas y juegos comprobados uno a uno, con lo que funciona y lo que sigue en curso, está en la página [Programas y juegos](page:software).
 
-Esta lista crece con cada versión. El detalle función por función y el orden de los próximos trabajos están en la wiki: [Compatibilidad de las aplicaciones](wiki:Compatibilite-des-applications).
+El detalle función por función y el orden de los próximos trabajos están en la wiki: [Compatibilidad de las aplicaciones](wiki:Compatibilite-des-applications).
 
 ## Lo que viene
 

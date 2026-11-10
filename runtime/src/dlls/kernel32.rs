@@ -3183,6 +3183,19 @@ pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
+    let r = move_file_ex_inner(src, dst, flags);
+    crate::trace!(
+        "MoveFileEx({src} -> {dst}, {flags:#x}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+
+fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     let s = crate::paths::to_linux(src);
     let d = crate::paths::to_linux(dst);
     if d.exists() {
@@ -3337,6 +3350,25 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
     }
     load_library_str(&crate::dlls::cstr(name))
 }
+/// Programme qui charge lui-même OpenGL, Vulkan ou Direct3D (SDL lié en
+/// statique, comme Xonotic) : il dessine sa fenêtre, qui reste donc à
+/// l'échelle 1, comme pour un import direct de ces DLL (#1421). SDL charge
+/// opengl32 avant de créer sa fenêtre.
+fn note_renders_itself(name: &str) {
+    let base = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let base = if base.contains('.') {
+        base
+    } else {
+        format!("{base}.dll")
+    };
+    if crate::dlls::gui_x11::renders_itself(&[base]) {
+        crate::dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// Corps commun de `load_library_a` et `load_library_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn load_library_str(name: &str) -> usize {
@@ -3345,6 +3377,7 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
+    note_renders_itself(n);
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -7177,6 +7210,18 @@ pub unsafe extern "win64" fn delete_file_a(path: *const u8) -> i32 {
 /// Corps commun de `delete_file_a` et `delete_file_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn delete_file_str(path: &str) -> i32 {
+    let r = delete_file_str_inner(path);
+    crate::trace!(
+        "DeleteFile({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn delete_file_str_inner(path: &str) -> i32 {
     match std::fs::remove_file(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7195,6 +7240,18 @@ pub unsafe extern "win64" fn create_directory_a(path: *const u8, _sec: usize) ->
 /// Corps commun de `create_directory_a` et `create_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
+    let r = create_directory_str_inner(path, _sec);
+    crate::trace!(
+        "CreateDirectory({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
     match std::fs::create_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7605,10 +7662,16 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    match remove_dir_or_link(&crate::paths::to_linux(&s.to_string_lossy())) {
-        Ok(()) => 1,
+    let path = s.to_string_lossy();
+    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+        Ok(()) => {
+            crate::trace!("RemoveDirectory({path}) = 1");
+            1
+        }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            let code = io_error_code(&e);
+            crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
+            crate::process::set_last_error(code);
             0
         }
     }

@@ -50,6 +50,7 @@ pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 #[allow(dead_code)]
 pub const WM_SHOWWINDOW: u32 = 0x0018;
+pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 #[allow(dead_code)]
@@ -873,6 +874,19 @@ pub unsafe fn call_wndproc(
     lparam: isize,
 ) -> isize {
     let f: extern "win64" fn(usize, u32, usize, isize) -> isize = std::mem::transmute(wnd_proc);
+    // WINLUX_WINDOW_DIAG=1 : messages d'état de fenêtre reçus par le
+    // programme (affichage, taille, activation, focus), pour les jeux qui
+    // se croient cachés ou réduits (#1421).
+    if crate::dlls::user32::window_diag()
+        && matches!(
+            msg,
+            0x0003 | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0018 | 0x001C | 0x0046 | 0x0047 | 0x0086
+        )
+    {
+        eprintln!(
+            "winlux[fenetre] message {hwnd:#x} {msg:#06x} wparam={wparam:#x} lparam={lparam:#x}"
+        );
+    }
     f(hwnd, msg, wparam, lparam)
 }
 
@@ -3270,6 +3284,65 @@ fn activate_app(active: bool) {
     }
 }
 
+/// Fenêtre de premier niveau active du programme (0 : aucune).
+static ACTIVE_TOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fenêtre de premier niveau qui contient `hwnd`.
+pub fn top_level_of(hwnd: usize) -> usize {
+    let map = lock(windows());
+    let mut h = hwnd;
+    for _ in 0..64 {
+        match map.get(&h) {
+            Some(w) if w.parent != 0 && w.style & 0x4000_0000 != 0 => h = w.parent,
+            Some(_) => return h,
+            None => return 0,
+        }
+    }
+    h
+}
+
+/// Changement de fenêtre active, comme Windows : l'ancienne reçoit
+/// WM_NCACTIVATE(FALSE) puis WM_ACTIVATE(WA_INACTIVE), la nouvelle
+/// WM_NCACTIVATE(TRUE) puis WM_ACTIVATE(WA_ACTIVE), avant WM_SETFOCUS.
+/// SDL ne donne le focus clavier à sa fenêtre qu'à WM_ACTIVATE : sans lui,
+/// Xonotic se croyait inactif et ne présentait plus que son écran de
+/// chargement (#1421).
+/// SetFocus vers une autre fenêtre de premier niveau : la fenêtre active
+/// change tout de suite, et l'appelant envoie lui-même (de façon synchrone,
+/// comme Windows) WM_NCACTIVATE et WM_ACTIVATE. Renvoie l'ancienne fenêtre
+/// active, ou `None` si `new_top` l'était déjà.
+///
+/// Postés plus tard depuis le FocusIn de X11, ces messages arrivaient
+/// périmés : wxWidgets rend le focus à la fenêtre que WM_ACTIVATE déclare
+/// active, ce qui relançait l'échange suivant. Audacity et sa boîte de
+/// bienvenue se renvoyaient ainsi l'activation sans fin, et la boîte
+/// n'était dessinée qu'en partie (#1504).
+pub fn activate_top_for_focus(new_top: usize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    (old != new_top).then_some(old)
+}
+
+fn change_active_top(new_top: usize) {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    if old == new_top {
+        return;
+    }
+    if old != 0 && is_window(old) {
+        post_to_window(old, Msg::new(old, WM_NCACTIVATE, 0, 0));
+        post_to_window(old, Msg::new(old, WM_ACTIVATE, 0, new_top as isize));
+    }
+    if new_top != 0 {
+        post_to_window(new_top, Msg::new(new_top, WM_NCACTIVATE, 1, 0));
+        post_to_window(new_top, Msg::new(new_top, WM_ACTIVATE, 1, old as isize));
+        crate::dlls::chromium_win32::notify_win_event(
+            crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
+            new_top,
+        );
+    }
+}
+
 /// Fenêtre de premier niveau désactivée (propriétaire d'une boîte modale) :
 /// sous Windows, ni elle ni ses filles ne reçoivent clic ou clavier. Une
 /// fille seule désactivée garde le comportement des contrôles.
@@ -3288,6 +3361,26 @@ fn input_disabled(hwnd: usize) -> bool {
         h = w.parent;
     }
     false
+}
+
+/// Message du backend qu'une fenêtre désactivée par une boîte modale ne doit
+/// pas recevoir : `None` s'il est livré, `Some(true)` s'il est refusé et
+/// ramène la boîte au premier plan, `Some(false)` s'il est seulement refusé.
+///
+/// La croix du gestionnaire de fenêtres (WM_DELETE_WINDOW, traduit en
+/// WM_CLOSE) en fait partie : sous Windows, la croix d'une fenêtre désactivée
+/// est inerte. Audacity fermait sinon le projet sous sa boîte « Attention »
+/// encore modale ; la boucle modale de la boîte reprenait ensuite sur des
+/// objets libérés et le tas était corrompu (#1376).
+fn refused_while_disabled(hwnd: usize, message: u32) -> Option<bool> {
+    let mouse = (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message);
+    if !(mouse || message == WM_SETFOCUS || message == WM_CLOSE) || !input_disabled(hwnd) {
+        return None;
+    }
+    let press = matches!(message, 0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7);
+    Some(press || message == WM_SETFOCUS || message == WM_CLOSE)
 }
 
 /// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
@@ -3423,12 +3516,8 @@ pub fn pump_backend() {
         if mouse && !matches!(e.message, 0x020A | 0x020E) {
             mouse_moved_to(e.hwnd);
         }
-        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
-            let press = matches!(
-                e.message,
-                0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
-            );
-            if press || e.message == WM_SETFOCUS {
+        if let Some(raise) = refused_while_disabled(e.hwnd, e.message) {
+            if raise {
                 if let Some(popup) = enabled_owned_popup(e.hwnd) {
                     let mut b = lock(backend());
                     b.raise_window(popup);
@@ -3439,6 +3528,7 @@ pub fn pump_backend() {
         }
         if e.message == WM_SETFOCUS {
             activate_app(true);
+            change_active_top(top_level_of(e.hwnd));
             let change = set_focus_from_backend(e.hwnd);
             if let Some(old) = change {
                 if old != 0 {
@@ -3456,19 +3546,29 @@ pub fn pump_backend() {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
             }
             if !refocused {
+                change_active_top(0);
                 activate_app(false);
             }
             continue;
         }
         if e.message == WM_SIZE {
-            let packed = e.lparam as u32;
-            update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            // Réduite : Windows annonce 0x0, la taille restaurée est gardée.
+            if e.wparam != SIZE_MINIMIZED {
+                let packed = e.lparam as u32;
+                update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            }
+            geometry_win_events(e.hwnd, Some(e.wparam));
         } else if e.message == WM_MOVE {
             let packed = e.lparam as u32;
             let x = (packed as u16 as i16) as i32;
             let y = ((packed >> 16) as u16 as i16) as i32;
             update_window_position(e.hwnd, x, y);
+            geometry_win_events(e.hwnd, None);
         }
+        // Taille ou position changée par le gestionnaire de fenêtres (agrandir,
+        // restaurer, glisser) : marquée pour que DispatchMessage envoie
+        // d'abord WM_WINDOWPOSCHANGED, comme Windows (#1476).
+        let geometry = matches!(e.message, WM_SIZE | WM_MOVE) && promoted == 0;
         let m = Msg {
             hwnd: e.hwnd,
             message: e.message,
@@ -3476,7 +3576,7 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: promoted,
+            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -3484,6 +3584,39 @@ pub fn pump_backend() {
             post_to_window(e.hwnd, m);
         }
     }
+}
+
+const SIZE_MINIMIZED: usize = 1;
+
+/// Événements SetWinEventHook d'un changement de géométrie venu du
+/// gestionnaire de fenêtres (fenêtres de premier niveau) : déplacement ou
+/// taille (EVENT_OBJECT_LOCATIONCHANGE), début et fin de réduction
+/// (EVENT_SYSTEM_MINIMIZESTART / MINIMIZEEND), comme Windows (#1476, #1498).
+fn geometry_win_events(hwnd: usize, size_kind: Option<usize>) {
+    use crate::dlls::chromium_win32 as w;
+    if window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    static MINIMIZED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    if let Some(kind) = size_kind {
+        let mut minimized = lock(&MINIMIZED);
+        let was = minimized.contains(&hwnd);
+        let now = kind == SIZE_MINIMIZED;
+        if now && !was {
+            minimized.push(hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, hwnd);
+            return;
+        }
+        if was && !now {
+            minimized.retain(|&h| h != hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, hwnd);
+            // Restaurée : tout est à redessiner, comme sous Windows.
+            request_paint(hwnd);
+        }
+    }
+    w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, hwnd);
 }
 
 // ---------- Raccourcis globaux (RegisterHotKey) ----------
@@ -3682,6 +3815,9 @@ pub fn request_paint(hwnd: usize) {
 /// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
 /// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
 const SYSTEM_PAINT: u32 = 0x5750;
+/// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
+/// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
+pub const BACKEND_GEOMETRY: u32 = 0x5751;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
@@ -4091,6 +4227,11 @@ pub fn set_title(hwnd: usize, title: &str) -> bool {
 }
 
 /// Change la visibilité ; renvoie l'état précédent.
+/// Drapeau « visible » propre à la fenêtre (sans regarder ses parents).
+pub fn visible_flag(hwnd: usize) -> Option<bool> {
+    lock(windows()).get(&hwnd).map(|w| w.visible)
+}
+
 pub fn set_visible(hwnd: usize, visible: bool) -> bool {
     let mut map = lock(windows());
     match map.get_mut(&hwnd) {
@@ -4474,6 +4615,19 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         // déplace ou redimensionne, comme la boucle modale de Windows.
         0x00A1 if wparam == 2 || (10..=17).contains(&wparam) => {
             with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
+            0
+        }
+        // WM_NCLBUTTONDBLCLK sur la légende : WM_SYSCOMMAND SC_MAXIMIZE ou
+        // SC_RESTORE, comme Windows (#1477).
+        0x00A3 if wparam == 2 => {
+            let mut state = WINDOW_NORMAL;
+            with_backend(|b| state = b.window_state(hwnd));
+            let command = if state == WINDOW_MAXIMIZED {
+                0xF120
+            } else {
+                0xF030
+            };
+            unsafe { crate::dlls::user32::send_message_w(hwnd, 0x0112, command, lparam) };
             0
         }
         // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
@@ -5892,6 +6046,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn setfocus_active_sa_fenetre_une_seule_fois() {
+        // #1504 : SetFocus active la fenêtre de premier niveau tout de
+        // suite ; le FocusIn de X11 qui suit ne doit plus rien reposter.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let a = fenetre_de_test();
+        let b = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(fille, b);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert_eq!(top_level_of(fille), b);
+        activate_top_for_focus(a);
+        assert_eq!(activate_top_for_focus(top_level_of(fille)), Some(a));
+        assert_eq!(activate_top_for_focus(b), None, "déjà active");
+        for h in [fille, b, a] {
+            destroy_window(h);
+        }
+        activate_top_for_focus(0);
+    }
+
+    #[test]
     fn une_fenetre_desactivee_par_une_boite_modale_renvoie_a_la_boite() {
         // #1120 : la fenêtre principale d'Audacity, désactivée par la boîte
         // Tonalité, ne doit recevoir ni clic ni focus.
@@ -5910,7 +6084,19 @@ pub(crate) mod tests {
         );
         assert!(!input_disabled(boite));
         assert_eq!(enabled_owned_popup(fille), Some(boite));
+        // #1376 : la croix d'une fenêtre désactivée ne la ferme pas, elle
+        // ramène la boîte ; la boîte elle-même se ferme normalement.
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0201), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0200), Some(false));
+        assert_eq!(refused_while_disabled(boite, WM_CLOSE), None);
+        assert_eq!(
+            refused_while_disabled(main, 0x0100),
+            None,
+            "clavier : focus déjà sur la boîte"
+        );
         set_window_style(main, 0);
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), None);
         for h in [fille, boite, main] {
             destroy_window(h);
         }
@@ -5926,7 +6112,17 @@ pub(crate) mod tests {
         // Création : la plus récente au sommet.
         let z = enum_top_level_windows();
         assert!(pos(&z, c) < pos(&z, b) && pos(&z, b) < pos(&z, a));
-        assert_eq!(z, enum_top_level_windows(), "ordre reproductible");
+        // Seul l'ordre relatif de a, b et c compte : d'autres tests qui
+        // tournent en parallèle créent et détruisent leurs propres fenêtres
+        // de premier niveau entre deux énumérations (#1484).
+        let les_notres = |list: Vec<usize>| -> Vec<usize> {
+            list.into_iter().filter(|h| [a, b, c].contains(h)).collect()
+        };
+        assert_eq!(
+            les_notres(z),
+            les_notres(enum_top_level_windows()),
+            "ordre reproductible"
+        );
         // Activation : la fenêtre activée passe devant, les autres gardent leur ordre.
         assert_eq!(set_focus(a), Some(0));
         let z = enum_top_level_windows();

@@ -1006,13 +1006,42 @@ pub extern "win64" fn get_device_caps(dc: usize, index: i32) -> i32 {
     if let Some(v) = crate::dlls::winspool::device_caps(dc, index) {
         return v;
     }
+    screen_caps(index, gui::screen_size())
+}
+
+/// GetDeviceCaps d'un DC d'écran : 32 bits par pixel sur un plan, comme
+/// EnumDisplaySettings. Darkplaces (xonotic-wgl.exe) refusait son mode
+/// vidéo avec les 24 bits annoncés jusqu'ici (#1420).
+fn screen_caps(index: i32, (w, h): (i32, i32)) -> i32 {
+    // Taille physique à 96 ppp, en millimètres.
+    let mm = |px: i32| px * 254 / 960;
     match index {
-        8 => gui::screen_size().0,  // HORZRES : écran réel, 1920 sans affichage
-        10 => gui::screen_size().1, // VERTRES
-        12 => 24,                   // BITSPIXEL
-        90 => 96,                   // LOGPIXELSX
-        88 => 96,                   // LOGPIXELSY
+        2 => 1,        // TECHNOLOGY : DT_RASDISPLAY
+        4 => mm(w),    // HORZSIZE
+        6 => mm(h),    // VERTSIZE
+        8 | 118 => w,  // HORZRES, DESKTOPHORZRES : écran réel, 1920 sans affichage
+        10 | 117 => h, // VERTRES, DESKTOPVERTRES
+        12 => 32,      // BITSPIXEL
+        14 => 1,       // PLANES
+        24 => -1,      // NUMCOLORS : plus de 256 couleurs
+        38 => 0x7e99, // RASTERCAPS : BITBLT, BITMAP64, DI_BITMAP, DIBTODEV, STRETCHBLT, STRETCHDIB…
+        88 | 90 => 96, // LOGPIXELSX, LOGPIXELSY
+        104 => 0,     // SIZEPALETTE : pas de palette
+        116 => 60,    // VREFRESH
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod screen_caps_tests {
+    /// #1420 : un DC d'écran annonce 32 bits sur un plan.
+    #[test]
+    fn screen_is_32_bits_one_plane() {
+        let c = |i| super::screen_caps(i, (1920, 1080));
+        assert_eq!(c(12) * c(14), 32);
+        assert_eq!((c(8), c(10), c(118), c(117)), (1920, 1080, 1920, 1080));
+        assert_eq!(c(2), 1);
+        assert_eq!(c(24), -1);
     }
 }
 
