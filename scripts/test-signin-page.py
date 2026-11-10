@@ -98,7 +98,36 @@ try:
             Path(shots).mkdir(parents=True, exist_ok=True)
             subprocess.run(["import", "-window", "root", str(Path(shots) / f"options-connexion-{lang}.png")], check=False)
         if lang == "fr":
-            # Sans lecteur : seule la carte du code PIN.
+            def pump(seconds, until=None):
+                end = time.monotonic() + seconds
+                while time.monotonic() < end and not (until and until()):
+                    while Gtk.events_pending():
+                        Gtk.main_iteration_do(False)
+                    time.sleep(0.01)
+
+            # Boîte « Configurer un code PIN » : une erreur ne la fait pas grandir (#1501).
+            dialog, fields, error = window.signin_dialog(
+                "Configurer un code PIN", [("password", "Mot de passe actuel", False), ("pin", "Nouveau code PIN", True)],
+                "De 4 à 32 chiffres. Évitez les chiffres répétés ou qui se suivent (1111, 1234).")
+            pump(0.5)
+            before = dialog.get_allocated_height(), dialog.get_allocated_width()
+            for message in ("Le mot de passe est incorrect.",
+                            "Le code PIN est bloqué après trop d’essais. Connectez-vous avec votre mot de passe."):
+                error.set_text(message)
+                pump(0.5)
+                after = dialog.get_allocated_height(), dialog.get_allocated_width()
+                check(after == before, f"message d’erreur : la boîte garde sa taille {before} → {after} (#1501)")
+            dialog.destroy()
+            # Sans lecteur : seule la carte du code PIN, puis lecteur branché
+            # page ouverte : la carte arrive seule (#1500).
+            page_globals = window.watch_signin_reader.__func__.__globals__
+            window.page = page_globals["PAGE_ACCOUNTS"]
+            window.SIGNIN_WATCH_MS = 200
+            if getattr(window, "_signin_watch", None):
+                settings["GLib"].source_remove(window._signin_watch)
+            window._signin_watch = None
+            refreshed = []
+            window.extra_refresh = lambda: refreshed.append(True)
             (fake / "alice.fingers").unlink()
             fake.rmdir()
             for child in window.body.get_children():
@@ -106,8 +135,15 @@ try:
             window.sections_signin("alice")
             labels, buttons = texts(window)
             check("Code PIN" in labels and finger not in labels, "sans lecteur : carte empreinte masquée")
+            pump(1.0)
+            check(not refreshed, "sans changement de lecteur : page non reconstruite")
             fake.mkdir()
             (fake / "alice.fingers").write_text("right-index-finger\n")
+            pump(5.0, lambda: refreshed)
+            check(bool(refreshed), "lecteur branché page ouverte : page reconstruite avec la carte empreinte (#1500)")
+            window.page = None
+            pump(0.5)
+            check(window._signin_watch is None, "page quittée : la surveillance du lecteur s’arrête")
             # Sans relais : rien.
             os.environ["WINLUX_ROOT_SOCKET"] = str(work / "absent.sock")
             for child in window.body.get_children():
