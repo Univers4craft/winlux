@@ -26,6 +26,10 @@ import sys
 
 PE_EXT = (".exe", ".dll", ".pyd", ".node")
 
+# Miroir de runtime/src/dlls/mod.rs::prefers_real_file : pour ces DLL, le
+# chargeur prend la copie livrée avec l'appli avant la version maison.
+PREFERS_REAL = {"msvcp140", "libstdc++-6", "libgcc_s_seh-1", "libgcc_s_dw2-1", "libwinpthread-1"}
+
 # Motifs (fnmatch) de DLL supposées livrées par l'écosystème de l'appli,
 # par exemple « --fourni=python3*.dll » pour des modules Python.
 ASSUMED = []
@@ -56,6 +60,8 @@ def normalize(dll: str) -> str:
         "api-ms-win-eventing-provider-l1-"
     ):
         return "advapi32"
+    if base.startswith("api-ms-win-ro-typeresolution-"):
+        return "wintypes"
     if base.startswith("msvcr") and base != "msvcrt":
         return "msvcrt"
     if base == "wsock32":
@@ -144,7 +150,10 @@ def analyse(exports, root):
             for entry in getattr(pe, attr, []):
                 raw = entry.dll.decode("ascii", "replace")
                 n = normalize(raw)
-                # Comme le chargeur : une DLL intégrée passe avant la copie livrée.
+                # Comme le chargeur : une DLL intégrée passe avant la copie
+                # livrée, sauf celles où la vraie est préférée (msvcp140…).
+                if n in PREFERS_REAL and (raw.lower() in shipped or n in shipped_norm):
+                    continue
                 if n not in exports and (
                     raw.lower() in shipped
                     or n in shipped_norm
