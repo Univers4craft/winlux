@@ -17,6 +17,7 @@ pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
+pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
@@ -235,6 +236,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
@@ -996,6 +998,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "odbc32",
                 exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "activeds",
+                exports: activeds_aclui::activeds_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "aclui",
+                exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wevtapi",
+                exports: wevtapi::exports(),
                 handle: fake_module(),
             },
             Builtin {
