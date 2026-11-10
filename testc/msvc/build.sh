@@ -35,6 +35,16 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hid_msvc.c" -o "$tmp/hid_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_msvc.obj" \
     "$tmp/kernel32_hid.lib" "$tmp/setupapi.lib" "$tmp/hid.lib" /out:"$out/hid_msvc.exe"
+# Logiciel d'éclairage (#1523) : cfgmgr32, collections de tête, HidP_*.
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nReadFile\nWriteFile\nCloseHandle\nGetLastError\nGetTickCount64\n' >"$tmp/kernel32_hidrgb.def"
+printf 'LIBRARY cfgmgr32.dll\nEXPORTS\nCM_Get_Device_Interface_List_SizeW\nCM_Get_Device_Interface_ListW\nCM_Get_Device_Interface_PropertyW\nCM_Locate_DevNodeW\nCM_Get_DevNode_PropertyW\n' >"$tmp/cfgmgr32_hidrgb.def"
+printf 'LIBRARY hid.dll\nEXPORTS\nHidD_GetHidGuid\nHidD_GetAttributes\nHidD_GetManufacturerString\nHidD_GetProductString\nHidD_GetSerialNumberString\nHidD_GetIndexedString\nHidD_GetPreparsedData\nHidD_FreePreparsedData\nHidD_GetFeature\nHidP_GetCaps\nHidP_GetValueCaps\nHidP_GetUsages\nHidP_InitializeReportForID\nHidP_SetUsageValueArray\n' >"$tmp/hid_hidrgb.def"
+for d in kernel32_hidrgb cfgmgr32_hidrgb hid_hidrgb; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hid_rgb_msvc.c" -o "$tmp/hid_rgb_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_rgb_msvc.obj" \
+    "$tmp/kernel32_hidrgb.lib" "$tmp/cfgmgr32_hidrgb.lib" "$tmp/hid_hidrgb.lib" /out:"$out/hid_rgb_msvc.exe"
 # DeviceIoControl sur volumes, disques et fichiers creux (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nDeviceIoControl\nWriteFile\nReadFile\nSetFilePointer\nCloseHandle\nGetLastError\n' >"$tmp/kernel32_devio.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_devio.def" -l "$tmp/kernel32_devio.lib"
