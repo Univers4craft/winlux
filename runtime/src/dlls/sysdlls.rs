@@ -437,8 +437,34 @@ pub unsafe extern "win64" fn mf_create_video_sample_from_surface(
 }
 
 // --------------------------------------------------------------------------
-// ktmw32 : transactions NTFS, absentes sous Linux.
+// ktmw32 : transactions du gestionnaire KTM, sans isolation.
+//
+// Linux n'a pas de Transactional NTFS. Sous Windows, CreateTransaction ne
+// dépend pas du volume et réussit toujours ; seules les opérations de
+// fichiers transactionnelles peuvent échouer (volume FAT, réseau). Le
+// programme d'installation de Steam x86 traitait l'échec de
+// CreateTransaction comme une installation impossible : il écrivait
+// `.ntfs_transaction_failed`, ne mettait aucun fichier extrait en place et
+// la mise à jour recommençait sans fin (#1475).
+//
+// Une transaction est donc une vraie poignée (un événement, que
+// CloseHandle ferme), et les fonctions *Transacted de kernel32 agissent
+// tout de suite. CommitTransaction n'a rien à valider ; RollbackTransaction
+// ne peut pas défaire ce qui est déjà fait, et le journal le dit.
 // --------------------------------------------------------------------------
+
+fn transactions() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+        std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+fn is_transaction(h: usize) -> bool {
+    transactions()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&h)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub extern "win64" fn create_transaction(
@@ -450,8 +476,19 @@ pub extern "win64" fn create_transaction(
     _timeout: u32,
     _description: *const u16,
 ) -> usize {
-    crate::process::set_last_error(ERROR_NOT_SUPPORTED);
-    INVALID_HANDLE_VALUE
+    // Événement à réinitialisation manuelle, non signalé : une poignée que
+    // CloseHandle et DuplicateHandle connaissent.
+    let h = unsafe { super::kernel32::create_event_w(0, 1, 0, std::ptr::null()) };
+    if h == 0 || h == INVALID_HANDLE_VALUE {
+        return INVALID_HANDLE_VALUE;
+    }
+    transactions()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(h);
+    crate::trace!("CreateTransaction = {h:#x} (opérations immédiates, sans isolation)");
+    crate::process::set_last_error(ERROR_SUCCESS);
+    h
 }
 
 pub extern "win64" fn open_transaction(_access: u32, _guid: usize) -> usize {
@@ -459,13 +496,41 @@ pub extern "win64" fn open_transaction(_access: u32, _guid: usize) -> usize {
     INVALID_HANDLE_VALUE
 }
 
-/// Aucune transaction ne peut exister : toute poignée est invalide.
-pub extern "win64" fn transaction_op(_h: usize) -> i32 {
-    fail(ERROR_INVALID_HANDLE)
+/// CommitTransaction(Async) : tout est déjà écrit.
+pub extern "win64" fn commit_transaction(h: usize) -> i32 {
+    if !is_transaction(h) {
+        return fail(ERROR_INVALID_HANDLE);
+    }
+    crate::trace!("CommitTransaction({h:#x})");
+    1
 }
 
-pub extern "win64" fn get_transaction_id(_h: usize, _guid: usize) -> i32 {
-    fail(ERROR_INVALID_HANDLE)
+/// RollbackTransaction(Async) : les opérations faites restent faites.
+pub extern "win64" fn rollback_transaction(h: usize) -> i32 {
+    if !is_transaction(h) {
+        return fail(ERROR_INVALID_HANDLE);
+    }
+    crate::log_warn!(
+        "ktmw32",
+        "RollbackTransaction({h:#x}) : les opérations déjà faites ne sont pas défaites"
+    );
+    1
+}
+
+/// GetTransactionId : un GUID propre à la poignée.
+pub unsafe extern "win64" fn get_transaction_id(h: usize, guid: *mut u8) -> i32 {
+    if !is_transaction(h) {
+        return fail(ERROR_INVALID_HANDLE);
+    }
+    if guid.is_null() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let mut g = [0u8; 16];
+    g[..8].copy_from_slice(&(h as u64).to_le_bytes());
+    g[8..12].copy_from_slice(&std::process::id().to_le_bytes());
+    g[12..].copy_from_slice(b"KTMw");
+    std::ptr::copy_nonoverlapping(g.as_ptr(), guid, 16);
+    1
 }
 
 // --------------------------------------------------------------------------
@@ -622,10 +687,10 @@ pub fn ktmw32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "CreateTransaction" => fn create_transaction,
         "OpenTransaction" => fn open_transaction,
-        "CommitTransaction" => fn transaction_op,
-        "CommitTransactionAsync" => fn transaction_op,
-        "RollbackTransaction" => fn transaction_op,
-        "RollbackTransactionAsync" => fn transaction_op,
+        "CommitTransaction" => fn commit_transaction,
+        "CommitTransactionAsync" => fn commit_transaction,
+        "RollbackTransaction" => fn rollback_transaction,
+        "RollbackTransactionAsync" => fn rollback_transaction,
         "GetTransactionId" => fn get_transaction_id,
     }
 }
@@ -771,6 +836,21 @@ mod tests {
             assert_eq!(granted & 0x001F_01FF, 0x001F_01FF);
             assert_eq!(error, 0);
         }
+    }
+
+    #[test]
+    fn transaction_sans_isolation() {
+        // #1475 : CreateTransaction réussit comme sous Windows ; la
+        // poignée se valide, s'annule (sans rien défaire) et se ferme.
+        let h = create_transaction(0, 0, 0, 0, 0, 0, std::ptr::null());
+        assert!(h != 0 && h != INVALID_HANDLE_VALUE);
+        let mut guid = [0u8; 16];
+        assert_eq!(unsafe { get_transaction_id(h, guid.as_mut_ptr()) }, 1);
+        assert_ne!(guid, [0u8; 16]);
+        assert_eq!(commit_transaction(h), 1);
+        assert_eq!(rollback_transaction(h), 1);
+        assert_eq!(commit_transaction(0x1234), 0);
+        assert_eq!(crate::dlls::kernel32::close_handle(h), 1);
     }
 
     #[test]
