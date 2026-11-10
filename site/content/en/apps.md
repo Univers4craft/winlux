@@ -20,16 +20,7 @@ Winlux opens Windows programs thanks to a compatibility layer written from scrat
 
 ## Software tried
 
-| Software | Result |
-|---|---|
-| Notepad++ 8.6 | Clean install and uninstall |
-| WinMerge 2.16 | Clean install and uninstall |
-| ShareX 16.1 | Clean install and uninstall |
-| Audacity 3.6 | Clean install and uninstall |
-| Built-in applications (Explorer, Task Manager, Registry Editor…) | Work: they are themselves `.exe` files run by Winlux |
-| Paint.NET 5.1 | The official installer installs and uninstalls; the interface does not open yet |
-| Claude for Windows | In progress, not usable yet |
-| Photoshop | Not supported |
+The list of software and games checked one by one, with what works and what is still in progress, is on the [Software and games](page:software) page.
 
 This list grows with every version. The function-by-function details and the order of the next work items are in the wiki: [Application compatibility](wiki:Compatibilite-des-applications).
 

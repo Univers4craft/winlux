@@ -20,16 +20,7 @@ Winlux öffnet Windows-Programme dank einer von Grund auf geschriebenen Kompatib
 
 ## Ausprobierte Software
 
-| Software | Ergebnis |
-|---|---|
-| Notepad++ 8.6 | Saubere Installation und Deinstallation |
-| WinMerge 2.16 | Saubere Installation und Deinstallation |
-| ShareX 16.1 | Saubere Installation und Deinstallation |
-| Audacity 3.6 | Saubere Installation und Deinstallation |
-| Eingebaute Anwendungen (Explorer, Task-Manager, Registrierungs-Editor…) | Funktionieren: Sie sind selbst `.exe`-Dateien, die Winlux ausführt |
-| Paint.NET 5.1 | Das offizielle Installationsprogramm installiert und deinstalliert sauber; die Oberfläche öffnet sich noch nicht |
-| Claude für Windows | In Arbeit, noch nicht nutzbar |
-| Photoshop | Nicht unterstützt |
+Die Liste der einzeln geprüften Programme und Spiele, mit dem, was funktioniert und was noch in Arbeit ist, steht auf der Seite [Software und Spiele](page:software).
 
 Diese Liste wächst mit jeder Version. Die Einzelheiten Funktion für Funktion und die Reihenfolge der nächsten Arbeiten stehen im Wiki: [Kompatibilität der Anwendungen](wiki:Compatibilite-des-applications).
 
