@@ -3288,7 +3288,7 @@ fn activate_app(active: bool) {
 static ACTIVE_TOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Fenêtre de premier niveau qui contient `hwnd`.
-fn top_level_of(hwnd: usize) -> usize {
+pub fn top_level_of(hwnd: usize) -> usize {
     let map = lock(windows());
     let mut h = hwnd;
     for _ in 0..64 {
@@ -3307,6 +3307,22 @@ fn top_level_of(hwnd: usize) -> usize {
 /// SDL ne donne le focus clavier à sa fenêtre qu'à WM_ACTIVATE : sans lui,
 /// Xonotic se croyait inactif et ne présentait plus que son écran de
 /// chargement (#1421).
+/// SetFocus vers une autre fenêtre de premier niveau : la fenêtre active
+/// change tout de suite, et l'appelant envoie lui-même (de façon synchrone,
+/// comme Windows) WM_NCACTIVATE et WM_ACTIVATE. Renvoie l'ancienne fenêtre
+/// active, ou `None` si `new_top` l'était déjà.
+///
+/// Postés plus tard depuis le FocusIn de X11, ces messages arrivaient
+/// périmés : wxWidgets rend le focus à la fenêtre que WM_ACTIVATE déclare
+/// active, ce qui relançait l'échange suivant. Audacity et sa boîte de
+/// bienvenue se renvoyaient ainsi l'activation sans fin, et la boîte
+/// n'était dessinée qu'en partie (#1504).
+pub fn activate_top_for_focus(new_top: usize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    (old != new_top).then_some(old)
+}
+
 fn change_active_top(new_top: usize) {
     use std::sync::atomic::Ordering;
     let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
@@ -5965,6 +5981,26 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn setfocus_active_sa_fenetre_une_seule_fois() {
+        // #1504 : SetFocus active la fenêtre de premier niveau tout de
+        // suite ; le FocusIn de X11 qui suit ne doit plus rien reposter.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let a = fenetre_de_test();
+        let b = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(fille, b);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert_eq!(top_level_of(fille), b);
+        activate_top_for_focus(a);
+        assert_eq!(activate_top_for_focus(top_level_of(fille)), Some(a));
+        assert_eq!(activate_top_for_focus(b), None, "déjà active");
+        for h in [fille, b, a] {
+            destroy_window(h);
+        }
+        activate_top_for_focus(0);
     }
 
     #[test]

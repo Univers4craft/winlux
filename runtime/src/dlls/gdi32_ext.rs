@@ -791,12 +791,20 @@ unsafe fn decode_dib_pixels(
     };
     let mut pixels = Vec::with_capacity(count);
     for dy in 0..src_h {
+        // DIB bas-haut : l'origine de la source est le coin inférieur
+        // gauche, et src_y compte les lignes depuis le bas (documentation de
+        // StretchDIBits et SetDIBitsToDevice). La ligne du haut du rectangle
+        // est donc la ligne mémoire src_y + src_h - 1. wxWidgets dessine
+        // ainsi les boutons d'Audacity, découpés dans une grande DIB : on
+        // lisait le bas de l'image, vide, et les barres d'outils restaient
+        // blanches (#1485).
         let row = if top_down {
             (src_y as usize).wrapping_add(dy)
         } else {
-            abs_h
+            (src_y as usize)
+                .checked_add(src_h)?
                 .checked_sub(1)?
-                .checked_sub((src_y as usize).wrapping_add(dy))?
+                .checked_sub(dy)?
         };
         if row >= abs_h {
             pixels.extend(std::iter::repeat_n(0u32, src_w));
@@ -946,6 +954,35 @@ mod reviewed_dib_tests {
             assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 2, 1).is_none());
             info.width = -2;
             assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 2, 1).is_none());
+        }
+    }
+    /// #1485 : dans une DIB bas-haut, src_y part du bas. Une bande de deux
+    /// lignes prise à src_y = 2 sur quatre est le haut de l'image (lignes
+    /// mémoire 3 puis 2), pas son bas.
+    #[test]
+    fn bottom_up_source_band_counts_from_the_bottom() {
+        let mut info = header(32, 4);
+        info.width = 1;
+        // Lignes mémoire 0 à 3, de bas en haut : rouges 1, 2, 3, 4 (BGRA).
+        let pixels: [u8; 16] = [0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0];
+        unsafe {
+            let base = &info as *const _ as *const u8;
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 1, 2),
+                Some(vec![4, 3]),
+                "haut de l'image"
+            );
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 1, 2),
+                Some(vec![2, 1]),
+                "bas de l'image"
+            );
+            info.height = -4;
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 1, 2),
+                Some(vec![3, 4]),
+                "haut-bas : src_y part du haut"
+            );
         }
     }
 }
