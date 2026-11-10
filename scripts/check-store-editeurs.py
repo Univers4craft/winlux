@@ -91,6 +91,15 @@ CANDIDATS = [
     {"id": "thunderbird", "base": "https://packages.mozilla.org/apt/", "index": "dists/mozilla/main/binary-amd64/Packages",
      "package": "thunderbird"},
     {"id": "protonmail", "json": "https://proton.me/download/mail/linux/version.json"},
+    # .exe validés au banc, pour le catalogue Windows de Winlux (#1515).
+    {"id": "7zip", "url": "https://www.7-zip.org/a/7z2409-x64.exe"},
+    {"id": "notepadplusplus", "github": "notepad-plus-plus/notepad-plus-plus", "tag": "v",
+     "asset": r"^npp\.[0-9.]+\.Installer\.x64\.exe$"},
+    {"id": "sumatrapdf", "url": "https://www.sumatrapdfreader.org/dl/rel/3.5.2/SumatraPDF-3.5.2-64-install.exe"},
+    {"id": "screentogif", "github": "NickeManarin/ScreenToGif", "tag": "", "asset": r"^ScreenToGif\.[0-9.]+\.Setup\.x64\.msi$"},
+    {"id": "flowlauncher", "github": "Flow-Launcher/Flow.Launcher", "tag": "v", "asset": r"^Flow-Launcher-Setup\.exe$"},
+    {"id": "putty", "url": "https://the.earth.li/~sgtatham/putty/0.83/w64/putty-64bit-0.83-installer.msi"},
+    {"id": "vlc", "url": "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"},
 ]
 
 
@@ -118,7 +127,7 @@ def candidats():
                         print(f"{c['id']}: téléchargement impossible ({r.stderr.strip()})")
                         continue
                     fields = subprocess.run(["dpkg-deb", "-f", str(deb), "Package", "Version", "Depends"],
-                                            capture_output=True, text=True).stdout
+                                            capture_output=True, text=True).stdout if a["name"].endswith(".deb") else ""
                     print(f"{c['id']}: {rels[0]['tag_name']} url={a['browser_download_url']} "
                           f"finale={urllib.parse.urlparse(r.stdout.strip()).hostname} "
                           f"sha256={hashlib.sha256(deb.read_bytes()).hexdigest()} api={a.get('digest')} "
@@ -136,6 +145,12 @@ def candidats():
                         last = dict(l.split(": ", 1) for l in blocks[-1].splitlines() if ": " in l and not l.startswith(" "))
                         print(f"    dernière {last.get('Version')} Filename={last.get('Filename')} "
                               f"SHA256={last.get('SHA256')} Size={last.get('Size')}")
+                elif "url" in c:
+                    f = work / "fichier"
+                    r = curl(c["url"], f)
+                    print(f"{c['id']}: " + (f"url={c['url']} finale={urllib.parse.urlparse(r.stdout.strip()).hostname} "
+                                            f"sha256={hashlib.sha256(f.read_bytes()).hexdigest()} size={f.stat().st_size}"
+                                            if not r.returncode else f"injoignable ({r.stderr.strip()})"))
                 else:
                     r = curl(c["json"], work / "v.json")
                     print(f"{c['id']}: " + ((work / "v.json").read_text(errors="replace")[:1500] if not r.returncode
