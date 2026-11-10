@@ -136,6 +136,16 @@ unsafe extern "win64" fn NetUserModalsGet(_server: usize, _level: u32, buf: *mut
     ERROR_NOT_SUPPORTED
 }
 
+/// NetGetDCName : Winlux n'est jamais membre d'un domaine, il n'y a pas
+/// de contrôleur de domaine (NERR_DCNotFound). Tk s'en sert pour le nom
+/// de l'utilisateur (#1491).
+unsafe extern "win64" fn NetGetDCName(_server: usize, _domain: usize, buf: *mut usize) -> u32 {
+    if !buf.is_null() {
+        *buf = 0;
+    }
+    2453
+}
+
 pub fn netapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "NetApiBufferFree" => fn NetApiBufferFree,
@@ -148,6 +158,7 @@ pub fn netapi32_exports() -> crate::dlls::Exports {
         "NetLocalGroupDel" => fn NetLocalGroupDel,
         "NetLocalGroupGetMembers" => fn NetLocalGroupGetMembers,
         "NetUserModalsGet" => fn NetUserModalsGet,
+        "NetGetDCName" => fn NetGetDCName,
     }
 }
 
