@@ -12,26 +12,17 @@ Winlux opens Windows programs thanks to a compatibility layer written from scrat
 | Simple 64-bit program (tools, utilities, command-line programs) | Usually works |
 | `.msi`, NSIS or Inno Setup installer | Works |
 | .NET application that ships its own runtime | Starts, but its interface does not always open |
-| WinForms and WPF interfaces | Not yet |
+| WinForms and WPF interfaces | Partial: ScreenToGif and Flow Launcher (WPF) work, many others not yet |
 | Direct3D 9, 11 and 12 games | Partial, to be checked game by game |
-| 32-bit program | Partial: the first 32-bit programs start, many do not open yet |
+| 32-bit program | Partial: PuTTY, 7-Zip and WinSCP in 32 bit work, many others do not open yet |
 | Drivers, antivirus, system-level anti-cheat | Not supported |
 | Applications packaged as MSIX or AppX | Install, shortcuts and uninstall |
 
 ## Software tried
 
-| Software | Result |
-|---|---|
-| Notepad++ 8.6 | Clean install and uninstall |
-| WinMerge 2.16 | Clean install and uninstall |
-| ShareX 16.1 | Clean install and uninstall |
-| Audacity 3.6 | Clean install and uninstall |
-| Built-in applications (Explorer, Task Manager, Registry Editor…) | Work: they are themselves `.exe` files run by Winlux |
-| Paint.NET 5.1 | The official installer installs and uninstalls; the interface does not open yet |
-| Claude for Windows | In progress, not usable yet |
-| Photoshop | Not supported |
+The list of software and games checked one by one, with what works and what is still in progress, is on the [Software and games](page:software) page.
 
-This list grows with every version. The function-by-function details and the order of the next work items are in the wiki: [Application compatibility](wiki:Compatibilite-des-applications).
+The function-by-function details and the order of the next work items are in the wiki: [Application compatibility](wiki:Compatibilite-des-applications).
 
 ## What comes next
 
