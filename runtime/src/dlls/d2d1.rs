@@ -1725,7 +1725,9 @@ unsafe extern "win64" fn target_shared_bitmap(
     let straight = fmt == FMT_BGRA32;
     // D2D1_ALPHA_MODE_IGNORE (3) : alpha ignoré, pixels opaques.
     let ignore = fmt == FMT_BGR32 || props.as_ref().is_some_and(|p| p[1] == 3);
-    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 {
+    // Formats larges (#1520) : 16 bits, demi-flottants, flottants.
+    let wide = super::wic_pixels::layout(&fmt);
+    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && wide.is_none() {
         crate::log_warn!(
             "d2d1",
             "CreateSharedBitmap : format de verrou {:?} non pris en charge",
@@ -1736,12 +1738,20 @@ unsafe extern "win64" fn target_shared_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let row = w as usize * 4;
+    let src_bpp = wide.map_or(4, |l| l.bpp as usize);
+    let src_row = w as usize * src_bpp;
     if ptr.is_null()
-        || (stride as usize) < row
-        || (size as usize) < stride as usize * (h as usize - 1) + row
+        || (stride as usize) < src_row
+        || (size as usize) < stride as usize * (h as usize - 1) + src_row
     {
         return E_INVALIDARG;
+    }
+    let row = w as usize * 4;
+    if let Some(l) = wide {
+        let src = std::slice::from_raw_parts(ptr, stride as usize * (h as usize - 1) + src_row);
+        let px = wide_to_pbgra(&l, src, w as usize, h as usize, stride as usize, ignore);
+        let b = Bitmap::new(w, h, px);
+        return put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b));
     }
     let mut px = vec![0u8; row * h as usize];
     for y in 0..h as usize {
@@ -1763,6 +1773,37 @@ unsafe extern "win64" fn target_shared_bitmap(
     }
     let b = Bitmap::new(w, h, px);
     put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
+}
+
+/// Pixels d'un format WIC large (16 bits, demi-flottants, flottants) en
+/// BGRA 8 bits prémultiplié. Les formats flottants portent des valeurs
+/// linéaires (scRGB) : elles sont encodées sRGB pour la cible 8 bits.
+fn wide_to_pbgra(
+    l: &super::wic_pixels::Layout,
+    src: &[u8],
+    w: usize,
+    h: usize,
+    stride: usize,
+    ignore: bool,
+) -> Vec<u8> {
+    use super::wic_pixels::{linear_to_srgb, read};
+    let bpp = l.bpp as usize;
+    let mut px = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let mut c = read(l, &src[y * stride + x * bpp..][..bpp]);
+            if l.linear() {
+                for v in &mut c[..3] {
+                    *v = linear_to_srgb(*v);
+                }
+            }
+            let a = if ignore { 1.0 } else { c[3].clamp(0.0, 1.0) };
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let d = &mut px[(y * w + x) * 4..][..4];
+            d.copy_from_slice(&[q(c[2] * a), q(c[1] * a), q(c[0] * a), q(a)]);
+        }
+    }
+    px
 }
 
 /// CreateBitmapFromWicBitmap : lit la source WIC convertie en BGRA prémultiplié.
@@ -3271,6 +3312,26 @@ mod tests {
             release_obj(bmp);
             release_obj(f);
         }
+    }
+
+    /// #1520 : un verrou WIC en 64bppPRGBAHalf (valeurs linéaires
+    /// prémultipliées) devient du BGRA 8 bits prémultiplié encodé sRGB.
+    #[test]
+    fn verrou_demi_flottant_en_bgra() {
+        use super::super::wic_pixels::{f32_to_half, layout, FMT_PRGBA_HALF64};
+        let l = layout(&FMT_PRGBA_HALF64).unwrap();
+        let px = |c: [f32; 4]| -> Vec<u8> {
+            c.iter()
+                .flat_map(|v| f32_to_half(*v).to_le_bytes())
+                .collect()
+        };
+        // Blanc opaque, puis rouge linéaire 0,5 à demi transparent.
+        let src = [px([1.0, 1.0, 1.0, 1.0]), px([0.25, 0.0, 0.0, 0.5])].concat();
+        let out = wide_to_pbgra(&l, &src, 2, 1, 16, false);
+        assert_eq!(&out[..4], &[255, 255, 255, 255]);
+        assert_eq!(&out[4..], &[0, 0, 94, 128]);
+        let opaque = wide_to_pbgra(&l, &src, 2, 1, 16, true);
+        assert_eq!(&opaque[4..], &[0, 0, 188, 255]);
     }
 
     /// #1399 : CreateSharedBitmap partage un IWICBitmapLock (Paint.NET,
