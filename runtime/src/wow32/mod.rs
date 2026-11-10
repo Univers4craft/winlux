@@ -1231,6 +1231,8 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "ucrtbase"
         || n.starts_with("msvcr")
         || n.starts_with("msvcp")
+        // operator new / delete de MFC 4.2 (signtool.exe, #1394).
+        || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
 }
 

@@ -409,6 +409,30 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!shf || !GetProcAddress(shf, "SHGetFolderPathW")) fail(58, 0);
     }
 
+    /* 81-82 : mfc42 (operator new/delete en cdecl, par numéro) et
+     * mssign32 (stdcall, échec propre) de signtool.exe x86 (#1394). */
+    {
+        typedef void *(__cdecl *new_fn)(unsigned);
+        typedef void(__cdecl *del_fn)(void *);
+        typedef long(__stdcall *sign_fn)(void *, void *, void *, void *, void *, void *, void *);
+        HANDLE mfc = LoadLibraryA("mfc42.dll"), ms = LoadLibraryA("mssign32.dll");
+        new_fn nw = mfc ? (new_fn)GetProcAddress(mfc, (const char *)823) : 0;
+        del_fn dl = mfc ? (del_fn)GetProcAddress(mfc, (const char *)825) : 0;
+        sign_fn sg = ms ? (sign_fn)GetProcAddress(ms, "SignerSign") : 0;
+        if (!nw || !dl || !sg) fail(81, (DWORD)(size_t)nw);
+        unsigned esp0, esp1;
+        __asm__ volatile("movl %%esp, %0" : "=r"(esp0));
+        char *p = (char *)nw(40);
+        if (p) p[39] = 7;
+        dl(p);
+        __asm__ volatile("movl %%esp, %0" : "=r"(esp1));
+        if (!p || esp0 != esp1) fail(81, esp0 - esp1);
+        __asm__ volatile("movl %%esp, %0" : "=r"(esp0));
+        long hr = sg(0, 0, 0, 0, 0, 0, 0);
+        __asm__ volatile("movl %%esp, %0" : "=r"(esp1));
+        if (hr != (long)0x80004001 || esp0 != esp1) fail(82, (DWORD)hr);
+    }
+
     /* 59-61 : VARIANT x86 (16 octets, BSTR sur 4 octets à +8, 4 octets
      * quelconques derrière) : VariantCopy et VariantClear n'en lisent que 4. */
     {

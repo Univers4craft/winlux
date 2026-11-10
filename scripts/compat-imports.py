@@ -60,6 +60,8 @@ def normalize(dll: str) -> str:
         "api-ms-win-eventing-provider-l1-"
     ):
         return "advapi32"
+    if base.startswith("api-ms-win-ro-typeresolution-"):
+        return "wintypes"
     if base.startswith("msvcr") and base != "msvcrt":
         return "msvcrt"
     if base == "wsock32":
