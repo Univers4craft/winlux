@@ -298,10 +298,12 @@ unsafe fn first_common(path: &str, data: *mut c_void, wide: bool) -> usize {
     let mut entries = match enumerate(path) {
         Ok(x) => x,
         Err(e) => {
+            crate::trace!("FindFirstFile({path}) = échec (erreur {e})");
             error(e);
             return usize::MAX;
         }
     };
+    crate::trace!("FindFirstFile({path}) = {} entrée(s)", entries.len());
     let first = entries.remove(0);
     if wide {
         copy_w(&first, data as *mut Win32FindDataW);
