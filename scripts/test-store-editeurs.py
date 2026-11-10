@@ -215,6 +215,25 @@ with tempfile.TemporaryDirectory() as tmp:
     check(calls[-1] == ["purge", "--autoremove", "--", "claude-desktop"], "purge du paquet")
     check(["winlux-store-repos", "clean", "claude"] in admin_calls, "dépôt de l'éditeur retiré")
 
+    # Paquets de transition vers Snap (#1513) : masqués sans snapd.
+    apt_src = type(m["SOURCE_BY_NAME"]["apt"])()
+    apt_src.local_only = True
+    apt_src.curated = lambda: {p: {"name": p, "featured": p == "thunderbird", "desc": "d", "cat": "internet",
+                                   "pub": "x"} for p in ("thunderbird", "vlc")}
+    apt_src.candidates = lambda pkgs: {"thunderbird": "2:1snap1-0ubuntu3", "vlc": "3.0.20"}
+    apt_src.installed = lambda: {}
+    apt_src.upgradable = lambda: {}
+    apt_src.refresh_lists = lambda *a: None
+    g = m["Apt"].apps.__globals__
+    saved = g["dep11_index"], g["run"], g["have"], g["OFFLINE"]
+    g["dep11_index"], g["have"], g["OFFLINE"] = (lambda: {}), (lambda c: True), True
+    g["run"] = lambda cmd, *a, **k: (0, "snapd\nReverse Depends:\n  thunderbird\n |firefox\n" if "rdepends" in cmd else "")
+    names = [a.ref for a in apt_src.apps()]
+    check(names == ["vlc"], f"Thunderbird (transition vers Snap) masqué sans snapd ({names})")
+    apt_src.installed = lambda: {"thunderbird": ("2:1snap1", 1)}
+    check("thunderbird" in [a.ref for a in apt_src.apps()], "déjà installé : reste visible pour la désinstallation")
+    g["dep11_index"], g["run"], g["have"], g["OFFLINE"] = saved
+
     # --- 3. winlux-store-repos sur une racine simulée -----------------------
     root = tmp / "root"
     lists = root / "etc/apt/sources.list.d"

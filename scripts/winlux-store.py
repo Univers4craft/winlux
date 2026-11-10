@@ -861,6 +861,21 @@ class Apt(Source):
                     result[pkg] = cand
         return result
 
+    def snap_wrappers(self):
+        """Paquets qui dépendent de snapd : de simples lanceurs d'un snap."""
+        if not have("apt-cache"):
+            return set()
+        code, out = run(["apt-cache", "rdepends", "--no-recommends", "--no-suggests", "--no-enhances",
+                         "--no-conflicts", "--no-breaks", "--no-replaces", "snapd"], 60,
+                        env={**os.environ, "LANG": "C"})
+        names, started = set(), False
+        for line in out.splitlines():
+            if line.startswith("Reverse Depends:"):
+                started = True
+            elif started and line.strip():
+                names.add(line.strip().lstrip("|").strip())
+        return names
+
     def refresh_lists(self):
         """apt-get update en arrière-plan si les listes ont plus de 6 h."""
         lists = Path(ROOT + "/var/lib/apt/lists")
@@ -880,11 +895,16 @@ class Apt(Source):
         installed, upgradable = self.installed(), self.upgradable()
         cands = self.candidates([p for p in curated if p not in comps])
         self.system_updates = len(upgradable)
+        # Paquets de transition vers Snap (thunderbird, firefox, chromium-browser
+        # d'Ubuntu) : sans snapd ni systemd leur installation échoue (#1513).
+        snap_only = set() if os.path.exists(ROOT + "/run/snapd.socket") else self.snap_wrappers()
         out = []
         for pkg in sorted(set(curated) | set(comps)):
             doc, cur = comps.get(pkg) or {}, curated.get(pkg)
             if not doc and pkg not in cands and pkg not in installed:
                 continue  # absent des dépôts configurés
+            if pkg in snap_only and pkg not in installed:
+                continue
             ver = installed.get(pkg, ("", 0))[0]
             app = App("apt", pkg, (cur["name"] if cur else doc.get("Name")) or pkg,
                       rank=0 if cur and cur["featured"] else (1 if cur else 3),
