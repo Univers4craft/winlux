@@ -52,6 +52,7 @@ pub mod crt_ucrt;
 pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
+pub mod d2d_combine;
 pub mod d2d_raster;
 pub mod d3d10;
 pub mod d3d11;

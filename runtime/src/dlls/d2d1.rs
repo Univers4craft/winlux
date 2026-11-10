@@ -904,6 +904,48 @@ unsafe extern "win64" fn geometry_simplify(
     emit_figures(sink, &figures, rule)
 }
 
+/// Géométrie de Winlux (chemin, forme simple, groupe ou transformée).
+unsafe fn is_geometry(p: *mut c_void) -> bool {
+    if p.is_null() {
+        return false;
+    }
+    let vt = *(p as *const *const ());
+    vt == GEOMETRY_VT.ptr() || vt == GROUP_VT.ptr() || vt == TRANSFORMED_VT.ptr()
+}
+
+/// CombineWithGeometry(entrée, mode, transform de l'entrée, tolérance,
+/// puits) (#1549) : union, intersection, ou exclusif ou différence des
+/// figures aplaties, envoyée en contours fermés.
+unsafe extern "win64" fn geometry_combine(
+    this: *mut GeometryObj,
+    input: *mut c_void,
+    mode: u32,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    use super::d2d_combine::{combine, CombineMode};
+    if sink.is_null() || !is_geometry(input) {
+        return E_INVALIDARG;
+    }
+    let Some(mode) = CombineMode::from_d2d(mode) else {
+        return E_INVALIDARG;
+    };
+    let polys = |g: *mut GeometryObj, m: &Matrix| {
+        let g = &Com::get(g).data;
+        let path = crate::dlls::lock(&g.path).fill_polys(m);
+        (path, *crate::dlls::lock(&g.rule))
+    };
+    let (a, ra) = polys(this, &Matrix::IDENTITY);
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let (b, rb) = polys(input as *mut GeometryObj, &m);
+    let figures: Vec<(Vec<Pt>, bool)> = combine(&a, ra, &b, rb, mode)
+        .into_iter()
+        .map(|p| (p, true))
+        .collect();
+    emit_figures(sink, &figures, FillRule::NonZero)
+}
+
 /// ID2D1PathGeometry::Stream(sink) : recopie le chemin fermé.
 unsafe extern "win64" fn path_stream(this: *mut GeometryObj, sink: *mut c_void) -> i32 {
     if sink.is_null() {
@@ -973,7 +1015,7 @@ macro_rules! geometry_vtable {
             unsupported!("CompareWithGeometry"),
             geometry_simplify as *const (),
             unsupported!("Tessellate"),
-            unsupported!("CombineWithGeometry"),
+            geometry_combine as *const (),
             unsupported!("Outline"),
             unsupported!("ComputeArea"),
             geometry_length as *const (),
@@ -1015,7 +1057,7 @@ static GEOMETRY_VT: VTable<22> = VTable([
     unsupported!("CompareWithGeometry"),
     geometry_simplify as *const (),
     unsupported!("Tessellate"),
-    unsupported!("CombineWithGeometry"),
+    geometry_combine as *const (),
     unsupported!("Outline"),
     unsupported!("ComputeArea"),
     geometry_length as *const (),
@@ -3401,6 +3443,66 @@ mod tests {
     }
 
     /// #1470 : Widen, GetWidenedBounds, StrokeContainsPoint et ComputeLength.
+    /// #1549 : CombineWithGeometry (boutons de couleur de Paint.NET) remplit
+    /// un chemin avec l'intersection de deux rectangles.
+    #[test]
+    fn geometries_combinees() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            type Create = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            type Combine = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                u32,
+                *const Matrix,
+                f32,
+                *mut c_void,
+            ) -> i32;
+            type Contains =
+                unsafe extern "win64" fn(*mut c_void, u64, *const Matrix, f32, *mut i32) -> i32;
+            type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
+            let rect = |l, t, r, b| {
+                let mut g = std::ptr::null_mut();
+                let rc = RectF { l, t, r, b };
+                assert_eq!(method::<RectGeo>(f.cast(), 5)(f.cast(), &rc, &mut g), S_OK);
+                g
+            };
+            let a = rect(0.0, 0.0, 10.0, 10.0);
+            let b = rect(0.0, 0.0, 10.0, 10.0);
+            // L'entrée est déplacée de (5, 5) par sa transformation.
+            let m = Matrix {
+                dx: 5.0,
+                dy: 5.0,
+                ..Matrix::IDENTITY
+            };
+            let mut path = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f.cast(), 10)(f.cast(), &mut path), S_OK);
+            let mut sink = std::ptr::null_mut();
+            assert_eq!(method::<Create>(path, 17)(path, &mut sink), S_OK);
+            assert_eq!(method::<Combine>(a, 11)(a, b, 1, &m, 0.25, sink), S_OK);
+            assert_eq!(method::<Close>(sink, 9)(sink), S_OK);
+            release_obj(sink);
+            let at = |x, y| {
+                let mut v = 0;
+                method::<Contains>(path, 7)(path, pt(x, y), std::ptr::null(), 0.25, &mut v);
+                v
+            };
+            assert_eq!(at(7.0, 7.0), 1, "dans l'intersection");
+            assert_eq!(at(2.0, 2.0), 0, "seulement dans a");
+            assert_eq!(at(12.0, 12.0), 0, "seulement dans b");
+            assert_eq!(
+                method::<Combine>(a, 11)(a, std::ptr::null_mut(), 0, &m, 0.25, sink),
+                E_INVALIDARG
+            );
+            release_obj(path);
+            release_obj(b);
+            release_obj(a);
+            release_obj(f.cast());
+        }
+    }
+
     #[test]
     fn geometrie_elargie() {
         unsafe {
