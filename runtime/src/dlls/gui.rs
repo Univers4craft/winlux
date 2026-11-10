@@ -6033,7 +6033,17 @@ pub(crate) mod tests {
         // Création : la plus récente au sommet.
         let z = enum_top_level_windows();
         assert!(pos(&z, c) < pos(&z, b) && pos(&z, b) < pos(&z, a));
-        assert_eq!(z, enum_top_level_windows(), "ordre reproductible");
+        // Seul l'ordre relatif de a, b et c compte : d'autres tests qui
+        // tournent en parallèle créent et détruisent leurs propres fenêtres
+        // de premier niveau entre deux énumérations (#1484).
+        let les_notres = |list: Vec<usize>| -> Vec<usize> {
+            list.into_iter().filter(|h| [a, b, c].contains(h)).collect()
+        };
+        assert_eq!(
+            les_notres(z),
+            les_notres(enum_top_level_windows()),
+            "ordre reproductible"
+        );
         // Activation : la fenêtre activée passe devant, les autres gardent leur ordre.
         assert_eq!(set_focus(a), Some(0));
         let z = enum_top_level_windows();
