@@ -307,8 +307,9 @@ fn read_format(p: u32, wide: bool) -> Vec<u32> {
 }
 
 /// Recopie les arguments x86 lus à `ap` en cases de 8 octets, d'après le
-/// format (taille de chaque conversion).
-fn convert_args(fmt: &[u32], mut ap: u32, scan: bool) -> Vec<u64> {
+/// format (taille de chaque conversion). `secure` : scanf « _s », où %c,
+/// %s et %[ sont suivis de la taille du tampon (#1508).
+fn convert_args(fmt: &[u32], mut ap: u32, scan: bool, secure: bool) -> Vec<u64> {
     let mut out = Vec::new();
     let mut next = || {
         let v = rd(ap);
@@ -350,9 +351,13 @@ fn convert_args(fmt: &[u32], mut ap: u32, scan: bool) -> Vec<u64> {
                     i += 1;
                 }
             }
+            let conv = at(i);
             i += 1;
             if !suppressed {
                 out.push(next() as u64);
+                if secure && matches!(conv, 'c' | 'C' | 's' | 'S' | ']') {
+                    out.push(next() as u64);
+                }
             }
             continue;
         }
@@ -437,7 +442,9 @@ extern "win64" fn fmt_call(args: u32, aux: usize) -> u64 {
     }
     let fmt = read_format(fmt_ptr, s.wide);
     let src = if s.va { rd(p) } else { p };
-    let mut conv = convert_args(&fmt, src, s.scan);
+    // __stdio_common_v*scanf : bit 0 des options = variante « _s ».
+    let secure = s.scan && s.fixed.first() == Some(&b'q') && slots[0] & 1 != 0;
+    let mut conv = convert_args(&fmt, src, s.scan, secure);
     if s.va {
         // Quelques cases de plus : une lecture au-delà du format reste
         // dans le tableau.
@@ -599,7 +606,7 @@ const FORMATS: &[FmtRow] = &[
     ),
     (
         "__stdio_common_vsscanf",
-        b"qiiiii",
+        b"qiiii",
         3,
         false,
         true,
@@ -608,7 +615,7 @@ const FORMATS: &[FmtRow] = &[
     ),
     (
         "__stdio_common_vswscanf",
-        b"qiiiii",
+        b"qiiii",
         3,
         true,
         true,
@@ -1328,6 +1335,11 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         return Some(o);
     }
     let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
+    if crt {
+        if let Some(c) = complex_code(func) {
+            return Some(Override::Data(c));
+        }
+    }
     if n == "user32" && func.starts_with("w") {
         return fmt_override(n, func);
     }
@@ -1363,6 +1375,8 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_wcmdln" => Override::Data(d + D_WCMDLN),
         "_iob" => Override::Data(d + D_IOB),
         "_adjust_fdiv" => Override::Data(d + D_ADJUST_FDIV),
+        "__pioinfo" => Override::Data(ioinfo32().0),
+        "__badioinfo" => Override::Data(ioinfo32().1),
         f if f.starts_with("_CI") => Override::Data(math_code(func)?),
         "_except1" => Override::Data(math_code(func)?),
         f if f.starts_with("_libm_sse2_") => Override::Data(math_code(func)?),
@@ -1371,6 +1385,10 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         // type_info::~type_info (thiscall, sans argument sur la pile) : le
         // nom décoré mis en cache n'est jamais alloué ici, rien à libérer.
         "??1type_info@@UAE@XZ" => Override::Data(ret_code()),
+        // std::exception et std::bad_cast de msvcrt x86 (thiscall).
+        f if f.contains("exception@@") || f.contains("bad_cast@@") => {
+            Override::Data(exc_code(func)?)
+        }
         // FuncInfo dans eax : petit code d'entrée propre (voir `cxx`).
         "__CxxFrameHandler" | "__CxxFrameHandler2" | "__CxxFrameHandler3" => {
             Override::Data(super::cxx::frame_handler_code())
@@ -1451,6 +1469,351 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
     })
 }
 
+/// `__pioinfo` et `__badioinfo` de msvcrt x86 (#1508) : 64 pointeurs de
+/// 32 bits vers des tableaux de 32 `ioinfo` vides (0x40 octets chacun),
+/// et l'entrée « invalide » (handle -1, FTEXT, LF), sous 4 Go.
+fn ioinfo32() -> (usize, usize) {
+    static P: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+    *P.get_or_init(|| {
+        const ENTRY: usize = 0x40;
+        let table = super::alloc_low(64 * 4 + ENTRY + 64 * 32 * ENTRY, false);
+        let bad = table + 64 * 4;
+        let blocks = bad + ENTRY;
+        unsafe {
+            for i in 0..64 {
+                *((table + i * 4) as *mut u32) = (blocks + i * 32 * ENTRY) as u32;
+            }
+            *(bad as *mut u32) = u32::MAX;
+            *((bad + 4) as *mut u8) = 0x80;
+            *((bad + 5) as *mut u8) = 10;
+        }
+        (table, bad)
+    })
+}
+
+// ---------------------------------------------------------------------
+// Nombres complexes de la CRT (#1508), convention x86 de MSVC
+// ---------------------------------------------------------------------
+//
+// `_Dcomplex` (et `_Lcomplex`, long double = double) passe par valeur sur
+// la pile et revient par un pointeur caché, premier argument, rendu dans
+// eax ; `_Fcomplex` passe par valeur et revient dans edx:eax ; les
+// résultats réels (creal, carg…) reviennent dans st0. Toutes cdecl.
+
+use crate::dlls::crt_releve::{complex_op, complex_pow, COp, C64};
+
+fn c_op(func: &str) -> Option<COp> {
+    Some(match func {
+        "cexp" => COp::Exp,
+        "ccos" => COp::Cos,
+        "ccosh" => COp::Cosh,
+        "csin" => COp::Sin,
+        "csinh" => COp::Sinh,
+        "ctan" => COp::Tan,
+        "ctanh" => COp::Tanh,
+        _ => return None,
+    })
+}
+
+const C_OPS: [COp; 7] = [
+    COp::Exp,
+    COp::Cos,
+    COp::Cosh,
+    COp::Sin,
+    COp::Sinh,
+    COp::Tan,
+    COp::Tanh,
+];
+
+unsafe fn c_store(ret: u64, z: C64) -> u64 {
+    let p = ret as u32 as usize as *mut f64;
+    if !p.is_null() {
+        p.write_unaligned(z.re);
+        p.add(1).write_unaligned(z.im);
+    }
+    ret as u32 as u64
+}
+
+fn f_pack(z: C64) -> u64 {
+    (z.re as f32).to_bits() as u64 | ((z.im as f32).to_bits() as u64) << 32
+}
+
+macro_rules! c32_ops {
+    ($($i:literal => $d:ident, $f:ident;)*) => {
+        $(
+            extern "win64" fn $d(ret: u64, re: f64, im: f64) -> u64 {
+                unsafe { c_store(ret, complex_op(C_OPS[$i], C64 { re, im })) }
+            }
+            extern "win64" fn $f(re: f32, im: f32) -> u64 {
+                f_pack(complex_op(C_OPS[$i], C64 { re: re as f64, im: im as f64 }))
+            }
+        )*
+        fn c32_targets(op: COp) -> (usize, usize) {
+            match op as usize {
+                $($i => ($d as *const () as usize, $f as *const () as usize),)*
+                _ => unreachable!(),
+            }
+        }
+    };
+}
+
+c32_ops! {
+    0 => c32_exp, c32_expf;
+    1 => c32_cos, c32_cosf;
+    2 => c32_cosh, c32_coshf;
+    3 => c32_sin, c32_sinf;
+    4 => c32_sinh, c32_sinhf;
+    5 => c32_tan, c32_tanf;
+    6 => c32_tanh, c32_tanhf;
+}
+
+extern "win64" fn c32_pow(ret: u64, are: f64, aim: f64, bre: f64, bim: f64) -> u64 {
+    let z = complex_pow(C64 { re: are, im: aim }, C64 { re: bre, im: bim });
+    unsafe { c_store(ret, z) }
+}
+extern "win64" fn c32_powf(are: f32, aim: f32, bre: f32, bim: f32) -> u64 {
+    f_pack(complex_pow(
+        C64 {
+            re: are as f64,
+            im: aim as f64,
+        },
+        C64 {
+            re: bre as f64,
+            im: bim as f64,
+        },
+    ))
+}
+extern "win64" fn c32_real(re: f64, _im: f64) -> f64 {
+    re
+}
+extern "win64" fn c32_imag(_re: f64, im: f64) -> f64 {
+    im
+}
+extern "win64" fn c32_arg(re: f64, im: f64) -> f64 {
+    im.atan2(re)
+}
+extern "win64" fn c32_abs(re: f64, im: f64) -> f64 {
+    re.hypot(im)
+}
+extern "win64" fn c32_realf(re: f32, _im: f32) -> f32 {
+    re
+}
+extern "win64" fn c32_imagf(_re: f32, im: f32) -> f32 {
+    im
+}
+extern "win64" fn c32_argf(re: f32, im: f32) -> f32 {
+    im.atan2(re)
+}
+extern "win64" fn c32_absf(re: f32, im: f32) -> f32 {
+    re.hypot(im)
+}
+
+/// Passerelle x86 d'une fonction complexe de la CRT, si `func` en est une.
+fn complex_code(func: &str) -> Option<usize> {
+    let (base, float) = match func {
+        "_cabs" => ("cabs", false),
+        f if f.starts_with('c') && (f.ends_with('f') || f.ends_with('l')) => {
+            (&f[..f.len() - 1], f.ends_with('f'))
+        }
+        f => (f, false),
+    };
+    let d2 = |f: extern "win64" fn(f64, f64) -> f64| (f as *const () as usize, "dd>d");
+    let f2 = |f: extern "win64" fn(f32, f32) -> f32| (f as *const () as usize, "ff>f");
+    let (target, sig) = match (base, float) {
+        ("creal", false) => d2(c32_real),
+        ("cimag", false) => d2(c32_imag),
+        ("carg", false) => d2(c32_arg),
+        ("cabs", false) => d2(c32_abs),
+        ("creal", true) => f2(c32_realf),
+        ("cimag", true) => f2(c32_imagf),
+        ("carg", true) => f2(c32_argf),
+        ("cabs", true) => f2(c32_absf),
+        ("cpow", false) => (c32_pow as *const () as usize, "idddd>i"),
+        ("cpow", true) => (c32_powf as *const () as usize, "ffff>q"),
+        (b, false) => (c32_targets(c_op(b)?).0, "idd>i"),
+        (b, true) => (c32_targets(c_op(b)?).1, "ff>q"),
+    };
+    static CODES: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    let codes = CODES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut m = codes.lock().unwrap_or_else(|e| e.into_inner());
+    Some(
+        *m.entry(func.to_string())
+            .or_insert_with(|| super::native_stub(target, sig, func)),
+    )
+}
+
+// ---------------------------------------------------------------------
+// std::exception et std::bad_cast de msvcrt x86 (#1508)
+// ---------------------------------------------------------------------
+//
+// Disposition x86 : { vftable, const char *what, int doFree } (12 octets),
+// table virtuelle { destructeur de suppression, what }. Méthodes
+// thiscall (this dans ecx, l'appelé dépile ses arguments) : un petit code
+// x86 passe ecx et l'argument à une fonction 64 bits cdecl.
+
+const EXC_NAMES: [&str; 7] = [
+    "??0exception@@QAE@XZ",
+    "??0exception@@QAE@ABQBD@Z",
+    "??0exception@@QAE@ABV0@@Z",
+    "??1exception@@UAE@XZ",
+    "?what@exception@@UBEPBDXZ",
+    "??0bad_cast@@QAE@ABV0@@Z",
+    "??1bad_cast@@UAE@XZ",
+];
+
+unsafe fn rd32(a: u64) -> u32 {
+    (a as u32 as usize as *const u32).read_unaligned()
+}
+unsafe fn wr32(a: u64, v: u32) {
+    (a as u32 as usize as *mut u32).write_unaligned(v)
+}
+
+/// Copie basse (tas, sous 4 Go) d'une chaîne x86.
+unsafe fn exc_dup(s: u32) -> u32 {
+    if s == 0 {
+        return 0;
+    }
+    let len = libc::strlen(s as usize as *const libc::c_char);
+    let p = libc::malloc(len + 1) as *mut u8;
+    if p.is_null() || p as usize >= 1 << 32 {
+        libc::free(p.cast());
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(s as usize as *const u8, p, len + 1);
+    p as usize as u32
+}
+
+/// Tables virtuelles de `exception` et `bad_cast`, et le texte par défaut.
+fn exc_tables() -> (u32, u32, u32) {
+    static T: OnceLock<(u32, u32, u32)> = OnceLock::new();
+    *T.get_or_init(|| {
+        let block = super::alloc_low(64, false);
+        let text = b"Unknown exception\0";
+        let vdtor = exc_thunk(
+            exc_vdtor as *const () as usize,
+            1,
+            "exception::`vector deleting destructor'",
+        );
+        let what = exc_thunk(exc_what as *const () as usize, 0, "exception::what");
+        unsafe {
+            // [0] localisateur (absent), [1] vdtor, [2] what ; idem en +12.
+            for base in [0usize, 12] {
+                *((block + base + 4) as *mut u32) = vdtor as u32;
+                *((block + base + 8) as *mut u32) = what as u32;
+            }
+            std::ptr::copy_nonoverlapping(text.as_ptr(), (block + 32) as *mut u8, text.len());
+        }
+        ((block + 4) as u32, (block + 16) as u32, (block + 32) as u32)
+    })
+}
+
+extern "win64" fn exc_ctor(this: u64, _: u64) -> u64 {
+    unsafe {
+        wr32(this, exc_tables().0);
+        wr32(this + 4, 0);
+        wr32(this + 8, 0);
+    }
+    this as u32 as u64
+}
+extern "win64" fn exc_ctor_str(this: u64, pp: u64) -> u64 {
+    unsafe {
+        exc_ctor(this, 0);
+        if pp as u32 != 0 {
+            let d = exc_dup(rd32(pp));
+            wr32(this + 4, d);
+            wr32(this + 8, (d != 0) as u32);
+        }
+    }
+    this as u32 as u64
+}
+extern "win64" fn exc_copy(this: u64, other: u64) -> u64 {
+    unsafe {
+        exc_ctor(this, 0);
+        if other as u32 != 0 && other as u32 != this as u32 {
+            let what = rd32(other + 4);
+            if rd32(other + 8) != 0 {
+                let d = exc_dup(what);
+                wr32(this + 4, d);
+                wr32(this + 8, (d != 0) as u32);
+            } else {
+                wr32(this + 4, what);
+            }
+        }
+    }
+    this as u32 as u64
+}
+extern "win64" fn bad_cast_copy(this: u64, other: u64) -> u64 {
+    exc_copy(this, other);
+    unsafe { wr32(this, exc_tables().1) };
+    this as u32 as u64
+}
+extern "win64" fn exc_dtor(this: u64, _: u64) -> u64 {
+    unsafe {
+        wr32(this, exc_tables().0);
+        if rd32(this + 8) != 0 {
+            libc::free(rd32(this + 4) as usize as *mut libc::c_void);
+        }
+        wr32(this + 4, 0);
+        wr32(this + 8, 0);
+    }
+    this as u32 as u64
+}
+extern "win64" fn exc_vdtor(this: u64, flags: u64) -> u64 {
+    exc_dtor(this, 0);
+    if flags & 1 != 0 {
+        unsafe { libc::free(this as u32 as usize as *mut libc::c_void) };
+    }
+    this as u32 as u64
+}
+extern "win64" fn exc_what(this: u64, _: u64) -> u64 {
+    match unsafe { rd32(this + 4) } {
+        0 => exc_tables().2 as u64,
+        w => w as u64,
+    }
+}
+
+/// Code x86 thiscall : `push arg ; push ecx ; call cible ; add esp, 8 ;
+/// ret 4*args`, la cible étant une passerelle cdecl « ii>i ».
+fn exc_thunk(target: usize, args: u8, label: &str) -> usize {
+    let native = super::native_stub(target, "ii>i", label) as u32;
+    let mut c = Vec::new();
+    if args == 1 {
+        c.extend_from_slice(&[0xFF, 0x74, 0x24, 0x04]); // push [esp+4]
+    } else {
+        c.extend_from_slice(&[0x6A, 0x00]); // push 0
+    }
+    c.push(0x51); // push ecx
+    c.push(0xB8); // mov eax, cible
+    c.extend_from_slice(&native.to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0, 0x83, 0xC4, 0x08]); // call eax ; add esp, 8
+    if args == 1 {
+        c.extend_from_slice(&[0xC2, 0x04, 0x00]);
+    } else {
+        c.push(0xC3);
+    }
+    super::alloc_code(&c) as usize
+}
+
+fn exc_code(func: &str) -> Option<usize> {
+    let i = EXC_NAMES.iter().position(|n| *n == func)?;
+    static CODES: OnceLock<Vec<usize>> = OnceLock::new();
+    let codes = CODES.get_or_init(|| {
+        let f = |t: extern "win64" fn(u64, u64) -> u64, args: u8, name: &str| {
+            exc_thunk(t as *const () as usize, args, name)
+        };
+        vec![
+            f(exc_ctor, 0, EXC_NAMES[0]),
+            f(exc_ctor_str, 1, EXC_NAMES[1]),
+            f(exc_copy, 1, EXC_NAMES[2]),
+            f(exc_dtor, 0, EXC_NAMES[3]),
+            f(exc_what, 0, EXC_NAMES[4]),
+            f(bad_cast_copy, 1, EXC_NAMES[5]),
+            f(exc_dtor, 0, EXC_NAMES[6]),
+        ]
+    });
+    codes.get(i).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1465,7 +1828,7 @@ mod tests {
         unsafe {
             std::ptr::copy_nonoverlapping(buf.as_ptr(), low as *mut u32, buf.len());
         }
-        convert_args(&f, low as u32, scan)
+        convert_args(&f, low as u32, scan, false)
     }
 
     #[test]
@@ -1500,6 +1863,49 @@ mod tests {
                 9
             ]
         );
+    }
+
+    #[test]
+    fn scanf_s_x86_garde_la_taille_apres_chaque_tampon() {
+        let f: Vec<u32> = "%d %s %*s %c %5[a-z]".chars().map(|c| c as u32).collect();
+        let words = [0x100u32, 0x200, 16, 0x300, 1, 0x400, 6];
+        let low = crate::wow32::alloc_low(4096, false);
+        unsafe {
+            std::ptr::copy_nonoverlapping(words.as_ptr(), low as *mut u32, words.len());
+        }
+        let v = convert_args(&f, low as u32, true, true);
+        assert_eq!(v, vec![0x100, 0x200, 16, 0x300, 1, 0x400, 6]);
+    }
+
+    #[test]
+    fn complexes_x86_par_pointeur_cache_et_edx_eax() {
+        let low = crate::wow32::alloc_low(4096, false);
+        let r = c32_exp(low as u64, 0.0, std::f64::consts::PI);
+        assert_eq!(r, low as u64);
+        let (re, im) = unsafe { (*(low as *const f64), *((low + 8) as *const f64)) };
+        assert!((re + 1.0).abs() < 1e-12 && im.abs() < 1e-12);
+        let packed = c32_powf(0.0, 1.0, 2.0, 0.0);
+        let (re, im) = (
+            f32::from_bits(packed as u32),
+            f32::from_bits((packed >> 32) as u32),
+        );
+        assert!((re + 1.0).abs() < 1e-6 && im.abs() < 1e-6);
+        assert_eq!(c32_arg(0.0, 1.0), std::f64::consts::FRAC_PI_2);
+        for f in ["cexp", "ctanhf", "cpowl", "crealf", "_cabs"] {
+            assert!(complex_code(f).is_some(), "{f}");
+        }
+        for f in ["ceil", "ceilf", "cosl", "cbrtl"] {
+            assert!(complex_code(f).is_none(), "{f}");
+        }
+    }
+
+    #[test]
+    fn pioinfo_x86_sous_4_go() {
+        let (table, bad) = ioinfo32();
+        assert!(table < 1 << 32 && bad < 1 << 32);
+        let first = unsafe { *(table as *const u32) } as usize;
+        assert!(first != 0 && unsafe { *(first as *const u32) } == 0);
+        assert_eq!(unsafe { *(bad as *const u32) }, u32::MAX);
     }
 
     #[test]

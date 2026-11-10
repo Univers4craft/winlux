@@ -77,7 +77,7 @@ fn free_slot(p: *mut c_void) {
 const MSVCRT_FILE_SIZE: usize = 48;
 static mut IOB: [u64; 3 * MSVCRT_FILE_SIZE / 8] = [0; 3 * MSVCRT_FILE_SIZE / 8];
 
-fn std_stream(index: usize) -> *mut c_void {
+pub(crate) fn std_stream(index: usize) -> *mut c_void {
     static STD: OnceLock<[usize; 3]> = OnceLock::new();
     let handles = STD.get_or_init(|| {
         let base = std::ptr::addr_of_mut!(IOB) as usize;

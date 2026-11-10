@@ -206,12 +206,57 @@ unsafe fn store_float(va: &mut crate::thunks::VaList, s: &Spec, value: f64) -> b
     !s.suppress
 }
 
+thread_local! {
+    static SECURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Exécute `f` en mode « sûr » : %s, %c et %[ lisent en plus la taille du
+/// tampon de destination.
+pub(crate) fn with_secure<T>(f: impl FnOnce() -> T) -> T {
+    let before = SECURE.with(|c| c.replace(true));
+    let r = f();
+    SECURE.with(|c| c.set(before));
+    r
+}
+
+/// Comme [`with_secure`] quand `on` vaut vrai, sinon appel direct.
+pub(crate) fn secure_if<T>(on: bool, f: impl FnOnce() -> T) -> T {
+    if on {
+        with_secure(f)
+    } else {
+        f()
+    }
+}
+
 /// Écrit une suite de caractères, étroite ou large selon le modificateur.
-unsafe fn store_string(va: &mut crate::thunks::VaList, s: &Spec, chars: &[u8]) -> bool {
+unsafe fn store_string(
+    va: &mut crate::thunks::VaList,
+    s: &Spec,
+    chars: &[u8],
+    terminate: bool,
+) -> bool {
     if s.suppress {
         return false;
     }
     let ptr = va.next_u64() as *mut u8;
+    // Variantes sûres (`sscanf_s`, option `_CRT_INTERNAL_SCANF_SECURECRT`) :
+    // la taille du tampon, en caractères, suit le pointeur.
+    if SECURE.with(|f| f.get()) {
+        let cap = va.next_u64() as u32 as usize;
+        if ptr.is_null() {
+            return false;
+        }
+        if cap < chars.len() + terminate as usize {
+            if cap > 0 {
+                if s.size == Size::L {
+                    *(ptr as *mut u16) = 0;
+                } else {
+                    *ptr = 0;
+                }
+            }
+            return false;
+        }
+    }
     if ptr.is_null() {
         return false;
     }
@@ -220,10 +265,14 @@ unsafe fn store_string(va: &mut crate::thunks::VaList, s: &Spec, chars: &[u8]) -
         for (i, &c) in chars.iter().enumerate() {
             *wp.add(i) = c as u16;
         }
-        *wp.add(chars.len()) = 0;
+        if terminate {
+            *wp.add(chars.len()) = 0;
+        }
     } else {
         std::ptr::copy_nonoverlapping(chars.as_ptr(), ptr, chars.len());
-        *ptr.add(chars.len()) = 0;
+        if terminate {
+            *ptr.add(chars.len()) = 0;
+        }
     }
     true
 }
@@ -399,7 +448,8 @@ unsafe fn scan_into(inp: &mut Scan<'_>, fmt: &[u8], va: &mut crate::thunks::VaLi
                 if chars.is_empty() {
                     break;
                 }
-                store_string(va, &s, &chars)
+                // %c n'écrit pas de zéro final.
+                store_string(va, &s, &chars, false)
             }
             b's' => {
                 let mut chars = Vec::new();
@@ -416,7 +466,7 @@ unsafe fn scan_into(inp: &mut Scan<'_>, fmt: &[u8], va: &mut crate::thunks::VaLi
                 if chars.is_empty() {
                     break;
                 }
-                store_string(va, &s, &chars)
+                store_string(va, &s, &chars, true)
             }
             b'[' => {
                 let set_start = f;
@@ -447,7 +497,7 @@ unsafe fn scan_into(inp: &mut Scan<'_>, fmt: &[u8], va: &mut crate::thunks::VaLi
                 if chars.is_empty() {
                     break;
                 }
-                store_string(va, &s, &chars)
+                store_string(va, &s, &chars, true)
             }
             b'n' => {
                 if !s.suppress {
@@ -548,6 +598,38 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn la_variante_sure_lit_la_taille_et_refuse_le_debordement() {
+        let mut word = [0xffu8; 8];
+        let mut c = [0u8; 2];
+        let mut n = 0i32;
+        let args = [
+            word.as_mut_ptr() as u64,
+            8,
+            c.as_mut_ptr() as u64,
+            2,
+            &mut n as *mut i32 as u64,
+        ];
+        let r = with_secure(|| unsafe {
+            scan(
+                b"abc xy 5",
+                b"%s %2c %d",
+                &mut crate::thunks::VaList::new(args.as_ptr()),
+            )
+        });
+        assert_eq!((r, &word[..4], c, n), (3, &b"abc\0"[..], *b"xy", 5));
+        // Tampon trop petit : chaîne vide, conversion en échec.
+        let args = [word.as_mut_ptr() as u64, 3];
+        let r = with_secure(|| unsafe {
+            scan(
+                b"abcdef",
+                b"%s",
+                &mut crate::thunks::VaList::new(args.as_ptr()),
+            )
+        });
+        assert_eq!((r, word[0]), (0, 0));
+    }
 
     #[test]
     fn fscanf_ne_consomme_que_ce_que_le_format_demande() {
