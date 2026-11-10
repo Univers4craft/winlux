@@ -22,6 +22,17 @@
                "de": "Fernzugriff und Fernwartung (für den privaten Gebrauch kostenlos)."}
     },
     {
+      "id": "bitwarden", "name": "Bitwarden", "publisher": "Bitwarden Inc.", "category": "utilitaires",
+      "licence": "libre", "package": "bitwarden", "kind": "deb",
+      "url": "https://github.com/bitwarden/clients/releases/download/desktop-v2026.10.4/Bitwarden-2026.10.4-amd64.deb",
+      "version": "2026.10.4", "sha256": "a45a34a20a9d5becbb1c710851717583ad578597d10fbd2bd57fe597f7625f41", "size": 163692848,
+      "hosts": ["github.com"], "site": "https://bitwarden.com/download/",
+      "desc": {"fr": "Gestionnaire de mots de passe chiffré, synchronisé entre appareils.",
+               "en": "Encrypted password manager, synced across devices.",
+               "es": "Gestor de contraseñas cifrado, sincronizado entre dispositivos.",
+               "de": "Verschlüsselter Passwortmanager, geräteübergreifend synchronisiert."}
+    },
+    {
       "id": "chatgpt", "name": "ChatGPT", "publisher": "OpenAI", "category": "bureautique",
       "licence": "proprietaire", "package": "chatgpt", "kind": "index",
       "base": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/", "index": "dists/stable/main/binary-amd64/Packages",
@@ -61,6 +72,17 @@
                "en": "Encrypted, decentralised Matrix messaging.",
                "es": "Mensajería Matrix cifrada y descentralizada.",
                "de": "Verschlüsselter, dezentraler Matrix-Messenger."}
+    },
+    {
+      "id": "obsidian", "name": "Obsidian", "publisher": "Dynalist Inc.", "category": "bureautique",
+      "licence": "proprietaire", "package": "obsidian", "kind": "deb",
+      "url": "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.15.0/obsidian_1.15.0_amd64.deb",
+      "version": "1.15.0", "sha256": "251805fdcb696af32129e8f5e8656f6688802fc38b169822175d23a74c5174b3", "size": 107879792,
+      "hosts": ["github.com"], "site": "https://obsidian.md/download",
+      "desc": {"fr": "Prise de notes en Markdown, reliées entre elles, gardées sur votre ordinateur.",
+               "en": "Linked Markdown notes, kept on your computer.",
+               "es": "Notas en Markdown enlazadas, guardadas en tu ordenador.",
+               "de": "Verknüpfte Markdown-Notizen, auf Ihrem Computer gespeichert."}
     },
     {
       "id": "onlyoffice", "name": "ONLYOFFICE", "publisher": "Ascensio System SIA", "category": "bureautique",

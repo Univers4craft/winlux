@@ -84,25 +84,8 @@ def main(argv):
 # Logiciels proposés pour la boutique (10 nov.) : version et empreinte relevées
 # ici, puisque seule la CI atteint les sites des éditeurs.
 CANDIDATS = [
-    {"id": "bitwarden", "github": "bitwarden/clients", "tag": "desktop-v", "asset": r"^Bitwarden-[0-9.]+-amd64\.deb$"},
-    {"id": "obsidian", "github": "obsidianmd/obsidian-releases", "tag": "v", "asset": r"^obsidian_[0-9.]+_amd64\.deb$"},
-    {"id": "teamviewer", "base": "https://linux.teamviewer.com/deb/", "index": "dists/stable/main/binary-amd64/Packages",
-     "package": "teamviewer"},
-    {"id": "thunderbird", "base": "https://packages.mozilla.org/apt/", "index": "dists/mozilla/main/binary-amd64/Packages",
-     "package": "thunderbird"},
-    {"id": "protonmail", "json": "https://proton.me/download/mail/linux/version.json"},
-    # .exe validés au banc, pour le catalogue Windows de Winlux (#1515).
-    {"id": "7zip", "url": "https://www.7-zip.org/a/7z2409-x64.exe"},
-    {"id": "notepadplusplus", "github": "notepad-plus-plus/notepad-plus-plus", "tag": "v8.6.",
-     "asset": r"^npp\.[0-9.]+\.Installer\.x64\.exe$"},
-    {"id": "sumatrapdf", "page": "https://www.sumatrapdfreader.org/download-free-pdf-viewer", "link": r"[^\"' ]*3\.6[^\"' ]*64-install\.exe"},
-    {"id": "screentogif", "github": "NickeManarin/ScreenToGif", "tag": "", "asset": r"^ScreenToGif\.[0-9.]+\.Setup\.x64\.msi$"},
-    {"id": "flowlauncher", "github": "Flow-Launcher/Flow.Launcher", "tag": "v", "asset": r"^Flow-Launcher-Setup\.exe$"},
-    {"id": "putty", "url": "https://the.earth.li/~sgtatham/putty/0.83/w64/putty-64bit-0.83-installer.msi"},
-    {"id": "vlc", "url": "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.exe"},
-    {"id": "warzone2100", "github": "Warzone2100/warzone2100", "tag": "4.", "asset": r"^warzone2100_win_x64_installer\.exe$"},
-    {"id": "supertuxkart", "github": "supertuxkart/stk-code", "tag": "1.5", "asset": r"^SuperTuxKart-1\.5-installer-x86_64\.exe$"},
-    {"id": "audacity", "github": "audacity/audacity", "tag": "Audacity-3.6.", "asset": r"^audacity-win-3\.6\.[0-9]+-64bit\.exe$"},
+    {"id": "protonmail", "url": "https://proton.me/download/mail/linux/1.16.1/ProtonMail-desktop-beta.deb"},
+    {"id": "warzone2100", "github": "Warzone2100/warzone2100", "tag": "4.", "asset": r"(?i)^warzone2100.*win.*x64.*\.exe$"},
 ]
 
 
@@ -121,7 +104,8 @@ def candidats():
                             if x["tag_name"].startswith(c["tag"]) and not x["prerelease"] and not x["draft"]]
                     assets = [a for a in (rels[0]["assets"] if rels else []) if re.match(c["asset"], a["name"])]
                     if not assets:
-                        print(f"{c['id']}: aucun .deb trouvé")
+                        print(f"{c['id']}: aucun fichier trouvé ; {rels[0]['tag_name'] if rels else '?'} : "
+                              + " ".join(a["name"] for a in (rels[0]["assets"] if rels else []))[:600])
                         continue
                     a = assets[0]
                     deb = work / "paquet.deb"
@@ -162,6 +146,9 @@ def candidats():
                 elif "url" in c:
                     f = work / "fichier"
                     r = curl(c["url"], f)
+                    if not r.returncode and c["url"].endswith(".deb"):
+                        print("    " + " ".join(subprocess.run(["dpkg-deb", "-f", str(f), "Package", "Version", "Depends"],
+                                                               capture_output=True, text=True).stdout.split())[:400])
                     print(f"{c['id']}: " + (f"url={c['url']} finale={urllib.parse.urlparse(r.stdout.strip()).hostname} "
                                             f"sha256={hashlib.sha256(f.read_bytes()).hexdigest()} size={f.stat().st_size}"
                                             if not r.returncode else f"injoignable ({r.stderr.strip()})"))

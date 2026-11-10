@@ -1,4 +1,133 @@
 {
-  "about": "Programmes .exe installés et utilisés sur le banc de Winlux (site/content/fr/software.md), section « Testés sur Winlux » de la boutique (#1515). Chaque fiche : adresse officielle épinglée, version, éditeur et SHA-256 relevés par la sonde de la CI (scripts/check-store-editeurs.py). Format « winlux » de docs/STORE.md.",
-  "apps": []
+ "about": "Programmes .exe installés et utilisés sur le banc de Winlux (site/content/fr/software.md), section « Testés sur Winlux » de la boutique (#1515). Chaque fiche : adresse officielle épinglée, version, éditeur et SHA-256 relevés par la sonde de la CI (scripts/check-store-editeurs.py). Format « winlux » de docs/STORE.md.",
+ "apps": [
+  {
+   "id": "7zip",
+   "name": "7-Zip",
+   "version": "24.09",
+   "publisher": "Igor Pavlov",
+   "category": "utilitaires",
+   "license": "LGPL-2.1",
+   "summary": "Ouvre et crée des archives 7z, zip, rar…",
+   "homepage": "https://www.7-zip.org",
+   "size_kb": 1598,
+   "installer": {
+    "url": "https://www.7-zip.org/a/7z2409-x64.exe",
+    "sha256": "bdd1a33de78618d16ee4ce148b849932c05d0015491c34887846d431d29f308e",
+    "type": "exe"
+   }
+  },
+  {
+   "id": "flowlauncher",
+   "name": "Flow Launcher",
+   "version": "2.1.4",
+   "publisher": "Flow Launcher Team",
+   "category": "utilitaires",
+   "license": "MIT",
+   "summary": "Lance programmes et fichiers au clavier.",
+   "homepage": "https://www.flowlauncher.com",
+   "size_kb": 99403,
+   "installer": {
+    "url": "https://github.com/Flow-Launcher/Flow.Launcher/releases/download/v2.1.4/Flow-Launcher-Setup.exe",
+    "sha256": "0e7b4ea82192702a98a10f8ec257c3830f6591b80517d291a83854c0df54fc20",
+    "type": "exe"
+   }
+  },
+  {
+   "id": "notepadplusplus",
+   "name": "Notepad++",
+   "version": "8.6.9",
+   "publisher": "Don Ho",
+   "category": "developpement",
+   "license": "GPL-3.0",
+   "summary": "Éditeur de texte et de code.",
+   "homepage": "https://notepad-plus-plus.org",
+   "size_kb": 6387,
+   "installer": {
+    "url": "https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.6.9/npp.8.6.9.Installer.x64.exe",
+    "sha256": "3fd473e00fa464f18af2dd930cf5bdba0709fdd841631598acccdb04c32a5cd2",
+    "type": "exe"
+   }
+  },
+  {
+   "id": "putty",
+   "name": "PuTTY",
+   "version": "0.83",
+   "publisher": "Simon Tatham",
+   "category": "internet",
+   "license": "MIT",
+   "summary": "Client SSH et Telnet.",
+   "homepage": "https://www.chiark.greenend.org.uk/~sgtatham/putty/",
+   "size_kb": 3742,
+   "installer": {
+    "url": "https://the.earth.li/~sgtatham/putty/0.83/w64/putty-64bit-0.83-installer.msi",
+    "sha256": "aa8e5036d973688f1e8622fbe9ab22e037346e0def0197bf5e7cdf37da4e223d",
+    "type": "msi"
+   }
+  },
+  {
+   "id": "screentogif",
+   "name": "ScreenToGif",
+   "version": "2.43.2",
+   "publisher": "Nicke Manarin",
+   "category": "multimedia",
+   "license": "MS-PL",
+   "summary": "Enregistre l'écran en GIF ou en vidéo.",
+   "homepage": "https://www.screentogif.com",
+   "size_kb": 73376,
+   "installer": {
+    "url": "https://github.com/NickeManarin/ScreenToGif/releases/download/2.43.2/ScreenToGif.2.43.2.Setup.x64.msi",
+    "sha256": "b494e929ac250d0e09cf2803cd172cc5580d9c35df179b022b451304a06df4a7",
+    "type": "msi"
+   }
+  },
+  {
+   "id": "sumatrapdf",
+   "name": "SumatraPDF",
+   "version": "3.6.1",
+   "publisher": "Krzysztof Kowalczyk",
+   "category": "bureautique",
+   "license": "GPL-3.0",
+   "summary": "Lecteur PDF, ePub et BD léger.",
+   "homepage": "https://www.sumatrapdfreader.org",
+   "size_kb": 10816,
+   "installer": {
+    "url": "https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64-install.exe",
+    "sha256": "1eee71cccd2ea6e94d5bcea54ee2f759844da3e1a0ee2f6045035b1d17b94381",
+    "type": "exe"
+   }
+  },
+  {
+   "id": "supertuxkart",
+   "name": "SuperTuxKart",
+   "version": "1.5",
+   "publisher": "SuperTuxKart Team",
+   "category": "jeux",
+   "license": "GPL-3.0",
+   "summary": "Course de karts en 3D.",
+   "homepage": "https://supertuxkart.net",
+   "size_kb": 706296,
+   "installer": {
+    "url": "https://github.com/supertuxkart/stk-code/releases/download/1.5/SuperTuxKart-1.5-installer-x86_64.exe",
+    "sha256": "a1260ebb73dd9da13ec3e37f526f29e494b3b66c00c05fd70767b30a4497d95e",
+    "type": "exe"
+   }
+  },
+  {
+   "id": "vlc",
+   "name": "VLC",
+   "version": "3.0.21",
+   "publisher": "VideoLAN",
+   "category": "multimedia",
+   "license": "GPL-2.0",
+   "summary": "Lit presque tous les formats audio et vidéo.",
+   "homepage": "https://www.videolan.org",
+   "size_kb": 43889,
+   "installer": {
+    "url": "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.exe",
+    "sha256": "9742689a50e96ddc04d80ceff046b28da2beefd617be18166f8c5e715ec60c59",
+    "type": "exe"
+   }
+  }
+ ]
 }
