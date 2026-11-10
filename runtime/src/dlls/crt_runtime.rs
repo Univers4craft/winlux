@@ -287,8 +287,37 @@ pub extern "win64" fn onexit(f: usize) -> usize {
         0
     }
 }
-pub extern "win64" fn dllonexit(f: usize, _begin: usize, _end: usize) -> usize {
-    onexit(f)
+/// `__dllonexit(f, &début, &fin)` : `atexit` d'une DLL liée à msvcrt.dll.
+/// La fonction va dans la table propre à la DLL (tableau alloué par `malloc`,
+/// agrandi ici au besoin), que la DLL parcourt elle-même à son
+/// DLL_PROCESS_DETACH. La mettre dans la liste du processus la faisait
+/// appeler à la sortie, après le FreeLibrary de la DLL : 7z.exe déchargeait
+/// 7z.dll puis sautait dans le vide, code de sortie 5 (#1479).
+pub unsafe extern "win64" fn dllonexit(f: usize, begin: *mut usize, end: *mut usize) -> usize {
+    if f == 0 || begin.is_null() || end.is_null() {
+        return 0;
+    }
+    let (b, e) = (*begin, *end);
+    let len = e.wrapping_sub(b);
+    if b == 0 || e < b || len % 8 != 0 || len > 1 << 24 {
+        // Table illisible : à défaut, la sortie du processus.
+        crate::log_warn!("crt", "__dllonexit : table {b:#x}..{e:#x} invalide");
+        return onexit(f);
+    }
+    let count = len / 8;
+    let cap = libc::malloc_usable_size(b as *mut c_void) / 8;
+    let mut table = b as *mut usize;
+    if count >= cap {
+        let grown = libc::realloc(table as *mut c_void, (count + count.max(16)) * 8) as *mut usize;
+        if grown.is_null() {
+            return 0;
+        }
+        table = grown;
+    }
+    *table.add(count) = f;
+    *begin = table as usize;
+    *end = table.add(count + 1) as usize;
+    f
 }
 pub extern "win64" fn crt_atexit(f: usize) -> i32 {
     atexit(f)
@@ -1868,6 +1897,28 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1479 : `__dllonexit` remplit la table de la DLL, jamais la liste du
+    /// processus (7z.dll, déchargée avant la sortie de 7z.exe).
+    #[test]
+    fn dllonexit_remplit_la_table_de_la_dll() {
+        unsafe {
+            let avant = atexit_list().lock().unwrap().len();
+            let t = libc::malloc(4 * 8) as usize;
+            let (mut debut, mut fin) = (t, t);
+            for f in 1..=40usize {
+                assert_eq!(dllonexit(0x1000 * f, &mut debut, &mut fin), 0x1000 * f);
+            }
+            assert_eq!((fin - debut) / 8, 40);
+            let table = std::slice::from_raw_parts(debut as *const usize, 40);
+            assert!(table
+                .iter()
+                .enumerate()
+                .all(|(i, &f)| f == 0x1000 * (i + 1)));
+            assert_eq!(atexit_list().lock().unwrap().len(), avant);
+            libc::free(debut as *mut c_void);
+        }
+    }
 
     #[test]
     fn environnement_initial_de_l_apphost_dotnet() {
