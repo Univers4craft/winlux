@@ -7662,10 +7662,16 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    match remove_dir_or_link(&crate::paths::to_linux(&s.to_string_lossy())) {
-        Ok(()) => 1,
+    let path = s.to_string_lossy();
+    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+        Ok(()) => {
+            crate::trace!("RemoveDirectory({path}) = 1");
+            1
+        }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            let code = io_error_code(&e);
+            crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
+            crate::process::set_last_error(code);
             0
         }
     }
