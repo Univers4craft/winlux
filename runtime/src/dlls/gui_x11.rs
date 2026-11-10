@@ -920,22 +920,50 @@ fn diag_paint(what: &str, hwnd: usize, xid: u32) {
 /// SDL ou GLFW liés en statique (Xonotic : ni SDL2.dll ni opengl32.dll
 /// dans les imports) : le nom de la classe de fenêtre qu'ils enregistrent,
 /// « SDL_app » ou « GLFW30 », figure dans l'image (#1421).
-pub fn statically_linked_renderer(image: &[u8]) -> bool {
-    fn utf16(s: &str) -> Vec<u8> {
-        s.encode_utf16()
-            .chain([0])
-            .flat_map(u16::to_le_bytes)
-            .collect()
+///
+/// Un seul passage pour les quatre formes (UTF-16 et UTF-8) : on ne
+/// compare qu'aux octets « S » et « G ». Quatre balayages complets de
+/// l'image doublaient le temps de lancement de chaque .exe (#1559).
+pub fn statically_linked_renderer(bytes: &[u8]) -> bool {
+    const NEEDLES: [&[u8]; 4] = [
+        b"SDL_app\0",
+        b"S\0D\0L\0_\0a\0p\0p\0\0\0",
+        b"GLFW30\0",
+        b"G\0L\0F\0W\x003\x000\0\0\0",
+    ];
+    let mut rest = bytes;
+    while let Some(i) = rest.iter().position(|&b| b == b'S' || b == b'G') {
+        let tail = &rest[i..];
+        if NEEDLES.iter().any(|n| tail.starts_with(n)) {
+            return true;
+        }
+        rest = &rest[i + 1..];
     }
-    // SDL 2 garde son nom de classe en UTF-8 (SDL_Appname) et ne le
-    // convertit qu'à l'exécution : on cherche les deux formes.
-    ["SDL_app", "GLFW30"].iter().any(|class| {
-        let wide = utf16(class);
-        let narrow: Vec<u8> = class.bytes().chain([0]).collect();
-        [wide, narrow]
-            .iter()
-            .any(|needle| image.windows(needle.len()).any(|w| w == needle.as_slice()))
-    })
+    false
+}
+
+/// Comme `statically_linked_renderer`, limité aux sections de données
+/// initialisées de l'image chargée (.rdata, .data) : les noms de classe
+/// sont des chaînes constantes. Le code, les ressources et les relocations
+/// ne sont pas lus, ce qui évite de toucher les pages d'un gros .exe
+/// (claude.exe : 161 Mo de code) au lancement (#1559).
+pub fn renderer_in_data_sections(image: &[u8], sections: &[crate::pe::Section]) -> bool {
+    const INITIALIZED_DATA: u32 = 0x40;
+    const CODE_OR_EXEC: u32 = 0x20 | 0x2000_0000;
+    sections
+        .iter()
+        .filter(|s| s.characteristics & INITIALIZED_DATA != 0)
+        .filter(|s| s.characteristics & CODE_OR_EXEC == 0)
+        .filter(|s| {
+            ![".rsrc", ".reloc", ".pdata", ".idata", ".edata", ".tls"].contains(&s.name.as_str())
+        })
+        .any(|s| {
+            let start = s.rva as usize;
+            let end = start.saturating_add(s.virtual_size.max(s.raw_size) as usize);
+            image
+                .get(start.min(image.len())..end.min(image.len()))
+                .is_some_and(statically_linked_renderer)
+        })
 }
 
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
@@ -3875,6 +3903,44 @@ mod tests {
         assert!(statically_linked_renderer(&image));
         assert!(statically_linked_renderer(b"..SDL_app\0.."));
         assert!(!statically_linked_renderer(b"SDL_application"));
+        let glfw: Vec<u8> = "GLFW30"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(statically_linked_renderer(&glfw));
+        assert!(statically_linked_renderer(b"xxGLFW30\0"));
+        assert!(!statically_linked_renderer(b"GLFW3"));
+    }
+
+    #[test]
+    fn classe_cherchee_dans_les_seules_sections_de_donnees() {
+        // #1559 : le code et les ressources ne sont pas lus au lancement.
+        use super::renderer_in_data_sections;
+        use crate::pe::Section;
+        let section = |name: &str, rva: u32, size: u32, characteristics: u32| Section {
+            name: name.into(),
+            virtual_size: size,
+            rva,
+            raw_size: size,
+            raw_ptr: 0,
+            characteristics,
+        };
+        let mut image = vec![0u8; 0x3000];
+        image[0x1100..0x1108].copy_from_slice(b"SDL_app\0");
+        let text = section(".text", 0x1000, 0x1000, 0x6000_0020);
+        let rdata = section(".rdata", 0x2000, 0x1000, 0x4000_0040);
+        assert!(!renderer_in_data_sections(
+            &image,
+            &[text.clone(), rdata.clone()]
+        ));
+        image[0x2200..0x2208].copy_from_slice(b"SDL_app\0");
+        assert!(renderer_in_data_sections(&image, &[text, rdata.clone()]));
+        let rsrc = section(".rsrc", 0x2000, 0x1000, 0x4000_0040);
+        assert!(!renderer_in_data_sections(&image, &[rsrc]));
+        // Section qui dépasse l'image : bornée, sans panique.
+        let long = section(".data", 0x2800, 0x10_0000, 0xC000_0040);
+        assert!(!renderer_in_data_sections(&image, &[long]));
     }
 
     #[test]
