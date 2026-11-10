@@ -1412,8 +1412,9 @@ pub fn normalize(dll: &str) -> String {
     if base == "imagehlp" {
         return "dbghelp".into();
     }
-    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
-    if base == "wsock32" {
+    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32, et
+    // mswsock (AcceptEx, TransmitFile, WSARecvEx…) y est servie (#1390).
+    if base == "wsock32" || base == "mswsock" {
         return "ws2_32".into();
     }
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
