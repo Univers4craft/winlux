@@ -29,6 +29,8 @@ __declspec(dllimport) DWORD WINAPI GetCurrentProcessId(void);
 __declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
 __declspec(dllimport) DWORD WINAPI GetEnvironmentVariableA(const char *, char *, DWORD);
 __declspec(dllimport) BOOL WINAPI GetPhysicallyInstalledSystemMemory(ULONGLONG *);
+__declspec(dllimport) unsigned short *WINAPI GetCommandLineW(void);
+__declspec(dllimport) int WINAPI lstrlenW(const unsigned short *);
 
 static DWORD fs_read(DWORD off) {
     DWORD v;
@@ -110,6 +112,23 @@ void __stdcall entry(void) {
     /* Mémoire installée en Kio (#1205 : installeur Creative Cloud). */
     ULONGLONG kb = 0;
     if (!GetPhysicallyInstalledSystemMemory(&kb) || kb < 65536) fail(17, (DWORD)kb);
+    /* PEB lu sans API par la CRT Microsoft liée en statique, notamment à la
+     * sortie (#1440) : Ldr (listes bouclées), ProcessParameters (drapeaux,
+     * ligne de commande identique à GetCommandLineW), LoaderLock. */
+    {
+        DWORD ldr = *(DWORD *)(peb + 0x0c);
+        if (ldr == 0 || *(DWORD *)(ldr + 0x0c) == 0 || *(DWORD *)(ldr + 0x14) == 0)
+            fail(18, ldr);
+        DWORD pp = *(DWORD *)(peb + 0x10);
+        if (pp == 0 || *(DWORD *)(pp + 8) == 0) fail(19, pp);
+        const unsigned short *cl = *(const unsigned short **)(pp + 0x44);
+        const unsigned short *api = GetCommandLineW();
+        DWORD len = *(unsigned short *)(pp + 0x40) / 2;
+        if (!cl || lstrlenW(api) != (int)len) fail(20, len);
+        for (DWORD i = 0; i < len; i++)
+            if (cl[i] != api[i]) fail(20, i);
+        if (*(DWORD *)(peb + 0xa0) == 0) fail(21, 0);
+    }
     /* FS x86 intact après des passerelles (y compris en pas à pas). */
     if (fs_read(0x18) != teb || fs_read(0x00) != 0xffffffffu) ExitProcess(16);
     say("Tout est correct.\r\n");
