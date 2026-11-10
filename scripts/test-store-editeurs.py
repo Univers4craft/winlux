@@ -234,6 +234,26 @@ with tempfile.TemporaryDirectory() as tmp:
     check("thunderbird" in [a.ref for a in apt_src.apps()], "déjà installé : reste visible pour la désinstallation")
     g["dep11_index"], g["run"], g["have"], g["OFFLINE"] = saved
 
+    # Section « Testés sur Winlux » (#1515) : catalogue livré, fiches épinglées.
+    valides = tmp / "valides.json"
+    valides.write_text(json.dumps({"apps": [
+        {"id": "7zip", "name": "7-Zip", "version": "24.09", "publisher": "Igor Pavlov", "category": "utilitaires",
+         "installer": {"url": "https://www.7-zip.org/a/7z2409-x64.exe", "sha256": "a" * 64}},
+        {"id": "sans-empreinte", "name": "X", "installer": {"url": "https://x.example/x.exe"}}]}))
+    g = m["Windows"].apps.__globals__
+    saved_v = g["VALIDES"]
+    g["VALIDES"] = valides
+    win = [a for a in m["Windows"]().apps() if a.ref.startswith("valides/")]
+    check([a.ref for a in win] == ["valides/7zip"] and win[0].tested and win[0].provider == "Testés sur Winlux",
+          f"section « Testés sur Winlux » : fiche épinglée seulement ({[a.ref for a in win]})")
+    g["VALIDES"] = saved_v
+    shipped = json.loads((project / "integration/store-windows-valides.json").read_text())
+    for a in shipped["apps"]:
+        check(m["valid_windows_entry"](a) and a["installer"]["url"].startswith("https://") and a.get("publisher")
+              and a.get("version") and not BRAND.search(json.dumps(a, ensure_ascii=False)),
+              f"{a.get('id')} : adresse https, version, éditeur, SHA-256")
+    check("store-windows-valides.json" in (project / "scripts/build-live-iso.sh").read_text(), "catalogue livré dans l'ISO")
+
     # --- 3. winlux-store-repos sur une racine simulée -----------------------
     root = tmp / "root"
     lists = root / "etc/apt/sources.list.d"

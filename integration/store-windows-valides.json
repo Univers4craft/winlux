@@ -1,0 +1,4 @@
+{
+  "about": "Programmes .exe installés et utilisés sur le banc de Winlux (site/content/fr/software.md), section « Testés sur Winlux » de la boutique (#1515). Chaque fiche : adresse officielle épinglée, version, éditeur et SHA-256 relevés par la sonde de la CI (scripts/check-store-editeurs.py). Format « winlux » de docs/STORE.md.",
+  "apps": []
+}
