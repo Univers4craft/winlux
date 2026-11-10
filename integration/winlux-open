@@ -492,6 +492,10 @@ if [ -n "$exit_file" ]; then
 fi
 # 0x100, 0x200… : statut Linux 0, mais échec pour Windows.
 if [ "$status" -eq 0 ] && [ "$code" != 0 ] && [ "$code" != 0x00000000 ]; then status=1; fi
+# Arrêt demandé (SIGHUP, SIGINT, SIGTERM : fermeture de session, kill,
+# Ctrl+C) : 128 + numéro du signal, sans code Windows écrit par le runtime.
+# Ce n'est pas un plantage, rien à afficher (#1490).
+case $status:$code in 129:129|130:130|143:143) exit "$status" ;; esac
 if [ "$status" -ne 0 ]; then
     # Un plantage enregistré depuis le lancement : la boîte « Signaler un
     # problème » explique la cause et propose l'envoi (jamais automatique).
