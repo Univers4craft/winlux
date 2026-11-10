@@ -936,6 +936,12 @@ pub fn cli(args: &[String]) -> i32 {
                         }
                     };
                 }
+                // Bundle WiX Burn (vc_redist, Python…) : déroulé par le
+                // runtime quand on le lance, dossier choisi par le bundle.
+                if let Some((name, version, publisher)) = burn::info(&host) {
+                    println!("burn\t{name}\t{version}\t{publisher}\t");
+                    return 0;
+                }
                 return match info(&host) {
                     Ok(inf) => {
                         println!(
