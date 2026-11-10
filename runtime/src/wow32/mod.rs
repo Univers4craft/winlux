@@ -73,6 +73,15 @@ const TLS32_ENTRIES: usize = 512;
 const PEB32_IMAGE_BASE: usize = 0x08;
 const PEB32_PROCESS_HEAP: usize = 0x18;
 const PEB32_NUMBER_OF_PROCESSORS: usize = 0x64;
+const PEB32_LDR: usize = 0x0c;
+const PEB32_PROCESS_PARAMETERS: usize = 0x10;
+const PEB32_LOADER_LOCK: usize = 0xa0;
+/// Dans la page du PEB 32 bits, après lui : PEB_LDR_DATA, LoaderLock et
+/// RTL_USER_PROCESS_PARAMETERS (#1440).
+const PEB32_LDR_DATA_AT: usize = 0x500;
+const PEB32_LOADER_LOCK_AT: usize = 0x540;
+const PEB32_PARAMS_AT: usize = 0x600;
+const PEB32_PARAMS_SIZE: usize = 0x2a0;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static PEB32: AtomicU32 = AtomicU32::new(0);
@@ -776,8 +785,83 @@ pub fn init_peb32(image_base: usize) {
         w(0xa8, 0);
         *((peb + 0xac) as *mut u16) = 19045;
         w(0xb0, 2);
+        fill_peb32_tables(peb);
     }
     PEB32.store(peb as u32, Ordering::Relaxed);
+}
+
+/// Champs du PEB 32 bits que du code x86 lit sans passer par une API :
+/// PEB->Ldr (listes vides mais bouclées), PEB->LoaderLock (section libre)
+/// et PEB->ProcessParameters (drapeaux, poignées standard, chemin de
+/// l'image, ligne de commande), copiés du PEB 64 bits. Nuls, la CRT
+/// Microsoft liée en statique plantait en lisant [0+8] à la sortie de
+/// pyi32.exe et de Steam.exe (#1440). Disposition x86 de winternl.h.
+unsafe fn fill_peb32_tables(peb: usize) {
+    let w = |a: usize, v: u32| *(a as *mut u32) = v;
+    // PEB_LDR_DATA : Length, Initialized, puis trois LIST_ENTRY (InLoadOrder
+    // à 0x0c, InMemoryOrder à 0x14, InInitializationOrder à 0x1c).
+    let ldr = peb + PEB32_LDR_DATA_AT;
+    w(ldr, 0x30);
+    w(ldr + 4, 1);
+    for head in [0x0c, 0x14, 0x1c] {
+        w(ldr + head, (ldr + head) as u32);
+        w(ldr + head + 4, (ldr + head) as u32);
+    }
+    w(peb + PEB32_LDR, ldr as u32);
+    // RTL_CRITICAL_SECTION x86 libre : LockCount = -1.
+    let lock = peb + PEB32_LOADER_LOCK_AT;
+    w(lock + 4, u32::MAX);
+    w(peb + PEB32_LOADER_LOCK, lock as u32);
+
+    let params = peb + PEB32_PARAMS_AT;
+    w(params, PEB32_PARAMS_SIZE as u32);
+    w(params + 4, PEB32_PARAMS_SIZE as u32);
+    w(params + 8, 1); // RTL_USER_PROC_PARAMS_NORMALIZED
+    w(params + 0x18, crate::dlls::kernel32::STD_INPUT_REAL as u32);
+    w(params + 0x1c, crate::dlls::kernel32::STD_OUTPUT_REAL as u32);
+    w(params + 0x20, crate::dlls::kernel32::STD_ERROR_REAL as u32);
+    let p64 = match crate::process::peb() {
+        0 => 0,
+        p => *((p + crate::process::PEB_PROCESS_PARAMETERS) as *const usize),
+    };
+    let read64 = |off: usize| -> Vec<u16> {
+        if p64 == 0 {
+            return Vec::new();
+        }
+        let len = *((p64 + off) as *const u16) as usize / 2;
+        let buf = *((p64 + off + 8) as *const usize) as *const u16;
+        if buf.is_null() {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(buf, len).to_vec()
+    };
+    let mut dir: Vec<u16> = std::env::current_dir()
+        .map(|d| crate::paths::to_windows(&d))
+        .unwrap_or_default()
+        .encode_utf16()
+        .collect();
+    if dir.last() != Some(&(b'\\' as u16)) {
+        dir.push(b'\\' as u16);
+    }
+    // CurrentDirectory.DosPath (0x24), DllPath (0x30), ImagePathName (0x38),
+    // CommandLine (0x40) : UNICODE_STRING x86 (longueurs puis tampon).
+    let strings = [
+        (0x24, dir),
+        (0x30, Vec::new()),
+        (0x38, read64(0x60)),
+        (0x40, read64(0x70)),
+    ];
+    let bytes: usize = strings.iter().map(|(_, s)| s.len() * 2 + 2).sum();
+    let mut at = alloc_low(bytes.next_multiple_of(0x1000), false);
+    for (off, s) in strings {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), at as *mut u16, s.len());
+        *((at + s.len() * 2) as *mut u16) = 0;
+        *((params + off) as *mut u16) = (s.len() * 2) as u16;
+        *((params + off + 2) as *mut u16) = (s.len() * 2 + 2) as u16;
+        w(params + off + 4, at as u32);
+        at += s.len() * 2 + 2;
+    }
+    w(peb + PEB32_PROCESS_PARAMETERS, params as u32);
 }
 
 #[repr(C)]

@@ -182,11 +182,11 @@ unsafe extern "win64" fn move_file_with_progress_w(
 }
 
 /// MoveFileTransactedW et DeleteFileTransactedW (Transactional NTFS) :
-/// CreateTransaction n'est pas pris en charge ici (ktmw32), donc aucune
-/// transaction n'existe ; l'opération est faite directement, comme
-/// MoveFileWithProgressW et DeleteFileW. Le programme d'installation de
-/// Steam x86 cherche ces deux fonctions par GetProcAddress et, faute de
-/// les trouver, ne déplaçait aucun fichier extrait (#1475).
+/// les transactions de ktmw32 n'ont pas d'isolation (voir sysdlls), donc
+/// l'opération est faite tout de suite, comme MoveFileWithProgressW et
+/// DeleteFileW. Le programme d'installation de Steam x86 cherche ces deux
+/// fonctions par GetProcAddress pour mettre en place les fichiers extraits
+/// (#1475).
 unsafe extern "win64" fn move_file_transacted_w(
     src: *const u16,
     dst: *const u16,

@@ -292,6 +292,32 @@ static int CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
 }
 
+/* Flux EM_STREAMIN / EM_STREAMOUT (#1457) : rappel stdcall x86. */
+typedef struct {
+    char data[64];
+    int len, pos, calls;
+} Flux;
+
+static DWORD __stdcall flux_lire(DWORD cookie, BYTE *buf, LONG cb, LONG *pcb) {
+    Flux *f = (Flux *)cookie;
+    int n = f->len - f->pos;
+    if (n > cb) n = cb;
+    if (n > 7) n = 7; /* morceaux : le contrôle doit rappeler */
+    for (int i = 0; i < n; i++) buf[i] = f->data[f->pos + i];
+    f->pos += n;
+    f->calls++;
+    *pcb = n;
+    return 0;
+}
+
+static DWORD __stdcall flux_ecrire(DWORD cookie, BYTE *buf, LONG cb, LONG *pcb) {
+    Flux *f = (Flux *)cookie;
+    for (int i = 0; i < cb && f->len < (int)sizeof f->data; i++) f->data[f->len++] = buf[i];
+    f->calls++;
+    *pcb = cb;
+    return 0;
+}
+
 static void pump(void) {
     MSG m;
     while (PeekMessageA(&m, 0, 0, 0, 1)) {
@@ -480,6 +506,26 @@ void __stdcall entry(void) {
         CHECK(80, init_calls >= 1 && init_saw_create == 0 && real_saw_create == 1,
               init_calls * 256 + init_saw_create * 16 + real_saw_create);
         DestroyWindow(w);
+    }
+
+    /* 81-83 : RichEdit rempli et relu par flux, rappel x86 (#1457). */
+    {
+        HWND re = CreateWindowExA(0, "RichEdit20A", "", 0x50000004, 0, 0, 200, 60, hwnd, 0, inst, 0);
+        CHECK(81, re != 0, 0);
+        static Flux src = {"Bonjour depuis un flux x86", 26, 0, 0};
+        struct { DWORD cookie; DWORD err; void *cb; } es = {(DWORD)&src, 77, (void *)flux_lire};
+        CHECK(81, sizeof es == 12, sizeof es);
+        LRESULT n = SendMessageA(re, 0x0449, 1 /* SF_TEXT */, (LPARAM)&es);
+        char got[64];
+        GetWindowTextA(re, got, sizeof got);
+        CHECK(82, n == 26 && es.err == 0 && src.calls >= 4 && same(got, src.data), n * 256 + es.err);
+        static Flux dst = {{0}, 0, 0, 0};
+        es.cookie = (DWORD)&dst;
+        es.cb = (void *)flux_ecrire;
+        SendMessageA(re, 0x044A, 1, (LPARAM)&es);
+        dst.data[dst.len < 63 ? dst.len : 63] = 0;
+        CHECK(83, es.err == 0 && dst.len == 26 && same(dst.data, src.data), dst.len);
+        DestroyWindow(re);
     }
 
     /* Fin : WM_DESTROY, PostQuitMessage(7), GetMessage rend 0. */

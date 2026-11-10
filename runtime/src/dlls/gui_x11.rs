@@ -1000,6 +1000,9 @@ pub struct X11Backend {
     /// sans masquer ce qu'un autre processus présente dans le parent
     /// (fenêtre « Chrome Legacy Window » de Chromium, #1337).
     see_through: std::collections::HashSet<usize>,
+    /// Fenêtres de premier niveau réduites par le gestionnaire de fenêtres,
+    /// telles que le programme le sait (WM_SIZE SIZE_MINIMIZED envoyé, #1498).
+    iconic: std::collections::HashSet<usize>,
     /// Barre de menus de chaque fenêtre qui en a une, et menu ouvert.
     menu_bars: HashMap<usize, (Vec<gui::MenuBarItem>, Option<usize>)>,
     /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
@@ -1213,6 +1216,7 @@ impl X11Backend {
             back: HashMap::new(),
             direct3d: std::collections::HashSet::new(),
             see_through: std::collections::HashSet::new(),
+            iconic: std::collections::HashSet::new(),
             menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -2656,6 +2660,7 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::PropertyNotify(e) => self.on_property(e),
             Event::SelectionNotify(e) => {
                 let root = self.conn.setup().roots[self.screen].root;
                 let scale = self.scale;
@@ -3376,6 +3381,53 @@ impl X11Backend {
             x.height = height.min(u16::MAX as u32) as u16;
         }
         let _ = self.conn.flush();
+    }
+
+    /// WM_STATE changé : le gestionnaire de fenêtres a réduit ou restauré la
+    /// fenêtre (bouton de la barre des tâches, wmctrl, Réduire du programme).
+    /// Windows passe alors par SetWindowPos : WM_SIZE SIZE_MINIMIZED, puis
+    /// SIZE_RESTORED ou SIZE_MAXIMIZED au retour. Chromium n'y remet son rendu
+    /// en marche qu'ainsi : réactivée, la fenêtre de Claude restait vide
+    /// (#1498).
+    fn on_property(
+        &mut self,
+        e: x11rb::protocol::xproto::PropertyNotifyEvent,
+    ) -> Option<PendingEvent> {
+        let hwnd = *self.by_xwin.get(&e.window)?;
+        let w = self.windows.get(&hwnd)?;
+        if w.child || Self::top_xwin(w) != e.window {
+            return None;
+        }
+        let wm_state = self
+            .conn
+            .intern_atom(true, b"WM_STATE")
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| r.atom)?;
+        if e.atom != wm_state {
+            return None;
+        }
+        let (width, height) = (w.width, w.height);
+        let state = gui::GuiBackend::window_state(self, hwnd);
+        let minimized = state == gui::WINDOW_MINIMIZED;
+        if minimized == self.iconic.contains(&hwnd) {
+            return None;
+        }
+        let lparam = if minimized {
+            self.iconic.insert(hwnd);
+            0
+        } else {
+            self.iconic.remove(&hwnd);
+            let lw = self.logical(width as i32).clamp(1, u16::MAX as i32);
+            let lh = self.logical(height as i32).clamp(1, u16::MAX as i32);
+            ((lh as isize) << 16) | (lw as isize & 0xFFFF)
+        };
+        Some(PendingEvent {
+            hwnd,
+            message: gui::WM_SIZE,
+            wparam: gui::size_kind(state),
+            lparam,
+        })
     }
 
     fn on_configure(&mut self, e: ConfigureNotifyEvent) -> Option<PendingEvent> {
@@ -4156,6 +4208,99 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
     }
 
+    /// #1498 : réduite puis restaurée par le gestionnaire de fenêtres, la
+    /// fenêtre reçoit WM_SIZE SIZE_MINIMIZED, puis SIZE_RESTORED avec sa
+    /// taille. Il faut un gestionnaire de fenêtres (openbox) pour WM_STATE.
+    #[test]
+    #[ignore = "requires an X11 server and a window manager"]
+    fn reduite_puis_restauree_par_le_gestionnaire_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut backend = X11Backend::connect().expect("X11");
+        let hwnd = gui::alloc_hwnd();
+        gui::insert_window(hwnd, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(hwnd, "essai 1498", Rect::from_size(100, 100, 400, 300));
+        backend.show_window(hwnd, true);
+        let attendre = |b: &mut X11Backend, kind: usize| {
+            let fin = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < fin {
+                for e in b.pump() {
+                    if e.hwnd == hwnd && e.message == gui::WM_SIZE && e.wparam == kind {
+                        return Some(e.lparam);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            None
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        backend.set_window_state(hwnd, gui::WINDOW_MINIMIZED);
+        assert_eq!(attendre(&mut backend, 1), Some(0), "SIZE_MINIMIZED");
+        assert_eq!(backend.window_state(hwnd), gui::WINDOW_MINIMIZED);
+        backend.set_window_state(hwnd, gui::WINDOW_NORMAL);
+        let restored = attendre(&mut backend, 0).expect("SIZE_RESTORED");
+        assert_eq!(restored & 0xFFFF, 400);
+        backend.destroy_window(hwnd);
+        gui::destroy_window(hwnd);
+    }
+
+    /// #1477 : WM_NCLBUTTONDOWN(HTCAPTION) → _NET_WM_MOVERESIZE ; le
+    /// gestionnaire de fenêtres déplace la fenêtre tant que le bouton est
+    /// tenu. Il faut openbox et xdotool.
+    #[test]
+    #[ignore = "requires an X11 server, a window manager and xdotool"]
+    fn glisser_la_legende_deplace_la_fenetre_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let xdotool = |args: &[&str]| {
+            std::process::Command::new("xdotool")
+                .args(args)
+                .status()
+                .expect("xdotool");
+        };
+        let mut backend = X11Backend::connect().expect("X11");
+        let hwnd = gui::alloc_hwnd();
+        gui::insert_window(hwnd, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(hwnd, "essai 1477", Rect::from_size(100, 100, 400, 300));
+        backend.set_decorations(hwnd, 0);
+        backend.show_window(hwnd, true);
+        let pause = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+        let mut position = |b: &mut X11Backend| {
+            for _ in 0..10 {
+                b.pump();
+                pause(30);
+            }
+            (b.windows[&hwnd].x, b.windows[&hwnd].y)
+        };
+        pause(300);
+        let avant = position(&mut backend);
+        xdotool(&[
+            "mousemove",
+            &(avant.0 + 200).to_string(),
+            &(avant.1 + 10).to_string(),
+        ]);
+        xdotool(&["mousedown", "1"]);
+        pause(100);
+        backend.pump();
+        backend.begin_move_resize(hwnd, 2);
+        pause(200);
+        for pas in 1..=10 {
+            xdotool(&[
+                "mousemove",
+                &(avant.0 + 200 + pas * 15).to_string(),
+                &(avant.1 + 10 + pas * 10).to_string(),
+            ]);
+            pause(30);
+        }
+        xdotool(&["mouseup", "1"]);
+        pause(200);
+        let apres = position(&mut backend);
+        assert!(
+            apres.0 > avant.0 + 100 && apres.1 > avant.1 + 60,
+            "{avant:?} → {apres:?}"
+        );
+        backend.destroy_window(hwnd);
+        gui::destroy_window(hwnd);
+    }
+
     /// Un enfant WS_EX_TRANSPARENT devient une fenêtre X InputOnly : il ne
     /// masque pas l'image qu'un autre processus présente dans le parent
     /// (Chromium, #1337).
@@ -4856,7 +5001,9 @@ impl gui::GuiBackend for X11Backend {
                 | x11rb::protocol::xproto::EventMask::POINTER_MOTION
                 | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
                 | x11rb::protocol::xproto::EventMask::KEY_PRESS
-                | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
+                | x11rb::protocol::xproto::EventMask::KEY_RELEASE
+                // WM_STATE : réduite ou restaurée par le gestionnaire (#1498).
+                | x11rb::protocol::xproto::EventMask::PROPERTY_CHANGE,
         );
         let aux = if let Some(cursor) = pointer_cursor {
             aux.cursor(cursor)
@@ -5249,6 +5396,7 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.see_through.remove(&hwnd);
+        self.iconic.remove(&hwnd);
         self.owners.remove(&hwnd);
         self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);

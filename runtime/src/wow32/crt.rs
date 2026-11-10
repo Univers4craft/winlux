@@ -782,8 +782,42 @@ extern "win64" fn atexit_trampoline(f: usize) {
     call32(f, &[]);
 }
 
-/// `atexit(f)`, `_onexit(f)`, `_crt_atexit(f)`, `__dllonexit(f, …)` : la
-/// fonction x86 rejoint la liste commune, exécutée par `exit`/`_cexit`.
+/// `__dllonexit(f, &début, &fin)` x86 : table propre à la DLL, qu'elle
+/// parcourt à son DLL_PROCESS_DETACH, comme en 64 bits (#1479).
+extern "win64" fn dllonexit32(args: u32, _aux: usize) -> u64 {
+    let (f, pb, pe) = (rd(args), rd(args + 4), rd(args + 8));
+    if f == 0 || pb == 0 || pe == 0 {
+        return 0;
+    }
+    let (b, e) = (rd(pb), rd(pe));
+    let len = e.wrapping_sub(b);
+    if b == 0 || e < b || len % 4 != 0 || len > 1 << 22 {
+        crate::log_warn!("crt", "__dllonexit (x86) : table {b:#x}..{e:#x} invalide");
+        return atexit32(args, 1);
+    }
+    let count = len / 4;
+    let cap = unsafe { libc::malloc_usable_size(b as usize as *mut libc::c_void) } as u32 / 4;
+    let mut table = b;
+    if count >= cap {
+        let grown = unsafe {
+            libc::realloc(
+                b as usize as *mut libc::c_void,
+                (count + count.max(16)) as usize * 4,
+            )
+        } as usize;
+        if grown == 0 || grown > u32::MAX as usize {
+            return 0;
+        }
+        table = grown as u32;
+    }
+    wr(table + count * 4, f);
+    wr(pb, table);
+    wr(pe, table + (count + 1) * 4);
+    f as u64
+}
+
+/// `atexit(f)`, `_onexit(f)`, `_crt_atexit(f)` : la fonction x86 rejoint la
+/// liste commune, exécutée par `exit`/`_cexit`.
 extern "win64" fn atexit32(args: u32, returns_fn: usize) -> u64 {
     let f = rd(args);
     let r = crate::dlls::crt_runtime::register_atexit(
@@ -1421,7 +1455,8 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_initterm" => raw(initterm, 0),
         "_initterm_e" => raw(initterm, 1),
         "atexit" | "_crt_atexit" => raw(atexit32, 0),
-        "_onexit" | "__dllonexit" => raw(atexit32, 1),
+        "_onexit" => raw(atexit32, 1),
+        "__dllonexit" => raw(dllonexit32, 0),
         "at_quick_exit" | "_crt_at_quick_exit" => raw(ret_zero, 0),
         "_initialize_onexit_table" => raw(onexit_table, 0),
         "_register_onexit_function" => raw(onexit_table, 1),
