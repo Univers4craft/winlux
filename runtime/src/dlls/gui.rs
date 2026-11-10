@@ -3288,7 +3288,7 @@ fn activate_app(active: bool) {
 static ACTIVE_TOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Fenêtre de premier niveau qui contient `hwnd`.
-fn top_level_of(hwnd: usize) -> usize {
+pub fn top_level_of(hwnd: usize) -> usize {
     let map = lock(windows());
     let mut h = hwnd;
     for _ in 0..64 {
@@ -3307,6 +3307,22 @@ fn top_level_of(hwnd: usize) -> usize {
 /// SDL ne donne le focus clavier à sa fenêtre qu'à WM_ACTIVATE : sans lui,
 /// Xonotic se croyait inactif et ne présentait plus que son écran de
 /// chargement (#1421).
+/// SetFocus vers une autre fenêtre de premier niveau : la fenêtre active
+/// change tout de suite, et l'appelant envoie lui-même (de façon synchrone,
+/// comme Windows) WM_NCACTIVATE et WM_ACTIVATE. Renvoie l'ancienne fenêtre
+/// active, ou `None` si `new_top` l'était déjà.
+///
+/// Postés plus tard depuis le FocusIn de X11, ces messages arrivaient
+/// périmés : wxWidgets rend le focus à la fenêtre que WM_ACTIVATE déclare
+/// active, ce qui relançait l'échange suivant. Audacity et sa boîte de
+/// bienvenue se renvoyaient ainsi l'activation sans fin, et la boîte
+/// n'était dessinée qu'en partie (#1504).
+pub fn activate_top_for_focus(new_top: usize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    (old != new_top).then_some(old)
+}
+
 fn change_active_top(new_top: usize) {
     use std::sync::atomic::Ordering;
     let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
@@ -3320,6 +3336,10 @@ fn change_active_top(new_top: usize) {
     if new_top != 0 {
         post_to_window(new_top, Msg::new(new_top, WM_NCACTIVATE, 1, 0));
         post_to_window(new_top, Msg::new(new_top, WM_ACTIVATE, 1, old as isize));
+        crate::dlls::chromium_win32::notify_win_event(
+            crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
+            new_top,
+        );
     }
 }
 
@@ -3532,13 +3552,18 @@ pub fn pump_backend() {
             continue;
         }
         if e.message == WM_SIZE {
-            let packed = e.lparam as u32;
-            update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            // Réduite : Windows annonce 0x0, la taille restaurée est gardée.
+            if e.wparam != SIZE_MINIMIZED {
+                let packed = e.lparam as u32;
+                update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            }
+            geometry_win_events(e.hwnd, Some(e.wparam));
         } else if e.message == WM_MOVE {
             let packed = e.lparam as u32;
             let x = (packed as u16 as i16) as i32;
             let y = ((packed >> 16) as u16 as i16) as i32;
             update_window_position(e.hwnd, x, y);
+            geometry_win_events(e.hwnd, None);
         }
         // Taille ou position changée par le gestionnaire de fenêtres (agrandir,
         // restaurer, glisser) : marquée pour que DispatchMessage envoie
@@ -3559,6 +3584,39 @@ pub fn pump_backend() {
             post_to_window(e.hwnd, m);
         }
     }
+}
+
+const SIZE_MINIMIZED: usize = 1;
+
+/// Événements SetWinEventHook d'un changement de géométrie venu du
+/// gestionnaire de fenêtres (fenêtres de premier niveau) : déplacement ou
+/// taille (EVENT_OBJECT_LOCATIONCHANGE), début et fin de réduction
+/// (EVENT_SYSTEM_MINIMIZESTART / MINIMIZEEND), comme Windows (#1476, #1498).
+fn geometry_win_events(hwnd: usize, size_kind: Option<usize>) {
+    use crate::dlls::chromium_win32 as w;
+    if window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    static MINIMIZED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    if let Some(kind) = size_kind {
+        let mut minimized = lock(&MINIMIZED);
+        let was = minimized.contains(&hwnd);
+        let now = kind == SIZE_MINIMIZED;
+        if now && !was {
+            minimized.push(hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, hwnd);
+            return;
+        }
+        if was && !now {
+            minimized.retain(|&h| h != hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, hwnd);
+            // Restaurée : tout est à redessiner, comme sous Windows.
+            request_paint(hwnd);
+        }
+    }
+    w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, hwnd);
 }
 
 // ---------- Raccourcis globaux (RegisterHotKey) ----------
@@ -4559,16 +4617,17 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
             0
         }
-        // WM_NCLBUTTONDBLCLK sur la légende : agrandir ou restaurer (#1477).
+        // WM_NCLBUTTONDBLCLK sur la légende : WM_SYSCOMMAND SC_MAXIMIZE ou
+        // SC_RESTORE, comme Windows (#1477).
         0x00A3 if wparam == 2 => {
-            with_backend(|b| {
-                let state = if b.window_state(hwnd) == WINDOW_MAXIMIZED {
-                    WINDOW_NORMAL
-                } else {
-                    WINDOW_MAXIMIZED
-                };
-                b.set_window_state(hwnd, state)
-            });
+            let mut state = WINDOW_NORMAL;
+            with_backend(|b| state = b.window_state(hwnd));
+            let command = if state == WINDOW_MAXIMIZED {
+                0xF120
+            } else {
+                0xF030
+            };
+            unsafe { crate::dlls::user32::send_message_w(hwnd, 0x0112, command, lparam) };
             0
         }
         // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
@@ -5984,6 +6043,26 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn setfocus_active_sa_fenetre_une_seule_fois() {
+        // #1504 : SetFocus active la fenêtre de premier niveau tout de
+        // suite ; le FocusIn de X11 qui suit ne doit plus rien reposter.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let a = fenetre_de_test();
+        let b = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(fille, b);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert_eq!(top_level_of(fille), b);
+        activate_top_for_focus(a);
+        assert_eq!(activate_top_for_focus(top_level_of(fille)), Some(a));
+        assert_eq!(activate_top_for_focus(b), None, "déjà active");
+        for h in [fille, b, a] {
+            destroy_window(h);
+        }
+        activate_top_for_focus(0);
     }
 
     #[test]

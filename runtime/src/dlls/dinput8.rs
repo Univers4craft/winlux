@@ -1577,6 +1577,42 @@ pub unsafe extern "win64" fn direct_input_create_ex(
     }
 }
 
+/// Classes COM de dinput8.dll et dinput.dll : SDL 2 crée DirectInput par
+/// `CoCreateInstance(CLSID_DirectInput8, …)` puis `Initialize`, au lieu de
+/// DirectInput8Create. Sans elles, pygame 32 bits réessayait sans fin et
+/// n'ouvrait jamais sa fenêtre (#1516).
+const CLSID_DIRECTINPUT: Guid = guid(0x25E609E0, 0xB259, 0x11CF, BFC7);
+const CLSID_DIRECTINPUT8: Guid = guid(0x25E609E4, 0xB259, 0x11CF, BFC7);
+
+pub unsafe fn create_builtin(
+    clsid: &super::ole32::Guid,
+    iid: &super::ole32::Guid,
+    out: *mut *mut c_void,
+) -> Option<i32> {
+    // SAFETY : un GUID COM fait 16 octets dans les deux représentations.
+    let clsid: &Guid = &*(clsid as *const super::ole32::Guid as *const Guid);
+    let iid: &Guid = &*(iid as *const super::ole32::Guid as *const Guid);
+    create_by_guid(clsid, iid, out)
+}
+
+unsafe fn create_by_guid(clsid: &Guid, iid: &Guid, out: *mut *mut c_void) -> Option<i32> {
+    if *clsid == CLSID_DIRECTINPUT8 {
+        return Some(match *iid {
+            g if g == IID_IDIRECTINPUT8A || g == IID_IUNKNOWN => new_di(out, false, false),
+            g if g == IID_IDIRECTINPUT8W => new_di(out, true, false),
+            _ => E_NOINTERFACE,
+        });
+    }
+    if *clsid == CLSID_DIRECTINPUT {
+        return Some(match *iid {
+            g if g == IID_IUNKNOWN => new_di(out, false, true),
+            g if DI_IIDS.contains(&g) => new_di(out, is_wide_iid(&g), true),
+            _ => E_NOINTERFACE,
+        });
+    }
+    None
+}
+
 pub extern "win64" fn dll_can_unload_now() -> i32 {
     comobj::S_FALSE
 }
@@ -1600,6 +1636,24 @@ pub fn legacy_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classe_com_directinput8() {
+        // #1516 : CoCreateInstance(CLSID_DirectInput8, IID_IDirectInput8W).
+        let mut out: *mut c_void = std::ptr::null_mut();
+        let hr = unsafe { create_by_guid(&CLSID_DIRECTINPUT8, &IID_IDIRECTINPUT8W, &mut out) };
+        assert_eq!(hr, Some(DI_OK));
+        assert!(!out.is_null());
+        unsafe {
+            assert_eq!(i_initialize(out as *mut DiObj, 0, 0x0800), DI_OK);
+            drop(Box::from_raw(out as *mut DiObj));
+        }
+        let other = guid(0x12345678, 0, 0, BFC7);
+        assert_eq!(
+            unsafe { create_by_guid(&other, &IID_IUNKNOWN, &mut out) },
+            None
+        );
+    }
 
     /// c_dfDIJoystick (partiel) : X, Y, 2 curseurs, 1 chapeau, 4 boutons.
     fn joystick_format() -> Vec<(Option<Guid>, u32, u32)> {

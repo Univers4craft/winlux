@@ -607,6 +607,7 @@ def run_lock(start="clock"):
       .lock-hint { color: white; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       .lock-name { color: white; font-size: 26px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
       .lock-error { color: white; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+      .lock-method-hint { color: white; font-size: 14px; margin-bottom: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       .lock-caps { color: white; font-size: 12px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       entry.lock-password { background: rgba(255,255,255,0.88); color: #1b1b1b; border: none;
                             border-bottom: 2px solid #3b6ee8; border-radius: 4px; padding: 8px 10px;
@@ -889,6 +890,8 @@ def run_lock(start="clock"):
             entry = self.password_entry
             entry.set_placeholder_text(_t("Code PIN") if self.method == "pin" else _t("Mot de passe"))
             entry.set_input_purpose(Gtk.InputPurpose.PIN if self.method == "pin" else Gtk.InputPurpose.PASSWORD)
+            entry.get_accessible().set_name(_t("Code PIN") if self.method == "pin" else _t("Mot de passe"))
+            self.method_hint.set_visible(self.method == "pin" and bool(self.password))
             entry.set_text("")
             entry.set_visibility(False)
             if not keep_error:
@@ -1005,6 +1008,12 @@ def run_lock(start="clock"):
             self.signin.pack_start(name, False, False, 6)
             # Champ et bouton construits tous deux : le compte choisi en bas à
             # gauche peut avoir un mot de passe ou non.
+            # GTK cache le texte indicatif du champ dès qu'il a le focus, donc
+            # dès l'affichage : « Code PIN » est aussi écrit au-dessus (#1499).
+            self.method_hint = Gtk.Label(label=_t("Code PIN"), halign=Gtk.Align.CENTER)
+            self.method_hint.get_style_context().add_class("lock-method-hint")
+            self.method_hint.set_no_show_all(True)
+            self.signin.pack_start(self.method_hint, False, False, 0)
             row = Gtk.Box(spacing=0, halign=Gtk.Align.CENTER)
             self.password_entry = Gtk.Entry(visibility=False, placeholder_text=_t("Mot de passe"))
             self.password_entry.get_style_context().add_class("lock-password")

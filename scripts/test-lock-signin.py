@@ -148,6 +148,8 @@ def scenario():
         entry = app.password_entry
         check(app.method == "pin" and entry.get_placeholder_text() == "Code PIN",
               "code PIN proposé d'office pour alice")
+        check(entry.is_focus() and app.method_hint.get_visible() and app.method_hint.get_text() == "Code PIN",
+              "champ au focus : « Code PIN » reste écrit au-dessus (#1499)")
         check(app.options_link.get_visible() and app.finger_label.get_visible()
               and "doigt" in app.finger_label.get_text(), "« Options de connexion » et invite du lecteur affichées")
         type_text("0000")
@@ -160,7 +162,8 @@ def scenario():
                                                                       "ecran-connexion.png")], check=False)
         app.method_buttons["password"].clicked()
         pump(0.3)
-        check(app.method == "password" and entry.get_placeholder_text() == "Mot de passe", "retour au mot de passe")
+        check(app.method == "password" and entry.get_placeholder_text() == "Mot de passe"
+              and not app.method_hint.get_visible(), "retour au mot de passe (indication PIN masquée)")
         app.method_buttons["pin"].clicked()
         pump(0.3)
         # Bob : mot de passe seulement.
@@ -168,6 +171,7 @@ def scenario():
         pump(1.0)
         check(app.method == "password" and not app.options_link.get_visible() and not app.finger_label.get_visible(),
               "bob (sans code ni doigt) : mot de passe seul")
+        check(not app.method_hint.get_visible(), "bob : pas d'indication « Code PIN »")
         app.select_account("alice")
         pump(1.0)
         check(app.method == "pin", "alice resélectionnée : code PIN")
