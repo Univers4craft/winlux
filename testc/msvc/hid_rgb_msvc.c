@@ -52,22 +52,24 @@ void *memset(void *d, int c, u64 n) {
     return d;
 }
 
-static int wcontains(const u16 *s, const char *w) {
+// Cherche w dans s (sans casse) ; *end reçoit l'adresse qui suit le zéro
+// final. Une seule boucle : un parcours « jusqu'au zéro » isolé serait
+// remplacé par un appel à wcslen par les clang récents (pas de CRT ici).
+static int wcontains(const u16 *s, const char *w, const u16 **end) {
+    int found = 0;
     for (; *s; s++) {
         const u16 *a = s;
         const char *b = w;
-        while (*b && (*a | 0x20) == (u16)(*b | 0x20)) a++, b++;
-        if (!*b) return 1;
+        while (!found && *b && (*a | 0x20) == (u16)(*b | 0x20)) a++, b++;
+        if (!*b) found = 1;
     }
-    return 0;
+    if (end) *end = s + 1;
+    return found;
 }
 
 static const u16 *find(const u16 *list, const char *w) {
-    for (const u16 *p = list; *p;) {
-        if (wcontains(p, w)) return p;
-        while (*p) p++;
-        p++;
-    }
+    for (const u16 *p = list, *next; *p; p = next)
+        if (wcontains(p, w, &next)) return p;
     return 0;
 }
 
@@ -97,7 +99,7 @@ int entry() {
     //    identifiants matériels (ce que lit hidapi).
     u32 type = 0, len = sizeof text;
     if (CM_Get_Device_Interface_PropertyW(rgb, &INSTANCE, &type, text, &len, 0) || type != 0x12 ||
-        !wcontains(text, "HID\\VID_1209&PID_0001&MI_02&COL02"))
+        !wcontains(text, "HID\\VID_1209&PID_0001&MI_02&COL02", 0))
         ExitProcess(20);
     u32 dn = 0;
     len = sizeof value;
@@ -115,10 +117,10 @@ int entry() {
     // 4. Chaînes USB : fabricant, produit, série, et par indice.
     h = CreateFileW(rgb, 0xC0000000, 3, 0, 3, 0, 0);
     if (h == INVALID) ExitProcess(4);
-    if (!HidD_GetManufacturerString(h, text, sizeof text) || !wcontains(text, "Winlux Essais")) ExitProcess(4);
-    if (!HidD_GetProductString(h, text, sizeof text) || !wcontains(text, "Clavier RVB")) ExitProcess(4);
-    if (!HidD_GetSerialNumberString(h, text, sizeof text) || !wcontains(text, "RVB0001")) ExitProcess(4);
-    if (!HidD_GetIndexedString(h, 2, text, sizeof text) || !wcontains(text, "Clavier RVB")) ExitProcess(4);
+    if (!HidD_GetManufacturerString(h, text, sizeof text) || !wcontains(text, "Winlux Essais", 0)) ExitProcess(4);
+    if (!HidD_GetProductString(h, text, sizeof text) || !wcontains(text, "Clavier RVB", 0)) ExitProcess(4);
+    if (!HidD_GetSerialNumberString(h, text, sizeof text) || !wcontains(text, "RVB0001", 0)) ExitProcess(4);
+    if (!HidD_GetIndexedString(h, 2, text, sizeof text) || !wcontains(text, "Clavier RVB", 0)) ExitProcess(4);
     if (!HidD_GetAttributes(h, &at) || at.version != 0x0105) ExitProcess(4);
     // 5. Capacités de la collection fabricant : Output 33, Feature 65.
     void *pre = 0;

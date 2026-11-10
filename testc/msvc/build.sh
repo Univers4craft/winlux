@@ -42,7 +42,7 @@ printf 'LIBRARY hid.dll\nEXPORTS\nHidD_GetHidGuid\nHidD_GetAttributes\nHidD_GetM
 for d in kernel32_hidrgb cfgmgr32_hidrgb hid_hidrgb; do
     llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
 done
-clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hid_rgb_msvc.c" -o "$tmp/hid_rgb_msvc.obj"
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fno-builtin -c "$src/hid_rgb_msvc.c" -o "$tmp/hid_rgb_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_rgb_msvc.obj" \
     "$tmp/kernel32_hidrgb.lib" "$tmp/cfgmgr32_hidrgb.lib" "$tmp/hid_hidrgb.lib" /out:"$out/hid_rgb_msvc.exe"
 # DeviceIoControl sur volumes, disques et fichiers creux (#271).
