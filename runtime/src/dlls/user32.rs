@@ -667,6 +667,7 @@ unsafe fn send_set_cursor(m: &Msg) {
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
+        super::chromium_win32::deliver_win_events();
         super::ws2_32::pump_async();
         let q = gui::current_queue();
         // Un minuteur très en retard passe avant les entrées (anti-famine).
@@ -756,6 +757,7 @@ pub unsafe extern "win64" fn peek_message_a(
 
 unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
     gui::pump_backend();
+    super::chromium_win32::deliver_win_events();
     super::ws2_32::pump_async();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
@@ -857,11 +859,12 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if m.l_private == gui::BACKEND_GEOMETRY {
         geometry_changed(m.hwnd, m.message);
     }
-    let (message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam);
-    let wnd_proc = gui::wnd_proc_of(m.hwnd);
+    let (hwnd, message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam)
+        .unwrap_or((m.hwnd, m.message, m.wparam, m.lparam));
+    let wnd_proc = gui::wnd_proc_of(hwnd);
     match wnd_proc {
-        Some(wp) => gui::call_wndproc(wp, m.hwnd, message, wparam, lparam),
-        None => gui::def_window_proc(m.hwnd, message, wparam, lparam),
+        Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
+        None => gui::def_window_proc(hwnd, message, wparam, lparam),
     }
 }
 
@@ -900,41 +903,82 @@ unsafe fn geometry_changed(hwnd: usize, message: u32) {
 /// Clic gauche dans une fenêtre qui dessine sa propre barre de titre (son
 /// cadre a été retiré, voir `frame_changed`) : comme Windows, le point est
 /// soumis à WM_NCHITTEST, et sur la légende ou un bord le clic devient
-/// WM_NCLBUTTONDOWN (ou WM_NCLBUTTONDBLCLK) en coordonnées écran.
-/// DefWindowProc lance alors le déplacement ou le redimensionnement par le
-/// gestionnaire de fenêtres. Sans cela, glisser la barre de Claude ne
-/// déplaçait pas la fenêtre (#1477). Les boutons de légende (HTMINBUTTON,
-/// HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium les traite
-/// lui-même.
+/// WM_NCLBUTTONDOWN en coordonnées écran ; un second clic rapide sur la
+/// légende devient WM_NCLBUTTONDBLCLK. DefWindowProc lance alors le
+/// déplacement par le gestionnaire de fenêtres, ou agrandit et restaure.
+/// Chromium couvre sa page d'un enfant transparent (« Chrome Legacy
+/// Window », fenêtre X InputOnly depuis #1337) : c'est lui qui reçoit le
+/// clic, mais la question et le message vont à la fenêtre de premier niveau,
+/// qui seule connaît ses zones glissables (#1477). Les boutons de légende
+/// (HTMINBUTTON, HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium
+/// les traite lui-même. Renvoie la fenêtre et le message à distribuer.
 unsafe fn caption_click(
     hwnd: usize,
     message: u32,
     wparam: usize,
     lparam: isize,
-) -> (u32, usize, isize) {
+) -> Option<(usize, u32, usize, isize)> {
     const WM_LBUTTONDOWN: u32 = 0x0201;
     const WM_LBUTTONDBLCLK: u32 = 0x0203;
-    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK)
-        || !OWN_FRAME
+    thread_local! {
+        /// Dernier clic sur une légende : instant, point écran, fenêtre.
+        static LAST: std::cell::Cell<Option<(std::time::Instant, i32, i32, usize)>> =
+            const { std::cell::Cell::new(None) };
+    }
+    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK) {
+        return None;
+    }
+    let own = |h: usize| {
+        OWN_FRAME
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains(&hwnd)
-    {
-        return (message, wparam, lparam);
-    }
-    let Some(r) = gui::window_rect(hwnd) else {
-        return (message, wparam, lparam);
+            .contains(&h)
     };
-    let x = lparam as u32 as u16 as i16 as i32;
-    let y = (lparam as u32 >> 16) as u16 as i16 as i32;
-    let screen = pack_i16_pair(r.left + x, r.top + y);
-    let hit = send_message_w(hwnd, 0x0084, 0, screen);
+    let top = if own(hwnd) {
+        hwnd
+    } else if gui::is_see_through_child(hwnd) {
+        let top = gui::top_level_of(hwnd);
+        if top == 0 || !own(top) {
+            return None;
+        }
+        top
+    } else {
+        return None;
+    };
+    let origin = gui::screen_rect(hwnd)?;
+    let x = origin.left + (lparam as u32 as u16 as i16 as i32);
+    let y = origin.top + ((lparam as u32 >> 16) as u16 as i16 as i32);
+    let screen = pack_i16_pair(x, y);
+    let hit = send_message_w(top, 0x0084, 0, screen);
+    if window_diag() {
+        eprintln!(
+            "winlux[fenetre] clic {hwnd:#x} → légende de {top:#x} ? WM_NCHITTEST({x},{y}) = {hit}"
+        );
+    }
     let caption = hit == 2;
-    let border = (10..=17).contains(&hit);
-    match message {
-        WM_LBUTTONDOWN if caption || border => (0x00A1, hit as usize, screen),
-        WM_LBUTTONDBLCLK if caption => (0x00A3, hit as usize, screen),
-        _ => (message, wparam, lparam),
+    if !caption && !(10..=17).contains(&hit) {
+        return None;
+    }
+    let _ = wparam;
+    if !caption {
+        LAST.with(|l| l.set(None));
+        return Some((top, 0x00A1, hit as usize, screen));
+    }
+    let now = std::time::Instant::now();
+    let double = LAST.with(|l| {
+        l.get().is_some_and(|(t, lx, ly, lh)| {
+            lh == top
+                && now.duration_since(t) <= std::time::Duration::from_millis(500)
+                && (x - lx).abs() <= 4
+                && (y - ly).abs() <= 4
+        })
+    });
+    if double {
+        LAST.with(|l| l.set(None));
+        Some((top, 0x00A3, hit as usize, screen))
+    } else {
+        LAST.with(|l| l.set(Some((now, x, y, top))));
+        Some((top, 0x00A1, hit as usize, screen))
     }
 }
 
@@ -1074,6 +1118,15 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     }
     if cmd != gui::SW_HIDE {
         gui::request_paint(hwnd);
+    }
+    if was != show && gui::window_parent(hwnd).unwrap_or(0) == 0 {
+        use super::chromium_win32 as w;
+        let event = if show {
+            w::EVENT_OBJECT_SHOW
+        } else {
+            w::EVENT_OBJECT_HIDE
+        };
+        w::notify_win_event(event, hwnd);
     }
     was as i32
 }
@@ -1428,6 +1481,12 @@ pub unsafe extern "win64" fn set_window_pos(
             gui::post_to_window(
                 hwnd,
                 Msg::new(hwnd, gui::WM_MOVE, 0, pack_i16_pair(left, top)),
+            );
+        }
+        if gui::window_parent(hwnd).unwrap_or(0) == 0 {
+            super::chromium_win32::notify_win_event(
+                super::chromium_win32::EVENT_OBJECT_LOCATIONCHANGE,
+                hwnd,
             );
         }
     }
@@ -4409,6 +4468,11 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
             }
         }
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
+        //    Les rappels SetWinEventHook en attente sont appelés pendant
+        //    l'attente, comme sous Windows.
+        if wake_mask != 0 {
+            super::chromium_win32::deliver_win_events();
+        }
         if wake_mask != 0 && message_waiting() {
             return count;
         }
@@ -6044,9 +6108,10 @@ mod tests {
             let got = vus();
             assert_eq!(got.iter().map(|v| v.0).collect::<Vec<_>>(), [gui::WM_SIZE]);
 
-            // Clic dans la barre maison (y = 10) : légende, coordonnées écran.
+            // Clic dans la barre maison (y = 10) : légende, coordonnées écran ;
+            // un second clic rapide au même endroit : double-clic.
             dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
-            dispatch_message_w(&Msg::new(hwnd, 0x0203, 1, pack_i16_pair(500, 10)));
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
             // Clic dans la page (y = 400) : clic client inchangé.
             dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 400)));
             let got = vus();
@@ -6055,7 +6120,106 @@ mod tests {
                 [(0x00A1, 2), (0x00A3, 2), (0x0201, 1)]
             );
             assert_eq!(got[0].2, pack_i16_pair(500, 10));
+
+            // « Chrome Legacy Window » : enfant transparent qui couvre la page
+            // et reçoit le clic. La légende est demandée à la fenêtre de
+            // premier niveau, qui reçoit WM_NCLBUTTONDOWN.
+            let legacy_name: Vec<u16> = "Winlux1477Legacy".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: def_window_proc_w as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: legacy_name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let legacy = create_window_ex_w(
+                0x20, // WS_EX_TRANSPARENT
+                legacy_name.as_ptr(),
+                legacy_name.as_ptr(),
+                0x5000_0000, // WS_CHILD | WS_VISIBLE
+                0,
+                0,
+                1920,
+                1039,
+                hwnd,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(legacy, 0);
+            dispatch_message_w(&Msg::new(legacy, 0x0201, 1, pack_i16_pair(700, 12)));
+            let got = vus();
+            assert_eq!(
+                got.iter().map(|v| (v.0, v.1, v.2)).collect::<Vec<_>>(),
+                [(0x00A1, 2, pack_i16_pair(700, 12))]
+            );
+            destroy_window(legacy);
             destroy_window(hwnd);
+        }
+    }
+
+    static WIN_EVENTS_1498: std::sync::Mutex<Vec<(u32, usize)>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn crochet_1498(
+        _hook: usize,
+        event: u32,
+        hwnd: usize,
+        _object: i32,
+        _child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        WIN_EVENTS_1498.lock().unwrap().push((event, hwnd));
+    }
+
+    /// #1498 : les événements SetWinEventHook (réduction, déplacement) sont
+    /// livrés au thread qui a posé le crochet quand il relève ses messages,
+    /// une seule fois par fenêtre tant qu'ils attendent.
+    #[test]
+    fn crochet_win_event_livre_au_thread_qui_le_pose() {
+        use super::super::chromium_win32 as w;
+        unsafe {
+            let hook = w::SetWinEventHook(
+                0x0016,
+                0x0017,
+                0,
+                crochet_1498 as *const () as usize,
+                0,
+                0,
+                0,
+            );
+            assert_ne!(hook, 0);
+            let fenetre = 0x1498_0000;
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, fenetre);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, fenetre);
+            // Hors de l'intervalle du crochet : rien.
+            w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, fenetre);
+            // Un autre thread ne reçoit rien.
+            std::thread::spawn(w::deliver_win_events_for_test)
+                .join()
+                .unwrap();
+            assert!(WIN_EVENTS_1498.lock().unwrap().is_empty());
+            let mut m = Msg::new(0, 0, 0, 0);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, fenetre);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            assert_eq!(
+                std::mem::take(&mut *WIN_EVENTS_1498.lock().unwrap()),
+                [
+                    (w::EVENT_SYSTEM_MINIMIZESTART, fenetre),
+                    (w::EVENT_SYSTEM_MINIMIZEEND, fenetre)
+                ]
+            );
+            assert_eq!(w::UnhookWinEvent(hook), 1);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, fenetre);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            assert!(WIN_EVENTS_1498.lock().unwrap().is_empty());
         }
     }
 
