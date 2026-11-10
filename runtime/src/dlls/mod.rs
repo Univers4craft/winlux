@@ -233,6 +233,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
@@ -993,6 +994,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "odbc32",
                 exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wevtapi",
+                exports: wevtapi::exports(),
                 handle: fake_module(),
             },
             Builtin {
