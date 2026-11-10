@@ -18,6 +18,8 @@ WriteFile@20
 ExitProcess@4
 GetCommandLineA@0
 lstrlenA@4
+GetCommandLineW@0
+lstrlenW@4
 GetTickCount@0
 GetTickCount64@0
 VerSetConditionMask@16
