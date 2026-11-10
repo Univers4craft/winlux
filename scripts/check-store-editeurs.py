@@ -7,6 +7,9 @@ taille que le Store proposerait aujourd'hui. Pour une entrée « deb » (fichier
 finale, la version et l'empreinte à épingler, et les lignes de dépôt APT que
 ses scripts de maintenance déclarent (lues comme du texte, jamais exécutées).
 
+Puis, pour les logiciels candidats (CANDIDATS ci-dessous), la dernière version
+publiée, son adresse et son empreinte, à recopier dans le catalogue après relecture.
+
     check-store-editeurs.py [integration/store-editeurs.json]"""
 import gzip
 import hashlib
@@ -74,7 +77,71 @@ def main(argv):
                     if re.search(r"https?://|signed-by|sources\.list|keyring|\.gpg|\.asc|Suites|Components|Types:", line):
                         print(f"    {script.name}: {line.strip()[:240]}")
     print(f"{failures} dépôt(s) en échec")
+    candidats()
     return 0
+
+
+# Logiciels proposés pour la boutique (10 nov.) : version et empreinte relevées
+# ici, puisque seule la CI atteint les sites des éditeurs.
+CANDIDATS = [
+    {"id": "bitwarden", "github": "bitwarden/clients", "tag": "desktop-v", "asset": r"^Bitwarden-[0-9.]+-amd64\.deb$"},
+    {"id": "obsidian", "github": "obsidianmd/obsidian-releases", "tag": "v", "asset": r"^obsidian_[0-9.]+_amd64\.deb$"},
+    {"id": "teamviewer", "base": "https://linux.teamviewer.com/deb/", "index": "dists/stable/main/binary-amd64/Packages",
+     "package": "teamviewer"},
+    {"id": "thunderbird", "base": "https://packages.mozilla.org/apt/", "index": "dists/mozilla/main/binary-amd64/Packages",
+     "package": "thunderbird"},
+    {"id": "protonmail", "json": "https://proton.me/download/mail/linux/version.json"},
+]
+
+
+def candidats():
+    print("--- Candidats ---")
+    for c in CANDIDATS:
+        with tempfile.TemporaryDirectory(prefix="editeur-candidat-") as work:
+            work = Path(work)
+            try:
+                if "github" in c:
+                    r = curl(f"https://api.github.com/repos/{c['github']}/releases?per_page=40", work / "r.json")
+                    if r.returncode:
+                        print(f"{c['id']}: API injoignable ({r.stderr.strip()})")
+                        continue
+                    rels = [x for x in json.loads((work / "r.json").read_text())
+                            if x["tag_name"].startswith(c["tag"]) and not x["prerelease"] and not x["draft"]]
+                    assets = [a for a in (rels[0]["assets"] if rels else []) if re.match(c["asset"], a["name"])]
+                    if not assets:
+                        print(f"{c['id']}: aucun .deb trouvé")
+                        continue
+                    a = assets[0]
+                    deb = work / "paquet.deb"
+                    r = curl(a["browser_download_url"], deb)
+                    if r.returncode:
+                        print(f"{c['id']}: téléchargement impossible ({r.stderr.strip()})")
+                        continue
+                    fields = subprocess.run(["dpkg-deb", "-f", str(deb), "Package", "Version", "Depends"],
+                                            capture_output=True, text=True).stdout
+                    print(f"{c['id']}: {rels[0]['tag_name']} url={a['browser_download_url']} "
+                          f"finale={urllib.parse.urlparse(r.stdout.strip()).hostname} "
+                          f"sha256={hashlib.sha256(deb.read_bytes()).hexdigest()} api={a.get('digest')} "
+                          f"size={deb.stat().st_size} " + " ".join(fields.split())[:400])
+                elif "index" in c:
+                    r = curl(urllib.parse.urljoin(c["base"], c["index"]), work / "Packages")
+                    if r.returncode:
+                        print(f"{c['id']}: index injoignable ({r.stderr.strip()})")
+                        continue
+                    data = (work / "Packages").read_text(errors="replace")
+                    names = sorted({m for m in re.findall(r"^Package: (\S+)", data, re.M)})
+                    blocks = [b for b in data.split("\n\n") if re.search(rf"^Package: {re.escape(c['package'])}$", b, re.M)]
+                    print(f"{c['id']}: paquets de l'index : {' '.join(names)[:400]}")
+                    if blocks:
+                        last = dict(l.split(": ", 1) for l in blocks[-1].splitlines() if ": " in l and not l.startswith(" "))
+                        print(f"    dernière {last.get('Version')} Filename={last.get('Filename')} "
+                              f"SHA256={last.get('SHA256')} Size={last.get('Size')}")
+                else:
+                    r = curl(c["json"], work / "v.json")
+                    print(f"{c['id']}: " + ((work / "v.json").read_text(errors="replace")[:1500] if not r.returncode
+                                            else f"injoignable ({r.stderr.strip()})"))
+            except Exception as error:  # sonde informative : on continue
+                print(f"{c['id']}: erreur {error!r}")
 
 
 if __name__ == "__main__":
