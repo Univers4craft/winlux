@@ -879,6 +879,7 @@ pub fn process_started() {
         ACMDLN = crate::dlls::kernel32::get_command_line_a();
         WCMDLN = crate::dlls::kernel32::get_command_line_w();
     }
+    crate::dlls::crt_releve::process_started();
 }
 fn cmdline() {
     if unsafe { ACMDLN } == 0 {
@@ -1317,7 +1318,7 @@ unsafe fn give_narrow(text: &str, buf: *mut u8, size: usize) -> *mut u8 {
     std::ptr::copy_nonoverlapping(b.as_ptr(), buf, b.len());
     buf
 }
-unsafe extern "win64" fn wgetcwd(buf: *mut u16, size: i32) -> *mut u16 {
+pub(crate) unsafe extern "win64" fn wgetcwd(buf: *mut u16, size: i32) -> *mut u16 {
     match std::env::current_dir() {
         Ok(p) => give_wide(&crate::paths::to_windows(&p), buf, size.max(0) as usize),
         Err(_) => {

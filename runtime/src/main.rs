@@ -114,6 +114,10 @@ fn main() {
                 println!("{dll}\t{name}");
             }
         }
+        // Noms x86 servis seulement par les passerelles wow32 (#1508).
+        for (dll, name) in wow32::x86_only_candidates() {
+            println!("x86:{dll}\t{name}");
+        }
         return;
     }
     if exe == "--exports-kernel32" {

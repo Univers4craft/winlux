@@ -96,8 +96,11 @@ def load_exports(path):
     return exports
 
 
-def lookup(exports, dll, func):
+def lookup(exports, dll, func, x86=False):
     if func in exports.get(dll, ()):
+        return True
+    # Noms x86 servis par les passerelles wow32 (lignes « x86:dll »).
+    if x86 and func in exports.get("x86:" + dll, ()):
         return True
     if dll == "ntdll":
         return func in exports.get("msvcrt", ())
@@ -167,7 +170,7 @@ def analyse(exports, root):
                 report["builtin_used"][n] += 1
                 for imp in entry.imports:
                     name = imp.name.decode("ascii", "replace") if imp.name else f"#{imp.ordinal}"
-                    if not lookup(exports, n, name):
+                    if not lookup(exports, n, name, pe.FILE_HEADER.Machine != 0x8664):
                         report["missing_func"][f"{n}!{name}"] += 1
     return report
 
