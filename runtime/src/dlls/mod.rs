@@ -167,6 +167,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
@@ -186,6 +187,7 @@ pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
+pub mod redist_dlls;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -990,6 +992,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "odbc32",
+                exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
                 handle: fake_module(),
@@ -1172,6 +1179,11 @@ fn builtins() -> &'static Vec<Builtin> {
             ("mpr", legacy_dlls::mpr_exports()),
             ("msi", legacy_dlls::msi_exports()),
             ("shfolder", legacy_dlls::shfolder_exports()),
+            // Corpus de #26 (#1394) : signtool x86, panda3d, .NET Core 3.1.
+            ("mfc42", redist_dlls::mfc42_exports()),
+            ("mssign32", redist_dlls::mssign32_exports()),
+            ("concrt140", redist_dlls::concrt140_exports()),
+            ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
                 name,
@@ -1412,6 +1424,10 @@ pub fn normalize(dll: &str) -> String {
     // imagehlp : sous-ensemble historique de dbghelp (#26, #1392).
     if base == "imagehlp" {
         return "dbghelp".into();
+    }
+    // Résolution des types WinRT : wintypes.dll (#1394).
+    if base.starts_with("api-ms-win-ro-typeresolution-") {
+        return "wintypes".into();
     }
     // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32, et
     // mswsock (AcceptEx, TransmitFile, WSARecvEx…) y est servie (#1390).
