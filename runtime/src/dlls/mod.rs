@@ -218,6 +218,7 @@ pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
+pub mod shcore_obsolete;
 pub mod shell32;
 pub mod shell32_releve;
 pub mod shell_folder_com;
@@ -546,7 +547,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "shcore",
-                exports: chromium_win32::shcore_exports(),
+                exports: {
+                    let mut e = chromium_win32::shcore_exports();
+                    e.extend(shcore_obsolete::exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -1525,6 +1530,11 @@ pub fn normalize(dll: &str) -> String {
     // DPI par écran (Chromium, Electron) : shcore.
     if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
         return "shcore".into();
+    }
+    // Paramètres système et affichage (SystemParametersInfoW,
+    // GetSystemMetrics, EnumDisplayMonitors…) : user32 (#1604).
+    if base.starts_with("api-ms-win-ntuser-sysparams-") {
+        return "user32".into();
     }
     // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
     for (prefix, dll) in [
