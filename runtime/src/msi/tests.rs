@@ -246,6 +246,23 @@ fn installation_administrative_et_erreurs() {
         1619
     );
     assert_eq!(cli(&["/z".into()]), 1639);
+    // Correctif .msp : refusé en clair dans le journal, rien n'est touché (#1715).
+    let journal = env.root.join("correctif.log");
+    assert_eq!(
+        cli(&[
+            "/p".into(),
+            "maj.msp".into(),
+            "/qn".into(),
+            "/l*v".into(),
+            journal.to_string_lossy().into_owned()
+        ]),
+        1637
+    );
+    let texte = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        texte.contains("correctif .msp non pris en charge"),
+        "{texte}"
+    );
     assert_eq!(
         install::package_info(&msi).unwrap(),
         (

@@ -387,18 +387,20 @@ impl<'a, 'b> Vm<'a, 'b> {
         } else {
             cur
         };
-        let roaming = "C:\\AppData\\Roaming";
+        // Dossiers du profil sous `C:\Users\<compte>`, comme %LOCALAPPDATA% (#1724).
+        let profile = crate::paths::profile_path;
+        let roaming = profile("AppData\\Roaming");
         match id & 0x7F {
             0x00 | 0x10 | 0x19 => Folders::desktop(),
             0x02 | 0x17 => Folders::programs(),
-            0x05 | 0x2E => "C:\\Documents".into(),
-            0x06 | 0x1F => "C:\\Favorites".into(),
+            0x05 | 0x2E => profile("Documents"),
+            0x06 | 0x1F => profile("Favorites"),
             0x07 | 0x18 => format!("{}\\Startup", Folders::programs()),
             0x08 => format!("{roaming}\\Microsoft\\Windows\\Recent"),
             0x09 => format!("{roaming}\\Microsoft\\Windows\\SendTo"),
             0x0B | 0x16 => Folders::start_menu().into(),
-            0x0D => "C:\\Music".into(),
-            0x0E => "C:\\Videos".into(),
+            0x0D => profile("Music"),
+            0x0E => profile("Videos"),
             0x14 => "C:\\windows\\Fonts".into(),
             0x15 | 0x2D => format!("{roaming}\\Microsoft\\Windows\\Templates"),
             0x1A => {
@@ -406,23 +408,23 @@ impl<'a, 'b> Vm<'a, 'b> {
                     // $QUICKLAUNCH : même dossier pour les deux contextes.
                     format!("{roaming}\\Microsoft\\Internet Explorer\\Quick Launch")
                 } else {
-                    roaming.into()
+                    roaming.clone()
                 }
             }
-            0x1C => "C:\\AppData\\Local".into(),
-            0x20 => "C:\\AppData\\Local\\Microsoft\\Windows\\INetCache".into(),
-            0x21 => "C:\\AppData\\Local\\Microsoft\\Windows\\INetCookies".into(),
-            0x22 => "C:\\AppData\\Local\\Microsoft\\Windows\\History".into(),
+            0x1C => profile("AppData\\Local"),
+            0x20 => profile("AppData\\Local\\Microsoft\\Windows\\INetCache"),
+            0x21 => profile("AppData\\Local\\Microsoft\\Windows\\INetCookies"),
+            0x22 => profile("AppData\\Local\\Microsoft\\Windows\\History"),
             0x23 => "C:\\ProgramData".into(),
             0x24 => "C:\\windows".into(),
             0x25 => "C:\\windows\\system32".into(),
             0x26 => Folders { x64: false }.program_files().into(),
-            0x27 => "C:\\Pictures".into(),
+            0x27 => profile("Pictures"),
             0x28 => "C:".into(),
             0x2B => format!("{}\\Common Files", Folders { x64: false }.program_files()),
             0x2F | 0x30 => format!("{}\\Administrative Tools", Folders::programs()),
             0x38 | 0x39 => "C:\\windows\\Resources".into(),
-            0x3B => "C:\\AppData\\Local\\Microsoft\\Windows\\Burn\\Burn".into(),
+            0x3B => profile("AppData\\Local\\Microsoft\\Windows\\Burn\\Burn"),
             _ => "C:".into(),
         }
     }
@@ -1313,8 +1315,8 @@ fn expand_env(s: &str) -> String {
                     "PROGRAMFILES" | "PROGRAMW6432" => "C:\\Program Files".to_string(),
                     "PROGRAMFILES(X86)" => "C:\\Program Files (x86)".to_string(),
                     "SYSTEMROOT" | "WINDIR" => "C:\\windows".to_string(),
-                    "APPDATA" => "C:\\AppData\\Roaming".to_string(),
-                    "LOCALAPPDATA" => "C:\\AppData\\Local".to_string(),
+                    "APPDATA" => crate::paths::profile_path("AppData\\Roaming"),
+                    "LOCALAPPDATA" => crate::paths::profile_path("AppData\\Local"),
                     "TEMP" | "TMP" => Folders::temp().to_string(),
                     "USERPROFILE" | "HOMEDRIVE" => "C:".to_string(),
                     _ => std::env::var(name).unwrap_or_else(|_| format!("%{name}%")),

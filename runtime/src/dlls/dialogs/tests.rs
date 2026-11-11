@@ -6,6 +6,12 @@ static SEEN: StdMutex<Vec<(u32, usize)>> = StdMutex::new(Vec::new());
 
 /// Modèle DLGTEMPLATE (ou EX) : une boîte, un champ, deux boutons.
 fn template(ex: bool) -> Vec<u8> {
+    template_font(ex, true)
+}
+
+/// Même modèle ; sans police, il porte DS_FIXEDSYS (0x8) sans DS_SETFONT
+/// et donc aucun champ de police dans l'en-tête.
+fn template_font(ex: bool, font: bool) -> Vec<u8> {
     let mut o = Vec::new();
     let p16 = |o: &mut Vec<u8>, v: u16| o.extend_from_slice(&v.to_le_bytes());
     let p32 = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
@@ -20,7 +26,7 @@ fn template(ex: bool) -> Vec<u8> {
             o.push(0);
         }
     };
-    let style = 0x80C8_0000 | DS_SETFONT | DS_CENTER;
+    let style = 0x80C8_0000 | DS_CENTER | if font { DS_SETFONT } else { 0x8 };
     if ex {
         p16(&mut o, 1);
         p16(&mut o, 0xFFFF);
@@ -38,13 +44,15 @@ fn template(ex: bool) -> Vec<u8> {
     p16(&mut o, 0);
     p16(&mut o, 0);
     ps(&mut o, "Réglages");
-    p16(&mut o, 9);
-    if ex {
-        p16(&mut o, 400);
-        o.push(0);
-        o.push(1);
+    if font {
+        p16(&mut o, 9);
+        if ex {
+            p16(&mut o, 400);
+            o.push(0);
+            o.push(1);
+        }
+        ps(&mut o, "MS Shell Dlg");
     }
-    ps(&mut o, "MS Shell Dlg");
     let items: [(u32, u16, u16, &str); 3] = [
         (0x5081_0080, 100, 0x81, ""),  // EDIT, WS_TABSTOP|WS_BORDER
         (0x5001_0001, 1, 0x80, "&OK"), // BS_DEFPUSHBUTTON
@@ -88,6 +96,17 @@ fn lecture_des_modeles_classique_et_etendu() {
         assert_eq!(t.items[1].class, NameOrId::Id(0x80));
         assert_eq!(t.items[1].title, NameOrId::Name("&OK".into()));
         assert_eq!((t.cx, t.cy), (200, 80));
+    }
+}
+
+#[test]
+fn ds_fixedsys_seul_sans_police_dans_l_en_tete() {
+    for ex in [false, true] {
+        let t = parse_template(&template_font(ex, false)).expect("modèle lisible (#1685)");
+        assert_eq!(t.title, "Réglages");
+        assert!(t.face.is_empty());
+        assert_eq!(t.items.len(), 3);
+        assert_eq!(t.items[2].title, NameOrId::Name("Annuler".into()));
     }
 }
 

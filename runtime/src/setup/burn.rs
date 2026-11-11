@@ -326,22 +326,27 @@ pub type Vars = HashMap<String, String>;
 
 /// Dossiers connus du moteur Burn, aux mêmes emplacements que pour
 /// Windows Installer (`msi::install`).
-fn builtin_folder(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "ProgramFilesFolder" => "C:\\Program Files (x86)\\",
-        "ProgramFiles64Folder" | "ProgramFiles6432Folder" => "C:\\Program Files\\",
-        "CommonFilesFolder" => "C:\\Program Files (x86)\\Common Files\\",
-        "CommonFiles64Folder" | "CommonFiles6432Folder" => "C:\\Program Files\\Common Files\\",
-        "WindowsVolume" => "C:\\",
-        "WindowsFolder" => "C:\\windows\\",
-        "SystemFolder" | "System64Folder" => "C:\\windows\\system32\\",
-        "TempFolder" => "C:\\AppData\\Local\\Temp\\",
-        "AppDataFolder" => "C:\\AppData\\Roaming\\",
-        "LocalAppDataFolder" => "C:\\AppData\\Local\\",
-        "CommonAppDataFolder" => "C:\\ProgramData\\",
-        "PersonalFolder" => "C:\\Documents\\",
-        _ => return None,
-    })
+fn builtin_folder(name: &str) -> Option<String> {
+    // Dossiers du profil sous `C:\Users\<compte>`, comme %LOCALAPPDATA% (#1724).
+    let profile = |rel: &str| crate::paths::profile_path(rel) + "\\";
+    Some(
+        match name {
+            "ProgramFilesFolder" => "C:\\Program Files (x86)\\",
+            "ProgramFiles64Folder" | "ProgramFiles6432Folder" => "C:\\Program Files\\",
+            "CommonFilesFolder" => "C:\\Program Files (x86)\\Common Files\\",
+            "CommonFiles64Folder" | "CommonFiles6432Folder" => "C:\\Program Files\\Common Files\\",
+            "WindowsVolume" => "C:\\",
+            "WindowsFolder" => "C:\\windows\\",
+            "SystemFolder" | "System64Folder" => "C:\\windows\\system32\\",
+            "TempFolder" => return Some(profile("AppData\\Local\\Temp")),
+            "AppDataFolder" => return Some(profile("AppData\\Roaming")),
+            "LocalAppDataFolder" => return Some(profile("AppData\\Local")),
+            "CommonAppDataFolder" => "C:\\ProgramData\\",
+            "PersonalFolder" => return Some(profile("Documents")),
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// Remplace les `[Variable]` d'une chaîne (valeurs elles-mêmes formatées,
@@ -356,11 +361,14 @@ pub fn format(vars: &Vars, text: &str) -> String {
             };
             out.push_str(&rest[..open]);
             let name = &rest[open + 1..open + 1 + len];
-            let value = vars
-                .get(name)
-                .map(String::as_str)
-                .or_else(|| builtin_folder(name))
-                .unwrap_or("");
+            let builtin;
+            let value = match vars.get(name) {
+                Some(v) => v.as_str(),
+                None => {
+                    builtin = builtin_folder(name).unwrap_or_default();
+                    builtin.as_str()
+                }
+            };
             if depth < 8 {
                 out.push_str(&go(vars, value, depth + 1));
             } else {
@@ -1114,7 +1122,7 @@ pub mod tests {
         ));
         assert_eq!(
             vars["TargetDir"],
-            "C:\\AppData\\Local\\Programs\\Python\\Python312"
+            crate::paths::profile_path("AppData\\Local\\Programs\\Python\\Python312")
         );
         assert_eq!(
             m.chain[0].msi_props,

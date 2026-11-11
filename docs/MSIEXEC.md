@@ -64,5 +64,7 @@ Requêtes SQL
 `INSERT`/`UPDATE`/`DELETE` (seul `MsiViewModify` écrit), lignes temporaires
 partagées entre deux actions DLL (chacune voit la base du paquet),
 recherche `CompLocator`, boîtes de dialogue propres au paquet (table `Dialog`), réparation `/f`
-(traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`,
+(traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`
+(#1715 : `/p` rend 1637 et `PATCH=` ou `TRANSFORMS=` sont signalés dans le
+journal, l'installation se poursuit avec la version de base),
 compression Quantum.
