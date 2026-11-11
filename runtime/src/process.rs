@@ -835,8 +835,10 @@ fn start(exe: Module) -> u32 {
     crate::quality::init();
     crate::wow32::wrap_fault_handlers();
     let mods = loader::MODULES.lock().unwrap().clone();
-    // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
-    for m in mods.iter().skip(1).rev() {
+    // Chaque DLL après celles qu'elle importe, comme Windows : l'ordre
+    // inverse de la projection ne le garantit pas (#1584).
+    let deps = mods.get(1..).unwrap_or(&[]);
+    for m in crate::dlls::kernel32::dependency_order(&exe, deps) {
         if !loader::mark_initialized(m.base) {
             continue;
         }

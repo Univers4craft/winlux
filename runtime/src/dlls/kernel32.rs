@@ -3456,8 +3456,6 @@ unsafe fn load_library_str(name: &str) -> usize {
 /// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
 /// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
 fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
-    // Les dépendances sont projetées après le module qui les importe : à
-    // rebours, chacune passe avant ceux qui l'utilisent.
     let pending: Vec<crate::loader::Module> = crate::loader::MODULES
         .lock()
         .unwrap()
@@ -3466,7 +3464,7 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         .filter(|x| !before.is_empty() && !before.contains(&x.base))
         .cloned()
         .collect();
-    for dep in pending.iter().rev() {
+    for dep in dependency_order(m, &pending) {
         if !crate::process::initialize_dynamic_module(dep) {
             crate::trace!(
                 "DllMain de {} (dépendance de {}) a échoué",
@@ -3477,6 +3475,76 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         }
     }
     crate::process::initialize_dynamic_module(m)
+}
+
+/// Ordre d'initialisation des dépendances `pending` de `m` : chacune après
+/// les DLL qu'elle importe, comme le chargeur de Windows (parcours en
+/// profondeur des imports, suffixe). L'ordre de projection ne suffit pas :
+/// steamui.dll importe tier0_s64.dll puis vstdlib_s64.dll, qui importe
+/// aussi tier0 ; à rebours de la projection, vstdlib passait avant tier0 et
+/// son DllMain lisait une variable de tier0 encore à zéro (#1584). Les DLL
+/// qu'aucun import n'atteint (transferts, chargements faits par un DllMain)
+/// restent dans l'ordre inverse de leur projection.
+pub(crate) fn dependency_order<'a>(
+    m: &crate::loader::Module,
+    pending: &'a [crate::loader::Module],
+) -> Vec<&'a crate::loader::Module> {
+    let names: Vec<String> = pending.iter().map(|x| x.name.clone()).collect();
+    init_order(&m.import_names(), &names, &|i| pending[i].import_names())
+        .into_iter()
+        .map(|i| &pending[i])
+        .collect()
+}
+
+/// Cœur de `dependency_order`, sur les noms : `roots` = imports du module
+/// chargé, `names[i]` = nom de la i-ème DLL à initialiser (dans l'ordre de
+/// projection), `imports(i)` = ses imports. Rend les indices dans l'ordre
+/// des DllMain.
+fn init_order(
+    roots: &[String],
+    names: &[String],
+    imports: &dyn Fn(usize) -> Vec<String>,
+) -> Vec<usize> {
+    let keys: Vec<String> = names.iter().map(|n| crate::dlls::normalize(n)).collect();
+    let find = |name: &str| {
+        let n = crate::dlls::normalize(name);
+        keys.iter().position(|k| *k == n)
+    };
+    let mut seen = vec![false; names.len()];
+    let mut order = Vec::with_capacity(names.len());
+    // Pile explicite (pas de récursion) : (indice, imports déjà parcourus).
+    let mut visit = |start: usize, seen: &mut Vec<bool>, order: &mut Vec<usize>| {
+        if seen[start] {
+            return;
+        }
+        seen[start] = true;
+        let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+        // À rebours : `pop` rend alors les imports dans leur ordre.
+        let deps =
+            |i: usize| -> Vec<usize> { imports(i).iter().rev().filter_map(|n| find(n)).collect() };
+        stack.push((start, deps(start)));
+        while let Some((i, todo)) = stack.last_mut() {
+            if let Some(j) = todo.pop() {
+                if !seen[j] {
+                    seen[j] = true;
+                    let d = deps(j);
+                    stack.push((j, d));
+                }
+            } else {
+                order.push(*i);
+                stack.pop();
+            }
+        }
+    };
+    for name in roots {
+        if let Some(j) = find(name) {
+            visit(j, &mut seen, &mut order);
+        }
+    }
+    for j in (0..names.len()).rev() {
+        visit(j, &mut seen, &mut order);
+    }
+    order
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {
@@ -10440,6 +10508,55 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dllmain_des_dependances_dans_l_ordre_des_imports() {
+        // #1584 : steamui importe libavcodec, SDL3, tier0, video64 et
+        // vstdlib ; vstdlib importe tier0, libavcodec importe libavutil.
+        // Projection : steamui (déjà à part), puis dans cet ordre.
+        let names: Vec<String> = [
+            "libavcodec.dll",
+            "libavutil.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+            "orpheline.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let imports = |i: usize| -> Vec<String> {
+            let v: &[&str] = match i {
+                0 => &["libavutil.dll", "KERNEL32.dll"],
+                4 => &["libavcodec.dll", "TIER0_S64.DLL"],
+                5 => &["tier0_s64.dll"],
+                _ => &[],
+            };
+            v.iter().map(|s| s.to_string()).collect()
+        };
+        let roots: Vec<String> = [
+            "libavcodec.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let order = super::init_order(&roots, &names, &imports);
+        let pos = |n: &str| order.iter().position(|&i| names[i] == n).unwrap();
+        assert_eq!(order.len(), names.len());
+        assert!(pos("tier0_s64.dll") < pos("vstdlib_s64.dll"));
+        assert!(pos("tier0_s64.dll") < pos("video64.dll"));
+        assert!(pos("libavutil.dll") < pos("libavcodec.dll"));
+        assert!(pos("libavcodec.dll") < pos("video64.dll"));
+        // Ordre des imports de steamui respecté entre DLL indépendantes.
+        assert!(pos("libavcodec.dll") < pos("SDL3.dll"));
+        assert!(pos("SDL3.dll") < pos("tier0_s64.dll"));
+        // DLL qu'aucun import n'atteint : initialisée aussi.
+        assert!(order.iter().any(|&i| names[i] == "orpheline.dll"));
+    }
     /// #767 : un enfant de Chromium désigne le gestionnaire de crashpad
     /// reçu de son parent, et le transmet à ses propres enfants.
     #[test]
