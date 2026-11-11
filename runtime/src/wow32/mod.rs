@@ -1330,6 +1330,12 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         // operator new / delete de MFC 4.2 (signtool.exe, #1394).
         || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
+        // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
+        // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
+        || (n == "cabinet"
+            && (func.starts_with("FCI")
+                || func.starts_with("FDI")
+                || matches!(func, "#10" | "#11" | "#12" | "#13" | "#14" | "#20" | "#21" | "#22" | "#23")))
 }
 
 /// Octets d'arguments qu'une fonction stdcall x86 dépile (`ret N`), d'après
@@ -2666,5 +2672,9 @@ mod tests {
         assert!(!is_cdecl("KERNEL32.dll", "WriteFile"));
         assert!(is_cdecl("ntdll.dll", "memcpy"));
         assert!(!is_cdecl("ntdll.dll", "RtlGetVersion"));
+        assert!(is_cdecl("CABINET.dll", "#20"));
+        assert!(is_cdecl("cabinet.dll", "FDICopy"));
+        assert!(is_cdecl("cabinet.dll", "#10"));
+        assert!(!is_cdecl("cabinet.dll", "CreateCompressor"));
     }
 }
