@@ -1354,6 +1354,20 @@ struct Bitmap {
     /// DXGI_FORMAT_A8_UNORM : la mémoire de l'appelant n'a qu'un octet
     /// d'alpha par pixel (#1471).
     alpha_only: bool,
+    /// Mémoire d'un IWICBitmapLock partagée (CreateSharedBitmap) : relue à
+    /// chaque usage, comme le partage réel de Direct2D (#1609).
+    shared: Option<SharedLock>,
+}
+
+/// Verrou WIC dont un bitmap partage les pixels.
+struct SharedLock {
+    /// IWICBitmapLock tenu jusqu'à la fin du bitmap.
+    lock: *mut c_void,
+    ptr: *const u8,
+    stride: usize,
+    straight: bool,
+    ignore: bool,
+    wide: Option<super::wic_pixels::Layout>,
 }
 
 impl Bitmap {
@@ -1365,12 +1379,68 @@ impl Bitmap {
             options: 0,
             surface: std::ptr::null_mut(),
             alpha_only: false,
+            shared: None,
+        }
+    }
+
+    /// Bitmap partagé : recopie la mémoire actuelle du verrou WIC. Paint.NET
+    /// remplit le tampon de son tampon de pinceau après CreateSharedBitmap.
+    unsafe fn refresh(&self) {
+        if let Some(s) = &self.shared {
+            let px = lock_pixels(
+                s.ptr,
+                s.stride,
+                self.w as usize,
+                self.h as usize,
+                s.straight,
+                s.ignore,
+                s.wide,
+            );
+            *crate::dlls::lock(&self.px) = px;
         }
     }
 }
 
+/// Pixels d'un verrou WIC (BGRA prémultiplié ou non, BGR, formats larges)
+/// en BGRA prémultiplié.
+unsafe fn lock_pixels(
+    ptr: *const u8,
+    stride: usize,
+    w: usize,
+    h: usize,
+    straight: bool,
+    ignore: bool,
+    wide: Option<super::wic_pixels::Layout>,
+) -> Vec<u8> {
+    let src_bpp = wide.map_or(4, |l| l.bpp as usize);
+    let src_row = w * src_bpp;
+    if let Some(l) = wide {
+        let src = std::slice::from_raw_parts(ptr, stride * (h - 1) + src_row);
+        return wide_to_pbgra(&l, src, w, h, stride, ignore);
+    }
+    let row = w * 4;
+    let mut px = vec![0u8; row * h];
+    for y in 0..h {
+        std::ptr::copy_nonoverlapping(ptr.add(y * stride), px[y * row..].as_mut_ptr(), row);
+    }
+    for p in px.as_chunks_mut::<4>().0 {
+        if ignore {
+            p[3] = 255;
+        } else if straight {
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+    }
+    px
+}
+
 impl Drop for Bitmap {
     fn drop(&mut self) {
+        if let Some(s) = &self.shared {
+            unsafe { method::<unsafe extern "win64" fn(*mut c_void) -> u32>(s.lock, 2)(s.lock) };
+        }
         if !self.surface.is_null() {
             unsafe {
                 method::<unsafe extern "win64" fn(*mut c_void) -> u32>(self.surface, 2)(
@@ -1926,32 +1996,26 @@ unsafe fn shared_bitmap(
     {
         return E_INVALIDARG;
     }
-    let row = w as usize * 4;
-    if let Some(l) = wide {
-        let src = std::slice::from_raw_parts(ptr, stride as usize * (h as usize - 1) + src_row);
-        let px = wide_to_pbgra(&l, src, w as usize, h as usize, stride as usize, ignore);
-        let b = Bitmap::new(w, h, px);
-        return put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b));
-    }
-    let mut px = vec![0u8; row * h as usize];
-    for y in 0..h as usize {
-        std::ptr::copy_nonoverlapping(
-            ptr.add(y * stride as usize),
-            px[y * row..].as_mut_ptr(),
-            row,
-        );
-    }
-    for p in px.as_chunks_mut::<4>().0 {
-        if ignore {
-            p[3] = 255;
-        } else if straight {
-            let a = p[3] as u32;
-            for c in &mut p[..3] {
-                *c = ((*c as u32 * a + 127) / 255) as u8;
-            }
-        }
-    }
-    let b = Bitmap::new(w, h, px);
+    let px = lock_pixels(
+        ptr,
+        stride as usize,
+        w as usize,
+        h as usize,
+        straight,
+        ignore,
+        wide,
+    );
+    let mut b = Bitmap::new(w, h, px);
+    // Le bitmap partage la mémoire du verrou (#1609) : il le tient.
+    method::<unsafe extern "win64" fn(*mut c_void) -> u32>(data, 1)(data);
+    b.shared = Some(SharedLock {
+        lock: data,
+        ptr,
+        stride: stride as usize,
+        straight,
+        ignore,
+        wide,
+    });
     put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
 }
 
@@ -2283,6 +2347,7 @@ unsafe extern "win64" fn draw_bitmap(
         return;
     }
     let b = &Com::get(bitmap as *mut BitmapObj).data;
+    b.refresh();
     let px = crate::dlls::lock(&b.px).clone();
     let (bw, bh) = (b.w as f32, b.h as f32);
     let s = src.as_ref().copied().unwrap_or(RectF {
@@ -3644,8 +3709,8 @@ mod tests {
         assert_eq!(&opaque[4..], &[0, 0, 188, 255]);
     }
 
-    /// #1399 : CreateSharedBitmap partage un IWICBitmapLock (Paint.NET,
-    /// DrawBackground) en ID2D1Bitmap aux pixels du verrou.
+    /// #1399, #1609 : CreateSharedBitmap partage un IWICBitmapLock
+    /// (Paint.NET : DrawBackground, tampon du pinceau) en ID2D1Bitmap.
     #[test]
     fn bitmap_partage_depuis_un_verrou_wic() {
         unsafe {
@@ -3682,6 +3747,12 @@ mod tests {
             assert_eq!((bm.w, bm.h), (8, 8));
             let px = crate::dlls::lock(&bm.px).clone();
             assert_eq!(&px[(2 * 8 + 1) * 4..][..4], &[0, 255, 0, 255]);
+            // #1609 : la mémoire est partagée. Ce que l'appelant écrit dans le
+            // verrou après la création (tampon du pinceau de Paint.NET) se
+            // retrouve dans le bitmap à l'usage suivant.
+            std::ptr::copy_nonoverlapping([0u8, 0, 255, 255].as_ptr(), data, 4);
+            let img = v11::image_img(b, 0, (8, 8)).unwrap();
+            assert_eq!(&img.px[0..4], &[0, 0, 255, 255]);
             // Un ID2D1Bitmap de Winlux se partage tel quel.
             let mut again = std::ptr::null_mut();
             assert_eq!(
