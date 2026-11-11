@@ -54,6 +54,8 @@ sed "s|/usr/bin/winlux|$prefix/bin/winlux|" "$root/integration/winlux-binfmt.con
     | install -Dm644 /dev/stdin "$etc/binfmt.d/winlux.conf"
 # Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
 install -Dm644 "$root/integration/70-winlux-manettes.rules" "$etc/udev/rules.d/70-winlux-manettes.rules"
+# Logiciels d'éclairage, claviers, souris et casques (#1522) : fabricants listés.
+install -Dm644 "$root/integration/71-winlux-eclairage.rules" "$etc/udev/rules.d/71-winlux-eclairage.rules"
 
 # Application par défaut des .exe pour tous les utilisateurs; uninstall.sh
 # retire exactement ces lignes.
