@@ -332,6 +332,149 @@ const VISUAL_ATTRIBS: [libc::c_int; 11] = [
     0, // None
 ];
 
+/// Suivi des présentations d'une chaîne d'échange après la première
+/// (#1886) : jalons n° 2, 10, 100, 1000… et un bilan toutes les 5 s, avec
+/// les refus (contexte indisponible sur le fil qui présente).
+#[derive(Default)]
+struct PresentTrace {
+    /// Présentations refusées depuis la création de la chaîne.
+    failed: AtomicU32,
+    /// Instant du dernier bilan (ms depuis le début du processus).
+    last_ms: AtomicU64,
+    /// Présentations réussies depuis le dernier bilan.
+    since: AtomicU32,
+}
+
+/// Bilan d'un intervalle : présentations faites et durée.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Bilan {
+    presents: u32,
+    elapsed_ms: u64,
+}
+
+/// Intervalle entre deux bilans périodiques.
+const BILAN_MS: u64 = 5000;
+
+impl PresentTrace {
+    /// Vrai pour 1, 2, 10, 100, 1000… : un journal court même à 60 i/s.
+    fn milestone(n: u32) -> bool {
+        n == 1 || n == 2 || (n >= 10 && 10u32.pow(n.ilog10()) == n)
+    }
+
+    /// Bilan à journaliser pour la présentation réussie n° `n` (n ≥ 2).
+    fn due(&self, n: u32) -> Option<Bilan> {
+        self.due_at(n, process_ms())
+    }
+
+    fn due_at(&self, n: u32, now: u64) -> Option<Bilan> {
+        let presents = self.since.fetch_add(1, Ordering::Relaxed) + 1;
+        let last = self.last_ms.load(Ordering::Relaxed);
+        let periodic = now.saturating_sub(last) >= BILAN_MS;
+        if !(Self::milestone(n) || periodic) {
+            return None;
+        }
+        if self
+            .last_ms
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return None;
+        }
+        self.since.store(0, Ordering::Relaxed);
+        Some(Bilan {
+            presents,
+            elapsed_ms: now.saturating_sub(last),
+        })
+    }
+}
+
+/// Millisecondes depuis le premier appel dans ce processus.
+fn process_ms() -> u64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// Identifiant Linux du fil courant.
+fn thread_id() -> i64 {
+    // SAFETY : appel système sans argument.
+    unsafe { libc::syscall(libc::SYS_gettid) }
+}
+
+/// État d'une fenêtre X pour le journal : carte (« visible », « non
+/// affichée », « ancêtre caché ») et position dans la racine. La fenêtre
+/// peut appartenir à un autre processus (navigateur Chromium) : l'état se
+/// lit par la connexion de la chaîne d'échange.
+unsafe fn x_window_state(display: *mut c_void, window: u64) -> String {
+    type GetAttrs = unsafe extern "C" fn(*mut c_void, libc::c_ulong, *mut u8) -> libc::c_int;
+    type Translate = unsafe extern "C" fn(
+        *mut c_void,
+        libc::c_ulong,
+        libc::c_ulong,
+        libc::c_int,
+        libc::c_int,
+        *mut libc::c_int,
+        *mut libc::c_int,
+        *mut libc::c_ulong,
+    ) -> libc::c_int;
+    type Root = unsafe extern "C" fn(*mut c_void) -> libc::c_ulong;
+    static FNS: std::sync::OnceLock<Option<(GetAttrs, Translate, Root)>> =
+        std::sync::OnceLock::new();
+    let fns = FNS.get_or_init(|| {
+        let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+        if lib.is_null() {
+            return None;
+        }
+        let a = libc::dlsym(lib, c"XGetWindowAttributes".as_ptr());
+        let t = libc::dlsym(lib, c"XTranslateCoordinates".as_ptr());
+        let r = libc::dlsym(lib, c"XDefaultRootWindow".as_ptr());
+        if a.is_null() || t.is_null() || r.is_null() {
+            return None;
+        }
+        Some((
+            std::mem::transmute::<*mut c_void, GetAttrs>(a),
+            std::mem::transmute::<*mut c_void, Translate>(t),
+            std::mem::transmute::<*mut c_void, Root>(r),
+        ))
+    });
+    let Some((get_attrs, translate, root_of)) = *fns else {
+        return "état X inconnu".into();
+    };
+    if display.is_null() || window == 0 {
+        return "pas de fenêtre X".into();
+    }
+    // XWindowAttributes (x86-64) : 136 octets, map_state à l'octet 92.
+    let mut attrs = [0u8; 256];
+    if get_attrs(display, window as libc::c_ulong, attrs.as_mut_ptr()) == 0 {
+        return "fenêtre X introuvable".into();
+    }
+    let map_state = i32::from_ne_bytes([attrs[92], attrs[93], attrs[94], attrs[95]]);
+    let carte = match map_state {
+        2 => "visible",
+        1 => "ancêtre caché",
+        0 => "non affichée",
+        _ => "état inconnu",
+    };
+    let (mut x, mut y, mut child) = (0, 0, 0);
+    let root = root_of(display);
+    if translate(
+        display,
+        window as libc::c_ulong,
+        root,
+        0,
+        0,
+        &mut x,
+        &mut y,
+        &mut child,
+    ) == 0
+    {
+        return carte.into();
+    }
+    format!("{carte}, à ({x}, {y}) dans l'écran")
+}
+
 pub(crate) struct GlContext {
     pub display: *mut c_void,
     pub context: *mut c_void,
@@ -345,6 +488,8 @@ pub(crate) struct GlContext {
     /// Taille de la fenêtre X à la dernière présentation (largeur << 32 |
     /// hauteur), pour voir qu'elle a changé (#1542).
     window_size: AtomicU64,
+    /// Suivi des présentations suivantes (#1886).
+    suivi: PresentTrace,
 }
 
 unsafe impl Send for GlContext {}
@@ -443,6 +588,7 @@ impl GlContext {
                 framebuffer: 0,
                 presented: AtomicU32::new(0),
                 window_size: AtomicU64::new(0),
+                suivi: PresentTrace::default(),
             };
             ctx.create_backbuffer(g);
             Some(ctx)
@@ -502,18 +648,29 @@ impl GlContext {
             let switched =
                 previous.context != self.context as usize || previous.drawable != self.drawable;
             if switched && (glx.MakeCurrent)(self.display, self.drawable, self.context) == 0 {
-                if self.presented.fetch_add(1, Ordering::Relaxed) == 0 {
+                // Chaque refus est compté et journalisé à intervalles : un
+                // seul message, au tout premier appel, laissait croire que
+                // toutes les présentations suivantes passaient (#1886).
+                self.presented.fetch_add(1, Ordering::Relaxed);
+                let n = self.suivi.failed.fetch_add(1, Ordering::Relaxed) + 1;
+                if PresentTrace::milestone(n) {
                     log_warn!(
                         "dxgi",
-                        "Present : contexte de la chaîne d'échange indisponible sur ce thread"
+                        "Present n°{n} refusée : contexte de la chaîne d'échange indisponible sur ce thread (fil {}, contexte du fil 0x{:x}, surface 0x{:x}, fenêtre X 0x{:x})",
+                        thread_id(),
+                        previous.context,
+                        previous.drawable,
+                        self.drawable
                     );
                 }
                 return;
             }
             crate::dlls::d3d11::FRAMES.fetch_add(1, Ordering::Relaxed);
-            let first = self.presented.fetch_add(1, Ordering::Relaxed) == 0;
-            if first {
+            let n = self.presented.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 {
                 self.describe(g, &previous, switched);
+            } else if let Some(bilan) = self.suivi.due(n) {
+                self.follow(g, glx, n, bilan, switched);
             }
             // Taille réelle de la fenêtre : elle a pu changer (agrandie,
             // restaurée) avant que le programme ne redimensionne sa chaîne.
@@ -581,6 +738,24 @@ impl GlContext {
     /// Décrit la première présentation : taille, fenêtre, contexte et un
     /// pixel du tampon arrière, pour diagnostiquer une fenêtre noire.
     unsafe fn describe(&self, g: &gl::GlFunctions, previous: &Binding, switched: bool) {
+        let px = self.center_pixel(g);
+        log_info!(
+            "dxgi",
+            "première présentation : {}x{} vers la fenêtre X 0x{:x} ({}), fil {}, contexte {} (thread : contexte 0x{:x}, surface 0x{:x}), pixel central {:?}",
+            self.width,
+            self.height,
+            self.drawable,
+            x_window_state(self.display, self.drawable),
+            thread_id(),
+            if switched { "rendu courant pour l'occasion" } else { "déjà courant" },
+            previous.context,
+            previous.drawable,
+            px
+        );
+    }
+
+    /// Pixel central du tampon arrière (RVBA), lu dans le contexte courant.
+    unsafe fn center_pixel(&self, g: &gl::GlFunctions) -> [u8; 4] {
         let mut px = [0u8; 4];
         (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
         (g.ReadPixels)(
@@ -593,15 +768,36 @@ impl GlContext {
             px.as_mut_ptr().cast(),
         );
         (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, 0);
+        px
+    }
+
+    /// Décrit une présentation suivante (n° 2, 10, 100… puis toutes les
+    /// 5 s) : rythme, pixel central, état de la fenêtre X. Sert à savoir si
+    /// les présentations s'arrêtent ou n'emportent que le fond (#1886).
+    unsafe fn follow(
+        &self,
+        g: &gl::GlFunctions,
+        glx: &gl::GlxFunctions,
+        n: u32,
+        bilan: Bilan,
+        switched: bool,
+    ) {
+        let px = self.center_pixel(g);
+        let size = self.drawable_size(glx);
+        let window = x_window_state(self.display, self.drawable);
         log_info!(
             "dxgi",
-            "première présentation : {}x{} vers la fenêtre X 0x{:x}, contexte {} (thread : contexte 0x{:x}, surface 0x{:x}), pixel central {:?}",
+            "présentation n°{n} : {}x{} vers la fenêtre X 0x{:x} (taille {}, {}), fil {}, contexte {}, {} présentation(s) et {} refus en {} ms, pixel central {:?}",
             self.width,
             self.height,
             self.drawable,
+            size.map_or("inconnue".to_string(), |(w, h)| format!("{w}x{h}")),
+            window,
+            thread_id(),
             if switched { "rendu courant pour l'occasion" } else { "déjà courant" },
-            previous.context,
-            previous.drawable,
+            bilan.presents,
+            self.suivi.failed.load(Ordering::Relaxed),
+            bilan.elapsed_ms,
             px
         );
     }
@@ -2011,6 +2207,56 @@ mod refcount_tests {
             assert_eq!(DxgiFactory::release(parent.cast()), 1);
             assert_eq!(DxgiAdapter::release(a), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod present_trace_tests {
+    use super::*;
+
+    /// #1886 : jalons 1, 2, 10, 100, 1000… seulement.
+    #[test]
+    fn jalons_des_presentations() {
+        let jalons: Vec<u32> = (1..=20_000)
+            .filter(|&n| PresentTrace::milestone(n))
+            .collect();
+        assert_eq!(jalons, [1, 2, 10, 100, 1000, 10_000]);
+    }
+
+    /// Un bilan aux jalons et toutes les 5 s, avec le nombre de
+    /// présentations faites depuis le précédent.
+    #[test]
+    fn bilan_aux_jalons_et_toutes_les_cinq_secondes() {
+        let t = PresentTrace::default();
+        // n° 2 à 0 ms : jalon.
+        assert_eq!(
+            t.due_at(2, 0),
+            Some(Bilan {
+                presents: 1,
+                elapsed_ms: 0
+            })
+        );
+        // n° 3 à 9 : ni jalon ni 5 s.
+        for n in 3..10 {
+            assert_eq!(t.due_at(n, 100 * u64::from(n)), None);
+        }
+        // n° 10 : jalon, 8 présentations depuis le n° 2.
+        assert_eq!(
+            t.due_at(10, 1000),
+            Some(Bilan {
+                presents: 8,
+                elapsed_ms: 1000
+            })
+        );
+        assert_eq!(t.due_at(11, 2000), None);
+        // 5 s après le dernier bilan : bilan périodique.
+        assert_eq!(
+            t.due_at(12, 6000),
+            Some(Bilan {
+                presents: 2,
+                elapsed_ms: 5000
+            })
+        );
     }
 }
 
