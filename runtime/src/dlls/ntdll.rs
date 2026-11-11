@@ -13,6 +13,7 @@ const STATUS_SUCCESS: i32 = 0;
 const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002u32 as i32;
 const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+const STATUS_OBJECT_NAME_INVALID: i32 = 0xC000_0033u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
 const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
@@ -1435,6 +1436,14 @@ pub unsafe extern "win64" fn nt_create_file(
     // ouvert. `remove_dir_all` de la bibliothèque Rust ouvre ainsi chaque
     // entrée du dossier à effacer (#1885).
     let root = *((attrs as *const u8).add(8) as *const usize);
+    // Un nom relatif ne remonte pas et ne repart pas de la racine :
+    // Windows refuse « \x » et « .. » avec STATUS_OBJECT_NAME_INVALID.
+    if root != 0
+        && (win_path.starts_with(['\\', '/'])
+            || win_path.split(['\\', '/']).any(|c| c == ".." || c == "."))
+    {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
     let linux_path = if root != 0 {
         let Some(base) =
             super::kernel32::fd_of_handle(root).and_then(super::ntdll_file::path_of_fd)

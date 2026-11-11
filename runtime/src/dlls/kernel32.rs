@@ -2353,6 +2353,24 @@ unsafe fn create_file_opened(
 /// handle (documentation de CreateFile, #1252).
 const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 
+/// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
+/// effacement à la fermeture. Rien si le fichier n'a plus de nom
+/// (déjà effacé : /proc rend « … (deleted) »), #1885.
+fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+    if fd < 0 {
+        return None;
+    }
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || st.st_nlink == 0 {
+        return None;
+    }
+    let path = crate::dlls::ntdll_file::path_of_fd(fd)?;
+    if path.to_string_lossy().ends_with(" (deleted)") {
+        return None;
+    }
+    Some((path, st.st_dev, st.st_ino))
+}
+
 pub(crate) fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
     static S: OnceLock<Mutex<HashMap<usize, std::path::PathBuf>>> = OnceLock::new();
     S.get_or_init(Default::default)
@@ -6817,13 +6835,9 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
     // renommé depuis son ouverture (#1885).
-    let doomed = lock(delete_on_close()).remove(&handle).map(|opened| {
-        let fd = handle_to_fd(handle);
-        (fd >= 0)
-            .then(|| crate::dlls::ntdll_file::path_of_fd(fd))
-            .flatten()
-            .unwrap_or(opened)
-    });
+    let doomed = lock(delete_on_close())
+        .remove(&handle)
+        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -6831,8 +6845,16 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
         forget_dir_watcher(handle);
-        if let Some(path) = doomed {
-            let removed = if path.is_dir() {
+        if let Some((path, dev, ino)) = doomed {
+            // Le nom doit toujours désigner le même fichier : jamais un
+            // autre qui l'aurait pris entre-temps.
+            let same = std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.dev() == dev && m.ino() == ino
+            });
+            let removed = if !same {
+                Err(std::io::Error::other("nom repris par un autre fichier"))
+            } else if path.is_dir() {
                 std::fs::remove_dir(&path)
             } else {
                 std::fs::remove_file(&path)

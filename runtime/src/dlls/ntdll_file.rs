@@ -1432,6 +1432,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Garde-fous de l'effacement à la fermeture (#1885) : un nom relatif
+    /// ne sort pas du dossier racine, et un nom repris par un autre fichier
+    /// n'est pas effacé.
+    #[test]
+    fn effacement_a_la_fermeture_sans_debordement() {
+        let base = std::env::temp_dir().join(format!("winlux-garde-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("racine")).unwrap();
+        std::fs::write(base.join("dehors"), b"d").unwrap();
+        std::fs::write(base.join("racine").join("x"), b"x").unwrap();
+        unsafe {
+            let dir = crate::dlls::kernel32::insert_file(
+                std::fs::File::open(base.join("racine")).unwrap(),
+            );
+            for nom in ["..\\dehors", "\\dehors", ".\\x", "a\\..\\..\\dehors"] {
+                let name = w(nom);
+                let us: [u64; 2] = [
+                    ((name.len() * 2) as u64) | (((name.len() * 2) as u64) << 16),
+                    name.as_ptr() as u64,
+                ];
+                let oa: [u64; 6] = [48, dir as u64, us.as_ptr() as u64, 0, 0, 0];
+                let (mut h, mut io) = (0usize, [0u64; 2]);
+                let st = crate::dlls::ntdll::nt_create_file(
+                    &mut h,
+                    0x0001_0000,
+                    oa.as_ptr() as *const c_void,
+                    io.as_mut_ptr() as *mut c_void,
+                    std::ptr::null(),
+                    0,
+                    7,
+                    1,
+                    0x1000,
+                    std::ptr::null(),
+                    0,
+                );
+                assert_eq!(st as u32, 0xC000_0033, "{nom} doit être refusé");
+            }
+            assert!(base.join("dehors").exists());
+            // Le fichier est effacé puis son nom repris : le nouveau reste.
+            let h = ouvrir_relatif(dir, &w("x"), 0x1000);
+            std::fs::remove_file(base.join("racine").join("x")).unwrap();
+            std::fs::write(base.join("racine").join("x"), b"nouveau").unwrap();
+            crate::dlls::kernel32::close_handle(h);
+            assert_eq!(
+                std::fs::read(base.join("racine").join("x")).unwrap(),
+                b"nouveau"
+            );
+            crate::dlls::kernel32::close_handle(dir);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn statut_des_erreurs_linux() {
         assert_eq!(status_of_errno(libc::ENOENT), STATUS_OBJECT_NAME_NOT_FOUND);
