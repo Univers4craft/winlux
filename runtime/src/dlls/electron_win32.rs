@@ -756,12 +756,56 @@ unsafe fn signal_process(h: usize, sig: i32) -> u32 {
     }
 }
 
+/// Processus figés par ce processus (NtSuspendProcess) et pas encore
+/// relancés. Crashpad fige le programme qu'il vide ; s'il plante pendant
+/// le vidage, le programme restait figé pour toujours (état T, enfants
+/// Chromium bloqués, « Quitter » sans effet, #1787) : le gestionnaire de
+/// plantage les relance (`resume_suspended`). Tableau fixe d'atomiques,
+/// lisible depuis un gestionnaire de signal.
+use std::sync::atomic::{AtomicI32, Ordering};
+
+static SUSPENDED: [AtomicI32; 16] = [const { AtomicI32::new(0) }; 16];
+
 unsafe extern "win64" fn NtSuspendProcess(h: usize) -> u32 {
-    signal_process(h, libc::SIGSTOP)
+    let r = signal_process(h, libc::SIGSTOP);
+    if r == 0 {
+        if let Some(pid) = crate::dlls::kernel32::process_os_pid(h) {
+            let _ = SUSPENDED.iter().find(|s| {
+                s.compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            });
+        }
+    }
+    r
 }
 
 unsafe extern "win64" fn NtResumeProcess(h: usize) -> u32 {
-    signal_process(h, libc::SIGCONT)
+    let r = signal_process(h, libc::SIGCONT);
+    if r == 0 {
+        if let Some(pid) = crate::dlls::kernel32::process_os_pid(h) {
+            let _ = SUSPENDED.iter().find(|s| {
+                s.compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            });
+        }
+    }
+    r
+}
+
+/// Relance (SIGCONT) les processus que ce processus a figés sans les
+/// relancer. Appelé par le gestionnaire de plantage : uniquement des
+/// opérations sûres dans un signal (atomiques, kill). Rend leur nombre.
+pub(crate) fn resume_suspended() -> usize {
+    let mut n = 0;
+    for slot in &SUSPENDED {
+        let pid = slot.swap(0, Ordering::AcqRel);
+        if pid > 0 {
+            // SAFETY : kill est sûr dans un gestionnaire de signal.
+            unsafe { libc::kill(pid, libc::SIGCONT) };
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Le chargeur de Winlux n'a pas de verrou exposé aux applis : on rend un
@@ -2615,6 +2659,49 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn etat(pid: u32) -> char {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        stat[stat.rfind(')').unwrap() + 1..]
+            .trim_start()
+            .chars()
+            .next()
+            .unwrap()
+    }
+
+    /// #1787 : un processus figé par NtSuspendProcess puis laissé ainsi
+    /// (Crashpad planté en plein vidage) est relancé par le gestionnaire de
+    /// plantage, et une relance normale libère sa place.
+    #[test]
+    fn processus_fige_relance_apres_plantage() {
+        let mut enfant = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = enfant.id();
+        unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        let place = SUSPENDED.iter().find(|s| {
+            s.compare_exchange(0, pid as i32, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        });
+        assert!(place.is_some());
+        let debut = std::time::Instant::now();
+        while etat(pid) != 'T' && debut.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::yield_now();
+        }
+        assert_eq!(etat(pid), 'T');
+        assert!(resume_suspended() >= 1);
+        let debut = std::time::Instant::now();
+        while etat(pid) == 'T' && debut.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::yield_now();
+        }
+        assert_ne!(etat(pid), 'T');
+        assert!(SUSPENDED
+            .iter()
+            .all(|s| s.load(Ordering::Relaxed) != pid as i32));
+        let _ = enfant.kill();
+        let _ = enfant.wait();
+    }
 
     fn fenetre(parent: usize) -> usize {
         let hwnd = crate::dlls::gui::alloc_hwnd();
