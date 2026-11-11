@@ -242,7 +242,12 @@ impl Interpreter {
             let index = self.domain.iter().position(|i| i.name == key);
             match index {
                 Some(i) => self.find_type_in(i, type_name, ignore_case),
-                None if key == domain::CORLIB => self.find_builtin(type_name, ignore_case),
+                None if domain::is_framework_assembly(&key) => {
+                    let corlib = self.domain.iter().position(|i| i.name == domain::CORLIB);
+                    corlib
+                        .and_then(|c| self.find_type_in(c, type_name, ignore_case))
+                        .or_else(|| self.find_builtin(type_name, ignore_case))
+                }
                 None => {
                     crate::log_warn!(
                         "clr",
