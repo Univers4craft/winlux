@@ -63,6 +63,36 @@ fn split_argv_wide(line: &[u16]) -> Vec<Vec<u16>> {
     result
 }
 
+/// Un seul bloc (libérable par LocalFree) : le tableau de pointeurs terminé
+/// par NULL, puis les chaînes. Les pointeurs ont la taille de ceux du
+/// programme : 4 octets pour un programme x86 (#1899), sinon il lirait
+/// argv[1] dans la moitié haute d'argv[0] (SteamService.exe /install).
+unsafe fn pack_argv(args: &[Vec<u16>], width: usize) -> *mut u8 {
+    let pointers = (args.len() + 1) * width;
+    let bytes = pointers + args.iter().map(|arg| (arg.len() + 1) * 2).sum::<usize>();
+    let block = crate::dlls::kernel32::heap_alloc(0, 0, bytes) as *mut u8;
+    if block.is_null() {
+        return block;
+    }
+    let slot = |index: usize, value: usize| {
+        let at = block.add(index * width);
+        if width == 4 {
+            std::ptr::write_unaligned(at.cast::<u32>(), value as u32);
+        } else {
+            std::ptr::write_unaligned(at.cast::<usize>(), value);
+        }
+    };
+    slot(args.len(), 0);
+    let mut cursor = block.add(pointers).cast::<u16>();
+    for (index, arg) in args.iter().enumerate() {
+        slot(index, cursor as usize);
+        std::ptr::copy_nonoverlapping(arg.as_ptr(), cursor, arg.len());
+        *cursor.add(arg.len()) = 0;
+        cursor = cursor.add(arg.len() + 1);
+    }
+    block
+}
+
 /// One LocalFree-compatible allocation contains both pointers and UTF-16 data.
 pub unsafe extern "win64" fn command_line_to_argv_w(
     line: *const u16,
@@ -92,22 +122,12 @@ pub unsafe extern "win64" fn command_line_to_argv_w(
     } else {
         split_argv_wide(std::slice::from_raw_parts(line, length))
     };
-    let pointers = (args.len() + 1) * std::mem::size_of::<*mut u16>();
-    let bytes = pointers + args.iter().map(|arg| (arg.len() + 1) * 2).sum::<usize>();
-    let block = crate::dlls::kernel32::heap_alloc(0, 0, bytes) as *mut u8;
+    let block = pack_argv(&args, crate::wow32::pointer_size());
     if block.is_null() {
         crate::process::set_last_error(8);
         return std::ptr::null_mut();
     }
     let argv = block.cast::<*mut u16>();
-    *argv.add(args.len()) = std::ptr::null_mut();
-    let mut cursor = block.add(pointers).cast::<u16>();
-    for (index, arg) in args.iter().enumerate() {
-        *argv.add(index) = cursor;
-        std::ptr::copy_nonoverlapping(arg.as_ptr(), cursor, arg.len());
-        *cursor.add(arg.len()) = 0;
-        cursor = cursor.add(arg.len() + 1);
-    }
     *count = args.len() as i32;
     argv
 }
@@ -823,6 +843,30 @@ mod tests {
         }
         std::env::remove_var("WINLUX_IMAGE_VIEWER");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SteamService.exe /install (#1899) : un programme x86 lit argv par
+    /// cases de 4 octets ; argv[1] doit y être, pas la moitié haute d'argv[0].
+    #[test]
+    fn argv_x86_en_pointeurs_de_4_octets() {
+        let _teb = crate::process::test_teb();
+        let args: Vec<Vec<u16>> = ["C:\\Steam\\bin\\SteamService.exe", "/install"]
+            .iter()
+            .map(|a| a.encode_utf16().collect())
+            .collect();
+        unsafe {
+            let block = pack_argv(&args, 4);
+            assert!(!block.is_null());
+            let slot = |i: usize| std::ptr::read_unaligned(block.add(i * 4).cast::<u32>());
+            let base = block as usize;
+            assert_eq!(slot(0), (base + 12) as u32, "argv[0] juste après 3 cases");
+            let second = base + 12 + (args[0].len() + 1) * 2;
+            assert_eq!(slot(1), second as u32, "argv[1] à la case 4");
+            assert_eq!(slot(2), 0, "tableau terminé par NULL");
+            let text = std::slice::from_raw_parts(second as *const u16, args[1].len());
+            assert_eq!(text, &args[1][..]);
+            assert!(crate::dlls::kernel32_misc::local_free(block.cast()).is_null());
+        }
     }
 
     #[test]
