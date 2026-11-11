@@ -3513,7 +3513,7 @@ fn init_order(
     let mut seen = vec![false; names.len()];
     let mut order = Vec::with_capacity(names.len());
     // Pile explicite (pas de récursion) : (indice, imports déjà parcourus).
-    let mut visit = |start: usize, seen: &mut Vec<bool>, order: &mut Vec<usize>| {
+    let visit = |start: usize, seen: &mut Vec<bool>, order: &mut Vec<usize>| {
         if seen[start] {
             return;
         }
