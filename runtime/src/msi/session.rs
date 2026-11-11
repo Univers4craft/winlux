@@ -173,7 +173,7 @@ unsafe fn text(p: usize, wide: bool) -> String {
 
 /// Copie façon Windows Installer : `*pcch` = taille du tampon en entrée,
 /// longueur (sans le zéro) en sortie ; ERROR_MORE_DATA si trop petit.
-unsafe fn put(value: &str, buf: usize, pcch: usize, wide: bool) -> u32 {
+pub(super) unsafe fn put(value: &str, buf: usize, pcch: usize, wide: bool) -> u32 {
     if pcch == 0 {
         return if buf == 0 {
             ERROR_SUCCESS
@@ -613,6 +613,7 @@ pub extern "win64" fn msi_close_handle(h: usize) -> u32 {
         s.records.remove(&(h as u32));
     });
     super::session_db::close(h as u32);
+    super::summary::close(h as u32);
     ERROR_SUCCESS
 }
 

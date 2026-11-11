@@ -92,7 +92,10 @@ pub fn file(name: &str) -> Option<PathBuf> {
     dir().map(|d| d.join(name))
 }
 
-fn ensure(dir: &Path, euid: u32) -> bool {
+/// Crée `dir` pour le compte `euid` (0755 pour root, 0700 sinon) et vérifie
+/// qu'il lui appartient : un dossier posé par un autre compte, ou un lien
+/// symbolique, est refusé.
+pub(crate) fn ensure(dir: &Path, euid: u32) -> bool {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     let mode = if euid == 0 { 0o755 } else { 0o700 };
     if let Some(parent) = dir.parent() {
