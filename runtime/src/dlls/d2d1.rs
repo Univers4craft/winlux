@@ -424,8 +424,69 @@ unsafe extern "win64" fn create_path_geometry(this: *mut FactoryObj, out: *mut *
     new_geometry(this, GeomKind::Path, Path::default(), out)
 }
 
+/// Disposition d'un bitmap WIC qui peut servir de cible (#1573) : BGRA ou
+/// RGBA 32 bits prémultiplié, BGR 32 bits, ou alpha seul sur 8 bits (masque
+/// de pinceau de Paint.NET).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WicLayout {
+    Pbgra,
+    Prgba,
+    Bgr,
+    Alpha8,
+}
+
+impl WicLayout {
+    fn of(fmt: &Guid) -> Option<WicLayout> {
+        use super::windowscodecs::{FMT_ALPHA8, FMT_BGR32, FMT_PBGRA32, FMT_PRGBA32};
+        Some(match *fmt {
+            FMT_PBGRA32 => WicLayout::Pbgra,
+            FMT_PRGBA32 => WicLayout::Prgba,
+            FMT_BGR32 => WicLayout::Bgr,
+            FMT_ALPHA8 => WicLayout::Alpha8,
+            _ => return None,
+        })
+    }
+
+    fn bpp(self) -> usize {
+        if self == WicLayout::Alpha8 {
+            1
+        } else {
+            4
+        }
+    }
+
+    /// Ligne du bitmap WIC vers la ligne BGRA prémultipliée de la cible.
+    fn read(self, src: &[u8], dst: &mut [u8]) {
+        for (d, s) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.chunks_exact(self.bpp()))
+        {
+            *d = match self {
+                WicLayout::Pbgra => [s[0], s[1], s[2], s[3]],
+                WicLayout::Prgba => [s[2], s[1], s[0], s[3]],
+                WicLayout::Bgr => [s[0], s[1], s[2], 255],
+                WicLayout::Alpha8 => [0, 0, 0, s[0]],
+            };
+        }
+    }
+
+    /// Ligne BGRA prémultipliée de la cible vers la ligne du bitmap WIC.
+    fn write(self, src: &[u8], dst: &mut [u8]) {
+        for (d, s) in dst.chunks_exact_mut(self.bpp()).zip(src.as_chunks::<4>().0) {
+            match self {
+                WicLayout::Pbgra => d.copy_from_slice(s),
+                WicLayout::Prgba => d.copy_from_slice(&[s[2], s[1], s[0], s[3]]),
+                WicLayout::Bgr => d.copy_from_slice(&[s[0], s[1], s[2], 255]),
+                WicLayout::Alpha8 => d[0] = s[3],
+            }
+        }
+    }
+}
+
 /// CreateWicBitmapRenderTarget : la cible dessine dans le bitmap WIC
-/// (32 bits BGRA prémultiplié ou BGR), lu à BeginDraw et écrit à EndDraw.
+/// (formats de `WicLayout`), lu à BeginDraw et écrit à EndDraw.
 unsafe extern "win64" fn create_wic_render_target(
     this: *mut FactoryObj,
     bitmap: *mut c_void,
@@ -448,10 +509,15 @@ unsafe extern "win64" fn create_wic_render_target(
     }
     let mut fmt = Guid::default();
     method::<GetFormat>(bitmap, 4)(bitmap, &mut fmt);
-    use super::windowscodecs::{FMT_BGR32, FMT_PBGRA32};
-    if fmt != FMT_PBGRA32 && fmt != FMT_BGR32 {
+    if WicLayout::of(&fmt).is_none() {
+        crate::log_warn!(
+            "d2d1",
+            "CreateWicBitmapRenderTarget : format {:?} non pris en charge",
+            fmt
+        );
         return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
     }
+    use super::windowscodecs::FMT_BGR32;
     method::<unsafe extern "win64" fn(*mut c_void) -> u32>(bitmap, 1)(bitmap);
     let target = Target {
         w,
@@ -1541,6 +1607,29 @@ impl Target {
         let (mut stride, mut size, mut data) = (0u32, 0u32, std::ptr::null_mut());
         method::<Stride>(lock, 4)(lock, &mut stride);
         method::<Data>(lock, 5)(lock, &mut size, &mut data);
+        type GetFormat = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+        let mut fmt = Guid::default();
+        method::<GetFormat>(wic, 4)(wic, &mut fmt);
+        let layout = WicLayout::of(&fmt).unwrap_or(WicLayout::Pbgra);
+        if layout != WicLayout::Pbgra && !data.is_null() {
+            // Formats convertis ligne par ligne (#1573).
+            let row = self.w as usize * 4;
+            let wrow = self.w as usize * layout.bpp();
+            let (stride, h) = (stride as usize, self.h as usize);
+            if h > 0 && stride >= wrow && (size as usize) >= stride * (h - 1) + wrow {
+                for y in 0..h {
+                    let wic = std::slice::from_raw_parts_mut(data.add(y * stride), wrow);
+                    let own = &mut self.px[y * row..][..row];
+                    if to_wic {
+                        layout.write(own, wic);
+                    } else {
+                        layout.read(wic, own);
+                    }
+                }
+            }
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(lock, 2)(lock);
+            return S_OK;
+        }
         let row = self.w as usize * 4;
         for y in 0..self.h as usize {
             let wic = data.add(y * stride as usize);
@@ -2778,6 +2867,76 @@ mod tests {
             release_obj(bmp);
             release_obj(f);
         }
+    }
+
+    /// #1573 : cibles WIC en RGBA prémultiplié et en alpha seul 8 bits
+    /// (masque du pinceau de Paint.NET).
+    #[test]
+    fn cible_wic_rgba_et_alpha_seul() {
+        unsafe {
+            let mut wic = std::ptr::null_mut();
+            assert_eq!(wic_create_imaging_factory_proxy(0x237, &mut wic), S_OK);
+            type CreateBmp = unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                u32,
+                *const Guid,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut bmp = std::ptr::null_mut();
+            let prgba = super::super::windowscodecs::FMT_PRGBA32;
+            assert_eq!(
+                method::<CreateBmp>(wic, 17)(wic, 8, 8, &prgba, 0, &mut bmp),
+                S_OK
+            );
+            release_obj(wic);
+            let mut f = std::ptr::null_mut();
+            assert_eq!(
+                d2d1_create_factory(0, &IID_D2D1_FACTORY, std::ptr::null(), &mut f),
+                S_OK
+            );
+            type CreateRt = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateRt>(f, 13)(f, bmp, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            method::<Unary>(rt, 48)(rt);
+            method::<Clear>(rt, 47)(
+                rt,
+                &ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(&pixels(bmp)[0..4], &[255, 0, 0, 255], "rouge en RGBA");
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
+        }
+        // Alpha seul : seule la couverture passe, dans les deux sens.
+        let a8 = WicLayout::of(&super::super::windowscodecs::FMT_ALPHA8).unwrap();
+        let mut own = [0u8; 8];
+        a8.read(&[0x80, 0xff], &mut own);
+        assert_eq!(own, [0, 0, 0, 0x80, 0, 0, 0, 0xff]);
+        let mut wic = [0u8; 2];
+        a8.write(&[10, 20, 30, 40, 1, 2, 3, 200], &mut wic);
+        assert_eq!(wic, [40, 200]);
+        assert!(WicLayout::of(&Guid::default()).is_none());
     }
 
     unsafe fn pixels(bmp: *mut c_void) -> Vec<u8> {
