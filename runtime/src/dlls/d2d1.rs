@@ -2732,10 +2732,28 @@ mod tests {
             assert_eq!(method::<Unary>(view, 1)(view), 3);
             assert_eq!(method::<Unary>(rt, 2)(rt), 2);
             // Méthodes propres au contexte (73 GetDevice, 75 GetTarget).
+            // #1554 : GetDevice rend toujours le même appareil, de la même
+            // fabrique que la cible (GetFactory, case 3).
             type Get = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void);
-            let mut p = 1usize as *mut c_void;
-            method::<Get>(view, 73)(view, &mut p);
-            assert!(p.is_null());
+            let mut d1 = std::ptr::null_mut();
+            method::<Get>(view, 73)(view, &mut d1);
+            assert!(!d1.is_null());
+            let mut d2 = std::ptr::null_mut();
+            method::<Get>(view, 73)(view, &mut d2);
+            assert_eq!(d1, d2);
+            let (mut fd, mut fv) = (std::ptr::null_mut(), std::ptr::null_mut());
+            method::<Get>(d1, 3)(d1, &mut fd);
+            method::<Get>(view, 3)(view, &mut fv);
+            assert!(!fd.is_null());
+            assert_eq!(fd, fv);
+            release_obj(fd);
+            release_obj(fv);
+            type GetDxgi = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            let mut dx = 1usize as *mut c_void;
+            assert!(method::<GetDxgi>(d1, 14)(d1, &mut dx) < 0);
+            assert!(dx.is_null());
+            release_obj(d2);
+            release_obj(d1);
             let mut p = 1usize as *mut c_void;
             method::<Get>(view, 75)(view, &mut p);
             assert!(p.is_null());
