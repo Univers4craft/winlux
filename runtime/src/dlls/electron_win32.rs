@@ -23,7 +23,6 @@ const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_IO_PENDING: u32 = 997;
 const ERROR_NOT_FOUND: u32 = 1168;
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
-const STATUS_NOT_IMPLEMENTED: u32 = 0xC000_0002;
 const E_NOTIMPL: u32 = 0x8000_4001;
 const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
 const WSASERVICE_NOT_FOUND: u32 = 10108;
@@ -501,8 +500,8 @@ pub fn psapi_exports() -> crate::dlls::Exports {
 //  ntdll
 // ============================================================
 
-unsafe extern "win64" fn NtDeleteKey(_key: usize) -> u32 {
-    STATUS_NOT_IMPLEMENTED
+unsafe extern "win64" fn NtDeleteKey(key: usize) -> u32 {
+    crate::dlls::ntdll::nt_delete_key(key) as u32
 }
 
 /// `NtQueryObject` : informations de base (0), nom (1), type (2) et
