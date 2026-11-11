@@ -1925,7 +1925,15 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
     if info_class != 0 {
         return 0xC000_0003u32 as i32; // STATUS_INVALID_INFO_CLASS
     }
-    let required = std::mem::size_of::<crate::dlls::kernel32::MemoryBasicInformation>();
+    // Programme x86 : MEMORY_BASIC_INFORMATION de 28 octets, comme pour
+    // NtQuerySection (#1650) ; la disposition 64 bits (48 octets) lui
+    // rendait STATUS_INFO_LENGTH_MISMATCH.
+    let x86 = crate::dlls::legacy_com::x86();
+    let required = if x86 {
+        28
+    } else {
+        std::mem::size_of::<crate::dlls::kernel32::MemoryBasicInformation>()
+    };
     if !return_length.is_null() {
         *return_length = required;
     }
@@ -1936,7 +1944,12 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
         return STATUS_INVALID_PARAMETER;
     }
     let previous = crate::dlls::kernel32::get_last_error();
-    let result = crate::dlls::kernel32::virtual_query(addr, info.cast(), length);
+    let result = if x86 {
+        crate::wow32::virtual_query32(addr as usize as u32, info as usize as u32, length as u32)
+            as usize
+    } else {
+        crate::dlls::kernel32::virtual_query(addr, info.cast(), length)
+    };
     crate::process::set_last_error(previous);
     if result == 0 {
         STATUS_INVALID_PARAMETER
