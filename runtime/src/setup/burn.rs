@@ -829,7 +829,29 @@ pub fn run(
     if status == 0 {
         log.log(&format!("{name} : terminé."));
     }
+    // Silencieux (/quiet) lancé d'un terminal : une ligne de bilan sur
+    // stderr et le chemin du journal, plutôt que rien du tout (#1592).
+    if quiet && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        eprintln!("{}", quiet_summary(&name, uninstall, status, log_file));
+    }
     status
+}
+
+/// Bilan d'une installation silencieuse, pour le terminal (#1592).
+fn quiet_summary(name: &str, uninstall: bool, status: i32, log_file: Option<&Path>) -> String {
+    let what = match (uninstall, status) {
+        (false, 0) => "installation terminée",
+        (true, 0) => "désinstallation terminée",
+        (false, _) => "installation en échec",
+        (true, _) => "désinstallation en échec",
+    };
+    match log_file {
+        Some(f) => format!(
+            "winlux : {name} : {what} (code {status}). Journal : {}",
+            f.display()
+        ),
+        None => format!("winlux : {name} : {what} (code {status})."),
+    }
 }
 
 /// `Nom=Valeur` de la ligne de commande : variables du bundle.
@@ -954,6 +976,19 @@ pub mod tests {
         pe.extend_from_slice(&ux);
         pe.extend_from_slice(&attached);
         pe
+    }
+
+    #[test]
+    fn bilan_silencieux_pour_le_terminal() {
+        let log = Path::new("/tmp/python_1.log");
+        assert_eq!(
+            quiet_summary("Python 3.12.10 (64-bit)", false, 0, Some(log)),
+            "winlux : Python 3.12.10 (64-bit) : installation terminée (code 0). Journal : /tmp/python_1.log"
+        );
+        assert_eq!(
+            quiet_summary("Python", true, 1603, None),
+            "winlux : Python : désinstallation en échec (code 1603)."
+        );
     }
 
     #[test]
