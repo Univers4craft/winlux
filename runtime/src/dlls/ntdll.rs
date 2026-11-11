@@ -13,6 +13,7 @@ const STATUS_SUCCESS: i32 = 0;
 const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002u32 as i32;
 const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+const STATUS_OBJECT_NAME_INVALID: i32 = 0xC000_0033u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
 const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
@@ -1404,6 +1405,9 @@ unsafe fn apply_disposition(o: &mut std::fs::OpenOptions, disp: u32) {
     }
 }
 
+/// Option de création FILE_DELETE_ON_CLOSE (winternl.h).
+const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
+
 /// `NtCreateFile` : ouvre ou crée un fichier via un chemin NT.
 pub unsafe extern "win64" fn nt_create_file(
     handle: *mut usize,
@@ -1414,7 +1418,7 @@ pub unsafe extern "win64" fn nt_create_file(
     _file_attrs: u32,
     _share: u32,
     disposition: u32,
-    _options: u32,
+    options: u32,
     _ea: *const c_void,
     _ea_len: u32,
 ) -> i32 {
@@ -1428,9 +1432,34 @@ pub unsafe extern "win64" fn nt_create_file(
     if super::afd::is_afd_path(&win_path) {
         return super::afd::open(handle, io);
     }
-    let linux_path = crate::paths::to_linux(&win_path);
+    // OBJECT_ATTRIBUTES.RootDirectory (+0x8) : nom relatif à un dossier
+    // ouvert. `remove_dir_all` de la bibliothèque Rust ouvre ainsi chaque
+    // entrée du dossier à effacer (#1885).
+    let root = *((attrs as *const u8).add(8) as *const usize);
+    // Un nom relatif ne remonte pas et ne repart pas de la racine :
+    // Windows refuse « \x » et « .. » avec STATUS_OBJECT_NAME_INVALID.
+    if root != 0
+        && (win_path.starts_with(['\\', '/'])
+            || win_path.split(['\\', '/']).any(|c| c == ".." || c == "."))
+    {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    let linux_path = if root != 0 {
+        let Some(base) =
+            super::kernel32::fd_of_handle(root).and_then(super::ntdll_file::path_of_fd)
+        else {
+            return STATUS_INVALID_HANDLE;
+        };
+        base.join(win_path.replace('\\', "/"))
+    } else {
+        crate::paths::to_linux(&win_path)
+    };
     let want_read = access & 0x8000_0000 != 0 || access & 1 != 0 || access & 0x0008_0000 != 0;
-    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    let mut want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    // Un dossier s'ouvre en lecture seule sous Linux.
+    if want_write && disposition == 1 && linux_path.is_dir() {
+        want_write = false;
+    }
     let mut o = std::fs::OpenOptions::new();
     o.read(want_read || !want_write).write(want_write);
     apply_disposition(&mut o, disposition);
@@ -1438,6 +1467,14 @@ pub unsafe extern "win64" fn nt_create_file(
         Ok(f) => {
             let h = super::kernel32::insert_file(f);
             *handle = h;
+            // FILE_DELETE_ON_CLOSE : effacé à la fermeture du handle.
+            if options & FILE_DELETE_ON_CLOSE != 0 {
+                crate::trace!(
+                    "NtCreateFile({}) : effacé à la fermeture",
+                    linux_path.display()
+                );
+                crate::dlls::lock(super::kernel32::delete_on_close()).insert(h, linux_path);
+            }
             if !io.is_null() {
                 (io as *mut u64).write(0);
                 (io as *mut u64).add(1).write(disposition as u64);
