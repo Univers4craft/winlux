@@ -12,7 +12,25 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime=${WINLUX_BIN:-$root/target/release/winlux}
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
-command -v makensis >/dev/null || { echo "makensis absent (paquet nsis) : test sauté"; exit 0; }
+# makensis natif (paquet nsis, en CI) ; sinon le makensis.exe Windows
+# officiel (nsis.sourceforge.io) lancé par Winlux : WINLUX_MAKENSIS_EXE, ou
+# l'emplacement d'installation habituel sur le lecteur C: de Winlux.
+makensis_exe=${WINLUX_MAKENSIS_EXE:-}
+if [ -z "$makensis_exe" ]; then
+    for c in "${WINLUX_DRIVE_C:-$HOME}/Program Files (x86)/NSIS/makensis.exe" \
+             "${WINLUX_DRIVE_C:-$HOME}/Program Files/NSIS/makensis.exe"; do
+        [ -f "$c" ] && { makensis_exe=$c; break; }
+    done
+fi
+if command -v makensis >/dev/null; then
+    build() { makensis -V1 "$1" >/dev/null; }
+elif [ -n "$makensis_exe" ]; then
+    echo "makensis.exe Windows lancé par Winlux : $makensis_exe"
+    build() { "$runtime" "$makensis_exe" /V1 "$1"; }
+else
+    echo "makensis absent (paquet nsis, ou WINLUX_MAKENSIS_EXE=chemin de makensis.exe) : test sauté"
+    exit 0
+fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -21,7 +39,8 @@ cd "$work"
 echo "DLL de test x86 de Winlux (#1800)" >winlux-test-x86.dll
 echo "DLL de test native de Winlux (#1800)" >winlux-test-native.dll
 echo "DLL de test après rétablissement (#1800)" >winlux-test-retour.dll
-makensis -V1 nsis-sysdir.nsi >/dev/null
+build nsis-sysdir.nsi || { echo "compilation NSIS en échec" >&2; exit 1; }
+test -f sysdir-test.exe || { echo "makensis n'a pas produit sysdir-test.exe" >&2; exit 1; }
 
 mkdir home
 fail() { echo "$1" >&2; cat "$work/out.txt" >&2 2>/dev/null || true; exit 1; }
