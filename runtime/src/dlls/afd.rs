@@ -292,10 +292,6 @@ pub unsafe fn device_io_control(
                 None => (STATUS_CANCELLED, 0),
                 Some(r) => (STATUS_SUCCESS, r.len()),
             };
-            // La demande est finie : on la retire avant d'écrire l'IOSB et de
-            // poster la complétion, pour qu'une annulation arrivée après la
-            // complétion rende STATUS_NOT_FOUND (#1835).
-            lock(ops()).remove(&id);
             // SAFETY : tampons de l'appelant, valables jusqu'à la fin de la
             // demande (contrat de NtDeviceIoControlFile).
             unsafe {
