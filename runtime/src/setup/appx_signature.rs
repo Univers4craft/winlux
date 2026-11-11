@@ -12,7 +12,8 @@
 //!   (`[Content_Types].xml`), `AXCI` (`AppxMetadata/CodeIntegrity.cat`),
 //!   `AXPC` (les fichiers de l'archive) et `AXCD` (son répertoire central) ;
 //! - que la chaîne de certificats mène à une autorité reconnue par le
-//!   système (magasin d'OpenSSL, `SSL_CERT_FILE` / `SSL_CERT_DIR`) et que le
+//!   système (magasin d'OpenSSL, `SSL_CERT_FILE` / `SSL_CERT_DIR`) ou à une
+//!   des racines de signature de code de `CODE_ROOTS`, et que le
 //!   certificat est prévu pour signer du code.
 //!
 //! Une signature fausse, ou un paquet modifié après signature, est refusé
@@ -23,6 +24,22 @@
 //!
 //! Les calculs (condensats, vérification RSA ou ECDSA, chaîne) passent par
 //! la bibliothèque OpenSSL du système (`dlls::hostssl`).
+
+/// Racines reconnues pour la signature de code seulement (jamais pour TLS) :
+/// le magasin du système, fait pour TLS, ne les contient pas, et toute
+/// signature Microsoft (paquets MSIX, Authenticode) restait « non
+/// vérifiée » (#1726). Certificats publics du dépôt PKI de Microsoft
+/// (https://www.microsoft.com/pkiops/docs/repository.htm), SHA-256 :
+/// - Root Certificate Authority 2010 : df545bf9…6f3c163e ;
+/// - Root Certificate Authority 2011 : 847df6a7…07ed7c61 ;
+/// - Identity Verification Root Certificate Authority 2020 : 5367f20c…292e1270 ;
+/// - Time Stamp Root Certificate Authority 2014 : 65af95f4…82109e4f.
+pub(crate) const CODE_ROOTS: [&[u8]; 4] = [
+    include_bytes!("racines_code/microsoft-root-2010.cer"),
+    include_bytes!("racines_code/microsoft-root-2011.cer"),
+    include_bytes!("racines_code/microsoft-identity-verification-root-2020.cer"),
+    include_bytes!("racines_code/microsoft-time-stamp-root-2014.cer"),
+];
 
 use crate::archive::zip::{self, ZipEntry};
 use crate::dlls::hostssl;
@@ -248,13 +265,14 @@ fn check_chain(p: &Parsed, signer: &Cert, name: String) -> Signature {
         .filter(|c| c.der != signer.der)
         .map(|c| c.der.clone())
         .collect();
-    match hostssl::verify(&signer.der, &others, None) {
+    match hostssl::verify_code(&signer.der, &others, &CODE_ROOTS, None) {
         None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
         Some(v) if v.error == 0 => Signature::Verified { signer: name },
         // Certificat expiré (ou pas encore valide) : comme Windows, une
         // signature horodatée pendant sa validité reste valable (#1387).
         Some(v) if v.error == 9 || v.error == 10 => match timestamp(p) {
-            Ok(Some(at)) => match hostssl::verify_at(&signer.der, &others, at) {
+            Ok(Some(at)) => match hostssl::verify_code(&signer.der, &others, &CODE_ROOTS, Some(at))
+            {
                 Some(w) if w.error == 0 => Signature::Verified { signer: name },
                 Some(w) => unverified(chain_reason(w.error)),
                 None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
@@ -357,7 +375,7 @@ fn check_tsa(tsa: &Cert, extra: &[Vec<u8>], at: i64) -> Result<(), String> {
     {
         return Err("certificat non prévu pour horodater".into());
     }
-    match hostssl::verify_at(&tsa.der, extra, at) {
+    match hostssl::verify_code(&tsa.der, extra, &CODE_ROOTS, Some(at)) {
         Some(v) if v.error == 0 => Ok(()),
         Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason(v.error))),
         None => Err("chaîne de l'autorité d'horodatage non vérifiable".into()),
@@ -1192,6 +1210,27 @@ fn display_name(subject: &[(String, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn racines_de_signature_de_code_reconnues() {
+        // #1726 : chaque racine est lisible et reconnue par verify_code ;
+        // elle ne sert pas aux vérifications TLS (verify), et elle
+        // n'aboutit qu'à une chaîne vérifiée, pas à un contrôle désactivé.
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        for root in CODE_ROOTS {
+            let v = hostssl::verify_code(root, &[], &CODE_ROOTS, None).expect("vérifiable");
+            assert_eq!(v.error, 0, "racine de signature de code non reconnue");
+        }
+        let empty: [&[u8]; 0] = [];
+        let v = hostssl::verify_code(CODE_ROOTS[1], &[], &empty, None).expect("vérifiable");
+        if v.error == 0 {
+            // Le magasin du système la contient déjà : rien à prouver ici.
+            return;
+        }
+        assert_ne!(hostssl::verify(CODE_ROOTS[1], &[], None).unwrap().error, 0);
+    }
 
     /// Exécutable minimal (PE32+, sans section), long d'un multiple de 8.
     fn pe_minimal() -> Vec<u8> {
