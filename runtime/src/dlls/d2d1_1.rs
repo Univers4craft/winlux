@@ -363,6 +363,9 @@ pub(super) struct TargetExt {
     /// Destination d'origine d'une cible fenêtre ou HDC mise de côté par
     /// SetTarget vers un bitmap, rendue par SetTarget(NULL) (#1590).
     home: Option<Box<Home>>,
+    /// Bitmap rendu par GetTarget pour la fenêtre ou le HDC (référence
+    /// tenue) : SetTarget de ce bitmap rétablit la destination d'origine.
+    home_bitmap: *mut c_void,
 }
 
 /// Fenêtre ou HDC d'une cible 1.0, avec ses pixels, le temps qu'un bitmap
@@ -380,6 +383,23 @@ fn swap_home(t: &mut Target, home: &mut Home) {
     std::mem::swap(&mut t.w, &mut home.w);
     std::mem::swap(&mut t.h, &mut home.h);
     std::mem::swap(&mut t.px, &mut home.px);
+}
+
+/// BindDC ou Resize pendant qu'un bitmap sert de cible : la fenêtre ou le
+/// HDC d'origine redevient la cible avant d'être changé (#1609). Rend le
+/// bitmap quitté, à relâcher une fois le verrou de la cible rendu.
+pub(super) unsafe fn leave_bitmap(t: &mut Target) -> *mut c_void {
+    let Some(mut home) = t.ext.home.take() else {
+        return std::ptr::null_mut();
+    };
+    if t.drawing && matches!(t.out, Output::Bitmap(_)) {
+        t.sync_wic(true);
+    }
+    swap_home(t, &mut home);
+    match home.out {
+        Output::Bitmap(b) => b,
+        _ => std::ptr::null_mut(),
+    }
 }
 
 /// EndDraw alors qu'un bitmap sert de cible : la fenêtre ou le HDC
@@ -403,6 +423,7 @@ impl Default for TargetExt {
             dpi: (96.0, 96.0),
             view: None,
             home: None,
+            home_bitmap: std::ptr::null_mut(),
         }
     }
 }
@@ -411,6 +432,9 @@ impl Drop for TargetExt {
     fn drop(&mut self) {
         if !self.device.is_null() {
             unsafe { com_release(self.device) };
+        }
+        if !self.home_bitmap.is_null() {
+            unsafe { com_release(self.home_bitmap) };
         }
     }
 }
@@ -2035,8 +2059,11 @@ unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_vo
 /// Paint.NET, qui dessinaient jusque-là dans la fenêtre).
 unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void) {
     let mut t = target(this);
-    let to_bitmap = is_pixel_image(image);
-    if !to_bitmap && !image.is_null() {
+    // Le bitmap rendu par GetTarget pour la fenêtre ou le HDC la rétablit
+    // (#1609), comme SetTarget(NULL).
+    let to_home = !image.is_null() && image == t.ext.home_bitmap;
+    let to_bitmap = !to_home && is_pixel_image(image);
+    if !to_bitmap && !to_home && !image.is_null() {
         crate::log_warn!(
             "d2d1",
             "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
@@ -2083,8 +2110,24 @@ unsafe extern "win64" fn dc_get_target(this: *mut TargetObj, out: *mut *mut c_vo
     if out.is_null() {
         return;
     }
-    *out = match target(this).out {
+    let mut t = target(this);
+    *out = match t.out {
         Output::Bitmap(b) => {
+            com_add_ref(b);
+            b
+        }
+        // Une cible fenêtre ou HDC a toujours une cible : un bitmap qui la
+        // représente, que Paint.NET garde pour la remettre après avoir
+        // dessiné dans ses propres bitmaps (#1609).
+        Output::Hwnd(_) | Output::Dc { .. } => {
+            if t.ext.home_bitmap.is_null() {
+                let (w, h) = (t.w.max(1), t.h.max(1));
+                let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+                // D2D1_BITMAP_OPTIONS_TARGET | CANNOT_DRAW.
+                b.options = 1 | 2;
+                t.ext.home_bitmap = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b).cast();
+            }
+            let b = t.ext.home_bitmap;
             com_add_ref(b);
             b
         }
@@ -2977,6 +3020,51 @@ mod tests {
                 super::super::end_draw(rt, std::ptr::null_mut(), std::ptr::null_mut()),
                 S_OK
             );
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1609 : GetTarget d'une cible HDC rend un bitmap qui la rétablit, et
+    /// BindDC pendant qu'un bitmap sert de cible rétablit d'abord le HDC.
+    #[test]
+    fn cible_hdc_get_target_et_bind_dc_retablissent_le_hdc() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            target(rt).resize(2, 2);
+            let mut home = std::ptr::null_mut();
+            dc_get_target(rt, &mut home);
+            assert!(!home.is_null());
+            let mut bmp = std::ptr::null_mut();
+            let size = 4u64 | (3u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            dc_set_target(rt, home);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (2, 2));
+                assert!(matches!(t.out, Output::Dc { .. }));
+            }
+            dc_set_target(rt, bmp);
+            let rect = [0, 0, 5, 6];
+            assert_eq!(super::super::bind_dc(rt, 0x1234, &rect), S_OK);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (5, 6));
+                assert!(matches!(t.out, Output::Dc { hdc: 0x1234, .. }));
+                assert!(t.ext.home.is_none());
+            }
+            com_release(home);
             com_release(bmp);
             com_release(rt.cast());
             Com::release(f);
