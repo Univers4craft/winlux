@@ -273,7 +273,14 @@ pub fn decode(il: &[u8], offset: usize) -> Option<Instruction> {
             | OpCode::Ldloc
             | OpCode::Ldloca
             | OpCode::Stloc => 2,
-            OpCode::Sizeof | OpCode::Constrained | OpCode::Ldftn | OpCode::Ldvirtftn => 4,
+            // `initobj` (FE 15) porte un jeton de type : sans lui, le
+            // décodage se décalait de 4 octets et lisait des jetons faux
+            // (« jmp » puis « jeton 0x02020000 » dans Corsair.Service.exe, #1664).
+            OpCode::Sizeof
+            | OpCode::Constrained
+            | OpCode::Ldftn
+            | OpCode::Ldvirtftn
+            | OpCode::Initobj => 4,
             OpCode::Unaligned => 1,
             _ => 0,
         };
@@ -594,4 +601,21 @@ pub fn read_f64(il: &[u8], offset: usize) -> f64 {
     il.get(offset..offset + 8)
         .map(|s| f64::from_le_bytes(s.try_into().unwrap()))
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1664 : `initobj` (FE 15 + jeton) occupe 6 octets ; l'instruction
+    /// suivante est lue au bon endroit.
+    #[test]
+    fn initobj_porte_un_jeton() {
+        // ldloca.s 0 ; initobj 0x02000027 ; ldarg.0 ; ret
+        let il = [0x12, 0x00, 0xFE, 0x15, 0x27, 0x00, 0x00, 0x02, 0x02, 0x2A];
+        let i = decode(&il, 2).unwrap();
+        assert_eq!((i.op, i.size), (OpCode::Initobj, 6));
+        assert_eq!(decode(&il, 8).unwrap().op, OpCode::Ldarg_0);
+        assert_eq!(decode(&il, 9).unwrap().op, OpCode::Ret);
+    }
 }
