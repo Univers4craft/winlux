@@ -100,6 +100,35 @@ namespace System
     {
         public static readonly string Empty = "";
 
+        // Comparaison et concaténation servies par le moteur (bcl.rs).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern bool operator ==(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern bool operator !=(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(string a, string b, string c);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(object a, object b, object c);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern bool StartsWith(string value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern bool EndsWith(string value);
+
+        // Égalité de contenu, et empreinte qui la respecte.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern override bool Equals(object obj);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern override int GetHashCode();
+
         public extern int Length
         {
             [MethodImpl(MethodImplOptions.InternalCall)]
@@ -115,12 +144,12 @@ namespace System
 
         public static bool IsNullOrEmpty(string value)
         {
-            return value == null || value.Length == 0;
+            return (object)value == null || value.Length == 0;
         }
 
         public static bool IsNullOrWhiteSpace(string value)
         {
-            if (value == null)
+            if ((object)value == null)
                 return true;
             for (int i = 0; i < value.Length; i++)
             {
@@ -138,12 +167,6 @@ namespace System
             [MethodImpl(MethodImplOptions.InternalCall)]
             get;
         }
-    }
-
-    public abstract class Type
-    {
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        public static extern Type GetTypeFromHandle(RuntimeTypeHandle handle);
     }
 
     public struct RuntimeTypeHandle { private IntPtr m_value; }

@@ -54,6 +54,8 @@ pub struct AsmInfo {
     pub method_owner: Vec<u32>,
     /// Field → TypeDef qui le déclare.
     pub field_owner: Vec<u32>,
+    /// Fichier d'où vient l'assembly (`Assembly.Location`, #1869).
+    pub path: Option<PathBuf>,
 }
 
 impl AsmInfo {
@@ -85,14 +87,20 @@ impl AsmInfo {
             type_ids: vec![None; types as usize + 1],
             method_owner,
             field_owner,
+            path: None,
         }
     }
 }
 
 /// Charge `main` puis, de proche en proche, les assemblies privées qu'elle
-/// référence. L'indice 0 est toujours le programme.
-pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmInfo>) {
-    let info = AsmInfo::new(&main, "programme");
+/// référence. L'indice 0 est toujours le programme, lu dans `main_path`.
+pub fn load(
+    main: Assembly,
+    main_path: Option<&Path>,
+    app_dir: Option<&Path>,
+) -> (Vec<Assembly>, Vec<AsmInfo>) {
+    let mut info = AsmInfo::new(&main, "programme");
+    info.path = main_path.map(Path::to_path_buf);
     let mut assemblies = vec![main];
     let mut infos = vec![info];
     let mut next = 0;
@@ -129,6 +137,7 @@ pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmIn
                     );
                     let mut info = AsmInfo::new(&a, &name);
                     info.name = key;
+                    info.path = Some(path.clone());
                     assemblies.push(a);
                     infos.push(info);
                 }
