@@ -374,6 +374,26 @@ impl Interpreter {
         Kind::Struct(id)
     }
 
+    /// Instanciation `System.Nullable<T>` : (décalage de `hasValue`,
+    /// décalage de `value`, type `T`). Les deux champs sont, dans cet ordre,
+    /// ceux de bcl/mscorlib/Valeurs.cs (#1952).
+    pub fn nullable_parts(&self, id: TypeId) -> Option<(usize, usize, TypeId)> {
+        let t = types::with_types(|reg| {
+            reg.get(id).and_then(|t| {
+                (t.is_value
+                    && t.namespace == "System"
+                    && t.name == "Nullable`1"
+                    && t.type_args.len() == 1)
+                    .then(|| t.type_args[0])
+            })
+        })?;
+        self.ensure_layout(id);
+        types::with_types(|reg| {
+            let f = &reg.get(id)?.fields;
+            (f.len() >= 2).then(|| (f[0].offset, f[1].offset, t))
+        })
+    }
+
     /// Façon de ranger une valeur d'un élément de signature.
     pub fn kind_of_sig(&self, asm: usize, et: &ElementType, gen: &Gen) -> Kind {
         use ElementType as E;

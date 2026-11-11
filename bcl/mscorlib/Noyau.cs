@@ -117,6 +117,9 @@ namespace System
         public static extern string Concat(object a, object b, object c);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(string a, string b, string c, string d);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         public extern bool StartsWith(string value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -173,7 +176,16 @@ namespace System
     public struct RuntimeFieldHandle { private IntPtr m_value; }
     public struct RuntimeMethodHandle { private IntPtr m_value; }
 
-    public abstract class Delegate { }
+    public abstract class Delegate
+    {
+        // Chaînage des délégués servi par le moteur (delegates.rs) ; le
+        // compilateur s'en sert pour les accesseurs d'événements.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern Delegate Combine(Delegate a, Delegate b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern Delegate Remove(Delegate source, Delegate value);
+    }
     public abstract class MulticastDelegate : Delegate { }
 
     public class Exception

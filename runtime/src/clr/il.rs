@@ -1836,6 +1836,28 @@ impl Interpreter {
             O::Box => {
                 let (id, kind) = self.kind_of_token(tok1());
                 let val = pop!();
+                // Nullable<T> (ECMA-335 III.4.1) : null sans valeur, sinon la
+                // valeur T encadrée.
+                if let Some((has, at, t)) = self.nullable_parts(id) {
+                    let src = val.as_ref();
+                    let boxed = if src.is_null() || unsafe { *src.add(has) } == 0 {
+                        Value::Null
+                    } else {
+                        let tk = self.kind_of_type(t);
+                        let inner = load(unsafe { src.add(at) }, tk);
+                        match tk {
+                            Kind::Ref => inner,
+                            Kind::Struct(_) => inner,
+                            k => {
+                                let b = gc::with_gc(|gc| gc.alloc(t, 8));
+                                store(b, k, inner);
+                                Value::Ref(b)
+                            }
+                        }
+                    };
+                    push!(boxed);
+                    return Ok(StepResult::Continue);
+                }
                 let boxed = match kind {
                     Kind::Ref => val,
                     Kind::Struct(_) => {
@@ -1866,6 +1888,29 @@ impl Interpreter {
                     return Ok(StepResult::Continue);
                 }
                 let p = obj.as_ref();
+                // Vers Nullable<T> : null donne un Nullable sans valeur, un T
+                // encadré un Nullable qui le porte (ECMA-335 III.4.33).
+                if let Some((has, at, t)) = self.nullable_parts(id) {
+                    let n = self.new_struct(id);
+                    if !p.is_null() {
+                        let tk = self.kind_of_type(t);
+                        if gc::type_of(p) != Some(t) && gc::type_of(p) != Some(id) {
+                            return Err(invalid_cast());
+                        }
+                        if gc::type_of(p) == Some(id) {
+                            store(n, kind, Value::Ref(p));
+                        } else {
+                            unsafe { *n.add(has) = 1 };
+                            store(unsafe { n.add(at) }, tk, load(p, tk));
+                        }
+                    }
+                    push!(if op == O::Unbox {
+                        Value::Ref(n)
+                    } else {
+                        load(n, kind)
+                    });
+                    return Ok(StepResult::Continue);
+                }
                 let Some(actual) = gc::type_of(p) else {
                     return Err(ClrException::null_reference());
                 };
