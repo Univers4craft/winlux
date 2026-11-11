@@ -103,15 +103,16 @@ def consent_lock_path():
     return f"/tmp/winlux-consent-{number}.lock"
 
 
-def hold_consent_lock(timeout=2.0):
-    """Descripteur tenu en exclusif (à garder ouvert), ou None."""
+def _lock_exclusive(path, timeout):
+    """Descripteur verrouillé en exclusif, ou None (lien, autre compte,
+    délai dépassé)."""
     import fcntl
-    import time
     import stat
+    import time
     # Jamais à travers un lien symbolique posé dans /tmp par un autre compte ;
-    # la saisie simulée refuse elle-même tout envoi sans ce verrou.
+    # la saisie simulée refuse elle-même tout envoi sans ces verrous.
     try:
-        fd = os.open(consent_lock_path(), os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     except OSError:
         return None
     info = os.fstat(fd)
@@ -127,7 +128,21 @@ def hold_consent_lock(timeout=2.0):
             if time.monotonic() >= end:
                 os.close(fd)
                 return None
-            time.sleep(0.02)
+            time.sleep(0.005)
+
+
+def hold_consent_lock(timeout=10.0):
+    """Verrous à garder ouverts jusqu'à la fermeture de la fenêtre (#1711).
+
+    D'abord la porte : dès qu'elle est prise, aucune nouvelle saisie simulée
+    ne démarre (elle n'y passe qu'un instant). Ensuite le verrou principal :
+    on attend la fin des envois déjà commencés, un lot au plus. Si un verrou
+    est impossible (fichier posé par un autre compte), la fenêtre s'affiche
+    quand même : la saisie simulée refuse alors déjà tout."""
+    path = consent_lock_path()
+    gate = _lock_exclusive(os.path.splitext(path)[0] + ".porte", timeout)
+    main = _lock_exclusive(path, timeout)
+    return [fd for fd in (gate, main) if fd is not None]
 
 
 def admin_accounts():
@@ -321,8 +336,8 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     window.set_default(yes)
     (entry if ask_password else no).grab_focus()
     Gtk.main()
-    if result.get("lock") is not None:
-        os.close(result["lock"])
+    for fd in result.get("lock") or []:
+        os.close(fd)
     if result.get("osk"):
         # Le clavier ouvert pour ce mot de passe se referme avec la fenêtre.
         osk_run(result["osk"], "hide")
