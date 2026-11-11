@@ -379,6 +379,27 @@ pub(crate) fn on_exit() {
     }
 }
 
+/// Plantage du processus (faute non rattrapée) : Windows ferme aussi ses
+/// handles, donc ses jobs KILL_ON_JOB_CLOSE tuent leurs membres (#1966).
+/// Appelé depuis le gestionnaire de signal : pas d'attente de verrou ni de
+/// handle de processus, seulement `kill(SIGKILL)` sur les membres vivants.
+pub(crate) fn on_crash() {
+    let Ok(g) = jobs().try_lock() else {
+        return;
+    };
+    let me = std::process::id() as i32;
+    for j in g.values() {
+        if j.flags() & KILL_ON_JOB_CLOSE == 0 {
+            continue;
+        }
+        for &(pid, _) in &j.members {
+            if pid != me && pid > 1 && alive(pid) {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
 /// Enfant lancé par CreateProcess : s'il est lancé par un membre d'un job
 /// (le processus courant), il rejoint ce job, sauf départ autorisé.
 pub(crate) fn on_child_created(pid: i32, process: usize, creation_flags: u32) {
@@ -447,6 +468,27 @@ mod tests {
         let status = child.wait().unwrap();
         assert!(!status.success(), "l'enfant est tué à la fermeture du job");
         assert!(!crate::dlls::lock(jobs()).contains_key(&job));
+    }
+
+    #[test]
+    fn plantage_tue_les_membres_kill_on_close() {
+        let job = create(None);
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        assert!(add_member(job, child.id() as i32, 0));
+        let l = limits(KILL_ON_JOB_CLOSE);
+        assert_eq!(
+            unsafe {
+                set_information_job_object(job, CLASS_EXTENDED_LIMIT, l.as_ptr(), l.len() as u32)
+            },
+            1
+        );
+        on_crash();
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "l'enfant est tué au plantage du parent");
+        assert!(close(job));
     }
 
     #[test]
