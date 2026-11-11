@@ -170,6 +170,20 @@ déclenchait son contrôle /GS (action DriversInstall d'iCUE). Test :
 `SetupDiGetClassDevs` est journalisé (classe ou interface, drapeaux, nombre
 d'éléments) pour observer ce qu'un logiciel cherche.
 
+Saisie simulée (#1683) : `SendInput`, `keybd_event` et `mouse_event` tapent
+dans la session X du compte par l'extension XTEST, en x64 (INPUT de 40
+octets) comme en x86 (28 octets). Les touches virtuelles suivent la
+disposition du clavier, les caractères `KEYEVENTF_UNICODE` passent par leur
+keysym (Maj ajouté si besoin, sinon un keycode libre réaffecté), les codes de
+balayage par le code noyau (+8), les clics, boutons latéraux et molettes par
+les boutons X. Aucun périphérique du noyau n'est créé (`/dev/uhid` reste
+fermé). La première fois, Winlux demande « Autoriser « app » à taper au
+clavier et à piloter la souris à votre place ? » (refus possible, révocable
+dans Paramètres > Confidentialité et sécurité ; sans réponse possible, c'est
+non), et rien n'est tapé tant que l'écran de verrouillage est affiché.
+Test : `scripts/test-sendinput.sh` (Xvfb). Les macros d'iCUE (#1655) s'y
+brancheront.
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,

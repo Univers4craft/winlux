@@ -243,6 +243,7 @@ pub mod url_moniker;
 pub mod url_security;
 pub mod user32;
 pub mod user32_ext;
+pub mod saisie;
 pub mod user32_more;
 pub mod user32_releve;
 pub mod userenv;
