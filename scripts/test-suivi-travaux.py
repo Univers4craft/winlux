@@ -102,6 +102,43 @@ def main():
         check(data is not None and data["executions"] == [] and "OCR impossible" in casse.stdout,
               "OCR en échec : capture refusée, construction menée à son terme (#1829)")
 
+        # Galerie reprise d'une publication précédente quand l'OCR manque (#1871).
+        import io, tarfile, zipfile
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            def ajoute(nom, donnees, **kw):
+                info = tarfile.TarInfo(nom)
+                info.size = len(donnees)
+                for k, v in kw.items():
+                    setattr(info, k, v)
+                tar.addfile(info, io.BytesIO(donnees))
+            ajoute("./fr/suivi.html", b"<html>")
+            ajoute("./suivi/data.json", json.dumps({"executions": [{"images": [{"nom": "parametres-02"}]}]}).encode())
+            ajoute("./suivi/img/0123456789abcdef.webp", b"RIFF-img")
+            ajoute("./suivi/min/0123456789abcdef.webp", b"RIFF-min")
+            ajoute("./suivi/../../evade.webp", b"x")
+            ajoute("./suivi/img/notes.txt", b"x")
+            lien = tarfile.TarInfo("./suivi/img/fedcba9876543210.webp")
+            lien.type, lien.linkname = tarfile.SYMTYPE, "/etc/passwd"
+            tar.addfile(lien)
+        archive = tmp / "pages.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("artifact.tar", tar_buf.getvalue())
+        reprise = tmp / "reprise" / "suivi"
+        prec = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y", str(reprise),
+                               "--archive", str(archive)], capture_output=True, text=True)
+        fichiers = sorted(p.relative_to(tmp / "reprise").as_posix() for p in (tmp / "reprise").rglob("*") if p.is_file())
+        check(prec.returncode == 0 and fichiers == ["suivi/data.json", "suivi/img/0123456789abcdef.webp",
+                                                   "suivi/min/0123456789abcdef.webp"]
+              and not (tmp / "evade.webp").exists(),
+              f"galerie précédente reprise, sans lien ni chemin sortant (#1871) ({fichiers})")
+        vide = tmp / "vide.zip"
+        with zipfile.ZipFile(vide, "w") as z:
+            z.writestr("artifact.tar", b"")
+        sans = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y",
+                               str(tmp / "sans"), "--archive", str(vide)], capture_output=True, text=True)
+        check(sans.returncode == 1, "archive sans galerie : rien de repris, code 1 (#1871)")
+
         # Page index.html de l'artefact captures-ui.
         artefact = work / "102" / "images"
         (artefact / "r.json").write_text('{"ecrans": {"parametres-02": 3.5}}', encoding="utf-8")
