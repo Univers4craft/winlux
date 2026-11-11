@@ -54,9 +54,12 @@ tree = ast.parse(FETCH.read_text())
 sources = next(ast.literal_eval(node.value) for node in tree.body
                if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "SOURCES")
 settings_source = (HERE / "winlux-settings.py").read_text()
-hosts = ast.literal_eval(settings_source.split("BROWSER_HOSTS = ", 1)[1].split("\n", 1)[0])
-check(hosts == {name: urlparse(base).hostname for name, (_, base, _) in sources.items()},
-      f"BROWSER_HOSTS {hosts} différent des dépôts téléchargés")
+hosts = next(ast.literal_eval(node.value) for node in ast.parse(settings_source).body
+             if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "BROWSER_HOSTS")
+# Tor Browser : archive de dist.torproject.org (pas de dépôt APT, #1716).
+expected = {name: urlparse(base).hostname for name, (_, base, _) in sources.items()}
+expected["tor"] = "dist.torproject.org"
+check(hosts == expected, f"BROWSER_HOSTS {hosts} différent des dépôts téléchargés {expected}")
 
 # ── 3. Texte dans les quatre langues (sous-processus : _t lit WINLUX_LANG au chargement) ──
 probe = """

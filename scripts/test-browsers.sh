@@ -170,7 +170,10 @@ keep = [n for n in tree.body if (isinstance(n, ast.Assign) and any(getattr(t, "i
 scope = {"_t": lambda text: text}
 exec(compile(ast.Module(body=keep, type_ignores=[]), "settings", "exec"), scope)
 names, shown = scope["BROWSER_NAMES"], scope["browser_buttons_shown"]
-assert names == {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}, names
+assert {k: names[k] for k in ("chrome", "edge", "firefox")} == {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}, names
+assert list(names) == ["brave", "chrome", "edge", "firefox", "opera", "operagx", "tor", "vivaldi"], names
+# Les cas ci-dessous portent sur les trois premiers navigateurs du catalogue.
+names = {k: names[k] for k in ("chrome", "edge", "firefox")}
 status = dict(l.split("=", 1) for l in open(sys.argv[2]).read().split() if "=" in l)
 def visible(status):
     return sorted(f"{v}-{i}" for i in names for v in ("install", "default", "launch") if shown(status, f"browser-{v}-{i}"))
@@ -197,5 +200,6 @@ assert 'action.startswith(("browser-install-", "browser-default-")):' in source 
 assert '["/usr/bin/winlux-browser", "--pending"]' in source
 PY
 if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
+sh "$project/scripts/test-browsers-autres.sh"
 python3 -B "$project/scripts/test-browser-downloads.py"
 echo 'OK: no browser shipped or preferred, choice screen, download on demand, URL arguments, checksums and cleanup'

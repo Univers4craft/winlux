@@ -294,6 +294,7 @@ _TR = {
     'Taille : {size} Mo': ('Size: {size} MB', 'Tamaño: {size} MB', 'Größe: {size} MB'),
     'Le fichier sera vérifié avant l’installation (empreinte SHA-256 {digest}…).': ('The file will be checked before installing (SHA-256 fingerprint {digest}…).', 'El archivo se comprobará antes de instalarlo (huella SHA-256 {digest}…).', 'Die Datei wird vor der Installation geprüft (SHA-256-Fingerabdruck {digest}…).'),
     'Le fichier sera vérifié avant l’installation (empreinte SHA-256 publiée par l’éditeur).': ('The file will be checked before installing (SHA-256 fingerprint published by the publisher).', 'El archivo se comprobará antes de instalarlo (huella SHA-256 publicada por el editor).', 'Die Datei wird vor der Installation geprüft (vom Herausgeber veröffentlichter SHA-256-Fingerabdruck).'),
+    'Il sera aussi vérifié avec la signature des développeurs de Tor Browser (clé {fingerprint}).': ('It will also be checked against the Tor Browser developers’ signature (key {fingerprint}).', 'También se comprobará con la firma de los desarrolladores de Tor Browser (clave {fingerprint}).', 'Sie wird außerdem mit der Signatur der Tor-Browser-Entwickler geprüft (Schlüssel {fingerprint}).'),
     'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
     'Définir {name} par défaut': ('Set {name} as default', 'Establecer {name} como predeterminado', '{name} als Standard festlegen'),
     '{name} (seul navigateur installé)': ('{name} (only browser installed)', '{name} (único navegador instalado)', '{name} (einziger installierter Browser)'),
@@ -992,9 +993,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             choices = [(title, action) for title, action in actions if action.startswith(POWER_CHOICES)]
             actions = [(title, action) for title, action in actions if not action.startswith(POWER_CHOICES)]
         if self.page == 11:
-            # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
+            # Ordre alphabétique des noms (Brave … Vivaldi) : aucun navigateur mis en avant.
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
-            # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
+            # Les vrais noms, pas les identifiants internes (chrome, operagx…).
             actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
                        for verb, action in (("Installer {name}", "install"), ("Définir {name} par défaut", "default"), ("Ouvrir {name}", "launch"))]
         # Boutons à leur largeur naturelle, à la ligne quand la place manque
@@ -1428,12 +1429,20 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
 
-# Ordre alphabétique : aucun navigateur mis en avant.
-BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+# Ordre alphabétique des noms affichés : aucun navigateur mis en avant. Tous
+# ont une version Linux officielle (relevé du 11 novembre 2026, #1716).
+BROWSER_NAMES = {"brave": "Brave", "chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox",
+                 "opera": "Opera", "operagx": "Opera GX", "tor": "Tor Browser", "vivaldi": "Vivaldi"}
 # Montré avant l'installation (#923) : l'éditeur, et le site d'où vient le
 # paquet (le même que SOURCES de winlux-browser-fetch, vérifié par le test).
-BROWSER_PUBLISHERS = {"chrome": "Google LLC", "edge": "Microsoft Corporation", "firefox": "Mozilla Corporation"}
-BROWSER_HOSTS = {"chrome": "dl.google.com", "edge": "packages.microsoft.com", "firefox": "packages.mozilla.org"}
+BROWSER_PUBLISHERS = {"brave": "Brave Software, Inc.", "chrome": "Google LLC", "edge": "Microsoft Corporation",
+                      "firefox": "Mozilla Corporation", "opera": "Opera Norway AS", "operagx": "Opera Norway AS",
+                      "tor": "The Tor Project, Inc.", "vivaldi": "Vivaldi Technologies AS"}
+BROWSER_HOSTS = {"brave": "brave-browser-apt-release.s3.brave.com", "chrome": "dl.google.com", "edge": "packages.microsoft.com",
+                 "firefox": "packages.mozilla.org", "opera": "deb.opera.com", "operagx": "deb.opera.com",
+                 "tor": "dist.torproject.org", "vivaldi": "repo.vivaldi.com"}
+# Tor Browser : archive signée, clé des développeurs épinglée (winlux-browser-fetch).
+TOR_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
 
 
 def browser_fetch_program():
@@ -1448,7 +1457,9 @@ def browser_details(ident, timeout=25):
     program = browser_fetch_program()
     if program is None: return {}
     try:
-        output = subprocess.run([program, "--info", ident], capture_output=True, text=True, timeout=timeout).stdout
+        # Tor Browser : liste SHA-256 signée et clé à lire en plus de la version.
+        output = subprocess.run([program, "--info", ident], capture_output=True, text=True,
+                                timeout=timeout + (20 if ident == "tor" else 0)).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     return dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
@@ -1471,6 +1482,9 @@ def browser_confirmation(ident, details):
         lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 {digest}…).").format(digest=details["sha256"][:16]))
     else:
         lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 publiée par l’éditeur)."))
+    if ident == "tor":
+        lines.append(_t("Il sera aussi vérifié avec la signature des développeurs de Tor Browser (clé {fingerprint}).")
+                     .format(fingerprint=" ".join(TOR_FINGERPRINT[i:i + 4] for i in range(0, 40, 4))))
     return _t("Installer {name} ?").format(name=name), "\n".join(lines)
 
 
