@@ -1,5 +1,3 @@
-use std::ffi::c_void;
-
 /// BCryptPrimitives uses a SIZE_T length and a BOOL result, unlike BCrypt's
 /// ULONG length / NTSTATUS API. Never report success with uninitialized bytes.
 pub unsafe extern "win64" fn process_prng(buffer: *mut u8, size: usize) -> i32 {
@@ -140,20 +138,32 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
     let name = crate::dlls::wstr(id);
     match alg_from_name(&name) {
         Some(h) if hmac && h == ALG_RNG => {
-            *out = 0;
+            put_handle(out, 0);
             STATUS_NOT_FOUND
         }
         Some(h) => {
-            *out = if hmac { h | HMAC_BIT } else { h };
+            put_handle(out, if hmac { h | HMAC_BIT } else { h });
+            0
+        }
+        None if name == "AES" && !hmac => {
+            put_handle(out, aes::open());
             0
         }
         None => {
-            *out = 0;
+            put_handle(out, 0);
             STATUS_NOT_FOUND
         }
     }
 }
+/// Poignée rendue à la taille des pointeurs du programme (4 octets en x86).
+unsafe fn put_handle(out: *mut usize, h: usize) {
+    crate::wow32::write_ptr(out as usize, h);
+}
+
 pub extern "win64" fn bcrypt_close_algorithm_provider(h: usize, _flags: u32) -> i32 {
+    if aes::close(h) {
+        return 0;
+    }
     if (1..=6).contains(&(h & !HMAC_BIT)) {
         0
     } else {
@@ -172,8 +182,11 @@ pub unsafe extern "win64" fn bcrypt_get_property(
     if prop.is_null() || result_len.is_null() {
         return 0xC000_000Du32 as i32;
     }
-    let h = resolve(h);
     let name = crate::dlls::wstr(prop);
+    if let Some(r) = aes::get_property(h, &name, output, output_len, result_len) {
+        return r;
+    }
+    let h = resolve(h);
     if name == "HashDigestLength" {
         if let Some(len) = hash_length(h) {
             *result_len = 4;
@@ -223,7 +236,29 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(h, (key, Vec::new()));
-    *hash_handle = h;
+    put_handle(hash_handle, h);
+    0
+}
+
+/// BCryptDuplicateHash : copie l'état (clé HMAC et données déjà reçues).
+pub unsafe extern "win64" fn bcrypt_duplicate_hash(
+    hash: usize,
+    out: *mut usize,
+    _obj: *mut u8,
+    _obj_len: u32,
+    _flags: u32,
+) -> i32 {
+    if out.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
+    let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(state) = states.get(&hash).cloned() else {
+        return 0xC000_0008u32 as i32;
+    };
+    let seq = HASH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+    let h = (hash & 0xFFFF) | (seq << 16) | 0x8000_0000;
+    states.insert(h, state);
+    put_handle(out, h);
     0
 }
 
@@ -370,18 +405,16 @@ pub unsafe extern "win64" fn bcrypt_hash(
     0
 }
 
-pub unsafe extern "win64" fn bcrypt_destroy_key(_h: usize) -> i32 {
-    0xC0000002u32 as i32
-}
-pub unsafe extern "win64" fn bcrypt_stub(_p: *mut c_void) -> i32 {
-    0xC0000002u32 as i32
-}
+mod aes;
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "BCryptGenRandom"=>fn bcrypt_gen_random,"BCryptOpenAlgorithmProvider"=>fn bcrypt_open_algorithm_provider,
-     "BCryptCloseAlgorithmProvider"=>fn bcrypt_close_algorithm_provider,"BCryptDestroyKey"=>fn bcrypt_destroy_key,
-     "BCryptEncrypt"=>fn bcrypt_stub,"BCryptDecrypt"=>fn bcrypt_stub,
+     "BCryptCloseAlgorithmProvider"=>fn bcrypt_close_algorithm_provider,
+     "BCryptDestroyKey"=>fn aes::destroy_key,"BCryptEncrypt"=>fn aes::encrypt,"BCryptDecrypt"=>fn aes::decrypt,
+     "BCryptGenerateSymmetricKey"=>fn aes::generate_symmetric_key,"BCryptImportKey"=>fn aes::import_key,
+     "BCryptExportKey"=>fn aes::export_key,"BCryptDuplicateKey"=>fn aes::duplicate_key,
+     "BCryptSetProperty"=>fn aes::set_property,"BCryptDuplicateHash"=>fn bcrypt_duplicate_hash,
      "BCryptGetProperty"=>fn bcrypt_get_property,
      "BCryptCreateHash"=>fn bcrypt_create_hash,"BCryptHashData"=>fn bcrypt_hash_data,
      "BCryptFinishHash"=>fn bcrypt_finish_hash,"BCryptDestroyHash"=>fn bcrypt_destroy_hash,
