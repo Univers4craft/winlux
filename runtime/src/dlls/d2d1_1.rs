@@ -1991,6 +1991,7 @@ static EFFECT_IMAGE_VT: VTable<4> = VTable([
 ]);
 
 /// Image calculée : pixels BGRA prémultipliés et position dans la scène.
+#[derive(Clone)]
 pub(super) struct Img {
     pub x: i32,
     pub y: i32,
@@ -2028,6 +2029,54 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
     None
 }
 
+thread_local! {
+    /// Entrées données par le graphe d'un effet personnalisé à un effet
+    /// pris comme nœud (CreateTransformNodeFromEffect) : elles remplacent
+    /// ses propres SetInput le temps du calcul (#1749).
+    static GRAPH_INPUTS: std::cell::RefCell<Vec<(usize, Vec<Option<Img>>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Calcule `effect` avec les entrées fournies par un graphe.
+pub(super) unsafe fn image_of_effect_with(
+    effect: *mut c_void,
+    inputs: Vec<Option<Img>>,
+    depth: u32,
+    hint: (u32, u32),
+) -> Option<Img> {
+    if effect.is_null() || *(effect as *const *const ()) != EFFECT_VT.ptr() {
+        return None;
+    }
+    let key = Com::get(effect as *mut EffectObj) as *const Effect as usize;
+    GRAPH_INPUTS.with(|g| g.borrow_mut().push((key, inputs)));
+    let r = image_of_effect(effect, depth, hint);
+    GRAPH_INPUTS.with(|g| g.borrow_mut().pop());
+    r
+}
+
+/// Entrée `i` de l'effet : celle du graphe qui l'emploie comme nœud s'il y
+/// en a un, sinon son SetInput.
+pub(super) unsafe fn effect_input_img(
+    e: &Effect,
+    i: usize,
+    depth: u32,
+    hint: (u32, u32),
+) -> Option<Img> {
+    let key = e as *const Effect as usize;
+    let given = GRAPH_INPUTS.with(|g| {
+        g.borrow()
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.get(i).cloned().flatten())
+    });
+    if let Some(img) = given {
+        return img;
+    }
+    let input = crate::dlls::lock(&e.inputs).get(i).copied()?;
+    image_img(input, depth + 1, hint)
+}
+
 /// Sortie d'un ID2D1Effect.
 unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> Option<Img> {
     if effect.is_null() || *(effect as *const *const ()) != EFFECT_VT.ptr() {
@@ -2045,11 +2094,7 @@ unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> 
             break 'calc ("intégré", img);
         }
         warn_effect_once(&e.clsid);
-        let first = crate::dlls::lock(&e.inputs).first().copied();
-        (
-            "non calculé",
-            first.and_then(|f| image_img(f, depth + 1, hint)),
-        )
+        ("non calculé", effect_input_img(e, 0, depth, hint))
     };
     // Sortie de chaque effet d'une chaîne, pour trouver celui qui vide
     // l'image (#1669).
@@ -2134,10 +2179,7 @@ fn prop_f32<const N: usize>(e: &Effect, index: u32) -> Option<[f32; N]> {
 /// charge, `Some(None)` si sa sortie est vide (#1609 : Paint.NET remplit
 /// les tuiles unies de son canevas par un bitmap 1x1 tiré d'un Flood).
 unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Option<Img>> {
-    let input = || {
-        let first = crate::dlls::lock(&e.inputs).first().copied()?;
-        image_img(first, depth + 1, hint)
-    };
+    let input = || effect_input_img(e, 0, depth, hint);
     if e.clsid == CLSID_FLOOD {
         // D2D1_FLOOD_PROP_COLOR : RVBA non prémultiplié, noir opaque par défaut.
         let c = prop_f32::<4>(e, 0).unwrap_or([0.0, 0.0, 0.0, 1.0]);
@@ -3714,6 +3756,41 @@ mod tests {
             for o in [inv, op, src, pm, crop, flood, bmp] {
                 com_release(o);
             }
+            com_release(dc.cast());
+            com_release(dev);
+            Com::release(f);
+        }
+    }
+
+    /// #1749 : un effet pris comme nœud d'un graphe personnalisé
+    /// (CreateTransformNodeFromEffect) calcule les entrées que le graphe lui
+    /// relie, pas ses propres SetInput (vides) : Inverser les couleurs de
+    /// Paint.NET rendait sa toile intacte.
+    #[test]
+    fn effet_noeud_lit_les_entrees_du_graphe() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            let mut inv = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_INVERT, &mut inv), S_OK);
+            let blanc = Img {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+                px: vec![255; 8],
+            };
+            let img = image_of_effect_with(inv, vec![Some(blanc)], 0, (2, 1)).unwrap();
+            assert_eq!(img.px, vec![0, 0, 0, 255, 0, 0, 0, 255]);
+            // Hors du graphe, l'effet sans entrée ne rend rien.
+            assert!(image_img(inv, 0, (2, 1)).is_none());
+            com_release(inv);
             com_release(dc.cast());
             com_release(dev);
             Com::release(f);
