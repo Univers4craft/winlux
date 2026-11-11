@@ -173,6 +173,8 @@ mfcapture.rs	MfObj	a-verifier
 mfcapture.rs	Reader	a-verifier	
 mfreader.rs	Reader	a-verifier	
 mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_profile)
+msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TSF) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
+msctf_profiles.rs	Profiles	interne	objet COM du runtime (TF_InputProcessorProfiles) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msvcp140.rs	Thrd	a-verifier	
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 ole32.rs	ComStream	a-verifier	
