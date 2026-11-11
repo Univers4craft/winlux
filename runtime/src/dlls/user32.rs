@@ -280,6 +280,21 @@ unsafe fn create_window_common(
     hwnd
 }
 
+/// Parent spécial de CreateWindowEx : fenêtre qui ne reçoit que des
+/// messages, sans rien d'affiché.
+const HWND_MESSAGE: usize = -3isize as usize;
+
+fn message_only_windows() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// `hwnd` est-elle une fenêtre « message seulement » (#1586) ?
+pub fn is_message_only(hwnd: usize) -> bool {
+    hwnd != 0 && lock(message_only_windows()).contains(&hwnd)
+}
+
 /// Taille d'une fenêtre de premier niveau créée en CW_USEDEFAULT : les
 /// trois quarts de la zone de travail, au moins 800 × 600 sans dépasser
 /// l'écran. Un 800 × 600 fixe faisait passer le ruban de l'Éditeur de
@@ -310,17 +325,27 @@ unsafe fn create_window_inner(
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
         return 0;
     };
+    let message_root = parent == HWND_MESSAGE;
     // Comme Windows : une fenêtre WS_CHILD sans parent est refusée, au lieu
     // de devenir une fenêtre isolée sans titre dans la barre des tâches.
     if style & WS_CHILD != 0 && parent == 0 {
         crate::process::set_last_error(1406); // ERROR_TLW_WITH_WSCHILD
         return 0;
     }
+    // Fenêtre « message seulement » (parent HWND_MESSAGE) et ses enfants :
+    // jamais affichées, donc aucune fenêtre X. pygame 32 bits (SDL) en
+    // créait une par seconde en boucle, chacune devenue une fenêtre X 1×1
+    // (#1586). Le parent rendu par GetParent est nul, comme sous Windows.
+    let message_only = parent == HWND_MESSAGE || is_message_only(parent);
+    let parent = if parent == HWND_MESSAGE { 0 } else { parent };
     let hwnd = gui::alloc_hwnd();
+    if message_only {
+        lock(message_only_windows()).insert(hwnd);
+    }
     // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut. Un contrôle
     // enfant garde la taille demandée, même nulle (barre d'état, flèches
     // haut/bas : le contrôle se place lui-même pendant WM_CREATE).
-    let child = style & WS_CHILD != 0 && parent != 0;
+    let child = style & WS_CHILD != 0 && parent != 0 && !message_root;
     let (w, h, px, py) = if child {
         let size = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v.max(0) };
         let pos = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v };
@@ -401,6 +426,9 @@ unsafe fn create_window_inner(
     // sans titre, dans la barre des tâches, et le parent serait resté blanc.
     // Elle n'est montrée qu'après WM_CREATE.
     with_backend(|b| {
+        if message_only {
+            return;
+        }
         if child {
             b.create_child_window(hwnd, parent, rect);
             // Win32 : un nouvel enfant passe derrière ses voisins (le premier
@@ -1155,6 +1183,7 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
+    lock(message_only_windows()).remove(&hwnd);
     pending_frame().retain(|(h, _, _)| *h != hwnd);
     OWN_FRAME
         .lock()
@@ -6635,6 +6664,44 @@ mod tests_messages {
             assert_eq!(owner_top_level(top), top);
             assert_eq!(owner_top_level(0x7777_0000), 0);
             destroy_window(top);
+        }
+    }
+
+    /// #1586 : une fenêtre HWND_MESSAGE et ses enfants restent sans fenêtre
+    /// affichée, et leur parent rendu est nul.
+    #[test]
+    fn fenetre_message_seulement() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    1,
+                    1,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let msg = make(0, HWND_MESSAGE);
+            assert_ne!(msg, 0);
+            assert!(is_message_only(msg));
+            assert_eq!(gui::window_parent(msg), Some(0));
+            let child = make(WS_CHILD, msg);
+            assert_ne!(child, 0);
+            assert!(is_message_only(child));
+            let top = make(0, 0);
+            assert!(!is_message_only(top));
+            destroy_window(child);
+            destroy_window(msg);
+            destroy_window(top);
+            assert!(!is_message_only(msg));
         }
     }
 
