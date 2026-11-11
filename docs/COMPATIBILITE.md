@@ -105,6 +105,20 @@ souris, claviers, casques) et hidapi :
 Test : `scripts/test-hid-rgb.sh` (faux clavier RVB USB à deux collections,
 120 trames de couleurs à plus de 60 par seconde).
 
+Depuis #1533, un logiciel constructeur qui ouvre son pilote par son nom
+(`CreateFileW("\\.\NomDuPilote")`, aussi `\\.\Global\…` et
+`\\?\GLOBALROOT\Device\…`) obtient un **appareil virtuel** de Winlux,
+jamais un pilote `.sys` (`runtime/src/dlls/vdev.rs`, #1531). Chaque appareil
+est un module de traduction inscrit par l'installation virtualisée (#1532) ou
+par la table de sa marque (#1534) ; `DeviceIoControl` lui est transmis,
+synchrone ou OVERLAPPED (événement signalé, paquet sur le port de
+complétion). Un code inconnu rend `ERROR_INVALID_FUNCTION` et une ligne de
+journal (`WINLUX_TRACE`) avec le nom, le code décodé (type, fonction,
+méthode, accès) et les tailles ; le contenu des tampons n'est écrit qu'avec
+`WINLUX_VDEV_DUMP=1`, pour les passes d'observation faites dans le cadre
+d'interopérabilité de `AGENTS.md`. Test : `scripts/test-vdev.sh` (appareil
+d'essai `WinluxEssai`, présent seulement avec `WINLUX_VDEV_ESSAI=1`).
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
