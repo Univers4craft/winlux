@@ -6,6 +6,7 @@
 //! ce qui dépend de `T` (taille, boxing, champs statiques) est résolu à
 //! l'exécution grâce au contexte générique (`Gen`) de la méthode en cours.
 
+use super::domain;
 use super::il::{Gen, Interpreter};
 use super::metadata::{self, Assembly, ElementType};
 use super::tables::{CodedIndex, TableId};
@@ -441,7 +442,19 @@ impl Interpreter {
                 let wanted = a
                     .get_string(a.get_assembly_ref(srow).name)
                     .to_ascii_lowercase();
-                let asm = self.domain.iter().position(|i| i.name == wanted)?;
+                // Une assembly du .NET Framework non chargée (System,
+                // System.Core…) : ses types sont dans notre mscorlib, comme
+                // si elle les y redirigeait (ECMA-335 §II.22.14, #1947 :
+                // Stopwatch est dans System.dll).
+                let asm = self
+                    .domain
+                    .iter()
+                    .position(|i| i.name == wanted)
+                    .or_else(|| {
+                        domain::is_framework_assembly(&wanted)
+                            .then(|| self.domain.iter().position(|i| i.name == domain::CORLIB))
+                            .flatten()
+                    })?;
                 let target = self.assembly_at(asm);
                 let t = (1..=target.row_count(TableId::TypeDef)).find(|&t| {
                     let td = target.get_type_def(t);
