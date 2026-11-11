@@ -1825,6 +1825,7 @@ fn history_on() -> bool {
 /// avec la valeur rendue (« = 0x… ») au retour, filtré sur le motif
 /// (« SetWindowPos », « user32 »…). Sert à suivre ce qu'un programme x86
 /// demande sans attendre une faute (champ du port de WinSCP, #1251).
+/// Plusieurs motifs se séparent par des virgules : `flux:filemapping,mapview`.
 fn history_stream() -> Option<&'static str> {
     static FILTER: OnceLock<Option<String>> = OnceLock::new();
     FILTER
@@ -1834,6 +1835,17 @@ fn history_stream() -> Option<&'static str> {
             Some(rest.strip_prefix(':').unwrap_or("").to_ascii_lowercase())
         })
         .as_deref()
+}
+
+/// La ligne passe-t-elle le filtre du mode flux (motif vide : tout passe ;
+/// sinon l'un des motifs séparés par des virgules) ?
+fn stream_match(filter: &str, line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    filter.is_empty()
+        || filter
+            .split(',')
+            .map(str::trim)
+            .any(|m| !m.is_empty() && line.contains(m))
 }
 
 fn passage_line(p: &Passage) -> String {
@@ -1869,7 +1881,7 @@ fn note_result(desc: u32, esp: u32, r: u64) {
             // seule une faute la montrait.
             if let Some(filter) = history_stream() {
                 let line = passage_line(p);
-                if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+                if stream_match(filter, &line) {
                     eprintln!("winlux[wow32] {line}");
                 }
             }
@@ -1880,7 +1892,7 @@ fn note_result(desc: u32, esp: u32, r: u64) {
 fn note(p: Passage) {
     if let Some(filter) = history_stream() {
         let line = passage_line(&p);
-        if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+        if stream_match(filter, &line) {
             eprintln!("winlux[wow32] {line}");
         }
     }
@@ -2598,6 +2610,16 @@ pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filtre_du_flux_a_plusieurs_motifs() {
+        let l = "KERNEL32.dll!MapViewOfFile (esp 0x1, retour 0x2) [0, 0, 0, 0] = 0x0";
+        assert!(stream_match("", l));
+        assert!(stream_match("mapview", l));
+        assert!(stream_match("filemapping, mapview", l));
+        assert!(!stream_match("filemapping,virtualquery", l));
+        assert!(!stream_match(",", l));
+    }
 
     #[test]
     fn table_stdcall() {
