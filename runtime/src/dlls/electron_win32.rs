@@ -547,6 +547,12 @@ unsafe extern "win64" fn NtQueryObject(
         return STATUS_INVALID_HANDLE;
     };
     let inherit = crate::dlls::inherit::is(h);
+    // Programme x86 : UNICODE_STRING de 8 octets (Buffer à 4) et
+    // OBJECT_TYPE_INFORMATION de 0x60 octets (TypeName + 22 ULONG,
+    // PUBLIC_OBJECT_TYPE_INFORMATION de winternl.h), comme pour
+    // NtQuerySection (#1650).
+    let x86 = crate::dlls::legacy_com::x86();
+    let us = if x86 { 8 } else { 16 };
     let mut bytes: Vec<u8>;
     // (position d'un UNICODE_STRING, position de son texte dans `bytes`)
     let mut string: Option<(usize, usize, usize)> = None;
@@ -583,7 +589,7 @@ unsafe extern "win64" fn NtQueryObject(
             } else {
                 String::new()
             };
-            let head = if class == 2 { 0x68 } else { 16 };
+            let head = if class == 2 { us + 88 } else { us };
             bytes = vec![0u8; head];
             let wide: Vec<u8> = text
                 .encode_utf16()
@@ -596,8 +602,8 @@ unsafe extern "win64" fn NtQueryObject(
             string = Some((0, at, chars));
             if class == 2 {
                 // ValidAccessMask, PoolType (Paged = 1).
-                bytes[0x50..0x54].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
-                bytes[0x5C..0x60].copy_from_slice(&1u32.to_le_bytes());
+                bytes[us + 64..us + 68].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+                bytes[us + 76..us + 80].copy_from_slice(&1u32.to_le_bytes());
             }
         }
         4 => {
@@ -623,7 +629,11 @@ unsafe extern "win64" fn NtQueryObject(
         let n = (chars * 2) as u16;
         (out.add(at) as *mut u16).write_unaligned(n);
         (out.add(at + 2) as *mut u16).write_unaligned(n + 2);
-        (out.add(at + 8) as *mut usize).write_unaligned(out as usize + text);
+        if x86 {
+            (out.add(at + 4) as *mut u32).write_unaligned((out as usize + text) as u32);
+        } else {
+            (out.add(at + 8) as *mut usize).write_unaligned(out as usize + text);
+        }
     }
     0
 }
