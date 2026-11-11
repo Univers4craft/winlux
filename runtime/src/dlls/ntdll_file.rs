@@ -497,6 +497,11 @@ pub unsafe extern "win64" fn NtSetInformationFile(
             let Some(src) = path_of_fd(fd) else {
                 return iosb(io, STATUS_INVALID_HANDLE, 0);
             };
+            crate::trace!(
+                "NtSetInformationFile(classe {class}) : {} → {} (remplacer : {replace})",
+                src.display(),
+                dst.display()
+            );
             let (cs, cd) = (cpath(&src), cpath(&dst));
             let rc = if class == 11 || class == 72 {
                 if !replace && dst.symlink_metadata().is_ok() {
@@ -555,8 +560,14 @@ pub unsafe extern "win64" fn NtSetInformationFile(
             } else {
                 libc::unlink(c.as_ptr())
             };
-            if rc != 0 {
-                return iosb(io, status_of_errno(errno()), 0);
+            let e = (rc != 0).then(errno);
+            crate::trace!(
+                "NtSetInformationFile(classe {class}) : suppression de {} = {}",
+                p.display(),
+                e.map_or("ok".to_string(), |e| format!("errno {e}"))
+            );
+            if let Some(e) = e {
+                return iosb(io, status_of_errno(e), 0);
             }
             iosb(io, STATUS_SUCCESS, 0)
         }
