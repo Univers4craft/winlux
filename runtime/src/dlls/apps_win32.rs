@@ -2041,10 +2041,79 @@ pub fn shell32_exports() -> Exports {
     }
 }
 
+/// SHGetDataFromIDListW (#1692) : avec SHGDFIL_FINDDATA, le
+/// WIN32_FIND_DATAW de l'élément `pidl` du dossier `folder`, lu par
+/// IShellFolder::GetDisplayNameOf(SHGDN_FORPARSING) puis FindFirstFileW.
+/// Les autres formats (ressource réseau, description) ne sont pas fournis.
+unsafe extern "win64" fn sh_get_data_from_id_list_w(
+    folder: usize,
+    pidl: *const u8,
+    format: i32,
+    out: *mut u8,
+    cb: i32,
+) -> u32 {
+    const SHGDFIL_FINDDATA: i32 = 1;
+    const E_INVALIDARG: u32 = 0x8007_0057;
+    const E_NOTIMPL: u32 = 0x8000_4001;
+    const WIN32_FIND_DATAW_SIZE: i32 = 592;
+    const SHGDN_FORPARSING: u32 = 0x8000;
+    if folder == 0 || pidl.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    // Table x86 d'un IShellFolder de programme 32 bits : pas d'appel win64.
+    if format != SHGDFIL_FINDDATA || crate::wow32::pointer_size() == 4 {
+        return E_NOTIMPL;
+    }
+    if cb < WIN32_FIND_DATAW_SIZE {
+        return E_INVALIDARG;
+    }
+    let vtbl = *(folder as *const *const usize);
+    let get_display_name_of: unsafe extern "win64" fn(usize, *const u8, u32, *mut u8) -> u32 =
+        std::mem::transmute(*vtbl.add(11));
+    let mut strret = [0u8; 272];
+    let hr = get_display_name_of(folder, pidl, SHGDN_FORPARSING, strret.as_mut_ptr());
+    if hr != 0 {
+        return hr;
+    }
+    let mut text: usize = 0;
+    let hr = api!(
+        "shlwapi",
+        "StrRetToStrW",
+        fn(*mut u8, *const u8, *mut usize) -> u32,
+        strret.as_mut_ptr(),
+        pidl,
+        &mut text
+    )
+    .unwrap_or(E_NOTIMPL);
+    if hr != 0 || text == 0 {
+        return if hr != 0 { hr } else { E_INVALIDARG };
+    }
+    let find = api!(
+        "kernel32",
+        "FindFirstFileW",
+        fn(usize, *mut u8) -> isize,
+        text,
+        out
+    )
+    .unwrap_or(-1);
+    crate::dlls::ole32::co_task_mem_free(text as *mut std::ffi::c_void);
+    if find == -1 {
+        let e = crate::dlls::kernel32::get_last_error();
+        return if e == 0 {
+            0x8000_4005
+        } else {
+            0x8007_0000 | (e & 0xffff)
+        };
+    }
+    api!("kernel32", "FindClose", fn(isize) -> i32, find);
+    0
+}
+
 /// Remplacent des exports vides (SHGetPathFromIDList renvoyait toujours 0).
 pub fn shell32_overrides() -> Exports {
     crate::exports! {
         "SHGetPathFromIDListW" => fn sh_get_path_from_id_list_w,
+        "SHGetDataFromIDListW" => fn sh_get_data_from_id_list_w,
     }
 }
 

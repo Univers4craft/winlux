@@ -421,8 +421,10 @@ pub(crate) unsafe fn show(owner: usize, s: &DialogState) -> Result<(Vec<String>,
         w(&mut ofn, 80, &(d.as_ptr() as u64).to_le_bytes());
     }
     w(&mut ofn, 88, &(title_w.as_ptr() as u64).to_le_bytes());
-    // OFN_EXPLORER | options communes.
-    let flags = 0x0008_0000 | (s.options & FOS_SAME_AS_OFN);
+    // OFN_EXPLORER | options communes. OFN_NOCHANGEDIR : la boîte
+    // IFileDialog ne change pas le dossier courant, seule GetOpenFileName
+    // le fait (#1691).
+    let flags = 0x0008_0000 | 0x8 | (s.options & FOS_SAME_AS_OFN);
     w(&mut ofn, 96, &flags.to_le_bytes());
     if let Some(e) = &ext_w {
         w(&mut ofn, 104, &(e.as_ptr() as u64).to_le_bytes());

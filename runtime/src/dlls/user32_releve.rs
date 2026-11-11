@@ -1887,10 +1887,39 @@ unsafe fn is_group_box(h: usize) -> bool {
     name.eq_ignore_ascii_case("Button") && style & BS_TYPEMASK == BS_GROUPBOX
 }
 
+/// Identifiants d'aide contextuelle des fenêtres (Set/GetWindowContextHelpId,
+/// #1692) : retenus par fenêtre, oubliés à sa destruction côté programme.
+static CONTEXT_HELP: Mutex<Vec<(usize, u32)>> = Mutex::new(Vec::new());
+
+unsafe extern "win64" fn set_window_context_help_id(hwnd: usize, id: u32) -> i32 {
+    if api!("user32", "IsWindow", fn(usize) -> i32, hwnd) != Some(1) {
+        return fail(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let mut map = CONTEXT_HELP.lock().unwrap_or_else(|e| e.into_inner());
+    // Un handle réutilisé après destruction repart de zéro.
+    map.retain(|&(h, _)| api!("user32", "IsWindow", fn(usize) -> i32, h) == Some(1));
+    match map.iter_mut().find(|(h, _)| *h == hwnd) {
+        Some(e) => e.1 = id,
+        None => map.push((hwnd, id)),
+    }
+    1
+}
+
+unsafe extern "win64" fn get_window_context_help_id(hwnd: usize) -> u32 {
+    CONTEXT_HELP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(h, _)| *h == hwnd)
+        .map_or(0, |e| e.1)
+}
+
 pub fn user32_exports() -> Exports {
     crate::exports! {
         "GetCursorInfo" => fn get_cursor_info,
         "GetMenuCheckMarkDimensions" => fn get_menu_check_mark_dimensions,
+        "SetWindowContextHelpId" => fn set_window_context_help_id,
+        "GetWindowContextHelpId" => fn get_window_context_help_id,
         "GrayStringA" => fn gray_string_a,
         "GrayStringW" => fn gray_string_w,
         "RealChildWindowFromPoint" => fn real_child_window_from_point,
