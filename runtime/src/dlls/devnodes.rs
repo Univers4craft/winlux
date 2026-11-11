@@ -912,6 +912,14 @@ pub fn get_class_devs(
             })
         })
         .collect();
+    // Observation en boîte noire (#1655) : ce qu'un logiciel demande à
+    // notre setupapi (classe ou interface, drapeaux) et ce qu'il obtient.
+    crate::trace!(
+        "SetupDiGetClassDevs({}, énumérateur {:?}, drapeaux {flags:#x}) = {} élément(s)",
+        guid.map(|g| guid_text(&g)).unwrap_or_else(|| "NULL".into()),
+        enumerator,
+        list.len()
+    );
     let h = NEXT_SET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::dlls::lock(&SETS).push((h, list));
     crate::process::set_last_error(0);
@@ -985,16 +993,33 @@ pub fn destroy(set: usize) -> bool {
 }
 
 /// Indice d'un SP_DEVINFO_DATA ou SP_DEVICE_INTERFACE_DATA (champ Reserved).
+///
+/// Reserved est un ULONG_PTR : 4 octets en x86 (structure de 28 octets),
+/// 8 en x64 (32 octets). L'écrire sur 8 octets pour un programme 32 bits
+/// déborde de 4 octets sur sa pile (#1656).
 pub(crate) unsafe fn reserved_index(data: *const u8) -> usize {
-    (data.add(24) as *const usize)
-        .read_unaligned()
-        .wrapping_sub(1)
+    let v = if crate::wow32::pointer_size() == 4 {
+        (data.add(24) as *const u32).read_unaligned() as usize
+    } else {
+        (data.add(24) as *const usize).read_unaligned()
+    };
+    v.wrapping_sub(1)
+}
+
+/// Écrit le champ Reserved (indice + 1) d'un SP_DEVINFO_DATA ou
+/// SP_DEVICE_INTERFACE_DATA, à la taille pointeur de l'appelant.
+pub(crate) unsafe fn write_reserved(data: *mut u8, index: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        (data.add(24) as *mut u32).write_unaligned(index as u32 + 1);
+    } else {
+        (data.add(24) as *mut usize).write_unaligned(index + 1);
+    }
 }
 
 unsafe fn write_devinfo(n: &Node, index: usize, data: *mut u8) {
     std::ptr::copy_nonoverlapping(n.class().as_ptr(), data.add(4), 16);
     (data.add(20) as *mut u32).write_unaligned(devinst(&n.id));
-    (data.add(24) as *mut usize).write_unaligned(index + 1);
+    write_reserved(data, index);
 }
 
 /// SP_DEVINFO_DATA : cbSize, ClassGuid, DevInst, Reserved.
@@ -1035,7 +1060,7 @@ pub unsafe fn enum_interfaces(
         let g = n.interface().unwrap_or_default();
         std::ptr::copy_nonoverlapping(g.as_ptr(), data.add(4), 16);
         (data.add(20) as *mut u32).write_unaligned(1); // SPINT_ACTIVE
-        (data.add(24) as *mut usize).write_unaligned(i + 1);
+        write_reserved(data, i);
     }
     Some(true)
 }
@@ -1709,7 +1734,7 @@ pub unsafe extern "win64" fn SetupDiOpenDeviceInterfaceW(
         let g = n.interface().unwrap_or_default();
         std::ptr::copy_nonoverlapping(g.as_ptr(), data.add(4), 16);
         (data.add(20) as *mut u32).write_unaligned(1); // SPINT_ACTIVE
-        (data.add(24) as *mut usize).write_unaligned(index + 1);
+        write_reserved(data, index);
     }
     1
 }
