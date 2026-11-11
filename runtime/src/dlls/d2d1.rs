@@ -2405,7 +2405,9 @@ unsafe extern "win64" fn end_draw(this: *mut TargetObj, a: *mut u64, b: *mut u64
     }
     t.drawing = false;
     t.state.clips.clear();
-    t.sync_wic(true)
+    let hr = t.sync_wic(true);
+    v11::end_draw_home(&mut t);
+    hr
 }
 
 unsafe extern "win64" fn get_size(this: *mut TargetObj, out: *mut [f32; 2]) -> *mut [f32; 2] {
