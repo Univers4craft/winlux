@@ -544,6 +544,7 @@ IsDebuggerPresent
 IsNLSDefinedString
 IsProcessInJob
 IsProcessorFeaturePresent
+IsSystemResumeAutomatic
 IsThreadAFiber
 IsThreadpoolTimerSet
 IsValidCodePage
@@ -914,8 +915,10 @@ WaitNamedPipeW
 WakeAllConditionVariable
 WakeConditionVariable
 WerGetFlags
+WerRegisterMemoryBlock
 WerRegisterRuntimeExceptionModule
 WerSetFlags
+WerUnregisterMemoryBlock
 WideCharToMultiByte
 WinExec
 WinluxArchiveCommit

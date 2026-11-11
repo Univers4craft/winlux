@@ -312,6 +312,20 @@ extern "win64" fn dsign(x: f64) -> i32 {
     }
 }
 
+/// _ldsign : sous MSVC, `long double` a la taille d'un `double` ; même
+/// résultat que `_dsign` (0x8000 si le bit de signe est levé). #1874.
+extern "win64" fn ldsign(x: f64) -> i32 {
+    dsign(x)
+}
+
+/// __initialize_lconv_for_unsigned_char : appelée au démarrage des
+/// programmes compilés avec `/J` (char non signé). Winlux ne sert que la
+/// locale « C », dont la `lconv` statique n'est pas réécrite ; l'appel
+/// réussit (0) sans effet. L'ODT x86 s'arrêtait sans elle (#1874).
+extern "win64" fn initialize_lconv_for_unsigned_char() -> i32 {
+    0
+}
+
 extern "win64" fn fdsign(x: f32) -> i32 {
     if x.is_sign_negative() {
         0x8000
@@ -376,6 +390,7 @@ pub fn exports() -> crate::dlls::Exports {
         "_wutime64" => fn wutime64, "_utime64" => fn utime64, "_wutime" => fn wutime64, "_utime" => fn utime64,
         "tmpnam" => fn tmpnam, "_kbhit" => fn kbhit, "_getch" => fn getch,
         "_dclass" => fn dclass, "_fdclass" => fn fdclass, "_dsign" => fn dsign, "_fdsign" => fn fdsign,
+        "_ldsign" => fn ldsign, "__initialize_lconv_for_unsigned_char" => fn initialize_lconv_for_unsigned_char,
         "log2l" => fn log2l, "_clearfp" => fn clearfp, "_statusfp" => fn clearfp,
         "_set_abort_behavior" => fn set_abort_behavior, "_set_new_handler" => fn set_new_handler,
         "_crt_at_quick_exit" => fn crt_at_quick_exit,
@@ -386,6 +401,27 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imports_crt_de_l_odt_servis() {
+        // setup.exe de l'ODT (x86) importe ces deux fonctions (#1874).
+        for (dll, f) in [
+            (
+                "api-ms-win-crt-locale-l1-1-0.dll",
+                "__initialize_lconv_for_unsigned_char",
+            ),
+            ("api-ms-win-crt-math-l1-1-0.dll", "_ldsign"),
+        ] {
+            assert!(
+                crate::dlls::lookup(&crate::dlls::normalize(dll), f).is_some(),
+                "{f}"
+            );
+        }
+        assert_eq!(ldsign(-2.5), 0x8000);
+        assert_eq!(ldsign(-0.0), 0x8000);
+        assert_eq!(ldsign(1.0), 0);
+        assert_eq!(initialize_lconv_for_unsigned_char(), 0);
+    }
 
     #[test]
     fn kbhit_sans_console_repond_zero() {
