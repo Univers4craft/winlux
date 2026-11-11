@@ -828,6 +828,10 @@ pub fn exports() -> crate::dlls::Exports {
     for (k, v) in super::shlwapi_path::exports() {
         m.entry(k).or_insert(v);
     }
+    // IUnknown_QueryService (#176) et QISearch (#219), par nom et ordinal (#1750).
+    for (k, v) in super::shell_ordinaux::shlwapi() {
+        m.entry(k).or_insert(v);
+    }
     m
 }
 

@@ -1097,7 +1097,7 @@ unsafe extern "win64" fn not_in_process(_a: usize, _b: usize, out: *mut *mut c_v
 }
 
 pub fn exports() -> Exports {
-    crate::exports! {
+    let mut m = crate::exports! {
         "SHParseDisplayName" => fn sh_parse_display_name,
         "SHILCreateFromPath" => fn sh_il_create_from_path,
         "SHGetFolderLocation" => fn sh_get_folder_location,
@@ -1127,7 +1127,12 @@ pub fn exports() -> Exports {
         "SHCreateShellFolderView" => fn not_in_process,
         "SHCreateDefaultContextMenu" => fn not_in_process,
         "SHCreateDefaultExtractIcon" => fn not_in_process,
+    };
+    // SHRestricted, aussi par l'ordinal 100 (#1750).
+    for (k, v) in super::shell_ordinaux::shell32() {
+        m.entry(k).or_insert(v);
     }
+    m
 }
 
 #[cfg(test)]

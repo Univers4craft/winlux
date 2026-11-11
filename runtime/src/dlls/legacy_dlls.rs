@@ -215,6 +215,23 @@ pub extern "win64" fn msi_get_product_info(_p: usize, _a: usize, _b: usize, _s: 
     ERROR_UNKNOWN_PRODUCT
 }
 
+/// MsiSourceList* : Winlux ne répare ni ne réinstalle un produit depuis sa
+/// source d'origine, la liste des sources n'a donc rien à retenir.
+/// L'ajout, l'effacement et le réglage réussissent (Acrobat inscrit son
+/// cache d'installation par MsiSourceListAddSourceW, #1757) ; la liste lue
+/// est vide.
+pub extern "win64" fn msi_source_list_ok() -> u32 {
+    crate::trace!("MsiSourceList : liste des sources non conservée");
+    0
+}
+pub extern "win64" fn msi_source_list_empty() -> u32 {
+    ERROR_NO_MORE_ITEMS
+}
+pub extern "win64" fn msi_source_list_get_info() -> u32 {
+    ERROR_UNKNOWN_PROPERTY
+}
+const ERROR_UNKNOWN_PROPERTY: u32 = 1608;
+
 pub fn msi_exports() -> super::Exports {
     // Fonctions de session des actions personnalisées DLL (#833).
     let mut all = crate::msi::session::exports();
@@ -233,6 +250,32 @@ pub fn msi_exports() -> super::Exports {
         "MsiGetProductInfoA" => fn msi_get_product_info,
         "MsiEnumRelatedProductsW" => fn msi_enum_related_products,
         "MsiEnumRelatedProductsA" => fn msi_enum_related_products,
+        "MsiSourceListAddSourceW" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceA" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceExW" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceExA" => fn msi_source_list_ok,
+        "MsiSourceListClearAllW" => fn msi_source_list_ok,
+        "MsiSourceListClearAllA" => fn msi_source_list_ok,
+        "MsiSourceListClearAllExW" => fn msi_source_list_ok,
+        "MsiSourceListClearAllExA" => fn msi_source_list_ok,
+        "MsiSourceListClearSourceW" => fn msi_source_list_ok,
+        "MsiSourceListClearSourceA" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionW" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionA" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionExW" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionExA" => fn msi_source_list_ok,
+        "MsiSourceListSetInfoW" => fn msi_source_list_ok,
+        "MsiSourceListSetInfoA" => fn msi_source_list_ok,
+        "MsiSourceListAddMediaDiskW" => fn msi_source_list_ok,
+        "MsiSourceListAddMediaDiskA" => fn msi_source_list_ok,
+        "MsiSourceListClearMediaDiskW" => fn msi_source_list_ok,
+        "MsiSourceListClearMediaDiskA" => fn msi_source_list_ok,
+        "MsiSourceListEnumSourcesW" => fn msi_source_list_empty,
+        "MsiSourceListEnumSourcesA" => fn msi_source_list_empty,
+        "MsiSourceListEnumMediaDisksW" => fn msi_source_list_empty,
+        "MsiSourceListEnumMediaDisksA" => fn msi_source_list_empty,
+        "MsiSourceListGetInfoW" => fn msi_source_list_get_info,
+        "MsiSourceListGetInfoA" => fn msi_source_list_get_info,
     });
     with_msi_ordinals(all)
 }
@@ -306,6 +349,10 @@ mod tests {
             (166, "MsiViewGetColumnInfo"),
             (171, "MsiFormatRecordW"),
             (70, "MsiGetProductInfoW"),
+            // Acrobat, CacheSetupFiles_SetSourceList (#1757).
+            (211, "MsiSourceListAddSourceW"),
+            (256, "MsiSourceListAddSourceExW"),
+            (268, "MsiSourceListSetInfoW"),
             (205, "MsiEnumRelatedProductsW"),
             // Base hors session et résumé (panda3d, electron-winstaller, #1657).
             (20, "MsiDatabaseCommit"),

@@ -413,6 +413,10 @@ impl Ctx {
             "cf64" | "commoncf64" | "autocf64" => "C:\\Program Files\\Common Files".into(),
             "usercf" => local("\\Programs\\Common"),
             "win" => "C:\\windows".into(),
+            // {sys} : en mode 32 bits, Windows 64 bits redirige System32
+            // vers SysWOW64 (documentation d'Inno Setup, « Constants ») ;
+            // une DLL x86 n'y remplace donc pas celle de System32 (#1796).
+            "sys" if !self.x64 => "C:\\windows\\syswow64".into(),
             "sys" | "sysnative" => "C:\\windows\\system32".into(),
             "syswow64" => "C:\\windows\\syswow64".into(),
             "fonts" | "commonfonts" | "autofonts" => "C:\\windows\\Fonts".into(),
@@ -1568,6 +1572,34 @@ mod tests {
         buf[i + 2] = (rel >> 16) as u8;
         untransform_calls(&mut buf, 0);
         assert_eq!(buf, orig);
+    }
+
+    fn ctx(x64: bool) -> Ctx {
+        Ctx {
+            app: "C:\\Program Files\\Demo".into(),
+            group: String::new(),
+            x64,
+            lang: 0,
+            lang_name: String::new(),
+            src: String::new(),
+            srcexe: String::new(),
+            uninstexe: String::new(),
+            tmp: String::new(),
+            messages: HashMap::new(),
+            components: Vec::new(),
+            tasks: Vec::new(),
+            app_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn sys_en_mode_32_bits_va_dans_syswow64() {
+        let x86 = ctx(false);
+        assert_eq!(x86.folder("sys").unwrap(), "C:\\windows\\syswow64");
+        assert_eq!(x86.folder("sysnative").unwrap(), "C:\\windows\\system32");
+        assert_eq!(x86.folder("syswow64").unwrap(), "C:\\windows\\syswow64");
+        let x64 = ctx(true);
+        assert_eq!(x64.folder("sys").unwrap(), "C:\\windows\\system32");
     }
 
     #[test]

@@ -226,6 +226,8 @@ shell32.rs	ShellExecuteInfo	x86	SHELLEXECUTEINFO de 60 octets converti par execu
 shell_folder_com.rs	Enum	interne	objet IEnumIDList du runtime ; en x86, la passerelle COM (wow32/com.rs, IENUMIDLIST) l'enveloppe
 shell_folder_com.rs	Folder	interne	objet IShellFolder du runtime ; en x86, la passerelle COM (wow32/com.rs, ISHELLFOLDER) l'enveloppe
 shell_link.rs	Link	interne	objet ShellLink (#1732), x64 seulement (refusé si wow32 actif)
+shell_ordinaux.rs	Obj	interne	test unitaire
+shell_ordinaux.rs	QiTab	a-verifier	QITAB x86 = 8 octets (pointeur 4 + int 4), x64 = 16 ; seul le chemin x64 est servi par #1750 (WinRAR x64)
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskbarlist_com.rs	Obj	a-verifier	
@@ -234,6 +236,7 @@ threadpool.rs	Instance	a-verifier
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
+user32.rs	CbtCreateWnd	interne	HCBT_CREATEWND (#1654), x64 seulement : les crochets WH_CBT x86 restent inertes (wow32 inert_hook)
 user32.rs	NcCalcSizeParams	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)
 user32.rs	WindowPos	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte

@@ -164,6 +164,12 @@ pub fn title(lang: &str) -> &'static str {
     ][lang_col(lang)]
 }
 
+/// Bouton de la boîte, dans la langue de l'interface : le bouton standard
+/// de GTK suivrait la langue du système (#1776).
+pub fn button(lang: &str) -> &'static str {
+    ["OK", "OK", "OK", "Aceptar"][lang_col(lang)]
+}
+
 /// Message du refus, dans la langue de l'interface : nomme le logiciel,
 /// dit la raison et ne laisse pas croire à une panne de Winlux.
 pub fn message(lang: &str, software: &str, a: &AntiCheat, stage: Stage) -> String {
@@ -209,18 +215,21 @@ pub fn message(lang: &str, software: &str, a: &AntiCheat, stage: Stage) -> Strin
     format!("{head}\n\n{why}\n\n{end}")
 }
 
+/// Script de la boîte : titre, texte et libellé du bouton en arguments.
+const DIALOG: &str = "import sys\nimport gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\n\
+title, text, button = sys.argv[1], sys.argv[2], sys.argv[3]\nhead, _, rest = text.partition('\\n\\n')\n\
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.NONE, text=head)\n\
+d.add_button(button, Gtk.ResponseType.OK)\nd.set_default_response(Gtk.ResponseType.OK)\n\
+d.set_title(title)\nd.format_secondary_text(rest)\nd.set_keep_above(True)\nd.run()\n";
+
 /// Boîte GTK (python3 du système), sinon notification. Bloquante : le
 /// programme refusé attend que la personne ait lu.
-fn show(title: &str, text: &str) {
+fn show(title: &str, text: &str, button: &str) {
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
         return;
     }
-    const DIALOG: &str = "import sys\nimport gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\n\
-title, text = sys.argv[1], sys.argv[2]\nhead, _, rest = text.partition('\\n\\n')\n\
-d = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.OK, text=head)\n\
-d.set_title(title)\nd.format_secondary_text(rest)\nd.set_keep_above(True)\nd.run()\n";
     let shown = std::process::Command::new("python3")
-        .args(["-I", "-c", DIALOG, title, text])
+        .args(["-I", "-c", DIALOG, title, text, button])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -252,7 +261,7 @@ pub fn refuse(software: &str, a: &AntiCheat, stage: Stage) -> i32 {
         a.protection
     );
     if !TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        show(title(&lang), &text);
+        show(title(&lang), &text, button(&lang));
     }
     REFUSED
 }
@@ -330,6 +339,27 @@ mod tests {
     }
 
     #[test]
+    fn script_de_la_boite_valide() {
+        let Ok(out) = std::process::Command::new("python3")
+            .args([
+                "-I",
+                "-c",
+                "import ast, sys; ast.parse(sys.argv[1])",
+                DIALOG,
+            ])
+            .output()
+        else {
+            return; // pas de python3 sur la machine de test
+        };
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(DIALOG.contains("add_button(button") && !DIALOG.contains("ButtonsType.OK"));
+    }
+
+    #[test]
     fn message_en_quatre_langues() {
         let a = &LIST[0];
         for (lang, mots) in [
@@ -380,5 +410,11 @@ mod tests {
         }
         assert!(message("fr", "x", a, Stage::During).contains("arrêtée avant"));
         assert_eq!(title("de"), "Installation abgelehnt");
+        // Bouton dans la langue de l'interface, pas celle du système (#1776).
+        assert_eq!(button("es_ES"), "Aceptar");
+        assert_eq!(button("de"), "OK");
+        assert!(!["fr", "en", "de", "es"]
+            .iter()
+            .any(|l| button(l) == "Valider"));
     }
 }

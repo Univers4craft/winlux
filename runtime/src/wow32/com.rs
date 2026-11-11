@@ -994,7 +994,10 @@ static ALL: &[&Iface] = &[
 ];
 
 fn by_iid(iid: &Guid) -> Option<&'static Iface> {
-    ALL.iter().copied().find(|f| &f.iid == iid)
+    ALL.iter()
+        .chain(super::com_taskschd::ALL.iter())
+        .copied()
+        .find(|f| &f.iid == iid)
 }
 
 /// Interface d'un objet x86 que le runtime ne décrit pas : seules les
