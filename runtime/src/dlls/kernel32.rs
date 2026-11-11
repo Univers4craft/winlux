@@ -8568,10 +8568,20 @@ pub unsafe extern "win64" fn query_depth_slist(head: usize) -> u16 {
 }
 // --- Encode/Decode Pointer ---
 pub extern "win64" fn encode_pointer(ptr: usize) -> usize {
-    ptr ^ 0xDEAD_BEEF_CAFE_BABE
+    pointer_xor(ptr)
 }
 pub extern "win64" fn decode_pointer(ptr: usize) -> usize {
-    ptr ^ 0xDEAD_BEEF_CAFE_BABE
+    pointer_xor(ptr)
+}
+/// Programme x86 : valeur codée sur 32 bits, comme un pointeur de ce
+/// programme ; sinon la passerelle la signale « au-dessus de 4 Go » (#1642).
+fn pointer_xor(ptr: usize) -> usize {
+    let v = ptr ^ 0xDEAD_BEEF_CAFE_BABE;
+    if crate::wow32::active() {
+        v as u32 as usize
+    } else {
+        v
+    }
 }
 
 // --- Helpers (hostname, date/time without chrono/nix) ---
