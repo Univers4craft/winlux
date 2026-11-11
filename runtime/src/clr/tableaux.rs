@@ -10,6 +10,7 @@
 use super::exceptions::ClrException;
 use super::gc;
 use super::il::{load, store, Interpreter, Value};
+use super::tables::{TableId, Token};
 use super::types::Kind;
 
 /// Données d'un tableau à une dimension : longueur (u64) puis éléments.
@@ -44,7 +45,51 @@ fn array_arg(v: Option<&Value>, name: &str) -> Result<*mut u8, ClrException> {
     }
 }
 
+/// Poignée d'un champ (`ldtoken`) : le jeton FieldDef et, au-dessus,
+/// l'indice + 1 de l'assembly qui le déclare.
+pub(super) fn field_handle(assembly: usize, token: u32) -> i64 {
+    (((assembly as u64) + 1) << 32 | token as u64) as i64
+}
+
 impl Interpreter {
+    /// `RuntimeHelpers.InitializeArray(array, champ)` : copie dans le
+    /// tableau les octets du champ à RVA que le compilateur a émis pour son
+    /// initialiseur (ECMA-335 §II.16.3.2, table FieldRVA §II.22.18).
+    fn initialize_array(&self, args: &[Value]) -> Result<Value, ClrException> {
+        let arr = array_arg(args.first(), "array")?;
+        let handle = args.get(1).map_or(0, |v| v.as_i64()) as u64;
+        let (index, token) = ((handle >> 32) as usize, handle as u32);
+        let bad = || {
+            ClrException::new(
+                "System",
+                "ArgumentException",
+                "The field handle does not point to an initialized static field.",
+            )
+        };
+        if index == 0 || Token(token).table() != TableId::Field as u8 {
+            return Err(bad());
+        }
+        let asm = self.assembly_at(index - 1);
+        let field = Token(token).rid();
+        let rva = (1..=asm.row_count(TableId::FieldRva))
+            .map(|row| asm.get_field_rva(row))
+            .find(|r| r.field == field)
+            .map(|r| r.rva)
+            .ok_or_else(bad)?;
+        let kind = self.elem_kind(arr);
+        if kind == Kind::Ref {
+            return Err(ClrException::new(
+                "System",
+                "ArgumentException",
+                "The array must be of a primitive or value type.",
+            ));
+        }
+        let size = length(arr) as usize * kind.elem_size();
+        let src = asm.rva_slice(rva, size).ok_or_else(bad)?;
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), arr.add(DATA), size) };
+        Ok(Value::Null)
+    }
+
     /// Façon de ranger un élément du tableau `arr`.
     fn elem_kind(&self, arr: *mut u8) -> Kind {
         match gc::array_elem_type(arr) {
@@ -60,6 +105,15 @@ impl Interpreter {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, ClrException>> {
+        if (namespace, class, name)
+            == (
+                "System.Runtime.CompilerServices",
+                "RuntimeHelpers",
+                "InitializeArray",
+            )
+        {
+            return Some(self.initialize_array(args));
+        }
         if namespace != "System" || class != "Array" {
             return None;
         }
