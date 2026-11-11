@@ -749,6 +749,14 @@ jobs:
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
 
+      - name: Démarrer, homonymes départagés et distingués (#1489)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-start-homonyms.py
+
+      - name: Trousseau de secrets créé et ouvert à la connexion, sans fenêtre (#1488)
+        run: |
+          sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin || { sudo apt-get update -q && sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin; }
+          /usr/bin/python3 -B scripts/test-keyring.py
+
       - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
         run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py
 

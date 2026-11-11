@@ -186,10 +186,32 @@ unsafe fn read_wide_string(value: *const u16) -> Option<String> {
     String::from_utf16(std::slice::from_raw_parts(value, len)).ok()
 }
 
+/// Appartement COM du thread : modèle (2 = STA, 0 = MTA) et nombre
+/// d'initialisations en cours.
+pub(crate) fn current_apartment() -> Option<(u32, u32)> {
+    COM_APARTMENT.with(|apartment| apartment.get())
+}
+
+/// Jetons de CoIncrementMTAUsage encore pris (MTA implicite).
+pub(crate) fn mta_usage() -> u32 {
+    MTA_USAGE.load(std::sync::atomic::Ordering::SeqCst) as u32
+}
+
+fn apartment_refs() -> u32 {
+    current_apartment().map(|(_, n)| n).unwrap_or(0)
+}
+
 pub extern "win64" fn co_initialize_ex(reserved: usize, coinit: u32) -> i32 {
     if reserved != 0 {
         return E_INVALIDARG;
     }
+    // Espions d'IInitializeSpy (CoRegisterInitializeSpy) : avant et après.
+    unsafe { super::ole32_lot_c::before_initialize(coinit, apartment_refs()) };
+    let hr = co_initialize_apartment(coinit);
+    unsafe { super::ole32_lot_c::after_initialize(hr, coinit, apartment_refs()) }
+}
+
+fn co_initialize_apartment(coinit: u32) -> i32 {
     let model = coinit & 2;
     COM_APARTMENT.with(|apartment| match apartment.get() {
         None => {
@@ -212,15 +234,23 @@ pub extern "win64" fn ole_initialize(reserved: usize) -> i32 {
 }
 
 pub extern "win64" fn co_uninitialize() {
+    let Some((model, count)) = current_apartment() else {
+        return;
+    };
+    unsafe { super::ole32_lot_c::before_uninitialize(count) };
+    if count == 1 {
+        // Dernière sortie : RoRegisterForApartmentShutdown est prévenu
+        // tant que l'appartement existe encore.
+        unsafe { super::ole32_lot_c::apartment_shutdown() };
+    }
     COM_APARTMENT.with(|apartment| {
-        if let Some((model, count)) = apartment.get() {
-            apartment.set(if count > 1 {
-                Some((model, count - 1))
-            } else {
-                None
-            });
-        }
+        apartment.set(if count > 1 {
+            Some((model, count - 1))
+        } else {
+            None
+        });
     });
+    unsafe { super::ole32_lot_c::after_uninitialize(count - 1) };
 }
 
 pub extern "win64" fn ole_uninitialize() {
@@ -1657,14 +1687,7 @@ pub extern "win64" fn co_free_unused_libraries_ex(_delay: u32, _reserved: u32) {
     co_free_unused_libraries();
 }
 
-/// CreateBindCtx : les monikers ne sont pas encore pris en charge.
-pub unsafe extern "win64" fn create_bind_ctx(_reserved: u32, out: *mut usize) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    *out = 0;
-    super::comobj::E_NOTIMPL
-}
+// CreateBindCtx : ole32_moniker.rs.
 
 /// OleRegEnumVerbs : aucun verbe OLE enregistré (OLEOBJ_E_NOVERBS).
 pub unsafe extern "win64" fn ole_reg_enum_verbs(_clsid: *const Guid, out: *mut usize) -> i32 {
@@ -1740,7 +1763,7 @@ pub fn exports() -> crate::dlls::Exports {
     "IsEqualGUID"=>fn is_equal_guid,"CoDisconnectObject"=>fn co_disconnect_object,
         "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,
         "CoAddRefServerProcess"=>fn co_add_ref_server_process,"CoReleaseServerProcess"=>fn co_release_server_process,
-        "CoResumeClassObjects"=>fn co_resume_class_objects,"CoSuspendClassObjects"=>fn co_resume_class_objects,"CreateBindCtx"=>fn create_bind_ctx,
+        "CoResumeClassObjects"=>fn co_resume_class_objects,"CoSuspendClassObjects"=>fn co_resume_class_objects,
         "OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
         // IsAccelerator, OleSetMenuDescriptor : ole32_inplace.rs.
         "CreateErrorInfo"=>fn super::errorinfo::create_error_info,

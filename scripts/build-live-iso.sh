@@ -138,6 +138,8 @@ cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalo
 # Logiciels publiés pour Linux par leur éditeur (#1056) : seulement leur
 # description ; téléchargés chez l'éditeur après confirmation, jamais dans l'ISO.
 cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeurs.json"
+# Programmes .exe testés sur Winlux (#1515) : fiches épinglées, rien de téléchargé.
+cp "$root/integration/store-windows-valides.json" "$stage/usr/share/winlux/store-windows-valides.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
 install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
@@ -1215,6 +1217,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         test -x /usr/bin/prlimit && session_limits='/usr/bin/prlimit --rtprio=20 --nice=31'
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             session_started=$(/bin/busybox date +%s)
+            logged_off=0
             # setsid : la session a son groupe de processus, arrêté d'un bloc.
             # prlimit : priorité temps réel (20) et nice jusqu'à -11 pour
             # PipeWire, sans RTKit (pas de systemd) : le son ne grésille plus
@@ -1238,6 +1241,17 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             while /bin/busybox kill -0 "$session_pid" 2>/dev/null; do
                 request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
                 update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+                # « Se déconnecter » (#1564) : la session se ferme, applications
+                # comprises, et la suivante s'ouvre sur l'écran de connexion.
+                if test "$request" = logoff-session; then
+                    /bin/busybox rm -f /run/winlux/session-action
+                    lock_at_start=1
+                    logged_off=1
+                    /bin/busybox kill -TERM "-$session_pid" 2>/dev/null || /bin/busybox kill "$session_pid" 2>/dev/null || true
+                    /bin/busybox sleep 2
+                    /bin/busybox kill -KILL "-$session_pid" 2>/dev/null || true
+                    break
+                fi
                 if test "$request" = restart-session && ! /usr/bin/winlux-update --busy; then
                     /bin/busybox rm -f /run/winlux/session-action
                     if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
@@ -1251,7 +1265,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             wait "$session_pid" 2>/dev/null || true
             # Un bureau qui ne tient pas : après trois échecs rapides, une
             # version tout juste installée est remplacée par la précédente.
-            if test $(( $(/bin/busybox date +%s) - session_started )) -lt 20; then
+            # Une déconnexion demandée n'est pas un échec (#1564).
+            if test "$logged_off" = 1; then
+                quick_exits=0
+            elif test $(( $(/bin/busybox date +%s) - session_started )) -lt 20; then
                 quick_exits=$((quick_exits + 1))
                 if test "$quick_exits" -ge 3; then
                     /bin/busybox tail -n 40 "/run/winlux/session-$desktop_user.log" >&2

@@ -432,6 +432,22 @@ def check_password(user, password):
     return not requires_password(user)
 
 
+def open_keyring(password):
+    """Trousseau de secrets du compte ouvert avec le mot de passe tout juste
+    vérifié, comme pam_gnome_keyring ailleurs (#1488). Le mot de passe passe
+    par un tube, jamais en argument ; le déverrouillage ne l'attend pas."""
+    helper = os.environ.get("WINLUX_KEYRING", "/usr/bin/winlux-keyring")
+    if not os.access(helper, os.X_OK):
+        return
+    try:
+        child = subprocess.Popen([helper, "unlock"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        child.stdin.write(password.encode())
+        child.stdin.close()
+    except OSError:
+        pass
+
+
 # ── Inactivité X11 et retour de veille ──────────────────────────────────────
 
 class _XssInfo(ctypes.Structure):
@@ -1260,6 +1276,7 @@ def run_lock(start="clock"):
                     self.show_clock()
                     return
             elif check_password(self.user, self.entry.get_text()):
+                open_keyring(self.entry.get_text())
                 self.unlock()
                 return
             self.entry.set_text("")

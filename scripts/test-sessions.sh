@@ -63,6 +63,15 @@ sleep 0.5
 WINLUX_TEST_VT=1 sessions list
 if grep -q alice "$root/run/winlux/sessions.txt"; then fail "session alice encore listée"; fi
 grep -qx 'session=root|:0|1|active' "$root/run/winlux/sessions.txt" || fail "session root perdue"
+# « Se déconnecter » du bureau principal (#1564) : sans PID suivi, l'init
+# le ferme et rouvre l'écran de connexion ; l'entrée du registre reste.
+rm -f "$root/run/winlux/session-action"
+: > "$work/log"
+WINLUX_TEST_VT=1 sessions logoff root
+test "$(cat "$root/run/winlux/session-action" 2>/dev/null)" = logoff-session || fail "déconnexion du bureau principal non transmise à l'init"
+test -f "$root/run/winlux/sessions/root" || fail "bureau principal retiré du registre par la déconnexion"
+if grep -q chvt "$work/log"; then fail "déconnexion du bureau principal : changement de terminal inattendu"; fi
+rm -f "$root/run/winlux/session-action"
 # Système installé : le premier bureau est sur le VT 2 (celui de l'init) ;
 # un second compte ne doit pas viser le même terminal (écran noir).
 rm -f "$root/run/winlux/sessions/"* "$work/x11/X1" "$work/x11/X2" "$work/x11/X3"

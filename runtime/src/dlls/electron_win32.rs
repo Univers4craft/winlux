@@ -1621,6 +1621,12 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
 /// Automation) se rabat sur l'API Win32.
 unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
     let name = String::from_utf16_lossy(hstring_slice(class));
+    // Fabriques inscrites par le programme (RoRegisterActivationFactories).
+    if let Some(hr) =
+        super::ole32_lot_c::registered_activation_factory(class, &name, iid as *const u8, out)
+    {
+        return hr;
+    }
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
@@ -1645,11 +1651,18 @@ unsafe extern "win64" fn RoTransformError(_old: i32, _new: i32, _message: usize)
     0
 }
 
+/// Erreur posée par SetRestrictedErrorInfo sur ce thread, cédée à
+/// l'appelant ; S_FALSE quand il n'y en a pas.
 unsafe extern "win64" fn GetRestrictedErrorInfo(out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    if out.is_null() {
+        return E_INVALIDARG;
     }
-    1 // S_FALSE : aucune erreur enregistrée
+    *out = super::ole32_lot_c::take_restricted_error_info();
+    if *out == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 pub fn ole32_exports() -> crate::dlls::Exports {

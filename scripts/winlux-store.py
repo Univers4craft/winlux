@@ -125,6 +125,10 @@ T = {
            "ed_licence_free": "Licence : logiciel libre",
            "ed_licence_owner": "Licence : logiciel propriétaire de l'éditeur",
            "ed_sha": "Empreinte SHA-256 vérifiée avant l'installation : {sha}",
+           "ed_sha512": "Empreinte SHA-512 vérifiée avant l'installation : {sha}",
+           "win_runtime": "Programme .exe exécuté par Winlux ; la désinstallation garde vos documents.",
+           "win_tested": "Installé et utilisé sur le banc de test de Winlux.",
+           "win_tested_name": "Testés sur Winlux",
            "ed_repo": "Le paquet de l'éditeur peut ajouter son dépôt pour les mises à jour ; la désinstallation retire le logiciel et ce dépôt.",
            "ed_ok": "Installer",
            "ed_ok_update": "Mettre à jour",
@@ -162,6 +166,10 @@ T = {
            "ed_licence_free": "Licence: free software",
            "ed_licence_owner": "Licence: publisher's proprietary software",
            "ed_sha": "SHA-256 fingerprint checked before installation: {sha}",
+           "ed_sha512": "SHA-512 fingerprint checked before installation: {sha}",
+           "win_runtime": ".exe program run by Winlux; uninstalling keeps your documents.",
+           "win_tested": "Installed and used on the Winlux test bench.",
+           "win_tested_name": "Tested on Winlux",
            "ed_repo": "The publisher's package may add its repository for updates; uninstalling removes the software and that repository.",
            "ed_ok": "Install",
            "ed_ok_update": "Update",
@@ -199,6 +207,10 @@ T = {
            "ed_licence_free": "Licencia: software libre",
            "ed_licence_owner": "Licencia: software propietario del editor",
            "ed_sha": "Huella SHA-256 comprobada antes de la instalación: {sha}",
+           "ed_sha512": "Huella SHA-512 comprobada antes de la instalación: {sha}",
+           "win_runtime": "Programa .exe ejecutado por Winlux; al desinstalarlo se conservan tus documentos.",
+           "win_tested": "Instalado y usado en el banco de pruebas de Winlux.",
+           "win_tested_name": "Probados en Winlux",
            "ed_repo": "El paquete del editor puede añadir su repositorio para las actualizaciones; al desinstalar se quitan el programa y ese repositorio.",
            "ed_ok": "Instalar",
            "ed_ok_update": "Actualizar",
@@ -237,6 +249,10 @@ T = {
            "ed_licence_free": "Lizenz: freie Software",
            "ed_licence_owner": "Lizenz: proprietäre Software des Herausgebers",
            "ed_sha": "SHA-256-Fingerabdruck vor der Installation geprüft: {sha}",
+           "ed_sha512": "SHA-512-Fingerabdruck vor der Installation geprüft: {sha}",
+           "win_runtime": ".exe-Programm, von Winlux ausgeführt; beim Deinstallieren bleiben Ihre Dokumente erhalten.",
+           "win_tested": "Auf dem Winlux-Prüfstand installiert und verwendet.",
+           "win_tested_name": "Auf Winlux getestet",
            "ed_repo": "Das Paket des Herausgebers kann seine Paketquelle für Updates hinzufügen; beim Deinstallieren werden das Programm und diese Quelle entfernt.",
            "ed_ok": "Installieren",
            "ed_ok_update": "Aktualisieren",
@@ -861,6 +877,21 @@ class Apt(Source):
                     result[pkg] = cand
         return result
 
+    def snap_wrappers(self):
+        """Paquets qui dépendent de snapd : de simples lanceurs d'un snap."""
+        if not have("apt-cache"):
+            return set()
+        code, out = run(["apt-cache", "rdepends", "--no-recommends", "--no-suggests", "--no-enhances",
+                         "--no-conflicts", "--no-breaks", "--no-replaces", "snapd"], 60,
+                        env={**os.environ, "LANG": "C"})
+        names, started = set(), False
+        for line in out.splitlines():
+            if line.startswith("Reverse Depends:"):
+                started = True
+            elif started and line.strip():
+                names.add(line.strip().lstrip("|").strip())
+        return names
+
     def refresh_lists(self):
         """apt-get update en arrière-plan si les listes ont plus de 6 h."""
         lists = Path(ROOT + "/var/lib/apt/lists")
@@ -880,11 +911,16 @@ class Apt(Source):
         installed, upgradable = self.installed(), self.upgradable()
         cands = self.candidates([p for p in curated if p not in comps])
         self.system_updates = len(upgradable)
+        # Paquets de transition vers Snap (thunderbird, firefox, chromium-browser
+        # d'Ubuntu) : sans snapd ni systemd leur installation échoue (#1513).
+        snap_only = set() if os.path.exists(ROOT + "/run/snapd.socket") else self.snap_wrappers()
         out = []
         for pkg in sorted(set(curated) | set(comps)):
             doc, cur = comps.get(pkg) or {}, curated.get(pkg)
             if not doc and pkg not in cands and pkg not in installed:
                 continue  # absent des dépôts configurés
+            if pkg in snap_only and pkg not in installed:
+                continue
             ver = installed.get(pkg, ("", 0))[0]
             app = App("apt", pkg, (cur["name"] if cur else doc.get("Name")) or pkg,
                       rank=0 if cur and cur["featured"] else (1 if cur else 3),
@@ -1338,6 +1374,9 @@ class AppImage(Source):
 # ---------------------------------------------------------------------------
 
 EDITEURS = Path(os.environ.get("WINLUX_STORE_EDITEURS", ROOT + "/usr/share/winlux/store-editeurs.json"))
+# Programmes .exe installés et utilisés sur le banc de Winlux (#1515) : livré
+# avec le système, chaque fichier épinglé (adresse officielle, version, SHA-256).
+VALIDES = Path(os.environ.get("WINLUX_STORE_VALIDES", ROOT + "/usr/share/winlux/store-windows-valides.json"))
 # Fenêtre de confirmation (produit, version, éditeur, source, empreinte ;
 # Annuler par défaut) : rien n'est téléchargé sans elle (#1056).
 CONFIRM = os.environ.get("WINLUX_STORE_CONFIRM", "/usr/lib/winlux/winlux-store-confirm")
@@ -1425,23 +1464,24 @@ def editeur_info(entry, force=False):
             "size": f.get("Size", "") if f.get("Size", "").isdigit() else ""}
 
 
-def confirmation_text(entry, info, update=False):
+def confirmation_text(entry, info, update=False, notes=("ed_repo",)):
     """(titre, texte) montrés avant le téléchargement, dans la langue de l'interface."""
-    size = info.get("size", "")
+    size = str(info.get("size", ""))
     lines = [tr("ed_publisher", publisher=entry["publisher"]), tr("ed_version", version=info["version"]),
              tr("ed_source", source=info["source"])]
     if size.isdigit():
         lines.append(tr("ed_size", size=max(1, round(int(size) / 1_000_000))))
-    lines.append(tr("ed_licence_free" if entry.get("licence") == "libre" else "ed_licence_owner"))
-    lines.append(tr("ed_sha", sha=info["sha256"]))
-    lines.append(tr("ed_repo"))
+    if entry.get("licence"):
+        lines.append(tr("ed_licence_free" if entry.get("licence") == "libre" else "ed_licence_owner"))
+    lines.append(tr("ed_sha512", sha=info["sha512"]) if info.get("sha512") else tr("ed_sha", sha=info["sha256"]))
+    lines += [tr(n) for n in notes]
     return tr("ed_update_title" if update else "ed_title", name=entry["name"]), "\n".join(lines)
 
 
-def confirm(entry, info, update=False):
+def confirm(entry, info, update=False, notes=("ed_repo",)):
     """True seulement si la personne a cliqué « Installer » ; Annuler, fermer
     la fenêtre ou l'absence d'affichage valent refus."""
-    title, text = confirmation_text(entry, info, update)
+    title, text = confirmation_text(entry, info, update, notes)
     try:
         return subprocess.run([sys.executable, "-I", CONFIRM, "--title", title, "--text", text,
                                "--ok", tr("ed_ok_update" if update else "ed_ok"), "--cancel", tr("ed_cancel")]
@@ -1866,6 +1906,10 @@ class Windows(Source):
                 if isinstance(conf, dict) and conf.get("enabled", True):
                     found.append(WindowsCatalog(conf))
                     seen.add(found[-1].id)
+        if VALIDES.is_file() and "valides" not in seen:
+            found.append(WindowsCatalog({"id": "valides", "name": tr("win_tested_name"), "format": "winlux",
+                                         "file": str(VALIDES)}))
+            seen.add("valides")
         # Boutiques Windows choisies par l'utilisateur (winlux-store-catalogs,
         # docs/BOUTIQUES.md) : aucune n'est active sans ce choix.
         for conf in chosen_catalogs():
@@ -1898,6 +1942,7 @@ class Windows(Source):
                           state="u" if ver and latest and ver != latest else ("i" if ver else "a"),
                           featured=bool(a.get("featured")))
                 app.installer, app.provider = a["installer"], prov.name
+                app.tested = prov.id == "valides"
                 out.append(app)
         return out
 
@@ -1906,6 +1951,14 @@ class Windows(Source):
         if app is None:
             return 2
         inst = app.installer
+        # Confirmation avant tout téléchargement, Annuler par défaut (#1517).
+        progress(None, tr("ed_waiting"))
+        notes = ("win_tested", "win_runtime") if getattr(app, "tested", False) else ("win_runtime",)
+        if not confirm({"name": app.name, "publisher": app.publisher or app.provider, "licence": ""},
+                       {"version": app.available or "?", "source": inst["url"], "sha256": inst.get("sha256", ""),
+                        "sha512": inst.get("sha512", ""), "size": inst.get("size", "")},
+                       update=bool(app.version), notes=notes):
+            return 9
         progress(5, tr("download", name=app.name))
         data = fetch(inst["url"], 600, 4 << 30)
         if inst.get("sha512"):
