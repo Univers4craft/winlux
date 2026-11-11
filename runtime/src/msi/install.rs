@@ -1163,7 +1163,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     let mut ini_dirs = Vec::new();
     super::extra::ini_files(db, &ctx, &comps, &mut manifest, &mut ini_dirs);
     manifest.dirs.extend(ini_dirs);
-    super::actions::services(
+    let services_to_start = super::actions::services(
         db,
         &ctx,
         &comps,
@@ -1296,6 +1296,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         if !opts.admin && has_exe_actions(db) {
             let _ = std::fs::copy(msi, cached_package(&code));
         }
+    }
+    if !opts.admin {
+        super::actions::start_services(&services_to_start, log);
     }
     log.log(&format!("{name} est installé."));
     Ok(())
