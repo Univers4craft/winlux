@@ -1473,8 +1473,10 @@ unsafe fn process_entry_a(snap: usize, entry: *mut u8, first: bool) -> i32 {
     }
     std::ptr::copy_nonoverlapping(w.as_ptr().add(4), entry.add(4), 40);
     let name: Vec<u16> = w[44..44 + 520]
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .take_while(|&c| c != 0)
         .collect();
     let mut a = crate::dlls::encode_ansi(&String::from_utf16_lossy(&name));
