@@ -681,17 +681,17 @@ pub extern "win64" fn get_class_name_a(_hwnd: usize, _buf: *mut u8, _max: i32) -
 pub extern "win64" fn get_class_name_w(_hwnd: usize, _buf: *mut u16, _max: i32) -> i32 {
     0
 }
-pub extern "win64" fn get_class_long_a(_hwnd: usize, _index: i32) -> usize {
-    0
+pub extern "win64" fn get_class_long_a(hwnd: usize, index: i32) -> usize {
+    crate::dlls::user32::class_value(hwnd, index).unwrap_or(0)
 }
-pub extern "win64" fn get_class_long_w(_hwnd: usize, _index: i32) -> usize {
-    0
+pub extern "win64" fn get_class_long_w(hwnd: usize, index: i32) -> usize {
+    crate::dlls::user32::class_value(hwnd, index).unwrap_or(0)
 }
-pub extern "win64" fn get_class_long_ptr_a(_hwnd: usize, _index: i32) -> usize {
-    0
+pub extern "win64" fn get_class_long_ptr_a(hwnd: usize, index: i32) -> usize {
+    crate::dlls::user32::class_value(hwnd, index).unwrap_or(0)
 }
-pub extern "win64" fn get_class_long_ptr_w(_hwnd: usize, _index: i32) -> usize {
-    0
+pub extern "win64" fn get_class_long_ptr_w(hwnd: usize, index: i32) -> usize {
+    crate::dlls::user32::class_value(hwnd, index).unwrap_or(0)
 }
 pub extern "win64" fn set_class_long_ptr_a(_hwnd: usize, _index: i32, _new: isize) -> usize {
     0
