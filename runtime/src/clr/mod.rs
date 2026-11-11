@@ -78,6 +78,10 @@ pub fn execute_assembly_at(
     let interp_ptr: *const Interpreter = &*interp;
     threads::register(interp_ptr);
     interp.link_types();
+    // Relevé d'un coup des méthodes .NET non servies (#1922).
+    if let Some(dest) = std::env::var_os("WINLUX_CLR_MANQUANTS") {
+        interp.report_missing(&dest.to_string_lossy());
+    }
 
     let row = Token(entry).rid();
     let sig = interp.assembly.get_method_def(row).signature;
