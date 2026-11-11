@@ -1514,6 +1514,7 @@ pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
 // ── GdiFlush / GdiSetBatchLimit ────────────────────────────────────
 
 pub extern "win64" fn gdi_flush() -> i32 {
+    gui::flush_all_paint_over();
     1
 }
 pub extern "win64" fn gdi_set_batch_limit(_limit: u32) -> u32 {
