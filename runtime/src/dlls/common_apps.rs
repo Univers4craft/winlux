@@ -1591,6 +1591,10 @@ unsafe extern "win64" fn get_role_text_w(_role: u32, buf: *mut u16, cap: u32) ->
 /// Numéros d'ordre publiés des fonctions importées sans nom
 /// (comctl32 v6, shell32).
 pub const ORDINALS: &[(&str, u16, &str)] = &[
+    ("winspool", 204, "SetDefaultPrinterW"),
+    ("shlwapi", 515, "SHGetViewStatePropertyBag"),
+    ("oleaut32", 185, "VariantTimeToSystemTime"),
+    ("oleaut32", 314, "VarBstrCmp"),
     ("comctl32", 16, "CreateUpDownControl"),
     ("comctl32", 17, "InitCommonControls"),
     ("comctl32", 344, "TaskDialog"),

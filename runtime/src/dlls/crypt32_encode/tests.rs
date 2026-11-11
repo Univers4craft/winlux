@@ -267,7 +267,7 @@ fn condensat_et_certificat_auto_signe() {
             0,
         );
         assert_ne!(ctx, 0);
-        let c = &*(ctx as *const crate::dlls::crypt32::CertContext);
+        let c = crate::dlls::crypt32::context(ctx);
         let der = std::slice::from_raw_parts(c.der, c.der_len as usize);
         let info = &*c.info;
         let subj = std::slice::from_raw_parts(info.subject.pb, info.subject.cb as usize);
@@ -286,6 +286,14 @@ fn condensat_et_certificat_auto_signe() {
             ),
             Some(true)
         );
+        // Disposition x86 (#1667) : CERT_CONTEXT de 20 octets, CERT_INFO de 112.
+        let (v, i) = crate::dlls::crypt32::x86_view(ctx);
+        assert_eq!(v[0], c.encoding);
+        assert_eq!(v[2], c.der_len);
+        assert_eq!(i[0], info.version);
+        assert_eq!(i[12], info.subject.cb);
+        assert_eq!(i[26], info.ext_count);
+        assert_eq!(std::mem::size_of_val(&i), 112);
         crate::dlls::crypt32::CertFreeCertificateContext(ctx);
     }
 }

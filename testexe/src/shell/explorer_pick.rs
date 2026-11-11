@@ -12,9 +12,13 @@
 
 use super::*;
 
-const MAX_FILTERS: usize = 16;
-const DESC_LEN: usize = 96;
-const PAT_LEN: usize = 160;
+/// Types de fichiers retenus : IrfanView en passe plus de 16, avec des
+/// motifs de plus de 1 000 caractères (« Tous les formats ») (#1690).
+const MAX_FILTERS: usize = 96;
+const DESC_LEN: usize = 128;
+const PAT_LEN: usize = 2048;
+/// Lignes visibles de la liste des types ; au-delà elle défile.
+const LIST_ROWS: usize = 12;
 pub(super) const PANEL_H: i32 = 96;
 const ROW_H: i32 = 28;
 
@@ -57,6 +61,11 @@ static mut RESULT: [u16; PATH_LEN + NAME_LEN + 2] = [0; PATH_LEN + NAME_LEN + 2]
 static mut SIG: (usize, usize, u16, u8) = (usize::MAX, 0, 0, 0);
 static mut SIG_READY: bool = false;
 static mut LIST_OPEN: bool = false;
+/// Premier type affiché dans la liste ouverte.
+static mut LIST_TOP: usize = 0;
+/// Une variable d'environnement tient jusqu'à 32 767 caractères.
+static mut ENV_W: [u16; 32768] = [0; 32768];
+static mut FILTERS_TEXT: [u8; 32768] = [0; 32768];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ask {
@@ -81,7 +90,10 @@ unsafe fn env(name: &core::ffi::CStr, out: &mut [u8]) -> Option<usize> {
     for (i, &c) in name.to_bytes().iter().enumerate().take(31) {
         wname[i] = c as u16;
     }
-    let mut w = [0u16; 2048];
+    // Tampon statique de 32 768 caractères : la liste des types d'un
+    // programme comme IrfanView dépasse largement 2 048 caractères, et elle
+    // était alors ignorée au profit de « Tous les fichiers » (#1690).
+    let w = &mut *core::ptr::addr_of_mut!(ENV_W);
     let n = GetEnvironmentVariableW(wname.as_ptr(), w.as_mut_ptr(), w.len() as u32) as usize;
     if n == 0 || n >= w.len() {
         return None;
@@ -134,8 +146,9 @@ pub(super) unsafe fn init() {
         DEFEXT[..DEFEXT_LEN].copy_from_slice(&e[..DEFEXT_LEN]);
     }
     NFILTERS = 0;
-    if let Some(n) = env(c"WINLUX_PICK_FILTERS", &mut buf) {
-        for line in buf[..n].split(|&c| c == b'\n') {
+    let text = &mut *core::ptr::addr_of_mut!(FILTERS_TEXT);
+    if let Some(n) = env(c"WINLUX_PICK_FILTERS", text) {
+        for line in text[..n].split(|&c| c == b'\n') {
             if NFILTERS == MAX_FILTERS {
                 break;
             }
@@ -164,6 +177,8 @@ pub(super) unsafe fn init() {
     if let Some(n) = env(c"WINLUX_PICK_FILTER", &mut buf) {
         CUR = (num(&buf[..n]) as usize).saturating_sub(1).min(NFILTERS - 1);
     }
+    LIST_TOP = 0;
+    keep_visible();
     FOCUS = Focus::FileName;
     // Les programmes lancés depuis la boîte (Nouvelle fenêtre, Terminal…)
     // ne doivent pas devenir à leur tour une boîte Ouvrir.
@@ -642,8 +657,24 @@ fn layout(s: &Rect) -> Layout {
     }
 }
 
+/// Lignes de la liste ouverte.
+fn list_rows() -> usize {
+    unsafe { NFILTERS }.min(LIST_ROWS)
+}
+
+/// Fait défiler la liste pour que le type courant soit visible.
+unsafe fn keep_visible() {
+    let rows = list_rows();
+    if CUR < LIST_TOP {
+        LIST_TOP = CUR;
+    } else if CUR >= LIST_TOP + rows {
+        LIST_TOP = CUR + 1 - rows;
+    }
+    LIST_TOP = LIST_TOP.min(NFILTERS - rows);
+}
+
 fn list_rect(l: &Layout) -> Rect {
-    let h = unsafe { NFILTERS } as i32 * ROW_H + 8;
+    let h = list_rows() as i32 * ROW_H + 8;
     rect(l.kind.left, l.kind.top - h - 2, l.kind.right, l.kind.top - 2)
 }
 
@@ -716,8 +747,9 @@ pub(super) unsafe fn draw(g: &mut Gfx, s: &Rect) {
         let r = list_rect(&l);
         round_rect(g.hdc, g.b, r.left - 1, r.top - 1, r.right + 1, r.bottom + 1, 7, p.border);
         round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.surface);
-        for i in 0..NFILTERS {
-            let row = rect(r.left + 4, r.top + 4 + i as i32 * ROW_H, r.right - 4, r.top + 4 + (i as i32 + 1) * ROW_H);
+        for k in 0..list_rows() {
+            let i = LIST_TOP + k;
+            let row = rect(r.left + 4, r.top + 4 + k as i32 * ROW_H, r.right - 4, r.top + 4 + (k as i32 + 1) * ROW_H);
             if i == CUR && TYPED.len == 0 {
                 round_rect(g.hdc, g.b, row.left, row.top, row.right, row.bottom, 4, p.selected);
             } else if hovered(&row) {
@@ -793,12 +825,18 @@ pub(super) unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame, status: &Rect) 
         return true;
     }
     let l = layout(status);
+    // Molette sur la liste ouverte : elle défile (#1690).
+    if let (true, Mouse::Wheel(d)) = (LIST_OPEN, ev) {
+        let max = NFILTERS - list_rows();
+        LIST_TOP = if d > 0 { LIST_TOP.saturating_sub(3) } else { (LIST_TOP + 3).min(max) };
+        return true;
+    }
     if LIST_OPEN && down {
         let r = list_rect(&l);
         LIST_OPEN = false;
         if inside(&r, x, y) {
-            let i = ((y - r.top - 4) / ROW_H).clamp(0, NFILTERS as i32 - 1) as usize;
-            CUR = i;
+            let k = ((y - r.top - 4) / ROW_H).clamp(0, list_rows() as i32 - 1) as usize;
+            CUR = (LIST_TOP + k).min(NFILTERS - 1);
             TYPED.len = 0;
             let p = pane();
             rebuild_view(p);
@@ -845,6 +883,7 @@ pub(super) unsafe fn key(vk: u32, ch: u16) -> bool {
             0x28 => CUR = (CUR + 1).min(NFILTERS - 1),
             _ => {}
         }
+        keep_visible();
         if matches!(vk, 0x26 | 0x28) {
             TYPED.len = 0;
             rebuild_view(pane());

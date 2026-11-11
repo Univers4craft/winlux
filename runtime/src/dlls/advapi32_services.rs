@@ -1857,6 +1857,11 @@ pub fn releve_exports() -> crate::dlls::Exports {
         "QueryServiceConfig2W" => fn query_service_config2_w,
         "ChangeServiceConfigW" => fn change_service_config_w,
         "ChangeServiceConfig2W" => fn change_service_config2_w,
+        "ChangeServiceConfigA" => fn change_service_config_a,
+        "ChangeServiceConfig2A" => fn change_service_config2_a,
+        "QueryServiceConfigA" => fn query_service_config_a,
+        "EnumDependentServicesA" => fn enum_dependent_services_a,
+        "ControlServiceExW" => fn control_service_ex_w,
         "EnumServicesStatusW" => fn enum_services_status_w,
         "EnumServicesStatusExW" => fn enum_services_status_ex_w,
         "EnumDependentServicesW" => fn enum_dependent_services_w,
@@ -1868,6 +1873,174 @@ pub fn releve_exports() -> crate::dlls::Exports {
         "QueryServiceObjectSecurity" => fn query_service_object_security,
         "SetServiceObjectSecurity" => fn set_service_object_security,
     }
+}
+
+// ── Variantes A et ControlServiceExW (driverinstalltool_64 de Corsair) ──
+
+/// Chaîne ANSI de l'appli en UTF-16 terminée, ou None pour NULL.
+unsafe fn a_to_w(p: *const u8) -> Option<Vec<u16>> {
+    (!p.is_null()).then(|| crate::dlls::cstr(p).encode_utf16().chain(Some(0)).collect())
+}
+
+fn ptr_or_null(v: &Option<Vec<u16>>) -> *const u16 {
+    v.as_ref().map_or(std::ptr::null(), |w| w.as_ptr())
+}
+
+/// ChangeServiceConfigA : chaînes converties, puis ChangeServiceConfigW.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn change_service_config_a(
+    service: usize,
+    kind: u32,
+    start: u32,
+    error_control: u32,
+    path: *const u8,
+    group: *const u8,
+    tag: *mut u32,
+    _deps: *const u8,
+    account: *const u8,
+    password: *const u8,
+    display: *const u8,
+) -> i32 {
+    let (path, group, account, password, display) = (
+        a_to_w(path),
+        a_to_w(group),
+        a_to_w(account),
+        a_to_w(password),
+        a_to_w(display),
+    );
+    change_service_config_w(
+        service,
+        kind,
+        start,
+        error_control,
+        ptr_or_null(&path),
+        ptr_or_null(&group),
+        tag,
+        std::ptr::null(),
+        ptr_or_null(&account),
+        ptr_or_null(&password),
+        ptr_or_null(&display),
+    )
+}
+
+/// ChangeServiceConfig2A : mêmes niveaux que la variante W, dont le
+/// contenu n'est pas relu.
+pub unsafe extern "win64" fn change_service_config2_a(
+    service: usize,
+    level: u32,
+    info: usize,
+) -> i32 {
+    change_service_config2_w(service, level, info)
+}
+
+/// QueryServiceConfigA : QUERY_SERVICE_CONFIGA, mêmes décalages que la
+/// variante W, chaînes en ANSI.
+pub unsafe extern "win64" fn query_service_config_a(
+    service: usize,
+    out: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if needed.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let mut probe = 0u32;
+    query_service_config_w(service, std::ptr::null_mut(), 0, &mut probe);
+    if probe == 0 {
+        return 0; // erreur déjà posée (poignée, service inconnu)
+    }
+    let mut wide = vec![0u64; (probe as usize).div_ceil(8)];
+    let wbuf = wide.as_mut_ptr() as *mut u8;
+    if query_service_config_w(service, wbuf, probe, &mut probe) == 0 {
+        return 0;
+    }
+    let ptr = crate::wow32::pointer_size();
+    let header = if ptr == 4 { 36 } else { 64 };
+    let slots: [usize; 5] = if ptr == 4 {
+        [12, 16, 24, 28, 32]
+    } else {
+        [16, 24, 40, 48, 56]
+    };
+    let read_slot = |slot: usize| -> usize {
+        if ptr == 4 {
+            std::ptr::read_unaligned(wbuf.add(slot) as *const u32) as usize
+        } else {
+            std::ptr::read_unaligned(wbuf.add(slot) as *const usize)
+        }
+    };
+    // Les dépendances (emplacement 2) sont une liste double-zéro, vide ici.
+    let texts: Vec<Vec<u8>> = slots
+        .iter()
+        .enumerate()
+        .map(|(i, &slot)| {
+            if i == 2 {
+                vec![0, 0]
+            } else {
+                let mut a =
+                    crate::dlls::encode_ansi(&crate::dlls::wstr(read_slot(slot) as *const u16));
+                a.push(0);
+                a
+            }
+        })
+        .collect();
+    let total = header + texts.iter().map(Vec::len).sum::<usize>();
+    *needed = total as u32;
+    if out.is_null() || (size as usize) < total {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(wbuf, out, header);
+    let mut at = header;
+    for (slot, text) in slots.iter().zip(texts.iter()) {
+        let p = out.add(at);
+        std::ptr::copy_nonoverlapping(text.as_ptr(), p, text.len());
+        if ptr == 4 {
+            std::ptr::write_unaligned(out.add(*slot) as *mut u32, p as usize as u32);
+        } else {
+            std::ptr::write_unaligned(out.add(*slot) as *mut usize, p as usize);
+        }
+        at += text.len();
+    }
+    1
+}
+
+/// EnumDependentServicesA : comme la variante W, aucun service de Winlux
+/// ne déclare de dépendance.
+pub unsafe extern "win64" fn enum_dependent_services_a(
+    service: usize,
+    state: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+) -> i32 {
+    enum_dependent_services_w(service, state, buf, size, needed, returned)
+}
+
+/// ControlServiceExW(hService, dwControl, dwInfoLevel, pControlParams) :
+/// niveau 1, SERVICE_CONTROL_STATUS_REASON_PARAMSW { dwReason;
+/// pszComment; SERVICE_STATUS_PROCESS ServiceStatus } (statut à 16 en
+/// x64, 8 en x86).
+pub unsafe extern "win64" fn control_service_ex_w(
+    service: usize,
+    control: u32,
+    level: u32,
+    params: *mut u8,
+) -> i32 {
+    if level != 1 {
+        return fail(ERROR_INVALID_LEVEL);
+    }
+    if params.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let at = if crate::wow32::pointer_size() == 4 {
+        8
+    } else {
+        16
+    };
+    // SERVICE_STATUS (28 octets) puis dwProcessId et dwServiceFlags.
+    let status = params.add(at);
+    std::ptr::write_bytes(status, 0, 36);
+    control_service(service, control, status)
 }
 
 pub fn exports() -> crate::dlls::Exports {
@@ -1972,8 +2145,27 @@ mod tests {
             unsafe { std::ptr::read_unaligned(status.as_ptr().add(4) as *const u32) },
             SERVICE_RUNNING
         );
+        // QueryServiceConfigA : chaînes ANSI, commande relue.
+        let mut need = 0u32;
         assert_eq!(
-            unsafe { control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr()) },
+            unsafe { query_service_config_a(service, std::ptr::null_mut(), 0, &mut need) },
+            0
+        );
+        let mut cfg = vec![0u64; (need as usize).div_ceil(8)];
+        let cfg_ptr = cfg.as_mut_ptr() as *mut u8;
+        assert_eq!(
+            unsafe { query_service_config_a(service, cfg_ptr, need, &mut need) },
+            1
+        );
+        let bin = unsafe { std::ptr::read_unaligned(cfg_ptr.add(16) as *const usize) };
+        assert_eq!(
+            unsafe { crate::dlls::cstr(bin as *const u8) },
+            "/bin/sleep 30"
+        );
+        // ControlServiceExW, niveau 1 : statut à 16 octets en x64.
+        let mut params = [0u8; 16 + 36];
+        assert_eq!(
+            unsafe { control_service_ex_w(service, SERVICE_CONTROL_STOP, 1, params.as_mut_ptr()) },
             1
         );
         assert_eq!(unsafe { delete_service(service) }, 1);
