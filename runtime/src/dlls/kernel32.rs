@@ -4927,7 +4927,9 @@ fn share_named(
             let Some(obj) = obj else {
                 return false;
             };
-            if f.set_len(4096).is_err() {
+            // Page réservée avant la projection : sur un tmpfs plein, la
+            // première écriture plantait au lieu d'échouer (#1905).
+            if !crate::dlls::inherit::reserve_page(std::os::fd::AsRawFd::as_raw_fd(f)) {
                 return false;
             }
             let Some(w) = named::dup(f).and_then(SharedWord::map) else {
