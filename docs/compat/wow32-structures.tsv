@@ -1,7 +1,7 @@
 # Structures #[repr(C)] à champs de taille pointeur dans runtime/src/dlls (#232).
 # Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
 # fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
-audio_com.rs	Iface	a-verifier	
+audio_com.rs	Iface	x86	interface WASAPI (mmdevapi) : mandataire x86 décrit dans wow32/com.rs (IMMDeviceEnumerator…) ; wasapi32.c
 cabinet_lz.rs	FdiNotification	a-verifier	
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
 comdlg32_ui.rs	DrawItem	a-verifier	
