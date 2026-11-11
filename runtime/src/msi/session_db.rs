@@ -43,8 +43,9 @@ fn with_db<T>(f: impl FnOnce(&mut Database) -> T) -> Option<T> {
     let mut g = DB.lock().unwrap_or_else(|e| e.into_inner());
     let db = g.get_or_insert_with(|| {
         let path = session::property("OriginalDatabase")?;
-        let data = std::fs::read(crate::paths::to_linux(&path)).ok()?;
-        Database::parse(&data).ok()
+        // Lu à la demande : un paquet de 800 Mo ne tient pas dans la
+        // mémoire basse du processus x86 de l'action (#1642).
+        Database::open_tables(&crate::paths::to_linux(&path)).ok()
     });
     db.as_mut().map(f)
 }
@@ -1105,6 +1106,31 @@ mod tests {
             stream_of(&db, "Binary", hits[0].origin[0]).unwrap(),
             b"MZ\x90\0"
         );
+    }
+
+    #[test]
+    fn base_lue_sans_charger_le_paquet() {
+        // Le paquet est lu à la demande dans le fichier : mêmes tables et
+        // flux que la lecture en mémoire (#1642).
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/msi/testdata/sample.msi");
+        let full = Database::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let lazy = Database::open_tables(&path).unwrap();
+        assert_eq!(full.tables.len(), lazy.tables.len());
+        assert_eq!(full.rows("File").count(), lazy.rows("File").count());
+        assert_eq!(full.template, lazy.template);
+        let mut a: Vec<_> = full.streams.keys().collect();
+        let mut b: Vec<_> = lazy.streams.keys().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        // Le filtre laisse sur le disque les flux qui ne sont pas des tables
+        // (cabinet intégré).
+        let tables_only =
+            crate::msi::cfb::Compound::open(&path, &|n, _| n.starts_with('!')).unwrap();
+        assert!(tables_only.streams.contains_key("!File"));
+        assert!(tables_only.streams.keys().all(|n| n.starts_with('!')));
+        assert!(full.streams.keys().any(|n| !n.starts_with('!')));
     }
 
     #[test]
