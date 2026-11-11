@@ -778,7 +778,7 @@ pub unsafe extern "win64" fn GetFileSecurityA(
 unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
     let control = std::ptr::read_unaligned(sd.add(2) as *const u16);
     if control & SE_SELF_RELATIVE == 0 {
-        return std::ptr::read_unaligned(sd.add(field * 2) as *const *mut u8);
+        return read_abs_slot(sd, field);
     }
     let off = std::ptr::read_unaligned(sd.add(field) as *const u32) as usize;
     if off == 0 {
@@ -994,8 +994,51 @@ const SE_SELF_RELATIVE: u16 = 0x8000;
 const SE_DACL_PRESENT: u16 = 0x4;
 const SE_DACL_DEFAULTED: u16 = 0x8;
 const SE_OWNER_DEFAULTED: u16 = 0x1;
-/// Taille d'un SECURITY_DESCRIPTOR absolu en x64.
-const ABSOLUTE_SD_SIZE: usize = 40;
+/// Taille d'un SECURITY_DESCRIPTOR absolu : 40 octets en x64, 20 pour un
+/// programme x86 (pointeurs sur 4 octets). Écrire 40 octets dans la
+/// structure x86, souvent sur la pile, écrasait les variables voisines :
+/// SteamService.exe abandonnait l'installation du service (#1881).
+fn absolute_sd_size(ptr: usize) -> usize {
+    if ptr == 4 {
+        20
+    } else {
+        40
+    }
+}
+
+/// Case d'un descripteur absolu pour la partie `field` (décalage
+/// auto-relatif : 4 propriétaire, 8 groupe, 12 SACL, 16 DACL) : x64 aux
+/// décalages 8, 16, 24, 32 ; x86 aux mêmes décalages que l'auto-relatif.
+fn abs_slot(field: usize, ptr: usize) -> usize {
+    if ptr == 4 {
+        field
+    } else {
+        field * 2
+    }
+}
+
+unsafe fn read_abs_slot(sd: *const u8, field: usize) -> *mut u8 {
+    let ptr = crate::wow32::pointer_size();
+    let at = sd.add(abs_slot(field, ptr));
+    if ptr == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize as *mut u8
+    } else {
+        std::ptr::read_unaligned(at as *const *mut u8)
+    }
+}
+
+unsafe fn write_abs_slot(sd: *mut u8, field: usize, value: *mut u8) {
+    write_abs_slot_for(sd, field, value, crate::wow32::pointer_size());
+}
+
+unsafe fn write_abs_slot_for(sd: *mut u8, field: usize, value: *mut u8, ptr: usize) {
+    let at = sd.add(abs_slot(field, ptr));
+    if ptr == 4 {
+        std::ptr::write_unaligned(at as *mut u32, value as usize as u32);
+    } else {
+        std::ptr::write_unaligned(at as *mut *mut u8, value);
+    }
+}
 
 /// InitializeSecurityDescriptor : descripteur absolu vide (révision 1).
 pub unsafe extern "win64" fn InitializeSecurityDescriptor(sd: *mut u8, revision: u32) -> i32 {
@@ -1003,7 +1046,7 @@ pub unsafe extern "win64" fn InitializeSecurityDescriptor(sd: *mut u8, revision:
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    std::ptr::write_bytes(sd, 0, ABSOLUTE_SD_SIZE);
+    std::ptr::write_bytes(sd, 0, absolute_sd_size(crate::wow32::pointer_size()));
     *sd = 1;
     1
 }
@@ -1038,8 +1081,9 @@ pub unsafe extern "win64" fn SetSecurityDescriptorDacl(
         }
     }
     std::ptr::write_unaligned(control, c);
-    std::ptr::write_unaligned(
-        sd.add(32) as *mut *mut u8,
+    write_abs_slot(
+        sd,
+        16,
         if present != 0 {
             dacl
         } else {
@@ -1062,7 +1106,7 @@ pub unsafe extern "win64" fn SetSecurityDescriptorOwner(
         c |= SE_OWNER_DEFAULTED;
     }
     std::ptr::write_unaligned(control, c);
-    std::ptr::write_unaligned(sd.add(8) as *mut *mut u8, owner);
+    write_abs_slot(sd, 4, owner);
     1
 }
 
@@ -1074,7 +1118,7 @@ pub unsafe extern "win64" fn SetSecurityDescriptorGroup(
     if absolute_sd(sd).is_none() {
         return 0;
     }
-    std::ptr::write_unaligned(sd.add(16) as *mut *mut u8, group);
+    write_abs_slot(sd, 8, group);
     1
 }
 

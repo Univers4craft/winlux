@@ -370,3 +370,26 @@ fn comptes_bien_connus_resolus() {
         assert_eq!(u, use_);
     }
 }
+
+/// SECURITY_DESCRIPTOR absolu d'un programme x86 : 20 octets, pointeurs sur
+/// 4 octets aux décalages 4, 8, 12, 16. Rien n'est écrit au-delà
+/// (SteamService.exe, #1881).
+#[test]
+fn descripteur_absolu_x86_tient_dans_20_octets() {
+    assert_eq!((absolute_sd_size(4), absolute_sd_size(8)), (20, 40));
+    assert_eq!(
+        [4, 8, 12, 16].map(|f| abs_slot(f, 4)),
+        [4, 8, 12, 16],
+        "x86 : même place que l'auto-relatif"
+    );
+    assert_eq!([4, 8, 12, 16].map(|f| abs_slot(f, 8)), [8, 16, 24, 32]);
+    let mut buf = [0xAAu8; 28];
+    unsafe {
+        write_abs_slot_for(buf.as_mut_ptr(), 16, 0x1234_5678usize as *mut u8, 4);
+    }
+    assert_eq!(&buf[16..20], &0x1234_5678u32.to_le_bytes());
+    assert!(
+        buf[20..].iter().all(|&b| b == 0xAA),
+        "rien après la DACL x86"
+    );
+}
