@@ -13,10 +13,12 @@ pub mod gc;
 pub mod il;
 pub mod interop;
 pub mod metadata;
+pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
 pub mod reflection;
 pub mod resolve;
+pub mod tableaux;
 pub mod tables;
 pub mod threads;
 pub mod types;
@@ -144,14 +146,15 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
             .type_methods(row)
             .map(|m| {
                 let md = assembly.get_method_def(m);
+                let params =
+                    metadata::decode_method_sig(assembly.get_blob(md.signature)).param_types;
                 types::MethodInfo {
                     name: assembly.get_string(md.name).to_string(),
                     assembly: asm_index,
                     token: Token::new(TableId::MethodDef, m).0,
                     is_virtual: md.is_virtual(),
-                    param_count: metadata::decode_method_sig(assembly.get_blob(md.signature))
-                        .param_types
-                        .len(),
+                    param_count: params.len(),
+                    params,
                 }
             })
             .collect();

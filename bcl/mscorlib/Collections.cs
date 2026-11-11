@@ -447,6 +447,41 @@ namespace System.Collections.Generic
             _version++;
         }
 
+        public void Sort()
+        {
+            Sort((IComparer<T>)null);
+        }
+
+        public void Sort(IComparer<T> comparer)
+        {
+            IComparer<T> c = comparer != null ? comparer : Comparer<T>.Default;
+            Sort((x, y) => c.Compare(x, y));
+        }
+
+        public int BinarySearch(T item)
+        {
+            return BinarySearch(item, null);
+        }
+
+        public int BinarySearch(T item, IComparer<T> comparer)
+        {
+            IComparer<T> c = comparer != null ? comparer : Comparer<T>.Default;
+            int lo = 0;
+            int hi = _size - 1;
+            while (lo <= hi)
+            {
+                int mid = lo + ((hi - lo) >> 1);
+                int order = c.Compare(_items[mid], item);
+                if (order == 0)
+                    return mid;
+                if (order < 0)
+                    lo = mid + 1;
+                else
+                    hi = mid - 1;
+            }
+            return ~lo;
+        }
+
         public T[] ToArray()
         {
             T[] array = new T[_size];

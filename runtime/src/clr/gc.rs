@@ -176,6 +176,14 @@ pub fn with_gc<T>(f: impl FnOnce(&mut GcHeap) -> T) -> T {
 }
 
 /// Type d'un objet managé, ou `None` si `ptr` n'est pas un objet du tas.
+/// Type des éléments d'un tableau créé par `alloc_array_of` (0 : références).
+pub fn array_elem_type(ptr: *mut u8) -> u32 {
+    if ptr.is_null() {
+        return 0;
+    }
+    unsafe { (*(ptr.sub(HEADER) as *const ObjHeader)).extra }
+}
+
 pub fn type_of(ptr: *mut u8) -> Option<u32> {
     if ptr.is_null() || !with_gc(|gc| gc.is_object(ptr as usize)) {
         return None;

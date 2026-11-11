@@ -41,27 +41,27 @@ namespace System
     public abstract class Enum : ValueType { }
     public struct Void { }
 
-    public struct Boolean { private bool m_value; }
-    public struct SByte { private sbyte m_value; }
-    public struct Byte { private byte m_value; }
-    public struct Int16 { private short m_value; }
-    public struct UInt16 { private ushort m_value; }
-    public struct Int32
+    public partial struct Boolean { private bool m_value; }
+    public partial struct SByte { private sbyte m_value; }
+    public partial struct Byte { private byte m_value; }
+    public partial struct Int16 { private short m_value; }
+    public partial struct UInt16 { private ushort m_value; }
+    public partial struct Int32
     {
         public const int MaxValue = 0x7FFFFFFF;
         public const int MinValue = -MaxValue - 1;
         private int m_value;
     }
-    public struct UInt32 { private uint m_value; }
-    public struct Int64
+    public partial struct UInt32 { private uint m_value; }
+    public partial struct Int64
     {
         public const long MaxValue = 0x7FFFFFFFFFFFFFFF;
         public const long MinValue = -MaxValue - 1;
         private long m_value;
     }
-    public struct UInt64 { private ulong m_value; }
-    public struct Single { private float m_value; }
-    public struct Double
+    public partial struct UInt64 { private ulong m_value; }
+    public partial struct Single { private float m_value; }
+    public partial struct Double
     {
         private double m_value;
 
@@ -73,7 +73,7 @@ namespace System
     public unsafe struct IntPtr { private void* m_value; }
     public unsafe struct UIntPtr { private void* m_value; }
 
-    public struct Char
+    public partial struct Char
     {
         private char m_value;
 
@@ -96,7 +96,7 @@ namespace System
         }
     }
 
-    public sealed class String
+    public sealed partial class String
     {
         public static readonly string Empty = "";
 
@@ -163,7 +163,7 @@ namespace System
         }
     }
 
-    public abstract class Array
+    public abstract partial class Array
     {
         public extern int Length
         {

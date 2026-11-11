@@ -603,13 +603,15 @@ impl Interpreter {
             return;
         };
         let name = self.method_name(token);
-        let argc = self.get_method_sig(token).param_types.len();
+        let params = self.get_method_sig(token).param_types;
+        let argc = params.len();
         let iface = match target {
             Target::Managed(asm, row) => self.interface_of(*asm, *row),
             _ => None,
         };
         let found = types::with_types(|reg| {
-            let (asm, tok, decl) = reg.find_override_of(type_id, &name, argc, iface.as_deref())?;
+            let (asm, tok, decl) =
+                reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
             Some((
                 asm,
                 tok,
@@ -662,6 +664,9 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.reflection_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.array_call(namespace, class, name, &args) {
             return r;
         }
         match (namespace, class, name) {
@@ -1478,10 +1483,23 @@ impl Interpreter {
                     } else {
                         let name = self.method_name(token);
                         let argc = sig.param_types.len();
+                        let iface = match &callee.target {
+                            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+                            _ => None,
+                        };
+                        // Seule une redéfinition de la méthode appelée (même
+                        // signature) compte : Int32.Equals(int) ne remplace
+                        // pas Object.Equals(object) (#1956).
                         let own = types::with_types(|reg| {
                             let t = reg.get(ct)?;
-                            let (asm, tok) = reg.find_own_method(ct, &name, argc)?;
-                            Some((asm, tok, t.type_args.clone()))
+                            let (asm, tok, decl) = reg.find_override_of(
+                                ct,
+                                &name,
+                                argc,
+                                iface.as_deref(),
+                                &sig.param_types,
+                            )?;
+                            (decl == ct).then(|| (asm, tok, t.type_args.clone()))
                         });
                         if let Some((asm, tok, t)) = own {
                             // Méthode du type valeur lui-même : `this` reste
@@ -1536,6 +1554,15 @@ impl Interpreter {
                 let f = frame!();
                 let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
                 let mut args = f.eval_stack.split_off(split);
+                // Une chaîne est immuable et de taille variable : son
+                // constructeur rend la chaîne entière (#1956).
+                if type_id == types::TYPE_STRING {
+                    let made = bcl::new_string(&args, &sig.param_types);
+                    push!(made.map_err(|kind| {
+                        exception(kind, "String::.ctor : arguments refusés")
+                    })?);
+                    return Ok(StepResult::Continue);
+                }
                 let kind = self.kind_of_type(type_id);
                 let obj = if kind == Kind::Ref {
                     self.ensure_layout(type_id);
