@@ -2105,6 +2105,23 @@ unsafe fn create_file_opened(
         None => path,
     };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
+    // Appareil virtuel d'un pilote constructeur (#1533) : \\.\NomDuPilote.
+    if crate::dlls::vdev::is_virtual(path) {
+        return match crate::dlls::vdev::open(path) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(2);
+                usize::MAX
+            }
+        };
+    }
     if crate::dlls::hid::parse_path(path).is_some() {
         return match crate::dlls::hid::open_path(path, access) {
             Ok(f) => {

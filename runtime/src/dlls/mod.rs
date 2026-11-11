@@ -236,6 +236,7 @@ pub mod usp10;
 pub mod uxtheme;
 pub mod v4l2;
 pub mod va_bindings;
+pub mod vdev;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;

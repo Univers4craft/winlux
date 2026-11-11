@@ -7,8 +7,9 @@
 //! (`SetDataFormat`, par ex. `c_dfDIJoystick2`) est interprété de façon
 //! générique, objet par objet, comme le fait DirectInput.
 
-use super::comobj::{self, guid, Guid, VTable, E_NOINTERFACE, E_POINTER, IID_IUNKNOWN, S_OK};
+use super::comobj::{self, guid, Guid, E_NOINTERFACE, E_POINTER, IID_IUNKNOWN, S_OK};
 use super::evdev::{self, Device, Snapshot};
+use super::legacy_com::{call_back, get_ptr, ptr_size, vtable_sig, x86};
 use super::lock;
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -818,7 +819,6 @@ unsafe extern "win64" fn d_get_capabilities(this: *mut DevObj, caps: *mut u32) -
     }
     DI_OK
 }
-type EnumObjCb = unsafe extern "win64" fn(*const u8, *mut c_void) -> i32;
 unsafe extern "win64" fn d_enum_objects(
     this: *mut DevObj,
     cb: usize,
@@ -838,12 +838,11 @@ unsafe extern "win64" fn d_enum_objects(
             .map(|(i, o)| (o.clone(), s.offset_of(i)))
             .collect()
     };
-    let cb: EnumObjCb = std::mem::transmute(cb);
     let size = if d.wide { 576 } else { 316 };
     let mut buf = vec![0u8; size];
     for (o, ofs) in items {
         fill_object(buf.as_mut_ptr(), size as u32, &o, ofs, d.wide);
-        if cb(buf.as_ptr(), ctx) == 0 {
+        if call_back(cb, &[buf.as_ptr() as usize, ctx as usize]) as u32 == 0 {
             break;
         }
     }
@@ -1030,7 +1029,10 @@ unsafe extern "win64" fn d_get_device_data(
     inout: *mut u32,
     flags: u32,
 ) -> i32 {
-    if inout.is_null() || (obj_size != 16 && obj_size != 24) {
+    // DIDEVICEOBJECTDATA : 16 octets (DirectX 3), 24 en 64 bits, 20 dans un
+    // programme 32 bits (uAppData de 4 octets).
+    let full = if x86() { 20 } else { 24 };
+    if inout.is_null() || (obj_size != 16 && obj_size != full) {
         return DIERR_INVALIDPARAM;
     }
     let mut s = lock(&dev(this).state);
@@ -1080,18 +1082,26 @@ unsafe extern "win64" fn d_set_data_format(this: *mut DevObj, fmt: *const u8) ->
         return DIERR_ACQUIRED;
     }
     // DIDATAFORMAT : dwSize, dwObjSize, dwFlags, dwDataSize, dwNumObjs, rgodf.
+    // DIOBJECTDATAFORMAT : pguid, dwOfs, dwType, dwFlags. Les pointeurs font
+    // 4 octets dans un programme 32 bits : rgodf est alors à 20 et chaque
+    // entrée fait 16 octets (#1516).
+    let ps = ptr_size();
     let rd = |o: usize| (fmt.add(o) as *const u32).read_unaligned();
     let (obj_size, flags, data_size, count) = (rd(4), rd(8), rd(12), rd(16));
-    let rgodf = (fmt.add(24) as *const *const u8).read_unaligned();
-    if obj_size < 20 || data_size % 4 != 0 || (count > 0 && rgodf.is_null()) || count > 4096 {
+    let rgodf = get_ptr(fmt as usize + (20usize).next_multiple_of(ps)) as *const u8;
+    if (obj_size as usize) < ps + 12
+        || data_size % 4 != 0
+        || (count > 0 && rgodf.is_null())
+        || count > 4096
+    {
         return DIERR_INVALIDPARAM;
     }
     let mut entries = Vec::with_capacity(count as usize);
     for k in 0..count as usize {
         let e = rgodf.add(k * obj_size as usize);
-        let g = comobj::read_guid((e as *const *const u8).read_unaligned());
-        let ofs = (e.add(8) as *const u32).read_unaligned();
-        let ty = (e.add(12) as *const u32).read_unaligned();
+        let g = comobj::read_guid(get_ptr(e as usize) as *const u8);
+        let ofs = (e.add(ps) as *const u32).read_unaligned();
+        let ty = (e.add(ps + 4) as *const u32).read_unaligned();
         entries.push((g, ofs, ty));
     }
     let format = match_format(&s.objs, &entries);
@@ -1254,40 +1264,48 @@ unsafe extern "win64" fn d_get_image_info(_this: *mut DevObj, _h: *mut u8) -> i3
     DIERR_UNSUPPORTED
 }
 
-static DEVICE_VTBL: VTable<32> = VTable([
-    d_qi as *const (),
-    d_addref as *const (),
-    d_release as *const (),
-    d_get_capabilities as *const (),
-    d_enum_objects as *const (),
-    d_get_property as *const (),
-    d_set_property as *const (),
-    d_acquire as *const (),
-    d_unacquire as *const (),
-    d_get_device_state as *const (),
-    d_get_device_data as *const (),
-    d_set_data_format as *const (),
-    d_set_event_notification as *const (),
-    d_set_cooperative_level as *const (),
-    d_get_object_info as *const (),
-    d_get_device_info as *const (),
-    d_run_control_panel as *const (),
-    d_initialize as *const (),
-    d_create_effect as *const (),
-    d_enum_effects as *const (),
-    d_get_effect_info as *const (),
-    d_get_ff_state as *const (),
-    d_send_ff_command as *const (),
-    d_enum_created_effects as *const (),
-    d_escape as *const (),
-    d_poll as *const (),
-    d_send_device_data as *const (),
-    d_effects_in_file as *const (),
-    d_write_effect as *const (),
-    d_build_action_map as *const (),
-    d_set_action_map as *const (),
-    d_get_image_info as *const (),
-]);
+/// Table de IDirectInputDevice8 pour l'ABI du programme : passerelles x86
+/// stdcall dans un programme 32 bits (#1516), table win64 sinon. `p` : case
+/// de pointeur remplie par la méthode.
+fn device_vtbl() -> *const () {
+    vtable_sig(
+        "IDirectInputDevice8",
+        &[
+            (d_qi as *const () as usize, "ip"),
+            (d_addref as *const () as usize, ""),
+            (d_release as *const () as usize, ""),
+            (d_get_capabilities as *const () as usize, "i"),
+            (d_enum_objects as *const () as usize, "iii"),
+            (d_get_property as *const () as usize, "ii"),
+            (d_set_property as *const () as usize, "ii"),
+            (d_acquire as *const () as usize, ""),
+            (d_unacquire as *const () as usize, ""),
+            (d_get_device_state as *const () as usize, "ii"),
+            (d_get_device_data as *const () as usize, "iiii"),
+            (d_set_data_format as *const () as usize, "i"),
+            (d_set_event_notification as *const () as usize, "i"),
+            (d_set_cooperative_level as *const () as usize, "ii"),
+            (d_get_object_info as *const () as usize, "iii"),
+            (d_get_device_info as *const () as usize, "i"),
+            (d_run_control_panel as *const () as usize, "ii"),
+            (d_initialize as *const () as usize, "iii"),
+            (d_create_effect as *const () as usize, "iipi"),
+            (d_enum_effects as *const () as usize, "iii"),
+            (d_get_effect_info as *const () as usize, "ii"),
+            (d_get_ff_state as *const () as usize, "i"),
+            (d_send_ff_command as *const () as usize, "i"),
+            (d_enum_created_effects as *const () as usize, "iii"),
+            (d_escape as *const () as usize, "i"),
+            (d_poll as *const () as usize, ""),
+            (d_send_device_data as *const () as usize, "iiii"),
+            (d_effects_in_file as *const () as usize, "iiii"),
+            (d_write_effect as *const () as usize, "iiii"),
+            (d_build_action_map as *const () as usize, "iii"),
+            (d_set_action_map as *const () as usize, "iii"),
+            (d_get_image_info as *const () as usize, "i"),
+        ],
+    ) as *const ()
+}
 
 // ---------- IDirectInput8 / IDirectInput7 ----------
 
@@ -1377,7 +1395,7 @@ unsafe fn create_device(di: &DiObj, rguid: *const u8, out: *mut *mut c_void, wid
         return DIERR_DEVICENOTREG;
     };
     let obj = Box::new(DevObj {
-        vtbl: DEVICE_VTBL.0.as_ptr() as *const (),
+        vtbl: device_vtbl(),
         refs: AtomicU32::new(1),
         wide,
         state: Mutex::new(state),
@@ -1395,7 +1413,6 @@ unsafe extern "win64" fn i_create_device(
     create_device(&*this, rguid, out, (*this).wide)
 }
 
-type EnumDevCb = unsafe extern "win64" fn(*const u8, *mut c_void) -> i32;
 unsafe extern "win64" fn i_enum_devices(
     this: *mut DiObj,
     ty: u32,
@@ -1407,7 +1424,6 @@ unsafe extern "win64" fn i_enum_devices(
         return DIERR_INVALIDPARAM;
     }
     let di = &*this;
-    let cb: EnumDevCb = std::mem::transmute(cb);
     let size = if di.wide { 1100 } else { 580 };
     let mut buf = vec![0u8; size];
     for inst in instances() {
@@ -1418,7 +1434,7 @@ unsafe extern "win64" fn i_enum_devices(
             continue; // DIEDFL_FORCEFEEDBACK : aucun retour de force exposé
         }
         fill_instance(buf.as_mut_ptr(), size as u32, &inst, di.wide, di.legacy);
-        if cb(buf.as_ptr(), ctx) == 0 {
+        if call_back(cb, &[buf.as_ptr() as usize, ctx as usize]) as u32 == 0 {
             break;
         }
     }
@@ -1480,42 +1496,35 @@ unsafe extern "win64" fn i_create_device_ex(
     create_device(&*this, rguid, out, wide)
 }
 
-static DI8_VTBL: VTable<11> = VTable([
-    i_qi as *const (),
-    i_addref as *const (),
-    i_release as *const (),
-    i_create_device as *const (),
-    i_enum_devices as *const (),
-    i_get_device_status as *const (),
-    i_run_control_panel as *const (),
-    i_initialize as *const (),
-    i_find_device as *const (),
-    i_enum_by_semantics as *const (),
-    i_configure_devices as *const (),
-]);
-
-static DI7_VTBL: VTable<10> = VTable([
-    i_qi as *const (),
-    i_addref as *const (),
-    i_release as *const (),
-    i_create_device as *const (),
-    i_enum_devices as *const (),
-    i_get_device_status as *const (),
-    i_run_control_panel as *const (),
-    i_initialize as *const (),
-    i_find_device as *const (),
-    i_create_device_ex as *const (),
-]);
+/// Tables de IDirectInput8 et IDirectInput7 pour l'ABI du programme (#1516).
+fn di_vtbl(legacy: bool) -> *const () {
+    let common: [(usize, &'static str); 9] = [
+        (i_qi as *const () as usize, "ip"),
+        (i_addref as *const () as usize, ""),
+        (i_release as *const () as usize, ""),
+        (i_create_device as *const () as usize, "ipi"),
+        (i_enum_devices as *const () as usize, "iiii"),
+        (i_get_device_status as *const () as usize, "i"),
+        (i_run_control_panel as *const () as usize, "ii"),
+        (i_initialize as *const () as usize, "ii"),
+        (i_find_device as *const () as usize, "iii"),
+    ];
+    let mut m = common.to_vec();
+    if legacy {
+        m.push((i_create_device_ex as *const () as usize, "iipi"));
+        vtable_sig("IDirectInput7", &m) as *const ()
+    } else {
+        m.push((i_enum_by_semantics as *const () as usize, "iiiii"));
+        m.push((i_configure_devices as *const () as usize, "iiii"));
+        vtable_sig("IDirectInput8", &m) as *const ()
+    }
+}
 
 unsafe fn new_di(out: *mut *mut c_void, wide: bool, legacy: bool) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
-    let vtbl = if legacy {
-        DI7_VTBL.0.as_ptr() as *const ()
-    } else {
-        DI8_VTBL.0.as_ptr() as *const ()
-    };
+    let vtbl = di_vtbl(legacy);
     let obj = Box::new(DiObj {
         vtbl,
         refs: AtomicU32::new(1),
