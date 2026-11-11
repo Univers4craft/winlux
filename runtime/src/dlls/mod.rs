@@ -1641,6 +1641,12 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-power-") {
         return "powrprof".into();
     }
+    // Modèle d'application (GetPackageFamilyName, GetCurrentPackageId…) :
+    // fonctions de kernel32, qui répondent APPMODEL_ERROR_NO_PACKAGE
+    // (Spotify #1809, Acrobat, #1832).
+    if base.starts_with("api-ms-win-appmodel-runtime-l1-") {
+        return "kernel32".into();
+    }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
         || base == "kernelbase"
@@ -2445,6 +2451,17 @@ mod tests {
                 "advapi32",
                 "SetThreadToken",
             ),
+            // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                "kernel32",
+                "GetPackageFamilyName",
+            ),
+            (
+                "api-ms-win-appmodel-runtime-l1-1-2.dll",
+                "kernel32",
+                "GetCurrentPackageId",
+            ),
         ] {
             let expected = lookup(host, symbol).expect("backend export must exist");
             assert_eq!(
@@ -2468,5 +2485,78 @@ mod tests {
             normalize("api-ms-win-security-unknown-l1-1-0.dll"),
             "api-ms-win-security-unknown-l1-1-0"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_contrats_spotify {
+    /// Spotify.dll (#1832) : fonctions documentées des contrats
+    /// appmodel-runtime, job-l2 et file-l2.
+    #[test]
+    fn contrats_appmodel_job_file_l2() {
+        let mut absentes = vec![];
+        for (contract, names) in [
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                &[
+                    "GetCurrentPackageFamilyName",
+                    "GetCurrentPackageFullName",
+                    "GetCurrentPackageId",
+                    "GetCurrentPackageInfo",
+                    "GetCurrentPackagePath",
+                    "GetPackageFamilyName",
+                    "GetPackageFullName",
+                    "GetPackageId",
+                    "GetPackageInfo",
+                    "GetPackagePath",
+                    "GetPackagesByPackageFamily",
+                    "OpenPackageInfoByFullName",
+                    "ClosePackageInfo",
+                    "PackageFamilyNameFromFullName",
+                    "PackageFamilyNameFromId",
+                    "PackageFullNameFromId",
+                    "PackageIdFromFullName",
+                    "PackageNameAndPublisherIdFromFamilyName",
+                    "GetApplicationUserModelId",
+                    "GetCurrentApplicationUserModelId",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-job-l2-1-0.dll",
+                &[
+                    "AssignProcessToJobObject",
+                    "CreateJobObjectW",
+                    "OpenJobObjectW",
+                    "QueryInformationJobObject",
+                    "SetInformationJobObject",
+                    "TerminateJobObject",
+                    "IsProcessInJob",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-file-l2-1-0.dll",
+                &[
+                    "CopyFile2",
+                    "CopyFileExW",
+                    "CreateDirectoryExW",
+                    "CreateHardLinkW",
+                    "CreateSymbolicLinkW",
+                    "GetFileInformationByHandleEx",
+                    "MoveFileExW",
+                    "MoveFileWithProgressW",
+                    "OpenFileById",
+                    "ReadDirectoryChangesW",
+                    "ReplaceFileW",
+                ][..],
+            ),
+        ] {
+            let dll = super::normalize(contract);
+            for n in names {
+                if super::lookup(&dll, n).is_none() {
+                    absentes.push(format!("{contract}!{n}"));
+                }
+            }
+        }
+        assert!(absentes.is_empty(), "{absentes:?}");
     }
 }
