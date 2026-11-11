@@ -717,7 +717,7 @@ use super::lock;
 /// Sous Windows, WSAGetLastError et GetLastError lisent la même valeur
 /// (celle du TEB) : .NET relit l'erreur d'une socket par GetLastError
 /// (Marshal.GetLastPInvokeError). La copie par fil sert hors TEB (tests).
-fn set_error(e: i32) {
+pub(crate) fn set_error(e: i32) {
     LAST_WSA_ERROR.with(|x| x.set(e));
     crate::process::set_last_error(e as u32);
 }

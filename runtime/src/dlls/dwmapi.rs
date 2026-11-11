@@ -90,6 +90,8 @@ pub fn exports() -> crate::dlls::Exports {
         "DwmDefWindowProc" => fn DwmDefWindowProc,
         "DwmGetColorizationColor" => fn DwmGetColorizationColor,
         "DwmEnableComposition" => fn DwmEnableComposition,
+        // Ordinal d'après dwmapi.lib du SDK Windows public (#1606).
+        "#102" => fn DwmEnableComposition,
         "DwmGetCompositionTimingInfo" => fn DwmGetCompositionTimingInfo,
         "DwmInvalidateIconicBitmaps" => fn DwmInvalidateIconicBitmaps,
         "DwmSetIconicThumbnail" => fn DwmSetIconicThumbnail,
