@@ -470,10 +470,17 @@ pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Veri
     verify_with(leaf, extra, None, false, host)
 }
 
-/// Comme `verify`, mais la validité des certificats est jugée à la date
-/// `at` (secondes Unix) : signature horodatée d'un exécutable (#1387).
-pub fn verify_at(leaf: &[u8], extra: &[Vec<u8>], at: i64) -> Option<Verified> {
-    verify_inner(leaf, extra, None, false, None, Some(at))
+/// Signature de code (Authenticode, paquets MSIX) : autorités du système
+/// plus `added`, racines reconnues seulement pour signer du code (jamais
+/// pour TLS), jugée à la date `at` si elle est donnée (#1726).
+pub fn verify_code(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    added: &[&[u8]],
+    at: Option<i64>,
+) -> Option<Verified> {
+    let added: Vec<Vec<u8>> = added.iter().map(|r| r.to_vec()).collect();
+    verify_inner(leaf, extra, None, &added, false, None, at)
 }
 
 /// Comme `verify`, mais avec des racines de confiance données (`roots`) à la
@@ -486,13 +493,14 @@ pub fn verify_with(
     partial: bool,
     host: Option<&str>,
 ) -> Option<Verified> {
-    verify_inner(leaf, extra, roots, partial, host, None)
+    verify_inner(leaf, extra, roots, &[], partial, host, None)
 }
 
 fn verify_inner(
     leaf: &[u8],
     extra: &[Vec<u8>],
     roots: Option<&[Vec<u8>]>,
+    added: &[Vec<u8>],
     partial: bool,
     host: Option<&str>,
     at: Option<i64>,
@@ -512,6 +520,12 @@ fn verify_inner(
                         (s.X509_free)(rx);
                     }
                 }
+            }
+        }
+        for r in added {
+            if let Some(rx) = x509_of(r) {
+                (s.X509_STORE_add_cert)(store, rx);
+                (s.X509_free)(rx);
             }
         }
         if partial {

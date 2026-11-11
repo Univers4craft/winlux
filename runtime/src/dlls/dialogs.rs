@@ -203,7 +203,9 @@ pub fn parse_template(data: &[u8]) -> Option<DialogTemplate> {
     let class = r.name_or_id()?;
     let title = r.wstr()?;
     let (mut point_size, mut weight, mut italic, mut face) = (8, 400, false, String::new());
-    if style & DS_SETFONT != 0 || style & 0x8 != 0 {
+    // Seul DS_SETFONT annonce la police dans l'en-tête ; DS_FIXEDSYS (0x8)
+    // seul n'en porte pas (DS_SHELLFONT = DS_SETFONT | DS_FIXEDSYS, #1685).
+    if style & DS_SETFONT != 0 {
         point_size = r.u16()?;
         if ex {
             weight = r.u16()?;
@@ -418,6 +420,10 @@ unsafe fn create_from_template(
         )
     });
     if hwnd == 0 {
+        crate::trace!(
+            "boîte de dialogue : CreateWindowEx({class:?}) a échoué (erreur {})",
+            crate::process::last_error()
+        );
         return 0;
     }
     lock(dialogs()).insert(
@@ -468,12 +474,18 @@ unsafe fn create_from_template(
         });
         if ctl != 0 {
             user32::send_message_w(ctl, WM_SETFONT, font, 0);
+        } else {
+            crate::trace!(
+                "boîte de dialogue : contrôle {} de classe {cls:?} non créé",
+                item.id
+            );
         }
     }
     // WM_INITDIALOG : TRUE demande le focus sur le premier contrôle.
     let first = next_tab_item(hwnd, 0, false);
     let focus_default = call_dlg_proc(hwnd, WM_INITDIALOG, first, init);
     if !gui::is_window(hwnd) {
+        crate::trace!("boîte de dialogue : détruite pendant WM_INITDIALOG");
         return 0;
     }
     // Le choix se refait après WM_INITDIALOG : la procédure a pu désactiver
@@ -1001,8 +1013,16 @@ unsafe fn create_indirect(
     wide: bool,
 ) -> usize {
     match parse_template(data) {
-        Some(t) => create_from_template(&t, instance, parent, proc_addr, init, wide),
+        Some(t) => {
+            crate::trace!(
+                "boîte de dialogue : {} contrôle(s), classe {:?}",
+                t.items.len(),
+                class_name(&t.class)
+            );
+            create_from_template(&t, instance, parent, proc_addr, init, wide)
+        }
         None => {
+            crate::trace!("boîte de dialogue : modèle illisible, création refusée");
             crate::process::set_last_error(1812); // ERROR_RESOURCE_DATA_NOT_FOUND
             0
         }
