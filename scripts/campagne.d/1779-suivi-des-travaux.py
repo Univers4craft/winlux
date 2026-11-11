@@ -33,3 +33,9 @@ ok("MIN_ARTEFACT" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
 ok("def cadrage(" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
    and "(#1925)" in (SCRIPTS / "test-suivi-travaux.py").read_text(encoding="utf-8"),
    "Suivi des travaux : vignettes 1440p/4K recadrées sur la fenêtre, pas un bureau noir (#1925)")
+ok("coins.count" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "(#1943)" in (SCRIPTS / "test-suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : Paramètres en 1440p/4K recadré même posé dans le coin (#1943)")
+ok('settings["shown_page"](page) != page' in (SCRIPTS / "capture-ui.py").read_text(encoding="utf-8")
+   and "def shown_page(" in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+   "Captures : une page de Paramètres absente n'est plus photographiée sur « Écran » (#1944)")
