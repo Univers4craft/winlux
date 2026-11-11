@@ -349,7 +349,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
         || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="));
     if chromium_child {
         exit_with_parent(windows_parent);
-        confine_chromium_child(&args);
+        confine_chromium_child(args);
     }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
