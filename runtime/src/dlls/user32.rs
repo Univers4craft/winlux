@@ -1849,7 +1849,7 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
         // Le cadre ne part que si la fenêtre a déjà une barre de titre à
         // elle (#1211). Sinon il reste, et sera retiré dès qu'elle en aura
         // une (voir `recheck_own_frame`).
-        if has_own_caption(hwnd) || drawn_whole(hwnd) {
+        if has_own_caption(hwnd) || drawn_whole(hwnd) || frame_test_1886() {
             take_own_frame(hwnd);
         } else {
             let mut pending = pending_frame();
@@ -1869,6 +1869,15 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
         };
         with_backend(|b| b.set_decorations(hwnd, level));
     }
+}
+
+/// Essai de banc de #1886 (WINLUX_1886_SANS_CADRE=1, sans effet sinon) :
+/// le cadre du gestionnaire part tout de suite, sans attendre la barre de
+/// titre de la page. Dans les lancements noirs de Discord, la fenêtre
+/// principale gardait ce cadre ; l'essai dit s'il est cause ou symptôme.
+fn frame_test_1886() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("WINLUX_1886_SANS_CADRE").is_ok_and(|v| v == "1"))
 }
 
 /// Fenêtres qui ont demandé à dessiner leur propre cadre mais n'ont pas
