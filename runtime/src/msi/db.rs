@@ -83,6 +83,9 @@ impl Row<'_> {
     }
 }
 
+/// Taille au-delà de laquelle `open_tables` laisse un flux sur le disque.
+const STREAM_MAX: usize = 32 << 20;
+
 #[derive(Default)]
 pub struct Database {
     pub tables: HashMap<String, Table>,
@@ -266,7 +269,21 @@ fn summary(stream: &[u8]) -> (String, i32) {
 
 impl Database {
     pub fn parse(data: &[u8]) -> Result<Database, String> {
-        let compound = Compound::parse(data)?;
+        Self::from_compound(Compound::parse(data)?)
+    }
+
+    /// Base lue depuis le fichier sans le charger : tables, résumé et flux
+    /// de moins de 32 Mo (Binary). Les cabinets intégrés, parfois de
+    /// plusieurs centaines de Mo, restent sur le disque : le processus x86
+    /// d'une action personnalisée n'a pas la mémoire basse pour eux
+    /// (iCUE 4.18, paquet de 834 Mo, #1642).
+    pub fn open_tables(path: &std::path::Path) -> Result<Database, String> {
+        Self::from_compound(Compound::open(path, &|name, size| {
+            name.starts_with('!') || name.starts_with('\u{5}') || size <= STREAM_MAX
+        })?)
+    }
+
+    fn from_compound(compound: Compound) -> Result<Database, String> {
         let (strings, refsize) = strings(&compound)?;
         let col_defs = [
             Column {

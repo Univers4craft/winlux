@@ -430,6 +430,8 @@ fn msi_dll_action(args: &[String]) -> ! {
         std::process::exit(1639);
     };
     let path = std::path::PathBuf::from(dll);
+    // Dans la trace, quelle action tourne dans ce processus (#1639).
+    crate::trace!("action personnalisée DLL : {entry} dans {dll}");
     let source = std::fs::read(&path).unwrap_or_default();
     let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
     if x86 {

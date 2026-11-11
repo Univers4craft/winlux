@@ -567,6 +567,19 @@ fn account_of(sid: &str) -> Option<(String, String, u32)> {
         ADMINISTRATORS => ("Administrators".into(), "BUILTIN".into(), 4),
         USERS => ("Users".into(), "BUILTIN".into(), 4),
         "S-1-5-18" => ("SYSTEM".into(), "NT AUTHORITY".into(), 5),
+        // Comptes et groupes bien connus (documentation publique « Well-known
+        // SIDs ») : un installeur les résout avant d'écrire une ACL (#1639).
+        // SidTypeWellKnownGroup = 5, SidTypeAlias = 4.
+        "S-1-5-4" => ("INTERACTIVE".into(), "NT AUTHORITY".into(), 5),
+        "S-1-5-6" => ("SERVICE".into(), "NT AUTHORITY".into(), 5),
+        "S-1-5-11" => ("Authenticated Users".into(), "NT AUTHORITY".into(), 5),
+        "S-1-5-19" => ("LOCAL SERVICE".into(), "NT AUTHORITY".into(), 5),
+        "S-1-5-20" => ("NETWORK SERVICE".into(), "NT AUTHORITY".into(), 5),
+        "S-1-5-32-546" => ("Guests".into(), "BUILTIN".into(), 4),
+        "S-1-5-32-547" => ("Power Users".into(), "BUILTIN".into(), 4),
+        "S-1-5-32-555" => ("Remote Desktop Users".into(), "BUILTIN".into(), 4),
+        "S-1-5-32-558" => ("Performance Monitor Users".into(), "BUILTIN".into(), 4),
+        "S-1-5-32-559" => ("Performance Log Users".into(), "BUILTIN".into(), 4),
         s if s == uid_sid(euid()) => (crate::paths::user_name(), host, 1),
         _ => return None,
     })
@@ -1487,6 +1500,12 @@ fn well_known_sid(kind: u32) -> Option<&'static str> {
         26 => "S-1-5-32-544",
         27 => "S-1-5-32-545",
         28 => "S-1-5-32-546",
+        29 => "S-1-5-32-547",
+        36 => "S-1-5-32-555",
+        // WinBuiltinPerfMonitoringUsersSid, WinBuiltinPerfLoggingUsersSid
+        // (WELL_KNOWN_SID_TYPE de winnt.h, en-têtes mingw-w64) (#1639).
+        57 => "S-1-5-32-558",
+        58 => "S-1-5-32-559",
         65 => "S-1-16-0",
         66 => "S-1-16-4096",
         67 => "S-1-16-8192",
