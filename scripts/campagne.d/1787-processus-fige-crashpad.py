@@ -5,3 +5,5 @@ ok("static SUSPENDED" in e and "fn resume_suspended" in e,
    "NtSuspendProcess retient les processus figés (#1787)")
 ok("electron_win32::resume_suspended()" in c,
    "le gestionnaire de plantage relance les processus figés (#1787)")
+ok('"RtlGetUnloadEventTraceEx" => fn RtlGetUnloadEventTraceEx' in e,
+   "ntdll exporte RtlGetUnloadEventTraceEx, trace vide, pour crashpad-handler (#1797)")

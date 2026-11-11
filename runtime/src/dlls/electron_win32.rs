@@ -741,6 +741,7 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "RtlGetLastNtStatus" => fn RtlGetLastNtStatus,
         "NtSuspendProcess" => fn NtSuspendProcess,
         "NtResumeProcess" => fn NtResumeProcess,
+        "RtlGetUnloadEventTraceEx" => fn RtlGetUnloadEventTraceEx,
         "LdrLockLoaderLock" => fn LdrLockLoaderLock,
         "LdrUnlockLoaderLock" => fn LdrUnlockLoaderLock,
     }
@@ -790,6 +791,33 @@ unsafe extern "win64" fn NtResumeProcess(h: usize) -> u32 {
         }
     }
     r
+}
+
+/// Trace des modules déchargés (RTL_UNLOAD_EVENT_TRACE, 0x68 octets en
+/// 64 bits) : Winlux n'en tient pas, la trace est vide. Crashpad obtient
+/// cette fonction par GetProcAddress sans vérifier le résultat et appelait
+/// une adresse nulle en vidant un processus (#1797). Signature : Microsoft
+/// Learn, « RtlGetUnloadEventTraceEx ».
+static UNLOAD_TRACE_SIZE: u32 = 0x68;
+static UNLOAD_TRACE_COUNT: u32 = 0;
+static UNLOAD_TRACE_ARRAY: [u8; 0x68] = [0; 0x68];
+/// Pointeur vers le tableau : Crashpad lit ce pointeur, puis le tableau.
+static UNLOAD_TRACE: &[u8; 0x68] = &UNLOAD_TRACE_ARRAY;
+
+unsafe extern "win64" fn RtlGetUnloadEventTraceEx(
+    element_size: *mut *const u32,
+    element_count: *mut *const u32,
+    event_trace: *mut *const c_void,
+) {
+    if !element_size.is_null() {
+        element_size.write_unaligned(&UNLOAD_TRACE_SIZE);
+    }
+    if !element_count.is_null() {
+        element_count.write_unaligned(&UNLOAD_TRACE_COUNT);
+    }
+    if !event_trace.is_null() {
+        event_trace.write_unaligned(&UNLOAD_TRACE as *const _ as *const c_void);
+    }
 }
 
 /// Relance (SIGCONT) les processus que ce processus a figés sans les
@@ -2667,6 +2695,28 @@ mod tests {
             .chars()
             .next()
             .unwrap()
+    }
+
+    /// #1797 : trace des modules déchargés vide mais bien formée.
+    #[test]
+    fn trace_des_modules_decharges_vide() {
+        let (mut taille, mut nombre, mut trace) =
+            (std::ptr::null(), std::ptr::null(), std::ptr::null());
+        unsafe {
+            RtlGetUnloadEventTraceEx(&mut taille, &mut nombre, &mut trace);
+            assert_eq!(*taille, 0x68);
+            assert_eq!(*nombre, 0);
+            let tableau = *(trace as *const *const u8);
+            assert_eq!(tableau, UNLOAD_TRACE_ARRAY.as_ptr());
+            RtlGetUnloadEventTraceEx(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+        let exports = crate::dlls::builtin_exports();
+        let ntdll = exports.iter().find(|(n, _)| *n == "ntdll").unwrap();
+        assert!(ntdll.1.contains(&"RtlGetUnloadEventTraceEx"));
     }
 
     /// #1787 : un processus figé par NtSuspendProcess puis laissé ainsi
