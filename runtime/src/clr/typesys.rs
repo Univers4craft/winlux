@@ -504,10 +504,6 @@ fn is_nested(a: &Assembly, type_row: u32) -> bool {
     (1..=a.row_count(TableId::NestedClass)).any(|n| a.get_nested_class(n).nested_class == type_row)
 }
 
-/// Réponses déjà calculées de `implements` : (type réel, interface).
-static IMPLEMENTS: std::sync::Mutex<Option<std::collections::HashMap<(TypeId, TypeId), bool>>> =
-    std::sync::Mutex::new(None);
-
 impl Interpreter {
     /// Définition (assembly, ligne TypeDef) d'un type, y compris d'un type
     /// intégré servi par notre mscorlib.
@@ -530,12 +526,7 @@ impl Interpreter {
     /// référence (`IEnumerable<string>` est un `IEnumerable<object>`).
     /// `None` : le type n'a pas de définition connue.
     pub(super) fn implements(&self, actual: TypeId, target: TypeId) -> Option<bool> {
-        if let Some(&r) = IMPLEMENTS
-            .lock()
-            .unwrap()
-            .get_or_insert_with(Default::default)
-            .get(&(actual, target))
-        {
+        if let Some(r) = types::with_types(|reg| reg.implements.get(&(actual, target)).copied()) {
             return Some(r);
         }
         let info = |id: TypeId| {
@@ -615,11 +606,7 @@ impl Interpreter {
         if !any_def {
             return None;
         }
-        IMPLEMENTS
-            .lock()
-            .unwrap()
-            .get_or_insert_with(Default::default)
-            .insert((actual, target), found);
+        types::with_types(|reg| reg.implements.insert((actual, target), found));
         Some(found)
     }
 }

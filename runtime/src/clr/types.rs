@@ -214,6 +214,10 @@ pub struct TypeRegistry {
     /// Champs statiques de chaque type, alloués une fois pour toutes : une
     /// adresse prise par `ldsflda` reste valable.
     pub static_data: HashMap<TypeId, Box<[u64]>>,
+    /// Réponses de `Interpreter::implements` : (type réel, interface). Le
+    /// cache vit avec le registre, car `init` en refait un dont les
+    /// numéros de type ne désignent plus les mêmes types (#1978).
+    pub implements: HashMap<(TypeId, TypeId), bool>,
 }
 
 impl TypeRegistry {
@@ -224,6 +228,7 @@ impl TypeRegistry {
             instances: HashMap::new(),
             next_id: FIRST_USER_TYPE,
             static_data: HashMap::new(),
+            implements: HashMap::new(),
         };
         let builtins = [
             (TYPE_OBJECT, "Object", 0, 8),
