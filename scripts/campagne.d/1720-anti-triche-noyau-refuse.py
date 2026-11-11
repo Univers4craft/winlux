@@ -22,3 +22,5 @@ ok("easyanticheat" not in _a.split("pub const LIST")[1].split("];")[0].lower()
 ok("refused_by_anticheat && exit" in _open, "winlux-open n'ajoute pas de boîte d'échec après un refus (#1720)")
 ok("Anti-triche noyau : installation refusée (#1720)" in _doc and "vgk.sys" in _doc,
    "liste des anti-triche refusés documentée avec ses sources (#1720)")
+ok("add_button(button" in _a and "buttons=Gtk.ButtonsType.NONE" in _a and '"Aceptar"' in _a,
+   "bouton de la boîte de refus dans la langue de l'interface (#1776)")

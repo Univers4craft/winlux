@@ -398,7 +398,11 @@ impl Path {
         } else if !clockwise && dt > 0.0 {
             dt -= tau;
         }
-        let n = segments(dt.abs() * rx.max(ry) * scale);
+        // Au moins 64 segments par tour : une géométrie petite agrandie
+        // ensuite par une transformation ne devient pas un polygone (#1743).
+        let n = segments(dt.abs() * rx.max(ry) * scale)
+            .max((dt.abs() / std::f32::consts::TAU * 64.0).ceil() as usize)
+            .max(1);
         for i in 1..=n {
             let t = t1 + dt * i as f32 / n as f32;
             let (x, y) = (rx * t.cos(), ry * t.sin());
@@ -422,7 +426,7 @@ impl Path {
     }
 
     pub fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32, scale: f32) -> Path {
-        let n = segments(std::f32::consts::TAU * rx.abs().max(ry.abs()) * scale);
+        let n = segments(std::f32::consts::TAU * rx.abs().max(ry.abs()) * scale).max(64);
         let pts = (0..n)
             .map(|i| {
                 let t = std::f32::consts::TAU * i as f32 / n as f32;

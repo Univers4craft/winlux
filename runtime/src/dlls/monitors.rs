@@ -147,6 +147,29 @@ pub fn work_rect(monitor: &Rect, area: &Rect) -> Rect {
     }
 }
 
+/// Rectangle d'une fenêtre ramené dans la zone de travail, cadre du
+/// gestionnaire compris (`frame` : gauche, droite, haut, bas, autour du
+/// rectangle). Une fenêtre redimensionnable plus grande que la zone est
+/// rétrécie ; les autres ne sont que déplacées, coin haut gauche visible
+/// d'abord, comme le fait Windows à la restauration d'une fenêtre (#1752).
+pub fn fit_in_work_area(r: &Rect, work: &Rect, frame: [i32; 4], resizable: bool) -> Rect {
+    let [l, rr, t, b] = frame.map(|v| v.max(0));
+    let mut w = r.width();
+    let mut h = r.height();
+    if resizable {
+        w = w.min(work.width() - l - rr).max(1);
+        h = h.min(work.height() - t - b).max(1);
+    }
+    let x = r.left.min(work.right - l - rr - w).max(work.left);
+    let y = r.top.min(work.bottom - t - b - h).max(work.top);
+    Rect {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    }
+}
+
 /// Remplit MONITORINFO (40 octets) ou MONITORINFOEX (A : 72, W : 104).
 pub unsafe fn fill_info(monitor: usize, info: *mut u8, wide: bool) -> i32 {
     if info.is_null() {
@@ -243,6 +266,35 @@ mod tests {
             right,
             bottom,
         }
+    }
+
+    /// #1752 : Audacity restaure 382,396 1180x714 sous une zone de travail
+    /// de 1039 px ; le cadre d'openbox ajoute 39 px en haut et 2 px ailleurs.
+    #[test]
+    fn fenetre_ramenee_dans_la_zone_de_travail() {
+        let zone = rect(0, 0, 1920, 1039);
+        let cadre = [2, 2, 39, 2];
+        let r = fit_in_work_area(&rect(382, 396, 1562, 1110), &zone, cadre, true);
+        assert_eq!(r, rect(382, 284, 1562, 998));
+        assert!(r.bottom + 2 <= 1039);
+        // Plus haute que la zone : rétrécie si elle se redimensionne.
+        let r = fit_in_work_area(&rect(100, 50, 900, 1250), &zone, cadre, true);
+        assert_eq!(r, rect(100, 0, 900, 998));
+        // Sinon seulement déplacée, barre de titre visible.
+        let r = fit_in_work_area(&rect(100, 50, 900, 1250), &zone, cadre, false);
+        assert_eq!(r, rect(100, 0, 900, 1200));
+        // Déjà dedans : inchangée.
+        let dedans = rect(10, 10, 410, 310);
+        assert_eq!(fit_in_work_area(&dedans, &zone, cadre, true), dedans);
+        // Sortie à gauche et à droite.
+        assert_eq!(
+            fit_in_work_area(&rect(-300, 10, 100, 310), &zone, cadre, true),
+            rect(0, 10, 400, 310)
+        );
+        assert_eq!(
+            fit_in_work_area(&rect(1800, 10, 2200, 310), &zone, cadre, true),
+            rect(1516, 10, 1916, 310)
+        );
     }
 
     /// #1267 : rcWork exclut le panneau du bas ; un écran que la zone ne

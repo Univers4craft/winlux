@@ -580,6 +580,78 @@ extern "win64" fn close_trace(_h: u64) -> u32 {
     ERROR_INVALID_HANDLE
 }
 
+/// StartTraceA : comme StartTraceW.
+extern "win64" fn start_trace_a(h: usize, name: usize, props: usize) -> u32 {
+    start_trace_w(h, name, props)
+}
+
+/// StopTraceW, FlushTraceW, QueryTraceW, UpdateTraceW (et leurs formes A,
+/// ControlTraceA) : formes de ControlTrace, aucune session n'existe.
+extern "win64" fn trace_session_op(_h: u64, _name: usize, _props: usize) -> u32 {
+    ERROR_WMI_INSTANCE_NOT_FOUND
+}
+
+extern "win64" fn control_trace_a(h: u64, name: usize, props: usize, code: u32) -> u32 {
+    control_trace_w(h, name, props, code)
+}
+
+extern "win64" fn open_trace_a(log: usize) -> u64 {
+    open_trace_w(log)
+}
+
+/// EnableTrace, EnableTraceEx, EnableTraceEx2 : activer un fournisseur
+/// demande d'être administrateur ou dans « Performance Log Users ».
+extern "win64" fn enable_trace(_a: u64, _b: usize, _c: usize) -> u32 {
+    ERROR_ACCESS_DENIED
+}
+
+/// QueryAllTracesW/A(PropertyArray, PropertyArrayCount, *LoggerCount) :
+/// aucune session de trace n'est en cours.
+unsafe extern "win64" fn query_all_traces(
+    _array: usize,
+    _count: u32,
+    logger_count: *mut u32,
+) -> u32 {
+    if logger_count.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    *logger_count = 0;
+    0
+}
+
+/// EnumerateTraceGuidsEx(class, in, in_size, out, out_size, *needed) :
+/// aucun fournisseur inscrit, liste vide.
+unsafe extern "win64" fn enumerate_trace_guids_ex(
+    _class: u32,
+    _inb: usize,
+    _in_size: u32,
+    _outb: usize,
+    _out_size: u32,
+    needed: *mut u32,
+) -> u32 {
+    if needed.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    *needed = 0;
+    0
+}
+
+/// TraceSetInformation : sans session ni droit de profilage.
+extern "win64" fn trace_set_information(_h: u64, _class: u32, _info: usize, _len: u32) -> u32 {
+    ERROR_ACCESS_DENIED
+}
+
+/// TraceQueryInformation : aucune session dont lire les réglages.
+extern "win64" fn trace_query_information(
+    _h: u64,
+    _class: u32,
+    _info: usize,
+    _len: u32,
+    _ret: usize,
+) -> u32 {
+    ERROR_WMI_INSTANCE_NOT_FOUND
+}
+
 // ── Fournisseurs de chiffrement ─────────────────────────────────────────
 
 /// Fournisseurs que CryptAcquireContext accepte : (nom, type).
@@ -1117,6 +1189,26 @@ pub fn exports() -> Exports {
         "OpenTraceW" => fn open_trace_w,
         "ProcessTrace" => fn process_trace,
         "CloseTrace" => fn close_trace,
+        // Contrat api-ms-win-eventing-controller (Teams, #1790).
+        "StartTraceA" => fn start_trace_a,
+        "ControlTraceA" => fn control_trace_a,
+        "OpenTraceA" => fn open_trace_a,
+        "StopTraceW" => fn trace_session_op,
+        "StopTraceA" => fn trace_session_op,
+        "FlushTraceW" => fn trace_session_op,
+        "FlushTraceA" => fn trace_session_op,
+        "QueryTraceW" => fn trace_session_op,
+        "QueryTraceA" => fn trace_session_op,
+        "UpdateTraceW" => fn trace_session_op,
+        "UpdateTraceA" => fn trace_session_op,
+        "EnableTrace" => fn enable_trace,
+        "EnableTraceEx" => fn enable_trace,
+        "EnableTraceEx2" => fn enable_trace,
+        "QueryAllTracesW" => fn query_all_traces,
+        "QueryAllTracesA" => fn query_all_traces,
+        "EnumerateTraceGuidsEx" => fn enumerate_trace_guids_ex,
+        "TraceSetInformation" => fn trace_set_information,
+        "TraceQueryInformation" => fn trace_query_information,
         "CryptEnumProvidersW" => fn crypt_enum_providers_w,
         "CryptEnumProviderTypesW" => fn crypt_enum_provider_types_w,
         "CryptGetDefaultProviderW" => fn crypt_get_default_provider_w,
