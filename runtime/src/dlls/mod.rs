@@ -85,6 +85,7 @@ pub mod devnotify;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
+pub mod discord_win32;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
@@ -1295,7 +1296,11 @@ fn builtins() -> &'static Vec<Builtin> {
         // mpr, msi et shfolder : importées directement par WinSCP et 7-Zip (#486).
         for (name, exports) in [
             ("mpr", legacy_dlls::mpr_exports()),
-            ("msi", legacy_dlls::msi_exports()),
+            ("msi", {
+                let mut e = legacy_dlls::msi_exports();
+                e.extend(discord_win32::msi_exports());
+                e
+            }),
             ("shfolder", legacy_dlls::shfolder_exports()),
             // Corpus de #26 (#1394) : signtool x86, panda3d, .NET Core 3.1.
             ("mfc42", redist_dlls::mfc42_exports()),
@@ -1452,6 +1457,8 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(icue)
         .chain(lot_e)
         .chain(lot_f)
+        // discord_utils.node (#1823).
+        .chain(discord_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1644,6 +1651,10 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-security-base-l1-")
         || base.starts_with("api-ms-win-security-sddl-l1-")
         || base.starts_with("api-ms-win-security-provider-l1-")
+        || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Contrats des services (service-core, -management, -winsvc) : les
+        // fonctions du gestionnaire de services d'advapi32 (#1823).
+        || base.starts_with("api-ms-win-service-")
     {
         return "advapi32".into();
     }
@@ -2373,6 +2384,32 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-0.dll",
                 "advapi32",
                 "OpenThreadToken",
+            ),
+            // discord_utils.node (#1823).
+            (
+                "api-ms-win-security-sddl-ansi-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSecurityDescriptorToSecurityDescriptorA",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "OpenSCManagerW",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "CloseServiceHandle",
+            ),
+            (
+                "api-ms-win-ntuser-sysparams-l1-1-0.dll",
+                "user32",
+                "SystemParametersInfoW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSidToSidW",
             ),
             // Teams (#1817) : contrat security-provider et
             // ImpersonateNamedPipeClient sous namedpipe.
