@@ -237,6 +237,7 @@ pub mod shell32;
 pub mod shell32_releve;
 pub mod shell_folder_com;
 pub mod shell_link;
+pub mod shell_ordinaux;
 pub mod shlwapi;
 pub mod shlwapi_path;
 pub mod shlwapi_reg;
@@ -1633,7 +1634,9 @@ pub fn normalize(dll: &str) -> String {
     {
         return "advapi32".into();
     }
-    if base.starts_with("api-ms-win-eventing-provider-l1-") {
+    if base.starts_with("api-ms-win-eventing-provider-l1-")
+        || base.starts_with("api-ms-win-eventing-controller-l1-")
+    {
         return "advapi32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
@@ -2351,6 +2354,22 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-0.dll",
                 "advapi32",
                 "OpenThreadToken",
+            ),
+            // Teams (#1790) : contrat des contrôleurs de traces ETW.
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "EnableTraceEx2",
+            ),
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "StartTraceW",
+            ),
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "QueryAllTracesW",
             ),
             (
                 "api-ms-win-core-processthreads-l1-1-2.dll",

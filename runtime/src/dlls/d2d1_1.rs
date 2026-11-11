@@ -1578,6 +1578,72 @@ pub(super) unsafe fn is_pixel_image(image: *mut c_void) -> bool {
     vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr()
 }
 
+/// Une liste de commandes cible d'un tracé retient la boîte des polygones
+/// remplis (bornée par la découpe), même hors de sa surface (#1743).
+pub(super) unsafe fn record_list_bounds(
+    list: *mut c_void,
+    polys: &[Vec<super::Pt>],
+    clip: Option<super::Clip>,
+) {
+    if list.is_null() || *(list as *const *const ()) != COMMAND_LIST_VT.ptr() {
+        return;
+    }
+    let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in polys.iter().flatten() {
+        if p.0.is_finite() && p.1.is_finite() {
+            r = [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)];
+        }
+    }
+    if let Some(c) = clip {
+        r = [r[0].max(c.l), r[1].max(c.t), r[2].min(c.r), r[3].min(c.b)];
+    }
+    if r[0] >= r[2] || r[1] >= r[3] {
+        return;
+    }
+    let b = &Com::get(list as *mut BitmapObj).data;
+    let mut d = crate::dlls::lock(&b.drawn);
+    *d = Some(match *d {
+        Some(o) => [
+            o[0].min(r[0]),
+            o[1].min(r[1]),
+            o[2].max(r[2]),
+            o[3].max(r[3]),
+        ],
+        None => r,
+    });
+}
+
+/// Boîte dessinée des listes de commandes d'où vient `image` : la liste
+/// elle-même, ou les entrées d'un effet, récursivement.
+unsafe fn drawn_bounds(image: *mut c_void, depth: u32) -> Option<[f32; 4]> {
+    if image.is_null() || depth > 32 {
+        return None;
+    }
+    let vt = *(image as *const *const ());
+    if vt == COMMAND_LIST_VT.ptr() {
+        return *crate::dlls::lock(&Com::get(image as *mut BitmapObj).data.drawn);
+    }
+    let effect = if vt == EFFECT_IMAGE_VT.ptr() || vt == EFFECT_RESOURCE_VT.ptr() {
+        Com::get(image as *mut Com<Res<EffectImage>>).data.effect
+    } else if vt == EFFECT_VT.ptr() {
+        image as *mut EffectObj
+    } else {
+        return None;
+    };
+    let inputs = crate::dlls::lock(&Com::get(effect).inputs).clone();
+    inputs
+        .into_iter()
+        .filter_map(|i| drawn_bounds(i, depth + 1))
+        .reduce(|a, b| {
+            [
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ]
+        })
+}
+
 /// CreateCommandList : surface de la taille de la cible courante.
 unsafe extern "win64" fn dc_create_command_list(
     this: *mut TargetObj,
@@ -2396,7 +2462,7 @@ unsafe extern "win64" fn dc_image_local_bounds(
         let t = target(_this);
         (t.w, t.h)
     };
-    *out = image_img(image, 0, hint).map_or(
+    let mut r = image_img(image, 0, hint).map_or(
         RectF {
             l: 0.0,
             t: 0.0,
@@ -2410,6 +2476,27 @@ unsafe extern "win64" fn dc_image_local_bounds(
             b: (i.y + i.h as i32) as f32,
         },
     );
+    // Ce qui a été dessiné dans une liste de commandes compte, même hors de
+    // sa surface : Paint.NET dimensionne le masque de son pinceau sur ces
+    // bornes (#1743), et une liste créée sur une cible 4×4 réduisait un
+    // pinceau de 50 px à une empreinte de 9 px.
+    if let Some(d) = drawn_bounds(image, 0) {
+        r = RectF {
+            l: r.l.min(d[0]),
+            t: r.t.min(d[1]),
+            r: r.r.max(d[2]),
+            b: r.b.max(d[3]),
+        };
+    }
+    d2d_trace!(
+        "GetImageLocalBounds {} → ({}, {}, {}, {})",
+        describe_image(image),
+        r.l,
+        r.t,
+        r.r,
+        r.b
+    );
+    *out = r;
     S_OK
 }
 
@@ -3795,6 +3882,103 @@ mod tests {
             com_release(dev);
             Com::release(f);
         }
+    }
+
+    /// #1743 : une liste de commandes créée sur une cible 4×4 et remplie
+    /// au-delà rend dans GetImageLocalBounds la boîte dessinée, et un effet
+    /// qui la prend en entrée aussi (Paint.NET dimensionne son pinceau ainsi).
+    #[test]
+    fn bornes_d_une_liste_de_commandes() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            let mut bmp = std::ptr::null_mut();
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    4 | (4 << 32),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut bmp
+                ),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let mut list = std::ptr::null_mut();
+            assert_eq!(dc_create_command_list(dc, &mut list), S_OK);
+            dc_set_target(dc, list);
+            let mut brush = std::ptr::null_mut();
+            let noir = super::super::ColorF {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            assert_eq!(
+                super::super::target_solid_brush(dc, &noir, std::ptr::null(), &mut brush),
+                S_OK
+            );
+            super::super::begin_draw(dc);
+            let r = RectF {
+                l: 1.0,
+                t: 2.0,
+                r: 12.0,
+                b: 10.0,
+            };
+            super::super::fill_rect(dc, &r, brush);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let mut out = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 0.0,
+                b: 0.0,
+            };
+            assert_eq!(dc_image_local_bounds(dc, list, &mut out), S_OK);
+            assert_eq!((out.l, out.t, out.r, out.b), (0.0, 0.0, 12.0, 10.0));
+            let mut inv = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_INVERT, &mut inv), S_OK);
+            effect_set_input(inv.cast(), 0, list, 1);
+            let mut img = std::ptr::null_mut();
+            effect_get_output(inv.cast(), &mut img);
+            let mut out2 = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 0.0,
+                b: 0.0,
+            };
+            assert_eq!(dc_image_local_bounds(dc, img, &mut out2), S_OK);
+            assert!(out2.r >= 12.0 && out2.b >= 10.0, "{} {}", out2.r, out2.b);
+            for o in [img, inv, brush, list, bmp] {
+                com_release(o);
+            }
+            com_release(dc.cast());
+            com_release(dev);
+            Com::release(f);
+        }
+    }
+
+    /// #1743 : une ellipse, même minuscule, garde au moins 64 points ; une
+    /// transformation qui l'agrandit ne la change plus en polygone.
+    #[test]
+    fn ellipse_au_moins_64_points() {
+        let p = crate::dlls::d2d_raster::Path::ellipse(0.0, 0.0, 0.5, 0.5, 1.0);
+        let n: usize = p
+            .fill_polys(&crate::dlls::d2d_raster::Matrix::IDENTITY)
+            .iter()
+            .map(|v| v.len())
+            .sum();
+        assert!(n >= 64, "{n}");
     }
 
     #[test]

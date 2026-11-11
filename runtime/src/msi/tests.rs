@@ -368,3 +368,21 @@ fn tables_complementaires() {
         Some("v")
     );
 }
+
+/// #1789 : SystemFolder est toujours SysWOW64 sous Windows 64 bits, même
+/// pour un paquet x64 ; seul System64Folder désigne System32.
+#[test]
+fn systemfolder_reste_syswow64_pour_un_paquet_x64() {
+    let db = db::Database::parse(SAMPLE).unwrap();
+    assert!(db.is_64bit());
+    let mut ctx = cond::Context::default();
+    install::system_props(&mut ctx, &db, &install::Options::default());
+    assert_eq!(ctx.get("SystemFolder"), "C:\\windows\\syswow64\\");
+    assert_eq!(ctx.get("System64Folder"), "C:\\windows\\system32\\");
+    assert_eq!(ctx.get("ProgramFilesFolder"), "C:\\Program Files (x86)\\");
+    assert_eq!(
+        ctx.get("CommonFilesFolder"),
+        "C:\\Program Files (x86)\\Common Files\\"
+    );
+    assert_eq!(ctx.get("ProgramFiles64Folder"), "C:\\Program Files\\");
+}
