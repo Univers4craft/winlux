@@ -541,6 +541,25 @@ unsafe fn create_window_inner(
         }
     }
 
+    // Crochet WH_CBT (HCBT_CREATEWND) avant tout message : MFC y sous-classe
+    // la fenêtre (AfxWndProc) et la rattache à son CWnd. Sans lui, une
+    // fenêtre MFC garde DefWindowProc et MFC lit un CWnd jamais rempli
+    // (Pythonwin, #1654). Une valeur non nulle refuse la création.
+    let mut cs = cs;
+    let wide_class: Vec<u16> = class.encode_utf16().chain([0]).collect();
+    let wide_title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+    if super::controls::message_is_wide(hwnd) {
+        cs.name = wide_title.as_ptr().cast();
+        cs.class = wide_class.as_ptr().cast();
+    }
+    if cbt_create_window(hwnd, &mut cs) {
+        gui::destroy_window(hwnd);
+        forget_window_longs(hwnd);
+        return 0;
+    }
+    cs.name = title_z.as_ptr().cast();
+    cs.class = class_z.as_ptr().cast();
+
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
     // La procédure est relue avant chaque message : un programme peut sous-
@@ -4033,11 +4052,14 @@ pub extern "win64" fn lock_set_foreground_window(lock_code: u32) -> i32 {
 // =====================================================================
 
 const WH_GETMESSAGE: i32 = 3;
+const WH_CBT: i32 = 5;
+const HCBT_CREATEWND: i32 = 3;
 const PM_REMOVE: usize = 1;
 
-/// Crochet installé par SetWindowsHookEx. Seul WH_GETMESSAGE est appelé :
-/// Qt 5 y relance la livraison de ses événements différés (clics, touches,
-/// repeints) ; sans lui, une fenêtre Qt s'affiche mais ne réagit plus (#938).
+/// Crochet installé par SetWindowsHookEx. Sont appelés WH_GETMESSAGE (Qt 5
+/// y relance la livraison de ses événements différés ; sans lui, une
+/// fenêtre Qt s'affiche mais ne réagit plus, #938) et WH_CBT pour
+/// HCBT_CREATEWND (MFC y attache ses fenêtres, #1654).
 #[derive(Clone, Copy)]
 struct Hook {
     handle: usize,
@@ -4065,7 +4087,7 @@ pub unsafe extern "win64" fn set_windows_hook_ex_a(
 ) -> usize {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00F0_0000);
     let handle = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if id == WH_GETMESSAGE && proc_ != 0 {
+    if matches!(id, WH_GETMESSAGE | WH_CBT) && proc_ != 0 {
         // Le plus récent passe en premier, comme sous Windows.
         hooks().lock().unwrap_or_else(|e| e.into_inner()).insert(
             0,
@@ -4128,6 +4150,32 @@ unsafe fn call_get_message_hooks(msg: *mut Msg, remove: usize) {
     if let Some(h) = next_hook(WH_GETMESSAGE, 0) {
         run_hook(h, 0, remove, msg as isize);
     }
+}
+
+/// CBT_CREATEWND : création en cours et fenêtre après laquelle l'insérer.
+#[repr(C)]
+struct CbtCreateWnd {
+    cs: *mut CreateStructA,
+    insert_after: usize,
+}
+
+/// HCBT_CREATEWND (wParam = HWND, lParam = CBT_CREATEWND) : vrai si un
+/// crochet WH_CBT du fil refuse la création. Le crochet peut changer la
+/// CREATESTRUCT, relue ensuite par WM_NCCREATE et WM_CREATE.
+unsafe fn cbt_create_window(hwnd: usize, cs: &mut CreateStructA) -> bool {
+    let Some(h) = next_hook(WH_CBT, 0) else {
+        return false;
+    };
+    let mut info = CbtCreateWnd {
+        cs: cs as *mut CreateStructA,
+        insert_after: 0,
+    };
+    run_hook(
+        h,
+        HCBT_CREATEWND,
+        hwnd,
+        &mut info as *mut CbtCreateWnd as isize,
+    ) != 0
 }
 
 pub unsafe extern "win64" fn call_next_hook_ex(
@@ -7073,6 +7121,91 @@ mod tests_messages {
                 (client.left, client.top, client.right, client.bottom)
             );
             assert!(r.right > r.left && r.bottom > r.top);
+            destroy_window(hwnd);
+        }
+    }
+
+    thread_local! {
+        static CBT_VUS: std::cell::RefCell<Vec<(usize, u32, String)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static CBT_REFUS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    extern "win64" fn proc_mfc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+        if msg == WM_NCCREATE {
+            CBT_VUS.with(|v| v.borrow_mut().push((hwnd, msg, String::new())));
+        }
+        unsafe { def_window_proc_w(hwnd, msg, wp, lp) }
+    }
+
+    extern "win64" fn crochet_cbt(code: i32, wp: usize, lp: isize) -> isize {
+        unsafe {
+            if code == HCBT_CREATEWND {
+                let info = &*(lp as *const CbtCreateWnd);
+                let class = read_wide_z((*info.cs).class.cast());
+                CBT_VUS.with(|v| v.borrow_mut().push((wp, 0, class)));
+                if CBT_REFUS.with(|r| r.get()) {
+                    return 1;
+                }
+                // Comme _AfxCbtFilterHook : sous-classement avant tout message.
+                set_window_long_ptr_w(wp, -4, proc_mfc as *const () as isize);
+            }
+            call_next_hook_ex(0, code, wp, lp)
+        }
+    }
+
+    unsafe fn read_wide_z(p: *const u16) -> String {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+    }
+
+    #[test]
+    fn crochet_cbt_sous_classe_avant_wm_nccreate() {
+        // MFC attache ses fenêtres dans HCBT_CREATEWND ; sa classe garde
+        // DefWindowProc (Pythonwin, #1654).
+        unsafe {
+            let tid = crate::dlls::kernel32::get_current_thread_id();
+            let h = set_windows_hook_ex_w(WH_CBT, crochet_cbt as *const () as usize, 0, tid);
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let creer = || {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    50,
+                    20,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            let vus = CBT_VUS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+            assert_eq!(
+                vus,
+                vec![
+                    (hwnd, 0, "STATIC".to_string()),
+                    (hwnd, WM_NCCREATE, String::new())
+                ]
+            );
+            destroy_window(hwnd);
+            // Une valeur non nulle refuse la fenêtre.
+            CBT_REFUS.with(|r| r.set(true));
+            assert_eq!(creer(), 0);
+            CBT_REFUS.with(|r| r.set(false));
+            assert_eq!(unhook_windows_hook_ex(h), 1);
+            CBT_VUS.with(|v| v.borrow_mut().clear());
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            assert!(CBT_VUS.with(|v| v.borrow().is_empty()));
             destroy_window(hwnd);
         }
     }
