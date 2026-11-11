@@ -893,6 +893,29 @@ unsafe extern "win64" fn spool_denied(_a: usize, _b: usize, _c: usize, _d: usize
     set_last_error(ERROR_ACCESS_DENIED);
     0
 }
+/// DeleteMonitor(serveur, environnement, nom) : seul « Local Port » existe
+/// (EnumMonitors) et il ne se supprime pas ; un autre nom est inconnu,
+/// comme sur un Windows où ce moniteur n'a jamais été installé (#1757).
+unsafe extern "win64" fn DeleteMonitorW(_server: usize, _env: usize, name: *const u16) -> i32 {
+    let name = crate::dlls::wstr(name);
+    crate::trace!("DeleteMonitor({name}) : moniteur absent");
+    set_last_error(if name.eq_ignore_ascii_case(LOCAL_PORT) {
+        ERROR_ACCESS_DENIED
+    } else {
+        ERROR_UNKNOWN_PRINT_MONITOR
+    });
+    0
+}
+unsafe extern "win64" fn DeleteMonitorA(_server: usize, _env: usize, name: *const u8) -> i32 {
+    let name = crate::dlls::cstr(name);
+    set_last_error(if name.eq_ignore_ascii_case(LOCAL_PORT) {
+        ERROR_ACCESS_DENIED
+    } else {
+        ERROR_UNKNOWN_PRINT_MONITOR
+    });
+    0
+}
+const ERROR_UNKNOWN_PRINT_MONITOR: u32 = 3000;
 unsafe extern "win64" fn no_connection(_name: usize) -> i32 {
     set_last_error(ERROR_INVALID_PRINTER_NAME);
     0
@@ -1181,6 +1204,8 @@ pub fn winspool_exports() -> crate::dlls::Exports {
         "SetFormW" => fn spool_denied,
         "DeleteFormW" => fn spool_denied,
         "EnumMonitorsW" => fn EnumMonitorsW,
+        "DeleteMonitorW" => fn DeleteMonitorW,
+        "DeleteMonitorA" => fn DeleteMonitorA,
         "EnumPortsW" => fn EnumPortsW,
         "EnumPrintProcessorsW" => fn EnumPrintProcessorsW,
         "EnumPrintProcessorDatatypesW" => fn EnumPrintProcessorDatatypesW,
