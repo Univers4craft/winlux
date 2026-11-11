@@ -33,7 +33,7 @@ fn opts(options: u64, wide: bool) -> crate::printf::Opts {
     }
 }
 
-unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8> {
+pub(crate) unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8> {
     let mut v = crate::thunks::VaList::new(va);
     crate::printf::format(
         std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
@@ -42,7 +42,7 @@ unsafe fn format_narrow(options: u64, fmt: *const u8, va: *const u64) -> Vec<u8>
     )
 }
 
-unsafe fn format_wide(options: u64, fmt: *const u16, va: *const u64) -> Vec<u16> {
+pub(crate) unsafe fn format_wide(options: u64, fmt: *const u16, va: *const u64) -> Vec<u16> {
     let mut v = crate::thunks::VaList::new(va);
     let text = String::from_utf16_lossy(std::slice::from_raw_parts(
         fmt,
@@ -252,7 +252,7 @@ pub unsafe extern "win64" fn stdio_common_vfwprintf(
     }
 }
 pub unsafe extern "win64" fn stdio_common_vsscanf(
-    _options: u64,
+    options: u64,
     buf: *const u8,
     len: usize,
     fmt: *const u8,
@@ -269,11 +269,14 @@ pub unsafe extern "win64" fn stdio_common_vsscanf(
         (0..len).position(|i| *buf.add(i) == 0).unwrap_or(len)
     };
     let mut v = crate::thunks::VaList::new(va);
-    crate::dlls::crt_scan::scan(
-        std::slice::from_raw_parts(buf, n),
-        std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
-        &mut v,
-    )
+    // Bit 0 : _CRT_INTERNAL_SCANF_SECURECRT (sscanf_s).
+    crate::dlls::crt_scan::secure_if(options & 1 != 0, || {
+        crate::dlls::crt_scan::scan(
+            std::slice::from_raw_parts(buf, n),
+            std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
+            &mut v,
+        )
+    })
 }
 
 /// Format de scanf large → format étroit du moteur : %s, %c et %[ sans
@@ -344,7 +347,7 @@ pub(crate) fn wide_scan_format(fmt: &[u16]) -> Vec<u8> {
 /// __stdio_common_vswscanf : le texte large passe au moteur octet par
 /// octet (Latin-1 ; au-delà, « ? »).
 pub unsafe extern "win64" fn stdio_common_vswscanf(
-    _options: u64,
+    options: u64,
     buf: *const u16,
     len: usize,
     fmt: *const u16,
@@ -369,7 +372,9 @@ pub unsafe extern "win64" fn stdio_common_vswscanf(
         crate::printf::wide_len(fmt),
     ));
     let mut v = crate::thunks::VaList::new(va);
-    crate::dlls::crt_scan::scan(&input, &f, &mut v)
+    crate::dlls::crt_scan::secure_if(options & 1 != 0, || {
+        crate::dlls::crt_scan::scan(&input, &f, &mut v)
+    })
 }
 
 // ---------- Flux ----------
@@ -822,30 +827,109 @@ pub extern "win64" fn lock_locales() {}
 
 // ---------- Mathématiques en simple précision et C99 ----------
 
-macro_rules! unary {
-    ($($name:ident: $t:ty => $f:expr),* $(,)?) => {
-        $(pub extern "win64" fn $name(x: $t) -> $t { let f: fn($t) -> $t = $f; f(x) })*
-    };
+// Écrites une à une (et non par macro) : wow32 lit leur signature dans
+// le source pour les servir aux programmes x86 (#1407).
+pub extern "win64" fn acosf(x: f32) -> f32 {
+    f32::acos(x)
 }
-macro_rules! binary {
-    ($($name:ident: $t:ty => $f:expr),* $(,)?) => {
-        $(pub extern "win64" fn $name(x: $t, y: $t) -> $t { let f: fn($t, $t) -> $t = $f; f(x, y) })*
-    };
+pub extern "win64" fn asinf(x: f32) -> f32 {
+    f32::asin(x)
 }
-unary! {
-    acosf: f32 => f32::acos, asinf: f32 => f32::asin, atanf: f32 => f32::atan,
-    cosf: f32 => f32::cos, sinf: f32 => f32::sin, tanf: f32 => f32::tan,
-    coshf: f32 => f32::cosh, sinhf: f32 => f32::sinh, tanhf: f32 => f32::tanh,
-    acoshf: f32 => f32::acosh, asinhf: f32 => f32::asinh, atanhf: f32 => f32::atanh,
-    expf: f32 => f32::exp, logf: f32 => f32::ln, log10f: f32 => f32::log10, log2f: f32 => f32::log2,
-    sqrtf: f32 => f32::sqrt, ceilf: f32 => f32::ceil, floorf: f32 => f32::floor,
-    roundf: f32 => f32::round, truncf: f32 => f32::trunc, cbrtf: f32 => f32::cbrt,
-    acosh: f64 => f64::acosh, asinh: f64 => f64::asinh, atanh: f64 => f64::atanh,
-    log2: f64 => f64::log2, cbrt: f64 => f64::cbrt, round: f64 => f64::round, trunc: f64 => f64::trunc,
+pub extern "win64" fn atanf(x: f32) -> f32 {
+    f32::atan(x)
 }
-binary! {
-    atan2f: f32 => f32::atan2, powf: f32 => f32::powf, fmodf: f32 => |x, y| x % y,
-    copysignf: f32 => f32::copysign, copysign: f64 => f64::copysign,
+pub extern "win64" fn cosf(x: f32) -> f32 {
+    f32::cos(x)
+}
+pub extern "win64" fn sinf(x: f32) -> f32 {
+    f32::sin(x)
+}
+pub extern "win64" fn tanf(x: f32) -> f32 {
+    f32::tan(x)
+}
+pub extern "win64" fn coshf(x: f32) -> f32 {
+    f32::cosh(x)
+}
+pub extern "win64" fn sinhf(x: f32) -> f32 {
+    f32::sinh(x)
+}
+pub extern "win64" fn tanhf(x: f32) -> f32 {
+    f32::tanh(x)
+}
+pub extern "win64" fn acoshf(x: f32) -> f32 {
+    f32::acosh(x)
+}
+pub extern "win64" fn asinhf(x: f32) -> f32 {
+    f32::asinh(x)
+}
+pub extern "win64" fn atanhf(x: f32) -> f32 {
+    f32::atanh(x)
+}
+pub extern "win64" fn expf(x: f32) -> f32 {
+    f32::exp(x)
+}
+pub extern "win64" fn logf(x: f32) -> f32 {
+    f32::ln(x)
+}
+pub extern "win64" fn log10f(x: f32) -> f32 {
+    f32::log10(x)
+}
+pub extern "win64" fn log2f(x: f32) -> f32 {
+    f32::log2(x)
+}
+pub extern "win64" fn sqrtf(x: f32) -> f32 {
+    f32::sqrt(x)
+}
+pub extern "win64" fn ceilf(x: f32) -> f32 {
+    f32::ceil(x)
+}
+pub extern "win64" fn floorf(x: f32) -> f32 {
+    f32::floor(x)
+}
+pub extern "win64" fn roundf(x: f32) -> f32 {
+    f32::round(x)
+}
+pub extern "win64" fn truncf(x: f32) -> f32 {
+    f32::trunc(x)
+}
+pub extern "win64" fn cbrtf(x: f32) -> f32 {
+    f32::cbrt(x)
+}
+pub extern "win64" fn acosh(x: f64) -> f64 {
+    f64::acosh(x)
+}
+pub extern "win64" fn asinh(x: f64) -> f64 {
+    f64::asinh(x)
+}
+pub extern "win64" fn atanh(x: f64) -> f64 {
+    f64::atanh(x)
+}
+pub extern "win64" fn log2(x: f64) -> f64 {
+    f64::log2(x)
+}
+pub extern "win64" fn cbrt(x: f64) -> f64 {
+    f64::cbrt(x)
+}
+pub extern "win64" fn round(x: f64) -> f64 {
+    f64::round(x)
+}
+pub extern "win64" fn trunc(x: f64) -> f64 {
+    f64::trunc(x)
+}
+pub extern "win64" fn atan2f(x: f32, y: f32) -> f32 {
+    f32::atan2(x, y)
+}
+pub extern "win64" fn powf(x: f32, y: f32) -> f32 {
+    f32::powf(x, y)
+}
+pub extern "win64" fn fmodf(x: f32, y: f32) -> f32 {
+    x % y
+}
+pub extern "win64" fn copysignf(x: f32, y: f32) -> f32 {
+    f32::copysign(x, y)
+}
+pub extern "win64" fn copysign(x: f64, y: f64) -> f64 {
+    f64::copysign(x, y)
 }
 pub extern "win64" fn fma(x: f64, y: f64, z: f64) -> f64 {
     x.mul_add(y, z)

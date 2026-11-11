@@ -90,6 +90,14 @@ for question, detail, _icon in perm["QUESTIONS"].values():
     assert question in perm["_TR"] and detail in perm["_TR"], question
     assert "{app}" in question and all("{app}" in row for row in perm["_TR"][question])
 assert all(len(row) == 3 and all(row) for row in perm["_TR"].values())
+# #1592 : la fenêtre ouverte, une ligne sur stderr pour le terminal qui attend.
+err = io.StringIO()
+perm["notice"]("files", "python.exe", err)
+line = err.getvalue()
+assert line.startswith("winlux : python.exe attend votre réponse dans une fenêtre.") and line.endswith("s.\n"), line
+assert "Autoriser « python.exe » à accéder à vos fichiers personnels ?" in line and "120 s" in line, line
+key = "{app} attend votre réponse dans une fenêtre. {question} Sans réponse : refus pour cette fois dans {delai} s."
+assert all("{question}" in row and "{delai}" in row for row in perm["_TR"][key])
 print("OK: winlux-permission (mémoire des choix, fenêtre fermée si le programme part, réponse enregistrée, langues)")
 
 # #1038 : affichage injoignable -> code 2 (refus pour cette fois), rien de mémorisé.

@@ -28,6 +28,15 @@ pub(crate) fn unsupported_call(name: &'static str) -> i32 {
     E_NOTIMPL
 }
 
+/// WINLUX_D2D_TRACE : une ligne par opération Direct2D notable (#1609).
+macro_rules! d2d_trace {
+    ($($a:tt)*) => {
+        if crate::dlls::d2d1::v11::trace_on() {
+            crate::dlls::d2d1::v11::trace(format_args!($($a)*));
+        }
+    };
+}
+
 #[path = "d2d1_1.rs"]
 mod v11;
 
@@ -42,6 +51,7 @@ pub(crate) fn tear_off_vt() -> *const () {
 }
 
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
+const DXGI_FORMAT_A8_UNORM: u32 = 65;
 const D2DERR_WRONG_STATE: i32 = 0x8899_0001u32 as i32;
 const D2DERR_UNSUPPORTED_PIXEL_FORMAT: i32 = 0x8898_2F80u32 as i32;
 
@@ -291,8 +301,90 @@ unsafe fn new_geometry(
         path: Mutex::new(path),
         rule: Mutex::new(FillRule::EvenOdd),
         open: Mutex::new(false),
+        sources: Vec::new(),
+        transform: Matrix::IDENTITY,
     };
     put(out, new_res(f, GEOMETRY_VT.ptr(), g))
+}
+
+/// CreateGeometryGroup(fillMode, geometries, count, out) : les figures des
+/// sources (aplaties) sont réunies sous la règle du groupe.
+unsafe extern "win64" fn create_geometry_group(
+    this: *mut FactoryObj,
+    mode: u32,
+    geoms: *const *mut c_void,
+    count: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if geoms.is_null() && count > 0 {
+        return E_INVALIDARG;
+    }
+    let mut path = Path::default();
+    let mut sources = Vec::with_capacity(count as usize);
+    for i in 0..count as usize {
+        let g = *geoms.add(i);
+        if g.is_null() {
+            continue;
+        }
+        if let Some((p, _)) = geometry_of(g) {
+            path.figures.extend(p.figures);
+        }
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 1)(g);
+        sources.push(g);
+    }
+    let g = Geometry {
+        kind: GeomKind::Group,
+        path: Mutex::new(path),
+        // D2D1_FILL_MODE_ALTERNATE 0, WINDING 1.
+        rule: Mutex::new(if mode == 1 {
+            FillRule::NonZero
+        } else {
+            FillRule::EvenOdd
+        }),
+        open: Mutex::new(false),
+        sources,
+        transform: Matrix::IDENTITY,
+    };
+    put(out, new_res(this, GROUP_VT.ptr(), g))
+}
+
+/// CreateTransformedGeometry(source, transform, out).
+unsafe extern "win64" fn create_transformed_geometry(
+    this: *mut FactoryObj,
+    src: *mut c_void,
+    m: *const Matrix,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if src.is_null() || m.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = *m;
+    let (path, rule) = geometry_of(src).unwrap_or((Path::default(), FillRule::EvenOdd));
+    let path = Path {
+        figures: path
+            .fill_polys(&m)
+            .into_iter()
+            .zip(path.figures.iter().map(|f| f.1))
+            .collect(),
+    };
+    method::<unsafe extern "win64" fn(*mut c_void) -> u32>(src, 1)(src);
+    let g = Geometry {
+        kind: GeomKind::Transformed,
+        path: Mutex::new(path),
+        rule: Mutex::new(rule),
+        open: Mutex::new(false),
+        sources: vec![src],
+        transform: m,
+    };
+    put(out, new_res(this, TRANSFORMED_VT.ptr(), g))
 }
 
 unsafe extern "win64" fn create_rect_geometry(
@@ -341,8 +433,69 @@ unsafe extern "win64" fn create_path_geometry(this: *mut FactoryObj, out: *mut *
     new_geometry(this, GeomKind::Path, Path::default(), out)
 }
 
+/// Disposition d'un bitmap WIC qui peut servir de cible (#1573) : BGRA ou
+/// RGBA 32 bits prémultiplié, BGR 32 bits, ou alpha seul sur 8 bits (masque
+/// de pinceau de Paint.NET).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WicLayout {
+    Pbgra,
+    Prgba,
+    Bgr,
+    Alpha8,
+}
+
+impl WicLayout {
+    fn of(fmt: &Guid) -> Option<WicLayout> {
+        use super::windowscodecs::{FMT_ALPHA8, FMT_BGR32, FMT_PBGRA32, FMT_PRGBA32};
+        Some(match *fmt {
+            FMT_PBGRA32 => WicLayout::Pbgra,
+            FMT_PRGBA32 => WicLayout::Prgba,
+            FMT_BGR32 => WicLayout::Bgr,
+            FMT_ALPHA8 => WicLayout::Alpha8,
+            _ => return None,
+        })
+    }
+
+    fn bpp(self) -> usize {
+        if self == WicLayout::Alpha8 {
+            1
+        } else {
+            4
+        }
+    }
+
+    /// Ligne du bitmap WIC vers la ligne BGRA prémultipliée de la cible.
+    fn read(self, src: &[u8], dst: &mut [u8]) {
+        for (d, s) in dst
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.chunks_exact(self.bpp()))
+        {
+            *d = match self {
+                WicLayout::Pbgra => [s[0], s[1], s[2], s[3]],
+                WicLayout::Prgba => [s[2], s[1], s[0], s[3]],
+                WicLayout::Bgr => [s[0], s[1], s[2], 255],
+                WicLayout::Alpha8 => [0, 0, 0, s[0]],
+            };
+        }
+    }
+
+    /// Ligne BGRA prémultipliée de la cible vers la ligne du bitmap WIC.
+    fn write(self, src: &[u8], dst: &mut [u8]) {
+        for (d, s) in dst.chunks_exact_mut(self.bpp()).zip(src.as_chunks::<4>().0) {
+            match self {
+                WicLayout::Pbgra => d.copy_from_slice(s),
+                WicLayout::Prgba => d.copy_from_slice(&[s[2], s[1], s[0], s[3]]),
+                WicLayout::Bgr => d.copy_from_slice(&[s[0], s[1], s[2], 255]),
+                WicLayout::Alpha8 => d[0] = s[3],
+            }
+        }
+    }
+}
+
 /// CreateWicBitmapRenderTarget : la cible dessine dans le bitmap WIC
-/// (32 bits BGRA prémultiplié ou BGR), lu à BeginDraw et écrit à EndDraw.
+/// (formats de `WicLayout`), lu à BeginDraw et écrit à EndDraw.
 unsafe extern "win64" fn create_wic_render_target(
     this: *mut FactoryObj,
     bitmap: *mut c_void,
@@ -365,10 +518,15 @@ unsafe extern "win64" fn create_wic_render_target(
     }
     let mut fmt = Guid::default();
     method::<GetFormat>(bitmap, 4)(bitmap, &mut fmt);
-    use super::windowscodecs::{FMT_BGR32, FMT_PBGRA32};
-    if fmt != FMT_PBGRA32 && fmt != FMT_BGR32 {
+    if WicLayout::of(&fmt).is_none() {
+        crate::log_warn!(
+            "d2d1",
+            "CreateWicBitmapRenderTarget : format {:?} non pris en charge",
+            fmt
+        );
         return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
     }
+    use super::windowscodecs::FMT_BGR32;
     method::<unsafe extern "win64" fn(*mut c_void) -> u32>(bitmap, 1)(bitmap);
     let target = Target {
         w,
@@ -380,7 +538,9 @@ unsafe extern "win64" fn create_wic_render_target(
         drawing: false,
         ext: Default::default(),
     };
-    put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)))
+    let hr = put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)));
+    d2d_trace!("CreateWicBitmapRenderTarget {:p} {w}x{h} {:?}", *out, fmt);
+    hr
 }
 
 /// D2D1_HWND_RENDER_TARGET_PROPERTIES.
@@ -410,7 +570,9 @@ unsafe fn new_screen_target(
         drawing: false,
         ext: Default::default(),
     };
-    put(out, new_res(f, vt, Mutex::new(target)))
+    let hr = put(out, new_res(f, vt, Mutex::new(target)));
+    d2d_trace!("cible écran {:p} {w}x{h}", *out);
+    hr
 }
 
 /// CreateHwndRenderTarget : rendu logiciel posé sur la fenêtre à EndDraw
@@ -467,8 +629,8 @@ static FACTORY_VT: VTable<33> = VTable([
     create_rect_geometry as *const (),
     create_rounded_rect_geometry as *const (),
     create_ellipse_geometry as *const (),
-    unsupported!("CreateGeometryGroup"),
-    unsupported!("CreateTransformedGeometry"),
+    create_geometry_group as *const (),
+    create_transformed_geometry as *const (),
     create_path_geometry as *const (),
     v11::factory_stroke_style as *const (),
     v11::factory_state_block as *const (),
@@ -504,6 +666,10 @@ enum GeomKind {
     RoundedRect,
     Ellipse,
     Path,
+    /// ID2D1GeometryGroup : figures des sources réunies (#1400).
+    Group,
+    /// ID2D1TransformedGeometry : figures de la source transformées.
+    Transformed,
 }
 
 struct Geometry {
@@ -512,6 +678,18 @@ struct Geometry {
     rule: Mutex<FillRule>,
     /// Un puits (sink) est ouvert et la géométrie n'est pas encore figée.
     open: Mutex<bool>,
+    /// Géométries sources d'un groupe ou d'une géométrie transformée, tenues.
+    sources: Vec<*mut c_void>,
+    /// Transformation d'une géométrie transformée.
+    transform: Matrix,
+}
+
+impl Drop for Geometry {
+    fn drop(&mut self) {
+        for &g in &self.sources {
+            unsafe { method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 2)(g) };
+        }
+    }
 }
 
 type GeometryObj = Com<Res<Geometry>>;
@@ -526,6 +704,8 @@ unsafe extern "win64" fn geometry_qi(
         GeomKind::RoundedRect => IID_D2D1_ROUNDED_RECT_GEOMETRY,
         GeomKind::Ellipse => IID_D2D1_ELLIPSE_GEOMETRY,
         GeomKind::Path => IID_D2D1_PATH_GEOMETRY,
+        GeomKind::Group => IID_D2D1_GEOMETRY_GROUP,
+        GeomKind::Transformed => IID_D2D1_TRANSFORMED_GEOMETRY,
     };
     // ID2D1PathGeometry1 (62baa2d2) prolonge ID2D1PathGeometry.
     const IID_PATH1: Guid = guid(
@@ -573,6 +753,26 @@ unsafe extern "win64" fn geometry_bounds(
     S_OK
 }
 
+/// Point (x, y) dans des polygones, selon la règle de remplissage.
+fn polys_contain(polys: &[Vec<Pt>], rule: FillRule, x: f32, y: f32) -> bool {
+    let mut wind = 0i32;
+    for poly in polys {
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (a.1 <= y) != (b.1 <= y) {
+                let t = (y - a.1) / (b.1 - a.1);
+                if a.0 + t * (b.0 - a.0) > x {
+                    wind += if b.1 > a.1 { 1 } else { -1 };
+                }
+            }
+        }
+    }
+    match rule {
+        FillRule::EvenOdd => wind % 2 != 0,
+        FillRule::NonZero => wind != 0,
+    }
+}
+
 /// FillContainsPoint(point, transform, tolérance, *BOOL) : test pair-impair
 /// ou non nul sur les polygones aplatis.
 unsafe extern "win64" fn geometry_fill_contains(
@@ -590,23 +790,112 @@ unsafe extern "win64" fn geometry_fill_contains(
     let polys = crate::dlls::lock(&g.path).fill_polys(&m);
     let rule = *crate::dlls::lock(&g.rule);
     let (x, y) = point(pt);
-    let mut wind = 0i32;
-    for poly in &polys {
-        for i in 0..poly.len() {
+    *out = i32::from(polys_contain(&polys, rule, x, y));
+    S_OK
+}
+
+/// Polygones du trait d'épaisseur `width` (jointures et extrémités rondes ;
+/// le style de trait n'est pas appliqué), à unir par la règle non nulle.
+unsafe fn widened_polys(this: *mut GeometryObj, width: f32, m: *const Matrix) -> Vec<Vec<Pt>> {
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    crate::dlls::lock(&Com::get(this).data.path).stroke_polys(&m, width.max(0.0))
+}
+
+/// GetWidenedBounds(largeur, style, transform, tolérance, *rect) (#1470).
+unsafe extern "win64" fn geometry_widened_bounds(
+    this: *mut GeometryObj,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut RectF,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut r = RectF {
+        l: f32::MAX,
+        t: f32::MAX,
+        r: f32::MIN,
+        b: f32::MIN,
+    };
+    for p in widened_polys(this, width, m).iter().flatten() {
+        r.l = r.l.min(p.0);
+        r.t = r.t.min(p.1);
+        r.r = r.r.max(p.0);
+        r.b = r.b.max(p.1);
+    }
+    *out = r;
+    S_OK
+}
+
+/// StrokeContainsPoint(point, largeur, style, transform, tolérance, *BOOL).
+unsafe extern "win64" fn geometry_stroke_contains(
+    this: *mut GeometryObj,
+    pt: u64,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut i32,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let (x, y) = point(pt);
+    let polys = widened_polys(this, width, m);
+    *out = i32::from(polys_contain(&polys, FillRule::NonZero, x, y));
+    S_OK
+}
+
+/// ComputeLength(transform, tolérance, *longueur) : somme des segments
+/// des figures aplaties.
+unsafe extern "win64" fn geometry_length(
+    this: *mut GeometryObj,
+    m: *const Matrix,
+    _tol: f32,
+    out: *mut f32,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
+    let mut len = 0.0;
+    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
+        let n = if *closed {
+            poly.len()
+        } else {
+            poly.len().saturating_sub(1)
+        };
+        for i in 0..n {
             let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-            if (a.1 <= y) != (b.1 <= y) {
-                let t = (y - a.1) / (b.1 - a.1);
-                if a.0 + t * (b.0 - a.0) > x {
-                    wind += if b.1 > a.1 { 1 } else { -1 };
-                }
-            }
+            len += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
         }
     }
-    *out = i32::from(match rule {
-        FillRule::EvenOdd => wind % 2 != 0,
-        FillRule::NonZero => wind != 0,
-    });
+    *out = len;
     S_OK
+}
+
+/// Widen(largeur, style, transform, tolérance, puits) : le trait de la
+/// géométrie, envoyé en figures fermées à unir par la règle non nulle
+/// (#1470). Paint.NET en tire les limites de ses éléments dessinés.
+unsafe extern "win64" fn geometry_widen(
+    this: *mut GeometryObj,
+    width: f32,
+    _style: *mut c_void,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    if sink.is_null() {
+        return E_INVALIDARG;
+    }
+    let figures: Vec<(Vec<Pt>, bool)> = widened_polys(this, width, m)
+        .into_iter()
+        .map(|p| (p, true))
+        .collect();
+    emit_figures(sink, &figures, FillRule::NonZero)
 }
 
 unsafe extern "win64" fn path_open(this: *mut GeometryObj, out: *mut *mut c_void) -> i32 {
@@ -632,6 +921,207 @@ unsafe extern "win64" fn path_figure_count(this: *mut GeometryObj, n: *mut u32) 
     S_OK
 }
 
+/// ID2D1GeometryGroup {2CD906A6-12E2-11DC-9FED-001143A055F9}.
+const IID_D2D1_GEOMETRY_GROUP: Guid = guid(
+    0x2cd906a6,
+    0x12e2,
+    0x11dc,
+    [0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9],
+);
+/// ID2D1TransformedGeometry {2CD906BB-12E2-11DC-9FED-001143A055F9}.
+const IID_D2D1_TRANSFORMED_GEOMETRY: Guid = guid(
+    0x2cd906bb,
+    0x12e2,
+    0x11dc,
+    [0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9],
+);
+
+/// Envoie des figures aplaties à un ID2D1SimplifiedGeometrySink (ou un
+/// ID2D1GeometrySink, qui le prolonge) : SetFillMode, BeginFigure,
+/// AddLines, EndFigure, Close.
+unsafe fn emit_figures(sink: *mut c_void, figures: &[(Vec<Pt>, bool)], rule: FillRule) -> i32 {
+    type SetFill = unsafe extern "win64" fn(*mut c_void, u32);
+    type Begin = unsafe extern "win64" fn(*mut c_void, u64, u32);
+    type Lines = unsafe extern "win64" fn(*mut c_void, *const Pt, u32);
+    type End = unsafe extern "win64" fn(*mut c_void, u32);
+    type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
+    let packed = |p: Pt| (p.0.to_bits() as u64) | ((p.1.to_bits() as u64) << 32);
+    method::<SetFill>(sink, 3)(sink, u32::from(rule == FillRule::NonZero));
+    for (pts, closed) in figures {
+        let Some(&first) = pts.first() else { continue };
+        // D2D1_FIGURE_BEGIN_FILLED 0 ; D2D1_FIGURE_END_CLOSED 1.
+        method::<Begin>(sink, 5)(sink, packed(first), 0);
+        if pts.len() > 1 {
+            method::<Lines>(sink, 6)(sink, pts[1..].as_ptr(), (pts.len() - 1) as u32);
+        }
+        method::<End>(sink, 8)(sink, u32::from(*closed));
+    }
+    method::<Close>(sink, 9)(sink)
+}
+
+/// Simplify(option, transform, tolérance, sink) : nos figures sont déjà
+/// aplaties, elles partent en segments droits quelle que soit l'option.
+unsafe extern "win64" fn geometry_simplify(
+    this: *mut GeometryObj,
+    _option: u32,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    if sink.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let g = &Com::get(this).data;
+    let path = crate::dlls::lock(&g.path).clone();
+    let rule = *crate::dlls::lock(&g.rule);
+    let figures: Vec<(Vec<Pt>, bool)> = path
+        .fill_polys(&m)
+        .into_iter()
+        .zip(path.figures.iter().map(|f| f.1))
+        .collect();
+    emit_figures(sink, &figures, rule)
+}
+
+/// Géométrie de Winlux (chemin, forme simple, groupe ou transformée).
+unsafe fn is_geometry(p: *mut c_void) -> bool {
+    if p.is_null() {
+        return false;
+    }
+    let vt = *(p as *const *const ());
+    vt == GEOMETRY_VT.ptr() || vt == GROUP_VT.ptr() || vt == TRANSFORMED_VT.ptr()
+}
+
+/// CombineWithGeometry(entrée, mode, transform de l'entrée, tolérance,
+/// puits) (#1549) : union, intersection, ou exclusif ou différence des
+/// figures aplaties, envoyée en contours fermés.
+unsafe extern "win64" fn geometry_combine(
+    this: *mut GeometryObj,
+    input: *mut c_void,
+    mode: u32,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    use super::d2d_combine::{combine, CombineMode};
+    if sink.is_null() || !is_geometry(input) {
+        return E_INVALIDARG;
+    }
+    let Some(mode) = CombineMode::from_d2d(mode) else {
+        return E_INVALIDARG;
+    };
+    let polys = |g: *mut GeometryObj, m: &Matrix| {
+        let g = &Com::get(g).data;
+        let path = crate::dlls::lock(&g.path).fill_polys(m);
+        (path, *crate::dlls::lock(&g.rule))
+    };
+    let (a, ra) = polys(this, &Matrix::IDENTITY);
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let (b, rb) = polys(input as *mut GeometryObj, &m);
+    let figures: Vec<(Vec<Pt>, bool)> = combine(&a, ra, &b, rb, mode)
+        .into_iter()
+        .map(|p| (p, true))
+        .collect();
+    emit_figures(sink, &figures, FillRule::NonZero)
+}
+
+/// ID2D1PathGeometry::Stream(sink) : recopie le chemin fermé.
+unsafe extern "win64" fn path_stream(this: *mut GeometryObj, sink: *mut c_void) -> i32 {
+    if sink.is_null() {
+        return E_INVALIDARG;
+    }
+    let g = &Com::get(this).data;
+    if *crate::dlls::lock(&g.open) {
+        return D2DERR_WRONG_STATE;
+    }
+    let path = crate::dlls::lock(&g.path).clone();
+    let rule = *crate::dlls::lock(&g.rule);
+    emit_figures(sink, &path.figures, rule)
+}
+
+unsafe extern "win64" fn group_fill_mode(this: *mut GeometryObj) -> u32 {
+    u32::from(*crate::dlls::lock(&Com::get(this).data.rule) == FillRule::NonZero)
+}
+unsafe extern "win64" fn group_source_count(this: *mut GeometryObj) -> u32 {
+    Com::get(this).data.sources.len() as u32
+}
+unsafe extern "win64" fn group_sources(this: *mut GeometryObj, out: *mut *mut c_void, n: u32) {
+    if out.is_null() {
+        return;
+    }
+    let src = &Com::get(this).data.sources;
+    for i in 0..n as usize {
+        let g = src.get(i).copied().unwrap_or(std::ptr::null_mut());
+        if !g.is_null() {
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 1)(g);
+        }
+        *out.add(i) = g;
+    }
+}
+unsafe extern "win64" fn transformed_source(this: *mut GeometryObj, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let g = Com::get(this)
+        .data
+        .sources
+        .first()
+        .copied()
+        .unwrap_or(std::ptr::null_mut());
+    if !g.is_null() {
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 1)(g);
+    }
+    *out = g;
+}
+unsafe extern "win64" fn transformed_matrix(this: *mut GeometryObj, out: *mut Matrix) {
+    if !out.is_null() {
+        *out = Com::get(this).data.transform;
+    }
+}
+
+/// Les 17 méthodes d'ID2D1Geometry, suivies de celles de l'interface fille.
+macro_rules! geometry_vtable {
+    ($name:ident, $n:literal, [$($extra:expr),*]) => {
+        static $name: VTable<$n> = VTable([
+            geometry_qi as *const (),
+            add_ref::<Res<Geometry>> as *const (),
+            release::<Res<Geometry>> as *const (),
+            get_factory::<Geometry> as *const (),
+            geometry_bounds as *const (),
+            geometry_widened_bounds as *const (),
+            geometry_stroke_contains as *const (),
+            geometry_fill_contains as *const (),
+            unsupported!("CompareWithGeometry"),
+            geometry_simplify as *const (),
+            unsupported!("Tessellate"),
+            geometry_combine as *const (),
+            unsupported!("Outline"),
+            unsupported!("ComputeArea"),
+            geometry_length as *const (),
+            unsupported!("ComputePointAtLength"),
+            geometry_widen as *const (),
+            $($extra),*
+        ]);
+    };
+}
+geometry_vtable!(
+    GROUP_VT,
+    20,
+    [
+        group_fill_mode as *const (),
+        group_source_count as *const (),
+        group_sources as *const ()
+    ]
+);
+geometry_vtable!(
+    TRANSFORMED_VT,
+    19,
+    [
+        transformed_source as *const (),
+        transformed_matrix as *const ()
+    ]
+);
+
 /// Table commune : ID2D1Geometry (17 entrées) puis, pour un chemin,
 /// Open, Stream, GetSegmentCount et GetFigureCount.
 static GEOMETRY_VT: VTable<22> = VTable([
@@ -640,20 +1130,20 @@ static GEOMETRY_VT: VTable<22> = VTable([
     release::<Res<Geometry>> as *const (),
     get_factory::<Geometry> as *const (),
     geometry_bounds as *const (),
-    unsupported!("GetWidenedBounds"),
-    unsupported!("StrokeContainsPoint"),
+    geometry_widened_bounds as *const (),
+    geometry_stroke_contains as *const (),
     geometry_fill_contains as *const (),
     unsupported!("CompareWithGeometry"),
-    unsupported!("Simplify"),
+    geometry_simplify as *const (),
     unsupported!("Tessellate"),
-    unsupported!("CombineWithGeometry"),
+    geometry_combine as *const (),
     unsupported!("Outline"),
     unsupported!("ComputeArea"),
-    unsupported!("ComputeLength"),
+    geometry_length as *const (),
     unsupported!("ComputePointAtLength"),
-    unsupported!("Widen"),
+    geometry_widen as *const (),
     path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
-    unsupported!("Stream"),
+    path_stream as *const (),
     path_figure_count as *const (), // GetSegmentCount (approché)
     path_figure_count as *const (),
     unsupported!("ComputePointAndSegmentAtLength"), // ID2D1PathGeometry1
@@ -861,6 +1351,9 @@ struct Bitmap {
     options: u32,
     /// Texture D3D11 sous-jacente (CreateBitmapFromDxgiSurface), tenue.
     surface: *mut c_void,
+    /// DXGI_FORMAT_A8_UNORM : la mémoire de l'appelant n'a qu'un octet
+    /// d'alpha par pixel (#1471).
+    alpha_only: bool,
 }
 
 impl Bitmap {
@@ -871,6 +1364,7 @@ impl Bitmap {
             px: Mutex::new(px),
             options: 0,
             surface: std::ptr::null_mut(),
+            alpha_only: false,
         }
     }
 }
@@ -953,6 +1447,22 @@ unsafe extern "win64" fn bitmap_copy_from_memory(
     src: *const u8,
     pitch: u32,
 ) -> i32 {
+    let hr = copy_from_memory(this, dst, src, pitch);
+    d2d_trace!(
+        "CopyFromMemory {:p} {:?} → {hr:#x} {}",
+        this,
+        dst.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        v11::describe_image(this.cast())
+    );
+    hr
+}
+
+unsafe fn copy_from_memory(
+    this: *mut BitmapObj,
+    dst: *const RectU,
+    src: *const u8,
+    pitch: u32,
+) -> i32 {
     if src.is_null() {
         return E_INVALIDARG;
     }
@@ -971,10 +1481,18 @@ unsafe extern "win64" fn bitmap_copy_from_memory(
         return E_INVALIDARG;
     }
     let mut px = crate::dlls::lock(&b.px);
-    let row = (r.r - r.l) as usize * 4;
+    let cols = (r.r - r.l) as usize;
     for y in 0..(r.b - r.t) as usize {
         let d = ((r.t as usize + y) * b.w as usize + r.l as usize) * 4;
-        std::ptr::copy_nonoverlapping(src.add(y * pitch as usize), px[d..].as_mut_ptr(), row);
+        let line = src.add(y * pitch as usize);
+        if b.alpha_only {
+            // Un octet d'alpha par pixel : noir prémultiplié de cette opacité.
+            for x in 0..cols {
+                px[d + x * 4..d + x * 4 + 4].copy_from_slice(&[0, 0, 0, *line.add(x)]);
+            }
+        } else {
+            std::ptr::copy_nonoverlapping(line, px[d..].as_mut_ptr(), cols * 4);
+        }
     }
     S_OK
 }
@@ -1082,6 +1600,8 @@ impl Target {
             Output::Dc { hdc, x, y } => {
                 if to_wic && hdc != 0 {
                     self.present(hdc, x, y);
+                } else if hdc != 0 {
+                    self.load_dc(hdc, x, y);
                 }
                 return S_OK;
             }
@@ -1116,6 +1636,29 @@ impl Target {
         let (mut stride, mut size, mut data) = (0u32, 0u32, std::ptr::null_mut());
         method::<Stride>(lock, 4)(lock, &mut stride);
         method::<Data>(lock, 5)(lock, &mut size, &mut data);
+        type GetFormat = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+        let mut fmt = Guid::default();
+        method::<GetFormat>(wic, 4)(wic, &mut fmt);
+        let layout = WicLayout::of(&fmt).unwrap_or(WicLayout::Pbgra);
+        if layout != WicLayout::Pbgra && !data.is_null() {
+            // Formats convertis ligne par ligne (#1573).
+            let row = self.w as usize * 4;
+            let wrow = self.w as usize * layout.bpp();
+            let (stride, h) = (stride as usize, self.h as usize);
+            if h > 0 && stride >= wrow && (size as usize) >= stride * (h - 1) + wrow {
+                for y in 0..h {
+                    let wic = std::slice::from_raw_parts_mut(data.add(y * stride), wrow);
+                    let own = &mut self.px[y * row..][..row];
+                    if to_wic {
+                        layout.write(own, wic);
+                    } else {
+                        layout.read(wic, own);
+                    }
+                }
+            }
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(lock, 2)(lock);
+            return S_OK;
+        }
         let row = self.w as usize * 4;
         for y in 0..self.h as usize {
             let wic = data.add(y * stride as usize);
@@ -1160,6 +1703,33 @@ impl Target {
     }
 
     /// Pose les pixels (BGRA prémultipliés, rendus opaques) sur `hdc`.
+    /// BeginDraw d'une cible de DC : elle part du contenu actuel du DC, et
+    /// ce qui n'est pas dessiné garde le fond posé par GDI (#1368). Sans
+    /// cela, la zone non peinte d'un bouton de Paint.NET devenait noire.
+    fn load_dc(&mut self, hdc: usize, x: i32, y: i32) {
+        if self.w == 0 || self.h == 0 {
+            return;
+        }
+        let rect = super::gui::Rect {
+            left: x,
+            top: y,
+            right: x + self.w as i32,
+            bottom: y + self.h as i32,
+        };
+        let snap = match super::gui::dc_window(hdc) {
+            Some(hwnd) if hwnd != 0 => super::gui::capture_window(hwnd, rect),
+            _ => super::gui::bitmap_snapshot(hdc, rect),
+        };
+        let Some(snap) = snap else { return };
+        if snap.width != self.w as usize || snap.height != self.h as usize {
+            return;
+        }
+        for (p, &c) in self.px.as_chunks_mut::<4>().0.iter_mut().zip(&snap.pixels) {
+            // COLORREF 0x00BBGGRR → BGRA opaque.
+            *p = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+        }
+    }
+
     unsafe fn present(&self, hdc: usize, x: i32, y: i32) {
         if self.w == 0 || self.h == 0 {
             return;
@@ -1232,7 +1802,7 @@ unsafe extern "win64" fn target_create_bitmap(
     size: u64,
     src: *const u8,
     pitch: u32,
-    _props: *const c_void,
+    props: *const u32,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
@@ -1242,16 +1812,200 @@ unsafe extern "win64" fn target_create_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+    // D2D1_BITMAP_PROPERTIES commence par le format DXGI.
+    b.alpha_only = !props.is_null() && props.read_unaligned() == DXGI_FORMAT_A8_UNORM;
     let obj = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b);
     if !src.is_null() {
         bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
     }
+    d2d_trace!("CreateBitmap {:p} → {:p} {w}x{h}", this, obj);
     put(out, obj)
+}
+
+/// IWICBitmapLock {00000123-A8F2-4877-BA0A-FD2B6645FB94} (wincodec.h).
+const IID_WIC_BITMAP_LOCK: Guid = guid(
+    0x0000_0123,
+    0xa8f2,
+    0x4877,
+    [0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94],
+);
+
+/// CreateSharedBitmap(riid, data, props, out) (#1399). Un ID2D1Bitmap de
+/// Winlux est rendu tel quel ; un IWICBitmapLock (Paint.NET :
+/// Direct2DControlImpl.DrawBackground) donne un bitmap aux pixels du
+/// verrou, lus à la création (BGRA, prémultiplié ou non, ou BGR).
+unsafe extern "win64" fn target_shared_bitmap(
+    this: *mut TargetObj,
+    riid: *const Guid,
+    data: *mut c_void,
+    props: *const [u32; 2],
+    out: *mut *mut c_void,
+) -> i32 {
+    let hr = shared_bitmap(this, riid, data, props, out);
+    if !out.is_null() {
+        d2d_trace!(
+            "CreateSharedBitmap {:p} {:?} → {hr:#x} {}",
+            this,
+            riid.as_ref(),
+            v11::describe_image(*out)
+        );
+    }
+    hr
+}
+
+unsafe fn shared_bitmap(
+    this: *mut TargetObj,
+    riid: *const Guid,
+    data: *mut c_void,
+    props: *const [u32; 2],
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if riid.is_null() || data.is_null() {
+        return E_INVALIDARG;
+    }
+    if *riid == IID_D2D1_BITMAP || *riid == v11::IID_D2D1_BITMAP1 {
+        if *(data as *const *const ()) != BITMAP_VT.ptr() {
+            return E_INVALIDARG;
+        }
+        Com::add_ref(data as *mut BitmapObj);
+        *out = data;
+        return S_OK;
+    }
+    if *riid != IID_WIC_BITMAP_LOCK {
+        crate::log_warn!(
+            "d2d1",
+            "CreateSharedBitmap : interface {:?} non prise en charge",
+            *riid
+        );
+        return E_INVALIDARG;
+    }
+    type GetSize = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut u32) -> i32;
+    type GetU32 = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+    type GetData = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut *mut u8) -> i32;
+    type GetFormat = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+    let (mut w, mut h, mut stride, mut size) = (0u32, 0u32, 0u32, 0u32);
+    let mut ptr = std::ptr::null_mut();
+    let mut fmt = Guid::default();
+    for hr in [
+        method::<GetSize>(data, 3)(data, &mut w, &mut h),
+        method::<GetU32>(data, 4)(data, &mut stride),
+        method::<GetData>(data, 5)(data, &mut size, &mut ptr),
+        method::<GetFormat>(data, 6)(data, &mut fmt),
+    ] {
+        if hr < 0 {
+            return hr;
+        }
+    }
+    use super::windowscodecs::{FMT_BGR32, FMT_BGRA32, FMT_PBGRA32};
+    let straight = fmt == FMT_BGRA32;
+    // D2D1_ALPHA_MODE_IGNORE (3) : alpha ignoré, pixels opaques.
+    let ignore = fmt == FMT_BGR32 || props.as_ref().is_some_and(|p| p[1] == 3);
+    // Formats larges (#1520) : 16 bits, demi-flottants, flottants.
+    let wide = super::wic_pixels::layout(&fmt);
+    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && wide.is_none() {
+        crate::log_warn!(
+            "d2d1",
+            "CreateSharedBitmap : format de verrou {:?} non pris en charge",
+            fmt
+        );
+        return D2DERR_UNSUPPORTED_PIXEL_FORMAT;
+    }
+    if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
+        return E_INVALIDARG;
+    }
+    let src_bpp = wide.map_or(4, |l| l.bpp as usize);
+    let src_row = w as usize * src_bpp;
+    if ptr.is_null()
+        || (stride as usize) < src_row
+        || (size as usize) < stride as usize * (h as usize - 1) + src_row
+    {
+        return E_INVALIDARG;
+    }
+    let row = w as usize * 4;
+    if let Some(l) = wide {
+        let src = std::slice::from_raw_parts(ptr, stride as usize * (h as usize - 1) + src_row);
+        let px = wide_to_pbgra(&l, src, w as usize, h as usize, stride as usize, ignore);
+        let b = Bitmap::new(w, h, px);
+        return put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b));
+    }
+    let mut px = vec![0u8; row * h as usize];
+    for y in 0..h as usize {
+        std::ptr::copy_nonoverlapping(
+            ptr.add(y * stride as usize),
+            px[y * row..].as_mut_ptr(),
+            row,
+        );
+    }
+    for p in px.as_chunks_mut::<4>().0 {
+        if ignore {
+            p[3] = 255;
+        } else if straight {
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+    }
+    let b = Bitmap::new(w, h, px);
+    put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
+}
+
+/// Pixels d'un format WIC large (16 bits, demi-flottants, flottants) en
+/// BGRA 8 bits prémultiplié. Les formats flottants portent des valeurs
+/// linéaires (scRGB) : elles sont encodées sRGB pour la cible 8 bits.
+fn wide_to_pbgra(
+    l: &super::wic_pixels::Layout,
+    src: &[u8],
+    w: usize,
+    h: usize,
+    stride: usize,
+    ignore: bool,
+) -> Vec<u8> {
+    use super::wic_pixels::{linear_to_srgb, read};
+    let bpp = l.bpp as usize;
+    let mut px = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let mut c = read(l, &src[y * stride + x * bpp..][..bpp]);
+            if l.linear() {
+                for v in &mut c[..3] {
+                    *v = linear_to_srgb(*v);
+                }
+            }
+            let a = if ignore { 1.0 } else { c[3].clamp(0.0, 1.0) };
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let d = &mut px[(y * w + x) * 4..][..4];
+            d.copy_from_slice(&[q(c[2] * a), q(c[1] * a), q(c[0] * a), q(a)]);
+        }
+    }
+    px
 }
 
 /// CreateBitmapFromWicBitmap : lit la source WIC convertie en BGRA prémultiplié.
 unsafe extern "win64" fn target_bitmap_from_wic(
+    this: *mut TargetObj,
+    src: *mut c_void,
+    props: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    let hr = bitmap_from_wic(this, src, props, out);
+    if !out.is_null() {
+        d2d_trace!(
+            "CreateBitmapFromWicBitmap {:p} {:p} → {hr:#x} {}",
+            this,
+            src,
+            v11::describe_image(*out)
+        );
+    }
+    hr
+}
+
+unsafe fn bitmap_from_wic(
     this: *mut TargetObj,
     src: *mut c_void,
     _props: *const c_void,
@@ -1473,7 +2227,11 @@ unsafe extern "win64" fn fill_ellipse(this: *mut TargetObj, e: *const Ellipse, b
 
 /// Géométrie Winlux sous-jacente, ou `None` pour un objet étranger.
 unsafe fn geometry_of(g: *mut c_void) -> Option<(Path, FillRule)> {
-    if g.is_null() || *(g as *const *const ()) != GEOMETRY_VT.ptr() {
+    if g.is_null() {
+        return None;
+    }
+    let vt = *(g as *const *const ());
+    if vt != GEOMETRY_VT.ptr() && vt != GROUP_VT.ptr() && vt != TRANSFORMED_VT.ptr() {
         return None;
     }
     let geo = &Com::get(g as *mut GeometryObj).data;
@@ -1514,6 +2272,13 @@ unsafe extern "win64" fn draw_bitmap(
     interpolation: u32,
     src: *const RectF,
 ) {
+    d2d_trace!(
+        "DrawBitmap {:p} ← {} dst {:?} src {:?} opacité {opacity}",
+        this,
+        v11::describe_image(bitmap),
+        dst.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        src.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+    );
     if bitmap.is_null() || *(bitmap as *const *const ()) != BITMAP_VT.ptr() {
         return;
     }
@@ -1672,6 +2437,7 @@ unsafe extern "win64" fn pop_clip(this: *mut TargetObj) {
 
 unsafe extern "win64" fn clear(this: *mut TargetObj, c: *const ColorF) {
     let c = c.as_ref().copied().unwrap_or_default();
+    d2d_trace!("Clear {:p} ({}, {}, {}, {})", this, c.r, c.g, c.b, c.a);
     let col = premul(c.r, c.g, c.b, c.a);
     let mut t = target(this);
     let (w, h) = (t.w as f32, t.h as f32);
@@ -1700,6 +2466,7 @@ unsafe extern "win64" fn clear(this: *mut TargetObj, c: *const ColorF) {
 
 unsafe extern "win64" fn begin_draw(this: *mut TargetObj) {
     let mut t = target(this);
+    d2d_trace!("BeginDraw {:p} {}", this, v11::describe_target(&t));
     if !t.drawing {
         t.drawing = true;
         t.sync_wic(false);
@@ -1714,7 +2481,10 @@ unsafe extern "win64" fn end_draw(this: *mut TargetObj, a: *mut u64, b: *mut u64
     }
     t.drawing = false;
     t.state.clips.clear();
-    t.sync_wic(true)
+    let hr = t.sync_wic(true);
+    v11::end_draw_home(&mut t);
+    d2d_trace!("EndDraw {:p} {} → {hr:#x}", this, v11::describe_target(&t));
+    hr
 }
 
 unsafe extern "win64" fn get_size(this: *mut TargetObj, out: *mut [f32; 2]) -> *mut [f32; 2] {
@@ -1745,7 +2515,7 @@ const TARGET_METHODS: [*const (); 57] = [
     get_factory::<Mutex<Target>> as *const (),
     target_create_bitmap as *const (),
     target_bitmap_from_wic as *const (),
-    unsupported!("CreateSharedBitmap"),
+    target_shared_bitmap as *const (),
     brushes::create_bitmap_brush as *const (),
     target_solid_brush as *const (),
     v11::gradient_stops as *const (),
@@ -1895,8 +2665,14 @@ unsafe extern "win64" fn hwnd_resize(this: *mut TargetObj, size: *const [u32; 2]
     let Some(&[w, h]) = size.as_ref() else {
         return E_INVALIDARG;
     };
+    d2d_trace!("Resize {:p} {w}x{h}", this);
     let mut t = target(this);
+    let left = v11::leave_bitmap(&mut t);
     t.resize(w, h);
+    drop(t);
+    if !left.is_null() {
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(left, 2)(left);
+    }
     S_OK
 }
 
@@ -1916,10 +2692,55 @@ unsafe extern "win64" fn bind_dc(this: *mut TargetObj, hdc: usize, rect: *const 
     if hdc == 0 {
         return E_INVALIDARG;
     }
+    d2d_trace!("BindDC {:p} hdc {hdc:#x} ({l}, {t}, {r}, {b})", this);
     let mut tg = target(this);
+    let left = v11::leave_bitmap(&mut tg);
     tg.resize((r - l).max(0) as u32, (b - t).max(0) as u32);
     tg.out = Output::Dc { hdc, x: l, y: t };
+    drop(tg);
+    if !left.is_null() {
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(left, 2)(left);
+    }
     S_OK
+}
+
+// --- Pour la composition WinRT ---------------------------------------------------------
+
+/// Pixels BGRA prémultipliés d'une ID2D1Bitmap de Winlux (surfaces de
+/// dessin de Windows.UI.Composition, #1416).
+pub(crate) unsafe fn bitmap_pixels(b: *mut c_void) -> Option<(u32, u32, Vec<u8>)> {
+    if b.is_null() || *(b as *const *const ()) != BITMAP_VT.ptr() {
+        return None;
+    }
+    let bm = &Com::get(b as *mut BitmapObj).data;
+    Some((bm.w, bm.h, crate::dlls::lock(&bm.px).clone()))
+}
+
+/// ID2D1Device à partir de l'appareil de rendu donné à la composition :
+/// l'appareil Direct2D lui-même, ou un appareil D3D/DXGI pour lequel une
+/// fabrique 1.1 en crée un. Pointeur tenu (à libérer) ou nul.
+pub(crate) unsafe fn device_for(render: *mut c_void) -> *mut c_void {
+    if render.is_null() {
+        return std::ptr::null_mut();
+    }
+    let mut dev = std::ptr::null_mut();
+    let qi: unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
+        method(render, 0);
+    if qi(render, &v11::device_iid(), &mut dev) >= 0 && !dev.is_null() {
+        return dev;
+    }
+    let mut f = std::ptr::null_mut();
+    if d2d1_create_factory(0, &v11::factory1_iid(), std::ptr::null(), &mut f) < 0 {
+        return std::ptr::null_mut();
+    }
+    let create: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> i32 =
+        method(f, 17);
+    let mut dev = std::ptr::null_mut();
+    if create(f, render, &mut dev) < 0 {
+        dev = std::ptr::null_mut();
+    }
+    method::<unsafe extern "win64" fn(*mut c_void) -> u32>(f, 2)(f);
+    dev
 }
 
 // --- Point d'entrée -----------------------------------------------------------------
@@ -2091,10 +2912,28 @@ mod tests {
             assert_eq!(method::<Unary>(view, 1)(view), 3);
             assert_eq!(method::<Unary>(rt, 2)(rt), 2);
             // Méthodes propres au contexte (73 GetDevice, 75 GetTarget).
+            // #1554 : GetDevice rend toujours le même appareil, de la même
+            // fabrique que la cible (GetFactory, case 3).
             type Get = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void);
-            let mut p = 1usize as *mut c_void;
-            method::<Get>(view, 73)(view, &mut p);
-            assert!(p.is_null());
+            let mut d1 = std::ptr::null_mut();
+            method::<Get>(view, 73)(view, &mut d1);
+            assert!(!d1.is_null());
+            let mut d2 = std::ptr::null_mut();
+            method::<Get>(view, 73)(view, &mut d2);
+            assert_eq!(d1, d2);
+            let (mut fd, mut fv) = (std::ptr::null_mut(), std::ptr::null_mut());
+            method::<Get>(d1, 3)(d1, &mut fd);
+            method::<Get>(view, 3)(view, &mut fv);
+            assert!(!fd.is_null());
+            assert_eq!(fd, fv);
+            release_obj(fd);
+            release_obj(fv);
+            type GetDxgi = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            let mut dx = 1usize as *mut c_void;
+            assert!(method::<GetDxgi>(d1, 14)(d1, &mut dx) < 0);
+            assert!(dx.is_null());
+            release_obj(d2);
+            release_obj(d1);
             let mut p = 1usize as *mut c_void;
             method::<Get>(view, 75)(view, &mut p);
             assert!(p.is_null());
@@ -2119,6 +2958,76 @@ mod tests {
             release_obj(bmp);
             release_obj(f);
         }
+    }
+
+    /// #1573 : cibles WIC en RGBA prémultiplié et en alpha seul 8 bits
+    /// (masque du pinceau de Paint.NET).
+    #[test]
+    fn cible_wic_rgba_et_alpha_seul() {
+        unsafe {
+            let mut wic = std::ptr::null_mut();
+            assert_eq!(wic_create_imaging_factory_proxy(0x237, &mut wic), S_OK);
+            type CreateBmp = unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                u32,
+                *const Guid,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut bmp = std::ptr::null_mut();
+            let prgba = super::super::windowscodecs::FMT_PRGBA32;
+            assert_eq!(
+                method::<CreateBmp>(wic, 17)(wic, 8, 8, &prgba, 0, &mut bmp),
+                S_OK
+            );
+            release_obj(wic);
+            let mut f = std::ptr::null_mut();
+            assert_eq!(
+                d2d1_create_factory(0, &IID_D2D1_FACTORY, std::ptr::null(), &mut f),
+                S_OK
+            );
+            type CreateRt = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateRt>(f, 13)(f, bmp, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            method::<Unary>(rt, 48)(rt);
+            method::<Clear>(rt, 47)(
+                rt,
+                &ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(&pixels(bmp)[0..4], &[255, 0, 0, 255], "rouge en RGBA");
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
+        }
+        // Alpha seul : seule la couverture passe, dans les deux sens.
+        let a8 = WicLayout::of(&super::super::windowscodecs::FMT_ALPHA8).unwrap();
+        let mut own = [0u8; 8];
+        a8.read(&[0x80, 0xff], &mut own);
+        assert_eq!(own, [0, 0, 0, 0x80, 0, 0, 0, 0xff]);
+        let mut wic = [0u8; 2];
+        a8.write(&[10, 20, 30, 40, 1, 2, 3, 200], &mut wic);
+        assert_eq!(wic, [40, 200]);
+        assert!(WicLayout::of(&Guid::default()).is_none());
     }
 
     unsafe fn pixels(bmp: *mut c_void) -> Vec<u8> {
@@ -2698,10 +3607,474 @@ mod tests {
             let at = |x: usize, y: usize| *(bits as *const u32).add(y * 8 + x) & 0xFF_FFFF;
             assert_eq!(at(3, 3), 0x00_00FF, "bleu dans le rectangle lié");
             assert_eq!(at(0, 0), 0, "rien hors du rectangle");
+            // #1368 : un tracé suivant part du contenu du DC ; ce qui n'est
+            // pas dessiné garde le fond posé par GDI au lieu de noircir.
+            *(bits as *mut u32).add(4 * 8 + 4) = 0x0033_6699;
+            method::<Unary>(dct, 48)(dct);
+            assert_eq!(
+                method::<End>(dct, 49)(dct, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(at(4, 4), 0x33_6699, "fond GDI conservé");
+            assert_eq!(at(3, 3), 0x00_00FF, "tracé précédent conservé");
             release_obj(dct);
             release_obj(rt);
             release_obj(bmp);
             release_obj(f);
+        }
+    }
+
+    /// #1520 : un verrou WIC en 64bppPRGBAHalf (valeurs linéaires
+    /// prémultipliées) devient du BGRA 8 bits prémultiplié encodé sRGB.
+    #[test]
+    fn verrou_demi_flottant_en_bgra() {
+        use super::super::wic_pixels::{f32_to_half, layout, FMT_PRGBA_HALF64};
+        let l = layout(&FMT_PRGBA_HALF64).unwrap();
+        let px = |c: [f32; 4]| -> Vec<u8> {
+            c.iter()
+                .flat_map(|v| f32_to_half(*v).to_le_bytes())
+                .collect()
+        };
+        // Blanc opaque, puis rouge linéaire 0,5 à demi transparent.
+        let src = [px([1.0, 1.0, 1.0, 1.0]), px([0.25, 0.0, 0.0, 0.5])].concat();
+        let out = wide_to_pbgra(&l, &src, 2, 1, 16, false);
+        assert_eq!(&out[..4], &[255, 255, 255, 255]);
+        assert_eq!(&out[4..], &[0, 0, 94, 128]);
+        let opaque = wide_to_pbgra(&l, &src, 2, 1, 16, true);
+        assert_eq!(&opaque[4..], &[0, 0, 188, 255]);
+    }
+
+    /// #1399 : CreateSharedBitmap partage un IWICBitmapLock (Paint.NET,
+    /// DrawBackground) en ID2D1Bitmap aux pixels du verrou.
+    #[test]
+    fn bitmap_partage_depuis_un_verrou_wic() {
+        unsafe {
+            let (f, bmp, rt) = setup();
+            type Lock =
+                unsafe extern "win64" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> i32;
+            let mut lock = std::ptr::null_mut();
+            assert_eq!(
+                method::<Lock>(bmp, 8)(bmp, std::ptr::null(), 3, &mut lock),
+                S_OK
+            );
+            type Data = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut *mut u8) -> i32;
+            let (mut size, mut data) = (0u32, std::ptr::null_mut());
+            assert_eq!(method::<Data>(lock, 5)(lock, &mut size, &mut data), S_OK);
+            // Pixel (1, 2) : vert opaque en BGRA prémultiplié.
+            std::ptr::copy_nonoverlapping(
+                [0u8, 255, 0, 255].as_ptr(),
+                data.add((2 * 8 + 1) * 4),
+                4,
+            );
+            type Shared = unsafe extern "win64" fn(
+                *mut c_void,
+                *const Guid,
+                *mut c_void,
+                *const [u32; 2],
+                *mut *mut c_void,
+            ) -> i32;
+            let mut b = std::ptr::null_mut();
+            assert_eq!(
+                method::<Shared>(rt, 6)(rt, &IID_WIC_BITMAP_LOCK, lock, std::ptr::null(), &mut b),
+                S_OK
+            );
+            let bm = &Com::get(b as *mut BitmapObj).data;
+            assert_eq!((bm.w, bm.h), (8, 8));
+            let px = crate::dlls::lock(&bm.px).clone();
+            assert_eq!(&px[(2 * 8 + 1) * 4..][..4], &[0, 255, 0, 255]);
+            // Un ID2D1Bitmap de Winlux se partage tel quel.
+            let mut again = std::ptr::null_mut();
+            assert_eq!(
+                method::<Shared>(rt, 6)(rt, &IID_D2D1_BITMAP, b, std::ptr::null(), &mut again),
+                S_OK
+            );
+            assert_eq!(again, b);
+            release_obj(again);
+            // Interface inconnue : refusée.
+            let mut none = std::ptr::null_mut();
+            assert_eq!(
+                method::<Shared>(rt, 6)(rt, &IID_D2D1_GEOMETRY, lock, std::ptr::null(), &mut none),
+                E_INVALIDARG
+            );
+            for o in [b, lock, rt, bmp, f] {
+                release_obj(o);
+            }
+        }
+    }
+
+    mod puits {
+        use super::*;
+        use std::cell::RefCell;
+        thread_local! {
+            /// (figures, points, mode de remplissage, Close appelé).
+            pub static RECU: RefCell<(u32, u32, u32, bool)> = const { RefCell::new((0, 0, 9, false)) };
+        }
+        unsafe extern "win64" fn un(_: *mut c_void) -> u32 {
+            1
+        }
+        unsafe extern "win64" fn qi(_: *mut c_void, _: *const Guid, _: *mut *mut c_void) -> i32 {
+            E_NOINTERFACE
+        }
+        unsafe extern "win64" fn mode(_: *mut c_void, m: u32) {
+            RECU.with(|r| r.borrow_mut().2 = m);
+        }
+        unsafe extern "win64" fn rien(_: *mut c_void, _: u32) {}
+        unsafe extern "win64" fn debut(_: *mut c_void, _: u64, _: u32) {
+            RECU.with(|r| {
+                let mut r = r.borrow_mut();
+                r.0 += 1;
+                r.1 += 1;
+            });
+        }
+        unsafe extern "win64" fn lignes(_: *mut c_void, _: *const Pt, n: u32) {
+            RECU.with(|r| r.borrow_mut().1 += n);
+        }
+        unsafe extern "win64" fn courbes(_: *mut c_void, _: *const c_void, _: u32) {}
+        unsafe extern "win64" fn fermer(_: *mut c_void) -> i32 {
+            RECU.with(|r| r.borrow_mut().3 = true);
+            S_OK
+        }
+        pub static VT: VTable<10> = VTable([
+            qi as *const (),
+            un as *const (),
+            un as *const (),
+            mode as *const (),
+            rien as *const (),
+            debut as *const (),
+            lignes as *const (),
+            courbes as *const (),
+            rien as *const (),
+            fermer as *const (),
+        ]);
+    }
+
+    /// #1471 : une bitmap A8 lit un octet d'alpha par pixel.
+    #[test]
+    fn bitmap_a8_lit_un_octet_par_pixel() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            let mut b = Bitmap::new(3, 2, vec![0xEE; 3 * 2 * 4]);
+            b.alpha_only = true;
+            let obj = new_res(f, BITMAP_VT.ptr(), b);
+            // Pas de 4 octets par ligne, trois utiles.
+            let src = [10u8, 20, 30, 0xFF, 40, 50, 60, 0xFF];
+            assert_eq!(
+                bitmap_copy_from_memory(obj, std::ptr::null(), src.as_ptr(), 4),
+                S_OK
+            );
+            let (w, h, px) = bitmap_pixels(obj.cast()).unwrap();
+            assert_eq!((w, h), (3, 2));
+            assert_eq!(&px[0..4], &[0, 0, 0, 10]);
+            assert_eq!(&px[20..24], &[0, 0, 0, 60]);
+            Com::release(obj);
+            Com::release(f);
+        }
+    }
+
+    /// #1470 : Widen, GetWidenedBounds, StrokeContainsPoint et ComputeLength.
+    /// #1549 : CombineWithGeometry (boutons de couleur de Paint.NET) remplit
+    /// un chemin avec l'intersection de deux rectangles.
+    #[test]
+    fn geometries_combinees() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            type Create = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            type Combine = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                u32,
+                *const Matrix,
+                f32,
+                *mut c_void,
+            ) -> i32;
+            type Contains =
+                unsafe extern "win64" fn(*mut c_void, u64, *const Matrix, f32, *mut i32) -> i32;
+            type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
+            let rect = |l, t, r, b| {
+                let mut g = std::ptr::null_mut();
+                let rc = RectF { l, t, r, b };
+                assert_eq!(method::<RectGeo>(f.cast(), 5)(f.cast(), &rc, &mut g), S_OK);
+                g
+            };
+            let a = rect(0.0, 0.0, 10.0, 10.0);
+            let b = rect(0.0, 0.0, 10.0, 10.0);
+            // L'entrée est déplacée de (5, 5) par sa transformation.
+            let m = Matrix {
+                dx: 5.0,
+                dy: 5.0,
+                ..Matrix::IDENTITY
+            };
+            let mut path = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f.cast(), 10)(f.cast(), &mut path), S_OK);
+            let mut sink = std::ptr::null_mut();
+            assert_eq!(method::<Create>(path, 17)(path, &mut sink), S_OK);
+            assert_eq!(method::<Combine>(a, 11)(a, b, 1, &m, 0.25, sink), S_OK);
+            assert_eq!(method::<Close>(sink, 9)(sink), S_OK);
+            release_obj(sink);
+            let at = |x, y| {
+                let mut v = 0;
+                method::<Contains>(path, 7)(path, pt(x, y), std::ptr::null(), 0.25, &mut v);
+                v
+            };
+            assert_eq!(at(7.0, 7.0), 1, "dans l'intersection");
+            assert_eq!(at(2.0, 2.0), 0, "seulement dans a");
+            assert_eq!(at(12.0, 12.0), 0, "seulement dans b");
+            assert_eq!(
+                method::<Combine>(a, 11)(a, std::ptr::null_mut(), 0, &m, 0.25, sink),
+                E_INVALIDARG
+            );
+            release_obj(path);
+            release_obj(b);
+            release_obj(a);
+            release_obj(f.cast());
+        }
+    }
+
+    #[test]
+    fn geometrie_elargie() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            let mut g = std::ptr::null_mut();
+            assert_eq!(
+                method::<RectGeo>(f.cast(), 5)(
+                    f.cast(),
+                    &RectF {
+                        l: 0.0,
+                        t: 0.0,
+                        r: 10.0,
+                        b: 10.0
+                    },
+                    &mut g
+                ),
+                S_OK
+            );
+            // Géométrie transformée (échelle 2), comme chez Paint.NET.
+            type Transformed = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const Matrix,
+                *mut *mut c_void,
+            ) -> i32;
+            let m = Matrix {
+                m11: 2.0,
+                m22: 2.0,
+                ..Matrix::IDENTITY
+            };
+            let mut tg = std::ptr::null_mut();
+            assert_eq!(
+                method::<Transformed>(f.cast(), 9)(f.cast(), g, &m, &mut tg),
+                S_OK
+            );
+            type WBounds = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut RectF,
+            ) -> i32;
+            let mut r = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 0.0,
+                b: 0.0,
+            };
+            assert_eq!(
+                method::<WBounds>(tg, 5)(
+                    tg,
+                    4.0,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0.25,
+                    &mut r
+                ),
+                S_OK
+            );
+            assert!(
+                (r.l + 2.0).abs() < 0.1 && (r.r - 22.0).abs() < 0.1,
+                "{:?}",
+                (r.l, r.r)
+            );
+            type SContains = unsafe extern "win64" fn(
+                *mut c_void,
+                u64,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut i32,
+            ) -> i32;
+            let mut inside = 0;
+            method::<SContains>(tg, 6)(
+                tg,
+                pt(21.0, 10.0),
+                4.0,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0.25,
+                &mut inside,
+            );
+            assert_eq!(inside, 1, "sur le bord droit");
+            method::<SContains>(tg, 6)(
+                tg,
+                pt(10.0, 10.0),
+                4.0,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0.25,
+                &mut inside,
+            );
+            assert_eq!(inside, 0, "au centre");
+            type Length =
+                unsafe extern "win64" fn(*mut c_void, *const Matrix, f32, *mut f32) -> i32;
+            let mut len = 0.0;
+            assert_eq!(
+                method::<Length>(tg, 14)(tg, std::ptr::null(), 0.25, &mut len),
+                S_OK
+            );
+            assert!((len - 80.0).abs() < 0.01, "{len}");
+            // Widen : figures fermées, règle non nulle, Close appelé.
+            puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
+            let mut sink = puits::VT.ptr();
+            let sink_ptr = &mut sink as *mut *const () as *mut c_void;
+            type Widen = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *mut c_void,
+                *const Matrix,
+                f32,
+                *mut c_void,
+            ) -> i32;
+            assert_eq!(
+                method::<Widen>(tg, 16)(
+                    tg,
+                    4.0,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0.25,
+                    sink_ptr
+                ),
+                S_OK
+            );
+            puits::RECU.with(|r| {
+                let r = r.borrow();
+                assert!(r.0 >= 8, "figures : {}", r.0);
+                assert_eq!((r.2, r.3), (1, true));
+            });
+            for o in [tg, g] {
+                release_obj(o);
+            }
+            Com::release(f);
+        }
+    }
+
+    /// #1400 : groupe de géométries, géométrie transformée, Simplify et Stream.
+    #[test]
+    fn groupe_transformation_simplify_et_stream() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            let rect = |l: f32, t: f32, r: f32, b: f32| {
+                let mut g = std::ptr::null_mut();
+                assert_eq!(
+                    method::<RectGeo>(f.cast(), 5)(f.cast(), &RectF { l, t, r, b }, &mut g),
+                    S_OK
+                );
+                g
+            };
+            let a = rect(0.0, 0.0, 2.0, 2.0);
+            let b = rect(10.0, 10.0, 12.0, 12.0);
+            type Group = unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                *const *mut c_void,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut grp = std::ptr::null_mut();
+            assert_eq!(
+                method::<Group>(f.cast(), 8)(f.cast(), 1, [a, b].as_ptr(), 2, &mut grp),
+                S_OK
+            );
+            type Contains =
+                unsafe extern "win64" fn(*mut c_void, u64, *const Matrix, f32, *mut i32) -> i32;
+            let mut inside = 0;
+            method::<Contains>(grp, 7)(grp, pt(11.0, 11.0), std::ptr::null(), 0.25, &mut inside);
+            assert_eq!(inside, 1);
+            method::<Contains>(grp, 7)(grp, pt(5.0, 5.0), std::ptr::null(), 0.25, &mut inside);
+            assert_eq!(inside, 0);
+            assert_eq!(
+                method::<unsafe extern "win64" fn(*mut c_void) -> u32>(grp, 17)(grp),
+                1
+            );
+            assert_eq!(
+                method::<unsafe extern "win64" fn(*mut c_void) -> u32>(grp, 18)(grp),
+                2
+            );
+            // Géométrie transformée : translation de (100, 0).
+            type Transformed = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const Matrix,
+                *mut *mut c_void,
+            ) -> i32;
+            let m = Matrix {
+                dx: 100.0,
+                ..Matrix::IDENTITY
+            };
+            let mut tg = std::ptr::null_mut();
+            assert_eq!(
+                method::<Transformed>(f.cast(), 9)(f.cast(), a, &m, &mut tg),
+                S_OK
+            );
+            type Bounds = unsafe extern "win64" fn(*mut c_void, *const Matrix, *mut RectF) -> i32;
+            let mut r = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 0.0,
+                b: 0.0,
+            };
+            assert_eq!(method::<Bounds>(tg, 4)(tg, std::ptr::null(), &mut r), S_OK);
+            assert_eq!((r.l, r.r), (100.0, 102.0));
+            // Simplify du groupe : deux figures de quatre points, règle non nulle.
+            let mut sink = puits::VT.ptr();
+            let sink_ptr = &mut sink as *mut *const () as *mut c_void;
+            type Simplify =
+                unsafe extern "win64" fn(*mut c_void, u32, *const Matrix, f32, *mut c_void) -> i32;
+            assert_eq!(
+                method::<Simplify>(grp, 9)(grp, 0, std::ptr::null(), 0.25, sink_ptr),
+                S_OK
+            );
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (2, 8, 1, true)));
+            // Stream d'un chemin.
+            puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
+            let mut path = std::ptr::null_mut();
+            assert_eq!(create_path_geometry(f, &mut path), S_OK);
+            let mut s = std::ptr::null_mut();
+            assert_eq!(
+                method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32>(path, 17)(
+                    path, &mut s
+                ),
+                S_OK
+            );
+            method::<unsafe extern "win64" fn(*mut c_void, u64, u32)>(s, 5)(s, pt(0.0, 0.0), 0);
+            method::<unsafe extern "win64" fn(*mut c_void, u64)>(s, 10)(s, pt(4.0, 0.0));
+            method::<unsafe extern "win64" fn(*mut c_void, u64)>(s, 10)(s, pt(4.0, 4.0));
+            method::<unsafe extern "win64" fn(*mut c_void, u32)>(s, 8)(s, 1);
+            method::<unsafe extern "win64" fn(*mut c_void) -> i32>(s, 9)(s);
+            release_obj(s);
+            type Stream = unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32;
+            assert_eq!(method::<Stream>(path, 18)(path, sink_ptr), S_OK);
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (1, 3, 0, true)));
+            for o in [path, tg, grp, a, b] {
+                release_obj(o);
+            }
+            Com::release(f);
         }
     }
 }

@@ -25,11 +25,20 @@ web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xh
 
 # Désenregistre d'abord binfmt pour que le noyau ne pointe plus vers un
 # interpréteur supprimé.
+# Sans systemd, l'entrée peut être tenue par binfmt-support (#27).
+if [ -z "$destdir" ] && command -v update-binfmts >/dev/null 2>&1 && \
+        update-binfmts --display winlux >/dev/null 2>&1; then
+    update-binfmts --package winlux --remove winlux "$bin/winlux" >/dev/null 2>&1 || true
+fi
 if [ -z "$destdir" ] && [ -w /proc/sys/fs/binfmt_misc/winlux ]; then
     echo -1 >/proc/sys/fs/binfmt_misc/winlux || true
 fi
-rm -f "$etc/binfmt.d/winlux.conf" "$etc/udev/rules.d/70-winlux-manettes.rules"
-rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report" "$bin/winlux-uac"
+rm -f "$etc/binfmt.d/winlux.conf" "$etc/udev/rules.d/70-winlux-manettes.rules" "$etc/udev/rules.d/71-winlux-eclairage.rules"
+rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report" "$bin/winlux-uac" "$bin/winlux-applications"
+rm -f "$share/thumbnailers/winlux-windows.thumbnailer"
+for icon in application-x-ms-dos-executable application-x-msdownload application-vnd.microsoft.portable-executable application-x-dosexec application-x-msi; do
+    rm -f "$share/icons/hicolor/scalable/mimetypes/$icon.svg"
+done
 rm -f "$share/applications/winlux.desktop" "$share/applications/winlux-browser.desktop" "$share/mime/packages/winlux.xml"
 rm -f "$share/winlux/version" "$share/winlux/uninstall.sh" "$share/winlux/install-browser.sh" "$share/winlux/install-edge.sh" "$share/winlux/winlux-browser-fetch" "$share/winlux/winlux-lock.py"
 rmdir "$share/winlux" 2>/dev/null || true

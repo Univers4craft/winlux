@@ -702,26 +702,12 @@ pub extern "win64" fn set_class_long_ptr_w(_hwnd: usize, _index: i32, _new: isiz
 pub extern "win64" fn enum_windows(_callback: usize, _lparam: isize) -> i32 {
     1
 }
-pub extern "win64" fn enum_child_windows(_parent: usize, _callback: usize, _lparam: isize) -> i32 {
-    1
-}
-pub extern "win64" fn get_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
-}
-pub extern "win64" fn get_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
-}
-pub extern "win64" fn set_prop_a(_hwnd: usize, _name: *const u8, _data: usize) -> i32 {
-    1
-}
-pub extern "win64" fn set_prop_w(_hwnd: usize, _name: *const u16, _data: usize) -> i32 {
-    1
-}
-pub extern "win64" fn remove_prop_a(_hwnd: usize, _name: *const u8) -> usize {
-    0
-}
-pub extern "win64" fn remove_prop_w(_hwnd: usize, _name: *const u16) -> usize {
-    0
+pub unsafe extern "win64" fn enum_child_windows(
+    parent: usize,
+    callback: usize,
+    lparam: isize,
+) -> i32 {
+    crate::dlls::user32::enum_child_windows(parent, callback, lparam)
 }
 pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize {
     crate::dlls::user32::get_dc(_hwnd)
@@ -842,9 +828,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
         "SetClassLongPtrA"=>fn set_class_long_ptr_a, "SetClassLongPtrW"=>fn set_class_long_ptr_w,
         "EnumWindows"=>fn enum_windows, "EnumChildWindows"=>fn enum_child_windows,
-        "GetPropA"=>fn get_prop_a, "GetPropW"=>fn get_prop_w,
-        "SetPropA"=>fn set_prop_a, "SetPropW"=>fn set_prop_w,
-        "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         "GetDCEx"=>fn get_dc_ex, "RedrawWindow"=>fn redraw_window, "GetUpdateRect"=>fn get_update_rect,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
         "ToUnicodeEx"=>fn to_unicode_ex,

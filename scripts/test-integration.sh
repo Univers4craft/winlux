@@ -37,10 +37,12 @@ printf '[Default Applications]\napplication/x-msdownload=autre.desktop;\ntext/pl
 cp "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant"
 DESTDIR="$dest" WINLUX_VERSION=test sh "$root/integration/install.sh" /usr >/dev/null
 for f in usr/bin/winlux usr/bin/winlux-open usr/bin/winlux-update usr/share/applications/winlux.desktop \
-         usr/share/mime/packages/winlux.xml usr/share/winlux/uninstall.sh etc/binfmt.d/winlux.conf; do
+         usr/share/mime/packages/winlux.xml usr/share/winlux/uninstall.sh etc/binfmt.d/winlux.conf \
+         usr/share/icons/hicolor/scalable/mimetypes/application-x-ms-dos-executable.svg \
+         usr/bin/winlux-applications usr/share/thumbnailers/winlux-windows.thumbnailer; do
     test -e "$dest/$f" || fail "$f non installé"
 done
-grep -q '^Exec=/usr/bin/winlux-open %f$' "$dest/usr/share/applications/winlux.desktop" || fail "Exec incorrect"
+grep -q '^Exec=env WINLUX_DESKTOP_LAUNCH=1 /usr/bin/winlux-open %f$' "$dest/usr/share/applications/winlux.desktop" || fail "Exec incorrect"
 grep -q '^Terminal=false$' "$dest/usr/share/applications/winlux.desktop" || fail "Terminal doit être false"
 grep -q ':/usr/bin/winlux:F$' "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt incorrect"
 grep -q '^application/x-msdownload=winlux.desktop;autre.desktop;$' "$dest/etc/xdg/mimeapps.list" || fail "association existante non prioritaire"
@@ -58,6 +60,11 @@ ok "installation DESTDIR et associations MIME"
 DESTDIR="$dest" sh "$dest/usr/share/winlux/uninstall.sh" /usr >/dev/null
 test ! -e "$dest/usr/bin/winlux" || fail "winlux non désinstallé"
 test ! -e "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt non désinstallé"
+# Icônes et miniatures des .exe (#1425) retirées aussi.
+for f in usr/bin/winlux-applications usr/share/thumbnailers/winlux-windows.thumbnailer \
+         usr/share/icons/hicolor/scalable/mimetypes/application-x-ms-dos-executable.svg; do
+    test ! -e "$dest/$f" || fail "$f non désinstallé"
+done
 cmp -s "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant" || fail "mimeapps.list non restauré"
 ok "désinstallation et restauration de mimeapps.list"
 
@@ -158,6 +165,31 @@ finally:
 PY
 ok "console heritee du bureau : le double-clic conserve une sortie visible"
 
+# Gestionnaire de fichiers lancé depuis un terminal (« nautilus & », #1424) :
+# il hérite d'un tty, et le double-clic doit quand même ouvrir un terminal
+# pour un .exe console. La ligne Exec de winlux.desktop est exécutée telle
+# quelle, sans WINLUX_DESKTOP_LAUNCH dans l'environnement.
+rm -f "$work/terminal.log"
+python3 - "$root/integration/winlux.desktop" "$open" "$apps/Bonjour monde.exe" "$fake" "$work/tty-state" <<'PY'
+import os, pty, shlex, subprocess, sys
+desktop, launcher, exe, fake, state = sys.argv[1:]
+line = next(l for l in open(desktop, encoding="utf-8") if l.startswith("Exec="))
+argv = [launcher if a == "/usr/bin/winlux-open" else exe if a == "%f" else a
+        for a in shlex.split(line[len("Exec="):].strip())]
+env = {k: v for k, v in os.environ.items() if k not in ("WINLUX_DESKTOP_LAUNCH", "WINLUX_NO_TERMINAL")}
+env.update(PATH=f"{fake}:{env['PATH']}", DISPLAY=":99", WINLUX_GUI="headless",
+           WINLUX_TERMINAL="faux-terminal", XDG_STATE_HOME=state)
+master, slave = pty.openpty()
+try:
+    result = subprocess.run(argv, env=env, stdin=slave, stdout=slave, stderr=slave, timeout=30)
+    assert result.returncode == 0, result.returncode
+finally:
+    os.close(master)
+    os.close(slave)
+PY
+grep -q 'terminal' "$work/terminal.log" || fail "double-clic depuis un gestionnaire lancé dans un terminal : aucun terminal (#1424)"
+ok "gestionnaire de fichiers lancé dans un terminal : un .exe console ouvre quand même son terminal (#1424)"
+
 set +e
 launch "$apps/code.exe"; status=$?
 set -e
@@ -188,7 +220,7 @@ mkdir -p "$crashbin" "$journal"
 cat >"$crashbin/winlux" <<EOF
 #!/bin/sh
 if [ "\$1" = --inspect ]; then echo gui; exit 0; fi
-printf '[CRASH] ts=%s sig=11 stop=IRQL_NOT_LESS_OR_EQUAL exe=plante.exe pid=%s\n' "\$(date +%s)" "\$\$" >>"$journal/crash.log"
+printf '[CRASH] ts=%s sig=11 stop=APPLICATION_FAILURE exe=plante.exe pid=%s\n' "\$(date +%s)" "\$\$" >>"$journal/crash.log"
 exit 5
 EOF
 chmod +x "$crashbin/winlux"

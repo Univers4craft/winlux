@@ -385,6 +385,7 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-accounts.py
+          xvfb-run -a -s '-screen 0 2732x768x24' /usr/bin/python3 -B scripts/test-lock-monitors.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-signin.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-signin-page.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
@@ -553,6 +554,16 @@ jobs:
           sudo apt-get install -y -q wixl msitools || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools; }
           sh scripts/test-msi-scripts.sh
 
+      - name: Construire les paquets MSI de la fiche de banc 833
+        run: sh scripts/construire-paquets-833.sh build/paquets-833
+
+      - name: Conserver les paquets MSI de la fiche de banc 833
+        uses: actions/upload-artifact@v4
+        with:
+          name: paquets-833
+          path: build/paquets-833
+          retention-days: 30
+
       - name: Assistant d'installation au double-clic (#833)
         run: |
           sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
@@ -563,6 +574,11 @@ jobs:
 
       - name: Tester l'intégration bureau (double-clic)
         run: sh scripts/test-integration.sh
+
+      - name: Installer Winlux sur l'hôte Ubuntu (binfmt, ./hello.exe, association, désinstallation, #27)
+        run: |
+          sudo apt-get install -y -q binfmt-support xdg-utils || { sudo apt-get update -q && sudo apt-get install -y -q binfmt-support xdg-utils; }
+          sudo sh scripts/test-host-install.sh
 
       - name: Installer MinGW-w64
         run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-i686 clang lld llvm xvfb xauth libgl1-mesa-dri
@@ -620,7 +636,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
             gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
-            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool x11-utils imagemagick python3-pil
+            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool x11-utils imagemagick python3-pil xterm
 
       - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
@@ -652,6 +668,9 @@ jobs:
       - name: Fenêtres agrandies à coins carrés (règle picom, veilleur, migration)
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-maximized-corners.py
 
+      - name: Fenêtre restée sur un écran débranché ramenée sur l'écran restant (#1412)
+        run: WINLUX=target/release/winlux sh scripts/test-display-bring-back.sh
+
       - name: Fenêtres PE gérées par openbox (bureau, machine, PID, classe)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pe-window-props.py
 
@@ -679,6 +698,7 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-brightness.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-display-page-follow.py
           /usr/bin/python3 -B scripts/test-brightness.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-certificates.py
           /usr/bin/python3 -B scripts/test-boot-journaux.py
@@ -728,6 +748,14 @@ jobs:
 
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
+
+      - name: Démarrer, homonymes départagés et distingués (#1489)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-start-homonyms.py
+
+      - name: Trousseau de secrets créé et ouvert à la connexion, sans fenêtre (#1488)
+        run: |
+          sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin || { sudo apt-get update -q && sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin; }
+          /usr/bin/python3 -B scripts/test-keyring.py
 
       - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
         run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py

@@ -73,6 +73,15 @@ const TLS32_ENTRIES: usize = 512;
 const PEB32_IMAGE_BASE: usize = 0x08;
 const PEB32_PROCESS_HEAP: usize = 0x18;
 const PEB32_NUMBER_OF_PROCESSORS: usize = 0x64;
+const PEB32_LDR: usize = 0x0c;
+const PEB32_PROCESS_PARAMETERS: usize = 0x10;
+const PEB32_LOADER_LOCK: usize = 0xa0;
+/// Dans la page du PEB 32 bits, après lui : PEB_LDR_DATA, LoaderLock et
+/// RTL_USER_PROCESS_PARAMETERS (#1440).
+const PEB32_LDR_DATA_AT: usize = 0x500;
+const PEB32_LOADER_LOCK_AT: usize = 0x540;
+const PEB32_PARAMS_AT: usize = 0x600;
+const PEB32_PARAMS_SIZE: usize = 0x2a0;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static PEB32: AtomicU32 = AtomicU32::new(0);
@@ -86,6 +95,13 @@ static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 /// Un programme 32 bits est-il en cours dans ce processus ?
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
+pub fn refresh_environ() {
+    if active() {
+        crt::refresh_environ();
+    }
 }
 
 /// Adresse au-delà de laquelle le programme 32 bits ne voit rien.
@@ -587,6 +603,13 @@ fn reserve_high(limit: usize) {
             );
         }
     };
+    // Comme WOW64, les 64 derniers Ko sous 4 Go restent inaccessibles : une
+    // adresse x86 de 0xffff0000 à 0xffffffff se confondrait avec un entier
+    // négatif (`widen` l'étend par le signe) ; wcschr de pygame32 recevait
+    // ainsi 0xffffffffffffec90 (#1438).
+    if limit == 0x1_0000_0000 {
+        reserve(0xffff_0000, limit);
+    }
     let mut cursor = limit;
     for &(a, b) in &used[..count] {
         // La pile principale grandit vers le bas : on lui laisse sa limite.
@@ -762,8 +785,83 @@ pub fn init_peb32(image_base: usize) {
         w(0xa8, 0);
         *((peb + 0xac) as *mut u16) = 19045;
         w(0xb0, 2);
+        fill_peb32_tables(peb);
     }
     PEB32.store(peb as u32, Ordering::Relaxed);
+}
+
+/// Champs du PEB 32 bits que du code x86 lit sans passer par une API :
+/// PEB->Ldr (listes vides mais bouclées), PEB->LoaderLock (section libre)
+/// et PEB->ProcessParameters (drapeaux, poignées standard, chemin de
+/// l'image, ligne de commande), copiés du PEB 64 bits. Nuls, la CRT
+/// Microsoft liée en statique plantait en lisant [0+8] à la sortie de
+/// pyi32.exe et de Steam.exe (#1440). Disposition x86 de winternl.h.
+unsafe fn fill_peb32_tables(peb: usize) {
+    let w = |a: usize, v: u32| *(a as *mut u32) = v;
+    // PEB_LDR_DATA : Length, Initialized, puis trois LIST_ENTRY (InLoadOrder
+    // à 0x0c, InMemoryOrder à 0x14, InInitializationOrder à 0x1c).
+    let ldr = peb + PEB32_LDR_DATA_AT;
+    w(ldr, 0x30);
+    w(ldr + 4, 1);
+    for head in [0x0c, 0x14, 0x1c] {
+        w(ldr + head, (ldr + head) as u32);
+        w(ldr + head + 4, (ldr + head) as u32);
+    }
+    w(peb + PEB32_LDR, ldr as u32);
+    // RTL_CRITICAL_SECTION x86 libre : LockCount = -1.
+    let lock = peb + PEB32_LOADER_LOCK_AT;
+    w(lock + 4, u32::MAX);
+    w(peb + PEB32_LOADER_LOCK, lock as u32);
+
+    let params = peb + PEB32_PARAMS_AT;
+    w(params, PEB32_PARAMS_SIZE as u32);
+    w(params + 4, PEB32_PARAMS_SIZE as u32);
+    w(params + 8, 1); // RTL_USER_PROC_PARAMS_NORMALIZED
+    w(params + 0x18, crate::dlls::kernel32::STD_INPUT_REAL as u32);
+    w(params + 0x1c, crate::dlls::kernel32::STD_OUTPUT_REAL as u32);
+    w(params + 0x20, crate::dlls::kernel32::STD_ERROR_REAL as u32);
+    let p64 = match crate::process::peb() {
+        0 => 0,
+        p => *((p + crate::process::PEB_PROCESS_PARAMETERS) as *const usize),
+    };
+    let read64 = |off: usize| -> Vec<u16> {
+        if p64 == 0 {
+            return Vec::new();
+        }
+        let len = *((p64 + off) as *const u16) as usize / 2;
+        let buf = *((p64 + off + 8) as *const usize) as *const u16;
+        if buf.is_null() {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(buf, len).to_vec()
+    };
+    let mut dir: Vec<u16> = std::env::current_dir()
+        .map(|d| crate::paths::to_windows(&d))
+        .unwrap_or_default()
+        .encode_utf16()
+        .collect();
+    if dir.last() != Some(&(b'\\' as u16)) {
+        dir.push(b'\\' as u16);
+    }
+    // CurrentDirectory.DosPath (0x24), DllPath (0x30), ImagePathName (0x38),
+    // CommandLine (0x40) : UNICODE_STRING x86 (longueurs puis tampon).
+    let strings = [
+        (0x24, dir),
+        (0x30, Vec::new()),
+        (0x38, read64(0x60)),
+        (0x40, read64(0x70)),
+    ];
+    let bytes: usize = strings.iter().map(|(_, s)| s.len() * 2 + 2).sum();
+    let mut at = alloc_low(bytes.next_multiple_of(0x1000), false);
+    for (off, s) in strings {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), at as *mut u16, s.len());
+        *((at + s.len() * 2) as *mut u16) = 0;
+        *((params + off) as *mut u16) = (s.len() * 2) as u16;
+        *((params + off + 2) as *mut u16) = (s.len() * 2 + 2) as u16;
+        w(params + off + 4, at as u32);
+        at += s.len() * 2 + 2;
+    }
+    w(peb + PEB32_PROCESS_PARAMETERS, params as u32);
 }
 
 #[repr(C)]
@@ -874,6 +972,7 @@ pub fn call32(target: usize, args: &[u32]) -> u64 {
             esp: 0,
             ret: 0,
             args: a,
+            result: None,
         });
     }
     let marker = 0u8;
@@ -1216,6 +1315,8 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "ucrtbase"
         || n.starts_with("msvcr")
         || n.starts_with("msvcp")
+        // operator new / delete de MFC 4.2 (signtool.exe, #1394).
+        || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
 }
 
@@ -1452,6 +1553,61 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
     })
 }
 
+/// Noms que seuls les programmes x86 importent et que wow32 sert par ses
+/// passerelles, sans export 64 bits du même nom : `winlux --exports` les
+/// ajoute (« x86:dll ») pour que scripts/compat-imports.py ne les compte
+/// pas comme manquants dans les binaires 32 bits (#1508).
+pub fn x86_only_candidates() -> Vec<(&'static str, String)> {
+    let mut v: Vec<(&'static str, String)> = Vec::new();
+    for crt in ["msvcrt", "ucrtbase"] {
+        for m in [
+            "acos", "asin", "atan", "atan2", "cos", "cosh", "exp", "fmod", "log", "log10", "pow",
+            "sin", "sinh", "sqrt", "tan", "tanh",
+        ] {
+            v.push((crt, format!("_CI{m}")));
+            v.push((crt, format!("_libm_sse2_{m}_precise")));
+        }
+        for f in [
+            "_except1",
+            "_ftol",
+            "_ftol2",
+            "_ftol2_sse",
+            "_adjust_fdiv",
+            "_setjmp3",
+            "_except_handler3",
+            "_except_handler4_common",
+            "_local_unwind2",
+            "_local_unwind4",
+            "_global_unwind2",
+            "??1type_info@@UAE@XZ",
+            "??0exception@@QAE@XZ",
+            "??0exception@@QAE@ABQBD@Z",
+            "??0exception@@QAE@ABV0@@Z",
+            "??1exception@@UAE@XZ",
+            "?what@exception@@UBEPBDXZ",
+            "??0bad_cast@@QAE@ABV0@@Z",
+            "??1bad_cast@@UAE@XZ",
+            "__p___initenv",
+            "__p___winitenv",
+            "__CxxFrameHandler",
+            "__CxxFrameHandler2",
+        ] {
+            v.push((crt, f.to_string()));
+        }
+    }
+    for f in [
+        "InterlockedIncrement",
+        "InterlockedDecrement",
+        "InterlockedExchange",
+        "InterlockedExchangeAdd",
+        "InterlockedCompareExchange",
+    ] {
+        v.push(("kernel32", f.to_string()));
+    }
+    v.retain(|(dll, f)| override_stub(dll, f).is_some());
+    v
+}
+
 /// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en
 /// a une ; pour une donnée exportée, son adresse sous 4 Go.
 pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
@@ -1517,6 +1673,16 @@ extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
         crate::dlls::kernel32::get_proc_address(module as usize, name as usize as *const u8)
     };
     if found == 0 {
+        // Fonction propre au CRT x86 (_CIfmod, _libm_sse2_*…) : pas
+        // d'export 64 bits, mais un remplacement x86, comme à l'import (#1333).
+        if let Some(dll) = crate::dlls::builtin_by_handle(module as usize) {
+            if name > 0xffff {
+                let symbol = unsafe { crate::dlls::cstr(name as usize as *const u8) };
+                if let Some(stub) = override_stub(&format!("{dll}.dll"), &symbol) {
+                    return stub as u32;
+                }
+            }
+        }
         return 0;
     }
     let Some(dll) = crate::dlls::builtin_by_handle(module as usize) else {
@@ -1624,6 +1790,9 @@ struct Passage {
     esp: u32,
     ret: u32,
     args: [u32; 4],
+    /// edx:eax rendu par la passerelle, une fois revenue (#1440) : la
+    /// valeur nulle qui fait fauter le code x86 vient souvent de là.
+    result: Option<u64>,
 }
 
 const HISTORY_LEN: usize = 64;
@@ -1645,7 +1814,70 @@ fn history_on() -> bool {
     })
 }
 
+/// `WINLUX_WOW32_HISTORY=flux` (ou `flux:motif`) : chaque passage est en
+/// plus écrit tout de suite sur la sortie d'erreur, puis une seconde fois
+/// avec la valeur rendue (« = 0x… ») au retour, filtré sur le motif
+/// (« SetWindowPos », « user32 »…). Sert à suivre ce qu'un programme x86
+/// demande sans attendre une faute (champ du port de WinSCP, #1251).
+fn history_stream() -> Option<&'static str> {
+    static FILTER: OnceLock<Option<String>> = OnceLock::new();
+    FILTER
+        .get_or_init(|| {
+            let v = std::env::var("WINLUX_WOW32_HISTORY").ok()?;
+            let rest = v.strip_prefix("flux")?;
+            Some(rest.strip_prefix(':').unwrap_or("").to_ascii_lowercase())
+        })
+        .as_deref()
+}
+
+fn passage_line(p: &Passage) -> String {
+    let what = if p.desc != 0 {
+        let d = unsafe { &*(p.desc as usize as *const Desc) };
+        d.label.clone()
+    } else {
+        format!("rappel x86 0x{:x}", p.target)
+    };
+    let rendu = match p.result {
+        Some(r) => format!(" = 0x{:x}", r as u32),
+        None => String::new(),
+    };
+    format!(
+        "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}{rendu}",
+        p.esp, p.ret, p.args
+    )
+}
+
+/// Note la valeur rendue par la passerelle `desc` appelée à `esp` : le
+/// passage le plus récent qui lui correspond (des rappels x86 ont pu être
+/// notés entre-temps).
+fn note_result(desc: u32, esp: u32, r: u64) {
+    HISTORY.with(|h| {
+        let mut h = h.borrow_mut();
+        if let Some(p) = h
+            .iter_mut()
+            .rev()
+            .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
+        {
+            p.result = Some(r);
+            // Mode flux : la valeur rendue suit aussitôt (#1616), sinon
+            // seule une faute la montrait.
+            if let Some(filter) = history_stream() {
+                let line = passage_line(p);
+                if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+                    eprintln!("winlux[wow32] {line}");
+                }
+            }
+        }
+    });
+}
+
 fn note(p: Passage) {
+    if let Some(filter) = history_stream() {
+        let line = passage_line(&p);
+        if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+            eprintln!("winlux[wow32] {line}");
+        }
+    }
     HISTORY.with(|h| {
         let mut h = h.borrow_mut();
         if h.len() == HISTORY_LEN {
@@ -1657,23 +1889,7 @@ fn note(p: Passage) {
 
 /// Passages notés, du plus ancien au plus récent, en texte.
 fn history_lines() -> Vec<String> {
-    HISTORY.with(|h| {
-        h.borrow()
-            .iter()
-            .map(|p| {
-                let what = if p.desc != 0 {
-                    let d = unsafe { &*(p.desc as usize as *const Desc) };
-                    d.label.clone()
-                } else {
-                    format!("rappel x86 0x{:x}", p.target)
-                };
-                format!(
-                    "{what} (esp 0x{:x}, retour 0x{:x}) {:x?}",
-                    p.esp, p.ret, p.args
-                )
-            })
-            .collect()
-    })
+    HISTORY.with(|h| h.borrow().iter().map(passage_line).collect())
 }
 
 #[cfg(test)]
@@ -1702,10 +1918,21 @@ fn historique_borne() {
             esp: 0,
             ret: 0,
             args: [i, 0, 0, 0],
+            result: None,
         });
     }
     let lines = history_lines();
     assert_eq!(lines.len(), HISTORY_LEN);
+    note(Passage {
+        desc: 0,
+        target: 0x41_0000,
+        esp: 0x1000,
+        ret: 0,
+        args: [0; 4],
+        result: None,
+    });
+    note_result(0, 0x1000, 0x1234);
+    assert!(history_lines().last().unwrap().ends_with("= 0x1234"));
     assert!(lines[0].starts_with("rappel x86 0x400005"), "{}", lines[0]);
     assert!(lines[HISTORY_LEN - 1].contains("0x400044"));
 }
@@ -1840,6 +2067,9 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let d = unsafe { &*(desc as usize as *const Desc) };
     let step = step_target().is_some() && step_wanted(d, args);
     let r = dispatch_inner(d, desc, args, xmm0);
+    if history_on() {
+        note_result(desc, args - 4, r);
+    }
     if step {
         step_arm();
     }
@@ -1855,6 +2085,7 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
             esp: args - 4,
             ret: rd(args - 4),
             args: [rd(args), rd(args + 4), rd(args + 8), rd(args + 12)],
+            result: None,
         });
     }
     if !d.supported {
@@ -2314,6 +2545,25 @@ pub fn x86_vtable_sig(name: &str, methods: &[(usize, &str)]) -> u32 {
         })
         .collect();
     Box::leak(table.into_boxed_slice()).as_ptr() as usize as u32
+}
+
+/// Passerelle x86 (stdcall) vers une fonction win64 du runtime qui n'est
+/// pas exportée par nom, comme les fonctions d'extension de Winsock rendues
+/// par WSAIoctl (#1408) : `n` arguments de 4 octets, étendus à 64 bits.
+pub fn x86_stdcall(name: &str, target: usize, n: u8) -> u32 {
+    make_stub(
+        Desc {
+            ret: b'i',
+            supported: true,
+            target,
+            kinds: vec![b'i'; n as usize],
+            label: name.to_string(),
+            fix: crt::Fix::None,
+            raw: None,
+            callbacks: 0,
+        },
+        Some(n as u16 * 4),
+    ) as u32
 }
 
 pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {

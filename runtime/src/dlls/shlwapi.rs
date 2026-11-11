@@ -96,15 +96,9 @@ pub unsafe extern "win64" fn path_combine_a(
     out
 }
 
-/// PathCombineW
-pub unsafe extern "win64" fn path_combine_w(
-    out: *mut u16,
-    dir: *const u16,
-    file: *const u16,
-) -> *mut u16 {
-    if out.is_null() {
-        return std::ptr::null_mut();
-    }
+/// Résultat de PathCombine (canonique), sans limite de taille ; sert aussi
+/// à PathCchCombineEx (#1383).
+pub(crate) unsafe fn path_combine_units(dir: *const u16, file: *const u16) -> Vec<u16> {
     let d = if dir.is_null() {
         String::new()
     } else {
@@ -127,10 +121,22 @@ pub unsafe extern "win64" fn path_combine_w(
     };
     // Le résultat est canonique (documentation de PathCombine).
     let units: Vec<u32> = combined.encode_utf16().map(u32::from).collect();
-    let w: Vec<u16> = canonicalize_units(&units)
+    canonicalize_units(&units)
         .iter()
         .map(|&c| c as u16)
-        .collect();
+        .collect()
+}
+
+/// PathCombineW
+pub unsafe extern "win64" fn path_combine_w(
+    out: *mut u16,
+    dir: *const u16,
+    file: *const u16,
+) -> *mut u16 {
+    if out.is_null() {
+        return std::ptr::null_mut();
+    }
+    let w = path_combine_units(dir, file);
     let n = w.len().min(259);
     std::ptr::copy_nonoverlapping(w.as_ptr(), out, n);
     *out.add(n) = 0;
@@ -756,8 +762,33 @@ fn is_root(p: &[u32]) -> bool {
     false
 }
 
+/// IsOS (shlwapi.h) : questions sur la famille et l'édition du système.
+/// Winlux répond comme un poste de travail NT récent, hors domaine, en
+/// session locale ; OS_WOW6432 suit le mode du programme (x86 ou non).
+/// Les valeurs OS_* viennent de l'en-tête public mingw-w64 shlwapi.h.
+/// L'ordinal 437 est celui que donne la documentation publique de IsOS
+/// (« load it by ordinal 437 from Shlwapi.dll »). Chromium s'en sert pour
+/// IsOS(OS_DOMAINMEMBER) ; sans lui, son crochet de chargement différé
+/// s'arrête sur int3 (#1622).
+pub extern "win64" fn is_os(os: u32) -> i32 {
+    let oui = match os {
+        // OS_NT, OS_NT4ORGREATER, OS_WIN2000ORGREATER, OS_WIN2000PRO,
+        // OS_XPORGREATER, OS_PROFESSIONAL, OS_FASTUSERSWITCHING,
+        // OS_WELCOMELOGONUI.
+        1 | 3 | 7 | 8 | 18 | 20 | 26 | 27 => true,
+        // OS_WOW6432.
+        30 => crate::dlls::legacy_com::x86(),
+        // Famille 9x/Me, éditions serveur, Home, Embedded, Terminal
+        // Services, membre d'un domaine, Tablet PC, Media Center, appliance.
+        _ => false,
+    };
+    oui as i32
+}
+
 pub fn exports() -> crate::dlls::Exports {
     let mut m = crate::exports! {
+        "IsOS" => fn is_os,
+        "#437" => fn is_os,
         "PathFileExistsA" => fn path_file_exists_a,
         "PathFileExistsW" => fn path_file_exists_w,
         "PathIsDirectoryA" => fn path_is_directory_a,
@@ -798,6 +829,18 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn is_os_poste_nt_hors_domaine() {
+        let f = crate::dlls::lookup("shlwapi", "#437").expect("shlwapi!#437");
+        assert_eq!(Some(f), crate::dlls::lookup("shlwapi", "IsOS"));
+        assert_eq!(super::is_os(28), 0, "OS_DOMAINMEMBER");
+        assert_eq!(super::is_os(1), 1, "OS_NT");
+        assert_eq!(super::is_os(18), 1, "OS_XPORGREATER");
+        assert_eq!(super::is_os(0), 0, "OS_WINDOWS (famille 9x)");
+        assert_eq!(super::is_os(23), 0, "OS_SERVER");
+        assert_eq!(super::is_os(30), 0, "OS_WOW6432 en 64 bits");
+    }
+
     use super::*;
 
     #[test]

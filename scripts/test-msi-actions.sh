@@ -21,9 +21,13 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runtime=${WINLUX_BIN:-$root/target/release/winlux}
-test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
+# WINLUX_MSI_OUT=<dossier> : construit seulement le paquet de la fiche de
+# banc 833 dans ce dossier, sans le runtime (scripts/construire-paquets-833.sh).
+out=${WINLUX_MSI_OUT:-}
+if [ -n "$out" ]; then mkdir -p "$out"; out=$(CDPATH= cd -- "$out" && pwd); fi
+test -n "$out" || test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 for tool in makensis wixl msibuild msiinfo x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
-    command -v "$tool" >/dev/null || { echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : test sauté"; exit 0; }
+    command -v "$tool" >/dev/null || { [ -n "$out" ] && { echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : paquet non construit" >&2; exit 1; }; echo "$tool absent (paquets nsis, wixl, msitools, gcc-mingw-w64) : test sauté"; exit 0; }
 done
 
 work=$(mktemp -d)
@@ -158,7 +162,9 @@ cat >ca.wxs <<'EOF'
             <File Id="cadll" Name="ca.dll" Source="ca64.dll"/>
             <ServiceInstall Id="service" Name="WinluxDemoSvc" DisplayName="Service de démonstration" Type="ownProcess"
                             Start="auto" ErrorControl="normal" Arguments="--service" Description="Service du paquet de test"/>
-            <ServiceControl Id="controle" Name="WinluxDemoSvc" Start="install" Stop="both" Remove="uninstall"/>
+            <!-- Pas de Start="install" : outil.exe n'est pas un vrai service, et
+                 un démarrage demandé est lancé en fin d'installation (#1626). -->
+            <ServiceControl Id="controle" Name="WinluxDemoSvc" Stop="both" Remove="uninstall"/>
           </Component>
         </Directory>
       </Directory>
@@ -217,7 +223,15 @@ cp prerequis.exe idt/Binary/WixCA.dll
 cp ca32.dll idt/Binary/CaDll32.dll
 cp ca64.dll idt/Binary/CaDll64.dll
 printf 'Name\tData\ns72\tv0\nBinary\tName\nPrerequis\tPrerequis.exe\nWixCA\tWixCA.dll\nCaDll32\tCaDll32.dll\nCaDll64\tCaDll64.dll\n' >idt/Binary.idt
+# Fichiers écrits par les actions personnalisées : comme sous Windows,
+# seule la table RemoveFile les retire à la désinstallation (mode 2).
+{
+    printf 'FileKey\tComponent_\tFileName\tDirProperty\tInstallMode\ns72\ts72\tL255\ts72\ti2\nRemoveFile\tFileKey\n'
+    printf 'Plan\tPrincipal\tplan-*.txt\tINSTALLDIR\t2\n'
+    printf 'Base\tPrincipal\tbase-*.txt\tINSTALLDIR\t2\n'
+} >idt/RemoveFile.idt
 (cd idt && for t in *.idt; do msibuild ../ca.msi -i "$t"; done)
+if [ -n "$out" ]; then cp ca.msi "$out/actions-dll-exe.msi"; echo "$out/actions-dll-exe.msi"; exit 0; fi
 
 mkdir home
 run() { HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_SETUP_RUN_TIMEOUT=120 "$runtime" "$@"; }
@@ -244,6 +258,7 @@ grep -q 'Start .*(2)' "$work/svc.txt" || fail "service non automatique : $(cat "
 
 run msiexec.exe /x '{7B2C6D1F-2222-4333-8444-955566667777}' /qn >"$work/out.txt" 2>&1 || fail "désinstallation en échec"
 test ! -e "$pf/Winlux Actions/outil.exe" || fail "fichier resté après désinstallation"
+test ! -e "$pf/Winlux Actions" || fail "RemoveFile (mode 2, jokers) : Winlux Actions non vidé : $(ls "$pf/Winlux Actions")"
 test ! -e "$pf/Outil Demo/outil.txt" || fail "type 34 à REMOVE=\"ALL\" : outil non désinstallé"
 grep -q 'Action personnalisée DLL EffaceDll (Efface) : terminée' "$work/out.txt" || fail "type 17 à REMOVE=\"ALL\" : DLL installée non appelée"
 test -f "$pf/Prerequis Demo/outil.txt" || fail "le prérequis est parti avec l'application"

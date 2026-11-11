@@ -495,6 +495,18 @@ unsafe impl Sync for GlFunctions {}
 
 // ── Fonctions GLX ───────────────────────────────────────────────────────────
 
+pub(crate) type XGetGeometryFn = unsafe extern "C" fn(
+    *mut XDisplay,
+    libc::c_ulong,
+    *mut libc::c_ulong,
+    *mut libc::c_int,
+    *mut libc::c_int,
+    *mut libc::c_uint,
+    *mut libc::c_uint,
+    *mut libc::c_uint,
+    *mut libc::c_uint,
+) -> libc::c_int;
+
 pub(crate) struct GlxFunctions {
     pub available: bool,
     // X11 basics (loaded from libX11 via libGL)
@@ -502,6 +514,8 @@ pub(crate) struct GlxFunctions {
     pub XCloseDisplay: unsafe extern "C" fn(*mut XDisplay) -> libc::c_int,
     pub XDefaultScreen: unsafe extern "C" fn(*mut XDisplay) -> libc::c_int,
     pub XDefaultRootWindow: unsafe extern "C" fn(*mut XDisplay) -> libc::c_ulong,
+    /// XGetGeometry : taille réelle de la fenêtre où l'on présente.
+    pub XGetGeometry: Option<XGetGeometryFn>,
     // GLX
     pub ChooseVisual:
         unsafe extern "C" fn(*mut XDisplay, libc::c_int, *const libc::c_int) -> *mut XVisualInfo,
@@ -1123,6 +1137,12 @@ unsafe fn load_glx(lib: *mut c_void) -> GlxFunctions {
         libc::dlsym(lib, b"XDefaultRootWindow\0".as_ptr().cast())
     };
 
+    let x_geometry = if !x11lib.is_null() {
+        libc::dlsym(x11lib, b"XGetGeometry\0".as_ptr().cast())
+    } else {
+        libc::dlsym(lib, b"XGetGeometry\0".as_ptr().cast())
+    };
+
     let x11_ok =
         !x_open.is_null() && !x_close.is_null() && !x_screen.is_null() && !x_root.is_null();
 
@@ -1132,6 +1152,8 @@ unsafe fn load_glx(lib: *mut c_void) -> GlxFunctions {
         XCloseDisplay: std::mem::transmute(if x_close.is_null() { n0 } else { x_close }),
         XDefaultScreen: std::mem::transmute(if x_screen.is_null() { n0 } else { x_screen }),
         XDefaultRootWindow: std::mem::transmute(if x_root.is_null() { n0 } else { x_root }),
+        XGetGeometry: (!x_geometry.is_null())
+            .then(|| std::mem::transmute::<*mut c_void, XGetGeometryFn>(x_geometry)),
         ChooseVisual: sym!(ret "glXChooseVisual", unsafe extern "C" fn(*mut XDisplay, libc::c_int, *const libc::c_int) -> *mut XVisualInfo),
         CreateContext: sym!(ret "glXCreateContext", unsafe extern "C" fn(*mut XDisplay, *mut XVisualInfo, GLXContext, libc::c_int) -> GLXContext),
         MakeCurrent: sym!(ret "glXMakeCurrent", unsafe extern "C" fn(*mut XDisplay, GLXDrawable, GLXContext) -> libc::c_int),

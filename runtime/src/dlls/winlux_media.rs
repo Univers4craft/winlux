@@ -863,11 +863,13 @@ pub fn build_play_args(p: &PlayPlan) -> Vec<String> {
     if let Some(index) = p.audio {
         let mut filters = vec!["asetpts=PTS-STARTPTS".to_string()];
         filters.extend(atempo_chain(p.speed_pct));
-        // Filtre nommé « vol » : son volume se règle en direct (#1013).
-        filters.push(format!(
-            "volume@vol={:.2}",
-            p.volume_pct.min(200) as f64 / 100.0
-        ));
+        if !p.engine_audio() {
+            // Filtre nommé « vol » : son volume se règle en direct (#1013).
+            filters.push(format!(
+                "volume@vol={:.2}",
+                p.volume_pct.min(200) as f64 / 100.0
+            ));
+        }
         a.push("-map".into());
         a.push(format!("0:{index}"));
         a.push("-af".into());
@@ -881,11 +883,26 @@ pub fn build_play_args(p: &PlayPlan) -> Vec<String> {
                 p.audio_app.clone(),
             ]);
         }
+        if p.engine_audio() {
+            // PCM vers le moteur audio du runtime : un seul flux par
+            // processus, mis en pause et réglé en volume sans être recréé.
+            a.extend(["-ar", "48000", "-ac", "2"].iter().map(|s| s.to_string()));
+        }
         a.push("-f".into());
         a.push(p.audio_out.0.clone());
         a.push(p.audio_out.1.clone());
     }
     a
+}
+
+/// Sortie audio « moteur » : PCM flottant stéréo 48 kHz sur le descripteur 3,
+/// joué par le moteur audio du runtime (#1013).
+pub const ENGINE_AUDIO: (&str, &str) = ("f32le", "pipe:3");
+
+impl PlayPlan {
+    pub fn engine_audio(&self) -> bool {
+        self.audio_out.0 == ENGINE_AUDIO.0 && self.audio_out.1 == ENGINE_AUDIO.1
+    }
 }
 
 /// Propriétés du flux audio d'un FFmpeg auxiliaire (#1010) : libpulse lit
@@ -919,15 +936,10 @@ fn audio_output() -> Option<(String, String)> {
             return Some((f.to_string(), d.to_string()));
         }
     }
-    let pulse = std::env::var_os("PULSE_SERVER").is_some()
-        || std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .is_some_and(|d| d.join("pulse/native").exists());
-    Some(if pulse {
-        ("pulse".to_string(), "default".to_string())
-    } else {
-        ("alsa".to_string(), "default".to_string())
-    })
+    // Par défaut, le son passe par le moteur audio du runtime (PipeWire,
+    // PulseAudio ou ALSA) ; `WINLUX_MEDIA_AUDIO=pulse:default` force une
+    // sortie directe de ffmpeg.
+    Some((ENGINE_AUDIO.0.to_string(), ENGINE_AUDIO.1.to_string()))
 }
 
 /// Taille de décodage : taille d'affichage du flux tenant dans la cible.
@@ -1027,6 +1039,94 @@ struct Shared {
     paused: AtomicBool,
     /// Volume réglé en direct depuis l'ouverture (u32::MAX : jamais).
     live_volume: AtomicU32,
+    /// Son joué par le moteur audio du runtime (sortie [`ENGINE_AUDIO`]).
+    engine: Option<Arc<MediaAudio>>,
+}
+
+/// Capacité de l'anneau PCM d'une session : 0,25 s de stéréo à 48 kHz.
+const MEDIA_RING: usize = 48_000 / 4 * 2;
+
+/// Source du moteur audio alimentée par le PCM de ffmpeg (#1013).
+///
+/// Elle vit autant que la session : la pause la rend inactive (le moteur
+/// bouchonne le flux), le volume est celui du flux, pas du signal.
+struct MediaAudio {
+    ring: Mutex<VecDeque<f32>>,
+    cv: std::sync::Condvar,
+    paused: AtomicBool,
+    closed: AtomicBool,
+    id: AtomicU64,
+}
+
+impl MediaAudio {
+    fn new() -> Arc<MediaAudio> {
+        Arc::new(MediaAudio {
+            ring: Mutex::new(VecDeque::with_capacity(MEDIA_RING)),
+            cv: std::sync::Condvar::new(),
+            paused: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            id: AtomicU64::new(0),
+        })
+    }
+
+    /// Lit le PCM de ffmpeg ; bloque quand l'anneau est plein, ce qui
+    /// cadence ffmpeg sur le périphérique.
+    fn feed(&self, mut pipe: std::fs::File) {
+        let mut buf = vec![0u8; 8192];
+        let mut carry: Vec<u8> = Vec::with_capacity(4);
+        loop {
+            let n = match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            carry.extend_from_slice(&buf[..n]);
+            let whole = carry.len() / 4 * 4;
+            let samples: Vec<f32> = carry[..whole]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect();
+            carry.drain(..whole);
+            let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+            while ring.len() + samples.len() > MEDIA_RING {
+                if self.closed.load(Ordering::SeqCst) {
+                    return;
+                }
+                ring = self
+                    .cv
+                    .wait_timeout(ring, Duration::from_millis(50))
+                    .map(|(g, _)| g)
+                    .unwrap_or_else(|e| e.into_inner().0);
+            }
+            ring.extend(samples);
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.cv.notify_all();
+        crate::audio::remove_source(self.id.load(Ordering::SeqCst));
+    }
+}
+
+impl crate::audio::Source for MediaAudio {
+    fn mix(&self, out: &mut [f32]) -> bool {
+        if self.closed.load(Ordering::SeqCst) {
+            return false;
+        }
+        let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+        let n = out.len().min(ring.len()) & !1;
+        for (o, v) in out.iter_mut().zip(ring.drain(..n)) {
+            *o += v;
+        }
+        drop(ring);
+        self.cv.notify_all();
+        true
+    }
+    fn active(&self) -> bool {
+        !self.paused.load(Ordering::SeqCst)
+    }
 }
 
 /// Commande ffmpeg (touche « c » puis une ligne) qui règle le filtre
@@ -1100,9 +1200,19 @@ impl Session {
                     return 0;
                 }
                 s.paused.store(pause, Ordering::SeqCst);
+                if let Some(a) = &s.engine {
+                    // Le flux du moteur passe en « bouchonné » sans fermer.
+                    a.paused.store(pause, Ordering::SeqCst);
+                }
                 if let Ok(mut g) = s.progress_at.lock() {
                     *g = Some(Instant::now());
                 }
+                1
+            }
+            CONTROL_VOLUME if s.engine.is_some() => {
+                // Volume du flux lui-même : le mélangeur du système l'affiche.
+                crate::audio::set_app_volume(crate::audio::percent_to_gain(value));
+                s.live_volume.store(value.min(200), Ordering::SeqCst);
                 1
             }
             CONTROL_VOLUME => {
@@ -1128,6 +1238,9 @@ impl Session {
 
     fn close(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        if let Some(a) = &self.shared.engine {
+            a.close();
+        }
         let pid = self.shared.pid.load(Ordering::SeqCst);
         if pid > 0 {
             unsafe {
@@ -1151,6 +1264,8 @@ struct Attempt {
     args: Vec<String>,
     hw: bool,
     audio: bool,
+    /// PCM sur le descripteur 3, pour le moteur audio.
+    engine_audio: bool,
 }
 
 fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>) -> bool {
@@ -1159,6 +1274,35 @@ fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>)
         &crate::audio::backend::app_name(),
         &crate::audio::backend::process_binary(),
     ));
+    // Tube du PCM : l'extrémité d'écriture devient le descripteur 3 de ffmpeg.
+    let mut pcm: Option<(std::fs::File, std::os::fd::OwnedFd)> = None;
+    if at.engine_audio && sh.engine.is_some() {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::process::CommandExt;
+        let mut fds = [0i32; 2];
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return false;
+        }
+        // Petit tampon : la pause et le volume s'entendent vite.
+        unsafe { libc::fcntl(fds[1], libc::F_SETPIPE_SZ, 16384) };
+        let w = fds[1];
+        unsafe {
+            cmd.pre_exec(move || {
+                if w == 3 {
+                    libc::fcntl(3, libc::F_SETFD, 0);
+                } else if libc::dup2(w, 3) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        pcm = Some(unsafe {
+            (
+                std::fs::File::from_raw_fd(fds[0]),
+                std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+            )
+        });
+    }
     die_with_parent(&mut cmd)
         .args(&at.args)
         .stdin(Stdio::piped())
@@ -1168,10 +1312,24 @@ fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>)
             Stdio::null()
         })
         .stderr(Stdio::piped());
-    let Ok(mut child) = cmd.spawn() else {
+    let spawned = cmd.spawn();
+    // Le parent garde seulement l'extrémité de lecture : fin de fichier
+    // quand ffmpeg se termine.
+    let pcm_reader = pcm.map(|(r, w)| {
+        drop(w);
+        r
+    });
+    let Ok(mut child) = spawned else {
         return false;
     };
     sh.pid.store(child.id() as i32, Ordering::SeqCst);
+    let feeder = match (pcm_reader, sh.engine.clone()) {
+        (Some(r), Some(a)) => {
+            a.ring.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            Some(std::thread::spawn(move || a.feed(r)))
+        }
+        _ => None,
+    };
     if sh.stop.load(Ordering::SeqCst) {
         let _ = child.kill();
         let _ = child.wait();
@@ -1240,6 +1398,9 @@ fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>)
     let _ = err_thread.join();
     if let Some(r) = reader {
         let _ = r.join();
+    }
+    if let Some(f) = feeder {
+        let _ = f.join();
     }
     let ok = status.map(|s| s.success()).unwrap_or(false);
     // Un essai qui échoue sans avoir rien produit doit être retenté autrement.
@@ -1364,6 +1525,7 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
             args: build_play_args(&p),
             hw: !hw.is_empty(),
             audio: has_audio,
+            engine_audio: has_audio && p.engine_audio(),
         }
     };
     if !hw.is_empty() {
@@ -1375,6 +1537,13 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
         attempts.push(mk(Vec::new(), None));
     }
     let frame_size = size.map(|(w, h)| w as usize * h as usize * 4).unwrap_or(0);
+    let engine = attempts.iter().any(|a| a.engine_audio).then(|| {
+        let a = MediaAudio::new();
+        crate::audio::set_app_volume(crate::audio::percent_to_gain(plan.volume_pct));
+        let id = crate::audio::add_source(a.clone());
+        a.id.store(id, Ordering::SeqCst);
+        a
+    });
     let shared = Arc::new(Shared {
         frame: Mutex::new((Vec::new(), 0)),
         out_time_us: AtomicI64::new(0),
@@ -1389,6 +1558,7 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
         stdin: Mutex::new(None),
         paused: AtomicBool::new(false),
         live_volume: AtomicU32::new(u32::MAX),
+        engine,
     });
     let sh = shared.clone();
     let supervisor = std::thread::Builder::new()
@@ -2423,5 +2593,124 @@ format.tags.title="Film"
         s.close();
         std::env::remove_var("WINLUX_MEDIA_AUDIO");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod real_server_tests {
+    use super::*;
+
+    fn sink_inputs() -> Vec<(u32, bool, String)> {
+        let out = Command::new("pactl")
+            .args(["list", "sink-inputs"])
+            .env("LC_ALL", "C")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let mut v = Vec::new();
+        for block in out.split("Sink Input #").skip(1) {
+            let idx = block
+                .lines()
+                .next()
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or(0);
+            let corked = block.contains("Corked: yes");
+            let vol = block
+                .lines()
+                .find(|l| l.trim_start().starts_with("Volume:"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            v.push((idx, corked, vol));
+        }
+        v
+    }
+
+    /// #1013 sur un vrai serveur : `cargo test -- --ignored un_seul_flux`.
+    #[test]
+    #[ignore]
+    fn un_seul_flux_pendant_pause_et_volume() {
+        let wav = std::env::temp_dir().join("winlux-1013.wav");
+        let ok = Command::new(find_tool("ffmpeg").expect("ffmpeg"))
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=440:duration=20")
+            .arg(&wav)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        let w: Vec<u16> = wav
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let o = OpenOptions {
+            start_ms: 0,
+            width: 0,
+            height: 0,
+            volume: 100,
+            speed: 100,
+            audio_track: -1,
+            sub_track: -1,
+            flags: 1,
+            sub_path: std::ptr::null(),
+        };
+        let h = unsafe { winlux_media_open(w.as_ptr(), &o) };
+        assert_ne!(h, 0);
+        let wait = |ms| std::thread::sleep(Duration::from_millis(ms));
+        wait(1500);
+        let play = sink_inputs();
+        eprintln!("lecture : {play:?}");
+        assert_eq!(play.len(), 1, "un flux pendant la lecture");
+        // Le son arrive bien au périphérique (moniteur du sink par défaut).
+        let rec = Command::new("sh")
+            .args([
+                "-c",
+                "ffmpeg -loglevel error -f pulse -i @DEFAULT_MONITOR@ -t 0.5 -ac 1 -ar 8000 -f s16le -",
+            ])
+            .output()
+            .map(|o| o.stdout)
+            .unwrap_or_default();
+        let peak = rec
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        eprintln!("crête au moniteur : {peak} ({} octets)", rec.len());
+        assert!(peak > 1000, "son absent du périphérique ({peak})");
+        let idx = play[0].0;
+        assert!(!play[0].1);
+        assert_eq!(unsafe { winlux_media_control(h, CONTROL_PAUSE, 1) }, 1);
+        wait(800);
+        let paused = sink_inputs();
+        eprintln!("pause : {paused:?}");
+        assert_eq!(unsafe { winlux_media_control(h, CONTROL_PAUSE, 0) }, 1);
+        wait(800);
+        let resumed = sink_inputs();
+        eprintln!("reprise : {resumed:?}");
+        assert_eq!(unsafe { winlux_media_control(h, CONTROL_VOLUME, 30) }, 1);
+        wait(800);
+        let vol = sink_inputs();
+        eprintln!("volume 30 : {vol:?}");
+        unsafe { winlux_media_close(h) };
+        assert_eq!(paused.len(), 1);
+        assert_eq!(paused[0].0, idx, "même flux en pause");
+        assert!(paused[0].1, "flux bouchonné en pause");
+        assert_eq!(resumed[0].0, idx);
+        assert!(!resumed[0].1);
+        assert_eq!(vol[0].0, idx);
+        assert!(
+            vol[0].2.contains(" 30%"),
+            "volume du flux à 30 % : {}",
+            vol[0].2
+        );
     }
 }

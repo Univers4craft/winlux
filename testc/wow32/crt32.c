@@ -11,6 +11,9 @@
 #include <signal.h>
 #include <time.h>
 #include <locale.h>
+#include <windows.h>
+#include <io.h>
+#include <wchar.h>
 
 static int ctor_ran;
 __attribute__((constructor)) static void ctor(void) { ctor_ran = 42; }
@@ -77,5 +80,241 @@ int main(int argc, char **argv) {
     if (fails == 20) printf("obtenu : %s\n", buf);
     atexit(bye);
     if (!fails) printf("CRT 32 bits : tout est correct\n");
+    {
+        /* Aides mathématiques du CRT x86 (#1333) : convention x87 (_CI*) et
+         * SSE2 (_libm_sse2_*), appelées comme le code de MSVC. */
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        void *ci_fmod = (void *)GetProcAddress(u, "_CIfmod");
+        void *ci_atan2 = (void *)GetProcAddress(u, "_CIatan2");
+        void *pow2 = (void *)GetProcAddress(u, "_libm_sse2_pow_precise");
+        void *sin2 = (void *)GetProcAddress(u, "_libm_sse2_sin_precise");
+        CHECK(21, ci_fmod && ci_atan2 && pow2 && sin2);
+        if (ci_fmod && ci_atan2 && pow2 && sin2) {
+            double a = 7.5, b = 2.0, r;
+            __asm__ volatile("fldl %1\n\tfldl %2\n\tcall *%3\n\tfstpl %0"
+                             : "=m"(r) : "m"(a), "m"(b), "r"(ci_fmod) : "eax", "ecx", "edx", "memory");
+            CHECK(22, r == 1.5);
+            double y = 1.0, x = -1.0;
+            __asm__ volatile("fldl %1\n\tfldl %2\n\tcall *%3\n\tfstpl %0"
+                             : "=m"(r) : "m"(y), "m"(x), "r"(ci_atan2) : "eax", "ecx", "edx", "memory");
+            CHECK(23, r > 2.356 && r < 2.357);
+            double p = 2.0, e = 10.0;
+            __asm__ volatile("movsd %1, %%xmm0\n\tmovsd %2, %%xmm1\n\tcall *%3\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(p), "m"(e), "r"(pow2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(24, r == 1024.0);
+            double z = 0.0;
+            __asm__ volatile("movsd %1, %%xmm0\n\tcall *%2\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(z), "r"(sin2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(25, r == 0.0);
+        }
+        /* Python 3.12 x86 (#1383) : _CI* à un opérande, log en SSE2 et
+         * __fpe_flt_rounds (arrondi au plus proche : 1). */
+        void *ci_sinh = (void *)GetProcAddress(u, "_CIsinh");
+        void *log2 = (void *)GetProcAddress(u, "_libm_sse2_log_precise");
+        int (*flt_rounds)(void) = (int (*)(void))GetProcAddress(u, "__fpe_flt_rounds");
+        CHECK(26, ci_sinh && log2 && flt_rounds);
+        if (ci_sinh && log2 && flt_rounds) {
+            double z = 0.0, one = 1.0, r;
+            __asm__ volatile("fldl %1\n\tcall *%2\n\tfstpl %0"
+                             : "=m"(r) : "m"(z), "r"(ci_sinh) : "eax", "ecx", "edx", "memory");
+            CHECK(27, r == 0.0);
+            __asm__ volatile("movsd %1, %%xmm0\n\tcall *%2\n\tmovsd %%xmm0, %0"
+                             : "=m"(r) : "m"(one), "r"(log2)
+                             : "eax", "ecx", "edx", "memory");
+            CHECK(28, r == 0.0);
+            CHECK(29, flt_rounds() == 1);
+        }
+    }
+    {
+        /* Steam.exe (#1380) : masques d'affinité sur 4 octets, variable
+         * cachée « =C: » écrite par _wchdir, imports par ordinal. */
+        struct { DWORD_PTR p, s; DWORD garde; } m = { 0, 0, 0xA5A5A5A5u };
+        CHECK(30, GetProcessAffinityMask(GetCurrentProcess(), &m.p, &m.s) && m.p && m.garde == 0xA5A5A5A5u);
+        CHECK(31, SetProcessAffinityMask(GetCurrentProcess(), m.p));
+        wchar_t v[64] = L"";
+        CHECK(32, SetEnvironmentVariableW(L"=C:", L"C:\\Steam")
+                  && GetEnvironmentVariableW(L"=C:", v, 64) == 8 && !wcscmp(v, L"C:\\Steam"));
+        HMODULE sh = LoadLibraryA("shell32.dll"), ws = LoadLibraryA("wsock32.dll");
+        CHECK(33, sh && ws && GetProcAddress(sh, MAKEINTRESOURCEA(680))
+                  && GetProcAddress(ws, MAKEINTRESOURCEA(1142)));
+    }
+    {
+        /* python312.dll x86 (#1407) : __timezone et __tzname rendent des
+         * pointeurs lisibles, fonctions mathématiques C99 et _wstat64i32. */
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        long *(*tz)(void) = (long *(*)(void))GetProcAddress(u, "__timezone");
+        char **(*tzn)(void) = (char **(*)(void))GetProcAddress(u, "__tzname");
+        CHECK(34, tz && tzn && tz() && *tz() >= -50400 && *tz() <= 50400
+                  && tzn() && tzn()[0] && strlen(tzn()[0]) < 64);
+        double (*acosh_)(double) = (double (*)(double))GetProcAddress(u, "acosh");
+        double (*cbrt_)(double) = (double (*)(double))GetProcAddress(u, "cbrt");
+        double (*round_)(double) = (double (*)(double))GetProcAddress(u, "round");
+        double (*log2_)(double) = (double (*)(double))GetProcAddress(u, "log2");
+        double (*copysign_)(double, double) = (double (*)(double, double))GetProcAddress(u, "copysign");
+        CHECK(35, acosh_ && cbrt_ && round_ && log2_ && copysign_
+                  && acosh_(1.0) == 0.0 && cbrt_(27.0) == 3.0 && round_(2.5) == 3.0
+                  && log2_(8.0) == 3.0 && copysign_(2.0, -1.0) == -2.0);
+        int (*wstat_)(const wchar_t *, void *) = (int (*)(const wchar_t *, void *))GetProcAddress(u, "_wstat64i32");
+        unsigned char st[48];
+        memset(st, 0, sizeof st);
+        CHECK(36, wstat_ && wstat_(L"C:\\", st) == 0 && (*(unsigned short *)(st + 6) & 0x4000));
+    }
+    {
+        /* 7-Zip (#1413) : FORMAT_MESSAGE_ALLOCATE_BUFFER écrit un pointeur
+         * de 4 octets, sans toucher au mot suivant. */
+        struct { wchar_t *p; DWORD garde; } b = { NULL, 0xA5A5A5A5u };
+        DWORD n = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+                                 | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, 5, 0, (LPWSTR)&b.p, 0, NULL);
+        CHECK(37, n > 0 && b.p && b.garde == 0xA5A5A5A5u && wcslen(b.p) == n);
+        LocalFree(b.p);
+    }
+    {
+        /* Python 3.12 x86 (#1436) : GetFileInformationByHandle sur la sortie
+         * standard, redirigée vers un fichier par test-wow32.sh. */
+        BY_HANDLE_FILE_INFORMATION fi;
+        memset(&fi, 0xEE, sizeof fi);
+        HANDLE out = (HANDLE)_get_osfhandle(1);
+        CHECK(38, GetFileType(out) != FILE_TYPE_DISK
+                  || (GetFileInformationByHandle(out, &fi) && fi.nNumberOfLinks >= 1
+                      && !(fi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)));
+    }
+    {
+        /* Steam x86 (#1439) : manifeste écrit par CreateFileW (CREATE_ALWAYS),
+         * GetFileType, sonde à -1 depuis la fin (ERROR_NEGATIVE_SEEK
+         * attendu), SetFilePointerEx puis WriteFile. Le LARGE_INTEGER
+         * passe par valeur sur 8 octets de pile. */
+        wchar_t dir[MAX_PATH], path[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        GetTempFileNameW(dir, L"spx", 0, path);
+        HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+        LARGE_INTEGER z, pos, sz;
+        z.QuadPart = 0;
+        pos.QuadPart = -1;
+        DWORD w = 0;
+        z.QuadPart = -1;
+        int neg = h != INVALID_HANDLE_VALUE && !SetFilePointerEx(h, z, &pos, FILE_END)
+                  && GetLastError() == ERROR_NEGATIVE_SEEK;
+        z.QuadPart = 0;
+        int ok1 = neg && GetFileType(h) == FILE_TYPE_DISK
+                  && SetFilePointerEx(h, z, &pos, FILE_END) && pos.QuadPart == 0
+                  && WriteFile(h, "abcde", 5, &w, NULL) && w == 5;
+        z.QuadPart = -2;
+        int ok2 = ok1 && SetFilePointerEx(h, z, &pos, FILE_CURRENT) && pos.QuadPart == 3;
+        z.QuadPart = 1;
+        int ok3 = ok2 && SetFilePointerEx(h, z, NULL, FILE_BEGIN)
+                  && GetFileSizeEx(h, &sz) && sz.QuadPart == 5;
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        DeleteFileW(path);
+        CHECK(39, ok3);
+    }
+    {
+        /* tkinter x86 (#1474) : TCL_LIBRARY posée par _wputenv après le
+         * démarrage doit apparaître dans _wenviron et _environ, que Tcl
+         * parcourt. */
+        int seen_w = 0, seen_a = 0;
+        _wputenv(L"WINLUX_T1474=ok");
+        for (wchar_t **e = _wenviron; e && *e; e++)
+            if (!wcscmp(*e, L"WINLUX_T1474=ok")) seen_w = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strcmp(*e, "WINLUX_T1474=ok")) seen_a = 1;
+        _putenv("WINLUX_T1474=");
+        int gone = 1;
+        for (char **e = _environ; e && *e; e++)
+            if (!strncmp(*e, "WINLUX_T1474=", 13)) gone = 0;
+        CHECK(40, seen_w && seen_a && gone && !getenv("WINLUX_T1474"));
+    }
+    {
+        /* Steam x86 (#1475) : MoveFileTransactedW et DeleteFileTransactedW
+         * trouvées par GetProcAddress, déplacement puis suppression faits. */
+        typedef BOOL (WINAPI *mv_t)(LPCWSTR, LPCWSTR, void *, void *, DWORD, HANDLE);
+        typedef BOOL (WINAPI *del_t)(LPCWSTR, HANDLE);
+        HMODULE k = GetModuleHandleA("kernel32.dll");
+        mv_t mv = (mv_t)GetProcAddress(k, "MoveFileTransactedW");
+        del_t del = (del_t)GetProcAddress(k, "DeleteFileTransactedW");
+        wchar_t dir[MAX_PATH], a[MAX_PATH], b[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        GetTempFileNameW(dir, L"tx", 0, a);
+        wcscpy(b, a);
+        wcscat(b, L"_dest");
+        int ok = mv && del && mv(a, b, NULL, NULL, MOVEFILE_REPLACE_EXISTING, INVALID_HANDLE_VALUE)
+                 && GetFileAttributesW(a) == INVALID_FILE_ATTRIBUTES
+                 && GetFileAttributesW(b) != INVALID_FILE_ATTRIBUTES
+                 && del(b, INVALID_HANDLE_VALUE) && GetFileAttributesW(b) == INVALID_FILE_ATTRIBUTES;
+        DeleteFileW(a);
+        DeleteFileW(b);
+        CHECK(41, ok);
+    }
+    {
+        /* #1508 : complexes x86 (pointeur caché pour _Dcomplex, edx:eax
+         * pour _Fcomplex, résultat réel dans st0), __pioinfo sous 4 Go et
+         * taille de tampon de __stdio_common_vsscanf « _s ». */
+        typedef struct { double re, im; } dc;
+        typedef struct { float re, im; } fc;
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        HMODULE m = LoadLibraryA("msvcrt.dll");
+        dc (*cexp_)(dc) = (dc (*)(dc))GetProcAddress(u, "cexp");
+        fc (*cpowf_)(fc, fc) = (fc (*)(fc, fc))GetProcAddress(u, "cpowf");
+        double (*cimag_)(dc) = (double (*)(dc))GetProcAddress(u, "cimag");
+        float (*cargf_)(fc) = (float (*)(fc))GetProcAddress(u, "cargf");
+        void **pio = (void **)GetProcAddress(m, "__pioinfo");
+        int (*vss)(unsigned long long, const char *, size_t, const char *, void *, va_list) =
+            (int (*)(unsigned long long, const char *, size_t, const char *, void *, va_list))
+                GetProcAddress(u, "__stdio_common_vsscanf");
+        int ok = cexp_ && cpowf_ && cimag_ && cargf_ && pio && vss;
+        if (ok) {
+            dc z = {0.0, 3.141592653589793};
+            dc e = cexp_(z);
+            fc i = {0.0f, 1.0f}, two = {2.0f, 0.0f};
+            fc p = cpowf_(i, two);
+            dc w = {1.0, 2.5};
+            fc q = {0.0f, 1.0f};
+            ok = e.re < -0.999999 && e.re > -1.000001 && e.im < 1e-9 && e.im > -1e-9
+                 && p.re < -0.99999f && p.re > -1.00001f
+                 && cimag_(w) == 2.5 && cargf_(q) > 1.5707f && cargf_(q) < 1.5709f
+                 && pio[0] != NULL && (unsigned long)pio[0] < 0x80000000UL;
+        }
+        if (ok) {
+            char word[8], small[3];
+            int n = 0;
+            struct { char *w; unsigned ws; int *n; } a1 = {word, sizeof word, &n};
+            struct { char *s; unsigned ss; } a2 = {small, sizeof small};
+            ok = vss(1, "abc 5", (size_t)-1, "%s %d", NULL, (va_list)&a1) == 2
+                 && strcmp(word, "abc") == 0 && n == 5
+                 && vss(1, "abcdef", (size_t)-1, "%s", NULL, (va_list)&a2) == 0 && small[0] == 0;
+        }
+        CHECK(42, ok);
+    }
+    {
+        /* #1508 : std::exception de msvcrt x86 (thiscall), table virtuelle
+         * { destructeur de suppression, what }. */
+        typedef void *(__thiscall *ctor_s)(void *, const char *const *);
+        typedef void *(__thiscall *copy_t)(void *, const void *);
+        typedef void (__thiscall *dtor_t)(void *);
+        typedef const char *(__thiscall *what_t)(const void *);
+        HMODULE m = LoadLibraryA("msvcrt.dll");
+        ctor_s c = (ctor_s)GetProcAddress(m, "??0exception@@QAE@ABQBD@Z");
+        copy_t cp = (copy_t)GetProcAddress(m, "??0bad_cast@@QAE@ABV0@@Z");
+        dtor_t d = (dtor_t)GetProcAddress(m, "??1exception@@UAE@XZ");
+        what_t w = (what_t)GetProcAddress(m, "?what@exception@@UBEPBDXZ");
+        int ok = c && cp && d && w;
+        if (ok) {
+            void *e[3], *b[3];
+            char text[8] = "boum";
+            const char *pt = text;
+            ok = c(e, &pt) == e;
+            text[0] = 'X'; /* la chaîne a été recopiée */
+            what_t vw = ok ? ((what_t *)e[0])[1] : 0;
+            ok = ok && strcmp(w(e), "boum") == 0 && vw && strcmp(vw(e), "boum") == 0
+                 && cp(b, e) == b && b[0] != e[0] && strcmp(w(b), "boum") == 0;
+            if (ok) {
+                d(b);
+                d(e);
+            }
+        }
+        CHECK(43, ok);
+    }
     return fails;
 }

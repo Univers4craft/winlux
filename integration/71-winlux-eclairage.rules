@@ -1,0 +1,20 @@
+# Winlux (#1522) : les logiciels d'éclairage, de claviers, de souris et de
+# casques (iCUE, Synapse, Armoury Crate, MSI Center, NGENUITY…) parlent à leur
+# appareil par hid.dll, que Winlux sert depuis /dev/hidraw*. Ces nœuds sont
+# réservés à root par défaut : on ouvre au groupe input (dont fait partie
+# chaque compte Winlux) ceux des fabricants listés ici, et rien d'autre.
+#
+# Pas de règle générique : un hidraw ouvert permet de lire les rapports d'un
+# appareil. Les comptes lisent déjà les claviers par evdev (groupe input),
+# donc ces fabricants n'ajoutent pas de lecture de frappe ; les clés de
+# sécurité (FIDO) et les autres appareils HID restent fermés. /dev/bus/usb
+# (usbfs) n'est pas ouvert : il permettrait de détacher le pilote du clavier.
+# Le nœud de création d'appareils HID virtuels reste lui aussi fermé.
+#
+# SteelSeries (1038) et Logitech (046d) sont déjà dans 70-winlux-manettes.rules.
+#   1b1c Corsair          1532 Razer             0b05 ASUS (ROG)
+#   1462 MSI              0951 HyperX (Kingston) 03f0 HyperX (HP)
+#   2516 Cooler Master    1e7d Roccat            10f5 Turtle Beach
+#   258a Glorious         31e3 Wooting           1e71 NZXT
+#   048d ITE (contrôleurs d'éclairage des cartes mères et portables)
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="*:1B1C:*|*:1532:*|*:0B05:*|*:1462:*|*:0951:*|*:03F0:*|*:2516:*|*:1E7D:*|*:10F5:*|*:258A:*|*:31E3:*|*:1E71:*|*:048D:*", GROUP="input", MODE="0660", TAG+="uaccess"

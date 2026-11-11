@@ -1343,6 +1343,20 @@ pub unsafe extern "win64" fn nt_query_information_process(
             }
             STATUS_SUCCESS
         }
+        58 if crate::dlls::kernel32::process_os_pid(handle)
+            .is_none_or(|pid| pid == std::process::id() as i32) =>
+        {
+            // ProcessHandleTable du processus courant : une liste de ULONG.
+            // Les handles de Winlux ne sont pas des objets du noyau et aucun
+            // n'est de ceux que la fermeture des handles du bac à sable de
+            // Chromium recherche (port de csrss, sections nommées) : la liste
+            // rendue est vide. Sans cette classe, chaque renderer s'arrêtait
+            // aussitôt (SBOX_FATAL_CLOSEHANDLES, code 7010, #1352).
+            if !return_length.is_null() {
+                *return_length = 0;
+            }
+            STATUS_SUCCESS
+        }
         _ => STATUS_NOT_IMPLEMENTED,
     }
 }
@@ -2132,6 +2146,206 @@ pub unsafe extern "win64" fn nt_query_attributes_file(
     STATUS_SUCCESS
 }
 
+// ============================================================
+//  Ouvertures par identifiant ou par nom (#767)
+// ============================================================
+//
+// Le bac à sable de Chromium intercepte toujours NtOpenThread, NtOpenProcess,
+// NtOpenProcessToken(Ex) et NtOpenThreadToken(Ex) dans ses enfants : il les
+// cherche dans la table d'exports de ntdll avant de créer le premier
+// processus de rendu, et abandonne si l'une manque.
+
+const STATUS_INVALID_CID: i32 = 0xC000_000Bu32 as i32;
+const STATUS_NO_TOKEN: i32 = 0xC000_007Cu32 as i32;
+const STATUS_OBJECT_PATH_NOT_FOUND: i32 = 0xC000_003Au32 as i32;
+/// OBJECT_ATTRIBUTES.Attributes : OBJ_INHERIT.
+const OBJ_INHERIT: u32 = 0x2;
+
+unsafe fn oa_inherit(attrs: *const c_void) -> i32 {
+    if attrs.is_null() {
+        return 0;
+    }
+    let a = std::ptr::read_unaligned((attrs as *const u8).add(0x18) as *const u32);
+    (a & OBJ_INHERIT != 0) as i32
+}
+
+/// Code NTSTATUS de la dernière erreur Win32 posée par l'appel délégué.
+fn status_of_last_error(default: i32) -> i32 {
+    match crate::process::last_error() {
+        5 => STATUS_ACCESS_DENIED,
+        6 => STATUS_INVALID_HANDLE,
+        2 => STATUS_OBJECT_NAME_NOT_FOUND,
+        3 => STATUS_OBJECT_PATH_NOT_FOUND,
+        1008 => STATUS_NO_TOKEN,
+        _ => default,
+    }
+}
+
+/// `NtOpenProcess` : CLIENT_ID.UniqueProcess désigne le processus.
+pub unsafe extern "win64" fn nt_open_process(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    cid: *const usize,
+) -> i32 {
+    if handle.is_null() || cid.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let h = crate::dlls::kernel32::open_process(access, oa_inherit(attrs), *cid as u32);
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_INVALID_CID);
+    }
+    *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtOpenThread` : CLIENT_ID.UniqueThread désigne le thread.
+pub unsafe extern "win64" fn nt_open_thread(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    cid: *const usize,
+) -> i32 {
+    if handle.is_null() || cid.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let h = crate::dlls::kernel32::open_thread(access, oa_inherit(attrs), *cid.add(1) as u32);
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_INVALID_CID);
+    }
+    *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtOpenProcessToken`.
+pub unsafe extern "win64" fn nt_open_process_token(
+    process: usize,
+    access: u32,
+    token: *mut usize,
+) -> i32 {
+    if token.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if crate::dlls::security::OpenProcessToken(process, access, token) != 0 {
+        STATUS_SUCCESS
+    } else {
+        status_of_last_error(STATUS_UNSUCCESSFUL)
+    }
+}
+
+/// `NtOpenProcessTokenEx` : les attributs du handle ne changent rien ici.
+pub unsafe extern "win64" fn nt_open_process_token_ex(
+    process: usize,
+    access: u32,
+    _attributes: u32,
+    token: *mut usize,
+) -> i32 {
+    nt_open_process_token(process, access, token)
+}
+
+/// `NtOpenThreadToken` : STATUS_NO_TOKEN si le thread n'emprunte aucune
+/// identité, comme sous Windows.
+pub unsafe extern "win64" fn nt_open_thread_token(
+    thread: usize,
+    _access: u32,
+    _open_as_self: u8,
+    token: *mut usize,
+) -> i32 {
+    if token.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if crate::dlls::security::open_thread_token(thread, token) != 0 {
+        STATUS_SUCCESS
+    } else {
+        status_of_last_error(STATUS_NO_TOKEN)
+    }
+}
+
+/// `NtOpenThreadTokenEx`.
+pub unsafe extern "win64" fn nt_open_thread_token_ex(
+    thread: usize,
+    access: u32,
+    open_as_self: u8,
+    _attributes: u32,
+    token: *mut usize,
+) -> i32 {
+    nt_open_thread_token(thread, access, open_as_self, token)
+}
+
+/// Nom d'objet noyau tel que l'attend kernel32 (« Global\… », « Local\… »
+/// ou nu) à partir de son chemin NT (« \BaseNamedObjects\… »,
+/// « \Sessions\1\BaseNamedObjects\… »).
+fn object_name_for_kernel32(nt: &str) -> String {
+    match nt.find("BaseNamedObjects\\") {
+        Some(i) => {
+            let rest = &nt[i + "BaseNamedObjects\\".len()..];
+            if nt.starts_with("\\BaseNamedObjects") {
+                format!("Global\\{rest}")
+            } else {
+                rest.to_string()
+            }
+        }
+        None => nt.to_string(),
+    }
+}
+
+/// `NtOpenEvent` : ouverture d'un événement nommé.
+pub unsafe extern "win64" fn nt_open_event(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(nt) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let mut w: Vec<u16> = object_name_for_kernel32(&nt).encode_utf16().collect();
+    w.push(0);
+    let h = crate::dlls::kernel32_ext::open_event_w(access, oa_inherit(attrs), w.as_ptr());
+    if h == 0 {
+        *handle = 0;
+        return status_of_last_error(STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+    *handle = h;
+    STATUS_SUCCESS
+}
+
+/// `NtQueryFullAttributesFile` : FILE_NETWORK_OPEN_INFORMATION (56 octets).
+pub unsafe extern "win64" fn nt_query_full_attributes_file(
+    attrs: *const c_void,
+    info: *mut c_void,
+) -> i32 {
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let meta = match std::fs::metadata(crate::paths::to_linux(&win_path)) {
+        Ok(m) => m,
+        Err(_) => return STATUS_OBJECT_NAME_NOT_FOUND,
+    };
+    if !info.is_null() {
+        use std::os::unix::fs::MetadataExt;
+        // FILETIME : centaines de nanosecondes depuis 1601.
+        let ft = |secs: i64, nsec: i64| ((secs + 11_644_473_600) * 10_000_000 + nsec / 100) as u64;
+        let b = info as *mut u8;
+        std::ptr::write_bytes(b, 0, 56);
+        let w64 = |off: usize, v: u64| std::ptr::write_unaligned(b.add(off) as *mut u64, v);
+        w64(0, ft(meta.ctime(), meta.ctime_nsec()));
+        w64(8, ft(meta.atime(), meta.atime_nsec()));
+        w64(16, ft(meta.mtime(), meta.mtime_nsec()));
+        w64(24, ft(meta.ctime(), meta.ctime_nsec()));
+        let size = if meta.is_dir() { 0 } else { meta.len() };
+        w64(32, (size + 4095) & !4095);
+        w64(40, size);
+        let file_attrs: u32 = if meta.is_dir() { 0x10 } else { 0x80 };
+        std::ptr::write_unaligned(b.add(48) as *mut u32, file_attrs);
+    }
+    STATUS_SUCCESS
+}
+
 /// `NtRaiseHardError` : affiche un message d'erreur fatal.
 pub unsafe extern "win64" fn nt_raise_hard_error(
     status: i32,
@@ -2258,6 +2472,14 @@ pub fn exports() -> crate::dlls::Exports {
         "NtWaitForSingleObject" => fn nt_wait_for_single_object,
         "NtFlushBuffersFile" => fn nt_flush_buffers_file,
         "NtQueryAttributesFile" => fn nt_query_attributes_file,
+        "NtQueryFullAttributesFile" => fn nt_query_full_attributes_file,
+        "NtOpenProcess" => fn nt_open_process,
+        "NtOpenThread" => fn nt_open_thread,
+        "NtOpenProcessToken" => fn nt_open_process_token,
+        "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
+        "NtOpenThreadToken" => fn nt_open_thread_token,
+        "NtOpenThreadTokenEx" => fn nt_open_thread_token_ex,
+        "NtOpenEvent" => fn nt_open_event,
         "NtRaiseHardError" => fn nt_raise_hard_error,
     }
 }
@@ -2388,6 +2610,25 @@ mod section_tests {
 mod process_information_tests {
     use super::*;
 
+    /// Bac à sable de Chromium (#1352) : ProcessHandleTable sur soi-même
+    /// réussit avec une liste vide, sinon le renderer se termine en 7010.
+    #[test]
+    fn table_des_handles_du_processus_courant_vide() {
+        let mut buf = [0u32; 16];
+        let mut ret = 0xffu32;
+        let st = unsafe {
+            nt_query_information_process(
+                usize::MAX,
+                58,
+                buf.as_mut_ptr() as *mut c_void,
+                64,
+                &mut ret,
+            )
+        };
+        assert_eq!(st, STATUS_SUCCESS);
+        assert_eq!(ret, 0);
+    }
+
     /// Process.GetProcesses de .NET (#1162) : la liste chaînée contient ce
     /// processus, ses fils et un nom lisible dans le tampon de l'appelant.
     #[test]
@@ -2472,5 +2713,78 @@ mod process_information_tests {
             let n = (q.as_ptr().add(8) as *const u16).read_unaligned() as usize / 2;
             assert_eq!(String::from_utf16_lossy(&big[..n]), mine);
         }
+    }
+}
+
+#[cfg(test)]
+mod ouvertures_tests {
+    use super::*;
+
+    /// Fonctions que le bac à sable de Chromium intercepte dans chaque enfant
+    /// (#767) : toutes exportées par ntdll, avec un relais de service.
+    #[test]
+    fn interceptions_de_base_du_bac_a_sable() {
+        let e = &crate::dlls::builtins()
+            .iter()
+            .find(|b| b.name == "ntdll")
+            .expect("ntdll intégrée")
+            .exports;
+        for name in [
+            "NtOpenThread",
+            "NtOpenProcess",
+            "NtOpenProcessToken",
+            "NtOpenProcessTokenEx",
+            "NtSetInformationThread",
+            "NtOpenThreadToken",
+            "NtOpenThreadTokenEx",
+            "NtMapViewOfSection",
+            "NtUnmapViewOfSection",
+            "NtCreateFile",
+            "NtOpenFile",
+            "NtQueryAttributesFile",
+            "NtQueryFullAttributesFile",
+            "NtSetInformationFile",
+            "NtCreateKey",
+            "NtOpenKey",
+            "NtOpenKeyEx",
+            "NtCreateEvent",
+            "NtOpenEvent",
+            "NtCreateSection",
+        ] {
+            assert!(e.contains_key(name), "{name} absent de ntdll");
+        }
+        unsafe {
+            let mut h = 0usize;
+            let pid = libc::getpid() as usize;
+            let tid = libc::syscall(libc::SYS_gettid) as usize;
+            assert_eq!(
+                nt_open_process(&mut h, 0x1000, std::ptr::null(), [pid, 0].as_ptr()),
+                STATUS_SUCCESS
+            );
+            assert_ne!(h, 0);
+            let mut t = 0usize;
+            assert_eq!(
+                nt_open_thread(&mut t, 0x40, std::ptr::null(), [0, tid].as_ptr()),
+                STATUS_SUCCESS
+            );
+            assert_ne!(t, 0);
+            let mut tok = 0usize;
+            assert_eq!(nt_open_process_token(h, 8, &mut tok), STATUS_SUCCESS);
+            assert_ne!(tok, 0);
+            let mut none = 1usize;
+            assert_eq!(
+                nt_open_thread_token_ex(t, 8, 1, 0, &mut none),
+                STATUS_NO_TOKEN
+            );
+            assert_eq!(none, 0);
+        }
+        assert_eq!(
+            object_name_for_kernel32("\\Sessions\\1\\BaseNamedObjects\\evt"),
+            "evt"
+        );
+        assert_eq!(
+            object_name_for_kernel32("\\BaseNamedObjects\\evt"),
+            "Global\\evt"
+        );
     }
 }

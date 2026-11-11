@@ -1015,15 +1015,44 @@ pub(crate) unsafe fn pick_with_explorer(
     for (k, v) in pick_env(request, &paths::to_windows(&result)) {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().ok()?;
+    let child = cmd.spawn().ok()?;
+    crate::thunks::api_note(&format!(
+        "boîte de fichiers : Explorateur lancé (pid {}), propriétaire {owner:#x} (#1288)",
+        child.id()
+    ));
     // Boîte modale : le programme attend, sa fenêtre reste dessinée.
     let owner_enabled = owner != 0 && user32::is_window_enabled(owner) != 0;
     if owner_enabled {
         user32::enable_window(owner, 0);
     }
+    // La fin de l'Explorateur est guettée par un fil à part, qui réveille
+    // ensuite la file de messages de ce fil. Sans ce réveil, une boucle de
+    // messages imbriquée du programme, ouverte pendant un message que la
+    // boucle ci-dessous distribue (Qt de VLC), attendait dans
+    // MsgWaitForMultipleObjectsEx un message qui ne venait jamais : la
+    // fenêtre propriétaire est désactivée, la souris n'y produit rien, et
+    // la boucle ci-dessous ne reprenait jamais la main (#1288).
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (child, done) = (child.clone(), done.clone());
+        let tid = std::thread::current().id();
+        std::thread::spawn(move || loop {
+            let exited = !matches!(
+                child.lock().unwrap_or_else(|e| e.into_inner()).try_wait(),
+                Ok(None)
+            );
+            if exited {
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+                gui::post_to_thread(tid, gui::Msg::new(0, 0, 0, 0)); // WM_NULL
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        });
+    }
     let mut msg: gui::Msg = std::mem::zeroed();
     loop {
-        if !matches!(child.try_wait(), Ok(None)) {
+        if done.load(std::sync::atomic::Ordering::SeqCst) {
             break;
         }
         let mut quit = None;
@@ -1036,6 +1065,7 @@ pub(crate) unsafe fn pick_with_explorer(
             user32::dispatch_message_w(&msg);
         }
         if let Some(code) = quit {
+            let mut child = child.lock().unwrap_or_else(|e| e.into_inner());
             let _ = child.kill();
             let _ = child.wait();
             user32::post_quit_message(code);
@@ -1043,6 +1073,7 @@ pub(crate) unsafe fn pick_with_explorer(
         }
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
+    crate::thunks::api_note("boîte de fichiers : Explorateur fermé, choix relu (#1288)");
     if owner_enabled {
         user32::enable_window(owner, 1);
     }
@@ -1353,6 +1384,70 @@ mod tests {
         assert_eq!(parse_pick_result(b"", 2), None);
         assert_eq!(parse_pick_result(b"1\n", 2), None);
         assert_eq!(parse_pick_result(b"1\nrelatif.txt\n", 2), None);
+    }
+
+    /// #1288 : une boucle de messages imbriquée du programme (Qt de VLC),
+    /// ouverte pendant que la boîte attend l'Explorateur, est réveillée à
+    /// la fermeture de l'Explorateur ; avant, VLC restait figé.
+    #[test]
+    fn boucle_imbriquee_reveillee_a_la_fin_de_l_explorateur() {
+        use std::os::unix::fs::PermissionsExt;
+        unsafe extern "win64" fn imbrique(h: usize, m: u32, w: usize, l: isize) -> isize {
+            if m == 0x8001 {
+                // Attente sans délai, comme QEventDispatcherWin32.
+                user32::msg_wait_for_multiple_objects(0, std::ptr::null(), 0, u32::MAX, 0x04FF);
+                return 1;
+            }
+            gui::def_window_proc(h, m, w, l)
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-pick-imbrique-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("winlux-shell-app");
+        std::fs::write(&app, "#!/bin/sh\nsleep 0.3\n").unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let app2 = app.clone();
+        std::thread::spawn(move || unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = user32::create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                40,
+                40,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            user32::set_window_long_ptr_w(hwnd, -4, imbrique as *const () as isize);
+            user32::post_message_w(hwnd, 0x8001, 0, 0);
+            let r = PickRequest {
+                save: false,
+                folder: false,
+                flags: 0,
+                title: "Ouvrir".into(),
+                filters: vec![],
+                filter: 0,
+                dir: "C:\\Users\\d".into(),
+                name: String::new(),
+                def_ext: None,
+            };
+            let got = pick_with_explorer(0, &r, &app2);
+            user32::destroy_window(hwnd);
+            let _ = tx.send(got);
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            got,
+            Ok(Some(None)),
+            "la boîte d'ouverture est restée bloquée"
+        );
     }
 
     #[test]

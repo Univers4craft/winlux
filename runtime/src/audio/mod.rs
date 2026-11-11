@@ -32,6 +32,13 @@ pub trait Source: Send + Sync {
     /// La méthode est appelée depuis le thread de mixage sans aucun verrou du
     /// moteur : elle peut appeler du code du programme (rappels).
     fn mix(&self, out: &mut [f32]) -> bool;
+
+    /// `false` tant que la source est en pause : si toutes les sources du
+    /// processus le sont, le flux est mis en pause (« bouchonné ») au lieu
+    /// d'être fermé ou nourri de silence (#1013).
+    fn active(&self) -> bool {
+        true
+    }
 }
 
 struct Engine {
@@ -43,6 +50,12 @@ struct Engine {
     /// Volume maître du processus (f32 en bits) et sourdine.
     master: AtomicU32,
     muted: AtomicBool,
+    /// Volume propre à l'application (lecteur multimédia), gain linéaire.
+    app_volume: AtomicU32,
+    /// Incrémenté à chaque réglage de volume : le flux ne reçoit un volume
+    /// que si le programme en a réglé un, pour ne pas écraser celui que le
+    /// mélangeur du système a mémorisé pour cette application.
+    volume_gen: AtomicU32,
     backend: AtomicUsize,
     loopback: Mutex<Vec<Weak<CaptureQueue>>>,
     started: AtomicBool,
@@ -57,6 +70,8 @@ fn engine() -> &'static Engine {
         frames: AtomicU64::new(0),
         master: AtomicU32::new(1.0f32.to_bits()),
         muted: AtomicBool::new(false),
+        app_volume: AtomicU32::new(1.0f32.to_bits()),
+        volume_gen: AtomicU32::new(0),
         backend: AtomicUsize::new(usize::MAX),
         loopback: Mutex::new(Vec::new()),
         started: AtomicBool::new(false),
@@ -114,12 +129,40 @@ pub fn set_master_volume(v: f32) {
         1.0
     };
     engine().master.store(v.to_bits(), Ordering::Relaxed);
+    engine().volume_gen.fetch_add(1, Ordering::Relaxed);
 }
 pub fn muted() -> bool {
     engine().muted.load(Ordering::Relaxed)
 }
 pub fn set_muted(m: bool) {
     engine().muted.store(m, Ordering::Relaxed);
+    engine().volume_gen.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Volume de l'application (gain linéaire, 0 à 8) appliqué au flux du
+/// processus : le mélangeur du système l'affiche et peut le changer.
+pub fn set_app_volume(gain: f32) {
+    let g = if gain.is_finite() {
+        gain.clamp(0.0, 8.0)
+    } else {
+        1.0
+    };
+    engine().app_volume.store(g.to_bits(), Ordering::Relaxed);
+    engine().volume_gen.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Gain linéaire correspondant à un pourcentage du mélangeur : PipeWire et
+/// PulseAudio affichent la racine cubique du gain, on prend donc le cube
+/// pour que « 30 % » dans le lecteur s'affiche « 30 % » dans le mélangeur.
+pub fn percent_to_gain(pct: u32) -> f32 {
+    let v = pct.min(200) as f32 / 100.0;
+    v * v * v
+}
+
+/// Gain total du processus (volume maître × volume de l'application).
+fn stream_gain() -> f32 {
+    let e = engine();
+    master_volume() * f32::from_bits(e.app_volume.load(Ordering::Relaxed))
 }
 
 /// Prépare le thread courant à appeler du code Windows (TEB, TLS des DLL).
@@ -150,6 +193,10 @@ fn mix_thread() {
     let mut out: Option<Box<dyn backend::Output>> = None;
     let mut buf = vec![0.0f32; PERIOD * 2];
     let mut idle_periods = 0u32;
+    // Volume déjà transmis au flux (génération) et accepté par le pilote.
+    let mut applied_gen = 0u32;
+    let mut hw_volume = false;
+    let mut corked = false;
     loop {
         let snapshot: Vec<(u64, Arc<dyn Source>)> = {
             let mut s = lock(&e.sources);
@@ -158,6 +205,7 @@ fn mix_thread() {
                 // Après 2 s sans source, libère le périphérique et s'endort.
                 if idle_periods > 200 {
                     out = None;
+                    corked = false;
                     while s.is_empty() {
                         s = e
                             .wake
@@ -171,31 +219,60 @@ fn mix_thread() {
             }
             s.clone()
         };
+        let o = out.get_or_insert_with(|| {
+            let o = backend::open_output();
+            e.backend.store(kind_index(o.kind()), Ordering::Relaxed);
+            applied_gen = 0;
+            hw_volume = false;
+            o
+        });
+        // Toutes les sources en pause : le flux reste ouvert mais bouchonné
+        // (si le pilote sait le faire ; sinon il reçoit du silence).
+        let all_paused = !snapshot.is_empty() && snapshot.iter().all(|(_, s)| !s.active());
+        if all_paused != corked && o.set_paused(all_paused) {
+            corked = all_paused;
+        } else if !all_paused && corked {
+            corked = false;
+        }
+        if corked {
+            let s = lock(&e.sources);
+            let _ = e.wake.wait_timeout(s, std::time::Duration::from_millis(10));
+            continue;
+        }
+        let gen = e.volume_gen.load(Ordering::Relaxed);
+        if gen != applied_gen {
+            applied_gen = gen;
+            hw_volume = o.set_volume(stream_gain(), muted());
+        }
         buf.fill(0.0);
         let mut finished = Vec::new();
         for (id, src) in &snapshot {
-            if !src.mix(&mut buf) {
+            if src.active() && !src.mix(&mut buf) {
                 finished.push(*id);
             }
         }
         if !finished.is_empty() {
             lock(&e.sources).retain(|(i, _)| !finished.contains(i));
         }
-        let gain = if muted() { 0.0 } else { master_volume() };
+        let gain = if hw_volume {
+            1.0
+        } else if muted() {
+            0.0
+        } else {
+            stream_gain()
+        };
         for v in buf.iter_mut() {
             *v = (*v * gain).clamp(-1.0, 1.0);
         }
         publish_loopback(&buf);
-        let o = out.get_or_insert_with(|| {
-            let o = backend::open_output();
-            e.backend.store(kind_index(o.kind()), Ordering::Relaxed);
-            o
-        });
         if !o.write(&buf) {
             crate::log_warn!("audio", "pilote {} perdu, bascule", o.kind().name());
             e.backend
                 .store(kind_index(backend::Kind::Null), Ordering::Relaxed);
             out = Some(Box::new(backend::Null::new()));
+            applied_gen = 0;
+            hw_volume = false;
+            corked = false;
         }
         e.frames.fetch_add(PERIOD as u64, Ordering::AcqRel);
     }

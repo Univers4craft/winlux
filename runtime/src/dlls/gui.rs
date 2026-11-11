@@ -50,6 +50,7 @@ pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 #[allow(dead_code)]
 pub const WM_SHOWWINDOW: u32 = 0x0018;
+pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 #[allow(dead_code)]
@@ -873,6 +874,19 @@ pub unsafe fn call_wndproc(
     lparam: isize,
 ) -> isize {
     let f: extern "win64" fn(usize, u32, usize, isize) -> isize = std::mem::transmute(wnd_proc);
+    // WINLUX_WINDOW_DIAG=1 : messages d'état de fenêtre reçus par le
+    // programme (affichage, taille, activation, focus), pour les jeux qui
+    // se croient cachés ou réduits (#1421).
+    if crate::dlls::user32::window_diag()
+        && matches!(
+            msg,
+            0x0003 | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0018 | 0x001C | 0x0046 | 0x0047 | 0x0086
+        )
+    {
+        eprintln!(
+            "winlux[fenetre] message {hwnd:#x} {msg:#06x} wparam={wparam:#x} lparam={lparam:#x}"
+        );
+    }
     f(hwnd, msg, wparam, lparam)
 }
 
@@ -2476,9 +2490,38 @@ fn translate_cmd(cmd: DrawCmd, (dx, dy): (i32, i32)) -> DrawCmd {
     }
 }
 
+thread_local! {
+    /// Diagnostic WINLUX_WINDOW_DIAG : vrai pendant un WM_DRAWITEM ou un
+    /// TVN_GETDISPINFO, chaque commande de dessin est alors journalisée.
+    static WATCH_DRAWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Journalise les commandes de dessin pendant `f` (WINLUX_WINDOW_DIAG).
+pub fn watch_draws<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let old = WATCH_DRAWS.with(|w| w.replace(on));
+    let r = f();
+    WATCH_DRAWS.with(|w| w.set(old));
+    r
+}
+
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    if WATCH_DRAWS.with(|w| w.get()) {
+        let known = lock(dcs())
+            .get(&hdc)
+            .map(|d| (d.hwnd, d.bitmap, dc_state_offset(d)));
+        let clip = dc_clip(hdc);
+        let mut desc = format!("{cmd:?}");
+        if desc.len() > 160 {
+            let mut cut = 160;
+            while !desc.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            desc.truncate(cut);
+        }
+        eprintln!("winlux[fenetre]   dessin hdc {hdc:#x} dc {known:?} découpe {clip:?} : {desc}");
+    }
     // DC imprimante : la commande part dans la page en cours (PDF).
     let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
         return true;
@@ -2502,14 +2545,44 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
         }
         return ok;
     }
-    let mut map = lock(windows());
-    match map.get_mut(&target) {
-        Some(w) => {
+    {
+        let mut map = lock(windows());
+        if let Some(w) = map.get_mut(&target) {
             w.pending.extend(cmds);
+            return true;
+        }
+    }
+    // Fenêtre d'un autre processus du compte : le processus GPU de Chromium
+    // peint les surgissants du navigateur en logiciel (GetDC, puis BitBlt
+    // depuis une section DIB). Les images vont tout de suite sur sa fenêtre
+    // X11, commune à tous les clients du serveur (#1345).
+    match foreign_window(target) {
+        Some(f) => {
+            for cmd in &cmds {
+                paint_foreign(f.xid, cmd);
+            }
             true
         }
         None => false,
     }
+}
+
+/// Peint une commande sur la fenêtre X11 d'un autre processus. Seules les
+/// images (BitBlt, StretchBlt, SetDIBitsToDevice, StretchDIBits depuis la
+/// mémoire) passent : c'est ce qu'envoie une sortie logicielle.
+fn paint_foreign(xid: u64, cmd: &DrawCmd) {
+    if let DrawCmd::Bitmap { rect, pixels, rop } = cmd {
+        #[cfg(test)]
+        FOREIGN_PAINTS.with(|p| p.borrow_mut().push((xid, *rect, pixels.len())));
+        with_backend(|b| b.paint_foreign(xid, *rect, pixels, *rop));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Images envoyées à des fenêtres étrangères (xid, rectangle, pixels).
+    pub(crate) static FOREIGN_PAINTS: std::cell::RefCell<Vec<(u64, Rect, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
@@ -2918,6 +2991,17 @@ pub const WINDOW_NORMAL: u8 = 0;
 pub const WINDOW_MINIMIZED: u8 = 1;
 pub const WINDOW_MAXIMIZED: u8 = 2;
 
+/// wParam de WM_SIZE selon l'état de la fenêtre : SIZE_RESTORED (0),
+/// SIZE_MINIMIZED (1), SIZE_MAXIMIZED (2). WPF ne tient son WindowState
+/// qu'ainsi : sans lui, le bouton « Restaurer » restait sans effet (#1328).
+pub fn size_kind(state: u8) -> usize {
+    match state {
+        WINDOW_MAXIMIZED => 2,
+        WINDOW_MINIMIZED => 1,
+        _ => 0,
+    }
+}
+
 pub trait GuiBackend: Send {
     /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
     fn pump(&mut self) -> Vec<PendingEvent> {
@@ -2934,6 +3018,11 @@ pub trait GuiBackend: Send {
     fn foreign_size(&mut self, _xid: u64) -> Option<(i32, i32)> {
         None
     }
+    /// Image (pixels COLORREF, rectangle logique) posée sur la fenêtre X11
+    /// d'un autre processus (#1345).
+    fn paint_foreign(&mut self, _xid: u64, _rect: Rect, _pixels: &[u32], _rop: RasterOp) {}
+    /// Marque une fenêtre X où une chaîne d'échange Direct3D présente (#1374).
+    fn mark_direct3d(&mut self, _xid: u64) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
@@ -2952,6 +3041,8 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// Place une fenêtre juste derrière sa voisine `sibling` (SetWindowPos).
+    fn stack_below(&mut self, _hwnd: usize, _sibling: usize) {}
     /// SetParent entre deux fenêtres connues : la sous-fenêtre suit son
     /// nouveau parent, à la place `rect` (coordonnées client du parent).
     fn reparent_window(&mut self, _hwnd: usize, _parent: usize, _rect: Rect) {}
@@ -2962,6 +3053,8 @@ pub trait GuiBackend: Send {
     /// seuls ces rectangles (coordonnées client) restent visibles et
     /// cliquables ; `None` rend la fenêtre rectangulaire.
     fn set_shape(&mut self, _hwnd: usize, _rects: Option<&[Rect]>) {}
+    /// Forme X (SHAPE) posée sur la fenêtre X11 d'un autre processus (#1357).
+    fn shape_foreign(&mut self, _xid: u64, _rects: Option<&[Rect]>) {}
     /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
@@ -3133,6 +3226,13 @@ pub fn native_window(hwnd: usize) -> Option<u64> {
     id.or_else(|| foreign_window(hwnd).map(|f| f.xid))
 }
 
+/// Une chaîne d'échange Direct3D présente dans la fenêtre X `xid`, de ce
+/// processus ou d'un autre : son propriétaire ne doit plus la repeindre en
+/// GDI à chaque exposition, seulement demander WM_PAINT (#1374).
+pub fn mark_direct3d_window(xid: u64) {
+    with_backend(|b| b.mark_direct3d(xid));
+}
+
 pub fn monitors() -> Vec<Monitor> {
     let mut list = Vec::new();
     with_backend(|b| list = b.monitors());
@@ -3184,6 +3284,65 @@ fn activate_app(active: bool) {
     }
 }
 
+/// Fenêtre de premier niveau active du programme (0 : aucune).
+static ACTIVE_TOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fenêtre de premier niveau qui contient `hwnd`.
+pub fn top_level_of(hwnd: usize) -> usize {
+    let map = lock(windows());
+    let mut h = hwnd;
+    for _ in 0..64 {
+        match map.get(&h) {
+            Some(w) if w.parent != 0 && w.style & 0x4000_0000 != 0 => h = w.parent,
+            Some(_) => return h,
+            None => return 0,
+        }
+    }
+    h
+}
+
+/// Changement de fenêtre active, comme Windows : l'ancienne reçoit
+/// WM_NCACTIVATE(FALSE) puis WM_ACTIVATE(WA_INACTIVE), la nouvelle
+/// WM_NCACTIVATE(TRUE) puis WM_ACTIVATE(WA_ACTIVE), avant WM_SETFOCUS.
+/// SDL ne donne le focus clavier à sa fenêtre qu'à WM_ACTIVATE : sans lui,
+/// Xonotic se croyait inactif et ne présentait plus que son écran de
+/// chargement (#1421).
+/// SetFocus vers une autre fenêtre de premier niveau : la fenêtre active
+/// change tout de suite, et l'appelant envoie lui-même (de façon synchrone,
+/// comme Windows) WM_NCACTIVATE et WM_ACTIVATE. Renvoie l'ancienne fenêtre
+/// active, ou `None` si `new_top` l'était déjà.
+///
+/// Postés plus tard depuis le FocusIn de X11, ces messages arrivaient
+/// périmés : wxWidgets rend le focus à la fenêtre que WM_ACTIVATE déclare
+/// active, ce qui relançait l'échange suivant. Audacity et sa boîte de
+/// bienvenue se renvoyaient ainsi l'activation sans fin, et la boîte
+/// n'était dessinée qu'en partie (#1504).
+pub fn activate_top_for_focus(new_top: usize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    (old != new_top).then_some(old)
+}
+
+fn change_active_top(new_top: usize) {
+    use std::sync::atomic::Ordering;
+    let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
+    if old == new_top {
+        return;
+    }
+    if old != 0 && is_window(old) {
+        post_to_window(old, Msg::new(old, WM_NCACTIVATE, 0, 0));
+        post_to_window(old, Msg::new(old, WM_ACTIVATE, 0, new_top as isize));
+    }
+    if new_top != 0 {
+        post_to_window(new_top, Msg::new(new_top, WM_NCACTIVATE, 1, 0));
+        post_to_window(new_top, Msg::new(new_top, WM_ACTIVATE, 1, old as isize));
+        crate::dlls::chromium_win32::notify_win_event(
+            crate::dlls::chromium_win32::EVENT_SYSTEM_FOREGROUND,
+            new_top,
+        );
+    }
+}
+
 /// Fenêtre de premier niveau désactivée (propriétaire d'une boîte modale) :
 /// sous Windows, ni elle ni ses filles ne reçoivent clic ou clavier. Une
 /// fille seule désactivée garde le comportement des contrôles.
@@ -3202,6 +3361,26 @@ fn input_disabled(hwnd: usize) -> bool {
         h = w.parent;
     }
     false
+}
+
+/// Message du backend qu'une fenêtre désactivée par une boîte modale ne doit
+/// pas recevoir : `None` s'il est livré, `Some(true)` s'il est refusé et
+/// ramène la boîte au premier plan, `Some(false)` s'il est seulement refusé.
+///
+/// La croix du gestionnaire de fenêtres (WM_DELETE_WINDOW, traduit en
+/// WM_CLOSE) en fait partie : sous Windows, la croix d'une fenêtre désactivée
+/// est inerte. Audacity fermait sinon le projet sous sa boîte « Attention »
+/// encore modale ; la boucle modale de la boîte reprenait ensuite sur des
+/// objets libérés et le tas était corrompu (#1376).
+fn refused_while_disabled(hwnd: usize, message: u32) -> Option<bool> {
+    let mouse = (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+        || (0x0245..=0x024A).contains(&message);
+    if !(mouse || message == WM_SETFOCUS || message == WM_CLOSE) || !input_disabled(hwnd) {
+        return None;
+    }
+    let press = matches!(message, 0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7);
+    Some(press || message == WM_SETFOCUS || message == WM_CLOSE)
 }
 
 /// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
@@ -3337,12 +3516,8 @@ pub fn pump_backend() {
         if mouse && !matches!(e.message, 0x020A | 0x020E) {
             mouse_moved_to(e.hwnd);
         }
-        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
-            let press = matches!(
-                e.message,
-                0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
-            );
-            if press || e.message == WM_SETFOCUS {
+        if let Some(raise) = refused_while_disabled(e.hwnd, e.message) {
+            if raise {
                 if let Some(popup) = enabled_owned_popup(e.hwnd) {
                     let mut b = lock(backend());
                     b.raise_window(popup);
@@ -3353,6 +3528,7 @@ pub fn pump_backend() {
         }
         if e.message == WM_SETFOCUS {
             activate_app(true);
+            change_active_top(top_level_of(e.hwnd));
             let change = set_focus_from_backend(e.hwnd);
             if let Some(old) = change {
                 if old != 0 {
@@ -3370,19 +3546,29 @@ pub fn pump_backend() {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
             }
             if !refocused {
+                change_active_top(0);
                 activate_app(false);
             }
             continue;
         }
         if e.message == WM_SIZE {
-            let packed = e.lparam as u32;
-            update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            // Réduite : Windows annonce 0x0, la taille restaurée est gardée.
+            if e.wparam != SIZE_MINIMIZED {
+                let packed = e.lparam as u32;
+                update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+            }
+            geometry_win_events(e.hwnd, Some(e.wparam));
         } else if e.message == WM_MOVE {
             let packed = e.lparam as u32;
             let x = (packed as u16 as i16) as i32;
             let y = ((packed >> 16) as u16 as i16) as i32;
             update_window_position(e.hwnd, x, y);
+            geometry_win_events(e.hwnd, None);
         }
+        // Taille ou position changée par le gestionnaire de fenêtres (agrandir,
+        // restaurer, glisser) : marquée pour que DispatchMessage envoie
+        // d'abord WM_WINDOWPOSCHANGED, comme Windows (#1476).
+        let geometry = matches!(e.message, WM_SIZE | WM_MOVE) && promoted == 0;
         let m = Msg {
             hwnd: e.hwnd,
             message: e.message,
@@ -3390,7 +3576,7 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: promoted,
+            l_private: if geometry { BACKEND_GEOMETRY } else { promoted },
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -3398,6 +3584,39 @@ pub fn pump_backend() {
             post_to_window(e.hwnd, m);
         }
     }
+}
+
+const SIZE_MINIMIZED: usize = 1;
+
+/// Événements SetWinEventHook d'un changement de géométrie venu du
+/// gestionnaire de fenêtres (fenêtres de premier niveau) : déplacement ou
+/// taille (EVENT_OBJECT_LOCATIONCHANGE), début et fin de réduction
+/// (EVENT_SYSTEM_MINIMIZESTART / MINIMIZEEND), comme Windows (#1476, #1498).
+fn geometry_win_events(hwnd: usize, size_kind: Option<usize>) {
+    use crate::dlls::chromium_win32 as w;
+    if window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    static MINIMIZED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    if let Some(kind) = size_kind {
+        let mut minimized = lock(&MINIMIZED);
+        let was = minimized.contains(&hwnd);
+        let now = kind == SIZE_MINIMIZED;
+        if now && !was {
+            minimized.push(hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, hwnd);
+            return;
+        }
+        if was && !now {
+            minimized.retain(|&h| h != hwnd);
+            drop(minimized);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, hwnd);
+            // Restaurée : tout est à redessiner, comme sous Windows.
+            request_paint(hwnd);
+        }
+    }
+    w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, hwnd);
 }
 
 // ---------- Raccourcis globaux (RegisterHotKey) ----------
@@ -3564,10 +3783,13 @@ pub fn request_paint(hwnd: usize) {
         let mut map = lock(windows());
         match map.get_mut(&hwnd) {
             Some(w) => {
+                // La zone est invalidée même si un WM_PAINT attend déjà : une
+                // ValidateRect entre les deux l'aurait sinon fait sauter, et
+                // cette nouvelle invalidation était perdue.
+                w.needs_paint = true;
                 if w.paint_queued {
                     return;
                 }
-                w.needs_paint = true;
                 w.paint_queued = true;
                 Some(w.owner)
             }
@@ -3593,6 +3815,9 @@ pub fn request_paint(hwnd: usize) {
 /// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
 /// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
 const SYSTEM_PAINT: u32 = 0x5750;
+/// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
+/// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
+pub const BACKEND_GEOMETRY: u32 = 0x5751;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
@@ -3666,7 +3891,40 @@ pub fn destroy_window(hwnd: usize) -> bool {
     // La HWND n'est plus valide qu'à partir d'ici.
     lock(windows()).remove(&hwnd);
     lock(destroying()).remove(&hwnd);
+    lock(window_props()).retain(|(h, _), _| *h != hwnd);
     true
+}
+
+/// Propriétés de fenêtre (SetProp/GetProp) : clé = nom en minuscules, ou
+/// `#n` pour un atome entier. La VCL y range l'objet Delphi de chaque
+/// contrôle (ControlAtom) et le retrouve pour refléter WM_NOTIFY,
+/// WM_DRAWITEM… (#1249, #1250).
+fn window_props() -> &'static Mutex<HashMap<(usize, String), usize>> {
+    static S: OnceLock<Mutex<HashMap<(usize, String), usize>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_window_prop(hwnd: usize, key: String, data: usize) {
+    lock(window_props()).insert((hwnd, key), data);
+}
+
+pub fn window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).get(&(hwnd, key.to_string())).copied()
+}
+
+/// Propriétés d'une fenêtre, triées par nom (EnumPropsEx).
+pub fn window_prop_list(hwnd: usize) -> Vec<(String, usize)> {
+    let mut list: Vec<(String, usize)> = lock(window_props())
+        .iter()
+        .filter(|((h, _), _)| *h == hwnd)
+        .map(|((_, k), v)| (k.clone(), *v))
+        .collect();
+    list.sort();
+    list
+}
+
+pub fn remove_window_prop(hwnd: usize, key: &str) -> Option<usize> {
+    lock(window_props()).remove(&(hwnd, key.to_string()))
 }
 
 pub fn register_class(name: &str, info: ClassInfo) -> bool {
@@ -3980,6 +4238,11 @@ pub fn set_title(hwnd: usize, title: &str) -> bool {
 }
 
 /// Change la visibilité ; renvoie l'état précédent.
+/// Drapeau « visible » propre à la fenêtre (sans regarder ses parents).
+pub fn visible_flag(hwnd: usize) -> Option<bool> {
+    lock(windows()).get(&hwnd).map(|w| w.visible)
+}
+
 pub fn set_visible(hwnd: usize, visible: bool) -> bool {
     let mut map = lock(windows());
     match map.get_mut(&hwnd) {
@@ -3990,6 +4253,22 @@ pub fn set_visible(hwnd: usize, visible: bool) -> bool {
         }
         None => false,
     }
+}
+
+/// Fenêtres de premier niveau visibles du fil appelant, du sommet vers le
+/// fond, avec leur style : candidates à l'activation quand la fenêtre qui
+/// avait le focus disparaît (#1311).
+pub fn thread_visible_top_levels() -> Vec<(usize, u32)> {
+    let tid = std::thread::current().id();
+    let map = lock(windows());
+    top_level_in_z_order(&map)
+        .into_iter()
+        .filter_map(|h| {
+            map.get(&h)
+                .filter(|w| w.owner == tid && w.visible)
+                .map(|w| (h, w.style))
+        })
+        .collect()
 }
 
 /// Fenêtre de premier niveau au sommet de l'ordre Z (visible de préférence).
@@ -4123,11 +4402,14 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
         // via UpdateWindow, ValidateRect) n'existe plus sous Windows : le
         // délivrer relançait une peinture de trop (#796).
-        if m.message == WM_PAINT
-            && m.l_private == SYSTEM_PAINT
-            && lock(windows()).get(&m.hwnd).is_some_and(|w| !w.needs_paint)
-        {
-            continue;
+        if m.message == WM_PAINT && m.l_private == SYSTEM_PAINT {
+            let mut map = lock(windows());
+            if let Some(w) = map.get_mut(&m.hwnd).filter(|w| !w.needs_paint) {
+                // Le WM_PAINT quitte la file : sans cela, `request_paint`
+                // le croyait toujours en attente et n'en postait plus aucun.
+                w.paint_queued = false;
+                continue;
+            }
         }
         // Message souris promu d'un WM_POINTER* que la fenêtre a traité
         // elle-même : Windows ne le produit pas (#1199).
@@ -4346,6 +4628,19 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
             0
         }
+        // WM_NCLBUTTONDBLCLK sur la légende : WM_SYSCOMMAND SC_MAXIMIZE ou
+        // SC_RESTORE, comme Windows (#1477).
+        0x00A3 if wparam == 2 => {
+            let mut state = WINDOW_NORMAL;
+            with_backend(|b| state = b.window_state(hwnd));
+            let command = if state == WINDOW_MAXIMIZED {
+                0xF120
+            } else {
+                0xF030
+            };
+            unsafe { crate::dlls::user32::send_message_w(hwnd, 0x0112, command, lparam) };
+            0
+        }
         // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
         0x0112 => {
             match wparam & 0xFFF0 {
@@ -4444,6 +4739,21 @@ fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
 /// Renvoie le style WS_* de la fenêtre.
 pub fn window_style(hwnd: usize) -> Option<u32> {
     lock(windows()).get(&hwnd).map(|w| w.style)
+}
+
+/// Enfant transparent qui laisse voir son parent : WS_CHILD et
+/// WS_EX_TRANSPARENT, hors contrôles intégrés (qui peignent eux-mêmes).
+/// Sous Windows, la chaîne d'échange présentée dans le parent passe devant
+/// le contenu GDI d'un tel enfant ; en X11 sa fenêtre la masquerait. La
+/// « Chrome Legacy Window » de Chromium couvre ainsi toute la zone client
+/// où le processus GPU présente la page (#1337).
+pub fn is_see_through_child(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TRANSPARENT: u32 = 0x20;
+    let see_through = lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.style & WS_CHILD != 0 && w.ex_style & WS_EX_TRANSPARENT != 0);
+    see_through && super::controls::kind_of(hwnd).is_none()
 }
 
 /// Renvoie le style étendu WS_EX_* de la fenêtre.
@@ -4846,7 +5156,14 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    #[test]
+    fn wm_size_dit_l_etat_de_la_fenetre() {
+        assert_eq!(size_kind(WINDOW_NORMAL), 0);
+        assert_eq!(size_kind(WINDOW_MINIMIZED), 1);
+        assert_eq!(size_kind(WINDOW_MAXIMIZED), 2);
+    }
+
     use super::*;
     use std::sync::atomic::Ordering;
 
@@ -4917,6 +5234,50 @@ mod tests {
         let popup = fenetre(haut, 0, Rect::from_size(300, 300, 50, 50));
         assert_eq!(screen_rect(popup), Some(Rect::from_size(300, 300, 50, 50)));
         for h in [bouton, groupe, popup, haut] {
+            destroy_window(h);
+        }
+    }
+
+    pub(crate) fn fenetre_essai(style: u32, ex_style: u32, parent: usize) -> Window {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        Window {
+            class: "Chrome_RenderWidgetHostHWND".to_string(),
+            wnd_proc: proc_addr as usize,
+            background: 6,
+            title: String::new(),
+            rect: Rect::from_size(0, 37, 1000, 763),
+            visible: true,
+            parent,
+            owner: std::thread::current().id(),
+            needs_paint: false,
+            paint_queued: false,
+            style,
+            ex_style,
+            pending: Vec::new(),
+            menu_bar: 0,
+            painting: false,
+        }
+    }
+
+    /// « Chrome Legacy Window » : WS_CHILD | WS_VISIBLE, WS_EX_TRANSPARENT,
+    /// au-dessus de la zone client où le processus GPU présente (#1337).
+    #[test]
+    fn enfant_transparent_laisse_voir_le_parent() {
+        // Fenêtres de premier niveau : l'ordre Z est global aux tests.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let parent = alloc_hwnd();
+        insert_window(parent, fenetre_essai(0x06c8_0000, 0, 0));
+        let legacy = alloc_hwnd();
+        insert_window(legacy, fenetre_essai(0x4600_0000, 0x20, parent));
+        let opaque = alloc_hwnd();
+        insert_window(opaque, fenetre_essai(0x4600_0000, 0, parent));
+        let haut = alloc_hwnd();
+        insert_window(haut, fenetre_essai(0x06c8_0000, 0x20, 0));
+        assert!(is_see_through_child(legacy));
+        assert!(!is_see_through_child(opaque));
+        assert!(!is_see_through_child(haut));
+        assert!(!is_see_through_child(parent));
+        for h in [legacy, opaque, haut, parent] {
             destroy_window(h);
         }
     }
@@ -5205,6 +5566,28 @@ mod tests {
         assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
         // Un WM_PAINT posté par l'appli elle-même reste délivré.
         post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        destroy_window(hwnd);
+    }
+
+    /// InvalidateRect, ValidateRect puis InvalidateRect : la seconde
+    /// invalidation donne bien un WM_PAINT, même si le premier attendait
+    /// encore dans la file.
+    #[test]
+    fn invalidation_apres_validation_repeint() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        request_paint(hwnd);
+        validate_window(hwnd);
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        assert!(begin_paint(hwnd).is_some());
+        // Message sauté (fenêtre déjà validée) : une invalidation suivante
+        // en poste un nouveau.
+        request_paint(hwnd);
+        validate_window(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        request_paint(hwnd);
         assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
         destroy_window(hwnd);
     }
@@ -5674,6 +6057,26 @@ mod tests {
     }
 
     #[test]
+    fn setfocus_active_sa_fenetre_une_seule_fois() {
+        // #1504 : SetFocus active la fenêtre de premier niveau tout de
+        // suite ; le FocusIn de X11 qui suit ne doit plus rien reposter.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let a = fenetre_de_test();
+        let b = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(fille, b);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert_eq!(top_level_of(fille), b);
+        activate_top_for_focus(a);
+        assert_eq!(activate_top_for_focus(top_level_of(fille)), Some(a));
+        assert_eq!(activate_top_for_focus(b), None, "déjà active");
+        for h in [fille, b, a] {
+            destroy_window(h);
+        }
+        activate_top_for_focus(0);
+    }
+
+    #[test]
     fn une_fenetre_desactivee_par_une_boite_modale_renvoie_a_la_boite() {
         // #1120 : la fenêtre principale d'Audacity, désactivée par la boîte
         // Tonalité, ne doit recevoir ni clic ni focus.
@@ -5692,7 +6095,19 @@ mod tests {
         );
         assert!(!input_disabled(boite));
         assert_eq!(enabled_owned_popup(fille), Some(boite));
+        // #1376 : la croix d'une fenêtre désactivée ne la ferme pas, elle
+        // ramène la boîte ; la boîte elle-même se ferme normalement.
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0201), Some(true));
+        assert_eq!(refused_while_disabled(fille, 0x0200), Some(false));
+        assert_eq!(refused_while_disabled(boite, WM_CLOSE), None);
+        assert_eq!(
+            refused_while_disabled(main, 0x0100),
+            None,
+            "clavier : focus déjà sur la boîte"
+        );
         set_window_style(main, 0);
+        assert_eq!(refused_while_disabled(main, WM_CLOSE), None);
         for h in [fille, boite, main] {
             destroy_window(h);
         }
@@ -5708,7 +6123,17 @@ mod tests {
         // Création : la plus récente au sommet.
         let z = enum_top_level_windows();
         assert!(pos(&z, c) < pos(&z, b) && pos(&z, b) < pos(&z, a));
-        assert_eq!(z, enum_top_level_windows(), "ordre reproductible");
+        // Seul l'ordre relatif de a, b et c compte : d'autres tests qui
+        // tournent en parallèle créent et détruisent leurs propres fenêtres
+        // de premier niveau entre deux énumérations (#1484).
+        let les_notres = |list: Vec<usize>| -> Vec<usize> {
+            list.into_iter().filter(|h| [a, b, c].contains(h)).collect()
+        };
+        assert_eq!(
+            les_notres(z),
+            les_notres(enum_top_level_windows()),
+            "ordre reproductible"
+        );
         // Activation : la fenêtre activée passe devant, les autres gardent leur ordre.
         assert_eq!(set_focus(a), Some(0));
         let z = enum_top_level_windows();

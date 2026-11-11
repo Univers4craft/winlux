@@ -15,10 +15,16 @@ use std::sync::Mutex;
 
 #[path = "d2d1_shader.rs"]
 pub(crate) mod d2d_shader;
+#[path = "d3d11_dxgi_resource.rs"]
+mod dxgi_res;
 #[path = "d3d11_ext.rs"]
 mod ext;
+#[path = "d3d11_formats.rs"]
+mod formats;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
+#[path = "d3d11_query.rs"]
+mod query;
 
 /// Images présentées (toutes chaînes d'échange), pour WINLUX_D3D11_TRACE.
 pub(crate) static FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -281,6 +287,10 @@ impl Texture2D {
             *out = this as *mut c_void;
             return S_OK;
         }
+        // IDXGIResource : ANGLE la demande sans tester la réponse (#1296).
+        if let Some(hr) = dxgi_res::texture_query(this, riid, out) {
+            return hr;
+        }
         crate::dlls::comobj::log_no_interface("d3d11 (texture 2D)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
@@ -292,6 +302,7 @@ impl Texture2D {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
             crate::dlls::dxgi_private::forget(this as *const c_void);
+            dxgi_res::forget_texture(this);
             let t = Box::from_raw(this);
             if t.owns_texture && t.gl_texture != 0 {
                 if let Some(g) = gl_here() {
@@ -302,7 +313,11 @@ impl Texture2D {
         }
         prev - 1
     }
-    unsafe extern "win64" fn get_device(_this: *mut Self, _out: *mut *mut c_void) {}
+    /// Appareil parent, AddRef compris : Chromium le vérifie juste après
+    /// CreateTexture2D et tombait sur son int3 avec une case vide (#1290).
+    unsafe extern "win64" fn get_device(_this: *mut Self, out: *mut *mut c_void) {
+        child_get_device(std::ptr::null_mut(), out)
+    }
     unsafe extern "win64" fn get_priv(
         this: *mut Self,
         g: *const Guid,
@@ -681,7 +696,9 @@ impl Buffer {
         }
         prev - 1
     }
-    unsafe extern "win64" fn get_device(_: *mut Self, _: *mut *mut c_void) {}
+    unsafe extern "win64" fn get_device(_: *mut Self, out: *mut *mut c_void) {
+        child_get_device(std::ptr::null_mut(), out)
+    }
     unsafe extern "win64" fn get_priv(
         this: *mut Self,
         g: *const Guid,
@@ -2138,15 +2155,6 @@ unsafe extern "win64" fn ctx_noop_uav(
     _: *const u32,
 ) {
 }
-unsafe extern "win64" fn ctx_get_data(
-    _: *mut DeviceContext,
-    _: *mut c_void,
-    _: *mut c_void,
-    _: u32,
-    _: u32,
-) -> i32 {
-    S_OK
-}
 unsafe extern "win64" fn ctx_get_type(_: *mut DeviceContext) -> u32 {
     0
 } // D3D11_DEVICE_CONTEXT_IMMEDIATE
@@ -3210,8 +3218,8 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     vs_set_shader_resources: pipeline::vs_set_srvs,
     vs_set_samplers: pipeline::vs_set_samplers,
     begin: ctx_noop_1ptr,
-    end: ctx_noop_1ptr,
-    get_data: ctx_get_data,
+    end: query::ctx_end,
+    get_data: query::ctx_get_data,
     set_predication: ctx_noop_pred,
     gs_set_shader_resources: pipeline::gs_set_srvs,
     gs_set_samplers: pipeline::gs_set_samplers,
@@ -4098,23 +4106,46 @@ unsafe extern "win64" fn dev_create_state(
     S_OK
 }
 
+/// CreateQuery et CreatePredicate : requête typée (#1317).
+unsafe extern "win64" fn dev_create_query(
+    _: *mut Device,
+    desc: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    query::create(desc.cast(), false, out)
+}
+
 unsafe extern "win64" fn dev_create_deferred(_: *mut Device, _: u32, _: *mut *mut c_void) -> i32 {
     crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDeferredContext")
 }
+/// OpenSharedResource : une poignée donnée par IDXGIResource::GetSharedHandle
+/// dans ce même processus (#1296) ; le partage entre processus reste refusé.
 unsafe extern "win64" fn dev_open_shared(
     _: *mut Device,
-    _: usize,
-    _: *const Guid,
-    _: *mut *mut c_void,
+    handle: usize,
+    riid: *const Guid,
+    out: *mut *mut c_void,
 ) -> i32 {
-    crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
-}
-
-unsafe extern "win64" fn dev_check_format(_: *mut Device, _format: u32, out: *mut u32) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0x1 | 0x2 | 0x4 | 0x10 | 0x20; // basic support flags
+    *out = std::ptr::null_mut();
+    if let Some(t) = dxgi_res::shared_texture(handle) {
+        return Texture2D::query_interface(t, riid, out);
+    }
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
+}
+
+/// CheckFormatSupport : capacités réelles du format (#1304), E_FAIL pour
+/// DXGI_FORMAT_UNKNOWN.
+unsafe extern "win64" fn dev_check_format(_: *mut Device, format: u32, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = formats::format_support(format);
+    if *out == 0 {
+        return E_FAIL;
+    }
     S_OK
 }
 
@@ -4268,8 +4299,8 @@ static DEVICE_VTABLE: DeviceVTable = DeviceVTable {
     create_depth_stencil_state: pipeline::dev_create_depth,
     create_rasterizer_state: pipeline::dev_create_raster,
     create_sampler_state: pipeline::dev_create_sampler,
-    create_query: dev_create_state,
-    create_predicate: dev_create_state,
+    create_query: dev_create_query,
+    create_predicate: dev_create_query,
     create_counter: dev_create_state,
     create_deferred_context: dev_create_deferred,
     open_shared_resource: dev_open_shared,
@@ -4528,6 +4559,99 @@ mod vtable_tests {
             5 * 8
         );
         assert_eq!(core::mem::size_of::<SimpleComVTable>(), 9 * 8);
+    }
+
+    #[test]
+    fn texture_et_tampon_rendent_leur_appareil() {
+        use super::*;
+        unsafe {
+            // Appareil factice (sans contexte OpenGL) pris comme parent.
+            let dev = Box::into_raw(Box::new(Device {
+                vtable: device_vt(),
+                ref_count: AtomicU32::new(1),
+                context: std::ptr::null_mut(),
+                feature_level: D3D_FEATURE_LEVEL_11_0,
+                flags: 0,
+                dxgi: DxgiDevice {
+                    vtable: dxgi_device_vt(),
+                    owner: std::ptr::null_mut(),
+                    frame_latency: AtomicU32::new(3),
+                },
+                multithread: ext::Multithread::new(),
+            }));
+            LAST_DEVICE.store(dev, Ordering::Release);
+            let tex = create_backbuffer_texture(0, 4, 4);
+            // Chromium lit la case sans l'initialiser (#1290).
+            let mut out = 0xaaaa_aaaa_aaaa_aaaau64 as usize as *mut c_void;
+            Texture2D::get_device(tex, &mut out);
+            assert_ne!(out as usize, 0xaaaa_aaaa_aaaa_aaaa);
+            let mut out_buf = 0xaaaa_aaaa_aaaa_aaaau64 as usize as *mut c_void;
+            Buffer::get_device(std::ptr::null_mut(), &mut out_buf);
+            assert_ne!(out_buf as usize, 0xaaaa_aaaa_aaaa_aaaa);
+            // Un autre test a pu créer son propre appareil entre-temps.
+            if out == dev.cast() {
+                assert!((*dev).ref_count.load(Ordering::Relaxed) >= 2);
+            }
+            let _ = LAST_DEVICE.compare_exchange(
+                dev,
+                std::ptr::null_mut(),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            );
+            drop(Box::from_raw(tex));
+        }
+    }
+
+    #[test]
+    fn texture_rend_idxgiresource() {
+        use super::*;
+        unsafe {
+            let tex = create_backbuffer_texture(0, 4, 4);
+            (*tex).desc.misc_flags = 0x2; // D3D11_RESOURCE_MISC_SHARED
+            (*tex).desc.bind_flags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            let mut r = std::ptr::null_mut();
+            assert_eq!(
+                Texture2D::query_interface(tex, &dxgi_res::IID_DXGI_RESOURCE, &mut r),
+                S_OK
+            );
+            assert!(!r.is_null());
+            assert_eq!((*tex).ref_count.load(Ordering::Relaxed), 2);
+            let m = |i: usize| *(*(r as *const *const usize)).add(i);
+            // GetUsage (case 9).
+            let get_usage: unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32 =
+                std::mem::transmute(m(9));
+            let mut usage = 0;
+            assert_eq!(get_usage(r, &mut usage), S_OK);
+            assert_eq!(usage, 0x10 | 0x20);
+            // GetSharedHandle (case 8), puis OpenSharedResource la retrouve.
+            let get_shared: unsafe extern "win64" fn(*mut c_void, *mut usize) -> i32 =
+                std::mem::transmute(m(8));
+            let mut h = 0usize;
+            assert_eq!(get_shared(r, &mut h), S_OK);
+            assert_ne!(h, 0);
+            let mut back = std::ptr::null_mut();
+            assert_eq!(
+                dev_open_shared(std::ptr::null_mut(), h, &IID_ID3D11_TEXTURE2D, &mut back),
+                S_OK
+            );
+            assert_eq!(back, tex.cast());
+            Texture2D::release(back.cast());
+            // IDXGIResource1 depuis la facette, et retour à la texture.
+            let qi: unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
+                std::mem::transmute(m(0));
+            let mut r1 = std::ptr::null_mut();
+            assert_eq!(qi(r, &dxgi_res::IID_DXGI_RESOURCE1, &mut r1), S_OK);
+            assert_eq!(r1, r);
+            let rel: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(m(2));
+            rel(r1);
+            let mut t = std::ptr::null_mut();
+            assert_eq!(qi(r, &IID_ID3D11_TEXTURE2D, &mut t), S_OK);
+            assert_eq!(t, tex.cast());
+            Texture2D::release(tex);
+            assert_eq!(rel(r), 0);
+            assert_eq!(Texture2D::release(tex), 0);
+            assert!(dxgi_res::shared_texture(h).is_none());
+        }
     }
 
     #[test]

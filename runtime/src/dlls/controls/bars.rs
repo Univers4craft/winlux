@@ -263,6 +263,20 @@ const BTNS_AUTOSIZE: u8 = 0x10;
 const BTNS_WHOLEDROPDOWN: u8 = 0x80;
 const TBSTYLE_WRAPABLE: u32 = 0x0200;
 const TBSTYLE_LIST: u32 = 0x1000;
+const BTNS_SHOWTEXT: u8 = 0x40;
+const TBSTYLE_EX_MIXEDBUTTONS: u32 = 0x08;
+
+/// Texte affiché sur le bouton. Avec TBSTYLE_LIST et
+/// TBSTYLE_EX_MIXEDBUTTONS, seuls les boutons BTNS_SHOWTEXT montrent leur
+/// texte ; celui des autres ne sert que d'infobulle (Sumatra, #1377).
+fn shown_text<'a>(hwnd: usize, s: &BarState, b: &'a Button) -> &'a str {
+    let mixed = s.ex_style & TBSTYLE_EX_MIXEDBUTTONS != 0 && style(hwnd) & TBSTYLE_LIST != 0;
+    if mixed && b.style & BTNS_SHOWTEXT == 0 {
+        ""
+    } else {
+        &b.text
+    }
+}
 const CCS_BOTTOM: u32 = 0x3;
 const CCS_NORESIZE: u32 = 0x4;
 const CCS_NOPARENTALIGN: u32 = 0x8;
@@ -332,7 +346,7 @@ fn toolbar_font(hwnd: usize) -> usize {
 fn toolbar_layout(hwnd: usize, s: &BarState) -> Vec<Rect> {
     let font = toolbar_font(hwnd);
     let lh = line_height(font);
-    let has_text = s.buttons.iter().any(|b| !b.text.is_empty());
+    let has_text = s.buttons.iter().any(|b| !shown_text(hwnd, s, b).is_empty());
     let list = style(hwnd) & TBSTYLE_LIST != 0;
     let vertical = style(hwnd) & CCS_VERT != 0;
     // Taille des images : celle de la liste d'images si elle existe.
@@ -351,12 +365,13 @@ fn toolbar_layout(hwnd: usize, s: &BarState) -> Vec<Rect> {
     .max(24);
     let mut uniform = 0;
     let width_of = |b: &Button| -> i32 {
-        let w = if b.text.is_empty() {
+        let text = shown_text(hwnd, s, b);
+        let w = if text.is_empty() {
             iw + 9
         } else if list {
-            iw + 4 + measure(font, &b.text).0 + 20
+            iw + 4 + measure(font, text).0 + 20
         } else {
-            (measure(font, &b.text).0 + 16).max(iw + 9)
+            (measure(font, text).0 + 16).max(iw + 9)
         };
         w.max(24)
     };
@@ -531,13 +546,14 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             .then(|| crate::dlls::icons::list_size(list))
             .flatten();
         let text_right = style(hwnd) & TBSTYLE_LIST != 0;
+        let text = shown_text(hwnd, &s, b);
         if let Some((iw, ih)) = size {
-            let x = if !b.text.is_empty() && text_right {
+            let x = if !text.is_empty() && text_right {
                 tr.left
             } else {
                 (tr.left + tr.right - iw) / 2
             };
-            let y = if b.text.is_empty() || text_right {
+            let y = if text.is_empty() || text_right {
                 (tr.top + tr.bottom - ih) / 2
             } else {
                 tr.top + 3
@@ -556,23 +572,23 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             } else {
                 crate::dlls::icons::draw_list_image(list, b.image, p.hdc, x, y, bg);
             }
-            if !b.text.is_empty() && text_right {
+            if !text.is_empty() && text_right {
                 let beside = Rect {
                     left: x + iw + 4,
                     ..tr
                 };
-                p.text(beside, &b.text, color, 0);
-            } else if !b.text.is_empty() {
+                p.text(beside, text, color, 0);
+            } else if !text.is_empty() {
                 let below = Rect { top: y + ih, ..tr };
-                p.text(below, &b.text, color, 1);
+                p.text(below, text, color, 1);
             }
-        } else if b.text.is_empty() {
+        } else if text.is_empty() {
             // Pas d'image affichable : petit repère pour que le bouton se voie.
             let cx = (tr.left + tr.right) / 2;
             let cy = (tr.top + tr.bottom) / 2;
             p.shape(Rect::from_size(cx - 3, cy - 3, 6, 6), color, color, 3, true);
         } else {
-            p.text(tr, &b.text, color, 1);
+            p.text(tr, text, color, 1);
         }
         if b.state & TBSTATE_INDETERMINATE != 0 {
             p.line(
@@ -985,6 +1001,15 @@ unsafe fn toolbar_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
         0x0413 => {
             // TB_ADDBITMAP : index de la première image ajoutée. Les
             // images vont dans une liste interne (cases de TB_SETBITMAPSIZE).
+            // Un HBITMAP nul n'ajoute rien et ne consomme aucun index :
+            // Notepad++ en passe un pour chaque séparateur, et ses boutons
+            // numérotent leurs images sans compter ces séparateurs (#1287).
+            if lp == 0 || {
+                let p = lp as *const usize;
+                *p == 0 && *p.add(1) == 0
+            } {
+                return Some(-1);
+            }
             let strip = if lp != 0 {
                 let p = lp as *const usize;
                 tb_bitmap_image(*p, *p.add(1))

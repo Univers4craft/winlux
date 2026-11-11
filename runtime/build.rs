@@ -152,8 +152,59 @@ fn classify(ty: &str, aliases: &HashMap<String, String>, depth: u32) -> char {
     }
 }
 
+/// Commit de construction, affiché par `winlux --version` (#1266) : sans
+/// lui, deux binaires de deux têtes de master disaient tous deux « v0.2.20 »
+/// et rien ne montrait lequel tournait vraiment dans une VM. `WINLUX_COMMIT`
+/// l'impose (construction hors dépôt git) ; sinon `git rev-parse HEAD`, plus
+/// « +modifié » si des fichiers suivis diffèrent de ce commit.
+fn build_commit(manifest: &Path) {
+    println!("cargo:rerun-if-env-changed=WINLUX_COMMIT");
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(manifest)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    // Un commit ou un changement de branche relance ce script : HEAD, la
+    // référence de la branche et packed-refs (les sources sont déjà suivies).
+    let mut watched = vec!["HEAD".to_string(), "packed-refs".to_string()];
+    if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        watched.push(reference);
+    }
+    for name in watched {
+        if let Some(path) = git(&["rev-parse", "--git-path", &name]) {
+            let path = manifest.join(path);
+            if path.exists() {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    let commit = match std::env::var("WINLUX_COMMIT") {
+        Ok(forced) if !forced.trim().is_empty() => forced.trim().to_string(),
+        _ => match git(&["rev-parse", "--short=12", "HEAD"]) {
+            Some(head) if !head.is_empty() => {
+                let modified = git(&["status", "--porcelain", "--untracked-files=no"])
+                    .is_some_and(|status| !status.is_empty());
+                if modified {
+                    format!("{head}+modifié")
+                } else {
+                    head
+                }
+            }
+            _ => "inconnu".to_string(),
+        },
+    };
+    println!("cargo:rustc-env=WINLUX_BUILD_COMMIT={commit}");
+}
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    build_commit(&manifest);
     let src = manifest.join("src");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=build.rs");

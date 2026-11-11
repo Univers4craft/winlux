@@ -170,6 +170,35 @@ xfce4-panel -q; kill 0"""
             ok({item["name"]: item["hidden"] for item in menu} == {"putty": True, "filezilla": False},
                f"vraie barre : menu de Winlux sur l'icône, « Ranger dans les icônes cachées » ({menu})")
 
+# ── 5. Infobulle retirée au clic (#1371) ────────────────────────────────────
+class FakeIcon:
+    def __init__(self): self.has_tooltip, self.text, self.on = True, "claude", True
+    def set_has_tooltip(self, value): self.has_tooltip = value
+    def set_tooltip_text(self, text): self.text, self.has_tooltip = text, True
+
+class FakeGLib:
+    pending = []
+    @staticmethod
+    def timeout_add(_ms, fn, *args): FakeGLib.pending.append((fn, args))
+
+scope = {"GLib": FakeGLib, "ICONS": {}, "TIPS": {}, "QUIET": set()}
+exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef)
+                              and n.name in ("quiet_tooltip", "tooltip_back")], type_ignores=[]),
+             "winlux-notify-icon.py", "exec"), scope)
+icon = FakeIcon()
+scope["ICONS"]["k"], scope["TIPS"]["k"] = icon, "claude"
+scope["pointer_on"] = lambda i: i.on
+scope["quiet_tooltip"]("k")
+ok(not icon.has_tooltip and "k" in scope["QUIET"] and len(FakeGLib.pending) == 1,
+   "clic sur l'icône : infobulle retirée, retour programmé (#1371)")
+fn, args = FakeGLib.pending[0]
+ok(fn(*args) is True and not icon.has_tooltip, "pointeur encore sur l'icône : l'infobulle reste cachée")
+icon.on = False
+ok(fn(*args) is False and icon.has_tooltip and icon.text == "claude" and "k" not in scope["QUIET"],
+   "pointeur sorti de l'icône : l'infobulle revient avec son texte")
+ok("quiet_tooltip(key)" in source and "if key not in QUIET:" in source,
+   "assistant : retrait au clic, texte mis de côté pendant le menu")
+
 if failures:
     raise SystemExit(f"{len(failures)} échec(s)")
 print("OK: icônes cachées une par une derrière la flèche de la zone de notification")

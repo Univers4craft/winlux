@@ -15,6 +15,7 @@ etc="$destdir/etc"
 version=${WINLUX_VERSION:-$(git -C "$root" describe --tags --always 2>/dev/null || printf 'development')}
 mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec application/x-msi application/x-ms-shortcut"
 web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml"
+mime_icons="application-x-ms-dos-executable application-x-msdownload application-vnd.microsoft.portable-executable application-x-dosexec application-x-msi"
 
 test -x "$root/target/release/winlux" || {
     echo "target/release/winlux absent : lancez d'abord cargo build --release -p winlux" >&2
@@ -38,10 +39,23 @@ sed "s|/usr/bin/winlux-open|$prefix/bin/winlux-open|" "$root/integration/winlux.
 sed "s|/usr/bin/winlux-browser|$prefix/bin/winlux-browser|" "$root/integration/winlux-browser.desktop" \
     | install -Dm644 /dev/stdin "$share/applications/winlux-browser.desktop"
 install -Dm644 "$root/integration/x-ms-dos-executable.xml" "$share/mime/packages/winlux.xml"
+# Icône des .exe dans le gestionnaire de fichiers d'une distribution ordinaire
+# (#1425) : celle de Winlux en repli (hicolor), et la vraie icône du programme
+# en miniature (Tumbler sous XFCE, GNOME), extraite par winlux-applications.
+for icon in $mime_icons; do
+    install -Dm644 "$root/integration/native/icons/Winlux/scalable/mimetypes/$icon.svg" \
+        "$share/icons/hicolor/scalable/mimetypes/$icon.svg"
+done
+install -Dm755 "$root/scripts/winlux-applications.py" "$bin/winlux-applications"
+sed "s|/usr/bin/winlux-applications|$prefix/bin/winlux-applications|g" \
+    "$root/integration/native/thumbnailers/winlux-windows.thumbnailer" \
+    | install -Dm644 /dev/stdin "$share/thumbnailers/winlux-windows.thumbnailer"
 sed "s|/usr/bin/winlux|$prefix/bin/winlux|" "$root/integration/winlux-binfmt.conf" \
     | install -Dm644 /dev/stdin "$etc/binfmt.d/winlux.conf"
 # Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
 install -Dm644 "$root/integration/70-winlux-manettes.rules" "$etc/udev/rules.d/70-winlux-manettes.rules"
+# Logiciels d'éclairage, claviers, souris et casques (#1522) : fabricants listés.
+install -Dm644 "$root/integration/71-winlux-eclairage.rules" "$etc/udev/rules.d/71-winlux-eclairage.rules"
 
 # Application par défaut des .exe pour tous les utilisateurs; uninstall.sh
 # retire exactement ces lignes.
@@ -72,12 +86,63 @@ for type in $mime_types; do
     fi
 done
 
+# Lancement direct des .exe (« ./programme.exe ») par binfmt_misc. systemd
+# relit /etc/binfmt.d ; sans systemd (Devuan, Void, Alpine, Gentoo OpenRC),
+# rien n'était enregistré avant le redémarrage (#27) : binfmt-support
+# (update-binfmts, aussi au démarrage) s'il est là, sinon écriture directe
+# dans /proc/sys/fs/binfmt_misc/register. WINLUX_BINFMT force la méthode
+# (tests) : auto, systemd, update-binfmts ou proc.
+binfmt=/proc/sys/fs/binfmt_misc
+binfmt_line() { grep -v '^#' "$etc/binfmt.d/winlux.conf" | grep -m 1 .; }
+binfmt_mount() {
+    test -e "$binfmt/register" && return 0
+    modprobe binfmt_misc 2>/dev/null || true
+    test -d "$binfmt" && mount -t binfmt_misc binfmt_misc "$binfmt" 2>/dev/null || true
+    test -e "$binfmt/register"
+}
+binfmt_proc() {
+    binfmt_mount || return 1
+    # Une ancienne entrée (autre préfixe) est remplacée par la nouvelle.
+    if [ -e "$binfmt/winlux" ]; then echo -1 >"$binfmt/winlux" || return 1; fi
+    binfmt_line >"$binfmt/register"
+}
+register_binfmt() {
+    method=${WINLUX_BINFMT:-auto}
+    if [ "$method" = auto ]; then
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then method=systemd
+        elif command -v update-binfmts >/dev/null 2>&1; then method=update-binfmts
+        else method=proc; fi
+    fi
+    case "$method" in
+        systemd)
+            binfmt_mount || true
+            systemctl restart systemd-binfmt.service 2>/dev/null || true
+            # systemd-binfmt absent ou en échec : enregistrement direct.
+            [ -e "$binfmt/winlux" ] || binfmt_proc || true ;;
+        update-binfmts)
+            binfmt_mount || true
+            # Gardé par binfmt-support, réenregistré à chaque démarrage.
+            if [ -e "$binfmt/winlux" ]; then echo -1 >"$binfmt/winlux" || true; fi
+            update-binfmts --package winlux --remove winlux "$bin/winlux" >/dev/null 2>&1 || true
+            update-binfmts --package winlux --install winlux "$bin/winlux" --magic MZ --fix-binary yes \
+                || binfmt_proc || true ;;
+        proc)
+            binfmt_proc || true
+            echo "Note : sans systemd ni binfmt-support, /etc/binfmt.d/winlux.conf n'est relu au démarrage que si le système d'init le gère (service binfmt d'OpenRC par exemple)." >&2 ;;
+        *) echo "WINLUX_BINFMT inconnu : $method" >&2; exit 2 ;;
+    esac
+    if [ -e "$binfmt/winlux" ]; then
+        echo "Lancement direct des .exe actif ($binfmt/winlux)"
+    else
+        echo "Attention : lancement direct des .exe non enregistré ; « winlux programme.exe » et le double-clic restent disponibles." >&2
+    fi
+}
+
 if [ -z "$destdir" ]; then
     update-mime-database "$share/mime" 2>/dev/null || true
     update-desktop-database "$share/applications" 2>/dev/null || true
+    gtk-update-icon-cache -q -t "$share/icons/hicolor" 2>/dev/null || true
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
-    if [ -d /proc/sys/fs/binfmt_misc ]; then
-        systemctl restart systemd-binfmt.service 2>/dev/null || true
-    fi
+    register_binfmt
 fi
 echo "Winlux $version installé dans $prefix/bin (double-clic : $prefix/bin/winlux-open)"

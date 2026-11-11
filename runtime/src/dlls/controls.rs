@@ -195,6 +195,8 @@ struct EditState {
     password: Option<char>,
     modified: bool,
     dragging: bool,
+    /// Marges gauche et droite posées par EM_SETMARGINS (None : celles de la police).
+    margins: Option<(i32, i32)>,
 }
 
 #[derive(Clone)]
@@ -754,12 +756,14 @@ fn draw_item(
         rc_item: rect,
         item_data: data as usize,
     };
-    let r = send(
-        parent(hwnd),
-        WM_DRAWITEM,
-        user32::control_id(hwnd) as usize,
-        &dis as *const DrawItemStruct as isize,
-    );
+    let r = gui::watch_draws(user32::window_diag(), || {
+        send(
+            parent(hwnd),
+            WM_DRAWITEM,
+            user32::control_id(hwnd) as usize,
+            &dis as *const DrawItemStruct as isize,
+        )
+    });
     if user32::window_diag() {
         eprintln!(
             "winlux[fenetre] WM_DRAWITEM {hwnd:#x} -> parent {:#x} élément {item} état {state:#x} ({},{} {}x{}) hdc {hdc:#x} -> {r}",
@@ -1416,18 +1420,43 @@ fn has_border(hwnd: usize) -> bool {
     style(hwnd) & WS_BORDER != 0 || ex_style(hwnd) & WS_EX_CLIENTEDGE != 0
 }
 
+/// Marge « étroite, calculée d'après la police » (EC_USEFONTINFO) : la
+/// moitié de la largeur d'un caractère moyen.
+fn font_margin(font: usize) -> i32 {
+    (measure(font, "x").0 / 2).max(1)
+}
+
+/// Marges d'un champ EDIT : celles d'EM_SETMARGINS, sinon celles de sa
+/// police. Sans elles, le « 1 » aligné à droite du champ « Page » de
+/// Sumatra touchait le cadre voisin et ne se lisait plus (#1377).
+fn edit_margins(hwnd: usize) -> Option<(i32, i32)> {
+    let c = lock(state()).get(&hwnd).cloned()?;
+    if c.kind != Kind::Edit {
+        return None;
+    }
+    Some(c.edit.margins.unwrap_or_else(|| {
+        let m = font_margin(font_of(&c));
+        (m, m)
+    }))
+}
+
 /// Zone du texte d'un champ (sans la bordure).
 fn edit_area(hwnd: usize, r: Rect) -> Rect {
-    let inset = if has_border(hwnd) || kind_of(hwnd) == Some(Kind::ComboBox) {
-        5
-    } else {
-        1
+    let bordered = has_border(hwnd);
+    let (left, right) = match edit_margins(hwnd) {
+        // Bordure (1 pixel et son relief) puis marges du texte.
+        Some((ml, mr)) => {
+            let b = if bordered { 2 } else { 0 };
+            (b + ml, b + mr)
+        }
+        None if bordered || kind_of(hwnd) == Some(Kind::ComboBox) => (5, 5),
+        None => (1, 1),
     };
     Rect {
-        left: r.left + inset,
-        top: r.top + if has_border(hwnd) { 2 } else { 0 },
-        right: r.right - inset,
-        bottom: r.bottom - if has_border(hwnd) { 2 } else { 0 },
+        left: r.left + left,
+        top: r.top + if bordered { 2 } else { 0 },
+        right: r.right - right,
+        bottom: r.bottom - if bordered { 2 } else { 0 },
     }
 }
 
@@ -2011,7 +2040,36 @@ unsafe fn edit_common(hwnd: usize, msg: u32, wp: usize, lp: isize, area: Rect) -
             keep_caret_visible(hwnd);
             Some(1)
         } // EM_SCROLLCARET
-        0x00C6 | 0x00CD | 0x00D3 | 0x00D4 => Some(0), // CANUNDO, EMPTYUNDOBUFFER, SET/GETMARGINS
+        0x00D3 => {
+            // EM_SETMARGINS : EC_LEFTMARGIN 1, EC_RIGHTMARGIN 2 ;
+            // EC_USEFONTINFO (0xFFFF) revient aux marges de la police, en
+            // wParam pour les deux marges ou dans le mot de lParam d'une
+            // seule. wxWidgets envoie MAKELONG(EC_USEFONTINFO,
+            // EC_USEFONTINFO) : pris pour 65535 pixels, le texte des champs
+            // de FileZilla partait hors du champ (#1552).
+            let font = with_ctl(hwnd, |c| font_of(c))?;
+            let current = edit_margins(hwnd).unwrap_or((0, 0));
+            let fm = font_margin(font);
+            let word = |v: u32| if v == 0xFFFF { fm } else { v as i32 };
+            let (l, r) = (word(lp as u32 & 0xFFFF), word(lp as u32 >> 16));
+            let next = if wp & 0xFFFF == 0xFFFF {
+                (fm, fm)
+            } else {
+                (
+                    if wp & 1 != 0 { l } else { current.0 },
+                    if wp & 2 != 0 { r } else { current.1 },
+                )
+            };
+            with_ctl(hwnd, |c| c.edit.margins = Some(next));
+            invalidate(hwnd);
+            Some(0)
+        }
+        0x00D4 => {
+            // EM_GETMARGINS : MAKELONG(gauche, droite).
+            let (l, r) = edit_margins(hwnd).unwrap_or((0, 0));
+            Some(((r as isize & 0xFFFF) << 16) | (l as isize & 0xFFFF))
+        }
+        0x00C6 | 0x00CD => Some(0), // CANUNDO, EMPTYUNDOBUFFER
         WM_CUT => {
             clipboard_set(hwnd, &selected_text(hwnd));
             if !edit_readonly(hwnd) {

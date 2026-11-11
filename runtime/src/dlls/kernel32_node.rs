@@ -184,8 +184,9 @@ pub unsafe extern "win64" fn VirtualUnlock(addr: usize, size: usize) -> i32 {
 
 const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
 
-/// `DeviceIoControl` : FSCTL_GET_REPARSE_POINT (cible d'un lien
-/// symbolique) ; les autres codes n'ont pas d'équivalent Linux.
+/// `DeviceIoControl` : appareils virtuels des pilotes constructeurs
+/// (vdev.rs), rapports HID, FSCTL_GET_REPARSE_POINT (cible d'un lien
+/// symbolique), volumes et disques (devio.rs).
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn DeviceIoControl(
     h: usize,
@@ -215,6 +216,12 @@ pub unsafe extern "win64" fn DeviceIoControl(
             }
         }
     };
+    // Appareil virtuel d'un pilote constructeur (#1533).
+    if let Some(r) =
+        crate::dlls::vdev::device_io_control(h, code, inb, inl, outb, outl, returned, ov)
+    {
+        return r;
+    }
     // Rapports HID par code de contrôle (hidapi, outils de manettes).
     match code {
         devio::IOCTL_HID_GET_FEATURE | devio::IOCTL_HID_GET_INPUT_REPORT => {
@@ -564,13 +571,17 @@ static WAITS: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 static NEXT_WAIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5741_0000);
 
-/// Un thread Winlux prêt à exécuter du code Windows (TEB, GS).
+/// Un thread Winlux prêt à exécuter du code Windows (TEB, GS). Son TEB et
+/// ses blocs TLS sont libérés à la fin : Chromium enregistre et retire des
+/// centaines d'attentes par seconde, et chacune laissait sinon ses
+/// mappages derrière elle (#1361).
 pub(super) fn spawn_windows_thread(f: impl FnOnce() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .stack_size(1 << 20)
         .spawn(move || {
             crate::process::init_thread();
             f();
+            crate::process::free_current_teb();
         })
         .is_ok()
 }
@@ -1285,13 +1296,6 @@ pub extern "win64" fn FreeResource(_h: usize) -> i32 {
     0
 }
 
-/// Énumération des ressources : aucune ressource de ce type
-/// (ERROR_RESOURCE_TYPE_NOT_FOUND), les appelants passent au repli.
-pub extern "win64" fn EnumResourceNamesW(_m: usize, _t: usize, _f: usize, _p: isize) -> i32 {
-    crate::process::set_last_error(1813);
-    0
-}
-
 /// `RtlFillMemory(destination, longueur, octet)`.
 pub unsafe extern "win64" fn RtlFillMemory(dest: *mut u8, len: usize, fill: u8) {
     if !dest.is_null() {
@@ -1401,8 +1405,6 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "GetNamedPipeHandleStateW" => fn GetNamedPipeHandleStateA,
         "GetConsoleTitleW" => fn GetConsoleTitleW,
         "FreeResource" => fn FreeResource,
-        "EnumResourceNamesW" => fn EnumResourceNamesW,
-        "EnumResourceLanguagesW" => fn EnumResourceNamesW,
         "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
     }
 }
@@ -1420,5 +1422,25 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "NtSetSecurityObject" => fn nt_not_supported,
         "NtOpenDirectoryObject" => fn nt_not_supported,
         "NtCreateNamedPipeFile" => fn nt_not_supported,
+    }
+}
+
+#[cfg(test)]
+mod fils_windows_tests {
+    /// Un thread de la réserve (RegisterWaitForSingleObject,
+    /// QueueUserWorkItem, minuteries) rend son TEB en finissant (#1361).
+    #[test]
+    fn thread_de_reserve_libere_son_teb() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(super::spawn_windows_thread(move || {
+            tx.send(crate::process::teb()).unwrap();
+        }));
+        let teb = rx.recv().unwrap();
+        assert_ne!(teb, 0);
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::process::teb_known(teb) && std::time::Instant::now() < fin {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!crate::process::teb_known(teb), "TEB jamais libéré");
     }
 }

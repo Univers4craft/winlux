@@ -285,3 +285,51 @@ fn objet_job_se_ferme_une_fois() {
     assert_eq!(crate::dlls::kernel32::close_handle(job), 1);
     assert_eq!(crate::dlls::kernel32::close_handle(job), 0);
 }
+
+/// Lancement d'un renderer en bac à sable (#1352) : TokenPrivileges tient
+/// dans plus de 16 octets et AddMandatoryAce ajoute une ACE d'étiquette.
+#[test]
+fn privileges_du_jeton_et_ace_obligatoire() {
+    let _teb = crate::process::test_teb();
+    unsafe {
+        let mut tok = 0usize;
+        assert_eq!(OpenProcessToken(usize::MAX, 8, &mut tok), 1);
+        let mut need = 0u32;
+        assert_eq!(
+            GetTokenInformation(tok, 3, std::ptr::null_mut(), 0, &mut need),
+            0
+        );
+        assert!(need >= 0x10, "TOKEN_PRIVILEGES de {need} octets");
+        let mut buf = vec![0u8; need as usize];
+        assert_eq!(
+            GetTokenInformation(tok, 3, buf.as_mut_ptr(), need, &mut need),
+            1
+        );
+        let count = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+        assert_eq!(count, 5);
+        let privs: Vec<(u32, u32)> = (0..count)
+            .map(|i| {
+                let at = 4 + i * 12;
+                (
+                    u32::from_le_bytes(buf[at..at + 4].try_into().unwrap()),
+                    u32::from_le_bytes(buf[at + 8..at + 12].try_into().unwrap()),
+                )
+            })
+            .collect();
+        assert!(privs.contains(&(23, 3)), "SeChangeNotifyPrivilege actif");
+
+        let label = [0u8, 0, 0, 0, 0, 16];
+        let mut low = std::ptr::null_mut();
+        assert_eq!(
+            AllocateAndInitializeSid(label.as_ptr(), 1, 4096, 0, 0, 0, 0, 0, 0, 0, &mut low),
+            1
+        );
+        let mut acl = [0u8; 64];
+        assert_eq!(InitializeAcl(acl.as_mut_ptr(), 64, 2), 1);
+        assert_eq!(AddMandatoryAce(acl.as_mut_ptr(), 2, 0, 1, low), 1);
+        assert_eq!(u16::from_le_bytes([acl[4], acl[5]]), 1);
+        assert_eq!(acl[8], 0x11, "SYSTEM_MANDATORY_LABEL_ACE_TYPE");
+        assert_eq!(u32::from_le_bytes(acl[12..16].try_into().unwrap()), 1);
+        FreeSid(low.cast());
+    }
+}

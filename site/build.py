@@ -375,7 +375,7 @@ def load_strings(lang: str) -> dict:
 
 def nav(lang: str, slug: str, strings: dict) -> str:
     items = []
-    for key, target in (("nav_home", "index"), ("nav_download", "download"), ("nav_guide", "guide"), ("nav_apps", "apps")):
+    for key, target in (("nav_home", "index"), ("nav_download", "download"), ("nav_guide", "guide"), ("nav_apps", "apps"), ("nav_software", "software")):
         current = slug == target or (target == "guide" and slug in GUIDE)
         aria = ' aria-current="page"' if current else ""
         items.append(f'<li><a href="{target}.html"{aria}>{strings[key]}</a></li>')

@@ -204,14 +204,31 @@ const CONTAINER_DDS: Guid = guid(
     [0x8c, 0xa2, 0x83, 0xd7, 0xcc, 0xd4, 0x25, 0xc9],
 );
 
-/// Octets par pixel des formats que Winlux sait lire et produire.
+use super::wic_pixels::{self, FMT_RGB32};
+
+/// Octets par pixel des formats que Winlux sait lire et produire : 8 bits
+/// par canal ici, plus larges dans `wic_pixels` (#1384).
 fn bytes_per_pixel(fmt: &Guid) -> Option<u32> {
     Some(match *fmt {
         FMT_GRAY8 => 1,
         FMT_BGR24 | FMT_RGB24 => 3,
-        FMT_BGR32 | FMT_BGRA32 | FMT_PBGRA32 | FMT_RGBA32 | FMT_PRGBA32 => 4,
-        _ => return None,
+        FMT_BGR32 | FMT_RGB32 | FMT_BGRA32 | FMT_PBGRA32 | FMT_RGBA32 | FMT_PRGBA32 => 4,
+        _ => return wic_pixels::layout(fmt).map(|l| l.bpp),
     })
+}
+
+/// Nom lisible d'un GUID de format, pour le journal.
+fn format_name(fmt: &Guid) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{}}}",
+        fmt.data1,
+        fmt.data2,
+        fmt.data3,
+        fmt.data4
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    )
 }
 
 // --- Pixels -------------------------------------------------------------------
@@ -271,6 +288,13 @@ impl Pix {
 
     /// Pixels en RGBA 8 bits non prémultiplié, ligne à ligne sans marge.
     fn to_rgba(&self) -> Vec<u8> {
+        if wic_pixels::layout(&self.fmt).is_some() {
+            return self
+                .to_raw()
+                .iter()
+                .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+                .collect();
+        }
         let bpp = bytes_per_pixel(&self.fmt).unwrap_or(4) as usize;
         let mut out = Vec::with_capacity(self.w as usize * self.h as usize * 4);
         for y in 0..self.h as usize {
@@ -282,6 +306,7 @@ impl Pix {
                     FMT_BGR24 => [p[2], p[1], p[0], 255],
                     FMT_RGB24 => [p[0], p[1], p[2], 255],
                     FMT_BGR32 => [p[2], p[1], p[0], 255],
+                    FMT_RGB32 => [p[0], p[1], p[2], 255],
                     FMT_BGRA32 => [p[2], p[1], p[0], p[3]],
                     FMT_RGBA32 => [p[0], p[1], p[2], p[3]],
                     FMT_PBGRA32 => unpremultiply([p[2], p[1], p[0], p[3]]),
@@ -294,6 +319,15 @@ impl Pix {
     }
 
     fn from_rgba(w: u32, h: u32, rgba: &[u8], fmt: Guid, dpi: (f64, f64)) -> Option<Pix> {
+        if wic_pixels::layout(&fmt).is_some() {
+            let raw: Vec<[f32; 4]> = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p.map(|v| v as f32 / 255.0))
+                .collect();
+            return Pix::from_raw(w, h, &raw, fmt, dpi);
+        }
         let mut pix = Pix::zeroed(w, h, fmt)?;
         pix.dpi = dpi;
         let bpp = bytes_per_pixel(&fmt)? as usize;
@@ -309,6 +343,7 @@ impl Pix {
                     FMT_BGR24 => d.copy_from_slice(&[s[2], s[1], s[0]]),
                     FMT_RGB24 => d.copy_from_slice(&[s[0], s[1], s[2]]),
                     FMT_BGR32 => d.copy_from_slice(&[s[2], s[1], s[0], 255]),
+                    FMT_RGB32 => d.copy_from_slice(&[s[0], s[1], s[2], 255]),
                     FMT_BGRA32 => d.copy_from_slice(&[s[2], s[1], s[0], s[3]]),
                     FMT_RGBA32 => d.copy_from_slice(s),
                     FMT_PBGRA32 => {
@@ -326,12 +361,88 @@ impl Pix {
         if fmt == self.fmt {
             return Some(self.clone());
         }
-        Pix::from_rgba(self.w, self.h, &self.to_rgba(), fmt, self.dpi)
+        bytes_per_pixel(&fmt)?;
+        let wide = |f: &Guid| wic_pixels::layout(f).is_some();
+        if !wide(&self.fmt) && !wide(&fmt) {
+            return Pix::from_rgba(self.w, self.h, &self.to_rgba(), fmt, self.dpi);
+        }
+        // Au moins un format large : passage par des valeurs linéaires en
+        // flottant, sans perdre la précision ni les valeurs hors 0..1.
+        let lin: Vec<[f32; 4]> = self
+            .to_raw()
+            .into_iter()
+            .map(|c| {
+                if format_linear(&self.fmt) {
+                    c
+                } else {
+                    let f = wic_pixels::srgb_to_linear;
+                    [f(c[0]), f(c[1]), f(c[2]), c[3]]
+                }
+            })
+            .collect();
+        let raw: Vec<[f32; 4]> = if format_linear(&fmt) {
+            lin
+        } else {
+            let f = wic_pixels::linear_to_srgb;
+            lin.into_iter()
+                .map(|c| [f(c[0]), f(c[1]), f(c[2]), c[3]])
+                .collect()
+        };
+        Pix::from_raw(self.w, self.h, &raw, fmt, self.dpi)
+    }
+
+    /// Pixels RVBA droits, valeurs telles que stockées par le format
+    /// (0..1 pour les entiers ; sans changement de courbe).
+    fn to_raw(&self) -> Vec<[f32; 4]> {
+        let Some(l) = wic_pixels::layout(&self.fmt) else {
+            return self
+                .to_rgba()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p.map(|v| v as f32 / 255.0))
+                .collect();
+        };
+        let bpp = l.bpp as usize;
+        let mut out = Vec::with_capacity(self.w as usize * self.h as usize);
+        for y in 0..self.h as usize {
+            let row = &self.data[y * self.stride as usize..];
+            for x in 0..self.w as usize {
+                out.push(wic_pixels::read(&l, &row[x * bpp..x * bpp + bpp]));
+            }
+        }
+        out
+    }
+
+    /// Inverse de `to_raw`.
+    fn from_raw(w: u32, h: u32, raw: &[[f32; 4]], fmt: Guid, dpi: (f64, f64)) -> Option<Pix> {
+        let Some(l) = wic_pixels::layout(&fmt) else {
+            let rgba: Vec<u8> = raw
+                .iter()
+                .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+                .collect();
+            return Pix::from_rgba(w, h, &rgba, fmt, dpi);
+        };
+        let mut pix = Pix::zeroed(w, h, fmt)?;
+        pix.dpi = dpi;
+        let bpp = l.bpp as usize;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let d = &mut pix.data[y * pix.stride as usize + x * bpp..][..bpp];
+                wic_pixels::write(&l, d, raw[y * w as usize + x]);
+            }
+        }
+        Some(pix)
     }
 
     fn from_raster(r: &crate::imaging::Raster) -> Pix {
         Pix::from_rgba(r.w, r.h, &r.px, FMT_BGRA32, (96.0, 96.0)).expect("format connu")
     }
+}
+
+/// Valeurs linéaires (formats flottants) plutôt qu'encodées sRGB.
+fn format_linear(fmt: &Guid) -> bool {
+    wic_pixels::layout(fmt).is_some_and(|l| l.linear())
 }
 
 fn premultiply(p: [u8; 4]) -> [u8; 4] {
@@ -473,16 +584,50 @@ unsafe fn qi_list<T>(
     E_NOINTERFACE
 }
 
+/// IWICComponentFactory {412D0C3A-9650-44FA-AF5B-DD2A06C8E8FB}
+/// (wincodecsdk.h) : IWICImagingFactory suivie des méthodes de
+/// métadonnées. IWICImagingFactory2 ajoute une autre méthode à la même
+/// case : la fabrique de composants est donc une facette à part (#1343).
+const IID_COMPONENT_FACTORY: Guid = guid(
+    0x412d_0c3a,
+    0x9650,
+    0x44fa,
+    [0xaf, 0x5b, 0xdd, 0x2a, 0x06, 0xc8, 0xe8, 0xfb],
+);
+
 unsafe extern "win64" fn factory_qi(
     this: *mut Com<Factory>,
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    if !out.is_null() && !riid.is_null() && *riid == IID_COMPONENT_FACTORY {
+        *out = std::ptr::null_mut();
+        return put(out, Com::create(COMPONENT_FACTORY_VT.ptr(), Factory));
+    }
     qi_list(
         this,
         riid,
         out,
         &[IID_IMAGING_FACTORY, IID_IMAGING_FACTORY2],
+    )
+}
+
+/// QueryInterface de la facette IWICComponentFactory : elle-même pour son
+/// IID et IWICImagingFactory ; la fabrique complète pour IWICImagingFactory2.
+unsafe extern "win64" fn component_factory_qi(
+    this: *mut Com<Factory>,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !out.is_null() && !riid.is_null() && *riid == IID_IMAGING_FACTORY2 {
+        *out = std::ptr::null_mut();
+        return put(out, Com::create(FACTORY_VT.ptr(), Factory));
+    }
+    qi_list(
+        this,
+        riid,
+        out,
+        &[IID_COMPONENT_FACTORY, IID_IMAGING_FACTORY],
     )
 }
 
@@ -672,6 +817,7 @@ unsafe fn new_source(kind: Kind, pix: Option<Pix>, out: *mut *mut c_void) -> i32
         Kind::Frame => FRAME_VT.ptr(),
         Kind::Bitmap => BITMAP_VT.ptr(),
         Kind::Converter => CONVERTER_VT.ptr(),
+        Kind::ColorTransform => COLOR_TRANSFORM_VT.ptr(),
         Kind::Scaler | Kind::Clipper | Kind::FlipRotator => TRANSFORM_VT.ptr(),
     };
     put(
@@ -698,6 +844,7 @@ macro_rules! creator_of {
     };
 }
 creator_of!(create_format_converter, Kind::Converter);
+creator_of!(create_color_transformer, Kind::ColorTransform);
 creator_of!(create_bitmap_scaler, Kind::Scaler);
 creator_of!(create_bitmap_clipper, Kind::Clipper);
 creator_of!(create_bitmap_flip_rotator, Kind::FlipRotator);
@@ -729,7 +876,16 @@ unsafe extern "win64" fn create_bitmap(
     }
     match Pix::zeroed(w, h, *fmt) {
         Some(p) => new_source(Kind::Bitmap, Some(p), out),
-        None => WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT,
+        None => {
+            crate::log_warn!(
+                "wic",
+                "CreateBitmap {}×{} : format de pixel {} non pris en charge",
+                w,
+                h,
+                format_name(&*fmt)
+            );
+            WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT
+        }
     }
 }
 
@@ -834,8 +990,8 @@ static FACTORY_VT: VTable<29> = VTable([
     create_bitmap_clipper as *const (),
     create_bitmap_flip_rotator as *const (),
     create_stream as *const (),
-    unsupported!("CreateColorContext"),
-    unsupported!("CreateColorTransformer"),
+    create_color_context as *const (),
+    create_color_transformer as *const (),
     create_bitmap as *const (),
     create_bitmap_from_source as *const (),
     create_bitmap_from_source_rect as *const (),
@@ -849,6 +1005,191 @@ static FACTORY_VT: VTable<29> = VTable([
     unsupported!("CreateQueryWriterFromReader"),
     unsupported!("CreateImageEncoder"),
 ]);
+
+/// IWICComponentFactory : les 28 méthodes d'IWICImagingFactory, puis les
+/// sept méthodes de métadonnées (non prises en charge).
+static COMPONENT_FACTORY_VT: VTable<35> = VTable([
+    component_factory_qi as *const (),
+    add_ref::<Factory> as *const (),
+    release::<Factory> as *const (),
+    create_decoder_from_filename as *const (),
+    create_decoder_from_stream as *const (),
+    create_decoder_from_file_handle as *const (),
+    create_component_info as *const (),
+    create_decoder as *const (),
+    unsupported!("CreateEncoder"),
+    create_palette as *const (),
+    create_format_converter as *const (),
+    create_bitmap_scaler as *const (),
+    create_bitmap_clipper as *const (),
+    create_bitmap_flip_rotator as *const (),
+    create_stream as *const (),
+    create_color_context as *const (),
+    create_color_transformer as *const (),
+    create_bitmap as *const (),
+    create_bitmap_from_source as *const (),
+    create_bitmap_from_source_rect as *const (),
+    create_bitmap_from_memory as *const (),
+    unsupported!("CreateBitmapFromHBITMAP"),
+    unsupported!("CreateBitmapFromHICON"),
+    unsupported!("CreateComponentEnumerator"),
+    unsupported!("CreateFastMetadataEncoderFromDecoder"),
+    unsupported!("CreateFastMetadataEncoderFromFrameDecode"),
+    unsupported!("CreateQueryWriter"),
+    unsupported!("CreateQueryWriterFromReader"),
+    // IWICComponentFactory
+    unsupported!("CreateMetadataReader"),
+    unsupported!("CreateMetadataReaderFromContainer"),
+    unsupported!("CreateMetadataWriter"),
+    unsupported!("CreateMetadataWriterFromReader"),
+    unsupported!("CreateQueryReaderFromBlockReader"),
+    unsupported!("CreateQueryWriterFromBlockWriter"),
+    unsupported!("CreateEncoderPropertyBag"),
+]);
+
+// --- Contexte de couleur (#1343) ----------------------------------------------------
+
+/// IWICColorContext {3C613A02-34B2-44EA-9A7C-45AEA9C6FD6D} (wincodec.h).
+const IID_COLOR_CONTEXT: Guid = guid(
+    0x3c61_3a02,
+    0x34b2,
+    0x44ea,
+    [0x9a, 0x7c, 0x45, 0xae, 0xa9, 0xc6, 0xfd, 0x6d],
+);
+/// WICColorContextType.
+const COLOR_CONTEXT_PROFILE: u32 = 1;
+const COLOR_CONTEXT_EXIF: u32 = 2;
+
+/// Contexte : non initialisé, profil ICC (octets) ou espace EXIF (1 sRGB,
+/// 2 Adobe RGB). Aucune conversion n'est faite : le contenu est rendu tel
+/// qu'il a été donné.
+enum ColorContext {
+    Uninitialized,
+    Profile(Vec<u8>),
+    Exif(u32),
+}
+
+type ColorContextObj = Com<Mutex<ColorContext>>;
+
+static COLOR_CONTEXT_VT: VTable<9> = VTable([
+    color_context_qi as *const (),
+    add_ref::<Mutex<ColorContext>> as *const (),
+    release::<Mutex<ColorContext>> as *const (),
+    cc_init_filename as *const (),
+    cc_init_memory as *const (),
+    cc_init_exif as *const (),
+    cc_get_type as *const (),
+    cc_get_profile_bytes as *const (),
+    cc_get_exif as *const (),
+]);
+
+unsafe extern "win64" fn create_color_context(_this: *mut c_void, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    put(
+        out,
+        Com::create(
+            COLOR_CONTEXT_VT.ptr(),
+            Mutex::new(ColorContext::Uninitialized),
+        ),
+    )
+}
+
+unsafe extern "win64" fn color_context_qi(
+    this: *mut ColorContextObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_COLOR_CONTEXT])
+}
+
+unsafe fn cc_set(this: *mut ColorContextObj, c: ColorContext) -> i32 {
+    *crate::dlls::lock(Com::get(this)) = c;
+    S_OK
+}
+
+unsafe extern "win64" fn cc_init_filename(this: *mut ColorContextObj, name: *const u16) -> i32 {
+    if name.is_null() {
+        return E_INVALIDARG;
+    }
+    let path = crate::paths::to_linux(&crate::dlls::wstr(name));
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => cc_set(this, ColorContext::Profile(bytes)),
+        Ok(_) => E_INVALIDARG,
+        Err(_) => 0x8007_0002u32 as i32, // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+    }
+}
+
+unsafe extern "win64" fn cc_init_memory(
+    this: *mut ColorContextObj,
+    data: *const u8,
+    size: u32,
+) -> i32 {
+    if data.is_null() || size == 0 {
+        return E_INVALIDARG;
+    }
+    let bytes = std::slice::from_raw_parts(data, size as usize).to_vec();
+    cc_set(this, ColorContext::Profile(bytes))
+}
+
+unsafe extern "win64" fn cc_init_exif(this: *mut ColorContextObj, value: u32) -> i32 {
+    // 1 : sRGB ; 2 : Adobe RGB.
+    if !matches!(value, 1 | 2) {
+        return E_INVALIDARG;
+    }
+    cc_set(this, ColorContext::Exif(value))
+}
+
+unsafe extern "win64" fn cc_get_type(this: *mut ColorContextObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = match &*crate::dlls::lock(Com::get(this)) {
+        ColorContext::Uninitialized => 0,
+        ColorContext::Profile(_) => COLOR_CONTEXT_PROFILE,
+        ColorContext::Exif(_) => COLOR_CONTEXT_EXIF,
+    };
+    S_OK
+}
+
+/// GetProfileBytes(cbBuffer, pbBuffer, pcbActual) : sans tampon, la taille.
+unsafe extern "win64" fn cc_get_profile_bytes(
+    this: *mut ColorContextObj,
+    size: u32,
+    buf: *mut u8,
+    actual: *mut u32,
+) -> i32 {
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    let guard = crate::dlls::lock(Com::get(this));
+    let ColorContext::Profile(bytes) = &*guard else {
+        *actual = 0;
+        return WINCODEC_ERR_NOTINITIALIZED;
+    };
+    *actual = bytes.len() as u32;
+    if buf.is_null() {
+        return S_OK;
+    }
+    if (size as usize) < bytes.len() {
+        return E_INVALIDARG;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    S_OK
+}
+
+unsafe extern "win64" fn cc_get_exif(this: *mut ColorContextObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    // Un contexte qui n'est pas EXIF répond 0xFFFFFFFF (non calibré).
+    *out = match &*crate::dlls::lock(Com::get(this)) {
+        ColorContext::Exif(v) => *v,
+        _ => 0xFFFF_FFFF,
+    };
+    S_OK
+}
 
 // --- Décodeur ---------------------------------------------------------------------
 
@@ -1426,7 +1767,459 @@ unsafe extern "win64" fn decoder_info(this: *mut DecoderObj, out: *mut *mut c_vo
     codec_info_for_container(&container, out)
 }
 
-/// IWICImagingFactory::CreateComponentInfo, pour les décodeurs intégrés.
+// --- Informations de format de pixel (IWICPixelFormatInfo2) ---------------------
+//
+// Paint.NET lit les caractéristiques d'un format (bits par pixel, canaux,
+// transparence) par CreateComponentInfo(GUID du format) (#1503). Ordre des
+// méthodes, IID, GUID et valeurs d'énumération : wincodec.h des en-têtes
+// mingw-w64.
+
+const IID_PIXEL_FORMAT_INFO: Guid = guid(
+    0xe8eda601,
+    0x3d48,
+    0x431a,
+    [0xab, 0x44, 0x69, 0x05, 0x9b, 0xe8, 0x8b, 0xbe],
+);
+const IID_PIXEL_FORMAT_INFO2: Guid = guid(
+    0xa9db33a2,
+    0xaf5f,
+    0x43c7,
+    [0xb6, 0x79, 0x74, 0xf5, 0x98, 0x4b, 0x5a, 0xa4],
+);
+/// WICComponentType::WICPixelFormat.
+const WIC_PIXEL_FORMAT: u32 = 0x20;
+/// WICPixelFormatNumericRepresentation.
+const NUM_INDEXED: u32 = 1;
+const NUM_UNSIGNED: u32 = 2;
+const NUM_FIXED: u32 = 4;
+const NUM_FLOAT: u32 = 5;
+
+/// Description d'un format : GUID, nom, bits par pixel, nombre de canaux,
+/// bits par canal (0 : champs irréguliers, voir `irregular_fields`),
+/// représentation numérique et présence d'un canal alpha.
+struct PixelFormatDesc {
+    guid: Guid,
+    name: &'static str,
+    bpp: u32,
+    channels: u32,
+    bpc: u32,
+    numeric: u32,
+    alpha: bool,
+}
+
+const fn pf(
+    guid: Guid,
+    name: &'static str,
+    bpp: u32,
+    channels: u32,
+    bpc: u32,
+    numeric: u32,
+    alpha: bool,
+) -> PixelFormatDesc {
+    PixelFormatDesc {
+        guid,
+        name,
+        bpp,
+        channels,
+        bpc,
+        numeric,
+        alpha,
+    }
+}
+
+pub const FMT_ALPHA8: Guid = guid(
+    0xe6cd0116,
+    0xeeba,
+    0x4161,
+    [0xaa, 0x85, 0x27, 0xdd, 0x9f, 0xb3, 0xa8, 0x95],
+);
+const FMT_BGRA5551: Guid = guid(
+    0x05ec7c2b,
+    0xf1e6,
+    0x4961,
+    [0xad, 0x46, 0xe1, 0xcc, 0x81, 0x0a, 0x87, 0xd2],
+);
+
+static PIXEL_FORMATS: &[PixelFormatDesc] = {
+    use wic_pixels::*;
+    &[
+        pf(
+            pixel_format(0x01),
+            "1bpp Indexed",
+            1,
+            1,
+            1,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x02),
+            "2bpp Indexed",
+            2,
+            1,
+            2,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x03),
+            "4bpp Indexed",
+            4,
+            1,
+            4,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x04),
+            "8bpp Indexed",
+            8,
+            1,
+            8,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x05),
+            "Black White",
+            1,
+            1,
+            1,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x06),
+            "2bpp Gray",
+            2,
+            1,
+            2,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x07),
+            "4bpp Gray",
+            4,
+            1,
+            4,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_GRAY8, "8bpp Gray", 8, 1, 8, NUM_UNSIGNED, false),
+        pf(FMT_ALPHA8, "8bpp Alpha", 8, 1, 8, NUM_UNSIGNED, true),
+        pf(
+            pixel_format(0x09),
+            "16bpp BGR555",
+            16,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x0a),
+            "16bpp BGR565",
+            16,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_BGRA5551, "16bpp BGRA5551", 16, 4, 0, NUM_UNSIGNED, true),
+        pf(FMT_GRAY16, "16bpp Gray", 16, 1, 16, NUM_UNSIGNED, false),
+        pf(
+            FMT_GRAY_HALF16,
+            "16bpp Gray Half",
+            16,
+            1,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            pixel_format(0x13),
+            "16bpp Gray FixedPoint",
+            16,
+            1,
+            16,
+            NUM_FIXED,
+            false,
+        ),
+        pf(FMT_BGR24, "24bpp BGR", 24, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_RGB24, "24bpp RGB", 24, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_BGR32, "32bpp BGR", 32, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_RGB32, "32bpp RGB", 32, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_BGRA32, "32bpp BGRA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_PBGRA32, "32bpp PBGRA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_RGBA32, "32bpp RGBA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_PRGBA32, "32bpp PRGBA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(
+            pixel_format(0x14),
+            "32bpp BGR101010",
+            32,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            FMT_GRAY_FLOAT32,
+            "32bpp Gray Float",
+            32,
+            1,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            pixel_format(0x3f),
+            "32bpp Gray FixedPoint",
+            32,
+            1,
+            32,
+            NUM_FIXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x1c),
+            "32bpp CMYK",
+            32,
+            4,
+            8,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_RGB48, "48bpp RGB", 48, 3, 16, NUM_UNSIGNED, false),
+        pf(FMT_BGR48, "48bpp BGR", 48, 3, 16, NUM_UNSIGNED, false),
+        pf(
+            FMT_RGB_HALF48,
+            "48bpp RGB Half",
+            48,
+            3,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(FMT_RGB64, "64bpp RGB", 64, 3, 16, NUM_UNSIGNED, false),
+        pf(FMT_RGBA64, "64bpp RGBA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_BGRA64, "64bpp BGRA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_PRGBA64, "64bpp PRGBA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_PBGRA64, "64bpp PBGRA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(
+            FMT_RGB_HALF64,
+            "64bpp RGB Half",
+            64,
+            3,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGBA_HALF64,
+            "64bpp RGBA Half",
+            64,
+            4,
+            16,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            FMT_PRGBA_HALF64,
+            "64bpp PRGBA Half",
+            64,
+            4,
+            16,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            pixel_format(0x1f),
+            "64bpp CMYK",
+            64,
+            4,
+            16,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            FMT_RGB_FLOAT96,
+            "96bpp RGB Float",
+            96,
+            3,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGB_FLOAT128,
+            "128bpp RGB Float",
+            128,
+            3,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGBA_FLOAT128,
+            "128bpp RGBA Float",
+            128,
+            4,
+            32,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            FMT_PRGBA_FLOAT128,
+            "128bpp PRGBA Float",
+            128,
+            4,
+            32,
+            NUM_FLOAT,
+            true,
+        ),
+    ]
+};
+
+/// Champs (premier bit, largeur) des formats aux canaux de tailles inégales,
+/// dans l'ordre des canaux du nom (bits de poids faible d'abord).
+fn irregular_fields(fmt: &Guid) -> &'static [(u32, u32)] {
+    if *fmt == pixel_format(0x09) {
+        &[(0, 5), (5, 5), (10, 5)]
+    } else if *fmt == pixel_format(0x0a) {
+        &[(0, 5), (5, 6), (11, 5)]
+    } else if *fmt == FMT_BGRA5551 {
+        &[(0, 5), (5, 5), (10, 5), (15, 1)]
+    } else if *fmt == pixel_format(0x14) {
+        &[(0, 10), (10, 10), (20, 10)]
+    } else {
+        &[]
+    }
+}
+
+/// Masque d'un canal : `bpp / 8` octets (arrondi au-dessus), petit-boutiste.
+fn channel_mask(d: &PixelFormatDesc, index: u32) -> Option<Vec<u8>> {
+    if index >= d.channels {
+        return None;
+    }
+    let (start, width) = if d.bpc == 0 {
+        *irregular_fields(&d.guid).get(index as usize)?
+    } else {
+        (index * d.bpc, d.bpc)
+    };
+    let mut mask = vec![0u8; d.bpp.div_ceil(8) as usize];
+    for bit in start..start + width {
+        mask[(bit / 8) as usize] |= 1 << (bit % 8);
+    }
+    Some(mask)
+}
+
+type PixelInfoObj = Com<usize>;
+
+unsafe fn pixel_desc(this: *mut PixelInfoObj) -> &'static PixelFormatDesc {
+    &PIXEL_FORMATS[*Com::get(this)]
+}
+
+unsafe extern "win64" fn pfi_qi(
+    this: *mut PixelInfoObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_COMPONENT_INFO,
+            IID_PIXEL_FORMAT_INFO,
+            IID_PIXEL_FORMAT_INFO2,
+        ],
+    )
+}
+unsafe extern "win64" fn pfi_component_type(_this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, WIC_PIXEL_FORMAT)
+}
+/// GetCLSID et GetFormatGUID rendent le GUID du format.
+unsafe extern "win64" fn pfi_guid(this: *mut PixelInfoObj, out: *mut Guid) -> i32 {
+    put_value(out, pixel_desc(this).guid)
+}
+unsafe extern "win64" fn pfi_friendly_name(
+    this: *mut PixelInfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string(pixel_desc(this).name, cch, buf, actual)
+}
+/// Contexte de couleur du format : sRGB.
+unsafe extern "win64" fn pfi_color_context(_this: *mut PixelInfoObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    put(
+        out,
+        Com::create(COLOR_CONTEXT_VT.ptr(), Mutex::new(ColorContext::Exif(1))),
+    )
+}
+unsafe extern "win64" fn pfi_bits_per_pixel(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).bpp)
+}
+unsafe extern "win64" fn pfi_channel_count(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).channels)
+}
+unsafe extern "win64" fn pfi_channel_mask(
+    this: *mut PixelInfoObj,
+    index: u32,
+    cb: u32,
+    buf: *mut u8,
+    actual: *mut u32,
+) -> i32 {
+    let Some(mask) = channel_mask(pixel_desc(this), index) else {
+        return E_INVALIDARG;
+    };
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    *actual = mask.len() as u32;
+    if buf.is_null() {
+        return S_OK;
+    }
+    if (cb as usize) < mask.len() {
+        return E_INVALIDARG;
+    }
+    std::ptr::copy_nonoverlapping(mask.as_ptr(), buf, mask.len());
+    S_OK
+}
+unsafe extern "win64" fn pfi_transparency(this: *mut PixelInfoObj, out: *mut i32) -> i32 {
+    put_value(out, pixel_desc(this).alpha as i32)
+}
+unsafe extern "win64" fn pfi_numeric(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).numeric)
+}
+
+static PIXEL_FORMAT_INFO_VT: VTable<18> = VTable([
+    pfi_qi as *const (),
+    add_ref::<usize> as *const (),
+    release::<usize> as *const (),
+    pfi_component_type as *const (),
+    pfi_guid as *const (), // GetCLSID
+    info_signing as *const (),
+    info_author as *const (),
+    info_vendor as *const (),
+    info_version as *const (),
+    info_version as *const (), // GetSpecVersion
+    pfi_friendly_name as *const (),
+    pfi_guid as *const (), // GetFormatGUID
+    pfi_color_context as *const (),
+    pfi_bits_per_pixel as *const (),
+    pfi_channel_count as *const (),
+    pfi_channel_mask as *const (),
+    pfi_transparency as *const (),
+    pfi_numeric as *const (),
+]);
+
+/// IWICImagingFactory::CreateComponentInfo : décodeurs intégrés et formats
+/// de pixel (#1503).
 unsafe extern "win64" fn create_component_info(
     _this: *mut c_void,
     clsid: *const Guid,
@@ -1441,7 +2234,10 @@ unsafe extern "win64" fn create_component_info(
     }
     match CODECS.iter().position(|c| c.clsid == *clsid) {
         Some(i) => new_codec_info(i, out),
-        None => WINCODEC_ERR_COMPONENTNOTFOUND,
+        None => match PIXEL_FORMATS.iter().position(|p| p.guid == *clsid) {
+            Some(i) => put(out, Com::create(PIXEL_FORMAT_INFO_VT.ptr(), i)),
+            None => WINCODEC_ERR_COMPONENTNOTFOUND,
+        },
     }
 }
 
@@ -1752,6 +2548,7 @@ enum Kind {
     Frame,
     Bitmap,
     Converter,
+    ColorTransform,
     Scaler,
     Clipper,
     FlipRotator,
@@ -1774,6 +2571,7 @@ unsafe extern "win64" fn source_qi(
         Kind::Frame => IID_BITMAP_FRAME_DECODE,
         Kind::Bitmap => IID_BITMAP,
         Kind::Converter => IID_FORMAT_CONVERTER,
+        Kind::ColorTransform => IID_COLOR_TRANSFORM,
         Kind::Scaler => IID_BITMAP_SCALER,
         Kind::Clipper => IID_BITMAP_CLIPPER,
         Kind::FlipRotator => IID_BITMAP_FLIP_ROTATOR,
@@ -2110,6 +2908,86 @@ source_vtable!(
     [converter_initialize, converter_can_convert]
 );
 source_vtable!(TRANSFORM_VT, 9, [transform_initialize]);
+source_vtable!(COLOR_TRANSFORM_VT, 9, [color_transform_initialize]);
+
+/// IWICColorTransform {B66F034F-D0E2-40AB-B436-6DE39E321A94} (wincodec.h).
+const IID_COLOR_TRANSFORM: Guid = guid(
+    0xb66f_034f,
+    0xd0e2,
+    0x40ab,
+    [0xb4, 0x36, 0x6d, 0xe3, 0x9e, 0x32, 0x1a, 0x94],
+);
+
+/// Profil matrice + courbes d'un IWICColorContext de Winlux.
+unsafe fn context_shaper(ctx: *mut c_void) -> Option<crate::dlls::icc::Shaper> {
+    if ctx.is_null() || !std::ptr::eq(*(ctx as *const *const ()), COLOR_CONTEXT_VT.ptr()) {
+        return None;
+    }
+    match &*crate::dlls::lock(Com::get(ctx as *mut ColorContextObj)) {
+        ColorContext::Profile(bytes) => crate::dlls::icc::shaper(bytes),
+        ColorContext::Exif(1) => crate::dlls::icc::shaper(&crate::dlls::icc::srgb()),
+        ColorContext::Exif(2) => Some(crate::dlls::icc::adobe_rgb_shaper()),
+        _ => None,
+    }
+}
+
+/// IWICColorTransform::Initialize : convertit la source du profil source
+/// au profil de destination (profils RVB matrice + courbes), puis au
+/// format demandé (#1384). Les profils non lus (tables LUT…) laissent les
+/// couleurs telles quelles, avec un avertissement.
+unsafe extern "win64" fn color_transform_initialize(
+    this: *mut SourceObj,
+    src: *mut c_void,
+    ctx_src: *mut c_void,
+    ctx_dst: *mut c_void,
+    fmt: *const Guid,
+) -> i32 {
+    if src.is_null() || ctx_src.is_null() || ctx_dst.is_null() || fmt.is_null() {
+        return E_INVALIDARG;
+    }
+    if bytes_per_pixel(&*fmt).is_none() {
+        crate::log_warn!(
+            "wic",
+            "ColorTransform : format de pixel {} non pris en charge",
+            format_name(&*fmt)
+        );
+        return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+    }
+    let pix = match read_source(src) {
+        Ok(p) => p,
+        Err(hr) => return hr,
+    };
+    let transform = match (context_shaper(ctx_src), context_shaper(ctx_dst)) {
+        (Some(a), Some(b)) => crate::dlls::icc::Transform::new(a, b),
+        _ => None,
+    };
+    let Some(transform) = transform else {
+        crate::log_warn!(
+            "wic",
+            "ColorTransform : profil non matrice + courbes, couleurs inchangées"
+        );
+        let Some(p) = pix.convert(*fmt) else {
+            return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+        };
+        *crate::dlls::lock(&Com::get(this).pix) = Some(p);
+        return S_OK;
+    };
+    let raw: Vec<[f32; 4]> = pix
+        .to_raw()
+        .into_iter()
+        .map(|c| {
+            let o = transform.apply([c[0], c[1], c[2]]);
+            [o[0], o[1], o[2], c[3]]
+        })
+        .collect();
+    match Pix::from_raw(pix.w, pix.h, &raw, *fmt, pix.dpi) {
+        Some(p) => {
+            *crate::dlls::lock(&Com::get(this).pix) = Some(p);
+            S_OK
+        }
+        None => WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT,
+    }
+}
 
 // --- Verrou de bitmap -----------------------------------------------------------------
 
@@ -2567,6 +3445,70 @@ mod tests {
         f
     }
 
+    /// Paint.NET (ImagingFactoryWrapper, ColorContexts.Srgb) : la fabrique
+    /// répond à IWICComponentFactory, puis crée des contextes de couleur
+    /// (#1343).
+    #[test]
+    fn fabrique_de_composants_et_contextes_de_couleur() {
+        type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+        type InitU32 = unsafe extern "win64" fn(*mut c_void, u32) -> i32;
+        type GetU32 = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+        type InitMem = unsafe extern "win64" fn(*mut c_void, *const u8, u32) -> i32;
+        type Bytes = unsafe extern "win64" fn(*mut c_void, u32, *mut u8, *mut u32) -> i32;
+        unsafe {
+            let f = factory();
+            let mut cf = std::ptr::null_mut();
+            assert_eq!(method::<Qi>(f, 0)(f, &IID_COMPONENT_FACTORY, &mut cf), S_OK);
+            assert!(!cf.is_null());
+            // La facette a 35 cases : la 15 est CreateColorContext.
+            let mut back = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(cf, 0)(cf, &IID_COMPONENT_FACTORY, &mut back),
+                S_OK
+            );
+            assert_eq!(back, cf);
+            release_obj(back);
+            let mut f2 = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(cf, 0)(cf, &IID_IMAGING_FACTORY2, &mut f2),
+                S_OK
+            );
+            release_obj(f2);
+            let mut cc = std::ptr::null_mut();
+            assert_eq!(method::<Create>(cf, 15)(cf, &mut cc), S_OK);
+            let mut kind = 9;
+            assert_eq!(method::<GetU32>(cc, 6)(cc, &mut kind), S_OK);
+            assert_eq!(kind, 0);
+            // sRGB par l'espace EXIF.
+            assert_eq!(method::<InitU32>(cc, 5)(cc, 1), S_OK);
+            assert_eq!(method::<GetU32>(cc, 6)(cc, &mut kind), S_OK);
+            assert_eq!(kind, COLOR_CONTEXT_EXIF);
+            let mut exif = 0;
+            assert_eq!(method::<GetU32>(cc, 8)(cc, &mut exif), S_OK);
+            assert_eq!(exif, 1);
+            assert_eq!(method::<InitU32>(cc, 5)(cc, 7), E_INVALIDARG);
+            // Profil ICC en mémoire, relu octet pour octet.
+            let profil = [1u8, 2, 3, 4, 5];
+            assert_eq!(method::<InitMem>(cc, 4)(cc, profil.as_ptr(), 5), S_OK);
+            let mut n = 0;
+            assert_eq!(
+                method::<Bytes>(cc, 7)(cc, 0, std::ptr::null_mut(), &mut n),
+                S_OK
+            );
+            assert_eq!(n, 5);
+            let mut lu = [0u8; 5];
+            assert_eq!(method::<Bytes>(cc, 7)(cc, 5, lu.as_mut_ptr(), &mut n), S_OK);
+            assert_eq!(lu, profil);
+            release_obj(cc);
+            // La fabrique principale crée aussi des contextes.
+            let mut cc2 = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 15)(f, &mut cc2), S_OK);
+            release_obj(cc2);
+            release_obj(cf);
+            release_obj(f);
+        }
+    }
+
     /// #1063 : PresentationCore appelle WIC par les fonctions exportées
     /// `Interface_Method_Proxy` ; elles doivent atteindre la bonne case de la
     /// table de l'objet.
@@ -2889,6 +3831,81 @@ mod tests {
         }
     }
 
+    /// #1384 : Paint.NET (ColorProfile.CanWicColorConvertFrom) crée un
+    /// bitmap flottant puis le convertit d'un profil à l'autre.
+    #[test]
+    fn bitmap_flottant_et_transformation_de_couleur() {
+        use crate::dlls::wic_pixels::{FMT_PRGBA_FLOAT128, FMT_RGBA64, FMT_RGBA_FLOAT128};
+        type CreateBmp = unsafe extern "win64" fn(
+            *mut c_void,
+            u32,
+            u32,
+            *const Guid,
+            u32,
+            *mut *mut c_void,
+        ) -> i32;
+        type InitU32 = unsafe extern "win64" fn(*mut c_void, u32) -> i32;
+        type InitMem = unsafe extern "win64" fn(*mut c_void, *const u8, u32) -> i32;
+        type Init = unsafe extern "win64" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *const Guid,
+        ) -> i32;
+        type Copy = unsafe extern "win64" fn(*mut c_void, *const WicRect, u32, u32, *mut u8) -> i32;
+        unsafe {
+            let f = factory();
+            for fmt in [FMT_RGBA_FLOAT128, FMT_PRGBA_FLOAT128, FMT_RGBA64] {
+                let mut bmp = std::ptr::null_mut();
+                assert_eq!(method::<CreateBmp>(f, 17)(f, 2, 1, &fmt, 0, &mut bmp), S_OK);
+                release_obj(bmp);
+            }
+            // Un format inconnu reste refusé.
+            let mut bmp = std::ptr::null_mut();
+            let inconnu = guid(1, 2, 3, [4; 8]);
+            assert_eq!(
+                method::<CreateBmp>(f, 17)(f, 1, 1, &inconnu, 0, &mut bmp),
+                WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT
+            );
+            // Gris sRGB 50 % → scRGB (profil linéaire) en flottant : ≈ 0,214.
+            let src =
+                Pix::from_rgba(1, 1, &[128, 128, 128, 255], FMT_BGRA32, (96.0, 96.0)).unwrap();
+            let mut sb = std::ptr::null_mut();
+            assert_eq!(new_source(Kind::Bitmap, Some(src), &mut sb), S_OK);
+            let (mut cs, mut cd) = (std::ptr::null_mut(), std::ptr::null_mut());
+            assert_eq!(method::<Create>(f, 15)(f, &mut cs), S_OK);
+            assert_eq!(method::<Create>(f, 15)(f, &mut cd), S_OK);
+            assert_eq!(method::<InitU32>(cs, 5)(cs, 1), S_OK);
+            let lin = crate::dlls::icc::scrgb();
+            assert_eq!(
+                method::<InitMem>(cd, 4)(cd, lin.as_ptr(), lin.len() as u32),
+                S_OK
+            );
+            let mut t = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 16)(f, &mut t), S_OK);
+            assert_eq!(
+                method::<Init>(t, 8)(t, sb, cs, cd, &FMT_RGBA_FLOAT128),
+                S_OK
+            );
+            let mut px = [0u8; 16];
+            assert_eq!(
+                method::<Copy>(t, 7)(t, std::ptr::null(), 16, 16, px.as_mut_ptr()),
+                S_OK
+            );
+            let r = f32::from_le_bytes(px[0..4].try_into().unwrap());
+            let a = f32::from_le_bytes(px[12..16].try_into().unwrap());
+            assert!((r - 0.2158).abs() < 0.003, "{r}");
+            assert_eq!(a, 1.0);
+            // Conversion de format seule : flottant linéaire → BGRA sRGB.
+            let p = read_source(t).unwrap().convert(FMT_BGRA32).unwrap();
+            assert!((p.data[0] as i32 - 128).abs() <= 1, "{}", p.data[0]);
+            for o in [t, cs, cd, sb, f] {
+                release_obj(o);
+            }
+        }
+    }
+
     #[test]
     fn rotation_miroir_et_mise_a_l_echelle() {
         // 2×1 : rouge puis vert.
@@ -2945,5 +3962,87 @@ mod tests {
         assert!(creator(&CLSID_WIC_IMAGING_FACTORY).is_some());
         assert!(creator(&CLSID_WIC_IMAGING_FACTORY1).is_some());
         assert!(creator(&IID_IMAGING_FACTORY).is_none());
+    }
+
+    /// #1503 : Paint.NET lit bits par pixel, canaux et transparence d'un
+    /// format par CreateComponentInfo(GUID du format).
+    #[test]
+    fn informations_de_format_de_pixel() {
+        unsafe {
+            let mut f = std::ptr::null_mut();
+            assert_eq!(create_factory(&IID_IMAGING_FACTORY, &mut f), S_OK);
+            type ById = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            type GetU32 = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+            type GetGuid = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+            type Mask = unsafe extern "win64" fn(*mut c_void, u32, u32, *mut u8, *mut u32) -> i32;
+            let mut info = std::ptr::null_mut();
+            assert_eq!(method::<ById>(f, 6)(f, &FMT_PBGRA32, &mut info), S_OK);
+            let mut info2 = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(info, 0)(info, &IID_PIXEL_FORMAT_INFO2, &mut info2),
+                S_OK
+            );
+            release_obj(info);
+            let mut v = 0u32;
+            assert_eq!(method::<GetU32>(info2, 3)(info2, &mut v), S_OK);
+            assert_eq!(v, WIC_PIXEL_FORMAT);
+            let mut g = Guid::default();
+            assert_eq!(method::<GetGuid>(info2, 11)(info2, &mut g), S_OK);
+            assert_eq!(g, FMT_PBGRA32);
+            assert_eq!(method::<GetU32>(info2, 13)(info2, &mut v), S_OK);
+            assert_eq!(v, 32);
+            assert_eq!(method::<GetU32>(info2, 14)(info2, &mut v), S_OK);
+            assert_eq!(v, 4);
+            let mut len = 0u32;
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 3, 0, std::ptr::null_mut(), &mut len),
+                S_OK
+            );
+            assert_eq!(len, 4);
+            let mut mask = [0u8; 4];
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 3, 4, mask.as_mut_ptr(), &mut len),
+                S_OK
+            );
+            assert_eq!(mask, [0, 0, 0, 0xff]);
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 4, 4, mask.as_mut_ptr(), &mut len),
+                E_INVALIDARG
+            );
+            assert_eq!(method::<GetU32>(info2, 16)(info2, &mut v), S_OK);
+            assert_eq!(v, 1);
+            assert_eq!(method::<GetU32>(info2, 17)(info2, &mut v), S_OK);
+            assert_eq!(v, NUM_UNSIGNED);
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(method::<Create>(info2, 12)(info2, &mut ctx), S_OK);
+            assert!(!ctx.is_null());
+            release_obj(ctx);
+            release_obj(info2);
+            // Champs inégaux et format flottant sans alpha.
+            let mut i565 = std::ptr::null_mut();
+            assert_eq!(
+                method::<ById>(f, 6)(f, &pixel_format(0x0a), &mut i565),
+                S_OK
+            );
+            let mut m = [0u8; 2];
+            assert_eq!(
+                method::<Mask>(i565, 15)(i565, 1, 2, m.as_mut_ptr(), &mut len),
+                S_OK
+            );
+            assert_eq!(u16::from_le_bytes(m), 0x07e0);
+            release_obj(i565);
+            let mut fl = std::ptr::null_mut();
+            assert_eq!(
+                method::<ById>(f, 6)(f, &wic_pixels::FMT_RGB_FLOAT128, &mut fl),
+                S_OK
+            );
+            assert_eq!(method::<GetU32>(fl, 16)(fl, &mut v), S_OK);
+            assert_eq!(v, 0);
+            assert_eq!(method::<GetU32>(fl, 17)(fl, &mut v), S_OK);
+            assert_eq!(v, NUM_FLOAT);
+            release_obj(fl);
+            release_obj(f);
+        }
     }
 }

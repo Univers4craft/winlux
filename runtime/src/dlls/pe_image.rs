@@ -129,6 +129,22 @@ pub unsafe fn redirect_service(info: *const libc::siginfo_t, uc: *mut libc::ucon
 /// Réserve `size` octets à la prochaine adresse fixe de la région, ou
 /// ailleurs si elle est prise.
 fn map_image(size: usize) -> *mut libc::c_void {
+    // Programme x86 : tout l'espace au-dessus de 4 Go est réservé, la région
+    // fixe n'y est jamais libre et l'image doit de toute façon rester sous
+    // 4 Go. Chaque image donnait sinon un avertissement (224 pour un
+    // programme PyInstaller 32 bits, #1383).
+    if crate::wow32::active() {
+        return unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+    }
     let span = size.div_ceil(GRANULARITY) * GRANULARITY;
     let want = NEXT_IMAGE.fetch_add(span, std::sync::atomic::Ordering::Relaxed);
     unsafe {
@@ -146,6 +162,11 @@ fn map_image(size: usize) -> *mut libc::c_void {
         if p != libc::MAP_FAILED {
             libc::munmap(p, size);
         }
+        // Le bac à sable de Chromium suppose la même adresse dans l'enfant.
+        crate::log_warn!(
+            "pe",
+            "image intégrée hors de sa région fixe ({want:#x} occupée)"
+        );
         libc::mmap(
             std::ptr::null_mut(),
             size,

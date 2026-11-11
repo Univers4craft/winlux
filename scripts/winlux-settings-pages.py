@@ -1181,6 +1181,13 @@ def clipboard_tool():
 DISPLAY_SCALES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
 
 
+def display_signature(status):
+    """Ce qui fait la page Écran : écrans branchés, disposition, principal,
+    définitions… Change au branchement ou au débranchement d’un écran, et la
+    page se reconstruit seule (#1442)."""
+    return tuple(sorted((k, v) for k, v in status.items() if k.startswith("display_")))
+
+
 def rate_label(rate):
     """« 143.97 » → « 144 Hz », comme Windows."""
     try: return f"{round(float(rate))} Hz"
@@ -2157,6 +2164,10 @@ class ExtraPages:
 
     def confirm(self, text):
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL, text=text)
+        # Prudence : Entrée annule (#1558), il faut cliquer pour confirmer.
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        cancel = dialog.get_widget_for_response(Gtk.ResponseType.CANCEL)
+        if cancel is not None: cancel.grab_focus()
         answer = dialog.run()
         dialog.destroy()
         return answer == Gtk.ResponseType.OK
@@ -3309,6 +3320,7 @@ class ExtraPages:
         else:
             self.row(box, _t("Code PIN"), None, _t("Un code chiffré, propre à ce PC, pour vous connecter plus vite. Votre mot de passe reste valable."))
             self.actions(box, [(_t("Configurer"), lambda: self.pin_dialog(me, False))])
+        self.watch_signin_reader(me, bool(status.get("reader")))
         if not status.get("reader"): return
         box = self.card()
         count = int(status.get("fingers") or 0)
@@ -3320,6 +3332,40 @@ class ExtraPages:
         self.row(box, _t("Reconnaissance d’empreinte digitale"), None, subtitle)
         self.actions(box, [(_t("Ajouter un doigt") if count else _t("Configurer"), lambda: self.finger_enroll(me), count < 10),
                            (_t("Supprimer"), lambda: self.signin_remove(me, "fp-delete"), count > 0)])
+
+    SIGNIN_WATCH_MS = 3000
+
+    def watch_signin_reader(self, me, shown):
+        """Lecteur d’empreintes branché ou retiré (ou simulateur activé) page
+        ouverte : la carte empreinte apparaît ou disparaît seule (#1500).
+        L’état est demandé au relais hors du fil GTK, une demande à la fois."""
+        self._signin_reader = shown
+        if getattr(self, "_signin_watch", None): return
+        import threading
+        busy = []
+
+        def check():
+            if self.page != PAGE_ACCOUNTS:
+                self._signin_watch = None
+                return False
+            if busy: return True
+            busy.append(True)
+
+            def work():
+                module = signin_module()
+                status = (module.client_status(me) if module is not None else None) or {}
+
+                def apply():
+                    busy.clear()
+                    if self._signin_watch and self.page == PAGE_ACCOUNTS \
+                            and bool(status.get("reader")) != self._signin_reader:
+                        self._signin_reader = bool(status.get("reader"))
+                        self.extra_refresh()
+                    return False
+                GLib.idle_add(apply)
+            threading.Thread(target=work, daemon=True).start()
+            return True
+        self._signin_watch = GLib.timeout_add(self.SIGNIN_WATCH_MS, check)
 
     def signin_dialog(self, title, fields, intro=None):
         """Boîte à champs masqués ; renvoie (dialogue, champs, étiquette d’erreur)."""
@@ -3339,7 +3385,10 @@ class ExtraPages:
             widget.get_accessible().set_name(label)
             area.pack_start(widget, False, False, 0)
             widgets[key] = widget
-        error = Gtk.Label(xalign=0, wrap=True)
+        # Place réservée pour trois lignes de message : la boîte garde sa
+        # taille et Valider ne bouge pas quand une erreur s’affiche (#1501).
+        error = Gtk.Label(xalign=0, yalign=0, wrap=True, width_chars=44, max_width_chars=44)
+        error.set_size_request(-1, error.create_pango_layout("\n\n").get_pixel_size()[1])
         area.pack_start(error, False, False, 0)
         dialog.show_all()
         return dialog, widgets, error

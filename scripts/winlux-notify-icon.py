@@ -86,6 +86,38 @@ def own_menu(key, event=None):
 
 OPEN_MENUS = []
 BUTTONS = {1: "l", 2: "m", 3: "r"}
+TIPS = {}      # clé → texte de l'infobulle
+QUIET = set()  # clés dont l'infobulle est retirée depuis un clic
+
+def pointer_on(icon):
+    """Le pointeur est-il sur l'icône ?"""
+    try:
+        found, _screen, area, _orientation = icon.get_geometry()
+        _screen, x, y = Gdk.Display.get_default().get_default_seat().get_pointer().get_position()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return bool(found) and area.x <= x < area.x + area.width and area.y <= y < area.y + area.height
+
+def quiet_tooltip(key):
+    """Clic sur l'icône : l'infobulle s'efface, comme sous Windows, pour ne
+    pas rester par-dessus le menu du programme. Elle revient une fois le
+    pointeur sorti de l'icône (#1371)."""
+    icon = ICONS.get(key)
+    if icon is None: return
+    icon.set_has_tooltip(False)
+    if key not in QUIET:
+        QUIET.add(key)
+        GLib.timeout_add(300, tooltip_back, key)
+
+def tooltip_back(key):
+    icon = ICONS.get(key)
+    if icon is None:
+        QUIET.discard(key)
+        return False
+    if pointer_on(icon): return True  # encore sur l'icône : on attend
+    QUIET.discard(key)
+    icon.set_tooltip_text(TIPS.get(key, ""))
+    return False
 
 def emit(key, event, x=0, y=0):
     try:
@@ -112,6 +144,7 @@ def program_name(executable):
 def pressed(icon, event, key):
     prefix = BUTTONS.get(event.button)
     if prefix is None: return False
+    quiet_tooltip(key)
     if prefix == "r" and event.state & Gdk.ModifierType.SHIFT_MASK:
         own_menu(key, event)  # Maj + clic droit : menu de Winlux, pas celui du programme
         return True
@@ -148,12 +181,15 @@ def apply(fields):
             if pixbuf is not None: icon.set_from_pixbuf(pixbuf)
             else: icon.set_from_icon_name("application-x-executable")
             icon.set_title(Path(executable).stem or "Winlux")
-        icon.set_tooltip_text(tip or Path(executable).stem)
+        TIPS[key] = tip or Path(executable).stem
+        if key not in QUIET:  # pendant un menu, le texte attend le retour de l'infobulle
+            icon.set_tooltip_text(TIPS[key])
         icon.set_visible(visible == "1")
     elif command == "menu" and len(fields) >= 2 and fields[1] in ICONS:
         own_menu(fields[1])  # programme sans menu (pas de message de rappel)
     elif command == "delete" and len(fields) >= 2:
         icon = ICONS.pop(fields[1], None)
+        TIPS.pop(fields[1], None)
         if icon is not None: icon.set_visible(False)
     elif command == "balloon" and len(fields) >= 5:
         key, title, text, flags = fields[1:5]

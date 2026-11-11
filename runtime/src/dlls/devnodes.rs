@@ -15,7 +15,7 @@
 //!   de l'appareil `USB\VID_v&PID_p\<numéro de série>` lu dans sysfs ;
 //! - un port intégré (`ttyS*`) : `ACPI\PNP0501\n` ; un `WINLUX_COMn` :
 //!   `ROOT\PORTS\000n` ;
-//! - un périphérique hidraw : `HID\VID_v&PID_p\HIDRAWn`.
+//! - une collection de tête hidraw : `HID\VID_v&PID_p[&MI_nn][&COLcc]\HIDRAWn`.
 //!
 //! Un DEVINST est l'indice (plus un) de l'identifiant dans une table qui ne
 //! fait que grandir pendant la vie du processus, comme sous Windows.
@@ -77,6 +77,119 @@ pub const USB_CLASS: [u8; 16] = guid(
     [0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
 );
 
+/// {50127DC3-0F36-415E-A6CC-4CB3BE910B65} : classe Processor (#1370).
+pub const PROCESSOR_CLASS: [u8; 16] = guid(
+    0x50127DC3,
+    0x0F36,
+    0x415E,
+    [0xA6, 0xCC, 0x4C, 0xB3, 0xBE, 0x91, 0x0B, 0x65],
+);
+
+/// Classes d'installation connues : nom, GUID (devguid.h, en-têtes publics
+/// mingw-w64) et description (#1625).
+pub const CLASSES: &[(&str, [u8; 16], &str)] = &[
+    ("HIDClass", HID_CLASS, "Human Interface Devices"),
+    ("USB", USB_CLASS, "Universal Serial Bus controllers"),
+    ("Ports", PORTS_CLASS, "Ports (COM & LPT)"),
+    ("Processor", PROCESSOR_CLASS, "Processors"),
+    (
+        "Keyboard",
+        guid(
+            0x4D36E96B,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Keyboards",
+    ),
+    (
+        "Mouse",
+        guid(
+            0x4D36E96F,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Mice and other pointing devices",
+    ),
+    (
+        "MEDIA",
+        guid(
+            0x4D36E96C,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Sound, video and game controllers",
+    ),
+    (
+        "System",
+        guid(
+            0x4D36E97D,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "System devices",
+    ),
+    (
+        "Net",
+        guid(
+            0x4D36E972,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Network adapters",
+    ),
+    (
+        "Display",
+        guid(
+            0x4D36E968,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Display adapters",
+    ),
+    (
+        "USBDevice",
+        guid(
+            0x88BAE032,
+            0x5A81,
+            0x49F0,
+            [0xBC, 0x3D, 0xA4, 0xFF, 0x13, 0x82, 0x16, 0xD6],
+        ),
+        "Universal Serial Bus devices",
+    ),
+    (
+        "AudioEndpoint",
+        guid(
+            0xC166523C,
+            0xFE0C,
+            0x4A94,
+            [0xA5, 0x86, 0xF1, 0xA8, 0x0C, 0xFB, 0xBF, 0x3E],
+        ),
+        "Audio inputs and outputs",
+    ),
+];
+
+/// Classe connue par son nom (casse indifférente).
+pub fn class_by_name(name: &str) -> Option<[u8; 16]> {
+    CLASSES
+        .iter()
+        .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, g, _)| *g)
+}
+
+/// Nom et description d'une classe connue.
+pub fn class_by_guid(g: &[u8; 16]) -> Option<(&'static str, &'static str)> {
+    CLASSES
+        .iter()
+        .find(|(_, c, _)| c == g)
+        .map(|(n, _, d)| (*n, *d))
+}
+
 const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
     let a = a.to_le_bytes();
     let b = b.to_le_bytes();
@@ -87,7 +200,7 @@ const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
     ]
 }
 
-fn guid_text(g: &[u8; 16]) -> String {
+pub(crate) fn guid_text(g: &[u8; 16]) -> String {
     let a = u32::from_le_bytes([g[0], g[1], g[2], g[3]]);
     let b = u16::from_le_bytes([g[4], g[5]]);
     let c = u16::from_le_bytes([g[6], g[7]]);
@@ -95,6 +208,32 @@ fn guid_text(g: &[u8; 16]) -> String {
         "{{{a:08x}-{b:04x}-{c:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]
     )
+}
+
+/// Inverse de `guid_text` : `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`.
+pub fn parse_guid(t: &str) -> Option<[u8; 16]> {
+    let h: String = t.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if h.len() != 32 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok();
+    let mut g = [0u8; 16];
+    for (dst, src) in [
+        (0, 3),
+        (1, 2),
+        (2, 1),
+        (3, 0),
+        (4, 5),
+        (5, 4),
+        (6, 7),
+        (7, 6),
+    ] {
+        g[dst] = byte(src)?;
+    }
+    for (i, b) in g.iter_mut().enumerate().skip(8) {
+        *b = byte(i)?;
+    }
+    Some(g)
 }
 
 // ============================================================
@@ -140,6 +279,203 @@ pub enum Kind {
         usb: Option<Usb>,
     },
     UsbDevice(Usb),
+    /// Processeur logique, tiré de /proc/cpuinfo (#1370).
+    Processor(Cpu),
+    /// Appareil créé par un installeur (`SetupDiCreateDeviceInfo`, énuméré
+    /// sous ROOT\), inscrit dans le registre (#1605).
+    Virtual(Virtual),
+}
+
+/// Appareil créé par un installeur : ses identifiants et sa classe.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Virtual {
+    pub hardware_ids: Vec<String>,
+    pub compatible_ids: Vec<String>,
+    pub class: [u8; 16],
+    pub description: String,
+}
+
+const ENUM_ROOT: &str = "hklm\\SYSTEM\\CurrentControlSet\\Enum";
+
+fn multi_of(bytes: &[u8]) -> Vec<String> {
+    let w: Vec<u16> = (0..bytes.len() / 2)
+        .map(|i| u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]))
+        .collect();
+    String::from_utf16_lossy(&w)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn multi_bytes(v: &[String]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for s in v {
+        for u in s.encode_utf16().chain(std::iter::once(0)) {
+            out.extend_from_slice(&u.to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// Appareils inscrits par des installeurs (`Enum\ROOT\<nom>\<n>`).
+pub fn registered_virtual() -> Vec<Node> {
+    crate::registry::read(|d| {
+        let mut out = Vec::new();
+        let base = format!("{ENUM_ROOT}\\ROOT");
+        for name in d.subkeys(&base) {
+            for inst in d.subkeys(&format!("{base}\\{name}")) {
+                let path = format!("{base}\\{name}\\{inst}");
+                let Some(hw) = d.get(&path, "HardwareID") else {
+                    continue;
+                };
+                let text = |v: &str| {
+                    d.get(&path, v)
+                        .map(|v| crate::registry::string_of(&v.bytes))
+                        .unwrap_or_default()
+                };
+                out.push(Node {
+                    id: format!("ROOT\\{}\\{}", name.to_ascii_uppercase(), inst),
+                    parent: Some(ROOT.into()),
+                    kind: Kind::Virtual(Virtual {
+                        hardware_ids: multi_of(&hw.bytes),
+                        compatible_ids: d
+                            .get(&path, "CompatibleIDs")
+                            .map(|v| multi_of(&v.bytes))
+                            .unwrap_or_default(),
+                        class: parse_guid(&text("ClassGUID")).unwrap_or([0; 16]),
+                        description: text("DeviceDesc"),
+                    }),
+                });
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default()
+}
+
+/// Inscrit l'appareil créé dans le registre (DIF_REGISTERDEVICE).
+pub fn register_virtual(n: &Node) -> Result<(), u32> {
+    let Kind::Virtual(v) = &n.kind else {
+        return Err(87);
+    };
+    let path = format!("{ENUM_ROOT}\\{}", n.id);
+    crate::registry::write(|d| {
+        d.ensure(&path);
+        d.set(&path, "HardwareID", 7, multi_bytes(&v.hardware_ids));
+        if !v.compatible_ids.is_empty() {
+            d.set(&path, "CompatibleIDs", 7, multi_bytes(&v.compatible_ids));
+        }
+        d.set(
+            &path,
+            "ClassGUID",
+            1,
+            crate::registry::utf16z(&guid_text(&v.class)),
+        );
+        d.set(
+            &path,
+            "DeviceDesc",
+            1,
+            crate::registry::utf16z(&v.description),
+        );
+        Ok(())
+    })
+    .map_err(|e| e as u32)
+}
+
+/// Retire un appareil créé par un installeur (DIF_REMOVE).
+pub fn remove_virtual(id: &str) -> bool {
+    if !id.to_ascii_uppercase().starts_with("ROOT\\") {
+        return false;
+    }
+    let path = format!("{ENUM_ROOT}\\{id}");
+    crate::registry::write(|d| Ok(d.delete_tree(&path))).unwrap_or(false)
+}
+
+/// Prochain identifiant libre `ROOT\<NOM>\NNNN` (DICD_GENERATE_ID).
+pub fn generate_root_id(name: &str) -> String {
+    let name = name.to_ascii_uppercase();
+    let used: Vec<String> = registered_virtual().into_iter().map(|n| n.id).collect();
+    let pending: Vec<String> = crate::dlls::lock(&SETS)
+        .iter()
+        .flat_map(|(_, v)| v.iter().map(|n| n.id.clone()))
+        .collect();
+    (0..10_000)
+        .map(|i| format!("ROOT\\{name}\\{i:04}"))
+        .find(|id| {
+            !used
+                .iter()
+                .chain(&pending)
+                .any(|u| u.eq_ignore_ascii_case(id))
+        })
+        .unwrap_or_else(|| format!("ROOT\\{name}\\9999"))
+}
+
+/// Processeur logique : numéro, nom (« model name ») et fabricant.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cpu {
+    pub index: u32,
+    pub name: String,
+    pub vendor: String,
+}
+
+/// Processeurs logiques décrits par le texte de /proc/cpuinfo. Sur ARM,
+/// sans « model name », le nom vient de « Hardware » ou reste générique.
+pub fn parse_cpuinfo(text: &str) -> Vec<Cpu> {
+    let mut out: Vec<Cpu> = Vec::new();
+    let mut hardware = String::new();
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        match key {
+            "processor" => out.push(Cpu {
+                index: value.parse().unwrap_or(out.len() as u32),
+                ..Cpu::default()
+            }),
+            "model name" | "cpu model" => {
+                if let Some(c) = out.last_mut() {
+                    c.name = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                }
+            }
+            "vendor_id" | "CPU implementer" => {
+                if let Some(c) = out.last_mut() {
+                    c.vendor = value.to_string();
+                }
+            }
+            "Hardware" => hardware = value.to_string(),
+            _ => {}
+        }
+    }
+    for c in &mut out {
+        if c.name.is_empty() {
+            c.name = if hardware.is_empty() {
+                "Processeur".into()
+            } else {
+                hardware.clone()
+            };
+        }
+    }
+    out
+}
+
+fn processors() -> Vec<Cpu> {
+    let path = std::env::var_os("WINLUX_CPUINFO").unwrap_or_else(|| "/proc/cpuinfo".into());
+    std::fs::read_to_string(path)
+        .map(|t| parse_cpuinfo(&t))
+        .unwrap_or_default()
+}
+
+/// Fabricant affiché : « GenuineIntel » → Intel, « AuthenticAMD » → AMD.
+fn cpu_manufacturer(vendor: &str) -> &str {
+    match vendor {
+        "GenuineIntel" => "Intel",
+        "AuthenticAMD" | "HygonGenuine" => "AMD",
+        "" => "(Standard)",
+        v => v,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -240,12 +576,10 @@ pub fn nodes() -> Vec<Node> {
         parent: None,
         kind: Kind::Root,
     }];
-    for d in hid::devices() {
+    // Une interface par collection de tête, comme Windows (#1523).
+    for d in hid::interfaces() {
         out.push(Node {
-            id: format!(
-                "HID\\VID_{:04X}&PID_{:04X}\\HIDRAW{}",
-                d.vendor, d.product, d.index
-            ),
+            id: d.instance_id(),
             parent: Some(ROOT.into()),
             kind: Kind::Hid(d),
         });
@@ -259,6 +593,13 @@ pub fn nodes() -> Vec<Node> {
         }
         out.push(node);
     }
+    for c in processors() {
+        out.push(Node {
+            id: format!("ACPI\\ACPI0007\\{}", c.index),
+            parent: Some(ROOT.into()),
+            kind: Kind::Processor(c),
+        });
+    }
     // Les autres appareils USB (ceux que winusb ou libusb ouvrent).
     for u in usb_devices() {
         let id = u.device_id();
@@ -270,6 +611,8 @@ pub fn nodes() -> Vec<Node> {
             });
         }
     }
+    // Appareils créés par des installeurs de pilotes (#1605).
+    out.extend(registered_virtual());
     out
 }
 
@@ -331,6 +674,8 @@ impl Node {
             Kind::Hid(_) => HID_CLASS,
             Kind::Port { .. } => PORTS_CLASS,
             Kind::UsbDevice(_) | Kind::Root => USB_CLASS,
+            Kind::Processor(_) => PROCESSOR_CLASS,
+            Kind::Virtual(ref v) => v.class,
         }
     }
     fn interface(&self) -> Option<[u8; 16]> {
@@ -338,7 +683,7 @@ impl Node {
             Kind::Hid(_) => Some(HID_GUID),
             Kind::Port { .. } => Some(COMPORT_INTERFACE),
             Kind::UsbDevice(_) => Some(USB_DEVICE_INTERFACE),
-            Kind::Root => None,
+            Kind::Root | Kind::Processor(_) | Kind::Virtual(_) => None,
         }
     }
     /// Chemin rendu par `SetupDiGetDeviceInterfaceDetailW`.
@@ -355,19 +700,21 @@ impl Node {
                 self.id.to_ascii_lowercase().replace('\\', "#"),
                 guid_text(&USB_DEVICE_INTERFACE)
             )),
-            Kind::Root => None,
+            Kind::Root | Kind::Processor(_) | Kind::Virtual(_) => None,
         }
     }
     fn description(&self) -> String {
         match &self.kind {
             Kind::Root => "Racine".into(),
-            Kind::Hid(d) if d.name.is_empty() => "Périphérique HID".into(),
-            Kind::Hid(d) => d.name.clone(),
+            Kind::Hid(d) if d.product_string().is_empty() => "Périphérique HID".into(),
+            Kind::Hid(d) => d.product_string(),
             Kind::Port { usb: Some(u), .. } if !u.name.is_empty() => u.name.clone(),
             Kind::Port { usb: Some(_), .. } => "USB Serial Device".into(),
             Kind::Port { .. } => "Communications Port".into(),
             Kind::UsbDevice(u) if !u.name.is_empty() => u.name.clone(),
             Kind::UsbDevice(_) => "USB Composite Device".into(),
+            Kind::Processor(c) => c.name.clone(),
+            Kind::Virtual(v) => v.description.clone(),
         }
     }
     /// Propriété SPDRP_* : (type de registre, chaîne(s) UTF-16 terminées).
@@ -388,10 +735,22 @@ impl Node {
                 _ => sz(&self.description()),
             },
             1 => match &self.kind {
-                Kind::Hid(d) => multi(&[
-                    format!("HID\\VID_{:04X}&PID_{:04X}", d.vendor, d.product),
-                    "HID_DEVICE".into(),
-                ]),
+                Kind::Hid(d) => {
+                    let id = d.instance_id();
+                    let first = id.rsplit_once('\\').map(|x| x.0).unwrap_or(&id).to_string();
+                    let tlc = d.tlc();
+                    let mut v = vec![first];
+                    let plain = format!("HID\\VID_{:04X}&PID_{:04X}", d.vendor, d.product);
+                    if !v.contains(&plain) {
+                        v.push(plain);
+                    }
+                    v.push(format!(
+                        "HID_DEVICE_UP:{:04X}_U:{:04X}",
+                        tlc.usage_page, tlc.usage
+                    ));
+                    v.push("HID_DEVICE".into());
+                    multi(&v)
+                }
                 Kind::Port { usb: Some(u), .. } => multi(&[
                     format!(
                         "USB\\VID_{:04X}&PID_{:04X}&MI_{:02X}",
@@ -406,29 +765,41 @@ impl Node {
                     multi(&["ACPI\\PNP0501".into(), "*PNP0501".into()])
                 }
                 Kind::Port { .. } => multi(&["ROOT\\PORTS".into()]),
-                Kind::Root => return None,
+                Kind::Processor(_) => multi(&["ACPI\\ACPI0007".into(), "*ACPI0007".into()]),
+                Kind::Virtual(v) if !v.hardware_ids.is_empty() => multi(&v.hardware_ids),
+                Kind::Root | Kind::Virtual(_) => return None,
+            },
+            2 => match &self.kind {
+                Kind::Virtual(v) if !v.compatible_ids.is_empty() => multi(&v.compatible_ids),
+                _ => return None,
             },
             4 => sz(match &self.kind {
                 Kind::Hid(_) => "HidUsb",
                 Kind::Port { usb: Some(_), .. } => "usbser",
                 Kind::Port { .. } => "Serial",
                 Kind::UsbDevice(_) => "usbccgp",
-                Kind::Root => return None,
+                Kind::Processor(c) if c.vendor == "GenuineIntel" => "intelppm",
+                Kind::Processor(c) if c.vendor == "AuthenticAMD" => "amdppm",
+                Kind::Processor(_) => "Processor",
+                Kind::Root | Kind::Virtual(_) => return None,
             }),
             7 => sz(match self.kind {
                 Kind::Hid(_) => "HIDClass",
                 Kind::Port { .. } => "Ports",
+                Kind::Processor(_) => "Processor",
                 _ => "USB",
             }),
             8 => sz(&guid_text(&self.class())),
             0xB => match &self.kind {
-                Kind::Hid(d) => sz(d.name.split_whitespace().next().unwrap_or("(Standard)")),
+                Kind::Hid(d) if !d.manufacturer_string().is_empty() => sz(&d.manufacturer_string()),
+                Kind::Hid(_) => sz("(Standard)"),
                 Kind::Port { usb: Some(u), .. } | Kind::UsbDevice(u)
                     if !u.manufacturer.is_empty() =>
                 {
                     sz(&u.manufacturer)
                 }
                 Kind::Port { .. } => sz("(Types de ports standard)"),
+                Kind::Processor(c) => sz(cpu_manufacturer(&c.vendor)),
                 _ => sz("(Standard)"),
             },
             0xE => match &self.kind {
@@ -505,8 +876,9 @@ fn set_nodes(set: usize) -> Option<Vec<Node>> {
         .map(|(_, d)| d.clone())
 }
 
-/// `SetupDiGetClassDevs` : `None` pour une classe sans appareil connu
-/// (INVALID_HANDLE_VALUE, ce dont Electron et Chromium se contentent).
+/// `SetupDiGetClassDevs` : comme sous Windows, une classe sans appareil
+/// donne un ensemble vide, pas INVALID_HANDLE_VALUE (#1370). `None` reste
+/// pour un appel invalide (ni classe ni DIGCF_ALLCLASSES).
 pub fn get_class_devs(
     guid: Option<[u8; 16]>,
     enumerator: Option<&str>,
@@ -525,19 +897,8 @@ pub fn get_class_devs(
         // L'interface HID est acceptée dans les deux modes (SDL, hidapi).
         n.interface() == Some(g) || (!interfaces && n.class() == g)
     };
-    let known = all
-        || guid.is_some_and(|g| {
-            [
-                HID_GUID,
-                HID_CLASS,
-                PORTS_CLASS,
-                COMPORT_INTERFACE,
-                USB_CLASS,
-                USB_DEVICE_INTERFACE,
-            ]
-            .contains(&g)
-        });
-    if !known {
+    if !all && guid.is_none() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return None;
     }
     let list: Vec<Node> = nodes()
@@ -553,7 +914,67 @@ pub fn get_class_devs(
         .collect();
     let h = NEXT_SET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     crate::dlls::lock(&SETS).push((h, list));
+    crate::process::set_last_error(0);
     Some(h)
+}
+
+/// Nouvel ensemble vide (`SetupDiCreateDeviceInfoList`).
+pub fn new_set() -> usize {
+    let h = NEXT_SET.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crate::dlls::lock(&SETS).push((h, Vec::new()));
+    h
+}
+
+/// Ajoute un nœud à l'ensemble et remplit son SP_DEVINFO_DATA.
+pub unsafe fn add_to_set(set: usize, node: Node, data: *mut u8) -> bool {
+    let mut sets = crate::dlls::lock(&SETS);
+    let Some((_, nodes)) = sets.iter_mut().find(|(h, _)| *h == set) else {
+        return false;
+    };
+    nodes.push(node);
+    let i = nodes.len() - 1;
+    if !data.is_null() {
+        write_devinfo(&nodes[i], i, data);
+    }
+    true
+}
+
+/// Ajoute à `dst` les nœuds de `src` (absents de `dst`), puis détruit `src`.
+pub fn merge_set(dst: usize, src: usize) -> bool {
+    let mut sets = crate::dlls::lock(&SETS);
+    let Some(i) = sets.iter().position(|(h, _)| *h == src) else {
+        return false;
+    };
+    let (_, extra) = sets.remove(i);
+    let Some((_, nodes)) = sets.iter_mut().find(|(h, _)| *h == dst) else {
+        return false;
+    };
+    for n in extra {
+        if !nodes.iter().any(|m| m.id.eq_ignore_ascii_case(&n.id)) {
+            nodes.push(n);
+        }
+    }
+    true
+}
+
+/// Nœud présent par son identifiant d'instance.
+pub fn node_by_id(id: &str) -> Option<Node> {
+    nodes().into_iter().find(|n| n.id.eq_ignore_ascii_case(id))
+}
+
+/// Modifie le nœud désigné par un SP_DEVINFO_DATA de l'ensemble.
+pub unsafe fn with_set_node<T>(
+    set: usize,
+    data: *const u8,
+    f: impl FnOnce(&mut Node) -> T,
+) -> Option<T> {
+    if data.is_null() {
+        return None;
+    }
+    let i = reserved_index(data);
+    let mut sets = crate::dlls::lock(&SETS);
+    let (_, nodes) = sets.iter_mut().find(|(h, _)| *h == set)?;
+    nodes.get_mut(i).map(f)
 }
 
 pub fn destroy(set: usize) -> bool {
@@ -564,7 +985,7 @@ pub fn destroy(set: usize) -> bool {
 }
 
 /// Indice d'un SP_DEVINFO_DATA ou SP_DEVICE_INTERFACE_DATA (champ Reserved).
-unsafe fn reserved_index(data: *const u8) -> usize {
+pub(crate) unsafe fn reserved_index(data: *const u8) -> usize {
     (data.add(24) as *const usize)
         .read_unaligned()
         .wrapping_sub(1)
@@ -657,7 +1078,7 @@ pub unsafe fn interface_detail(
     Some(true)
 }
 
-unsafe fn node_in_set(set: usize, devinfo: *const u8) -> Option<Node> {
+pub(crate) unsafe fn node_in_set(set: usize, devinfo: *const u8) -> Option<Node> {
     if devinfo.is_null() {
         return None;
     }
@@ -673,7 +1094,7 @@ pub unsafe fn registry_property(
 }
 
 /// Copie une chaîne UTF-16 terminée ; `required` en caractères.
-unsafe fn put_wide(s: &str, buf: *mut u16, chars: u32, required: *mut u32) -> bool {
+pub(crate) unsafe fn put_wide(s: &str, buf: *mut u16, chars: u32, required: *mut u32) -> bool {
     let w = wide(s);
     if !required.is_null() {
         *required = w.len() as u32;
@@ -782,13 +1203,8 @@ pub unsafe extern "win64" fn SetupDiOpenDevRegKey(
     }
 }
 
-unsafe fn class_guids(name: &str, list: *mut u8, size: u32, required: *mut u32) -> i32 {
-    let g = match name.to_ascii_lowercase().as_str() {
-        "ports" => Some(PORTS_CLASS),
-        "hidclass" => Some(HID_CLASS),
-        "usb" => Some(USB_CLASS),
-        _ => None,
-    };
+pub(crate) unsafe fn class_guids(name: &str, list: *mut u8, size: u32, required: *mut u32) -> i32 {
+    let g = class_by_name(name);
     let count = g.is_some() as u32;
     if !required.is_null() {
         *required = count;
@@ -1019,6 +1435,15 @@ pub unsafe extern "win64" fn CM_Get_DevNode_Registry_PropertyW(
     CR_SUCCESS
 }
 
+/// Toutes les interfaces présentes : (classe d'interface, chemin), pour les
+/// avis de branchement (`devnotify`).
+pub fn interface_paths() -> Vec<([u8; 16], String)> {
+    nodes()
+        .iter()
+        .filter_map(|n| Some((n.interface()?, n.interface_path()?)))
+        .collect()
+}
+
 /// MULTI_SZ des chemins d'interface d'une classe d'interface.
 fn interface_list(guid: [u8; 16], device: Option<&str>) -> Vec<u16> {
     let mut out: Vec<u16> = nodes()
@@ -1066,8 +1491,478 @@ pub unsafe extern "win64" fn CM_Get_Device_Interface_ListW(
     CR_SUCCESS
 }
 
+// ============================================================
+//  Propriétés unifiées (DEVPROPKEY) : hidapi, SDL, logiciels de matériel
+// ============================================================
+
+/// {A45C254E-DF1C-4EFD-8020-67D146A850E0} : propriétés générales d'appareil.
+const DEVPKEY_DEVICE: [u8; 16] = guid(
+    0xA45C254E,
+    0xDF1C,
+    0x4EFD,
+    [0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0],
+);
+/// {78C34FC8-104A-4ACA-9EA4-524D52996E57}, pid 256 : DEVPKEY_Device_InstanceId.
+const DEVPKEY_INSTANCE: [u8; 16] = guid(
+    0x78C34FC8,
+    0x104A,
+    0x4ACA,
+    [0x9E, 0xA4, 0x52, 0x4D, 0x52, 0x99, 0x6E, 0x57],
+);
+/// {4340A6C5-93FA-4706-972C-7B648008A5A7} : relations (Parent 8, Children 9).
+const DEVPKEY_RELATIONS: [u8; 16] = guid(
+    0x4340A6C5,
+    0x93FA,
+    0x4706,
+    [0x97, 0x2C, 0x7B, 0x64, 0x80, 0x08, 0xA5, 0xA7],
+);
+const DEVPROP_TYPE_GUID: u32 = 0x0D;
+const DEVPROP_TYPE_STRING: u32 = 0x12;
+const DEVPROP_TYPE_STRING_LIST: u32 = 0x2012;
+
+fn bytes16(v: &[u16]) -> Vec<u8> {
+    v.iter().flat_map(|c| c.to_le_bytes()).collect()
+}
+
+/// Valeur d'une propriété DEVPROPKEY : (DEVPROPTYPE, octets).
+pub fn devprop(n: &Node, key: &[u8; 16], pid: u32) -> Option<(u32, Vec<u8>)> {
+    let reg = |spdrp: u32| {
+        n.property(spdrp).map(|(t, v)| {
+            let kind = if t == 7 {
+                DEVPROP_TYPE_STRING_LIST
+            } else {
+                DEVPROP_TYPE_STRING
+            };
+            (kind, bytes16(&v))
+        })
+    };
+    if key == &DEVPKEY_INSTANCE && pid == 256 {
+        return Some((DEVPROP_TYPE_STRING, bytes16(&wide(&n.id))));
+    }
+    if key == &DEVPKEY_RELATIONS && pid == 8 {
+        let parent = n.parent.clone()?;
+        return Some((DEVPROP_TYPE_STRING, bytes16(&wide(&parent))));
+    }
+    if key != &DEVPKEY_DEVICE {
+        return None;
+    }
+    match pid {
+        2 => reg(0), // DeviceDesc
+        3 => reg(1), // HardwareIds
+        4 => reg(2), // CompatibleIds
+        6 => reg(4), // Service
+        9 => reg(7), // Class
+        10 => Some((DEVPROP_TYPE_GUID, n.class().to_vec())),
+        13 => reg(0xB),  // Manufacturer
+        14 => reg(0xC),  // FriendlyName
+        15 => reg(0xE),  // LocationInfo
+        24 => reg(0x16), // EnumeratorName
+        _ => None,
+    }
+}
+
+unsafe fn put_devprop(
+    value: Option<(u32, Vec<u8>)>,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+) -> u32 {
+    let Some((t, v)) = value else {
+        return CR_NO_SUCH_VALUE;
+    };
+    if len.is_null() || kind.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    *kind = t;
+    let room = *len as usize;
+    *len = v.len() as u32;
+    if buf.is_null() || room < v.len() {
+        return CR_BUFFER_SMALL;
+    }
+    std::ptr::copy_nonoverlapping(v.as_ptr(), buf, v.len());
+    CR_SUCCESS
+}
+
+unsafe fn read_key(key: *const u8) -> Option<([u8; 16], u32)> {
+    let g = read_guid(key)?;
+    Some((g, (key.add(16) as *const u32).read_unaligned()))
+}
+
+pub unsafe extern "win64" fn CM_Get_DevNode_PropertyW(
+    dn: u32,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+    _flags: u32,
+) -> u32 {
+    let Some(n) = node_of(dn) else {
+        return CR_NO_SUCH_DEVNODE;
+    };
+    let Some((g, pid)) = read_key(key) else {
+        return CR_INVALID_POINTER;
+    };
+    put_devprop(devprop(&n, &g, pid), kind, buf, len)
+}
+
+/// Nœud qui porte un chemin d'interface.
+fn node_of_interface(path: &str) -> Option<Node> {
+    let lower = path.to_ascii_lowercase().replace("\\\\.\\", "\\\\?\\");
+    nodes().into_iter().find(|n| {
+        n.interface_path()
+            .is_some_and(|p| p.eq_ignore_ascii_case(&lower))
+    })
+}
+
+/// Propriétés d'une interface : celles de son appareil (hidapi y lit
+/// DEVPKEY_Device_InstanceId).
+pub unsafe extern "win64" fn CM_Get_Device_Interface_PropertyW(
+    path: *const u16,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+    _flags: u32,
+) -> u32 {
+    if path.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let Some(n) = node_of_interface(&crate::dlls::wstr(path)) else {
+        return 0x33; // CR_NO_SUCH_DEVICE_INTERFACE
+    };
+    let Some((g, pid)) = read_key(key) else {
+        return CR_INVALID_POINTER;
+    };
+    put_devprop(devprop(&n, &g, pid), kind, buf, len)
+}
+
+pub unsafe extern "win64" fn SetupDiGetDevicePropertyW(
+    set: usize,
+    devinfo: *const u8,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    size: u32,
+    required: *mut u32,
+    _flags: u32,
+) -> i32 {
+    let Some(n) = node_in_set(set, devinfo) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some((g, pid)) = read_key(key) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let mut len = size;
+    let mut t = 0u32;
+    let r = put_devprop(devprop(&n, &g, pid), &mut t, buf, &mut len);
+    if !kind.is_null() {
+        *kind = t;
+    }
+    if !required.is_null() {
+        *required = len;
+    }
+    match r {
+        CR_SUCCESS => 1,
+        CR_BUFFER_SMALL => {
+            crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+            0
+        }
+        _ => {
+            crate::process::set_last_error(0xE000_0225); // ERROR_NOT_FOUND
+            0
+        }
+    }
+}
+
+/// Ajoute à un ensemble l'interface désignée par son chemin.
+pub unsafe extern "win64" fn SetupDiOpenDeviceInterfaceW(
+    set: usize,
+    path: *const u16,
+    _flags: u32,
+    data: *mut u8,
+) -> i32 {
+    if path.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(n) = node_of_interface(&crate::dlls::wstr(path)) else {
+        crate::process::set_last_error(0xE000_0206); // ERROR_NO_SUCH_DEVICE_INTERFACE
+        return 0;
+    };
+    let index = {
+        let mut sets = crate::dlls::lock(&SETS);
+        let Some((_, list)) = sets.iter_mut().find(|(h, _)| *h == set) else {
+            crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        match list.iter().position(|x| x.id.eq_ignore_ascii_case(&n.id)) {
+            Some(i) => i,
+            None => {
+                list.push(n.clone());
+                list.len() - 1
+            }
+        }
+    };
+    if !data.is_null() {
+        let g = n.interface().unwrap_or_default();
+        std::ptr::copy_nonoverlapping(g.as_ptr(), data.add(4), 16);
+        (data.add(20) as *mut u32).write_unaligned(1); // SPINT_ACTIVE
+        (data.add(24) as *mut usize).write_unaligned(index + 1);
+    }
+    1
+}
+
+// ---- Variantes _Ex et configurations logiques (#1625) --------------------
+//
+// Winlux ne gère que la machine locale : CM_Connect_MachineW rend une
+// poignée locale pour un nom vide ou local, CR_REMOTE_COMM_FAILURE sinon.
+// Aucun appareil n'a de configuration logique de ressources (ports, IRQ)
+// exposée : CM_Get_First_Log_Conf répond CR_NO_MORE_LOG_CONF.
+
+const CR_INVALID_FLAG: u32 = 0x04;
+const CR_INVALID_RES_DES: u32 = 0x06;
+const CR_INVALID_LOG_CONF: u32 = 0x07;
+const CR_NO_MORE_LOG_CONF: u32 = 0x0E;
+const CR_REMOTE_COMM_FAILURE: u32 = 0x30;
+/// Poignée de la machine locale rendue par CM_Connect_Machine.
+const LOCAL_MACHINE: usize = 0x10CA_1000;
+
+fn is_local_machine(name: &str) -> bool {
+    let n = name.trim_start_matches('\\');
+    if n.is_empty() || n == "." || n.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    n.eq_ignore_ascii_case(host.trim())
+}
+
+pub unsafe extern "win64" fn CM_Connect_MachineW(name: *const u16, out: *mut usize) -> u32 {
+    if out.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let local = name.is_null() || is_local_machine(&crate::dlls::wstr(name));
+    if !local {
+        *out = 0;
+        return CR_REMOTE_COMM_FAILURE;
+    }
+    *out = LOCAL_MACHINE;
+    CR_SUCCESS
+}
+pub unsafe extern "win64" fn CM_Connect_MachineA(name: *const u8, out: *mut usize) -> u32 {
+    if out.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let local = name.is_null() || is_local_machine(&crate::dlls::cstr(name));
+    if !local {
+        *out = 0;
+        return CR_REMOTE_COMM_FAILURE;
+    }
+    *out = LOCAL_MACHINE;
+    CR_SUCCESS
+}
+pub extern "win64" fn CM_Disconnect_Machine(_machine: usize) -> u32 {
+    CR_SUCCESS
+}
+pub unsafe extern "win64" fn CM_Locate_DevNode_ExW(
+    out: *mut u32,
+    id: *const u16,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Locate_DevNodeW(out, id, flags)
+}
+pub unsafe extern "win64" fn CM_Locate_DevNode_ExA(
+    out: *mut u32,
+    id: *const u8,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Locate_DevNodeA(out, id, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_ExW(
+    dn: u32,
+    buf: *mut u16,
+    chars: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_IDW(dn, buf, chars, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_ExA(
+    dn: u32,
+    buf: *mut u8,
+    chars: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_IDA(dn, buf, chars, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_Size_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_ID_Size(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_DevNode_Status_Ex(
+    status: *mut u32,
+    problem: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_DevNode_Status(status, problem, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Parent_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Parent(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Child_Ex(out: *mut u32, dn: u32, flags: u32, _m: usize) -> u32 {
+    CM_Get_Child(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Sibling_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Sibling(out, dn, flags)
+}
+/// Réénumération : l'arbre est relu à chaque appel, rien à faire.
+pub extern "win64" fn CM_Reenumerate_DevNode(dn: u32, _flags: u32) -> u32 {
+    if node_of(dn).is_some() {
+        CR_SUCCESS
+    } else {
+        CR_NO_SUCH_DEVNODE
+    }
+}
+pub extern "win64" fn CM_Reenumerate_DevNode_Ex(dn: u32, flags: u32, _m: usize) -> u32 {
+    CM_Reenumerate_DevNode(dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_First_Log_Conf(out: *mut usize, dn: u32, flags: u32) -> u32 {
+    if flags > 6 {
+        return CR_INVALID_FLAG;
+    }
+    if !out.is_null() {
+        *out = 0;
+    }
+    if node_of(dn).is_none() {
+        return CR_NO_SUCH_DEVNODE;
+    }
+    CR_NO_MORE_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_First_Log_Conf_Ex(
+    out: *mut usize,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_First_Log_Conf(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Next_Log_Conf(out: *mut usize, _lc: usize, _flags: u32) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    CR_INVALID_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_Next_Log_Conf_Ex(
+    out: *mut usize,
+    lc: usize,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Next_Log_Conf(out, lc, flags)
+}
+/// Aucune configuration logique n'est jamais rendue : toute poignée est invalide.
+pub unsafe extern "win64" fn CM_Get_Next_Res_Des(
+    out: *mut usize,
+    _rd: usize,
+    _for_resource: u32,
+    resource_id: *mut u32,
+    _flags: u32,
+) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    if !resource_id.is_null() {
+        *resource_id = 0;
+    }
+    CR_INVALID_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_Next_Res_Des_Ex(
+    out: *mut usize,
+    rd: usize,
+    for_resource: u32,
+    resource_id: *mut u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Next_Res_Des(out, rd, for_resource, resource_id, flags)
+}
+pub extern "win64" fn CM_Get_Res_Des_Data(
+    _rd: usize,
+    _buf: *mut u8,
+    _len: u32,
+    _flags: u32,
+) -> u32 {
+    CR_INVALID_RES_DES
+}
+pub extern "win64" fn CM_Get_Res_Des_Data_Ex(
+    rd: usize,
+    buf: *mut u8,
+    len: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Res_Des_Data(rd, buf, len, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Res_Des_Data_Size(
+    size: *mut u32,
+    _rd: usize,
+    _flags: u32,
+) -> u32 {
+    if size.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    *size = 0;
+    CR_INVALID_RES_DES
+}
+pub unsafe extern "win64" fn CM_Get_Res_Des_Data_Size_Ex(
+    size: *mut u32,
+    rd: usize,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Res_Des_Data_Size(size, rd, flags)
+}
+pub extern "win64" fn CM_Free_Log_Conf_Handle(lc: usize) -> u32 {
+    if lc == 0 {
+        CR_INVALID_LOG_CONF
+    } else {
+        CR_SUCCESS
+    }
+}
+pub extern "win64" fn CM_Free_Res_Des_Handle(rd: usize) -> u32 {
+    if rd == 0 {
+        CR_INVALID_RES_DES
+    } else {
+        CR_SUCCESS
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "CM_Get_DevNode_PropertyW" => fn CM_Get_DevNode_PropertyW,
+        "CM_Get_Device_Interface_PropertyW" => fn CM_Get_Device_Interface_PropertyW,
+        "SetupDiGetDevicePropertyW" => fn SetupDiGetDevicePropertyW,
+        "SetupDiOpenDeviceInterfaceW" => fn SetupDiOpenDeviceInterfaceW,
         "SetupDiGetDeviceInstanceIdW" => fn SetupDiGetDeviceInstanceIdW,
         "SetupDiGetDeviceInstanceIdA" => fn SetupDiGetDeviceInstanceIdA,
         "SetupDiOpenDevRegKey" => fn SetupDiOpenDevRegKey,
@@ -1085,12 +1980,103 @@ pub fn exports() -> crate::dlls::Exports {
         "CM_Get_DevNode_Registry_PropertyW" => fn CM_Get_DevNode_Registry_PropertyW,
         "CM_Get_Device_Interface_List_SizeW" => fn CM_Get_Device_Interface_List_SizeW,
         "CM_Get_Device_Interface_ListW" => fn CM_Get_Device_Interface_ListW,
+        "CM_Connect_MachineW" => fn CM_Connect_MachineW,
+        "CM_Connect_MachineA" => fn CM_Connect_MachineA,
+        "CM_Disconnect_Machine" => fn CM_Disconnect_Machine,
+        "CM_Locate_DevNode_ExW" => fn CM_Locate_DevNode_ExW,
+        "CM_Locate_DevNode_ExA" => fn CM_Locate_DevNode_ExA,
+        "CM_Get_Device_ID_ExW" => fn CM_Get_Device_ID_ExW,
+        "CM_Get_Device_ID_ExA" => fn CM_Get_Device_ID_ExA,
+        "CM_Get_Device_ID_Size_Ex" => fn CM_Get_Device_ID_Size_Ex,
+        "CM_Get_DevNode_Status_Ex" => fn CM_Get_DevNode_Status_Ex,
+        "CM_Get_Parent_Ex" => fn CM_Get_Parent_Ex,
+        "CM_Get_Child_Ex" => fn CM_Get_Child_Ex,
+        "CM_Get_Sibling_Ex" => fn CM_Get_Sibling_Ex,
+        "CM_Reenumerate_DevNode" => fn CM_Reenumerate_DevNode,
+        "CM_Reenumerate_DevNode_Ex" => fn CM_Reenumerate_DevNode_Ex,
+        "CM_Get_First_Log_Conf" => fn CM_Get_First_Log_Conf,
+        "CM_Get_First_Log_Conf_Ex" => fn CM_Get_First_Log_Conf_Ex,
+        "CM_Get_Next_Log_Conf" => fn CM_Get_Next_Log_Conf,
+        "CM_Get_Next_Log_Conf_Ex" => fn CM_Get_Next_Log_Conf_Ex,
+        "CM_Get_Next_Res_Des" => fn CM_Get_Next_Res_Des,
+        "CM_Get_Next_Res_Des_Ex" => fn CM_Get_Next_Res_Des_Ex,
+        "CM_Get_Res_Des_Data" => fn CM_Get_Res_Des_Data,
+        "CM_Get_Res_Des_Data_Ex" => fn CM_Get_Res_Des_Data_Ex,
+        "CM_Get_Res_Des_Data_Size" => fn CM_Get_Res_Des_Data_Size,
+        "CM_Get_Res_Des_Data_Size_Ex" => fn CM_Get_Res_Des_Data_Size_Ex,
+        "CM_Free_Log_Conf_Handle" => fn CM_Free_Log_Conf_Handle,
+        "CM_Free_Res_Des_Handle" => fn CM_Free_Res_Des_Handle,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guid_de_classe_aller_retour() {
+        // GUID_DEVCLASS_HIDCLASS, lu et réécrit au registre d'un appareil racine (#1605).
+        let g = parse_guid("{745a17a0-74d3-11d0-b6fe-00a0c90f57da}").unwrap();
+        assert_eq!(&g[..4], &[0xa0, 0x17, 0x5a, 0x74]);
+        assert_eq!(
+            guid_text(&g).to_ascii_lowercase(),
+            "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}"
+        );
+        assert_eq!(parse_guid("{745a17a0}"), None);
+    }
+
+    #[test]
+    fn classe_processor_depuis_cpuinfo() {
+        let text = "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM)  i7-1165G7 @ 2.80GHz\n\n\
+                    processor\t: 1\nvendor_id\t: GenuineIntel\nmodel name\t: Intel(R) Core(TM)  i7-1165G7 @ 2.80GHz\n";
+        let cpus = parse_cpuinfo(text);
+        assert_eq!(cpus.len(), 2);
+        assert_eq!(cpus[1].index, 1);
+        assert_eq!(cpus[0].name, "Intel(R) Core(TM) i7-1165G7 @ 2.80GHz");
+        assert_eq!(
+            guid_text(&PROCESSOR_CLASS).to_ascii_lowercase(),
+            "{50127dc3-0f36-415e-a6cc-4cb3be910b65}"
+        );
+        // ARM sans « model name » : nom générique.
+        assert_eq!(
+            parse_cpuinfo("processor : 0\nCPU implementer : 0x41\n")[0].name,
+            "Processeur"
+        );
+
+        // Nœud Processor : nom lisible, classe et fabricant.
+        let node = Node {
+            id: "ACPI\\ACPI0007\\0".into(),
+            parent: Some(ROOT.into()),
+            kind: Kind::Processor(cpus[0].clone()),
+        };
+        let name = node.property(0xC).unwrap().1;
+        assert_eq!(
+            String::from_utf16_lossy(&name[..name.len() - 1]),
+            cpus[0].name
+        );
+        assert_eq!(node.property(7).unwrap().1, wide("Processor"));
+        assert_eq!(node.property(0xB).unwrap().1, wide("Intel"));
+        assert_eq!(node.class(), PROCESSOR_CLASS);
+        // Classe Processor : un appareil par processeur logique de la machine
+        // (sans variable d'environnement : les tests tournent en parallèle).
+        let expected = std::fs::read_to_string("/proc/cpuinfo")
+            .map(|t| parse_cpuinfo(&t).len())
+            .unwrap_or(0);
+        let set = get_class_devs(Some(PROCESSOR_CLASS), None, 0x2).expect("ensemble");
+        assert_eq!(set_nodes(set).unwrap().len(), expected);
+        destroy(set);
+        // Classe sans appareil : ensemble vide, pas INVALID_HANDLE_VALUE.
+        let unknown = guid(
+            0x4D36E968,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        );
+        let set = get_class_devs(Some(unknown), None, 0x2).expect("ensemble vide");
+        assert!(set_nodes(set).unwrap().is_empty());
+        destroy(set);
+        assert!(get_class_devs(None, None, 0x2).is_none());
+    }
 
     #[test]
     fn guids_au_format_windows() {

@@ -136,6 +136,16 @@ unsafe extern "win64" fn NetUserModalsGet(_server: usize, _level: u32, buf: *mut
     ERROR_NOT_SUPPORTED
 }
 
+/// NetGetDCName : Winlux n'est jamais membre d'un domaine, il n'y a pas
+/// de contrôleur de domaine (NERR_DCNotFound). Tk s'en sert pour le nom
+/// de l'utilisateur (#1491).
+unsafe extern "win64" fn NetGetDCName(_server: usize, _domain: usize, buf: *mut usize) -> u32 {
+    if !buf.is_null() {
+        *buf = 0;
+    }
+    2453
+}
+
 pub fn netapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "NetApiBufferFree" => fn NetApiBufferFree,
@@ -148,6 +158,7 @@ pub fn netapi32_exports() -> crate::dlls::Exports {
         "NetLocalGroupDel" => fn NetLocalGroupDel,
         "NetLocalGroupGetMembers" => fn NetLocalGroupGetMembers,
         "NetUserModalsGet" => fn NetUserModalsGet,
+        "NetGetDCName" => fn NetGetDCName,
     }
 }
 
@@ -159,18 +170,55 @@ const WTS_USER_NAME: u32 = 5;
 const WTS_CONNECT_STATE: u32 = 8;
 const WTS_CLIENT_PROTOCOL_TYPE: u32 = 16;
 
-/// WTSQuerySessionInformationW : renseigne la session console unique de
+/// Poignée du serveur local rendue par WTSOpenServerA/W (#1606) ; elle
+/// équivaut à WTS_CURRENT_SERVER_HANDLE pour les autres fonctions.
+const WTS_LOCAL_SERVER: usize = 0x5754_5300;
+
+/// WTSOpenServerW/A : seul le serveur local existe, quel que soit le nom
+/// donné ; la poignée n'a rien à libérer.
+unsafe extern "win64" fn WTSOpenServerW(_name: *const u16) -> usize {
+    WTS_LOCAL_SERVER
+}
+unsafe extern "win64" fn WTSOpenServerA(_name: *const u8) -> usize {
+    WTS_LOCAL_SERVER
+}
+unsafe extern "win64" fn WTSCloseServer(_server: usize) {}
+
+/// Données d'une classe WTS_INFO_CLASS pour la session console unique de
 /// Winlux (identifiant 1, état « active », protocole console, nom du
-/// compte Linux). Le tampon vient de LocalAlloc pour que WTSFreeMemory
-/// puisse le rendre.
-unsafe extern "win64" fn WTSQuerySessionInformationW(
-    _server: usize,
+/// compte Linux) ; les chaînes en UTF-16 ou en ANSI selon `wide`.
+fn session_info(class: u32, wide: bool) -> Vec<u8> {
+    let text = |t: &str| -> Vec<u8> {
+        if wide {
+            t.encode_utf16()
+                .chain(std::iter::once(0))
+                .flat_map(|c| c.to_le_bytes())
+                .collect()
+        } else {
+            t.bytes().chain(std::iter::once(0)).collect()
+        }
+    };
+    match class {
+        WTS_SESSION_ID => 1u32.to_le_bytes().to_vec(),
+        WTS_CONNECT_STATE => 0u32.to_le_bytes().to_vec(), // WTSActive
+        WTS_CLIENT_PROTOCOL_TYPE => 0u16.to_le_bytes().to_vec(), // console
+        WTS_USER_NAME => text(&std::env::var("USER").unwrap_or_else(|_| "winlux".into())),
+        // Classes textuelles inconnues : chaîne vide plutôt qu'un échec.
+        _ => text(""),
+    }
+}
+
+/// WTSQuerySessionInformationW/A : le tampon vient de LocalAlloc pour que
+/// WTSFreeMemory puisse le rendre ; le pointeur est écrit à la taille de
+/// pointeur du programme.
+unsafe fn query_session(
     session: u32,
     class: u32,
-    buffer: *mut *mut u8,
+    buffer: usize,
     bytes: *mut u32,
+    wide: bool,
 ) -> i32 {
-    if buffer.is_null() || bytes.is_null() {
+    if buffer == 0 || bytes.is_null() {
         crate::dlls::kernel32::set_last_error(87);
         return 0;
     }
@@ -178,32 +226,38 @@ unsafe extern "win64" fn WTSQuerySessionInformationW(
         crate::dlls::kernel32::set_last_error(7022);
         return 0;
     }
-    let data: Vec<u8> = match class {
-        WTS_SESSION_ID => 1u32.to_le_bytes().to_vec(),
-        WTS_CONNECT_STATE => 0u32.to_le_bytes().to_vec(), // WTSActive
-        WTS_CLIENT_PROTOCOL_TYPE => 0u16.to_le_bytes().to_vec(), // console
-        WTS_USER_NAME => {
-            let name = std::env::var("USER").unwrap_or_else(|_| "winlux".into());
-            name.encode_utf16()
-                .chain(std::iter::once(0))
-                .flat_map(|c| c.to_le_bytes())
-                .collect()
-        }
-        _ => {
-            // Classes textuelles inconnues : chaîne vide plutôt qu'un échec.
-            vec![0, 0]
-        }
-    };
+    let data = session_info(class, wide);
     let p = crate::dlls::kernel32_misc::local_alloc(0x40, data.len()) as *mut u8;
     if p.is_null() {
         crate::dlls::kernel32::set_last_error(8);
         return 0;
     }
     std::ptr::copy_nonoverlapping(data.as_ptr(), p, data.len());
-    *buffer = p;
+    crate::wow32::write_ptr(buffer, p as usize);
     *bytes = data.len() as u32;
     1
 }
+
+unsafe extern "win64" fn WTSQuerySessionInformationW(
+    _server: usize,
+    session: u32,
+    class: u32,
+    buffer: usize,
+    bytes: *mut u32,
+) -> i32 {
+    query_session(session, class, buffer, bytes, true)
+}
+
+unsafe extern "win64" fn WTSQuerySessionInformationA(
+    _server: usize,
+    session: u32,
+    class: u32,
+    buffer: usize,
+    bytes: *mut u32,
+) -> i32 {
+    query_session(session, class, buffer, bytes, false)
+}
+
 unsafe extern "win64" fn WTSFreeMemory(p: usize) {
     if p != 0 {
         crate::dlls::kernel32_misc::local_free(p as *mut std::ffi::c_void);
@@ -213,6 +267,63 @@ unsafe extern "win64" fn WTSFreeMemory(p: usize) {
 pub fn wtsapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "WTSQuerySessionInformationW" => fn WTSQuerySessionInformationW,
+        "WTSQuerySessionInformationA" => fn WTSQuerySessionInformationA,
+        "WTSOpenServerW" => fn WTSOpenServerW,
+        "WTSOpenServerA" => fn WTSOpenServerA,
+        "WTSCloseServer" => fn WTSCloseServer,
         "WTSFreeMemory" => fn WTSFreeMemory,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wtsapi32_serveur_local_et_session() {
+        unsafe {
+            let h = WTSOpenServerA(c"localhost".as_ptr().cast());
+            assert_ne!(h, 0);
+            let mut p = 0usize;
+            let mut n = 0u32;
+            assert_eq!(
+                WTSQuerySessionInformationA(
+                    h,
+                    WTS_CURRENT_SESSION,
+                    WTS_SESSION_ID,
+                    (&mut p as *mut usize) as usize,
+                    &mut n
+                ),
+                1
+            );
+            assert_eq!((n, *(p as *const u32)), (4, 1));
+            WTSFreeMemory(p);
+            assert_eq!(
+                WTSQuerySessionInformationA(
+                    h,
+                    1,
+                    WTS_USER_NAME,
+                    (&mut p as *mut usize) as usize,
+                    &mut n
+                ),
+                1
+            );
+            let name = std::ffi::CStr::from_ptr(p as *const std::ffi::c_char);
+            assert_eq!(name.to_bytes().len() + 1, n as usize);
+            WTSFreeMemory(p);
+            assert_eq!(
+                WTSQuerySessionInformationW(
+                    h,
+                    1,
+                    WTS_USER_NAME,
+                    (&mut p as *mut usize) as usize,
+                    &mut n
+                ),
+                1
+            );
+            assert_eq!(n as usize, (name.to_bytes().len() + 1) * 2);
+            WTSFreeMemory(p);
+            WTSCloseServer(h);
+        }
     }
 }

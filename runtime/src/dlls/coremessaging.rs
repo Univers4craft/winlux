@@ -679,6 +679,73 @@ pub unsafe extern "win64" fn create_dispatcher_queue_controller(
     S_OK
 }
 
+// ---------------------------------------------------------------------
+// Fabrique d'activation de Windows.System.DispatcherQueue (#1355)
+// ---------------------------------------------------------------------
+
+/// IDispatcherQueueStatics (windows.system.h).
+const IID_QUEUE_STATICS: Guid = guid(
+    0xA96D_83D7,
+    0x9371,
+    0x4517,
+    [0x92, 0x45, 0xD0, 0x82, 0x4A, 0xC1, 0x2C, 0x74],
+);
+
+unsafe extern "win64" fn statics_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Some(iid) = read_guid(iid) else {
+        return E_INVALIDARG;
+    };
+    if is_base(&iid) || iid == IID_QUEUE_STATICS {
+        *out = this;
+        return S_OK;
+    }
+    log_unknown("DispatcherQueue (fabrique)", &iid);
+    *out = 0;
+    E_NOINTERFACE
+}
+
+/// `GetForCurrentThread` : la file créée sur ce thread par
+/// `CreateDispatcherQueueController`, ou null s'il n'en a pas, comme
+/// Windows (sans en créer).
+unsafe extern "win64" fn statics_for_current_thread(_this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = lock(by_thread()).get(&tid()).copied().unwrap_or(0);
+    S_OK
+}
+
+static STATICS_VTBL: VTable<7> = VTable([
+    statics_qi as *const (),
+    static_add_ref as *const (),
+    static_release as *const (),
+    get_iids as *const (),
+    q_class as *const (),
+    get_trust_level as *const (),
+    statics_for_current_thread as *const (),
+]);
+
+#[repr(C)]
+struct Statics {
+    vtbl: &'static VTable<7>,
+}
+static STATICS: Statics = Statics {
+    vtbl: &STATICS_VTBL,
+};
+
+/// `RoGetActivationFactory` pour les classes de ce module : `None` si la
+/// classe n'est pas d'ici.
+pub unsafe fn activation_factory(class: &str, iid: *const u8, out: *mut usize) -> Option<i32> {
+    if class != "Windows.System.DispatcherQueue" {
+        return None;
+    }
+    let this = std::ptr::addr_of!(STATICS) as usize;
+    Some(statics_qi(this, iid, out))
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "CreateDispatcherQueueController" => fn create_dispatcher_queue_controller,
@@ -760,6 +827,43 @@ mod tests {
             }
             assert_eq!(h.calls.load(Ordering::Acquire), 1);
             assert_eq!(h.refs.load(Ordering::Acquire), 1);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// #1355 : `DispatcherQueue.GetForCurrentThread` passe par la fabrique
+    /// d'activation WinRT ; elle rend la file du thread, ou null.
+    #[test]
+    fn fabrique_dispatcher_queue_get_for_current_thread() {
+        std::thread::spawn(|| unsafe {
+            let mut f = 0usize;
+            assert!(
+                activation_factory("Windows.Other", IID_QUEUE_STATICS.as_ptr(), &mut f).is_none()
+            );
+            assert_eq!(
+                activation_factory(
+                    "Windows.System.DispatcherQueue",
+                    IID_QUEUE_STATICS.as_ptr(),
+                    &mut f
+                ),
+                Some(S_OK)
+            );
+            assert_ne!(f, 0);
+            let mut q = 1usize;
+            assert_eq!(statics_for_current_thread(f, &mut q), S_OK);
+            assert_eq!(q, 0, "pas de file sur ce thread");
+            let mut c = 0usize;
+            let opts = Options {
+                size: 12,
+                thread_type: DQTYPE_THREAD_CURRENT,
+                apartment: 0,
+            };
+            assert_eq!(create_dispatcher_queue_controller(&opts, &mut c), S_OK);
+            let mut expected = 0usize;
+            assert_eq!(ctl_get_queue(c, &mut expected), S_OK);
+            assert_eq!(statics_for_current_thread(f, &mut q), S_OK);
+            assert_eq!(q, expected);
         })
         .join()
         .unwrap();

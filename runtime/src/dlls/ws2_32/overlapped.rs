@@ -70,6 +70,10 @@ fn modes() -> &'static Mutex<HashMap<usize, u8>> {
 
 const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 1;
 
+pub(super) fn forget_modes(s: usize) {
+    lock(modes()).remove(&s);
+}
+
 pub(super) fn set_modes(s: usize, flags: u8) {
     lock(modes()).insert(s, flags);
 }
@@ -77,10 +81,13 @@ pub(super) fn set_modes(s: usize, flags: u8) {
 /// L'appel demande-t-il une E/S avec OVERLAPPED que l'on sait terminer ?
 /// Une routine de complétion (APC) garde l'ancien chemin synchrone.
 pub(super) fn wanted(overlapped: usize, completion: usize) -> bool {
-    overlapped != 0
-        && completion == 0
-        && crate::wow32::pointer_size() == 8
-        && overlapped.is_multiple_of(std::mem::align_of::<Overlapped>())
+    // OVERLAPPED x86 : champs de 4 octets, alignement 4 (#1408).
+    let align = if crate::wow32::pointer_size() == 4 {
+        4
+    } else {
+        std::mem::align_of::<Overlapped>()
+    };
+    overlapped != 0 && completion == 0 && overlapped.is_multiple_of(align)
 }
 
 /// Termine l'opération : OVERLAPPED, événement et paquet au port associé.
@@ -115,9 +122,7 @@ fn start(s: usize, overlapped: usize, events: i16, mut step: Step) -> i32 {
     // SAFETY : OVERLAPPED aligné fourni par l'appelant, valable jusqu'à la fin
     // de l'opération (contrat Win32).
     unsafe {
-        let ov = overlapped as *mut Overlapped;
-        std::ptr::write_volatile(&mut (*ov).internal, STATUS_PENDING);
-        std::ptr::write_volatile(&mut (*ov).internal_high, 0);
+        crate::dlls::kernel32::ov_set(overlapped, STATUS_PENDING, 0);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -498,7 +503,349 @@ pub(super) unsafe extern "win64" fn connect_ex(
     0
 }
 
-/// WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER) : seul ConnectEx est fourni.
+/// AcceptEx (mswsock) : accepte une connexion sur `listen` et la range
+/// dans la socket `accept` déjà créée. Après les `data_len` premiers octets
+/// reçus (attendus s'il en faut), `out` reçoit l'adresse locale puis
+/// l'adresse distante, chacune dans un bloc de `local_len` / `remote_len`
+/// octets (relues par GetAcceptExSockaddrs). Rend TRUE si tout est fait.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe extern "win64" fn accept_ex(
+    listen: usize,
+    accept: usize,
+    out: *mut u8,
+    data_len: u32,
+    local_len: u32,
+    remote_len: u32,
+    received: *mut u32,
+    overlapped: usize,
+) -> i32 {
+    if !valid_socket(listen) || !valid_socket(accept) {
+        set_error(WSAENOTSOCK);
+        return 0;
+    }
+    if out.is_null() || local_len < 16 || remote_len < 16 {
+        set_error(WSAEFAULT);
+        return 0;
+    }
+    let target = accept as i32;
+    let out = out as usize;
+    let step = move |fd: i32| -> Option<(u32, i32)> {
+        // SAFETY : descripteurs et tampon valables jusqu'à la fin de
+        // l'opération (contrat de AcceptEx).
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            let r = libc::accept4(
+                fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                libc::SOCK_CLOEXEC,
+            );
+            let e = errno();
+            libc::fcntl(fd, libc::F_SETFL, flags);
+            if r < 0 {
+                return if would_block(e) {
+                    None
+                } else {
+                    Some((0, error_from_errno(e)))
+                };
+            }
+            let moved = libc::dup3(r, target, libc::O_CLOEXEC);
+            libc::close(r);
+            if moved < 0 {
+                return Some((0, error_from_errno(errno())));
+            }
+            let mut got = 0u32;
+            if data_len > 0 {
+                let mut p = libc::pollfd {
+                    fd: target,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                libc::poll(&mut p, 1, -1);
+                let n = libc::recv(target, out as *mut libc::c_void, data_len as usize, 0);
+                if n < 0 {
+                    return Some((0, error_from_errno(errno())));
+                }
+                got = n as u32;
+            }
+            for (at, len, peer) in [
+                (out + data_len as usize, local_len, false),
+                (out + (data_len + local_len) as usize, remote_len, true),
+            ] {
+                std::ptr::write_bytes(at as *mut u8, 0, len as usize);
+                let mut n = len as libc::socklen_t;
+                let p = at as *mut libc::sockaddr;
+                if peer {
+                    libc::getpeername(target, p, &mut n);
+                } else {
+                    libc::getsockname(target, p, &mut n);
+                }
+                super::addr_out(at as *mut u8, n as usize);
+            }
+            Some((got, 0))
+        }
+    };
+    let mut step: Step = Box::new(step);
+    if !wanted(overlapped, 0) {
+        // Sans OVERLAPPED : attente bloquante de la connexion.
+        let mut p = libc::pollfd {
+            fd: listen as i32,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        loop {
+            libc::poll(&mut p, 1, -1);
+            match step(listen as i32) {
+                Some((n, 0)) => {
+                    if !received.is_null() {
+                        *received = n;
+                    }
+                    set_error(0);
+                    return 1;
+                }
+                Some((_, e)) => {
+                    set_error(e);
+                    return 0;
+                }
+                None => continue,
+            }
+        }
+    }
+    let now = step(listen as i32);
+    if let Some(rc) = conclude(listen, overlapped, now, received) {
+        return i32::from(rc == 0);
+    }
+    start(listen, overlapped, libc::POLLIN, step);
+    0
+}
+
+/// DisconnectEx (mswsock) : ferme la connexion ; la socket ne peut pas
+/// resservir sous Linux, TF_REUSE_SOCKET est donc sans effet.
+pub(super) unsafe extern "win64" fn disconnect_ex(
+    s: usize,
+    overlapped: usize,
+    _flags: u32,
+    _reserved: u32,
+) -> i32 {
+    if !valid_socket(s) {
+        set_error(WSAENOTSOCK);
+        return 0;
+    }
+    libc::shutdown(s as i32, libc::SHUT_RDWR);
+    if wanted(overlapped, 0) {
+        conclude(s, overlapped, Some((0, 0)), std::ptr::null_mut());
+    }
+    set_error(0);
+    1
+}
+
+/// TransmitFile : TF_DISCONNECT ferme l'envoi une fois tout parti ;
+/// TF_REUSE_SOCKET est sans effet sous Linux, comme pour DisconnectEx.
+const TF_DISCONNECT: u32 = 1;
+/// Plafond d'un envoi par TransmitFile (2 147 483 646 octets, documenté).
+const TRANSMIT_FILE_MAX: u64 = 0x7FFF_FFFE;
+
+/// Lit le contenu à transmettre : `n` octets (0 : jusqu'à la fin), à
+/// l'Offset de l'OVERLAPPED s'il y en a un, sinon à la position courante
+/// du fichier, qui avance alors comme sous Windows.
+unsafe fn transmit_content(fd: i32, n: u32, overlapped: usize) -> Result<Vec<u8>, i32> {
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut st) < 0 {
+        return Err(error_from_errno(errno()));
+    }
+    let mut at = if overlapped != 0 {
+        // OVERLAPPED : Offset/OffsetHigh après Internal et InternalHigh.
+        let base = overlapped + 2 * crate::wow32::pointer_size();
+        let lo = std::ptr::read_unaligned(base as *const u32) as u64;
+        let hi = std::ptr::read_unaligned((base + 4) as *const u32) as u64;
+        Some(lo | hi << 32)
+    } else {
+        None
+    };
+    let pos = match at {
+        Some(o) => o,
+        None => libc::lseek(fd, 0, libc::SEEK_CUR).max(0) as u64,
+    };
+    let left = (st.st_size.max(0) as u64).saturating_sub(pos);
+    let want = if n == 0 { left } else { (n as u64).min(left) };
+    if want > TRANSMIT_FILE_MAX {
+        return Err(WSAEINVAL);
+    }
+    let mut data = vec![0u8; want as usize];
+    let mut got = 0usize;
+    while got < data.len() {
+        let p = data.as_mut_ptr().add(got) as *mut libc::c_void;
+        let r = match at {
+            Some(o) => libc::pread(fd, p, data.len() - got, o as libc::off_t),
+            None => libc::read(fd, p, data.len() - got),
+        };
+        if r < 0 {
+            let e = errno();
+            if e == libc::EINTR {
+                continue;
+            }
+            return Err(error_from_errno(e));
+        }
+        if r == 0 {
+            break;
+        }
+        got += r as usize;
+        at = at.map(|o| o + r as u64);
+    }
+    data.truncate(got);
+    Ok(data)
+}
+
+/// TransmitFile (mswsock) : envoie l'en-tête et la fin de
+/// TRANSMIT_FILE_BUFFERS autour du contenu de `file` (aucun fichier si
+/// `file` vaut 0). Rend TRUE si tout est parti ; avec OVERLAPPED, FALSE et
+/// WSA_IO_PENDING tant que la socket est pleine.
+pub(super) unsafe extern "win64" fn transmit_file(
+    s: usize,
+    file: usize,
+    n_bytes: u32,
+    _per_send: u32,
+    overlapped: usize,
+    buffers: usize,
+    flags: u32,
+) -> i32 {
+    if !valid_socket(s) {
+        set_error(WSAENOTSOCK);
+        return 0;
+    }
+    let ov = if wanted(overlapped, 0) { overlapped } else { 0 };
+    let content = if file == 0 {
+        Vec::new()
+    } else {
+        let Some(fd) = crate::dlls::kernel32::fd_of_handle(file) else {
+            set_error(WSAEINVAL);
+            return 0;
+        };
+        match transmit_content(fd, n_bytes, ov) {
+            Ok(v) => v,
+            Err(e) => {
+                set_error(e);
+                return 0;
+            }
+        }
+    };
+    // TRANSMIT_FILE_BUFFERS : Head, HeadLength, Tail, TailLength, chaque
+    // champ aligné sur la taille d'un pointeur du programme.
+    let mut list: Vec<(usize, usize)> = Vec::new();
+    let ps = crate::wow32::pointer_size();
+    let head = |i: usize| -> (usize, usize) {
+        let ptr = crate::wow32::read_ptr(buffers + 2 * i * ps);
+        let len = std::ptr::read_unaligned((buffers + (2 * i + 1) * ps) as *const u32) as usize;
+        (len, ptr)
+    };
+    let (h, t) = if buffers != 0 {
+        (head(0), head(1))
+    } else {
+        ((0, 0), (0, 0))
+    };
+    if h.0 > 0 && h.1 != 0 {
+        list.push(h);
+    }
+    let body = (content.len(), content.as_ptr() as usize);
+    if body.0 > 0 {
+        list.push(body);
+    }
+    if t.0 > 0 && t.1 != 0 {
+        list.push(t);
+    }
+    let disconnect = flags & TF_DISCONNECT != 0;
+    let mut done = 0usize;
+    // Le contenu lu vit dans l'étape : le tampon reste valable tant que
+    // l'envoi n'est pas fini.
+    let mut step: Step = Box::new(move |fd| {
+        let _keep = &content;
+        let r = send_now(fd, &list, &mut done, 0);
+        if disconnect && matches!(r, Some((_, 0))) {
+            libc::shutdown(fd, libc::SHUT_WR);
+        }
+        r
+    });
+    if ov == 0 {
+        // Sans OVERLAPPED : envoi bloquant jusqu'au bout.
+        let mut p = libc::pollfd {
+            fd: s as i32,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        loop {
+            match step(s as i32) {
+                Some((_, 0)) => {
+                    set_error(0);
+                    return 1;
+                }
+                Some((_, e)) => {
+                    set_error(e);
+                    return 0;
+                }
+                None => {
+                    libc::poll(&mut p, 1, -1);
+                }
+            }
+        }
+    }
+    let now = step(s as i32);
+    if let Some(rc) = conclude(s, ov, now, std::ptr::null_mut()) {
+        return i32::from(rc == 0);
+    }
+    start(s, ov, libc::POLLOUT, step);
+    0
+}
+
+/// GUID des fonctions d'extension de mswsock, tels qu'en mémoire.
+const WSAID_ACCEPTEX: [u8; 16] = [
+    0xF1, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
+];
+const WSAID_GETACCEPTEXSOCKADDRS: [u8; 16] = [
+    0xF2, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
+];
+const WSAID_DISCONNECTEX: [u8; 16] = [
+    0x11, 0x2E, 0xDA, 0x7F, 0x30, 0x86, 0x6F, 0x43, 0xA0, 0x31, 0xF5, 0x36, 0xA6, 0xEE, 0xC1, 0x57,
+];
+const WSAID_TRANSMITFILE: [u8; 16] = [
+    0xF0, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
+];
+
+/// Adresse appelable par le programme : la fonction elle-même en x64, une
+/// passerelle stdcall de `args` arguments en x86 (#1408).
+fn extension_address(guid: &[u8; 16]) -> Option<usize> {
+    let (name, f, args): (&str, usize, u8) = if *guid == WSAID_CONNECTEX {
+        ("ConnectEx", connect_ex as *const () as usize, 7)
+    } else if *guid == WSAID_ACCEPTEX {
+        ("AcceptEx", accept_ex as *const () as usize, 8)
+    } else if *guid == WSAID_GETACCEPTEXSOCKADDRS {
+        (
+            "GetAcceptExSockaddrs",
+            super::get_accept_ex_sockaddrs as *const () as usize,
+            8,
+        )
+    } else if *guid == WSAID_DISCONNECTEX {
+        ("DisconnectEx", disconnect_ex as *const () as usize, 4)
+    } else if *guid == WSAID_TRANSMITFILE {
+        ("TransmitFile", transmit_file as *const () as usize, 7)
+    } else {
+        return None;
+    };
+    if crate::wow32::pointer_size() == 8 {
+        return Some(f);
+    }
+    static STUBS: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
+    let mut stubs = lock(STUBS.get_or_init(|| Mutex::new(HashMap::new())));
+    Some(
+        *stubs
+            .entry(name)
+            .or_insert_with(|| crate::wow32::x86_stdcall(name, f, args) as usize),
+    )
+}
+
+/// WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER) : ConnectEx, AcceptEx,
+/// GetAcceptExSockaddrs et DisconnectEx ; la sortie est un pointeur de la
+/// taille de ceux du programme (4 octets en x86, #1408).
 pub(super) unsafe fn extension_function(
     in_buf: *const u8,
     in_len: u32,
@@ -506,20 +853,21 @@ pub(super) unsafe fn extension_function(
     out_len: u32,
     returned: *mut u32,
 ) -> i32 {
-    if in_buf.is_null() || in_len < 16 || out_buf.is_null() || (out_len as usize) < 8 {
+    let ps = crate::wow32::pointer_size();
+    if in_buf.is_null() || in_len < 16 || out_buf.is_null() || (out_len as usize) < ps {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
     }
     let mut guid = [0u8; 16];
     std::ptr::copy_nonoverlapping(in_buf, guid.as_mut_ptr(), 16);
-    if guid != WSAID_CONNECTEX || crate::wow32::pointer_size() != 8 {
+    let Some(f) = extension_address(&guid) else {
         eprintln!("[ws2_32] WSAIoctl: fonction d'extension non fournie {guid:02x?}");
         set_error(WSAEINVAL);
         return SOCKET_ERROR;
-    }
-    std::ptr::write_unaligned(out_buf as *mut usize, connect_ex as *const () as usize);
+    };
+    crate::wow32::write_ptr(out_buf as usize, f);
     if !returned.is_null() {
-        *returned = 8;
+        *returned = ps as u32;
     }
     0
 }

@@ -903,6 +903,23 @@ ok("WINLUX_EXIT_CODE_FILE" in (ROOT / "integration/winlux-open").read_text()
    and "fn record_exit_code" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
    and "#1205" in (SCRIPTS / "test-integration.sh").read_text(),
    "message de fin d'un .exe : code de sortie complet en hexadécimal (#1205)")
+# #1434 : CoCreateInstance(CLSID_TaskbarList) rend ITaskbarList à ITaskbarList4.
+ok("taskbarlist_com::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text()
+   and "fn taskbar_list_cree_et_progression_retenue" in (ROOT / "runtime/src/dlls/taskbarlist_com.rs").read_text(),
+   "COM : CLSID_TaskbarList créé, progression du bouton retenue (#1434)")
+# #1425 : icône Winlux des fenêtres hors session Winlux, icônes et miniatures des .exe par install.sh.
+ok("fn winlux_window_icon" in (ROOT / "runtime/src/dlls/gui_x11.rs").read_text()
+   and "winlux-windows.thumbnailer" in (ROOT / "integration/install.sh").read_text()
+   and "hicolor/scalable/mimetypes" in (ROOT / "integration/install.sh").read_text(),
+   "icônes : _NET_WM_ICON de Winlux sous KDE/XFCE ordinaire, icône et miniature des .exe (#1425)")
+# #1426 : libellés français de la calculatrice accentués.
+calc = (ROOT / "testexe/src/shell/calc.rs").read_text()
+ok(all(word not in calc for word in ('b"Chronometre"', 'b"Reveil"', 'b"Demarrer"', 'b"Desactive', 'b"Active"')),
+   "calculatrice : Chronomètre, Réveil, Démarrer, Activée, Désactivée accentués (#1426)")
+# #1427 : aucun nom de marque dans les textes des programmes d'essai PE.
+ok("testexe/src/bin" in (SCRIPTS / "test-no-microsoft-branding.py").read_text()
+   and "Windows 11" not in "".join(line.split("//")[0] for line in (ROOT / "testexe/src/bin/gui_demo.rs").read_text().splitlines()),
+   "programmes d'essai PE : textes sans marque, contrôlés par test-no-microsoft-branding (#1427)")
 # #1188/#1189 : C:\\Users\\<compte> = dossier personnel (raccourcis de Claude pour Windows).
 ok("def account_names" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#1189" in (SCRIPTS / "test-native-catalogue.py").read_text(),
@@ -1355,6 +1372,9 @@ ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
 ok("unsafe fn has_own_caption" in (runtime_dlls / "user32.rs").read_text()
    and "cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre" in (SCRIPTS / "test-all.sh").read_text(),
    "Fenêtre sans barre de titre à elle (Electron sans page) : cadre du gestionnaire gardé, toujours fermable (#1211)")
+ok("pub fn work_rect" in (runtime_dlls / "monitors.rs").read_text()
+   and "zone_de_travail_sans_le_panneau" in (SCRIPTS / "test-all.sh").read_text(),
+   "GetMonitorInfo : rcWork sans le panneau, menus de la zone de notification au-dessus du curseur (#1267)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
@@ -1416,4 +1436,12 @@ for extra in loaded:
     runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
 ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
    f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
+# Transfert des réglages (fiche 171 point 7) : épingles du menu Démarrer
+# emportées (#1458), archive et fichiers importés au nom du compte (#1459).
+transfer_script = (SCRIPTS / "winlux-transfer.sh").read_text(encoding="utf-8")
+transfer_test = (SCRIPTS / "test-transfer.sh").read_text(encoding="utf-8")
+ok("pins_export" in transfer_script and "user/epingles.json" in transfer_script and "(#1458)" in transfer_test,
+   "Transfert des réglages : épingles du menu Démarrer exportées et restaurées (#1458)")
+ok("--owner=0" not in transfer_script and 'own "$home/$rel"' in transfer_script and "(#1459)" in transfer_test,
+   "Transfert des réglages : archive et fichiers importés au nom du compte (#1459)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

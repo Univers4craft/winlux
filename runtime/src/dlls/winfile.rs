@@ -200,7 +200,13 @@ fn split_search_path(path: &str) -> Result<(std::path::PathBuf, String), u32> {
         Some(i) => (&path[..i], &path[i + 1..]),
         None => (".", path),
     };
-    if pattern.is_empty() || directory.contains('*') || directory.contains('?') {
+    // Le « ? » des préfixes \\?\ et \??\ n'est pas un joker : Steam
+    // cherche « \\?\C:\…\package\tmp\* » (#1475).
+    let body = ["\\\\?\\", "\\??\\"]
+        .iter()
+        .find_map(|pre| directory.strip_prefix(pre))
+        .unwrap_or(directory);
+    if pattern.is_empty() || body.contains('*') || body.contains('?') {
         return Err(ERROR_INVALID_PARAMETER);
     }
     let directory = crate::paths::to_linux(directory);
@@ -298,10 +304,12 @@ unsafe fn first_common(path: &str, data: *mut c_void, wide: bool) -> usize {
     let mut entries = match enumerate(path) {
         Ok(x) => x,
         Err(e) => {
+            crate::trace!("FindFirstFile({path}) = échec (erreur {e})");
             error(e);
             return usize::MAX;
         }
     };
+    crate::trace!("FindFirstFile({path}) = {} entrée(s)", entries.len());
     let first = entries.remove(0);
     if wide {
         copy_w(&first, data as *mut Win32FindDataW);
@@ -396,7 +404,7 @@ pub unsafe extern "win64" fn find_next_file_w(handle: usize, data: *mut Win32Fin
     1
 }
 pub extern "win64" fn find_close(handle: usize) -> i32 {
-    if lock(searches()).remove(&handle).is_some() {
+    if lock(searches()).remove(&handle).is_some() || crate::dlls::kernel32_releve::close(handle) {
         1
     } else {
         error(6);
@@ -428,6 +436,30 @@ mod tests {
         let (dir, pat) = split_search_path("Z:\\tmp\\*").unwrap();
         assert_eq!(dir, std::path::PathBuf::from("/tmp"));
         assert_eq!(pat, "*");
+    }
+    #[test]
+    fn prefixe_chemin_long_avec_joker() {
+        // #1475 : Steam liste « \\?\C:\…\package\tmp\* » ; le « ? » du
+        // préfixe n'est pas un joker (avant : erreur 87 à chaque fois).
+        let (dir, pat) = split_search_path("\\\\?\\Z:\\tmp\\*").unwrap();
+        assert_eq!(dir, std::path::PathBuf::from("/tmp"));
+        assert_eq!(pat, "*");
+        let (dir, _) = split_search_path("\\??\\Z:\\tmp\\*.zip").unwrap();
+        assert_eq!(dir, std::path::PathBuf::from("/tmp"));
+        assert_eq!(
+            split_search_path("\\\\?\\Z:\\t?p\\*").unwrap_err(),
+            ERROR_INVALID_PARAMETER
+        );
+        let base = std::env::temp_dir().join(format!("winlux-find-1475-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("libcef.dll_"), b"x").unwrap();
+        let win = format!(
+            "\\\\?\\Z:{}\\*",
+            base.display().to_string().replace('/', "\\")
+        );
+        let found = enumerate(&win).unwrap();
+        assert!(found.iter().any(|e| e.name == "libcef.dll_"), "{win}");
+        std::fs::remove_dir_all(&base).unwrap();
     }
     #[test]
     fn etoile_point_etoile_liste_aussi_les_noms_sans_point() {

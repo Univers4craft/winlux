@@ -294,6 +294,32 @@ fn champ_de_saisie_texte_selection_et_notifications() {
 }
 
 #[test]
+fn champ_marges_em_setmargins() {
+    // #1377 : marges de la police par défaut, puis celles d'EM_SETMARGINS ;
+    // le texte aligné à droite ne touche plus le bord du champ.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "Edit", "1", 0x2002, 12, (10, 10, 42, 15));
+    let m = sendw(e, 0x00D4, 0, 0); // EM_GETMARGINS
+    let (l, r) = (m & 0xFFFF, m >> 16);
+    assert!(l > 0 && r > 0, "marges de la police : {l}, {r}");
+    sendw(e, 0x00D3, 2, 7 << 16); // EC_RIGHTMARGIN = 7
+    assert_eq!(sendw(e, 0x00D4, 0, 0), (7 << 16) | l);
+    let area = edit_area(e, client(e));
+    assert_eq!((area.left, area.right), (l as i32, 42 - 7));
+    sendw(e, 0x00D3, 0xFFFF, 0); // EC_USEFONTINFO
+    assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    // #1552 : EC_USEFONTINFO dans chaque mot de lParam (wxWidgets) donne
+    // aussi les marges de la police, pas 65535 pixels.
+    sendw(e, 0x00D3, 3, 7 | (7 << 16));
+    sendw(e, 0x00D3, 3, 0xFFFF | (0xFFFF << 16));
+    assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    let area = edit_area(e, client(e));
+    assert!(area.left < area.right, "zone de texte {area:?}");
+    gui::destroy_window(p);
+}
+
+#[test]
 fn champ_multiligne_lignes_et_touches() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let p = parent_window();
@@ -934,6 +960,35 @@ struct TbButtonT {
     reserved: [u8; 6],
     data: usize,
     string: isize,
+}
+
+#[test]
+fn tb_addbitmap_nul_ne_consomme_pas_d_index() {
+    // Notepad++ passe un HBITMAP nul pour chaque séparateur ; ses boutons
+    // numérotent leurs images sans les compter (#1287).
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let tb = child(p, "ToolbarWindow32", "", 0x0800, 61, (0, 0, 0, 0));
+    assert!(tb != 0);
+    sendw(tb, 0x0420, 0, 0x0010_0010); // TB_SETBITMAPSIZE 16×16
+                                       // Premier pixel blanc : couleur de transparence, le reste de la couleur.
+    let bmp = |c: u32| {
+        let mut px = [c; 256];
+        px[0] = 0xFFFF_FFFF;
+        gui::bitmap_from_pixels(16, 16, &px).unwrap()
+    };
+    let rouge = [0usize, bmp(0xFF00_00FF)];
+    let nul = [0usize, 0];
+    let vert = [0usize, bmp(0xFF00_FF00)];
+    assert_eq!(sendw(tb, 0x0413, 1, rouge.as_ptr() as isize), 0);
+    assert_eq!(sendw(tb, 0x0413, 1, nul.as_ptr() as isize), -1);
+    assert_eq!(sendw(tb, 0x0413, 1, vert.as_ptr() as isize), 1);
+    let list = sendw(tb, 0x0431, 0, 0) as usize; // TB_GETIMAGELIST
+    assert_eq!(crate::dlls::icons::image_list_get_image_count(list), 2);
+    let premier = crate::dlls::icons::list_image(list, 0).unwrap();
+    let second = crate::dlls::icons::list_image(list, 1).unwrap();
+    assert!(second.px.iter().any(|q| q >> 24 != 0), "image 1 vide");
+    assert_ne!(premier.px[8 * 16 + 8], second.px[8 * 16 + 8]);
 }
 
 #[test]
@@ -1878,4 +1933,164 @@ fn wm_setcursor_applique_le_curseur_de_classe() {
         unsafe { user32::send_message_w(bare, WM_SETCURSOR, bare, lp) },
         0
     );
+}
+
+static ENUMERES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+unsafe extern "win64" fn enum_collecte(hwnd: usize, limite: isize) -> i32 {
+    let mut v = ENUMERES.lock().unwrap();
+    v.push(hwnd);
+    i32::from(v.len() < limite as usize)
+}
+
+#[test]
+fn enum_child_windows_parcourt_tous_les_descendants() {
+    // Sumatra PDF invalide chaque enfant par EnumChildWindows en passant à
+    // l'onglet d'accueil ; le bouchon ne rappelait jamais.
+    let parent = parent_window();
+    let a = child(parent, "Static", "a", 0, 1, (0, 0, 10, 10));
+    let b = child(parent, "Static", "b", 0, 2, (0, 20, 10, 10));
+    let petit = child(a, "Static", "petit", 0, 3, (0, 0, 5, 5));
+    let cb = enum_collecte as *const () as usize;
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 100) };
+    let mut vus = ENUMERES.lock().unwrap().clone();
+    vus.sort_unstable();
+    let mut attendus = vec![a, b, petit];
+    attendus.sort_unstable();
+    assert_eq!(vus, attendus);
+    // FALSE arrête l'énumération.
+    ENUMERES.lock().unwrap().clear();
+    unsafe { user32::enum_child_windows(parent, cb, 1) };
+    assert_eq!(ENUMERES.lock().unwrap().len(), 1);
+}
+
+/// LVM_FINDITEM avec LVFI_PARAM seul : psz n'est pas lu (WinSCP x86 y
+/// laisse 1, #1325).
+#[test]
+fn liste_recherche_par_parametre_sans_texte() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 52, (0, 0, 300, 200));
+    for i in 0..3 {
+        let t = w("fichier");
+        let mut it = LvItemW {
+            mask: 0x1 | 0x4,
+            item: i,
+            sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            text: t.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 500 + i as isize,
+        };
+        assert_eq!(
+            sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize),
+            i as isize
+        );
+    }
+    // LVFINDINFOW 64 bits : flags, psz, lParam, pt, vkDirection.
+    let mut find = [0usize; 5];
+    find[0] = 0x1; // LVFI_PARAM
+    find[1] = 1; // psz quelconque
+    find[2] = 502;
+    assert_eq!(sendw(lv, 0x1053, usize::MAX, find.as_mut_ptr() as isize), 2);
+    find[2] = 9;
+    assert_eq!(
+        sendw(lv, 0x1053, usize::MAX, find.as_mut_ptr() as isize),
+        -1
+    );
+    // GetWindowPlacement d'une fenêtre enfant : relatif à son parent (#1326).
+    let tb = child(p, "Static", "", 0, 53, (0, 40, 120, 55));
+    let mut wp = user32::WindowPlacement::default();
+    assert_eq!(unsafe { user32::get_window_placement(tb, &mut wp) }, 1);
+    assert_eq!(
+        (
+            wp.normal.left,
+            wp.normal.top,
+            wp.normal.right,
+            wp.normal.bottom
+        ),
+        (0, 40, 120, 95)
+    );
+    unsafe {
+        user32::destroy_window(p);
+    }
+}
+
+/// Source d'un flux EM_STREAMIN / puits d'EM_STREAMOUT pour les tests.
+struct Flux {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+unsafe extern "win64" fn flux_lire(cookie: usize, buf: *mut u8, cb: i32, pcb: *mut i32) -> u32 {
+    let f = &mut *(cookie as *mut Flux);
+    // Morceaux de 7 octets : le contrôle doit rappeler jusqu'à la fin.
+    let n = (f.data.len() - f.pos).min(cb as usize).min(7);
+    std::ptr::copy_nonoverlapping(f.data.as_ptr().add(f.pos), buf, n);
+    f.pos += n;
+    *pcb = n as i32;
+    0
+}
+
+unsafe extern "win64" fn flux_ecrire(cookie: usize, buf: *mut u8, cb: i32, pcb: *mut i32) -> u32 {
+    let f = &mut *(cookie as *mut Flux);
+    f.data
+        .extend_from_slice(std::slice::from_raw_parts(buf, cb as usize));
+    *pcb = cb;
+    0
+}
+
+/// EDITSTREAM x64 telle que richedit.h la déclare sous pack(4) : dwCookie à 0,
+/// dwError à 8, pfnCallback à 12, 20 octets (#1454). Les octets qui suivent
+/// restent nuls : relire le rappel à 16 donnerait un pointeur faux.
+fn edit_stream(f: &mut Flux, callback: usize) -> [u8; 24] {
+    let mut es = [0u8; 24];
+    es[..8].copy_from_slice(&(f as *mut Flux as usize).to_le_bytes());
+    es[12..20].copy_from_slice(&callback.to_le_bytes());
+    es
+}
+
+/// #1433 : RichTextBox.Text de WinForms passe par EM_STREAMIN
+/// (SF_TEXT | SF_UNICODE) ; la zone de détails de Paint.NET restait vide.
+#[test]
+fn richedit_flux_texte_et_rtf() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "RICHEDIT50W", "", 0x4 | 0x800, 12, (10, 10, 300, 90));
+    let texte = "Exception:\r\n\r\nSystem.EntryPointNotFoundException: é";
+    let mut src = Flux {
+        data: texte.encode_utf16().flat_map(|u| u.to_le_bytes()).collect(),
+        pos: 0,
+    };
+    // EDITSTREAM (pack(4)) : dwCookie, dwError, pfnCallback.
+    let mut es = edit_stream(&mut src, flux_lire as usize);
+    let n = sendw(e, 0x0449, 0x1 | 0x10, es.as_mut_ptr() as isize);
+    assert_eq!(n as usize, texte.chars().count());
+    assert_eq!(title(e), texte);
+    // EM_STREAMOUT rend le même texte.
+    let mut dst = Flux {
+        data: Vec::new(),
+        pos: 0,
+    };
+    let mut es = edit_stream(&mut dst, flux_ecrire as usize);
+    sendw(e, 0x044A, 0x1 | 0x10, es.as_mut_ptr() as isize);
+    let units: Vec<u16> = dst
+        .data
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    assert_eq!(String::from_utf16_lossy(&units), texte);
+    // RTF : tables ignorées, \par, \'e9 et \u.
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\colortbl;\red0\green0\blue0;}\f0 Caf\'e9\par Pile \{1\}\tab \u8364?}";
+    let mut src = Flux {
+        data: rtf.to_vec(),
+        pos: 0,
+    };
+    let mut es = edit_stream(&mut src, flux_lire as usize);
+    sendw(e, 0x0449, 0x2, es.as_mut_ptr() as isize);
+    assert_eq!(title(e), "Café\r\nPile {1}\t€");
+    gui::destroy_window(p);
 }

@@ -14,7 +14,7 @@ réseau disponible).
 | `flatpak` | AppStream XML des remotes configurées (Flathub quand l'utilisateur l'a choisi) | `flatpak install --user`, `update`, `uninstall` |
 | `snap` | API locale de snapd (`/run/snapd.socket`) | `snap install/refresh/remove` |
 | `appimage` | flux AppImageHub, dernière version sur GitHub ; lu seulement pour un compte qui a déjà installé une AppImage (catalogue ni examiné ni signé, `docs/BOUTIQUES.md`) | `~/Applications` + lanceur `.desktop` |
-| `editeur` | `integration/store-editeurs.json` : index du dépôt de l'éditeur, en HTTPS (Claude, Spotify, Signal…) | confirmation, SHA-256 vérifié, `apt-get install -- <fichier>` ; purge + dépôt retiré |
+| `editeur` | `integration/store-editeurs.json` : index du dépôt de l'éditeur, en HTTPS (Claude, Spotify, Signal…) | confirmation, autorisation avant le téléchargement, SHA-256 vérifié deux fois, `apt-get install -- <copie>` ; purge + dépôt retiré |
 | `windows` | catalogues interchangeables, Scoop Extras par défaut (voir plus bas) | runtime Winlux (`winlux setup.exe`, msiexec intégré, applications portables) |
 
 Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
@@ -92,10 +92,17 @@ Sublime Text, VSCodium. Rien n'est fourni dans l'ISO.
 produit, la version, l'éditeur, l'adresse exacte, la taille, la licence et
 l'empreinte, dans la langue de l'interface, avec **Annuler** par défaut ;
 Annuler, Échap, fermer la fenêtre ou l'absence d'affichage valent refus, et
-rien n'est téléchargé. Après « Installer » : téléchargement dans un dossier
-neuf et vide du cache, empreinte comparée à celle montrée, nom et version du
-paquet contrôlés (`dpkg-deb -f`), puis `apt-get install -- <fichier>` par le
-relais root (Contrôle de compte d'utilisateur). Le dossier est effacé ensuite.
+rien n'est téléchargé. Après « Installer », le Contrôle de compte
+d'utilisateur vient tout de suite, avant le téléchargement
+(`winlux-store-repos grant <id> <sha256>`, #1451) : le relais root en garde un
+accord à usage unique, en mémoire seulement, lié au compte, à ce logiciel et à
+cette empreinte, valable une heure (#1453). Puis téléchargement dans un
+dossier neuf et vide du cache (avancement réel en Mo), empreinte comparée à
+celle montrée, nom et version du paquet contrôlés (`dpkg-deb -f`), et
+`winlux-store-repos install <id> <sha256> <fichier>` consomme l'accord : il
+recopie le paquet dans `/var/cache/winlux-store`, revérifie empreinte et nom,
+et lance `apt-get install -- <copie>` seulement. Un téléchargement annulé ou
+en échec retire l'accord (`revoke`). Les dossiers sont effacés ensuite.
 Une mise à jour (`u`) repasse par la même confirmation.
 
 **Désinstaller.** `apt-get purge --autoremove`, puis `winlux-store-repos clean
@@ -149,7 +156,18 @@ un catalogue :
 (`"file": "/chemin/catalog.json"` pour un fichier local, `"enabled": false`
 pour le désactiver.)
 
-**Boutiques au choix : Scoop Extras et Scoop Games.** Aucun catalogue Windows
+**Testés sur Winlux (#1515).** Seul catalogue Windows livré :
+`integration/store-windows-valides.json` (format `winlux`, installé dans
+`/usr/share/winlux/store-windows-valides.json`), les programmes .exe
+installés et utilisés sur le banc (liste de `site/content/fr/software.md`),
+chacun avec adresse officielle, version et SHA-256 relevés par la sonde de la
+CI (`scripts/check-store-editeurs.py`). Section dédiée en tête de la page
+Windows de la boutique et sur l'accueil. Comme pour tout programme .exe, une
+fenêtre de confirmation (produit, version, éditeur, adresse, empreinte,
+Annuler par défaut) précède le téléchargement (#1517) ; la désinstallation
+garde les documents.
+
+**Boutiques au choix : Scoop Extras et Scoop Games.** Aucun autre catalogue Windows
 n'est actif d'office : l'utilisateur choisit ses boutiques (installateur,
 premier démarrage, Paramètres > Applications ; voir `docs/BOUTIQUES.md`, qui
 liste aussi les boutiques écartées et pourquoi). Une installation antérieure

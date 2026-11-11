@@ -128,6 +128,12 @@ fn focus_taken_by_wm(
     detail == x11rb::protocol::xproto::NotifyDetail::ANCESTOR && child && asked_focus == xwin
 }
 
+/// FocusIn d'un contrôle qui n'est pas la dernière cible de SetFocus :
+/// écho périmé d'une remise du focus, sans effet côté Win32 (#1286).
+fn stale_child_focus(child: bool, asked_focus: u32, xwin: u32) -> bool {
+    child && asked_focus != xwin
+}
+
 #[derive(Clone, Copy)]
 struct XFont {
     id: u32,
@@ -411,6 +417,14 @@ impl XftRenderer {
         if display.is_null() {
             return None;
         }
+        // Xft et cairo dessinent sur des fenêtres et des tampons de la
+        // connexion x11rb, depuis cette seconde connexion Xlib. Si l'un
+        // d'eux vient d'être détruit, le serveur répond BadDrawable et le
+        // gestionnaire Xlib par défaut tuait tout le programme : FileZilla
+        // mourait à l'ouverture de « Se souvenir des mots de passe ? »
+        // (#1577). L'erreur est journalisée, le dessin perdu est refait au
+        // prochain WM_PAINT.
+        super::dxgi::install_x_error_guard();
         let screen = (api.default_screen)(display);
         let visual = (api.default_visual)(display, screen);
         let colormap = (api.default_colormap)(display, screen);
@@ -901,6 +915,65 @@ pub fn renders_itself(imports: &[String]) -> bool {
     })
 }
 
+/// WINLUX_WINDOW_DIAG=1 : journal borné (200 lignes) des peintures X11
+/// faites par Winlux, pour trouver ce qui recouvre une image GPU (#1421).
+fn diag_paint(what: &str, hwnd: usize, xid: u32) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    if crate::dlls::user32::window_diag() && N.fetch_add(1, Ordering::Relaxed) < 200 {
+        eprintln!("winlux[fenetre] peinture {what} hwnd={hwnd:#x} x={xid:#x}");
+    }
+}
+
+/// SDL ou GLFW liés en statique (Xonotic : ni SDL2.dll ni opengl32.dll
+/// dans les imports) : le nom de la classe de fenêtre qu'ils enregistrent,
+/// « SDL_app » ou « GLFW30 », figure dans l'image (#1421).
+///
+/// Un seul passage pour les quatre formes (UTF-16 et UTF-8) : on ne
+/// compare qu'aux octets « S » et « G ». Quatre balayages complets de
+/// l'image doublaient le temps de lancement de chaque .exe (#1559).
+pub fn statically_linked_renderer(bytes: &[u8]) -> bool {
+    const NEEDLES: [&[u8]; 4] = [
+        b"SDL_app\0",
+        b"S\0D\0L\0_\0a\0p\0p\0\0\0",
+        b"GLFW30\0",
+        b"G\0L\0F\0W\x003\x000\0\0\0",
+    ];
+    let mut rest = bytes;
+    while let Some(i) = rest.iter().position(|&b| b == b'S' || b == b'G') {
+        let tail = &rest[i..];
+        if NEEDLES.iter().any(|n| tail.starts_with(n)) {
+            return true;
+        }
+        rest = &rest[i + 1..];
+    }
+    false
+}
+
+/// Comme `statically_linked_renderer`, limité aux sections de données
+/// initialisées de l'image chargée (.rdata, .data) : les noms de classe
+/// sont des chaînes constantes. Le code, les ressources et les relocations
+/// ne sont pas lus, ce qui évite de toucher les pages d'un gros .exe
+/// (claude.exe : 161 Mo de code) au lancement (#1559).
+pub fn renderer_in_data_sections(image: &[u8], sections: &[crate::pe::Section]) -> bool {
+    const INITIALIZED_DATA: u32 = 0x40;
+    const CODE_OR_EXEC: u32 = 0x20 | 0x2000_0000;
+    sections
+        .iter()
+        .filter(|s| s.characteristics & INITIALIZED_DATA != 0)
+        .filter(|s| s.characteristics & CODE_OR_EXEC == 0)
+        .filter(|s| {
+            ![".rsrc", ".reloc", ".pdata", ".idata", ".edata", ".tls"].contains(&s.name.as_str())
+        })
+        .any(|s| {
+            let start = s.rva as usize;
+            let end = start.saturating_add(s.virtual_size.max(s.raw_size) as usize);
+            image
+                .get(start.min(image.len())..end.min(image.len()))
+                .is_some_and(statically_linked_renderer)
+        })
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -955,6 +1028,17 @@ pub struct X11Backend {
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
     back: HashMap<usize, (u32, u16, u16)>,
+    /// Fenêtres X où Direct3D présente (ce processus ou un autre : processus
+    /// GPU de Chromium) : leur contenu ne vient pas du dessin GDI (#1374).
+    direct3d: std::collections::HashSet<u32>,
+    /// Enfants transparents (WS_CHILD et WS_EX_TRANSPARENT, hors
+    /// contrôles intégrés) : fenêtres X « InputOnly », qui reçoivent la souris
+    /// sans masquer ce qu'un autre processus présente dans le parent
+    /// (fenêtre « Chrome Legacy Window » de Chromium, #1337).
+    see_through: std::collections::HashSet<usize>,
+    /// Fenêtres de premier niveau réduites par le gestionnaire de fenêtres,
+    /// telles que le programme le sait (WM_SIZE SIZE_MINIMIZED envoyé, #1498).
+    iconic: std::collections::HashSet<usize>,
     /// Barre de menus de chaque fenêtre qui en a une, et menu ouvert.
     menu_bars: HashMap<usize, (Vec<gui::MenuBarItem>, Option<usize>)>,
     /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
@@ -1166,6 +1250,9 @@ impl X11Backend {
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
+            direct3d: std::collections::HashSet::new(),
+            see_through: std::collections::HashSet::new(),
+            iconic: std::collections::HashSet::new(),
             menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -1625,6 +1712,7 @@ impl X11Backend {
 
     /// Recopie une zone du tampon arrière vers la fenêtre.
     fn present(&self, w: &XWin, pixmap: u32, x: i16, y: i16, width: u16, height: u16) {
+        diag_paint("tampon", 0, w.window);
         self.before_x11();
         let _ = self
             .conn
@@ -2155,6 +2243,42 @@ impl X11Backend {
         );
     }
 
+    /// Forme X de `window` : les rectangles logiques visibles, ou toute la
+    /// fenêtre (`None`).
+    fn apply_shape(&self, window: Window, width: u16, height: u16, rects: Option<&[Rect]>) {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
+            Some(list) => list
+                .iter()
+                .map(|r| {
+                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
+                    x11rb::protocol::xproto::Rectangle {
+                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
+                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
+                    }
+                })
+                .collect(),
+            None => vec![x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }],
+        };
+        let _ = self.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            window,
+            0,
+            0,
+            &rects,
+        );
+        let _ = self.conn.flush();
+    }
+
     fn paint_bitmap(
         &self,
         window: &XWin,
@@ -2528,6 +2652,17 @@ impl X11Backend {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                diag_paint("expose", hwnd, e.window);
+                if self.presented_by_direct3d(e.window) {
+                    // Image de Direct3D : ni tampon GDI ni thème par-dessus,
+                    // le programme redessine sur WM_PAINT (#1374).
+                    return (e.count == 0).then_some(PendingEvent {
+                        hwnd,
+                        message: gui::WM_PAINT,
+                        wparam: 0,
+                        lparam: 0,
+                    });
+                }
                 if self.is_frame(hwnd, e.window) {
                     if e.count == 0 {
                         self.paint_menu_bar(hwnd);
@@ -2561,6 +2696,7 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::PropertyNotify(e) => self.on_property(e),
             Event::SelectionNotify(e) => {
                 let root = self.conn.setup().roots[self.screen].root;
                 let scale = self.scale;
@@ -2613,7 +2749,7 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
-                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                if input_diag() {
                     eprintln!("Winlux X11 button {} at {x},{y} hwnd {hwnd:#x}", e.detail);
                 }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
@@ -2635,7 +2771,7 @@ impl X11Backend {
                     h == hwnd
                         && b == e.detail
                         && now.duration_since(t).as_millis()
-                            <= crate::dlls::mouse::current().double_click as u128
+                            <= crate::dlls::mouse::double_click_time() as u128
                         && (x - lx).abs() <= 4
                         && (y - ly).abs() <= 4
                 }) && gui::wants_double_clicks(hwnd);
@@ -2705,6 +2841,9 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if input_diag() {
+                    eprintln!("Winlux X11 release {} at {x},{y} hwnd {hwnd:#x}", e.detail);
+                }
                 if wheel_message(e.detail).is_some() {
                     return None;
                 }
@@ -2730,6 +2869,9 @@ impl X11Backend {
                 }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if input_diag() && button_state(e.state) != 0 {
+                    eprintln!("Winlux X11 drag {x},{y} hwnd {hwnd:#x}");
+                }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 Some(PendingEvent {
                     hwnd,
@@ -2739,6 +2881,15 @@ impl X11Backend {
                 })
             }
             Event::FocusIn(e) => {
+                if input_diag() {
+                    eprintln!(
+                        "Winlux X11 focus-in xwin {:#x} hwnd {:#x} mode {:?} detail {:?}",
+                        e.event,
+                        self.by_xwin.get(&e.event).copied().unwrap_or(0),
+                        e.mode,
+                        e.detail
+                    );
+                }
                 // NotifyGrab/NotifyUngrab : focus temporairement pris par un
                 // menu ou un glisser (grab du clavier) ; la fenêtre ne perd
                 // pas réellement le focus, ne pas le signaler.
@@ -2749,6 +2900,16 @@ impl X11Backend {
                 if self.is_frame(hwnd, e.event)
                     && e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
                 {
+                    return None;
+                }
+                // FocusIn périmé d'un contrôle : seul Winlux donne le focus X
+                // à un contrôle, et sa dernière demande vise une autre fenêtre.
+                // C'est l'écho d'une remise du focus (#1137) arrivé après un
+                // clic sur un autre bouton : le traiter rendait le focus Win32
+                // au bouton par défaut pendant l'appui, et le clic était perdu
+                // (#1286).
+                let child = self.windows.get(&hwnd).is_some_and(|w| w.child);
+                if stale_child_focus(child, self.asked_focus, e.event) {
                     return None;
                 }
                 // Focus remonté d'un contrôle à sa fenêtre de premier niveau
@@ -2778,6 +2939,15 @@ impl X11Backend {
                 })
             }
             Event::FocusOut(e) => {
+                if input_diag() {
+                    eprintln!(
+                        "Winlux X11 focus-out xwin {:#x} hwnd {:#x} mode {:?} detail {:?}",
+                        e.event,
+                        self.by_xwin.get(&e.event).copied().unwrap_or(0),
+                        e.mode,
+                        e.detail
+                    );
+                }
                 if focus_is_grab(e.mode) {
                     return None;
                 }
@@ -2840,7 +3010,7 @@ impl X11Backend {
                 }
                 gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                if input_diag() {
                     eprintln!("Winlux X11 keycode {}", e.detail);
                 }
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
@@ -3126,6 +3296,36 @@ impl X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn direct3d_atom(&self) -> Option<Atom> {
+        self.conn
+            .intern_atom(false, b"_WINLUX_DIRECT3D")
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| r.atom)
+    }
+
+    /// La fenêtre X reçoit-elle les images d'une chaîne d'échange Direct3D,
+    /// d'après la marque `_WINLUX_DIRECT3D` posée par le présentateur (#1374) ?
+    fn presented_by_direct3d(&mut self, xwin: u32) -> bool {
+        if self.direct3d.contains(&xwin) {
+            return true;
+        }
+        let Some(atom) = self.direct3d_atom() else {
+            return false;
+        };
+        let marked = self
+            .conn
+            .get_property(false, xwin, atom, AtomEnum::CARDINAL, 0, 1)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|r| r.value_len > 0);
+        if marked {
+            self.direct3d.insert(xwin);
+        }
+        marked
+    }
+
     /// Crée, déplace ou retire la zone client placée sous la barre de menus.
     fn layout_menu_frame(&mut self, hwnd: usize, bar: u16) {
         let Some(w) = self.windows.get(&hwnd).copied() else {
@@ -3219,6 +3419,53 @@ impl X11Backend {
         let _ = self.conn.flush();
     }
 
+    /// WM_STATE changé : le gestionnaire de fenêtres a réduit ou restauré la
+    /// fenêtre (bouton de la barre des tâches, wmctrl, Réduire du programme).
+    /// Windows passe alors par SetWindowPos : WM_SIZE SIZE_MINIMIZED, puis
+    /// SIZE_RESTORED ou SIZE_MAXIMIZED au retour. Chromium n'y remet son rendu
+    /// en marche qu'ainsi : réactivée, la fenêtre de Claude restait vide
+    /// (#1498).
+    fn on_property(
+        &mut self,
+        e: x11rb::protocol::xproto::PropertyNotifyEvent,
+    ) -> Option<PendingEvent> {
+        let hwnd = *self.by_xwin.get(&e.window)?;
+        let w = self.windows.get(&hwnd)?;
+        if w.child || Self::top_xwin(w) != e.window {
+            return None;
+        }
+        let wm_state = self
+            .conn
+            .intern_atom(true, b"WM_STATE")
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| r.atom)?;
+        if e.atom != wm_state {
+            return None;
+        }
+        let (width, height) = (w.width, w.height);
+        let state = gui::GuiBackend::window_state(self, hwnd);
+        let minimized = state == gui::WINDOW_MINIMIZED;
+        if minimized == self.iconic.contains(&hwnd) {
+            return None;
+        }
+        let lparam = if minimized {
+            self.iconic.insert(hwnd);
+            0
+        } else {
+            self.iconic.remove(&hwnd);
+            let lw = self.logical(width as i32).clamp(1, u16::MAX as i32);
+            let lh = self.logical(height as i32).clamp(1, u16::MAX as i32);
+            ((lh as isize) << 16) | (lw as isize & 0xFFFF)
+        };
+        Some(PendingEvent {
+            hwnd,
+            message: gui::WM_SIZE,
+            wparam: gui::size_kind(state),
+            lparam,
+        })
+    }
+
     fn on_configure(&mut self, e: ConfigureNotifyEvent) -> Option<PendingEvent> {
         let hwnd = *self.by_xwin.get(&e.window)?;
         let (old_x, old_y, old_w, old_h, window, root, child, frame, bar) = {
@@ -3288,10 +3535,17 @@ impl X11Backend {
                     lparam: pack_i16_pair(self.logical(x), self.logical(y)),
                 });
             }
+            // SIZE_MAXIMIZED ou SIZE_MINIMIZED quand le gestionnaire a
+            // agrandi ou réduit la fenêtre (#1328).
+            let wparam = if child {
+                0
+            } else {
+                gui::size_kind(gui::GuiBackend::window_state(self, hwnd))
+            };
             return Some(PendingEvent {
                 hwnd,
                 message: gui::WM_SIZE,
-                wparam: 0,
+                wparam,
                 lparam,
             });
         }
@@ -3351,6 +3605,13 @@ fn double_click_message(down: u32) -> u32 {
 
 /// Boutons X11 4/5 (molette verticale) et 6/7 (horizontale) : un cran vaut
 /// `WHEEL_DELTA` (120), positif vers le haut ou vers la droite.
+/// WINLUX_INPUT_DIAG : journal des boutons, relâchements et changements de
+/// focus X reçus (#1286, glisser de Sumatra au banc).
+fn input_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()))
+}
+
 fn wheel_message(detail: u8) -> Option<(u32, i16)> {
     match detail {
         4 => Some((gui::WM_MOUSEWHEEL, 120)),
@@ -3453,6 +3714,27 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFFE5 => gui::VK_CAPITAL,
         0xFF7F => gui::VK_NUMLOCK,
         0xFF14 => gui::VK_SCROLL,
+        // Pavé numérique (#1378) : opérateurs, Entrée, chiffres et, sans
+        // Verr. Num, touches de déplacement.
+        0xFF8D => gui::VK_RETURN,                          // KP_Enter
+        0xFFAA => 0x6A,                                    // VK_MULTIPLY
+        0xFFAB => 0x6B,                                    // VK_ADD
+        0xFFAC => 0x6C,                                    // VK_SEPARATOR
+        0xFFAD => 0x6D,                                    // VK_SUBTRACT
+        0xFFAE => 0x6E,                                    // VK_DECIMAL
+        0xFFAF => 0x6F,                                    // VK_DIVIDE
+        0xFFB0..=0xFFB9 => 0x60 + (sym - 0xFFB0) as usize, // VK_NUMPAD0..9
+        0xFF95 => 0x24,                                    // KP_Home
+        0xFF96 => 0x25,                                    // KP_Left
+        0xFF97 => 0x26,                                    // KP_Up
+        0xFF98 => 0x27,                                    // KP_Right
+        0xFF99 => 0x28,                                    // KP_Down
+        0xFF9A => 0x21,                                    // KP_Prior
+        0xFF9B => 0x22,                                    // KP_Next
+        0xFF9C => 0x23,                                    // KP_End
+        0xFF9D => 0x0C,                                    // KP_Begin / VK_CLEAR
+        0xFF9E => 0x2D,                                    // KP_Insert
+        0xFF9F => 0x2E,                                    // KP_Delete
         // ASCII imprimable : VK_A..VK_Z, chiffres et touches OEM Windows.
         0x20 => gui::VK_SPACE,
         0x21..=0x7E => {
@@ -3583,8 +3865,109 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
     }
 }
 
+/// Logo Winlux en 16, 32 et 48 px au format _NET_WM_ICON (largeur, hauteur,
+/// puis pixels ARGB), décodé une fois.
+pub(crate) fn winlux_window_icon() -> &'static [u32] {
+    static ICON: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let mut out = Vec::new();
+        for png in [
+            &include_bytes!("../../../assets/brand/winlux-logo-16.png")[..],
+            &include_bytes!("../../../assets/brand/winlux-logo-32.png")[..],
+            &include_bytes!("../../../assets/brand/winlux-logo-48.png")[..],
+        ] {
+            let Some(image) = super::icons::decode_png_bytes(png) else {
+                continue;
+            };
+            out.push(image.w as u32);
+            out.push(image.h as u32);
+            // Image : 0xAABBGGRR ; _NET_WM_ICON : 0xAARRGGBB.
+            out.extend(
+                image
+                    .px
+                    .iter()
+                    .map(|&p| (p & 0xFF00_FF00) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF)),
+            );
+        }
+        out
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    /// #1577 : un texte Xft sur une fenêtre ou un tampon déjà détruit
+    /// (BadDrawable) ne tue plus le processus. Sans affichage X, rien à
+    /// vérifier.
+    #[test]
+    fn xft_sur_un_dessin_detruit_ne_tue_pas_le_processus() {
+        if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
+            return;
+        }
+        let Some(mut xft) = (unsafe { super::XftRenderer::connect() }) else {
+            return;
+        };
+        let spec = crate::dlls::gui::FontSpec::default();
+        // Identifiant jamais attribué par le serveur : BadDrawable.
+        let _ = xft.draw(0x1F, &spec, 2, 12, b"FileZilla", 0);
+        xft.sync();
+    }
+
+    /// #1421 : SDL lié en statique est reconnu à sa classe de fenêtre.
+    #[test]
+    fn sdl_statique_reconnu() {
+        use super::statically_linked_renderer;
+        let mut image = vec![0u8; 64];
+        assert!(!statically_linked_renderer(&image));
+        image.extend(
+            "SDL_app"
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes),
+        );
+        image.extend([1, 2, 3]);
+        assert!(statically_linked_renderer(&image));
+        assert!(statically_linked_renderer(b"..SDL_app\0.."));
+        assert!(!statically_linked_renderer(b"SDL_application"));
+        let glfw: Vec<u8> = "GLFW30"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(statically_linked_renderer(&glfw));
+        assert!(statically_linked_renderer(b"xxGLFW30\0"));
+        assert!(!statically_linked_renderer(b"GLFW3"));
+    }
+
+    #[test]
+    fn classe_cherchee_dans_les_seules_sections_de_donnees() {
+        // #1559 : le code et les ressources ne sont pas lus au lancement.
+        use super::renderer_in_data_sections;
+        use crate::pe::Section;
+        let section = |name: &str, rva: u32, size: u32, characteristics: u32| Section {
+            name: name.into(),
+            virtual_size: size,
+            rva,
+            raw_size: size,
+            raw_ptr: 0,
+            characteristics,
+        };
+        let mut image = vec![0u8; 0x3000];
+        image[0x1100..0x1108].copy_from_slice(b"SDL_app\0");
+        let text = section(".text", 0x1000, 0x1000, 0x6000_0020);
+        let rdata = section(".rdata", 0x2000, 0x1000, 0x4000_0040);
+        assert!(!renderer_in_data_sections(
+            &image,
+            &[text.clone(), rdata.clone()]
+        ));
+        image[0x2200..0x2208].copy_from_slice(b"SDL_app\0");
+        assert!(renderer_in_data_sections(&image, &[text, rdata.clone()]));
+        let rsrc = section(".rsrc", 0x2000, 0x1000, 0x4000_0040);
+        assert!(!renderer_in_data_sections(&image, &[rsrc]));
+        // Section qui dépasse l'image : bornée, sans panique.
+        let long = section(".data", 0x2800, 0x10_0000, 0xC000_0040);
+        assert!(!renderer_in_data_sections(&image, &[long]));
+    }
+
     #[test]
     fn symboles_remplaces_par_un_equivalent() {
         assert_eq!(super::symbol_substitute('\u{FF0B}'), Some('+'));
@@ -3593,6 +3976,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn icone_winlux_publiee_en_trois_tailles() {
+        // #1425 : _NET_WM_ICON = largeur, hauteur, pixels ARGB, 16/32/48 px.
+        let icon = super::winlux_window_icon();
+        let mut at = 0;
+        let mut sizes = Vec::new();
+        while at + 2 <= icon.len() {
+            let (w, h) = (icon[at] as usize, icon[at + 1] as usize);
+            sizes.push((w, h));
+            at += 2 + w * h;
+        }
+        assert_eq!(sizes, [(16, 16), (32, 32), (48, 48)]);
+        assert_eq!(at, icon.len());
+        // Le logo a des pixels opaques et transparents (fond non rempli).
+        let pixels = &icon[2 + 16 * 16 + 2..2 + 16 * 16 + 2 + 32 * 32];
+        assert!(pixels.iter().any(|p| p >> 24 == 0xFF));
+        assert!(pixels.iter().any(|p| p >> 24 == 0));
+    }
 
     #[test]
     fn altgr_est_ctrl_gauche_plus_alt_droit() {
@@ -3645,6 +4047,17 @@ mod tests {
         assert!(!focus_taken_by_wm(NotifyDetail::NONLINEAR, 7, 7, true));
         // Fenêtre de premier niveau : pas concernée.
         assert!(!focus_taken_by_wm(NotifyDetail::ANCESTOR, 7, 7, false));
+    }
+
+    #[test]
+    fn focus_perime_d_un_controle_ignore() {
+        // « Oui » (7) reprend le focus X après que le clic sur « Non » (9)
+        // l'a demandé : l'écho est périmé et ne rend pas le focus à « Oui ».
+        assert!(stale_child_focus(true, 9, 7));
+        // Focus X donné au contrôle visé par le dernier SetFocus.
+        assert!(!stale_child_focus(true, 9, 9));
+        // Fenêtre de premier niveau : le gestionnaire peut l'activer.
+        assert!(!stale_child_focus(false, 9, 7));
     }
 
     #[test]
@@ -3737,6 +4150,12 @@ mod tests {
     fn dispositions_azerty_et_altgr_preservent_raccourcis_et_texte() {
         assert_eq!(key_levels_to_vk(b'&' as u32, b'1' as u32), Some(0x31));
         assert_eq!(key_levels_to_vk(0xE9, b'2' as u32), Some(0x32));
+        // Pavé numérique : « + » donne VK_ADD, pas la touche V (#1378).
+        assert_eq!(keysym_to_vk(0xFFAB), Some(0x6B));
+        assert_eq!(keysym_to_vk(0xFFAD), Some(0x6D));
+        assert_eq!(keysym_to_vk(0xFFB7), Some(0x67));
+        assert_eq!(keysym_to_vk(0xFF8D), Some(gui::VK_RETURN));
+        assert_eq!(key_levels_to_vk(0xFF9C, 0xFFB1), Some(0x23));
         assert_eq!(key_levels_to_vk(b'a' as u32, b'A' as u32), Some(0x41));
         let french_e = [b'e' as u32, b'E' as u32, 0x20AC, 0x0100_00A2];
         assert_eq!(
@@ -3878,6 +4297,138 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.0, 0.0), 0x0000_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 1.0, 1.0), 0x00ff_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
+    }
+
+    /// #1498 : réduite puis restaurée par le gestionnaire de fenêtres, la
+    /// fenêtre reçoit WM_SIZE SIZE_MINIMIZED, puis SIZE_RESTORED avec sa
+    /// taille. Il faut un gestionnaire de fenêtres (openbox) pour WM_STATE.
+    #[test]
+    #[ignore = "requires an X11 server and a window manager"]
+    fn reduite_puis_restauree_par_le_gestionnaire_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut backend = X11Backend::connect().expect("X11");
+        let hwnd = gui::alloc_hwnd();
+        gui::insert_window(hwnd, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(hwnd, "essai 1498", Rect::from_size(100, 100, 400, 300));
+        backend.show_window(hwnd, true);
+        let attendre = |b: &mut X11Backend, kind: usize| {
+            let fin = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < fin {
+                for e in b.pump() {
+                    if e.hwnd == hwnd && e.message == gui::WM_SIZE && e.wparam == kind {
+                        return Some(e.lparam);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            None
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        backend.set_window_state(hwnd, gui::WINDOW_MINIMIZED);
+        assert_eq!(attendre(&mut backend, 1), Some(0), "SIZE_MINIMIZED");
+        assert_eq!(backend.window_state(hwnd), gui::WINDOW_MINIMIZED);
+        backend.set_window_state(hwnd, gui::WINDOW_NORMAL);
+        let restored = attendre(&mut backend, 0).expect("SIZE_RESTORED");
+        assert_eq!(restored & 0xFFFF, 400);
+        backend.destroy_window(hwnd);
+        gui::destroy_window(hwnd);
+    }
+
+    /// #1477 : WM_NCLBUTTONDOWN(HTCAPTION) → _NET_WM_MOVERESIZE ; le
+    /// gestionnaire de fenêtres déplace la fenêtre tant que le bouton est
+    /// tenu. Il faut openbox et xdotool.
+    #[test]
+    #[ignore = "requires an X11 server, a window manager and xdotool"]
+    fn glisser_la_legende_deplace_la_fenetre_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let xdotool = |args: &[&str]| {
+            std::process::Command::new("xdotool")
+                .args(args)
+                .status()
+                .expect("xdotool");
+        };
+        let mut backend = X11Backend::connect().expect("X11");
+        let hwnd = gui::alloc_hwnd();
+        gui::insert_window(hwnd, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(hwnd, "essai 1477", Rect::from_size(100, 100, 400, 300));
+        backend.set_decorations(hwnd, 0);
+        backend.show_window(hwnd, true);
+        let pause = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+        let position = |b: &mut X11Backend| {
+            for _ in 0..10 {
+                b.pump();
+                pause(30);
+            }
+            (b.windows[&hwnd].x, b.windows[&hwnd].y)
+        };
+        pause(300);
+        let avant = position(&mut backend);
+        xdotool(&[
+            "mousemove",
+            &(avant.0 + 200).to_string(),
+            &(avant.1 + 10).to_string(),
+        ]);
+        xdotool(&["mousedown", "1"]);
+        pause(100);
+        backend.pump();
+        backend.begin_move_resize(hwnd, 2);
+        pause(200);
+        for pas in 1..=10 {
+            xdotool(&[
+                "mousemove",
+                &(avant.0 + 200 + pas * 15).to_string(),
+                &(avant.1 + 10 + pas * 10).to_string(),
+            ]);
+            pause(30);
+        }
+        xdotool(&["mouseup", "1"]);
+        pause(200);
+        let apres = position(&mut backend);
+        assert!(
+            apres.0 > avant.0 + 100 && apres.1 > avant.1 + 60,
+            "{avant:?} → {apres:?}"
+        );
+        backend.destroy_window(hwnd);
+        gui::destroy_window(hwnd);
+    }
+
+    /// Un enfant WS_EX_TRANSPARENT devient une fenêtre X InputOnly : il ne
+    /// masque pas l'image qu'un autre processus présente dans le parent
+    /// (Chromium, #1337).
+    #[test]
+    #[ignore = "requires an X11 server"]
+    fn enfant_transparent_en_inputonly_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::xproto::WindowClass;
+        let mut backend = X11Backend::connect().expect("X11");
+        let parent = gui::alloc_hwnd();
+        gui::insert_window(parent, gui::tests::fenetre_essai(0x06c8_0000, 0, 0));
+        backend.create_window(parent, "essai", Rect::from_size(0, 0, 200, 150));
+        let legacy = gui::alloc_hwnd();
+        gui::insert_window(legacy, gui::tests::fenetre_essai(0x4600_0000, 0x20, parent));
+        backend.create_child_window(legacy, parent, Rect::from_size(0, 37, 200, 113));
+        let opaque = gui::alloc_hwnd();
+        gui::insert_window(opaque, gui::tests::fenetre_essai(0x4600_0000, 0, parent));
+        backend.create_child_window(opaque, parent, Rect::from_size(0, 0, 20, 20));
+        let class = |b: &X11Backend, h: usize| {
+            let w = b.windows[&h].window;
+            b.conn
+                .get_window_attributes(w)
+                .unwrap()
+                .reply()
+                .unwrap()
+                .class
+        };
+        assert_eq!(class(&backend, legacy), WindowClass::INPUT_ONLY);
+        assert_eq!(class(&backend, opaque), WindowClass::INPUT_OUTPUT);
+        // Aucun dessin ne va dans la fenêtre InputOnly (pas d'erreur X).
+        backend.draw(legacy, &[]);
+        backend.conn.sync().unwrap();
+        for h in [legacy, opaque, parent] {
+            backend.destroy_window(h);
+            gui::destroy_window(h);
+        }
+        backend.conn.sync().unwrap();
     }
 
     #[test]
@@ -4110,6 +4661,148 @@ mod tests {
         backend.conn.free_gc(gc).unwrap();
         backend.conn.free_pixmap(pixmap).unwrap();
     }
+
+    /// #1357 : forme X posée sur la fenêtre d'un autre client X.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn forme_posee_sur_une_fenetre_etrangere_x11() {
+        use crate::dlls::gui::GuiBackend;
+        use x11rb::protocol::shape::ConnectionExt as _;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let win = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_window(
+                0,
+                win,
+                root.root,
+                0,
+                0,
+                40,
+                20,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        let s = backend.scaled(1);
+        let rect = Rect {
+            left: 10,
+            top: 0,
+            right: 30,
+            bottom: 20,
+        };
+        backend.shape_foreign(win as u64, Some(&[rect]));
+        let got = backend
+            .conn
+            .shape_get_rectangles(win, x11rb::protocol::shape::SK::BOUNDING)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(got.rectangles.len(), 1);
+        assert_eq!(got.rectangles[0].x as i32, 10 * s);
+        assert_eq!(got.rectangles[0].width as i32, 20 * s);
+        backend.conn.destroy_window(win).unwrap();
+    }
+
+    /// #1374 : la marque Direct3D posée par un client (processus GPU) est
+    /// lue par le propriétaire de la fenêtre, sur une autre connexion.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn marque_direct3d_lue_par_le_proprietaire_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut owner = X11Backend::connect().expect("X11");
+        let mut gpu = X11Backend::connect().expect("X11");
+        let root = owner.conn.setup().roots[owner.screen].root;
+        let win = owner.conn.generate_id().unwrap();
+        owner
+            .conn
+            .create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                40,
+                20,
+                0,
+                x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new().background_pixel(0xF3F3F3),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(!owner.presented_by_direct3d(win));
+        gpu.mark_direct3d(win as u64);
+        assert!(
+            owner.presented_by_direct3d(win),
+            "marque invisible du propriétaire"
+        );
+        owner.conn.destroy_window(win).unwrap();
+    }
+
+    /// #1345 : image posée par un autre processus (processus GPU de
+    /// Chromium) sur un drawable X11 qui ne lui appartient pas.
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn image_posee_sur_un_drawable_etranger_x11() {
+        use crate::dlls::gui::GuiBackend;
+        let mut backend = X11Backend::connect().expect("X11");
+        let root = backend.conn.setup().roots[backend.screen].clone();
+        let pixmap = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_pixmap(root.root_depth, pixmap, root.root, 64, 64)
+            .unwrap()
+            .check()
+            .unwrap();
+        let rect = Rect {
+            left: 2,
+            top: 2,
+            right: 6,
+            bottom: 5,
+        };
+        let scaled = backend.scaled_rect(&rect);
+        backend.paint_foreign(pixmap as u64, rect, &[0x0000_00ff; 12], gui::RasterOp::Copy);
+        let pixel = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                scaled.left as i16,
+                scaled.top as i16,
+                1,
+                1,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        let visual = root
+            .allowed_depths
+            .iter()
+            .flat_map(|d| &d.visuals)
+            .find(|v| v.visual_id == root.root_visual)
+            .unwrap();
+        let mut value = [0u8; 4];
+        let len = pixel.data.len().min(4);
+        value[..len].copy_from_slice(&pixel.data[..len]);
+        let value = if backend.conn.setup().image_byte_order
+            == x11rb::protocol::xproto::ImageOrder::LSB_FIRST
+        {
+            u32::from_le_bytes(value)
+        } else {
+            u32::from_be_bytes(value) >> (8 * (4 - len))
+        };
+        assert_eq!(value & visual.red_mask, visual.red_mask);
+        assert_eq!(value & visual.green_mask, 0);
+        backend.conn.free_pixmap(pixmap).unwrap();
+    }
 }
 
 /// Agrandit/réduit une image ZPixmap. `src`/`dst` = (largeur, hauteur, pas).
@@ -4219,6 +4912,74 @@ impl gui::GuiBackend for X11Backend {
 
     fn native_window(&mut self, hwnd: usize) -> Option<u64> {
         self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
+    fn mark_direct3d(&mut self, xid: u64) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
+        };
+        let Some(atom) = self.direct3d_atom() else {
+            return;
+        };
+        use x11rb::wrapper::ConnectionExt as _;
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            xid,
+            atom,
+            AtomEnum::CARDINAL,
+            &[1],
+        );
+        // Fond « None » : une exposition ne repeint pas le fond gris par-dessus
+        // la dernière image présentée.
+        let _ = self.conn.change_window_attributes(
+            xid,
+            &x11rb::protocol::xproto::ChangeWindowAttributesAux::new().background_pixmap(0),
+        );
+        let _ = self.conn.flush();
+        self.direct3d.insert(xid);
+    }
+
+    fn paint_foreign(&mut self, xid: u64, rect: Rect, pixels: &[u32], rop: gui::RasterOp) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
+        };
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return; // fenêtre détruite entre-temps
+        };
+        // L'image est encodée pour la profondeur de la racine.
+        if g.depth != self.conn.setup().roots[self.screen].root_depth {
+            return;
+        }
+        let Ok(gc) = self.conn.generate_id() else {
+            return;
+        };
+        if !self
+            .conn
+            .create_gc(gc, xid, &CreateGCAux::new())
+            .is_ok_and(|c| c.check().is_ok())
+        {
+            return;
+        }
+        let window = XWin {
+            window: xid,
+            gc,
+            x: 0,
+            y: 0,
+            width: g.width,
+            height: g.height,
+            child: false,
+            frame: 0,
+            bar: 0,
+        };
+        let destination = self.scaled_rect(&rect);
+        self.paint_bitmap(&window, &rect, &destination, pixels, rop);
+        let _ = self.conn.free_gc(gc);
+        let _ = self.conn.flush();
     }
 
     fn foreign_size(&mut self, xid: u64) -> Option<(i32, i32)> {
@@ -4331,7 +5092,9 @@ impl gui::GuiBackend for X11Backend {
                 | x11rb::protocol::xproto::EventMask::POINTER_MOTION
                 | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
                 | x11rb::protocol::xproto::EventMask::KEY_PRESS
-                | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
+                | x11rb::protocol::xproto::EventMask::KEY_RELEASE
+                // WM_STATE : réduite ou restaurée par le gestionnaire (#1498).
+                | x11rb::protocol::xproto::EventMask::PROPERTY_CHANGE,
         );
         let aux = if let Some(cursor) = pointer_cursor {
             aux.cursor(cursor)
@@ -4451,6 +5214,21 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::STRING,
             class.as_bytes(),
         );
+        // Icône de la fenêtre hors de la session Winlux (#1425) : sous KDE ou
+        // un XFCE ordinaire, personne ne publie _NET_WM_ICON et la barre des
+        // tâches montrait l'icône X11 par défaut. La session Winlux publie
+        // elle-même l'icône extraite du programme (winlux-applications).
+        if std::env::var("XDG_SESSION_DESKTOP").as_deref() != Ok("winlux") {
+            if let Some(icon) = atom(b"_NET_WM_ICON") {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    win,
+                    icon,
+                    AtomEnum::CARDINAL,
+                    winlux_window_icon(),
+                );
+            }
+        }
         if title == "Winlux Desktop" && std::env::var_os("WINLUX_NATIVE_SHELL").is_some() {
             if let (Some(kind), Some(desktop)) = (
                 atom(b"_NET_WM_WINDOW_TYPE"),
@@ -4517,9 +5295,22 @@ impl gui::GuiBackend for X11Backend {
         let Ok(win) = self.conn.generate_id() else {
             return;
         };
-        let bg = self.alloc_color(theme::BG_DEEP);
-        let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+        let see_through = gui::is_see_through_child(hwnd);
+        let aux = if see_through {
+            // InputOnly : ni fond ni dessin, la souris seulement.
+            CreateWindowAux::new()
+        } else {
+            let bg = self.alloc_color(theme::BG_DEEP);
+            CreateWindowAux::new().background_pixel(bg)
+        };
+        // Une fenêtre InputOnly n'est jamais exposée.
+        let exposure = if see_through {
+            x11rb::protocol::xproto::EventMask::NO_EVENT
+        } else {
             x11rb::protocol::xproto::EventMask::EXPOSURE
+        };
+        let aux = aux.event_mask(
+            exposure
                 | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
                 | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
                 | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
@@ -4543,8 +5334,12 @@ impl gui::GuiBackend for X11Backend {
                 w,
                 h,
                 0,
-                WindowClass::INPUT_OUTPUT,
-                visual,
+                if see_through {
+                    WindowClass::INPUT_ONLY
+                } else {
+                    WindowClass::INPUT_OUTPUT
+                },
+                if see_through { 0 } else { visual },
                 &aux,
             )
             .is_err()
@@ -4554,9 +5349,15 @@ impl gui::GuiBackend for X11Backend {
         let Ok(gc) = self.conn.generate_id() else {
             return;
         };
+        // Un GC ne se crée pas sur une fenêtre InputOnly : celui du parent
+        // (jamais utilisé, aucun dessin n'y va).
+        let gc_drawable = if see_through { parent_win } else { win };
         let _ = self
             .conn
-            .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+            .create_gc(gc, gc_drawable, &CreateGCAux::new().graphics_exposures(0));
+        if see_through {
+            self.see_through.insert(hwnd);
+        }
         let _ = self.conn.flush();
         self.windows.insert(
             hwnd,
@@ -4576,6 +5377,19 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
+        // Fenêtre où OpenGL ou Direct3D présente : la peinture GDI (thème,
+        // tampon arrière) effacerait son image (#1421, #1374).
+        if self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|w| self.direct3d.contains(&w.window))
+        {
+            self.content.insert(hwnd, cmds.to_vec());
+            return;
+        }
         self.content.insert(hwnd, cmds.to_vec());
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
@@ -4601,6 +5415,16 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        if self.see_through.contains(&hwnd) {
+            return;
+        }
+        if self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|w| self.direct3d.contains(&w.window))
+        {
+            return;
+        }
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
@@ -4662,6 +5486,8 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
+        self.see_through.remove(&hwnd);
+        self.iconic.remove(&hwnd);
         self.owners.remove(&hwnd);
         self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
@@ -4804,43 +5630,28 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_shape(&mut self, hwnd: usize, rects: Option<&[Rect]>) {
-        use x11rb::protocol::shape::{self, ConnectionExt as _};
         let Some(w) = self.windows.get(&hwnd).copied() else {
             return;
         };
         if w.frame != 0 {
             return; // cadre Winlux (barre de menus) : jamais en couches
         }
-        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
-            Some(list) => list
-                .iter()
-                .map(|r| {
-                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
-                    x11rb::protocol::xproto::Rectangle {
-                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
-                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
-                    }
-                })
-                .collect(),
-            None => vec![x11rb::protocol::xproto::Rectangle {
-                x: 0,
-                y: 0,
-                width: w.width,
-                height: w.height,
-            }],
+        self.apply_shape(w.window, w.width, w.height, rects);
+    }
+
+    fn shape_foreign(&mut self, xid: u64, rects: Option<&[Rect]>) {
+        let Ok(xid) = u32::try_from(xid) else {
+            return;
         };
-        let _ = self.conn.shape_rectangles(
-            shape::SO::SET,
-            shape::SK::BOUNDING,
-            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
-            w.window,
-            0,
-            0,
-            &rects,
-        );
-        let _ = self.conn.flush();
+        let Some(g) = self
+            .conn
+            .get_geometry(xid)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return;
+        };
+        self.apply_shape(xid, g.width, g.height, rects);
     }
 
     fn set_decorations(&mut self, hwnd: usize, level: u8) {
@@ -5158,6 +5969,16 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn stack_below(&mut self, hwnd: usize, sibling: usize) {
+        if let (Some(w), Some(s)) = (self.windows.get(&hwnd), self.windows.get(&sibling)) {
+            let aux = ConfigureWindowAux::new()
+                .sibling(Self::top_xwin(s))
+                .stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
     fn raise_window(&mut self, hwnd: usize) {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
@@ -5264,6 +6085,7 @@ impl gui::GuiBackend for X11Backend {
             return;
         }
         if let Some(w) = self.windows.get(&hwnd) {
+            diag_paint("effacement", hwnd, w.window);
             let _ = self.conn.clear_area(false, w.window, 0, 0, 0, 0);
             let _ = self.conn.flush();
         }

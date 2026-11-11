@@ -76,6 +76,9 @@ __attribute__((noinline)) static int rethrow_inner() {
     return 0;
 }
 
+// 14 (#1413, 7-Zip) : dans cxx32_seh.cpp, compilé avec -fasync-exceptions.
+int rethrow_seh();
+
 __attribute__((noinline)) static int nested_in_catch() {
     int r = 0;
     try {
@@ -153,6 +156,8 @@ extern "C" __attribute__((used)) void __stdcall entry() {
         }
     }
     if (live != 0) fail(13);
+
+    if (rethrow_seh() != 11) fail(14);
 
     say("C++ MSVC 32 bits : tout est correct\r\n");
     ExitProcess(0);

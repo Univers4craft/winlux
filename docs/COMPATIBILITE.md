@@ -74,6 +74,91 @@ et écritures, OVERLAPPED compris, passent par un relais qui ajoute ou retire
 l'octet d'identifiant de rapport que Windows impose et que hidraw omet. La règle
 `integration/70-winlux-manettes.rules` ouvre les `/dev/hidraw*` des fabricants
 de manettes au groupe `input`. Test : `scripts/test-hid.sh`.
+`integration/71-winlux-eclairage.rules` (#1522) fait de même pour les
+fabricants de claviers, souris et casques à éclairage (Corsair, Razer, ASUS,
+MSI, HyperX, Cooler Master, Roccat, Turtle Beach, Glorious, Wooting, NZXT,
+ITE), et pour eux seulement : aucune règle générique, `/dev/bus/usb` et
+`/dev/uhid` restent fermés aux comptes.
+
+Depuis #1523, `hid.dll` sert aussi les logiciels de matériel (éclairage,
+souris, claviers, casques) et hidapi :
+- **une interface par collection de tête**, comme sous Windows : un clavier
+  RVB qui déclare une collection clavier et une collection fabricant
+  (`0xFF00`) donne deux chemins `…&mi_02&col01#…` et `…&col02#…`, chacun avec
+  ses capacités ; le relais ne transmet à une collection que ses propres
+  rapports d'entrée ;
+- **description complète** (`runtime/src/dlls/hid_report.rs`, d'après la
+  spécification HID 1.11 et `hidpi.h`) : `HidP_GetButtonCaps`,
+  `GetValueCaps`, `GetSpecific*Caps`, `GetLinkCollectionNodes`,
+  `GetUsages(Ex)`, `SetUsages`, `UnsetUsages`, `UsageListDifference`,
+  `GetUsageValue`, `GetScaledUsageValue`, `Get/SetUsageValueArray`,
+  `InitializeReportForID`, `GetData`, `SetData` ; les trames de couleurs
+  par touche passent octet pour octet ;
+- **ouverture sans droit d'accès** (`dwDesiredAccess = 0`) : réussit même
+  quand `/dev/hidrawN` est fermé à l'utilisateur, pour lire attributs,
+  chaînes et capacités ; les rapports restent refusés (ERROR_ACCESS_DENIED) ;
+- **chaînes USB** (fabricant, produit, numéro de série, version
+  `bcdDevice`, `HidD_GetIndexedString` pour leurs indices) lues dans sysfs ;
+- **propriétés unifiées** `CM_Get_DevNode_PropertyW`,
+  `CM_Get_Device_Interface_PropertyW`, `SetupDiGetDevicePropertyW`,
+  `SetupDiOpenDeviceInterfaceW` (identifiant d'instance, identifiants
+  matériels dont `HID_DEVICE_UP:xxxx_U:yyyy`, parent…) ;
+- **avis de branchement** : `RegisterDeviceNotification` envoie
+  `WM_DEVICECHANGE` (`DBT_DEVICEARRIVAL`, `DBT_DEVICEREMOVECOMPLETE` avec le
+  chemin d'interface, puis `DBT_DEVNODES_CHANGED`) (`runtime/src/dlls/devnotify.rs`).
+
+Test : `scripts/test-hid-rgb.sh` (faux clavier RVB USB à deux collections,
+120 trames de couleurs à plus de 60 par seconde).
+
+Depuis #1533, un logiciel constructeur qui ouvre son pilote par son nom
+(`CreateFileW("\\.\NomDuPilote")`, aussi `\\.\Global\…` et
+`\\?\GLOBALROOT\Device\…`) obtient un **appareil virtuel** de Winlux,
+jamais un pilote `.sys` (`runtime/src/dlls/vdev.rs`, #1531). Chaque appareil
+est un module de traduction inscrit par l'installation virtualisée (#1532) ou
+par la table de sa marque (#1534) ; `DeviceIoControl` lui est transmis,
+synchrone ou OVERLAPPED (événement signalé, paquet sur le port de
+complétion). Un code inconnu rend `ERROR_INVALID_FUNCTION` et une ligne de
+journal (`WINLUX_TRACE`) avec le nom, le code décodé (type, fonction,
+méthode, accès) et les tailles ; le contenu des tampons n'est écrit qu'avec
+`WINLUX_VDEV_DUMP=1`, pour les passes d'observation faites dans le cadre
+d'interopérabilité de `AGENTS.md`. Test : `scripts/test-vdev.sh` (appareil
+d'essai `WinluxEssai`, présent seulement avec `WINLUX_VDEV_ESSAI=1`).
+
+Depuis #1532, un installeur qui pose un pilote réussit sans qu'aucun `.sys`
+ne soit chargé (`runtime/src/dlls/drivers.rs`) : `SetupCopyOEMInf` copie le
+`.inf` dans `C:\Windows\INF\oemN.inf` (même contenu, même nom),
+`DiInstallDriver` et `UpdateDriverForPlugAndPlayDevices` (newdev.dll, appareil
+présent exigé sinon `ERROR_NO_SUCH_DEVINST`) inscrivent les services
+`AddService` du `.inf`. Un service `SERVICE_KERNEL_DRIVER` n'est jamais lancé
+comme un programme : s'il existe une traduction pour son `.sys` (table par
+marque, #1534), « démarrer » le service fait apparaître l'appareil virtuel qui
+le remplace et la personne lit « Le pilote Windows de X a été remplacé par
+Winlux » ; sinon le service reste arrêté avec `ERROR_DRIVER_BLOCKED` (1275) et
+une notification le dit, en français, anglais, allemand ou espagnol. Test :
+`scripts/test-drivers.sh`.
+
+Depuis #1605, un installeur qui crée lui-même son appareil racine (comme
+`devcon install`) va jusqu'au bout : `SetupDiCreateDeviceInfo` (avec
+`DICD_GENERATE_ID`, identifiant `ROOT\NOM\0000`),
+`SetupDiSetDeviceRegistryProperty(SPDRP_HARDWAREID)` puis
+`SetupDiCallClassInstaller(DIF_REGISTERDEVICE)` inscrivent l'appareil sous
+`HKLM\SYSTEM\CurrentControlSet\Enum\ROOT`, où `CM_Locate_DevNode` et
+`UpdateDriverForPlugAndPlayDevices` le trouvent. `DIF_REMOVE`,
+`SetupDiRemoveDevice` et `CM_Request_Device_EjectW` le retirent (un vrai
+appareil refuse l'éjection, `CR_REMOVE_VETOED`). `CMP_WaitNoPendingInstallEvents`
+répond tout de suite : aucune installation n'est jamais en attente.
+
+Depuis #1625, les outils d'installation de pilotes des constructeurs
+(`driverinstalltool_64.exe` d'iCUE, devcon) trouvent le reste de setupapi
+et de cfgmgr32 (`runtime/src/dlls/setupinf.rs`) : lecture des `.inf`
+(`SetupOpenInfFile`, `SetupFindFirstLine`, `SetupGetStringField`), listes de
+pilotes tirées de `[Manufacturer]` et des sections de modèles `NTamd64`
+(`SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfo`,
+`SetupDiGetDriverInfoDetail`, avec `DI_ENUMSINGLEINF`), paramètres
+d'installation, classes connues, variantes `_Ex` de cfgmgr32 (machine locale
+seulement) et `DiUninstallDevice`. Une file de copie reste vide : aucun
+fichier de pilote n'est copié vers `System32\drivers`, et aucun appareil
+n'expose de configuration logique (`CR_NO_MORE_LOG_CONF`).
 
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent

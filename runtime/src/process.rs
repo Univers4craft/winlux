@@ -328,6 +328,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     // SharedUserData!SystemCall avant tout code du programme : les relais
     // Nt* de ntdll en dépendent (#767).
     crate::dlls::pe_image::map_shared_user_data();
+    crate::dlls::kernel32::adopt_crash_handler();
     let peb = alloc_peb();
     let params = alloc_zeroed(0x1000);
     unsafe {
@@ -361,6 +362,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     PEB.store(peb, Ordering::Relaxed);
     if crate::wow32::active() {
         crate::wow32::init_peb32(exe.base);
+    } else {
+        // PEB->Ldr : modules lus par un autre processus (crashpad, #1314).
+        crate::ldr::install(peb);
     }
     let _ = PROCESS.set(ProcessInfo {
         command_line_w,
@@ -484,7 +488,7 @@ fn remove_signal_stack() {
 /// Libère le TEB du thread courant (blocs TLS statiques, tableau
 /// d'expansion, pile de signal) et détache GS : plus aucun code Windows ne
 /// tourne sur ce thread.
-fn free_current_teb() {
+pub fn free_current_teb() {
     let t = teb();
     if t == 0 {
         return;
@@ -522,6 +526,16 @@ fn free_current_teb() {
         libc::munmap(t as *mut libc::c_void, TEB_SIZE);
     }
     remove_signal_stack();
+}
+
+/// Le TEB `t` appartient-il encore à un thread vivant ? (tests, #1361)
+#[cfg(test)]
+pub fn teb_known(t: usize) -> bool {
+    THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&t)
 }
 
 /// Lit une valeur TLS Win32 du TEB courant.
@@ -786,7 +800,12 @@ fn thread_calls_enabled(module: usize) -> bool {
 pub fn thread_attach_current() {
     init_thread();
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1) {
+    // Comme Windows : une DLL qui n'a pas encore reçu DLL_PROCESS_ATTACH
+    // (en cours de chargement par un autre thread) ne reçoit pas
+    // DLL_THREAD_ATTACH. Sinon un thread né pendant la liaison des imports
+    // de SDL3.dll exécutait son rappel TLS avant que sa section de code soit
+    // exécutable : faute d'exécution dans steamwebhelper (#1612).
+    for m in mods.into_iter().skip(1).filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
@@ -803,7 +822,7 @@ pub fn thread_detach_current() {
         return;
     }
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1).rev() {
+    for m in mods.into_iter().skip(1).rev().filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
@@ -821,8 +840,10 @@ fn start(exe: Module) -> u32 {
     crate::quality::init();
     crate::wow32::wrap_fault_handlers();
     let mods = loader::MODULES.lock().unwrap().clone();
-    // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
-    for m in mods.iter().skip(1).rev() {
+    // Chaque DLL après celles qu'elle importe, comme Windows : l'ordre
+    // inverse de la projection ne le garantit pas (#1584).
+    let deps = mods.get(1..).unwrap_or(&[]);
+    for m in crate::dlls::kernel32::dependency_order(&exe, deps) {
         if !loader::mark_initialized(m.base) {
             continue;
         }

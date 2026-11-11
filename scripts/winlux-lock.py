@@ -432,6 +432,22 @@ def check_password(user, password):
     return not requires_password(user)
 
 
+def open_keyring(password):
+    """Trousseau de secrets du compte ouvert avec le mot de passe tout juste
+    vérifié, comme pam_gnome_keyring ailleurs (#1488). Le mot de passe passe
+    par un tube, jamais en argument ; le déverrouillage ne l'attend pas."""
+    helper = os.environ.get("WINLUX_KEYRING", "/usr/bin/winlux-keyring")
+    if not os.access(helper, os.X_OK):
+        return
+    try:
+        child = subprocess.Popen([helper, "unlock"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        child.stdin.write(password.encode())
+        child.stdin.close()
+    except OSError:
+        pass
+
+
 # ── Inactivité X11 et retour de veille ──────────────────────────────────────
 
 class _XssInfo(ctypes.Structure):
@@ -582,6 +598,19 @@ def clock_css(scale):
             f".lock-hint {{ font-size: {max(11, round(13 * scale))}px; }}\n")
 
 
+def cover_plan(covered, monitors):
+    """Écrans à couvrir après un branchement ou un débranchement (#158).
+
+    `covered` : géométries (x, y, largeur, hauteur) déjà couvertes par une
+    fenêtre de l'écran verrouillé ; `monitors` : géométries des écrans
+    présents. Rend (à ajouter, à retirer) : aucun écran ne doit montrer le
+    bureau, et aucune fenêtre ne doit rester sur un écran disparu."""
+    covered, monitors = list(covered), list(monitors)
+    add = [geo for geo in monitors if geo not in covered]
+    remove = [geo for geo in covered if geo not in monitors]
+    return add, remove
+
+
 def run_lock(start="clock"):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -594,6 +623,7 @@ def run_lock(start="clock"):
       .lock-hint { color: white; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       .lock-name { color: white; font-size: 26px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
       .lock-error { color: white; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+      .lock-method-hint { color: white; font-size: 14px; margin-bottom: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       .lock-caps { color: white; font-size: 12px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       entry.lock-password { background: rgba(255,255,255,0.88); color: #1b1b1b; border: none;
                             border-bottom: 2px solid #3b6ee8; border-radius: 4px; padding: 8px 10px;
@@ -655,12 +685,55 @@ def run_lock(start="clock"):
             for index in range(display.get_n_monitors()):
                 monitor = display.get_monitor(index)
                 self.windows.append(self.make_window(monitor.get_geometry(), monitor == primary))
+            # Écran branché, débranché ou redéfini (xrandr, retour de veille)
+            # pendant le verrouillage : chaque écran reste couvert (#158).
+            display.connect("monitor-added", lambda *_: GLib.idle_add(self.cover_monitors))
+            display.connect("monitor-removed", lambda *_: GLib.idle_add(self.cover_monitors))
+            Gdk.Screen.get_default().connect("monitors-changed", lambda *_: GLib.idle_add(self.cover_monitors))
             self.grab_tries = 0
             GLib.timeout_add(100, self.grab)
             GLib.timeout_add(1000, self.tick)
             self.tick()
             if start == "signin":
                 self.show_signin()
+
+        @staticmethod
+        def _geo(rect):
+            return (rect.x, rect.y, rect.width, rect.height)
+
+        def cover_monitors(self):
+            display = Gdk.Display.get_default()
+            monitors = [display.get_monitor(i) for i in range(display.get_n_monitors())]
+            primary = display.get_primary_monitor() or (monitors[0] if monitors else None)
+            geos = [self._geo(m.get_geometry()) for m in monitors]
+            # La fenêtre principale suit l'écran principal s'il a bougé ou changé.
+            if primary is not None:
+                main_geo = self._geo(primary.get_geometry())
+                if self.main_geo != main_geo:
+                    x, y, width, height = main_geo
+                    self.main.move(x, y)
+                    self.main.set_size_request(width, height)
+                    self.main.resize(width, height)
+                    self.main_geo = main_geo
+            covers = {geo: window for geo, window in self.covers.items()}
+            # Un cache resté sur l'écran où la fenêtre principale vient d'aller
+            # la masquerait : il part.
+            stale = covers.pop(self.main_geo, None)
+            if stale is not None:
+                stale.destroy()
+            add, remove = cover_plan(list(covers) + [self.main_geo], geos)
+            for geo in remove:
+                window = covers.pop(geo, None)
+                if window is not None:
+                    window.destroy()
+            for geo in add:
+                rect = Gdk.Rectangle()
+                rect.x, rect.y, rect.width, rect.height = geo
+                covers[geo] = self.make_window(rect, False)
+            self.covers = covers
+            self.windows = [self.main] + list(covers.values())
+            self.main.present()
+            return False
 
         def make_window(self, geo, main):
             window = Gtk.Window(type=Gtk.WindowType.POPUP)
@@ -673,8 +746,11 @@ def run_lock(start="clock"):
             area = Gtk.DrawingArea()
             area.connect("draw", self.draw_background)
             overlay.add(area)
+            if not hasattr(self, "covers"):
+                self.covers = {}
             if main:
                 self.main = window
+                self.main_geo = (geo.x, geo.y, geo.width, geo.height)
                 self.area = area
                 overlay.add_overlay(self.clock_view(geo.width, geo.height))
                 overlay.add_overlay(self.signin_view())
@@ -684,6 +760,8 @@ def run_lock(start="clock"):
                 window.connect("key-press-event", self.on_key)
                 window.connect("button-press-event", self.on_click)
             window.show_all()
+            if not main:
+                self.covers[(geo.x, geo.y, geo.width, geo.height)] = window
             if main:
                 self.signin.hide()
                 self.accounts.hide()
@@ -828,6 +906,8 @@ def run_lock(start="clock"):
             entry = self.password_entry
             entry.set_placeholder_text(_t("Code PIN") if self.method == "pin" else _t("Mot de passe"))
             entry.set_input_purpose(Gtk.InputPurpose.PIN if self.method == "pin" else Gtk.InputPurpose.PASSWORD)
+            entry.get_accessible().set_name(_t("Code PIN") if self.method == "pin" else _t("Mot de passe"))
+            self.method_hint.set_visible(self.method == "pin" and bool(self.password))
             entry.set_text("")
             entry.set_visibility(False)
             if not keep_error:
@@ -944,6 +1024,12 @@ def run_lock(start="clock"):
             self.signin.pack_start(name, False, False, 6)
             # Champ et bouton construits tous deux : le compte choisi en bas à
             # gauche peut avoir un mot de passe ou non.
+            # GTK cache le texte indicatif du champ dès qu'il a le focus, donc
+            # dès l'affichage : « Code PIN » est aussi écrit au-dessus (#1499).
+            self.method_hint = Gtk.Label(label=_t("Code PIN"), halign=Gtk.Align.CENTER)
+            self.method_hint.get_style_context().add_class("lock-method-hint")
+            self.method_hint.set_no_show_all(True)
+            self.signin.pack_start(self.method_hint, False, False, 0)
             row = Gtk.Box(spacing=0, halign=Gtk.Align.CENTER)
             self.password_entry = Gtk.Entry(visibility=False, placeholder_text=_t("Mot de passe"))
             self.password_entry.get_style_context().add_class("lock-password")
@@ -1190,6 +1276,7 @@ def run_lock(start="clock"):
                     self.show_clock()
                     return
             elif check_password(self.user, self.entry.get_text()):
+                open_keyring(self.entry.get_text())
                 self.unlock()
                 return
             self.entry.set_text("")

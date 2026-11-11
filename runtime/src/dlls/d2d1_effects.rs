@@ -78,6 +78,13 @@ const IID_DRAW_TRANSFORM: Guid = guid(
     0x435d,
     [0xa3, 0x0d, 0xa6, 0x53, 0xbe, 0xff, 0x6a, 0x6f],
 );
+/// ID2D1Transform {EF1A287D-342A-4F76-8FDB-DA0D6EA9F92B} (d2d1effectauthor.h).
+const IID_TRANSFORM: Guid = guid(
+    0xef1a287d,
+    0x342a,
+    0x4f76,
+    [0x8f, 0xdb, 0xda, 0x0d, 0x6e, 0xa9, 0xf9, 0x2b],
+);
 const IID_OFFSET_TRANSFORM: Guid = guid(
     0x3fe6adea,
     0x7643,
@@ -424,12 +431,6 @@ pub(super) unsafe fn instantiate(reg: Arc<Registration>, effect: *mut EffectObj)
         pending: Mutex::new(1),
     };
     let _ = e.custom.set(custom);
-    // Valeurs par défaut des propriétés liées, passées par leur fonction.
-    for (i, p) in reg.props.iter().enumerate() {
-        if p.set != 0 && !p.default.is_empty() {
-            set_value(e, i as u32, &p.default);
-        }
-    }
     let init =
         method::<unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) -> i32>(imp, 3);
     let hr = init(imp, context.cast(), graph.cast());
@@ -439,6 +440,24 @@ pub(super) unsafe fn instantiate(reg: Arc<Registration>, effect: *mut EffectObj)
             "effet personnalisé : Initialize a échoué ({:#x})",
             hr
         );
+        return hr;
+    }
+    // Valeurs par défaut des propriétés liées, passées par leur fonction
+    // une fois l'effet initialisé : Paint.NET ne relie son objet .NET qu'à
+    // Initialize et son setter lève NullReferenceException avant (#1268).
+    for (i, p) in reg.props.iter().enumerate() {
+        if p.set != 0 && !p.default.is_empty() {
+            if let Some(h) = set_value(e, i as u32, &p.default) {
+                if h < 0 {
+                    crate::log_warn!(
+                        "d2d1",
+                        "effet personnalisé : valeur par défaut de « {} » refusée ({:#x})",
+                        p.name,
+                        h
+                    );
+                }
+            }
+        }
     }
     hr
 }
@@ -474,7 +493,19 @@ pub(super) unsafe fn get_value(
         return Some((hr, actual));
     }
     let props = crate::dlls::lock(&e.props);
-    let v = props.get(&index).map_or(&[][..], |v| &v[..]);
+    // Interface jamais posée : pointeur nul de taille pointeur, que
+    // GetValueSize annonce déjà (#1367).
+    const NUL: [u8; 8] = [0; 8];
+    let v = props.get(&index).map_or_else(
+        || {
+            if p.ty == ty::IUNKNOWN || p.ty == ty::COLOR_CONTEXT {
+                &NUL[..]
+            } else {
+                &[][..]
+            }
+        },
+        |v| &v[..],
+    );
     if !data.is_null() {
         if (size as usize) < v.len() {
             return Some((D2DERR_INSUFFICIENT_BUFFER, v.len() as u32));
@@ -515,6 +546,10 @@ enum Source {
 
 struct NodeEntry {
     node: *mut c_void,
+    /// Interface ID2D1Transform du nœud (référence tenue), nulle s'il n'en a
+    /// pas : un objet .NET a une table par interface, et celle
+    /// d'ID2D1TransformNode s'arrête à GetInputCount (#1319).
+    transform: *mut c_void,
     /// ID2D1DrawInfo donné à une transformation de dessin.
     info: *mut DrawInfoObj,
     inputs: Vec<Source>,
@@ -554,6 +589,9 @@ unsafe fn release_entry(n: NodeEntry) {
     if !n.info.is_null() {
         Com::release(n.info);
     }
+    if !n.transform.is_null() {
+        com_release(n.transform);
+    }
     com_release(n.node);
 }
 
@@ -582,6 +620,12 @@ unsafe fn add_node(g: &Graph, s: &mut GraphState, node: *mut c_void) -> i32 {
     let n = node_input_count(node) as usize;
     let mut entry = NodeEntry {
         node,
+        // Nos transformations intégrées n'ont pas de table ID2D1Transform.
+        transform: if as_builtin(node).is_some() {
+            std::ptr::null_mut()
+        } else {
+            com_qi(node, &IID_TRANSFORM)
+        },
         info: std::ptr::null_mut(),
         inputs: vec![Source::None; n],
     };
@@ -1328,10 +1372,10 @@ unsafe fn eval_node(
     if depth > 32 {
         return None;
     }
-    let (node, info, sources) = {
+    let (node, transform, info, sources) = {
         let s = crate::dlls::lock(&g.state);
         let n = s.nodes.get(index)?;
-        (n.node, n.info, n.inputs.clone())
+        (n.node, n.transform, n.info, n.inputs.clone())
     };
     let mut inputs = Vec::with_capacity(sources.len());
     for src in &sources {
@@ -1355,7 +1399,7 @@ unsafe fn eval_node(
             Builtin::Effect(fx) => super::image_of_effect(fx, depth + 1, hint),
         };
     }
-    if info.is_null() {
+    if info.is_null() || transform.is_null() {
         crate::log_debug!("d2d1", "nœud de graphe d'effet inconnu : entrée 0 recopiée");
         return inputs.into_iter().next().flatten();
     }
@@ -1378,10 +1422,10 @@ unsafe fn eval_node(
             *mut [i32; 4],
             *mut [i32; 4],
         ) -> i32,
-    >(node, 5);
+    >(transform, 5);
     let zero = vec![[0i32; 4]; rects.len()];
     if map_in(
-        node,
+        transform,
         rects.as_ptr(),
         zero.as_ptr(),
         rects.len() as u32,
@@ -1402,8 +1446,8 @@ unsafe fn eval_node(
     let mut needed = vec![[0i32; 4]; rects.len()];
     let map_out = method::<
         unsafe extern "win64" fn(*mut c_void, *const [i32; 4], *mut [i32; 4], u32) -> i32,
-    >(node, 4);
-    let _ = map_out(node, &out, needed.as_mut_ptr(), needed.len() as u32);
+    >(transform, 4);
+    let _ = map_out(transform, &out, needed.as_mut_ptr(), needed.len() as u32);
 
     let (shader, constants, linear) = {
         let s = crate::dlls::lock(&Com::get(info).state);
@@ -1629,6 +1673,334 @@ mod tests {
             assert!(!e.is_null());
             com_release(e);
             Com::release(f);
+        }
+    }
+
+    /// Effet d'essai dont le setter exige qu'Initialize ait déjà eu lieu,
+    /// comme l'effet personnalisé .NET de Paint.NET (#1268).
+    mod ordre {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        pub static INIT: AtomicBool = AtomicBool::new(false);
+        pub static AVANT_INIT: AtomicU32 = AtomicU32::new(0);
+        pub static VALEUR: AtomicU32 = AtomicU32::new(0);
+        #[repr(C)]
+        pub struct Imp {
+            vt: *const (),
+        }
+        unsafe extern "win64" fn qi(
+            this: *mut Imp,
+            riid: *const Guid,
+            out: *mut *mut c_void,
+        ) -> i32 {
+            if *riid == IID_EFFECT_IMPL || *riid == crate::dlls::d2d1::IID_IUNKNOWN {
+                *out = this.cast();
+                return S_OK;
+            }
+            *out = std::ptr::null_mut();
+            E_NOINTERFACE
+        }
+        unsafe extern "win64" fn one(_: *mut Imp) -> u32 {
+            1
+        }
+        unsafe extern "win64" fn init(_: *mut Imp, _: *mut c_void, _: *mut c_void) -> i32 {
+            INIT.store(true, Ordering::SeqCst);
+            S_OK
+        }
+        unsafe extern "win64" fn ok(_: *mut Imp, _: usize) -> i32 {
+            S_OK
+        }
+        pub unsafe extern "win64" fn set(_: *mut c_void, data: *const u8, n: u32) -> i32 {
+            if !INIT.load(Ordering::SeqCst) {
+                AVANT_INIT.fetch_add(1, Ordering::SeqCst);
+                return E_FAIL;
+            }
+            if n == 4 {
+                VALEUR.store(
+                    u32::from_le_bytes(*data.cast::<[u8; 4]>()),
+                    Ordering::SeqCst,
+                );
+            }
+            S_OK
+        }
+        pub unsafe extern "win64" fn get(_: *mut c_void, _: *mut u8, _: u32, n: *mut u32) -> i32 {
+            if !n.is_null() {
+                *n = 4;
+            }
+            S_OK
+        }
+        static VT: VTable<6> = VTable([
+            qi as *const (),
+            one as *const (),
+            one as *const (),
+            init as *const (),
+            ok as *const (),
+            ok as *const (),
+        ]);
+        static mut IMP: Imp = Imp {
+            vt: std::ptr::null(),
+        };
+        pub unsafe extern "win64" fn create(out: *mut *mut c_void) -> i32 {
+            let p = std::ptr::addr_of_mut!(IMP);
+            (*p).vt = VT.ptr();
+            *out = p.cast();
+            S_OK
+        }
+    }
+
+    #[test]
+    fn valeurs_par_defaut_posees_apres_initialize() {
+        use std::sync::atomic::Ordering;
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1268_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Damier'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs/>\
+                <Property name='Taille' type='uint32' value='8'/>\
+                </Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            let nom: Vec<u16> = "Taille".encode_utf16().chain([0]).collect();
+            let liaisons = [
+                nom.as_ptr() as usize,
+                ordre::set as *const () as usize,
+                ordre::get as *const () as usize,
+            ];
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    liaisons.as_ptr().cast(),
+                    1,
+                    ordre::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            let hr = super::super::create_effect(f, &id, &mut e);
+            assert_eq!(hr, S_OK);
+            assert_eq!(ordre::AVANT_INIT.load(Ordering::SeqCst), 0);
+            assert_eq!(ordre::VALEUR.load(Ordering::SeqCst), 8);
+            com_release(e);
+            Com::release(f);
+        }
+    }
+
+    /// #1367 : une propriété contexte de couleur jamais posée vaut un
+    /// pointeur nul de taille pointeur.
+    #[test]
+    fn contexte_de_couleur_non_pose_vaut_un_pointeur_nul() {
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1367_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Couleurs'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs minimum='1' maximum='1'><Input name='Source'/></Inputs>\
+                <Property name='SourceColorContext' type='colorcontext'/>\
+                </Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    ordre::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            assert_eq!(super::super::create_effect(f, &id, &mut e), S_OK);
+            let e = e.cast();
+            assert_eq!(super::super::effect_prop_type(e, 0), ty::COLOR_CONTEXT);
+            assert_eq!(super::super::effect_value_size(e, 0), 8);
+            let mut p: usize = 0xdead;
+            assert_eq!(
+                super::super::effect_get_value(
+                    e,
+                    0,
+                    ty::COLOR_CONTEXT,
+                    &mut p as *mut usize as *mut u8,
+                    8
+                ),
+                S_OK
+            );
+            assert_eq!(p, 0);
+            com_release(e.cast());
+            Com::release(f);
+        }
+    }
+
+    #[test]
+    fn effet_rend_sa_fabrique_par_id2d1resource() {
+        unsafe {
+            let f = Com::create(
+                super::super::super::FACTORY_VT.ptr(),
+                super::super::super::Factory,
+            );
+            let id = guid(0x1291_0001, 0, 0, [0, 0, 0, 0, 0, 0, 0, 1]);
+            let xml: Vec<u16> = "<?xml version='1.0'?><Effect>\
+                <Property name='DisplayName' type='string' value='Damier'/>\
+                <Property name='Author' type='string' value=''/>\
+                <Property name='Category' type='string' value=''/>\
+                <Property name='Description' type='string' value=''/>\
+                <Inputs/></Effect>"
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            assert_eq!(
+                super::super::factory_register_string(
+                    f,
+                    &id,
+                    xml.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    essai::create as *const () as usize
+                ),
+                S_OK
+            );
+            let mut e = std::ptr::null_mut();
+            assert_eq!(super::super::create_effect(f, &id, &mut e), S_OK);
+            // QueryInterface(ID2D1Resource) puis GetFactory (case 3), comme
+            // Paint.NET (#1291).
+            let qi = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(e, 0);
+            let mut res = std::ptr::null_mut();
+            assert_eq!(qi(e, &super::super::IID_D2D1_RESOURCE, &mut res), S_OK);
+            assert!(!res.is_null());
+            let get_factory =
+                method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void)>(res, 3);
+            let mut got = std::ptr::null_mut();
+            get_factory(res, &mut got);
+            assert_eq!(got, f.cast());
+            com_release(got);
+            // La facette rend l'effet pour ID2D1Effect.
+            let qi2 = method::<
+                unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32,
+            >(res, 0);
+            let mut back = std::ptr::null_mut();
+            assert_eq!(qi2(res, &super::super::IID_D2D1_EFFECT, &mut back), S_OK);
+            assert_eq!(back, e);
+            com_release(back);
+            com_release(res);
+            // QueryInterface(ID2D1Image) rend la sortie de l'effet, comme
+            // GetOutput : Paint.NET la passe à DrawImage (#1297).
+            let mut img = std::ptr::null_mut();
+            assert_eq!(qi(e, &super::super::IID_D2D1_IMAGE, &mut img), S_OK);
+            assert!(!img.is_null());
+            let get_factory =
+                method::<unsafe extern "win64" fn(*mut c_void, *mut *mut c_void)>(img, 3);
+            let mut f2 = std::ptr::null_mut();
+            get_factory(img, &mut f2);
+            assert_eq!(f2, f.cast());
+            com_release(f2);
+            com_release(img);
+            com_release(e);
+            Com::release(f);
+        }
+    }
+
+    /// Nœud .NET : une table par interface. Celle d'ID2D1TransformNode
+    /// s'arrête à GetInputCount ; ID2D1Transform est une autre facette,
+    /// obtenue par QueryInterface (#1319).
+    mod noeud_dotnet {
+        use super::*;
+        use std::sync::atomic::{AtomicI32, Ordering};
+        pub static REFS: AtomicI32 = AtomicI32::new(0);
+        #[repr(C)]
+        pub struct Facette {
+            vt: *const (),
+        }
+        pub static mut NOEUD: Facette = Facette {
+            vt: std::ptr::null(),
+        };
+        pub static mut TRANSFORM: Facette = Facette {
+            vt: std::ptr::null(),
+        };
+        unsafe extern "win64" fn qi(
+            _: *mut Facette,
+            riid: *const Guid,
+            out: *mut *mut c_void,
+        ) -> i32 {
+            *out = std::ptr::null_mut();
+            if *riid == IID_TRANSFORM {
+                REFS.fetch_add(1, Ordering::SeqCst);
+                *out = std::ptr::addr_of_mut!(TRANSFORM).cast();
+                return S_OK;
+            }
+            E_NOINTERFACE
+        }
+        unsafe extern "win64" fn add_ref(_: *mut Facette) -> u32 {
+            (REFS.fetch_add(1, Ordering::SeqCst) + 1) as u32
+        }
+        unsafe extern "win64" fn release(_: *mut Facette) -> u32 {
+            (REFS.fetch_sub(1, Ordering::SeqCst) - 1) as u32
+        }
+        unsafe extern "win64" fn input_count(_: *mut Facette) -> u32 {
+            1
+        }
+        static NOEUD_VT: VTable<4> = VTable([
+            qi as *const (),
+            add_ref as *const (),
+            release as *const (),
+            input_count as *const (),
+        ]);
+        static TRANSFORM_VT: VTable<4> = VTable([
+            qi as *const (),
+            add_ref as *const (),
+            release as *const (),
+            input_count as *const (),
+        ]);
+        pub unsafe fn prepare() -> *mut c_void {
+            (*std::ptr::addr_of_mut!(NOEUD)).vt = NOEUD_VT.ptr();
+            (*std::ptr::addr_of_mut!(TRANSFORM)).vt = TRANSFORM_VT.ptr();
+            std::ptr::addr_of_mut!(NOEUD).cast()
+        }
+    }
+
+    #[test]
+    fn noeud_appele_par_son_interface_id2d1transform() {
+        use std::sync::atomic::Ordering;
+        unsafe {
+            let node = noeud_dotnet::prepare();
+            let g = Graph {
+                effect: std::ptr::null_mut(),
+                state: Mutex::new(GraphState::default()),
+            };
+            {
+                let mut s = crate::dlls::lock(&g.state);
+                assert_eq!(add_node(&g, &mut s, node), S_OK);
+                let n = &s.nodes[0];
+                assert_eq!(n.node, node);
+                assert_eq!(
+                    n.transform,
+                    std::ptr::addr_of_mut!(noeud_dotnet::TRANSFORM).cast()
+                );
+                assert_eq!(n.inputs.len(), 1);
+            }
+            // Le nœud et sa facette ID2D1Transform sont tenus, puis rendus.
+            assert_eq!(noeud_dotnet::REFS.load(Ordering::SeqCst), 2);
+            drop(g);
+            assert_eq!(noeud_dotnet::REFS.load(Ordering::SeqCst), 0);
         }
     }
 

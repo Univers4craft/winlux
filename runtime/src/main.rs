@@ -16,10 +16,12 @@ mod dlls;
 mod firewall;
 mod gamemode;
 mod gpu;
+mod image_cache;
 mod imaging;
 mod intl;
 mod journal;
 mod launch;
+mod ldr;
 mod loader;
 pub mod log;
 mod managed;
@@ -48,6 +50,36 @@ mod volumes;
 mod wow32;
 
 use std::path::PathBuf;
+
+/// Ligne de `winlux --version` : version et commit de construction (#1266),
+/// par exemple « winlux v0.2.20 (commit 2e22875042ab) ».
+fn version_line() -> String {
+    format!(
+        "winlux {} (commit {})",
+        include_str!("../../VERSION").trim(),
+        env!("WINLUX_BUILD_COMMIT")
+    )
+}
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn version_affiche_le_commit_de_construction() {
+        let line = super::version_line();
+        let commit = env!("WINLUX_BUILD_COMMIT");
+        assert!(line.starts_with("winlux v"), "{line}");
+        assert!(line.ends_with(&format!("(commit {commit})")), "{line}");
+        assert!(!commit.is_empty());
+        // Construit dans le dépôt git : un vrai commit, pas « inconnu ».
+        if std::env::var_os("WINLUX_COMMIT").is_none() {
+            let head = commit.trim_end_matches("+modifié");
+            assert!(
+                head.len() >= 7 && head.bytes().all(|b| b.is_ascii_hexdigit()),
+                "{commit}"
+            );
+        }
+    }
+}
 
 fn main() {
     // Journal du compte (#633), fixé tant qu'il n'y a qu'un fil.
@@ -82,6 +114,10 @@ fn main() {
                 println!("{dll}\t{name}");
             }
         }
+        // Noms x86 servis seulement par les passerelles wow32 (#1508).
+        for (dll, name) in wow32::x86_only_candidates() {
+            println!("x86:{dll}\t{name}");
+        }
         return;
     }
     if exe == "--exports-kernel32" {
@@ -107,7 +143,8 @@ fn main() {
         return;
     }
     if exe == "--version" {
-        println!("winlux {}", include_str!("../../VERSION").trim());
+        // Commit compris (#1266) : deux têtes de master se distinguent.
+        println!("{}", version_line());
         return;
     }
     if exe == "--power" {
@@ -188,7 +225,7 @@ fn main() {
             eprintln!("winlux: usage: winlux --inspect PROGRAM.exe");
             std::process::exit(2);
         };
-        std::process::exit(inspect(&PathBuf::from(path)));
+        std::process::exit(inspect(&paths::launch_path(&path)));
     }
     if exe == "--image-info" {
         let Some(path) = args.next() else {
@@ -200,7 +237,7 @@ fn main() {
     if let Some(code) = gpu_command(&exe, &mut args) {
         std::process::exit(code);
     }
-    let exe = PathBuf::from(exe);
+    let exe = paths::launch_path(exe.as_ref());
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
     // msiexec.exe est fourni par Winlux lui-même (module msi).
     if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
@@ -318,7 +355,9 @@ fn main() {
     uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
-    if dlls::gui_x11::renders_itself(&imports) {
+    if dlls::gui_x11::renders_itself(&imports)
+        || dlls::gui_x11::renderer_in_data_sections(image.bytes(), &image.pe.sections)
+    {
         dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     if cpu::is_heavy(&imports) {

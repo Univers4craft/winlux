@@ -82,6 +82,24 @@ fn init_args() {
     });
 }
 
+/// `_putenv` et `_wputenv_s` mettent aussi à jour `_environ` et `_wenviron`,
+/// comme la CRT Microsoft. Tcl (tkinter) cherche TCL_LIBRARY, posée par
+/// PyInstaller après le démarrage, en parcourant `_wenviron` (#1474).
+/// Les anciens tableaux restent valides : un appelant peut encore les lire.
+pub fn refresh_environ() {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    init_args();
+    let env = environment();
+    unsafe {
+        ENVIRON = leak_narrow(&env);
+        WENVIRON = leak_wide(&env);
+    }
+    crate::wow32::refresh_environ();
+}
+
 pub unsafe extern "win64" fn getmainargs(
     argc: *mut i32,
     argv: *mut *mut *mut u8,
@@ -269,8 +287,37 @@ pub extern "win64" fn onexit(f: usize) -> usize {
         0
     }
 }
-pub extern "win64" fn dllonexit(f: usize, _begin: usize, _end: usize) -> usize {
-    onexit(f)
+/// `__dllonexit(f, &début, &fin)` : `atexit` d'une DLL liée à msvcrt.dll.
+/// La fonction va dans la table propre à la DLL (tableau alloué par `malloc`,
+/// agrandi ici au besoin), que la DLL parcourt elle-même à son
+/// DLL_PROCESS_DETACH. La mettre dans la liste du processus la faisait
+/// appeler à la sortie, après le FreeLibrary de la DLL : 7z.exe déchargeait
+/// 7z.dll puis sautait dans le vide, code de sortie 5 (#1479).
+pub unsafe extern "win64" fn dllonexit(f: usize, begin: *mut usize, end: *mut usize) -> usize {
+    if f == 0 || begin.is_null() || end.is_null() {
+        return 0;
+    }
+    let (b, e) = (*begin, *end);
+    let len = e.wrapping_sub(b);
+    if b == 0 || e < b || len % 8 != 0 || len > 1 << 24 {
+        // Table illisible : à défaut, la sortie du processus.
+        crate::log_warn!("crt", "__dllonexit : table {b:#x}..{e:#x} invalide");
+        return onexit(f);
+    }
+    let count = len / 8;
+    let cap = libc::malloc_usable_size(b as *mut c_void) / 8;
+    let mut table = b as *mut usize;
+    if count >= cap {
+        let grown = libc::realloc(table as *mut c_void, (count + count.max(16)) * 8) as *mut usize;
+        if grown.is_null() {
+            return 0;
+        }
+        table = grown;
+    }
+    *table.add(count) = f;
+    *begin = table as usize;
+    *end = table.add(count + 1) as usize;
+    f
 }
 pub extern "win64" fn crt_atexit(f: usize) -> i32 {
     atexit(f)
@@ -547,7 +594,10 @@ pub unsafe extern "win64" fn aligned_malloc(size: usize, align: usize) -> *mut c
     p
 }
 pub unsafe extern "win64" fn aligned_free(p: *mut c_void) {
-    libc::free(p)
+    match crate::dlls::crt_releve::take_offset_block(p as usize) {
+        Some(base) => libc::free(base as *mut c_void),
+        None => libc::free(p),
+    }
 }
 pub unsafe extern "win64" fn aligned_realloc(
     p: *mut c_void,
@@ -828,6 +878,7 @@ fn putenv_str(s: &str) -> i32 {
     } else {
         std::env::set_var(k, v);
     }
+    refresh_environ();
     0
 }
 pub unsafe extern "win64" fn putenv(s: *const u8) -> i32 {
@@ -919,6 +970,78 @@ pub unsafe extern "win64" fn time32(out: *mut i32) -> i32 {
     }
     t
 }
+/// Heure de `_ftime` : (secondes, millisecondes, minutes à l'ouest d'UTC
+/// hors heure d'été, heure d'été en cours).
+fn ftime_now() -> (i64, u16, i16, i16) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() as i64;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let t = secs as libc::time_t;
+    unsafe { libc::localtime_r(&t, &mut tm) };
+    let bias = crate::intl::tz::current().bias as i16;
+    (
+        secs,
+        now.subsec_millis() as u16,
+        bias,
+        (tm.tm_isdst > 0) as i16,
+    )
+}
+
+/// `_ftime64` : struct __timeb64 { time (8), millitm (2), timezone (2),
+/// dstflag (2) }, 16 octets (Tcl, #1491).
+pub unsafe extern "win64" fn ftime64(out: *mut u8) {
+    if out.is_null() {
+        *errno() = 22;
+        return;
+    }
+    let (t, ms, tz, dst) = ftime_now();
+    (out as *mut i64).write_unaligned(t);
+    (out.add(8) as *mut u16).write_unaligned(ms);
+    (out.add(10) as *mut i16).write_unaligned(tz);
+    (out.add(12) as *mut i16).write_unaligned(dst);
+}
+
+/// `_ftime32` : struct __timeb32 { time (4), millitm, timezone, dstflag },
+/// 12 octets.
+pub unsafe extern "win64" fn ftime32(out: *mut u8) {
+    if out.is_null() {
+        *errno() = 22;
+        return;
+    }
+    let (t, ms, tz, dst) = ftime_now();
+    (out as *mut i32).write_unaligned(t as i32);
+    (out.add(4) as *mut u16).write_unaligned(ms);
+    (out.add(6) as *mut i16).write_unaligned(tz);
+    (out.add(8) as *mut i16).write_unaligned(dst);
+}
+
+/// `_ftime` de msvcrt : time_t de 32 bits en x86, de 64 bits en x64.
+pub unsafe extern "win64" fn ftime(out: *mut u8) {
+    if crate::wow32::pointer_size() == 8 {
+        ftime64(out)
+    } else {
+        ftime32(out)
+    }
+}
+
+pub unsafe extern "win64" fn ftime64_s(out: *mut u8) -> i32 {
+    if out.is_null() {
+        return 22;
+    }
+    ftime64(out);
+    0
+}
+
+pub unsafe extern "win64" fn ftime32_s(out: *mut u8) -> i32 {
+    if out.is_null() {
+        return 22;
+    }
+    ftime32(out);
+    0
+}
+
 unsafe fn convert(t: *const i64, local: bool) -> *mut Tm {
     if t.is_null() || *t < 0 {
         *errno() = 22;
@@ -1416,6 +1539,7 @@ pub unsafe extern "win64" fn close(fd: i32) -> i32 {
     if fd <= 2 {
         return 0;
     }
+    forget_osfhandle(fd);
     let r = libc::close(fd);
     if r < 0 {
         set_errno_from_os();
@@ -1475,6 +1599,8 @@ pub unsafe extern "win64" fn dup(fd: i32) -> i32 {
     r
 }
 pub unsafe extern "win64" fn dup2(a: i32, b: i32) -> i32 {
+    // `b` est fermé puis remplacé : son handle de _get_osfhandle aussi.
+    forget_osfhandle(b);
     let r = libc::dup2(a, b);
     if r < 0 {
         set_errno_from_os();
@@ -1618,17 +1744,75 @@ pub extern "win64" fn setmaxstdio(n: i32) -> i32 {
     n
 }
 
+/// Handles Windows rendus par _get_osfhandle, par descripteur CRT.
+fn osf_handles() -> &'static Mutex<HashMap<i32, usize>> {
+    static M: OnceLock<Mutex<HashMap<i32, usize>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// _get_osfhandle : le handle Windows d'un descripteur CRT. Les descripteurs
+/// de Winlux sont ceux de Linux : le handle tient une copie (dup) du
+/// descripteur, qui partage sa position, et reste le même d'un appel à
+/// l'autre jusqu'au _close. Il renvoyait -1 pour tout fichier : libsndfile
+/// (sf_open_fd) prenait le fichier pour un tube et l'export WAV d'Audacity
+/// restait vide (#1283).
 pub extern "win64" fn get_osfhandle(fd: i32) -> isize {
     match fd {
-        0 => -10,
-        1 => -11,
-        2 => -12,
-        _ => {
-            unsafe {
-                *errno() = 9;
-            }
-            -1
+        0 => return -10,
+        1 => return -11,
+        2 => return -12,
+        _ => {}
+    }
+    let bad = || {
+        unsafe {
+            *errno() = 9;
         }
+        -1
+    };
+    if fd < 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        return bad();
+    }
+    let mut map = osf_handles().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&h) = map.get(&fd) {
+        // Le numéro de descripteur a pu être réutilisé pour un autre fichier
+        // (fermé par fclose ou remplacé par _dup2 sans passer par _close) :
+        // le handle n'est rendu que s'il désigne toujours le même fichier.
+        match crate::dlls::kernel32::fd_of_handle(h) {
+            Some(copy) if same_file(fd, copy) => return h as isize,
+            Some(_) => {
+                crate::dlls::kernel32::close_handle(h);
+            }
+            None => {}
+        }
+        map.remove(&fd);
+    }
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if copy < 0 {
+        return bad();
+    }
+    let file = unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(copy) };
+    let h = crate::dlls::kernel32::insert_file(file);
+    map.insert(fd, h);
+    h as isize
+}
+
+/// Deux descripteurs désignent le même fichier (périphérique et inœud).
+fn same_file(a: i32, b: i32) -> bool {
+    let stat = |fd: i32| unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        (libc::fstat(fd, &mut st) == 0).then_some((st.st_dev, st.st_ino))
+    };
+    matches!((stat(a), stat(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Le descripteur est fermé : son handle de _get_osfhandle aussi.
+fn forget_osfhandle(fd: i32) {
+    let h = osf_handles()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&fd);
+    if let Some(h) = h.filter(|&h| crate::dlls::kernel32::fd_of_handle(h).is_some()) {
+        crate::dlls::kernel32::close_handle(h);
     }
 }
 pub extern "win64" fn getpid() -> i32 {
@@ -1759,6 +1943,8 @@ pub fn exports() -> crate::dlls::Exports {
         "__pctype_func" => fn pctype_func,
         "getenv" => fn getenv, "_wgetenv" => fn wgetenv, "_putenv" => fn putenv, "_wputenv" => fn wputenv, "_putenv_s" => fn putenv_s,
         "time" => fn time64, "_time64" => fn time64, "_time32" => fn time32,
+        "_ftime" => fn ftime, "_ftime64" => fn ftime64, "_ftime32" => fn ftime32,
+        "_ftime64_s" => fn ftime64_s, "_ftime32_s" => fn ftime32_s,
         "localtime" => fn localtime64, "_localtime64" => fn localtime64, "_localtime32" => fn localtime32,
         "gmtime" => fn gmtime64, "_gmtime64" => fn gmtime64, "_gmtime32" => fn gmtime32,
         "_localtime64_s" => fn localtime64_s, "_gmtime64_s" => fn gmtime64_s,
@@ -1788,6 +1974,51 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1479 : `__dllonexit` remplit la table de la DLL, jamais la liste du
+    /// processus (7z.dll, déchargée avant la sortie de 7z.exe).
+    #[test]
+    fn dllonexit_remplit_la_table_de_la_dll() {
+        unsafe {
+            let avant = atexit_list().lock().unwrap().len();
+            let t = libc::malloc(4 * 8) as usize;
+            let (mut debut, mut fin) = (t, t);
+            for f in 1..=40usize {
+                assert_eq!(dllonexit(0x1000 * f, &mut debut, &mut fin), 0x1000 * f);
+            }
+            assert_eq!((fin - debut) / 8, 40);
+            let table = std::slice::from_raw_parts(debut as *const usize, 40);
+            assert!(table
+                .iter()
+                .enumerate()
+                .all(|(i, &f)| f == 0x1000 * (i + 1)));
+            assert_eq!(atexit_list().lock().unwrap().len(), avant);
+            libc::free(debut as *mut c_void);
+        }
+    }
+
+    /// #1491 : Tcl importe api-ms-win-crt-time!_ftime64.
+    #[test]
+    fn ftime_rend_l_heure_et_le_fuseau() {
+        for name in ["_ftime64", "_ftime32", "_ftime", "_ftime64_s"] {
+            assert!(crate::dlls::lookup("ucrtbase", name).is_some(), "{name}");
+        }
+        let avant = unsafe { time64(std::ptr::null_mut()) };
+        let mut b = [0xAAu8; 16];
+        unsafe { ftime64(b.as_mut_ptr()) };
+        let t = i64::from_le_bytes(b[..8].try_into().unwrap());
+        let ms = u16::from_le_bytes([b[8], b[9]]);
+        let tz = i16::from_le_bytes([b[10], b[11]]);
+        let dst = i16::from_le_bytes([b[12], b[13]]);
+        assert!(t >= avant && t <= avant + 2, "{t} {avant}");
+        assert!(ms < 1000 && (-24 * 60..=24 * 60).contains(&tz) && (dst == 0 || dst == 1));
+        let mut c = [0xAAu8; 12];
+        unsafe { ftime32(c.as_mut_ptr()) };
+        let t32 = i32::from_le_bytes(c[..4].try_into().unwrap()) as i64;
+        assert!(t32 >= avant && t32 <= avant + 2);
+        assert_eq!(i16::from_le_bytes([c[6], c[7]]), tz);
+        assert_eq!(unsafe { ftime64_s(std::ptr::null_mut()) }, 22);
+    }
 
     #[test]
     fn environnement_initial_de_l_apphost_dotnet() {
@@ -1991,6 +2222,69 @@ mod tests {
             assert_eq!(unlink(c.as_ptr()), 0);
             assert_eq!(open(c.as_ptr(), 0, 0), -1);
             assert_eq!(*errno(), 2);
+        }
+    }
+
+    /// #1283 : libsndfile (sf_open_fd) écrit par le handle de
+    /// _get_osfhandle ; il doit désigner le même fichier, à la même position.
+    #[test]
+    fn get_osfhandle_d_un_fichier() {
+        unsafe {
+            let path = std::env::temp_dir().join(format!("winlux-osf-{}", std::process::id()));
+            let c = format!("{}\0", path.display());
+            let fd = open(c.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            assert!(fd > 2);
+            let h = get_osfhandle(fd);
+            assert!(h > 0);
+            assert_eq!(get_osfhandle(fd), h, "même handle d'un appel à l'autre");
+            assert_eq!(crate::dlls::kernel32::get_file_type(h as usize), 1); // FILE_TYPE_DISK
+            let mut n = 0u32;
+            let ok = crate::dlls::kernel32::write_file(h as usize, b"RIFF".as_ptr(), 4, &mut n, 0);
+            assert!(ok != 0 && n == 4);
+            assert_eq!(lseek(fd, 0, 1), 4, "position partagée avec le descripteur");
+            assert_eq!(close(fd), 0);
+            assert_eq!(
+                crate::dlls::kernel32::get_file_type(h as usize),
+                0,
+                "handle fermé avec le descripteur"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"RIFF");
+            let _ = std::fs::remove_file(&path);
+            // Le numéro `fd` peut déjà resservir à un test qui tourne en
+            // parallèle (#1320) : on vérifie l'oubli dans la table, pas un
+            // appel à get_osfhandle(fd).
+            assert!(osf_handles().lock().unwrap().get(&fd).is_none());
+        }
+    }
+
+    #[test]
+    fn get_osfhandle_suit_un_numero_reutilise() {
+        // Un numéro de descripteur repris pour un autre fichier sans passer
+        // par _close (fclose, _dup2) ne rend pas l'ancien handle (#1320).
+        unsafe {
+            let dir = std::env::temp_dir();
+            let a = dir.join(format!("winlux-osf-a-{}", std::process::id()));
+            let b = dir.join(format!("winlux-osf-b-{}", std::process::id()));
+            let ca = format!("{}\0", a.display());
+            let cb = format!("{}\0", b.display());
+            let fd = open(ca.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            let autre = open(cb.as_ptr(), O_RDWR | O_CREAT | O_TRUNC | 0x8000, 0x180);
+            assert!(fd > 2 && autre > 2);
+            let h = get_osfhandle(fd);
+            assert!(h > 0);
+            // Remplacement brut, sans _close ni _dup2 : la table garde l'entrée.
+            assert_eq!(libc::dup2(autre, fd), fd);
+            let h2 = get_osfhandle(fd);
+            assert!(h2 > 0 && h2 != h, "nouveau handle pour le nouveau fichier");
+            let mut n = 0u32;
+            let ok = crate::dlls::kernel32::write_file(h2 as usize, b"B".as_ptr(), 1, &mut n, 0);
+            assert!(ok != 0 && n == 1);
+            assert_eq!(close(fd), 0);
+            assert_eq!(close(autre), 0);
+            assert_eq!(std::fs::read(&b).unwrap(), b"B");
+            assert_eq!(std::fs::read(&a).unwrap(), b"");
+            let _ = std::fs::remove_file(&a);
+            let _ = std::fs::remove_file(&b);
         }
     }
 }

@@ -14,7 +14,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 source = (HERE / "winlux-applications.py").read_text(encoding="utf-8")
-wanted = {"windows_path", "window_target", "launcher_icon"}
+wanted = {"windows_path", "_windows_path", "fix_case", "window_target", "launcher_icon"}
 nodes = [item for item in ast.parse(source).body if isinstance(item, ast.FunctionDef) and item.name in wanted]
 problems = []
 if {node.name for node in nodes} != wanted:

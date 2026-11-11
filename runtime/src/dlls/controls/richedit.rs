@@ -116,6 +116,364 @@ fn text_of(hwnd: usize) -> String {
     title(hwnd)
 }
 
+const SF_RTF: u32 = 0x2;
+const SFF_SELECTION: u32 = 0x8000;
+const SF_UNICODE: u32 = 0x10;
+const SF_USECODEPAGE: u32 = 0x20;
+
+/// EDITSTREAMCALLBACK(dwCookie, pbBuff, cb, pcb) -> 0 pour continuer.
+type StreamCallback = unsafe extern "win64" fn(usize, *mut u8, i32, *mut i32) -> u32;
+
+/// EDITSTREAM est déclarée sous `pack(4)` dans richedit.h : en x64,
+/// dwCookie (8 octets) à 0, dwError (4) à 8 et pfnCallback à 12, sans
+/// remplissage (20 octets). Lire le rappel à 16 donnait la moitié haute du
+/// pointeur, et Paint.NET sautait à 0x7288 (#1454).
+const EDITSTREAM_CALLBACK: usize = 12;
+
+/// Rappel EDITSTREAMCALLBACK du programme : x64, ou x86 en stdcall pour
+/// un programme 32 bits (#1457).
+#[derive(Clone, Copy)]
+enum Stream {
+    X64(usize, StreamCallback),
+    X86(u32, u32),
+}
+
+impl Stream {
+    /// Appelle le rappel : rend son code (0 pour continuer). En x86, le
+    /// tampon et le compteur sont dans la mémoire basse (programme x86),
+    /// leurs adresses tiennent en 32 bits.
+    unsafe fn call(self, buf: *mut u8, cb: i32, pcb: &mut i32) -> u32 {
+        match self {
+            Stream::X64(cookie, f) => f(cookie, buf, cb, pcb),
+            Stream::X86(cookie, f) => {
+                let pcb = pcb as *mut i32 as usize;
+                debug_assert!(buf as usize >> 32 == 0 && pcb >> 32 == 0);
+                crate::wow32::call32(f as usize, &[cookie, buf as u32, cb as u32, pcb as u32])
+                    as u32
+            }
+        }
+    }
+}
+
+/// Lit l'EDITSTREAM (dwError remis à 0). En x86, sous `pack(4)` :
+/// dwCookie (4) à 0, dwError à 4, pfnCallback à 8 (12 octets).
+unsafe fn edit_stream(lp: isize) -> Option<Stream> {
+    if lp == 0 {
+        return None;
+    }
+    let p = lp as *mut u8;
+    if crate::wow32::pointer_size() != 8 {
+        let cookie = (p as *const u32).read_unaligned();
+        let cb = (p.add(8) as *const u32).read_unaligned();
+        if cb == 0 {
+            return None;
+        }
+        (p.add(4) as *mut u32).write_unaligned(0);
+        return Some(Stream::X86(cookie, cb));
+    }
+    let cookie = (p as *const usize).read_unaligned();
+    let cb = (p.add(EDITSTREAM_CALLBACK) as *const usize).read_unaligned();
+    if cb == 0 {
+        return None;
+    }
+    (p.add(8) as *mut u32).write_unaligned(0);
+    Some(Stream::X64(
+        cookie,
+        std::mem::transmute::<usize, StreamCallback>(cb),
+    ))
+}
+
+unsafe fn set_stream_error(lp: isize, err: u32) {
+    let at = if crate::wow32::pointer_size() != 8 {
+        4
+    } else {
+        8
+    };
+    ((lp as *mut u8).add(at) as *mut u32).write_unaligned(err);
+}
+
+/// EM_STREAMIN : le programme fournit le texte par son rappel, en texte
+/// brut (ANSI, page de code ou UTF-16) ou en RTF, réduit ici à son texte.
+/// WinForms (RichTextBox.Text) passe par là : sans lui, la zone de détails
+/// de la boîte de plantage de Paint.NET restait vide (#1433).
+unsafe fn stream_in(hwnd: usize, flags: u32, lp: isize) -> isize {
+    let Some(cb) = edit_stream(lp) else {
+        return 0;
+    };
+    let mut bytes = Vec::new();
+    let mut buf = vec![0u8; 4096];
+    loop {
+        let mut got = 0i32;
+        let err = cb.call(buf.as_mut_ptr(), buf.len() as i32, &mut got);
+        if err != 0 {
+            set_stream_error(lp, err);
+            break;
+        }
+        if got <= 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..(got as usize).min(buf.len())]);
+    }
+    let text = if flags & SF_RTF != 0 || bytes.starts_with(b"{\\rtf") {
+        rtf_to_text(&bytes)
+    } else if flags & SF_UNICODE != 0 {
+        let units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else if flags & SF_USECODEPAGE != 0 && flags >> 16 == 65001 {
+        String::from_utf8_lossy(&bytes).into_owned()
+    } else {
+        crate::dlls::decode_ansi(&bytes)
+    };
+    let text = text.trim_end_matches('\0').to_string();
+    let n = text.chars().count();
+    if flags & SFF_SELECTION != 0 {
+        edit_replace(hwnd, &text, false);
+    } else {
+        // Le flux remplace tout le texte, sans la limite de saisie.
+        with_ctl(hwnd, |c| c.edit.limit = c.edit.limit.max(n));
+        control_proc_impl(Kind::Edit, hwnd, 0x00B1, 0, -1);
+        edit_replace(hwnd, &text, false);
+        with_ctl(hwnd, |c| {
+            c.edit.anchor = 0;
+            c.edit.caret = 0;
+            c.edit.top_line = 0;
+            c.edit.modified = false;
+        });
+    }
+    n as isize
+}
+
+/// EM_STREAMOUT : rend le texte (ou la sélection) par le rappel, en texte
+/// brut ; le RTF demandé est un RTF minimal autour du même texte.
+unsafe fn stream_out(hwnd: usize, flags: u32, lp: isize) -> isize {
+    let Some(cb) = edit_stream(lp) else {
+        return 0;
+    };
+    let text = if flags & SFF_SELECTION != 0 {
+        selected_text(hwnd)
+    } else {
+        text_of(hwnd)
+    };
+    let mut bytes = if flags & SF_RTF != 0 {
+        text_to_rtf(&text).into_bytes()
+    } else if flags & SF_UNICODE != 0 {
+        text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect()
+    } else if flags & SF_USECODEPAGE != 0 && flags >> 16 == 65001 {
+        text.clone().into_bytes()
+    } else {
+        crate::dlls::encode_ansi(&text)
+    };
+    let total = bytes.len();
+    let mut off = 0;
+    while off < total {
+        let chunk = (total - off).min(4096);
+        let mut done = 0i32;
+        let err = cb.call(bytes[off..].as_mut_ptr(), chunk as i32, &mut done);
+        if err != 0 {
+            set_stream_error(lp, err);
+            break;
+        }
+        if done <= 0 {
+            break;
+        }
+        off += (done as usize).min(chunk);
+    }
+    text.chars().count() as isize
+}
+
+/// Texte d'un document RTF : groupes de destination ignorés (tables de
+/// polices et de couleurs, images, `\\*`), `\\par` et `\\line` en fin de
+/// ligne, `\\tab`, `\\'hh` (page de code 1252) et `\\uN` (avec `\\ucN`).
+pub(super) fn rtf_to_text(rtf: &[u8]) -> String {
+    const SKIP: &[&str] = &[
+        "fonttbl",
+        "colortbl",
+        "stylesheet",
+        "info",
+        "pict",
+        "object",
+        "header",
+        "footer",
+        "listtable",
+        "listoverridetable",
+        "rsidtbl",
+        "generator",
+        "themedata",
+        "colorschememapping",
+        "latentstyles",
+        "datastore",
+        "xmlnstbl",
+    ];
+    let mut out = String::new();
+    // Pile : (ignorer ce groupe, caractères à sauter après \u).
+    let mut stack: Vec<(bool, usize)> = vec![(false, 1)];
+    let mut skip_after_u = 0usize;
+    let mut i = 0;
+    let mut pending_ansi: Vec<u8> = Vec::new();
+    let flush = |out: &mut String, pending: &mut Vec<u8>| {
+        if !pending.is_empty() {
+            out.push_str(&crate::dlls::decode_ansi(pending));
+            pending.clear();
+        }
+    };
+    while i < rtf.len() {
+        let c = rtf[i];
+        let (skipping, uc) = *stack.last().unwrap_or(&(false, 1));
+        match c {
+            b'{' => {
+                stack.push((skipping, uc));
+                i += 1;
+            }
+            b'}' => {
+                if stack.len() > 1 {
+                    stack.pop();
+                }
+                i += 1;
+            }
+            b'\\' => {
+                i += 1;
+                let Some(&n) = rtf.get(i) else { break };
+                if n.is_ascii_alphabetic() {
+                    let start = i;
+                    while i < rtf.len() && rtf[i].is_ascii_alphabetic() {
+                        i += 1;
+                    }
+                    let word = std::str::from_utf8(&rtf[start..i]).unwrap_or("");
+                    let nstart = i;
+                    if i < rtf.len() && (rtf[i] == b'-' || rtf[i].is_ascii_digit()) {
+                        i += 1;
+                        while i < rtf.len() && rtf[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                    }
+                    let param: Option<i32> = std::str::from_utf8(&rtf[nstart..i])
+                        .ok()
+                        .and_then(|t| t.parse().ok());
+                    if i < rtf.len() && rtf[i] == b' ' {
+                        i += 1;
+                    }
+                    if SKIP.contains(&word) {
+                        if let Some(top) = stack.last_mut() {
+                            top.0 = true;
+                        }
+                        continue;
+                    }
+                    if skipping {
+                        continue;
+                    }
+                    if skip_after_u > 0 {
+                        skip_after_u -= 1;
+                        continue;
+                    }
+                    match word {
+                        "par" | "line" => {
+                            flush(&mut out, &mut pending_ansi);
+                            out.push_str("\r\n");
+                        }
+                        "tab" => {
+                            flush(&mut out, &mut pending_ansi);
+                            out.push('\t');
+                        }
+                        "uc" => {
+                            if let Some(top) = stack.last_mut() {
+                                top.1 = param.unwrap_or(1).max(0) as usize;
+                            }
+                        }
+                        "u" => {
+                            flush(&mut out, &mut pending_ansi);
+                            let v = param.unwrap_or(0);
+                            let v = if v < 0 { v + 65536 } else { v } as u32;
+                            out.push(char::from_u32(v).unwrap_or('\u{FFFD}'));
+                            skip_after_u = uc;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    i += 1;
+                    match n {
+                        b'*' => {
+                            if let Some(top) = stack.last_mut() {
+                                top.0 = true;
+                            }
+                        }
+                        b'\'' => {
+                            let hex = rtf.get(i..i + 2).and_then(|h| std::str::from_utf8(h).ok());
+                            i += 2;
+                            if skipping {
+                                continue;
+                            }
+                            if skip_after_u > 0 {
+                                skip_after_u -= 1;
+                                continue;
+                            }
+                            if let Some(b) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                                pending_ansi.push(b);
+                            }
+                        }
+                        b'\\' | b'{' | b'}' if !skipping => {
+                            flush(&mut out, &mut pending_ansi);
+                            out.push(n as char);
+                        }
+                        b'~' if !skipping => {
+                            flush(&mut out, &mut pending_ansi);
+                            out.push('\u{A0}');
+                        }
+                        b'\n' | b'\r' if !skipping => {
+                            flush(&mut out, &mut pending_ansi);
+                            out.push_str("\r\n");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            b'\r' | b'\n' => i += 1,
+            _ => {
+                i += 1;
+                if skipping {
+                    continue;
+                }
+                if skip_after_u > 0 {
+                    skip_after_u -= 1;
+                    continue;
+                }
+                pending_ansi.push(c);
+            }
+        }
+    }
+    flush(&mut out, &mut pending_ansi);
+    out
+}
+
+/// RTF minimal qui porte `text` (EM_STREAMOUT avec SF_RTF).
+fn text_to_rtf(text: &str) -> String {
+    let mut s = String::from("{\\rtf1\\ansi\\deff0 ");
+    for ch in text.chars() {
+        match ch {
+            '\\' | '{' | '}' => {
+                s.push('\\');
+                s.push(ch);
+            }
+            '\r' => {}
+            '\n' => s.push_str("\\par\n"),
+            '\t' => s.push_str("\\tab "),
+            c if (c as u32) < 0x80 => s.push(c),
+            c => {
+                let mut units = [0u16; 2];
+                for u in c.encode_utf16(&mut units) {
+                    s.push_str(&format!("\\u{}?", *u as i16));
+                }
+            }
+        }
+    }
+    s.push('}');
+    s
+}
+
 unsafe fn rich_message(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
     let wide = wide_for(hwnd);
     let r = match msg {
@@ -208,8 +566,8 @@ unsafe fn rich_message(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
             }
             1
         }
-        // Les flux RTF ne sont pas lus : aucun caractère transféré.
-        EM_STREAMIN | EM_STREAMOUT => 0,
+        EM_STREAMIN => stream_in(hwnd, wp as u32, lp),
+        EM_STREAMOUT => stream_out(hwnd, wp as u32, lp),
         EM_GETTEXTLENGTHEX => {
             let text = text_of(hwnd);
             // GTL_NUMBYTES (0x10) en ANSI : octets ; sinon caractères UTF-16.

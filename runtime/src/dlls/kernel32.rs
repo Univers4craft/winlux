@@ -246,6 +246,9 @@ impl EventObject {
 }
 struct MutexState {
     owner: Option<ThreadId>,
+    /// Tid Linux du propriétaire, pour passer le mutex dans une page
+    /// partagée (DuplicateHandle vers un autre processus, #767).
+    owner_os: u32,
     recursion: usize,
 }
 pub(crate) struct MutexObject {
@@ -273,6 +276,7 @@ impl MutexObject {
         MutexObject {
             state: Mutex::new(MutexState {
                 owner: owned.then(|| std::thread::current().id()),
+                owner_os: if owned { os_thread_id() } else { 0 },
                 recursion: usize::from(owned),
             }),
             changed: Condvar::new(),
@@ -300,6 +304,34 @@ impl MutexObject {
         }
         None
     }
+    /// Rend le mutex partageable avec un autre processus (DuplicateHandle
+    /// du mutex « vivant » du bac à sable de Chromium, #767) : son état
+    /// passe dans une page partagée, comme celui d'un mutex nommé (#20).
+    pub(crate) fn share(&self) -> Option<i32> {
+        let _gate = sync_gate();
+        let st = lock(&self.state);
+        if self.shared.get().is_none() {
+            let w = crate::dlls::inherit::SharedWord::create(false)?;
+            let (owner, depth) = match st.owner {
+                Some(_) => (st.owner_os, st.recursion as u32),
+                None => (0, 0),
+            };
+            w.slot(0).store(owner, Ordering::Release);
+            w.slot(1).store(depth, Ordering::Release);
+            w.slot(2).store(SHARED_KIND_MUTEX, Ordering::Release);
+            let _ = self.shared.set(w);
+            // Les attentes locales en cours repartent sur la page partagée.
+            self.changed.notify_all();
+        }
+        self.shared.get().map(|w| w.fd())
+    }
+    /// Mutex dont l'état vit dans une page partagée reçue d'un autre
+    /// processus.
+    pub(crate) fn adopt(word: crate::dlls::inherit::SharedWord) -> SyncHandle {
+        let m = MutexObject::new(false);
+        let _ = m.shared.set(word);
+        SyncHandle::Mutex(Arc::new(m))
+    }
     fn shared_ready(w: &crate::dlls::inherit::SharedWord) -> bool {
         let owner = w.slot(0).load(Ordering::Acquire);
         owner == 0 || owner == os_thread_id() || !os_process_alive(owner as i32)
@@ -313,6 +345,27 @@ impl SemaphoreObject {
             changed: Condvar::new(),
             shared: std::sync::OnceLock::new(),
         }
+    }
+    /// Rend le sémaphore partageable avec un autre processus : compteur et
+    /// maximum passent dans une page partagée.
+    pub(crate) fn share(&self) -> Option<i32> {
+        let _gate = sync_gate();
+        let c = lock(&self.count);
+        if self.shared.get().is_none() {
+            let w = crate::dlls::inherit::SharedWord::create(false)?;
+            w.slot(0).store(c.0.max(0) as u32, Ordering::Release);
+            w.slot(1).store(c.1.max(0) as u32, Ordering::Release);
+            w.slot(2).store(SHARED_KIND_SEMAPHORE, Ordering::Release);
+            let _ = self.shared.set(w);
+            self.changed.notify_all();
+        }
+        self.shared.get().map(|w| w.fd())
+    }
+    pub(crate) fn adopt(word: crate::dlls::inherit::SharedWord) -> SyncHandle {
+        let max = word.slot(1).load(Ordering::Acquire) as i32;
+        let sem = SemaphoreObject::new(0, max);
+        let _ = sem.shared.set(word);
+        SyncHandle::Semaphore(Arc::new(sem))
     }
     fn shared_try(w: &crate::dlls::inherit::SharedWord) -> bool {
         let c = w.slot(0);
@@ -684,6 +737,8 @@ pub(crate) fn canon_std(h: usize) -> usize {
         STD_INPUT_REAL | 0x7FFF_FFFF_FFFF_FFF6 => (-10isize) as usize,
         STD_OUTPUT_REAL | 0x7FFF_FFFF_FFFF_FFF5 => (-11isize) as usize,
         STD_ERROR_REAL | 0x7FFF_FFFF_FFFF_FFF4 => (-12isize) as usize,
+        // Tampon d'écran de CreateConsoleScreenBuffer : le même terminal.
+        _ if crate::dlls::kernel32_releve::is_screen_buffer(h) => (-11isize) as usize,
         _ => h,
     }
 }
@@ -726,8 +781,12 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
     1
 }
 
+/// Comme sous Windows, un handle est un multiple de 4 : le bit 0 de
+/// `OVERLAPPED.hEvent` dit « pas de paquet au port de complétion ». Avec un
+/// numéro impair, la fin d'une E/S signalait le handle voisin et l'événement
+/// attendu ne l'était jamais (#1360).
 fn next_handle() -> usize {
-    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+    NEXT_HANDLE.fetch_add(4, Ordering::Relaxed)
 }
 /// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
 pub(crate) fn new_handle_number() -> usize {
@@ -746,13 +805,44 @@ pub(crate) fn insert_sync_at(h: usize, obj: SyncHandle) {
 }
 /// Les prochains handles seront au-dessus de `h` (handles hérités).
 pub(crate) fn reserve_handles_up_to(h: usize) {
-    NEXT_HANDLE.fetch_max(h + 1, Ordering::Relaxed);
+    NEXT_HANDLE.fetch_max((h + 4) & !3, Ordering::Relaxed);
 }
 /// Événement transmissible à un enfant : (descripteur de sa page partagée,
 /// réinitialisation manuelle).
 pub(crate) fn share_event(h: usize) -> Option<(i32, bool)> {
     match lookup_sync(h)? {
         SyncHandle::Event(e) => Some((e.share()?, e.manual_reset)),
+        _ => None,
+    }
+}
+/// Gestionnaire de plantage de crashpad lancé par ce processus ou désigné
+/// par notre parent (variable `WINLUX_CRASH_HANDLER_PID`).
+static CRASH_HANDLER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+pub(crate) const CRASH_HANDLER_ENV: &str = "WINLUX_CRASH_HANDLER_PID";
+fn crash_handler_pid() -> Option<i32> {
+    Some(CRASH_HANDLER.load(Ordering::Relaxed)).filter(|&p| p > 1)
+}
+/// Au démarrage : les enfants de Chromium (GPU, réseau, rendu) ne sont pas
+/// des descendants du gestionnaire de crashpad, que Linux (Yama) empêche
+/// alors de lire leur mémoire ; sous Windows, il l'ouvre comme tout
+/// processus du même compte (#767). L'enfant le désigne donc lui-même.
+pub(crate) fn adopt_crash_handler() {
+    let Some(pid) = std::env::var(CRASH_HANDLER_ENV)
+        .ok()
+        .and_then(|p| p.parse::<i32>().ok())
+        .filter(|&p| p > 1 && p != std::process::id() as i32)
+    else {
+        return;
+    };
+    CRASH_HANDLER.store(pid, Ordering::Relaxed);
+    unsafe { libc::prctl(libc::PR_SET_PTRACER, pid as libc::c_ulong, 0, 0, 0) };
+}
+/// Mutex ou sémaphore transmissible à un autre processus : (descripteur
+/// de sa page partagée, vrai pour un sémaphore).
+pub(crate) fn share_sync(h: usize) -> Option<(i32, bool)> {
+    match lookup_sync(h)? {
+        SyncHandle::Mutex(m) => Some((m.share()?, false)),
+        SyncHandle::Semaphore(s) => Some((s.share()?, true)),
         _ => None,
     }
 }
@@ -1166,12 +1256,38 @@ fn stream_io(
 /// Opération réussie tout de suite sur un handle en
 /// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS : OVERLAPPED rempli, événement
 /// signalé si `signal`, aucun paquet au port de complétion.
+/// Écrit Internal et InternalHigh d'un OVERLAPPED, en disposition x86
+/// (champs de 4 octets) pour un programme 32 bits (#1408).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_set(ov: usize, internal: usize, high: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::write_volatile(ov as *mut u32, internal as u32);
+        std::ptr::write_volatile((ov + 4) as *mut u32, high as u32);
+    } else {
+        let p = ov as *mut Overlapped;
+        std::ptr::write_volatile(&mut (*p).internal, internal);
+        std::ptr::write_volatile(&mut (*p).internal_high, high);
+    }
+}
+
+/// hEvent d'un OVERLAPPED (décalage 16 en x86, 24 en x64).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_event(ov: usize) -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::read_unaligned((ov + 16) as *const u32) as usize
+    } else {
+        (*(ov as *const Overlapped)).event
+    }
+}
+
 pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: bool) {
     unsafe {
-        let p = overlapped as *mut Overlapped;
-        (*p).internal = 0;
-        (*p).internal_high = bytes as usize;
-        let raw = (*p).event;
+        ov_set(overlapped, 0, bytes as usize);
+        let raw = ov_event(overlapped);
         if signal && raw & !1 != 0 {
             let _ = set_event(raw & !1);
         }
@@ -1180,10 +1296,12 @@ pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: 
 
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
-        let p = overlapped as *mut Overlapped;
-        let raw = (*p).event;
-        (*p).internal = ntstatus_of_win32(error) as usize;
-        (*p).internal_high = bytes as usize;
+        let raw = ov_event(overlapped);
+        ov_set(
+            overlapped,
+            ntstatus_of_win32(error) as usize,
+            bytes as usize,
+        );
         if raw & !1 != 0 {
             let _ = set_event(raw & !1);
         }
@@ -1987,8 +2105,25 @@ unsafe fn create_file_opened(
         None => path,
     };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
-    if let Some(dev) = crate::dlls::hid::device_path(path) {
-        return match crate::dlls::hid::open(&dev) {
+    // Appareil virtuel d'un pilote constructeur (#1533) : \\.\NomDuPilote.
+    if crate::dlls::vdev::is_virtual(path) {
+        return match crate::dlls::vdev::open(path) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(2);
+                usize::MAX
+            }
+        };
+    }
+    if crate::dlls::hid::parse_path(path).is_some() {
+        return match crate::dlls::hid::open_path(path, access) {
             Ok(f) => {
                 crate::process::set_last_error(0);
                 let h = insert_file(f);
@@ -2151,10 +2286,13 @@ unsafe fn create_file_opened(
     };
     // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
     // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
-    // l'erreur d'une tentative précédente ne doit pas rester (#905).
-    if creation == 2 || creation == 4 {
-        crate::process::set_last_error(if existed { 183 } else { 0 });
-    }
+    // l'erreur d'une tentative précédente ne doit pas rester (#905). Les
+    // autres dispositions réussies rendent 0 aussi (#1315).
+    crate::process::set_last_error(if (creation == 2 || creation == 4) && existed {
+        183
+    } else {
+        0
+    });
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
@@ -2459,7 +2597,7 @@ pub unsafe extern "win64" fn set_file_pointer(
     let from = match method {
         0 if d >= 0 => SeekFrom::Start(d as u64),
         0 => {
-            crate::process::set_last_error(87);
+            crate::process::set_last_error(ERROR_NEGATIVE_SEEK);
             return u32::MAX;
         }
         1 => SeekFrom::Current(d),
@@ -2477,9 +2615,22 @@ pub unsafe extern "win64" fn set_file_pointer(
             n as u32
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(seek_error_code(&e));
             u32::MAX
         }
+    }
+}
+
+/// ERROR_NEGATIVE_SEEK : d'après la documentation de SetFilePointer(Ex),
+/// une position résultante négative échoue avec ce code. lseek() rend
+/// EINVAL dans ce cas ; le CRT de Steam x86, qui sonde la fin d'un fichier
+/// neuf à -1, ne tolère que 131 et fermait son manifeste vide (#1439).
+const ERROR_NEGATIVE_SEEK: u32 = 131;
+fn seek_error_code(e: &std::io::Error) -> u32 {
+    if e.raw_os_error() == Some(libc::EINVAL) {
+        ERROR_NEGATIVE_SEEK
+    } else {
+        io_error_code(e)
     }
 }
 pub extern "win64" fn flush_file_buffers(h: usize) -> i32 {
@@ -2584,6 +2735,10 @@ pub unsafe extern "win64" fn set_file_pointer_ex(
     };
     let from = match method {
         0 if distance >= 0 => SeekFrom::Start(distance as u64),
+        0 => {
+            crate::process::set_last_error(ERROR_NEGATIVE_SEEK);
+            return 0;
+        }
         1 => SeekFrom::Current(distance),
         2 => SeekFrom::End(distance),
         _ => {
@@ -2601,7 +2756,7 @@ pub unsafe extern "win64" fn set_file_pointer_ex(
             1
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(seek_error_code(&e));
             0
         }
     }
@@ -3047,6 +3202,19 @@ pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
+    let r = move_file_ex_inner(src, dst, flags);
+    crate::trace!(
+        "MoveFileEx({src} -> {dst}, {flags:#x}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+
+fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     let s = crate::paths::to_linux(src);
     let d = crate::paths::to_linux(dst);
     if d.exists() {
@@ -3201,6 +3369,25 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
     }
     load_library_str(&crate::dlls::cstr(name))
 }
+/// Programme qui charge lui-même OpenGL, Vulkan ou Direct3D (SDL lié en
+/// statique, comme Xonotic) : il dessine sa fenêtre, qui reste donc à
+/// l'échelle 1, comme pour un import direct de ces DLL (#1421). SDL charge
+/// opengl32 avant de créer sa fenêtre.
+fn note_renders_itself(name: &str) {
+    let base = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let base = if base.contains('.') {
+        base
+    } else {
+        format!("{base}.dll")
+    };
+    if crate::dlls::gui_x11::renders_itself(&[base]) {
+        crate::dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// Corps commun de `load_library_a` et `load_library_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn load_library_str(name: &str) -> usize {
@@ -3209,6 +3396,7 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
+    note_renders_itself(n);
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -3268,8 +3456,6 @@ unsafe fn load_library_str(name: &str) -> usize {
 /// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
 /// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
 fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
-    // Les dépendances sont projetées après le module qui les importe : à
-    // rebours, chacune passe avant ceux qui l'utilisent.
     let pending: Vec<crate::loader::Module> = crate::loader::MODULES
         .lock()
         .unwrap()
@@ -3278,7 +3464,7 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         .filter(|x| !before.is_empty() && !before.contains(&x.base))
         .cloned()
         .collect();
-    for dep in pending.iter().rev() {
+    for dep in dependency_order(m, &pending) {
         if !crate::process::initialize_dynamic_module(dep) {
             crate::trace!(
                 "DllMain de {} (dépendance de {}) a échoué",
@@ -3289,6 +3475,76 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         }
     }
     crate::process::initialize_dynamic_module(m)
+}
+
+/// Ordre d'initialisation des dépendances `pending` de `m` : chacune après
+/// les DLL qu'elle importe, comme le chargeur de Windows (parcours en
+/// profondeur des imports, suffixe). L'ordre de projection ne suffit pas :
+/// steamui.dll importe tier0_s64.dll puis vstdlib_s64.dll, qui importe
+/// aussi tier0 ; à rebours de la projection, vstdlib passait avant tier0 et
+/// son DllMain lisait une variable de tier0 encore à zéro (#1584). Les DLL
+/// qu'aucun import n'atteint (transferts, chargements faits par un DllMain)
+/// restent dans l'ordre inverse de leur projection.
+pub(crate) fn dependency_order<'a>(
+    m: &crate::loader::Module,
+    pending: &'a [crate::loader::Module],
+) -> Vec<&'a crate::loader::Module> {
+    let names: Vec<String> = pending.iter().map(|x| x.name.clone()).collect();
+    init_order(&m.import_names(), &names, &|i| pending[i].import_names())
+        .into_iter()
+        .map(|i| &pending[i])
+        .collect()
+}
+
+/// Cœur de `dependency_order`, sur les noms : `roots` = imports du module
+/// chargé, `names[i]` = nom de la i-ème DLL à initialiser (dans l'ordre de
+/// projection), `imports(i)` = ses imports. Rend les indices dans l'ordre
+/// des DllMain.
+fn init_order(
+    roots: &[String],
+    names: &[String],
+    imports: &dyn Fn(usize) -> Vec<String>,
+) -> Vec<usize> {
+    let keys: Vec<String> = names.iter().map(|n| crate::dlls::normalize(n)).collect();
+    let find = |name: &str| {
+        let n = crate::dlls::normalize(name);
+        keys.iter().position(|k| *k == n)
+    };
+    let mut seen = vec![false; names.len()];
+    let mut order = Vec::with_capacity(names.len());
+    // Pile explicite (pas de récursion) : (indice, imports déjà parcourus).
+    let visit = |start: usize, seen: &mut Vec<bool>, order: &mut Vec<usize>| {
+        if seen[start] {
+            return;
+        }
+        seen[start] = true;
+        let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+        // À rebours : `pop` rend alors les imports dans leur ordre.
+        let deps =
+            |i: usize| -> Vec<usize> { imports(i).iter().rev().filter_map(|n| find(n)).collect() };
+        stack.push((start, deps(start)));
+        while let Some((i, todo)) = stack.last_mut() {
+            if let Some(j) = todo.pop() {
+                if !seen[j] {
+                    seen[j] = true;
+                    let d = deps(j);
+                    stack.push((j, d));
+                }
+            } else {
+                order.push(*i);
+                stack.pop();
+            }
+        }
+    };
+    for name in roots {
+        if let Some(j) = find(name) {
+            visit(j, &mut seen, &mut order);
+        }
+    }
+    for j in (0..names.len()).rev() {
+        visit(j, &mut seen, &mut order);
+    }
+    order
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {
@@ -3335,9 +3591,9 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         return load_as_data(&value, flags);
     }
     // Never execute DLL entry points for resource/data-only loading requests.
-    // AddDllDirectory/user search directories and signature flags are not yet
-    // supported; return an error rather than searching an unsafe fallback path.
-    const SEARCH: u32 = 0x100 | 0x200 | 0x800 | 0x1000;
+    // Signature flags are not supported; return an error rather than
+    // searching an unsafe fallback path. 0x400 = AddDllDirectory dirs.
+    const SEARCH: u32 = 0x100 | 0x200 | 0x400 | 0x800 | 0x1000;
     if flags & !(SEARCH | 8) != 0 {
         crate::process::set_last_error(50);
         return 0;
@@ -3377,6 +3633,9 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
                 directories.push(parent.to_path_buf());
             }
         }
+    }
+    if flags & (0x400 | 0x1000) != 0 {
+        directories.extend(crate::loader::user_dll_directories());
     }
     if flags & (8 | 0x800 | 0x1000) != 0 {
         directories.push(crate::paths::to_linux("C:\\Windows\\System32"));
@@ -4544,17 +4803,8 @@ fn share_named(
             let manual = w.slot(3).load(Ordering::Acquire) != 0;
             EventObject::adopt(manual, w)
         }
-        SHARED_KIND_MUTEX => {
-            let m = MutexObject::new(false);
-            let _ = m.shared.set(w);
-            SyncHandle::Mutex(Arc::new(m))
-        }
-        _ => {
-            let max = w.slot(1).load(Ordering::Acquire) as i32;
-            let sem = SemaphoreObject::new(0, max);
-            let _ = sem.shared.set(w);
-            SyncHandle::Semaphore(Arc::new(sem))
-        }
+        SHARED_KIND_MUTEX => MutexObject::adopt(w),
+        _ => SemaphoreObject::adopt(w),
     };
     Some(Ok((found, true)))
 }
@@ -4629,6 +4879,10 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
         SyncHandle::CompletionPort(_) => "IoCompletion",
         SyncHandle::Semaphore(_) => "Semaphore",
     })
+}
+/// Le handle est-il un événement de CreateEvent ?
+pub(crate) fn is_event_handle(h: usize) -> bool {
+    matches!(lookup_sync(h), Some(SyncHandle::Event(_)))
 }
 pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
@@ -4733,6 +4987,11 @@ fn wait_semaphore(sem: &SemaphoreObject, timeout: u32) -> u32 {
     loop {
         let gate = sync_gate();
         let mut state = lock(&sem.count);
+        if sem.shared.get().is_some() {
+            drop(state);
+            drop(gate);
+            return wait_semaphore(sem, time_left(start, timeout).unwrap_or(0));
+        }
         if state.0 > 0 {
             state.0 -= 1;
             return 0;
@@ -4782,12 +5041,19 @@ fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
     loop {
         let gate = sync_gate();
         let mut s = lock(&m.state);
+        if m.shared.get().is_some() {
+            // Passé dans une page partagée pendant l'attente (#767).
+            drop(s);
+            drop(gate);
+            return wait_mutex(m, time_left(start, timeout).unwrap_or(0));
+        }
         if s.owner.as_ref() == Some(&me) {
             s.recursion = s.recursion.saturating_add(1);
             return 0;
         }
         if s.owner.is_none() {
             s.owner = Some(me);
+            s.owner_os = os_thread_id();
             s.recursion = 1;
             return 0;
         }
@@ -4886,6 +5152,7 @@ fn try_mutex(m: &MutexObject) -> bool {
         true
     } else if s.owner.is_none() {
         s.owner = Some(me);
+        s.owner_os = os_thread_id();
         s.recursion = 1;
         true
     } else {
@@ -4908,9 +5175,14 @@ fn leave_mutex(m: &MutexObject) -> bool {
         }
         return true;
     }
-    let _gate = sync_gate();
+    let gate = sync_gate();
     let me = std::thread::current().id();
     let mut s = lock(&m.state);
+    if m.shared.get().is_some() {
+        drop(s);
+        drop(gate);
+        return leave_mutex(m);
+    }
     if s.owner.as_ref() != Some(&me) {
         crate::process::set_last_error(288);
         return false;
@@ -5068,52 +5340,52 @@ pub unsafe extern "win64" fn create_thread(
         builder = builder.stack_size(stack.max(64 * 1024));
     }
     let thread = state.clone();
-    if builder
-        .spawn(move || {
-            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
-            let _ = thread.rust_id.set(std::thread::current().id());
-            super::thread_ctl::register(os_tid, &thread.slot);
-            register_thread_object(os_tid, &thread);
-            let mut s = lock(&thread.state);
-            // L'identifiant rendu par CreateThread est celui que
-            // GetCurrentThreadId donnera dans le thread : le créateur attend
-            // qu'il soit connu, même pour un thread créé suspendu.
-            s.win_tid = os_tid as u32;
-            thread.changed.notify_all();
-            while s.suspend_count != 0 {
-                s = thread
-                    .changed
-                    .wait(s)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Err(e) = builder.spawn(move || {
+        let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+        let _ = thread.rust_id.set(std::thread::current().id());
+        super::thread_ctl::register(os_tid, &thread.slot);
+        register_thread_object(os_tid, &thread);
+        let mut s = lock(&thread.state);
+        // L'identifiant rendu par CreateThread est celui que
+        // GetCurrentThreadId donnera dans le thread : le créateur attend
+        // qu'il soit connu, même pour un thread créé suspendu.
+        s.win_tid = os_tid as u32;
+        thread.changed.notify_all();
+        while s.suspend_count != 0 {
+            s = thread
+                .changed
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        s.running = true;
+        drop(s);
+        {
+            // Même verrou que SetThreadAffinityMask/SetThreadPriority :
+            // une demande faite pendant le démarrage n'est jamais perdue.
+            let mut pending = lock(&thread.pending_cpus);
+            if let Some(cpus) = pending.take() {
+                crate::cpu::set_affinity(os_tid, &cpus);
             }
-            s.running = true;
-            drop(s);
-            {
-                // Même verrou que SetThreadAffinityMask/SetThreadPriority :
-                // une demande faite pendant le démarrage n'est jamais perdue.
-                let mut pending = lock(&thread.pending_cpus);
-                if let Some(cpus) = pending.take() {
-                    crate::cpu::set_affinity(os_tid, &cpus);
-                }
-                super::kernel32_cpu::thread_started(
-                    os_tid,
-                    thread.priority.load(Ordering::Relaxed),
-                );
-                thread.os_tid.store(os_tid, Ordering::Release);
-            }
-            CURRENT_THREAD.with(|c| *c.borrow_mut() = Some(thread.clone()));
-            crate::process::thread_attach_current();
-            let jump: *mut u64 = lock(&thread.exit_jump).as_mut_ptr();
-            // Second retour (valeur 1) : ExitThread a déjà enregistré le code
-            // et signalé le handle ; le thread se termine simplement ici.
-            if winlux_thread_setjmp(jump) == 0 {
-                let code = super::thread_ctl::root_call(start, param);
-                finish_current_thread(code);
-            }
-            std::hint::black_box(&thread);
-        })
-        .is_err()
-    {
+            super::kernel32_cpu::thread_started(os_tid, thread.priority.load(Ordering::Relaxed));
+            thread.os_tid.store(os_tid, Ordering::Release);
+        }
+        CURRENT_THREAD.with(|c| *c.borrow_mut() = Some(thread.clone()));
+        crate::process::thread_attach_current();
+        let jump: *mut u64 = lock(&thread.exit_jump).as_mut_ptr();
+        // Second retour (valeur 1) : ExitThread a déjà enregistré le code
+        // et signalé le handle ; le thread se termine simplement ici.
+        if winlux_thread_setjmp(jump) == 0 {
+            let code = super::thread_ctl::root_call(start, param);
+            finish_current_thread(code);
+        }
+        std::hint::black_box(&thread);
+    }) {
+        // Toujours journalisé, avec les limites en cause (#767).
+        crate::log_warn!(
+            "process",
+            "CreateThread refusé ({e}) : {}",
+            crate::crash::thread_limits_report()
+        );
         remove_sync(handle);
         crate::process::set_last_error(8);
         return 0;
@@ -5919,6 +6191,12 @@ unsafe fn create_process_common(
     // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
     // suspendu) : ouvert ici, hérité, renommé d'après son PID.
     cmd.env_remove(crate::dlls::handle_broker::ENV);
+    // Gestionnaire de crashpad connu : l'enfant le désigne à son tour pour
+    // qu'il puisse lire sa mémoire (#767).
+    cmd.env_remove(CRASH_HANDLER_ENV);
+    if let Some(pid) = crash_handler_pid() {
+        cmd.env(CRASH_HANDLER_ENV, pid.to_string());
+    }
     let desk = if is_pe {
         crate::dlls::handle_broker::prepare_child()
     } else {
@@ -5947,6 +6225,7 @@ unsafe fn create_process_common(
     if let Ok(c) = spawned.as_ref() {
         if is_pe && line.contains("--type=crashpad-handler") {
             libc::prctl(libc::PR_SET_PTRACER, c.id() as libc::c_ulong, 0, 0, 0);
+            CRASH_HANDLER.store(c.id() as i32, Ordering::Relaxed);
         }
     }
     let mut child = match spawned {
@@ -6338,6 +6617,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if matches!(handle as isize, -6..=-1) {
         return 1;
     }
+    // Événement de WSACreateEvent fermé par CloseHandle (#1360).
+    if lookup_sync(handle).is_none() && crate::dlls::ws2_32::is_wsa_event(handle) {
+        return crate::dlls::ws2_32::wsa_close_event(handle);
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6359,7 +6642,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
+    if crate::dlls::kernel32_node::close_snapshot(handle)
+        || crate::dlls::jobs::close(handle)
+        || crate::dlls::kernel32_releve::close(handle)
+    {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -6395,6 +6681,11 @@ pub unsafe extern "win64" fn create_event_a(
 }
 pub extern "win64" fn set_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : hEvent d'un WSASend de Chromium,
+        // signalé à la fin de l'E/S (#1360).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_set_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
@@ -6412,6 +6703,9 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
 }
 pub extern "win64" fn reset_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return crate::dlls::ws2_32::wsa_reset_event(h);
+        }
         crate::process::set_last_error(6);
         return 0;
     };
@@ -6563,16 +6857,67 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         };
     }
     let Some(obj) = lookup_sync(h) else {
+        // Événement de WSACreateEvent : Chromium (serveur DevTools) l'attend
+        // par ObjectWatcher, donc par WaitForSingleObject (#1351).
+        if crate::dlls::ws2_32::is_wsa_event(h) {
+            return wait_wsa_events(&[h], timeout);
+        }
         crate::process::set_last_error(6);
         return u32::MAX;
     };
     match obj {
+        // Événement associé à une socket par WSAEventSelect : la pile réseau
+        // de Windows le signale ; ici, l'attente interroge la socket.
+        SyncHandle::Event(e) if crate::dlls::ws2_32::has_socket_assoc(h) => {
+            let start = std::time::Instant::now();
+            loop {
+                if crate::dlls::ws2_32::handle_ready(h) || wait_event(&e, 0) == 0 {
+                    return 0;
+                }
+                if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+                    return 258;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
         SyncHandle::Event(e) => wait_event(&e, timeout),
         SyncHandle::Mutex(m) => wait_mutex(&m, timeout),
         SyncHandle::Thread(t) => wait_thread(&t, timeout),
         SyncHandle::Process(p) => wait_process(&p, timeout),
         SyncHandle::CompletionPort(p) => wait_iocp(&p, timeout),
         SyncHandle::Semaphore(sem) => wait_semaphore(&sem, timeout),
+    }
+}
+/// Attente « un seul parmi » qui contient des événements de WSACreateEvent
+/// (#1351) : ceux-ci, et les autres handles, sont interrogés sans attente
+/// jusqu'au premier prêt. Un événement WSA est à réinitialisation manuelle :
+/// l'interroger ne le consomme pas.
+fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
+    let start = std::time::Instant::now();
+    loop {
+        for (i, &h) in hs.iter().enumerate() {
+            let ready = if lookup_sync(h).is_none() {
+                if !crate::dlls::ws2_32::is_wsa_event(h) {
+                    crate::process::set_last_error(6);
+                    return u32::MAX;
+                }
+                crate::dlls::ws2_32::handle_ready(h)
+            } else {
+                match wait_for_single_object(h, 0) {
+                    0 => true,
+                    0x80 => return 0x80 + i as u32,
+                    u32::MAX => return u32::MAX,
+                    _ => false,
+                }
+            };
+            if ready {
+                return i as u32;
+            }
+        }
+        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
+            return 258;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
@@ -6586,6 +6931,13 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         return u32::MAX;
     }
     let hs = std::slice::from_raw_parts(handles, count as usize);
+    if wait_all == 0
+        && hs
+            .iter()
+            .any(|&h| lookup_sync(h).is_none() && crate::dlls::ws2_32::is_wsa_event(h))
+    {
+        return wait_wsa_events(hs, timeout);
+    }
     let mut objects = Vec::with_capacity(hs.len());
     for &h in hs {
         let Some(o) = lookup_sync(h) else {
@@ -6605,8 +6957,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         loop {
             let gate = sync_gate();
             let me = std::thread::current().id();
-            let ready = objects.iter().all(|o| match o {
-                SyncHandle::Event(e) => e.is_set(&lock(&e.signaled)),
+            let ready = objects.iter().zip(hs).all(|(o, &h)| match o {
+                SyncHandle::Event(e) => {
+                    e.is_set(&lock(&e.signaled)) || crate::dlls::ws2_32::handle_ready(h)
+                }
                 SyncHandle::Mutex(m) => match m.shared.get() {
                     Some(w) => MutexObject::shared_ready(w),
                     None => {
@@ -6638,6 +6992,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                                 s.recursion = s.recursion.saturating_add(1);
                             } else {
                                 s.owner = Some(me);
+                                s.owner_os = os_thread_id();
                                 s.recursion = 1;
                             }
                         }
@@ -6667,7 +7022,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
     loop {
         for (i, obj) in objects.iter().enumerate() {
             let ready = match obj {
-                SyncHandle::Event(e) => wait_event(e, 0) == 0,
+                // WinSCP (PuTTY) attend ainsi ses sockets (#1340).
+                SyncHandle::Event(e) => {
+                    wait_event(e, 0) == 0 || crate::dlls::ws2_32::handle_ready(hs[i])
+                }
                 SyncHandle::Mutex(m) => match wait_mutex(m, 0) {
                     0 => true,
                     0x80 => return 0x80 + i as u32,
@@ -6691,7 +7049,24 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
+/// Variables cachées « =C: » (dossier courant de chaque lecteur) : Windows
+/// les admet en tête de nom, l'environnement Linux non. `_wchdir` du CRT
+/// Microsoft écrit « =C: » après SetCurrentDirectoryW et échoue si
+/// SetEnvironmentVariableW refuse (Steam, #1380).
+fn hidden_env() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
+    static V: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+    V.lock().unwrap_or_else(|e| e.into_inner())
+}
+fn is_hidden_env_name(name: &str) -> bool {
+    name.len() > 1 && name.starts_with('=') && !name[1..].contains('=')
+}
 pub(crate) fn env_value(name: &str) -> Option<String> {
+    if is_hidden_env_name(name) {
+        return hidden_env()
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone());
+    }
     std::env::var_os(name)
         .or_else(|| {
             std::env::vars_os()
@@ -6701,7 +7076,15 @@ pub(crate) fn env_value(name: &str) -> Option<String> {
         .map(|v| v.to_string_lossy().into_owned())
 }
 fn set_env_value(name: &str, value: Option<&str>) -> Result<(), u32> {
-    if name.is_empty() || name.contains('=') {
+    if is_hidden_env_name(name) {
+        let mut v = hidden_env();
+        v.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+        if let Some(val) = value {
+            v.push((name.to_string(), val.to_string()));
+        }
+        return Ok(());
+    }
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
         return Err(87);
     }
     if let Some(v) = value {
@@ -6917,6 +7300,18 @@ pub unsafe extern "win64" fn delete_file_a(path: *const u8) -> i32 {
 /// Corps commun de `delete_file_a` et `delete_file_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn delete_file_str(path: &str) -> i32 {
+    let r = delete_file_str_inner(path);
+    crate::trace!(
+        "DeleteFile({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn delete_file_str_inner(path: &str) -> i32 {
     match std::fs::remove_file(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -6935,6 +7330,18 @@ pub unsafe extern "win64" fn create_directory_a(path: *const u8, _sec: usize) ->
 /// Corps commun de `create_directory_a` et `create_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
+    let r = create_directory_str_inner(path, _sec);
+    crate::trace!(
+        "CreateDirectory({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
     match std::fs::create_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7345,10 +7752,16 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    match remove_dir_or_link(&crate::paths::to_linux(&s.to_string_lossy())) {
-        Ok(()) => 1,
+    let path = s.to_string_lossy();
+    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+        Ok(()) => {
+            crate::trace!("RemoveDirectory({path}) = 1");
+            1
+        }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            let code = io_error_code(&e);
+            crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
+            crate::process::set_last_error(code);
             0
         }
     }
@@ -7532,6 +7945,7 @@ pub fn record_exit_code(code: u32) {
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -7550,8 +7964,18 @@ pub fn flush_and_exit(code: i32) -> ! {
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
+    crate::trace!("ExitProcess : fin, code {:#x}", code as u32);
     record_exit_code(code as u32);
-    std::process::exit(code)
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    // ExitProcess ne rend jamais la main au code de l'invité : pas de
+    // `exit()` de la glibc, dont les gestionnaires atexit et destructeurs TLS
+    // tournaient pendant que les autres threads x86 continuaient. Steam et
+    // PyInstaller x86 y plantaient en lisant [0+8] après « fin » (#1440).
+    // SAFETY : sorties vidées ci-dessus, _exit termine tout le processus.
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+        libc::_exit(code)
+    }
 }
 
 // ---------- Fonctions supplémentaires kernel32 ----------
@@ -8259,6 +8683,45 @@ pub unsafe extern "win64" fn create_waitable_timer_w(
         n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
     )
 }
+/// OpenWaitableTimerW : minuteur nommé de ce processus. Le handle ouvert
+/// partage le compteur d'armement du minuteur d'origine.
+pub unsafe extern "win64" fn open_waitable_timer_w(
+    access: u32,
+    inherit: i32,
+    name: *const u16,
+) -> usize {
+    let Some(n) = sync_name_w(name) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let h = open_event_a(access, inherit, n.as_ptr().cast());
+    if h == 0 {
+        return 0;
+    }
+    let Some(SyncHandle::Event(obj)) = lookup_sync(h) else {
+        return h;
+    };
+    let timers: Vec<(usize, Arc<AtomicUsize>)> = lock(waitable_timers())
+        .iter()
+        .map(|(&t, g)| (t, g.clone()))
+        .collect();
+    let generation = timers.into_iter().find_map(|(t, g)| match lookup_sync(t) {
+        Some(SyncHandle::Event(o)) if Arc::ptr_eq(&o, &obj) => Some(g),
+        _ => None,
+    });
+    match generation {
+        Some(g) => {
+            lock(waitable_timers()).insert(h, g);
+            h
+        }
+        None => {
+            // Le nom désigne un événement, pas un minuteur.
+            close_handle(h);
+            crate::process::set_last_error(6);
+            0
+        }
+    }
+}
 pub unsafe extern "win64" fn create_waitable_timer_ex_w(
     attr: usize,
     name: *const u16,
@@ -8358,6 +8821,10 @@ pub struct ByHandleFileInformation {
     pub file_index_low: u32,
 }
 
+/// GetFileInformationByHandle, lu par fstat sur le descripteur du handle :
+/// fichier, dossier, mais aussi handle standard redirigé vers un fichier,
+/// /dev/null ou un terminal (Python 3.12 x86, #1436). Seuls les
+/// fichiers ouverts par CreateFile étaient reconnus.
 pub unsafe extern "win64" fn get_file_information_by_handle(
     handle: usize,
     info: *mut ByHandleFileInformation,
@@ -8366,24 +8833,44 @@ pub unsafe extern "win64" fn get_file_information_by_handle(
         crate::process::set_last_error(87);
         return 0;
     }
-    let handles = lock(HANDLES.get().unwrap());
-    let Some(FileHandle::File(file)) = handles.get(&handle) else {
+    let fd = handle_to_fd(handle);
+    if fd < 0 {
         crate::process::set_last_error(6);
         return 0;
-    };
-    let f = lock(file);
-    let Ok(meta) = f.metadata() else {
+    }
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut st) != 0 {
         crate::process::set_last_error(6);
         return 0;
+    }
+    let is_dir = st.st_mode & libc::S_IFMT == libc::S_IFDIR;
+    let mut attrs = if is_dir { 0x10 } else { 0 };
+    if st.st_mode & libc::S_IFMT == libc::S_IFREG && st.st_mode & 0o222 == 0 {
+        attrs |= 0x1;
+    }
+    if attrs == 0 {
+        attrs = 0x80;
+    }
+    let ft = |t: i64| -> [u32; 2] { [t as u32, (t >> 32) as u32] };
+    let modified = unix_to_filetime(st.st_mtime, st.st_mtime_nsec);
+    let changed = unix_to_filetime(st.st_ctime, st.st_ctime_nsec);
+    let size = if st.st_mode & libc::S_IFMT == libc::S_IFREG {
+        st.st_size as u64
+    } else {
+        0
     };
-    drop(f);
-    drop(handles);
-    let size = meta.len();
     std::ptr::write_bytes(info, 0, 1);
-    (*info).attributes = if meta.is_dir() { 0x10 } else { 0x80 };
-    (*info).file_size_low = size as u32;
-    (*info).file_size_high = (size >> 32) as u32;
-    (*info).number_of_links = 1;
+    let i = &mut *info;
+    i.attributes = attrs;
+    i.creation_time = ft(modified.min(changed));
+    i.last_access_time = ft(unix_to_filetime(st.st_atime, st.st_atime_nsec));
+    i.last_write_time = ft(modified);
+    i.volume_serial = st.st_dev as u32;
+    i.file_size_high = (size >> 32) as u32;
+    i.file_size_low = size as u32;
+    i.number_of_links = (st.st_nlink as u32).max(1);
+    i.file_index_high = (st.st_ino >> 32) as u32;
+    i.file_index_low = st.st_ino as u32;
     1
 }
 
@@ -9813,8 +10300,13 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
         w.wake();
         return 1;
     }
-    let _gate = sync_gate();
+    let gate = sync_gate();
     let mut state = lock(&sem.count);
+    if sem.shared.get().is_some() {
+        drop(state);
+        drop(gate);
+        return release_semaphore(h, count, prev);
+    }
     if state.0.checked_add(count).is_none_or(|n| n > state.1) {
         crate::process::set_last_error(298);
         return 0;
@@ -10017,6 +10509,71 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn dllmain_des_dependances_dans_l_ordre_des_imports() {
+        // #1584 : steamui importe libavcodec, SDL3, tier0, video64 et
+        // vstdlib ; vstdlib importe tier0, libavcodec importe libavutil.
+        // Projection : steamui (déjà à part), puis dans cet ordre.
+        let names: Vec<String> = [
+            "libavcodec.dll",
+            "libavutil.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+            "orpheline.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let imports = |i: usize| -> Vec<String> {
+            let v: &[&str] = match i {
+                0 => &["libavutil.dll", "KERNEL32.dll"],
+                4 => &["libavcodec.dll", "TIER0_S64.DLL"],
+                5 => &["tier0_s64.dll"],
+                _ => &[],
+            };
+            v.iter().map(|s| s.to_string()).collect()
+        };
+        let roots: Vec<String> = [
+            "libavcodec.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let order = super::init_order(&roots, &names, &imports);
+        let pos = |n: &str| order.iter().position(|&i| names[i] == n).unwrap();
+        assert_eq!(order.len(), names.len());
+        assert!(pos("tier0_s64.dll") < pos("vstdlib_s64.dll"));
+        assert!(pos("tier0_s64.dll") < pos("video64.dll"));
+        assert!(pos("libavutil.dll") < pos("libavcodec.dll"));
+        assert!(pos("libavcodec.dll") < pos("video64.dll"));
+        // Ordre des imports de steamui respecté entre DLL indépendantes.
+        assert!(pos("libavcodec.dll") < pos("SDL3.dll"));
+        assert!(pos("SDL3.dll") < pos("tier0_s64.dll"));
+        // DLL qu'aucun import n'atteint : initialisée aussi.
+        assert!(order.iter().any(|&i| names[i] == "orpheline.dll"));
+    }
+    /// #767 : un enfant de Chromium désigne le gestionnaire de crashpad
+    /// reçu de son parent, et le transmet à ses propres enfants.
+    #[test]
+    fn gestionnaire_de_crashpad_designe_par_l_enfant() {
+        let parent = unsafe { libc::getppid() };
+        std::env::set_var(super::CRASH_HANDLER_ENV, parent.to_string());
+        super::adopt_crash_handler();
+        std::env::remove_var(super::CRASH_HANDLER_ENV);
+        assert_eq!(super::crash_handler_pid(), Some(parent));
+        let report = crate::crash::thread_limits_report();
+        assert!(
+            report.contains("threads ") && report.contains("RLIMIT_NPROC"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn code_de_sortie_complet_en_hexadecimal() {
         // #1205 : 0x780148E0, pas l'octet de poids faible (224).
         assert_eq!(&super::exit_code_text(0x7801_48E0), b"0x780148E0\n");
@@ -10165,6 +10722,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn variable_cachee_dossier_du_lecteur() {
+        // `_wchdir` (CRT Microsoft) : SetCurrentDirectoryW puis « =C: » (#1380).
+        let name: Vec<u16> = "=C:".encode_utf16().chain([0]).collect();
+        let val: Vec<u16> = "C:\\Program Files (x86)\\Steam"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        unsafe {
+            assert_eq!(set_environment_variable_w(name.as_ptr(), val.as_ptr()), 1);
+            let mut out = [0u16; 64];
+            let n = get_environment_variable_w(name.as_ptr(), out.as_mut_ptr(), 64);
+            assert_eq!(
+                String::from_utf16_lossy(&out[..n as usize]),
+                "C:\\Program Files (x86)\\Steam"
+            );
+            assert!(std::env::var_os("=C:").is_none());
+            assert_eq!(
+                set_environment_variable_w(name.as_ptr(), std::ptr::null()),
+                1
+            );
+            assert_eq!(
+                get_environment_variable_w(name.as_ptr(), out.as_mut_ptr(), 64),
+                0
+            );
+            let bad: Vec<u16> = "A=B".encode_utf16().chain([0]).collect();
+            assert_eq!(set_environment_variable_w(bad.as_ptr(), val.as_ptr()), 0);
+        }
+    }
     use std::ffi::CString;
 
     #[test]
@@ -10293,6 +10880,55 @@ mod tests {
         let _ = std::fs::remove_file(linux);
     }
 
+    #[test]
+    fn create_file_reussi_remet_l_erreur_a_zero() {
+        // #1315 : un CreateFileW réussi ne laisse pas l'erreur d'un appel
+        // précédent (Claude pour Windows : 122 puis 50 sur config.json).
+        init();
+        let _teb = crate::process::test_teb();
+        let path = format!(
+            "Z:\\tmp\\winlux-k32err-{}-{}.json",
+            std::process::id(),
+            next_handle()
+        );
+        let path_c = CString::new(path).unwrap();
+        let p = path_c.as_ptr() as *const u8;
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        unsafe { close_handle(h) };
+        for (creation, flags, expected) in
+            [(3, 0x80, 0), (5, 0x80, 0), (4, 0x80, 183), (2, 0x80, 183)]
+        {
+            crate::process::set_last_error(122);
+            let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, creation, flags, 0) };
+            assert_ne!(h, usize::MAX, "disposition {creation}");
+            assert_eq!(
+                crate::process::last_error(),
+                expected,
+                "disposition {creation}"
+            );
+            unsafe { close_handle(h) };
+        }
+        let dir = CString::new("Z:\\tmp").unwrap();
+        crate::process::set_last_error(50);
+        let h = unsafe { create_file_a(dir.as_ptr() as *const u8, 0x80, 7, 0, 3, 0x0200_0000, 0) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            0,
+            "dossier (FILE_FLAG_BACKUP_SEMANTICS)"
+        );
+        unsafe { close_handle(h) };
+        crate::process::set_last_error(0);
+        let h = unsafe { create_file_a(p, 0xC000_0000, 0, 0, 1, 0x80, 0) };
+        assert_eq!(h, usize::MAX);
+        assert_eq!(
+            crate::process::last_error(),
+            80,
+            "CREATE_NEW sur un fichier existant"
+        );
+        unsafe { delete_file_a(p) };
+    }
     #[test]
     fn informations_etendues_d_un_handle_de_fichier() {
         init();
@@ -11659,6 +12295,31 @@ mod audit_tests {
         let c = std::ffi::CString::new(path).unwrap();
         let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
         assert_eq!(get_file_type(h), 1);
+        close_handle(h);
+        unsafe { delete_file_a(c.as_ptr() as *const u8) };
+    }
+
+    #[test]
+    fn position_negative_rend_error_negative_seek() {
+        // #1439 : sonde à -1 depuis la fin d'un fichier vide (CRT de Steam).
+        init();
+        let _teb = crate::process::test_teb();
+        let path = format!("Z:\\tmp\\winlux-negseek-{}.bin", std::process::id());
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0x80, 0) };
+        assert_ne!(h, usize::MAX);
+        let mut pos = 7i64;
+        assert_eq!(unsafe { set_file_pointer_ex(h, -1, &mut pos, 2) }, 0);
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(unsafe { set_file_pointer_ex(h, -1, &mut pos, 0) }, 0);
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(
+            unsafe { set_file_pointer(h, -1, std::ptr::null_mut(), 1) },
+            u32::MAX
+        );
+        assert_eq!(crate::process::last_error(), 131);
+        assert_eq!(unsafe { set_file_pointer_ex(h, 0, &mut pos, 2) }, 1);
+        assert_eq!(pos, 0);
         close_handle(h);
         unsafe { delete_file_a(c.as_ptr() as *const u8) };
     }

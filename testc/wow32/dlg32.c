@@ -346,6 +346,7 @@ static void gdi_origin(void)
 static int lv_changed = -1, lv_param;
 static LPARAM tv_param;
 static UINT tv_code;
+static int tv_dispinfo;
 static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_NOTIFY) {
@@ -355,6 +356,19 @@ static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (nm->uNewState & LVIS_SELECTED) {
                 lv_changed = nm->iItem;
                 lv_param = (int)nm->lParam;
+            }
+        } else if (hdr->code == TVN_GETDISPINFOW && hdr->idFrom == 53) {
+            /* Comme le TTreeView de la VCL : nœud retrouvé par TVM_GETITEM
+               (TVIF_PARAM) puis texte copié dans pszText (#1249). */
+            NMTVDISPINFOW *di = (NMTVDISPINFOW *)lp;
+            TVITEMW q = {0};
+            q.mask = TVIF_PARAM | TVIF_HANDLE;
+            q.hItem = di->item.hItem;
+            SendMessageW(hdr->hwndFrom, TVM_GETITEMW, 0, (LPARAM)&q);
+            tv_dispinfo++;
+            if ((di->item.mask & TVIF_TEXT) && q.lParam == 88 && di->item.pszText && di->item.cchTextMax > 8) {
+                wcscpy(di->item.pszText, L"New Site");
+                di->item.mask |= TVIF_DI_SETITEM;
             }
         } else if ((hdr->code == TVN_SELCHANGEDW || hdr->code == TVN_SELCHANGEDA) && hdr->idFrom == 52) {
             NMTREEVIEWW *nm = (NMTREEVIEWW *)lp;
@@ -489,6 +503,33 @@ static void notifications(void)
     HTREEITEM h = (HTREEITEM)SendMessageW(tv, TVM_INSERTITEMW, 0, (LPARAM)&ins);
     SendMessageW(tv, TVM_SELECTITEM, TVGN_CARET, (LPARAM)h);
     CHECK(tv_code != 0 && tv_param == 77, "TVN_SELCHANGED reçu en x86 (NMTREEVIEW)");
+
+    /* Arbre de la VCL : éléments LPSTR_TEXTCALLBACKW (#1249). */
+    HWND vt = CreateWindowExW(0, WC_TREEVIEWW, L"", WS_CHILD | TVS_HASLINES, 0, 0, 200, 200, parent, (HMENU)53, NULL, NULL);
+    TVINSERTSTRUCTW vi = {0};
+    vi.hParent = TVI_ROOT;
+    vi.hInsertAfter = TVI_LAST;
+    vi.item.mask = TVIF_TEXT | TVIF_PARAM;
+    vi.item.pszText = LPSTR_TEXTCALLBACKW;
+    vi.item.lParam = 88;
+    HTREEITEM site = (HTREEITEM)SendMessageW(vt, TVM_INSERTITEMW, 0, (LPARAM)&vi);
+    CHECK(site != NULL, "élément LPSTR_TEXTCALLBACKW");
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP canvas = CreateCompatibleBitmap(screen, 200, 200);
+    SelectObject(mem, canvas);
+    SendMessageW(vt, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
+    WCHAR got[32] = { 0 };
+    TVITEMW gi = {0};
+    gi.mask = TVIF_TEXT | TVIF_HANDLE;
+    gi.hItem = site;
+    gi.pszText = got;
+    gi.cchTextMax = 32;
+    SendMessageW(vt, TVM_GETITEMW, 0, (LPARAM)&gi);
+    CHECK(tv_dispinfo > 0 && wcscmp(got, L"New Site") == 0, "TVN_GETDISPINFOW en x86, texte retenu (TVIF_DI_SETITEM)");
+    DeleteDC(mem);
+    DeleteObject(canvas);
+    ReleaseDC(NULL, screen);
     DestroyWindow(parent);
 }
 
@@ -840,6 +881,99 @@ static void subclassed(void)
     DestroyWindow(cb);
 }
 
+/* FindControl de la VCL : le parent retrouve l'objet du contrôle par
+ * GetWindowThreadProcessId + GetPropW(MAKEINTATOM(ControlAtom)) avant de lui
+ * refléter WM_NOTIFY / WM_DRAWITEM (#1249, #1250). */
+static void vcl_props(void)
+{
+    ATOM atom = GlobalAddAtomW(L"ControlOfs0040000000000ABC");
+    CHECK(atom >= 0xC000, "GlobalAddAtomW");
+    HWND w = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 10, 10, NULL, NULL, NULL, NULL);
+    CHECK(w != NULL, "fenêtre pour SetPropW");
+    CHECK(GetPropW(w, (LPCWSTR)MAKEINTATOM(atom)) == NULL, "GetPropW avant SetPropW");
+    CHECK(SetPropW(w, (LPCWSTR)MAKEINTATOM(atom), (HANDLE)0xfee354a0), "SetPropW(MAKEINTATOM)");
+    DWORD pid = 0;
+    CHECK(GetWindowThreadProcessId(w, &pid) != 0 && pid == GetCurrentProcessId(), "fenêtre de ce processus");
+    CHECK(GetPropW(w, (LPCWSTR)MAKEINTATOM(atom)) == (HANDLE)0xfee354a0, "GetPropW(MAKEINTATOM) relit l'objet");
+    CHECK(GetPropW(w, L"controlofs0040000000000abc") == (HANDLE)0xfee354a0, "GetPropW par le nom de l'atome");
+    CHECK(GlobalFindAtomW(L"ControlOfs0040000000000ABC") == atom, "GlobalFindAtomW");
+    CHECK(RemovePropW(w, (LPCWSTR)MAKEINTATOM(atom)) == (HANDLE)0xfee354a0, "RemovePropW");
+    CHECK(GetPropW(w, (LPCWSTR)MAKEINTATOM(atom)) == NULL, "propriété retirée");
+    DestroyWindow(w);
+}
+
+/* TWinControl.SetBounds de la VCL : avec une fenêtre déjà créée, seul
+ * WM_WINDOWPOSCHANGED met à jour Left/Top/Width/Height. Le champ du port de
+ * WinSCP reçoit Left, puis Top, Width, Height un par un depuis le DFM
+ * (#1251). WINDOWPOS x86 : 28 octets. */
+static RECT vb_bounds;
+static int vb_changed, vb_changing;
+static LRESULT CALLBACK vb_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_WINDOWPOSCHANGING) {
+        WINDOWPOS *p = (WINDOWPOS *)l;
+        vb_changing++;
+        if (p->hwnd == h && p->cx > 300) p->cx = 300;
+    }
+    if (m == WM_WINDOWPOSCHANGED) {
+        WINDOWPOS *p = (WINDOWPOS *)l;
+        if (p->hwnd == h) {
+            vb_changed++;
+            GetWindowRect(h, &vb_bounds);
+            MapWindowPoints(HWND_DESKTOP, GetParent(h), (POINT *)&vb_bounds, 2);
+        }
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+static void vcl_bounds(void)
+{
+    WNDCLASSW c = { 0 };
+    c.lpfnWndProc = vb_proc;
+    c.hInstance = GetModuleHandleW(NULL);
+    c.lpszClassName = L"TUpDownEditVb";
+    CHECK(RegisterClassW(&c) != 0, "classe TUpDownEditVb");
+    HWND parent = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 400, 300, NULL, NULL, NULL, NULL);
+    HWND e = CreateWindowExW(0, L"TUpDownEditVb", L"22", WS_CHILD | WS_VISIBLE, 0, 0, 121, 14,
+                             parent, NULL, NULL, NULL);
+    CHECK(e != NULL, "champ du port");
+    int left = 0, top = 0, width = 121, height = 14;
+#define VB_SET(l, t, w_, h_) do { vb_changed = 0; \
+        SetWindowPos(e, 0, l, t, w_, h_, SWP_NOZORDER | SWP_NOACTIVATE); \
+        if (vb_changed) { left = vb_bounds.left; top = vb_bounds.top; \
+            width = vb_bounds.right - vb_bounds.left; height = vb_bounds.bottom - vb_bounds.top; } } while (0)
+    VB_SET(280, top, width, height);
+    VB_SET(left, 87, width, height);
+    VB_SET(left, top, 102, height);
+    VB_SET(left, top, width, 23);
+#undef VB_SET
+    CHECK(vb_changing >= 4, "WM_WINDOWPOSCHANGING envoyé");
+    CHECK(left == 280 && top == 87 && width == 102 && height == 23, "bornes relues par WM_WINDOWPOSCHANGED");
+    SetWindowPos(e, 0, 0, 0, 500, 23, SWP_NOZORDER | SWP_NOMOVE);
+    RECT r;
+    GetWindowRect(e, &r);
+    CHECK(r.right - r.left == 300, "largeur corrigée dans WM_WINDOWPOSCHANGING");
+    /* 7-Zip : hauteur de la barre = GetWindowRect + rcNormalPosition.top,
+     * relatif au parent pour une fenêtre enfant (#1326). */
+    WINDOWPLACEMENT pl = { sizeof pl };
+    CHECK(GetWindowPlacement(e, &pl) && pl.rcNormalPosition.left == 280 && pl.rcNormalPosition.top == 87,
+          "GetWindowPlacement d'un enfant relatif au parent");
+    /* LVM_FINDITEM avec LVFI_PARAM seul : psz n'est pas lu (#1325). */
+    HWND lv = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | LVS_REPORT, 0, 120, 200, 100,
+                              parent, NULL, NULL, NULL);
+    LVITEMW it = { LVIF_TEXT | LVIF_PARAM };
+    for (int i = 0; i < 3; i++) {
+        it.iItem = i;
+        it.pszText = L"fichier";
+        it.lParam = 700 + i;
+        SendMessageW(lv, LVM_INSERTITEMW, 0, (LPARAM)&it);
+    }
+    LVFINDINFOW fi = { LVFI_PARAM };
+    fi.psz = (LPCWSTR)1;
+    fi.lParam = 701;
+    CHECK(SendMessageW(lv, LVM_FINDITEMW, -1, (LPARAM)&fi) == 1, "LVM_FINDITEM par lParam sans texte");
+    DestroyWindow(parent);
+}
+
 int main(void)
 {
     INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_WIN95_CLASSES | ICC_TAB_CLASSES };
@@ -859,6 +993,8 @@ int main(void)
     dialogs();
     winscp();
     owner_combo();
+    vcl_props();
+    vcl_bounds();
     printf("dlg32 : contrôles et boîtes communes 32 bits, %d vérifications passées. Tout est correct\n", step);
     return 0;
 }

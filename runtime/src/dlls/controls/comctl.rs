@@ -51,7 +51,9 @@ fn notify_simple(hwnd: usize, code: i32) -> isize {
 
 /// Texte d'une structure TVITEM/LVITEM/TCITEM (A ou W selon le message).
 unsafe fn read_text_ptr(ptr: usize, wide: bool) -> Option<String> {
-    if ptr == 0 || ptr == usize::MAX {
+    // LPSTR_TEXTCALLBACK (-1, ou 0xFFFFFFFF venu d'un programme 32 bits) et
+    // toute valeur sous 64 Kio ne sont pas des chaînes.
+    if ptr < 0x10000 || ptr == usize::MAX || ptr == u32::MAX as usize {
         return None;
     }
     Some(if wide {
@@ -331,9 +333,19 @@ fn tree_text(hwnd: usize, n: &TreeNode) -> String {
     } else {
         TVN_GETDISPINFOA
     };
-    notify_struct(hwnd, code, &mut nm);
+    let r = notify_struct(hwnd, code, &mut nm);
     // Le parent peut remplir notre tampon ou pointer vers le sien.
     let text = unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default();
+    if user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] TVN_GETDISPINFO{} {hwnd:#x} élément {:#x} lParam {:#x} -> {r}, mask {:#x}, texte {:#x} {text:?}",
+            if wide { "W" } else { "A" },
+            n.handle,
+            n.param,
+            nm.item.mask,
+            nm.item.text
+        );
+    }
     if nm.item.mask & TVIF_DI_SETITEM != 0 {
         let h = n.handle;
         let keep = text.clone();
@@ -2156,9 +2168,16 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             let flags = *(lp as *const u32);
             let text_ptr = *((lp as *const usize).add(1));
             let param = *((lp as *const isize).add(2));
-            let needle = read_text_ptr(text_ptr, msg == 0x1053)
-                .unwrap_or_default()
-                .to_lowercase();
+            // psz n'est lu qu'avec LVFI_STRING, LVFI_SUBSTRING ou
+            // LVFI_PARTIAL : avec LVFI_PARAM seul, il ne vaut rien (WinSCP
+            // x86 y laissait 1, #1325).
+            let needle = if flags & 0xE != 0 {
+                read_text_ptr(text_ptr, msg == 0x1053)
+                    .unwrap_or_default()
+                    .to_lowercase()
+            } else {
+                String::new()
+            };
             let s = common_snapshot(hwnd);
             s.rows
                 .iter()
