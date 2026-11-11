@@ -227,6 +227,7 @@ pub mod shell32;
 pub mod shell32_releve;
 pub mod shell_folder_com;
 pub mod shlwapi;
+pub mod shlwapi_path;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod sysdlls;
