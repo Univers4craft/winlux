@@ -65,6 +65,8 @@ TOR_KEY_URLS = (
     "https://openpgpkey.torproject.org/.well-known/openpgpkey/torproject.org/hu/kounek7zrdx745qydx6p59t9mqjpuhdf?l=torbrowser",
     "https://keys.openpgp.org/vks/v1/by-fingerprint/" + TOR_FINGERPRINT,
 )
+# Hôte montré dans la confirmation (Paramètres) ; archive.torproject.org garde les anciennes versions.
+TOR_HOST = "dist.torproject.org"
 TOR_BINARY = re.compile(r"https://(dist|archive)\.torproject\.org/torbrowser/([0-9][0-9a-z.]*)/tor-browser-linux-x86_64-\2\.tar\.xz")
 BROWSERS = sorted([*SOURCES, TOR_ID])
 

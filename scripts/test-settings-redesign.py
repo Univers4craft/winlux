@@ -85,7 +85,8 @@ settings_module = runpy.run_path(str(HERE / "winlux-settings.py"), run_name="red
 fetcher = runpy.run_path(str(HERE / "prepare-browser-packages.py"), run_name="redesign_fetch")
 confirmation, hosts = settings_module["browser_confirmation"], settings_module["BROWSER_HOSTS"]
 from urllib.parse import urlparse
-check(hosts == {ident: urlparse(row[1]).hostname for ident, row in fetcher["SOURCES"].items()},
+check(hosts == {**{ident: urlparse(row[1]).hostname for ident, row in fetcher["SOURCES"].items()},
+               fetcher["TOR_ID"]: fetcher["TOR_HOST"]},
       "sources affichées = dépôts réellement utilisés par le téléchargeur")
 _, shown = confirmation("firefox", {"version": "147.0.1", "sha256": "ab" * 32})
 check("Mozilla" in shown and "147.0.1" in shown and "packages.mozilla.org" in shown and "SHA-256" in shown,
