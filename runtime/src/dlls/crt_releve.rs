@@ -1836,6 +1836,23 @@ unsafe extern "win64" fn crt_lcmap_string_a(
     }
 }
 
+/// `__crtGetShowWindowMode()` (msvcr110/120) : `wShowWindow` de
+/// STARTUPINFO si STARTF_USESHOWWINDOW est posé, sinon SW_SHOWDEFAULT.
+/// Manquait à gldriverquery64.exe de Steam (#1950).
+extern "win64" fn crt_get_show_window_mode() -> u16 {
+    show_window_mode(&super::kernel32::startup_info())
+}
+
+fn show_window_mode(si: &super::kernel32::StartupInfo) -> u16 {
+    const STARTF_USESHOWWINDOW: u32 = 1;
+    const SW_SHOWDEFAULT: u16 = 10;
+    if si.flags & STARTF_USESHOWWINDOW != 0 {
+        si.show_window
+    } else {
+        SW_SHOWDEFAULT
+    }
+}
+
 /// `__crtGetStringTypeW(type, src, n, out, page, lcid)`.
 unsafe extern "win64" fn crt_get_string_type_w(
     kind: u32,
@@ -1925,12 +1942,22 @@ pub fn exports() -> crate::dlls::Exports {
         // msvcrt.
         "__crtLCMapStringW" => fn crt_lcmap_string_w, "__crtLCMapStringA" => fn crt_lcmap_string_a,
         "__crtGetStringTypeW" => fn crt_get_string_type_w,
+        "__crtGetShowWindowMode" => fn crt_get_show_window_mode,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_d_affichage_par_defaut() {
+        let mut si = super::super::kernel32::startup_info();
+        assert_eq!(show_window_mode(&si), 10);
+        si.flags = 1;
+        si.show_window = 0;
+        assert_eq!(show_window_mode(&si), 0);
+    }
 
     #[test]
     fn fonctions_s_de_pythonwin() {
