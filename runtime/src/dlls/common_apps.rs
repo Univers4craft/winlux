@@ -400,8 +400,10 @@ extern "win64" fn is_char_upper_w(c: u16) -> i32 {
 
 /// Le presse-papiers prévient déjà par WM_CLIPBOARDUPDATE ; la vieille
 /// chaîne de visionneuses reste vide.
-extern "win64" fn set_clipboard_viewer(_hwnd: usize) -> usize {
-    0
+/// SetClipboardViewer : rend la fenêtre inscrite avant (la suivante de
+/// la chaîne) ; GetClipboardViewer la retrouve.
+extern "win64" fn set_clipboard_viewer(hwnd: usize) -> usize {
+    super::user32_releve::swap_clipboard_viewer(hwnd)
 }
 
 extern "win64" fn change_clipboard_chain(_remove: usize, _next: usize) -> i32 {
@@ -1595,6 +1597,32 @@ pub const ORDINALS: &[(&str, u16, &str)] = &[
     ("comctl32", 412, "RemoveWindowSubclass"),
     ("comctl32", 413, "DefSubclassProc"),
     ("shell32", 165, "SHCreateDirectory"),
+    // Lot D du relevé (#1512) : numéros lus dans les bibliothèques
+    // d'importation c/um/x64 (Cabinet.Lib, dsound.lib, Uxtheme.lib,
+    // shell32.lib) du paquet NuGet Microsoft.Windows.SDK.CPP.x64
+    // 10.0.26100.4654.
+    ("cabinet", 10, "FCICreate"),
+    ("cabinet", 11, "FCIAddFile"),
+    ("cabinet", 12, "FCIFlushFolder"),
+    ("cabinet", 13, "FCIFlushCabinet"),
+    ("cabinet", 14, "FCIDestroy"),
+    ("cabinet", 20, "FDICreate"),
+    ("cabinet", 21, "FDIIsCabinet"),
+    ("cabinet", 22, "FDICopy"),
+    ("cabinet", 23, "FDIDestroy"),
+    ("dsound", 1, "DirectSoundCreate"),
+    ("dsound", 2, "DirectSoundEnumerateA"),
+    ("dsound", 3, "DirectSoundEnumerateW"),
+    ("dsound", 6, "DirectSoundCaptureCreate"),
+    ("dsound", 7, "DirectSoundCaptureEnumerateA"),
+    ("dsound", 8, "DirectSoundCaptureEnumerateW"),
+    ("dsound", 11, "DirectSoundCreate8"),
+    ("dsound", 12, "DirectSoundCaptureCreate8"),
+    ("uxtheme", 47, "DrawThemeBackgroundEx"),
+    ("shell32", 28, "SHILCreateFromPath"),
+    ("shell32", 192, "SHUpdateImageW"),
+    ("shell32", 232, "SHSetFolderPathW"),
+    ("shell32", 256, "SHCreateShellFolderView"),
 ];
 
 pub fn all() -> Vec<(&'static str, Exports)> {

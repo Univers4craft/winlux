@@ -226,7 +226,7 @@ pub(crate) fn new_item(path: &str) -> *mut Com<ShellItem> {
 
 /// Chemin Windows d'un IShellItem venu du programme (le nôtre, ou un autre
 /// objet qui sait rendre SIGDN_FILESYSPATH).
-unsafe fn item_path(item: usize) -> Option<String> {
+pub(crate) unsafe fn item_path(item: usize) -> Option<String> {
     if item == 0 {
         return None;
     }
@@ -1005,7 +1005,7 @@ static CUSTOM_VT: VTable<30> = VTable([
 
 // ---------- IShellItem ----------
 
-unsafe extern "win64" fn item_qi(
+pub(crate) unsafe extern "win64" fn item_qi(
     this: *mut Com<ShellItem>,
     riid: *const Guid,
     out: *mut *mut c_void,
@@ -1240,6 +1240,18 @@ static ARRAY_VT: VTable<10> = VTable([
 ]);
 
 // ---------- shell32 ----------
+
+/// Nouvel IShellItemArray sur des chemins Windows (lot D, #1512).
+pub(crate) unsafe fn new_item_array(
+    items: Vec<String>,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    let a = Com::create(ARRAY_VT.ptr(), ItemArray { items });
+    let hr = array_qi(a, riid, out);
+    Com::release(a);
+    hr
+}
 
 /// SHCreateItemFromParsingName : IShellItem d'un chemin existant.
 pub unsafe extern "win64" fn sh_create_item_from_parsing_name(

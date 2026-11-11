@@ -2735,7 +2735,7 @@ impl X11Backend {
                     h == hwnd
                         && b == e.detail
                         && now.duration_since(t).as_millis()
-                            <= crate::dlls::mouse::current().double_click as u128
+                            <= crate::dlls::mouse::double_click_time() as u128
                         && (x - lx).abs() <= 4
                         && (y - ly).abs() <= 4
                 }) && gui::wants_double_clicks(hwnd);
