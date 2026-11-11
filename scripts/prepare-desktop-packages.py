@@ -16,6 +16,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "bluez", "blueman", "brightnessctl",
             # Interrupteurs radio (rfkill unblock dans winlux-bluetooth, #604).
             "rfkill",
+            # Trousseau de secrets (libsecret : Claude, navigateurs, mail),
+            # ouvert à la connexion par winlux-keyring (#1488).
+            "gnome-keyring",
             # glxinfo : moteur de rendu OpenGL dans le rapport de bug (#610).
             "mesa-utils",
             # Bus d'accessibilité org.a11y.Bus : lecteurs d'écran, Narrateur,

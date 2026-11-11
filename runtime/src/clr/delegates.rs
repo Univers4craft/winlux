@@ -19,6 +19,9 @@ use super::types::{self, Kind};
 const TARGET: usize = 8;
 const METHOD: usize = 16;
 const LIST: usize = 24;
+/// Taille d'un objet délégué : en-tête, cible, méthode, liste d'invocation.
+/// `System.Delegate` de notre mscorlib la réserve (#1702).
+pub(super) const OBJECT_SIZE: usize = LIST + 8;
 
 /// Méthode désignée par un pointeur de méthode (`ldftn`).
 #[derive(Clone)]

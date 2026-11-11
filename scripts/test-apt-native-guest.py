@@ -22,6 +22,14 @@ for tool, bit in (("/usr/bin/su.util-linux", stat.S_ISUID), ("/usr/bin/passwd", 
 import grp
 assert Path("/etc/shadow").stat().st_gid == grp.getgrnam("shadow").gr_gid, "/etc/shadow must belong to group shadow"
 assert Path("/var/lib/winlux/apt-base-permissions-restored").read_text().strip() == "3"
+# Dossiers personnels après le démarrage (#1722) : jamais inscriptibles par
+# le groupe ni par les autres (l'init remet en 0700 un dossier resté ouvert).
+import pwd
+for account in pwd.getpwall():
+    home = Path(account.pw_dir)
+    if 1000 <= account.pw_uid < 60000 and str(home).startswith("/home/") and home.is_dir() and not home.is_symlink():
+        mode = stat.S_IMODE(home.stat().st_mode)
+        assert not mode & 0o022, f"{home} en {mode:o} : écriture du groupe ou des autres (#1722)"
 # « su » vers root passe par sudo : /usr/bin/su est la bascule, le vrai su est détourné.
 assert Path("/usr/bin/su").read_bytes()[:2] == b"#!", "/usr/bin/su must be the Winlux sudo switch"
 assert stat.S_IMODE(Path("/usr/bin/su.util-linux").stat().st_mode) & stat.S_ISUID, "Real su must stay setuid"

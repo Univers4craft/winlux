@@ -851,6 +851,11 @@ def InstalledAppsPanel(window, kind=None):
         def message(self, kind, text, detail=None, buttons=Gtk.ButtonsType.CLOSE):
             dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=kind, buttons=buttons, text=text)
             if detail: dialog.format_secondary_text(detail)
+            if buttons == Gtk.ButtonsType.OK_CANCEL:
+                # Prudence : Entrée annule (#1558), il faut cliquer pour confirmer.
+                dialog.set_default_response(Gtk.ResponseType.CANCEL)
+                cancel = dialog.get_widget_for_response(Gtk.ResponseType.CANCEL)
+                if cancel is not None: cancel.grab_focus()
             answer = dialog.run()
             dialog.destroy()
             return answer

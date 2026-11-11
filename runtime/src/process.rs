@@ -199,6 +199,58 @@ mod tests {
         assert_eq!(quote_arg("a\"b"), "\"a\\\"b\"");
     }
 
+    /// Un module en cours de déchargement (compteur à zéro, image peut-être
+    /// déjà démappée) n'a pas de bloc TLS dans un nouveau thread (#1673).
+    #[test]
+    fn tls_statique_ignore_un_module_en_dechargement() {
+        use crate::loader::{Module, TlsInfo};
+        use crate::pe::PeImage;
+        let template = *b"winlux-tls-1668!";
+        let module = |slot: usize, start: usize, refcount: u32| Module {
+            name: format!("m{slot}.dll"),
+            path: format!("m{slot}.dll").into(),
+            base: 0,
+            size: 0,
+            pe: PeImage {
+                characteristics: 0,
+                entry_rva: 0,
+                image_base: 0,
+                section_alignment: 0x1000,
+                size_of_image: 0,
+                size_of_headers: 0,
+                subsystem: 3,
+                dll_characteristics: 0,
+                stack_reserve: 0,
+                stack_commit: 0,
+                dirs: vec![],
+                sections: vec![],
+                il_only32: false,
+                x86: false,
+            },
+            tls: Some(TlsInfo {
+                raw_start: start,
+                raw_end: start + template.len(),
+                index_addr: 0,
+                callbacks_addr: 0,
+                zero_fill: 0,
+                slot,
+            }),
+            initialized: true,
+            refcount,
+        };
+        let t = template.as_ptr() as usize;
+        // Image principale à zéro référence, DLL démappée (adresse 0x10, page
+        // nulle jamais projetée) en cours de déchargement, DLL vivante.
+        let mods = [module(0, t, 0), module(1, 0x10, 0), module(2, t, 1)];
+        let array = super::alloc_zeroed(4096);
+        super::fill_static_tls(&mods, array);
+        let slot = |i: usize| unsafe { *((array + i * 8) as *const usize) };
+        let block = |i: usize| unsafe { std::slice::from_raw_parts(slot(i) as *const u8, 16) };
+        assert_eq!(block(0), &template);
+        assert_eq!(slot(1), 0);
+        assert_eq!(block(2), &template);
+    }
+
     #[test]
     fn parent_de_chromium_vivant_ou_mort() {
         assert!(super::stat_alive("42 (claude.exe) S 1 42"));
@@ -297,6 +349,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
         || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="));
     if chromium_child {
         exit_with_parent(windows_parent);
+        confine_chromium_child(args);
     }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
@@ -316,6 +369,10 @@ pub fn init_process(exe: &Module, args: &[String]) {
     }
     if !chromium_child && chromium_sandbox_refused(&exe_win, &cmd) {
         cmd.push_str(" --no-sandbox");
+        crate::log_info!(
+            "process",
+            "{exe_win} : lancé sans le bac à sable de Chromium, processus enfants confinés par Winlux (#1733)"
+        );
     }
     // Bac à sable refusé en cours de route (appli non reconnue au départ,
     // #236) : l'appli repart sans, comme l'utilisateur l'a accepté.
@@ -613,10 +670,31 @@ pub fn clear_tls_value_all_threads(index: u32) -> bool {
 }
 
 /// TLS statique (__declspec(thread)) : un bloc par module, copié depuis l'image.
+///
+/// La copie se fait sous le verrou de MODULES : FreeLibrary retire le module
+/// de la liste sous ce verrou avant de le démapper, donc un module encore
+/// listé ici reste projeté jusqu'à la fin de la copie. Un module dont le
+/// compteur est à zéro est en cours de déchargement : son index TLS est déjà
+/// rendu, il n'a pas de bloc (#1673). L'image principale n'est jamais
+/// déchargée : elle garde le sien quel que soit son compteur.
 fn setup_static_tls(teb: usize) {
-    let mods = loader::MODULES.lock().unwrap().clone();
     let array = alloc_zeroed(4096);
-    for m in mods.iter() {
+    let mods = loader::MODULES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fill_static_tls(&mods, array);
+    drop(mods);
+    unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
+}
+
+/// Remplit le tableau TLS d'un thread depuis la liste des modules, tenue
+/// verrouillée par l'appelant.
+fn fill_static_tls(mods: &[Module], array: usize) {
+    let live = mods
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| *i == 0 || m.refcount != 0);
+    for (_, m) in live {
         if let Some(t) = &m.tls {
             let idx = t.slot;
             if idx >= loader::TLS_MODULE_SLOTS {
@@ -633,7 +711,6 @@ fn setup_static_tls(teb: usize) {
             }
         }
     }
-    unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
 }
 
 fn run_tls_callbacks(m: &Module, reason: u32) {
@@ -800,7 +877,12 @@ fn thread_calls_enabled(module: usize) -> bool {
 pub fn thread_attach_current() {
     init_thread();
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1) {
+    // Comme Windows : une DLL qui n'a pas encore reçu DLL_PROCESS_ATTACH
+    // (en cours de chargement par un autre thread) ne reçoit pas
+    // DLL_THREAD_ATTACH. Sinon un thread né pendant la liaison des imports
+    // de SDL3.dll exécutait son rappel TLS avant que sa section de code soit
+    // exécutable : faute d'exécution dans steamwebhelper (#1612).
+    for m in mods.into_iter().skip(1).filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
@@ -817,7 +899,7 @@ pub fn thread_detach_current() {
         return;
     }
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1).rev() {
+    for m in mods.into_iter().skip(1).rev().filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
@@ -835,8 +917,10 @@ fn start(exe: Module) -> u32 {
     crate::quality::init();
     crate::wow32::wrap_fault_handlers();
     let mods = loader::MODULES.lock().unwrap().clone();
-    // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
-    for m in mods.iter().skip(1).rev() {
+    // Chaque DLL après celles qu'elle importe, comme Windows : l'ordre
+    // inverse de la projection ne le garantit pas (#1584).
+    let deps = mods.get(1..).unwrap_or(&[]);
+    for m in crate::dlls::kernel32::dependency_order(&exe, deps) {
         if !loader::mark_initialized(m.base) {
             continue;
         }
@@ -928,10 +1012,10 @@ pub fn run(exe: Module) -> ! {
 /// Programme Chromium ou Electron (Claude, Discord, VS Code…) : son bac à
 /// sable Windows exige d'écrire dans la mémoire de l'enfant et de lui
 /// confier des poignées avant son démarrage, ce que Winlux ne sait pas
-/// encore faire ; le courtier tue alors chaque enfant (#767). Winlux pose
-/// la question à l'utilisateur (capacité « sandbox ») et n'ajoute
-/// `--no-sandbox` qu'après un « Autoriser » explicite, révocable dans
-/// Paramètres > Confidentialité et sécurité.
+/// encore faire ; le courtier tue alors chaque enfant (#767). Sans poser de
+/// question (#1733), Winlux ajoute `--no-sandbox` et confine lui-même les
+/// processus enfants ; un refus mémorisé dans Paramètres > Confidentialité
+/// et sécurité garde le bac à sable.
 fn chromium_sandbox_refused(exe_win: &str, cmd: &str) -> bool {
     if cmd.contains("--no-sandbox") {
         return false;
@@ -941,6 +1025,36 @@ fn chromium_sandbox_refused(exe_win: &str, cmd: &str) -> bool {
         .parent()
         .is_some_and(is_chromium_dir);
     is_chromium && crate::permissions::allowed(crate::permissions::Capability::Sandbox)
+}
+
+/// Enfant Chromium (renderer, GPU, utilitaire) lancé sans le bac à sable :
+/// Winlux le confine lui-même (#1733). `PR_SET_NO_NEW_PRIVS` lui interdit
+/// tout gain de droits (programme setuid, capacités de fichier) pour lui et
+/// ses descendants ; le noyau garde ce verrou jusqu'à la fin du processus.
+fn confine_chromium_child(args: &[String]) {
+    let no_sandbox = args.iter().any(|a| a == "--no-sandbox")
+        || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains("--no-sandbox"));
+    if !no_sandbox {
+        return;
+    }
+    let kind = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--type="))
+        .unwrap_or("?");
+    // SAFETY : prctl sans pointeur, effet limité au processus courant.
+    let r = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if r == 0 {
+        crate::log_info!(
+            "process",
+            "enfant Chromium {kind} confiné (sans gain de droits possible, #1733)"
+        );
+    } else {
+        crate::log_warn!(
+            "process",
+            "enfant Chromium {kind} : confinement impossible ({})",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 /// Dossier d'un programme Chromium : données ICU et instantané V8 côte à côte.

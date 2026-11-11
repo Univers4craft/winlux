@@ -737,6 +737,8 @@ pub(crate) fn canon_std(h: usize) -> usize {
         STD_INPUT_REAL | 0x7FFF_FFFF_FFFF_FFF6 => (-10isize) as usize,
         STD_OUTPUT_REAL | 0x7FFF_FFFF_FFFF_FFF5 => (-11isize) as usize,
         STD_ERROR_REAL | 0x7FFF_FFFF_FFFF_FFF4 => (-12isize) as usize,
+        // Tampon d'écran de CreateConsoleScreenBuffer : le même terminal.
+        _ if crate::dlls::kernel32_releve::is_screen_buffer(h) => (-11isize) as usize,
         _ => h,
     }
 }
@@ -1891,6 +1893,10 @@ pub unsafe extern "win64" fn write_file(
     if !written.is_null() {
         *written = 0;
     }
+    // Appareil virtuel (pilote remplacé, observation #1655).
+    if let Some(r) = crate::dlls::vdev::write_file(h, buf, len, written, ov) {
+        return r;
+    }
     if ov != 0 {
         if is_overlapped_handle(h) {
             return start_overlapped_io(h, buf as usize, len, ov, true, written);
@@ -2103,8 +2109,25 @@ unsafe fn create_file_opened(
         None => path,
     };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
-    if let Some(dev) = crate::dlls::hid::device_path(path) {
-        return match crate::dlls::hid::open(&dev) {
+    // Appareil virtuel d'un pilote constructeur (#1533) : \\.\NomDuPilote.
+    if crate::dlls::vdev::is_virtual(path) {
+        return match crate::dlls::vdev::open(path) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(2);
+                usize::MAX
+            }
+        };
+    }
+    if crate::dlls::hid::parse_path(path).is_some() {
+        return match crate::dlls::hid::open_path(path, access) {
             Ok(f) => {
                 crate::process::set_last_error(0);
                 let h = insert_file(f);
@@ -2261,10 +2284,28 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
+            // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
+            let code = if e.kind() == std::io::ErrorKind::NotFound
+                && p.parent()
+                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+            {
+                3
+            } else {
+                io_error_code(&e)
+            };
+            // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
+            crate::trace!(
+                "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
+                p.display()
+            );
+            crate::process::set_last_error(code);
             return usize::MAX;
         }
     };
+    if !existed {
+        crate::trace!("CreateFile({path} → {}) : fichier créé", p.display());
+    }
     // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
     // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
     // l'erreur d'une tentative précédente ne doit pas rester (#905). Les
@@ -2281,6 +2322,7 @@ unsafe fn create_file_opened(
         lock(overlapped_handles()).insert(h);
     }
     if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
+        crate::trace!("CreateFile({path}) : effacé à la fermeture");
         lock(delete_on_close()).insert(h, p);
     }
     h
@@ -3183,6 +3225,19 @@ pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
+    let r = move_file_ex_inner(src, dst, flags);
+    crate::trace!(
+        "MoveFileEx({src} -> {dst}, {flags:#x}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+
+fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     let s = crate::paths::to_linux(src);
     let d = crate::paths::to_linux(dst);
     if d.exists() {
@@ -3424,8 +3479,6 @@ unsafe fn load_library_str(name: &str) -> usize {
 /// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
 /// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
 fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
-    // Les dépendances sont projetées après le module qui les importe : à
-    // rebours, chacune passe avant ceux qui l'utilisent.
     let pending: Vec<crate::loader::Module> = crate::loader::MODULES
         .lock()
         .unwrap()
@@ -3434,7 +3487,7 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         .filter(|x| !before.is_empty() && !before.contains(&x.base))
         .cloned()
         .collect();
-    for dep in pending.iter().rev() {
+    for dep in dependency_order(m, &pending) {
         if !crate::process::initialize_dynamic_module(dep) {
             crate::trace!(
                 "DllMain de {} (dépendance de {}) a échoué",
@@ -3445,6 +3498,76 @@ fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> 
         }
     }
     crate::process::initialize_dynamic_module(m)
+}
+
+/// Ordre d'initialisation des dépendances `pending` de `m` : chacune après
+/// les DLL qu'elle importe, comme le chargeur de Windows (parcours en
+/// profondeur des imports, suffixe). L'ordre de projection ne suffit pas :
+/// steamui.dll importe tier0_s64.dll puis vstdlib_s64.dll, qui importe
+/// aussi tier0 ; à rebours de la projection, vstdlib passait avant tier0 et
+/// son DllMain lisait une variable de tier0 encore à zéro (#1584). Les DLL
+/// qu'aucun import n'atteint (transferts, chargements faits par un DllMain)
+/// restent dans l'ordre inverse de leur projection.
+pub(crate) fn dependency_order<'a>(
+    m: &crate::loader::Module,
+    pending: &'a [crate::loader::Module],
+) -> Vec<&'a crate::loader::Module> {
+    let names: Vec<String> = pending.iter().map(|x| x.name.clone()).collect();
+    init_order(&m.import_names(), &names, &|i| pending[i].import_names())
+        .into_iter()
+        .map(|i| &pending[i])
+        .collect()
+}
+
+/// Cœur de `dependency_order`, sur les noms : `roots` = imports du module
+/// chargé, `names[i]` = nom de la i-ème DLL à initialiser (dans l'ordre de
+/// projection), `imports(i)` = ses imports. Rend les indices dans l'ordre
+/// des DllMain.
+fn init_order(
+    roots: &[String],
+    names: &[String],
+    imports: &dyn Fn(usize) -> Vec<String>,
+) -> Vec<usize> {
+    let keys: Vec<String> = names.iter().map(|n| crate::dlls::normalize(n)).collect();
+    let find = |name: &str| {
+        let n = crate::dlls::normalize(name);
+        keys.iter().position(|k| *k == n)
+    };
+    let mut seen = vec![false; names.len()];
+    let mut order = Vec::with_capacity(names.len());
+    // Pile explicite (pas de récursion) : (indice, imports déjà parcourus).
+    let visit = |start: usize, seen: &mut Vec<bool>, order: &mut Vec<usize>| {
+        if seen[start] {
+            return;
+        }
+        seen[start] = true;
+        let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
+        // À rebours : `pop` rend alors les imports dans leur ordre.
+        let deps =
+            |i: usize| -> Vec<usize> { imports(i).iter().rev().filter_map(|n| find(n)).collect() };
+        stack.push((start, deps(start)));
+        while let Some((i, todo)) = stack.last_mut() {
+            if let Some(j) = todo.pop() {
+                if !seen[j] {
+                    seen[j] = true;
+                    let d = deps(j);
+                    stack.push((j, d));
+                }
+            } else {
+                order.push(*i);
+                stack.pop();
+            }
+        }
+    };
+    for name in roots {
+        if let Some(j) = find(name) {
+            visit(j, &mut seen, &mut order);
+        }
+    }
+    for j in (0..names.len()).rev() {
+        visit(j, &mut seen, &mut order);
+    }
+    order
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {
@@ -4559,6 +4682,16 @@ pub unsafe extern "win64" fn virtual_query(
             kind: 0,
         }
     };
+    if crate::log::enabled(crate::log::Level::Trace) {
+        if let Some(n) = crate::dlls::mmap::named_view_at(address) {
+            crate::trace!(
+                "VirtualQuery(0x{address:x}, vue de {n}) : base 0x{:x}, taille {}, état 0x{:x}",
+                result.base_address as usize,
+                result.region_size,
+                result.state
+            );
+        }
+    }
     std::ptr::write_unaligned(info, result);
     required
 }
@@ -6542,7 +6675,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
+    if crate::dlls::kernel32_node::close_snapshot(handle)
+        || crate::dlls::jobs::close(handle)
+        || crate::dlls::kernel32_releve::close(handle)
+    {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -7197,6 +7333,18 @@ pub unsafe extern "win64" fn delete_file_a(path: *const u8) -> i32 {
 /// Corps commun de `delete_file_a` et `delete_file_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn delete_file_str(path: &str) -> i32 {
+    let r = delete_file_str_inner(path);
+    crate::trace!(
+        "DeleteFile({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn delete_file_str_inner(path: &str) -> i32 {
     match std::fs::remove_file(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7215,6 +7363,18 @@ pub unsafe extern "win64" fn create_directory_a(path: *const u8, _sec: usize) ->
 /// Corps commun de `create_directory_a` et `create_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
+    let r = create_directory_str_inner(path, _sec);
+    crate::trace!(
+        "CreateDirectory({path}) = {r} (erreur {})",
+        if r == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    r
+}
+unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
     match std::fs::create_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
@@ -7625,10 +7785,16 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    match remove_dir_or_link(&crate::paths::to_linux(&s.to_string_lossy())) {
-        Ok(()) => 1,
+    let path = s.to_string_lossy();
+    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+        Ok(()) => {
+            crate::trace!("RemoveDirectory({path}) = 1");
+            1
+        }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            let code = io_error_code(&e);
+            crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
+            crate::process::set_last_error(code);
             0
         }
     }
@@ -8435,10 +8601,20 @@ pub unsafe extern "win64" fn query_depth_slist(head: usize) -> u16 {
 }
 // --- Encode/Decode Pointer ---
 pub extern "win64" fn encode_pointer(ptr: usize) -> usize {
-    ptr ^ 0xDEAD_BEEF_CAFE_BABE
+    pointer_xor(ptr)
 }
 pub extern "win64" fn decode_pointer(ptr: usize) -> usize {
-    ptr ^ 0xDEAD_BEEF_CAFE_BABE
+    pointer_xor(ptr)
+}
+/// Programme x86 : valeur codée sur 32 bits, comme un pointeur de ce
+/// programme ; sinon la passerelle la signale « au-dessus de 4 Go » (#1642).
+fn pointer_xor(ptr: usize) -> usize {
+    let v = ptr ^ 0xDEAD_BEEF_CAFE_BABE;
+    if crate::wow32::active() {
+        v as u32 as usize
+    } else {
+        v
+    }
 }
 
 // --- Helpers (hostname, date/time without chrono/nix) ---
@@ -8549,6 +8725,45 @@ pub unsafe extern "win64" fn create_waitable_timer_w(
         manual,
         n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
     )
+}
+/// OpenWaitableTimerW : minuteur nommé de ce processus. Le handle ouvert
+/// partage le compteur d'armement du minuteur d'origine.
+pub unsafe extern "win64" fn open_waitable_timer_w(
+    access: u32,
+    inherit: i32,
+    name: *const u16,
+) -> usize {
+    let Some(n) = sync_name_w(name) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let h = open_event_a(access, inherit, n.as_ptr().cast());
+    if h == 0 {
+        return 0;
+    }
+    let Some(SyncHandle::Event(obj)) = lookup_sync(h) else {
+        return h;
+    };
+    let timers: Vec<(usize, Arc<AtomicUsize>)> = lock(waitable_timers())
+        .iter()
+        .map(|(&t, g)| (t, g.clone()))
+        .collect();
+    let generation = timers.into_iter().find_map(|(t, g)| match lookup_sync(t) {
+        Some(SyncHandle::Event(o)) if Arc::ptr_eq(&o, &obj) => Some(g),
+        _ => None,
+    });
+    match generation {
+        Some(g) => {
+            lock(waitable_timers()).insert(h, g);
+            h
+        }
+        None => {
+            // Le nom désigne un événement, pas un minuteur.
+            close_handle(h);
+            crate::process::set_last_error(6);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn create_waitable_timer_ex_w(
     attr: usize,
@@ -10336,6 +10551,55 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dllmain_des_dependances_dans_l_ordre_des_imports() {
+        // #1584 : steamui importe libavcodec, SDL3, tier0, video64 et
+        // vstdlib ; vstdlib importe tier0, libavcodec importe libavutil.
+        // Projection : steamui (déjà à part), puis dans cet ordre.
+        let names: Vec<String> = [
+            "libavcodec.dll",
+            "libavutil.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+            "orpheline.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let imports = |i: usize| -> Vec<String> {
+            let v: &[&str] = match i {
+                0 => &["libavutil.dll", "KERNEL32.dll"],
+                4 => &["libavcodec.dll", "TIER0_S64.DLL"],
+                5 => &["tier0_s64.dll"],
+                _ => &[],
+            };
+            v.iter().map(|s| s.to_string()).collect()
+        };
+        let roots: Vec<String> = [
+            "libavcodec.dll",
+            "SDL3.dll",
+            "tier0_s64.dll",
+            "video64.dll",
+            "vstdlib_s64.dll",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let order = super::init_order(&roots, &names, &imports);
+        let pos = |n: &str| order.iter().position(|&i| names[i] == n).unwrap();
+        assert_eq!(order.len(), names.len());
+        assert!(pos("tier0_s64.dll") < pos("vstdlib_s64.dll"));
+        assert!(pos("tier0_s64.dll") < pos("video64.dll"));
+        assert!(pos("libavutil.dll") < pos("libavcodec.dll"));
+        assert!(pos("libavcodec.dll") < pos("video64.dll"));
+        // Ordre des imports de steamui respecté entre DLL indépendantes.
+        assert!(pos("libavcodec.dll") < pos("SDL3.dll"));
+        assert!(pos("SDL3.dll") < pos("tier0_s64.dll"));
+        // DLL qu'aucun import n'atteint : initialisée aussi.
+        assert!(order.iter().any(|&i| names[i] == "orpheline.dll"));
+    }
     /// #767 : un enfant de Chromium désigne le gestionnaire de crashpad
     /// reçu de son parent, et le transmet à ses propres enfants.
     #[test]

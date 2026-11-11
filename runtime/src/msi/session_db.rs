@@ -39,14 +39,71 @@ const ERROR_INVALID_DATA: u32 = 13;
 /// Base du paquet, chargée à la première demande (`None` : illisible).
 static DB: Mutex<Option<Option<Database>>> = Mutex::new(None);
 
-fn with_db<T>(f: impl FnOnce(&mut Database) -> T) -> Option<T> {
+/// Base ouverte par `MsiOpenDatabase`, hors de la session (#1657).
+struct Opened {
+    db: Database,
+    path: std::path::PathBuf,
+    read_only: bool,
+    changed: bool,
+}
+
+static OPENED: Mutex<Option<HashMap<u32, Opened>>> = Mutex::new(None);
+
+fn opened<T>(f: impl FnOnce(&mut HashMap<u32, Opened>) -> T) -> T {
+    let mut g = OPENED.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(HashMap::new))
+}
+
+/// Nouvelle base ouverte hors session (#1657).
+pub(super) fn insert_opened(h: u32, db: Database, path: std::path::PathBuf, read_only: bool) {
+    opened(|o| {
+        o.insert(
+            h,
+            Opened {
+                db,
+                path,
+                read_only,
+                changed: false,
+            },
+        )
+    });
+}
+
+/// MsiDatabaseCommit : `Some(true)` s'il y a des changements à écrire.
+/// La base de la session et une base en lecture seule n'ont rien à écrire.
+pub(super) fn commit_state(h: u32) -> Option<bool> {
+    if h == DB_HANDLE {
+        return Some(false);
+    }
+    opened(|o| {
+        o.get(&h).map(|d| {
+            if d.changed {
+                eprintln!("msi.dll : base {} modifiée", d.path.display());
+            }
+            d.changed && !d.read_only
+        })
+    })
+}
+
+/// Base derrière la poignée `h` : celle de la session (`DB_HANDLE`) ou une
+/// base ouverte par `MsiOpenDatabase`.
+pub(super) fn with_db<T>(h: u32, f: impl FnOnce(&mut Database) -> T) -> Option<T> {
+    if h != DB_HANDLE {
+        return opened(|o| o.get_mut(&h).map(|d| f(&mut d.db)));
+    }
     let mut g = DB.lock().unwrap_or_else(|e| e.into_inner());
     let db = g.get_or_insert_with(|| {
         let path = session::property("OriginalDatabase")?;
-        let data = std::fs::read(crate::paths::to_linux(&path)).ok()?;
-        Database::parse(&data).ok()
+        // Lu à la demande : un paquet de 800 Mo ne tient pas dans la
+        // mémoire basse du processus x86 de l'action (#1642).
+        Database::open_tables(&crate::paths::to_linux(&path)).ok()
     });
     db.as_mut().map(f)
+}
+
+/// Poignée de base valide ?
+pub(super) fn is_db(h: u32) -> bool {
+    h == DB_HANDLE || opened(|o| o.contains_key(&h))
 }
 
 // ---------- analyse ----------
@@ -503,6 +560,7 @@ fn run(db: &Database, q: &Query, params: &[Value]) -> Result<Vec<Vec<Value>>, u3
 // ---------- poignées de vue ----------
 
 struct View {
+    db: u32,
     query: Query,
     rows: Option<Vec<Hit>>,
     pos: usize,
@@ -524,6 +582,9 @@ fn views<T>(f: impl FnOnce(&mut Views) -> T) -> T {
 
 /// MsiCloseHandle d'une vue ou d'un enregistrement lu.
 pub fn close(h: u32) -> bool {
+    if opened(|o| o.remove(&h)).is_some() {
+        return true;
+    }
     views(|v| {
         v.fetched.remove(&h);
         v.views.remove(&h).is_some()
@@ -557,7 +618,7 @@ pub extern "win64" fn msi_get_active_database(h: usize) -> u32 {
     if h as u32 != session::SESSION_HANDLE || session::scheduled() {
         return 0;
     }
-    if with_db(|_| ()).is_some() {
+    if with_db(DB_HANDLE, |_| ()).is_some() {
         DB_HANDLE
     } else {
         0
@@ -565,7 +626,7 @@ pub extern "win64" fn msi_get_active_database(h: usize) -> u32 {
 }
 
 fn open_view(db: usize, query: usize, out: usize, wide: bool) -> u32 {
-    if db as u32 != DB_HANDLE {
+    if !is_db(db as u32) {
         return ERROR_INVALID_HANDLE;
     }
     if query == 0 || out == 0 {
@@ -582,7 +643,7 @@ fn open_view(db: usize, query: usize, out: usize, wide: bool) -> u32 {
         eprintln!("msi.dll : requête non prise en charge : {sql}");
         return ERROR_BAD_QUERY_SYNTAX;
     };
-    match with_db(|d| layout(d, &q).map(|_| ())) {
+    match with_db(db as u32, |d| layout(d, &q).map(|_| ())) {
         None => return ERROR_INVALID_HANDLE,
         Some(Err(e)) => return e,
         Some(Ok(())) => {}
@@ -592,6 +653,7 @@ fn open_view(db: usize, query: usize, out: usize, wide: bool) -> u32 {
         v.views.insert(
             h,
             View {
+                db: db as u32,
                 query: q,
                 rows: None,
                 pos: 0,
@@ -613,13 +675,14 @@ pub extern "win64" fn msi_view_execute(view: usize, rec: usize) -> u32 {
     let params: Vec<Value> = session::record_fields(rec as u32)
         .map(|f| f.iter().skip(1).map(from_field).collect())
         .unwrap_or_default();
-    let Some(query) = views(|v| v.views.get(&(view as u32)).map(|w| w.query.clone())) else {
+    let Some((db, query)) = views(|v| v.views.get(&(view as u32)).map(|w| (w.db, w.query.clone())))
+    else {
         return ERROR_INVALID_HANDLE;
     };
     if params.len() < query.params {
         return ERROR_INVALID_PARAMETER;
     }
-    let Some(result) = with_db(|d| run_hits(d, &query, &params)) else {
+    let Some(result) = with_db(db, |d| run_hits(d, &query, &params)) else {
         return ERROR_INVALID_HANDLE;
     };
     match result {
@@ -647,16 +710,16 @@ pub extern "win64" fn msi_view_fetch(view: usize, out: usize) -> u32 {
         let rows = w.rows.as_ref().ok_or(ERROR_INVALID_HANDLE_STATE)?;
         let hit = rows.get(w.pos).cloned().ok_or(ERROR_NO_MORE_ITEMS)?;
         w.pos += 1;
-        Ok::<_, u32>((hit, w.query.clone()))
+        Ok::<_, u32>((hit, w.db, w.query.clone()))
     });
-    let (hit, query) = match row {
+    let (hit, db, query) = match row {
         Ok(r) => r,
         Err(e) => {
             unsafe { *(out as *mut u32) = 0 };
             return e;
         }
     };
-    let fields = with_db(|d| {
+    let fields = with_db(db, |d| {
         let cols = picked(d, &query).unwrap_or_default();
         let mut fields = vec![Field::Null];
         for (i, v) in hit.values.iter().enumerate() {
@@ -787,18 +850,22 @@ pub extern "win64" fn msi_view_modify(view: usize, mode: i32, rec: usize) -> u32
     };
     let values: Vec<Value> = fields.iter().skip(1).map(from_field).collect();
     let info = views(|v| {
-        let q = v.views.get(&(view as u32))?.query.clone();
+        let w = v.views.get(&(view as u32))?;
+        let (db, q) = (w.db, w.query.clone());
         let origin = v
             .fetched
             .get(&(rec as u32))
             .filter(|(from, _)| *from == view as u32)
             .and_then(|(_, o)| o.first().copied());
-        Some((q, origin))
+        Some((db, q, origin))
     });
-    let Some((query, origin)) = info else {
+    let Some((db, query, origin)) = info else {
         return ERROR_INVALID_HANDLE;
     };
-    let result = with_db(|d| modify(d, &query, mode, &values, origin));
+    let result = with_db(db, |d| modify(d, &query, mode, &values, origin));
+    if matches!(result, Some(Ok(()))) && !matches!(mode, -1 | 0 | 7..=10) {
+        opened(|o| o.get_mut(&db).map(|d| d.changed = true));
+    }
     match result {
         Some(Ok(())) => {
             if mode == 6 {
@@ -817,10 +884,11 @@ pub extern "win64" fn msi_view_get_column_info(view: usize, kind: i32, out: usiz
     if out == 0 {
         return ERROR_INVALID_PARAMETER;
     }
-    let Some(query) = views(|v| v.views.get(&(view as u32)).map(|w| w.query.clone())) else {
+    let Some((db, query)) = views(|v| v.views.get(&(view as u32)).map(|w| (w.db, w.query.clone())))
+    else {
         return ERROR_INVALID_HANDLE;
     };
-    let info = with_db(|d| {
+    let info = with_db(db, |d| {
         let cols = picked(d, &query).ok()?;
         Some(
             cols.iter()
@@ -854,7 +922,7 @@ pub extern "win64" fn msi_view_get_column_info(view: usize, kind: i32, out: usiz
 }
 
 fn table_persistent(db: usize, table: usize, wide: bool) -> i32 {
-    if db as u32 != DB_HANDLE {
+    if !is_db(db as u32) {
         return 3; // MSICONDITION_ERROR
     }
     let name = unsafe {
@@ -864,7 +932,7 @@ fn table_persistent(db: usize, table: usize, wide: bool) -> i32 {
             crate::dlls::cstr(table as *const u8)
         }
     };
-    match with_db(|d| d.tables.contains_key(&name)) {
+    match with_db(db as u32, |d| d.tables.contains_key(&name)) {
         Some(true) => 1,  // MSICONDITION_TRUE
         Some(false) => 2, // MSICONDITION_NONE
         None => 3,
@@ -878,8 +946,91 @@ pub extern "win64" fn msi_database_is_table_persistent_a(db: usize, table: usize
     table_persistent(db, table, false)
 }
 
+/// Colonnes de la clé primaire d'une table, dans l'ordre des colonnes.
+fn key_columns(d: &Database, table: &str) -> Option<Vec<String>> {
+    let t = d.tables.get(table)?;
+    Some(
+        t.columns
+            .iter()
+            .zip(&t.keys)
+            .filter(|(_, &k)| k)
+            .map(|(c, _)| c.clone())
+            .collect(),
+    )
+}
+
+fn primary_keys(db: usize, table: usize, out: usize, wide: bool) -> u32 {
+    if out == 0 || table == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    unsafe { *(out as *mut u32) = 0 };
+    if !is_db(db as u32) {
+        return ERROR_INVALID_HANDLE;
+    }
+    let name = unsafe {
+        if wide {
+            crate::dlls::wstr(table as *const u16)
+        } else {
+            crate::dlls::cstr(table as *const u8)
+        }
+    };
+    let keys = with_db(db as u32, |d| key_columns(d, &name));
+    match keys {
+        None => ERROR_INVALID_HANDLE,
+        Some(None) => ERROR_INVALID_TABLE,
+        Some(Some(keys)) => {
+            // Champ 0 : nom de la table ; champs 1..n : colonnes de la clé.
+            let mut fields = vec![Field::Str(name)];
+            fields.extend(keys.into_iter().map(Field::Str));
+            unsafe { *(out as *mut u32) = session::new_record(fields) };
+            ERROR_SUCCESS
+        }
+    }
+}
+
+/// MsiDatabaseGetPrimaryKeys : enregistrement des colonnes de la clé primaire.
+pub extern "win64" fn msi_database_get_primary_keys_w(db: usize, table: usize, out: usize) -> u32 {
+    primary_keys(db, table, out, true)
+}
+pub extern "win64" fn msi_database_get_primary_keys_a(db: usize, table: usize, out: usize) -> u32 {
+    primary_keys(db, table, out, false)
+}
+
+const MSIDBERROR_INVALIDARG: i32 = -3;
+const MSIDBERROR_NOERROR: i32 = 0;
+
+/// MsiViewGetError : MsiViewModify ne valide pas les lignes (pas de
+/// MSIMODIFY_VALIDATE), il n'y a donc jamais d'erreur de colonne à
+/// signaler : MSIDBERROR_NOERROR et un nom de colonne vide.
+fn view_error(view: usize, buf: usize, size: usize, wide: bool) -> i32 {
+    if size == 0 || !views(|v| v.views.contains_key(&(view as u32))) {
+        return MSIDBERROR_INVALIDARG;
+    }
+    unsafe {
+        if buf != 0 && *(size as *const u32) > 0 {
+            if wide {
+                *(buf as *mut u16) = 0;
+            } else {
+                *(buf as *mut u8) = 0;
+            }
+        }
+        *(size as *mut u32) = 0;
+    }
+    MSIDBERROR_NOERROR
+}
+pub extern "win64" fn msi_view_get_error_w(view: usize, buf: usize, size: usize) -> i32 {
+    view_error(view, buf, size, true)
+}
+pub extern "win64" fn msi_view_get_error_a(view: usize, buf: usize, size: usize) -> i32 {
+    view_error(view, buf, size, false)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "MsiDatabaseGetPrimaryKeysW" => fn msi_database_get_primary_keys_w,
+        "MsiDatabaseGetPrimaryKeysA" => fn msi_database_get_primary_keys_a,
+        "MsiViewGetErrorW" => fn msi_view_get_error_w,
+        "MsiViewGetErrorA" => fn msi_view_get_error_a,
         "MsiGetActiveDatabase" => fn msi_get_active_database,
         "MsiDatabaseOpenViewW" => fn msi_database_open_view_w,
         "MsiDatabaseOpenViewA" => fn msi_database_open_view_a,
@@ -935,6 +1086,7 @@ mod tests {
                 columns: vec!["Name".into(), "Data".into()],
                 rows: vec![vec![s("Outil"), Value::Int(1)]],
                 binary: vec![false, true],
+                ..Default::default()
             },
         );
         db.streams
@@ -1021,5 +1173,47 @@ mod tests {
             stream_of(&db, "Binary", hits[0].origin[0]).unwrap(),
             b"MZ\x90\0"
         );
+    }
+
+    #[test]
+    fn base_lue_sans_charger_le_paquet() {
+        // Le paquet est lu à la demande dans le fichier : mêmes tables et
+        // flux que la lecture en mémoire (#1642).
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/msi/testdata/sample.msi");
+        let full = Database::parse(&std::fs::read(&path).unwrap()).unwrap();
+        let lazy = Database::open_tables(&path).unwrap();
+        assert_eq!(full.tables.len(), lazy.tables.len());
+        assert_eq!(full.rows("File").count(), lazy.rows("File").count());
+        assert_eq!(full.template, lazy.template);
+        let mut a: Vec<_> = full.streams.keys().collect();
+        let mut b: Vec<_> = lazy.streams.keys().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        // Le filtre laisse sur le disque les flux qui ne sont pas des tables
+        // (cabinet intégré).
+        let tables_only =
+            crate::msi::cfb::Compound::open(&path, &|n, _| n.starts_with('!')).unwrap();
+        assert!(tables_only.streams.contains_key("!File"));
+        assert!(tables_only.streams.keys().all(|n| n.starts_with('!')));
+        assert!(full.streams.keys().any(|n| !n.starts_with('!')));
+    }
+
+    #[test]
+    fn cles_primaires_lues_dans_columns() {
+        // Paquet réel produit par msitools : clés déclarées dans les tables
+        // standard (#1607).
+        let db = Database::parse(include_bytes!("testdata/sample.msi")).unwrap();
+        assert_eq!(key_columns(&db, "File").unwrap(), vec!["File".to_string()]);
+        assert_eq!(
+            key_columns(&db, "Component").unwrap(),
+            vec!["Component".to_string()]
+        );
+        assert_eq!(
+            key_columns(&db, "FeatureComponents").unwrap(),
+            vec!["Feature_".to_string(), "Component_".to_string()]
+        );
+        assert!(key_columns(&db, "Absente").is_none());
     }
 }

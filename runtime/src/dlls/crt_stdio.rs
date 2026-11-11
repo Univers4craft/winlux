@@ -77,7 +77,7 @@ fn free_slot(p: *mut c_void) {
 const MSVCRT_FILE_SIZE: usize = 48;
 static mut IOB: [u64; 3 * MSVCRT_FILE_SIZE / 8] = [0; 3 * MSVCRT_FILE_SIZE / 8];
 
-fn std_stream(index: usize) -> *mut c_void {
+pub(crate) fn std_stream(index: usize) -> *mut c_void {
     static STD: OnceLock<[usize; 3]> = OnceLock::new();
     let handles = STD.get_or_init(|| {
         let base = std::ptr::addr_of_mut!(IOB) as usize;
@@ -288,38 +288,60 @@ fn flush_stream(s: &Stream) -> bool {
 
 // ---------- Ouverture / fermeture ----------
 
+/// Échec d'ouverture : errno comme la CRT de Windows (ENOENT pour un
+/// fichier absent, EACCES…), sinon un appelant comme getpath de Python 3.12
+/// voit errno 0 et prend « pyvenv.cfg absent » pour une erreur fatale (#1582).
+fn open_failed(e: &std::io::Error) -> *mut c_void {
+    let code = e
+        .raw_os_error()
+        .map(crate::dlls::crt_runtime::crt_errno)
+        .unwrap_or(match e.kind() {
+            std::io::ErrorKind::NotFound => 2,
+            std::io::ErrorKind::PermissionDenied => 13,
+            _ => 22,
+        });
+    crate::dlls::crt_runtime::set_errno_value(code);
+    std::ptr::null_mut()
+}
+
+/// Argument invalide (pointeur nul, mode illisible) : EINVAL.
+fn invalid_open() -> *mut c_void {
+    crate::dlls::crt_runtime::set_errno_value(22);
+    std::ptr::null_mut()
+}
+
 pub unsafe extern "win64" fn fopen(path: *const u8, mode: *const u8) -> *mut c_void {
     if path.is_null() || mode.is_null() {
-        return std::ptr::null_mut();
+        return invalid_open();
     }
     let path = match String::from_utf8(cstr_bytes(path)) {
         Ok(s) => s,
-        Err(_) => return std::ptr::null_mut(),
+        Err(_) => return invalid_open(),
     };
     let mode = String::from_utf8_lossy(&cstr_bytes(mode)).to_string();
     let file = match parse_mode(&mode) {
         Some((_, o)) => o.open(crate::paths::to_linux(&path)),
-        None => return std::ptr::null_mut(),
+        None => return invalid_open(),
     };
     match file {
         Ok(f) => register(Kind::Disk, Some(f)),
-        Err(_) => std::ptr::null_mut(),
+        Err(e) => open_failed(&e),
     }
 }
 
 pub unsafe extern "win64" fn wfopen(path: *const u16, mode: *const u16) -> *mut c_void {
     if path.is_null() || mode.is_null() {
-        return std::ptr::null_mut();
+        return invalid_open();
     }
     let p = crate::dlls::wstr(path);
     let m = crate::dlls::wstr(mode);
     let file = match parse_mode(&m) {
         Some((_, o)) => o.open(crate::paths::to_linux(&p)),
-        None => return std::ptr::null_mut(),
+        None => return invalid_open(),
     };
     match file {
         Ok(f) => register(Kind::Disk, Some(f)),
-        Err(_) => std::ptr::null_mut(),
+        Err(e) => open_failed(&e),
     }
 }
 
@@ -334,7 +356,10 @@ pub unsafe extern "win64" fn fopen_s(
     let f = fopen(path, mode);
     if f.is_null() {
         *result = std::ptr::null_mut();
-        22
+        match *crate::dlls::crt_runtime::errno() {
+            0 => 22,
+            e => e,
+        }
     } else {
         *result = f;
         0
@@ -828,12 +853,12 @@ unsafe fn reopen(path: &str, mode: &str, stream: *mut c_void) -> *mut c_void {
         return std::ptr::null_mut();
     };
     let Some((_, o)) = parse_mode(mode) else {
-        return std::ptr::null_mut();
+        return invalid_open();
     };
     flush_stream(&s);
-    let Ok(file) = o.open(crate::paths::to_linux(path)) else {
-        crate::dlls::crt_runtime::set_errno_value(2);
-        return std::ptr::null_mut();
+    let file = match o.open(crate::paths::to_linux(path)) {
+        Ok(f) => f,
+        Err(e) => return open_failed(&e),
     };
     match s.kind {
         Kind::Disk => {
@@ -891,7 +916,10 @@ pub unsafe extern "win64" fn freopen_s(
         *out = r;
     }
     if r.is_null() {
-        2
+        match *crate::dlls::crt_runtime::errno() {
+            0 => 2,
+            e => e,
+        }
     } else {
         0
     }
@@ -907,7 +935,10 @@ pub unsafe extern "win64" fn wfreopen_s(
         *out = r;
     }
     if r.is_null() {
-        2
+        match *crate::dlls::crt_runtime::errno() {
+            0 => 2,
+            e => e,
+        }
     } else {
         0
     }
@@ -1018,6 +1049,38 @@ mod tests {
             assert_eq!(fgetc(f), b'k' as i32);
             fclose(f);
             let _ = std::fs::remove_file(&base);
+        }
+    }
+
+    /// Fichier absent : NULL et errno ENOENT (getpath de Python 3.12 ne
+    /// tolère l'absence de pyvenv.cfg qu'avec FileNotFoundError, #1582).
+    #[test]
+    fn fopen_d_un_fichier_absent_pose_enoent() {
+        unsafe {
+            let base = std::env::temp_dir().join(format!(
+                "winlux-crt-absent-{}/pyvenv.cfg",
+                std::process::id()
+            ));
+            let path = format!("{}\0", base.display());
+            crate::dlls::crt_runtime::set_errno_value(0);
+            assert!(fopen(path.as_ptr(), b"rb\0".as_ptr()).is_null());
+            assert_eq!(*crate::dlls::crt_runtime::errno(), 2);
+            let wide: Vec<u16> = base
+                .display()
+                .to_string()
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            let mode: Vec<u16> = "rb".encode_utf16().chain([0]).collect();
+            crate::dlls::crt_runtime::set_errno_value(0);
+            assert!(wfopen(wide.as_ptr(), mode.as_ptr()).is_null());
+            assert_eq!(*crate::dlls::crt_runtime::errno(), 2);
+            let mut out = 1 as *mut c_void;
+            assert_eq!(fopen_s(&mut out, path.as_ptr(), b"r\0".as_ptr()), 2);
+            assert!(out.is_null());
+            crate::dlls::crt_runtime::set_errno_value(0);
+            assert!(fopen(path.as_ptr(), b"?\0".as_ptr()).is_null());
+            assert_eq!(*crate::dlls::crt_runtime::errno(), 22);
         }
     }
 

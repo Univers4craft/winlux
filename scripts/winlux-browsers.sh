@@ -16,24 +16,80 @@ config="$root/etc/winlux/browser.conf"
 run="$root/run/winlux"
 browser=${2:-none}
 mode=${1:---status}
+# Catalogue, ordre alphabétique des noms affichés (Brave, Google Chrome,
+# Microsoft Edge, Mozilla Firefox, Opera, Opera GX, Tor Browser, Vivaldi) :
+# tous ont une version Linux officielle (relevé du 11 novembre 2026, #1716).
+ids='brave chrome edge firefox opera operagx tor vivaldi'
+known() {
+    case "$1" in brave|chrome|edge|firefox|opera|operagx|tor|vivaldi) return 0 ;; *) return 1 ;; esac
+}
+# Clé des développeurs de Tor Browser, épinglée ici aussi : l'archive est
+# revérifiée avant extraction, pas seulement au téléchargement.
+tor_fingerprint=EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+if test -n "$root" && test -n "${WINLUX_BROWSER_TOR_FINGERPRINT:-}"; then tor_fingerprint=$WINLUX_BROWSER_TOR_FINGERPRINT; fi
 case "${1:---status}" in
-    --install|--default|--launch) case "$browser" in edge|chrome|firefox) ;; *) echo 'Navigateur inconnu' >&2; exit 2 ;; esac ;;
+    --install|--default|--launch) known "$browser" || { echo 'Navigateur inconnu' >&2; exit 2; } ;;
     *) browser=none ;;
 esac
-binary() {
+# Programme habituel dans le paquet de l'éditeur. Le chemin réellement trouvé
+# à l'installation est noté dans <id>/program et prime.
+default_program() {
     case "$1" in
-        edge) printf '%s/edge/root/opt/microsoft/msedge/microsoft-edge\n' "$installed" ;;
-        chrome) printf '%s/chrome/root/opt/google/chrome/google-chrome\n' "$installed" ;;
-        firefox) printf '%s/firefox/root/usr/lib/firefox/firefox\n' "$installed" ;;
+        brave) printf 'root/opt/brave.com/brave/brave-browser\n' ;;
+        chrome) printf 'root/opt/google/chrome/google-chrome\n' ;;
+        edge) printf 'root/opt/microsoft/msedge/microsoft-edge\n' ;;
+        firefox) printf 'root/usr/lib/firefox/firefox\n' ;;
+        opera) printf 'root/usr/lib/x86_64-linux-gnu/opera/opera\n' ;;
+        operagx) printf 'root/usr/lib/x86_64-linux-gnu/opera-gx/opera-gx\n' ;;
+        tor) printf 'root/tor-browser/Browser/start-tor-browser\n' ;;
+        vivaldi) printf 'root/opt/vivaldi/vivaldi\n' ;;
     esac
+}
+safe_relative() {
+    case "$1" in root/*) ;; *) return 1 ;; esac
+    case "/$1/" in */../*|*/./*|*//*) return 1 ;; esac
+    return 0
+}
+binary() {
+    noted=$(sed -n '1p' "$installed/$1/program" 2>/dev/null || true)
+    if test -n "$noted" && safe_relative "$noted"; then
+        printf '%s/%s/%s\n' "$installed" "$1" "$noted"
+    else
+        printf '%s/%s/%s\n' "$installed" "$1" "$(default_program "$1")"
+    fi
+}
+# Programme dans l'arbre extrait : le chemin habituel, sinon le lien de
+# /usr/bin que pose le paquet (un éditeur peut changer de dossier).
+find_program() {
+    tree=$1; id=$2
+    relative=$(default_program "$id")
+    if test -x "$tree/$relative" && ! test -d "$tree/$relative"; then printf '%s\n' "$relative"; return 0; fi
+    test "$id" != tor || return 1
+    for link in "$tree"/root/usr/bin/*; do
+        test -L "$link" || continue
+        target=$(readlink "$link")
+        case "$target" in /opt/*|/usr/lib/*) ;; *) continue ;; esac
+        candidate="root$target"
+        safe_relative "$candidate" || continue
+        if test -x "$tree/$candidate" && ! test -d "$tree/$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+    done
+    return 1
+}
+# Nom du paquet attendu dans le .deb de l'éditeur.
+expected_package() {
+    case "$1:$2" in
+        brave:brave-browser|chrome:google-chrome-stable|edge:microsoft-edge-stable|firefox:firefox) return 0 ;;
+        opera:opera-stable|operagx:opera-gx-stable|operagx:opera-gx|vivaldi:vivaldi-stable) return 0 ;;
+    esac
+    return 1
 }
 default_browser() {
     selected=$(sed -n 's/^default=//p' "$config" 2>/dev/null | head -n 1)
-    case "$selected" in edge|chrome|firefox) printf '%s\n' "$selected" ;; *) printf 'none\n' ;; esac
+    if known "$selected"; then printf '%s\n' "$selected"; else printf 'none\n'; fi
 }
 status() {
     printf 'browser_default=%s\n' "$(default_browser)"
-    for id in chrome edge firefox; do
+    for id in $ids; do
         state=unavailable
         # Téléchargeable chez l'éditeur : proposé, jamais fourni par Winlux.
         test ! -x "$fetch" || state=downloadable
@@ -131,11 +187,33 @@ add_langpacks() {
         > "$firefox_dir/defaults/pref/winlux-langue.js"
     chmod -R a+rX "$firefox_dir"
 }
+# Tor Browser : signature des développeurs de Tor revérifiée avec la clé que
+# winlux-browser-fetch a contrôlée (empreinte principale épinglée ci-dessus).
+tor_signature_ok() {
+    archive=$1; signature=$2; keyring=$3
+    test -r "$signature" && test -r "$keyring" || { echo 'Signature de Tor Browser absente' >&2; return 1; }
+    command -v gpgv >/dev/null 2>&1 || { echo 'gpgv absent : signature de Tor Browser invérifiable' >&2; return 1; }
+    gnupg_home=$(mktemp -d)
+    statuses=$(gpgv --homedir "$gnupg_home" --keyring "$keyring" --status-fd 1 "$signature" "$archive" 2>/dev/null) || statuses=
+    rm -r -f "${gnupg_home:?}"
+    printf '%s\n' "$statuses" | grep -q '^\[GNUPG:\] GOODSIG ' || { echo 'Signature de Tor Browser invalide' >&2; return 1; }
+    printf '%s\n' "$statuses" | grep -qi "^\[GNUPG:\] VALIDSIG .* $tor_fingerprint\$" || { echo 'Tor Browser signé par une clé inattendue' >&2; return 1; }
+}
+# Archive de Tor Browser : aucun chemin absolu ni « .. », un seul dossier tor-browser.
+tor_extract() {
+    archive=$1; target=$2
+    listing=$(tar -tJf "$archive") || { echo 'Archive de Tor Browser illisible' >&2; return 1; }
+    if printf '%s\n' "$listing" | grep -qE '^/|(^|/)\.\.(/|$)'; then echo 'Archive de Tor Browser refusée (chemin hors du dossier)' >&2; return 1; fi
+    if printf '%s\n' "$listing" | grep -qvE '^(\./)?(tor-browser(/|$)|$)'; then echo 'Archive de Tor Browser inattendue' >&2; return 1; fi
+    tar -xJf "$archive" --no-same-owner -C "$target"
+}
 install_browser() {
     id=$1
-    if ! test -r "$cache/$id.deb"; then
+    format=deb
+    test "$id" != tor || format=tar.xz
+    if ! test -r "$cache/$id.$format"; then
         case "$id" in
-            edge|chrome|firefox)
+            brave|chrome|edge|firefox|opera|operagx|tor|vivaldi)
                 # Paquet officiel téléchargé chez l'éditeur, jamais fourni par Winlux.
                 test -x "$fetch" || { echo "Téléchargement indisponible : $id" >&2; return 1; }
                 network_up || { offline "$id"; return 75; }
@@ -160,7 +238,7 @@ install_browser() {
                 ;;
         esac
     fi
-    test -r "$cache/$id.deb" && test -r "$cache/$id.sha256" || { echo "Paquet hors ligne absent : $id" >&2; return 1; }
+    test -r "$cache/$id.$format" && test -r "$cache/$id.sha256" || { echo "Paquet hors ligne absent : $id" >&2; return 1; }
     if test -x "$(binary "$id")" && cmp -s "$cache/$id.version" "$installed/$id/version"; then forget "$id"; return 0; fi
     if command -v winlux-update >/dev/null 2>&1 && winlux-update --busy 2>/dev/null; then echo 'Attendez la fin de la mise à jour système.' >&2; return 1; fi
     mkdir -p "$installed" "$run"
@@ -173,22 +251,25 @@ install_browser() {
     mkdir "$run/browser-install.lock" 2>/dev/null || { echo 'Installation navigateur déjà en cours' >&2; trap - EXIT HUP INT TERM; return 1; }
     lock_held=1
     work=$(mktemp -d "$installed/.install-$id.XXXXXX")
-    cp "$cache/$id.deb" "$work/package.deb"
+    cp "$cache/$id.$format" "$work/package.$format"
     hash=$(cat "$cache/$id.sha256")
-    printf '%s  %s\n' "$hash" "$work/package.deb" | sha256sum -c - || return 1
-    expected=$id
-    case "$id" in edge) expected=microsoft-edge-stable ;; chrome) expected=google-chrome-stable ;; esac
-    test "$(/usr/bin/dpkg-deb -f "$work/package.deb" Package)" = "$expected" || { echo 'Paquet inattendu' >&2; return 1; }
-    test "$(/usr/bin/dpkg-deb -f "$work/package.deb" Architecture)" = amd64 || return 1
+    printf '%s  %s\n' "$hash" "$work/package.$format" | sha256sum -c - || return 1
     mkdir "$work/root"
     chmod 755 "$work" "$work/root"
-    /usr/bin/dpkg-deb -x "$work/package.deb" "$work/root"
+    if test "$id" = tor; then
+        tor_signature_ok "$work/package.tar.xz" "$cache/tor.tar.xz.asc" "$cache/tor.keyring" || return 1
+        tor_extract "$work/package.tar.xz" "$work/root" || return 1
+        sed -n '1p' "$cache/tor.version" > "$work/version"
+    else
+        expected_package "$id" "$(/usr/bin/dpkg-deb -f "$work/package.deb" Package)" || { echo 'Paquet inattendu' >&2; return 1; }
+        test "$(/usr/bin/dpkg-deb -f "$work/package.deb" Architecture)" = amd64 || return 1
+        /usr/bin/dpkg-deb -x "$work/package.deb" "$work/root"
+        /usr/bin/dpkg-deb -f "$work/package.deb" Version > "$work/version"
+    fi
     chmod 755 "$work/root"
-    target=$(binary "$id")
-    relative=${target#"$installed/$id/"}
-    test -x "$work/$relative" || { echo 'Programme navigateur absent du paquet' >&2; return 1; }
-    /usr/bin/dpkg-deb -f "$work/package.deb" Version > "$work/version"
-    rm "$work/package.deb"
+    relative=$(find_program "$work" "$id") || { echo 'Programme navigateur absent du paquet' >&2; return 1; }
+    printf '%s\n' "$relative" > "$work/program"
+    rm -f "$work/package.deb" "$work/package.tar.xz"
     if test "$id" = firefox; then add_langpacks "$work/root"; fi
     # Refuse replacement while any process still has the previous browser mapped.
     if test -d "$installed/$id"; then
@@ -237,7 +318,7 @@ launch() {
         # Vendor sandbox stays enabled: the browser runs as its own user.
         home=/home/winlux-web
         test -d "$home" || { echo 'Compte navigateur non initialisé' >&2; return 1; }
-        case "$id" in edge|chrome)
+        case "$id" in brave|chrome|edge|opera|operagx|vivaldi)
             size=$(/usr/bin/xrandr --current 2>/dev/null | awk '/\*/ {print $1;exit}')
             width=${size%x*}; height=${size#*x}
             case "$width:$height" in *[!0-9:]*|:|*:) width=1920; height=1080 ;; esac
@@ -248,7 +329,12 @@ launch() {
             ;;
         esac
         xhost +SI:localuser:winlux-web >/dev/null 2>&1 || true
-        for helper in "${program%/*}/chrome-sandbox" "${program%/*}/msedge-sandbox"; do
+        if test "$id" = tor; then
+            # Copie personnelle du compte du navigateur (voir tor_copy).
+            program=$(/usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
+                env HOME="$home" /bin/sh "$0" --tor-copy) || { echo 'Copie de Tor Browser impossible' >&2; return 1; }
+        fi
+        for helper in "${program%/*}/chrome-sandbox" "${program%/*}/msedge-sandbox" "${program%/*}/opera_sandbox" "${program%/*}/vivaldi-sandbox"; do
             if test -f "$helper" && ! test -L "$helper"; then chown root:root "$helper"; chmod 4755 "$helper"; fi
         done
         mkdir -p "$run"
@@ -271,7 +357,33 @@ launch() {
             return 1
         fi
     fi
+    if test "$id" = tor; then program=$(tor_copy) || return 1; fi
     exec "$program" "$@"
+}
+# Tor Browser écrit son profil dans son propre dossier : il tourne depuis une
+# copie personnelle (~/.local/share/winlux/tor-browser), refaite à chaque
+# nouvelle version, jamais depuis /opt/winlux/browsers (lecture seule). Le
+# profil (Browser/TorBrowser/Data) est gardé d'une version à l'autre.
+tor_copy() {
+    source_dir="$installed/tor/root/tor-browser"
+    version=$(sed -n '1p' "$installed/tor/version" 2>/dev/null)
+    test -d "$source_dir" && test -n "$version" || return 1
+    copy="${HOME:?}/.local/share/winlux/tor-browser"
+    if test "$(sed -n '1p' "$copy/.winlux-version" 2>/dev/null)" != "$version"; then
+        mkdir -p "${copy%/*}"
+        rm -r -f "${copy:?}.new"
+        cp -R "$source_dir" "$copy.new"
+        if test -d "$copy/Browser/TorBrowser/Data"; then
+            rm -r -f "${copy:?}.new/Browser/TorBrowser/Data"
+            mv "$copy/Browser/TorBrowser/Data" "$copy.new/Browser/TorBrowser/Data"
+        fi
+        rm -r -f "${copy:?}.old"
+        if test -d "$copy"; then mv "$copy" "$copy.old"; fi
+        mv "$copy.new" "$copy"
+        rm -r -f "${copy:?}.old"
+        printf '%s\n' "$version" > "$copy/.winlux-version"
+    fi
+    printf '%s/Browser/start-tor-browser\n' "$copy"
 }
 case "${1:---status}" in
     --status) status ;;
@@ -283,5 +395,6 @@ case "${1:---status}" in
         mkdir -p "${config%/*}"; printf 'default=%s\n' "$browser" > "$config.new"; mv "$config.new" "$config" ;;
     --launch) shift 2; launch "$browser" "$@" ;;
     --open) shift; launch "$(default_browser)" "$@" ;;
-    *) echo 'usage: winlux-browsers --status|--install ID|--default ID|--launch ID|--open [URL]' >&2; exit 2 ;;
+    --tor-copy) tor_copy ;;
+    *) echo 'usage: winlux-browsers --status|--install ID|--default ID|--launch ID|--open [URL] (ID : brave chrome edge firefox opera operagx tor vivaldi)' >&2; exit 2 ;;
 esac

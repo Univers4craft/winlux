@@ -260,7 +260,7 @@ fn substitutes(name: &str) -> &'static [&'static str] {
 }
 
 /// Polices livrées avec Windows que les programmes supposent présentes.
-fn is_windows_font(name: &str) -> bool {
+pub(crate) fn is_windows_font(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.starts_with("segoe ui")
         || matches!(
@@ -318,19 +318,6 @@ pub(crate) fn gdi_face(name: &str, weight: u32, italic: bool) -> Option<FaceInfo
         .collect();
     let fams = group(added.into_iter().chain(super::lock(extra()).clone()));
     match_face(&fams, name, weight, italic)
-}
-
-/// Police Windows absente que Winlux remplace par une police libre : nom
-/// de la famille de remplacement présente, pour qu'EnumFontFamiliesEx
-/// réponde comme CreateFont (#1768). `None` si la famille existe
-/// telle quelle, si le nom n'est pas une police livrée avec Windows, ou si
-/// aucun remplaçant n'est installé.
-pub(crate) fn windows_alias(name: &str, present: &[String]) -> Option<String> {
-    let has = |n: &str| present.iter().find(|p| p.eq_ignore_ascii_case(n));
-    if has(name).is_some() || !is_windows_font(name) {
-        return None;
-    }
-    substitutes(name).iter().find_map(|s| has(s).cloned())
 }
 
 /// Police de secours pour un caractère absent de la police demandée.
@@ -695,6 +682,128 @@ unsafe extern "win64" fn gdi_compatible_layout(
     create_text_layout(this, text, len, format, max_w, max_h, out)
 }
 
+// --- Signe de troncature « … » (IDWriteInlineObject) --------------------------
+//
+// CreateEllipsisTrimmingSign (#1561) : Paint.NET le demande pour le texte
+// de sa barre d'état. Ordre des méthodes, IID et structures : dwrite.h des
+// en-têtes mingw-w64. Le signe mesure le caractère U+2026 dans le format
+// donné ; la troncature elle-même reste faite par la mise en page.
+
+/// IDWriteInlineObject {8339FDE3-106F-47AB-8373-1C6295EB10B3}.
+const IID_INLINE_OBJECT: Guid = guid(
+    0x8339_fde3,
+    0x106f,
+    0x47ab,
+    [0x83, 0x73, 0x1c, 0x62, 0x95, 0xeb, 0x10, 0xb3],
+);
+
+/// DWRITE_INLINE_OBJECT_METRICS.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct InlineMetrics {
+    width: f32,
+    height: f32,
+    baseline: f32,
+    supports_sideways: i32,
+}
+
+type SignObj = Com<InlineMetrics>;
+
+unsafe extern "win64" fn ellipsis_trimming_sign(
+    _this: *mut c_void,
+    format: *mut c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if format.is_null() {
+        return E_INVALIDARG;
+    }
+    let fmt = format_of(format).unwrap_or_default();
+    let lines = build(&fmt, &[0x2026], f32::MAX, f32::MAX);
+    let m = match lines.lines.first() {
+        Some(l) => InlineMetrics {
+            width: l.width,
+            height: l.height,
+            baseline: l.baseline,
+            supports_sideways: 0,
+        },
+        None => InlineMetrics {
+            width: fmt.size,
+            height: fmt.size * 1.2,
+            baseline: fmt.size,
+            supports_sideways: 0,
+        },
+    };
+    put(out, Com::create(SIGN_VT.ptr(), m))
+}
+
+unsafe extern "win64" fn sign_qi(
+    this: *mut SignObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_INLINE_OBJECT])
+}
+
+/// Draw : rien à dessiner ici, la mise en page pose elle-même les points.
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn sign_draw(
+    _this: *mut SignObj,
+    _context: *mut c_void,
+    _renderer: *mut c_void,
+    _x: f32,
+    _y: f32,
+    _sideways: i32,
+    _rtl: i32,
+    _effect: *mut c_void,
+) -> i32 {
+    S_OK
+}
+
+unsafe extern "win64" fn sign_metrics(this: *mut SignObj, out: *mut InlineMetrics) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = *Com::get(this);
+    S_OK
+}
+
+/// GetOverhangMetrics : DWRITE_OVERHANG_METRICS nulles.
+unsafe extern "win64" fn sign_overhang(_this: *mut SignObj, out: *mut [f32; 4]) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = [0.0; 4];
+    S_OK
+}
+
+/// GetBreakConditions : DWRITE_BREAK_CONDITION_NEUTRAL (0) des deux côtés.
+unsafe extern "win64" fn sign_breaks(
+    _this: *mut SignObj,
+    before: *mut u32,
+    after: *mut u32,
+) -> i32 {
+    if before.is_null() || after.is_null() {
+        return E_INVALIDARG;
+    }
+    *before = 0;
+    *after = 0;
+    S_OK
+}
+
+static SIGN_VT: VTable<7> = VTable([
+    sign_qi as *const (),
+    add_ref::<InlineMetrics> as *const (),
+    release::<InlineMetrics> as *const (),
+    sign_draw as *const (),
+    sign_metrics as *const (),
+    sign_overhang as *const (),
+    sign_breaks as *const (),
+]);
+
 // IDWriteFactory, puis IDWriteFactory1 (24-25), IDWriteFactory2 (26-30),
 // IDWriteFactory3 (31-39), 4 (40-42), 5 (43-47), 6 (48-54) et 7 (55-56).
 static FACTORY_VT: VTable<57> = VTable([
@@ -718,7 +827,7 @@ static FACTORY_VT: VTable<57> = VTable([
     not_implemented as *const (), // GetGdiInterop
     create_text_layout as *const (),
     gdi_compatible_layout as *const (),
-    not_implemented as *const (), // CreateEllipsisTrimmingSign
+    ellipsis_trimming_sign as *const (), // CreateEllipsisTrimmingSign
     super::dwrite_analyzer::create_text_analyzer as *const (), // CreateTextAnalyzer
     super::dwrite_analyzer::create_number_substitution as *const (), // CreateNumberSubstitution
     super::dwrite_glyphs::create_glyph_run_analysis as *const (), // CreateGlyphRunAnalysis
@@ -3376,6 +3485,42 @@ pub mod tests {
         let mut f = std::ptr::null_mut();
         assert_eq!(DWriteCreateFactory(0, &IID_DWRITE_FACTORY, &mut f), S_OK);
         f
+    }
+
+    /// #1561 : CreateEllipsisTrimmingSign rend un IDWriteInlineObject
+    /// aux mesures du format (barre d'état de Paint.NET).
+    #[test]
+    fn signe_de_troncature() {
+        unsafe {
+            let f = factory();
+            let l = layout(f, "abc", 100.0);
+            type Sign = unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> i32;
+            let mut sign = std::ptr::null_mut();
+            assert_eq!(method::<Sign>(f, 20)(f, l, &mut sign), S_OK);
+            assert!(!sign.is_null());
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let mut same = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(sign, 0)(sign, &IID_INLINE_OBJECT, &mut same),
+                S_OK
+            );
+            assert_eq!(same, sign);
+            method::<Unary>(same, 2)(same);
+            type Metrics = unsafe extern "win64" fn(*mut c_void, *mut InlineMetrics) -> i32;
+            let mut m = InlineMetrics::default();
+            assert_eq!(method::<Metrics>(sign, 4)(sign, &mut m), S_OK);
+            assert!(m.width > 0.0 && m.height > 0.0 && m.baseline > 0.0, "{m:?}");
+            type Breaks = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut u32) -> i32;
+            let (mut b, mut a) = (9u32, 9u32);
+            assert_eq!(method::<Breaks>(sign, 6)(sign, &mut b, &mut a), S_OK);
+            assert_eq!((b, a), (0, 0));
+            assert_eq!(
+                method::<Sign>(f, 20)(f, std::ptr::null_mut(), &mut sign),
+                E_INVALIDARG
+            );
+            method::<Unary>(l, 2)(l);
+            method::<Unary>(f, 2)(f);
+        }
     }
 
     /// Mise en page de `s` en « Winlux Test » 10 DIP.

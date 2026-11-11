@@ -2,6 +2,7 @@
 
 mod abslots;
 mod admin;
+mod anticheat;
 mod archive;
 mod audio;
 mod bootsplash;
@@ -113,6 +114,10 @@ fn main() {
             for name in names {
                 println!("{dll}\t{name}");
             }
+        }
+        // Noms x86 servis seulement par les passerelles wow32 (#1508).
+        for (dll, name) in wow32::x86_only_candidates() {
+            println!("x86:{dll}\t{name}");
         }
         return;
     }
@@ -257,6 +262,10 @@ fn main() {
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
     }
+    // Anti-triche noyau embarqué : refusé avant toute écriture (#1720).
+    if let Some(code) = anticheat::check_launch(&exe) {
+        std::process::exit(code);
+    }
     if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
         if let Some(code) = setup::launch(&exe, &rest) {
             std::process::exit(code);
@@ -352,7 +361,7 @@ fn main() {
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if dlls::gui_x11::renders_itself(&imports)
-        || dlls::gui_x11::statically_linked_renderer(image.bytes())
+        || dlls::gui_x11::renderer_in_data_sections(image.bytes(), &image.pe.sections)
     {
         dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -426,6 +435,8 @@ fn msi_dll_action(args: &[String]) -> ! {
         std::process::exit(1639);
     };
     let path = std::path::PathBuf::from(dll);
+    // Dans la trace, quelle action tourne dans ce processus (#1639).
+    crate::trace!("action personnalisée DLL : {entry} dans {dll}");
     let source = std::fs::read(&path).unwrap_or_default();
     let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
     if x86 {

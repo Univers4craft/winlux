@@ -154,6 +154,29 @@ fn installe_puis_desinstalle() {
     );
     assert_eq!(utf16(&reg(uninstall, "DisplayVersion").unwrap()), "1.2.3");
     assert!(utf16(&reg(uninstall, "UninstallString").unwrap()).starts_with("MsiExec.exe /X{"));
+    // Composants retrouvables par un autre paquet (CompLocator, #1598) :
+    // pip.msi de Python cherche python.exe posé par exe.msi.
+    let cle = install::component_key_path("{11111111-2222-4333-8444-555555555555}");
+    assert_eq!(
+        cle.as_deref(),
+        Some("C:\\Program Files\\Winlux Exemple\\app.exe")
+    );
+    let cle = cle.unwrap();
+    assert_eq!(
+        extra::component_search(&cle, 1, Some("APP.EXE")).as_deref(),
+        Some("C:\\Program Files\\Winlux Exemple\\app.exe")
+    );
+    assert_eq!(
+        extra::component_search(&cle, 1, Some("Lisez-moi.txt")).as_deref(),
+        Some("C:\\Program Files\\Winlux Exemple\\Lisez-moi.txt")
+    );
+    assert_eq!(
+        extra::component_search(&cle, 0, None).as_deref(),
+        Some("C:\\Program Files\\Winlux Exemple\\")
+    );
+    assert!(extra::component_search(&cle, 1, Some("absent.exe")).is_none());
+    // Le composant du raccourci a une clé de registre pour chemin clé.
+    assert!(install::component_key_path("{33333333-2222-4333-8444-555555555555}").is_none());
 
     // Réinstaller avec INSTALLLEVEL=2 remplace la version en place.
     let code = cli(&[
@@ -180,6 +203,7 @@ fn installe_puis_desinstalle() {
     ));
     assert!(reg(uninstall, "DisplayName").is_none());
     assert!(install::Manifest::all().is_empty());
+    assert!(install::component_key_path("{11111111-2222-4333-8444-555555555555}").is_none());
     assert_eq!(
         cli(&["/x".into(), "{00000000-0000-0000-0000-000000000000}".into()]),
         1605
@@ -222,6 +246,23 @@ fn installation_administrative_et_erreurs() {
         1619
     );
     assert_eq!(cli(&["/z".into()]), 1639);
+    // Correctif .msp : refusé en clair dans le journal, rien n'est touché (#1715).
+    let journal = env.root.join("correctif.log");
+    assert_eq!(
+        cli(&[
+            "/p".into(),
+            "maj.msp".into(),
+            "/qn".into(),
+            "/l*v".into(),
+            journal.to_string_lossy().into_owned()
+        ]),
+        1637
+    );
+    let texte = std::fs::read_to_string(&journal).unwrap();
+    assert!(
+        texte.contains("correctif .msp non pris en charge"),
+        "{texte}"
+    );
     assert_eq!(
         install::package_info(&msi).unwrap(),
         (

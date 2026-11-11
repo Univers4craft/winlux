@@ -42,7 +42,7 @@ même genre, largeurs différentes. Les remplacements se font à trois endroits 
 doivent rester d'accord : fontconfig
 (`integration/native/config/fontconfig/conf.d/60-winlux-windows-fonts.conf`),
 la table `substitutes` de `runtime/src/dlls/dwrite.rs` (GDI et DirectWrite) et
-l'énumération de `gdi32_fonts.rs` (#1768).
+l'énumération de `gdi32_fonts.rs` (#1670, #1768).
 
 | Police Windows | Remplaçant | Type | Dans l'ISO |
 |---|---|---|---|
@@ -88,10 +88,11 @@ l'énumération de `gdi32_fonts.rs` (#1768).
 
 | Issue | Manque | Urgence |
 |---|---|---|
-| #1768 | Une police Windows remplacée était dite absente par EnumFontFamiliesEx (cause probable du Steam sans texte, #1670) | 1, corrigé |
+| #1768 | Une police Windows remplacée était dite absente par EnumFontFamiliesEx (cause probable du Steam sans texte, #1670) | 1, corrigé par #1775, complété ici (MS Shell Dlg, Calibri Light, Cambria) |
 | #1769 | Un nom résolu vers un remplaçant le restait après AddFontResource | 2, corrigé |
 | #1770 | Calibri et Cambria vers Liberation au lieu de Carlito et Caladea | 2, corrigé |
 | #1771 | FR_NOT_ENUM ignoré ; GetGlyphIndicesA, CreateFontIndirectExA/W absents | 3, corrigé |
 | #1772 | .otf à contours CFF jamais dessinés par GDI ni DirectWrite | 2, après 0.2.21 |
 | #1773 | Police installée pendant qu'un .exe tourne : invisible pour lui, pas de WM_FONTCHANGE ; IDWriteFactory5::CreateInMemoryFontFileLoader absent | 3 |
 | #1774 | Polices bitmap .fon et Type 1 (.pfm\|.pfb) refusées | 3 |
+| #1781 | Un programme qui ouvre directement `C:\Windows\Fonts\arial.ttf` (ou lit son nom dans la clé de registre Fonts) ne trouve aucun fichier : la clé ne liste que les vraies familles installées | 2 |

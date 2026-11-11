@@ -471,7 +471,8 @@ def installed_registry(home, registry=None):
         icon = values.get("displayicon", "").rsplit(",", 1)[0]
         if name and icon:
             target = windows_path(expand(icon), home)
-            if valid_exe(target): entries.append((target, name))
+            # DisplayIcon vers le désinstalleur (NSIS) : lancer l'entrée désinstallerait.
+            if valid_exe(target) and not is_uninstaller(target.stem): entries.append((target, name))
     return entries
 
 # Variables d'environnement Windows des commandes du registre (REG_EXPAND_SZ),
@@ -766,6 +767,30 @@ def lnk_resolve(path, home=None):
     icon = windows_path(expand(values["icon"]), home) if values.get("icon") else None
     return target, command_arguments(expand(values.get("arguments", ""))), workdir, icon, values["icon_index"]
 
+# #1748 : le menu aplatit les dossiers de Programmes. Un désinstalleur n'est pas
+# une application (la désinstallation passe par « Applications installées ») ;
+# un raccourci au nom générique garde le nom de son dossier.
+UNINSTALLER = re.compile(r"^(unins\d*|uninst|uninstall|uninstaller|deinstall|deinstallieren|désinstaller|desinstaller|"
+                         r"désinstallation|desinstalar|desinstalación|desinstalacion)\b", re.IGNORECASE)
+GENERIC_NAMES = {"readme", "read me", "lisez-moi", "lisezmoi", "liesmich", "lies mich", "léame", "leame", "léeme", "leeme",
+                 "help", "aide", "hilfe", "ayuda", "manual", "manuel", "handbuch", "documentation", "dokumentation",
+                 "documentación", "documentacion", "website", "web site", "site web", "webseite", "sitio web",
+                 "home page", "homepage", "license", "licence", "lizenz", "licencia", "what's new", "whats new",
+                 "nouveautés", "neuigkeiten", "novedades", "changelog", "release notes", "notes de version", "faq",
+                 "support", "online help", "aide en ligne", "user guide", "guide de l'utilisateur", "settings",
+                 "paramètres", "einstellungen", "configuración"}
+
+def is_uninstaller(name, target=None):
+    names = [name.strip()] + ([target.stem] if target is not None else [])
+    return any(UNINSTALLER.search(value) for value in names)
+
+def menu_name(path, root):
+    """Nom affiché d'un raccourci de Programmes, avec son dossier s'il est générique."""
+    name = path.stem.strip()
+    folder = path.parent.name.strip() if path.parent != root else ""
+    if folder and name.lower() in GENERIC_NAMES: return f"{folder} › {name}"
+    return name
+
 def shortcuts(home):
     roots = [home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
              home / "ProgramData/Microsoft/Windows/Start Menu/Programs", home / "Start Menu/Programs"]
@@ -777,7 +802,8 @@ def shortcuts(home):
             if count > 4096: return
             try:
                 executable, extra, _, _, _ = lnk_resolve(path, home)
-                if valid_exe(executable): yield executable, path.stem, extra
+                if not valid_exe(executable) or is_uninstaller(path.stem, executable): continue
+                yield executable, menu_name(path, root), extra
             except (OSError, ValueError, UnicodeError, struct.error): continue
 
 def thumbnail(source, output, size):
@@ -802,17 +828,47 @@ def thumbnail(source, output, size):
         pixbuf = pixbuf.scale_simple(max(1, int(pixbuf.get_width() * scale)), max(1, int(pixbuf.get_height() * scale)), GdkPixbuf.InterpType.BILINEAR)
     pixbuf.savev(str(output), "png", [], [])
 
+# Navigateurs du catalogue (winlux-browsers), ordre alphabétique des noms :
+# (id, nom, programme habituel, icône habituelle). Le programme réellement
+# trouvé à l'installation est noté dans /opt/winlux/browsers/<id>/program.
+BROWSER_CATALOGUE = (
+    ("brave", "Brave", "opt/brave.com/brave/brave-browser", "opt/brave.com/brave/product_logo_48.png"),
+    ("chrome", "Google Chrome", "opt/google/chrome/google-chrome", "opt/google/chrome/product_logo_48.png"),
+    ("edge", "Microsoft Edge", "opt/microsoft/msedge/microsoft-edge", "opt/microsoft/msedge/product_logo_48.png"),
+    ("firefox", "Mozilla Firefox", "usr/lib/firefox/firefox", "usr/lib/firefox/browser/chrome/icons/default/default48.png"),
+    ("opera", "Opera", "usr/lib/x86_64-linux-gnu/opera/opera", "usr/share/icons/hicolor/48x48/apps/opera.png"),
+    ("operagx", "Opera GX", "usr/lib/x86_64-linux-gnu/opera-gx/opera-gx", "usr/share/icons/hicolor/48x48/apps/opera-gx.png"),
+    ("tor", "Tor Browser", "tor-browser/Browser/start-tor-browser", "tor-browser/Browser/browser/chrome/icons/default/default48.png"),
+    ("vivaldi", "Vivaldi", "opt/vivaldi/vivaldi", "opt/vivaldi/product_logo_48.png"),
+)
+
+def browser_program(key, binary):
+    """Programme du navigateur installé (fichier « program » s'il est sûr)."""
+    folder = Path("/opt/winlux/browsers") / key
+    try:
+        noted = (folder / "program").read_text().splitlines()[0].strip()
+    except (OSError, IndexError):
+        noted = ""
+    parts = noted.split("/")
+    if noted.startswith("root/") and "" not in parts and ".." not in parts and "." not in parts:
+        return folder / noted
+    return folder / "root" / binary
+
+def browser_icon(root, icon):
+    """Icône habituelle, sinon la première icône 48 px du paquet, sinon l'icône générique."""
+    if (root / icon).is_file(): return str(root / icon)
+    for found in sorted((root / "usr/share/icons/hicolor/48x48/apps").glob("*.png")):
+        return str(found)
+    return "web-browser"
+
 def browsers():
-    values = [("edge", "Microsoft Edge", "opt/microsoft/msedge/microsoft-edge", "opt/microsoft/msedge/product_logo_48.png"),
-              ("chrome", "Google Chrome", "opt/google/chrome/google-chrome", "opt/google/chrome/product_logo_48.png"),
-              ("firefox", "Mozilla Firefox", "usr/lib/firefox/firefox", "usr/lib/firefox/browser/chrome/icons/default/default48.png")]
     keep = set()
-    for key, name, binary, icon in values:
+    for key, name, binary, icon in BROWSER_CATALOGUE:
         root = Path("/opt/winlux/browsers") / key / "root"
-        if (root / binary).is_file():
+        if browser_program(key, binary).is_file():
             filename = f"winlux-browser-{key}.desktop"
             keep.add(filename)
-            managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/winlux-browsers --launch {key} %U\nIcon={root / icon}\nTerminal=false\nCategories=Network;WebBrowser;\n")
+            managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/winlux-browsers --launch {key} %U\nIcon={browser_icon(root, icon)}\nTerminal=false\nCategories=Network;WebBrowser;\n")
     return keep
 
 def desktop_dir(home):
@@ -911,18 +967,19 @@ def link_shortcuts(home):
             count += 1
             if count > 4096: return
             try:
+                name = menu_name(path, root)
                 if suffix == ".url":
                     url = url_of(path)
-                    if url: yield path.stem, url, "web-browser"
+                    if url: yield name, url, "web-browser"
                     continue
                 target, _, _, _, _ = lnk_resolve(path, home)
                 if valid_exe(target) or not target.is_file(): continue
                 if target.suffix.lower() == ".url":
                     url = url_of(target)
-                    if url: yield path.stem, url, "web-browser"
+                    if url: yield name, url, "web-browser"
                     continue
                 if target.suffix.lower() in (".exe", ".com", ".bat", ".cmd", ".msi", ".dll", ".lnk"): continue
-                yield path.stem, str(target), LINK_ICONS.get(target.suffix.lower(), "text-x-generic")
+                yield name, str(target), LINK_ICONS.get(target.suffix.lower(), "text-x-generic")
             except (OSError, ValueError, UnicodeError, struct.error): continue
 
 def link_launcher(name, target, icon, profile="desktop"):
@@ -967,8 +1024,8 @@ def refresh():
 
 START_MENUS = ("AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
                "ProgramData/Microsoft/Windows/Start Menu/Programs", "Start Menu/Programs")
-BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
-                    "firefox/root/usr/lib/firefox/firefox")
+BROWSER_BINARIES = tuple(f"{key}/root/{binary}" for key, _, binary, _ in BROWSER_CATALOGUE) + \
+    tuple(f"{key}/program" for key, _, _, _ in BROWSER_CATALOGUE)
 
 def watched_inputs():
     """What refresh() reads, as (path, mtime, size): a change means a new pass is due."""

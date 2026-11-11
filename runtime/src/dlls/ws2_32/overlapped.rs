@@ -640,6 +640,163 @@ pub(super) unsafe extern "win64" fn disconnect_ex(
     1
 }
 
+/// TransmitFile : TF_DISCONNECT ferme l'envoi une fois tout parti ;
+/// TF_REUSE_SOCKET est sans effet sous Linux, comme pour DisconnectEx.
+const TF_DISCONNECT: u32 = 1;
+/// Plafond d'un envoi par TransmitFile (2 147 483 646 octets, documenté).
+const TRANSMIT_FILE_MAX: u64 = 0x7FFF_FFFE;
+
+/// Lit le contenu à transmettre : `n` octets (0 : jusqu'à la fin), à
+/// l'Offset de l'OVERLAPPED s'il y en a un, sinon à la position courante
+/// du fichier, qui avance alors comme sous Windows.
+unsafe fn transmit_content(fd: i32, n: u32, overlapped: usize) -> Result<Vec<u8>, i32> {
+    let mut st: libc::stat = std::mem::zeroed();
+    if libc::fstat(fd, &mut st) < 0 {
+        return Err(error_from_errno(errno()));
+    }
+    let mut at = if overlapped != 0 {
+        // OVERLAPPED : Offset/OffsetHigh après Internal et InternalHigh.
+        let base = overlapped + 2 * crate::wow32::pointer_size();
+        let lo = std::ptr::read_unaligned(base as *const u32) as u64;
+        let hi = std::ptr::read_unaligned((base + 4) as *const u32) as u64;
+        Some(lo | hi << 32)
+    } else {
+        None
+    };
+    let pos = match at {
+        Some(o) => o,
+        None => libc::lseek(fd, 0, libc::SEEK_CUR).max(0) as u64,
+    };
+    let left = (st.st_size.max(0) as u64).saturating_sub(pos);
+    let want = if n == 0 { left } else { (n as u64).min(left) };
+    if want > TRANSMIT_FILE_MAX {
+        return Err(WSAEINVAL);
+    }
+    let mut data = vec![0u8; want as usize];
+    let mut got = 0usize;
+    while got < data.len() {
+        let p = data.as_mut_ptr().add(got) as *mut libc::c_void;
+        let r = match at {
+            Some(o) => libc::pread(fd, p, data.len() - got, o as libc::off_t),
+            None => libc::read(fd, p, data.len() - got),
+        };
+        if r < 0 {
+            let e = errno();
+            if e == libc::EINTR {
+                continue;
+            }
+            return Err(error_from_errno(e));
+        }
+        if r == 0 {
+            break;
+        }
+        got += r as usize;
+        at = at.map(|o| o + r as u64);
+    }
+    data.truncate(got);
+    Ok(data)
+}
+
+/// TransmitFile (mswsock) : envoie l'en-tête et la fin de
+/// TRANSMIT_FILE_BUFFERS autour du contenu de `file` (aucun fichier si
+/// `file` vaut 0). Rend TRUE si tout est parti ; avec OVERLAPPED, FALSE et
+/// WSA_IO_PENDING tant que la socket est pleine.
+pub(super) unsafe extern "win64" fn transmit_file(
+    s: usize,
+    file: usize,
+    n_bytes: u32,
+    _per_send: u32,
+    overlapped: usize,
+    buffers: usize,
+    flags: u32,
+) -> i32 {
+    if !valid_socket(s) {
+        set_error(WSAENOTSOCK);
+        return 0;
+    }
+    let ov = if wanted(overlapped, 0) { overlapped } else { 0 };
+    let content = if file == 0 {
+        Vec::new()
+    } else {
+        let Some(fd) = crate::dlls::kernel32::fd_of_handle(file) else {
+            set_error(WSAEINVAL);
+            return 0;
+        };
+        match transmit_content(fd, n_bytes, ov) {
+            Ok(v) => v,
+            Err(e) => {
+                set_error(e);
+                return 0;
+            }
+        }
+    };
+    // TRANSMIT_FILE_BUFFERS : Head, HeadLength, Tail, TailLength, chaque
+    // champ aligné sur la taille d'un pointeur du programme.
+    let mut list: Vec<(usize, usize)> = Vec::new();
+    let ps = crate::wow32::pointer_size();
+    let head = |i: usize| -> (usize, usize) {
+        let ptr = crate::wow32::read_ptr(buffers + 2 * i * ps);
+        let len = std::ptr::read_unaligned((buffers + (2 * i + 1) * ps) as *const u32) as usize;
+        (len, ptr)
+    };
+    let (h, t) = if buffers != 0 {
+        (head(0), head(1))
+    } else {
+        ((0, 0), (0, 0))
+    };
+    if h.0 > 0 && h.1 != 0 {
+        list.push(h);
+    }
+    let body = (content.len(), content.as_ptr() as usize);
+    if body.0 > 0 {
+        list.push(body);
+    }
+    if t.0 > 0 && t.1 != 0 {
+        list.push(t);
+    }
+    let disconnect = flags & TF_DISCONNECT != 0;
+    let mut done = 0usize;
+    // Le contenu lu vit dans l'étape : le tampon reste valable tant que
+    // l'envoi n'est pas fini.
+    let mut step: Step = Box::new(move |fd| {
+        let _keep = &content;
+        let r = send_now(fd, &list, &mut done, 0);
+        if disconnect && matches!(r, Some((_, 0))) {
+            libc::shutdown(fd, libc::SHUT_WR);
+        }
+        r
+    });
+    if ov == 0 {
+        // Sans OVERLAPPED : envoi bloquant jusqu'au bout.
+        let mut p = libc::pollfd {
+            fd: s as i32,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        loop {
+            match step(s as i32) {
+                Some((_, 0)) => {
+                    set_error(0);
+                    return 1;
+                }
+                Some((_, e)) => {
+                    set_error(e);
+                    return 0;
+                }
+                None => {
+                    libc::poll(&mut p, 1, -1);
+                }
+            }
+        }
+    }
+    let now = step(s as i32);
+    if let Some(rc) = conclude(s, ov, now, std::ptr::null_mut()) {
+        return i32::from(rc == 0);
+    }
+    start(s, ov, libc::POLLOUT, step);
+    0
+}
+
 /// GUID des fonctions d'extension de mswsock, tels qu'en mémoire.
 const WSAID_ACCEPTEX: [u8; 16] = [
     0xF1, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
@@ -649,6 +806,17 @@ const WSAID_GETACCEPTEXSOCKADDRS: [u8; 16] = [
 ];
 const WSAID_DISCONNECTEX: [u8; 16] = [
     0x11, 0x2E, 0xDA, 0x7F, 0x30, 0x86, 0x6F, 0x43, 0xA0, 0x31, 0xF5, 0x36, 0xA6, 0xEE, 0xC1, 0x57,
+];
+/// WSAID_WSARECVMSG {F689D7C8-6F1F-436B-8A53-E54FE351C322} (mswsock.h).
+const WSAID_WSARECVMSG: [u8; 16] = [
+    0xC8, 0xD7, 0x89, 0xF6, 0x1F, 0x6F, 0x6B, 0x43, 0x8A, 0x53, 0xE5, 0x4F, 0xE3, 0x51, 0xC3, 0x22,
+];
+/// WSAID_WSASENDMSG {A441E712-754F-43CA-84A7-0DEE44CF606D} (mswsock.h).
+const WSAID_WSASENDMSG: [u8; 16] = [
+    0x12, 0xE7, 0x41, 0xA4, 0x4F, 0x75, 0xCA, 0x43, 0x84, 0xA7, 0x0D, 0xEE, 0x44, 0xCF, 0x60, 0x6D,
+];
+const WSAID_TRANSMITFILE: [u8; 16] = [
+    0xF0, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
 ];
 
 /// Adresse appelable par le programme : la fonction elle-même en x64, une
@@ -666,6 +834,20 @@ fn extension_address(guid: &[u8; 16]) -> Option<usize> {
         )
     } else if *guid == WSAID_DISCONNECTEX {
         ("DisconnectEx", disconnect_ex as *const () as usize, 4)
+    } else if *guid == WSAID_WSARECVMSG {
+        (
+            "WSARecvMsg",
+            super::msg::wsa_recv_msg as *const () as usize,
+            5,
+        )
+    } else if *guid == WSAID_WSASENDMSG {
+        (
+            "WSASendMsg",
+            super::msg::wsa_send_msg as *const () as usize,
+            6,
+        )
+    } else if *guid == WSAID_TRANSMITFILE {
+        ("TransmitFile", transmit_file as *const () as usize, 7)
     } else {
         return None;
     };
@@ -682,7 +864,7 @@ fn extension_address(guid: &[u8; 16]) -> Option<usize> {
 }
 
 /// WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER) : ConnectEx, AcceptEx,
-/// GetAcceptExSockaddrs et DisconnectEx ; la sortie est un pointeur de la
+/// GetAcceptExSockaddrs, DisconnectEx, WSARecvMsg et WSASendMsg (#1629) ; la sortie est un pointeur de la
 /// taille de ceux du programme (4 octets en x86, #1408).
 pub(super) unsafe fn extension_function(
     in_buf: *const u8,

@@ -103,6 +103,7 @@ pub struct Ssl {
     pub EVP_DigestVerifyInit: unsafe extern "C" fn(P, *mut P, P, P, P) -> c_int,
     pub EVP_DigestVerify: unsafe extern "C" fn(P, *const u8, usize, *const u8, usize) -> c_int,
     pub X509_get_pubkey: unsafe extern "C" fn(P) -> P,
+    pub X509_verify: unsafe extern "C" fn(P, P) -> c_int,
     pub EVP_PKEY_free: unsafe extern "C" fn(P),
     // libssl
     pub TLS_client_method: unsafe extern "C" fn() -> P,
@@ -250,6 +251,7 @@ pub fn ssl() -> Option<&'static Ssl> {
             EVP_DigestVerifyInit: f!(c, "EVP_DigestVerifyInit"),
             EVP_DigestVerify: f!(c, "EVP_DigestVerify"),
             X509_get_pubkey: f!(c, "X509_get_pubkey"),
+            X509_verify: f!(c, "X509_verify"),
             EVP_PKEY_free: f!(c, "EVP_PKEY_free"),
             TLS_client_method: f!(s, "TLS_client_method"),
             SSL_CTX_new: f!(s, "SSL_CTX_new"),
@@ -433,6 +435,27 @@ pub fn x509_of(der: &[u8]) -> Option<P> {
     (!x.is_null()).then_some(x)
 }
 
+/// Le certificat `subject` porte-t-il une signature valide de la clé de
+/// `issuer` ? (CertVerifySubjectCertificateContext.)
+pub fn signed_by(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some(s) = ssl() else {
+        return false;
+    };
+    let (Some(x), Some(i)) = (x509_of(subject), x509_of(issuer)) else {
+        return false;
+    };
+    unsafe {
+        let key = (s.X509_get_pubkey)(i);
+        let ok = !key.is_null() && (s.X509_verify)(x, key) == 1;
+        if !key.is_null() {
+            (s.EVP_PKEY_free)(key);
+        }
+        (s.X509_free)(x);
+        (s.X509_free)(i);
+        ok
+    }
+}
+
 /// Résultat de la vérification d'une chaîne par OpenSSL.
 pub struct Verified {
     /// Code X509_V_* (0 : succès).
@@ -447,10 +470,17 @@ pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Veri
     verify_with(leaf, extra, None, false, host)
 }
 
-/// Comme `verify`, mais la validité des certificats est jugée à la date
-/// `at` (secondes Unix) : signature horodatée d'un exécutable (#1387).
-pub fn verify_at(leaf: &[u8], extra: &[Vec<u8>], at: i64) -> Option<Verified> {
-    verify_inner(leaf, extra, None, false, None, Some(at))
+/// Signature de code (Authenticode, paquets MSIX) : autorités du système
+/// plus `added`, racines reconnues seulement pour signer du code (jamais
+/// pour TLS), jugée à la date `at` si elle est donnée (#1726).
+pub fn verify_code(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    added: &[&[u8]],
+    at: Option<i64>,
+) -> Option<Verified> {
+    let added: Vec<Vec<u8>> = added.iter().map(|r| r.to_vec()).collect();
+    verify_inner(leaf, extra, None, &added, false, None, at)
 }
 
 /// Comme `verify`, mais avec des racines de confiance données (`roots`) à la
@@ -463,13 +493,14 @@ pub fn verify_with(
     partial: bool,
     host: Option<&str>,
 ) -> Option<Verified> {
-    verify_inner(leaf, extra, roots, partial, host, None)
+    verify_inner(leaf, extra, roots, &[], partial, host, None)
 }
 
 fn verify_inner(
     leaf: &[u8],
     extra: &[Vec<u8>],
     roots: Option<&[Vec<u8>]>,
+    added: &[Vec<u8>],
     partial: bool,
     host: Option<&str>,
     at: Option<i64>,
@@ -489,6 +520,12 @@ fn verify_inner(
                         (s.X509_free)(rx);
                     }
                 }
+            }
+        }
+        for r in added {
+            if let Some(rx) = x509_of(r) {
+                (s.X509_STORE_add_cert)(store, rx);
+                (s.X509_free)(rx);
             }
         }
         if partial {

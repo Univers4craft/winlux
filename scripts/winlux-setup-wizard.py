@@ -117,6 +117,9 @@ def command(runtime, path, info, folder=None, desktop=True):
     """Ligne de commande de l'installation silencieuse faite par le runtime."""
     if info["kind"] == "msi":
         return [runtime, "--msiexec", "/i", path, "/qn"]
+    if info["kind"] == "burn":
+        # Bundle WiX Burn : lancé par le runtime, qui installe sa chaîne.
+        return [runtime, path, "/quiet", "/norestart"]
     argv = [runtime, "--setup", path]
     if folder and folder != info["folder"]:
         argv.append("/D=" + folder)
@@ -211,7 +214,7 @@ def main(argv):
     desktop = Gtk.CheckButton(label=tr("Créer un raccourci sur le Bureau"), active=True)
     frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=8)
     frame.pack_start(Gtk.Label(label=tr("Dossier d'installation"), xalign=0), False, False, 0)
-    if info["kind"] == "msi" or not info["folder"]:
+    if info["kind"] in ("msi", "burn") or not info["folder"]:
         frame.pack_start(Gtk.Label(label=tr("Le dossier est choisi par le paquet."), xalign=0), False, False, 0)
     else:
         row = Gtk.Box(spacing=6)

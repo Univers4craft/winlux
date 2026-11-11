@@ -742,6 +742,31 @@ unsafe extern "win64" fn load_cursor_from_file_w(path: *const u16) -> usize {
     .unwrap_or(0)
 }
 
+/// LoadCursorFromFileA : chemin ANSI vers LoadCursorFromFileW (Tk, #1491).
+unsafe extern "win64" fn load_cursor_from_file_a(path: *const u8) -> usize {
+    if path.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut w: Vec<u16> = crate::dlls::cstr(path).encode_utf16().collect();
+    w.push(0);
+    load_cursor_from_file_w(w.as_ptr())
+}
+
+/// LASTINPUTINFO { cbSize, dwTime } : moment de la dernière saisie, en
+/// GetTickCount. Winlux ne suit pas l'inactivité de la session X : la
+/// dernière saisie est « maintenant », la session n'est jamais inactive
+/// (Tk, `tk inactive`, #1491).
+unsafe extern "win64" fn get_last_input_info(info: *mut u32) -> i32 {
+    if info.is_null() || info.read_unaligned() < 8 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    info.add(1)
+        .write_unaligned(crate::dlls::kernel32::get_tick_count());
+    1
+}
+
 unsafe extern "win64" fn wait_for_input_idle(_proc: usize, _ms: u32) -> u32 {
     0
 }
@@ -752,12 +777,13 @@ unsafe extern "win64" fn exit_windows_ex(_flags: u32, _reason: u32) -> i32 {
     0
 }
 
-/// keybd_event / SendInput : pas de saisie simulée vers le serveur X.
-unsafe extern "win64" fn keybd_event(_vk: u8, _scan: u8, _flags: u32, _extra: usize) {}
+/// keybd_event / SendInput : saisie simulée dans la session (saisie.rs, #1683).
+unsafe extern "win64" fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize) {
+    super::saisie::keybd_event(vk, scan, flags, extra)
+}
 
-unsafe extern "win64" fn send_input(_n: u32, _inputs: *const u8, _size: i32) -> u32 {
-    crate::process::set_last_error(5);
-    0
+unsafe extern "win64" fn send_input(n: u32, inputs: *const u8, size: i32) -> u32 {
+    super::saisie::send_input(n, inputs, size)
 }
 
 pub fn exports() -> crate::dlls::Exports {
@@ -782,6 +808,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetProcessDefaultLayout" => fn get_process_default_layout,
         "SetProcessDefaultLayout" => fn set_process_default_layout,
         "AnimateWindow" => fn animate_window, "LoadCursorFromFileW" => fn load_cursor_from_file_w,
+        "LoadCursorFromFileA" => fn load_cursor_from_file_a, "GetLastInputInfo" => fn get_last_input_info,
         "WaitForInputIdle" => fn wait_for_input_idle, "ExitWindowsEx" => fn exit_windows_ex,
         "keybd_event" => fn keybd_event, "SendInput" => fn send_input,
     }
@@ -816,6 +843,26 @@ mod tests {
 #[cfg(test)]
 mod char_tests {
     use super::*;
+
+    /// #1491 : Tk lit GetLastInputInfo et charge ses curseurs en ANSI.
+    #[test]
+    fn derniere_saisie_et_curseur_ansi() {
+        let mut lii = [8u32, 0];
+        let avant = crate::dlls::kernel32::get_tick_count();
+        assert_eq!(unsafe { get_last_input_info(lii.as_mut_ptr()) }, 1);
+        assert!(lii[1] >= avant);
+        let mut court = [4u32, 0];
+        assert_eq!(unsafe { get_last_input_info(court.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { load_cursor_from_file_a(std::ptr::null()) }, 0);
+        for (dll, name) in [
+            ("user32", "GetLastInputInfo"),
+            ("user32", "LoadCursorFromFileA"),
+            ("gdi32", "GetTextCharset"),
+            ("netapi32", "NetGetDCName"),
+        ] {
+            assert!(crate::dlls::lookup(dll, name).is_some(), "{dll}!{name}");
+        }
+    }
 
     #[test]
     fn casse_des_tampons() {

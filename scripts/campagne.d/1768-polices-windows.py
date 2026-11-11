@@ -2,8 +2,8 @@
 fonts_rs = (runtime_dlls / "gdi32_fonts.rs").read_text(encoding="utf-8")
 dwrite_rs = (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8")
 paquets = (ROOT / "scripts" / "prepare-desktop-packages.py").read_text(encoding="utf-8")
-ok("fn enum_faces" in fonts_rs and "windows_alias(face" in fonts_rs,
-   "Polices : EnumFontFamiliesEx annonce une police Windows remplacée (#1768)")
+ok("fn enum_faces" in fonts_rs and '"MS Shell Dlg 2"' not in fonts_rs and '| "ms shell dlg 2"' in dwrite_rs,
+   "Polices : MS Shell Dlg et Calibri Light comptent comme polices Windows remplacées (#1768)")
 ok("forget_fonts()" in fonts_rs, "Polices : un ajout de police oublie les résolutions faites (#1769)")
 ok('"Carlito"' in dwrite_rs and '"Caladea"' in dwrite_rs
    and "fonts-crosextra-carlito" in paquets and "fonts-crosextra-caladea" in paquets,

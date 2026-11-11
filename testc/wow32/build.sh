@@ -18,6 +18,8 @@ WriteFile@20
 ExitProcess@4
 GetCommandLineA@0
 lstrlenA@4
+GetCommandLineW@0
+lstrlenW@4
 GetTickCount@0
 GetTickCount64@0
 VerSetConditionMask@16
@@ -425,6 +427,34 @@ lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
     "$tmp/jeux64/jeux64.obj" "$tmp/jeux64/jeux.lib" "$tmp/jeux64/jeux_user32.lib" \
     "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_dpnet.lib" "$tmp/jeux64/jeux_msacm32.lib" "$tmp/jeux64/jeux_winmm.lib" \
     /out:"$out/jeux64.exe"
+# WASAPI (banc pygame32) : wasapi32.exe (x86) et wasapi64.exe (x64).
+cat >"$tmp/wasapi_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+DEF
+cat >"$tmp/wasapi_ole32.def" <<'DEF'
+LIBRARY ole32.dll
+EXPORTS
+CoInitializeEx@8
+CoCreateInstance@20
+CoTaskMemFree@4
+DEF
+mkdir -p "$tmp/wasapi64"
+for lib in wasapi_k32 wasapi_ole32; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/wasapi64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/wasapi64/$lib.def" -l "$tmp/wasapi64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wasapi32.c" -o "$tmp/wasapi32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/wasapi32.obj" "$tmp/wasapi_k32.lib" "$tmp/wasapi_ole32.lib" /out:"$out/wasapi32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wasapi32.c" -o "$tmp/wasapi64/wasapi64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
+    "$tmp/wasapi64/wasapi64.obj" "$tmp/wasapi64/wasapi_k32.lib" "$tmp/wasapi64/wasapi_ole32.lib" \
+    /out:"$out/wasapi64.exe"
 # Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
 cat >"$tmp/d3d11_k32.def" <<'DEF'
 LIBRARY kernel32.dll

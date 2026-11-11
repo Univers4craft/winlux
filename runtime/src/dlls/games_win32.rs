@@ -659,13 +659,6 @@ unsafe extern "win64" fn PostThreadMessage(
     };
     crate::dlls::gui::post_to_thread(thread, m) as i32
 }
-extern "win64" fn RegisterDeviceNotification(
-    _recipient: usize,
-    _filter: usize,
-    _flags: u32,
-) -> usize {
-    fake_handle()
-}
 unsafe extern "win64" fn wvsprintfA(dst: *mut u8, fmt: *const u8, va: *const u64) -> i32 {
     if dst.is_null() || fmt.is_null() {
         return 0;
@@ -716,9 +709,9 @@ pub fn user32_exports() -> Exports {
         "SetRect" => fn SetRect, "CopyRect" => fn CopyRect, "IsRectEmpty" => fn IsRectEmpty,
         "EqualRect" => fn EqualRect, "InflateRect" => fn InflateRect, "SubtractRect" => fn SubtractRect,
         "PostThreadMessageW" => fn PostThreadMessage, "PostThreadMessageA" => fn PostThreadMessage,
-        "RegisterDeviceNotificationW" => fn RegisterDeviceNotification,
-        "RegisterDeviceNotificationA" => fn RegisterDeviceNotification,
-        "UnregisterDeviceNotification" => fn ok1,
+        "RegisterDeviceNotificationW" => fn crate::dlls::devnotify::RegisterDeviceNotificationW,
+        "RegisterDeviceNotificationA" => fn crate::dlls::devnotify::RegisterDeviceNotificationA,
+        "UnregisterDeviceNotification" => fn crate::dlls::devnotify::UnregisterDeviceNotification,
         "SetWindowRgn" => fn ok1,
         // SetWindowRgn est sans effet : aucune fenêtre n'a de région, donc
         // GetWindowRgn(Box) répond ERROR (0), comme Windows dans ce cas (#747).
@@ -880,22 +873,9 @@ pub fn setupapi_exports() -> Exports {
     }
 }
 
-extern "win64" fn hid_false() -> i32 {
-    set_error(1);
-    0
-}
-/// HIDP_STATUS_INVALID_PREPARSED_DATA.
-extern "win64" fn hidp_invalid() -> u32 {
-    0xC011_0001
-}
-/// Compléments de hid.rs (fonctions qu'il ne fournit pas encore).
+/// Plus aucun complément : hid.rs et hid_report.rs servent tout hid.dll (#1523).
 pub fn hid_exports() -> Exports {
-    crate::exports! {
-        "HidD_GetIndexedString" => fn hid_false,
-        "HidP_GetButtonCaps" => fn hidp_invalid, "HidP_GetValueCaps" => fn hidp_invalid,
-        "HidP_GetData" => fn hidp_invalid, "HidP_GetUsages" => fn hidp_invalid, "HidP_GetUsageValue" => fn hidp_invalid,
-        "HidP_MaxDataListLength" => fn zero, "HidP_MaxUsageListLength" => fn zero,
-    }
+    crate::exports! {}
 }
 
 // =====================================================================
@@ -1055,9 +1035,8 @@ fn dns_records() -> &'static Mutex<HashMap<usize, Vec<usize>>> {
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
+pub(crate) unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
     const DNS_ERROR_RCODE_NAME_ERROR: i32 = 9003;
-    const DNS_INFO_NO_RECORDS: i32 = 9501;
     if results.is_null() {
         return 87;
     }
@@ -1077,6 +1056,15 @@ unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
         return DNS_ERROR_RCODE_NAME_ERROR;
     }
     let msg = &answer[..(n as usize).min(answer.len())];
+    records_from_message(msg, ty, results)
+}
+
+/// Liste DNS_RECORD tirée d'une réponse au format réseau (enregistrements
+/// de type `ty`, ou tous pour 255), libérée par DnsFree ou
+/// DnsRecordListFree. Sert aussi à DnsExtractRecordsFromMessage_W (#1614).
+pub(crate) unsafe fn records_from_message(msg: &[u8], ty: u16, results: *mut usize) -> i32 {
+    const DNS_INFO_NO_RECORDS: i32 = 9501;
+    *results = 0;
     let blocks: Vec<*mut u8> = parse_answers(msg)
         .iter()
         .filter(|r| r.ty == ty || ty == 255)
@@ -1514,25 +1502,16 @@ unsafe extern "win64" fn WSARecvFrom(
     }
     0
 }
-/// WSAMSG (x64) : name 0, namelen 8, lpBuffers 16, dwBufferCount 24,
-/// Control 32, dwFlags 48. Les données de contrôle sont ignorées.
+/// WSASendMsg : aussi fonction d'extension, servie par ws2_32 (#1629).
 unsafe extern "win64" fn WSASendMsg(
     s: usize,
-    msg: *const u8,
+    msg: usize,
     flags: u32,
     sent: *mut u32,
     ovl: usize,
     cb: usize,
 ) -> i32 {
-    if msg.is_null() {
-        crate::dlls::ws2_32::wsa_set_last_error(10014);
-        return -1;
-    }
-    let name = std::ptr::read_unaligned(msg as *const usize) as *const u8;
-    let namelen = std::ptr::read_unaligned(msg.add(8) as *const i32);
-    let bufs = std::ptr::read_unaligned(msg.add(16) as *const usize) as *const WsaBuf;
-    let count = std::ptr::read_unaligned(msg.add(24) as *const u32);
-    WSASendTo(s, bufs, count, sent, flags, name, namelen, ovl, cb)
+    crate::dlls::ws2_32::wsa_send_msg(s, msg, flags, sent, ovl, cb)
 }
 pub fn ws2_32_exports() -> Exports {
     crate::exports! {

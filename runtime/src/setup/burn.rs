@@ -181,6 +181,8 @@ pub struct Package {
     /// `InstallCondition` du paquet (vide : toujours installé).
     pub condition: String,
     pub payloads: Vec<String>,
+    /// Propriétés `MsiProperty` passées au paquet MSI (valeurs à formater).
+    pub msi_props: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +195,10 @@ pub struct Payload {
 pub struct Manifest {
     pub name: String,
     pub version: String,
+    pub publisher: String,
+    /// Variables déclarées par le bundle (`<Variable Id Value>`), dans
+    /// l'ordre : leur valeur par défaut.
+    pub variables: Vec<(String, String)>,
     /// Conteneur → index de pièce jointe.
     pub containers: HashMap<String, usize>,
     pub payloads: HashMap<String, Payload>,
@@ -217,7 +223,19 @@ pub fn parse_manifest(xml: &str) -> Manifest {
                     m.version = e.attr("Version").to_string();
                 }
             }
-            "Arp" => m.name = e.attr("DisplayName").to_string(),
+            "Arp" => {
+                m.name = e.attr("DisplayName").to_string();
+                m.publisher = e.attr("Publisher").to_string();
+            }
+            "Variable" => m
+                .variables
+                .push((e.attr("Id").to_string(), e.attr("Value").to_string())),
+            "MsiProperty" => {
+                if let Some((_, p)) = current.as_mut() {
+                    p.msi_props
+                        .push((e.attr("Id").to_string(), e.attr("Value").to_string()));
+                }
+            }
             "RegistrySearch" => {
                 m.registry_searches
                     .insert(e.attr("Variable").to_string(), e.attr("Value").to_string());
@@ -253,6 +271,7 @@ pub fn parse_manifest(xml: &str) -> Manifest {
                         uninstall_args: e.attr("UninstallArguments").to_string(),
                         condition: e.attr("InstallCondition").to_string(),
                         payloads: Vec::new(),
+                        msi_props: Vec::new(),
                     },
                 ));
             }
@@ -301,7 +320,123 @@ fn parse_version(s: &str) -> Option<Vec<u64>> {
     s.split('.').map(|p| p.parse().ok()).collect()
 }
 
-fn variable(m: &Manifest, name: &str) -> Value {
+/// Variables du bundle pendant l'installation : valeurs par défaut du
+/// manifeste, puis celles de la ligne de commande (`Include_core=1`).
+pub type Vars = HashMap<String, String>;
+
+/// Dossiers connus du moteur Burn, aux mêmes emplacements que pour
+/// Windows Installer (`msi::install`).
+fn builtin_folder(name: &str) -> Option<String> {
+    // Dossiers du profil sous `C:\Users\<compte>`, comme %LOCALAPPDATA% (#1724).
+    let profile = |rel: &str| crate::paths::profile_path(rel) + "\\";
+    Some(
+        match name {
+            "ProgramFilesFolder" => "C:\\Program Files (x86)\\",
+            "ProgramFiles64Folder" | "ProgramFiles6432Folder" => "C:\\Program Files\\",
+            "CommonFilesFolder" => "C:\\Program Files (x86)\\Common Files\\",
+            "CommonFiles64Folder" | "CommonFiles6432Folder" => "C:\\Program Files\\Common Files\\",
+            "WindowsVolume" => "C:\\",
+            "WindowsFolder" => "C:\\windows\\",
+            "SystemFolder" | "System64Folder" => "C:\\windows\\system32\\",
+            "TempFolder" => return Some(profile("AppData\\Local\\Temp")),
+            "AppDataFolder" => return Some(profile("AppData\\Roaming")),
+            "LocalAppDataFolder" => return Some(profile("AppData\\Local")),
+            "CommonAppDataFolder" => "C:\\ProgramData\\",
+            "PersonalFolder" => return Some(profile("Documents")),
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// Remplace les `[Variable]` d'une chaîne (valeurs elles-mêmes formatées,
+/// profondeur bornée). Une variable inconnue devient vide, comme dans Burn.
+pub fn format(vars: &Vars, text: &str) -> String {
+    fn go(vars: &Vars, text: &str, depth: u32) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(open) = rest.find('[') {
+            let Some(len) = rest[open + 1..].find(']') else {
+                break;
+            };
+            out.push_str(&rest[..open]);
+            let name = &rest[open + 1..open + 1 + len];
+            let builtin;
+            let value = match vars.get(name) {
+                Some(v) => v.as_str(),
+                None => {
+                    builtin = builtin_folder(name).unwrap_or_default();
+                    builtin.as_str()
+                }
+            };
+            if depth < 8 {
+                out.push_str(&go(vars, value, depth + 1));
+            } else {
+                out.push_str(value);
+            }
+            rest = &rest[open + 2 + len..];
+        }
+        out.push_str(rest);
+        out
+    }
+    go(vars, text, 0)
+}
+
+/// Variables de départ : valeurs du manifeste, ligne de commande, puis ce
+/// que l'interface du bundle ferait avant d'installer. L'interface de
+/// Python, par exemple, choisit `TargetDir` (vide par défaut) entre
+/// `DefaultJustForMeTargetDir` et `DefaultAllUsersTargetDir`.
+pub fn initial_vars(m: &Manifest, overrides: &[(String, String)]) -> Vars {
+    let mut vars: Vars = m.variables.iter().cloned().collect();
+    for (k, v) in overrides {
+        vars.insert(k.clone(), v.clone());
+    }
+    // Le CRT universel (ucrtbase.dll) fait partie de Winlux : l'interface de
+    // Python le constate et saute son paquet ucrt.msi, téléchargé à part
+    // pour Windows 7 et 8 (#1568).
+    vars.entry("CRTInstalled".into())
+        .or_insert_with(|| "1".into());
+    let unset = |vars: &Vars, k: &str| vars.get(k).is_some_and(|v| v.is_empty());
+    if unset(&vars, "TargetDir") {
+        let all_users = vars
+            .get("InstallAllUsers")
+            .is_some_and(|v| parse_value(v).truthy());
+        let pick = ["DefaultCustomTargetDir"]
+            .into_iter()
+            .chain(Some(if all_users {
+                "DefaultAllUsersTargetDir"
+            } else {
+                "DefaultJustForMeTargetDir"
+            }))
+            .find_map(|k| vars.get(k).filter(|v| !v.is_empty()).cloned());
+        if let Some(dir) = pick {
+            let dir = format(&vars, &dir);
+            vars.insert("TargetDir".into(), dir);
+        }
+    }
+    vars
+}
+
+/// Valeur d'une variable du bundle : `-1`, `0`, `1` sont des nombres (une
+/// condition `Include_core` est vraie pour `1`), `v1.2` une version, le
+/// reste une chaîne.
+fn parse_value(v: &str) -> Value {
+    if v.is_empty() {
+        return Value::Empty;
+    }
+    if let Ok(n) = v.parse() {
+        return Value::Num(n);
+    }
+    if let Some(ver) = v.strip_prefix(['v', 'V']).and_then(parse_version) {
+        return Value::Version(ver);
+    }
+    Value::Str(v.to_string())
+}
+
+fn variable(m: &Manifest, vars: &Vars, name: &str) -> Value {
+    if let Some(v) = vars.get(name) {
+        return parse_value(v);
+    }
     match name {
         "VersionNT" | "VersionNT64" => Value::Version(vec![10, 0, 0, 0]),
         "NativeMachine" => Value::Num(0x8664),
@@ -361,6 +496,7 @@ fn tokens(s: &str) -> Option<Vec<String>> {
 
 struct Eval<'a> {
     m: &'a Manifest,
+    vars: &'a Vars,
     t: Vec<String>,
     i: usize,
 }
@@ -452,7 +588,7 @@ impl Eval<'_> {
             return Some(Value::Num(n));
         }
         if t.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Some(variable(self.m, &t));
+            return Some(variable(self.m, self.vars, &t));
         }
         None
     }
@@ -460,14 +596,14 @@ impl Eval<'_> {
 
 /// Le paquet doit-il être installé ? Une condition illisible l'installe,
 /// comme avant la prise en charge des conditions.
-pub fn should_install(m: &Manifest, condition: &str) -> bool {
+pub fn should_install(m: &Manifest, vars: &Vars, condition: &str) -> bool {
     if condition.trim().is_empty() {
         return true;
     }
     let Some(t) = tokens(condition) else {
         return true;
     };
-    let mut e = Eval { m, t, i: 0 };
+    let mut e = Eval { m, vars, t, i: 0 };
     match e.or() {
         Some(v) if e.i == e.t.len() => v,
         _ => true,
@@ -553,7 +689,13 @@ fn split_args(s: &str) -> Vec<String> {
 }
 
 /// Installe (ou, avec `uninstall`, désinstalle) la chaîne d'un bundle.
-pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -> i32 {
+pub fn run(
+    path: &Path,
+    uninstall: bool,
+    quiet: bool,
+    log_file: Option<&Path>,
+    overrides: &[(String, String)],
+) -> i32 {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(e) => {
@@ -593,14 +735,18 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -
         bundle.manifest.chain.len()
     ));
     let work = std::env::temp_dir().join(format!("winlux-burn-{}", std::process::id()));
+    let vars = initial_vars(&bundle.manifest, overrides);
     let mut status = 0;
+    // Paquets réellement installés : un bundle qui n'en installe aucun n'a
+    // pas réussi, même si rien n'a échoué (#1555).
+    let mut installed = 0;
     let chain: Vec<&Package> = if uninstall {
         bundle.manifest.chain.iter().rev().collect()
     } else {
         bundle.manifest.chain.iter().collect()
     };
     for p in chain {
-        if !uninstall && !should_install(&bundle.manifest, &p.condition) {
+        if !uninstall && !should_install(&bundle.manifest, &vars, &p.condition) {
             log.log(&format!(
                 "{} : condition « {} » fausse, paquet ignoré",
                 p.id,
@@ -620,13 +766,21 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -
             }
             PackageKind::Msi => match stage(&bundle, p, &dir) {
                 Ok(Some(msi)) => {
+                    let props = p
+                        .msi_props
+                        .iter()
+                        .map(|(k, v)| (k.clone(), format(&vars, v)))
+                        .filter(|(_, v)| !v.is_empty())
+                        .collect();
                     let opts = crate::msi::install::Options {
-                        props: Vec::new(),
+                        props,
                         quiet,
                         admin: false,
                     };
                     let r = crate::msi::install::install(&msi, &opts, &mut log);
-                    if r != 0 {
+                    if r == 0 || r == 3010 {
+                        installed += 1;
+                    } else {
                         status = r;
                     }
                 }
@@ -654,7 +808,7 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -
                             .args(&args)
                             .status()
                         {
-                            Ok(s) if s.success() || s.code() == Some(3010) => {}
+                            Ok(s) if s.success() || s.code() == Some(3010) => installed += 1,
                             Ok(s) => {
                                 log.log(&format!("{} : code {}", p.id, s.code().unwrap_or(-1)))
                             }
@@ -674,10 +828,63 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -
         }
     }
     let _ = std::fs::remove_dir_all(&work);
+    if status == 0 && !uninstall && installed == 0 {
+        log.log(&format!(
+            "{name} : aucun paquet installé, installation en échec."
+        ));
+        status = 1603;
+    }
     if status == 0 {
         log.log(&format!("{name} : terminé."));
     }
+    // Silencieux (/quiet) lancé d'un terminal : une ligne de bilan sur
+    // stderr et le chemin du journal, plutôt que rien du tout (#1592).
+    if quiet && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        eprintln!("{}", quiet_summary(&name, uninstall, status, log_file));
+    }
     status
+}
+
+/// Bilan d'une installation silencieuse, pour le terminal (#1592).
+fn quiet_summary(name: &str, uninstall: bool, status: i32, log_file: Option<&Path>) -> String {
+    let what = match (uninstall, status) {
+        (false, 0) => "installation terminée",
+        (true, 0) => "désinstallation terminée",
+        (false, _) => "installation en échec",
+        (true, _) => "désinstallation en échec",
+    };
+    match log_file {
+        Some(f) => format!(
+            "winlux : {name} : {what} (code {status}). Journal : {}",
+            f.display()
+        ),
+        None => format!("winlux : {name} : {what} (code {status})."),
+    }
+}
+
+/// `Nom=Valeur` de la ligne de commande : variables du bundle.
+fn overrides(args: &[String]) -> Vec<(String, String)> {
+    args.iter()
+        .filter(|a| !a.starts_with(['/', '-']))
+        .filter_map(|a| a.split_once('='))
+        .filter(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        .map(|(k, v)| (k.to_string(), v.trim_matches('"').to_string()))
+        .collect()
+}
+
+/// `winlux --setup --info` : nom, version et éditeur du bundle.
+pub fn info(path: &Path) -> Option<(String, String, String)> {
+    if !is_bundle_file(path) {
+        return None;
+    }
+    let data = crate::loader::ImageFile::open(path).ok()?;
+    let b = open(&data).ok()?;
+    let name = if b.manifest.name.is_empty() {
+        path.file_stem()?.to_string_lossy().into_owned()
+    } else {
+        b.manifest.name
+    };
+    Some((name, b.manifest.version, b.manifest.publisher))
 }
 
 /// Lancement direct d'un bundle (double-clic, ou par un autre installeur).
@@ -692,7 +899,13 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     };
     let quiet = has("quiet") || has("q") || has("passive") || has("silent");
     let log = log_path(exe, args, quiet);
-    Some(run(exe, has("uninstall"), quiet, log.as_deref()))
+    Some(run(
+        exe,
+        has("uninstall"),
+        quiet,
+        log.as_deref(),
+        &overrides(args),
+    ))
 }
 
 /// Journal de l'installation : `/log <fichier>` (ou `/l`), comme Burn ;
@@ -774,6 +987,19 @@ pub mod tests {
     }
 
     #[test]
+    fn bilan_silencieux_pour_le_terminal() {
+        let log = Path::new("/tmp/python_1.log");
+        assert_eq!(
+            quiet_summary("Python 3.12.10 (64-bit)", false, 0, Some(log)),
+            "winlux : Python 3.12.10 (64-bit) : installation terminée (code 0). Journal : /tmp/python_1.log"
+        );
+        assert_eq!(
+            quiet_summary("Python", true, 1603, None),
+            "winlux : Python : désinstallation en échec (code 1603)."
+        );
+    }
+
+    #[test]
     fn lit_le_manifeste() {
         let m = parse_manifest(MANIFEST);
         assert_eq!(m.name, "Redistribuable & test");
@@ -834,14 +1060,127 @@ pub mod tests {
         );
         assert!(should_install(
             &m,
+            &Vars::new(),
             "(VersionNT64) AND NOT (Arm64_Check = \"ARM64\")"
         ));
-        assert!(!should_install(&m, "Arm64_Check = \"ARM64\""));
-        assert!(!should_install(&m, "VersionNT = v6.1 AND VersionNT64"));
-        assert!(!should_install(&m, "VersionNT = v6.3 AND NOT VersionNT64"));
-        assert!(should_install(&m, "VersionNT >= v6.1"));
-        assert!(should_install(&m, "NOT Inconnue OR (Inconnue"));
-        assert!(should_install(&m, ""));
+        assert!(!should_install(&m, &Vars::new(), "Arm64_Check = \"ARM64\""));
+        assert!(!should_install(
+            &m,
+            &Vars::new(),
+            "VersionNT = v6.1 AND VersionNT64"
+        ));
+        assert!(!should_install(
+            &m,
+            &Vars::new(),
+            "VersionNT = v6.3 AND NOT VersionNT64"
+        ));
+        assert!(should_install(&m, &Vars::new(), "VersionNT >= v6.1"));
+        assert!(should_install(
+            &m,
+            &Vars::new(),
+            "NOT Inconnue OR (Inconnue"
+        ));
+        assert!(should_install(&m, &Vars::new(), ""));
+    }
+
+    /// Bundle de Python (python.org, sources Tools/msi/bundle) : variables
+    /// Include_* à 1 par défaut, InstallAllUsers à 0, TargetDir choisi par
+    /// l'interface, passé au MSI par MsiProperty.
+    const PYTHON_MANIFEST: &str = r#"<BurnManifest>
+  <Variable Id="InstallAllUsers" Value="0" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="Include_core" Value="1" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="Include_exe" Value="1" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="Include_launcher" Value="-1" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="Include_pip" Value="1" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="Include_symbols" Value="0" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="LauncherOnly" Value="0" Type="numeric" Hidden="no" Persisted="no" />
+  <Variable Id="WinVerNoDot" Value="312" Type="string" Hidden="no" Persisted="no" />
+  <Variable Id="TargetDir" Value="" Type="string" Hidden="no" Persisted="no" />
+  <Variable Id="DefaultAllUsersTargetDir" Value="[ProgramFiles64Folder]Python[WinVerNoDot]" Type="string" Hidden="no" Persisted="no" />
+  <Variable Id="DefaultJustForMeTargetDir" Value="[LocalAppDataFolder]Programs\Python\Python[WinVerNoDot]" Type="string" Hidden="no" Persisted="no" />
+  <Variable Id="DefaultCustomTargetDir" Value="" Type="string" Hidden="no" Persisted="no" />
+  <Registration Version="3.12.10150.0"><Arp DisplayName="Python 3.12.10 (64-bit)" Publisher="Python Software Foundation" /></Registration>
+  <Chain>
+    <MsiPackage Id="core_JustForMe" InstallCondition="not InstallAllUsers and (Include_core or Include_exe or Include_launcher or Include_pip) and not LauncherOnly">
+      <MsiProperty Id="TARGETDIR" Value="[TargetDir]" />
+    </MsiPackage>
+  </Chain>
+</BurnManifest>"#;
+
+    #[test]
+    fn variables_du_bundle_python() {
+        let m = parse_manifest(PYTHON_MANIFEST);
+        assert_eq!(m.publisher, "Python Software Foundation");
+        let cond = &m.chain[0].condition;
+        let vars = initial_vars(&m, &[]);
+        assert!(should_install(&m, &vars, cond), "valeurs par défaut");
+        assert!(!should_install(&m, &vars, "Include_symbols"));
+        assert!(!should_install(
+            &m,
+            &vars,
+            "not InstallAllUsers and not CRTInstalled and (Include_core or Include_exe or Include_pip) and not LauncherOnly"
+        ));
+        assert_eq!(
+            vars["TargetDir"],
+            crate::paths::profile_path("AppData\\Local\\Programs\\Python\\Python312")
+        );
+        assert_eq!(
+            m.chain[0].msi_props,
+            vec![("TARGETDIR".into(), "[TargetDir]".into())]
+        );
+        assert_eq!(format(&vars, "[TargetDir]"), vars["TargetDir"]);
+        // Ligne de commande : InstallAllUsers=1 change de paquet et de dossier.
+        let all = overrides(&["/quiet".into(), "InstallAllUsers=1".into(), "/log".into()]);
+        let vars = initial_vars(&m, &all);
+        assert!(!should_install(&m, &vars, cond));
+        assert_eq!(vars["TargetDir"], "C:\\Program Files\\Python312");
+        let none = overrides(&[
+            "Include_core=0".into(),
+            "Include_exe=0".into(),
+            "Include_launcher=0".into(),
+            "Include_pip=0".into(),
+        ]);
+        assert!(!should_install(&m, &initial_vars(&m, &none), cond));
+        let custom = overrides(&["TargetDir=D:\\Py".into()]);
+        assert_eq!(initial_vars(&m, &custom)["TargetDir"], "D:\\Py");
+    }
+
+    /// Aucun paquet installé : code 1603, jamais un faux succès.
+    #[test]
+    fn aucun_paquet_installe_est_un_echec() {
+        let root = std::env::temp_dir().join(format!("winlux-burn-vide-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let exe = root.join("python-test.exe");
+        // Assez gros pour être reconnu (4 Kio au moins).
+        let filler = vec![0u8; 8192];
+        std::fs::write(&exe, build_bundle_with(PYTHON_MANIFEST, &[("a9", &filler)])).unwrap();
+        let log = root.join("bundle.log");
+        let mut args: Vec<String> = [
+            "/quiet",
+            "Include_core=0",
+            "Include_exe=0",
+            "Include_launcher=0",
+            "Include_pip=0",
+            "/log",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        args.push(log.to_string_lossy().into_owned());
+        assert_eq!(launch(&exe, &args), Some(1603));
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(text.contains("aucun paquet installé"), "{text}");
+        assert!(!text.contains("terminé"), "{text}");
+        assert_eq!(
+            info(&exe),
+            Some((
+                "Python 3.12.10 (64-bit)".into(),
+                "3.12.10150.0".into(),
+                "Python Software Foundation".into()
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

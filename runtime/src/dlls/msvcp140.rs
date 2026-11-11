@@ -24,7 +24,11 @@ const MTX_RECURSIVE: i32 = 0x100;
 
 // ---------- futex ----------
 
-unsafe fn futex_wait(word: &AtomicU32, expected: u32, timeout: Option<Duration>) -> bool {
+pub(crate) unsafe fn futex_wait(
+    word: &AtomicU32,
+    expected: u32,
+    timeout: Option<Duration>,
+) -> bool {
     let ts = timeout.map(|d| libc::timespec {
         tv_sec: d.as_secs() as libc::time_t,
         tv_nsec: d.subsec_nanos() as libc::c_long,
@@ -40,7 +44,7 @@ unsafe fn futex_wait(word: &AtomicU32, expected: u32, timeout: Option<Duration>)
     !(r == -1 && *libc::__errno_location() == libc::ETIMEDOUT)
 }
 
-unsafe fn futex_wake(word: &AtomicU32, n: i32) {
+pub(crate) unsafe fn futex_wake(word: &AtomicU32, n: i32) {
     libc::syscall(
         libc::SYS_futex,
         word as *const AtomicU32,

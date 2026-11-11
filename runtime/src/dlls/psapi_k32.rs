@@ -437,13 +437,26 @@ mod tests {
             assert_eq!(K32QueryWorkingSet(usize::MAX, ws.as_mut_ptr().cast(), 8), 0);
             assert_eq!(crate::process::last_error(), ERROR_BAD_LENGTH);
             assert!(ws[0] > 0);
-            let mut big = vec![0usize; ws[0] + 4096];
-            let cb = (big.len() * 8) as u32;
-            assert_eq!(
-                K32QueryWorkingSet(usize::MAX, big.as_mut_ptr().cast(), cb),
-                1
+            // Les autres tests, en parallèle, font grandir l'ensemble de
+            // travail entre deux appels : on recommence avec le nombre rendu,
+            // comme un programme le fait sur ERROR_BAD_LENGTH (#1693).
+            let mut want = ws[0];
+            let mut done = false;
+            for _ in 0..8 {
+                let mut big = vec![0usize; want * 2 + 4096];
+                let cb = (big.len() * 8) as u32;
+                if K32QueryWorkingSet(usize::MAX, big.as_mut_ptr().cast(), cb) == 1 {
+                    assert!(big[0] > 0 && big[1] % 4096 == 0);
+                    done = true;
+                    break;
+                }
+                assert_eq!(crate::process::last_error(), ERROR_BAD_LENGTH);
+                want = big[0];
+            }
+            assert!(
+                done,
+                "ensemble de travail toujours plus grand que le tampon"
             );
-            assert!(big[0] > 0 && big[1] % 4096 == 0);
         }
     }
 }

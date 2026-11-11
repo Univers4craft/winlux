@@ -713,6 +713,62 @@ unsafe fn sign_hash(prov_key: (P, bool), algid: u32, digest: &[u8]) -> Result<Ve
     Ok(sig)
 }
 
+/// Clé RSA neuve d'un certificat auto-signé (CertCreateSelfSignCertificate).
+pub(crate) struct SelfSignKey(P);
+
+impl SelfSignKey {
+    pub(crate) fn new(bits: u32) -> Option<Self> {
+        generate(bits).map(Self)
+    }
+
+    /// Module et exposant public, grand-boutistes et sans zéros de tête.
+    pub(crate) fn public(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        let be = |mut v: Vec<u8>| {
+            v.reverse();
+            let z = v.iter().take_while(|&&b| b == 0).count();
+            v.split_off(z.min(v.len().saturating_sub(1)))
+        };
+        unsafe {
+            let bits = bits_of(self.0)? as usize;
+            Some((
+                be(param_le(self.0, c"n", bits / 8)?),
+                be(param_le(self.0, c"e", 8)?),
+            ))
+        }
+    }
+
+    /// Clé privée DER (RSAPrivateKey), comme celle d'un PKCS #12 importé.
+    pub(crate) fn private_der(&self) -> Option<Vec<u8>> {
+        let s = hostssl::ssl()?;
+        unsafe {
+            let mut out: *mut u8 = std::ptr::null_mut();
+            let n = (s.i2d_PrivateKey)(self.0, &mut out);
+            let v = (n > 0).then(|| std::slice::from_raw_parts(out, n as usize).to_vec());
+            if !out.is_null() {
+                (s.CRYPTO_free)(out.cast(), c"advapi32_rsa".as_ptr(), 0);
+            }
+            v
+        }
+    }
+
+    /// Signature PKCS #1 v1.5 de `data` (condensat `algid`), grand-boutiste
+    /// comme dans un certificat X.509.
+    pub(crate) fn sign(&self, algid: u32, data: &[u8]) -> Option<Vec<u8>> {
+        let digest = hostssl::digest(md_name(algid)?, data)?;
+        let mut sig = unsafe { sign_hash((self.0, true), algid, &digest) }.ok()?;
+        sig.reverse();
+        Some(sig)
+    }
+}
+
+impl Drop for SelfSignKey {
+    fn drop(&mut self) {
+        if let Some(s) = hostssl::ssl() {
+            unsafe { (s.EVP_PKEY_free)(self.0) };
+        }
+    }
+}
+
 unsafe fn sign_common(hash: usize, spec: u32, flags: u32, out: *mut u8, len: *mut u32) -> i32 {
     if len.is_null() || flags != 0 {
         set_last_error(if flags != 0 {

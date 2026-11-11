@@ -247,5 +247,74 @@ int main(int argc, char **argv) {
         DeleteFileW(b);
         CHECK(41, ok);
     }
+    {
+        /* #1508 : complexes x86 (pointeur caché pour _Dcomplex, edx:eax
+         * pour _Fcomplex, résultat réel dans st0), __pioinfo sous 4 Go et
+         * taille de tampon de __stdio_common_vsscanf « _s ». */
+        typedef struct { double re, im; } dc;
+        typedef struct { float re, im; } fc;
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        HMODULE m = LoadLibraryA("msvcrt.dll");
+        dc (*cexp_)(dc) = (dc (*)(dc))GetProcAddress(u, "cexp");
+        fc (*cpowf_)(fc, fc) = (fc (*)(fc, fc))GetProcAddress(u, "cpowf");
+        double (*cimag_)(dc) = (double (*)(dc))GetProcAddress(u, "cimag");
+        float (*cargf_)(fc) = (float (*)(fc))GetProcAddress(u, "cargf");
+        void **pio = (void **)GetProcAddress(m, "__pioinfo");
+        int (*vss)(unsigned long long, const char *, size_t, const char *, void *, va_list) =
+            (int (*)(unsigned long long, const char *, size_t, const char *, void *, va_list))
+                GetProcAddress(u, "__stdio_common_vsscanf");
+        int ok = cexp_ && cpowf_ && cimag_ && cargf_ && pio && vss;
+        if (ok) {
+            dc z = {0.0, 3.141592653589793};
+            dc e = cexp_(z);
+            fc i = {0.0f, 1.0f}, two = {2.0f, 0.0f};
+            fc p = cpowf_(i, two);
+            dc w = {1.0, 2.5};
+            fc q = {0.0f, 1.0f};
+            ok = e.re < -0.999999 && e.re > -1.000001 && e.im < 1e-9 && e.im > -1e-9
+                 && p.re < -0.99999f && p.re > -1.00001f
+                 && cimag_(w) == 2.5 && cargf_(q) > 1.5707f && cargf_(q) < 1.5709f
+                 && pio[0] != NULL && (unsigned long)pio[0] < 0x80000000UL;
+        }
+        if (ok) {
+            char word[8], small[3];
+            int n = 0;
+            struct { char *w; unsigned ws; int *n; } a1 = {word, sizeof word, &n};
+            struct { char *s; unsigned ss; } a2 = {small, sizeof small};
+            ok = vss(1, "abc 5", (size_t)-1, "%s %d", NULL, (va_list)&a1) == 2
+                 && strcmp(word, "abc") == 0 && n == 5
+                 && vss(1, "abcdef", (size_t)-1, "%s", NULL, (va_list)&a2) == 0 && small[0] == 0;
+        }
+        CHECK(42, ok);
+    }
+    {
+        /* #1508 : std::exception de msvcrt x86 (thiscall), table virtuelle
+         * { destructeur de suppression, what }. */
+        typedef void *(__thiscall *ctor_s)(void *, const char *const *);
+        typedef void *(__thiscall *copy_t)(void *, const void *);
+        typedef void (__thiscall *dtor_t)(void *);
+        typedef const char *(__thiscall *what_t)(const void *);
+        HMODULE m = LoadLibraryA("msvcrt.dll");
+        ctor_s c = (ctor_s)GetProcAddress(m, "??0exception@@QAE@ABQBD@Z");
+        copy_t cp = (copy_t)GetProcAddress(m, "??0bad_cast@@QAE@ABV0@@Z");
+        dtor_t d = (dtor_t)GetProcAddress(m, "??1exception@@UAE@XZ");
+        what_t w = (what_t)GetProcAddress(m, "?what@exception@@UBEPBDXZ");
+        int ok = c && cp && d && w;
+        if (ok) {
+            void *e[3], *b[3];
+            char text[8] = "boum";
+            const char *pt = text;
+            ok = c(e, &pt) == e;
+            text[0] = 'X'; /* la chaîne a été recopiée */
+            what_t vw = ok ? ((what_t *)e[0])[1] : 0;
+            ok = ok && strcmp(w(e), "boum") == 0 && vw && strcmp(vw(e), "boum") == 0
+                 && cp(b, e) == b && b[0] != e[0] && strcmp(w(b), "boum") == 0;
+            if (ok) {
+                d(b);
+                d(e);
+            }
+        }
+        CHECK(43, ok);
+    }
     return fails;
 }

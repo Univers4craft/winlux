@@ -324,6 +324,45 @@ pub unsafe extern "win64" fn close_threadpool_timer(timer: *const Timer) {
     lock(&timers().list).retain(|x| !Arc::ptr_eq(x, &t));
 }
 
+/// Pools privés (CreateThreadpool, #1606) : les rappels de Winlux passent
+/// tous par le pool partagé ; la table ne garde que les bornes demandées
+/// (minimum, maximum). Poignées multiples de 4, sous 4 Gio pour les
+/// programmes x86.
+fn private_pools() -> &'static Mutex<std::collections::HashMap<usize, (u32, u32)>> {
+    static P: OnceLock<Mutex<std::collections::HashMap<usize, (u32, u32)>>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+pub extern "win64" fn create_threadpool(_reserved: usize) -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0x7D00_0000);
+    let h = NEXT.fetch_add(4, Ordering::Relaxed);
+    lock(private_pools()).insert(h, (0, MAX_THREADS as u32));
+    h
+}
+
+pub extern "win64" fn close_threadpool(pool: usize) {
+    lock(private_pools()).remove(&pool);
+}
+
+pub extern "win64" fn set_threadpool_thread_maximum(pool: usize, max: u32) {
+    if let Some(p) = lock(private_pools()).get_mut(&pool) {
+        p.1 = max;
+    }
+}
+
+pub extern "win64" fn set_threadpool_thread_minimum(pool: usize, min: u32) -> i32 {
+    match lock(private_pools()).get_mut(&pool) {
+        Some(p) => {
+            p.0 = min;
+            1
+        }
+        None => {
+            crate::process::set_last_error(87);
+            0
+        }
+    }
+}
+
 /// CallbackMayRunLong : le pool crée de toute façon un thread de plus au besoin.
 pub extern "win64" fn callback_may_run_long(_instance: usize) -> i32 {
     1
@@ -342,6 +381,10 @@ pub fn exports() -> crate::dlls::Exports {
         "WaitForThreadpoolTimerCallbacks" => fn wait_for_threadpool_timer_callbacks,
         "CloseThreadpoolTimer" => fn close_threadpool_timer,
         "CallbackMayRunLong" => fn callback_may_run_long,
+        "CreateThreadpool" => fn create_threadpool,
+        "CloseThreadpool" => fn close_threadpool,
+        "SetThreadpoolThreadMaximum" => fn set_threadpool_thread_maximum,
+        "SetThreadpoolThreadMinimum" => fn set_threadpool_thread_minimum,
     }
 }
 
@@ -349,6 +392,18 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
+
+    #[test]
+    fn pool_prive() {
+        let _teb = crate::process::test_teb();
+        let p = create_threadpool(0);
+        assert_ne!(p, 0);
+        assert_eq!(set_threadpool_thread_minimum(p, 2), 1);
+        set_threadpool_thread_maximum(p, 4);
+        assert_eq!(lock(private_pools()).get(&p), Some(&(2, 4)));
+        close_threadpool(p);
+        assert_eq!(set_threadpool_thread_minimum(p, 2), 0);
+    }
 
     unsafe extern "win64" fn count_work(inst: *mut Instance, ctx: usize, _w: *const Work) {
         assert!(!inst.is_null());

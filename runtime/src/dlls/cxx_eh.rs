@@ -194,6 +194,26 @@ unsafe fn cxx_params(rec: &ExceptionRecord) -> Option<(usize, usize, usize)> {
     Some((rec.info[1], ti, base))
 }
 
+/// Noms décorés des types capturables d'une exception C++, tels que
+/// RaiseException les reçoit (journal `WINLUX_SEH_TRACE`, #1659).
+pub(crate) unsafe fn thrown_type_names(rec: &ExceptionRecord) -> Vec<String> {
+    let Some((_, ti, base)) = cxx_params(rec) else {
+        return Vec::new();
+    };
+    if base == 0 {
+        return Vec::new();
+    }
+    let cta = base + rd32(ti + 12) as usize;
+    let n = rdi(cta).clamp(0, 16) as usize;
+    (0..n)
+        .map(|i| {
+            let ct = base + rd32(cta + 4 + i * 4) as usize;
+            let td = base + rd32(ct + 4) as usize;
+            String::from_utf8_lossy(type_name(td)).into_owned()
+        })
+        .collect()
+}
+
 unsafe fn type_name(td: usize) -> &'static [u8] {
     std::ffi::CStr::from_ptr((td + 16) as *const std::ffi::c_char).to_bytes()
 }

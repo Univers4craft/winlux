@@ -262,6 +262,16 @@ fn reported_state(name: &str) -> Option<u32> {
 }
 
 fn refresh(record: &mut ServiceRecord) {
+    // Pilote Windows (#1532) : jamais de processus, état tenu par Winlux.
+    if is_driver(record.service_type) {
+        record.state = if driver_started(record) {
+            SERVICE_RUNNING
+        } else {
+            SERVICE_STOPPED
+        };
+        record.process_id = 0;
+        return;
+    }
     if let Some(c) = record.child.as_mut() {
         if let Ok(Some(status)) = c.try_wait() {
             record.state = SERVICE_STOPPED;
@@ -299,19 +309,47 @@ fn running_elsewhere(name: &str) -> Option<u32> {
     if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
         return Some(pid.unwrap_or(0));
     }
-    let pid = pid.filter(|&p| p > 0)?;
-    let alive = unsafe { libc::kill(pid as i32, 0) } == 0
-        && !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
-            s.rsplit(')')
-                .next()
-                .is_some_and(|r| r.trim_start().starts_with('Z'))
-        });
-    if alive {
-        Some(pid)
-    } else {
+    if let Some(pid) = pid.filter(|&p| p > 0) {
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0
+            && !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+                s.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            });
+        if alive {
+            return Some(pid);
+        }
         let _ = std::fs::remove_file(sock.with_extension("pid"));
-        None
     }
+    // Sans canal ni .pid (service lancé par une autre session de Winlux,
+    // fichiers effacés) : le processus porte WINLUX_SERVICE_NAME dans son
+    // environnement, posé par spawn_service (#1675, #1676).
+    service_process(std::path::Path::new("/proc"), name)
+}
+
+/// Processus vivant du compte dont l'environnement porte
+/// `WINLUX_SERVICE_NAME=<name>` (casse ignorée, comme les noms de service).
+fn service_process(proc_dir: &std::path::Path, name: &str) -> Option<u32> {
+    let me = std::process::id();
+    let wanted = format!("WINLUX_SERVICE_NAME={name}").to_ascii_lowercase();
+    std::fs::read_dir(proc_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| pid != me)
+        .find(|pid| {
+            let dir = proc_dir.join(pid.to_string());
+            let zombie = std::fs::read_to_string(dir.join("stat")).is_ok_and(|s| {
+                s.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            });
+            !zombie
+                && std::fs::read(dir.join("environ")).is_ok_and(|env| {
+                    env.split(|&b| b == 0)
+                        .any(|v| v.to_ascii_lowercase() == wanted.as_bytes())
+                })
+        })
 }
 fn write_status(record: &ServiceRecord, out: *mut u8) {
     unsafe {
@@ -392,6 +430,20 @@ unsafe fn create_service(
         crate::process::set_last_error(if raw.is_empty() { 87 } else { 123 });
         return 0;
     }
+    // Filet (#1720) : un pilote d'anti-triche noyau n'est jamais inscrit ;
+    // la personne est prévenue, l'installateur reçoit un refus d'accès.
+    if is_driver(service_type) {
+        if let Some(a) = crate::anticheat::by_driver(&command) {
+            // Programme Windows lancé (winlux PROGRAMME.exe …).
+            let software = std::env::args()
+                .nth(1)
+                .map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string())
+                .unwrap_or_default();
+            crate::anticheat::refuse(&software, a, crate::anticheat::Stage::During);
+            crate::process::set_last_error(5);
+            return 0;
+        }
+    }
     let key = raw.to_lowercase();
     if lock(services()).contains_key(&key) || load_persisted(&key).is_some() {
         crate::process::set_last_error(ERROR_SERVICE_EXISTS as u32);
@@ -471,6 +523,112 @@ pub unsafe extern "win64" fn create_service_w(
     )
 }
 
+// ---- Pilotes Windows virtualisés (#1532) -----------------------------------
+
+/// SERVICE_KERNEL_DRIVER (1), SERVICE_FILE_SYSTEM_DRIVER (2) et
+/// SERVICE_RECOGNIZER_DRIVER (8) : jamais exécutés par Winlux.
+fn is_driver(service_type: u32) -> bool {
+    service_type & 0x0B != 0 && service_type & 0x30 == 0
+}
+
+fn driver_state_path(name: &str) -> std::path::PathBuf {
+    control_sock_path(name).with_extension("driver")
+}
+
+/// Pilote « démarré » : il a une traduction, et il a été démarré pendant
+/// cette session ou il démarre avec le système (Start 0 à 2).
+fn driver_started(r: &ServiceRecord) -> bool {
+    crate::dlls::drivers::translation(&r.command).is_some()
+        && (r.start_type <= 2 || driver_state_path(&r.name).exists())
+}
+
+/// StartService d'un pilote : l'appareil virtuel prend sa place, ou le
+/// service reste arrêté (ERROR_DRIVER_BLOCKED). Le .sys n'est jamais lu.
+fn start_driver(r: &mut ServiceRecord) -> Result<(), u32> {
+    if r.start_type == 4 {
+        return Err(ERROR_SERVICE_DISABLED as u32);
+    }
+    if r.state == SERVICE_RUNNING {
+        return Err(ERROR_SERVICE_ALREADY_RUNNING as u32);
+    }
+    match crate::dlls::drivers::translation(&r.command) {
+        Some(t) => {
+            std::fs::write(driver_state_path(&r.name), "4").map_err(|_| 5u32)?;
+            r.state = SERVICE_RUNNING;
+            r.win32_exit_code = 0;
+            crate::dlls::drivers::tell(&r.command, Some(t.product));
+            Ok(())
+        }
+        None => {
+            r.state = SERVICE_STOPPED;
+            r.win32_exit_code = crate::dlls::drivers::ERROR_DRIVER_BLOCKED;
+            crate::dlls::drivers::tell(&r.command, None);
+            Err(crate::dlls::drivers::ERROR_DRIVER_BLOCKED)
+        }
+    }
+}
+
+/// Vrai si un service pilote inscrit pour le fichier `binary` est démarré
+/// (dans ce processus ou un autre : l'état est dans le registre et /run).
+pub(crate) fn driver_running(binary: &str) -> bool {
+    let is_ours = |r: &ServiceRecord| {
+        is_driver(r.service_type)
+            && r.command
+                .trim()
+                .trim_matches('"')
+                .rsplit(['\\', '/'])
+                .next()
+                .is_some_and(|f| f.eq_ignore_ascii_case(binary))
+    };
+    let mut names = registered_services();
+    names.extend(lock(services()).keys().cloned());
+    names.into_iter().any(|n| {
+        let local = lock(services())
+            .get(&n.to_lowercase())
+            .map(|r| is_ours(r) && driver_started(r));
+        local.unwrap_or_else(|| {
+            load_persisted(&n).is_some_and(|r| is_ours(&r) && driver_started(&r))
+        })
+    })
+}
+
+/// Démarre le pilote inscrit `name` (installation d'un appareil présent).
+pub(crate) fn start_driver_named(name: &str) -> Result<(), u32> {
+    let key = name.to_lowercase();
+    let mut all = lock(services());
+    if !all.contains_key(&key) {
+        let r = load_persisted(&key).ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+        all.insert(key.clone(), r);
+    }
+    let r = all
+        .get_mut(&key)
+        .ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+    refresh(r);
+    if r.state == SERVICE_RUNNING {
+        return Ok(());
+    }
+    start_driver(r)
+}
+
+/// Service d'un .inf (AddService) : inscrit, ou mis à jour s'il existe.
+pub(crate) fn install_driver_service(s: &crate::dlls::drivers::DriverService) -> Result<(), u32> {
+    let key = s.name.to_lowercase();
+    let record = ServiceRecord {
+        name: key.clone(),
+        display: s.display.clone(),
+        command: s.binary.clone(),
+        service_type: s.service_type,
+        start_type: s.start_type,
+        state: SERVICE_STOPPED,
+        win32_exit_code: 0,
+        process_id: 0,
+        child: None,
+    };
+    persist(&record).map_err(|e| e as u32)?;
+    lock(services()).insert(key, record);
+    Ok(())
+}
+
 fn open_service(manager: usize, name: Option<String>) -> usize {
     if !matches!(handle(manager), Some(ScmHandle::Manager)) {
         crate::process::set_last_error(6);
@@ -485,10 +643,14 @@ fn open_service(manager: usize, name: Option<String>) -> usize {
         if let Some(r) = load_persisted(&key) {
             lock(services()).insert(key.clone(), r);
         } else {
+            // WINLUX_TRACE : le nom demandé et l'erreur rendue, pour les
+            // installeurs qui s'arrêtent sur un service absent (#1659, #1699).
+            crate::trace!("OpenService({name}) : service absent, erreur 1060");
             crate::process::set_last_error(ERROR_SERVICE_DOES_NOT_EXIST as u32);
             return 0;
         }
     }
+    crate::trace!("OpenService({name}) : ouvert");
     new_handle(ScmHandle::Service(key))
 }
 pub unsafe extern "win64" fn open_service_a(
@@ -515,6 +677,12 @@ fn start_service(service: usize, extra: Vec<String>) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if is_driver(r.service_type) {
+        return match start_driver(r) {
+            Ok(()) => 1,
+            Err(e) => fail(e),
+        };
+    }
     match spawn_service(r, &extra) {
         Ok(()) => 1,
         Err(e) => fail(e),
@@ -563,6 +731,76 @@ pub unsafe extern "win64" fn query_service_status(service: usize, status: *mut u
     write_status_basic(r, status);
     1
 }
+
+/// QueryServiceConfigW (#1585) : QUERY_SERVICE_CONFIGW suivi de ses
+/// chaînes (chemin, groupe vide, dépendances vides, compte LocalSystem,
+/// nom affiché), dans la disposition x64 ou x86 du programme.
+pub unsafe extern "win64" fn query_service_config_w(
+    service: usize,
+    out: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if needed.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let Some(ScmHandle::Service(name)) = handle(service) else {
+        return fail(ERROR_INVALID_HANDLE as u32);
+    };
+    let (kind, start, path, display) = {
+        let all = lock(services());
+        let Some(r) = all.get(&name) else {
+            return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
+        };
+        (
+            r.service_type,
+            r.start_type,
+            r.command.clone(),
+            r.display.clone(),
+        )
+    };
+    let ptr = crate::wow32::pointer_size();
+    // 3 DWORD, puis pointeurs et dwTagId, alignés sur la taille de pointeur.
+    let header = if ptr == 4 { 36 } else { 64 };
+    let w = |s: &str| -> Vec<u16> { s.encode_utf16().chain([0]).collect() };
+    let strings = [
+        w(&path),
+        w(""),
+        vec![0u16, 0],
+        w("LocalSystem"),
+        w(&display),
+    ];
+    let total = header + strings.iter().map(|s| s.len() * 2).sum::<usize>();
+    *needed = total as u32;
+    if out.is_null() || (size as usize) < total {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::write_bytes(out, 0, header);
+    std::ptr::write_unaligned(out as *mut u32, kind);
+    std::ptr::write_unaligned(out.add(4) as *mut u32, start);
+    // SERVICE_ERROR_NORMAL.
+    std::ptr::write_unaligned(out.add(8) as *mut u32, 1);
+    // Emplacements des pointeurs : binaire, groupe, (tag), dépendances,
+    // compte, nom affiché.
+    let slots: [usize; 5] = if ptr == 4 {
+        [12, 16, 24, 28, 32]
+    } else {
+        [16, 24, 40, 48, 56]
+    };
+    let mut at = header;
+    for (slot, text) in slots.iter().zip(strings.iter()) {
+        let p = out.add(at);
+        std::ptr::copy_nonoverlapping(text.as_ptr() as *const u8, p, text.len() * 2);
+        if ptr == 4 {
+            std::ptr::write_unaligned(out.add(*slot) as *mut u32, p as usize as u32);
+        } else {
+            std::ptr::write_unaligned(out.add(*slot) as *mut usize, p as usize);
+        }
+        at += text.len() * 2;
+    }
+    1
+}
+
 pub unsafe extern "win64" fn control_service(service: usize, control: u32, status: *mut u8) -> i32 {
     let Some(ScmHandle::Service(name)) = handle(service) else {
         return fail(ERROR_INVALID_HANDLE as u32);
@@ -576,6 +814,14 @@ pub unsafe extern "win64" fn control_service(service: usize, control: u32, statu
         SERVICE_CONTROL_STOP => {
             if r.state != SERVICE_RUNNING {
                 return fail(ERROR_SERVICE_NOT_ACTIVE as u32);
+            }
+            if is_driver(r.service_type) {
+                let _ = std::fs::remove_file(driver_state_path(&name));
+                r.state = SERVICE_STOPPED;
+                if !status.is_null() {
+                    write_status_basic(r, status);
+                }
+                return 1;
             }
             // Try the control channel first (graceful stop).
             if send_control_to_service(&name, SERVICE_CONTROL_STOP).is_ok() {
@@ -772,13 +1018,33 @@ fn dispatcher() -> &'static Mutex<DispatcherState> {
 }
 
 fn control_sock_path(name: &str) -> std::path::PathBuf {
-    let dir = if std::path::Path::new("/run/winlux").exists() {
-        std::path::PathBuf::from("/run/winlux/services")
-    } else {
-        std::env::temp_dir().join("winlux-services")
-    };
-    let _ = std::fs::create_dir_all(&dir);
+    let euid = unsafe { libc::geteuid() };
+    let dir = services_dir(std::path::Path::new("/run/winlux"), euid);
+    let _ = crate::journal::ensure(&dir, euid);
     dir.join(format!("{name}.sock"))
+}
+
+/// Dossier des canaux de contrôle du compte `euid` (#1643) : celui de root
+/// (`services`, 0755) n'est pas ouvert aux autres comptes ; un service lancé
+/// par un compte écrit dans `services-<uid>`, 0700, qui doit lui appartenir
+/// (un dossier posé par un autre compte est refusé, comme pour le journal).
+/// Sans /run/winlux, le dossier temporaire.
+fn services_dir(run: &std::path::Path, euid: u32) -> std::path::PathBuf {
+    let base = if run.exists() {
+        run.to_path_buf()
+    } else {
+        std::env::temp_dir()
+    };
+    let prefix = if run.exists() {
+        "services"
+    } else {
+        "winlux-services"
+    };
+    if euid == 0 {
+        base.join(prefix)
+    } else {
+        base.join(format!("{prefix}-{euid}"))
+    }
 }
 
 static LISTENER_SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -904,7 +1170,15 @@ unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
-        Err(_) => {
+        Err(e) => {
+            // Le service s'arrête alors sur « Accès non autorisé » : dire
+            // quel chemin et pour quel compte (#1643).
+            crate::log_warn!(
+                "services",
+                "service {svc_name} : canal de contrôle {} refusé ({e}), uid {}",
+                sock_path.display(),
+                unsafe { libc::geteuid() }
+            );
             crate::process::set_last_error(ERROR_ACCESS_DENIED as u32);
             return 0;
         }
@@ -1069,9 +1343,37 @@ pub fn autostart() -> Vec<(String, Result<(), u32>)> {
     out
 }
 
-/// `winlux --services autostart|list`.
+/// Démarre un service inscrit, par son nom (fin d'installation MSI, #1626).
+pub fn start_by_name(name: &str) -> Result<(), u32> {
+    let mut r = load_persisted(name).ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+    if is_driver(r.service_type) {
+        return start_driver(&mut r);
+    }
+    refresh(&mut r);
+    if r.state == SERVICE_RUNNING {
+        return Ok(());
+    }
+    let result = spawn_service(&mut r, &[]);
+    lock(services()).insert(r.name.clone(), r);
+    result
+}
+
+/// `winlux --services autostart|list|start NOM…`.
 pub fn cli(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
+        Some("start") if args.len() > 1 => {
+            let mut code = 0;
+            for name in &args[1..] {
+                match start_by_name(name) {
+                    Ok(()) => println!("Service démarré : {name}"),
+                    Err(e) => {
+                        code = 1;
+                        eprintln!("Service {name} : démarrage impossible (erreur {e})");
+                    }
+                }
+            }
+            code
+        }
         Some("autostart") => {
             let mut code = 0;
             for (name, result) in autostart() {
@@ -1107,18 +1409,708 @@ pub fn cli(args: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("usage : winlux --services autostart|list");
+            eprintln!("usage : winlux --services autostart|list|start NOM…");
             2
         }
     }
 }
 
+// ── Lot D du relevé (#1512) : configuration, énumération, verrou ────────
+
+const ERROR_MORE_DATA: u32 = 234;
+const ERROR_INVALID_LEVEL: u32 = 124;
+const SERVICE_NO_CHANGE: u32 = 0xFFFF_FFFF;
+
+/// Tous les services inscrits, état rafraîchi.
+fn all_records() -> Vec<(String, String, u32, u32, u32, u32)> {
+    let mut out = Vec::new();
+    let mut all = lock(services());
+    for name in registered_services() {
+        let key = name.to_lowercase();
+        if !all.contains_key(&key) {
+            if let Some(r) = load_persisted(&name) {
+                all.insert(key.clone(), r);
+            }
+        }
+        if let Some(r) = all.get_mut(&key) {
+            refresh(r);
+            out.push((
+                name.clone(),
+                r.display.clone(),
+                r.service_type,
+                r.state,
+                r.win32_exit_code,
+                r.process_id,
+            ));
+        }
+    }
+    out
+}
+
+fn service_record<T>(service: usize, f: impl FnOnce(&mut ServiceRecord) -> T) -> Result<T, u32> {
+    let Some(ScmHandle::Service(name)) = handle(service) else {
+        return Err(ERROR_INVALID_HANDLE as u32);
+    };
+    let mut all = lock(services());
+    let r = all
+        .get_mut(&name)
+        .ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+    Ok(f(r))
+}
+
+/// Écrit une structure de `head` octets suivie de chaînes UTF-16 placées
+/// en fin de tampon ; `ptrs` donne, pour chaque chaîne, le décalage du
+/// pointeur dans la structure.
+unsafe fn pack(
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    head: &[u8],
+    strings: &[(usize, Option<String>)],
+) -> i32 {
+    let words: Vec<(usize, Option<Vec<u16>>)> = strings
+        .iter()
+        .map(|(o, s)| {
+            (
+                *o,
+                s.as_ref().map(|s| s.encode_utf16().chain([0]).collect()),
+            )
+        })
+        .collect();
+    let total = head.len()
+        + words
+            .iter()
+            .flat_map(|w| &w.1)
+            .map(|w| w.len() * 2)
+            .sum::<usize>();
+    if !needed.is_null() {
+        *needed = total as u32;
+    }
+    if buf.is_null() || (size as usize) < total {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(head.as_ptr(), buf, head.len());
+    let mut at = head.len();
+    for (off, w) in words {
+        let p = match w {
+            Some(w) => {
+                let dst = buf.add(at);
+                std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, dst, w.len() * 2);
+                at += w.len() * 2;
+                dst as usize
+            }
+            None => 0,
+        };
+        std::ptr::write_unaligned(buf.add(off) as *mut usize, p);
+    }
+    1
+}
+
+// QueryServiceConfigW : plus haut, dispositions x64 et x86 (#1585).
+
+/// QueryServiceConfig2W : description (vide), actions en cas d'échec
+/// (aucune), démarrage automatique différé (non).
+pub unsafe extern "win64" fn query_service_config2_w(
+    service: usize,
+    level: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if let Err(e) = service_record(service, |_| ()) {
+        return fail(e);
+    }
+    match level {
+        1 => pack(buf, size, needed, &[0u8; 8], &[(0, Some(String::new()))]),
+        2 => pack(buf, size, needed, &[0u8; 40], &[]),
+        3 => pack(buf, size, needed, &[0u8; 4], &[]),
+        _ => fail(ERROR_INVALID_LEVEL),
+    }
+}
+
+/// ChangeServiceConfigW : type, démarrage, commande et nom affiché
+/// (SERVICE_NO_CHANGE ou NULL laissent la valeur).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn change_service_config_w(
+    service: usize,
+    kind: u32,
+    start: u32,
+    _error_control: u32,
+    path: *const u16,
+    _group: *const u16,
+    tag: *mut u32,
+    _deps: *const u16,
+    _account: *const u16,
+    _password: *const u16,
+    display: *const u16,
+) -> i32 {
+    if !tag.is_null() {
+        *tag = 0;
+    }
+    let result = service_record(service, |r| {
+        if kind != SERVICE_NO_CHANGE {
+            r.service_type = kind;
+        }
+        if start != SERVICE_NO_CHANGE {
+            if start > 4 {
+                return Err(ERROR_INVALID_PARAMETER as u32);
+            }
+            r.start_type = start;
+        }
+        if let Some(p) = opt_w(path) {
+            r.command = p;
+        }
+        if let Some(d) = opt_w(display) {
+            r.display = d;
+        }
+        persist(r).map_err(|e| e as u32)
+    });
+    match result {
+        Ok(Ok(())) => 1,
+        Ok(Err(e)) | Err(e) => fail(e),
+    }
+}
+
+/// ChangeServiceConfig2W : la description, les actions d'échec et le
+/// démarrage différé sont acceptés ; le gestionnaire de Winlux ne
+/// redémarre pas un service tombé et le démarre dès la session.
+pub unsafe extern "win64" fn change_service_config2_w(
+    service: usize,
+    level: u32,
+    info: usize,
+) -> i32 {
+    if let Err(e) = service_record(service, |_| ()) {
+        return fail(e);
+    }
+    match level {
+        1..=3 if info != 0 => 1,
+        1..=3 => fail(ERROR_INVALID_PARAMETER as u32),
+        _ => fail(ERROR_INVALID_LEVEL),
+    }
+}
+
+fn state_wanted(state: u32, filter: u32) -> bool {
+    match filter {
+        1 => state != SERVICE_STOPPED,
+        2 => state == SERVICE_STOPPED,
+        _ => true,
+    }
+}
+
+/// Énumération commune : `entry` octets par service (deux pointeurs puis
+/// le statut), chaînes en fin de tampon.
+#[allow(clippy::too_many_arguments)]
+unsafe fn enum_services(
+    manager: usize,
+    filter: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+    resume: *mut u32,
+    entry: usize,
+    process: bool,
+) -> i32 {
+    if !matches!(handle(manager), Some(ScmHandle::Manager)) {
+        return fail(ERROR_INVALID_HANDLE as u32);
+    }
+    if needed.is_null() || returned.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let start = if resume.is_null() {
+        0
+    } else {
+        *resume as usize
+    };
+    let list: Vec<_> = all_records()
+        .into_iter()
+        .filter(|r| state_wanted(r.3, filter))
+        .skip(start)
+        .collect();
+    let cost = |r: &(String, String, u32, u32, u32, u32)| {
+        entry + (r.0.encode_utf16().count() + r.1.encode_utf16().count() + 2) * 2
+    };
+    let total: usize = list.iter().map(cost).sum();
+    let mut fit = 0;
+    let mut used = 0;
+    for r in &list {
+        if used + cost(r) > size as usize {
+            break;
+        }
+        used += cost(r);
+        fit += 1;
+    }
+    *returned = fit as u32;
+    *needed = (total - used) as u32;
+    if !buf.is_null() {
+        let mut tail = buf.add(fit * entry);
+        for (i, r) in list.iter().take(fit).enumerate() {
+            let e = buf.add(i * entry);
+            std::ptr::write_bytes(e, 0, entry);
+            for (k, s) in [&r.0, &r.1].iter().enumerate() {
+                let w: Vec<u16> = s.encode_utf16().chain([0]).collect();
+                std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, tail, w.len() * 2);
+                std::ptr::write_unaligned(e.add(k * 8) as *mut usize, tail as usize);
+                tail = tail.add(w.len() * 2);
+            }
+            let st = e.add(16);
+            std::ptr::write_unaligned(st as *mut u32, r.2);
+            std::ptr::write_unaligned(st.add(4) as *mut u32, r.3);
+            std::ptr::write_unaligned(st.add(12) as *mut u32, r.4);
+            if process {
+                std::ptr::write_unaligned(st.add(28) as *mut u32, r.5);
+            }
+        }
+    }
+    if fit < list.len() {
+        if !resume.is_null() {
+            *resume = (start + fit) as u32;
+        }
+        return fail(ERROR_MORE_DATA);
+    }
+    if !resume.is_null() {
+        *resume = 0;
+    }
+    1
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn enum_services_status_w(
+    manager: usize,
+    _kind: u32,
+    state: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+    resume: *mut u32,
+) -> i32 {
+    // ENUM_SERVICE_STATUSW : deux pointeurs + SERVICE_STATUS = 48 octets.
+    enum_services(
+        manager, state, buf, size, needed, returned, resume, 48, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn enum_services_status_ex_w(
+    manager: usize,
+    level: u32,
+    _kind: u32,
+    state: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+    resume: *mut u32,
+    _group: *const u16,
+) -> i32 {
+    if level != 0 {
+        return fail(ERROR_INVALID_LEVEL);
+    }
+    // ENUM_SERVICE_STATUS_PROCESSW : deux pointeurs + 36 octets = 56.
+    enum_services(
+        manager, state, buf, size, needed, returned, resume, 56, true,
+    )
+}
+
+/// Aucun service de Winlux ne dépend d'un autre.
+pub unsafe extern "win64" fn enum_dependent_services_w(
+    service: usize,
+    _state: u32,
+    _buf: *mut u8,
+    _size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+) -> i32 {
+    if let Err(e) = service_record(service, |_| ()) {
+        return fail(e);
+    }
+    if !needed.is_null() {
+        *needed = 0;
+    }
+    if !returned.is_null() {
+        *returned = 0;
+    }
+    1
+}
+
+unsafe fn name_lookup(
+    manager: usize,
+    key: *const u16,
+    buf: *mut u16,
+    cch: *mut u32,
+    to_display: bool,
+) -> i32 {
+    if !matches!(handle(manager), Some(ScmHandle::Manager)) {
+        return fail(ERROR_INVALID_HANDLE as u32);
+    }
+    if cch.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let wanted = opt_w(key).unwrap_or_default().to_lowercase();
+    let found = all_records().into_iter().find_map(|r| {
+        if to_display && r.0.to_lowercase() == wanted {
+            Some(r.1)
+        } else if !to_display && r.1.to_lowercase() == wanted {
+            Some(r.0)
+        } else {
+            None
+        }
+    });
+    let Some(text) = found else {
+        return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
+    };
+    let w: Vec<u16> = text.encode_utf16().collect();
+    if buf.is_null() || (*cch as usize) <= w.len() {
+        *cch = w.len() as u32;
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
+    *cch = w.len() as u32;
+    1
+}
+
+pub unsafe extern "win64" fn get_service_display_name_w(
+    m: usize,
+    name: *const u16,
+    buf: *mut u16,
+    cch: *mut u32,
+) -> i32 {
+    name_lookup(m, name, buf, cch, true)
+}
+
+pub unsafe extern "win64" fn get_service_key_name_w(
+    m: usize,
+    name: *const u16,
+    buf: *mut u16,
+    cch: *mut u32,
+) -> i32 {
+    name_lookup(m, name, buf, cch, false)
+}
+
+static DB_LOCK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// LockServiceDatabase : un seul verrou à la fois, dans ce programme.
+pub unsafe extern "win64" fn lock_service_database(manager: usize) -> usize {
+    if !matches!(handle(manager), Some(ScmHandle::Manager)) {
+        fail(ERROR_INVALID_HANDLE as u32);
+        return 0;
+    }
+    let token = NEXT.fetch_add(1, Ordering::Relaxed);
+    if DB_LOCK
+        .compare_exchange(0, token, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        fail(1055); // ERROR_SERVICE_DATABASE_LOCKED
+        return 0;
+    }
+    token
+}
+
+pub extern "win64" fn unlock_service_database(token: usize) -> i32 {
+    if token != 0
+        && DB_LOCK
+            .compare_exchange(token, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    {
+        1
+    } else {
+        fail(1071) // ERROR_INVALID_SERVICE_LOCK
+    }
+}
+
+pub unsafe extern "win64" fn query_service_lock_status_w(
+    manager: usize,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if !matches!(handle(manager), Some(ScmHandle::Manager)) {
+        return fail(ERROR_INVALID_HANDLE as u32);
+    }
+    let locked = DB_LOCK.load(Ordering::Acquire) != 0;
+    let mut head = vec![0u8; 24];
+    head[..4].copy_from_slice(&u32::from(locked).to_le_bytes());
+    let owner = locked.then(crate::paths::user_name);
+    pack(
+        buf,
+        size,
+        needed,
+        &head,
+        &[(8, Some(owner.unwrap_or_default()))],
+    )
+}
+
+/// Descripteur de sécurité d'un service : celui que Winlux donne à tout
+/// objet de l'utilisateur.
+pub unsafe extern "win64" fn query_service_object_security(
+    service: usize,
+    info: u32,
+    sd: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if let Err(e) = service_record(service, |_| ()) {
+        return fail(e);
+    }
+    crate::dlls::security::GetKernelObjectSecurity(service, info, sd, size, needed)
+}
+
+/// Les droits d'un service ne se changent pas (ERROR_ACCESS_DENIED, ce que
+/// rend Windows à un compte sans WRITE_DAC).
+pub unsafe extern "win64" fn set_service_object_security(
+    service: usize,
+    _info: u32,
+    _sd: usize,
+) -> i32 {
+    if let Err(e) = service_record(service, |_| ()) {
+        return fail(e);
+    }
+    fail(ERROR_ACCESS_DENIED as u32)
+}
+
+pub fn releve_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "QueryServiceConfig2W" => fn query_service_config2_w,
+        "ChangeServiceConfigW" => fn change_service_config_w,
+        "ChangeServiceConfig2W" => fn change_service_config2_w,
+        "ChangeServiceConfigA" => fn change_service_config_a,
+        "ChangeServiceConfig2A" => fn change_service_config2_a,
+        "QueryServiceConfigA" => fn query_service_config_a,
+        "EnumDependentServicesA" => fn enum_dependent_services_a,
+        "ControlServiceExW" => fn control_service_ex_w,
+        "EnumServicesStatusW" => fn enum_services_status_w,
+        "EnumServicesStatusExW" => fn enum_services_status_ex_w,
+        "EnumDependentServicesW" => fn enum_dependent_services_w,
+        "GetServiceDisplayNameW" => fn get_service_display_name_w,
+        "GetServiceKeyNameW" => fn get_service_key_name_w,
+        "LockServiceDatabase" => fn lock_service_database,
+        "UnlockServiceDatabase" => fn unlock_service_database,
+        "QueryServiceLockStatusW" => fn query_service_lock_status_w,
+        "QueryServiceObjectSecurity" => fn query_service_object_security,
+        "SetServiceObjectSecurity" => fn set_service_object_security,
+    }
+}
+
+// ── Variantes A et ControlServiceExW (driverinstalltool_64 de Corsair) ──
+
+/// Chaîne ANSI de l'appli en UTF-16 terminée, ou None pour NULL.
+unsafe fn a_to_w(p: *const u8) -> Option<Vec<u16>> {
+    (!p.is_null()).then(|| crate::dlls::cstr(p).encode_utf16().chain(Some(0)).collect())
+}
+
+fn ptr_or_null(v: &Option<Vec<u16>>) -> *const u16 {
+    v.as_ref().map_or(std::ptr::null(), |w| w.as_ptr())
+}
+
+/// ChangeServiceConfigA : chaînes converties, puis ChangeServiceConfigW.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn change_service_config_a(
+    service: usize,
+    kind: u32,
+    start: u32,
+    error_control: u32,
+    path: *const u8,
+    group: *const u8,
+    tag: *mut u32,
+    _deps: *const u8,
+    account: *const u8,
+    password: *const u8,
+    display: *const u8,
+) -> i32 {
+    let (path, group, account, password, display) = (
+        a_to_w(path),
+        a_to_w(group),
+        a_to_w(account),
+        a_to_w(password),
+        a_to_w(display),
+    );
+    change_service_config_w(
+        service,
+        kind,
+        start,
+        error_control,
+        ptr_or_null(&path),
+        ptr_or_null(&group),
+        tag,
+        std::ptr::null(),
+        ptr_or_null(&account),
+        ptr_or_null(&password),
+        ptr_or_null(&display),
+    )
+}
+
+/// ChangeServiceConfig2A : mêmes niveaux que la variante W, dont le
+/// contenu n'est pas relu.
+pub unsafe extern "win64" fn change_service_config2_a(
+    service: usize,
+    level: u32,
+    info: usize,
+) -> i32 {
+    change_service_config2_w(service, level, info)
+}
+
+/// QueryServiceConfigA : QUERY_SERVICE_CONFIGA, mêmes décalages que la
+/// variante W, chaînes en ANSI.
+pub unsafe extern "win64" fn query_service_config_a(
+    service: usize,
+    out: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if needed.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let mut probe = 0u32;
+    query_service_config_w(service, std::ptr::null_mut(), 0, &mut probe);
+    if probe == 0 {
+        return 0; // erreur déjà posée (poignée, service inconnu)
+    }
+    let mut wide = vec![0u64; (probe as usize).div_ceil(8)];
+    let wbuf = wide.as_mut_ptr() as *mut u8;
+    if query_service_config_w(service, wbuf, probe, &mut probe) == 0 {
+        return 0;
+    }
+    let ptr = crate::wow32::pointer_size();
+    let header = if ptr == 4 { 36 } else { 64 };
+    let slots: [usize; 5] = if ptr == 4 {
+        [12, 16, 24, 28, 32]
+    } else {
+        [16, 24, 40, 48, 56]
+    };
+    let read_slot = |slot: usize| -> usize {
+        if ptr == 4 {
+            std::ptr::read_unaligned(wbuf.add(slot) as *const u32) as usize
+        } else {
+            std::ptr::read_unaligned(wbuf.add(slot) as *const usize)
+        }
+    };
+    // Les dépendances (emplacement 2) sont une liste double-zéro, vide ici.
+    let texts: Vec<Vec<u8>> = slots
+        .iter()
+        .enumerate()
+        .map(|(i, &slot)| {
+            if i == 2 {
+                vec![0, 0]
+            } else {
+                let mut a =
+                    crate::dlls::encode_ansi(&crate::dlls::wstr(read_slot(slot) as *const u16));
+                a.push(0);
+                a
+            }
+        })
+        .collect();
+    let total = header + texts.iter().map(Vec::len).sum::<usize>();
+    *needed = total as u32;
+    if out.is_null() || (size as usize) < total {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(wbuf, out, header);
+    let mut at = header;
+    for (slot, text) in slots.iter().zip(texts.iter()) {
+        let p = out.add(at);
+        std::ptr::copy_nonoverlapping(text.as_ptr(), p, text.len());
+        if ptr == 4 {
+            std::ptr::write_unaligned(out.add(*slot) as *mut u32, p as usize as u32);
+        } else {
+            std::ptr::write_unaligned(out.add(*slot) as *mut usize, p as usize);
+        }
+        at += text.len();
+    }
+    1
+}
+
+/// EnumDependentServicesA : comme la variante W, aucun service de Winlux
+/// ne déclare de dépendance.
+pub unsafe extern "win64" fn enum_dependent_services_a(
+    service: usize,
+    state: u32,
+    buf: *mut u8,
+    size: u32,
+    needed: *mut u32,
+    returned: *mut u32,
+) -> i32 {
+    enum_dependent_services_w(service, state, buf, size, needed, returned)
+}
+
+/// ControlServiceExW(hService, dwControl, dwInfoLevel, pControlParams) :
+/// niveau 1, SERVICE_CONTROL_STATUS_REASON_PARAMSW { dwReason;
+/// pszComment; SERVICE_STATUS_PROCESS ServiceStatus } (statut à 16 en
+/// x64, 8 en x86).
+pub unsafe extern "win64" fn control_service_ex_w(
+    service: usize,
+    control: u32,
+    level: u32,
+    params: *mut u8,
+) -> i32 {
+    if level != 1 {
+        return fail(ERROR_INVALID_LEVEL);
+    }
+    if params.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let at = if crate::wow32::pointer_size() == 4 {
+        8
+    } else {
+        16
+    };
+    // SERVICE_STATUS (28 octets) puis dwProcessId et dwServiceFlags.
+    let status = params.add(at);
+    std::ptr::write_bytes(status, 0, 36);
+    control_service(service, control, status)
+}
+
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service,"StartServiceCtrlDispatcherA"=>fn start_service_ctrl_dispatcher_a,"RegisterServiceCtrlHandlerA"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExA"=>fn register_service_ctrl_handler_ex_a,"SetServiceStatus"=>fn set_service_status,"OpenSCManagerW"=>fn open_sc_manager_w,"CreateServiceW"=>fn create_service_w,"OpenServiceW"=>fn open_service_w,"StartServiceW"=>fn start_service_w,"QueryServiceStatus"=>fn query_service_status,"StartServiceCtrlDispatcherW"=>fn start_service_ctrl_dispatcher_w,"RegisterServiceCtrlHandlerW"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExW"=>fn register_service_ctrl_handler_ex_a}
+    crate::exports! {"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service,"StartServiceCtrlDispatcherA"=>fn start_service_ctrl_dispatcher_a,"RegisterServiceCtrlHandlerA"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExA"=>fn register_service_ctrl_handler_ex_a,"SetServiceStatus"=>fn set_service_status,"OpenSCManagerW"=>fn open_sc_manager_w,"CreateServiceW"=>fn create_service_w,"OpenServiceW"=>fn open_service_w,"StartServiceW"=>fn start_service_w,"QueryServiceStatus"=>fn query_service_status,"QueryServiceConfigW"=>fn query_service_config_w,"StartServiceCtrlDispatcherW"=>fn start_service_ctrl_dispatcher_w,"RegisterServiceCtrlHandlerW"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExW"=>fn register_service_ctrl_handler_ex_a}
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn service_retrouve_par_son_environnement() {
+        // Faux /proc : 41 est le service, 42 un autre programme, 43 un zombie.
+        let tmp = std::env::temp_dir().join(format!("winlux-proc-{}", std::process::id()));
+        for (pid, env, state) in [
+            (
+                "41",
+                "HOME=/x\0WINLUX_SERVICE_NAME=CorsairLLAService\0",
+                "S",
+            ),
+            ("42", "HOME=/x\0", "S"),
+            ("43", "WINLUX_SERVICE_NAME=Zombie\0", "Z"),
+        ] {
+            let d = tmp.join(pid);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("environ"), env).unwrap();
+            std::fs::write(d.join("stat"), format!("{pid} (exe) {state} 1")).unwrap();
+        }
+        assert_eq!(super::service_process(&tmp, "corsairllaservice"), Some(41));
+        assert_eq!(super::service_process(&tmp, "Absent"), None);
+        assert_eq!(super::service_process(&tmp, "Zombie"), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn canal_de_controle_par_compte() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("winlux-svcdir-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // root garde le dossier commun ; un compte a le sien (#1643).
+        assert_eq!(super::services_dir(&tmp, 0), tmp.join("services"));
+        assert_eq!(super::services_dir(&tmp, 1000), tmp.join("services-1000"));
+        let euid = unsafe { libc::geteuid() };
+        let mine = super::services_dir(&tmp, euid);
+        assert!(crate::journal::ensure(&mine, euid));
+        let mode = std::fs::metadata(&mine).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, if euid == 0 { 0o755 } else { 0o700 });
+        // Un lien symbolique à la place du dossier est refusé.
+        let link = tmp.join("services-4242");
+        std::os::unix::fs::symlink(&mine, &link).unwrap();
+        assert!(!crate::journal::ensure(&link, 4242));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     use super::*;
     use std::ffi::CString;
     #[test]
@@ -1171,8 +2163,27 @@ mod tests {
             unsafe { std::ptr::read_unaligned(status.as_ptr().add(4) as *const u32) },
             SERVICE_RUNNING
         );
+        // QueryServiceConfigA : chaînes ANSI, commande relue.
+        let mut need = 0u32;
         assert_eq!(
-            unsafe { control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr()) },
+            unsafe { query_service_config_a(service, std::ptr::null_mut(), 0, &mut need) },
+            0
+        );
+        let mut cfg = vec![0u64; (need as usize).div_ceil(8)];
+        let cfg_ptr = cfg.as_mut_ptr() as *mut u8;
+        assert_eq!(
+            unsafe { query_service_config_a(service, cfg_ptr, need, &mut need) },
+            1
+        );
+        let bin = unsafe { std::ptr::read_unaligned(cfg_ptr.add(16) as *const usize) };
+        assert_eq!(
+            unsafe { crate::dlls::cstr(bin as *const u8) },
+            "/bin/sleep 30"
+        );
+        // ControlServiceExW, niveau 1 : statut à 16 octets en x64.
+        let mut params = [0u8; 16 + 36];
+        assert_eq!(
+            unsafe { control_service_ex_w(service, SERVICE_CONTROL_STOP, 1, params.as_mut_ptr()) },
             1
         );
         assert_eq!(unsafe { delete_service(service) }, 1);
@@ -1368,6 +2379,25 @@ mod tests {
                 u32::from_le_bytes(status[4..8].try_into().unwrap()),
                 SERVICE_RUNNING
             );
+            // QueryServiceConfigW (#1585) : taille demandée, puis contenu.
+            let mut needed = 0u32;
+            assert_eq!(
+                unsafe { query_service_config_w(opened, std::ptr::null_mut(), 0, &mut needed) },
+                0
+            );
+            let mut cfg = vec![0u64; (needed as usize).div_ceil(8)];
+            assert_eq!(
+                unsafe {
+                    query_service_config_w(opened, cfg.as_mut_ptr().cast(), needed, &mut needed)
+                },
+                1
+            );
+            assert_eq!(cfg[0] as u32, 0x10);
+            assert_eq!((cfg[0] >> 32) as u32, 2);
+            let text = |slot: usize| unsafe { crate::dlls::wstr(cfg[slot] as *const u16) };
+            assert_eq!(text(2), "/bin/sleep 30");
+            assert_eq!(text(6), "LocalSystem");
+            assert_eq!(text(7), "Service d'essai été");
             // Une seconde fois : déjà lancé, rien n'est relancé.
             assert!(!autostart()
                 .iter()
