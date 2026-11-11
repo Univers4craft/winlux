@@ -53,9 +53,9 @@ lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/vdev_msvc.o
     "$tmp/kernel32_vdev.lib" /out:"$out/vdev_msvc.exe"
 # Installation virtualisée d'un pilote constructeur (#1532).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nCloseHandle\nGetLastError\nDeviceIoControl\n' >"$tmp/kernel32_drv.def"
-printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupCopyOEMInfW\nSetupUninstallOEMInfW\nSetupDiCreateDeviceInfoList\nSetupDiCreateDeviceInfoW\nSetupDiSetDeviceRegistryPropertyW\nSetupDiCallClassInstaller\nSetupDiDestroyDeviceInfoList\nCMP_WaitNoPendingInstallEvents\n' >"$tmp/setupapi_drv.def"
-printf 'LIBRARY cfgmgr32.dll\nEXPORTS\nCM_Locate_DevNodeW\nCM_Request_Device_EjectW\n' >"$tmp/cfgmgr32_drv.def"
-printf 'LIBRARY newdev.dll\nEXPORTS\nDiInstallDriverW\nUpdateDriverForPlugAndPlayDevicesW\n' >"$tmp/newdev_drv.def"
+printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupCopyOEMInfW\nSetupUninstallOEMInfW\nSetupDiCreateDeviceInfoList\nSetupDiCreateDeviceInfoW\nSetupDiSetDeviceRegistryPropertyW\nSetupDiCallClassInstaller\nSetupDiDestroyDeviceInfoList\nCMP_WaitNoPendingInstallEvents\nSetupOpenInfFileW\nSetupCloseInfFile\nSetupFindFirstLineW\nSetupGetStringFieldW\nSetupOpenFileQueue\nSetupScanFileQueueW\nSetupCloseFileQueue\nSetupDiGetINFClassW\nSetupDiClassNameFromGuidExW\nSetupDiGetClassDevsExW\nSetupDiGetDeviceInstallParamsW\nSetupDiSetDeviceInstallParamsW\nSetupDiBuildDriverInfoList\nSetupDiEnumDriverInfoW\nSetupDiGetDriverInfoDetailW\nSetupDiSetSelectedDriverW\nSetupDiDestroyDriverInfoList\n' >"$tmp/setupapi_drv.def"
+printf 'LIBRARY cfgmgr32.dll\nEXPORTS\nCM_Locate_DevNodeW\nCM_Request_Device_EjectW\nCM_Connect_MachineW\nCM_Disconnect_Machine\nCM_Locate_DevNode_ExW\nCM_Get_DevNode_Status_Ex\nCM_Get_First_Log_Conf_Ex\n' >"$tmp/cfgmgr32_drv.def"
+printf 'LIBRARY newdev.dll\nEXPORTS\nDiInstallDriverW\nUpdateDriverForPlugAndPlayDevicesW\nDiUninstallDevice\n' >"$tmp/newdev_drv.def"
 printf 'LIBRARY advapi32.dll\nEXPORTS\nOpenSCManagerW\nOpenServiceW\nCreateServiceW\nStartServiceW\nControlService\nQueryServiceStatus\nDeleteService\nCloseServiceHandle\n' >"$tmp/advapi32_drv.def"
 for d in kernel32_drv setupapi_drv cfgmgr32_drv newdev_drv advapi32_drv; do
     llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"

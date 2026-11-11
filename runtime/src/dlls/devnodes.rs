@@ -85,6 +85,111 @@ pub const PROCESSOR_CLASS: [u8; 16] = guid(
     [0xA6, 0xCC, 0x4C, 0xB3, 0xBE, 0x91, 0x0B, 0x65],
 );
 
+/// Classes d'installation connues : nom, GUID (devguid.h, en-têtes publics
+/// mingw-w64) et description (#1625).
+pub const CLASSES: &[(&str, [u8; 16], &str)] = &[
+    ("HIDClass", HID_CLASS, "Human Interface Devices"),
+    ("USB", USB_CLASS, "Universal Serial Bus controllers"),
+    ("Ports", PORTS_CLASS, "Ports (COM & LPT)"),
+    ("Processor", PROCESSOR_CLASS, "Processors"),
+    (
+        "Keyboard",
+        guid(
+            0x4D36E96B,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Keyboards",
+    ),
+    (
+        "Mouse",
+        guid(
+            0x4D36E96F,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Mice and other pointing devices",
+    ),
+    (
+        "MEDIA",
+        guid(
+            0x4D36E96C,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Sound, video and game controllers",
+    ),
+    (
+        "System",
+        guid(
+            0x4D36E97D,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "System devices",
+    ),
+    (
+        "Net",
+        guid(
+            0x4D36E972,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Network adapters",
+    ),
+    (
+        "Display",
+        guid(
+            0x4D36E968,
+            0xE325,
+            0x11CE,
+            [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
+        ),
+        "Display adapters",
+    ),
+    (
+        "USBDevice",
+        guid(
+            0x88BAE032,
+            0x5A81,
+            0x49F0,
+            [0xBC, 0x3D, 0xA4, 0xFF, 0x13, 0x82, 0x16, 0xD6],
+        ),
+        "Universal Serial Bus devices",
+    ),
+    (
+        "AudioEndpoint",
+        guid(
+            0xC166523C,
+            0xFE0C,
+            0x4A94,
+            [0xA5, 0x86, 0xF1, 0xA8, 0x0C, 0xFB, 0xBF, 0x3E],
+        ),
+        "Audio inputs and outputs",
+    ),
+];
+
+/// Classe connue par son nom (casse indifférente).
+pub fn class_by_name(name: &str) -> Option<[u8; 16]> {
+    CLASSES
+        .iter()
+        .find(|(n, _, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, g, _)| *g)
+}
+
+/// Nom et description d'une classe connue.
+pub fn class_by_guid(g: &[u8; 16]) -> Option<(&'static str, &'static str)> {
+    CLASSES
+        .iter()
+        .find(|(_, c, _)| c == g)
+        .map(|(n, _, d)| (*n, *d))
+}
+
 const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
     let a = a.to_le_bytes();
     let b = b.to_le_bytes();
@@ -95,7 +200,7 @@ const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
     ]
 }
 
-fn guid_text(g: &[u8; 16]) -> String {
+pub(crate) fn guid_text(g: &[u8; 16]) -> String {
     let a = u32::from_le_bytes([g[0], g[1], g[2], g[3]]);
     let b = u16::from_le_bytes([g[4], g[5]]);
     let c = u16::from_le_bytes([g[6], g[7]]);
@@ -834,6 +939,29 @@ pub unsafe fn add_to_set(set: usize, node: Node, data: *mut u8) -> bool {
     true
 }
 
+/// Ajoute à `dst` les nœuds de `src` (absents de `dst`), puis détruit `src`.
+pub fn merge_set(dst: usize, src: usize) -> bool {
+    let mut sets = crate::dlls::lock(&SETS);
+    let Some(i) = sets.iter().position(|(h, _)| *h == src) else {
+        return false;
+    };
+    let (_, extra) = sets.remove(i);
+    let Some((_, nodes)) = sets.iter_mut().find(|(h, _)| *h == dst) else {
+        return false;
+    };
+    for n in extra {
+        if !nodes.iter().any(|m| m.id.eq_ignore_ascii_case(&n.id)) {
+            nodes.push(n);
+        }
+    }
+    true
+}
+
+/// Nœud présent par son identifiant d'instance.
+pub fn node_by_id(id: &str) -> Option<Node> {
+    nodes().into_iter().find(|n| n.id.eq_ignore_ascii_case(id))
+}
+
 /// Modifie le nœud désigné par un SP_DEVINFO_DATA de l'ensemble.
 pub unsafe fn with_set_node<T>(
     set: usize,
@@ -857,7 +985,7 @@ pub fn destroy(set: usize) -> bool {
 }
 
 /// Indice d'un SP_DEVINFO_DATA ou SP_DEVICE_INTERFACE_DATA (champ Reserved).
-unsafe fn reserved_index(data: *const u8) -> usize {
+pub(crate) unsafe fn reserved_index(data: *const u8) -> usize {
     (data.add(24) as *const usize)
         .read_unaligned()
         .wrapping_sub(1)
@@ -950,7 +1078,7 @@ pub unsafe fn interface_detail(
     Some(true)
 }
 
-unsafe fn node_in_set(set: usize, devinfo: *const u8) -> Option<Node> {
+pub(crate) unsafe fn node_in_set(set: usize, devinfo: *const u8) -> Option<Node> {
     if devinfo.is_null() {
         return None;
     }
@@ -966,7 +1094,7 @@ pub unsafe fn registry_property(
 }
 
 /// Copie une chaîne UTF-16 terminée ; `required` en caractères.
-unsafe fn put_wide(s: &str, buf: *mut u16, chars: u32, required: *mut u32) -> bool {
+pub(crate) unsafe fn put_wide(s: &str, buf: *mut u16, chars: u32, required: *mut u32) -> bool {
     let w = wide(s);
     if !required.is_null() {
         *required = w.len() as u32;
@@ -1075,14 +1203,8 @@ pub unsafe extern "win64" fn SetupDiOpenDevRegKey(
     }
 }
 
-unsafe fn class_guids(name: &str, list: *mut u8, size: u32, required: *mut u32) -> i32 {
-    let g = match name.to_ascii_lowercase().as_str() {
-        "ports" => Some(PORTS_CLASS),
-        "hidclass" => Some(HID_CLASS),
-        "usb" => Some(USB_CLASS),
-        "processor" => Some(PROCESSOR_CLASS),
-        _ => None,
-    };
+pub(crate) unsafe fn class_guids(name: &str, list: *mut u8, size: u32, required: *mut u32) -> i32 {
+    let g = class_by_name(name);
     let count = g.is_some() as u32;
     if !required.is_null() {
         *required = count;
@@ -1592,6 +1714,249 @@ pub unsafe extern "win64" fn SetupDiOpenDeviceInterfaceW(
     1
 }
 
+// ---- Variantes _Ex et configurations logiques (#1625) --------------------
+//
+// Winlux ne gère que la machine locale : CM_Connect_MachineW rend une
+// poignée locale pour un nom vide ou local, CR_REMOTE_COMM_FAILURE sinon.
+// Aucun appareil n'a de configuration logique de ressources (ports, IRQ)
+// exposée : CM_Get_First_Log_Conf répond CR_NO_MORE_LOG_CONF.
+
+const CR_INVALID_FLAG: u32 = 0x04;
+const CR_INVALID_RES_DES: u32 = 0x06;
+const CR_INVALID_LOG_CONF: u32 = 0x07;
+const CR_NO_MORE_LOG_CONF: u32 = 0x0E;
+const CR_REMOTE_COMM_FAILURE: u32 = 0x30;
+/// Poignée de la machine locale rendue par CM_Connect_Machine.
+const LOCAL_MACHINE: usize = 0x10CA_1000;
+
+fn is_local_machine(name: &str) -> bool {
+    let n = name.trim_start_matches('\\');
+    if n.is_empty() || n == "." || n.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    n.eq_ignore_ascii_case(host.trim())
+}
+
+pub unsafe extern "win64" fn CM_Connect_MachineW(name: *const u16, out: *mut usize) -> u32 {
+    if out.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let local = name.is_null() || is_local_machine(&crate::dlls::wstr(name));
+    if !local {
+        *out = 0;
+        return CR_REMOTE_COMM_FAILURE;
+    }
+    *out = LOCAL_MACHINE;
+    CR_SUCCESS
+}
+pub unsafe extern "win64" fn CM_Connect_MachineA(name: *const u8, out: *mut usize) -> u32 {
+    if out.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let local = name.is_null() || is_local_machine(&crate::dlls::cstr(name));
+    if !local {
+        *out = 0;
+        return CR_REMOTE_COMM_FAILURE;
+    }
+    *out = LOCAL_MACHINE;
+    CR_SUCCESS
+}
+pub extern "win64" fn CM_Disconnect_Machine(_machine: usize) -> u32 {
+    CR_SUCCESS
+}
+pub unsafe extern "win64" fn CM_Locate_DevNode_ExW(
+    out: *mut u32,
+    id: *const u16,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Locate_DevNodeW(out, id, flags)
+}
+pub unsafe extern "win64" fn CM_Locate_DevNode_ExA(
+    out: *mut u32,
+    id: *const u8,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Locate_DevNodeA(out, id, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_ExW(
+    dn: u32,
+    buf: *mut u16,
+    chars: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_IDW(dn, buf, chars, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_ExA(
+    dn: u32,
+    buf: *mut u8,
+    chars: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_IDA(dn, buf, chars, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Device_ID_Size_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Device_ID_Size(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_DevNode_Status_Ex(
+    status: *mut u32,
+    problem: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_DevNode_Status(status, problem, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Parent_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Parent(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Child_Ex(out: *mut u32, dn: u32, flags: u32, _m: usize) -> u32 {
+    CM_Get_Child(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Sibling_Ex(
+    out: *mut u32,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Sibling(out, dn, flags)
+}
+/// Réénumération : l'arbre est relu à chaque appel, rien à faire.
+pub extern "win64" fn CM_Reenumerate_DevNode(dn: u32, _flags: u32) -> u32 {
+    if node_of(dn).is_some() {
+        CR_SUCCESS
+    } else {
+        CR_NO_SUCH_DEVNODE
+    }
+}
+pub extern "win64" fn CM_Reenumerate_DevNode_Ex(dn: u32, flags: u32, _m: usize) -> u32 {
+    CM_Reenumerate_DevNode(dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_First_Log_Conf(out: *mut usize, dn: u32, flags: u32) -> u32 {
+    if flags > 6 {
+        return CR_INVALID_FLAG;
+    }
+    if !out.is_null() {
+        *out = 0;
+    }
+    if node_of(dn).is_none() {
+        return CR_NO_SUCH_DEVNODE;
+    }
+    CR_NO_MORE_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_First_Log_Conf_Ex(
+    out: *mut usize,
+    dn: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_First_Log_Conf(out, dn, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Next_Log_Conf(out: *mut usize, _lc: usize, _flags: u32) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    CR_INVALID_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_Next_Log_Conf_Ex(
+    out: *mut usize,
+    lc: usize,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Next_Log_Conf(out, lc, flags)
+}
+/// Aucune configuration logique n'est jamais rendue : toute poignée est invalide.
+pub unsafe extern "win64" fn CM_Get_Next_Res_Des(
+    out: *mut usize,
+    _rd: usize,
+    _for_resource: u32,
+    resource_id: *mut u32,
+    _flags: u32,
+) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    if !resource_id.is_null() {
+        *resource_id = 0;
+    }
+    CR_INVALID_LOG_CONF
+}
+pub unsafe extern "win64" fn CM_Get_Next_Res_Des_Ex(
+    out: *mut usize,
+    rd: usize,
+    for_resource: u32,
+    resource_id: *mut u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Next_Res_Des(out, rd, for_resource, resource_id, flags)
+}
+pub extern "win64" fn CM_Get_Res_Des_Data(
+    _rd: usize,
+    _buf: *mut u8,
+    _len: u32,
+    _flags: u32,
+) -> u32 {
+    CR_INVALID_RES_DES
+}
+pub extern "win64" fn CM_Get_Res_Des_Data_Ex(
+    rd: usize,
+    buf: *mut u8,
+    len: u32,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Res_Des_Data(rd, buf, len, flags)
+}
+pub unsafe extern "win64" fn CM_Get_Res_Des_Data_Size(
+    size: *mut u32,
+    _rd: usize,
+    _flags: u32,
+) -> u32 {
+    if size.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    *size = 0;
+    CR_INVALID_RES_DES
+}
+pub unsafe extern "win64" fn CM_Get_Res_Des_Data_Size_Ex(
+    size: *mut u32,
+    rd: usize,
+    flags: u32,
+    _m: usize,
+) -> u32 {
+    CM_Get_Res_Des_Data_Size(size, rd, flags)
+}
+pub extern "win64" fn CM_Free_Log_Conf_Handle(lc: usize) -> u32 {
+    if lc == 0 {
+        CR_INVALID_LOG_CONF
+    } else {
+        CR_SUCCESS
+    }
+}
+pub extern "win64" fn CM_Free_Res_Des_Handle(rd: usize) -> u32 {
+    if rd == 0 {
+        CR_INVALID_RES_DES
+    } else {
+        CR_SUCCESS
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "CM_Get_DevNode_PropertyW" => fn CM_Get_DevNode_PropertyW,
@@ -1615,6 +1980,32 @@ pub fn exports() -> crate::dlls::Exports {
         "CM_Get_DevNode_Registry_PropertyW" => fn CM_Get_DevNode_Registry_PropertyW,
         "CM_Get_Device_Interface_List_SizeW" => fn CM_Get_Device_Interface_List_SizeW,
         "CM_Get_Device_Interface_ListW" => fn CM_Get_Device_Interface_ListW,
+        "CM_Connect_MachineW" => fn CM_Connect_MachineW,
+        "CM_Connect_MachineA" => fn CM_Connect_MachineA,
+        "CM_Disconnect_Machine" => fn CM_Disconnect_Machine,
+        "CM_Locate_DevNode_ExW" => fn CM_Locate_DevNode_ExW,
+        "CM_Locate_DevNode_ExA" => fn CM_Locate_DevNode_ExA,
+        "CM_Get_Device_ID_ExW" => fn CM_Get_Device_ID_ExW,
+        "CM_Get_Device_ID_ExA" => fn CM_Get_Device_ID_ExA,
+        "CM_Get_Device_ID_Size_Ex" => fn CM_Get_Device_ID_Size_Ex,
+        "CM_Get_DevNode_Status_Ex" => fn CM_Get_DevNode_Status_Ex,
+        "CM_Get_Parent_Ex" => fn CM_Get_Parent_Ex,
+        "CM_Get_Child_Ex" => fn CM_Get_Child_Ex,
+        "CM_Get_Sibling_Ex" => fn CM_Get_Sibling_Ex,
+        "CM_Reenumerate_DevNode" => fn CM_Reenumerate_DevNode,
+        "CM_Reenumerate_DevNode_Ex" => fn CM_Reenumerate_DevNode_Ex,
+        "CM_Get_First_Log_Conf" => fn CM_Get_First_Log_Conf,
+        "CM_Get_First_Log_Conf_Ex" => fn CM_Get_First_Log_Conf_Ex,
+        "CM_Get_Next_Log_Conf" => fn CM_Get_Next_Log_Conf,
+        "CM_Get_Next_Log_Conf_Ex" => fn CM_Get_Next_Log_Conf_Ex,
+        "CM_Get_Next_Res_Des" => fn CM_Get_Next_Res_Des,
+        "CM_Get_Next_Res_Des_Ex" => fn CM_Get_Next_Res_Des_Ex,
+        "CM_Get_Res_Des_Data" => fn CM_Get_Res_Des_Data,
+        "CM_Get_Res_Des_Data_Ex" => fn CM_Get_Res_Des_Data_Ex,
+        "CM_Get_Res_Des_Data_Size" => fn CM_Get_Res_Des_Data_Size,
+        "CM_Get_Res_Des_Data_Size_Ex" => fn CM_Get_Res_Des_Data_Size_Ex,
+        "CM_Free_Log_Conf_Handle" => fn CM_Free_Log_Conf_Handle,
+        "CM_Free_Res_Des_Handle" => fn CM_Free_Res_Des_Handle,
     }
 }
 

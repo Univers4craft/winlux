@@ -25,6 +25,15 @@ cat >"$work/essai.inf" <<'INF'
 [Version]
 Signature = "$WINDOWS NT$"
 Class     = HIDClass
+ClassGUID = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider  = %Mfg%
+DriverVer = 07/14/2017,3.3.0.0
+
+[Manufacturer]
+%Mfg% = Modeles, NTamd64
+
+[Modeles.NTamd64]
+%Clavier% = Essai, ROOT\WinluxEssai
 
 [Essai.NTamd64.Services]
 AddService = WinluxEssai, 0x00000002, Essai_Service
@@ -38,6 +47,8 @@ ServiceBinary = %12%\winluxessai.sys
 
 [Strings]
 SvcDesc = "Pilote d'essai de Winlux"
+Mfg     = "Winlux Essais"
+Clavier = "Clavier d'essai"
 INF
 
 cd "$work"
