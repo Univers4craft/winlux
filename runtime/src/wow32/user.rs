@@ -338,12 +338,20 @@ fn wq64(p: usize, off: usize, v: u64) {
     unsafe { ((p + off) as *mut u64).write_unaligned(v) }
 }
 
-/// Pointeur 64 bits qui doit être visible du code x86.
+/// Pointeur 64 bits qui doit être visible du code x86. Une valeur
+/// négative étendue par le signe (HWND_MESSAGE = -3, HWND_TOPMOST…)
+/// passe sans perte une fois tronquée (#1543).
 fn low(v: u64, what: &str) -> u32 {
-    if v > u32::MAX as u64 {
+    if !fits32(v) {
         crate::trace!("wow32 : {what} 0x{v:x} au-dessus de 4 Go, invisible du programme x86");
     }
     v as u32
+}
+
+/// Vrai si la valeur garde son sens en 32 bits : pointeur sous 4 Go ou
+/// petit entier négatif étendu par le signe.
+fn fits32(v: u64) -> bool {
+    (i32::MIN as i64..=u32::MAX as i64).contains(&(v as i64))
 }
 
 /// lParam 64 bits pour le x86 : valeur signée (-1…) ou pointeur sous 4 Go.
@@ -1222,6 +1230,15 @@ mod tests {
         assert_eq!(out, [1, 16, 24, 0x51, 0x52, 0xAAAA_AAAA]);
         let back = iconinfo_from_x86(low as u32);
         assert_eq!(back, [1 | 16 << 32, 24, 0x51, 0x52]);
+    }
+
+    #[test]
+    fn les_poignees_speciales_passent_en_32_bits() {
+        // HWND_MESSAGE (-3), HWND_TOPMOST (-1), pointeur bas : sans perte.
+        assert!(fits32(-3i64 as u64) && fits32(-1i64 as u64) && fits32(0x7fff_0000));
+        assert!(fits32(u32::MAX as u64));
+        assert!(!fits32(0x1_0000_0000) && !fits32(0x5555_0000_1000));
+        assert_eq!(low(-3i64 as u64, "test"), 0xffff_fffd);
     }
 
     #[test]

@@ -4329,7 +4329,7 @@ mod tests {
         backend.set_decorations(hwnd, 0);
         backend.show_window(hwnd, true);
         let pause = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
-        let mut position = |b: &mut X11Backend| {
+        let position = |b: &mut X11Backend| {
             for _ in 0..10 {
                 b.pump();
                 pause(30);

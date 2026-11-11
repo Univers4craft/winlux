@@ -2164,6 +2164,10 @@ class ExtraPages:
 
     def confirm(self, text):
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL, text=text)
+        # Prudence : Entrée annule (#1558), il faut cliquer pour confirmer.
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        cancel = dialog.get_widget_for_response(Gtk.ResponseType.CANCEL)
+        if cancel is not None: cancel.grab_focus()
         answer = dialog.run()
         dialog.destroy()
         return answer == Gtk.ResponseType.OK

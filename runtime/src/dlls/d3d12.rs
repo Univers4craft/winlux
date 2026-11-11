@@ -414,7 +414,8 @@ pub(crate) struct Device {
 
 enum Gpu {
     Vk(Arc<VkContext>),
-    Gl(Mutex<GlBackend>),
+    // En boîte : le contexte GL est bien plus gros que les autres variantes.
+    Gl(Box<Mutex<GlBackend>>),
     Cpu,
 }
 
@@ -4231,7 +4232,7 @@ fn make_gpu() -> Gpu {
     }
     if caps.opengl {
         if let Some(b) = GlBackend::create() {
-            return Gpu::Gl(Mutex::new(b));
+            return Gpu::Gl(Box::new(Mutex::new(b)));
         }
     }
     log_warn!(
@@ -4647,7 +4648,7 @@ mod tests {
             return;
         }
         let Some(b) = GlBackend::create() else { return };
-        let p = unsafe { scenario(Gpu::Gl(Mutex::new(b))) };
+        let p = unsafe { scenario(Gpu::Gl(Box::new(Mutex::new(b)))) };
         assert_eq!(px(&p, 3, 0), [255, 255, 255, 255]);
         assert_eq!(px(&p, 3, 7), [0, 0, 255, 255]);
     }
@@ -5094,7 +5095,7 @@ mod tests {
             return;
         }
         let Some(b) = GlBackend::create() else { return };
-        let p = unsafe { scenario_texture(Gpu::Gl(Mutex::new(b))) };
+        let p = unsafe { scenario_texture(Gpu::Gl(Box::new(Mutex::new(b)))) };
         assert_eq!(px(&p, 3, 1), [255, 0, 0, 255], "haut : rangée rouge");
         assert_eq!(px(&p, 3, 6), [0, 255, 0, 255], "bas : rangée verte");
     }
@@ -5119,7 +5120,7 @@ mod tests {
             return;
         }
         let Some(b) = GlBackend::create() else { return };
-        let p = unsafe { scenario_shaders(Gpu::Gl(Mutex::new(b))) };
+        let p = unsafe { scenario_shaders(Gpu::Gl(Box::new(Mutex::new(b)))) };
         // Décalé d'une demi-hauteur vers le bas par b0 : le bas est couvert.
         // Couleur : constantes racine (1, 1, 0) × table b2 (1, 0, 1) = rouge.
         assert_eq!(px(&p, 3, 7), [255, 0, 0, 255], "bas de l'image");
@@ -5464,7 +5465,7 @@ mod tests {
         }
         for format in [40, 45, 55] {
             let Some(b) = GlBackend::create() else { return };
-            let (px, z) = unsafe { scenario_profondeur(Gpu::Gl(Mutex::new(b)), format) };
+            let (px, z) = unsafe { scenario_profondeur(Gpu::Gl(Box::new(Mutex::new(b))), format) };
             assert_eq!(
                 px,
                 [255, 0, 0, 255],
@@ -5576,7 +5577,7 @@ mod tests {
         assert_eq!(unsafe { scenario_alias(Gpu::Cpu) }, [0, 0, 255, 255]);
         if gpu_caps::caps().opengl {
             if let Some(b) = GlBackend::create() {
-                let px = unsafe { scenario_alias(Gpu::Gl(Mutex::new(b))) };
+                let px = unsafe { scenario_alias(Gpu::Gl(Box::new(Mutex::new(b)))) };
                 assert_eq!(px, [0, 0, 255, 255], "OpenGL");
             }
         }

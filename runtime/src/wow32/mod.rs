@@ -1315,6 +1315,8 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "ucrtbase"
         || n.starts_with("msvcr")
         || n.starts_with("msvcp")
+        // operator new / delete de MFC 4.2 (signtool.exe, #1394).
+        || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
 }
 
@@ -1549,6 +1551,61 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
         "_local_unwind4" if crt => (seh::local_unwind4 as *const () as usize, "iii>v"),
         _ => return None,
     })
+}
+
+/// Noms que seuls les programmes x86 importent et que wow32 sert par ses
+/// passerelles, sans export 64 bits du même nom : `winlux --exports` les
+/// ajoute (« x86:dll ») pour que scripts/compat-imports.py ne les compte
+/// pas comme manquants dans les binaires 32 bits (#1508).
+pub fn x86_only_candidates() -> Vec<(&'static str, String)> {
+    let mut v: Vec<(&'static str, String)> = Vec::new();
+    for crt in ["msvcrt", "ucrtbase"] {
+        for m in [
+            "acos", "asin", "atan", "atan2", "cos", "cosh", "exp", "fmod", "log", "log10", "pow",
+            "sin", "sinh", "sqrt", "tan", "tanh",
+        ] {
+            v.push((crt, format!("_CI{m}")));
+            v.push((crt, format!("_libm_sse2_{m}_precise")));
+        }
+        for f in [
+            "_except1",
+            "_ftol",
+            "_ftol2",
+            "_ftol2_sse",
+            "_adjust_fdiv",
+            "_setjmp3",
+            "_except_handler3",
+            "_except_handler4_common",
+            "_local_unwind2",
+            "_local_unwind4",
+            "_global_unwind2",
+            "??1type_info@@UAE@XZ",
+            "??0exception@@QAE@XZ",
+            "??0exception@@QAE@ABQBD@Z",
+            "??0exception@@QAE@ABV0@@Z",
+            "??1exception@@UAE@XZ",
+            "?what@exception@@UBEPBDXZ",
+            "??0bad_cast@@QAE@ABV0@@Z",
+            "??1bad_cast@@UAE@XZ",
+            "__p___initenv",
+            "__p___winitenv",
+            "__CxxFrameHandler",
+            "__CxxFrameHandler2",
+        ] {
+            v.push((crt, f.to_string()));
+        }
+    }
+    for f in [
+        "InterlockedIncrement",
+        "InterlockedDecrement",
+        "InterlockedExchange",
+        "InterlockedExchangeAdd",
+        "InterlockedCompareExchange",
+    ] {
+        v.push(("kernel32", f.to_string()));
+    }
+    v.retain(|(dll, f)| override_stub(dll, f).is_some());
+    v
 }
 
 /// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en

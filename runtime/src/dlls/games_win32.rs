@@ -659,13 +659,6 @@ unsafe extern "win64" fn PostThreadMessage(
     };
     crate::dlls::gui::post_to_thread(thread, m) as i32
 }
-extern "win64" fn RegisterDeviceNotification(
-    _recipient: usize,
-    _filter: usize,
-    _flags: u32,
-) -> usize {
-    fake_handle()
-}
 unsafe extern "win64" fn wvsprintfA(dst: *mut u8, fmt: *const u8, va: *const u64) -> i32 {
     if dst.is_null() || fmt.is_null() {
         return 0;
@@ -716,9 +709,9 @@ pub fn user32_exports() -> Exports {
         "SetRect" => fn SetRect, "CopyRect" => fn CopyRect, "IsRectEmpty" => fn IsRectEmpty,
         "EqualRect" => fn EqualRect, "InflateRect" => fn InflateRect, "SubtractRect" => fn SubtractRect,
         "PostThreadMessageW" => fn PostThreadMessage, "PostThreadMessageA" => fn PostThreadMessage,
-        "RegisterDeviceNotificationW" => fn RegisterDeviceNotification,
-        "RegisterDeviceNotificationA" => fn RegisterDeviceNotification,
-        "UnregisterDeviceNotification" => fn ok1,
+        "RegisterDeviceNotificationW" => fn crate::dlls::devnotify::RegisterDeviceNotificationW,
+        "RegisterDeviceNotificationA" => fn crate::dlls::devnotify::RegisterDeviceNotificationA,
+        "UnregisterDeviceNotification" => fn crate::dlls::devnotify::UnregisterDeviceNotification,
         "SetWindowRgn" => fn ok1,
         // SetWindowRgn est sans effet : aucune fenêtre n'a de région, donc
         // GetWindowRgn(Box) répond ERROR (0), comme Windows dans ce cas (#747).
@@ -880,22 +873,9 @@ pub fn setupapi_exports() -> Exports {
     }
 }
 
-extern "win64" fn hid_false() -> i32 {
-    set_error(1);
-    0
-}
-/// HIDP_STATUS_INVALID_PREPARSED_DATA.
-extern "win64" fn hidp_invalid() -> u32 {
-    0xC011_0001
-}
-/// Compléments de hid.rs (fonctions qu'il ne fournit pas encore).
+/// Plus aucun complément : hid.rs et hid_report.rs servent tout hid.dll (#1523).
 pub fn hid_exports() -> Exports {
-    crate::exports! {
-        "HidD_GetIndexedString" => fn hid_false,
-        "HidP_GetButtonCaps" => fn hidp_invalid, "HidP_GetValueCaps" => fn hidp_invalid,
-        "HidP_GetData" => fn hidp_invalid, "HidP_GetUsages" => fn hidp_invalid, "HidP_GetUsageValue" => fn hidp_invalid,
-        "HidP_MaxDataListLength" => fn zero, "HidP_MaxUsageListLength" => fn zero,
-    }
+    crate::exports! {}
 }
 
 // =====================================================================

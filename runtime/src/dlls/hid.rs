@@ -24,8 +24,8 @@ use std::sync::Mutex;
 pub const HID_GUID: [u8; 16] = [
     0xB2, 0x55, 0x1E, 0x4D, 0x6F, 0xF1, 0xCF, 0x11, 0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30,
 ];
-const HIDP_STATUS_SUCCESS: u32 = 0x0011_0000;
-const HIDP_STATUS_INVALID_PREPARSED_DATA: u32 = 0xC011_0001;
+const ERROR_ACCESS_DENIED: u32 = 5;
+const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_INVALID_HANDLE: u32 = 6;
 
@@ -40,25 +40,84 @@ fn dev_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/dev"))
 }
 
-/// Un périphérique hidraw.
+/// Un périphérique hidraw, ou une de ses collections de tête : sous Windows,
+/// chaque collection de tête (clavier, contrôles multimédia, interface
+/// fabricant…) est un périphérique HID à part, avec son propre chemin.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HidDevice {
     pub index: u32,
     pub vendor: u16,
     pub product: u16,
     pub version: u16,
+    /// Nom complet du noyau (HID_NAME, souvent « Fabricant Produit »).
     pub name: String,
     pub serial: String,
+    /// Chaînes de l'appareil USB parent, quand il y en a un.
+    pub manufacturer: String,
+    pub product_name: String,
+    /// Numéro d'interface USB (`&mi_NN` du chemin Windows).
+    pub interface: Option<u8>,
+    /// Indices des chaînes USB (iManufacturer, iProduct, iSerialNumber).
+    pub string_indices: [u8; 3],
+    /// Collection de tête, à partir de 1 ; 0 quand l'appareil n'en a qu'une.
+    pub collection: u16,
     pub descriptor: Vec<u8>,
 }
 
 impl HidDevice {
     /// Chemin d'interface Windows.
     pub fn interface_path(&self) -> String {
+        let mut first = format!("vid_{:04x}&pid_{:04x}", self.vendor, self.product);
+        if let Some(mi) = self.interface {
+            first.push_str(&format!("&mi_{mi:02x}"));
+        }
+        if self.collection > 0 {
+            first.push_str(&format!("&col{:02x}", self.collection));
+        }
         format!(
-            "\\\\?\\hid#vid_{:04x}&pid_{:04x}#hidraw{}#{{4d1e55b2-f16f-11cf-88cb-001111000030}}",
-            self.vendor, self.product, self.index
+            "\\\\?\\hid#{first}#hidraw{}#{{4d1e55b2-f16f-11cf-88cb-001111000030}}",
+            self.index
         )
+    }
+    /// Identifiant d'instance Plug and Play (`HID\VID_…&PID_…&MI_…&COL…\HIDRAWn`).
+    pub fn instance_id(&self) -> String {
+        let mut first = format!("VID_{:04X}&PID_{:04X}", self.vendor, self.product);
+        if let Some(mi) = self.interface {
+            first.push_str(&format!("&MI_{mi:02X}"));
+        }
+        if self.collection > 0 {
+            first.push_str(&format!("&COL{:02X}", self.collection));
+        }
+        format!("HID\\{first}\\HIDRAW{}", self.index)
+    }
+    /// Fabricant : chaîne USB, sinon premier mot du nom du noyau.
+    pub fn manufacturer_string(&self) -> String {
+        if !self.manufacturer.is_empty() {
+            return self.manufacturer.clone();
+        }
+        self.name
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    }
+    /// Produit : chaîne USB, sinon le nom du noyau.
+    pub fn product_string(&self) -> String {
+        if !self.product_name.is_empty() {
+            return self.product_name.clone();
+        }
+        self.name.clone()
+    }
+    /// Capacités de la collection de tête de ce périphérique.
+    pub fn tlc(&self) -> crate::dlls::hid_report::Tlc {
+        let mut all =
+            crate::dlls::hid_report::split(&crate::dlls::hid_report::parse(&self.descriptor));
+        let i = (self.collection.max(1) - 1) as usize;
+        if i < all.len() {
+            all.swap_remove(i)
+        } else {
+            all.swap_remove(0)
+        }
     }
     fn load(index: u32) -> Option<HidDevice> {
         let dir = sysfs_root().join(format!("hidraw{index}")).join("device");
@@ -86,11 +145,40 @@ impl HidDevice {
             }
         }
         d.descriptor = std::fs::read(dir.join("report_descriptor")).unwrap_or_default();
+        // Appareil USB : …/1-2/1-2:1.0/0003:VVVV:PPPP.NNNN. Le dossier parent
+        // est l'interface USB, le grand-parent l'appareil.
+        if let Ok(real) = std::fs::canonicalize(&dir) {
+            let read = |p: PathBuf| {
+                std::fs::read_to_string(p)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default()
+            };
+            if let Some(intf) = real.parent() {
+                if let Ok(n) = u8::from_str_radix(&read(intf.join("bInterfaceNumber")), 16) {
+                    d.interface = Some(n);
+                }
+                if let Some(usb) = intf.parent().filter(|_| d.interface.is_some()) {
+                    d.manufacturer = read(usb.join("manufacturer"));
+                    d.product_name = read(usb.join("product"));
+                    if d.serial.is_empty() {
+                        d.serial = read(usb.join("serial"));
+                    }
+                    d.version = u16::from_str_radix(&read(usb.join("bcdDevice")), 16).unwrap_or(0);
+                    // Descripteur d'appareil USB : iManufacturer, iProduct,
+                    // iSerialNumber aux octets 14, 15 et 16.
+                    if let Ok(raw) = std::fs::read(usb.join("descriptors")) {
+                        if raw.len() >= 18 {
+                            d.string_indices = [raw[14], raw[15], raw[16]];
+                        }
+                    }
+                }
+            }
+        }
         Some(d)
     }
 }
 
-/// Périphériques hidraw présents, triés par numéro.
+/// Périphériques hidraw présents, triés par numéro (un par nœud hidraw).
 pub fn devices() -> Vec<HidDevice> {
     let mut idx: Vec<u32> = std::fs::read_dir(sysfs_root())
         .map(|rd| {
@@ -103,18 +191,48 @@ pub fn devices() -> Vec<HidDevice> {
     idx.into_iter().filter_map(HidDevice::load).collect()
 }
 
-/// Chemin Linux d'un chemin d'interface HID passé à CreateFile.
-pub fn device_path(path: &str) -> Option<PathBuf> {
+/// Interfaces HID vues par setupapi : une par collection de tête.
+pub fn interfaces() -> Vec<HidDevice> {
+    let mut out = Vec::new();
+    for d in devices() {
+        out.extend(split_collections(d));
+    }
+    out
+}
+
+fn split_collections(d: HidDevice) -> Vec<HidDevice> {
+    let n = crate::dlls::hid_report::parse(&d.descriptor).tlcs.len();
+    if n <= 1 {
+        return vec![d];
+    }
+    (1..=n as u16)
+        .map(|c| HidDevice {
+            collection: c,
+            ..d.clone()
+        })
+        .collect()
+}
+
+/// Numéro hidraw et collection de tête d'un chemin d'interface HID.
+pub fn parse_path(path: &str) -> Option<(u32, u16)> {
     let lower = path.to_ascii_lowercase();
     let rest = lower
         .strip_prefix("\\\\?\\hid#")
         .or_else(|| lower.strip_prefix("\\\\.\\hid#"))?;
-    let index: u32 = rest
-        .split('#')
-        .nth(1)?
-        .strip_prefix("hidraw")?
-        .parse()
-        .ok()?;
+    let mut parts = rest.split('#');
+    let first = parts.next()?;
+    let index: u32 = parts.next()?.strip_prefix("hidraw")?.parse().ok()?;
+    let collection = first
+        .split('&')
+        .find_map(|p| u16::from_str_radix(p.strip_prefix("col")?, 16).ok())
+        .unwrap_or(0);
+    Some((index, collection))
+}
+
+/// Chemin Linux d'un chemin d'interface HID passé à CreateFile.
+#[cfg(test)]
+pub fn device_path(path: &str) -> Option<PathBuf> {
+    let (index, _) = parse_path(path)?;
     Some(dev_root().join(format!("hidraw{index}")))
 }
 
@@ -128,10 +246,19 @@ pub fn device_path(path: &str) -> Option<PathBuf> {
 // un rapport) relié au vrai /dev/hidrawN par un fil qui ajoute ou retire
 // cet octet. Les lectures asynchrones (OVERLAPPED), l'annulation et la
 // fermeture passent ainsi par le chemin existant des sockets.
+//
+// Quand l'appareil a plusieurs collections de tête, le relais ne transmet
+// que les rapports d'entrée de la collection ouverte, comme Windows.
+//
+// Une ouverture sans droit d'accès (dwDesiredAccess = 0), que hidapi et les
+// logiciels de matériel font pour lire les attributs d'un clavier ou d'une
+// souris, réussit même quand /dev/hidrawN est fermé à l'utilisateur : le
+// handle sert alors aux fonctions HidD_Get*/HidP_*, pas aux rapports.
 
 struct Opened {
     inode: u64,
     device: HidDevice,
+    /// Descripteur du vrai hidraw, -1 pour un handle d'attributs seulement.
     raw: i32,
 }
 static OPENED: Mutex<Vec<Opened>> = Mutex::new(Vec::new());
@@ -141,15 +268,49 @@ fn inode_of(fd: i32) -> Option<u64> {
     (unsafe { libc::fstat(fd, &mut st) } == 0).then_some(st.st_ino as u64)
 }
 
-/// Ouvre `/dev/hidrawN` et rend le bout « programme » du relais.
-pub fn open(dev: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
-    let index: u32 = dev
-        .file_name()
-        .and_then(|n| n.to_str()?.strip_prefix("hidraw")?.parse().ok())
-        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-    let device =
+fn register(inode: u64, device: HidDevice, raw: i32) {
+    let mut opened = crate::dlls::lock(&OPENED);
+    // Un inode libéré peut être réutilisé : l'ancienne entrée est morte.
+    opened.retain(|o| o.inode != inode);
+    opened.push(Opened { inode, device, raw });
+}
+
+/// GENERIC_READ, GENERIC_WRITE, GENERIC_ALL, FILE_READ_DATA, FILE_WRITE_DATA.
+fn wants_data(access: u32) -> bool {
+    access & (0x8000_0000 | 0x4000_0000 | 0x1000_0000 | 0x1 | 0x2) != 0
+}
+
+/// Ouvre le périphérique désigné par un chemin d'interface Windows.
+pub fn open_path(path: &str, access: u32) -> std::io::Result<std::fs::File> {
+    let (index, collection) =
+        parse_path(path).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    let base =
         HidDevice::load(index).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    let device = split_collections(base)
+        .into_iter()
+        .find(|d| d.collection == collection)
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    let dev = dev_root().join(format!("hidraw{index}"));
+    match open_device(&dev, device.clone()) {
+        Ok(f) => Ok(f),
+        Err(e) if !wants_data(access) => attributes_only(device).map_err(|_| e),
+        Err(e) => Err(e),
+    }
+}
+
+/// Handle sans accès aux rapports : un memfd vide, propre à ce handle.
+fn attributes_only(device: HidDevice) -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::FromRawFd;
+    let fd = unsafe { libc::memfd_create(c"winlux-hid".as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    register(inode_of(fd).unwrap_or(0), device, -1);
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+fn open_device(dev: &std::path::Path, device: HidDevice) -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
     let raw = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -171,13 +332,15 @@ pub fn open(dev: &std::path::Path) -> std::io::Result<std::fs::File> {
         return Err(e);
     }
     let (app, pump) = (pair[0], pair[1]);
-    let prefix = !parse_descriptor(&device.descriptor).report_ids;
-    let inode = inode_of(app).unwrap_or(0);
-    crate::dlls::lock(&OPENED).push(Opened { inode, device, raw });
+    let desc = crate::dlls::hid_report::parse(&device.descriptor);
+    let prefix = !desc.report_ids;
+    // Filtre des rapports d'entrée : seulement s'il y a plusieurs collections.
+    let filter: Option<Vec<u8>> = (device.collection > 0).then(|| device.tlc().input_ids);
+    register(inode_of(app).unwrap_or(0), device, raw);
     let spawned = std::thread::Builder::new()
         .name("winlux-hid".into())
         .spawn(move || {
-            relay(raw, pump, prefix);
+            relay(raw, pump, prefix, filter.as_deref());
             crate::dlls::lock(&OPENED).retain(|o| o.raw != raw);
             unsafe {
                 libc::close(pump);
@@ -198,7 +361,7 @@ pub fn open(dev: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 /// Recopie les rapports dans les deux sens jusqu'à la fermeture du handle
 /// (ou le débranchement de l'appareil).
-fn relay(raw: i32, pump: i32, prefix: bool) {
+fn relay(raw: i32, pump: i32, prefix: bool, filter: Option<&[u8]>) {
     let mut buf = [0u8; 4097];
     loop {
         let mut fds = [
@@ -231,6 +394,9 @@ fn relay(raw: i32, pump: i32, prefix: bool) {
                 return; // appareil débranché
             }
             buf[0] = if prefix { 0 } else { buf[0] };
+            if filter.is_some_and(|ids| !ids.contains(&buf[0])) {
+                continue; // rapport d'une autre collection de tête
+            }
             unsafe {
                 libc::send(
                     pump,
@@ -412,10 +578,9 @@ unsafe fn put_string(buf: *mut u16, bytes: u32, s: &str) -> u8 {
     1
 }
 
-/// Nom du produit (HID_NAME contient souvent « Fabricant Produit »).
 pub unsafe extern "win64" fn HidD_GetProductString(handle: usize, buf: *mut u16, bytes: u32) -> u8 {
     match device_of_handle(handle) {
-        Some((d, _)) => put_string(buf, bytes, &d.name),
+        Some((d, _)) => put_string(buf, bytes, &d.product_string()),
         None => 0,
     }
 }
@@ -425,10 +590,7 @@ pub unsafe extern "win64" fn HidD_GetManufacturerString(
     bytes: u32,
 ) -> u8 {
     match device_of_handle(handle) {
-        Some((d, _)) => {
-            let maker = d.name.split_whitespace().next().unwrap_or("").to_string();
-            put_string(buf, bytes, &maker)
-        }
+        Some((d, _)) => put_string(buf, bytes, &d.manufacturer_string()),
         None => 0,
     }
 }
@@ -442,14 +604,41 @@ pub unsafe extern "win64" fn HidD_GetSerialNumberString(
         None => 0,
     }
 }
-
-/// Données « préanalysées » : une copie des capacités, rendue par pointeur.
-#[repr(C)]
-struct Preparsed {
-    magic: u64,
-    caps: Caps,
+/// Chaîne USB par son indice. Linux expose les trois chaînes de
+/// l'appareil (fabricant, produit, numéro de série) ; les autres indices
+/// ne sont pas lisibles sans accès usbfs.
+pub unsafe extern "win64" fn HidD_GetIndexedString(
+    handle: usize,
+    index: u32,
+    buf: *mut u16,
+    bytes: u32,
+) -> u8 {
+    let Some((d, _)) = device_of_handle(handle) else {
+        crate::process::set_last_error(ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let text = match d
+        .string_indices
+        .iter()
+        .position(|&i| i != 0 && u32::from(i) == index)
+    {
+        Some(0) => d.manufacturer_string(),
+        Some(1) => d.product_string(),
+        Some(2) => d.serial.clone(),
+        _ => String::new(),
+    };
+    if text.is_empty() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    put_string(buf, bytes, &text)
 }
-const PREPARSED_MAGIC: u64 = 0x5749_4E4C_5848_4944; // « WINLXHID »
+/// Descripteur physique (rarissime) : absent, comme sur la plupart des
+/// appareils.
+pub extern "win64" fn HidD_GetPhysicalDescriptor(_handle: usize, _buf: usize, _len: u32) -> u8 {
+    crate::process::set_last_error(1); // ERROR_INVALID_FUNCTION
+    0
+}
 
 pub unsafe extern "win64" fn HidD_GetPreparsedData(handle: usize, out: *mut usize) -> u8 {
     let Some((d, _)) = device_of_handle(handle) else {
@@ -459,43 +648,18 @@ pub unsafe extern "win64" fn HidD_GetPreparsedData(handle: usize, out: *mut usiz
     if out.is_null() {
         return 0;
     }
-    let p = Box::new(Preparsed {
-        magic: PREPARSED_MAGIC,
-        caps: parse_descriptor(&d.descriptor),
-    });
-    *out = Box::into_raw(p) as usize;
+    let p = crate::dlls::hid_report::preparsed_into_raw(d.tlc());
+    if crate::wow32::active() {
+        // Programme 32 bits : la valeur est un pointeur de 4 octets.
+        (out as *mut u32).write_unaligned(p as u32);
+    } else {
+        *out = p;
+    }
     1
 }
 
 pub unsafe extern "win64" fn HidD_FreePreparsedData(data: usize) -> u8 {
-    let p = data as *mut Preparsed;
-    if p.is_null() || (*p).magic != PREPARSED_MAGIC {
-        return 0;
-    }
-    (*p).magic = 0;
-    drop(Box::from_raw(p));
-    1
-}
-
-/// HIDP_CAPS (64 octets).
-pub unsafe extern "win64" fn HidP_GetCaps(data: usize, out: *mut u16) -> u32 {
-    let p = data as *const Preparsed;
-    if p.is_null() || (*p).magic != PREPARSED_MAGIC || out.is_null() {
-        return HIDP_STATUS_INVALID_PREPARSED_DATA;
-    }
-    let c = (*p).caps;
-    std::ptr::write_bytes(out, 0, 32);
-    *out = c.usage;
-    *out.add(1) = c.usage_page;
-    *out.add(2) = c.input_len;
-    *out.add(3) = c.output_len;
-    *out.add(4) = c.feature_len;
-    // Après Reserved[17] : NumberLinkCollectionNodes, puis les compteurs.
-    *out.add(22) = 1;
-    *out.add(23) = u16::from(c.input_buttons > 0);
-    *out.add(24) = c.input_values;
-    *out.add(25) = c.input_buttons + c.input_values;
-    HIDP_STATUS_SUCCESS
+    u8::from(crate::dlls::hid_report::preparsed_free(data))
 }
 
 /// Rapports par ioctl hidraw (HIDIOCSFEATURE, HIDIOCGFEATURE, HIDIOCGINPUT,
@@ -505,12 +669,21 @@ unsafe fn report_ioctl(handle: usize, nr: u64, buf: *mut u8, len: u32) -> u8 {
         crate::process::set_last_error(ERROR_INVALID_HANDLE);
         return 0;
     };
+    if fd < 0 {
+        crate::process::set_last_error(ERROR_ACCESS_DENIED);
+        return 0;
+    }
     if buf.is_null() || len == 0 {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
     let req = (3u64 << 30) | ((len as u64 & 0x3FFF) << 16) | ((b'H' as u64) << 8) | nr;
-    u8::from(libc::ioctl(fd, req as _, buf) >= 0)
+    if libc::ioctl(fd, req as _, buf) >= 0 {
+        1
+    } else {
+        crate::process::set_last_error(ERROR_GEN_FAILURE);
+        0
+    }
 }
 pub unsafe extern "win64" fn HidD_SetFeature(handle: usize, buf: *mut u8, len: u32) -> u8 {
     report_ioctl(handle, 0x06, buf, len)
@@ -538,17 +711,25 @@ pub unsafe extern "win64" fn HidD_GetNumInputBuffers(_handle: usize, count: *mut
 pub extern "win64" fn HidD_FlushQueue(handle: usize) -> u8 {
     u8::from(device_of_handle(handle).is_some())
 }
+/// HIDD_CONFIGURATION : rien de configurable côté Winlux.
+pub extern "win64" fn HidD_GetConfiguration(handle: usize, _cfg: usize, _len: u32) -> u8 {
+    u8::from(device_of_handle(handle).is_some())
+}
+pub extern "win64" fn HidD_SetConfiguration(handle: usize, _cfg: usize, _len: u32) -> u8 {
+    u8::from(device_of_handle(handle).is_some())
+}
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut e = crate::exports! {
         "HidD_GetHidGuid" => fn HidD_GetHidGuid,
         "HidD_GetAttributes" => fn HidD_GetAttributes,
         "HidD_GetProductString" => fn HidD_GetProductString,
         "HidD_GetManufacturerString" => fn HidD_GetManufacturerString,
         "HidD_GetSerialNumberString" => fn HidD_GetSerialNumberString,
+        "HidD_GetIndexedString" => fn HidD_GetIndexedString,
+        "HidD_GetPhysicalDescriptor" => fn HidD_GetPhysicalDescriptor,
         "HidD_GetPreparsedData" => fn HidD_GetPreparsedData,
         "HidD_FreePreparsedData" => fn HidD_FreePreparsedData,
-        "HidP_GetCaps" => fn HidP_GetCaps,
         "HidD_SetFeature" => fn HidD_SetFeature,
         "HidD_GetFeature" => fn HidD_GetFeature,
         "HidD_GetInputReport" => fn HidD_GetInputReport,
@@ -556,7 +737,11 @@ pub fn exports() -> crate::dlls::Exports {
         "HidD_SetNumInputBuffers" => fn HidD_SetNumInputBuffers,
         "HidD_GetNumInputBuffers" => fn HidD_GetNumInputBuffers,
         "HidD_FlushQueue" => fn HidD_FlushQueue,
-    }
+        "HidD_GetConfiguration" => fn HidD_GetConfiguration,
+        "HidD_SetConfiguration" => fn HidD_SetConfiguration,
+    };
+    e.extend(crate::dlls::hid_report::exports());
+    e
 }
 
 #[cfg(test)]

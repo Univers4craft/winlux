@@ -58,6 +58,14 @@ juridiquement irréprochable, il se fait en « salle blanche » :
   désassemblage d'un programme tiers testé (PuTTY, un jeu…) reste permis
   pour comprendre ce qu'il attend de Winlux, jamais pour copier du code
   Microsoft qu'il contiendrait.
+- **Ordinaux** : quand un programme importe une DLL système par numéro,
+  la table numéro → nom se lit dans la bibliothèque d'importation (`.lib`)
+  du SDK Windows public, par exemple celle du paquet NuGet
+  `Microsoft.Windows.SDK.CPP.x64`. On n'en lit que les noms et les numéros,
+  avec un script à nous, et on ne copie dans le dépôt que la table qu'on
+  écrit soi-même. Le paquet, sa version, son sha256 et les fichiers lus sont
+  notés dans le commit et la PR (#1392). Les `.def` de mingw-w64 générés
+  depuis Wine, et les tables d'exports des DLL de Windows, restent exclus.
 - **Textes** : les messages, libellés et boîtes de dialogue sont rédigés par
   Winlux, jamais recopiés mot pour mot de Windows. Les noms d'API, de
   constantes et de structures, ainsi que les codes d'erreur, ne sont pas
@@ -68,6 +76,33 @@ juridiquement irréprochable, il se fait en « salle blanche » :
   généré (exemple : `runtime/src/msi/testdata/`).
 - En cas de doute sur l'origine d'une information ou d'un fichier, ne pas
   l'utiliser et le signaler.
+
+### Logiciels constructeurs de périphériques (#1531, décision du 10/11/2026)
+
+Pour faire fonctionner les logiciels d'éclairage, de souris, de claviers et
+de casques (iCUE, Synapse, G HUB, SteelSeries GG…), l'observation de leur
+fonctionnement est permise **dans le seul but de l'interopérabilité**, dans
+le cadre du droit de l'Union européenne (directive 2009/24/CE, art. 5 § 3 :
+observer, étudier et tester le fonctionnement d'un programme qu'on a le droit
+d'utiliser) :
+
+- **Permis** : journaliser, avec le runtime Winlux, ce que le logiciel envoie
+  à notre propre appareil virtuel (`DeviceIoControl`, rapports HID) ou au
+  périphérique USB, y compris quand l'appareil virtuel se présente avec le
+  VID:PID et un descripteur HID tirés d'une source publique ou d'un pilote
+  libre.
+- **Interdit** : désassembler ou décompiler un binaire de la marque ou de
+  Microsoft ; copier un de leurs fichiers dans le dépôt ; extraire une
+  ressource ou du code d'un installeur. La tolérance ci-dessus pour les
+  « programmes tiers testés » ne s'applique pas à ces logiciels.
+- **Résultat** : uniquement nos propres tables de traduction, écrites par
+  nous. Chaque PR concernée rappelle ce cadre et note la provenance et la
+  méthode (logiciel, version, éditeur, source officielle, SHA-256 de
+  l'installeur, ce qui a été journalisé).
+- **Installeurs téléchargés** : données non fiables. Dossier vide dédié,
+  scripts ailleurs, chemins passés en arguments, Python avec `-I`. Jamais
+  ajoutés au dépôt.
+- Le reste du projet garde la règle des sources publiques ci-dessus.
 
 ## Marque et vocabulaire
 

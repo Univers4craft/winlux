@@ -594,7 +594,10 @@ pub unsafe extern "win64" fn aligned_malloc(size: usize, align: usize) -> *mut c
     p
 }
 pub unsafe extern "win64" fn aligned_free(p: *mut c_void) {
-    libc::free(p)
+    match crate::dlls::crt_releve::take_offset_block(p as usize) {
+        Some(base) => libc::free(base as *mut c_void),
+        None => libc::free(p),
+    }
 }
 pub unsafe extern "win64" fn aligned_realloc(
     p: *mut c_void,
