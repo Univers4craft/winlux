@@ -162,7 +162,8 @@ unsafe fn control(sd: *const u8) -> u16 {
 /// descripteur absolu ou auto-relatif.
 unsafe fn part(sd: *const u8, index: usize) -> *mut u8 {
     if control(sd) & SE_SELF_RELATIVE == 0 {
-        std::ptr::read_unaligned(sd.add(8 + index * 8) as *const *mut u8)
+        // Places x86 ou x64 selon le programme (#1881).
+        crate::dlls::security::read_abs_slot(sd, 4 + index * 4)
     } else {
         let off = std::ptr::read_unaligned(sd.add(4 + index * 4) as *const u32) as usize;
         if off == 0 {
@@ -272,8 +273,9 @@ pub unsafe extern "win64" fn SetSecurityDescriptorSacl(
         }
     }
     std::ptr::write_unaligned(sd.add(2) as *mut u16, c);
-    std::ptr::write_unaligned(
-        sd.add(24) as *mut *mut u8,
+    crate::dlls::security::write_abs_slot(
+        sd,
+        12,
         if present != 0 {
             sacl
         } else {
