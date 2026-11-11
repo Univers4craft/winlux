@@ -234,6 +234,7 @@ pub mod setupinf;
 pub mod sfnt;
 pub mod shcore_obsolete;
 pub mod shell32;
+pub mod shell32_ansi;
 pub mod shell32_releve;
 pub mod shell_folder_com;
 pub mod shell_link;
