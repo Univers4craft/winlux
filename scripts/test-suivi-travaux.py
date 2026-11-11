@@ -102,6 +102,63 @@ def main():
         check(data is not None and data["executions"] == [] and "OCR impossible" in casse.stdout,
               "OCR en échec : capture refusée, construction menée à son terme (#1829)")
 
+        # Galerie reprise d'une publication précédente quand l'OCR manque (#1871).
+        import io, tarfile, zipfile
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            def ajoute(nom, donnees, **kw):
+                info = tarfile.TarInfo(nom)
+                info.size = len(donnees)
+                for k, v in kw.items():
+                    setattr(info, k, v)
+                tar.addfile(info, io.BytesIO(donnees))
+            ajoute("./fr/suivi.html", b"<html>")
+            ajoute("./suivi/data.json", json.dumps({"executions": [{"images": [{"nom": "parametres-02"}]}]}).encode())
+            ajoute("./suivi/img/0123456789abcdef.webp", b"RIFF-img")
+            ajoute("./suivi/min/0123456789abcdef.webp", b"RIFF-min")
+            ajoute("./suivi/../../evade.webp", b"x")
+            ajoute("./suivi/img/notes.txt", b"x")
+            lien = tarfile.TarInfo("./suivi/img/fedcba9876543210.webp")
+            lien.type, lien.linkname = tarfile.SYMTYPE, "/etc/passwd"
+            tar.addfile(lien)
+        archive = tmp / "pages.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("artifact.tar", tar_buf.getvalue())
+        reprise = tmp / "reprise" / "suivi"
+        prec = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y", str(reprise),
+                               "--archive", str(archive)], capture_output=True, text=True)
+        fichiers = sorted(p.relative_to(tmp / "reprise").as_posix() for p in (tmp / "reprise").rglob("*") if p.is_file())
+        check(prec.returncode == 0 and fichiers == ["suivi/data.json", "suivi/img/0123456789abcdef.webp",
+                                                   "suivi/min/0123456789abcdef.webp"]
+              and not (tmp / "evade.webp").exists()
+              and json.loads((reprise / "data.json").read_text(encoding="utf-8")).get("reprise") is True,
+              f"galerie précédente reprise, sans lien ni chemin sortant (#1871) ({fichiers})")
+        vide = tmp / "vide.zip"
+        with zipfile.ZipFile(vide, "w") as z:
+            z.writestr("artifact.tar", b"")
+        sans = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y",
+                               str(tmp / "sans"), "--archive", str(vide)], capture_output=True, text=True)
+        check(sans.returncode == 1, "archive sans galerie : rien de repris, code 1 (#1871)")
+
+        # Vignette recadrée sur une petite fenêtre posée sur un bureau noir (#1925).
+        import importlib.util
+        from PIL import Image
+        spec = importlib.util.spec_from_file_location("suivi_travaux", HERE / "suivi-travaux.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        quatre_k = Image.new("RGB", (3840, 2160), (0, 0, 0))
+        quatre_k.paste(Image.new("RGB", (600, 700), (240, 240, 245)), (3100, 1300))
+        boite = module.cadrage(quatre_k)
+        check(boite is not None and boite[0] <= 3100 and boite[1] <= 1300 and boite[2] >= 3700 and boite[3] >= 2000
+              and boite[2] <= 3840 and boite[3] <= 2160 and abs((boite[2] - boite[0]) / (boite[3] - boite[1]) - 1.6) < 0.01
+              and (boite[2] - boite[0]) < 1600,
+              f"4K à fond noir : vignette recadrée sur la fenêtre, en 16:10 (#1925) ({boite})")
+        bureau = Image.new("RGB", (1920, 1080), (40, 60, 120))
+        bureau.paste(Image.new("RGB", (1920, 48), (20, 20, 30)), (0, 1032))
+        bureau.paste(Image.new("RGB", (1200, 800), (240, 240, 245)), (300, 100))
+        check(module.cadrage(bureau) is None and module.cadrage(Image.new("RGB", (800, 500))) is None,
+              "capture remplie ou vide : vignette de l'image entière (#1925)")
+
         # Page index.html de l'artefact captures-ui.
         artefact = work / "102" / "images"
         (artefact / "r.json").write_text('{"ecrans": {"parametres-02": 3.5}}', encoding="utf-8")

@@ -40,6 +40,10 @@
       var runs = data && data.executions;
       if (!runs || !runs.length) { empty(); return; }
       box.textContent = "";
+      // Date des captures les plus récentes, et avertissement quand la CI n'a
+      // pu que reprendre la galerie précédente (#1871).
+      if (data.genere) box.appendChild(el("p", "suivi-meta muted", box.getAttribute("data-updated") + " " + when(data.genere)));
+      if (data.reprise) box.appendChild(el("p", "suivi-failed", box.getAttribute("data-stale")));
       runs.forEach(function (run) {
         var sec = el("section", "suivi-run");
         var head = el("h2");
