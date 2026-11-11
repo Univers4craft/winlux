@@ -2,7 +2,7 @@
 # Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
 # fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
 audio_com.rs	Iface	x86	interface WASAPI (mmdevapi) : mandataire x86 décrit dans wow32/com.rs (IMMDeviceEnumerator…) ; wasapi32.c
-cabinet_lz.rs	FdiNotification	a-verifier	
+cabinet_lz.rs	FdiNotification	x86	disposition x86 de 40 octets écrite par x86_notification (#1758)
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
@@ -153,6 +153,8 @@ gui.rs	WndClassA	a-verifier
 gui.rs	WndClassExA	a-verifier	
 gui_x11.rs	XftFont	a-verifier	
 icons.rs	IconInfo	a-verifier	
+icuuc.rs	FromUArgs	interne	UConverterFromUnicodeArgs d'ICU (#1792), x64 seulement : icuuc n'est servi qu'aux programmes 64 bits (Qt6Core)
+icuuc.rs	ToUArgs	interne	UConverterToUnicodeArgs d'ICU (#1792), x64 seulement : icuuc n'est servi qu'aux programmes 64 bits (Qt6Core)
 image_list_com.rs	Obj	interne	objet IImageList d'une liste système ; en x86 seul le handle sert (ImageList_*), pas la table de méthodes
 jumplist_com.rs	Coll	interne	objet IObjectCollection du runtime ; en x86, la passerelle COM (wow32/com.rs, IOBJECTCOLLECTION) l'enveloppe
 jumplist_com.rs	Obj	interne	objets ICustomDestinationList et IObjectArray du runtime ; en x86, la passerelle COM (wow32/com.rs) les enveloppe
@@ -182,6 +184,8 @@ msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TS
 msctf_profiles.rs	Profiles	interne	objet COM du runtime (TF_InputProcessorProfiles) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msvcp140.rs	Thrd	a-verifier	
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
+netlistmgr.rs	Enum	interne	objet COM du runtime (énumération vide de réseaux) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
+netlistmgr.rs	Manager	interne	objet COM du runtime (NetworkListManager) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
 ole32.rs	ComStream	a-verifier	
 ole32.rs	ContextVtbl	a-verifier	
 ole32.rs	Factory	a-verifier	

@@ -37,6 +37,7 @@ CheckRemoteDebuggerPresent
 ClearCommBreak
 ClearCommError
 CloseHandle
+ClosePackageInfo
 ClosePrivateNamespace
 ClosePseudoConsole
 CloseThreadpool
@@ -229,6 +230,7 @@ GetACP
 GetActiveProcessorCount
 GetActiveProcessorGroupCount
 GetApplicationRestartSettings
+GetApplicationUserModelId
 GetAtomNameA
 GetAtomNameW
 GetBinaryTypeW
@@ -276,6 +278,7 @@ GetCurrentDirectoryW
 GetCurrentPackageFamilyName
 GetCurrentPackageFullName
 GetCurrentPackageId
+GetCurrentPackageInfo
 GetCurrentPackagePath
 GetCurrentProcess
 GetCurrentProcessId
@@ -374,6 +377,11 @@ GetOEMCP
 GetOverlappedResult
 GetOverlappedResultEx
 GetPackageFamilyName
+GetPackageFullName
+GetPackageId
+GetPackageInfo
+GetPackagePath
+GetPackagesByPackageFamily
 GetPhysicallyInstalledSystemMemory
 GetPriorityClass
 GetPrivateProfileIntA
@@ -544,6 +552,7 @@ IsDebuggerPresent
 IsNLSDefinedString
 IsProcessInJob
 IsProcessorFeaturePresent
+IsSystemResumeAutomatic
 IsThreadAFiber
 IsThreadpoolTimerSet
 IsValidCodePage
@@ -626,6 +635,7 @@ OpenJobObjectA
 OpenJobObjectW
 OpenMutexA
 OpenMutexW
+OpenPackageInfoByFullName
 OpenPrivateNamespaceA
 OpenPrivateNamespaceW
 OpenProcess
@@ -635,6 +645,11 @@ OpenThread
 OpenWaitableTimerW
 OutputDebugStringA
 OutputDebugStringW
+PackageFamilyNameFromFullName
+PackageFamilyNameFromId
+PackageFullNameFromId
+PackageIdFromFullName
+PackageNameAndPublisherIdFromFamilyName
 PeekConsoleInputA
 PeekConsoleInputW
 PeekNamedPipe
@@ -914,8 +929,10 @@ WaitNamedPipeW
 WakeAllConditionVariable
 WakeConditionVariable
 WerGetFlags
+WerRegisterMemoryBlock
 WerRegisterRuntimeExceptionModule
 WerSetFlags
+WerUnregisterMemoryBlock
 WideCharToMultiByte
 WinExec
 WinluxArchiveCommit

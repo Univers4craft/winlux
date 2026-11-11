@@ -15,6 +15,7 @@ pub mod interop;
 pub mod metadata;
 pub mod opcodes;
 pub mod pinvoke;
+pub mod reflection;
 pub mod resolve;
 pub mod tables;
 pub mod threads;
@@ -29,7 +30,18 @@ use types::TypeId;
 /// Exécute le point d'entrée d'une assembly .NET et renvoie le code de
 /// sortie. Les assemblies privées référencées sont cherchées dans `app_dir`,
 /// le dossier du programme.
+#[cfg(test)]
 pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) -> i32 {
+    execute_assembly_at(pe_data, None, app_dir)
+}
+
+/// Comme `execute_assembly_in`, en connaissant le fichier du programme
+/// (`Assembly.Location`, #1869).
+pub fn execute_assembly_at(
+    pe_data: &[u8],
+    exe_path: Option<&std::path::Path>,
+    app_dir: Option<&std::path::Path>,
+) -> i32 {
     types::init();
     gc::init();
     crate::dlls::kernel32::init();
@@ -54,7 +66,7 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
         return 1;
     }
 
-    let (assemblies, mut infos) = domain::load(assembly, app_dir);
+    let (assemblies, mut infos) = domain::load(assembly, exe_path, app_dir);
     // Les assemblies référencées d'abord : une classe du programme qui dérive
     // d'une classe d'une bibliothèque y trouve son parent déjà enregistré.
     for idx in (0..assemblies.len()).rev() {

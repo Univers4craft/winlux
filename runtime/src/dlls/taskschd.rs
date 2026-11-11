@@ -827,13 +827,20 @@ fn join_folder(base: &str, rel: &str) -> String {
     }
 }
 
+/// Dossiers créés par le compte courant : dans sa base (système pour root,
+/// personnelle sinon, #1824).
 fn folders_file() -> std::path::PathBuf {
-    admin::path(tasks::TASKS_DIR).join("folders")
+    tasks::store_dir().join("folders")
 }
 
 fn known_folders() -> Vec<String> {
-    let mut list: Vec<String> = admin::read_text(&folders_file())
-        .unwrap_or_default()
+    let system = admin::path(tasks::TASKS_DIR).join("folders");
+    let mut text = admin::read_text(&system).unwrap_or_default();
+    if folders_file() != system {
+        text += "\n";
+        text += &admin::read_text(&folders_file()).unwrap_or_default();
+    }
+    let mut list: Vec<String> = text
         .lines()
         .filter(|l| !l.is_empty())
         .map(norm_folder)
@@ -1939,9 +1946,13 @@ macro_rules! str_prop {
 
 /// Journal des appels du planificateur sous WINLUX_TRACE (#1757 : AddTask
 /// d'Acrobat, dont les appels COM n'apparaissent pas dans WINLUX_APITRACE).
+///
+/// Préfixe `winlux[taskschd]` : msiexec recopie ces lignes du processus
+/// d'une action personnalisée dans son journal (`is_trace_line`), ce qu'il
+/// ne faisait pas pour l'ancien « winlux : taskschd : » (#1825).
 fn trace(msg: impl FnOnce() -> String) {
     if std::env::var_os("WINLUX_TRACE").is_some() {
-        eprintln!("winlux : taskschd : {}", msg());
+        eprintln!("winlux[taskschd] {}", msg());
     }
 }
 

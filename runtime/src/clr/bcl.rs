@@ -50,6 +50,10 @@ fn missing(class: &str, method: &str) -> Option<Value> {
     None
 }
 
+fn is_null(v: &Value) -> bool {
+    matches!(v, Value::Null) || matches!(v, Value::Ref(p) if p.is_null())
+}
+
 /// Chaîne managée : longueur (u64) suivie des unités UTF-16.
 pub fn alloc_managed_string(s: &str) -> Value {
     let utf16: Vec<u16> = s.encode_utf16().collect();
@@ -384,22 +388,42 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         },
         "op_Equality" => {
             if args.len() >= 2 {
-                let a = value_to_string(&args[args.len() - 2]);
-                let b = value_to_string(&args[args.len() - 1]);
-                Some(Value::I32(if a == b { 1 } else { 0 }))
+                let (x, y) = (&args[args.len() - 2], &args[args.len() - 1]);
+                // null n'est égal qu'à null, pas à "" (String.op_Equality).
+                let eq = match (is_null(x), is_null(y)) {
+                    (true, true) => true,
+                    (false, false) => value_to_string(x) == value_to_string(y),
+                    _ => false,
+                };
+                Some(Value::I32(eq as i32))
             } else {
                 Some(Value::I32(0))
             }
         }
-        "op_Inequality" => {
-            if args.len() >= 2 {
-                let a = value_to_string(&args[args.len() - 2]);
-                let b = value_to_string(&args[args.len() - 1]);
-                Some(Value::I32(if a != b { 1 } else { 0 }))
-            } else {
-                Some(Value::I32(1))
+        // String.Equals(object) : vrai pour une chaîne de même contenu.
+        "Equals" => match args {
+            [Value::Ref(a), Value::Ref(b)] if gc::type_of(*b) == Some(TYPE_STRING) => Some(
+                Value::I32((read_managed_string(*a) == read_managed_string(*b)) as i32),
+            ),
+            [_, _] => Some(Value::I32(0)),
+            _ => None,
+        },
+        // Empreinte du contenu (FNV-1a sur l'UTF-16) : deux chaînes égales
+        // ont la même, quel que soit l'objet.
+        "GetHashCode" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let mut h: u32 = 0x811C_9DC5;
+                for u in read_managed_string(*p).encode_utf16() {
+                    h = (h ^ u32::from(u)).wrapping_mul(0x0100_0193);
+                }
+                Some(Value::I32(h as i32))
             }
-        }
+            _ => None,
+        },
+        "op_Inequality" => match string_dispatch("op_Equality", args) {
+            Some(Value::I32(eq)) => Some(Value::I32((eq == 0) as i32)),
+            other => other,
+        },
         "Substring" => {
             let this_str = match args.first() {
                 Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),

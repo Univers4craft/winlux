@@ -20,3 +20,7 @@ ok("cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in (ROOT / "
 ok('OMP_THREAD_LIMIT="1"' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
    and "OCR impossible" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
    "Suivi des travaux : OCR borné, une capture illisible est refusée sans tout arrêter (#1829)")
+_site = (ROOT / ".github/workflows/site.yml").read_text(encoding="utf-8")
+_etape = _site.split("- name: Suivi des travaux (captures de la CI)", 1)[-1].split("- name:", 1)[0]
+ok("continue-on-error" not in _etape and "galerie du suivi vide" in _etape and "for essai in 1 2 3" in _etape,
+   "Site : sans galerie complète, rien n'est publié et la galerie en ligne reste (#1871)")

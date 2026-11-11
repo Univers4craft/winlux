@@ -7675,7 +7675,10 @@ pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
             return u32::MAX;
         }
     };
-    get_file_attributes_str(&s.to_string_lossy())
+    let path = s.to_string_lossy();
+    let r = get_file_attributes_str(&path);
+    crate::trace!("GetFileAttributesW({path}) = {r:#x}");
+    r
 }
 pub unsafe extern "win64" fn delete_file_w(path: *const u16) -> i32 {
     let s = match cstring_from_wide(path) {
@@ -12800,5 +12803,30 @@ mod interrupt_time_tests {
             super::query_unbiased_interrupt_time(std::ptr::null_mut()),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_downlevel {
+    /// Acrobat (#1818) : LoadLibraryEx d'un contrat « downlevel » avec
+    /// LOAD_LIBRARY_SEARCH_SYSTEM32, puis GetProcAddress.
+    #[test]
+    fn contrat_downlevel_charge_avec_search_system32() {
+        unsafe {
+            let h = super::load_library_ex_a(
+                c"api-ms-win-downlevel-shell32-l1-1-0.dll".as_ptr().cast(),
+                0,
+                0x800,
+            );
+            assert_ne!(h, 0);
+            for f in [
+                c"CommandLineToArgvW",
+                c"SHGetKnownFolderPath",
+                c"SHGetFolderPathW",
+                c"ShellExecuteExW",
+            ] {
+                assert_ne!(super::get_proc_address(h, f.as_ptr().cast()), 0, "{f:?}");
+            }
+        }
     }
 }

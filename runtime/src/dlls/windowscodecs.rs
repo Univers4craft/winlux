@@ -19,6 +19,10 @@ use super::ole32::Guid;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
+/// Encodeur PNG (#1868).
+#[path = "windowscodecs_encoder.rs"]
+mod encoder;
+
 const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const WINCODEC_ERR_NOTINITIALIZED: i32 = 0x8898_2F0Cu32 as i32;
 const WINCODEC_ERR_CODECNOTHUMBNAIL: i32 = 0x8898_2F44u32 as i32;
@@ -983,7 +987,7 @@ static FACTORY_VT: VTable<29> = VTable([
     create_decoder_from_file_handle as *const (),
     create_component_info as *const (),
     create_decoder as *const (),
-    unsupported!("CreateEncoder"),
+    encoder::create_encoder as *const (),
     create_palette as *const (),
     create_format_converter as *const (),
     create_bitmap_scaler as *const (),
@@ -1017,7 +1021,7 @@ static COMPONENT_FACTORY_VT: VTable<35> = VTable([
     create_decoder_from_file_handle as *const (),
     create_component_info as *const (),
     create_decoder as *const (),
-    unsupported!("CreateEncoder"),
+    encoder::create_encoder as *const (),
     create_palette as *const (),
     create_format_converter as *const (),
     create_bitmap_scaler as *const (),

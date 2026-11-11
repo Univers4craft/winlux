@@ -2542,24 +2542,57 @@ pub unsafe extern "win64" fn set_window_long_ptr_w(hwnd: usize, index: i32, valu
 // GetClassLongA/W, GetClassLongPtrA/W, GetClassNameA/W, GetClassInfoExA/W
 // =====================================================================
 
+/// Valeur de classe d'une fenêtre (GetClassLong, GetClassLongPtr,
+/// GetClassWord) : atome, style, procédure, module, fond, curseur. Index
+/// inconnu ou octets supplémentaires de classe (non conservés) : 0. Tout
+/// renvoyait 0 et GetClassWord manquait : Steam s'arrêtait en 0xC0000139
+/// juste après le clic sur sa boîte de service (#1858).
+pub fn class_value(hwnd: usize, index: i32) -> Option<usize> {
+    const GCLP_HBRBACKGROUND: i32 = -10;
+    const GCLP_HCURSOR: i32 = -12;
+    const GCLP_HMODULE: i32 = -16;
+    const GCLP_WNDPROC: i32 = -24;
+    const GCL_STYLE: i32 = -26;
+    const GCW_ATOM: i32 = -32;
+    let class = gui::window_class(hwnd)?;
+    let info = gui::lookup_class(&class);
+    Some(match index {
+        GCW_ATOM => class_atom(&class) as usize,
+        GCL_STYLE => gui::class_style(&class) as usize,
+        GCLP_WNDPROC => info.map_or(0, |i| i.wnd_proc),
+        GCLP_HMODULE => info.map_or(0, |i| i.instance),
+        GCLP_HBRBACKGROUND => info.map_or(0, |i| i.background),
+        GCLP_HCURSOR => gui::class_cursor_of(hwnd),
+        _ => 0,
+    })
+}
+
+fn class_value_or_error(hwnd: usize, index: i32) -> usize {
+    class_value(hwnd, index).unwrap_or_else(|| {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        0
+    })
+}
+
 pub unsafe extern "win64" fn get_class_long_a(hwnd: usize, index: i32) -> u32 {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index) as u32
 }
 
 pub unsafe extern "win64" fn get_class_long_w(hwnd: usize, index: i32) -> u32 {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index) as u32
 }
 
 pub unsafe extern "win64" fn get_class_long_ptr_a(hwnd: usize, index: i32) -> usize {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index)
 }
 
 pub unsafe extern "win64" fn get_class_long_ptr_w(hwnd: usize, index: i32) -> usize {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index)
+}
+
+/// GetClassWord : seul GCW_ATOM (-32) a un sens hors octets supplémentaires.
+pub unsafe extern "win64" fn get_class_word(hwnd: usize, index: i32) -> u16 {
+    class_value_or_error(hwnd, index) as u16
 }
 
 pub unsafe extern "win64" fn get_class_name_a(hwnd: usize, buf: *mut u8, max_count: i32) -> i32 {
@@ -3032,9 +3065,12 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
 }
 
 /// TrackMouseEvent (#1254) : TME_LEAVE fait poster WM_MOUSELEAVE quand le
-/// pointeur quitte la fenêtre. TME_HOVER et TME_NONCLIENT sont acceptés
-/// sans effet. La structure fait 24 octets en 64 bits et 16 en 32 bits.
+/// pointeur quitte la fenêtre ; TME_HOVER fait poster WM_MOUSEHOVER quand il
+/// reste immobile dwHoverTime millisecondes (#1591). TME_NONCLIENT est
+/// accepté sans effet. La structure fait 24 octets en 64 bits (dwHoverTime
+/// à +16) ; wow32 la convertit depuis les 16 octets du x86.
 pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
+    const TME_HOVER: u32 = 0x1;
     const TME_LEAVE: u32 = 0x2;
     const TME_NONCLIENT: u32 = 0x10;
     const TME_QUERY: u32 = 0x4000_0000;
@@ -3057,12 +3093,35 @@ pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
         return 0;
     }
     let hwnd = hwnd_at(tme);
+    let hover_at = if size == 16 { 12 } else { 16 };
     if flags & TME_QUERY != 0 {
-        let tracked = gui::mouse_leave_tracked(hwnd);
-        std::ptr::write_unaligned(tme.add(4) as *mut u32, if tracked { TME_LEAVE } else { 0 });
+        let mut out = if gui::mouse_leave_tracked(hwnd) {
+            TME_LEAVE
+        } else {
+            0
+        };
+        if let Some(ms) = gui::mouse_hover_tracked(hwnd) {
+            out |= TME_HOVER;
+            std::ptr::write_unaligned(tme.add(hover_at) as *mut u32, ms);
+        }
+        std::ptr::write_unaligned(tme.add(4) as *mut u32, out);
         return 1;
     }
-    if flags & TME_LEAVE == 0 || flags & TME_NONCLIENT != 0 {
+    if flags & TME_NONCLIENT != 0 {
+        return 1;
+    }
+    if flags & TME_HOVER != 0 {
+        if flags & TME_CANCEL != 0 {
+            gui::cancel_mouse_hover(hwnd);
+        } else if gui::is_window(hwnd) {
+            let ms = std::ptr::read_unaligned(tme.add(hover_at) as *const u32);
+            gui::track_mouse_hover(hwnd, ms);
+        } else {
+            crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+            return 0;
+        }
+    }
+    if flags & TME_LEAVE == 0 {
         return 1;
     }
     if flags & TME_CANCEL != 0 {
@@ -5317,6 +5376,7 @@ pub fn exports() -> crate::dlls::Exports {
         // --- Class info ---
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
+        "GetClassWord"=>fn get_class_word,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
         "RealGetWindowClassA"=>fn real_get_window_class_a, "RealGetWindowClassW"=>fn real_get_window_class_w,
         "GetClassInfoExA"=>fn get_class_info_ex_a, "GetClassInfoExW"=>fn get_class_info_ex_w,
@@ -5995,6 +6055,41 @@ mod tests {
             let r = gui::screen_rect(hwnd).expect("rectangle");
             assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
             destroy_window(hwnd);
+        }
+    }
+
+    /// GetClassWord et GetClassLong(Ptr) relisent la classe de la fenêtre
+    /// (Steam, #1858).
+    #[test]
+    fn valeurs_de_classe_relues() {
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        unsafe {
+            let h = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            let atom = class_atom("Static");
+            assert_eq!(get_class_word(h, -32), atom);
+            assert_eq!(get_class_long_w(h, -32), atom as u32);
+            assert_eq!(
+                get_class_long_ptr_w(h, -24),
+                gui::lookup_class("Static").expect("classe").wnd_proc
+            );
+            assert_ne!(get_class_long_ptr_w(h, -12), 0, "curseur flèche");
+            assert_eq!(get_class_long_ptr_w(h, 0), 0, "octets supplémentaires");
+            destroy_window(h);
+            assert_eq!(get_class_word(h, -32), 0, "fenêtre détruite");
         }
     }
 

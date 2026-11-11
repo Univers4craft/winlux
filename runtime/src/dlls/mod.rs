@@ -85,6 +85,7 @@ pub mod devnotify;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
+pub mod discord_win32;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
@@ -131,6 +132,7 @@ pub mod hostssl;
 pub mod icc;
 pub mod icons;
 pub mod icue_win32;
+pub mod icuuc;
 pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
@@ -184,6 +186,7 @@ pub mod msxml_dom;
 pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
+pub mod netlistmgr;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
@@ -213,6 +216,7 @@ pub mod print_pdf;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
+pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
 pub mod remote_vm;
@@ -1132,6 +1136,24 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: cabinet_lz::cabinet_exports(),
                 handle: 0,
             },
+            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792) ;
+            // icu.dll (Windows 10 1903+) exporte les mêmes noms.
+            Builtin {
+                name: "icuuc",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "icu",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
+            // Qualité de service qWAVE (discord_voice.node, #NNNN).
+            Builtin {
+                name: "qwave",
+                exports: qwave::exports(),
+                handle: 0,
+            },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
             Builtin {
                 name: "wldap32",
@@ -1284,7 +1306,11 @@ fn builtins() -> &'static Vec<Builtin> {
         // mpr, msi et shfolder : importées directement par WinSCP et 7-Zip (#486).
         for (name, exports) in [
             ("mpr", legacy_dlls::mpr_exports()),
-            ("msi", legacy_dlls::msi_exports()),
+            ("msi", {
+                let mut e = legacy_dlls::msi_exports();
+                e.extend(discord_win32::msi_exports());
+                e
+            }),
             ("shfolder", legacy_dlls::shfolder_exports()),
             // Corpus de #26 (#1394) : signtool x86, panda3d, .NET Core 3.1.
             ("mfc42", redist_dlls::mfc42_exports()),
@@ -1441,6 +1467,8 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(icue)
         .chain(lot_e)
         .chain(lot_f)
+        // discord_utils.node (#1823).
+        .chain(discord_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1622,6 +1650,12 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-power-") {
         return "powrprof".into();
     }
+    // Modèle d'application (GetPackageFamilyName, GetCurrentPackageId…) :
+    // fonctions de kernel32, qui répondent APPMODEL_ERROR_NO_PACKAGE
+    // (Spotify #1809, Acrobat, #1832).
+    if base.starts_with("api-ms-win-appmodel-runtime-l1-") {
+        return "kernel32".into();
+    }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
         || base == "kernelbase"
@@ -1632,6 +1666,11 @@ pub fn normalize(dll: &str) -> String {
     // implemented by our Advapi32 backend, rather than a separate disk DLL.
     if base.starts_with("api-ms-win-security-base-l1-")
         || base.starts_with("api-ms-win-security-sddl-l1-")
+        || base.starts_with("api-ms-win-security-provider-l1-")
+        || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Contrats des services (service-core, -management, -winsvc) : les
+        // fonctions du gestionnaire de services d'advapi32 (#1823).
+        || base.starts_with("api-ms-win-service-")
     {
         return "advapi32".into();
     }
@@ -1748,9 +1787,15 @@ pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
 
-/// Fonctions de jeton du contrat api-ms-win-core-processthreads, servies
-/// par advapi32 (liste de la documentation publique des API sets).
-const PROCESSTHREADS_TOKENS: [&str; 3] = ["OpenProcessToken", "OpenThreadToken", "SetThreadToken"];
+/// Fonctions de sécurité que KernelBase sert sous des contrats
+/// api-ms-win-core-* (processthreads, namedpipe) et que notre advapi32
+/// porte (Teams, #1767, #1817).
+const KERNELBASE_SECURITY: [&str; 4] = [
+    "OpenProcessToken",
+    "OpenThreadToken",
+    "SetThreadToken",
+    "ImpersonateNamedPipeClient",
+];
 
 pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let b = builtins().iter().find(|b| b.name == normalized)?;
@@ -1767,7 +1812,7 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
             lookup("ntdll", func).or_else(|| {
                 // KernelBase sert aussi les Reg* (api-ms-win-core-registry)
                 // et les jetons du contrat processthreads (Teams, #1767).
-                (func.starts_with("Reg") || PROCESSTHREADS_TOKENS.contains(&func))
+                (func.starts_with("Reg") || KERNELBASE_SECURITY.contains(&func))
                     .then(|| lookup("advapi32", func))
                     .flatten()
             })
@@ -2356,6 +2401,44 @@ mod tests {
                 "advapi32",
                 "OpenThreadToken",
             ),
+            // discord_utils.node (#1823).
+            (
+                "api-ms-win-security-sddl-ansi-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSecurityDescriptorToSecurityDescriptorA",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "OpenSCManagerW",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "CloseServiceHandle",
+            ),
+            (
+                "api-ms-win-ntuser-sysparams-l1-1-0.dll",
+                "user32",
+                "SystemParametersInfoW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSidToSidW",
+            ),
+            // Teams (#1817) : contrat security-provider et
+            // ImpersonateNamedPipeClient sous namedpipe.
+            (
+                "api-ms-win-security-provider-l1-1-0.dll",
+                "advapi32",
+                "SetEntriesInAclW",
+            ),
+            (
+                "api-ms-win-core-namedpipe-l1-1-0.dll",
+                "advapi32",
+                "ImpersonateNamedPipeClient",
+            ),
             // Teams (#1790) : contrat des contrôleurs de traces ETW.
             (
                 "api-ms-win-eventing-controller-l1-1-0.dll",
@@ -2376,6 +2459,17 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-2.dll",
                 "advapi32",
                 "SetThreadToken",
+            ),
+            // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                "kernel32",
+                "GetPackageFamilyName",
+            ),
+            (
+                "api-ms-win-appmodel-runtime-l1-1-2.dll",
+                "kernel32",
+                "GetCurrentPackageId",
             ),
         ] {
             let expected = lookup(host, symbol).expect("backend export must exist");
@@ -2400,5 +2494,78 @@ mod tests {
             normalize("api-ms-win-security-unknown-l1-1-0.dll"),
             "api-ms-win-security-unknown-l1-1-0"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_contrats_spotify {
+    /// Spotify.dll (#1832) : fonctions documentées des contrats
+    /// appmodel-runtime, job-l2 et file-l2.
+    #[test]
+    fn contrats_appmodel_job_file_l2() {
+        let mut absentes = vec![];
+        for (contract, names) in [
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                &[
+                    "GetCurrentPackageFamilyName",
+                    "GetCurrentPackageFullName",
+                    "GetCurrentPackageId",
+                    "GetCurrentPackageInfo",
+                    "GetCurrentPackagePath",
+                    "GetPackageFamilyName",
+                    "GetPackageFullName",
+                    "GetPackageId",
+                    "GetPackageInfo",
+                    "GetPackagePath",
+                    "GetPackagesByPackageFamily",
+                    "OpenPackageInfoByFullName",
+                    "ClosePackageInfo",
+                    "PackageFamilyNameFromFullName",
+                    "PackageFamilyNameFromId",
+                    "PackageFullNameFromId",
+                    "PackageIdFromFullName",
+                    "PackageNameAndPublisherIdFromFamilyName",
+                    "GetApplicationUserModelId",
+                    "GetCurrentApplicationUserModelId",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-job-l2-1-0.dll",
+                &[
+                    "AssignProcessToJobObject",
+                    "CreateJobObjectW",
+                    "OpenJobObjectW",
+                    "QueryInformationJobObject",
+                    "SetInformationJobObject",
+                    "TerminateJobObject",
+                    "IsProcessInJob",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-file-l2-1-0.dll",
+                &[
+                    "CopyFile2",
+                    "CopyFileExW",
+                    "CreateDirectoryExW",
+                    "CreateHardLinkW",
+                    "CreateSymbolicLinkW",
+                    "GetFileInformationByHandleEx",
+                    "MoveFileExW",
+                    "MoveFileWithProgressW",
+                    "OpenFileById",
+                    "ReadDirectoryChangesW",
+                    "ReplaceFileW",
+                ][..],
+            ),
+        ] {
+            let dll = super::normalize(contract);
+            for n in names {
+                if super::lookup(&dll, n).is_none() {
+                    absentes.push(format!("{contract}!{n}"));
+                }
+            }
+        }
+        assert!(absentes.is_empty(), "{absentes:?}");
     }
 }
