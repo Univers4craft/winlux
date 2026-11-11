@@ -956,20 +956,34 @@ pub fn trash_usage(trash: &std::path::Path) -> (u64, u64) {
     (size, count)
 }
 
-/// SHQueryRecycleBinW : SHQUERYRBINFO (24 octets en 64 bits).
-unsafe extern "win64" fn sh_query_recycle_bin_w(_root: *const u16, info: *mut u8) -> i32 {
-    if info.is_null() || std::ptr::read_unaligned(info as *const u32) < 24 {
+/// SHQueryRecycleBinW : SHQUERYRBINFO, 24 octets en 64 bits (i64Size à 8,
+/// i64NumItems à 16) ; 20 octets en 32 bits, où shellapi.h est compacté
+/// par `pshpack1.h` (i64Size à 4, i64NumItems à 12, #1841).
+pub(super) unsafe extern "win64" fn sh_query_recycle_bin_w(
+    _root: *const u16,
+    info: *mut u8,
+) -> i32 {
+    let (need, size_at, count_at) = if crate::wow32::pointer_size() == 4 {
+        (20, 4, 12)
+    } else {
+        (24, 8, 16)
+    };
+    if info.is_null() || std::ptr::read_unaligned(info as *const u32) < need {
         return E_INVALIDARG;
     }
     let (size, count) = trash_usage(&trash_dir());
-    std::ptr::write_unaligned(info.add(8) as *mut u64, size);
-    std::ptr::write_unaligned(info.add(16) as *mut u64, count);
+    std::ptr::write_unaligned(info.add(size_at) as *mut u64, size);
+    std::ptr::write_unaligned(info.add(count_at) as *mut u64, count);
     S_OK
 }
 
 /// SHEmptyRecycleBinW : vide la corbeille. Sans SHERB_NOCONFIRMATION,
 /// l'utilisateur confirme d'abord (Non par défaut).
-unsafe extern "win64" fn sh_empty_recycle_bin_w(hwnd: usize, _root: *const u16, flags: u32) -> i32 {
+pub(super) unsafe extern "win64" fn sh_empty_recycle_bin_w(
+    hwnd: usize,
+    _root: *const u16,
+    flags: u32,
+) -> i32 {
     let trash = trash_dir();
     let (_, count) = trash_usage(&trash);
     if count == 0 {
@@ -1128,6 +1142,10 @@ pub fn exports() -> Exports {
         "SHCreateDefaultContextMenu" => fn not_in_process,
         "SHCreateDefaultExtractIcon" => fn not_in_process,
     };
+    // Variantes ANSI qui manquaient (SHFileOperationA de l'ODT, #1841).
+    for (k, v) in super::shell32_ansi::exports() {
+        m.entry(k).or_insert(v);
+    }
     // SHRestricted, aussi par l'ordinal 100 (#1750).
     for (k, v) in super::shell_ordinaux::shell32() {
         m.entry(k).or_insert(v);

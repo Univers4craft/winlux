@@ -312,7 +312,7 @@ extern "win64" fn ExtractIconA(_inst: usize, _file: *const u8, _index: u32) -> u
 /// ExtractAssociatedIconW : sans icône propre au fichier, l'icône
 /// d'application par défaut (IDI_APPLICATION), comme le prévoit la
 /// documentation ; l'index rendu est 0.
-unsafe extern "win64" fn ExtractAssociatedIconW(
+pub(super) unsafe extern "win64" fn ExtractAssociatedIconW(
     _inst: usize,
     _path: *mut u16,
     index: *mut u16,
