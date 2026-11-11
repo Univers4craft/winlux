@@ -880,7 +880,19 @@ pub unsafe fn call_wndproc(
     if crate::dlls::user32::window_diag()
         && matches!(
             msg,
-            0x0003 | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0018 | 0x001C | 0x0046 | 0x0047 | 0x0086
+            0x0003
+                | 0x0005
+                | 0x0006
+                | 0x0007
+                | 0x0008
+                | 0x0018
+                | 0x001C
+                | 0x0021
+                | 0x0046
+                | 0x0047
+                | 0x0086
+                | 0x0201
+                | 0x0202
         )
     {
         eprintln!(
@@ -3432,6 +3444,11 @@ pub fn click_activation_target(hwnd: usize) -> Option<usize> {
     eligible.then_some(top)
 }
 
+/// Fenêtre de premier niveau active (0 : le programme n'a pas le focus).
+pub fn active_top() -> usize {
+    ACTIVE_TOP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn change_active_top(new_top: usize) {
     use std::sync::atomic::Ordering;
     let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
@@ -4311,18 +4328,28 @@ pub fn bring_to_top(hwnd: usize) {
     z.insert(0, hwnd);
 }
 
+/// Fenêtre de premier niveau au sens de Windows : sans parent, ou sans
+/// WS_CHILD. Une fenêtre possédée (boîte, fenêtre surgissante) garde sa
+/// propriétaire dans `parent`, mais reste de premier niveau : EnumWindows,
+/// WindowFromPoint et GetForegroundWindow la voient. La boîte « Erreur du
+/// service Steam », possédée, n'était jamais trouvée sous le pointeur, et
+/// vgui ignorait les clics sur ses boutons (#1804).
+fn is_top_level(w: &Window) -> bool {
+    w.parent == 0 || w.style & 0x4000_0000 == 0
+}
+
 /// Fenêtres de premier niveau du sommet vers le fond (ordre d'`EnumWindows`).
 fn top_level_in_z_order(map: &HashMap<usize, Window>) -> Vec<usize> {
     let z = lock(z_order());
     let mut out: Vec<usize> = z
         .iter()
         .copied()
-        .filter(|h| map.get(h).is_some_and(|w| w.parent == 0))
+        .filter(|h| map.get(h).is_some_and(is_top_level))
         .collect();
     // Fenêtres insérées sans passer par `insert_window` : après, par handle.
     let mut rest: Vec<usize> = map
         .iter()
-        .filter(|(h, w)| w.parent == 0 && !out.contains(h))
+        .filter(|(h, w)| is_top_level(w) && !out.contains(h))
         .map(|(h, _)| *h)
         .collect();
     rest.sort_unstable();
@@ -5121,7 +5148,10 @@ pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
     };
     match cmd {
         0..=3 => {
-            let parent = map.get(&hwnd).map_or(0, |w| w.parent);
+            let parent = map
+                .get(&hwnd)
+                .filter(|w| !is_top_level(w))
+                .map_or(0, |w| w.parent);
             let list = siblings(parent);
             let pos = list.iter().position(|&h| h == hwnd)?;
             match cmd {
@@ -6368,6 +6398,12 @@ pub(crate) mod tests {
         set_window_ex_style(boite, 0x80); // WS_EX_TOOLWINDOW
         set_window_parent(bouton, boite);
         set_window_style(bouton, 0x4000_0000); // WS_CHILD
+                                               // Possédée, elle reste de premier niveau : EnumWindows, donc
+                                               // WindowFromPoint, la trouve ; le bouton (WS_CHILD) non.
+        let z = enum_top_level_windows();
+        assert!(z.contains(&boite) && !z.contains(&bouton));
+        assert!(z.iter().position(|&h| h == boite) < z.iter().position(|&h| h == principale));
+        assert_eq!(get_window_relative(boite, 4), Some(principale)); // GW_OWNER
         activate_top_for_focus(principale);
         assert_eq!(click_activation_target(boite), Some(boite));
         assert_eq!(
@@ -6382,6 +6418,7 @@ pub(crate) mod tests {
         );
         activate_top_for_focus(boite);
         assert_eq!(click_activation_target(boite), None, "déjà active");
+        assert_eq!(active_top(), boite);
         activate_top_for_focus(principale);
         set_window_ex_style(boite, 0x80 | 0x0800_0000); // + WS_EX_NOACTIVATE
         assert_eq!(click_activation_target(boite), None);
@@ -6497,7 +6534,7 @@ pub(crate) mod tests {
                     owner: std::thread::current().id(),
                     needs_paint: false,
                     paint_queued: false,
-                    style: 0,
+                    style: 0x4000_0000, // WS_CHILD
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,

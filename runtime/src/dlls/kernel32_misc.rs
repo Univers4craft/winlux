@@ -586,6 +586,17 @@ fn system_message(code: u32) -> Option<&'static str> {
         127 => "Fonction absente de la bibliothèque.",
         183 => "Un élément de ce nom existe déjà.",
         267 => "Ce nom ne désigne pas un dossier.",
+        // HRESULT de COM et d'OLE Automation les plus courants (#1838).
+        0x8000_4001 => "Fonction non implémentée.",
+        0x8000_4002 => "Interface non prise en charge.",
+        0x8000_4003 => "Pointeur non valide.",
+        0x8000_4005 => "Erreur non précisée.",
+        0x8002_0003 => "Membre introuvable.",
+        0x8002_0006 => "Nom inconnu.",
+        0x8002_801D => "Bibliothèque de types non inscrite.",
+        0x8002_802B => "Élément introuvable.",
+        0x8002_9C4A => "Impossible de charger la bibliothèque de types.",
+        0x8004_0154 => "Classe non inscrite.",
         // HRESULT_FROM_WIN32 (0x8007xxxx) : le texte du code Win32 contenu,
         // comme sous Windows (7-Zip passe ainsi ses erreurs, #483).
         c if c & 0xFFFF_0000 == 0x8007_0000 => return system_message(c & 0xFFFF),
@@ -668,7 +679,12 @@ unsafe fn format_message(
         "{}\r\n",
         system_message(code)
             .map(str::to_string)
-            .unwrap_or_else(|| format!("Erreur Windows {code}."))
+            .unwrap_or_else(|| if code >= 0x8000_0000 {
+                // HRESULT : en hexadécimal, comme on le cherche.
+                format!("Erreur Windows 0x{code:08X}.")
+            } else {
+                format!("Erreur Windows {code}.")
+            })
     ))
 }
 
@@ -1590,7 +1606,7 @@ mod tests {
     fn hresult_win32_donne_le_texte_du_code_contenu() {
         assert_eq!(system_message(0x8007_0005), system_message(5));
         assert!(system_message(0x8007_010B).is_some());
-        assert_eq!(system_message(0x8000_4005), None);
+        assert_eq!(system_message(0x8000_1234), None);
     }
 
     use super::*;
@@ -1765,6 +1781,33 @@ mod tests {
             let text = crate::dlls::cstr(ansi.as_ptr());
             assert!(text.starts_with("Library (DLL) not found"), "{text}");
             assert!(ansi[..n as usize].is_ascii());
+        }
+    }
+
+    /// #1838 : un HRESULT de COM a un texte, sinon il est écrit en
+    /// hexadécimal (et non « Erreur Windows 2147647517 »).
+    #[test]
+    fn messages_des_hresult() {
+        unsafe {
+            for (code, debut) in [
+                (0x8002_801Du32, "Bibliothèque de types non inscrite"),
+                (0x8004_0154, "Classe non inscrite"),
+                (0x8000_1234, "Erreur Windows 0x80001234"),
+            ] {
+                let mut msg = [0u16; 128];
+                let n = format_message_w(
+                    FORMAT_MESSAGE_FROM_SYSTEM,
+                    0,
+                    code,
+                    0,
+                    msg.as_mut_ptr(),
+                    128,
+                    0,
+                );
+                assert!(n > 0);
+                let texte = crate::dlls::wstr(msg.as_ptr());
+                assert!(texte.starts_with(debut), "{code:#x} : {texte}");
+            }
         }
     }
 
