@@ -1013,11 +1013,26 @@ def last_crash(since=0):
     return entries[-1] if entries else None
 
 
+def tail_text(path, limit=1024 * 1024):
+    """Fin d'un fichier, au plus `limit` octets (#1903) : un journal de trace
+    de plusieurs Go ne doit jamais être chargé en entier. La première ligne,
+    peut-être coupée, est écartée quand le fichier a été tronqué."""
+    with open(path, "rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(max(0, size - limit))
+        data = stream.read(limit)
+    text = data.decode("utf-8", "replace")
+    if size > limit:
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+    return text
+
+
 def journal_tail(limit=30):
     lines = []
     for path in (JOURNAL / "winlux.log", STATE / "last-launch.log"):
         try:
-            lines += path.read_text(errors="replace").splitlines()[-limit:]
+            lines += tail_text(path).splitlines()[-limit:]
         except OSError:
             pass
     return [l for l in lines if l.strip()][-limit:]
@@ -1036,7 +1051,7 @@ def network_tail(limit=40):
     sections = []
     for name, title in (("network-manager", "NetworkManager"), ("wpa-supplicant", "wpa_supplicant")):
         try:
-            lines = (NETWORK_LOGS / f"{name}.log").read_text(errors="replace").splitlines()
+            lines = tail_text(NETWORK_LOGS / f"{name}.log").splitlines()
         except OSError:
             continue
         lines = [SSID_TEXT.sub(r"\1\2<réseau-wifi>\2", line) for line in lines if line.strip()][-limit:]
@@ -1147,11 +1162,7 @@ def utc_seconds(text):
 def winlux_lines(limit=2 * 1024 * 1024):
     """Lignes du journal du runtime (la fin s'il est très long)."""
     try:
-        with open(JOURNAL / "winlux.log", "rb") as stream:
-            stream.seek(0, os.SEEK_END)
-            size = stream.tell()
-            stream.seek(max(0, size - limit))
-            return stream.read().decode("utf-8", "replace").splitlines()
+        return tail_text(JOURNAL / "winlux.log", limit).splitlines()
     except OSError:
         return []
 
@@ -1326,7 +1337,7 @@ def previous_boot_problem():
     for dump in dumps:
         if "dmesg" in dump.name or dump.name.startswith(("efi-", "console")):
             try:
-                lines += dump.read_text(errors="replace").splitlines()
+                lines += tail_text(dump).splitlines()
             except OSError:
                 pass
     if lines:
@@ -1680,7 +1691,7 @@ def diagnostics(domain, language=None):
         if not path.exists():
             continue
         try:
-            text = path.read_text(errors="replace")
+            text = tail_text(path)
         except OSError:
             found.append((name, None, tr("d_unreadable", language)))
             continue

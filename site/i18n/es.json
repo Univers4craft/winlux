@@ -46,5 +46,7 @@
   "suivi_run": "Ejecución",
   "suivi_pr": "PR",
   "suivi_test": "Prueba",
-  "suivi_failed": "la CI falló"
+  "suivi_failed": "la CI falló",
+  "suivi_updated": "Últimas capturas:",
+  "suivi_stale": "La CI no pudo actualizar la galería: esta es la última versión publicada."
 }

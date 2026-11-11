@@ -163,6 +163,47 @@ pub struct MethodInfo {
     pub token: u32,
     pub is_virtual: bool,
     pub param_count: usize,
+    /// Types des paramètres, pour départager deux surcharges de même
+    /// arité (Equals(object) et Equals(int), #1956).
+    pub params: Vec<super::metadata::ElementType>,
+}
+
+/// Deux types de paramètre peuvent-ils désigner le même type ? Les types
+/// élémentaires se comparent ; deux jetons (classe, structure) sont propres
+/// à leur assembly et s'acceptent.
+fn same_param(a: &super::metadata::ElementType, b: &super::metadata::ElementType) -> bool {
+    use super::metadata::ElementType as E;
+    let simple = |e: &E| {
+        matches!(
+            e,
+            E::Boolean
+                | E::Char
+                | E::I1
+                | E::U1
+                | E::I2
+                | E::U2
+                | E::I4
+                | E::U4
+                | E::I8
+                | E::U8
+                | E::R4
+                | E::R8
+                | E::String
+                | E::Object
+                | E::IntPtr
+                | E::UIntPtr
+        )
+    };
+    let generic = |e: &E| matches!(e, E::Var(_) | E::MVar(_));
+    match (simple(a), simple(b)) {
+        (true, true) => a == b,
+        // Object, String et les primitives ont toujours leur propre code
+        // d'élément (ECMA-335 §II.23.2.12) : face à un jeton, seul un
+        // paramètre générique peut encore les désigner.
+        (true, false) => generic(b),
+        (false, true) => generic(a),
+        (false, false) => true,
+    }
 }
 
 pub struct TypeRegistry {
@@ -311,32 +352,49 @@ impl TypeRegistry {
         name: &str,
         param_count: usize,
     ) -> Option<(usize, u32, TypeId)> {
+        self.find_override_of(type_id, name, param_count, None, &[])
+    }
+
+    /// Comme `find_override`, pour une méthode de l'interface `iface`
+    /// (« Espace.Nom », sans arité) : une implémentation explicite
+    /// (« Espace.Nom<T>.Méthode », ECMA-335 §II.10.3.2) passe avant la
+    /// méthode publique de même nom, à chaque niveau (#1896).
+    pub fn find_override_of(
+        &self,
+        type_id: TypeId,
+        name: &str,
+        param_count: usize,
+        iface: Option<&str>,
+        params: &[super::metadata::ElementType],
+    ) -> Option<(usize, u32, TypeId)> {
+        let explicit = iface.map(|i| format!("{i}.{name}"));
         let mut current = type_id;
         while let Some(ti) = self.get(current) {
-            let found = ti
-                .methods
-                .iter()
-                .find(|m| m.is_virtual && m.name == name && m.param_count == param_count);
+            let found = explicit
+                .as_deref()
+                .and_then(|e| {
+                    ti.methods.iter().find(|m| {
+                        m.is_virtual
+                            && m.param_count == param_count
+                            && m.name.contains('.')
+                            && strip_generic_args(&m.name) == e
+                    })
+                })
+                .or_else(|| {
+                    ti.methods.iter().find(|m| {
+                        m.is_virtual
+                            && m.name == name
+                            && m.param_count == param_count
+                            && (params.len() != m.params.len()
+                                || params.iter().zip(&m.params).all(|(a, b)| same_param(a, b)))
+                    })
+                });
             if let Some(m) = found {
                 return Some((m.assembly, m.token, current));
             }
             current = ti.parent;
         }
         None
-    }
-
-    /// Méthode d'instance déclarée par le type lui-même (sans les parents).
-    pub fn find_own_method(
-        &self,
-        type_id: TypeId,
-        name: &str,
-        param_count: usize,
-    ) -> Option<(usize, u32)> {
-        let ti = self.get(type_id)?;
-        ti.methods
-            .iter()
-            .find(|m| m.name == name && m.param_count == param_count)
-            .map(|m| (m.assembly, m.token))
     }
 
     /// Emplacement d'un champ statique ; la zone du type est créée à la
@@ -387,4 +445,20 @@ pub fn with_types<T>(f: impl FnOnce(&mut TypeRegistry) -> T) -> T {
     let mut lock = TYPE_REGISTRY.lock().unwrap();
     let reg = lock.as_mut().expect("registre de types CLR non initialisé");
     f(reg)
+}
+
+/// « A.B<T, C<D>>.M » → « A.B.M » : le nom d'une implémentation explicite
+/// sans ses arguments génériques.
+pub fn strip_generic_args(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut depth = 0u32;
+    for c in name.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }

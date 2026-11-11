@@ -38,6 +38,16 @@ assert crash["module"] == "setup.exe+0x1a2b" and crash["path"].endswith("Setup.e
 assert crash["regs"]["addr"] == "0x0000000000000018" and len(crash["frames"]) == 2
 assert missing["details"] == ["fonction=d3d12.dll!D3D12CreateDevice"]
 
+# Journal de plusieurs Go (#1903) : seule la fin est lue, sans ligne coupée.
+big = tmp / "gros.log"
+with open(big, "wb") as stream:
+    stream.write(("x" * 99 + "\n").encode() * 30000)
+    stream.write("dernière ligne é\n".encode())
+tail = r["tail_text"](big, 4096)
+assert len(tail.encode()) <= 4096 and tail.endswith("dernière ligne é\n"), tail[-40:]
+assert all(len(l) == 99 for l in tail.splitlines()[:-1]), "première ligne coupée écartée"
+assert r["tail_text"](big, 10 ** 9).count("\n") == 30001
+
 # Toutes les langues ont toutes les chaînes du français.
 for code, table in r["T"].items():
     assert set(table) == set(r["T"]["fr"]), (code, set(r["T"]["fr"]) ^ set(table))

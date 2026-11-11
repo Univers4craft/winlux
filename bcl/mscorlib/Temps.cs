@@ -13,6 +13,7 @@ namespace System
     {
         public SystemException() { }
         public SystemException(string message) : base(message) { }
+        public SystemException(string message, Exception innerException) : base(message, innerException) { }
     }
 
     public class ArithmeticException : SystemException
@@ -31,9 +32,12 @@ namespace System
     {
         public ArgumentException() { }
         public ArgumentException(string message) : base(message) { }
+        public ArgumentException(string message, Exception innerException) : base(message, innerException) { }
+        public ArgumentException(string message, string paramName)
+            : base(paramName == null ? message : message + "\r\nParameter name: " + paramName) { }
     }
 
-    public struct TimeSpan
+    public partial struct TimeSpan
     {
         public const long TicksPerMillisecond = 10000;
         public const long TicksPerSecond = TicksPerMillisecond * 1000;

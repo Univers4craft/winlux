@@ -131,7 +131,7 @@ namespace System
         public Version(int major, int minor)
         {
             if (major < 0 || minor < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _major = major;
             _minor = minor;
             _build = -1;
@@ -141,14 +141,14 @@ namespace System
         public Version(int major, int minor, int build) : this(major, minor)
         {
             if (build < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _build = build;
         }
 
         public Version(int major, int minor, int build, int revision) : this(major, minor, build)
         {
             if (revision < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _revision = revision;
         }
 
@@ -226,7 +226,18 @@ namespace System
     public class ArgumentOutOfRangeException : ArgumentException
     {
         public ArgumentOutOfRangeException() { }
-        public ArgumentOutOfRangeException(string message) : base(message) { }
+        public ArgumentOutOfRangeException(string paramName)
+            : base(WithParam("Specified argument was out of the range of valid values.", paramName)) { }
+
+        public ArgumentOutOfRangeException(string paramName, string message)
+            : base(WithParam(message, paramName)) { }
+
+        private static string WithParam(string message, string paramName)
+        {
+            if (string.IsNullOrEmpty(paramName))
+                return message;
+            return string.Concat(message, "\r\nParameter name: ", paramName);
+        }
     }
 }
 

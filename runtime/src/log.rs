@@ -41,22 +41,63 @@ static JOURNAL_FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
 
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Taille au-delà de laquelle le journal du compte passe en `.old` (#1904) :
+/// il vit dans /run, donc en mémoire vive, et une trace de plusieurs Go
+/// finissait par la remplir.
+const MAX_JOURNAL_SIZE: u64 = 32 * 1024 * 1024;
+
+/// Écritures entre deux vérifications de la taille du journal.
+const JOURNAL_CHECK_EVERY: u32 = 512;
+
+static JOURNAL_WRITES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn open_journal(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .ok()
+}
+
 fn journal_file() -> &'static Mutex<Option<std::fs::File>> {
     JOURNAL_FILE.get_or_init(|| {
         // Journal propre au compte (#633) : aucun autre compte ne peut
         // l'effacer ni y glisser de fausses lignes.
-        let file = crate::journal::file("winlux.log").and_then(|path| {
-            use std::os::unix::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(path)
-                .ok()
-        });
-        Mutex::new(file)
+        Mutex::new(crate::journal::file("winlux.log").and_then(|p| open_journal(&p)))
     })
+}
+
+/// Rotation du journal partagé par tous les processus du compte (#1904).
+/// Seul le processus dont le fichier est encore `winlux.log` le renomme en
+/// `winlux.log.old` ; un processus qui tient déjà un fichier renommé par un
+/// autre rouvre simplement le nouveau `winlux.log`. Au plus deux fichiers
+/// d'environ MAX_JOURNAL_SIZE restent donc en mémoire.
+fn rotate_journal(slot: &mut Option<std::fs::File>, path: &std::path::Path, limit: u64) {
+    use std::os::unix::fs::MetadataExt;
+    let Some(file) = slot.as_ref() else {
+        return;
+    };
+    let Ok(ours) = file.metadata() else {
+        return;
+    };
+    if ours.len() < limit {
+        return;
+    }
+    let current = std::fs::symlink_metadata(path).ok();
+    if current
+        .as_ref()
+        .is_some_and(|m| m.dev() == ours.dev() && m.ino() == ours.ino())
+    {
+        let mut old = path.as_os_str().to_owned();
+        old.push(".old");
+        let _ = std::fs::rename(path, old);
+    }
+    if let Some(fresh) = open_journal(path) {
+        *slot = Some(fresh);
+    }
 }
 
 fn config() -> &'static Config {
@@ -244,6 +285,12 @@ pub fn journal_event(target: &str, message: &str) {
 
 fn write_to_journal(level: Level, target: &str, message: &str) {
     if let Ok(mut guard) = journal_file().lock() {
+        let n = JOURNAL_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n.is_multiple_of(JOURNAL_CHECK_EVERY) {
+            if let Some(path) = crate::journal::file("winlux.log") {
+                rotate_journal(&mut guard, &path, MAX_JOURNAL_SIZE);
+            }
+        }
         if let Some(ref mut f) = *guard {
             let _ = writeln!(
                 f,
@@ -415,5 +462,34 @@ mod file_line_tests {
         );
         assert!(line.contains(&pid), "{line}");
         assert!(line.ends_with(" runtime: chargement"), "{line}");
+    }
+
+    /// #1904 : au-delà de la limite, le journal passe en `.old` ; un second
+    /// processus qui tient l'ancien fichier rouvre le nouveau sans rien
+    /// renommer de plus.
+    #[test]
+    fn journal_tourne_au_dela_de_la_limite() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("winlux-journal-1904-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("winlux.log");
+        let mut a = open_journal(&path);
+        let mut b = open_journal(&path);
+        a.as_mut().unwrap().write_all(&[b'x'; 200]).unwrap();
+        rotate_journal(&mut a, &path, 100);
+        let old = dir.join("winlux.log.old");
+        assert_eq!(std::fs::metadata(&old).unwrap().len(), 200);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        // b tient toujours l'ancien fichier : il rouvre, sans écraser .old.
+        rotate_journal(&mut b, &path, 100);
+        assert_eq!(std::fs::metadata(&old).unwrap().len(), 200);
+        b.as_mut().unwrap().write_all(b"ligne\n").unwrap();
+        a.as_mut().unwrap().write_all(b"ligne\n").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 12);
+        // Sous la limite : rien ne bouge.
+        rotate_journal(&mut a, &path, 100);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 12);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

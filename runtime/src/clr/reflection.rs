@@ -115,6 +115,16 @@ fn this_handle(args: &[Value], namespace: &str, class: &str) -> Option<usize> {
     .then(|| unsafe { *(p.add(size) as *const u64) } as usize)
 }
 
+/// Type désigné par un objet `System.Type` créé par le moteur (#1962).
+pub(super) fn type_id_of(obj: *mut u8) -> Option<TypeId> {
+    with_cache(|c| {
+        c.types
+            .iter()
+            .find(|(_, &o)| o == obj as usize)
+            .map(|(&id, _)| id)
+    })
+}
+
 fn bool_value(b: bool) -> Value {
     Value::I32(b as i32)
 }
@@ -242,7 +252,12 @@ impl Interpreter {
             let index = self.domain.iter().position(|i| i.name == key);
             match index {
                 Some(i) => self.find_type_in(i, type_name, ignore_case),
-                None if key == domain::CORLIB => self.find_builtin(type_name, ignore_case),
+                None if domain::is_framework_assembly(&key) => {
+                    let corlib = self.domain.iter().position(|i| i.name == domain::CORLIB);
+                    corlib
+                        .and_then(|c| self.find_type_in(c, type_name, ignore_case))
+                        .or_else(|| self.find_builtin(type_name, ignore_case))
+                }
                 None => {
                     crate::log_warn!(
                         "clr",

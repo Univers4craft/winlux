@@ -22,5 +22,25 @@ ok('OMP_THREAD_LIMIT="1"' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="
    "Suivi des travaux : OCR borné, une capture illisible est refusée sans tout arrêter (#1829)")
 _site = (ROOT / ".github/workflows/site.yml").read_text(encoding="utf-8")
 _etape = _site.split("- name: Suivi des travaux (captures de la CI)", 1)[-1].split("- name:", 1)[0]
-ok("continue-on-error" not in _etape and "galerie du suivi vide" in _etape and "for essai in 1 2 3" in _etape,
+ok("continue-on-error" not in _etape and "galerie du suivi vide" in _etape and "for essai in 1 2" in _etape,
    "Site : sans galerie complète, rien n'est publié et la galerie en ligne reste (#1871)")
+ok("suivi-galerie-precedente.py" in _etape
+   and "PERMIS" in (SCRIPTS / "suivi-galerie-precedente.py").read_text(encoding="utf-8"),
+   "Site : sans OCR, la dernière galerie publiée est reprise, rien de nouveau publié (#1871)")
+ok("MIN_ARTEFACT" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and 'size_in_bytes", 0) >= MIN_ARTEFACT' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : les artefacts de captures vides ne chassent pas les vraies captures (#1912)")
+ok("def cadrage(" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "(#1925)" in (SCRIPTS / "test-suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : vignettes 1440p/4K recadrées sur la fenêtre, pas un bureau noir (#1925)")
+ok("coins.count" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "(#1943)" in (SCRIPTS / "test-suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : Paramètres en 1440p/4K recadré même posé dans le coin (#1943)")
+ok('settings["shown_page"](page) != page' in (SCRIPTS / "capture-ui.py").read_text(encoding="utf-8")
+   and "def shown_page(" in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+   "Captures : une page de Paramètres absente n'est plus photographiée sur « Écran » (#1944)")
+ok("page « Écran » sous un autre nom (#1944)" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : les anciennes captures « Écran » sous un faux nom sont écartées de la galerie (#1944)")
+ok("(#1957)" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "round(ht * 1.6)" not in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : vignettes recadrées au ras du contenu, sans bande noire (#1957)")

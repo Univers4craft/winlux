@@ -63,6 +63,36 @@ fn split_argv_wide(line: &[u16]) -> Vec<Vec<u16>> {
     result
 }
 
+/// Un seul bloc (libérable par LocalFree) : le tableau de pointeurs terminé
+/// par NULL, puis les chaînes. Les pointeurs ont la taille de ceux du
+/// programme : 4 octets pour un programme x86 (#1899), sinon il lirait
+/// argv[1] dans la moitié haute d'argv[0] (SteamService.exe /install).
+unsafe fn pack_argv(args: &[Vec<u16>], width: usize) -> *mut u8 {
+    let pointers = (args.len() + 1) * width;
+    let bytes = pointers + args.iter().map(|arg| (arg.len() + 1) * 2).sum::<usize>();
+    let block = crate::dlls::kernel32::heap_alloc(0, 0, bytes) as *mut u8;
+    if block.is_null() {
+        return block;
+    }
+    let slot = |index: usize, value: usize| {
+        let at = block.add(index * width);
+        if width == 4 {
+            std::ptr::write_unaligned(at.cast::<u32>(), value as u32);
+        } else {
+            std::ptr::write_unaligned(at.cast::<usize>(), value);
+        }
+    };
+    slot(args.len(), 0);
+    let mut cursor = block.add(pointers).cast::<u16>();
+    for (index, arg) in args.iter().enumerate() {
+        slot(index, cursor as usize);
+        std::ptr::copy_nonoverlapping(arg.as_ptr(), cursor, arg.len());
+        *cursor.add(arg.len()) = 0;
+        cursor = cursor.add(arg.len() + 1);
+    }
+    block
+}
+
 /// One LocalFree-compatible allocation contains both pointers and UTF-16 data.
 pub unsafe extern "win64" fn command_line_to_argv_w(
     line: *const u16,
@@ -92,22 +122,12 @@ pub unsafe extern "win64" fn command_line_to_argv_w(
     } else {
         split_argv_wide(std::slice::from_raw_parts(line, length))
     };
-    let pointers = (args.len() + 1) * std::mem::size_of::<*mut u16>();
-    let bytes = pointers + args.iter().map(|arg| (arg.len() + 1) * 2).sum::<usize>();
-    let block = crate::dlls::kernel32::heap_alloc(0, 0, bytes) as *mut u8;
+    let block = pack_argv(&args, crate::wow32::pointer_size());
     if block.is_null() {
         crate::process::set_last_error(8);
         return std::ptr::null_mut();
     }
     let argv = block.cast::<*mut u16>();
-    *argv.add(args.len()) = std::ptr::null_mut();
-    let mut cursor = block.add(pointers).cast::<u16>();
-    for (index, arg) in args.iter().enumerate() {
-        *argv.add(index) = cursor;
-        std::ptr::copy_nonoverlapping(arg.as_ptr(), cursor, arg.len());
-        *cursor.add(arg.len()) = 0;
-        cursor = cursor.add(arg.len() + 1);
-    }
     *count = args.len() as i32;
     argv
 }
@@ -406,9 +426,18 @@ fn spawn(
     dir: Option<PathBuf>,
     keep: bool,
     elevate: bool,
+    hidden: bool,
 ) -> Result<Option<std::process::Child>, ()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
+    // Le nom de service n'appartient qu'au processus lancé par le
+    // gestionnaire de services, pas à ce qu'il lance (comme CreateProcess).
+    cmd.env_remove("WINLUX_SERVICE_NAME");
+    if hidden {
+        // SW_HIDE, SEE_MASK_NO_CONSOLE ou appelant sans bureau (service) :
+        // un programme console ne reçoit pas de terminal visible (#1923).
+        cmd.env("WINLUX_NO_TERMINAL", "1");
+    }
     if elevate {
         // Verbe « runas » : le .exe lancé affiche la demande UAC (uac.rs).
         cmd.env("WINLUX_ELEVATE", "1");
@@ -442,7 +471,40 @@ pub(crate) fn execute(
     dir: Option<String>,
     verb: Option<String>,
 ) -> isize {
-    execute_keep(file, params, dir, false, is_runas(verb.as_deref())).0
+    execute_shown(file, params, dir, verb, SW_SHOWNORMAL)
+}
+
+const SW_HIDE: i32 = 0;
+const SW_SHOWNORMAL: i32 = 1;
+/// SEE_MASK_NO_CONSOLE : le programme console garde la console de
+/// l'appelant au lieu d'en ouvrir une.
+const SEE_MASK_NO_CONSOLE: u32 = 0x8000;
+
+/// Pas de terminal visible pour un programme console (#1923) : fenêtre
+/// cachée demandée, console de l'appelant gardée, ou appelant qui tourne
+/// comme service (sans bureau, comme la session 0 de Windows).
+fn hidden_launch(show: i32, mask: u32) -> bool {
+    show == SW_HIDE
+        || mask & SEE_MASK_NO_CONSOLE != 0
+        || std::env::var_os("WINLUX_SERVICE_NAME").is_some_and(|n| !n.is_empty())
+}
+
+fn execute_shown(
+    file: &str,
+    params: &str,
+    dir: Option<String>,
+    verb: Option<String>,
+    show: i32,
+) -> isize {
+    execute_keep(
+        file,
+        params,
+        dir,
+        false,
+        is_runas(verb.as_deref()),
+        hidden_launch(show, 0),
+    )
+    .0
 }
 
 /// Verbe « runas » : exécuter en tant qu'administrateur.
@@ -456,14 +518,23 @@ fn execute_keep(
     dir: Option<String>,
     keep: bool,
     elevate: bool,
+    hidden: bool,
 ) -> (isize, Option<std::process::Child>) {
     match resolve(file, params) {
         Ok((program, args)) => {
-            crate::trace!("ShellExecute → {} {args:?}", program.display());
+            crate::trace!(
+                "ShellExecute → {} {args:?}{}",
+                program.display(),
+                if hidden {
+                    " (sans terminal visible)"
+                } else {
+                    ""
+                }
+            );
             let dir = dir
                 .filter(|d| !d.is_empty())
                 .map(|d| crate::paths::to_linux(&d));
-            match spawn(&program, &args, dir, keep, elevate) {
+            match spawn(&program, &args, dir, keep, elevate, hidden) {
                 Ok(child) => (SUCCESS, child),
                 Err(()) => (SE_ERR_FNF, None),
             }
@@ -496,16 +567,17 @@ pub unsafe extern "win64" fn shell_execute_a(
     file: *const u8,
     params: *const u8,
     dir: *const u8,
-    _show: i32,
+    show: i32,
 ) -> isize {
     let Some(file) = opt_a(file) else {
         return SE_ERR_FNF;
     };
-    execute(
+    execute_shown(
         &file,
         &opt_a(params).unwrap_or_default(),
         opt_a(dir),
         opt_a(verb),
+        show,
     )
 }
 
@@ -515,16 +587,17 @@ pub unsafe extern "win64" fn shell_execute_w(
     file: *const u16,
     params: *const u16,
     dir: *const u16,
-    _show: i32,
+    show: i32,
 ) -> isize {
     let Some(file) = opt_w(file) else {
         return SE_ERR_FNF;
     };
-    execute(
+    execute_shown(
         &file,
         &opt_w(params).unwrap_or_default(),
         opt_w(dir),
         opt_w(verb),
+        show,
     )
 }
 
@@ -579,9 +652,10 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
     let params = text(i.parameters).unwrap_or_default();
     let verb = text(i.verb);
     crate::trace!(
-        "ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}, dossier {:?}, masque {:#x})",
+        "ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}, dossier {:?}, masque {:#x}, nShow {})",
         text(i.directory),
-        i.mask
+        i.mask,
+        i.show
     );
     let (code, child) = execute_keep(
         &file,
@@ -589,6 +663,7 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
         text(i.directory),
         wants_process,
         is_runas(verb.as_deref()),
+        hidden_launch(i.show, i.mask),
     );
     i.inst_app = code;
     if let Some(child) = child {
@@ -823,6 +898,41 @@ mod tests {
         }
         std::env::remove_var("WINLUX_IMAGE_VIEWER");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SteamServiceTmp.exe /Update (#1923) : caché, sans console propre ou
+    /// lancé par un service, un programme console n'a pas de terminal visible.
+    #[test]
+    fn lancement_cache_sans_terminal() {
+        assert!(hidden_launch(SW_HIDE, 0));
+        assert!(hidden_launch(SW_SHOWNORMAL, SEE_MASK_NO_CONSOLE));
+        assert!(
+            !hidden_launch(SW_SHOWNORMAL, 0) || std::env::var_os("WINLUX_SERVICE_NAME").is_some()
+        );
+    }
+
+    /// SteamService.exe /install (#1899) : un programme x86 lit argv par
+    /// cases de 4 octets ; argv[1] doit y être, pas la moitié haute d'argv[0].
+    #[test]
+    fn argv_x86_en_pointeurs_de_4_octets() {
+        let _teb = crate::process::test_teb();
+        let args: Vec<Vec<u16>> = ["C:\\Steam\\bin\\SteamService.exe", "/install"]
+            .iter()
+            .map(|a| a.encode_utf16().collect())
+            .collect();
+        unsafe {
+            let block = pack_argv(&args, 4);
+            assert!(!block.is_null());
+            let slot = |i: usize| std::ptr::read_unaligned(block.add(i * 4).cast::<u32>());
+            let base = block as usize;
+            assert_eq!(slot(0), (base + 12) as u32, "argv[0] juste après 3 cases");
+            let second = base + 12 + (args[0].len() + 1) * 2;
+            assert_eq!(slot(1), second as u32, "argv[1] à la case 4");
+            assert_eq!(slot(2), 0, "tableau terminé par NULL");
+            let text = std::slice::from_raw_parts(second as *const u16, args[1].len());
+            assert_eq!(text, &args[1][..]);
+            assert!(crate::dlls::kernel32_misc::local_free(block.cast()).is_null());
+        }
     }
 
     #[test]

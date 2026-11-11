@@ -31,6 +31,14 @@ __declspec(dllimport) DWORD WINAPI GetEnvironmentVariableA(const char *, char *,
 __declspec(dllimport) BOOL WINAPI GetPhysicallyInstalledSystemMemory(ULONGLONG *);
 __declspec(dllimport) unsigned short *WINAPI GetCommandLineW(void);
 __declspec(dllimport) int WINAPI lstrlenW(const unsigned short *);
+__declspec(dllimport) HANDLE WINAPI LoadLibraryA(const char *);
+__declspec(dllimport) void *WINAPI GetProcAddress(HANDLE, const char *);
+
+/* vulkan-1.dll, en stdcall (VKAPI_CALL de vk_platform.h en Win32). */
+typedef void *(WINAPI *VkGipa)(void *, const char *);
+typedef int (WINAPI *VkCreate)(const void *, const void *, void **);
+typedef int (WINAPI *VkEnumExt)(const char *, DWORD *, void *);
+typedef int (WINAPI *VkEnumVer)(DWORD *);
 
 static DWORD fs_read(DWORD off) {
     DWORD v;
@@ -128,6 +136,26 @@ void __stdcall entry(void) {
         for (DWORD i = 0; i < len; i++)
             if (cl[i] != api[i]) fail(20, i);
         if (*(DWORD *)(peb + 0xa0) == 0) fail(21, 0);
+    }
+    /* Vulkan sans pilote 32 bits (#1951) : le chargeur répond, l'instance
+     * est refusée par VK_ERROR_INCOMPATIBLE_DRIVER (-9), sans plantage, et
+     * la pile stdcall reste juste. */
+    {
+        HANDLE vk = LoadLibraryA("vulkan-1.dll");
+        if (!vk) fail(22, 0);
+        VkGipa gipa = (VkGipa)GetProcAddress(vk, "vkGetInstanceProcAddr");
+        if (!gipa) fail(22, 1);
+        VkCreate create = (VkCreate)gipa(0, "vkCreateInstance");
+        VkEnumExt ext = (VkEnumExt)gipa(0, "vkEnumerateInstanceExtensionProperties");
+        VkEnumVer ver = (VkEnumVer)gipa(0, "vkEnumerateInstanceVersion");
+        if (!create || !ext || !ver) fail(23, 0);
+        if (gipa(0, "vkEnumeratePhysicalDevices")) fail(23, 1);
+        DWORD n = 77, v = 0;
+        if (ext(0, &n, 0) != 0 || n != 0) fail(24, n);
+        if (ver(&v) != 0 || v < (1u << 22)) fail(24, v);
+        void *inst = (void *)1;
+        int r = create(&n, 0, &inst);
+        if (r != -9 || inst != 0) fail(25, (DWORD)r);
     }
     /* FS x86 intact après des passerelles (y compris en pas à pas). */
     if (fs_read(0x18) != teb || fs_read(0x00) != 0xffffffffu) ExitProcess(16);

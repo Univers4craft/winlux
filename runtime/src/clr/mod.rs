@@ -13,10 +13,12 @@ pub mod gc;
 pub mod il;
 pub mod interop;
 pub mod metadata;
+pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
 pub mod reflection;
 pub mod resolve;
+pub mod tableaux;
 pub mod tables;
 pub mod threads;
 pub mod types;
@@ -78,6 +80,10 @@ pub fn execute_assembly_at(
     let interp_ptr: *const Interpreter = &*interp;
     threads::register(interp_ptr);
     interp.link_types();
+    // Relevé d'un coup des méthodes .NET non servies (#1922).
+    if let Some(dest) = std::env::var_os("WINLUX_CLR_MANQUANTS") {
+        interp.report_missing(&dest.to_string_lossy());
+    }
 
     let row = Token(entry).rid();
     let sig = interp.assembly.get_method_def(row).signature;
@@ -140,14 +146,15 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
             .type_methods(row)
             .map(|m| {
                 let md = assembly.get_method_def(m);
+                let params =
+                    metadata::decode_method_sig(assembly.get_blob(md.signature)).param_types;
                 types::MethodInfo {
                     name: assembly.get_string(md.name).to_string(),
                     assembly: asm_index,
                     token: Token::new(TableId::MethodDef, m).0,
                     is_virtual: md.is_virtual(),
-                    param_count: metadata::decode_method_sig(assembly.get_blob(md.signature))
-                        .param_types
-                        .len(),
+                    param_count: params.len(),
+                    params,
                 }
             })
             .collect();

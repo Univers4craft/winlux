@@ -804,6 +804,24 @@ SETTINGS_CSS = """
 """
 
 
+def unavailable_pages():
+    """Pages sans contenu possible sur cette machine (outil absent, matériel
+    absent) : elles n'apparaissent pas, et WINLUX_SETTINGS_PAGE qui en vise une
+    ouvre « Écran ». capture-ui.py s'en sert pour ne pas photographier « Écran »
+    sous le nom d'une autre page (#1944)."""
+    status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+    return {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+
+
+def shown_page(wanted, unavailable=None):
+    """Page réellement ouverte pour WINLUX_SETTINGS_PAGE=wanted (#1944)."""
+    wanted = MERGED.get(min(len(PAGES) - 1, max(0, wanted)), min(len(PAGES) - 1, max(0, wanted)))
+    hidden = ((unavailable_pages() if unavailable is None else unavailable) - {SOUND_PAGE}) | set(MERGED)
+    if wanted == 35 and wanted in hidden: wanted = 2
+    if wanted in hidden: wanted = 8
+    return wanted
+
+
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Paramètres"))
@@ -815,20 +833,16 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.connect("destroy", lambda *_: Gtk.main_level() and Gtk.main_quit())
         try: wanted = int(os.environ.get("WINLUX_SETTINGS_PAGE", "8"))
         except ValueError: wanted = 8
-        wanted = MERGED.get(min(len(PAGES) - 1, max(0, wanted)), min(len(PAGES) - 1, max(0, wanted)))
         # Une page sans contenu possible sur cette machine n'apparaît pas.
-        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
-        self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+        self.hidden_pages = unavailable_pages()
+        wanted = shown_page(wanted, self.hidden_pages)
         # Sans batterie, la page s'appelle « Alimentation » (comme un PC de bureau).
         if not power_hardware()[0]: PAGES[23] = _t("Alimentation")
         # Sans PipeWire, « Son » garde les commandes simples de l’ancienne page.
         self.sound_fallback = SOUND_PAGE in self.hidden_pages
         self.hidden_pages.discard(SOUND_PAGE)
         self.hidden_pages |= set(MERGED)
-        # Page 33 (Comptes, #309) : cachée tant que sa page n’est pas livrée.
-        # Wi-Fi (35) sans carte Wi-Fi : la page Réseau la remplace.
-        if wanted == 35 and wanted in self.hidden_pages: wanted = 2
-        if wanted in self.hidden_pages: wanted = 8
+        # Wi-Fi (35) sans carte Wi-Fi : la page Réseau la remplace (shown_page).
         self.current = wanted
         self.page = wanted
         self.process = None

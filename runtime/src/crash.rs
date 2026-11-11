@@ -198,6 +198,8 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         }
         let code = report(sig, info, ctx);
         crate::dlls::kernel32::record_exit_code(code);
+        // Comme sous Windows, la mort du processus ferme ses jobs (#1966).
+        crate::dlls::jobs::on_crash();
         libc::_exit(code as i32);
     }
 }

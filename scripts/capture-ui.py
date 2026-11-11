@@ -40,6 +40,11 @@ def targets(runtime, testdir):
     found = []
     settings = runpy.run_path(str(scripts / "winlux-settings.py"), run_name="capture_ui")
     for page in range(len(settings["PAGES"])):
+        # Une page absente sur cette machine ouvrirait « Écran » : pas de
+        # capture sous un nom trompeur (#1944).
+        if settings["shown_page"](page) != page:
+            print(f"parametres-{page:02d} : page absente sur cette machine, pas de capture (#1944)")
+            continue
         found.append((f"parametres-{page:02d}", [python, "-B", str(scripts / "winlux-settings.py")],
                       {"WINLUX_SETTINGS_PAGE": str(page)}))
     found.append(("menu-demarrer", [python, "-B", str(scripts / "winlux-start-menu.py")], {}))
