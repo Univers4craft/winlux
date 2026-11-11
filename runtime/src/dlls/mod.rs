@@ -17,6 +17,7 @@ pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
+pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
@@ -45,6 +46,7 @@ pub mod crt;
 pub mod crt_extra;
 pub mod crt_more;
 pub mod crt_proc;
+pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -52,6 +54,7 @@ pub mod crt_ucrt;
 pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
+pub mod d2d_combine;
 pub mod d2d_raster;
 pub mod d3d10;
 pub mod d3d11;
@@ -74,6 +77,7 @@ pub mod ddeml;
 pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
+pub mod devnotify;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
@@ -115,6 +119,7 @@ mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
 pub mod hid;
+pub mod hid_report;
 pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
@@ -166,6 +171,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
@@ -185,6 +191,7 @@ pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
+pub mod redist_dlls;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -231,6 +238,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
@@ -393,6 +401,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
+            e.extend(crt_releve::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -989,6 +998,26 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "odbc32",
+                exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "activeds",
+                exports: activeds_aclui::activeds_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "aclui",
+                exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wevtapi",
+                exports: wevtapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
                 handle: fake_module(),
@@ -1171,6 +1200,11 @@ fn builtins() -> &'static Vec<Builtin> {
             ("mpr", legacy_dlls::mpr_exports()),
             ("msi", legacy_dlls::msi_exports()),
             ("shfolder", legacy_dlls::shfolder_exports()),
+            // Corpus de #26 (#1394) : signtool x86, panda3d, .NET Core 3.1.
+            ("mfc42", redist_dlls::mfc42_exports()),
+            ("mssign32", redist_dlls::mssign32_exports()),
+            ("concrt140", redist_dlls::concrt140_exports()),
+            ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
                 name,
@@ -1412,8 +1446,13 @@ pub fn normalize(dll: &str) -> String {
     if base == "imagehlp" {
         return "dbghelp".into();
     }
-    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
-    if base == "wsock32" {
+    // Résolution des types WinRT : wintypes.dll (#1394).
+    if base.starts_with("api-ms-win-ro-typeresolution-") {
+        return "wintypes".into();
+    }
+    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32, et
+    // mswsock (AcceptEx, TransmitFile, WSARecvEx…) y est servie (#1390).
+    if base == "wsock32" || base == "mswsock" {
         return "ws2_32".into();
     }
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
