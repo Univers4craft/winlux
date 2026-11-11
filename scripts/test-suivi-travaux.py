@@ -92,6 +92,16 @@ def main():
         data = json.loads((tmp / "ferme" / "data.json").read_text(encoding="utf-8"))
         check(closed.returncode == 0 and data["executions"] == [], "OCR absent : aucune capture publiée")
 
+        # Un tesseract qui échoue refuse l'image au lieu d'arrêter la construction (#1829).
+        faux = tmp / "faux-bin"
+        faux.mkdir()
+        (faux / "tesseract").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (faux / "tesseract").chmod(0o755)
+        casse = run(work, tmp / "casse", "--exiger-ocr", env=dict(os.environ, PATH=f"{faux}:{os.environ.get('PATH', '')}"))
+        data = json.loads((tmp / "casse" / "data.json").read_text(encoding="utf-8")) if casse.returncode == 0 else None
+        check(data is not None and data["executions"] == [] and "OCR impossible" in casse.stdout,
+              "OCR en échec : capture refusée, construction menée à son terme (#1829)")
+
         # Page index.html de l'artefact captures-ui.
         artefact = work / "102" / "images"
         (artefact / "r.json").write_text('{"ecrans": {"parametres-02": 3.5}}', encoding="utf-8")
