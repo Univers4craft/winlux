@@ -930,6 +930,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Pare-feu, ancienne interface HNetCfg.FwMgr (SteamService, #1919).
+        if let Some(hr) = super::netfw::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Profils de saisie du Text Services Framework (CEF de Steam, #1602).
         if let Some(hr) = super::msctf_profiles::create_builtin(&guid, &iid, out) {
             return hr;
