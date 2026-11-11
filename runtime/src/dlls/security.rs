@@ -1539,6 +1539,37 @@ pub unsafe extern "win64" fn CreateWellKnownSid(
     1
 }
 
+const SACL_SECURITY_INFORMATION: u32 = 0x8;
+const LABEL_SECURITY_INFORMATION: u32 = 0x10;
+
+/// Ajoute au descripteur auto-relatif `sd` une SACL portant l'étiquette
+/// d'intégrité du processus (SYSTEM_MANDATORY_LABEL_ACE, NO_WRITE_UP), comme
+/// TokenIntegrityLevel. Un jeton ou un processus Windows en a toujours une ;
+/// Acrobat lit AceCount de cette SACL sans tester le pointeur (#1828).
+fn with_integrity_label(mut sd: Vec<u8>) -> Vec<u8> {
+    let level = if elevated() {
+        "S-1-16-12288"
+    } else {
+        "S-1-16-8192"
+    };
+    let sid = sid_bytes(level).unwrap_or_default();
+    let ace_size = 8 + sid.len();
+    let off = sd.len() as u32;
+    sd[12..16].copy_from_slice(&off.to_le_bytes());
+    sd.extend_from_slice(&[2, 0]);
+    sd.extend_from_slice(&((8 + ace_size) as u16).to_le_bytes());
+    sd.extend_from_slice(&1u16.to_le_bytes());
+    sd.extend_from_slice(&[0, 0]);
+    // SYSTEM_MANDATORY_LABEL_ACE_TYPE 0x11, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP.
+    sd.extend_from_slice(&[0x11, 0]);
+    sd.extend_from_slice(&(ace_size as u16).to_le_bytes());
+    sd.extend_from_slice(&1u32.to_le_bytes());
+    sd.extend_from_slice(&sid);
+    let control = u16::from_le_bytes([sd[2], sd[3]]) | 0x10; // SE_SACL_PRESENT
+    sd[2..4].copy_from_slice(&control.to_le_bytes());
+    sd
+}
+
 /// GetKernelObjectSecurity : descripteur de l'objet (au nom du compte).
 pub unsafe extern "win64" fn GetKernelObjectSecurity(
     _handle: usize,
@@ -1548,6 +1579,9 @@ pub unsafe extern "win64" fn GetKernelObjectSecurity(
     needed: *mut u32,
 ) -> i32 {
     let d = match file_descriptor(std::path::Path::new("/proc/self"), info & 7) {
+        Ok(d) if info & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION) != 0 => {
+            with_integrity_label(d)
+        }
         Ok(d) => d,
         Err(e) => {
             crate::process::set_last_error(crate::dlls::kernel32::io_error_code(&e));

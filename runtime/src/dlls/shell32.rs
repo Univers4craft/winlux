@@ -459,6 +459,7 @@ fn execute_keep(
 ) -> (isize, Option<std::process::Child>) {
     match resolve(file, params) {
         Ok((program, args)) => {
+            crate::trace!("ShellExecute → {} {args:?}", program.display());
             let dir = dir
                 .filter(|d| !d.is_empty())
                 .map(|d| crate::paths::to_linux(&d));
@@ -575,12 +576,19 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
     if wants_process {
         i.process = 0;
     }
+    let params = text(i.parameters).unwrap_or_default();
+    let verb = text(i.verb);
+    crate::trace!(
+        "ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}, dossier {:?}, masque {:#x})",
+        text(i.directory),
+        i.mask
+    );
     let (code, child) = execute_keep(
         &file,
-        &text(i.parameters).unwrap_or_default(),
+        &params,
         text(i.directory),
         wants_process,
-        is_runas(text(i.verb).as_deref()),
+        is_runas(verb.as_deref()),
     );
     i.inst_app = code;
     if let Some(child) = child {

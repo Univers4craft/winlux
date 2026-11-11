@@ -542,6 +542,107 @@ pub unsafe extern "win64" fn bcrypt_hash(
 
 mod aes;
 
+// --- Clés asymétriques, secrets, énumérations (ISCC, #1860) -----------------
+// ISCmplr.dll (Inno Setup 6.7) résout ces fonctions au chargement et refuse
+// de se charger s'il en manque une ; il ne s'en sert que pour les signatures
+// ISSig. Winlux n'a pas encore de fournisseur RSA/ECC sous CNG : chaque
+// fonction répond STATUS_NOT_SUPPORTED, comme un fournisseur qui ne connaît
+// pas l'algorithme demandé. Source : documentation publique de bcrypt.h.
+
+const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+
+pub extern "win64" fn bcrypt_generate_key_pair(
+    _alg: usize,
+    _key: usize,
+    _bits: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+/// Aucune paire n'a pu être créée, donc aucun handle de paire n'est valide.
+pub extern "win64" fn bcrypt_finalize_key_pair(_key: usize, _flags: u32) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_import_key_pair(
+    _alg: usize,
+    _import: usize,
+    _blob_type: usize,
+    _key: usize,
+    _input: usize,
+    _len: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_sign_hash(
+    _key: usize,
+    _padding: usize,
+    _input: usize,
+    _len: u32,
+    _output: usize,
+    _out_len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_verify_signature(
+    _key: usize,
+    _padding: usize,
+    _hash: usize,
+    _hash_len: u32,
+    _sig: usize,
+    _sig_len: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+pub extern "win64" fn bcrypt_secret_agreement(
+    _private: usize,
+    _public: usize,
+    _secret: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+pub extern "win64" fn bcrypt_destroy_secret(_secret: usize) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_derive_key(
+    _secret: usize,
+    _kdf: usize,
+    _params: usize,
+    _out: usize,
+    _len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_key_derivation(
+    _key: usize,
+    _params: usize,
+    _out: usize,
+    _len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+/// BCryptGetFipsAlgorithmMode : le mode FIPS n'est pas imposé.
+pub unsafe extern "win64" fn bcrypt_get_fips_algorithm_mode(enabled: *mut u8) -> i32 {
+    if enabled.is_null() {
+        return 0xC000_000Du32 as i32; // STATUS_INVALID_PARAMETER
+    }
+    *enabled = 0;
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "BCryptGenRandom"=>fn bcrypt_gen_random,"BCryptOpenAlgorithmProvider"=>fn bcrypt_open_algorithm_provider,
@@ -556,7 +657,13 @@ pub fn exports() -> crate::dlls::Exports {
      "BCryptDeriveKeyPBKDF2"=>fn bcrypt_derive_key_pbkdf2,
      "BCryptEnumContextFunctions"=>fn bcrypt_enum_context_functions,
      "BCryptFreeBuffer"=>fn bcrypt_free_buffer,
-     "BCryptHash"=>fn bcrypt_hash
+     "BCryptHash"=>fn bcrypt_hash,
+     "BCryptGenerateKeyPair"=>fn bcrypt_generate_key_pair,"BCryptFinalizeKeyPair"=>fn bcrypt_finalize_key_pair,
+     "BCryptImportKeyPair"=>fn bcrypt_import_key_pair,"BCryptSignHash"=>fn bcrypt_sign_hash,
+     "BCryptVerifySignature"=>fn bcrypt_verify_signature,"BCryptSecretAgreement"=>fn bcrypt_secret_agreement,
+     "BCryptDestroySecret"=>fn bcrypt_destroy_secret,"BCryptDeriveKey"=>fn bcrypt_derive_key,
+     "BCryptKeyDerivation"=>fn bcrypt_key_derivation,
+     "BCryptGetFipsAlgorithmMode"=>fn bcrypt_get_fips_algorithm_mode
     }
 }
 
