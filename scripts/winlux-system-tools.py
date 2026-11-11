@@ -374,8 +374,13 @@ def palette(dark, accent):
             link = _mix(link, "#000000", 0.15)
     while _contrast(link, p["card"]) < 4.5:
         link = _mix(link, "#ffffff", 0.15)
+    # Fond d'accent (tuiles actives, bouton principal) : assombri ou éclairci
+    # juste assez pour que son texte dépasse 4,5:1, même à la limite (#10893e).
+    on_accent = _text_on(accent)
+    while _contrast(on_accent, accent) < 4.6:
+        accent = _mix(accent, "#000000" if on_accent == "#ffffff" else "#ffffff", 0.06)
     p["accent"] = accent
-    p["on_accent"] = _text_on(accent)
+    p["on_accent"] = on_accent
     p["accent_hover"] = _mix(accent, p["fg"], 0.12)
     p["link"] = link
     p["card_border"] = _mix(p["card"], p["border"], 0.5)
