@@ -8,6 +8,10 @@ const MSITYPE_VALID: u32 = 0x0100;
 const MSITYPE_STRING: u32 = 0x0800;
 const MSITYPE_NULLABLE: u32 = 0x1000;
 const MSITYPE_TEMPORARY: u32 = 0x4000;
+/// Colonne de clé primaire dans `_Columns` : bit observé sur nos propres
+/// paquets (msitools, `testdata/sample.msi`), où seules les colonnes
+/// déclarées clés le portent (#1607).
+const MSITYPE_KEY: u32 = 0x2000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -45,6 +49,8 @@ pub struct Table {
     /// Colonnes de flux binaire (`v0`) : la valeur vaut 1 si le flux
     /// `Table.clé` existe.
     pub binary: Vec<bool>,
+    /// Colonnes de la clé primaire (`MsiDatabaseGetPrimaryKeys`).
+    pub keys: Vec<bool>,
 }
 
 impl Table {
@@ -315,6 +321,7 @@ impl Database {
                         .iter()
                         .map(|c| c.kind & !MSITYPE_NULLABLE == MSITYPE_STRING | MSITYPE_VALID)
                         .collect(),
+                    keys: cols.iter().map(|c| c.kind & MSITYPE_KEY != 0).collect(),
                     columns: cols.into_iter().map(|c| c.name).collect(),
                     rows,
                 },
