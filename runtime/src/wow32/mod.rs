@@ -2252,6 +2252,10 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumCalendarInfoExW"
         | "EnumWindows" => bit(0),
         "InitOnceExecuteOnce"
+        | "RegisterServiceCtrlHandlerA"
+        | "RegisterServiceCtrlHandlerW"
+        | "RegisterServiceCtrlHandlerExA"
+        | "RegisterServiceCtrlHandlerExW"
         | "SetTimerQueueTimer"
         | "CreateFiber"
         | "CreateThreadpoolIo"
