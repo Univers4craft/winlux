@@ -309,6 +309,13 @@ fn champ_marges_em_setmargins() {
     assert_eq!((area.left, area.right), (l as i32, 42 - 7));
     sendw(e, 0x00D3, 0xFFFF, 0); // EC_USEFONTINFO
     assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    // #1552 : EC_USEFONTINFO dans chaque mot de lParam (wxWidgets) donne
+    // aussi les marges de la police, pas 65535 pixels.
+    sendw(e, 0x00D3, 3, 7 | (7 << 16));
+    sendw(e, 0x00D3, 3, 0xFFFF | (0xFFFF << 16));
+    assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    let area = edit_area(e, client(e));
+    assert!(area.left < area.right, "zone de texte {area:?}");
     gui::destroy_window(p);
 }
 

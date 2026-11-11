@@ -2105,8 +2105,8 @@ unsafe fn create_file_opened(
         None => path,
     };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
-    if let Some(dev) = crate::dlls::hid::device_path(path) {
-        return match crate::dlls::hid::open(&dev) {
+    if crate::dlls::hid::parse_path(path).is_some() {
+        return match crate::dlls::hid::open_path(path, access) {
             Ok(f) => {
                 crate::process::set_last_error(0);
                 let h = insert_file(f);

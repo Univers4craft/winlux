@@ -182,6 +182,11 @@ if test -f "$dir/hid_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
 fi
 
+# Logiciels d'éclairage : collections de tête, HidP_*, cfgmgr32 (#1523), bloquant.
+if test -f "$dir/hid_rgb_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid-rgb.sh"
+fi
+
 # DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
 if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"

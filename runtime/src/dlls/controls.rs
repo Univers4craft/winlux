@@ -2042,11 +2042,16 @@ unsafe fn edit_common(hwnd: usize, msg: u32, wp: usize, lp: isize, area: Rect) -
         } // EM_SCROLLCARET
         0x00D3 => {
             // EM_SETMARGINS : EC_LEFTMARGIN 1, EC_RIGHTMARGIN 2 ;
-            // EC_USEFONTINFO (0xFFFF) revient aux marges de la police.
+            // EC_USEFONTINFO (0xFFFF) revient aux marges de la police, en
+            // wParam pour les deux marges ou dans le mot de lParam d'une
+            // seule. wxWidgets envoie MAKELONG(EC_USEFONTINFO,
+            // EC_USEFONTINFO) : pris pour 65535 pixels, le texte des champs
+            // de FileZilla partait hors du champ (#1552).
             let font = with_ctl(hwnd, |c| font_of(c))?;
             let current = edit_margins(hwnd).unwrap_or((0, 0));
             let fm = font_margin(font);
-            let (l, r) = ((lp as u32 & 0xFFFF) as i32, (lp as u32 >> 16) as i32);
+            let word = |v: u32| if v == 0xFFFF { fm } else { v as i32 };
+            let (l, r) = (word(lp as u32 & 0xFFFF), word(lp as u32 >> 16));
             let next = if wp & 0xFFFF == 0xFFFF {
                 (fm, fm)
             } else {
