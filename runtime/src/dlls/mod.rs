@@ -85,6 +85,7 @@ pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
 pub mod dpnet;
+pub mod drivers;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -1458,6 +1459,11 @@ pub fn normalize(dll: &str) -> String {
     }
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
+        return "setupapi".into();
+    }
+    // Installation de pilotes (DiInstallDriver, UpdateDriverForPlugAndPlay…,
+    // #1532) : servie par setupapi.
+    if base == "newdev" {
         return "setupapi".into();
     }
     // combase.dll (COM et Windows Runtime depuis Windows 8) : notre ole32.

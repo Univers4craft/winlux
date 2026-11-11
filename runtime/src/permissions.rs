@@ -476,7 +476,7 @@ pub fn denied_notice(app: &str, lang: &str) -> String {
     t.replace("{app}", app)
 }
 
-fn interface_lang() -> String {
+pub(crate) fn interface_lang() -> String {
     if let Ok(l) = std::env::var("WINLUX_LANG") {
         if !l.is_empty() {
             return l;
