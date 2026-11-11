@@ -956,15 +956,17 @@ impl Interpreter {
         let Some(actual) = gc::type_of(obj) else {
             return true;
         };
+        if types::with_types(|reg| reg.get(target).is_some_and(|t| t.is_interface)) {
+            // Interfaces suivies par la table InterfaceImpl (#1975) ; un
+            // type sans définition connue reste accepté.
+            return self.implements(actual, target).unwrap_or(true);
+        }
         types::with_types(|reg| {
             let Some(t) = reg.get(target) else {
                 return true;
             };
-            // Les interfaces implémentées ne sont pas encore suivies, ni la
-            // hiérarchie des types de la bibliothèque intégrée : on accepte.
-            if t.is_interface {
-                return true;
-            }
+            // La hiérarchie des types de la bibliothèque intégrée n'est pas
+            // suivie : on accepte.
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
                 || reg.is_subclass_of(target, types::TYPE_EXCEPTION);

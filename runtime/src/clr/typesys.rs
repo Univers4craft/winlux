@@ -503,3 +503,123 @@ impl Interpreter {
 fn is_nested(a: &Assembly, type_row: u32) -> bool {
     (1..=a.row_count(TableId::NestedClass)).any(|n| a.get_nested_class(n).nested_class == type_row)
 }
+
+/// Réponses déjà calculées de `implements` : (type réel, interface).
+static IMPLEMENTS: std::sync::Mutex<Option<std::collections::HashMap<(TypeId, TypeId), bool>>> =
+    std::sync::Mutex::new(None);
+
+impl Interpreter {
+    /// Définition (assembly, ligne TypeDef) d'un type, y compris d'un type
+    /// intégré servi par notre mscorlib.
+    fn type_def_of(&self, id: TypeId) -> Option<(usize, u32)> {
+        if let Some(def) = types::with_types(|reg| reg.get(id).and_then(|t| t.def)) {
+            return Some(def);
+        }
+        self.domain.iter().enumerate().find_map(|(asm, d)| {
+            d.type_ids
+                .iter()
+                .position(|t| *t == Some(id))
+                .map(|row| (asm, row as u32))
+        })
+    }
+
+    /// Le type `actual` implémente-t-il l'interface `target` (ECMA-335
+    /// §II.12, table InterfaceImpl §II.22.23), directement, par un parent ou
+    /// par une interface héritée (#1975) ? Les arguments de type sont
+    /// comparés quand ils sont connus, avec la covariance des types
+    /// référence (`IEnumerable<string>` est un `IEnumerable<object>`).
+    /// `None` : le type n'a pas de définition connue.
+    pub(super) fn implements(&self, actual: TypeId, target: TypeId) -> Option<bool> {
+        if let Some(&r) = IMPLEMENTS
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .get(&(actual, target))
+        {
+            return Some(r);
+        }
+        let info = |id: TypeId| {
+            types::with_types(|reg| {
+                reg.get(id).map(|t| {
+                    (
+                        (t.namespace.clone(), t.name.clone()),
+                        t.type_args.clone(),
+                        t.generic_params,
+                        t.parent,
+                    )
+                })
+            })
+        };
+        let (wanted, wanted_args, _, _) = info(target)?;
+        if actual == types::TYPE_ARRAY {
+            let r = (wanted.0 == "System.Collections.Generic" || wanted.0 == "System.Collections")
+                && super::tableaux::ARRAY_INTERFACES.contains(&wanted.1.as_str())
+                || (wanted.0 == "System" && wanted.1 == "ICloneable");
+            return Some(r);
+        }
+        let arg_fits = |found: TypeId, want: TypeId| {
+            found == want
+                || types::with_types(|reg| {
+                    let value = |id| reg.get(id).is_some_and(|t| t.is_value);
+                    !value(want) && !value(found) && reg.is_subclass_of(found, want)
+                })
+        };
+        // (type, arguments de type connus ?)
+        let mut todo = vec![(actual, true)];
+        let mut seen = Vec::new();
+        let mut any_def = false;
+        let mut found = false;
+        while let Some((id, known)) = todo.pop() {
+            if id == 0 || seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some((name, args, generic_params, parent)) = info(id) else {
+                continue;
+            };
+            if id != actual && name == wanted {
+                let fits = !known
+                    || args.len() != wanted_args.len()
+                    || args.iter().zip(&wanted_args).all(|(&f, &w)| arg_fits(f, w));
+                if fits {
+                    found = true;
+                    break;
+                }
+                continue;
+            }
+            // Le parent est rangé sous sa définition ouverte.
+            todo.push((parent, false));
+            let Some((asm, row)) = self.type_def_of(id) else {
+                continue;
+            };
+            any_def = true;
+            let a = self.assembly_at(asm);
+            let impls: Vec<u32> = (1..=a.row_count(TableId::InterfaceImpl))
+                .map(|r| a.get_interface_impl(r))
+                .filter(|i| i.class == row)
+                .map(|i| i.interface)
+                .collect();
+            let instantiated = known && args.len() as u32 == generic_params;
+            for coded in impls {
+                if instantiated {
+                    let gen = Gen {
+                        t: args.clone(),
+                        m: Vec::new(),
+                    };
+                    todo.push((self.resolve_coded(asm, coded, &gen), true));
+                } else {
+                    todo.push((self.resolve_coded_open(asm, coded), false));
+                }
+            }
+        }
+        if !any_def {
+            return None;
+        }
+        IMPLEMENTS
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Default::default)
+            .insert((actual, target), found);
+        Some(found)
+    }
+}

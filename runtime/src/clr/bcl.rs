@@ -377,7 +377,7 @@ fn boxed_bytes(p: *mut u8) -> Option<(types::TypeId, Vec<u8>)> {
     Some((id, unsafe { std::slice::from_raw_parts(p, size) }.to_vec()))
 }
 
-fn boxed_equal(a: *mut u8, b: *mut u8) -> bool {
+pub(super) fn boxed_equal(a: *mut u8, b: *mut u8) -> bool {
     match (boxed_bytes(a), boxed_bytes(b)) {
         (Some(x), Some(y)) => x == y,
         _ => false,
