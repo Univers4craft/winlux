@@ -74,6 +74,11 @@ et écritures, OVERLAPPED compris, passent par un relais qui ajoute ou retire
 l'octet d'identifiant de rapport que Windows impose et que hidraw omet. La règle
 `integration/70-winlux-manettes.rules` ouvre les `/dev/hidraw*` des fabricants
 de manettes au groupe `input`. Test : `scripts/test-hid.sh`.
+`integration/71-winlux-eclairage.rules` (#1522) fait de même pour les
+fabricants de claviers, souris et casques à éclairage (Corsair, Razer, ASUS,
+MSI, HyperX, Cooler Master, Roccat, Turtle Beach, Glorious, Wooting, NZXT,
+ITE), et pour eux seulement : aucune règle générique, `/dev/bus/usb` et
+`/dev/uhid` restent fermés aux comptes.
 
 Depuis #1523, `hid.dll` sert aussi les logiciels de matériel (éclairage,
 souris, claviers, casques) et hidapi :

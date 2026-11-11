@@ -33,7 +33,7 @@ fi
 if [ -z "$destdir" ] && [ -w /proc/sys/fs/binfmt_misc/winlux ]; then
     echo -1 >/proc/sys/fs/binfmt_misc/winlux || true
 fi
-rm -f "$etc/binfmt.d/winlux.conf" "$etc/udev/rules.d/70-winlux-manettes.rules"
+rm -f "$etc/binfmt.d/winlux.conf" "$etc/udev/rules.d/70-winlux-manettes.rules" "$etc/udev/rules.d/71-winlux-eclairage.rules"
 rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report" "$bin/winlux-uac" "$bin/winlux-applications"
 rm -f "$share/thumbnailers/winlux-windows.thumbnailer"
 for icon in application-x-ms-dos-executable application-x-msdownload application-vnd.microsoft.portable-executable application-x-dosexec application-x-msi; do
