@@ -332,21 +332,73 @@ fn resident_pages() -> Vec<usize> {
     pages
 }
 
+/// Une page d'un autre processus est-elle présente ? Bit 63 de son entrée
+/// dans `/proc/<pid>/pagemap` (lisible sans privilège pour un processus
+/// que l'on peut tracer ; seuls les numéros de cadre sont masqués).
+pub(crate) fn pagemap_present(file: &std::fs::File, page: usize) -> bool {
+    use std::os::unix::fs::FileExt;
+    let mut e = [0u8; 8];
+    file.read_exact_at(&mut e, (page / 4096 * 8) as u64).is_ok() && u64::from_le_bytes(e) >> 63 != 0
+}
+
+/// Pages présentes d'un autre processus, sur ses projections lisibles.
+fn foreign_resident_pages(pid: i32) -> Option<Vec<usize>> {
+    let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).ok()?;
+    let pagemap = std::fs::File::open(format!("/proc/{pid}/pagemap")).ok()?;
+    let mut pages = Vec::new();
+    for line in maps.lines() {
+        let mut parts = line.split_whitespace();
+        let Some((lo, hi)) = parts.next().and_then(|r| r.split_once('-')) else {
+            continue;
+        };
+        let (Ok(lo), Ok(hi)) = (usize::from_str_radix(lo, 16), usize::from_str_radix(hi, 16))
+        else {
+            continue;
+        };
+        if !parts.next().is_some_and(|perm| perm.starts_with('r')) || hi > 0x7FFF_FFFF_0000 {
+            continue;
+        }
+        pages.extend(
+            (lo..hi)
+                .step_by(4096)
+                .filter(|&p| pagemap_present(&pagemap, p)),
+        );
+    }
+    Some(pages)
+}
+
 /// `QueryWorkingSet` : PSAPI_WORKING_SET_INFORMATION, NumberOfEntries puis
 /// une entrée par page résidente (adresse de page, drapeaux à zéro : page
 /// privée). Tampon trop petit : NumberOfEntries rempli et ERROR_BAD_LENGTH,
 /// comme Windows, pour que l'appelant agrandisse son tampon.
 pub unsafe extern "win64" fn K32QueryWorkingSet(process: usize, info: *mut u8, cb: u32) -> i32 {
-    if !is_current(process) {
-        set_error(ERROR_ACCESS_DENIED);
-        return 0;
-    }
+    // Autre processus (#1729) : pages présentes d'après /proc/<pid>/pagemap.
+    let foreign = if is_current(process) {
+        None
+    } else {
+        match crate::dlls::kernel32::process_os_pid(process) {
+            Some(pid) => Some(pid),
+            None => {
+                set_error(6); // ERROR_INVALID_HANDLE
+                return 0;
+            }
+        }
+    };
     let ptr = crate::wow32::pointer_size();
     if info.is_null() || (cb as usize) < ptr {
         set_error(ERROR_BAD_LENGTH);
         return 0;
     }
-    let pages = resident_pages();
+    let pages = match foreign {
+        None => resident_pages(),
+        Some(pid) => match foreign_resident_pages(pid) {
+            Some(p) => p,
+            None => {
+                set_error(ERROR_ACCESS_DENIED);
+                return 0;
+            }
+        },
+    };
     crate::wow32::write_ptr(info as usize, pages.len());
     if pages.len() > (cb as usize - ptr) / ptr {
         set_error(ERROR_BAD_LENGTH);
@@ -395,6 +447,67 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VirtualQueryEx, NtQueryVirtualMemory et QueryWorkingSet sur le
+    /// handle d'un autre processus, comme le gestionnaire de plantage de
+    /// Chromium (#1729).
+    #[test]
+    fn memoire_d_un_autre_processus() {
+        use crate::dlls::kernel32::MemoryBasicInformation;
+        use crate::dlls::kernel32::{close_handle, open_process, virtual_query_ex};
+        let _teb = crate::process::test_teb();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        unsafe {
+            let h = open_process(0x0410, 0, child.id());
+            assert_ne!(h, 0);
+            let size = std::mem::size_of::<MemoryBasicInformation>();
+            let mut addr = 0usize;
+            let (mut committed, mut regions) = (0, 0);
+            loop {
+                let mut m: MemoryBasicInformation = std::mem::zeroed();
+                let got = virtual_query_ex(h, addr as *const _, &mut m, size);
+                if got == 0 {
+                    break;
+                }
+                assert_eq!(got, size);
+                assert_eq!(m.base_address as usize, addr, "parcours contigu");
+                assert!(m.region_size > 0);
+                committed += usize::from(m.state == 0x1000);
+                regions += 1;
+                addr += m.region_size;
+                assert!(regions < 100_000);
+            }
+            assert_eq!(crate::dlls::kernel32::get_last_error(), 87);
+            assert!(committed > 0, "le programme du processus est projeté");
+            // NtQueryVirtualMemory accepte le même handle.
+            let mut m: MemoryBasicInformation = std::mem::zeroed();
+            let mut ret = 0usize;
+            assert_eq!(
+                crate::dlls::ntdll::nt_query_virtual_memory(
+                    h,
+                    std::ptr::null(),
+                    0,
+                    (&mut m as *mut MemoryBasicInformation).cast(),
+                    size,
+                    &mut ret
+                ),
+                0
+            );
+            // QueryWorkingSet : au moins une page présente.
+            let mut buf = vec![0usize; 1 << 20];
+            assert_eq!(
+                K32QueryWorkingSet(h, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32),
+                1
+            );
+            assert!(buf[0] > 0);
+            close_handle(h);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     #[test]
     fn liste_des_processus_et_chemins() {

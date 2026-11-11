@@ -1919,7 +1919,9 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
     length: usize,
     return_length: *mut usize,
 ) -> i32 {
-    if !crate::dlls::kernel32::is_current_process_handle(handle) {
+    // Autre processus : ses régions viennent de /proc/<pid>/maps (#1729).
+    let current = crate::dlls::kernel32::is_current_process_handle(handle);
+    if !current && crate::dlls::kernel32::process_os_pid(handle).is_none() {
         return STATUS_INVALID_HANDLE;
     }
     if info_class != 0 {
@@ -1944,11 +1946,21 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
         return STATUS_INVALID_PARAMETER;
     }
     let previous = crate::dlls::kernel32::get_last_error();
-    let result = if x86 {
-        crate::wow32::virtual_query32(addr as usize as u32, info as usize as u32, length as u32)
-            as usize
-    } else {
-        crate::dlls::kernel32::virtual_query(addr, info.cast(), length)
+    let result = match (x86, current) {
+        (true, true) => {
+            crate::wow32::virtual_query32(addr as usize as u32, info as usize as u32, length as u32)
+                as usize
+        }
+        (true, false) => crate::wow32::virtual_query_ex32(
+            handle as u32,
+            addr as usize as u32,
+            info as usize as u32,
+            length as u32,
+        ) as usize,
+        (false, true) => crate::dlls::kernel32::virtual_query(addr, info.cast(), length),
+        (false, false) => {
+            crate::dlls::kernel32::virtual_query_ex(handle, addr, info.cast(), length)
+        }
     };
     crate::process::set_last_error(previous);
     if result == 0 {

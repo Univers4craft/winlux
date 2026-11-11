@@ -35,6 +35,12 @@ mod kernel;
 pub fn virtual_query32(addr: u32, info: u32, len: u32) -> u32 {
     kernel::virtual_query(addr, info, len)
 }
+
+/// VirtualQueryEx à la disposition x86, pour NtQueryVirtualMemory sur un
+/// autre processus (#1729).
+pub fn virtual_query_ex32(process: u32, addr: u32, info: u32, len: u32) -> u32 {
+    kernel::virtual_query_ex(process, addr, info, len)
+}
 mod layout;
 mod seh;
 mod user;

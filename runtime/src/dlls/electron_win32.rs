@@ -323,16 +323,43 @@ unsafe extern "win64" fn K32GetPerformanceInfo(info: *mut u8, cb: u32) -> i32 {
 
 /// PSAPI_WORKING_SET_EX_INFORMATION { VirtualAddress, VirtualAttributes } :
 /// une page présente (mincore) est marquée valide (bit 0).
-unsafe extern "win64" fn K32QueryWorkingSetEx(_process: usize, buf: *mut usize, cb: u32) -> i32 {
+/// `QueryWorkingSetEx` : drapeau « valide » de chaque adresse demandée ;
+/// pour un autre processus, d'après son `/proc/<pid>/pagemap` (#1729).
+unsafe extern "win64" fn K32QueryWorkingSetEx(process: usize, buf: *mut usize, cb: u32) -> i32 {
     if buf.is_null() {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    for i in 0..cb as usize / 16 {
-        let addr = *buf.add(i * 2) & !0xFFF;
-        let mut present = 0u8;
-        let ok = libc::mincore(addr as *mut c_void, 4096, &mut present) == 0;
-        *buf.add(i * 2 + 1) = usize::from(ok && present & 1 != 0);
+    let pagemap =
+        if process == usize::MAX || crate::dlls::kernel32::is_current_process_handle(process) {
+            None
+        } else {
+            let Some(pid) = crate::dlls::kernel32::process_os_pid(process) else {
+                set_last_error(6); // ERROR_INVALID_HANDLE
+                return 0;
+            };
+            match std::fs::File::open(format!("/proc/{pid}/pagemap")) {
+                Ok(f) => Some(f),
+                Err(_) => {
+                    set_last_error(5); // ERROR_ACCESS_DENIED
+                    return 0;
+                }
+            }
+        };
+    // PSAPI_WORKING_SET_EX_INFORMATION : adresse et attributs, deux
+    // pointeurs (8 octets en x86, 16 en x64).
+    let ps = crate::wow32::pointer_size();
+    for i in 0..cb as usize / (2 * ps) {
+        let entry = buf as usize + i * 2 * ps;
+        let addr = crate::wow32::read_ptr(entry) & !0xFFF;
+        let valid = match &pagemap {
+            Some(f) => crate::dlls::psapi_k32::pagemap_present(f, addr),
+            None => {
+                let mut present = 0u8;
+                libc::mincore(addr as *mut c_void, 4096, &mut present) == 0 && present & 1 != 0
+            }
+        };
+        crate::wow32::write_ptr(entry + ps, usize::from(valid));
     }
     1
 }
