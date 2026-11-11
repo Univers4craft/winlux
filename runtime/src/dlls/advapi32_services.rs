@@ -629,10 +629,14 @@ fn open_service(manager: usize, name: Option<String>) -> usize {
         if let Some(r) = load_persisted(&key) {
             lock(services()).insert(key.clone(), r);
         } else {
+            // WINLUX_TRACE : le nom demandé et l'erreur rendue, pour les
+            // installeurs qui s'arrêtent sur un service absent (#1659, #1699).
+            crate::trace!("OpenService({name}) : service absent, erreur 1060");
             crate::process::set_last_error(ERROR_SERVICE_DOES_NOT_EXIST as u32);
             return 0;
         }
     }
+    crate::trace!("OpenService({name}) : ouvert");
     new_handle(ScmHandle::Service(key))
 }
 pub unsafe extern "win64" fn open_service_a(
