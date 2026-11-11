@@ -406,6 +406,17 @@ def records(home):
         return value if isinstance(value, list) else []
     except (OSError, ValueError): return []
 
+def launched(home):
+    """Programmes déjà lancés (launchers.json), sans les désinstalleurs.
+
+    WinRAR s'installe en lançant « Uninstall.exe /setup » : ce lancement restait
+    dans launchers.json et redonnait à chaque passage une entrée « Uninstall »
+    au menu Démarrer (#1748, #1810). Écartée ici, une entrée déjà écrite n'est
+    plus gardée par refresh() et disparaît au passage suivant."""
+    entries = [(Path(item["path"]), item.get("name", Path(item["path"]).stem)) for item in records(home)
+               if isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("name", ""), str)]
+    return [(target, name) for target, name in entries if not is_uninstaller(name, target)]
+
 def register(path):
     path = path.resolve()
     if not valid_exe(path): return
@@ -997,8 +1008,7 @@ def refresh():
     if os.getuid() == 0 and Path("/home/winlux-web").is_dir(): homes.append((Path("/home/winlux-web"), "browser"))
     names = {}
     for home, profile in homes:
-        entries = [(Path(item["path"]), item.get("name", Path(item["path"]).stem)) for item in records(home)
-                   if isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("name", ""), str)]
+        entries = launched(home)
         entries += installed_registry(home)
         for target, name in entries:
             filename = launcher(target, name, profile)
