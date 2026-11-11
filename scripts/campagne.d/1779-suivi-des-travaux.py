@@ -41,3 +41,6 @@ ok('settings["shown_page"](page) != page' in (SCRIPTS / "capture-ui.py").read_te
    "Captures : une page de Paramètres absente n'est plus photographiée sur « Écran » (#1944)")
 ok("page « Écran » sous un autre nom (#1944)" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
    "Suivi des travaux : les anciennes captures « Écran » sous un faux nom sont écartées de la galerie (#1944)")
+ok("(#1957)" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "round(ht * 1.6)" not in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : vignettes recadrées au ras du contenu, sans bande noire (#1957)")
