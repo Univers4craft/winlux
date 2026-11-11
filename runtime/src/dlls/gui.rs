@@ -2572,7 +2572,16 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
     {
         let mut map = lock(windows());
         if let Some(w) = map.get_mut(&target) {
+            // Une image copiée hors WM_PAINT (BitBlt, StretchDIBits…) se
+            // voit tout de suite sous Windows. SDL garde le DC de sa
+            // fenêtre (CS_OWNDC) sans jamais appeler ReleaseDC : sa surface
+            // logicielle restait en attente, fenêtre blanche (#1706).
+            let image = !w.painting && cmds.iter().any(is_image_cmd);
             w.pending.extend(cmds);
+            drop(map);
+            if image {
+                flush_paint_over(target);
+            }
             return true;
         }
     }
@@ -2978,6 +2987,24 @@ fn raster_color(source: u32, destination: u32, rop: RasterOp) -> u32 {
         RasterOp::PatCopy => source, // pattern copié tel quel
         RasterOp::PatPaint => (source | (!destination & RGB_MASK)) & destination, // DPSnoo
         RasterOp::DstCopy => destination,
+    }
+}
+
+/// Commande qui pose une image entière (copie de bitmap ou de fenêtre).
+fn is_image_cmd(cmd: &DrawCmd) -> bool {
+    matches!(cmd, DrawCmd::Blit { .. } | DrawCmd::Bitmap { .. })
+}
+
+/// GdiFlush : les dessins faits hors `WM_PAINT` sur les fenêtres de ce
+/// processus partent à l'écran.
+pub fn flush_all_paint_over() {
+    let hwnds: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(_, w)| !w.painting && !w.pending.is_empty())
+        .map(|(&h, _)| h)
+        .collect();
+    for hwnd in hwnds {
+        flush_paint_over(hwnd);
     }
 }
 
@@ -5926,6 +5953,37 @@ pub(crate) mod tests {
         assert!(subtract_rect(&a, &Rect::from_size(-1, -1, 12, 12)).is_empty());
         let pieces = subtract_rect(&a, &Rect::from_size(0, 0, 10, 5));
         assert_eq!(pieces, vec![Rect::from_size(0, 5, 10, 5)]);
+    }
+
+    #[test]
+    fn une_image_hors_wm_paint_part_sans_release_dc() {
+        // SDL garde le DC de sa fenêtre (CS_OWNDC) et y copie sa surface
+        // logicielle par BitBlt sans jamais appeler ReleaseDC (#1706).
+        let hwnd = fenetre_de_test();
+        let hdc = create_dc(hwnd);
+        let rect = Rect::from_size(0, 0, 2, 2);
+        let image = || DrawCmd::Bitmap {
+            rect,
+            pixels: vec![0x0028_28C8; 4],
+            rop: RasterOp::Copy,
+        };
+        let _ = take_pending(hwnd);
+        // Un remplissage attend ReleaseDC ou GdiFlush…
+        assert!(record(hdc, DrawCmd::FillRect { rect, color: 0 }));
+        // … mais l'image l'emporte avec elle vers l'écran.
+        assert!(record(hdc, image()));
+        assert!(take_pending(hwnd).is_empty());
+        // GdiFlush vide aussi les dessins en attente.
+        assert!(record(hdc, DrawCmd::FillRect { rect, color: 0 }));
+        flush_all_paint_over();
+        assert!(take_pending(hwnd).is_empty());
+        free_dc(hdc);
+        // Pendant BeginPaint, l'image attend EndPaint.
+        let (paint_dc, _) = begin_paint(hwnd).expect("cycle de peinture");
+        assert!(record(paint_dc, image()));
+        assert_eq!(take_pending(hwnd).len(), 1);
+        end_paint(hwnd, paint_dc);
+        destroy_window(hwnd);
     }
 
     #[test]

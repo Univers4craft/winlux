@@ -26,6 +26,11 @@ const ERROR_MORE_DATA: u32 = 234;
 pub trait VirtualDevice: Send + Sync {
     /// Réponse à un code de contrôle ; `None` pour un code inconnu.
     fn control(&self, code: u32, input: &[u8], out_len: usize) -> Option<Reply>;
+    /// Réponse à un `WriteFile` ; `None` : écriture refusée
+    /// (ERROR_INVALID_FUNCTION).
+    fn write(&self, _data: &[u8]) -> Option<Reply> {
+        None
+    }
 }
 
 struct Entry {
@@ -83,7 +88,64 @@ pub fn device_name(path: &str) -> Option<&str> {
     (!rest.is_empty() && !rest.contains(['\\', '/', ':'])).then_some(rest)
 }
 
+// ---- Observation (#1655) ---------------------------------------------------
+
+/// Interfaces à présenter pour une passe d'observation :
+/// `WINLUX_VDEV_OBSERVE={guid}[,{guid}…]`. Un logiciel qui cherche l'une
+/// d'elles (SetupDiGetClassDevs) la trouve sur un appareil d'observation
+/// (devnodes.rs) ; ses DeviceIoControl et WriteFile y sont acceptés sans
+/// effet et journalisés. Sert à voir, en boîte noire, ce qu'un logiciel
+/// envoie à un pilote que Winlux ne charge pas, avant d'écrire sa table.
+pub fn observed_interfaces() -> Vec<[u8; 16]> {
+    let Some(list) = std::env::var_os("WINLUX_VDEV_OBSERVE") else {
+        return Vec::new();
+    };
+    let mut out: Vec<[u8; 16]> = Vec::new();
+    for g in list.to_string_lossy().split([',', ';', ' ']) {
+        if let Some(g) = crate::dlls::devnodes::parse_guid(g.trim()) {
+            if !out.contains(&g) {
+                out.push(g);
+            }
+        }
+    }
+    out
+}
+
+/// Nom d'appareil (chemin d'interface sans `\\?\`) d'un appareil
+/// d'observation.
+fn observation_device(name: &str) -> Option<(String, Arc<dyn VirtualDevice>)> {
+    let lower = name.to_ascii_lowercase();
+    if !lower.starts_with("root#winlux_observation#") {
+        return None;
+    }
+    let known = crate::dlls::devnodes::observation_nodes()
+        .iter()
+        .filter_map(|n| n.interface_path())
+        .any(|p| p.get(4..).is_some_and(|t| t.eq_ignore_ascii_case(name)));
+    known.then(|| {
+        (
+            name.to_string(),
+            Arc::new(Observation) as Arc<dyn VirtualDevice>,
+        )
+    })
+}
+
+/// Appareil d'observation : tout est accepté, rien n'est exécuté.
+struct Observation;
+
+impl VirtualDevice for Observation {
+    fn control(&self, _code: u32, _input: &[u8], _out_len: usize) -> Option<Reply> {
+        Some(Reply::Data(Vec::new()))
+    }
+    fn write(&self, _data: &[u8]) -> Option<Reply> {
+        Some(Reply::Data(Vec::new()))
+    }
+}
+
 fn lookup(name: &str) -> Option<(String, Arc<dyn VirtualDevice>)> {
+    if let Some(found) = observation_device(name) {
+        return Some(found);
+    }
     let found = crate::dlls::lock(devices())
         .iter()
         .find(|e| e.name.eq_ignore_ascii_case(name))
@@ -153,6 +215,10 @@ pub fn open(path: &str) -> std::io::Result<std::fs::File> {
 }
 
 fn device_of_handle(h: usize) -> Option<(String, Arc<dyn VirtualDevice>)> {
+    // Aucun appareil virtuel ouvert : rien à chercher (WriteFile passe ici).
+    if crate::dlls::lock(&OPENED).is_empty() {
+        return None;
+    }
     let fd = crate::dlls::kernel32::fd_of_handle(h)?;
     let mut name = [0u8; 32];
     let link = format!("/proc/self/fd/{fd}\0");
@@ -272,6 +338,56 @@ pub unsafe fn device_io_control(
     Some((error == 0) as i32)
 }
 
+/// `WriteFile` sur un handle d'appareil virtuel ; `None` si `h` n'en est
+/// pas un. Journalisé comme DeviceIoControl (contenu avec
+/// WINLUX_VDEV_DUMP=1) ; réponse synchrone, OVERLAPPED compris.
+///
+/// # Safety
+/// Pointeurs fournis par le programme, comme pour WriteFile.
+pub unsafe fn write_file(
+    h: usize,
+    buf: *const u8,
+    len: u32,
+    written: *mut u32,
+    ov: usize,
+) -> Option<i32> {
+    let (name, device) = device_of_handle(h)?;
+    let data = if buf.is_null() || len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(buf, len as usize)
+    };
+    let error = match device.write(data) {
+        Some(Reply::Error(e)) => e,
+        Some(_) => 0,
+        None => ERROR_INVALID_FUNCTION,
+    };
+    if crate::log::enabled(crate::log::Level::Trace) {
+        let mut line = format!(
+            "{name} : WriteFile {} o : {}",
+            data.len(),
+            if error == 0 {
+                "accepté".to_string()
+            } else {
+                format!("erreur {error}")
+            }
+        );
+        if std::env::var_os("WINLUX_VDEV_DUMP").is_some_and(|v| v == "1") {
+            line.push_str(&format!(" ; données = {}", hex(data)));
+        }
+        crate::log::emit(crate::log::Level::Trace, "vdev", &format_args!("{line}"));
+    }
+    let n = if error == 0 { len } else { 0 };
+    if !written.is_null() {
+        *written = n;
+    }
+    if ov != 0 {
+        crate::dlls::kernel32::complete_overlapped(h, ov, n, error);
+    }
+    crate::process::set_last_error(error);
+    Some((error == 0) as i32)
+}
+
 // ---- Appareil d'essai ----------------------------------------------------
 
 /// CTL_CODE(0x8000, fonction, METHOD_BUFFERED, FILE_ANY_ACCESS).
@@ -325,6 +441,44 @@ impl VirtualDevice for Essai {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appareil_d_observation() {
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old = std::env::var_os("WINLUX_VDEV_OBSERVE");
+        std::env::remove_var("WINLUX_VDEV_OBSERVE");
+        assert!(observed_interfaces().is_empty());
+        assert!(crate::dlls::devnodes::observation_nodes().is_empty());
+        std::env::set_var(
+            "WINLUX_VDEV_OBSERVE",
+            "{2abad0de-4ddc-4965-8d7a-7faf3b7f1d59}, pas-un-guid",
+        );
+        assert_eq!(observed_interfaces().len(), 1);
+        let nodes = crate::dlls::devnodes::observation_nodes();
+        let path = nodes[0].interface_path().unwrap();
+        assert_eq!(
+            path,
+            "\\\\?\\root#winlux_observation#0000#{2abad0de-4ddc-4965-8d7a-7faf3b7f1d59}"
+        );
+        assert!(is_virtual(&path));
+        assert!(is_virtual(&path.to_ascii_uppercase()));
+        assert!(!is_virtual(
+            "\\\\?\\root#winlux_observation#0001#{2abad0de-4ddc-4965-8d7a-7faf3b7f1d59}"
+        ));
+        let (_, dev) = lookup(&path[4..]).unwrap();
+        assert!(matches!(dev.write(b"abc"), Some(Reply::Data(_))));
+        assert!(matches!(
+            dev.control(0x0022_0000, b"", 0),
+            Some(Reply::Data(_))
+        ));
+        assert!(open(&path).is_ok());
+        match old {
+            Some(v) => std::env::set_var("WINLUX_VDEV_OBSERVE", v),
+            None => std::env::remove_var("WINLUX_VDEV_OBSERVE"),
+        }
+    }
 
     #[test]
     fn noms_d_appareil() {

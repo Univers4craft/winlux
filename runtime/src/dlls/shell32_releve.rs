@@ -654,6 +654,23 @@ unsafe fn new_store(p: Props, riid: *const u8, out: *mut *mut c_void) -> i32 {
     hr
 }
 
+/// Magasin de propriétés en mémoire, vide et modifiable
+/// (PSCreateMemoryPropertyStore, lot F #1615).
+pub(crate) unsafe fn memory_property_store(riid: *const u8, out: *mut *mut c_void) -> i32 {
+    if !clear_out(out) {
+        return E_POINTER;
+    }
+    new_store(
+        Props {
+            window: 0,
+            local: Vec::new(),
+            writable: true,
+        },
+        riid,
+        out,
+    )
+}
+
 /// SHGetPropertyStoreForWindow : propriétés de la fenêtre (Qt y pose
 /// System.AppUserModel.ID), gardées tant que le programme tourne.
 unsafe extern "win64" fn sh_get_property_store_for_window(
