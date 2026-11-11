@@ -22,6 +22,16 @@ use std::sync::Mutex;
 
 static HELD: Mutex<Vec<std::fs::File>> = Mutex::new(Vec::new());
 
+/// Ouverture en lecture seule sans jamais bloquer : un FIFO nommé « x.exe »
+/// ne doit pas suspendre CreateFile.
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
 /// Extensions d'image concernées : le contrôle ne touche jamais un
 /// document, un journal ou une base de données.
 fn is_image_name(path: &Path) -> bool {
@@ -39,7 +49,7 @@ pub fn hold(path: &Path) {
     if !is_image_name(path) {
         return;
     }
-    let Ok(f) = std::fs::File::open(path) else {
+    let Ok(f) = open_nonblocking(path) else {
         return;
     };
     if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
@@ -55,7 +65,7 @@ pub fn in_use(path: &Path) -> bool {
     if !is_image_name(path) {
         return false;
     }
-    let Ok(f) = std::fs::File::open(path) else {
+    let Ok(f) = open_nonblocking(path) else {
         return false;
     };
     let fd = f.as_raw_fd();
@@ -103,6 +113,18 @@ mod tests {
         assert!(!in_use(&exe));
         HELD.lock().unwrap().clear();
         assert!(!in_use(&moved), "verrou levé avec le descripteur");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fifo_nomme_comme_un_exe_ne_bloque_pas() {
+        let dir = std::env::temp_dir().join(format!("winlux-image-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("piege.exe");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(!in_use(&fifo), "un FIFO sans écrivain ne doit pas bloquer");
+        hold(&fifo);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
