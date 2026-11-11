@@ -4669,6 +4669,16 @@ pub unsafe extern "win64" fn virtual_query(
             kind: 0,
         }
     };
+    if crate::log::enabled(crate::log::Level::Trace) {
+        if let Some(n) = crate::dlls::mmap::named_view_at(address) {
+            crate::trace!(
+                "VirtualQuery(0x{address:x}, vue de {n}) : base 0x{:x}, taille {}, état 0x{:x}",
+                result.base_address as usize,
+                result.region_size,
+                result.state
+            );
+        }
+    }
     std::ptr::write_unaligned(info, result);
     required
 }
