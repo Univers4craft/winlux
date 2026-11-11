@@ -246,8 +246,14 @@ pub unsafe fn ellipse(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: 
         note_fill(hdc, l, t, r, bt, chrome(color));
     }
     SelectObject(hdc, b.get(color));
+    // Sans plume : la plume par défaut d'un DC est noire (comme sous
+    // Windows) et cernait chaque disque d'un trait noir.
+    SelectObject(hdc, GetStockObject(NULL_PEN));
     Ellipse(hdc, l, t, r, bt);
 }
+/// Objet de stock NULL_PEN (aucun contour).
+const NULL_PEN: i32 = 8;
+
 pub unsafe fn round_rect(
     hdc: Handle,
     b: &mut Brushes,
@@ -263,6 +269,9 @@ pub unsafe fn round_rect(
         note_fill(hdc, l, t, r, bt, chrome(color));
     }
     SelectObject(hdc, b.get(color));
+    // Sans plume : RoundRect trace maintenant le contour à la plume du DC
+    // (noire par défaut, comme sous Windows), d'où un liseré noir partout.
+    SelectObject(hdc, GetStockObject(NULL_PEN));
     // Le shell a été dessiné avec des coins de rayon 2 × radius ; RoundRect
     // prend maintenant la largeur de l'ellipse comme Windows (#866).
     RoundRect(hdc, l, t, r, bt, radius * 4, radius * 4);
