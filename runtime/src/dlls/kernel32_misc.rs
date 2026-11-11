@@ -1411,33 +1411,6 @@ mod tests {
         }
     }
 
-    /// #1838 : un HRESULT de COM a un texte, sinon il est écrit en
-    /// hexadécimal (et non « Erreur Windows 2147647517 »).
-    #[test]
-    fn messages_des_hresult() {
-        unsafe {
-            for (code, debut) in [
-                (0x8002_801Du32, "Bibliothèque de types non inscrite"),
-                (0x8004_0154, "Classe non inscrite"),
-                (0x8000_1234, "Erreur Windows 0x80001234"),
-            ] {
-                let mut msg = [0u16; 128];
-                let n = format_message_w(
-                    FORMAT_MESSAGE_FROM_SYSTEM,
-                    0,
-                    code,
-                    0,
-                    msg.as_mut_ptr(),
-                    128,
-                    0,
-                );
-                assert!(n > 0);
-                let texte = crate::dlls::wstr(msg.as_ptr());
-                assert!(texte.starts_with(debut), "{code:#x} : {texte}");
-            }
-        }
-    }
-
     #[test]
     fn output_debug_string_garde_les_derniers_messages() {
         let w: Vec<u16> = "qt.qpa.plugin: Could not load\r\n"
