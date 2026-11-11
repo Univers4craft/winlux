@@ -185,7 +185,13 @@ def cadrage(image):
     n'est pas touchée."""
     from PIL import Image, ImageChops
     largeur, hauteur = image.size
-    fond = Image.new("RGB", image.size, image.getpixel((0, 0)))
+    # Fond : couleur la plus fréquente des quatre coins. Paramètres s'ouvre en
+    # (0, 0) sans gestionnaire de fenêtres : le coin haut gauche est la fenêtre (#1943).
+    coins = [image.getpixel(c) for c in ((0, 0), (largeur - 1, 0), (0, hauteur - 1), (largeur - 1, hauteur - 1))]
+    couleur = max(coins, key=coins.count)
+    if coins.count(couleur) < 2:
+        return None
+    fond = Image.new("RGB", image.size, couleur)
     boite = ImageChops.difference(image, fond).convert("L").point(lambda v: 255 if v > 24 else 0).getbbox()
     if not boite:
         return None
