@@ -604,8 +604,12 @@ impl Interpreter {
         };
         let name = self.method_name(token);
         let argc = self.get_method_sig(token).param_types.len();
+        let iface = match target {
+            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+            _ => None,
+        };
         let found = types::with_types(|reg| {
-            let (asm, tok, decl) = reg.find_override(type_id, &name, argc)?;
+            let (asm, tok, decl) = reg.find_override_of(type_id, &name, argc, iface.as_deref())?;
             Some((
                 asm,
                 tok,
@@ -618,6 +622,28 @@ impl Interpreter {
             *target = Target::Managed(asm, Token(tok).rid());
             gen.t = type_args;
         }
+    }
+
+    /// « Espace.Nom » (sans arité) de l'interface qui déclare la méthode
+    /// `row` de l'assembly `asm`, si c'en est une.
+    fn interface_of(&self, asm: usize, row: u32) -> Option<String> {
+        let owner = *self.domain.get(asm)?.method_owner.get(row as usize)?;
+        if owner == 0 {
+            return None;
+        }
+        let a = self.assembly_at(asm);
+        let td = a.get_type_def(owner);
+        if !td.is_interface() {
+            return None;
+        }
+        let name = a.get_string(td.name);
+        let name = name.split('`').next().unwrap_or(name);
+        let ns = a.get_string(td.namespace);
+        Some(if ns.is_empty() {
+            name.to_string()
+        } else {
+            format!("{ns}.{name}")
+        })
     }
 
     /// Méthode implémentée par le runtime (bibliothèque intégrée).
@@ -698,8 +724,13 @@ impl Interpreter {
         self.pins.extend(args.iter().copied());
         let mut args = args;
         let first_param = args.len() - params.len().min(args.len());
+        // Égalité et empreinte comparent les objets eux-mêmes, pas leur
+        // texte (#1896 : clés encadrées de Dictionary).
+        let compares_objects = namespace == "System"
+            && class == "Object"
+            && matches!(name, "Equals" | "ReferenceEquals" | "GetHashCode");
         for (i, param) in params.iter().enumerate() {
-            if matches!(param, ElementType::Object) {
+            if matches!(param, ElementType::Object) && !compares_objects {
                 match self.managed_to_string(args[first_param + i]) {
                     Ok(v) => {
                         args[first_param + i] = v;
@@ -731,6 +762,11 @@ impl Interpreter {
         };
         let found = types::with_types(|reg| {
             let (asm, tok, decl) = reg.find_override(type_id, "ToString", 0)?;
+            // Object.ToString de notre mscorlib est elle-même servie par
+            // bcl.rs : rien à convertir (#1896).
+            if decl == types::TYPE_OBJECT {
+                return None;
+            }
             Some((
                 asm,
                 tok,
@@ -1460,8 +1496,13 @@ impl Interpreter {
                             store(boxed, kind, load(ptr, kind));
                             args[0] = Value::Ref(boxed);
                         } else {
-                            args[0] = load(ptr, kind);
-                            virtual_call = false;
+                            // Primitive ou énumération : encadrée comme le
+                            // demande ECMA-335 §III.2.1, pour que
+                            // Object.Equals compare deux valeurs encadrées
+                            // (EqualityComparer<int>, #1896).
+                            let boxed = gc::with_gc(|gc| gc.alloc(ct, 8));
+                            store(boxed, kind, load(ptr, kind));
+                            args[0] = Value::Ref(boxed);
                         }
                     }
                 }
