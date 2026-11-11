@@ -570,11 +570,21 @@ fn pointer_cookie() -> usize {
 }
 
 pub extern "win64" fn rtl_encode_pointer(ptr: *mut c_void) -> *mut c_void {
-    (ptr as usize ^ pointer_cookie()) as *mut c_void
+    rtl_pointer_xor(ptr as usize) as *mut c_void
 }
 
 pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
-    (ptr as usize ^ pointer_cookie()) as *mut c_void
+    rtl_pointer_xor(ptr as usize) as *mut c_void
+}
+
+/// Programme x86 : valeur codée sur 32 bits (#1642).
+fn rtl_pointer_xor(ptr: usize) -> usize {
+    let v = ptr ^ pointer_cookie();
+    if crate::wow32::active() {
+        v as u32 as usize
+    } else {
+        v
+    }
 }
 
 // ============================================================
