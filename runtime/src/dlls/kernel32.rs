@@ -7675,7 +7675,10 @@ pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
             return u32::MAX;
         }
     };
-    get_file_attributes_str(&s.to_string_lossy())
+    let path = s.to_string_lossy();
+    let r = get_file_attributes_str(&path);
+    crate::trace!("GetFileAttributesW({path}) = {r:#x}");
+    r
 }
 pub unsafe extern "win64" fn delete_file_w(path: *const u16) -> i32 {
     let s = match cstring_from_wide(path) {
