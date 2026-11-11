@@ -1166,6 +1166,9 @@ unsafe fn call_service_main(main: ServiceMainFn, name: &[u8], wide: bool) -> Opt
 /// Corps de `StartServiceCtrlDispatcherA` pour le service `svc_name` (le nom
 /// vient de `WINLUX_SERVICE_NAME`, posé par le gestionnaire de services).
 unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -> i32 {
+    // Trace visible du banc : dit si le programme se met en mode service
+    // avant de sortir (#1918).
+    crate::trace!("StartServiceCtrlDispatcher(service « {svc_name} »)");
     let sock_path = control_sock_path(svc_name);
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
