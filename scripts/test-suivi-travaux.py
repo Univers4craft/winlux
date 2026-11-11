@@ -160,7 +160,7 @@ def main():
         coin = Image.new("RGB", (2560, 1440), (0, 0, 0))
         coin.paste(Image.new("RGB", (1020, 740), (233, 236, 244)), (0, 0))
         boite = module.cadrage(coin)
-        check(boite == (0, 0, 1020, 740), f"fenêtre posée en (0, 0) : recadrée au ras, sans bande noire (#1943, #1957) ({boite})")
+        check(boite == (0, 0, 1020, 740), f"fenêtre posée en (0, 0) : recadrée au ras, sans bande noire (#1943) (#1957) ({boite})")
         bureau = Image.new("RGB", (1920, 1080), (40, 60, 120))
         bureau.paste(Image.new("RGB", (1920, 48), (20, 20, 30)), (0, 1032))
         bureau.paste(Image.new("RGB", (1200, 800), (240, 240, 245)), (300, 100))
