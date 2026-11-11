@@ -18,6 +18,7 @@ mod firewall;
 mod gamemode;
 mod gpu;
 mod image_cache;
+mod image_lock;
 mod imaging;
 mod intl;
 mod journal;
