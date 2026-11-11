@@ -972,13 +972,33 @@ fn dispatcher() -> &'static Mutex<DispatcherState> {
 }
 
 fn control_sock_path(name: &str) -> std::path::PathBuf {
-    let dir = if std::path::Path::new("/run/winlux").exists() {
-        std::path::PathBuf::from("/run/winlux/services")
-    } else {
-        std::env::temp_dir().join("winlux-services")
-    };
-    let _ = std::fs::create_dir_all(&dir);
+    let euid = unsafe { libc::geteuid() };
+    let dir = services_dir(std::path::Path::new("/run/winlux"), euid);
+    let _ = crate::journal::ensure(&dir, euid);
     dir.join(format!("{name}.sock"))
+}
+
+/// Dossier des canaux de contrôle du compte `euid` (#1643) : celui de root
+/// (`services`, 0755) n'est pas ouvert aux autres comptes ; un service lancé
+/// par un compte écrit dans `services-<uid>`, 0700, qui doit lui appartenir
+/// (un dossier posé par un autre compte est refusé, comme pour le journal).
+/// Sans /run/winlux, le dossier temporaire.
+fn services_dir(run: &std::path::Path, euid: u32) -> std::path::PathBuf {
+    let base = if run.exists() {
+        run.to_path_buf()
+    } else {
+        std::env::temp_dir()
+    };
+    let prefix = if run.exists() {
+        "services"
+    } else {
+        "winlux-services"
+    };
+    if euid == 0 {
+        base.join(prefix)
+    } else {
+        base.join(format!("{prefix}-{euid}"))
+    }
 }
 
 static LISTENER_SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1828,6 +1848,26 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canal_de_controle_par_compte() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("winlux-svcdir-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // root garde le dossier commun ; un compte a le sien (#1643).
+        assert_eq!(super::services_dir(&tmp, 0), tmp.join("services"));
+        assert_eq!(super::services_dir(&tmp, 1000), tmp.join("services-1000"));
+        let euid = unsafe { libc::geteuid() };
+        let mine = super::services_dir(&tmp, euid);
+        assert!(crate::journal::ensure(&mine, euid));
+        let mode = std::fs::metadata(&mine).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, if euid == 0 { 0o755 } else { 0o700 });
+        // Un lien symbolique à la place du dossier est refusé.
+        let link = tmp.join("services-4242");
+        std::os::unix::fs::symlink(&mine, &link).unwrap();
+        assert!(!crate::journal::ensure(&link, 4242));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     use super::*;
     use std::ffi::CString;
     #[test]
