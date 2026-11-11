@@ -127,6 +127,39 @@ impl Inf {
         Inf { sections, strings }
     }
 
+    /// Indice d'une section (casse indifférente).
+    pub(crate) fn section_index(&self, name: &str) -> Option<usize> {
+        self.sections
+            .iter()
+            .position(|(n, _)| n.eq_ignore_ascii_case(name))
+    }
+
+    /// Lignes d'une section par son indice.
+    pub(crate) fn lines(&self, index: usize) -> &[String] {
+        self.sections
+            .get(index)
+            .map(|(_, l)| l.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Clé (avant `=`) et champs développés d'une ligne. Sans `=`, la
+    /// ligne n'a que des champs.
+    pub(crate) fn split_line(&self, line: &str) -> (Option<String>, Vec<String>) {
+        let (key, rest) = match line.split_once('=') {
+            Some((k, v)) => (Some(self.expand(k.trim().trim_matches('"'))), v),
+            None => (None, line),
+        };
+        (key, fields(rest).iter().map(|f| self.expand(f)).collect())
+    }
+
+    /// Valeur d'une clé de [Version] (Class, ClassGUID, Provider, DriverVer…).
+    pub(crate) fn version(&self, key: &str) -> Option<String> {
+        self.entries("Version")
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.join(","))
+    }
+
     fn section(&self, name: &str) -> Option<&[String]> {
         self.sections
             .iter()
@@ -338,7 +371,7 @@ pub fn tell(image_path: &str, replaced: Option<&str>) {
 
 // ---- Magasin de pilotes ---------------------------------------------------
 
-fn store_dir() -> std::path::PathBuf {
+pub(crate) fn store_dir() -> std::path::PathBuf {
     crate::paths::to_linux("C:\\Windows\\INF")
 }
 
@@ -415,7 +448,7 @@ fn fail(code: u32) -> i32 {
     crate::process::set_last_error(code);
     0
 }
-fn store_path(name: &str) -> String {
+pub(crate) fn store_path(name: &str) -> String {
     format!("C:\\Windows\\INF\\{name}")
 }
 

@@ -148,6 +148,18 @@ Depuis #1605, un installeur qui crée lui-même son appareil racine (comme
 appareil refuse l'éjection, `CR_REMOVE_VETOED`). `CMP_WaitNoPendingInstallEvents`
 répond tout de suite : aucune installation n'est jamais en attente.
 
+Depuis #1625, les outils d'installation de pilotes des constructeurs
+(`driverinstalltool_64.exe` d'iCUE, devcon) trouvent le reste de setupapi
+et de cfgmgr32 (`runtime/src/dlls/setupinf.rs`) : lecture des `.inf`
+(`SetupOpenInfFile`, `SetupFindFirstLine`, `SetupGetStringField`), listes de
+pilotes tirées de `[Manufacturer]` et des sections de modèles `NTamd64`
+(`SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfo`,
+`SetupDiGetDriverInfoDetail`, avec `DI_ENUMSINGLEINF`), paramètres
+d'installation, classes connues, variantes `_Ex` de cfgmgr32 (machine locale
+seulement) et `DiUninstallDevice`. Une file de copie reste vide : aucun
+fichier de pilote n'est copié vers `System32\drivers`, et aucun appareil
+n'expose de configuration logique (`CR_NO_MORE_LOG_CONF`).
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
