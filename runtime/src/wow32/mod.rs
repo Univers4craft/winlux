@@ -2236,7 +2236,9 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumFontFamiliesExA"
         | "EnumFontFamiliesExW"
         | "EnumFontsA"
-        | "EnumFontsW" => bit(2),
+        | "EnumFontsW"
+        | "GrayStringA"
+        | "GrayStringW" => bit(2),
         "EnumResourceLanguagesA" | "EnumResourceLanguagesW" | "SetWaitableTimer" | "SetTimer" => {
             bit(3)
         }
