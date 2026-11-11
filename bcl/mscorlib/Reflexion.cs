@@ -19,6 +19,17 @@ namespace System
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern Type GetTypeFromHandle(RuntimeTypeHandle handle);
 
+        // Type par son nom, éventuellement qualifié d'assembly (#1884) :
+        // cherché par le moteur dans l'assembly qui appelle puis mscorlib.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern Type GetType(string typeName);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern Type GetType(string typeName, bool throwOnError);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern Type GetType(string typeName, bool throwOnError, bool ignoreCase);
+
         public extern override string Name
         {
             [MethodImpl(MethodImplOptions.InternalCall)]
@@ -206,10 +217,31 @@ namespace System
         public static bool operator >=(Version v1, Version v2) { return v2 <= v1; }
     }
 
+    public class TypeLoadException : SystemException
+    {
+        public TypeLoadException() { }
+        public TypeLoadException(string message) : base(message) { }
+    }
+
     public class ArgumentOutOfRangeException : ArgumentException
     {
         public ArgumentOutOfRangeException() { }
         public ArgumentOutOfRangeException(string message) : base(message) { }
+    }
+}
+
+namespace System.IO
+{
+    public class IOException : SystemException
+    {
+        public IOException() { }
+        public IOException(string message) : base(message) { }
+    }
+
+    public class FileNotFoundException : IOException
+    {
+        public FileNotFoundException() { }
+        public FileNotFoundException(string message) : base(message) { }
     }
 }
 
