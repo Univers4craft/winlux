@@ -29,6 +29,12 @@ pub fn dispatch_internal_call(
         ("System.IO", "File", m) => file_dispatch(m, args),
         ("System.IO", "Path", m) => path_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
+        // Horloge monotone de Stopwatch, en graduations de 100 ns (#1922).
+        ("System.Diagnostics", "Stopwatch", "GetTimestamp") => {
+            static DEBUT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let ecoule = DEBUT.get_or_init(std::time::Instant::now).elapsed();
+            Some(Value::I64((ecoule.as_nanos() / 100) as i64))
+        }
         _ => {
             crate::log_warn!(
                 "clr-bcl",
