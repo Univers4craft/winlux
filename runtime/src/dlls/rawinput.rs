@@ -27,6 +27,59 @@ const RIDI_DEVICEINFO: u32 = 0x2000_000B;
 const RIDEV_REMOVE: u32 = 0x0000_0001;
 const RIDEV_INPUTSINK: u32 = 0x0000_0100;
 const HEADER: usize = 24;
+
+// Un programme x86 (wow32) passe les tailles de ses propres structures :
+// RAWINPUTDEVICE 12 octets, RAWINPUTDEVICELIST 8, RAWINPUTHEADER 16, et
+// des paquets alignés sur 4 octets (RAWINPUT_ALIGN). Tout refuser en
+// ERROR_INVALID_PARAMETER faisait boucler l'initialisation des manettes de
+// SDL 2 dans pygame 32 bits (#1616).
+
+/// Taille d'un pointeur ou d'un handle chez l'appelant (4 en x86, 8 en x64).
+fn ptr() -> usize {
+    crate::wow32::pointer_size()
+}
+/// RAWINPUTDEVICE : usUsagePage, usUsage, dwFlags, hwndTarget.
+fn device_size() -> usize {
+    8 + ptr()
+}
+/// RAWINPUTDEVICELIST : hDevice, dwType (complété à l'alignement).
+fn list_size() -> usize {
+    2 * ptr()
+}
+/// RAWINPUTHEADER : dwType, dwSize, hDevice, wParam.
+fn header_size() -> usize {
+    8 + 2 * ptr()
+}
+unsafe fn read_handle(p: *const u8) -> usize {
+    if ptr() == 4 {
+        (p as *const u32).read_unaligned() as usize
+    } else {
+        (p as *const usize).read_unaligned()
+    }
+}
+unsafe fn write_handle(p: *mut u8, v: usize) {
+    if ptr() == 4 {
+        (p as *mut u32).write_unaligned(v as u32);
+    } else {
+        (p as *mut usize).write_unaligned(v);
+    }
+}
+
+/// Paquet x64 (en-tête de 24 octets) remis à la forme de l'appelant : en
+/// x86, en-tête de 16 octets aux handles tronqués, dwSize corrigé.
+fn for_caller(packet: &[u8], pointer: usize) -> Vec<u8> {
+    if pointer == 8 || packet.len() < HEADER {
+        return packet.to_vec();
+    }
+    let size = (packet.len() - 8) as u32;
+    let mut v = Vec::with_capacity(packet.len() - 8);
+    v.extend(&packet[0..4]);
+    v.extend(size.to_le_bytes());
+    v.extend(&packet[8..12]); // hDevice (handles < 4 Gio)
+    v.extend(&packet[16..20]); // wParam
+    v.extend(&packet[HEADER..]);
+    v
+}
 const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const ERROR_INVALID_HANDLE: u32 = 6;
@@ -67,18 +120,18 @@ pub unsafe extern "win64" fn RegisterRawInputDevices(
     count: u32,
     size: u32,
 ) -> i32 {
-    if devs.is_null() || count == 0 || size as usize != 16 {
+    if devs.is_null() || count == 0 || size as usize != device_size() {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
     let mut regs = crate::dlls::lock(&REGISTERED);
     for i in 0..count as usize {
-        let p = devs.add(i * 16);
+        let p = devs.add(i * device_size());
         let r = Registration {
             page: (p as *const u16).read_unaligned(),
             usage: (p.add(2) as *const u16).read_unaligned(),
             flags: (p.add(4) as *const u32).read_unaligned(),
-            hwnd: (p.add(8) as *const usize).read_unaligned(),
+            hwnd: read_handle(p.add(8)),
         };
         regs.retain(|x| !(x.page == r.page && x.usage == r.usage));
         if r.flags & RIDEV_REMOVE == 0 {
@@ -99,7 +152,7 @@ pub unsafe extern "win64" fn GetRegisteredRawInputDevices(
     count: *mut u32,
     size: u32,
 ) -> u32 {
-    if count.is_null() || size != 16 {
+    if count.is_null() || size as usize != device_size() {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return u32::MAX;
     }
@@ -113,11 +166,11 @@ pub unsafe extern "win64" fn GetRegisteredRawInputDevices(
         return u32::MAX;
     }
     for (i, r) in regs.iter().enumerate() {
-        let p = devs.add(i * 16);
+        let p = devs.add(i * device_size());
         (p as *mut u16).write_unaligned(r.page);
         (p.add(2) as *mut u16).write_unaligned(r.usage);
         (p.add(4) as *mut u32).write_unaligned(r.flags);
-        (p.add(8) as *mut usize).write_unaligned(r.hwnd);
+        write_handle(p.add(8), r.hwnd);
     }
     regs.len() as u32
 }
@@ -321,7 +374,7 @@ pub unsafe extern "win64" fn GetRawInputData(
     header_size: u32,
 ) -> u32 {
     if size.is_null()
-        || header_size as usize != HEADER
+        || header_size as usize != self::header_size()
         || !(command == RID_INPUT || command == RID_HEADER)
     {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
@@ -332,8 +385,9 @@ pub unsafe extern "win64" fn GetRawInputData(
         crate::process::set_last_error(ERROR_INVALID_HANDLE);
         return u32::MAX;
     };
+    let packet = for_caller(packet, ptr());
     let want = if command == RID_HEADER {
-        HEADER
+        self::header_size()
     } else {
         packet.len()
     };
@@ -349,21 +403,23 @@ pub unsafe extern "win64" fn GetRawInputData(
     want as u32
 }
 
-/// Paquets en attente, alignés sur 8 octets (GetRawInputBuffer).
+/// Paquets en attente, alignés sur 8 octets (4 en x86) (GetRawInputBuffer).
 pub unsafe extern "win64" fn GetRawInputBuffer(
     data: *mut u8,
     size: *mut u32,
     header_size: u32,
 ) -> u32 {
-    if size.is_null() || header_size as usize != HEADER {
+    if size.is_null() || header_size as usize != self::header_size() {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return u32::MAX;
     }
+    // RAWINPUT_ALIGN : 8 octets en x64, 4 en x86.
+    let (pointer, align) = (ptr(), ptr());
     let mut q = crate::dlls::lock(&QUEUE);
     let pending = q.packets.iter().filter(|(_, _, read)| !read);
     if data.is_null() {
         *size = pending
-            .map(|(_, p, _)| p.len().next_multiple_of(8))
+            .map(|(_, p, _)| for_caller(p, pointer).len().next_multiple_of(align))
             .max()
             .unwrap_or(0) as u32;
         return 0;
@@ -372,7 +428,8 @@ pub unsafe extern "win64" fn GetRawInputBuffer(
     let mut at = 0usize;
     let mut count = 0u32;
     for (_, p, read) in q.packets.iter_mut().filter(|(_, _, read)| !*read) {
-        let step = p.len().next_multiple_of(8);
+        let p = for_caller(p, pointer);
+        let step = p.len().next_multiple_of(align);
         if at + step > room {
             break;
         }
@@ -531,7 +588,7 @@ pub unsafe extern "win64" fn GetRawInputDeviceList(
     count: *mut u32,
     size: u32,
 ) -> u32 {
-    if count.is_null() || size != 16 {
+    if count.is_null() || size as usize != list_size() {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return u32::MAX;
     }
@@ -546,9 +603,10 @@ pub unsafe extern "win64" fn GetRawInputDeviceList(
         return u32::MAX;
     }
     for (i, d) in devs.iter().enumerate() {
-        let p = list.add(i * 16);
-        (p as *mut usize).write_unaligned(d.handle);
-        (p.add(8) as *mut u64).write_unaligned(d.kind as u64);
+        let p = list.add(i * list_size());
+        write_handle(p, d.handle);
+        // dwType, puis le bourrage d'alignement à zéro en x64.
+        write_handle(p.add(ptr()), d.kind as usize);
     }
     devs.len() as u32
 }
@@ -881,6 +939,28 @@ mod tests {
         assert_eq!(u16::from_le_bytes(p[28..30].try_into().unwrap()), 0x1);
         assert_eq!(i32::from_le_bytes(p[36..40].try_into().unwrap()), -5);
         assert_eq!(i32::from_le_bytes(p[40..44].try_into().unwrap()), 7);
+    }
+
+    #[test]
+    fn paquet_remis_en_forme_x86() {
+        // #1616 : en-tête RAWINPUTHEADER de 16 octets pour un appelant x86.
+        let p = mouse_packet(MOUSE_BASE + 3, true, 0x1, 0, -5, 7);
+        assert_eq!(for_caller(&p, 8), p);
+        let x86 = for_caller(&p, 4);
+        assert_eq!(x86.len(), 40);
+        assert_eq!(
+            u32::from_le_bytes(x86[0..4].try_into().unwrap()),
+            RIM_TYPEMOUSE
+        );
+        assert_eq!(u32::from_le_bytes(x86[4..8].try_into().unwrap()), 40);
+        assert_eq!(
+            u32::from_le_bytes(x86[8..12].try_into().unwrap()) as usize,
+            MOUSE_BASE + 3
+        );
+        assert_eq!(u32::from_le_bytes(x86[12..16].try_into().unwrap()), 1);
+        assert_eq!(x86[16..], p[HEADER..]);
+        // Tailles x64 attendues hors wow32.
+        assert_eq!((device_size(), list_size(), header_size()), (16, 16, 24));
     }
 
     #[test]

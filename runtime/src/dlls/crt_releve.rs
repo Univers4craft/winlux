@@ -747,6 +747,199 @@ unsafe extern "win64" fn wmakepath_s(
 }
 
 // ---------------------------------------------------------------------
+// Fonctions « _s » voisines (Pythonwin, fiche 1393)
+// ---------------------------------------------------------------------
+
+/// `wmemcpy_s` : comme `memcpy_s`, tailles comptées en caractères larges.
+unsafe extern "win64" fn wmemcpy_s(dst: *mut u16, size: usize, src: *const u16, n: usize) -> i32 {
+    if n == 0 {
+        return 0;
+    }
+    if dst.is_null() {
+        return fail(EINVAL);
+    }
+    if src.is_null() || size < n {
+        std::ptr::write_bytes(dst, 0, size);
+        return fail(if src.is_null() { EINVAL } else { ERANGE });
+    }
+    std::ptr::copy(src, dst, n);
+    0
+}
+/// `wmemmove_s` : la destination n'est pas effacée en cas d'erreur.
+unsafe extern "win64" fn wmemmove_s(dst: *mut u16, size: usize, src: *const u16, n: usize) -> i32 {
+    if n == 0 {
+        return 0;
+    }
+    if dst.is_null() || src.is_null() {
+        return fail(EINVAL);
+    }
+    if size < n {
+        return fail(ERANGE);
+    }
+    std::ptr::copy(src, dst, n);
+    0
+}
+
+/// Longueur d'une chaîne terminée dans `size` éléments, sinon `None`.
+unsafe fn len_within<T: Copy + PartialEq + From<u8>>(s: *const T, size: usize) -> Option<usize> {
+    (0..size).find(|&i| *s.add(i) == T::from(0))
+}
+
+/// `_strset_s`, `_wcsset_s`, `_strnset_s`, `_wcsnset_s` : chaîne non
+/// terminée dans `size` → effacée, EINVAL.
+unsafe fn set_s<T: Copy + PartialEq + From<u8>>(s: *mut T, size: usize, c: T, count: usize) -> i32 {
+    if s.is_null() || size == 0 {
+        return fail(EINVAL);
+    }
+    let Some(n) = len_within(s, size) else {
+        *s = T::from(0);
+        return fail(EINVAL);
+    };
+    for i in 0..n.min(count) {
+        *s.add(i) = c;
+    }
+    0
+}
+unsafe extern "win64" fn strset_s(s: *mut u8, size: usize, c: i32) -> i32 {
+    set_s(s, size, c as u8, usize::MAX)
+}
+unsafe extern "win64" fn wcsset_s(s: *mut u16, size: usize, c: u16) -> i32 {
+    set_s(s, size, c, usize::MAX)
+}
+unsafe extern "win64" fn strnset_s(s: *mut u8, size: usize, c: i32, count: usize) -> i32 {
+    set_s(s, size, c as u8, count)
+}
+unsafe extern "win64" fn wcsnset_s(s: *mut u16, size: usize, c: u16, count: usize) -> i32 {
+    set_s(s, size, c, count)
+}
+
+unsafe extern "win64" fn wcsupr_s(s: *mut u16, size: usize) -> i32 {
+    if s.is_null() || wlen(s) >= size {
+        return fail(EINVAL);
+    }
+    wcsupr(s);
+    0
+}
+unsafe extern "win64" fn wcslwr_s_l(s: *mut u16, size: usize, _locale: usize) -> i32 {
+    wcslwr_s(s, size)
+}
+unsafe extern "win64" fn wcsupr_s_l(s: *mut u16, size: usize, _locale: usize) -> i32 {
+    wcsupr_s(s, size)
+}
+unsafe extern "win64" fn strlwr_s(s: *mut u8, size: usize) -> i32 {
+    if s.is_null() || crate::printf::narrow_len(s) >= size {
+        return fail(EINVAL);
+    }
+    for i in 0..crate::printf::narrow_len(s) {
+        *s.add(i) = (*s.add(i)).to_ascii_lowercase();
+    }
+    0
+}
+
+/// `_mbscpy_s` : copie d'octets, comme `strcpy_s`.
+unsafe extern "win64" fn mbscpy_s(dst: *mut u8, size: usize, src: *const u8) -> i32 {
+    if dst.is_null() || size == 0 {
+        return fail(EINVAL);
+    }
+    if src.is_null() {
+        *dst = 0;
+        return fail(EINVAL);
+    }
+    let n = crate::printf::narrow_len(src);
+    if n + 1 > size {
+        *dst = 0;
+        return fail(ERANGE);
+    }
+    std::ptr::copy(src, dst, n + 1);
+    0
+}
+
+/// `_ltoa_s` et `_ultoa_s` : `long` vaut 32 bits sous Windows.
+unsafe extern "win64" fn ltoa_s(v: i32, buf: *mut u8, size: usize, radix: i32) -> i32 {
+    put(buf, size, &signed_digits(v as i64, 32, radix), radix)
+}
+unsafe extern "win64" fn ultoa_s(v: u32, buf: *mut u8, size: usize, radix: i32) -> i32 {
+    put(
+        buf,
+        size,
+        &digits(v as u64, false, radix.clamp(2, 36) as u32),
+        radix,
+    )
+}
+
+/// Octets vus comme des unités de 16 bits (et retour) : les séparateurs
+/// et les octets de tête multioctets restent intacts.
+unsafe fn widen(p: *const u8) -> Option<Vec<u16>> {
+    (!p.is_null()).then(|| {
+        std::slice::from_raw_parts(p, crate::printf::narrow_len(p))
+            .iter()
+            .map(|&b| b as u16)
+            .collect()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn splitpath_s(
+    path: *const u8,
+    drive: *mut u8,
+    dsz: usize,
+    dir: *mut u8,
+    dirsz: usize,
+    name: *mut u8,
+    nsz: usize,
+    ext: *mut u8,
+    esz: usize,
+) -> i32 {
+    let Some(wide) = widen(path) else {
+        return fail(EINVAL);
+    };
+    let (d, di, n, e) = split_path(&wide);
+    let ok = put_part(drive, dsz, &d)
+        & put_part(dir, dirsz, &di)
+        & put_part(name, nsz, &n)
+        & put_part(ext, esz, &e);
+    if ok {
+        0
+    } else {
+        fail(ERANGE)
+    }
+}
+
+unsafe extern "win64" fn makepath_s(
+    buf: *mut u8,
+    size: usize,
+    drive: *const u8,
+    dir: *const u8,
+    name: *const u8,
+    ext: *const u8,
+) -> i32 {
+    if buf.is_null() || size == 0 {
+        return fail(EINVAL);
+    }
+    let z = |v: Option<Vec<u16>>| {
+        v.map(|mut v| {
+            v.push(0);
+            v
+        })
+    };
+    let parts = [widen(drive), widen(dir), widen(name), widen(ext)].map(z);
+    let ptr = |i: usize| parts[i].as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let mut out = vec![0u16; size];
+    let r = wmakepath_s(out.as_mut_ptr(), size, ptr(0), ptr(1), ptr(2), ptr(3));
+    if r != 0 {
+        *buf = 0;
+        return r;
+    }
+    for (i, &c) in out.iter().enumerate() {
+        *buf.add(i) = c as u8;
+        if c == 0 {
+            break;
+        }
+    }
+    0
+}
+
+// ---------------------------------------------------------------------
 // Tas
 // ---------------------------------------------------------------------
 
@@ -1694,6 +1887,13 @@ pub fn exports() -> crate::dlls::Exports {
         "_mbsrchr" => fn mbsrchr, "_mbscmp" => fn mbscmp, "isleadbyte" => fn isleadbyte,
         "_wsplitpath_s" => fn wsplitpath_s, "_wsplitpath" => fn wsplitpath, "_splitpath" => fn splitpath,
         "_wmakepath_s" => fn wmakepath_s,
+        "wmemcpy_s" => fn wmemcpy_s, "wmemmove_s" => fn wmemmove_s,
+        "_strset_s" => fn strset_s, "_wcsset_s" => fn wcsset_s,
+        "_strnset_s" => fn strnset_s, "_wcsnset_s" => fn wcsnset_s,
+        "_wcsupr_s" => fn wcsupr_s, "_strlwr_s" => fn strlwr_s,
+        "_wcslwr_s_l" => fn wcslwr_s_l, "_wcsupr_s_l" => fn wcsupr_s_l,
+        "_mbscpy_s" => fn mbscpy_s, "_ltoa_s" => fn ltoa_s, "_ultoa_s" => fn ultoa_s,
+        "_splitpath_s" => fn splitpath_s, "_makepath_s" => fn makepath_s,
         // Tas.
         "_malloc_base" => fn malloc_base, "_calloc_base" => fn calloc_base,
         "_realloc_base" => fn realloc_base, "_free_base" => fn free_base,
@@ -1731,6 +1931,84 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fonctions_s_de_pythonwin() {
+        unsafe {
+            let src: Vec<u16> = "abc".encode_utf16().collect();
+            let mut dst = [9u16; 4];
+            assert_eq!(wmemcpy_s(dst.as_mut_ptr(), 4, src.as_ptr(), 3), 0);
+            assert_eq!(&dst[..3], &src[..]);
+            assert_eq!(wmemcpy_s(dst.as_mut_ptr(), 2, src.as_ptr(), 3), ERANGE);
+            assert_eq!(&dst[..2], &[0, 0]); // seule la taille annoncée est effacée
+            assert_eq!(wmemmove_s(dst.as_mut_ptr(), 2, src.as_ptr(), 3), ERANGE);
+
+            let mut s = *b"hello\0";
+            assert_eq!(strnset_s(s.as_mut_ptr(), 6, b'x' as i32, 2), 0);
+            assert_eq!(&s, b"xxllo\0");
+            assert_eq!(strset_s(s.as_mut_ptr(), 6, b'y' as i32), 0);
+            assert_eq!(&s, b"yyyyy\0");
+            assert_eq!(strset_s(s.as_mut_ptr(), 3, b'z' as i32), EINVAL);
+            assert_eq!(s[0], 0);
+
+            let mut w: Vec<u16> = "Abc\0".encode_utf16().collect();
+            assert_eq!(wcsupr_s(w.as_mut_ptr(), 4), 0);
+            assert_eq!(String::from_utf16_lossy(&w[..3]), "ABC");
+            assert_eq!(wcsupr_s(w.as_mut_ptr(), 3), EINVAL);
+
+            let mut b = [0u8; 12];
+            assert_eq!(ltoa_s(-42, b.as_mut_ptr(), 12, 10), 0);
+            assert_eq!(&b[..4], b"-42\0");
+            assert_eq!(ultoa_s(255, b.as_mut_ptr(), 12, 16), 0);
+            assert_eq!(&b[..3], b"ff\0");
+            assert_eq!(mbscpy_s(b.as_mut_ptr(), 3, b"abc\0".as_ptr()), ERANGE);
+
+            let (mut d, mut di, mut n, mut e) = ([0u8; 3], [0u8; 32], [0u8; 32], [0u8; 8]);
+            let path = b"C:\\Python\\pythonwin.exe\0";
+            assert_eq!(
+                splitpath_s(
+                    path.as_ptr(),
+                    d.as_mut_ptr(),
+                    3,
+                    di.as_mut_ptr(),
+                    32,
+                    n.as_mut_ptr(),
+                    32,
+                    e.as_mut_ptr(),
+                    8
+                ),
+                0
+            );
+            assert_eq!(&d, b"C:\0");
+            assert_eq!(&di[..9], b"\\Python\\\0");
+            assert_eq!(&n[..10], b"pythonwin\0");
+            assert_eq!(&e[..5], b".exe\0");
+            let mut out = [0u8; 32];
+            assert_eq!(
+                makepath_s(
+                    out.as_mut_ptr(),
+                    32,
+                    b"C\0".as_ptr(),
+                    b"\\Python\0".as_ptr(),
+                    b"python\0".as_ptr(),
+                    b"exe\0".as_ptr()
+                ),
+                0
+            );
+            assert_eq!(&out[..21], b"C:\\Python\\python.exe\0");
+            assert_eq!(
+                makepath_s(
+                    out.as_mut_ptr(),
+                    4,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    b"python\0".as_ptr(),
+                    std::ptr::null()
+                ),
+                ERANGE
+            );
+        }
+    }
 
     #[test]
     fn complexes() {
