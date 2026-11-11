@@ -349,6 +349,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
         || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="));
     if chromium_child {
         exit_with_parent(windows_parent);
+        confine_chromium_child(&args);
     }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
@@ -368,6 +369,10 @@ pub fn init_process(exe: &Module, args: &[String]) {
     }
     if !chromium_child && chromium_sandbox_refused(&exe_win, &cmd) {
         cmd.push_str(" --no-sandbox");
+        crate::log_info!(
+            "process",
+            "{exe_win} : lancé sans le bac à sable de Chromium, processus enfants confinés par Winlux (#1733)"
+        );
     }
     // Bac à sable refusé en cours de route (appli non reconnue au départ,
     // #236) : l'appli repart sans, comme l'utilisateur l'a accepté.
@@ -1007,10 +1012,10 @@ pub fn run(exe: Module) -> ! {
 /// Programme Chromium ou Electron (Claude, Discord, VS Code…) : son bac à
 /// sable Windows exige d'écrire dans la mémoire de l'enfant et de lui
 /// confier des poignées avant son démarrage, ce que Winlux ne sait pas
-/// encore faire ; le courtier tue alors chaque enfant (#767). Winlux pose
-/// la question à l'utilisateur (capacité « sandbox ») et n'ajoute
-/// `--no-sandbox` qu'après un « Autoriser » explicite, révocable dans
-/// Paramètres > Confidentialité et sécurité.
+/// encore faire ; le courtier tue alors chaque enfant (#767). Sans poser de
+/// question (#1733), Winlux ajoute `--no-sandbox` et confine lui-même les
+/// processus enfants ; un refus mémorisé dans Paramètres > Confidentialité
+/// et sécurité garde le bac à sable.
 fn chromium_sandbox_refused(exe_win: &str, cmd: &str) -> bool {
     if cmd.contains("--no-sandbox") {
         return false;
@@ -1020,6 +1025,36 @@ fn chromium_sandbox_refused(exe_win: &str, cmd: &str) -> bool {
         .parent()
         .is_some_and(is_chromium_dir);
     is_chromium && crate::permissions::allowed(crate::permissions::Capability::Sandbox)
+}
+
+/// Enfant Chromium (renderer, GPU, utilitaire) lancé sans le bac à sable :
+/// Winlux le confine lui-même (#1733). `PR_SET_NO_NEW_PRIVS` lui interdit
+/// tout gain de droits (programme setuid, capacités de fichier) pour lui et
+/// ses descendants ; le noyau garde ce verrou jusqu'à la fin du processus.
+fn confine_chromium_child(args: &[String]) {
+    let no_sandbox = args.iter().any(|a| a == "--no-sandbox")
+        || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains("--no-sandbox"));
+    if !no_sandbox {
+        return;
+    }
+    let kind = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--type="))
+        .unwrap_or("?");
+    // SAFETY : prctl sans pointeur, effet limité au processus courant.
+    let r = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if r == 0 {
+        crate::log_info!(
+            "process",
+            "enfant Chromium {kind} confiné (sans gain de droits possible, #1733)"
+        );
+    } else {
+        crate::log_warn!(
+            "process",
+            "enfant Chromium {kind} : confinement impossible ({})",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 /// Dossier d'un programme Chromium : données ICU et instantané V8 côte à côte.

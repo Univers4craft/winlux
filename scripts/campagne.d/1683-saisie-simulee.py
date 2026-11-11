@@ -12,7 +12,7 @@ ok(not any(m in p.read_text(encoding="utf-8", errors="replace") for p in regles 
 ok("consent_shown()" in saisie and '"winlux-uac"' in saisie.replace("b\"winlux-uac\"", '"winlux-uac"'),
    "saisie simulée : rien n'est tapé pendant une demande d'autorisation ou d'élévation (#1683)")
 ok("Capability::Input" in saisie and "session_locked()" in saisie
-   and "Capability::Sandbox | Capability::Input" in perm,
+   and "let implied = cap != Capability::Input;" in perm,
    "saisie simulée : autorisation explicite, jamais implicite, et rien sur l'écran verrouillé (#1683)")
 ok('"input": ("Autoriser « {app} » à taper au clavier et à piloter la souris à votre place ?"' in tool
    and "Darf „{app}“ für Sie tippen und die Maus steuern?" in tool
