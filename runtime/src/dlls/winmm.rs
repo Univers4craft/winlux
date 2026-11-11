@@ -729,6 +729,12 @@ fn capture_thread(
         // La fonction de rappel est du code Windows : il lui faut un TEB.
         crate::process::init_thread();
     }
+    // Question « micro » posée ici, sur le fil de capture : l'application
+    // n'attend pas la réponse (Steam s'arrêtait sur son chien de garde de
+    // 15 s, #1882). Refus : aucun tampon n'est rempli.
+    if !microphone_allowed() {
+        return;
+    }
     let Ok(a) = alsa_capture() else { return };
     let default = CString::new("default").unwrap();
     let mut pcm = std::ptr::null_mut();
@@ -812,8 +818,11 @@ fn microphone_allowed() -> bool {
     crate::permissions::allowed(crate::permissions::Capability::Microphone)
 }
 
+/// Micro présent et pas refusé, sans rien demander : compter les micros ou
+/// lire leurs caractéristiques ne pose pas de question (#1882).
 fn microphone_available() -> bool {
-    microphone_allowed() && alsa_capture().is_ok()
+    crate::permissions::not_refused(crate::permissions::Capability::Microphone)
+        && alsa_capture().is_ok()
 }
 
 pub unsafe extern "win64" fn wave_in_get_num_devs() -> u32 {
@@ -884,17 +893,24 @@ pub unsafe extern "win64" fn wave_in_open(
     if !valid_device(device_id as usize) {
         return MMSYSERR_BADDEVICEID;
     }
-    if !microphone_allowed() {
-        return MMSYSERR_NODRIVER;
-    }
     if pwfx.is_null() {
         return MMSYSERR_INVALPARAM;
     }
     let Some(config) = parse_wave_format(pwfx) else {
         return WAVERR_BADFORMAT;
     };
+    // WAVE_FORMAT_QUERY n'ouvre rien : pas de question (#1882).
     if flags & WAVE_FORMAT_QUERY != 0 {
-        return 0;
+        return if crate::permissions::not_refused(crate::permissions::Capability::Microphone) {
+            0
+        } else {
+            MMSYSERR_NODRIVER
+        };
+    }
+    // Ouvrir ne demande rien : la question vient au premier enregistrement,
+    // sur le fil de capture, sans bloquer l'application (#1882).
+    if !crate::permissions::not_refused(crate::permissions::Capability::Microphone) {
+        return MMSYSERR_NODRIVER;
     }
     let kind = flags & CALLBACK_TYPEMASK;
     if !matches!(
