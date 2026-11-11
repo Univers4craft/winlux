@@ -210,6 +210,7 @@ oleaut32_typelib.rs	InfoObj	interne	ICreateTypeInfo2/ITypeInfo de CreateTypeLib2
 oleaut32_typelib.rs	LibObj	interne	ICreateTypeLib2/ITypeLib de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
+rtti.rs	StdException	interne	std::bad_typeid lancée par __RTtypeid en x64 seulement (x86 : avertissement, rien n'est lancé)
 schannel.rs	SecBuffer	a-verifier	
 schannel.rs	SecBufferDesc	a-verifier	
 schannel.rs	SecHandle	a-verifier	
