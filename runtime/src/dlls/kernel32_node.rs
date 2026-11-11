@@ -184,8 +184,9 @@ pub unsafe extern "win64" fn VirtualUnlock(addr: usize, size: usize) -> i32 {
 
 const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
 
-/// `DeviceIoControl` : FSCTL_GET_REPARSE_POINT (cible d'un lien
-/// symbolique) ; les autres codes n'ont pas d'équivalent Linux.
+/// `DeviceIoControl` : appareils virtuels des pilotes constructeurs
+/// (vdev.rs), rapports HID, FSCTL_GET_REPARSE_POINT (cible d'un lien
+/// symbolique), volumes et disques (devio.rs).
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn DeviceIoControl(
     h: usize,
@@ -215,6 +216,12 @@ pub unsafe extern "win64" fn DeviceIoControl(
             }
         }
     };
+    // Appareil virtuel d'un pilote constructeur (#1533).
+    if let Some(r) =
+        crate::dlls::vdev::device_io_control(h, code, inb, inl, outb, outl, returned, ov)
+    {
+        return r;
+    }
     // Rapports HID par code de contrôle (hidapi, outils de manettes).
     match code {
         devio::IOCTL_HID_GET_FEATURE | devio::IOCTL_HID_GET_INPUT_REPORT => {
@@ -1289,13 +1296,6 @@ pub extern "win64" fn FreeResource(_h: usize) -> i32 {
     0
 }
 
-/// Énumération des ressources : aucune ressource de ce type
-/// (ERROR_RESOURCE_TYPE_NOT_FOUND), les appelants passent au repli.
-pub extern "win64" fn EnumResourceNamesW(_m: usize, _t: usize, _f: usize, _p: isize) -> i32 {
-    crate::process::set_last_error(1813);
-    0
-}
-
 /// `RtlFillMemory(destination, longueur, octet)`.
 pub unsafe extern "win64" fn RtlFillMemory(dest: *mut u8, len: usize, fill: u8) {
     if !dest.is_null() {
@@ -1405,8 +1405,6 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "GetNamedPipeHandleStateW" => fn GetNamedPipeHandleStateA,
         "GetConsoleTitleW" => fn GetConsoleTitleW,
         "FreeResource" => fn FreeResource,
-        "EnumResourceNamesW" => fn EnumResourceNamesW,
-        "EnumResourceLanguagesW" => fn EnumResourceNamesW,
         "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
     }
 }
