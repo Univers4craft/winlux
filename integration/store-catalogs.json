@@ -1,5 +1,5 @@
 {
-  "about": "Boutiques que Winlux propose d'ajouter au Store (docs/BOUTIQUES.md). Aucune n'est fournie dans l'image ni présélectionnée ; l'ordre d'affichage est alphabétique.",
+  "about": "Boutiques que Winlux propose d'ajouter au Store (docs/BOUTIQUES.md). Aucune n'est fournie dans l'image ; « preselected » : proposée cochée à l'installation et au premier démarrage, décochable ; l'ordre d'affichage est alphabétique.",
   "catalogs": [
     {
       "id": "flathub",
@@ -7,6 +7,7 @@
       "platform": "linux",
       "kind": "flatpak",
       "remote": "flathub",
+      "preselected": true,
       "repo": "https://dl.flathub.org/repo/flathub.flatpakrepo",
       "fingerprint": "6E5C05D979C76DAF93C081354184DD4D907A7CAE",
       "site": "https://flathub.org",

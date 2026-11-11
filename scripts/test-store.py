@@ -136,6 +136,8 @@ Categories:
 remotes) printf 'flathub\\tsystem\\n';;
 list) printf 'org.kde.krita\\t5.2.0\\tflathub\\n';;
 remote-ls) printf 'org.kde.krita\\t5.2.2\\n';;
+remote-info) printf '%s\\n' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;;
+info) printf '%s\\n' "${FP_INSTALLED:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}";;
 *) printf 'flatpak %s\\n' "$*" >> "$LOG"; echo 'Installation 100%';;
 esac
 """)
@@ -273,7 +275,23 @@ esac
     asked = (w / "confirm.log").read_text()
     check("Annuler" in asked and "Version : 8.6" in asked and "SHA-256" in asked and "garde vos documents" in asked,
           f"confirmation : version, adresse, empreinte, documents gardés ({asked[-300:]})")
+    # Flathub : même confirmation, révision montrée puis vérifiée (#1678).
+    rev = "0123456789abcdef" * 4
+    st("install", "flatpak:org.gimp.GIMP", code=9)
+    check("install --user" not in log.read_text(), "Flathub : Annuler, rien n'est installé (#1678)")
+    asked = (w / "confirm.log").read_text()
+    check("Révision installée : " + rev in asked and "Flathub (flathub) https://flathub.org/apps/org.gimp.GIMP" in asked
+          and "Application Linux" in asked and "Annuler" in asked, f"confirmation Flathub ({asked[-300:]})")
     env["CONFIRM_ANSWER"] = "0"
+    st("install", "flatpak:org.gimp.GIMP")
+    text = log.read_text()
+    check("flatpak install --user flathub org.gimp.GIMP -y --noninteractive" in text and "--commit=" not in text,
+          "Flathub : installation de la révision confirmée")
+    env["FP_INSTALLED"] = "f" * 64
+    st("install", "flatpak:org.gimp.GIMP")
+    env.pop("FP_INSTALLED")
+    check(f"flatpak update --user --commit={rev} org.gimp.GIMP" in log.read_text(),
+          "Flathub : le dépôt a avancé, retour à la révision confirmée")
     st("install", "windows:local/notepadpp")
     check(f"winlux {home}/.cache/winlux/store/installers/local_notepadpp.exe /S" in log.read_text(), "installateur Windows")
     state = json.loads((home / ".local/share/winlux/store-state.json").read_text())

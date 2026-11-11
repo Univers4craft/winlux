@@ -132,7 +132,7 @@ cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.
 # Catalogues ajoutés à la main par l'administrateur (aucun livré).
 mkdir -p "$stage/etc/winlux/store-sources.d"
 # Boutiques tierces proposées (docs/BOUTIQUES.md) : seulement leur description ;
-# rien n'est téléchargé avant le choix de l'utilisateur, aucune n'est cochée.
+# rien n'est téléchargé avant le choix de l'utilisateur, Flathub est proposé coché, décochable.
 cp "$root/scripts/winlux-store-catalogs.py" "$stage/usr/bin/winlux-store-catalogs"
 cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalogs.json"
 # Logiciels publiés pour Linux par leur éditeur (#1056) : seulement leur
