@@ -701,6 +701,20 @@ extern "win64" fn initiate_system_shutdown_w(
     fail(ERROR_PRIVILEGE_NOT_HELD)
 }
 
+/// InitiateSystemShutdownExW : comme la variante sans raison, le droit
+/// d'arrêter la machine n'est pas accordé aux programmes ; l'arrêt passe
+/// par le menu de Winlux.
+extern "win64" fn initiate_system_shutdown_ex_w(
+    m: usize,
+    msg: usize,
+    t: u32,
+    force: i32,
+    reboot: i32,
+    _reason: u32,
+) -> i32 {
+    initiate_system_shutdown_w(m, msg, t, force, reboot)
+}
+
 extern "win64" fn abort_system_shutdown_w(_machine: usize) -> i32 {
     fail(ERROR_NO_SHUTDOWN_IN_PROGRESS)
 }
@@ -1108,6 +1122,7 @@ pub fn exports() -> Exports {
         "CryptGetDefaultProviderW" => fn crypt_get_default_provider_w,
         "CryptSetProviderExW" => fn crypt_set_provider_ex_w,
         "InitiateSystemShutdownW" => fn initiate_system_shutdown_w,
+        "InitiateSystemShutdownExW" => fn initiate_system_shutdown_ex_w,
         "AbortSystemShutdownW" => fn abort_system_shutdown_w,
         "GetCurrentHwProfileW" => fn get_current_hw_profile_w,
         "ImpersonateAnonymousToken" => fn impersonate_anonymous_token,

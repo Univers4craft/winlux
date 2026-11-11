@@ -968,9 +968,12 @@ impl Interpreter {
             return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
         };
         self.ensure_initialized(field.owner)?;
-        let ptr = types::with_types(|reg| {
-            reg.static_field_ptr(field.owner, field.info.offset, field.info.kind.slot_size())
-        });
+        // La taille d'une structure se lit dans le registre : la calculer
+        // avant de le verrouiller, sinon le verrou est repris et le fil se
+        // bloque (champ statique de type structure, #1687).
+        let size = field.info.kind.slot_size();
+        let ptr =
+            types::with_types(|reg| reg.static_field_ptr(field.owner, field.info.offset, size));
         Ok((ptr, field.info.kind))
     }
 

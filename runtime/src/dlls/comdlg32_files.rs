@@ -1223,6 +1223,15 @@ pub(crate) unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i3
     wr::<u16>(ofn_ptr, ofn::FILE_OFFSET, off);
     wr::<u16>(ofn_ptr, ofn::FILE_EXT, ext);
     wr::<u32>(ofn_ptr, ofn::FILTER_INDEX, st.filter as u32 + 1);
+    // Comme Windows, le dossier courant devient celui du fichier choisi,
+    // sauf avec OFN_NOCHANGEDIR : IrfanView y cherche « l'image suivante »
+    // (#1691).
+    if flags & OFN_NOCHANGEDIR == 0 {
+        if let Some(dir) = st.result.first().and_then(|p| chosen_dir(p)) {
+            let w: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
+            super::kernel32::set_current_directory_w(w.as_ptr());
+        }
+    }
     let title_buf = rd::<usize>(ofn_ptr, ofn::FILE_TITLE);
     let max_title = rd::<u32>(ofn_ptr, ofn::MAX_FILE_TITLE);
     if title_buf != 0 && max_title > 0 && st.result.len() == 1 {
@@ -1234,6 +1243,20 @@ pub(crate) unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i3
         }
     }
     1
+}
+
+const OFN_NOCHANGEDIR: u32 = 0x8;
+
+/// Dossier d'un chemin Windows choisi (`C:\Images\a.png` → `C:\Images`,
+/// `C:\a.png` → `C:\`).
+pub(crate) fn chosen_dir(path: &str) -> Option<String> {
+    let cut = path.rfind('\\')?;
+    let dir = &path[..cut];
+    Some(if dir.len() == 2 && dir.ends_with(':') {
+        format!("{dir}\\")
+    } else {
+        dir.to_string()
+    })
 }
 
 pub unsafe extern "win64" fn get_open_file_name_a(ofn: *mut u8) -> i32 {
@@ -1280,6 +1303,17 @@ pub unsafe extern "win64" fn get_file_title_w(path: *const u16, buf: *mut u16, c
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dossier courant après un choix (#1691) : celui du fichier choisi.
+    #[test]
+    fn dossier_du_fichier_choisi() {
+        assert_eq!(
+            chosen_dir(r"C:\Images\essai-irfan.png").as_deref(),
+            Some(r"C:\Images")
+        );
+        assert_eq!(chosen_dir(r"C:\a.png").as_deref(), Some(r"C:\"));
+        assert_eq!(chosen_dir("sans-dossier.png"), None);
+    }
 
     #[test]
     fn motifs_sans_casse_et_etoile_point_etoile() {

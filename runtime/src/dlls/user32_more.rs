@@ -777,12 +777,13 @@ unsafe extern "win64" fn exit_windows_ex(_flags: u32, _reason: u32) -> i32 {
     0
 }
 
-/// keybd_event / SendInput : pas de saisie simulée vers le serveur X.
-unsafe extern "win64" fn keybd_event(_vk: u8, _scan: u8, _flags: u32, _extra: usize) {}
+/// keybd_event / SendInput : saisie simulée dans la session (saisie.rs, #1683).
+unsafe extern "win64" fn keybd_event(vk: u8, scan: u8, flags: u32, extra: usize) {
+    super::saisie::keybd_event(vk, scan, flags, extra)
+}
 
-unsafe extern "win64" fn send_input(_n: u32, _inputs: *const u8, _size: i32) -> u32 {
-    crate::process::set_last_error(5);
-    0
+unsafe extern "win64" fn send_input(n: u32, inputs: *const u8, size: i32) -> u32 {
+    super::saisie::send_input(n, inputs, size)
 }
 
 pub fn exports() -> crate::dlls::Exports {

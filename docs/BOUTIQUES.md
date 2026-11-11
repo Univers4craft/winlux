@@ -7,8 +7,13 @@ du système lui-même. Les catalogues **tiers** sont des « boutiques » que
 l'utilisateur choisit, dans le même esprit que les navigateurs
 (`docs/BROWSERS.md`) :
 
-- aucune n'est fournie dans l'image, aucune n'est cochée d'office, la liste est
-  en ordre alphabétique ;
+- aucune n'est fournie dans l'image et la liste est en ordre alphabétique ;
+- **Flathub** (applications Linux) est proposé **coché** dans l'installateur et
+  au premier démarrage (accord de damien, 11 novembre 2026), avec la mention
+  qu'on peut le décocher pour le refuser ; les autres ne sont pas cochées.
+  Un fichier de réponse sans clé `store_catalogs` garde ce choix, `[]` le
+  refuse. Une installation existante ne change pas : rien n'est ajouté sans
+  qu'on l'ait choisi ;
 - le choix se fait dans l'installateur (page Profil), au premier démarrage
   (OOBE), dans **Paramètres > Applications > Boutiques de logiciels**, et
   Bienvenue y mène (« Choisir des boutiques de logiciels ») ;
@@ -74,4 +79,11 @@ avec la mise à jour.
   sans mot de passe et apparaissent dans Toutes les applications. Retirer la
   boutique la masque du Store sans désinstaller ce qui a été installé.
 - Fichier de réponse de l'installation automatique : `"store_catalogs": ["flathub"]`.
+- Installer une application Flathub passe par la même confirmation que les
+  paquets des éditeurs et les .exe (#1678) : produit, version, éditeur, source
+  (`https://flathub.org/apps/<id>`), révision exacte (somme SHA-256 OSTree,
+  signée par Flathub), « Application Linux en bac à sable », et « Annuler » par
+  défaut. Si le dépôt a avancé entre la confirmation et le téléchargement, le
+  Store revient à la révision confirmée (`flatpak update --commit`). La
+  désinstallation garde les documents (`~/.var/app` n'est pas effacé).
 - Test : `scripts/test-store-catalogs.py` (dans `scripts/test-all.sh` et la CI).

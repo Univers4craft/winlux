@@ -154,6 +154,9 @@ pub mod legacy_com;
 pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod lot_e_comptes;
+pub mod lot_e_divers;
+pub mod lot_e_reseau;
 pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
@@ -210,6 +213,7 @@ pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
 pub mod rtti;
+pub mod saisie;
 pub mod sandbox_dlls;
 pub mod schannel;
 pub mod sechost;
@@ -1396,6 +1400,11 @@ fn add_basics(all: &mut [Builtin]) {
     let ftp = ftp_apps::all();
     // Imports d'iCUE 4.18 (#1606).
     let icue = icue_win32::all();
+    // Lot E de #1410 (#1614).
+    let lot_e = lot_e_comptes::all()
+        .into_iter()
+        .chain(lot_e_reseau::all())
+        .chain(lot_e_divers::all());
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
@@ -1404,6 +1413,7 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(common)
         .chain(ftp)
         .chain(icue)
+        .chain(lot_e)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {

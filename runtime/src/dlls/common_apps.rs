@@ -420,8 +420,13 @@ extern "win64" fn set_menu_item_bitmaps(_m: usize, _p: u32, _f: u32, _u: usize, 
     1
 }
 
-/// mouse_event : seul le déplacement absolu ou relatif du pointeur est rendu.
-unsafe extern "win64" fn mouse_event(flags: u32, dx: i32, dy: i32, _data: u32, _extra: usize) {
+/// mouse_event : tapé dans la session quand le programme y est autorisé
+/// (saisie.rs, #1683) ; sinon seul le déplacement du pointeur logique est
+/// rendu, comme avant.
+unsafe extern "win64" fn mouse_event(flags: u32, dx: i32, dy: i32, data: u32, _extra: usize) {
+    if crate::dlls::saisie::mouse_event(flags, dx, dy, data) {
+        return;
+    }
     const MOVE: u32 = 0x1;
     const ABSOLUTE: u32 = 0x8000;
     if flags & MOVE == 0 {
@@ -1586,6 +1591,10 @@ unsafe extern "win64" fn get_role_text_w(_role: u32, buf: *mut u16, cap: u32) ->
 /// Numéros d'ordre publiés des fonctions importées sans nom
 /// (comctl32 v6, shell32).
 pub const ORDINALS: &[(&str, u16, &str)] = &[
+    ("winspool", 204, "SetDefaultPrinterW"),
+    ("shlwapi", 515, "SHGetViewStatePropertyBag"),
+    ("oleaut32", 185, "VariantTimeToSystemTime"),
+    ("oleaut32", 314, "VarBstrCmp"),
     ("comctl32", 16, "CreateUpDownControl"),
     ("comctl32", 17, "InitCommonControls"),
     ("comctl32", 344, "TaskDialog"),

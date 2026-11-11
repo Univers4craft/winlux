@@ -39,18 +39,18 @@ crt_runtime.rs	LocaleInfo	a-verifier
 crt_runtime.rs	LocalePointers	a-verifier	
 crt_runtime.rs	OnexitTable	a-verifier	
 crt_ucrt.rs	Empty	a-verifier	
-crypt32.rs	AlgId	a-verifier	
-crypt32.rs	BitBlob	a-verifier	
-crypt32.rs	Blob	a-verifier	
-crypt32.rs	CertContext	a-verifier	
-crypt32.rs	CertInfo	a-verifier	
-crypt32.rs	Chain	a-verifier	
-crypt32.rs	ChainContext	a-verifier	
-crypt32.rs	ChainElement	a-verifier	
-crypt32.rs	Extension	a-verifier	
+crypt32.rs	AlgId	a-verifier	CRYPT_ALGORITHM_IDENTIFIER 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
+crypt32.rs	BitBlob	a-verifier	CRYPT_BIT_BLOB 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
+crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
+crypt32.rs	CertContext	x86	CERT_CONTEXT 20 octets en x86 (40 en x64) : vue Cert.view remplie par fill_view (#1667) ; test condensat_et_certificat_auto_signe
+crypt32.rs	CertInfo	x86	CERT_INFO 112 octets en x86 (208 en x64) : Cert.info32 (#1667) ; test condensat_et_certificat_auto_signe
+crypt32.rs	Chain	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
+crypt32.rs	ChainContext	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
+crypt32.rs	ChainElement	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
+crypt32.rs	Extension	x86	CERT_EXTENSION 16 octets en x86 (24 en x64) : Cert.exts32 (#1667)
 crypt32.rs	PolicyPara	a-verifier	
 crypt32.rs	PolicyStatus	a-verifier	
-crypt32.rs	SimpleChain	a-verifier	
+crypt32.rs	SimpleChain	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
 crypt32.rs	SslExtraPara	a-verifier	
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
@@ -210,6 +210,7 @@ oleaut32_typelib.rs	InfoObj	interne	ICreateTypeInfo2/ITypeInfo de CreateTypeLib2
 oleaut32_typelib.rs	LibObj	interne	ICreateTypeLib2/ITypeLib de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
+rtti.rs	StdException	interne	std::bad_typeid lancée par __RTtypeid en x64 seulement (x86 : avertissement, rien n'est lancé)
 schannel.rs	SecBuffer	a-verifier	
 schannel.rs	SecBufferDesc	a-verifier	
 schannel.rs	SecHandle	a-verifier	

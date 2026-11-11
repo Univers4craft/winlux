@@ -201,6 +201,10 @@ fi
 # bloquant (le script se construit lui-même et se saute sans clang).
 WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-setupapi32.sh"
 
+# Saisie simulée (#1683) : SendInput et keybd_event en x64 et x86 sous Xvfb,
+# bloquant (le script se construit lui-même et se saute sans clang ni xvfb-run).
+WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-sendinput.sh"
+
 # DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
 if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"

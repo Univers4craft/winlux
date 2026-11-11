@@ -1064,7 +1064,8 @@ pub struct X11Backend {
     pinch_last: f32,
     /// Dernier appui (fenêtre, bouton, instant, x, y) pour reconnaître un
     /// double-clic.
-    last_click: Option<(usize, u8, std::time::Instant, i32, i32)>,
+    /// Dernier clic : fenêtre, bouton, heure du serveur X (ms), position.
+    last_click: Option<(usize, u8, u32, i32, i32)>,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
     /// Fenêtre possédée → propriétaire. openbox ne relève pas un
@@ -2766,15 +2767,16 @@ impl X11Backend {
                     });
                 }
                 let wparam = button_wparam(e.detail) | button_state(e.state);
-                let now = std::time::Instant::now();
-                let double = self.last_click.take().is_some_and(|(h, b, t, lx, ly)| {
-                    h == hwnd
-                        && b == e.detail
-                        && now.duration_since(t).as_millis()
-                            <= crate::dlls::mouse::double_click_time() as u128
-                        && (x - lx).abs() <= 4
-                        && (y - ly).abs() <= 4
-                }) && gui::wants_double_clicks(hwnd);
+                // Heure de l'événement donnée par le serveur X, pas celle où
+                // il est lu : un programme occupé à redessiner après le
+                // premier clic lit le second en retard, et le double-clic
+                // était perdu (#1689).
+                let now = e.time;
+                let double = self
+                    .last_click
+                    .take()
+                    .is_some_and(|prev| is_double_click(prev, (hwnd, e.detail, now, x, y)))
+                    && gui::wants_double_clicks(hwnd);
                 // Le clic qui conclut un double-clic n'en commence pas un autre.
                 if !double {
                     self.last_click = Some((hwnd, e.detail, now, x, y));
@@ -3793,7 +3795,7 @@ fn effective_keysym(syms: &[u32], shift: bool, caps: bool, level3: bool) -> Opti
         .or(Some(base))
 }
 
-fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
+pub(crate) fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
     // Sur AZERTY le chiffre est au niveau Maj (&/1, é/2…), mais le VK reste
     // VK_1/VK_2 ; les lettres suivent la disposition choisie sur le serveur.
     if matches!(shifted, 0x30..=0x39) && !matches!(base, 0x41..=0x5A | 0x61..=0x7A) {
@@ -3910,6 +3912,23 @@ mod tests {
         // Identifiant jamais attribué par le serveur : BadDrawable.
         let _ = xft.draw(0x1F, &spec, 2, 12, b"FileZilla", 0);
         xft.sync();
+    }
+
+    /// L'écart se mesure à l'heure du serveur X, pas à la lecture (#1689).
+    #[test]
+    fn double_clic_a_l_heure_du_serveur() {
+        let limit = crate::dlls::mouse::double_click_time();
+        let prev = (7usize, 1u8, 1000u32, 10, 10);
+        assert!(is_double_click(prev, (7, 1, 1000 + limit, 12, 9)));
+        assert!(!is_double_click(prev, (7, 1, 1001 + limit, 10, 10)));
+        assert!(!is_double_click(prev, (7, 3, 1100, 10, 10)));
+        assert!(!is_double_click(prev, (8, 1, 1100, 10, 10)));
+        assert!(!is_double_click(prev, (7, 1, 1100, 15, 10)));
+        // Retour à zéro de l'horloge X (49 jours) : écart toujours court.
+        assert!(is_double_click(
+            (7, 1, u32::MAX - 50, 0, 0),
+            (7, 1, 100, 0, 0)
+        ));
     }
 
     /// #1421 : SDL lié en statique est reconnu à sa classe de fenêtre.
@@ -6115,4 +6134,17 @@ fn client_machine() -> String {
         .map(|s| s.trim().to_string())
         .find(|s| !s.is_empty())
         .unwrap_or_else(|| "localhost".to_string())
+}
+
+/// Deux appuis forment un double-clic : même fenêtre et même bouton, écart
+/// d'au plus GetDoubleClickTime selon l'heure du serveur X, à 4 pixels près
+/// (#1689).
+fn is_double_click(prev: (usize, u8, u32, i32, i32), cur: (usize, u8, u32, i32, i32)) -> bool {
+    let (h, b, t, lx, ly) = prev;
+    let (hwnd, button, now, x, y) = cur;
+    h == hwnd
+        && b == button
+        && now.wrapping_sub(t) <= crate::dlls::mouse::double_click_time()
+        && (x - lx).abs() <= 4
+        && (y - ly).abs() <= 4
 }

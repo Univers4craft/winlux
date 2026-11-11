@@ -417,33 +417,30 @@ unsafe extern "win64" fn CertGetIssuerCertificateFromStore(
     prev: usize,
     flags: *mut u32,
 ) -> usize {
-    use super::crypt32::{CertContext, CertFindCertificateInStore, CertVerifyTimeValidity};
+    use super::crypt32::{context, CertFindCertificateInStore, CertVerifyTimeValidity};
     if subject == 0 || flags.is_null() {
         set_last_error(E_INVALIDARG as u32);
         return 0;
     }
-    let s = &*(subject as *const CertContext);
+    let s = context(subject);
     let info = &*s.info;
     let blob = |b: &super::crypt32::Blob| std::slice::from_raw_parts(b.pb, b.cb as usize).to_vec();
     if blob(&info.issuer) == blob(&info.subject) {
         set_last_error(CRYPT_E_SELF_SIGNED);
         return 0;
     }
-    let issuer_name = info.issuer;
-    let found = CertFindCertificateInStore(
-        store,
-        1,
-        0,
-        CERT_FIND_SUBJECT_NAME,
-        &issuer_name as *const _ as usize,
-        prev,
-    );
+    // CERT_NAME_BLOB à la taille de pointeur du programme.
+    let mut issuer_name = [0u64; 2];
+    let at = issuer_name.as_mut_ptr() as usize;
+    (at as *mut u32).write(info.issuer.cb);
+    crate::wow32::write_ptr(at + crate::wow32::pointer_size(), info.issuer.pb as usize);
+    let found = CertFindCertificateInStore(store, 1, 0, CERT_FIND_SUBJECT_NAME, at, prev);
     if found == 0 {
         return 0;
     }
     let wanted = *flags;
     let mut left = wanted;
-    let issuer = &*(found as *const CertContext);
+    let issuer = context(found);
     if wanted & CERT_STORE_SIGNATURE_FLAG != 0 {
         let der = std::slice::from_raw_parts(s.der, s.der_len as usize);
         let issuer_der = std::slice::from_raw_parts(issuer.der, issuer.der_len as usize);

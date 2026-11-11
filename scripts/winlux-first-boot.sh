@@ -322,13 +322,19 @@ menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun
 BROWSER_CHOICE=${REPLY:-aucun}
 case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
 
-# Boutiques de logiciels : aucune fournie ni cochée d'office (docs/BOUTIQUES.md),
-# ordre alphabétique. Ajoutées au Store par winlux-store-catalogs, reprises au
-# démarrage suivant sans réseau.
+# Boutiques de logiciels : aucune fournie dans l'image, ordre alphabétique.
+# Flathub (« preselected » dans store-catalogs.json) est proposé coché tant
+# qu'aucun choix n'est enregistré ; décoché, il est refusé (docs/BOUTIQUES.md).
+# Ajoutées au Store par winlux-store-catalogs, reprises au démarrage suivant
+# sans réseau.
 log "Étape 6/$TOTAL_STEPS : Boutiques de logiciels"
-store_mark() { if grep -qx "$1" /etc/winlux/store-catalogs 2>/dev/null; then echo on; else echo off; fi; }
+store_mark() {
+    if test -e /etc/winlux/store-catalogs; then
+        if grep -qx "$1" /etc/winlux/store-catalogs; then echo on; else echo off; fi
+    elif test "$1" = flathub; then echo on; else echo off; fi
+}
 CHECKLIST_ARGS="flathub Flathub_(logiciels_Linux) $(store_mark flathub) scoop-extras Scoop_Extras_(logiciels_Windows) $(store_mark scoop-extras) scoop-games Scoop_Games_(jeux_Windows) $(store_mark scoop-games)"
-checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Winlux n'en impose aucune)" $CHECKLIST_ARGS
+checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Flathub proposé coché, décochez pour refuser)" $CHECKLIST_ARGS
 STORE_CHOICE=
 for store in ${REPLY:-}; do
     store=$(printf '%s' "$store" | tr -d '"')
