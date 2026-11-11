@@ -15,7 +15,7 @@
 //!   de l'appareil `USB\VID_v&PID_p\<numéro de série>` lu dans sysfs ;
 //! - un port intégré (`ttyS*`) : `ACPI\PNP0501\n` ; un `WINLUX_COMn` :
 //!   `ROOT\PORTS\000n` ;
-//! - un périphérique hidraw : `HID\VID_v&PID_p\HIDRAWn`.
+//! - une collection de tête hidraw : `HID\VID_v&PID_p[&MI_nn][&COLcc]\HIDRAWn`.
 //!
 //! Un DEVINST est l'indice (plus un) de l'identifiant dans une table qui ne
 //! fait que grandir pendant la vie du processus, comme sous Windows.
@@ -316,12 +316,10 @@ pub fn nodes() -> Vec<Node> {
         parent: None,
         kind: Kind::Root,
     }];
-    for d in hid::devices() {
+    // Une interface par collection de tête, comme Windows (#1523).
+    for d in hid::interfaces() {
         out.push(Node {
-            id: format!(
-                "HID\\VID_{:04X}&PID_{:04X}\\HIDRAW{}",
-                d.vendor, d.product, d.index
-            ),
+            id: d.instance_id(),
             parent: Some(ROOT.into()),
             kind: Kind::Hid(d),
         });
@@ -445,8 +443,8 @@ impl Node {
     fn description(&self) -> String {
         match &self.kind {
             Kind::Root => "Racine".into(),
-            Kind::Hid(d) if d.name.is_empty() => "Périphérique HID".into(),
-            Kind::Hid(d) => d.name.clone(),
+            Kind::Hid(d) if d.product_string().is_empty() => "Périphérique HID".into(),
+            Kind::Hid(d) => d.product_string(),
             Kind::Port { usb: Some(u), .. } if !u.name.is_empty() => u.name.clone(),
             Kind::Port { usb: Some(_), .. } => "USB Serial Device".into(),
             Kind::Port { .. } => "Communications Port".into(),
@@ -473,10 +471,22 @@ impl Node {
                 _ => sz(&self.description()),
             },
             1 => match &self.kind {
-                Kind::Hid(d) => multi(&[
-                    format!("HID\\VID_{:04X}&PID_{:04X}", d.vendor, d.product),
-                    "HID_DEVICE".into(),
-                ]),
+                Kind::Hid(d) => {
+                    let id = d.instance_id();
+                    let first = id.rsplit_once('\\').map(|x| x.0).unwrap_or(&id).to_string();
+                    let tlc = d.tlc();
+                    let mut v = vec![first];
+                    let plain = format!("HID\\VID_{:04X}&PID_{:04X}", d.vendor, d.product);
+                    if !v.contains(&plain) {
+                        v.push(plain);
+                    }
+                    v.push(format!(
+                        "HID_DEVICE_UP:{:04X}_U:{:04X}",
+                        tlc.usage_page, tlc.usage
+                    ));
+                    v.push("HID_DEVICE".into());
+                    multi(&v)
+                }
                 Kind::Port { usb: Some(u), .. } => multi(&[
                     format!(
                         "USB\\VID_{:04X}&PID_{:04X}&MI_{:02X}",
@@ -512,7 +522,8 @@ impl Node {
             }),
             8 => sz(&guid_text(&self.class())),
             0xB => match &self.kind {
-                Kind::Hid(d) => sz(d.name.split_whitespace().next().unwrap_or("(Standard)")),
+                Kind::Hid(d) if !d.manufacturer_string().is_empty() => sz(&d.manufacturer_string()),
+                Kind::Hid(_) => sz("(Standard)"),
                 Kind::Port { usb: Some(u), .. } | Kind::UsbDevice(u)
                     if !u.manufacturer.is_empty() =>
                 {
@@ -1102,6 +1113,15 @@ pub unsafe extern "win64" fn CM_Get_DevNode_Registry_PropertyW(
     CR_SUCCESS
 }
 
+/// Toutes les interfaces présentes : (classe d'interface, chemin), pour les
+/// avis de branchement (`devnotify`).
+pub fn interface_paths() -> Vec<([u8; 16], String)> {
+    nodes()
+        .iter()
+        .filter_map(|n| Some((n.interface()?, n.interface_path()?)))
+        .collect()
+}
+
 /// MULTI_SZ des chemins d'interface d'une classe d'interface.
 fn interface_list(guid: [u8; 16], device: Option<&str>) -> Vec<u16> {
     let mut out: Vec<u16> = nodes()
@@ -1149,8 +1169,235 @@ pub unsafe extern "win64" fn CM_Get_Device_Interface_ListW(
     CR_SUCCESS
 }
 
+// ============================================================
+//  Propriétés unifiées (DEVPROPKEY) : hidapi, SDL, logiciels de matériel
+// ============================================================
+
+/// {A45C254E-DF1C-4EFD-8020-67D146A850E0} : propriétés générales d'appareil.
+const DEVPKEY_DEVICE: [u8; 16] = guid(
+    0xA45C254E,
+    0xDF1C,
+    0x4EFD,
+    [0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0],
+);
+/// {78C34FC8-104A-4ACA-9EA4-524D52996E57}, pid 256 : DEVPKEY_Device_InstanceId.
+const DEVPKEY_INSTANCE: [u8; 16] = guid(
+    0x78C34FC8,
+    0x104A,
+    0x4ACA,
+    [0x9E, 0xA4, 0x52, 0x4D, 0x52, 0x99, 0x6E, 0x57],
+);
+/// {4340A6C5-93FA-4706-972C-7B648008A5A7} : relations (Parent 8, Children 9).
+const DEVPKEY_RELATIONS: [u8; 16] = guid(
+    0x4340A6C5,
+    0x93FA,
+    0x4706,
+    [0x97, 0x2C, 0x7B, 0x64, 0x80, 0x08, 0xA5, 0xA7],
+);
+const DEVPROP_TYPE_GUID: u32 = 0x0D;
+const DEVPROP_TYPE_STRING: u32 = 0x12;
+const DEVPROP_TYPE_STRING_LIST: u32 = 0x2012;
+
+fn bytes16(v: &[u16]) -> Vec<u8> {
+    v.iter().flat_map(|c| c.to_le_bytes()).collect()
+}
+
+/// Valeur d'une propriété DEVPROPKEY : (DEVPROPTYPE, octets).
+pub fn devprop(n: &Node, key: &[u8; 16], pid: u32) -> Option<(u32, Vec<u8>)> {
+    let reg = |spdrp: u32| {
+        n.property(spdrp).map(|(t, v)| {
+            let kind = if t == 7 {
+                DEVPROP_TYPE_STRING_LIST
+            } else {
+                DEVPROP_TYPE_STRING
+            };
+            (kind, bytes16(&v))
+        })
+    };
+    if key == &DEVPKEY_INSTANCE && pid == 256 {
+        return Some((DEVPROP_TYPE_STRING, bytes16(&wide(&n.id))));
+    }
+    if key == &DEVPKEY_RELATIONS && pid == 8 {
+        let parent = n.parent.clone()?;
+        return Some((DEVPROP_TYPE_STRING, bytes16(&wide(&parent))));
+    }
+    if key != &DEVPKEY_DEVICE {
+        return None;
+    }
+    match pid {
+        2 => reg(0), // DeviceDesc
+        3 => reg(1), // HardwareIds
+        4 => reg(2), // CompatibleIds
+        6 => reg(4), // Service
+        9 => reg(7), // Class
+        10 => Some((DEVPROP_TYPE_GUID, n.class().to_vec())),
+        13 => reg(0xB),  // Manufacturer
+        14 => reg(0xC),  // FriendlyName
+        15 => reg(0xE),  // LocationInfo
+        24 => reg(0x16), // EnumeratorName
+        _ => None,
+    }
+}
+
+unsafe fn put_devprop(
+    value: Option<(u32, Vec<u8>)>,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+) -> u32 {
+    let Some((t, v)) = value else {
+        return CR_NO_SUCH_VALUE;
+    };
+    if len.is_null() || kind.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    *kind = t;
+    let room = *len as usize;
+    *len = v.len() as u32;
+    if buf.is_null() || room < v.len() {
+        return CR_BUFFER_SMALL;
+    }
+    std::ptr::copy_nonoverlapping(v.as_ptr(), buf, v.len());
+    CR_SUCCESS
+}
+
+unsafe fn read_key(key: *const u8) -> Option<([u8; 16], u32)> {
+    let g = read_guid(key)?;
+    Some((g, (key.add(16) as *const u32).read_unaligned()))
+}
+
+pub unsafe extern "win64" fn CM_Get_DevNode_PropertyW(
+    dn: u32,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+    _flags: u32,
+) -> u32 {
+    let Some(n) = node_of(dn) else {
+        return CR_NO_SUCH_DEVNODE;
+    };
+    let Some((g, pid)) = read_key(key) else {
+        return CR_INVALID_POINTER;
+    };
+    put_devprop(devprop(&n, &g, pid), kind, buf, len)
+}
+
+/// Nœud qui porte un chemin d'interface.
+fn node_of_interface(path: &str) -> Option<Node> {
+    let lower = path.to_ascii_lowercase().replace("\\\\.\\", "\\\\?\\");
+    nodes().into_iter().find(|n| {
+        n.interface_path()
+            .is_some_and(|p| p.eq_ignore_ascii_case(&lower))
+    })
+}
+
+/// Propriétés d'une interface : celles de son appareil (hidapi y lit
+/// DEVPKEY_Device_InstanceId).
+pub unsafe extern "win64" fn CM_Get_Device_Interface_PropertyW(
+    path: *const u16,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    len: *mut u32,
+    _flags: u32,
+) -> u32 {
+    if path.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    let Some(n) = node_of_interface(&crate::dlls::wstr(path)) else {
+        return 0x33; // CR_NO_SUCH_DEVICE_INTERFACE
+    };
+    let Some((g, pid)) = read_key(key) else {
+        return CR_INVALID_POINTER;
+    };
+    put_devprop(devprop(&n, &g, pid), kind, buf, len)
+}
+
+pub unsafe extern "win64" fn SetupDiGetDevicePropertyW(
+    set: usize,
+    devinfo: *const u8,
+    key: *const u8,
+    kind: *mut u32,
+    buf: *mut u8,
+    size: u32,
+    required: *mut u32,
+    _flags: u32,
+) -> i32 {
+    let Some(n) = node_in_set(set, devinfo) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some((g, pid)) = read_key(key) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let mut len = size;
+    let mut t = 0u32;
+    let r = put_devprop(devprop(&n, &g, pid), &mut t, buf, &mut len);
+    if !kind.is_null() {
+        *kind = t;
+    }
+    if !required.is_null() {
+        *required = len;
+    }
+    match r {
+        CR_SUCCESS => 1,
+        CR_BUFFER_SMALL => {
+            crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+            0
+        }
+        _ => {
+            crate::process::set_last_error(0xE000_0225); // ERROR_NOT_FOUND
+            0
+        }
+    }
+}
+
+/// Ajoute à un ensemble l'interface désignée par son chemin.
+pub unsafe extern "win64" fn SetupDiOpenDeviceInterfaceW(
+    set: usize,
+    path: *const u16,
+    _flags: u32,
+    data: *mut u8,
+) -> i32 {
+    if path.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(n) = node_of_interface(&crate::dlls::wstr(path)) else {
+        crate::process::set_last_error(0xE000_0206); // ERROR_NO_SUCH_DEVICE_INTERFACE
+        return 0;
+    };
+    let index = {
+        let mut sets = crate::dlls::lock(&SETS);
+        let Some((_, list)) = sets.iter_mut().find(|(h, _)| *h == set) else {
+            crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        match list.iter().position(|x| x.id.eq_ignore_ascii_case(&n.id)) {
+            Some(i) => i,
+            None => {
+                list.push(n.clone());
+                list.len() - 1
+            }
+        }
+    };
+    if !data.is_null() {
+        let g = n.interface().unwrap_or_default();
+        std::ptr::copy_nonoverlapping(g.as_ptr(), data.add(4), 16);
+        (data.add(20) as *mut u32).write_unaligned(1); // SPINT_ACTIVE
+        (data.add(24) as *mut usize).write_unaligned(index + 1);
+    }
+    1
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "CM_Get_DevNode_PropertyW" => fn CM_Get_DevNode_PropertyW,
+        "CM_Get_Device_Interface_PropertyW" => fn CM_Get_Device_Interface_PropertyW,
+        "SetupDiGetDevicePropertyW" => fn SetupDiGetDevicePropertyW,
+        "SetupDiOpenDeviceInterfaceW" => fn SetupDiOpenDeviceInterfaceW,
         "SetupDiGetDeviceInstanceIdW" => fn SetupDiGetDeviceInstanceIdW,
         "SetupDiGetDeviceInstanceIdA" => fn SetupDiGetDeviceInstanceIdA,
         "SetupDiOpenDevRegKey" => fn SetupDiOpenDevRegKey,
