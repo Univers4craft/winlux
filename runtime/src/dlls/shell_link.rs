@@ -169,8 +169,10 @@ pub fn parse_link(d: &[u8]) -> Option<LinkData> {
         if local_u != 0 {
             let raw = info.get(local_u..)?;
             let units: Vec<u16> = raw
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .take_while(|&c| c != 0)
                 .collect();
             l.target = String::from_utf16_lossy(&units);
@@ -199,8 +201,10 @@ pub fn parse_link(d: &[u8]) -> Option<LinkData> {
         at += bytes;
         let s = if wide {
             let units: Vec<u16> = raw
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .collect();
             String::from_utf16_lossy(&units)
         } else {
