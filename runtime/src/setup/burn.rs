@@ -337,7 +337,9 @@ fn builtin_folder(name: &str) -> Option<String> {
             "CommonFiles64Folder" | "CommonFiles6432Folder" => "C:\\Program Files\\Common Files\\",
             "WindowsVolume" => "C:\\",
             "WindowsFolder" => "C:\\windows\\",
-            "SystemFolder" | "System64Folder" => "C:\\windows\\system32\\",
+            // Comme Windows Installer : SystemFolder est SysWOW64 (#1789).
+            "SystemFolder" => crate::msi::install::SYSTEM_FOLDER_32,
+            "System64Folder" => crate::msi::install::SYSTEM_FOLDER_64,
             "TempFolder" => return Some(profile("AppData\\Local\\Temp")),
             "AppDataFolder" => return Some(profile("AppData\\Roaming")),
             "LocalAppDataFolder" => return Some(profile("AppData\\Local")),

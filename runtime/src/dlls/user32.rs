@@ -515,9 +515,11 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
-                if style & 0x00C0_0000 == 0x00C0_0000 {
-                    b.set_dialog_type(hwnd);
-                }
+            }
+            if captioned_tool_window(style, ex_style) {
+                b.set_tool_type(hwnd);
+            } else if owner != 0 && style & 0x00C0_0000 == 0x00C0_0000 {
+                b.set_dialog_type(hwnd);
             }
         }
     });
@@ -540,6 +542,25 @@ unsafe fn create_window_inner(
             }
         }
     }
+
+    // Crochet WH_CBT (HCBT_CREATEWND) avant tout message : MFC y sous-classe
+    // la fenêtre (AfxWndProc) et la rattache à son CWnd. Sans lui, une
+    // fenêtre MFC garde DefWindowProc et MFC lit un CWnd jamais rempli
+    // (Pythonwin, #1654). Une valeur non nulle refuse la création.
+    let mut cs = cs;
+    let wide_class: Vec<u16> = class.encode_utf16().chain([0]).collect();
+    let wide_title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+    if super::controls::message_is_wide(hwnd) {
+        cs.name = wide_title.as_ptr().cast();
+        cs.class = wide_class.as_ptr().cast();
+    }
+    if cbt_create_window(hwnd, &mut cs) {
+        gui::destroy_window(hwnd);
+        forget_window_longs(hwnd);
+        return 0;
+    }
+    cs.name = title_z.as_ptr().cast();
+    cs.class = class_z.as_ptr().cast();
 
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
@@ -1171,6 +1192,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
         send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
     }
+    if show && gui::visible_flag(hwnd) == Some(false) && !matches!(cmd, 2 | 3 | 6 | 7 | 11) {
+        fit_to_work_area(hwnd);
+    }
     let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
@@ -1206,6 +1230,73 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Fenêtre de premier niveau à barre de titre affichée : si son cadre
+/// dépasse la zone de travail de son écran, elle y est ramenée, et
+/// rétrécie si elle se redimensionne et n'y tient pas. Audacity restaure la
+/// position qu'il a enregistrée sans la contraindre ; sous la barre des
+/// tâches, la fenêtre restait coupée et la position fautive était
+/// réenregistrée à chaque fermeture (#1752). Les fenêtres sans cadre, les
+/// enfants et les fenêtres agrandies ou réduites ne sont pas touchées.
+unsafe fn fit_to_work_area(hwnd: usize) {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MINIMIZE: u32 = 0x2000_0000;
+    const WS_MAXIMIZE: u32 = 0x0100_0000;
+    let (Some(style), Some(rect)) = (gui::window_style(hwnd), gui::window_rect(hwnd)) else {
+        return;
+    };
+    if style & WS_CHILD != 0
+        || style & WS_CAPTION != WS_CAPTION
+        || style & (WS_MINIMIZE | WS_MAXIMIZE) != 0
+        || gui::window_parent(hwnd).unwrap_or(0) != 0
+        || OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return;
+    }
+    let monitors = super::monitors::list();
+    let index = super::monitors::from_rect_in(&monitors, &rect, 2);
+    let Some(monitor) = monitors.get(index.wrapping_sub(1)) else {
+        return;
+    };
+    let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
+    let resizable = style & WS_THICKFRAME != 0;
+    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
+    // interrogé.
+    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    let fitted =
+        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    if fitted == rect {
+        return;
+    }
+    crate::thunks::api_note(&format!(
+        "ShowWindow {hwnd:#x} : ({},{} {}x{}) ramenée dans la zone de travail ({},{} {}x{}) (#1752)",
+        rect.left,
+        rect.top,
+        rect.width(),
+        rect.height(),
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height()
+    ));
+    set_window_pos(
+        hwnd,
+        0,
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height(),
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 
 /// `UpdateWindow` : si la fenêtre a une zone invalidée, WM_PAINT lui est
@@ -2332,8 +2423,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
             lock(user_data_map()).insert((hwnd, index), value);
             let owner = owner_top_level(value as usize);
             if owner != 0 && owner != hwnd {
-                let captioned =
-                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                let captioned = gui::window_style(hwnd)
+                    .is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000)
+                    && !captioned_tool_window(
+                        gui::window_style(hwnd).unwrap_or(0),
+                        gui::window_ex_style(hwnd).unwrap_or(0),
+                    );
                 with_backend(|b| {
                     b.set_owner(hwnd, owner);
                     if captioned {
@@ -4002,11 +4097,14 @@ pub extern "win64" fn lock_set_foreground_window(lock_code: u32) -> i32 {
 // =====================================================================
 
 const WH_GETMESSAGE: i32 = 3;
+const WH_CBT: i32 = 5;
+const HCBT_CREATEWND: i32 = 3;
 const PM_REMOVE: usize = 1;
 
-/// Crochet installé par SetWindowsHookEx. Seul WH_GETMESSAGE est appelé :
-/// Qt 5 y relance la livraison de ses événements différés (clics, touches,
-/// repeints) ; sans lui, une fenêtre Qt s'affiche mais ne réagit plus (#938).
+/// Crochet installé par SetWindowsHookEx. Sont appelés WH_GETMESSAGE (Qt 5
+/// y relance la livraison de ses événements différés ; sans lui, une
+/// fenêtre Qt s'affiche mais ne réagit plus, #938) et WH_CBT pour
+/// HCBT_CREATEWND (MFC y attache ses fenêtres, #1654).
 #[derive(Clone, Copy)]
 struct Hook {
     handle: usize,
@@ -4034,7 +4132,7 @@ pub unsafe extern "win64" fn set_windows_hook_ex_a(
 ) -> usize {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00F0_0000);
     let handle = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if id == WH_GETMESSAGE && proc_ != 0 {
+    if matches!(id, WH_GETMESSAGE | WH_CBT) && proc_ != 0 {
         // Le plus récent passe en premier, comme sous Windows.
         hooks().lock().unwrap_or_else(|e| e.into_inner()).insert(
             0,
@@ -4097,6 +4195,32 @@ unsafe fn call_get_message_hooks(msg: *mut Msg, remove: usize) {
     if let Some(h) = next_hook(WH_GETMESSAGE, 0) {
         run_hook(h, 0, remove, msg as isize);
     }
+}
+
+/// CBT_CREATEWND : création en cours et fenêtre après laquelle l'insérer.
+#[repr(C)]
+struct CbtCreateWnd {
+    cs: *mut CreateStructA,
+    insert_after: usize,
+}
+
+/// HCBT_CREATEWND (wParam = HWND, lParam = CBT_CREATEWND) : vrai si un
+/// crochet WH_CBT du fil refuse la création. Le crochet peut changer la
+/// CREATESTRUCT, relue ensuite par WM_NCCREATE et WM_CREATE.
+unsafe fn cbt_create_window(hwnd: usize, cs: &mut CreateStructA) -> bool {
+    let Some(h) = next_hook(WH_CBT, 0) else {
+        return false;
+    };
+    let mut info = CbtCreateWnd {
+        cs: cs as *mut CreateStructA,
+        insert_after: 0,
+    };
+    run_hook(
+        h,
+        HCBT_CREATEWND,
+        hwnd,
+        &mut info as *mut CbtCreateWnd as isize,
+    ) != 0
 }
 
 pub unsafe extern "win64" fn call_next_hook_ex(
@@ -5296,6 +5420,18 @@ fn drawn_whole(hwnd: usize) -> bool {
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
+/// Fenêtre outil avec barre de titre (WS_CAPTION + WS_EX_TOOLWINDOW) :
+/// palette flottante, que Windows dessine avec le seul bouton Fermer. Pour
+/// openbox, c'est une barre d'outils détachée (_NET_WM_WINDOW_TYPE_TOOLBAR),
+/// qui n'a ni Réduire ni Agrandir et laisse donc sa place au titre : les
+/// panneaux de Paint.NET, larges de 180 px, affichaient « H… ue » (#1761).
+fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -5312,6 +5448,20 @@ fn popup_decorations(style: u32) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
+    /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.
+    #[test]
+    fn palette_flottante_reconnue() {
+        use super::captioned_tool_window;
+        // FormBorderStyle.SizableToolWindow : WS_CAPTION | WS_THICKFRAME | WS_SYSMENU.
+        assert!(captioned_tool_window(0x02CC_0000, 0x0001_0180));
+        assert!(!captioned_tool_window(0x00CF_0000, 0x0000_0100));
+        // Sans barre de titre (fenêtre surgissante outil).
+        assert!(!captioned_tool_window(0x8000_0000, 0x0000_0080));
+        // Enfant.
+        assert!(!captioned_tool_window(0x40C0_0000, 0x0000_0080));
+    }
 
     /// #1630 : une classe déjà inscrite par le même module est refusée
     /// (ERROR_CLASS_ALREADY_EXISTS) jusqu'à son UnregisterClass.
@@ -6985,6 +7135,91 @@ mod tests_messages {
                 (client.left, client.top, client.right, client.bottom)
             );
             assert!(r.right > r.left && r.bottom > r.top);
+            destroy_window(hwnd);
+        }
+    }
+
+    thread_local! {
+        static CBT_VUS: std::cell::RefCell<Vec<(usize, u32, String)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static CBT_REFUS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    extern "win64" fn proc_mfc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+        if msg == WM_NCCREATE {
+            CBT_VUS.with(|v| v.borrow_mut().push((hwnd, msg, String::new())));
+        }
+        unsafe { def_window_proc_w(hwnd, msg, wp, lp) }
+    }
+
+    extern "win64" fn crochet_cbt(code: i32, wp: usize, lp: isize) -> isize {
+        unsafe {
+            if code == HCBT_CREATEWND {
+                let info = &*(lp as *const CbtCreateWnd);
+                let class = read_wide_z((*info.cs).class.cast());
+                CBT_VUS.with(|v| v.borrow_mut().push((wp, 0, class)));
+                if CBT_REFUS.with(|r| r.get()) {
+                    return 1;
+                }
+                // Comme _AfxCbtFilterHook : sous-classement avant tout message.
+                set_window_long_ptr_w(wp, -4, proc_mfc as *const () as isize);
+            }
+            call_next_hook_ex(0, code, wp, lp)
+        }
+    }
+
+    unsafe fn read_wide_z(p: *const u16) -> String {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+    }
+
+    #[test]
+    fn crochet_cbt_sous_classe_avant_wm_nccreate() {
+        // MFC attache ses fenêtres dans HCBT_CREATEWND ; sa classe garde
+        // DefWindowProc (Pythonwin, #1654).
+        unsafe {
+            let tid = crate::dlls::kernel32::get_current_thread_id();
+            let h = set_windows_hook_ex_w(WH_CBT, crochet_cbt as *const () as usize, 0, tid);
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let creer = || {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    50,
+                    20,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            let vus = CBT_VUS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+            assert_eq!(
+                vus,
+                vec![
+                    (hwnd, 0, "STATIC".to_string()),
+                    (hwnd, WM_NCCREATE, String::new())
+                ]
+            );
+            destroy_window(hwnd);
+            // Une valeur non nulle refuse la fenêtre.
+            CBT_REFUS.with(|r| r.set(true));
+            assert_eq!(creer(), 0);
+            CBT_REFUS.with(|r| r.set(false));
+            assert_eq!(unhook_windows_hook_ex(h), 1);
+            CBT_VUS.with(|v| v.borrow_mut().clear());
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            assert!(CBT_VUS.with(|v| v.borrow().is_empty()));
             destroy_window(hwnd);
         }
     }
