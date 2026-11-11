@@ -1654,6 +1654,14 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if !out.is_null() {
         crate::wow32::write_ptr(out as usize, 0);
     }
+    // Classe et interface demandées, pour savoir ce qu'il faudrait servir
+    // (#1659), comme le journal de CoCreateInstance.
+    let iid_text = super::comobj::read_guid(iid as *const u8)
+        .map_or_else(|| "NULL".to_string(), |g| super::comobj::guid_str(&g));
+    crate::log_warn!(
+        "com",
+        "RoGetActivationFactory : classe « {name} » (interface {iid_text}) inconnue (REGDB_E_CLASSNOTREG)"
+    );
     REGDB_E_CLASSNOTREG
 }
 
