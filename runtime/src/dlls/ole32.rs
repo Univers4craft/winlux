@@ -1172,7 +1172,9 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
                 return S_OK;
             }
             if std::env::var_os("WINLUX_TRACE").is_some() {
-                eprintln!("winlux : CLSIDFromProgID(\"{name}\") : ProgID inconnu");
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : ProgID inconnu"
+                );
             }
             return CO_E_CLASSSTRING;
         }
@@ -1183,7 +1185,14 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
             *clsid = g;
             S_OK
         }
-        None => CO_E_CLASSSTRING,
+        None => {
+            if std::env::var_os("WINLUX_TRACE").is_some() {
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : CLSID illisible « {text} »"
+                );
+            }
+            CO_E_CLASSSTRING
+        }
     }
 }
 
