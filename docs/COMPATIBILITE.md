@@ -791,6 +791,43 @@ Microsoft Store (paquet MSIX), que Winlux sait déjà installer.
   FACEIT) et **pilotes Windows** (`.sys` : VPN, imprimantes, matériel) : ils
   exigent le noyau Windows. Les jeux en ligne qui les imposent ne tourneront
   pas, sauf si l'éditeur active le mode Linux de son anti-triche.
+  Ceux de la liste ci-dessous sont même refusés dès l'installation (#1720).
+
+### Anti-triche noyau : installation refusée (#1720)
+
+Un anti-triche noyau atteste qu'il tourne sur un vrai noyau Windows. Sous
+Winlux, qui ne charge aucun pilote `.sys`, il risquerait de conclure à une
+triche et de faire suspendre le compte du joueur. Winlux refuse donc
+d'installer les logiciels qui en embarquent un, **avant de poser quoi que ce
+soit**, avec un message dans la langue de l'interface (fr/en/de/es) qui
+nomme le logiciel, donne la raison et précise que ce n'est pas une panne de
+Winlux. Aucune adaptation, rétro-ingénierie ni contournement de
+l'anti-triche n'est tenté.
+
+La détection porte sur la présence de l'anti-triche, jamais sur le nom
+d'un jeu :
+- un pilote de la liste posé à côté du programme, ou présent dans la
+  table File d'un paquet MSI ;
+- un programme d'installation de l'éditeur qui pose la protection ;
+- en dernier recours, la création d'un service pilote de la liste
+  (refus d'accès et même message).
+
+| Protection | Éditeur | Pilotes | Programmes | Source publique |
+|---|---|---|---|---|
+| Riot Vanguard | Riot Games | `vgk.sys` | `Install League of Legends*.exe`, `Install VALORANT*.exe`, `RiotClientServices.exe` | articles Vanguard de support-valorant.riotgames.com |
+| Roblox Hyperion | Roblox | — | `RobloxPlayerInstaller*.exe`, `RobloxPlayerLauncher.exe`, `RobloxPlayerBeta.exe` | aide de Roblox ; protection annoncée par Roblox en 2023 |
+| FACEIT Anti-Cheat | FACEIT | `faceit.sys` | — | support.faceit.com |
+| XIGNCODE3 | Wellbia | `xhunter1.sys` | — | avis de sécurité publics |
+| mhyprot | miHoYo / HoYoverse | `mhyprot2.sys`, `mhyprot3.sys` | — | avis de sécurité publics (2022) |
+
+Roblox Studio n'est pas concerné. La liste vit dans `runtime/src/anticheat.rs`,
+et toute entrée ajoutée doit citer sa source.
+
+**Easy Anti-Cheat et BattlEye ne sont pas dans la liste.** Leurs éditeurs
+peuvent activer, jeu par jeu, une prise en charge Linux : c'est la seule
+voie légitime pour les jeux protégés, et un jeu innocent ne doit pas être
+bloqué. Que Winlux puisse profiter de ce mode Linux reste à vérifier jeu par
+jeu ; sans lui, leur pilote est simplement bloqué comme tout `.sys`.
 - **Antivirus** : exclu par choix du projet.
 - **Applis du Microsoft Store (UWP/MSIX, WinRT, AppContainer)** : possibles à
   très long terme, mais pas un objectif tant que le bureau Win32 n'est pas

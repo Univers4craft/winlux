@@ -45,6 +45,12 @@ $3}" >&2
 }
 show_error() { show_message "$1" error "${2:-}"; }
 
+# Logiciel à anti-triche noyau (#1720) : le runtime a déjà expliqué le refus
+# dans sa propre boîte, rien d'autre à afficher.
+refused_by_anticheat() {
+    grep -qF 'installation refusée (anti-triche noyau)' "$log" 2>/dev/null
+}
+
 gtk_message() {
     python3 - "$@" <<'PY' 2>/dev/null
 import sys
@@ -376,6 +382,7 @@ case "$exe" in
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             show_message "« $(installed_name) » est installé." info
         else
+            refused_by_anticheat && exit "$status"
             show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
         fi
@@ -395,6 +402,7 @@ case "$exe" in
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             show_message "« $(installed_name) » est installé." info
         else
+            refused_by_anticheat && exit "$status"
             show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
         fi
@@ -443,6 +451,7 @@ case "$kind" in
             exit 0
         fi
         if [ "$kind" = uninstall ]; then what="Désinstallation"; else what="Installation de « $(basename -- "$exe") »"; fi
+        refused_by_anticheat && exit "$status"
         show_error "$what impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
         exit "$status"
@@ -521,6 +530,7 @@ if [ "$status" -ne 0 ]; then
         && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' "$crashes" | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
+    refused_by_anticheat && exit "$status"
     show_error "$(explain_failure "$(basename -- "$exe")" "$code" "$log")" "$detail"
 fi
 exit "$status"
