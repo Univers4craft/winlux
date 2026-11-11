@@ -762,6 +762,46 @@ unsafe fn send_set_cursor(m: &Msg) {
     );
 }
 
+const WA_ACTIVE: usize = 1;
+const WA_CLICKACTIVE: usize = 2;
+
+/// Activation au clic, que Windows fait quand il retire de la file un
+/// bouton enfoncé : WM_MOUSEACTIVATE à la fenêtre cliquée, puis, sauf
+/// MA_NOACTIVATE, WM_NCACTIVATE / WM_ACTIVATE(WA_CLICKACTIVE) et
+/// WM_SETFOCUS, avant le WM_LBUTTONDOWN lui-même. Faite ici seulement pour
+/// les fenêtres que le gestionnaire de fenêtres n'active pas : la boîte
+/// « Erreur du service Steam » ne réagissait à aucun bouton (#1804).
+/// MA_ACTIVATEANDEAT active sans retirer le clic (simplification).
+unsafe fn click_activate(m: &Msg) {
+    const WM_MOUSEACTIVATE: u32 = 0x0021;
+    const HTCLIENT: isize = 1;
+    const MA_NOACTIVATE: isize = 3;
+    const MA_NOACTIVATEANDEAT: isize = 4;
+    if m.hwnd == 0
+        || gui::get_capture() != 0
+        || !matches!(m.message, 0x0201 | 0x0204 | 0x0207 | 0x020B)
+    {
+        return;
+    }
+    let Some(top) = gui::click_activation_target(m.hwnd) else {
+        return;
+    };
+    let answer = send_message_w(
+        m.hwnd,
+        WM_MOUSEACTIVATE,
+        top,
+        ((m.message as isize) << 16) | HTCLIENT,
+    );
+    if matches!(answer, MA_NOACTIVATE | MA_NOACTIVATEANDEAT) || !gui::is_window(top) {
+        return;
+    }
+    activate_for_focus(top, WA_CLICKACTIVE);
+    // Le focus reste au contrôle de la fenêtre qui l'avait déjà.
+    if gui::top_level_of(gui::focused_window()) != top {
+        set_focus(top);
+    }
+}
+
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
@@ -782,6 +822,7 @@ unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i
                 return 0;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -871,6 +912,7 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
                 return 1;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -1433,7 +1475,7 @@ pub unsafe extern "win64" fn get_keyboard_state(out: *mut u8) -> i32 {
 /// puis WM_ACTIVATE(WA_INACTIVE), la nouvelle WM_NCACTIVATE(TRUE) puis
 /// WM_ACTIVATE(WA_ACTIVE), envoyés et non postés. Le FocusIn de X11 qui suit
 /// trouve la fenêtre déjà active et ne poste plus rien (#1504).
-unsafe fn activate_for_focus(hwnd: usize) {
+unsafe fn activate_for_focus(hwnd: usize, state: usize) {
     let top = gui::top_level_of(hwnd);
     if top == 0 {
         return;
@@ -1456,7 +1498,7 @@ unsafe fn activate_for_focus(hwnd: usize) {
         deliver(prev, gui::WM_ACTIVATE, 0, top as isize);
     }
     deliver(top, gui::WM_NCACTIVATE, 1, 0);
-    deliver(top, gui::WM_ACTIVATE, 1, prev as isize);
+    deliver(top, gui::WM_ACTIVATE, state, prev as isize);
 }
 
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
@@ -1471,7 +1513,7 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
         }
     }
     if hwnd != 0 && gui::focused_window() != hwnd {
-        activate_for_focus(hwnd);
+        activate_for_focus(hwnd, WA_ACTIVE);
     }
     let Some(old) = gui::set_focus(hwnd) else {
         crate::process::set_last_error(87);
@@ -5383,7 +5425,7 @@ fn owner_top_level(mut hwnd: usize) -> usize {
 /// version exigeait outil ET non activable, ce que ce menu n'a pas.
 /// Une fenêtre en couches (Flow Launcher) reste gérée : elle prend le
 /// clavier.
-fn floating_popup(style: u32, ex_style: u32) -> bool {
+pub(crate) fn floating_popup(style: u32, ex_style: u32) -> bool {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
     const WS_EX_TOPMOST: u32 = 0x0000_0008;
