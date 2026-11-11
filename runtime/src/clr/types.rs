@@ -29,7 +29,7 @@ pub const TYPE_ARRAY: TypeId = 17;
 pub const TYPE_EXCEPTION: TypeId = 19;
 pub const TYPE_VALUETYPE: TypeId = 20;
 pub const TYPE_ENUM: TypeId = 21;
-const FIRST_USER_TYPE: TypeId = 256;
+pub const FIRST_USER_TYPE: TypeId = 256;
 
 /// Type intégré au moteur (Object, String, primitives…) : sa disposition
 /// mémoire est fixée par le runtime, même quand notre mscorlib le définit.

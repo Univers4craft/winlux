@@ -216,6 +216,147 @@ impl Interpreter {
         }
     }
 
+    /// `this` est-il un objet Type (appel d'instance) ?
+    fn is_type_object(&self, args: &[Value]) -> bool {
+        this_handle(args, "System", "RuntimeType").is_some()
+    }
+
+    /// Type.GetType : « Espace.Type », « Externe+Imbriqué », suivi ou non de
+    /// « , Assembly[, Version=…] ». Sans assembly, cherché dans l'assembly
+    /// qui appelle puis dans mscorlib, comme le documente Type.GetType.
+    fn type_by_name(
+        &self,
+        text: &str,
+        throw_on_error: bool,
+        ignore_case: bool,
+    ) -> Result<Value, ClrException> {
+        let (type_name, assembly) = split_qualified(text);
+        let found = if type_name.contains('[')
+            || type_name.ends_with('&')
+            || type_name.ends_with('*')
+        {
+            // Génériques instanciés, tableaux, pointeurs : pas encore.
+            None
+        } else if let Some(asm_name) = assembly {
+            let key = asm_name.to_ascii_lowercase();
+            let index = self.domain.iter().position(|i| i.name == key);
+            match index {
+                Some(i) => self.find_type_in(i, type_name, ignore_case),
+                None if key == domain::CORLIB => self.find_builtin(type_name, ignore_case),
+                None => {
+                    crate::log_warn!(
+                        "clr",
+                        "Type.GetType(\"{text}\") : assembly « {asm_name} » non chargée"
+                    );
+                    if throw_on_error {
+                        return Err(ClrException::new(
+                            "System.IO",
+                            "FileNotFoundException",
+                            &format!(
+                                "Could not load file or assembly '{asm_name}' or one of its dependencies. The system cannot find the file specified."
+                            ),
+                        ));
+                    }
+                    return Ok(Value::Null);
+                }
+            }
+        } else {
+            let caller = self.frame_assembly(0);
+            let corlib = self.domain.iter().position(|i| i.name == domain::CORLIB);
+            self.find_type_in(caller, type_name, ignore_case)
+                .or_else(|| corlib.and_then(|c| self.find_type_in(c, type_name, ignore_case)))
+                .or_else(|| self.find_builtin(type_name, ignore_case))
+        };
+        crate::log_info!(
+            "clr",
+            "Type.GetType(\"{text}\") : {}",
+            if found.is_some() {
+                "trouvé"
+            } else {
+                "introuvable"
+            }
+        );
+        match found {
+            Some(id) => Ok(self.type_object(id)),
+            None if throw_on_error => Err(ClrException::new(
+                "System",
+                "TypeLoadException",
+                &format!(
+                    "Could not load type '{type_name}' from assembly '{}'.",
+                    assembly.unwrap_or("mscorlib")
+                ),
+            )),
+            None => Ok(Value::Null),
+        }
+    }
+
+    /// Type nommé « Espace.Type » ou « Espace.Externe+Imbriqué » parmi les
+    /// TypeDef d'une assembly du domaine.
+    fn find_type_in(&self, index: usize, wanted: &str, ignore_case: bool) -> Option<TypeId> {
+        let info = self.domain.get(index)?;
+        let a = self.assembly_at(index);
+        let mut enclosing = HashMap::new();
+        for n in 1..=a.row_count(TableId::NestedClass) {
+            let nc = a.get_nested_class(n);
+            enclosing.insert(nc.nested_class, nc.enclosing_class);
+        }
+        let full_name = |row: u32| {
+            let mut parts = Vec::new();
+            let mut r = row;
+            loop {
+                let td = a.get_type_def(r);
+                match enclosing.get(&r) {
+                    Some(&outer) => {
+                        parts.push(a.get_string(td.name).to_string());
+                        r = outer;
+                    }
+                    None => {
+                        let ns = a.get_string(td.namespace);
+                        let name = a.get_string(td.name);
+                        parts.push(if ns.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{ns}.{name}")
+                        });
+                        break;
+                    }
+                }
+                if parts.len() > 64 {
+                    break;
+                }
+            }
+            parts.reverse();
+            parts.join("+")
+        };
+        let same = |a: &str| {
+            if ignore_case {
+                a.eq_ignore_ascii_case(wanted)
+            } else {
+                a == wanted
+            }
+        };
+        (1..=a.row_count(TableId::TypeDef))
+            .find(|&row| same(&full_name(row)))
+            .and_then(|row| info.type_ids.get(row as usize).copied().flatten())
+    }
+
+    /// Types intégrés au moteur (sans mscorlib C#) : System.Object…
+    fn find_builtin(&self, wanted: &str, ignore_case: bool) -> Option<TypeId> {
+        let (ns, name) = wanted.rsplit_once('.').unwrap_or(("", wanted));
+        types::with_types(|reg| {
+            let id = reg.find_by_name(ns, name).or_else(|| {
+                if !ignore_case {
+                    return None;
+                }
+                (1..super::types::FIRST_USER_TYPE).find(|&id| {
+                    reg.get(id)
+                        .is_some_and(|t| t.full_name().eq_ignore_ascii_case(wanted))
+                })
+            })?;
+            types::is_builtin(id).then_some(id)
+        })
+    }
+
     /// Méthodes de Type, Assembly et Object.GetType servies par le moteur.
     pub(super) fn reflection_call(
         &mut self,
@@ -232,6 +373,24 @@ impl Interpreter {
                 Some(v) => *v,
                 None => Value::Null,
             },
+            // Type.GetType(nom[, throwOnError[, ignoreCase]]) (#1884).
+            ("System", "Type", "GetType") if !args.is_empty() && !self.is_type_object(args) => {
+                let text = match args.first() {
+                    Some(Value::Ref(p)) if gc::type_of(*p) == Some(types::TYPE_STRING) => {
+                        super::bcl::read_managed_string(*p)
+                    }
+                    Some(Value::Null) => {
+                        return Some(Err(ClrException::new(
+                            "System",
+                            "ArgumentNullException",
+                            "Value cannot be null.\r\nParameter name: typeName",
+                        )))
+                    }
+                    _ => return None,
+                };
+                let flag = |i: usize| matches!(args.get(i), Some(Value::I32(v)) if *v != 0);
+                return Some(self.type_by_name(&text, flag(1), flag(2)));
+            }
             ("System", "Object", "GetType") => match args.first() {
                 Some(Value::Ref(p)) if !p.is_null() => match gc::type_of(*p) {
                     Some(id) if id != 0 => self.type_object(id),
@@ -333,9 +492,41 @@ impl Interpreter {
     }
 }
 
+/// « Type, Assembly, Version=… » → (« Type », Some(« Assembly »)) : la
+/// première virgule hors crochets sépare le type de l'assembly.
+fn split_qualified(text: &str) -> (&str, Option<&str>) {
+    let mut depth = 0i32;
+    for (i, c) in text.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            ',' if depth == 0 => {
+                let rest = &text[i + 1..];
+                let asm = rest.split(',').next().unwrap_or("").trim();
+                return (text[..i].trim(), (!asm.is_empty()).then_some(asm));
+            }
+            _ => {}
+        }
+    }
+    (text.trim(), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nom_qualifie_d_assembly() {
+        assert_eq!(split_qualified("A.B"), ("A.B", None));
+        assert_eq!(
+            split_qualified("A.B+C, Corsair.Core, Version=1.0.0.0, Culture=neutral"),
+            ("A.B+C", Some("Corsair.Core"))
+        );
+        assert_eq!(
+            split_qualified("L`1[[System.Int32, mscorlib]], Lib"),
+            ("L`1[[System.Int32, mscorlib]]", Some("Lib"))
+        );
+    }
 
     #[test]
     fn nom_complet_d_assembly() {
