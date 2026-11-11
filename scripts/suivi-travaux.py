@@ -273,6 +273,15 @@ def construire(travail, sortie, exiger_ocr, liste=LISTE, cache=None, travaux=4):
             source_de.setdefault(empreinte, png)
             tailles[empreinte] = image.size
             lot.append((name, empreinte))
+        # Avant #1944, une page de Paramètres absente du runner ouvrait « Écran »
+        # (parametres-08) et était photographiée sous son propre nom : une image
+        # identique au pixel près à parametres-08 de la même exécution est écartée.
+        ecran = dict(lot).get("parametres-08")
+        if ecran:
+            for name, empreinte in lot:
+                if name.startswith("parametres-") and name != "parametres-08" and empreinte == ecran:
+                    refusees[name] = "page « Écran » sous un autre nom (#1944)"
+            lot = [(n, e) for n, e in lot if not (n.startswith("parametres-") and n != "parametres-08" and e == ecran)]
         retenues.append((meta, lot))
     # 2. OCR des images jamais vues, en parallèle (tesseract est un processus).
     verdicts = {}

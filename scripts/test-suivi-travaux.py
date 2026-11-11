@@ -57,6 +57,9 @@ def main():
             screen(images / "parametres-02.png", "Réseau : connecté par câble")
             screen(images / "outils-apps.png", "Liste des applications du runner")
             screen(images / "parametres-03.png", "Fabricant : Microsoft Corporation")
+            # Page absente du runner photographiée sur « Écran » avant #1944.
+            screen(images / "parametres-08.png", "Définition de l'écran")
+            screen(images / "parametres-26.png", "Définition de l'écran")
             (images / "popup-volume.png").write_bytes(b"pas une image")
             (images / "parametres-02.log").write_text("journal", encoding="utf-8")
             (work / str(run_id) / "meta.json").write_text(json.dumps({
@@ -72,8 +75,8 @@ def main():
         if has_ocr:
             check([r["run"] for r in runs] == [102, 101], "exécutions de la plus récente à la plus ancienne")
             names = [i["nom"] for r in runs for i in r["images"]]
-            check(names == ["parametres-02", "parametres-02"], f"seule la capture permise est publiée ({names})")
-            check(len(list((out / "img").iterdir())) == 1 and len(list((out / "min").iterdir())) == 1,
+            check(names == ["parametres-02", "parametres-08"] * 2, f"seules les captures permises sont publiées ({names})")
+            check(len(list((out / "img").iterdir())) == 2 and len(list((out / "min").iterdir())) == 2,
                   "image identique stockée une seule fois, avec sa vignette")
             first = runs[0]["images"][0]
             check(first["legende"]["de"].startswith("Einstellungen") and "capture-ui.py" in first["test"],
@@ -84,6 +87,8 @@ def main():
         check("outils-apps" in result.stdout and "restées privées" in result.stdout,
               "capture hors liste blanche restée privée")
         check("popup-volume (fichier PNG invalide" in result.stdout, "faux PNG refusé")
+        check("parametres-26 (page « Écran » sous un autre nom (#1944))" in result.stdout,
+              "page de Paramètres identique à « Écran » écartée (#1944)")
         check(not any(p.suffix == ".log" for p in out.rglob("*")), "aucun journal publié")
 
         # Sans tesseract dans le PATH, --exiger-ocr ferme tout.
