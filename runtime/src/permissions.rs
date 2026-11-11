@@ -36,6 +36,10 @@ pub enum Capability {
     /// (`--no-sandbox`), que Winlux ne sait pas encore fournir (#767).
     /// Jamais accordé sans un « Autoriser » explicite de l'utilisateur.
     Sandbox,
+    /// Taper au clavier et piloter la souris à la place de la personne
+    /// (SendInput, keybd_event, mouse_event ; macros des logiciels de
+    /// périphériques, #1655). Jamais accordé sans un « Autoriser » explicite.
+    Input,
 }
 
 impl Capability {
@@ -47,6 +51,7 @@ impl Capability {
             Capability::Screen => "screen",
             Capability::Network => "network",
             Capability::Sandbox => "sandbox",
+            Capability::Input => "input",
         }
     }
 
@@ -407,8 +412,9 @@ pub fn allowed(cap: Capability) -> bool {
     if globally_denied(cap) {
         return false;
     }
-    // Le bac à sable ne se retire que sur un choix explicite.
-    let implied = cap != Capability::Sandbox;
+    // Le bac à sable ne se retire, et la saisie à la place de la personne
+    // ne s'accorde, que sur un choix explicite.
+    let implied = !matches!(cap, Capability::Sandbox | Capability::Input);
     let Some(app) = APP.get() else {
         return implied;
     };
@@ -445,6 +451,7 @@ pub fn allowed(cap: Capability) -> bool {
                     | Capability::Microphone
                     | Capability::Screen
                     | Capability::Sandbox
+                    | Capability::Input
             ),
         },
     };
@@ -622,6 +629,15 @@ mod tests {
             assert!(allowed(Capability::Files));
         }
         assert_eq!(Capability::Sandbox.key(), "sandbox");
+    }
+
+    /// Taper à la place de la personne n'est jamais implicite (#1655).
+    #[test]
+    fn saisie_jamais_accordee_sans_reponse() {
+        if APP.get().is_none() {
+            assert!(!allowed(Capability::Input));
+        }
+        assert_eq!(Capability::Input.key(), "input");
     }
 
     /// Un service sans fenêtre n'ouvre jamais la demande : refus (#1620).

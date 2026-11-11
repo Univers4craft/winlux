@@ -420,8 +420,13 @@ extern "win64" fn set_menu_item_bitmaps(_m: usize, _p: u32, _f: u32, _u: usize, 
     1
 }
 
-/// mouse_event : seul le déplacement absolu ou relatif du pointeur est rendu.
-unsafe extern "win64" fn mouse_event(flags: u32, dx: i32, dy: i32, _data: u32, _extra: usize) {
+/// mouse_event : tapé dans la session quand le programme y est autorisé
+/// (saisie.rs, #1683) ; sinon seul le déplacement du pointeur logique est
+/// rendu, comme avant.
+unsafe extern "win64" fn mouse_event(flags: u32, dx: i32, dy: i32, data: u32, _extra: usize) {
+    if crate::dlls::saisie::mouse_event(flags, dx, dy, data) {
+        return;
+    }
     const MOVE: u32 = 0x1;
     const ABSOLUTE: u32 = 0x8000;
     if flags & MOVE == 0 {
