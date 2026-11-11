@@ -226,9 +226,33 @@ fn substitutes(name: &str) -> &'static [&'static str] {
         "DejaVu Sans Mono",
         "FreeMono",
     ];
+    // Carlito et Caladea ont les métriques de Calibri et Cambria (#1770).
+    const CALIBRI: &[&str] = &[
+        "Carlito",
+        "Liberation Sans",
+        "Arimo",
+        "Noto Sans",
+        "DejaVu Sans",
+    ];
+    const CAMBRIA: &[&str] = &[
+        "Caladea",
+        "Liberation Serif",
+        "Tinos",
+        "Noto Serif",
+        "DejaVu Serif",
+    ];
     match name.to_ascii_lowercase().as_str() {
-        "arial" | "helvetica" | "microsoft sans serif" | "tahoma" | "verdana" | "calibri" => ARIAL,
-        "times new roman" | "times" | "georgia" | "cambria" | "serif" => SERIF,
+        "calibri" | "calibri light" => CALIBRI,
+        "cambria" => CAMBRIA,
+        "arial"
+        | "helvetica"
+        | "microsoft sans serif"
+        | "ms sans serif"
+        | "ms shell dlg"
+        | "ms shell dlg 2"
+        | "tahoma"
+        | "verdana" => ARIAL,
+        "times new roman" | "times" | "georgia" | "serif" => SERIF,
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia mono"
         | "cascadia code" | "monospace" => MONO,
         _ => SANS,
@@ -242,6 +266,10 @@ fn is_windows_font(name: &str) -> bool {
         || matches!(
             n.as_str(),
             "arial"
+                | "ms shell dlg"
+                | "ms shell dlg 2"
+                | "ms sans serif"
+                | "calibri light"
                 | "tahoma"
                 | "verdana"
                 | "calibri"
@@ -290,6 +318,19 @@ pub(crate) fn gdi_face(name: &str, weight: u32, italic: bool) -> Option<FaceInfo
         .collect();
     let fams = group(added.into_iter().chain(super::lock(extra()).clone()));
     match_face(&fams, name, weight, italic)
+}
+
+/// Police Windows absente que Winlux remplace par une police libre : nom
+/// de la famille de remplacement présente, pour qu'EnumFontFamiliesEx
+/// réponde comme CreateFont (#1768). `None` si la famille existe
+/// telle quelle, si le nom n'est pas une police livrée avec Windows, ou si
+/// aucun remplaçant n'est installé.
+pub(crate) fn windows_alias(name: &str, present: &[String]) -> Option<String> {
+    let has = |n: &str| present.iter().find(|p| p.eq_ignore_ascii_case(n));
+    if has(name).is_some() || !is_windows_font(name) {
+        return None;
+    }
+    substitutes(name).iter().find_map(|s| has(s).cloned())
 }
 
 /// Police de secours pour un caractère absent de la police demandée.

@@ -352,6 +352,13 @@ fn added() -> &'static Mutex<Vec<FontFace>> {
     ADDED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Fichiers ajoutés avec `FR_NOT_ENUM` : utilisables, mais absents des
+/// énumérations.
+fn not_enum() -> &'static Mutex<Vec<PathBuf>> {
+    static N: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+    N.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// Toutes les faces visibles par le processus (système puis ajoutées).
 pub fn all_faces() -> Vec<FontFace> {
     let mut faces = lock(system_cache())
@@ -637,13 +644,49 @@ pub fn enum_entry_w(f: &FontFace, charset: u8) -> (EnumLogFontExW, NewTextMetric
 
 type EnumProc = unsafe extern "win64" fn(*const c_void, *const c_void, u32, isize) -> i32;
 
+/// Faces rendues par une énumération. Les polices ajoutées avec
+/// `FR_NOT_ENUM` sont tues. Une police livrée avec Windows mais absente
+/// (Tahoma, Arial, Segoe UI…) est annoncée sous son nom par les faces de
+/// sa remplaçante libre, celle que CreateFont choisit déjà : un programme
+/// qui vérifie l'existence d'une police avant de la créer ne conclut plus
+/// qu'elle manque (#1768, Steam #1670).
+fn enum_faces(face: &str) -> Vec<FontFace> {
+    let hidden = lock(not_enum()).clone();
+    let faces: Vec<FontFace> = all_faces()
+        .into_iter()
+        .filter(|f| !hidden.contains(&f.path))
+        .collect();
+    let mut out = select(&faces, face);
+    if out.is_empty() && !face.is_empty() {
+        let present: Vec<String> = families(&faces).into_iter().map(|f| f.family).collect();
+        if let Some(sub) = super::dwrite::windows_alias(face, &present) {
+            out = select(&faces, &sub);
+            for f in &mut out {
+                f.full_name = if f.style.eq_ignore_ascii_case("Regular") {
+                    face.to_string()
+                } else {
+                    format!("{face} {}", f.style)
+                };
+                f.family = face.to_string();
+            }
+            crate::trace!(
+                "EnumFontFamilies({face}) : absente, annoncée par {sub} ({} face(s))",
+                out.len()
+            );
+            return out;
+        }
+    }
+    crate::trace!("EnumFontFamilies({face}) = {} face(s)", out.len());
+    out
+}
+
 unsafe fn run_a(face: &str, charset: u8, callback: usize, lparam: isize) -> i32 {
     if callback == 0 {
         return 0;
     }
     let cb: EnumProc = std::mem::transmute(callback);
     let mut last = 1;
-    for f in select(&all_faces(), face) {
+    for f in enum_faces(face) {
         let (lf, tm) = enum_entry_a(&f, charset);
         last = cb(
             (&lf as *const EnumLogFontExA).cast(),
@@ -664,7 +707,7 @@ unsafe fn run_w(face: &str, charset: u8, callback: usize, lparam: isize) -> i32 
     }
     let cb: EnumProc = std::mem::transmute(callback);
     let mut last = 1;
-    for f in select(&all_faces(), face) {
+    for f in enum_faces(face) {
         let (lf, tm) = enum_entry_w(&f, charset);
         last = cb(
             (&lf as *const EnumLogFontExW).cast(),
@@ -769,6 +812,27 @@ pub fn add_font_file(path: &Path) -> usize {
     list.extend(faces);
     drop(list);
     fontconfig_add(&canon);
+    // Une police déjà résolue sous ce nom (par un remplaçant) doit être
+    // résolue à nouveau (#1769).
+    super::usp10::forget_fonts();
+    n
+}
+
+/// Ajoute un fichier avec les drapeaux d'AddFontResourceEx.
+fn add_font_file_ex(path: &Path, flags: u32) -> usize {
+    let n = add_font_file(path);
+    if n > 0 {
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut hidden = lock(not_enum());
+        hidden.retain(|p| p != &canon);
+        if flags & FR_NOT_ENUM != 0 {
+            hidden.push(canon);
+        }
+    }
+    crate::trace!(
+        "AddFontResource({}, drapeaux {flags:#x}) = {n} face(s)",
+        path.display()
+    );
     n
 }
 
@@ -782,7 +846,9 @@ pub fn remove_font_file(path: &Path) -> bool {
     let remaining: Vec<PathBuf> = list.iter().map(|f| f.path.clone()).collect();
     drop(list);
     if removed {
+        lock(not_enum()).retain(|p| p != &canon);
         fontconfig_reset(&remaining);
+        super::usp10::forget_fonts();
     }
     removed
 }
@@ -840,25 +906,28 @@ fn fontconfig_reset(remaining: &[PathBuf]) {
     }
 }
 
+/// AddFontResourceEx : la police n'est pas énumérée.
+const FR_NOT_ENUM: u32 = 0x20;
+
 pub unsafe extern "win64" fn add_font_resource_a(name: *const u8) -> i32 {
-    add_font_file(&resolve_font_path(&cstr(name))) as i32
+    add_font_file_ex(&resolve_font_path(&cstr(name)), 0) as i32
 }
 pub unsafe extern "win64" fn add_font_resource_w(name: *const u16) -> i32 {
-    add_font_file(&resolve_font_path(&wstr(name))) as i32
+    add_font_file_ex(&resolve_font_path(&wstr(name)), 0) as i32
 }
 pub unsafe extern "win64" fn add_font_resource_ex_a(
     name: *const u8,
-    _flags: u32,
+    flags: u32,
     _reserved: *mut c_void,
 ) -> i32 {
-    add_font_resource_a(name)
+    add_font_file_ex(&resolve_font_path(&cstr(name)), flags) as i32
 }
 pub unsafe extern "win64" fn add_font_resource_ex_w(
     name: *const u16,
-    _flags: u32,
+    flags: u32,
     _reserved: *mut c_void,
 ) -> i32 {
-    add_font_resource_w(name)
+    add_font_file_ex(&resolve_font_path(&wstr(name)), flags) as i32
 }
 /// Polices passées en mémoire (AddFontMemResourceEx) : chaque police est
 /// écrite dans un fichier privé du processus (répertoire 0700, supprimé avec
@@ -963,6 +1032,65 @@ pub unsafe extern "win64" fn remove_font_resource_ex_w(
     remove_font_resource_w(name)
 }
 
+/// CreateFontIndirectExA/W : ENUMLOGFONTEXDV commence par ENUMLOGFONTEX,
+/// qui commence par LOGFONT ; les axes de police variable sont ignorés.
+pub unsafe extern "win64" fn create_font_indirect_ex_a(elf: *const c_void) -> usize {
+    if elf.is_null() {
+        return 0;
+    }
+    match crate::dlls::lookup("gdi32", "CreateFontIndirectA") {
+        Some(f) => {
+            let f: unsafe extern "win64" fn(*const c_void) -> usize = std::mem::transmute(f);
+            f(elf)
+        }
+        None => 0,
+    }
+}
+pub unsafe extern "win64" fn create_font_indirect_ex_w(elf: *const c_void) -> usize {
+    if elf.is_null() {
+        return 0;
+    }
+    match crate::dlls::lookup("gdi32", "CreateFontIndirectW") {
+        Some(f) => {
+            let f: unsafe extern "win64" fn(*const c_void) -> usize = std::mem::transmute(f);
+            f(elf)
+        }
+        None => 0,
+    }
+}
+
+/// GetGlyphIndicesA : chaque octet est un caractère de la page ANSI, puis
+/// GetGlyphIndicesW.
+pub unsafe extern "win64" fn get_glyph_indices_a(
+    hdc: usize,
+    text: *const u8,
+    count: i32,
+    out: *mut u16,
+    flags: u32,
+) -> u32 {
+    if text.is_null() || out.is_null() || count < 0 {
+        return u32::MAX; // GDI_ERROR
+    }
+    let bytes = std::slice::from_raw_parts(text, count as usize);
+    let wide: Vec<u16> = bytes
+        .iter()
+        .map(|&b| {
+            super::decode_ansi(&[b])
+                .chars()
+                .next()
+                .map_or(0xFFFD, |c| c as u32 as u16)
+        })
+        .collect();
+    match crate::dlls::lookup("gdi32", "GetGlyphIndicesW") {
+        Some(f) => {
+            let f: unsafe extern "win64" fn(usize, *const u16, i32, *mut u16, u32) -> u32 =
+                std::mem::transmute(f);
+            f(hdc, wide.as_ptr(), count, out, flags)
+        }
+        None => u32::MAX,
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "EnumFontFamiliesExA" => fn enum_font_families_ex_a,
@@ -981,6 +1109,9 @@ pub fn exports() -> crate::dlls::Exports {
         "RemoveFontResourceExW" => fn remove_font_resource_ex_w,
         "AddFontMemResourceEx" => fn add_font_mem_resource_ex,
         "RemoveFontMemResourceEx" => fn remove_font_mem_resource_ex,
+        "CreateFontIndirectExA" => fn create_font_indirect_ex_a,
+        "CreateFontIndirectExW" => fn create_font_indirect_ex_w,
+        "GetGlyphIndicesA" => fn get_glyph_indices_a,
     }
 }
 
@@ -1174,6 +1305,59 @@ pub mod tests {
         assert_ne!(tm.extra.flags & NTM_REGULAR, 0);
         let (lfa, _) = enum_entry_a(f, 0);
         assert_eq!(&lfa.face[..10], b"Mono Test\0");
+    }
+
+    #[test]
+    fn police_windows_absente_annoncee_par_sa_remplacante() {
+        let present = vec!["Liberation Sans".to_string(), "Carlito".to_string()];
+        let alias = |n: &str| crate::dlls::dwrite::windows_alias(n, &present);
+        assert_eq!(alias("Tahoma").as_deref(), Some("Liberation Sans"));
+        assert_eq!(alias("MS Shell Dlg 2").as_deref(), Some("Liberation Sans"));
+        assert_eq!(alias("Calibri").as_deref(), Some("Carlito"));
+        // Une famille présente reste elle-même ; un nom inconnu reste absent.
+        assert_eq!(alias("Liberation Sans"), None);
+        assert_eq!(alias("Motiva Sans"), None);
+        assert_eq!(crate::dlls::dwrite::windows_alias("Arial", &[]), None);
+
+        let dir = std::env::temp_dir().join(format!("winlux-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sub = dir.join("subst.ttf");
+        std::fs::write(
+            &sub,
+            sample_font("Liberation Sans", "Regular", 400, false, false),
+        )
+        .unwrap();
+        assert_eq!(add_font_file(&sub), 1);
+        if !all_faces()
+            .iter()
+            .any(|f| f.family.eq_ignore_ascii_case("Tahoma"))
+        {
+            let faces = enum_faces("Tahoma");
+            assert!(!faces.is_empty(), "Tahoma annoncée");
+            assert!(faces.iter().all(|f| f.family == "Tahoma"));
+        }
+        assert!(enum_faces("Motiva Sans Inconnue").is_empty());
+        remove_font_file(&sub);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fr_not_enum_cache_la_police() {
+        let dir = std::env::temp_dir().join(format!("winlux-notenum-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("cachee.ttf");
+        std::fs::write(
+            &p,
+            sample_font("Cachée Winlux", "Regular", 400, false, false),
+        )
+        .unwrap();
+        assert_eq!(add_font_file_ex(&p, FR_NOT_ENUM), 1);
+        assert!(enum_faces("Cachée Winlux").is_empty());
+        assert!(all_faces().iter().any(|f| f.family == "Cachée Winlux"));
+        assert_eq!(add_font_file_ex(&p, 0), 1);
+        assert_eq!(enum_faces("Cachée Winlux").len(), 1);
+        assert!(remove_font_file(&p));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

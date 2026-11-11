@@ -63,6 +63,12 @@ fn fonts() -> &'static Mutex<HashMap<Key, Arc<GdiFont>>> {
     F.get_or_init(Default::default)
 }
 
+/// Oublie les polices résolues : à appeler quand une police est ajoutée ou
+/// retirée, sinon un nom résolu plus tôt vers un remplaçant le resterait.
+pub fn forget_fonts() {
+    super::lock(fonts()).clear();
+}
+
 /// Taille em en pixels d'après lfHeight : négatif = hauteur des caractères,
 /// positif = hauteur de cellule (ascendante + descendante), 0 = défaut.
 fn em_for(height: i32, m: &sfnt::Metrics) -> f32 {
