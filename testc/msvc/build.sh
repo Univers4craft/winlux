@@ -45,6 +45,12 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fno-builtin -c "$src/hid_rgb_msvc.c" -o "$tmp/hid_rgb_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_rgb_msvc.obj" \
     "$tmp/kernel32_hidrgb.lib" "$tmp/cfgmgr32_hidrgb.lib" "$tmp/hid_hidrgb.lib" /out:"$out/hid_rgb_msvc.exe"
+# Appareil virtuel d'un pilote constructeur (#1533) : \\.\Nom et DeviceIoControl.
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nCloseHandle\nGetLastError\nDeviceIoControl\nCreateEventW\nWaitForSingleObject\nGetOverlappedResult\nCreateIoCompletionPort\nGetQueuedCompletionStatus\n' >"$tmp/kernel32_vdev.def"
+llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_vdev.def" -l "$tmp/kernel32_vdev.lib"
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fno-builtin -c "$src/vdev_msvc.c" -o "$tmp/vdev_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/vdev_msvc.obj" \
+    "$tmp/kernel32_vdev.lib" /out:"$out/vdev_msvc.exe"
 # DeviceIoControl sur volumes, disques et fichiers creux (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nDeviceIoControl\nWriteFile\nReadFile\nSetFilePointer\nCloseHandle\nGetLastError\n' >"$tmp/kernel32_devio.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_devio.def" -l "$tmp/kernel32_devio.lib"
