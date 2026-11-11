@@ -167,3 +167,29 @@ mod tests {
         assert_eq!(&a[..7], b"Volant\0");
     }
 }
+
+/// Tampon d'octets aligné sur 8, pour bâtir un VARIANT, un VARDESC ou un
+/// autre bloc que lisent des fonctions qui le déréférencent directement
+/// (un `[u8; N]` sur la pile peut être mal aligné).
+#[repr(C, align(8))]
+#[derive(Clone, Copy)]
+pub struct Aligned<const N: usize>(pub [u8; N]);
+
+impl<const N: usize> Default for Aligned<N> {
+    fn default() -> Self {
+        Aligned([0; N])
+    }
+}
+
+impl<const N: usize> std::ops::Deref for Aligned<N> {
+    type Target = [u8; N];
+    fn deref(&self) -> &[u8; N] {
+        &self.0
+    }
+}
+
+impl<const N: usize> std::ops::DerefMut for Aligned<N> {
+    fn deref_mut(&mut self) -> &mut [u8; N] {
+        &mut self.0
+    }
+}

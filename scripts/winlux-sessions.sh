@@ -227,6 +227,14 @@ do_logoff() {
     vt=$(get "$f" vt)
     pid=$(get "$f" pid)
     xpid=$(get "$f" xorg_pid)
+    # Bureau principal (écran :0, sans PID suivi) : l'init l'a lancé et le
+    # relance. On lui demande de fermer la session et de rouvrir l'écran de
+    # connexion (#1564) ; l'entrée reste, l'écran :0 garde son compte.
+    if test -z "$pid" && test -z "$xpid"; then
+        printf 'logoff-session\n' > "$run/session-action"
+        do_list
+        return 0
+    fi
     rm -f "$f"
     if test -n "$pid"; then kill "$pid" 2>/dev/null || true; fi
     if test -n "$xpid"; then kill "$xpid" 2>/dev/null || true; fi

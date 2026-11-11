@@ -892,7 +892,8 @@ class Start(Gtk.Application):
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
         self.results = sorted((app for app in self.apps.values() if matches(app, query)),
-                              key=lambda app: (rank(app.get_display_name(), query), app.get_display_name().casefold()))
+                              key=lambda app: result_order(app, query, self.state))
+        twins = homonyms(self.results)
         self.views.set_visible(listing and not query)
         for key, button in self.view_buttons.items():
             context = button.get_style_context()
@@ -920,7 +921,9 @@ class Start(Gtk.Application):
                     heading.get_style_context().add_class("heading")
                     self.content.pack_start(heading, False, False, 0)
                     previous = group
-                self.content.pack_start(self.app_button(app), False, False, 0)
+                # Homonymes (Claude pour Windows et Claude de la Boutique,
+                # #1489) : le repère « .exe » les distingue.
+                self.content.pack_start(self.app_button(app, badge=fold(app.get_display_name()) in twins), False, False, 0)
             if pages:
                 heading = Gtk.Label(label=_t("Meilleur résultat") if not self.results else _t("Paramètres"), xalign=0, margin_top=10)
                 heading.get_style_context().add_class("heading")
@@ -1001,7 +1004,7 @@ class Start(Gtk.Application):
         """« Toutes les applications » mieux rangé (#685) : ajoutées récemment,
         puis catégories en cartes (un clic déplie la catégorie), grille ou
         liste A–Z avec une barre de lettres."""
-        apps = sorted(self.apps.values(), key=lambda app: fold(app.get_display_name()))
+        apps = sorted(self.apps.values(), key=lambda app: result_order(app, "", self.state)[1:])
         view = self.apps_view()
         fresh = [self.apps[ident] for ident in recently_added(self.state, self.apps, time.time())]
         if view != "list" and fresh and not self.open_category:
@@ -1476,6 +1479,25 @@ def rank(text, query):
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
+
+
+def result_order(app, query, state):
+    """Clé de tri d'une application : pertinence pour la recherche, nom, puis,
+    entre homonymes, la plus récemment installée d'abord (#1489). Sans ce
+    départage, l'ordre de Gio décidait du Meilleur résultat : Claude pour
+    Windows passait avant le Claude que l'on venait d'installer."""
+    seen = state.get("seen") if isinstance(state, dict) and isinstance(state.get("seen"), dict) else {}
+    ident = app.get_id() or ""
+    when = seen.get(ident)
+    when = when if isinstance(when, (int, float)) else 0
+    return (rank(app.get_display_name(), query), fold(app.get_display_name()), -when,
+            ident.startswith(("winlux-pe-", "winlux-link-")), ident)
+
+
+def homonyms(apps):
+    """Noms (repliés) portés par plusieurs applications de la liste."""
+    names = [fold(app.get_display_name()) for app in apps]
+    return {name for name in names if names.count(name) > 1}
 
 
 def modified(path):

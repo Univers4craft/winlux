@@ -291,12 +291,34 @@ wait_desktop() {
     if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
     # Téléphone connecté : seulement si un téléphone est associé à ce compte.
     if test -x /usr/bin/winlux-phone; then start phone.log /usr/bin/winlux-phone serve --if-paired; fi
-    # Programmes « au démarrage » : lancés une fois le bureau affiché.
-    if test -x /usr/bin/winlux-session-startup; then (/usr/bin/winlux-session-startup </dev/null >"$logs/startup-apps.log" 2>&1 &); fi
-    # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
-    if command -v winlux-store >/dev/null 2>&1; then
-        (winlux-store starter --resume >"$logs/starter.log" 2>&1 &)
-    fi
+    # Trousseau de secrets (libsecret) et programmes « au démarrage » (#1488).
+    # Sans PAM de connexion, le trousseau « login » est ouvert ici pour un
+    # compte sans mot de passe, et par l'écran de verrouillage avec le mot de
+    # passe sinon. Une session ouverte verrouillée lance ses programmes après
+    # la connexion : avant, ils demandaient en boucle de créer un trousseau.
+    (
+        lock_state=$(/usr/bin/winlux-lock status 2>/dev/null || true)
+        case "$lock_state" in
+            *lock_password=0*)
+                if test -x /usr/bin/winlux-keyring; then printf '' | /usr/bin/winlux-keyring unlock >"$logs/keyring.log" 2>&1 || true; fi ;;
+            *lock_password=1*)
+                if test "${WINLUX_LOCK_AT_START:-0}" = 1; then
+                    seen=0
+                    for attempt in $(seq 1 7200); do
+                        case "$(/usr/bin/winlux-lock status 2>/dev/null)" in
+                            *lock_active=1*) seen=1 ;;
+                            *) if test "$seen" = 1 || test "$attempt" -ge 20; then break; fi ;;
+                        esac
+                        sleep 0.5
+                    done
+                fi ;;
+        esac
+        if test -x /usr/bin/winlux-session-startup; then /usr/bin/winlux-session-startup </dev/null >"$logs/startup-apps.log" 2>&1; fi &
+        # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
+        if command -v winlux-store >/dev/null 2>&1; then
+            winlux-store starter --resume >"$logs/starter.log" 2>&1 &
+        fi
+    ) </dev/null >/dev/null 2>&1 &
     if test -x /usr/bin/xscreensaver; then
         if test "$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)" -gt 0; then
             start screensaver.log /usr/bin/xscreensaver -no-splash

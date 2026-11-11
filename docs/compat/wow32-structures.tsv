@@ -188,6 +188,12 @@ ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seuleme
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
 ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
+ole32_lot_c.rs	AgileRef	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+ole32_lot_c/tests.rs	Probe	interne	test unitaire
+ole32_moniker.rs	BindCtx	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+ole32_moniker.rs	EnumMoniker	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+ole32_moniker.rs	Moniker	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+ole32_moniker.rs	Rot	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 ole32_storage.rs	EnumObj	interne	IEnumSTATSTG du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
 ole32_storage.rs	LockBytesObj	interne	ILockBytes de CreateILockBytesOnHGlobal (#1235), x64 seulement (refusé si wow32 actif)
 ole32_storage.rs	StgObj	interne	IStorage du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
@@ -195,6 +201,9 @@ ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), 
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
+oleaut32_picture.rs	Font	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+oleaut32_picture.rs	Picture	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
+oleaut32_record.rs	RecordInfo	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 oleaut32_typelib.rs	InfoObj	interne	ICreateTypeInfo2/ITypeInfo de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
 oleaut32_typelib.rs	LibObj	interne	ICreateTypeLib2/ITypeLib de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
