@@ -919,6 +919,12 @@ pub unsafe extern "win64" fn reg_notify_change_key_value(
         if event == 0 {
             return ERROR_INVALID_PARAMETER;
         }
+        // L'abonnement est une E/S asynchrone (NtNotifyChangeKey) : comme
+        // toute E/S qui reçoit un événement, il le remet à zéro en partant.
+        // Chromium réarme avec un événement à réinitialisation manuelle
+        // resté signalé : sans cette remise à zéro, il relisait sa
+        // configuration DNS en boucle, plus de mille fois par seconde (#1954).
+        crate::dlls::kernel32::reset_event(event);
         if !watch_key(handle, event) {
             return ERROR_NOT_ENOUGH_MEMORY;
         }
@@ -1798,6 +1804,9 @@ mod tests {
                 0
             );
             assert!(!lock(watches()).iter().any(|w| w.0 == h && w.1 == event));
+            // #1954 : réarmer remet l'événement (manuel, resté signalé) à zéro.
+            assert_eq!(reg_notify_change_key_value(h, 1, 4, event, 1), 0);
+            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 0), 258);
             assert_eq!(reg_close_key(h), 0);
             crate::dlls::kernel32::close_handle(event);
         }

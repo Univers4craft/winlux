@@ -27,6 +27,7 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
+use super::tableaux;
 use super::tables::{TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
@@ -603,13 +604,15 @@ impl Interpreter {
             return;
         };
         let name = self.method_name(token);
-        let argc = self.get_method_sig(token).param_types.len();
+        let params = self.get_method_sig(token).param_types;
+        let argc = params.len();
         let iface = match target {
             Target::Managed(asm, row) => self.interface_of(*asm, *row),
             _ => None,
         };
         let found = types::with_types(|reg| {
-            let (asm, tok, decl) = reg.find_override_of(type_id, &name, argc, iface.as_deref())?;
+            let (asm, tok, decl) =
+                reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
             Some((
                 asm,
                 tok,
@@ -662,6 +665,9 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.reflection_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.array_call(namespace, class, name, &args) {
             return r;
         }
         match (namespace, class, name) {
@@ -950,15 +956,17 @@ impl Interpreter {
         let Some(actual) = gc::type_of(obj) else {
             return true;
         };
+        if types::with_types(|reg| reg.get(target).is_some_and(|t| t.is_interface)) {
+            // Interfaces suivies par la table InterfaceImpl (#1975) ; un
+            // type sans définition connue reste accepté.
+            return self.implements(actual, target).unwrap_or(true);
+        }
         types::with_types(|reg| {
             let Some(t) = reg.get(target) else {
                 return true;
             };
-            // Les interfaces implémentées ne sont pas encore suivies, ni la
-            // hiérarchie des types de la bibliothèque intégrée : on accepte.
-            if t.is_interface {
-                return true;
-            }
+            // La hiérarchie des types de la bibliothèque intégrée n'est pas
+            // suivie : on accepte.
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
                 || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
@@ -1478,10 +1486,23 @@ impl Interpreter {
                     } else {
                         let name = self.method_name(token);
                         let argc = sig.param_types.len();
+                        let iface = match &callee.target {
+                            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+                            _ => None,
+                        };
+                        // Seule une redéfinition de la méthode appelée (même
+                        // signature) compte : Int32.Equals(int) ne remplace
+                        // pas Object.Equals(object) (#1956).
                         let own = types::with_types(|reg| {
                             let t = reg.get(ct)?;
-                            let (asm, tok) = reg.find_own_method(ct, &name, argc)?;
-                            Some((asm, tok, t.type_args.clone()))
+                            let (asm, tok, decl) = reg.find_override_of(
+                                ct,
+                                &name,
+                                argc,
+                                iface.as_deref(),
+                                &sig.param_types,
+                            )?;
+                            (decl == ct).then(|| (asm, tok, t.type_args.clone()))
                         });
                         if let Some((asm, tok, t)) = own {
                             // Méthode du type valeur lui-même : `this` reste
@@ -1536,6 +1557,15 @@ impl Interpreter {
                 let f = frame!();
                 let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
                 let mut args = f.eval_stack.split_off(split);
+                // Une chaîne est immuable et de taille variable : son
+                // constructeur rend la chaîne entière (#1956).
+                if type_id == types::TYPE_STRING {
+                    let made = bcl::new_string(&args, &sig.param_types);
+                    push!(made.map_err(|kind| {
+                        exception(kind, "String::.ctor : arguments refusés")
+                    })?);
+                    return Ok(StepResult::Continue);
+                }
                 let kind = self.kind_of_type(type_id);
                 let obj = if kind == Kind::Ref {
                     self.ensure_layout(type_id);
@@ -2016,6 +2046,12 @@ impl Interpreter {
                 let token = tok1();
                 let handle = match self.resolve_type_token(token) {
                     Some(id) => id as i64,
+                    // Champ : l'assembly qui le déclare voyage avec le
+                    // jeton, car `RuntimeHelpers.InitializeArray` s'exécute
+                    // dans le contexte de notre mscorlib (#1965).
+                    None if Token(token).table() == TableId::Field as u8 => {
+                        tableaux::field_handle(self.current, token)
+                    }
                     None => token as i64,
                 };
                 push!(Value::I64(handle));

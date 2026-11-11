@@ -181,7 +181,7 @@ def cadrage(image):
     en 1440p ou 4K montre souvent une petite fenêtre sur un bureau noir : la
     vignette de 480 px était presque toute noire. Quand le fond uni (couleur
     du coin) couvre plus de la moitié de l'image, la vignette est recadrée sur
-    le contenu, avec une marge, au format 16:10 des cartes. L'image complète
+    le contenu, avec une marge. L'image complète
     n'est pas touchée."""
     from PIL import Image, ImageChops
     largeur, hauteur = image.size
@@ -198,17 +198,12 @@ def cadrage(image):
     g, h, d, b = boite
     if (d - g) * (b - h) >= largeur * hauteur / 2:
         return None
-    marge = max(16, round(0.04 * max(d - g, b - h)))
-    g, h, d, b = max(0, g - marge), max(0, h - marge), min(largeur, d + marge), min(hauteur, b + marge)
-    l, ht = d - g, b - h
-    if l < ht * 1.6:
-        l = min(largeur, round(ht * 1.6))
-    else:
-        ht = min(hauteur, round(l / 1.6))
-    cx, cy = (g + d) / 2, (h + b) / 2
-    g = min(max(0, round(cx - l / 2)), largeur - l)
-    h = min(max(0, round(cy - ht / 2)), hauteur - ht)
-    return (g, h, g + l, h + ht)
+    # Au plus près du contenu, sans forcer le 16:10 : la carte centre la
+    # vignette (object-fit: contain). Élargir une fenêtre étroite posée en
+    # (0, 0) laissait une bande noire à droite (#1957). La marge est la même
+    # des quatre côtés, bornée par la place disponible.
+    marge = min(max(16, round(0.04 * max(d - g, b - h))), g, h, largeur - d, hauteur - b)
+    return (g - marge, h - marge, d + marge, b + marge)
 
 
 def verdict_ocr(png):

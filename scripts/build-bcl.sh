@@ -68,6 +68,12 @@ if [ "${1:-}" = "--temoins" ]; then
             # de notre mscorlib, qui porte le même nom.
             refs+=(-r:Facade="$root/build/bcl-facades/$facade.dll")
         done
+        # « Option de compilation : -optimize+. » : un témoin compilé en
+        # version optimisée, comme les programmes livrés (machines à états
+        # async en structures).
+        for option in $(sed -n 's/.*Option de compilation : \(-[a-z+-]*\)\..*/\1/p' "$src"); do
+            refs+=("$option")
+        done
         compile "${refs[@]}" \
             -out:"$root/build/bcl-temoins/$(basename "$src" .cs).exe" "$src"
     done

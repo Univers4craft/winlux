@@ -475,6 +475,65 @@ unsafe fn x_window_state(display: *mut c_void, window: u64) -> String {
     format!("{carte}, à ({x}, {y}) dans l'écran")
 }
 
+/// Pixel (R, V, B) de la fenêtre X `window` en (`x`, `y`), relu par
+/// XGetImage sur la connexion de la chaîne d'échange : ce que la fenêtre
+/// contient vraiment, quel que soit le client qui l'a créée (#1886).
+unsafe fn x_window_pixel(display: *mut c_void, window: u64, x: u32, y: u32) -> Option<[u8; 3]> {
+    type GetImage = unsafe extern "C" fn(
+        *mut c_void,
+        libc::c_ulong,
+        libc::c_int,
+        libc::c_int,
+        libc::c_uint,
+        libc::c_uint,
+        libc::c_ulong,
+        libc::c_int,
+    ) -> *mut u8;
+    type GetPixel = unsafe extern "C" fn(*mut u8, libc::c_int, libc::c_int) -> libc::c_ulong;
+    static FNS: std::sync::OnceLock<Option<(GetImage, GetPixel)>> = std::sync::OnceLock::new();
+    let fns = FNS.get_or_init(|| {
+        let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+        if lib.is_null() {
+            return None;
+        }
+        let g = libc::dlsym(lib, c"XGetImage".as_ptr());
+        let p = libc::dlsym(lib, c"XGetPixel".as_ptr());
+        if g.is_null() || p.is_null() {
+            return None;
+        }
+        Some((
+            std::mem::transmute::<*mut c_void, GetImage>(g),
+            std::mem::transmute::<*mut c_void, GetPixel>(p),
+        ))
+    });
+    let (get_image, get_pixel) = (*fns)?;
+    if display.is_null() || window == 0 {
+        return None;
+    }
+    // ZPixmap = 2, AllPlanes.
+    let image = get_image(
+        display,
+        window as libc::c_ulong,
+        x as i32,
+        y as i32,
+        1,
+        1,
+        !0,
+        2,
+    );
+    if image.is_null() {
+        return None;
+    }
+    let v = get_pixel(image, 0, 0) as u32;
+    // XImage (x86-64) : funcs.destroy_image à l'octet 96 (macro XDestroyImage).
+    let destroy: Option<unsafe extern "C" fn(*mut u8) -> libc::c_int> =
+        std::ptr::read_unaligned(image.add(96).cast());
+    if let Some(destroy) = destroy {
+        destroy(image);
+    }
+    Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
+}
+
 pub(crate) struct GlContext {
     pub display: *mut c_void,
     pub context: *mut c_void,
@@ -667,11 +726,12 @@ impl GlContext {
             }
             crate::dlls::d3d11::FRAMES.fetch_add(1, Ordering::Relaxed);
             let n = self.presented.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == 1 {
+            let bilan = if n == 1 {
                 self.describe(g, &previous, switched);
-            } else if let Some(bilan) = self.suivi.due(n) {
-                self.follow(g, glx, n, bilan, switched);
-            }
+                None
+            } else {
+                self.suivi.due(n)
+            };
             // Taille réelle de la fenêtre : elle a pu changer (agrandie,
             // restaurée) avant que le programme ne redimensionne sa chaîne.
             let (dw, dh) = self.drawable_size(glx).unwrap_or((self.width, self.height));
@@ -704,6 +764,12 @@ impl GlContext {
                 (glx.SwapBuffers)(self.display, self.drawable);
             }
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            if let Some(bilan) = bilan {
+                // Après l'échange : le pixel relu dans la fenêtre X dit si
+                // l'image y est arrivée (#1886).
+                (g.Finish)();
+                self.follow(g, glx, n, bilan, switched);
+            }
             // Rendre au thread le contexte qu'il avait (le sien n'est pas
             // lié ailleurs, la reprise réussit).
             if switched && previous.context != 0 {
@@ -785,9 +851,12 @@ impl GlContext {
         let px = self.center_pixel(g);
         let size = self.drawable_size(glx);
         let window = x_window_state(self.display, self.drawable);
+        let (ww, wh) = size.unwrap_or((self.width, self.height));
+        let shown = x_window_pixel(self.display, self.drawable, ww / 2, wh / 2)
+            .map_or("illisible".to_string(), |p| format!("{p:?}"));
         log_info!(
             "dxgi",
-            "présentation n°{n} : {}x{} vers la fenêtre X 0x{:x} (taille {}, {}), fil {}, contexte {}, {} présentation(s) et {} refus en {} ms, pixel central {:?}",
+            "présentation n°{n} : {}x{} vers la fenêtre X 0x{:x} (taille {}, {}), fil {}, contexte {}, {} présentation(s) et {} refus en {} ms, pixel central {:?}, relu dans la fenêtre X après l'échange {shown}",
             self.width,
             self.height,
             self.drawable,
@@ -2429,6 +2498,11 @@ mod presentation_x11_tests {
             ctx.present();
             (g.Finish)();
             assert_eq!(pixel(10, 10), 0xFF0000);
+            // #1886 : la relecture du journal voit la même image.
+            assert_eq!(
+                x_window_pixel(ctx.display, ctx.drawable, 10, 10),
+                Some([255, 0, 0])
+            );
             // Agrandie : la chaîne garde 200x100 pour l'instant.
             conn.configure_window(win, &ConfigureWindowAux::new().width(400).height(300))
                 .unwrap();

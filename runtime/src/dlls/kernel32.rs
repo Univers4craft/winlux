@@ -3299,7 +3299,7 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     }
     match std::fs::rename(&s, &d) {
         Ok(()) => 1,
-        Err(_) if flags & 0x2 != 0 => match std::fs::copy(&s, &d) {
+        Err(_) if flags & 0x2 != 0 => match copy_keeping_write_time(&s, &d) {
             Ok(_) => {
                 let _ = std::fs::remove_file(&s);
                 1
@@ -7860,6 +7860,23 @@ pub unsafe extern "win64" fn get_full_path_name_w(
     }
     text.len() as u32
 }
+/// Copie comme CopyFile : contenu et attributs, et **date de dernière
+/// écriture conservée** (documentation de CopyFile). `std::fs::copy` mettait
+/// l'heure courante : SteamService comparait les dates de ses deux copies,
+/// se croyait périmé à chaque démarrage et relançait sa mise à jour sans
+/// fin (#1949).
+fn copy_keeping_write_time(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<u64> {
+    let n = std::fs::copy(source, target)?;
+    if let Ok(modified) = std::fs::metadata(source).and_then(|m| m.modified()) {
+        if let Ok(f) = std::fs::File::open(target) {
+            let _ = f.set_modified(modified);
+        }
+    }
+    Ok(n)
+}
 pub unsafe extern "win64" fn copy_file_a(
     src: *const u8,
     dst: *const u8,
@@ -7879,7 +7896,7 @@ pub unsafe extern "win64" fn copy_file_a(
         crate::process::set_last_error(code);
         return 0;
     }
-    match std::fs::copy(source, target) {
+    match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -7916,7 +7933,7 @@ pub unsafe extern "win64" fn copy_file_w(
         crate::process::set_last_error(code);
         return 0;
     }
-    match std::fs::copy(source, target) {
+    match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -10808,6 +10825,25 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    use super::copy_keeping_write_time;
+
+    #[test]
+    fn copie_garde_la_date_de_derniere_ecriture() {
+        let dir = std::env::temp_dir().join(format!("winlux-copie-date-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("SteamService.exe");
+        let dst = dir.join("Copie.exe");
+        std::fs::write(&src, b"MZ").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_761_091_200);
+        std::fs::File::open(&src)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(copy_keeping_write_time(&src, &dst).unwrap(), 2);
+        assert_eq!(std::fs::metadata(&dst).unwrap().modified().unwrap(), old);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn dllmain_des_dependances_dans_l_ordre_des_imports() {
         // #1584 : steamui importe libavcodec, SDL3, tier0, video64 et
