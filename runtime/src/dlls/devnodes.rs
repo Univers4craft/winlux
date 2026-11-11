@@ -293,6 +293,9 @@ pub struct Virtual {
     pub compatible_ids: Vec<String>,
     pub class: [u8; 16],
     pub description: String,
+    /// Interface présentée par un appareil d'observation (#1655), ouverte
+    /// comme un appareil virtuel (vdev.rs).
+    pub interface: Option<[u8; 16]>,
 }
 
 const ENUM_ROOT: &str = "hklm\\SYSTEM\\CurrentControlSet\\Enum";
@@ -346,6 +349,7 @@ pub fn registered_virtual() -> Vec<Node> {
                             .unwrap_or_default(),
                         class: parse_guid(&text("ClassGUID")).unwrap_or([0; 16]),
                         description: text("DeviceDesc"),
+                        interface: None,
                     }),
                 });
             }
@@ -613,7 +617,36 @@ pub fn nodes() -> Vec<Node> {
     }
     // Appareils créés par des installeurs de pilotes (#1605).
     out.extend(registered_virtual());
+    // Interfaces présentées pour une passe d'observation (#1655).
+    out.extend(observation_nodes());
     out
+}
+
+/// Classe « System » (devguid.h, public) des appareils d'observation.
+const SYSTEM_CLASS: [u8; 16] = [
+    0x7d, 0xe9, 0x36, 0x4d, 0x25, 0xe3, 0xce, 0x11, 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18,
+];
+
+/// Un appareil par interface de `WINLUX_VDEV_OBSERVE` : un logiciel qui
+/// cherche cette classe d'interface la trouve, l'ouvre, et tout ce qu'il y
+/// écrit est journalisé (WINLUX_TRACE, WINLUX_VDEV_DUMP=1) sans être
+/// exécuté. Rien n'est présenté sans cette variable.
+pub fn observation_nodes() -> Vec<Node> {
+    crate::dlls::vdev::observed_interfaces()
+        .into_iter()
+        .enumerate()
+        .map(|(i, guid)| Node {
+            id: format!("ROOT\\WINLUX_OBSERVATION\\{i:04}"),
+            parent: Some(ROOT.into()),
+            kind: Kind::Virtual(Virtual {
+                hardware_ids: vec!["ROOT\\WINLUX_OBSERVATION".into()],
+                class: SYSTEM_CLASS,
+                description: "Appareil d'observation Winlux".into(),
+                interface: Some(guid),
+                ..Default::default()
+            }),
+        })
+        .collect()
 }
 
 /// Racine de sysfs (`WINLUX_SYSFS` pour les tests).
@@ -683,7 +716,8 @@ impl Node {
             Kind::Hid(_) => Some(HID_GUID),
             Kind::Port { .. } => Some(COMPORT_INTERFACE),
             Kind::UsbDevice(_) => Some(USB_DEVICE_INTERFACE),
-            Kind::Root | Kind::Processor(_) | Kind::Virtual(_) => None,
+            Kind::Virtual(ref v) => v.interface,
+            Kind::Root | Kind::Processor(_) => None,
         }
     }
     /// Chemin rendu par `SetupDiGetDeviceInterfaceDetailW`.
@@ -699,6 +733,13 @@ impl Node {
                 "\\\\?\\{}#{}",
                 self.id.to_ascii_lowercase().replace('\\', "#"),
                 guid_text(&USB_DEVICE_INTERFACE)
+            )),
+            Kind::Virtual(Virtual {
+                interface: Some(g), ..
+            }) => Some(format!(
+                "\\\\?\\{}#{}",
+                self.id.to_ascii_lowercase().replace('\\', "#"),
+                guid_text(g)
             )),
             Kind::Root | Kind::Processor(_) | Kind::Virtual(_) => None,
         }

@@ -124,6 +124,15 @@ méthode, accès) et les tailles ; le contenu des tampons n'est écrit qu'avec
 d'interopérabilité de `AGENTS.md`. Test : `scripts/test-vdev.sh` (appareil
 d'essai `WinluxEssai`, présent seulement avec `WINLUX_VDEV_ESSAI=1`).
 
+Passe d'observation (#1655) : avec `WINLUX_VDEV_OBSERVE={guid}[,{guid}…]`,
+Winlux présente un appareil `ROOT\WINLUX_OBSERVATION\000N` (classe System)
+portant chacune de ces interfaces. Un logiciel dont le pilote n'est pas
+chargé (macros d'iCUE : `{2abad0de-4ddc-4965-8d7a-7faf3b7f1d59}`, relevée
+par notre trace de `SetupDiGetClassDevs`) la trouve et l'ouvre ; ses
+`DeviceIoControl` et `WriteFile` sont acceptés sans effet et journalisés,
+contenu compris avec `WINLUX_VDEV_DUMP=1`. Rien n'est présenté sans la
+variable, et rien n'est exécuté : la traduction viendra de ce journal.
+
 Depuis #1532, un installeur qui pose un pilote réussit sans qu'aucun `.sys`
 ne soit chargé (`runtime/src/dlls/drivers.rs`) : `SetupCopyOEMInf` copie le
 `.inf` dans `C:\Windows\INF\oemN.inf` (même contenu, même nom),
