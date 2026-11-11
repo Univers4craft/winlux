@@ -212,6 +212,8 @@ pub(crate) fn open(
     }
     let dir = dir()?;
     let _lock = DirLock::take(&dir)?;
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| sweep_orphans(&dir));
     let path = dir.join(file_name(kind, key));
     let existing = std::fs::OpenOptions::new()
         .read(true)
@@ -264,6 +266,47 @@ pub(crate) fn open(
         },
     );
     Some(Opened { fd, created, path })
+}
+
+/// Supprime les objets que plus aucun processus ne tient (#1911) : ceux
+/// d'un processus tué (TerminateProcess, plantage, OOM), qui n'a lâché ni
+/// `release` ni `on_exit`. Sans cela leurs pages restaient sur le tmpfs,
+/// donc en RAM, jusqu'au redémarrage (Chromium et CEF donnent des noms
+/// aléatoires à leurs mémoires partagées : le nom n'est jamais repris).
+/// Appelé dossier verrouillé, une fois par processus.
+fn sweep_orphans(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with("m-") || name.starts_with("s-")) {
+            continue;
+        }
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if let Some(object) = name.strip_suffix(".chemin") {
+            // `.chemin` dont l'objet a disparu.
+            if !dir.join(object).exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
+        }
+        let Ok(f) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+        else {
+            continue;
+        };
+        if flock(&f, libc::LOCK_EX | libc::LOCK_NB) {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(sidecar(&path));
+        }
+    }
 }
 
 /// Fichier `.chemin` d'une section adossée à un fichier.
@@ -416,6 +459,33 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(open(SYNC, &key, None).is_none());
+    }
+
+    #[test]
+    fn orphelins_balayes_les_objets_tenus_gardes() {
+        let d = dir().unwrap();
+        let orphan = d.join(file_name(SECTION, &unique("balai-orphelin")));
+        let kept = d.join(file_name(SYNC, &unique("balai-tenu")));
+        let lone = d.join(format!(
+            "{}.chemin",
+            file_name(SECTION, &unique("balai-seul"))
+        ));
+        std::fs::write(&orphan, [0u8; 64]).unwrap();
+        std::fs::write(sidecar(&orphan), "64\n/tmp/x").unwrap();
+        std::fs::write(&kept, [0u8; 64]).unwrap();
+        std::fs::write(&lone, "1\n/tmp/y").unwrap();
+        // Un autre « processus » tient `kept`.
+        let holder = File::open(&kept).unwrap();
+        assert!(flock(&holder, libc::LOCK_SH | libc::LOCK_NB));
+        {
+            let _lock = DirLock::take(&d).unwrap();
+            sweep_orphans(&d);
+        }
+        assert!(!orphan.exists() && !sidecar(&orphan).exists());
+        assert!(!lone.exists());
+        assert!(kept.exists());
+        drop(holder);
+        let _ = std::fs::remove_file(&kept);
     }
 
     #[test]

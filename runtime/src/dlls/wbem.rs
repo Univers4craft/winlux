@@ -1835,8 +1835,11 @@ unsafe fn string_array(list: &[String]) -> usize {
     let sa = super::oleaut32::safe_array_create_vector(VT_BSTR, 0, list.len() as u32);
     let mut p: *mut c_void = std::ptr::null_mut();
     if sa != 0 && super::oleaut32::safe_array_access_data(sa, &mut p) == 0 {
+        // Cases de la taille d'un pointeur du programme : 4 octets en x86.
+        // En y écrivant 8 octets, la dernière débordait du tas (#1926).
+        let cell = super::oleaut32::safe_array_get_elem_size(sa) as usize;
         for (i, s) in list.iter().enumerate() {
-            (p as *mut *mut u16).add(i).write_unaligned(bstr(s));
+            super::oleaut32::write_cell((p as *mut u8).add(i * cell), bstr(s) as usize);
         }
         super::oleaut32::safe_array_unaccess_data(sa);
     }

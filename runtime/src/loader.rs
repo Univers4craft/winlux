@@ -404,7 +404,8 @@ pub fn load_data(path: &Path, tag: usize) -> Result<usize, String> {
         let hs = (pe.size_of_headers as usize).min(file.len()).min(size);
         dst[..hs].copy_from_slice(&file[..hs]);
         for s in &pe.sections {
-            if s.raw_size == 0 || s.raw_ptr == 0 {
+            if s.raw_size == 0 || s.raw_ptr == 0 || s.raw_ptr as usize >= file.len() {
+                // Au-delà de la fin du fichier (.exe tronqué, #1916) : rien à lire.
                 continue;
             }
             let start = s.raw_ptr as usize;
@@ -803,6 +804,17 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
                 continue;
             }
             let start = s.raw_ptr as usize;
+            // Données de section au-delà de la fin du fichier : .exe tronqué.
+            // Windows refuse l'image (ERROR_BAD_EXE_FORMAT) ; ici aussi, au
+            // lieu de paniquer sur la tranche (#1916).
+            if start >= file.len() {
+                return Err(format!(
+                    "{} : fichier tronqué ({} octets), la section {} commence à {start} (image invalide)",
+                    path.display(),
+                    file.len(),
+                    s.name
+                ));
+            }
             let mut n = (s.raw_size as usize).min(file.len().saturating_sub(start));
             if s.virtual_size != 0 {
                 n = n.min(s.virtual_size as usize);

@@ -231,3 +231,35 @@ fn wmi_par_com() {
         release(loc);
     }
 }
+
+/// #1926 : les noms de GetNames tombent chacun dans sa case, de la taille
+/// d'un pointeur du programme, sans rien écrire au-delà.
+#[test]
+fn noms_dans_des_cases_de_la_taille_d_un_pointeur() {
+    use crate::dlls::oleaut32 as oa;
+    let list: Vec<String> = ["Caption", "Version", "BuildNumber"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    unsafe {
+        let sa = super::string_array(&list);
+        assert_ne!(sa, 0);
+        assert_eq!(
+            oa::safe_array_get_elem_size(sa) as usize,
+            crate::wow32::pointer_size()
+        );
+        for (i, want) in list.iter().enumerate() {
+            let mut b: usize = 0;
+            let idx = [i as i32];
+            assert_eq!(
+                oa::safe_array_get_element(sa, idx.as_ptr(), (&mut b as *mut usize).cast()),
+                0
+            );
+            let len = oa::sys_string_len(b as *const u16) as usize;
+            let got = String::from_utf16_lossy(std::slice::from_raw_parts(b as *const u16, len));
+            assert_eq!(&got, want);
+            oa::sys_free_string(b as *mut u16);
+        }
+        assert_eq!(oa::safe_array_destroy(sa), 0);
+    }
+}

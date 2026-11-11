@@ -893,9 +893,15 @@ unsafe fn build_trustee(trustee: *mut u8, form: u32, value: usize) {
     if trustee.is_null() {
         return;
     }
-    std::ptr::write_bytes(trustee, 0, 32);
-    (trustee.add(12) as *mut u32).write_unaligned(form);
-    (trustee.add(24) as *mut usize).write_unaligned(value);
+    // 20 octets en x86, 32 en x64 (#1915).
+    let (_, lay) = crate::dlls::security::trustee_layout(crate::wow32::pointer_size());
+    std::ptr::write_bytes(trustee, 0, lay.size);
+    (trustee.add(lay.form) as *mut u32).write_unaligned(form);
+    if lay.size == 20 {
+        (trustee.add(lay.name) as *mut u32).write_unaligned(value as u32);
+    } else {
+        (trustee.add(lay.name) as *mut usize).write_unaligned(value);
+    }
 }
 
 unsafe extern "win64" fn BuildTrusteeWithSid(trustee: *mut u8, sid: usize) {
