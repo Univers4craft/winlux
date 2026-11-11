@@ -1289,13 +1289,6 @@ pub extern "win64" fn FreeResource(_h: usize) -> i32 {
     0
 }
 
-/// Énumération des ressources : aucune ressource de ce type
-/// (ERROR_RESOURCE_TYPE_NOT_FOUND), les appelants passent au repli.
-pub extern "win64" fn EnumResourceNamesW(_m: usize, _t: usize, _f: usize, _p: isize) -> i32 {
-    crate::process::set_last_error(1813);
-    0
-}
-
 /// `RtlFillMemory(destination, longueur, octet)`.
 pub unsafe extern "win64" fn RtlFillMemory(dest: *mut u8, len: usize, fill: u8) {
     if !dest.is_null() {
@@ -1405,8 +1398,6 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "GetNamedPipeHandleStateW" => fn GetNamedPipeHandleStateA,
         "GetConsoleTitleW" => fn GetConsoleTitleW,
         "FreeResource" => fn FreeResource,
-        "EnumResourceNamesW" => fn EnumResourceNamesW,
-        "EnumResourceLanguagesW" => fn EnumResourceNamesW,
         "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
     }
 }
