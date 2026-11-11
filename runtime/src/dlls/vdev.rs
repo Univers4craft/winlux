@@ -84,10 +84,30 @@ pub fn device_name(path: &str) -> Option<&str> {
 }
 
 fn lookup(name: &str) -> Option<(String, Arc<dyn VirtualDevice>)> {
-    crate::dlls::lock(devices())
+    let found = crate::dlls::lock(devices())
         .iter()
         .find(|e| e.name.eq_ignore_ascii_case(name))
-        .map(|e| (e.name.clone(), e.device.clone()))
+        .map(|e| (e.name.clone(), e.device.clone()));
+    found.or_else(|| driver_device(name))
+}
+
+/// Appareil d'un pilote constructeur remplacé (#1532) : présent tant que son
+/// service est inscrit et démarré, vérifié à chaque ouverture ; un seul
+/// module par nom dans le processus, pour que son état soit partagé.
+fn driver_device(name: &str) -> Option<(String, Arc<dyn VirtualDevice>)> {
+    static CACHE: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    let (device, make) = crate::dlls::drivers::running_device(name)?;
+    let mut cache = crate::dlls::lock(&CACHE);
+    if let Some(e) = cache.iter().find(|e| e.name.eq_ignore_ascii_case(device)) {
+        return Some((e.name.clone(), e.device.clone()));
+    }
+    let entry = Entry {
+        name: device.to_string(),
+        device: make(),
+    };
+    let out = (entry.name.clone(), entry.device.clone());
+    cache.push(entry);
+    Some(out)
 }
 
 /// Vrai si `path` désigne un appareil virtuel inscrit.
@@ -257,6 +277,12 @@ pub unsafe fn device_io_control(
 /// CTL_CODE(0x8000, fonction, METHOD_BUFFERED, FILE_ANY_ACCESS).
 pub const fn essai_code(function: u32) -> u32 {
     (0x8000 << 16) | (function << 2)
+}
+
+/// Module de l'appareil d'essai (aussi servi par le pilote d'essai de
+/// drivers.rs).
+pub fn essai() -> Arc<dyn VirtualDevice> {
+    Arc::new(Essai::default())
 }
 
 /// Appareil d'essai : version, écho inversé, compteur d'appels, réponse

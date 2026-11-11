@@ -262,6 +262,16 @@ fn reported_state(name: &str) -> Option<u32> {
 }
 
 fn refresh(record: &mut ServiceRecord) {
+    // Pilote Windows (#1532) : jamais de processus, état tenu par Winlux.
+    if is_driver(record.service_type) {
+        record.state = if driver_started(record) {
+            SERVICE_RUNNING
+        } else {
+            SERVICE_STOPPED
+        };
+        record.process_id = 0;
+        return;
+    }
     if let Some(c) = record.child.as_mut() {
         if let Ok(Some(status)) = c.try_wait() {
             record.state = SERVICE_STOPPED;
@@ -471,6 +481,112 @@ pub unsafe extern "win64" fn create_service_w(
     )
 }
 
+// ---- Pilotes Windows virtualisés (#1532) -----------------------------------
+
+/// SERVICE_KERNEL_DRIVER (1), SERVICE_FILE_SYSTEM_DRIVER (2) et
+/// SERVICE_RECOGNIZER_DRIVER (8) : jamais exécutés par Winlux.
+fn is_driver(service_type: u32) -> bool {
+    service_type & 0x0B != 0 && service_type & 0x30 == 0
+}
+
+fn driver_state_path(name: &str) -> std::path::PathBuf {
+    control_sock_path(name).with_extension("driver")
+}
+
+/// Pilote « démarré » : il a une traduction, et il a été démarré pendant
+/// cette session ou il démarre avec le système (Start 0 à 2).
+fn driver_started(r: &ServiceRecord) -> bool {
+    crate::dlls::drivers::translation(&r.command).is_some()
+        && (r.start_type <= 2 || driver_state_path(&r.name).exists())
+}
+
+/// StartService d'un pilote : l'appareil virtuel prend sa place, ou le
+/// service reste arrêté (ERROR_DRIVER_BLOCKED). Le .sys n'est jamais lu.
+fn start_driver(r: &mut ServiceRecord) -> Result<(), u32> {
+    if r.start_type == 4 {
+        return Err(ERROR_SERVICE_DISABLED as u32);
+    }
+    if r.state == SERVICE_RUNNING {
+        return Err(ERROR_SERVICE_ALREADY_RUNNING as u32);
+    }
+    match crate::dlls::drivers::translation(&r.command) {
+        Some(t) => {
+            std::fs::write(driver_state_path(&r.name), "4").map_err(|_| 5u32)?;
+            r.state = SERVICE_RUNNING;
+            r.win32_exit_code = 0;
+            crate::dlls::drivers::tell(&r.command, Some(t.product));
+            Ok(())
+        }
+        None => {
+            r.state = SERVICE_STOPPED;
+            r.win32_exit_code = crate::dlls::drivers::ERROR_DRIVER_BLOCKED;
+            crate::dlls::drivers::tell(&r.command, None);
+            Err(crate::dlls::drivers::ERROR_DRIVER_BLOCKED)
+        }
+    }
+}
+
+/// Vrai si un service pilote inscrit pour le fichier `binary` est démarré
+/// (dans ce processus ou un autre : l'état est dans le registre et /run).
+pub(crate) fn driver_running(binary: &str) -> bool {
+    let is_ours = |r: &ServiceRecord| {
+        is_driver(r.service_type)
+            && r.command
+                .trim()
+                .trim_matches('"')
+                .rsplit(['\\', '/'])
+                .next()
+                .is_some_and(|f| f.eq_ignore_ascii_case(binary))
+    };
+    let mut names = registered_services();
+    names.extend(lock(services()).keys().cloned());
+    names.into_iter().any(|n| {
+        let local = lock(services())
+            .get(&n.to_lowercase())
+            .map(|r| is_ours(r) && driver_started(r));
+        local.unwrap_or_else(|| {
+            load_persisted(&n).is_some_and(|r| is_ours(&r) && driver_started(&r))
+        })
+    })
+}
+
+/// Démarre le pilote inscrit `name` (installation d'un appareil présent).
+pub(crate) fn start_driver_named(name: &str) -> Result<(), u32> {
+    let key = name.to_lowercase();
+    let mut all = lock(services());
+    if !all.contains_key(&key) {
+        let r = load_persisted(&key).ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+        all.insert(key.clone(), r);
+    }
+    let r = all
+        .get_mut(&key)
+        .ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+    refresh(r);
+    if r.state == SERVICE_RUNNING {
+        return Ok(());
+    }
+    start_driver(r)
+}
+
+/// Service d'un .inf (AddService) : inscrit, ou mis à jour s'il existe.
+pub(crate) fn install_driver_service(s: &crate::dlls::drivers::DriverService) -> Result<(), u32> {
+    let key = s.name.to_lowercase();
+    let record = ServiceRecord {
+        name: key.clone(),
+        display: s.display.clone(),
+        command: s.binary.clone(),
+        service_type: s.service_type,
+        start_type: s.start_type,
+        state: SERVICE_STOPPED,
+        win32_exit_code: 0,
+        process_id: 0,
+        child: None,
+    };
+    persist(&record).map_err(|e| e as u32)?;
+    lock(services()).insert(key, record);
+    Ok(())
+}
+
 fn open_service(manager: usize, name: Option<String>) -> usize {
     if !matches!(handle(manager), Some(ScmHandle::Manager)) {
         crate::process::set_last_error(6);
@@ -515,6 +631,12 @@ fn start_service(service: usize, extra: Vec<String>) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if is_driver(r.service_type) {
+        return match start_driver(r) {
+            Ok(()) => 1,
+            Err(e) => fail(e),
+        };
+    }
     match spawn_service(r, &extra) {
         Ok(()) => 1,
         Err(e) => fail(e),
@@ -576,6 +698,14 @@ pub unsafe extern "win64" fn control_service(service: usize, control: u32, statu
         SERVICE_CONTROL_STOP => {
             if r.state != SERVICE_RUNNING {
                 return fail(ERROR_SERVICE_NOT_ACTIVE as u32);
+            }
+            if is_driver(r.service_type) {
+                let _ = std::fs::remove_file(driver_state_path(&name));
+                r.state = SERVICE_STOPPED;
+                if !status.is_null() {
+                    write_status_basic(r, status);
+                }
+                return 1;
             }
             // Try the control channel first (graceful stop).
             if send_control_to_service(&name, SERVICE_CONTROL_STOP).is_ok() {

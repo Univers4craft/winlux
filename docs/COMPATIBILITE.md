@@ -119,6 +119,19 @@ méthode, accès) et les tailles ; le contenu des tampons n'est écrit qu'avec
 d'interopérabilité de `AGENTS.md`. Test : `scripts/test-vdev.sh` (appareil
 d'essai `WinluxEssai`, présent seulement avec `WINLUX_VDEV_ESSAI=1`).
 
+Depuis #1532, un installeur qui pose un pilote réussit sans qu'aucun `.sys`
+ne soit chargé (`runtime/src/dlls/drivers.rs`) : `SetupCopyOEMInf` copie le
+`.inf` dans `C:\Windows\INF\oemN.inf` (même contenu, même nom),
+`DiInstallDriver` et `UpdateDriverForPlugAndPlayDevices` (newdev.dll, appareil
+présent exigé sinon `ERROR_NO_SUCH_DEVINST`) inscrivent les services
+`AddService` du `.inf`. Un service `SERVICE_KERNEL_DRIVER` n'est jamais lancé
+comme un programme : s'il existe une traduction pour son `.sys` (table par
+marque, #1534), « démarrer » le service fait apparaître l'appareil virtuel qui
+le remplace et la personne lit « Le pilote Windows de X a été remplacé par
+Winlux » ; sinon le service reste arrêté avec `ERROR_DRIVER_BLOCKED` (1275) et
+une notification le dit, en français, anglais, allemand ou espagnol. Test :
+`scripts/test-drivers.sh`.
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
