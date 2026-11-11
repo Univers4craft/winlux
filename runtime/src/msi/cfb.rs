@@ -20,16 +20,41 @@ pub struct Compound {
     pub streams: HashMap<String, Vec<u8>>,
 }
 
+/// Origine des octets du fichier composé : tout en mémoire, ou lu à la
+/// demande dans le fichier (gros paquets, processus x86 dont la mémoire
+/// basse ne tient pas un .msi de 800 Mo, #1642).
+enum Source<'a> {
+    Bytes(&'a [u8]),
+    File(&'a std::fs::File, u64),
+}
+
+impl Source<'_> {
+    fn get(&self, start: usize, len: usize) -> Option<std::borrow::Cow<'_, [u8]>> {
+        match self {
+            Source::Bytes(d) => d.get(start..start.checked_add(len)?).map(Into::into),
+            Source::File(f, size) => {
+                use std::os::unix::fs::FileExt;
+                if start.checked_add(len)? as u64 > *size {
+                    return None;
+                }
+                let mut buf = vec![0u8; len];
+                f.read_exact_at(&mut buf, start as u64).ok()?;
+                Some(buf.into())
+            }
+        }
+    }
+}
+
 struct Reader<'a> {
-    data: &'a [u8],
+    data: Source<'a>,
     sector: usize,
     fat: Vec<u32>,
 }
 
 impl Reader<'_> {
-    fn sector(&self, n: u32) -> Option<&[u8]> {
+    fn sector(&self, n: u32) -> Option<std::borrow::Cow<'_, [u8]>> {
         let start = (n as usize + 1).checked_mul(self.sector)?;
-        self.data.get(start..start + self.sector)
+        self.data.get(start, self.sector)
     }
 
     fn chain(&self, table: &[u32], first: u32) -> Option<Vec<u32>> {
@@ -51,7 +76,7 @@ impl Reader<'_> {
     fn read(&self, first: u32, size: usize) -> Option<Vec<u8>> {
         let mut out = Vec::with_capacity(size.min(1 << 28));
         for n in self.chain(&self.fat, first)? {
-            out.extend_from_slice(self.sector(n)?);
+            out.extend_from_slice(&self.sector(n)?);
             if out.len() >= size {
                 break;
             }
@@ -93,9 +118,28 @@ pub fn decode_name(raw: &[u16]) -> String {
 
 impl Compound {
     pub fn parse(data: &[u8]) -> Result<Compound, String> {
-        if data.len() < 512 || data[..8] != [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] {
+        Self::read_from(Source::Bytes(data), &|_, _| true)
+    }
+
+    /// Lit le fichier à la demande, sans le charger en entier ; `keep`
+    /// (nom, taille) dit quels flux charger (#1642).
+    pub fn open(
+        path: &std::path::Path,
+        keep: &dyn Fn(&str, usize) -> bool,
+    ) -> Result<Compound, String> {
+        let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let size = f.metadata().map_err(|e| e.to_string())?.len();
+        Self::read_from(Source::File(&f, size), keep)
+    }
+
+    fn read_from(src: Source, keep: &dyn Fn(&str, usize) -> bool) -> Result<Compound, String> {
+        let head = src.get(0, 512).map(|h| h.into_owned());
+        let Some(data) = head
+            .as_deref()
+            .filter(|d| d[..8] == [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
+        else {
             return Err("ce fichier n'est pas un paquet Windows Installer".into());
-        }
+        };
         let bad = || "paquet Windows Installer endommagé".to_string();
         let shift = u16_at(data, 0x1E).ok_or_else(bad)?;
         let mini_shift = u16_at(data, 0x20).ok_or_else(bad)?;
@@ -113,7 +157,7 @@ impl Compound {
             .filter(|&s| s != FREE)
             .collect();
         let mut reader = Reader {
-            data,
+            data: src,
             sector,
             fat: Vec::new(),
         };
@@ -122,12 +166,12 @@ impl Compound {
         while difat_next != END && difat_next != FREE && guard < 1 << 16 {
             let s = reader.sector(difat_next).ok_or_else(bad)?;
             for i in 0..per - 1 {
-                let v = u32_at(s, i * 4).ok_or_else(bad)?;
+                let v = u32_at(&s, i * 4).ok_or_else(bad)?;
                 if v != FREE {
                     fat_sectors.push(v);
                 }
             }
-            difat_next = u32_at(s, (per - 1) * 4).ok_or_else(bad)?;
+            difat_next = u32_at(&s, (per - 1) * 4).ok_or_else(bad)?;
             guard += 1;
         }
         fat_sectors.truncate(n_fat.max(1));
@@ -146,7 +190,7 @@ impl Compound {
         let dir_sectors = reader.chain(&reader.fat, first_dir).ok_or_else(bad)?;
         let mut dir = Vec::new();
         for s in dir_sectors {
-            dir.extend_from_slice(reader.sector(s).ok_or_else(bad)?);
+            dir.extend_from_slice(&reader.sector(s).ok_or_else(bad)?);
         }
         struct Entry {
             name: String,
@@ -223,7 +267,7 @@ impl Compound {
             }
             stack.push(e.left);
             stack.push(e.right);
-            if e.kind != 2 {
+            if e.kind != 2 || !keep(&e.name, e.size) {
                 continue;
             }
             let bytes = if e.size == 0 {

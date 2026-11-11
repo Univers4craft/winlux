@@ -475,6 +475,23 @@ fn script_action(
     )
 }
 
+/// Message écrit juste avant un abandon (SIGABRT) par Rust ou la glibc :
+/// mémoire refusée, erreur fatale du runtime, tas abîmé (#1642).
+fn is_abort_message(l: &str) -> bool {
+    l.starts_with("memory allocation of ")
+        || l.starts_with("fatal runtime error")
+        || l.contains("panicked at")
+        || [
+            "malloc(): ",
+            "free(): ",
+            "realloc(): ",
+            "double free",
+            "corrupted ",
+        ]
+        .iter()
+        .any(|m| l.contains(m))
+}
+
 /// Lance une action DLL ou script dans un processus à part qui partage le
 /// fichier de session ; relit le code et (action immédiate) les
 /// propriétés. Renvoie les lignes à journaliser.
@@ -530,6 +547,7 @@ fn child_action(
             l.starts_with("winlux: ")
                 && !l.contains("WINLUX_MISSING=")
                 && !l.starts_with("winlux: processus arrêté par le ")
+                || is_abort_message(l)
         })
         .take(8)
         .map(|l| format!("  {l}"))
@@ -752,6 +770,18 @@ mod tests {
 
     /// `ServiceControl` avec l'événement 1 (démarrer à l'installation) :
     /// le service est rendu pour être démarré en fin d'installation (#1626).
+    #[test]
+    fn message_d_abandon_garde_au_journal() {
+        assert!(is_abort_message(
+            "memory allocation of 834207744 bytes failed"
+        ));
+        assert!(is_abort_message("malloc(): corrupted top size"));
+        assert!(is_abort_message(
+            "fatal runtime error: Rust cannot catch foreign exceptions"
+        ));
+        assert!(!is_abort_message("DLL chargée"));
+    }
+
     #[test]
     fn services_a_demarrer_apres_installation() {
         let s = |v: &str| Value::Str(v.into());
