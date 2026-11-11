@@ -2135,7 +2135,9 @@ unsafe extern "win64" fn target_solid_brush(
 /// peut lire un bitmap ou calculer un effet.
 unsafe fn fill_path(this: *mut TargetObj, path: &Path, rule: FillRule, brush: *mut c_void) {
     let world = target(this).transform();
-    let Some(paint) = brushes::paint(brush, &world) else {
+    let paint = brushes::paint(brush, &world);
+    trace_fill(this, "Remplissage", path, brush, paint.is_some());
+    let Some(paint) = paint else {
         return;
     };
     let polys = path.fill_polys(&world);
@@ -2144,11 +2146,40 @@ unsafe fn fill_path(this: *mut TargetObj, path: &Path, rule: FillRule, brush: *m
 
 unsafe fn stroke_path(this: *mut TargetObj, path: &Path, brush: *mut c_void, width: f32) {
     let world = target(this).transform();
-    let Some(paint) = brushes::paint(brush, &world) else {
+    let paint = brushes::paint(brush, &world);
+    trace_fill(this, "Trait", path, brush, paint.is_some());
+    let Some(paint) = paint else {
         return;
     };
     let polys = path.stroke_polys(&world, width);
     target(this).fill(&polys, FillRule::NonZero, &*paint);
+}
+
+/// WINLUX_D2D_TRACE (#1669) : forme, boîte et pinceau d'un remplissage,
+/// et si le pinceau a pu être préparé (sinon rien n'est dessiné).
+unsafe fn trace_fill(this: *mut TargetObj, what: &str, path: &Path, brush: *mut c_void, ok: bool) {
+    if !v11::trace_on() {
+        return;
+    }
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for (pts, _) in &path.figures {
+        for p in pts {
+            b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+        }
+    }
+    d2d_trace!(
+        "{} {:p} {} figures boîte {:?} pinceau {}{}",
+        what,
+        this,
+        path.figures.len(),
+        b,
+        brushes::describe(brush),
+        if ok {
+            ""
+        } else {
+            " → rien (pinceau non préparé)"
+        }
+    );
 }
 
 // --- Texte (DirectWrite maison) ----------------------------------------------------
