@@ -1460,6 +1460,11 @@ set default=1
 set winlux_efi_args=
 if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
     set winlux_efi_args=efi=noruntime
+    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
+    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
+    insmod efi_gop
+    insmod efi_uga
+    set gfxpayload=keep
 fi
 # 5 s : le temps de lire le menu et d'appuyer sur une flèche sur un vrai PC.
 set timeout=5
