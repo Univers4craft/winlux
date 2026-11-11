@@ -685,6 +685,76 @@ pub unsafe extern "win64" fn query_service_status(service: usize, status: *mut u
     write_status_basic(r, status);
     1
 }
+
+/// QueryServiceConfigW (#1585) : QUERY_SERVICE_CONFIGW suivi de ses
+/// chaînes (chemin, groupe vide, dépendances vides, compte LocalSystem,
+/// nom affiché), dans la disposition x64 ou x86 du programme.
+pub unsafe extern "win64" fn query_service_config_w(
+    service: usize,
+    out: *mut u8,
+    size: u32,
+    needed: *mut u32,
+) -> i32 {
+    if needed.is_null() {
+        return fail(ERROR_INVALID_PARAMETER as u32);
+    }
+    let Some(ScmHandle::Service(name)) = handle(service) else {
+        return fail(ERROR_INVALID_HANDLE as u32);
+    };
+    let (kind, start, path, display) = {
+        let all = lock(services());
+        let Some(r) = all.get(&name) else {
+            return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
+        };
+        (
+            r.service_type,
+            r.start_type,
+            r.command.clone(),
+            r.display.clone(),
+        )
+    };
+    let ptr = crate::wow32::pointer_size();
+    // 3 DWORD, puis pointeurs et dwTagId, alignés sur la taille de pointeur.
+    let header = if ptr == 4 { 36 } else { 64 };
+    let w = |s: &str| -> Vec<u16> { s.encode_utf16().chain([0]).collect() };
+    let strings = [
+        w(&path),
+        w(""),
+        vec![0u16, 0],
+        w("LocalSystem"),
+        w(&display),
+    ];
+    let total = header + strings.iter().map(|s| s.len() * 2).sum::<usize>();
+    *needed = total as u32;
+    if out.is_null() || (size as usize) < total {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::write_bytes(out, 0, header);
+    std::ptr::write_unaligned(out as *mut u32, kind);
+    std::ptr::write_unaligned(out.add(4) as *mut u32, start);
+    // SERVICE_ERROR_NORMAL.
+    std::ptr::write_unaligned(out.add(8) as *mut u32, 1);
+    // Emplacements des pointeurs : binaire, groupe, (tag), dépendances,
+    // compte, nom affiché.
+    let slots: [usize; 5] = if ptr == 4 {
+        [12, 16, 24, 28, 32]
+    } else {
+        [16, 24, 40, 48, 56]
+    };
+    let mut at = header;
+    for (slot, text) in slots.iter().zip(strings.iter()) {
+        let p = out.add(at);
+        std::ptr::copy_nonoverlapping(text.as_ptr() as *const u8, p, text.len() * 2);
+        if ptr == 4 {
+            std::ptr::write_unaligned(out.add(*slot) as *mut u32, p as usize as u32);
+        } else {
+            std::ptr::write_unaligned(out.add(*slot) as *mut usize, p as usize);
+        }
+        at += text.len() * 2;
+    }
+    1
+}
+
 pub unsafe extern "win64" fn control_service(service: usize, control: u32, status: *mut u8) -> i32 {
     let Some(ScmHandle::Service(name)) = handle(service) else {
         return fail(ERROR_INVALID_HANDLE as u32);
@@ -1334,43 +1404,7 @@ unsafe fn pack(
     1
 }
 
-/// QueryServiceConfigW : QUERY_SERVICE_CONFIGW (64 octets) et ses chaînes.
-pub unsafe extern "win64" fn query_service_config_w(
-    service: usize,
-    buf: *mut u8,
-    size: u32,
-    needed: *mut u32,
-) -> i32 {
-    let info = service_record(service, |r| {
-        (
-            r.service_type,
-            r.start_type,
-            r.command.clone(),
-            r.display.clone(),
-        )
-    });
-    let (kind, start, command, display) = match info {
-        Ok(i) => i,
-        Err(e) => return fail(e),
-    };
-    let mut head = vec![0u8; 64];
-    head[..4].copy_from_slice(&kind.to_le_bytes());
-    head[4..8].copy_from_slice(&start.to_le_bytes());
-    head[8..12].copy_from_slice(&1u32.to_le_bytes()); // SERVICE_ERROR_NORMAL
-    pack(
-        buf,
-        size,
-        needed,
-        &head,
-        &[
-            (16, Some(command)),
-            (24, Some(String::new())),
-            (40, Some(String::new())), // lpDependencies : liste vide (double zéro)
-            (48, Some("LocalSystem".into())),
-            (56, Some(display)),
-        ],
-    )
-}
+// QueryServiceConfigW : plus haut, dispositions x64 et x86 (#1585).
 
 /// QueryServiceConfig2W : description (vide), actions en cas d'échec
 /// (aucune), démarrage automatique différé (non).
@@ -1736,7 +1770,6 @@ pub unsafe extern "win64" fn set_service_object_security(
 
 pub fn releve_exports() -> crate::dlls::Exports {
     crate::exports! {
-        "QueryServiceConfigW" => fn query_service_config_w,
         "QueryServiceConfig2W" => fn query_service_config2_w,
         "ChangeServiceConfigW" => fn change_service_config_w,
         "ChangeServiceConfig2W" => fn change_service_config2_w,
@@ -1754,7 +1787,7 @@ pub fn releve_exports() -> crate::dlls::Exports {
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service,"StartServiceCtrlDispatcherA"=>fn start_service_ctrl_dispatcher_a,"RegisterServiceCtrlHandlerA"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExA"=>fn register_service_ctrl_handler_ex_a,"SetServiceStatus"=>fn set_service_status,"OpenSCManagerW"=>fn open_sc_manager_w,"CreateServiceW"=>fn create_service_w,"OpenServiceW"=>fn open_service_w,"StartServiceW"=>fn start_service_w,"QueryServiceStatus"=>fn query_service_status,"StartServiceCtrlDispatcherW"=>fn start_service_ctrl_dispatcher_w,"RegisterServiceCtrlHandlerW"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExW"=>fn register_service_ctrl_handler_ex_a}
+    crate::exports! {"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service,"StartServiceCtrlDispatcherA"=>fn start_service_ctrl_dispatcher_a,"RegisterServiceCtrlHandlerA"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExA"=>fn register_service_ctrl_handler_ex_a,"SetServiceStatus"=>fn set_service_status,"OpenSCManagerW"=>fn open_sc_manager_w,"CreateServiceW"=>fn create_service_w,"OpenServiceW"=>fn open_service_w,"StartServiceW"=>fn start_service_w,"QueryServiceStatus"=>fn query_service_status,"QueryServiceConfigW"=>fn query_service_config_w,"StartServiceCtrlDispatcherW"=>fn start_service_ctrl_dispatcher_w,"RegisterServiceCtrlHandlerW"=>fn register_service_ctrl_handler_a,"RegisterServiceCtrlHandlerExW"=>fn register_service_ctrl_handler_ex_a}
 }
 
 #[cfg(test)]
@@ -2008,6 +2041,25 @@ mod tests {
                 u32::from_le_bytes(status[4..8].try_into().unwrap()),
                 SERVICE_RUNNING
             );
+            // QueryServiceConfigW (#1585) : taille demandée, puis contenu.
+            let mut needed = 0u32;
+            assert_eq!(
+                unsafe { query_service_config_w(opened, std::ptr::null_mut(), 0, &mut needed) },
+                0
+            );
+            let mut cfg = vec![0u64; (needed as usize).div_ceil(8)];
+            assert_eq!(
+                unsafe {
+                    query_service_config_w(opened, cfg.as_mut_ptr().cast(), needed, &mut needed)
+                },
+                1
+            );
+            assert_eq!(cfg[0] as u32, 0x10);
+            assert_eq!((cfg[0] >> 32) as u32, 2);
+            let text = |slot: usize| unsafe { crate::dlls::wstr(cfg[slot] as *const u16) };
+            assert_eq!(text(2), "/bin/sleep 30");
+            assert_eq!(text(6), "LocalSystem");
+            assert_eq!(text(7), "Service d'essai été");
             // Une seconde fois : déjà lancé, rien n'est relancé.
             assert!(!autostart()
                 .iter()

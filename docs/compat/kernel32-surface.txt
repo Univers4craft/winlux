@@ -5,7 +5,9 @@ AddAtomA
 AddAtomW
 AddConsoleAliasW
 AddDllDirectory
+AddIntegrityLabelToBoundaryDescriptor
 AddRefActCtx
+AddSIDToBoundaryDescriptor
 AddVectoredContinueHandler
 AddVectoredExceptionHandler
 AllocConsole
@@ -35,7 +37,9 @@ CheckRemoteDebuggerPresent
 ClearCommBreak
 ClearCommError
 CloseHandle
+ClosePrivateNamespace
 ClosePseudoConsole
+CloseThreadpool
 CloseThreadpoolTimer
 CloseThreadpoolWait
 CloseThreadpoolWork
@@ -57,6 +61,8 @@ CopyFileTransactedW
 CopyFileW
 CreateActCtxA
 CreateActCtxW
+CreateBoundaryDescriptorA
+CreateBoundaryDescriptorW
 CreateConsoleScreenBuffer
 CreateDirectoryA
 CreateDirectoryExW
@@ -87,6 +93,8 @@ CreateMutexW
 CreateNamedPipeA
 CreateNamedPipeW
 CreatePipe
+CreatePrivateNamespaceA
+CreatePrivateNamespaceW
 CreateProcessA
 CreateProcessW
 CreatePseudoConsole
@@ -99,6 +107,7 @@ CreateSymbolicLinkA
 CreateSymbolicLinkTransactedW
 CreateSymbolicLinkW
 CreateThread
+CreateThreadpool
 CreateThreadpoolTimer
 CreateThreadpoolWait
 CreateThreadpoolWork
@@ -115,6 +124,7 @@ DebugBreak
 DecodePointer
 DefineDosDeviceW
 DeleteAtom
+DeleteBoundaryDescriptor
 DeleteCriticalSection
 DeleteFiber
 DeleteFileA
@@ -203,6 +213,7 @@ FlushFileBuffers
 FlushInstructionCache
 FlushProcessWriteBuffers
 FlushViewOfFile
+FoldStringW
 FormatMessageA
 FormatMessageW
 FreeConsole
@@ -615,6 +626,8 @@ OpenJobObjectA
 OpenJobObjectW
 OpenMutexA
 OpenMutexW
+OpenPrivateNamespaceA
+OpenPrivateNamespaceW
 OpenProcess
 OpenSemaphoreA
 OpenSemaphoreW
@@ -819,6 +832,8 @@ SetThreadPriority
 SetThreadPriorityBoost
 SetThreadStackGuarantee
 SetThreadUILanguage
+SetThreadpoolThreadMaximum
+SetThreadpoolThreadMinimum
 SetThreadpoolTimer
 SetThreadpoolWait
 SetTimeZoneInformation
