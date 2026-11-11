@@ -521,6 +521,17 @@ fn child_action(
     if deferred {
         props.insert("CustomActionData".into(), ctx.get(name));
     }
+    // Composants retenus : MsiGetComponentState répond d'après eux (#1699).
+    // Avant leur calcul (actions de propriétés), la liste est vide : rien
+    // n'est transmis et tout composant reste réputé installé.
+    if !ctx.components.is_empty() {
+        let mut selected: Vec<&String> = ctx.components.keys().collect();
+        selected.sort();
+        props.insert(
+            super::session::COMPONENTS_KEY.into(),
+            selected.into_iter().map(|c| format!("{c}\n")).collect(),
+        );
+    }
     let _ = std::fs::create_dir_all(temp);
     let session = temp.join(format!("{name}.session"));
     std::fs::write(&session, super::session::encode(&props)).ok()?;
@@ -576,6 +587,7 @@ fn child_action(
     let code = back
         .remove(super::session::CODE_KEY)
         .and_then(|c| c.parse::<i32>().ok());
+    back.remove(super::session::COMPONENTS_KEY);
     if let Some(list) = back.remove(super::session::DO_KEY) {
         scheduled.extend(list.split('\n').filter(|s| !s.is_empty()).map(String::from));
     }

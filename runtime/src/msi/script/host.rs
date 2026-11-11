@@ -147,7 +147,12 @@ impl Host for SessionObj {
             | "componentrequeststate" => {
                 let (mut installed, mut action) = (0i32, 0i32);
                 let n = wz(&s(0));
-                session::msi_get_state(
+                let state = if lower(name).starts_with("component") {
+                    session::msi_get_component_state_w
+                } else {
+                    session::msi_get_state
+                };
+                state(
                     SESSION,
                     n.as_ptr() as usize,
                     &mut installed as *mut i32 as usize,
