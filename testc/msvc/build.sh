@@ -53,15 +53,16 @@ lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/vdev_msvc.o
     "$tmp/kernel32_vdev.lib" /out:"$out/vdev_msvc.exe"
 # Installation virtualisée d'un pilote constructeur (#1532).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nCloseHandle\nGetLastError\nDeviceIoControl\n' >"$tmp/kernel32_drv.def"
-printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupCopyOEMInfW\nSetupUninstallOEMInfW\n' >"$tmp/setupapi_drv.def"
+printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupCopyOEMInfW\nSetupUninstallOEMInfW\nSetupDiCreateDeviceInfoList\nSetupDiCreateDeviceInfoW\nSetupDiSetDeviceRegistryPropertyW\nSetupDiCallClassInstaller\nSetupDiDestroyDeviceInfoList\nCMP_WaitNoPendingInstallEvents\n' >"$tmp/setupapi_drv.def"
+printf 'LIBRARY cfgmgr32.dll\nEXPORTS\nCM_Locate_DevNodeW\nCM_Request_Device_EjectW\n' >"$tmp/cfgmgr32_drv.def"
 printf 'LIBRARY newdev.dll\nEXPORTS\nDiInstallDriverW\nUpdateDriverForPlugAndPlayDevicesW\n' >"$tmp/newdev_drv.def"
 printf 'LIBRARY advapi32.dll\nEXPORTS\nOpenSCManagerW\nOpenServiceW\nCreateServiceW\nStartServiceW\nControlService\nQueryServiceStatus\nDeleteService\nCloseServiceHandle\n' >"$tmp/advapi32_drv.def"
-for d in kernel32_drv setupapi_drv newdev_drv advapi32_drv; do
+for d in kernel32_drv setupapi_drv cfgmgr32_drv newdev_drv advapi32_drv; do
     llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
 done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fno-builtin -c "$src/driver_msvc.c" -o "$tmp/driver_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/driver_msvc.obj" \
-    "$tmp/kernel32_drv.lib" "$tmp/setupapi_drv.lib" "$tmp/newdev_drv.lib" "$tmp/advapi32_drv.lib" \
+    "$tmp/kernel32_drv.lib" "$tmp/setupapi_drv.lib" "$tmp/cfgmgr32_drv.lib" "$tmp/newdev_drv.lib" "$tmp/advapi32_drv.lib" \
     /out:"$out/driver_msvc.exe"
 # DeviceIoControl sur volumes, disques et fichiers creux (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nDeviceIoControl\nWriteFile\nReadFile\nSetFilePointer\nCloseHandle\nGetLastError\n' >"$tmp/kernel32_devio.def"
