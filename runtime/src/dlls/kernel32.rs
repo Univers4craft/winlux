@@ -1325,6 +1325,27 @@ pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error
     }
 }
 
+/// Paquet au port lié à `h`, sans toucher à `overlapped` : la valeur est
+/// celle que l'appelant a confiée (ApcContext d'un IOCTL AFD, #1766).
+pub(crate) fn post_completion(h: usize, overlapped: usize, bytes: u32, error: u32) -> bool {
+    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&h)
+        .cloned();
+    let Some((port, key)) = completion else {
+        return false;
+    };
+    post_iocp(
+        &port,
+        CompletionPacket {
+            bytes,
+            key,
+            overlapped,
+            error,
+        },
+    );
+    true
+}
+
 fn start_overlapped_io(
     h: usize,
     buffer: usize,
@@ -6736,6 +6757,8 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if lookup_sync(handle).is_none() && crate::dlls::ws2_32::is_wsa_event(handle) {
         return crate::dlls::ws2_32::wsa_close_event(handle);
     }
+    // \Device\Afd (mio, #1766) : ses sondages en cours sont annulés.
+    crate::dlls::afd::closed(handle);
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;

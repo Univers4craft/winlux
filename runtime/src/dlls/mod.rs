@@ -23,6 +23,7 @@ pub mod advapi32_crypto;
 pub mod advapi32_releve;
 pub mod advapi32_rsa;
 pub mod advapi32_services;
+pub mod afd;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;

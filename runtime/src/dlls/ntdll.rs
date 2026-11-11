@@ -1424,6 +1424,10 @@ pub unsafe extern "win64" fn nt_create_file(
     let Some(win_path) = oa_path(attrs) else {
         return STATUS_INVALID_PARAMETER;
     };
+    // Pilote AFD des sockets (mio/tokio, #1766).
+    if super::afd::is_afd_path(&win_path) {
+        return super::afd::open(handle, io);
+    }
     let linux_path = crate::paths::to_linux(&win_path);
     let want_read = access & 0x8000_0000 != 0 || access & 1 != 0 || access & 0x0008_0000 != 0;
     let want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
