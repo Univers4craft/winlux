@@ -34,18 +34,97 @@ const SPDIT_COMPATDRIVER: u32 = 2;
 const DI_ENUMSINGLEINF: u32 = 0x0001_0000;
 const DIOCR_INTERFACE: u32 = 2;
 
-/// sizeof(SP_DRVINFO_DATA_V2_W) et sizeof(SP_DRVINFO_DATA_V1_W).
-const DRVINFO_V2: u32 = 1568;
-const DRVINFO_V1: u32 = 1552;
-/// Décalage de HardwareID dans SP_DRVINFO_DETAIL_DATA_W, et sa taille.
-const DETAIL_HWID: usize = 1576;
-const DETAIL_SIZE: u32 = 1584;
-/// sizeof(SP_DEVINSTALL_PARAMS_W).
-const INSTALL_PARAMS: usize = 584;
-/// sizeof(SP_DRVINSTALL_PARAMS).
-const DRV_INSTALL_PARAMS: u32 = 32;
-/// sizeof(SP_DEVINFO_LIST_DETAIL_DATA_W).
-const LIST_DETAIL: u32 = 560;
+/// Disposition des structures de setupapi.h : alignement naturel en
+/// 64 bits, `pack(1)` en 32 bits (pshpack1.h), où les champs de taille
+/// pointeur font 4 octets (#1656). Tailles et décalages vérifiés avec clang
+/// (x86_64-pc-windows-msvc et i686-pc-windows-msvc).
+pub struct Layout {
+    /// INFCONTEXT : décalage de Section (Line suit).
+    ctx_section: usize,
+    /// SP_DRVINFO_DATA_V2_W, V1, Description, DriverDate, DriverVersion.
+    drvinfo_v2: u32,
+    drvinfo_v1: u32,
+    drv_desc: usize,
+    drv_date: usize,
+    drv_version: usize,
+    /// SP_DRVINFO_DETAIL_DATA_W : taille, Reserved, SectionName, InfFileName,
+    /// DrvDescription, HardwareID.
+    detail_size: u32,
+    detail_reserved: usize,
+    detail_section: usize,
+    detail_inf: usize,
+    detail_desc: usize,
+    detail_hwid: usize,
+    /// SP_DEVINSTALL_PARAMS_W : taille et DriverPath.
+    install_params: usize,
+    install_path: usize,
+    /// sizeof(SP_DRVINSTALL_PARAMS) et sizeof(SP_DEVINFO_LIST_DETAIL_DATA_W).
+    drv_install_params: u32,
+    list_detail: u32,
+}
+
+pub const LAYOUT_64: Layout = Layout {
+    ctx_section: 16,
+    drvinfo_v2: 1568,
+    drvinfo_v1: 1552,
+    drv_desc: 16,
+    drv_date: 1552,
+    drv_version: 1560,
+    detail_size: 1584,
+    detail_reserved: 24,
+    detail_section: 32,
+    detail_inf: 544,
+    detail_desc: 1064,
+    detail_hwid: 1576,
+    install_params: 584,
+    install_path: 60,
+    drv_install_params: 32,
+    list_detail: 560,
+};
+
+pub const LAYOUT_32: Layout = Layout {
+    ctx_section: 8,
+    drvinfo_v2: 1564,
+    drvinfo_v1: 1548,
+    drv_desc: 12,
+    drv_date: 1548,
+    drv_version: 1556,
+    detail_size: 1570,
+    detail_reserved: 20,
+    detail_section: 24,
+    detail_inf: 536,
+    detail_desc: 1056,
+    detail_hwid: 1568,
+    install_params: 556,
+    install_path: 36,
+    drv_install_params: 20,
+    list_detail: 550,
+};
+
+/// Disposition du programme appelant (x86 sous wow32, ou x64).
+fn layout() -> &'static Layout {
+    if crate::wow32::pointer_size() == 4 {
+        &LAYOUT_32
+    } else {
+        &LAYOUT_64
+    }
+}
+
+/// Champ de taille pointeur (4 octets en x86, 8 en x64).
+unsafe fn write_ptr(p: *mut u8, v: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        (p as *mut u32).write_unaligned(v as u32);
+    } else {
+        (p as *mut usize).write_unaligned(v);
+    }
+}
+unsafe fn read_ptr(p: *const u8) -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        (p as *const u32).read_unaligned() as usize
+    } else {
+        (p as *const usize).read_unaligned()
+    }
+}
 
 fn ok() -> i32 {
     crate::process::set_last_error(0);
@@ -164,16 +243,17 @@ pub extern "win64" fn SetupCloseInfFile(h: usize) {
 
 /// INFCONTEXT : Inf, CurrentInf, Section, Line (24 octets).
 unsafe fn write_ctx(ctx: *mut u8, h: usize, section: usize, line: usize) {
-    (ctx as *mut usize).write_unaligned(h);
-    (ctx.add(8) as *mut usize).write_unaligned(h);
-    (ctx.add(16) as *mut u32).write_unaligned(section as u32);
-    (ctx.add(20) as *mut u32).write_unaligned(line as u32);
+    let at = layout().ctx_section;
+    write_ptr(ctx, h);
+    write_ptr(ctx.add(at / 2), h);
+    (ctx.add(at) as *mut u32).write_unaligned(section as u32);
+    (ctx.add(at + 4) as *mut u32).write_unaligned(line as u32);
 }
 unsafe fn read_ctx(ctx: *const u8) -> (usize, usize, usize) {
     (
-        (ctx as *const usize).read_unaligned(),
-        (ctx.add(16) as *const u32).read_unaligned() as usize,
-        (ctx.add(20) as *const u32).read_unaligned() as usize,
+        read_ptr(ctx),
+        (ctx.add(layout().ctx_section) as *const u32).read_unaligned() as usize,
+        (ctx.add(layout().ctx_section + 4) as *const u32).read_unaligned() as usize,
     )
 }
 
@@ -350,8 +430,8 @@ fn install_params(key: (usize, usize)) -> Vec<u8> {
         .find(|(k, _)| *k == key)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| {
-            let mut v = vec![0u8; INSTALL_PARAMS];
-            v[..4].copy_from_slice(&(INSTALL_PARAMS as u32).to_le_bytes());
+            let mut v = vec![0u8; layout().install_params];
+            v[..4].copy_from_slice(&(layout().install_params as u32).to_le_bytes());
             v
         })
 }
@@ -364,11 +444,11 @@ pub unsafe extern "win64" fn SetupDiGetDeviceInstallParamsW(
     if out.is_null() {
         return fail(ERROR_INVALID_PARAMETER);
     }
-    if (out as *const u32).read_unaligned() as usize != INSTALL_PARAMS {
+    if (out as *const u32).read_unaligned() as usize != layout().install_params {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
     let v = install_params(device_key(set, data));
-    std::ptr::copy_nonoverlapping(v.as_ptr(), out, INSTALL_PARAMS);
+    std::ptr::copy_nonoverlapping(v.as_ptr(), out, layout().install_params);
     ok()
 }
 pub unsafe extern "win64" fn SetupDiSetDeviceInstallParamsW(
@@ -379,10 +459,10 @@ pub unsafe extern "win64" fn SetupDiSetDeviceInstallParamsW(
     if params.is_null() {
         return fail(ERROR_INVALID_PARAMETER);
     }
-    if (params as *const u32).read_unaligned() as usize != INSTALL_PARAMS {
+    if (params as *const u32).read_unaligned() as usize != layout().install_params {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
-    let v = std::slice::from_raw_parts(params, INSTALL_PARAMS).to_vec();
+    let v = std::slice::from_raw_parts(params, layout().install_params).to_vec();
     let key = device_key(set, data);
     let mut all = crate::dlls::lock(&INSTALL);
     all.retain(|(k, _)| *k != key);
@@ -396,7 +476,7 @@ fn single_inf(key: (usize, usize)) -> Option<String> {
     if flags & DI_ENUMSINGLEINF == 0 {
         return None;
     }
-    let w: Vec<u16> = v[60..60 + 520]
+    let w: Vec<u16> = v[layout().install_path..layout().install_path + 520]
         .chunks(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .take_while(|&c| c != 0)
@@ -586,13 +666,14 @@ fn driver_list(key: (usize, usize), kind: u32) -> Option<Vec<DriverEntry>> {
 unsafe fn write_drvinfo(out: *mut u8, kind: u32, index: usize, d: &DriverEntry) {
     let size = (out as *const u32).read_unaligned();
     (out.add(4) as *mut u32).write_unaligned(kind);
-    (out.add(8) as *mut usize).write_unaligned(index + 1);
-    write_wide_fixed(out.add(16), 256, &d.description);
-    write_wide_fixed(out.add(16 + 512), 256, &d.manufacturer);
-    write_wide_fixed(out.add(16 + 1024), 256, &d.provider);
-    if size == DRVINFO_V2 {
-        (out.add(1552) as *mut u64).write_unaligned(d.date);
-        (out.add(1560) as *mut u64).write_unaligned(d.version);
+    let l = layout();
+    write_ptr(out.add(8), index + 1);
+    write_wide_fixed(out.add(l.drv_desc), 256, &d.description);
+    write_wide_fixed(out.add(l.drv_desc + 512), 256, &d.manufacturer);
+    write_wide_fixed(out.add(l.drv_desc + 1024), 256, &d.provider);
+    if size == l.drvinfo_v2 {
+        (out.add(l.drv_date) as *mut u64).write_unaligned(d.date);
+        (out.add(l.drv_version) as *mut u64).write_unaligned(d.version);
     }
 }
 
@@ -607,7 +688,7 @@ pub unsafe extern "win64" fn SetupDiEnumDriverInfoW(
         return fail(ERROR_INVALID_PARAMETER);
     }
     let size = (out as *const u32).read_unaligned();
-    if size != DRVINFO_V2 && size != DRVINFO_V1 {
+    if size != layout().drvinfo_v2 && size != layout().drvinfo_v1 {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
     let list = driver_list(device_key(set, data), kind).unwrap_or_default();
@@ -625,9 +706,7 @@ unsafe fn driver_of(set: usize, data: *const u8, drv: *const u8) -> Option<Drive
         return None;
     }
     let kind = (drv.add(4) as *const u32).read_unaligned();
-    let index = (drv.add(8) as *const usize)
-        .read_unaligned()
-        .checked_sub(1)?;
+    let index = read_ptr(drv.add(8)).checked_sub(1)?;
     driver_list(device_key(set, data), kind)?
         .get(index)
         .cloned()
@@ -656,14 +735,15 @@ pub unsafe extern "win64" fn SetupDiGetDriverInfoDetailW(
         ids.extend(c.encode_utf16().chain(std::iter::once(0)));
     }
     ids.push(0);
-    let need = (DETAIL_HWID + ids.len() * 2) as u32;
+    let l = layout();
+    let need = (l.detail_hwid + ids.len() * 2) as u32;
     if !required.is_null() {
         *required = need;
     }
     if out.is_null() {
         return fail(ERROR_INSUFFICIENT_BUFFER);
     }
-    if (out as *const u32).read_unaligned() != DETAIL_SIZE {
+    if (out as *const u32).read_unaligned() != l.detail_size {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
     if size < need {
@@ -677,13 +757,13 @@ pub unsafe extern "win64" fn SetupDiGetDriverInfoDetailW(
     };
     (out.add(12) as *mut u32).write_unaligned(if compat_len == 0 { 0 } else { compat_at as u32 });
     (out.add(16) as *mut u32).write_unaligned(compat_len as u32);
-    (out.add(24) as *mut usize).write_unaligned(0);
-    write_wide_fixed(out.add(32), 256, &d.section);
-    write_wide_fixed(out.add(544), 260, &d.inf);
-    write_wide_fixed(out.add(1064), 256, &d.description);
+    write_ptr(out.add(l.detail_reserved), 0);
+    write_wide_fixed(out.add(l.detail_section), 256, &d.section);
+    write_wide_fixed(out.add(l.detail_inf), 260, &d.inf);
+    write_wide_fixed(out.add(l.detail_desc), 256, &d.description);
     std::ptr::copy_nonoverlapping(
         ids.as_ptr() as *const u8,
-        out.add(DETAIL_HWID),
+        out.add(l.detail_hwid),
         ids.len() * 2,
     );
     ok()
@@ -699,10 +779,10 @@ pub unsafe extern "win64" fn SetupDiGetDriverInstallParamsW(
     if out.is_null() || driver_of(set, data, drv).is_none() {
         return fail(ERROR_INVALID_PARAMETER);
     }
-    if (out as *const u32).read_unaligned() != DRV_INSTALL_PARAMS {
+    if (out as *const u32).read_unaligned() != layout().drv_install_params {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
-    std::ptr::write_bytes(out.add(4), 0, DRV_INSTALL_PARAMS as usize - 4);
+    std::ptr::write_bytes(out.add(4), 0, layout().drv_install_params as usize - 4);
     ok()
 }
 
@@ -799,10 +879,10 @@ pub unsafe extern "win64" fn SetupDiGetDeviceInfoListDetailW(_set: usize, out: *
     if out.is_null() {
         return fail(ERROR_INVALID_PARAMETER);
     }
-    if (out as *const u32).read_unaligned() != LIST_DETAIL {
+    if (out as *const u32).read_unaligned() != layout().list_detail {
         return fail(ERROR_INVALID_USER_BUFFER);
     }
-    std::ptr::write_bytes(out.add(4), 0, LIST_DETAIL as usize - 4);
+    std::ptr::write_bytes(out.add(4), 0, layout().list_detail as usize - 4);
     ok()
 }
 
@@ -1073,6 +1153,32 @@ Souris = \"Souris d'essai\"\r\n";
         assert_eq!(m[0].compatible_ids, vec!["USB\\Class_03".to_string()]);
         assert_eq!(m[0].version, (3u64 << 48) | (3 << 32) | 1);
         assert_eq!(m[1].compatible_ids, Vec::<String>::new());
+    }
+
+    #[test]
+    fn dispositions_x86_et_x64() {
+        // HardwareID[1] termine SP_DRVINFO_DETAIL_DATA_W : taille = décalage
+        // + 2, arrondie à 8 en x64, exacte en pack(1) (#1656).
+        assert_eq!(
+            LAYOUT_64.detail_size as usize,
+            (LAYOUT_64.detail_hwid + 2 + 7) / 8 * 8
+        );
+        assert_eq!(LAYOUT_32.detail_size as usize, LAYOUT_32.detail_hwid + 2);
+        // V2 = V1 + DriverDate + DriverVersion ; trois chaînes de 256 WCHAR.
+        for l in [&LAYOUT_64, &LAYOUT_32] {
+            assert_eq!(l.drvinfo_v2, l.drvinfo_v1 + 16);
+            assert_eq!(l.drv_date, l.drv_desc + 3 * 512);
+        }
+        // DriverPath[260] termine SP_DEVINSTALL_PARAMS_W.
+        assert_eq!(LAYOUT_32.install_params, LAYOUT_32.install_path + 520);
+        assert_eq!(
+            LAYOUT_64.install_params,
+            (LAYOUT_64.install_path + 520 + 7) / 8 * 8
+        );
+        assert_eq!(
+            (LAYOUT_32.list_detail, LAYOUT_32.drv_install_params),
+            (550, 20)
+        );
     }
 
     #[test]

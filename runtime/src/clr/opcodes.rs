@@ -214,6 +214,8 @@ pub enum OpCode {
     Endfilter = 0xFE11,
     Unaligned = 0xFE12,
     Volatile = 0xFE13,
+    /// Préfixe `no.` : contrôles de type, de bornes ou de null facultatifs.
+    No = 0xFE19,
     Tail = 0xFE14,
     Initobj = 0xFE15,
     Constrained = 0xFE16,
@@ -260,6 +262,7 @@ pub fn decode(il: &[u8], offset: usize) -> Option<Instruction> {
             0xFE16 => OpCode::Constrained,
             0xFE17 => OpCode::Cpblk,
             0xFE18 => OpCode::Initblk,
+            0xFE19 => OpCode::No,
             0xFE1A => OpCode::Rethrow,
             0xFE1C => OpCode::Sizeof,
             0xFE1D => OpCode::Refanytype,
@@ -273,8 +276,15 @@ pub fn decode(il: &[u8], offset: usize) -> Option<Instruction> {
             | OpCode::Ldloc
             | OpCode::Ldloca
             | OpCode::Stloc => 2,
-            OpCode::Sizeof | OpCode::Constrained | OpCode::Ldftn | OpCode::Ldvirtftn => 4,
-            OpCode::Unaligned => 1,
+            // `initobj` (FE 15) porte un jeton de type : sans lui, le
+            // décodage se décalait de 4 octets et lisait des jetons faux
+            // (« jmp » puis « jeton 0x02020000 » dans Corsair.Service.exe, #1664).
+            OpCode::Sizeof
+            | OpCode::Constrained
+            | OpCode::Ldftn
+            | OpCode::Ldvirtftn
+            | OpCode::Initobj => 4,
+            OpCode::Unaligned | OpCode::No => 1,
             _ => 0,
         };
         (op, 2 + operand)
@@ -594,4 +604,79 @@ pub fn read_f64(il: &[u8], offset: usize) -> f64 {
     il.get(offset..offset + 8)
         .map(|s| f64::from_le_bytes(s.try_into().unwrap()))
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1664 : `initobj` (FE 15 + jeton) occupe 6 octets ; l'instruction
+    /// suivante est lue au bon endroit.
+    #[test]
+    fn initobj_porte_un_jeton() {
+        // ldloca.s 0 ; initobj 0x02000027 ; ldarg.0 ; ret
+        let il = [0x12, 0x00, 0xFE, 0x15, 0x27, 0x00, 0x00, 0x02, 0x02, 0x2A];
+        let i = decode(&il, 2).unwrap();
+        assert_eq!((i.op, i.size), (OpCode::Initobj, 6));
+        assert_eq!(decode(&il, 8).unwrap().op, OpCode::Ldarg_0);
+        assert_eq!(decode(&il, 9).unwrap().op, OpCode::Ret);
+    }
+}
+
+#[cfg(test)]
+mod table_ecma {
+    use super::decode;
+
+    /// Taille d'opérande de chaque opcode d'ECMA-335 partition III (§1.2.1 et
+    /// tables de l'annexe), écrite à part de `decode` : un opcode dont
+    /// l'opérande est oublié décale tout le décodage qui suit (#1664).
+    fn operande(op: u16) -> Option<usize> {
+        Some(match op {
+            0x00..=0x0D | 0x14..=0x1E | 0x25 | 0x26 | 0x2A => 0,
+            0x0E..=0x13 | 0x1F | 0x2B..=0x37 | 0xDE => 1,
+            0x20 | 0x22 | 0x27..=0x29 | 0x38..=0x44 => 4,
+            0x21 | 0x23 => 8,
+            0x45 => 4, // switch avec 0 cible
+            0x46..=0x6E | 0x76 | 0x7A | 0x82..=0x8B | 0x8E | 0x90..=0xA2 => 0,
+            0x6F..=0x75 | 0x79 | 0x7B..=0x81 | 0x8C | 0x8D | 0x8F | 0xA3..=0xA5 => 4,
+            0xB3..=0xBA | 0xC3 | 0xD1..=0xDC | 0xDF | 0xE0 => 0,
+            0xC2 | 0xC6 | 0xD0 | 0xDD => 4,
+            0xFE00..=0xFE05 | 0xFE0F | 0xFE11 | 0xFE13 | 0xFE14 => 0,
+            0xFE17 | 0xFE18 | 0xFE1A | 0xFE1D | 0xFE1E => 0,
+            0xFE06 | 0xFE07 | 0xFE15 | 0xFE16 | 0xFE1C => 4,
+            0xFE09..=0xFE0E => 2,
+            0xFE12 | 0xFE19 => 1,
+            _ => return None,
+        })
+    }
+
+    #[test]
+    fn chaque_opcode_a_la_taille_d_operande_d_ecma() {
+        let mut ecarts = Vec::new();
+        for op in (0u16..=0xFF).chain(0xFE00..=0xFEFF) {
+            if op == 0xFE {
+                continue;
+            }
+            let Some(attendu) = operande(op) else {
+                continue;
+            };
+            let mut il = if op > 0xFF {
+                vec![0xFE, op as u8]
+            } else {
+                vec![op as u8]
+            };
+            let longueur = il.len();
+            il.extend_from_slice(&[0; 8]);
+            match decode(&il, 0) {
+                Some(i) if i.size == longueur + attendu => {}
+                Some(i) => ecarts.push(format!(
+                    "{op:#06x} : {} au lieu de {}",
+                    i.size,
+                    longueur + attendu
+                )),
+                None => ecarts.push(format!("{op:#06x} : inconnu")),
+            }
+        }
+        assert!(ecarts.is_empty(), "{}", ecarts.join("\n"));
+    }
 }

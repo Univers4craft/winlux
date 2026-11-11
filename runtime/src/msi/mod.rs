@@ -16,6 +16,7 @@ mod lzx;
 pub mod script;
 pub mod session;
 pub mod session_db;
+pub mod summary;
 
 use install::{Logger, Options};
 use std::path::{Path, PathBuf};

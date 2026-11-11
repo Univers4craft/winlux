@@ -219,6 +219,7 @@ pub fn msi_exports() -> super::Exports {
     // Fonctions de session des actions personnalisées DLL (#833).
     let mut all = crate::msi::session::exports();
     all.extend(crate::msi::session_db::exports());
+    all.extend(crate::msi::summary::exports());
     all.extend(crate::exports! {
         "MsiGetComponentPathW" => fn msi_get_component_path,
         "MsiGetComponentPathA" => fn msi_get_component_path,
@@ -306,6 +307,16 @@ mod tests {
             (171, "MsiFormatRecordW"),
             (70, "MsiGetProductInfoW"),
             (205, "MsiEnumRelatedProductsW"),
+            // Base hors session et résumé (panda3d, electron-winstaller, #1657).
+            (20, "MsiDatabaseCommit"),
+            (77, "MsiGetSummaryInformationA"),
+            (92, "MsiOpenDatabaseW"),
+            (148, "MsiSummaryInfoGetPropertyA"),
+            (149, "MsiSummaryInfoGetPropertyCount"),
+            (151, "MsiSummaryInfoPersist"),
+            (152, "MsiSummaryInfoSetPropertyA"),
+            (153, "MsiSummaryInfoSetPropertyW"),
+            (219, "MsiGetFileHashW"),
         ] {
             let by_name = e.get(name).copied();
             assert!(by_name.is_some(), "{name}");
