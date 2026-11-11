@@ -644,6 +644,17 @@ unsafe extern "win64" fn NtQuerySection(
     len: usize,
     ret: *mut usize,
 ) -> u32 {
+    query_section(h, class, info, len, ret, crate::dlls::legacy_com::x86())
+}
+
+unsafe fn query_section(
+    h: usize,
+    class: u32,
+    info: *mut u8,
+    len: usize,
+    ret: *mut usize,
+    x86: bool,
+) -> u32 {
     const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
     const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
     const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
@@ -652,17 +663,27 @@ unsafe extern "win64" fn NtQuerySection(
     let Some((_, size, _)) = crate::dlls::mmap::export(h) else {
         return STATUS_INVALID_HANDLE;
     };
+    // Programme x86 : SECTION_BASIC_INFORMATION fait 16 octets (pointeur de
+    // 4 octets, MaximumSize à 8) et le SIZE_T rendu en fait 4. steam.exe y
+    // lit la taille du flux partagé avec steamwebhelper ; avec la
+    // disposition 64 bits il obtenait STATUS_INFO_LENGTH_MISMATCH et une
+    // taille 0, et l'écriture de 8 octets débordait de son SIZE_T (#1650).
+    let (total, attrs_at, size_at) = if x86 { (16, 4, 8) } else { (24, 8, 16) };
     match class {
         0 => {
             if !ret.is_null() {
-                *ret = 24;
+                if total == 16 {
+                    (ret as *mut u32).write_unaligned(16);
+                } else {
+                    ret.write_unaligned(24);
+                }
             }
-            if info.is_null() || len < 24 {
+            if info.is_null() || len < total {
                 return STATUS_INFO_LENGTH_MISMATCH;
             }
-            std::ptr::write_bytes(info, 0, 24);
-            put_u32(info, 8, SEC_COMMIT);
-            (info.add(16) as *mut u64).write_unaligned(size);
+            std::ptr::write_bytes(info, 0, total);
+            put_u32(info, attrs_at, SEC_COMMIT);
+            (info.add(size_at) as *mut u64).write_unaligned(size);
             0
         }
         1 => STATUS_SECTION_NOT_IMAGE,
@@ -2911,6 +2932,30 @@ mod tests {
             assert_eq!(
                 NtQuerySection(0x99_9999, 0, info.as_mut_ptr(), 24, &mut got),
                 0xC000_0008
+            );
+            // Disposition x86 (#1650) : 16 octets, MaximumSize à 8, SIZE_T
+            // rendu sur 4 octets sans toucher aux 4 suivants.
+            let mut small = [0u8; 16];
+            let mut got32 = [0u32, 0xDEAD_BEEF];
+            assert_eq!(
+                query_section(
+                    h,
+                    0,
+                    small.as_mut_ptr(),
+                    16,
+                    got32.as_mut_ptr().cast(),
+                    true
+                ),
+                0
+            );
+            assert_eq!(got32, [16, 0xDEAD_BEEF]);
+            assert_eq!(
+                u64::from_le_bytes(small[8..16].try_into().unwrap()),
+                0x40000
+            );
+            assert_eq!(
+                u32::from_le_bytes(small[4..8].try_into().unwrap()),
+                0x0800_0000
             );
             crate::dlls::kernel32::close_handle(h);
         }
