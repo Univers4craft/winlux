@@ -472,6 +472,7 @@ pub(super) unsafe fn describe_image(image: *mut c_void) -> String {
     let vt = *(image as *const *const ());
     if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
+        b.refresh();
         let kind = if vt == BITMAP_VT.ptr() {
             "bitmap"
         } else {
@@ -1953,6 +1954,7 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
     let vt = *(image as *const *const ());
     if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
+        b.refresh();
         return Some(Img {
             x: 0,
             y: 0,
