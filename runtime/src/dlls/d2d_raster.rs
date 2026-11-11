@@ -107,19 +107,47 @@ pub fn premul(r: f32, g: f32, b: f32, a: f32) -> Color {
     ]
 }
 
+/// Rendu d'un remplissage : anticrénelage et D2D1_PRIMITIVE_BLEND.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FillMode {
+    /// D2D1_ANTIALIAS_MODE_ALIASED : un pixel est couvert en entier si son
+    /// centre est dans la forme, sinon pas du tout.
+    pub aliased: bool,
+    /// 0 SOURCE_OVER, 1 COPY, 2 MIN, 3 ADD, 4 MAX.
+    pub blend: u32,
+}
+
 impl Canvas<'_> {
-    /// Mélange « source over » de `c` avec la couverture `cov`.
-    fn blend(&mut self, x: usize, y: usize, c: Color, cov: f32) {
+    /// Mélange de `c` selon D2D1_PRIMITIVE_BLEND, la couverture `cov`
+    /// pondérant le résultat pour les modes autres que « source over ».
+    fn blend_mode(&mut self, x: usize, y: usize, c: Color, cov: f32, mode: u32) {
         let o = y * self.stride + x * 4;
         let d = &mut self.px[o..o + 4];
-        let sa = c[3] * cov;
-        if sa <= 0.0 {
-            return;
-        }
-        let inv = 1.0 - sa;
-        let s = [c[2] * cov, c[1] * cov, c[0] * cov, sa];
-        for i in 0..4 {
-            d[i] = ((s[i] * 255.0 + d[i] as f32 * inv) + 0.5).min(255.0) as u8;
+        let s = [c[2], c[1], c[0], c[3]];
+        let q = |v: f32| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        match mode {
+            1..=4 => {
+                for i in 0..4 {
+                    let dv = d[i] as f32 / 255.0;
+                    let r = match mode {
+                        1 => s[i],
+                        2 => s[i].min(dv),
+                        3 => (s[i] + dv).min(1.0),
+                        _ => s[i].max(dv),
+                    };
+                    d[i] = q(dv + (r - dv) * cov);
+                }
+            }
+            _ => {
+                let sa = c[3] * cov;
+                if sa <= 0.0 {
+                    return;
+                }
+                let inv = 1.0 - sa;
+                for i in 0..4 {
+                    d[i] = ((s[i] * cov * 255.0 + d[i] as f32 * inv) + 0.5).min(255.0) as u8;
+                }
+            }
         }
     }
 
@@ -131,6 +159,18 @@ impl Canvas<'_> {
         rule: FillRule,
         clip: Option<Clip>,
         paint: &dyn Fn(f32, f32) -> Color,
+    ) {
+        self.fill_mode(polys, rule, clip, paint, FillMode::default());
+    }
+
+    /// `fill` avec l'anticrénelage et le mélange donnés.
+    pub fn fill_mode(
+        &mut self,
+        polys: &[Vec<Pt>],
+        rule: FillRule,
+        clip: Option<Clip>,
+        paint: &dyn Fn(f32, f32) -> Color,
+        mode: FillMode,
     ) {
         let mut edges = Vec::new();
         let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
@@ -168,12 +208,12 @@ impl Canvas<'_> {
         }
         let mut cov = vec![0f32; self.w as usize + 1];
         let mut xs: Vec<(f32, i32)> = Vec::new();
-        const SUB: usize = 4;
+        let sub: usize = if mode.aliased { 1 } else { 4 };
         for y in y0..y1 {
             cov.iter_mut().for_each(|v| *v = 0.0);
             let (mut lo, mut hi) = (usize::MAX, 0usize);
-            for s in 0..SUB {
-                let sy = y as f32 + (s as f32 + 0.5) / SUB as f32;
+            for s in 0..sub {
+                let sy = y as f32 + (s as f32 + 0.5) / sub as f32;
                 if sy < c.t || sy >= c.b {
                     continue;
                 }
@@ -199,8 +239,17 @@ impl Canvas<'_> {
                     };
                     if inside && i + 1 < xs.len() {
                         let (a, b) = (xs[i].0.max(cl), xs[i + 1].0.min(cr));
-                        if a < b {
-                            add_span(&mut cov, a, b, 1.0 / SUB as f32);
+                        if mode.aliased {
+                            // Pixels dont le centre est dans [a, b).
+                            let (pa, pb) = ((a - 0.5).ceil(), (b - 0.5).ceil());
+                            if pa < pb {
+                                let (pa, pb) = (pa as usize, pb as usize);
+                                add_span(&mut cov, pa as f32, pb as f32, 1.0);
+                                lo = lo.min(pa);
+                                hi = hi.max(pb);
+                            }
+                        } else if a < b {
+                            add_span(&mut cov, a, b, 1.0 / sub as f32);
                             lo = lo.min(a.floor() as usize);
                             hi = hi.max(b.ceil() as usize);
                         }
@@ -215,7 +264,7 @@ impl Canvas<'_> {
                 let v = c.min(1.0);
                 if v > 0.0 {
                     let col = paint(x as f32 + 0.5, y as f32 + 0.5);
-                    self.blend(x, y as usize, col, v);
+                    self.blend_mode(x, y as usize, col, v, mode.blend);
                 }
             }
         }
