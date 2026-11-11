@@ -286,7 +286,7 @@ pub fn journal_event(target: &str, message: &str) {
 fn write_to_journal(level: Level, target: &str, message: &str) {
     if let Ok(mut guard) = journal_file().lock() {
         let n = JOURNAL_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n % JOURNAL_CHECK_EVERY == 0 {
+        if n.is_multiple_of(JOURNAL_CHECK_EVERY) {
             if let Some(path) = crate::journal::file("winlux.log") {
                 rotate_journal(&mut guard, &path, MAX_JOURNAL_SIZE);
             }
