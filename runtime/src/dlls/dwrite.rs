@@ -226,9 +226,33 @@ fn substitutes(name: &str) -> &'static [&'static str] {
         "DejaVu Sans Mono",
         "FreeMono",
     ];
+    // Carlito et Caladea ont les métriques de Calibri et Cambria (#1770).
+    const CALIBRI: &[&str] = &[
+        "Carlito",
+        "Liberation Sans",
+        "Arimo",
+        "Noto Sans",
+        "DejaVu Sans",
+    ];
+    const CAMBRIA: &[&str] = &[
+        "Caladea",
+        "Liberation Serif",
+        "Tinos",
+        "Noto Serif",
+        "DejaVu Serif",
+    ];
     match name.to_ascii_lowercase().as_str() {
-        "arial" | "helvetica" | "microsoft sans serif" | "tahoma" | "verdana" | "calibri" => ARIAL,
-        "times new roman" | "times" | "georgia" | "cambria" | "serif" => SERIF,
+        "calibri" | "calibri light" => CALIBRI,
+        "cambria" => CAMBRIA,
+        "arial"
+        | "helvetica"
+        | "microsoft sans serif"
+        | "ms sans serif"
+        | "ms shell dlg"
+        | "ms shell dlg 2"
+        | "tahoma"
+        | "verdana" => ARIAL,
+        "times new roman" | "times" | "georgia" | "serif" => SERIF,
         "courier new" | "courier" | "consolas" | "lucida console" | "cascadia mono"
         | "cascadia code" | "monospace" => MONO,
         _ => SANS,
@@ -242,6 +266,10 @@ pub(crate) fn is_windows_font(name: &str) -> bool {
         || matches!(
             n.as_str(),
             "arial"
+                | "ms shell dlg"
+                | "ms shell dlg 2"
+                | "ms sans serif"
+                | "calibri light"
                 | "tahoma"
                 | "verdana"
                 | "calibri"
