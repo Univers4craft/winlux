@@ -393,3 +393,45 @@ fn descripteur_absolu_x86_tient_dans_20_octets() {
         "rien après la DACL x86"
     );
 }
+
+/// Acrobat (#1828) : le descripteur d'un jeton demandé avec
+/// LABEL_SECURITY_INFORMATION porte une SACL et son étiquette d'intégrité.
+#[test]
+fn descripteur_du_jeton_porte_l_etiquette_d_integrite() {
+    unsafe {
+        let mut needed = 0u32;
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, std::ptr::null_mut(), 0, &mut needed),
+            0
+        );
+        let mut buf = vec![0u8; needed as usize];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, buf.as_mut_ptr(), needed, &mut needed),
+            1
+        );
+        let (mut present, mut defaulted) = (0i32, 0i32);
+        let mut sacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            crate::dlls::chromium_win32::GetSecurityDescriptorSacl(
+                buf.as_ptr(),
+                &mut present,
+                &mut sacl,
+                &mut defaulted
+            ),
+            1
+        );
+        assert_eq!(present, 1);
+        assert!(!sacl.is_null());
+        assert_eq!(std::ptr::read_unaligned(sacl.add(4) as *const u16), 1); // AceCount
+        assert_eq!(*sacl.add(8), 0x11); // SYSTEM_MANDATORY_LABEL_ACE_TYPE
+        let sid = std::slice::from_raw_parts(sacl.add(16), 12);
+        let text = sid_text(sid).unwrap();
+        assert!(text == "S-1-16-8192" || text == "S-1-16-12288", "{text}");
+        let mut buf = vec![0u8; 256];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 4, buf.as_mut_ptr(), 256, &mut needed),
+            1
+        );
+        assert_eq!(u16::from_le_bytes([buf[2], buf[3]]) & 0x10, 0);
+    }
+}

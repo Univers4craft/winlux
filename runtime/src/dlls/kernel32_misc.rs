@@ -624,6 +624,17 @@ fn system_message_english(code: u32) -> Option<&'static str> {
         127 => "Function missing from the library.",
         183 => "An item with this name already exists.",
         267 => "This name is not a folder.",
+        // Les mêmes HRESULT de COM qu'en français (#1842).
+        0x8000_4001 => "Function not implemented.",
+        0x8000_4002 => "Interface not supported.",
+        0x8000_4003 => "Invalid pointer.",
+        0x8000_4005 => "Unspecified error.",
+        0x8002_0003 => "Member not found.",
+        0x8002_0006 => "Unknown name.",
+        0x8002_801D => "Type library not registered.",
+        0x8002_802B => "Element not found.",
+        0x8002_9C4A => "Cannot load the type library.",
+        0x8004_0154 => "Class not registered.",
         c if c & 0xFFFF_0000 == 0x8007_0000 => return system_message_english(c & 0xFFFF),
         _ => return None,
     })
@@ -672,7 +683,11 @@ unsafe fn format_message(
             "{}\r\n",
             system_message_english(code)
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("Windows error {code}."))
+                .unwrap_or_else(|| if code >= 0x8000_0000 {
+                    format!("Windows error 0x{code:08X}.")
+                } else {
+                    format!("Windows error {code}.")
+                })
         ));
     }
     Some(format!(
@@ -1056,6 +1071,348 @@ pub unsafe extern "win64" fn get_current_package_path(len: *mut u32, buf: *mut u
     package_string(len, buf, current_package().map(|(_, dir)| dir.clone()))
 }
 
+// --- Reste du contrat api-ms-win-appmodel-runtime (Spotify #1832) ---------
+// Sources : documentation publique de Microsoft (appmodel.h, PACKAGE_ID,
+// noms complets et noms de famille de paquet).
+
+const ERROR_NOT_FOUND: u32 = 1168;
+const ERROR_NOT_SUPPORTED: u32 = 50;
+
+/// Pseudo-handle du processus courant, seul processus dont Winlux connaît
+/// l'identité de paquet.
+fn is_current_process(process: usize) -> bool {
+    process == usize::MAX
+}
+
+pub unsafe extern "win64" fn get_package_full_name(
+    process: usize,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if !is_current_process(process) {
+        return if len.is_null() {
+            87
+        } else {
+            APPMODEL_ERROR_NO_PACKAGE
+        };
+    }
+    get_current_package_full_name(len, buf)
+}
+
+pub unsafe extern "win64" fn get_package_id(process: usize, len: *mut u32, buf: *mut u8) -> u32 {
+    if !is_current_process(process) {
+        return if len.is_null() {
+            87
+        } else {
+            APPMODEL_ERROR_NO_PACKAGE
+        };
+    }
+    get_current_package_id(len, buf)
+}
+
+pub unsafe extern "win64" fn get_application_user_model_id(
+    process: usize,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if !is_current_process(process) {
+        return if len.is_null() {
+            87
+        } else {
+            APPMODEL_ERROR_NO_PACKAGE
+        };
+    }
+    get_current_application_user_model_id(len, buf)
+}
+
+/// `GetCurrentPackageInfo` : sans paquet, APPMODEL_ERROR_NO_PACKAGE ; le
+/// graphe des dépendances d'un paquet n'est pas encore décrit.
+pub unsafe extern "win64" fn get_current_package_info(
+    _flags: u32,
+    len: *mut u32,
+    _buf: *mut u8,
+    count: *mut u32,
+) -> u32 {
+    if len.is_null() {
+        return 87;
+    }
+    if !count.is_null() {
+        *count = 0;
+    }
+    if current_package().is_none() {
+        APPMODEL_ERROR_NO_PACKAGE
+    } else {
+        ERROR_NOT_SUPPORTED
+    }
+}
+
+/// `GetPackagePath` : dossier du paquet courant quand l'identifiant le nomme.
+pub unsafe extern "win64" fn get_package_path(
+    id: *const u8,
+    _reserved: u32,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if id.is_null() || len.is_null() {
+        return 87;
+    }
+    let name = wide_at(*(id.add(16) as *const usize) as *const u16);
+    match current_package() {
+        Some((p, dir)) if p.name == name => package_string(len, buf, Some(dir.clone())),
+        _ => ERROR_NOT_FOUND,
+    }
+}
+
+/// Aucun paquet installé n'est inscrit auprès d'un catalogue Windows.
+pub unsafe extern "win64" fn open_package_info_by_full_name(
+    name: *const u16,
+    _reserved: u32,
+    reference: *mut usize,
+) -> u32 {
+    if name.is_null() || reference.is_null() {
+        return 87;
+    }
+    *reference = 0;
+    ERROR_NOT_FOUND
+}
+
+pub unsafe extern "win64" fn get_package_info(
+    reference: usize,
+    _flags: u32,
+    len: *mut u32,
+    _buf: *mut u8,
+    count: *mut u32,
+) -> u32 {
+    if !count.is_null() {
+        *count = 0;
+    }
+    if reference == 0 || len.is_null() {
+        return 87;
+    }
+    ERROR_NOT_FOUND
+}
+
+pub extern "win64" fn close_package_info(_reference: usize) -> u32 {
+    0
+}
+
+/// `GetPackagesByPackageFamily` : aucun paquet de cette famille.
+pub unsafe extern "win64" fn get_packages_by_package_family(
+    family: *const u16,
+    count: *mut u32,
+    _names: *mut usize,
+    buffer_len: *mut u32,
+    _buffer: *mut u16,
+) -> u32 {
+    if family.is_null() || count.is_null() || buffer_len.is_null() {
+        return 87;
+    }
+    *count = 0;
+    *buffer_len = 0;
+    0
+}
+
+unsafe fn wide_at(p: *const u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let mut n = 0;
+    while *p.add(n) != 0 {
+        n += 1;
+    }
+    String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+}
+
+/// Nom complet `Nom_Version_Arch_IdRessource_IdEditeur` découpé en ses cinq
+/// parties.
+fn split_full_name(full: &str) -> Option<[&str; 5]> {
+    let parts: Vec<&str> = full.split('_').collect();
+    let [name, version, arch, resource, publisher] = parts[..] else {
+        return None;
+    };
+    if name.is_empty() || version.split('.').count() != 4 || publisher.len() != 13 {
+        return None;
+    }
+    Some([name, version, arch, resource, publisher])
+}
+
+fn arch_name(arch: u32) -> Option<&'static str> {
+    Some(match arch {
+        0 => "x86",
+        5 => "arm",
+        9 => "x64",
+        11 => "neutral",
+        12 => "arm64",
+        _ => return None,
+    })
+}
+
+pub unsafe extern "win64" fn package_family_name_from_full_name(
+    full: *const u16,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if full.is_null() || len.is_null() {
+        return 87;
+    }
+    let full = wide_at(full);
+    let Some([name, _, _, _, publisher]) = split_full_name(&full) else {
+        return 87;
+    };
+    package_string(len, buf, Some(format!("{name}_{publisher}")))
+}
+
+pub unsafe extern "win64" fn package_name_and_publisher_id_from_family_name(
+    family: *const u16,
+    name_len: *mut u32,
+    name: *mut u16,
+    publisher_len: *mut u32,
+    publisher: *mut u16,
+) -> u32 {
+    if family.is_null() || name_len.is_null() || publisher_len.is_null() {
+        return 87;
+    }
+    let family = wide_at(family);
+    let Some((n, p)) = family
+        .rsplit_once('_')
+        .filter(|(n, p)| !n.is_empty() && p.len() == 13)
+    else {
+        return 87;
+    };
+    let a = package_string(name_len, name, Some(n.to_string()));
+    let b = package_string(publisher_len, publisher, Some(p.to_string()));
+    if a != 0 {
+        a
+    } else {
+        b
+    }
+}
+
+/// Champs d'une PACKAGE_ID 64 bits : (nom, version, arch, ressource,
+/// identifiant d'éditeur calculé depuis l'éditeur).
+unsafe fn read_package_id(id: *const u8) -> Option<(String, String, &'static str, String, String)> {
+    if id.is_null() {
+        return None;
+    }
+    let arch = arch_name((id.add(4) as *const u32).read_unaligned())?;
+    let v = (id.add(8) as *const u64).read_unaligned();
+    let version = format!(
+        "{}.{}.{}.{}",
+        v >> 48,
+        (v >> 32) & 0xffff,
+        (v >> 16) & 0xffff,
+        v & 0xffff
+    );
+    let field =
+        |i: usize| wide_at((id.add(16 + i * 8) as *const usize).read_unaligned() as *const u16);
+    let name = field(0);
+    let publisher = field(1);
+    if name.is_empty() || publisher.is_empty() {
+        return None;
+    }
+    Some((
+        name,
+        version,
+        arch,
+        field(2),
+        crate::setup::msix::publisher_id(&publisher),
+    ))
+}
+
+pub unsafe extern "win64" fn package_family_name_from_id(
+    id: *const u8,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if len.is_null() {
+        return 87;
+    }
+    let Some((name, _, _, _, publisher)) = read_package_id(id) else {
+        return 87;
+    };
+    package_string(len, buf, Some(format!("{name}_{publisher}")))
+}
+
+pub unsafe extern "win64" fn package_full_name_from_id(
+    id: *const u8,
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    if len.is_null() {
+        return 87;
+    }
+    let Some((name, version, arch, resource, publisher)) = read_package_id(id) else {
+        return 87;
+    };
+    package_string(
+        len,
+        buf,
+        Some(format!("{name}_{version}_{arch}_{resource}_{publisher}")),
+    )
+}
+
+/// `PackageIdFromFullName` : PACKAGE_ID et ses chaînes dans le même tampon ;
+/// l'éditeur n'est pas connu depuis le seul nom complet (pointeur nul),
+/// l'identifiant d'éditeur l'est.
+pub unsafe extern "win64" fn package_id_from_full_name(
+    full: *const u16,
+    _flags: u32,
+    len: *mut u32,
+    buf: *mut u8,
+) -> u32 {
+    if full.is_null() || len.is_null() {
+        return 87;
+    }
+    let full = wide_at(full);
+    let Some([name, version, arch, resource, publisher]) = split_full_name(&full) else {
+        return 87;
+    };
+    let arch = match arch {
+        "x86" => 0u32,
+        "arm" => 5,
+        "x64" => 9,
+        "neutral" => 11,
+        "arm64" => 12,
+        _ => return 87,
+    };
+    let mut v = version
+        .split('.')
+        .map(|n| n.parse::<u64>().unwrap_or(0) & 0xffff);
+    let packed = v.next().unwrap_or(0) << 48
+        | v.next().unwrap_or(0) << 32
+        | v.next().unwrap_or(0) << 16
+        | v.next().unwrap_or(0);
+    // Ordre de PACKAGE_ID : name (16), publisher (24), resourceId (32),
+    // publisherId (40).
+    let strings: [(usize, Option<&str>); 4] = [
+        (16, Some(name)),
+        (24, None),
+        (32, (!resource.is_empty()).then_some(resource)),
+        (40, Some(publisher)),
+    ];
+    let wide: Vec<(usize, Vec<u16>)> = strings
+        .iter()
+        .filter_map(|(o, s)| s.map(|s| (*o, s.encode_utf16().chain(std::iter::once(0)).collect())))
+        .collect();
+    let needed = 48 + wide.iter().map(|(_, w)| w.len() * 2).sum::<usize>();
+    if buf.is_null() || (*len as usize) < needed {
+        *len = needed as u32;
+        return 122;
+    }
+    std::ptr::write_bytes(buf, 0, 48);
+    (buf.add(4) as *mut u32).write_unaligned(arch);
+    (buf.add(8) as *mut u64).write_unaligned(packed);
+    let mut at = 48usize;
+    for (offset, w) in &wide {
+        let dst = buf.add(at);
+        std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, dst, w.len() * 2);
+        (buf.add(*offset) as *mut usize).write_unaligned(dst as usize);
+        at += w.len() * 2;
+    }
+    *len = needed as u32;
+    0
+}
+
 /// IsWow64Process : Winlux exécute les programmes 64 bits nativement, sans
 /// couche WOW64.
 pub unsafe extern "win64" fn is_wow64_process(_process: usize, wow64: *mut i32) -> i32 {
@@ -1175,6 +1532,20 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCurrentPackageFamilyName" => fn get_current_package_family_name,
         "GetCurrentApplicationUserModelId" => fn get_current_application_user_model_id,
         "GetCurrentPackagePath" => fn get_current_package_path,
+        "GetPackageFullName" => fn get_package_full_name,
+        "GetPackageId" => fn get_package_id,
+        "GetApplicationUserModelId" => fn get_application_user_model_id,
+        "GetCurrentPackageInfo" => fn get_current_package_info,
+        "GetPackagePath" => fn get_package_path,
+        "OpenPackageInfoByFullName" => fn open_package_info_by_full_name,
+        "GetPackageInfo" => fn get_package_info,
+        "ClosePackageInfo" => fn close_package_info,
+        "GetPackagesByPackageFamily" => fn get_packages_by_package_family,
+        "PackageFamilyNameFromFullName" => fn package_family_name_from_full_name,
+        "PackageNameAndPublisherIdFromFamilyName" => fn package_name_and_publisher_id_from_family_name,
+        "PackageFamilyNameFromId" => fn package_family_name_from_id,
+        "PackageFullNameFromId" => fn package_full_name_from_id,
+        "PackageIdFromFullName" => fn package_id_from_full_name,
         "IsWow64Process" => fn is_wow64_process, "LCMapStringEx" => fn lc_map_string_ex,
         "GetFinalPathNameByHandleW" => fn get_final_path_name_by_handle_w,
         "GetFinalPathNameByHandleA" => fn get_final_path_name_by_handle_a,
@@ -1183,6 +1554,69 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Spotify et Acrobat (#1832) : noms de paquet et réponse sans paquet.
+    #[test]
+    fn noms_de_paquet_appmodel() {
+        unsafe {
+            let w = |t: &str| t.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+            let mut len = 0u32;
+            assert_eq!(
+                super::get_package_full_name(1234, &mut len, std::ptr::null_mut()),
+                super::APPMODEL_ERROR_NO_PACKAGE
+            );
+            let full = w("Contoso.App_1.2.3.4_x64__8wekyb3d8bbwe");
+            let mut buf = [0u16; 128];
+            len = 128;
+            assert_eq!(
+                super::package_family_name_from_full_name(
+                    full.as_ptr(),
+                    &mut len,
+                    buf.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..len as usize - 1]),
+                "Contoso.App_8wekyb3d8bbwe"
+            );
+            let (mut nl, mut pl) = (128u32, 128u32);
+            let mut pbuf = [0u16; 128];
+            let family = w("Contoso.App_8wekyb3d8bbwe");
+            assert_eq!(
+                super::package_name_and_publisher_id_from_family_name(
+                    family.as_ptr(),
+                    &mut nl,
+                    buf.as_mut_ptr(),
+                    &mut pl,
+                    pbuf.as_mut_ptr()
+                ),
+                0
+            );
+            assert_eq!(
+                String::from_utf16_lossy(&pbuf[..pl as usize - 1]),
+                "8wekyb3d8bbwe"
+            );
+            let mut id = vec![0u8; 512];
+            len = 512;
+            assert_eq!(
+                super::package_id_from_full_name(full.as_ptr(), 0, &mut len, id.as_mut_ptr()),
+                0
+            );
+            assert_eq!((id.as_ptr().add(4) as *const u32).read_unaligned(), 9);
+            assert_eq!(
+                (id.as_ptr().add(8) as *const u64).read_unaligned(),
+                1 << 48 | 2 << 32 | 3 << 16 | 4
+            );
+            assert_eq!((id.as_ptr().add(24) as *const usize).read_unaligned(), 0);
+            let mut r = 1usize;
+            assert_eq!(
+                super::open_package_info_by_full_name(full.as_ptr(), 0, &mut r),
+                1168
+            );
+            assert_eq!(r, 0);
+        }
+    }
+
     #[test]
     fn hresult_win32_donne_le_texte_du_code_contenu() {
         assert_eq!(system_message(0x8007_0005), system_message(5));
@@ -1370,17 +1804,21 @@ mod tests {
     #[test]
     fn messages_des_hresult() {
         unsafe {
-            for (code, debut) in [
-                (0x8002_801Du32, "Bibliothèque de types non inscrite"),
-                (0x8004_0154, "Classe non inscrite"),
-                (0x8000_1234, "Erreur Windows 0x80001234"),
+            for (code, lang, debut) in [
+                (0x8002_801Du32, 0u32, "Bibliothèque de types non inscrite"),
+                (0x8004_0154, 0, "Classe non inscrite"),
+                (0x8000_1234, 0, "Erreur Windows 0x80001234"),
+                // #1842 : en anglais aussi (LANG_ENGLISH demandé).
+                (0x8002_801D, 0x0409, "Type library not registered"),
+                (0x8004_0154, 0x0409, "Class not registered"),
+                (0x8000_1234, 0x0409, "Windows error 0x80001234"),
             ] {
                 let mut msg = [0u16; 128];
                 let n = format_message_w(
                     FORMAT_MESSAGE_FROM_SYSTEM,
                     0,
                     code,
-                    0,
+                    lang,
                     msg.as_mut_ptr(),
                     128,
                     0,

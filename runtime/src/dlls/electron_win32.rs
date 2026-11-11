@@ -2368,17 +2368,22 @@ unsafe extern "win64" fn CertGetIntendedKeyUsage(
     0
 }
 
-unsafe extern "win64" fn CryptMsgClose(_msg: usize) -> i32 {
+unsafe extern "win64" fn CryptMsgClose(msg: usize) -> i32 {
+    // Message de CryptMsgOpenToDecode (#1820) : libéré.
+    super::discord_win32::close_msg(msg);
     1
 }
 
 unsafe extern "win64" fn CryptMsgGetParam(
-    _msg: usize,
-    _ty: u32,
-    _index: u32,
-    _data: *mut c_void,
+    msg: usize,
+    ty: u32,
+    index: u32,
+    data: *mut c_void,
     len: *mut u32,
 ) -> i32 {
+    if super::discord_win32::is_decode_msg(msg) {
+        return super::discord_win32::get_param(msg, ty, index, data, len);
+    }
     if !len.is_null() {
         *len = 0;
     }

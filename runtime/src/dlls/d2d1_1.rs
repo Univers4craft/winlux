@@ -2915,6 +2915,34 @@ pub(super) static DC_VT: VTable<120> = VTable(super::derived::<120>(&DC_EXTRA));
 
 type StrokeObj = Com<Res<StrokeStyle>>;
 
+/// D2D1_STROKE_TRANSFORM_TYPE d'un style de trait (0 sans style).
+pub(super) unsafe fn stroke_pattern_kind(style: *mut c_void) -> u32 {
+    if style.is_null() || *(style as *const *const ()) != STROKE_VT.ptr() {
+        return 0;
+    }
+    Com::get(style as *mut StrokeObj).data.props.transform_type
+}
+
+/// Tirets d'un ID2D1StrokeStyle de Winlux, en multiples de l'épaisseur
+/// (#1867) : motif, décalage et D2D1_STROKE_TRANSFORM_TYPE. `None` pour un
+/// trait plein ou un objet étranger.
+pub(super) unsafe fn stroke_pattern(style: *mut c_void) -> Option<(Vec<f32>, f32, u32)> {
+    if style.is_null() || *(style as *const *const ()) != STROKE_VT.ptr() {
+        return None;
+    }
+    let st = &Com::get(style as *mut StrokeObj).data;
+    // D2D1_DASH_STYLE : motifs publics de Direct2D.
+    let pattern = match st.props.dash_style {
+        1 => vec![2.0, 2.0],
+        2 => vec![0.0, 2.0],
+        3 => vec![2.0, 2.0, 0.0, 2.0],
+        4 => vec![2.0, 2.0, 0.0, 2.0, 0.0, 2.0],
+        5 if !st.dashes.is_empty() => st.dashes.clone(),
+        _ => return None,
+    };
+    Some((pattern, st.props.dash_offset, st.props.transform_type))
+}
+
 unsafe extern "win64" fn stroke_qi(
     this: *mut StrokeObj,
     riid: *const Guid,

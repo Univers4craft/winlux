@@ -656,7 +656,7 @@ extern "win64" fn mixerGetNumDevs() -> u32 {
 }
 
 /// MIXERCAPSW : 80 octets.
-unsafe extern "win64" fn mixerGetDevCapsW(id: usize, caps: *mut u8, size: u32) -> u32 {
+pub(crate) unsafe extern "win64" fn mixerGetDevCapsW(id: usize, caps: *mut u8, size: u32) -> u32 {
     if caps.is_null() || size < 80 {
         return MMSYSERR_INVALPARAM;
     }

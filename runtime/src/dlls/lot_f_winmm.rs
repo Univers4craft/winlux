@@ -368,6 +368,38 @@ unsafe extern "win64" fn mixerGetControlDetailsA(obj: usize, cd: *mut u8, flags:
     super::icue_win32::mixerGetControlDetailsW(obj, cd, flags)
 }
 
+/// mixerGetDevCapsA (Steam, #1879) : MIXERCAPSA, 48 octets — wMid, wPid,
+/// vDriverVersion, szPname[32] en ANSI, fdwSupport, cDestinations — tirés
+/// de la variante W ; un tampon plus court reçoit le début de la structure.
+unsafe extern "win64" fn mixerGetDevCapsA(id: usize, caps: *mut u8, size: u32) -> u32 {
+    if caps.is_null() || size == 0 {
+        return 11; // MMSYSERR_INVALPARAM
+    }
+    let mut wide = [0u8; 80];
+    let r = super::icue_win32::mixerGetDevCapsW(id, wide.as_mut_ptr(), 80);
+    if r != 0 {
+        return r;
+    }
+    let mut a = [0u8; 48];
+    a[..8].copy_from_slice(&wide[..8]);
+    let name: Vec<u16> = (0..32)
+        .map(|i| u16::from_le_bytes([wide[8 + 2 * i], wide[9 + 2 * i]]))
+        .take_while(|&c| c != 0)
+        .collect();
+    let text = String::from_utf16_lossy(&name);
+    let bytes = crate::dlls::encode_ansi(&text);
+    let n = bytes.len().min(31);
+    a[8..8 + n].copy_from_slice(&bytes[..n]);
+    a[40..48].copy_from_slice(&wide[72..80]);
+    std::ptr::copy_nonoverlapping(a.as_ptr(), caps, (size as usize).min(48));
+    0
+}
+
+/// mixerMessage : message propre à un pilote ; celui de Winlux n'en a pas.
+extern "win64" fn mixerMessage(_mixer: usize, _msg: u32, _p1: usize, _p2: usize) -> u32 {
+    8 // MMSYSERR_NOTSUPPORTED
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "joyGetNumDevs" => fn joyGetNumDevs,
@@ -375,6 +407,8 @@ pub fn exports() -> crate::dlls::Exports {
         "joyGetPos" => fn joyGetPos, "joyGetPosEx" => fn joyGetPosEx,
         "joyGetThreshold" => fn joyGetThreshold, "joySetThreshold" => fn joySetThreshold,
         "mixerGetLineInfoA" => fn mixerGetLineInfoA,
+        "mixerGetDevCapsA" => fn mixerGetDevCapsA,
+        "mixerMessage" => fn mixerMessage,
         "mixerGetLineControlsA" => fn mixerGetLineControlsA,
         "mixerGetControlDetailsA" => fn mixerGetControlDetailsA,
     }
@@ -383,6 +417,38 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Steam (#1879) : la famille mixer est servie par winmm, A et W.
+    #[test]
+    fn capacites_du_melangeur_en_ansi() {
+        for f in [
+            "mixerGetNumDevs",
+            "mixerGetDevCapsA",
+            "mixerGetDevCapsW",
+            "mixerOpen",
+            "mixerClose",
+            "mixerGetID",
+            "mixerGetLineInfoA",
+            "mixerGetLineInfoW",
+            "mixerGetLineControlsA",
+            "mixerGetLineControlsW",
+            "mixerGetControlDetailsA",
+            "mixerGetControlDetailsW",
+            "mixerSetControlDetails",
+            "mixerMessage",
+        ] {
+            assert!(crate::dlls::lookup("winmm", f).is_some(), "{f}");
+        }
+        unsafe {
+            let mut caps = [0xAAu8; 48];
+            assert_eq!(mixerGetDevCapsA(0, caps.as_mut_ptr(), 48), 0);
+            assert_eq!(&caps[8..15], b"Winlux\0");
+            assert_eq!(u32::from_le_bytes(caps[44..48].try_into().unwrap()), 1);
+            let mut short = [0u8; 4];
+            assert_eq!(mixerGetDevCapsA(0, short.as_mut_ptr(), 4), 0);
+            assert_eq!(mixerGetDevCapsA(7, caps.as_mut_ptr(), 48), 2);
+        }
+    }
 
     #[test]
     fn manettes_absentes_et_melangeur_ansi() {
