@@ -2468,6 +2468,7 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
         t.px = crate::dlls::lock(&b.px).clone();
         com_add_ref(image);
         t.out = Output::Bitmap(image);
+        super::register_drawing(image, this.cast());
     } else if let Some(mut home) = t.ext.home.take() {
         swap_home(&mut t, &mut home);
     } else {
@@ -2477,6 +2478,9 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
     }
     drop(t);
     if let Output::Bitmap(b) = old {
+        if b != image {
+            super::unregister_drawing(b);
+        }
         com_release(b);
     }
 }
