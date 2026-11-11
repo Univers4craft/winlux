@@ -2280,7 +2280,16 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
         Err(e) => {
-            let code = io_error_code(&e);
+            // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
+            // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
+            let code = if e.kind() == std::io::ErrorKind::NotFound
+                && p.parent()
+                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+            {
+                3
+            } else {
+                io_error_code(&e)
+            };
             // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
             crate::trace!(
                 "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",

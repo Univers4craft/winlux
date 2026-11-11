@@ -751,7 +751,14 @@ pub fn product_of(msi: &Path) -> Result<String, i32> {
     package_info(msi).map(|info| info.0)
 }
 
+/// C:\Windows\Installer existe toujours sous Windows : les actions WiX y
+/// écrivent le script de leurs actions différées (SchedServiceConfig, #1663).
+fn ensure_installer_dir() {
+    let _ = std::fs::create_dir_all(crate::paths::to_linux("C:\\Windows\\Installer"));
+}
+
 pub fn install(msi: &Path, opts: &Options, log: &mut Logger) -> i32 {
+    ensure_installer_dir();
     let data = match std::fs::read(msi) {
         Ok(d) => d,
         Err(e) => {
@@ -1423,6 +1430,7 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
 }
 
 pub fn uninstall(code: &str, log: &mut Logger) -> i32 {
+    ensure_installer_dir();
     match Manifest::find(code) {
         Some(m) => {
             remove_manifest(&m, log);

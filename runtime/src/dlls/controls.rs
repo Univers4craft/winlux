@@ -314,7 +314,8 @@ pub fn builtin_class(name: &str) -> Option<usize> {
         match lower.as_str() {
             "button" => button_proc,
             "static" => static_proc,
-            "edit" => edit_proc,
+            // Le contrôle d'adresse réseau est une zone d'édition (#1685).
+            "edit" | "msctls_netaddress" => edit_proc,
             "listbox" | "combolbox" => listbox_proc,
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,

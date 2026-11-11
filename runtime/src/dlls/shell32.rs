@@ -650,8 +650,17 @@ unsafe fn execute_ex_any(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
 /// cette fonction absente, #849).
 pub unsafe extern "win64" fn sh_add_to_recent_docs(_flags: u32, _item: *const std::ffi::c_void) {}
 
+/// InitNetworkAddressControl : rend disponible la classe
+/// « msctls_netaddress » (contrôle de saisie d'adresse réseau, une zone
+/// d'édition). MFC l'appelle avant de créer une boîte de dialogue et
+/// abandonne la boîte si la fonction manque (installeur d'IrfanView, #1685).
+pub extern "win64" fn init_network_address_control() -> i32 {
+    1
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "InitNetworkAddressControl"=>fn init_network_address_control,
         "SHAddToRecentDocs"=>fn sh_add_to_recent_docs,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
