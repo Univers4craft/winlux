@@ -17,3 +17,6 @@ ok("--exiger-ocr" in (ROOT / ".github/workflows/site.yml").read_text(encoding="u
    "Suivi des travaux : OCR obligatoire, PR de forks ignorées, lien en bas du site (#1779)")
 ok("cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in (ROOT / ".github/workflows/site.yml").read_text(encoding="utf-8"),
    "Site : une publication sur master n'est plus annulée par la CI suivante (#1801)")
+ok('OMP_THREAD_LIMIT="1"' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "OCR impossible" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : OCR borné, une capture illisible est refusée sans tout arrêter (#1829)")

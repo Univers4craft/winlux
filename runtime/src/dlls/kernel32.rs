@@ -3482,11 +3482,19 @@ unsafe fn load_library_str(name: &str) -> usize {
             if initialize_with_dependencies(&m, &before) {
                 m.base
             } else {
+                crate::log_warn!(
+                    "loader",
+                    "LoadLibrary {} : DllMain ou une dépendance a refusé l'initialisation (1114)",
+                    path.display()
+                );
                 crate::process::set_last_error(1114);
                 0
             }
         }
-        Err(_) => {
+        Err(e) => {
+            // La raison était perdue : seul le code 126 remontait (Spotify,
+            // #1809). Elle va au journal, comme les imports manquants.
+            crate::log_warn!("loader", "LoadLibrary {} : {e} (126)", path.display());
             crate::process::set_last_error(126);
             0
         }

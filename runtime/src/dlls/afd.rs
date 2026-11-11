@@ -284,6 +284,10 @@ pub unsafe fn device_io_control(
         .name("winlux-afd-poll".into())
         .spawn(move || {
             let ready = wait(&wanted, timeout_ms(timeout), wake, &cancelled, &closed);
+            // Retirée de la liste avant d'être rendue : une fois la
+            // complétion postée, NtCancelIoFileEx doit répondre
+            // STATUS_NOT_FOUND (#1836). L'eventfd n'est fermé qu'après.
+            lock(ops()).remove(&id);
             let (status, n) = match &ready {
                 None => (STATUS_CANCELLED, 0),
                 Some(r) => (STATUS_SUCCESS, r.len()),
