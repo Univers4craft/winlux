@@ -131,6 +131,7 @@ pub mod hostssl;
 pub mod icc;
 pub mod icons;
 pub mod icue_win32;
+pub mod icuuc;
 pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
@@ -1130,6 +1131,18 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: cabinet_lz::cabinet_exports(),
                 handle: 0,
             },
+            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792) ;
+            // icu.dll (Windows 10 1903+) exporte les mêmes noms.
+            Builtin {
+                name: "icuuc",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "icu",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
             Builtin {
                 name: "wldap32",
@@ -1630,6 +1643,7 @@ pub fn normalize(dll: &str) -> String {
     // implemented by our Advapi32 backend, rather than a separate disk DLL.
     if base.starts_with("api-ms-win-security-base-l1-")
         || base.starts_with("api-ms-win-security-sddl-l1-")
+        || base.starts_with("api-ms-win-security-provider-l1-")
     {
         return "advapi32".into();
     }
@@ -1746,9 +1760,15 @@ pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
 
-/// Fonctions de jeton du contrat api-ms-win-core-processthreads, servies
-/// par advapi32 (liste de la documentation publique des API sets).
-const PROCESSTHREADS_TOKENS: [&str; 3] = ["OpenProcessToken", "OpenThreadToken", "SetThreadToken"];
+/// Fonctions de sécurité que KernelBase sert sous des contrats
+/// api-ms-win-core-* (processthreads, namedpipe) et que notre advapi32
+/// porte (Teams, #1767, #1817).
+const KERNELBASE_SECURITY: [&str; 4] = [
+    "OpenProcessToken",
+    "OpenThreadToken",
+    "SetThreadToken",
+    "ImpersonateNamedPipeClient",
+];
 
 pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let b = builtins().iter().find(|b| b.name == normalized)?;
@@ -1765,7 +1785,7 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
             lookup("ntdll", func).or_else(|| {
                 // KernelBase sert aussi les Reg* (api-ms-win-core-registry)
                 // et les jetons du contrat processthreads (Teams, #1767).
-                (func.starts_with("Reg") || PROCESSTHREADS_TOKENS.contains(&func))
+                (func.starts_with("Reg") || KERNELBASE_SECURITY.contains(&func))
                     .then(|| lookup("advapi32", func))
                     .flatten()
             })
@@ -2353,6 +2373,18 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-0.dll",
                 "advapi32",
                 "OpenThreadToken",
+            ),
+            // Teams (#1817) : contrat security-provider et
+            // ImpersonateNamedPipeClient sous namedpipe.
+            (
+                "api-ms-win-security-provider-l1-1-0.dll",
+                "advapi32",
+                "SetEntriesInAclW",
+            ),
+            (
+                "api-ms-win-core-namedpipe-l1-1-0.dll",
+                "advapi32",
+                "ImpersonateNamedPipeClient",
             ),
             // Teams (#1790) : contrat des contrôleurs de traces ETW.
             (
