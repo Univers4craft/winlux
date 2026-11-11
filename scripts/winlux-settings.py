@@ -140,7 +140,7 @@ _TR = {
     'Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul.': ("This account has no password: the screen unlocks with a click and never locks by itself.", 'Esta cuenta no tiene contraseña: la pantalla se desbloquea con un clic y nunca se bloquea sola.', 'Dieses Konto hat kein Kennwort: Der Bildschirm wird per Klick entsperrt und sperrt sich nie von selbst.'),
     # Confidentialité et sécurité : autorisations des applications Windows.
     'Autorisations des applications Windows': ('Windows app permissions', 'Permisos de las aplicaciones de Windows', 'Berechtigungen von Windows-Apps'),
-    'Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment.': ('Each app asks the first time. Your choice is remembered; change it here at any time.', 'Cada aplicación pregunta la primera vez. Su elección se recuerda; cámbiela aquí cuando quiera.', 'Jede App fragt beim ersten Mal. Ihre Wahl wird gespeichert; Sie können sie hier jederzeit ändern.'),
+    'Fichiers personnels, réseau et lancement sans isolation sont accordés automatiquement ; caméra, micro, capture de l’écran et saisie à votre place sont demandés la première fois. Tout se retire ici, à tout moment.': ('Personal files, network and running without isolation are granted automatically; camera, microphone, screen capture and typing for you are asked the first time. You can take any of them back here at any time.', 'Los archivos personales, la red y la ejecución sin aislamiento se conceden automáticamente; la cámara, el micrófono, la captura de pantalla y escribir por usted se piden la primera vez. Puede retirarlos aquí en cualquier momento.', 'Persönliche Dateien, Netzwerk und Start ohne Isolierung werden automatisch erlaubt; Kamera, Mikrofon, Bildschirmaufnahme und Eingaben an Ihrer Stelle werden beim ersten Mal erfragt. Sie können alles hier jederzeit widerrufen.'),
     'Caméra pour toutes les applications': ('Camera for all apps', 'Cámara para todas las aplicaciones', 'Kamera für alle Apps'),
     'Micro pour toutes les applications': ('Microphone for all apps', 'Micrófono para todas las aplicaciones', 'Mikrofon für alle Apps'),
     'Aucune application Windows n’a encore demandé d’autorisation.': ('No Windows app has asked for permission yet.', 'Ninguna aplicación de Windows ha pedido permiso todavía.', 'Noch keine Windows-App hat eine Berechtigung angefordert.'),
@@ -1155,7 +1155,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         """Autorisations des .exe : interrupteurs globaux, puis une carte par application."""
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.label(_t("Autorisations des applications Windows"), "section")
-        self.label(_t("Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment."))
+        self.label(_t("Fichiers personnels, réseau et lancement sans isolation sont accordés automatiquement ; caméra, micro, capture de l’écran et saisie à votre place sont demandés la première fois. Tout se retire ici, à tout moment."))
         for key, action, title in (("privacy_camera", "privacy-camera", _t("Caméra pour toutes les applications")),
                                    ("privacy_microphone", "privacy-microphone", _t("Micro pour toutes les applications"))):
             row = Gtk.Box(spacing=12)

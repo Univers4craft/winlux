@@ -16,7 +16,7 @@ use super::audio_com::{
 use super::d2d_raster::{premul, Canvas, Clip, Color, FillMode, FillRule, Matrix, Path, Pt};
 use super::ole32::Guid;
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 pub(crate) fn unsupported_call(name: &'static str) -> i32 {
     static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -1617,6 +1617,126 @@ unsafe fn copy_from_memory(
     S_OK
 }
 
+/// Bitmaps dans lesquels une cible dessine (SetTarget, cible compatible),
+/// avec cette cible : CopyFromBitmap lit les pixels en cours de tracé
+/// (#1749), que Direct2D aurait vidés avant la copie.
+fn drawing_into() -> &'static Mutex<std::collections::HashMap<usize, usize>> {
+    static M: OnceLock<Mutex<std::collections::HashMap<usize, usize>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+pub(super) fn register_drawing(bitmap: *mut c_void, target: *mut c_void) {
+    if !bitmap.is_null() {
+        crate::dlls::lock(drawing_into()).insert(bitmap as usize, target as usize);
+    }
+}
+
+pub(super) fn unregister_drawing(bitmap: *mut c_void) {
+    crate::dlls::lock(drawing_into()).remove(&(bitmap as usize));
+}
+
+/// Pixels BGRA prémultipliés à jour d'un bitmap, avec sa taille.
+unsafe fn current_pixels(bitmap: *mut c_void) -> (u32, u32, Vec<u8>) {
+    let owner = crate::dlls::lock(drawing_into())
+        .get(&(bitmap as usize))
+        .copied();
+    if let Some(owner) = owner {
+        let t = target(owner as *mut TargetObj);
+        if matches!(t.out, Output::Bitmap(b) if b == bitmap) && t.drawing {
+            return (t.w, t.h, t.px.clone());
+        }
+    }
+    let b = &Com::get(bitmap as *mut BitmapObj).data;
+    b.refresh();
+    let px = crate::dlls::lock(&b.px).clone();
+    (b.w, b.h, px)
+}
+
+/// Copie la zone `src` (pixels w×h) vers `dst` au point `at`.
+unsafe fn copy_pixels_into(
+    dst: *mut BitmapObj,
+    at: *const [u32; 2],
+    (w, h, px): (u32, u32, Vec<u8>),
+    src: *const RectU,
+) -> i32 {
+    let r = src.as_ref().copied().unwrap_or(RectU {
+        l: 0,
+        t: 0,
+        r: w,
+        b: h,
+    });
+    let (x, y) = at.as_ref().map_or((0, 0), |p| (p[0], p[1]));
+    let d = &Com::get(dst).data;
+    let (cw, ch) = (r.r.saturating_sub(r.l), r.b.saturating_sub(r.t));
+    if r.l > r.r || r.t > r.b || r.r > w || r.b > h || x + cw > d.w || y + ch > d.h {
+        return E_INVALIDARG;
+    }
+    if px.len() < w as usize * h as usize * 4 {
+        return E_INVALIDARG;
+    }
+    let mut out = crate::dlls::lock(&d.px);
+    let row = cw as usize * 4;
+    for j in 0..ch as usize {
+        let s = ((r.t as usize + j) * w as usize + r.l as usize) * 4;
+        let o = ((y as usize + j) * d.w as usize + x as usize) * 4;
+        out[o..o + row].copy_from_slice(&px[s..s + row]);
+    }
+    S_OK
+}
+
+/// ID2D1Bitmap::CopyFromBitmap (#1749) : Paint.NET recopie la cible de
+/// ses effets GPU dans un bitmap lisible par le processeur.
+unsafe extern "win64" fn bitmap_copy_from_bitmap(
+    this: *mut BitmapObj,
+    at: *const [u32; 2],
+    bitmap: *mut c_void,
+    src: *const RectU,
+) -> i32 {
+    if bitmap.is_null() || !v11::is_pixel_image(bitmap) {
+        return E_INVALIDARG;
+    }
+    let pixels = current_pixels(bitmap);
+    let hr = copy_pixels_into(this, at, pixels, src);
+    d2d_trace!(
+        "CopyFromBitmap {:p} ← {} @{:?} src {:?} → {hr:#x}",
+        this,
+        v11::describe_image(bitmap),
+        at.as_ref(),
+        src.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+    );
+    hr
+}
+
+/// ID2D1Bitmap::CopyFromRenderTarget : pixels courants de la cible.
+unsafe extern "win64" fn bitmap_copy_from_target(
+    this: *mut BitmapObj,
+    at: *const [u32; 2],
+    rt: *mut c_void,
+    src: *const RectU,
+) -> i32 {
+    if rt.is_null() {
+        return E_INVALIDARG;
+    }
+    let vt = *(rt as *const *const ());
+    let known = [
+        TARGET_VT.ptr(),
+        HWND_TARGET_VT.ptr(),
+        DC_TARGET_VT.ptr(),
+        BITMAP_TARGET_VT.ptr(),
+        v11::DC_VT.ptr(),
+    ];
+    if !known.contains(&vt) {
+        return E_INVALIDARG;
+    }
+    let pixels = {
+        let t = target(rt as *mut TargetObj);
+        (t.w, t.h, t.px.clone())
+    };
+    let hr = copy_pixels_into(this, at, pixels, src);
+    d2d_trace!("CopyFromRenderTarget {:p} ← {:p} → {hr:#x}", this, rt);
+    hr
+}
+
 static BITMAP_VT: VTable<16> = VTable([
     bitmap_qi as *const (),
     add_ref::<Res<Bitmap>> as *const (),
@@ -1626,8 +1746,8 @@ static BITMAP_VT: VTable<16> = VTable([
     bitmap_pixel_size as *const (),
     pixel_format as *const (),
     dpi_96 as *const (),
-    unsupported!("CopyFromBitmap"),
-    unsupported!("CopyFromRenderTarget"),
+    bitmap_copy_from_bitmap as *const (),
+    bitmap_copy_from_target as *const (),
     bitmap_copy_from_memory as *const (),
     // ID2D1Bitmap1
     v11::bitmap_color_context as *const (),
@@ -1678,6 +1798,9 @@ enum Output {
 
 impl Drop for Target {
     fn drop(&mut self) {
+        if let Output::Bitmap(b) = self.out {
+            unregister_drawing(b);
+        }
         if let Output::Wic(obj) | Output::Bitmap(obj) = self.out {
             unsafe { method::<unsafe extern "win64" fn(*mut c_void) -> u32>(obj, 2)(obj) };
         }
@@ -2854,10 +2977,12 @@ unsafe extern "win64" fn create_compatible_target(
         ext: Default::default(),
     };
     target.ext.set_dpi(dpi.0, dpi.1);
-    put(
+    let hr = put(
         out,
         new_res(factory, BITMAP_TARGET_VT.ptr(), Mutex::new(target)),
-    )
+    );
+    register_drawing(bitmap, *out);
+    hr
 }
 
 unsafe extern "win64" fn get_bitmap(this: *mut TargetObj, out: *mut *mut c_void) -> i32 {
@@ -4521,5 +4646,120 @@ mod tests {
         assert_eq!(essai([100; 4], src, 4), [100, 100, 204, 204]);
         assert_eq!(essai([100; 4], src, 3), [151, 151, 255, 255]);
         assert_eq!(essai([100; 4], src, 1), [51, 51, 204, 204]);
+    }
+
+    /// #1749 : CopyFromBitmap lit les pixels en cours de tracé d'un bitmap
+    /// cible et les place au point demandé ; CopyFromRenderTarget lit ceux
+    /// de la cible ; une zone hors du bitmap est refusée.
+    #[test]
+    fn copie_entre_bitmaps() {
+        unsafe {
+            let (f, bmp, rt) = setup();
+            type Compat = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 2],
+                *const [u32; 2],
+                *const c_void,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut off = std::ptr::null_mut();
+            assert_eq!(
+                method::<Compat>(rt, 12)(
+                    rt,
+                    &[4.0, 4.0],
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &mut off
+                ),
+                S_OK
+            );
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            // Rouge dessiné, EndDraw pas encore appelé.
+            method::<Unary>(off, 48)(off);
+            method::<Clear>(off, 47)(
+                off,
+                &ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            let mut src = std::ptr::null_mut();
+            type GetBitmap = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            assert_eq!(method::<GetBitmap>(off, 57)(off, &mut src), S_OK);
+            type CreateBitmap = unsafe extern "win64" fn(
+                *mut c_void,
+                u64,
+                *const u8,
+                u32,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut dst = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateBitmap>(rt, 4)(
+                    rt,
+                    4 | 4 << 32,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut dst
+                ),
+                S_OK
+            );
+            type Copy = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [u32; 2],
+                *mut c_void,
+                *const RectU,
+            ) -> i32;
+            let zone = RectU {
+                l: 0,
+                t: 0,
+                r: 2,
+                b: 2,
+            };
+            assert_eq!(method::<Copy>(dst, 8)(dst, &[1, 1], src, &zone), S_OK);
+            let px = |b: *mut c_void, x: usize, y: usize| -> [u8; 4] {
+                let d = &Com::get(b as *mut BitmapObj).data;
+                let p = crate::dlls::lock(&d.px);
+                p[(y * d.w as usize + x) * 4..][..4].try_into().unwrap()
+            };
+            assert_eq!(px(dst, 1, 1), [0, 0, 255, 255], "rouge en cours de tracé");
+            assert_eq!(px(dst, 2, 2), [0, 0, 255, 255]);
+            assert_eq!(px(dst, 0, 0)[3], 0);
+            assert_eq!(px(dst, 3, 3)[3], 0);
+            // Hors du bitmap de destination.
+            assert_eq!(
+                method::<Copy>(dst, 8)(dst, &[3, 3], src, &zone),
+                E_INVALIDARG
+            );
+            // CopyFromRenderTarget depuis la cible hors écran.
+            method::<Clear>(off, 47)(
+                off,
+                &ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            );
+            assert_eq!(
+                method::<Copy>(dst, 9)(dst, std::ptr::null(), off, std::ptr::null()),
+                S_OK
+            );
+            assert_eq!(px(dst, 3, 3), [255, 0, 0, 255], "bleu de la cible");
+            method::<End>(off, 49)(off, std::ptr::null_mut(), std::ptr::null_mut());
+            release_obj(dst);
+            release_obj(src);
+            release_obj(off);
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
+        }
     }
 }
