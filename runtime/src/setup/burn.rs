@@ -383,6 +383,11 @@ pub fn initial_vars(m: &Manifest, overrides: &[(String, String)]) -> Vars {
     for (k, v) in overrides {
         vars.insert(k.clone(), v.clone());
     }
+    // Le CRT universel (ucrtbase.dll) fait partie de Winlux : l'interface de
+    // Python le constate et saute son paquet ucrt.msi, téléchargé à part
+    // pour Windows 7 et 8 (#1568).
+    vars.entry("CRTInstalled".into())
+        .or_insert_with(|| "1".into());
     let unset = |vars: &Vars, k: &str| vars.get(k).is_some_and(|v| v.is_empty());
     if unset(&vars, "TargetDir") {
         let all_users = vars
@@ -1067,6 +1072,11 @@ pub mod tests {
         let vars = initial_vars(&m, &[]);
         assert!(should_install(&m, &vars, cond), "valeurs par défaut");
         assert!(!should_install(&m, &vars, "Include_symbols"));
+        assert!(!should_install(
+            &m,
+            &vars,
+            "not InstallAllUsers and not CRTInstalled and (Include_core or Include_exe or Include_pip) and not LauncherOnly"
+        ));
         assert_eq!(
             vars["TargetDir"],
             "C:\\AppData\\Local\\Programs\\Python\\Python312"

@@ -3808,6 +3808,13 @@ unsafe fn system_parameters_info_common(
             };
             return 1;
         }
+        // SPI_GETMOUSEHOVERWIDTH / HEIGHT (4 pixels) et SPI_GETMOUSEHOVERTIME
+        // (400 ms), valeurs par défaut documentées : WinForms en fait
+        // l'intervalle du minuteur de survol de ses barres d'outils (#1574).
+        0x0062 | 0x0064 | 0x0066 if !data.is_null() => {
+            *data.cast::<u32>() = if action == 0x0066 { 400 } else { 4 };
+            return 1;
+        }
         // SPI_GETCARETWIDTH : DWORD en pixels.
         0x2006 if !data.is_null() => {
             *data.cast::<u32>() = u32::from(a11y.caret_width);
@@ -5337,6 +5344,16 @@ mod tests {
     fn taille_des_cases_a_cocher() {
         assert_eq!(get_system_metrics(71), 15);
         assert_eq!(get_system_metrics(72), 15);
+    }
+
+    /// #1574 : délai et zone de survol (minuteur des barres d'outils WinForms).
+    #[test]
+    fn delai_et_zone_de_survol() {
+        for (action, want) in [(0x0066u32, 400u32), (0x0062, 4), (0x0064, 4)] {
+            let mut v = 0u32;
+            let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
+            assert_eq!((r, v), (1, want), "action {action:#x}");
+        }
     }
 
     /// #797 : lfMessageFont de NONCLIENTMETRICSW est une vraie police (Segoe
