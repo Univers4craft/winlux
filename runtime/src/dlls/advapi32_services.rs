@@ -1269,9 +1269,37 @@ pub fn autostart() -> Vec<(String, Result<(), u32>)> {
     out
 }
 
-/// `winlux --services autostart|list`.
+/// Démarre un service inscrit, par son nom (fin d'installation MSI, #1626).
+pub fn start_by_name(name: &str) -> Result<(), u32> {
+    let mut r = load_persisted(name).ok_or(ERROR_SERVICE_DOES_NOT_EXIST as u32)?;
+    if is_driver(r.service_type) {
+        return start_driver(&mut r);
+    }
+    refresh(&mut r);
+    if r.state == SERVICE_RUNNING {
+        return Ok(());
+    }
+    let result = spawn_service(&mut r, &[]);
+    lock(services()).insert(r.name.clone(), r);
+    result
+}
+
+/// `winlux --services autostart|list|start NOM…`.
 pub fn cli(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
+        Some("start") if args.len() > 1 => {
+            let mut code = 0;
+            for name in &args[1..] {
+                match start_by_name(name) {
+                    Ok(()) => println!("Service démarré : {name}"),
+                    Err(e) => {
+                        code = 1;
+                        eprintln!("Service {name} : démarrage impossible (erreur {e})");
+                    }
+                }
+            }
+            code
+        }
         Some("autostart") => {
             let mut code = 0;
             for (name, result) in autostart() {
@@ -1307,7 +1335,7 @@ pub fn cli(args: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("usage : winlux --services autostart|list");
+            eprintln!("usage : winlux --services autostart|list|start NOM…");
             2
         }
     }
