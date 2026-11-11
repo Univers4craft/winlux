@@ -560,6 +560,20 @@ pub(crate) unsafe fn context<'a>(ctx: usize) -> &'a CertContext {
     &(*(ctx as *const Cert)).ctx
 }
 
+/// Identifiants des propriétés posées sur un contexte, plus les
+/// condensats toujours calculables (SHA-1 3, MD5 4, SHA-256 107).
+pub(crate) fn prop_ids(ctx: usize) -> Vec<u32> {
+    let Some(c) = (unsafe { cert(ctx) }) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<u32> = super::lock(&c.props).keys().copied().collect();
+    ids.extend([3, 4, 107]);
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|&id| id != PRIVATE_KEY_PROP);
+    ids
+}
+
 /// Le contexte derrière un PCCERT_CONTEXT créé par Winlux.
 unsafe fn cert<'a>(ctx: usize) -> Option<&'a Cert> {
     (ctx != 0).then(|| &*(ctx as *const Cert))
@@ -914,7 +928,7 @@ pub unsafe extern "win64" fn CertCompareCertificate(
     (s(&(*a).serial) == s(&(*b).serial) && s(&(*a).issuer) == s(&(*b).issuer)) as i32
 }
 
-fn hash_prop(der: &[u8], id: u32) -> Option<Vec<u8>> {
+pub(crate) fn hash_prop(der: &[u8], id: u32) -> Option<Vec<u8>> {
     match id {
         3 => hostssl::digest(c"SHA1", der),
         4 => hostssl::digest(c"MD5", der),
@@ -1329,10 +1343,18 @@ struct ChainContext {
     id: [u8; 16],
 }
 
-/// Chaîne complète : la structure publique en tête.
+/// Chaîne complète. En tête, la vue rendue au programme : le
+/// CERT_CHAIN_CONTEXT de 72 octets en x64, ou de 56 octets en x86 avec des
+/// CERT_SIMPLE_CHAIN et CERT_CHAIN_ELEMENT de 32 octets (#1708). Le code
+/// de Winlux lit toujours `ctx`, `simple` et `elements`.
 #[repr(C)]
 struct Chain {
+    view: [u64; 9],
     ctx: ChainContext,
+    simple32: [u32; 8],
+    simple_ptrs32: [u32; 1],
+    elements32: Vec<[u32; 8]>,
+    element_ptrs32: Vec<u32>,
     refs: AtomicUsize,
     simple: Box<SimpleChain>,
     simple_ptrs: Vec<*const SimpleChain>,
@@ -1445,7 +1467,12 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
         freshness: 0,
     });
     let simple_ptrs = vec![&*simple as *const SimpleChain];
-    let chain = Box::new(Chain {
+    let mut chain = Box::new(Chain {
+        view: [0; 9],
+        simple32: [0; 8],
+        simple_ptrs32: [0; 1],
+        elements32: Vec::new(),
+        element_ptrs32: Vec::new(),
         ctx: ChainContext {
             cb: std::mem::size_of::<ChainContext>() as u32,
             trust: TrustStatus {
@@ -1469,8 +1496,92 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
         x509_error,
         store,
     });
+    chain.ctx.chains = chain.simple_ptrs.as_ptr();
+    fill_chain_view(&mut chain, crate::wow32::pointer_size());
     *out = Box::into_raw(chain) as usize;
     1
+}
+
+/// Vue x86 d'une chaîne (tests, #1708) : CERT_CHAIN_CONTEXT, puis la
+/// CERT_SIMPLE_CHAIN et les CERT_CHAIN_ELEMENT.
+#[cfg(test)]
+pub(crate) unsafe fn chain_x86_view(chain: usize) -> ([u32; 14], [u32; 8], Vec<[u32; 8]>) {
+    let c = &mut *(chain as *mut Chain);
+    fill_chain_view(c, 4);
+    let v = std::ptr::read(c.view.as_ptr() as *const [u32; 14]);
+    let r = (v, c.simple32, c.elements32.clone());
+    fill_chain_view(c, 8);
+    r
+}
+
+/// Remplit la vue de tête d'une chaîne pour un programme de `ps` octets
+/// par pointeur (#1708).
+fn fill_chain_view(c: &mut Chain, ps: usize) {
+    if ps == 8 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &c.ctx as *const ChainContext as *const u8,
+                c.view.as_mut_ptr() as *mut u8,
+                std::mem::size_of::<ChainContext>(),
+            )
+        };
+        return;
+    }
+    let p = |x: usize| x as u32;
+    c.elements32 = c
+        .elements
+        .iter()
+        .map(|e| {
+            [
+                32,
+                p(e.cert),
+                e.trust.error,
+                e.trust.info,
+                p(e.revocation),
+                p(e.issuance),
+                p(e.application),
+                p(e.extended_error),
+            ]
+        })
+        .collect();
+    c.element_ptrs32 = c
+        .elements32
+        .iter()
+        .map(|e| p(e.as_ptr() as usize))
+        .collect();
+    let s = &c.simple;
+    c.simple32 = [
+        32,
+        s.trust.error,
+        s.trust.info,
+        c.element_ptrs32.len() as u32,
+        p(c.element_ptrs32.as_ptr() as usize),
+        p(s.trust_list),
+        s.has_freshness as u32,
+        s.freshness,
+    ];
+    c.simple_ptrs32 = [p(c.simple32.as_ptr() as usize)];
+    let x = &c.ctx;
+    let mut v = [0u32; 14];
+    v[..10].copy_from_slice(&[
+        56,
+        x.trust.error,
+        x.trust.info,
+        x.count,
+        p(c.simple_ptrs32.as_ptr() as usize),
+        x.lower_count,
+        p(x.lower),
+        x.has_freshness as u32,
+        x.freshness,
+        x.create_flags,
+    ]);
+    for (i, w) in x.id.chunks(4).enumerate() {
+        v[10 + i] = u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+    }
+    c.view = [0; 9];
+    unsafe {
+        std::ptr::copy_nonoverlapping(v.as_ptr(), c.view.as_mut_ptr() as *mut u32, 14);
+    }
 }
 
 pub unsafe extern "win64" fn CertFreeCertificateChain(chain: usize) {
@@ -1497,19 +1608,14 @@ pub unsafe extern "win64" fn CertDuplicateCertificateChain(chain: usize) -> usiz
     chain
 }
 
+/// CERT_CHAIN_POLICY_PARA en x64 (tests) ; le code lit les champs à la
+/// taille d'un pointeur du programme.
+#[cfg(test)]
 #[repr(C)]
 struct PolicyPara {
     cb: u32,
     flags: u32,
     extra: usize,
-}
-
-#[repr(C)]
-struct SslExtraPara {
-    cb: u32,
-    auth_type: u32,
-    checks: u32,
-    server_name: *const u16,
 }
 
 #[repr(C)]
@@ -1559,18 +1665,34 @@ pub unsafe extern "win64" fn CertVerifyCertificateChainPolicy(
         return 0;
     }
     let c = &*(chain as *const Chain);
-    let p = para as *const PolicyPara;
-    let flags = if p.is_null() { 0 } else { (*p).flags };
-    let ssl = if policy == 4 && !p.is_null() && (*p).extra != 0 {
-        (*p).extra as *const SslExtraPara
+    // CERT_CHAIN_POLICY_PARA { cbSize, dwFlags, pvExtraPolicyPara } et
+    // SSL_EXTRA_CERT_CHAIN_POLICY_PARA { cbSize, dwAuthType, fdwChecks,
+    // pwszServerName } : pointeurs de 4 octets pour un programme x86, lus
+    // à la taille d'un pointeur (#1708).
+    let ps = crate::wow32::pointer_size();
+    let (flags, extra) = if para == 0 {
+        (0, 0)
     } else {
-        std::ptr::null()
+        (
+            *((para + 4) as *const u32),
+            crate::wow32::read_ptr(para + 8),
+        )
     };
-    let checks = if ssl.is_null() { 0 } else { (*ssl).checks };
+    let ssl = if policy == 4 { extra } else { 0 };
+    let checks = if ssl == 0 {
+        0
+    } else {
+        *((ssl + 8) as *const u32)
+    };
+    let server_name = if ssl == 0 {
+        0
+    } else {
+        crate::wow32::read_ptr(ssl + 12usize.next_multiple_of(ps))
+    };
     let mut error = policy_error(trust_error(c.x509_error), flags, checks);
     // Nom du serveur (stratégie SSL, côté client : dwAuthType = 2).
-    if error == 0 && !ssl.is_null() && !(*ssl).server_name.is_null() && checks & 0x1000 == 0 {
-        let host = super::wstr((*ssl).server_name);
+    if error == 0 && server_name != 0 && checks & 0x1000 == 0 {
+        let host = super::wstr(server_name as *const u16);
         let leaf = c.elements.first().map(|e| cert_der(e.cert)).unwrap_or(&[]);
         if !host.is_empty() && !hostssl::check_host(leaf, &host) {
             error = CERT_E_CN_NO_MATCH;
@@ -1604,26 +1726,34 @@ pub unsafe extern "win64" fn CertCreateCertificateChainEngine(
     config: usize,
     out: *mut usize,
 ) -> i32 {
-    // cbSize : 80 (Windows 7) ou 88 (Windows 8 et plus, avec dwExclusiveFlags).
+    // cbSize : d'origine, Windows 7 (hExclusiveRoot) ou Windows 8 et plus
+    // (dwExclusiveFlags). Handles de la taille d'un pointeur : 64, 80, 88
+    // octets en x64 ; 40, 48, 52 en x86 (#1708).
+    let ps = crate::wow32::pointer_size();
+    let l = engine_config_layout(ps);
     let cb = if config == 0 {
         0
     } else {
-        *(config as *const u32)
+        *(config as *const u32) as usize
     };
-    if out.is_null() || !(cb == 64 || cb == 80 || cb == 88) {
+    if out.is_null() || !l.sizes.contains(&cb) {
         set_last_error(E_INVALIDARG);
         return 0;
     }
-    let f = |off: usize| *((config + off) as *const usize);
-    let count = *((config + 32) as *const u32) as usize;
-    let list = f(40) as *const usize;
-    let additional = if list.is_null() {
+    let count = *((config + l.count) as *const u32) as usize;
+    let list = crate::wow32::read_ptr(config + l.list);
+    let additional = if list == 0 {
         Vec::new()
     } else {
-        std::slice::from_raw_parts(list, count).to_vec()
+        (0..count)
+            .map(|i| crate::wow32::read_ptr(list + i * ps))
+            .collect()
     };
-    let (exclusive_root, partial) = if cb >= 80 {
-        (f(64), cb >= 88 && *((config + 80) as *const u32) & 1 != 0)
+    let (exclusive_root, partial) = if cb >= l.sizes[1] {
+        (
+            crate::wow32::read_ptr(config + l.exclusive_root),
+            cb >= l.sizes[2] && *((config + l.exclusive_flags) as *const u32) & 1 != 0,
+        )
     } else {
         (0, false)
     };
@@ -1643,6 +1773,39 @@ pub unsafe extern "win64" fn CertCreateCertificateChainEngine(
     );
     *out = id;
     1
+}
+
+/// Décalages de CERT_CHAIN_ENGINE_CONFIG (wincrypt.h) selon la taille
+/// d'un pointeur (#1708).
+struct EngineLayout {
+    count: usize,
+    list: usize,
+    exclusive_root: usize,
+    exclusive_flags: usize,
+    sizes: [usize; 3],
+}
+
+fn engine_config_layout(ps: usize) -> EngineLayout {
+    // cbSize puis trois handles ; cAdditionalStore, rghAdditionalStore,
+    // dwFlags, trois DWORD, hExclusiveRoot, hExclusiveTrustedPeople,
+    // dwExclusiveFlags.
+    let count = 4usize.next_multiple_of(ps) + 3 * ps;
+    let list = (count + 4).next_multiple_of(ps);
+    let flags = list + ps;
+    let original = flags + 16;
+    let exclusive_root = original.next_multiple_of(ps);
+    let exclusive_flags = exclusive_root + 2 * ps;
+    EngineLayout {
+        count,
+        list,
+        exclusive_root,
+        exclusive_flags,
+        sizes: [
+            original.next_multiple_of(ps),
+            exclusive_flags,
+            (exclusive_flags + 4).next_multiple_of(ps),
+        ],
+    }
 }
 
 pub extern "win64" fn CertFreeCertificateChainEngine(engine: usize) {
@@ -2467,6 +2630,23 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CERT_CHAIN_ENGINE_CONFIG : tailles de wincrypt.h en x64 et en x86 (#1708).
+    #[test]
+    fn config_du_moteur_de_chaines_x86_et_x64() {
+        let l = engine_config_layout(8);
+        assert_eq!(
+            (l.count, l.list, l.exclusive_root, l.exclusive_flags),
+            (32, 40, 64, 80)
+        );
+        assert_eq!(l.sizes, [64, 80, 88]);
+        let l = engine_config_layout(4);
+        assert_eq!(
+            (l.count, l.list, l.exclusive_root, l.exclusive_flags),
+            (16, 20, 40, 48)
+        );
+        assert_eq!(l.sizes, [40, 48, 52]);
+    }
 
     #[test]
     fn oid_et_dates() {
