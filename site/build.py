@@ -342,7 +342,8 @@ class Renderer:
         s = self.strings
         return (f'<div class="suivi" data-suivi="../suivi/" data-empty="{html.escape(s["suivi_empty"])}" '
                 f'data-run="{html.escape(s["suivi_run"])}" data-pr="{html.escape(s["suivi_pr"])}" '
-                f'data-test="{html.escape(s["suivi_test"])}" data-failed="{html.escape(s["suivi_failed"])}">'
+                f'data-test="{html.escape(s["suivi_test"])}" data-failed="{html.escape(s["suivi_failed"])}" '
+                f'data-updated="{html.escape(s["suivi_updated"])}" data-stale="{html.escape(s["suivi_stale"])}">'
                 f'<p class="muted">{html.escape(s["suivi_loading"])}</p></div>'
                 f'<script src="../static/suivi.js" defer></script>')
 

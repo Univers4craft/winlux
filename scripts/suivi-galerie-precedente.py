@@ -56,9 +56,14 @@ def reprendre(archive_zip, sortie):
         if not images:
             return 0
         for rel, info in trouves.items():
+            if rel == "data.json":
+                continue
             cible = sortie / rel
             cible.parent.mkdir(parents=True, exist_ok=True)
             cible.write_bytes(tar.extractfile(info).read())
+        # La page avertit que la galerie n'a pas été mise à jour.
+        data["reprise"] = True
+        (sortie / "data.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         return images
 
 

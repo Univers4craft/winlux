@@ -130,7 +130,8 @@ def main():
         fichiers = sorted(p.relative_to(tmp / "reprise").as_posix() for p in (tmp / "reprise").rglob("*") if p.is_file())
         check(prec.returncode == 0 and fichiers == ["suivi/data.json", "suivi/img/0123456789abcdef.webp",
                                                    "suivi/min/0123456789abcdef.webp"]
-              and not (tmp / "evade.webp").exists(),
+              and not (tmp / "evade.webp").exists()
+              and json.loads((reprise / "data.json").read_text(encoding="utf-8")).get("reprise") is True,
               f"galerie précédente reprise, sans lien ni chemin sortant (#1871) ({fichiers})")
         vide = tmp / "vide.zip"
         with zipfile.ZipFile(vide, "w") as z:
