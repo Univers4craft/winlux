@@ -46,5 +46,7 @@
   "suivi_run": "Exécution",
   "suivi_pr": "PR",
   "suivi_test": "Test",
-  "suivi_failed": "échec de la CI"
+  "suivi_failed": "échec de la CI",
+  "suivi_updated": "Dernières captures :",
+  "suivi_stale": "La CI n'a pas pu mettre la galerie à jour : voici la dernière version publiée."
 }
