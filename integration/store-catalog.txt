@@ -37,6 +37,7 @@ newsflash|internet|NewsFlash|newsflash|NewsFlash|Lecteur de flux moderne.|Modern
 uget|internet|uGet|uget|uGet|Gestionnaire de téléchargements.|Download manager.|Gestor de descargas.|Download-Manager.
 kdeconnect|internet|KDE Connect|kdeconnect|KDE|Relier son téléphone à l'ordinateur.|Connect your phone to your computer.|Conecta tu teléfono al ordenador.|Telefon mit dem Computer verbinden.
 wireshark|internet|Wireshark|wireshark|Wireshark|Analyser le trafic réseau.|Analyse network traffic.|Analiza el tráfico de red.|Netzwerkverkehr analysieren.
+zenmap|internet|Zenmap|zenmap|Nmap Project|Explorer son réseau : appareils et ports ouverts.|Explore your network: devices and open ports.|Explora tu red: dispositivos y puertos abiertos.|Das eigene Netzwerk erkunden: Geräte und offene Ports.
 # --- Bureautique ---
 writer|bureautique|LibreOffice Writer|libreoffice-writer|The Document Foundation|Traitement de texte compatible avec les fichiers Word (.docx).|Word processor compatible with .docx files.|Procesador de textos compatible con archivos .docx.|Textverarbeitung, kompatibel mit .docx-Dateien.
 calc|bureautique|LibreOffice Calc|libreoffice-calc|The Document Foundation|Tableur compatible avec les classeurs Excel (.xlsx).|Spreadsheet compatible with .xlsx workbooks.|Hoja de cálculo compatible con libros .xlsx.|Tabellenkalkulation, kompatibel mit .xlsx.
@@ -68,6 +69,11 @@ korganizer|bureautique|KOrganizer|korganizer|KDE|Agenda et tâches.|Calendar and
 dia|bureautique|Dia|dia|GNOME|Diagrammes et organigrammes.|Diagrams and flowcharts.|Diagramas y organigramas.|Diagramme und Flussdiagramme.
 ghostwriter|bureautique|Ghostwriter|ghostwriter|KDE|Écrire en Markdown sans distraction.|Distraction-free Markdown writing.|Escribe en Markdown sin distracciones.|Ablenkungsfrei in Markdown schreiben.
 manuskript|bureautique|Manuskript|manuskript|Manuskript|Organiser l'écriture d'un roman.|Organise the writing of a novel.|Organiza la escritura de una novela.|Das Schreiben eines Romans planen.
+apostrophe|bureautique|Apostrophe|apostrophe|GNOME|Rédaction en Markdown sans distraction.|Distraction-free Markdown writing.|Escritura en Markdown sin distracciones.|Ablenkungsfreies Schreiben in Markdown.
+retext|bureautique|ReText|retext|ReText|Éditeur Markdown avec aperçu.|Markdown editor with preview.|Editor de Markdown con vista previa.|Markdown-Editor mit Vorschau.
+focuswriter|bureautique|FocusWriter|focuswriter|Gott Code|Traitement de texte plein écran pour écrire au calme.|Full-screen word processor for focused writing.|Procesador de texto a pantalla completa para escribir con calma.|Vollbild-Textverarbeitung für konzentriertes Schreiben.
+zathura|bureautique|Zathura|zathura|pwmt|Lecteur PDF léger, au clavier.|Lightweight, keyboard-driven PDF reader.|Lector de PDF ligero, con teclado.|Leichter, tastaturgesteuerter PDF-Betrachter.
+grisbi|bureautique|Grisbi|grisbi|Grisbi|Comptes personnels et budget.|Personal accounts and budget.|Cuentas personales y presupuesto.|Persönliche Konten und Budget.
 # --- Audio et vidéo ---
 vlc|multimedia|VLC|vlc|VideoLAN|Lit presque tous les formats audio et vidéo.|Plays almost every audio and video format.|Reproduce casi todos los formatos de audio y vídeo.|Spielt fast alle Audio- und Videoformate ab.
 mpv|multimedia|mpv|mpv|mpv|Lecteur vidéo minimaliste et performant.|Minimal, efficient video player.|Reproductor de vídeo minimalista y eficaz.|Minimalistischer, schneller Videoplayer.
@@ -107,6 +113,10 @@ subtitleeditor|multimedia|Subtitle Editor|subtitleeditor|Subtitle Editor|Créer 
 gaupol|multimedia|Gaupol|gaupol|Gaupol|Éditeur de sous-titres.|Subtitle editor.|Editor de subtítulos.|Untertitel-Editor.
 cheese|multimedia|Cheese|cheese|GNOME|Photos et vidéos avec la webcam.|Photos and videos with your webcam.|Fotos y vídeos con la cámara web.|Fotos und Videos mit der Webcam.
 guvcview|multimedia|guvcview|guvcview|guvcview|Réglages et capture de webcam.|Webcam settings and capture.|Ajustes y captura de cámara web.|Webcam-Einstellungen und Aufnahme.
+kodi|multimedia|Kodi|kodi|Kodi Foundation|Centre multimédia pour films, séries et musique.|Media center for films, shows and music.|Centro multimedia para películas, series y música.|Mediencenter für Filme, Serien und Musik.
+picard|multimedia|MusicBrainz Picard|picard|MetaBrainz|Classer et étiqueter sa musique.|Tag and organize your music.|Etiquetar y ordenar tu música.|Musik taggen und ordnen.
+peek|multimedia|Peek|peek|Peek|Enregistrer une zone de l'écran en GIF animé.|Record part of the screen as an animated GIF.|Grabar una zona de la pantalla como GIF animado.|Bildschirmbereich als animiertes GIF aufnehmen.
+kamoso|multimedia|Kamoso|kamoso|KDE|Photos et vidéos avec la webcam.|Photos and videos with your webcam.|Fotos y vídeos con la webcam.|Fotos und Videos mit der Webcam.
 # --- Photo et graphisme ---
 gimp|graphisme|GIMP|gimp|GIMP Team|Retouche photo et création graphique avancée.|Advanced photo editing and graphics.|Retoque fotográfico y diseño avanzado.|Fortgeschrittene Bildbearbeitung und Grafik.
 krita|graphisme|Krita|krita|KDE|Peinture numérique et illustration.|Digital painting and illustration.|Pintura digital e ilustración.|Digitale Malerei und Illustration.
@@ -133,6 +143,8 @@ gcolor3|graphisme|Gcolor3|gcolor3|Gcolor3|Pipette et nuancier.|Colour picker and
 converseen|graphisme|Converseen|converseen|Converseen|Convertir et redimensionner des images par lots.|Batch-convert and resize images.|Convierte y redimensiona imágenes por lotes.|Bilder stapelweise umwandeln und skalieren.
 simplescan|graphisme|Numériseur|simple-scan|GNOME|Numériser des documents et des photos.|Scan documents and photos.|Escanea documentos y fotos.|Dokumente und Fotos scannen.
 skanlite|graphisme|Skanlite|skanlite|KDE|Numérisation simple.|Simple scanning.|Escaneo sencillo.|Einfaches Scannen.
+luminance|graphisme|Luminance HDR|luminance-hdr|Luminance HDR|Créer des photos HDR à partir de plusieurs expositions.|Create HDR photos from several exposures.|Crear fotos HDR a partir de varias exposiciones.|HDR-Fotos aus mehreren Belichtungen erstellen.
+pencil2d|graphisme|Pencil2D|pencil2d|Pencil2D|Animation 2D image par image.|Frame-by-frame 2D animation.|Animación 2D fotograma a fotograma.|2D-Animation Bild für Bild.
 # --- Développement ---
 git|developpement|Git|git|Git|Gestion de versions distribuée.|Distributed version control.|Control de versiones distribuido.|Verteilte Versionsverwaltung.
 gitg|developpement|gitg|gitg|GNOME|Explorer un dépôt Git.|Browse a Git repository.|Explora un repositorio Git.|Ein Git-Repository durchsuchen.
@@ -224,6 +236,9 @@ pychess|jeux|PyChess|pychess|PyChess|Échecs avec analyse.|Chess with analysis.|
 scummvm|jeux|ScummVM|scummvm|ScummVM|Rejouer aux jeux d'aventure classiques.|Replay classic adventure games.|Vuelve a jugar aventuras clásicas.|Klassische Adventures erneut spielen.
 dosbox|jeux|DOSBox|dosbox|DOSBox|Lancer de vieux jeux DOS.|Run old DOS games.|Ejecuta juegos DOS antiguos.|Alte DOS-Spiele starten.
 retroarch|jeux|RetroArch|retroarch|Libretro|Émulateur de consoles rétro.|Retro console emulator.|Emulador de consolas retro.|Emulator für Retro-Konsolen.
+freeorion|jeux|FreeOrion|freeorion|FreeOrion|Conquête spatiale au tour par tour.|Turn-based space conquest.|Conquista espacial por turnos.|Rundenbasierte Eroberung des Weltalls.
+endless-sky|jeux|Endless Sky|endless-sky|Endless Sky|Commerce et combats dans l'espace.|Trading and combat in space.|Comercio y combates en el espacio.|Handel und Kämpfe im Weltall.
+naev|jeux|Naev|naev|Naev|Aventure spatiale ouverte : missions, commerce, combats.|Open space adventure: missions, trading, combat.|Aventura espacial abierta: misiones, comercio, combates.|Offenes Weltraumabenteuer: Missionen, Handel, Kämpfe.
 # --- Éducation ---
 gcompris|education|GCompris|gcompris-qt|KDE|Plus de 100 activités pour les 2 à 10 ans.|Over 100 activities for ages 2 to 10.|Más de 100 actividades para niños de 2 a 10 años.|Über 100 Aktivitäten für 2- bis 10-Jährige.
 tuxpaint|education|Tux Paint|tuxpaint|Tux Paint|Dessin pour les enfants.|Drawing for children.|Dibujo para niños.|Malen für Kinder.
@@ -244,6 +259,7 @@ gbrainy|education|gbrainy|gbrainy|gbrainy|Casse-têtes et entraînement cérébr
 lenmus|education|LenMus|lenmus|LenMus|Apprendre le solfège.|Learn music theory.|Aprende solfeo.|Musiktheorie lernen.
 minuet|education|Minuet|minuet|KDE|Éducation musicale de l'oreille.|Ear training for music.|Educación auditiva musical.|Gehörbildung für Musik.
 kanagram|education|Kanagram|kanagram|KDE|Jeu d'anagrammes.|Anagram game.|Juego de anagramas.|Anagrammspiel.
+kiwix|education|Kiwix|kiwix|Kiwix|Wikipédia et d'autres encyclopédies, hors ligne.|Wikipedia and other encyclopedias, offline.|Wikipedia y otras enciclopedias, sin conexión.|Wikipedia und andere Enzyklopädien, offline.
 # --- Sciences ---
 stellarium|sciences|Stellarium|stellarium|Stellarium|Planétarium réaliste.|Realistic planetarium.|Planetario realista.|Realistisches Planetarium.
 kstars|sciences|KStars|kstars|KDE|Carte du ciel et astronomie.|Sky chart and astronomy.|Mapa del cielo y astronomía.|Himmelskarte und Astronomie.
@@ -291,6 +307,7 @@ redshift|utilitaires|Redshift|redshift-gtk|Redshift|Lumière plus chaude le soir
 cpux|utilitaires|CPU-X|cpu-x|CPU-X|Informations sur le matériel.|Hardware information.|Información del hardware.|Hardware-Informationen.
 hardinfo|utilitaires|HardInfo|hardinfo|HardInfo|Rapport et tests du matériel.|Hardware report and benchmarks.|Informe y pruebas del hardware.|Hardwarebericht und Leistungstests.
 ocrfeeder|utilitaires|OCRFeeder|ocrfeeder|GNOME|Reconnaître le texte d'un document numérisé.|Recognise text in scanned documents.|Reconoce texto en documentos escaneados.|Text in gescannten Dokumenten erkennen.
+gtkhash|utilitaires|GtkHash|gtkhash|GtkHash|Calculer et vérifier les empreintes de fichiers (SHA-256…).|Compute and check file checksums (SHA-256…).|Calcular y verificar huellas de archivos (SHA-256…).|Prüfsummen von Dateien berechnen und prüfen (SHA-256…).
 # --- Système ---
 htop|systeme|htop|htop|htop|Moniteur de processus interactif.|Interactive process monitor.|Monitor de procesos interactivo.|Interaktiver Prozessmonitor.
 btop|systeme|btop|btop|btop|Moniteur système en couleurs.|Colourful system monitor.|Monitor del sistema en colores.|Farbiger Systemmonitor.

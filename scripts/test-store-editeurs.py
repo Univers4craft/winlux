@@ -215,6 +215,45 @@ with tempfile.TemporaryDirectory() as tmp:
     check(calls[-1] == ["purge", "--autoremove", "--", "claude-desktop"], "purge du paquet")
     check(["winlux-store-repos", "clean", "claude"] in admin_calls, "dépôt de l'éditeur retiré")
 
+    # Paquets de transition vers Snap (#1513) : masqués sans snapd.
+    apt_src = type(m["SOURCE_BY_NAME"]["apt"])()
+    apt_src.local_only = True
+    apt_src.curated = lambda: {p: {"name": p, "featured": p == "thunderbird", "desc": "d", "cat": "internet",
+                                   "pub": "x"} for p in ("thunderbird", "vlc")}
+    apt_src.candidates = lambda pkgs: {"thunderbird": "2:1snap1-0ubuntu3", "vlc": "3.0.20"}
+    apt_src.installed = lambda: {}
+    apt_src.upgradable = lambda: {}
+    apt_src.refresh_lists = lambda *a: None
+    g = m["Apt"].apps.__globals__
+    saved = g["dep11_index"], g["run"], g["have"], g["OFFLINE"]
+    g["dep11_index"], g["have"], g["OFFLINE"] = (lambda: {}), (lambda c: True), True
+    g["run"] = lambda cmd, *a, **k: (0, "snapd\nReverse Depends:\n  thunderbird\n |firefox\n" if "rdepends" in cmd else "")
+    names = [a.ref for a in apt_src.apps()]
+    check(names == ["vlc"], f"Thunderbird (transition vers Snap) masqué sans snapd ({names})")
+    apt_src.installed = lambda: {"thunderbird": ("2:1snap1", 1)}
+    check("thunderbird" in [a.ref for a in apt_src.apps()], "déjà installé : reste visible pour la désinstallation")
+    g["dep11_index"], g["run"], g["have"], g["OFFLINE"] = saved
+
+    # Section « Testés sur Winlux » (#1515) : catalogue livré, fiches épinglées.
+    valides = tmp / "valides.json"
+    valides.write_text(json.dumps({"apps": [
+        {"id": "7zip", "name": "7-Zip", "version": "24.09", "publisher": "Igor Pavlov", "category": "utilitaires",
+         "installer": {"url": "https://www.7-zip.org/a/7z2409-x64.exe", "sha256": "a" * 64}},
+        {"id": "sans-empreinte", "name": "X", "installer": {"url": "https://x.example/x.exe"}}]}))
+    g = m["Windows"].apps.__globals__
+    saved_v = g["VALIDES"]
+    g["VALIDES"] = valides
+    win = [a for a in m["Windows"]().apps() if a.ref.startswith("valides/")]
+    check([a.ref for a in win] == ["valides/7zip"] and win[0].tested and win[0].provider == "Testés sur Winlux",
+          f"section « Testés sur Winlux » : fiche épinglée seulement ({[a.ref for a in win]})")
+    g["VALIDES"] = saved_v
+    shipped = json.loads((project / "integration/store-windows-valides.json").read_text())
+    for a in shipped["apps"]:
+        check(m["valid_windows_entry"](a) and a["installer"]["url"].startswith("https://") and a.get("publisher")
+              and a.get("version") and not BRAND.search(json.dumps(a, ensure_ascii=False)),
+              f"{a.get('id')} : adresse https, version, éditeur, SHA-256")
+    check("store-windows-valides.json" in (project / "scripts/build-live-iso.sh").read_text(), "catalogue livré dans l'ISO")
+
     # --- 3. winlux-store-repos sur une racine simulée -----------------------
     root = tmp / "root"
     lists = root / "etc/apt/sources.list.d"

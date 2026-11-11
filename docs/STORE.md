@@ -156,7 +156,18 @@ un catalogue :
 (`"file": "/chemin/catalog.json"` pour un fichier local, `"enabled": false`
 pour le désactiver.)
 
-**Boutiques au choix : Scoop Extras et Scoop Games.** Aucun catalogue Windows
+**Testés sur Winlux (#1515).** Seul catalogue Windows livré :
+`integration/store-windows-valides.json` (format `winlux`, installé dans
+`/usr/share/winlux/store-windows-valides.json`), les programmes .exe
+installés et utilisés sur le banc (liste de `site/content/fr/software.md`),
+chacun avec adresse officielle, version et SHA-256 relevés par la sonde de la
+CI (`scripts/check-store-editeurs.py`). Section dédiée en tête de la page
+Windows de la boutique et sur l'accueil. Comme pour tout programme .exe, une
+fenêtre de confirmation (produit, version, éditeur, adresse, empreinte,
+Annuler par défaut) précède le téléchargement (#1517) ; la désinstallation
+garde les documents.
+
+**Boutiques au choix : Scoop Extras et Scoop Games.** Aucun autre catalogue Windows
 n'est actif d'office : l'utilisateur choisit ses boutiques (installateur,
 premier démarrage, Paramètres > Applications ; voir `docs/BOUTIQUES.md`, qui
 liste aussi les boutiques écartées et pourquoi). Une installation antérieure
