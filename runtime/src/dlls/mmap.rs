@@ -32,6 +32,8 @@ struct MappedView {
     /// Protection Windows (PAGE_*) de chaque page de 4 Kio, pour
     /// VirtualProtect et VirtualAlloc(MEM_COMMIT) sur la vue (#665).
     protection: Vec<u32>,
+    /// Nom de la section, pour la trace de VirtualQuery (#1650).
+    name: Option<String>,
 }
 
 static MAPPINGS: Mutex<Option<HashMap<usize, FileMapping>>> = Mutex::new(None);
@@ -303,6 +305,33 @@ unsafe fn create_mapping(
     max_size: u64,
     name: Option<String>,
 ) -> usize {
+    let shown = name.clone();
+    let h = create_mapping_inner(file, security, protect, max_size, name);
+    // WINLUX_TRACE : nom, taille demandée, handle, taille réelle et
+    // ERROR_ALREADY_EXISTS, pour suivre une mémoire partagée nommée entre
+    // processus (flux de Steam, #1650).
+    if let Some(n) = shown.filter(|n| !n.is_empty()) {
+        crate::trace!(
+            "CreateFileMapping({n}, fichier 0x{file:x}, taille {max_size}) = 0x{h:x}, taille réelle {:?} (erreur {})",
+            mapping_size(h),
+            crate::dlls::kernel32::get_last_error()
+        );
+    }
+    h
+}
+
+/// Taille d'une section (pour la trace).
+fn mapping_size(h: usize) -> Option<u64> {
+    Some(mappings().as_ref()?.get(&h)?.max_size)
+}
+
+unsafe fn create_mapping_inner(
+    file: usize,
+    security: usize,
+    protect: u32,
+    max_size: u64,
+    name: Option<String>,
+) -> usize {
     let key = name.as_deref().filter(|n| !n.is_empty()).map(name_key);
     if let Some(k) = key.as_deref() {
         if let Some(h) = open_named(k, SECTION_ALL_ACCESS) {
@@ -384,6 +413,12 @@ fn open_mapping(name: Option<String>, access: u32, inherit: i32) -> usize {
     };
     let found = open_named(&key, section_rights(access))
         .or_else(|| open_shared(&key, section_rights(access)));
+    crate::trace!(
+        "OpenFileMapping({}, accès 0x{access:x}) = {:?}, taille {:?}",
+        name.as_deref().unwrap_or(""),
+        found,
+        found.and_then(mapping_size)
+    );
     match found {
         Some(h) => {
             crate::dlls::inherit::set(h, inherit != 0);
@@ -623,6 +658,12 @@ unsafe fn map_view_at(
     }
 
     let addr = p as usize;
+    let view_name = fm.name.clone();
+    if let Some(n) = fm.name.as_deref() {
+        crate::trace!(
+            "MapViewOfFile({n}, accès 0x{access:x}, décalage {offset}, demandé {bytes_to_map}) = 0x{addr:x}, {len} octets"
+        );
+    }
     drop(guard);
     views().as_mut().unwrap().insert(
         addr,
@@ -630,9 +671,19 @@ unsafe fn map_view_at(
             addr,
             len,
             protection: vec![win_prot; len.div_ceil(PAGE)],
+            name: view_name,
         },
     );
     addr
+}
+
+/// Nom de la section d'une vue qui contient `addr` (trace de VirtualQuery).
+pub fn named_view_at(addr: usize) -> Option<String> {
+    views()
+        .as_ref()?
+        .values()
+        .find(|v| addr >= v.addr && addr < v.addr + v.len)
+        .and_then(|v| v.name.clone())
 }
 
 /// Change la protection des pages [start, end) si elles sont toutes dans
