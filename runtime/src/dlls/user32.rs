@@ -2590,13 +2590,44 @@ pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     if window_diag() {
         eprintln!("winlux[fenetre] parent {hwnd:#x} : {old:#x} -> {new_parent:#x}");
     }
-    if new_parent != 0 && new_parent != old {
+    if new_parent != 0
+        && new_parent != HWND_MESSAGE
+        && is_message_only(hwnd)
+        && !is_message_only(new_parent)
+    {
+        // Fenêtre créée sous une fenêtre « message seulement », donc sans
+        // fenêtre X (#1586), puis rattachée à une vraie fenêtre : WinForms
+        // crée les ToolStrip de Paint.NET (menus, barre d'outils, barre
+        // d'état) sous sa WindowsFormsParkingWindow, puis les déplace dans
+        // la fenêtre principale (#1677). Elle devient une fenêtre ordinaire.
+        leave_message_only(hwnd, new_parent);
+    } else if new_parent != 0 && new_parent != old {
         // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).
         let rect = gui::window_rect(hwnd).unwrap_or_default();
         with_backend(|b| b.reparent_window(hwnd, new_parent, rect));
     }
     old
+}
+
+/// Donne une fenêtre X à `hwnd` et à ses descendants, sortis du monde
+/// « message seulement » par SetParent, puis demande leur peinture.
+fn leave_message_only(hwnd: usize, parent: usize) {
+    lock(message_only_windows()).remove(&hwnd);
+    let rect = gui::window_rect(hwnd).unwrap_or_default();
+    let shown = gui::is_window_visible(hwnd);
+    with_backend(|b| {
+        b.create_child_window(hwnd, parent, rect);
+        if shown {
+            b.show_window(hwnd, true);
+        }
+    });
+    for child in gui::child_windows(hwnd) {
+        leave_message_only(child, hwnd);
+    }
+    if shown {
+        gui::request_paint(hwnd);
+    }
 }
 
 // =====================================================================
@@ -6789,6 +6820,17 @@ mod tests_messages {
             assert!(is_message_only(child));
             let top = make(0, 0);
             assert!(!is_message_only(top));
+            // #1677 : rattachée à une vraie fenêtre (ToolStrip de WinForms
+            // sorti de la fenêtre de parcage), elle redevient ordinaire,
+            // avec ses enfants.
+            let grand = make(WS_CHILD, child);
+            assert!(is_message_only(grand));
+            assert_eq!(set_parent(child, top), msg);
+            assert!(!is_message_only(child));
+            assert!(!is_message_only(grand));
+            assert_eq!(gui::window_parent(child), Some(top));
+            assert!(is_message_only(msg));
+            destroy_window(grand);
             destroy_window(child);
             destroy_window(msg);
             destroy_window(top);
