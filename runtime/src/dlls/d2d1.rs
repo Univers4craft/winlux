@@ -442,13 +442,18 @@ enum WicLayout {
     Prgba,
     Bgr,
     Alpha8,
+    /// 128bppPRGBAFloat : contexte WARP intermédiaire des effets GPU de
+    /// Paint.NET (#1749), rendu ici en 8 bits.
+    PrgbaF32,
 }
 
 impl WicLayout {
     fn of(fmt: &Guid) -> Option<WicLayout> {
+        use super::wic_pixels::FMT_PRGBA_FLOAT128;
         use super::windowscodecs::{FMT_ALPHA8, FMT_BGR32, FMT_PBGRA32, FMT_PRGBA32};
         Some(match *fmt {
             FMT_PBGRA32 => WicLayout::Pbgra,
+            FMT_PRGBA_FLOAT128 => WicLayout::PrgbaF32,
             FMT_PRGBA32 => WicLayout::Prgba,
             FMT_BGR32 => WicLayout::Bgr,
             FMT_ALPHA8 => WicLayout::Alpha8,
@@ -457,10 +462,10 @@ impl WicLayout {
     }
 
     fn bpp(self) -> usize {
-        if self == WicLayout::Alpha8 {
-            1
-        } else {
-            4
+        match self {
+            WicLayout::Alpha8 => 1,
+            WicLayout::PrgbaF32 => 16,
+            _ => 4,
         }
     }
 
@@ -477,6 +482,13 @@ impl WicLayout {
                 WicLayout::Prgba => [s[2], s[1], s[0], s[3]],
                 WicLayout::Bgr => [s[0], s[1], s[2], 255],
                 WicLayout::Alpha8 => [0, 0, 0, s[0]],
+                WicLayout::PrgbaF32 => {
+                    let c = |i: usize| {
+                        let v = f32::from_le_bytes(s[i * 4..i * 4 + 4].try_into().unwrap());
+                        (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+                    };
+                    [c(2), c(1), c(0), c(3)]
+                }
             };
         }
     }
@@ -489,6 +501,11 @@ impl WicLayout {
                 WicLayout::Prgba => d.copy_from_slice(&[s[2], s[1], s[0], s[3]]),
                 WicLayout::Bgr => d.copy_from_slice(&[s[0], s[1], s[2], 255]),
                 WicLayout::Alpha8 => d[0] = s[3],
+                WicLayout::PrgbaF32 => {
+                    for (i, v) in [s[2], s[1], s[0], s[3]].into_iter().enumerate() {
+                        d[i * 4..i * 4 + 4].copy_from_slice(&(v as f32 / 255.0).to_le_bytes());
+                    }
+                }
             }
         }
     }
@@ -3230,6 +3247,85 @@ mod tests {
         a8.write(&[10, 20, 30, 40, 1, 2, 3, 200], &mut wic);
         assert_eq!(wic, [40, 200]);
         assert!(WicLayout::of(&Guid::default()).is_none());
+    }
+
+    /// #1749 : cible WIC 128bppPRGBAFloat (contexte WARP des effets GPU de
+    /// Paint.NET) acceptée, lue et écrite en flottants prémultipliés.
+    #[test]
+    fn cible_wic_flottante_128_bits() {
+        let fmt = super::super::wic_pixels::FMT_PRGBA_FLOAT128;
+        let l = WicLayout::of(&fmt).expect("128bppPRGBAFloat");
+        let f = |v: [f32; 4]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let mut own = [0u8; 4];
+        l.read(&f([1.0, 0.5, 0.0, 1.0]), &mut own);
+        assert_eq!(own, [0, 128, 255, 255], "RGBA flottant vers BGRA");
+        let mut wic = [0u8; 16];
+        l.write(&[0, 0, 255, 255], &mut wic);
+        assert_eq!(wic.to_vec(), f([1.0, 0.0, 0.0, 1.0]));
+        unsafe {
+            let mut w = std::ptr::null_mut();
+            assert_eq!(wic_create_imaging_factory_proxy(0x237, &mut w), S_OK);
+            type CreateBmp = unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                u32,
+                *const Guid,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut bmp = std::ptr::null_mut();
+            assert_eq!(method::<CreateBmp>(w, 17)(w, 2, 2, &fmt, 0, &mut bmp), S_OK);
+            release_obj(w);
+            let mut fac = std::ptr::null_mut();
+            assert_eq!(
+                d2d1_create_factory(0, &IID_D2D1_FACTORY, std::ptr::null(), &mut fac),
+                S_OK
+            );
+            type CreateRt = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateRt>(fac, 13)(fac, bmp, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            method::<Unary>(rt, 48)(rt);
+            method::<Clear>(rt, 47)(
+                rt,
+                &ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            );
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            type Copy =
+                unsafe extern "win64" fn(*mut c_void, *const c_void, u32, u32, *mut u8) -> i32;
+            let mut buf = vec![0u8; 2 * 2 * 16];
+            assert_eq!(
+                method::<Copy>(bmp, 7)(
+                    bmp,
+                    std::ptr::null(),
+                    32,
+                    buf.len() as u32,
+                    buf.as_mut_ptr()
+                ),
+                S_OK
+            );
+            assert_eq!(buf[..16].to_vec(), f([0.0, 0.0, 1.0, 1.0]), "bleu opaque");
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(fac);
+        }
     }
 
     unsafe fn pixels(bmp: *mut c_void) -> Vec<u8> {
