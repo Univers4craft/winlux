@@ -2082,6 +2082,8 @@ pub fn oleaut32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "VarBstrCmp" => fn VarBstrCmp,
         "VarUI4FromStr" => fn VarUI4FromStr,
+        // Ordinal d'après OleAut32.Lib du SDK Windows public (#1606).
+        "#277" => fn VarUI4FromStr,
     }
 }
 

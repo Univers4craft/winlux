@@ -1,5 +1,7 @@
 //! Avis de branchement et de retrait d'appareils (#1523) :
-//! `RegisterDeviceNotificationW/A` et `UnregisterDeviceNotification`.
+//! `RegisterDeviceNotificationW/A` et `UnregisterDeviceNotification`, et
+//! leur forme cfgmgr32 `CM_Register_Notification` /
+//! `CM_Unregister_Notification` (rappel au lieu d'une fenêtre, #1585).
 //!
 //! Les logiciels de matériel, SDL et hidapi s'inscrivent pour une classe
 //! d'interface (`DBT_DEVTYP_DEVICEINTERFACE`, par ex. l'interface HID) et
@@ -29,10 +31,18 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 
 struct Registration {
     handle: usize,
-    hwnd: usize,
+    target: Target,
     /// Classe d'interface suivie, `None` pour toutes.
     class: Option<[u8; 16]>,
-    wide: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Target {
+    /// WM_DEVICECHANGE postés à la fenêtre (A ou W).
+    Window { hwnd: usize, wide: bool },
+    /// PCM_NOTIFY_CALLBACK, appelable en win64 (passerelle pour un
+    /// programme 32 bits), et son contexte.
+    Callback { function: usize, context: usize },
 }
 
 struct State {
@@ -103,13 +113,25 @@ fn post(hwnd: usize, wparam: usize, lparam: usize) {
 
 /// Écarts entre deux relevés, envoyés à chaque inscription concernée.
 fn notify(before: &BTreeSet<([u8; 16], String)>, after: &BTreeSet<([u8; 16], String)>) {
-    let targets: Vec<(usize, Option<[u8; 16]>, bool)> = crate::dlls::lock(&STATE)
+    let targets: Vec<(usize, Target, Option<[u8; 16]>)> = crate::dlls::lock(&STATE)
         .list
         .iter()
-        .map(|r| (r.hwnd, r.class, r.wide))
+        .map(|r| (r.handle, r.target, r.class))
         .collect();
-    for (hwnd, class, wide) in targets {
+    for (handle, target, class) in targets {
         let wanted = |c: &[u8; 16]| class.is_none_or(|k| &k == c);
+        let (hwnd, wide) = match target {
+            Target::Window { hwnd, wide } => (hwnd, wide),
+            Target::Callback { function, context } => {
+                for (c, path) in before.difference(after).filter(|(c, _)| wanted(c)) {
+                    cm_callback(function, handle, context, CM_NOTIFY_ACTION_REMOVAL, c, path);
+                }
+                for (c, path) in after.difference(before).filter(|(c, _)| wanted(c)) {
+                    cm_callback(function, handle, context, CM_NOTIFY_ACTION_ARRIVAL, c, path);
+                }
+                continue;
+            }
+        };
         let mut changed = false;
         for (c, path) in before.difference(after).filter(|(c, _)| wanted(c)) {
             post(hwnd, DBT_DEVICEREMOVECOMPLETE, broadcast(c, path, wide));
@@ -178,9 +200,11 @@ unsafe fn register(recipient: usize, filter: *const u8, flags: u32, wide: bool) 
         };
         st.list.push(Registration {
             handle: handle_out,
-            hwnd: recipient,
+            target: Target::Window {
+                hwnd: recipient,
+                wide,
+            },
             class,
-            wide,
         });
     }
     start_watch();
@@ -212,6 +236,138 @@ pub extern "win64" fn UnregisterDeviceNotification(handle: usize) -> i32 {
     i32::from(before != st.list.len() || (handle & 3 == 0 && handle >= 0xD0_0000))
 }
 
+// ---------- cfgmgr32 : CM_Register_Notification ----------
+
+const CR_SUCCESS: u32 = 0;
+const CR_INVALID_POINTER: u32 = 3;
+const CR_INVALID_FLAG: u32 = 4;
+const CR_INVALID_DATA: u32 = 31;
+/// sizeof(CM_NOTIFY_FILTER) : en-tête de 16 octets et union de
+/// MAX_DEVICE_ID_LEN (200) caractères larges.
+const CM_NOTIFY_FILTER_SIZE: u32 = 416;
+const CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES: u32 = 1;
+const CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES: u32 = 2;
+const CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE: u32 = 0;
+const CM_NOTIFY_FILTER_TYPE_MAX: u32 = 3;
+const CM_NOTIFY_ACTION_ARRIVAL: u32 = 0;
+const CM_NOTIFY_ACTION_REMOVAL: u32 = 1;
+
+/// CM_NOTIFY_EVENT_DATA d'une interface : FilterType, Reserved, ClassGuid,
+/// SymbolicLink (UTF-16), sur le tas du processus comme les tampons DBT.
+fn cm_event_data(class: &[u8; 16], path: &str) -> (usize, u32) {
+    let link: Vec<u8> = path
+        .encode_utf16()
+        .chain([0])
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let size = 24 + link.len();
+    let heap = crate::dlls::kernel32::process_heap();
+    let p = unsafe { crate::dlls::kernel32::heap_alloc(heap, 8, size) } as *mut u8;
+    if p.is_null() {
+        return (0, 0);
+    }
+    unsafe {
+        (p as *mut u32).write_unaligned(CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE);
+        std::ptr::copy_nonoverlapping(class.as_ptr(), p.add(8), 16);
+        std::ptr::copy_nonoverlapping(link.as_ptr(), p.add(24), link.len());
+    }
+    (p as usize, size as u32)
+}
+
+/// Appelle le rappel du programme (depuis le thread de relevé, comme le
+/// thread système de Windows), puis libère les données de l'avis.
+fn cm_callback(
+    function: usize,
+    handle: usize,
+    context: usize,
+    action: u32,
+    class: &[u8; 16],
+    path: &str,
+) {
+    let (data, size) = cm_event_data(class, path);
+    if data == 0 {
+        return;
+    }
+    let f: extern "win64" fn(usize, usize, u32, usize, u32) -> u32 =
+        unsafe { std::mem::transmute(function) };
+    f(handle, context, action, data, size);
+    let heap = crate::dlls::kernel32::process_heap();
+    unsafe { crate::dlls::kernel32::heap_free(heap, 0, data as *mut _) };
+}
+
+pub unsafe extern "win64" fn CM_Register_Notification(
+    filter: *const u8,
+    context: usize,
+    callback: usize,
+    out: *mut usize,
+) -> u32 {
+    if filter.is_null() || callback == 0 || out.is_null() {
+        return CR_INVALID_POINTER;
+    }
+    *out = 0;
+    let size = (filter as *const u32).read_unaligned();
+    let flags = (filter.add(4) as *const u32).read_unaligned();
+    let kind = (filter.add(8) as *const u32).read_unaligned();
+    if size != CM_NOTIFY_FILTER_SIZE || kind >= CM_NOTIFY_FILTER_TYPE_MAX {
+        return CR_INVALID_DATA;
+    }
+    if flags
+        & !(CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES
+            | CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES)
+        != 0
+    {
+        return CR_INVALID_FLAG;
+    }
+    // Rappel x86 d'un programme 32 bits : passerelle win64.
+    let function = if crate::wow32::active() {
+        crate::wow32::callback64(callback as u32)
+    } else {
+        callback
+    };
+    let handle = {
+        let mut st = crate::dlls::lock(&STATE);
+        st.next += 4;
+        let handle = st.next;
+        // Avis par handle de fichier ou par instance : inscrits, jamais émis.
+        if kind == CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE {
+            let class = if flags & CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES != 0 {
+                None
+            } else {
+                let mut g = [0u8; 16];
+                std::ptr::copy_nonoverlapping(filter.add(16), g.as_mut_ptr(), 16);
+                Some(g)
+            };
+            st.list.push(Registration {
+                handle,
+                target: Target::Callback { function, context },
+                class,
+            });
+        }
+        handle
+    };
+    if kind == CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE {
+        start_watch();
+    }
+    *out = handle;
+    CR_SUCCESS
+}
+
+pub extern "win64" fn CM_Unregister_Notification(handle: usize) -> u32 {
+    if handle == 0 {
+        return CR_INVALID_POINTER;
+    }
+    let mut st = crate::dlls::lock(&STATE);
+    st.list.retain(|r| r.handle != handle);
+    CR_SUCCESS
+}
+
+pub fn cfgmgr32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "CM_Register_Notification" => fn CM_Register_Notification,
+        "CM_Unregister_Notification" => fn CM_Unregister_Notification,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +382,69 @@ mod tests {
             assert_eq!((p.add(4) as *const u32).read_unaligned(), 5);
             assert_eq!(std::slice::from_raw_parts(p.add(12), 16), &class);
             assert_eq!((p.add(28) as *const u16).read_unaligned(), u16::from(b'\\'));
+        }
+    }
+
+    static SEEN: Mutex<Vec<(usize, usize, u32, String)>> = Mutex::new(Vec::new());
+
+    extern "win64" fn recorder(h: usize, ctx: usize, action: u32, data: usize, size: u32) -> u32 {
+        let p = data as *const u8;
+        let n = (size as usize - 24) / 2 - 1;
+        let link: Vec<u16> = (0..n)
+            .map(|i| unsafe { (p.add(24 + 2 * i) as *const u16).read_unaligned() })
+            .collect();
+        SEEN.lock()
+            .unwrap()
+            .push((h, ctx, action, String::from_utf16_lossy(&link)));
+        0
+    }
+
+    #[test]
+    fn inscription_cfgmgr32_et_rappel() {
+        unsafe {
+            let mut filter = [0u64; 52];
+            let f = filter.as_mut_ptr() as *mut u8;
+            (f as *mut u32).write(CM_NOTIFY_FILTER_SIZE);
+            (f.add(4) as *mut u32).write(CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES);
+            let mut h = 0usize;
+            assert_eq!(
+                CM_Register_Notification(f, 77, recorder as *const () as usize, &mut h),
+                CR_SUCCESS
+            );
+            assert_ne!(h, 0);
+
+            // Un appareil apparaît puis disparaît entre deux relevés.
+            let class = crate::dlls::hid::HID_GUID;
+            let empty = BTreeSet::new();
+            let one: BTreeSet<_> = [(class, "\\\\?\\hid#essai".to_string())].into();
+            notify(&empty, &one);
+            notify(&one, &empty);
+            let seen: Vec<_> = SEEN
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.0 == h)
+                .cloned()
+                .collect();
+            assert_eq!(seen.len(), 2);
+            assert_eq!((seen[0].1, seen[0].2), (77, CM_NOTIFY_ACTION_ARRIVAL));
+            assert_eq!(seen[0].3, "\\\\?\\hid#essai");
+            assert_eq!(seen[1].2, CM_NOTIFY_ACTION_REMOVAL);
+
+            assert_eq!(CM_Unregister_Notification(h), CR_SUCCESS);
+            notify(&empty, &one);
+            assert_eq!(SEEN.lock().unwrap().iter().filter(|e| e.0 == h).count(), 2);
+
+            // Taille de filtre fausse, pointeurs nuls.
+            (f as *mut u32).write(16);
+            assert_eq!(
+                CM_Register_Notification(f, 0, recorder as *const () as usize, &mut h),
+                CR_INVALID_DATA
+            );
+            assert_eq!(
+                CM_Register_Notification(std::ptr::null(), 0, 1, &mut h),
+                CR_INVALID_POINTER
+            );
         }
     }
 }

@@ -54,6 +54,7 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
+pub mod crypt32_encode;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_combine;
@@ -128,6 +129,7 @@ pub mod hostcall;
 pub mod hostssl;
 pub mod icc;
 pub mod icons;
+pub mod icue_win32;
 pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
@@ -139,9 +141,11 @@ pub mod jumplist_com;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
+pub mod kernel32_fold;
 pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
+pub mod kernel32_namespace;
 pub mod kernel32_node;
 pub mod kernel32_path;
 pub mod kernel32_releve;
@@ -217,6 +221,7 @@ pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
+pub mod shcore_obsolete;
 pub mod shell32;
 pub mod shell32_releve;
 pub mod shell_folder_com;
@@ -437,6 +442,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_fold::exports());
+                    e.extend(kernel32_namespace::exports());
                     e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
@@ -544,7 +551,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "shcore",
-                exports: chromium_win32::shcore_exports(),
+                exports: {
+                    let mut e = chromium_win32::shcore_exports();
+                    e.extend(shcore_obsolete::exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -914,7 +925,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "setupapi",
-                exports: setupapi::exports(),
+                exports: {
+                    let mut e = setupapi::exports();
+                    e.extend(devnotify::cfgmgr32_exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -1377,6 +1392,8 @@ fn add_basics(all: &mut [Builtin]) {
     let common = common_apps::all();
     // Imports de FileZilla (ftp_apps).
     let ftp = ftp_apps::all();
+    // Imports d'iCUE 4.18 (#1606).
+    let icue = icue_win32::all();
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
@@ -1384,6 +1401,7 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(electron)
         .chain(common)
         .chain(ftp)
+        .chain(icue)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1519,6 +1537,11 @@ pub fn normalize(dll: &str) -> String {
     // DPI par écran (Chromium, Electron) : shcore.
     if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
         return "shcore".into();
+    }
+    // Paramètres système et affichage (SystemParametersInfoW,
+    // GetSystemMetrics, EnumDisplayMonitors…) : user32 (#1604).
+    if base.starts_with("api-ms-win-ntuser-sysparams-") {
+        return "user32".into();
     }
     // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
     for (prefix, dll) in [
