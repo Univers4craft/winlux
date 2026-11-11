@@ -348,6 +348,27 @@ pub unsafe extern "win64" fn crypt_hash_data(
     1
 }
 
+/// CryptHashSessionKey : ajoute au condensat les octets de la clé de
+/// session, dans l'ordre inverse sauf CRYPT_LITTLE_ENDIAN (1) — la
+/// documentation dit que la clé est condensée en gros-boutiste par défaut,
+/// et elle est gardée ici dans l'ordre où l'application l'a donnée (#1512).
+pub unsafe extern "win64" fn crypt_hash_session_key(h: usize, key: usize, flags: u32) -> i32 {
+    let Some(mut bytes) = super::lock(keys()).get(&key).map(|k| k.key.clone()) else {
+        set_last_error(NTE_BAD_KEY);
+        return 0;
+    };
+    if flags & 1 == 0 {
+        bytes.reverse();
+    }
+    let mut map = super::lock(hashes());
+    let Some(st) = map.get_mut(&h) else {
+        set_last_error(NTE_BAD_HASH);
+        return 0;
+    };
+    st.data.extend_from_slice(&bytes);
+    1
+}
+
 pub unsafe extern "win64" fn crypt_get_hash_param(
     h: usize,
     param: u32,
@@ -1117,6 +1138,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CryptVerifySignatureA" => fn super::advapi32_rsa::crypt_verify_signature_a,
         "CryptCreateHash" => fn crypt_create_hash,
         "CryptHashData" => fn crypt_hash_data,
+        "CryptHashSessionKey" => fn crypt_hash_session_key,
         "CryptGetHashParam" => fn crypt_get_hash_param,
         "CryptSetHashParam" => fn crypt_set_hash_param,
         "CryptDuplicateHash" => fn crypt_duplicate_hash,
