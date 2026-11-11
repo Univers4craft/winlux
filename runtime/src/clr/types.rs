@@ -163,6 +163,38 @@ pub struct MethodInfo {
     pub token: u32,
     pub is_virtual: bool,
     pub param_count: usize,
+    /// Types des paramètres, pour départager deux surcharges de même
+    /// arité (Equals(object) et Equals(int), #1956).
+    pub params: Vec<super::metadata::ElementType>,
+}
+
+/// Deux types de paramètre peuvent-ils désigner le même type ? Les types
+/// élémentaires se comparent ; un jeton (classe, structure, générique) est
+/// propre à son assembly et s'accepte.
+fn same_param(a: &super::metadata::ElementType, b: &super::metadata::ElementType) -> bool {
+    use super::metadata::ElementType as E;
+    let simple = |e: &E| {
+        matches!(
+            e,
+            E::Boolean
+                | E::Char
+                | E::I1
+                | E::U1
+                | E::I2
+                | E::U2
+                | E::I4
+                | E::U4
+                | E::I8
+                | E::U8
+                | E::R4
+                | E::R8
+                | E::String
+                | E::Object
+                | E::IntPtr
+                | E::UIntPtr
+        )
+    };
+    !(simple(a) && simple(b)) || a == b
 }
 
 pub struct TypeRegistry {
@@ -311,7 +343,7 @@ impl TypeRegistry {
         name: &str,
         param_count: usize,
     ) -> Option<(usize, u32, TypeId)> {
-        self.find_override_of(type_id, name, param_count, None)
+        self.find_override_of(type_id, name, param_count, None, &[])
     }
 
     /// Comme `find_override`, pour une méthode de l'interface `iface`
@@ -324,6 +356,7 @@ impl TypeRegistry {
         name: &str,
         param_count: usize,
         iface: Option<&str>,
+        params: &[super::metadata::ElementType],
     ) -> Option<(usize, u32, TypeId)> {
         let explicit = iface.map(|i| format!("{i}.{name}"));
         let mut current = type_id;
@@ -339,9 +372,13 @@ impl TypeRegistry {
                     })
                 })
                 .or_else(|| {
-                    ti.methods
-                        .iter()
-                        .find(|m| m.is_virtual && m.name == name && m.param_count == param_count)
+                    ti.methods.iter().find(|m| {
+                        m.is_virtual
+                            && m.name == name
+                            && m.param_count == param_count
+                            && (params.len() != m.params.len()
+                                || params.iter().zip(&m.params).all(|(a, b)| same_param(a, b)))
+                    })
                 });
             if let Some(m) = found {
                 return Some((m.assembly, m.token, current));
@@ -349,20 +386,6 @@ impl TypeRegistry {
             current = ti.parent;
         }
         None
-    }
-
-    /// Méthode d'instance déclarée par le type lui-même (sans les parents).
-    pub fn find_own_method(
-        &self,
-        type_id: TypeId,
-        name: &str,
-        param_count: usize,
-    ) -> Option<(usize, u32)> {
-        let ti = self.get(type_id)?;
-        ti.methods
-            .iter()
-            .find(|m| m.name == name && m.param_count == param_count)
-            .map(|m| (m.assembly, m.token))
     }
 
     /// Emplacement d'un champ statique ; la zone du type est créée à la
