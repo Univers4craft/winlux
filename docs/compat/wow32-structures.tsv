@@ -167,10 +167,15 @@ kernel32.rs	StartupInfo	x86	wow64.c n° 10-11, forme W convertie de même
 kernel32.rs	StartupInfoA	x86	wow64.c n° 10-11 (STARTUPINFOA de 68 octets)
 kernel32.rs	SystemInfo	x86	wow64.c n° 4-7 (SYSTEM_INFO de 36 octets)
 libgcc.rs	UnwindContext	a-verifier	
+lot_f_crypt32.rs	OidInfo	a-verifier	
+lot_f_divers.rs	Operation	a-verifier	objet COM IActivateAudioInterfaceAsyncOperation en disposition x64, comme ceux de mmdevapi
+lot_f_mfplat.rs	AsyncResult	a-verifier	MFASYNCRESULT de mfapi.h en disposition x64 (pCallback à +40 ; +24 en x86), comme les autres objets MF
+lot_f_mfplat.rs	Cb	interne	test unitaire
 mfcapture.rs	MediaSource	a-verifier	
 mfcapture.rs	MemBuf	a-verifier	
 mfcapture.rs	MfObj	a-verifier	
 mfcapture.rs	Reader	a-verifier	
+mfcapture/descr.rs	Handler	a-verifier	
 mfreader.rs	Reader	a-verifier	
 mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_profile)
 msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TSF) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)

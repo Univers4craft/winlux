@@ -704,7 +704,11 @@ unsafe extern "win64" fn mixerGetID(_obj: usize, id: *mut u32, _flags: u32) -> u
 }
 
 /// MIXERLINEW : 284 octets en x64, 280 en x86 (dwUser de taille pointeur).
-unsafe extern "win64" fn mixerGetLineInfoW(_obj: usize, line: *mut u8, flags: u32) -> u32 {
+pub(crate) unsafe extern "win64" fn mixerGetLineInfoW(
+    _obj: usize,
+    line: *mut u8,
+    flags: u32,
+) -> u32 {
     if line.is_null() {
         return MMSYSERR_INVALPARAM;
     }
@@ -760,7 +764,11 @@ unsafe fn write_control(p: *mut u8, id: u32) {
 
 /// MIXERLINECONTROLSW : cbStruct, dwLineID, dwControlID/Type, cControls,
 /// cbmxctrl, pamxctrl.
-unsafe extern "win64" fn mixerGetLineControlsW(_obj: usize, lc: *mut u8, flags: u32) -> u32 {
+pub(crate) unsafe extern "win64" fn mixerGetLineControlsW(
+    _obj: usize,
+    lc: *mut u8,
+    flags: u32,
+) -> u32 {
     if lc.is_null() {
         return MMSYSERR_INVALPARAM;
     }
@@ -828,7 +836,11 @@ fn cell(id: u32) -> Option<&'static AtomicU32> {
     }
 }
 
-unsafe extern "win64" fn mixerGetControlDetailsW(_obj: usize, cd: *mut u8, _flags: u32) -> u32 {
+pub(crate) unsafe extern "win64" fn mixerGetControlDetailsW(
+    _obj: usize,
+    cd: *mut u8,
+    _flags: u32,
+) -> u32 {
     let Some((id, channels, cb, pa)) = details(cd) else {
         return MMSYSERR_INVALPARAM;
     };

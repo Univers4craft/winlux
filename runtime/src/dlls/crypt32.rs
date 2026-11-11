@@ -560,6 +560,20 @@ pub(crate) unsafe fn context<'a>(ctx: usize) -> &'a CertContext {
     &(*(ctx as *const Cert)).ctx
 }
 
+/// Identifiants des propriétés posées sur un contexte, plus les
+/// condensats toujours calculables (SHA-1 3, MD5 4, SHA-256 107).
+pub(crate) fn prop_ids(ctx: usize) -> Vec<u32> {
+    let Some(c) = (unsafe { cert(ctx) }) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<u32> = super::lock(&c.props).keys().copied().collect();
+    ids.extend([3, 4, 107]);
+    ids.sort_unstable();
+    ids.dedup();
+    ids.retain(|&id| id != PRIVATE_KEY_PROP);
+    ids
+}
+
 /// Le contexte derrière un PCCERT_CONTEXT créé par Winlux.
 unsafe fn cert<'a>(ctx: usize) -> Option<&'a Cert> {
     (ctx != 0).then(|| &*(ctx as *const Cert))
@@ -914,7 +928,7 @@ pub unsafe extern "win64" fn CertCompareCertificate(
     (s(&(*a).serial) == s(&(*b).serial) && s(&(*a).issuer) == s(&(*b).issuer)) as i32
 }
 
-fn hash_prop(der: &[u8], id: u32) -> Option<Vec<u8>> {
+pub(crate) fn hash_prop(der: &[u8], id: u32) -> Option<Vec<u8>> {
     match id {
         3 => hostssl::digest(c"SHA1", der),
         4 => hostssl::digest(c"MD5", der),

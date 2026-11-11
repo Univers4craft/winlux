@@ -96,16 +96,14 @@ pub unsafe extern "win64" fn mf_create_aligned_memory_buffer(
     mf_create_memory_buffer(max_len, out)
 }
 
+/// MFCreateAsyncResult : structure MFASYNCRESULT (lot F, #1615).
 pub unsafe extern "win64" fn mf_create_async_result(
-    _unk: *mut c_void,
-    _cb: *mut c_void,
-    _state: *mut c_void,
+    unk: *mut c_void,
+    cb: *mut c_void,
+    state: *mut c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
-    }
-    E_NOTIMPL
+    super::lot_f_mfplat::MFCreateAsyncResult(unk, cb, state, out)
 }
 
 /// Horloge système MF en unités de 100 ns (monotone).
