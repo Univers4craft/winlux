@@ -1825,7 +1825,7 @@ static EPV_VT: VTable<21> = VTable([
 // Création COM et exports
 // ---------------------------------------------------------------------------
 
-unsafe fn create_enumerator(riid: *const Guid, out: *mut *mut c_void) -> i32 {
+pub(crate) unsafe fn create_enumerator(riid: *const Guid, out: *mut *mut c_void) -> i32 {
     let e = Com::create(EN_VT.ptr(), Enumerator);
     let hr = en_qi(e, riid, out);
     Com::release(e);

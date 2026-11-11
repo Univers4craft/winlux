@@ -103,6 +103,7 @@ pub struct Ssl {
     pub EVP_DigestVerifyInit: unsafe extern "C" fn(P, *mut P, P, P, P) -> c_int,
     pub EVP_DigestVerify: unsafe extern "C" fn(P, *const u8, usize, *const u8, usize) -> c_int,
     pub X509_get_pubkey: unsafe extern "C" fn(P) -> P,
+    pub X509_verify: unsafe extern "C" fn(P, P) -> c_int,
     pub EVP_PKEY_free: unsafe extern "C" fn(P),
     // libssl
     pub TLS_client_method: unsafe extern "C" fn() -> P,
@@ -250,6 +251,7 @@ pub fn ssl() -> Option<&'static Ssl> {
             EVP_DigestVerifyInit: f!(c, "EVP_DigestVerifyInit"),
             EVP_DigestVerify: f!(c, "EVP_DigestVerify"),
             X509_get_pubkey: f!(c, "X509_get_pubkey"),
+            X509_verify: f!(c, "X509_verify"),
             EVP_PKEY_free: f!(c, "EVP_PKEY_free"),
             TLS_client_method: f!(s, "TLS_client_method"),
             SSL_CTX_new: f!(s, "SSL_CTX_new"),
@@ -431,6 +433,27 @@ pub fn x509_of(der: &[u8]) -> Option<P> {
     let mut p = der.as_ptr();
     let x = unsafe { (s.d2i_X509)(std::ptr::null_mut(), &mut p, der.len() as c_long) };
     (!x.is_null()).then_some(x)
+}
+
+/// Le certificat `subject` porte-t-il une signature valide de la clé de
+/// `issuer` ? (CertVerifySubjectCertificateContext.)
+pub fn signed_by(subject: &[u8], issuer: &[u8]) -> bool {
+    let Some(s) = ssl() else {
+        return false;
+    };
+    let (Some(x), Some(i)) = (x509_of(subject), x509_of(issuer)) else {
+        return false;
+    };
+    unsafe {
+        let key = (s.X509_get_pubkey)(i);
+        let ok = !key.is_null() && (s.X509_verify)(x, key) == 1;
+        if !key.is_null() {
+            (s.EVP_PKEY_free)(key);
+        }
+        (s.X509_free)(x);
+        (s.X509_free)(i);
+        ok
+    }
 }
 
 /// Résultat de la vérification d'une chaîne par OpenSSL.

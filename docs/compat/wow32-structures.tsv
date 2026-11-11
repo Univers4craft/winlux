@@ -44,14 +44,13 @@ crypt32.rs	BitBlob	a-verifier	CRYPT_BIT_BLOB 12 octets en x86 (24 en x64) : reco
 crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
 crypt32.rs	CertContext	x86	CERT_CONTEXT 20 octets en x86 (40 en x64) : vue Cert.view remplie par fill_view (#1667) ; test condensat_et_certificat_auto_signe
 crypt32.rs	CertInfo	x86	CERT_INFO 112 octets en x86 (208 en x64) : Cert.info32 (#1667) ; test condensat_et_certificat_auto_signe
-crypt32.rs	Chain	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
-crypt32.rs	ChainContext	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
-crypt32.rs	ChainElement	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
+crypt32.rs	Chain	x86	chaîne Winlux : la vue de tête est x86 pour un programme 32 bits (#1708)
+crypt32.rs	ChainContext	x86	CERT_CHAIN_CONTEXT 56 octets en x86 (72 en x64) : vue Chain.view remplie par fill_chain_view (#1708) ; test condensat_et_certificat_auto_signe
+crypt32.rs	ChainElement	x86	CERT_CHAIN_ELEMENT 32 octets en x86 : Chain.elements32 (#1708) ; test condensat_et_certificat_auto_signe
 crypt32.rs	Extension	x86	CERT_EXTENSION 16 octets en x86 (24 en x64) : Cert.exts32 (#1667)
-crypt32.rs	PolicyPara	a-verifier	
-crypt32.rs	PolicyStatus	a-verifier	
-crypt32.rs	SimpleChain	a-verifier	chaîne encore en disposition x64 pour un appelant x86 ; à traiter si un programme x86 vérifie une chaîne (#1667)
-crypt32.rs	SslExtraPara	a-verifier	
+crypt32.rs	PolicyPara	interne	structure de test seulement ; CERT_CHAIN_POLICY_PARA (12 octets en x86) et SSL_EXTRA_CERT_CHAIN_POLICY_PARA (16 en x86) lus par read_ptr (#1708)
+crypt32.rs	PolicyStatus	x86	CERT_CHAIN_POLICY_STATUS 20 octets en x86 : seuls les quatre DWORD de tête sont écrits, mêmes décalages (#1708)
+crypt32.rs	SimpleChain	x86	CERT_SIMPLE_CHAIN 32 octets en x86 : Chain.simple32 (#1708) ; test condensat_et_certificat_auto_signe
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
@@ -141,6 +140,7 @@ dxgi.rs	DxgiSwapChainDesc	x86	60 octets en x86 (HWND), converti par dx11_x86::sw
 dxgi.rs	DxgiSwapChainVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
+electron_win32.rs	Header	interne	test unitaire : HSTRING bâti par le programme (C++/WinRT, windows-rs), lu à la taille de pointeur du programme (#1712)
 fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 filedialog_com.rs	FakeSink	interne	test unitaire (faux IFileDialogEvents, #1288)
 games_win32.rs	WsaBuf	a-verifier	
@@ -167,10 +167,15 @@ kernel32.rs	StartupInfo	x86	wow64.c n° 10-11, forme W convertie de même
 kernel32.rs	StartupInfoA	x86	wow64.c n° 10-11 (STARTUPINFOA de 68 octets)
 kernel32.rs	SystemInfo	x86	wow64.c n° 4-7 (SYSTEM_INFO de 36 octets)
 libgcc.rs	UnwindContext	a-verifier	
+lot_f_crypt32.rs	OidInfo	a-verifier	
+lot_f_divers.rs	Operation	a-verifier	objet COM IActivateAudioInterfaceAsyncOperation en disposition x64, comme ceux de mmdevapi
+lot_f_mfplat.rs	AsyncResult	a-verifier	MFASYNCRESULT de mfapi.h en disposition x64 (pCallback à +40 ; +24 en x86), comme les autres objets MF
+lot_f_mfplat.rs	Cb	interne	test unitaire
 mfcapture.rs	MediaSource	a-verifier	
 mfcapture.rs	MemBuf	a-verifier	
 mfcapture.rs	MfObj	a-verifier	
 mfcapture.rs	Reader	a-verifier	
+mfcapture/descr.rs	Handler	a-verifier	
 mfreader.rs	Reader	a-verifier	
 mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_profile)
 msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TSF) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)

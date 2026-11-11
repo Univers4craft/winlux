@@ -262,6 +262,141 @@ pub unsafe extern "win64" fn bcrypt_duplicate_hash(
     0
 }
 
+/// BCryptDeriveKeyPBKDF2 (lot F, #1615) : PBKDF2 de la RFC 8018 avec le
+/// HMAC de l'algorithme `prf` (ouvert avec ou sans BCRYPT_ALG_HANDLE_HMAC_FLAG).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn bcrypt_derive_key_pbkdf2(
+    prf: usize,
+    password: *const u8,
+    password_len: u32,
+    salt: *const u8,
+    salt_len: u32,
+    iterations: u64,
+    out: *mut u8,
+    out_len: u32,
+    _flags: u32,
+) -> i32 {
+    const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
+    let alg = resolve(prf) | HMAC_BIT;
+    if hash_length(alg).is_none() {
+        return 0xC000_0008u32 as i32;
+    }
+    if iterations == 0 || (out.is_null() && out_len > 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let slice = |p: *const u8, n: u32| {
+        if p.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(p, n as usize)
+        }
+    };
+    match pbkdf2(
+        alg,
+        slice(password, password_len),
+        slice(salt, salt_len),
+        iterations,
+        out_len as usize,
+    ) {
+        Some(key) => {
+            std::ptr::copy_nonoverlapping(key.as_ptr(), out, key.len());
+            0
+        }
+        None => STATUS_NOT_SUPPORTED,
+    }
+}
+
+fn pbkdf2(
+    alg: usize,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u64,
+    len: usize,
+) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(len);
+    let mut block = 1u32;
+    while out.len() < len {
+        let mut msg = salt.to_vec();
+        msg.extend_from_slice(&block.to_be_bytes());
+        let mut u = compute(alg, Some(password), &msg)?;
+        let mut t = u.clone();
+        for _ in 1..iterations {
+            u = compute(alg, Some(password), &u)?;
+            t.iter_mut().zip(&u).for_each(|(a, b)| *a ^= b);
+        }
+        let take = (len - out.len()).min(t.len());
+        out.extend_from_slice(&t[..take]);
+        block += 1;
+    }
+    Some(out)
+}
+
+/// BCryptEnumContextFunctions (lot F, #1615) : fonctions servies pour
+/// l'interface demandée, dans une CRYPT_CONTEXT_FUNCTIONS (nombre, tableau
+/// de chaînes) allouée ici et rendue par BCryptFreeBuffer, ou copiée dans
+/// le tampon de l'appelant.
+pub unsafe extern "win64" fn bcrypt_enum_context_functions(
+    _table: u32,
+    _context: *const u16,
+    interface: u32,
+    cb: *mut u32,
+    buffer: *mut usize,
+) -> i32 {
+    if cb.is_null() || buffer.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
+    let names: &[&str] = match interface {
+        1 => &["AES"],
+        2 => &["SHA256", "SHA1", "SHA384", "SHA512", "MD5"],
+        6 => &["RNG"],
+        _ => &[],
+    };
+    let ps = crate::wow32::pointer_size();
+    // CRYPT_CONTEXT_FUNCTIONS : ULONG cFunctions, puis PWSTR* à +ps.
+    let table_at = 2 * ps;
+    let mut strings_at = table_at + ps * names.len();
+    let wide: Vec<Vec<u16>> = names
+        .iter()
+        .map(|n| n.encode_utf16().chain(std::iter::once(0)).collect())
+        .collect();
+    let size = strings_at + wide.iter().map(|w| w.len() * 2).sum::<usize>();
+    let existing = crate::wow32::read_ptr(buffer as usize);
+    let base = if existing == 0 {
+        let p = crate::dlls::ole32::co_task_mem_alloc(size) as usize;
+        if p == 0 {
+            return 0xC000_0017u32 as i32; // STATUS_NO_MEMORY
+        }
+        p
+    } else {
+        if (*cb as usize) < size {
+            *cb = size as u32;
+            return 0xC000_0023u32 as i32; // STATUS_BUFFER_TOO_SMALL
+        }
+        existing
+    };
+    std::ptr::write_bytes(base as *mut u8, 0, size);
+    *(base as *mut u32) = names.len() as u32;
+    crate::wow32::write_ptr(
+        base + ps,
+        if names.is_empty() { 0 } else { base + table_at },
+    );
+    for (i, w) in wide.iter().enumerate() {
+        std::ptr::copy_nonoverlapping(w.as_ptr(), (base + strings_at) as *mut u16, w.len());
+        crate::wow32::write_ptr(base + table_at + i * ps, base + strings_at);
+        strings_at += w.len() * 2;
+    }
+    *cb = size as u32;
+    crate::wow32::write_ptr(buffer as usize, base);
+    0
+}
+
+/// BCryptFreeBuffer : mémoire rendue par les fonctions d'énumération.
+pub unsafe extern "win64" fn bcrypt_free_buffer(p: *mut std::ffi::c_void) {
+    if !p.is_null() {
+        crate::dlls::ole32::co_task_mem_free(p);
+    }
+}
+
 // SHA-1/SHA-256 maison, partagés avec winlux-remote.
 #[allow(dead_code)]
 #[path = "../remote/crypto.rs"]
@@ -418,6 +553,9 @@ pub fn exports() -> crate::dlls::Exports {
      "BCryptGetProperty"=>fn bcrypt_get_property,
      "BCryptCreateHash"=>fn bcrypt_create_hash,"BCryptHashData"=>fn bcrypt_hash_data,
      "BCryptFinishHash"=>fn bcrypt_finish_hash,"BCryptDestroyHash"=>fn bcrypt_destroy_hash,
+     "BCryptDeriveKeyPBKDF2"=>fn bcrypt_derive_key_pbkdf2,
+     "BCryptEnumContextFunctions"=>fn bcrypt_enum_context_functions,
+     "BCryptFreeBuffer"=>fn bcrypt_free_buffer,
      "BCryptHash"=>fn bcrypt_hash
     }
 }
@@ -425,6 +563,44 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pbkdf2_rfc6070_et_enumeration() {
+        unsafe {
+            // RFC 6070, PBKDF2-HMAC-SHA1, « password » / « salt », 2 tours.
+            let mut key = [0u8; 20];
+            let st = bcrypt_derive_key_pbkdf2(
+                0xa1,
+                b"password".as_ptr(),
+                8,
+                b"salt".as_ptr(),
+                4,
+                2,
+                key.as_mut_ptr(),
+                20,
+                0,
+            );
+            if st == STATUS_NOT_SUPPORTED {
+                return; // pas d'OpenSSL sur l'hôte de test
+            }
+            assert_eq!(st, 0);
+            assert_eq!(
+                key[..4],
+                [0xea, 0x6c, 0x01, 0x4d],
+                "premier bloc du vecteur RFC 6070"
+            );
+            assert_eq!(key[16..], [0xd8, 0xde, 0x89, 0x57]);
+            let (mut cb, mut buf) = (0u32, 0usize);
+            assert_eq!(
+                bcrypt_enum_context_functions(1, std::ptr::null(), 2, &mut cb, &mut buf),
+                0
+            );
+            assert_eq!(*(buf as *const u32), 5);
+            let first = *((buf + 8) as *const *const *const u16);
+            assert_eq!(crate::dlls::wstr(*first), "SHA256");
+            bcrypt_free_buffer(buf as *mut _);
+        }
+    }
 
     #[test]
     fn process_prng_uses_size_t_and_rejects_invalid_buffers() {
