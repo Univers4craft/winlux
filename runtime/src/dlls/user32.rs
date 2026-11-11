@@ -515,9 +515,11 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
-                if style & 0x00C0_0000 == 0x00C0_0000 {
-                    b.set_dialog_type(hwnd);
-                }
+            }
+            if captioned_tool_window(style, ex_style) {
+                b.set_tool_type(hwnd);
+            } else if owner != 0 && style & 0x00C0_0000 == 0x00C0_0000 {
+                b.set_dialog_type(hwnd);
             }
         }
     });
@@ -760,6 +762,46 @@ unsafe fn send_set_cursor(m: &Msg) {
     );
 }
 
+const WA_ACTIVE: usize = 1;
+const WA_CLICKACTIVE: usize = 2;
+
+/// Activation au clic, que Windows fait quand il retire de la file un
+/// bouton enfoncé : WM_MOUSEACTIVATE à la fenêtre cliquée, puis, sauf
+/// MA_NOACTIVATE, WM_NCACTIVATE / WM_ACTIVATE(WA_CLICKACTIVE) et
+/// WM_SETFOCUS, avant le WM_LBUTTONDOWN lui-même. Faite ici seulement pour
+/// les fenêtres que le gestionnaire de fenêtres n'active pas : la boîte
+/// « Erreur du service Steam » ne réagissait à aucun bouton (#1804).
+/// MA_ACTIVATEANDEAT active sans retirer le clic (simplification).
+unsafe fn click_activate(m: &Msg) {
+    const WM_MOUSEACTIVATE: u32 = 0x0021;
+    const HTCLIENT: isize = 1;
+    const MA_NOACTIVATE: isize = 3;
+    const MA_NOACTIVATEANDEAT: isize = 4;
+    if m.hwnd == 0
+        || gui::get_capture() != 0
+        || !matches!(m.message, 0x0201 | 0x0204 | 0x0207 | 0x020B)
+    {
+        return;
+    }
+    let Some(top) = gui::click_activation_target(m.hwnd) else {
+        return;
+    };
+    let answer = send_message_w(
+        m.hwnd,
+        WM_MOUSEACTIVATE,
+        top,
+        ((m.message as isize) << 16) | HTCLIENT,
+    );
+    if matches!(answer, MA_NOACTIVATE | MA_NOACTIVATEANDEAT) || !gui::is_window(top) {
+        return;
+    }
+    activate_for_focus(top, WA_CLICKACTIVE);
+    // Le focus reste au contrôle de la fenêtre qui l'avait déjà.
+    if gui::top_level_of(gui::focused_window()) != top {
+        set_focus(top);
+    }
+}
+
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
@@ -780,6 +822,7 @@ unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i
                 return 0;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -869,6 +912,7 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
                 return 1;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -1087,6 +1131,8 @@ pub unsafe extern "win64" fn post_quit_message(code: i32) {
     gui::post_quit(&q, code);
 }
 
+const HWND_BROADCAST: usize = 0xFFFF;
+
 pub unsafe extern "win64" fn post_message_a(
     hwnd: usize,
     message: u32,
@@ -1096,6 +1142,16 @@ pub unsafe extern "win64" fn post_message_a(
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
+    }
+    // HWND_BROADCAST : chaque fenêtre de premier niveau du processus
+    // reçoit le message ; les autres programmes n'en ont pas d'ici. Comme
+    // Windows, l'envoi réussit même sans destinataire (BroadcastUnload…
+    // d'Acrobat échouait, #1757).
+    if hwnd == HWND_BROADCAST {
+        for w in gui::enum_top_level_windows() {
+            post_message_a(w, message, wparam, lparam);
+        }
+        return 1;
     }
     let m = Msg {
         hwnd,
@@ -1190,6 +1246,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
         send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
     }
+    if show && gui::visible_flag(hwnd) == Some(false) && !matches!(cmd, 2 | 3 | 6 | 7 | 11) {
+        fit_to_work_area(hwnd);
+    }
     let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
@@ -1225,6 +1284,73 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Fenêtre de premier niveau à barre de titre affichée : si son cadre
+/// dépasse la zone de travail de son écran, elle y est ramenée, et
+/// rétrécie si elle se redimensionne et n'y tient pas. Audacity restaure la
+/// position qu'il a enregistrée sans la contraindre ; sous la barre des
+/// tâches, la fenêtre restait coupée et la position fautive était
+/// réenregistrée à chaque fermeture (#1752). Les fenêtres sans cadre, les
+/// enfants et les fenêtres agrandies ou réduites ne sont pas touchées.
+unsafe fn fit_to_work_area(hwnd: usize) {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MINIMIZE: u32 = 0x2000_0000;
+    const WS_MAXIMIZE: u32 = 0x0100_0000;
+    let (Some(style), Some(rect)) = (gui::window_style(hwnd), gui::window_rect(hwnd)) else {
+        return;
+    };
+    if style & WS_CHILD != 0
+        || style & WS_CAPTION != WS_CAPTION
+        || style & (WS_MINIMIZE | WS_MAXIMIZE) != 0
+        || gui::window_parent(hwnd).unwrap_or(0) != 0
+        || OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return;
+    }
+    let monitors = super::monitors::list();
+    let index = super::monitors::from_rect_in(&monitors, &rect, 2);
+    let Some(monitor) = monitors.get(index.wrapping_sub(1)) else {
+        return;
+    };
+    let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
+    let resizable = style & WS_THICKFRAME != 0;
+    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
+    // interrogé.
+    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    let fitted =
+        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    if fitted == rect {
+        return;
+    }
+    crate::thunks::api_note(&format!(
+        "ShowWindow {hwnd:#x} : ({},{} {}x{}) ramenée dans la zone de travail ({},{} {}x{}) (#1752)",
+        rect.left,
+        rect.top,
+        rect.width(),
+        rect.height(),
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height()
+    ));
+    set_window_pos(
+        hwnd,
+        0,
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height(),
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 
 /// `UpdateWindow` : si la fenêtre a une zone invalidée, WM_PAINT lui est
@@ -1361,7 +1487,7 @@ pub unsafe extern "win64" fn get_keyboard_state(out: *mut u8) -> i32 {
 /// puis WM_ACTIVATE(WA_INACTIVE), la nouvelle WM_NCACTIVATE(TRUE) puis
 /// WM_ACTIVATE(WA_ACTIVE), envoyés et non postés. Le FocusIn de X11 qui suit
 /// trouve la fenêtre déjà active et ne poste plus rien (#1504).
-unsafe fn activate_for_focus(hwnd: usize) {
+unsafe fn activate_for_focus(hwnd: usize, state: usize) {
     let top = gui::top_level_of(hwnd);
     if top == 0 {
         return;
@@ -1384,7 +1510,7 @@ unsafe fn activate_for_focus(hwnd: usize) {
         deliver(prev, gui::WM_ACTIVATE, 0, top as isize);
     }
     deliver(top, gui::WM_NCACTIVATE, 1, 0);
-    deliver(top, gui::WM_ACTIVATE, 1, prev as isize);
+    deliver(top, gui::WM_ACTIVATE, state, prev as isize);
 }
 
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
@@ -1399,7 +1525,7 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
         }
     }
     if hwnd != 0 && gui::focused_window() != hwnd {
-        activate_for_focus(hwnd);
+        activate_for_focus(hwnd, WA_ACTIVE);
     }
     let Some(old) = gui::set_focus(hwnd) else {
         crate::process::set_last_error(87);
@@ -2351,8 +2477,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
             lock(user_data_map()).insert((hwnd, index), value);
             let owner = owner_top_level(value as usize);
             if owner != 0 && owner != hwnd {
-                let captioned =
-                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                let captioned = gui::window_style(hwnd)
+                    .is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000)
+                    && !captioned_tool_window(
+                        gui::window_style(hwnd).unwrap_or(0),
+                        gui::window_ex_style(hwnd).unwrap_or(0),
+                    );
                 with_backend(|b| {
                     b.set_owner(hwnd, owner);
                     if captioned {
@@ -3927,6 +4057,30 @@ unsafe fn system_parameters_info_common(
         }
         _ => {}
     }
+    // Délais et vitesses du clavier et des menus : valeurs par défaut
+    // documentées de SystemParametersInfo. Sans elles, le succès générique
+    // laissait le tampon à 0, et un minuteur WinForms réglé dessus refuse 0
+    // (#1803) : SPI_GETKEYBOARDSPEED (31), SPI_GETKEYBOARDDELAY (1, soit
+    // 500 ms), SPI_GETMENUSHOWDELAY (400 ms), SPI_GETFOREGROUNDLOCKTIMEOUT
+    // (200 000 ms), SPI_GETFOCUSBORDERWIDTH / HEIGHT (1 pixel),
+    // SPI_GETMESSAGEDURATION (5 s) et SPI_GETCARETTIMEOUT (5 000 ms).
+    let default = match action {
+        0x000A => Some(31),
+        0x0016 => Some(1),
+        0x006A => Some(400),
+        0x2000 => Some(200_000),
+        0x200E | 0x2010 => Some(1),
+        0x2016 => Some(5),
+        0x2022 => Some(5000),
+        _ => None,
+    };
+    if let Some(v) = default {
+        if data.is_null() {
+            return 0;
+        }
+        *data.cast::<u32>() = v;
+        return 1;
+    }
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
         // Sans la barre des tâches : une fenêtre placée ici n'est pas cachée dessous.
@@ -5307,7 +5461,7 @@ fn owner_top_level(mut hwnd: usize) -> usize {
 /// version exigeait outil ET non activable, ce que ce menu n'a pas.
 /// Une fenêtre en couches (Flow Launcher) reste gérée : elle prend le
 /// clavier.
-fn floating_popup(style: u32, ex_style: u32) -> bool {
+pub(crate) fn floating_popup(style: u32, ex_style: u32) -> bool {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
     const WS_EX_TOPMOST: u32 = 0x0000_0008;
@@ -5344,6 +5498,18 @@ fn drawn_whole(hwnd: usize) -> bool {
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
+/// Fenêtre outil avec barre de titre (WS_CAPTION + WS_EX_TOOLWINDOW) :
+/// palette flottante, que Windows dessine avec le seul bouton Fermer. Pour
+/// openbox, c'est une barre d'outils détachée (_NET_WM_WINDOW_TYPE_TOOLBAR),
+/// qui n'a ni Réduire ni Agrandir et laisse donc sa place au titre : les
+/// panneaux de Paint.NET, larges de 180 px, affichaient « H… ue » (#1761).
+fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -5360,6 +5526,20 @@ fn popup_decorations(style: u32) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
+    /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.
+    #[test]
+    fn palette_flottante_reconnue() {
+        use super::captioned_tool_window;
+        // FormBorderStyle.SizableToolWindow : WS_CAPTION | WS_THICKFRAME | WS_SYSMENU.
+        assert!(captioned_tool_window(0x02CC_0000, 0x0001_0180));
+        assert!(!captioned_tool_window(0x00CF_0000, 0x0000_0100));
+        // Sans barre de titre (fenêtre surgissante outil).
+        assert!(!captioned_tool_window(0x8000_0000, 0x0000_0080));
+        // Enfant.
+        assert!(!captioned_tool_window(0x40C0_0000, 0x0000_0080));
+    }
 
     /// #1630 : une classe déjà inscrite par le même module est refusée
     /// (ERROR_CLASS_ALREADY_EXISTS) jusqu'à son UnregisterClass.
@@ -5526,6 +5706,25 @@ mod tests {
     #[test]
     fn delai_et_zone_de_survol() {
         for (action, want) in [(0x0066u32, 400u32), (0x0062, 4), (0x0064, 4)] {
+            let mut v = 0u32;
+            let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
+            assert_eq!((r, v), (1, want), "action {action:#x}");
+        }
+    }
+
+    /// #1803 : aucun délai de clavier, de menu ou de message ne reste à 0.
+    #[test]
+    fn delais_clavier_menus_et_messages() {
+        for (action, want) in [
+            (0x000Au32, 31u32),
+            (0x0016, 1),
+            (0x006A, 400),
+            (0x2000, 200_000),
+            (0x200E, 1),
+            (0x2010, 1),
+            (0x2016, 5),
+            (0x2022, 5000),
+        ] {
             let mut v = 0u32;
             let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
             assert_eq!((r, v), (1, want), "action {action:#x}");

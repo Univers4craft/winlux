@@ -1165,7 +1165,19 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
     let reg_path = format!("hkcr\\{}\\clsid", name.to_lowercase());
     let text = match crate::registry::get_string(&reg_path, "") {
         Some(v) => v,
-        None => return CO_E_CLASSSTRING,
+        None => {
+            // Classes intégrées sans clé HKCR : MSXML (#1758).
+            if let Some(g) = super::msxml::clsid_for_prog_id(&name) {
+                *clsid = g;
+                return S_OK;
+            }
+            if std::env::var_os("WINLUX_TRACE").is_some() {
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : ProgID inconnu"
+                );
+            }
+            return CO_E_CLASSSTRING;
+        }
     };
     let text = text.as_str();
     match parse_guid(text) {
@@ -1173,7 +1185,14 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
             *clsid = g;
             S_OK
         }
-        None => CO_E_CLASSSTRING,
+        None => {
+            if std::env::var_os("WINLUX_TRACE").is_some() {
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : CLSID illisible « {text} »"
+                );
+            }
+            CO_E_CLASSSTRING
+        }
     }
 }
 
