@@ -105,6 +105,7 @@ pub mod evdev;
 pub mod eventing;
 pub mod fiber64;
 pub mod filedialog_com;
+pub mod shell_link;
 pub mod ftp_apps;
 pub mod games_win32;
 pub mod gdi32;
