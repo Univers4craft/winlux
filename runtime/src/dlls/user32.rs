@@ -1180,6 +1180,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     // SW_MAXIMIZE (3) donne une taille à la fenêtre : elle est montrée.
     let map = cmd != gui::SW_HIDE && (cmd == 3 || !empty_top_level(hwnd));
     with_backend(|b| b.show_window(hwnd, map));
+    if was != show {
+        visibility_win_pos(hwnd, show);
+    }
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
     if gui::window_parent(hwnd).unwrap_or(0) == 0 {
@@ -1206,6 +1209,37 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Visibilité changée par ShowWindow : comme Windows, la fenêtre reçoit
+/// WM_WINDOWPOSCHANGING puis WM_WINDOWPOSCHANGED avec SWP_SHOWWINDOW ou
+/// SWP_HIDEWINDOW. Chromium ne suit la visibilité de sa fenêtre que par
+/// ces drapeaux : cachée dans la zone de notification puis remontrée,
+/// Claude restait blanche (#1745). Programmes 64 bits (la structure
+/// WINDOWPOS d'un programme 32 bits serait à traduire).
+unsafe fn visibility_win_pos(hwnd: usize, show: bool) {
+    if crate::wow32::pointer_size() != 8 {
+        return;
+    }
+    let Some(rect) = gui::window_rect(hwnd) else {
+        return;
+    };
+    let flags = SWP_NOMOVE
+        | SWP_NOSIZE
+        | SWP_NOZORDER
+        | SWP_NOACTIVATE
+        | if show { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
+    let mut pos = WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: rect.left,
+        y: rect.top,
+        cx: rect.width(),
+        cy: rect.height(),
+        flags,
+    };
+    send_message_w(hwnd, WM_WINDOWPOSCHANGING, 0, &mut pos as *mut _ as isize);
+    send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
 }
 
 /// `UpdateWindow` : si la fenêtre a une zone invalidée, WM_PAINT lui est
@@ -5802,6 +5836,70 @@ mod tests {
                 .push((r.left, r.top, r.width(), r.height(), pos.flags));
         }
         gui::def_window_proc(h, msg, w, l)
+    }
+
+    static VISIBILITY_POS: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn proc_visibilite(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_WINDOWPOSCHANGING || msg == WM_WINDOWPOSCHANGED {
+            let pos = &*(l as *const WindowPos);
+            VISIBILITY_POS.lock().unwrap().push((msg, pos.flags));
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1745 : ShowWindow annonce le changement de visibilité par
+    /// WM_WINDOWPOSCHANGING/CHANGED (SWP_SHOWWINDOW, SWP_HIDEWINDOW), seul
+    /// signal que Chromium suit ; rien quand la visibilité ne change pas.
+    #[test]
+    fn afficher_et_cacher_annonces_par_windowpos() {
+        let name: Vec<u16> = "Winlux1745Visibilite".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_visibilite as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let h = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0x00CF_0000,
+                10,
+                10,
+                200,
+                100,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            VISIBILITY_POS.lock().unwrap().clear();
+            show_window(h, 5); // SW_SHOW
+            show_window(h, 5); // déjà visible : rien
+            show_window(h, gui::SW_HIDE);
+            show_window(h, gui::SW_HIDE);
+            let seen = VISIBILITY_POS.lock().unwrap().clone();
+            assert_eq!(seen.len(), 4, "{seen:?}");
+            assert_eq!(seen[0].0, WM_WINDOWPOSCHANGING);
+            assert_eq!(seen[1].0, WM_WINDOWPOSCHANGED);
+            assert_ne!(seen[1].1 & SWP_SHOWWINDOW, 0);
+            assert_eq!(
+                seen[1].1 & (SWP_NOMOVE | SWP_NOSIZE),
+                SWP_NOMOVE | SWP_NOSIZE
+            );
+            assert_ne!(seen[3].1 & SWP_HIDEWINDOW, 0);
+            destroy_window(h);
+        }
     }
 
     /// SetWindowPos envoie WM_WINDOWPOSCHANGING puis WM_WINDOWPOSCHANGED :
