@@ -42,9 +42,9 @@ pub struct DriverService {
 /// Texte d'un .inf : UTF-16LE (avec BOM) ou 8 bits.
 pub fn decode(bytes: &[u8]) -> String {
     if bytes.starts_with(&[0xFF, 0xFE]) {
-        let w: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        let w: Vec<u16> = (2..bytes.len().saturating_sub(1))
+            .step_by(2)
+            .map(|i| u16::from_le_bytes([bytes[i], bytes[i + 1]]))
             .collect();
         return String::from_utf16_lossy(&w);
     }
