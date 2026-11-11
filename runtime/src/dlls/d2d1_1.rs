@@ -423,9 +423,23 @@ pub(super) fn trace(line: std::fmt::Arguments) {
     }
 }
 
-/// Pixels non transparents d'un tampon BGRA.
-fn visible(px: &[u8]) -> usize {
-    px.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count()
+/// Pixels non transparents d'un tampon BGRA, avec la moyenne BGRA de ces
+/// pixels pour le journal (une image blanche et une image de texte noir
+/// ont autant de pixels visibles).
+fn visible(px: &[u8]) -> String {
+    let mut n = 0u64;
+    let mut sum = [0u64; 4];
+    for p in px.as_chunks::<4>().0.iter().filter(|p| p[3] != 0) {
+        n += 1;
+        for (s, &c) in sum.iter_mut().zip(p) {
+            *s += c as u64;
+        }
+    }
+    if n == 0 {
+        return "0".into();
+    }
+    let m = sum.map(|s| s / n);
+    format!("{n} moy {:?}", m)
 }
 
 /// Destination d'une cible pour le journal.
@@ -1970,9 +1984,127 @@ unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> 
             return Some(img);
         }
     }
+    if let Some(img) = builtin_render(e, depth, hint) {
+        return img;
+    }
     warn_effect_once(&e.clsid);
     let first = crate::dlls::lock(&e.inputs).first().copied()?;
     image_img(first, depth + 1, hint)
+}
+
+// Effets intégrés calculés (CLSID de d2d1effects.h, mingw-w64).
+/// CLSID_D2D1Flood {61C23C20-AE69-4D8E-94CF-50078DF638F2}.
+const CLSID_FLOOD: Guid = guid(
+    0x61c2_3c20,
+    0xae69,
+    0x4d8e,
+    [0x94, 0xcf, 0x50, 0x07, 0x8d, 0xf6, 0x38, 0xf2],
+);
+/// CLSID_D2D1Crop {E23F7110-0E9A-4324-AF47-6A2C0C46F35B}.
+const CLSID_CROP: Guid = guid(
+    0xe23f_7110,
+    0x0e9a,
+    0x4324,
+    [0xaf, 0x47, 0x6a, 0x2c, 0x0c, 0x46, 0xf3, 0x5b],
+);
+/// CLSID_D2D1Premultiply {06EAB419-DEED-4018-80D2-3E1D471ADEB2}.
+const CLSID_PREMULTIPLY: Guid = guid(
+    0x06ea_b419,
+    0xdeed,
+    0x4018,
+    [0x80, 0xd2, 0x3e, 0x1d, 0x47, 0x1a, 0xde, 0xb2],
+);
+/// CLSID_D2D1ColorManagement {1A28524C-FDD6-4AA4-AE8F-837EB8267B37}.
+const CLSID_COLOR_MANAGEMENT: Guid = guid(
+    0x1a28_524c,
+    0xfdd6,
+    0x4aa4,
+    [0xae, 0x8f, 0x83, 0x7e, 0xb8, 0x26, 0x7b, 0x37],
+);
+
+/// Propriété en flottants (vecteurs D2D1_VECTOR_*F).
+fn prop_f32<const N: usize>(e: &Effect, index: u32) -> Option<[f32; N]> {
+    let props = crate::dlls::lock(&e.props);
+    let v = props.get(&index)?;
+    if v.len() < N * 4 {
+        return None;
+    }
+    let mut out = [0f32; N];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = f32::from_le_bytes([v[i * 4], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]]);
+    }
+    Some(out)
+}
+
+/// Sortie d'un effet intégré calculé : `None` si l'effet n'est pas pris en
+/// charge, `Some(None)` si sa sortie est vide (#1609 : Paint.NET remplit
+/// les tuiles unies de son canevas par un bitmap 1x1 tiré d'un Flood).
+unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Option<Img>> {
+    let input = || {
+        let first = crate::dlls::lock(&e.inputs).first().copied()?;
+        image_img(first, depth + 1, hint)
+    };
+    if e.clsid == CLSID_FLOOD {
+        // D2D1_FLOOD_PROP_COLOR : RVBA non prémultiplié, noir opaque par défaut.
+        let c = prop_f32::<4>(e, 0).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        let a = c[3].clamp(0.0, 1.0);
+        let q = |v: f32| (v.clamp(0.0, 1.0) * a * 255.0).round() as u8;
+        let p = [q(c[2]), q(c[1]), q(c[0]), (a * 255.0).round() as u8];
+        let (w, h) = (hint.0.max(1), hint.1.max(1));
+        return Some(Some(Img {
+            x: 0,
+            y: 0,
+            w,
+            h,
+            px: p.repeat(w as usize * h as usize),
+        }));
+    }
+    if e.clsid == CLSID_CROP {
+        let Some(img) = input() else {
+            return Some(None);
+        };
+        // D2D1_CROP_PROP_RECT : gauche, haut, droite, bas ; infini par défaut.
+        let r = prop_f32::<4>(e, 0).unwrap_or([f32::MIN, f32::MIN, f32::MAX, f32::MAX]);
+        let clamp = |v: f32| v.clamp(-1.0e7, 1.0e7) as i64;
+        let x0 = (img.x as i64).max(clamp(r[0].floor()));
+        let y0 = (img.y as i64).max(clamp(r[1].floor()));
+        let x1 = (img.x as i64 + img.w as i64).min(clamp(r[2].ceil()));
+        let y1 = (img.y as i64 + img.h as i64).min(clamp(r[3].ceil()));
+        if x1 <= x0 || y1 <= y0 {
+            return Some(None);
+        }
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut px = vec![0u8; w * h * 4];
+        let (sx, sy) = ((x0 - img.x as i64) as usize, (y0 - img.y as i64) as usize);
+        for y in 0..h {
+            let s = ((sy + y) * img.w as usize + sx) * 4;
+            px[y * w * 4..][..w * 4].copy_from_slice(&img.px[s..s + w * 4]);
+        }
+        return Some(Some(Img {
+            x: x0 as i32,
+            y: y0 as i32,
+            w: w as u32,
+            h: h as u32,
+            px,
+        }));
+    }
+    if e.clsid == CLSID_PREMULTIPLY {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        for p in img.px.as_chunks_mut::<4>().0 {
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_COLOR_MANAGEMENT {
+        // Écran sRGB : l'image passe telle quelle.
+        return Some(input());
+    }
+    None
 }
 
 fn warn_effect_once(id: &Guid) {
@@ -3213,7 +3345,8 @@ mod tests {
             );
             let d = describe_image(bmp);
             assert!(
-                d.starts_with("bitmap ") && d.ends_with("2x1 options 0x0 visibles 1"),
+                d.starts_with("bitmap ")
+                    && d.ends_with("2x1 options 0x0 visibles 1 moy [0, 0, 0, 255]"),
                 "{d}"
             );
             assert_eq!(describe_image(std::ptr::null_mut()), "NULL");
@@ -3221,6 +3354,98 @@ mod tests {
             assert!(t.starts_with("hdc 0x0 @0,0 0x0 visibles 0"), "{t}");
             com_release(bmp);
             com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1609 : Flood, Crop et Premultiply sont calculés (tuiles unies du
+    /// canevas de Paint.NET : un bitmap 1x1 rempli par un Flood blanc).
+    #[test]
+    fn effets_flood_crop_premultiply() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            let mut bmp = std::ptr::null_mut();
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    1 | (1 << 32),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut bmp
+                ),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let mut flood = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_FLOOD, &mut flood), S_OK);
+            let color: [f32; 4] = [1.0, 1.0, 1.0, 0.5];
+            let bytes: Vec<u8> = color.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            super::super::begin_draw(dc);
+            dc_draw_image(dc, flood, std::ptr::null(), std::ptr::null(), 0, 0);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let b = &Com::get(bmp as *mut BitmapObj).data;
+            assert_eq!(&crate::dlls::lock(&b.px)[0..4], &[128, 128, 128, 128]);
+
+            // Crop d'un Flood opaque à (1, 2, 3, 3) : image 2x1 en (1, 2).
+            let mut crop = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_CROP, &mut crop), S_OK);
+            let rect: [f32; 4] = [1.0, 2.0, 3.0, 3.0];
+            let bytes: Vec<u8> = rect.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(crop.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            let opaque: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+            let bytes: Vec<u8> = opaque.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            effect_set_input(crop.cast(), 0, flood, 1);
+            let img = image_img(crop, 0, (8, 8)).unwrap();
+            assert_eq!((img.x, img.y, img.w, img.h), (1, 2, 2, 1));
+            assert_eq!(&img.px[0..4], &[255, 0, 0, 255]);
+
+            // Premultiply : (200, 100, 50, a 128) → (100, 50, 25).
+            let mut pm = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_PREMULTIPLY, &mut pm), S_OK);
+            let mut src = std::ptr::null_mut();
+            let raw = [200u8, 100, 50, 128];
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    1 | (1 << 32),
+                    raw.as_ptr(),
+                    4,
+                    std::ptr::null(),
+                    &mut src
+                ),
+                S_OK
+            );
+            effect_set_input(pm.cast(), 0, src, 1);
+            let img = image_img(pm, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[100, 50, 25, 128]);
+
+            for o in [src, pm, crop, flood, bmp] {
+                com_release(o);
+            }
+            com_release(dc.cast());
+            com_release(dev);
             Com::release(f);
         }
     }
