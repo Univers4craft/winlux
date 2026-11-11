@@ -1981,17 +1981,40 @@ unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> 
     }
     let obj = effect as *mut EffectObj;
     let e = Com::get(obj);
-    if e.custom.get().is_some() {
-        if let Some(img) = custom::render(obj, depth, hint) {
-            return Some(img);
+    let (how, img) = 'calc: {
+        if e.custom.get().is_some() {
+            if let Some(img) = custom::render(obj, depth, hint) {
+                break 'calc ("personnalisé", Some(img));
+            }
         }
-    }
-    if let Some(img) = builtin_render(e, depth, hint) {
-        return img;
-    }
-    warn_effect_once(&e.clsid);
-    let first = crate::dlls::lock(&e.inputs).first().copied()?;
-    image_img(first, depth + 1, hint)
+        if let Some(img) = builtin_render(e, depth, hint) {
+            break 'calc ("intégré", img);
+        }
+        warn_effect_once(&e.clsid);
+        let first = crate::dlls::lock(&e.inputs).first().copied();
+        (
+            "non calculé",
+            first.and_then(|f| image_img(f, depth + 1, hint)),
+        )
+    };
+    // Sortie de chaque effet d'une chaîne, pour trouver celui qui vide
+    // l'image (#1669).
+    d2d_trace!(
+        "  effet {:p} {:?} ({}) profondeur {} → {}",
+        effect,
+        e.clsid,
+        how,
+        depth,
+        img.as_ref().map_or("rien".to_string(), |i| format!(
+            "{}x{} @{},{} visibles {}",
+            i.w,
+            i.h,
+            i.x,
+            i.y,
+            visible(&i.px)
+        ))
+    );
+    img
 }
 
 // Effets intégrés calculés (CLSID de d2d1effects.h, mingw-w64).
@@ -2015,6 +2038,13 @@ const CLSID_PREMULTIPLY: Guid = guid(
     0xdeed,
     0x4018,
     [0x80, 0xd2, 0x3e, 0x1d, 0x47, 0x1a, 0xde, 0xb2],
+);
+/// CLSID_D2D1Opacity {811D79A4-DE28-4454-8094-C64685F8BD4C} (#1669).
+const CLSID_OPACITY: Guid = guid(
+    0x811d_79a4,
+    0xde28,
+    0x4454,
+    [0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c],
 );
 /// CLSID_D2D1ColorManagement {1A28524C-FDD6-4AA4-AE8F-837EB8267B37}.
 const CLSID_COLOR_MANAGEMENT: Guid = guid(
@@ -2099,6 +2129,17 @@ unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Opt
             for c in &mut p[..3] {
                 *c = ((*c as u32 * a + 127) / 255) as u8;
             }
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_OPACITY {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        // D2D1_OPACITY_PROP_OPACITY : 1 par défaut, sur une image prémultipliée.
+        let k = prop_f32::<1>(e, 0).map_or(1.0, |v| v[0]).clamp(0.0, 1.0);
+        for c in img.px.iter_mut() {
+            *c = (*c as f32 * k + 0.5) as u8;
         }
         return Some(Some(img));
     }
@@ -3566,7 +3607,18 @@ mod tests {
             let img = image_img(pm, 0, (1, 1)).unwrap();
             assert_eq!(&img.px[0..4], &[100, 50, 25, 128]);
 
-            for o in [src, pm, crop, flood, bmp] {
+            // Opacity 0,5 (#1669) : tous les canaux prémultipliés par 0,5.
+            let mut op = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_OPACITY, &mut op), S_OK);
+            effect_set_input(op.cast(), 0, src, 1);
+            let img = image_img(op, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[200, 100, 50, 128]);
+            let half = 0.5f32.to_le_bytes();
+            assert_eq!(effect_set_value(op.cast(), 0, 0, half.as_ptr(), 4), S_OK);
+            let img = image_img(op, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[100, 50, 25, 64]);
+
+            for o in [op, src, pm, crop, flood, bmp] {
                 com_release(o);
             }
             com_release(dc.cast());
