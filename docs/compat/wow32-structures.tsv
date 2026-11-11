@@ -184,6 +184,8 @@ msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TS
 msctf_profiles.rs	Profiles	interne	objet COM du runtime (TF_InputProcessorProfiles) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msvcp140.rs	Thrd	a-verifier	
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
+netlistmgr.rs	Enum	interne	objet COM du runtime (énumération vide de réseaux) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
+netlistmgr.rs	Manager	interne	objet COM du runtime (NetworkListManager) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
 ole32.rs	ComStream	a-verifier	
 ole32.rs	ContextVtbl	a-verifier	
 ole32.rs	Factory	a-verifier	

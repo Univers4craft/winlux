@@ -186,6 +186,7 @@ pub mod msxml_dom;
 pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
+pub mod netlistmgr;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
