@@ -115,6 +115,16 @@ fn this_handle(args: &[Value], namespace: &str, class: &str) -> Option<usize> {
     .then(|| unsafe { *(p.add(size) as *const u64) } as usize)
 }
 
+/// Type désigné par un objet `System.Type` créé par le moteur (#1962).
+pub(super) fn type_id_of(obj: *mut u8) -> Option<TypeId> {
+    with_cache(|c| {
+        c.types
+            .iter()
+            .find(|(_, &o)| o == obj as usize)
+            .map(|(&id, _)| id)
+    })
+}
+
 fn bool_value(b: bool) -> Value {
     Value::I32(b as i32)
 }

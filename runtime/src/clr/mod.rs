@@ -18,6 +18,7 @@ pub mod opcodes;
 pub mod pinvoke;
 pub mod reflection;
 pub mod resolve;
+pub mod tableaux;
 pub mod tables;
 pub mod threads;
 pub mod types;

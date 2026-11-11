@@ -163,7 +163,7 @@ namespace System
         }
     }
 
-    public abstract class Array
+    public abstract partial class Array
     {
         public extern int Length
         {

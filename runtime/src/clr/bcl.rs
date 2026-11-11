@@ -22,6 +22,22 @@ pub fn dispatch_internal_call(
         ("System", "String", m) => string_dispatch(m, args),
         ("System", "Number", m) => number_dispatch(m, args),
         ("System", "Char", m) => char_dispatch(m, args),
+        // Octets aléatoires de Guid.NewGuid (#1962).
+        ("System", "Guid", "FillRandom") => {
+            let buf = args.first()?.as_ref();
+            if !buf.is_null() {
+                let len = unsafe { *(buf as *const u64) } as usize;
+                let mut filled = 0;
+                while filled < len {
+                    let n = unsafe { libc::getrandom(buf.add(8 + filled).cast(), len - filled, 0) };
+                    if n <= 0 {
+                        return None;
+                    }
+                    filled += n as usize;
+                }
+            }
+            Some(Value::Null)
+        }
         ("System", "Object", m) => object_dispatch(m, args),
         ("System", "Array", m) => array_dispatch(m, args),
         ("System", "GC", m) => gc_dispatch(m, args),

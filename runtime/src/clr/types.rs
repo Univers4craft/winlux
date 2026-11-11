@@ -169,8 +169,8 @@ pub struct MethodInfo {
 }
 
 /// Deux types de paramètre peuvent-ils désigner le même type ? Les types
-/// élémentaires se comparent ; un jeton (classe, structure, générique) est
-/// propre à son assembly et s'accepte.
+/// élémentaires se comparent ; deux jetons (classe, structure) sont propres
+/// à leur assembly et s'acceptent.
 fn same_param(a: &super::metadata::ElementType, b: &super::metadata::ElementType) -> bool {
     use super::metadata::ElementType as E;
     let simple = |e: &E| {
@@ -194,7 +194,16 @@ fn same_param(a: &super::metadata::ElementType, b: &super::metadata::ElementType
                 | E::UIntPtr
         )
     };
-    !(simple(a) && simple(b)) || a == b
+    let generic = |e: &E| matches!(e, E::Var(_) | E::MVar(_));
+    match (simple(a), simple(b)) {
+        (true, true) => a == b,
+        // Object, String et les primitives ont toujours leur propre code
+        // d'élément (ECMA-335 §II.23.2.12) : face à un jeton, seul un
+        // paramètre générique peut encore les désigner.
+        (true, false) => generic(b),
+        (false, true) => generic(a),
+        (false, false) => true,
+    }
 }
 
 pub struct TypeRegistry {
