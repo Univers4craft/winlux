@@ -1611,6 +1611,14 @@ unsafe extern "win64" fn raise_exception_impl(
             rec.info[i] = *args.add(i);
         }
     }
+    if code == 0xE06D_7363 && seh_trace() {
+        crate::log_warn!(
+            "seh",
+            "exception C++ lancée depuis {:#x} : types capturables {:?}",
+            rec.address,
+            super::cxx_eh::thrown_type_names(&rec)
+        );
+    }
     // 0x406D1388 : convention MSVC pour nommer un thread dans le débogueur ;
     // sans débogueur, Windows la transmet aussi aux gestionnaires.
     raise(&mut rec, &mut context)
