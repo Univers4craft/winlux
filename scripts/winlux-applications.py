@@ -802,17 +802,47 @@ def thumbnail(source, output, size):
         pixbuf = pixbuf.scale_simple(max(1, int(pixbuf.get_width() * scale)), max(1, int(pixbuf.get_height() * scale)), GdkPixbuf.InterpType.BILINEAR)
     pixbuf.savev(str(output), "png", [], [])
 
+# Navigateurs du catalogue (winlux-browsers), ordre alphabétique des noms :
+# (id, nom, programme habituel, icône habituelle). Le programme réellement
+# trouvé à l'installation est noté dans /opt/winlux/browsers/<id>/program.
+BROWSER_CATALOGUE = (
+    ("brave", "Brave", "opt/brave.com/brave/brave-browser", "opt/brave.com/brave/product_logo_48.png"),
+    ("chrome", "Google Chrome", "opt/google/chrome/google-chrome", "opt/google/chrome/product_logo_48.png"),
+    ("edge", "Microsoft Edge", "opt/microsoft/msedge/microsoft-edge", "opt/microsoft/msedge/product_logo_48.png"),
+    ("firefox", "Mozilla Firefox", "usr/lib/firefox/firefox", "usr/lib/firefox/browser/chrome/icons/default/default48.png"),
+    ("opera", "Opera", "usr/lib/x86_64-linux-gnu/opera/opera", "usr/share/icons/hicolor/48x48/apps/opera.png"),
+    ("operagx", "Opera GX", "usr/lib/x86_64-linux-gnu/opera-gx/opera-gx", "usr/share/icons/hicolor/48x48/apps/opera-gx.png"),
+    ("tor", "Tor Browser", "tor-browser/Browser/start-tor-browser", "tor-browser/Browser/browser/chrome/icons/default/default48.png"),
+    ("vivaldi", "Vivaldi", "opt/vivaldi/vivaldi", "opt/vivaldi/product_logo_48.png"),
+)
+
+def browser_program(key, binary):
+    """Programme du navigateur installé (fichier « program » s'il est sûr)."""
+    folder = Path("/opt/winlux/browsers") / key
+    try:
+        noted = (folder / "program").read_text().splitlines()[0].strip()
+    except (OSError, IndexError):
+        noted = ""
+    parts = noted.split("/")
+    if noted.startswith("root/") and "" not in parts and ".." not in parts and "." not in parts:
+        return folder / noted
+    return folder / "root" / binary
+
+def browser_icon(root, icon):
+    """Icône habituelle, sinon la première icône 48 px du paquet, sinon l'icône générique."""
+    if (root / icon).is_file(): return str(root / icon)
+    for found in sorted((root / "usr/share/icons/hicolor/48x48/apps").glob("*.png")):
+        return str(found)
+    return "web-browser"
+
 def browsers():
-    values = [("edge", "Microsoft Edge", "opt/microsoft/msedge/microsoft-edge", "opt/microsoft/msedge/product_logo_48.png"),
-              ("chrome", "Google Chrome", "opt/google/chrome/google-chrome", "opt/google/chrome/product_logo_48.png"),
-              ("firefox", "Mozilla Firefox", "usr/lib/firefox/firefox", "usr/lib/firefox/browser/chrome/icons/default/default48.png")]
     keep = set()
-    for key, name, binary, icon in values:
+    for key, name, binary, icon in BROWSER_CATALOGUE:
         root = Path("/opt/winlux/browsers") / key / "root"
-        if (root / binary).is_file():
+        if browser_program(key, binary).is_file():
             filename = f"winlux-browser-{key}.desktop"
             keep.add(filename)
-            managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/winlux-browsers --launch {key} %U\nIcon={root / icon}\nTerminal=false\nCategories=Network;WebBrowser;\n")
+            managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/winlux-browsers --launch {key} %U\nIcon={browser_icon(root, icon)}\nTerminal=false\nCategories=Network;WebBrowser;\n")
     return keep
 
 def desktop_dir(home):
@@ -967,8 +997,8 @@ def refresh():
 
 START_MENUS = ("AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
                "ProgramData/Microsoft/Windows/Start Menu/Programs", "Start Menu/Programs")
-BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
-                    "firefox/root/usr/lib/firefox/firefox")
+BROWSER_BINARIES = tuple(f"{key}/root/{binary}" for key, _, binary, _ in BROWSER_CATALOGUE) + \
+    tuple(f"{key}/program" for key, _, _, _ in BROWSER_CATALOGUE)
 
 def watched_inputs():
     """What refresh() reads, as (path, mtime, size): a change means a new pass is due."""

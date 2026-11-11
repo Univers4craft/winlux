@@ -21,12 +21,14 @@ for path in opt/microsoft opt/google opt/brave.com opt/vivaldi opt/opera opt/zoo
     opt/discord opt/spotify usr/share/microsoft-edge usr/share/teams usr/share/code \
     usr/bin/microsoft-edge usr/bin/microsoft-edge-stable usr/bin/google-chrome usr/bin/google-chrome-stable \
     usr/share/winlux/browsers/edge.deb usr/share/winlux/browsers/chrome.deb usr/share/winlux/browsers/firefox.deb \
+    usr/share/winlux/browsers/brave.deb usr/share/winlux/browsers/opera.deb usr/share/winlux/browsers/operagx.deb \
+    usr/share/winlux/browsers/vivaldi.deb usr/share/winlux/browsers/tor.tar.xz opt/winlux/browsers/tor \
     opt/firefox usr/lib/firefox/firefox; do
     if test -e "$root/$path" || test -L "$root/$path"; then found="$found /$path"; fi
 done
 
 # Paquets propriétaires connus, installés (dpkg) ou mis en cache (.deb).
-denied='firefox|firefox-esr|chromium|chromium-browser|microsoft-*|msedge*|google-chrome*|google-earth*|code|code-insiders|teams|teams-for-linux|skypeforlinux|vivaldi*|opera-stable|opera-beta|brave-browser*|zoom|discord|spotify-client|steam-launcher|yandex-browser*|anydesk|teamviewer*'
+denied='firefox|firefox-esr|chromium|chromium-browser|microsoft-*|msedge*|google-chrome*|google-earth*|code|code-insiders|teams|teams-for-linux|skypeforlinux|vivaldi*|opera-stable|opera-beta|opera-gx*|torbrowser-launcher|brave-browser*|zoom|discord|spotify-client|steam-launcher|yandex-browser*|anydesk|teamviewer*'
 status="$root/var/lib/dpkg/status"
 if test -r "$status"; then
     packages=$(awk '/^Package: / { name = $2 } /^Status: .* installed$/ { print name }' "$status")

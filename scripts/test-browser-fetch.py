@@ -136,4 +136,101 @@ with tempfile.TemporaryDirectory() as tmp:
     for url in ("https://packages.microsoft.com/repos/edge/", "https://dl.google.com/linux/chrome/deb/",
                 "https://packages.mozilla.org/apt/"):
         check(url in source, f"dépôt de l'éditeur absent : {url}")
-print("OK : téléchargement des navigateurs sans durée maximale, reprise, empreinte SHA-256, paquets de langue de Firefox")
+# Navigateurs ajoutés le 11 novembre 2026 (#1716).
+import gzip  # noqa: E402
+import json  # noqa: E402
+import shutil  # noqa: E402
+source = FETCH.read_text()
+for url in ("https://brave-browser-apt-release.s3.brave.com/", "https://deb.opera.com/opera-stable/",
+            "https://deb.opera.com/opera-gx-stable/", "https://repo.vivaldi.com/archive/deb/",
+            "https://aus1.torproject.org/torbrowser/update_3/release/download-linux-x86_64.json"):
+    check(url in source, f"source officielle absente : {url}")
+check('TOR_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"' in source, "clé de Tor Browser non épinglée")
+with tempfile.TemporaryDirectory() as tmp:
+    w = Path(tmp)
+    mirror = w / "mirror"
+    out = w / "out"
+    out.mkdir()
+    env = {**os.environ, "WINLUX_BROWSER_MIRROR": mirror.as_uri() + "/"}
+
+    def run(*args, extra=None):
+        return subprocess.run([sys.executable, "-I", "-B", str(FETCH), *args], env={**env, **(extra or {})},
+                              capture_output=True, text=True)
+
+    # Opera GX : index compressé seulement (Packages.gz), nom de paquet « opera-gx » accepté.
+    pkg = w / "gx"
+    (pkg / "DEBIAN").mkdir(parents=True)
+    (pkg / "DEBIAN/control").write_text("Package: opera-gx\nVersion: 120.0\nArchitecture: amd64\n"
+                                        "Maintainer: Test <t@example.org>\nDescription: test\n")
+    deb = mirror / "pool/non-free/o/opera-gx_120.0_amd64.deb"
+    deb.parent.mkdir(parents=True)
+    subprocess.run(["dpkg-deb", "--build", str(pkg), str(deb)], check=True, capture_output=True)
+    sha = hashlib.sha256(deb.read_bytes()).hexdigest()
+    index = mirror / "dists/stable/non-free/binary-amd64/Packages.gz"
+    index.parent.mkdir(parents=True)
+    index.write_bytes(gzip.compress(f"Package: opera-gx\nVersion: 120.0\nArchitecture: amd64\n"
+                                    f"Filename: pool/non-free/o/{deb.name}\nSHA256: {sha}\n\n".encode()))
+    r = run("--only", "operagx", str(out))
+    check(r.returncode == 0 and (out / "operagx.deb").read_bytes() == deb.read_bytes(), f"Opera GX : {r.stderr}")
+    check((out / "operagx.package").read_text().strip() == "opera-gx", "nom réel du paquet d'Opera GX non noté")
+
+    # Tor Browser : archive, liste SHA-256 signée, signature de l'archive.
+    if shutil.which("gpg") and shutil.which("gpgv"):
+        home = w / "gnupg"
+        home.mkdir(mode=0o700)
+        genv = {**os.environ, "GNUPGHOME": str(home)}
+        gpg = lambda *a: subprocess.run(["gpg", "--batch", "--quiet", "--yes", "--pinentry-mode", "loopback",
+                                         "--passphrase", "", *a], env=genv, check=True, capture_output=True)
+        gpg("--quick-gen-key", "Tor fixture <tor@example.invalid>", "ed25519", "sign", "never")
+        gpg("--quick-gen-key", "Autre <autre@example.invalid>", "ed25519", "sign", "never")
+        listing = subprocess.run(["gpg", "--batch", "--with-colons", "--list-keys"], env=genv, capture_output=True, text=True).stdout
+        good, other = [l.split(":")[9] for l in listing.splitlines() if l.startswith("fpr:")][:2]
+        version = "16.0.1"
+        folder = mirror / "torbrowser" / version
+        folder.mkdir(parents=True)
+        tree = w / "tree/tor-browser/Browser"
+        tree.mkdir(parents=True)
+        (tree / "start-tor-browser").write_text("#!/bin/sh\n")
+        archive = folder / f"tor-browser-linux-x86_64-{version}.tar.xz"
+        subprocess.run(["tar", "-cJf", str(archive), "-C", str(w / "tree"), "tor-browser"], check=True)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (folder / "sha256sums-signed-build.txt").write_text(f"{'0' * 64}  autre.tar.xz\n{digest}  {archive.name}\n")
+        url = mirror.as_uri() + f"/torbrowser/{version}/{archive.name}"
+        (mirror / "download-linux-x86_64.json").write_text(json.dumps({"binary": url, "sig": url + ".asc", "version": version}))
+        gpg("--export", "--armor", "--output", str(mirror / "torbrowser.key"), good)
+
+        def sign(key):
+            for target in (archive, folder / "sha256sums-signed-build.txt"):
+                gpg("--local-user", key, "--armor", "--detach-sign", "--output", str(target) + ".asc", str(target))
+        sign(good)
+        tor_env = {"WINLUX_BROWSER_TOR_FINGERPRINT": good}
+        r = run("--info", "tor", extra=tor_env)
+        check(r.returncode == 0 and f"sha256={digest}" in r.stdout and f"version={version}" in r.stdout
+              and "signature=tor" in r.stdout, f"--info tor : {r.stdout} {r.stderr}")
+        r = run("--only", "tor", str(out), extra=tor_env)
+        check(r.returncode == 0 and (out / "tor.tar.xz").read_bytes() == archive.read_bytes(), f"Tor Browser : {r.stderr}")
+        for name in ("tor.tar.xz.asc", "tor.keyring", "tor.sha256", "tor.version", "tor.source"):
+            check((out / name).is_file(), f"{name} absent")
+        check((out / "tor.sha256").read_text().strip() == digest, "SHA-256 de Tor Browser")
+        # Clé servie différente de celle épinglée : refusée.
+        r = run("--info", "tor", extra={"WINLUX_BROWSER_TOR_FINGERPRINT": other})
+        check(r.returncode != 0 and "empreinte inattendue" in r.stderr, "clé non épinglée acceptée")
+        # Liste et archive signées par une autre clé : refusées, rien de gardé.
+        (out / "tor.tar.xz").unlink()
+        sign(other)
+        r = run("--only", "tor", str(out), extra=tor_env)
+        check(r.returncode != 0 and "signature" in r.stderr and not (out / "tor.tar.xz").exists(), "mauvaise signature acceptée")
+        # Liste bien signée mais archive signée par une autre clé : refusée.
+        gpg("--local-user", good, "--armor", "--detach-sign", "--output", str(folder / "sha256sums-signed-build.txt.asc"),
+            str(folder / "sha256sums-signed-build.txt"))
+        r = run("--only", "tor", str(out), extra=tor_env)
+        check(r.returncode != 0 and not (out / "tor.tar.xz").exists() and not list(out.glob(".tor-*.partial")),
+              "archive mal signée acceptée")
+        # Adresse d'archive hors du dossier attendu : refusée.
+        (mirror / "download-linux-x86_64.json").write_text(json.dumps({"binary": "https://example.invalid/t.tar.xz",
+                                                                        "sig": "https://example.invalid/t.tar.xz.asc", "version": version}))
+        r = run("--info", "tor", extra=tor_env)
+        check(r.returncode != 0 and "inattendue" in r.stderr, "adresse de Tor Browser non contrôlée")
+    else:
+        print("gpg/gpgv absents : partie Tor Browser sautée", file=sys.stderr)
+print("OK : téléchargement des navigateurs sans durée maximale, reprise, empreinte SHA-256, paquets de langue de Firefox, Opera GX, Tor Browser signé (#1716)")

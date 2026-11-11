@@ -933,7 +933,7 @@ fi
 if test -s /etc/winlux/first-boot-browser; then
     (
         choice=$(/bin/busybox sed -n '1p' /etc/winlux/first-boot-browser)
-        case "$choice" in chrome|edge|firefox) ;; *) exit 0 ;; esac
+        case "$choice" in brave|chrome|edge|firefox|opera|operagx|tor|vivaldi) ;; *) exit 0 ;; esac
         for attempt in $(/bin/busybox seq 1 120); do
             /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
             /bin/busybox sleep 5
@@ -955,7 +955,7 @@ if test -s /etc/winlux/browser-install-pending; then
         done
         low=
         if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
-        for choice in $(/bin/busybox grep -E '^(chrome|edge|firefox)$' /etc/winlux/browser-install-pending); do
+        for choice in $(/bin/busybox grep -E '^(brave|chrome|edge|firefox|opera|operagx|tor|vivaldi)$' /etc/winlux/browser-install-pending); do
             $low /usr/bin/winlux-browsers --install "$choice" || true
         done
     ) >>/var/log/winlux-first-boot-browser.log 2>&1 &

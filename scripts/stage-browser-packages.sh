@@ -22,7 +22,8 @@ libraries() {
     printf '%s\n' "$result" | awk '$2 == "=>" && $3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' | sort -u > "$work/libraries"
     while IFS= read -r lib; do copy_library "$lib"; done < "$work/libraries"
 }
-for tool in dpkg-deb setpriv xhost tar; do
+# gpgv et xz : archive signée de Tor Browser (#1716).
+for tool in dpkg-deb setpriv xhost tar gpgv xz; do
     binary=$(command -v "$tool")
     cp --remove-destination "$binary" "$stage/usr/bin/$tool"
     libraries "$binary"
@@ -30,8 +31,8 @@ done
 # Aucun navigateur n'est copié dans l'image : l'utilisateur choisit le sien,
 # téléchargé chez son éditeur (winlux-browsers --install). La licence d'Edge
 # en interdit d'ailleurs la redistribution (section 2.8 f).
-for id in edge chrome firefox; do
-    if test -e "$cache/$id.deb"; then
+for id in brave chrome edge firefox opera operagx tor vivaldi; do
+    if test -e "$cache/$id.deb" || test -e "$cache/$id.tar.xz"; then
         echo "$id.deb refusé : aucun navigateur dans l'image, téléchargement à la demande uniquement" >&2
         exit 1
     fi
