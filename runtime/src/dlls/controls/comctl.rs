@@ -116,6 +116,11 @@ pub(super) struct CommonState {
     page: i32,
     buddy: usize,
     dragging: bool,
+    // Infobulle : délais (TTDT_RESHOW, TTDT_AUTOPOP, TTDT_INITIAL ; None =
+    // valeur par défaut), largeur maximale et couleurs fixées par le programme.
+    tt_delays: [Option<i32>; 3],
+    tt_max_width: Option<i32>,
+    tt_colors: [Option<u32>; 2],
 }
 
 #[derive(Clone)]
@@ -239,13 +244,78 @@ pub(super) unsafe fn proc_impl(
         Kind::ToolBar | Kind::ReBar | Kind::ComboBoxEx => {
             super::bars::proc_impl(kind, hwnd, msg, wp, lp)
         }
-        Kind::ToolTip => Some(match msg {
-            0x0404 | 0x0432 => 1, // TTM_ADDTOOLA/W
-            _ if (0x0400..0x0500).contains(&msg) => 0,
-            _ => return None,
-        }),
+        Kind::ToolTip => tooltip_proc(hwnd, msg, wp, lp),
         _ => None,
     }
+}
+
+// =====================================================================
+// tooltips_class32 (sans affichage)
+// =====================================================================
+
+const TTDT_AUTOMATIC: usize = 0;
+const TTDT_RESHOW: usize = 1;
+const TTDT_AUTOPOP: usize = 2;
+const TTDT_INITIAL: usize = 3;
+
+/// Délai d'une infobulle, en millisecondes. Par défaut, comme le documente
+/// TTM_SETDELAYTIME : apparition = GetDoubleClickTime, disparition = dix
+/// fois plus, réapparition = cinq fois moins. Jamais 0 : WinForms en fait
+/// l'intervalle d'un minuteur, qui refuse 0 (Paint.NET, #1803).
+fn tooltip_delay(hwnd: usize, which: usize) -> i32 {
+    let initial = user32::get_double_click_time().max(1) as i32;
+    let fixed = common_snapshot(hwnd).tt_delays;
+    match which {
+        TTDT_RESHOW => fixed[0].unwrap_or(initial / 5),
+        TTDT_AUTOPOP => fixed[1].unwrap_or(initial * 10),
+        _ => fixed[2].unwrap_or(initial),
+    }
+}
+
+fn tooltip_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
+    Some(match msg {
+        0x0404 | 0x0432 => 1, // TTM_ADDTOOLA/W
+        // TTM_SETDELAYTIME : LOWORD(lParam) en ms, -1 rend la valeur par
+        // défaut ; TTDT_AUTOMATIC règle les trois d'après l'apparition.
+        0x0403 => {
+            let ms = lp as u16 as i16 as i32;
+            let value = (ms >= 0).then_some(ms);
+            with_common(hwnd, |s| match wp {
+                TTDT_AUTOMATIC => {
+                    s.tt_delays = match value {
+                        Some(t) => [Some(t / 5), Some(t * 10), Some(t)],
+                        None => [None; 3],
+                    }
+                }
+                TTDT_RESHOW | TTDT_AUTOPOP | TTDT_INITIAL => s.tt_delays[wp - 1] = value,
+                _ => {}
+            });
+            0
+        }
+        0x0415 => tooltip_delay(hwnd, wp) as isize,
+        // TTM_SETMAXTIPWIDTH rend l'ancienne largeur ; -1 = pas de limite.
+        0x0418 => {
+            let previous = with_common(hwnd, |s| s.tt_max_width.replace(lp as i32));
+            previous.unwrap_or(-1) as isize
+        }
+        0x0419 => common_snapshot(hwnd).tt_max_width.unwrap_or(-1) as isize,
+        // TTM_SETTIPBKCOLOR / TEXTCOLOR, et leurs lectures (couleurs système
+        // COLOR_INFOBK et COLOR_INFOTEXT par défaut).
+        0x0413 | 0x0414 => {
+            with_common(hwnd, |s| {
+                s.tt_colors[(msg - 0x0413) as usize] = Some(wp as u32)
+            });
+            0
+        }
+        0x0416 | 0x0417 => {
+            let i = (msg - 0x0416) as usize;
+            common_snapshot(hwnd).tt_colors[i]
+                .unwrap_or_else(|| user32::get_sys_color(if i == 0 { 24 } else { 23 }))
+                as isize
+        }
+        _ if (0x0400..0x0500).contains(&msg) => 0,
+        _ => return None,
+    })
 }
 
 // =====================================================================
