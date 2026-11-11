@@ -155,14 +155,12 @@ def main():
         quatre_k.paste(Image.new("RGB", (600, 700), (240, 240, 245)), (3100, 1300))
         boite = module.cadrage(quatre_k)
         check(boite is not None and boite[0] <= 3100 and boite[1] <= 1300 and boite[2] >= 3700 and boite[3] >= 2000
-              and boite[2] <= 3840 and boite[3] <= 2160 and abs((boite[2] - boite[0]) / (boite[3] - boite[1]) - 1.6) < 0.01
-              and (boite[2] - boite[0]) < 1600,
-              f"4K à fond noir : vignette recadrée sur la fenêtre, en 16:10 (#1925) ({boite})")
+              and boite[2] - boite[0] <= 700 and boite[3] - boite[1] <= 800,
+              f"4K à fond noir : vignette recadrée sur la fenêtre, sans bande noire (#1925, #1957) ({boite})")
         coin = Image.new("RGB", (2560, 1440), (0, 0, 0))
         coin.paste(Image.new("RGB", (1020, 740), (233, 236, 244)), (0, 0))
         boite = module.cadrage(coin)
-        check(boite is not None and boite[0] == 0 and boite[1] == 0 and boite[2] >= 1020 and boite[3] >= 740
-              and boite[2] < 1600, f"fenêtre posée en (0, 0) : vignette recadrée quand même (#1943) ({boite})")
+        check(boite == (0, 0, 1020, 740), f"fenêtre posée en (0, 0) : recadrée au ras, sans bande noire (#1943, #1957) ({boite})")
         bureau = Image.new("RGB", (1920, 1080), (40, 60, 120))
         bureau.paste(Image.new("RGB", (1920, 48), (20, 20, 30)), (0, 1032))
         bureau.paste(Image.new("RGB", (1200, 800), (240, 240, 245)), (300, 100))
