@@ -2687,11 +2687,14 @@ fn leave_message_only(hwnd: usize, parent: usize) {
 // FindWindowA/W, EnumWindows, GetWindow
 // =====================================================================
 
+/// FindWindowA/W : `class` peut être un atome (MAKEINTATOM, 16 bits hauts
+/// nuls), qu'Acrobat passe pour la classe des boîtes de dialogue (#32770) ;
+/// il ne se lit pas comme une chaîne (#1754).
 pub unsafe extern "win64" fn find_window_a(class: *const u8, title: *const u8) -> usize {
     let cls = if class.is_null() {
         None
     } else {
-        Some(crate::dlls::cstr(class))
+        Some(read_class_name_a(class))
     };
     let ttl = if title.is_null() {
         None
@@ -2705,7 +2708,7 @@ pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16)
     let cls = if class.is_null() {
         None
     } else {
-        Some(crate::dlls::wstr(class))
+        Some(read_class_name_w(class))
     };
     let ttl = if title.is_null() {
         None
@@ -5701,6 +5704,13 @@ mod tests {
                 read_class_name_a(b as usize as *const u8),
                 "Chrome_MessageWindow"
             );
+            // FindWindow avec un atome : lu comme tel, jamais déréférencé
+            // (Acrobat passe MAKEINTATOM(0x8002), #1754).
+            let _ = find_window_a(0x8002 as *const u8, std::ptr::null());
+            let _ = find_window_w(0x8002 as *const u16, std::ptr::null());
+            let _ = find_window_ex_a(0, 0, a as usize as *const u8, std::ptr::null());
+            let _ = find_window_ex_w(0, 0, b as usize as *const u16, std::ptr::null());
+            assert_eq!(read_class_name_a(0x8002 as *const u8), "#32770");
         }
     }
 

@@ -1325,6 +1325,27 @@ pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error
     }
 }
 
+/// Paquet au port lié à `h`, sans toucher à `overlapped` : la valeur est
+/// celle que l'appelant a confiée (ApcContext d'un IOCTL AFD, #1766).
+pub(crate) fn post_completion(h: usize, overlapped: usize, bytes: u32, error: u32) -> bool {
+    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&h)
+        .cloned();
+    let Some((port, key)) = completion else {
+        return false;
+    };
+    post_iocp(
+        &port,
+        CompletionPacket {
+            bytes,
+            key,
+            overlapped,
+            error,
+        },
+    );
+    true
+}
+
 fn start_overlapped_io(
     h: usize,
     buffer: usize,
@@ -4566,11 +4587,6 @@ fn stack_region(address: usize, limit: usize, base: usize) -> MemoryBasicInforma
 }
 
 fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
-    const PAGE: usize = 4096;
-    const MEM_COMMIT: u32 = 0x1000;
-    const MEM_PRIVATE: u32 = 0x20000;
-    const MEM_MAPPED: u32 = 0x40000;
-    let page = address & !(PAGE - 1);
     let teb = crate::process::teb();
     if teb != 0 {
         let (base, limit) = unsafe {
@@ -4584,6 +4600,27 @@ fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
         }
     }
     let text = std::fs::read_to_string("/proc/self/maps").ok()?;
+    maps_region(&text, address)
+}
+
+/// Bornes (début, fin) de chaque ligne de `/proc/<pid>/maps`.
+fn maps_ranges(text: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    text.lines().filter_map(|line| {
+        let (lo, hi) = line.split_whitespace().next()?.split_once('-')?;
+        Some((
+            usize::from_str_radix(lo, 16).ok()?,
+            usize::from_str_radix(hi, 16).ok()?,
+        ))
+    })
+}
+
+/// Région d'un texte `/proc/<pid>/maps` qui contient `address`.
+fn maps_region(text: &str, address: usize) -> Option<MemoryBasicInformation> {
+    const PAGE: usize = 4096;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_PRIVATE: u32 = 0x20000;
+    const MEM_MAPPED: u32 = 0x40000;
+    let page = address & !(PAGE - 1);
     for line in text.lines() {
         let mut parts = line.split_whitespace();
         let (range, perms) = (parts.next()?, parts.next()?);
@@ -4695,17 +4732,83 @@ pub unsafe extern "win64" fn virtual_query(
     std::ptr::write_unaligned(info, result);
     required
 }
+/// Plus haute adresse d'un programme Windows 64 bits (0x7FFFFFFEFFFF).
+const USER_SPACE_END: usize = 0x7FFF_FFFF_0000;
+
+/// VirtualQueryEx : pour un autre processus (enfant, ou processus qui nous a
+/// désignés comme le gestionnaire de plantage de Chromium, #1729), les
+/// régions viennent de son `/proc/<pid>/maps` ; un trou entre deux régions
+/// est MEM_FREE, et au-delà de l'espace utilisateur ERROR_INVALID_PARAMETER
+/// arrête le parcours, comme sous Windows.
 pub unsafe extern "win64" fn virtual_query_ex(
     process: usize,
     addr: *const c_void,
     info: *mut MemoryBasicInformation,
     length: usize,
 ) -> usize {
-    if !is_current_process_handle(process) {
+    if is_current_process_handle(process) {
+        return virtual_query(addr, info, length);
+    }
+    let Some(pid) = process_os_pid(process) else {
         crate::process::set_last_error(6);
         return 0;
+    };
+    let required = std::mem::size_of::<MemoryBasicInformation>();
+    if info.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
     }
-    virtual_query(addr, info, length)
+    if length < required {
+        crate::process::set_last_error(24); // ERROR_BAD_LENGTH
+        return 0;
+    }
+    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/maps")) else {
+        crate::process::set_last_error(5);
+        return 0;
+    };
+    match foreign_region(&text, addr as usize) {
+        Some(r) => {
+            std::ptr::write_unaligned(info, r);
+            required
+        }
+        None => {
+            crate::process::set_last_error(87);
+            0
+        }
+    }
+}
+
+/// Région d'un autre processus d'après son `maps` ; None au-delà de
+/// l'espace utilisateur.
+fn foreign_region(text: &str, address: usize) -> Option<MemoryBasicInformation> {
+    const PAGE: usize = 4096;
+    if address >= USER_SPACE_END {
+        return None;
+    }
+    if let Some(r) = maps_region(text, address) {
+        let end = (r.base_address as usize + r.region_size).min(USER_SPACE_END);
+        return Some(MemoryBasicInformation {
+            region_size: end - r.base_address as usize,
+            ..r
+        });
+    }
+    let page = address & !(PAGE - 1);
+    let next = maps_ranges(text)
+        .map(|(lo, _)| lo)
+        .filter(|&lo| lo > page)
+        .min()
+        .unwrap_or(USER_SPACE_END)
+        .min(USER_SPACE_END);
+    Some(MemoryBasicInformation {
+        base_address: page as *mut c_void,
+        allocation_base: std::ptr::null_mut(),
+        allocation_protect: 0,
+        partition_id: 0,
+        region_size: next - page,
+        state: 0x10000, // MEM_FREE
+        protect: 1,
+        kind: 0,
+    })
 }
 pub extern "win64" fn flush_instruction_cache(
     _process: usize,
@@ -6654,6 +6757,8 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if lookup_sync(handle).is_none() && crate::dlls::ws2_32::is_wsa_event(handle) {
         return crate::dlls::ws2_32::wsa_close_event(handle);
     }
+    // \Device\Afd (mio, #1766) : ses sondages en cours sont annulés.
+    crate::dlls::afd::closed(handle);
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;

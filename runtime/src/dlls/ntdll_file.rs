@@ -1061,22 +1061,50 @@ pub unsafe extern "win64" fn NtWriteFile(
 
 const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
 
-/// `NtDeviceIoControlFile` : les IOCTL de périphériques Windows (AFD des
-/// sockets, disques) n'ont pas d'équivalent ; libuv sait s'en passer.
+/// `NtDeviceIoControlFile` : IOCTL_AFD_POLL sur un handle `\Device\Afd`
+/// (mio/tokio, #1766). Les autres IOCTL de périphériques Windows (AFD sur
+/// la socket elle-même, disques) n'ont pas d'équivalent ; libuv sait s'en
+/// passer.
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn NtDeviceIoControlFile(
-    _handle: usize,
-    _event: usize,
+    handle: usize,
+    event: usize,
     _apc: usize,
-    _apc_ctx: usize,
+    apc_ctx: usize,
     io: *mut c_void,
-    _code: u32,
-    _inb: *const u8,
-    _inl: u32,
-    _outb: *mut u8,
-    _outl: u32,
+    code: u32,
+    inb: *const u8,
+    inl: u32,
+    outb: *mut u8,
+    outl: u32,
 ) -> u32 {
+    if let Some(r) =
+        super::afd::device_io_control(handle, event, apc_ctx, io, code, inb, inl, outb, outl)
+    {
+        return r;
+    }
     iosb(io, STATUS_NOT_SUPPORTED, 0)
+}
+
+/// `NtCancelIoFileEx` : annule la demande dont l'IO_STATUS_BLOCK est
+/// `request` (toutes celles du handle s'il est nul) ; STATUS_NOT_FOUND si
+/// rien n'est en cours.
+pub unsafe extern "win64" fn NtCancelIoFileEx(
+    handle: usize,
+    request: *mut c_void,
+    io: *mut c_void,
+) -> u32 {
+    if let Some(r) = super::afd::cancel(handle, request as usize, io) {
+        return r;
+    }
+    let ok = crate::dlls::kernel32::cancel_io_ex(handle, request.cast());
+    let status = if ok != 0 { 0 } else { 0xC000_0225 };
+    iosb(io, status, 0)
+}
+
+/// `NtCancelIoFile` : toutes les demandes du handle.
+pub unsafe extern "win64" fn NtCancelIoFile(handle: usize, io: *mut c_void) -> u32 {
+    NtCancelIoFileEx(handle, std::ptr::null_mut(), io)
 }
 
 /// `NtFsControlFile` : FSCTL_GET_REPARSE_POINT renvoie la cible d'un lien
@@ -1177,6 +1205,8 @@ pub fn exports() -> crate::dlls::Exports {
         "NtReadFile" => fn NtReadFile,
         "NtWriteFile" => fn NtWriteFile,
         "NtDeviceIoControlFile" => fn NtDeviceIoControlFile,
+        "NtCancelIoFileEx" => fn NtCancelIoFileEx,
+        "NtCancelIoFile" => fn NtCancelIoFile,
         "NtFsControlFile" => fn NtFsControlFile,
     }
 }
