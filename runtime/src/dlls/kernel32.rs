@@ -5287,7 +5287,9 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
 fn poll_process(p: &ProcessObject) -> bool {
     let mut s = lock(&p.state);
     if let Some(pid) = s.foreign {
-        if !os_process_alive(pid) {
+        // Un processus terminé que son parent n'a pas encore réclamé reste
+        // un zombie : il est fini, son handle doit être signalé (#1859).
+        if !os_process_alive(pid) || os_process_zombie(pid) {
             s.foreign = None;
             s.exit_code = 0;
             p.changed.notify_all();
@@ -6634,6 +6636,22 @@ fn os_process_alive(pid: i32) -> bool {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+/// Processus terminé mais pas encore réclamé par son parent (zombie). Un
+/// meneur de groupe sorti seul (ExitThread du fil principal) apparaît aussi
+/// « Z » tant que ses autres fils tournent : il n'est fini que s'il ne reste
+/// plus que lui dans /proc/<pid>/task.
+fn os_process_zombie(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .rfind(')')
+        .and_then(|i| stat[i + 1..].trim_start().chars().next());
+    if !matches!(state, Some('Z' | 'X')) {
+        return false;
+    }
+    std::fs::read_dir(format!("/proc/{pid}/task")).map_or(true, |d| d.count() <= 1)
 }
 pub unsafe extern "win64" fn get_exit_code_process(handle: usize, code: *mut u32) -> i32 {
     if code.is_null() {
@@ -12905,5 +12923,29 @@ mod tests_downlevel {
                 assert_ne!(super::get_proc_address(h, f.as_ptr().cast()), 0, "{f:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_processus_zombie {
+    use super::*;
+
+    #[test]
+    fn processus_etranger_fini_mais_non_reclame_est_signale() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !os_process_zombie(pid) {
+            assert!(std::time::Instant::now() < deadline, "jamais zombie");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Zombie : encore « vivant » pour kill(0), mais fini pour Windows.
+        assert!(os_process_alive(pid));
+        let h = unsafe { open_process(0x0010_0000, 0, pid as u32) };
+        assert_ne!(h, 0);
+        assert_eq!(wait_for_single_object(h, 2000), 0);
+        assert!(!os_process_zombie(std::process::id() as i32));
+        unsafe { close_handle(h) };
+        child.wait().unwrap();
     }
 }

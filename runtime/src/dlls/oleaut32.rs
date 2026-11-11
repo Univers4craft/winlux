@@ -359,7 +359,7 @@ unsafe fn read_cell(at: *const u8) -> usize {
     }
 }
 
-unsafe fn write_cell(at: *mut u8, v: usize) {
+pub(crate) unsafe fn write_cell(at: *mut u8, v: usize) {
     if crate::wow32::pointer_size() == 4 {
         std::ptr::write_unaligned(at as *mut u32, v as u32)
     } else {
