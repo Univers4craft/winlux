@@ -871,6 +871,23 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
+# Dossiers personnels (#1722) : jamais inscriptibles par le groupe ni par les
+# autres. Un installeur .exe avait ouvert l'un d'eux en drwx-w--w- (C:\ est
+# le dossier personnel) ; un dossier ouvert ainsi est remis en 0700 à chaque
+# démarrage, y compris sur un système déjà installé. Un dossier qui
+# n'appartient pas au compte, ou un lien symbolique, n'est pas touché.
+/bin/busybox awk -F: '$3 >= 1000 && $3 < 60000 { print $3 ":" $6 }' /etc/passwd 2>/dev/null |
+    while IFS=: read -r home_uid home_dir; do
+        case "$home_dir" in /home/?*) ;; *) continue ;; esac
+        case "$home_dir" in *..*) continue ;; esac
+        test -d "$home_dir" && ! test -L "$home_dir" || continue
+        test "$(/bin/busybox stat -c %u "$home_dir")" = "$home_uid" || continue
+        home_mode=$(/bin/busybox stat -c %a "$home_dir")
+        if test $((0$home_mode & 022)) -ne 0; then
+            /bin/busybox chmod 700 "$home_dir" &&
+                echo "Winlux : dossier personnel $home_dir en $home_mode, remis en 700 (#1722)"
+        fi
+    done
 # Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
