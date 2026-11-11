@@ -2224,6 +2224,15 @@ unsafe fn create_file_opened(
             }
         }
     }
+    // .exe ou DLL chargé par un processus vivant : ni écriture ni
+    // troncature (CREATE_ALWAYS 2, TRUNCATE_EXISTING 5), comme sous
+    // Windows (#1917).
+    if existed && (want_write_access(access) || matches!(creation, 2 | 5)) {
+        if let Some(code) = crate::image_lock::refuse_write(&p, "CreateFile") {
+            crate::process::set_last_error(code);
+            return usize::MAX;
+        }
+    }
     let want_read = access & (0x8000_0000 | 0x1000_0000 | 0x0200_0000 | 1) != 0;
     // GENERIC_WRITE, GENERIC_ALL, MAXIMUM_ALLOWED ou FILE_WRITE_DATA.
     let want_write = access & (0x4000_0000 | 0x1000_0000 | 0x0200_0000 | 2) != 0;
@@ -7866,6 +7875,10 @@ pub unsafe extern "win64" fn copy_file_a(
         crate::process::set_last_error(80);
         return 0;
     }
+    if let Some(code) = crate::image_lock::refuse_write(&target, "CopyFile") {
+        crate::process::set_last_error(code);
+        return 0;
+    }
     match std::fs::copy(source, target) {
         Ok(_) => 1,
         Err(e) => {
@@ -7897,6 +7910,10 @@ pub unsafe extern "win64" fn copy_file_w(
     let target = crate::paths::to_linux(&d.to_string_lossy());
     if fail_if_exists != 0 && target.exists() {
         crate::process::set_last_error(80);
+        return 0;
+    }
+    if let Some(code) = crate::image_lock::refuse_write(&target, "CopyFile") {
+        crate::process::set_last_error(code);
         return 0;
     }
     match std::fs::copy(source, target) {
