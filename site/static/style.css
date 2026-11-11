@@ -436,3 +436,15 @@ tr:last-child td { border-bottom: 0; }
   .topbar, .side, .prev-next, .footer-links, .download { display: none; }
   body { background: #fff; color: #000; }
 }
+
+/* Suivi des travaux (#1779) : captures de la CI, une section par exécution. */
+.layout-page .prose:has(.suivi) { max-width: none; }
+.suivi-run { margin: 32px 0; }
+.suivi-run h2 { margin-bottom: 4px; font-size: 1.1em; }
+.suivi-meta { margin-top: 0; font-size: 0.9em; }
+.suivi-failed { color: #e5534b; font-weight: 600; }
+.suivi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.suivi-shot { margin: 0; background: var(--bg-card); border-radius: 10px; overflow: hidden; }
+.suivi-shot img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: contain; background: #0003; }
+.suivi-shot figcaption { padding: 8px 10px 10px; font-size: 0.85em; display: grid; gap: 2px; }
+.suivi-shot figcaption .muted { font-size: 0.9em; word-break: break-word; }

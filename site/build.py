@@ -13,8 +13,9 @@ Liens spéciaux dans le Markdown :
     repo:docs/AUDIO.md     fichier ou dossier du dépôt (doit exister)
     issue:287              issue GitHub
     img:capture.jpg        image de site/static/img/
-Codes courts, seuls sur leur ligne : {{download}} (boutons de téléchargement)
-et {{steps}} (liste des étapes du guide).
+Codes courts, seuls sur leur ligne : {{download}} (boutons de téléchargement),
+{{steps}} (liste des étapes du guide) et {{suivi}} (galerie des captures de la
+CI, remplie par static/suivi.js depuis suivi/data.json, #1779).
 Blocs : ::: cards / ::: steps-grid / ::: figure-row ... ::: ; citations
 « > [!note] », « > [!warning] », « > [!tip] ».
 """
@@ -238,9 +239,10 @@ class Renderer:
                 out.append(self.heading(len(m.group(1)), m.group(2)))
                 i += 1
                 continue
-            if stripped in ("{{download}}", "{{steps}}"):
+            if stripped in ("{{download}}", "{{steps}}", "{{suivi}}"):
                 flush()
-                out.append(self.download() if stripped == "{{download}}" else self.steps())
+                out.append({"{{download}}": self.download, "{{steps}}": self.steps,
+                            "{{suivi}}": self.suivi}[stripped]())
                 i += 1
                 continue
             m = re.fullmatch(r'!\[([^\]]*)\]\((img:[^)\s]+)(?:\s+"([^"]*)")?\)', stripped)
@@ -333,6 +335,16 @@ class Renderer:
 </div>
 <p class="download-more"><a data-asset="sha256" href="{latest}" rel="noopener">{s['dl_sha']}</a> · <a href="{GITHUB}/releases" rel="noopener">{s['dl_all']}</a></p>
 </div>"""
+
+    def suivi(self) -> str:
+        """Galerie du suivi des travaux (#1779) : suivi/data.json est ajouté au
+        site publié par scripts/suivi-travaux.py ; sans lui, le message vide."""
+        s = self.strings
+        return (f'<div class="suivi" data-suivi="../suivi/" data-empty="{html.escape(s["suivi_empty"])}" '
+                f'data-run="{html.escape(s["suivi_run"])}" data-pr="{html.escape(s["suivi_pr"])}" '
+                f'data-test="{html.escape(s["suivi_test"])}" data-failed="{html.escape(s["suivi_failed"])}">'
+                f'<p class="muted">{html.escape(s["suivi_loading"])}</p></div>'
+                f'<script src="../static/suivi.js" defer></script>')
 
     def steps(self) -> str:
         items = []
@@ -501,6 +513,7 @@ def render_page(lang: str, slug: str, all_strings: dict, meta_all: dict) -> str:
 <ul class="footer-links">
 <li><a href="{GITHUB}" rel="noopener">{s['footer_code']}</a></li>
 <li><a href="{GITHUB}/wiki" rel="noopener">{s['footer_wiki']}</a></li>
+<li><a href="suivi.html">{s['footer_suivi']}</a></li>
 <li><a href="{GITHUB}/releases" rel="noopener">{s['footer_releases']}</a></li>
 <li><a href="{GITHUB}/issues" rel="noopener">{s['footer_issues']}</a></li>
 <li><a href="{GITHUB}/blob/master/LICENSE" rel="noopener">{s['footer_license']}</a></li>
