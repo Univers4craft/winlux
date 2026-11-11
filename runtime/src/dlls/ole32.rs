@@ -935,6 +935,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::msxml::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Gestionnaire de listes de réseaux (module réseau de Qt 5, iCUE #1844).
+        if let Some(hr) = super::netlistmgr::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
         if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
             return hr;
