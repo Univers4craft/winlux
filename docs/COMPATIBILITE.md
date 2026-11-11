@@ -54,14 +54,28 @@ est vérifié entièrement (#235, `runtime/src/setup/appx_signature.rs`, calculs
 l'OpenSSL du système) : signature RSA ou ECDSA des attributs signés, `messageDigest`
 du `SpcIndirectDataContent`, condensats `AXBM` (block map, qui protège chaque
 fichier), `AXCT`, `AXCI`, `AXPC` et `AXCD` du paquet reçu, usage « signature de
-code » du certificat et chaîne jusqu'à une autorité du système. Entièrement vérifié,
+code » du certificat et chaîne jusqu'à une autorité du système ou à l'une des
+racines de signature de code de Microsoft (`CODE_ROOTS`, reconnues pour la signature
+de code seulement, jamais pour TLS, #1726). `AppxMetadata\CodeIntegrity.cat`,
+fichier d'empreinte absent du block map, est protégé par `AXCI` (#1725). Entièrement vérifié,
 il s'installe sans question ; signé par une autorité inconnue (certificat de test,
 autorité d'entreprise non installée) ou expiré, il passe par la même confirmation ;
 une signature fausse, au nom d'un autre éditeur, ou un paquet modifié après
 signature est refusé dans tous les cas.
 Pas encore : la contre-signature d'horodatage (un certificat expiré reste à confirmer),
-la révocation en ligne, les autorités de signature de code propres à Windows (absentes du
-magasin du système : un paquet du Store reste donc à confirmer), les paquets de ressources des bundles, et les paquets 32 bits (#232).
+la révocation en ligne, les autorités propres au Microsoft Store (paquets signés par le
+Store), les paquets de ressources des bundles, et les paquets 32 bits (#232).
+
+Applications livrées seulement en MSIX : le nouveau Microsoft Teams
+(MSTeams-x64.msix, lien hors ligne officiel sur Microsoft Learn ; teamsbootstrapper.exe
+passe par le `PackageManager` de Windows.Management.Deployment, pas encore fourni) et
+**WhatsApp Desktop**. Depuis fin 2025, WhatsApp pour Windows est un emballage WebView2
+publié seulement sur le Microsoft Store : whatsapp.com/download renvoie vers
+l'installeur du Store, et l'ancien installeur autonome de Meta (WhatsAppSetup.exe)
+n'est plus servi (relevé du 11 novembre 2026). Winlux n'implémente pas le protocole de
+distribution du Store, qui n'est pas documenté. WhatsApp attend donc un .msix obtenu
+par une voie officielle (par exemple `winget download` sur un Windows avec compte
+Entra), que l'installeur MSIX saura alors installer.
 Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
