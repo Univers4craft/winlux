@@ -124,6 +124,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ### Chantiers actifs (issue ouverte)
 
+- [ ] Logiciels constructeurs de périphériques (iCUE, Synapse, G HUB, GG…) en natif (#1531) : hid.dll complet livré (#1523) ; appareils virtuels `\\.\NomDuPilote` + DeviceIoControl (#1533) ; restent l'installation virtualisée des pilotes (#1532), les tables par marque (#1534, #1537–#1540), les sorties audio virtuelles (#1535) et la page Éclairage (#1536).
 - [ ] Démarrer en moins de 10 s (bureau utilisable) : menu GRUB caché 1 s, noyau silencieux, inventaire matériel et services hors du chemin critique, premier démarrage sans installation bloquante (`docs/PERFORMANCES.md`, objectif 10 s).
 - [ ] v0.2.14 en préparation pour une installation sur un vrai ordinateur : démarrage le plus court possible, campagne de tests terminée, Claude Code dans Winlux (#255–#257 livrés) ; PR #262, #263, #264. v0.2.13 publiée le 01/11/2026.
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étapes 1 à 4 livrées (#133, #143, #191, #201) ; personne dessus pour l'instant, suite dans #265 à #268 (#138, `docs/PAINTNET.md`).
