@@ -233,6 +233,13 @@ fn fail(status: u32) -> i32 {
 }
 
 /// WinVerifyTrust(hwnd, pgActionID, pWVTData).
+/// WinVerifyTrustEx : même vérification que WinVerifyTrust (la
+/// documentation la décrit comme sa forme typée, WINTRUST_DATA en
+/// troisième argument) ; Teams l'importe (#1791).
+pub unsafe extern "win64" fn WinVerifyTrustEx(hwnd: usize, action: usize, data: usize) -> i32 {
+    WinVerifyTrust(hwnd, action, data)
+}
+
 pub unsafe extern "win64" fn WinVerifyTrust(_hwnd: usize, action: usize, data: usize) -> i32 {
     if data == 0 {
         return fail(E_INVALIDARG);
@@ -349,6 +356,7 @@ pub unsafe extern "win64" fn CryptCATAdminAcquireContext(
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "WinVerifyTrust" => fn WinVerifyTrust,
+        "WinVerifyTrustEx" => fn WinVerifyTrustEx,
         "WTHelperProvDataFromStateData" => fn WTHelperProvDataFromStateData,
         "WTHelperGetProvSignerFromChain" => fn WTHelperGetProvSignerFromChain,
         "WTHelperGetProvCertFromChain" => fn WTHelperGetProvCertFromChain,

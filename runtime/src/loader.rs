@@ -1271,6 +1271,38 @@ fn delay_rva(m: &Module, attrs: u32, value: u32) -> Result<usize, String> {
     }
 }
 
+/// Noms (ou « #ordinal ») des fonctions d'une table d'imports.
+fn import_names(m: &Module, lookup_rva: usize) -> Vec<String> {
+    let b = m.bytes();
+    let (width, ordinal_flag) = if m.pe.x86 {
+        (4, 1u64 << 31)
+    } else {
+        (8, 1u64 << 63)
+    };
+    let mut names = Vec::new();
+    for i in 0..65_536usize {
+        let Some(t) = lookup_rva.checked_add(i * width).and_then(|lo| {
+            if m.pe.x86 {
+                rd32(b, lo).map(u64::from)
+            } else {
+                rd64(b, lo)
+            }
+        }) else {
+            break;
+        };
+        if t == 0 {
+            break;
+        }
+        names.push(if t & ordinal_flag != 0 {
+            format!("#{}", t & 0xffff)
+        } else {
+            m.cstr_at((t & 0x7fff_ffff) as u32 + 2)
+                .unwrap_or_else(|| "?".into())
+        });
+    }
+    names
+}
+
 fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Result<(), String> {
     let b = m.bytes();
     // Entrées de 4 octets en PE32, ordinal signalé par le bit 31.
@@ -1302,7 +1334,23 @@ fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Resu
                     .ok_or("nom d'import illisible")?,
             )
         };
-        let addr = resolve_one(dll, &want, m)?;
+        let addr = match resolve_one(dll, &want, m) {
+            Ok(a) => a,
+            // DLL absente : le message nomme le module qui l'importe et les
+            // fonctions qu'il en attend, pour qu'un seul passage au banc
+            // dise tout ce qu'il faut fournir (#1792).
+            Err(e) if e.starts_with("DLL introuvable") => {
+                return Err(format!(
+                    "{e} ; importée par {} : {}",
+                    m.path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    import_names(m, lookup_rva).join(", ")
+                ));
+            }
+            Err(e) => return Err(e),
+        };
         let dst = i
             .checked_mul(width)
             .and_then(|n| iat_rva.checked_add(n))
