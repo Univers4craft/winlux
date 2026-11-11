@@ -426,9 +426,18 @@ fn spawn(
     dir: Option<PathBuf>,
     keep: bool,
     elevate: bool,
+    hidden: bool,
 ) -> Result<Option<std::process::Child>, ()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
+    // Le nom de service n'appartient qu'au processus lancé par le
+    // gestionnaire de services, pas à ce qu'il lance (comme CreateProcess).
+    cmd.env_remove("WINLUX_SERVICE_NAME");
+    if hidden {
+        // SW_HIDE, SEE_MASK_NO_CONSOLE ou appelant sans bureau (service) :
+        // un programme console ne reçoit pas de terminal visible (#1923).
+        cmd.env("WINLUX_NO_TERMINAL", "1");
+    }
     if elevate {
         // Verbe « runas » : le .exe lancé affiche la demande UAC (uac.rs).
         cmd.env("WINLUX_ELEVATE", "1");
@@ -462,7 +471,40 @@ pub(crate) fn execute(
     dir: Option<String>,
     verb: Option<String>,
 ) -> isize {
-    execute_keep(file, params, dir, false, is_runas(verb.as_deref())).0
+    execute_shown(file, params, dir, verb, SW_SHOWNORMAL)
+}
+
+const SW_HIDE: i32 = 0;
+const SW_SHOWNORMAL: i32 = 1;
+/// SEE_MASK_NO_CONSOLE : le programme console garde la console de
+/// l'appelant au lieu d'en ouvrir une.
+const SEE_MASK_NO_CONSOLE: u32 = 0x8000;
+
+/// Pas de terminal visible pour un programme console (#1923) : fenêtre
+/// cachée demandée, console de l'appelant gardée, ou appelant qui tourne
+/// comme service (sans bureau, comme la session 0 de Windows).
+fn hidden_launch(show: i32, mask: u32) -> bool {
+    show == SW_HIDE
+        || mask & SEE_MASK_NO_CONSOLE != 0
+        || std::env::var_os("WINLUX_SERVICE_NAME").is_some_and(|n| !n.is_empty())
+}
+
+fn execute_shown(
+    file: &str,
+    params: &str,
+    dir: Option<String>,
+    verb: Option<String>,
+    show: i32,
+) -> isize {
+    execute_keep(
+        file,
+        params,
+        dir,
+        false,
+        is_runas(verb.as_deref()),
+        hidden_launch(show, 0),
+    )
+    .0
 }
 
 /// Verbe « runas » : exécuter en tant qu'administrateur.
@@ -476,14 +518,23 @@ fn execute_keep(
     dir: Option<String>,
     keep: bool,
     elevate: bool,
+    hidden: bool,
 ) -> (isize, Option<std::process::Child>) {
     match resolve(file, params) {
         Ok((program, args)) => {
-            crate::trace!("ShellExecute → {} {args:?}", program.display());
+            crate::trace!(
+                "ShellExecute → {} {args:?}{}",
+                program.display(),
+                if hidden {
+                    " (sans terminal visible)"
+                } else {
+                    ""
+                }
+            );
             let dir = dir
                 .filter(|d| !d.is_empty())
                 .map(|d| crate::paths::to_linux(&d));
-            match spawn(&program, &args, dir, keep, elevate) {
+            match spawn(&program, &args, dir, keep, elevate, hidden) {
                 Ok(child) => (SUCCESS, child),
                 Err(()) => (SE_ERR_FNF, None),
             }
@@ -516,16 +567,17 @@ pub unsafe extern "win64" fn shell_execute_a(
     file: *const u8,
     params: *const u8,
     dir: *const u8,
-    _show: i32,
+    show: i32,
 ) -> isize {
     let Some(file) = opt_a(file) else {
         return SE_ERR_FNF;
     };
-    execute(
+    execute_shown(
         &file,
         &opt_a(params).unwrap_or_default(),
         opt_a(dir),
         opt_a(verb),
+        show,
     )
 }
 
@@ -535,16 +587,17 @@ pub unsafe extern "win64" fn shell_execute_w(
     file: *const u16,
     params: *const u16,
     dir: *const u16,
-    _show: i32,
+    show: i32,
 ) -> isize {
     let Some(file) = opt_w(file) else {
         return SE_ERR_FNF;
     };
-    execute(
+    execute_shown(
         &file,
         &opt_w(params).unwrap_or_default(),
         opt_w(dir),
         opt_w(verb),
+        show,
     )
 }
 
@@ -599,9 +652,10 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
     let params = text(i.parameters).unwrap_or_default();
     let verb = text(i.verb);
     crate::trace!(
-        "ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}, dossier {:?}, masque {:#x})",
+        "ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}, dossier {:?}, masque {:#x}, nShow {})",
         text(i.directory),
-        i.mask
+        i.mask,
+        i.show
     );
     let (code, child) = execute_keep(
         &file,
@@ -609,6 +663,7 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
         text(i.directory),
         wants_process,
         is_runas(verb.as_deref()),
+        hidden_launch(i.show, i.mask),
     );
     i.inst_app = code;
     if let Some(child) = child {
@@ -843,6 +898,17 @@ mod tests {
         }
         std::env::remove_var("WINLUX_IMAGE_VIEWER");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SteamServiceTmp.exe /Update (#1923) : caché, sans console propre ou
+    /// lancé par un service, un programme console n'a pas de terminal visible.
+    #[test]
+    fn lancement_cache_sans_terminal() {
+        assert!(hidden_launch(SW_HIDE, 0));
+        assert!(hidden_launch(SW_SHOWNORMAL, SEE_MASK_NO_CONSOLE));
+        assert!(
+            !hidden_launch(SW_SHOWNORMAL, 0) || std::env::var_os("WINLUX_SERVICE_NAME").is_some()
+        );
     }
 
     /// SteamService.exe /install (#1899) : un programme x86 lit argv par
