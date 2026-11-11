@@ -129,6 +129,7 @@ pub mod hostcall;
 pub mod hostssl;
 pub mod icc;
 pub mod icons;
+pub mod icue_win32;
 pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
@@ -144,6 +145,7 @@ pub mod kernel32_fold;
 pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
+pub mod kernel32_namespace;
 pub mod kernel32_node;
 pub mod kernel32_path;
 pub mod kernel32_releve;
@@ -440,6 +442,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
                     e.extend(kernel32_fold::exports());
+                    e.extend(kernel32_namespace::exports());
                     e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
@@ -1388,6 +1391,8 @@ fn add_basics(all: &mut [Builtin]) {
     let common = common_apps::all();
     // Imports de FileZilla (ftp_apps).
     let ftp = ftp_apps::all();
+    // Imports d'iCUE 4.18 (#1606).
+    let icue = icue_win32::all();
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
@@ -1395,6 +1400,7 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(electron)
         .chain(common)
         .chain(ftp)
+        .chain(icue)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
