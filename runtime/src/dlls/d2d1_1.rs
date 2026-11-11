@@ -2331,7 +2331,7 @@ unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void)
     if t.drawing && matches!(t.out, Output::Bitmap(_)) {
         t.sync_wic(true);
     }
-    let old = if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. }) {
+    let old = if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. } | Output::Wic(_)) {
         let out = std::mem::replace(&mut t.out, Output::None);
         let px = std::mem::take(&mut t.px);
         t.ext.home = Some(Box::new(Home {
@@ -2374,10 +2374,10 @@ unsafe extern "win64" fn dc_get_target(this: *mut TargetObj, out: *mut *mut c_vo
             com_add_ref(b);
             b
         }
-        // Une cible fenêtre ou HDC a toujours une cible : un bitmap qui la
-        // représente, que Paint.NET garde pour la remettre après avoir
-        // dessiné dans ses propres bitmaps (#1609).
-        Output::Hwnd(_) | Output::Dc { .. } => {
+        // Une cible fenêtre, HDC ou WIC a toujours une cible : un bitmap qui
+        // la représente, que Paint.NET garde pour la remettre après avoir
+        // dessiné dans ses propres bitmaps (#1609, #1669 pour WIC).
+        Output::Hwnd(_) | Output::Dc { .. } | Output::Wic(_) => {
             if t.ext.home_bitmap.is_null() {
                 let (w, h) = (t.w.max(1), t.h.max(1));
                 let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
@@ -3332,6 +3332,77 @@ mod tests {
             com_release(bmp);
             com_release(rt.cast());
             Com::release(f);
+        }
+    }
+
+    /// #1669 : une cible WIC rend un bitmap par GetTarget, et SetTarget de ce
+    /// bitmap (ou NULL) la rétablit : Paint.NET y dessine l'empreinte du
+    /// pinceau après être passé par une liste de commandes.
+    #[test]
+    fn cible_wic_get_target_puis_retour() {
+        unsafe {
+            let (f, wic, rt) = super::super::tests::setup();
+            let rt: *mut TargetObj = rt.cast();
+            super::super::begin_draw(rt);
+            let mut home = std::ptr::null_mut();
+            dc_get_target(rt, &mut home);
+            assert!(!home.is_null());
+            let mut bmp = std::ptr::null_mut();
+            let size = 2u64 | (2u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            let rouge = super::super::ColorF {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(rt, &rouge);
+            dc_set_target(rt, home);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (8, 8));
+                assert!(matches!(t.out, Output::Wic(_)));
+            }
+            let vert = super::super::ColorF {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(rt, &vert);
+            // Même retour avec SetTarget(NULL).
+            dc_set_target(rt, bmp);
+            dc_set_target(rt, std::ptr::null_mut());
+            assert!(matches!(target(rt).out, Output::Wic(_)));
+            assert_eq!(
+                super::super::end_draw(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            type Lock =
+                unsafe extern "win64" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> i32;
+            type Data = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut *mut u8) -> i32;
+            let mut lock = std::ptr::null_mut();
+            assert_eq!(
+                method::<Lock>(wic, 8)(wic, std::ptr::null(), 1, &mut lock),
+                S_OK
+            );
+            let (mut n, mut data) = (0u32, std::ptr::null_mut());
+            assert_eq!(method::<Data>(lock, 5)(lock, &mut n, &mut data), S_OK);
+            assert_eq!(std::slice::from_raw_parts(data, 4), &[0, 255, 0, 255]);
+            com_release(lock);
+            {
+                let b = &Com::get(bmp as *mut BitmapObj).data;
+                assert_eq!(&crate::dlls::lock(&b.px)[0..4], &[0, 0, 255, 255]);
+            }
+            com_release(home);
+            com_release(bmp);
+            com_release(rt.cast());
+            com_release(wic);
+            com_release(f);
         }
     }
 
