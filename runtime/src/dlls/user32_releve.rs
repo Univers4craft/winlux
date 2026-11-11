@@ -1307,7 +1307,6 @@ unsafe extern "win64" fn scale_window_ext_ex(
     )
     .unwrap_or(0)
 }
-
 /// CreateMetaFileW : un métafichier en mémoire, porté par un métafichier
 /// amélioré ; l'écriture d'un .wmf sur disque n'est pas prise en charge.
 unsafe extern "win64" fn create_meta_file_w(file: *const u16) -> usize {

@@ -575,7 +575,12 @@ unsafe fn map_view_at(
         return 0;
     }
 
-    let mut prot = if access & (FILE_MAP_WRITE | FILE_MAP_COPY) != 0 {
+    // FILE_MAP_COPY (0x1) est aussi le bit SECTION_QUERY, présent dans
+    // FILE_MAP_ALL_ACCESS (0xF001F) : seule une demande de copie sans
+    // lecture ni écriture explicites donne une vue privée (#1707).
+    let copy_on_write =
+        access & FILE_MAP_COPY != 0 && access & (FILE_MAP_WRITE | _FILE_MAP_READ) == 0;
+    let mut prot = if access & FILE_MAP_WRITE != 0 || copy_on_write {
         libc::PROT_READ | libc::PROT_WRITE
     } else {
         libc::PROT_READ
@@ -593,7 +598,7 @@ unsafe fn map_view_at(
 
     // Vue partagée (les écritures des autres vues y apparaissent), sauf
     // copie sur écriture demandée.
-    let flags = if access & FILE_MAP_COPY != 0 {
+    let flags = if copy_on_write {
         libc::MAP_PRIVATE
     } else {
         libc::MAP_SHARED
@@ -660,6 +665,9 @@ unsafe fn map_view_at(
     let addr = p as usize;
     let view_name = fm.name.clone();
     if let Some(n) = fm.name.as_deref() {
+        // Une vue garde la section nommée vivante, et son nom trouvable par
+        // OpenFileMapping, même après CloseHandle, comme sous Windows.
+        crate::dlls::named_objects::retain(crate::dlls::named_objects::SECTION, n);
         crate::trace!(
             "MapViewOfFile({n}, accès 0x{access:x}, décalage {offset}, demandé {bytes_to_map}) = 0x{addr:x}, {len} octets"
         );
@@ -730,6 +738,9 @@ pub unsafe extern "win64" fn unmap_view_of_file(addr: usize) -> i32 {
     match view {
         Some(v) => {
             libc::munmap(v.addr as *mut _, v.len);
+            if let Some(k) = v.name.as_deref() {
+                crate::dlls::named_objects::release(crate::dlls::named_objects::SECTION, k);
+            }
             1
         }
         None => {
@@ -1040,6 +1051,49 @@ mod tests {
                 crate::dlls::kernel32::get_last_error(),
                 ERROR_FILE_NOT_FOUND
             );
+        }
+    }
+
+    /// Steam (#1650, #1707) : deux vues FILE_MAP_ALL_ACCESS d'une section nommée
+    /// partagent leurs pages, et la section reste ouvrable par son nom
+    /// tant qu'une vue existe, même après CloseHandle du créateur.
+    #[test]
+    fn section_nommee_vues_all_access_partagees_et_vivantes() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let name: Vec<u16> = format!("Local\\winlux-test-1707-{}", std::process::id())
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let h = create_file_mapping_w(usize::MAX, 0, PAGE_READWRITE, 0, 8208, name.as_ptr());
+            assert_ne!(h, 0);
+            let a = map_view_of_file(h, 0xF001F, 0, 0, 0) as *mut u8;
+            let o = open_file_mapping_w(0xF001F, 0, name.as_ptr());
+            assert_ne!(o, 0);
+            let b = map_view_of_file(o, 0xF001F, 0, 0, 0) as *mut u8;
+            assert!(!a.is_null() && !b.is_null());
+            *a.add(16) = 42;
+            assert_eq!(*b.add(16), 42);
+            crate::dlls::kernel32::close_handle(o);
+            unmap_view_of_file(b as usize);
+            // Le créateur ferme son handle mais garde sa vue.
+            crate::dlls::kernel32::close_handle(h);
+            let again = open_file_mapping_w(0xF001F, 0, name.as_ptr());
+            assert_ne!(again, 0);
+            assert_eq!(mapping_size(again), Some(8208));
+            let c = map_view_of_file(again, 0xF001F, 0, 0, 0) as *mut u8;
+            assert_eq!(*c.add(16), 42);
+            *c = 9;
+            assert_eq!(*a, 9);
+            // FILE_MAP_COPY seul : copie privée.
+            let d = map_view_of_file(again, FILE_MAP_COPY, 0, 0, 0) as *mut u8;
+            *d = 1;
+            assert_eq!(*a, 9);
+            for v in [a, c, d] {
+                unmap_view_of_file(v as usize);
+            }
+            crate::dlls::kernel32::close_handle(again);
+            assert_eq!(open_file_mapping_w(4, 0, name.as_ptr()), 0);
         }
     }
 }

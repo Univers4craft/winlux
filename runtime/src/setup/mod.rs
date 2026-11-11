@@ -405,6 +405,9 @@ pub struct Installer {
     pub manifest: Manifest,
     pub edits: Vec<RegEdit>,
     files_seen: HashSet<PathBuf>,
+    /// Fichiers qui n'existaient pas avant cette installation : effacés si
+    /// elle échoue (#1723).
+    created: Vec<PathBuf>,
     pub log: Logger,
 }
 
@@ -429,6 +432,7 @@ impl Installer {
             },
             edits: Vec::new(),
             files_seen: HashSet::new(),
+            created: Vec::new(),
             log,
         }
     }
@@ -461,19 +465,46 @@ impl Installer {
     /// Ouvre un fichier en écriture (chemin Windows), dossiers compris.
     pub fn create_file(&mut self, win: &str) -> std::io::Result<(PathBuf, std::fs::File)> {
         let path = crate::paths::to_linux(win);
+        // Un dossier (C:\ lui-même, nom vide) n'est jamais ouvert comme un
+        // fichier, et ses droits ne sont pas touchés (#1722, #1723).
+        let existing = std::fs::symlink_metadata(&path).ok();
+        if existing.as_ref().is_some_and(|m| m.is_dir()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::IsADirectory,
+                format!("{} est un dossier", path.display()),
+            ));
+        }
         if let Some(parent) = path.parent() {
             self.mkdirs(parent)?;
         }
-        // Un fichier en lecture seule d'une version précédente.
-        if let Ok(meta) = std::fs::metadata(&path) {
-            let mut perm = meta.permissions();
-            #[allow(clippy::permissions_set_readonly_false)]
-            perm.set_readonly(false);
-            let _ = std::fs::set_permissions(&path, perm);
+        // Un fichier en lecture seule d'une version précédente : écriture
+        // rendue au seul propriétaire. `set_readonly` à faux ouvrirait
+        // l'écriture au groupe et à tous (0o222, #1722).
+        if let Some(meta) = existing.filter(|m| m.is_file()) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode();
+            if mode & 0o200 == 0 {
+                let _ =
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode | 0o200));
+            }
+        } else {
+            self.created.push(path.clone());
         }
         let f = std::fs::File::create(&path)?;
         self.note_file(&path);
         Ok((path, f))
+    }
+
+    /// Installation en échec : efface les fichiers qu'elle a créés et les
+    /// dossiers qu'elle a créés devenus vides, du plus profond au plus haut
+    /// (#1723). Les fichiers qui existaient avant restent.
+    pub fn rollback(&mut self) {
+        for f in self.created.drain(..).rev() {
+            let _ = std::fs::remove_file(&f);
+        }
+        for d in self.manifest.dirs.iter().rev() {
+            let _ = std::fs::remove_dir(d);
+        }
     }
 
     pub fn note_file(&mut self, path: &Path) {
@@ -786,21 +817,26 @@ pub fn info(path: &Path) -> Result<Info, String> {
 /// Installe. Renvoie le manifeste enregistré.
 pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, String> {
     let mut inst;
-    if msix::is_package(path) {
+    let done = if msix::is_package(path) {
         inst = Installer::new(Kind::Msix, log);
-        msix::install(path, opts, &mut inst)?;
+        msix::install(path, opts, &mut inst)
     } else {
         let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
         let kind =
             detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
         inst = Installer::new(kind, log);
         match kind {
-            Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
-            Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
-            Kind::SevenZip => sevenz::install(&data, path, opts, &mut inst)?,
-            Kind::Squirrel => squirrel::install(&data, opts, &mut inst)?,
+            Kind::Inno => inno::install(&data, path, opts, &mut inst),
+            Kind::Nsis => nsis::install(&data, path, opts, &mut inst),
+            Kind::SevenZip => sevenz::install(&data, path, opts, &mut inst),
+            Kind::Squirrel => squirrel::install(&data, opts, &mut inst),
             Kind::Msix => unreachable!("un .exe n'est jamais un paquet MSIX"),
         }
+    };
+    if let Err(e) = done {
+        // Rien ne reste d'une installation en échec (#1723).
+        inst.rollback();
+        return Err(e);
     }
     // Réinstallation : les fichiers de l'ancienne version absents de la
     // nouvelle sont retirés, le reste est conservé.
@@ -919,6 +955,12 @@ pub fn cli(args: &[String]) -> i32 {
                     return 2;
                 };
                 let host = host_path(p);
+                // Anti-triche noyau : pas d'assistant, le lancement refusera
+                // avec son message (#1720).
+                if let Some(a) = crate::anticheat::in_package(&host) {
+                    eprintln!("setup : {} ({})", crate::anticheat::MARKER, a.protection);
+                    return 1;
+                }
                 if host
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("msi"))
@@ -1026,6 +1068,9 @@ pub fn cli(args: &[String]) -> i32 {
     // Auto-extractible qui lance son propre installateur (paquet MSI porté,
     // ou téléchargeur, #733, #896) : suivi ici, comme au double-clic.
     let path = host_path(&file);
+    if let Some(code) = crate::anticheat::check_launch(&path) {
+        return code;
+    }
     if detect_file(&path) == Some(Kind::SevenZip) {
         let rest: Vec<String> = args
             .iter()
@@ -1089,6 +1134,46 @@ mod tests {
         assert!(wildcard("*.*", "fichier"));
         assert!(wildcard("unins???.*", "unins000.dat"));
         assert!(!wildcard("*.dll", "app.exe"));
+    }
+
+    /// Un dossier n'est jamais ouvert comme fichier ni rendu inscriptible
+    /// par tous ; un fichier en lecture seule ne regagne que l'écriture du
+    /// propriétaire ; un échec efface ce que l'installation a créé
+    /// (#1722, #1723).
+    #[test]
+    fn droits_preserves_et_echec_nettoye() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("winlux-setup-droits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("perso");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let win = |p: &Path| crate::paths::to_windows(p);
+        let mut inst = Installer::new(Kind::Inno, Logger { quiet: true });
+
+        let err = inst.create_file(&win(&home)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory);
+        let mode = std::fs::metadata(&home).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "droits du dossier touchés : {mode:o}");
+
+        let old = home.join("ancien.txt");
+        std::fs::write(&old, b"v1").unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o444)).unwrap();
+        inst.write_file(&win(&old), b"v2").unwrap();
+        let mode = std::fs::metadata(&old).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o644,
+            "seul le propriétaire regagne l'écriture : {mode:o}"
+        );
+
+        let new = home.join("Programs").join("App").join("app.exe");
+        inst.write_file(&win(&new), b"MZ").unwrap();
+        assert!(new.is_file());
+        inst.rollback();
+        assert!(!new.exists());
+        assert!(!home.join("Programs").exists(), "dossiers créés retirés");
+        assert!(old.is_file(), "un fichier qui existait avant reste");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

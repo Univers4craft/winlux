@@ -317,10 +317,10 @@ APPS_SELECTED=${REPLY:-libreoffice vlc}
 # liste est alphabétique ; le choix est téléchargé sur le site officiel de
 # l'éditeur et installé par l'init dès que le réseau répond.
 log "Étape 6/$TOTAL_STEPS : Navigateur"
-MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'
+MENU_ARGS='aucun Choisir_plus_tard brave Brave chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox opera Opera operagx Opera_GX tor Tor_Browser vivaldi Vivaldi'
 menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun)" $MENU_ARGS
 BROWSER_CHOICE=${REPLY:-aucun}
-case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
+case "$BROWSER_CHOICE" in brave|chrome|edge|firefox|opera|operagx|tor|vivaldi) ;; *) BROWSER_CHOICE=aucun ;; esac
 
 # Boutiques de logiciels : aucune fournie dans l'image, ordre alphabétique.
 # Flathub (« preselected » dans store-catalogs.json) est proposé coché tant

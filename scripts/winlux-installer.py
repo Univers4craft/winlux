@@ -2319,7 +2319,10 @@ Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 """
 
 # Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
-BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
+# Tous ont une version Linux officielle, téléchargée chez l'éditeur (#1716).
+BROWSER_CHOICES = [("brave", "Brave"), ("chrome", "Google Chrome"), ("edge", "Microsoft Edge"),
+                   ("firefox", "Mozilla Firefox"), ("opera", "Opera"), ("operagx", "Opera GX"),
+                   ("tor", "Tor Browser"), ("vivaldi", "Vivaldi")]
 
 
 def store_catalog_choices():
@@ -5227,17 +5230,19 @@ class InstallerApp(Gtk.Application):
         sub.get_style_context().add_class("card-detail")
         sub.set_line_wrap(True)
         card.pack_start(sub, False, False, 0)
-        row = Gtk.Box(spacing=16)
         later = Gtk.RadioButton.new_with_label_from_widget(None, tr("browser_later"))
         later.connect("toggled", self.on_browser_toggle, None)
-        row.pack_start(later, False, False, 0)
+        card.pack_start(later, False, False, 0)
         self.browser_buttons = {None: later}
-        for browser, name in BROWSER_CHOICES:
+        # Huit navigateurs : grille de quatre colonnes, lue ligne par ligne
+        # dans l'ordre alphabétique, pour tenir dans une fenêtre de 1024 px.
+        grid = Gtk.Grid(column_spacing=16, row_spacing=4)
+        for index, (browser, name) in enumerate(BROWSER_CHOICES):
             button = Gtk.RadioButton.new_with_label_from_widget(later, name)
             button.connect("toggled", self.on_browser_toggle, browser)
-            row.pack_start(button, False, False, 0)
+            grid.attach(button, index % 4, index // 4, 1, 1)
             self.browser_buttons[browser] = button
-        card.pack_start(row, False, False, 0)
+        card.pack_start(grid, False, False, 0)
         self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
         return card
 

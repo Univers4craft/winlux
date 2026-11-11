@@ -430,6 +430,20 @@ unsafe fn create_service(
         crate::process::set_last_error(if raw.is_empty() { 87 } else { 123 });
         return 0;
     }
+    // Filet (#1720) : un pilote d'anti-triche noyau n'est jamais inscrit ;
+    // la personne est prévenue, l'installateur reçoit un refus d'accès.
+    if is_driver(service_type) {
+        if let Some(a) = crate::anticheat::by_driver(&command) {
+            // Programme Windows lancé (winlux PROGRAMME.exe …).
+            let software = std::env::args()
+                .nth(1)
+                .map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string())
+                .unwrap_or_default();
+            crate::anticheat::refuse(&software, a, crate::anticheat::Stage::During);
+            crate::process::set_last_error(5);
+            return 0;
+        }
+    }
     let key = raw.to_lowercase();
     if lock(services()).contains_key(&key) || load_persisted(&key).is_some() {
         crate::process::set_last_error(ERROR_SERVICE_EXISTS as u32);
@@ -629,10 +643,14 @@ fn open_service(manager: usize, name: Option<String>) -> usize {
         if let Some(r) = load_persisted(&key) {
             lock(services()).insert(key.clone(), r);
         } else {
+            // WINLUX_TRACE : le nom demandé et l'erreur rendue, pour les
+            // installeurs qui s'arrêtent sur un service absent (#1659, #1699).
+            crate::trace!("OpenService({name}) : service absent, erreur 1060");
             crate::process::set_last_error(ERROR_SERVICE_DOES_NOT_EXIST as u32);
             return 0;
         }
     }
+    crate::trace!("OpenService({name}) : ouvert");
     new_handle(ScmHandle::Service(key))
 }
 pub unsafe extern "win64" fn open_service_a(

@@ -514,6 +514,60 @@ pub(super) unsafe fn end_draw_home(t: &mut Target) {
     }
 }
 
+impl TargetExt {
+    /// Facteur pixels par DIP : DPI / 96, sauf en D2D1_UNIT_MODE_PIXELS.
+    pub(super) fn dip_scale(&self) -> (f32, f32) {
+        if self.unit_mode == 1 {
+            (1.0, 1.0)
+        } else {
+            (self.dpi.0 / 96.0, self.dpi.1 / 96.0)
+        }
+    }
+
+    /// DPI demandé par l'application ; (0, 0) ou une valeur invalide
+    /// rend la valeur par défaut, 96.
+    pub(super) fn set_dpi(&mut self, x: f32, y: f32) {
+        self.dpi = if x > 0.0 && y > 0.0 && x.is_finite() && y.is_finite() {
+            (x, y)
+        } else {
+            (96.0, 96.0)
+        };
+    }
+
+    pub(super) fn dpi(&self) -> (f32, f32) {
+        self.dpi
+    }
+
+    pub(super) fn primitive_blend(&self) -> u32 {
+        self.primitive_blend
+    }
+
+    /// État de tracé qui change le rendu, pour WINLUX_D2D_TRACE (#1743) :
+    /// vide quand tout est à sa valeur par défaut.
+    pub(super) fn describe_state(&self, world: &Matrix, antialias: u32) -> String {
+        let mut s = String::new();
+        if *world != Matrix::IDENTITY {
+            s += &format!(
+                " transformation [{}, {}, {}, {}, {}, {}]",
+                world.m11, world.m12, world.m21, world.m22, world.dx, world.dy
+            );
+        }
+        if self.dpi != (96.0, 96.0) {
+            s += &format!(" dpi {}x{}", self.dpi.0, self.dpi.1);
+        }
+        if self.unit_mode != 0 {
+            s += " unités pixels";
+        }
+        if antialias != 0 {
+            s += " crénelé";
+        }
+        if self.primitive_blend != 0 {
+            s += &format!(" mélange {}", self.primitive_blend);
+        }
+        s
+    }
+}
+
 impl Default for TargetExt {
     fn default() -> Self {
         TargetExt {
@@ -2046,6 +2100,14 @@ const CLSID_OPACITY: Guid = guid(
     0x4454,
     [0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c],
 );
+/// CLSID_D2D1Invert {E0C3784D-CB39-4E84-B6FD-6B72F0810263} (#1717) : Paint.NET
+/// inverse la forme noire de l'empreinte du pinceau avant d'en tirer le masque.
+const CLSID_INVERT: Guid = guid(
+    0xe0c3_784d,
+    0xcb39,
+    0x4e84,
+    [0xb6, 0xfd, 0x6b, 0x72, 0xf0, 0x81, 0x02, 0x63],
+);
 /// CLSID_D2D1ColorManagement {1A28524C-FDD6-4AA4-AE8F-837EB8267B37}.
 const CLSID_COLOR_MANAGEMENT: Guid = guid(
     0x1a28_524c,
@@ -2140,6 +2202,20 @@ unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Opt
         let k = prop_f32::<1>(e, 0).map_or(1.0, |v| v[0]).clamp(0.0, 1.0);
         for c in img.px.iter_mut() {
             *c = (*c as f32 * k + 0.5) as u8;
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_INVERT {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        // Couleur inversée, alpha gardé : 1 − c en couleur droite, donc
+        // a − c en prémultiplié.
+        for p in img.px.as_chunks_mut::<4>().0 {
+            let a = p[3];
+            for c in &mut p[..3] {
+                *c = a.saturating_sub(*c);
+            }
         }
         return Some(Some(img));
     }
@@ -2304,7 +2380,7 @@ unsafe extern "win64" fn dc_image_world_bounds(
     if hr < 0 {
         return hr;
     }
-    let m = target(this).transform();
+    let m = target(this).world();
     let r = *out;
     let pts = [
         m.apply((r.l, r.t)),
@@ -2446,19 +2522,22 @@ unsafe extern "win64" fn dc_get_controls(this: *mut TargetObj, c: *mut [u32; 3])
     }
 }
 unsafe extern "win64" fn dc_set_blend(this: *mut TargetObj, v: u32) {
+    d2d_trace!("SetPrimitiveBlend {:p} {v}", this);
     target(this).ext.primitive_blend = v;
 }
 unsafe extern "win64" fn dc_get_blend(this: *mut TargetObj) -> u32 {
     target(this).ext.primitive_blend
 }
 unsafe extern "win64" fn dc_set_unit(this: *mut TargetObj, v: u32) {
+    d2d_trace!("SetUnitMode {:p} {v}", this);
     target(this).ext.unit_mode = v;
 }
 unsafe extern "win64" fn dc_get_unit(this: *mut TargetObj) -> u32 {
     target(this).ext.unit_mode
 }
 pub(super) unsafe extern "win64" fn set_dpi(this: *mut TargetObj, x: f32, y: f32) {
-    target(this).ext.dpi = (x, y);
+    d2d_trace!("SetDpi {:p} {x}x{y}", this);
+    target(this).ext.set_dpi(x, y);
 }
 pub(super) unsafe extern "win64" fn get_dpi(this: *mut TargetObj, x: *mut f32, y: *mut f32) {
     let (dx, dy) = target(this).ext.dpi;
@@ -2517,7 +2596,8 @@ pub(super) unsafe extern "win64" fn save_state(this: *mut TargetObj, block: *mut
     let t = target(this);
     let b = &Com::get(block as *mut StateBlockObj).data;
     let mut d = crate::dlls::lock(&b.desc);
-    d.transform = t.transform();
+    d.transform = t.world();
+    d.antialias = t.state.antialias;
     d.tag1 = t.state.tags.0;
     d.tag2 = t.state.tags.1;
     d.primitive_blend = t.ext.primitive_blend;
@@ -2530,6 +2610,7 @@ pub(super) unsafe extern "win64" fn restore_state(this: *mut TargetObj, block: *
     let d = *crate::dlls::lock(&Com::get(block as *mut StateBlockObj).data.desc);
     let mut t = target(this);
     t.state.transform = Some(d.transform);
+    t.state.antialias = d.antialias;
     t.state.tags = (d.tag1, d.tag2);
     t.ext.primitive_blend = d.primitive_blend;
     t.ext.unit_mode = d.unit_mode;
@@ -3618,7 +3699,15 @@ mod tests {
             let img = image_img(op, 0, (1, 1)).unwrap();
             assert_eq!(&img.px[0..4], &[100, 50, 25, 64]);
 
-            for o in [op, src, pm, crop, flood, bmp] {
+            // Invert : (200, 100, 50, a 128) prémultiplié → 255 − couleur
+            // droite, soit 128 − composante, bornée à 0.
+            let mut inv = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_INVERT, &mut inv), S_OK);
+            effect_set_input(inv.cast(), 0, pm, 1);
+            let img = image_img(inv, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[28, 78, 103, 128]);
+
+            for o in [inv, op, src, pm, crop, flood, bmp] {
                 com_release(o);
             }
             com_release(dc.cast());

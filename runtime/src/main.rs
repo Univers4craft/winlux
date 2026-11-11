@@ -2,6 +2,7 @@
 
 mod abslots;
 mod admin;
+mod anticheat;
 mod archive;
 mod audio;
 mod bootsplash;
@@ -260,6 +261,10 @@ fn main() {
     }
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
+    }
+    // Anti-triche noyau embarqué : refusé avant toute écriture (#1720).
+    if let Some(code) = anticheat::check_launch(&exe) {
+        std::process::exit(code);
     }
     if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
         if let Some(code) = setup::launch(&exe, &rest) {

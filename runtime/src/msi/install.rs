@@ -746,6 +746,20 @@ pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
     ))
 }
 
+/// Noms longs des fichiers que pose un paquet (table File), pour la
+/// détection des anti-triche noyau (#1720). Vide si le paquet est illisible.
+pub fn file_names(msi: &Path) -> Vec<String> {
+    let Ok(data) = std::fs::read(msi) else {
+        return Vec::new();
+    };
+    let Ok(db) = Database::parse(&data) else {
+        return Vec::new();
+    };
+    db.rows("File")
+        .map(|r| long_name(&r.str("FileName")).to_string())
+        .collect()
+}
+
 /// Code produit d'un paquet (pour `/x paquet.msi`).
 pub fn product_of(msi: &Path) -> Result<String, i32> {
     package_info(msi).map(|info| info.0)
