@@ -3116,6 +3116,10 @@ pub trait GuiBackend: Send {
     /// Fenêtre possédée avec barre de titre : boîte de dialogue pour le
     /// gestionnaire (_NET_WM_WINDOW_TYPE_DIALOG).
     fn set_dialog_type(&mut self, _hwnd: usize) {}
+    /// Fenêtre outil avec barre de titre (WS_EX_TOOLWINDOW) : barre d'outils
+    /// détachée pour le gestionnaire (_NET_WM_WINDOW_TYPE_TOOLBAR), dont la
+    /// barre de titre n'a que le bouton Fermer (#1761).
+    fn set_tool_type(&mut self, _hwnd: usize) {}
     /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
     /// gestionnaire ne doit pas lui donner le focus en l'affichant.
     fn set_no_initial_focus(&mut self, _hwnd: usize) {}

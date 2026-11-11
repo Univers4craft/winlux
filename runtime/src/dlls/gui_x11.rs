@@ -1074,6 +1074,31 @@ pub struct X11Backend {
 }
 
 impl X11Backend {
+    /// _NET_WM_WINDOW_TYPE (EWMH) d'une fenêtre de premier niveau.
+    fn set_window_type(&mut self, hwnd: usize, name: &[u8]) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        let top = Self::top_xwin(w);
+        let atom = |atom_name: &[u8]| {
+            self.conn
+                .intern_atom(false, atom_name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.atom)
+        };
+        if let (Some(kind), Some(value)) = (atom(b"_NET_WM_WINDOW_TYPE"), atom(name)) {
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                top,
+                kind,
+                AtomEnum::ATOM,
+                &[value],
+            );
+            let _ = self.conn.flush();
+        }
+    }
+
     /// WM_NORMAL_HINTS d'une fenêtre de premier niveau : position et taille
     /// voulues par le programme (USPosition | USSize | PPosition | PSize |
     /// PWinGravity). NorthWestGravity : la position est celle du cadre, barre
@@ -5723,30 +5748,11 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_dialog_type(&mut self, hwnd: usize) {
-        let Some(w) = self.windows.get(&hwnd) else {
-            return;
-        };
-        let top = Self::top_xwin(w);
-        let atom = |name: &[u8]| {
-            self.conn
-                .intern_atom(false, name)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .map(|r| r.atom)
-        };
-        if let (Some(kind), Some(dialog)) = (
-            atom(b"_NET_WM_WINDOW_TYPE"),
-            atom(b"_NET_WM_WINDOW_TYPE_DIALOG"),
-        ) {
-            let _ = self.conn.change_property32(
-                x11rb::protocol::xproto::PropMode::REPLACE,
-                top,
-                kind,
-                AtomEnum::ATOM,
-                &[dialog],
-            );
-            let _ = self.conn.flush();
-        }
+        self.set_window_type(hwnd, b"_NET_WM_WINDOW_TYPE_DIALOG");
+    }
+
+    fn set_tool_type(&mut self, hwnd: usize) {
+        self.set_window_type(hwnd, b"_NET_WM_WINDOW_TYPE_TOOLBAR");
     }
 
     fn set_no_initial_focus(&mut self, hwnd: usize) {

@@ -515,9 +515,11 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
-                if style & 0x00C0_0000 == 0x00C0_0000 {
-                    b.set_dialog_type(hwnd);
-                }
+            }
+            if captioned_tool_window(style, ex_style) {
+                b.set_tool_type(hwnd);
+            } else if owner != 0 && style & 0x00C0_0000 == 0x00C0_0000 {
+                b.set_dialog_type(hwnd);
             }
         }
     });
@@ -2366,8 +2368,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
             lock(user_data_map()).insert((hwnd, index), value);
             let owner = owner_top_level(value as usize);
             if owner != 0 && owner != hwnd {
-                let captioned =
-                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                let captioned = gui::window_style(hwnd)
+                    .is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000)
+                    && !captioned_tool_window(
+                        gui::window_style(hwnd).unwrap_or(0),
+                        gui::window_ex_style(hwnd).unwrap_or(0),
+                    );
                 with_backend(|b| {
                     b.set_owner(hwnd, owner);
                     if captioned {
@@ -5327,6 +5333,18 @@ fn drawn_whole(hwnd: usize) -> bool {
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
+/// Fenêtre outil avec barre de titre (WS_CAPTION + WS_EX_TOOLWINDOW) :
+/// palette flottante, que Windows dessine avec le seul bouton Fermer. Pour
+/// openbox, c'est une barre d'outils détachée (_NET_WM_WINDOW_TYPE_TOOLBAR),
+/// qui n'a ni Réduire ni Agrandir et laisse donc sa place au titre : les
+/// panneaux de Paint.NET, larges de 180 px, affichaient « H… ue » (#1761).
+fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -5343,6 +5361,20 @@ fn popup_decorations(style: u32) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
+    /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.
+    #[test]
+    fn palette_flottante_reconnue() {
+        use super::captioned_tool_window;
+        // FormBorderStyle.SizableToolWindow : WS_CAPTION | WS_THICKFRAME | WS_SYSMENU.
+        assert!(captioned_tool_window(0x02CC_0000, 0x0001_0180));
+        assert!(!captioned_tool_window(0x00CF_0000, 0x0000_0100));
+        // Sans barre de titre (fenêtre surgissante outil).
+        assert!(!captioned_tool_window(0x8000_0000, 0x0000_0080));
+        // Enfant.
+        assert!(!captioned_tool_window(0x40C0_0000, 0x0000_0080));
+    }
 
     /// #1630 : une classe déjà inscrite par le même module est refusée
     /// (ERROR_CLASS_ALREADY_EXISTS) jusqu'à son UnregisterClass.
