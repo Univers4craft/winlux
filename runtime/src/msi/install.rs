@@ -99,8 +99,12 @@ fn language_id() -> &'static str {
     }
 }
 
+/// Dossier système 32 bits (`SystemFolder`) et 64 bits (`System64Folder`).
+pub(crate) const SYSTEM_FOLDER_32: &str = "C:\\windows\\syswow64\\";
+pub(crate) const SYSTEM_FOLDER_64: &str = "C:\\windows\\system32\\";
+
 /// Propriétés fournies par le système (version, dossiers standard…).
-fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
+pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let x64 = db.is_64bit();
     let pf32 = "C:\\Program Files (x86)\\".to_string();
     let pf64 = "C:\\Program Files\\".to_string();
@@ -118,17 +122,14 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("CommonFiles64Folder", format!("{pf64}Common Files\\")),
         ("WindowsFolder", "C:\\windows\\".into()),
         ("WindowsVolume", "C:\\".into()),
-        // Paquet 32 bits : comme sous Windows 64 bits, ses DLL système vont
-        // dans SysWOW64 et n'écrasent pas celles de System32.
-        (
-            "SystemFolder",
-            if x64 {
-                "C:\\windows\\system32\\".into()
-            } else {
-                "C:\\windows\\syswow64\\".into()
-            },
-        ),
-        ("System64Folder", "C:\\windows\\system32\\".into()),
+        // Windows 64 bits (documentation « SystemFolder property ») :
+        // SystemFolder est TOUJOURS le dossier système 32 bits, SysWOW64,
+        // que le paquet soit marqué x64 ou non ; seul System64Folder
+        // désigne System32. Un paquet x64 qui embarque le runtime VC x86
+        // (Acrobat Reader, AcroPro.msi) écrasait sinon les DLL x64 de
+        // System32 (#1789).
+        ("SystemFolder", SYSTEM_FOLDER_32.into()),
+        ("System64Folder", SYSTEM_FOLDER_64.into()),
         ("System16Folder", "C:\\windows\\system\\".into()),
         ("FontsFolder", "C:\\windows\\Fonts\\".into()),
         ("TempFolder", "C:\\AppData\\Local\\Temp\\".into()),
