@@ -284,6 +284,7 @@ pub mod winmm_midi;
 pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
+pub mod winrt_ui;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
