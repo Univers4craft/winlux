@@ -955,6 +955,12 @@ pub fn cli(args: &[String]) -> i32 {
                     return 2;
                 };
                 let host = host_path(p);
+                // Anti-triche noyau : pas d'assistant, le lancement refusera
+                // avec son message (#1720).
+                if let Some(a) = crate::anticheat::in_package(&host) {
+                    eprintln!("setup : {} ({})", crate::anticheat::MARKER, a.protection);
+                    return 1;
+                }
                 if host
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("msi"))
@@ -1062,6 +1068,9 @@ pub fn cli(args: &[String]) -> i32 {
     // Auto-extractible qui lance son propre installateur (paquet MSI porté,
     // ou téléchargeur, #733, #896) : suivi ici, comme au double-clic.
     let path = host_path(&file);
+    if let Some(code) = crate::anticheat::check_launch(&path) {
+        return code;
+    }
     if detect_file(&path) == Some(Kind::SevenZip) {
         let rest: Vec<String> = args
             .iter()
