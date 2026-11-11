@@ -27,6 +27,7 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
+use super::tableaux;
 use super::tables::{TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
@@ -2043,6 +2044,12 @@ impl Interpreter {
                 let token = tok1();
                 let handle = match self.resolve_type_token(token) {
                     Some(id) => id as i64,
+                    // Champ : l'assembly qui le déclare voyage avec le
+                    // jeton, car `RuntimeHelpers.InitializeArray` s'exécute
+                    // dans le contexte de notre mscorlib (#1965).
+                    None if Token(token).table() == TableId::Field as u8 => {
+                        tableaux::field_handle(self.current, token)
+                    }
                     None => token as i64,
                 };
                 push!(Value::I64(handle));
