@@ -382,9 +382,8 @@ unsafe extern "win64" fn mixerGetDevCapsA(id: usize, caps: *mut u8, size: u32) -
     }
     let mut a = [0u8; 48];
     a[..8].copy_from_slice(&wide[..8]);
-    let name: Vec<u16> = wide[8..72]
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+    let name: Vec<u16> = (0..32)
+        .map(|i| u16::from_le_bytes([wide[8 + 2 * i], wide[9 + 2 * i]]))
         .take_while(|&c| c != 0)
         .collect();
     let text = String::from_utf16_lossy(&name);
