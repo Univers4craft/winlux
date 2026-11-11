@@ -861,6 +861,23 @@ static ASSOC_VT: VTable<8> = VTable([
 
 /// AssocCreateForClasses : IQueryAssociations sur la première classe
 /// nommée (extension, ProgID ou « * »), au-dessus d'AssocQueryString.
+/// Objet IQueryAssociations neuf, sans classe (AssocCreate de shlwapi,
+/// lot E, #1614) : IQueryAssociations::Init la fixe ensuite.
+pub(crate) unsafe fn assoc_create_empty(riid: *const u8, out: *mut *mut c_void) -> i32 {
+    if !clear_out(out) {
+        return E_POINTER;
+    }
+    let obj = Com::create(
+        ASSOC_VT.ptr(),
+        Assoc {
+            class: "*".encode_utf16().chain([0]).collect(),
+        },
+    );
+    let hr = qa_qi(obj, riid, out);
+    Com::release(obj);
+    hr
+}
+
 unsafe extern "win64" fn assoc_create_for_classes(
     list: *const u8,
     count: u32,

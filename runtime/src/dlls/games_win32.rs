@@ -1035,9 +1035,8 @@ fn dns_records() -> &'static Mutex<HashMap<usize, Vec<usize>>> {
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
+pub(crate) unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
     const DNS_ERROR_RCODE_NAME_ERROR: i32 = 9003;
-    const DNS_INFO_NO_RECORDS: i32 = 9501;
     if results.is_null() {
         return 87;
     }
@@ -1057,6 +1056,15 @@ unsafe fn dns_query(name: &str, ty: u16, results: *mut usize) -> i32 {
         return DNS_ERROR_RCODE_NAME_ERROR;
     }
     let msg = &answer[..(n as usize).min(answer.len())];
+    records_from_message(msg, ty, results)
+}
+
+/// Liste DNS_RECORD tirée d'une réponse au format réseau (enregistrements
+/// de type `ty`, ou tous pour 255), libérée par DnsFree ou
+/// DnsRecordListFree. Sert aussi à DnsExtractRecordsFromMessage_W (#1614).
+pub(crate) unsafe fn records_from_message(msg: &[u8], ty: u16, results: *mut usize) -> i32 {
+    const DNS_INFO_NO_RECORDS: i32 = 9501;
+    *results = 0;
     let blocks: Vec<*mut u8> = parse_answers(msg)
         .iter()
         .filter(|r| r.ty == ty || ty == 255)
