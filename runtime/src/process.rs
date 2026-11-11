@@ -377,6 +377,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     // Bac à sable refusé en cours de route (appli non reconnue au départ,
     // #236) : l'appli repart sans, comme l'utilisateur l'a accepté.
     crate::sandbox_fallback::apply_at_start(&mut cmd, chromium_child);
+    // Ligne de commande vue par le programme (GetCommandLine), pour vérifier
+    // qu'un lancement par ShellExecuteEx « runas » garde ses paramètres (#1805).
+    crate::trace!("ligne de commande : {cmd}");
     crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
