@@ -1421,6 +1421,8 @@ struct SharedLock {
     straight: bool,
     ignore: bool,
     wide: Option<super::wic_pixels::Layout>,
+    /// GUID_WICPixelFormat8bppAlpha : un octet d'alpha par pixel (#1849).
+    alpha8: bool,
 }
 
 impl Bitmap {
@@ -1449,6 +1451,7 @@ impl Bitmap {
                 s.straight,
                 s.ignore,
                 s.wide,
+                s.alpha8,
             );
             *crate::dlls::lock(&self.px) = px;
         }
@@ -1465,7 +1468,20 @@ unsafe fn lock_pixels(
     straight: bool,
     ignore: bool,
     wide: Option<super::wic_pixels::Layout>,
+    alpha8: bool,
 ) -> Vec<u8> {
+    if alpha8 {
+        // Masque d'alpha : noir prémultiplié de cette opacité, comme un
+        // bitmap DXGI_FORMAT_A8_UNORM.
+        let mut px = vec![0u8; w * h * 4];
+        for y in 0..h {
+            let line = std::slice::from_raw_parts(ptr.add(y * stride), w);
+            for (x, &a) in line.iter().enumerate() {
+                px[(y * w + x) * 4 + 3] = a;
+            }
+        }
+        return px;
+    }
     let src_bpp = wide.map_or(4, |l| l.bpp as usize);
     let src_row = w * src_bpp;
     if let Some(l) = wide {
@@ -2191,13 +2207,15 @@ unsafe fn shared_bitmap(
             return hr;
         }
     }
-    use super::windowscodecs::{FMT_BGR32, FMT_BGRA32, FMT_PBGRA32};
+    use super::windowscodecs::{FMT_ALPHA8, FMT_BGR32, FMT_BGRA32, FMT_PBGRA32};
     let straight = fmt == FMT_BGRA32;
+    // Masque de sélection de Paint.NET (#1849).
+    let alpha8 = fmt == FMT_ALPHA8;
     // D2D1_ALPHA_MODE_IGNORE (3) : alpha ignoré, pixels opaques.
     let ignore = fmt == FMT_BGR32 || props.as_ref().is_some_and(|p| p[1] == 3);
     // Formats larges (#1520) : 16 bits, demi-flottants, flottants.
     let wide = super::wic_pixels::layout(&fmt);
-    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && wide.is_none() {
+    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && !alpha8 && wide.is_none() {
         crate::log_warn!(
             "d2d1",
             "CreateSharedBitmap : format de verrou {:?} non pris en charge",
@@ -2208,7 +2226,11 @@ unsafe fn shared_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let src_bpp = wide.map_or(4, |l| l.bpp as usize);
+    let src_bpp = if alpha8 {
+        1
+    } else {
+        wide.map_or(4, |l| l.bpp as usize)
+    };
     let src_row = w as usize * src_bpp;
     if ptr.is_null()
         || (stride as usize) < src_row
@@ -2224,8 +2246,10 @@ unsafe fn shared_bitmap(
         straight,
         ignore,
         wide,
+        alpha8,
     );
     let mut b = Bitmap::new(w, h, px);
+    b.alpha_only = alpha8;
     // Le bitmap partage la mémoire du verrou (#1609) : il le tient.
     method::<unsafe extern "win64" fn(*mut c_void) -> u32>(data, 1)(data);
     b.shared = Some(SharedLock {
@@ -2235,6 +2259,7 @@ unsafe fn shared_bitmap(
         straight,
         ignore,
         wide,
+        alpha8,
     });
     put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
 }
@@ -4072,6 +4097,20 @@ mod tests {
         assert_eq!(&out[4..], &[0, 0, 94, 128]);
         let opaque = wide_to_pbgra(&l, &src, 2, 1, 16, true);
         assert_eq!(&opaque[4..], &[0, 0, 188, 255]);
+    }
+
+    /// #1849 : verrou WIC 8bppAlpha (masque de sélection de Paint.NET) lu
+    /// en noir prémultiplié de l'opacité de chaque octet, pas refusé.
+    #[test]
+    fn verrou_wic_alpha_8_bits() {
+        // 3×2, pas de ligne 4 octets.
+        let src = [10u8, 20, 30, 0, 40, 50, 60, 0];
+        let px = unsafe { lock_pixels(src.as_ptr(), 4, 3, 2, false, false, None, true) };
+        assert_eq!(px.len(), 3 * 2 * 4);
+        assert_eq!(&px[0..4], &[0, 0, 0, 10]);
+        assert_eq!(&px[8..12], &[0, 0, 0, 30]);
+        assert_eq!(&px[12..16], &[0, 0, 0, 40]);
+        assert_eq!(&px[20..24], &[0, 0, 0, 60]);
     }
 
     /// #1399, #1609 : CreateSharedBitmap partage un IWICBitmapLock
