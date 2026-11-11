@@ -234,6 +234,52 @@ fn notre_mscorlib_s_attache_aux_types_integres() {
     assert_eq!(code, 23);
 }
 
+/// `jmp` (#1641) : la méthode cède sa place à une autre de même signature,
+/// qui reçoit les mêmes arguments ; son résultat revient à l'appelant.
+#[test]
+fn jmp_saute_vers_la_methode_cible() {
+    let mut b = Builder::new("Saut");
+    b.type_def(PUBLIC, "Saut", "Programme", 0);
+    let sig = method_sig(false, &[T_I4], &[&[T_I4], &[T_I4]]);
+    let cible = b.method(
+        M_PUBLIC | M_STATIC,
+        "Cible",
+        &sig,
+        Some(
+            Il::default()
+                .op(0x02)
+                .i4(10)
+                .op(MUL)
+                .op(0x03)
+                .op(ADD)
+                .ret()
+                .body(),
+        ),
+    );
+    let saut = b.method(
+        M_PUBLIC | M_STATIC,
+        "Saut",
+        &sig,
+        Some(Il::default().tok(0x27, cible).body()),
+    );
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(
+            Il::default()
+                .i4(4)
+                .i4(2)
+                .call(saut)
+                .i4(1)
+                .op(ADD)
+                .ret()
+                .body(),
+        ),
+    );
+    assert_eq!(lancer(&b.build(main), None), 43);
+}
+
 #[test]
 fn le_constructeur_statique_ne_tourne_qu_une_fois() {
     let mut b = Builder::new("Statique");

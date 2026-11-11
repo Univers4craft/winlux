@@ -1104,7 +1104,15 @@ unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
-        Err(_) => {
+        Err(e) => {
+            // Le service s'arrête alors sur « Accès non autorisé » : dire
+            // quel chemin et pour quel compte (#1643).
+            crate::log_warn!(
+                "services",
+                "service {svc_name} : canal de contrôle {} refusé ({e}), uid {}",
+                sock_path.display(),
+                unsafe { libc::geteuid() }
+            );
             crate::process::set_last_error(ERROR_ACCESS_DENIED as u32);
             return 0;
         }
