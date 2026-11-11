@@ -712,6 +712,44 @@ pub fn session_locked() -> bool {
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// Ligne de commande (`/proc/<pid>/cmdline`, arguments séparés par NUL)
+/// d'une fenêtre de consentement de Winlux : demande d'autorisation ou
+/// contrôle de compte. Personne d'autre que la personne n'y répond.
+pub fn is_consent_window(cmdline: &[u8]) -> bool {
+    let args: Vec<&[u8]> = cmdline.split(|&b| b == 0).collect();
+    let base = |a: &[u8]| -> Vec<u8> {
+        let b = a.rsplit(|&c| c == b'/').next().unwrap_or(a);
+        b.strip_suffix(b".py").unwrap_or(b).to_vec()
+    };
+    let Some(first) = args.first().map(|a| base(a)) else {
+        return false;
+    };
+    // Script lancé par son interpréteur : son nom est le deuxième argument.
+    let program = if first.starts_with(b"python") {
+        args.get(1).map(|a| base(a)).unwrap_or_default()
+    } else {
+        first
+    };
+    program == b"winlux-uac" || (program == b"winlux-permission" && args.contains(&&b"ask"[..]))
+}
+
+/// Une fenêtre de consentement est-elle ouverte ? Un programme autorisé à
+/// taper ne doit pas pouvoir répondre « Autoriser » à la place de la
+/// personne, comme les fenêtres d'élévation de Windows échappent à SendInput.
+pub fn consent_shown() -> bool {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    dir.flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .any(|e| std::fs::read(e.path().join("cmdline")).is_ok_and(|c| is_consent_window(&c)))
+}
+
 /// Tape les événements dans la session ; `Err(code)` : rien n'a été tapé.
 pub fn inject(events: &[Event]) -> Result<(), u32> {
     if events.is_empty() {
@@ -728,6 +766,10 @@ pub fn inject(events: &[Event]) -> Result<(), u32> {
     }
     if !crate::permissions::allowed(crate::permissions::Capability::Input) {
         crate::trace!("saisie simulée refusée : autorisation « input » non accordée");
+        return Err(ERROR_ACCESS_DENIED);
+    }
+    if consent_shown() {
+        crate::trace!("saisie simulée refusée : une fenêtre d'autorisation est ouverte");
         return Err(ERROR_ACCESS_DENIED);
     }
     let mut guard = super::lock(injector());
@@ -939,6 +981,22 @@ mod tests {
         assert!(!m.spare().contains(&24));
         assert_eq!(vk_fallback_keysym(0x5A), Some(0x7A));
         assert_eq!(vk_keysyms(0xB3, false)[0], 0x1008_FF14);
+    }
+
+    #[test]
+    fn fenetres_de_consentement() {
+        assert!(is_consent_window(
+            b"/usr/bin/python3\0/usr/bin/winlux-uac\0--app\0X\0"
+        ));
+        assert!(is_consent_window(
+            b"/usr/bin/winlux-permission\0ask\0input\0A.exe\0/x\0"
+        ));
+        assert!(is_consent_window(
+            b"python3\0scripts/winlux-permission.py\0ask\0files\0"
+        ));
+        assert!(!is_consent_window(b"/usr/bin/winlux-permission\0list\0"));
+        assert!(!is_consent_window(b"/usr/bin/vim\0winlux-uac\0"));
+        assert!(!is_consent_window(b""));
     }
 
     #[test]

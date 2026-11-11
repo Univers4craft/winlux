@@ -3,8 +3,14 @@ saisie = (runtime_dlls / "saisie.rs").read_text(encoding="utf-8")
 perm = (ROOT / "runtime" / "src" / "permissions.rs").read_text(encoding="utf-8")
 tool = (ROOT / "scripts" / "winlux-permission.py").read_text(encoding="utf-8")
 settings = (ROOT / "scripts" / "winlux-settings.py").read_text(encoding="utf-8")
-ok("xtest_fake_input" in saisie and "uhid" not in saisie.replace("/dev/uhid reste fermé", ""),
-   "saisie simulée : XTEST dans la session du compte, aucun appareil uhid (#1683)")
+code = "\n".join(l for l in saisie.splitlines() if not l.lstrip().startswith("//"))
+ok("xtest_fake_input" in saisie and not any(m in code for m in ("uhid", "uinput", "/dev/", "O_RDWR")),
+   "saisie simulée : XTEST dans la session du compte, jamais /dev/uhid ni /dev/uinput (#1683)")
+regles = [p for p in ROOT.rglob("*.rules") if "target" not in p.parts and ".git" not in p.parts]
+ok(not any(m in p.read_text(encoding="utf-8", errors="replace") for p in regles for m in ("uhid", "uinput")),
+   "saisie simulée : aucune règle udev n'ouvre /dev/uhid ni /dev/uinput aux comptes (#1683)")
+ok("consent_shown()" in saisie and '"winlux-uac"' in saisie.replace("b\"winlux-uac\"", '"winlux-uac"'),
+   "saisie simulée : rien n'est tapé pendant une demande d'autorisation ou d'élévation (#1683)")
 ok("Capability::Input" in saisie and "session_locked()" in saisie
    and "Capability::Sandbox | Capability::Input" in perm,
    "saisie simulée : autorisation explicite, jamais implicite, et rien sur l'écran verrouillé (#1683)")
