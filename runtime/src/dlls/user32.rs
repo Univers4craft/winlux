@@ -1089,6 +1089,8 @@ pub unsafe extern "win64" fn post_quit_message(code: i32) {
     gui::post_quit(&q, code);
 }
 
+const HWND_BROADCAST: usize = 0xFFFF;
+
 pub unsafe extern "win64" fn post_message_a(
     hwnd: usize,
     message: u32,
@@ -1098,6 +1100,16 @@ pub unsafe extern "win64" fn post_message_a(
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
+    }
+    // HWND_BROADCAST : chaque fenêtre de premier niveau du processus
+    // reçoit le message ; les autres programmes n'en ont pas d'ici. Comme
+    // Windows, l'envoi réussit même sans destinataire (BroadcastUnload…
+    // d'Acrobat échouait, #1757).
+    if hwnd == HWND_BROADCAST {
+        for w in gui::enum_top_level_windows() {
+            post_message_a(w, message, wparam, lparam);
+        }
+        return 1;
     }
     let m = Msg {
         hwnd,

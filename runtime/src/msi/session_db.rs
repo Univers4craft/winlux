@@ -215,6 +215,9 @@ struct Query {
     filter: Option<Expr>,
     order: Vec<ColRef>,
     params: usize,
+    /// INSERT INTO … VALUES (…) [TEMPORARY] : valeurs et caractère
+    /// temporaire de la ligne (#1757).
+    insert: Option<(Vec<Operand>, bool)>,
 }
 
 struct Parser {
@@ -346,6 +349,9 @@ fn parse(sql: &str) -> Result<Query, ()> {
         i: 0,
         params: 0,
     };
+    if p.keyword("INSERT") {
+        return parse_insert(p);
+    }
     if !p.keyword("SELECT") {
         return Err(());
     }
@@ -391,7 +397,62 @@ fn parse(sql: &str) -> Result<Query, ()> {
         filter,
         order,
         params: p.params,
+        insert: None,
     })
+}
+
+/// `INSERT INTO table (colonnes) VALUES (valeurs) [TEMPORARY]` (syntaxe
+/// SQL de Windows Installer, documentation publique « SQL Syntax »).
+fn parse_insert(mut p: Parser) -> Result<Query, ()> {
+    if !p.keyword("INTO") {
+        return Err(());
+    }
+    let table = p.name()?;
+    if !p.sym("(") {
+        return Err(());
+    }
+    let mut cols = vec![p.colref()?];
+    while p.sym(",") {
+        cols.push(p.colref()?);
+    }
+    if !p.sym(")") || !p.keyword("VALUES") || !p.sym("(") {
+        return Err(());
+    }
+    let mut values = vec![p.operand()?];
+    while p.sym(",") {
+        values.push(p.operand()?);
+    }
+    if !p.sym(")") || values.len() != cols.len() {
+        return Err(());
+    }
+    if values.iter().any(|v| matches!(v, Operand::Col(_))) {
+        return Err(());
+    }
+    let temporary = p.keyword("TEMPORARY");
+    if p.i != p.t.len() {
+        return Err(());
+    }
+    Ok(Query {
+        distinct: false,
+        columns: Some(cols),
+        tables: vec![table],
+        filter: None,
+        order: Vec::new(),
+        params: p.params,
+        insert: Some((values, temporary)),
+    })
+}
+
+/// Exécute un INSERT : la ligne est ajoutée à la base en mémoire,
+/// refusée si sa clé existe déjà. Rend vrai si la base est modifiée de
+/// façon durable (ligne non temporaire).
+fn run_insert(db: &mut Database, q: &Query, params: &[Value]) -> Result<bool, u32> {
+    let Some((ops, temporary)) = &q.insert else {
+        return Err(ERROR_FUNCTION_FAILED);
+    };
+    let values: Vec<Value> = ops.iter().map(|o| value(o, &[], &[], params)).collect();
+    modify(db, q, if *temporary { 7 } else { 1 }, &values, None)?;
+    Ok(!temporary)
 }
 
 // ---------- exécution ----------
@@ -681,6 +742,24 @@ pub extern "win64" fn msi_view_execute(view: usize, rec: usize) -> u32 {
     };
     if params.len() < query.params {
         return ERROR_INVALID_PARAMETER;
+    }
+    if query.insert.is_some() {
+        return match with_db(db, |d| run_insert(d, &query, &params)) {
+            None => ERROR_INVALID_HANDLE,
+            Some(Err(e)) => e,
+            Some(Ok(lasting)) => {
+                if lasting {
+                    opened(|o| o.get_mut(&db).map(|d| d.changed = true));
+                }
+                views(|v| {
+                    if let Some(w) = v.views.get_mut(&(view as u32)) {
+                        w.rows = Some(Vec::new());
+                        w.pos = 0;
+                    }
+                });
+                ERROR_SUCCESS
+            }
+        };
     }
     let Some(result) = with_db(db, |d| run_hits(d, &query, &params)) else {
         return ERROR_INVALID_HANDLE;
@@ -1125,7 +1204,9 @@ mod tests {
 
     #[test]
     fn refuse_bad_sql_and_unknown_tables() {
-        assert!(parse("INSERT INTO `File` (`File`) VALUES ('x')").is_err());
+        assert!(parse("INSERT INTO `File` (`File`) VALUES ('x', 'y')").is_err());
+        assert!(parse("INSERT INTO `File` (`File`) VALUES (`Autre`)").is_err());
+        assert!(parse("UPDATE `File` SET `File` = 'x'").is_err());
         let db = sample();
         let q = parse("SELECT * FROM `Absente`").unwrap();
         assert_eq!(run(&db, &q, &[]), Err(ERROR_INVALID_TABLE));
@@ -1161,6 +1242,30 @@ mod tests {
             modify(&mut db, &j, 7, &[s("x")], None),
             Err(ERROR_FUNCTION_FAILED)
         );
+    }
+
+    #[test]
+    fn insert_temporaire_comme_acrobat() {
+        // PopulateReserveCost d'Acrobat (#1757).
+        let mut db = sample();
+        let q = parse(
+            "INSERT INTO `File` (`File`, `Component_`, `FileName`) VALUES (?, ?, 'e.txt') TEMPORARY",
+        )
+        .unwrap();
+        assert_eq!(q.params, 2);
+        assert_eq!(run_insert(&mut db, &q, &[s("e"), s("C1")]), Ok(false));
+        let back = parse("SELECT `Component_`, `FileName` FROM `File` WHERE `File` = 'e'").unwrap();
+        assert_eq!(
+            run(&db, &back, &[]).unwrap(),
+            vec![vec![s("C1"), s("e.txt")]]
+        );
+        // Clé déjà présente : refusée, comme MSIMODIFY_INSERT.
+        assert_eq!(
+            run_insert(&mut db, &q, &[s("e"), s("C2")]),
+            Err(ERROR_FUNCTION_FAILED)
+        );
+        let lasting = parse("INSERT INTO `File` (`File`) VALUES ('f')").unwrap();
+        assert_eq!(run_insert(&mut db, &lasting, &[]), Ok(true));
     }
 
     #[test]
