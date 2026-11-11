@@ -402,6 +402,92 @@ pub(super) unsafe fn leave_bitmap(t: &mut Target) -> *mut c_void {
     }
 }
 
+/// WINLUX_D2D_TRACE (#1609) : journal des cibles, bitmaps, effets et tracés.
+pub(super) fn trace_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("WINLUX_D2D_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+/// Une ligne sur stderr, au plus 200 000 par processus.
+pub(super) fn trace(line: std::fmt::Arguments) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    if n < 200_000 {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+        eprintln!("winlux[d2d] {tid} {line}");
+    } else if n == 200_000 {
+        eprintln!("winlux[d2d] journal plein, suite ignorée");
+    }
+}
+
+/// Pixels non transparents d'un tampon BGRA.
+fn visible(px: &[u8]) -> usize {
+    px.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count()
+}
+
+/// Destination d'une cible pour le journal.
+pub(super) fn describe_target(t: &Target) -> String {
+    let out = match t.out {
+        Output::Wic(w) => format!("wic {w:p}"),
+        Output::Hwnd(h) => format!("hwnd {h:#x}"),
+        Output::Dc { hdc, x, y } => format!("hdc {hdc:#x} @{x},{y}"),
+        Output::Bitmap(b) => format!("bitmap {b:p}"),
+        Output::None => "aucune".into(),
+    };
+    format!(
+        "{out} {}x{} visibles {}{}",
+        t.w,
+        t.h,
+        visible(&t.px),
+        if t.ext.home.is_some() {
+            " (fenêtre de côté)"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Image pour le journal : nature, taille, pixels visibles ou CLSID.
+pub(super) unsafe fn describe_image(image: *mut c_void) -> String {
+    if image.is_null() {
+        return "NULL".into();
+    }
+    let vt = *(image as *const *const ());
+    if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
+        let b = &Com::get(image as *mut BitmapObj).data;
+        let kind = if vt == BITMAP_VT.ptr() {
+            "bitmap"
+        } else {
+            "liste"
+        };
+        let n = visible(&crate::dlls::lock(&b.px));
+        return format!(
+            "{kind} {image:p} {}x{} options {:#x} visibles {n}",
+            b.w, b.h, b.options
+        );
+    }
+    let effect = if vt == EFFECT_IMAGE_VT.ptr() || vt == EFFECT_RESOURCE_VT.ptr() {
+        Com::get(image as *mut Com<Res<EffectImage>>).data.effect
+    } else if vt == EFFECT_VT.ptr() {
+        image as *mut EffectObj
+    } else {
+        return format!("image inconnue {image:p}");
+    };
+    let e = Com::get(effect);
+    format!(
+        "effet {effect:p} {:?}{}",
+        e.clsid,
+        if e.custom.get().is_some() {
+            " (personnalisé)"
+        } else {
+            ""
+        }
+    )
+}
+
 /// EndDraw alors qu'un bitmap sert de cible : la fenêtre ou le HDC
 /// d'origine reçoit aussi ce qui lui a été dessiné avant SetTarget.
 pub(super) unsafe fn end_draw_home(t: &mut Target) {
@@ -1039,6 +1125,11 @@ unsafe extern "win64" fn dc_create_bitmap(
     if !src.is_null() {
         super::bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
     }
+    d2d_trace!(
+        "CreateBitmap1 {:p} → {:p} {w}x{h} format {format} options {options:#x}",
+        this,
+        obj
+    );
     put(out, obj)
 }
 
@@ -1123,6 +1214,7 @@ pub(super) unsafe extern "win64" fn bitmap_map(
         pitch: b.w * 4,
         bits: px.as_mut_ptr(),
     };
+    d2d_trace!("Map {:p} {}x{} options {:#x}", this, b.w, b.h, _options);
     S_OK
 }
 pub(super) unsafe extern "win64" fn bitmap_unmap(_: *mut BitmapObj) -> i32 {
@@ -1281,7 +1373,9 @@ unsafe extern "win64" fn dc_create_effect(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    create_effect(Com::get(this).factory, clsid, out)
+    let hr = create_effect(Com::get(this).factory, clsid, out);
+    d2d_trace!("CreateEffect {:?} → {hr:#x} {:p}", clsid.as_ref(), *out);
+    hr
 }
 
 /// ID2D1DeviceContext::CreateEffect et ID2D1EffectContext::CreateEffect.
@@ -1720,6 +1814,11 @@ unsafe extern "win64" fn effect_set_input(
     input: *mut c_void,
     _invalidate: i32,
 ) {
+    d2d_trace!(
+        "SetInput effet {:p} [{index}] ← {}",
+        this,
+        describe_image(input)
+    );
     let mut inputs = crate::dlls::lock(&Com::get(this).inputs);
     let i = index as usize;
     if i >= inputs.len() {
@@ -1906,7 +2005,23 @@ unsafe extern "win64" fn dc_draw_image(
         let t = target(this);
         (t.w, t.h)
     };
-    let Some(img) = image_img(image, 0, hint) else {
+    let img = image_img(image, 0, hint);
+    d2d_trace!(
+        "DrawImage {:p} ← {} offset {:?} src {:?} → {}",
+        this,
+        describe_image(image),
+        offset.as_ref(),
+        rect.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        img.as_ref().map_or("rien".to_string(), |i| format!(
+            "{}x{} @{},{} visibles {}",
+            i.w,
+            i.h,
+            i.x,
+            i.y,
+            visible(&i.px)
+        ))
+    );
+    let Some(img) = img else {
         return;
     };
     // Rectangle source dans l'espace de l'image (son origine peut ne pas
@@ -2058,6 +2173,7 @@ unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_vo
 /// SetTarget(NULL) ou vers une autre image (#1590, canevas et panneaux de
 /// Paint.NET, qui dessinaient jusque-là dans la fenêtre).
 unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void) {
+    d2d_trace!("SetTarget {:p} ← {}", this, describe_image(image));
     let mut t = target(this);
     // Le bitmap rendu par GetTarget pour la fenêtre ou le HDC la rétablit
     // (#1609), comme SetTarget(NULL).
@@ -2133,6 +2249,7 @@ unsafe extern "win64" fn dc_get_target(this: *mut TargetObj, out: *mut *mut c_vo
         }
         _ => std::ptr::null_mut(),
     };
+    d2d_trace!("GetTarget {:p} → {:p} {}", this, *out, describe_target(&t));
 }
 
 unsafe extern "win64" fn dc_set_controls(this: *mut TargetObj, c: *const [u32; 3]) {
@@ -2186,6 +2303,11 @@ pub(super) unsafe extern "win64" fn push_layer(
     params: *const RectF,
     _layer: *mut c_void,
 ) {
+    d2d_trace!(
+        "PushLayer {:p} {:?}",
+        this,
+        params.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+    );
     let r = params.as_ref().copied().unwrap_or(RectF {
         l: -f32::MAX,
         t: -f32::MAX,
@@ -3065,6 +3187,38 @@ mod tests {
                 assert!(t.ext.home.is_none());
             }
             com_release(home);
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1609 : le journal WINLUX_D2D_TRACE décrit bitmaps et cibles.
+    #[test]
+    fn journal_d2d_decrit_bitmap_et_cible() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            let mut bmp = std::ptr::null_mut();
+            let size = 2u64 | (1u64 << 32);
+            let src = [0u8, 0, 0, 255, 0, 0, 0, 0];
+            assert_eq!(
+                dc_create_bitmap(rt, size, src.as_ptr(), 8, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            let d = describe_image(bmp);
+            assert!(
+                d.starts_with("bitmap ") && d.ends_with("2x1 options 0x0 visibles 1"),
+                "{d}"
+            );
+            assert_eq!(describe_image(std::ptr::null_mut()), "NULL");
+            let t = describe_target(&target(rt));
+            assert!(t.starts_with("hdc 0x0 @0,0 0x0 visibles 0"), "{t}");
             com_release(bmp);
             com_release(rt.cast());
             Com::release(f);

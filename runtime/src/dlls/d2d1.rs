@@ -28,6 +28,15 @@ pub(crate) fn unsupported_call(name: &'static str) -> i32 {
     E_NOTIMPL
 }
 
+/// WINLUX_D2D_TRACE : une ligne par opération Direct2D notable (#1609).
+macro_rules! d2d_trace {
+    ($($a:tt)*) => {
+        if crate::dlls::d2d1::v11::trace_on() {
+            crate::dlls::d2d1::v11::trace(format_args!($($a)*));
+        }
+    };
+}
+
 #[path = "d2d1_1.rs"]
 mod v11;
 
@@ -529,7 +538,9 @@ unsafe extern "win64" fn create_wic_render_target(
         drawing: false,
         ext: Default::default(),
     };
-    put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)))
+    let hr = put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)));
+    d2d_trace!("CreateWicBitmapRenderTarget {:p} {w}x{h} {:?}", *out, fmt);
+    hr
 }
 
 /// D2D1_HWND_RENDER_TARGET_PROPERTIES.
@@ -559,7 +570,9 @@ unsafe fn new_screen_target(
         drawing: false,
         ext: Default::default(),
     };
-    put(out, new_res(f, vt, Mutex::new(target)))
+    let hr = put(out, new_res(f, vt, Mutex::new(target)));
+    d2d_trace!("cible écran {:p} {w}x{h}", *out);
+    hr
 }
 
 /// CreateHwndRenderTarget : rendu logiciel posé sur la fenêtre à EndDraw
@@ -1434,6 +1447,22 @@ unsafe extern "win64" fn bitmap_copy_from_memory(
     src: *const u8,
     pitch: u32,
 ) -> i32 {
+    let hr = copy_from_memory(this, dst, src, pitch);
+    d2d_trace!(
+        "CopyFromMemory {:p} {:?} → {hr:#x} {}",
+        this,
+        dst.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        v11::describe_image(this.cast())
+    );
+    hr
+}
+
+unsafe fn copy_from_memory(
+    this: *mut BitmapObj,
+    dst: *const RectU,
+    src: *const u8,
+    pitch: u32,
+) -> i32 {
     if src.is_null() {
         return E_INVALIDARG;
     }
@@ -1790,6 +1819,7 @@ unsafe extern "win64" fn target_create_bitmap(
     if !src.is_null() {
         bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
     }
+    d2d_trace!("CreateBitmap {:p} → {:p} {w}x{h}", this, obj);
     put(out, obj)
 }
 
@@ -1806,6 +1836,25 @@ const IID_WIC_BITMAP_LOCK: Guid = guid(
 /// Direct2DControlImpl.DrawBackground) donne un bitmap aux pixels du
 /// verrou, lus à la création (BGRA, prémultiplié ou non, ou BGR).
 unsafe extern "win64" fn target_shared_bitmap(
+    this: *mut TargetObj,
+    riid: *const Guid,
+    data: *mut c_void,
+    props: *const [u32; 2],
+    out: *mut *mut c_void,
+) -> i32 {
+    let hr = shared_bitmap(this, riid, data, props, out);
+    if !out.is_null() {
+        d2d_trace!(
+            "CreateSharedBitmap {:p} {:?} → {hr:#x} {}",
+            this,
+            riid.as_ref(),
+            v11::describe_image(*out)
+        );
+    }
+    hr
+}
+
+unsafe fn shared_bitmap(
     this: *mut TargetObj,
     riid: *const Guid,
     data: *mut c_void,
@@ -1939,6 +1988,24 @@ fn wide_to_pbgra(
 
 /// CreateBitmapFromWicBitmap : lit la source WIC convertie en BGRA prémultiplié.
 unsafe extern "win64" fn target_bitmap_from_wic(
+    this: *mut TargetObj,
+    src: *mut c_void,
+    props: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    let hr = bitmap_from_wic(this, src, props, out);
+    if !out.is_null() {
+        d2d_trace!(
+            "CreateBitmapFromWicBitmap {:p} {:p} → {hr:#x} {}",
+            this,
+            src,
+            v11::describe_image(*out)
+        );
+    }
+    hr
+}
+
+unsafe fn bitmap_from_wic(
     this: *mut TargetObj,
     src: *mut c_void,
     _props: *const c_void,
@@ -2205,6 +2272,13 @@ unsafe extern "win64" fn draw_bitmap(
     interpolation: u32,
     src: *const RectF,
 ) {
+    d2d_trace!(
+        "DrawBitmap {:p} ← {} dst {:?} src {:?} opacité {opacity}",
+        this,
+        v11::describe_image(bitmap),
+        dst.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        src.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+    );
     if bitmap.is_null() || *(bitmap as *const *const ()) != BITMAP_VT.ptr() {
         return;
     }
@@ -2363,6 +2437,7 @@ unsafe extern "win64" fn pop_clip(this: *mut TargetObj) {
 
 unsafe extern "win64" fn clear(this: *mut TargetObj, c: *const ColorF) {
     let c = c.as_ref().copied().unwrap_or_default();
+    d2d_trace!("Clear {:p} ({}, {}, {}, {})", this, c.r, c.g, c.b, c.a);
     let col = premul(c.r, c.g, c.b, c.a);
     let mut t = target(this);
     let (w, h) = (t.w as f32, t.h as f32);
@@ -2391,6 +2466,7 @@ unsafe extern "win64" fn clear(this: *mut TargetObj, c: *const ColorF) {
 
 unsafe extern "win64" fn begin_draw(this: *mut TargetObj) {
     let mut t = target(this);
+    d2d_trace!("BeginDraw {:p} {}", this, v11::describe_target(&t));
     if !t.drawing {
         t.drawing = true;
         t.sync_wic(false);
@@ -2407,6 +2483,7 @@ unsafe extern "win64" fn end_draw(this: *mut TargetObj, a: *mut u64, b: *mut u64
     t.state.clips.clear();
     let hr = t.sync_wic(true);
     v11::end_draw_home(&mut t);
+    d2d_trace!("EndDraw {:p} {} → {hr:#x}", this, v11::describe_target(&t));
     hr
 }
 
@@ -2588,6 +2665,7 @@ unsafe extern "win64" fn hwnd_resize(this: *mut TargetObj, size: *const [u32; 2]
     let Some(&[w, h]) = size.as_ref() else {
         return E_INVALIDARG;
     };
+    d2d_trace!("Resize {:p} {w}x{h}", this);
     let mut t = target(this);
     let left = v11::leave_bitmap(&mut t);
     t.resize(w, h);
@@ -2614,6 +2692,7 @@ unsafe extern "win64" fn bind_dc(this: *mut TargetObj, hdc: usize, rect: *const 
     if hdc == 0 {
         return E_INVALIDARG;
     }
+    d2d_trace!("BindDC {:p} hdc {hdc:#x} ({l}, {t}, {r}, {b})", this);
     let mut tg = target(this);
     let left = v11::leave_bitmap(&mut tg);
     tg.resize((r - l).max(0) as u32, (b - t).max(0) as u32);
