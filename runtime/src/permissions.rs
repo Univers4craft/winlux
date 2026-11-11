@@ -339,7 +339,7 @@ pub fn ask_files_before_start(exe_windows: &str) {
     let Some(app) = APP.get() else {
         return;
     };
-    if launched_by_program || app.trusted || !is_installed_program(exe_windows) {
+    if launched_by_program || app.trusted || is_service() || !is_installed_program(exe_windows) {
         return;
     }
     let text = store_path()
@@ -350,8 +350,28 @@ pub fn ask_files_before_start(exe_windows: &str) {
     }
 }
 
+/// Processus lancé par le gestionnaire de services (`WINLUX_SERVICE_NAME`,
+/// retiré de l'environnement de ses enfants) : aucune fenêtre ne lui
+/// appartient, personne n'attend devant lui.
+fn is_service() -> bool {
+    std::env::var_os("WINLUX_SERVICE_NAME").is_some_and(|n| !n.is_empty())
+}
+
 /// Ouvre la fenêtre de demande. `None` : impossible de demander.
 fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
+    // Un service sans fenêtre ne pose pas de question au démarrage de la
+    // session (#1620) : refus, mémorisé pour qu'il apparaisse dans
+    // Paramètres > Confidentialité et sécurité, où l'utilisateur peut
+    // l'autoriser.
+    if is_service() {
+        crate::log_info!(
+            "permissions",
+            "service {} : accès « {} » refusé sans fenêtre, à autoriser dans Paramètres si besoin",
+            app.name,
+            cap.key()
+        );
+        return Some(Some(Decision::Deny));
+    }
     let helper = std::env::var_os("WINLUX_PERMISSION_HELPER")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/bin/winlux-permission"));
@@ -602,6 +622,38 @@ mod tests {
             assert!(allowed(Capability::Files));
         }
         assert_eq!(Capability::Sandbox.key(), "sandbox");
+    }
+
+    /// Un service sans fenêtre n'ouvre jamais la demande : refus (#1620).
+    #[test]
+    fn un_service_ne_demande_pas() {
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let app = App {
+            exe: PathBuf::from("/c/Program Files/Editeur/Service.exe"),
+            name: "Service.exe".into(),
+            dir: PathBuf::from("/c/Program Files/Editeur"),
+            personal: Vec::new(),
+            granted: Vec::new(),
+            trusted: false,
+        };
+        let saved = std::env::var_os("WINLUX_SERVICE_NAME");
+        std::env::set_var("WINLUX_SERVICE_NAME", "EditeurService");
+        assert!(is_service());
+        for cap in [
+            Capability::Files,
+            Capability::Camera,
+            Capability::Microphone,
+        ] {
+            assert_eq!(ask(&app, cap), Some(Some(Decision::Deny)));
+        }
+        std::env::set_var("WINLUX_SERVICE_NAME", "");
+        assert!(!is_service());
+        match saved {
+            Some(v) => std::env::set_var("WINLUX_SERVICE_NAME", v),
+            None => std::env::remove_var("WINLUX_SERVICE_NAME"),
+        }
     }
 
     #[test]
