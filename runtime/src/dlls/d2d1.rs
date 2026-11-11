@@ -1669,7 +1669,17 @@ impl Target {
             }
             Output::Dc { hdc, x, y } => {
                 if to_wic && hdc != 0 {
-                    self.present(hdc, x, y);
+                    d2d_trace!(
+                        "présentation hdc {:#x} @{},{} {}x{} → {}",
+                        hdc,
+                        x,
+                        y,
+                        self.w,
+                        self.h,
+                        super::gui::describe_dc(hdc)
+                    );
+                    let lignes = self.present(hdc, x, y);
+                    d2d_trace!("présentation hdc {:#x} : {} lignes", hdc, lignes);
                 } else if hdc != 0 {
                     self.load_dc(hdc, x, y);
                 }
@@ -1800,9 +1810,9 @@ impl Target {
         }
     }
 
-    unsafe fn present(&self, hdc: usize, x: i32, y: i32) {
+    unsafe fn present(&self, hdc: usize, x: i32, y: i32) -> i32 {
         if self.w == 0 || self.h == 0 {
-            return;
+            return 0;
         }
         let mut px = self.px.clone();
         for p in px.as_chunks_mut::<4>().0 {
@@ -1828,7 +1838,7 @@ impl Target {
             px.as_ptr() as *const c_void,
             info.as_ptr() as *const c_void,
             0,
-        );
+        )
     }
 }
 

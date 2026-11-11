@@ -29,6 +29,12 @@ mod crt;
 mod cxx;
 mod fiber;
 mod kernel;
+
+/// VirtualQuery à la disposition x86 (MEMORY_BASIC_INFORMATION de 28
+/// octets), pour NtQueryVirtualMemory appelé par un programme x86.
+pub fn virtual_query32(addr: u32, info: u32, len: u32) -> u32 {
+    kernel::virtual_query(addr, info, len)
+}
 mod layout;
 mod seh;
 mod user;
