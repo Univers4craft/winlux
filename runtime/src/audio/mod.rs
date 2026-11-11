@@ -361,13 +361,37 @@ fn mic() -> &'static Mic {
 /// S'abonne au micro par défaut. Le pilote d'entrée est ouvert à la première
 /// demande et refermé quand plus personne n'écoute.
 pub fn subscribe_microphone() -> Arc<CaptureQueue> {
+    use crate::permissions::{allowed, not_refused, Capability};
     let q = CaptureQueue::new();
     // Micro refusé : file jamais alimentée, l'application n'entend que du silence.
-    if !crate::permissions::allowed(crate::permissions::Capability::Microphone) {
+    if !not_refused(Capability::Microphone) {
         return q;
     }
+    // La question éventuelle est posée sur un fil à part : l'application ne
+    // l'attend pas et entend du silence jusqu'à la réponse. Bloquer son fil
+    // faisait s'arrêter Steam sur son chien de garde de 15 s (#1882).
+    let weak = Arc::downgrade(&q);
+    let asked = std::thread::Builder::new()
+        .name("winlux-mic-permission".into())
+        .spawn(move || {
+            if allowed(Capability::Microphone) {
+                attach_microphone(weak);
+            }
+        })
+        .is_ok();
+    if !asked && allowed(Capability::Microphone) {
+        attach_microphone(Arc::downgrade(&q));
+    }
+    q
+}
+
+/// Branche une file sur la capture du micro, ouverte au premier abonné.
+fn attach_microphone(q: std::sync::Weak<CaptureQueue>) {
+    if q.strong_count() == 0 {
+        return;
+    }
     let m = mic();
-    lock(&m.subscribers).push(Arc::downgrade(&q));
+    lock(&m.subscribers).push(q);
     if !m.running.swap(true, Ordering::AcqRel) {
         let ok = std::thread::Builder::new()
             .name("winlux-audio-capture".into())
@@ -377,7 +401,6 @@ pub fn subscribe_microphone() -> Arc<CaptureQueue> {
             m.running.store(false, Ordering::Release);
         }
     }
-    q
 }
 
 fn capture_thread() {

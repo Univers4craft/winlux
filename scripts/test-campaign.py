@@ -1021,7 +1021,7 @@ ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text(
    and "fn resolve_type_ref_in" in (clr / "typesys.rs").read_text()
    and "fn ensure_initialized" in (clr / "il.rs").read_text()
    and "une_bibliotheque_livree_avec_le_programme_est_chargee" in (clr / "tests.rs").read_text()
-   and "execute_assembly_in" in (ROOT / "runtime/src/main.rs").read_text(),
+   and "execute_assembly_at(" in (ROOT / "runtime/src/main.rs").read_text(),
    "CLR : DLL .NET privées du dossier de l'appli chargées, appels, héritage, champs et .cctor entre assemblies (#926)")
 
 # ── Moteur .NET Framework, étape 2 (#945, #946) : cœur d'exécution, génériques ──

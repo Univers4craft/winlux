@@ -216,6 +216,8 @@ struct CallFrame {
     /// Méthode exécutée (ligne MethodDef de l'assembly en cours), pour
     /// nommer l'endroit d'une erreur.
     method: u32,
+    /// Assembly de la méthode (`Assembly.GetExecutingAssembly`, #1869).
+    asm: usize,
     ip: usize,
     code: Rc<Vec<u8>>,
     locals: Slots,
@@ -512,6 +514,7 @@ impl Interpreter {
 
         self.frames.push(CallFrame {
             method: method_row,
+            asm: self.current,
             ip: 0,
             code: Rc::new(body.code),
             locals: Slots::new(&local_kinds),
@@ -524,6 +527,15 @@ impl Interpreter {
             constrained: None,
         });
         self.run_loop()
+    }
+
+    /// Assembly de la méthode `depth` cadres sous la méthode en cours
+    /// (l'appelante d'une méthode interne), le programme à défaut (#1869).
+    pub(super) fn frame_assembly(&self, depth: usize) -> usize {
+        let n = self.frames.len();
+        n.checked_sub(depth + 1)
+            .and_then(|i| self.frames.get(i))
+            .map_or(0, |f| f.asm)
     }
 
     /// « Espace.Type::Méthode IL_xxxx » de la méthode en cours.
@@ -621,6 +633,9 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.thread_call(namespace, class, name, &args, params) {
+            return r;
+        }
+        if let Some(r) = self.reflection_call(namespace, class, name, &args) {
             return r;
         }
         match (namespace, class, name) {
@@ -930,6 +945,7 @@ impl Interpreter {
         });
         roots.extend(threads::roots());
         roots.extend(super::callbacks::roots());
+        roots.extend(super::reflection::roots());
         for data in self.shared.external_statics.lock().unwrap().values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
