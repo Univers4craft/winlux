@@ -175,10 +175,15 @@ pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
+pub mod ole32_lot_c;
+pub mod ole32_moniker;
 pub mod ole32_storage;
 pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
+pub mod oleaut32_lot_c;
+pub mod oleaut32_picture;
+pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
@@ -572,6 +577,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(ole32_storage::exports());
                     e.extend(ole32_embed::exports());
                     e.extend(ole32_inplace::exports());
+                    e.extend(ole32_lot_c::exports());
+                    e.extend(ole32_moniker::exports());
                     for (name, addr) in wpf_native::ole32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -745,6 +752,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(oleaut32_var::exports());
                     e.extend(oleaut32_disp::exports());
                     e.extend(oleaut32_typelib::exports());
+                    e.extend(oleaut32_record::exports());
+                    e.extend(oleaut32_picture::exports());
+                    e.extend(oleaut32_lot_c::exports());
                     e
                 },
                 handle: 0,

@@ -2132,6 +2132,28 @@ pub unsafe fn register(tlib: usize, path: &str) -> Option<i32> {
     Some(S_OK)
 }
 
+/// UnRegisterTypeLib : retire l'inscription de cette version pour le
+/// processus. Faux si elle n'était pas inscrite.
+pub unsafe fn unregister(guid: &Guid, major: u16, minor: u16) -> bool {
+    let removed: Vec<usize> = {
+        let mut r = registered().lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = Vec::new();
+        r.retain(|(g, maj, min, _, lib)| {
+            if g == guid && *maj == major && *min == minor {
+                out.push(*lib);
+                false
+            } else {
+                true
+            }
+        });
+        out
+    };
+    for lib in &removed {
+        lib_release(*lib as *const LibObj);
+    }
+    !removed.is_empty()
+}
+
 /// Résultat de LoadTypeLib quand rien n'est trouvé.
 pub const NOT_LOADED: i32 = TYPE_E_CANTLOADLIBRARY;
 pub const NOT_REGISTERED: i32 = TYPE_E_LIBNOTREGISTERED;
