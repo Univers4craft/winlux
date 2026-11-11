@@ -120,18 +120,25 @@ jobs:
           paquets="tesseract-ocr tesseract-ocr-fra python3-pil"
           debs="$RUNNER_TEMP/apt-suivi"
           mkdir -p "$debs/partial"
-          for essai in 1 2 3; do
-            sudo apt-get install -y -q -o Dir::Cache::Archives="$debs" $paquets && break
-            echo "apt-get : essai $essai échoué, nouvel essai dans 30 s"
-            sleep 30
-            sudo apt-get update -q || true
+          # Deux essais de 6 min au plus : le job (30 min) garde le temps de l'OCR
+          # ou du repli ci-dessous.
+          for essai in 1 2; do
+            sudo timeout 360 apt-get install -y -q -o Dir::Cache::Archives="$debs" $paquets && break
+            echo "apt-get : essai $essai échoué"
+            test "$essai" = 2 || { sleep 20; sudo timeout 240 apt-get update -q || true; }
           done
           sudo chmod -R a+rX "$debs"
-          command -v tesseract >/dev/null && /usr/bin/python3 -c "import PIL" ||
-            { echo "::error::tesseract ou Pillow absent : publication annulée, le site en ligne est conservé (#1871)"; exit 1; }
-          /usr/bin/python3 -I scripts/suivi-travaux.py telecharger "$GITHUB_REPOSITORY" "$RUNNER_TEMP/suivi" --nombre 30
-          /usr/bin/python3 -I scripts/suivi-travaux.py construire "$RUNNER_TEMP/suivi" build/site/suivi --exiger-ocr \
-            --cache "$RUNNER_TEMP/suivi-ocr.json"
+          if command -v tesseract >/dev/null && /usr/bin/python3 -c "import PIL"; then
+            /usr/bin/python3 -I scripts/suivi-travaux.py telecharger "$GITHUB_REPOSITORY" "$RUNNER_TEMP/suivi" --nombre 30
+            /usr/bin/python3 -I scripts/suivi-travaux.py construire "$RUNNER_TEMP/suivi" build/site/suivi --exiger-ocr \
+              --cache "$RUNNER_TEMP/suivi-ocr.json"
+          else
+            # Repli : la dernière galerie publiée, déjà filtrée (liste blanche, OCR).
+            echo "::warning::tesseract ou Pillow absent : reprise de la dernière galerie publiée (#1871)"
+            rm -rf build/site/suivi
+            /usr/bin/python3 -I scripts/suivi-galerie-precedente.py "$GITHUB_REPOSITORY" build/site/suivi ||
+              { echo "::error::ni OCR ni galerie précédente : publication annulée, le site en ligne est conservé (#1871)"; exit 1; }
+          fi
           /usr/bin/python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if any(r["images"] for r in d["executions"]) else 1)' \
             build/site/suivi/data.json ||
             { echo "::error::galerie du suivi vide : publication annulée, le site en ligne est conservé (#1871)"; exit 1; }

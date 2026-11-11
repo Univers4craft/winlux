@@ -422,6 +422,61 @@ pub unsafe extern "win64" fn LookupPrivilegeValueA(
 // ---------- Fonctions SID ----------
 
 /// Mémoire libérable par `FreeSid` / `LocalFree` (tas Winlux).
+/// Disposition d'EXPLICIT_ACCESS et de son TRUSTEE selon la taille de
+/// pointeur du programme (#1915). x64 : TRUSTEE à 16 (forme 28, nom 40),
+/// 48 octets ; x86 : TRUSTEE à 12 (forme 20, nom 28), 32 octets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AccessLayout {
+    pub size: usize,
+    pub form: usize,
+    pub kind: usize,
+    pub name: usize,
+}
+
+pub(crate) fn access_layout(ptr: usize) -> AccessLayout {
+    let (t, l) = trustee_layout(ptr);
+    AccessLayout {
+        size: t + l.size,
+        form: t + l.form,
+        kind: t + l.kind,
+        name: t + l.name,
+    }
+}
+
+/// (décalage du TRUSTEE dans EXPLICIT_ACCESS, disposition du TRUSTEE seul).
+pub(crate) fn trustee_layout(ptr: usize) -> (usize, AccessLayout) {
+    if ptr == 4 {
+        (
+            12,
+            AccessLayout {
+                size: 20,
+                form: 8,
+                kind: 12,
+                name: 16,
+            },
+        )
+    } else {
+        (
+            16,
+            AccessLayout {
+                size: 32,
+                form: 12,
+                kind: 16,
+                name: 24,
+            },
+        )
+    }
+}
+
+/// Lit une case pointeur de `ptr` octets.
+unsafe fn read_ptr_of(at: *const u8, ptr: usize) -> usize {
+    if ptr == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned(at as *const usize)
+    }
+}
+
 unsafe fn heap_copy(b: &[u8]) -> *mut u8 {
     let p = crate::dlls::kernel32::heap_alloc(0, 0, b.len()) as *mut u8;
     if !p.is_null() {
@@ -1216,6 +1271,18 @@ unsafe fn set_entries_in_acl(
     out: *mut *mut u8,
     wide: bool,
 ) -> u32 {
+    set_entries_in_acl_for(count, entries, old, out, wide, crate::wow32::pointer_size())
+}
+
+/// SetEntriesInAcl pour un programme dont les pointeurs font `ptr` octets.
+unsafe fn set_entries_in_acl_for(
+    count: u32,
+    entries: *const u8,
+    old: *const u8,
+    out: *mut *mut u8,
+    wide: bool,
+    ptr: usize,
+) -> u32 {
     if out.is_null() || (count > 0 && entries.is_null()) {
         return ERROR_INVALID_PARAMETER;
     }
@@ -1237,13 +1304,14 @@ unsafe fn set_entries_in_acl(
             off += len.max(8);
         }
     }
+    let lay = access_layout(ptr);
     for i in 0..count as usize {
-        let e = entries.add(i * 48);
+        let e = entries.add(i * lay.size);
         let mask = std::ptr::read_unaligned(e as *const u32);
         let mode = std::ptr::read_unaligned(e.add(4) as *const u32);
         let inherit = std::ptr::read_unaligned(e.add(8) as *const u32) as u8;
-        let form = std::ptr::read_unaligned(e.add(28) as *const u32);
-        let name = std::ptr::read_unaligned(e.add(40) as *const *const u8);
+        let form = std::ptr::read_unaligned(e.add(lay.form) as *const u32);
+        let name = read_ptr_of(e.add(lay.name), ptr) as *const u8;
         let sid = match form {
             0 => sid_at(name).map(<[u8]>::to_vec),
             1 => {
@@ -1257,6 +1325,9 @@ unsafe fn set_entries_in_acl(
             _ => None,
         };
         let Some(sid) = sid else {
+            crate::trace!(
+                "SetEntriesInAcl : administré {i} (forme {form}) introuvable → ERROR_NONE_MAPPED"
+            );
             return 1332; // ERROR_NONE_MAPPED
         };
         match mode {
@@ -1301,6 +1372,17 @@ fn trustee_sid(name: &str) -> Option<Vec<u8>> {
     let account = name.rsplit('\\').next().unwrap_or(name);
     if account.eq_ignore_ascii_case("Everyone") || account.eq_ignore_ascii_case("Tout le monde") {
         return sid_bytes(EVERYONE);
+    }
+    // Comptes et groupes bien connus (noms anglais de l'API, #1915).
+    let known = match account.to_ascii_lowercase().as_str() {
+        "system" | "local system" => Some("S-1-5-18"),
+        "administrators" | "administrateurs" => Some("S-1-5-32-544"),
+        "users" | "utilisateurs" => Some("S-1-5-32-545"),
+        "authenticated users" => Some("S-1-5-11"),
+        _ => None,
+    };
+    if let Some(sid) = known {
+        return sid_bytes(sid);
     }
     let c = std::ffi::CString::new(account).ok()?;
     let pw = unsafe { libc::getpwnam(c.as_ptr()) };
@@ -2030,7 +2112,7 @@ pub unsafe extern "win64" fn GetAuditedPermissionsFromAclW(
 }
 
 /// GetExplicitEntriesFromAclW : un tableau EXPLICIT_ACCESS_W (48 octets
-/// chacun) suivi des SID, en un seul bloc LocalAlloc.
+/// chacun, 32 pour un programme x86) suivi des SID, en un seul bloc LocalAlloc.
 pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     acl: *const u8,
     count: *mut u32,
@@ -2041,6 +2123,8 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     }
     *count = 0;
     *out = std::ptr::null_mut();
+    let ptr = crate::wow32::pointer_size();
+    let lay = access_layout(ptr);
     let entries: Vec<_> = acl_entries(acl)
         .into_iter()
         .filter(|e| e.1 & 0x10 == 0 && matches!(e.0, 0..=2)) // pas INHERITED_ACE
@@ -2048,7 +2132,7 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     if entries.is_empty() {
         return 0;
     }
-    let head = entries.len() * 48;
+    let head = entries.len() * lay.size;
     let total = head + entries.iter().map(|e| e.3.len()).sum::<usize>();
     let mut block = vec![0u8; total];
     let base = heap_copy(&block);
@@ -2057,7 +2141,7 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     }
     let mut at = head;
     for (i, (kind, flags, mask, sid)) in entries.iter().enumerate() {
-        let e = i * 48;
+        let e = i * lay.size;
         let mode: u32 = match (kind, flags & 0xC0) {
             (0, _) => 1,    // GRANT_ACCESS
             (1, _) => 3,    // DENY_ACCESS
@@ -2068,7 +2152,8 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
         block[e + 4..e + 8].copy_from_slice(&mode.to_le_bytes());
         block[e + 8..e + 12].copy_from_slice(&u32::from(flags & 0x0F).to_le_bytes());
         // TRUSTEE_W : forme TRUSTEE_IS_SID (0), type inconnu (0).
-        block[e + 40..e + 48].copy_from_slice(&(base as usize + at).to_le_bytes());
+        let sid_at = (base as usize + at).to_le_bytes();
+        block[e + lay.name..e + lay.name + ptr].copy_from_slice(&sid_at[..ptr]);
         block[at..at + sid.len()].copy_from_slice(sid);
         at += sid.len();
     }

@@ -215,6 +215,57 @@ fn sid_alloues_et_convertis() {
     }
 }
 
+/// SteamService.exe (#1915) : un programme x86 passe des EXPLICIT_ACCESS
+/// de 32 octets (TRUSTEE à 12, nom à 28).
+#[test]
+fn explicit_access_x86_de_32_octets() {
+    assert_eq!(
+        access_layout(4),
+        AccessLayout {
+            size: 32,
+            form: 20,
+            kind: 24,
+            name: 28
+        }
+    );
+    assert_eq!(
+        access_layout(8),
+        AccessLayout {
+            size: 48,
+            form: 28,
+            kind: 32,
+            name: 40
+        }
+    );
+    let users = sid_bytes("S-1-5-32-545").unwrap();
+    let system = sid_bytes("S-1-5-18").unwrap();
+    let mut entries = [0u8; 64];
+    for (i, sid) in [&users, &system].iter().enumerate() {
+        let e = i * 32;
+        entries[e..e + 4].copy_from_slice(&0x1F_01FFu32.to_le_bytes());
+        entries[e + 4..e + 8].copy_from_slice(&2u32.to_le_bytes()); // SET_ACCESS
+        entries[e + 8..e + 12].copy_from_slice(&3u32.to_le_bytes()); // héritage
+                                                                     // forme TRUSTEE_IS_SID (0) ; adresse du SID sur 4 octets.
+        let low = (sid.as_ptr() as usize as u32).to_le_bytes();
+        entries[e + 28..e + 32].copy_from_slice(&low);
+    }
+    if users.as_ptr() as usize > u32::MAX as usize {
+        return; // tas de test au-dessus de 4 Go : pas d'adresse x86 possible
+    }
+    // La passerelle wow32 prête une case de 8 octets pour `out` (type `p`).
+    let mut acl: *mut u8 = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            set_entries_in_acl_for(2, entries.as_ptr(), std::ptr::null(), &mut acl, true, 4),
+            0
+        );
+        assert_eq!(std::ptr::read_unaligned(acl.add(4) as *const u16), 2);
+    }
+    let names = trustee_sid("Users").unwrap();
+    assert_eq!(names, users);
+    assert_eq!(trustee_sid("SYSTEM").unwrap(), system);
+}
+
 #[test]
 fn absolute_descriptor_and_explicit_acl() {
     unsafe {

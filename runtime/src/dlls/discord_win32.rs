@@ -239,6 +239,41 @@ unsafe extern "win64" fn D3DKMTGetProcessSchedulingPriorityClass(
     STATUS_SUCCESS
 }
 
+/// Ouverture d'un adaptateur du noyau graphique Windows (par LUID, HDC ou
+/// nom GDI) : sous Winlux, le pilote est celui de Linux et il n'y a aucun
+/// adaptateur de noyau Windows à ouvrir. Chromium (processus GPU et
+/// utilitaires de Discord) s'arrêtait en 0xC0000139 sur l'entrée absente ;
+/// un échec NTSTATUS est son chemin prévu (#1920).
+unsafe extern "win64" fn D3DKMTOpenAdapter(desc: *mut u8) -> i32 {
+    if desc.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    STATUS_NOT_SUPPORTED
+}
+
+/// D3DKMTEnumAdapters2 : aucun adaptateur (NumAdapters = 0).
+unsafe extern "win64" fn D3DKMTEnumAdapters2(desc: *mut u32) -> i32 {
+    if desc.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *desc = 0;
+    STATUS_SUCCESS
+}
+
+/// Opération sur un handle d'adaptateur (D3DKMT_HANDLE en tête de la
+/// structure) : aucun n'a pu être ouvert, tous sont inconnus.
+unsafe extern "win64" fn D3DKMTUnknownAdapter(_desc: *mut u8) -> i32 {
+    STATUS_INVALID_PARAMETER
+}
+
+/// D3DKMTQueryStatistics : pas de statistiques du noyau graphique Windows.
+unsafe extern "win64" fn D3DKMTQueryStatistics(desc: *mut u8) -> i32 {
+    if desc.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    STATUS_NOT_SUPPORTED
+}
+
 // --- crypt32 ------------------------------------------------------------
 
 const CMSG_SIGNED: u32 = 2;
@@ -417,6 +452,14 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
             crate::exports! {
                 "D3DKMTSetProcessSchedulingPriorityClass" => fn D3DKMTSetProcessSchedulingPriorityClass,
                 "D3DKMTGetProcessSchedulingPriorityClass" => fn D3DKMTGetProcessSchedulingPriorityClass,
+                "D3DKMTOpenAdapterFromLuid" => fn D3DKMTOpenAdapter,
+                "D3DKMTOpenAdapterFromHdc" => fn D3DKMTOpenAdapter,
+                "D3DKMTOpenAdapterFromGdiDisplayName" => fn D3DKMTOpenAdapter,
+                "D3DKMTEnumAdapters2" => fn D3DKMTEnumAdapters2,
+                "D3DKMTCloseAdapter" => fn D3DKMTUnknownAdapter,
+                "D3DKMTQueryAdapterInfo" => fn D3DKMTUnknownAdapter,
+                "D3DKMTQueryVideoMemoryInfo" => fn D3DKMTUnknownAdapter,
+                "D3DKMTQueryStatistics" => fn D3DKMTQueryStatistics,
             },
         ),
         (
@@ -460,6 +503,25 @@ mod tests {
             let mut c = 0;
             assert_eq!(D3DKMTGetProcessSchedulingPriorityClass(0, &mut c), 0);
             assert_eq!(c, PRIORITY_NORMAL);
+            // #1920 : pas d'adaptateur de noyau Windows, échecs NTSTATUS.
+            for name in [
+                "D3DKMTOpenAdapterFromLuid",
+                "D3DKMTOpenAdapterFromHdc",
+                "D3DKMTCloseAdapter",
+                "D3DKMTQueryAdapterInfo",
+                "D3DKMTEnumAdapters2",
+            ] {
+                assert!(crate::dlls::lookup("gdi32", name).is_some(), "{name}");
+            }
+            let mut luid = [0u8; 12];
+            assert_eq!(D3DKMTOpenAdapter(luid.as_mut_ptr()), STATUS_NOT_SUPPORTED);
+            let mut enum2 = [7u32, 0, 0, 0];
+            assert_eq!(D3DKMTEnumAdapters2(enum2.as_mut_ptr()), STATUS_SUCCESS);
+            assert_eq!(enum2[0], 0);
+            assert_eq!(
+                D3DKMTUnknownAdapter(luid.as_mut_ptr()),
+                STATUS_INVALID_PARAMETER
+            );
             // Copie bornée de wnsprintf.
             let mut buf = [0xffu16; 4];
             assert_eq!(write_bounded(buf.as_mut_ptr(), 4, &[1, 2]), 2);

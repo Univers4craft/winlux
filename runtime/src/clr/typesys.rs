@@ -6,6 +6,7 @@
 //! ce qui dépend de `T` (taille, boxing, champs statiques) est résolu à
 //! l'exécution grâce au contexte générique (`Gen`) de la méthode en cours.
 
+use super::domain;
 use super::il::{Gen, Interpreter};
 use super::metadata::{self, Assembly, ElementType};
 use super::tables::{CodedIndex, TableId};
@@ -373,6 +374,26 @@ impl Interpreter {
         Kind::Struct(id)
     }
 
+    /// Instanciation `System.Nullable<T>` : (décalage de `hasValue`,
+    /// décalage de `value`, type `T`). Les deux champs sont, dans cet ordre,
+    /// ceux de bcl/mscorlib/Valeurs.cs (#1952).
+    pub fn nullable_parts(&self, id: TypeId) -> Option<(usize, usize, TypeId)> {
+        let t = types::with_types(|reg| {
+            reg.get(id).and_then(|t| {
+                (t.is_value
+                    && t.namespace == "System"
+                    && t.name == "Nullable`1"
+                    && t.type_args.len() == 1)
+                    .then(|| t.type_args[0])
+            })
+        })?;
+        self.ensure_layout(id);
+        types::with_types(|reg| {
+            let f = &reg.get(id)?.fields;
+            (f.len() >= 2).then(|| (f[0].offset, f[1].offset, t))
+        })
+    }
+
     /// Façon de ranger une valeur d'un élément de signature.
     pub fn kind_of_sig(&self, asm: usize, et: &ElementType, gen: &Gen) -> Kind {
         use ElementType as E;
@@ -441,7 +462,19 @@ impl Interpreter {
                 let wanted = a
                     .get_string(a.get_assembly_ref(srow).name)
                     .to_ascii_lowercase();
-                let asm = self.domain.iter().position(|i| i.name == wanted)?;
+                // Une assembly du .NET Framework non chargée (System,
+                // System.Core…) : ses types sont dans notre mscorlib, comme
+                // si elle les y redirigeait (ECMA-335 §II.22.14, #1947 :
+                // Stopwatch est dans System.dll).
+                let asm = self
+                    .domain
+                    .iter()
+                    .position(|i| i.name == wanted)
+                    .or_else(|| {
+                        domain::is_framework_assembly(&wanted)
+                            .then(|| self.domain.iter().position(|i| i.name == domain::CORLIB))
+                            .flatten()
+                    })?;
                 let target = self.assembly_at(asm);
                 let t = (1..=target.row_count(TableId::TypeDef)).find(|&t| {
                     let td = target.get_type_def(t);

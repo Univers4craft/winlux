@@ -57,6 +57,9 @@ def main():
             screen(images / "parametres-02.png", "Réseau : connecté par câble")
             screen(images / "outils-apps.png", "Liste des applications du runner")
             screen(images / "parametres-03.png", "Fabricant : Microsoft Corporation")
+            # Page absente du runner photographiée sur « Écran » avant #1944.
+            screen(images / "parametres-08.png", "Définition de l'écran")
+            screen(images / "parametres-26.png", "Définition de l'écran")
             (images / "popup-volume.png").write_bytes(b"pas une image")
             (images / "parametres-02.log").write_text("journal", encoding="utf-8")
             (work / str(run_id) / "meta.json").write_text(json.dumps({
@@ -72,8 +75,8 @@ def main():
         if has_ocr:
             check([r["run"] for r in runs] == [102, 101], "exécutions de la plus récente à la plus ancienne")
             names = [i["nom"] for r in runs for i in r["images"]]
-            check(names == ["parametres-02", "parametres-02"], f"seule la capture permise est publiée ({names})")
-            check(len(list((out / "img").iterdir())) == 1 and len(list((out / "min").iterdir())) == 1,
+            check(names == ["parametres-02", "parametres-08"] * 2, f"seules les captures permises sont publiées ({names})")
+            check(len(list((out / "img").iterdir())) == 2 and len(list((out / "min").iterdir())) == 2,
                   "image identique stockée une seule fois, avec sa vignette")
             first = runs[0]["images"][0]
             check(first["legende"]["de"].startswith("Einstellungen") and "capture-ui.py" in first["test"],
@@ -84,6 +87,8 @@ def main():
         check("outils-apps" in result.stdout and "restées privées" in result.stdout,
               "capture hors liste blanche restée privée")
         check("popup-volume (fichier PNG invalide" in result.stdout, "faux PNG refusé")
+        check("parametres-26 (page « Écran » sous un autre nom (#1944))" in result.stdout,
+              "page de Paramètres identique à « Écran » écartée (#1944)")
         check(not any(p.suffix == ".log" for p in out.rglob("*")), "aucun journal publié")
 
         # Sans tesseract dans le PATH, --exiger-ocr ferme tout.
@@ -101,6 +106,68 @@ def main():
         data = json.loads((tmp / "casse" / "data.json").read_text(encoding="utf-8")) if casse.returncode == 0 else None
         check(data is not None and data["executions"] == [] and "OCR impossible" in casse.stdout,
               "OCR en échec : capture refusée, construction menée à son terme (#1829)")
+
+        # Galerie reprise d'une publication précédente quand l'OCR manque (#1871).
+        import io, tarfile, zipfile
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tar:
+            def ajoute(nom, donnees, **kw):
+                info = tarfile.TarInfo(nom)
+                info.size = len(donnees)
+                for k, v in kw.items():
+                    setattr(info, k, v)
+                tar.addfile(info, io.BytesIO(donnees))
+            ajoute("./fr/suivi.html", b"<html>")
+            ajoute("./suivi/data.json", json.dumps({"executions": [{"images": [{"nom": "parametres-02"}]}]}).encode())
+            ajoute("./suivi/img/0123456789abcdef.webp", b"RIFF-img")
+            ajoute("./suivi/min/0123456789abcdef.webp", b"RIFF-min")
+            ajoute("./suivi/../../evade.webp", b"x")
+            ajoute("./suivi/img/notes.txt", b"x")
+            lien = tarfile.TarInfo("./suivi/img/fedcba9876543210.webp")
+            lien.type, lien.linkname = tarfile.SYMTYPE, "/etc/passwd"
+            tar.addfile(lien)
+        archive = tmp / "pages.zip"
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("artifact.tar", tar_buf.getvalue())
+        reprise = tmp / "reprise" / "suivi"
+        prec = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y", str(reprise),
+                               "--archive", str(archive)], capture_output=True, text=True)
+        fichiers = sorted(p.relative_to(tmp / "reprise").as_posix() for p in (tmp / "reprise").rglob("*") if p.is_file())
+        check(prec.returncode == 0 and fichiers == ["suivi/data.json", "suivi/img/0123456789abcdef.webp",
+                                                   "suivi/min/0123456789abcdef.webp"]
+              and not (tmp / "evade.webp").exists()
+              and json.loads((reprise / "data.json").read_text(encoding="utf-8")).get("reprise") is True,
+              f"galerie précédente reprise, sans lien ni chemin sortant (#1871) ({fichiers})")
+        vide = tmp / "vide.zip"
+        with zipfile.ZipFile(vide, "w") as z:
+            z.writestr("artifact.tar", b"")
+        sans = subprocess.run([sys.executable, "-I", str(HERE / "suivi-galerie-precedente.py"), "x/y",
+                               str(tmp / "sans"), "--archive", str(vide)], capture_output=True, text=True)
+        check(sans.returncode == 1, "archive sans galerie : rien de repris, code 1 (#1871)")
+
+        # Vignette recadrée sur une petite fenêtre posée sur un bureau noir (#1925).
+        import importlib.util
+        from PIL import Image
+        spec = importlib.util.spec_from_file_location("suivi_travaux", HERE / "suivi-travaux.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        quatre_k = Image.new("RGB", (3840, 2160), (0, 0, 0))
+        quatre_k.paste(Image.new("RGB", (600, 700), (240, 240, 245)), (3100, 1300))
+        boite = module.cadrage(quatre_k)
+        check(boite is not None and boite[0] <= 3100 and boite[1] <= 1300 and boite[2] >= 3700 and boite[3] >= 2000
+              and boite[2] <= 3840 and boite[3] <= 2160 and abs((boite[2] - boite[0]) / (boite[3] - boite[1]) - 1.6) < 0.01
+              and (boite[2] - boite[0]) < 1600,
+              f"4K à fond noir : vignette recadrée sur la fenêtre, en 16:10 (#1925) ({boite})")
+        coin = Image.new("RGB", (2560, 1440), (0, 0, 0))
+        coin.paste(Image.new("RGB", (1020, 740), (233, 236, 244)), (0, 0))
+        boite = module.cadrage(coin)
+        check(boite is not None and boite[0] == 0 and boite[1] == 0 and boite[2] >= 1020 and boite[3] >= 740
+              and boite[2] < 1600, f"fenêtre posée en (0, 0) : vignette recadrée quand même (#1943) ({boite})")
+        bureau = Image.new("RGB", (1920, 1080), (40, 60, 120))
+        bureau.paste(Image.new("RGB", (1920, 48), (20, 20, 30)), (0, 1032))
+        bureau.paste(Image.new("RGB", (1200, 800), (240, 240, 245)), (300, 100))
+        check(module.cadrage(bureau) is None and module.cadrage(Image.new("RGB", (800, 500))) is None,
+              "capture remplie ou vide : vignette de l'image entière (#1925)")
 
         # Page index.html de l'artefact captures-ui.
         artefact = work / "102" / "images"

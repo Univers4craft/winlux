@@ -41,6 +41,10 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 THUMB_WIDTH = 480
 OCR_DELAI = 90
+# Un artefact captures-ui sans capture (job « Captures d'écran » tombé avant
+# la capture) pèse ~1,5 Ko, un vrai ~5 Mo : les vides ne prennent pas la place
+# des exécutions qui ont vraiment des images (#1912).
+MIN_ARTEFACT = 200_000
 # Mots refusés à la lecture OCR. « Windows » seul reste permis : il décrit les
 # raccourcis et les programmes, comme le texte du site.
 INTERDIT = re.compile(
@@ -86,7 +90,8 @@ def telecharger(depot, travail, nombre):
             if head != depot or run.get("event") not in ("push", "pull_request", "workflow_dispatch"):
                 continue
             arts = json.loads(gh("api", f"repos/{depot}/actions/runs/{run['id']}/artifacts?name=captures-ui"))
-            if not any(a["name"] == "captures-ui" and not a["expired"] for a in arts.get("artifacts", [])):
+            if not any(a["name"] == "captures-ui" and not a["expired"]
+                       and a.get("size_in_bytes", 0) >= MIN_ARTEFACT for a in arts.get("artifacts", [])):
                 continue
             cible = travail / str(run["id"])
             if cible.exists():
@@ -171,6 +176,41 @@ def empreinte_de(image):
     return hashlib.sha256(image.tobytes() + repr(image.size).encode()).hexdigest()[:24]
 
 
+def cadrage(image):
+    """Boîte de la vignette, ou None pour l'image entière (#1925). Une capture
+    en 1440p ou 4K montre souvent une petite fenêtre sur un bureau noir : la
+    vignette de 480 px était presque toute noire. Quand le fond uni (couleur
+    du coin) couvre plus de la moitié de l'image, la vignette est recadrée sur
+    le contenu, avec une marge, au format 16:10 des cartes. L'image complète
+    n'est pas touchée."""
+    from PIL import Image, ImageChops
+    largeur, hauteur = image.size
+    # Fond : couleur la plus fréquente des quatre coins. Paramètres s'ouvre en
+    # (0, 0) sans gestionnaire de fenêtres : le coin haut gauche est la fenêtre (#1943).
+    coins = [image.getpixel(c) for c in ((0, 0), (largeur - 1, 0), (0, hauteur - 1), (largeur - 1, hauteur - 1))]
+    couleur = max(coins, key=coins.count)
+    if coins.count(couleur) < 2:
+        return None
+    fond = Image.new("RGB", image.size, couleur)
+    boite = ImageChops.difference(image, fond).convert("L").point(lambda v: 255 if v > 24 else 0).getbbox()
+    if not boite:
+        return None
+    g, h, d, b = boite
+    if (d - g) * (b - h) >= largeur * hauteur / 2:
+        return None
+    marge = max(16, round(0.04 * max(d - g, b - h)))
+    g, h, d, b = max(0, g - marge), max(0, h - marge), min(largeur, d + marge), min(hauteur, b + marge)
+    l, ht = d - g, b - h
+    if l < ht * 1.6:
+        l = min(largeur, round(ht * 1.6))
+    else:
+        ht = min(hauteur, round(l / 1.6))
+    cx, cy = (g + d) / 2, (h + b) / 2
+    g = min(max(0, round(cx - l / 2)), largeur - l)
+    h = min(max(0, round(cy - ht / 2)), hauteur - ht)
+    return (g, h, g + l, h + ht)
+
+
 def verdict_ocr(png):
     """(publiable, raison). Une image que l'OCR ne relit pas est refusée (#1829)."""
     try:
@@ -233,6 +273,15 @@ def construire(travail, sortie, exiger_ocr, liste=LISTE, cache=None, travaux=4):
             source_de.setdefault(empreinte, png)
             tailles[empreinte] = image.size
             lot.append((name, empreinte))
+        # Avant #1944, une page de Paramètres absente du runner ouvrait « Écran »
+        # (parametres-08) et était photographiée sous son propre nom : une image
+        # identique au pixel près à parametres-08 de la même exécution est écartée.
+        ecran = dict(lot).get("parametres-08")
+        if ecran:
+            for name, empreinte in lot:
+                if name.startswith("parametres-") and name != "parametres-08" and empreinte == ecran:
+                    refusees[name] = "page « Écran » sous un autre nom (#1944)"
+            lot = [(n, e) for n, e in lot if not (n.startswith("parametres-") and n != "parametres-08" and e == ecran)]
         retenues.append((meta, lot))
     # 2. OCR des images jamais vues, en parallèle (tesseract est un processus).
     verdicts = {}
@@ -260,6 +309,9 @@ def construire(travail, sortie, exiger_ocr, liste=LISTE, cache=None, travaux=4):
         if verdicts[empreinte][0]:
             image = ouvrir(png)
             image.save(sortie / "img" / f"{empreinte}.webp", "WEBP", lossless=True, method=4)
+            boite = cadrage(image)
+            if boite:
+                image = image.crop(boite)
             image.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 4))
             image.save(sortie / "min" / f"{empreinte}.webp", "WEBP", quality=80, method=4)
     runs = []

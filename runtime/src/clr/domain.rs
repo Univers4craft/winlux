@@ -15,6 +15,18 @@ use std::path::{Path, PathBuf};
 /// Nom (en minuscules) de l'assembly de base.
 pub const CORLIB: &str = "mscorlib";
 
+/// Assembly du .NET Framework (ou de sa façade netstandard) dont les types
+/// sont servis par notre mscorlib tant qu'elle n'est pas fournie à part.
+pub fn is_framework_assembly(lower_name: &str) -> bool {
+    lower_name == CORLIB
+        || lower_name == "system"
+        || lower_name == "netstandard"
+        || lower_name.starts_with("system.")
+        || lower_name == "microsoft.csharp"
+        || lower_name == "microsoft.visualbasic"
+        || lower_name == "windowsbase"
+}
+
 /// Assemblies fournies par la BCL Winlux plutôt que par le dossier de l'appli.
 const BCL_ASSEMBLIES: [&str; 1] = [CORLIB];
 
