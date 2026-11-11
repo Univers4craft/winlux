@@ -63,7 +63,7 @@ l'énumération de `gdi32_fonts.rs` (#1670, #1768).
 | Nirmala UI, Ebrima, Gadugi, Leelawadee UI, Myanmar Text, Javanese Text, Sylfaen, Mongolian Baiti, Microsoft Himalaya… | famille Noto du script | proche | à la demande |
 | Comic Sans MS | Comic Neue | proche | non |
 | Arial Black, Impact, Trebuchet MS, Candara, Constantia, Corbel, Franklin Gothic, Bahnschrift, Sitka, Gabriola, Ink Free, MV Boli, Segoe Print, Segoe Script | — | **aucun** | — |
-| Marlett, Wingdings, Webdings, Segoe MDL2 Assets, Segoe Fluent Icons | — | **aucun** (polices de symboles : les codes n'ont pas de sens ailleurs). Une copie apportée par un logiciel (Steam) est servie depuis #1807 ; une Marlett maison est possible plus tard. | — |
+| Marlett, Wingdings, Webdings, Segoe MDL2 Assets, Segoe Fluent Icons | — | **aucun** (polices de symboles : les codes n'ont pas de sens ailleurs). Une police de symboles qu'un logiciel apporte lui-même est lue depuis #1807 ; pour Marlett, une police maison est prévue après le gel (#1807). | — |
 
 ## 3. Chemin d'installation d'une police : ce qui existe
 
@@ -95,5 +95,21 @@ l'énumération de `gdi32_fonts.rs` (#1670, #1768).
 | #1772 | .otf à contours CFF jamais dessinés par GDI ni DirectWrite | 2, après 0.2.21 |
 | #1773 | Police installée pendant qu'un .exe tourne : invisible pour lui, pas de WM_FONTCHANGE ; IDWriteFactory5::CreateInMemoryFontFileLoader absent | 3 |
 | #1774 | Polices bitmap .fon et Type 1 (.pfm\|.pfb) refusées | 3 |
-| #1807 | Marlett (et toute police de symboles aux noms en codage « symbole ») rejetée : 0 face chez Steam | 2, corrigé |
+| #1807 | Marlett absente : Steam la demande (0 face) et se rabat sur Tahoma, ses boutons vgui montrent des lettres. La lecture des noms en codage « symbole » est corrigée, mais ne suffit pas : il faut une police maison, après le gel | 2, ouverte |
 | #1781 | Un programme qui ouvre directement `C:\Windows\Fonts\arial.ttf` (ou lit son nom dans la clé de registre Fonts) ne trouve aucun fichier : la clé ne liste que les vraies familles installées | 2 |
+
+## 5. Marlett : à ne pas oublier
+
+**Aucun logiciel testé n'apporte sa propre Marlett.** Au banc du 11 novembre
+(master 6216a7ca, archive `steam-odt-6216a7c.txz`), steam.exe n'appelle
+jamais AddFontResource. Il demande `Marlett` à l'énumération, obtient 0 face,
+puis se rabat sur Tahoma : il compte sur la Marlett du système, comme sous
+Windows. Inutile donc de chercher une « copie livrée par le logiciel ».
+
+Marlett n'est pas livrable (licence Windows) et n'a pas d'équivalent libre. La
+solution retenue, après le gel de la 0.2.21, est une police de symboles
+d'interface dessinée par Winlux :
+- elle porte un nom à nous ;
+- elle est annoncée comme « Marlett » par le mécanisme de remplacement
+  (`substitutes`, `WINDOWS_FAMILIES`, fontconfig) ;
+- sa correspondance caractère → symbole est établie en boîte noire.
