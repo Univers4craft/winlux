@@ -3554,6 +3554,126 @@ pub fn mouse_leave_tracked(hwnd: usize) -> bool {
     lock(leave_tracking()).contains(&hwnd)
 }
 
+pub const WM_MOUSEHOVER: u32 = 0x02A1;
+
+/// Demande TrackMouseEvent(TME_HOVER) en cours (#1591) : WM_MOUSEHOVER est
+/// posté quand le pointeur reste `ms` millisecondes dans le rectangle de
+/// survol (SPI_GETMOUSEHOVERWIDTH/HEIGHT, 4 pixels) autour de `anchor`.
+/// À usage unique, comme sous Windows ; les info-bulles WinForms (Paint.NET)
+/// n'apparaissent qu'à ce message.
+struct Hover {
+    hwnd: usize,
+    ms: u32,
+    anchor: (i32, i32),
+    since: std::time::Instant,
+}
+
+fn hover_tracking() -> &'static Mutex<Vec<Hover>> {
+    static T: OnceLock<Mutex<Vec<Hover>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+static HOVER_THREAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Délai par défaut de survol (HOVER_DEFAULT), SPI_GETMOUSEHOVERTIME.
+pub const HOVER_DEFAULT_MS: u32 = 400;
+
+/// TrackMouseEvent(TME_HOVER) : suivre le survol de `hwnd`.
+pub fn track_mouse_hover(hwnd: usize, ms: u32) {
+    let ms = if ms == u32::MAX {
+        HOVER_DEFAULT_MS
+    } else {
+        ms.max(1)
+    };
+    let mut t = lock(hover_tracking());
+    t.retain(|h| h.hwnd != hwnd);
+    t.push(Hover {
+        hwnd,
+        ms,
+        anchor: cursor_screen_pos(),
+        since: std::time::Instant::now(),
+    });
+    if !HOVER_THREAD.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let spawned = std::thread::Builder::new()
+            .name("winlux-survol".into())
+            .spawn(hover_loop);
+        if spawned.is_err() {
+            HOVER_THREAD.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// TME_CANCEL | TME_HOVER : ne plus suivre le survol de `hwnd`.
+pub fn cancel_mouse_hover(hwnd: usize) {
+    lock(hover_tracking()).retain(|h| h.hwnd != hwnd);
+}
+
+/// TME_QUERY : délai de survol suivi pour `hwnd`, s'il y en a un.
+pub fn mouse_hover_tracked(hwnd: usize) -> Option<u32> {
+    lock(hover_tracking())
+        .iter()
+        .find(|h| h.hwnd == hwnd)
+        .map(|h| h.ms)
+}
+
+/// Un pas du suivi : les demandes dont le pointeur est resté immobile assez
+/// longtemps sont retirées et rendues avec la position du pointeur ; celles
+/// dont la fenêtre n'est plus sous le pointeur sont abandonnées.
+fn hover_tick(
+    list: &mut Vec<Hover>,
+    pos: (i32, i32),
+    now: std::time::Instant,
+    over: impl Fn(usize) -> bool,
+) -> Vec<(usize, (i32, i32))> {
+    const HALF: i32 = 2; // la moitié des 4 pixels du rectangle de survol
+    let mut fired = vec![];
+    list.retain_mut(|h| {
+        if !over(h.hwnd) {
+            return false;
+        }
+        if (pos.0 - h.anchor.0).abs() > HALF || (pos.1 - h.anchor.1).abs() > HALF {
+            h.anchor = pos;
+            h.since = now;
+            return true;
+        }
+        if now.duration_since(h.since).as_millis() >= u128::from(h.ms) {
+            fired.push((h.hwnd, pos));
+            return false;
+        }
+        true
+    });
+    fired
+}
+
+fn hover_loop() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let (fired, stop) = {
+            let mut t = lock(hover_tracking());
+            let fired = hover_tick(
+                &mut t,
+                cursor_screen_pos(),
+                std::time::Instant::now(),
+                pointer_over,
+            );
+            let stop = t.is_empty();
+            if stop {
+                // Sous le verrou : une demande arrivée ensuite relance un fil.
+                HOVER_THREAD.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            (fired, stop)
+        };
+        for (hwnd, (x, y)) in fired {
+            let (left, top) = screen_rect(hwnd).map(|r| (r.left, r.top)).unwrap_or((0, 0));
+            let lparam = (((y - top) as u16 as usize) << 16) | ((x - left) as u16 as usize);
+            post_to_window(hwnd, Msg::new(hwnd, WM_MOUSEHOVER, 0, lparam as isize));
+        }
+        if stop {
+            return;
+        }
+    }
+}
+
 /// Le pointeur est maintenant sur `now` (0 : hors de toute fenêtre du
 /// programme) : les fenêtres suivies qu'il a quittées reçoivent
 /// WM_MOUSELEAVE. Sans lui, WPF rapportait la souris à la première
@@ -6596,4 +6716,46 @@ pub fn take_raw_mouse() -> (i32, i32, i32, [bool; 8]) {
     r.dy = 0;
     r.wheel = 0;
     out
+}
+
+#[cfg(test)]
+mod tests_survol {
+    use super::{hover_tick, Hover};
+    use std::time::{Duration, Instant};
+
+    /// Paint.NET (#1591) : WM_MOUSEHOVER après le délai sans bouger, une
+    /// seule fois ; un mouvement hors du rectangle relance l'attente ; une
+    /// fenêtre quittée abandonne le suivi.
+    #[test]
+    fn survol_poste_une_fois_apres_le_delai() {
+        let t0 = Instant::now();
+        let mut list = vec![Hover {
+            hwnd: 7,
+            ms: 400,
+            anchor: (100, 100),
+            since: t0,
+        }];
+        let over = |h: usize| h == 7;
+        assert!(hover_tick(&mut list, (101, 99), t0 + Duration::from_millis(300), over).is_empty());
+        // Sortie du rectangle de 4 pixels : l'attente repart de là.
+        assert!(
+            hover_tick(&mut list, (110, 100), t0 + Duration::from_millis(390), over).is_empty()
+        );
+        assert!(
+            hover_tick(&mut list, (110, 100), t0 + Duration::from_millis(700), over).is_empty()
+        );
+        assert_eq!(
+            hover_tick(&mut list, (111, 101), t0 + Duration::from_millis(800), over),
+            vec![(7, (111, 101))]
+        );
+        assert!(list.is_empty());
+        let mut list = vec![Hover {
+            hwnd: 8,
+            ms: 400,
+            anchor: (0, 0),
+            since: t0,
+        }];
+        assert!(hover_tick(&mut list, (0, 0), t0 + Duration::from_secs(1), over).is_empty());
+        assert!(list.is_empty());
+    }
 }
