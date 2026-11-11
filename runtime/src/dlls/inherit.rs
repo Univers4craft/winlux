@@ -88,6 +88,19 @@ pub(crate) struct SharedWord {
 unsafe impl Send for SharedWord {}
 unsafe impl Sync for SharedWord {}
 
+/// Donne au fichier `fd` une page réellement allouée. Sur un tmpfs plein
+/// (/dev/shm, XDG_RUNTIME_DIR), ftruncate réussit mais la première écriture
+/// dans la projection lève SIGBUS ; posix_fallocate réserve la page et rend
+/// ENOSPC à la place, que l'appelant traite (#1905).
+pub(crate) fn reserve_page(fd: std::os::fd::RawFd) -> bool {
+    match unsafe { libc::posix_fallocate(fd, 0, 4096) } {
+        0 => true,
+        // Système de fichiers sans fallocate : la taille seule.
+        libc::EOPNOTSUPP | libc::EINVAL => unsafe { libc::ftruncate(fd, 4096) == 0 },
+        _ => false,
+    }
+}
+
 impl SharedWord {
     pub(crate) fn create(initial: bool) -> Option<SharedWord> {
         let fd = unsafe { libc::memfd_create(c"evenement-partage".as_ptr(), libc::MFD_CLOEXEC) };
@@ -95,7 +108,7 @@ impl SharedWord {
             return None;
         }
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        if unsafe { libc::ftruncate(fd.as_raw_fd(), 4096) } != 0 {
+        if !reserve_page(fd.as_raw_fd()) {
             return None;
         }
         let w = SharedWord::map(fd)?;
@@ -103,7 +116,14 @@ impl SharedWord {
         Some(w)
     }
 
+    /// Projette la page partagée de `fd`. Refuse un fichier de moins d'une
+    /// page (tronqué, ou créé à moitié) : écrire au-delà de sa fin lèverait
+    /// SIGBUS au lieu d'une erreur (#1905).
     pub(crate) fn map(fd: OwnedFd) -> Option<SharedWord> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 || st.st_size < 4096 {
+            return None;
+        }
         let p = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -440,6 +460,32 @@ pub(crate) fn adopt() {
 
 #[cfg(test)]
 mod tests {
+    /// #1905 : un fichier tronqué n'est pas projeté, et la page réservée est
+    /// réellement allouée (pas un trou qui lèverait SIGBUS à l'écriture).
+    #[test]
+    fn page_partagee_reservee_et_taille_verifiee() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        unsafe {
+            let fd = libc::memfd_create(c"test-court".as_ptr(), libc::MFD_CLOEXEC);
+            assert!(fd >= 0);
+            let fd = OwnedFd::from_raw_fd(fd);
+            assert_eq!(libc::ftruncate(fd.as_raw_fd(), 100), 0);
+            let dup = OwnedFd::from_raw_fd(libc::dup(fd.as_raw_fd()));
+            assert!(super::SharedWord::map(dup).is_none());
+            assert!(super::reserve_page(fd.as_raw_fd()));
+            let mut st: libc::stat = std::mem::zeroed();
+            assert_eq!(libc::fstat(fd.as_raw_fd(), &mut st), 0);
+            assert!(
+                st.st_size >= 4096 && st.st_blocks >= 8,
+                "{} {}",
+                st.st_size,
+                st.st_blocks
+            );
+            let w = super::SharedWord::map(fd).expect("projection");
+            w.slot(0).store(7, std::sync::atomic::Ordering::Release);
+        }
+    }
+
     use super::*;
 
     #[test]
