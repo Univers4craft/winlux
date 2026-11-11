@@ -175,6 +175,35 @@ pub(crate) fn install_x_error_guard() {
     });
 }
 
+/// Connexions X des contextes GL détruits, gardées ouvertes et resservies.
+/// Fermer la connexion détruit l'écran GLX de Mesa qui lui est attaché, et
+/// avec lui les ressources des textures créées sous ce contexte. Or ces
+/// textures sont partagées : un cadre d'une vue de rendu du périphérique
+/// peut encore tenir le tampon arrière d'une chaîne disparue. Sa
+/// suppression appelait alors une fonction de l'écran détruit (adresse 0)
+/// et le processus GPU de Chromium mourait (#1565).
+static SPARE_DISPLAYS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+unsafe fn open_display(glx: &gl::GlxFunctions) -> *mut gl::XDisplay {
+    let spare = SPARE_DISPLAYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pop();
+    match spare {
+        Some(display) => display as *mut gl::XDisplay,
+        None => (glx.XOpenDisplay)(std::ptr::null()),
+    }
+}
+
+fn keep_display(display: *mut gl::XDisplay) {
+    if !display.is_null() {
+        SPARE_DISPLAYS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(display as usize);
+    }
+}
+
 /// Contexte GLX de la première chaîne d'échange : les contextes de travail
 /// des autres threads partagent ses objets (shaders, tampons, textures).
 static MAIN_CONTEXT: AtomicUsize = AtomicUsize::new(0);
@@ -331,7 +360,7 @@ impl GlContext {
         let g = gl::gl()?;
 
         unsafe {
-            let display = (glx.XOpenDisplay)(std::ptr::null());
+            let display = open_display(glx);
             if display.is_null() {
                 log_error!("dxgi", "impossible d'ouvrir le display X11");
                 return None;
@@ -359,7 +388,7 @@ impl GlContext {
             let vi = (glx.ChooseVisual)(display, screen, attribs.as_ptr());
             if vi.is_null() {
                 log_error!("dxgi", "glXChooseVisual a échoué");
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -369,7 +398,7 @@ impl GlContext {
             let context = (glx.CreateContext)(display, vi, share, 1);
             if context.is_null() {
                 log_error!("dxgi", "glXCreateContext a échoué");
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -378,7 +407,7 @@ impl GlContext {
             let drawable = if hwnd != 0 {
                 crate::dlls::gui::native_window(hwnd).unwrap_or(hwnd as u64)
             } else {
-                (glx.XDefaultRootWindow)(display) as u64
+                (glx.XDefaultRootWindow)(display)
             };
             if hwnd != 0 {
                 crate::dlls::gui::mark_direct3d_window(drawable);
@@ -387,7 +416,7 @@ impl GlContext {
             if (glx.MakeCurrent)(display, drawable, context) == 0 {
                 log_error!("dxgi", "glXMakeCurrent a échoué");
                 (glx.DestroyContext)(display, context);
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -583,10 +612,51 @@ impl GlContext {
         }
         self.width = width;
         self.height = height;
-        if let Some(g) = gl::gl() {
-            unsafe {
-                self.create_backbuffer(g);
-            }
+        let Some(g) = gl::gl() else { return };
+        unsafe {
+            // Les framebuffers ne sont pas partagés entre contextes GL. Celui
+            // du tampon arrière doit naître dans le contexte de la chaîne,
+            // où Present le relit. ResizeBuffers arrive sur un thread où le
+            // contexte courant est celui du périphérique : le framebuffer y
+            // était créé, Present lisait un nom inconnu de son contexte et
+            // l'image ne suivait plus la fenêtre. La suppression de l'ancien
+            // nom touchait en plus un framebuffer du périphérique (#1565).
+            let restore = self.make_own_context_current();
+            self.create_backbuffer(g);
+            self.restore_binding(restore);
+        }
+    }
+
+    /// Rend le contexte de la chaîne courant sur ce thread, s'il ne l'est
+    /// pas déjà. Renvoie la liaison à rétablir ensuite (`None` : rien à
+    /// rétablir). En cas d'échec (contexte courant sur un autre thread),
+    /// le contexte du thread reste en place.
+    unsafe fn make_own_context_current(&self) -> Option<Binding> {
+        let glx = gl::glx()?;
+        let previous = current_binding();
+        if previous.context == self.context as usize && previous.drawable == self.drawable {
+            return None;
+        }
+        if (glx.MakeCurrent)(self.display, self.drawable, self.context) == 0 {
+            log_warn!(
+                "dxgi",
+                "contexte de la chaîne d'échange indisponible sur ce thread pour ResizeBuffers"
+            );
+            return None;
+        }
+        Some(previous)
+    }
+
+    unsafe fn restore_binding(&self, previous: Option<Binding>) {
+        let (Some(glx), Some(previous)) = (gl::glx(), previous) else {
+            return;
+        };
+        if previous.context != 0 {
+            (glx.MakeCurrent)(
+                previous.display as *mut _,
+                previous.drawable,
+                previous.context as gl::GLXContext,
+            );
         }
     }
 }
@@ -597,12 +667,15 @@ impl Drop for GlContext {
         let glx = gl::glx();
         unsafe {
             if let Some(g) = g {
+                // Le framebuffer appartient au contexte de la chaîne (#1565).
+                let restore = self.make_own_context_current();
                 if self.framebuffer != 0 {
                     (g.DeleteFramebuffers)(1, &self.framebuffer);
                 }
                 if self.back_texture != 0 {
                     (g.DeleteTextures)(1, &self.back_texture);
                 }
+                self.restore_binding(restore);
             }
             if let Some(glx) = glx {
                 if !self.context.is_null() {
@@ -612,12 +685,14 @@ impl Drop for GlContext {
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
-                    (glx.MakeCurrent)(self.display, 0, std::ptr::null_mut());
+                    // Ne détacher que notre contexte : celui du thread (le
+                    // périphérique) reste courant.
+                    if current_binding().context == self.context as usize {
+                        (glx.MakeCurrent)(self.display, 0, std::ptr::null_mut());
+                    }
                     (glx.DestroyContext)(self.display, self.context);
                 }
-                if !self.display.is_null() {
-                    (glx.XCloseDisplay)(self.display);
-                }
+                keep_display(self.display);
             }
         }
     }
@@ -2118,6 +2193,142 @@ mod presentation_x11_tests {
             for (x, y) in [(10, 10), (390, 10), (10, 290), (390, 290)] {
                 assert_eq!(pixel(x, y), 0xFF0000, "pixel ({x},{y})");
             }
+        }
+        conn.destroy_window(win).unwrap();
+        conn.sync().unwrap();
+    }
+
+    /// #1565 : le processus GPU de Chromium mourait (appel à 0 dans Mesa)
+    /// en libérant une vue de rendu après la fin d'une chaîne d'échange :
+    /// le cadre de la vue tenait encore le tampon arrière de la chaîne.
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn vue_liberee_apres_la_fin_de_sa_chaine_x11() {
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        unsafe {
+            let device = GlContext::create_for_window(0).expect("contexte du périphérique");
+            let chain = GlContext::create_for_window(0).expect("contexte de la chaîne");
+            assert_ne!(
+                (glx.MakeCurrent)(device.display, device.drawable, device.context),
+                0
+            );
+            // Vue de rendu sur le tampon arrière, dans le contexte du périphérique.
+            let mut fb = 0;
+            (g.GenFramebuffers)(1, &mut fb);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fb);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl::GL_COLOR_ATTACHMENT0,
+                gl::GL_TEXTURE_2D,
+                chain.back_texture,
+                0,
+            );
+            (g.ClearColor)(0.0, 0.0, 1.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            (g.Finish)();
+            drop(chain);
+            assert_eq!(current_binding().context, device.context as usize);
+            (g.DeleteFramebuffers)(1, &fb);
+            (g.Finish)();
+        }
+    }
+
+    /// #1565 : ResizeBuffers arrive avec le contexte du périphérique courant
+    /// sur le thread. Le nouveau tampon arrière, rempli par ce contexte, doit
+    /// quand même être présenté par le contexte de la chaîne.
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn tampon_redimensionne_sous_un_autre_contexte_reste_presente_x11() {
+        let (conn, screen) = x11rb::connect(None).expect("X11");
+        let root = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            root.root_depth,
+            win,
+            root.root,
+            0,
+            0,
+            200,
+            100,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+            root.root_visual,
+            &CreateWindowAux::new().background_pixel(root.black_pixel),
+        )
+        .unwrap();
+        conn.map_window(win).unwrap();
+        conn.sync().unwrap();
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        let pixel = |x: i16, y: i16| -> u32 {
+            let img = conn
+                .get_image(ImageFormat::Z_PIXMAP, win, x, y, 1, 1, !0)
+                .unwrap()
+                .reply()
+                .unwrap();
+            u32::from_le_bytes([img.data[0], img.data[1], img.data[2], 0])
+        };
+        // Remplit la texture `tex` d'une couleur, avec le contexte courant
+        // et un framebuffer à lui (comme une vue de rendu D3D11).
+        let fill = |tex: gl::GLuint, r: f32, gr: f32| unsafe {
+            let mut fb = 0;
+            (g.GenFramebuffers)(1, &mut fb);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fb);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl::GL_COLOR_ATTACHMENT0,
+                gl::GL_TEXTURE_2D,
+                tex,
+                0,
+            );
+            (g.ClearColor)(r, gr, 0.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            (g.DeleteFramebuffers)(1, &fb);
+            (g.Finish)();
+        };
+        unsafe {
+            let mut chain = GlContext::create_for_window(0).expect("contexte de la chaîne");
+            chain.drawable = u64::from(win);
+            assert_ne!(
+                (glx.MakeCurrent)(chain.display, chain.drawable, chain.context),
+                0
+            );
+            chain.resize(200, 100);
+            // Le contexte du périphérique, partagé, courant sur le thread.
+            let device = GlContext::create_for_window(0).expect("contexte du périphérique");
+            assert_ne!(
+                (glx.MakeCurrent)(device.display, device.drawable, device.context),
+                0
+            );
+            fill(chain.back_texture, 1.0, 0.0);
+            chain.present();
+            (g.Finish)();
+            assert_eq!(pixel(10, 10), 0xFF0000, "avant ResizeBuffers");
+            assert_eq!(current_binding().context, device.context as usize);
+            // ResizeBuffers sous le contexte du périphérique.
+            chain.resize(400, 300);
+            assert_eq!(
+                current_binding().context,
+                device.context as usize,
+                "le contexte du thread est rétabli"
+            );
+            fill(chain.back_texture, 0.0, 1.0);
+            chain.present();
+            (g.Finish)();
+            chain.present();
+            (g.Finish)();
+            for (x, y) in [(10, 10), (190, 10), (10, 90), (190, 90)] {
+                assert_eq!(pixel(x, y), 0x00FF00, "pixel ({x},{y}) après ResizeBuffers");
+            }
+            drop(chain);
+            assert_eq!(
+                current_binding().context,
+                device.context as usize,
+                "la fin de la chaîne laisse le contexte du thread"
+            );
         }
         conn.destroy_window(win).unwrap();
         conn.sync().unwrap();
