@@ -41,6 +41,10 @@ MAX_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 THUMB_WIDTH = 480
 OCR_DELAI = 90
+# Un artefact captures-ui sans capture (job « Captures d'écran » tombé avant
+# la capture) pèse ~1,5 Ko, un vrai ~5 Mo : les vides ne prennent pas la place
+# des exécutions qui ont vraiment des images (#1912).
+MIN_ARTEFACT = 200_000
 # Mots refusés à la lecture OCR. « Windows » seul reste permis : il décrit les
 # raccourcis et les programmes, comme le texte du site.
 INTERDIT = re.compile(
@@ -86,7 +90,8 @@ def telecharger(depot, travail, nombre):
             if head != depot or run.get("event") not in ("push", "pull_request", "workflow_dispatch"):
                 continue
             arts = json.loads(gh("api", f"repos/{depot}/actions/runs/{run['id']}/artifacts?name=captures-ui"))
-            if not any(a["name"] == "captures-ui" and not a["expired"] for a in arts.get("artifacts", [])):
+            if not any(a["name"] == "captures-ui" and not a["expired"]
+                       and a.get("size_in_bytes", 0) >= MIN_ARTEFACT for a in arts.get("artifacts", [])):
                 continue
             cible = travail / str(run["id"])
             if cible.exists():

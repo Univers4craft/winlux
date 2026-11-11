@@ -27,3 +27,6 @@ ok("continue-on-error" not in _etape and "galerie du suivi vide" in _etape and "
 ok("suivi-galerie-precedente.py" in _etape
    and "PERMIS" in (SCRIPTS / "suivi-galerie-precedente.py").read_text(encoding="utf-8"),
    "Site : sans OCR, la dernière galerie publiée est reprise, rien de nouveau publié (#1871)")
+ok("MIN_ARTEFACT" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and 'size_in_bytes", 0) >= MIN_ARTEFACT' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : les artefacts de captures vides ne chassent pas les vraies captures (#1912)")
