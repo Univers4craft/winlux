@@ -32,6 +32,8 @@ mod custom;
 
 const D2DERR_EFFECT_IS_NOT_REGISTERED: i32 = 0x8899_0028u32 as i32;
 const D2DERR_INSUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
+/// d2derr.h de mingw-w64.
+const D2DERR_UNSUPPORTED_OPERATION: i32 = 0x8899_0003u32 as i32;
 
 // --- Identifiants ----------------------------------------------------------------
 
@@ -838,7 +840,9 @@ struct D2Device {
 
 impl Drop for D2Device {
     fn drop(&mut self) {
-        unsafe { com_release(self.dxgi) };
+        if !self.dxgi.is_null() {
+            unsafe { com_release(self.dxgi) };
+        }
     }
 }
 
@@ -895,6 +899,11 @@ unsafe extern "win64" fn device_get_dxgi(this: *mut DeviceObj, out: *mut *mut c_
         return E_POINTER;
     }
     let d = Com::get(this).data.dxgi;
+    if d.is_null() {
+        // Appareil d'une cible 1.0 : pas d'appareil DXGI derrière.
+        *out = std::ptr::null_mut();
+        return D2DERR_UNSUPPORTED_OPERATION;
+    }
     com_add_ref(d);
     *out = d;
     S_OK
@@ -1966,14 +1975,23 @@ unsafe extern "win64" fn dc_image_world_bounds(
 
 // --- Contexte d'appareil : cible, réglages --------------------------------------------
 
+/// GetDevice : l'appareil parent. Une cible 1.0 (fenêtre, HDC, WIC) vue en
+/// contexte d'appareil n'en a pas : un appareil sans DXGI, rattaché à la
+/// fabrique de la cible, lui est créé à la première demande puis rendu à
+/// chaque appel (#1554, canevas de Paint.NET).
 unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_void) {
     if out.is_null() {
         return;
     }
-    let d = target(this).ext.device;
-    if !d.is_null() {
-        com_add_ref(d);
+    let mut t = target(this);
+    if t.ext.device.is_null() {
+        let dev = D2Device {
+            dxgi: std::ptr::null_mut(),
+        };
+        t.ext.device = new_res(Com::get(this).factory, DEVICE_VT.ptr(), dev).cast();
     }
+    let d = t.ext.device;
+    com_add_ref(d);
     *out = d;
 }
 
