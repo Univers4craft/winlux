@@ -301,6 +301,11 @@ fi
 # Raccourcis du Bureau approuvés en arrière-plan : seule leur ouverture
 # en dépend, pas l'affichage du bureau.
 /usr/bin/winlux-trust-shortcuts </dev/null >/run/winlux/trust-shortcuts.log 2>&1 &
+# Trousseau de secrets d'un compte sans mot de passe ouvert sans question
+# (#1488) : sans lui, gcr-prompter demandait en boucle « Default Keyring ».
+if test -x /usr/bin/winlux-keyring && /usr/bin/winlux-lock status 2>/dev/null | grep -qx 'lock_password=0'; then
+    printf '' | /usr/bin/winlux-keyring unlock >/run/winlux/keyring.log 2>&1 || true
+fi
 # Programmes « au démarrage » : lancés après le bureau, comme sous Windows.
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1 &
 # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
