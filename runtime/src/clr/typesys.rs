@@ -234,13 +234,14 @@ impl Interpreter {
     /// classe garde son premier mot pour le runtime), chacun sur un
     /// emplacement multiple de 8 octets ; un type valeur est rangé en place.
     pub fn ensure_layout(&self, id: TypeId) {
-        let Some((def, args, parent, is_value)) = types::with_types(|reg| {
+        let Some((def, args, parent, is_value, is_delegate_root)) = types::with_types(|reg| {
             let t = reg.get_mut(id)?;
             if t.laid_out {
                 return None;
             }
             t.laid_out = true;
-            Some((t.def, t.type_args.clone(), t.parent, t.is_value))
+            let root = t.namespace == "System" && t.name == "Delegate";
+            Some((t.def, t.type_args.clone(), t.parent, t.is_value, root))
         }) else {
             return;
         };
@@ -323,6 +324,12 @@ impl Interpreter {
         }
         let size = if is_value {
             end.max(class_size as usize).div_ceil(max_align).max(1) * max_align
+        } else if is_delegate_root {
+            // Le moteur range cible, méthode et liste d'invocation dans tout
+            // délégué (delegates.rs) : sans cette réserve, un délégué de notre
+            // mscorlib (Func<T>…) débordait de son objet de 16 octets et
+            // corrompait le tas (#1702).
+            offset.max(base).max(super::delegates::OBJECT_SIZE)
         } else {
             offset.max(base)
         };
