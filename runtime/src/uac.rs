@@ -14,6 +14,13 @@
 //! `C:\Program Files` et `C:\ProgramData` sont dans le profil, donc
 //! inscriptibles sans root.
 //!
+//! Compte administrateur : l'élévation est accordée **sans question** (règle
+//! de damien, #1739 : un double-clic lance l'application). La signature de
+//! l'éditeur et l'élévation sont consignées au journal. Compte standard
+//! (enfant, invité) : la fenêtre demande le mot de passe d'un
+//! administrateur, comme sous Windows ; c'est un contrôle d'accès entre
+//! comptes, pas une question de confort.
+//!
 //! `WINLUX_UAC=allow|deny` force la réponse (tests, sessions sans écran).
 
 use std::path::Path;
@@ -81,11 +88,23 @@ pub enum Answer {
     Unavailable,
 }
 
-fn ask(exe: &Path) -> Answer {
+/// Faut-il afficher la fenêtre ? Seulement pour un compte qui ne peut pas
+/// devenir administrateur par lui-même (#1739).
+pub fn shows_dialog(admin_capable: bool) -> bool {
+    !admin_capable
+}
+
+fn ask(exe: &Path, admin_capable: bool) -> Answer {
     match std::env::var("WINLUX_UAC").as_deref() {
         Ok("allow") => return Answer::Allowed,
         Ok("deny") => return Answer::Refused,
         _ => {}
+    }
+    use crate::setup::appx_signature::{examine_pe, Signature};
+    let signature = examine_pe(exe);
+    crate::log_info!("uac", "signature de {} : {signature:?}", exe.display());
+    if !shows_dialog(admin_capable) {
+        return Answer::Allowed;
     }
     let has_display = std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
         || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty());
@@ -103,9 +122,6 @@ fn ask(exe: &Path) -> Answer {
         .arg(crate::paths::to_windows(exe));
     // Éditeur vérifié par sa signature Authenticode (#1382) ; sinon la
     // fenêtre dit « Éditeur : inconnu », comme Windows.
-    use crate::setup::appx_signature::{examine_pe, Signature};
-    let signature = examine_pe(exe);
-    crate::log_info!("uac", "signature de {} : {signature:?}", exe.display());
     if let Signature::Verified { signer } = signature {
         cmd.arg("--publisher").arg(signer);
     }
@@ -126,15 +142,16 @@ pub fn check_launch(base: usize, exe: &Path) {
     // `runas` (ShellExecuteEx) : le parent pose WINLUX_ELEVATE=1.
     let forced = std::env::var("WINLUX_ELEVATE").is_ok_and(|v| v == "1");
     std::env::remove_var("WINLUX_ELEVATE");
+    let admin_capable = crate::dlls::security::admin_capable();
     if !needs_prompt(
         level,
         forced,
         crate::dlls::security::elevated(),
-        crate::dlls::security::admin_capable(),
+        admin_capable,
     ) {
         return;
     }
-    match ask(exe) {
+    match ask(exe, admin_capable) {
         Answer::Allowed => {
             crate::log_info!("uac", "élévation accordée pour {}", exe.display());
             std::env::set_var("WINLUX_ELEVATED", "1");
@@ -196,5 +213,13 @@ mod tests {
         assert!(needs_prompt(AsInvoker, true, false, false), "runas");
         assert!(needs_prompt(HighestAvailable, false, false, true));
         assert!(!needs_prompt(HighestAvailable, false, false, false));
+    }
+
+    /// Un administrateur lance sans question ; un compte standard doit
+    /// donner le mot de passe d'un administrateur (#1739).
+    #[test]
+    fn fenetre_seulement_pour_un_compte_standard() {
+        assert!(!shows_dialog(true));
+        assert!(shows_dialog(false));
     }
 }
