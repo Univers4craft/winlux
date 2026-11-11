@@ -100,6 +100,15 @@ jobs:
           key: suivi-ocr-${{ github.run_id }}
           restore-keys: suivi-ocr-
 
+      # Les .deb de l'OCR sont gardés en cache : une panne des miroirs Ubuntu
+      # n'empêche plus de les installer (#1871).
+      - name: Paquets de l'OCR (suivi des travaux)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/apt-suivi
+          key: apt-suivi-${{ runner.os }}-v1
+
       # Sans galerie complète, rien n'est publié : le site déjà en ligne reste
       # tel quel jusqu'à la prochaine exécution (#1871). Avant, un miroir Ubuntu
       # injoignable faisait publier un site sans data.json, donc une galerie vide.
@@ -109,12 +118,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           paquets="tesseract-ocr tesseract-ocr-fra python3-pil"
+          debs="$RUNNER_TEMP/apt-suivi"
+          mkdir -p "$debs/partial"
           for essai in 1 2 3; do
-            sudo apt-get install -y -q $paquets && break
+            sudo apt-get install -y -q -o Dir::Cache::Archives="$debs" $paquets && break
             echo "apt-get : essai $essai échoué, nouvel essai dans 30 s"
             sleep 30
             sudo apt-get update -q || true
           done
+          sudo chmod -R a+rX "$debs"
           command -v tesseract >/dev/null && /usr/bin/python3 -c "import PIL" ||
             { echo "::error::tesseract ou Pillow absent : publication annulée, le site en ligne est conservé (#1871)"; exit 1; }
           /usr/bin/python3 -I scripts/suivi-travaux.py telecharger "$GITHUB_REPOSITORY" "$RUNNER_TEMP/suivi" --nombre 30
