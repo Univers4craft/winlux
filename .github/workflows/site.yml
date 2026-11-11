@@ -3,6 +3,9 @@ name: Site web
 # Construit, teste et publie le site de Winlux (site/) sur GitHub Pages :
 # https://univers4craft.github.io/winlux/
 # Le wiki technique reste publié par wiki.yml ; le site renvoie vers lui.
+# Après chaque exécution de la CI (master ou PR de ce dépôt), le site est
+# republié avec la galerie « Suivi des travaux » (suivi.html, #1779) : les
+# captures des 30 dernières exécutions, filtrées par scripts/suivi-travaux.py.
 on:
   push:
     branches: [master]
@@ -20,6 +23,9 @@ on:
       - scripts/test-site.py
       - scripts/test-site-render.js
       - .github/workflows/site.yml
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -33,38 +39,74 @@ jobs:
   tester:
     name: Construire et tester le site
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - uses: actions/setup-node@v6
+        if: github.event_name != 'workflow_run'
         with:
           node-version: 22
 
       - name: Installer Chromium pour le test de rendu
+        if: github.event_name != 'workflow_run'
         run: |
           npm install --no-save --no-audit --no-fund playwright@1.63.0
           npx playwright install --with-deps chromium
 
       - name: Construire et tester (liens, quatre langues, mobile et grand écran)
+        if: github.event_name != 'workflow_run'
         env:
           WINLUX_SITE_RENDER: required
           WINLUX_SITE_SHOTS: build/site-captures
         run: python3 -B scripts/test-site.py --render --keep build/site
 
       - name: Vérifier que les liens externes répondent
+        if: github.event_name != 'workflow_run'
         continue-on-error: true
         run: python3 -B scripts/test-site.py --online
 
       - name: Conserver les captures du rendu
-        if: always()
+        if: always() && github.event_name != 'workflow_run'
         uses: actions/upload-artifact@v4
         with:
           name: site-captures
           path: build/site-captures
           if-no-files-found: ignore
+
+      # Après une exécution de la CI, le site de master (déjà testé) est
+      # reconstruit tel quel pour accueillir les nouvelles captures.
+      - name: Construire le site (après la CI)
+        if: github.event_name == 'workflow_run'
+        run: python3 -B site/build.py build/site
+
+      # Galerie du suivi des travaux (#1779) : liste blanche site/suivi-captures.tsv,
+      # PR de forks ignorées, OCR obligatoire contre les marques Microsoft, images
+      # ré-encodées. Les artefacts ne sont que lus : aucun code d'une PR ne tourne ici.
+      - name: Verdicts OCR déjà rendus (suivi des travaux)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/suivi-ocr.json
+          key: suivi-ocr-${{ github.run_id }}
+          restore-keys: suivi-ocr-
+
+      - name: Suivi des travaux (captures de la CI)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get install -y -q tesseract-ocr tesseract-ocr-fra python3-pil ||
+            { sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr tesseract-ocr-fra python3-pil; }
+          /usr/bin/python3 -I scripts/suivi-travaux.py telecharger "$GITHUB_REPOSITORY" "$RUNNER_TEMP/suivi" --nombre 30
+          /usr/bin/python3 -I scripts/suivi-travaux.py construire "$RUNNER_TEMP/suivi" build/site/suivi --exiger-ocr \
+            --cache "$RUNNER_TEMP/suivi-ocr.json"
 
       - name: Préparer la publication
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'

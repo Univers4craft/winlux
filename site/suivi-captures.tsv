@@ -1,0 +1,80 @@
+# Captures publiées sur la page « Suivi des travaux » du site (#1779).
+#
+# LISTE BLANCHE : seule une capture dont le nom (sans .png) figure ici, à
+# l'identique, est publiée ; toutes les autres restent dans l'artefact privé
+# de la CI. Chaque image retenue passe en plus une lecture OCR qui la refuse si
+# une marque Microsoft ou un nom d'hôte du runner (Azure, Hyper-V…) y apparaît.
+#
+# Ne jamais ajouter : une capture d'un programme d'éditeur (seuls nos écrans
+# et nos programmes de test compilés depuis nos sources) ; Bienvenue et
+# Paramètres › À propos (mention de la marque) ; les pages qui décrivent la
+# machine ou ses logiciels, car le runner GitHub est une VM Azure : Paramètres
+# 00 Système Linux, 01 Gérer les applications, 10 Programmes Windows,
+# 11 Navigateurs, 19 Processeur, 24 Graphismes, 34 Matériel et pilotes,
+# 39 Applications installées, Outils › Applications et Outils › Tâches.
+# scripts/campagne.d/1779-suivi-des-travaux.py le vérifie.
+#
+# nom<TAB>test qui la produit<TAB>légende fr<TAB>en<TAB>de<TAB>es
+parametres-02	capture-ui.py (Capturer les écrans)	Paramètres › Réseau	Settings › Network	Einstellungen › Netzwerk	Configuración › Red
+parametres-03	capture-ui.py (Capturer les écrans)	Paramètres › Son	Settings › Sound	Einstellungen › Sound	Configuración › Sonido
+parametres-04	capture-ui.py (Capturer les écrans)	Paramètres › Clavier et souris	Settings › Keyboard & mouse	Einstellungen › Tastatur und Maus	Configuración › Teclado y mouse
+parametres-05	capture-ui.py (Capturer les écrans)	Paramètres › Souris	Settings › Mouse	Einstellungen › Maus	Configuración › Mouse
+parametres-06	capture-ui.py (Capturer les écrans)	Paramètres › Personnalisation	Settings › Personalization	Einstellungen › Personalisierung	Configuración › Personalización
+parametres-07	capture-ui.py (Capturer les écrans)	Paramètres › Mise à jour OS	Settings › OS update	Einstellungen › OS-Update	Configuración › Actualización del SO
+parametres-08	capture-ui.py (Capturer les écrans)	Paramètres › Écran	Settings › Display	Einstellungen › Bildschirm	Configuración › Pantalla
+parametres-12	capture-ui.py (Capturer les écrans)	Paramètres › Accessibilité	Settings › Accessibility	Einstellungen › Barrierefreiheit	Configuración › Accesibilidad
+parametres-13	capture-ui.py (Capturer les écrans)	Paramètres › Effets visuels	Settings › Visual effects	Einstellungen › Visuelle Effekte	Configuración › Efectos visuales
+parametres-14	capture-ui.py (Capturer les écrans)	Paramètres › Localisation	Settings › Language & region	Einstellungen › Sprache und Region	Configuración › Idioma y región
+parametres-15	capture-ui.py (Capturer les écrans)	Paramètres › Gestionnaire de fichiers	Settings › File manager	Einstellungen › Dateimanager	Configuración › Administrador de archivos
+parametres-16	capture-ui.py (Capturer les écrans)	Paramètres › Son	Settings › Sound	Einstellungen › Sound	Configuración › Sonido
+parametres-17	capture-ui.py (Capturer les écrans)	Paramètres › Mise à jour application	Settings › Application update	Einstellungen › Anwendungsupdate	Configuración › Actualización de aplicaciones
+parametres-18	capture-ui.py (Capturer les écrans)	Paramètres › Confidentialité et sécurité	Settings › Privacy & security	Einstellungen › Datenschutz und Sicherheit	Configuración › Privacidad y seguridad
+parametres-20	capture-ui.py (Capturer les écrans)	Paramètres › Lecteurs réseau	Settings › Network drives	Einstellungen › Netzlaufwerke	Configuración › Unidades de red
+parametres-21	capture-ui.py (Capturer les écrans)	Paramètres › Fond d’écran et couleurs	Settings › Background & colors	Einstellungen › Hintergrund und Farben	Configuración › Fondo y colores
+parametres-22	capture-ui.py (Capturer les écrans)	Paramètres › Bluetooth	Settings › Bluetooth	Einstellungen › Bluetooth	Configuración › Bluetooth
+parametres-23	capture-ui.py (Capturer les écrans)	Paramètres › Alimentation et batterie	Settings › Power & battery	Einstellungen › Energie und Akku	Configuración › Energía y batería
+parametres-25	capture-ui.py (Capturer les écrans)	Paramètres › Signaler un problème	Settings › Report a problem	Einstellungen › Problem melden	Configuración › Informar de un problema
+parametres-26	capture-ui.py (Capturer les écrans)	Paramètres › Imprimantes et scanners	Settings › Printers and scanners	Einstellungen › Drucker und Scanner	Configuración › Impresoras y escáneres
+parametres-27	capture-ui.py (Capturer les écrans)	Paramètres › Bureau à distance	Settings › Remote Desktop	Einstellungen › Remotedesktop	Configuración › Escritorio remoto
+parametres-28	capture-ui.py (Capturer les écrans)	Paramètres › Partage et transfert	Settings › Sharing and transfer	Einstellungen › Freigabe und Übertragung	Configuración › Compartir y transferir
+parametres-29	capture-ui.py (Capturer les écrans)	Paramètres › Jeux	Settings › Games	Einstellungen › Spiele	Configuración › Juegos
+parametres-30	capture-ui.py (Capturer les écrans)	Paramètres › Assistant IA	Settings › AI assistant	Einstellungen › KI-Assistent	Configuración › Asistente de IA
+parametres-31	capture-ui.py (Capturer les écrans)	Paramètres › Récupération	Settings › Recovery	Einstellungen › Wiederherstellung	Configuración › Recuperación
+parametres-32	capture-ui.py (Capturer les écrans)	Paramètres › Presse-papiers	Settings › Clipboard	Einstellungen › Zwischenablage	Configuración › Portapapeles
+parametres-33	capture-ui.py (Capturer les écrans)	Paramètres › Comptes	Settings › Accounts	Einstellungen › Konten	Configuración › Cuentas
+parametres-35	capture-ui.py (Capturer les écrans)	Paramètres › Wi-Fi	Settings › Wi-Fi	Einstellungen › WLAN	Configuración › Wi-Fi
+parametres-36	capture-ui.py (Capturer les écrans)	Paramètres › Certificats	Settings › Certificates	Einstellungen › Zertifikate	Configuración › Certificados
+parametres-37	capture-ui.py (Capturer les écrans)	Paramètres › Appareils mobiles	Settings › Mobile devices	Einstellungen › Mobile Geräte	Configuración › Dispositivos móviles
+parametres-38	capture-ui.py (Capturer les écrans)	Paramètres › Sauvegarde	Settings › Backup	Einstellungen › Sicherung	Configuración › Copia de seguridad
+parametres-40	capture-ui.py (Capturer les écrans)	Paramètres › VPN	Settings › VPN	Einstellungen › VPN	Configuración › VPN
+parametres-41	capture-ui.py (Capturer les écrans)	Paramètres › Point d’accès sans fil mobile	Settings › Mobile hotspot	Einstellungen › Mobiler Hotspot	Configuración › Zona con cobertura inalámbrica móvil
+parametres-42	capture-ui.py (Capturer les écrans)	Paramètres › Contrôle parental	Settings › Parental controls	Einstellungen › Jugendschutz	Configuración › Control parental
+menu-demarrer	capture-ui.py (Capturer les écrans)	Menu Démarrer, thème sombre	Start menu, dark theme	Startmenü, dunkles Design	Menú Inicio, tema oscuro
+menu-demarrer-clair	capture-ui.py (Capturer les écrans)	Menu Démarrer, thème clair	Start menu, light theme	Startmenü, helles Design	Menú Inicio, tema claro
+popup-volume	capture-ui.py (Capturer les écrans)	Volume de la barre des tâches	Taskbar volume	Lautstärke der Taskleiste	Volumen de la barra de tareas
+popup-power	capture-ui.py (Capturer les écrans)	Menu d'alimentation	Power menu	Energiemenü	Menú de energía
+popup-calendar	capture-ui.py (Capturer les écrans)	Notifications et calendrier	Notifications and calendar	Benachrichtigungen und Kalender	Notificaciones y calendario
+popup-quick	capture-ui.py (Capturer les écrans)	Réglages rapides	Quick settings	Schnelleinstellungen	Configuración rápida
+widgets	capture-ui.py (Capturer les écrans)	Volet de widgets	Widgets panel	Widget-Bereich	Panel de widgets
+outils-quick	capture-ui.py (Capturer les écrans)	Outils système › Accès rapide	System tools › Quick access	Systemtools › Schnellzugriff	Herramientas del sistema › Acceso rápido
+outils-notifications	capture-ui.py (Capturer les écrans)	Outils système › Notifications	System tools › Notifications	Systemtools › Benachrichtigungen	Herramientas del sistema › Notificaciones
+outils-appearance	capture-ui.py (Capturer les écrans)	Outils système › Apparence	System tools › Appearance	Systemtools › Darstellung	Herramientas del sistema › Apariencia
+outils-files	capture-ui.py (Capturer les écrans)	Outils système › Fichiers	System tools › Files	Systemtools › Dateien	Herramientas del sistema › Archivos
+outils-recovery	capture-ui.py (Capturer les écrans)	Outils système › Récupération	System tools › Recovery	Systemtools › Wiederherstellung	Herramientas del sistema › Recuperación
+bureau-pe	capture-ui.py (Capturer les écrans)	Bureau du shell Winlux (programme de test gui_demo)	Winlux shell desktop (gui_demo test program)	Winlux-Shell-Desktop (Testprogramm gui_demo)	Escritorio del shell de Winlux (programa de prueba gui_demo)
+appli-explorer	capture-ui.py (Capturer les écrans)	Explorateur de fichiers Winlux	Winlux file explorer	Winlux-Datei-Explorer	Explorador de archivos de Winlux
+appli-store	capture-ui.py (Capturer les écrans)	Store Winlux	Winlux Store	Winlux Store	Tienda de Winlux
+appli-fonts	capture-ui.py (Capturer les écrans)	Polices	Fonts	Schriftarten	Fuentes
+appli-programs	capture-ui.py (Capturer les écrans)	Programmes et fonctionnalités	Programs and features	Programme und Features	Programas y características
+appli-taskschd	capture-ui.py (Capturer les écrans)	Planificateur de tâches	Task scheduler	Aufgabenplanung	Programador de tareas
+appli-firewall	capture-ui.py (Capturer les écrans)	Pare-feu	Firewall	Firewall	Cortafuegos
+resolution-1080p-start	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Menu Démarrer en 1080p	Start menu at 1080p	Startmenü in 1080p	Menú Inicio en 1080p
+resolution-1080p-quick	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Réglages rapides en 1080p	Quick settings at 1080p	Schnelleinstellungen in 1080p	Configuración rápida en 1080p
+resolution-1080p-settings	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Paramètres en 1080p	Settings at 1080p	Einstellungen in 1080p	Configuración en 1080p
+resolution-1440p-start	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Menu Démarrer en 1440p	Start menu at 1440p	Startmenü in 1440p	Menú Inicio en 1440p
+resolution-1440p-quick	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Réglages rapides en 1440p	Quick settings at 1440p	Schnelleinstellungen in 1440p	Configuración rápida en 1440p
+resolution-1440p-settings	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Paramètres en 1440p	Settings at 1440p	Einstellungen in 1440p	Configuración en 1440p
+resolution-2160p-start	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Menu Démarrer en 4K	Start menu at 4K	Startmenü in 4K	Menú Inicio en 4K
+resolution-2160p-quick	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Réglages rapides en 4K	Quick settings at 4K	Schnelleinstellungen in 4K	Configuración rápida en 4K
+resolution-2160p-settings	test-resolutions.py (Bureau en 1080p, 1440p et 4K)	Paramètres en 4K	Settings at 4K	Einstellungen in 4K	Configuración en 4K
+jeux-bibliotheque	test-games.py (Fenêtre Jeux)	Application Jeux, bibliothèque	Games app, library	Spiele-App, Bibliothek	Aplicación Juegos, biblioteca

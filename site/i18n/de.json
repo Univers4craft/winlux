@@ -39,5 +39,12 @@
   "footer_privacy": "Datenschutz",
   "footer_position": "Rechtliche Position",
   "footer_disclaimer": "Winlux ist unabhängige freie Software. Es ist weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke ihres Inhabers und wird hier nur genannt, um die Kompatibilität mit `.exe`-Programmen zu beschreiben.",
-  "not_found": "Seite nicht gefunden: zurück zur Startseite"
+  "not_found": "Seite nicht gefunden: zurück zur Startseite",
+  "footer_suivi": "Arbeitsfortschritt",
+  "suivi_empty": "Noch keine Bildschirmfotos veröffentlicht: Die Galerie füllt sich nach dem nächsten CI-Lauf.",
+  "suivi_loading": "Bildschirmfotos werden geladen…",
+  "suivi_run": "Lauf",
+  "suivi_pr": "PR",
+  "suivi_test": "Test",
+  "suivi_failed": "CI fehlgeschlagen"
 }

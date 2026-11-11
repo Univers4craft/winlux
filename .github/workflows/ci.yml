@@ -796,14 +796,6 @@ jobs:
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures
 
-      - name: Conserver les captures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: captures-ui
-          path: build/captures
-          retention-days: 30
-
       - name: Récupérer les captures de la dernière version verte de master
         if: always()
         env:
@@ -826,10 +818,31 @@ jobs:
           /usr/bin/python3 -B scripts/compare-captures.py build/captures-ref build/captures build/captures-diff
           cat build/captures-diff/rapport.md >> "$GITHUB_STEP_SUMMARY"
 
+      # Une page index.html dans chaque artefact : on décompresse, on l'ouvre,
+      # toutes les captures du commit y sont, avec le pourcentage changé (#1779).
+      # sh scripts/telecharger-captures.sh rapatrie plusieurs exécutions d'un coup.
+      - name: Page index.html des captures
+        if: always()
+        run: |
+          mkdir -p build/captures build/captures-diff
+          /usr/bin/python3 -I scripts/index-captures.py build/captures --rapport build/captures-diff/rapport.json \
+            --titre "Captures d'écran Winlux ${GITHUB_SHA::7}"
+          /usr/bin/python3 -I scripts/index-captures.py build/captures-diff --rapport build/captures-diff/rapport.json \
+            --titre "Pixels changés ${GITHUB_SHA::7}"
+
+      # 90 jours, le maximum d'un dépôt public, où le stockage est gratuit (#1779).
+      - name: Conserver les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui
+          path: build/captures
+          retention-days: 90
+
       - name: Conserver les différences
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: captures-ui-diff
           path: build/captures-diff
-          retention-days: 30
+          retention-days: 90
