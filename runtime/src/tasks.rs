@@ -751,8 +751,17 @@ fn as_account(cmd: &mut Command, uid: u32) -> Result<(), String> {
         cmd.env("XDG_RUNTIME_DIR", runtime);
     }
     let (gid, groups) = (acc.gid, acc.groups);
+    // Dossier de travail : Rust fait son chdir avant les closures pre_exec,
+    // donc encore en root. On part de « / » et on entre dans le dossier de
+    // la tâche après setuid, avec les droits du compte (revue de #1864).
+    let workdir = cmd
+        .get_current_dir()
+        .map(|d| std::ffi::CString::new(d.as_os_str().as_encoded_bytes().to_vec()))
+        .transpose()
+        .map_err(|_| "dossier de travail illisible".to_string())?;
+    cmd.current_dir("/");
     // SAFETY : seuls des appels système sûrs après fork (setgroups,
-    // setgid, setuid), sur des données préparées avant.
+    // setgid, setuid, chdir), sur des données préparées avant.
     unsafe {
         cmd.pre_exec(move || {
             if libc::setgroups(groups.len(), groups.as_ptr()) != 0
@@ -760,6 +769,11 @@ fn as_account(cmd: &mut Command, uid: u32) -> Result<(), String> {
                 || libc::setuid(uid) != 0
             {
                 return Err(std::io::Error::last_os_error());
+            }
+            if let Some(dir) = &workdir {
+                if libc::chdir(dir.as_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             Ok(())
         });
