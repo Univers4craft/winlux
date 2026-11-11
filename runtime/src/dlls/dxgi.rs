@@ -140,7 +140,7 @@ pub(crate) struct DxgiSwapChainDesc {
 
 /// Garde-fou : par défaut Xlib termine le processus sur une erreur X
 /// (visuel incompatible, fenêtre détruite…). On la journalise à la place,
-/// et l'appel GLX concerné échoue proprement.
+/// et l'appel GLX, Xft ou cairo concerné échoue proprement.
 pub(crate) fn install_x_error_guard() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
@@ -153,7 +153,7 @@ pub(crate) fn install_x_error_guard() {
             // minor_code à 32, 33 et 34.
             let resource = std::ptr::read_unaligned(ev.add(16) as *const u64);
             log_warn!(
-                "dxgi",
+                "x11",
                 "erreur X11 ignorée (code {}, requête {}.{}, ressource {:#x})",
                 *ev.add(32),
                 *ev.add(33),
