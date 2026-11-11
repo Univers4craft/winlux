@@ -339,6 +339,11 @@ pub unsafe extern "win64" fn SetFileCompletionNotificationModes(h: usize, flags:
     if crate::dlls::ws2_32::set_completion_modes(h, flags) {
         return 1;
     }
+    // \Device\Afd : mio y pose FILE_SKIP_SET_EVENT_ON_HANDLE ; les
+    // sondages ne signalent de toute façon pas le handle (#1766).
+    if crate::dlls::afd::is_afd(h) {
+        return 1;
+    }
     crate::process::set_last_error(1);
     0
 }

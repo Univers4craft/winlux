@@ -974,6 +974,8 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
     // Les opérations en cours se terminent en WSA_OPERATION_ABORTED, leur
     // paquet parti, avant que le numéro de socket ne puisse resservir.
     overlapped::close(s);
+    // Sondages AFD de mio qui la surveillent : AFD_POLL_LOCAL_CLOSE (#1766).
+    crate::dlls::afd::socket_closed(s);
     let r = unsafe { libc::close(s as i32) };
     if r < 0 {
         set_error(last_error());

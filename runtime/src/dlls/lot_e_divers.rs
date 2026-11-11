@@ -1473,24 +1473,6 @@ extern "win64" fn LsaLogonUser() -> i32 {
     0xC000_00BBu32 as i32 // STATUS_NOT_SUPPORTED
 }
 
-/// WTHelper* : WinVerifyTrust de Winlux ne garde pas de données d'état
-/// (hWVTStateData reste nul), donc ni signataire ni certificat à rendre ;
-/// les appelants testent NULL.
-extern "win64" fn WTHelperProvDataFromStateData(_state: usize) -> usize {
-    0
-}
-extern "win64" fn WTHelperGetProvSignerFromChain(
-    _data: usize,
-    _i: u32,
-    _counter: i32,
-    _j: u32,
-) -> usize {
-    0
-}
-extern "win64" fn WTHelperGetProvCertFromChain(_signer: usize, _i: u32) -> usize {
-    0
-}
-
 fn cef_exports() -> Vec<(&'static str, crate::dlls::Exports)> {
     vec![
         (
@@ -1513,14 +1495,6 @@ fn cef_exports() -> Vec<(&'static str, crate::dlls::Exports)> {
         (
             "secur32",
             crate::exports! { "LsaLogonUser" => fn LsaLogonUser },
-        ),
-        (
-            "wintrust",
-            crate::exports! {
-                "WTHelperProvDataFromStateData" => fn WTHelperProvDataFromStateData,
-                "WTHelperGetProvSignerFromChain" => fn WTHelperGetProvSignerFromChain,
-                "WTHelperGetProvCertFromChain" => fn WTHelperGetProvCertFromChain,
-            },
         ),
     ]
 }

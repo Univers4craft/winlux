@@ -637,13 +637,88 @@ pub fn enum_entry_w(f: &FontFace, charset: u8) -> (EnumLogFontExW, NewTextMetric
 
 type EnumProc = unsafe extern "win64" fn(*const c_void, *const c_void, u32, isize) -> i32;
 
+/// Polices livrées avec Windows que les programmes supposent présentes,
+/// énumérées sous leur nom même quand elles sont servies par une police
+/// équivalente (#1670) : CreateFont les remplace déjà, et un programme qui
+/// vérifie leur présence par EnumFontFamiliesEx (la couche vgui de Steam)
+/// ne doit pas conclure qu'aucune police n'existe.
+const WINDOWS_FAMILIES: &[&str] = &[
+    "Arial",
+    "Calibri",
+    "Consolas",
+    "Courier New",
+    "Georgia",
+    "Lucida Console",
+    "Microsoft Sans Serif",
+    "Segoe UI",
+    "Tahoma",
+    "Times New Roman",
+    "Verdana",
+];
+
+/// Faces de la police qui remplace la police Windows `name`, renommées.
+fn windows_alias(all: &[FontFace], name: &str) -> Vec<FontFace> {
+    let Some(info) = super::dwrite::gdi_face(name, 400, false) else {
+        return Vec::new();
+    };
+    let Some(real) = all
+        .iter()
+        .find(|f| f.path == info.path && f.index == info.index)
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<FontFace> = select(all, &real.family)
+        .into_iter()
+        .map(|mut f| {
+            f.family = name.to_string();
+            f.full_name = if f.style.eq_ignore_ascii_case("regular") {
+                name.to_string()
+            } else {
+                format!("{name} {}", f.style)
+            };
+            f
+        })
+        .collect();
+    out.dedup_by(|a, b| a.style == b.style);
+    out
+}
+
+/// Faces que les fonctions EnumFont* énumèrent pour `face` (vide : une par
+/// famille), polices Windows remplacées comprises.
+pub fn enum_faces(face: &str) -> Vec<FontFace> {
+    let all = all_faces();
+    let mut found = select(&all, face);
+    if face.is_empty() {
+        for name in WINDOWS_FAMILIES {
+            if !found.iter().any(|f| f.family.eq_ignore_ascii_case(name)) {
+                found.extend(windows_alias(&all, name).into_iter().take(1));
+            }
+        }
+        found.sort_by_key(|f| f.family.to_lowercase());
+    } else if found.is_empty() && super::dwrite::is_windows_font(face) {
+        let name = WINDOWS_FAMILIES
+            .iter()
+            .find(|n| n.eq_ignore_ascii_case(face))
+            .copied()
+            .unwrap_or(face);
+        found = windows_alias(&all, name);
+    }
+    found
+}
+
 unsafe fn run_a(face: &str, charset: u8, callback: usize, lparam: isize) -> i32 {
     if callback == 0 {
         return 0;
     }
+    if !face.is_empty() {
+        crate::trace!(
+            "EnumFontFamilies({face}) : {} face(s)",
+            enum_faces(face).len()
+        );
+    }
     let cb: EnumProc = std::mem::transmute(callback);
     let mut last = 1;
-    for f in select(&all_faces(), face) {
+    for f in enum_faces(face) {
         let (lf, tm) = enum_entry_a(&f, charset);
         last = cb(
             (&lf as *const EnumLogFontExA).cast(),
@@ -662,9 +737,15 @@ unsafe fn run_w(face: &str, charset: u8, callback: usize, lparam: isize) -> i32 
     if callback == 0 {
         return 0;
     }
+    if !face.is_empty() {
+        crate::trace!(
+            "EnumFontFamilies({face}) : {} face(s)",
+            enum_faces(face).len()
+        );
+    }
     let cb: EnumProc = std::mem::transmute(callback);
     let mut last = 1;
-    for f in select(&all_faces(), face) {
+    for f in enum_faces(face) {
         let (lf, tm) = enum_entry_w(&f, charset);
         last = cb(
             (&lf as *const EnumLogFontExW).cast(),
@@ -987,6 +1068,50 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// Steam (#1670) : une police Windows absente du système (Tahoma,
+    /// Arial…) est énumérée sous son nom, servie par la police qui la
+    /// remplace dans CreateFont ; un nom inconnu reste absent.
+    #[test]
+    fn polices_windows_enumerees_sous_leur_nom() {
+        if super::super::dwrite::gdi_face("Tahoma", 400, false).is_none() {
+            return; // aucune police sur la machine de test
+        }
+        for name in ["Tahoma", "arial", "Verdana", "Segoe UI"] {
+            let faces = enum_faces(name);
+            assert!(!faces.is_empty(), "{name}");
+            assert!(
+                faces.iter().all(|f| f.family.eq_ignore_ascii_case(name)),
+                "{name}"
+            );
+        }
+        assert!(enum_faces("Police Inexistante Winlux").is_empty());
+        let all = enum_faces("");
+        assert!(all.iter().any(|f| f.family == "Tahoma"));
+        assert_eq!(all.iter().filter(|f| f.family == "Tahoma").count(), 1);
+        unsafe extern "win64" fn compte(
+            _: *const c_void,
+            _: *const c_void,
+            _: u32,
+            n: isize,
+        ) -> i32 {
+            *(n as *mut u32) += 1;
+            1
+        }
+        let mut n = 0u32;
+        let mut lf = [0u8; 92];
+        lf[28..34].copy_from_slice(b"Tahoma");
+        unsafe {
+            enum_font_families_ex_a(
+                0,
+                lf.as_ptr().cast(),
+                compte as usize,
+                &mut n as *mut u32 as isize,
+                0,
+            );
+        }
+        assert!(n >= 1);
+    }
 
     /// AddFontMemResourceEx : police en mémoire ajoutée puis retirée avec
     /// son fichier privé (SDL2_ttf de pygame, #1334).
