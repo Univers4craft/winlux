@@ -3065,9 +3065,12 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
 }
 
 /// TrackMouseEvent (#1254) : TME_LEAVE fait poster WM_MOUSELEAVE quand le
-/// pointeur quitte la fenêtre. TME_HOVER et TME_NONCLIENT sont acceptés
-/// sans effet. La structure fait 24 octets en 64 bits et 16 en 32 bits.
+/// pointeur quitte la fenêtre ; TME_HOVER fait poster WM_MOUSEHOVER quand il
+/// reste immobile dwHoverTime millisecondes (#1591). TME_NONCLIENT est
+/// accepté sans effet. La structure fait 24 octets en 64 bits (dwHoverTime
+/// à +16) ; wow32 la convertit depuis les 16 octets du x86.
 pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
+    const TME_HOVER: u32 = 0x1;
     const TME_LEAVE: u32 = 0x2;
     const TME_NONCLIENT: u32 = 0x10;
     const TME_QUERY: u32 = 0x4000_0000;
@@ -3090,12 +3093,35 @@ pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
         return 0;
     }
     let hwnd = hwnd_at(tme);
+    let hover_at = if size == 16 { 12 } else { 16 };
     if flags & TME_QUERY != 0 {
-        let tracked = gui::mouse_leave_tracked(hwnd);
-        std::ptr::write_unaligned(tme.add(4) as *mut u32, if tracked { TME_LEAVE } else { 0 });
+        let mut out = if gui::mouse_leave_tracked(hwnd) {
+            TME_LEAVE
+        } else {
+            0
+        };
+        if let Some(ms) = gui::mouse_hover_tracked(hwnd) {
+            out |= TME_HOVER;
+            std::ptr::write_unaligned(tme.add(hover_at) as *mut u32, ms);
+        }
+        std::ptr::write_unaligned(tme.add(4) as *mut u32, out);
         return 1;
     }
-    if flags & TME_LEAVE == 0 || flags & TME_NONCLIENT != 0 {
+    if flags & TME_NONCLIENT != 0 {
+        return 1;
+    }
+    if flags & TME_HOVER != 0 {
+        if flags & TME_CANCEL != 0 {
+            gui::cancel_mouse_hover(hwnd);
+        } else if gui::is_window(hwnd) {
+            let ms = std::ptr::read_unaligned(tme.add(hover_at) as *const u32);
+            gui::track_mouse_hover(hwnd, ms);
+        } else {
+            crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+            return 0;
+        }
+    }
+    if flags & TME_LEAVE == 0 {
         return 1;
     }
     if flags & TME_CANCEL != 0 {
