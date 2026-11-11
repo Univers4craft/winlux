@@ -140,6 +140,7 @@ dxgi.rs	DxgiSwapChainDesc	x86	60 octets en x86 (HWND), converti par dx11_x86::sw
 dxgi.rs	DxgiSwapChainVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
+electron_win32.rs	Header	interne	test unitaire : HSTRING bâti par le programme (C++/WinRT, windows-rs), lu à la taille de pointeur du programme (#1712)
 fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 filedialog_com.rs	FakeSink	interne	test unitaire (faux IFileDialogEvents, #1288)
 games_win32.rs	WsaBuf	a-verifier	
