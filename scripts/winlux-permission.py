@@ -96,6 +96,10 @@ _TR = {
         "Puede cambiar de opinión en Configuración > Privacidad y seguridad.",
         "Sie können dies unter Einstellungen > Datenschutz und Sicherheit ändern."),
     "Demande d’autorisation": ("Permission request", "Solicitud de permiso", "Berechtigungsanfrage"),
+    "{app} attend votre réponse dans une fenêtre. {question} Sans réponse : refus pour cette fois dans {delai} s.": (
+        "{app} is waiting for your answer in a window. {question} Without an answer: denied this time in {delai} s.",
+        "{app} espera su respuesta en una ventana. {question} Sin respuesta: se deniega esta vez en {delai} s.",
+        "{app} wartet in einem Fenster auf Ihre Antwort. {question} Ohne Antwort: diesmal abgelehnt in {delai} s."),
 }
 
 
@@ -236,6 +240,22 @@ def watch(cap, exe, parent):
 
 # ── Fenêtre de demande ──────────────────────────────────────────────────────
 
+def notice(cap, name, stream=None):
+    """Une ligne sur stderr quand la fenêtre s'ouvre : une commande lancée
+    depuis un terminal (pip…) ne doit pas attendre en silence (#1592)."""
+    stream = stream if stream is not None else sys.stderr
+    if stream is None:
+        return
+    question = _t(QUESTIONS[cap][0]).format(app=name)
+    line = _t("{app} attend votre réponse dans une fenêtre. {question} "
+              "Sans réponse : refus pour cette fois dans {delai} s.").format(app=name, question=question,
+                                                               delai=TIMEOUT_SECONDS)
+    try:
+        print(f"winlux : {line}", file=stream, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def ask(cap, name, exe):
     parent = requester()
     early = watch(cap, exe, parent)
@@ -332,6 +352,7 @@ def ask(cap, name, exe):
     window.show_all()
     deny.grab_focus()
     window.present()
+    notice(cap, name)
     GLib.timeout_add_seconds(TIMEOUT_SECONDS, lambda: finish(2) or False)
     GLib.timeout_add(WATCH_MILLISECONDS, poll)
     Gtk.main()
