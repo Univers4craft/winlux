@@ -1987,6 +1987,9 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
 
 /// Couleur système, remplacée par le thème de contraste élevé s'il est actif.
 fn system_color(index: i32) -> Option<u32> {
+    if let Some(c) = crate::dlls::user32_releve::sys_color_override(index) {
+        return Some(c);
+    }
     crate::dlls::a11y::system_color(crate::dlls::a11y::current().contrast, index)
         .or_else(|| gui::theme::system_color(index))
 }
@@ -2856,7 +2859,7 @@ pub extern "win64" fn show_cursor(show: i32) -> i32 {
 
 pub extern "win64" fn get_double_click_time() -> u32 {
     // Paramètres > Souris (500 ms par défaut, comme Windows).
-    crate::dlls::mouse::current().double_click
+    crate::dlls::mouse::double_click_time()
 }
 
 pub extern "win64" fn swap_mouse_button(_swap: i32) -> i32 {

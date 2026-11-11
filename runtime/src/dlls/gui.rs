@@ -3912,6 +3912,17 @@ pub fn window_prop(hwnd: usize, key: &str) -> Option<usize> {
     lock(window_props()).get(&(hwnd, key.to_string())).copied()
 }
 
+/// Propriétés d'une fenêtre, triées par nom (EnumPropsEx).
+pub fn window_prop_list(hwnd: usize) -> Vec<(String, usize)> {
+    let mut list: Vec<(String, usize)> = lock(window_props())
+        .iter()
+        .filter(|((h, _), _)| *h == hwnd)
+        .map(|((_, k), v)| (k.clone(), *v))
+        .collect();
+    list.sort();
+    list
+}
+
 pub fn remove_window_prop(hwnd: usize, key: &str) -> Option<usize> {
     lock(window_props()).remove(&(hwnd, key.to_string()))
 }

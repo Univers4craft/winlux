@@ -165,6 +165,14 @@ unsafe extern "win64" fn connect(_inst: u32, _service: usize, _topic: usize, _ct
     0
 }
 
+/// DdeQueryConvInfo : aucune conversation n'existe jamais, tout handle
+/// de conversation est donc invalide (#1512). Rend 0, comme pour un
+/// handle refermé.
+unsafe extern "win64" fn query_conv_info(_conv: usize, _transaction: u32, _info: usize) -> u32 {
+    LAST_ERROR.store(DMLERR_INVALIDPARAMETER, Ordering::Relaxed);
+    0
+}
+
 unsafe extern "win64" fn get_last_error(_inst: u32) -> u32 {
     LAST_ERROR.swap(DMLERR_NO_ERROR, Ordering::Relaxed)
 }
@@ -198,6 +206,7 @@ pub fn exports() -> crate::dlls::Exports {
         "DdeConnect" => fn connect,
         "DdeConnectList" => fn connect,
         "DdeGetLastError" => fn get_last_error,
+        "DdeQueryConvInfo" => fn query_conv_info,
         "DdeDisconnect" => fn ok,
         "DdeDisconnectList" => fn ok,
         "DdePostAdvise" => fn ok,

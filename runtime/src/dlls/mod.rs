@@ -20,11 +20,13 @@ pub mod actctx;
 pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
+pub mod advapi32_releve;
 pub mod advapi32_rsa;
 pub mod advapi32_services;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod cabinet_fci;
 pub mod cabinet_lz;
 pub mod chromium_win32;
 pub mod clipboard;
@@ -85,6 +87,7 @@ pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
 pub mod dpnet;
+pub mod drivers;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -209,6 +212,7 @@ pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
+pub mod shell32_releve;
 pub mod shell_folder_com;
 pub mod shlwapi;
 pub mod shlwapi_reg;
@@ -227,6 +231,7 @@ pub mod url_security;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
+pub mod user32_releve;
 pub mod userenv;
 pub mod usp10;
 pub mod uxtheme;
@@ -523,6 +528,10 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
                     e.extend(pointer::user32_exports());
+                    // Lot D du relevé (#1512) : seulement les noms absents.
+                    for (name, addr) in user32_releve::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: 0,
@@ -542,6 +551,15 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_fs::advapi32_exports());
                     e.extend(security::advapi32_exports());
                     e.extend(credentials::exports());
+                    // Lot D du relevé (#1512).
+                    for (name, addr) in security::releve_exports()
+                        .into_iter()
+                        .chain(advapi32_services::releve_exports())
+                        .chain(credentials::releve_exports())
+                        .chain(advapi32_releve::exports())
+                    {
+                        e.entry(name).or_insert(addr);
+                    }
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e.extend(chromium_win32::advapi32_exports());
@@ -617,6 +635,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(knownfolders::shell32_exports());
                     e.extend(security::shell32_exports());
                     e.extend(dataobject::shell32_exports());
+                    for (name, addr) in shell32_releve::exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: 0,
@@ -661,6 +682,9 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    for (name, addr) in user32_releve::gdi32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e.extend(gdi32_fonts::exports());
                     e.extend(gdi32_more::exports());
                     e.extend(gdi32_path::exports());
@@ -933,7 +957,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "uxtheme",
-                exports: uxtheme::exports(),
+                exports: {
+                    let mut e = uxtheme::exports();
+                    e.extend(user32_releve::uxtheme_exports());
+                    e
+                },
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
@@ -1151,7 +1179,13 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "secur32",
-                exports: secur32::exports(),
+                exports: {
+                    let mut e = secur32::exports();
+                    for (name, addr) in advapi32_releve::secur32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -1460,6 +1494,11 @@ pub fn normalize(dll: &str) -> String {
     }
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
+        return "setupapi".into();
+    }
+    // Installation de pilotes (DiInstallDriver, UpdateDriverForPlugAndPlay…,
+    // #1532) : servie par setupapi.
+    if base == "newdev" {
         return "setupapi".into();
     }
     // combase.dll (COM et Windows Runtime depuis Windows 8) : notre ole32.

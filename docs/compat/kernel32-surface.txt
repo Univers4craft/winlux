@@ -686,6 +686,7 @@ RegEnumKeyExW
 RegEnumValueA
 RegEnumValueW
 RegFlushKey
+RegGetKeySecurity
 RegGetValueA
 RegGetValueW
 RegLoadKeyA
