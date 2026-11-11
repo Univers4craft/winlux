@@ -236,7 +236,7 @@ fn substitutes(name: &str) -> &'static [&'static str] {
 }
 
 /// Polices livrées avec Windows que les programmes supposent présentes.
-fn is_windows_font(name: &str) -> bool {
+pub(crate) fn is_windows_font(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.starts_with("segoe ui")
         || matches!(
