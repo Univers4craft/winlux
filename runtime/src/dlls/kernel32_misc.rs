@@ -593,6 +593,36 @@ fn system_message(code: u32) -> Option<&'static str> {
     })
 }
 
+/// Les mêmes messages en anglais, pour un appel qui demande explicitement
+/// LANG_ENGLISH (libuv, donc Node et Electron, le fait pour ses erreurs de
+/// chargement de module : un texte français en ANSI devenait
+/// « Biblioth?que » dans le journal de Discord, #1820). Textes de Winlux.
+fn system_message_english(code: u32) -> Option<&'static str> {
+    Some(match code {
+        0 => "The operation completed without error.",
+        2 => "File not found.",
+        3 => "Folder not found.",
+        5 => "Access is not allowed.",
+        6 => "Invalid handle.",
+        8 => "Not enough memory to complete the operation.",
+        32 => "The file is already open in another program.",
+        80 => "This file already exists.",
+        87 => "Invalid parameter.",
+        122 => "The buffer is too small for the result.",
+        126 => "Library (DLL) not found.",
+        127 => "Function missing from the library.",
+        183 => "An item with this name already exists.",
+        267 => "This name is not a folder.",
+        c if c & 0xFFFF_0000 == 0x8007_0000 => return system_message_english(c & 0xFFFF),
+        _ => return None,
+    })
+}
+
+/// LANG_ENGLISH (0x09) demandé explicitement dans dwLanguageId.
+fn wants_english(lang: u32) -> bool {
+    lang & 0x3FF == 0x09
+}
+
 const FORMAT_MESSAGE_ALLOCATE_BUFFER: u32 = 0x100;
 const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x200;
 const FORMAT_MESSAGE_FROM_STRING: u32 = 0x400;
@@ -608,6 +638,7 @@ unsafe fn format_message(
     flags: u32,
     source: usize,
     code: u32,
+    lang: u32,
     args: usize,
     wide: bool,
 ) -> Option<String> {
@@ -624,6 +655,14 @@ unsafe fn format_message(
     }
     if flags & FORMAT_MESSAGE_FROM_SYSTEM == 0 {
         return None;
+    }
+    if wants_english(lang) {
+        return Some(format!(
+            "{}\r\n",
+            system_message_english(code)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Windows error {code}."))
+        ));
     }
     Some(format!(
         "{}\r\n",
@@ -780,12 +819,12 @@ pub unsafe extern "win64" fn format_message_a(
     flags: u32,
     src: usize,
     code: u32,
-    _lang: u32,
+    lang: u32,
     buf: *mut u8,
     size: u32,
     args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, src, code, args, false) else {
+    let Some(text) = format_message(flags, src, code, lang, args, false) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -812,12 +851,12 @@ pub unsafe extern "win64" fn format_message_w(
     flags: u32,
     src: usize,
     code: u32,
-    _lang: u32,
+    lang: u32,
     buf: *mut u16,
     size: u32,
     args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, src, code, args, true) else {
+    let Some(text) = format_message(flags, src, code, lang, args, true) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -1292,6 +1331,21 @@ mod tests {
             );
             assert!(n > 0);
             assert!(crate::dlls::wstr(msg.as_ptr()).starts_with("Fichier introuvable"));
+            // #1820 : LANG_ENGLISH demandé (libuv) → texte anglais, en ASCII.
+            let mut ansi = [0u8; 128];
+            let n = format_message_a(
+                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                0,
+                126,
+                0x0409,
+                ansi.as_mut_ptr(),
+                128,
+                0,
+            );
+            assert!(n > 0);
+            let text = crate::dlls::cstr(ansi.as_ptr());
+            assert!(text.starts_with("Library (DLL) not found"), "{text}");
+            assert!(ansi[..n as usize].is_ascii());
         }
     }
 

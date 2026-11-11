@@ -129,4 +129,19 @@ with tempfile.TemporaryDirectory() as tmp:
     code, _, err = run("--createShortcut", "claude.exe")
     ok(code != 0 and "non prise en charge" in err, "commande inconnue : erreur claire")
 
+    # #1821 : --uninstall -s (Discord) : crochet, puis désinstallation Winlux.
+    key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AnthropicClaude"
+    (tools / "lances").write_text("")
+    script(tools / "winlux",
+           f'echo "$@" >> {tools}/lances\n'
+           f'if [ "$1 $2" = "--setup --programs" ]; then\n'
+           f'  printf \'app=%s\\tClaude\\t0.14.11\\tAnthropic\\t0\\t\\twin\\n\' \'{key}\'\n'
+           f'  printf \'app=HKCU\\\\Autre\\tAutre\\t1\\tX\\t0\\t\\twin\\ndone=1\\n\'\nfi\n')
+    code, _, err = run("--uninstall", "-s")
+    lances = (tools / "lances").read_text()
+    ok(code == 0 and "--squirrel-uninstall" in lances, "--uninstall : crochet --squirrel-uninstall")
+    ok(f"--setup --remove {key}" in lances and "Autre" not in lances.split("--remove", 1)[1],
+       "--uninstall : désinstallation Winlux de la bonne inscription")
+    ok(not root.exists(), "--uninstall : dossier de l'appli retiré")
+
 sys.exit(1 if failures else 0)
