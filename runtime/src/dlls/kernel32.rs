@@ -2280,10 +2280,19 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            let code = io_error_code(&e);
+            // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
+            crate::trace!(
+                "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
+                p.display()
+            );
+            crate::process::set_last_error(code);
             return usize::MAX;
         }
     };
+    if !existed {
+        crate::trace!("CreateFile({path} → {}) : fichier créé", p.display());
+    }
     // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
     // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
     // l'erreur d'une tentative précédente ne doit pas rester (#905). Les
@@ -2300,6 +2309,7 @@ unsafe fn create_file_opened(
         lock(overlapped_handles()).insert(h);
     }
     if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
+        crate::trace!("CreateFile({path}) : effacé à la fermeture");
         lock(delete_on_close()).insert(h, p);
     }
     h
