@@ -138,6 +138,8 @@ cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalo
 # Logiciels publiés pour Linux par leur éditeur (#1056) : seulement leur
 # description ; téléchargés chez l'éditeur après confirmation, jamais dans l'ISO.
 cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeurs.json"
+# Programmes .exe testés sur Winlux (#1515) : fiches épinglées, rien de téléchargé.
+cp "$root/integration/store-windows-valides.json" "$stage/usr/share/winlux/store-windows-valides.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
 install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
