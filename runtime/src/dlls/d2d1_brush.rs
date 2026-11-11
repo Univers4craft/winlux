@@ -197,6 +197,27 @@ pub(super) type Paint = Box<dyn Fn(f32, f32) -> Color>;
 /// Fonction de peinture d'un pinceau sous la transformation `world` de la
 /// cible : (x, y) du centre d'un pixel → couleur prémultipliée. None pour
 /// un pinceau inconnu ou dont l'image ne se calcule pas.
+/// WINLUX_D2D_TRACE (#1669) : nature d'un pinceau pour le journal.
+pub(super) unsafe fn describe(brush_obj: *mut c_void) -> String {
+    if brush_obj.is_null() || !is_brush(*(brush_obj as *const *const ())) {
+        return format!("pinceau inconnu {brush_obj:p}");
+    }
+    let b = brush(brush_obj);
+    let opacity = *crate::dlls::lock(&b.opacity);
+    let kind = match &*crate::dlls::lock(&b.kind) {
+        Kind::Solid => {
+            let c = *crate::dlls::lock(&b.color);
+            format!("uni ({}, {}, {}, {})", c.r, c.g, c.b, c.a)
+        }
+        Kind::Image { image, .. } => {
+            format!("image {}", super::v11::describe_image(image.0))
+        }
+        Kind::Linear { .. } => "dégradé linéaire".into(),
+        Kind::Radial { .. } => "dégradé radial".into(),
+    };
+    format!("{kind} opacité {opacity}")
+}
+
 pub(super) unsafe fn paint(brush_obj: *mut c_void, world: &Matrix) -> Option<Paint> {
     if brush_obj.is_null() || !is_brush(*(brush_obj as *const *const ())) {
         return None;

@@ -183,6 +183,13 @@ dans Paramètres > Confidentialité et sécurité ; sans réponse possible, c'es
 non), et rien n'est tapé tant que l'écran de verrouillage est affiché.
 Test : `scripts/test-sendinput.sh` (Xvfb). Les macros d'iCUE (#1655) s'y
 brancheront.
+Depuis #1696, la saisie et les fenêtres de consentement (`winlux-permission
+ask`, `winlux-uac`) partagent un verrou par affichage
+(`/tmp/winlux-consent-<n>.lock`, jamais à travers un lien symbolique ni
+posé par un autre compte) : la fenêtre le prend en exclusif avant de
+s'afficher, la saisie en partagé du contrôle jusqu'à la fin de l'envoi.
+Une fenêtre de consentement ne reçoit donc jamais de saisie simulée, et
+le clavier tactile comme le Bureau à distance y fonctionnent toujours.
 
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent

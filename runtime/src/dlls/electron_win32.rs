@@ -671,8 +671,10 @@ unsafe fn query_section(
     const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
     const SEC_COMMIT: u32 = 0x0800_0000;
     let Some((_, size, _)) = crate::dlls::mmap::export(h) else {
+        crate::trace!("NtQuerySection(0x{h:x}) : handle inconnu");
         return STATUS_INVALID_HANDLE;
     };
+    crate::trace!("NtQuerySection(0x{h:x}, classe {class}, {len} octets) : taille {size}");
     // Programme x86 : SECTION_BASIC_INFORMATION fait 16 octets (pointeur de
     // 4 octets, MaximumSize à 8) et le SIZE_T rendu en fait 4. steam.exe y
     // lit la taille du flux partagé avec steamwebhelper ; avec la
