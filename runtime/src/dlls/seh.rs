@@ -1909,10 +1909,13 @@ pub unsafe fn call_funclet(func: usize, arg: u64, target: Context) -> u64 {
 }
 
 /// Base du module invité contenant `addr`.
+///
+/// Attente bloquante comme `lookup_entry` : un essai sans attente rendait
+/// None dès qu'un autre thread chargeait une DLL, et `_CxxThrowException`
+/// posait alors une base d'image nulle dans l'exception ; le gestionnaire
+/// lisait le ThrowInfo à son RVA brut et plantait (iCUE, #1727).
 pub fn module_base(addr: usize) -> Option<usize> {
-    crate::loader::MODULES
-        .try_lock()
-        .ok()?
+    crate::dlls::lock(&crate::loader::MODULES)
         .iter()
         .find(|m| m.contains(addr))
         .map(|m| m.base)
