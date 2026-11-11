@@ -13,7 +13,7 @@
 use super::audio_com::{
     guid, put, Com, VTable, E_INVALIDARG, E_NOINTERFACE, E_POINTER, IID_IUNKNOWN, S_OK,
 };
-use super::d2d_raster::{premul, Canvas, Clip, Color, FillRule, Matrix, Path, Pt};
+use super::d2d_raster::{premul, Canvas, Clip, Color, FillMode, FillRule, Matrix, Path, Pt};
 use super::ole32::Guid;
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -499,7 +499,7 @@ impl WicLayout {
 unsafe extern "win64" fn create_wic_render_target(
     this: *mut FactoryObj,
     bitmap: *mut c_void,
-    _props: *const c_void,
+    props: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
@@ -528,7 +528,7 @@ unsafe extern "win64" fn create_wic_render_target(
     }
     use super::windowscodecs::FMT_BGR32;
     method::<unsafe extern "win64" fn(*mut c_void) -> u32>(bitmap, 1)(bitmap);
-    let target = Target {
+    let mut target = Target {
         w,
         h,
         px: vec![0; w as usize * h as usize * 4],
@@ -538,9 +538,30 @@ unsafe extern "win64" fn create_wic_render_target(
         drawing: false,
         ext: Default::default(),
     };
+    let dpi = props_dpi(props);
+    target.ext.set_dpi(dpi.0, dpi.1);
     let hr = put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)));
-    d2d_trace!("CreateWicBitmapRenderTarget {:p} {w}x{h} {:?}", *out, fmt);
+    d2d_trace!(
+        "CreateWicBitmapRenderTarget {:p} {w}x{h} {:?} dpi {}x{}",
+        *out,
+        fmt,
+        dpi.0,
+        dpi.1
+    );
     hr
+}
+
+/// dpiX, dpiY de D2D1_RENDER_TARGET_PROPERTIES (type, format de pixel,
+/// puis les DPI aux octets 12 et 16) ; 0 veut dire la valeur par défaut.
+unsafe fn props_dpi(props: *const c_void) -> (f32, f32) {
+    if props.is_null() {
+        return (0.0, 0.0);
+    }
+    let p = props as *const u8;
+    (
+        std::ptr::read_unaligned(p.add(12) as *const f32),
+        std::ptr::read_unaligned(p.add(16) as *const f32),
+    )
 }
 
 /// D2D1_HWND_RENDER_TARGET_PROPERTIES.
@@ -558,9 +579,10 @@ unsafe fn new_screen_target(
     h: u32,
     out_to: Output,
     vt: *const (),
+    props: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    let target = Target {
+    let mut target = Target {
         w,
         h,
         px: vec![0; w as usize * h as usize * 4],
@@ -570,6 +592,8 @@ unsafe fn new_screen_target(
         drawing: false,
         ext: Default::default(),
     };
+    let dpi = props_dpi(props);
+    target.ext.set_dpi(dpi.0, dpi.1);
     let hr = put(out, new_res(f, vt, Mutex::new(target)));
     d2d_trace!("cible écran {:p} {w}x{h}", *out);
     hr
@@ -579,7 +603,7 @@ unsafe fn new_screen_target(
 /// (Scintilla de Notepad++ en DirectWrite, #551).
 unsafe extern "win64" fn create_hwnd_render_target(
     this: *mut FactoryObj,
-    _props: *const c_void,
+    props: *const c_void,
     hwnd_props: *const HwndProps,
     out: *mut *mut c_void,
 ) -> i32 {
@@ -597,13 +621,21 @@ unsafe extern "win64" fn create_hwnd_render_target(
             h = r.height().max(0) as u32;
         }
     }
-    new_screen_target(this, w, h, Output::Hwnd(hp.hwnd), HWND_TARGET_VT.ptr(), out)
+    new_screen_target(
+        this,
+        w,
+        h,
+        Output::Hwnd(hp.hwnd),
+        HWND_TARGET_VT.ptr(),
+        props,
+        out,
+    )
 }
 
 /// CreateDCRenderTarget : la taille et le DC viennent de BindDC.
 unsafe extern "win64" fn create_dc_render_target(
     this: *mut FactoryObj,
-    _props: *const c_void,
+    props: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
@@ -616,6 +648,7 @@ unsafe extern "win64" fn create_dc_render_target(
         0,
         Output::Dc { hdc: 0, x: 0, y: 0 },
         DC_TARGET_VT.ptr(),
+        props,
         out,
     )
 }
@@ -1592,6 +1625,8 @@ static BITMAP_VT: VTable<16> = VTable([
 #[derive(Default)]
 struct TargetState {
     transform: Option<Matrix>,
+    /// D2D1_ANTIALIAS_MODE : 0 par primitive, 1 crénelé.
+    antialias: u32,
     clips: Vec<Clip>,
     tags: (u64, u64),
 }
@@ -1635,14 +1670,42 @@ impl Drop for Target {
 type TargetObj = Com<Res<Mutex<Target>>>;
 
 impl Target {
-    fn transform(&self) -> Matrix {
+    /// Transformation de l'application (en DIP), celle de GetTransform.
+    fn world(&self) -> Matrix {
         self.state.transform.unwrap_or(Matrix::IDENTITY)
+    }
+    /// Des DIP aux pixels de la cible : la transformation de l'application
+    /// puis l'échelle DPI / 96 (#1743). Paint.NET dessine les empreintes du
+    /// pinceau en DIP sur des tuiles de masque à plus haute résolution ;
+    /// sans l'échelle, elles couvraient un tiers de pixel et le trait noir
+    /// sortait gris clair.
+    fn transform(&self) -> Matrix {
+        let (sx, sy) = self.ext.dip_scale();
+        let world = self.world();
+        if (sx, sy) == (1.0, 1.0) {
+            return world;
+        }
+        world.then(&Matrix {
+            m11: sx,
+            m12: 0.0,
+            m21: 0.0,
+            m22: sy,
+            dx: 0.0,
+            dy: 0.0,
+        })
+    }
+    fn fill_mode(&self) -> FillMode {
+        FillMode {
+            aliased: self.state.antialias == 1,
+            blend: self.ext.primitive_blend(),
+        }
     }
     fn clip(&self) -> Option<Clip> {
         self.state.clips.last().copied()
     }
     fn fill(&mut self, polys: &[Vec<Pt>], rule: FillRule, paint: &dyn Fn(f32, f32) -> Color) {
         let clip = self.clip();
+        let mode = self.fill_mode();
         let (w, h) = (self.w, self.h);
         let mut c = Canvas {
             w,
@@ -1650,7 +1713,7 @@ impl Target {
             stride: w as usize * 4,
             px: &mut self.px,
         };
-        c.fill(polys, rule, clip, paint);
+        c.fill_mode(polys, rule, clip, paint, mode);
     }
 
     /// Copie entre la cible et sa destination (`to_wic` à EndDraw et Flush).
@@ -2155,6 +2218,16 @@ unsafe fn stroke_path(this: *mut TargetObj, path: &Path, brush: *mut c_void, wid
     target(this).fill(&polys, FillRule::NonZero, &*paint);
 }
 
+/// WINLUX_D2D_TRACE (#1743) : transformation, DPI, anticrénelage et
+/// mélange courants quand ils ne sont pas ceux par défaut.
+unsafe fn describe_state(this: *mut TargetObj) -> String {
+    if !v11::trace_on() {
+        return String::new();
+    }
+    let t = target(this);
+    t.ext.describe_state(&t.world(), t.state.antialias)
+}
+
 /// WINLUX_D2D_TRACE (#1669) : forme, boîte et pinceau d'un remplissage,
 /// et si le pinceau a pu être préparé (sinon rien n'est dessiné).
 unsafe fn trace_fill(this: *mut TargetObj, what: &str, path: &Path, brush: *mut c_void, ok: bool) {
@@ -2168,12 +2241,13 @@ unsafe fn trace_fill(this: *mut TargetObj, what: &str, path: &Path, brush: *mut 
         }
     }
     d2d_trace!(
-        "{} {:p} {} figures boîte {:?} pinceau {}{}",
+        "{} {:p} {} figures boîte {:?} pinceau {}{}{}",
         what,
         this,
         path.figures.len(),
         b,
         brushes::describe(brush),
+        describe_state(this),
         if ok {
             ""
         } else {
@@ -2378,11 +2452,12 @@ unsafe extern "win64" fn draw_bitmap(
     src: *const RectF,
 ) {
     d2d_trace!(
-        "DrawBitmap {:p} ← {} dst {:?} src {:?} opacité {opacity}",
+        "DrawBitmap {:p} ← {} dst {:?} src {:?} opacité {opacity}{}",
         this,
         v11::describe_image(bitmap),
         dst.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
-        src.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+        src.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        describe_state(this)
     );
     if bitmap.is_null() || *(bitmap as *const *const ()) != BITMAP_VT.ptr() {
         return;
@@ -2481,8 +2556,14 @@ unsafe extern "win64" fn set_transform(this: *mut TargetObj, m: *const Matrix) {
 }
 unsafe extern "win64" fn get_transform(this: *mut TargetObj, m: *mut Matrix) {
     if !m.is_null() {
-        *m = target(this).transform();
+        *m = target(this).world();
     }
+}
+unsafe extern "win64" fn set_antialias(this: *mut TargetObj, mode: u32) {
+    target(this).state.antialias = mode;
+}
+unsafe extern "win64" fn get_antialias(this: *mut TargetObj) -> u32 {
+    target(this).state.antialias
 }
 unsafe extern "win64" fn get_zero(_this: *mut c_void) -> u32 {
     0
@@ -2647,8 +2728,8 @@ const TARGET_METHODS: [*const (); 57] = [
     draw_glyph_run as *const (),
     set_transform as *const (),
     get_transform as *const (),
-    nothing as *const (),  // SetAntialiasMode
-    get_zero as *const (), // GetAntialiasMode : D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+    set_antialias as *const (),
+    get_antialias as *const (),
     nothing as *const (),  // SetTextAntialiasMode
     get_zero as *const (), // GetTextAntialiasMode
     nothing as *const (),  // SetTextRenderingParams
@@ -2719,13 +2800,24 @@ unsafe extern "win64" fn create_compatible_target(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    let (w, h) = if let Some(&[w, h]) = pixel_size.as_ref() {
-        (w, h)
-    } else if let Some(&[w, h]) = size.as_ref() {
-        (w.ceil().max(0.0) as u32, h.ceil().max(0.0) as u32)
-    } else {
+    // Taille en DIP au DPI de la cible parente, ou en pixels ; les deux
+    // ensemble fixent le DPI (#1743).
+    let (parent_px, parent_dpi) = {
         let t = target(this);
-        (t.w, t.h)
+        ((t.w, t.h), t.ext.dpi())
+    };
+    let size = size.as_ref().filter(|s| s[0] > 0.0 && s[1] > 0.0);
+    let ((w, h), dpi) = match (pixel_size.as_ref(), size) {
+        (Some(&[w, h]), Some(&[sw, sh])) => ((w, h), (w as f32 * 96.0 / sw, h as f32 * 96.0 / sh)),
+        (Some(&[w, h]), None) => ((w, h), parent_dpi),
+        (None, Some(&[sw, sh])) => (
+            (
+                (sw * parent_dpi.0 / 96.0).ceil() as u32,
+                (sh * parent_dpi.1 / 96.0).ceil() as u32,
+            ),
+            parent_dpi,
+        ),
+        (None, None) => (parent_px, parent_dpi),
     };
     let (w, h) = (w.max(1), h.max(1));
     if crate::imaging::check_size(w, h).is_err() {
@@ -2734,7 +2826,7 @@ unsafe extern "win64" fn create_compatible_target(
     let factory = Com::get(this).factory;
     let bitmap = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
     let bitmap = new_res(factory, BITMAP_VT.ptr(), bitmap) as *mut c_void;
-    let target = Target {
+    let mut target = Target {
         w,
         h,
         px: vec![0; w as usize * h as usize * 4],
@@ -2744,6 +2836,7 @@ unsafe extern "win64" fn create_compatible_target(
         drawing: false,
         ext: Default::default(),
     };
+    target.ext.set_dpi(dpi.0, dpi.1);
     put(
         out,
         new_res(factory, BITMAP_TARGET_VT.ptr(), Mutex::new(target)),
@@ -4191,5 +4284,146 @@ mod tests {
             }
             Com::release(f);
         }
+    }
+
+    /// #1743 : le DPI de la cible (SetDpi ou D2D1_RENDER_TARGET_PROPERTIES)
+    /// met les DIP à l'échelle, SetAntialiasMode(ALIASED) couvre les pixels
+    /// dont le centre est dans la forme, et le mélange MAX garde le plus fort.
+    #[test]
+    fn dpi_anticrenelage_et_melange() {
+        unsafe {
+            type FillRect = unsafe extern "win64" fn(*mut c_void, *const RectF, *mut c_void);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            type SetDpi = unsafe extern "win64" fn(*mut c_void, f32, f32);
+            type SetAa = unsafe extern "win64" fn(*mut c_void, u32);
+            type GetTransform = unsafe extern "win64" fn(*mut c_void, *mut Matrix);
+            let rect = |l: f32, t: f32, r: f32, b: f32| RectF { l, t, r, b };
+            let (f, bmp, rt) = setup();
+            let noir = solid(
+                rt,
+                ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            method::<Unary>(rt, 48)(rt);
+            method::<SetDpi>(rt, 51)(rt, 192.0, 192.0);
+            method::<FillRect>(rt, 17)(rt, &rect(0.0, 0.0, 1.0, 1.0), noir);
+            let mut m = Matrix {
+                m11: 0.0,
+                ..Matrix::IDENTITY
+            };
+            method::<GetTransform>(rt, 31)(rt, &mut m);
+            assert_eq!(m, Matrix::IDENTITY, "GetTransform ne voit pas le DPI");
+            // SetDpi(0, 0) revient à 96.
+            method::<SetDpi>(rt, 51)(rt, 0.0, 0.0);
+            // Un demi-pixel centré : crénelé, le pixel est plein.
+            method::<SetAa>(rt, 32)(rt, 1);
+            assert_eq!(method::<Unary>(rt, 33)(rt), 1);
+            method::<FillRect>(rt, 17)(rt, &rect(4.25, 4.25, 4.75, 4.75), noir);
+            method::<SetAa>(rt, 32)(rt, 0);
+            method::<FillRect>(rt, 17)(rt, &rect(6.25, 6.25, 6.75, 6.75), noir);
+            method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut());
+            let p = pixels(bmp);
+            for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                assert_eq!(px(&p, x, y), [0, 0, 0, 255], "DIP à 192 ppp ({x},{y})");
+            }
+            assert_eq!(px(&p, 2, 0)[3], 0);
+            assert_eq!(px(&p, 4, 4), [0, 0, 0, 255]);
+            assert_eq!(px(&p, 5, 4)[3], 0);
+            let a = px(&p, 6, 6)[3];
+            assert!((40..=90).contains(&a), "anticrénelé : {a}");
+            release_obj(noir);
+            release_obj(rt);
+
+            // DPI donné à la création de la cible WIC.
+            #[repr(C)]
+            struct Props {
+                kind: u32,
+                format: u32,
+                alpha: u32,
+                dpi: [f32; 2],
+                usage: u32,
+                level: u32,
+            }
+            let props = Props {
+                kind: 0,
+                format: 0,
+                alpha: 0,
+                dpi: [288.0, 288.0],
+                usage: 0,
+                level: 0,
+            };
+            type CreateRt = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateRt>(f, 13)(f, bmp, &props as *const Props as *const c_void, &mut rt),
+                S_OK
+            );
+            let mut dpi = (0f32, 0f32);
+            type GetDpi = unsafe extern "win64" fn(*mut c_void, *mut f32, *mut f32);
+            method::<GetDpi>(rt, 52)(rt, &mut dpi.0, &mut dpi.1);
+            assert_eq!(dpi, (288.0, 288.0));
+            let blanc = solid(
+                rt,
+                ColorF {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            );
+            method::<Unary>(rt, 48)(rt);
+            method::<FillRect>(rt, 17)(rt, &rect(1.0, 1.0, 2.0, 2.0), blanc);
+            method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut());
+            let p = pixels(bmp);
+            assert_eq!(px(&p, 3, 3), [255, 255, 255, 255]);
+            assert_eq!(px(&p, 5, 5), [255, 255, 255, 255]);
+            assert_eq!(px(&p, 2, 2)[3], 0);
+            assert_eq!(px(&p, 6, 5)[3], 0);
+            release_obj(blanc);
+            release_obj(rt);
+            release_obj(bmp);
+            Com::release(f as *mut FactoryObj);
+        }
+    }
+
+    /// #1743 : D2D1_PRIMITIVE_BLEND MIN, ADD, MAX et COPY.
+    #[test]
+    fn melange_des_primitives() {
+        let carre = vec![vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]];
+        let essai = |dest: [u8; 4], src: Color, blend: u32| {
+            let mut px = dest.to_vec();
+            let mut c = Canvas {
+                w: 1,
+                h: 1,
+                stride: 4,
+                px: &mut px,
+            };
+            c.fill_mode(
+                &carre,
+                FillRule::NonZero,
+                None,
+                &|_, _| src,
+                FillMode {
+                    aliased: false,
+                    blend,
+                },
+            );
+            px
+        };
+        // Destination BGRA (100, 100, 100, 100), source rgba 0.2 / 0.8.
+        let src = [0.8, 0.2, 0.2, 0.8];
+        assert_eq!(essai([100; 4], src, 2), [51, 51, 100, 100]);
+        assert_eq!(essai([100; 4], src, 4), [100, 100, 204, 204]);
+        assert_eq!(essai([100; 4], src, 3), [151, 151, 255, 255]);
+        assert_eq!(essai([100; 4], src, 1), [51, 51, 204, 204]);
     }
 }

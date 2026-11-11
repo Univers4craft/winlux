@@ -514,6 +514,60 @@ pub(super) unsafe fn end_draw_home(t: &mut Target) {
     }
 }
 
+impl TargetExt {
+    /// Facteur pixels par DIP : DPI / 96, sauf en D2D1_UNIT_MODE_PIXELS.
+    pub(super) fn dip_scale(&self) -> (f32, f32) {
+        if self.unit_mode == 1 {
+            (1.0, 1.0)
+        } else {
+            (self.dpi.0 / 96.0, self.dpi.1 / 96.0)
+        }
+    }
+
+    /// DPI demandé par l'application ; (0, 0) ou une valeur invalide
+    /// rend la valeur par défaut, 96.
+    pub(super) fn set_dpi(&mut self, x: f32, y: f32) {
+        self.dpi = if x > 0.0 && y > 0.0 && x.is_finite() && y.is_finite() {
+            (x, y)
+        } else {
+            (96.0, 96.0)
+        };
+    }
+
+    pub(super) fn dpi(&self) -> (f32, f32) {
+        self.dpi
+    }
+
+    pub(super) fn primitive_blend(&self) -> u32 {
+        self.primitive_blend
+    }
+
+    /// État de tracé qui change le rendu, pour WINLUX_D2D_TRACE (#1743) :
+    /// vide quand tout est à sa valeur par défaut.
+    pub(super) fn describe_state(&self, world: &Matrix, antialias: u32) -> String {
+        let mut s = String::new();
+        if *world != Matrix::IDENTITY {
+            s += &format!(
+                " transformation [{}, {}, {}, {}, {}, {}]",
+                world.m11, world.m12, world.m21, world.m22, world.dx, world.dy
+            );
+        }
+        if self.dpi != (96.0, 96.0) {
+            s += &format!(" dpi {}x{}", self.dpi.0, self.dpi.1);
+        }
+        if self.unit_mode != 0 {
+            s += " unités pixels";
+        }
+        if antialias != 0 {
+            s += " crénelé";
+        }
+        if self.primitive_blend != 0 {
+            s += &format!(" mélange {}", self.primitive_blend);
+        }
+        s
+    }
+}
+
 impl Default for TargetExt {
     fn default() -> Self {
         TargetExt {
@@ -2326,7 +2380,7 @@ unsafe extern "win64" fn dc_image_world_bounds(
     if hr < 0 {
         return hr;
     }
-    let m = target(this).transform();
+    let m = target(this).world();
     let r = *out;
     let pts = [
         m.apply((r.l, r.t)),
@@ -2468,19 +2522,22 @@ unsafe extern "win64" fn dc_get_controls(this: *mut TargetObj, c: *mut [u32; 3])
     }
 }
 unsafe extern "win64" fn dc_set_blend(this: *mut TargetObj, v: u32) {
+    d2d_trace!("SetPrimitiveBlend {:p} {v}", this);
     target(this).ext.primitive_blend = v;
 }
 unsafe extern "win64" fn dc_get_blend(this: *mut TargetObj) -> u32 {
     target(this).ext.primitive_blend
 }
 unsafe extern "win64" fn dc_set_unit(this: *mut TargetObj, v: u32) {
+    d2d_trace!("SetUnitMode {:p} {v}", this);
     target(this).ext.unit_mode = v;
 }
 unsafe extern "win64" fn dc_get_unit(this: *mut TargetObj) -> u32 {
     target(this).ext.unit_mode
 }
 pub(super) unsafe extern "win64" fn set_dpi(this: *mut TargetObj, x: f32, y: f32) {
-    target(this).ext.dpi = (x, y);
+    d2d_trace!("SetDpi {:p} {x}x{y}", this);
+    target(this).ext.set_dpi(x, y);
 }
 pub(super) unsafe extern "win64" fn get_dpi(this: *mut TargetObj, x: *mut f32, y: *mut f32) {
     let (dx, dy) = target(this).ext.dpi;
@@ -2539,7 +2596,8 @@ pub(super) unsafe extern "win64" fn save_state(this: *mut TargetObj, block: *mut
     let t = target(this);
     let b = &Com::get(block as *mut StateBlockObj).data;
     let mut d = crate::dlls::lock(&b.desc);
-    d.transform = t.transform();
+    d.transform = t.world();
+    d.antialias = t.state.antialias;
     d.tag1 = t.state.tags.0;
     d.tag2 = t.state.tags.1;
     d.primitive_blend = t.ext.primitive_blend;
@@ -2552,6 +2610,7 @@ pub(super) unsafe extern "win64" fn restore_state(this: *mut TargetObj, block: *
     let d = *crate::dlls::lock(&Com::get(block as *mut StateBlockObj).data.desc);
     let mut t = target(this);
     t.state.transform = Some(d.transform);
+    t.state.antialias = d.antialias;
     t.state.tags = (d.tag1, d.tag2);
     t.ext.primitive_blend = d.primitive_blend;
     t.ext.unit_mode = d.unit_mode;
