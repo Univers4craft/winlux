@@ -2353,7 +2353,25 @@ unsafe fn create_file_opened(
 /// handle (documentation de CreateFile, #1252).
 const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 
-fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
+/// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
+/// effacement à la fermeture. Rien si le fichier n'a plus de nom
+/// (déjà effacé : /proc rend « … (deleted) »), #1885.
+fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+    if fd < 0 {
+        return None;
+    }
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || st.st_nlink == 0 {
+        return None;
+    }
+    let path = crate::dlls::ntdll_file::path_of_fd(fd)?;
+    if path.to_string_lossy().ends_with(" (deleted)") {
+        return None;
+    }
+    Some((path, st.st_dev, st.st_ino))
+}
+
+pub(crate) fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
     static S: OnceLock<Mutex<HashMap<usize, std::path::PathBuf>>> = OnceLock::new();
     S.get_or_init(Default::default)
 }
@@ -6815,6 +6833,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         return 1;
     }
+    // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
+    // renommé depuis son ouverture (#1885).
+    let doomed = lock(delete_on_close())
+        .remove(&handle)
+        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -6822,8 +6845,25 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
         forget_dir_watcher(handle);
-        if let Some(path) = lock(delete_on_close()).remove(&handle) {
-            let _ = std::fs::remove_file(path);
+        if let Some((path, dev, ino)) = doomed {
+            // Le nom doit toujours désigner le même fichier : jamais un
+            // autre qui l'aurait pris entre-temps.
+            let same = std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.dev() == dev && m.ino() == ino
+            });
+            let removed = if !same {
+                Err(std::io::Error::other("nom repris par un autre fichier"))
+            } else if path.is_dir() {
+                std::fs::remove_dir(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            crate::trace!(
+                "CloseHandle({handle:#x}) : effacement à la fermeture de {} = {}",
+                path.display(),
+                removed.map_or_else(|e| e.to_string(), |_| "ok".into())
+            );
         }
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
@@ -9080,6 +9120,41 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
     if fd < 0 {
         crate::process::set_last_error(6);
         return 0;
+    }
+    // Listes de dossier (FileIdBothDirectory(Restart)Info,
+    // FileFullDirectory(Restart)Info) : celles de NtQueryDirectoryFile.
+    // `remove_dir_all` de la bibliothèque Rust parcourt ainsi le dossier à
+    // effacer ; sans elles le dossier restait (rm-* de Discord, #1885).
+    if let Some((nt, restart)) = match class {
+        10 => Some((37, false)),
+        11 => Some((37, true)),
+        14 => Some((2, false)),
+        15 => Some((2, true)),
+        _ => None,
+    } {
+        let mut iosb = [0u64; 2];
+        let st = crate::dlls::ntdll_file::NtQueryDirectoryFile(
+            handle,
+            0,
+            0,
+            0,
+            iosb.as_mut_ptr() as *mut std::ffi::c_void,
+            out,
+            size,
+            nt,
+            0,
+            std::ptr::null(),
+            u8::from(restart),
+        );
+        if st != 0 {
+            crate::process::set_last_error(match st {
+                0x8000_0006 => 18,  // STATUS_NO_MORE_FILES → ERROR_NO_MORE_FILES
+                0x8000_0005 => 234, // STATUS_BUFFER_OVERFLOW → ERROR_MORE_DATA
+                _ => crate::dlls::ntdll::rtl_nt_status_to_dos_error(st as i32),
+            });
+            return 0;
+        }
+        return 1;
     }
     let mut st: libc::stat = std::mem::zeroed();
     if libc::fstat(fd, &mut st) != 0 {
