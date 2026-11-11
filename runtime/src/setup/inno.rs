@@ -958,10 +958,36 @@ fn make_ctx(setup: &Setup, path: &Path, opts: &Options) -> Ctx {
     ctx.group = ctx.expand(&h.s("DefaultGroupName"));
     ctx.app = match &opts.dir {
         Some(d) => d.clone(),
-        None => ctx.expand(&h.s("DefaultDirName")),
+        None => {
+            let raw = h.s("DefaultDirName");
+            rooted_app_dir(&raw, &ctx.expand(&raw), Folders { x64 }.program_files())
+        }
     };
     ctx.app = ctx.app.trim_end_matches('\\').to_string();
     ctx
+}
+
+/// Dossier d'installation par défaut : DefaultDirName développé. Une
+/// fonction `{code:…}` que Winlux n'exécute pas peut le laisser sans
+/// lecteur (« \Inno Setup 6 ») ; il serait alors pris relativement au
+/// dossier courant (#1862). Il est placé sous Program Files, comme le
+/// dossier qu'un tel script choisit d'ordinaire.
+fn rooted_app_dir(raw: &str, expanded: &str, program_files: &str) -> String {
+    let absolute = expanded.as_bytes().get(1) == Some(&b':') || expanded.starts_with("\\\\");
+    if absolute {
+        return expanded.to_string();
+    }
+    let rest = expanded.trim_start_matches('\\');
+    let rooted = if rest.is_empty() {
+        program_files.to_string()
+    } else {
+        format!("{program_files}\\{rest}")
+    };
+    crate::log_info!(
+        "installeur",
+        "DefaultDirName « {raw} » sans lecteur une fois développé (« {expanded} ») : {rooted}"
+    );
+    rooted
 }
 
 pub fn info(data: &[u8]) -> Result<Info, String> {
@@ -1572,6 +1598,22 @@ mod tests {
         buf[i + 2] = (rel >> 16) as u8;
         untransform_calls(&mut buf, 0);
         assert_eq!(buf, orig);
+    }
+
+    #[test]
+    fn dossier_par_defaut_toujours_absolu() {
+        // #1862 : {code:…} non exécuté laisse « \Inno Setup 6 ».
+        let pf = "C:\\Program Files (x86)";
+        assert_eq!(
+            rooted_app_dir("{code:Dir}\\Inno Setup 6", "\\Inno Setup 6", pf),
+            "C:\\Program Files (x86)\\Inno Setup 6"
+        );
+        assert_eq!(rooted_app_dir("{code:Dir}", "", pf), pf);
+        assert_eq!(
+            rooted_app_dir("{autopf}\\Demo", "C:\\Program Files\\Demo", pf),
+            "C:\\Program Files\\Demo"
+        );
+        assert_eq!(rooted_app_dir("x", "\\\\serveur\\p", pf), "\\\\serveur\\p");
     }
 
     fn ctx(x64: bool) -> Ctx {
