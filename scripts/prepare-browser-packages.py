@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cache official amd64 browser DEBs; verify publisher-index SHA256 hashes.
 
-    prepare-browser-packages.py [--only edge,chrome,firefox] [SORTIE]
-    prepare-browser-packages.py --info edge|chrome|firefox
+    prepare-browser-packages.py [--only brave,chrome,edge,firefox,opera,operagx,tor,vivaldi] [SORTIE]
+    prepare-browser-packages.py --info ID
 
 --info lit seulement l'index de l'éditeur, sans rien télécharger d'autre, et
 écrit version=, source=, sha256= et size= : Paramètres les montre avant
@@ -15,8 +15,11 @@ favorise aucun. Le navigateur choisi est téléchargé chez son éditeur sur le
 PC de l'utilisateur, à sa demande : winlux-browsers --install (image) et
 install-browser.sh (paquet d'intégration) appellent ce script.
 """
+import base64
 import gzip
 import hashlib
+import json
+import lzma
 import os
 import pathlib
 import re
@@ -25,11 +28,45 @@ import sys
 import tempfile
 import urllib.parse
 
+# Dépôts APT officiels des éditeurs (id : paquet, dépôt, index). Un index
+# peut être donné sous plusieurs formes (Packages.gz, Packages…) : la première
+# qui répond est lue. Un paquet peut avoir plusieurs noms acceptés (le premier
+# trouvé dans l'index est pris ; winlux-browsers contrôle le nom réel). Relevé
+# des versions Linux officielles : docs/BROWSERS.md (#1716).
 SOURCES = {
-    "edge": ("microsoft-edge-stable", "https://packages.microsoft.com/repos/edge/", "dists/stable/main/binary-amd64/Packages.gz"),
+    "brave": (("brave-browser",), "https://brave-browser-apt-release.s3.brave.com/",
+              ("dists/stable/main/binary-amd64/Packages.gz", "dists/stable/main/binary-amd64/Packages")),
     "chrome": ("google-chrome-stable", "https://dl.google.com/linux/chrome/deb/", "dists/stable/main/binary-amd64/Packages.gz"),
+    "edge": ("microsoft-edge-stable", "https://packages.microsoft.com/repos/edge/", "dists/stable/main/binary-amd64/Packages.gz"),
     "firefox": ("firefox", "https://packages.mozilla.org/apt/", "dists/mozilla/main/binary-amd64/Packages"),
+    "opera": (("opera-stable",), "https://deb.opera.com/opera-stable/",
+              ("dists/stable/non-free/binary-amd64/Packages.gz", "dists/stable/non-free/binary-amd64/Packages")),
+    # Opera GX existe sur Linux depuis le 19 mars 2026 (.deb d'opera.com/gx/linux,
+    # qui configure ce dépôt pour ses mises à jour).
+    "operagx": (("opera-gx-stable", "opera-gx"), "https://deb.opera.com/opera-gx-stable/",
+                ("dists/stable/non-free/binary-amd64/Packages.gz", "dists/stable/non-free/binary-amd64/Packages")),
+    "vivaldi": (("vivaldi-stable",), "https://repo.vivaldi.com/archive/deb/",
+                ("dists/stable/main/binary-amd64/Packages.gz", "dists/stable/main/binary-amd64/Packages")),
 }
+
+# Tor Browser n'a ni .deb ni dépôt APT : archive officielle tor-browser-linux-
+# x86_64-<version>.tar.xz. La version vient du fichier de téléchargement du
+# projet Tor ; l'archive est acceptée seulement si (1) la liste
+# sha256sums-signed-build.txt est signée par la clé des développeurs de Tor
+# Browser, (2) son SHA-256 est celui de cette liste et (3) sa propre signature
+# .asc est valide avec la même clé. La clé est lue chez le projet Tor (WKD de
+# torproject.org, puis keys.openpgp.org, le serveur que cite Tor) et refusée
+# si son empreinte n'est pas celle épinglée ici.
+TOR_ID = "tor"
+TOR_PACKAGE = "tor-browser"
+TOR_DOWNLOADS = "https://aus1.torproject.org/torbrowser/update_3/release/download-linux-x86_64.json"
+TOR_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
+TOR_KEY_URLS = (
+    "https://openpgpkey.torproject.org/.well-known/openpgpkey/torproject.org/hu/kounek7zrdx745qydx6p59t9mqjpuhdf?l=torbrowser",
+    "https://keys.openpgp.org/vks/v1/by-fingerprint/" + TOR_FINGERPRINT,
+)
+TOR_BINARY = re.compile(r"https://(dist|archive)\.torproject\.org/torbrowser/([0-9][0-9a-z.]*)/tor-browser-linux-x86_64-\2\.tar\.xz")
+BROWSERS = sorted([*SOURCES, TOR_ID])
 
 # Langues de Winlux autres que l'anglais : paquets de langue officiels de
 # Firefox (firefox-l10n-<langue>, même dépôt Mozilla), installés avec lui pour
@@ -77,13 +114,28 @@ def fetch_package(url, partial):
                     "--retry", "5", "--retry-delay", "5", "--max-filesize", "536870912",
                     "--continue-at", "-", url, "--output", str(partial)], check=True)
 
+def fetch_any_index(base, paths, destination):
+    """Première forme de l'index qui répond (Packages.gz, Packages…)."""
+    paths = (paths,) if isinstance(paths, str) else paths
+    for number, path in enumerate(paths):
+        try:
+            fetch_index(base + path, destination)
+            return
+        except subprocess.CalledProcessError:
+            if number == len(paths) - 1:
+                raise
+
+
 def select(data, package, architectures=("amd64",)):
     if data.startswith(b"\x1f\x8b"):
         data = gzip.decompress(data)
+    elif data.startswith(b"\xfd7zXZ"):
+        data = lzma.decompress(data)
+    names = (package,) if isinstance(package, str) else tuple(package)
     best = None
     for stanza in data.decode("utf-8").split("\n\n"):
         fields = dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
-        if fields.get("Package") != package or fields.get("Architecture") not in architectures:
+        if fields.get("Package") not in names or fields.get("Architecture") not in architectures:
             continue
         filename = fields.get("Filename", "")
         if not filename.startswith("pool/") or ".." in filename.split("/") or not re.fullmatch(r"[A-Za-z0-9_+~./:-]+\.deb", filename):
@@ -95,7 +147,7 @@ def select(data, package, architectures=("amd64",)):
         if best is None or subprocess.run(["dpkg", "--compare-versions", fields["Version"], "gt", best["Version"]]).returncode == 0:
             best = fields
     if best is None:
-        raise ValueError(f"package not found: {package}")
+        raise ValueError(f"package not found: {'|'.join(names)}")
     return best
 
 def checksum(path):
@@ -107,13 +159,22 @@ def checksum(path):
 
 def info(browser):
     """Version, adresse exacte, empreinte et taille annoncées par l'index (#923)."""
+    if browser == TOR_ID:
+        with tempfile.TemporaryDirectory(prefix="winlux-browser-info-") as work:
+            release = tor_release(pathlib.Path(work))
+        print(f"version={release['version']}")
+        print(f"source={release['binary']}")
+        print(f"sha256={release['sha256']}")
+        print("size=")
+        print("signature=tor")
+        return
     if browser not in SOURCES:
         raise SystemExit(f"navigateur inconnu : {browser}")
     package, base, index = SOURCES[browser]
     base = MIRROR or base
     with tempfile.TemporaryDirectory(prefix="winlux-browser-info-") as work:
         path = pathlib.Path(work) / "Packages"
-        fetch_index(base + index, path)
+        fetch_any_index(base, index, path)
         fields = select(path.read_bytes(), package)
     size = fields.get("Size", "")
     print(f"version={fields['Version']}")
@@ -122,16 +183,151 @@ def info(browser):
     print(f"size={size if size.isdigit() else ''}")
 
 
+# --- Tor Browser : archive signée --------------------------------------------
+
+def tor_settings():
+    """Adresses et empreinte ; un miroir de test (file://) peut les remplacer."""
+    if MIRROR.startswith("file://"):
+        return (MIRROR + "download-linux-x86_64.json", os.environ.get("WINLUX_BROWSER_TOR_FINGERPRINT", TOR_FINGERPRINT),
+                (MIRROR + "torbrowser.key",), re.compile(re.escape(MIRROR) + r"torbrowser/([0-9][0-9a-z.]*)/tor-browser-linux-x86_64-\1\.tar\.xz"))
+    return TOR_DOWNLOADS, TOR_FINGERPRINT, TOR_KEY_URLS, TOR_BINARY
+
+
+def dearmor(data):
+    """Clé OpenPGP en clair (ASCII armor) → paquets binaires lus par gpgv."""
+    text = data.decode("ascii", "replace")
+    if "-----BEGIN PGP PUBLIC KEY BLOCK-----" not in text:
+        return data
+    body = text.split("-----BEGIN PGP PUBLIC KEY BLOCK-----", 1)[1].split("-----END PGP PUBLIC KEY BLOCK-----", 1)[0]
+    lines = [line.strip() for line in body.strip().splitlines()]
+    # En-têtes facultatifs (« Comment: … ») puis une ligne vide ; « =XXXX » : somme de contrôle.
+    if "" in lines:
+        lines = lines[lines.index("") + 1:]
+    return base64.b64decode("".join(line for line in lines if line and not line.startswith("=")))
+
+
+def primary_fingerprint(data):
+    """Empreinte V4 du premier paquet « clé publique » (RFC 4880 §12.2), sans gpg."""
+    if len(data) < 2 or not data[0] & 0x80:
+        return ""
+    if data[0] & 0x40:  # en-tête au nouveau format
+        tag, first = data[0] & 0x3F, data[1]
+        if first < 192:
+            length, start = first, 2
+        elif first < 224:
+            length, start = ((first - 192) << 8) + data[2] + 192, 3
+        elif first == 255:
+            length, start = int.from_bytes(data[2:6], "big"), 6
+        else:
+            return ""
+    else:  # ancien format
+        tag, kind = (data[0] >> 2) & 0x0F, data[0] & 0x03
+        size = {0: 1, 1: 2, 2: 4}.get(kind)
+        if size is None:
+            return ""
+        length, start = int.from_bytes(data[1:1 + size], "big"), 1 + size
+    body = data[start:start + length]
+    if tag != 6 or len(body) != length or not body or body[0] != 4:
+        return ""
+    return hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + body).hexdigest().upper()
+
+
+def gpgv_ok(keyring, signature, data, fingerprint):
+    """Signature valide faite par la clé dont l'empreinte PRINCIPALE est épinglée."""
+    home = keyring.parent / "gnupg"
+    home.mkdir(mode=0o700, exist_ok=True)
+    result = subprocess.run(["gpgv", "--homedir", str(home), "--keyring", str(keyring), "--status-fd", "1",
+                             str(signature), str(data)], capture_output=True, text=True)
+    good = valid = False
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if parts[:2] == ["[GNUPG:]", "GOODSIG"]:
+            good = True
+        # VALIDSIG <empreinte de la sous-clé> … <empreinte de la clé principale>
+        if parts[:2] == ["[GNUPG:]", "VALIDSIG"] and parts[-1].upper() == fingerprint.upper():
+            valid = True
+    return result.returncode == 0 and good and valid
+
+
+def tor_key(work, fingerprint, urls):
+    """Clé des développeurs de Tor Browser, lue chez Tor ; empreinte contrôlée."""
+    keyring = work / "torbrowser.gpg"
+    for url in urls:
+        try:
+            fetch_index(url, work / "torbrowser.key")
+            keyring.write_bytes(dearmor((work / "torbrowser.key").read_bytes()))
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            continue
+        # Première clé du fichier = clé principale : elle doit être celle épinglée.
+        if primary_fingerprint(keyring.read_bytes()) == fingerprint.upper():
+            return keyring
+    raise ValueError("clé des développeurs de Tor Browser introuvable ou empreinte inattendue")
+
+
+def tor_release(work):
+    """Version, adresse de l'archive et SHA-256 tiré de la liste signée."""
+    downloads, fingerprint, key_urls, pattern = tor_settings()
+    fetch_index(downloads, work / "download.json")
+    data = json.loads((work / "download.json").read_text())
+    binary, signature, version = data.get("binary", ""), data.get("sig", ""), str(data.get("version", ""))
+    match = pattern.fullmatch(binary)
+    if not match or match.groups()[-1] != version or signature != binary + ".asc":
+        raise ValueError(f"adresse de Tor Browser inattendue : {binary}")
+    folder = binary.rsplit("/", 1)[0] + "/"
+    keyring = tor_key(work, fingerprint, key_urls)
+    fetch_index(folder + "sha256sums-signed-build.txt", work / "sums.txt")
+    fetch_index(folder + "sha256sums-signed-build.txt.asc", work / "sums.txt.asc")
+    if not gpgv_ok(keyring, work / "sums.txt.asc", work / "sums.txt", fingerprint):
+        raise ValueError("signature de la liste SHA-256 de Tor Browser invalide")
+    name = binary.rsplit("/", 1)[1]
+    sums = [line.split() for line in (work / "sums.txt").read_text().splitlines()]
+    digest = next((parts[0] for parts in sums if len(parts) == 2 and parts[1].lstrip("*") == name), "")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError(f"{name} absent de la liste SHA-256 signée")
+    return {"version": version, "binary": binary, "sig": signature, "sha256": digest, "keyring": keyring,
+            "fingerprint": fingerprint}
+
+
+def fetch_tor(output, work):
+    release = tor_release(work)
+    destination = output / f"{TOR_ID}.tar.xz"
+    if not destination.exists() or checksum(destination) != release["sha256"]:
+        partial = output / f".{TOR_ID}-{release['sha256'][:16]}.partial"
+        for old in output.glob(f".{TOR_ID}-*.partial"):
+            if old != partial:
+                old.unlink()
+        fetch_package(release["binary"], partial)
+        if checksum(partial) != release["sha256"]:
+            partial.unlink()
+            raise ValueError("checksum mismatch: tor")
+        fetch_index(release["sig"], work / "tor.tar.xz.asc")
+        if not gpgv_ok(release["keyring"], work / "tor.tar.xz.asc", partial, release["fingerprint"]):
+            partial.unlink()
+            raise ValueError("signature de Tor Browser invalide")
+        partial.replace(destination)
+    else:
+        fetch_index(release["sig"], work / "tor.tar.xz.asc")
+    # Signature et clé gardées : winlux-browsers revérifie l'archive avant de l'extraire.
+    (output / f"{TOR_ID}.tar.xz.asc").write_bytes((work / "tor.tar.xz.asc").read_bytes())
+    (output / f"{TOR_ID}.keyring").write_bytes(release["keyring"].read_bytes())
+    (output / f"{TOR_ID}.fingerprint").write_text(release["fingerprint"] + "\n")
+    (output / f"{TOR_ID}.sha256").write_text(release["sha256"] + "\n")
+    (output / f"{TOR_ID}.version").write_text(release["version"] + "\n")
+    (output / f"{TOR_ID}.source").write_text(release["binary"] + "\n")
+    (output / f"{TOR_ID}.package").write_text(TOR_PACKAGE + "\n")
+    print(f"{TOR_ID}: {release['version']} verified (SHA-256 + signature {release['fingerprint']})", flush=True)
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["--info"] and len(args) == 2:
         info(args[1])
         return
-    only = list(SOURCES)
+    only = list(BROWSERS)
     if args[:1] == ["--only"] and len(args) >= 2:
         only = [name for name in args[1].split(",") if name]
         args = args[2:]
-    unknown = [name for name in only if name not in SOURCES]
+    unknown = [name for name in only if name not in BROWSERS]
     if unknown:
         raise SystemExit(f"navigateur inconnu : {', '.join(unknown)}")
     output = pathlib.Path(args[0] if args else "build/browser-packages").resolve()
@@ -139,9 +335,12 @@ def main():
     with tempfile.TemporaryDirectory(dir=output, prefix=".download-") as work:
         work = pathlib.Path(work)
         for browser in only:
+            if browser == TOR_ID:
+                fetch_tor(output, work)
+                continue
             package, base, index = SOURCES[browser]
             base = MIRROR or base
-            fetch_index(base + index, work / "Packages.gz")
+            fetch_any_index(base, index, work / "Packages.gz")
             fields = select((work / "Packages.gz").read_bytes(), package)
             destination = output / f"{browser}.deb"
             if not destination.exists() or checksum(destination) != fields["SHA256"]:
@@ -155,13 +354,14 @@ def main():
                     partial.unlink()
                     raise ValueError(f"checksum mismatch: {browser}")
                 actual = subprocess.check_output(["dpkg-deb", "-f", str(partial), "Package"]).decode().strip()
-                if actual != package:
+                if actual != fields["Package"]:
                     partial.unlink()
                     raise ValueError(f"unexpected DEB: {actual}")
                 partial.replace(destination)
             (output / f"{browser}.sha256").write_text(fields["SHA256"] + "\n")
             (output / f"{browser}.version").write_text(fields["Version"] + "\n")
             (output / f"{browser}.source").write_text(urllib.parse.urljoin(base, fields["Filename"]) + "\n")
+            (output / f"{browser}.package").write_text(fields["Package"] + "\n")
             print(f"{browser}: {fields['Version']} verified", flush=True)
             fetch_langpacks(browser, base, work, output)
 
