@@ -1448,7 +1448,20 @@ impl Interpreter {
                 StepResult::Continue
             }
             O::Ret => StepResult::Return(pop!()),
-            O::Jmp | O::Calli => {
+            O::Jmp => {
+                // Saut en queue (ECMA-335 III.3.37) : la méthode en cours
+                // s'arrête et la cible, de même signature, reçoit ses
+                // arguments tels qu'ils sont ; son résultat devient le nôtre.
+                let token = tok1();
+                frame!().ip = next_ip;
+                let callee = self.resolve_callee(token);
+                let returns = !matches!(self.get_method_sig(token).ret_type, ElementType::Void);
+                let f = frame!();
+                let args: Vec<Value> = (0..f.args.layout.len()).map(|i| f.args.get(i)).collect();
+                let v = self.invoke(token, callee, args, false)?;
+                StepResult::Return(if returns { v } else { Value::Null })
+            }
+            O::Calli => {
                 return Err(exception(
                     "InvalidProgramException",
                     &format!("{op:?} n'est pas encore pris en charge"),
