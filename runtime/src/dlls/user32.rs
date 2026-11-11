@@ -146,19 +146,68 @@ unsafe fn register_class_common(
         crate::process::set_last_error(87);
         return 0;
     }
-    // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
-    // classe ; on rend son atome.
+    // Classe déjà enregistrée par ce module et pas encore désenregistrée :
+    // 0 et ERROR_CLASS_ALREADY_EXISTS, comme sous Windows (#1630). Une
+    // classe de même nom venue d'un autre module ou de Winlux garde
+    // l'ancienne tolérance et rend son atome.
+    let key = (name.to_ascii_lowercase(), instance);
+    let info = ClassInfo {
+        wnd_proc,
+        background,
+        instance,
+    };
+    let again = {
+        let mut app = lock(app_classes());
+        if app.registered.contains(&key) {
+            crate::process::set_last_error(ERROR_CLASS_ALREADY_EXISTS);
+            return 0;
+        }
+        app.registered.insert(key.clone());
+        app.unregistered.remove(&key)
+    };
     gui::set_class_style(&name, style);
     gui::set_class_cursor(&name, cursor);
-    gui::register_class(
-        &name,
-        ClassInfo {
-            wnd_proc,
-            background,
-            instance,
-        },
-    );
+    if again {
+        // Réenregistrement après UnregisterClass : la nouvelle procédure
+        // remplace l'ancienne.
+        gui::replace_class(&name, info);
+    } else {
+        gui::register_class(&name, info);
+    }
     class_atom(&name) as usize
+}
+
+const ERROR_CLASS_ALREADY_EXISTS: u32 = 1410;
+const ERROR_CLASS_DOES_NOT_EXIST: u32 = 1411;
+
+/// Classes enregistrées par le programme, par (nom en minuscules, module).
+#[derive(Default)]
+struct AppClasses {
+    registered: std::collections::HashSet<(String, usize)>,
+    unregistered: std::collections::HashSet<(String, usize)>,
+}
+
+fn app_classes() -> &'static Mutex<AppClasses> {
+    static C: OnceLock<Mutex<AppClasses>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(AppClasses::default()))
+}
+
+/// UnregisterClass : la classe du module peut être enregistrée de nouveau.
+/// Les fenêtres encore ouvertes gardent leur procédure.
+fn unregister_class(name: Option<String>, instance: usize) -> i32 {
+    let Some(name) = name else {
+        // Atome : la classe reste connue, rien à retirer.
+        return 1;
+    };
+    let key = (name.to_ascii_lowercase(), instance);
+    let mut app = lock(app_classes());
+    if app.registered.remove(&key) {
+        app.unregistered.insert(key);
+        1
+    } else {
+        crate::process::set_last_error(ERROR_CLASS_DOES_NOT_EXIST);
+        0
+    }
 }
 
 pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
@@ -4820,12 +4869,18 @@ pub unsafe extern "win64" fn remove_prop_w(hwnd: usize, name: *const u16) -> usi
 
 // ---------- Misc ----------
 
-pub extern "win64" fn unregister_class_a(_name: *const u8, _instance: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn unregister_class_a(name: *const u8, instance: usize) -> i32 {
+    unregister_class(
+        (name as usize > 0xFFFF).then(|| read_class_name_a(name)),
+        instance,
+    )
 }
 
-pub extern "win64" fn unregister_class_w(_name: *const u16, _instance: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn unregister_class_w(name: *const u16, instance: usize) -> i32 {
+    unregister_class(
+        (name as usize > 0xFFFF).then(|| read_class_name_w(name)),
+        instance,
+    )
 }
 
 pub extern "win64" fn get_dc_ex(hwnd: usize, _rgn: usize, _flags: u32) -> usize {
@@ -5223,6 +5278,42 @@ fn popup_decorations(style: u32) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1630 : une classe déjà inscrite par le même module est refusée
+    /// (ERROR_CLASS_ALREADY_EXISTS) jusqu'à son UnregisterClass.
+    #[test]
+    fn classe_deja_inscrite_refusee_puis_reinscrite() {
+        let _teb = crate::process::test_teb();
+        let name: Vec<u16> = "Winlux1630Message".encode_utf16().chain([0]).collect();
+        let wc = gui::WndClassA {
+            style: 0,
+            wnd_proc: def_window_proc_w as *const () as usize,
+            cls_extra: 0,
+            wnd_extra: 0,
+            instance: 0x40_0000,
+            icon: 0,
+            cursor: 0,
+            background: 0,
+            menu_name: std::ptr::null(),
+            class_name: name.as_ptr().cast(),
+        };
+        unsafe {
+            let atom = register_class_w(&wc);
+            assert_ne!(atom, 0);
+            assert_eq!(register_class_w(&wc), 0);
+            assert_eq!(crate::process::last_error(), 1410);
+            // Un autre module peut inscrire une classe de même nom.
+            let other = gui::WndClassA {
+                instance: 0x50_0000,
+                ..wc
+            };
+            assert_ne!(register_class_w(&other), 0);
+            assert_eq!(unregister_class_w(name.as_ptr(), 0x40_0000), 1);
+            assert_eq!(unregister_class_w(name.as_ptr(), 0x40_0000), 0);
+            assert_eq!(crate::process::last_error(), 1411);
+            assert_eq!(register_class_w(&wc), atom);
+        }
+    }
     use super::*;
 
     /// GetWindowPlacement : 44 octets, showCmd selon l'état, rectangle courant.

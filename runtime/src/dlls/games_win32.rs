@@ -1494,25 +1494,16 @@ unsafe extern "win64" fn WSARecvFrom(
     }
     0
 }
-/// WSAMSG (x64) : name 0, namelen 8, lpBuffers 16, dwBufferCount 24,
-/// Control 32, dwFlags 48. Les données de contrôle sont ignorées.
+/// WSASendMsg : aussi fonction d'extension, servie par ws2_32 (#1629).
 unsafe extern "win64" fn WSASendMsg(
     s: usize,
-    msg: *const u8,
+    msg: usize,
     flags: u32,
     sent: *mut u32,
     ovl: usize,
     cb: usize,
 ) -> i32 {
-    if msg.is_null() {
-        crate::dlls::ws2_32::wsa_set_last_error(10014);
-        return -1;
-    }
-    let name = std::ptr::read_unaligned(msg as *const usize) as *const u8;
-    let namelen = std::ptr::read_unaligned(msg.add(8) as *const i32);
-    let bufs = std::ptr::read_unaligned(msg.add(16) as *const usize) as *const WsaBuf;
-    let count = std::ptr::read_unaligned(msg.add(24) as *const u32);
-    WSASendTo(s, bufs, count, sent, flags, name, namelen, ovl, cb)
+    crate::dlls::ws2_32::wsa_send_msg(s, msg, flags, sent, ovl, cb)
 }
 pub fn ws2_32_exports() -> Exports {
     crate::exports! {

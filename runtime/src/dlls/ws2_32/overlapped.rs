@@ -807,6 +807,14 @@ const WSAID_GETACCEPTEXSOCKADDRS: [u8; 16] = [
 const WSAID_DISCONNECTEX: [u8; 16] = [
     0x11, 0x2E, 0xDA, 0x7F, 0x30, 0x86, 0x6F, 0x43, 0xA0, 0x31, 0xF5, 0x36, 0xA6, 0xEE, 0xC1, 0x57,
 ];
+/// WSAID_WSARECVMSG {F689D7C8-6F1F-436B-8A53-E54FE351C322} (mswsock.h).
+const WSAID_WSARECVMSG: [u8; 16] = [
+    0xC8, 0xD7, 0x89, 0xF6, 0x1F, 0x6F, 0x6B, 0x43, 0x8A, 0x53, 0xE5, 0x4F, 0xE3, 0x51, 0xC3, 0x22,
+];
+/// WSAID_WSASENDMSG {A441E712-754F-43CA-84A7-0DEE44CF606D} (mswsock.h).
+const WSAID_WSASENDMSG: [u8; 16] = [
+    0x12, 0xE7, 0x41, 0xA4, 0x4F, 0x75, 0xCA, 0x43, 0x84, 0xA7, 0x0D, 0xEE, 0x44, 0xCF, 0x60, 0x6D,
+];
 const WSAID_TRANSMITFILE: [u8; 16] = [
     0xF0, 0x7D, 0x36, 0xB5, 0xAC, 0xCB, 0xCF, 0x11, 0x95, 0xCA, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92,
 ];
@@ -826,6 +834,18 @@ fn extension_address(guid: &[u8; 16]) -> Option<usize> {
         )
     } else if *guid == WSAID_DISCONNECTEX {
         ("DisconnectEx", disconnect_ex as *const () as usize, 4)
+    } else if *guid == WSAID_WSARECVMSG {
+        (
+            "WSARecvMsg",
+            super::msg::wsa_recv_msg as *const () as usize,
+            5,
+        )
+    } else if *guid == WSAID_WSASENDMSG {
+        (
+            "WSASendMsg",
+            super::msg::wsa_send_msg as *const () as usize,
+            6,
+        )
     } else if *guid == WSAID_TRANSMITFILE {
         ("TransmitFile", transmit_file as *const () as usize, 7)
     } else {
@@ -844,7 +864,7 @@ fn extension_address(guid: &[u8; 16]) -> Option<usize> {
 }
 
 /// WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER) : ConnectEx, AcceptEx,
-/// GetAcceptExSockaddrs et DisconnectEx ; la sortie est un pointeur de la
+/// GetAcceptExSockaddrs, DisconnectEx, WSARecvMsg et WSASendMsg (#1629) ; la sortie est un pointeur de la
 /// taille de ceux du programme (4 octets en x86, #1408).
 pub(super) unsafe fn extension_function(
     in_buf: *const u8,
