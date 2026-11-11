@@ -737,6 +737,8 @@ pub(crate) fn canon_std(h: usize) -> usize {
         STD_INPUT_REAL | 0x7FFF_FFFF_FFFF_FFF6 => (-10isize) as usize,
         STD_OUTPUT_REAL | 0x7FFF_FFFF_FFFF_FFF5 => (-11isize) as usize,
         STD_ERROR_REAL | 0x7FFF_FFFF_FFFF_FFF4 => (-12isize) as usize,
+        // Tampon d'écran de CreateConsoleScreenBuffer : le même terminal.
+        _ if crate::dlls::kernel32_releve::is_screen_buffer(h) => (-11isize) as usize,
         _ => h,
     }
 }
@@ -2103,6 +2105,23 @@ unsafe fn create_file_opened(
         None => path,
     };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
+    // Appareil virtuel d'un pilote constructeur (#1533) : \\.\NomDuPilote.
+    if crate::dlls::vdev::is_virtual(path) {
+        return match crate::dlls::vdev::open(path) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(2);
+                usize::MAX
+            }
+        };
+    }
     if crate::dlls::hid::parse_path(path).is_some() {
         return match crate::dlls::hid::open_path(path, access) {
             Ok(f) => {
@@ -6555,7 +6574,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
+    if crate::dlls::kernel32_node::close_snapshot(handle)
+        || crate::dlls::jobs::close(handle)
+        || crate::dlls::kernel32_releve::close(handle)
+    {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -8592,6 +8614,45 @@ pub unsafe extern "win64" fn create_waitable_timer_w(
         manual,
         n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
     )
+}
+/// OpenWaitableTimerW : minuteur nommé de ce processus. Le handle ouvert
+/// partage le compteur d'armement du minuteur d'origine.
+pub unsafe extern "win64" fn open_waitable_timer_w(
+    access: u32,
+    inherit: i32,
+    name: *const u16,
+) -> usize {
+    let Some(n) = sync_name_w(name) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let h = open_event_a(access, inherit, n.as_ptr().cast());
+    if h == 0 {
+        return 0;
+    }
+    let Some(SyncHandle::Event(obj)) = lookup_sync(h) else {
+        return h;
+    };
+    let timers: Vec<(usize, Arc<AtomicUsize>)> = lock(waitable_timers())
+        .iter()
+        .map(|(&t, g)| (t, g.clone()))
+        .collect();
+    let generation = timers.into_iter().find_map(|(t, g)| match lookup_sync(t) {
+        Some(SyncHandle::Event(o)) if Arc::ptr_eq(&o, &obj) => Some(g),
+        _ => None,
+    });
+    match generation {
+        Some(g) => {
+            lock(waitable_timers()).insert(h, g);
+            h
+        }
+        None => {
+            // Le nom désigne un événement, pas un minuteur.
+            close_handle(h);
+            crate::process::set_last_error(6);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn create_waitable_timer_ex_w(
     attr: usize,
