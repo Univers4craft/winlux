@@ -333,3 +333,40 @@ fn privileges_du_jeton_et_ace_obligatoire() {
         FreeSid(low.cast());
     }
 }
+
+/// Comptes bien connus résolus comme sous Windows (#1639) : WiX
+/// (WixQueryOsWellKnownSID) les cherche avant d'écrire des ACL.
+#[test]
+fn comptes_bien_connus_resolus() {
+    for (kind, name, domain, use_) in [
+        (23u32, "LOCAL SERVICE", "NT AUTHORITY", 5u32),
+        (24, "NETWORK SERVICE", "NT AUTHORITY", 5),
+        (28, "Guests", "BUILTIN", 4),
+        (58, "Performance Log Users", "BUILTIN", 4),
+    ] {
+        let mut sid = [0u8; 68];
+        let mut size = sid.len() as u32;
+        assert_eq!(
+            unsafe { CreateWellKnownSid(kind, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+            1,
+            "{kind}"
+        );
+        let (mut n, mut d) = ([0u16; 64], [0u16; 64]);
+        let (mut nl, mut dl, mut u) = (64u32, 64u32, 0u32);
+        let ok = unsafe {
+            LookupAccountSidW(
+                std::ptr::null(),
+                sid.as_ptr(),
+                n.as_mut_ptr(),
+                &mut nl,
+                d.as_mut_ptr(),
+                &mut dl,
+                &mut u,
+            )
+        };
+        assert_eq!(ok, 1, "{kind}");
+        assert_eq!(String::from_utf16_lossy(&n[..nl as usize]), name);
+        assert_eq!(String::from_utf16_lossy(&d[..dl as usize]), domain);
+        assert_eq!(u, use_);
+    }
+}
