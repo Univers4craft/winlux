@@ -162,6 +162,7 @@ pub mod mpr;
 pub mod msacm32;
 pub mod mscms;
 pub mod mscoree;
+pub mod msctf_profiles;
 pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
