@@ -1945,7 +1945,7 @@ impl Interpreter {
                 frame!().constrained = ct;
                 StepResult::Continue
             }
-            O::Volatile | O::Unaligned | O::Tail | O::Readonly => StepResult::Continue,
+            O::Volatile | O::Unaligned | O::Tail | O::Readonly | O::No => StepResult::Continue,
 
             _ => {
                 crate::log_warn!("clr-il", "opcode non implémenté : {:?} à IP={}", op, offset);
