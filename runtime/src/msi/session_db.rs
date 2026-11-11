@@ -878,8 +878,91 @@ pub extern "win64" fn msi_database_is_table_persistent_a(db: usize, table: usize
     table_persistent(db, table, false)
 }
 
+/// Colonnes de la clé primaire d'une table, dans l'ordre des colonnes.
+fn key_columns(d: &Database, table: &str) -> Option<Vec<String>> {
+    let t = d.tables.get(table)?;
+    Some(
+        t.columns
+            .iter()
+            .zip(&t.keys)
+            .filter(|(_, &k)| k)
+            .map(|(c, _)| c.clone())
+            .collect(),
+    )
+}
+
+fn primary_keys(db: usize, table: usize, out: usize, wide: bool) -> u32 {
+    if out == 0 || table == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    unsafe { *(out as *mut u32) = 0 };
+    if db as u32 != DB_HANDLE {
+        return ERROR_INVALID_HANDLE;
+    }
+    let name = unsafe {
+        if wide {
+            crate::dlls::wstr(table as *const u16)
+        } else {
+            crate::dlls::cstr(table as *const u8)
+        }
+    };
+    let keys = with_db(|d| key_columns(d, &name));
+    match keys {
+        None => ERROR_INVALID_HANDLE,
+        Some(None) => ERROR_INVALID_TABLE,
+        Some(Some(keys)) => {
+            // Champ 0 : nom de la table ; champs 1..n : colonnes de la clé.
+            let mut fields = vec![Field::Str(name)];
+            fields.extend(keys.into_iter().map(Field::Str));
+            unsafe { *(out as *mut u32) = session::new_record(fields) };
+            ERROR_SUCCESS
+        }
+    }
+}
+
+/// MsiDatabaseGetPrimaryKeys : enregistrement des colonnes de la clé primaire.
+pub extern "win64" fn msi_database_get_primary_keys_w(db: usize, table: usize, out: usize) -> u32 {
+    primary_keys(db, table, out, true)
+}
+pub extern "win64" fn msi_database_get_primary_keys_a(db: usize, table: usize, out: usize) -> u32 {
+    primary_keys(db, table, out, false)
+}
+
+const MSIDBERROR_INVALIDARG: i32 = -3;
+const MSIDBERROR_NOERROR: i32 = 0;
+
+/// MsiViewGetError : MsiViewModify ne valide pas les lignes (pas de
+/// MSIMODIFY_VALIDATE), il n'y a donc jamais d'erreur de colonne à
+/// signaler : MSIDBERROR_NOERROR et un nom de colonne vide.
+fn view_error(view: usize, buf: usize, size: usize, wide: bool) -> i32 {
+    if size == 0 || !views(|v| v.views.contains_key(&(view as u32))) {
+        return MSIDBERROR_INVALIDARG;
+    }
+    unsafe {
+        if buf != 0 && *(size as *const u32) > 0 {
+            if wide {
+                *(buf as *mut u16) = 0;
+            } else {
+                *(buf as *mut u8) = 0;
+            }
+        }
+        *(size as *mut u32) = 0;
+    }
+    MSIDBERROR_NOERROR
+}
+pub extern "win64" fn msi_view_get_error_w(view: usize, buf: usize, size: usize) -> i32 {
+    view_error(view, buf, size, true)
+}
+pub extern "win64" fn msi_view_get_error_a(view: usize, buf: usize, size: usize) -> i32 {
+    view_error(view, buf, size, false)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "MsiDatabaseGetPrimaryKeysW" => fn msi_database_get_primary_keys_w,
+        "MsiDatabaseGetPrimaryKeysA" => fn msi_database_get_primary_keys_a,
+        "MsiViewGetErrorW" => fn msi_view_get_error_w,
+        "MsiViewGetErrorA" => fn msi_view_get_error_a,
         "MsiGetActiveDatabase" => fn msi_get_active_database,
         "MsiDatabaseOpenViewW" => fn msi_database_open_view_w,
         "MsiDatabaseOpenViewA" => fn msi_database_open_view_a,
@@ -935,6 +1018,7 @@ mod tests {
                 columns: vec!["Name".into(), "Data".into()],
                 rows: vec![vec![s("Outil"), Value::Int(1)]],
                 binary: vec![false, true],
+                ..Default::default()
             },
         );
         db.streams
@@ -1021,5 +1105,22 @@ mod tests {
             stream_of(&db, "Binary", hits[0].origin[0]).unwrap(),
             b"MZ\x90\0"
         );
+    }
+
+    #[test]
+    fn cles_primaires_lues_dans_columns() {
+        // Paquet réel produit par msitools : clés déclarées dans les tables
+        // standard (#1607).
+        let db = Database::parse(include_bytes!("testdata/sample.msi")).unwrap();
+        assert_eq!(key_columns(&db, "File").unwrap(), vec!["File".to_string()]);
+        assert_eq!(
+            key_columns(&db, "Component").unwrap(),
+            vec!["Component".to_string()]
+        );
+        assert_eq!(
+            key_columns(&db, "FeatureComponents").unwrap(),
+            vec!["Feature_".to_string(), "Component_".to_string()]
+        );
+        assert!(key_columns(&db, "Absente").is_none());
     }
 }
