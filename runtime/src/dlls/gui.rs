@@ -3120,6 +3120,11 @@ pub trait GuiBackend: Send {
     /// détachée pour le gestionnaire (_NET_WM_WINDOW_TYPE_TOOLBAR), dont la
     /// barre de titre n'a que le bouton Fermer (#1761).
     fn set_tool_type(&mut self, _hwnd: usize) {}
+    /// Épaisseur du cadre du gestionnaire autour d'une fenêtre de premier
+    /// niveau : gauche, droite, haut, bas (_NET_FRAME_EXTENTS, #1752).
+    fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        None
+    }
     /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
     /// gestionnaire ne doit pas lui donner le focus en l'affichant.
     fn set_no_initial_focus(&mut self, _hwnd: usize) {}

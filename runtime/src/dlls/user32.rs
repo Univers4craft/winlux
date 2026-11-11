@@ -1173,6 +1173,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
         send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
     }
+    if show && gui::visible_flag(hwnd) == Some(false) && !matches!(cmd, 2 | 3 | 6 | 7 | 11) {
+        fit_to_work_area(hwnd);
+    }
     let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
@@ -1211,6 +1214,73 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Fenêtre de premier niveau à barre de titre affichée : si son cadre
+/// dépasse la zone de travail de son écran, elle y est ramenée, et
+/// rétrécie si elle se redimensionne et n'y tient pas. Audacity restaure la
+/// position qu'il a enregistrée sans la contraindre ; sous la barre des
+/// tâches, la fenêtre restait coupée et la position fautive était
+/// réenregistrée à chaque fermeture (#1752). Les fenêtres sans cadre, les
+/// enfants et les fenêtres agrandies ou réduites ne sont pas touchées.
+unsafe fn fit_to_work_area(hwnd: usize) {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MINIMIZE: u32 = 0x2000_0000;
+    const WS_MAXIMIZE: u32 = 0x0100_0000;
+    let (Some(style), Some(rect)) = (gui::window_style(hwnd), gui::window_rect(hwnd)) else {
+        return;
+    };
+    if style & WS_CHILD != 0
+        || style & WS_CAPTION != WS_CAPTION
+        || style & (WS_MINIMIZE | WS_MAXIMIZE) != 0
+        || gui::window_parent(hwnd).unwrap_or(0) != 0
+        || OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return;
+    }
+    let monitors = super::monitors::list();
+    let index = super::monitors::from_rect_in(&monitors, &rect, 2);
+    let Some(monitor) = monitors.get(index.wrapping_sub(1)) else {
+        return;
+    };
+    let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
+    let resizable = style & WS_THICKFRAME != 0;
+    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
+    // interrogé.
+    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    let fitted =
+        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    if fitted == rect {
+        return;
+    }
+    crate::thunks::api_note(&format!(
+        "ShowWindow {hwnd:#x} : ({},{} {}x{}) ramenée dans la zone de travail ({},{} {}x{}) (#1752)",
+        rect.left,
+        rect.top,
+        rect.width(),
+        rect.height(),
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height()
+    ));
+    set_window_pos(
+        hwnd,
+        0,
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height(),
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 
 /// Visibilité changée par ShowWindow : comme Windows, la fenêtre reçoit

@@ -5045,6 +5045,51 @@ impl gui::GuiBackend for X11Backend {
         ))
     }
 
+    fn frame_extents(&mut self, hwnd: usize) -> Option<[i32; 4]> {
+        let top = Self::top_xwin(self.windows.get(&hwnd)?);
+        let root = self.conn.setup().roots[self.screen].root;
+        let atom = |conn: &RustConnection, name: &[u8]| {
+            conn.intern_atom(false, name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.atom)
+        };
+        let extents = atom(&self.conn, b"_NET_FRAME_EXTENTS")?;
+        let read = |conn: &RustConnection| -> Option<[i32; 4]> {
+            let reply = conn
+                .get_property(false, top, extents, AtomEnum::CARDINAL, 0, 4)
+                .ok()?
+                .reply()
+                .ok()?;
+            let v: Vec<u32> = reply.value32()?.collect();
+            (v.len() == 4).then(|| [v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32])
+        };
+        let found = match read(&self.conn) {
+            Some(v) => Some(v),
+            None => {
+                // Fenêtre pas encore gérée : _NET_REQUEST_FRAME_EXTENTS (EWMH),
+                // le gestionnaire pose la propriété sans afficher la fenêtre.
+                let request = atom(&self.conn, b"_NET_REQUEST_FRAME_EXTENTS")?;
+                let ev =
+                    x11rb::protocol::xproto::ClientMessageEvent::new(32, top, request, [0u32; 5]);
+                let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+                    | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+                let _ = self.conn.send_event(false, root, mask, ev);
+                let _ = self.conn.flush();
+                let mut got = None;
+                for _ in 0..20 {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    got = read(&self.conn);
+                    if got.is_some() {
+                        break;
+                    }
+                }
+                got
+            }
+        }?;
+        Some(found.map(|v| self.logical(v)))
+    }
+
     fn work_area(&mut self) -> Option<Rect> {
         // _NET_WORKAREA du bureau courant : x, y, largeur, hauteur.
         let root = self.conn.setup().roots[self.screen].root;
