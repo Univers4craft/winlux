@@ -891,6 +891,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::filedialog_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Raccourcis Windows (ShellLink : Discord, Electron, #1732).
+        if let Some(hr) = super::shell_link::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // DirectInput 8 et 7 par CoCreateInstance (SDL 2, #1516).
         if let Some(hr) = super::dinput8::create_builtin(&guid, &iid, out) {
             return hr;
