@@ -461,6 +461,265 @@ pub unsafe extern "win64" fn load_string_w(
     n as i32
 }
 
+// ── Énumération (EnumResourceTypes/Names/Languages) ─────────────────
+
+/// Clé d'une entrée de répertoire : identifiant ou nom UTF-16.
+#[derive(Clone, Debug, PartialEq)]
+enum ResKey {
+    Id(u16),
+    Name(Vec<u16>),
+}
+
+/// Entrées d'un répertoire : clé et valeur (sous-répertoire ou données).
+fn dir_list(rsrc: &[u8], dir: usize) -> Option<Vec<(ResKey, u32)>> {
+    let named = rd16(rsrc, dir + 12)? as usize;
+    let ids = rd16(rsrc, dir + 14)? as usize;
+    let mut out = Vec::with_capacity(named + ids);
+    for i in 0..named + ids {
+        let off = dir + 16 + i * 8;
+        let key = rd32(rsrc, off)?;
+        let val = rd32(rsrc, off + 4)?;
+        let k = if key & 0x8000_0000 != 0 {
+            let noff = (key & 0x7FFF_FFFF) as usize;
+            let len = rd16(rsrc, noff)? as usize;
+            let mut name = Vec::with_capacity(len);
+            for j in 0..len {
+                name.push(rd16(rsrc, noff + 2 + j * 2)?);
+            }
+            ResKey::Name(name)
+        } else {
+            ResKey::Id(key as u16)
+        };
+        out.push((k, val));
+    }
+    Some(out)
+}
+
+/// Copie d'une clé pour un rappel : MAKEINTRESOURCE ou chaîne terminée
+/// sur le tas (sous 4 Go pour un programme x86), libérée après l'appel.
+fn with_key<T>(k: &ResKey, ansi: bool, f: impl FnOnce(usize) -> T) -> T {
+    match k {
+        ResKey::Id(id) => f(*id as usize),
+        ResKey::Name(n) => {
+            let bytes: Vec<u8> = if ansi {
+                let mut b = crate::dlls::encode_ansi(&String::from_utf16_lossy(n));
+                b.push(0);
+                b
+            } else {
+                n.iter()
+                    .chain(std::iter::once(&0))
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect()
+            };
+            // SAFETY : bloc alloué, rempli puis libéré ici.
+            unsafe {
+                let p = libc::malloc(bytes.len()) as *mut u8;
+                if p.is_null() {
+                    return f(0);
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+                let r = f(p as usize);
+                libc::free(p.cast());
+                r
+            }
+        }
+    }
+}
+
+/// Clé désignée par un argument : entier, ou chaîne (ANSI ou large).
+/// Une chaîne « #123 » vaut l'identifiant 123, comme sous Windows.
+unsafe fn arg_key(p: usize, ansi: bool) -> ResKey {
+    if is_int_resource(p) {
+        return ResKey::Id(p as u16);
+    }
+    let s = if ansi {
+        crate::dlls::cstr(p as *const u8)
+    } else {
+        crate::dlls::wstr(p as *const u16)
+    };
+    if let Some(n) = s.strip_prefix('#').and_then(|d| d.parse::<u16>().ok()) {
+        return ResKey::Id(n);
+    }
+    ResKey::Name(s.encode_utf16().collect())
+}
+
+fn key_eq(a: &ResKey, b: &ResKey) -> bool {
+    match (a, b) {
+        (ResKey::Id(x), ResKey::Id(y)) => x == y,
+        (ResKey::Name(x), ResKey::Name(y)) => {
+            let up = |c: &u16| {
+                if *c < 128 {
+                    (*c as u8).to_ascii_uppercase() as u16
+                } else {
+                    *c
+                }
+            };
+            x.len() == y.len() && x.iter().map(up).eq(y.iter().map(up))
+        }
+        _ => false,
+    }
+}
+
+const ERROR_RESOURCE_DATA_NOT_FOUND: u32 = 1812;
+const ERROR_RESOURCE_TYPE_NOT_FOUND: u32 = 1813;
+const ERROR_RESOURCE_NAME_NOT_FOUND: u32 = 1814;
+const ERROR_RESOURCE_LANG_NOT_FOUND: u32 = 1815;
+const ERROR_RESOURCE_ENUM_USER_STOP: u32 = 15106;
+
+fn enum_base(hmod: usize) -> usize {
+    if hmod == 0 {
+        loader::main_module().map(|m| m.base).unwrap_or(0)
+    } else {
+        hmod & !loader::DATA_HANDLE_BITS
+    }
+}
+
+/// Sous-répertoire de `key` dans le répertoire `dir`.
+fn sub_dir(rsrc: &[u8], dir: usize, key: &ResKey) -> Option<usize> {
+    dir_list(rsrc, dir)?
+        .into_iter()
+        .find(|(k, v)| key_eq(k, key) && v & 0x8000_0000 != 0)
+        .map(|(_, v)| (v & 0x7FFF_FFFF) as usize)
+}
+
+fn fail(e: u32) -> i32 {
+    crate::process::set_last_error(e);
+    0
+}
+
+type TypeProc = unsafe extern "win64" fn(usize, usize, isize) -> i32;
+type NameProc = unsafe extern "win64" fn(usize, usize, usize, isize) -> i32;
+type LangProc = unsafe extern "win64" fn(usize, usize, usize, u16, isize) -> i32;
+
+unsafe fn enum_types(hmod: usize, proc_: usize, param: isize, ansi: bool) -> i32 {
+    let Some((_, rsrc)) = resource_root(enum_base(hmod)) else {
+        return fail(ERROR_RESOURCE_DATA_NOT_FOUND);
+    };
+    if proc_ == 0 {
+        return fail(87);
+    }
+    let f: TypeProc = std::mem::transmute(proc_);
+    let list = dir_list(rsrc, 0).unwrap_or_default();
+    if list.is_empty() {
+        return fail(ERROR_RESOURCE_TYPE_NOT_FOUND);
+    }
+    for (k, _) in &list {
+        if with_key(k, ansi, |t| f(hmod, t, param)) == 0 {
+            return fail(ERROR_RESOURCE_ENUM_USER_STOP);
+        }
+    }
+    1
+}
+
+unsafe fn enum_names(hmod: usize, ty: usize, proc_: usize, param: isize, ansi: bool) -> i32 {
+    let Some((_, rsrc)) = resource_root(enum_base(hmod)) else {
+        return fail(ERROR_RESOURCE_DATA_NOT_FOUND);
+    };
+    if proc_ == 0 {
+        return fail(87);
+    }
+    let tk = arg_key(ty, ansi);
+    let Some(tdir) = sub_dir(rsrc, 0, &tk) else {
+        return fail(ERROR_RESOURCE_TYPE_NOT_FOUND);
+    };
+    let f: NameProc = std::mem::transmute(proc_);
+    let list = dir_list(rsrc, tdir).unwrap_or_default();
+    if list.is_empty() {
+        return fail(ERROR_RESOURCE_NAME_NOT_FOUND);
+    }
+    for (k, _) in &list {
+        if with_key(&tk, ansi, |t| with_key(k, ansi, |n| f(hmod, t, n, param))) == 0 {
+            return fail(ERROR_RESOURCE_ENUM_USER_STOP);
+        }
+    }
+    1
+}
+
+unsafe fn enum_langs(
+    hmod: usize,
+    ty: usize,
+    name: usize,
+    proc_: usize,
+    param: isize,
+    ansi: bool,
+) -> i32 {
+    let Some((_, rsrc)) = resource_root(enum_base(hmod)) else {
+        return fail(ERROR_RESOURCE_DATA_NOT_FOUND);
+    };
+    if proc_ == 0 {
+        return fail(87);
+    }
+    let (tk, nk) = (arg_key(ty, ansi), arg_key(name, ansi));
+    let Some(tdir) = sub_dir(rsrc, 0, &tk) else {
+        return fail(ERROR_RESOURCE_TYPE_NOT_FOUND);
+    };
+    let Some(ndir) = sub_dir(rsrc, tdir, &nk) else {
+        return fail(ERROR_RESOURCE_NAME_NOT_FOUND);
+    };
+    let f: LangProc = std::mem::transmute(proc_);
+    let list = dir_list(rsrc, ndir).unwrap_or_default();
+    if list.is_empty() {
+        return fail(ERROR_RESOURCE_LANG_NOT_FOUND);
+    }
+    for (k, _) in &list {
+        let lang = match k {
+            ResKey::Id(l) => *l,
+            ResKey::Name(_) => continue,
+        };
+        let r = with_key(&tk, ansi, |t| {
+            with_key(&nk, ansi, |n| f(hmod, t, n, lang, param))
+        });
+        if r == 0 {
+            return fail(ERROR_RESOURCE_ENUM_USER_STOP);
+        }
+    }
+    1
+}
+
+/// EnumResourceTypesW(module, rappel, lParam).
+pub unsafe extern "win64" fn enum_resource_types_w(hmod: usize, f: usize, p: isize) -> i32 {
+    enum_types(hmod, f, p, false)
+}
+pub unsafe extern "win64" fn enum_resource_types_a(hmod: usize, f: usize, p: isize) -> i32 {
+    enum_types(hmod, f, p, true)
+}
+/// EnumResourceNamesW(module, type, rappel, lParam).
+pub unsafe extern "win64" fn enum_resource_names_w(
+    hmod: usize,
+    ty: usize,
+    f: usize,
+    p: isize,
+) -> i32 {
+    enum_names(hmod, ty, f, p, false)
+}
+pub unsafe extern "win64" fn enum_resource_names_a(
+    hmod: usize,
+    ty: usize,
+    f: usize,
+    p: isize,
+) -> i32 {
+    enum_names(hmod, ty, f, p, true)
+}
+/// EnumResourceLanguagesW(module, type, nom, rappel, lParam).
+pub unsafe extern "win64" fn enum_resource_languages_w(
+    hmod: usize,
+    ty: usize,
+    name: usize,
+    f: usize,
+    p: isize,
+) -> i32 {
+    enum_langs(hmod, ty, name, f, p, false)
+}
+pub unsafe extern "win64" fn enum_resource_languages_a(
+    hmod: usize,
+    ty: usize,
+    name: usize,
+    f: usize,
+    p: isize,
+) -> i32 {
+    enum_langs(hmod, ty, name, f, p, true)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "FindResourceA" => fn find_resource_a,
@@ -472,6 +731,12 @@ pub fn exports() -> crate::dlls::Exports {
         "LockResource" => fn lock_resource,
         "LoadStringA" => fn load_string_a,
         "LoadStringW" => fn load_string_w,
+        "EnumResourceTypesA" => fn enum_resource_types_a,
+        "EnumResourceTypesW" => fn enum_resource_types_w,
+        "EnumResourceNamesA" => fn enum_resource_names_a,
+        "EnumResourceNamesW" => fn enum_resource_names_w,
+        "EnumResourceLanguagesA" => fn enum_resource_languages_a,
+        "EnumResourceLanguagesW" => fn enum_resource_languages_w,
     }
 }
 

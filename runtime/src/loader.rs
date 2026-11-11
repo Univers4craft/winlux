@@ -66,6 +66,18 @@ pub fn set_dll_directory(dir: Option<&str>) {
     user_search(|u| u.directory = d);
 }
 
+/// GetDllDirectory : le dossier réglé par SetDllDirectory, en chemin
+/// Windows (`None` si aucun).
+pub fn dll_directory() -> Option<String> {
+    user_search(|u| u.directory.clone()).map(|d| {
+        if d.as_os_str().is_empty() {
+            String::new()
+        } else {
+            crate::paths::to_windows(&d)
+        }
+    })
+}
+
 /// AddDllDirectory : chemin absolu exigé ; rend le cookie (0 = refus).
 pub fn add_dll_directory(dir: &str) -> usize {
     let p = crate::paths::to_linux(dir);

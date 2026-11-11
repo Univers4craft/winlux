@@ -141,6 +141,7 @@ pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
 pub mod kernel32_path;
+pub mod kernel32_releve;
 pub mod knownfolders;
 pub mod legacy_com;
 pub mod legacy_dlls;
@@ -443,6 +444,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -1650,6 +1652,10 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
 /// (VLC appelait un pointeur resté nul, #495).
 pub const KERNELBASE_ONLY: &[&str] = &[
     "WaitOnAddress",
+    // Absentes de kernel32.dll, servies par KernelBase et les API-sets
+    // (api-ms-win-core-handle, -realtime) : Qt WebEngine (#1510).
+    "CompareObjectHandles",
+    "QueryUnbiasedInterruptTimePrecise",
     "WakeByAddressAll",
     "WakeByAddressSingle",
     // Douteux (#521) : user32 les exporte ; on les laisse visibles par
