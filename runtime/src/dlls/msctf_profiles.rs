@@ -688,16 +688,27 @@ mod tests {
             assert_eq!(next(e, 1, prof.as_mut_ptr(), &mut got), S_FALSE);
             assert_eq!(got, 0);
             e_release(e);
+            // Table complète : 21 méthodes, SubstituteKeyboardLayout (n° 20)
+            // en dernier. On l'appelle plutôt que de comparer des adresses de
+            // fonctions, qui ne sont pas uniques en --release (#1645).
+            let vt = *(p as *const *const usize);
+            assert!((0..21).all(|i| *vt.add(i) != 0));
+            let s: unsafe extern "win64" fn(usize, *const u8, u16, *const u8, usize) -> i32 =
+                call(p, 20);
+            assert_eq!(
+                s(
+                    p,
+                    CLSID_TF_INPUT_PROCESSOR_PROFILES.as_ptr(),
+                    lang,
+                    std::ptr::null(),
+                    0
+                ),
+                E_NOTIMPL
+            );
             // Le Release de la face Mgr et celui de la face principale
             // libèrent l'objet sans double libération.
             assert_eq!(m_release(m), 1);
             assert_eq!(p_release(p), 0);
-            // Table complète : 21 méthodes, SubstituteKeyboardLayout en dernier.
-            let vt = profiles_vtbl() as *const usize;
-            assert_eq!(
-                *vt.add(20),
-                p_substitute_keyboard_layout as *const () as usize
-            );
         }
     }
 }
