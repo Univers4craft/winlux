@@ -84,7 +84,12 @@ pub fn fwpuclnt_exports() -> crate::dlls::Exports {
 
 // ---- netapi32.dll ---------------------------------------------------------
 
-unsafe extern "win64" fn NetApiBufferFree(_buf: usize) -> u32 {
+/// NetApiBufferFree : les tampons de netapi32 viennent de LocalAlloc
+/// (lot E, #1614).
+unsafe extern "win64" fn NetApiBufferFree(buf: usize) -> u32 {
+    if buf != 0 {
+        crate::dlls::kernel32_misc::local_free(buf as *mut std::ffi::c_void);
+    }
     0
 }
 unsafe extern "win64" fn net_denied4(_a: usize, _b: usize, _c: usize, _d: usize) -> u32 {

@@ -769,6 +769,20 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
 }
 
 unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize {
+    // Classe CS_DBLCLKS : le second appui d'un double-clic arrive en
+    // WM_LBUTTONDBLCLK, daté par Winlux à l'heure du serveur X. Mesuré ici
+    // à la lecture du message, un Explorateur occupé à redessiner après le
+    // premier clic perdait le double-clic (#1689). Hors Explorateur, c'est
+    // un appui ordinaire, comme avant.
+    if msg == WM_LBUTTONDBLCLK {
+        if wm::native_app().is_some() {
+            let x = (lparam as u32 & 0xFFFF) as i16 as i32;
+            let y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
+            wm::native_mouse(hwnd, wm::Mouse::DoubleClick, x, y);
+            return 0;
+        }
+        return wnd_proc(hwnd, WM_LBUTTONDOWN, wparam, lparam);
+    }
     match msg {
         WM_PAINT => {
             let first = GOT_PAINT == 0;
@@ -1009,7 +1023,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let class = c"WinluxDemoClass";
         let wc = WndClassExA {
             size: core::mem::size_of::<WndClassExA>() as u32,
-            style: 0,
+            style: CS_DBLCLKS,
             wnd_proc: wnd_proc as *const () as usize,
             cls_extra: 0,
             wnd_extra: 0,

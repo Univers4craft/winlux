@@ -412,7 +412,10 @@ pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
 pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
     MOUSE_X = x;
     MOUSE_Y = y;
-    if ev == Mouse::Down {
+    if ev == Mouse::DoubleClick {
+        // Double-clic reconnu par Winlux (WM_LBUTTONDBLCLK, #1689).
+        LAST_CLICK_TIME = 0;
+    } else if ev == Mouse::Down {
         if now().wrapping_sub(LAST_CLICK_TIME) < 450
             && (x - LAST_CLICK_X).abs() < 5
             && (y - LAST_CLICK_Y).abs() < 5

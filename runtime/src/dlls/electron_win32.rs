@@ -1464,8 +1464,26 @@ unsafe fn hstring_parts(h: usize) -> Option<(*const u16, u32)> {
         return None;
     }
     let len = p.add(2).read_unaligned();
-    let text = ((h + 16) as *const usize).read_unaligned() as *const u16;
+    let text = header_text(h);
     Some((text, len))
+}
+
+/// Texte de l'en-tête, à +16, sur la taille d'un pointeur du programme :
+/// le HSTRING_HEADER d'un programme x86 n'a que 20 octets (#1630).
+unsafe fn header_text(h: usize) -> *const u16 {
+    if crate::wow32::pointer_size() == 4 {
+        ((h + 16) as *const u32).read_unaligned() as usize as *const u16
+    } else {
+        ((h + 16) as *const usize).read_unaligned() as *const u16
+    }
+}
+
+unsafe fn set_header_text(h: usize, text: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        ((h + 16) as *mut u32).write_unaligned(text as u32);
+    } else {
+        ((h + 16) as *mut usize).write_unaligned(text);
+    }
 }
 
 unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
@@ -1480,7 +1498,7 @@ unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
     std::ptr::copy_nonoverlapping(src, text, len as usize);
     (p as *mut u32).write(HSTRING_MAGIC);
     (p.add(8) as *mut u32).write(len);
-    (p.add(16) as *mut usize).write(text as usize);
+    set_header_text(p as usize, text as usize);
     p as usize
 }
 
@@ -1492,7 +1510,7 @@ pub(crate) unsafe extern "win64" fn WindowsCreateString(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
     if len == 0 {
         return 0;
     }
@@ -1503,7 +1521,7 @@ pub(crate) unsafe extern "win64" fn WindowsCreateString(
     if h == 0 {
         return E_OUTOFMEMORY;
     }
-    *out = h;
+    crate::wow32::write_ptr(out as usize, h);
     0
 }
 
@@ -1516,19 +1534,20 @@ unsafe extern "win64" fn WindowsCreateStringReference(
     if out.is_null() || header.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
     if len == 0 {
         return 0;
     }
     if src.is_null() || *src.add(len as usize) != 0 {
         return E_INVALIDARG;
     }
-    std::ptr::write_bytes(header, 0, 24);
+    // HSTRING_HEADER : 20 octets en x86, 24 en x64 (#1630).
+    std::ptr::write_bytes(header, 0, 16 + crate::wow32::pointer_size());
     (header as *mut u32).write_unaligned(HSTRING_MAGIC);
     (header.add(4) as *mut u32).write_unaligned(HSTRING_REFERENCE);
     (header.add(8) as *mut u32).write_unaligned(len);
-    (header.add(16) as *mut usize).write_unaligned(src as usize);
-    *out = header as usize;
+    set_header_text(header as usize, src as usize);
+    crate::wow32::write_ptr(out as usize, header as usize);
     0
 }
 
@@ -1550,7 +1569,7 @@ unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i3
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
     let Some((text, len)) = hstring_parts(h) else {
         return E_INVALIDARG;
     };
@@ -1561,7 +1580,7 @@ unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i3
     if copy == 0 {
         return E_OUTOFMEMORY;
     }
-    *out = copy;
+    crate::wow32::write_ptr(out as usize, copy);
     0
 }
 
@@ -1664,8 +1683,16 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
         return hr;
     }
     if !out.is_null() {
-        *out = 0;
+        crate::wow32::write_ptr(out as usize, 0);
     }
+    // Classe et interface demandées, pour savoir ce qu'il faudrait servir
+    // (#1659), comme le journal de CoCreateInstance.
+    let iid_text = super::comobj::read_guid(iid as *const u8)
+        .map_or_else(|| "NULL".to_string(), |g| super::comobj::guid_str(&g));
+    crate::log_warn!(
+        "com",
+        "RoGetActivationFactory : classe « {name} » (interface {iid_text}) inconnue (REGDB_E_CLASSNOTREG)"
+    );
     REGDB_E_CLASSNOTREG
 }
 
@@ -1687,8 +1714,9 @@ unsafe extern "win64" fn GetRestrictedErrorInfo(out: *mut usize) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = super::ole32_lot_c::take_restricted_error_info();
-    if *out == 0 {
+    let info = super::ole32_lot_c::take_restricted_error_info();
+    crate::wow32::write_ptr(out as usize, info);
+    if info == 0 {
         1
     } else {
         0
@@ -2190,17 +2218,21 @@ unsafe extern "win64" fn CertGetEnhancedKeyUsage(
     if len.is_null() {
         return 0;
     }
+    // CERT_ENHKEY_USAGE { cUsageIdentifier, rgpszUsageIdentifier } : 8 octets
+    // en x86, 16 en x64 (#1667).
+    let ps = crate::wow32::pointer_size();
+    let size = 2 * ps as u32;
     if usage.is_null() {
-        *len = 16;
+        *len = size;
         return 1;
     }
-    if *len < 16 {
-        *len = 16;
+    if *len < size {
+        *len = size;
         set_last_error(234); // ERROR_MORE_DATA
         return 0;
     }
     *usage = 0; // cUsageIdentifier
-    *(usage.add(2) as *mut usize) = 0;
+    crate::wow32::write_ptr(usage as usize + ps, 0);
     set_last_error(CRYPT_E_NOT_FOUND);
     1
 }

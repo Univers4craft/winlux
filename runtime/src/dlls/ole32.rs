@@ -1386,7 +1386,11 @@ pub unsafe extern "win64" fn co_increment_mta_usage(cookie: *mut usize) -> i32 {
         return E_INVALIDARG;
     }
     MTA_USAGE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    *cookie = MTA_COOKIE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // CO_MTA_USAGE_COOKIE est un pointeur : 4 octets en x86 (#1630).
+    crate::wow32::write_ptr(
+        cookie as usize,
+        MTA_COOKIE.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+    );
     S_OK
 }
 

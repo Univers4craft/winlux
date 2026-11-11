@@ -199,6 +199,58 @@ mod tests {
         assert_eq!(quote_arg("a\"b"), "\"a\\\"b\"");
     }
 
+    /// Un module en cours de déchargement (compteur à zéro, image peut-être
+    /// déjà démappée) n'a pas de bloc TLS dans un nouveau thread (#1673).
+    #[test]
+    fn tls_statique_ignore_un_module_en_dechargement() {
+        use crate::loader::{Module, TlsInfo};
+        use crate::pe::PeImage;
+        let template = *b"winlux-tls-1668!";
+        let module = |slot: usize, start: usize, refcount: u32| Module {
+            name: format!("m{slot}.dll"),
+            path: format!("m{slot}.dll").into(),
+            base: 0,
+            size: 0,
+            pe: PeImage {
+                characteristics: 0,
+                entry_rva: 0,
+                image_base: 0,
+                section_alignment: 0x1000,
+                size_of_image: 0,
+                size_of_headers: 0,
+                subsystem: 3,
+                dll_characteristics: 0,
+                stack_reserve: 0,
+                stack_commit: 0,
+                dirs: vec![],
+                sections: vec![],
+                il_only32: false,
+                x86: false,
+            },
+            tls: Some(TlsInfo {
+                raw_start: start,
+                raw_end: start + template.len(),
+                index_addr: 0,
+                callbacks_addr: 0,
+                zero_fill: 0,
+                slot,
+            }),
+            initialized: true,
+            refcount,
+        };
+        let t = template.as_ptr() as usize;
+        // Image principale à zéro référence, DLL démappée (adresse 0x10, page
+        // nulle jamais projetée) en cours de déchargement, DLL vivante.
+        let mods = [module(0, t, 0), module(1, 0x10, 0), module(2, t, 1)];
+        let array = super::alloc_zeroed(4096);
+        super::fill_static_tls(&mods, array);
+        let slot = |i: usize| unsafe { *((array + i * 8) as *const usize) };
+        let block = |i: usize| unsafe { std::slice::from_raw_parts(slot(i) as *const u8, 16) };
+        assert_eq!(block(0), &template);
+        assert_eq!(slot(1), 0);
+        assert_eq!(block(2), &template);
+    }
+
     #[test]
     fn parent_de_chromium_vivant_ou_mort() {
         assert!(super::stat_alive("42 (claude.exe) S 1 42"));
@@ -613,10 +665,31 @@ pub fn clear_tls_value_all_threads(index: u32) -> bool {
 }
 
 /// TLS statique (__declspec(thread)) : un bloc par module, copié depuis l'image.
+///
+/// La copie se fait sous le verrou de MODULES : FreeLibrary retire le module
+/// de la liste sous ce verrou avant de le démapper, donc un module encore
+/// listé ici reste projeté jusqu'à la fin de la copie. Un module dont le
+/// compteur est à zéro est en cours de déchargement : son index TLS est déjà
+/// rendu, il n'a pas de bloc (#1673). L'image principale n'est jamais
+/// déchargée : elle garde le sien quel que soit son compteur.
 fn setup_static_tls(teb: usize) {
-    let mods = loader::MODULES.lock().unwrap().clone();
     let array = alloc_zeroed(4096);
-    for m in mods.iter() {
+    let mods = loader::MODULES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fill_static_tls(&mods, array);
+    drop(mods);
+    unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
+}
+
+/// Remplit le tableau TLS d'un thread depuis la liste des modules, tenue
+/// verrouillée par l'appelant.
+fn fill_static_tls(mods: &[Module], array: usize) {
+    let live = mods
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| *i == 0 || m.refcount != 0);
+    for (_, m) in live {
         if let Some(t) = &m.tls {
             let idx = t.slot;
             if idx >= loader::TLS_MODULE_SLOTS {
@@ -633,7 +706,6 @@ fn setup_static_tls(teb: usize) {
             }
         }
     }
-    unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
 }
 
 fn run_tls_callbacks(m: &Module, reason: u32) {

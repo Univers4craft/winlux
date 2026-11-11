@@ -794,7 +794,9 @@ pub fn exports() -> crate::dlls::Exports {
         "GetEnhMetaFileW" => fn meta_fail, "GetEnhMetaFileHeader" => fn meta_fail,
         "PlayEnhMetaFile" => fn meta_fail, "GetWinMetaFileBits" => fn meta_fail,
         "SetWinMetaFileBits" => fn meta_fail, "SetMetaFileBitsEx" => fn meta_fail,
-        "GetMetaFileBitsEx" => fn meta_fail, "DeleteEnhMetaFile" => fn meta_ok, "DeleteMetaFile" => fn meta_ok,
+        "GetMetaFileBitsEx" => fn meta_fail,
+        // Métafichiers Windows 3.x : pas encore lus, comme SetMetaFileBitsEx (#1692).
+        "GetMetaFileW" => fn meta_fail, "GetMetaFileA" => fn meta_fail, "DeleteEnhMetaFile" => fn meta_ok, "DeleteMetaFile" => fn meta_ok,
     }
 }
 

@@ -850,6 +850,11 @@ fn new_handle(printer: Option<PrinterEntry>, devmode: Option<DevMode>) -> usize 
     h
 }
 
+/// Poignée d'imprimante ou de serveur d'impression ouverte (lot E, #1614).
+pub(crate) fn is_printer_handle(h: usize) -> bool {
+    lock(handles()).contains_key(&h)
+}
+
 fn handle_printer(h: usize) -> Option<PrinterEntry> {
     lock(handles()).get(&h).and_then(|p| p.printer.clone())
 }

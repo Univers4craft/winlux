@@ -1635,9 +1635,294 @@ unsafe extern "win64" fn set_window_theme_attribute(
     0
 }
 
+// ---------------------------------------------------------------------
+// Relevé d'iCUE 4.18 (#1680) : gdi32 ScaleViewportExtEx, user32
+// GetMenuCheckMarkDimensions, GrayStringA/W et RealChildWindowFromPoint,
+// d'après la documentation publique et winuser.h / wingdi.h de mingw-w64.
+// ---------------------------------------------------------------------
+
+/// ScaleViewportExtEx : étendue du viewport × num / dénom (mode
+/// anisotrope ou isotrope), l'ancienne rendue dans `old`.
+unsafe extern "win64" fn scale_viewport_ext_ex(
+    hdc: usize,
+    xn: i32,
+    xd: i32,
+    yn: i32,
+    yd: i32,
+    old: *mut [i32; 2],
+) -> i32 {
+    if xd == 0 || yd == 0 {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let mut cur = [0i32; 2];
+    if api!(
+        "gdi32",
+        "GetViewportExtEx",
+        fn(usize, *mut [i32; 2]) -> i32,
+        hdc,
+        &mut cur
+    ) != Some(1)
+    {
+        return 0;
+    }
+    if !old.is_null() {
+        *old = cur;
+    }
+    api!(
+        "gdi32",
+        "SetViewportExtEx",
+        fn(usize, i32, i32, *mut [i32; 2]) -> i32,
+        hdc,
+        cur[0] * xn / xd,
+        cur[1] * yn / yd,
+        std::ptr::null_mut()
+    )
+    .unwrap_or(0)
+}
+
+const SM_CXMENUCHECK: i32 = 71;
+const SM_CYMENUCHECK: i32 = 72;
+
+/// GetMenuCheckMarkDimensions : MAKELONG(SM_CXMENUCHECK, SM_CYMENUCHECK).
+unsafe extern "win64" fn get_menu_check_mark_dimensions() -> i32 {
+    let metric = |i: i32| api!("user32", "GetSystemMetrics", fn(i32) -> i32, i).unwrap_or(15);
+    let (cx, cy) = (metric(SM_CXMENUCHECK), metric(SM_CYMENUCHECK));
+    menu_check_long(cx, cy)
+}
+
+fn menu_check_long(cx: i32, cy: i32) -> i32 {
+    ((cx as u32 & 0xffff) | ((cy as u32 & 0xffff) << 16)) as i32
+}
+
+const COLOR_GRAYTEXT: i32 = 17;
+
+/// GrayStringA/W : texte grisé. Sans fonction de sortie, `data` est la
+/// chaîne (longueur `count`, calculée si 0 ou -1) dessinée en COLOR_GRAYTEXT
+/// à (x, y). Avec une fonction de sortie, elle dessine elle-même, origine
+/// du viewport décalée en (x, y) comme sur le DC mémoire de Windows.
+unsafe fn gray_string(
+    hdc: usize,
+    proc_: usize,
+    data: usize,
+    count: i32,
+    x: i32,
+    y: i32,
+    wide: bool,
+) -> i32 {
+    if hdc == 0 {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    if proc_ != 0 {
+        let mut org = [0i32; 2];
+        api!(
+            "gdi32",
+            "OffsetViewportOrgEx",
+            fn(usize, i32, i32, *mut [i32; 2]) -> i32,
+            hdc,
+            x,
+            y,
+            &mut org
+        );
+        let f: unsafe extern "win64" fn(usize, usize, i32) -> i32 = std::mem::transmute(proc_);
+        let r = f(hdc, data, count);
+        api!(
+            "gdi32",
+            "SetViewportOrgEx",
+            fn(usize, i32, i32, *mut [i32; 2]) -> i32,
+            hdc,
+            org[0],
+            org[1],
+            std::ptr::null_mut()
+        );
+        return i32::from(r != 0);
+    }
+    if data == 0 {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let n = if count > 0 {
+        count
+    } else if wide {
+        (0..)
+            .take_while(|&i| *(data as *const u16).add(i) != 0)
+            .count() as i32
+    } else {
+        (0..)
+            .take_while(|&i| *(data as *const u8).add(i) != 0)
+            .count() as i32
+    };
+    let gray = api!("user32", "GetSysColor", fn(i32) -> u32, COLOR_GRAYTEXT).unwrap_or(0x6d6d6d);
+    let old = api!("gdi32", "SetTextColor", fn(usize, u32) -> u32, hdc, gray).unwrap_or(0);
+    let r = if wide {
+        api!(
+            "gdi32",
+            "TextOutW",
+            fn(usize, i32, i32, usize, i32) -> i32,
+            hdc,
+            x,
+            y,
+            data,
+            n
+        )
+    } else {
+        api!(
+            "gdi32",
+            "TextOutA",
+            fn(usize, i32, i32, usize, i32) -> i32,
+            hdc,
+            x,
+            y,
+            data,
+            n
+        )
+    };
+    api!("gdi32", "SetTextColor", fn(usize, u32) -> u32, hdc, old);
+    r.unwrap_or(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn gray_string_w(
+    hdc: usize,
+    _brush: usize,
+    proc_: usize,
+    data: usize,
+    count: i32,
+    x: i32,
+    y: i32,
+    _w: i32,
+    _h: i32,
+) -> i32 {
+    gray_string(hdc, proc_, data, count, x, y, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn gray_string_a(
+    hdc: usize,
+    _brush: usize,
+    proc_: usize,
+    data: usize,
+    count: i32,
+    x: i32,
+    y: i32,
+    _w: i32,
+    _h: i32,
+) -> i32 {
+    gray_string(hdc, proc_, data, count, x, y, false)
+}
+
+const GWL_STYLE: i32 = -16;
+const BS_TYPEMASK: u32 = 0xf;
+const BS_GROUPBOX: u32 = 7;
+
+/// RealChildWindowFromPoint : enfant visible sous le point (coordonnées
+/// client du parent), en traversant les cadres de groupe (bouton
+/// BS_GROUPBOX) ; le parent lui-même s'il n'y a pas d'enfant.
+unsafe extern "win64" fn real_child_window_from_point(parent: usize, pt: u64) -> usize {
+    if api!("user32", "IsWindow", fn(usize) -> i32, parent) != Some(1) {
+        set_last_error(ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let (x, y) = (pt as u32 as i32, (pt >> 32) as u32 as i32);
+    let mut child = api!("user32", "GetWindow", fn(usize, u32) -> usize, parent, 5).unwrap_or(0); // GW_CHILD
+    let mut group = 0usize;
+    while child != 0 {
+        let visible = api!("user32", "IsWindowVisible", fn(usize) -> i32, child) == Some(1);
+        if visible {
+            let mut r = [0i32; 4];
+            api!(
+                "user32",
+                "GetWindowRect",
+                fn(usize, *mut [i32; 4]) -> i32,
+                child,
+                &mut r
+            );
+            api!(
+                "user32",
+                "MapWindowPoints",
+                fn(usize, usize, *mut [i32; 4], u32) -> i32,
+                0,
+                parent,
+                &mut r,
+                2
+            );
+            if x >= r[0] && x < r[2] && y >= r[1] && y < r[3] {
+                if is_group_box(child) {
+                    if group == 0 {
+                        group = child;
+                    }
+                } else {
+                    return child;
+                }
+            }
+        }
+        child = api!("user32", "GetWindow", fn(usize, u32) -> usize, child, 2).unwrap_or(0);
+        // GW_HWNDNEXT
+    }
+    if group != 0 {
+        group
+    } else {
+        parent
+    }
+}
+
+unsafe fn is_group_box(h: usize) -> bool {
+    let mut class = [0u16; 16];
+    let n = api!(
+        "user32",
+        "GetClassNameW",
+        fn(usize, *mut u16, i32) -> i32,
+        h,
+        class.as_mut_ptr(),
+        16
+    )
+    .unwrap_or(0);
+    let name = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+    let style = api!(
+        "user32",
+        "GetWindowLongW",
+        fn(usize, i32) -> i32,
+        h,
+        GWL_STYLE
+    )
+    .unwrap_or(0) as u32;
+    name.eq_ignore_ascii_case("Button") && style & BS_TYPEMASK == BS_GROUPBOX
+}
+
+/// Identifiants d'aide contextuelle des fenêtres (Set/GetWindowContextHelpId,
+/// #1692) : retenus par fenêtre, oubliés à sa destruction côté programme.
+static CONTEXT_HELP: Mutex<Vec<(usize, u32)>> = Mutex::new(Vec::new());
+
+unsafe extern "win64" fn set_window_context_help_id(hwnd: usize, id: u32) -> i32 {
+    if api!("user32", "IsWindow", fn(usize) -> i32, hwnd) != Some(1) {
+        return fail(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let mut map = CONTEXT_HELP.lock().unwrap_or_else(|e| e.into_inner());
+    // Un handle réutilisé après destruction repart de zéro.
+    map.retain(|&(h, _)| api!("user32", "IsWindow", fn(usize) -> i32, h) == Some(1));
+    match map.iter_mut().find(|(h, _)| *h == hwnd) {
+        Some(e) => e.1 = id,
+        None => map.push((hwnd, id)),
+    }
+    1
+}
+
+unsafe extern "win64" fn get_window_context_help_id(hwnd: usize) -> u32 {
+    CONTEXT_HELP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(h, _)| *h == hwnd)
+        .map_or(0, |e| e.1)
+}
+
 pub fn user32_exports() -> Exports {
     crate::exports! {
         "GetCursorInfo" => fn get_cursor_info,
+        "GetMenuCheckMarkDimensions" => fn get_menu_check_mark_dimensions,
+        "SetWindowContextHelpId" => fn set_window_context_help_id,
+        "GetWindowContextHelpId" => fn get_window_context_help_id,
+        "GrayStringA" => fn gray_string_a,
+        "GrayStringW" => fn gray_string_w,
+        "RealChildWindowFromPoint" => fn real_child_window_from_point,
         "GetKeyboardType" => fn get_keyboard_type,
         "SetDoubleClickTime" => fn set_double_click_time,
         "CloseWindow" => fn close_window,
@@ -1689,6 +1974,7 @@ pub fn gdi32_exports() -> Exports {
         "InvertRgn" => fn invert_rgn,
         "PlgBlt" => fn plg_blt,
         "ScaleWindowExtEx" => fn scale_window_ext_ex,
+        "ScaleViewportExtEx" => fn scale_viewport_ext_ex,
         "CreateMetaFileW" => fn create_meta_file_w,
         "CloseMetaFile" => fn close_meta_file,
         "GetGlyphOutlineA" => fn get_glyph_outline_a,
@@ -1709,6 +1995,12 @@ pub fn uxtheme_exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coche_de_menu_en_makelong() {
+        assert_eq!(menu_check_long(15, 13), 0x000d_000f);
+        assert_eq!(menu_check_long(-1, 2), 0x0002_ffff);
+    }
 
     #[test]
     fn transformations_composees() {
