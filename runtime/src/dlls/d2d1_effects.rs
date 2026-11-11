@@ -1358,8 +1358,7 @@ pub(super) unsafe fn render(effect: *mut EffectObj, depth: u32, hint: (u32, u32)
 }
 
 unsafe fn effect_input(e: &Effect, i: u32, depth: u32, hint: (u32, u32)) -> Option<Img> {
-    let input = crate::dlls::lock(&e.inputs).get(i as usize).copied()?;
-    super::image_img(input, depth + 1, hint)
+    super::effect_input_img(e, i as usize, depth, hint)
 }
 
 unsafe fn eval_node(
@@ -1387,6 +1386,10 @@ unsafe fn eval_node(
         });
     }
     if let Some(b) = as_builtin(node) {
+        if let Builtin::Effect(fx) = b {
+            // L'effet-nœud lit les entrées que le graphe lui relie (#1749).
+            return super::image_of_effect_with(fx, inputs, depth + 1, hint);
+        }
         let first = inputs.into_iter().next().flatten();
         return match b {
             Builtin::Offset(x, y) => first.map(|mut i| {
@@ -1396,7 +1399,7 @@ unsafe fn eval_node(
             }),
             Builtin::Bounds(r) => first.map(|i| crop(i, r)),
             Builtin::Border => first,
-            Builtin::Effect(fx) => super::image_of_effect(fx, depth + 1, hint),
+            Builtin::Effect(_) => None,
         };
     }
     if info.is_null() || transform.is_null() {

@@ -68,4 +68,14 @@ with tempfile.TemporaryDirectory() as directory:
     entries = [(target.name, name) for target, name in catalogue.installed_registry(home, registry)]
     assert entries == [("Outil.exe", "Outil")], entries
 
+    # #1810 : un désinstalleur déjà lancé (launchers.json) ne redonne pas d'entrée.
+    state = home / ".local/share/winlux"
+    state.mkdir(parents=True)
+    import json
+    (state / "launchers.json").write_text(json.dumps([
+        {"path": str(app / "Uninstall.exe"), "name": "Uninstall"},
+        {"path": str(app / "WinRAR.exe"), "name": "WinRAR"}]))
+    found = [(target.name, name) for target, name in catalogue.launched(home)]
+    assert found == [("WinRAR.exe", "WinRAR")], found
+
 print("Menu Démarrer : désinstalleurs écartés, noms génériques préfixés du dossier (#1748).")

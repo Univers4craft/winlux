@@ -133,6 +133,17 @@ fn guid_text(guid: &Guid) -> String {
     )
 }
 
+/// Adresses de retour de l'appli (« module+rva »), pour les journaux
+/// d'échec : « aucun » quand seul Winlux est sur la pile.
+fn caller_text() -> String {
+    let calls = super::seh::caller_stack(4);
+    if calls.is_empty() {
+        "aucun".into()
+    } else {
+        calls.join(" < ")
+    }
+}
+
 fn parse_hex_u32(value: &str) -> Option<u32> {
     u32::from_str_radix(value, 16).ok()
 }
@@ -951,10 +962,16 @@ pub unsafe extern "win64" fn co_create_instance(
                 return hr;
             }
         }
+        // Interface, contexte et appelants : sans eux, un CLSID mal formé
+        // ({00000000-0000-0000-0700-…} chez WinRAR, #1830) ne dit pas qui
+        // l'a fourni, de l'appli ou d'une fonction de Winlux.
         crate::log_warn!(
             "com",
-            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG)",
-            guid_text(&guid)
+            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG), interface {}, contexte {:#x}, appelants {}",
+            guid_text(&guid),
+            guid_text(&iid),
+            ctx,
+            caller_text()
         );
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
@@ -1070,8 +1087,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         }
         crate::log_warn!(
             "com",
-            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG)",
-            guid_text(&guid)
+            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG), interface {}, contexte {:#x}, appelants {}",
+            guid_text(&guid),
+            guid_text(&iid),
+            ctx,
+            caller_text()
         );
         return REGDB_E_CLASSNOTREG;
     };
@@ -1165,7 +1185,19 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
     let reg_path = format!("hkcr\\{}\\clsid", name.to_lowercase());
     let text = match crate::registry::get_string(&reg_path, "") {
         Some(v) => v,
-        None => return CO_E_CLASSSTRING,
+        None => {
+            // Classes intégrées sans clé HKCR : MSXML (#1758).
+            if let Some(g) = super::msxml::clsid_for_prog_id(&name) {
+                *clsid = g;
+                return S_OK;
+            }
+            if std::env::var_os("WINLUX_TRACE").is_some() {
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : ProgID inconnu"
+                );
+            }
+            return CO_E_CLASSSTRING;
+        }
     };
     let text = text.as_str();
     match parse_guid(text) {
@@ -1173,7 +1205,14 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
             *clsid = g;
             S_OK
         }
-        None => CO_E_CLASSSTRING,
+        None => {
+            if std::env::var_os("WINLUX_TRACE").is_some() {
+                eprintln!(
+                    "winlux : CLSIDFromProgID(\"{name}\") = 0x800401F3 (CO_E_CLASSSTRING) : CLSID illisible « {text} »"
+                );
+            }
+            CO_E_CLASSSTRING
+        }
     }
 }
 

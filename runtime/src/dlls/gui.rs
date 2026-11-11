@@ -880,7 +880,19 @@ pub unsafe fn call_wndproc(
     if crate::dlls::user32::window_diag()
         && matches!(
             msg,
-            0x0003 | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0018 | 0x001C | 0x0046 | 0x0047 | 0x0086
+            0x0003
+                | 0x0005
+                | 0x0006
+                | 0x0007
+                | 0x0008
+                | 0x0018
+                | 0x001C
+                | 0x0021
+                | 0x0046
+                | 0x0047
+                | 0x0086
+                | 0x0201
+                | 0x0202
         )
     {
         eprintln!(
@@ -3404,6 +3416,39 @@ pub fn activate_top_for_focus(new_top: usize) -> Option<usize> {
     (old != new_top).then_some(old)
 }
 
+/// Fenêtre de premier niveau qu'un clic sur `hwnd` doit activer, parce que
+/// le gestionnaire de fenêtres ne le fera pas (#1804). Sous Windows, un clic
+/// sur une fenêtre sans WS_EX_NOACTIVATE l'active avant WM_LBUTTONDOWN ;
+/// chez nous, cette activation vient du FocusIn que donne le gestionnaire,
+/// et une fenêtre surgissante hors gestionnaire (override-redirect) n'en
+/// reçoit jamais. La boîte « Erreur du service Steam » (vguiPopupWindow,
+/// WS_POPUP + WS_EX_TOOLWINDOW) restait ainsi inactive, et vgui ignorait
+/// ses boutons. Les menus et listes intégrés de Winlux ne s'activent pas.
+pub fn click_activation_target(hwnd: usize) -> Option<usize> {
+    use std::sync::atomic::Ordering;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+    let top = top_level_of(hwnd);
+    if top == 0 || ACTIVE_TOP.load(Ordering::Relaxed) == top {
+        return None;
+    }
+    let map = lock(windows());
+    let w = map.get(&top)?;
+    let eligible = w.visible
+        && w.style & (WS_CHILD | WS_DISABLED) == 0
+        && w.ex_style & WS_EX_NOACTIVATE == 0
+        && crate::dlls::user32::floating_popup(w.style, w.ex_style)
+        && crate::dlls::controls::builtin_class(&w.class).is_none()
+        && crate::dlls::controls::builtin_class_of_proc(w.wnd_proc).is_none();
+    eligible.then_some(top)
+}
+
+/// Fenêtre de premier niveau active (0 : le programme n'a pas le focus).
+pub fn active_top() -> usize {
+    ACTIVE_TOP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn change_active_top(new_top: usize) {
     use std::sync::atomic::Ordering;
     let old = ACTIVE_TOP.swap(new_top, Ordering::Relaxed);
@@ -4163,18 +4208,28 @@ pub fn bring_to_top(hwnd: usize) {
     z.insert(0, hwnd);
 }
 
+/// Fenêtre de premier niveau au sens de Windows : sans parent, ou sans
+/// WS_CHILD. Une fenêtre possédée (boîte, fenêtre surgissante) garde sa
+/// propriétaire dans `parent`, mais reste de premier niveau : EnumWindows,
+/// WindowFromPoint et GetForegroundWindow la voient. La boîte « Erreur du
+/// service Steam », possédée, n'était jamais trouvée sous le pointeur, et
+/// vgui ignorait les clics sur ses boutons (#1804).
+fn is_top_level(w: &Window) -> bool {
+    w.parent == 0 || w.style & 0x4000_0000 == 0
+}
+
 /// Fenêtres de premier niveau du sommet vers le fond (ordre d'`EnumWindows`).
 fn top_level_in_z_order(map: &HashMap<usize, Window>) -> Vec<usize> {
     let z = lock(z_order());
     let mut out: Vec<usize> = z
         .iter()
         .copied()
-        .filter(|h| map.get(h).is_some_and(|w| w.parent == 0))
+        .filter(|h| map.get(h).is_some_and(is_top_level))
         .collect();
     // Fenêtres insérées sans passer par `insert_window` : après, par handle.
     let mut rest: Vec<usize> = map
         .iter()
-        .filter(|(h, w)| w.parent == 0 && !out.contains(h))
+        .filter(|(h, w)| is_top_level(w) && !out.contains(h))
         .map(|(h, _)| *h)
         .collect();
     rest.sort_unstable();
@@ -4641,6 +4696,21 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             set_cursor(load_cursor(0, 32512));
             0
         }
+        // WM_MOUSEACTIVATE : le parent d'une fenêtre enfant décide d'abord,
+        // sinon MA_ACTIVATE, comme Windows (#1804).
+        0x0021 => {
+            const WS_CHILD: u32 = 0x4000_0000;
+            const MA_ACTIVATE: isize = 1;
+            let child = window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0);
+            if let Some(parent) = window_parent(hwnd).filter(|&p| child && p != 0) {
+                let answer =
+                    unsafe { crate::dlls::user32::send_message_w(parent, 0x0021, wparam, lparam) };
+                if answer != 0 {
+                    return answer;
+                }
+            }
+            MA_ACTIVATE
+        }
         // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
         // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le
         // rectangle proposé reste donc la zone cliente.
@@ -4958,7 +5028,10 @@ pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
     };
     match cmd {
         0..=3 => {
-            let parent = map.get(&hwnd).map_or(0, |w| w.parent);
+            let parent = map
+                .get(&hwnd)
+                .filter(|w| !is_top_level(w))
+                .map_or(0, |w| w.parent);
             let list = siblings(parent);
             let pos = list.iter().position(|&h| h == hwnd)?;
             match cmd {
@@ -6194,6 +6267,72 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn un_clic_active_une_fenetre_surgissante_hors_gestionnaire() {
+        // #1804 : boîte vgui de Steam, WS_POPUP + WS_EX_TOOLWINDOW, possédée.
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let principale = fenetre_de_test();
+        let boite = fenetre_de_test();
+        let bouton = fenetre_de_test();
+        set_window_parent(boite, principale);
+        set_window_style(boite, 0x8200_0000); // WS_POPUP | WS_CLIPCHILDREN
+        set_window_ex_style(boite, 0x80); // WS_EX_TOOLWINDOW
+        set_window_parent(bouton, boite);
+        set_window_style(bouton, 0x4000_0000); // WS_CHILD
+                                               // Possédée, elle reste de premier niveau : EnumWindows, donc
+                                               // WindowFromPoint, la trouve ; le bouton (WS_CHILD) non.
+        let z = enum_top_level_windows();
+        assert!(z.contains(&boite) && !z.contains(&bouton));
+        assert!(z.iter().position(|&h| h == boite) < z.iter().position(|&h| h == principale));
+        assert_eq!(get_window_relative(boite, 4), Some(principale)); // GW_OWNER
+        activate_top_for_focus(principale);
+        assert_eq!(click_activation_target(boite), Some(boite));
+        assert_eq!(
+            click_activation_target(bouton),
+            Some(boite),
+            "clic sur un enfant"
+        );
+        assert_eq!(
+            click_activation_target(principale),
+            None,
+            "déjà active, ou laissée au gestionnaire de fenêtres"
+        );
+        activate_top_for_focus(boite);
+        assert_eq!(click_activation_target(boite), None, "déjà active");
+        assert_eq!(active_top(), boite);
+        activate_top_for_focus(principale);
+        set_window_ex_style(boite, 0x80 | 0x0800_0000); // + WS_EX_NOACTIVATE
+        assert_eq!(click_activation_target(boite), None);
+        set_window_ex_style(boite, 0x80);
+        set_window_style(boite, 0x8A00_0000); // + WS_DISABLED
+        assert_eq!(click_activation_target(boite), None);
+        set_window_style(boite, 0x8200_0000);
+        // Fenêtre à barre de titre : le gestionnaire de fenêtres l'active.
+        set_window_style(boite, 0x80C0_0000);
+        assert_eq!(click_activation_target(boite), None);
+        // WM_MOUSEACTIVATE laissé à DefWindowProc : MA_ACTIVATE.
+        set_window_style(boite, 0x8200_0000);
+        assert_eq!(def_window_proc(boite, 0x0021, boite, 0x0201_0001), 1);
+        for h in [bouton, boite, principale] {
+            destroy_window(h);
+        }
+        activate_top_for_focus(0);
+    }
+
+    #[test]
+    fn un_menu_integre_ne_s_active_pas_au_clic() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let menu = fenetre_de_test();
+        if let Some(w) = lock(windows()).get_mut(&menu) {
+            w.class = crate::dlls::controls::popup::CLASS.to_string();
+        }
+        set_window_style(menu, 0x8000_0000);
+        set_window_ex_style(menu, 0x88);
+        activate_top_for_focus(0);
+        assert_eq!(click_activation_target(menu), None);
+        destroy_window(menu);
+    }
+
+    #[test]
     fn une_fenetre_desactivee_par_une_boite_modale_renvoie_a_la_boite() {
         // #1120 : la fenêtre principale d'Audacity, désactivée par la boîte
         // Tonalité, ne doit recevoir ni clic ni focus.
@@ -6275,7 +6414,7 @@ pub(crate) mod tests {
                     owner: std::thread::current().id(),
                     needs_paint: false,
                     paint_queued: false,
-                    style: 0,
+                    style: 0x4000_0000, // WS_CHILD
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,

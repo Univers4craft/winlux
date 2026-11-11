@@ -893,7 +893,7 @@ unsafe extern "win64" fn sh_get_known_folder_id_list(
     }
 }
 
-unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> usize {
+pub(super) unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> usize {
     if path.is_null() {
         return 0;
     }
@@ -1058,7 +1058,7 @@ unsafe extern "win64" fn sh_get_file_info_w(
 
 /// ExtractIconExW : Winlux n'extrait pas encore les icônes des modules ;
 /// « aucune icône » est une réponse normale.
-unsafe extern "win64" fn extract_icon_ex_w(
+pub(super) unsafe extern "win64" fn extract_icon_ex_w(
     _file: *const u16,
     _index: i32,
     large: *mut usize,
@@ -1235,20 +1235,68 @@ pub fn file_operation(func: u32, from: &[PathBuf], to: &[PathBuf], flags: u16) -
     0
 }
 
-/// SHFileOperationW : copie, déplacement, renommage et suppression (vers la
-/// corbeille avec FOF_ALLOWUNDO). Sans boîte de progression.
-unsafe extern "win64" fn sh_file_operation_w(op: *mut u8) -> i32 {
+/// Liste double-zéro de chemins ANSI (pFrom / pTo de SHFILEOPSTRUCTA).
+unsafe fn multi_sz_ansi(mut p: *const u8) -> Vec<String> {
+    let mut v = Vec::new();
+    if p.is_null() {
+        return v;
+    }
+    while *p != 0 {
+        let n = libc::strlen(p.cast());
+        v.push(crate::dlls::decode_ansi(std::slice::from_raw_parts(p, n)));
+        p = p.add(n + 1);
+    }
+    v
+}
+
+/// Décalages de SHFILEOPSTRUCT (wFunc, pFrom, pTo, fFlags,
+/// fAnyOperationsAborted) : alignement naturel en 64 bits, `pshpack1.h`
+/// en 32 bits (shellapi.h, en-têtes MinGW-w64), d'où fFlags (WORD) à 16
+/// et fAnyOperationsAborted à 18 en x86 (#1841).
+fn file_op_offsets(x86: bool) -> [usize; 5] {
+    if x86 {
+        [4, 8, 12, 16, 18]
+    } else {
+        [8, 16, 24, 32, 36]
+    }
+}
+
+/// SHFileOperationA/W : copie, déplacement, renommage et suppression (vers
+/// la corbeille avec FOF_ALLOWUNDO). Sans boîte de progression.
+pub(super) unsafe fn sh_file_operation(op: *mut u8, wide: bool) -> i32 {
     if op.is_null() {
         return ERROR_INVALID_PARAMETER as i32;
     }
-    let func = std::ptr::read_unaligned(op.add(8) as *const u32);
-    let from = multi_sz(std::ptr::read_unaligned(op.add(16) as *const *const u16));
-    let to = multi_sz(std::ptr::read_unaligned(op.add(24) as *const *const u16));
-    let flags = std::ptr::read_unaligned(op.add(32) as *const u16);
-    std::ptr::write_unaligned(op.add(36) as *mut i32, 0);
+    let x86 = crate::wow32::pointer_size() == 4;
+    let [func_at, from_at, to_at, flags_at, aborted_at] = file_op_offsets(x86);
+    let ptr = |at: usize| -> usize {
+        if x86 {
+            std::ptr::read_unaligned(op.add(at) as *const u32) as usize
+        } else {
+            std::ptr::read_unaligned(op.add(at) as *const usize)
+        }
+    };
+    let func = std::ptr::read_unaligned(op.add(func_at) as *const u32);
+    let (from, to) = if wide {
+        (
+            multi_sz(ptr(from_at) as *const u16),
+            multi_sz(ptr(to_at) as *const u16),
+        )
+    } else {
+        (
+            multi_sz_ansi(ptr(from_at) as *const u8),
+            multi_sz_ansi(ptr(to_at) as *const u8),
+        )
+    };
+    let flags = std::ptr::read_unaligned(op.add(flags_at) as *const u16);
+    std::ptr::write_unaligned(op.add(aborted_at) as *mut i32, 0);
     let lin =
         |v: &[String]| -> Vec<PathBuf> { v.iter().map(|s| crate::paths::to_linux(s)).collect() };
     file_operation(func, &lin(&from), &lin(&to), flags)
+}
+
+unsafe extern "win64" fn sh_file_operation_w(op: *mut u8) -> i32 {
+    sh_file_operation(op, true)
 }
 
 // ── advapi32 ────────────────────────────────────────────────────────────
@@ -1876,7 +1924,7 @@ pub fn comctl32_exports() -> Exports {
 /// l'association du registre (comme AssocQueryString ASSOCSTR_EXECUTABLE).
 /// Renvoie une valeur > 32 si trouvé, 2 (fichier absent) ou 31
 /// (SE_ERR_NOASSOC) sinon.
-unsafe extern "win64" fn find_executable_w(
+pub(super) unsafe extern "win64" fn find_executable_w(
     file: *const u16,
     dir: *const u16,
     out: *mut u16,
