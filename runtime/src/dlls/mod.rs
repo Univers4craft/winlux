@@ -220,6 +220,7 @@ pub mod seh_hw;
 pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
+pub mod setupinf;
 pub mod sfnt;
 pub mod shcore_obsolete;
 pub mod shell32;
