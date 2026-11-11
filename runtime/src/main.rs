@@ -356,7 +356,7 @@ fn main() {
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if dlls::gui_x11::renders_itself(&imports)
-        || dlls::gui_x11::statically_linked_renderer(image.bytes())
+        || dlls::gui_x11::renderer_in_data_sections(image.bytes(), &image.pe.sections)
     {
         dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
