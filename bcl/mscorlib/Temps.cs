@@ -33,7 +33,7 @@ namespace System
         public ArgumentException(string message) : base(message) { }
     }
 
-    public struct TimeSpan
+    public partial struct TimeSpan
     {
         public const long TicksPerMillisecond = 10000;
         public const long TicksPerSecond = TicksPerMillisecond * 1000;

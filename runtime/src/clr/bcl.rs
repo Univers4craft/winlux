@@ -22,6 +22,20 @@ pub fn dispatch_internal_call(
         ("System", "String", m) => string_dispatch(m, args),
         ("System", "Number", m) => number_dispatch(m, args),
         ("System", "Char", m) => char_dispatch(m, args),
+        // Horloge de DateTime (#1963) : graduations de 100 ns depuis le
+        // 1er janvier de l'an 1 (UTC), et décalage de l'heure locale.
+        ("System", "Horloge", "UtcNowTicks") => {
+            let since_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            Some(Value::I64(
+                UNIX_EPOCH_TICKS + (since_unix.as_nanos() / 100) as i64,
+            ))
+        }
+        ("System", "Horloge", "LocalOffsetTicks") => {
+            let utc = args.first()?.as_i64();
+            Some(Value::I64(local_offset_ticks(utc)))
+        }
         // Octets aléatoires de Guid.NewGuid (#1962).
         ("System", "Guid", "FillRandom") => {
             let buf = args.first()?.as_ref();
@@ -64,6 +78,20 @@ pub fn dispatch_internal_call(
             None
         }
     }
+}
+
+/// 1970-01-01 en graduations de 100 ns depuis 0001-01-01.
+const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+
+/// Décalage de l'heure locale (fuseau du système, heure d'été comprise) à
+/// l'instant UTC `utc_ticks`, en graduations de 100 ns.
+fn local_offset_ticks(utc_ticks: i64) -> i64 {
+    let t = ((utc_ticks - UNIX_EPOCH_TICKS) / 10_000_000) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    tm.tm_gmtoff * 10_000_000
 }
 
 /// Méthode connue de la classe mais pas encore écrite : l'appel lève une
