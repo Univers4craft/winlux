@@ -507,6 +507,9 @@ pub struct Manifest {
     pub restores: Vec<(String, String, Option<(u32, Vec<u8>)>)>,
     /// Fichiers ou dossiers à supprimer à la désinstallation (RemoveFile).
     pub later: Vec<(String, u8)>,
+    /// Composants posés : (GUID en majuscules, chemin clé Windows), pour la
+    /// recherche `CompLocator` d'un autre paquet (#1598).
+    pub components: Vec<(String, String)>,
 }
 
 pub fn manifest_dir() -> PathBuf {
@@ -568,6 +571,9 @@ impl Manifest {
         for (t, kind) in &self.later {
             text.push_str(&format!("later\t{}\t{kind}\n", clean(t)));
         }
+        for (guid, path) in &self.components {
+            text.push_str(&format!("comp\t{}\t{}\n", clean(guid), clean(path)));
+        }
         let path = manifest_path(&self.product);
         std::fs::create_dir_all(manifest_dir())?;
         let tmp = path.with_extension("tmp");
@@ -609,6 +615,7 @@ impl Manifest {
                     m.restores.push((k.to_string(), n.to_string(), prev));
                 }
                 ["later", t, kind] => m.later.push((t.to_string(), kind.parse().unwrap_or(0))),
+                ["comp", g, p] => m.components.push((g.to_string(), p.to_string())),
                 _ => {}
             }
         }
@@ -628,6 +635,20 @@ impl Manifest {
     pub fn find(code: &str) -> Option<Manifest> {
         Manifest::load(&manifest_path(code))
     }
+}
+
+/// Chemin clé d'un composant installé par un autre paquet, d'après son GUID
+/// (`ComponentId`) : ce que `CompLocator` recherche (#1598).
+pub fn component_key_path(guid: &str) -> Option<String> {
+    let guid = guid.trim().to_ascii_uppercase();
+    if guid.is_empty() {
+        return None;
+    }
+    Manifest::all()
+        .into_iter()
+        .flat_map(|m| m.components)
+        .find(|(g, _)| *g == guid)
+        .map(|(_, p)| p)
 }
 
 /// Crée un dossier et retient ceux qui n'existaient pas.
@@ -1245,6 +1266,26 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             relayed.as_deref(),
             log,
         );
+    }
+    // Composants posés, retrouvables par `CompLocator` (pip.msi de Python
+    // cherche python.exe posé par exe.msi, #1598). Chemin clé : le fichier
+    // `KeyPath`, ou le dossier du composant si `KeyPath` est vide ; une clé
+    // de registre n'est pas retenue.
+    for r in db.rows("Component") {
+        let comp = r.str("Component");
+        let guid = r.str("ComponentId").trim().to_ascii_uppercase();
+        if guid.is_empty() || !comps.contains(&comp) {
+            continue;
+        }
+        let key = r.str("KeyPath");
+        let path = if key.is_empty() {
+            comp_dir.get(&comp).cloned()
+        } else {
+            ctx.files.get(&key).cloned()
+        };
+        if let Some(path) = path.filter(|p| !p.is_empty()) {
+            manifest.components.push((guid, path));
+        }
     }
     if !code.is_empty() {
         manifest

@@ -800,6 +800,11 @@ unsafe fn is_windows(i: usize) -> bool {
     app_field(i, F_KEY).starts_with(b"windows:")
 }
 
+/// Programme .exe installé et utilisé sur le banc de Winlux (#1515).
+unsafe fn is_tested(i: usize) -> bool {
+    app_field(i, F_KEY).starts_with(b"windows:valides/")
+}
+
 unsafe fn hit(r: Rect, a: Action) {
     if HIT_COUNT < MAX_HITS {
         HITS[HIT_COUNT] = (r, a);
@@ -1639,6 +1644,12 @@ unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
         }
     }
     for (c, windows) in sections {
+        // Section « Testés sur Winlux » juste avant les autres programmes Windows.
+        if windows && (0..APP_COUNT).any(|i| is_tested(i)) {
+            row_heading(g, body, y, t(b"Test\xE9s sur Winlux", b"Tested on Winlux"), Action::Nav(3));
+            card_row(g, body, y + 40, |i| is_tested(i));
+            y += 40 + CARD_H + 32;
+        }
         let (label, action): (&[u8], Action) = if windows {
             (
                 t(b"Programmes Windows", b"Windows programs"),
@@ -1650,7 +1661,7 @@ unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
         // Une rangée vide n'est pas affichée (ni son titre).
         let any = (0..APP_COUNT).any(|i| {
             if windows {
-                is_windows(i)
+                is_windows(i) && !is_tested(i)
             } else {
                 cat_of(i) == c && (c == JEUX || !is_windows(i))
             }
@@ -1661,7 +1672,7 @@ unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
         row_heading(g, body, y, label, action);
         card_row(g, body, y + 40, |i| {
             if windows {
-                is_windows(i)
+                is_windows(i) && !is_tested(i)
             } else {
                 cat_of(i) == c && (c == JEUX || !is_windows(i))
             }
@@ -1812,7 +1823,39 @@ unsafe fn draw_windows(g: &mut Gfx, body: &Rect) {
         );
     }
     y += 64;
-    let end = grid(g, body, y, |i| is_windows(i));
+    let tested = (0..APP_COUNT).filter(|&i| is_tested(i)).count();
+    let mut end = y;
+    if tested > 0 {
+        heading(g, body.left, y, t(b"Test\xE9s sur Winlux", b"Tested on Winlux"), body);
+        y += 36;
+        if y >= body.top {
+            wrap(
+                g,
+                g.f.body,
+                13,
+                p.text2,
+                body.left,
+                y,
+                (body.right - body.left).min(760),
+                t(
+                    b"Install\xE9s et utilis\xE9s sur notre banc de test, depuis le site officiel de l'\xE9diteur.",
+                    b"Installed and used on our test bench, from the publisher's official site.",
+                ),
+                2,
+                body.bottom,
+            );
+        }
+        y += 40;
+        end = grid(g, body, y, |i| is_tested(i));
+        y = end + 24;
+        if count > tested {
+            heading(g, body.left, y, t(b"Autres programmes Windows", b"Other Windows programs"), body);
+            y += 44;
+        }
+    }
+    if count > tested {
+        end = grid(g, body, y, |i| is_windows(i) && !is_tested(i));
+    }
     if count == 0 && y >= body.top && y + 32 <= body.bottom {
         let label = t(b"Ouvrir la Biblioth\xE8que", b"Open the Library");
         let probe = rect(body.left, y, body.left + 200, y + 32);
@@ -2713,6 +2756,24 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 /// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
 /// français/anglais passé à `t` (aussi pour fonts.rs).
 const STORE_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"Test\xE9s sur Winlux",
+        b"Tested on Winlux",
+        b"Probados en Winlux",
+        b"Auf Winlux getestet",
+    ),
+    (
+        b"Install\xE9s et utilis\xE9s sur notre banc de test, depuis le site officiel de l'\xE9diteur.",
+        b"Installed and used on our test bench, from the publisher's official site.",
+        b"Instalados y usados en nuestro banco de pruebas, desde el sitio oficial del editor.",
+        b"Auf unserem Pr\xFCfstand installiert und verwendet, von der offiziellen Seite des Herausgebers.",
+    ),
+    (
+        b"Autres programmes Windows",
+        b"Other Windows programs",
+        b"Otros programas de Windows",
+        b"Weitere Windows-Programme",
+    ),
     (
         b"Applis",
         b"Apps",

@@ -51,6 +51,10 @@ with tempfile.TemporaryDirectory() as tmp:
            "WINLUX_APPIMAGE_FEED": (w / "feed.json").as_uri(), "WINLUX_STORE_APPIMAGEHUB": "1",
            "PATH": f"{bindir}:/usr/bin:/bin"}
 
+    # Fenêtre de confirmation (#1517) : « Installer » sauf CONFIRM_ANSWER=1.
+    mock(bindir, "confirm", f"printf '%s\\n' \"$@\" >> {w / 'confirm.log'}\nexit ${{CONFIRM_ANSWER:-0}}\n")
+    env["WINLUX_STORE_CONFIRM"] = str(bindir / "confirm")
+
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---
     mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
@@ -261,6 +265,15 @@ esac
     check("install --no-install-recommends -- gimp" in log.read_text(), "commande apt")
     st("update", "flatpak:org.kde.krita")
     check("flatpak update org.kde.krita -y --noninteractive" in log.read_text(), "mise à jour Flatpak")
+    env["CONFIRM_ANSWER"] = "1"
+    st("install", "windows:local/notepadpp", code=9)
+    check("local_notepadpp" not in log.read_text()
+          and not (home / ".cache/winlux/store/installers/local_notepadpp.exe").exists(),
+          "programme Windows : Annuler, rien n'est téléchargé (#1517)")
+    asked = (w / "confirm.log").read_text()
+    check("Annuler" in asked and "Version : 8.6" in asked and "SHA-256" in asked and "garde vos documents" in asked,
+          f"confirmation : version, adresse, empreinte, documents gardés ({asked[-300:]})")
+    env["CONFIRM_ANSWER"] = "0"
     st("install", "windows:local/notepadpp")
     check(f"winlux {home}/.cache/winlux/store/installers/local_notepadpp.exe /S" in log.read_text(), "installateur Windows")
     state = json.loads((home / ".local/share/winlux/store-state.json").read_text())
