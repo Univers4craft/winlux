@@ -624,6 +624,17 @@ fn system_message_english(code: u32) -> Option<&'static str> {
         127 => "Function missing from the library.",
         183 => "An item with this name already exists.",
         267 => "This name is not a folder.",
+        // Les mêmes HRESULT de COM qu'en français (#1842).
+        0x8000_4001 => "Function not implemented.",
+        0x8000_4002 => "Interface not supported.",
+        0x8000_4003 => "Invalid pointer.",
+        0x8000_4005 => "Unspecified error.",
+        0x8002_0003 => "Member not found.",
+        0x8002_0006 => "Unknown name.",
+        0x8002_801D => "Type library not registered.",
+        0x8002_802B => "Element not found.",
+        0x8002_9C4A => "Cannot load the type library.",
+        0x8004_0154 => "Class not registered.",
         c if c & 0xFFFF_0000 == 0x8007_0000 => return system_message_english(c & 0xFFFF),
         _ => return None,
     })
@@ -672,7 +683,11 @@ unsafe fn format_message(
             "{}\r\n",
             system_message_english(code)
                 .map(str::to_string)
-                .unwrap_or_else(|| format!("Windows error {code}."))
+                .unwrap_or_else(|| if code >= 0x8000_0000 {
+                    format!("Windows error 0x{code:08X}.")
+                } else {
+                    format!("Windows error {code}.")
+                })
         ));
     }
     Some(format!(
@@ -1370,17 +1385,21 @@ mod tests {
     #[test]
     fn messages_des_hresult() {
         unsafe {
-            for (code, debut) in [
-                (0x8002_801Du32, "Bibliothèque de types non inscrite"),
-                (0x8004_0154, "Classe non inscrite"),
-                (0x8000_1234, "Erreur Windows 0x80001234"),
+            for (code, lang, debut) in [
+                (0x8002_801Du32, 0u32, "Bibliothèque de types non inscrite"),
+                (0x8004_0154, 0, "Classe non inscrite"),
+                (0x8000_1234, 0, "Erreur Windows 0x80001234"),
+                // #1842 : en anglais aussi (LANG_ENGLISH demandé).
+                (0x8002_801D, 0x0409, "Type library not registered"),
+                (0x8004_0154, 0x0409, "Class not registered"),
+                (0x8000_1234, 0x0409, "Windows error 0x80001234"),
             ] {
                 let mut msg = [0u16; 128];
                 let n = format_message_w(
                     FORMAT_MESSAGE_FROM_SYSTEM,
                     0,
                     code,
-                    0,
+                    lang,
                     msg.as_mut_ptr(),
                     128,
                     0,
