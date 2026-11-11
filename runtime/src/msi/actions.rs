@@ -475,6 +475,15 @@ fn script_action(
     )
 }
 
+/// Ligne de trace d'un processus d'action (« winlux[wow32] … »), à
+/// recopier telle quelle (#1666). Les lignes de journal du processus
+/// (« winlux[niveau/cible] ») vont déjà au journal système.
+fn is_trace_line(l: &str) -> bool {
+    l.strip_prefix("winlux[")
+        .and_then(|r| r.split_once(']'))
+        .is_some_and(|(tag, _)| !tag.contains('/'))
+}
+
 /// Message écrit juste avant un abandon (SIGABRT) par Rust ou la glibc :
 /// mémoire refusée, erreur fatale du runtime, tas abîmé (#1642).
 fn is_abort_message(l: &str) -> bool {
@@ -538,6 +547,14 @@ fn child_action(
         })
         .map(|l| format!("  {l}"))
         .collect();
+    // Traces demandées par l'utilisateur dans le processus de l'action
+    // (WINLUX_WOW32_HISTORY=flux…, lignes « winlux[…] ») : recopiées au
+    // journal, réussite ou échec, sinon elles étaient perdues (#1666).
+    let traces: Vec<String> = output
+        .lines()
+        .filter(|l| is_trace_line(l))
+        .map(|l| format!("  {l}"))
+        .collect();
     // Diagnostics du runtime dans le processus de l'action (plantage,
     // fonction absente, exception) : sans eux, un échec sans code de
     // l'action restait muet (#1628).
@@ -599,6 +616,7 @@ fn child_action(
         ),
     };
     let _ = std::fs::remove_file(&session);
+    lines.extend(traces);
     lines.insert(0, head);
     Some(lines.join("\n"))
 }
@@ -770,6 +788,16 @@ mod tests {
 
     /// `ServiceControl` avec l'événement 1 (démarrer à l'installation) :
     /// le service est rendu pour être démarré en fin d'installation (#1626).
+    #[test]
+    fn trace_wow32_recopiee() {
+        assert!(is_trace_line(
+            "winlux[wow32] setupapi.dll!SetupDiGetClassDevsW (esp 0x7f9466a0, retour 0x1000a3c1) [0, 0, 0, 6] = 0x4"
+        ));
+        assert!(!is_trace_line("winlux[info/installeur]: Progression 1%"));
+        assert!(!is_trace_line("winlux[warn/services]: canal refusé"));
+        assert!(!is_trace_line("msi.dll : MsiProcessMessage"));
+    }
+
     #[test]
     fn message_d_abandon_garde_au_journal() {
         assert!(is_abort_message(
