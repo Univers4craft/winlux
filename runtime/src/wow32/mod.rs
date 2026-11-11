@@ -1815,7 +1815,8 @@ fn history_on() -> bool {
 }
 
 /// `WINLUX_WOW32_HISTORY=flux` (ou `flux:motif`) : chaque passage est en
-/// plus écrit tout de suite sur la sortie d'erreur, filtré sur le motif
+/// plus écrit tout de suite sur la sortie d'erreur, puis une seconde fois
+/// avec la valeur rendue (« = 0x… ») au retour, filtré sur le motif
 /// (« SetWindowPos », « user32 »…). Sert à suivre ce qu'un programme x86
 /// demande sans attendre une faute (champ du port de WinSCP, #1251).
 fn history_stream() -> Option<&'static str> {
@@ -1858,6 +1859,14 @@ fn note_result(desc: u32, esp: u32, r: u64) {
             .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
         {
             p.result = Some(r);
+            // Mode flux : la valeur rendue suit aussitôt (#1616), sinon
+            // seule une faute la montrait.
+            if let Some(filter) = history_stream() {
+                let line = passage_line(p);
+                if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+                    eprintln!("winlux[wow32] {line}");
+                }
+            }
         }
     });
 }
