@@ -52,6 +52,7 @@ pub mod crt_proc;
 pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
+pub mod crt_secure;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
@@ -442,6 +443,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e.extend(crt_releve::exports());
+            e.extend(crt_secure::exports());
             e
         };
         let mut ucrt = crt.clone();
