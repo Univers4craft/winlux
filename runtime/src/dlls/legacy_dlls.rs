@@ -230,13 +230,32 @@ pub fn msi_exports() -> super::Exports {
         "MsiLocateComponentA" => fn msi_locate_component,
         "MsiGetProductInfoW" => fn msi_get_product_info,
         "MsiGetProductInfoA" => fn msi_get_product_info,
-        // Importées par numéro (WinSCP, bibliothèque d'import de C++Builder) :
-        // deux fonctions de quatre arguments dont l'échec est toujours sûr ;
-        // 1627 n'est ni ERROR_SUCCESS ni un INSTALLSTATE « présent ».
-        "#70" => fn msi_get_shortcut_target,
-        "#205" => fn msi_get_shortcut_target,
+        "MsiEnumRelatedProductsW" => fn msi_enum_related_products,
+        "MsiEnumRelatedProductsA" => fn msi_enum_related_products,
     });
+    with_msi_ordinals(all)
+}
+
+/// Ordinaux de msi.dll (`msi_ordinals.tsv`, tirés de `Msi.Lib` du SDK
+/// Windows public, identiques en x86 et x64) : WixCA.dll et les actions
+/// personnalisées compilées avec la bibliothèque d'import du SDK importent
+/// msi.dll par numéro (#1607), WinSCP aussi (C++Builder). Chaque fonction
+/// servie par nom l'est aussi sous « #n ».
+fn with_msi_ordinals(mut all: super::Exports) -> super::Exports {
+    for line in include_str!("msi_ordinals.tsv").lines() {
+        let Some((n, name)) = line.split_once('\t') else {
+            continue;
+        };
+        if let (Ok(n), Some(&addr)) = (n.parse::<u16>(), all.get(name)) {
+            all.insert(Box::leak(format!("#{n}").into_boxed_str()), addr);
+        }
+    }
     all
+}
+
+/// MsiEnumRelatedProducts : aucun produit apparenté inscrit.
+pub extern "win64" fn msi_enum_related_products(_u: usize, _r: u32, _i: u32, _b: usize) -> u32 {
+    ERROR_NO_MORE_ITEMS
 }
 
 // ---------- shfolder.dll ----------
@@ -251,6 +270,52 @@ pub fn shfolder_exports() -> super::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msi_par_ordinal_comme_wixca() {
+        let e = msi_exports();
+        // Ordinaux importés par WixCA.dll (iCUE, #1607), d'après Msi.Lib.
+        for (n, name) in [
+            (8, "MsiCloseHandle"),
+            (17, "MsiCreateRecord"),
+            (26, "MsiDatabaseGetPrimaryKeysW"),
+            (32, "MsiDatabaseOpenViewW"),
+            (34, "MsiDoActionW"),
+            (47, "MsiEvaluateConditionW"),
+            (49, "MsiGetActiveDatabase"),
+            (51, "MsiGetComponentStateW"),
+            (64, "MsiGetMode"),
+            (73, "MsiGetPropertyA"),
+            (74, "MsiGetPropertyW"),
+            (80, "MsiGetTargetPathW"),
+            (103, "MsiProcessMessage"),
+            (116, "MsiRecordGetInteger"),
+            (118, "MsiRecordGetStringW"),
+            (119, "MsiRecordIsNull"),
+            (120, "MsiRecordReadStream"),
+            (121, "MsiRecordSetInteger"),
+            (124, "MsiRecordSetStringA"),
+            (125, "MsiRecordSetStringW"),
+            (143, "MsiSetMode"),
+            (145, "MsiSetPropertyW"),
+            (159, "MsiViewExecute"),
+            (160, "MsiViewFetch"),
+            (162, "MsiViewGetErrorW"),
+            (163, "MsiViewModify"),
+            (166, "MsiViewGetColumnInfo"),
+            (171, "MsiFormatRecordW"),
+            (70, "MsiGetProductInfoW"),
+            (205, "MsiEnumRelatedProductsW"),
+        ] {
+            let by_name = e.get(name).copied();
+            assert!(by_name.is_some(), "{name}");
+            assert_eq!(
+                e.get(format!("#{n}").as_str()).copied(),
+                by_name,
+                "#{n} {name}"
+            );
+        }
+    }
 
     #[test]
     fn lettres_de_lecteur() {
