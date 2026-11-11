@@ -1330,6 +1330,8 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         // operator new / delete de MFC 4.2 (signtool.exe, #1394).
         || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
+        // LDAPAPI de winldap.h est __cdecl (#1765).
+        || n == "wldap32"
         // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
         // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
         || (n == "cabinet"
@@ -2676,5 +2678,6 @@ mod tests {
         assert!(is_cdecl("cabinet.dll", "FDICopy"));
         assert!(is_cdecl("cabinet.dll", "#10"));
         assert!(!is_cdecl("cabinet.dll", "CreateCompressor"));
+        assert!(is_cdecl("WLDAP32.dll", "#144"));
     }
 }
