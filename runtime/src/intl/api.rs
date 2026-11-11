@@ -66,15 +66,21 @@ pub extern "win64" fn is_valid_code_page(cp: u32) -> i32 {
     codepage::is_valid(cp) as i32
 }
 
-/// CPINFO : taille maximale d'un caractère, caractère par défaut, octets de
-/// tête (plages par paires, seulement pour les pages asiatiques).
+/// CPINFO (18 octets) : taille maximale d'un caractère, caractère par
+/// défaut, octets de tête (plages par paires, seulement pour les pages
+/// asiatiques).
+const CPINFO_SIZE: usize = 18;
+/// CPINFOEXW (544 octets) : CPINFO, UnicodeDefaultChar à 18, CodePage à 20,
+/// CodePageName[260] à 24 ; CPINFOEXA en fait 284 (#1750).
+const CPINFOEXW_SIZE: usize = 544;
+const CPINFOEXA_SIZE: usize = 284;
 pub unsafe extern "win64" fn get_cp_info(cp: u32, info: *mut u8) -> i32 {
     let cp = codepage::resolve(cp);
     if info.is_null() || !codepage::is_valid(cp) {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    std::ptr::write_bytes(info, 0, 20);
+    std::ptr::write_bytes(info, 0, CPINFO_SIZE);
     let max = if cp == CP_UTF8 {
         4
     } else if super::dbcs::is_dbcs(cp) {
@@ -123,11 +129,13 @@ pub unsafe extern "win64" fn get_cp_info_ex_w(cp: u32, _flags: u32, info: *mut u
     if get_cp_info(cp, info) == 0 {
         return 0;
     }
-    std::ptr::write_bytes(info.add(20), 0, 548 - 20);
-    (info.add(20) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
-    (info.add(24) as *mut u32).write_unaligned(cp);
+    // Jamais au-delà de la structure : 4 octets de trop écrasaient le
+    // cookie /GS de WinRAR (#1750).
+    std::ptr::write_bytes(info.add(CPINFO_SIZE), 0, CPINFOEXW_SIZE - CPINFO_SIZE);
+    (info.add(18) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
+    (info.add(20) as *mut u32).write_unaligned(cp);
     let name: Vec<u16> = code_page_name(cp).encode_utf16().take(259).collect();
-    std::ptr::copy_nonoverlapping(name.as_ptr() as *const u8, info.add(28), name.len() * 2);
+    std::ptr::copy_nonoverlapping(name.as_ptr() as *const u8, info.add(24), name.len() * 2);
     1
 }
 
@@ -137,12 +145,12 @@ pub unsafe extern "win64" fn get_cp_info_ex_a(cp: u32, flags: u32, info: *mut u8
         return 0;
     }
     let _ = flags;
-    std::ptr::write_bytes(info.add(20), 0, 288 - 20);
-    (info.add(20) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
-    (info.add(24) as *mut u32).write_unaligned(cp);
+    std::ptr::write_bytes(info.add(CPINFO_SIZE), 0, CPINFOEXA_SIZE - CPINFO_SIZE);
+    (info.add(18) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
+    (info.add(20) as *mut u32).write_unaligned(cp);
     let name = code_page_name(cp);
     let n = name.len().min(259);
-    std::ptr::copy_nonoverlapping(name.as_ptr(), info.add(28), n);
+    std::ptr::copy_nonoverlapping(name.as_ptr(), info.add(24), n);
     1
 }
 
@@ -1707,6 +1715,32 @@ mod tests {
     }
 
     use super::*;
+
+    /// CPINFO (18), CPINFOEXW (544) et CPINFOEXA (284) : champs aux
+    /// décalages de winnls.h, pas un octet écrit au-delà (#1750).
+    #[test]
+    fn cpinfo_sans_debordement() {
+        unsafe {
+            let mut buf = [0xAAu8; 600];
+            assert_eq!(get_cp_info(65001, buf.as_mut_ptr()), 1);
+            assert!(buf[CPINFO_SIZE..].iter().all(|&b| b == 0xAA));
+            assert_eq!(u32::from_le_bytes(buf[..4].try_into().unwrap()), 4);
+            let mut buf = [0xAAu8; 600];
+            assert_eq!(get_cp_info_ex_w(65001, 0, buf.as_mut_ptr()), 1);
+            assert!(buf[CPINFOEXW_SIZE..].iter().all(|&b| b == 0xAA));
+            assert_eq!(u32::from_le_bytes(buf[20..24].try_into().unwrap()), 65001);
+            let name: Vec<u16> = buf[24..24 + 2 * 15]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            assert_eq!(String::from_utf16_lossy(&name), "65001  (UTF-8)\0");
+            let mut buf = [0xAAu8; 600];
+            assert_eq!(get_cp_info_ex_a(1252, 0, buf.as_mut_ptr()), 1);
+            assert!(buf[CPINFOEXA_SIZE..].iter().all(|&b| b == 0xAA));
+            assert_eq!(u32::from_le_bytes(buf[20..24].try_into().unwrap()), 1252);
+            assert_eq!(&buf[24..28], b"1252");
+        }
+    }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain([0]).collect()

@@ -12,7 +12,13 @@ for typed, label in (("parametres", "Paramètres"), ("RESEAU", "Réseau Wi-Fi"),
     assert fold(typed) in fold(label), (typed, label)
 # Navigateurs : vrais noms, « Par défaut »/« Ouvrir » seulement une fois installé.
 shown, names = module["browser_buttons_shown"], module["BROWSER_NAMES"]
-assert list(names) == ["chrome", "edge", "firefox"] and names["firefox"] == "Mozilla Firefox", names
+assert list(names) == ["brave", "chrome", "edge", "firefox", "opera", "operagx", "tor", "vivaldi"], names
+assert names["firefox"] == "Mozilla Firefox" and names["operagx"] == "Opera GX" and names["tor"] == "Tor Browser", names
+# Ordre alphabétique des noms affichés : aucun navigateur mis en avant (#1716).
+assert sorted(names.values(), key=str.casefold) == list(names.values()), names
+assert set(module["BROWSER_PUBLISHERS"]) == set(names) == set(module["BROWSER_HOSTS"])
+title, text = module["browser_confirmation"]("tor", {"version": "16.0.1", "source": "https://dist.torproject.org/torbrowser/16.0.1/x.tar.xz"})
+assert "Tor Browser" in title and "16.0.1" in text and "EF6E 286D" in text and "dist.torproject.org" in text, text
 state = {"browser_chrome": "installed", "browser_edge": "downloadable", "browser_firefox": "update"}
 assert shown(state, "browser-default-chrome") and shown(state, "browser-launch-chrome")
 assert not shown(state, "browser-install-chrome")

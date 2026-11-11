@@ -28,6 +28,7 @@ const MSI_NULL_INTEGER: i32 = i32::MIN;
 pub const SESSION_HANDLE: u32 = 0x4D53;
 const INSTALLSTATE_ABSENT: i32 = 2;
 const INSTALLSTATE_LOCAL: i32 = 3;
+const INSTALLSTATE_UNKNOWN: i32 = -1;
 
 /// Champ d'un enregistrement MSI.
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +118,9 @@ pub fn decode(text: &str) -> HashMap<String, String> {
 pub const CODE_KEY: &str = "\u{1}code";
 /// Clé des actions demandées par MsiDoAction, une par ligne.
 pub const DO_KEY: &str = "\u{1}do";
+/// Clé des composants retenus pour l'installation, un par ligne : absente,
+/// tout composant est réputé installé (ancien comportement).
+pub const COMPONENTS_KEY: &str = "\u{1}components";
 
 pub(super) fn property(name: &str) -> Option<String> {
     with(|s| s.props.get(name).cloned())
@@ -173,7 +177,7 @@ unsafe fn text(p: usize, wide: bool) -> String {
 
 /// Copie façon Windows Installer : `*pcch` = taille du tampon en entrée,
 /// longueur (sans le zéro) en sortie ; ERROR_MORE_DATA si trop petit.
-unsafe fn put(value: &str, buf: usize, pcch: usize, wide: bool) -> u32 {
+pub(super) unsafe fn put(value: &str, buf: usize, pcch: usize, wide: bool) -> u32 {
     if pcch == 0 {
         return if buf == 0 {
             ERROR_SUCCESS
@@ -286,6 +290,57 @@ pub extern "win64" fn msi_get_language(h: usize) -> u32 {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1033)
     })
+}
+
+/// MsiGetComponentState : un composant que l'installation ne pose pas
+/// (fonctionnalité non retenue, condition fausse) n'a aucune action
+/// (INSTALLSTATE_UNKNOWN), comme sous Windows. Sinon WiX
+/// (SchedServiceConfig…) programme le réglage d'un service qui ne sera
+/// jamais inscrit, et ExecServiceConfig rend 1603 (#1699).
+fn component_state(h: usize, name: usize, installed: usize, action: usize, wide: bool) -> u32 {
+    let selected = if name == 0 || flag("WINLUX_MSI_REMOVING") {
+        None
+    } else {
+        let name = unsafe { text(name, wide) };
+        with(|s| {
+            s.props
+                .get(COMPONENTS_KEY)
+                .map(|list| list.lines().any(|c| c == name))
+        })
+    };
+    if selected != Some(false) {
+        return msi_get_state(h, name, installed, action);
+    }
+    if !is_session(h) {
+        return ERROR_INVALID_HANDLE;
+    }
+    unsafe {
+        if installed != 0 {
+            *(installed as *mut i32) = INSTALLSTATE_ABSENT;
+        }
+        if action != 0 {
+            *(action as *mut i32) = INSTALLSTATE_UNKNOWN;
+        }
+    }
+    ERROR_SUCCESS
+}
+
+pub extern "win64" fn msi_get_component_state_w(
+    h: usize,
+    name: usize,
+    installed: usize,
+    action: usize,
+) -> u32 {
+    component_state(h, name, installed, action, true)
+}
+
+pub extern "win64" fn msi_get_component_state_a(
+    h: usize,
+    name: usize,
+    installed: usize,
+    action: usize,
+) -> u32 {
+    component_state(h, name, installed, action, false)
 }
 
 /// MsiGetComponentState / MsiGetFeatureState : présent et laissé présent
@@ -613,6 +668,7 @@ pub extern "win64" fn msi_close_handle(h: usize) -> u32 {
         s.records.remove(&(h as u32));
     });
     super::session_db::close(h as u32);
+    super::summary::close(h as u32);
     ERROR_SUCCESS
 }
 
@@ -702,8 +758,8 @@ pub fn exports() -> crate::dlls::Exports {
         "MsiGetMode" => fn msi_get_mode,
         "MsiSetMode" => fn msi_set_mode,
         "MsiGetLanguage" => fn msi_get_language,
-        "MsiGetComponentStateW" => fn msi_get_state,
-        "MsiGetComponentStateA" => fn msi_get_state,
+        "MsiGetComponentStateW" => fn msi_get_component_state_w,
+        "MsiGetComponentStateA" => fn msi_get_component_state_a,
         "MsiGetFeatureStateW" => fn msi_get_state,
         "MsiGetFeatureStateA" => fn msi_get_state,
         "MsiSetComponentStateW" => fn msi_set_state,
@@ -758,5 +814,39 @@ mod tests {
             "C:\\Program Files\\X\\".to_string(),
         );
         assert_eq!(decode(&encode(&p)), p);
+    }
+
+    /// Un composant que l'installation ne pose pas n'a aucune action ;
+    /// sans liste transmise, tout composant reste réputé installé (#1699).
+    #[test]
+    fn etat_des_composants_selon_la_selection() {
+        let state = |name: &str| {
+            let w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let (mut installed, mut action) = (0i32, 0i32);
+            let r = msi_get_component_state_w(
+                SESSION_HANDLE as usize,
+                w.as_ptr() as usize,
+                &mut installed as *mut i32 as usize,
+                &mut action as *mut i32 as usize,
+            );
+            (r, installed, action)
+        };
+        let set = |list: Option<&str>| {
+            with(|s| match list {
+                Some(l) => s.props.insert(COMPONENTS_KEY.into(), l.into()),
+                None => s.props.remove(COMPONENTS_KEY),
+            });
+        };
+        set(Some("Principal\nServicePilotes\n"));
+        assert_eq!(
+            state("ServicePilotes"),
+            (0, INSTALLSTATE_ABSENT, INSTALLSTATE_LOCAL)
+        );
+        assert_eq!(
+            state("Audio"),
+            (0, INSTALLSTATE_ABSENT, INSTALLSTATE_UNKNOWN)
+        );
+        set(None);
+        assert_eq!(state("Audio"), (0, INSTALLSTATE_ABSENT, INSTALLSTATE_LOCAL));
     }
 }

@@ -16,6 +16,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "bluez", "blueman", "brightnessctl",
             # Interrupteurs radio (rfkill unblock dans winlux-bluetooth, #604).
             "rfkill",
+            # Trousseau de secrets (libsecret : Claude, navigateurs, mail),
+            # ouvert à la connexion par winlux-keyring (#1488).
+            "gnome-keyring",
             # glxinfo : moteur de rendu OpenGL dans le rapport de bug (#610).
             "mesa-utils",
             # Bus d'accessibilité org.a11y.Bus : lecteurs d'écran, Narrateur,
@@ -31,6 +34,12 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Polices aux métriques d'Arial, Times New Roman et Courier New :
             # les fenêtres des .exe gardent leur mise en page.
             "fonts-liberation",
+            # Métriques de Calibri et Cambria, polices par défaut des
+            # documents Office (Carlito : OFL 1.1, Caladea : Apache 2.0).
+            "fonts-crosextra-carlito", "fonts-crosextra-caladea",
+            # Cascadia Code et Mono : polices de Windows 11 publiées par
+            # Microsoft sous OFL 1.1, donc livrables telles quelles.
+            "fonts-cascadia-code",
             # Chinois, japonais et coréen : un .exe qui en affiche (lien
             # « 支持台灣獨立 » de Notepad++) a ses glyphes par repli de police
             # au lieu de carrés, comme la liaison de polices de Windows (#745).

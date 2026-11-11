@@ -11,7 +11,7 @@ Usage :
 La fenêtre enregistre elle-même la réponse, se ferme seule si le programme
 qui demande a quitté, et ne s'ouvre pas si la réponse est déjà connue.
 
-Capacités : files, camera, microphone, screen, network, sandbox. Le runtime Winlux
+Capacités : files, camera, microphone, screen, network, sandbox, input. Le runtime Winlux
 (runtime/src/permissions.rs) pose la question et mémorise la réponse dans
 ~/.config/winlux/permissions.tsv (capacité<TAB>allow|deny<TAB>chemin).
 """
@@ -89,6 +89,14 @@ _TR = {
         "This app (Chromium or Electron) cannot start with its sandbox on Winlux yet. Without it, the app starts, but a booby-trapped web page it displays would have more hold over your files.",
         "Esta aplicación (Chromium o Electron) aún no puede iniciarse con su entorno aislado en Winlux. Sin él, la aplicación se inicia, pero una página web trampa que muestre tendría más acceso a sus archivos.",
         "Diese App (Chromium oder Electron) kann unter Winlux noch nicht mit ihrer Sandbox starten. Ohne sie startet die App, aber eine präparierte Webseite, die sie anzeigt, hätte mehr Zugriff auf Ihre Dateien."),
+    "Autoriser « {app} » à taper au clavier et à piloter la souris à votre place ?": (
+        "Allow “{app}” to type and control the mouse for you?",
+        "¿Permitir que «{app}» escriba y controle el ratón por usted?",
+        "Darf „{app}“ für Sie tippen und die Maus steuern?"),
+    "L’application pourra appuyer sur des touches, écrire du texte et cliquer dans les autres fenêtres, comme si vous le faisiez (macros d’un clavier ou d’une souris, par exemple). Rien n’est tapé tant que l’écran est verrouillé.": (
+        "The app will be able to press keys, type text and click in other windows as if you were doing it (keyboard or mouse macros, for example). Nothing is typed while the screen is locked.",
+        "La aplicación podrá pulsar teclas, escribir texto y hacer clic en otras ventanas como si lo hiciera usted (macros de un teclado o un ratón, por ejemplo). No se escribe nada mientras la pantalla esté bloqueada.",
+        "Die App kann Tasten drücken, Text eingeben und in andere Fenster klicken, als ob Sie es täten (zum Beispiel Tastatur- oder Mausmakros). Solange der Bildschirm gesperrt ist, wird nichts eingegeben."),
     "Autoriser": ("Allow", "Permitir", "Zulassen"),
     "Ne pas autoriser": ("Don't allow", "No permitir", "Nicht zulassen"),
     "Vous pourrez changer d’avis dans Paramètres > Confidentialité et sécurité.": (
@@ -96,6 +104,10 @@ _TR = {
         "Puede cambiar de opinión en Configuración > Privacidad y seguridad.",
         "Sie können dies unter Einstellungen > Datenschutz und Sicherheit ändern."),
     "Demande d’autorisation": ("Permission request", "Solicitud de permiso", "Berechtigungsanfrage"),
+    "{app} attend votre réponse dans une fenêtre. {question} Sans réponse : refus pour cette fois dans {delai} s.": (
+        "{app} is waiting for your answer in a window. {question} Without an answer: denied this time in {delai} s.",
+        "{app} espera su respuesta en una ventana. {question} Sin respuesta: se deniega esta vez en {delai} s.",
+        "{app} wartet in einem Fenster auf Ihre Antwort. {question} Ohne Antwort: diesmal abgelehnt in {delai} s."),
 }
 
 
@@ -105,7 +117,63 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
-CAPABILITIES = ("files", "camera", "microphone", "screen", "network", "sandbox")
+# ── Verrou des fenêtres de consentement (#1696) ─────────────────────────────
+# Partagé avec la saisie simulée du runtime (runtime/src/dlls/saisie.rs) :
+# la fenêtre le prend en exclusif avant de s'afficher et le garde jusqu'à sa
+# fermeture. Un envoi SendInput en cours se termine d'abord ; aucun autre ne
+# commence tant que la fenêtre est là. Seule la personne peut y répondre.
+
+def consent_lock_path():
+    if os.environ.get("WINLUX_CONSENT_LOCK"):
+        return os.environ["WINLUX_CONSENT_LOCK"]
+    display = os.environ.get("DISPLAY", "").rpartition(":")[2].split(".")[0]
+    number = "".join(c for c in display if c.isdigit()) or "0"
+    return f"/tmp/winlux-consent-{number}.lock"
+
+
+def _lock_exclusive(path, timeout):
+    """Descripteur verrouillé en exclusif, ou None (lien, autre compte,
+    délai dépassé)."""
+    import fcntl
+    import stat
+    import time
+    # Jamais à travers un lien symbolique posé dans /tmp par un autre compte ;
+    # la saisie simulée refuse elle-même tout envoi sans ces verrous.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return None
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid not in (os.getuid(), 0):
+        os.close(fd)
+        return None
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= end:
+                os.close(fd)
+                return None
+            time.sleep(0.005)
+
+
+def hold_consent_lock(timeout=10.0):
+    """Verrous à garder ouverts jusqu'à la fermeture de la fenêtre (#1711).
+
+    D'abord la porte : dès qu'elle est prise, aucune nouvelle saisie simulée
+    ne démarre (elle n'y passe qu'un instant). Ensuite le verrou principal :
+    on attend la fin des envois déjà commencés, un lot au plus. Si un verrou
+    est impossible (fichier posé par un autre compte), la fenêtre s'affiche
+    quand même : la saisie simulée refuse alors déjà tout."""
+    path = consent_lock_path()
+    gate = _lock_exclusive(os.path.splitext(path)[0] + ".porte", timeout)
+    main = _lock_exclusive(path, timeout)
+    return [fd for fd in (gate, main) if fd is not None]
+
+
+CAPABILITIES = ("files", "camera", "microphone", "screen", "network", "sandbox", "input")
 QUESTIONS = {
     "files": ("Autoriser « {app} » à accéder à vos fichiers personnels ?",
               "Documents, Images, Musique, Vidéos, Bureau et Téléchargements. L’application pourra les lire et les modifier.",
@@ -123,6 +191,9 @@ QUESTIONS = {
     "sandbox": ("Lancer « {app} » sans son isolation ?",
                 "Cette application (Chromium ou Electron) ne démarre pas encore avec son bac à sable sous Winlux. Sans lui, elle démarre, mais une page web piégée qu’elle afficherait aurait plus de prise sur vos fichiers.",
                 "security-medium"),
+    "input": ("Autoriser « {app} » à taper au clavier et à piloter la souris à votre place ?",
+              "L’application pourra appuyer sur des touches, écrire du texte et cliquer dans les autres fenêtres, comme si vous le faisiez (macros d’un clavier ou d’une souris, par exemple). Rien n’est tapé tant que l’écran est verrouillé.",
+              "input-keyboard"),
 }
 TIMEOUT_SECONDS = 120
 WATCH_MILLISECONDS = 500
@@ -236,6 +307,22 @@ def watch(cap, exe, parent):
 
 # ── Fenêtre de demande ──────────────────────────────────────────────────────
 
+def notice(cap, name, stream=None):
+    """Une ligne sur stderr quand la fenêtre s'ouvre : une commande lancée
+    depuis un terminal (pip…) ne doit pas attendre en silence (#1592)."""
+    stream = stream if stream is not None else sys.stderr
+    if stream is None:
+        return
+    question = _t(QUESTIONS[cap][0]).format(app=name)
+    line = _t("{app} attend votre réponse dans une fenêtre. {question} "
+              "Sans réponse : refus pour cette fois dans {delai} s.").format(app=name, question=question,
+                                                               delai=TIMEOUT_SECONDS)
+    try:
+        print(f"winlux : {line}", file=stream, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def ask(cap, name, exe):
     parent = requester()
     early = watch(cap, exe, parent)
@@ -329,12 +416,16 @@ def ask(cap, name, exe):
     note.get_style_context().add_class("consent-note")
     footer.pack_start(note, False, False, 0)
     # Par prudence, Entrée ne vaut pas « Autoriser » : le focus va sur le refus.
+    result["lock"] = hold_consent_lock()
     window.show_all()
     deny.grab_focus()
     window.present()
+    notice(cap, name)
     GLib.timeout_add_seconds(TIMEOUT_SECONDS, lambda: finish(2) or False)
     GLib.timeout_add(WATCH_MILLISECONDS, poll)
     Gtk.main()
+    for fd in result.get("lock") or []:
+        os.close(fd)
     return result["code"]
 
 

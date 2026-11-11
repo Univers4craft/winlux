@@ -107,19 +107,47 @@ pub fn premul(r: f32, g: f32, b: f32, a: f32) -> Color {
     ]
 }
 
+/// Rendu d'un remplissage : anticrénelage et D2D1_PRIMITIVE_BLEND.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FillMode {
+    /// D2D1_ANTIALIAS_MODE_ALIASED : un pixel est couvert en entier si son
+    /// centre est dans la forme, sinon pas du tout.
+    pub aliased: bool,
+    /// 0 SOURCE_OVER, 1 COPY, 2 MIN, 3 ADD, 4 MAX.
+    pub blend: u32,
+}
+
 impl Canvas<'_> {
-    /// Mélange « source over » de `c` avec la couverture `cov`.
-    fn blend(&mut self, x: usize, y: usize, c: Color, cov: f32) {
+    /// Mélange de `c` selon D2D1_PRIMITIVE_BLEND, la couverture `cov`
+    /// pondérant le résultat pour les modes autres que « source over ».
+    fn blend_mode(&mut self, x: usize, y: usize, c: Color, cov: f32, mode: u32) {
         let o = y * self.stride + x * 4;
         let d = &mut self.px[o..o + 4];
-        let sa = c[3] * cov;
-        if sa <= 0.0 {
-            return;
-        }
-        let inv = 1.0 - sa;
-        let s = [c[2] * cov, c[1] * cov, c[0] * cov, sa];
-        for i in 0..4 {
-            d[i] = ((s[i] * 255.0 + d[i] as f32 * inv) + 0.5).min(255.0) as u8;
+        let s = [c[2], c[1], c[0], c[3]];
+        let q = |v: f32| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        match mode {
+            1..=4 => {
+                for i in 0..4 {
+                    let dv = d[i] as f32 / 255.0;
+                    let r = match mode {
+                        1 => s[i],
+                        2 => s[i].min(dv),
+                        3 => (s[i] + dv).min(1.0),
+                        _ => s[i].max(dv),
+                    };
+                    d[i] = q(dv + (r - dv) * cov);
+                }
+            }
+            _ => {
+                let sa = c[3] * cov;
+                if sa <= 0.0 {
+                    return;
+                }
+                let inv = 1.0 - sa;
+                for i in 0..4 {
+                    d[i] = ((s[i] * cov * 255.0 + d[i] as f32 * inv) + 0.5).min(255.0) as u8;
+                }
+            }
         }
     }
 
@@ -131,6 +159,18 @@ impl Canvas<'_> {
         rule: FillRule,
         clip: Option<Clip>,
         paint: &dyn Fn(f32, f32) -> Color,
+    ) {
+        self.fill_mode(polys, rule, clip, paint, FillMode::default());
+    }
+
+    /// `fill` avec l'anticrénelage et le mélange donnés.
+    pub fn fill_mode(
+        &mut self,
+        polys: &[Vec<Pt>],
+        rule: FillRule,
+        clip: Option<Clip>,
+        paint: &dyn Fn(f32, f32) -> Color,
+        mode: FillMode,
     ) {
         let mut edges = Vec::new();
         let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
@@ -168,12 +208,12 @@ impl Canvas<'_> {
         }
         let mut cov = vec![0f32; self.w as usize + 1];
         let mut xs: Vec<(f32, i32)> = Vec::new();
-        const SUB: usize = 4;
+        let sub: usize = if mode.aliased { 1 } else { 4 };
         for y in y0..y1 {
             cov.iter_mut().for_each(|v| *v = 0.0);
             let (mut lo, mut hi) = (usize::MAX, 0usize);
-            for s in 0..SUB {
-                let sy = y as f32 + (s as f32 + 0.5) / SUB as f32;
+            for s in 0..sub {
+                let sy = y as f32 + (s as f32 + 0.5) / sub as f32;
                 if sy < c.t || sy >= c.b {
                     continue;
                 }
@@ -199,8 +239,17 @@ impl Canvas<'_> {
                     };
                     if inside && i + 1 < xs.len() {
                         let (a, b) = (xs[i].0.max(cl), xs[i + 1].0.min(cr));
-                        if a < b {
-                            add_span(&mut cov, a, b, 1.0 / SUB as f32);
+                        if mode.aliased {
+                            // Pixels dont le centre est dans [a, b).
+                            let (pa, pb) = ((a - 0.5).ceil(), (b - 0.5).ceil());
+                            if pa < pb {
+                                let (pa, pb) = (pa as usize, pb as usize);
+                                add_span(&mut cov, pa as f32, pb as f32, 1.0);
+                                lo = lo.min(pa);
+                                hi = hi.max(pb);
+                            }
+                        } else if a < b {
+                            add_span(&mut cov, a, b, 1.0 / sub as f32);
                             lo = lo.min(a.floor() as usize);
                             hi = hi.max(b.ceil() as usize);
                         }
@@ -215,7 +264,7 @@ impl Canvas<'_> {
                 let v = c.min(1.0);
                 if v > 0.0 {
                     let col = paint(x as f32 + 0.5, y as f32 + 0.5);
-                    self.blend(x, y as usize, col, v);
+                    self.blend_mode(x, y as usize, col, v, mode.blend);
                 }
             }
         }
@@ -349,7 +398,11 @@ impl Path {
         } else if !clockwise && dt > 0.0 {
             dt -= tau;
         }
-        let n = segments(dt.abs() * rx.max(ry) * scale);
+        // Au moins 64 segments par tour : une géométrie petite agrandie
+        // ensuite par une transformation ne devient pas un polygone (#1743).
+        let n = segments(dt.abs() * rx.max(ry) * scale)
+            .max((dt.abs() / std::f32::consts::TAU * 64.0).ceil() as usize)
+            .max(1);
         for i in 1..=n {
             let t = t1 + dt * i as f32 / n as f32;
             let (x, y) = (rx * t.cos(), ry * t.sin());
@@ -373,7 +426,7 @@ impl Path {
     }
 
     pub fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32, scale: f32) -> Path {
-        let n = segments(std::f32::consts::TAU * rx.abs().max(ry.abs()) * scale);
+        let n = segments(std::f32::consts::TAU * rx.abs().max(ry.abs()) * scale).max(64);
         let pts = (0..n)
             .map(|i| {
                 let t = std::f32::consts::TAU * i as f32 / n as f32;
@@ -416,6 +469,98 @@ impl Path {
     /// Contour d'épaisseur `width` (en unités utilisateur), à jointures et
     /// extrémités rondes, sous forme de polygones orientés pour une union
     /// par règle non nulle.
+    /// Découpe le tracé en tirets (#1867) : `pattern` alterne longueurs
+    /// tracées et vides (unités de l'espace du tracé), `offset` décale le
+    /// motif le long de chaque figure. Un tiret de longueur nulle devient un
+    /// point, que le trait arrondit.
+    pub fn dashed(&self, pattern: &[f32], offset: f32) -> Path {
+        let total: f32 = pattern.iter().map(|d| d.max(0.0)).sum();
+        if pattern.is_empty() || total <= 1e-6 || !total.is_finite() {
+            return self.clone();
+        }
+        let mut out = Path::default();
+        for (pts, closed) in &self.figures {
+            if pts.len() < 2 {
+                out.figures.push((pts.clone(), false));
+                continue;
+            }
+            // Position de départ dans le motif.
+            let mut idx = 0usize;
+            let mut left = pattern[0].max(0.0);
+            let mut skip = offset.rem_euclid(total);
+            while skip > 0.0 {
+                if skip >= left {
+                    skip -= left;
+                    idx = (idx + 1) % pattern.len();
+                    left = pattern[idx].max(0.0);
+                } else {
+                    left -= skip;
+                    skip = 0.0;
+                }
+            }
+            let on = |i: usize| i.is_multiple_of(2);
+            let mut zeros = 0usize;
+            while left <= 1e-6 && zeros < pattern.len() {
+                zeros += 1;
+                if on(idx) {
+                    out.figures.push((vec![pts[0]], false));
+                }
+                idx = (idx + 1) % pattern.len();
+                left = pattern[idx].max(0.0);
+            }
+            let mut cur: Vec<Pt> = if on(idx) { vec![pts[0]] } else { Vec::new() };
+            let n = if *closed { pts.len() } else { pts.len() - 1 };
+            let mut guard = 0usize;
+            for i in 0..n {
+                let (mut a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                let mut len = dist(a, b);
+                while len > 1e-6 && guard < 1_000_000 {
+                    guard += 1;
+                    if left >= len {
+                        left -= len;
+                        if on(idx) {
+                            cur.push(b);
+                        }
+                        break;
+                    }
+                    let t = left / len;
+                    let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                    if on(idx) {
+                        cur.push(p);
+                        out.figures.push((std::mem::take(&mut cur), false));
+                    } else {
+                        cur = vec![p];
+                    }
+                    len -= left;
+                    a = p;
+                    idx = (idx + 1) % pattern.len();
+                    left = pattern[idx].max(0.0);
+                    // Tiret nul : un point.
+                    while left <= 1e-6 && guard < 1_000_000 {
+                        guard += 1;
+                        if on(idx) {
+                            out.figures.push((vec![a], false));
+                            cur.clear();
+                        } else {
+                            cur = vec![a];
+                        }
+                        idx = (idx + 1) % pattern.len();
+                        left = pattern[idx].max(0.0);
+                    }
+                    if !on(idx) {
+                        cur.clear();
+                    } else if cur.is_empty() {
+                        cur.push(a);
+                    }
+                }
+            }
+            if on(idx) && cur.len() >= 2 {
+                out.figures.push((cur, false));
+            }
+        }
+        out
+    }
+
     pub fn stroke_polys(&self, m: &Matrix, width: f32) -> Vec<Vec<Pt>> {
         let hw = (width * m.scale() / 2.0).max(0.35);
         let mut out = Vec::new();
@@ -480,6 +625,35 @@ fn oriented(mut p: Vec<Pt>) -> Vec<Pt> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1867 : tirets d'un trait (contour de sélection de Paint.NET).
+    #[test]
+    fn trait_en_tirets() {
+        let mut p = Path::default();
+        p.begin((0.0, 0.0));
+        p.line((10.0, 0.0));
+        let d = p.dashed(&[2.0, 2.0], 0.0);
+        let spans: Vec<(f32, f32)> = d
+            .figures
+            .iter()
+            .map(|(f, _)| (f[0].0, f.last().unwrap().0))
+            .collect();
+        assert_eq!(spans, vec![(0.0, 2.0), (4.0, 6.0), (8.0, 10.0)]);
+        // Décalage d'un demi-tiret : le motif commence au milieu d'un tiret.
+        let d = p.dashed(&[2.0, 2.0], 1.0);
+        assert_eq!((d.figures[0].0[0].0, d.figures[0].0[1].0), (0.0, 1.0));
+        assert_eq!(d.figures[1].0[0].0, 3.0);
+        // Rectangle fermé : le motif suit les côtés, coins compris.
+        let r = Path::rect(0.0, 0.0, 4.0, 4.0).dashed(&[3.0, 1.0], 0.0);
+        assert_eq!(r.figures.len(), 4);
+        assert_eq!(r.figures[0].0, vec![(0.0, 0.0), (3.0, 0.0)]);
+        assert_eq!(r.figures[1].0, vec![(4.0, 0.0), (4.0, 3.0)]);
+        // Points (tiret nul) : une figure d'un point chacun.
+        let d = p.dashed(&[0.0, 5.0], 0.0);
+        assert_eq!(d.figures.len(), 2);
+        assert!(d.figures.iter().all(|(f, _)| f.len() == 1));
+    }
+
     use super::*;
 
     fn canvas(px: &mut [u8], w: u32, h: u32) -> Canvas<'_> {

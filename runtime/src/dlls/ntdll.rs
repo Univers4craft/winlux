@@ -13,6 +13,7 @@ const STATUS_SUCCESS: i32 = 0;
 const STATUS_NOT_IMPLEMENTED: i32 = 0xC000_0002u32 as i32;
 const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+const STATUS_OBJECT_NAME_INVALID: i32 = 0xC000_0033u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
 const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
@@ -20,6 +21,7 @@ const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
 const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
 const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
 const STATUS_UNSUCCESSFUL: i32 = 0xC000_0001u32 as i32;
+const STATUS_INVALID_INFO_CLASS: i32 = 0xC000_0003u32 as i32;
 
 use super::lock;
 
@@ -570,11 +572,21 @@ fn pointer_cookie() -> usize {
 }
 
 pub extern "win64" fn rtl_encode_pointer(ptr: *mut c_void) -> *mut c_void {
-    (ptr as usize ^ pointer_cookie()) as *mut c_void
+    rtl_pointer_xor(ptr as usize) as *mut c_void
 }
 
 pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
-    (ptr as usize ^ pointer_cookie()) as *mut c_void
+    rtl_pointer_xor(ptr as usize) as *mut c_void
+}
+
+/// Programme x86 : valeur codée sur 32 bits (#1642).
+fn rtl_pointer_xor(ptr: usize) -> usize {
+    let v = ptr ^ pointer_cookie();
+    if crate::wow32::active() {
+        v as u32 as usize
+    } else {
+        v
+    }
 }
 
 // ============================================================
@@ -1018,6 +1030,8 @@ fn registry_status(error: i32) -> i32 {
         2 => 0xC000_0034u32 as i32,
         5 => 0xC000_0022u32 as i32,
         6 => STATUS_INVALID_HANDLE,
+        // ERROR_NO_MORE_ITEMS → STATUS_NO_MORE_ENTRIES (fin d'énumération).
+        259 => 0x8000_001Au32 as i32,
         _ => STATUS_INVALID_PARAMETER,
     }
 }
@@ -1062,6 +1076,96 @@ pub unsafe extern "win64" fn nt_open_key_ex(
     nt_open_key(out, access, attrs)
 }
 
+/// Texte d'un UNICODE_STRING de nom de valeur (vide accepté).
+unsafe fn value_name(name: *const u8) -> Result<(Vec<u16>, String), i32> {
+    if name.is_null() || !ustr_len(name).is_multiple_of(2) || ustr_len(name) > ustr_max(name) {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let count = ustr_len(name) as usize / 2;
+    if count != 0 && ustr_buf_w(name).is_null() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let wide = if count == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(ustr_buf_w(name), count).to_vec()
+    };
+    let text = String::from_utf16(&wide).map_err(|_| STATUS_INVALID_PARAMETER)?;
+    Ok((wide, text))
+}
+
+/// Copie une structure d'information NT calculée d'avance : longueur
+/// requise toujours rendue, STATUS_BUFFER_TOO_SMALL sous l'en-tête fixe,
+/// STATUS_BUFFER_OVERFLOW (données partielles) au-delà.
+unsafe fn put_info(
+    result: &[u8],
+    header: usize,
+    info: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> i32 {
+    let Ok(required) = u32::try_from(result.len()) else {
+        return STATUS_NO_MEMORY;
+    };
+    if result_length.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *result_length = required;
+    if (length as usize) < header {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(result.as_ptr(), info, result.len().min(length as usize));
+    if (length as usize) < result.len() {
+        0x8000_0005u32 as i32
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+fn put_wide(out: &mut [u8], at: usize, wide: &[u16]) {
+    for (index, unit) in wide.iter().enumerate() {
+        out[at + index * 2..at + index * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+}
+
+/// KEY_VALUE_BASIC (0), _FULL (1) et _PARTIAL (2)_INFORMATION, d'après
+/// ddk/wdm.h de mingw-w64. Rend (octets, taille de l'en-tête fixe).
+fn value_info(wide: &[u16], kind: u32, data: &[u8], class: u32) -> Result<(Vec<u8>, usize), i32> {
+    if class > 2 {
+        return Err(STATUS_INVALID_INFO_CLASS);
+    }
+    let header = if class == 1 { 20 } else { 12 };
+    let name_size = wide.len() * 2;
+    let data_offset = (header + name_size + 3) & !3;
+    let required = match class {
+        0 => header + name_size,
+        1 => data_offset + data.len(),
+        _ => header + data.len(),
+    };
+    let mut result = vec![0u8; required];
+    result[4..8].copy_from_slice(&kind.to_le_bytes());
+    match class {
+        0 => result[8..12].copy_from_slice(&(name_size as u32).to_le_bytes()),
+        1 => {
+            result[8..12].copy_from_slice(&(data_offset as u32).to_le_bytes());
+            result[12..16].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            result[16..20].copy_from_slice(&(name_size as u32).to_le_bytes());
+            result[data_offset..].copy_from_slice(data);
+        }
+        _ => {
+            result[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            result[12..].copy_from_slice(data);
+        }
+    }
+    if class < 2 {
+        put_wide(&mut result, header, wide);
+    }
+    Ok((result, header))
+}
+
 pub unsafe extern "win64" fn nt_query_value_key(
     handle: usize,
     name: *const u8,
@@ -1070,78 +1174,189 @@ pub unsafe extern "win64" fn nt_query_value_key(
     length: u32,
     result_length: *mut u32,
 ) -> i32 {
-    if name.is_null()
-        || result_length.is_null()
-        || !ustr_len(name).is_multiple_of(2)
-        || ustr_len(name) > ustr_max(name)
-    {
+    if result_length.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    let count = ustr_len(name) as usize / 2;
-    if count != 0 && ustr_buf_w(name).is_null() {
-        return STATUS_INVALID_PARAMETER;
-    }
-    let wide = if count == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(ustr_buf_w(name), count)
-    };
-    let text = match String::from_utf16(wide) {
-        Ok(text) => text,
-        Err(_) => return STATUS_INVALID_PARAMETER,
+    let (wide, text) = match value_name(name) {
+        Ok(v) => v,
+        Err(status) => return status,
     };
     if info_class > 2 {
-        return 0xC000_0003u32 as i32;
+        return STATUS_INVALID_INFO_CLASS;
     }
     let (kind, data) = match crate::dlls::advapi32::query_native_value(handle, &text) {
         Ok(value) => value,
         Err(error) => return registry_status(error),
     };
-    let header = if info_class == 1 { 20 } else { 12 };
-    let name_size = wide.len() * 2;
-    let data_offset = (header + name_size + 3) & !3;
-    let required = match info_class {
-        0 => header + name_size,
-        1 => data_offset + data.len(),
-        _ => header + data.len(),
-    };
-    let Ok(required_u32) = u32::try_from(required) else {
-        return 0xC000_0017u32 as i32;
-    };
-    *result_length = required_u32;
-    if (length as usize) < header {
-        return STATUS_BUFFER_TOO_SMALL;
+    match value_info(&wide, kind, &data, info_class) {
+        Ok((result, header)) => put_info(&result, header, info, length, result_length),
+        Err(status) => status,
     }
-    if info.is_null() {
+}
+
+/// `NtSetValueKey` : chrome_elf.dll (steamwebhelper, Chromium) écrit ainsi
+/// ses réglages très tôt, sans passer par advapi32 (#1635).
+pub unsafe extern "win64" fn nt_set_value_key(
+    handle: usize,
+    name: *const u8,
+    _title_index: u32,
+    kind: u32,
+    data: *const u8,
+    size: u32,
+) -> i32 {
+    let (_, text) = match value_name(name) {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
+    if data.is_null() && size != 0 {
         return STATUS_INVALID_PARAMETER;
     }
-    let mut result = vec![0u8; required];
-    result[4..8].copy_from_slice(&kind.to_le_bytes());
-    match info_class {
-        0 => {
-            result[8..12].copy_from_slice(&(name_size as u32).to_le_bytes());
-        }
-        1 => {
-            result[8..12].copy_from_slice(&(data_offset as u32).to_le_bytes());
-            result[12..16].copy_from_slice(&(data.len() as u32).to_le_bytes());
-            result[16..20].copy_from_slice(&(name_size as u32).to_le_bytes());
-            result[data_offset..].copy_from_slice(&data);
-        }
-        _ => {
-            result[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
-            result[12..].copy_from_slice(&data);
-        }
-    }
-    if info_class < 2 {
-        for (index, unit) in wide.iter().enumerate() {
-            result[header + index * 2..header + index * 2 + 2].copy_from_slice(&unit.to_le_bytes());
-        }
-    }
-    std::ptr::copy_nonoverlapping(result.as_ptr(), info, required.min(length as usize));
-    if (length as usize) < required {
-        0x8000_0005u32 as i32
+    let bytes = if size == 0 {
+        Vec::new()
     } else {
-        STATUS_SUCCESS
+        std::slice::from_raw_parts(data, size as usize).to_vec()
+    };
+    registry_status(crate::dlls::advapi32::set_native_value(
+        handle, &text, kind, bytes,
+    ))
+}
+
+pub unsafe extern "win64" fn nt_delete_value_key(handle: usize, name: *const u8) -> i32 {
+    match value_name(name) {
+        Ok((_, text)) => registry_status(crate::dlls::advapi32::delete_native_value(handle, &text)),
+        Err(status) => status,
+    }
+}
+
+pub unsafe extern "win64" fn nt_delete_key(handle: usize) -> i32 {
+    registry_status(crate::dlls::advapi32::delete_native_key(handle))
+}
+
+pub unsafe extern "win64" fn nt_flush_key(handle: usize) -> i32 {
+    registry_status(crate::dlls::advapi32::reg_flush_key(handle))
+}
+
+/// KEY_BASIC (0), KEY_NODE (1) et KEY_NAME (3)_INFORMATION d'un nom de clé
+/// (ddk/wdm.h ; KEY_NAME_INFORMATION d'après sa documentation publique).
+fn key_name_info(wide: &[u16], last_write: u64, class: u32) -> Result<(Vec<u8>, usize), i32> {
+    let name_size = wide.len() * 2;
+    let (header, name_len_at) = match class {
+        0 => (16, 12),
+        1 => (24, 20),
+        3 => (4, 0),
+        _ => return Err(STATUS_INVALID_INFO_CLASS),
+    };
+    let mut result = vec![0u8; header + name_size];
+    if class != 3 {
+        result[0..8].copy_from_slice(&last_write.to_le_bytes());
+    }
+    if class == 1 {
+        // Pas de classe : ClassOffset = -1, ClassLength = 0.
+        result[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    }
+    result[name_len_at..name_len_at + 4].copy_from_slice(&(name_size as u32).to_le_bytes());
+    put_wide(&mut result, header, wide);
+    Ok((result, header))
+}
+
+pub unsafe extern "win64" fn nt_enumerate_key(
+    handle: usize,
+    index: u32,
+    info_class: u32,
+    info: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> i32 {
+    if result_length.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if !matches!(info_class, 0 | 1 | 3) {
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    let (name, stamp) = match crate::dlls::advapi32::native_subkey_at(handle, index) {
+        Ok(v) => v,
+        Err(error) => return registry_status(error),
+    };
+    let wide: Vec<u16> = name.encode_utf16().collect();
+    match key_name_info(&wide, stamp, info_class) {
+        Ok((result, header)) => put_info(&result, header, info, length, result_length),
+        Err(status) => status,
+    }
+}
+
+pub unsafe extern "win64" fn nt_enumerate_value_key(
+    handle: usize,
+    index: u32,
+    info_class: u32,
+    info: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> i32 {
+    if result_length.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if info_class > 2 {
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    let (name, kind, data) = match crate::dlls::advapi32::native_value_at(handle, index) {
+        Ok(v) => v,
+        Err(error) => return registry_status(error),
+    };
+    let wide: Vec<u16> = name.encode_utf16().collect();
+    match value_info(&wide, kind, &data, info_class) {
+        Ok((result, header)) => put_info(&result, header, info, length, result_length),
+        Err(status) => status,
+    }
+}
+
+pub unsafe extern "win64" fn nt_query_key(
+    handle: usize,
+    info_class: u32,
+    info: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> i32 {
+    if result_length.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if !matches!(info_class, 0..=3) {
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    let k = match crate::dlls::advapi32::native_key_info(handle) {
+        Ok(k) => k,
+        Err(error) => return registry_status(error),
+    };
+    let built = if info_class == 2 {
+        // KEY_FULL_INFORMATION, sans classe.
+        let mut r = vec![0u8; 44];
+        r[0..8].copy_from_slice(&k.last_write.to_le_bytes());
+        r[8..12].copy_from_slice(&0u32.to_le_bytes());
+        r[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        for (at, v) in [
+            (16, 0),
+            (20, k.sub_keys),
+            (24, k.max_sub_key_len),
+            (28, 0),
+            (32, k.values),
+            (36, k.max_value_name_len),
+            (40, k.max_value_len),
+        ] {
+            r[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        Ok((r, 44))
+    } else {
+        // Basic et Node portent le dernier composant, Name le chemin complet.
+        let name = if info_class == 3 {
+            k.full_name.as_str()
+        } else {
+            k.full_name.rsplit('\\').next().unwrap_or("")
+        };
+        let wide: Vec<u16> = name.encode_utf16().collect();
+        key_name_info(&wide, k.last_write, info_class)
+    };
+    match built {
+        Ok((result, header)) => put_info(&result, header, info, length, result_length),
+        Err(status) => status,
     }
 }
 
@@ -1190,6 +1405,9 @@ unsafe fn apply_disposition(o: &mut std::fs::OpenOptions, disp: u32) {
     }
 }
 
+/// Option de création FILE_DELETE_ON_CLOSE (winternl.h).
+const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
+
 /// `NtCreateFile` : ouvre ou crée un fichier via un chemin NT.
 pub unsafe extern "win64" fn nt_create_file(
     handle: *mut usize,
@@ -1200,7 +1418,7 @@ pub unsafe extern "win64" fn nt_create_file(
     _file_attrs: u32,
     _share: u32,
     disposition: u32,
-    _options: u32,
+    options: u32,
     _ea: *const c_void,
     _ea_len: u32,
 ) -> i32 {
@@ -1210,9 +1428,38 @@ pub unsafe extern "win64" fn nt_create_file(
     let Some(win_path) = oa_path(attrs) else {
         return STATUS_INVALID_PARAMETER;
     };
-    let linux_path = crate::paths::to_linux(&win_path);
+    // Pilote AFD des sockets (mio/tokio, #1766).
+    if super::afd::is_afd_path(&win_path) {
+        return super::afd::open(handle, io);
+    }
+    // OBJECT_ATTRIBUTES.RootDirectory (+0x8) : nom relatif à un dossier
+    // ouvert. `remove_dir_all` de la bibliothèque Rust ouvre ainsi chaque
+    // entrée du dossier à effacer (#1885).
+    let root = *((attrs as *const u8).add(8) as *const usize);
+    // Un nom relatif ne remonte pas et ne repart pas de la racine :
+    // Windows refuse « \x » et « .. » avec STATUS_OBJECT_NAME_INVALID.
+    if root != 0
+        && (win_path.starts_with(['\\', '/'])
+            || win_path.split(['\\', '/']).any(|c| c == ".." || c == "."))
+    {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    let linux_path = if root != 0 {
+        let Some(base) =
+            super::kernel32::fd_of_handle(root).and_then(super::ntdll_file::path_of_fd)
+        else {
+            return STATUS_INVALID_HANDLE;
+        };
+        base.join(win_path.replace('\\', "/"))
+    } else {
+        crate::paths::to_linux(&win_path)
+    };
     let want_read = access & 0x8000_0000 != 0 || access & 1 != 0 || access & 0x0008_0000 != 0;
-    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    let mut want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    // Un dossier s'ouvre en lecture seule sous Linux.
+    if want_write && disposition == 1 && linux_path.is_dir() {
+        want_write = false;
+    }
     let mut o = std::fs::OpenOptions::new();
     o.read(want_read || !want_write).write(want_write);
     apply_disposition(&mut o, disposition);
@@ -1220,6 +1467,14 @@ pub unsafe extern "win64" fn nt_create_file(
         Ok(f) => {
             let h = super::kernel32::insert_file(f);
             *handle = h;
+            // FILE_DELETE_ON_CLOSE : effacé à la fermeture du handle.
+            if options & FILE_DELETE_ON_CLOSE != 0 {
+                crate::trace!(
+                    "NtCreateFile({}) : effacé à la fermeture",
+                    linux_path.display()
+                );
+                crate::dlls::lock(super::kernel32::delete_on_close()).insert(h, linux_path);
+            }
             if !io.is_null() {
                 (io as *mut u64).write(0);
                 (io as *mut u64).add(1).write(disposition as u64);
@@ -1705,13 +1960,23 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
     length: usize,
     return_length: *mut usize,
 ) -> i32 {
-    if !crate::dlls::kernel32::is_current_process_handle(handle) {
+    // Autre processus : ses régions viennent de /proc/<pid>/maps (#1729).
+    let current = crate::dlls::kernel32::is_current_process_handle(handle);
+    if !current && crate::dlls::kernel32::process_os_pid(handle).is_none() {
         return STATUS_INVALID_HANDLE;
     }
     if info_class != 0 {
         return 0xC000_0003u32 as i32; // STATUS_INVALID_INFO_CLASS
     }
-    let required = std::mem::size_of::<crate::dlls::kernel32::MemoryBasicInformation>();
+    // Programme x86 : MEMORY_BASIC_INFORMATION de 28 octets, comme pour
+    // NtQuerySection (#1650) ; la disposition 64 bits (48 octets) lui
+    // rendait STATUS_INFO_LENGTH_MISMATCH.
+    let x86 = crate::dlls::legacy_com::x86();
+    let required = if x86 {
+        28
+    } else {
+        std::mem::size_of::<crate::dlls::kernel32::MemoryBasicInformation>()
+    };
     if !return_length.is_null() {
         *return_length = required;
     }
@@ -1722,7 +1987,22 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
         return STATUS_INVALID_PARAMETER;
     }
     let previous = crate::dlls::kernel32::get_last_error();
-    let result = crate::dlls::kernel32::virtual_query(addr, info.cast(), length);
+    let result = match (x86, current) {
+        (true, true) => {
+            crate::wow32::virtual_query32(addr as usize as u32, info as usize as u32, length as u32)
+                as usize
+        }
+        (true, false) => crate::wow32::virtual_query_ex32(
+            handle as u32,
+            addr as usize as u32,
+            info as usize as u32,
+            length as u32,
+        ) as usize,
+        (false, true) => crate::dlls::kernel32::virtual_query(addr, info.cast(), length),
+        (false, false) => {
+            crate::dlls::kernel32::virtual_query_ex(handle, addr, info.cast(), length)
+        }
+    };
     crate::process::set_last_error(previous);
     if result == 0 {
         STATUS_INVALID_PARAMETER
@@ -2444,6 +2724,18 @@ pub fn exports() -> crate::dlls::Exports {
         "NtOpenKeyEx" => fn nt_open_key_ex,
         "NtCreateKey" => fn nt_create_key,
         "NtQueryValueKey" => fn nt_query_value_key,
+        "NtSetValueKey" => fn nt_set_value_key,
+        "ZwSetValueKey" => fn nt_set_value_key,
+        "NtDeleteValueKey" => fn nt_delete_value_key,
+        "ZwDeleteValueKey" => fn nt_delete_value_key,
+        "NtFlushKey" => fn nt_flush_key,
+        "ZwFlushKey" => fn nt_flush_key,
+        "NtEnumerateKey" => fn nt_enumerate_key,
+        "ZwEnumerateKey" => fn nt_enumerate_key,
+        "NtEnumerateValueKey" => fn nt_enumerate_value_key,
+        "ZwEnumerateValueKey" => fn nt_enumerate_value_key,
+        "NtQueryKey" => fn nt_query_key,
+        "ZwQueryKey" => fn nt_query_key,
         "NtCreateFile" => fn nt_create_file,
         "NtOpenFile" => fn nt_open_file,
         "NtQueryInformationProcess" => fn nt_query_information_process,

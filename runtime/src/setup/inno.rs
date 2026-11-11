@@ -399,23 +399,28 @@ struct Ctx {
 impl Ctx {
     fn folder(&self, name: &str) -> Option<String> {
         let pf = Folders { x64: self.x64 }.program_files().to_string();
-        let roaming = "C:\\AppData\\Roaming";
+        let roaming = crate::paths::profile_path("AppData\\Roaming");
+        let local = |rel: &str| crate::paths::profile_path(&format!("AppData\\Local{rel}"));
         Some(match name.to_ascii_lowercase().as_str() {
             "app" => self.app.clone(),
             "group" => format!("{}\\{}", Folders::programs(), self.group),
             "pf" | "commonpf" | "autopf" => pf,
             "pf32" | "commonpf32" | "autopf32" => "C:\\Program Files (x86)".into(),
             "pf64" | "commonpf64" | "autopf64" => "C:\\Program Files".into(),
-            "userpf" => "C:\\AppData\\Local\\Programs".into(),
+            "userpf" => local("\\Programs"),
             "cf" | "commoncf" | "autocf" => format!("{pf}\\Common Files"),
             "cf32" | "commoncf32" | "autocf32" => "C:\\Program Files (x86)\\Common Files".into(),
             "cf64" | "commoncf64" | "autocf64" => "C:\\Program Files\\Common Files".into(),
-            "usercf" => "C:\\AppData\\Local\\Programs\\Common".into(),
+            "usercf" => local("\\Programs\\Common"),
             "win" => "C:\\windows".into(),
+            // {sys} : en mode 32 bits, Windows 64 bits redirige System32
+            // vers SysWOW64 (documentation d'Inno Setup, « Constants ») ;
+            // une DLL x86 n'y remplace donc pas celle de System32 (#1796).
+            "sys" if !self.x64 => "C:\\windows\\syswow64".into(),
             "sys" | "sysnative" => "C:\\windows\\system32".into(),
             "syswow64" => "C:\\windows\\syswow64".into(),
             "fonts" | "commonfonts" | "autofonts" => "C:\\windows\\Fonts".into(),
-            "userfonts" => "C:\\AppData\\Local\\Microsoft\\Windows\\Fonts".into(),
+            "userfonts" => local("\\Microsoft\\Windows\\Fonts"),
             "tmp" => self.tmp.clone(),
             "src" => self.src.clone(),
             "srcexe" => self.srcexe.clone(),
@@ -427,11 +432,15 @@ impl Ctx {
             "userstartup" | "commonstartup" | "autostartup" => {
                 format!("{}\\Startup", Folders::programs())
             }
-            "userappdata" | "appdata" => roaming.into(),
+            "userappdata" | "appdata" => roaming.clone(),
             "commonappdata" | "autoappdata" => "C:\\ProgramData".into(),
-            "localappdata" => "C:\\AppData\\Local".into(),
-            "userdocs" | "commondocs" | "autodocs" | "mydocs" => "C:\\Documents".into(),
-            "userfavorites" | "commonfavorites" | "autofavorites" => "C:\\Favorites".into(),
+            "localappdata" => local(""),
+            "userdocs" | "commondocs" | "autodocs" | "mydocs" => {
+                crate::paths::profile_path("Documents")
+            }
+            "userfavorites" | "commonfavorites" | "autofavorites" => {
+                crate::paths::profile_path("Favorites")
+            }
             "usertemplates" | "commontemplates" | "autotemplates" => {
                 format!("{roaming}\\Microsoft\\Windows\\Templates")
             }
@@ -455,6 +464,22 @@ impl Ctx {
             "\\" => "\\".into(),
             _ => return None,
         })
+    }
+
+    /// Destination d'un fichier ou d'un dossier. Une fonction `{code:…}` du
+    /// script Pascal (non exécuté) rend une chaîne vide : la destination
+    /// commence alors par « \ » sans racine. C'est presque toujours un
+    /// dossier de l'application (`{code:GetDestDir}` de VS Code rend
+    /// `{app}`), donc on la rattache à `{app}` plutôt qu'à `C:\` (#1723).
+    fn dest(&self, raw: &str) -> String {
+        let d = self.expand(raw);
+        if d.is_empty() {
+            format!("{}\\", self.app.trim_end_matches('\\'))
+        } else if d.starts_with('\\') && !d.starts_with("\\\\") {
+            format!("{}{}", self.app.trim_end_matches('\\'), d)
+        } else {
+            d
+        }
     }
 
     /// Développe les constantes Inno (`{app}\x`, `{cm:Nom}`, `{%VAR|déf}`…).
@@ -933,10 +958,36 @@ fn make_ctx(setup: &Setup, path: &Path, opts: &Options) -> Ctx {
     ctx.group = ctx.expand(&h.s("DefaultGroupName"));
     ctx.app = match &opts.dir {
         Some(d) => d.clone(),
-        None => ctx.expand(&h.s("DefaultDirName")),
+        None => {
+            let raw = h.s("DefaultDirName");
+            rooted_app_dir(&raw, &ctx.expand(&raw), Folders { x64 }.program_files())
+        }
     };
     ctx.app = ctx.app.trim_end_matches('\\').to_string();
     ctx
+}
+
+/// Dossier d'installation par défaut : DefaultDirName développé. Une
+/// fonction `{code:…}` que Winlux n'exécute pas peut le laisser sans
+/// lecteur (« \Inno Setup 6 ») ; il serait alors pris relativement au
+/// dossier courant (#1862). Il est placé sous Program Files, comme le
+/// dossier qu'un tel script choisit d'ordinaire.
+fn rooted_app_dir(raw: &str, expanded: &str, program_files: &str) -> String {
+    let absolute = expanded.as_bytes().get(1) == Some(&b':') || expanded.starts_with("\\\\");
+    if absolute {
+        return expanded.to_string();
+    }
+    let rest = expanded.trim_start_matches('\\');
+    let rooted = if rest.is_empty() {
+        program_files.to_string()
+    } else {
+        format!("{program_files}\\{rest}")
+    };
+    crate::log_info!(
+        "installeur",
+        "DefaultDirName « {raw} » sans lecteur une fois développé (« {expanded} ») : {rooted}"
+    );
+    rooted
 }
 
 pub fn info(data: &[u8]) -> Result<Info, String> {
@@ -1113,7 +1164,7 @@ pub fn install(
         .map_err(|e| format!("{} : {e}", ctx.app))?;
     for d in &setup.entries[E_DIR] {
         if ctx.wanted(d, false) {
-            let dir = ctx.expand(&d.s("DirName"));
+            let dir = ctx.dest(&d.s("DirName"));
             if !d.flag("Options", "DeleteAfterInstall") {
                 inst.mkdirs_win(&dir).map_err(|e| format!("{dir} : {e}"))?;
             }
@@ -1127,8 +1178,15 @@ pub fn install(
         if !ctx.wanted(f, true) {
             continue;
         }
-        let dest = ctx.expand(&f.s("DestName"));
+        let dest = ctx.dest(&f.s("DestName"));
         if f.enum_name("FileType") == "UninstExe" {
+            continue;
+        }
+        if dest.ends_with('\\') {
+            // Entrée de dossier (nom vide) : créée, jamais ouverte comme un
+            // fichier (#1723).
+            inst.mkdirs_win(&dest)
+                .map_err(|e| format!("{dest} : {e}"))?;
             continue;
         }
         if f.flag("Options", "DeleteAfterInstall")
@@ -1540,6 +1598,50 @@ mod tests {
         buf[i + 2] = (rel >> 16) as u8;
         untransform_calls(&mut buf, 0);
         assert_eq!(buf, orig);
+    }
+
+    #[test]
+    fn dossier_par_defaut_toujours_absolu() {
+        // #1862 : {code:…} non exécuté laisse « \Inno Setup 6 ».
+        let pf = "C:\\Program Files (x86)";
+        assert_eq!(
+            rooted_app_dir("{code:Dir}\\Inno Setup 6", "\\Inno Setup 6", pf),
+            "C:\\Program Files (x86)\\Inno Setup 6"
+        );
+        assert_eq!(rooted_app_dir("{code:Dir}", "", pf), pf);
+        assert_eq!(
+            rooted_app_dir("{autopf}\\Demo", "C:\\Program Files\\Demo", pf),
+            "C:\\Program Files\\Demo"
+        );
+        assert_eq!(rooted_app_dir("x", "\\\\serveur\\p", pf), "\\\\serveur\\p");
+    }
+
+    fn ctx(x64: bool) -> Ctx {
+        Ctx {
+            app: "C:\\Program Files\\Demo".into(),
+            group: String::new(),
+            x64,
+            lang: 0,
+            lang_name: String::new(),
+            src: String::new(),
+            srcexe: String::new(),
+            uninstexe: String::new(),
+            tmp: String::new(),
+            messages: HashMap::new(),
+            components: Vec::new(),
+            tasks: Vec::new(),
+            app_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn sys_en_mode_32_bits_va_dans_syswow64() {
+        let x86 = ctx(false);
+        assert_eq!(x86.folder("sys").unwrap(), "C:\\windows\\syswow64");
+        assert_eq!(x86.folder("sysnative").unwrap(), "C:\\windows\\system32");
+        assert_eq!(x86.folder("syswow64").unwrap(), "C:\\windows\\syswow64");
+        let x64 = ctx(true);
+        assert_eq!(x64.folder("sys").unwrap(), "C:\\windows\\system32");
     }
 
     #[test]

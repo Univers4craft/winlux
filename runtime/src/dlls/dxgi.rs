@@ -7,7 +7,7 @@ use crate::dlls::gl_bindings as gl;
 use crate::dlls::ole32::Guid;
 use crate::{log_debug, log_error, log_info, log_warn};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const S_OK: i32 = 0;
@@ -140,7 +140,7 @@ pub(crate) struct DxgiSwapChainDesc {
 
 /// Garde-fou : par défaut Xlib termine le processus sur une erreur X
 /// (visuel incompatible, fenêtre détruite…). On la journalise à la place,
-/// et l'appel GLX concerné échoue proprement.
+/// et l'appel GLX, Xft ou cairo concerné échoue proprement.
 pub(crate) fn install_x_error_guard() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
@@ -153,7 +153,7 @@ pub(crate) fn install_x_error_guard() {
             // minor_code à 32, 33 et 34.
             let resource = std::ptr::read_unaligned(ev.add(16) as *const u64);
             log_warn!(
-                "dxgi",
+                "x11",
                 "erreur X11 ignorée (code {}, requête {}.{}, ressource {:#x})",
                 *ev.add(32),
                 *ev.add(33),
@@ -173,6 +173,35 @@ pub(crate) fn install_x_error_guard() {
             set(Some(on_error));
         }
     });
+}
+
+/// Connexions X des contextes GL détruits, gardées ouvertes et resservies.
+/// Fermer la connexion détruit l'écran GLX de Mesa qui lui est attaché, et
+/// avec lui les ressources des textures créées sous ce contexte. Or ces
+/// textures sont partagées : un cadre d'une vue de rendu du périphérique
+/// peut encore tenir le tampon arrière d'une chaîne disparue. Sa
+/// suppression appelait alors une fonction de l'écran détruit (adresse 0)
+/// et le processus GPU de Chromium mourait (#1565).
+static SPARE_DISPLAYS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+unsafe fn open_display(glx: &gl::GlxFunctions) -> *mut gl::XDisplay {
+    let spare = SPARE_DISPLAYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pop();
+    match spare {
+        Some(display) => display as *mut gl::XDisplay,
+        None => (glx.XOpenDisplay)(std::ptr::null()),
+    }
+}
+
+fn keep_display(display: *mut gl::XDisplay) {
+    if !display.is_null() {
+        SPARE_DISPLAYS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(display as usize);
+    }
 }
 
 /// Contexte GLX de la première chaîne d'échange : les contextes de travail
@@ -303,6 +332,149 @@ const VISUAL_ATTRIBS: [libc::c_int; 11] = [
     0, // None
 ];
 
+/// Suivi des présentations d'une chaîne d'échange après la première
+/// (#1886) : jalons n° 2, 10, 100, 1000… et un bilan toutes les 5 s, avec
+/// les refus (contexte indisponible sur le fil qui présente).
+#[derive(Default)]
+struct PresentTrace {
+    /// Présentations refusées depuis la création de la chaîne.
+    failed: AtomicU32,
+    /// Instant du dernier bilan (ms depuis le début du processus).
+    last_ms: AtomicU64,
+    /// Présentations réussies depuis le dernier bilan.
+    since: AtomicU32,
+}
+
+/// Bilan d'un intervalle : présentations faites et durée.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Bilan {
+    presents: u32,
+    elapsed_ms: u64,
+}
+
+/// Intervalle entre deux bilans périodiques.
+const BILAN_MS: u64 = 5000;
+
+impl PresentTrace {
+    /// Vrai pour 1, 2, 10, 100, 1000… : un journal court même à 60 i/s.
+    fn milestone(n: u32) -> bool {
+        n == 1 || n == 2 || (n >= 10 && 10u32.pow(n.ilog10()) == n)
+    }
+
+    /// Bilan à journaliser pour la présentation réussie n° `n` (n ≥ 2).
+    fn due(&self, n: u32) -> Option<Bilan> {
+        self.due_at(n, process_ms())
+    }
+
+    fn due_at(&self, n: u32, now: u64) -> Option<Bilan> {
+        let presents = self.since.fetch_add(1, Ordering::Relaxed) + 1;
+        let last = self.last_ms.load(Ordering::Relaxed);
+        let periodic = now.saturating_sub(last) >= BILAN_MS;
+        if !(Self::milestone(n) || periodic) {
+            return None;
+        }
+        if self
+            .last_ms
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return None;
+        }
+        self.since.store(0, Ordering::Relaxed);
+        Some(Bilan {
+            presents,
+            elapsed_ms: now.saturating_sub(last),
+        })
+    }
+}
+
+/// Millisecondes depuis le premier appel dans ce processus.
+fn process_ms() -> u64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// Identifiant Linux du fil courant.
+fn thread_id() -> i64 {
+    // SAFETY : appel système sans argument.
+    unsafe { libc::syscall(libc::SYS_gettid) }
+}
+
+/// État d'une fenêtre X pour le journal : carte (« visible », « non
+/// affichée », « ancêtre caché ») et position dans la racine. La fenêtre
+/// peut appartenir à un autre processus (navigateur Chromium) : l'état se
+/// lit par la connexion de la chaîne d'échange.
+unsafe fn x_window_state(display: *mut c_void, window: u64) -> String {
+    type GetAttrs = unsafe extern "C" fn(*mut c_void, libc::c_ulong, *mut u8) -> libc::c_int;
+    type Translate = unsafe extern "C" fn(
+        *mut c_void,
+        libc::c_ulong,
+        libc::c_ulong,
+        libc::c_int,
+        libc::c_int,
+        *mut libc::c_int,
+        *mut libc::c_int,
+        *mut libc::c_ulong,
+    ) -> libc::c_int;
+    type Root = unsafe extern "C" fn(*mut c_void) -> libc::c_ulong;
+    static FNS: std::sync::OnceLock<Option<(GetAttrs, Translate, Root)>> =
+        std::sync::OnceLock::new();
+    let fns = FNS.get_or_init(|| {
+        let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+        if lib.is_null() {
+            return None;
+        }
+        let a = libc::dlsym(lib, c"XGetWindowAttributes".as_ptr());
+        let t = libc::dlsym(lib, c"XTranslateCoordinates".as_ptr());
+        let r = libc::dlsym(lib, c"XDefaultRootWindow".as_ptr());
+        if a.is_null() || t.is_null() || r.is_null() {
+            return None;
+        }
+        Some((
+            std::mem::transmute::<*mut c_void, GetAttrs>(a),
+            std::mem::transmute::<*mut c_void, Translate>(t),
+            std::mem::transmute::<*mut c_void, Root>(r),
+        ))
+    });
+    let Some((get_attrs, translate, root_of)) = *fns else {
+        return "état X inconnu".into();
+    };
+    if display.is_null() || window == 0 {
+        return "pas de fenêtre X".into();
+    }
+    // XWindowAttributes (x86-64) : 136 octets, map_state à l'octet 92.
+    let mut attrs = [0u8; 256];
+    if get_attrs(display, window as libc::c_ulong, attrs.as_mut_ptr()) == 0 {
+        return "fenêtre X introuvable".into();
+    }
+    let map_state = i32::from_ne_bytes([attrs[92], attrs[93], attrs[94], attrs[95]]);
+    let carte = match map_state {
+        2 => "visible",
+        1 => "ancêtre caché",
+        0 => "non affichée",
+        _ => "état inconnu",
+    };
+    let (mut x, mut y, mut child) = (0, 0, 0);
+    let root = root_of(display);
+    if translate(
+        display,
+        window as libc::c_ulong,
+        root,
+        0,
+        0,
+        &mut x,
+        &mut y,
+        &mut child,
+    ) == 0
+    {
+        return carte.into();
+    }
+    format!("{carte}, à ({x}, {y}) dans l'écran")
+}
+
 pub(crate) struct GlContext {
     pub display: *mut c_void,
     pub context: *mut c_void,
@@ -313,6 +485,11 @@ pub(crate) struct GlContext {
     pub framebuffer: gl::GLuint,
     /// Présentations faites : la première est décrite dans le journal.
     presented: AtomicU32,
+    /// Taille de la fenêtre X à la dernière présentation (largeur << 32 |
+    /// hauteur), pour voir qu'elle a changé (#1542).
+    window_size: AtomicU64,
+    /// Suivi des présentations suivantes (#1886).
+    suivi: PresentTrace,
 }
 
 unsafe impl Send for GlContext {}
@@ -328,7 +505,7 @@ impl GlContext {
         let g = gl::gl()?;
 
         unsafe {
-            let display = (glx.XOpenDisplay)(std::ptr::null());
+            let display = open_display(glx);
             if display.is_null() {
                 log_error!("dxgi", "impossible d'ouvrir le display X11");
                 return None;
@@ -356,7 +533,7 @@ impl GlContext {
             let vi = (glx.ChooseVisual)(display, screen, attribs.as_ptr());
             if vi.is_null() {
                 log_error!("dxgi", "glXChooseVisual a échoué");
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -366,7 +543,7 @@ impl GlContext {
             let context = (glx.CreateContext)(display, vi, share, 1);
             if context.is_null() {
                 log_error!("dxgi", "glXCreateContext a échoué");
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -375,7 +552,7 @@ impl GlContext {
             let drawable = if hwnd != 0 {
                 crate::dlls::gui::native_window(hwnd).unwrap_or(hwnd as u64)
             } else {
-                (glx.XDefaultRootWindow)(display) as u64
+                (glx.XDefaultRootWindow)(display)
             };
             if hwnd != 0 {
                 crate::dlls::gui::mark_direct3d_window(drawable);
@@ -384,7 +561,7 @@ impl GlContext {
             if (glx.MakeCurrent)(display, drawable, context) == 0 {
                 log_error!("dxgi", "glXMakeCurrent a échoué");
                 (glx.DestroyContext)(display, context);
-                (glx.XCloseDisplay)(display);
+                keep_display(display);
                 return None;
             }
 
@@ -410,6 +587,8 @@ impl GlContext {
                 back_texture: 0,
                 framebuffer: 0,
                 presented: AtomicU32::new(0),
+                window_size: AtomicU64::new(0),
+                suivi: PresentTrace::default(),
             };
             ctx.create_backbuffer(g);
             Some(ctx)
@@ -469,36 +648,61 @@ impl GlContext {
             let switched =
                 previous.context != self.context as usize || previous.drawable != self.drawable;
             if switched && (glx.MakeCurrent)(self.display, self.drawable, self.context) == 0 {
-                if self.presented.fetch_add(1, Ordering::Relaxed) == 0 {
+                // Chaque refus est compté et journalisé à intervalles : un
+                // seul message, au tout premier appel, laissait croire que
+                // toutes les présentations suivantes passaient (#1886).
+                self.presented.fetch_add(1, Ordering::Relaxed);
+                let n = self.suivi.failed.fetch_add(1, Ordering::Relaxed) + 1;
+                if PresentTrace::milestone(n) {
                     log_warn!(
                         "dxgi",
-                        "Present : contexte de la chaîne d'échange indisponible sur ce thread"
+                        "Present n°{n} refusée : contexte de la chaîne d'échange indisponible sur ce thread (fil {}, contexte du fil 0x{:x}, surface 0x{:x}, fenêtre X 0x{:x})",
+                        thread_id(),
+                        previous.context,
+                        previous.drawable,
+                        self.drawable
                     );
                 }
                 return;
             }
             crate::dlls::d3d11::FRAMES.fetch_add(1, Ordering::Relaxed);
-            let first = self.presented.fetch_add(1, Ordering::Relaxed) == 0;
-            if first {
+            let n = self.presented.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 {
                 self.describe(g, &previous, switched);
+            } else if let Some(bilan) = self.suivi.due(n) {
+                self.follow(g, glx, n, bilan, switched);
             }
-            (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
-            (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
-            // Le rendu D3D11 garde la ligne 0 en haut (voir d3d11_pipeline.rs) :
-            // l'image est retournée en la copiant vers la fenêtre.
-            (g.BlitFramebuffer)(
-                0,
-                0,
-                self.width as i32,
-                self.height as i32,
-                0,
-                self.height as i32,
-                self.width as i32,
-                0,
-                gl::GL_COLOR_BUFFER_BIT,
-                gl::GL_LINEAR as u32,
-            );
-            (glx.SwapBuffers)(self.display, self.drawable);
+            // Taille réelle de la fenêtre : elle a pu changer (agrandie,
+            // restaurée) avant que le programme ne redimensionne sa chaîne.
+            let (dw, dh) = self.drawable_size(glx).unwrap_or((self.width, self.height));
+            let packed = (u64::from(dw) << 32) | u64::from(dh);
+            let changed = self.window_size.swap(packed, Ordering::Relaxed) != packed;
+            // Taille changée : Mesa ne relit celle de la fenêtre qu'après un
+            // échange. La première image serait placée et coupée d'après
+            // l'ancienne taille (contenu décalé d'autant, bande noire), et
+            // restait ainsi tant que la page ne redessinait pas (#1542) :
+            // l'image est présentée une seconde fois, à la bonne taille.
+            for _ in 0..if changed { 2 } else { 1 } {
+                (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
+                (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
+                // Le rendu D3D11 garde la ligne 0 en haut (voir
+                // d3d11_pipeline.rs) : l'image est retournée en la copiant.
+                // Elle couvre toute la fenêtre, comme DXGI_SCALING_STRETCH :
+                // jamais d'ancienne image ni de noir autour.
+                (g.BlitFramebuffer)(
+                    0,
+                    0,
+                    self.width as i32,
+                    self.height as i32,
+                    0,
+                    dh as i32,
+                    dw as i32,
+                    0,
+                    gl::GL_COLOR_BUFFER_BIT,
+                    gl::GL_LINEAR as u32,
+                );
+                (glx.SwapBuffers)(self.display, self.drawable);
+            }
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
             // Rendre au thread le contexte qu'il avait (le sien n'est pas
             // lié ailleurs, la reprise réussit).
@@ -512,9 +716,46 @@ impl GlContext {
         }
     }
 
+    /// Taille de la fenêtre X où l'on présente (XGetGeometry).
+    unsafe fn drawable_size(&self, glx: &gl::GlxFunctions) -> Option<(u32, u32)> {
+        let get = glx.XGetGeometry?;
+        let (mut root, mut x, mut y) = (0, 0, 0);
+        let (mut w, mut h, mut border, mut depth) = (0, 0, 0, 0);
+        let ok = get(
+            self.display.cast(),
+            self.drawable as libc::c_ulong,
+            &mut root,
+            &mut x,
+            &mut y,
+            &mut w,
+            &mut h,
+            &mut border,
+            &mut depth,
+        );
+        (ok != 0 && w > 0 && h > 0).then_some((w, h))
+    }
+
     /// Décrit la première présentation : taille, fenêtre, contexte et un
     /// pixel du tampon arrière, pour diagnostiquer une fenêtre noire.
     unsafe fn describe(&self, g: &gl::GlFunctions, previous: &Binding, switched: bool) {
+        let px = self.center_pixel(g);
+        log_info!(
+            "dxgi",
+            "première présentation : {}x{} vers la fenêtre X 0x{:x} ({}), fil {}, contexte {} (thread : contexte 0x{:x}, surface 0x{:x}), pixel central {:?}",
+            self.width,
+            self.height,
+            self.drawable,
+            x_window_state(self.display, self.drawable),
+            thread_id(),
+            if switched { "rendu courant pour l'occasion" } else { "déjà courant" },
+            previous.context,
+            previous.drawable,
+            px
+        );
+    }
+
+    /// Pixel central du tampon arrière (RVBA), lu dans le contexte courant.
+    unsafe fn center_pixel(&self, g: &gl::GlFunctions) -> [u8; 4] {
         let mut px = [0u8; 4];
         (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
         (g.ReadPixels)(
@@ -527,15 +768,36 @@ impl GlContext {
             px.as_mut_ptr().cast(),
         );
         (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, 0);
+        px
+    }
+
+    /// Décrit une présentation suivante (n° 2, 10, 100… puis toutes les
+    /// 5 s) : rythme, pixel central, état de la fenêtre X. Sert à savoir si
+    /// les présentations s'arrêtent ou n'emportent que le fond (#1886).
+    unsafe fn follow(
+        &self,
+        g: &gl::GlFunctions,
+        glx: &gl::GlxFunctions,
+        n: u32,
+        bilan: Bilan,
+        switched: bool,
+    ) {
+        let px = self.center_pixel(g);
+        let size = self.drawable_size(glx);
+        let window = x_window_state(self.display, self.drawable);
         log_info!(
             "dxgi",
-            "première présentation : {}x{} vers la fenêtre X 0x{:x}, contexte {} (thread : contexte 0x{:x}, surface 0x{:x}), pixel central {:?}",
+            "présentation n°{n} : {}x{} vers la fenêtre X 0x{:x} (taille {}, {}), fil {}, contexte {}, {} présentation(s) et {} refus en {} ms, pixel central {:?}",
             self.width,
             self.height,
             self.drawable,
+            size.map_or("inconnue".to_string(), |(w, h)| format!("{w}x{h}")),
+            window,
+            thread_id(),
             if switched { "rendu courant pour l'occasion" } else { "déjà courant" },
-            previous.context,
-            previous.drawable,
+            bilan.presents,
+            self.suivi.failed.load(Ordering::Relaxed),
+            bilan.elapsed_ms,
             px
         );
     }
@@ -546,10 +808,51 @@ impl GlContext {
         }
         self.width = width;
         self.height = height;
-        if let Some(g) = gl::gl() {
-            unsafe {
-                self.create_backbuffer(g);
-            }
+        let Some(g) = gl::gl() else { return };
+        unsafe {
+            // Les framebuffers ne sont pas partagés entre contextes GL. Celui
+            // du tampon arrière doit naître dans le contexte de la chaîne,
+            // où Present le relit. ResizeBuffers arrive sur un thread où le
+            // contexte courant est celui du périphérique : le framebuffer y
+            // était créé, Present lisait un nom inconnu de son contexte et
+            // l'image ne suivait plus la fenêtre. La suppression de l'ancien
+            // nom touchait en plus un framebuffer du périphérique (#1565).
+            let restore = self.make_own_context_current();
+            self.create_backbuffer(g);
+            self.restore_binding(restore);
+        }
+    }
+
+    /// Rend le contexte de la chaîne courant sur ce thread, s'il ne l'est
+    /// pas déjà. Renvoie la liaison à rétablir ensuite (`None` : rien à
+    /// rétablir). En cas d'échec (contexte courant sur un autre thread),
+    /// le contexte du thread reste en place.
+    unsafe fn make_own_context_current(&self) -> Option<Binding> {
+        let glx = gl::glx()?;
+        let previous = current_binding();
+        if previous.context == self.context as usize && previous.drawable == self.drawable {
+            return None;
+        }
+        if (glx.MakeCurrent)(self.display, self.drawable, self.context) == 0 {
+            log_warn!(
+                "dxgi",
+                "contexte de la chaîne d'échange indisponible sur ce thread pour ResizeBuffers"
+            );
+            return None;
+        }
+        Some(previous)
+    }
+
+    unsafe fn restore_binding(&self, previous: Option<Binding>) {
+        let (Some(glx), Some(previous)) = (gl::glx(), previous) else {
+            return;
+        };
+        if previous.context != 0 {
+            (glx.MakeCurrent)(
+                previous.display as *mut _,
+                previous.drawable,
+                previous.context as gl::GLXContext,
+            );
         }
     }
 }
@@ -560,12 +863,15 @@ impl Drop for GlContext {
         let glx = gl::glx();
         unsafe {
             if let Some(g) = g {
+                // Le framebuffer appartient au contexte de la chaîne (#1565).
+                let restore = self.make_own_context_current();
                 if self.framebuffer != 0 {
                     (g.DeleteFramebuffers)(1, &self.framebuffer);
                 }
                 if self.back_texture != 0 {
                     (g.DeleteTextures)(1, &self.back_texture);
                 }
+                self.restore_binding(restore);
             }
             if let Some(glx) = glx {
                 if !self.context.is_null() {
@@ -575,12 +881,14 @@ impl Drop for GlContext {
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     );
-                    (glx.MakeCurrent)(self.display, 0, std::ptr::null_mut());
+                    // Ne détacher que notre contexte : celui du thread (le
+                    // périphérique) reste courant.
+                    if current_binding().context == self.context as usize {
+                        (glx.MakeCurrent)(self.display, 0, std::ptr::null_mut());
+                    }
                     (glx.DestroyContext)(self.display, self.context);
                 }
-                if !self.display.is_null() {
-                    (glx.XCloseDisplay)(self.display);
-                }
+                keep_display(self.display);
             }
         }
     }
@@ -1903,6 +2211,56 @@ mod refcount_tests {
 }
 
 #[cfg(test)]
+mod present_trace_tests {
+    use super::*;
+
+    /// #1886 : jalons 1, 2, 10, 100, 1000… seulement.
+    #[test]
+    fn jalons_des_presentations() {
+        let jalons: Vec<u32> = (1..=20_000)
+            .filter(|&n| PresentTrace::milestone(n))
+            .collect();
+        assert_eq!(jalons, [1, 2, 10, 100, 1000, 10_000]);
+    }
+
+    /// Un bilan aux jalons et toutes les 5 s, avec le nombre de
+    /// présentations faites depuis le précédent.
+    #[test]
+    fn bilan_aux_jalons_et_toutes_les_cinq_secondes() {
+        let t = PresentTrace::default();
+        // n° 2 à 0 ms : jalon.
+        assert_eq!(
+            t.due_at(2, 0),
+            Some(Bilan {
+                presents: 1,
+                elapsed_ms: 0
+            })
+        );
+        // n° 3 à 9 : ni jalon ni 5 s.
+        for n in 3..10 {
+            assert_eq!(t.due_at(n, 100 * u64::from(n)), None);
+        }
+        // n° 10 : jalon, 8 présentations depuis le n° 2.
+        assert_eq!(
+            t.due_at(10, 1000),
+            Some(Bilan {
+                presents: 8,
+                elapsed_ms: 1000
+            })
+        );
+        assert_eq!(t.due_at(11, 2000), None);
+        // 5 s après le dernier bilan : bilan périodique.
+        assert_eq!(
+            t.due_at(12, 6000),
+            Some(Bilan {
+                presents: 2,
+                elapsed_ms: 5000
+            })
+        );
+    }
+}
+
+#[cfg(test)]
 mod adapter_desc_tests {
     #[test]
     fn adapter_desc_sizes_match_windows() {
@@ -2011,5 +2369,214 @@ mod swap_chain1_tests {
         assert_eq!(std::mem::size_of::<FrameStatistics>(), 32);
         assert_eq!(std::mem::size_of::<FullscreenDesc>(), 20);
         assert_eq!(std::mem::size_of::<crate::dlls::d3d12::SwapDesc1>(), 48);
+    }
+}
+
+#[cfg(test)]
+mod presentation_x11_tests {
+    use super::*;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, ImageFormat,
+    };
+    use x11rb::wrapper::ConnectionExt as _;
+
+    /// #1542 : la fenêtre change de taille avant la chaîne d'échange
+    /// (agrandie par le gestionnaire). L'image présentée couvre toute la
+    /// fenêtre, à sa nouvelle taille : ni noir, ni ancienne image, ni
+    /// décalage. Il faut un serveur X avec GLX (Xvfb + Mesa).
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn image_presentee_couvre_la_fenetre_redimensionnee_x11() {
+        let (conn, screen) = x11rb::connect(None).expect("X11");
+        let root = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            root.root_depth,
+            win,
+            root.root,
+            0,
+            0,
+            200,
+            100,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+            root.root_visual,
+            &CreateWindowAux::new().background_pixel(root.black_pixel),
+        )
+        .unwrap();
+        conn.map_window(win).unwrap();
+        conn.sync().unwrap();
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        let mut ctx = GlContext::create_for_window(0).expect("contexte GL");
+        ctx.drawable = u64::from(win);
+        let pixel = |x: i16, y: i16| -> u32 {
+            let img = conn
+                .get_image(ImageFormat::Z_PIXMAP, win, x, y, 1, 1, !0)
+                .unwrap()
+                .reply()
+                .unwrap();
+            u32::from_le_bytes([img.data[0], img.data[1], img.data[2], 0])
+        };
+        unsafe {
+            assert_ne!((glx.MakeCurrent)(ctx.display, ctx.drawable, ctx.context), 0);
+            ctx.resize(200, 100);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, ctx.framebuffer);
+            (g.ClearColor)(1.0, 0.0, 0.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            ctx.present();
+            (g.Finish)();
+            assert_eq!(pixel(10, 10), 0xFF0000);
+            // Agrandie : la chaîne garde 200x100 pour l'instant.
+            conn.configure_window(win, &ConfigureWindowAux::new().width(400).height(300))
+                .unwrap();
+            conn.sync().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            ctx.present();
+            (g.Finish)();
+            for (x, y) in [(10, 10), (390, 10), (10, 290), (390, 290)] {
+                assert_eq!(pixel(x, y), 0xFF0000, "pixel ({x},{y})");
+            }
+        }
+        conn.destroy_window(win).unwrap();
+        conn.sync().unwrap();
+    }
+
+    /// #1565 : le processus GPU de Chromium mourait (appel à 0 dans Mesa)
+    /// en libérant une vue de rendu après la fin d'une chaîne d'échange :
+    /// le cadre de la vue tenait encore le tampon arrière de la chaîne.
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn vue_liberee_apres_la_fin_de_sa_chaine_x11() {
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        unsafe {
+            let device = GlContext::create_for_window(0).expect("contexte du périphérique");
+            let chain = GlContext::create_for_window(0).expect("contexte de la chaîne");
+            assert_ne!(
+                (glx.MakeCurrent)(device.display, device.drawable, device.context),
+                0
+            );
+            // Vue de rendu sur le tampon arrière, dans le contexte du périphérique.
+            let mut fb = 0;
+            (g.GenFramebuffers)(1, &mut fb);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fb);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl::GL_COLOR_ATTACHMENT0,
+                gl::GL_TEXTURE_2D,
+                chain.back_texture,
+                0,
+            );
+            (g.ClearColor)(0.0, 0.0, 1.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            (g.Finish)();
+            drop(chain);
+            assert_eq!(current_binding().context, device.context as usize);
+            (g.DeleteFramebuffers)(1, &fb);
+            (g.Finish)();
+        }
+    }
+
+    /// #1565 : ResizeBuffers arrive avec le contexte du périphérique courant
+    /// sur le thread. Le nouveau tampon arrière, rempli par ce contexte, doit
+    /// quand même être présenté par le contexte de la chaîne.
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn tampon_redimensionne_sous_un_autre_contexte_reste_presente_x11() {
+        let (conn, screen) = x11rb::connect(None).expect("X11");
+        let root = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            root.root_depth,
+            win,
+            root.root,
+            0,
+            0,
+            200,
+            100,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+            root.root_visual,
+            &CreateWindowAux::new().background_pixel(root.black_pixel),
+        )
+        .unwrap();
+        conn.map_window(win).unwrap();
+        conn.sync().unwrap();
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        let pixel = |x: i16, y: i16| -> u32 {
+            let img = conn
+                .get_image(ImageFormat::Z_PIXMAP, win, x, y, 1, 1, !0)
+                .unwrap()
+                .reply()
+                .unwrap();
+            u32::from_le_bytes([img.data[0], img.data[1], img.data[2], 0])
+        };
+        // Remplit la texture `tex` d'une couleur, avec le contexte courant
+        // et un framebuffer à lui (comme une vue de rendu D3D11).
+        let fill = |tex: gl::GLuint, r: f32, gr: f32| unsafe {
+            let mut fb = 0;
+            (g.GenFramebuffers)(1, &mut fb);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fb);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl::GL_COLOR_ATTACHMENT0,
+                gl::GL_TEXTURE_2D,
+                tex,
+                0,
+            );
+            (g.ClearColor)(r, gr, 0.0, 1.0);
+            (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            (g.DeleteFramebuffers)(1, &fb);
+            (g.Finish)();
+        };
+        unsafe {
+            let mut chain = GlContext::create_for_window(0).expect("contexte de la chaîne");
+            chain.drawable = u64::from(win);
+            assert_ne!(
+                (glx.MakeCurrent)(chain.display, chain.drawable, chain.context),
+                0
+            );
+            chain.resize(200, 100);
+            // Le contexte du périphérique, partagé, courant sur le thread.
+            let device = GlContext::create_for_window(0).expect("contexte du périphérique");
+            assert_ne!(
+                (glx.MakeCurrent)(device.display, device.drawable, device.context),
+                0
+            );
+            fill(chain.back_texture, 1.0, 0.0);
+            chain.present();
+            (g.Finish)();
+            assert_eq!(pixel(10, 10), 0xFF0000, "avant ResizeBuffers");
+            assert_eq!(current_binding().context, device.context as usize);
+            // ResizeBuffers sous le contexte du périphérique.
+            chain.resize(400, 300);
+            assert_eq!(
+                current_binding().context,
+                device.context as usize,
+                "le contexte du thread est rétabli"
+            );
+            fill(chain.back_texture, 0.0, 1.0);
+            chain.present();
+            (g.Finish)();
+            chain.present();
+            (g.Finish)();
+            for (x, y) in [(10, 10), (190, 10), (10, 90), (190, 90)] {
+                assert_eq!(pixel(x, y), 0x00FF00, "pixel ({x},{y}) après ResizeBuffers");
+            }
+            drop(chain);
+            assert_eq!(
+                current_binding().context,
+                device.context as usize,
+                "la fin de la chaîne laisse le contexte du thread"
+            );
+        }
+        conn.destroy_window(win).unwrap();
+        conn.sync().unwrap();
     }
 }

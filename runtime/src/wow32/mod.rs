@@ -23,12 +23,25 @@
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
 mod com;
+mod com_taskschd;
 mod comctl;
 mod comdlg;
 mod crt;
 mod cxx;
 mod fiber;
 mod kernel;
+
+/// VirtualQuery à la disposition x86 (MEMORY_BASIC_INFORMATION de 28
+/// octets), pour NtQueryVirtualMemory appelé par un programme x86.
+pub fn virtual_query32(addr: u32, info: u32, len: u32) -> u32 {
+    kernel::virtual_query(addr, info, len)
+}
+
+/// VirtualQueryEx à la disposition x86, pour NtQueryVirtualMemory sur un
+/// autre processus (#1729).
+pub fn virtual_query_ex32(process: u32, addr: u32, info: u32, len: u32) -> u32 {
+    kernel::virtual_query_ex(process, addr, info, len)
+}
 mod layout;
 mod seh;
 mod user;
@@ -73,6 +86,15 @@ const TLS32_ENTRIES: usize = 512;
 const PEB32_IMAGE_BASE: usize = 0x08;
 const PEB32_PROCESS_HEAP: usize = 0x18;
 const PEB32_NUMBER_OF_PROCESSORS: usize = 0x64;
+const PEB32_LDR: usize = 0x0c;
+const PEB32_PROCESS_PARAMETERS: usize = 0x10;
+const PEB32_LOADER_LOCK: usize = 0xa0;
+/// Dans la page du PEB 32 bits, après lui : PEB_LDR_DATA, LoaderLock et
+/// RTL_USER_PROCESS_PARAMETERS (#1440).
+const PEB32_LDR_DATA_AT: usize = 0x500;
+const PEB32_LOADER_LOCK_AT: usize = 0x540;
+const PEB32_PARAMS_AT: usize = 0x600;
+const PEB32_PARAMS_SIZE: usize = 0x2a0;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static PEB32: AtomicU32 = AtomicU32::new(0);
@@ -776,8 +798,83 @@ pub fn init_peb32(image_base: usize) {
         w(0xa8, 0);
         *((peb + 0xac) as *mut u16) = 19045;
         w(0xb0, 2);
+        fill_peb32_tables(peb);
     }
     PEB32.store(peb as u32, Ordering::Relaxed);
+}
+
+/// Champs du PEB 32 bits que du code x86 lit sans passer par une API :
+/// PEB->Ldr (listes vides mais bouclées), PEB->LoaderLock (section libre)
+/// et PEB->ProcessParameters (drapeaux, poignées standard, chemin de
+/// l'image, ligne de commande), copiés du PEB 64 bits. Nuls, la CRT
+/// Microsoft liée en statique plantait en lisant [0+8] à la sortie de
+/// pyi32.exe et de Steam.exe (#1440). Disposition x86 de winternl.h.
+unsafe fn fill_peb32_tables(peb: usize) {
+    let w = |a: usize, v: u32| *(a as *mut u32) = v;
+    // PEB_LDR_DATA : Length, Initialized, puis trois LIST_ENTRY (InLoadOrder
+    // à 0x0c, InMemoryOrder à 0x14, InInitializationOrder à 0x1c).
+    let ldr = peb + PEB32_LDR_DATA_AT;
+    w(ldr, 0x30);
+    w(ldr + 4, 1);
+    for head in [0x0c, 0x14, 0x1c] {
+        w(ldr + head, (ldr + head) as u32);
+        w(ldr + head + 4, (ldr + head) as u32);
+    }
+    w(peb + PEB32_LDR, ldr as u32);
+    // RTL_CRITICAL_SECTION x86 libre : LockCount = -1.
+    let lock = peb + PEB32_LOADER_LOCK_AT;
+    w(lock + 4, u32::MAX);
+    w(peb + PEB32_LOADER_LOCK, lock as u32);
+
+    let params = peb + PEB32_PARAMS_AT;
+    w(params, PEB32_PARAMS_SIZE as u32);
+    w(params + 4, PEB32_PARAMS_SIZE as u32);
+    w(params + 8, 1); // RTL_USER_PROC_PARAMS_NORMALIZED
+    w(params + 0x18, crate::dlls::kernel32::STD_INPUT_REAL as u32);
+    w(params + 0x1c, crate::dlls::kernel32::STD_OUTPUT_REAL as u32);
+    w(params + 0x20, crate::dlls::kernel32::STD_ERROR_REAL as u32);
+    let p64 = match crate::process::peb() {
+        0 => 0,
+        p => *((p + crate::process::PEB_PROCESS_PARAMETERS) as *const usize),
+    };
+    let read64 = |off: usize| -> Vec<u16> {
+        if p64 == 0 {
+            return Vec::new();
+        }
+        let len = *((p64 + off) as *const u16) as usize / 2;
+        let buf = *((p64 + off + 8) as *const usize) as *const u16;
+        if buf.is_null() {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(buf, len).to_vec()
+    };
+    let mut dir: Vec<u16> = std::env::current_dir()
+        .map(|d| crate::paths::to_windows(&d))
+        .unwrap_or_default()
+        .encode_utf16()
+        .collect();
+    if dir.last() != Some(&(b'\\' as u16)) {
+        dir.push(b'\\' as u16);
+    }
+    // CurrentDirectory.DosPath (0x24), DllPath (0x30), ImagePathName (0x38),
+    // CommandLine (0x40) : UNICODE_STRING x86 (longueurs puis tampon).
+    let strings = [
+        (0x24, dir),
+        (0x30, Vec::new()),
+        (0x38, read64(0x60)),
+        (0x40, read64(0x70)),
+    ];
+    let bytes: usize = strings.iter().map(|(_, s)| s.len() * 2 + 2).sum();
+    let mut at = alloc_low(bytes.next_multiple_of(0x1000), false);
+    for (off, s) in strings {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), at as *mut u16, s.len());
+        *((at + s.len() * 2) as *mut u16) = 0;
+        *((params + off) as *mut u16) = (s.len() * 2) as u16;
+        *((params + off + 2) as *mut u16) = (s.len() * 2 + 2) as u16;
+        w(params + off + 4, at as u32);
+        at += s.len() * 2 + 2;
+    }
+    w(peb + PEB32_PROCESS_PARAMETERS, params as u32);
 }
 
 #[repr(C)]
@@ -1231,7 +1328,20 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "ucrtbase"
         || n.starts_with("msvcr")
         || n.starts_with("msvcp")
+        // operator new / delete de MFC 4.2 (signtool.exe, #1394).
+        || (n == "mfc42" && (func == "#823" || func == "#825"))
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
+        // LDAPAPI de winldap.h est __cdecl (#1765).
+        || n == "wldap32"
+        // U_EXPORT2 d'ICU est __cdecl (#1792).
+        || n == "icuuc"
+        || n == "icu"
+        // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
+        // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
+        || (n == "cabinet"
+            && (func.starts_with("FCI")
+                || func.starts_with("FDI")
+                || matches!(func, "#10" | "#11" | "#12" | "#13" | "#14" | "#20" | "#21" | "#22" | "#23")))
 }
 
 /// Octets d'arguments qu'une fonction stdcall x86 dépile (`ret N`), d'après
@@ -1467,6 +1577,61 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
     })
 }
 
+/// Noms que seuls les programmes x86 importent et que wow32 sert par ses
+/// passerelles, sans export 64 bits du même nom : `winlux --exports` les
+/// ajoute (« x86:dll ») pour que scripts/compat-imports.py ne les compte
+/// pas comme manquants dans les binaires 32 bits (#1508).
+pub fn x86_only_candidates() -> Vec<(&'static str, String)> {
+    let mut v: Vec<(&'static str, String)> = Vec::new();
+    for crt in ["msvcrt", "ucrtbase"] {
+        for m in [
+            "acos", "asin", "atan", "atan2", "cos", "cosh", "exp", "fmod", "log", "log10", "pow",
+            "sin", "sinh", "sqrt", "tan", "tanh",
+        ] {
+            v.push((crt, format!("_CI{m}")));
+            v.push((crt, format!("_libm_sse2_{m}_precise")));
+        }
+        for f in [
+            "_except1",
+            "_ftol",
+            "_ftol2",
+            "_ftol2_sse",
+            "_adjust_fdiv",
+            "_setjmp3",
+            "_except_handler3",
+            "_except_handler4_common",
+            "_local_unwind2",
+            "_local_unwind4",
+            "_global_unwind2",
+            "??1type_info@@UAE@XZ",
+            "??0exception@@QAE@XZ",
+            "??0exception@@QAE@ABQBD@Z",
+            "??0exception@@QAE@ABV0@@Z",
+            "??1exception@@UAE@XZ",
+            "?what@exception@@UBEPBDXZ",
+            "??0bad_cast@@QAE@ABV0@@Z",
+            "??1bad_cast@@UAE@XZ",
+            "__p___initenv",
+            "__p___winitenv",
+            "__CxxFrameHandler",
+            "__CxxFrameHandler2",
+        ] {
+            v.push((crt, f.to_string()));
+        }
+    }
+    for f in [
+        "InterlockedIncrement",
+        "InterlockedDecrement",
+        "InterlockedExchange",
+        "InterlockedExchangeAdd",
+        "InterlockedCompareExchange",
+    ] {
+        v.push(("kernel32", f.to_string()));
+    }
+    v.retain(|(dll, f)| override_stub(dll, f).is_some());
+    v
+}
+
 /// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en
 /// a une ; pour une donnée exportée, son adresse sous 4 Go.
 pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
@@ -1674,9 +1839,11 @@ fn history_on() -> bool {
 }
 
 /// `WINLUX_WOW32_HISTORY=flux` (ou `flux:motif`) : chaque passage est en
-/// plus écrit tout de suite sur la sortie d'erreur, filtré sur le motif
+/// plus écrit tout de suite sur la sortie d'erreur, puis une seconde fois
+/// avec la valeur rendue (« = 0x… ») au retour, filtré sur le motif
 /// (« SetWindowPos », « user32 »…). Sert à suivre ce qu'un programme x86
 /// demande sans attendre une faute (champ du port de WinSCP, #1251).
+/// Plusieurs motifs se séparent par des virgules : `flux:filemapping,mapview`.
 fn history_stream() -> Option<&'static str> {
     static FILTER: OnceLock<Option<String>> = OnceLock::new();
     FILTER
@@ -1686,6 +1853,17 @@ fn history_stream() -> Option<&'static str> {
             Some(rest.strip_prefix(':').unwrap_or("").to_ascii_lowercase())
         })
         .as_deref()
+}
+
+/// La ligne passe-t-elle le filtre du mode flux (motif vide : tout passe ;
+/// sinon l'un des motifs séparés par des virgules) ?
+fn stream_match(filter: &str, line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    filter.is_empty()
+        || filter
+            .split(',')
+            .map(str::trim)
+            .any(|m| !m.is_empty() && line.contains(m))
 }
 
 fn passage_line(p: &Passage) -> String {
@@ -1717,6 +1895,14 @@ fn note_result(desc: u32, esp: u32, r: u64) {
             .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
         {
             p.result = Some(r);
+            // Mode flux : la valeur rendue suit aussitôt (#1616), sinon
+            // seule une faute la montrait.
+            if let Some(filter) = history_stream() {
+                let line = passage_line(p);
+                if stream_match(filter, &line) {
+                    eprintln!("winlux[wow32] {line}");
+                }
+            }
         }
     });
 }
@@ -1724,7 +1910,7 @@ fn note_result(desc: u32, esp: u32, r: u64) {
 fn note(p: Passage) {
     if let Some(filter) = history_stream() {
         let line = passage_line(&p);
-        if filter.is_empty() || line.to_ascii_lowercase().contains(filter) {
+        if stream_match(filter, &line) {
             eprintln!("winlux[wow32] {line}");
         }
     }
@@ -2080,7 +2266,9 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumFontFamiliesExA"
         | "EnumFontFamiliesExW"
         | "EnumFontsA"
-        | "EnumFontsW" => bit(2),
+        | "EnumFontsW"
+        | "GrayStringA"
+        | "GrayStringW" => bit(2),
         "EnumResourceLanguagesA" | "EnumResourceLanguagesW" | "SetWaitableTimer" | "SetTimer" => {
             bit(3)
         }
@@ -2444,6 +2632,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn filtre_du_flux_a_plusieurs_motifs() {
+        let l = "KERNEL32.dll!MapViewOfFile (esp 0x1, retour 0x2) [0, 0, 0, 0] = 0x0";
+        assert!(stream_match("", l));
+        assert!(stream_match("mapview", l));
+        assert!(stream_match("filemapping, mapview", l));
+        assert!(!stream_match("filemapping,virtualquery", l));
+        assert!(!stream_match(",", l));
+    }
+
+    #[test]
     fn table_stdcall() {
         assert_eq!(stdcall_bytes("ADVAPI32.dll", "RegSetKeySecurity"), Some(12));
         assert_eq!(stdcall_bytes("kernel32", "SetLastError"), Some(4));
@@ -2480,5 +2678,10 @@ mod tests {
         assert!(!is_cdecl("KERNEL32.dll", "WriteFile"));
         assert!(is_cdecl("ntdll.dll", "memcpy"));
         assert!(!is_cdecl("ntdll.dll", "RtlGetVersion"));
+        assert!(is_cdecl("CABINET.dll", "#20"));
+        assert!(is_cdecl("cabinet.dll", "FDICopy"));
+        assert!(is_cdecl("cabinet.dll", "#10"));
+        assert!(!is_cdecl("cabinet.dll", "CreateCompressor"));
+        assert!(is_cdecl("WLDAP32.dll", "#144"));
     }
 }

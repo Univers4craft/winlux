@@ -1,5 +1,3 @@
-use std::ffi::c_void;
-
 /// BCryptPrimitives uses a SIZE_T length and a BOOL result, unlike BCrypt's
 /// ULONG length / NTSTATUS API. Never report success with uninitialized bytes.
 pub unsafe extern "win64" fn process_prng(buffer: *mut u8, size: usize) -> i32 {
@@ -140,20 +138,32 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
     let name = crate::dlls::wstr(id);
     match alg_from_name(&name) {
         Some(h) if hmac && h == ALG_RNG => {
-            *out = 0;
+            put_handle(out, 0);
             STATUS_NOT_FOUND
         }
         Some(h) => {
-            *out = if hmac { h | HMAC_BIT } else { h };
+            put_handle(out, if hmac { h | HMAC_BIT } else { h });
+            0
+        }
+        None if name == "AES" && !hmac => {
+            put_handle(out, aes::open());
             0
         }
         None => {
-            *out = 0;
+            put_handle(out, 0);
             STATUS_NOT_FOUND
         }
     }
 }
+/// Poignée rendue à la taille des pointeurs du programme (4 octets en x86).
+unsafe fn put_handle(out: *mut usize, h: usize) {
+    crate::wow32::write_ptr(out as usize, h);
+}
+
 pub extern "win64" fn bcrypt_close_algorithm_provider(h: usize, _flags: u32) -> i32 {
+    if aes::close(h) {
+        return 0;
+    }
     if (1..=6).contains(&(h & !HMAC_BIT)) {
         0
     } else {
@@ -172,8 +182,11 @@ pub unsafe extern "win64" fn bcrypt_get_property(
     if prop.is_null() || result_len.is_null() {
         return 0xC000_000Du32 as i32;
     }
-    let h = resolve(h);
     let name = crate::dlls::wstr(prop);
+    if let Some(r) = aes::get_property(h, &name, output, output_len, result_len) {
+        return r;
+    }
+    let h = resolve(h);
     if name == "HashDigestLength" {
         if let Some(len) = hash_length(h) {
             *result_len = 4;
@@ -223,8 +236,165 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(h, (key, Vec::new()));
-    *hash_handle = h;
+    put_handle(hash_handle, h);
     0
+}
+
+/// BCryptDuplicateHash : copie l'état (clé HMAC et données déjà reçues).
+pub unsafe extern "win64" fn bcrypt_duplicate_hash(
+    hash: usize,
+    out: *mut usize,
+    _obj: *mut u8,
+    _obj_len: u32,
+    _flags: u32,
+) -> i32 {
+    if out.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
+    let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(state) = states.get(&hash).cloned() else {
+        return 0xC000_0008u32 as i32;
+    };
+    let seq = HASH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+    let h = (hash & 0xFFFF) | (seq << 16) | 0x8000_0000;
+    states.insert(h, state);
+    put_handle(out, h);
+    0
+}
+
+/// BCryptDeriveKeyPBKDF2 (lot F, #1615) : PBKDF2 de la RFC 8018 avec le
+/// HMAC de l'algorithme `prf` (ouvert avec ou sans BCRYPT_ALG_HANDLE_HMAC_FLAG).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn bcrypt_derive_key_pbkdf2(
+    prf: usize,
+    password: *const u8,
+    password_len: u32,
+    salt: *const u8,
+    salt_len: u32,
+    iterations: u64,
+    out: *mut u8,
+    out_len: u32,
+    _flags: u32,
+) -> i32 {
+    const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
+    let alg = resolve(prf) | HMAC_BIT;
+    if hash_length(alg).is_none() {
+        return 0xC000_0008u32 as i32;
+    }
+    if iterations == 0 || (out.is_null() && out_len > 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let slice = |p: *const u8, n: u32| {
+        if p.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(p, n as usize)
+        }
+    };
+    match pbkdf2(
+        alg,
+        slice(password, password_len),
+        slice(salt, salt_len),
+        iterations,
+        out_len as usize,
+    ) {
+        Some(key) => {
+            std::ptr::copy_nonoverlapping(key.as_ptr(), out, key.len());
+            0
+        }
+        None => STATUS_NOT_SUPPORTED,
+    }
+}
+
+fn pbkdf2(
+    alg: usize,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u64,
+    len: usize,
+) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(len);
+    let mut block = 1u32;
+    while out.len() < len {
+        let mut msg = salt.to_vec();
+        msg.extend_from_slice(&block.to_be_bytes());
+        let mut u = compute(alg, Some(password), &msg)?;
+        let mut t = u.clone();
+        for _ in 1..iterations {
+            u = compute(alg, Some(password), &u)?;
+            t.iter_mut().zip(&u).for_each(|(a, b)| *a ^= b);
+        }
+        let take = (len - out.len()).min(t.len());
+        out.extend_from_slice(&t[..take]);
+        block += 1;
+    }
+    Some(out)
+}
+
+/// BCryptEnumContextFunctions (lot F, #1615) : fonctions servies pour
+/// l'interface demandée, dans une CRYPT_CONTEXT_FUNCTIONS (nombre, tableau
+/// de chaînes) allouée ici et rendue par BCryptFreeBuffer, ou copiée dans
+/// le tampon de l'appelant.
+pub unsafe extern "win64" fn bcrypt_enum_context_functions(
+    _table: u32,
+    _context: *const u16,
+    interface: u32,
+    cb: *mut u32,
+    buffer: *mut usize,
+) -> i32 {
+    if cb.is_null() || buffer.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
+    let names: &[&str] = match interface {
+        1 => &["AES"],
+        2 => &["SHA256", "SHA1", "SHA384", "SHA512", "MD5"],
+        6 => &["RNG"],
+        _ => &[],
+    };
+    let ps = crate::wow32::pointer_size();
+    // CRYPT_CONTEXT_FUNCTIONS : ULONG cFunctions, puis PWSTR* à +ps.
+    let table_at = 2 * ps;
+    let mut strings_at = table_at + ps * names.len();
+    let wide: Vec<Vec<u16>> = names
+        .iter()
+        .map(|n| n.encode_utf16().chain(std::iter::once(0)).collect())
+        .collect();
+    let size = strings_at + wide.iter().map(|w| w.len() * 2).sum::<usize>();
+    let existing = crate::wow32::read_ptr(buffer as usize);
+    let base = if existing == 0 {
+        let p = crate::dlls::ole32::co_task_mem_alloc(size) as usize;
+        if p == 0 {
+            return 0xC000_0017u32 as i32; // STATUS_NO_MEMORY
+        }
+        p
+    } else {
+        if (*cb as usize) < size {
+            *cb = size as u32;
+            return 0xC000_0023u32 as i32; // STATUS_BUFFER_TOO_SMALL
+        }
+        existing
+    };
+    std::ptr::write_bytes(base as *mut u8, 0, size);
+    *(base as *mut u32) = names.len() as u32;
+    crate::wow32::write_ptr(
+        base + ps,
+        if names.is_empty() { 0 } else { base + table_at },
+    );
+    for (i, w) in wide.iter().enumerate() {
+        std::ptr::copy_nonoverlapping(w.as_ptr(), (base + strings_at) as *mut u16, w.len());
+        crate::wow32::write_ptr(base + table_at + i * ps, base + strings_at);
+        strings_at += w.len() * 2;
+    }
+    *cb = size as u32;
+    crate::wow32::write_ptr(buffer as usize, base);
+    0
+}
+
+/// BCryptFreeBuffer : mémoire rendue par les fonctions d'énumération.
+pub unsafe extern "win64" fn bcrypt_free_buffer(p: *mut std::ffi::c_void) {
+    if !p.is_null() {
+        crate::dlls::ole32::co_task_mem_free(p);
+    }
 }
 
 // SHA-1/SHA-256 maison, partagés avec winlux-remote.
@@ -370,28 +540,174 @@ pub unsafe extern "win64" fn bcrypt_hash(
     0
 }
 
-pub unsafe extern "win64" fn bcrypt_destroy_key(_h: usize) -> i32 {
-    0xC0000002u32 as i32
+mod aes;
+
+// --- Clés asymétriques, secrets, énumérations (ISCC, #1860) -----------------
+// ISCmplr.dll (Inno Setup 6.7) résout ces fonctions au chargement et refuse
+// de se charger s'il en manque une ; il ne s'en sert que pour les signatures
+// ISSig. Winlux n'a pas encore de fournisseur RSA/ECC sous CNG : chaque
+// fonction répond STATUS_NOT_SUPPORTED, comme un fournisseur qui ne connaît
+// pas l'algorithme demandé. Source : documentation publique de bcrypt.h.
+
+const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+
+pub extern "win64" fn bcrypt_generate_key_pair(
+    _alg: usize,
+    _key: usize,
+    _bits: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
 }
-pub unsafe extern "win64" fn bcrypt_stub(_p: *mut c_void) -> i32 {
-    0xC0000002u32 as i32
+/// Aucune paire n'a pu être créée, donc aucun handle de paire n'est valide.
+pub extern "win64" fn bcrypt_finalize_key_pair(_key: usize, _flags: u32) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_import_key_pair(
+    _alg: usize,
+    _import: usize,
+    _blob_type: usize,
+    _key: usize,
+    _input: usize,
+    _len: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_sign_hash(
+    _key: usize,
+    _padding: usize,
+    _input: usize,
+    _len: u32,
+    _output: usize,
+    _out_len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_verify_signature(
+    _key: usize,
+    _padding: usize,
+    _hash: usize,
+    _hash_len: u32,
+    _sig: usize,
+    _sig_len: u32,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+pub extern "win64" fn bcrypt_secret_agreement(
+    _private: usize,
+    _public: usize,
+    _secret: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+pub extern "win64" fn bcrypt_destroy_secret(_secret: usize) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_derive_key(
+    _secret: usize,
+    _kdf: usize,
+    _params: usize,
+    _out: usize,
+    _len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_INVALID_HANDLE
+}
+#[allow(clippy::too_many_arguments)]
+pub extern "win64" fn bcrypt_key_derivation(
+    _key: usize,
+    _params: usize,
+    _out: usize,
+    _len: u32,
+    _result: usize,
+    _flags: u32,
+) -> i32 {
+    STATUS_NOT_SUPPORTED
+}
+/// BCryptGetFipsAlgorithmMode : le mode FIPS n'est pas imposé.
+pub unsafe extern "win64" fn bcrypt_get_fips_algorithm_mode(enabled: *mut u8) -> i32 {
+    if enabled.is_null() {
+        return 0xC000_000Du32 as i32; // STATUS_INVALID_PARAMETER
+    }
+    *enabled = 0;
+    0
 }
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "BCryptGenRandom"=>fn bcrypt_gen_random,"BCryptOpenAlgorithmProvider"=>fn bcrypt_open_algorithm_provider,
-     "BCryptCloseAlgorithmProvider"=>fn bcrypt_close_algorithm_provider,"BCryptDestroyKey"=>fn bcrypt_destroy_key,
-     "BCryptEncrypt"=>fn bcrypt_stub,"BCryptDecrypt"=>fn bcrypt_stub,
+     "BCryptCloseAlgorithmProvider"=>fn bcrypt_close_algorithm_provider,
+     "BCryptDestroyKey"=>fn aes::destroy_key,"BCryptEncrypt"=>fn aes::encrypt,"BCryptDecrypt"=>fn aes::decrypt,
+     "BCryptGenerateSymmetricKey"=>fn aes::generate_symmetric_key,"BCryptImportKey"=>fn aes::import_key,
+     "BCryptExportKey"=>fn aes::export_key,"BCryptDuplicateKey"=>fn aes::duplicate_key,
+     "BCryptSetProperty"=>fn aes::set_property,"BCryptDuplicateHash"=>fn bcrypt_duplicate_hash,
      "BCryptGetProperty"=>fn bcrypt_get_property,
      "BCryptCreateHash"=>fn bcrypt_create_hash,"BCryptHashData"=>fn bcrypt_hash_data,
      "BCryptFinishHash"=>fn bcrypt_finish_hash,"BCryptDestroyHash"=>fn bcrypt_destroy_hash,
-     "BCryptHash"=>fn bcrypt_hash
+     "BCryptDeriveKeyPBKDF2"=>fn bcrypt_derive_key_pbkdf2,
+     "BCryptEnumContextFunctions"=>fn bcrypt_enum_context_functions,
+     "BCryptFreeBuffer"=>fn bcrypt_free_buffer,
+     "BCryptHash"=>fn bcrypt_hash,
+     "BCryptGenerateKeyPair"=>fn bcrypt_generate_key_pair,"BCryptFinalizeKeyPair"=>fn bcrypt_finalize_key_pair,
+     "BCryptImportKeyPair"=>fn bcrypt_import_key_pair,"BCryptSignHash"=>fn bcrypt_sign_hash,
+     "BCryptVerifySignature"=>fn bcrypt_verify_signature,"BCryptSecretAgreement"=>fn bcrypt_secret_agreement,
+     "BCryptDestroySecret"=>fn bcrypt_destroy_secret,"BCryptDeriveKey"=>fn bcrypt_derive_key,
+     "BCryptKeyDerivation"=>fn bcrypt_key_derivation,
+     "BCryptGetFipsAlgorithmMode"=>fn bcrypt_get_fips_algorithm_mode
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pbkdf2_rfc6070_et_enumeration() {
+        unsafe {
+            // RFC 6070, PBKDF2-HMAC-SHA1, « password » / « salt », 2 tours.
+            let mut key = [0u8; 20];
+            let st = bcrypt_derive_key_pbkdf2(
+                0xa1,
+                b"password".as_ptr(),
+                8,
+                b"salt".as_ptr(),
+                4,
+                2,
+                key.as_mut_ptr(),
+                20,
+                0,
+            );
+            if st == STATUS_NOT_SUPPORTED {
+                return; // pas d'OpenSSL sur l'hôte de test
+            }
+            assert_eq!(st, 0);
+            assert_eq!(
+                key[..4],
+                [0xea, 0x6c, 0x01, 0x4d],
+                "premier bloc du vecteur RFC 6070"
+            );
+            assert_eq!(key[16..], [0xd8, 0xde, 0x89, 0x57]);
+            let (mut cb, mut buf) = (0u32, 0usize);
+            assert_eq!(
+                bcrypt_enum_context_functions(1, std::ptr::null(), 2, &mut cb, &mut buf),
+                0
+            );
+            assert_eq!(*(buf as *const u32), 5);
+            let first = *((buf + 8) as *const *const *const u16);
+            assert_eq!(crate::dlls::wstr(*first), "SHA256");
+            bcrypt_free_buffer(buf as *mut _);
+        }
+    }
 
     #[test]
     fn process_prng_uses_size_t_and_rejects_invalid_buffers() {

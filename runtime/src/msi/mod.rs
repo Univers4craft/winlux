@@ -16,6 +16,7 @@ mod lzx;
 pub mod script;
 pub mod session;
 pub mod session_db;
+pub mod summary;
 
 use install::{Logger, Options};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ const USAGE: &str = "Winlux msiexec
   /i paquet.msi        installer (aussi /package)
   /x paquet.msi|{code} désinstaller (aussi /uninstall)
   /a paquet.msi        installation administrative (TARGETDIR=dossier)
+  /p correctif.msp     refusé : correctifs .msp pas encore pris en charge
   /q, /qn, /qb, /passive, /quiet   sans interface
   /l*v journal.txt     écrire le journal
   PROPRIETE=valeur     propriété publique (INSTALLDIR=…, ADDLOCAL=ALL…)
@@ -45,6 +47,27 @@ enum Mode {
     Install(String),
     Admin(String),
     Uninstall(String),
+    Patch(String),
+}
+
+/// Erreur Windows Installer : correctif impossible à traiter.
+const ERROR_PATCH_PACKAGE_UNSUPPORTED: i32 = 1637;
+
+/// Correctifs (.msp) et transformations (.mst) ne sont pas encore appliqués
+/// (#1715) : on le dit dans le journal au lieu de les ignorer en silence,
+/// et l'installation se poursuit avec la version de base.
+fn refuse_patches(props: &[(String, String)], log: &mut install::Logger) {
+    for (k, v) in props {
+        if k.eq_ignore_ascii_case("PATCH") && !v.is_empty() {
+            log.log(&format!(
+                "correctif .msp non pris en charge, installation de la version de base : {v} (#1715)"
+            ));
+        } else if k.eq_ignore_ascii_case("TRANSFORMS") && !v.is_empty() {
+            log.log(&format!(
+                "transformation .mst non prise en charge, ignorée : {v} (#1715)"
+            ));
+        }
+    }
 }
 
 pub fn cli(args: &[String]) -> i32 {
@@ -85,6 +108,7 @@ pub fn cli(args: &[String]) -> i32 {
                     mode = next(&mut i).map(Mode::Install)
                 }
                 "a" => mode = next(&mut i).map(Mode::Admin),
+                "p" | "update" => mode = next(&mut i).map(Mode::Patch),
                 "x" | "uninstall" => mode = next(&mut i).map(Mode::Uninstall),
                 "quiet" | "passive" => opts.quiet = true,
                 "norestart" | "forcerestart" | "promptrestart" => {}
@@ -133,8 +157,23 @@ pub fn cli(args: &[String]) -> i32 {
             eprintln!("{USAGE}");
             ERROR_INVALID_COMMAND_LINE
         }
-        Some(Mode::Install(p)) => install::install(&host_path(&p), &opts, &mut log),
+        Some(Mode::Install(p)) | Some(Mode::Admin(p))
+            if crate::anticheat::check_launch(&host_path(&p)).is_some() =>
+        {
+            crate::anticheat::REFUSED
+        }
+        Some(Mode::Install(p)) => {
+            refuse_patches(&opts.props, &mut log);
+            install::install(&host_path(&p), &opts, &mut log)
+        }
+        Some(Mode::Patch(p)) => {
+            log.log(&format!(
+                "correctif .msp non pris en charge, rien n'est modifié : {p} (#1715)"
+            ));
+            ERROR_PATCH_PACKAGE_UNSUPPORTED
+        }
         Some(Mode::Admin(p)) => {
+            refuse_patches(&opts.props, &mut log);
             opts.admin = true;
             install::install(&host_path(&p), &opts, &mut log)
         }

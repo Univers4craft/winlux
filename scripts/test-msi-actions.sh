@@ -162,7 +162,9 @@ cat >ca.wxs <<'EOF'
             <File Id="cadll" Name="ca.dll" Source="ca64.dll"/>
             <ServiceInstall Id="service" Name="WinluxDemoSvc" DisplayName="Service de démonstration" Type="ownProcess"
                             Start="auto" ErrorControl="normal" Arguments="--service" Description="Service du paquet de test"/>
-            <ServiceControl Id="controle" Name="WinluxDemoSvc" Start="install" Stop="both" Remove="uninstall"/>
+            <!-- Pas de Start="install" : outil.exe n'est pas un vrai service, et
+                 un démarrage demandé est lancé en fin d'installation (#1626). -->
+            <ServiceControl Id="controle" Name="WinluxDemoSvc" Stop="both" Remove="uninstall"/>
           </Component>
         </Directory>
       </Directory>

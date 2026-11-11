@@ -99,8 +99,12 @@ fn language_id() -> &'static str {
     }
 }
 
+/// Dossier système 32 bits (`SystemFolder`) et 64 bits (`System64Folder`).
+pub(crate) const SYSTEM_FOLDER_32: &str = "C:\\windows\\syswow64\\";
+pub(crate) const SYSTEM_FOLDER_64: &str = "C:\\windows\\system32\\";
+
 /// Propriétés fournies par le système (version, dossiers standard…).
-fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
+pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let x64 = db.is_64bit();
     let pf32 = "C:\\Program Files (x86)\\".to_string();
     let pf64 = "C:\\Program Files\\".to_string();
@@ -118,17 +122,14 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("CommonFiles64Folder", format!("{pf64}Common Files\\")),
         ("WindowsFolder", "C:\\windows\\".into()),
         ("WindowsVolume", "C:\\".into()),
-        // Paquet 32 bits : comme sous Windows 64 bits, ses DLL système vont
-        // dans SysWOW64 et n'écrasent pas celles de System32.
-        (
-            "SystemFolder",
-            if x64 {
-                "C:\\windows\\system32\\".into()
-            } else {
-                "C:\\windows\\syswow64\\".into()
-            },
-        ),
-        ("System64Folder", "C:\\windows\\system32\\".into()),
+        // Windows 64 bits (documentation « SystemFolder property ») :
+        // SystemFolder est TOUJOURS le dossier système 32 bits, SysWOW64,
+        // que le paquet soit marqué x64 ou non ; seul System64Folder
+        // désigne System32. Un paquet x64 qui embarque le runtime VC x86
+        // (Acrobat Reader, AcroPro.msi) écrasait sinon les DLL x64 de
+        // System32 (#1789).
+        ("SystemFolder", SYSTEM_FOLDER_32.into()),
+        ("System64Folder", SYSTEM_FOLDER_64.into()),
         ("System16Folder", "C:\\windows\\system\\".into()),
         ("FontsFolder", "C:\\windows\\Fonts\\".into()),
         ("TempFolder", "C:\\AppData\\Local\\Temp\\".into()),
@@ -170,11 +171,19 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let user = std::env::var("USER").unwrap_or_else(|_| "winlux".into());
     let lang = language_id();
     let fixed: Vec<(&str, String)> = vec![
+        // Valeurs que Windows Installer 5 donne sur Windows 10 et 11 x64
+        // (documentation « Operating System Property Values ») ; un
+        // paquet qui teste le système ou la version de Windows Installer
+        // doit s'y reconnaître (#1756).
         ("VersionNT", "603".into()),
         ("VersionNT64", "603".into()),
         ("WindowsBuild", "9600".into()),
         ("ServicePackLevel", "0".into()),
+        ("VersionMsi", "5.00".into()),
+        ("MsiNTProductType", "1".into()),
         ("Msix64", "6".into()),
+        ("MsiAMD64", "6".into()),
+        ("PhysicalMemory", physical_memory_mb().to_string()),
         ("Privileged", "1".into()),
         ("AdminUser", "1".into()),
         ("LogonUser", user.clone()),
@@ -189,6 +198,18 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     for (k, v) in folders.into_iter().chain(fixed) {
         ctx.props.insert(k.to_string(), v);
     }
+}
+
+/// Mémoire physique en Mo (propriété PhysicalMemory), lue dans /proc/meminfo.
+fn physical_memory_mb() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("MemTotal:"))
+                .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+        })
+        .map_or(4096, |kb| kb / 1024)
 }
 
 struct DirInfo {
@@ -507,6 +528,9 @@ pub struct Manifest {
     pub restores: Vec<(String, String, Option<(u32, Vec<u8>)>)>,
     /// Fichiers ou dossiers à supprimer à la désinstallation (RemoveFile).
     pub later: Vec<(String, u8)>,
+    /// Composants posés : (GUID en majuscules, chemin clé Windows), pour la
+    /// recherche `CompLocator` d'un autre paquet (#1598).
+    pub components: Vec<(String, String)>,
 }
 
 pub fn manifest_dir() -> PathBuf {
@@ -568,6 +592,9 @@ impl Manifest {
         for (t, kind) in &self.later {
             text.push_str(&format!("later\t{}\t{kind}\n", clean(t)));
         }
+        for (guid, path) in &self.components {
+            text.push_str(&format!("comp\t{}\t{}\n", clean(guid), clean(path)));
+        }
         let path = manifest_path(&self.product);
         std::fs::create_dir_all(manifest_dir())?;
         let tmp = path.with_extension("tmp");
@@ -609,6 +636,7 @@ impl Manifest {
                     m.restores.push((k.to_string(), n.to_string(), prev));
                 }
                 ["later", t, kind] => m.later.push((t.to_string(), kind.parse().unwrap_or(0))),
+                ["comp", g, p] => m.components.push((g.to_string(), p.to_string())),
                 _ => {}
             }
         }
@@ -628,6 +656,20 @@ impl Manifest {
     pub fn find(code: &str) -> Option<Manifest> {
         Manifest::load(&manifest_path(code))
     }
+}
+
+/// Chemin clé d'un composant installé par un autre paquet, d'après son GUID
+/// (`ComponentId`) : ce que `CompLocator` recherche (#1598).
+pub fn component_key_path(guid: &str) -> Option<String> {
+    let guid = guid.trim().to_ascii_uppercase();
+    if guid.is_empty() {
+        return None;
+    }
+    Manifest::all()
+        .into_iter()
+        .flat_map(|m| m.components)
+        .find(|(g, _)| *g == guid)
+        .map(|(_, p)| p)
 }
 
 /// Crée un dossier et retient ceux qui n'existaient pas.
@@ -725,12 +767,33 @@ pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
     ))
 }
 
+/// Noms longs des fichiers que pose un paquet (table File), pour la
+/// détection des anti-triche noyau (#1720). Vide si le paquet est illisible.
+pub fn file_names(msi: &Path) -> Vec<String> {
+    let Ok(data) = std::fs::read(msi) else {
+        return Vec::new();
+    };
+    let Ok(db) = Database::parse(&data) else {
+        return Vec::new();
+    };
+    db.rows("File")
+        .map(|r| long_name(&r.str("FileName")).to_string())
+        .collect()
+}
+
 /// Code produit d'un paquet (pour `/x paquet.msi`).
 pub fn product_of(msi: &Path) -> Result<String, i32> {
     package_info(msi).map(|info| info.0)
 }
 
+/// C:\Windows\Installer existe toujours sous Windows : les actions WiX y
+/// écrivent le script de leurs actions différées (SchedServiceConfig, #1663).
+fn ensure_installer_dir() {
+    let _ = std::fs::create_dir_all(crate::paths::to_linux("C:\\Windows\\Installer"));
+}
+
 pub fn install(msi: &Path, opts: &Options, log: &mut Logger) -> i32 {
+    ensure_installer_dir();
     let data = match std::fs::read(msi) {
         Ok(d) => d,
         Err(e) => {
@@ -1142,7 +1205,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     let mut ini_dirs = Vec::new();
     super::extra::ini_files(db, &ctx, &comps, &mut manifest, &mut ini_dirs);
     manifest.dirs.extend(ini_dirs);
-    super::actions::services(
+    let services_to_start = super::actions::services(
         db,
         &ctx,
         &comps,
@@ -1246,6 +1309,26 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             log,
         );
     }
+    // Composants posés, retrouvables par `CompLocator` (pip.msi de Python
+    // cherche python.exe posé par exe.msi, #1598). Chemin clé : le fichier
+    // `KeyPath`, ou le dossier du composant si `KeyPath` est vide ; une clé
+    // de registre n'est pas retenue.
+    for r in db.rows("Component") {
+        let comp = r.str("Component");
+        let guid = r.str("ComponentId").trim().to_ascii_uppercase();
+        if guid.is_empty() || !comps.contains(&comp) {
+            continue;
+        }
+        let key = r.str("KeyPath");
+        let path = if key.is_empty() {
+            comp_dir.get(&comp).cloned()
+        } else {
+            ctx.files.get(&key).cloned()
+        };
+        if let Some(path) = path.filter(|p| !p.is_empty()) {
+            manifest.components.push((guid, path));
+        }
+    }
     if !code.is_empty() {
         manifest
             .save()
@@ -1255,6 +1338,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         if !opts.admin && has_exe_actions(db) {
             let _ = std::fs::copy(msi, cached_package(&code));
         }
+    }
+    if !opts.admin {
+        super::actions::start_services(&services_to_start, log);
     }
     log.log(&format!("{name} est installé."));
     Ok(())
@@ -1379,6 +1465,7 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
 }
 
 pub fn uninstall(code: &str, log: &mut Logger) -> i32 {
+    ensure_installer_dir();
     match Manifest::find(code) {
         Some(m) => {
             remove_manifest(&m, log);

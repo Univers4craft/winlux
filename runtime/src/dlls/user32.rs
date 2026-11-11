@@ -146,19 +146,68 @@ unsafe fn register_class_common(
         crate::process::set_last_error(87);
         return 0;
     }
-    // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
-    // classe ; on rend son atome.
+    // Classe déjà enregistrée par ce module et pas encore désenregistrée :
+    // 0 et ERROR_CLASS_ALREADY_EXISTS, comme sous Windows (#1630). Une
+    // classe de même nom venue d'un autre module ou de Winlux garde
+    // l'ancienne tolérance et rend son atome.
+    let key = (name.to_ascii_lowercase(), instance);
+    let info = ClassInfo {
+        wnd_proc,
+        background,
+        instance,
+    };
+    let again = {
+        let mut app = lock(app_classes());
+        if app.registered.contains(&key) {
+            crate::process::set_last_error(ERROR_CLASS_ALREADY_EXISTS);
+            return 0;
+        }
+        app.registered.insert(key.clone());
+        app.unregistered.remove(&key)
+    };
     gui::set_class_style(&name, style);
     gui::set_class_cursor(&name, cursor);
-    gui::register_class(
-        &name,
-        ClassInfo {
-            wnd_proc,
-            background,
-            instance,
-        },
-    );
+    if again {
+        // Réenregistrement après UnregisterClass : la nouvelle procédure
+        // remplace l'ancienne.
+        gui::replace_class(&name, info);
+    } else {
+        gui::register_class(&name, info);
+    }
     class_atom(&name) as usize
+}
+
+const ERROR_CLASS_ALREADY_EXISTS: u32 = 1410;
+const ERROR_CLASS_DOES_NOT_EXIST: u32 = 1411;
+
+/// Classes enregistrées par le programme, par (nom en minuscules, module).
+#[derive(Default)]
+struct AppClasses {
+    registered: std::collections::HashSet<(String, usize)>,
+    unregistered: std::collections::HashSet<(String, usize)>,
+}
+
+fn app_classes() -> &'static Mutex<AppClasses> {
+    static C: OnceLock<Mutex<AppClasses>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(AppClasses::default()))
+}
+
+/// UnregisterClass : la classe du module peut être enregistrée de nouveau.
+/// Les fenêtres encore ouvertes gardent leur procédure.
+fn unregister_class(name: Option<String>, instance: usize) -> i32 {
+    let Some(name) = name else {
+        // Atome : la classe reste connue, rien à retirer.
+        return 1;
+    };
+    let key = (name.to_ascii_lowercase(), instance);
+    let mut app = lock(app_classes());
+    if app.registered.remove(&key) {
+        app.unregistered.insert(key);
+        1
+    } else {
+        crate::process::set_last_error(ERROR_CLASS_DOES_NOT_EXIST);
+        0
+    }
 }
 
 pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
@@ -280,6 +329,21 @@ unsafe fn create_window_common(
     hwnd
 }
 
+/// Parent spécial de CreateWindowEx : fenêtre qui ne reçoit que des
+/// messages, sans rien d'affiché.
+const HWND_MESSAGE: usize = -3isize as usize;
+
+fn message_only_windows() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// `hwnd` est-elle une fenêtre « message seulement » (#1586) ?
+pub fn is_message_only(hwnd: usize) -> bool {
+    hwnd != 0 && lock(message_only_windows()).contains(&hwnd)
+}
+
 /// Taille d'une fenêtre de premier niveau créée en CW_USEDEFAULT : les
 /// trois quarts de la zone de travail, au moins 800 × 600 sans dépasser
 /// l'écran. Un 800 × 600 fixe faisait passer le ruban de l'Éditeur de
@@ -310,17 +374,27 @@ unsafe fn create_window_inner(
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
         return 0;
     };
+    let message_root = parent == HWND_MESSAGE;
     // Comme Windows : une fenêtre WS_CHILD sans parent est refusée, au lieu
     // de devenir une fenêtre isolée sans titre dans la barre des tâches.
     if style & WS_CHILD != 0 && parent == 0 {
         crate::process::set_last_error(1406); // ERROR_TLW_WITH_WSCHILD
         return 0;
     }
+    // Fenêtre « message seulement » (parent HWND_MESSAGE) et ses enfants :
+    // jamais affichées, donc aucune fenêtre X. pygame 32 bits (SDL) en
+    // créait une par seconde en boucle, chacune devenue une fenêtre X 1×1
+    // (#1586). Le parent rendu par GetParent est nul, comme sous Windows.
+    let message_only = parent == HWND_MESSAGE || is_message_only(parent);
+    let parent = if parent == HWND_MESSAGE { 0 } else { parent };
     let hwnd = gui::alloc_hwnd();
+    if message_only {
+        lock(message_only_windows()).insert(hwnd);
+    }
     // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut. Un contrôle
     // enfant garde la taille demandée, même nulle (barre d'état, flèches
     // haut/bas : le contrôle se place lui-même pendant WM_CREATE).
-    let child = style & WS_CHILD != 0 && parent != 0;
+    let child = style & WS_CHILD != 0 && parent != 0 && !message_root;
     let (w, h, px, py) = if child {
         let size = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v.max(0) };
         let pos = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v };
@@ -401,6 +475,9 @@ unsafe fn create_window_inner(
     // sans titre, dans la barre des tâches, et le parent serait resté blanc.
     // Elle n'est montrée qu'après WM_CREATE.
     with_backend(|b| {
+        if message_only {
+            return;
+        }
         if child {
             b.create_child_window(hwnd, parent, rect);
             // Win32 : un nouvel enfant passe derrière ses voisins (le premier
@@ -438,9 +515,11 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
-                if style & 0x00C0_0000 == 0x00C0_0000 {
-                    b.set_dialog_type(hwnd);
-                }
+            }
+            if captioned_tool_window(style, ex_style) {
+                b.set_tool_type(hwnd);
+            } else if owner != 0 && style & 0x00C0_0000 == 0x00C0_0000 {
+                b.set_dialog_type(hwnd);
             }
         }
     });
@@ -463,6 +542,25 @@ unsafe fn create_window_inner(
             }
         }
     }
+
+    // Crochet WH_CBT (HCBT_CREATEWND) avant tout message : MFC y sous-classe
+    // la fenêtre (AfxWndProc) et la rattache à son CWnd. Sans lui, une
+    // fenêtre MFC garde DefWindowProc et MFC lit un CWnd jamais rempli
+    // (Pythonwin, #1654). Une valeur non nulle refuse la création.
+    let mut cs = cs;
+    let wide_class: Vec<u16> = class.encode_utf16().chain([0]).collect();
+    let wide_title: Vec<u16> = title.encode_utf16().chain([0]).collect();
+    if super::controls::message_is_wide(hwnd) {
+        cs.name = wide_title.as_ptr().cast();
+        cs.class = wide_class.as_ptr().cast();
+    }
+    if cbt_create_window(hwnd, &mut cs) {
+        gui::destroy_window(hwnd);
+        forget_window_longs(hwnd);
+        return 0;
+    }
+    cs.name = title_z.as_ptr().cast();
+    cs.class = class_z.as_ptr().cast();
 
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
@@ -664,9 +762,50 @@ unsafe fn send_set_cursor(m: &Msg) {
     );
 }
 
+const WA_ACTIVE: usize = 1;
+const WA_CLICKACTIVE: usize = 2;
+
+/// Activation au clic, que Windows fait quand il retire de la file un
+/// bouton enfoncé : WM_MOUSEACTIVATE à la fenêtre cliquée, puis, sauf
+/// MA_NOACTIVATE, WM_NCACTIVATE / WM_ACTIVATE(WA_CLICKACTIVE) et
+/// WM_SETFOCUS, avant le WM_LBUTTONDOWN lui-même. Faite ici seulement pour
+/// les fenêtres que le gestionnaire de fenêtres n'active pas : la boîte
+/// « Erreur du service Steam » ne réagissait à aucun bouton (#1804).
+/// MA_ACTIVATEANDEAT active sans retirer le clic (simplification).
+unsafe fn click_activate(m: &Msg) {
+    const WM_MOUSEACTIVATE: u32 = 0x0021;
+    const HTCLIENT: isize = 1;
+    const MA_NOACTIVATE: isize = 3;
+    const MA_NOACTIVATEANDEAT: isize = 4;
+    if m.hwnd == 0
+        || gui::get_capture() != 0
+        || !matches!(m.message, 0x0201 | 0x0204 | 0x0207 | 0x020B)
+    {
+        return;
+    }
+    let Some(top) = gui::click_activation_target(m.hwnd) else {
+        return;
+    };
+    let answer = send_message_w(
+        m.hwnd,
+        WM_MOUSEACTIVATE,
+        top,
+        ((m.message as isize) << 16) | HTCLIENT,
+    );
+    if matches!(answer, MA_NOACTIVATE | MA_NOACTIVATEANDEAT) || !gui::is_window(top) {
+        return;
+    }
+    activate_for_focus(top, WA_CLICKACTIVE);
+    // Le focus reste au contrôle de la fenêtre qui l'avait déjà.
+    if gui::top_level_of(gui::focused_window()) != top {
+        set_focus(top);
+    }
+}
+
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
+        super::chromium_win32::deliver_win_events();
         super::ws2_32::pump_async();
         let q = gui::current_queue();
         // Un minuteur très en retard passe avant les entrées (anti-famine).
@@ -683,6 +822,7 @@ unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i
                 return 0;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -756,6 +896,7 @@ pub unsafe extern "win64" fn peek_message_a(
 
 unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
     gui::pump_backend();
+    super::chromium_win32::deliver_win_events();
     super::ws2_32::pump_async();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
@@ -771,6 +912,7 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
                 return 1;
             }
             gui::observe_key_message(&m);
+            click_activate(&m);
             send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
@@ -857,11 +999,12 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if m.l_private == gui::BACKEND_GEOMETRY {
         geometry_changed(m.hwnd, m.message);
     }
-    let (message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam);
-    let wnd_proc = gui::wnd_proc_of(m.hwnd);
+    let (hwnd, message, wparam, lparam) = caption_click(m.hwnd, m.message, m.wparam, m.lparam)
+        .unwrap_or((m.hwnd, m.message, m.wparam, m.lparam));
+    let wnd_proc = gui::wnd_proc_of(hwnd);
     match wnd_proc {
-        Some(wp) => gui::call_wndproc(wp, m.hwnd, message, wparam, lparam),
-        None => gui::def_window_proc(m.hwnd, message, wparam, lparam),
+        Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
+        None => gui::def_window_proc(hwnd, message, wparam, lparam),
     }
 }
 
@@ -900,41 +1043,82 @@ unsafe fn geometry_changed(hwnd: usize, message: u32) {
 /// Clic gauche dans une fenêtre qui dessine sa propre barre de titre (son
 /// cadre a été retiré, voir `frame_changed`) : comme Windows, le point est
 /// soumis à WM_NCHITTEST, et sur la légende ou un bord le clic devient
-/// WM_NCLBUTTONDOWN (ou WM_NCLBUTTONDBLCLK) en coordonnées écran.
-/// DefWindowProc lance alors le déplacement ou le redimensionnement par le
-/// gestionnaire de fenêtres. Sans cela, glisser la barre de Claude ne
-/// déplaçait pas la fenêtre (#1477). Les boutons de légende (HTMINBUTTON,
-/// HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium les traite
-/// lui-même.
+/// WM_NCLBUTTONDOWN en coordonnées écran ; un second clic rapide sur la
+/// légende devient WM_NCLBUTTONDBLCLK. DefWindowProc lance alors le
+/// déplacement par le gestionnaire de fenêtres, ou agrandit et restaure.
+/// Chromium couvre sa page d'un enfant transparent (« Chrome Legacy
+/// Window », fenêtre X InputOnly depuis #1337) : c'est lui qui reçoit le
+/// clic, mais la question et le message vont à la fenêtre de premier niveau,
+/// qui seule connaît ses zones glissables (#1477). Les boutons de légende
+/// (HTMINBUTTON, HTMAXBUTTON, HTCLOSE) restent des clics clients : Chromium
+/// les traite lui-même. Renvoie la fenêtre et le message à distribuer.
 unsafe fn caption_click(
     hwnd: usize,
     message: u32,
     wparam: usize,
     lparam: isize,
-) -> (u32, usize, isize) {
+) -> Option<(usize, u32, usize, isize)> {
     const WM_LBUTTONDOWN: u32 = 0x0201;
     const WM_LBUTTONDBLCLK: u32 = 0x0203;
-    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK)
-        || !OWN_FRAME
+    thread_local! {
+        /// Dernier clic sur une légende : instant, point écran, fenêtre.
+        static LAST: std::cell::Cell<Option<(std::time::Instant, i32, i32, usize)>> =
+            const { std::cell::Cell::new(None) };
+    }
+    if !matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK) {
+        return None;
+    }
+    let own = |h: usize| {
+        OWN_FRAME
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains(&hwnd)
-    {
-        return (message, wparam, lparam);
-    }
-    let Some(r) = gui::window_rect(hwnd) else {
-        return (message, wparam, lparam);
+            .contains(&h)
     };
-    let x = lparam as u32 as u16 as i16 as i32;
-    let y = (lparam as u32 >> 16) as u16 as i16 as i32;
-    let screen = pack_i16_pair(r.left + x, r.top + y);
-    let hit = send_message_w(hwnd, 0x0084, 0, screen);
+    let top = if own(hwnd) {
+        hwnd
+    } else if gui::is_see_through_child(hwnd) {
+        let top = gui::top_level_of(hwnd);
+        if top == 0 || !own(top) {
+            return None;
+        }
+        top
+    } else {
+        return None;
+    };
+    let origin = gui::screen_rect(hwnd)?;
+    let x = origin.left + (lparam as u32 as u16 as i16 as i32);
+    let y = origin.top + ((lparam as u32 >> 16) as u16 as i16 as i32);
+    let screen = pack_i16_pair(x, y);
+    let hit = send_message_w(top, 0x0084, 0, screen);
+    if window_diag() {
+        eprintln!(
+            "winlux[fenetre] clic {hwnd:#x} → légende de {top:#x} ? WM_NCHITTEST({x},{y}) = {hit}"
+        );
+    }
     let caption = hit == 2;
-    let border = (10..=17).contains(&hit);
-    match message {
-        WM_LBUTTONDOWN if caption || border => (0x00A1, hit as usize, screen),
-        WM_LBUTTONDBLCLK if caption => (0x00A3, hit as usize, screen),
-        _ => (message, wparam, lparam),
+    if !caption && !(10..=17).contains(&hit) {
+        return None;
+    }
+    let _ = wparam;
+    if !caption {
+        LAST.with(|l| l.set(None));
+        return Some((top, 0x00A1, hit as usize, screen));
+    }
+    let now = std::time::Instant::now();
+    let double = LAST.with(|l| {
+        l.get().is_some_and(|(t, lx, ly, lh)| {
+            lh == top
+                && now.duration_since(t) <= std::time::Duration::from_millis(500)
+                && (x - lx).abs() <= 4
+                && (y - ly).abs() <= 4
+        })
+    });
+    if double {
+        LAST.with(|l| l.set(None));
+        Some((top, 0x00A3, hit as usize, screen))
+    } else {
+        LAST.with(|l| l.set(Some((now, x, y, top))));
+        Some((top, 0x00A1, hit as usize, screen))
     }
 }
 
@@ -947,6 +1131,8 @@ pub unsafe extern "win64" fn post_quit_message(code: i32) {
     gui::post_quit(&q, code);
 }
 
+const HWND_BROADCAST: usize = 0xFFFF;
+
 pub unsafe extern "win64" fn post_message_a(
     hwnd: usize,
     message: u32,
@@ -956,6 +1142,16 @@ pub unsafe extern "win64" fn post_message_a(
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
+    }
+    // HWND_BROADCAST : chaque fenêtre de premier niveau du processus
+    // reçoit le message ; les autres programmes n'en ont pas d'ici. Comme
+    // Windows, l'envoi réussit même sans destinataire (BroadcastUnload…
+    // d'Acrobat échouait, #1757).
+    if hwnd == HWND_BROADCAST {
+        for w in gui::enum_top_level_windows() {
+            post_message_a(w, message, wparam, lparam);
+        }
+        return 1;
     }
     let m = Msg {
         hwnd,
@@ -1050,6 +1246,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if gui::visible_flag(hwnd).is_some_and(|v| v != show) {
         send_message_w(hwnd, gui::WM_SHOWWINDOW, show as usize, 0);
     }
+    if show && gui::visible_flag(hwnd) == Some(false) && !matches!(cmd, 2 | 3 | 6 | 7 | 11) {
+        fit_to_work_area(hwnd);
+    }
     let was = gui::set_visible(hwnd, show);
     // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
     // fenêtre s'affiche sans prendre le focus (#1127).
@@ -1075,7 +1274,83 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     if cmd != gui::SW_HIDE {
         gui::request_paint(hwnd);
     }
+    if was != show && gui::window_parent(hwnd).unwrap_or(0) == 0 {
+        use super::chromium_win32 as w;
+        let event = if show {
+            w::EVENT_OBJECT_SHOW
+        } else {
+            w::EVENT_OBJECT_HIDE
+        };
+        w::notify_win_event(event, hwnd);
+    }
     was as i32
+}
+
+/// Fenêtre de premier niveau à barre de titre affichée : si son cadre
+/// dépasse la zone de travail de son écran, elle y est ramenée, et
+/// rétrécie si elle se redimensionne et n'y tient pas. Audacity restaure la
+/// position qu'il a enregistrée sans la contraindre ; sous la barre des
+/// tâches, la fenêtre restait coupée et la position fautive était
+/// réenregistrée à chaque fermeture (#1752). Les fenêtres sans cadre, les
+/// enfants et les fenêtres agrandies ou réduites ne sont pas touchées.
+unsafe fn fit_to_work_area(hwnd: usize) {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MINIMIZE: u32 = 0x2000_0000;
+    const WS_MAXIMIZE: u32 = 0x0100_0000;
+    let (Some(style), Some(rect)) = (gui::window_style(hwnd), gui::window_rect(hwnd)) else {
+        return;
+    };
+    if style & WS_CHILD != 0
+        || style & WS_CAPTION != WS_CAPTION
+        || style & (WS_MINIMIZE | WS_MAXIMIZE) != 0
+        || gui::window_parent(hwnd).unwrap_or(0) != 0
+        || OWN_FRAME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&hwnd)
+    {
+        return;
+    }
+    let monitors = super::monitors::list();
+    let index = super::monitors::from_rect_in(&monitors, &rect, 2);
+    let Some(monitor) = monitors.get(index.wrapping_sub(1)) else {
+        return;
+    };
+    let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
+    let resizable = style & WS_THICKFRAME != 0;
+    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
+    // interrogé.
+    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    let fitted =
+        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    if fitted == rect {
+        return;
+    }
+    crate::thunks::api_note(&format!(
+        "ShowWindow {hwnd:#x} : ({},{} {}x{}) ramenée dans la zone de travail ({},{} {}x{}) (#1752)",
+        rect.left,
+        rect.top,
+        rect.width(),
+        rect.height(),
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height()
+    ));
+    set_window_pos(
+        hwnd,
+        0,
+        fitted.left,
+        fitted.top,
+        fitted.width(),
+        fitted.height(),
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
 }
 
 /// `UpdateWindow` : si la fenêtre a une zone invalidée, WM_PAINT lui est
@@ -1102,6 +1377,7 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
+    lock(message_only_windows()).remove(&hwnd);
     pending_frame().retain(|(h, _, _)| *h != hwnd);
     OWN_FRAME
         .lock()
@@ -1206,6 +1482,37 @@ pub unsafe extern "win64" fn get_keyboard_state(out: *mut u8) -> i32 {
     1
 }
 
+/// Avant de donner le focus à `hwnd`, active sa fenêtre de premier niveau
+/// comme SetActiveWindow sous Windows : l'ancienne reçoit WM_NCACTIVATE(FALSE)
+/// puis WM_ACTIVATE(WA_INACTIVE), la nouvelle WM_NCACTIVATE(TRUE) puis
+/// WM_ACTIVATE(WA_ACTIVE), envoyés et non postés. Le FocusIn de X11 qui suit
+/// trouve la fenêtre déjà active et ne poste plus rien (#1504).
+unsafe fn activate_for_focus(hwnd: usize, state: usize) {
+    let top = gui::top_level_of(hwnd);
+    if top == 0 {
+        return;
+    }
+    let Some(prev) = gui::activate_top_for_focus(top) else {
+        return;
+    };
+    let me = std::thread::current().id();
+    let deliver = |h: usize, msg: u32, wparam: usize, lparam: isize| {
+        if gui::window_owner(h).as_ref() == Some(&me) {
+            if let Some(wp) = gui::wnd_proc_of(h) {
+                gui::call_wndproc(wp, h, msg, wparam, lparam);
+            }
+        } else {
+            gui::post_to_window(h, gui::Msg::new(h, msg, wparam, lparam));
+        }
+    };
+    if prev != 0 && gui::is_window(prev) {
+        deliver(prev, gui::WM_NCACTIVATE, 0, 0);
+        deliver(prev, gui::WM_ACTIVATE, 0, top as isize);
+    }
+    deliver(top, gui::WM_NCACTIVATE, 1, 0);
+    deliver(top, gui::WM_ACTIVATE, state, prev as isize);
+}
+
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
     if hwnd != 0 {
         let Some(owner) = gui::window_owner(hwnd) else {
@@ -1216,6 +1523,9 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
             crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
             return 0;
         }
+    }
+    if hwnd != 0 && gui::focused_window() != hwnd {
+        activate_for_focus(hwnd, WA_ACTIVE);
     }
     let Some(old) = gui::set_focus(hwnd) else {
         crate::process::set_last_error(87);
@@ -1394,6 +1704,12 @@ pub unsafe extern "win64" fn set_window_pos(
             gui::post_to_window(
                 hwnd,
                 Msg::new(hwnd, gui::WM_MOVE, 0, pack_i16_pair(left, top)),
+            );
+        }
+        if gui::window_parent(hwnd).unwrap_or(0) == 0 {
+            super::chromium_win32::notify_win_event(
+                super::chromium_win32::EVENT_OBJECT_LOCATIONCHANGE,
+                hwnd,
             );
         }
     }
@@ -1840,7 +2156,13 @@ pub unsafe extern "win64" fn validate_rect(hwnd: usize, _rect: *const Rect) -> i
 pub extern "win64" fn get_desktop_window() -> usize {
     1
 }
+/// GetForegroundWindow : la fenêtre active du programme quand il a le
+/// focus (une boîte possédée cliquée, #1804), sinon la plus haute.
 pub extern "win64" fn get_foreground_window() -> usize {
+    let active = gui::active_top();
+    if active != 0 && gui::is_window(active) {
+        return active;
+    }
     gui::first_window().unwrap_or(1)
 }
 
@@ -1894,6 +2216,9 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
 
 /// Couleur système, remplacée par le thème de contraste élevé s'il est actif.
 fn system_color(index: i32) -> Option<u32> {
+    if let Some(c) = crate::dlls::user32_releve::sys_color_override(index) {
+        return Some(c);
+    }
     crate::dlls::a11y::system_color(crate::dlls::a11y::current().contrast, index)
         .or_else(|| gui::theme::system_color(index))
 }
@@ -2158,8 +2483,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
             lock(user_data_map()).insert((hwnd, index), value);
             let owner = owner_top_level(value as usize);
             if owner != 0 && owner != hwnd {
-                let captioned =
-                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                let captioned = gui::window_style(hwnd)
+                    .is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000)
+                    && !captioned_tool_window(
+                        gui::window_style(hwnd).unwrap_or(0),
+                        gui::window_ex_style(hwnd).unwrap_or(0),
+                    );
                 with_backend(|b| {
                     b.set_owner(hwnd, owner);
                     if captioned {
@@ -2213,24 +2542,57 @@ pub unsafe extern "win64" fn set_window_long_ptr_w(hwnd: usize, index: i32, valu
 // GetClassLongA/W, GetClassLongPtrA/W, GetClassNameA/W, GetClassInfoExA/W
 // =====================================================================
 
+/// Valeur de classe d'une fenêtre (GetClassLong, GetClassLongPtr,
+/// GetClassWord) : atome, style, procédure, module, fond, curseur. Index
+/// inconnu ou octets supplémentaires de classe (non conservés) : 0. Tout
+/// renvoyait 0 et GetClassWord manquait : Steam s'arrêtait en 0xC0000139
+/// juste après le clic sur sa boîte de service (#1858).
+pub fn class_value(hwnd: usize, index: i32) -> Option<usize> {
+    const GCLP_HBRBACKGROUND: i32 = -10;
+    const GCLP_HCURSOR: i32 = -12;
+    const GCLP_HMODULE: i32 = -16;
+    const GCLP_WNDPROC: i32 = -24;
+    const GCL_STYLE: i32 = -26;
+    const GCW_ATOM: i32 = -32;
+    let class = gui::window_class(hwnd)?;
+    let info = gui::lookup_class(&class);
+    Some(match index {
+        GCW_ATOM => class_atom(&class) as usize,
+        GCL_STYLE => gui::class_style(&class) as usize,
+        GCLP_WNDPROC => info.map_or(0, |i| i.wnd_proc),
+        GCLP_HMODULE => info.map_or(0, |i| i.instance),
+        GCLP_HBRBACKGROUND => info.map_or(0, |i| i.background),
+        GCLP_HCURSOR => gui::class_cursor_of(hwnd),
+        _ => 0,
+    })
+}
+
+fn class_value_or_error(hwnd: usize, index: i32) -> usize {
+    class_value(hwnd, index).unwrap_or_else(|| {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        0
+    })
+}
+
 pub unsafe extern "win64" fn get_class_long_a(hwnd: usize, index: i32) -> u32 {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index) as u32
 }
 
 pub unsafe extern "win64" fn get_class_long_w(hwnd: usize, index: i32) -> u32 {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index) as u32
 }
 
 pub unsafe extern "win64" fn get_class_long_ptr_a(hwnd: usize, index: i32) -> usize {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index)
 }
 
 pub unsafe extern "win64" fn get_class_long_ptr_w(hwnd: usize, index: i32) -> usize {
-    let _ = (hwnd, index);
-    0
+    class_value_or_error(hwnd, index)
+}
+
+/// GetClassWord : seul GCW_ATOM (-32) a un sens hors octets supplémentaires.
+pub unsafe extern "win64" fn get_class_word(hwnd: usize, index: i32) -> u16 {
+    class_value_or_error(hwnd, index) as u16
 }
 
 pub unsafe extern "win64" fn get_class_name_a(hwnd: usize, buf: *mut u8, max_count: i32) -> i32 {
@@ -2416,7 +2778,18 @@ pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     if window_diag() {
         eprintln!("winlux[fenetre] parent {hwnd:#x} : {old:#x} -> {new_parent:#x}");
     }
-    if new_parent != 0 && new_parent != old {
+    if new_parent != 0
+        && new_parent != HWND_MESSAGE
+        && is_message_only(hwnd)
+        && !is_message_only(new_parent)
+    {
+        // Fenêtre créée sous une fenêtre « message seulement », donc sans
+        // fenêtre X (#1586), puis rattachée à une vraie fenêtre : WinForms
+        // crée les ToolStrip de Paint.NET (menus, barre d'outils, barre
+        // d'état) sous sa WindowsFormsParkingWindow, puis les déplace dans
+        // la fenêtre principale (#1677). Elle devient une fenêtre ordinaire.
+        leave_message_only(hwnd, new_parent);
+    } else if new_parent != 0 && new_parent != old {
         // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).
         let rect = gui::window_rect(hwnd).unwrap_or_default();
@@ -2425,15 +2798,38 @@ pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     old
 }
 
+/// Donne une fenêtre X à `hwnd` et à ses descendants, sortis du monde
+/// « message seulement » par SetParent, puis demande leur peinture.
+fn leave_message_only(hwnd: usize, parent: usize) {
+    lock(message_only_windows()).remove(&hwnd);
+    let rect = gui::window_rect(hwnd).unwrap_or_default();
+    let shown = gui::is_window_visible(hwnd);
+    with_backend(|b| {
+        b.create_child_window(hwnd, parent, rect);
+        if shown {
+            b.show_window(hwnd, true);
+        }
+    });
+    for child in gui::child_windows(hwnd) {
+        leave_message_only(child, hwnd);
+    }
+    if shown {
+        gui::request_paint(hwnd);
+    }
+}
+
 // =====================================================================
 // FindWindowA/W, EnumWindows, GetWindow
 // =====================================================================
 
+/// FindWindowA/W : `class` peut être un atome (MAKEINTATOM, 16 bits hauts
+/// nuls), qu'Acrobat passe pour la classe des boîtes de dialogue (#32770) ;
+/// il ne se lit pas comme une chaîne (#1754).
 pub unsafe extern "win64" fn find_window_a(class: *const u8, title: *const u8) -> usize {
     let cls = if class.is_null() {
         None
     } else {
-        Some(crate::dlls::cstr(class))
+        Some(read_class_name_a(class))
     };
     let ttl = if title.is_null() {
         None
@@ -2447,7 +2843,7 @@ pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16)
     let cls = if class.is_null() {
         None
     } else {
-        Some(crate::dlls::wstr(class))
+        Some(read_class_name_w(class))
     };
     let ttl = if title.is_null() {
         None
@@ -2669,9 +3065,12 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
 }
 
 /// TrackMouseEvent (#1254) : TME_LEAVE fait poster WM_MOUSELEAVE quand le
-/// pointeur quitte la fenêtre. TME_HOVER et TME_NONCLIENT sont acceptés
-/// sans effet. La structure fait 24 octets en 64 bits et 16 en 32 bits.
+/// pointeur quitte la fenêtre ; TME_HOVER fait poster WM_MOUSEHOVER quand il
+/// reste immobile dwHoverTime millisecondes (#1591). TME_NONCLIENT est
+/// accepté sans effet. La structure fait 24 octets en 64 bits (dwHoverTime
+/// à +16) ; wow32 la convertit depuis les 16 octets du x86.
 pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
+    const TME_HOVER: u32 = 0x1;
     const TME_LEAVE: u32 = 0x2;
     const TME_NONCLIENT: u32 = 0x10;
     const TME_QUERY: u32 = 0x4000_0000;
@@ -2694,12 +3093,35 @@ pub unsafe extern "win64" fn track_mouse_event(tme: *mut u8) -> i32 {
         return 0;
     }
     let hwnd = hwnd_at(tme);
+    let hover_at = if size == 16 { 12 } else { 16 };
     if flags & TME_QUERY != 0 {
-        let tracked = gui::mouse_leave_tracked(hwnd);
-        std::ptr::write_unaligned(tme.add(4) as *mut u32, if tracked { TME_LEAVE } else { 0 });
+        let mut out = if gui::mouse_leave_tracked(hwnd) {
+            TME_LEAVE
+        } else {
+            0
+        };
+        if let Some(ms) = gui::mouse_hover_tracked(hwnd) {
+            out |= TME_HOVER;
+            std::ptr::write_unaligned(tme.add(hover_at) as *mut u32, ms);
+        }
+        std::ptr::write_unaligned(tme.add(4) as *mut u32, out);
         return 1;
     }
-    if flags & TME_LEAVE == 0 || flags & TME_NONCLIENT != 0 {
+    if flags & TME_NONCLIENT != 0 {
+        return 1;
+    }
+    if flags & TME_HOVER != 0 {
+        if flags & TME_CANCEL != 0 {
+            gui::cancel_mouse_hover(hwnd);
+        } else if gui::is_window(hwnd) {
+            let ms = std::ptr::read_unaligned(tme.add(hover_at) as *const u32);
+            gui::track_mouse_hover(hwnd, ms);
+        } else {
+            crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+            return 0;
+        }
+    }
+    if flags & TME_LEAVE == 0 {
         return 1;
     }
     if flags & TME_CANCEL != 0 {
@@ -2763,7 +3185,7 @@ pub extern "win64" fn show_cursor(show: i32) -> i32 {
 
 pub extern "win64" fn get_double_click_time() -> u32 {
     // Paramètres > Souris (500 ms par défaut, comme Windows).
-    crate::dlls::mouse::current().double_click
+    crate::dlls::mouse::double_click_time()
 }
 
 pub extern "win64" fn swap_mouse_button(_swap: i32) -> i32 {
@@ -3686,12 +4108,43 @@ unsafe fn system_parameters_info_common(
             };
             return 1;
         }
+        // SPI_GETMOUSEHOVERWIDTH / HEIGHT (4 pixels) et SPI_GETMOUSEHOVERTIME
+        // (400 ms), valeurs par défaut documentées : WinForms en fait
+        // l'intervalle du minuteur de survol de ses barres d'outils (#1574).
+        0x0062 | 0x0064 | 0x0066 if !data.is_null() => {
+            *data.cast::<u32>() = if action == 0x0066 { 400 } else { 4 };
+            return 1;
+        }
         // SPI_GETCARETWIDTH : DWORD en pixels.
         0x2006 if !data.is_null() => {
             *data.cast::<u32>() = u32::from(a11y.caret_width);
             return 1;
         }
         _ => {}
+    }
+    // Délais et vitesses du clavier et des menus : valeurs par défaut
+    // documentées de SystemParametersInfo. Sans elles, le succès générique
+    // laissait le tampon à 0, et un minuteur WinForms réglé dessus refuse 0
+    // (#1803) : SPI_GETKEYBOARDSPEED (31), SPI_GETKEYBOARDDELAY (1, soit
+    // 500 ms), SPI_GETMENUSHOWDELAY (400 ms), SPI_GETFOREGROUNDLOCKTIMEOUT
+    // (200 000 ms), SPI_GETFOCUSBORDERWIDTH / HEIGHT (1 pixel),
+    // SPI_GETMESSAGEDURATION (5 s) et SPI_GETCARETTIMEOUT (5 000 ms).
+    let default = match action {
+        0x000A => Some(31),
+        0x0016 => Some(1),
+        0x006A => Some(400),
+        0x2000 => Some(200_000),
+        0x200E | 0x2010 => Some(1),
+        0x2016 => Some(5),
+        0x2022 => Some(5000),
+        _ => None,
+    };
+    if let Some(v) = default {
+        if data.is_null() {
+            return 0;
+        }
+        *data.cast::<u32>() = v;
+        return 1;
     }
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
@@ -3740,8 +4193,14 @@ pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut
     tid
 }
 
+/// GetActiveWindow : fenêtre de premier niveau active du fil appelant,
+/// jamais un contrôle (#1804).
 pub extern "win64" fn get_active_window() -> usize {
-    gui::focused_window()
+    let active = gui::active_top();
+    if active != 0 && gui::window_owner(active).as_ref() == Some(&std::thread::current().id()) {
+        return active;
+    }
+    gui::top_level_of(gui::focused_window())
 }
 
 pub extern "win64" fn set_active_window(hwnd: usize) -> usize {
@@ -3787,11 +4246,14 @@ pub extern "win64" fn lock_set_foreground_window(lock_code: u32) -> i32 {
 // =====================================================================
 
 const WH_GETMESSAGE: i32 = 3;
+const WH_CBT: i32 = 5;
+const HCBT_CREATEWND: i32 = 3;
 const PM_REMOVE: usize = 1;
 
-/// Crochet installé par SetWindowsHookEx. Seul WH_GETMESSAGE est appelé :
-/// Qt 5 y relance la livraison de ses événements différés (clics, touches,
-/// repeints) ; sans lui, une fenêtre Qt s'affiche mais ne réagit plus (#938).
+/// Crochet installé par SetWindowsHookEx. Sont appelés WH_GETMESSAGE (Qt 5
+/// y relance la livraison de ses événements différés ; sans lui, une
+/// fenêtre Qt s'affiche mais ne réagit plus, #938) et WH_CBT pour
+/// HCBT_CREATEWND (MFC y attache ses fenêtres, #1654).
 #[derive(Clone, Copy)]
 struct Hook {
     handle: usize,
@@ -3819,7 +4281,7 @@ pub unsafe extern "win64" fn set_windows_hook_ex_a(
 ) -> usize {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00F0_0000);
     let handle = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if id == WH_GETMESSAGE && proc_ != 0 {
+    if matches!(id, WH_GETMESSAGE | WH_CBT) && proc_ != 0 {
         // Le plus récent passe en premier, comme sous Windows.
         hooks().lock().unwrap_or_else(|e| e.into_inner()).insert(
             0,
@@ -3882,6 +4344,32 @@ unsafe fn call_get_message_hooks(msg: *mut Msg, remove: usize) {
     if let Some(h) = next_hook(WH_GETMESSAGE, 0) {
         run_hook(h, 0, remove, msg as isize);
     }
+}
+
+/// CBT_CREATEWND : création en cours et fenêtre après laquelle l'insérer.
+#[repr(C)]
+struct CbtCreateWnd {
+    cs: *mut CreateStructA,
+    insert_after: usize,
+}
+
+/// HCBT_CREATEWND (wParam = HWND, lParam = CBT_CREATEWND) : vrai si un
+/// crochet WH_CBT du fil refuse la création. Le crochet peut changer la
+/// CREATESTRUCT, relue ensuite par WM_NCCREATE et WM_CREATE.
+unsafe fn cbt_create_window(hwnd: usize, cs: &mut CreateStructA) -> bool {
+    let Some(h) = next_hook(WH_CBT, 0) else {
+        return false;
+    };
+    let mut info = CbtCreateWnd {
+        cs: cs as *mut CreateStructA,
+        insert_after: 0,
+    };
+    run_hook(
+        h,
+        HCBT_CREATEWND,
+        hwnd,
+        &mut info as *mut CbtCreateWnd as isize,
+    ) != 0
 }
 
 pub unsafe extern "win64" fn call_next_hook_ex(
@@ -4375,6 +4863,11 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
             }
         }
         // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
+        //    Les rappels SetWinEventHook en attente sont appelés pendant
+        //    l'attente, comme sous Windows.
+        if wake_mask != 0 {
+            super::chromium_win32::deliver_win_events();
+        }
         if wake_mask != 0 && message_waiting() {
             return count;
         }
@@ -4683,12 +5176,18 @@ pub unsafe extern "win64" fn remove_prop_w(hwnd: usize, name: *const u16) -> usi
 
 // ---------- Misc ----------
 
-pub extern "win64" fn unregister_class_a(_name: *const u8, _instance: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn unregister_class_a(name: *const u8, instance: usize) -> i32 {
+    unregister_class(
+        (name as usize > 0xFFFF).then(|| read_class_name_a(name)),
+        instance,
+    )
 }
 
-pub extern "win64" fn unregister_class_w(_name: *const u16, _instance: usize) -> i32 {
-    1
+pub unsafe extern "win64" fn unregister_class_w(name: *const u16, instance: usize) -> i32 {
+    unregister_class(
+        (name as usize > 0xFFFF).then(|| read_class_name_w(name)),
+        instance,
+    )
 }
 
 pub extern "win64" fn get_dc_ex(hwnd: usize, _rgn: usize, _flags: u32) -> usize {
@@ -4877,6 +5376,7 @@ pub fn exports() -> crate::dlls::Exports {
         // --- Class info ---
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
+        "GetClassWord"=>fn get_class_word,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
         "RealGetWindowClassA"=>fn real_get_window_class_a, "RealGetWindowClassW"=>fn real_get_window_class_w,
         "GetClassInfoExA"=>fn get_class_info_ex_a, "GetClassInfoExW"=>fn get_class_info_ex_w,
@@ -5033,7 +5533,7 @@ fn owner_top_level(mut hwnd: usize) -> usize {
 /// version exigeait outil ET non activable, ce que ce menu n'a pas.
 /// Une fenêtre en couches (Flow Launcher) reste gérée : elle prend le
 /// clavier.
-fn floating_popup(style: u32, ex_style: u32) -> bool {
+pub(crate) fn floating_popup(style: u32, ex_style: u32) -> bool {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
     const WS_EX_TOPMOST: u32 = 0x0000_0008;
@@ -5070,6 +5570,18 @@ fn drawn_whole(hwnd: usize) -> bool {
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
+/// Fenêtre outil avec barre de titre (WS_CAPTION + WS_EX_TOOLWINDOW) :
+/// palette flottante, que Windows dessine avec le seul bouton Fermer. Pour
+/// openbox, c'est une barre d'outils détachée (_NET_WM_WINDOW_TYPE_TOOLBAR),
+/// qui n'a ni Réduire ni Agrandir et laisse donc sa place au titre : les
+/// panneaux de Paint.NET, larges de 180 px, affichaient « H… ue » (#1761).
+fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -5086,6 +5598,56 @@ fn popup_decorations(style: u32) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
+    /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.
+    #[test]
+    fn palette_flottante_reconnue() {
+        use super::captioned_tool_window;
+        // FormBorderStyle.SizableToolWindow : WS_CAPTION | WS_THICKFRAME | WS_SYSMENU.
+        assert!(captioned_tool_window(0x02CC_0000, 0x0001_0180));
+        assert!(!captioned_tool_window(0x00CF_0000, 0x0000_0100));
+        // Sans barre de titre (fenêtre surgissante outil).
+        assert!(!captioned_tool_window(0x8000_0000, 0x0000_0080));
+        // Enfant.
+        assert!(!captioned_tool_window(0x40C0_0000, 0x0000_0080));
+    }
+
+    /// #1630 : une classe déjà inscrite par le même module est refusée
+    /// (ERROR_CLASS_ALREADY_EXISTS) jusqu'à son UnregisterClass.
+    #[test]
+    fn classe_deja_inscrite_refusee_puis_reinscrite() {
+        let _teb = crate::process::test_teb();
+        let name: Vec<u16> = "Winlux1630Message".encode_utf16().chain([0]).collect();
+        let wc = gui::WndClassA {
+            style: 0,
+            wnd_proc: def_window_proc_w as *const () as usize,
+            cls_extra: 0,
+            wnd_extra: 0,
+            instance: 0x40_0000,
+            icon: 0,
+            cursor: 0,
+            background: 0,
+            menu_name: std::ptr::null(),
+            class_name: name.as_ptr().cast(),
+        };
+        unsafe {
+            let atom = register_class_w(&wc);
+            assert_ne!(atom, 0);
+            assert_eq!(register_class_w(&wc), 0);
+            assert_eq!(crate::process::last_error(), 1410);
+            // Un autre module peut inscrire une classe de même nom.
+            let other = gui::WndClassA {
+                instance: 0x50_0000,
+                ..wc
+            };
+            assert_ne!(register_class_w(&other), 0);
+            assert_eq!(unregister_class_w(name.as_ptr(), 0x40_0000), 1);
+            assert_eq!(unregister_class_w(name.as_ptr(), 0x40_0000), 0);
+            assert_eq!(crate::process::last_error(), 1411);
+            assert_eq!(register_class_w(&wc), atom);
+        }
+    }
     use super::*;
 
     /// GetWindowPlacement : 44 octets, showCmd selon l'état, rectangle courant.
@@ -5210,6 +5772,35 @@ mod tests {
     fn taille_des_cases_a_cocher() {
         assert_eq!(get_system_metrics(71), 15);
         assert_eq!(get_system_metrics(72), 15);
+    }
+
+    /// #1574 : délai et zone de survol (minuteur des barres d'outils WinForms).
+    #[test]
+    fn delai_et_zone_de_survol() {
+        for (action, want) in [(0x0066u32, 400u32), (0x0062, 4), (0x0064, 4)] {
+            let mut v = 0u32;
+            let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
+            assert_eq!((r, v), (1, want), "action {action:#x}");
+        }
+    }
+
+    /// #1803 : aucun délai de clavier, de menu ou de message ne reste à 0.
+    #[test]
+    fn delais_clavier_menus_et_messages() {
+        for (action, want) in [
+            (0x000Au32, 31u32),
+            (0x0016, 1),
+            (0x006A, 400),
+            (0x2000, 200_000),
+            (0x200E, 1),
+            (0x2010, 1),
+            (0x2016, 5),
+            (0x2022, 5000),
+        ] {
+            let mut v = 0u32;
+            let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
+            assert_eq!((r, v), (1, want), "action {action:#x}");
+        }
     }
 
     /// #797 : lfMessageFont de NONCLIENTMETRICSW est une vraie police (Segoe
@@ -5350,6 +5941,13 @@ mod tests {
                 read_class_name_a(b as usize as *const u8),
                 "Chrome_MessageWindow"
             );
+            // FindWindow avec un atome : lu comme tel, jamais déréférencé
+            // (Acrobat passe MAKEINTATOM(0x8002), #1754).
+            let _ = find_window_a(0x8002 as *const u8, std::ptr::null());
+            let _ = find_window_w(0x8002 as *const u16, std::ptr::null());
+            let _ = find_window_ex_a(0, 0, a as usize as *const u8, std::ptr::null());
+            let _ = find_window_ex_w(0, 0, b as usize as *const u16, std::ptr::null());
+            assert_eq!(read_class_name_a(0x8002 as *const u8), "#32770");
         }
     }
 
@@ -5457,6 +6055,41 @@ mod tests {
             let r = gui::screen_rect(hwnd).expect("rectangle");
             assert_eq!((r.right - r.left, r.bottom - r.top), (w, h));
             destroy_window(hwnd);
+        }
+    }
+
+    /// GetClassWord et GetClassLong(Ptr) relisent la classe de la fenêtre
+    /// (Steam, #1858).
+    #[test]
+    fn valeurs_de_classe_relues() {
+        let class: Vec<u16> = "Static\0".encode_utf16().collect();
+        unsafe {
+            let h = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            let atom = class_atom("Static");
+            assert_eq!(get_class_word(h, -32), atom);
+            assert_eq!(get_class_long_w(h, -32), atom as u32);
+            assert_eq!(
+                get_class_long_ptr_w(h, -24),
+                gui::lookup_class("Static").expect("classe").wnd_proc
+            );
+            assert_ne!(get_class_long_ptr_w(h, -12), 0, "curseur flèche");
+            assert_eq!(get_class_long_ptr_w(h, 0), 0, "octets supplémentaires");
+            destroy_window(h);
+            assert_eq!(get_class_word(h, -32), 0, "fenêtre détruite");
         }
     }
 
@@ -6010,9 +6643,10 @@ mod tests {
             let got = vus();
             assert_eq!(got.iter().map(|v| v.0).collect::<Vec<_>>(), [gui::WM_SIZE]);
 
-            // Clic dans la barre maison (y = 10) : légende, coordonnées écran.
+            // Clic dans la barre maison (y = 10) : légende, coordonnées écran ;
+            // un second clic rapide au même endroit : double-clic.
             dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
-            dispatch_message_w(&Msg::new(hwnd, 0x0203, 1, pack_i16_pair(500, 10)));
+            dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 10)));
             // Clic dans la page (y = 400) : clic client inchangé.
             dispatch_message_w(&Msg::new(hwnd, 0x0201, 1, pack_i16_pair(500, 400)));
             let got = vus();
@@ -6021,7 +6655,106 @@ mod tests {
                 [(0x00A1, 2), (0x00A3, 2), (0x0201, 1)]
             );
             assert_eq!(got[0].2, pack_i16_pair(500, 10));
+
+            // « Chrome Legacy Window » : enfant transparent qui couvre la page
+            // et reçoit le clic. La légende est demandée à la fenêtre de
+            // premier niveau, qui reçoit WM_NCLBUTTONDOWN.
+            let legacy_name: Vec<u16> = "Winlux1477Legacy".encode_utf16().chain([0]).collect();
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: def_window_proc_w as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: legacy_name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let legacy = create_window_ex_w(
+                0x20, // WS_EX_TRANSPARENT
+                legacy_name.as_ptr(),
+                legacy_name.as_ptr(),
+                0x5000_0000, // WS_CHILD | WS_VISIBLE
+                0,
+                0,
+                1920,
+                1039,
+                hwnd,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(legacy, 0);
+            dispatch_message_w(&Msg::new(legacy, 0x0201, 1, pack_i16_pair(700, 12)));
+            let got = vus();
+            assert_eq!(
+                got.iter().map(|v| (v.0, v.1, v.2)).collect::<Vec<_>>(),
+                [(0x00A1, 2, pack_i16_pair(700, 12))]
+            );
+            destroy_window(legacy);
             destroy_window(hwnd);
+        }
+    }
+
+    static WIN_EVENTS_1498: std::sync::Mutex<Vec<(u32, usize)>> = std::sync::Mutex::new(Vec::new());
+
+    unsafe extern "win64" fn crochet_1498(
+        _hook: usize,
+        event: u32,
+        hwnd: usize,
+        _object: i32,
+        _child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        WIN_EVENTS_1498.lock().unwrap().push((event, hwnd));
+    }
+
+    /// #1498 : les événements SetWinEventHook (réduction, déplacement) sont
+    /// livrés au thread qui a posé le crochet quand il relève ses messages,
+    /// une seule fois par fenêtre tant qu'ils attendent.
+    #[test]
+    fn crochet_win_event_livre_au_thread_qui_le_pose() {
+        use super::super::chromium_win32 as w;
+        unsafe {
+            let hook = w::SetWinEventHook(
+                0x0016,
+                0x0017,
+                0,
+                crochet_1498 as *const () as usize,
+                0,
+                0,
+                0,
+            );
+            assert_ne!(hook, 0);
+            let fenetre = 0x1498_0000;
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, fenetre);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZESTART, fenetre);
+            // Hors de l'intervalle du crochet : rien.
+            w::notify_win_event(w::EVENT_OBJECT_LOCATIONCHANGE, fenetre);
+            // Un autre thread ne reçoit rien.
+            std::thread::spawn(w::deliver_win_events_for_test)
+                .join()
+                .unwrap();
+            assert!(WIN_EVENTS_1498.lock().unwrap().is_empty());
+            let mut m = Msg::new(0, 0, 0, 0);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, fenetre);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            assert_eq!(
+                std::mem::take(&mut *WIN_EVENTS_1498.lock().unwrap()),
+                [
+                    (w::EVENT_SYSTEM_MINIMIZESTART, fenetre),
+                    (w::EVENT_SYSTEM_MINIMIZEEND, fenetre)
+                ]
+            );
+            assert_eq!(w::UnhookWinEvent(hook), 1);
+            w::notify_win_event(w::EVENT_SYSTEM_MINIMIZEEND, fenetre);
+            peek_message_w(&mut m, 0, 0, 0, 1);
+            assert!(WIN_EVENTS_1498.lock().unwrap().is_empty());
         }
     }
 
@@ -6420,6 +7153,55 @@ mod tests_messages {
         }
     }
 
+    /// #1586 : une fenêtre HWND_MESSAGE et ses enfants restent sans fenêtre
+    /// affichée, et leur parent rendu est nul.
+    #[test]
+    fn fenetre_message_seulement() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    1,
+                    1,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let msg = make(0, HWND_MESSAGE);
+            assert_ne!(msg, 0);
+            assert!(is_message_only(msg));
+            assert_eq!(gui::window_parent(msg), Some(0));
+            let child = make(WS_CHILD, msg);
+            assert_ne!(child, 0);
+            assert!(is_message_only(child));
+            let top = make(0, 0);
+            assert!(!is_message_only(top));
+            // #1677 : rattachée à une vraie fenêtre (ToolStrip de WinForms
+            // sorti de la fenêtre de parcage), elle redevient ordinaire,
+            // avec ses enfants.
+            let grand = make(WS_CHILD, child);
+            assert!(is_message_only(grand));
+            assert_eq!(set_parent(child, top), msg);
+            assert!(!is_message_only(child));
+            assert!(!is_message_only(grand));
+            assert_eq!(gui::window_parent(child), Some(top));
+            assert!(is_message_only(msg));
+            destroy_window(grand);
+            destroy_window(child);
+            destroy_window(msg);
+            destroy_window(top);
+            assert!(!is_message_only(msg));
+        }
+    }
+
     #[test]
     fn real_get_window_class_rend_le_nom_de_classe() {
         unsafe {
@@ -6557,6 +7339,91 @@ mod tests_messages {
                 (client.left, client.top, client.right, client.bottom)
             );
             assert!(r.right > r.left && r.bottom > r.top);
+            destroy_window(hwnd);
+        }
+    }
+
+    thread_local! {
+        static CBT_VUS: std::cell::RefCell<Vec<(usize, u32, String)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static CBT_REFUS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    extern "win64" fn proc_mfc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+        if msg == WM_NCCREATE {
+            CBT_VUS.with(|v| v.borrow_mut().push((hwnd, msg, String::new())));
+        }
+        unsafe { def_window_proc_w(hwnd, msg, wp, lp) }
+    }
+
+    extern "win64" fn crochet_cbt(code: i32, wp: usize, lp: isize) -> isize {
+        unsafe {
+            if code == HCBT_CREATEWND {
+                let info = &*(lp as *const CbtCreateWnd);
+                let class = read_wide_z((*info.cs).class.cast());
+                CBT_VUS.with(|v| v.borrow_mut().push((wp, 0, class)));
+                if CBT_REFUS.with(|r| r.get()) {
+                    return 1;
+                }
+                // Comme _AfxCbtFilterHook : sous-classement avant tout message.
+                set_window_long_ptr_w(wp, -4, proc_mfc as *const () as isize);
+            }
+            call_next_hook_ex(0, code, wp, lp)
+        }
+    }
+
+    unsafe fn read_wide_z(p: *const u16) -> String {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+    }
+
+    #[test]
+    fn crochet_cbt_sous_classe_avant_wm_nccreate() {
+        // MFC attache ses fenêtres dans HCBT_CREATEWND ; sa classe garde
+        // DefWindowProc (Pythonwin, #1654).
+        unsafe {
+            let tid = crate::dlls::kernel32::get_current_thread_id();
+            let h = set_windows_hook_ex_w(WH_CBT, crochet_cbt as *const () as usize, 0, tid);
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let creer = || {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    50,
+                    20,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            let vus = CBT_VUS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+            assert_eq!(
+                vus,
+                vec![
+                    (hwnd, 0, "STATIC".to_string()),
+                    (hwnd, WM_NCCREATE, String::new())
+                ]
+            );
+            destroy_window(hwnd);
+            // Une valeur non nulle refuse la fenêtre.
+            CBT_REFUS.with(|r| r.set(true));
+            assert_eq!(creer(), 0);
+            CBT_REFUS.with(|r| r.set(false));
+            assert_eq!(unhook_windows_hook_ex(h), 1);
+            CBT_VUS.with(|v| v.borrow_mut().clear());
+            let hwnd = creer();
+            assert_ne!(hwnd, 0);
+            assert!(CBT_VUS.with(|v| v.borrow().is_empty()));
             destroy_window(hwnd);
         }
     }

@@ -17,13 +17,17 @@ pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
+pub mod activeds_aclui;
 pub mod advapi32;
 pub mod advapi32_crypto;
+pub mod advapi32_releve;
 pub mod advapi32_rsa;
 pub mod advapi32_services;
+pub mod afd;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod cabinet_fci;
 pub mod cabinet_lz;
 pub mod chromium_win32;
 pub mod clipboard;
@@ -45,13 +49,16 @@ pub mod crt;
 pub mod crt_extra;
 pub mod crt_more;
 pub mod crt_proc;
+pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
+pub mod crypt32_encode;
 pub mod cxx_eh;
 pub mod d2d1;
+pub mod d2d_combine;
 pub mod d2d_raster;
 pub mod d3d10;
 pub mod d3d11;
@@ -74,13 +81,16 @@ pub mod ddeml;
 pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
+pub mod devnotify;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
+pub mod discord_win32;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
 pub mod dpnet;
+pub mod drivers;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -115,11 +125,14 @@ mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
 pub mod hid;
+pub mod hid_report;
 pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
 pub mod icc;
 pub mod icons;
+pub mod icue_win32;
+pub mod icuuc;
 pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
@@ -131,16 +144,27 @@ pub mod jumplist_com;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
+pub mod kernel32_fold;
 pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
+pub mod kernel32_namespace;
 pub mod kernel32_node;
 pub mod kernel32_path;
+pub mod kernel32_releve;
 pub mod knownfolders;
 pub mod legacy_com;
 pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod lot_e_comptes;
+pub mod lot_e_divers;
+pub mod lot_e_reseau;
+pub mod lot_f_crypt32;
+pub mod lot_f_divers;
+pub mod lot_f_mfplat;
+pub mod lot_f_propsys;
+pub mod lot_f_winmm;
 pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
@@ -153,6 +177,7 @@ pub mod mpr;
 pub mod msacm32;
 pub mod mscms;
 pub mod mscoree;
+pub mod msctf_profiles;
 pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -161,18 +186,25 @@ pub mod msxml_dom;
 pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
+pub mod netlistmgr;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
 pub mod ole32_inplace;
+pub mod ole32_lot_c;
+pub mod ole32_moniker;
 pub mod ole32_storage;
 pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
+pub mod oleaut32_lot_c;
+pub mod oleaut32_picture;
+pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
@@ -184,11 +216,14 @@ pub mod print_pdf;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
+pub mod qwave;
 pub mod rawinput;
+pub mod redist_dlls;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
 pub mod rtti;
+pub mod saisie;
 pub mod sandbox_dlls;
 pub mod schannel;
 pub mod sechost;
@@ -199,10 +234,17 @@ pub mod seh_hw;
 pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
+pub mod setupinf;
 pub mod sfnt;
+pub mod shcore_obsolete;
 pub mod shell32;
+pub mod shell32_ansi;
+pub mod shell32_releve;
 pub mod shell_folder_com;
+pub mod shell_link;
+pub mod shell_ordinaux;
 pub mod shlwapi;
+pub mod shlwapi_path;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod sysdlls;
@@ -219,11 +261,13 @@ pub mod url_security;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
+pub mod user32_releve;
 pub mod userenv;
 pub mod usp10;
 pub mod uxtheme;
 pub mod v4l2;
 pub mod va_bindings;
+pub mod vdev;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
@@ -231,6 +275,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
 pub mod windowscodecs;
@@ -247,10 +292,12 @@ pub mod winmm_midi;
 pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
+pub mod winrt_ui;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
 pub mod winusb;
+pub mod wldap32;
 pub mod wpf_native;
 pub mod write_watch;
 pub mod ws2_32;
@@ -393,6 +440,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
+            e.extend(crt_releve::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -415,6 +463,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_fold::exports());
+                    e.extend(kernel32_namespace::exports());
                     e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
@@ -433,6 +483,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -511,13 +562,21 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
                     e.extend(pointer::user32_exports());
+                    // Lot D du relevé (#1512) : seulement les noms absents.
+                    for (name, addr) in user32_releve::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: 0,
             },
             Builtin {
                 name: "shcore",
-                exports: chromium_win32::shcore_exports(),
+                exports: {
+                    let mut e = chromium_win32::shcore_exports();
+                    e.extend(shcore_obsolete::exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -530,6 +589,15 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_fs::advapi32_exports());
                     e.extend(security::advapi32_exports());
                     e.extend(credentials::exports());
+                    // Lot D du relevé (#1512).
+                    for (name, addr) in security::releve_exports()
+                        .into_iter()
+                        .chain(advapi32_services::releve_exports())
+                        .chain(credentials::releve_exports())
+                        .chain(advapi32_releve::exports())
+                    {
+                        e.entry(name).or_insert(addr);
+                    }
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e.extend(chromium_win32::advapi32_exports());
@@ -563,6 +631,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(ole32_storage::exports());
                     e.extend(ole32_embed::exports());
                     e.extend(ole32_inplace::exports());
+                    e.extend(ole32_lot_c::exports());
+                    e.extend(ole32_moniker::exports());
                     for (name, addr) in wpf_native::ole32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -605,6 +675,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(knownfolders::shell32_exports());
                     e.extend(security::shell32_exports());
                     e.extend(dataobject::shell32_exports());
+                    for (name, addr) in shell32_releve::exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: 0,
@@ -649,6 +722,9 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    for (name, addr) in user32_releve::gdi32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e.extend(gdi32_fonts::exports());
                     e.extend(gdi32_more::exports());
                     e.extend(gdi32_path::exports());
@@ -736,6 +812,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(oleaut32_var::exports());
                     e.extend(oleaut32_disp::exports());
                     e.extend(oleaut32_typelib::exports());
+                    e.extend(oleaut32_record::exports());
+                    e.extend(oleaut32_picture::exports());
+                    e.extend(oleaut32_lot_c::exports());
                     e
                 },
                 handle: 0,
@@ -867,7 +946,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "setupapi",
-                exports: setupapi::exports(),
+                exports: {
+                    let mut e = setupapi::exports();
+                    e.extend(devnotify::cfgmgr32_exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -921,7 +1004,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "uxtheme",
-                exports: uxtheme::exports(),
+                exports: {
+                    let mut e = uxtheme::exports();
+                    e.extend(user32_releve::uxtheme_exports());
+                    e
+                },
                 handle: 0,
             },
             // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
@@ -989,6 +1076,26 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "odbc32",
+                exports: odbc32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "activeds",
+                exports: activeds_aclui::activeds_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "aclui",
+                exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wevtapi",
+                exports: wevtapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
                 handle: fake_module(),
@@ -1027,6 +1134,30 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "cabinet",
                 exports: cabinet_lz::cabinet_exports(),
+                handle: 0,
+            },
+            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792) ;
+            // icu.dll (Windows 10 1903+) exporte les mêmes noms.
+            Builtin {
+                name: "icuuc",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "icu",
+                exports: icuuc::exports(),
+                handle: 0,
+            },
+            // Qualité de service qWAVE (discord_voice.node, #NNNN).
+            Builtin {
+                name: "qwave",
+                exports: qwave::exports(),
+                handle: 0,
+            },
+            // Client LDAP sans connexion (libcurl d'OBS, #1765).
+            Builtin {
+                name: "wldap32",
+                exports: wldap32::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1119,7 +1250,13 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "secur32",
-                exports: secur32::exports(),
+                exports: {
+                    let mut e = secur32::exports();
+                    for (name, addr) in advapi32_releve::secur32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
+                    e
+                },
                 handle: 0,
             },
             Builtin {
@@ -1169,8 +1306,17 @@ fn builtins() -> &'static Vec<Builtin> {
         // mpr, msi et shfolder : importées directement par WinSCP et 7-Zip (#486).
         for (name, exports) in [
             ("mpr", legacy_dlls::mpr_exports()),
-            ("msi", legacy_dlls::msi_exports()),
+            ("msi", {
+                let mut e = legacy_dlls::msi_exports();
+                e.extend(discord_win32::msi_exports());
+                e
+            }),
             ("shfolder", legacy_dlls::shfolder_exports()),
+            // Corpus de #26 (#1394) : signtool x86, panda3d, .NET Core 3.1.
+            ("mfc42", redist_dlls::mfc42_exports()),
+            ("mssign32", redist_dlls::mssign32_exports()),
+            ("concrt140", redist_dlls::concrt140_exports()),
+            ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
                 name,
@@ -1295,6 +1441,22 @@ fn add_basics(all: &mut [Builtin]) {
     let common = common_apps::all();
     // Imports de FileZilla (ftp_apps).
     let ftp = ftp_apps::all();
+    // Imports d'iCUE 4.18 (#1606).
+    let icue = icue_win32::all();
+    // Lot E de #1410 (#1614).
+    let lot_e = lot_e_comptes::all()
+        .into_iter()
+        .chain(lot_e_reseau::all())
+        .chain(lot_e_divers::all());
+    // Lot F de #1410 (#1615).
+    let lot_f = vec![
+        ("winmm", lot_f_winmm::exports()),
+        ("crypt32", lot_f_crypt32::exports()),
+        ("propsys", lot_f_propsys::exports()),
+        ("mfplat", lot_f_mfplat::exports()),
+    ]
+    .into_iter()
+    .chain(lot_f_divers::all());
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
@@ -1302,6 +1464,11 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(electron)
         .chain(common)
         .chain(ftp)
+        .chain(icue)
+        .chain(lot_e)
+        .chain(lot_f)
+        // discord_utils.node (#1823).
+        .chain(discord_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1318,6 +1485,15 @@ fn add_basics(all: &mut [Builtin]) {
     // comctl32 et shell32 importés par numéro d'ordre.
     for &(dll, ord, name) in common_apps::ORDINALS {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
+        }
+    }
+    // wldap32 n'est importée que par numéro d'ordre.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "wldap32") {
+        for &(ord, name) in wldap32::ORDINALS {
             if let Some(&a) = b.exports.get(name) {
                 let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
                 b.exports.entry(key).or_insert(a);
@@ -1412,12 +1588,22 @@ pub fn normalize(dll: &str) -> String {
     if base == "imagehlp" {
         return "dbghelp".into();
     }
-    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
-    if base == "wsock32" {
+    // Résolution des types WinRT : wintypes.dll (#1394).
+    if base.starts_with("api-ms-win-ro-typeresolution-") {
+        return "wintypes".into();
+    }
+    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32, et
+    // mswsock (AcceptEx, TransmitFile, WSARecvEx…) y est servie (#1390).
+    if base == "wsock32" || base == "mswsock" {
         return "ws2_32".into();
     }
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
+        return "setupapi".into();
+    }
+    // Installation de pilotes (DiInstallDriver, UpdateDriverForPlugAndPlay…,
+    // #1532) : servie par setupapi.
+    if base == "newdev" {
         return "setupapi".into();
     }
     // combase.dll (COM et Windows Runtime depuis Windows 8) : notre ole32.
@@ -1427,6 +1613,11 @@ pub fn normalize(dll: &str) -> String {
     // DPI par écran (Chromium, Electron) : shcore.
     if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
         return "shcore".into();
+    }
+    // Paramètres système et affichage (SystemParametersInfoW,
+    // GetSystemMetrics, EnumDisplayMonitors…) : user32 (#1604).
+    if base.starts_with("api-ms-win-ntuser-sysparams-") {
+        return "user32".into();
     }
     // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
     for (prefix, dll) in [
@@ -1459,6 +1650,12 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-power-") {
         return "powrprof".into();
     }
+    // Modèle d'application (GetPackageFamilyName, GetCurrentPackageId…) :
+    // fonctions de kernel32, qui répondent APPMODEL_ERROR_NO_PACKAGE
+    // (Spotify #1809, Acrobat, #1832).
+    if base.starts_with("api-ms-win-appmodel-runtime-l1-") {
+        return "kernel32".into();
+    }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
         || base == "kernelbase"
@@ -1467,10 +1664,19 @@ pub fn normalize(dll: &str) -> String {
     }
     // Security API-set contracts expose the same public security functions
     // implemented by our Advapi32 backend, rather than a separate disk DLL.
-    if base.starts_with("api-ms-win-security-base-l1-") {
+    if base.starts_with("api-ms-win-security-base-l1-")
+        || base.starts_with("api-ms-win-security-sddl-l1-")
+        || base.starts_with("api-ms-win-security-provider-l1-")
+        || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Contrats des services (service-core, -management, -winsvc) : les
+        // fonctions du gestionnaire de services d'advapi32 (#1823).
+        || base.starts_with("api-ms-win-service-")
+    {
         return "advapi32".into();
     }
-    if base.starts_with("api-ms-win-eventing-provider-l1-") {
+    if base.starts_with("api-ms-win-eventing-provider-l1-")
+        || base.starts_with("api-ms-win-eventing-controller-l1-")
+    {
         return "advapi32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
@@ -1581,6 +1787,16 @@ pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
 
+/// Fonctions de sécurité que KernelBase sert sous des contrats
+/// api-ms-win-core-* (processthreads, namedpipe) et que notre advapi32
+/// porte (Teams, #1767, #1817).
+const KERNELBASE_SECURITY: [&str; 4] = [
+    "OpenProcessToken",
+    "OpenThreadToken",
+    "SetThreadToken",
+    "ImpersonateNamedPipeClient",
+];
+
 pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let b = builtins().iter().find(|b| b.name == normalized)?;
     let r = b.exports.get(func).copied();
@@ -1594,7 +1810,9 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
         if normalized == "kernel32" {
             // KernelBase exporte aussi les Reg* (api-ms-win-core-registry).
             lookup("ntdll", func).or_else(|| {
-                func.starts_with("Reg")
+                // KernelBase sert aussi les Reg* (api-ms-win-core-registry)
+                // et les jetons du contrat processthreads (Teams, #1767).
+                (func.starts_with("Reg") || KERNELBASE_SECURITY.contains(&func))
                     .then(|| lookup("advapi32", func))
                     .flatten()
             })
@@ -1610,6 +1828,10 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
 /// (VLC appelait un pointeur resté nul, #495).
 pub const KERNELBASE_ONLY: &[&str] = &[
     "WaitOnAddress",
+    // Absentes de kernel32.dll, servies par KernelBase et les API-sets
+    // (api-ms-win-core-handle, -realtime) : Qt WebEngine (#1510).
+    "CompareObjectHandles",
+    "QueryUnbiasedInterruptTimePrecise",
     "WakeByAddressAll",
     "WakeByAddressSingle",
     // Douteux (#521) : user32 les exporte ; on les laisse visibles par
@@ -2147,6 +2369,108 @@ mod tests {
                 "kernel32",
                 "GetCurrentProcessId",
             ),
+            // Teams (#1767) : contrat sddl en entier et jetons de
+            // processthreads.
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertSidToStringSidW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSidToSidW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSecurityDescriptorToSecurityDescriptorW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertSecurityDescriptorToStringSecurityDescriptorW",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-0.dll",
+                "advapi32",
+                "OpenProcessToken",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-0.dll",
+                "advapi32",
+                "OpenThreadToken",
+            ),
+            // discord_utils.node (#1823).
+            (
+                "api-ms-win-security-sddl-ansi-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSecurityDescriptorToSecurityDescriptorA",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "OpenSCManagerW",
+            ),
+            (
+                "api-ms-win-service-management-l1-1-0.dll",
+                "advapi32",
+                "CloseServiceHandle",
+            ),
+            (
+                "api-ms-win-ntuser-sysparams-l1-1-0.dll",
+                "user32",
+                "SystemParametersInfoW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSidToSidW",
+            ),
+            // Teams (#1817) : contrat security-provider et
+            // ImpersonateNamedPipeClient sous namedpipe.
+            (
+                "api-ms-win-security-provider-l1-1-0.dll",
+                "advapi32",
+                "SetEntriesInAclW",
+            ),
+            (
+                "api-ms-win-core-namedpipe-l1-1-0.dll",
+                "advapi32",
+                "ImpersonateNamedPipeClient",
+            ),
+            // Teams (#1790) : contrat des contrôleurs de traces ETW.
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "EnableTraceEx2",
+            ),
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "StartTraceW",
+            ),
+            (
+                "api-ms-win-eventing-controller-l1-1-0.dll",
+                "advapi32",
+                "QueryAllTracesW",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-2.dll",
+                "advapi32",
+                "SetThreadToken",
+            ),
+            // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                "kernel32",
+                "GetPackageFamilyName",
+            ),
+            (
+                "api-ms-win-appmodel-runtime-l1-1-2.dll",
+                "kernel32",
+                "GetCurrentPackageId",
+            ),
         ] {
             let expected = lookup(host, symbol).expect("backend export must exist");
             assert_eq!(
@@ -2170,5 +2494,78 @@ mod tests {
             normalize("api-ms-win-security-unknown-l1-1-0.dll"),
             "api-ms-win-security-unknown-l1-1-0"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_contrats_spotify {
+    /// Spotify.dll (#1832) : fonctions documentées des contrats
+    /// appmodel-runtime, job-l2 et file-l2.
+    #[test]
+    fn contrats_appmodel_job_file_l2() {
+        let mut absentes = vec![];
+        for (contract, names) in [
+            (
+                "api-ms-win-appmodel-runtime-l1-1-0.dll",
+                &[
+                    "GetCurrentPackageFamilyName",
+                    "GetCurrentPackageFullName",
+                    "GetCurrentPackageId",
+                    "GetCurrentPackageInfo",
+                    "GetCurrentPackagePath",
+                    "GetPackageFamilyName",
+                    "GetPackageFullName",
+                    "GetPackageId",
+                    "GetPackageInfo",
+                    "GetPackagePath",
+                    "GetPackagesByPackageFamily",
+                    "OpenPackageInfoByFullName",
+                    "ClosePackageInfo",
+                    "PackageFamilyNameFromFullName",
+                    "PackageFamilyNameFromId",
+                    "PackageFullNameFromId",
+                    "PackageIdFromFullName",
+                    "PackageNameAndPublisherIdFromFamilyName",
+                    "GetApplicationUserModelId",
+                    "GetCurrentApplicationUserModelId",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-job-l2-1-0.dll",
+                &[
+                    "AssignProcessToJobObject",
+                    "CreateJobObjectW",
+                    "OpenJobObjectW",
+                    "QueryInformationJobObject",
+                    "SetInformationJobObject",
+                    "TerminateJobObject",
+                    "IsProcessInJob",
+                ][..],
+            ),
+            (
+                "api-ms-win-core-file-l2-1-0.dll",
+                &[
+                    "CopyFile2",
+                    "CopyFileExW",
+                    "CreateDirectoryExW",
+                    "CreateHardLinkW",
+                    "CreateSymbolicLinkW",
+                    "GetFileInformationByHandleEx",
+                    "MoveFileExW",
+                    "MoveFileWithProgressW",
+                    "OpenFileById",
+                    "ReadDirectoryChangesW",
+                    "ReplaceFileW",
+                ][..],
+            ),
+        ] {
+            let dll = super::normalize(contract);
+            for n in names {
+                if super::lookup(&dll, n).is_none() {
+                    absentes.push(format!("{contract}!{n}"));
+                }
+            }
+        }
+        assert!(absentes.is_empty(), "{absentes:?}");
     }
 }

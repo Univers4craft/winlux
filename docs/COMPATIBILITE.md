@@ -54,14 +54,28 @@ est vérifié entièrement (#235, `runtime/src/setup/appx_signature.rs`, calculs
 l'OpenSSL du système) : signature RSA ou ECDSA des attributs signés, `messageDigest`
 du `SpcIndirectDataContent`, condensats `AXBM` (block map, qui protège chaque
 fichier), `AXCT`, `AXCI`, `AXPC` et `AXCD` du paquet reçu, usage « signature de
-code » du certificat et chaîne jusqu'à une autorité du système. Entièrement vérifié,
+code » du certificat et chaîne jusqu'à une autorité du système ou à l'une des
+racines de signature de code de Microsoft (`CODE_ROOTS`, reconnues pour la signature
+de code seulement, jamais pour TLS, #1726). `AppxMetadata\CodeIntegrity.cat`,
+fichier d'empreinte absent du block map, est protégé par `AXCI` (#1725). Entièrement vérifié,
 il s'installe sans question ; signé par une autorité inconnue (certificat de test,
 autorité d'entreprise non installée) ou expiré, il passe par la même confirmation ;
 une signature fausse, au nom d'un autre éditeur, ou un paquet modifié après
 signature est refusé dans tous les cas.
 Pas encore : la contre-signature d'horodatage (un certificat expiré reste à confirmer),
-la révocation en ligne, les autorités de signature de code propres à Windows (absentes du
-magasin du système : un paquet du Store reste donc à confirmer), les paquets de ressources des bundles, et les paquets 32 bits (#232).
+la révocation en ligne, les autorités propres au Microsoft Store (paquets signés par le
+Store), les paquets de ressources des bundles, et les paquets 32 bits (#232).
+
+Applications livrées seulement en MSIX : le nouveau Microsoft Teams
+(MSTeams-x64.msix, lien hors ligne officiel sur Microsoft Learn ; teamsbootstrapper.exe
+passe par le `PackageManager` de Windows.Management.Deployment, pas encore fourni) et
+**WhatsApp Desktop**. Depuis fin 2025, WhatsApp pour Windows est un emballage WebView2
+publié seulement sur le Microsoft Store : whatsapp.com/download renvoie vers
+l'installeur du Store, et l'ancien installeur autonome de Meta (WhatsAppSetup.exe)
+n'est plus servi (relevé du 11 novembre 2026). Winlux n'implémente pas le protocole de
+distribution du Store, qui n'est pas documenté. WhatsApp attend donc un .msix obtenu
+par une voie officielle (par exemple `winget download` sur un Windows avec compte
+Entra), que l'installeur MSIX saura alors installer.
 Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
@@ -74,6 +88,131 @@ et écritures, OVERLAPPED compris, passent par un relais qui ajoute ou retire
 l'octet d'identifiant de rapport que Windows impose et que hidraw omet. La règle
 `integration/70-winlux-manettes.rules` ouvre les `/dev/hidraw*` des fabricants
 de manettes au groupe `input`. Test : `scripts/test-hid.sh`.
+`integration/71-winlux-eclairage.rules` (#1522) fait de même pour les
+fabricants de claviers, souris et casques à éclairage (Corsair, Razer, ASUS,
+MSI, HyperX, Cooler Master, Roccat, Turtle Beach, Glorious, Wooting, NZXT,
+ITE), et pour eux seulement : aucune règle générique, `/dev/bus/usb` et
+`/dev/uhid` restent fermés aux comptes.
+
+Depuis #1523, `hid.dll` sert aussi les logiciels de matériel (éclairage,
+souris, claviers, casques) et hidapi :
+- **une interface par collection de tête**, comme sous Windows : un clavier
+  RVB qui déclare une collection clavier et une collection fabricant
+  (`0xFF00`) donne deux chemins `…&mi_02&col01#…` et `…&col02#…`, chacun avec
+  ses capacités ; le relais ne transmet à une collection que ses propres
+  rapports d'entrée ;
+- **description complète** (`runtime/src/dlls/hid_report.rs`, d'après la
+  spécification HID 1.11 et `hidpi.h`) : `HidP_GetButtonCaps`,
+  `GetValueCaps`, `GetSpecific*Caps`, `GetLinkCollectionNodes`,
+  `GetUsages(Ex)`, `SetUsages`, `UnsetUsages`, `UsageListDifference`,
+  `GetUsageValue`, `GetScaledUsageValue`, `Get/SetUsageValueArray`,
+  `InitializeReportForID`, `GetData`, `SetData` ; les trames de couleurs
+  par touche passent octet pour octet ;
+- **ouverture sans droit d'accès** (`dwDesiredAccess = 0`) : réussit même
+  quand `/dev/hidrawN` est fermé à l'utilisateur, pour lire attributs,
+  chaînes et capacités ; les rapports restent refusés (ERROR_ACCESS_DENIED) ;
+- **chaînes USB** (fabricant, produit, numéro de série, version
+  `bcdDevice`, `HidD_GetIndexedString` pour leurs indices) lues dans sysfs ;
+- **propriétés unifiées** `CM_Get_DevNode_PropertyW`,
+  `CM_Get_Device_Interface_PropertyW`, `SetupDiGetDevicePropertyW`,
+  `SetupDiOpenDeviceInterfaceW` (identifiant d'instance, identifiants
+  matériels dont `HID_DEVICE_UP:xxxx_U:yyyy`, parent…) ;
+- **avis de branchement** : `RegisterDeviceNotification` envoie
+  `WM_DEVICECHANGE` (`DBT_DEVICEARRIVAL`, `DBT_DEVICEREMOVECOMPLETE` avec le
+  chemin d'interface, puis `DBT_DEVNODES_CHANGED`) (`runtime/src/dlls/devnotify.rs`).
+
+Test : `scripts/test-hid-rgb.sh` (faux clavier RVB USB à deux collections,
+120 trames de couleurs à plus de 60 par seconde).
+
+Depuis #1533, un logiciel constructeur qui ouvre son pilote par son nom
+(`CreateFileW("\\.\NomDuPilote")`, aussi `\\.\Global\…` et
+`\\?\GLOBALROOT\Device\…`) obtient un **appareil virtuel** de Winlux,
+jamais un pilote `.sys` (`runtime/src/dlls/vdev.rs`, #1531). Chaque appareil
+est un module de traduction inscrit par l'installation virtualisée (#1532) ou
+par la table de sa marque (#1534) ; `DeviceIoControl` lui est transmis,
+synchrone ou OVERLAPPED (événement signalé, paquet sur le port de
+complétion). Un code inconnu rend `ERROR_INVALID_FUNCTION` et une ligne de
+journal (`WINLUX_TRACE`) avec le nom, le code décodé (type, fonction,
+méthode, accès) et les tailles ; le contenu des tampons n'est écrit qu'avec
+`WINLUX_VDEV_DUMP=1`, pour les passes d'observation faites dans le cadre
+d'interopérabilité de `AGENTS.md`. Test : `scripts/test-vdev.sh` (appareil
+d'essai `WinluxEssai`, présent seulement avec `WINLUX_VDEV_ESSAI=1`).
+
+Passe d'observation (#1655) : avec `WINLUX_VDEV_OBSERVE={guid}[,{guid}…]`,
+Winlux présente un appareil `ROOT\WINLUX_OBSERVATION\000N` (classe System)
+portant chacune de ces interfaces. Un logiciel dont le pilote n'est pas
+chargé (macros d'iCUE : `{2abad0de-4ddc-4965-8d7a-7faf3b7f1d59}`, relevée
+par notre trace de `SetupDiGetClassDevs`) la trouve et l'ouvre ; ses
+`DeviceIoControl` et `WriteFile` sont acceptés sans effet et journalisés,
+contenu compris avec `WINLUX_VDEV_DUMP=1`. Rien n'est présenté sans la
+variable, et rien n'est exécuté : la traduction viendra de ce journal.
+
+Depuis #1532, un installeur qui pose un pilote réussit sans qu'aucun `.sys`
+ne soit chargé (`runtime/src/dlls/drivers.rs`) : `SetupCopyOEMInf` copie le
+`.inf` dans `C:\Windows\INF\oemN.inf` (même contenu, même nom),
+`DiInstallDriver` et `UpdateDriverForPlugAndPlayDevices` (newdev.dll, appareil
+présent exigé sinon `ERROR_NO_SUCH_DEVINST`) inscrivent les services
+`AddService` du `.inf`. Un service `SERVICE_KERNEL_DRIVER` n'est jamais lancé
+comme un programme : s'il existe une traduction pour son `.sys` (table par
+marque, #1534), « démarrer » le service fait apparaître l'appareil virtuel qui
+le remplace et la personne lit « Le pilote Windows de X a été remplacé par
+Winlux » ; sinon le service reste arrêté avec `ERROR_DRIVER_BLOCKED` (1275) et
+une notification le dit, en français, anglais, allemand ou espagnol. Test :
+`scripts/test-drivers.sh`.
+
+Depuis #1605, un installeur qui crée lui-même son appareil racine (comme
+`devcon install`) va jusqu'au bout : `SetupDiCreateDeviceInfo` (avec
+`DICD_GENERATE_ID`, identifiant `ROOT\NOM\0000`),
+`SetupDiSetDeviceRegistryProperty(SPDRP_HARDWAREID)` puis
+`SetupDiCallClassInstaller(DIF_REGISTERDEVICE)` inscrivent l'appareil sous
+`HKLM\SYSTEM\CurrentControlSet\Enum\ROOT`, où `CM_Locate_DevNode` et
+`UpdateDriverForPlugAndPlayDevices` le trouvent. `DIF_REMOVE`,
+`SetupDiRemoveDevice` et `CM_Request_Device_EjectW` le retirent (un vrai
+appareil refuse l'éjection, `CR_REMOVE_VETOED`). `CMP_WaitNoPendingInstallEvents`
+répond tout de suite : aucune installation n'est jamais en attente.
+
+Depuis #1625, les outils d'installation de pilotes des constructeurs
+(`driverinstalltool_64.exe` d'iCUE, devcon) trouvent le reste de setupapi
+et de cfgmgr32 (`runtime/src/dlls/setupinf.rs`) : lecture des `.inf`
+(`SetupOpenInfFile`, `SetupFindFirstLine`, `SetupGetStringField`), listes de
+pilotes tirées de `[Manufacturer]` et des sections de modèles `NTamd64`
+(`SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfo`,
+`SetupDiGetDriverInfoDetail`, avec `DI_ENUMSINGLEINF`), paramètres
+d'installation, classes connues, variantes `_Ex` de cfgmgr32 (machine locale
+seulement) et `DiUninstallDevice`. Une file de copie reste vide : aucun
+fichier de pilote n'est copié vers `System32\drivers`, et aucun appareil
+n'expose de configuration logique (`CR_NO_MORE_LOG_CONF`).
+
+Depuis #1656, setupapi remplit ses structures à la taille de l'appelant : en
+x86, setupapi.h est en `pack(1)` et ses champs `ULONG_PTR` font 4 octets
+(SP_DEVINFO_DATA et SP_DEVICE_INTERFACE_DATA de 28 octets, INFCONTEXT de 16,
+SP_DEVINSTALL_PARAMS_W de 556, SP_DRVINFO_DATA_V2_W de 1564). Écrire le champ
+`Reserved` sur 8 octets débordait sur la pile d'un programme 32 bits et
+déclenchait son contrôle /GS (action DriversInstall d'iCUE). Test :
+`scripts/test-setupapi32.sh`. Avec `WINLUX_APITRACE`, chaque
+`SetupDiGetClassDevs` est journalisé (classe ou interface, drapeaux, nombre
+d'éléments) pour observer ce qu'un logiciel cherche.
+
+Saisie simulée (#1683) : `SendInput`, `keybd_event` et `mouse_event` tapent
+dans la session X du compte par l'extension XTEST, en x64 (INPUT de 40
+octets) comme en x86 (28 octets). Les touches virtuelles suivent la
+disposition du clavier, les caractères `KEYEVENTF_UNICODE` passent par leur
+keysym (Maj ajouté si besoin, sinon un keycode libre réaffecté), les codes de
+balayage par le code noyau (+8), les clics, boutons latéraux et molettes par
+les boutons X. Aucun périphérique du noyau n'est créé (`/dev/uhid` reste
+fermé). La première fois, Winlux demande « Autoriser « app » à taper au
+clavier et à piloter la souris à votre place ? » (refus possible, révocable
+dans Paramètres > Confidentialité et sécurité ; sans réponse possible, c'est
+non), et rien n'est tapé tant que l'écran de verrouillage est affiché.
+Test : `scripts/test-sendinput.sh` (Xvfb). Les macros d'iCUE (#1655) s'y
+brancheront.
+Depuis #1696, la saisie et les fenêtres de consentement (`winlux-permission
+ask`, `winlux-uac`) partagent un verrou par affichage
+(`/tmp/winlux-consent-<n>.lock`, jamais à travers un lien symbolique ni
+posé par un autre compte) : la fenêtre le prend en exclusif avant de
+s'afficher, la saisie en partagé du contrôle jusqu'à la fin de l'envoi.
+Une fenêtre de consentement ne reçoit donc jamais de saisie simulée, et
+le clavier tactile comme le Bureau à distance y fonctionnent toujours.
 
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
@@ -652,6 +791,43 @@ Microsoft Store (paquet MSIX), que Winlux sait déjà installer.
   FACEIT) et **pilotes Windows** (`.sys` : VPN, imprimantes, matériel) : ils
   exigent le noyau Windows. Les jeux en ligne qui les imposent ne tourneront
   pas, sauf si l'éditeur active le mode Linux de son anti-triche.
+  Ceux de la liste ci-dessous sont même refusés dès l'installation (#1720).
+
+### Anti-triche noyau : installation refusée (#1720)
+
+Un anti-triche noyau atteste qu'il tourne sur un vrai noyau Windows. Sous
+Winlux, qui ne charge aucun pilote `.sys`, il risquerait de conclure à une
+triche et de faire suspendre le compte du joueur. Winlux refuse donc
+d'installer les logiciels qui en embarquent un, **avant de poser quoi que ce
+soit**, avec un message dans la langue de l'interface (fr/en/de/es) qui
+nomme le logiciel, donne la raison et précise que ce n'est pas une panne de
+Winlux. Aucune adaptation, rétro-ingénierie ni contournement de
+l'anti-triche n'est tenté.
+
+La détection porte sur la présence de l'anti-triche, jamais sur le nom
+d'un jeu :
+- un pilote de la liste posé à côté du programme, ou présent dans la
+  table File d'un paquet MSI ;
+- un programme d'installation de l'éditeur qui pose la protection ;
+- en dernier recours, la création d'un service pilote de la liste
+  (refus d'accès et même message).
+
+| Protection | Éditeur | Pilotes | Programmes | Source publique |
+|---|---|---|---|---|
+| Riot Vanguard | Riot Games | `vgk.sys` | `Install League of Legends*.exe`, `Install VALORANT*.exe`, `RiotClientServices.exe` | articles Vanguard de support-valorant.riotgames.com |
+| Roblox Hyperion | Roblox | — | `RobloxPlayerInstaller*.exe`, `RobloxPlayerLauncher.exe`, `RobloxPlayerBeta.exe` | aide de Roblox ; protection annoncée par Roblox en 2023 |
+| FACEIT Anti-Cheat | FACEIT | `faceit.sys` | — | support.faceit.com |
+| XIGNCODE3 | Wellbia | `xhunter1.sys` | — | avis de sécurité publics |
+| mhyprot | miHoYo / HoYoverse | `mhyprot2.sys`, `mhyprot3.sys` | — | avis de sécurité publics (2022) |
+
+Roblox Studio n'est pas concerné. La liste vit dans `runtime/src/anticheat.rs`,
+et toute entrée ajoutée doit citer sa source.
+
+**Easy Anti-Cheat et BattlEye ne sont pas dans la liste.** Leurs éditeurs
+peuvent activer, jeu par jeu, une prise en charge Linux : c'est la seule
+voie légitime pour les jeux protégés, et un jeu innocent ne doit pas être
+bloqué. Que Winlux puisse profiter de ce mode Linux reste à vérifier jeu par
+jeu ; sans lui, leur pilote est simplement bloqué comme tout `.sys`.
 - **Antivirus** : exclu par choix du projet.
 - **Applis du Microsoft Store (UWP/MSIX, WinRT, AppContainer)** : possibles à
   très long terme, mais pas un objectif tant que le bureau Win32 n'est pas

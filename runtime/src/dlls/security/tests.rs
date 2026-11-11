@@ -333,3 +333,105 @@ fn privileges_du_jeton_et_ace_obligatoire() {
         FreeSid(low.cast());
     }
 }
+
+/// Comptes bien connus résolus comme sous Windows (#1639) : WiX
+/// (WixQueryOsWellKnownSID) les cherche avant d'écrire des ACL.
+#[test]
+fn comptes_bien_connus_resolus() {
+    for (kind, name, domain, use_) in [
+        (23u32, "LOCAL SERVICE", "NT AUTHORITY", 5u32),
+        (24, "NETWORK SERVICE", "NT AUTHORITY", 5),
+        (28, "Guests", "BUILTIN", 4),
+        (58, "Performance Log Users", "BUILTIN", 4),
+    ] {
+        let mut sid = [0u8; 68];
+        let mut size = sid.len() as u32;
+        assert_eq!(
+            unsafe { CreateWellKnownSid(kind, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+            1,
+            "{kind}"
+        );
+        let (mut n, mut d) = ([0u16; 64], [0u16; 64]);
+        let (mut nl, mut dl, mut u) = (64u32, 64u32, 0u32);
+        let ok = unsafe {
+            LookupAccountSidW(
+                std::ptr::null(),
+                sid.as_ptr(),
+                n.as_mut_ptr(),
+                &mut nl,
+                d.as_mut_ptr(),
+                &mut dl,
+                &mut u,
+            )
+        };
+        assert_eq!(ok, 1, "{kind}");
+        assert_eq!(String::from_utf16_lossy(&n[..nl as usize]), name);
+        assert_eq!(String::from_utf16_lossy(&d[..dl as usize]), domain);
+        assert_eq!(u, use_);
+    }
+}
+
+/// SECURITY_DESCRIPTOR absolu d'un programme x86 : 20 octets, pointeurs sur
+/// 4 octets aux décalages 4, 8, 12, 16. Rien n'est écrit au-delà
+/// (SteamService.exe, #1881).
+#[test]
+fn descripteur_absolu_x86_tient_dans_20_octets() {
+    assert_eq!((absolute_sd_size(4), absolute_sd_size(8)), (20, 40));
+    assert_eq!(
+        [4, 8, 12, 16].map(|f| abs_slot(f, 4)),
+        [4, 8, 12, 16],
+        "x86 : même place que l'auto-relatif"
+    );
+    assert_eq!([4, 8, 12, 16].map(|f| abs_slot(f, 8)), [8, 16, 24, 32]);
+    let mut buf = [0xAAu8; 28];
+    unsafe {
+        write_abs_slot_for(buf.as_mut_ptr(), 16, 0x1234_5678usize as *mut u8, 4);
+    }
+    assert_eq!(&buf[16..20], &0x1234_5678u32.to_le_bytes());
+    assert!(
+        buf[20..].iter().all(|&b| b == 0xAA),
+        "rien après la DACL x86"
+    );
+}
+
+/// Acrobat (#1828) : le descripteur d'un jeton demandé avec
+/// LABEL_SECURITY_INFORMATION porte une SACL et son étiquette d'intégrité.
+#[test]
+fn descripteur_du_jeton_porte_l_etiquette_d_integrite() {
+    unsafe {
+        let mut needed = 0u32;
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, std::ptr::null_mut(), 0, &mut needed),
+            0
+        );
+        let mut buf = vec![0u8; needed as usize];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, buf.as_mut_ptr(), needed, &mut needed),
+            1
+        );
+        let (mut present, mut defaulted) = (0i32, 0i32);
+        let mut sacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            crate::dlls::chromium_win32::GetSecurityDescriptorSacl(
+                buf.as_ptr(),
+                &mut present,
+                &mut sacl,
+                &mut defaulted
+            ),
+            1
+        );
+        assert_eq!(present, 1);
+        assert!(!sacl.is_null());
+        assert_eq!(std::ptr::read_unaligned(sacl.add(4) as *const u16), 1); // AceCount
+        assert_eq!(*sacl.add(8), 0x11); // SYSTEM_MANDATORY_LABEL_ACE_TYPE
+        let sid = std::slice::from_raw_parts(sacl.add(16), 12);
+        let text = sid_text(sid).unwrap();
+        assert!(text == "S-1-16-8192" || text == "S-1-16-12288", "{text}");
+        let mut buf = vec![0u8; 256];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 4, buf.as_mut_ptr(), 256, &mut needed),
+            1
+        );
+        assert_eq!(u16::from_le_bytes([buf[2], buf[3]]) & 0x10, 0);
+    }
+}

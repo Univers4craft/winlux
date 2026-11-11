@@ -70,6 +70,10 @@ import re  # noqa: E402
 for script in ("scripts/build-live-iso.sh", "scripts/install.sh", "scripts/winlux-installer.py", "scripts/winlux-reset.py"):
     text = (project / script).read_text()
     assert "set winlux_efi_args=efi=noruntime" in text, script
+    # #1852 : sans pilote vidéo GRUB sur efi-i386, « Booting in blind mode » et
+    # aucun framebuffer pour le noyau (Xorg : « no screens found »).
+    assert text.count("insmod efi_gop") == text.count("set winlux_efi_args=efi=noruntime"), script
+    assert text.count("set gfxpayload=keep") == text.count("set winlux_efi_args=efi=noruntime"), script
     lines = [line for line in text.splitlines() if re.match(r"\s*(f')?\s*linux [^ ]*vmlinuz", line)]
     assert lines and all("winlux_efi_args" in line for line in lines), (script, [line for line in lines if "winlux_efi_args" not in line])
 assert 'ia32_loader "$iso_root"' in (project / "scripts/winlux-secureboot.sh").read_text()

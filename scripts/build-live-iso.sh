@@ -132,12 +132,14 @@ cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.
 # Catalogues ajoutés à la main par l'administrateur (aucun livré).
 mkdir -p "$stage/etc/winlux/store-sources.d"
 # Boutiques tierces proposées (docs/BOUTIQUES.md) : seulement leur description ;
-# rien n'est téléchargé avant le choix de l'utilisateur, aucune n'est cochée.
+# rien n'est téléchargé avant le choix de l'utilisateur, Flathub est proposé coché, décochable.
 cp "$root/scripts/winlux-store-catalogs.py" "$stage/usr/bin/winlux-store-catalogs"
 cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalogs.json"
 # Logiciels publiés pour Linux par leur éditeur (#1056) : seulement leur
 # description ; téléchargés chez l'éditeur après confirmation, jamais dans l'ISO.
 cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeurs.json"
+# Programmes .exe testés sur Winlux (#1515) : fiches épinglées, rien de téléchargé.
+cp "$root/integration/store-windows-valides.json" "$stage/usr/share/winlux/store-windows-valides.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
 install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
@@ -536,6 +538,8 @@ cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
 # Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
 mkdir -p "$stage/etc/udev/rules.d"
 cp "$root/integration/70-winlux-manettes.rules" "$stage/etc/udev/rules.d/70-winlux-manettes.rules"
+# Logiciels d'éclairage, claviers, souris et casques (#1522) : fabricants listés.
+cp "$root/integration/71-winlux-eclairage.rules" "$stage/etc/udev/rules.d/71-winlux-eclairage.rules"
 # Type MIME pour les .exe.
 mkdir -p "$stage/usr/share/mime/packages"
 cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
@@ -867,6 +871,23 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
+# Dossiers personnels (#1722) : jamais inscriptibles par le groupe ni par les
+# autres. Un installeur .exe avait ouvert l'un d'eux en drwx-w--w- (C:\ est
+# le dossier personnel) ; un dossier ouvert ainsi est remis en 0700 à chaque
+# démarrage, y compris sur un système déjà installé. Un dossier qui
+# n'appartient pas au compte, ou un lien symbolique, n'est pas touché.
+/bin/busybox awk -F: '$3 >= 1000 && $3 < 60000 { print $3 ":" $6 }' /etc/passwd 2>/dev/null |
+    while IFS=: read -r home_uid home_dir; do
+        case "$home_dir" in /home/?*) ;; *) continue ;; esac
+        case "$home_dir" in *..*) continue ;; esac
+        test -d "$home_dir" && ! test -L "$home_dir" || continue
+        test "$(/bin/busybox stat -c %u "$home_dir")" = "$home_uid" || continue
+        home_mode=$(/bin/busybox stat -c %a "$home_dir")
+        if test $((0$home_mode & 022)) -ne 0; then
+            /bin/busybox chmod 700 "$home_dir" &&
+                echo "Winlux : dossier personnel $home_dir en $home_mode, remis en 700 (#1722)"
+        fi
+    done
 # Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
@@ -929,7 +950,7 @@ fi
 if test -s /etc/winlux/first-boot-browser; then
     (
         choice=$(/bin/busybox sed -n '1p' /etc/winlux/first-boot-browser)
-        case "$choice" in chrome|edge|firefox) ;; *) exit 0 ;; esac
+        case "$choice" in brave|chrome|edge|firefox|opera|operagx|tor|vivaldi) ;; *) exit 0 ;; esac
         for attempt in $(/bin/busybox seq 1 120); do
             /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
             /bin/busybox sleep 5
@@ -951,7 +972,7 @@ if test -s /etc/winlux/browser-install-pending; then
         done
         low=
         if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
-        for choice in $(/bin/busybox grep -E '^(chrome|edge|firefox)$' /etc/winlux/browser-install-pending); do
+        for choice in $(/bin/busybox grep -E '^(brave|chrome|edge|firefox|opera|operagx|tor|vivaldi)$' /etc/winlux/browser-install-pending); do
             $low /usr/bin/winlux-browsers --install "$choice" || true
         done
     ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
@@ -1215,6 +1236,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         test -x /usr/bin/prlimit && session_limits='/usr/bin/prlimit --rtprio=20 --nice=31'
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             session_started=$(/bin/busybox date +%s)
+            logged_off=0
             # setsid : la session a son groupe de processus, arrêté d'un bloc.
             # prlimit : priorité temps réel (20) et nice jusqu'à -11 pour
             # PipeWire, sans RTKit (pas de systemd) : le son ne grésille plus
@@ -1238,6 +1260,17 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             while /bin/busybox kill -0 "$session_pid" 2>/dev/null; do
                 request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
                 update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+                # « Se déconnecter » (#1564) : la session se ferme, applications
+                # comprises, et la suivante s'ouvre sur l'écran de connexion.
+                if test "$request" = logoff-session; then
+                    /bin/busybox rm -f /run/winlux/session-action
+                    lock_at_start=1
+                    logged_off=1
+                    /bin/busybox kill -TERM "-$session_pid" 2>/dev/null || /bin/busybox kill "$session_pid" 2>/dev/null || true
+                    /bin/busybox sleep 2
+                    /bin/busybox kill -KILL "-$session_pid" 2>/dev/null || true
+                    break
+                fi
                 if test "$request" = restart-session && ! /usr/bin/winlux-update --busy; then
                     /bin/busybox rm -f /run/winlux/session-action
                     if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
@@ -1251,7 +1284,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             wait "$session_pid" 2>/dev/null || true
             # Un bureau qui ne tient pas : après trois échecs rapides, une
             # version tout juste installée est remplacée par la précédente.
-            if test $(( $(/bin/busybox date +%s) - session_started )) -lt 20; then
+            # Une déconnexion demandée n'est pas un échec (#1564).
+            if test "$logged_off" = 1; then
+                quick_exits=0
+            elif test $(( $(/bin/busybox date +%s) - session_started )) -lt 20; then
                 quick_exits=$((quick_exits + 1))
                 if test "$quick_exits" -ge 3; then
                     /bin/busybox tail -n 40 "/run/winlux/session-$desktop_user.log" >&2
@@ -1424,6 +1460,11 @@ set default=1
 set winlux_efi_args=
 if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
     set winlux_efi_args=efi=noruntime
+    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
+    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
+    insmod efi_gop
+    insmod efi_uga
+    set gfxpayload=keep
 fi
 # 5 s : le temps de lire le menu et d'appuyer sur une flèche sur un vrai PC.
 set timeout=5

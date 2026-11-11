@@ -52,11 +52,13 @@ def _t(text, **values):
     return text.format(**values) if values else text
 
 
-CATALOGUE = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+CATALOGUE = {"brave": "Brave", "chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox",
+             "opera": "Opera", "operagx": "Opera GX", "tor": "Tor Browser", "vivaldi": "Vivaldi"}
 SYSTEM = {"firefox": "Mozilla Firefox", "chromium": "Chromium", "chromium-browser": "Chromium",
           "google-chrome-stable": "Google Chrome", "microsoft-edge-stable": "Microsoft Edge",
           "microsoft-edge": "Microsoft Edge"}
-ICONS = {"chrome": "google-chrome", "edge": "microsoft-edge", "firefox": "firefox",
+ICONS = {"brave": "brave-browser", "chrome": "google-chrome", "edge": "microsoft-edge", "firefox": "firefox",
+         "opera": "opera", "operagx": "opera-gx", "tor": "torbrowser", "vivaldi": "vivaldi",
          "chromium": "chromium", "chromium-browser": "chromium",
          "google-chrome-stable": "google-chrome", "microsoft-edge-stable": "microsoft-edge"}
 

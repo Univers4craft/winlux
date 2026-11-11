@@ -51,6 +51,9 @@ const TKIND_MAX: u32 = 8;
 
 // VARTYPE
 const VT_I4: u16 = 3;
+const VT_BSTR: u16 = 8;
+const VT_DISPATCH: u16 = 9;
+const VT_VARIANT: u16 = 12;
 const VT_UI2: u16 = 18;
 const VT_UI4: u16 = 19;
 const VT_INT: u16 = 22;
@@ -64,7 +67,10 @@ const VT_USERDEFINED: u16 = 29;
 const VT_ARRAY: u16 = 0x2000;
 const VT_BYREF: u16 = 0x4000;
 
+const PARAMFLAG_FIN: u16 = 0x1;
+const PARAMFLAG_FOUT: u16 = 0x2;
 const PARAMFLAG_FRETVAL: u16 = 0x8;
+const PARAMFLAG_FOPT: u16 = 0x10;
 const PARAMFLAG_FHASDEFAULT: u16 = 0x20;
 
 const FUNC_VIRTUAL: u32 = 0;
@@ -73,6 +79,7 @@ const FUNCFLAG_FRESTRICTED: u16 = 1;
 const VAR_CONST: u32 = 2;
 const TYPEFLAG_FHIDDEN: u16 = 0x10;
 const TYPEFLAG_FDUAL: u16 = 0x40;
+const TYPEFLAG_FOLEAUTOMATION: u16 = 0x100;
 const TYPEFLAG_FDISPATCHABLE: u16 = 0x1000;
 const SYS_WIN64: u32 = 3;
 
@@ -96,6 +103,20 @@ const IID_ICREATETYPEINFO2: Guid = ole_guid(0x0002_040E);
 const IID_ICREATETYPELIB2: Guid = ole_guid(0x0002_040F);
 /// Bibliothèque standard OLE Automation (stdole2.tlb).
 pub const LIBID_STDOLE: Guid = ole_guid(0x0002_0430);
+/// Bibliothèque « Accessibility » d'oleacc (IAccessible), version 1.1 :
+/// GUID publics d'oleacc.h (mingw-w64).
+pub const LIBID_ACCESSIBILITY: Guid = Guid {
+    data1: 0x1ea4_dbf0,
+    data2: 0x3c3b,
+    data3: 0x11cf,
+    data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+};
+const IID_IACCESSIBLE: Guid = Guid {
+    data1: 0x6187_36e0,
+    data2: 0x3c3d,
+    data3: 0x11cf,
+    data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+};
 
 // ── Données ────────────────────────────────────────────────────────
 
@@ -2050,6 +2071,237 @@ fn stdole() -> usize {
     })
 }
 
+/// Méthode d'IAccessible : HRESULT, paramètres (nom, type, PARAMFLAG).
+fn acc_func(name: &str, params: &[(&str, TypeDesc, u16)], memid: i32, invkind: u32) -> Func {
+    let mut names = vec![name.to_string()];
+    names.extend(params.iter().map(|(n, _, _)| n.to_string()));
+    Func {
+        memid,
+        funckind: FUNC_PUREVIRTUAL,
+        invkind,
+        callconv: 4, // CC_STDCALL
+        params: params
+            .iter()
+            .map(|(_, td, flags)| Elem {
+                td: td.clone(),
+                flags: *flags,
+                default: None,
+            })
+            .collect(),
+        ret: Elem {
+            td: TypeDesc::plain(VT_HRESULT),
+            ..Default::default()
+        },
+        names,
+        ..Default::default()
+    }
+}
+
+/// Bibliothèque « Accessibility » 1.1 (#1837) : l'interface double
+/// IAccessible, dans l'ordre de sa table de méthodes et avec ses DISPID
+/// (DISPID_ACC_PARENT = -5000 … DISPID_ACC_DODEFAULTACTION = -5018), d'après
+/// oleacc.idl / oleacc.h (mingw-w64) et la documentation d'IAccessible.
+/// WinForms en lit l'ITypeInfo (LoadRegTypeLib puis GetTypeInfoOfGuid) pour
+/// l'IDispatch de ses objets accessibles ; sans elle, la première
+/// infobulle clavier levait TYPE_E_LIBNOTREGISTERED (Paint.NET).
+fn accessibility() -> usize {
+    static LIB: OnceLock<usize> = OnceLock::new();
+    *LIB.get_or_init(|| unsafe {
+        // IDispatch de stdole : base d'IAccessible, référence tenue.
+        let std = &*(stdole() as *const LibObj);
+        let disp = {
+            let d = lock(std);
+            tinfo_ptr(d.infos.iter().find(|e| e.d.guid == IID_IDISPATCH).unwrap())
+        };
+        lib_add_ref(std);
+        let lib = new_lib(LibData {
+            name: "Accessibility".into(),
+            guid: LIBID_ACCESSIBILITY,
+            major: 1,
+            minor: 1,
+            file: "C:\\Windows\\System32\\oleacc.dll".into(),
+            ..Default::default()
+        });
+        let l = &*lib;
+        let mut d = lock(l);
+        let child = || TypeDesc::plain(VT_VARIANT);
+        let out = |vt: u16| TypeDesc::ptr(TypeDesc::plain(vt));
+        let (opt, ret, o) = (
+            PARAMFLAG_FIN | PARAMFLAG_FOPT,
+            PARAMFLAG_FOUT | PARAMFLAG_FRETVAL,
+            PARAMFLAG_FOUT,
+        );
+        const GET: u32 = 2;
+        const PUT: u32 = 4;
+        const CALL: u32 = 1;
+        // Propriétés « varChild → chaîne » : name, value, description, help,
+        // keyboardShortcut, defaultAction.
+        let bstr_prop = |name: &str, memid: i32| {
+            acc_func(
+                name,
+                &[("varChild", child(), opt), ("pszResult", out(VT_BSTR), ret)],
+                memid,
+                GET,
+            )
+        };
+        let funcs = vec![
+            acc_func(
+                "accParent",
+                &[("ppdispParent", out(VT_DISPATCH), ret)],
+                -5000,
+                GET,
+            ),
+            acc_func(
+                "accChildCount",
+                &[("pcountChildren", out(VT_I4), ret)],
+                -5001,
+                GET,
+            ),
+            acc_func(
+                "accChild",
+                &[
+                    ("varChild", child(), PARAMFLAG_FIN),
+                    ("ppdispChild", out(VT_DISPATCH), ret),
+                ],
+                -5002,
+                GET,
+            ),
+            bstr_prop("accName", -5003),
+            bstr_prop("accValue", -5004),
+            bstr_prop("accDescription", -5005),
+            acc_func(
+                "accRole",
+                &[
+                    ("varChild", child(), opt),
+                    ("pvarRole", out(VT_VARIANT), ret),
+                ],
+                -5006,
+                GET,
+            ),
+            acc_func(
+                "accState",
+                &[
+                    ("varChild", child(), opt),
+                    ("pvarState", out(VT_VARIANT), ret),
+                ],
+                -5007,
+                GET,
+            ),
+            bstr_prop("accHelp", -5008),
+            acc_func(
+                "accHelpTopic",
+                &[
+                    ("pszHelpFile", out(VT_BSTR), o),
+                    ("varChild", child(), opt),
+                    ("pidTopic", out(VT_I4), ret),
+                ],
+                -5009,
+                GET,
+            ),
+            bstr_prop("accKeyboardShortcut", -5010),
+            acc_func(
+                "accFocus",
+                &[("pvarChild", out(VT_VARIANT), ret)],
+                -5011,
+                GET,
+            ),
+            acc_func(
+                "accSelection",
+                &[("pvarChildren", out(VT_VARIANT), ret)],
+                -5012,
+                GET,
+            ),
+            bstr_prop("accDefaultAction", -5013),
+            acc_func(
+                "accSelect",
+                &[
+                    ("flagsSelect", TypeDesc::plain(VT_I4), PARAMFLAG_FIN),
+                    ("varChild", child(), opt),
+                ],
+                -5014,
+                CALL,
+            ),
+            acc_func(
+                "accLocation",
+                &[
+                    ("pxLeft", out(VT_I4), o),
+                    ("pyTop", out(VT_I4), o),
+                    ("pcxWidth", out(VT_I4), o),
+                    ("pcyHeight", out(VT_I4), o),
+                    ("varChild", child(), opt),
+                ],
+                -5015,
+                CALL,
+            ),
+            acc_func(
+                "accNavigate",
+                &[
+                    ("navDir", TypeDesc::plain(VT_I4), PARAMFLAG_FIN),
+                    ("varStart", child(), opt),
+                    ("pvarEndUpAt", out(VT_VARIANT), ret),
+                ],
+                -5016,
+                CALL,
+            ),
+            acc_func(
+                "accHitTest",
+                &[
+                    ("xLeft", TypeDesc::plain(VT_I4), PARAMFLAG_FIN),
+                    ("yTop", TypeDesc::plain(VT_I4), PARAMFLAG_FIN),
+                    ("pvarChild", out(VT_VARIANT), ret),
+                ],
+                -5017,
+                CALL,
+            ),
+            acc_func(
+                "accDoDefaultAction",
+                &[("varChild", child(), opt)],
+                -5018,
+                CALL,
+            ),
+            acc_func(
+                "accName",
+                &[
+                    ("varChild", child(), opt),
+                    ("szName", TypeDesc::plain(VT_BSTR), PARAMFLAG_FIN),
+                ],
+                -5003,
+                PUT,
+            ),
+            acc_func(
+                "accValue",
+                &[
+                    ("varChild", child(), opt),
+                    ("szValue", TypeDesc::plain(VT_BSTR), PARAMFLAG_FIN),
+                ],
+                -5004,
+                PUT,
+            ),
+        ];
+        let acc = push_info(
+            l,
+            &mut d,
+            InfoData {
+                name: "IAccessible".into(),
+                kind: TKIND_INTERFACE,
+                guid: IID_IACCESSIBLE,
+                flags: TYPEFLAG_FHIDDEN
+                    | TYPEFLAG_FDUAL
+                    | TYPEFLAG_FOLEAUTOMATION
+                    | TYPEFLAG_FDISPATCHABLE,
+                align: 8,
+                funcs,
+                refs: vec![(disp, true)],
+                impls: vec![(HREF_BASE, 0)],
+                ..Default::default()
+            },
+        );
+        layout(&mut d, acc);
+        drop(d);
+        lib as usize
+    })
+}
+
 /// Bibliothèques inscrites par RegisterTypeLib (processus seulement).
 fn registered() -> &'static Mutex<Vec<(Guid, u16, u16, String, usize)>> {
     static R: Mutex<Vec<(Guid, u16, u16, String, usize)>> = Mutex::new(Vec::new());
@@ -2072,6 +2324,11 @@ pub unsafe fn load_by_path(path: &str) -> Option<usize> {
         lib_add_ref(&*(lib as *const LibObj));
         return Some(lib + 8);
     }
+    if base == "oleacc.dll" {
+        let lib = accessibility();
+        lib_add_ref(&*(lib as *const LibObj));
+        return Some(lib + 8);
+    }
     let r = registered().lock().unwrap_or_else(|e| e.into_inner());
     let &(_, _, _, _, lib) = r
         .iter()
@@ -2084,6 +2341,11 @@ pub unsafe fn load_by_path(path: &str) -> Option<usize> {
 pub unsafe fn load_registered(guid: &Guid, major: u16) -> Option<usize> {
     if *guid == LIBID_STDOLE && (major == 1 || major == 2) {
         let lib = stdole();
+        lib_add_ref(&*(lib as *const LibObj));
+        return Some(lib + 8);
+    }
+    if *guid == LIBID_ACCESSIBILITY && major == 1 {
+        let lib = accessibility();
         lib_add_ref(&*(lib as *const LibObj));
         return Some(lib + 8);
     }
@@ -2100,6 +2362,9 @@ pub unsafe fn load_registered(guid: &Guid, major: u16) -> Option<usize> {
 pub fn registered_path(guid: &Guid, major: u16) -> Option<String> {
     if *guid == LIBID_STDOLE && (major == 1 || major == 2) {
         return Some("C:\\Windows\\System32\\stdole2.tlb".into());
+    }
+    if *guid == LIBID_ACCESSIBILITY && major == 1 {
+        return Some("C:\\Windows\\System32\\oleacc.dll".into());
     }
     let r = registered().lock().unwrap_or_else(|e| e.into_inner());
     r.iter()
@@ -2130,6 +2395,28 @@ pub unsafe fn register(tlib: usize, path: &str) -> Option<i32> {
         .unwrap_or_else(|e| e.into_inner())
         .push((guid, major, minor, file, lib as *const LibObj as usize));
     Some(S_OK)
+}
+
+/// UnRegisterTypeLib : retire l'inscription de cette version pour le
+/// processus. Faux si elle n'était pas inscrite.
+pub unsafe fn unregister(guid: &Guid, major: u16, minor: u16) -> bool {
+    let removed: Vec<usize> = {
+        let mut r = registered().lock().unwrap_or_else(|e| e.into_inner());
+        let mut out = Vec::new();
+        r.retain(|(g, maj, min, _, lib)| {
+            if g == guid && *maj == major && *min == minor {
+                out.push(*lib);
+                false
+            } else {
+                true
+            }
+        });
+        out
+    };
+    for lib in &removed {
+        lib_release(*lib as *const LibObj);
+    }
+    !removed.is_empty()
 }
 
 /// Résultat de LoadTypeLib quand rien n'est trouvé.
@@ -2456,6 +2743,91 @@ mod tests {
             slot::<Hr0>(ctl, 2)(ctl);
             slot::<Hr0>(disp_ti, 2)(disp_ti);
             slot::<Hr0>(stdole_tl, 2)(stdole_tl);
+        }
+    }
+
+    unsafe extern "win64" fn trois_enfants(_this: usize, n: *mut i32) -> i32 {
+        *n = 3;
+        0
+    }
+
+    /// #1837 : la bibliothèque « Accessibility » 1.1 donne l'ITypeInfo
+    /// d'IAccessible (WinForms, AccessibleDispatch), avec la table de
+    /// méthodes et les DISPID publics ; Invoke atteint la bonne méthode.
+    #[test]
+    fn accessibilite_iaccessible_par_loadregtypelib() {
+        unsafe {
+            let mut tl = 0usize;
+            assert_eq!(
+                super::super::oleaut32::load_reg_type_lib(
+                    &LIBID_ACCESSIBILITY as *const _ as *const u8,
+                    1,
+                    1,
+                    0,
+                    &mut tl
+                ),
+                S_OK
+            );
+            let mut ti = 0usize;
+            assert_eq!(
+                slot::<HrPP>(tl, 6)(
+                    tl,
+                    &IID_IACCESSIBLE as *const _ as usize,
+                    &mut ti as *mut _ as usize
+                ),
+                S_OK
+            );
+            let mut attr = 0usize;
+            assert_eq!(slot::<HrP>(ti, 3)(ti, &mut attr as *mut _ as usize), S_OK);
+            assert!(*(attr as *const Guid) == IID_IACCESSIBLE);
+            assert_eq!(*((attr + 44) as *const u32), TKIND_INTERFACE);
+            assert_eq!(*((attr + 48) as *const u16), 21, "cFuncs");
+            // IDispatch (7 méthodes) puis les 21 d'IAccessible.
+            assert_eq!(*((attr + 54) as *const u16), 28 * 8, "cbSizeVft");
+            assert_ne!(*((attr + 58) as *const u16) & TYPEFLAG_FDUAL, 0);
+            slot::<unsafe extern "win64" fn(usize, usize)>(ti, 19)(ti, attr);
+
+            let nom = w("accName");
+            let noms = [nom.as_ptr()];
+            let mut id = 0i32;
+            let get_ids: unsafe extern "win64" fn(usize, *const *const u16, u32, *mut i32) -> i32 =
+                slot(ti, 10);
+            assert_eq!(get_ids(ti, noms.as_ptr(), 1, &mut id), S_OK);
+            assert_eq!(id, -5003);
+
+            // get_accChildCount est la 9e entrée (IDispatch 0–6, accParent 7).
+            let mut vtbl = [0usize; 28];
+            vtbl[8] = trois_enfants as usize;
+            let objet = [vtbl.as_ptr() as usize];
+            let params = [0u8; 24];
+            let mut resultat = [0u8; 24];
+            let invoke: unsafe extern "win64" fn(
+                usize,
+                usize,
+                i32,
+                u16,
+                *const u8,
+                *mut u8,
+                *mut u8,
+                *mut u32,
+            ) -> i32 = slot(ti, 11);
+            assert_eq!(
+                invoke(
+                    ti,
+                    objet.as_ptr() as usize,
+                    -5001,
+                    2, // DISPATCH_PROPERTYGET
+                    params.as_ptr(),
+                    resultat.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                S_OK
+            );
+            assert_eq!(*(resultat.as_ptr() as *const u16), VT_I4);
+            assert_eq!(*(resultat.as_ptr().add(8) as *const i32), 3);
+            slot::<Hr0>(ti, 2)(ti);
+            slot::<Hr0>(tl, 2)(tl);
         }
     }
 }

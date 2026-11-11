@@ -158,11 +158,16 @@ unsafe extern "win64" fn rt_dynamic_cast(
     r
 }
 
-unsafe extern "win64" fn rt_typeid(inptr: usize) -> usize {
+/// Résultat de `__RTtypeid` ; `THROW_BAD_TYPEID` quand il faut lever
+/// std::bad_typeid (pointeur nul, programme x64).
+unsafe extern "win64" fn typeid_of(inptr: usize) -> usize {
     if inptr == 0 {
+        if crate::wow32::pointer_size() == 8 {
+            return THROW_BAD_TYPEID;
+        }
         crate::log_warn!(
             "rtti",
-            "typeid sur un pointeur nul : std::bad_typeid non levée"
+            "typeid sur un pointeur nul : std::bad_typeid non levée (x86)"
         );
         return 0;
     }
@@ -170,6 +175,169 @@ unsafe extern "win64" fn rt_typeid(inptr: usize) -> usize {
         Some((col, base)) => rva(base, rd_i32(col + 12)),
         None => 0,
     }
+}
+
+const THROW_BAD_TYPEID: usize = usize::MAX;
+
+/// `__RTtypeid` : type_info de l'objet complet ; `typeid(*p)` avec `p`
+/// nul lève std::bad_typeid depuis le cadre de l'appelant, comme
+/// vcruntime (#1658).
+#[unsafe(naked)]
+unsafe extern "win64" fn rt_typeid(_inptr: usize) -> usize {
+    core::arch::naked_asm!(
+        "sub rsp, 0x28",
+        "call {typeid_of}",
+        "add rsp, 0x28",
+        "cmp rax, -1",
+        "je 2f",
+        "ret",
+        "2:",
+        "sub rsp, 0x28",
+        "call {args}",
+        "add rsp, 0x28",
+        "mov ecx, 0xE06D7363",
+        "mov edx, 1",
+        "mov r8d, 4",
+        "mov r9, rax",
+        "jmp {raise}",
+        typeid_of = sym typeid_of,
+        args = sym bad_typeid_args,
+        raise = sym super::seh::raise_exception,
+    )
+}
+
+// --- std::bad_typeid lancée par __RTtypeid ------------------------------------
+
+/// Objet lancé : disposition de std::exception (vptr, puis
+/// __std_exception_data { what, dofree }).
+#[repr(C)]
+struct StdException {
+    vptr: usize,
+    what: *const u8,
+    dofree: usize,
+}
+
+const BAD_TYPEID_WHAT: &[u8] = b"Attempted a typeid of nullptr pointer!\0";
+
+/// Bloc de données RTTI et EH de std::bad_typeid, adressé par RVA depuis
+/// son début (qui sert de « base d'image ») : TypeDescriptor, COL,
+/// hiérarchie de classes, types capturables et ThrowInfo, au format x64
+/// de vcruntime (`rttidata.h`, `ehdata.h`).
+struct BadTypeid {
+    base: usize,
+    vtable: usize,
+    throw_info: usize,
+}
+
+unsafe impl Send for BadTypeid {}
+unsafe impl Sync for BadTypeid {}
+
+unsafe extern "win64" fn exception_dtor(this: usize, flags: u32) -> usize {
+    // Objet et chaîne statiques : rien à libérer.
+    let _ = flags;
+    this
+}
+
+unsafe extern "win64" fn exception_what(this: *const StdException) -> *const u8 {
+    let w = (*this).what;
+    if w.is_null() {
+        c"Unknown exception".as_ptr().cast()
+    } else {
+        w
+    }
+}
+
+fn bad_typeid_data() -> &'static BadTypeid {
+    static DATA: std::sync::OnceLock<BadTypeid> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        // Disposition (décalages dans le bloc) :
+        const TD_BAD: usize = 0x000; // TypeDescriptor bad_typeid (16 + nom)
+        const TD_EXC: usize = 0x040; // TypeDescriptor exception
+        const COL: usize = 0x080; // Complete Object Locator (24 octets)
+        const CHD: usize = 0x0A0; // ClassHierarchyDescriptor (16)
+        const BCA: usize = 0x0B0; // tableau des bases (2 RVA)
+        const BCD0: usize = 0x0C0; // BaseClassDescriptor bad_typeid (28)
+        const BCD1: usize = 0x0E0; // BaseClassDescriptor exception (28)
+        const CT0: usize = 0x100; // CatchableType bad_typeid (28)
+        const CT1: usize = 0x120; // CatchableType exception (28)
+        const CTA: usize = 0x140; // CatchableTypeArray (4 + 2 × 4)
+        const TI: usize = 0x150; // ThrowInfo (16)
+        const VT: usize = 0x168; // [COL, destructeur, what]
+        const SIZE: usize = 0x180;
+        let block: &'static mut [u8] = Box::leak(vec![0u8; SIZE].into_boxed_slice());
+        let base = block.as_mut_ptr() as usize;
+        let put32 = |off: usize, v: u32| unsafe { ((base + off) as *mut u32).write_unaligned(v) };
+        let put64 =
+            |off: usize, v: usize| unsafe { ((base + off) as *mut usize).write_unaligned(v) };
+        let name = |off: usize, n: &[u8]| unsafe {
+            std::ptr::copy_nonoverlapping(n.as_ptr(), (base + off + 16) as *mut u8, n.len())
+        };
+        // TypeDescriptor : pVFTable (celle de type_info, ici le bloc
+        // lui-même ; seul le nom est lu), spare, nom décoré.
+        put64(TD_BAD, base + VT);
+        name(TD_BAD, b".?AVbad_typeid@std@@");
+        put64(TD_EXC, base + VT);
+        name(TD_EXC, b".?AVexception@std@@");
+        // COL signature 1 : offset 0, cdOffset 0, RVA TD, CHD, lui-même.
+        put32(COL, 1);
+        put32(COL + 12, TD_BAD as u32);
+        put32(COL + 16, CHD as u32);
+        put32(COL + 20, COL as u32);
+        // CHD : signature 0, attributs 0, deux bases, RVA du tableau.
+        put32(CHD + 8, 2);
+        put32(CHD + 12, BCA as u32);
+        put32(BCA, BCD0 as u32);
+        put32(BCA + 4, BCD1 as u32);
+        // BCD : RVA TD, bases contenues, PMD { 0, -1, 0 }, attributs, RVA CHD.
+        for (bcd, td, contained) in [(BCD0, TD_BAD, 1u32), (BCD1, TD_EXC, 0)] {
+            put32(bcd, td as u32);
+            put32(bcd + 4, contained);
+            put32(bcd + 12, u32::MAX);
+            put32(bcd + 24, CHD as u32);
+        }
+        // CatchableType : propriétés CT_IsSimpleType (copie octet par
+        // octet), RVA TD, PMD { 0, -1, 0 }, taille, pas de constructeur.
+        for (ct, td) in [(CT0, TD_BAD), (CT1, TD_EXC)] {
+            put32(ct, 1);
+            put32(ct + 4, td as u32);
+            put32(ct + 12, u32::MAX);
+            put32(ct + 20, std::mem::size_of::<StdException>() as u32);
+        }
+        put32(CTA, 2);
+        put32(CTA + 4, CT0 as u32);
+        put32(CTA + 8, CT1 as u32);
+        // ThrowInfo : attributs, pas de destructeur, compat, RVA du tableau.
+        put32(TI + 12, CTA as u32);
+        // vtable : COL juste avant, puis destructeur et what().
+        put64(VT, base + COL);
+        put64(VT + 8, exception_dtor as *const () as usize);
+        put64(VT + 16, exception_what as *const () as usize);
+        BadTypeid {
+            base,
+            vtable: base + VT + 8,
+            throw_info: base + TI,
+        }
+    })
+}
+
+thread_local! {
+    static BAD_TYPEID_ARGS: std::cell::RefCell<[usize; 4]> =
+        const { std::cell::RefCell::new([0; 4]) };
+}
+
+/// Arguments de RaiseException pour std::bad_typeid : magie, objet,
+/// ThrowInfo, base du bloc.
+unsafe extern "win64" fn bad_typeid_args() -> *const usize {
+    let d = bad_typeid_data();
+    let obj = Box::leak(Box::new(StdException {
+        vptr: d.vtable,
+        what: BAD_TYPEID_WHAT.as_ptr(),
+        dofree: 0,
+    })) as *mut StdException as usize;
+    BAD_TYPEID_ARGS.with(|a| {
+        *a.borrow_mut() = [0x1993_0520, obj, d.throw_info, d.base];
+        a.as_ptr() as *const usize
+    })
 }
 
 unsafe extern "win64" fn rt_cast_to_void(inptr: usize) -> usize {
@@ -210,6 +378,34 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bad_typeid_complete() {
+        unsafe {
+            assert_eq!(typeid_of(0), THROW_BAD_TYPEID);
+            let args = bad_typeid_args();
+            let a = std::slice::from_raw_parts(args, 4);
+            assert_eq!(a[0], 0x1993_0520);
+            // L'objet lancé a un RTTI lisible : typeid(e) donne bad_typeid.
+            let td = typeid_of(a[1]);
+            assert_eq!(type_name(td), b".?AVbad_typeid@std@@");
+            // Le ThrowInfo propose bad_typeid puis exception.
+            let cta = a[3] + rd_u32(a[2] + 12) as usize;
+            assert_eq!(rd_i32(cta), 2);
+            let ct1 = a[3] + rd_u32(cta + 8) as usize;
+            assert_eq!(
+                type_name(a[3] + rd_u32(ct1 + 4) as usize),
+                b".?AVexception@std@@"
+            );
+            // what() rend le message de vcruntime.
+            let what: unsafe extern "win64" fn(usize) -> *const u8 =
+                std::mem::transmute(rd_ptr(rd_ptr(a[1]) + 8));
+            assert_eq!(
+                CStr::from_ptr(what(a[1]).cast()).to_bytes(),
+                b"Attempted a typeid of nullptr pointer!"
+            );
+        }
+    }
 
     /// Image factice : struct Derived : Base1, Base2 (héritage multiple).
     struct Image {

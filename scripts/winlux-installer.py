@@ -1705,7 +1705,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": 'Navigateur',
         "summary_browser_none": 'à choisir plus tard',
         "store_title": 'Boutiques de logiciels',
-        "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
+        "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique ; Flathub (applications Linux) est proposé coché, décochez-le pour le refuser. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
         "summary_store": 'Boutiques',
         "summary_store_none": 'aucune (Paramètres > Applications)',
         "summary_offline_later": "Pas de connexion Internet pour l'instant : le navigateur et les boutiques choisis seront installés automatiquement au premier démarrage connecté.",
@@ -1794,7 +1794,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": 'Browser',
         "summary_browser_none": 'to be chosen later',
         "store_title": 'Software stores',
-        "store_subtitle": 'Winlux neither ships nor imposes any store. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
+        "store_subtitle": 'Winlux neither ships nor imposes any store; Flathub (Linux apps) is offered ticked, untick it to refuse it. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
         "summary_store": 'Stores',
         "summary_store_none": 'none (Settings > Apps)',
         "summary_offline_later": 'No Internet connection for now: the chosen browser and stores will be installed automatically at the first startup with a connection.',
@@ -1883,7 +1883,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": "Browser",
         "summary_browser_none": "später auswählen",
         "store_title": 'Software-Stores',
-        "store_subtitle": 'Winlux liefert und erzwingt keinen Store. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
+        "store_subtitle": 'Winlux liefert und erzwingt keinen Store; Flathub (Linux-Apps) ist vorab angekreuzt, entfernen Sie das Häkchen, um es abzulehnen. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
         "summary_store": 'Stores',
         "summary_store_none": 'keine (Einstellungen > Apps)',
         "summary_offline_later": 'Derzeit keine Internetverbindung: Der gewählte Browser und die Stores werden beim ersten Start mit Verbindung automatisch installiert.',
@@ -1972,7 +1972,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": "Navegador",
         "summary_browser_none": "por elegir más tarde",
         "store_title": 'Tiendas de programas',
-        "store_subtitle": 'Winlux no incluye ni impone ninguna tienda. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
+        "store_subtitle": 'Winlux no incluye ni impone ninguna tienda; Flathub (aplicaciones Linux) aparece marcada, desmárquela para rechazarla. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
         "summary_store": 'Tiendas',
         "summary_store_none": 'ninguna (Configuración > Aplicaciones)',
         "summary_offline_later": 'Sin conexión a Internet por ahora: el navegador y las tiendas elegidos se instalarán automáticamente en el primer arranque con conexión.',
@@ -2061,7 +2061,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": "Browser",
         "summary_browser_none": "da scegliere più tardi",
         "store_title": 'Negozi di software',
-        "store_subtitle": "Winlux non include né impone alcun negozio. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
+        "store_subtitle": "Winlux non include né impone alcun negozio; Flathub (app Linux) è proposto selezionato, deselezionalo per rifiutarlo. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
         "summary_store": 'Negozi',
         "summary_store_none": 'nessuno (Impostazioni > App)',
         "summary_offline_later": 'Nessuna connessione Internet per ora: il browser e i negozi scelti verranno installati automaticamente al primo avvio con connessione.',
@@ -2150,7 +2150,7 @@ EXTRA_TRANSLATIONS = {
         "summary_browser": "Navegador",
         "summary_browser_none": "a escolher depois",
         "store_title": 'Lojas de software',
-        "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
+        "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja; o Flathub (apps Linux) vem marcado, desmarque-o para recusá-lo. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
         "summary_store": 'Lojas',
         "summary_store_none": 'nenhuma (Configurações > Aplicativos)',
         "summary_offline_later": 'Sem conexão com a Internet por enquanto: o navegador e as lojas escolhidos serão instalados automaticamente na primeira inicialização com conexão.',
@@ -2319,7 +2319,10 @@ Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 """
 
 # Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
-BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
+# Tous ont une version Linux officielle, téléchargée chez l'éditeur (#1716).
+BROWSER_CHOICES = [("brave", "Brave"), ("chrome", "Google Chrome"), ("edge", "Microsoft Edge"),
+                   ("firefox", "Mozilla Firefox"), ("opera", "Opera"), ("operagx", "Opera GX"),
+                   ("tor", "Tor Browser"), ("vivaldi", "Vivaldi")]
 
 
 def store_catalog_choices():
@@ -2332,6 +2335,21 @@ def store_catalog_choices():
             continue
         rows = [r for r in rows if isinstance(r, dict) and re.fullmatch(r"[a-z0-9-]+", str(r.get("id", "")))]
         return sorted(((r["id"], r.get("name", r["id"]), r.get("summary", {})) for r in rows), key=lambda r: r[1].casefold())
+    return []
+
+
+def preselected_store_catalogs():
+    """Boutiques proposées cochées (Flathub, accord de damien du 11 novembre) :
+    un choix visible, décochable à l'installation, au premier démarrage et
+    dans Paramètres > Applications."""
+    for path in (os.path.join(SCRIPT_DIR, "..", "integration", "store-catalogs.json"), "/usr/share/winlux/store-catalogs.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = json.load(f).get("catalogs", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        return [r["id"] for r in rows if isinstance(r, dict) and r.get("preselected") is True
+                and re.fullmatch(r"[a-z0-9-]+", str(r.get("id", "")))]
     return []
 
 STEPS = [
@@ -3356,8 +3374,8 @@ class InstallerApp(Gtk.Application):
             "packages": [],
             # Aucun navigateur présélectionné : None = choisir plus tard.
             "browser": None,
-            # Aucune boutique tierce cochée d'office (docs/BOUTIQUES.md).
-            "store_catalogs": [],
+            # Flathub proposé coché, décochable ; les autres non (docs/BOUTIQUES.md).
+            "store_catalogs": preselected_store_catalogs(),
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
@@ -5212,22 +5230,24 @@ class InstallerApp(Gtk.Application):
         sub.get_style_context().add_class("card-detail")
         sub.set_line_wrap(True)
         card.pack_start(sub, False, False, 0)
-        row = Gtk.Box(spacing=16)
         later = Gtk.RadioButton.new_with_label_from_widget(None, tr("browser_later"))
         later.connect("toggled", self.on_browser_toggle, None)
-        row.pack_start(later, False, False, 0)
+        card.pack_start(later, False, False, 0)
         self.browser_buttons = {None: later}
-        for browser, name in BROWSER_CHOICES:
+        # Huit navigateurs : grille de quatre colonnes, lue ligne par ligne
+        # dans l'ordre alphabétique, pour tenir dans une fenêtre de 1024 px.
+        grid = Gtk.Grid(column_spacing=16, row_spacing=4)
+        for index, (browser, name) in enumerate(BROWSER_CHOICES):
             button = Gtk.RadioButton.new_with_label_from_widget(later, name)
             button.connect("toggled", self.on_browser_toggle, browser)
-            row.pack_start(button, False, False, 0)
+            grid.attach(button, index % 4, index // 4, 1, 1)
             self.browser_buttons[browser] = button
-        card.pack_start(row, False, False, 0)
+        card.pack_start(grid, False, False, 0)
         self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
         return card
 
     def build_store_choice(self):
-        """Boutiques de logiciels : cases à cocher, aucune cochée, ordre alphabétique."""
+        """Boutiques de logiciels : cases à cocher, Flathub proposé coché, ordre alphabétique."""
         choices = store_catalog_choices()
         if not choices:
             return None
@@ -6114,6 +6134,11 @@ class InstallerApp(Gtk.Application):
 set winlux_efi_args=
 if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
     set winlux_efi_args=efi=noruntime
+    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
+    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
+    insmod efi_gop
+    insmod efi_uga
+    set gfxpayload=keep
 fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}

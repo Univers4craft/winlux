@@ -162,7 +162,8 @@ unsafe fn control(sd: *const u8) -> u16 {
 /// descripteur absolu ou auto-relatif.
 unsafe fn part(sd: *const u8, index: usize) -> *mut u8 {
     if control(sd) & SE_SELF_RELATIVE == 0 {
-        std::ptr::read_unaligned(sd.add(8 + index * 8) as *const *mut u8)
+        // Places x86 ou x64 selon le programme (#1881).
+        crate::dlls::security::read_abs_slot(sd, 4 + index * 4)
     } else {
         let off = std::ptr::read_unaligned(sd.add(4 + index * 4) as *const u32) as usize;
         if off == 0 {
@@ -272,8 +273,9 @@ pub unsafe extern "win64" fn SetSecurityDescriptorSacl(
         }
     }
     std::ptr::write_unaligned(sd.add(2) as *mut u16, c);
-    std::ptr::write_unaligned(
-        sd.add(24) as *mut *mut u8,
+    crate::dlls::security::write_abs_slot(
+        sd,
+        12,
         if present != 0 {
             sacl
         } else {
@@ -564,8 +566,52 @@ pub extern "win64" fn GetSystemDpiForProcess(_process: usize) -> u32 {
     system_dpi()
 }
 
-/// `SetWinEventHook` (lecteurs d'écran, accessibilité) : aucun événement
-/// n'est encore émis, le crochet est accepté.
+/// Crochet `SetWinEventHook` hors contexte (WINEVENT_OUTOFCONTEXT) : son
+/// rappel est appelé par le thread qui l'a posé, quand il relève ses
+/// messages (GetMessage, PeekMessage, MsgWaitForMultipleObjects), comme sous
+/// Windows.
+struct WinEventHook {
+    handle: usize,
+    min: u32,
+    max: u32,
+    proc_: usize,
+    thread: std::thread::ThreadId,
+}
+
+/// Événement en attente de livraison à un crochet.
+struct WinEventCall {
+    thread: std::thread::ThreadId,
+    handle: usize,
+    proc_: usize,
+    event: u32,
+    hwnd: usize,
+    time: u32,
+}
+
+static WIN_EVENT_HOOKS: std::sync::Mutex<Vec<WinEventHook>> = std::sync::Mutex::new(Vec::new());
+static WIN_EVENT_QUEUE: std::sync::Mutex<Vec<WinEventCall>> = std::sync::Mutex::new(Vec::new());
+static NEXT_WIN_EVENT_HOOK: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0x5745_0001);
+
+fn lock_hooks() -> std::sync::MutexGuard<'static, Vec<WinEventHook>> {
+    WIN_EVENT_HOOKS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn lock_win_events() -> std::sync::MutexGuard<'static, Vec<WinEventCall>> {
+    WIN_EVENT_QUEUE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+pub const EVENT_SYSTEM_MINIMIZESTART: u32 = 0x0016;
+pub const EVENT_SYSTEM_MINIMIZEEND: u32 = 0x0017;
+pub const EVENT_OBJECT_SHOW: u32 = 0x8002;
+pub const EVENT_OBJECT_HIDE: u32 = 0x8003;
+pub const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800B;
+
+/// `SetWinEventHook`. Le suivi d'occultation de Chromium en pose sept
+/// (réduction, premier plan, déplacement…) et ne recalcule ce qui est visible
+/// qu'à leur réception : sans événement, une fenêtre restaurée ou agrandie
+/// restait vide ou figée (#1476, #1498).
 pub extern "win64" fn SetWinEventHook(
     min: u32,
     max: u32,
@@ -579,11 +625,97 @@ pub extern "win64" fn SetWinEventHook(
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    0x5745_0000 | (proc_ & 0xFFFF)
+    let handle = NEXT_WIN_EVENT_HOOK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    lock_hooks().push(WinEventHook {
+        handle,
+        min,
+        max,
+        proc_,
+        thread: std::thread::current().id(),
+    });
+    handle
 }
 
 pub extern "win64" fn UnhookWinEvent(hook: usize) -> i32 {
-    i32::from(hook != 0)
+    let mut hooks = lock_hooks();
+    let before = hooks.len();
+    hooks.retain(|h| h.handle != hook);
+    lock_win_events().retain(|c| c.handle != hook);
+    i32::from(hooks.len() != before)
+}
+
+/// Émet un événement sur une fenêtre (OBJID_WINDOW, CHILDID_SELF) : il est
+/// mis en attente pour chaque crochet concerné et son thread est réveillé.
+/// Programmes 64 bits seulement (le rappel d'un programme 32 bits serait à
+/// traduire).
+pub fn notify_win_event(event: u32, hwnd: usize) {
+    if crate::wow32::pointer_size() != 8 {
+        return;
+    }
+    let time = crate::dlls::kernel32::get_tick_count();
+    let targets: Vec<(std::thread::ThreadId, usize, usize)> = lock_hooks()
+        .iter()
+        .filter(|h| (h.min..=h.max).contains(&event))
+        .map(|h| (h.thread, h.handle, h.proc_))
+        .collect();
+    if crate::dlls::user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] événement {event:#06x} sur {hwnd:#x} : {} crochet(s)",
+            targets.len()
+        );
+    }
+    if targets.is_empty() {
+        return;
+    }
+    let mut queue = lock_win_events();
+    for (thread, handle, proc_) in targets {
+        // Un même événement encore en attente sur la même fenêtre n'est pas
+        // répété (LOCATIONCHANGE arrive à chaque pas d'un glisser).
+        if queue
+            .iter()
+            .any(|c| c.handle == handle && c.event == event && c.hwnd == hwnd)
+        {
+            continue;
+        }
+        queue.push(WinEventCall {
+            thread,
+            handle,
+            proc_,
+            event,
+            hwnd,
+            time,
+        });
+        crate::dlls::gui::wake_thread(thread);
+    }
+}
+
+#[cfg(test)]
+pub fn deliver_win_events_for_test() {
+    unsafe { deliver_win_events() }
+}
+
+/// Appelle les rappels en attente pour le thread courant.
+pub unsafe fn deliver_win_events() {
+    let me = std::thread::current().id();
+    let calls: Vec<WinEventCall> = {
+        let mut queue = lock_win_events();
+        if !queue.iter().any(|c| c.thread == me) {
+            return;
+        }
+        let (mine, rest): (Vec<_>, Vec<_>) = queue.drain(..).partition(|c| c.thread == me);
+        *queue = rest;
+        mine
+    };
+    type WinEventProc = unsafe extern "win64" fn(usize, u32, usize, i32, i32, u32, u32);
+    let tid = crate::dlls::kernel32::get_current_thread_id();
+    for c in calls {
+        // Décroché entre-temps : plus de rappel.
+        if !lock_hooks().iter().any(|h| h.handle == c.handle) {
+            continue;
+        }
+        let f: WinEventProc = std::mem::transmute(c.proc_);
+        f(c.handle, c.event, c.hwnd, 0, 0, tid, c.time);
+    }
 }
 
 pub fn user32_exports() -> crate::dlls::Exports {

@@ -827,13 +827,20 @@ fn join_folder(base: &str, rel: &str) -> String {
     }
 }
 
+/// Dossiers créés par le compte courant : dans sa base (système pour root,
+/// personnelle sinon, #1824).
 fn folders_file() -> std::path::PathBuf {
-    admin::path(tasks::TASKS_DIR).join("folders")
+    tasks::store_dir().join("folders")
 }
 
 fn known_folders() -> Vec<String> {
-    let mut list: Vec<String> = admin::read_text(&folders_file())
-        .unwrap_or_default()
+    let system = admin::path(tasks::TASKS_DIR).join("folders");
+    let mut text = admin::read_text(&system).unwrap_or_default();
+    if folders_file() != system {
+        text += "\n";
+        text += &admin::read_text(&folders_file()).unwrap_or_default();
+    }
+    let mut list: Vec<String> = text
         .lines()
         .filter(|l| !l.is_empty())
         .map(norm_folder)
@@ -1035,6 +1042,18 @@ unsafe extern "win64" fn qi(this: *mut Obj, iid: *const Guid, out: *mut *mut c_v
         *out = this as *mut c_void;
         S_OK
     } else {
+        trace(|| {
+            format!(
+                "QueryInterface({{{:08X}-{:04X}-{:04X}-{}}}) = E_NOINTERFACE",
+                iid.data1,
+                iid.data2,
+                iid.data3,
+                iid.data4
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>()
+            )
+        });
         E_NOINTERFACE
     }
 }
@@ -1457,7 +1476,10 @@ fn register(base: &str, path: &str, def: &DefData, flags: i32) -> Result<String,
     if flags & TASK_DISABLE != 0 {
         task.enabled = false;
     }
-    tasks::save(&task).map_err(|_| E_ACCESSDENIED)?;
+    tasks::save(&task).map_err(|e| {
+        trace(|| format!("enregistrement de « {folder}\\{name} » refusé : {e}"));
+        E_ACCESSDENIED
+    })?;
     if run_now && task.enabled {
         start_task(&task.id);
     }
@@ -1503,6 +1525,13 @@ unsafe extern "win64" fn folder_register_definition(
         return E_INVALIDARG;
     };
     let result = register(&folder_of(this), &bstr_in(path), &lock(def), flags);
+    trace(|| {
+        format!(
+            "RegisterTaskDefinition(\"{}\", flags={flags:#x}) = {:#x}",
+            bstr_in(path),
+            result.as_ref().map(|_| 0).unwrap_or_else(|e| *e) as u32
+        )
+    });
     match result {
         Ok(id) if !out.is_null() => out_obj(out, Kind::Registered(id)),
         Ok(_) => S_OK,
@@ -1897,15 +1926,34 @@ macro_rules! str_prop {
             }
         }
         unsafe extern "win64" fn $put(this: *mut Obj, v: *const u16) -> i32 {
-            match $lock(this) {
+            let hr = match $lock(this) {
                 Some(x) => {
                     lock(&x).$($field).+ = bstr_in(v);
                     S_OK
                 }
                 None => E_INVALIDARG,
-            }
+            };
+            trace(|| format!(
+                "{}(\"{}\") = {:#x}",
+                stringify!($put),
+                bstr_in(v),
+                hr as u32
+            ));
+            hr
         }
     };
+}
+
+/// Journal des appels du planificateur sous WINLUX_TRACE (#1757 : AddTask
+/// d'Acrobat, dont les appels COM n'apparaissent pas dans WINLUX_APITRACE).
+///
+/// Préfixe `winlux[taskschd]` : msiexec recopie ces lignes du processus
+/// d'une action personnalisée dans son journal (`is_trace_line`), ce qu'il
+/// ne faisait pas pour l'ancien « winlux : taskschd : » (#1825).
+fn trace(msg: impl FnOnce() -> String) {
+    if std::env::var_os("WINLUX_TRACE").is_some() {
+        eprintln!("winlux[taskschd] {}", msg());
+    }
 }
 
 macro_rules! bool_prop {

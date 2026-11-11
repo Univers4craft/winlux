@@ -146,6 +146,30 @@ fn long_name(s: &str) -> &str {
     s.split('|').nth(1).unwrap_or(s)
 }
 
+/// `CompLocator` : à partir du chemin clé d'un composant installé, le
+/// dossier de ce chemin (type 0 : le chemin clé est un dossier ; 1 : un
+/// fichier, dont on prend le dossier parent), ou le fichier de la table
+/// `Signature` cherché dans ce dossier (#1598).
+pub(crate) fn component_search(key: &str, kind: i32, file_name: Option<&str>) -> Option<String> {
+    let key = key.trim();
+    let host = crate::paths::to_linux(key);
+    let mut dir = key.to_string();
+    if kind & 1 == 1 || host.is_file() {
+        let i = dir.rfind('\\')?;
+        dir.truncate(i + 1);
+    } else if !dir.ends_with('\\') {
+        dir.push('\\');
+    }
+    match file_name {
+        Some(name) => {
+            let hit = search_dir(&crate::paths::to_linux(&dir), Some(name), 0)?;
+            hit.is_file().then(|| crate::paths::to_windows(&hit))
+        }
+        None if kind & 1 == 1 => host.is_file().then(|| key.to_string()),
+        None => crate::paths::to_linux(&dir).is_dir().then_some(dir),
+    }
+}
+
 /// Action `AppSearch` : renseigne des propriétés à partir du registre, de
 /// fichiers .ini ou du disque (ancienne installation, dossier choisi…).
 pub fn app_search(db: &Database, ctx: &mut Context, all_users: bool, log: &mut Logger) {
@@ -221,10 +245,14 @@ pub fn app_search(db: &Database, ctx: &mut Context, all_users: bool, log: &mut L
                     found = Some(w);
                 }
             }
-        } else if db.rows("CompLocator").any(|r| r.str("Signature_") == sig) {
-            log.log(&format!(
-                "AppSearch {prop} : recherche de composant ignorée"
-            ));
+        } else if let Some(r) = db.rows("CompLocator").find(|r| r.str("Signature_") == sig) {
+            let guid = r.str("ComponentId");
+            match super::install::component_key_path(&guid) {
+                Some(key) => {
+                    found = component_search(&key, r.int("Type").unwrap_or(1), file.as_deref())
+                }
+                None => log.log(&format!("AppSearch {prop} : composant {guid} non installé")),
+            }
         }
         if let Some(v) = found.filter(|v| !v.is_empty()) {
             log.log(&format!("AppSearch : {prop} = {v}"));

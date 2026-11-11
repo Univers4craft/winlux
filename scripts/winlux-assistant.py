@@ -1098,6 +1098,15 @@ def has_browser():
     """Un vrai navigateur est-il installé sur ce PC (#912) ? L'ISO n'en livre aucun."""
     if any(os.access(BROWSERS_DIR / path, os.X_OK) for path in BROWSER_BINARIES):
         return True
+    # Autres navigateurs du catalogue (Brave, Opera, Tor Browser…, #1716) :
+    # winlux-browsers note leur programme dans <id>/program.
+    try:
+        for noted in BROWSERS_DIR.glob("*/program"):
+            relative = noted.read_text().split("\n", 1)[0].strip()
+            if relative.startswith("root/") and ".." not in relative.split("/") and os.access(noted.parent / relative, os.X_OK):
+                return True
+    except OSError:
+        pass
     return any(shutil.which(name) for name in BROWSER_COMMANDS)
 
 

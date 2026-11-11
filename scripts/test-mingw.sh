@@ -182,6 +182,29 @@ if test -f "$dir/hid_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
 fi
 
+# Logiciels d'éclairage : collections de tête, HidP_*, cfgmgr32 (#1523), bloquant.
+if test -f "$dir/hid_rgb_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid-rgb.sh"
+fi
+
+# Appareil virtuel d'un pilote constructeur (#1533), bloquant.
+if test -f "$dir/vdev_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-vdev.sh"
+fi
+
+# Installation virtualisée d'un pilote constructeur (#1532), bloquant.
+if test -f "$dir/driver_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-drivers.sh"
+fi
+
+# setupapi en x86 : structures à la taille 32 bits, sans débordement (#1656),
+# bloquant (le script se construit lui-même et se saute sans clang).
+WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-setupapi32.sh"
+
+# Saisie simulée (#1683) : SendInput et keybd_event en x64 et x86 sous Xvfb,
+# bloquant (le script se construit lui-même et se saute sans clang ni xvfb-run).
+WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-sendinput.sh"
+
 # DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
 if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"

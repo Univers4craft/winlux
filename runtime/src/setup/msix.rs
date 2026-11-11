@@ -348,10 +348,15 @@ pub fn decode_name(name: &str) -> String {
     String::from_utf8_lossy(&out).replace('/', "\\")
 }
 
-/// Fichiers techniques du conteneur, absents du block map.
+/// Fichiers d'empreinte du conteneur, absents du block map :
+/// `AppxMetadata\CodeIntegrity.cat` en fait partie, protégé par le condensat
+/// `AXCI` de la signature, pas par le block map (#1725).
 fn is_container_file(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n == "appxblockmap.xml" || n == "appxsignature.p7x" || n == "[content_types].xml"
+    let n = name.to_ascii_lowercase().replace('/', "\\");
+    n == "appxblockmap.xml"
+        || n == "appxsignature.p7x"
+        || n == "[content_types].xml"
+        || n == "appxmetadata\\codeintegrity.cat"
 }
 
 fn read_entry(f: &mut File, e: &ZipEntry) -> Result<Vec<u8>, String> {
@@ -745,6 +750,15 @@ mod tests {
         assert_eq!(bundle_choice(xml).unwrap(), "a_x64.msix");
         let only32 = r#"<Package Type="application" Architecture="x86" FileName="a.msix"/>"#;
         assert!(bundle_choice(only32).unwrap_err().contains("32 bits"));
+    }
+
+    #[test]
+    fn catalogue_d_integrite_hors_du_block_map() {
+        // #1725 : fichier d'empreinte, comme la signature et le block map.
+        assert!(is_container_file("AppxMetadata\\CodeIntegrity.cat"));
+        assert!(is_container_file("AppxMetadata/CodeIntegrity.cat"));
+        assert!(!is_container_file("AppxMetadata\\Autre.cat"));
+        assert!(!is_container_file("AppxManifest.xml"));
     }
 
     #[test]

@@ -26,6 +26,10 @@ import sys
 
 PE_EXT = (".exe", ".dll", ".pyd", ".node")
 
+# Miroir de runtime/src/dlls/mod.rs::prefers_real_file : pour ces DLL, le
+# chargeur prend la copie livrée avec l'appli avant la version maison.
+PREFERS_REAL = {"msvcp140", "libstdc++-6", "libgcc_s_seh-1", "libgcc_s_dw2-1", "libwinpthread-1"}
+
 # Motifs (fnmatch) de DLL supposées livrées par l'écosystème de l'appli,
 # par exemple « --fourni=python3*.dll » pour des modules Python.
 ASSUMED = []
@@ -56,6 +60,8 @@ def normalize(dll: str) -> str:
         "api-ms-win-eventing-provider-l1-"
     ):
         return "advapi32"
+    if base.startswith("api-ms-win-ro-typeresolution-"):
+        return "wintypes"
     if base.startswith("msvcr") and base != "msvcrt":
         return "msvcrt"
     if base == "wsock32":
@@ -90,8 +96,11 @@ def load_exports(path):
     return exports
 
 
-def lookup(exports, dll, func):
+def lookup(exports, dll, func, x86=False):
     if func in exports.get(dll, ()):
+        return True
+    # Noms x86 servis par les passerelles wow32 (lignes « x86:dll »).
+    if x86 and func in exports.get("x86:" + dll, ()):
         return True
     if dll == "ntdll":
         return func in exports.get("msvcrt", ())
@@ -144,7 +153,10 @@ def analyse(exports, root):
             for entry in getattr(pe, attr, []):
                 raw = entry.dll.decode("ascii", "replace")
                 n = normalize(raw)
-                # Comme le chargeur : une DLL intégrée passe avant la copie livrée.
+                # Comme le chargeur : une DLL intégrée passe avant la copie
+                # livrée, sauf celles où la vraie est préférée (msvcp140…).
+                if n in PREFERS_REAL and (raw.lower() in shipped or n in shipped_norm):
+                    continue
                 if n not in exports and (
                     raw.lower() in shipped
                     or n in shipped_norm
@@ -158,7 +170,7 @@ def analyse(exports, root):
                 report["builtin_used"][n] += 1
                 for imp in entry.imports:
                     name = imp.name.decode("ascii", "replace") if imp.name else f"#{imp.ordinal}"
-                    if not lookup(exports, n, name):
+                    if not lookup(exports, n, name, pe.FILE_HEADER.Machine != 0x8664):
                         report["missing_func"][f"{n}!{name}"] += 1
     return report
 

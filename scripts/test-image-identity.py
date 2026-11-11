@@ -85,17 +85,18 @@ installer = (project / "scripts/winlux-installer.py").read_text()
 assert installer.count('"independent_notice":') == 6, "mention absente d'une langue de l'installateur"
 # Choix du navigateur : aucun fourni, aucun présélectionné, ordre alphabétique.
 assert installer.count('"browser_subtitle":') == 6, "choix du navigateur absent d'une langue"
-assert 'BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]' in installer
+assert 'BROWSER_CHOICES = [("brave", "Brave"), ("chrome", "Google Chrome"), ("edge", "Microsoft Edge"),' in installer
+assert '("tor", "Tor Browser"), ("vivaldi", "Vivaldi")]' in installer
 assert '"browser": None,' in installer and 'first-boot-browser' in installer
 first_boot = (project / "scripts/winlux-first-boot.sh").read_text()
-assert "MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'" in first_boot
+assert "MENU_ARGS='aucun Choisir_plus_tard brave Brave chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox opera Opera operagx Opera_GX tor Tor_Browser vivaldi Vivaldi'" in first_boot
 assert "Navigateur_Firefox on" not in first_boot and "apt-get install -y --no-install-recommends firefox" not in first_boot
 assert 'winlux-browsers --default "$choice"' in build and "first-boot-browser.done" in build
 sys.path.insert(0, str(project / "scripts"))
 import winlux_autoinstall  # noqa: E402
 with tempfile.TemporaryDirectory() as temp:
     answers = Path(temp) / "winlux-answers.json"
-    for value, ok in (("firefox", True), ("edge", True), ("safari", False)):
+    for value, ok in (("firefox", True), ("edge", True), ("operagx", True), ("tor", True), ("safari", False)):
         answers.write_text('{"version": 1, "browser": "%s"}' % value)
         try:
             settings, _steps = winlux_autoinstall.load(str(answers))
@@ -103,17 +104,17 @@ with tempfile.TemporaryDirectory() as temp:
         except winlux_autoinstall.AnswerFileError:
             assert not ok, value
 browsers_sh = (project / "scripts/winlux-browsers.sh").read_text()
-assert "browser=${2:-none}" in browsers_sh and "printf 'none\\n'" in browsers_sh and "edge\\n' ;;" not in browsers_sh
+assert "browser=${2:-none}" in browsers_sh and "printf 'none\\n'" in browsers_sh and "printf 'edge\\n'" not in browsers_sh
 settings_py = (project / "scripts/winlux-settings.py").read_text()
 # Ordre alphabétique, aucun navigateur mis en avant (vrais noms dans BROWSER_NAMES).
-assert 'BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}' in settings_py
+assert 'BROWSER_NAMES = {"brave": "Brave", "chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox",' in settings_py
 assert "for ident in BROWSER_NAMES" in settings_py
 # Paquet d'intégration (hors ISO) : même règle, aucun script dédié à un éditeur.
 assert not (project / "scripts/install-edge.sh").exists()
 integration = (project / "integration/install.sh").read_text()
 assert "install-browser.sh" in integration and "install-edge" not in integration
 refused = subprocess.run(["sh", str(project / "scripts/install-browser.sh"), "safari"], capture_output=True, text=True)
-assert refused.returncode == 2 and "chrome|edge|firefox" in refused.stderr, refused
+assert refused.returncode == 2 and "brave|chrome|edge|firefox|opera|operagx|vivaldi" in refused.stderr, refused
 shell32 = (project / "runtime/src/dlls/shell32.rs").read_text()
 assert "Microsoft Edge" not in shell32, "shell32 présente encore Edge comme navigateur par défaut"
 guest = (project / "scripts/test-native-session-guest.py").read_text()

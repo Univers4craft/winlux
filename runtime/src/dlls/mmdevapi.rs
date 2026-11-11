@@ -46,97 +46,97 @@ const CLSID_MMDEVICEENUMERATOR: Guid = guid(
     0x467c,
     [0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e],
 );
-const IID_IMMDEVICEENUMERATOR: Guid = guid(
+pub(crate) const IID_IMMDEVICEENUMERATOR: Guid = guid(
     0xa95664d2,
     0x9614,
     0x4f35,
     [0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6],
 );
-const IID_IMMDEVICE: Guid = guid(
+pub(crate) const IID_IMMDEVICE: Guid = guid(
     0xd666063f,
     0x1587,
     0x4e43,
     [0x81, 0xf1, 0xb9, 0x48, 0xe8, 0x07, 0x36, 0x3f],
 );
-const IID_IMMDEVICECOLLECTION: Guid = guid(
+pub(crate) const IID_IMMDEVICECOLLECTION: Guid = guid(
     0x0bd7a1be,
     0x7a1a,
     0x44db,
     [0x83, 0x97, 0xcc, 0x53, 0x92, 0x38, 0x7b, 0x5e],
 );
-const IID_IMMENDPOINT: Guid = guid(
+pub(crate) const IID_IMMENDPOINT: Guid = guid(
     0x1be09788,
     0x6894,
     0x4089,
     [0x85, 0x86, 0x9a, 0x2a, 0x6c, 0x26, 0x5a, 0xc5],
 );
-const IID_IPROPERTYSTORE: Guid = guid(
+pub(crate) const IID_IPROPERTYSTORE: Guid = guid(
     0x886d8eeb,
     0x8cf2,
     0x4446,
     [0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99],
 );
-const IID_IAUDIOCLIENT: Guid = guid(
+pub(crate) const IID_IAUDIOCLIENT: Guid = guid(
     0x1cb9ad4c,
     0xdbfa,
     0x4c32,
     [0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2],
 );
-const IID_IAUDIOCLIENT2: Guid = guid(
+pub(crate) const IID_IAUDIOCLIENT2: Guid = guid(
     0x726778cd,
     0xf60a,
     0x4eda,
     [0x82, 0xde, 0xe4, 0x76, 0x10, 0xcd, 0x78, 0xaa],
 );
-const IID_IAUDIOCLIENT3: Guid = guid(
+pub(crate) const IID_IAUDIOCLIENT3: Guid = guid(
     0x7ed4ee07,
     0x8e67,
     0x4cd4,
     [0x8c, 0x1a, 0x2b, 0x7a, 0x59, 0x87, 0xad, 0x42],
 );
-const IID_IAUDIORENDERCLIENT: Guid = guid(
+pub(crate) const IID_IAUDIORENDERCLIENT: Guid = guid(
     0xf294acfc,
     0x3146,
     0x4483,
     [0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2],
 );
-const IID_IAUDIOCAPTURECLIENT: Guid = guid(
+pub(crate) const IID_IAUDIOCAPTURECLIENT: Guid = guid(
     0xc8adbd64,
     0xe71e,
     0x48a0,
     [0xa4, 0xde, 0x18, 0x5c, 0x39, 0x5c, 0xd3, 0x17],
 );
-const IID_IAUDIOCLOCK: Guid = guid(
+pub(crate) const IID_IAUDIOCLOCK: Guid = guid(
     0xcd63314f,
     0x3fba,
     0x4a1b,
     [0x81, 0x2c, 0xef, 0x96, 0x35, 0x8d, 0x3a, 0xc9],
 );
-const IID_ISIMPLEAUDIOVOLUME: Guid = guid(
+pub(crate) const IID_ISIMPLEAUDIOVOLUME: Guid = guid(
     0x87ce5498,
     0x68d6,
     0x44e5,
     [0x92, 0x15, 0x6d, 0xa4, 0x7e, 0xf8, 0x83, 0xd8],
 );
-const IID_IAUDIOSTREAMVOLUME: Guid = guid(
+pub(crate) const IID_IAUDIOSTREAMVOLUME: Guid = guid(
     0x93014887,
     0x242d,
     0x4068,
     [0x8a, 0x15, 0xcf, 0x5e, 0x93, 0xb9, 0x0f, 0xe3],
 );
-const IID_IAUDIOSESSIONCONTROL: Guid = guid(
+pub(crate) const IID_IAUDIOSESSIONCONTROL: Guid = guid(
     0xf4b1a599,
     0x7266,
     0x4319,
     [0xa8, 0xca, 0xe7, 0x0a, 0xcb, 0x11, 0xe8, 0xcd],
 );
-const IID_IAUDIOSESSIONCONTROL2: Guid = guid(
+pub(crate) const IID_IAUDIOSESSIONCONTROL2: Guid = guid(
     0xbfb7ff88,
     0x7239,
     0x4fc9,
     [0x8f, 0xa2, 0x07, 0xc9, 0x50, 0xbe, 0x9c, 0x6d],
 );
-const IID_IAUDIOENDPOINTVOLUME: Guid = guid(
+pub(crate) const IID_IAUDIOENDPOINTVOLUME: Guid = guid(
     0x5cdf2c82,
     0x841e,
     0x4546,
@@ -1825,7 +1825,7 @@ static EPV_VT: VTable<21> = VTable([
 // Création COM et exports
 // ---------------------------------------------------------------------------
 
-unsafe fn create_enumerator(riid: *const Guid, out: *mut *mut c_void) -> i32 {
+pub(crate) unsafe fn create_enumerator(riid: *const Guid, out: *mut *mut c_void) -> i32 {
     let e = Com::create(EN_VT.ptr(), Enumerator);
     let hr = en_qi(e, riid, out);
     Com::release(e);

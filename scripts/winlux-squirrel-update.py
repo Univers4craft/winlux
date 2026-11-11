@@ -15,7 +15,10 @@ Commandes prises en charge :
                           télécharger d'autre que l'index RELEASES ;
   --download URL          confirmation visible, puis paquet complet vérifié ;
   --update URL            idem, puis installation dans app-<version> ;
-  --processStart EXE [-a ARGS], --processStartAndWait EXE [-a ARGS].
+  --processStart EXE [-a ARGS], --processStartAndWait EXE [-a ARGS] ;
+  --uninstall [-s]        crochet --squirrel-uninstall des programmes qui le
+                          gèrent, puis désinstallation par Winlux (raccourcis,
+                          fichiers, inscription), comme Squirrel (#1821).
 
 Le paquet téléchargé est une donnée non fiable : il reste dans packages/,
 il est vérifié (taille, SHA-1 publié dans RELEASES), et son extraction refuse
@@ -347,6 +350,42 @@ def install(root, package, entry):
     return dest
 
 
+def uninstall(root):
+    """Update.exe --uninstall : Squirrel prévient l'appli (--squirrel-uninstall),
+    puis retire tout. Winlux retire ce qu'il a installé par sa propre
+    désinstallation, retrouvée par le nom du dossier (l'Id du paquet)."""
+    versions = installed_versions(root)
+    if versions:
+        dest = root / f"app-{versions[-1]}"
+        for exe in sorted(dest.glob("*.exe")):
+            if squirrel_aware(exe):
+                log(root, f"crochet {exe.name} --squirrel-uninstall")
+                try:
+                    subprocess.run([WINLUX, str(exe), "--squirrel-uninstall", versions[-1]],
+                                   cwd=dest, timeout=HOOK_TIMEOUT, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    log(root, f"crochet {exe.name} : {e}")
+    listing = subprocess.run([WINLUX, "--setup", "--programs"], capture_output=True,
+                             text=True, errors="replace", timeout=120).stdout
+    wanted = root.name.casefold()
+    for line in listing.splitlines():
+        if not line.startswith("app="):
+            continue
+        key = line[4:].split("\t", 1)[0]
+        if key.rsplit("\\", 1)[-1].casefold() == wanted:
+            rc = subprocess.run([WINLUX, "--setup", "--remove", key], timeout=600,
+                                stdout=subprocess.DEVNULL).returncode
+            log(root, f"désinstallation {key} : code {rc}")
+            # Seulement un vrai dossier Squirrel (app-* présents au départ).
+            if rc == 0 and versions:
+                # Ce que l'appli a écrit elle-même (installer.db, Discord.exe,
+                # anciennes versions) : Squirrel retire tout le dossier.
+                shutil.rmtree(root, ignore_errors=True)
+            return rc
+    raise Fail(f"{root.name} : aucune installation inscrite à désinstaller")
+
+
 def process_start(root, exe_name, args, wait):
     name = Path(exe_name.replace("\\", "/")).name
     for version in reversed(installed_versions(root)):
@@ -407,6 +446,8 @@ def main(argv):
             return 0
         if command in ("processStart", "processStartAndWait") and value:
             return process_start(root, value, extra, command == "processStartAndWait")
+        if command == "uninstall":
+            return uninstall(root)
         raise Fail(f"commande Squirrel non prise en charge : {' '.join(argv[2:])}")
     except Fail as e:
         log(root, str(e))

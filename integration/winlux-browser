@@ -31,14 +31,14 @@ report_status() {
     fi
 }
 
-# Navigateurs installés, un par ligne : « catalogue:<id> » (Chrome, Edge,
-# Firefox du catalogue, ordre alphabétique) puis « systeme:<commande> ».
+# Navigateurs installés, un par ligne : « catalogue:<id> » (navigateurs du
+# catalogue, ordre alphabétique) puis « systeme:<commande> ».
 # « defaut » est le navigateur par défaut du catalogue s'il est installé.
 installed_browsers() {
     default=none
     if command -v winlux-browsers >/dev/null 2>&1 && state=$(winlux-browsers --status 2>/dev/null); then
         default=$(printf '%s\n' "$state" | sed -n 's/^browser_default=//p')
-        for id in chrome edge firefox; do
+        for id in brave chrome edge firefox opera operagx tor vivaldi; do
             if printf '%s\n' "$state" | grep -Eq "^browser_$id=(installed|update)$"; then
                 printf 'catalogue:%s\n' "$id"
             fi

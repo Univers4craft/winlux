@@ -66,6 +66,18 @@ pub fn set_dll_directory(dir: Option<&str>) {
     user_search(|u| u.directory = d);
 }
 
+/// GetDllDirectory : le dossier réglé par SetDllDirectory, en chemin
+/// Windows (`None` si aucun).
+pub fn dll_directory() -> Option<String> {
+    user_search(|u| u.directory.clone()).map(|d| {
+        if d.as_os_str().is_empty() {
+            String::new()
+        } else {
+            crate::paths::to_windows(&d)
+        }
+    })
+}
+
 /// AddDllDirectory : chemin absolu exigé ; rend le cookie (0 = refus).
 pub fn add_dll_directory(dir: &str) -> usize {
     let p = crate::paths::to_linux(dir);
@@ -1259,6 +1271,48 @@ fn delay_rva(m: &Module, attrs: u32, value: u32) -> Result<usize, String> {
     }
 }
 
+/// Liste de fonctions bornée : les 60 premières, puis leur nombre.
+fn shorten(names: &[String]) -> String {
+    const MAX: usize = 60;
+    let mut text = names[..names.len().min(MAX)].join(", ");
+    if names.len() > MAX {
+        text.push_str(&format!(" … (+{} autres)", names.len() - MAX));
+    }
+    text
+}
+
+/// Noms (ou « #ordinal ») des fonctions d'une table d'imports.
+fn import_names(m: &Module, lookup_rva: usize) -> Vec<String> {
+    let b = m.bytes();
+    let (width, ordinal_flag) = if m.pe.x86 {
+        (4, 1u64 << 31)
+    } else {
+        (8, 1u64 << 63)
+    };
+    let mut names = Vec::new();
+    for i in 0..65_536usize {
+        let Some(t) = lookup_rva.checked_add(i * width).and_then(|lo| {
+            if m.pe.x86 {
+                rd32(b, lo).map(u64::from)
+            } else {
+                rd64(b, lo)
+            }
+        }) else {
+            break;
+        };
+        if t == 0 {
+            break;
+        }
+        names.push(if t & ordinal_flag != 0 {
+            format!("#{}", t & 0xffff)
+        } else {
+            m.cstr_at((t & 0x7fff_ffff) as u32 + 2)
+                .unwrap_or_else(|| "?".into())
+        });
+    }
+    names
+}
+
 fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Result<(), String> {
     let b = m.bytes();
     // Entrées de 4 octets en PE32, ordinal signalé par le bit 31.
@@ -1290,7 +1344,29 @@ fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Resu
                     .ok_or("nom d'import illisible")?,
             )
         };
-        let addr = resolve_one(dll, &want, m)?;
+        let addr = match resolve_one(dll, &want, m) {
+            Ok(a) => a,
+            // DLL absente : le message nomme le module qui l'importe et les
+            // fonctions qu'il en attend, pour qu'un seul passage au banc
+            // dise tout ce qu'il faut fournir (#1792).
+            Err(e) if e.starts_with("DLL introuvable") => {
+                let me = m
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // Déjà détaillé par un module plus profond : on ne nomme que
+                // le chaînon, pour que le message reste court (#1816).
+                if e.contains(" ; importée par ") {
+                    return Err(format!("{e} ← {me}"));
+                }
+                return Err(format!(
+                    "{e} ; importée par {me} : {}",
+                    shorten(&import_names(m, lookup_rva))
+                ));
+            }
+            Err(e) => return Err(e),
+        };
         let dst = i
             .checked_mul(width)
             .and_then(|n| iat_rva.checked_add(n))
@@ -1725,5 +1801,19 @@ mod tests {
 fn libc_munmap(base: usize, size: usize) {
     unsafe {
         libc::munmap(base as *mut libc::c_void, size);
+    }
+}
+
+#[cfg(test)]
+mod tests_dll_introuvable {
+    /// #1816 : 60 noms au plus, puis leur nombre.
+    #[test]
+    fn liste_de_fonctions_bornee() {
+        let names: Vec<String> = (0..75).map(|i| format!("f{i}")).collect();
+        let s = super::shorten(&names);
+        assert!(s.starts_with("f0, f1"));
+        assert!(s.contains("f59") && !s.contains("f60,"));
+        assert!(s.ends_with("… (+15 autres)"));
+        assert_eq!(super::shorten(&names[..2]), "f0, f1");
     }
 }

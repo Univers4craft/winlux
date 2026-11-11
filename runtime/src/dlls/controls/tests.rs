@@ -309,6 +309,13 @@ fn champ_marges_em_setmargins() {
     assert_eq!((area.left, area.right), (l as i32, 42 - 7));
     sendw(e, 0x00D3, 0xFFFF, 0); // EC_USEFONTINFO
     assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    // #1552 : EC_USEFONTINFO dans chaque mot de lParam (wxWidgets) donne
+    // aussi les marges de la police, pas 65535 pixels.
+    sendw(e, 0x00D3, 3, 7 | (7 << 16));
+    sendw(e, 0x00D3, 3, 0xFFFF | (0xFFFF << 16));
+    assert_eq!(sendw(e, 0x00D4, 0, 0), m);
+    let area = edit_area(e, client(e));
+    assert!(area.left < area.right, "zone de texte {area:?}");
     gui::destroy_window(p);
 }
 
@@ -2086,4 +2093,36 @@ fn richedit_flux_texte_et_rtf() {
     sendw(e, 0x0449, 0x2, es.as_mut_ptr() as isize);
     assert_eq!(title(e), "Café\r\nPile {1}\t€");
     gui::destroy_window(p);
+}
+
+/// #1803 : les délais d'une infobulle ne valent jamais 0. WinForms en fait
+/// l'intervalle d'un minuteur (Paint.NET, Tab dans la barre d'outils).
+#[test]
+fn infobulle_delais_par_defaut_et_reglages() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    const TTM_SETDELAYTIME: u32 = 0x0403;
+    const TTM_GETDELAYTIME: u32 = 0x0415;
+    let p = parent_window();
+    let tip = child(p, "tooltips_class32", "", 0, 0, (0, 0, 0, 0));
+    assert_ne!(tip, 0);
+    let clic = user32::get_double_click_time() as isize;
+    let delais = |tip| [1, 2, 3].map(|w| sendw(tip, TTM_GETDELAYTIME, w, 0));
+    // Réapparition, disparition, apparition.
+    assert_eq!(delais(tip), [clic / 5, clic * 10, clic]);
+    sendw(tip, TTM_SETDELAYTIME, 0, 1000);
+    assert_eq!(delais(tip), [200, 10000, 1000]);
+    sendw(tip, TTM_SETDELAYTIME, 3, 250);
+    assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), 250);
+    sendw(tip, TTM_SETDELAYTIME, 3, 40000); // au-delà de 32 767 ms
+    assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), 40000);
+    sendw(tip, TTM_SETDELAYTIME, 3, 0xFFFF); // -1 : valeur par défaut
+    assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), clic);
+    // Largeur maximale : -1 au départ, l'ancienne valeur rendue au réglage.
+    assert_eq!(sendw(tip, 0x0419, 0, 0), -1);
+    assert_eq!(sendw(tip, 0x0418, 0, 300), -1);
+    assert_eq!(sendw(tip, 0x0419, 0, 0), 300);
+    // Couleurs : système par défaut, puis celle fixée.
+    assert_eq!(sendw(tip, 0x0416, 0, 0) as u32, user32::get_sys_color(24));
+    sendw(tip, 0x0413, 0x00FF_00FF, 0);
+    assert_eq!(sendw(tip, 0x0416, 0, 0), 0x00FF_00FF);
 }

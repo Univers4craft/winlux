@@ -8,7 +8,6 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
-#[allow(dead_code)]
 const E_OUTOFMEMORY: i32 = 0x8007_000eu32 as i32;
 const DISP_E_BADINDEX: i32 = 0x8002_000bu32 as i32;
 
@@ -164,6 +163,10 @@ pub unsafe extern "win64" fn variant_copy(dest: *mut c_void, src: *const c_void)
     variant_clear(dest);
     std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, 16);
     let vt = *(src as *const u16);
+    // VT_RECORD en x64 : pRecInfo occupe les octets 16 à 23 (#1902).
+    if vt == VT_RECORD && variant_size() == 24 {
+        std::ptr::copy_nonoverlapping((src as *const u8).add(16), (dest as *mut u8).add(16), 8);
+    }
     if vt == VT_BSTR {
         let dup = sys_alloc_string(variant_bstr(src));
         set_variant_bstr(dest, dup);
@@ -198,6 +201,8 @@ struct SafeArrayInner {
     locks: u32,
     data: Vec<u8>,
     bounds: Vec<SafeArrayBound>,
+    /// IRecordInfo d'un tableau VT_RECORD (référence prise), sinon 0.
+    record: usize,
     /// Structure SAFEARRAY publique (oaidl.h) que voit l'appelant, précédée
     /// de 16 octets dont les 4 derniers portent le VARTYPE
     /// (FADF_HAVEVARTYPE). Son adresse + 16 est le pointeur rendu (#1204).
@@ -208,7 +213,11 @@ struct SafeArrayInner {
 // par le verrou de la table.
 unsafe impl Send for SafeArrayInner {}
 
+const FADF_RECORD: u16 = 0x0020;
 const FADF_HAVEVARTYPE: u16 = 0x0080;
+const VT_RECORD: u16 = 36;
+const E_POINTER: i32 = 0x8000_4003u32 as i32;
+const E_UNEXPECTED: i32 = 0x8000_FFFFu32 as i32;
 const FADF_BSTR: u16 = 0x0100;
 const FADF_UNKNOWN: u16 = 0x0200;
 const FADF_DISPATCH: u16 = 0x0400;
@@ -226,6 +235,7 @@ impl SafeArrayInner {
             locks: 0,
             data,
             bounds,
+            record: 0,
             header: vec![0u64; words],
         });
         inner.sync_header();
@@ -242,21 +252,35 @@ impl SafeArrayInner {
     /// droite en premier comme sous Windows. Disposition x86 (pointeur de
     /// 4 octets, bornes à l'octet 16) pour un programme 32 bits.
     fn sync_header(&mut self) {
-        let features = FADF_HAVEVARTYPE
-            | match self.vt {
-                VT_BSTR => FADF_BSTR,
-                13 => FADF_UNKNOWN,
-                9 => FADF_DISPATCH,
-                12 => FADF_VARIANT,
-                _ => 0,
-            };
+        let features = if self.vt == VT_RECORD {
+            FADF_RECORD
+        } else {
+            FADF_HAVEVARTYPE
+        } | match self.vt {
+            VT_BSTR => FADF_BSTR,
+            13 => FADF_UNKNOWN,
+            9 => FADF_DISPATCH,
+            12 => FADF_VARIANT,
+            _ => 0,
+        };
         let data = self.data.as_mut_ptr() as usize;
         let ptr32 = crate::wow32::pointer_size() == 4;
         let bounds: Vec<SafeArrayBound> = self.bounds.iter().rev().copied().collect();
         let (dims, size, locks, vt) = (self.dims, self.element_size, self.locks, self.vt);
+        let record = self.record;
         let base = self.header.as_mut_ptr() as *mut u8;
         unsafe {
-            std::ptr::write_unaligned(base.add(12) as *mut u32, u32::from(vt));
+            // FADF_RECORD : l'IRecordInfo juste avant la structure, à la
+            // place du VARTYPE.
+            if vt == VT_RECORD {
+                if ptr32 {
+                    std::ptr::write_unaligned(base.add(12) as *mut u32, record as u32);
+                } else {
+                    std::ptr::write_unaligned(base.add(8) as *mut usize, record);
+                }
+            } else {
+                std::ptr::write_unaligned(base.add(12) as *mut u32, u32::from(vt));
+            }
             let sa = base.add(16);
             std::ptr::write_unaligned(sa as *mut u16, dims);
             std::ptr::write_unaligned(sa.add(2) as *mut u16, features);
@@ -300,15 +324,46 @@ fn safe_arrays() -> &'static Mutex<HashMap<usize, Box<SafeArrayInner>>> {
     SAFE_ARRAYS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Taille d'une case de SAFEARRAY, selon le programme : les pointeurs
+/// (BSTR, IDispatch, IUnknown) font 4 octets en x86, et un VARIANT 24 en
+/// x64 (son union contient BRECORD, deux pointeurs) contre 16 en x86 (#1902).
 fn element_size_for_vt(vt: u16) -> u32 {
+    element_size(vt, crate::wow32::pointer_size() as u32)
+}
+
+/// Taille d'une case pour des pointeurs de `pointer` octets (4 ou 8).
+fn element_size(vt: u16, pointer: u32) -> u32 {
     match vt {
-        VT_UI1 => 1,           // VT_UI1
-        VT_I2 | VT_BOOL => 2,  // VT_I2, VT_BOOL
-        VT_I4 | 4 => 4,        // VT_I4, VT_R4
-        5 | 7 => 8,            // VT_R8, VT_DATE
-        VT_BSTR | 9 | 13 => 8, // VT_BSTR, VT_DISPATCH, VT_UNKNOWN (pointers)
-        12 => 16,              // VT_VARIANT
+        VT_UI1 | 16 => 1,                   // VT_UI1, VT_I1
+        VT_I2 | VT_BOOL | 18 => 2,          // VT_I2, VT_BOOL, VT_UI2
+        VT_I4 | 4 | 10 | 19 | 22 | 23 => 4, // VT_I4, VT_R4, VT_ERROR, VT_UI4, VT_INT, VT_UINT
+        5 | 6 | 7 | 20 | 21 => 8,           // VT_R8, VT_CY, VT_DATE, VT_I8, VT_UI8
+        VT_BSTR | 9 | 13 => pointer,        // VT_BSTR, VT_DISPATCH, VT_UNKNOWN
+        14 => 16,                           // VT_DECIMAL
+        12 => 8 + 2 * pointer,              // VT_VARIANT : 16 en x86, 24 en x64
         _ => 16,
+    }
+}
+
+/// sizeof(VARIANT) pour le programme : 16 en x86, 24 en x64.
+fn variant_size() -> u32 {
+    element_size(12, crate::wow32::pointer_size() as u32)
+}
+
+/// Case de la taille d'un pointeur du programme, à une adresse quelconque.
+unsafe fn read_cell(at: *const u8) -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned(at as *const usize)
+    }
+}
+
+unsafe fn write_cell(at: *mut u8, v: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        std::ptr::write_unaligned(at as *mut u32, v as u32)
+    } else {
+        std::ptr::write_unaligned(at as *mut usize, v)
     }
 }
 
@@ -377,7 +432,10 @@ pub extern "win64" fn safe_array_destroy(sa: usize) -> i32 {
         Some(inner) => {
             drop(map);
             // SAFETY : éléments écrits par les fonctions SafeArray* elles-mêmes.
-            unsafe { clear_elements(&inner) };
+            unsafe {
+                clear_elements(&inner);
+                unk_call(2, inner.record);
+            }
             0
         }
         None => E_INVALIDARG,
@@ -477,20 +535,20 @@ pub unsafe extern "win64" fn safe_array_get_element(
         // Une copie de la chaîne, de l'interface (AddRef) ou du VARIANT,
         // que l'appelant libère (Microsoft Learn, SafeArrayGetElement).
         VT_BSTR => {
-            let b = std::ptr::read_unaligned(at as *const *const u16);
+            let b = read_cell(at) as *const u16;
             let copy = if b.is_null() {
                 std::ptr::null_mut()
             } else {
                 sys_alloc_string_len(b, sys_string_len(b))
             };
-            std::ptr::write_unaligned(out as *mut *mut u16, copy);
+            write_cell(out as *mut u8, copy as usize);
         }
         9 | 13 => {
-            let p = std::ptr::read_unaligned(at as *const usize);
+            let p = read_cell(at);
             if p != 0 {
                 unk_call(1, p);
             }
-            std::ptr::write_unaligned(out as *mut usize, p);
+            write_cell(out as *mut u8, p);
         }
         12 => {
             std::ptr::write_bytes(out as *mut u8, 0, elem_size);
@@ -532,8 +590,8 @@ pub unsafe extern "win64" fn safe_array_put_element(
             if copy.is_null() {
                 return E_OUTOFMEMORY;
             }
-            let old = std::ptr::read_unaligned(at as *const *mut u16);
-            std::ptr::write_unaligned(at as *mut *mut u16, copy);
+            let old = read_cell(at) as *mut u16;
+            write_cell(at, copy as usize);
             if !old.is_null() {
                 sys_free_string(old);
             }
@@ -541,8 +599,8 @@ pub unsafe extern "win64" fn safe_array_put_element(
         9 | 13 => {
             let p = val as usize;
             unk_call(1, p);
-            let old = std::ptr::read_unaligned(at as *const usize);
-            std::ptr::write_unaligned(at as *mut usize, p);
+            let old = read_cell(at);
+            write_cell(at, p);
             if old != 0 {
                 unk_call(2, old);
             }
@@ -566,19 +624,26 @@ unsafe fn clear_elements(inner: &SafeArrayInner) {
     for at in inner.data.chunks_exact(size).map(|c| c.as_ptr()) {
         match inner.vt {
             VT_BSTR => {
-                let b = std::ptr::read_unaligned(at as *const *mut u16);
+                let b = read_cell(at) as *mut u16;
                 if !b.is_null() {
                     sys_free_string(b);
                 }
             }
             9 | 13 => {
-                let p = std::ptr::read_unaligned(at as *const usize);
+                let p = read_cell(at);
                 if p != 0 {
                     unk_call(2, p);
                 }
             }
             12 => {
                 variant_clear(at as *mut c_void);
+            }
+            // IRecordInfo::RecordClear de chaque élément.
+            VT_RECORD if inner.record != 0 && crate::wow32::pointer_size() == 8 => {
+                let rec = inner.record;
+                let clear: unsafe extern "win64" fn(usize, *const u8) -> i32 =
+                    std::mem::transmute(*(*(rec as *const *const usize)).add(4));
+                clear(rec, at);
             }
             _ => return,
         }
@@ -617,6 +682,186 @@ pub unsafe extern "win64" fn safe_array_get_vartype(sa: usize, pvt: *mut u16) ->
         return E_INVALIDARG;
     };
     *pvt = inner.vt;
+    0
+}
+
+// ── Verrous, descripteurs et tableaux de structures (#1511) ──────────
+
+pub extern "win64" fn safe_array_lock(sa: usize) -> i32 {
+    let mut map = lock(safe_arrays());
+    let Some(inner) = map.get_mut(&sa) else {
+        return E_INVALIDARG;
+    };
+    inner.locks = inner.locks.saturating_add(1);
+    inner.sync_header();
+    0
+}
+
+pub extern "win64" fn safe_array_unlock(sa: usize) -> i32 {
+    let mut map = lock(safe_arrays());
+    let Some(inner) = map.get_mut(&sa) else {
+        return E_INVALIDARG;
+    };
+    if inner.locks == 0 {
+        return E_UNEXPECTED;
+    }
+    inner.locks -= 1;
+    inner.sync_header();
+    0
+}
+
+/// Descripteur sans données : l'appelant remplit rgsabound dans la
+/// structure publique, puis appelle SafeArrayAllocData.
+pub unsafe extern "win64" fn safe_array_alloc_descriptor_ex(
+    vt: u16,
+    dims: u32,
+    out: *mut usize,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    if dims == 0 || dims > 0xFFFF {
+        return E_INVALIDARG;
+    }
+    let size = if vt == VT_RECORD {
+        0
+    } else {
+        element_size_for_vt(vt)
+    };
+    let bounds = vec![
+        SafeArrayBound {
+            elements: 0,
+            lower_bound: 0,
+        };
+        dims as usize
+    ];
+    *out = register(SafeArrayInner::new(vt, bounds, Vec::new(), size));
+    0
+}
+
+/// Données d'un descripteur : bornes et taille d'élément lues dans la
+/// structure publique (disposition x86 ou x64).
+pub extern "win64" fn safe_array_alloc_data(sa: usize) -> i32 {
+    let mut map = lock(safe_arrays());
+    let Some(inner) = map.get_mut(&sa) else {
+        return E_INVALIDARG;
+    };
+    let first = if crate::wow32::pointer_size() == 4 {
+        16
+    } else {
+        24
+    };
+    // SAFETY : la structure publique appartient au tableau (`header`).
+    let (public_size, mut bounds) = unsafe {
+        let p = sa as *const u8;
+        let size = std::ptr::read_unaligned(p.add(4) as *const u32);
+        let bounds: Vec<SafeArrayBound> = (0..inner.dims as usize)
+            .map(|i| std::ptr::read_unaligned(p.add(first + 8 * i) as *const SafeArrayBound))
+            .collect();
+        (size, bounds)
+    };
+    bounds.reverse();
+    if public_size != 0 {
+        inner.element_size = public_size;
+    }
+    let Some(data_size) = bounds
+        .iter()
+        .try_fold(inner.element_size as usize, |acc, b| {
+            acc.checked_mul(b.elements as usize)
+        })
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return E_OUTOFMEMORY;
+    };
+    inner.bounds = bounds;
+    inner.data = vec![0u8; data_size];
+    inner.sync_header();
+    0
+}
+
+/// IRecordInfo::GetSize (emplacement 8) ; 0 si l'objet le refuse.
+unsafe fn record_size(rec: usize) -> u32 {
+    if rec == 0 || crate::wow32::pointer_size() != 8 {
+        return 0;
+    }
+    let get: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+        std::mem::transmute(*(*(rec as *const *const usize)).add(8));
+    let mut size = 0u32;
+    if get(rec, &mut size) < 0 {
+        0
+    } else {
+        size
+    }
+}
+
+/// SafeArrayCreateEx : pour VT_RECORD, `extra` est l'IRecordInfo des
+/// éléments ; pour VT_UNKNOWN/VT_DISPATCH, un IID qui ne change rien ici.
+pub unsafe extern "win64" fn safe_array_create_ex(
+    vt: u16,
+    dims: u32,
+    bounds_ptr: usize,
+    extra: usize,
+) -> usize {
+    if vt != VT_RECORD {
+        return safe_array_create(vt, dims, bounds_ptr);
+    }
+    let size = record_size(extra);
+    if extra == 0 || size == 0 || dims == 0 || dims > 0xFFFF || bounds_ptr == 0 {
+        return 0;
+    }
+    let bounds =
+        std::slice::from_raw_parts(bounds_ptr as *const SafeArrayBound, dims as usize).to_vec();
+    let Some(data_size) = bounds
+        .iter()
+        .try_fold(size as usize, |acc, b| acc.checked_mul(b.elements as usize))
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return 0;
+    };
+    let mut inner = SafeArrayInner::new(vt, bounds, vec![0u8; data_size], size);
+    unk_call(1, extra);
+    inner.record = extra;
+    inner.sync_header();
+    register(inner)
+}
+
+pub unsafe extern "win64" fn safe_array_set_record_info(sa: usize, rec: usize) -> i32 {
+    let size = record_size(rec);
+    let old = {
+        let mut map = lock(safe_arrays());
+        let Some(inner) = map.get_mut(&sa) else {
+            return E_INVALIDARG;
+        };
+        if inner.vt != VT_RECORD {
+            return E_INVALIDARG;
+        }
+        unk_call(1, rec);
+        if inner.data.is_empty() && size != 0 {
+            inner.element_size = size;
+        }
+        let old = std::mem::replace(&mut inner.record, rec);
+        inner.sync_header();
+        old
+    };
+    unk_call(2, old);
+    0
+}
+
+pub unsafe extern "win64" fn safe_array_get_record_info(sa: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    let map = lock(safe_arrays());
+    let Some(inner) = map.get(&sa) else {
+        return E_INVALIDARG;
+    };
+    if inner.vt != VT_RECORD || inner.record == 0 {
+        return E_INVALIDARG;
+    }
+    unk_call(1, inner.record);
+    *out = inner.record;
     0
 }
 
@@ -852,6 +1097,13 @@ pub fn exports() -> crate::dlls::Exports {
         "SafeArrayGetVartype" => fn safe_array_get_vartype,
         "SafeArrayPtrOfIndex" => fn safe_array_ptr_of_index,
         "SafeArrayRedim" => fn safe_array_redim,
+        "SafeArrayLock" => fn safe_array_lock,
+        "SafeArrayUnlock" => fn safe_array_unlock,
+        "SafeArrayAllocDescriptorEx" => fn safe_array_alloc_descriptor_ex,
+        "SafeArrayAllocData" => fn safe_array_alloc_data,
+        "SafeArrayCreateEx" => fn safe_array_create_ex,
+        "SafeArraySetRecordInfo" => fn safe_array_set_record_info,
+        "SafeArrayGetRecordInfo" => fn safe_array_get_record_info,
         "VariantCopyInd" => fn variant_copy_ind,
         "GetErrorInfo" => fn get_error_info,
         "SetErrorInfo" => fn set_error_info,
@@ -874,6 +1126,12 @@ pub fn exports() -> crate::dlls::Exports {
         "#149" => fn sys_string_byte_len, "#150" => fn sys_alloc_string_byte_len,
         "#200" => fn get_error_info, "#201" => fn set_error_info, "#202" => fn create_error_info,
         "#411" => fn safe_array_create_vector,
+        // Lot C du relevé (#1511) : numéros de la bibliothèque d'importation
+        // OleAut32.Lib du SDK Windows public.
+        "#21" => fn safe_array_lock, "#22" => fn safe_array_unlock,
+        "#37" => fn safe_array_alloc_data, "#41" => fn safe_array_alloc_descriptor_ex,
+        "#42" => fn safe_array_create_ex, "#44" => fn safe_array_set_record_info,
+        "#45" => fn safe_array_get_record_info,
     }
 }
 
@@ -927,6 +1185,77 @@ mod safearray_tests {
             sys_free_string(got);
             sys_free_string(b);
             assert_eq!(safe_array_destroy(sa), 0);
+        }
+    }
+
+    /// #1902 : taille des cases selon le programme. En x64, un VARIANT fait
+    /// 24 octets ; en x86, 16, et les pointeurs 4.
+    #[test]
+    fn taille_des_cases_selon_le_programme() {
+        assert_eq!(element_size(12, 8), 24);
+        assert_eq!(element_size(12, 4), 16);
+        for vt in [VT_BSTR, 9, 13] {
+            assert_eq!(element_size(vt, 8), 8);
+            assert_eq!(element_size(vt, 4), 4);
+        }
+        assert_eq!(element_size(14, 4), 16, "VT_DECIMAL");
+        assert_eq!(element_size(20, 4), 8, "VT_I8");
+        assert_eq!(element_size(16, 8), 1, "VT_I1");
+        assert_eq!(element_size(18, 8), 2, "VT_UI2");
+        assert_eq!(element_size(10, 8), 4, "VT_ERROR");
+    }
+
+    /// #1902 : un SAFEARRAY de VARIANT d'un programme x64 a des cases de
+    /// 24 octets, et PutElement/GetElement tombent sur la bonne case.
+    #[test]
+    fn variants_espaces_de_24_octets_en_x64() {
+        unsafe {
+            let sa = safe_array_create_vector(12, 0, 3);
+            assert_ne!(sa, 0);
+            assert_eq!(safe_array_get_elem_size(sa), 24);
+            assert_eq!(rd::<u32>(sa + 4), 24, "cbElements");
+            let mut v = [0u8; 24];
+            v[0] = VT_I4 as u8;
+            v[8..12].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+            for i in 0..3i32 {
+                v[8] = i as u8;
+                assert_eq!(
+                    safe_array_put_element(sa, [i].as_ptr(), v.as_ptr().cast()),
+                    0
+                );
+            }
+            let mut data: *mut c_void = std::ptr::null_mut();
+            assert_eq!(safe_array_access_data(sa, &mut data), 0);
+            for i in 0..3usize {
+                let at = data as usize + 24 * i;
+                assert_eq!(rd::<u16>(at), VT_I4);
+                assert_eq!(rd::<u32>(at + 8), 0x1234_5600 | i as u32);
+            }
+            safe_array_unaccess_data(sa);
+            let mut got = [0u8; 24];
+            assert_eq!(
+                safe_array_get_element(sa, [2].as_ptr(), got.as_mut_ptr().cast()),
+                0
+            );
+            assert_eq!(rd::<u32>(got.as_ptr() as usize + 8), 0x1234_5602);
+            assert_eq!(safe_array_destroy(sa), 0);
+        }
+    }
+
+    /// #1902 : VariantCopy garde pRecInfo (octets 16 à 23) d'un VT_RECORD.
+    #[test]
+    fn copie_d_un_variant_record_garde_record_info() {
+        unsafe {
+            let mut src = [0u8; 24];
+            src[0] = VT_RECORD as u8;
+            src[8..16].copy_from_slice(&0x1111_2222_3333_4444u64.to_le_bytes());
+            src[16..24].copy_from_slice(&0x5555_6666_7777_8888u64.to_le_bytes());
+            let mut dst = [0u8; 24];
+            assert_eq!(
+                variant_copy(dst.as_mut_ptr().cast(), src.as_ptr().cast()),
+                0
+            );
+            assert_eq!(dst, src);
         }
     }
 

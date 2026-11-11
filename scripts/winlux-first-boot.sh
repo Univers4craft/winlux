@@ -317,18 +317,24 @@ APPS_SELECTED=${REPLY:-libreoffice vlc}
 # liste est alphabétique ; le choix est téléchargé sur le site officiel de
 # l'éditeur et installé par l'init dès que le réseau répond.
 log "Étape 6/$TOTAL_STEPS : Navigateur"
-MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'
+MENU_ARGS='aucun Choisir_plus_tard brave Brave chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox opera Opera operagx Opera_GX tor Tor_Browser vivaldi Vivaldi'
 menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun)" $MENU_ARGS
 BROWSER_CHOICE=${REPLY:-aucun}
-case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
+case "$BROWSER_CHOICE" in brave|chrome|edge|firefox|opera|operagx|tor|vivaldi) ;; *) BROWSER_CHOICE=aucun ;; esac
 
-# Boutiques de logiciels : aucune fournie ni cochée d'office (docs/BOUTIQUES.md),
-# ordre alphabétique. Ajoutées au Store par winlux-store-catalogs, reprises au
-# démarrage suivant sans réseau.
+# Boutiques de logiciels : aucune fournie dans l'image, ordre alphabétique.
+# Flathub (« preselected » dans store-catalogs.json) est proposé coché tant
+# qu'aucun choix n'est enregistré ; décoché, il est refusé (docs/BOUTIQUES.md).
+# Ajoutées au Store par winlux-store-catalogs, reprises au démarrage suivant
+# sans réseau.
 log "Étape 6/$TOTAL_STEPS : Boutiques de logiciels"
-store_mark() { if grep -qx "$1" /etc/winlux/store-catalogs 2>/dev/null; then echo on; else echo off; fi; }
+store_mark() {
+    if test -e /etc/winlux/store-catalogs; then
+        if grep -qx "$1" /etc/winlux/store-catalogs; then echo on; else echo off; fi
+    elif test "$1" = flathub; then echo on; else echo off; fi
+}
 CHECKLIST_ARGS="flathub Flathub_(logiciels_Linux) $(store_mark flathub) scoop-extras Scoop_Extras_(logiciels_Windows) $(store_mark scoop-extras) scoop-games Scoop_Games_(jeux_Windows) $(store_mark scoop-games)"
-checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Winlux n'en impose aucune)" $CHECKLIST_ARGS
+checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Flathub proposé coché, décochez pour refuser)" $CHECKLIST_ARGS
 STORE_CHOICE=
 for store in ${REPLY:-}; do
     store=$(printf '%s' "$store" | tr -d '"')

@@ -429,8 +429,34 @@ pub fn now_filetime() -> u64 {
     116_444_736_000_000_000 + since.as_nanos() as u64 / 100
 }
 
+/// Valeurs système ajoutées après coup : posées aussi dans un registre déjà
+/// créé s'il ne les a pas. Composants d'Internet Explorer 11, présents sous
+/// Windows 10 et 11 : des installeurs (Acrobat) exigent « Internet
+/// Explorer 7.0 » (#1756).
+const LATER_DEFAULTS: [(&str, &str, &str); 2] = [
+    (
+        "hklm\\Software\\Microsoft\\Internet Explorer",
+        "Version",
+        "9.11.19041.0",
+    ),
+    (
+        "hklm\\Software\\Microsoft\\Internet Explorer",
+        "svcVersion",
+        "11.0.19041.0",
+    ),
+];
+
+fn add_later_defaults(d: &mut Data) {
+    for (k, n, v) in LATER_DEFAULTS {
+        if d.get(k, n).is_none() {
+            d.set(k, n, REG_SZ, utf16z(v));
+        }
+    }
+}
+
 fn defaults() -> Data {
     let mut d = Data::empty();
+    add_later_defaults(&mut d);
     d.ensure("hklm\\Software\\Classes");
     let sz = |s: &str| utf16z(s);
     for (k, n, v) in [
@@ -955,7 +981,9 @@ fn load_file(path: &Path) -> Result<Data, i32> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(defaults()),
         Err(_) => return Err(ERROR_ACCESS_DENIED),
     }
-    parse(&text)
+    let mut data = parse(&text)?;
+    add_later_defaults(&mut data);
+    Ok(data)
 }
 
 fn current(cache: &mut Option<Cache>) -> Result<&Data, i32> {

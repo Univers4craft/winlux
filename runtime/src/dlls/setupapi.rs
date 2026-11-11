@@ -86,6 +86,8 @@ pub unsafe extern "win64" fn SetupDiGetDeviceInterfaceDetailW(
 
 pub fn exports() -> crate::dlls::Exports {
     let mut e = devnodes::exports();
+    e.extend(crate::dlls::drivers::exports());
+    e.extend(crate::dlls::setupinf::exports());
     e.extend(crate::exports! {
         "SetupDiGetClassDevsW" => fn SetupDiGetClassDevsW,
         "SetupDiGetClassDevsA" => fn SetupDiGetClassDevsA,

@@ -23,7 +23,20 @@ fn bcl_dir() -> Option<PathBuf> {
     let dir = std::env::var_os("WINLUX_BCL_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/opt/winlux/bcl"));
-    dir.is_dir().then_some(dir)
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    // Sans elle, seuls les appels servis par bcl.rs marchent : le dire une
+    // fois, sinon un banc sans BCL donne des conclusions fausses (#1703).
+    static ABSENTE: std::sync::Once = std::sync::Once::new();
+    ABSENTE.call_once(|| {
+        crate::log_warn!(
+            "clr",
+            "BCL Winlux absente ({}) : seule la bibliothèque intégrée répond",
+            dir.display()
+        )
+    });
+    None
 }
 
 use super::metadata::Assembly;
@@ -41,6 +54,8 @@ pub struct AsmInfo {
     pub method_owner: Vec<u32>,
     /// Field → TypeDef qui le déclare.
     pub field_owner: Vec<u32>,
+    /// Fichier d'où vient l'assembly (`Assembly.Location`, #1869).
+    pub path: Option<PathBuf>,
 }
 
 impl AsmInfo {
@@ -72,14 +87,20 @@ impl AsmInfo {
             type_ids: vec![None; types as usize + 1],
             method_owner,
             field_owner,
+            path: None,
         }
     }
 }
 
 /// Charge `main` puis, de proche en proche, les assemblies privées qu'elle
-/// référence. L'indice 0 est toujours le programme.
-pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmInfo>) {
-    let info = AsmInfo::new(&main, "programme");
+/// référence. L'indice 0 est toujours le programme, lu dans `main_path`.
+pub fn load(
+    main: Assembly,
+    main_path: Option<&Path>,
+    app_dir: Option<&Path>,
+) -> (Vec<Assembly>, Vec<AsmInfo>) {
+    let mut info = AsmInfo::new(&main, "programme");
+    info.path = main_path.map(Path::to_path_buf);
     let mut assemblies = vec![main];
     let mut infos = vec![info];
     let mut next = 0;
@@ -116,6 +137,7 @@ pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmIn
                     );
                     let mut info = AsmInfo::new(&a, &name);
                     info.name = key;
+                    info.path = Some(path.clone());
                     assemblies.push(a);
                     infos.push(info);
                 }

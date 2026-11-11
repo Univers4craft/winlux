@@ -329,7 +329,12 @@ pub unsafe extern "win64" fn sh_get_known_folder_path(
 }
 
 /// `GetUserProfileDirectory` : taille en caractères, terminateur compris.
-unsafe fn profile_out<T: Copy>(text: Vec<T>, zero: T, buf: *mut T, size: *mut u32) -> i32 {
+pub(crate) unsafe fn profile_out<T: Copy>(
+    text: Vec<T>,
+    zero: T,
+    buf: *mut T,
+    size: *mut u32,
+) -> i32 {
     if size.is_null() {
         crate::process::set_last_error(87);
         return 0;

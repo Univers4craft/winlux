@@ -221,6 +221,13 @@ fn casse_ambigue_prefere_le_nom_exact_puis_l_ordre_alphabetique() {
     assert_eq!(to_linux("C:\\PROJETS\\Nouveau.TXT"), d.join("Nouveau.TXT"));
     // Dossier intermédiaire absent : le chemin est rendu tel quel.
     assert_eq!(to_linux("C:\\absent\\x"), env.home.join("absent/x"));
+    // Préfixe existant dans une autre casse, suite absente : le préfixe
+    // garde la casse du disque (~/windows, pas ~/Windows, #1663).
+    std::fs::create_dir_all(env.home.join("windows/INF")).unwrap();
+    assert_eq!(
+        to_linux("C:\\Windows\\Installer\\wix.rmi"),
+        env.home.join("windows/Installer/wix.rmi")
+    );
 }
 
 #[test]

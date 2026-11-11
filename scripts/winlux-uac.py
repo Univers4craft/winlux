@@ -89,6 +89,62 @@ def _t(text, **values):
 ADMIN_GROUPS = ("sudo", "wheel", "admin")
 
 
+# ── Verrou des fenêtres de consentement (#1696) ─────────────────────────────
+# Partagé avec la saisie simulée du runtime (runtime/src/dlls/saisie.rs) :
+# la fenêtre le prend en exclusif avant de s'afficher et le garde jusqu'à sa
+# fermeture. Un envoi SendInput en cours se termine d'abord ; aucun autre ne
+# commence tant que la fenêtre est là. Seule la personne peut y répondre.
+
+def consent_lock_path():
+    if os.environ.get("WINLUX_CONSENT_LOCK"):
+        return os.environ["WINLUX_CONSENT_LOCK"]
+    display = os.environ.get("DISPLAY", "").rpartition(":")[2].split(".")[0]
+    number = "".join(c for c in display if c.isdigit()) or "0"
+    return f"/tmp/winlux-consent-{number}.lock"
+
+
+def _lock_exclusive(path, timeout):
+    """Descripteur verrouillé en exclusif, ou None (lien, autre compte,
+    délai dépassé)."""
+    import fcntl
+    import stat
+    import time
+    # Jamais à travers un lien symbolique posé dans /tmp par un autre compte ;
+    # la saisie simulée refuse elle-même tout envoi sans ces verrous.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return None
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid not in (os.getuid(), 0):
+        os.close(fd)
+        return None
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= end:
+                os.close(fd)
+                return None
+            time.sleep(0.005)
+
+
+def hold_consent_lock(timeout=10.0):
+    """Verrous à garder ouverts jusqu'à la fermeture de la fenêtre (#1711).
+
+    D'abord la porte : dès qu'elle est prise, aucune nouvelle saisie simulée
+    ne démarre (elle n'y passe qu'un instant). Ensuite le verrou principal :
+    on attend la fin des envois déjà commencés, un lot au plus. Si un verrou
+    est impossible (fichier posé par un autre compte), la fenêtre s'affiche
+    quand même : la saisie simulée refuse alors déjà tout."""
+    path = consent_lock_path()
+    gate = _lock_exclusive(os.path.splitext(path)[0] + ".porte", timeout)
+    main = _lock_exclusive(path, timeout)
+    return [fd for fd in (gate, main) if fd is not None]
+
+
 def admin_accounts():
     """Comptes administrateurs, le compte personnel avant root."""
     names = []
@@ -275,10 +331,13 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     window.connect("destroy", lambda _w: Gtk.main_quit())
     window.connect("key-press-event",
                    lambda _w, ev: Gtk.main_quit() if ev.keyval == Gdk.KEY_Escape else False)
+    result["lock"] = hold_consent_lock()
     window.show_all()
     window.set_default(yes)
     (entry if ask_password else no).grab_focus()
     Gtk.main()
+    for fd in result.get("lock") or []:
+        os.close(fd)
     if result.get("osk"):
         # Le clavier ouvert pour ce mot de passe se referme avec la fenêtre.
         osk_run(result["osk"], "hide")

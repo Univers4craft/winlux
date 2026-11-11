@@ -6,6 +6,8 @@ use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+mod msg;
+pub(crate) use msg::wsa_send_msg;
 mod overlapped;
 
 #[link(name = "c")]
@@ -717,7 +719,7 @@ use super::lock;
 /// Sous Windows, WSAGetLastError et GetLastError lisent la même valeur
 /// (celle du TEB) : .NET relit l'erreur d'une socket par GetLastError
 /// (Marshal.GetLastPInvokeError). La copie par fil sert hors TEB (tests).
-fn set_error(e: i32) {
+pub(crate) fn set_error(e: i32) {
     LAST_WSA_ERROR.with(|x| x.set(e));
     crate::process::set_last_error(e as u32);
 }
@@ -972,6 +974,8 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
     // Les opérations en cours se terminent en WSA_OPERATION_ABORTED, leur
     // paquet parti, avant que le numéro de socket ne puisse resservir.
     overlapped::close(s);
+    // Sondages AFD de mio qui la surveillent : AFD_POLL_LOCAL_CLOSE (#1766).
+    crate::dlls::afd::socket_closed(s);
     let r = unsafe { libc::close(s as i32) };
     if r < 0 {
         set_error(last_error());
@@ -3589,6 +3593,44 @@ pub unsafe extern "win64" fn get_accept_ex_sockaddrs(
     }
 }
 
+/// `WSARecvEx` (mswsock, wsock32 ordinal 1107) : `recv` qui signale par
+/// MSG_PARTIAL (0x8000) dans `*flags` un datagramme plus long que le
+/// tampon ; le reste du datagramme est perdu, comme sous Windows.
+pub unsafe extern "win64" fn wsa_recv_ex(s: usize, b: *mut u8, n: i32, flags: *mut i32) -> i32 {
+    const MSG_PARTIAL: i32 = 0x8000;
+    let asked = if flags.is_null() {
+        0
+    } else {
+        std::ptr::read_unaligned(flags) & !MSG_PARTIAL
+    };
+    if !valid_socket(s) || n <= 0 || b.is_null() {
+        return recv(s, b, n, asked);
+    }
+    async_arm(s, FD_READ | FD_OOB);
+    let mut iov = libc::iovec {
+        iov_base: b as *mut c_void,
+        iov_len: n as usize,
+    };
+    let mut msg: libc::msghdr = std::mem::zeroed();
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    let r = libc::recvmsg(s as i32, &mut msg, recv_flags(asked));
+    if r < 0 {
+        set_error(last_error());
+        return SOCKET_ERROR;
+    }
+    if !flags.is_null() {
+        let partial = if msg.msg_flags & libc::MSG_TRUNC != 0 {
+            MSG_PARTIAL
+        } else {
+            0
+        };
+        std::ptr::write_unaligned(flags, partial);
+    }
+    set_error(0);
+    r as i32
+}
+
 // ── __WSAFDIsSet (FD_ISSET helper) ──────────────────────────────────────
 pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i32 {
     if set.is_null() {
@@ -3653,7 +3695,10 @@ const WINSOCK_ORDINALS: &[(u16, &str)] = &[
     (115, "WSAStartup"),
     (116, "WSACleanup"),
     (151, "__WSAFDIsSet"),
-    // wsock32 : fonctions de mswsock exportées par ordinal (#1380).
+    // wsock32 : fonctions de mswsock exportées par ordinal (#1380, #1390).
+    (1107, "WSARecvEx"),
+    (1140, "TransmitFile"),
+    (1141, "AcceptEx"),
     (1142, "GetAcceptExSockaddrs"),
 ];
 
@@ -3705,7 +3750,10 @@ fn named_exports() -> crate::dlls::Exports {
      // select / poll
      "select"=>fn select,"WSAPoll"=>fn wsa_poll,
      "__WSAFDIsSet"=>fn wsa_fd_is_set,
+     // mswsock (#1390) : aussi rendues par WSAIoctl et par wsock32.
      "GetAcceptExSockaddrs"=>fn get_accept_ex_sockaddrs,
+     "AcceptEx"=>fn overlapped::accept_ex,"TransmitFile"=>fn overlapped::transmit_file,
+     "WSARecvEx"=>fn wsa_recv_ex,
      // WSA extended
      "WSASocketW"=>fn wsa_socket_w,"WSASocketA"=>fn wsa_socket_w,
      "WSASend"=>fn wsa_send,"WSARecv"=>fn wsa_recv,
@@ -3884,6 +3932,78 @@ mod tests {
                 closesocket(s);
             }
         }
+    }
+
+    #[test]
+    fn mswsock_transmit_file_et_wsa_recv_ex() {
+        // #1390 : jdk4py et pywin32 importent mswsock.dll en direct.
+        let _g = init();
+        assert_eq!(crate::dlls::normalize("MSWSOCK.dll"), "ws2_32");
+        let e = exports();
+        for (o, n) in [
+            ("#1107", "WSARecvEx"),
+            ("#1140", "TransmitFile"),
+            ("#1141", "AcceptEx"),
+        ] {
+            assert!(e.contains_key(n), "{n}");
+            assert_eq!(e.get(o), e.get(n));
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-1390-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("corps.txt");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        unsafe {
+            let l = socket(2, 1, 6);
+            let mut a = [0u8; 16];
+            a[0] = 2;
+            a[4..8].copy_from_slice(&[127, 0, 0, 1]);
+            assert_eq!(bind(l, a.as_ptr(), 16), 0);
+            assert_eq!(listen(l, 4), 0);
+            let mut alen = 16i32;
+            assert_eq!(get_socket_name(l, a.as_mut_ptr(), &mut alen), 0);
+            let c = socket(2, 1, 6);
+            assert_eq!(connect(c, a.as_ptr(), 16), 0);
+            let inc = accept(l, std::ptr::null_mut(), std::ptr::null_mut());
+            let h = crate::dlls::kernel32::create_file_a(
+                cpath.as_ptr() as *const u8,
+                0x8000_0000,
+                1,
+                0,
+                3,
+                0,
+                0,
+            );
+            assert_ne!(h, usize::MAX);
+            // Position courante à 2 : le fichier part de là, 5 octets.
+            crate::dlls::kernel32::set_file_pointer(h, 2, std::ptr::null_mut(), 0);
+            let (head, tail) = (*b"<", *b">");
+            let tfb: [usize; 4] = [head.as_ptr() as usize, 1, tail.as_ptr() as usize, 1];
+            assert_eq!(
+                overlapped::transmit_file(inc, h, 5, 0, 0, tfb.as_ptr() as usize, 1),
+                1
+            );
+            let mut r = [0u8; 16];
+            let mut got = 0usize;
+            loop {
+                let mut fl = 0i32;
+                let n = wsa_recv_ex(c, r.as_mut_ptr().add(got), (16 - got) as i32, &mut fl);
+                assert!(n >= 0);
+                assert_eq!(fl, 0);
+                if n == 0 {
+                    break;
+                }
+                got += n as usize;
+            }
+            // TF_DISCONNECT : la fin d'envoi arrive après « <23456> ».
+            assert_eq!(&r[..got], b"<23456>");
+            crate::dlls::kernel32::close_handle(h);
+            for s in [c, inc, l] {
+                closesocket(s);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

@@ -475,6 +475,32 @@ fn script_action(
     )
 }
 
+/// Ligne de trace d'un processus d'action (« winlux[wow32] … »), à
+/// recopier telle quelle (#1666). Les lignes de journal du processus
+/// (« winlux[niveau/cible] ») vont déjà au journal système.
+fn is_trace_line(l: &str) -> bool {
+    l.strip_prefix("winlux[")
+        .and_then(|r| r.split_once(']'))
+        .is_some_and(|(tag, _)| !tag.contains('/'))
+}
+
+/// Message écrit juste avant un abandon (SIGABRT) par Rust ou la glibc :
+/// mémoire refusée, erreur fatale du runtime, tas abîmé (#1642).
+fn is_abort_message(l: &str) -> bool {
+    l.starts_with("memory allocation of ")
+        || l.starts_with("fatal runtime error")
+        || l.contains("panicked at")
+        || [
+            "malloc(): ",
+            "free(): ",
+            "realloc(): ",
+            "double free",
+            "corrupted ",
+        ]
+        .iter()
+        .any(|m| l.contains(m))
+}
+
 /// Lance une action DLL ou script dans un processus à part qui partage le
 /// fichier de session ; relit le code et (action immédiate) les
 /// propriétés. Renvoie les lignes à journaliser.
@@ -494,6 +520,17 @@ fn child_action(
     let mut props = ctx.props.clone();
     if deferred {
         props.insert("CustomActionData".into(), ctx.get(name));
+    }
+    // Composants retenus : MsiGetComponentState répond d'après eux (#1699).
+    // Avant leur calcul (actions de propriétés), la liste est vide : rien
+    // n'est transmis et tout composant reste réputé installé.
+    if !ctx.components.is_empty() {
+        let mut selected: Vec<&String> = ctx.components.keys().collect();
+        selected.sort();
+        props.insert(
+            super::session::COMPONENTS_KEY.into(),
+            selected.into_iter().map(|c| format!("{c}\n")).collect(),
+        );
     }
     let _ = std::fs::create_dir_all(temp);
     let session = temp.join(format!("{name}.session"));
@@ -521,6 +558,28 @@ fn child_action(
         })
         .map(|l| format!("  {l}"))
         .collect();
+    // Traces demandées par l'utilisateur dans le processus de l'action
+    // (WINLUX_WOW32_HISTORY=flux…, lignes « winlux[…] ») : recopiées au
+    // journal, réussite ou échec, sinon elles étaient perdues (#1666).
+    let traces: Vec<String> = output
+        .lines()
+        .filter(|l| is_trace_line(l))
+        .map(|l| format!("  {l}"))
+        .collect();
+    // Diagnostics du runtime dans le processus de l'action (plantage,
+    // fonction absente, exception) : sans eux, un échec sans code de
+    // l'action restait muet (#1628).
+    let diagnostics: Vec<String> = output
+        .lines()
+        .filter(|l| {
+            l.starts_with("winlux: ")
+                && !l.contains("WINLUX_MISSING=")
+                && !l.starts_with("winlux: processus arrêté par le ")
+                || is_abort_message(l)
+        })
+        .take(8)
+        .map(|l| format!("  {l}"))
+        .collect();
     // Code exact et propriétés rendues par l'action (fichier de session).
     let mut back = std::fs::read_to_string(&session)
         .map(|t| super::session::decode(&t))
@@ -528,6 +587,7 @@ fn child_action(
     let code = back
         .remove(super::session::CODE_KEY)
         .and_then(|c| c.parse::<i32>().ok());
+    back.remove(super::session::COMPONENTS_KEY);
     if let Some(list) = back.remove(super::session::DO_KEY) {
         scheduled.extend(list.split('\n').filter(|s| !s.is_empty()).map(String::from));
     }
@@ -543,7 +603,24 @@ fn child_action(
             format!("Action personnalisée {what} : terminée")
         }
         Outcome::Exited(c) => {
-            format!("Action personnalisée {what} en échec (code {c}), installation poursuivie")
+            lines.extend(diagnostics);
+            if code.is_none() {
+                // Processus terminé sans rendre de code : ce n'est pas la
+                // réponse de l'action elle-même.
+                lines.push("  (processus de l'action arrêté sans rendre de code)".into());
+            }
+            // Arrêt par un signal : ce n'est pas un code de sortie (#1628).
+            match output
+                .lines()
+                .find_map(|l| l.strip_prefix("winlux: processus arrêté par le "))
+            {
+                Some(signal) => format!(
+                    "Action personnalisée {what} en échec, processus arrêté par le {signal}, installation poursuivie"
+                ),
+                None => format!(
+                    "Action personnalisée {what} en échec (code {c}), installation poursuivie"
+                ),
+            }
         }
         other => format!(
             "Action personnalisée {what} : {}",
@@ -551,6 +628,7 @@ fn child_action(
         ),
     };
     let _ = std::fs::remove_file(&session);
+    lines.extend(traces);
     lines.insert(0, head);
     Some(lines.join("\n"))
 }
@@ -584,8 +662,10 @@ pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
 /// Services Windows déclarés par le paquet (`ServiceInstall`) : inscrits
 /// sous `HKLM\SYSTEM\CurrentControlSet\Services\<Nom>`, là où le
 /// gestionnaire de services de Winlux les lit (`advapi32_services.rs`), et
-/// retirés avec l'application. Le démarrage demandé par `ServiceControl`
-/// est laissé au gestionnaire de services (journalisé).
+/// retirés avec l'application. Rend les services dont `ServiceControl`
+/// demande le démarrage à l'installation : ils sont lancés une fois
+/// l'installation terminée (#1626), puis à chaque session s'ils sont en
+/// démarrage automatique.
 pub fn services(
     db: &Database,
     ctx: &Context,
@@ -594,7 +674,7 @@ pub fn services(
     keys: &mut Vec<String>,
     values: &mut Vec<(String, String)>,
     log: &mut Logger,
-) {
+) -> Vec<String> {
     let keypath: HashMap<String, String> = db
         .rows("Component")
         .map(|r| (r.str("Component"), r.str("KeyPath")))
@@ -663,12 +743,125 @@ pub fn services(
         keys.push(key);
         log.log(&format!("Service inscrit : {name} ({image})"));
     }
+    let mut start = Vec::new();
     for r in db.rows("ServiceControl") {
+        // msidbServiceControlEventStart (1) : démarrer à l'installation.
         if comps.contains(&r.str("Component_")) && r.int("Event").unwrap_or(0) & 1 != 0 {
-            log.log(&format!(
-                "Service {} : démarrage laissé au gestionnaire de services",
-                ctx.format(&r.str("Name"))
-            ));
+            let name = ctx.format(&r.str("Name"));
+            if !name.is_empty() && !start.contains(&name) {
+                start.push(name);
+            }
         }
+    }
+    start
+}
+
+/// Démarre les services une fois l'installation écrite (fichiers et
+/// registre) : `winlux --services start NOM`, détaché de l'installeur,
+/// dans l'environnement d'une session (sans le jeton administrateur de
+/// l'installeur ni ses variables MSI), comme le démarrage automatique (#1626).
+pub fn start_services(names: &[String], log: &mut Logger) {
+    if names.is_empty() {
+        return;
+    }
+    let Ok(runtime) = std::env::current_exe() else {
+        return;
+    };
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(runtime);
+    command
+        .arg("--services")
+        .arg("start")
+        .args(names)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    for (k, _) in std::env::vars_os() {
+        let k = k.to_string_lossy();
+        if k == "WINLUX_ELEVATED" || k.starts_with("WINLUX_MSI") || k == "WINLUX_SERVICE_NAME" {
+            command.env_remove(k.as_ref());
+        }
+    }
+    match command.spawn() {
+        Ok(_) => {
+            for n in names {
+                log.log(&format!("Service {n} : démarrage demandé"));
+            }
+        }
+        Err(e) => log.log(&format!("Services non démarrés : {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::msi::db::{Table, Value};
+
+    /// `ServiceControl` avec l'événement 1 (démarrer à l'installation) :
+    /// le service est rendu pour être démarré en fin d'installation (#1626).
+    #[test]
+    fn trace_wow32_recopiee() {
+        assert!(is_trace_line(
+            "winlux[wow32] setupapi.dll!SetupDiGetClassDevsW (esp 0x7f9466a0, retour 0x1000a3c1) [0, 0, 0, 6] = 0x4"
+        ));
+        assert!(!is_trace_line("winlux[info/installeur]: Progression 1%"));
+        assert!(!is_trace_line("winlux[warn/services]: canal refusé"));
+        assert!(!is_trace_line("msi.dll : MsiProcessMessage"));
+    }
+
+    #[test]
+    fn message_d_abandon_garde_au_journal() {
+        assert!(is_abort_message(
+            "memory allocation of 834207744 bytes failed"
+        ));
+        assert!(is_abort_message("malloc(): corrupted top size"));
+        assert!(is_abort_message(
+            "fatal runtime error: Rust cannot catch foreign exceptions"
+        ));
+        assert!(!is_abort_message("DLL chargée"));
+    }
+
+    #[test]
+    fn services_a_demarrer_apres_installation() {
+        let s = |v: &str| Value::Str(v.into());
+        let mut db = Database::default();
+        db.tables.insert(
+            "ServiceControl".into(),
+            Table {
+                columns: vec![
+                    "ServiceControl".into(),
+                    "Name".into(),
+                    "Event".into(),
+                    "Component_".into(),
+                ],
+                rows: vec![
+                    vec![s("a"), s("EditeurService"), Value::Int(0xA1), s("P")],
+                    vec![s("b"), s("ArretSeul"), Value::Int(0xA0), s("P")],
+                    vec![s("c"), s("[NOM]Plugin"), Value::Int(1), s("P")],
+                    vec![s("d"), s("AutreComposant"), Value::Int(1), s("Q")],
+                ],
+                ..Default::default()
+            },
+        );
+        let mut ctx = Context::default();
+        ctx.props.insert("NOM".into(), "Editeur".into());
+        let comps: HashSet<String> = ["P".to_string()].into();
+        let (mut edits, mut keys, mut values) = (Vec::new(), Vec::new(), Vec::new());
+        let mut log = Logger::default();
+        log.quiet = true;
+        let start = services(
+            &db,
+            &ctx,
+            &comps,
+            &mut edits,
+            &mut keys,
+            &mut values,
+            &mut log,
+        );
+        assert_eq!(
+            start,
+            vec!["EditeurService".to_string(), "EditeurPlugin".to_string()]
+        );
     }
 }

@@ -2,6 +2,7 @@
 
 mod abslots;
 mod admin;
+mod anticheat;
 mod archive;
 mod audio;
 mod bootsplash;
@@ -113,6 +114,10 @@ fn main() {
             for name in names {
                 println!("{dll}\t{name}");
             }
+        }
+        // Noms x86 servis seulement par les passerelles wow32 (#1508).
+        for (dll, name) in wow32::x86_only_candidates() {
+            println!("x86:{dll}\t{name}");
         }
         return;
     }
@@ -257,6 +262,10 @@ fn main() {
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
     }
+    // Anti-triche noyau embarqué : refusé avant toute écriture (#1720).
+    if let Some(code) = anticheat::check_launch(&exe) {
+        std::process::exit(code);
+    }
     if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
         if let Some(code) = setup::launch(&exe, &rest) {
             std::process::exit(code);
@@ -304,15 +313,16 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let app_dir = std::fs::canonicalize(&exe)
-            .ok()
+        let exe_path = std::fs::canonicalize(&exe).ok();
+        let app_dir = exe_path
+            .as_deref()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
         // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
         if process::teb() == 0 {
             process::init_thread();
         }
-        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
+        let code = clr::execute_assembly_at(&assembly, exe_path.as_deref(), app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),
@@ -352,7 +362,7 @@ fn main() {
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if dlls::gui_x11::renders_itself(&imports)
-        || dlls::gui_x11::statically_linked_renderer(image.bytes())
+        || dlls::gui_x11::renderer_in_data_sections(image.bytes(), &image.pe.sections)
     {
         dlls::gui_x11::RENDERS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -426,6 +436,8 @@ fn msi_dll_action(args: &[String]) -> ! {
         std::process::exit(1639);
     };
     let path = std::path::PathBuf::from(dll);
+    // Dans la trace, quelle action tourne dans ce processus (#1639).
+    crate::trace!("action personnalisée DLL : {entry} dans {dll}");
     let source = std::fs::read(&path).unwrap_or_default();
     let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
     if x86 {

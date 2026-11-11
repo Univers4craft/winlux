@@ -215,10 +215,28 @@ pub extern "win64" fn msi_get_product_info(_p: usize, _a: usize, _b: usize, _s: 
     ERROR_UNKNOWN_PRODUCT
 }
 
+/// MsiSourceList* : Winlux ne répare ni ne réinstalle un produit depuis sa
+/// source d'origine, la liste des sources n'a donc rien à retenir.
+/// L'ajout, l'effacement et le réglage réussissent (Acrobat inscrit son
+/// cache d'installation par MsiSourceListAddSourceW, #1757) ; la liste lue
+/// est vide.
+pub extern "win64" fn msi_source_list_ok() -> u32 {
+    crate::trace!("MsiSourceList : liste des sources non conservée");
+    0
+}
+pub extern "win64" fn msi_source_list_empty() -> u32 {
+    ERROR_NO_MORE_ITEMS
+}
+pub extern "win64" fn msi_source_list_get_info() -> u32 {
+    ERROR_UNKNOWN_PROPERTY
+}
+const ERROR_UNKNOWN_PROPERTY: u32 = 1608;
+
 pub fn msi_exports() -> super::Exports {
     // Fonctions de session des actions personnalisées DLL (#833).
     let mut all = crate::msi::session::exports();
     all.extend(crate::msi::session_db::exports());
+    all.extend(crate::msi::summary::exports());
     all.extend(crate::exports! {
         "MsiGetComponentPathW" => fn msi_get_component_path,
         "MsiGetComponentPathA" => fn msi_get_component_path,
@@ -230,13 +248,58 @@ pub fn msi_exports() -> super::Exports {
         "MsiLocateComponentA" => fn msi_locate_component,
         "MsiGetProductInfoW" => fn msi_get_product_info,
         "MsiGetProductInfoA" => fn msi_get_product_info,
-        // Importées par numéro (WinSCP, bibliothèque d'import de C++Builder) :
-        // deux fonctions de quatre arguments dont l'échec est toujours sûr ;
-        // 1627 n'est ni ERROR_SUCCESS ni un INSTALLSTATE « présent ».
-        "#70" => fn msi_get_shortcut_target,
-        "#205" => fn msi_get_shortcut_target,
+        "MsiEnumRelatedProductsW" => fn msi_enum_related_products,
+        "MsiEnumRelatedProductsA" => fn msi_enum_related_products,
+        "MsiSourceListAddSourceW" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceA" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceExW" => fn msi_source_list_ok,
+        "MsiSourceListAddSourceExA" => fn msi_source_list_ok,
+        "MsiSourceListClearAllW" => fn msi_source_list_ok,
+        "MsiSourceListClearAllA" => fn msi_source_list_ok,
+        "MsiSourceListClearAllExW" => fn msi_source_list_ok,
+        "MsiSourceListClearAllExA" => fn msi_source_list_ok,
+        "MsiSourceListClearSourceW" => fn msi_source_list_ok,
+        "MsiSourceListClearSourceA" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionW" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionA" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionExW" => fn msi_source_list_ok,
+        "MsiSourceListForceResolutionExA" => fn msi_source_list_ok,
+        "MsiSourceListSetInfoW" => fn msi_source_list_ok,
+        "MsiSourceListSetInfoA" => fn msi_source_list_ok,
+        "MsiSourceListAddMediaDiskW" => fn msi_source_list_ok,
+        "MsiSourceListAddMediaDiskA" => fn msi_source_list_ok,
+        "MsiSourceListClearMediaDiskW" => fn msi_source_list_ok,
+        "MsiSourceListClearMediaDiskA" => fn msi_source_list_ok,
+        "MsiSourceListEnumSourcesW" => fn msi_source_list_empty,
+        "MsiSourceListEnumSourcesA" => fn msi_source_list_empty,
+        "MsiSourceListEnumMediaDisksW" => fn msi_source_list_empty,
+        "MsiSourceListEnumMediaDisksA" => fn msi_source_list_empty,
+        "MsiSourceListGetInfoW" => fn msi_source_list_get_info,
+        "MsiSourceListGetInfoA" => fn msi_source_list_get_info,
     });
+    with_msi_ordinals(all)
+}
+
+/// Ordinaux de msi.dll (`msi_ordinals.tsv`, tirés de `Msi.Lib` du SDK
+/// Windows public, identiques en x86 et x64) : WixCA.dll et les actions
+/// personnalisées compilées avec la bibliothèque d'import du SDK importent
+/// msi.dll par numéro (#1607), WinSCP aussi (C++Builder). Chaque fonction
+/// servie par nom l'est aussi sous « #n ».
+fn with_msi_ordinals(mut all: super::Exports) -> super::Exports {
+    for line in include_str!("msi_ordinals.tsv").lines() {
+        let Some((n, name)) = line.split_once('\t') else {
+            continue;
+        };
+        if let (Ok(n), Some(&addr)) = (n.parse::<u16>(), all.get(name)) {
+            all.insert(Box::leak(format!("#{n}").into_boxed_str()), addr);
+        }
+    }
     all
+}
+
+/// MsiEnumRelatedProducts : aucun produit apparenté inscrit.
+pub extern "win64" fn msi_enum_related_products(_u: usize, _r: u32, _i: u32, _b: usize) -> u32 {
+    ERROR_NO_MORE_ITEMS
 }
 
 // ---------- shfolder.dll ----------
@@ -251,6 +314,66 @@ pub fn shfolder_exports() -> super::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msi_par_ordinal_comme_wixca() {
+        let e = msi_exports();
+        // Ordinaux importés par WixCA.dll (iCUE, #1607), d'après Msi.Lib.
+        for (n, name) in [
+            (8, "MsiCloseHandle"),
+            (17, "MsiCreateRecord"),
+            (26, "MsiDatabaseGetPrimaryKeysW"),
+            (32, "MsiDatabaseOpenViewW"),
+            (34, "MsiDoActionW"),
+            (47, "MsiEvaluateConditionW"),
+            (49, "MsiGetActiveDatabase"),
+            (51, "MsiGetComponentStateW"),
+            (64, "MsiGetMode"),
+            (73, "MsiGetPropertyA"),
+            (74, "MsiGetPropertyW"),
+            (80, "MsiGetTargetPathW"),
+            (103, "MsiProcessMessage"),
+            (116, "MsiRecordGetInteger"),
+            (118, "MsiRecordGetStringW"),
+            (119, "MsiRecordIsNull"),
+            (120, "MsiRecordReadStream"),
+            (121, "MsiRecordSetInteger"),
+            (124, "MsiRecordSetStringA"),
+            (125, "MsiRecordSetStringW"),
+            (143, "MsiSetMode"),
+            (145, "MsiSetPropertyW"),
+            (159, "MsiViewExecute"),
+            (160, "MsiViewFetch"),
+            (162, "MsiViewGetErrorW"),
+            (163, "MsiViewModify"),
+            (166, "MsiViewGetColumnInfo"),
+            (171, "MsiFormatRecordW"),
+            (70, "MsiGetProductInfoW"),
+            // Acrobat, CacheSetupFiles_SetSourceList (#1757).
+            (211, "MsiSourceListAddSourceW"),
+            (256, "MsiSourceListAddSourceExW"),
+            (268, "MsiSourceListSetInfoW"),
+            (205, "MsiEnumRelatedProductsW"),
+            // Base hors session et résumé (panda3d, electron-winstaller, #1657).
+            (20, "MsiDatabaseCommit"),
+            (77, "MsiGetSummaryInformationA"),
+            (92, "MsiOpenDatabaseW"),
+            (148, "MsiSummaryInfoGetPropertyA"),
+            (149, "MsiSummaryInfoGetPropertyCount"),
+            (151, "MsiSummaryInfoPersist"),
+            (152, "MsiSummaryInfoSetPropertyA"),
+            (153, "MsiSummaryInfoSetPropertyW"),
+            (219, "MsiGetFileHashW"),
+        ] {
+            let by_name = e.get(name).copied();
+            assert!(by_name.is_some(), "{name}");
+            assert_eq!(
+                e.get(format!("#{n}").as_str()).copied(),
+                by_name,
+                "#{n} {name}"
+            );
+        }
+    }
 
     #[test]
     fn lettres_de_lecteur() {

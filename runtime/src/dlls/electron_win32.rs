@@ -23,7 +23,6 @@ const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_IO_PENDING: u32 = 997;
 const ERROR_NOT_FOUND: u32 = 1168;
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
-const STATUS_NOT_IMPLEMENTED: u32 = 0xC000_0002;
 const E_NOTIMPL: u32 = 0x8000_4001;
 const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
 const WSASERVICE_NOT_FOUND: u32 = 10108;
@@ -324,16 +323,43 @@ unsafe extern "win64" fn K32GetPerformanceInfo(info: *mut u8, cb: u32) -> i32 {
 
 /// PSAPI_WORKING_SET_EX_INFORMATION { VirtualAddress, VirtualAttributes } :
 /// une page présente (mincore) est marquée valide (bit 0).
-unsafe extern "win64" fn K32QueryWorkingSetEx(_process: usize, buf: *mut usize, cb: u32) -> i32 {
+/// `QueryWorkingSetEx` : drapeau « valide » de chaque adresse demandée ;
+/// pour un autre processus, d'après son `/proc/<pid>/pagemap` (#1729).
+unsafe extern "win64" fn K32QueryWorkingSetEx(process: usize, buf: *mut usize, cb: u32) -> i32 {
     if buf.is_null() {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    for i in 0..cb as usize / 16 {
-        let addr = *buf.add(i * 2) & !0xFFF;
-        let mut present = 0u8;
-        let ok = libc::mincore(addr as *mut c_void, 4096, &mut present) == 0;
-        *buf.add(i * 2 + 1) = usize::from(ok && present & 1 != 0);
+    let pagemap =
+        if process == usize::MAX || crate::dlls::kernel32::is_current_process_handle(process) {
+            None
+        } else {
+            let Some(pid) = crate::dlls::kernel32::process_os_pid(process) else {
+                set_last_error(6); // ERROR_INVALID_HANDLE
+                return 0;
+            };
+            match std::fs::File::open(format!("/proc/{pid}/pagemap")) {
+                Ok(f) => Some(f),
+                Err(_) => {
+                    set_last_error(5); // ERROR_ACCESS_DENIED
+                    return 0;
+                }
+            }
+        };
+    // PSAPI_WORKING_SET_EX_INFORMATION : adresse et attributs, deux
+    // pointeurs (8 octets en x86, 16 en x64).
+    let ps = crate::wow32::pointer_size();
+    for i in 0..cb as usize / (2 * ps) {
+        let entry = buf as usize + i * 2 * ps;
+        let addr = crate::wow32::read_ptr(entry) & !0xFFF;
+        let valid = match &pagemap {
+            Some(f) => crate::dlls::psapi_k32::pagemap_present(f, addr),
+            None => {
+                let mut present = 0u8;
+                libc::mincore(addr as *mut c_void, 4096, &mut present) == 0 && present & 1 != 0
+            }
+        };
+        crate::wow32::write_ptr(entry + ps, usize::from(valid));
     }
     1
 }
@@ -501,8 +527,8 @@ pub fn psapi_exports() -> crate::dlls::Exports {
 //  ntdll
 // ============================================================
 
-unsafe extern "win64" fn NtDeleteKey(_key: usize) -> u32 {
-    STATUS_NOT_IMPLEMENTED
+unsafe extern "win64" fn NtDeleteKey(key: usize) -> u32 {
+    crate::dlls::ntdll::nt_delete_key(key) as u32
 }
 
 /// `NtQueryObject` : informations de base (0), nom (1), type (2) et
@@ -548,6 +574,12 @@ unsafe extern "win64" fn NtQueryObject(
         return STATUS_INVALID_HANDLE;
     };
     let inherit = crate::dlls::inherit::is(h);
+    // Programme x86 : UNICODE_STRING de 8 octets (Buffer à 4) et
+    // OBJECT_TYPE_INFORMATION de 0x60 octets (TypeName + 22 ULONG,
+    // PUBLIC_OBJECT_TYPE_INFORMATION de winternl.h), comme pour
+    // NtQuerySection (#1650).
+    let x86 = crate::dlls::legacy_com::x86();
+    let us = if x86 { 8 } else { 16 };
     let mut bytes: Vec<u8>;
     // (position d'un UNICODE_STRING, position de son texte dans `bytes`)
     let mut string: Option<(usize, usize, usize)> = None;
@@ -584,7 +616,7 @@ unsafe extern "win64" fn NtQueryObject(
             } else {
                 String::new()
             };
-            let head = if class == 2 { 0x68 } else { 16 };
+            let head = if class == 2 { us + 88 } else { us };
             bytes = vec![0u8; head];
             let wide: Vec<u8> = text
                 .encode_utf16()
@@ -597,8 +629,8 @@ unsafe extern "win64" fn NtQueryObject(
             string = Some((0, at, chars));
             if class == 2 {
                 // ValidAccessMask, PoolType (Paged = 1).
-                bytes[0x50..0x54].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
-                bytes[0x5C..0x60].copy_from_slice(&1u32.to_le_bytes());
+                bytes[us + 64..us + 68].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+                bytes[us + 76..us + 80].copy_from_slice(&1u32.to_le_bytes());
             }
         }
         4 => {
@@ -624,7 +656,11 @@ unsafe extern "win64" fn NtQueryObject(
         let n = (chars * 2) as u16;
         (out.add(at) as *mut u16).write_unaligned(n);
         (out.add(at + 2) as *mut u16).write_unaligned(n + 2);
-        (out.add(at + 8) as *mut usize).write_unaligned(out as usize + text);
+        if x86 {
+            (out.add(at + 4) as *mut u32).write_unaligned((out as usize + text) as u32);
+        } else {
+            (out.add(at + 8) as *mut usize).write_unaligned(out as usize + text);
+        }
     }
     0
 }
@@ -645,25 +681,48 @@ unsafe extern "win64" fn NtQuerySection(
     len: usize,
     ret: *mut usize,
 ) -> u32 {
+    query_section(h, class, info, len, ret, crate::dlls::legacy_com::x86())
+}
+
+unsafe fn query_section(
+    h: usize,
+    class: u32,
+    info: *mut u8,
+    len: usize,
+    ret: *mut usize,
+    x86: bool,
+) -> u32 {
     const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
     const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
     const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
     const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
     const SEC_COMMIT: u32 = 0x0800_0000;
     let Some((_, size, _)) = crate::dlls::mmap::export(h) else {
+        crate::trace!("NtQuerySection(0x{h:x}) : handle inconnu");
         return STATUS_INVALID_HANDLE;
     };
+    crate::trace!("NtQuerySection(0x{h:x}, classe {class}, {len} octets) : taille {size}");
+    // Programme x86 : SECTION_BASIC_INFORMATION fait 16 octets (pointeur de
+    // 4 octets, MaximumSize à 8) et le SIZE_T rendu en fait 4. steam.exe y
+    // lit la taille du flux partagé avec steamwebhelper ; avec la
+    // disposition 64 bits il obtenait STATUS_INFO_LENGTH_MISMATCH et une
+    // taille 0, et l'écriture de 8 octets débordait de son SIZE_T (#1650).
+    let (total, attrs_at, size_at) = if x86 { (16, 4, 8) } else { (24, 8, 16) };
     match class {
         0 => {
             if !ret.is_null() {
-                *ret = 24;
+                if total == 16 {
+                    (ret as *mut u32).write_unaligned(16);
+                } else {
+                    ret.write_unaligned(24);
+                }
             }
-            if info.is_null() || len < 24 {
+            if info.is_null() || len < total {
                 return STATUS_INFO_LENGTH_MISMATCH;
             }
-            std::ptr::write_bytes(info, 0, 24);
-            put_u32(info, 8, SEC_COMMIT);
-            (info.add(16) as *mut u64).write_unaligned(size);
+            std::ptr::write_bytes(info, 0, total);
+            put_u32(info, attrs_at, SEC_COMMIT);
+            (info.add(size_at) as *mut u64).write_unaligned(size);
             0
         }
         1 => STATUS_SECTION_NOT_IMAGE,
@@ -682,6 +741,7 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "RtlGetLastNtStatus" => fn RtlGetLastNtStatus,
         "NtSuspendProcess" => fn NtSuspendProcess,
         "NtResumeProcess" => fn NtResumeProcess,
+        "RtlGetUnloadEventTraceEx" => fn RtlGetUnloadEventTraceEx,
         "LdrLockLoaderLock" => fn LdrLockLoaderLock,
         "LdrUnlockLoaderLock" => fn LdrUnlockLoaderLock,
     }
@@ -697,12 +757,83 @@ unsafe fn signal_process(h: usize, sig: i32) -> u32 {
     }
 }
 
+/// Processus figés par ce processus (NtSuspendProcess) et pas encore
+/// relancés. Crashpad fige le programme qu'il vide ; s'il plante pendant
+/// le vidage, le programme restait figé pour toujours (état T, enfants
+/// Chromium bloqués, « Quitter » sans effet, #1787) : le gestionnaire de
+/// plantage les relance (`resume_suspended`). Tableau fixe d'atomiques,
+/// lisible depuis un gestionnaire de signal.
+use std::sync::atomic::{AtomicI32, Ordering};
+
+static SUSPENDED: [AtomicI32; 16] = [const { AtomicI32::new(0) }; 16];
+
 unsafe extern "win64" fn NtSuspendProcess(h: usize) -> u32 {
-    signal_process(h, libc::SIGSTOP)
+    let r = signal_process(h, libc::SIGSTOP);
+    if r == 0 {
+        if let Some(pid) = crate::dlls::kernel32::process_os_pid(h) {
+            let _ = SUSPENDED.iter().find(|s| {
+                s.compare_exchange(0, pid, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            });
+        }
+    }
+    r
 }
 
 unsafe extern "win64" fn NtResumeProcess(h: usize) -> u32 {
-    signal_process(h, libc::SIGCONT)
+    let r = signal_process(h, libc::SIGCONT);
+    if r == 0 {
+        if let Some(pid) = crate::dlls::kernel32::process_os_pid(h) {
+            let _ = SUSPENDED.iter().find(|s| {
+                s.compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            });
+        }
+    }
+    r
+}
+
+/// Trace des modules déchargés (RTL_UNLOAD_EVENT_TRACE, 0x68 octets en
+/// 64 bits) : Winlux n'en tient pas, la trace est vide. Crashpad obtient
+/// cette fonction par GetProcAddress sans vérifier le résultat et appelait
+/// une adresse nulle en vidant un processus (#1797). Signature : Microsoft
+/// Learn, « RtlGetUnloadEventTraceEx ».
+static UNLOAD_TRACE_SIZE: u32 = 0x68;
+static UNLOAD_TRACE_COUNT: u32 = 0;
+static UNLOAD_TRACE_ARRAY: [u8; 0x68] = [0; 0x68];
+/// Pointeur vers le tableau : Crashpad lit ce pointeur, puis le tableau.
+static UNLOAD_TRACE: &[u8; 0x68] = &UNLOAD_TRACE_ARRAY;
+
+unsafe extern "win64" fn RtlGetUnloadEventTraceEx(
+    element_size: *mut *const u32,
+    element_count: *mut *const u32,
+    event_trace: *mut *const c_void,
+) {
+    if !element_size.is_null() {
+        element_size.write_unaligned(&UNLOAD_TRACE_SIZE);
+    }
+    if !element_count.is_null() {
+        element_count.write_unaligned(&UNLOAD_TRACE_COUNT);
+    }
+    if !event_trace.is_null() {
+        event_trace.write_unaligned(&UNLOAD_TRACE as *const _ as *const c_void);
+    }
+}
+
+/// Relance (SIGCONT) les processus que ce processus a figés sans les
+/// relancer. Appelé par le gestionnaire de plantage : uniquement des
+/// opérations sûres dans un signal (atomiques, kill). Rend leur nombre.
+pub(crate) fn resume_suspended() -> usize {
+    let mut n = 0;
+    for slot in &SUSPENDED {
+        let pid = slot.swap(0, Ordering::AcqRel);
+        if pid > 0 {
+            // SAFETY : kill est sûr dans un gestionnaire de signal.
+            unsafe { libc::kill(pid, libc::SIGCONT) };
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Le chargeur de Winlux n'a pas de verrou exposé aux applis : on rend un
@@ -1407,21 +1538,31 @@ pub fn user32_exports() -> crate::dlls::Exports {
 //  combase / ole32 : chaînes HSTRING et activation Windows Runtime
 // ============================================================
 //
-// Un HSTRING pointe sur un en-tête de 24 octets (la taille de HSTRING_HEADER) :
-// { magie u32, drapeaux u32, longueur u32, réservé u32, texte *const u16 }.
-// Une chaîne créée par WindowsCreateString est allouée d'un bloc (en-tête puis
-// texte terminé par 0) ; une « référence rapide » (WindowsCreateStringReference)
-// écrit l'en-tête dans le HSTRING_HEADER de l'appelant et pointe sur son texte.
+// Disposition commune des HSTRING (#1712), celle que C++/WinRT (base.h,
+// `hstring_header` / `shared_hstring_header`) et windows-rs
+// (`HStringHeader`, licence MIT) écrivent eux-mêmes sans passer par
+// WindowsCreateString : { drapeaux u32, longueur u32, réservé u32,
+// réservé u32, texte *const u16 } (20 octets en x86, 24 en x64, la taille
+// de HSTRING_HEADER). Le drapeau 1 marque une référence rapide, dont
+// l'en-tête est fourni par l'appelant. Une chaîne allouée continue par un
+// compteur de références u32 puis le texte terminé par 0 ; elle vient du
+// tas du processus, que ces bibliothèques libèrent par HeapFree, et
+// WindowsDuplicateString ne fait qu'incrémenter son compteur.
 
-const HSTRING_MAGIC: u32 = 0x4853_5452; // « HSTR »
 const HSTRING_REFERENCE: u32 = 1;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
 const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
 const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154u32 as i32;
 
-fn hstring_layout(len: u32) -> std::alloc::Layout {
-    std::alloc::Layout::from_size_align(24 + (len as usize + 1) * 2, 8).expect("taille HSTRING")
+/// Taille de l'en-tête, sur la taille d'un pointeur du programme.
+fn header_size() -> usize {
+    16 + crate::wow32::pointer_size()
+}
+
+/// Compteur de références d'une chaîne allouée, juste après l'en-tête.
+unsafe fn hstring_count<'a>(h: usize) -> &'a std::sync::atomic::AtomicU32 {
+    &*((h + header_size()) as *const std::sync::atomic::AtomicU32)
 }
 
 /// (texte, longueur) d'un HSTRING ; NULL est la chaîne vide.
@@ -1429,29 +1570,54 @@ unsafe fn hstring_parts(h: usize) -> Option<(*const u16, u32)> {
     if h == 0 {
         return Some((std::ptr::null(), 0));
     }
-    let p = h as *const u32;
-    if p.read_unaligned() != HSTRING_MAGIC {
+    let len = ((h + 4) as *const u32).read_unaligned();
+    let text = header_text(h);
+    if text.is_null() && len != 0 {
         return None;
     }
-    let len = p.add(2).read_unaligned();
-    let text = ((h + 16) as *const usize).read_unaligned() as *const u16;
     Some((text, len))
+}
+
+/// Texte de l'en-tête, à +16, sur la taille d'un pointeur du programme :
+/// le HSTRING_HEADER d'un programme x86 n'a que 20 octets (#1630).
+unsafe fn header_text(h: usize) -> *const u16 {
+    if crate::wow32::pointer_size() == 4 {
+        ((h + 16) as *const u32).read_unaligned() as usize as *const u16
+    } else {
+        ((h + 16) as *const usize).read_unaligned() as *const u16
+    }
+}
+
+unsafe fn set_header_text(h: usize, text: usize) {
+    if crate::wow32::pointer_size() == 4 {
+        ((h + 16) as *mut u32).write_unaligned(text as u32);
+    } else {
+        ((h + 16) as *mut usize).write_unaligned(text);
+    }
 }
 
 unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
     if len == 0 {
         return 0;
     }
-    let p = std::alloc::alloc_zeroed(hstring_layout(len));
+    let text_at = header_size() + 4;
+    let size = text_at + (len as usize + 1) * 2;
+    // HEAP_ZERO_MEMORY : en-tête réservé et 0 final.
+    let p = crate::dlls::kernel32::heap_alloc(0, 8, size) as *mut u8;
     if p.is_null() {
         return 0;
     }
-    let text = p.add(24) as *mut u16;
+    let text = p.add(text_at) as *mut u16;
     std::ptr::copy_nonoverlapping(src, text, len as usize);
-    (p as *mut u32).write(HSTRING_MAGIC);
-    (p.add(8) as *mut u32).write(len);
-    (p.add(16) as *mut usize).write(text as usize);
+    (p.add(4) as *mut u32).write_unaligned(len);
+    set_header_text(p as usize, text as usize);
+    hstring_count(p as usize).store(1, std::sync::atomic::Ordering::Relaxed);
     p as usize
+}
+
+/// Une référence rapide (en-tête fourni par l'appelant) ?
+unsafe fn is_reference(h: usize) -> bool {
+    (h as *const u32).read_unaligned() & HSTRING_REFERENCE != 0
 }
 
 pub(crate) unsafe extern "win64" fn WindowsCreateString(
@@ -1462,7 +1628,7 @@ pub(crate) unsafe extern "win64" fn WindowsCreateString(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
     if len == 0 {
         return 0;
     }
@@ -1473,7 +1639,7 @@ pub(crate) unsafe extern "win64" fn WindowsCreateString(
     if h == 0 {
         return E_OUTOFMEMORY;
     }
-    *out = h;
+    crate::wow32::write_ptr(out as usize, h);
     0
 }
 
@@ -1486,32 +1652,28 @@ unsafe extern "win64" fn WindowsCreateStringReference(
     if out.is_null() || header.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
     if len == 0 {
         return 0;
     }
     if src.is_null() || *src.add(len as usize) != 0 {
         return E_INVALIDARG;
     }
-    std::ptr::write_bytes(header, 0, 24);
-    (header as *mut u32).write_unaligned(HSTRING_MAGIC);
-    (header.add(4) as *mut u32).write_unaligned(HSTRING_REFERENCE);
-    (header.add(8) as *mut u32).write_unaligned(len);
-    (header.add(16) as *mut usize).write_unaligned(src as usize);
-    *out = header as usize;
+    // HSTRING_HEADER : 20 octets en x86, 24 en x64 (#1630).
+    std::ptr::write_bytes(header, 0, header_size());
+    (header as *mut u32).write_unaligned(HSTRING_REFERENCE);
+    (header.add(4) as *mut u32).write_unaligned(len);
+    set_header_text(header as usize, src as usize);
+    crate::wow32::write_ptr(out as usize, header as usize);
     0
 }
 
 unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
-    if h == 0 {
+    if h == 0 || is_reference(h) {
         return 0;
     }
-    let Some((_, len)) = hstring_parts(h) else {
-        return E_INVALIDARG;
-    };
-    if (h as *const u32).add(1).read_unaligned() & HSTRING_REFERENCE == 0 {
-        (h as *mut u32).write(0);
-        std::alloc::dealloc(h as *mut u8, hstring_layout(len));
+    if hstring_count(h).fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+        crate::dlls::kernel32::heap_free(0, 0, h as *mut std::ffi::c_void);
     }
     0
 }
@@ -1520,18 +1682,23 @@ unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i3
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = 0;
+    crate::wow32::write_ptr(out as usize, 0);
+    if h == 0 {
+        return 0;
+    }
+    if !is_reference(h) {
+        hstring_count(h).fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::wow32::write_ptr(out as usize, h);
+        return 0;
+    }
     let Some((text, len)) = hstring_parts(h) else {
         return E_INVALIDARG;
     };
-    if len == 0 {
-        return 0;
-    }
     let copy = hstring_alloc(text, len);
-    if copy == 0 {
+    if copy == 0 && len != 0 {
         return E_OUTOFMEMORY;
     }
-    *out = copy;
+    crate::wow32::write_ptr(out as usize, copy);
     0
 }
 
@@ -1621,15 +1788,32 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
 /// Automation) se rabat sur l'API Win32.
 unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
     let name = String::from_utf16_lossy(hstring_slice(class));
+    // Fabriques inscrites par le programme (RoRegisterActivationFactories).
+    if let Some(hr) =
+        super::ole32_lot_c::registered_activation_factory(class, &name, iid as *const u8, out)
+    {
+        return hr;
+    }
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if let Some(hr) = super::composition::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
-    if !out.is_null() {
-        *out = 0;
+    if let Some(hr) = super::winrt_ui::activation_factory(&name, iid as *const u8, out) {
+        return hr;
     }
+    if !out.is_null() {
+        crate::wow32::write_ptr(out as usize, 0);
+    }
+    // Classe et interface demandées, pour savoir ce qu'il faudrait servir
+    // (#1659), comme le journal de CoCreateInstance.
+    let iid_text = super::comobj::read_guid(iid as *const u8)
+        .map_or_else(|| "NULL".to_string(), |g| super::comobj::guid_str(&g));
+    crate::log_warn!(
+        "com",
+        "RoGetActivationFactory : classe « {name} » (interface {iid_text}) inconnue (REGDB_E_CLASSNOTREG)"
+    );
     REGDB_E_CLASSNOTREG
 }
 
@@ -1645,11 +1829,19 @@ unsafe extern "win64" fn RoTransformError(_old: i32, _new: i32, _message: usize)
     0
 }
 
+/// Erreur posée par SetRestrictedErrorInfo sur ce thread, cédée à
+/// l'appelant ; S_FALSE quand il n'y en a pas.
 unsafe extern "win64" fn GetRestrictedErrorInfo(out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    if out.is_null() {
+        return E_INVALIDARG;
     }
-    1 // S_FALSE : aucune erreur enregistrée
+    let info = super::ole32_lot_c::take_restricted_error_info();
+    crate::wow32::write_ptr(out as usize, info);
+    if info == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 pub fn ole32_exports() -> crate::dlls::Exports {
@@ -2069,6 +2261,8 @@ pub fn oleaut32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "VarBstrCmp" => fn VarBstrCmp,
         "VarUI4FromStr" => fn VarUI4FromStr,
+        // Ordinal d'après OleAut32.Lib du SDK Windows public (#1606).
+        "#277" => fn VarUI4FromStr,
     }
 }
 
@@ -2145,17 +2339,21 @@ unsafe extern "win64" fn CertGetEnhancedKeyUsage(
     if len.is_null() {
         return 0;
     }
+    // CERT_ENHKEY_USAGE { cUsageIdentifier, rgpszUsageIdentifier } : 8 octets
+    // en x86, 16 en x64 (#1667).
+    let ps = crate::wow32::pointer_size();
+    let size = 2 * ps as u32;
     if usage.is_null() {
-        *len = 16;
+        *len = size;
         return 1;
     }
-    if *len < 16 {
-        *len = 16;
+    if *len < size {
+        *len = size;
         set_last_error(234); // ERROR_MORE_DATA
         return 0;
     }
     *usage = 0; // cUsageIdentifier
-    *(usage.add(2) as *mut usize) = 0;
+    crate::wow32::write_ptr(usage as usize + ps, 0);
     set_last_error(CRYPT_E_NOT_FOUND);
     1
 }
@@ -2170,17 +2368,22 @@ unsafe extern "win64" fn CertGetIntendedKeyUsage(
     0
 }
 
-unsafe extern "win64" fn CryptMsgClose(_msg: usize) -> i32 {
+unsafe extern "win64" fn CryptMsgClose(msg: usize) -> i32 {
+    // Message de CryptMsgOpenToDecode (#1820) : libéré.
+    super::discord_win32::close_msg(msg);
     1
 }
 
 unsafe extern "win64" fn CryptMsgGetParam(
-    _msg: usize,
-    _ty: u32,
-    _index: u32,
-    _data: *mut c_void,
+    msg: usize,
+    ty: u32,
+    index: u32,
+    data: *mut c_void,
     len: *mut u32,
 ) -> i32 {
+    if super::discord_win32::is_decode_msg(msg) {
+        return super::discord_win32::get_param(msg, ty, index, data, len);
+    }
     if !len.is_null() {
         *len = 0;
     }
@@ -2489,6 +2692,71 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn etat(pid: u32) -> char {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        stat[stat.rfind(')').unwrap() + 1..]
+            .trim_start()
+            .chars()
+            .next()
+            .unwrap()
+    }
+
+    /// #1797 : trace des modules déchargés vide mais bien formée.
+    #[test]
+    fn trace_des_modules_decharges_vide() {
+        let (mut taille, mut nombre, mut trace) =
+            (std::ptr::null(), std::ptr::null(), std::ptr::null());
+        unsafe {
+            RtlGetUnloadEventTraceEx(&mut taille, &mut nombre, &mut trace);
+            assert_eq!(*taille, 0x68);
+            assert_eq!(*nombre, 0);
+            let tableau = *(trace as *const *const u8);
+            assert_eq!(tableau, UNLOAD_TRACE_ARRAY.as_ptr());
+            RtlGetUnloadEventTraceEx(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+        let exports = crate::dlls::builtin_exports();
+        let ntdll = exports.iter().find(|(n, _)| *n == "ntdll").unwrap();
+        assert!(ntdll.1.contains(&"RtlGetUnloadEventTraceEx"));
+    }
+
+    /// #1787 : un processus figé par NtSuspendProcess puis laissé ainsi
+    /// (Crashpad planté en plein vidage) est relancé par le gestionnaire de
+    /// plantage, et une relance normale libère sa place.
+    #[test]
+    fn processus_fige_relance_apres_plantage() {
+        let mut enfant = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = enfant.id();
+        unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+        let place = SUSPENDED.iter().find(|s| {
+            s.compare_exchange(0, pid as i32, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        });
+        assert!(place.is_some());
+        let debut = std::time::Instant::now();
+        while etat(pid) != 'T' && debut.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::yield_now();
+        }
+        assert_eq!(etat(pid), 'T');
+        assert!(resume_suspended() >= 1);
+        let debut = std::time::Instant::now();
+        while etat(pid) == 'T' && debut.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::yield_now();
+        }
+        assert_ne!(etat(pid), 'T');
+        assert!(SUSPENDED
+            .iter()
+            .all(|s| s.load(Ordering::Relaxed) != pid as i32));
+        let _ = enfant.kill();
+        let _ = enfant.wait();
+    }
 
     fn fenetre(parent: usize) -> usize {
         let hwnd = crate::dlls::gui::alloc_hwnd();
@@ -2898,6 +3166,30 @@ mod tests {
                 NtQuerySection(0x99_9999, 0, info.as_mut_ptr(), 24, &mut got),
                 0xC000_0008
             );
+            // Disposition x86 (#1650) : 16 octets, MaximumSize à 8, SIZE_T
+            // rendu sur 4 octets sans toucher aux 4 suivants.
+            let mut small = [0u8; 16];
+            let mut got32 = [0u32, 0xDEAD_BEEF];
+            assert_eq!(
+                query_section(
+                    h,
+                    0,
+                    small.as_mut_ptr(),
+                    16,
+                    got32.as_mut_ptr().cast(),
+                    true
+                ),
+                0
+            );
+            assert_eq!(got32, [16, 0xDEAD_BEEF]);
+            assert_eq!(
+                u64::from_le_bytes(small[8..16].try_into().unwrap()),
+                0x40000
+            );
+            assert_eq!(
+                u32::from_le_bytes(small[4..8].try_into().unwrap()),
+                0x0800_0000
+            );
             crate::dlls::kernel32::close_handle(h);
         }
     }
@@ -3090,6 +3382,65 @@ mod tests {
             assert_eq!(RegisterHotKey(0, 1, 2, 0x41), 1);
             assert_eq!(UnregisterHotKey(0, 1), 1);
             assert_eq!(UnregisterHotKey(0, 1), 0);
+        }
+    }
+
+    /// Chaîne bâtie par le programme lui-même, comme C++/WinRT et
+    /// windows-rs : { drapeaux, longueur, 0, 0, texte, compteur, texte }.
+    #[test]
+    fn chaine_winrt_batie_par_le_programme() {
+        unsafe {
+            #[repr(C)]
+            struct Header {
+                flags: u32,
+                len: u32,
+                r0: u32,
+                r1: u32,
+                data: *const u16,
+                count: u32,
+                buffer: [u16; 32],
+            }
+            let nom: Vec<u16> = "Windows.Foundation.Uri".encode_utf16().collect();
+            let mut b = Box::new(Header {
+                flags: 0,
+                len: nom.len() as u32,
+                r0: 0,
+                r1: 0,
+                data: std::ptr::null(),
+                count: 1,
+                buffer: [0; 32],
+            });
+            b.buffer[..nom.len()].copy_from_slice(&nom);
+            b.data = b.buffer.as_ptr();
+            let h = Box::into_raw(b) as usize;
+            let count =
+                || std::ptr::read_volatile(std::ptr::addr_of!((*(h as *const Header)).count));
+            assert_eq!(hstring_slice(h), &nom[..]);
+            assert_eq!(WindowsGetStringLen(h), nom.len() as u32);
+            // Dupliquer une chaîne allouée ne fait que compter une référence.
+            let mut dup = 0usize;
+            assert_eq!(WindowsDuplicateString(h, &mut dup), 0);
+            assert_eq!(dup, h);
+            assert_eq!(count(), 2);
+            assert_eq!(WindowsDeleteString(dup), 0);
+            assert_eq!(count(), 1);
+            // Et nos chaînes suivent la même disposition.
+            let mut ours = 0usize;
+            assert_eq!(
+                WindowsCreateString(nom.as_ptr(), nom.len() as u32, &mut ours),
+                0
+            );
+            let o = &*(ours as *const Header);
+            assert_eq!((o.flags, o.len, o.count), (0, nom.len() as u32, 1));
+            assert_eq!(
+                std::slice::from_raw_parts(o.data, nom.len() + 1)[nom.len()],
+                0
+            );
+            assert_eq!(WindowsDuplicateString(ours, &mut dup), 0);
+            assert_eq!(dup, ours);
+            assert_eq!(WindowsDeleteString(ours), 0);
+            assert_eq!(WindowsDeleteString(dup), 0);
+            drop(Box::from_raw(h as *mut Header));
         }
     }
 

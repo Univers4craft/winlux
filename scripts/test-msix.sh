@@ -67,6 +67,7 @@ def fake_p7x(cn):
     signed = der(0x02, b"\x01") + der(0x31, b"") + der(0x30, b"") + der(0xA0, cert) + der(0x31, b"")
     oid = der(0x06, bytes([0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]))
     return b"PKCX" + der(0x30, oid + der(0xA0, der(0x30, signed)))
+CATALOG = b"catalogue d'integrite de test"
 def contents(arch):
     files = {
         "AppxManifest.xml": manifest.replace("ARCH", arch).encode(),
@@ -91,6 +92,9 @@ def package(path, arch, tamper=False, signer=None):
             z.writestr(name.replace(" ", "%20"), data)
         z.writestr("AppxBlockMap.xml", blockmap)
         z.writestr("[Content_Types].xml", "<Types/>")
+        # Fichier d'empreinte, absent du block map comme dans les vrais
+        # paquets (Teams) : il ne doit pas rendre le paquet « altéré » (#1725).
+        z.writestr("AppxMetadata/CodeIntegrity.cat", CATALOG)
         if signer:
             z.writestr("AppxSignature.p7x", fake_p7x(signer))
 
@@ -105,6 +109,7 @@ def unsigned(arch, blockmap_override=None):
             z.writestr(name.replace(" ", "%20"), data)
         z.writestr("AppxBlockMap.xml", blockmap_override or blockmap)
         z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("AppxMetadata/CodeIntegrity.cat", CATALOG)
     return buf.getvalue(), blockmap
 def openssl(*args):
     subprocess.run(["openssl", *args], check=True, cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -123,7 +128,8 @@ def signed(path, leaf="leaf", blockmap_signed=None, corrupt=False):
     entries, cd_size, cd_off = struct.unpack("<HII", data[eocd + 10:eocd + 20])
     sha = lambda b: hashlib.sha256(b).digest()
     digests = b"APPX" + b"AXPC" + sha(data[:cd_off]) + b"AXCD" + sha(data[cd_off:]) \
-        + b"AXCT" + sha(b"<Types/>") + b"AXBM" + sha(blockmap_signed or blockmap)
+        + b"AXCT" + sha(b"<Types/>") + b"AXBM" + sha(blockmap_signed or blockmap) \
+        + b"AXCI" + sha(CATALOG)
     sha256 = der(0x30, der(0x06, bytes.fromhex("608648016503040201")) + der(0x05, b""))
     spc = der(0x30, der(0x30, der(0x06, bytes.fromhex("2b060104018237021e"))) + der(0x30, sha256 + der(0x04, digests)))
     open(work + "/spc.der", "wb").write(spc)

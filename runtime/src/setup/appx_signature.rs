@@ -12,7 +12,8 @@
 //!   (`[Content_Types].xml`), `AXCI` (`AppxMetadata/CodeIntegrity.cat`),
 //!   `AXPC` (les fichiers de l'archive) et `AXCD` (son répertoire central) ;
 //! - que la chaîne de certificats mène à une autorité reconnue par le
-//!   système (magasin d'OpenSSL, `SSL_CERT_FILE` / `SSL_CERT_DIR`) et que le
+//!   système (magasin d'OpenSSL, `SSL_CERT_FILE` / `SSL_CERT_DIR`) ou à une
+//!   des racines de signature de code de `CODE_ROOTS`, et que le
 //!   certificat est prévu pour signer du code.
 //!
 //! Une signature fausse, ou un paquet modifié après signature, est refusé
@@ -23,6 +24,22 @@
 //!
 //! Les calculs (condensats, vérification RSA ou ECDSA, chaîne) passent par
 //! la bibliothèque OpenSSL du système (`dlls::hostssl`).
+
+/// Racines reconnues pour la signature de code seulement (jamais pour TLS) :
+/// le magasin du système, fait pour TLS, ne les contient pas, et toute
+/// signature Microsoft (paquets MSIX, Authenticode) restait « non
+/// vérifiée » (#1726). Certificats publics du dépôt PKI de Microsoft
+/// (https://www.microsoft.com/pkiops/docs/repository.htm), SHA-256 :
+/// - Root Certificate Authority 2010 : df545bf9…6f3c163e ;
+/// - Root Certificate Authority 2011 : 847df6a7…07ed7c61 ;
+/// - Identity Verification Root Certificate Authority 2020 : 5367f20c…292e1270 ;
+/// - Time Stamp Root Certificate Authority 2014 : 65af95f4…82109e4f.
+pub(crate) const CODE_ROOTS: [&[u8]; 4] = [
+    include_bytes!("racines_code/microsoft-root-2010.cer"),
+    include_bytes!("racines_code/microsoft-root-2011.cer"),
+    include_bytes!("racines_code/microsoft-identity-verification-root-2020.cer"),
+    include_bytes!("racines_code/microsoft-time-stamp-root-2014.cer"),
+];
 
 use crate::archive::zip::{self, ZipEntry};
 use crate::dlls::hostssl;
@@ -248,13 +265,14 @@ fn check_chain(p: &Parsed, signer: &Cert, name: String) -> Signature {
         .filter(|c| c.der != signer.der)
         .map(|c| c.der.clone())
         .collect();
-    match hostssl::verify(&signer.der, &others, None) {
+    match hostssl::verify_code(&signer.der, &others, &CODE_ROOTS, None) {
         None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
         Some(v) if v.error == 0 => Signature::Verified { signer: name },
         // Certificat expiré (ou pas encore valide) : comme Windows, une
         // signature horodatée pendant sa validité reste valable (#1387).
         Some(v) if v.error == 9 || v.error == 10 => match timestamp(p) {
-            Ok(Some(at)) => match hostssl::verify_at(&signer.der, &others, at) {
+            Ok(Some(at)) => match hostssl::verify_code(&signer.der, &others, &CODE_ROOTS, Some(at))
+            {
                 Some(w) if w.error == 0 => Signature::Verified { signer: name },
                 Some(w) => unverified(chain_reason(w.error)),
                 None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
@@ -357,7 +375,7 @@ fn check_tsa(tsa: &Cert, extra: &[Vec<u8>], at: i64) -> Result<(), String> {
     {
         return Err("certificat non prévu pour horodater".into());
     }
-    match hostssl::verify_at(&tsa.der, extra, at) {
+    match hostssl::verify_code(&tsa.der, extra, &CODE_ROOTS, Some(at)) {
         Some(v) if v.error == 0 => Ok(()),
         Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason(v.error))),
         None => Err("chaîne de l'autorité d'horodatage non vérifiable".into()),
@@ -632,6 +650,13 @@ fn digest_len(md: &CStr) -> usize {
 
 /// PKCS #7 SignedData Authenticode (DER) : certificats, signataire et
 /// condensat signé du `SpcIndirectDataContent`.
+/// PKCS #7 SignedData décodé pour CryptMsgOpenToDecode (#1823) :
+/// certificats (DER), contenu signé et nombre de signataires lus.
+pub(crate) fn signed_data_parts(der: &[u8]) -> Option<(Vec<Vec<u8>>, Vec<u8>)> {
+    let p = parse_signed_any(der).ok()?;
+    Some((p.certs.iter().map(|c| c.der.clone()).collect(), p.content))
+}
+
 fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
     let mut p = parse_signed_any(der)?;
     if p.content_type != OID_SPC_INDIRECT_DATA {
@@ -1089,15 +1114,34 @@ const PE_MAX: u64 = 512 << 20;
 /// (#1382). `Verified.signer` / `Unverified.signer` : nom à afficher (CN du
 /// certificat, sinon O).
 pub fn examine_pe(path: &Path) -> Signature {
+    examine_pe_with_certs(path).0
+}
+
+/// Comme `examine_pe`, avec les certificats de la signature en DER, celui
+/// du signataire en tête (vide sans signature lisible) : WinVerifyTrust en
+/// tire ses données d'état (#1728).
+pub fn examine_pe_with_certs(path: &Path) -> (Signature, Vec<Vec<u8>>) {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 || size > PE_MAX {
-        return Signature::Absent;
+        return (Signature::Absent, Vec::new());
     }
     let data = match std::fs::read(path) {
         Ok(d) => d,
-        Err(e) => return Signature::Invalid(format!("{} : {e}", path.display())),
+        Err(e) => {
+            return (
+                Signature::Invalid(format!("{} : {e}", path.display())),
+                Vec::new(),
+            )
+        }
     };
-    examine_pe_bytes(&data)
+    let mut certs = Vec::new();
+    let sig = examine_pe_parts(&data, &mut certs);
+    (sig, certs)
+}
+
+#[cfg(test)]
+fn examine_pe_bytes(d: &[u8]) -> Signature {
+    examine_pe_parts(d, &mut Vec::new())
 }
 
 /// Zones de l'image : (somme de contrôle, entrée « sécurité » du répertoire
@@ -1128,7 +1172,7 @@ fn pe_layout(d: &[u8]) -> Option<(usize, usize, usize, usize)> {
     Some((opt + 64, entry, start, len))
 }
 
-fn examine_pe_bytes(d: &[u8]) -> Signature {
+fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     let Some((checksum, entry, start, len)) = pe_layout(d) else {
         return Signature::Absent;
     };
@@ -1154,6 +1198,14 @@ fn examine_pe_bytes(d: &[u8]) -> Signature {
     let Some(signer) = parsed.certs.iter().find(|c| parsed.signer_id.matches(c)) else {
         return Signature::Invalid("le certificat du signataire est absent de la signature".into());
     };
+    certs.push(signer.der.clone());
+    certs.extend(
+        parsed
+            .certs
+            .iter()
+            .filter(|c| c.der != signer.der)
+            .map(|c| c.der.clone()),
+    );
     let name = display_name(&signer.subject);
     if let Some(failure) = check_signer(&parsed, signer, &name) {
         return failure;
@@ -1190,8 +1242,29 @@ fn display_name(subject: &[(String, String)]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn racines_de_signature_de_code_reconnues() {
+        // #1726 : chaque racine est lisible et reconnue par verify_code ;
+        // elle ne sert pas aux vérifications TLS (verify), et elle
+        // n'aboutit qu'à une chaîne vérifiée, pas à un contrôle désactivé.
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        for root in CODE_ROOTS {
+            let v = hostssl::verify_code(root, &[], &CODE_ROOTS, None).expect("vérifiable");
+            assert_eq!(v.error, 0, "racine de signature de code non reconnue");
+        }
+        let empty: [&[u8]; 0] = [];
+        let v = hostssl::verify_code(CODE_ROOTS[1], &[], &empty, None).expect("vérifiable");
+        if v.error == 0 {
+            // Le magasin du système la contient déjà : rien à prouver ici.
+            return;
+        }
+        assert_ne!(hostssl::verify(CODE_ROOTS[1], &[], None).unwrap().error, 0);
+    }
 
     /// Exécutable minimal (PE32+, sans section), long d'un multiple de 8.
     fn pe_minimal() -> Vec<u8> {
@@ -1483,14 +1556,10 @@ mod tests {
     /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
     /// Signature d'essai faite par la commande openssl (certificat
     /// autosigné : signature juste mais autorité inconnue).
-    #[test]
-    fn executable_signe_lu_et_verifie() {
+    /// Exécutable minimal signé (Authenticode, SHA-256) par un certificat
+    /// auto-signé « Testeur Winlux » ; None sans la commande openssl.
+    pub(crate) fn signed_test_pe() -> Option<Vec<u8>> {
         let pe = pe_minimal();
-        assert_eq!(examine_pe_bytes(&pe), Signature::Absent);
-        if hostssl::ssl().is_none() {
-            eprintln!("OpenSSL du système absent : vérification non testée");
-            return;
-        }
         let (checksum, entry, _, _) = pe_layout(&pe).unwrap();
         let mut image = pe[..checksum].to_vec();
         image.extend_from_slice(&pe[checksum + 4..entry]);
@@ -1530,7 +1599,7 @@ mod tests {
             .is_err()
         {
             eprintln!("commande openssl absente : vérification non testée");
-            return;
+            return None;
         }
         std::fs::write(dir.join("spc.der"), &spc).unwrap();
         run(&[
@@ -1585,6 +1654,21 @@ mod tests {
         signed[entry..entry + 4].copy_from_slice(&(start as u32).to_le_bytes());
         signed[entry + 4..entry + 8].copy_from_slice(&(padded as u32).to_le_bytes());
 
+        Some(signed)
+    }
+
+    #[test]
+    fn executable_signe_lu_et_verifie() {
+        let pe = pe_minimal();
+        assert_eq!(examine_pe_bytes(&pe), Signature::Absent);
+        if hostssl::ssl().is_none() {
+            eprintln!("OpenSSL du système absent : vérification non testée");
+            return;
+        }
+        let Some(signed) = signed_test_pe() else {
+            return;
+        };
+        let (checksum, _, _, _) = pe_layout(&pe).unwrap();
         match examine_pe_bytes(&signed) {
             Signature::Unverified { signer, reason } => {
                 assert_eq!(signer, "Testeur Winlux");

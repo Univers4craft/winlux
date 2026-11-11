@@ -430,6 +430,14 @@ jobs:
         run: |
           WINLUX_STORE_CATALOGS_DEFS=integration/store-catalogs.json python3 -B scripts/winlux-store-catalogs.py --check-key flathub
 
+      - name: Navigateurs proposés présents chez leurs éditeurs (informatif, #1716)
+        # Index officiels de Brave, Chrome, Edge, Firefox, Opera, Opera GX et
+        # Vivaldi ; liste signée de Tor Browser (clé épinglée). Informatif :
+        # une panne chez un éditeur ne bloque pas les autres PR.
+        continue-on-error: true
+        timeout-minutes: 10
+        run: sh scripts/check-navigateurs-editeurs.sh
+
       - name: Sonder les dépôts des éditeurs du Store (informatif)
         continue-on-error: true
         timeout-minutes: 20
@@ -543,6 +551,9 @@ jobs:
         run: |
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
           sh scripts/test-setup-run.sh
+
+      - name: Dossier système des installateurs NSIS 32 bits (#1800)
+        run: sh scripts/test-sysdir-32bits.sh
 
       - name: Actions personnalisées et services msiexec (#833)
         run: |
@@ -749,6 +760,14 @@ jobs:
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
 
+      - name: Démarrer, homonymes départagés et distingués (#1489)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-start-homonyms.py
+
+      - name: Trousseau de secrets créé et ouvert à la connexion, sans fenêtre (#1488)
+        run: |
+          sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin || { sudo apt-get update -q && sudo apt-get install -y -q gnome-keyring libsecret-tools dbus libglib2.0-bin; }
+          /usr/bin/python3 -B scripts/test-keyring.py
+
       - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
         run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py
 
@@ -780,14 +799,6 @@ jobs:
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures
 
-      - name: Conserver les captures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: captures-ui
-          path: build/captures
-          retention-days: 30
-
       - name: Récupérer les captures de la dernière version verte de master
         if: always()
         env:
@@ -810,10 +821,31 @@ jobs:
           /usr/bin/python3 -B scripts/compare-captures.py build/captures-ref build/captures build/captures-diff
           cat build/captures-diff/rapport.md >> "$GITHUB_STEP_SUMMARY"
 
+      # Une page index.html dans chaque artefact : on décompresse, on l'ouvre,
+      # toutes les captures du commit y sont, avec le pourcentage changé (#1779).
+      # sh scripts/telecharger-captures.sh rapatrie plusieurs exécutions d'un coup.
+      - name: Page index.html des captures
+        if: always()
+        run: |
+          mkdir -p build/captures build/captures-diff
+          /usr/bin/python3 -I scripts/index-captures.py build/captures --rapport build/captures-diff/rapport.json \
+            --titre "Captures d'écran Winlux ${GITHUB_SHA::7}"
+          /usr/bin/python3 -I scripts/index-captures.py build/captures-diff --rapport build/captures-diff/rapport.json \
+            --titre "Pixels changés ${GITHUB_SHA::7}"
+
+      # 90 jours, le maximum d'un dépôt public, où le stockage est gratuit (#1779).
+      - name: Conserver les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui
+          path: build/captures
+          retention-days: 90
+
       - name: Conserver les différences
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: captures-ui-diff
           path: build/captures-diff
-          retention-days: 30
+          retention-days: 90

@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+pub(crate) use descr::{create_event, create_presentation_descriptor, create_stream_descriptor};
+
 // ---------- HRESULT ----------
 pub const MF_E_INVALIDSTREAMNUMBER: i32 = 0xC00D_36B3u32 as i32;
 pub const MF_E_INVALIDMEDIATYPE: i32 = 0xC00D_36B4u32 as i32;
@@ -22,6 +24,7 @@ pub const MF_E_INVALIDTYPE: i32 = 0xC00D_36BDu32 as i32;
 pub const MF_E_INVALIDREQUEST: i32 = 0xC00D_36B2u32 as i32;
 pub const MF_E_ATTRIBUTENOTFOUND: i32 = 0xC00D_36E6u32 as i32;
 pub const MF_E_NOT_FOUND: i32 = 0xC00D_36D5u32 as i32;
+const MF_E_NOT_INITIALIZED: i32 = 0xC00D_36B6u32 as i32;
 const MF_E_BUFFERTOOSMALL: i32 = 0xC00D_36B1u32 as i32;
 const MF_E_VIDEO_DEVICE_INVALIDATED: i32 = 0xC00D_3EA2u32 as i32;
 
@@ -332,6 +335,9 @@ enum Ext {
     MediaType,
     Activate(Camera),
     Sample(Mutex<SampleData>),
+    Event(descr::EventData),
+    StreamDesc(descr::StreamData),
+    PresDesc(descr::PresData),
 }
 
 #[derive(Default)]
@@ -365,6 +371,9 @@ fn new_obj(ext: Ext) -> *mut MfObj {
         Ext::MediaType => MEDIATYPE_VTBL.0.as_ptr() as *const (),
         Ext::Activate(_) => ACTIVATE_VTBL.0.as_ptr() as *const (),
         Ext::Sample(_) => SAMPLE_VTBL.0.as_ptr() as *const (),
+        Ext::Event(_) => descr::EVENT_VTBL.0.as_ptr() as *const (),
+        Ext::StreamDesc(_) => descr::STREAMDESC_VTBL.0.as_ptr() as *const (),
+        Ext::PresDesc(_) => descr::PRESDESC_VTBL.0.as_ptr() as *const (),
     };
     Box::into_raw(Box::new(MfObj {
         vtbl,
@@ -385,6 +394,9 @@ fn is_ours(p: *mut c_void) -> bool {
         MEDIATYPE_VTBL.0.as_ptr() as *const (),
         ACTIVATE_VTBL.0.as_ptr() as *const (),
         SAMPLE_VTBL.0.as_ptr() as *const (),
+        descr::EVENT_VTBL.0.as_ptr() as *const (),
+        descr::STREAMDESC_VTBL.0.as_ptr() as *const (),
+        descr::PRESDESC_VTBL.0.as_ptr() as *const (),
     ]
     .contains(&v)
 }
@@ -405,7 +417,10 @@ unsafe extern "win64" fn a_qi(this: *mut MfObj, riid: *const u8, out: *mut *mut 
         || iid == IID_IMFATTRIBUTES
         || (iid == IID_IMFMEDIATYPE && matches!(o.ext, Ext::MediaType))
         || (iid == IID_IMFACTIVATE && matches!(o.ext, Ext::Activate(_)))
-        || (iid == IID_IMFSAMPLE && matches!(o.ext, Ext::Sample(_)));
+        || (iid == IID_IMFSAMPLE && matches!(o.ext, Ext::Sample(_)))
+        || (iid == descr::IID_IMFMEDIAEVENT && matches!(o.ext, Ext::Event(_)))
+        || (iid == descr::IID_IMFSTREAMDESCRIPTOR && matches!(o.ext, Ext::StreamDesc(_)))
+        || (iid == descr::IID_IMFPRESENTATIONDESCRIPTOR && matches!(o.ext, Ext::PresDesc(_)));
     if ok {
         o.refs.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
@@ -850,7 +865,7 @@ unsafe extern "win64" fn a_copy_all_items(this: *mut MfObj, dest: *mut c_void) -
 }
 
 /// Libère ce que `write_propvariant` a alloué.
-unsafe fn clear_propvariant(pv: *mut u8) {
+pub(crate) unsafe fn clear_propvariant(pv: *mut u8) {
     let vt = (pv as *const u16).read_unaligned();
     let data = pv.add(8);
     match vt {
@@ -929,6 +944,9 @@ const fn concat<const A: usize, const B: usize, const N: usize>(
     }
     out
 }
+
+// Après la macro des attributs, que le module emploie.
+mod descr;
 
 static ATTR_VTBL: VTable<33> = VTable(attr_vtbl_entries!());
 
@@ -1251,6 +1269,148 @@ fn buffer_from(bytes: &[u8]) -> *mut c_void {
         m.len.store(bytes.len() as u32, Ordering::Relaxed);
     }
     b
+}
+
+// ---------- MFCreateMediaBufferWrapper (Discord, #1895) ----------
+// Tampon qui montre une tranche [offset, offset + longueur) d'un autre
+// IMFMediaBuffer, sans copie : Lock verrouille le tampon d'origine et rend
+// son adresse décalée. La longueur courante part de `longueur`.
+
+#[repr(C)]
+struct WrapBuf {
+    vtbl: *const (),
+    refs: AtomicU32,
+    inner: *mut c_void,
+    offset: u32,
+    max: u32,
+    len: AtomicU32,
+}
+
+unsafe extern "win64" fn w_qi(this: *mut WrapBuf, riid: *const u8, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let iid = comobj::read_guid(riid);
+    if iid == Some(IID_IUNKNOWN) || iid == Some(IID_IMFMEDIABUFFER) {
+        (*this).refs.fetch_add(1, Ordering::Relaxed);
+        *out = this as *mut c_void;
+        S_OK
+    } else {
+        *out = std::ptr::null_mut();
+        E_NOINTERFACE
+    }
+}
+unsafe extern "win64" fn w_addref(this: *mut WrapBuf) -> u32 {
+    (*this).refs.fetch_add(1, Ordering::Relaxed) + 1
+}
+unsafe extern "win64" fn w_release(this: *mut WrapBuf) -> u32 {
+    let n = (*this).refs.fetch_sub(1, Ordering::AcqRel) - 1;
+    if n == 0 {
+        let b = Box::from_raw(this);
+        com_release(b.inner);
+    }
+    n
+}
+unsafe extern "win64" fn w_lock(
+    this: *mut WrapBuf,
+    ptr: *mut *mut u8,
+    max: *mut u32,
+    cur: *mut u32,
+) -> i32 {
+    if ptr.is_null() {
+        return E_POINTER;
+    }
+    let b = &*this;
+    let lock_fn: unsafe extern "win64" fn(*mut c_void, *mut *mut u8, *mut u32, *mut u32) -> i32 =
+        std::mem::transmute(slot(b.inner, 3));
+    let mut p = std::ptr::null_mut();
+    let hr = lock_fn(b.inner, &mut p, std::ptr::null_mut(), std::ptr::null_mut());
+    if hr < 0 {
+        return hr;
+    }
+    *ptr = p.add(b.offset as usize);
+    if !max.is_null() {
+        *max = b.max;
+    }
+    if !cur.is_null() {
+        *cur = b.len.load(Ordering::Relaxed);
+    }
+    S_OK
+}
+unsafe extern "win64" fn w_unlock(this: *mut WrapBuf) -> i32 {
+    let inner = (*this).inner;
+    let unlock_fn: unsafe extern "win64" fn(*mut c_void) -> i32 =
+        std::mem::transmute(slot(inner, 4));
+    unlock_fn(inner)
+}
+unsafe extern "win64" fn w_get_current_length(this: *mut WrapBuf, n: *mut u32) -> i32 {
+    if n.is_null() {
+        return E_POINTER;
+    }
+    *n = (*this).len.load(Ordering::Relaxed);
+    S_OK
+}
+unsafe extern "win64" fn w_set_current_length(this: *mut WrapBuf, n: u32) -> i32 {
+    if n > (*this).max {
+        return E_INVALIDARG;
+    }
+    (*this).len.store(n, Ordering::Relaxed);
+    S_OK
+}
+unsafe extern "win64" fn w_get_max_length(this: *mut WrapBuf, n: *mut u32) -> i32 {
+    if n.is_null() {
+        return E_POINTER;
+    }
+    *n = (*this).max;
+    S_OK
+}
+
+static WRAP_VTBL: VTable<8> = VTable([
+    w_qi as *const (),
+    w_addref as *const (),
+    w_release as *const (),
+    w_lock as *const (),
+    w_unlock as *const (),
+    w_get_current_length as *const (),
+    w_set_current_length as *const (),
+    w_get_max_length as *const (),
+]);
+
+/// MFCreateMediaBufferWrapper : la tranche doit tenir dans la longueur
+/// maximale du tampon d'origine.
+pub unsafe extern "win64" fn mf_create_media_buffer_wrapper(
+    inner: *mut c_void,
+    offset: u32,
+    length: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if inner.is_null() {
+        return E_INVALIDARG;
+    }
+    let get_max: unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32 =
+        std::mem::transmute(slot(inner, 7));
+    let mut max = 0u32;
+    let hr = get_max(inner, &mut max);
+    if hr < 0 {
+        return hr;
+    }
+    if u64::from(offset) + u64::from(length) > u64::from(max) {
+        return E_INVALIDARG;
+    }
+    com_addref(inner);
+    *out = Box::into_raw(Box::new(WrapBuf {
+        vtbl: WRAP_VTBL.0.as_ptr() as *const (),
+        refs: AtomicU32::new(1),
+        inner,
+        offset,
+        max: length,
+        len: AtomicU32::new(length),
+    })) as *mut c_void;
+    S_OK
 }
 
 /// Lit le contenu d'un IMFMediaBuffer quelconque (Lock/Unlock).

@@ -46,12 +46,30 @@ namespace System
     public struct Byte { private byte m_value; }
     public struct Int16 { private short m_value; }
     public struct UInt16 { private ushort m_value; }
-    public struct Int32 { private int m_value; }
+    public struct Int32
+    {
+        public const int MaxValue = 0x7FFFFFFF;
+        public const int MinValue = -MaxValue - 1;
+        private int m_value;
+    }
     public struct UInt32 { private uint m_value; }
-    public struct Int64 { private long m_value; }
+    public struct Int64
+    {
+        public const long MaxValue = 0x7FFFFFFFFFFFFFFF;
+        public const long MinValue = -MaxValue - 1;
+        private long m_value;
+    }
     public struct UInt64 { private ulong m_value; }
     public struct Single { private float m_value; }
-    public struct Double { private double m_value; }
+    public struct Double
+    {
+        private double m_value;
+
+        // NaN est le seul double différent de lui-même (IEEE 754).
+#pragma warning disable 1718
+        public static bool IsNaN(double d) { return d != d; }
+#pragma warning restore 1718
+    }
     public unsafe struct IntPtr { private void* m_value; }
     public unsafe struct UIntPtr { private void* m_value; }
 
@@ -82,6 +100,35 @@ namespace System
     {
         public static readonly string Empty = "";
 
+        // Comparaison et concaténation servies par le moteur (bcl.rs).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern bool operator ==(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern bool operator !=(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(string a, string b);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(string a, string b, string c);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public static extern string Concat(object a, object b, object c);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern bool StartsWith(string value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern bool EndsWith(string value);
+
+        // Égalité de contenu, et empreinte qui la respecte.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern override bool Equals(object obj);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern override int GetHashCode();
+
         public extern int Length
         {
             [MethodImpl(MethodImplOptions.InternalCall)]
@@ -97,12 +144,12 @@ namespace System
 
         public static bool IsNullOrEmpty(string value)
         {
-            return value == null || value.Length == 0;
+            return (object)value == null || value.Length == 0;
         }
 
         public static bool IsNullOrWhiteSpace(string value)
         {
-            if (value == null)
+            if ((object)value == null)
                 return true;
             for (int i = 0; i < value.Length; i++)
             {
@@ -120,12 +167,6 @@ namespace System
             [MethodImpl(MethodImplOptions.InternalCall)]
             get;
         }
-    }
-
-    public abstract class Type
-    {
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        public static extern Type GetTypeFromHandle(RuntimeTypeHandle handle);
     }
 
     public struct RuntimeTypeHandle { private IntPtr m_value; }
