@@ -11,3 +11,4 @@ ok('"Carlito"' in dwrite_rs and '"Caladea"' in dwrite_rs
 ok("FR_NOT_ENUM" in fonts_rs and '"GetGlyphIndicesA"' in fonts_rs and '"CreateFontIndirectExW"' in fonts_rs,
    "Polices : FR_NOT_ENUM, GetGlyphIndicesA et CreateFontIndirectEx (#1771)")
 ok((ROOT / "docs" / "POLICES-WINDOWS.md").is_file(), "Polices de Windows : inventaire et licences (#1768)")
+ok("(3, 0 | 1 | 10)" in fonts_rs, "Polices : noms en codage symbole lus, Marlett de Steam (#1807)")

@@ -226,7 +226,9 @@ fn name_string(table: &[u8], name_id: u16) -> Option<String> {
             continue;
         };
         let (rank, text) = match (platform, encoding) {
-            (3, 1 | 10) | (0, _) => {
+            // (3, 0) : polices de symboles (Marlett, Wingdings, Symbol) ;
+            // leurs noms sont aussi en UTF-16 gros-boutiste (#1807).
+            (3, 0 | 1 | 10) | (0, _) => {
                 let units: Vec<u16> = raw
                     .as_chunks::<2>()
                     .0
@@ -1419,6 +1421,28 @@ pub mod tests {
         assert_eq!(enum_faces("Cachée Winlux").len(), 1);
         assert!(remove_font_file(&p));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Police de symboles dont les noms sont en codage Windows « symbole »
+    /// (plateforme 3, codage 0), comme le marlett.ttf livré par Steam.
+    #[test]
+    fn noms_en_codage_symbole() {
+        let mut bytes = sample_font("Marlett Essai", "Regular", 400, false, false);
+        let from = [0u8, 3, 0, 1, 0x04, 0x09];
+        let to = [0u8, 3, 0, 0, 0x04, 0x09];
+        let mut n = 0;
+        let mut i = 0;
+        while i + from.len() <= bytes.len() {
+            if bytes[i..i + from.len()] == from {
+                bytes[i..i + from.len()].copy_from_slice(&to);
+                n += 1;
+            }
+            i += 1;
+        }
+        assert!(n >= 2, "enregistrements de noms réécrits");
+        let faces = parse_font_bytes(&bytes, Path::new("marlett.ttf"));
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].family, "Marlett Essai");
     }
 
     #[test]
