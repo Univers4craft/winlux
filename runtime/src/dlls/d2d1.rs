@@ -2589,7 +2589,12 @@ unsafe extern "win64" fn hwnd_resize(this: *mut TargetObj, size: *const [u32; 2]
         return E_INVALIDARG;
     };
     let mut t = target(this);
+    let left = v11::leave_bitmap(&mut t);
     t.resize(w, h);
+    drop(t);
+    if !left.is_null() {
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(left, 2)(left);
+    }
     S_OK
 }
 
@@ -2610,8 +2615,13 @@ unsafe extern "win64" fn bind_dc(this: *mut TargetObj, hdc: usize, rect: *const 
         return E_INVALIDARG;
     }
     let mut tg = target(this);
+    let left = v11::leave_bitmap(&mut tg);
     tg.resize((r - l).max(0) as u32, (b - t).max(0) as u32);
     tg.out = Output::Dc { hdc, x: l, y: t };
+    drop(tg);
+    if !left.is_null() {
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(left, 2)(left);
+    }
     S_OK
 }
 
