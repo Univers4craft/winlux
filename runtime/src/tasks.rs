@@ -1,10 +1,16 @@
 //! Planificateur de tâches Winlux : modèle des tâches, service de
 //! déclenchement et commandes `winlux --tasks …`.
 //!
-//! Une tâche est un fichier texte `clé=valeur` dans `/etc/winlux/tasks`
-//! (`<id>.task`, en Latin-1 pour que le bureau Win32 le lise et l'écrive
-//! directement). Le service `winlux --tasks daemon`, lancé par l'init Winlux,
-//! surveille l'heure et les événements système et exécute les actions.
+//! Une tâche est un fichier texte `clé=valeur` (`<id>.task`, en Latin-1 pour
+//! que le bureau Win32 le lise et l'écrive directement), rangé :
+//! - dans `/etc/winlux/tasks` pour les tâches du système, écrites par root ;
+//!   leurs actions tournent en root ;
+//! - dans `~/.local/share/winlux/tasks` pour celles qu'un compte enregistre
+//!   lui-même (AddTask d'Acrobat, #1824) ; leurs actions tournent sous ce
+//!   compte, jamais en root. `/etc/winlux/tasks` reste fermé aux comptes.
+//!
+//! Le service `winlux --tasks daemon`, lancé par l'init Winlux, surveille
+//! l'heure et les événements système et exécute les actions.
 //!
 //! Fichiers produits pour le bureau :
 //! - `/var/lib/winlux/tasks/history.log` : historique d'exécution, une ligne
@@ -20,6 +26,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 pub const TASKS_DIR: &str = "etc/winlux/tasks";
+/// Tâches d'un compte, relatif à son dossier personnel (#1824).
+pub const USER_TASKS_REL: &str = ".local/share/winlux/tasks";
 pub const STATE_DIR: &str = "var/lib/winlux/tasks";
 pub const RUN_DIR: &str = "run/winlux/tasks";
 const HISTORY_MAX: u64 = 256 * 1024;
@@ -234,6 +242,10 @@ pub struct Task {
     pub network: bool,
     /// Durée maximale en minutes (0 = illimitée).
     pub time_limit: u32,
+    /// Compte propriétaire d'une tâche personnelle, sous lequel ses actions
+    /// tournent ; `None` pour une tâche du système. Déduit de l'endroit où
+    /// le fichier est rangé, jamais lu dans le fichier (#1824).
+    pub owner: Option<u32>,
 }
 
 impl Default for Task {
@@ -250,6 +262,7 @@ impl Default for Task {
             ac_only: false,
             network: false,
             time_limit: 4320,
+            owner: None,
         }
     }
 }
@@ -337,6 +350,15 @@ impl Task {
         s
     }
 
+    /// Clé de l'état (dernière exécution, instance en cours, historique) :
+    /// l'id pour une tâche du système, `u<uid>-<id>` pour celle d'un compte.
+    pub fn key(&self) -> String {
+        match self.owner {
+            Some(uid) => account_key(uid, &self.id),
+            None => self.id.clone(),
+        }
+    }
+
     /// Chemin complet façon Windows : `\Dossier\Nom`.
     pub fn full_path(&self) -> String {
         let folder = self.folder.trim_end_matches('\\');
@@ -382,46 +404,182 @@ pub fn id_for(folder: &str, name: &str) -> String {
     }
 }
 
+fn euid() -> u32 {
+    // SAFETY : geteuid n'échoue jamais.
+    unsafe { libc::geteuid() }
+}
+
+/// Seul root écrit dans la base du système ; un autre compte enregistre ses
+/// tâches dans son dossier personnel (#1824).
+fn writes_system() -> bool {
+    euid() == 0
+}
+
+/// Dossier personnel d'un compte pour les tâches : sous la racine de test
+/// quand `WINLUX_ADMIN_ROOT` est posée, pour ne jamais toucher au vrai.
+fn own_home() -> PathBuf {
+    if std::env::var_os("WINLUX_ADMIN_ROOT").is_some_and(|r| !r.is_empty()) {
+        admin::path(&format!("home/{}", euid()))
+    } else {
+        crate::paths::home()
+    }
+}
+
+/// Dossier où le compte courant enregistre ses tâches et ses dossiers.
+pub fn store_dir() -> PathBuf {
+    if writes_system() {
+        admin::path(TASKS_DIR)
+    } else {
+        own_home().join(USER_TASKS_REL)
+    }
+}
+
+fn own_file(id: &str) -> Option<PathBuf> {
+    (!writes_system()).then(|| own_home().join(USER_TASKS_REL).join(format!("{id}.task")))
+}
+
+/// Fichier d'une tâche : celle du compte d'abord, sinon celle du système.
 fn task_file(id: &str) -> PathBuf {
+    if let Some(p) = own_file(id).filter(|p| p.exists()) {
+        return p;
+    }
     admin::path(TASKS_DIR).join(format!("{id}.task"))
 }
 
-pub fn load_all() -> Vec<Task> {
+/// Tâches `.task` d'un dossier, avec leur propriétaire.
+fn load_dir(dir: &std::path::Path, owner: Option<u32>) -> Vec<Task> {
     let mut tasks = Vec::new();
-    let Ok(entries) = std::fs::read_dir(admin::path(TASKS_DIR)) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return tasks;
     };
     for e in entries.flatten() {
         let p = e.path();
-        if p.extension().is_some_and(|x| x == "task") {
-            let id = p
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if let Some(text) = admin::read_text(&p) {
-                tasks.push(Task::parse(&id, &text));
+        if !p.extension().is_some_and(|x| x == "task") {
+            continue;
+        }
+        // Pour une tâche de compte : un vrai fichier, à ce compte (pas un
+        // lien vers le fichier d'un autre).
+        if let Some(uid) = owner {
+            use std::os::unix::fs::MetadataExt;
+            match std::fs::symlink_metadata(&p) {
+                Ok(m) if m.is_file() && m.uid() == uid => {}
+                _ => continue,
             }
         }
+        let id = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(text) = admin::read_text(&p) {
+            let mut t = Task::parse(&id, &text);
+            t.owner = owner;
+            tasks.push(t);
+        }
     }
+    tasks
+}
+
+fn sort_tasks(tasks: &mut [Task]) {
     tasks.sort_by(|a, b| {
         a.full_path()
             .to_lowercase()
             .cmp(&b.full_path().to_lowercase())
     });
+}
+
+/// Tâches visibles du compte courant : celles du système et les siennes
+/// (une tâche personnelle masque une tâche système de même id).
+pub fn load_all() -> Vec<Task> {
+    let mut tasks = Vec::new();
+    if !writes_system() {
+        tasks = load_dir(&own_home().join(USER_TASKS_REL), Some(euid()));
+    }
+    for t in load_dir(&admin::path(TASKS_DIR), None) {
+        if !tasks.iter().any(|o| o.id == t.id) {
+            tasks.push(t);
+        }
+    }
+    sort_tasks(&mut tasks);
     tasks
 }
 
+/// Comptes ordinaires (uid ≥ 1000) et leur dossier personnel, d'après
+/// `/etc/passwd`.
+fn accounts() -> Vec<(u32, PathBuf)> {
+    let text = admin::read_text(&admin::path("etc/passwd")).unwrap_or_default();
+    accounts_in(&text)
+}
+
+fn accounts_in(passwd: &str) -> Vec<(u32, PathBuf)> {
+    passwd
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            let uid: u32 = f.get(2)?.parse().ok()?;
+            let home = f.get(5)?;
+            (uid >= 1000 && uid != 65534 && home.starts_with('/')).then(|| (uid, admin::path(home)))
+        })
+        .collect()
+}
+
+/// Tâches du service : celles du système, puis celles de chaque compte.
+/// Leur état est rangé sous [`Task::key`], pour que deux comptes ne se
+/// mêlent pas.
+fn load_everyone() -> Vec<Task> {
+    let mut tasks = load_dir(&admin::path(TASKS_DIR), None);
+    for (uid, home) in accounts() {
+        let dir = home.join(USER_TASKS_REL);
+        // Le dossier lui-même doit appartenir au compte.
+        use std::os::unix::fs::MetadataExt;
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir() && m.uid() == uid) {
+            continue;
+        }
+        tasks.extend(load_dir(&dir, Some(uid)));
+    }
+    sort_tasks(&mut tasks);
+    tasks
+}
+
+/// Clé d'état d'une tâche de compte : `u<uid>-<id>`.
+fn account_key(uid: u32, id: &str) -> String {
+    format!("u{uid}-{id}")
+}
+
+/// Clé d'état (dernière exécution, instance en cours) d'une tâche vue par
+/// le compte courant.
+fn state_key(id: &str) -> String {
+    match own_file(id) {
+        Some(p) if p.exists() => account_key(euid(), id),
+        _ => id.to_string(),
+    }
+}
+
 pub fn load(id: &str) -> Option<Task> {
-    admin::read_text(&task_file(id)).map(|t| Task::parse(id, &t))
+    let p = task_file(id);
+    let mut t = admin::read_text(&p).map(|t| Task::parse(id, &t))?;
+    if own_file(id).is_some_and(|o| o == p) {
+        t.owner = Some(euid());
+    }
+    Some(t)
 }
 
 pub fn save(task: &Task) -> std::io::Result<()> {
-    admin::write_text(&task_file(&task.id), &task.to_text())
+    let dir = store_dir();
+    if !writes_system() {
+        // Dossier privé du compte : personne d'autre n'y lit ses tâches.
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)?;
+    }
+    admin::write_text(&dir.join(format!("{}.task", task.id)), &task.to_text())
 }
 
 pub fn delete(id: &str) -> bool {
+    let key = state_key(id);
     let ok = std::fs::remove_file(task_file(id)).is_ok();
-    let _ = std::fs::remove_file(admin::path(STATE_DIR).join(format!("{id}.last")));
+    let _ = std::fs::remove_file(admin::path(STATE_DIR).join(format!("{key}.last")));
     ok
 }
 
@@ -434,7 +592,8 @@ pub struct LastRun {
 }
 
 pub fn last_run(id: &str) -> Option<LastRun> {
-    let text = admin::read_text(&admin::path(STATE_DIR).join(format!("{id}.last")))?;
+    let key = state_key(id);
+    let text = admin::read_text(&admin::path(STATE_DIR).join(format!("{key}.last")))?;
     Some(LastRun {
         time: admin::field(&text, "last_run")?.parse().ok()?,
         result: admin::field(&text, "last_result")
@@ -449,7 +608,11 @@ fn running_file(id: &str) -> PathBuf {
 
 /// PID de l'instance en cours, si elle vit encore.
 pub fn running_pid(id: &str) -> Option<i32> {
-    let pid: i32 = admin::read_text(&running_file(id))?.trim().parse().ok()?;
+    running_pid_of(&state_key(id))
+}
+
+fn running_pid_of(key: &str) -> Option<i32> {
+    let pid: i32 = admin::read_text(&running_file(key))?.trim().parse().ok()?;
     // SAFETY: kill(pid, 0) ne fait que tester l'existence du processus.
     (pid > 0 && unsafe { libc::kill(pid, 0) } == 0).then_some(pid)
 }
@@ -461,7 +624,7 @@ pub fn history(task: &Task, kind: &str, detail: &str) {
         &format!(
             "{now}\t{}\t{}\t{}\t{kind}\t{}",
             admin::format_time(now),
-            task.id,
+            task.key(),
             clean(&task.name),
             clean(detail)
         ),
@@ -525,6 +688,85 @@ pub fn command_for(action: &Action) -> Option<Command> {
     Some(cmd)
 }
 
+/// Compte Linux : nom, groupe principal, dossier personnel, groupes.
+struct Account {
+    name: String,
+    gid: u32,
+    home: String,
+    groups: Vec<libc::gid_t>,
+}
+
+fn account(uid: u32) -> Option<Account> {
+    let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut buf = vec![0 as libc::c_char; 16 * 1024];
+    let mut res: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY : tampons à nous, getpwuid_r est réentrant.
+    let rc = unsafe { libc::getpwuid_r(uid, &mut pw, buf.as_mut_ptr(), buf.len(), &mut res) };
+    if rc != 0 || res.is_null() || pw.pw_name.is_null() {
+        return None;
+    }
+    // SAFETY : chaînes terminées par zéro dans `buf`.
+    let (name, home) = unsafe {
+        (
+            std::ffi::CStr::from_ptr(pw.pw_name).to_owned(),
+            std::ffi::CStr::from_ptr(pw.pw_dir)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let mut groups: Vec<libc::gid_t> = vec![0; 256];
+    let mut n = groups.len() as libc::c_int;
+    // SAFETY : `groups` contient `n` cases.
+    if unsafe { libc::getgrouplist(name.as_ptr(), pw.pw_gid, groups.as_mut_ptr(), &mut n) } < 0 {
+        groups = vec![pw.pw_gid];
+    } else {
+        groups.truncate(n.max(0) as usize);
+    }
+    Some(Account {
+        name: name.to_string_lossy().into_owned(),
+        gid: pw.pw_gid,
+        home,
+        groups,
+    })
+}
+
+/// Fait tourner la commande sous le compte `uid` : groupes, groupe puis
+/// utilisateur, dans le processus enfant avant exec ; environnement du
+/// compte. Sans compte connu, la tâche ne démarre pas (#1824).
+fn as_account(cmd: &mut Command, uid: u32) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let acc = account(uid).ok_or_else(|| format!("compte {uid} inconnu"))?;
+    let path = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
+    let lang = std::env::var_os("LANG");
+    cmd.env_clear()
+        .env("PATH", path)
+        .env("HOME", &acc.home)
+        .env("USER", &acc.name)
+        .env("LOGNAME", &acc.name);
+    if let Some(l) = lang {
+        cmd.env("LANG", l);
+    }
+    let runtime = format!("/run/user/{uid}");
+    if std::path::Path::new(&runtime).is_dir() {
+        cmd.env("XDG_RUNTIME_DIR", runtime);
+    }
+    let (gid, groups) = (acc.gid, acc.groups);
+    // SAFETY : seuls des appels système sûrs après fork (setgroups,
+    // setgid, setuid), sur des données préparées avant.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setgroups(groups.len(), groups.as_ptr()) != 0
+                || libc::setgid(gid) != 0
+                || libc::setuid(uid) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
 /// Raison pour laquelle une tâche ne doit pas démarrer maintenant.
 pub fn blocked_reason(task: &Task) -> Option<&'static str> {
     if task.ac_only && !admin::on_ac_power() {
@@ -533,7 +775,7 @@ pub fn blocked_reason(task: &Task) -> Option<&'static str> {
     if task.network && !admin::network_available() {
         return Some("network");
     }
-    if running_pid(&task.id).is_some() {
+    if running_pid_of(&task.key()).is_some() {
         return Some("running");
     }
     None
@@ -558,6 +800,20 @@ pub fn run_task(task: &Task, reason: &str) -> i32 {
             code = -1;
             continue;
         };
+        // Tâche d'un compte : jamais en root, toujours sous ce compte.
+        if let Some(uid) = task.owner {
+            if euid() == 0 {
+                if let Err(e) = as_account(&mut cmd, uid) {
+                    history(task, "error", &e);
+                    code = -1;
+                    continue;
+                }
+            } else if euid() != uid {
+                history(task, "error", "tâche d'un autre compte");
+                code = -1;
+                continue;
+            }
+        }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -566,7 +822,7 @@ pub fn run_task(task: &Task, reason: &str) -> i32 {
                 continue;
             }
         };
-        let marker = running_file(&task.id);
+        let marker = running_file(&task.key());
         let _ = admin::write_text(&marker, &child.id().to_string());
         let deadline = (task.time_limit > 0).then(|| admin::now() + task.time_limit as i64 * 60);
         code = loop {
@@ -587,7 +843,7 @@ pub fn run_task(task: &Task, reason: &str) -> i32 {
     }
     let now = admin::now();
     let _ = admin::write_text(
-        &admin::path(STATE_DIR).join(format!("{}.last", task.id)),
+        &admin::path(STATE_DIR).join(format!("{}.last", task.key())),
         &format!(
             "last_run={now}\nlast_result={code}\nlast_run_text={}\n",
             admin::format_time(now)
@@ -681,7 +937,7 @@ fn matching(tasks: &[Task], pred: impl Fn(&Trigger) -> bool) -> Vec<Task> {
 fn spawn_run(task: Task, reason: String, busy: &Arc<Mutex<HashSet<String>>>) {
     {
         let mut b = crate::dlls::lock(busy);
-        if !b.insert(task.id.clone()) {
+        if !b.insert(task.key()) {
             history(&task, "skip", "running");
             return;
         }
@@ -689,15 +945,15 @@ fn spawn_run(task: Task, reason: String, busy: &Arc<Mutex<HashSet<String>>>) {
     let busy = Arc::clone(busy);
     std::thread::spawn(move || {
         run_task(&task, &reason);
-        crate::dlls::lock(&busy).remove(&task.id);
+        crate::dlls::lock(&busy).remove(&task.key());
     });
 }
 
 fn write_next(tasks: &[Task], now: i64, bases: &HashMap<String, i64>) {
     let mut out = String::new();
     for t in tasks {
-        if let Some(n) = t.next_run(now, bases.get(&t.id).copied()) {
-            out += &format!("{}\t{}\t{}\n", t.id, n, admin::format_time(n));
+        if let Some(n) = t.next_run(now, bases.get(&t.key()).copied()) {
+            out += &format!("{}\t{}\t{}\n", t.key(), n, admin::format_time(n));
         }
     }
     let _ = admin::write_text(&admin::path(RUN_DIR).join("next.txt"), &out);
@@ -713,7 +969,7 @@ pub fn daemon() -> ! {
         &std::process::id().to_string(),
     );
     let booted = admin::path(RUN_DIR).join("booted");
-    let mut tasks = load_all();
+    let mut tasks = load_everyone();
     if !booted.exists() {
         let _ = admin::write_text(&booted, &start.to_string());
         for t in matching(&tasks, |tr| *tr == Trigger::Boot) {
@@ -727,16 +983,16 @@ pub fn daemon() -> ! {
         std::thread::sleep(std::time::Duration::from_secs(1));
         tick += 1;
         let now = admin::now();
-        tasks = load_all();
+        tasks = load_everyone();
         for t in due_between(&tasks, last, now) {
             spawn_run(t, "time".into(), &busy);
         }
         for t in &tasks {
             for tr in &t.triggers {
                 if let Trigger::Interval { minutes } = tr {
-                    let base = *bases.entry(t.id.clone()).or_insert(now);
+                    let base = *bases.entry(t.key()).or_insert(now);
                     if t.enabled && now >= base + *minutes as i64 * 60 {
-                        bases.insert(t.id.clone(), now);
+                        bases.insert(t.key(), now);
                         spawn_run(t.clone(), "interval".into(), &busy);
                     }
                 }
@@ -811,7 +1067,11 @@ pub fn cli(args: &[String]) -> i32 {
         "delete" => i32::from(!delete(arg(1))),
         "fire" => {
             let what = arg(1);
-            let tasks = load_all();
+            let tasks = if writes_system() {
+                load_everyone()
+            } else {
+                load_all()
+            };
             let selected = matching(&tasks, |tr| match what {
                 "logon" => *tr == Trigger::Logon,
                 "boot" => *tr == Trigger::Boot,
@@ -936,6 +1196,65 @@ mod tests {
     }
 
     #[test]
+    fn comptes_ordinaires_du_passwd() {
+        let passwd = "root:x:0:0:root:/root:/bin/sh\n\
+                      nobody:x:65534:65534::/nonexistent:/bin/false\n\
+                      damien:x:1000:1000:Damien:/home/damien:/bin/bash\n\
+                      cassé:x:abc:1::/home/x:/bin/sh\n";
+        let a = accounts_in(passwd);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].0, 1000);
+        assert!(a[0].1.ends_with("home/damien"));
+    }
+
+    #[test]
+    fn tache_de_compte_rangee_chez_lui_et_lue_par_le_service() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = Root::new("tasks-compte");
+        let t = Task {
+            id: id_for("\\Adobe", "Mise à jour"),
+            name: "Mise à jour".into(),
+            folder: "\\Adobe".into(),
+            actions: vec![Action {
+                path: "/bin/true".into(),
+                ..Action::default()
+            }],
+            ..Task::default()
+        };
+        save(&t).unwrap();
+        let me = euid();
+        let file = store_dir().join(format!("{}.task", t.id));
+        assert!(file.is_file());
+        if me != 0 {
+            // Jamais dans la base du système ; dossier privé du compte.
+            assert!(!r
+                .dir
+                .join(TASKS_DIR)
+                .join(format!("{}.task", t.id))
+                .exists());
+            let mode = std::fs::metadata(store_dir()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0);
+            assert_eq!(load(&t.id).unwrap().owner, Some(me));
+            assert_eq!(load(&t.id).unwrap().key(), format!("u{me}-{}", t.id));
+        } else {
+            assert_eq!(load(&t.id).unwrap().owner, None);
+        }
+        // Le service lit les tâches d'un dossier de compte avec leur
+        // propriétaire, et ignore celles qui ne lui appartiennent pas.
+        let dir = r.dir.join("perso");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.task"), "name=A\naction=/bin/true\n").unwrap();
+        let own = load_dir(&dir, Some(me));
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].owner, Some(me));
+        assert_eq!(own[0].key(), format!("u{me}-a"));
+        assert!(load_dir(&dir, Some(me + 1)).is_empty());
+        // Une tâche système garde son id comme clé.
+        assert_eq!(load_dir(&dir, None)[0].key(), "a");
+        assert!(delete(&t.id));
+    }
+
+    #[test]
     fn run_records_history_state_and_conditions() {
         let r = Root::new("tasks");
         let out = r.dir.join("ran");
@@ -952,7 +1271,12 @@ mod tests {
         };
         assert_eq!(t.id, "_crire");
         save(&t).unwrap();
-        assert_eq!(load_all(), vec![t.clone()]);
+        // Sous un compte ordinaire (CI), la tâche va dans sa base à lui.
+        let saved = Task {
+            owner: (euid() != 0).then(euid),
+            ..t.clone()
+        };
+        assert_eq!(load_all(), vec![saved]);
         assert_eq!(cli(&["fire".into(), "logon".into()]), 0);
         assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "ok");
         assert_eq!(last_run(&t.id).unwrap().result, 3);
