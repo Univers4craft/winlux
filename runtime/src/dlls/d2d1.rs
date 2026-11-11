@@ -2927,7 +2927,7 @@ mod tests {
     }
 
     /// Bitmap WIC PBGRA 8×8, fabrique Direct2D et cible de rendu dessus.
-    unsafe fn setup() -> (*mut c_void, *mut c_void, *mut c_void) {
+    pub(super) unsafe fn setup() -> (*mut c_void, *mut c_void, *mut c_void) {
         let mut wic = std::ptr::null_mut();
         assert_eq!(wic_create_imaging_factory_proxy(0x237, &mut wic), S_OK);
         type CreateBmp = unsafe extern "win64" fn(
@@ -3009,9 +3009,12 @@ mod tests {
             assert!(dx.is_null());
             release_obj(d2);
             release_obj(d1);
-            let mut p = 1usize as *mut c_void;
+            // Une cible WIC a toujours une cible : le bitmap qui la
+            // représente (#1669).
+            let mut p = std::ptr::null_mut();
             method::<Get>(view, 75)(view, &mut p);
-            assert!(p.is_null());
+            assert!(!p.is_null());
+            release_obj(p);
             // Dessin par la vue : il arrive dans le bitmap WIC de la cible.
             let red = ColorF {
                 r: 1.0,
