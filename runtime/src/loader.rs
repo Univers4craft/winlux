@@ -846,6 +846,9 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         }
     }
 
+    // Image en cours d'exécution : plus d'écriture ni de troncature tant que
+    // ce processus vit, comme sous Windows (#1917).
+    crate::image_lock::hold(path);
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
