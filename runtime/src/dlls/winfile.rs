@@ -404,7 +404,7 @@ pub unsafe extern "win64" fn find_next_file_w(handle: usize, data: *mut Win32Fin
     1
 }
 pub extern "win64" fn find_close(handle: usize) -> i32 {
-    if lock(searches()).remove(&handle).is_some() {
+    if lock(searches()).remove(&handle).is_some() || crate::dlls::kernel32_releve::close(handle) {
         1
     } else {
         error(6);
