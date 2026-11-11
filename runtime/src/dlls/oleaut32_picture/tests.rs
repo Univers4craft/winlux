@@ -56,7 +56,7 @@ fn image_chargee_d_un_flux_puis_relue() {
         let mut d = 0usize;
         assert_eq!(pic_qi(p, &IID_IPICTURE_DISP, &mut d), S_OK);
         assert_eq!(d, p + 8);
-        let mut v = [0u8; VARIANT_SIZE];
+        let mut v = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
         assert_eq!(
             picd_invoke(
                 d,
@@ -121,7 +121,7 @@ fn image_creee_depuis_un_handle_et_vide() {
         assert_eq!(kind, PICTYPE_UNINITIALIZED);
         pic_release(p);
 
-        let mut desc = [0u8; 24];
+        let mut desc = crate::dlls::comobj::Aligned::<24>::default();
         desc[0..4].copy_from_slice(&24u32.to_le_bytes());
         desc[4..8].copy_from_slice(&(PICTYPE_NONE as u32).to_le_bytes());
         assert_eq!(
@@ -145,7 +145,7 @@ fn image_creee_depuis_un_handle_et_vide() {
 fn police_ole_proprietes_clone_et_dispatch() {
     unsafe {
         let name: Vec<u16> = "Arial\0".encode_utf16().collect();
-        let mut desc = [0u8; 40];
+        let mut desc = crate::dlls::comobj::Aligned::<40>::default();
         desc[0..4].copy_from_slice(&40u32.to_le_bytes());
         desc[8..16].copy_from_slice(&(name.as_ptr() as usize).to_le_bytes());
         desc[16..24].copy_from_slice(&120_000i64.to_le_bytes()); // 12 pt
@@ -185,7 +185,7 @@ fn police_ole_proprietes_clone_et_dispatch() {
         // IFontDisp : Name par Invoke, puis Size en écriture.
         let mut d = 0usize;
         assert_eq!(font_qi(f, &IID_IFONT_DISP, &mut d), S_OK);
-        let mut v = [0u8; VARIANT_SIZE];
+        let mut v = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
         assert_eq!(
             fontd_invoke(
                 d,
@@ -202,10 +202,10 @@ fn police_ole_proprietes_clone_et_dispatch() {
         );
         assert_eq!(std::ptr::read_unaligned(v.as_ptr() as *const u16), VT_BSTR);
         variant_clear(v.as_mut_ptr().cast());
-        let mut arg = [0u8; VARIANT_SIZE];
+        let mut arg = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
         std::ptr::write_unaligned(arg.as_mut_ptr() as *mut u16, VT_I4);
         std::ptr::write_unaligned(arg.as_mut_ptr().add(8) as *mut i32, 9);
-        let mut params = [0u8; 24];
+        let mut params = crate::dlls::comobj::Aligned::<24>::default();
         params[0..8].copy_from_slice(&(arg.as_ptr() as usize).to_le_bytes());
         params[16..20].copy_from_slice(&1u32.to_le_bytes());
         assert_eq!(

@@ -129,7 +129,10 @@ unsafe fn put_variant_i(out: *mut u8, vt: u16, value: i64) {
 }
 
 /// Argument d'un PROPERTYPUT converti en `vt` ; rend le VARIANT converti.
-unsafe fn put_argument(params: *const u8, vt: u16) -> Result<[u8; VARIANT_SIZE], i32> {
+unsafe fn put_argument(
+    params: *const u8,
+    vt: u16,
+) -> Result<crate::dlls::comobj::Aligned<VARIANT_SIZE>, i32> {
     if params.is_null() {
         return Err(E_INVALIDARG);
     }
@@ -138,7 +141,7 @@ unsafe fn put_argument(params: *const u8, vt: u16) -> Result<[u8; VARIANT_SIZE],
     if count < 1 || args.is_null() {
         return Err(DISP_E_BADPARAMCOUNT);
     }
-    let mut v = [0u8; VARIANT_SIZE];
+    let mut v = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
     variant_init(v.as_mut_ptr().cast());
     let hr = variant_change_type(v.as_mut_ptr().cast(), args.cast(), 0, vt);
     if hr < 0 {
@@ -529,7 +532,7 @@ unsafe extern "win64" fn picd_invoke(
 
 /// Largeur et hauteur en pixels d'une bitmap GDI (GetObject → BITMAP).
 fn bitmap_pixels(handle: usize) -> Option<(i32, i32)> {
-    let mut bm = [0u8; 32];
+    let mut bm = crate::dlls::comobj::Aligned::<32>::default();
     // SAFETY : BITMAP x64 fait 32 octets.
     let n = unsafe { super::gdi32::get_object_w(handle, 32, bm.as_mut_ptr().cast()) };
     if n <= 0 {

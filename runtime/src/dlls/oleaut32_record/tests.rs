@@ -29,11 +29,13 @@ unsafe fn point_type() -> usize {
     let set_name: unsafe extern "win64" fn(usize, u32, *const u16) -> i32 =
         std::mem::transmute(slot(cti, 16));
     for (i, (field, offset, vt)) in [("Nom", 0u32, 8u16), ("Age", 8, 3)].into_iter().enumerate() {
-        let mut vd = [0u8; 64];
-        std::ptr::write_unaligned(vd.as_mut_ptr() as *mut i32, MEMBERID_NIL);
-        std::ptr::write_unaligned(vd.as_mut_ptr().add(16) as *mut u32, offset);
-        std::ptr::write_unaligned(vd.as_mut_ptr().add(32) as *mut u16, vt);
-        assert_eq!(add_var(cti, i as u32, vd.as_ptr()), S_OK);
+        // VARDESC aligné sur 8 comme celui d'un vrai appelant.
+        let mut words = [0u64; 8];
+        let vd = words.as_mut_ptr() as *mut u8;
+        std::ptr::write_unaligned(vd as *mut i32, MEMBERID_NIL);
+        std::ptr::write_unaligned(vd.add(16) as *mut u32, offset);
+        std::ptr::write_unaligned(vd.add(32) as *mut u16, vt);
+        assert_eq!(add_var(cti, i as u32, vd), S_OK);
         let n = w(field);
         assert_eq!(set_name(cti, i as u32, n.as_ptr()), S_OK);
     }
@@ -78,7 +80,7 @@ fn structure_decrite_lue_ecrite_et_copiee() {
         // PutField avec conversion : chaîne « 42 » vers le champ long.
         let data = ri_record_create(rec);
         assert!(!data.is_null());
-        let mut v = [0u8; VARIANT_SIZE];
+        let mut v = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
         let texte = w("42");
         std::ptr::write_unaligned(v.as_mut_ptr() as *mut u16, 8);
         std::ptr::write_unaligned(
@@ -92,7 +94,7 @@ fn structure_decrite_lue_ecrite_et_copiee() {
         variant_clear(v.as_mut_ptr().cast());
         assert_eq!(std::ptr::read_unaligned(data.add(8) as *const i32), 42);
 
-        let mut out = [0u8; VARIANT_SIZE];
+        let mut out = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
         assert_eq!(
             ri_get_field(rec, data, age.as_ptr(), out.as_mut_ptr()),
             S_OK

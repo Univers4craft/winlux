@@ -405,7 +405,7 @@ unsafe extern "win64" fn ri_get_field(
         Err(hr) => return hr,
     };
     variant_clear(out.cast());
-    let mut by_ref = [0u8; VARIANT_SIZE];
+    let mut by_ref = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
     std::ptr::write_unaligned(by_ref.as_mut_ptr() as *mut u16, f.vt | VT_BYREF);
     std::ptr::write_unaligned(
         by_ref.as_mut_ptr().add(8) as *mut usize,
@@ -452,7 +452,7 @@ unsafe extern "win64" fn ri_put_field(
         Ok(f) => f,
         Err(hr) => return hr,
     };
-    let mut tmp = [0u8; VARIANT_SIZE];
+    let mut tmp = crate::dlls::comobj::Aligned::<VARIANT_SIZE>::default();
     variant_init(tmp.as_mut_ptr().cast());
     let hr = if f.vt == 12 {
         variant_copy_ind(tmp.as_mut_ptr().cast(), value.cast())
