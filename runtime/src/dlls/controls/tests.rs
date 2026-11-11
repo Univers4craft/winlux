@@ -2113,6 +2113,8 @@ fn infobulle_delais_par_defaut_et_reglages() {
     assert_eq!(delais(tip), [200, 10000, 1000]);
     sendw(tip, TTM_SETDELAYTIME, 3, 250);
     assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), 250);
+    sendw(tip, TTM_SETDELAYTIME, 3, 40000); // au-delà de 32 767 ms
+    assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), 40000);
     sendw(tip, TTM_SETDELAYTIME, 3, 0xFFFF); // -1 : valeur par défaut
     assert_eq!(sendw(tip, TTM_GETDELAYTIME, 3, 0), clic);
     // Largeur maximale : -1 au départ, l'ancienne valeur rendue au réglage.

@@ -278,8 +278,9 @@ fn tooltip_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
         // TTM_SETDELAYTIME : LOWORD(lParam) en ms, -1 rend la valeur par
         // défaut ; TTDT_AUTOMATIC règle les trois d'après l'apparition.
         0x0403 => {
-            let ms = lp as u16 as i16 as i32;
-            let value = (ms >= 0).then_some(ms);
+            // Seul 0xFFFF (-1) rend la valeur par défaut : jusqu'à 65 534 ms.
+            let ms = lp as u16;
+            let value = (ms != 0xFFFF).then_some(i32::from(ms));
             with_common(hwnd, |s| match wp {
                 TTDT_AUTOMATIC => {
                     s.tt_delays = match value {
