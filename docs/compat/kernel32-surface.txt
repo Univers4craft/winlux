@@ -203,6 +203,7 @@ FlushFileBuffers
 FlushInstructionCache
 FlushProcessWriteBuffers
 FlushViewOfFile
+FoldStringW
 FormatMessageA
 FormatMessageW
 FreeConsole

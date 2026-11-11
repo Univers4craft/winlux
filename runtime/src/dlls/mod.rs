@@ -54,6 +54,7 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
+pub mod crypt32_encode;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_combine;
@@ -139,6 +140,7 @@ pub mod jumplist_com;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
+pub mod kernel32_fold;
 pub mod kernel32_fs;
 pub mod kernel32_legacy;
 pub mod kernel32_misc;
@@ -436,6 +438,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_fold::exports());
                     e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
@@ -913,7 +916,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "setupapi",
-                exports: setupapi::exports(),
+                exports: {
+                    let mut e = setupapi::exports();
+                    e.extend(devnotify::cfgmgr32_exports());
+                    e
+                },
                 handle: 0,
             },
             Builtin {

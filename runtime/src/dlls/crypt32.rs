@@ -186,7 +186,7 @@ pub(crate) fn name_attrs(name_der: &[u8]) -> Vec<(String, String)> {
     v
 }
 
-fn short_name(oid: &str) -> Option<&'static str> {
+pub(crate) fn short_name(oid: &str) -> Option<&'static str> {
     Some(match oid {
         "2.5.4.3" => "CN",
         "2.5.4.6" => "C",
@@ -2108,7 +2108,14 @@ pub fn private_key(ctx: usize) -> Option<Vec<u8>> {
     super::lock(&c.props).get(&PRIVATE_KEY_PROP).cloned()
 }
 
-fn der_wrap(tag: u8, body: &[u8]) -> Vec<u8> {
+/// Attache une clé privée DER à un certificat (CertCreateSelfSignCertificate).
+pub(crate) fn attach_private_key(c: *mut Cert, der: Vec<u8>) {
+    if let Some(c) = unsafe { c.as_ref() } {
+        super::lock(&c.props).insert(PRIVATE_KEY_PROP, der);
+    }
+}
+
+pub(crate) fn der_wrap(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut v = vec![tag];
     let n = body.len();
     if n < 0x80 {
@@ -2347,6 +2354,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CertFreeCRLContext" => fn CertFreeCRLContext,
         "CertFreeCTLContext" => fn CertFreeCTLContext,
     });
+    e.extend(super::crypt32_encode::exports());
     e
 }
 
