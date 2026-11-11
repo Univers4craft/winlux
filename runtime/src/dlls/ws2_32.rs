@@ -6,6 +6,8 @@ use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+mod msg;
+pub(crate) use msg::wsa_send_msg;
 mod overlapped;
 
 #[link(name = "c")]

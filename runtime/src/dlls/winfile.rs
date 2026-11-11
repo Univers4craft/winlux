@@ -215,6 +215,48 @@ fn split_search_path(path: &str) -> Result<(std::path::PathBuf, String), u32> {
     Ok((directory, pattern.to_string()))
 }
 
+/// Racine d'un lecteur (« C:\* », « \\?\C:\* ») ou racine Linux : pas
+/// de « . » ni de « .. » sous Windows.
+fn is_drive_root(path: &str, directory: &std::path::Path) -> bool {
+    let Some(end) = path.rfind(['\\', '/']) else {
+        return directory.parent().is_none();
+    };
+    let dir = &path[..end];
+    let dir = ["\\\\?\\", "\\??\\"]
+        .iter()
+        .find_map(|pre| dir.strip_prefix(pre))
+        .unwrap_or(dir);
+    let dir = dir.trim_end_matches(['\\', '/']);
+    dir.is_empty() || dir.ends_with(':') || directory.parent().is_none()
+}
+
+fn entry(name: String, path: &std::path::Path) -> Result<Option<Entry>, u32> {
+    let (attributes, metadata) = match attributes(path) {
+        Ok(x) => x,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(crate::dlls::kernel32::io_error_code(&e)),
+    };
+    let reparse_tag = if attributes & ATTR_REPARSE_POINT != 0 {
+        IO_REPARSE_TAG_SYMLINK
+    } else {
+        0
+    };
+    let zero = std::time::UNIX_EPOCH;
+    Ok(Some(Entry {
+        name,
+        attributes,
+        creation: filetime(
+            metadata
+                .created()
+                .unwrap_or_else(|_| metadata.modified().unwrap_or(zero)),
+        ),
+        access: filetime(metadata.accessed().unwrap_or(zero)),
+        write: filetime(metadata.modified().unwrap_or(zero)),
+        size: if metadata.is_dir() { 0 } else { metadata.len() },
+        reparse_tag,
+    }))
+}
+
 fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {
     let (directory, pattern) = split_search_path(path)?;
     let entries = std::fs::read_dir(&directory).map_err(|e| {
@@ -232,33 +274,28 @@ fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {
         if !wildcard_matches(&pattern, &name) {
             continue;
         }
-        let (attributes, metadata) = match attributes(&item.path()) {
-            Ok(x) => x,
+        match entry(name, &item.path()) {
+            Ok(Some(e)) => found.push(e),
             // Fichier disparu entre la lecture du dossier et maintenant.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(crate::dlls::kernel32::io_error_code(&e)),
-        };
-        let reparse_tag = if attributes & ATTR_REPARSE_POINT != 0 {
-            IO_REPARSE_TAG_SYMLINK
-        } else {
-            0
-        };
-        let zero = std::time::UNIX_EPOCH;
-        found.push(Entry {
-            name,
-            attributes,
-            creation: filetime(
-                metadata
-                    .created()
-                    .unwrap_or_else(|_| metadata.modified().unwrap_or(zero)),
-            ),
-            access: filetime(metadata.accessed().unwrap_or(zero)),
-            write: filetime(metadata.modified().unwrap_or(zero)),
-            size: if metadata.is_dir() { 0 } else { metadata.len() },
-            reparse_tag,
-        });
+            Ok(None) => continue,
+            Err(e) => return Err(e),
+        }
     }
     found.sort_by_key(|a| a.name.to_lowercase());
+    // Hors racine d'un lecteur, Windows rend d'abord « . » et « .. », même
+    // pour un dossier vide : os.scandir (shutil.rmtree de pip) prend
+    // l'erreur 2 d'un dossier vide pour un échec (#1618).
+    if !is_drive_root(path, &directory) {
+        let parent = directory.parent().unwrap_or(&directory).to_path_buf();
+        let dots = [(".", directory.clone()), ("..", parent)];
+        for (i, (name, dir)) in dots.into_iter().enumerate() {
+            if wildcard_matches(&pattern, name) {
+                if let Ok(Some(e)) = entry(name.to_string(), &dir) {
+                    found.insert(i.min(found.len()), e);
+                }
+            }
+        }
+    }
     if found.is_empty() {
         Err(ERROR_FILE_NOT_FOUND)
     } else {
@@ -462,6 +499,30 @@ mod tests {
         std::fs::remove_dir_all(&base).unwrap();
     }
     #[test]
+    fn dossier_vide_rend_point_et_point_point() {
+        // #1618 : FindFirstFile(« vide\\*.* ») réussit sous Windows.
+        let dir = std::env::temp_dir().join(format!(
+            "winlux-find-1618-{}-{}",
+            std::process::id(),
+            NEXT_SEARCH.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let win = crate::paths::to_windows(&dir);
+        let names: Vec<String> = enumerate(&format!("{win}\\*.*"))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, [".", ".."]);
+        assert!(enumerate(&format!("{win}\\*.txt")).is_err());
+        let dots = enumerate(&format!("{win}\\*")).unwrap();
+        assert!(dots.iter().all(|e| e.attributes & 0x10 != 0));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(is_drive_root("C:\\*", std::path::Path::new("/x")));
+        assert!(is_drive_root("\\\\?\\C:\\*", std::path::Path::new("/x")));
+        assert!(!is_drive_root("C:\\Temp\\*", std::path::Path::new("/x")));
+    }
+    #[test]
     fn etoile_point_etoile_liste_aussi_les_noms_sans_point() {
         // #1125 : wxWidgets énumère « locales\*.* » pour trouver « fr », « de »…
         assert!(wildcard_matches("*.*", "fr"));
@@ -488,7 +549,7 @@ mod tests {
             .map(|e| e.name)
             .collect();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(names, ["de", "es", "fr"]);
+        assert_eq!(names, [".", "..", "de", "es", "fr"]);
     }
     #[test]
     fn enumeration_wildcard_est_insensible_a_la_casse_et_retourne_tailles() {

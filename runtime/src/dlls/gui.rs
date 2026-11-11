@@ -3927,6 +3927,11 @@ pub fn remove_window_prop(hwnd: usize, key: &str) -> Option<usize> {
     lock(window_props()).remove(&(hwnd, key.to_string()))
 }
 
+/// Remplace la procédure d'une classe réenregistrée après UnregisterClass.
+pub fn replace_class(name: &str, info: ClassInfo) {
+    lock(classes()).insert(name.to_string(), info);
+}
+
 pub fn register_class(name: &str, info: ClassInfo) -> bool {
     let mut map = lock(classes());
     if map.contains_key(name) {
