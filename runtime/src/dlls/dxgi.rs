@@ -475,6 +475,89 @@ unsafe fn x_window_state(display: *mut c_void, window: u64) -> String {
     format!("{carte}, à ({x}, {y}) dans l'écran")
 }
 
+/// Passe de départage de #1886, choisie par WINLUX_DXGI_1886 (outil de
+/// banc, sans effet hors de cette variable) : la relecture diagnostique
+/// (glFinish + XGetImage au bilan) fait apparaître la page de Discord ;
+/// chaque valeur n'en garde qu'un ingrédient pour savoir lequel compte.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Passe1886 {
+    /// Comportement de 4d34ccb : glFinish + relecture au bilan.
+    Relecture,
+    /// Rien au bilan : ni glFinish ni relecture (témoin).
+    Aucune,
+    /// glFinish après chaque présentation, sans relecture.
+    Finish,
+    /// XSync de la connexion de la chaîne après chaque présentation.
+    XSync,
+    /// Relecture XGetImage au bilan, sans glFinish.
+    RelectureSeule,
+    /// Intervalle d'échange 0 (pas d'attente de vblank), sans relecture.
+    Intervalle0,
+}
+
+impl Passe1886 {
+    fn parse(v: Option<&str>) -> Self {
+        match v.map(str::trim) {
+            Some("aucune") => Self::Aucune,
+            Some("finish") => Self::Finish,
+            Some("xsync") => Self::XSync,
+            Some("relecture-seule") => Self::RelectureSeule,
+            Some("intervalle0") => Self::Intervalle0,
+            _ => Self::Relecture,
+        }
+    }
+
+    fn get() -> Self {
+        static P: std::sync::OnceLock<Passe1886> = std::sync::OnceLock::new();
+        *P.get_or_init(|| {
+            let p = Self::parse(std::env::var("WINLUX_DXGI_1886").ok().as_deref());
+            log_info!("dxgi", "passe #1886 : {p:?}");
+            p
+        })
+    }
+}
+
+/// Fonction libX11 ou libGL chargée à la demande (outils de #1886).
+unsafe fn x_sym(lib: &std::ffi::CStr, name: &std::ffi::CStr) -> *mut c_void {
+    let h = libc::dlopen(lib.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+    if h.is_null() {
+        return std::ptr::null_mut();
+    }
+    libc::dlsym(h, name.as_ptr())
+}
+
+/// XSync(display, False) : attend que le serveur X ait traité les requêtes
+/// de la connexion de la chaîne (#1886).
+unsafe fn x_sync(display: *mut c_void) {
+    type Sync = unsafe extern "C" fn(*mut c_void, libc::c_int) -> libc::c_int;
+    static F: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let f = *F.get_or_init(|| x_sym(c"libX11.so.6", c"XSync") as usize);
+    if f != 0 && !display.is_null() {
+        std::mem::transmute::<usize, Sync>(f)(display, 0);
+    }
+}
+
+/// glXSwapIntervalEXT(display, drawable, 0), sinon glXSwapIntervalMESA(0) (#1886).
+unsafe fn swap_interval_zero(
+    glx: &gl::GlxFunctions,
+    display: *mut gl::XDisplay,
+    drawable: u64,
+) -> &'static str {
+    type Ext = unsafe extern "C" fn(*mut gl::XDisplay, u64, libc::c_int);
+    type Mesa = unsafe extern "C" fn(libc::c_uint) -> libc::c_int;
+    let ext = (glx.GetProcAddressARB)(c"glXSwapIntervalEXT".as_ptr().cast());
+    if !ext.is_null() {
+        std::mem::transmute::<*mut c_void, Ext>(ext)(display, drawable, 0);
+        return "glXSwapIntervalEXT(0)";
+    }
+    let mesa = (glx.GetProcAddressARB)(c"glXSwapIntervalMESA".as_ptr().cast());
+    if !mesa.is_null() {
+        std::mem::transmute::<*mut c_void, Mesa>(mesa)(0);
+        return "glXSwapIntervalMESA(0)";
+    }
+    "aucune fonction d'intervalle"
+}
+
 /// Pixel (R, V, B) de la fenêtre X `window` en (`x`, `y`), relu par
 /// XGetImage sur la connexion de la chaîne d'échange : ce que la fenêtre
 /// contient vraiment, quel que soit le client qui l'a créée (#1886).
@@ -624,6 +707,11 @@ impl GlContext {
                 return None;
             }
 
+            if hwnd != 0 && Passe1886::get() == Passe1886::Intervalle0 {
+                let f = swap_interval_zero(glx, display, drawable);
+                log_info!("dxgi", "passe #1886 : {f} sur la fenêtre X 0x{drawable:x}");
+            }
+
             let _ = MAIN_CONTEXT.compare_exchange(
                 0,
                 context as usize,
@@ -764,11 +852,20 @@ impl GlContext {
                 (glx.SwapBuffers)(self.display, self.drawable);
             }
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            let passe = Passe1886::get();
+            match passe {
+                Passe1886::Finish => (g.Finish)(),
+                Passe1886::XSync => x_sync(self.display.cast()),
+                _ => {}
+            }
             if let Some(bilan) = bilan {
                 // Après l'échange : le pixel relu dans la fenêtre X dit si
                 // l'image y est arrivée (#1886).
-                (g.Finish)();
-                self.follow(g, glx, n, bilan, switched);
+                if passe == Passe1886::Relecture {
+                    (g.Finish)();
+                }
+                let relire = matches!(passe, Passe1886::Relecture | Passe1886::RelectureSeule);
+                self.follow(g, glx, n, bilan, switched, relire);
             }
             // Rendre au thread le contexte qu'il avait (le sien n'est pas
             // lié ailleurs, la reprise réussit).
@@ -847,13 +944,18 @@ impl GlContext {
         n: u32,
         bilan: Bilan,
         switched: bool,
+        relire: bool,
     ) {
         let px = self.center_pixel(g);
         let size = self.drawable_size(glx);
         let window = x_window_state(self.display, self.drawable);
         let (ww, wh) = size.unwrap_or((self.width, self.height));
-        let shown = x_window_pixel(self.display, self.drawable, ww / 2, wh / 2)
-            .map_or("illisible".to_string(), |p| format!("{p:?}"));
+        let shown = if relire {
+            x_window_pixel(self.display, self.drawable, ww / 2, wh / 2)
+                .map_or("illisible".to_string(), |p| format!("{p:?}"))
+        } else {
+            format!("non relu (passe {:?})", Passe1886::get())
+        };
         log_info!(
             "dxgi",
             "présentation n°{n} : {}x{} vers la fenêtre X 0x{:x} (taille {}, {}), fil {}, contexte {}, {} présentation(s) et {} refus en {} ms, pixel central {:?}, relu dans la fenêtre X après l'échange {shown}",
@@ -2282,6 +2384,24 @@ mod refcount_tests {
 #[cfg(test)]
 mod present_trace_tests {
     use super::*;
+
+    /// #1886 : passes de départage ; toute autre valeur garde 4d34ccb.
+    #[test]
+    fn passes_1886() {
+        assert_eq!(Passe1886::parse(None), Passe1886::Relecture);
+        assert_eq!(Passe1886::parse(Some("finish")), Passe1886::Finish);
+        assert_eq!(Passe1886::parse(Some("xsync")), Passe1886::XSync);
+        assert_eq!(Passe1886::parse(Some(" aucune ")), Passe1886::Aucune);
+        assert_eq!(
+            Passe1886::parse(Some("relecture-seule")),
+            Passe1886::RelectureSeule
+        );
+        assert_eq!(
+            Passe1886::parse(Some("intervalle0")),
+            Passe1886::Intervalle0
+        );
+        assert_eq!(Passe1886::parse(Some("n'importe")), Passe1886::Relecture);
+    }
 
     /// #1886 : jalons 1, 2, 10, 100, 1000… seulement.
     #[test]
