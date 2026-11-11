@@ -160,6 +160,16 @@ seulement) et `DiUninstallDevice`. Une file de copie reste vide : aucun
 fichier de pilote n'est copié vers `System32\drivers`, et aucun appareil
 n'expose de configuration logique (`CR_NO_MORE_LOG_CONF`).
 
+Depuis #1656, setupapi remplit ses structures à la taille de l'appelant : en
+x86, setupapi.h est en `pack(1)` et ses champs `ULONG_PTR` font 4 octets
+(SP_DEVINFO_DATA et SP_DEVICE_INTERFACE_DATA de 28 octets, INFCONTEXT de 16,
+SP_DEVINSTALL_PARAMS_W de 556, SP_DRVINFO_DATA_V2_W de 1564). Écrire le champ
+`Reserved` sur 8 octets débordait sur la pile d'un programme 32 bits et
+déclenchait son contrôle /GS (action DriversInstall d'iCUE). Test :
+`scripts/test-setupapi32.sh`. Avec `WINLUX_APITRACE`, chaque
+`SetupDiGetClassDevs` est journalisé (classe ou interface, drapeaux, nombre
+d'éléments) pour observer ce qu'un logiciel cherche.
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
