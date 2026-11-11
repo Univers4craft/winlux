@@ -267,10 +267,18 @@ control = (SCRIPTS / "winlux-control.sh").read_text(encoding="utf-8")
 ok("store-catalog-add-*|store-catalog-remove-*)" in control, "winlux-control relaie l'ajout et le retrait")
 installer = (SCRIPTS / "winlux-installer.py").read_text(encoding="utf-8")
 ok(installer.count('"store_title":') == 6 and installer.count('"summary_store_none":') == 6, "installateur : choix des boutiques dans ses six langues")
-ok('"store_catalogs": [],' in installer and "store-catalogs-pending" in installer, "installateur : rien de coché, choix repris au premier démarrage")
+ok('"store_catalogs": preselected_store_catalogs(),' in installer and "store-catalogs-pending" in installer,
+   "installateur : boutiques proposées cochées, choix repris au premier démarrage")
+defs = json.loads((ROOT / "integration/store-catalogs.json").read_text(encoding="utf-8"))["catalogs"]
+ok([c["id"] for c in defs if c.get("preselected")] == ["flathub"],
+   "seul Flathub (applications Linux) est proposé coché, sur accord de damien")
+ok(all(w in installer for w in ("décochez-le pour le refuser", "untick it to refuse it", "um es abzulehnen", "desmárquela para rechazarla")),
+   "installateur : Flathub coché et refus possible, dit en quatre langues")
 ok("store_catalogs" in (SCRIPTS / "winlux_autoinstall.py").read_text(), "fichier de réponse : clé store_catalogs")
 oobe = (SCRIPTS / "winlux-first-boot.sh").read_text(encoding="utf-8")
 ok("winlux-store-catalogs --set" in oobe, "premier démarrage : choix des boutiques")
+ok('elif test "$1" = flathub; then echo on' in oobe and "décochez pour refuser" in oobe,
+   "premier démarrage : Flathub proposé coché tant que rien n'est choisi, décochable")
 pages = (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8")
 ok("self.store_catalogs_section()" in pages and "store-catalog-" in pages, "Paramètres > Applications : boutiques activables")
 welcome = (SCRIPTS / "winlux-welcome.py").read_text(encoding="utf-8")

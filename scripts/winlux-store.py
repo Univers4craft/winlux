@@ -127,6 +127,8 @@ T = {
            "ed_sha": "Empreinte SHA-256 vérifiée avant l'installation : {sha}",
            "ed_sha512": "Empreinte SHA-512 vérifiée avant l'installation : {sha}",
            "win_runtime": "Programme .exe exécuté par Winlux ; la désinstallation garde vos documents.",
+           "fp_commit": "Révision installée : {commit} (somme SHA-256 signée par Flathub, vérifiée par Flatpak)",
+           "fp_linux": "Application Linux en bac à sable, distribuée par Flathub ; la désinstallation garde vos documents.",
            "win_tested": "Installé et utilisé sur le banc de test de Winlux.",
            "win_tested_name": "Testés sur Winlux",
            "ed_repo": "Le paquet de l'éditeur peut ajouter son dépôt pour les mises à jour ; la désinstallation retire le logiciel et ce dépôt.",
@@ -168,6 +170,8 @@ T = {
            "ed_sha": "SHA-256 fingerprint checked before installation: {sha}",
            "ed_sha512": "SHA-512 fingerprint checked before installation: {sha}",
            "win_runtime": ".exe program run by Winlux; uninstalling keeps your documents.",
+           "fp_commit": "Installed revision: {commit} (SHA-256 checksum signed by Flathub, checked by Flatpak)",
+           "fp_linux": "Sandboxed Linux app distributed by Flathub; uninstalling keeps your documents.",
            "win_tested": "Installed and used on the Winlux test bench.",
            "win_tested_name": "Tested on Winlux",
            "ed_repo": "The publisher's package may add its repository for updates; uninstalling removes the software and that repository.",
@@ -209,6 +213,8 @@ T = {
            "ed_sha": "Huella SHA-256 comprobada antes de la instalación: {sha}",
            "ed_sha512": "Huella SHA-512 comprobada antes de la instalación: {sha}",
            "win_runtime": "Programa .exe ejecutado por Winlux; al desinstalarlo se conservan tus documentos.",
+           "fp_commit": "Revisión instalada: {commit} (suma SHA-256 firmada por Flathub, comprobada por Flatpak)",
+           "fp_linux": "Aplicación Linux aislada, distribuida por Flathub; al desinstalarla se conservan tus documentos.",
            "win_tested": "Instalado y usado en el banco de pruebas de Winlux.",
            "win_tested_name": "Probados en Winlux",
            "ed_repo": "El paquete del editor puede añadir su repositorio para las actualizaciones; al desinstalar se quitan el programa y ese repositorio.",
@@ -251,6 +257,8 @@ T = {
            "ed_sha": "SHA-256-Fingerabdruck vor der Installation geprüft: {sha}",
            "ed_sha512": "SHA-512-Fingerabdruck vor der Installation geprüft: {sha}",
            "win_runtime": ".exe-Programm, von Winlux ausgeführt; beim Deinstallieren bleiben Ihre Dokumente erhalten.",
+           "fp_commit": "Installierte Revision: {commit} (SHA-256-Prüfsumme von Flathub signiert, von Flatpak geprüft)",
+           "fp_linux": "Linux-App in einer Sandbox, von Flathub verteilt; beim Deinstallieren bleiben Ihre Dokumente erhalten.",
            "win_tested": "Auf dem Winlux-Prüfstand installiert und verwendet.",
            "win_tested_name": "Auf Winlux getestet",
            "ed_repo": "Das Paket des Herausgebers kann seine Paketquelle für Updates hinzufügen; beim Deinstallieren werden das Programm und diese Quelle entfernt.",
@@ -1152,11 +1160,39 @@ class Flatpak(Source):
                 log.write(raw)
             return proc.wait()
 
+    def commit(self, remote, ref):
+        """Révision (somme SHA-256 OSTree signée) que le dépôt sert pour ref."""
+        for scope in (["--user"], []):
+            code, out = run(["flatpak", "remote-info", *scope, "--cached", "--show-commit", remote, ref], 30)
+            commit = out.strip().splitlines()[-1].strip() if code == 0 and out.strip() else ""
+            if re.fullmatch(r"[0-9a-f]{64}", commit):
+                return commit
+        return ""
+
     def install(self, ref, progress):
         self.user_remotes()
         remote = next(iter(self.remotes()), "flathub")
+        app = next((a for a in self.apps() if a.ref == ref), None)
+        commit = self.commit(remote, ref)
+        if app is None or not commit:
+            return 2
+        # Confirmation avant tout téléchargement, Annuler par défaut (#1678) :
+        # la révision montrée est celle installée, puis vérifiée.
+        progress(None, tr("ed_waiting"))
+        if not confirm({"name": app.name, "publisher": app.publisher or "Flathub", "licence": ""},
+                       {"version": app.available or "?", "source": f"Flathub ({remote}) https://flathub.org/apps/{ref}",
+                        "commit": commit},
+                       notes=("fp_linux",)):
+            return 9
         # Installation du compte : ni mot de passe ni service système requis.
-        return self.flatpak(["install", "--user", remote, ref], progress)
+        code = self.flatpak(["install", "--user", remote, ref], progress)
+        if code == 0:
+            got = run(["flatpak", "info", "--user", "--show-commit", ref], 30)[1].strip()
+            if got != commit:
+                # Le dépôt a avancé entre la confirmation et le téléchargement :
+                # revenir à la révision confirmée.
+                code = self.flatpak(["update", "--user", f"--commit={commit}", ref], progress)
+        return code
 
     def remove(self, ref, progress):
         return self.flatpak(["uninstall", ref], progress)
@@ -1473,7 +1509,12 @@ def confirmation_text(entry, info, update=False, notes=("ed_repo",)):
         lines.append(tr("ed_size", size=max(1, round(int(size) / 1_000_000))))
     if entry.get("licence"):
         lines.append(tr("ed_licence_free" if entry.get("licence") == "libre" else "ed_licence_owner"))
-    lines.append(tr("ed_sha512", sha=info["sha512"]) if info.get("sha512") else tr("ed_sha", sha=info["sha256"]))
+    if info.get("commit"):
+        lines.append(tr("fp_commit", commit=info["commit"]))
+    elif info.get("sha512"):
+        lines.append(tr("ed_sha512", sha=info["sha512"]))
+    else:
+        lines.append(tr("ed_sha", sha=info["sha256"]))
     lines += [tr(n) for n in notes]
     return tr("ed_update_title" if update else "ed_title", name=entry["name"]), "\n".join(lines)
 

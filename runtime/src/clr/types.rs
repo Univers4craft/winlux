@@ -364,7 +364,26 @@ pub fn init() {
     *TYPE_REGISTRY.lock().unwrap() = Some(TypeRegistry::new());
 }
 
+thread_local! {
+    /// Vrai pendant qu'un `with_types` de ce fil tient le registre.
+    static TYPES_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Accès exclusif au registre de types. Un appel imbriqué sur le même fil
+/// bloquerait le processus pour toujours (#1687) : il s'arrête plutôt avec
+/// un message qui le dit.
 pub fn with_types<T>(f: impl FnOnce(&mut TypeRegistry) -> T) -> T {
+    struct Held;
+    impl Drop for Held {
+        fn drop(&mut self) {
+            TYPES_HELD.with(|h| h.set(false));
+        }
+    }
+    assert!(
+        !TYPES_HELD.with(|h| h.replace(true)),
+        "registre de types CLR repris par le fil qui le tient déjà (interblocage évité)"
+    );
+    let _held = Held;
     let mut lock = TYPE_REGISTRY.lock().unwrap();
     let reg = lock.as_mut().expect("registre de types CLR non initialisé");
     f(reg)
