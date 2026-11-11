@@ -2046,6 +2046,14 @@ const CLSID_OPACITY: Guid = guid(
     0x4454,
     [0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c],
 );
+/// CLSID_D2D1Invert {E0C3784D-CB39-4E84-B6FD-6B72F0810263} (#1717) : Paint.NET
+/// inverse la forme noire de l'empreinte du pinceau avant d'en tirer le masque.
+const CLSID_INVERT: Guid = guid(
+    0xe0c3_784d,
+    0xcb39,
+    0x4e84,
+    [0xb6, 0xfd, 0x6b, 0x72, 0xf0, 0x81, 0x02, 0x63],
+);
 /// CLSID_D2D1ColorManagement {1A28524C-FDD6-4AA4-AE8F-837EB8267B37}.
 const CLSID_COLOR_MANAGEMENT: Guid = guid(
     0x1a28_524c,
@@ -2140,6 +2148,20 @@ unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Opt
         let k = prop_f32::<1>(e, 0).map_or(1.0, |v| v[0]).clamp(0.0, 1.0);
         for c in img.px.iter_mut() {
             *c = (*c as f32 * k + 0.5) as u8;
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_INVERT {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        // Couleur inversée, alpha gardé : 1 − c en couleur droite, donc
+        // a − c en prémultiplié.
+        for p in img.px.as_chunks_mut::<4>().0 {
+            let a = p[3];
+            for c in &mut p[..3] {
+                *c = a.saturating_sub(*c);
+            }
         }
         return Some(Some(img));
     }
@@ -3618,7 +3640,15 @@ mod tests {
             let img = image_img(op, 0, (1, 1)).unwrap();
             assert_eq!(&img.px[0..4], &[100, 50, 25, 64]);
 
-            for o in [op, src, pm, crop, flood, bmp] {
+            // Invert : (200, 100, 50, a 128) prémultiplié → 255 − couleur
+            // droite, soit 128 − composante, bornée à 0.
+            let mut inv = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_INVERT, &mut inv), S_OK);
+            effect_set_input(inv.cast(), 0, pm, 1);
+            let img = image_img(inv, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[28, 78, 103, 128]);
+
+            for o in [inv, op, src, pm, crop, flood, bmp] {
                 com_release(o);
             }
             com_release(dc.cast());

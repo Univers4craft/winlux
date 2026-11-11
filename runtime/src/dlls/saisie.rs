@@ -784,10 +784,22 @@ pub fn consent_lock_path() -> std::path::PathBuf {
 /// consentement est ouverte, ou le verrou appartient à un autre compte
 /// (refus, jamais d'envoi sans garde).
 pub fn consent_guard() -> Option<std::fs::File> {
+    let path = consent_lock_path();
+    // Porte (#1711) : une fenêtre qui veut s'afficher la prend en exclusif
+    // et arrête aussitôt toute nouvelle saisie, même si des envois se
+    // chevauchent sans fin sur le verrou principal. La saisie ne la tient
+    // que le temps de prendre ce dernier.
+    let gate = shared_lock(&path.with_extension("porte"))?;
+    let main = shared_lock(&path);
+    drop(gate);
+    main
+}
+
+/// Ouvre `path` (jamais à travers un lien symbolique, propriétaire : ce
+/// compte ou root) et le verrouille en partagé sans attendre.
+fn shared_lock(path: &std::path::Path) -> Option<std::fs::File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::os::unix::io::AsRawFd;
-    let path = consent_lock_path();
-    // Jamais à travers un lien symbolique posé dans /tmp par un autre compte.
     let open = |write: bool| {
         std::fs::OpenOptions::new()
             .read(true)
@@ -796,7 +808,7 @@ pub fn consent_guard() -> Option<std::fs::File> {
             .truncate(false)
             .mode(0o644)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)
+            .open(path)
     };
     // Verrou créé par root (fenêtre d'élévation) : ouvert en lecture seule.
     let file = open(true).or_else(|_| open(false)).ok()?;
@@ -1101,6 +1113,19 @@ mod tests {
             0
         );
         drop(sending);
+        // Une fenêtre qui attend (porte tenue en exclusif) arrête toute
+        // nouvelle saisie, même si le verrou principal est libre (#1711).
+        let gate_path = path.with_extension("porte");
+        let gate = std::fs::File::open(&gate_path).unwrap();
+        // SAFETY: descripteur valide.
+        assert_eq!(
+            unsafe { libc::flock(gate.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(consent_guard().is_none(), "porte fermée : aucune saisie");
+        drop(gate);
+        assert!(consent_guard().is_some());
+        let _ = std::fs::remove_file(&gate_path);
         // Lien symbolique posé à la place du verrou : refus, jamais suivi.
         let _ = std::fs::remove_file(&path);
         std::os::unix::fs::symlink(std::env::temp_dir(), &path).unwrap();
