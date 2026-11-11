@@ -488,7 +488,7 @@ fn units_a(p: *const u8) -> Vec<u32> {
 
 /// Longueur de la racine : « C:\ » (3), « C: » (2), « \\serveur\partage\ »,
 /// « \ » (1).
-fn root_len(p: &[u32]) -> usize {
+pub(crate) fn root_len(p: &[u32]) -> usize {
     if p.len() >= 2 && p[1] == b':' as u32 {
         return if p.get(2) == Some(&BS) { 3 } else { 2 };
     }
@@ -824,6 +824,10 @@ pub fn exports() -> crate::dlls::Exports {
     };
     // SHGetValue, SHRegGetUSValue, AssocQueryString… : voir shlwapi_reg.rs.
     m.extend(super::shlwapi_reg::exports());
+    // Le reste de la famille Path* (#1631), sans masquer une copie existante.
+    for (k, v) in super::shlwapi_path::exports() {
+        m.entry(k).or_insert(v);
+    }
     m
 }
 
