@@ -800,7 +800,12 @@ fn thread_calls_enabled(module: usize) -> bool {
 pub fn thread_attach_current() {
     init_thread();
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1) {
+    // Comme Windows : une DLL qui n'a pas encore reçu DLL_PROCESS_ATTACH
+    // (en cours de chargement par un autre thread) ne reçoit pas
+    // DLL_THREAD_ATTACH. Sinon un thread né pendant la liaison des imports
+    // de SDL3.dll exécutait son rappel TLS avant que sa section de code soit
+    // exécutable : faute d'exécution dans steamwebhelper (#1612).
+    for m in mods.into_iter().skip(1).filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
@@ -817,7 +822,7 @@ pub fn thread_detach_current() {
         return;
     }
     let mods = loader::MODULES.lock().unwrap().clone();
-    for m in mods.into_iter().skip(1).rev() {
+    for m in mods.into_iter().skip(1).rev().filter(|m| m.initialized) {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain =
