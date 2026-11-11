@@ -418,6 +418,32 @@ pub extern "win64" fn count_clipboard_formats() -> i32 {
     current(&mut s).available().len() as i32
 }
 
+/// GetUpdatedClipboardFormats : formats présents, sans ouvrir le
+/// presse-papiers (lot D du relevé, #1512).
+pub unsafe extern "win64" fn get_updated_clipboard_formats(
+    formats: *mut u32,
+    cap: u32,
+    out: *mut u32,
+) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let list = {
+        let mut s = lock(state());
+        current(&mut s).available()
+    };
+    *out = list.len() as u32;
+    if list.len() > cap as usize || (formats.is_null() && !list.is_empty()) {
+        crate::process::set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
+        return 0;
+    }
+    for (i, f) in list.iter().enumerate() {
+        *formats.add(i) = *f;
+    }
+    1
+}
+
 pub extern "win64" fn enum_clipboard_formats(format: u32) -> u32 {
     let mut s = lock(state());
     if format == 0 {
@@ -544,6 +570,7 @@ pub fn exports() -> crate::dlls::Exports {
         "IsClipboardFormatAvailable" => fn is_clipboard_format_available,
         "CountClipboardFormats" => fn count_clipboard_formats,
         "EnumClipboardFormats" => fn enum_clipboard_formats,
+        "GetUpdatedClipboardFormats" => fn get_updated_clipboard_formats,
         "GetClipboardSequenceNumber" => fn get_clipboard_sequence_number,
         "GetPriorityClipboardFormat" => fn get_priority_clipboard_format,
         "RegisterClipboardFormatA" => fn register_clipboard_format_a,

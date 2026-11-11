@@ -118,6 +118,22 @@ fn new_folder(path: String) -> *mut Folder {
     }))
 }
 
+/// IShellFolder sur un dossier Windows, demandé par `iid` (lot D, #1512).
+pub unsafe fn folder_for(path: &str, iid: *const Guid, out: *mut *mut c_void) -> i32 {
+    let f = new_folder(path.to_string());
+    let hr = folder_qi(f, iid, out);
+    folder_release(f);
+    hr
+}
+
+/// Chemin d'un IShellFolder de Winlux.
+pub unsafe fn folder_path(obj: usize) -> Option<String> {
+    if obj == 0 || *(obj as *const *const ()) != &FOLDER_VT as *const _ as *const () {
+        return None;
+    }
+    Some((*(obj as *const Folder)).path.clone())
+}
+
 fn desktop_path() -> String {
     super::knownfolders::csidl_path(CSIDL_DESKTOPDIRECTORY).unwrap_or_else(|| "C:\\".into())
 }

@@ -322,12 +322,14 @@ unsafe extern "win64" fn fdi_copy(
 }
 
 pub fn cabinet_exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut e = super::cabinet_fci::exports();
+    e.extend(crate::exports! {
         "FDICreate" => fn fdi_create,
         "FDIIsCabinet" => fn fdi_is_cabinet,
         "FDICopy" => fn fdi_copy,
         "FDIDestroy" => fn fdi_destroy,
-    }
+    });
+    e
 }
 
 // --- lz32.dll : fichiers SZDD ----------------------------------------------------------------
