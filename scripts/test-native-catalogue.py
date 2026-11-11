@@ -235,14 +235,14 @@ with tempfile.TemporaryDirectory() as temporary:
     (folder / "Forum.url").write_text("[InternetShortcut]\nURL=javascript:alert(1)\n")
     (folder / "Aide en ligne.url").write_text("[InternetShortcut]\nURL=https://example.org/aide\n")
     found_links = sorted(catalogue.link_shortcuts(home))
-    assert found_links == [("Aide en ligne", "https://example.org/aide", "web-browser"),
+    assert found_links == [("PuTTY (64-bit) › Aide en ligne", "https://example.org/aide", "web-browser"),
                            ("PuTTY Manual", str(home / "putty/putty.chm"), "help-browser"),
                            ("PuTTY Web Site", "https://example.org/putty/", "web-browser")], found_links
     assert all(name != "Programme installé" for name, _, _ in found_links), "un .exe compté deux fois"
     catalogue.refresh()
     link_entries = {path.read_text().split("Name=", 1)[1].split("\n", 1)[0]: path.read_text()
                     for path in catalogue.APPS.glob("winlux-link-*.desktop")}
-    assert sorted(link_entries) == ["Aide en ligne", "PuTTY Manual", "PuTTY Web Site"], sorted(link_entries)
+    assert sorted(link_entries) == ["PuTTY (64-bit) › Aide en ligne", "PuTTY Manual", "PuTTY Web Site"], sorted(link_entries)
     assert 'Exec=/usr/bin/xdg-open "https://example.org/putty/"' in link_entries["PuTTY Web Site"]
     assert "Categories=Utility;WinluxWindows;" in link_entries["PuTTY Manual"]
     (folder / "Aide en ligne.url").unlink()
