@@ -294,6 +294,19 @@ fn condensat_et_certificat_auto_signe() {
         assert_eq!(i[12], info.subject.cb);
         assert_eq!(i[26], info.ext_count);
         assert_eq!(std::mem::size_of_val(&i), 112);
+        // Chaîne en disposition x86 (#1708) : 56, 32 et 32 octets.
+        let mut chain = 0usize;
+        assert_eq!(
+            crate::dlls::crypt32::CertGetCertificateChain(0, ctx, 0, 0, 0, 0, 0, &mut chain),
+            1
+        );
+        let (cc, simple, elements) = crate::dlls::crypt32::chain_x86_view(chain);
+        assert_eq!((cc[0], cc[3]), (56, 1));
+        assert_eq!(simple[0], 32);
+        assert_eq!(simple[3] as usize, elements.len());
+        assert!(!elements.is_empty() && elements.iter().all(|e| e[0] == 32 && e[1] != 0));
+        assert_eq!(cc[1], simple[1]);
+        crate::dlls::crypt32::CertFreeCertificateChain(chain);
         crate::dlls::crypt32::CertFreeCertificateContext(ctx);
     }
 }

@@ -212,10 +212,25 @@ unsafe extern "win64" fn cv_notify_all(this: *mut usize) {
     cv_notify(this, i32::MAX);
 }
 
+/// critical_section::scoped_lock(critical_section&) : retient la section et
+/// la verrouille (lot F, #1615).
+unsafe extern "win64" fn scoped_lock_ctor(this: *mut usize, cs: *mut usize) -> *mut usize {
+    this.write(cs as usize);
+    cs_lock(cs);
+    this
+}
+
+/// ~scoped_lock() : déverrouille la section retenue.
+unsafe extern "win64" fn scoped_lock_dtor(this: *mut usize) {
+    cs_unlock(this.read() as *mut usize);
+}
+
 pub fn concrt140_exports() -> super::Exports {
     crate::exports! {
         "??0critical_section@Concurrency@@QEAA@XZ" => fn cs_ctor,
         "??1critical_section@Concurrency@@QEAA@XZ" => fn cs_dtor,
+        "??0scoped_lock@critical_section@Concurrency@@QEAA@AEAV12@@Z" => fn scoped_lock_ctor,
+        "??1scoped_lock@critical_section@Concurrency@@QEAA@XZ" => fn scoped_lock_dtor,
         "?lock@critical_section@Concurrency@@QEAAXXZ" => fn cs_lock,
         "?try_lock@critical_section@Concurrency@@QEAA_NXZ" => fn cs_try_lock,
         "?try_lock_for@critical_section@Concurrency@@QEAA_NI@Z" => fn cs_try_lock_for,

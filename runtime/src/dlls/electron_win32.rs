@@ -1439,21 +1439,31 @@ pub fn user32_exports() -> crate::dlls::Exports {
 //  combase / ole32 : chaînes HSTRING et activation Windows Runtime
 // ============================================================
 //
-// Un HSTRING pointe sur un en-tête de 24 octets (la taille de HSTRING_HEADER) :
-// { magie u32, drapeaux u32, longueur u32, réservé u32, texte *const u16 }.
-// Une chaîne créée par WindowsCreateString est allouée d'un bloc (en-tête puis
-// texte terminé par 0) ; une « référence rapide » (WindowsCreateStringReference)
-// écrit l'en-tête dans le HSTRING_HEADER de l'appelant et pointe sur son texte.
+// Disposition commune des HSTRING (#1712), celle que C++/WinRT (base.h,
+// `hstring_header` / `shared_hstring_header`) et windows-rs
+// (`HStringHeader`, licence MIT) écrivent eux-mêmes sans passer par
+// WindowsCreateString : { drapeaux u32, longueur u32, réservé u32,
+// réservé u32, texte *const u16 } (20 octets en x86, 24 en x64, la taille
+// de HSTRING_HEADER). Le drapeau 1 marque une référence rapide, dont
+// l'en-tête est fourni par l'appelant. Une chaîne allouée continue par un
+// compteur de références u32 puis le texte terminé par 0 ; elle vient du
+// tas du processus, que ces bibliothèques libèrent par HeapFree, et
+// WindowsDuplicateString ne fait qu'incrémenter son compteur.
 
-const HSTRING_MAGIC: u32 = 0x4853_5452; // « HSTR »
 const HSTRING_REFERENCE: u32 = 1;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
 const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
 const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154u32 as i32;
 
-fn hstring_layout(len: u32) -> std::alloc::Layout {
-    std::alloc::Layout::from_size_align(24 + (len as usize + 1) * 2, 8).expect("taille HSTRING")
+/// Taille de l'en-tête, sur la taille d'un pointeur du programme.
+fn header_size() -> usize {
+    16 + crate::wow32::pointer_size()
+}
+
+/// Compteur de références d'une chaîne allouée, juste après l'en-tête.
+unsafe fn hstring_count<'a>(h: usize) -> &'a std::sync::atomic::AtomicU32 {
+    &*((h + header_size()) as *const std::sync::atomic::AtomicU32)
 }
 
 /// (texte, longueur) d'un HSTRING ; NULL est la chaîne vide.
@@ -1461,12 +1471,11 @@ unsafe fn hstring_parts(h: usize) -> Option<(*const u16, u32)> {
     if h == 0 {
         return Some((std::ptr::null(), 0));
     }
-    let p = h as *const u32;
-    if p.read_unaligned() != HSTRING_MAGIC {
+    let len = ((h + 4) as *const u32).read_unaligned();
+    let text = header_text(h);
+    if text.is_null() && len != 0 {
         return None;
     }
-    let len = p.add(2).read_unaligned();
-    let text = header_text(h);
     Some((text, len))
 }
 
@@ -1492,16 +1501,24 @@ unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
     if len == 0 {
         return 0;
     }
-    let p = std::alloc::alloc_zeroed(hstring_layout(len));
+    let text_at = header_size() + 4;
+    let size = text_at + (len as usize + 1) * 2;
+    // HEAP_ZERO_MEMORY : en-tête réservé et 0 final.
+    let p = crate::dlls::kernel32::heap_alloc(0, 8, size) as *mut u8;
     if p.is_null() {
         return 0;
     }
-    let text = p.add(24) as *mut u16;
+    let text = p.add(text_at) as *mut u16;
     std::ptr::copy_nonoverlapping(src, text, len as usize);
-    (p as *mut u32).write(HSTRING_MAGIC);
-    (p.add(8) as *mut u32).write(len);
+    (p.add(4) as *mut u32).write_unaligned(len);
     set_header_text(p as usize, text as usize);
+    hstring_count(p as usize).store(1, std::sync::atomic::Ordering::Relaxed);
     p as usize
+}
+
+/// Une référence rapide (en-tête fourni par l'appelant) ?
+unsafe fn is_reference(h: usize) -> bool {
+    (h as *const u32).read_unaligned() & HSTRING_REFERENCE != 0
 }
 
 pub(crate) unsafe extern "win64" fn WindowsCreateString(
@@ -1544,25 +1561,20 @@ unsafe extern "win64" fn WindowsCreateStringReference(
         return E_INVALIDARG;
     }
     // HSTRING_HEADER : 20 octets en x86, 24 en x64 (#1630).
-    std::ptr::write_bytes(header, 0, 16 + crate::wow32::pointer_size());
-    (header as *mut u32).write_unaligned(HSTRING_MAGIC);
-    (header.add(4) as *mut u32).write_unaligned(HSTRING_REFERENCE);
-    (header.add(8) as *mut u32).write_unaligned(len);
+    std::ptr::write_bytes(header, 0, header_size());
+    (header as *mut u32).write_unaligned(HSTRING_REFERENCE);
+    (header.add(4) as *mut u32).write_unaligned(len);
     set_header_text(header as usize, src as usize);
     crate::wow32::write_ptr(out as usize, header as usize);
     0
 }
 
 unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
-    if h == 0 {
+    if h == 0 || is_reference(h) {
         return 0;
     }
-    let Some((_, len)) = hstring_parts(h) else {
-        return E_INVALIDARG;
-    };
-    if (h as *const u32).add(1).read_unaligned() & HSTRING_REFERENCE == 0 {
-        (h as *mut u32).write(0);
-        std::alloc::dealloc(h as *mut u8, hstring_layout(len));
+    if hstring_count(h).fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+        crate::dlls::kernel32::heap_free(0, 0, h as *mut std::ffi::c_void);
     }
     0
 }
@@ -1572,14 +1584,19 @@ unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i3
         return E_INVALIDARG;
     }
     crate::wow32::write_ptr(out as usize, 0);
+    if h == 0 {
+        return 0;
+    }
+    if !is_reference(h) {
+        hstring_count(h).fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::wow32::write_ptr(out as usize, h);
+        return 0;
+    }
     let Some((text, len)) = hstring_parts(h) else {
         return E_INVALIDARG;
     };
-    if len == 0 {
-        return 0;
-    }
     let copy = hstring_alloc(text, len);
-    if copy == 0 {
+    if copy == 0 && len != 0 {
         return E_OUTOFMEMORY;
     }
     crate::wow32::write_ptr(out as usize, copy);
@@ -3193,6 +3210,65 @@ mod tests {
             assert_eq!(RegisterHotKey(0, 1, 2, 0x41), 1);
             assert_eq!(UnregisterHotKey(0, 1), 1);
             assert_eq!(UnregisterHotKey(0, 1), 0);
+        }
+    }
+
+    /// Chaîne bâtie par le programme lui-même, comme C++/WinRT et
+    /// windows-rs : { drapeaux, longueur, 0, 0, texte, compteur, texte }.
+    #[test]
+    fn chaine_winrt_batie_par_le_programme() {
+        unsafe {
+            #[repr(C)]
+            struct Header {
+                flags: u32,
+                len: u32,
+                r0: u32,
+                r1: u32,
+                data: *const u16,
+                count: u32,
+                buffer: [u16; 32],
+            }
+            let nom: Vec<u16> = "Windows.Foundation.Uri".encode_utf16().collect();
+            let mut b = Box::new(Header {
+                flags: 0,
+                len: nom.len() as u32,
+                r0: 0,
+                r1: 0,
+                data: std::ptr::null(),
+                count: 1,
+                buffer: [0; 32],
+            });
+            b.buffer[..nom.len()].copy_from_slice(&nom);
+            b.data = b.buffer.as_ptr();
+            let h = Box::into_raw(b) as usize;
+            let count =
+                || std::ptr::read_volatile(std::ptr::addr_of!((*(h as *const Header)).count));
+            assert_eq!(hstring_slice(h), &nom[..]);
+            assert_eq!(WindowsGetStringLen(h), nom.len() as u32);
+            // Dupliquer une chaîne allouée ne fait que compter une référence.
+            let mut dup = 0usize;
+            assert_eq!(WindowsDuplicateString(h, &mut dup), 0);
+            assert_eq!(dup, h);
+            assert_eq!(count(), 2);
+            assert_eq!(WindowsDeleteString(dup), 0);
+            assert_eq!(count(), 1);
+            // Et nos chaînes suivent la même disposition.
+            let mut ours = 0usize;
+            assert_eq!(
+                WindowsCreateString(nom.as_ptr(), nom.len() as u32, &mut ours),
+                0
+            );
+            let o = &*(ours as *const Header);
+            assert_eq!((o.flags, o.len, o.count), (0, nom.len() as u32, 1));
+            assert_eq!(
+                std::slice::from_raw_parts(o.data, nom.len() + 1)[nom.len()],
+                0
+            );
+            assert_eq!(WindowsDuplicateString(ours, &mut dup), 0);
+            assert_eq!(dup, ours);
+            assert_eq!(WindowsDeleteString(ours), 0);
+            assert_eq!(WindowsDeleteString(dup), 0);
+            drop(Box::from_raw(h as *mut Header));
         }
     }
 

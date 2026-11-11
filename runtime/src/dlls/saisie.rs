@@ -750,6 +750,79 @@ pub fn consent_shown() -> bool {
         .any(|e| std::fs::read(e.path().join("cmdline")).is_ok_and(|c| is_consent_window(&c)))
 }
 
+/// Verrou partagé avec les fenêtres de consentement (#1696) :
+/// `/tmp/winlux-consent-<affichage>.lock` (WINLUX_CONSENT_LOCK pour les
+/// tests). Une fenêtre de consentement le prend en exclusif avant de
+/// s'afficher et le garde jusqu'à sa fermeture ; la saisie le prend en
+/// partagé, sans attendre, du contrôle jusqu'à la fin de l'envoi (après
+/// l'aller-retour avec le serveur X). Une fenêtre ne peut donc pas s'ouvrir
+/// au milieu d'un envoi, et aucun envoi ne commence tant qu'elle est là.
+pub fn consent_lock_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("WINLUX_CONSENT_LOCK") {
+        return p.into();
+    }
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    let number: String = display
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect();
+    let number = if number.is_empty() {
+        "0".into()
+    } else {
+        number
+    };
+    format!("/tmp/winlux-consent-{number}.lock").into()
+}
+
+/// Verrou partagé tenu pendant un envoi ; `None` : une fenêtre de
+/// consentement est ouverte, ou le verrou appartient à un autre compte
+/// (refus, jamais d'envoi sans garde).
+pub fn consent_guard() -> Option<std::fs::File> {
+    let path = consent_lock_path();
+    // Porte (#1711) : une fenêtre qui veut s'afficher la prend en exclusif
+    // et arrête aussitôt toute nouvelle saisie, même si des envois se
+    // chevauchent sans fin sur le verrou principal. La saisie ne la tient
+    // que le temps de prendre ce dernier.
+    let gate = shared_lock(&path.with_extension("porte"))?;
+    let main = shared_lock(&path);
+    drop(gate);
+    main
+}
+
+/// Ouvre `path` (jamais à travers un lien symbolique, propriétaire : ce
+/// compte ou root) et le verrouille en partagé sans attendre.
+fn shared_lock(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::unix::io::AsRawFd;
+    let open = |write: bool| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(write)
+            .create(write)
+            .truncate(false)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+    };
+    // Verrou créé par root (fenêtre d'élévation) : ouvert en lecture seule.
+    let file = open(true).or_else(|_| open(false)).ok()?;
+    let meta = file.metadata().ok()?;
+    // SAFETY: getuid ne peut pas échouer.
+    let me = unsafe { libc::getuid() };
+    if !meta.is_file() || (meta.uid() != me && meta.uid() != 0) {
+        return None;
+    }
+    // SAFETY: descripteur valide, tenu par `file`.
+    let r = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
+    (r == 0).then_some(file)
+}
+
 /// Tape les événements dans la session ; `Err(code)` : rien n'a été tapé.
 pub fn inject(events: &[Event]) -> Result<(), u32> {
     if events.is_empty() {
@@ -768,6 +841,11 @@ pub fn inject(events: &[Event]) -> Result<(), u32> {
         crate::trace!("saisie simulée refusée : autorisation « input » non accordée");
         return Err(ERROR_ACCESS_DENIED);
     }
+    // Gardé jusqu'à la fin de la fonction, donc après l'aller-retour X.
+    let Some(_consent) = consent_guard() else {
+        crate::trace!("saisie simulée refusée : une fenêtre d'autorisation s'ouvre ou est ouverte");
+        return Err(ERROR_ACCESS_DENIED);
+    };
     if consent_shown() {
         crate::trace!("saisie simulée refusée : une fenêtre d'autorisation est ouverte");
         return Err(ERROR_ACCESS_DENIED);
@@ -997,6 +1075,69 @@ mod tests {
         assert!(!is_consent_window(b"/usr/bin/winlux-permission\0list\0"));
         assert!(!is_consent_window(b"/usr/bin/vim\0winlux-uac\0"));
         assert!(!is_consent_window(b""));
+    }
+
+    #[test]
+    fn verrou_des_fenetres_de_consentement() {
+        use std::os::unix::io::AsRawFd;
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path =
+            std::env::temp_dir().join(format!("winlux-consent-test-{}.lock", std::process::id()));
+        let old = std::env::var_os("WINLUX_CONSENT_LOCK");
+        std::env::set_var("WINLUX_CONSENT_LOCK", &path);
+        // Deux envois en même temps : verrous partagés compatibles.
+        let a = consent_guard().expect("premier envoi");
+        let b = consent_guard().expect("second envoi");
+        drop((a, b));
+        // Une fenêtre de consentement (verrou exclusif) bloque tout envoi.
+        let window = std::fs::File::open(&path).unwrap();
+        // SAFETY: descripteur valide.
+        assert_eq!(
+            unsafe { libc::flock(window.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(consent_guard().is_none());
+        drop(window);
+        assert!(
+            consent_guard().is_some(),
+            "fenêtre fermée : l'envoi reprend"
+        );
+        // Pendant un envoi, la fenêtre attend qu'il se termine.
+        let sending = consent_guard().unwrap();
+        let window = std::fs::File::open(&path).unwrap();
+        // SAFETY: descripteur valide.
+        assert_ne!(
+            unsafe { libc::flock(window.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        drop(sending);
+        // Une fenêtre qui attend (porte tenue en exclusif) arrête toute
+        // nouvelle saisie, même si le verrou principal est libre (#1711).
+        let gate_path = path.with_extension("porte");
+        let gate = std::fs::File::open(&gate_path).unwrap();
+        // SAFETY: descripteur valide.
+        assert_eq!(
+            unsafe { libc::flock(gate.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(consent_guard().is_none(), "porte fermée : aucune saisie");
+        drop(gate);
+        assert!(consent_guard().is_some());
+        let _ = std::fs::remove_file(&gate_path);
+        // Lien symbolique posé à la place du verrou : refus, jamais suivi.
+        let _ = std::fs::remove_file(&path);
+        std::os::unix::fs::symlink(std::env::temp_dir(), &path).unwrap();
+        assert!(
+            consent_guard().is_none(),
+            "un lien symbolique n'est jamais suivi"
+        );
+        match old {
+            Some(v) => std::env::set_var("WINLUX_CONSENT_LOCK", v),
+            None => std::env::remove_var("WINLUX_CONSENT_LOCK"),
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

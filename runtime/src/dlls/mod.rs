@@ -157,6 +157,11 @@ pub mod libstdcpp;
 pub mod lot_e_comptes;
 pub mod lot_e_divers;
 pub mod lot_e_reseau;
+pub mod lot_f_crypt32;
+pub mod lot_f_divers;
+pub mod lot_f_mfplat;
+pub mod lot_f_propsys;
+pub mod lot_f_winmm;
 pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
@@ -1405,6 +1410,15 @@ fn add_basics(all: &mut [Builtin]) {
         .into_iter()
         .chain(lot_e_reseau::all())
         .chain(lot_e_divers::all());
+    // Lot F de #1410 (#1615).
+    let lot_f = vec![
+        ("winmm", lot_f_winmm::exports()),
+        ("crypt32", lot_f_crypt32::exports()),
+        ("propsys", lot_f_propsys::exports()),
+        ("mfplat", lot_f_mfplat::exports()),
+    ]
+    .into_iter()
+    .chain(lot_f_divers::all());
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
@@ -1414,6 +1428,7 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(ftp)
         .chain(icue)
         .chain(lot_e)
+        .chain(lot_f)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {

@@ -1893,6 +1893,10 @@ pub unsafe extern "win64" fn write_file(
     if !written.is_null() {
         *written = 0;
     }
+    // Appareil virtuel (pilote remplacé, observation #1655).
+    if let Some(r) = crate::dlls::vdev::write_file(h, buf, len, written, ov) {
+        return r;
+    }
     if ov != 0 {
         if is_overlapped_handle(h) {
             return start_overlapped_io(h, buf as usize, len, ov, true, written);

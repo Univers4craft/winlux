@@ -3,7 +3,8 @@
 # et en x86 avec clang (cible MSVC), tape dans sa propre fenêtre sous Xvfb
 # par SendInput et keybd_event (clic, VK_A, « é », « € », molette), une fois
 # l'autorisation « input » accordée ; sans elle, SendInput rend 0 et
-# ERROR_ACCESS_DENIED. Sauté (code 0) sans runtime, clang ou xvfb-run.
+# ERROR_ACCESS_DENIED, de même pendant une fenêtre de consentement (#1696).
+# Sauté (code 0) sans runtime, clang ou xvfb-run.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -50,12 +51,14 @@ done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/home"
+wrap=
 run() {
     exe=$1; shift
     set +e
-    env HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" \
+    $wrap env HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" \
         XDG_CONFIG_HOME="$work/home/.config" WINLUX_LOCK_ROOT="$work" \
         WINLUX_PERMISSIONS_FILE="$work/permissions.tsv" WINLUX_PERMISSION_HELPER="$work/absent" \
+        WINLUX_CONSENT_LOCK="$work/consent.lock" \
         WINLUX_REGISTRY_PATH="$work/registre.tsv" TMPDIR="$work" \
         xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI -u WINLUX_PERMISSIONS \
         timeout 60 "$runtime" "$exe" "$@" >"$work/out.txt" 2>&1
@@ -73,6 +76,17 @@ for arch in 64 32; do
         exit 1
     }
     printf 'input\tallow\t%s\n' "$real" >"$work/permissions.tsv"
+    # Fenêtre de consentement ouverte (verrou exclusif, #1696) : refus aussi.
+    if command -v flock >/dev/null 2>&1; then
+        wrap="flock -x $work/consent.lock"
+        run "$exe" refus
+        wrap=
+        test "$status" -eq 0 || {
+            tail -20 "$work/out.txt"
+            echo "sendinput$arch.exe pendant une fenêtre de consentement : le test n° $status a échoué" >&2
+            exit 1
+        }
+    fi
     run "$exe"
     test "$status" -eq 0 || {
         tail -20 "$work/out.txt"
@@ -80,4 +94,4 @@ for arch in 64 32; do
         exit 1
     }
 done
-echo "sendinput : SendInput et keybd_event tapent dans la session en x64 et en x86 (clic, VK_A, é, €, molette) une fois autorisés, refusés sinon"
+echo "sendinput : SendInput et keybd_event tapent dans la session en x64 et en x86 (clic, VK_A, é, €, molette) une fois autorisés, refusés sinon et pendant une fenêtre de consentement"

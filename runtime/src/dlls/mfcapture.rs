@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+pub(crate) use descr::{create_event, create_presentation_descriptor, create_stream_descriptor};
+
 // ---------- HRESULT ----------
 pub const MF_E_INVALIDSTREAMNUMBER: i32 = 0xC00D_36B3u32 as i32;
 pub const MF_E_INVALIDMEDIATYPE: i32 = 0xC00D_36B4u32 as i32;
@@ -22,6 +24,7 @@ pub const MF_E_INVALIDTYPE: i32 = 0xC00D_36BDu32 as i32;
 pub const MF_E_INVALIDREQUEST: i32 = 0xC00D_36B2u32 as i32;
 pub const MF_E_ATTRIBUTENOTFOUND: i32 = 0xC00D_36E6u32 as i32;
 pub const MF_E_NOT_FOUND: i32 = 0xC00D_36D5u32 as i32;
+const MF_E_NOT_INITIALIZED: i32 = 0xC00D_36B6u32 as i32;
 const MF_E_BUFFERTOOSMALL: i32 = 0xC00D_36B1u32 as i32;
 const MF_E_VIDEO_DEVICE_INVALIDATED: i32 = 0xC00D_3EA2u32 as i32;
 
@@ -332,6 +335,9 @@ enum Ext {
     MediaType,
     Activate(Camera),
     Sample(Mutex<SampleData>),
+    Event(descr::EventData),
+    StreamDesc(descr::StreamData),
+    PresDesc(descr::PresData),
 }
 
 #[derive(Default)]
@@ -365,6 +371,9 @@ fn new_obj(ext: Ext) -> *mut MfObj {
         Ext::MediaType => MEDIATYPE_VTBL.0.as_ptr() as *const (),
         Ext::Activate(_) => ACTIVATE_VTBL.0.as_ptr() as *const (),
         Ext::Sample(_) => SAMPLE_VTBL.0.as_ptr() as *const (),
+        Ext::Event(_) => descr::EVENT_VTBL.0.as_ptr() as *const (),
+        Ext::StreamDesc(_) => descr::STREAMDESC_VTBL.0.as_ptr() as *const (),
+        Ext::PresDesc(_) => descr::PRESDESC_VTBL.0.as_ptr() as *const (),
     };
     Box::into_raw(Box::new(MfObj {
         vtbl,
@@ -385,6 +394,9 @@ fn is_ours(p: *mut c_void) -> bool {
         MEDIATYPE_VTBL.0.as_ptr() as *const (),
         ACTIVATE_VTBL.0.as_ptr() as *const (),
         SAMPLE_VTBL.0.as_ptr() as *const (),
+        descr::EVENT_VTBL.0.as_ptr() as *const (),
+        descr::STREAMDESC_VTBL.0.as_ptr() as *const (),
+        descr::PRESDESC_VTBL.0.as_ptr() as *const (),
     ]
     .contains(&v)
 }
@@ -405,7 +417,10 @@ unsafe extern "win64" fn a_qi(this: *mut MfObj, riid: *const u8, out: *mut *mut 
         || iid == IID_IMFATTRIBUTES
         || (iid == IID_IMFMEDIATYPE && matches!(o.ext, Ext::MediaType))
         || (iid == IID_IMFACTIVATE && matches!(o.ext, Ext::Activate(_)))
-        || (iid == IID_IMFSAMPLE && matches!(o.ext, Ext::Sample(_)));
+        || (iid == IID_IMFSAMPLE && matches!(o.ext, Ext::Sample(_)))
+        || (iid == descr::IID_IMFMEDIAEVENT && matches!(o.ext, Ext::Event(_)))
+        || (iid == descr::IID_IMFSTREAMDESCRIPTOR && matches!(o.ext, Ext::StreamDesc(_)))
+        || (iid == descr::IID_IMFPRESENTATIONDESCRIPTOR && matches!(o.ext, Ext::PresDesc(_)));
     if ok {
         o.refs.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
@@ -850,7 +865,7 @@ unsafe extern "win64" fn a_copy_all_items(this: *mut MfObj, dest: *mut c_void) -
 }
 
 /// Libère ce que `write_propvariant` a alloué.
-unsafe fn clear_propvariant(pv: *mut u8) {
+pub(crate) unsafe fn clear_propvariant(pv: *mut u8) {
     let vt = (pv as *const u16).read_unaligned();
     let data = pv.add(8);
     match vt {
@@ -929,6 +944,9 @@ const fn concat<const A: usize, const B: usize, const N: usize>(
     }
     out
 }
+
+// Après la macro des attributs, que le module emploie.
+mod descr;
 
 static ATTR_VTBL: VTable<33> = VTable(attr_vtbl_entries!());
 
