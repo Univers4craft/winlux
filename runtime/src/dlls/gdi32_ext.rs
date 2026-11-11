@@ -196,6 +196,17 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, out: *mut TextMetric
     1
 }
 
+/// GetTextCharset : jeu de caractères de la police du DC, celui que rend
+/// GetTextMetricsW (ANSI_CHARSET : Winlux dessine en Unicode). DC
+/// invalide : DEFAULT_CHARSET (Tk, #1491).
+pub unsafe extern "win64" fn get_text_charset(hdc: usize) -> i32 {
+    let mut tm = std::mem::MaybeUninit::<TextMetricW>::zeroed();
+    if get_text_metrics_w(hdc, tm.as_mut_ptr()) == 0 {
+        return 1;
+    }
+    tm.assume_init().char_set as i32
+}
+
 // ── ExtTextOut ──────────────────────────────────────────────────────
 
 pub unsafe extern "win64" fn ext_text_out_a(
@@ -791,12 +802,20 @@ unsafe fn decode_dib_pixels(
     };
     let mut pixels = Vec::with_capacity(count);
     for dy in 0..src_h {
+        // DIB bas-haut : l'origine de la source est le coin inférieur
+        // gauche, et src_y compte les lignes depuis le bas (documentation de
+        // StretchDIBits et SetDIBitsToDevice). La ligne du haut du rectangle
+        // est donc la ligne mémoire src_y + src_h - 1. wxWidgets dessine
+        // ainsi les boutons d'Audacity, découpés dans une grande DIB : on
+        // lisait le bas de l'image, vide, et les barres d'outils restaient
+        // blanches (#1485).
         let row = if top_down {
             (src_y as usize).wrapping_add(dy)
         } else {
-            abs_h
+            (src_y as usize)
+                .checked_add(src_h)?
                 .checked_sub(1)?
-                .checked_sub((src_y as usize).wrapping_add(dy))?
+                .checked_sub(dy)?
         };
         if row >= abs_h {
             pixels.extend(std::iter::repeat_n(0u32, src_w));
@@ -946,6 +965,35 @@ mod reviewed_dib_tests {
             assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 2, 1).is_none());
             info.width = -2;
             assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 2, 1).is_none());
+        }
+    }
+    /// #1485 : dans une DIB bas-haut, src_y part du bas. Une bande de deux
+    /// lignes prise à src_y = 2 sur quatre est le haut de l'image (lignes
+    /// mémoire 3 puis 2), pas son bas.
+    #[test]
+    fn bottom_up_source_band_counts_from_the_bottom() {
+        let mut info = header(32, 4);
+        info.width = 1;
+        // Lignes mémoire 0 à 3, de bas en haut : rouges 1, 2, 3, 4 (BGRA).
+        let pixels: [u8; 16] = [0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0];
+        unsafe {
+            let base = &info as *const _ as *const u8;
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 1, 2),
+                Some(vec![4, 3]),
+                "haut de l'image"
+            );
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 1, 2),
+                Some(vec![2, 1]),
+                "bas de l'image"
+            );
+            info.height = -4;
+            assert_eq!(
+                decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 1, 2),
+                Some(vec![3, 4]),
+                "haut-bas : src_y part du haut"
+            );
         }
     }
 }
@@ -1466,6 +1514,7 @@ pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
 // ── GdiFlush / GdiSetBatchLimit ────────────────────────────────────
 
 pub extern "win64" fn gdi_flush() -> i32 {
+    gui::flush_all_paint_over();
     1
 }
 pub extern "win64" fn gdi_set_batch_limit(_limit: u32) -> u32 {
@@ -1543,6 +1592,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetTextMetricsA" => fn get_text_metrics_a,
         "GetTextMetricsW" => fn get_text_metrics_w,
+        "GetTextCharset" => fn get_text_charset,
         "ExtTextOutA" => fn ext_text_out_a,
         "ExtTextOutW" => fn ext_text_out_w,
         "TextOutW" => fn text_out_w,

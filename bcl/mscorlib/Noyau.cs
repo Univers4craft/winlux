@@ -46,12 +46,30 @@ namespace System
     public struct Byte { private byte m_value; }
     public struct Int16 { private short m_value; }
     public struct UInt16 { private ushort m_value; }
-    public struct Int32 { private int m_value; }
+    public struct Int32
+    {
+        public const int MaxValue = 0x7FFFFFFF;
+        public const int MinValue = -MaxValue - 1;
+        private int m_value;
+    }
     public struct UInt32 { private uint m_value; }
-    public struct Int64 { private long m_value; }
+    public struct Int64
+    {
+        public const long MaxValue = 0x7FFFFFFFFFFFFFFF;
+        public const long MinValue = -MaxValue - 1;
+        private long m_value;
+    }
     public struct UInt64 { private ulong m_value; }
     public struct Single { private float m_value; }
-    public struct Double { private double m_value; }
+    public struct Double
+    {
+        private double m_value;
+
+        // NaN est le seul double différent de lui-même (IEEE 754).
+#pragma warning disable 1718
+        public static bool IsNaN(double d) { return d != d; }
+#pragma warning restore 1718
+    }
     public unsafe struct IntPtr { private void* m_value; }
     public unsafe struct UIntPtr { private void* m_value; }
 

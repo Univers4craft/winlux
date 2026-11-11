@@ -708,7 +708,249 @@ pub(super) static ISHELLFOLDER: Iface = Iface {
     ],
 };
 
+// ---------------------------------------------------------------------
+// WASAPI (mmdevapi, audioses) : son des programmes x86 (#232).
+// Les nombres flottants (volumes) passent comme des cases de 4 octets :
+// la passerelle 64 bits recopie les premières cases dans xmm0 à xmm3.
+// ---------------------------------------------------------------------
+
+use crate::dlls::mmdevapi as mmd;
+
+/// GUID du runtime audio (structure) dans la représentation en octets.
+const fn g(x: crate::dlls::ole32::Guid) -> Guid {
+    guid(x.data1, x.data2, x.data3, x.data4)
+}
+
+/// IMMDeviceEnumerator : énumération des périphériques audio.
+pub(super) static IMMDEVICEENUMERATOR: Iface = Iface {
+    name: "IMMDeviceEnumerator",
+    iid: g(mmd::IID_IMMDEVICEENUMERATOR),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, Out(&IMMDEVICECOLLECTION)]), // EnumAudioEndpoints
+        Some(&[I, I, Out(&IMMDEVICE)]),           // GetDefaultAudioEndpoint
+        Some(&[I, Out(&IMMDEVICE)]),              // GetDevice
+        Some(&[In(&IUNKNOWN)]),                   // RegisterEndpointNotificationCallback
+        Some(&[In(&IUNKNOWN)]),                   // UnregisterEndpointNotificationCallback
+    ],
+};
+
+pub(super) static IMMDEVICECOLLECTION: Iface = Iface {
+    name: "IMMDeviceCollection",
+    iid: g(mmd::IID_IMMDEVICECOLLECTION),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),                  // GetCount
+        Some(&[I, Out(&IMMDEVICE)]), // Item
+    ],
+};
+
+pub(super) static IMMDEVICE: Iface = Iface {
+    name: "IMMDevice",
+    iid: g(mmd::IID_IMMDEVICE),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[Iid, I, I, OutQ]),         // Activate
+        Some(&[I, Out(&IPROPERTYSTORE)]), // OpenPropertyStore
+        Some(&[OutPtr]),                  // GetId
+        Some(&[I]),                       // GetState
+    ],
+};
+
+pub(super) static IMMENDPOINT: Iface = Iface {
+    name: "IMMEndpoint",
+    iid: g(mmd::IID_IMMENDPOINT),
+    parent: Some(&IUNKNOWN),
+    methods: &[Some(&[I])], // GetDataFlow
+};
+
+/// IPropertyStore : PROPVARIANT de 16 octets en x86, 24 en x64.
+pub(super) static IPROPERTYSTORE: Iface = Iface {
+    name: "IPropertyStore",
+    iid: g(mmd::IID_IPROPERTYSTORE),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),      // GetCount
+        Some(&[I, I]),   // GetAt (PROPERTYKEY sans pointeur)
+        Some(&[I, Var]), // GetValue
+        Some(&[I, Var]), // SetValue
+        Some(&[]),       // Commit
+    ],
+};
+
+pub(super) static IAUDIOCLIENT: Iface = Iface {
+    name: "IAudioClient",
+    iid: g(mmd::IID_IAUDIOCLIENT),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, Q, Q, I, I]), // Initialize
+        Some(&[I]),                // GetBufferSize
+        Some(&[I]),                // GetStreamLatency
+        Some(&[I]),                // GetCurrentPadding
+        Some(&[I, I, OutPtr]),     // IsFormatSupported
+        Some(&[OutPtr]),           // GetMixFormat
+        Some(&[I, I]),             // GetDevicePeriod
+        Some(&[]),                 // Start
+        Some(&[]),                 // Stop
+        Some(&[]),                 // Reset
+        Some(&[I]),                // SetEventHandle
+        Some(&[Iid, OutQ]),        // GetService
+    ],
+};
+
+pub(super) static IAUDIOCLIENT2: Iface = Iface {
+    name: "IAudioClient2",
+    iid: g(mmd::IID_IAUDIOCLIENT2),
+    parent: Some(&IAUDIOCLIENT),
+    methods: &[
+        Some(&[I, I]),       // IsOffloadCapable
+        Some(&[I]),          // SetClientProperties
+        Some(&[I, I, I, I]), // GetBufferSizeLimits
+    ],
+};
+
+pub(super) static IAUDIOCLIENT3: Iface = Iface {
+    name: "IAudioClient3",
+    iid: g(mmd::IID_IAUDIOCLIENT3),
+    parent: Some(&IAUDIOCLIENT2),
+    methods: &[
+        Some(&[I, I, I, I, I]), // GetSharedModeEnginePeriod
+        Some(&[OutPtr, I]),     // GetCurrentSharedModeEnginePeriod
+        Some(&[I, I, I, I]),    // InitializeSharedAudioStream
+    ],
+};
+
+/// IAudioRenderClient : le tampon rendu est dans le tas, sous 4 Go.
+pub(super) static IAUDIORENDERCLIENT: Iface = Iface {
+    name: "IAudioRenderClient",
+    iid: g(mmd::IID_IAUDIORENDERCLIENT),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, OutPtr]), // GetBuffer
+        Some(&[I, I]),      // ReleaseBuffer
+    ],
+};
+
+pub(super) static IAUDIOCAPTURECLIENT: Iface = Iface {
+    name: "IAudioCaptureClient",
+    iid: g(mmd::IID_IAUDIOCAPTURECLIENT),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[OutPtr, I, I, I, I]), // GetBuffer
+        Some(&[I]),                  // ReleaseBuffer
+        Some(&[I]),                  // GetNextPacketSize
+    ],
+};
+
+pub(super) static IAUDIOCLOCK: Iface = Iface {
+    name: "IAudioClock",
+    iid: g(mmd::IID_IAUDIOCLOCK),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),    // GetFrequency
+        Some(&[I, I]), // GetPosition
+        Some(&[I]),    // GetCharacteristics
+    ],
+};
+
+pub(super) static ISIMPLEAUDIOVOLUME: Iface = Iface {
+    name: "ISimpleAudioVolume",
+    iid: g(mmd::IID_ISIMPLEAUDIOVOLUME),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I]), // SetMasterVolume (float, GUID*)
+        Some(&[I]),    // GetMasterVolume
+        Some(&[I, I]), // SetMute
+        Some(&[I]),    // GetMute
+    ],
+};
+
+pub(super) static IAUDIOSTREAMVOLUME: Iface = Iface {
+    name: "IAudioStreamVolume",
+    iid: g(mmd::IID_IAUDIOSTREAMVOLUME),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),    // GetChannelCount
+        Some(&[I, I]), // SetChannelVolume (UINT32, float)
+        Some(&[I, I]), // GetChannelVolume
+        Some(&[I, I]), // SetAllVolumes
+        Some(&[I, I]), // GetAllVolumes
+    ],
+};
+
+pub(super) static IAUDIOSESSIONCONTROL: Iface = Iface {
+    name: "IAudioSessionControl",
+    iid: g(mmd::IID_IAUDIOSESSIONCONTROL),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),             // GetState
+        Some(&[OutPtr]),        // GetDisplayName
+        Some(&[I, I]),          // SetDisplayName
+        Some(&[OutPtr]),        // GetIconPath
+        Some(&[I, I]),          // SetIconPath
+        Some(&[I]),             // GetGroupingParam
+        Some(&[I, I]),          // SetGroupingParam
+        Some(&[In(&IUNKNOWN)]), // RegisterAudioSessionNotification
+        Some(&[In(&IUNKNOWN)]), // UnregisterAudioSessionNotification
+    ],
+};
+
+pub(super) static IAUDIOSESSIONCONTROL2: Iface = Iface {
+    name: "IAudioSessionControl2",
+    iid: g(mmd::IID_IAUDIOSESSIONCONTROL2),
+    parent: Some(&IAUDIOSESSIONCONTROL),
+    methods: &[
+        Some(&[OutPtr]), // GetSessionIdentifier
+        Some(&[OutPtr]), // GetSessionInstanceIdentifier
+        Some(&[I]),      // GetProcessId
+        Some(&[]),       // IsSystemSoundsSession
+        Some(&[I]),      // SetDuckingPreference
+    ],
+};
+
+pub(super) static IAUDIOENDPOINTVOLUME: Iface = Iface {
+    name: "IAudioEndpointVolume",
+    iid: g(mmd::IID_IAUDIOENDPOINTVOLUME),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[In(&IUNKNOWN)]), // RegisterControlChangeNotify
+        Some(&[In(&IUNKNOWN)]), // UnregisterControlChangeNotify
+        Some(&[I]),             // GetChannelCount
+        Some(&[I, I]),          // SetMasterVolumeLevel
+        Some(&[I, I]),          // SetMasterVolumeLevelScalar
+        Some(&[I]),             // GetMasterVolumeLevel
+        Some(&[I]),             // GetMasterVolumeLevelScalar
+        Some(&[I, I, I]),       // SetChannelVolumeLevel
+        Some(&[I, I, I]),       // SetChannelVolumeLevelScalar
+        Some(&[I, I]),          // GetChannelVolumeLevel
+        Some(&[I, I]),          // GetChannelVolumeLevelScalar
+        Some(&[I, I]),          // SetMute
+        Some(&[I]),             // GetMute
+        Some(&[I, I]),          // GetVolumeStepInfo
+        Some(&[I]),             // VolumeStepUp
+        Some(&[I]),             // VolumeStepDown
+        Some(&[I]),             // QueryHardwareSupport
+        Some(&[I, I, I]),       // GetVolumeRange
+    ],
+};
+
 static ALL: &[&Iface] = &[
+    &IMMDEVICEENUMERATOR,
+    &IMMDEVICECOLLECTION,
+    &IMMDEVICE,
+    &IMMENDPOINT,
+    &IPROPERTYSTORE,
+    &IAUDIOCLIENT,
+    &IAUDIOCLIENT2,
+    &IAUDIOCLIENT3,
+    &IAUDIORENDERCLIENT,
+    &IAUDIOCAPTURECLIENT,
+    &IAUDIOCLOCK,
+    &ISIMPLEAUDIOVOLUME,
+    &IAUDIOSTREAMVOLUME,
+    &IAUDIOSESSIONCONTROL,
+    &IAUDIOSESSIONCONTROL2,
+    &IAUDIOENDPOINTVOLUME,
     &IUNKNOWN,
     &ICLASSFACTORY,
     &IMALLOC,
@@ -1069,6 +1311,10 @@ const VT_PTR: u16 = 26;
 const VT_LPSTR: u16 = 30;
 const VT_LPWSTR: u16 = 31;
 const VT_RECORD: u16 = 36;
+/// BLOB { ULONG cbSize; BYTE *pBlobData } : pointeur à 12 en x86, à 16 en
+/// x64 (format du moteur audio, PKEY_AudioEngine_DeviceFormat).
+const VT_BLOB: u16 = 65;
+const VT_BLOB_OBJECT: u16 = 70;
 const VT_ARRAY: u16 = 0x2000;
 const VT_BYREF: u16 = 0x4000;
 
@@ -1085,6 +1331,11 @@ unsafe fn variant64(src: u32, dst: *mut u8) {
     std::ptr::copy_nonoverlapping(src as usize as *const u8, dst, 16);
     std::ptr::write_bytes(dst.add(16), 0, 8);
     let vt = *(dst as *const u16);
+    if matches!(vt, VT_BLOB | VT_BLOB_OBJECT) {
+        (dst.add(12) as *mut u32).write_unaligned(0);
+        (dst.add(16) as *mut u64).write_unaligned(rd(src + 12) as u64);
+        return;
+    }
     if !variant_has_pointer(vt) {
         return;
     }
@@ -1104,6 +1355,11 @@ unsafe fn variant64(src: u32, dst: *mut u8) {
 unsafe fn variant32(src: *const u8, dst: u32) {
     let vt = *(src as *const u16);
     std::ptr::copy_nonoverlapping(src, dst as usize as *mut u8, 8);
+    if matches!(vt, VT_BLOB | VT_BLOB_OBJECT) {
+        wr(dst + 8, (src.add(8) as *const u32).read_unaligned());
+        wr(dst + 12, (src.add(16) as *const u32).read_unaligned());
+        return;
+    }
     if !variant_has_pointer(vt) {
         std::ptr::copy_nonoverlapping(src.add(8), (dst + 8) as usize as *mut u8, 8);
         return;
@@ -1601,6 +1857,72 @@ mod tests {
         assert!(!IMALLOC.derives(&ISTREAM));
         assert_eq!(slots(ISTREAM.method(5).unwrap()), 4);
         assert!(by_iid(&ole(0xC)).is_some_and(|f| std::ptr::eq(f, &ISTREAM)));
+    }
+
+    #[test]
+    fn wasapi_decrit() {
+        // IMMDeviceEnumerator (refusé avant, banc pygame32) et sa chaîne.
+        let e = by_iid(&guid(
+            0xA95664D2,
+            0x9614,
+            0x4F35,
+            [0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6],
+        ));
+        assert!(e.is_some_and(|f| std::ptr::eq(f, &IMMDEVICEENUMERATOR)));
+        assert_eq!(IMMDEVICEENUMERATOR.count(), 8);
+        assert_eq!(IAUDIOCLIENT.count(), 15);
+        assert_eq!(IAUDIOCLIENT3.count(), 21);
+        assert_eq!(IAUDIOSESSIONCONTROL2.count(), 17);
+        assert_eq!(IAUDIOENDPOINTVOLUME.count(), 21);
+        // Initialize : deux REFERENCE_TIME de 8 octets sur la pile x86.
+        assert_eq!(slots(IAUDIOCLIENT.method(3).unwrap()), 8);
+        for f in ALL {
+            for i in 0..f.count() {
+                assert!(
+                    f.method(i).is_some() || !f.name.starts_with("IAudio"),
+                    "{}",
+                    f.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn propvariant_blob() {
+        // x86 : cbSize à 8, pointeur à 12 ; x64 : cbSize à 8, pointeur à 16.
+        // Mémoire sous 4 Go, comme celle d'un programme x86.
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let a = low as usize as u32;
+        let x86 = unsafe { std::slice::from_raw_parts(low as *const u8, 16) };
+        let mut x64 = [0u8; 24];
+        x64[0] = VT_BLOB as u8;
+        x64[8..12].copy_from_slice(&40u32.to_le_bytes());
+        x64[16..24].copy_from_slice(&0x1234_5678u64.to_le_bytes());
+        unsafe { variant32(x64.as_ptr(), a) };
+        assert_eq!(u16::from_le_bytes([x86[0], x86[1]]), VT_BLOB);
+        assert_eq!(u32::from_le_bytes(x86[8..12].try_into().unwrap()), 40);
+        assert_eq!(
+            u32::from_le_bytes(x86[12..16].try_into().unwrap()),
+            0x1234_5678
+        );
+        let mut back = [0xffu8; 24];
+        unsafe { variant64(a, back.as_mut_ptr()) };
+        assert_eq!(u32::from_le_bytes(back[8..12].try_into().unwrap()), 40);
+        assert_eq!(
+            u64::from_le_bytes(back[16..24].try_into().unwrap()),
+            0x1234_5678
+        );
+        unsafe { libc::munmap(low, 4096) };
     }
 
     #[test]

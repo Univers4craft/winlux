@@ -8,6 +8,10 @@ const MSITYPE_VALID: u32 = 0x0100;
 const MSITYPE_STRING: u32 = 0x0800;
 const MSITYPE_NULLABLE: u32 = 0x1000;
 const MSITYPE_TEMPORARY: u32 = 0x4000;
+/// Colonne de clé primaire dans `_Columns` : bit observé sur nos propres
+/// paquets (msitools, `testdata/sample.msi`), où seules les colonnes
+/// déclarées clés le portent (#1607).
+const MSITYPE_KEY: u32 = 0x2000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -45,6 +49,8 @@ pub struct Table {
     /// Colonnes de flux binaire (`v0`) : la valeur vaut 1 si le flux
     /// `Table.clé` existe.
     pub binary: Vec<bool>,
+    /// Colonnes de la clé primaire (`MsiDatabaseGetPrimaryKeys`).
+    pub keys: Vec<bool>,
 }
 
 impl Table {
@@ -77,6 +83,9 @@ impl Row<'_> {
     }
 }
 
+/// Taille au-delà de laquelle `open_tables` laisse un flux sur le disque.
+const STREAM_MAX: usize = 32 << 20;
+
 #[derive(Default)]
 pub struct Database {
     pub tables: HashMap<String, Table>,
@@ -87,7 +96,7 @@ pub struct Database {
     pub word_count: i32,
 }
 
-fn decode(bytes: &[u8], codepage: u32) -> String {
+pub(super) fn decode(bytes: &[u8], codepage: u32) -> String {
     if codepage == 65001 {
         return String::from_utf8_lossy(bytes).into_owned();
     }
@@ -260,7 +269,21 @@ fn summary(stream: &[u8]) -> (String, i32) {
 
 impl Database {
     pub fn parse(data: &[u8]) -> Result<Database, String> {
-        let compound = Compound::parse(data)?;
+        Self::from_compound(Compound::parse(data)?)
+    }
+
+    /// Base lue depuis le fichier sans le charger : tables, résumé et flux
+    /// de moins de 32 Mo (Binary). Les cabinets intégrés, parfois de
+    /// plusieurs centaines de Mo, restent sur le disque : le processus x86
+    /// d'une action personnalisée n'a pas la mémoire basse pour eux
+    /// (iCUE 4.18, paquet de 834 Mo, #1642).
+    pub fn open_tables(path: &std::path::Path) -> Result<Database, String> {
+        Self::from_compound(Compound::open(path, &|name, size| {
+            name.starts_with('!') || name.starts_with('\u{5}') || size <= STREAM_MAX
+        })?)
+    }
+
+    fn from_compound(compound: Compound) -> Result<Database, String> {
         let (strings, refsize) = strings(&compound)?;
         let col_defs = [
             Column {
@@ -315,6 +338,7 @@ impl Database {
                         .iter()
                         .map(|c| c.kind & !MSITYPE_NULLABLE == MSITYPE_STRING | MSITYPE_VALID)
                         .collect(),
+                    keys: cols.iter().map(|c| c.kind & MSITYPE_KEY != 0).collect(),
                     columns: cols.into_iter().map(|c| c.name).collect(),
                     rows,
                 },

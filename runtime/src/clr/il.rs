@@ -27,7 +27,7 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
-use super::tables::Token;
+use super::tables::{TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
 
@@ -213,6 +213,9 @@ impl Slots {
 }
 
 struct CallFrame {
+    /// Méthode exécutée (ligne MethodDef de l'assembly en cours), pour
+    /// nommer l'endroit d'une erreur.
+    method: u32,
     ip: usize,
     code: Rc<Vec<u8>>,
     locals: Slots,
@@ -508,6 +511,7 @@ impl Interpreter {
         };
 
         self.frames.push(CallFrame {
+            method: method_row,
             ip: 0,
             code: Rc::new(body.code),
             locals: Slots::new(&local_kinds),
@@ -520,6 +524,28 @@ impl Interpreter {
             constrained: None,
         });
         self.run_loop()
+    }
+
+    /// « Espace.Type::Méthode IL_xxxx » de la méthode en cours.
+    fn location(&self, offset: usize) -> String {
+        let Some(frame) = self.frames.last() else {
+            return format!("IL_{offset:04x}");
+        };
+        let owner = self.domain[self.current]
+            .method_owner
+            .get(frame.method as usize)
+            .copied()
+            .unwrap_or(0);
+        let a = &self.assembly;
+        let name = a.get_string(a.get_method_def(frame.method).name);
+        if owner == 0 {
+            return format!("{name} IL_{offset:04x}");
+        }
+        let td = a.get_type_def(owner);
+        let ns = a.get_string(td.namespace);
+        let class = a.get_string(td.name);
+        let dot = if ns.is_empty() { "" } else { "." };
+        format!("{ns}{dot}{class}::{name} IL_{offset:04x}")
     }
 
     /// Appelle `callee`. Avec `virtual_call`, la redéfinition du type réel de
@@ -942,9 +968,12 @@ impl Interpreter {
             return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
         };
         self.ensure_initialized(field.owner)?;
-        let ptr = types::with_types(|reg| {
-            reg.static_field_ptr(field.owner, field.info.offset, field.info.kind.slot_size())
-        });
+        // La taille d'une structure se lit dans le registre : la calculer
+        // avant de le verrouiller, sinon le verrou est repris et le fil se
+        // bloque (champ statique de type structure, #1687).
+        let size = field.info.kind.slot_size();
+        let ptr =
+            types::with_types(|reg| reg.static_field_ptr(field.owner, field.info.offset, size));
         Ok((ptr, field.info.kind))
     }
 
@@ -1012,6 +1041,31 @@ impl Interpreter {
         let br_l = || (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize;
 
         use OpCode as O;
+        // Un appel ne peut viser qu'une méthode : un autre jeton trahit un
+        // IL mal décodé ou corrompu (#1664). L'erreur nomme l'endroit.
+        if matches!(
+            op,
+            O::Call | O::Callvirt | O::Newobj | O::Jmp | O::Ldftn | O::Ldvirtftn
+        ) {
+            let token = if matches!(op, O::Ldftn | O::Ldvirtftn) {
+                tok2()
+            } else {
+                tok1()
+            };
+            let table = Token(token).table();
+            if table != TableId::MethodDef as u8
+                && table != TableId::MemberRef as u8
+                && table != TableId::MethodSpec as u8
+            {
+                return Err(exception(
+                    "InvalidProgramException",
+                    &format!(
+                        "{op:?} vers le jeton {token:#010x}, qui n'est pas une méthode, dans {}",
+                        self.location(offset)
+                    ),
+                ));
+            }
+        }
         let r = match op {
             O::Nop | O::Break => StepResult::Continue,
 
@@ -1448,7 +1502,20 @@ impl Interpreter {
                 StepResult::Continue
             }
             O::Ret => StepResult::Return(pop!()),
-            O::Jmp | O::Calli => {
+            O::Jmp => {
+                // Saut en queue (ECMA-335 III.3.37) : la méthode en cours
+                // s'arrête et la cible, de même signature, reçoit ses
+                // arguments tels qu'ils sont ; son résultat devient le nôtre.
+                let token = tok1();
+                frame!().ip = next_ip;
+                let callee = self.resolve_callee(token);
+                let returns = !matches!(self.get_method_sig(token).ret_type, ElementType::Void);
+                let f = frame!();
+                let args: Vec<Value> = (0..f.args.layout.len()).map(|i| f.args.get(i)).collect();
+                let v = self.invoke(token, callee, args, false)?;
+                StepResult::Return(if returns { v } else { Value::Null })
+            }
+            O::Calli => {
                 return Err(exception(
                     "InvalidProgramException",
                     &format!("{op:?} n'est pas encore pris en charge"),
@@ -1881,7 +1948,7 @@ impl Interpreter {
                 frame!().constrained = ct;
                 StepResult::Continue
             }
-            O::Volatile | O::Unaligned | O::Tail | O::Readonly => StepResult::Continue,
+            O::Volatile | O::Unaligned | O::Tail | O::Readonly | O::No => StepResult::Continue,
 
             _ => {
                 crate::log_warn!("clr-il", "opcode non implémenté : {:?} à IP={}", op, offset);

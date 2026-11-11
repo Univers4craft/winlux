@@ -258,6 +258,21 @@ fn write_to_journal(level: Level, target: &str, message: &str) {
     }
 }
 
+/// Copie dans WINLUX_LOG_FILE (et le journal) d'une ligne déjà écrite sur
+/// la sortie d'erreur. Les enfants GPU de Chromium sont lancés sans sortie
+/// d'erreur : sans cette copie, la cause de leur arrêt est perdue (#1565).
+pub fn copy_to_file(level: Level, target: &str, message: &str) {
+    if config().journal {
+        write_to_journal(level, target, message);
+    }
+    if let Some(file_mutex) = log_file() {
+        if let Ok(mut f) = file_mutex.lock() {
+            let ts = timestamp();
+            let _ = writeln!(f, "{}", file_line(&ts, level, target, message));
+        }
+    }
+}
+
 pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
     if !enabled(level) {
         return;

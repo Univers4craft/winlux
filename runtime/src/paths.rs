@@ -645,7 +645,7 @@ fn wow64_redirect(comps: &mut [String]) {
         for x in c {
             p.push(linux_name(x));
         }
-        p.symlink_metadata().is_ok() || fix_case(&p).is_some()
+        p.symlink_metadata().is_ok() || fix_case(&p).is_some_and(|q| q.symlink_metadata().is_ok())
     };
     if exists(&wow) || !exists(comps) {
         comps[1] = "SysWOW64".into();
@@ -745,9 +745,17 @@ fn fix_case(p: &Path) -> Option<PathBuf> {
         found.sort();
         match found.into_iter().next() {
             Some(n) => cur.push(n),
-            // Dernier composant absent (création de fichier) : on garde le nom tel quel.
-            None if i == comps.len() - 1 => cur = exact,
-            None => return None,
+            // Composant absent (création de fichier ou de dossier) : la
+            // partie déjà retrouvée garde sa casse sur le disque, le reste
+            // est gardé tel quel. Sans cela, C:\Windows\Installer\x visait
+            // ~/Windows alors que l'arbre existant est ~/windows (#1663).
+            None => {
+                cur = exact;
+                for rest in &comps[i + 1..] {
+                    cur.push(rest.as_os_str());
+                }
+                break;
+            }
         }
     }
     Some(if p.is_absolute() {

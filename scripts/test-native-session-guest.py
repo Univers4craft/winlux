@@ -367,11 +367,22 @@ run("xscreensaver-command", "-deactivate")
 run("xdotool", "mousemove_relative", "2", "2")
 print("WINLUX_NATIVE_PIPES_ANIMATED=0", flush=True)
 
-for window in [explorer, settings, editor, terminal, browser]:
+for name, window in [("explorer", explorer), ("settings", settings), ("editor", editor),
+                     ("terminal", terminal), ("browser", browser)]:
     run("wmctrl", "-ic", window)
     # Query the stable root property rather than reading the title/geometry of
     # clients that can disappear halfway through wmctrl's enumeration.
-    wait_for(lambda: int(window, 16) not in client_ids(), "close")
+    try:
+        wait_for(lambda: int(window, 16) not in client_ids(), "close")
+    except AssertionError:
+        # Fenêtre restée ouverte (#1541) : laquelle, ce qui est à l'écran,
+        # et les processus du trousseau ou du verrouillage s'il y en a.
+        print(f"close: {name} {window} toujours ouverte ; fenêtres : {windows()}", flush=True)
+        subprocess.run(["ps", "-eo", "pid,stat,etime,args"], check=False, timeout=10)
+        for extra in (Path("/run/winlux/keyring.log"), Path("/run/winlux/startup-apps.log")):
+            if extra.is_file(): print(f"--- {extra.name}\n{extra.read_text(errors='replace')[-2000:]}", flush=True)
+        capture("native-close-failed")
+        raise AssertionError(f"close: {name}")
 run("wmctrl", "-m")
 print("WINLUX_NATIVE_CLOSE=0", flush=True)
 

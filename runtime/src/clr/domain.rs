@@ -23,7 +23,20 @@ fn bcl_dir() -> Option<PathBuf> {
     let dir = std::env::var_os("WINLUX_BCL_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/opt/winlux/bcl"));
-    dir.is_dir().then_some(dir)
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    // Sans elle, seuls les appels servis par bcl.rs marchent : le dire une
+    // fois, sinon un banc sans BCL donne des conclusions fausses (#1703).
+    static ABSENTE: std::sync::Once = std::sync::Once::new();
+    ABSENTE.call_once(|| {
+        crate::log_warn!(
+            "clr",
+            "BCL Winlux absente ({}) : seule la bibliothèque intégrée répond",
+            dir.display()
+        )
+    });
+    None
 }
 
 use super::metadata::Assembly;

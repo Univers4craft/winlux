@@ -89,6 +89,47 @@ def _t(text, **values):
 ADMIN_GROUPS = ("sudo", "wheel", "admin")
 
 
+# ── Verrou des fenêtres de consentement (#1696) ─────────────────────────────
+# Partagé avec la saisie simulée du runtime (runtime/src/dlls/saisie.rs) :
+# la fenêtre le prend en exclusif avant de s'afficher et le garde jusqu'à sa
+# fermeture. Un envoi SendInput en cours se termine d'abord ; aucun autre ne
+# commence tant que la fenêtre est là. Seule la personne peut y répondre.
+
+def consent_lock_path():
+    if os.environ.get("WINLUX_CONSENT_LOCK"):
+        return os.environ["WINLUX_CONSENT_LOCK"]
+    display = os.environ.get("DISPLAY", "").rpartition(":")[2].split(".")[0]
+    number = "".join(c for c in display if c.isdigit()) or "0"
+    return f"/tmp/winlux-consent-{number}.lock"
+
+
+def hold_consent_lock(timeout=2.0):
+    """Descripteur tenu en exclusif (à garder ouvert), ou None."""
+    import fcntl
+    import time
+    import stat
+    # Jamais à travers un lien symbolique posé dans /tmp par un autre compte ;
+    # la saisie simulée refuse elle-même tout envoi sans ce verrou.
+    try:
+        fd = os.open(consent_lock_path(), os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return None
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid not in (os.getuid(), 0):
+        os.close(fd)
+        return None
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= end:
+                os.close(fd)
+                return None
+            time.sleep(0.02)
+
+
 def admin_accounts():
     """Comptes administrateurs, le compte personnel avant root."""
     names = []
@@ -275,10 +316,13 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     window.connect("destroy", lambda _w: Gtk.main_quit())
     window.connect("key-press-event",
                    lambda _w, ev: Gtk.main_quit() if ev.keyval == Gdk.KEY_Escape else False)
+    result["lock"] = hold_consent_lock()
     window.show_all()
     window.set_default(yes)
     (entry if ask_password else no).grab_focus()
     Gtk.main()
+    if result.get("lock") is not None:
+        os.close(result["lock"])
     if result.get("osk"):
         # Le clavier ouvert pour ce mot de passe se referme avec la fenêtre.
         osk_run(result["osk"], "hide")

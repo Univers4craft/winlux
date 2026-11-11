@@ -36,6 +36,10 @@ pub enum Capability {
     /// (`--no-sandbox`), que Winlux ne sait pas encore fournir (#767).
     /// Jamais accordé sans un « Autoriser » explicite de l'utilisateur.
     Sandbox,
+    /// Taper au clavier et piloter la souris à la place de la personne
+    /// (SendInput, keybd_event, mouse_event ; macros des logiciels de
+    /// périphériques, #1655). Jamais accordé sans un « Autoriser » explicite.
+    Input,
 }
 
 impl Capability {
@@ -47,6 +51,7 @@ impl Capability {
             Capability::Screen => "screen",
             Capability::Network => "network",
             Capability::Sandbox => "sandbox",
+            Capability::Input => "input",
         }
     }
 
@@ -339,7 +344,7 @@ pub fn ask_files_before_start(exe_windows: &str) {
     let Some(app) = APP.get() else {
         return;
     };
-    if launched_by_program || app.trusted || !is_installed_program(exe_windows) {
+    if launched_by_program || app.trusted || is_service() || !is_installed_program(exe_windows) {
         return;
     }
     let text = store_path()
@@ -350,8 +355,28 @@ pub fn ask_files_before_start(exe_windows: &str) {
     }
 }
 
+/// Processus lancé par le gestionnaire de services (`WINLUX_SERVICE_NAME`,
+/// retiré de l'environnement de ses enfants) : aucune fenêtre ne lui
+/// appartient, personne n'attend devant lui.
+fn is_service() -> bool {
+    std::env::var_os("WINLUX_SERVICE_NAME").is_some_and(|n| !n.is_empty())
+}
+
 /// Ouvre la fenêtre de demande. `None` : impossible de demander.
 fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
+    // Un service sans fenêtre ne pose pas de question au démarrage de la
+    // session (#1620) : refus, mémorisé pour qu'il apparaisse dans
+    // Paramètres > Confidentialité et sécurité, où l'utilisateur peut
+    // l'autoriser.
+    if is_service() {
+        crate::log_info!(
+            "permissions",
+            "service {} : accès « {} » refusé sans fenêtre, à autoriser dans Paramètres si besoin",
+            app.name,
+            cap.key()
+        );
+        return Some(Some(Decision::Deny));
+    }
     let helper = std::env::var_os("WINLUX_PERMISSION_HELPER")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/bin/winlux-permission"));
@@ -387,8 +412,9 @@ pub fn allowed(cap: Capability) -> bool {
     if globally_denied(cap) {
         return false;
     }
-    // Le bac à sable ne se retire que sur un choix explicite.
-    let implied = cap != Capability::Sandbox;
+    // Le bac à sable ne se retire, et la saisie à la place de la personne
+    // ne s'accorde, que sur un choix explicite.
+    let implied = !matches!(cap, Capability::Sandbox | Capability::Input);
     let Some(app) = APP.get() else {
         return implied;
     };
@@ -425,6 +451,7 @@ pub fn allowed(cap: Capability) -> bool {
                     | Capability::Microphone
                     | Capability::Screen
                     | Capability::Sandbox
+                    | Capability::Input
             ),
         },
     };
@@ -476,7 +503,7 @@ pub fn denied_notice(app: &str, lang: &str) -> String {
     t.replace("{app}", app)
 }
 
-fn interface_lang() -> String {
+pub(crate) fn interface_lang() -> String {
     if let Ok(l) = std::env::var("WINLUX_LANG") {
         if !l.is_empty() {
             return l;
@@ -602,6 +629,47 @@ mod tests {
             assert!(allowed(Capability::Files));
         }
         assert_eq!(Capability::Sandbox.key(), "sandbox");
+    }
+
+    /// Taper à la place de la personne n'est jamais implicite (#1655).
+    #[test]
+    fn saisie_jamais_accordee_sans_reponse() {
+        if APP.get().is_none() {
+            assert!(!allowed(Capability::Input));
+        }
+        assert_eq!(Capability::Input.key(), "input");
+    }
+
+    /// Un service sans fenêtre n'ouvre jamais la demande : refus (#1620).
+    #[test]
+    fn un_service_ne_demande_pas() {
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let app = App {
+            exe: PathBuf::from("/c/Program Files/Editeur/Service.exe"),
+            name: "Service.exe".into(),
+            dir: PathBuf::from("/c/Program Files/Editeur"),
+            personal: Vec::new(),
+            granted: Vec::new(),
+            trusted: false,
+        };
+        let saved = std::env::var_os("WINLUX_SERVICE_NAME");
+        std::env::set_var("WINLUX_SERVICE_NAME", "EditeurService");
+        assert!(is_service());
+        for cap in [
+            Capability::Files,
+            Capability::Camera,
+            Capability::Microphone,
+        ] {
+            assert_eq!(ask(&app, cap), Some(Some(Decision::Deny)));
+        }
+        std::env::set_var("WINLUX_SERVICE_NAME", "");
+        assert!(!is_service());
+        match saved {
+            Some(v) => std::env::set_var("WINLUX_SERVICE_NAME", v),
+            None => std::env::remove_var("WINLUX_SERVICE_NAME"),
+        }
     }
 
     #[test]

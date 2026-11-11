@@ -1767,7 +1767,459 @@ unsafe extern "win64" fn decoder_info(this: *mut DecoderObj, out: *mut *mut c_vo
     codec_info_for_container(&container, out)
 }
 
-/// IWICImagingFactory::CreateComponentInfo, pour les décodeurs intégrés.
+// --- Informations de format de pixel (IWICPixelFormatInfo2) ---------------------
+//
+// Paint.NET lit les caractéristiques d'un format (bits par pixel, canaux,
+// transparence) par CreateComponentInfo(GUID du format) (#1503). Ordre des
+// méthodes, IID, GUID et valeurs d'énumération : wincodec.h des en-têtes
+// mingw-w64.
+
+const IID_PIXEL_FORMAT_INFO: Guid = guid(
+    0xe8eda601,
+    0x3d48,
+    0x431a,
+    [0xab, 0x44, 0x69, 0x05, 0x9b, 0xe8, 0x8b, 0xbe],
+);
+const IID_PIXEL_FORMAT_INFO2: Guid = guid(
+    0xa9db33a2,
+    0xaf5f,
+    0x43c7,
+    [0xb6, 0x79, 0x74, 0xf5, 0x98, 0x4b, 0x5a, 0xa4],
+);
+/// WICComponentType::WICPixelFormat.
+const WIC_PIXEL_FORMAT: u32 = 0x20;
+/// WICPixelFormatNumericRepresentation.
+const NUM_INDEXED: u32 = 1;
+const NUM_UNSIGNED: u32 = 2;
+const NUM_FIXED: u32 = 4;
+const NUM_FLOAT: u32 = 5;
+
+/// Description d'un format : GUID, nom, bits par pixel, nombre de canaux,
+/// bits par canal (0 : champs irréguliers, voir `irregular_fields`),
+/// représentation numérique et présence d'un canal alpha.
+struct PixelFormatDesc {
+    guid: Guid,
+    name: &'static str,
+    bpp: u32,
+    channels: u32,
+    bpc: u32,
+    numeric: u32,
+    alpha: bool,
+}
+
+const fn pf(
+    guid: Guid,
+    name: &'static str,
+    bpp: u32,
+    channels: u32,
+    bpc: u32,
+    numeric: u32,
+    alpha: bool,
+) -> PixelFormatDesc {
+    PixelFormatDesc {
+        guid,
+        name,
+        bpp,
+        channels,
+        bpc,
+        numeric,
+        alpha,
+    }
+}
+
+pub const FMT_ALPHA8: Guid = guid(
+    0xe6cd0116,
+    0xeeba,
+    0x4161,
+    [0xaa, 0x85, 0x27, 0xdd, 0x9f, 0xb3, 0xa8, 0x95],
+);
+const FMT_BGRA5551: Guid = guid(
+    0x05ec7c2b,
+    0xf1e6,
+    0x4961,
+    [0xad, 0x46, 0xe1, 0xcc, 0x81, 0x0a, 0x87, 0xd2],
+);
+
+static PIXEL_FORMATS: &[PixelFormatDesc] = {
+    use wic_pixels::*;
+    &[
+        pf(
+            pixel_format(0x01),
+            "1bpp Indexed",
+            1,
+            1,
+            1,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x02),
+            "2bpp Indexed",
+            2,
+            1,
+            2,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x03),
+            "4bpp Indexed",
+            4,
+            1,
+            4,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x04),
+            "8bpp Indexed",
+            8,
+            1,
+            8,
+            NUM_INDEXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x05),
+            "Black White",
+            1,
+            1,
+            1,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x06),
+            "2bpp Gray",
+            2,
+            1,
+            2,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x07),
+            "4bpp Gray",
+            4,
+            1,
+            4,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_GRAY8, "8bpp Gray", 8, 1, 8, NUM_UNSIGNED, false),
+        pf(FMT_ALPHA8, "8bpp Alpha", 8, 1, 8, NUM_UNSIGNED, true),
+        pf(
+            pixel_format(0x09),
+            "16bpp BGR555",
+            16,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            pixel_format(0x0a),
+            "16bpp BGR565",
+            16,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_BGRA5551, "16bpp BGRA5551", 16, 4, 0, NUM_UNSIGNED, true),
+        pf(FMT_GRAY16, "16bpp Gray", 16, 1, 16, NUM_UNSIGNED, false),
+        pf(
+            FMT_GRAY_HALF16,
+            "16bpp Gray Half",
+            16,
+            1,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            pixel_format(0x13),
+            "16bpp Gray FixedPoint",
+            16,
+            1,
+            16,
+            NUM_FIXED,
+            false,
+        ),
+        pf(FMT_BGR24, "24bpp BGR", 24, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_RGB24, "24bpp RGB", 24, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_BGR32, "32bpp BGR", 32, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_RGB32, "32bpp RGB", 32, 3, 8, NUM_UNSIGNED, false),
+        pf(FMT_BGRA32, "32bpp BGRA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_PBGRA32, "32bpp PBGRA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_RGBA32, "32bpp RGBA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(FMT_PRGBA32, "32bpp PRGBA", 32, 4, 8, NUM_UNSIGNED, true),
+        pf(
+            pixel_format(0x14),
+            "32bpp BGR101010",
+            32,
+            3,
+            0,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            FMT_GRAY_FLOAT32,
+            "32bpp Gray Float",
+            32,
+            1,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            pixel_format(0x3f),
+            "32bpp Gray FixedPoint",
+            32,
+            1,
+            32,
+            NUM_FIXED,
+            false,
+        ),
+        pf(
+            pixel_format(0x1c),
+            "32bpp CMYK",
+            32,
+            4,
+            8,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(FMT_RGB48, "48bpp RGB", 48, 3, 16, NUM_UNSIGNED, false),
+        pf(FMT_BGR48, "48bpp BGR", 48, 3, 16, NUM_UNSIGNED, false),
+        pf(
+            FMT_RGB_HALF48,
+            "48bpp RGB Half",
+            48,
+            3,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(FMT_RGB64, "64bpp RGB", 64, 3, 16, NUM_UNSIGNED, false),
+        pf(FMT_RGBA64, "64bpp RGBA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_BGRA64, "64bpp BGRA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_PRGBA64, "64bpp PRGBA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(FMT_PBGRA64, "64bpp PBGRA", 64, 4, 16, NUM_UNSIGNED, true),
+        pf(
+            FMT_RGB_HALF64,
+            "64bpp RGB Half",
+            64,
+            3,
+            16,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGBA_HALF64,
+            "64bpp RGBA Half",
+            64,
+            4,
+            16,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            FMT_PRGBA_HALF64,
+            "64bpp PRGBA Half",
+            64,
+            4,
+            16,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            pixel_format(0x1f),
+            "64bpp CMYK",
+            64,
+            4,
+            16,
+            NUM_UNSIGNED,
+            false,
+        ),
+        pf(
+            FMT_RGB_FLOAT96,
+            "96bpp RGB Float",
+            96,
+            3,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGB_FLOAT128,
+            "128bpp RGB Float",
+            128,
+            3,
+            32,
+            NUM_FLOAT,
+            false,
+        ),
+        pf(
+            FMT_RGBA_FLOAT128,
+            "128bpp RGBA Float",
+            128,
+            4,
+            32,
+            NUM_FLOAT,
+            true,
+        ),
+        pf(
+            FMT_PRGBA_FLOAT128,
+            "128bpp PRGBA Float",
+            128,
+            4,
+            32,
+            NUM_FLOAT,
+            true,
+        ),
+    ]
+};
+
+/// Champs (premier bit, largeur) des formats aux canaux de tailles inégales,
+/// dans l'ordre des canaux du nom (bits de poids faible d'abord).
+fn irregular_fields(fmt: &Guid) -> &'static [(u32, u32)] {
+    if *fmt == pixel_format(0x09) {
+        &[(0, 5), (5, 5), (10, 5)]
+    } else if *fmt == pixel_format(0x0a) {
+        &[(0, 5), (5, 6), (11, 5)]
+    } else if *fmt == FMT_BGRA5551 {
+        &[(0, 5), (5, 5), (10, 5), (15, 1)]
+    } else if *fmt == pixel_format(0x14) {
+        &[(0, 10), (10, 10), (20, 10)]
+    } else {
+        &[]
+    }
+}
+
+/// Masque d'un canal : `bpp / 8` octets (arrondi au-dessus), petit-boutiste.
+fn channel_mask(d: &PixelFormatDesc, index: u32) -> Option<Vec<u8>> {
+    if index >= d.channels {
+        return None;
+    }
+    let (start, width) = if d.bpc == 0 {
+        *irregular_fields(&d.guid).get(index as usize)?
+    } else {
+        (index * d.bpc, d.bpc)
+    };
+    let mut mask = vec![0u8; d.bpp.div_ceil(8) as usize];
+    for bit in start..start + width {
+        mask[(bit / 8) as usize] |= 1 << (bit % 8);
+    }
+    Some(mask)
+}
+
+type PixelInfoObj = Com<usize>;
+
+unsafe fn pixel_desc(this: *mut PixelInfoObj) -> &'static PixelFormatDesc {
+    &PIXEL_FORMATS[*Com::get(this)]
+}
+
+unsafe extern "win64" fn pfi_qi(
+    this: *mut PixelInfoObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_COMPONENT_INFO,
+            IID_PIXEL_FORMAT_INFO,
+            IID_PIXEL_FORMAT_INFO2,
+        ],
+    )
+}
+unsafe extern "win64" fn pfi_component_type(_this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, WIC_PIXEL_FORMAT)
+}
+/// GetCLSID et GetFormatGUID rendent le GUID du format.
+unsafe extern "win64" fn pfi_guid(this: *mut PixelInfoObj, out: *mut Guid) -> i32 {
+    put_value(out, pixel_desc(this).guid)
+}
+unsafe extern "win64" fn pfi_friendly_name(
+    this: *mut PixelInfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string(pixel_desc(this).name, cch, buf, actual)
+}
+/// Contexte de couleur du format : sRGB.
+unsafe extern "win64" fn pfi_color_context(_this: *mut PixelInfoObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    put(
+        out,
+        Com::create(COLOR_CONTEXT_VT.ptr(), Mutex::new(ColorContext::Exif(1))),
+    )
+}
+unsafe extern "win64" fn pfi_bits_per_pixel(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).bpp)
+}
+unsafe extern "win64" fn pfi_channel_count(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).channels)
+}
+unsafe extern "win64" fn pfi_channel_mask(
+    this: *mut PixelInfoObj,
+    index: u32,
+    cb: u32,
+    buf: *mut u8,
+    actual: *mut u32,
+) -> i32 {
+    let Some(mask) = channel_mask(pixel_desc(this), index) else {
+        return E_INVALIDARG;
+    };
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    *actual = mask.len() as u32;
+    if buf.is_null() {
+        return S_OK;
+    }
+    if (cb as usize) < mask.len() {
+        return E_INVALIDARG;
+    }
+    std::ptr::copy_nonoverlapping(mask.as_ptr(), buf, mask.len());
+    S_OK
+}
+unsafe extern "win64" fn pfi_transparency(this: *mut PixelInfoObj, out: *mut i32) -> i32 {
+    put_value(out, pixel_desc(this).alpha as i32)
+}
+unsafe extern "win64" fn pfi_numeric(this: *mut PixelInfoObj, out: *mut u32) -> i32 {
+    put_value(out, pixel_desc(this).numeric)
+}
+
+static PIXEL_FORMAT_INFO_VT: VTable<18> = VTable([
+    pfi_qi as *const (),
+    add_ref::<usize> as *const (),
+    release::<usize> as *const (),
+    pfi_component_type as *const (),
+    pfi_guid as *const (), // GetCLSID
+    info_signing as *const (),
+    info_author as *const (),
+    info_vendor as *const (),
+    info_version as *const (),
+    info_version as *const (), // GetSpecVersion
+    pfi_friendly_name as *const (),
+    pfi_guid as *const (), // GetFormatGUID
+    pfi_color_context as *const (),
+    pfi_bits_per_pixel as *const (),
+    pfi_channel_count as *const (),
+    pfi_channel_mask as *const (),
+    pfi_transparency as *const (),
+    pfi_numeric as *const (),
+]);
+
+/// IWICImagingFactory::CreateComponentInfo : décodeurs intégrés et formats
+/// de pixel (#1503).
 unsafe extern "win64" fn create_component_info(
     _this: *mut c_void,
     clsid: *const Guid,
@@ -1782,7 +2234,10 @@ unsafe extern "win64" fn create_component_info(
     }
     match CODECS.iter().position(|c| c.clsid == *clsid) {
         Some(i) => new_codec_info(i, out),
-        None => WINCODEC_ERR_COMPONENTNOTFOUND,
+        None => match PIXEL_FORMATS.iter().position(|p| p.guid == *clsid) {
+            Some(i) => put(out, Com::create(PIXEL_FORMAT_INFO_VT.ptr(), i)),
+            None => WINCODEC_ERR_COMPONENTNOTFOUND,
+        },
     }
 }
 
@@ -3507,5 +3962,87 @@ mod tests {
         assert!(creator(&CLSID_WIC_IMAGING_FACTORY).is_some());
         assert!(creator(&CLSID_WIC_IMAGING_FACTORY1).is_some());
         assert!(creator(&IID_IMAGING_FACTORY).is_none());
+    }
+
+    /// #1503 : Paint.NET lit bits par pixel, canaux et transparence d'un
+    /// format par CreateComponentInfo(GUID du format).
+    #[test]
+    fn informations_de_format_de_pixel() {
+        unsafe {
+            let mut f = std::ptr::null_mut();
+            assert_eq!(create_factory(&IID_IMAGING_FACTORY, &mut f), S_OK);
+            type ById = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            type GetU32 = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+            type GetGuid = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+            type Mask = unsafe extern "win64" fn(*mut c_void, u32, u32, *mut u8, *mut u32) -> i32;
+            let mut info = std::ptr::null_mut();
+            assert_eq!(method::<ById>(f, 6)(f, &FMT_PBGRA32, &mut info), S_OK);
+            let mut info2 = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(info, 0)(info, &IID_PIXEL_FORMAT_INFO2, &mut info2),
+                S_OK
+            );
+            release_obj(info);
+            let mut v = 0u32;
+            assert_eq!(method::<GetU32>(info2, 3)(info2, &mut v), S_OK);
+            assert_eq!(v, WIC_PIXEL_FORMAT);
+            let mut g = Guid::default();
+            assert_eq!(method::<GetGuid>(info2, 11)(info2, &mut g), S_OK);
+            assert_eq!(g, FMT_PBGRA32);
+            assert_eq!(method::<GetU32>(info2, 13)(info2, &mut v), S_OK);
+            assert_eq!(v, 32);
+            assert_eq!(method::<GetU32>(info2, 14)(info2, &mut v), S_OK);
+            assert_eq!(v, 4);
+            let mut len = 0u32;
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 3, 0, std::ptr::null_mut(), &mut len),
+                S_OK
+            );
+            assert_eq!(len, 4);
+            let mut mask = [0u8; 4];
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 3, 4, mask.as_mut_ptr(), &mut len),
+                S_OK
+            );
+            assert_eq!(mask, [0, 0, 0, 0xff]);
+            assert_eq!(
+                method::<Mask>(info2, 15)(info2, 4, 4, mask.as_mut_ptr(), &mut len),
+                E_INVALIDARG
+            );
+            assert_eq!(method::<GetU32>(info2, 16)(info2, &mut v), S_OK);
+            assert_eq!(v, 1);
+            assert_eq!(method::<GetU32>(info2, 17)(info2, &mut v), S_OK);
+            assert_eq!(v, NUM_UNSIGNED);
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(method::<Create>(info2, 12)(info2, &mut ctx), S_OK);
+            assert!(!ctx.is_null());
+            release_obj(ctx);
+            release_obj(info2);
+            // Champs inégaux et format flottant sans alpha.
+            let mut i565 = std::ptr::null_mut();
+            assert_eq!(
+                method::<ById>(f, 6)(f, &pixel_format(0x0a), &mut i565),
+                S_OK
+            );
+            let mut m = [0u8; 2];
+            assert_eq!(
+                method::<Mask>(i565, 15)(i565, 1, 2, m.as_mut_ptr(), &mut len),
+                S_OK
+            );
+            assert_eq!(u16::from_le_bytes(m), 0x07e0);
+            release_obj(i565);
+            let mut fl = std::ptr::null_mut();
+            assert_eq!(
+                method::<ById>(f, 6)(f, &wic_pixels::FMT_RGB_FLOAT128, &mut fl),
+                S_OK
+            );
+            assert_eq!(method::<GetU32>(fl, 16)(fl, &mut v), S_OK);
+            assert_eq!(v, 0);
+            assert_eq!(method::<GetU32>(fl, 17)(fl, &mut v), S_OK);
+            assert_eq!(v, NUM_FLOAT);
+            release_obj(fl);
+            release_obj(f);
+        }
     }
 }

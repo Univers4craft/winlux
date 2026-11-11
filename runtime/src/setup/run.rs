@@ -310,9 +310,15 @@ pub fn spawn_with(
     })
     .collect();
     let deadline = Instant::now() + timeout();
+    let mut signal = None;
     let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break Outcome::Exited(status.code().unwrap_or(1)),
+            Ok(Some(status)) => {
+                // Arrêt par un signal (plantage du processus) : code 1 comme
+                // avant, et le signal dit dans la sortie (#1628).
+                signal = std::os::unix::process::ExitStatusExt::signal(&status);
+                break Outcome::Exited(status.code().unwrap_or(1));
+            }
             Ok(None) if Instant::now() >= deadline => break Outcome::TimedOut,
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => break Outcome::Failed(e.to_string()),
@@ -328,7 +334,25 @@ pub fn spawn_with(
     for r in readers {
         out.extend(r.join().unwrap_or_default());
     }
+    if let Some(sig) = signal {
+        out.extend_from_slice(signal_line(sig).as_bytes());
+    }
     (outcome, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Ligne ajoutée à la sortie d'un programme arrêté par un signal.
+fn signal_line(sig: i32) -> String {
+    let name = match sig {
+        libc::SIGSEGV => " (SIGSEGV, accès mémoire invalide)",
+        libc::SIGABRT => " (SIGABRT, abandon)",
+        libc::SIGBUS => " (SIGBUS)",
+        libc::SIGILL => " (SIGILL, instruction invalide)",
+        libc::SIGFPE => " (SIGFPE)",
+        libc::SIGKILL => " (SIGKILL, tué)",
+        libc::SIGTERM => " (SIGTERM)",
+        _ => "",
+    };
+    format!("\nwinlux: processus arrêté par le signal {sig}{name}\n")
 }
 
 /// Ligne de commande complète (NSIS `Exec`, `ExecWait`, `nsExec`).
@@ -368,6 +392,13 @@ pub fn describe(what: &str, outcome: &Outcome) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn signal_dit_dans_la_sortie() {
+        let l = super::signal_line(11);
+        assert!(l.contains("signal 11") && l.contains("SIGSEGV"), "{l}");
+        assert!(l.trim_start().starts_with("winlux: "));
+    }
+
     use super::*;
 
     #[test]

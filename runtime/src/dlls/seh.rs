@@ -26,7 +26,9 @@ fn seh_trace() -> bool {
 macro_rules! seh_trace {
     ($($arg:tt)*) => {
         if seh_trace() {
-            eprintln!("winlux[seh] {}", format_args!($($arg)*));
+            let line = format!($($arg)*);
+            eprintln!("winlux[seh] {line}");
+            crate::log::copy_to_file(crate::log::Level::Debug, "seh", &line);
         }
     };
 }
@@ -1566,6 +1568,7 @@ unsafe fn unhandled(rec: &ExceptionRecord, ctx: &mut Context) -> ! {
     if filter != 0 {
         let line = describe_for_app_filter(rec, ctx);
         eprintln!("{line}");
+        crate::log::copy_to_file(crate::log::Level::Error, "seh", &line);
         crate::thunks::api_note(&line);
         let mut copy = *rec;
         let mut ptrs = ExceptionPointers {
@@ -1607,6 +1610,14 @@ unsafe extern "win64" fn raise_exception_impl(
         for i in 0..n as usize {
             rec.info[i] = *args.add(i);
         }
+    }
+    if code == 0xE06D_7363 && seh_trace() {
+        crate::log_warn!(
+            "seh",
+            "exception C++ lancée depuis {:#x} : types capturables {:?}",
+            rec.address,
+            super::cxx_eh::thrown_type_names(&rec)
+        );
     }
     // 0x406D1388 : convention MSVC pour nommer un thread dans le débogueur ;
     // sans débogueur, Windows la transmet aussi aux gestionnaires.

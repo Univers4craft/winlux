@@ -32,6 +32,8 @@ mod custom;
 
 const D2DERR_EFFECT_IS_NOT_REGISTERED: i32 = 0x8899_0028u32 as i32;
 const D2DERR_INSUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
+/// d2derr.h de mingw-w64.
+const D2DERR_UNSUPPORTED_OPERATION: i32 = 0x8899_0003u32 as i32;
 
 // --- Identifiants ----------------------------------------------------------------
 
@@ -358,6 +360,158 @@ pub(super) struct TargetExt {
     dpi: (f32, f32),
     /// Vue ID2D1DeviceContext d'une cible 1.0 (créée à la première demande).
     view: Option<Box<ContextView>>,
+    /// Destination d'origine d'une cible fenêtre ou HDC mise de côté par
+    /// SetTarget vers un bitmap, rendue par SetTarget(NULL) (#1590).
+    home: Option<Box<Home>>,
+    /// Bitmap rendu par GetTarget pour la fenêtre ou le HDC (référence
+    /// tenue) : SetTarget de ce bitmap rétablit la destination d'origine.
+    home_bitmap: *mut c_void,
+}
+
+/// Fenêtre ou HDC d'une cible 1.0, avec ses pixels, le temps qu'un bitmap
+/// lui serve de cible.
+pub(super) struct Home {
+    out: Output,
+    w: u32,
+    h: u32,
+    px: Vec<u8>,
+}
+
+/// Échange la destination courante et celle mise de côté.
+fn swap_home(t: &mut Target, home: &mut Home) {
+    std::mem::swap(&mut t.out, &mut home.out);
+    std::mem::swap(&mut t.w, &mut home.w);
+    std::mem::swap(&mut t.h, &mut home.h);
+    std::mem::swap(&mut t.px, &mut home.px);
+}
+
+/// BindDC ou Resize pendant qu'un bitmap sert de cible : la fenêtre ou le
+/// HDC d'origine redevient la cible avant d'être changé (#1609). Rend le
+/// bitmap quitté, à relâcher une fois le verrou de la cible rendu.
+pub(super) unsafe fn leave_bitmap(t: &mut Target) -> *mut c_void {
+    let Some(mut home) = t.ext.home.take() else {
+        return std::ptr::null_mut();
+    };
+    if t.drawing && matches!(t.out, Output::Bitmap(_)) {
+        t.sync_wic(true);
+    }
+    swap_home(t, &mut home);
+    match home.out {
+        Output::Bitmap(b) => b,
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// WINLUX_D2D_TRACE (#1609) : journal des cibles, bitmaps, effets et tracés.
+pub(super) fn trace_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("WINLUX_D2D_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+/// Une ligne sur stderr, au plus 200 000 par processus.
+pub(super) fn trace(line: std::fmt::Arguments) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    if n < 200_000 {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+        eprintln!("winlux[d2d] {tid} {line}");
+    } else if n == 200_000 {
+        eprintln!("winlux[d2d] journal plein, suite ignorée");
+    }
+}
+
+/// Pixels non transparents d'un tampon BGRA, avec la moyenne BGRA de ces
+/// pixels pour le journal (une image blanche et une image de texte noir
+/// ont autant de pixels visibles).
+fn visible(px: &[u8]) -> String {
+    let mut n = 0u64;
+    let mut sum = [0u64; 4];
+    for p in px.as_chunks::<4>().0.iter().filter(|p| p[3] != 0) {
+        n += 1;
+        for (s, &c) in sum.iter_mut().zip(p) {
+            *s += c as u64;
+        }
+    }
+    if n == 0 {
+        return "0".into();
+    }
+    let m = sum.map(|s| s / n);
+    format!("{n} moy {:?}", m)
+}
+
+/// Destination d'une cible pour le journal.
+pub(super) fn describe_target(t: &Target) -> String {
+    let out = match t.out {
+        Output::Wic(w) => format!("wic {w:p}"),
+        Output::Hwnd(h) => format!("hwnd {h:#x}"),
+        Output::Dc { hdc, x, y } => format!("hdc {hdc:#x} @{x},{y}"),
+        Output::Bitmap(b) => format!("bitmap {b:p}"),
+        Output::None => "aucune".into(),
+    };
+    format!(
+        "{out} {}x{} visibles {}{}",
+        t.w,
+        t.h,
+        visible(&t.px),
+        if t.ext.home.is_some() {
+            " (fenêtre de côté)"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Image pour le journal : nature, taille, pixels visibles ou CLSID.
+pub(super) unsafe fn describe_image(image: *mut c_void) -> String {
+    if image.is_null() {
+        return "NULL".into();
+    }
+    let vt = *(image as *const *const ());
+    if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
+        let b = &Com::get(image as *mut BitmapObj).data;
+        b.refresh();
+        let kind = if vt == BITMAP_VT.ptr() {
+            "bitmap"
+        } else {
+            "liste"
+        };
+        let n = visible(&crate::dlls::lock(&b.px));
+        return format!(
+            "{kind} {image:p} {}x{} options {:#x} visibles {n}",
+            b.w, b.h, b.options
+        );
+    }
+    let effect = if vt == EFFECT_IMAGE_VT.ptr() || vt == EFFECT_RESOURCE_VT.ptr() {
+        Com::get(image as *mut Com<Res<EffectImage>>).data.effect
+    } else if vt == EFFECT_VT.ptr() {
+        image as *mut EffectObj
+    } else {
+        return format!("image inconnue {image:p}");
+    };
+    let e = Com::get(effect);
+    format!(
+        "effet {effect:p} {:?}{}",
+        e.clsid,
+        if e.custom.get().is_some() {
+            " (personnalisé)"
+        } else {
+            ""
+        }
+    )
+}
+
+/// EndDraw alors qu'un bitmap sert de cible : la fenêtre ou le HDC
+/// d'origine reçoit aussi ce qui lui a été dessiné avant SetTarget.
+pub(super) unsafe fn end_draw_home(t: &mut Target) {
+    if let Some(mut home) = t.ext.home.take() {
+        swap_home(t, &mut home);
+        t.sync_wic(true);
+        swap_home(t, &mut home);
+        t.ext.home = Some(home);
+    }
 }
 
 impl Default for TargetExt {
@@ -369,6 +523,8 @@ impl Default for TargetExt {
             controls: [1, 1024, 1024],
             dpi: (96.0, 96.0),
             view: None,
+            home: None,
+            home_bitmap: std::ptr::null_mut(),
         }
     }
 }
@@ -377,6 +533,9 @@ impl Drop for TargetExt {
     fn drop(&mut self) {
         if !self.device.is_null() {
             unsafe { com_release(self.device) };
+        }
+        if !self.home_bitmap.is_null() {
+            unsafe { com_release(self.home_bitmap) };
         }
     }
 }
@@ -838,7 +997,9 @@ struct D2Device {
 
 impl Drop for D2Device {
     fn drop(&mut self) {
-        unsafe { com_release(self.dxgi) };
+        if !self.dxgi.is_null() {
+            unsafe { com_release(self.dxgi) };
+        }
     }
 }
 
@@ -895,6 +1056,11 @@ unsafe extern "win64" fn device_get_dxgi(this: *mut DeviceObj, out: *mut *mut c_
         return E_POINTER;
     }
     let d = Com::get(this).data.dxgi;
+    if d.is_null() {
+        // Appareil d'une cible 1.0 : pas d'appareil DXGI derrière.
+        *out = std::ptr::null_mut();
+        return D2DERR_UNSUPPORTED_OPERATION;
+    }
     com_add_ref(d);
     *out = d;
     S_OK
@@ -974,6 +1140,11 @@ unsafe extern "win64" fn dc_create_bitmap(
     if !src.is_null() {
         super::bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
     }
+    d2d_trace!(
+        "CreateBitmap1 {:p} → {:p} {w}x{h} format {format} options {options:#x}",
+        this,
+        obj
+    );
     put(out, obj)
 }
 
@@ -1058,6 +1229,7 @@ pub(super) unsafe extern "win64" fn bitmap_map(
         pitch: b.w * 4,
         bits: px.as_mut_ptr(),
     };
+    d2d_trace!("Map {:p} {}x{} options {:#x}", this, b.w, b.h, _options);
     S_OK
 }
 pub(super) unsafe extern "win64" fn bitmap_unmap(_: *mut BitmapObj) -> i32 {
@@ -1216,7 +1388,9 @@ unsafe extern "win64" fn dc_create_effect(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    create_effect(Com::get(this).factory, clsid, out)
+    let hr = create_effect(Com::get(this).factory, clsid, out);
+    d2d_trace!("CreateEffect {:?} → {hr:#x} {:p}", clsid.as_ref(), *out);
+    hr
 }
 
 /// ID2D1DeviceContext::CreateEffect et ID2D1EffectContext::CreateEffect.
@@ -1655,6 +1829,11 @@ unsafe extern "win64" fn effect_set_input(
     input: *mut c_void,
     _invalidate: i32,
 ) {
+    d2d_trace!(
+        "SetInput effet {:p} [{index}] ← {}",
+        this,
+        describe_image(input)
+    );
     let mut inputs = crate::dlls::lock(&Com::get(this).inputs);
     let i = index as usize;
     if i >= inputs.len() {
@@ -1775,6 +1954,7 @@ pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32))
     let vt = *(image as *const *const ());
     if vt == BITMAP_VT.ptr() || vt == COMMAND_LIST_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
+        b.refresh();
         return Some(Img {
             x: 0,
             y: 0,
@@ -1801,14 +1981,173 @@ unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> 
     }
     let obj = effect as *mut EffectObj;
     let e = Com::get(obj);
-    if e.custom.get().is_some() {
-        if let Some(img) = custom::render(obj, depth, hint) {
-            return Some(img);
+    let (how, img) = 'calc: {
+        if e.custom.get().is_some() {
+            if let Some(img) = custom::render(obj, depth, hint) {
+                break 'calc ("personnalisé", Some(img));
+            }
         }
+        if let Some(img) = builtin_render(e, depth, hint) {
+            break 'calc ("intégré", img);
+        }
+        warn_effect_once(&e.clsid);
+        let first = crate::dlls::lock(&e.inputs).first().copied();
+        (
+            "non calculé",
+            first.and_then(|f| image_img(f, depth + 1, hint)),
+        )
+    };
+    // Sortie de chaque effet d'une chaîne, pour trouver celui qui vide
+    // l'image (#1669).
+    d2d_trace!(
+        "  effet {:p} {:?} ({}) profondeur {} → {}",
+        effect,
+        e.clsid,
+        how,
+        depth,
+        img.as_ref().map_or("rien".to_string(), |i| format!(
+            "{}x{} @{},{} visibles {}",
+            i.w,
+            i.h,
+            i.x,
+            i.y,
+            visible(&i.px)
+        ))
+    );
+    img
+}
+
+// Effets intégrés calculés (CLSID de d2d1effects.h, mingw-w64).
+/// CLSID_D2D1Flood {61C23C20-AE69-4D8E-94CF-50078DF638F2}.
+const CLSID_FLOOD: Guid = guid(
+    0x61c2_3c20,
+    0xae69,
+    0x4d8e,
+    [0x94, 0xcf, 0x50, 0x07, 0x8d, 0xf6, 0x38, 0xf2],
+);
+/// CLSID_D2D1Crop {E23F7110-0E9A-4324-AF47-6A2C0C46F35B}.
+const CLSID_CROP: Guid = guid(
+    0xe23f_7110,
+    0x0e9a,
+    0x4324,
+    [0xaf, 0x47, 0x6a, 0x2c, 0x0c, 0x46, 0xf3, 0x5b],
+);
+/// CLSID_D2D1Premultiply {06EAB419-DEED-4018-80D2-3E1D471ADEB2}.
+const CLSID_PREMULTIPLY: Guid = guid(
+    0x06ea_b419,
+    0xdeed,
+    0x4018,
+    [0x80, 0xd2, 0x3e, 0x1d, 0x47, 0x1a, 0xde, 0xb2],
+);
+/// CLSID_D2D1Opacity {811D79A4-DE28-4454-8094-C64685F8BD4C} (#1669).
+const CLSID_OPACITY: Guid = guid(
+    0x811d_79a4,
+    0xde28,
+    0x4454,
+    [0x80, 0x94, 0xc6, 0x46, 0x85, 0xf8, 0xbd, 0x4c],
+);
+/// CLSID_D2D1ColorManagement {1A28524C-FDD6-4AA4-AE8F-837EB8267B37}.
+const CLSID_COLOR_MANAGEMENT: Guid = guid(
+    0x1a28_524c,
+    0xfdd6,
+    0x4aa4,
+    [0xae, 0x8f, 0x83, 0x7e, 0xb8, 0x26, 0x7b, 0x37],
+);
+
+/// Propriété en flottants (vecteurs D2D1_VECTOR_*F).
+fn prop_f32<const N: usize>(e: &Effect, index: u32) -> Option<[f32; N]> {
+    let props = crate::dlls::lock(&e.props);
+    let v = props.get(&index)?;
+    if v.len() < N * 4 {
+        return None;
     }
-    warn_effect_once(&e.clsid);
-    let first = crate::dlls::lock(&e.inputs).first().copied()?;
-    image_img(first, depth + 1, hint)
+    let mut out = [0f32; N];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = f32::from_le_bytes([v[i * 4], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]]);
+    }
+    Some(out)
+}
+
+/// Sortie d'un effet intégré calculé : `None` si l'effet n'est pas pris en
+/// charge, `Some(None)` si sa sortie est vide (#1609 : Paint.NET remplit
+/// les tuiles unies de son canevas par un bitmap 1x1 tiré d'un Flood).
+unsafe fn builtin_render(e: &Effect, depth: u32, hint: (u32, u32)) -> Option<Option<Img>> {
+    let input = || {
+        let first = crate::dlls::lock(&e.inputs).first().copied()?;
+        image_img(first, depth + 1, hint)
+    };
+    if e.clsid == CLSID_FLOOD {
+        // D2D1_FLOOD_PROP_COLOR : RVBA non prémultiplié, noir opaque par défaut.
+        let c = prop_f32::<4>(e, 0).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+        let a = c[3].clamp(0.0, 1.0);
+        let q = |v: f32| (v.clamp(0.0, 1.0) * a * 255.0).round() as u8;
+        let p = [q(c[2]), q(c[1]), q(c[0]), (a * 255.0).round() as u8];
+        let (w, h) = (hint.0.max(1), hint.1.max(1));
+        return Some(Some(Img {
+            x: 0,
+            y: 0,
+            w,
+            h,
+            px: p.repeat(w as usize * h as usize),
+        }));
+    }
+    if e.clsid == CLSID_CROP {
+        let Some(img) = input() else {
+            return Some(None);
+        };
+        // D2D1_CROP_PROP_RECT : gauche, haut, droite, bas ; infini par défaut.
+        let r = prop_f32::<4>(e, 0).unwrap_or([f32::MIN, f32::MIN, f32::MAX, f32::MAX]);
+        let clamp = |v: f32| v.clamp(-1.0e7, 1.0e7) as i64;
+        let x0 = (img.x as i64).max(clamp(r[0].floor()));
+        let y0 = (img.y as i64).max(clamp(r[1].floor()));
+        let x1 = (img.x as i64 + img.w as i64).min(clamp(r[2].ceil()));
+        let y1 = (img.y as i64 + img.h as i64).min(clamp(r[3].ceil()));
+        if x1 <= x0 || y1 <= y0 {
+            return Some(None);
+        }
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut px = vec![0u8; w * h * 4];
+        let (sx, sy) = ((x0 - img.x as i64) as usize, (y0 - img.y as i64) as usize);
+        for y in 0..h {
+            let s = ((sy + y) * img.w as usize + sx) * 4;
+            px[y * w * 4..][..w * 4].copy_from_slice(&img.px[s..s + w * 4]);
+        }
+        return Some(Some(Img {
+            x: x0 as i32,
+            y: y0 as i32,
+            w: w as u32,
+            h: h as u32,
+            px,
+        }));
+    }
+    if e.clsid == CLSID_PREMULTIPLY {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        for p in img.px.as_chunks_mut::<4>().0 {
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_OPACITY {
+        let Some(mut img) = input() else {
+            return Some(None);
+        };
+        // D2D1_OPACITY_PROP_OPACITY : 1 par défaut, sur une image prémultipliée.
+        let k = prop_f32::<1>(e, 0).map_or(1.0, |v| v[0]).clamp(0.0, 1.0);
+        for c in img.px.iter_mut() {
+            *c = (*c as f32 * k + 0.5) as u8;
+        }
+        return Some(Some(img));
+    }
+    if e.clsid == CLSID_COLOR_MANAGEMENT {
+        // Écran sRGB : l'image passe telle quelle.
+        return Some(input());
+    }
+    None
 }
 
 fn warn_effect_once(id: &Guid) {
@@ -1841,7 +2180,23 @@ unsafe extern "win64" fn dc_draw_image(
         let t = target(this);
         (t.w, t.h)
     };
-    let Some(img) = image_img(image, 0, hint) else {
+    let img = image_img(image, 0, hint);
+    d2d_trace!(
+        "DrawImage {:p} ← {} offset {:?} src {:?} → {}",
+        this,
+        describe_image(image),
+        offset.as_ref(),
+        rect.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        img.as_ref().map_or("rien".to_string(), |i| format!(
+            "{}x{} @{},{} visibles {}",
+            i.w,
+            i.h,
+            i.x,
+            i.y,
+            visible(&i.px)
+        ))
+    );
+    let Some(img) = img else {
         return;
     };
     // Rectangle source dans l'espace de l'image (son origine peut ne pas
@@ -1854,11 +2209,19 @@ unsafe extern "win64" fn dc_draw_image(
         b: iy + img.h as f32,
     });
     let (ox, oy) = offset.as_ref().map_or((0.0, 0.0), |o| (o[0], o[1]));
+    // Avec un rectangle source, son coin haut gauche est placé au décalage
+    // (Paint.NET passe le même point aux deux, #1651) ; sans rectangle,
+    // l'image entière est translatée du décalage.
+    let (dx, dy) = if rect.is_null() {
+        (ox, oy)
+    } else {
+        (ox - src.l, oy - src.t)
+    };
     let dst = RectF {
-        l: ox + src.l,
-        t: oy + src.t,
-        r: ox + src.r,
-        b: oy + src.b,
+        l: dx + src.l,
+        t: dy + src.t,
+        r: dx + src.r,
+        b: dy + src.b,
     };
     let local = RectF {
         l: src.l - ix,
@@ -1966,46 +2329,76 @@ unsafe extern "win64" fn dc_image_world_bounds(
 
 // --- Contexte d'appareil : cible, réglages --------------------------------------------
 
+/// GetDevice : l'appareil parent. Une cible 1.0 (fenêtre, HDC, WIC) vue en
+/// contexte d'appareil n'en a pas : un appareil sans DXGI, rattaché à la
+/// fabrique de la cible, lui est créé à la première demande puis rendu à
+/// chaque appel (#1554, canevas de Paint.NET).
 unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_void) {
     if out.is_null() {
         return;
     }
-    let d = target(this).ext.device;
-    if !d.is_null() {
-        com_add_ref(d);
+    let mut t = target(this);
+    if t.ext.device.is_null() {
+        let dev = D2Device {
+            dxgi: std::ptr::null_mut(),
+        };
+        t.ext.device = new_res(Com::get(this).factory, DEVICE_VT.ptr(), dev).cast();
     }
+    let d = t.ext.device;
+    com_add_ref(d);
     *out = d;
 }
 
 /// SetTarget : la cible prend la taille et le contenu du bitmap ; EndDraw
-/// les lui rend (et à sa texture s'il vient d'une surface DXGI).
+/// les lui rend (et à sa texture s'il vient d'une surface DXGI). Une cible
+/// fenêtre ou HDC vue en contexte d'appareil peut aussi dessiner dans un
+/// bitmap : sa fenêtre est mise de côté avec ses pixels et revient à
+/// SetTarget(NULL) ou vers une autre image (#1590, canevas et panneaux de
+/// Paint.NET, qui dessinaient jusque-là dans la fenêtre).
 unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void) {
+    d2d_trace!("SetTarget {:p} ← {}", this, describe_image(image));
     let mut t = target(this);
-    if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. }) {
-        // Vue d'une cible fenêtre ou HDC : sa destination ne change pas.
-        crate::log_warn!("d2d1", "SetTarget refusé sur une cible fenêtre ou HDC");
-        return;
+    // Le bitmap rendu par GetTarget pour la fenêtre ou le HDC la rétablit
+    // (#1609), comme SetTarget(NULL).
+    let to_home = !image.is_null() && image == t.ext.home_bitmap;
+    let to_bitmap = !to_home && is_pixel_image(image);
+    if !to_bitmap && !to_home && !image.is_null() {
+        crate::log_warn!(
+            "d2d1",
+            "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
+        );
     }
-    let new_out = if is_pixel_image(image) {
+    // Ce qui a été dessiné dans le bitmap quitté lui revient tout de suite.
+    if t.drawing && matches!(t.out, Output::Bitmap(_)) {
+        t.sync_wic(true);
+    }
+    let old = if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. } | Output::Wic(_)) {
+        let out = std::mem::replace(&mut t.out, Output::None);
+        let px = std::mem::take(&mut t.px);
+        t.ext.home = Some(Box::new(Home {
+            out,
+            w: t.w,
+            h: t.h,
+            px,
+        }));
+        Output::None
+    } else {
+        std::mem::replace(&mut t.out, Output::None)
+    };
+    if to_bitmap {
         let b = &Com::get(image as *mut BitmapObj).data;
         t.w = b.w;
         t.h = b.h;
         t.px = crate::dlls::lock(&b.px).clone();
         com_add_ref(image);
-        Output::Bitmap(image)
+        t.out = Output::Bitmap(image);
+    } else if let Some(mut home) = t.ext.home.take() {
+        swap_home(&mut t, &mut home);
     } else {
-        if !image.is_null() {
-            crate::log_warn!(
-                "d2d1",
-                "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
-            );
-        }
         t.w = 0;
         t.h = 0;
         t.px = Vec::new();
-        Output::None
-    };
-    let old = std::mem::replace(&mut t.out, new_out);
+    }
     drop(t);
     if let Output::Bitmap(b) = old {
         com_release(b);
@@ -2016,13 +2409,30 @@ unsafe extern "win64" fn dc_get_target(this: *mut TargetObj, out: *mut *mut c_vo
     if out.is_null() {
         return;
     }
-    *out = match target(this).out {
+    let mut t = target(this);
+    *out = match t.out {
         Output::Bitmap(b) => {
+            com_add_ref(b);
+            b
+        }
+        // Une cible fenêtre, HDC ou WIC a toujours une cible : un bitmap qui
+        // la représente, que Paint.NET garde pour la remettre après avoir
+        // dessiné dans ses propres bitmaps (#1609, #1669 pour WIC).
+        Output::Hwnd(_) | Output::Dc { .. } | Output::Wic(_) => {
+            if t.ext.home_bitmap.is_null() {
+                let (w, h) = (t.w.max(1), t.h.max(1));
+                let mut b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
+                // D2D1_BITMAP_OPTIONS_TARGET | CANNOT_DRAW.
+                b.options = 1 | 2;
+                t.ext.home_bitmap = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b).cast();
+            }
+            let b = t.ext.home_bitmap;
             com_add_ref(b);
             b
         }
         _ => std::ptr::null_mut(),
     };
+    d2d_trace!("GetTarget {:p} → {:p} {}", this, *out, describe_target(&t));
 }
 
 unsafe extern "win64" fn dc_set_controls(this: *mut TargetObj, c: *const [u32; 3]) {
@@ -2076,6 +2486,11 @@ pub(super) unsafe extern "win64" fn push_layer(
     params: *const RectF,
     _layer: *mut c_void,
 ) {
+    d2d_trace!(
+        "PushLayer {:p} {:?}",
+        this,
+        params.as_ref().map(|r| (r.l, r.t, r.r, r.b))
+    );
     let r = params.as_ref().copied().unwrap_or(RectF {
         l: -f32::MAX,
         t: -f32::MAX,
@@ -2858,6 +3273,358 @@ mod tests {
         }
         // ID2D1Factory7, tel que demandé par Paint.NET 5.1.
         assert_eq!(FACTORY_IIDS[6].data1, 0xbdc2_bdd3);
+    }
+
+    /// #1590 : une cible HDC vue en contexte d'appareil dessine dans un
+    /// bitmap choisi par SetTarget, puis retrouve ses pixels à SetTarget(NULL).
+    #[test]
+    fn cible_hdc_dessine_dans_un_bitmap_puis_revient() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            target(rt).resize(2, 2);
+            let color = |r: f32, b: f32| super::super::ColorF {
+                r,
+                g: 0.0,
+                b,
+                a: 1.0,
+            };
+            super::super::begin_draw(rt);
+            super::super::clear(rt, &color(1.0, 0.0));
+            let mut bmp = std::ptr::null_mut();
+            let size = 4u64 | (3u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (4, 3));
+            }
+            let mut got = std::ptr::null_mut();
+            dc_get_target(rt, &mut got);
+            assert_eq!(got, bmp);
+            com_release(got);
+            super::super::clear(rt, &color(0.0, 1.0));
+            dc_set_target(rt, std::ptr::null_mut());
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (2, 2));
+                assert!(matches!(t.out, Output::Dc { .. }));
+                assert_eq!(&t.px[0..4], &[0, 0, 255, 255]);
+            }
+            let (_, _, px) = super::super::bitmap_pixels(bmp).unwrap();
+            assert_eq!(&px[0..4], &[255, 0, 0, 255]);
+            assert_eq!(
+                super::super::end_draw(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1609 : GetTarget d'une cible HDC rend un bitmap qui la rétablit, et
+    /// BindDC pendant qu'un bitmap sert de cible rétablit d'abord le HDC.
+    #[test]
+    fn cible_hdc_get_target_et_bind_dc_retablissent_le_hdc() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            target(rt).resize(2, 2);
+            let mut home = std::ptr::null_mut();
+            dc_get_target(rt, &mut home);
+            assert!(!home.is_null());
+            let mut bmp = std::ptr::null_mut();
+            let size = 4u64 | (3u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            dc_set_target(rt, home);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (2, 2));
+                assert!(matches!(t.out, Output::Dc { .. }));
+            }
+            dc_set_target(rt, bmp);
+            let rect = [0, 0, 5, 6];
+            assert_eq!(super::super::bind_dc(rt, 0x1234, &rect), S_OK);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (5, 6));
+                assert!(matches!(t.out, Output::Dc { hdc: 0x1234, .. }));
+                assert!(t.ext.home.is_none());
+            }
+            com_release(home);
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1669 : une cible WIC rend un bitmap par GetTarget, et SetTarget de ce
+    /// bitmap (ou NULL) la rétablit : Paint.NET y dessine l'empreinte du
+    /// pinceau après être passé par une liste de commandes.
+    #[test]
+    fn cible_wic_get_target_puis_retour() {
+        unsafe {
+            let (f, wic, rt) = super::super::tests::setup();
+            let rt: *mut TargetObj = rt.cast();
+            super::super::begin_draw(rt);
+            let mut home = std::ptr::null_mut();
+            dc_get_target(rt, &mut home);
+            assert!(!home.is_null());
+            let mut bmp = std::ptr::null_mut();
+            let size = 2u64 | (2u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            let rouge = super::super::ColorF {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(rt, &rouge);
+            dc_set_target(rt, home);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (8, 8));
+                assert!(matches!(t.out, Output::Wic(_)));
+            }
+            let vert = super::super::ColorF {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            super::super::clear(rt, &vert);
+            // Même retour avec SetTarget(NULL).
+            dc_set_target(rt, bmp);
+            dc_set_target(rt, std::ptr::null_mut());
+            assert!(matches!(target(rt).out, Output::Wic(_)));
+            assert_eq!(
+                super::super::end_draw(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            type Lock =
+                unsafe extern "win64" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> i32;
+            type Data = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut *mut u8) -> i32;
+            let mut lock = std::ptr::null_mut();
+            assert_eq!(
+                method::<Lock>(wic, 8)(wic, std::ptr::null(), 1, &mut lock),
+                S_OK
+            );
+            let (mut n, mut data) = (0u32, std::ptr::null_mut());
+            assert_eq!(method::<Data>(lock, 5)(lock, &mut n, &mut data), S_OK);
+            assert_eq!(std::slice::from_raw_parts(data, 4), &[0, 255, 0, 255]);
+            com_release(lock);
+            {
+                let b = &Com::get(bmp as *mut BitmapObj).data;
+                assert_eq!(&crate::dlls::lock(&b.px)[0..4], &[0, 0, 255, 255]);
+            }
+            com_release(home);
+            com_release(bmp);
+            com_release(rt.cast());
+            com_release(wic);
+            com_release(f);
+        }
+    }
+
+    /// #1609 : le journal WINLUX_D2D_TRACE décrit bitmaps et cibles.
+    #[test]
+    fn journal_d2d_decrit_bitmap_et_cible() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            let mut bmp = std::ptr::null_mut();
+            let size = 2u64 | (1u64 << 32);
+            let src = [0u8, 0, 0, 255, 0, 0, 0, 0];
+            assert_eq!(
+                dc_create_bitmap(rt, size, src.as_ptr(), 8, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            let d = describe_image(bmp);
+            assert!(
+                d.starts_with("bitmap ")
+                    && d.ends_with("2x1 options 0x0 visibles 1 moy [0, 0, 0, 255]"),
+                "{d}"
+            );
+            assert_eq!(describe_image(std::ptr::null_mut()), "NULL");
+            let t = describe_target(&target(rt));
+            assert!(t.starts_with("hdc 0x0 @0,0 0x0 visibles 0"), "{t}");
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
+    }
+
+    /// #1609 : Flood, Crop et Premultiply sont calculés (tuiles unies du
+    /// canevas de Paint.NET : un bitmap 1x1 rempli par un Flood blanc).
+    #[test]
+    fn effets_flood_crop_premultiply() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(factory_create_device(f, fake.cast(), &mut dev), S_OK);
+            Com::release(fake);
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(device_create_context(dev.cast(), 0, &mut dc), S_OK);
+            let dc: *mut TargetObj = dc.cast();
+            let mut bmp = std::ptr::null_mut();
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    1 | (1 << 32),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut bmp
+                ),
+                S_OK
+            );
+            dc_set_target(dc, bmp);
+            let mut flood = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_FLOOD, &mut flood), S_OK);
+            let color: [f32; 4] = [1.0, 1.0, 1.0, 0.5];
+            let bytes: Vec<u8> = color.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            super::super::begin_draw(dc);
+            dc_draw_image(dc, flood, std::ptr::null(), std::ptr::null(), 0, 0);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let b = &Com::get(bmp as *mut BitmapObj).data;
+            assert_eq!(&crate::dlls::lock(&b.px)[0..4], &[128, 128, 128, 128]);
+
+            // DrawImage avec rectangle source : son coin haut gauche va au
+            // décalage, sans s'y ajouter (#1651).
+            let mut large = std::ptr::null_mut();
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    4 | (1 << 32),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut large
+                ),
+                S_OK
+            );
+            dc_set_target(dc, large);
+            let rouge: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+            let bytes: Vec<u8> = rouge.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            super::super::begin_draw(dc);
+            let decalage = [1.0f32, 0.0];
+            let source = RectF {
+                l: 1.0,
+                t: 0.0,
+                r: 2.0,
+                b: 1.0,
+            };
+            dc_draw_image(dc, flood, &decalage, &source, 0, 0);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            {
+                let b = &Com::get(large as *mut BitmapObj).data;
+                let px = crate::dlls::lock(&b.px);
+                assert_eq!(&px[0..4], &[0, 0, 0, 0]);
+                assert_eq!(&px[4..8], &[0, 0, 255, 255]);
+                assert_eq!(&px[8..12], &[0, 0, 0, 0]);
+            }
+            dc_set_target(dc, bmp);
+            com_release(large);
+
+            // Crop d'un Flood opaque à (1, 2, 3, 3) : image 2x1 en (1, 2).
+            let mut crop = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_CROP, &mut crop), S_OK);
+            let rect: [f32; 4] = [1.0, 2.0, 3.0, 3.0];
+            let bytes: Vec<u8> = rect.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(crop.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            let opaque: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+            let bytes: Vec<u8> = opaque.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            effect_set_input(crop.cast(), 0, flood, 1);
+            let img = image_img(crop, 0, (8, 8)).unwrap();
+            assert_eq!((img.x, img.y, img.w, img.h), (1, 2, 2, 1));
+            assert_eq!(&img.px[0..4], &[255, 0, 0, 255]);
+
+            // Premultiply : (200, 100, 50, a 128) → (100, 50, 25).
+            let mut pm = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_PREMULTIPLY, &mut pm), S_OK);
+            let mut src = std::ptr::null_mut();
+            let raw = [200u8, 100, 50, 128];
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    1 | (1 << 32),
+                    raw.as_ptr(),
+                    4,
+                    std::ptr::null(),
+                    &mut src
+                ),
+                S_OK
+            );
+            effect_set_input(pm.cast(), 0, src, 1);
+            let img = image_img(pm, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[100, 50, 25, 128]);
+
+            // Opacity 0,5 (#1669) : tous les canaux prémultipliés par 0,5.
+            let mut op = std::ptr::null_mut();
+            assert_eq!(dc_create_effect(dc, &CLSID_OPACITY, &mut op), S_OK);
+            effect_set_input(op.cast(), 0, src, 1);
+            let img = image_img(op, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[200, 100, 50, 128]);
+            let half = 0.5f32.to_le_bytes();
+            assert_eq!(effect_set_value(op.cast(), 0, 0, half.as_ptr(), 4), S_OK);
+            let img = image_img(op, 0, (1, 1)).unwrap();
+            assert_eq!(&img.px[0..4], &[100, 50, 25, 64]);
+
+            for o in [op, src, pm, crop, flood, bmp] {
+                com_release(o);
+            }
+            com_release(dc.cast());
+            com_release(dev);
+            Com::release(f);
+        }
     }
 
     #[test]

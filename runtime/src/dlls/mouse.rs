@@ -77,6 +77,22 @@ static CACHE: Mutex<Cache> = Mutex::new(Cache {
     settings: DEFAULT,
 });
 
+/// Délai de double-clic fixé par SetDoubleClickTime : il vaut pour ce
+/// programme seulement (0 = celui de Paramètres > Souris).
+static DOUBLE_CLICK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_double_click_override(ms: u32) {
+    DOUBLE_CLICK_OVERRIDE.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Délai de double-clic en vigueur pour ce programme.
+pub fn double_click_time() -> u32 {
+    match DOUBLE_CLICK_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => current().double_click,
+        ms => ms,
+    }
+}
+
 /// Réglages courants, relus au plus deux fois par seconde.
 pub fn current() -> Settings {
     let mut cache = match CACHE.lock() {

@@ -1376,6 +1376,102 @@ pub(crate) unsafe fn query_native_value(handle: usize, name: &str) -> Result<(u3
     Ok((v.kind, v.bytes))
 }
 
+/// NtSetValueKey : écrit une valeur sur une clé ouverte.
+pub(crate) fn set_native_value(handle: usize, name: &str, kind: u32, bytes: Vec<u8>) -> i32 {
+    match reg::handle_path(handle) {
+        Ok(p) => set_impl(&p, name, kind, bytes),
+        Err(e) => e,
+    }
+}
+
+/// NtDeleteValueKey.
+pub(crate) fn delete_native_value(handle: usize, name: &str) -> i32 {
+    match reg::handle_path(handle) {
+        Ok(p) => delete_value_impl(&p, name),
+        Err(e) => e,
+    }
+}
+
+/// NtDeleteKey : supprime la clé ouverte elle-même, si elle n'a plus de
+/// sous-clé (les racines ne se suppriment pas).
+pub(crate) fn delete_native_key(handle: usize) -> i32 {
+    if reg::predefined(handle).is_some() {
+        return ERROR_ACCESS_DENIED;
+    }
+    let path = match reg::handle_path(handle) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    status(reg::write(|d| {
+        if !d.exists(&path) {
+            return Err(ERROR_FILE_NOT_FOUND);
+        }
+        if d.has_subkeys(&path) || !d.delete_tree(&path) {
+            return Err(ERROR_ACCESS_DENIED);
+        }
+        Ok(())
+    }))
+}
+
+/// NtEnumerateKey : nom et date de la sous-clé `index`.
+pub(crate) fn native_subkey_at(handle: usize, index: u32) -> Result<(String, u64), i32> {
+    subkey_at(handle, index)
+}
+
+/// NtEnumerateValueKey : la valeur `index`.
+pub(crate) fn native_value_at(handle: usize, index: u32) -> Result<(String, u32, Vec<u8>), i32> {
+    value_at(handle, index).map(|v| (v.name, v.kind, v.bytes))
+}
+
+/// NtQueryKey : ce que dit une clé ouverte d'elle-même.
+pub(crate) struct NativeKeyInfo {
+    /// Nom NT complet (`\Registry\Machine\…`).
+    pub full_name: String,
+    pub last_write: u64,
+    pub sub_keys: u32,
+    pub max_sub_key_len: u32,
+    pub values: u32,
+    pub max_value_name_len: u32,
+    pub max_value_len: u32,
+}
+
+pub(crate) fn native_key_info(handle: usize) -> Result<NativeKeyInfo, i32> {
+    let path = reg::handle_path(handle)?;
+    let (root, rest) = match path.split_once('\\') {
+        Some((r, rest)) => (r.to_string(), Some(rest.to_string())),
+        None => (path.clone(), None),
+    };
+    let prefix = match root.to_ascii_lowercase().as_str() {
+        "hklm" | "hkey_local_machine" => "\\Registry\\Machine".to_string(),
+        "hkcu" | "hkey_current_user" => native_current_user_key_path(),
+        "hku" | "hkey_users" => "\\Registry\\User".to_string(),
+        "hkcc" | "hkey_current_config" => {
+            "\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current".to_string()
+        }
+        _ => "\\Registry\\Machine\\Software\\Classes".to_string(),
+    };
+    reg::read(|d| {
+        if !d.exists(&path) {
+            return Err(ERROR_INVALID_HANDLE);
+        }
+        let children = d.subkeys(&path);
+        let vals = d.values(&path);
+        let len = |s: &str| s.encode_utf16().count() as u32 * 2;
+        Ok(NativeKeyInfo {
+            full_name: match &rest {
+                Some(r) => format!("{prefix}\\{r}"),
+                None => prefix.clone(),
+            },
+            last_write: d.key(&path).map(|k| k.last_write).unwrap_or(0),
+            sub_keys: children.len() as u32,
+            max_sub_key_len: children.iter().map(|c| len(c)).max().unwrap_or(0),
+            values: vals.len() as u32,
+            max_value_name_len: vals.iter().map(|v| len(&v.name)).max().unwrap_or(0),
+            max_value_len: vals.iter().map(|v| v.bytes.len() as u32).max().unwrap_or(0),
+        })
+    })
+}
+
 /// Octets bruts d'une valeur (chemin `hklm\…`, `hkcr\…`, `HKEY_…\…`).
 pub fn read_registry_value_internal(key_path: &str, value_name: &str) -> Option<Vec<u8>> {
     let path = reg::canonical(key_path)?;
@@ -1998,6 +2094,153 @@ mod tests {
                 ERROR_FILE_NOT_FOUND
             );
             reg_close_key(h);
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
+        if let Some(v) = previous {
+            std::env::set_var("WINLUX_REGISTRY_PATH", v);
+        } else {
+            std::env::remove_var("WINLUX_REGISTRY_PATH");
+        }
+    }
+
+    /// UNICODE_STRING (16 octets) sur un texte UTF-16 qui doit survivre.
+    fn ustr(wide: &[u16]) -> [u8; 16] {
+        let mut u = [0u8; 16];
+        let n = (wide.len() * 2) as u16;
+        u[0..2].copy_from_slice(&n.to_le_bytes());
+        u[2..4].copy_from_slice(&n.to_le_bytes());
+        u[8..16].copy_from_slice(&(wide.as_ptr() as usize).to_le_bytes());
+        u
+    }
+
+    /// chrome_elf.dll passe par NtCreateKey/NtSetValueKey/NtQueryKey… (#1635).
+    #[test]
+    fn appels_nt_du_registre_chrome_elf() {
+        use crate::dlls::ntdll as nt;
+        let _serial = REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = std::env::temp_dir().join(format!(
+            "winlux-registry-nt-test-{}.tsv",
+            std::process::id()
+        ));
+        let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+        std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+        let full: Vec<u16> = format!("{}\\Software\\WinluxNt", native_current_user_key_path())
+            .encode_utf16()
+            .collect();
+        let key_name = ustr(&full);
+        let mut attrs = [0u8; 48];
+        attrs[0..4].copy_from_slice(&48u32.to_le_bytes());
+        attrs[16..24].copy_from_slice(&(key_name.as_ptr() as usize).to_le_bytes());
+        let child: Vec<u16> = format!(
+            "{}\\Software\\WinluxNt\\Enfant",
+            native_current_user_key_path()
+        )
+        .encode_utf16()
+        .collect();
+        let child_name = ustr(&child);
+        let mut child_attrs = attrs;
+        child_attrs[16..24].copy_from_slice(&(child_name.as_ptr() as usize).to_le_bytes());
+        let value: Vec<u16> = "Etat".encode_utf16().collect();
+        let value_name = ustr(&value);
+        unsafe {
+            let (mut h, mut c, mut disp) = (0usize, 0usize, 0u32);
+            let null = std::ptr::null();
+            assert_eq!(
+                nt::nt_create_key(&mut h, 0xF003F, attrs.as_ptr(), 0, null, 0, &mut disp),
+                0
+            );
+            assert_eq!(
+                nt::nt_create_key(&mut c, 0xF003F, child_attrs.as_ptr(), 0, null, 0, &mut disp),
+                0
+            );
+            let data = 7u32.to_le_bytes();
+            assert_eq!(
+                nt::nt_set_value_key(h, value_name.as_ptr(), 0, 4, data.as_ptr(), 4),
+                0
+            );
+            let mut need = 0u32;
+            let mut buf = [0u8; 64];
+            // KeyValuePartialInformation : type 4 (DWORD), 4 octets, 7.
+            assert_eq!(
+                nt::nt_query_value_key(h, value_name.as_ptr(), 2, buf.as_mut_ptr(), 64, &mut need),
+                0
+            );
+            assert_eq!(
+                (need, &buf[4..8], &buf[12..16]),
+                (16, &4u32.to_le_bytes()[..], &data[..])
+            );
+            // Énumération des valeurs puis fin.
+            assert_eq!(
+                nt::nt_enumerate_value_key(h, 0, 0, buf.as_mut_ptr(), 64, &mut need),
+                0
+            );
+            assert_eq!(&buf[8..12], &8u32.to_le_bytes());
+            assert_eq!(
+                nt::nt_enumerate_value_key(h, 1, 0, buf.as_mut_ptr(), 64, &mut need),
+                0x8000_001Au32 as i32
+            );
+            // KeyBasicInformation de la sous-clé « Enfant ».
+            assert_eq!(
+                nt::nt_enumerate_key(h, 0, 0, buf.as_mut_ptr(), 64, &mut need),
+                0
+            );
+            let n = u32::from_le_bytes(buf[12..16].try_into().unwrap()) as usize;
+            let name: Vec<u16> = buf[16..16 + n]
+                .chunks(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            assert_eq!(String::from_utf16(&name).unwrap(), "Enfant");
+            // KeyFullInformation : 1 sous-clé, 1 valeur ; tampon trop court.
+            assert_eq!(
+                nt::nt_query_key(h, 2, buf.as_mut_ptr(), 8, &mut need),
+                0xC000_0023u32 as i32
+            );
+            assert_eq!(need, 44);
+            assert_eq!(nt::nt_query_key(h, 2, buf.as_mut_ptr(), 64, &mut need), 0);
+            assert_eq!(
+                (&buf[20..24], &buf[32..36]),
+                (&1u32.to_le_bytes()[..], &1u32.to_le_bytes()[..])
+            );
+            // KeyNameInformation : le chemin NT complet.
+            let mut big = [0u8; 512];
+            assert_eq!(nt::nt_query_key(h, 3, big.as_mut_ptr(), 512, &mut need), 0);
+            let n = u32::from_le_bytes(big[0..4].try_into().unwrap()) as usize;
+            let name: Vec<u16> = big[4..4 + n]
+                .chunks(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect();
+            assert!(String::from_utf16(&name)
+                .unwrap()
+                .to_lowercase()
+                .ends_with("\\software\\winluxnt"));
+            assert_eq!(nt::nt_flush_key(h), 0);
+            // Suppressions : valeur, clé parente refusée tant qu'elle a un enfant.
+            assert_eq!(nt::nt_delete_value_key(h, value_name.as_ptr()), 0);
+            assert_eq!(
+                nt::nt_query_value_key(h, value_name.as_ptr(), 2, buf.as_mut_ptr(), 64, &mut need),
+                0xC000_0034u32 as i32
+            );
+            assert_eq!(nt::nt_delete_key(h), 0xC000_0022u32 as i32);
+            assert_eq!(nt::nt_delete_key(c), 0);
+            assert_eq!(nt::nt_delete_key(h), 0);
+            assert_eq!(nt::nt_close(c), 0);
+            assert_eq!(nt::nt_close(h), 0);
+            let lookup = |n| crate::dlls::lookup("ntdll", n).is_some();
+            for n in [
+                "NtSetValueKey",
+                "ZwSetValueKey",
+                "NtQueryKey",
+                "NtEnumerateKey",
+                "NtEnumerateValueKey",
+                "NtDeleteValueKey",
+                "NtFlushKey",
+                "NtDeleteKey",
+            ] {
+                assert!(lookup(n), "{n}");
+            }
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("lock"));
