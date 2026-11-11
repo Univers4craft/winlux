@@ -2166,11 +2166,19 @@ unsafe extern "win64" fn dc_draw_image(
         b: iy + img.h as f32,
     });
     let (ox, oy) = offset.as_ref().map_or((0.0, 0.0), |o| (o[0], o[1]));
+    // Avec un rectangle source, son coin haut gauche est placé au décalage
+    // (Paint.NET passe le même point aux deux, #1651) ; sans rectangle,
+    // l'image entière est translatée du décalage.
+    let (dx, dy) = if rect.is_null() {
+        (ox, oy)
+    } else {
+        (ox - src.l, oy - src.t)
+    };
     let dst = RectF {
-        l: ox + src.l,
-        t: oy + src.t,
-        r: ox + src.r,
-        b: oy + src.b,
+        l: dx + src.l,
+        t: dy + src.t,
+        r: dx + src.r,
+        b: dy + src.b,
     };
     let local = RectF {
         l: src.l - ix,
@@ -3400,6 +3408,50 @@ mod tests {
             );
             let b = &Com::get(bmp as *mut BitmapObj).data;
             assert_eq!(&crate::dlls::lock(&b.px)[0..4], &[128, 128, 128, 128]);
+
+            // DrawImage avec rectangle source : son coin haut gauche va au
+            // décalage, sans s'y ajouter (#1651).
+            let mut large = std::ptr::null_mut();
+            assert_eq!(
+                dc_create_bitmap(
+                    dc,
+                    4 | (1 << 32),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut large
+                ),
+                S_OK
+            );
+            dc_set_target(dc, large);
+            let rouge: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+            let bytes: Vec<u8> = rouge.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert_eq!(
+                effect_set_value(flood.cast(), 0, 0, bytes.as_ptr(), 16),
+                S_OK
+            );
+            super::super::begin_draw(dc);
+            let decalage = [1.0f32, 0.0];
+            let source = RectF {
+                l: 1.0,
+                t: 0.0,
+                r: 2.0,
+                b: 1.0,
+            };
+            dc_draw_image(dc, flood, &decalage, &source, 0, 0);
+            assert_eq!(
+                super::super::end_draw(dc, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            {
+                let b = &Com::get(large as *mut BitmapObj).data;
+                let px = crate::dlls::lock(&b.px);
+                assert_eq!(&px[0..4], &[0, 0, 0, 0]);
+                assert_eq!(&px[4..8], &[0, 0, 255, 255]);
+                assert_eq!(&px[8..12], &[0, 0, 0, 0]);
+            }
+            dc_set_target(dc, bmp);
+            com_release(large);
 
             // Crop d'un Flood opaque à (1, 2, 3, 3) : image 2x1 en (1, 2).
             let mut crop = std::ptr::null_mut();
