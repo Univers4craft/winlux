@@ -177,6 +177,7 @@ mfcapture.rs	MediaSource	a-verifier
 mfcapture.rs	MemBuf	a-verifier	
 mfcapture.rs	MfObj	a-verifier	
 mfcapture.rs	Reader	a-verifier	
+mfcapture.rs	WrapBuf	interne	objet COM IMFMediaBuffer (#1895) : seule sa table virtuelle est vue par le programme, jamais ses champs
 mfcapture/descr.rs	Handler	a-verifier	
 mfreader.rs	Reader	a-verifier	
 mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_profile)

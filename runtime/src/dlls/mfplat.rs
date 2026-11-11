@@ -96,6 +96,72 @@ pub unsafe extern "win64" fn mf_create_aligned_memory_buffer(
     mf_create_memory_buffer(max_len, out)
 }
 
+/// MFCreateMediaBufferFromMediaType (#1895) : tampon mémoire assez grand
+/// pour `duration` (en 100 ns) du type : MF_MT_SAMPLE_SIZE, sinon le débit
+/// audio MF_MT_AUDIO_AVG_BYTES_PER_SECOND, au moins `min_len` octets.
+pub unsafe extern "win64" fn mf_create_media_buffer_from_media_type(
+    media_type: *mut c_void,
+    duration: i64,
+    min_len: u32,
+    _min_align: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    if media_type.is_null() {
+        return E_INVALIDARG;
+    }
+    // IMFAttributes::GetUINT32 est la 8e entrée de la table.
+    let get_u32: unsafe extern "win64" fn(*mut c_void, *const u8, *mut u32) -> i32 =
+        std::mem::transmute(mfcapture::slot(media_type, 7));
+    let mut sample = 0u32;
+    let mut size = 0u64;
+    if get_u32(
+        media_type,
+        mfcapture::MF_MT_SAMPLE_SIZE.as_ptr(),
+        &mut sample,
+    ) >= 0
+    {
+        size = u64::from(sample);
+    } else {
+        let mut rate = 0u32;
+        if get_u32(
+            media_type,
+            super::mfreader::MF_MT_AUDIO_AVG_BYTES_PER_SECOND.as_ptr(),
+            &mut rate,
+        ) >= 0
+        {
+            size = u64::from(rate) * duration.max(0) as u64 / 10_000_000;
+        }
+    }
+    let size = size.max(u64::from(min_len)).min(u64::from(u32::MAX)) as usize;
+    *out = mfcapture::create_memory_buffer(size);
+    S_OK
+}
+
+/// MFCopyImage : copie `lines` lignes de `width` octets entre deux pas.
+pub unsafe extern "win64" fn mf_copy_image(
+    dst: *mut u8,
+    dst_stride: i32,
+    src: *const u8,
+    src_stride: i32,
+    width: u32,
+    lines: u32,
+) -> i32 {
+    if dst.is_null() || src.is_null() {
+        return E_POINTER;
+    }
+    for y in 0..lines as isize {
+        std::ptr::copy(
+            src.offset(y * src_stride as isize),
+            dst.offset(y * dst_stride as isize),
+            width as usize,
+        );
+    }
+    S_OK
+}
+
 /// MFCreateAsyncResult : structure MFASYNCRESULT (lot F, #1615).
 pub unsafe extern "win64" fn mf_create_async_result(
     unk: *mut c_void,
@@ -319,6 +385,9 @@ pub fn exports() -> crate::dlls::Exports {
         "MFCreateSample"                  => fn mf_create_sample,
         "MFCreateMemoryBuffer"            => fn mf_create_memory_buffer,
         "MFCreateAlignedMemoryBuffer"     => fn mf_create_aligned_memory_buffer,
+        "MFCreateMediaBufferWrapper"      => fn mfcapture::mf_create_media_buffer_wrapper,
+        "MFCreateMediaBufferFromMediaType" => fn mf_create_media_buffer_from_media_type,
+        "MFCopyImage"                     => fn mf_copy_image,
         "MFCreateAsyncResult"             => fn mf_create_async_result,
         "MFGetSystemTime"                 => fn mf_get_system_time,
         "MFGetService"                    => fn mf_get_service,
@@ -328,5 +397,72 @@ pub fn exports() -> crate::dlls::Exports {
         "MFCreateSourceReaderFromURL"     => fn mf_create_source_reader_from_url,
         "MFCreateSourceReaderFromByteStream" => fn mf_create_source_reader_from_byte_stream,
         "MFCreateSinkWriterFromURL"       => fn mf_create_sink_writer_from_url,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe fn call_lock(b: *mut c_void) -> (*mut u8, u32, u32) {
+        let f: unsafe extern "win64" fn(*mut c_void, *mut *mut u8, *mut u32, *mut u32) -> i32 =
+            std::mem::transmute(mfcapture::slot(b, 3));
+        let (mut p, mut max, mut cur) = (std::ptr::null_mut(), 0, 0);
+        assert_eq!(f(b, &mut p, &mut max, &mut cur), S_OK);
+        let u: unsafe extern "win64" fn(*mut c_void) -> i32 =
+            std::mem::transmute(mfcapture::slot(b, 4));
+        u(b);
+        (p, max, cur)
+    }
+
+    /// Discord (#1895) : une tranche d'un tampon, sans copie.
+    #[test]
+    fn tampon_enveloppe_et_type_de_media() {
+        unsafe {
+            let mut inner = std::ptr::null_mut();
+            assert_eq!(mf_create_memory_buffer(16, &mut inner), S_OK);
+            let mut wrap = std::ptr::null_mut();
+            assert_eq!(
+                mfcapture::mf_create_media_buffer_wrapper(inner, 10, 8, &mut wrap),
+                E_INVALIDARG
+            );
+            assert!(wrap.is_null());
+            assert_eq!(
+                mfcapture::mf_create_media_buffer_wrapper(inner, 4, 8, &mut wrap),
+                S_OK
+            );
+            let (p, _, _) = call_lock(inner);
+            let (q, max, cur) = call_lock(wrap);
+            assert_eq!((q as usize - p as usize, max, cur), (4, 8, 8));
+            // Le tampon d'origine reste vivant tant que l'enveloppe le tient.
+            mfcapture::com_release(inner);
+            *q = 7;
+            mfcapture::com_release(wrap);
+
+            let mut mt = std::ptr::null_mut();
+            assert_eq!(mf_create_media_type(&mut mt), S_OK);
+            let set_u32: unsafe extern "win64" fn(*mut c_void, *const u8, u32) -> i32 =
+                std::mem::transmute(mfcapture::slot(mt, 21));
+            assert_eq!(
+                set_u32(mt, mfcapture::MF_MT_SAMPLE_SIZE.as_ptr(), 4096),
+                S_OK
+            );
+            let mut b = std::ptr::null_mut();
+            assert_eq!(
+                mf_create_media_buffer_from_media_type(mt, 0, 100, 0, &mut b),
+                S_OK
+            );
+            assert_eq!(call_lock(b).1, 4096);
+            mfcapture::com_release(b);
+            mfcapture::com_release(mt);
+
+            let src = [1u8, 2, 3, 9, 4, 5, 6, 9];
+            let mut dst = [0u8; 6];
+            assert_eq!(
+                mf_copy_image(dst.as_mut_ptr(), 3, src.as_ptr(), 4, 3, 2),
+                S_OK
+            );
+            assert_eq!(dst, [1, 2, 3, 4, 5, 6]);
+        }
     }
 }

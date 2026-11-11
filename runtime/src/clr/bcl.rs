@@ -141,6 +141,39 @@ pub fn value_to_string(v: &Value) -> String {
     }
 }
 
+/// Contenu d'une valeur encadrée (type valeur) ou d'une chaîne : ce que
+/// comparent ValueType.Equals et String.Equals (#1896, clés de
+/// Dictionary<int, …>).
+fn boxed_bytes(p: *mut u8) -> Option<(types::TypeId, Vec<u8>)> {
+    let id = gc::type_of(p)?;
+    if id == TYPE_STRING {
+        let s = read_managed_string(p);
+        return Some((id, s.encode_utf16().flat_map(u16::to_le_bytes).collect()));
+    }
+    let size = types::with_types(|reg| {
+        let t = reg.get(id)?;
+        t.is_value.then_some(t.instance_size)
+    })?;
+    let size = if is_boxed_primitive(id) { 8 } else { size };
+    Some((id, unsafe { std::slice::from_raw_parts(p, size) }.to_vec()))
+}
+
+fn boxed_equal(a: *mut u8, b: *mut u8) -> bool {
+    match (boxed_bytes(a), boxed_bytes(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn boxed_hash(p: *mut u8) -> Option<i32> {
+    let (_, bytes) = boxed_bytes(p)?;
+    let mut h: u32 = 0x811C_9DC5;
+    for b in bytes {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    Some(h as i32)
+}
+
 fn is_boxed_primitive(id: types::TypeId) -> bool {
     (types::TYPE_INT32..=types::TYPE_INTPTR).contains(&id)
 }
@@ -548,7 +581,7 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 let eq = match (&args[0], &args[1]) {
                     (Value::I32(a), Value::I32(b)) => a == b,
                     (Value::I64(a), Value::I64(b)) => a == b,
-                    (Value::Ref(a), Value::Ref(b)) => std::ptr::eq(*a, *b),
+                    (Value::Ref(a), Value::Ref(b)) => std::ptr::eq(*a, *b) || boxed_equal(*a, *b),
                     (Value::Null, Value::Null) => true,
                     _ => false,
                 };
@@ -558,7 +591,7 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             }
         }
         "GetHashCode" => match args.first() {
-            Some(Value::Ref(p)) => Some(Value::I32(*p as i32)),
+            Some(Value::Ref(p)) => Some(Value::I32(boxed_hash(*p).unwrap_or(*p as i32))),
             Some(Value::I32(v)) => Some(Value::I32(*v)),
             Some(Value::I64(v)) => Some(Value::I32(*v as i32)),
             _ => Some(Value::I32(0)),
