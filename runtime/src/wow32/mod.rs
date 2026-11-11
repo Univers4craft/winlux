@@ -46,6 +46,7 @@ pub fn virtual_query_ex32(process: u32, addr: u32, info: u32, len: u32) -> u32 {
 mod layout;
 mod seh;
 mod user;
+mod vulkan;
 mod wow64;
 
 pub use wow64::{
@@ -1650,6 +1651,7 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
                 .or_else(|| com::override_for(&n, func))
                 .or_else(|| comdlg::override_for(&n, func))
                 .or_else(|| comctl::override_for(&n, func))
+                .or_else(|| vulkan::override_for(&n, func))
         }? {
             crt::Override::Data(addr) => return Some(addr),
             crt::Override::Native { target, sig, fix } => (target, sig, fix),
