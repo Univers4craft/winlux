@@ -1103,7 +1103,7 @@ mod tests {
         drop(sending);
         // Lien symbolique posé à la place du verrou : refus, jamais suivi.
         let _ = std::fs::remove_file(&path);
-        std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+        std::os::unix::fs::symlink(std::env::temp_dir(), &path).unwrap();
         assert!(
             consent_guard().is_none(),
             "un lien symbolique n'est jamais suivi"
