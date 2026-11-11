@@ -3092,6 +3092,20 @@ mod foreign_window_tests {
         gui_shared::withdraw_for_test(hwnd, other);
     }
 
+    /// #1609 : le journal Direct2D décrit le DC où une image est présentée.
+    #[test]
+    fn journal_d2d_decrit_un_dc_memoire() {
+        let mem = create_compatible_dc(0);
+        let bitmap = create_compatible_bitmap(mem, 5, 2);
+        select_object(mem, bitmap);
+        let d = gui::describe_dc(mem);
+        assert!(d.starts_with("fenêtre 0x0 bitmap "), "{d}");
+        assert!(d.contains("(5x2 dib false)"), "{d}");
+        assert!(gui::describe_dc(0x7ffe_fff4).ends_with("inconnu"));
+        delete_dc(mem);
+        delete_object(bitmap);
+    }
+
     /// #1357 : un surgissant d'un autre processus peint depuis une DIB
     /// 32 bits à alpha reçoit une forme X qui découpe la marge transparente.
     #[test]

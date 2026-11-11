@@ -2506,6 +2506,30 @@ pub fn watch_draws<R>(on: bool, f: impl FnOnce() -> R) -> R {
 
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
+/// Diagnostic WINLUX_D2D_TRACE (#1609) : fenêtre, bitmap sélectionné,
+/// décalage et découpe d'un DC, pour savoir où va une image présentée.
+pub fn describe_dc(hdc: usize) -> String {
+    let known = lock(dcs())
+        .get(&hdc)
+        .map(|d| (d.hwnd, d.bitmap, dc_state_offset(d)));
+    let Some((hwnd, bitmap, offset)) = known else {
+        return format!("dc {hdc:#x} inconnu");
+    };
+    let size = match lock(objects()).get(&bitmap) {
+        Some(GdiObject::Bitmap {
+            width,
+            height,
+            dib_bits,
+            ..
+        }) => format!("{width}x{height} dib {}", dib_bits.is_some()),
+        _ => "-".to_string(),
+    };
+    format!(
+        "fenêtre {hwnd:#x} bitmap {bitmap:#x} ({size}) décalage {offset:?} découpe {:?}",
+        dc_clip(hdc)
+    )
+}
+
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
     if WATCH_DRAWS.with(|w| w.get()) {
         let known = lock(dcs())
