@@ -405,9 +405,9 @@ local_action() {
 }
 perform() {
     case "$action" in
-        browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
-        browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
-        browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
+        browser-install-brave|browser-install-chrome|browser-install-edge|browser-install-firefox|browser-install-opera|browser-install-operagx|browser-install-tor|browser-install-vivaldi) winlux-browsers --install "${action#browser-install-}" ;;
+        browser-default-brave|browser-default-chrome|browser-default-edge|browser-default-firefox|browser-default-opera|browser-default-operagx|browser-default-tor|browser-default-vivaldi) winlux-browsers --default "${action#browser-default-}" ;;
+        browser-launch-brave|browser-launch-chrome|browser-launch-edge|browser-launch-firefox|browser-launch-opera|browser-launch-operagx|browser-launch-tor|browser-launch-vivaldi) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
         # Boutiques de logiciels (docs/BOUTIQUES.md) : 75 = reporté faute de réseau
         # (Paramètres l'explique, l'init reprend au démarrage suivant).
         store-catalog-add-*|store-catalog-remove-*)

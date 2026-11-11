@@ -253,7 +253,7 @@ SETTINGS_INDEX = [
     (8, "Écran", "ecran affichage resolution luminosite echelle orientation projeter second ecran moniteur display brightness scale monitor project pantalla brillo escala Bildschirm Anzeige Helligkeit Auflosung Skalierung"),
     (9, "À propos", "a propos version nom du pc informations systeme about pc name specifications acerca de version Info Version Gerätename"),
     (10, "Programmes Windows", "programmes windows exe compatibilite windows programs compatibility programas Windows-Programme Kompatibilitat"),
-    (11, "Navigateurs", "navigateur navigateurs par defaut firefox chrome browser default navegador predeterminado Browser Standard"),
+    (11, "Navigateurs", "navigateur navigateurs par defaut firefox chrome brave opera vivaldi tor browser default navegador predeterminado Browser Standard"),
     (12, "Accessibilité", "accessibilite loupe contraste narrateur taille du texte accessibility magnifier contrast narrator text size accesibilidad lupa contraste narrador Barrierefreiheit Lupe Kontrast Sprachausgabe"),
     (13, "Effets visuels", "effets visuels animations transparence visual effects transparency efectos visuales animaciones transparencia visuelle Effekte Animationen Transparenz"),
     (14, "Heure et langue", "langue region date heure fuseau horaire format clavier language time zone date idioma region fecha hora zona horaria Sprache Region Datum Uhrzeit Zeitzone"),
