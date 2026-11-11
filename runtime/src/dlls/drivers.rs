@@ -642,8 +642,260 @@ pub unsafe extern "win64" fn UpdateDriverForPlugAndPlayDevicesA(
     update_driver(opt_a(hwid), opt_a(inf))
 }
 
+// ---- Appareils créés par un installeur (#1605) ---------------------------
+
+const DICD_GENERATE_ID: u32 = 1;
+const DIF_REMOVE: u32 = 5;
+const DIF_REGISTERDEVICE: u32 = 0x19;
+const ERROR_DEVINST_ALREADY_EXISTS: u32 = 0xE000_0207;
+const ERROR_INVALID_HANDLE: u32 = 6;
+
+unsafe fn guid_at(p: *const u8) -> [u8; 16] {
+    let mut g = [0u8; 16];
+    if !p.is_null() {
+        std::ptr::copy_nonoverlapping(p, g.as_mut_ptr(), 16);
+    }
+    g
+}
+
+/// `SetupDiCreateDeviceInfoList` : ensemble vide où créer un appareil.
+pub unsafe extern "win64" fn SetupDiCreateDeviceInfoList(_guid: *const u8, _hwnd: usize) -> usize {
+    crate::process::set_last_error(0);
+    crate::dlls::devnodes::new_set()
+}
+pub unsafe extern "win64" fn SetupDiCreateDeviceInfoListExW(
+    guid: *const u8,
+    hwnd: usize,
+    _machine: *const u16,
+    _reserved: usize,
+) -> usize {
+    SetupDiCreateDeviceInfoList(guid, hwnd)
+}
+
+fn create_device_info(
+    set: usize,
+    name: Option<String>,
+    guid: [u8; 16],
+    desc: Option<String>,
+    flags: u32,
+    data: *mut u8,
+) -> i32 {
+    use crate::dlls::devnodes::{Kind, Node, Virtual};
+    let Some(name) = name.filter(|n| !n.is_empty()) else {
+        return fail(87);
+    };
+    let id = if flags & DICD_GENERATE_ID != 0 {
+        if name.contains('\\') {
+            return fail(87);
+        }
+        crate::dlls::devnodes::generate_root_id(&name)
+    } else {
+        if crate::dlls::devnodes::nodes()
+            .iter()
+            .any(|n| n.id.eq_ignore_ascii_case(&name))
+        {
+            return fail(ERROR_DEVINST_ALREADY_EXISTS);
+        }
+        name.to_ascii_uppercase()
+    };
+    let node = Node {
+        id,
+        parent: Some("HTREE\\ROOT\\0".into()),
+        kind: Kind::Virtual(Virtual {
+            class: guid,
+            description: desc.unwrap_or_default(),
+            ..Default::default()
+        }),
+    };
+    if !unsafe { crate::dlls::devnodes::add_to_set(set, node, data) } {
+        return fail(ERROR_INVALID_HANDLE);
+    }
+    crate::process::set_last_error(0);
+    1
+}
+
+/// `SetupDiCreateDeviceInfoW` : appareil énuméré par ROOT, inscrit au
+/// registre seulement par DIF_REGISTERDEVICE (comme Windows).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn SetupDiCreateDeviceInfoW(
+    set: usize,
+    name: *const u16,
+    guid: *const u8,
+    desc: *const u16,
+    _hwnd: usize,
+    flags: u32,
+    data: *mut u8,
+) -> i32 {
+    create_device_info(set, opt_w(name), guid_at(guid), opt_w(desc), flags, data)
+}
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn SetupDiCreateDeviceInfoA(
+    set: usize,
+    name: *const u8,
+    guid: *const u8,
+    desc: *const u8,
+    _hwnd: usize,
+    flags: u32,
+    data: *mut u8,
+) -> i32 {
+    create_device_info(set, opt_a(name), guid_at(guid), opt_a(desc), flags, data)
+}
+
+/// Chaînes d'un tampon REG_MULTI_SZ ou REG_SZ (UTF-16 ou 8 bits).
+unsafe fn strings_of(buf: *const u8, size: u32, wide: bool) -> Vec<String> {
+    if buf.is_null() || size == 0 {
+        return Vec::new();
+    }
+    let b = std::slice::from_raw_parts(buf, size as usize);
+    let text = if wide {
+        let w: Vec<u16> = (0..b.len() / 2)
+            .map(|i| u16::from_le_bytes([b[2 * i], b[2 * i + 1]]))
+            .collect();
+        String::from_utf16_lossy(&w)
+    } else {
+        b.iter().map(|&c| c as char).collect()
+    };
+    text.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+unsafe fn set_property(
+    set: usize,
+    data: *const u8,
+    prop: u32,
+    buf: *const u8,
+    size: u32,
+    wide: bool,
+) -> i32 {
+    use crate::dlls::devnodes::Kind;
+    let values = strings_of(buf, size, wide);
+    let done = crate::dlls::devnodes::with_set_node(set, data, |n| match &mut n.kind {
+        Kind::Virtual(v) => {
+            match prop {
+                0 => v.description = values.first().cloned().unwrap_or_default(),
+                1 => v.hardware_ids = values,
+                2 => v.compatible_ids = values,
+                // Les autres propriétés (nom convivial, filtres…) sont acceptées.
+                _ => {}
+            }
+            true
+        }
+        // Les appareils réels gardent leurs propriétés lues dans sysfs.
+        _ => true,
+    });
+    match done {
+        Some(_) => {
+            crate::process::set_last_error(0);
+            1
+        }
+        None => fail(ERROR_INVALID_HANDLE),
+    }
+}
+
+/// `SetupDiSetDeviceRegistryPropertyW` : identifiants matériels (SPDRP_HARDWAREID).
+pub unsafe extern "win64" fn SetupDiSetDeviceRegistryPropertyW(
+    set: usize,
+    data: *const u8,
+    prop: u32,
+    buf: *const u8,
+    size: u32,
+) -> i32 {
+    set_property(set, data, prop, buf, size, true)
+}
+pub unsafe extern "win64" fn SetupDiSetDeviceRegistryPropertyA(
+    set: usize,
+    data: *const u8,
+    prop: u32,
+    buf: *const u8,
+    size: u32,
+) -> i32 {
+    set_property(set, data, prop, buf, size, false)
+}
+
+/// `SetupDiCallClassInstaller` : DIF_REGISTERDEVICE inscrit l'appareil
+/// créé, DIF_REMOVE le retire ; les autres étapes réussissent sans rien
+/// charger (aucun co-installeur ni pilote n'est exécuté).
+pub unsafe extern "win64" fn SetupDiCallClassInstaller(
+    dif: u32,
+    set: usize,
+    data: *const u8,
+) -> i32 {
+    use crate::dlls::devnodes;
+    let node = devnodes::with_set_node(set, data, |n| n.clone());
+    let result = match (dif, node) {
+        (DIF_REGISTERDEVICE, Some(n)) => devnodes::register_virtual(&n),
+        (DIF_REMOVE, Some(n)) => {
+            devnodes::remove_virtual(&n.id);
+            Ok(())
+        }
+        (DIF_REGISTERDEVICE | DIF_REMOVE, None) => Err(ERROR_INVALID_HANDLE),
+        _ => Ok(()),
+    };
+    match result {
+        Ok(()) => {
+            crate::process::set_last_error(0);
+            1
+        }
+        Err(e) => fail(e),
+    }
+}
+
+/// `SetupDiRemoveDevice` : comme DIF_REMOVE.
+pub unsafe extern "win64" fn SetupDiRemoveDevice(set: usize, data: *const u8) -> i32 {
+    SetupDiCallClassInstaller(DIF_REMOVE, set, data)
+}
+
+/// `CMP_WaitNoPendingInstallEvents` : aucune installation n'est jamais en
+/// attente sous Winlux (pas de pilote à charger), WAIT_OBJECT_0 tout de suite.
+pub extern "win64" fn CMP_WaitNoPendingInstallEvents(_timeout: u32) -> u32 {
+    0
+}
+
+/// `CM_Request_Device_EjectW` : un appareil créé par un installeur est
+/// retiré ; un vrai appareil ne s'éjecte pas d'ici (CR_REMOVE_VETOED).
+pub unsafe extern "win64" fn CM_Request_Device_EjectW(
+    devinst: u32,
+    veto: *mut u32,
+    _name: *mut u16,
+    _len: u32,
+    _flags: u32,
+) -> u32 {
+    use crate::dlls::devnodes;
+    let node = devnodes::nodes()
+        .into_iter()
+        .find(|n| devnodes::devinst(&n.id) == devinst);
+    if !veto.is_null() {
+        *veto = 0;
+    }
+    match node {
+        Some(n) if matches!(n.kind, devnodes::Kind::Virtual(_)) => {
+            devnodes::remove_virtual(&n.id);
+            0
+        }
+        Some(_) => {
+            if !veto.is_null() {
+                *veto = 6; // PNP_VetoDevice
+            }
+            0x17 // CR_REMOVE_VETOED
+        }
+        None => 0x0D, // CR_NO_SUCH_DEVNODE
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "SetupDiCreateDeviceInfoList" => fn SetupDiCreateDeviceInfoList,
+        "SetupDiCreateDeviceInfoListExW" => fn SetupDiCreateDeviceInfoListExW,
+        "SetupDiCreateDeviceInfoW" => fn SetupDiCreateDeviceInfoW,
+        "SetupDiCreateDeviceInfoA" => fn SetupDiCreateDeviceInfoA,
+        "SetupDiSetDeviceRegistryPropertyW" => fn SetupDiSetDeviceRegistryPropertyW,
+        "SetupDiSetDeviceRegistryPropertyA" => fn SetupDiSetDeviceRegistryPropertyA,
+        "SetupDiCallClassInstaller" => fn SetupDiCallClassInstaller,
+        "SetupDiRemoveDevice" => fn SetupDiRemoveDevice,
+        "CMP_WaitNoPendingInstallEvents" => fn CMP_WaitNoPendingInstallEvents,
+        "CM_Request_Device_EjectW" => fn CM_Request_Device_EjectW,
         "SetupCopyOEMInfW" => fn SetupCopyOEMInfW,
         "SetupCopyOEMInfA" => fn SetupCopyOEMInfA,
         "SetupUninstallOEMInfW" => fn SetupUninstallOEMInfW,

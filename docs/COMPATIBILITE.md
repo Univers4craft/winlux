@@ -137,6 +137,17 @@ Winlux » ; sinon le service reste arrêté avec `ERROR_DRIVER_BLOCKED` (1275) e
 une notification le dit, en français, anglais, allemand ou espagnol. Test :
 `scripts/test-drivers.sh`.
 
+Depuis #1605, un installeur qui crée lui-même son appareil racine (comme
+`devcon install`) va jusqu'au bout : `SetupDiCreateDeviceInfo` (avec
+`DICD_GENERATE_ID`, identifiant `ROOT\NOM\0000`),
+`SetupDiSetDeviceRegistryProperty(SPDRP_HARDWAREID)` puis
+`SetupDiCallClassInstaller(DIF_REGISTERDEVICE)` inscrivent l'appareil sous
+`HKLM\SYSTEM\CurrentControlSet\Enum\ROOT`, où `CM_Locate_DevNode` et
+`UpdateDriverForPlugAndPlayDevices` le trouvent. `DIF_REMOVE`,
+`SetupDiRemoveDevice` et `CM_Request_Device_EjectW` le retirent (un vrai
+appareil refuse l'éjection, `CR_REMOVE_VETOED`). `CMP_WaitNoPendingInstallEvents`
+répond tout de suite : aucune installation n'est jamais en attente.
+
 `DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
 (`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
 sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
