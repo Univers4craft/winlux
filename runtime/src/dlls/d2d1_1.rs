@@ -360,6 +360,37 @@ pub(super) struct TargetExt {
     dpi: (f32, f32),
     /// Vue ID2D1DeviceContext d'une cible 1.0 (créée à la première demande).
     view: Option<Box<ContextView>>,
+    /// Destination d'origine d'une cible fenêtre ou HDC mise de côté par
+    /// SetTarget vers un bitmap, rendue par SetTarget(NULL) (#1590).
+    home: Option<Box<Home>>,
+}
+
+/// Fenêtre ou HDC d'une cible 1.0, avec ses pixels, le temps qu'un bitmap
+/// lui serve de cible.
+pub(super) struct Home {
+    out: Output,
+    w: u32,
+    h: u32,
+    px: Vec<u8>,
+}
+
+/// Échange la destination courante et celle mise de côté.
+fn swap_home(t: &mut Target, home: &mut Home) {
+    std::mem::swap(&mut t.out, &mut home.out);
+    std::mem::swap(&mut t.w, &mut home.w);
+    std::mem::swap(&mut t.h, &mut home.h);
+    std::mem::swap(&mut t.px, &mut home.px);
+}
+
+/// EndDraw alors qu'un bitmap sert de cible : la fenêtre ou le HDC
+/// d'origine reçoit aussi ce qui lui a été dessiné avant SetTarget.
+pub(super) unsafe fn end_draw_home(t: &mut Target) {
+    if let Some(mut home) = t.ext.home.take() {
+        swap_home(t, &mut home);
+        t.sync_wic(true);
+        swap_home(t, &mut home);
+        t.ext.home = Some(home);
+    }
 }
 
 impl Default for TargetExt {
@@ -371,6 +402,7 @@ impl Default for TargetExt {
             controls: [1, 1024, 1024],
             dpi: (96.0, 96.0),
             view: None,
+            home: None,
         }
     }
 }
@@ -1996,34 +2028,51 @@ unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_vo
 }
 
 /// SetTarget : la cible prend la taille et le contenu du bitmap ; EndDraw
-/// les lui rend (et à sa texture s'il vient d'une surface DXGI).
+/// les lui rend (et à sa texture s'il vient d'une surface DXGI). Une cible
+/// fenêtre ou HDC vue en contexte d'appareil peut aussi dessiner dans un
+/// bitmap : sa fenêtre est mise de côté avec ses pixels et revient à
+/// SetTarget(NULL) ou vers une autre image (#1590, canevas et panneaux de
+/// Paint.NET, qui dessinaient jusque-là dans la fenêtre).
 unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void) {
     let mut t = target(this);
-    if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. }) {
-        // Vue d'une cible fenêtre ou HDC : sa destination ne change pas.
-        crate::log_warn!("d2d1", "SetTarget refusé sur une cible fenêtre ou HDC");
-        return;
+    let to_bitmap = is_pixel_image(image);
+    if !to_bitmap && !image.is_null() {
+        crate::log_warn!(
+            "d2d1",
+            "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
+        );
     }
-    let new_out = if is_pixel_image(image) {
+    // Ce qui a été dessiné dans le bitmap quitté lui revient tout de suite.
+    if t.drawing && matches!(t.out, Output::Bitmap(_)) {
+        t.sync_wic(true);
+    }
+    let old = if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. }) {
+        let out = std::mem::replace(&mut t.out, Output::None);
+        let px = std::mem::take(&mut t.px);
+        t.ext.home = Some(Box::new(Home {
+            out,
+            w: t.w,
+            h: t.h,
+            px,
+        }));
+        Output::None
+    } else {
+        std::mem::replace(&mut t.out, Output::None)
+    };
+    if to_bitmap {
         let b = &Com::get(image as *mut BitmapObj).data;
         t.w = b.w;
         t.h = b.h;
         t.px = crate::dlls::lock(&b.px).clone();
         com_add_ref(image);
-        Output::Bitmap(image)
+        t.out = Output::Bitmap(image);
+    } else if let Some(mut home) = t.ext.home.take() {
+        swap_home(&mut t, &mut home);
     } else {
-        if !image.is_null() {
-            crate::log_warn!(
-                "d2d1",
-                "SetTarget : seule une ID2D1Bitmap1 ou une liste de commandes peut être cible"
-            );
-        }
         t.w = 0;
         t.h = 0;
         t.px = Vec::new();
-        Output::None
-    };
-    let old = std::mem::replace(&mut t.out, new_out);
+    }
     drop(t);
     if let Output::Bitmap(b) = old {
         com_release(b);
@@ -2876,6 +2925,62 @@ mod tests {
         }
         // ID2D1Factory7, tel que demandé par Paint.NET 5.1.
         assert_eq!(FACTORY_IIDS[6].data1, 0xbdc2_bdd3);
+    }
+
+    /// #1590 : une cible HDC vue en contexte d'appareil dessine dans un
+    /// bitmap choisi par SetTarget, puis retrouve ses pixels à SetTarget(NULL).
+    #[test]
+    fn cible_hdc_dessine_dans_un_bitmap_puis_revient() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut rt = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_dc_render_target(f, std::ptr::null(), &mut rt),
+                S_OK
+            );
+            let rt: *mut TargetObj = rt.cast();
+            target(rt).resize(2, 2);
+            let color = |r: f32, b: f32| super::super::ColorF {
+                r,
+                g: 0.0,
+                b,
+                a: 1.0,
+            };
+            super::super::begin_draw(rt);
+            super::super::clear(rt, &color(1.0, 0.0));
+            let mut bmp = std::ptr::null_mut();
+            let size = 4u64 | (3u64 << 32);
+            assert_eq!(
+                dc_create_bitmap(rt, size, std::ptr::null(), 0, std::ptr::null(), &mut bmp),
+                S_OK
+            );
+            dc_set_target(rt, bmp);
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (4, 3));
+            }
+            let mut got = std::ptr::null_mut();
+            dc_get_target(rt, &mut got);
+            assert_eq!(got, bmp);
+            com_release(got);
+            super::super::clear(rt, &color(0.0, 1.0));
+            dc_set_target(rt, std::ptr::null_mut());
+            {
+                let t = target(rt);
+                assert_eq!((t.w, t.h), (2, 2));
+                assert!(matches!(t.out, Output::Dc { .. }));
+                assert_eq!(&t.px[0..4], &[0, 0, 255, 255]);
+            }
+            let (_, _, px) = super::super::bitmap_pixels(bmp).unwrap();
+            assert_eq!(&px[0..4], &[255, 0, 0, 255]);
+            assert_eq!(
+                super::super::end_draw(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            com_release(bmp);
+            com_release(rt.cast());
+            Com::release(f);
+        }
     }
 
     #[test]
