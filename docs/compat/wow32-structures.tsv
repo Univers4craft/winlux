@@ -226,6 +226,8 @@ shell32.rs	ShellExecuteInfo	x86	SHELLEXECUTEINFO de 60 octets converti par execu
 shell_folder_com.rs	Enum	interne	objet IEnumIDList du runtime ; en x86, la passerelle COM (wow32/com.rs, IENUMIDLIST) l'enveloppe
 shell_folder_com.rs	Folder	interne	objet IShellFolder du runtime ; en x86, la passerelle COM (wow32/com.rs, ISHELLFOLDER) l'enveloppe
 shell_link.rs	Link	interne	objet ShellLink (#1732), x64 seulement (refusé si wow32 actif)
+shell_ordinaux.rs	Obj	interne	test unitaire
+shell_ordinaux.rs	QiTab	a-verifier	QITAB x86 = 8 octets (pointeur 4 + int 4), x64 = 16 ; seul le chemin x64 est servi par #1750 (WinRAR x64)
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskbarlist_com.rs	Obj	a-verifier	
