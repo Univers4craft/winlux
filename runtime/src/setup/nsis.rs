@@ -66,6 +66,11 @@ fn decoder<'a>(method: Method, raw: &'a [u8]) -> io::Result<Box<dyn Read + 'a>> 
     })
 }
 
+/// Plafonds du cache des fichiers d'un flux solide : les petits fichiers
+/// (où les doublons se trouvent), dans une enveloppe mémoire bornée.
+const SOLID_CACHE_FILE: usize = 4 << 20;
+const SOLID_CACHE_TOTAL: usize = 128 << 20;
+
 /// Accès aux données (fichiers) de l'installateur.
 enum Data<'a> {
     /// Flux unique : en-tête puis fichiers, chacun précédé de sa taille.
@@ -75,6 +80,14 @@ enum Data<'a> {
         reader: Option<Box<dyn Read + 'a>>,
         pos: u64,
         base: u64,
+        /// Fichiers déjà lus, par position. NSIS ne stocke qu'une fois des
+        /// fichiers identiques (OBS : les .pak de locales) ; sans ce cache,
+        /// chaque relecture en arrière redécompressait le flux depuis le
+        /// début (~9 s par fichier après 500 Mo, #1741).
+        cache: std::collections::HashMap<u32, Vec<u8>>,
+        cached: usize,
+        /// Redécompressions depuis le début du flux (mesure, tests).
+        restarts: u32,
     },
     /// Blocs séparés : `[taille | bit 31 compressé][données]`.
     Blocks { raw: &'a [u8], method: Method },
@@ -112,9 +125,18 @@ impl<'a> Data<'a> {
                 reader,
                 pos,
                 base,
+                cache,
+                cached,
+                restarts,
             } => {
+                if let Some(hit) = cache.get(&offset) {
+                    return Ok(hit.clone());
+                }
                 let target = *base + offset as u64;
                 if reader.is_none() || *pos > target {
+                    if reader.is_some() {
+                        *restarts += 1;
+                    }
                     *reader = Some(decoder(*method, raw)?);
                     *pos = 0;
                 }
@@ -136,6 +158,10 @@ impl<'a> Data<'a> {
                     return Err(bad("fichier tronqué"));
                 }
                 *pos += 4 + size as u64;
+                if size <= SOLID_CACHE_FILE && *cached + size <= SOLID_CACHE_TOTAL {
+                    *cached += size;
+                    cache.insert(offset, out.clone());
+                }
                 Ok(out)
             }
         }
@@ -1456,6 +1482,9 @@ fn load(data: &[u8]) -> Result<(Script, Data<'_>, usize), String> {
                     reader: Some(r),
                     pos: 4 + header_len as u64,
                     base: 4 + header_len as u64,
+                    cache: std::collections::HashMap::new(),
+                    cached: 0,
+                    restarts: 0,
                 },
             )
         };
@@ -1964,6 +1993,43 @@ mod tests {
         assert_eq!(os_info_read(&flags, (60 << 24) | 1), 1);
         assert_eq!(os_info_read(&flags, (12 << 24) | 4), 0x1234);
         assert_eq!(os_info_read(&flags, (63 << 24) | 4), 10); // au-delà : zéros
+    }
+
+    #[test]
+    fn fichiers_partages_lus_sans_tout_redecompresser() {
+        // Flux solide : 5000 petits fichiers, puis des entrées qui
+        // réutilisent des données déjà passées (fichiers identiques, #1741).
+        let mut raw = Vec::new();
+        let mut offsets = Vec::new();
+        for i in 0..5000u32 {
+            offsets.push(raw.len() as u32);
+            let body = format!("pak{i}");
+            raw.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            raw.extend_from_slice(body.as_bytes());
+        }
+        let mut data = Data::Solid {
+            raw: &raw,
+            method: Method::Stored,
+            reader: None,
+            pos: 0,
+            base: 0,
+            cache: std::collections::HashMap::new(),
+            cached: 0,
+            restarts: 0,
+        };
+        for (i, &o) in offsets.iter().enumerate() {
+            assert_eq!(data.read(o).unwrap(), format!("pak{i}").into_bytes());
+            // Chaque fichier relit aussi un fichier déjà passé.
+            let back = offsets[i / 2];
+            assert_eq!(
+                data.read(back).unwrap(),
+                format!("pak{}", i / 2).into_bytes()
+            );
+        }
+        let Data::Solid { restarts, .. } = data else {
+            unreachable!()
+        };
+        assert_eq!(restarts, 0, "relectures en arrière servies par le cache");
     }
 
     #[test]

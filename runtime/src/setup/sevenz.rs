@@ -924,6 +924,45 @@ pub fn embedded_msi(entries: &[Entry]) -> Option<&Entry> {
     }
 }
 
+/// Archive d'installateur sans configuration d'auto-extractible reconnue
+/// (auto-extracteur d'Adobe : `setup.exe`, `setup.ini`, `AcroPro.msi`…) :
+/// `setup.exe` ou `setup.ini` à la racine. Ce n'est pas une application à
+/// copier dans Program Files, mais un installateur à suivre (#1738).
+pub fn is_setup_bundle(entries: &[Entry]) -> bool {
+    entries.iter().any(|e| {
+        !e.dir && !e.name.contains('\\') && {
+            let n = e.name.to_ascii_lowercase();
+            n == "setup.exe" || n == "setup.ini"
+        }
+    })
+}
+
+/// Section `[Product]` de `setup.ini` (clés en minuscules).
+fn setup_ini_product(entries: &[Entry]) -> Vec<(String, String)> {
+    let Some(ini) = entries
+        .iter()
+        .find(|e| !e.dir && e.name.eq_ignore_ascii_case("setup.ini"))
+    else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&ini.data);
+    let mut in_product = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_product = line.eq_ignore_ascii_case("[product]");
+            continue;
+        }
+        if in_product {
+            if let Some((k, v)) = line.split_once('=') {
+                out.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
 /// Lancement d'un auto-extractible 7z qui lance son propre installateur.
 /// `None` : ce n'est pas ce cas, la suite habituelle s'applique.
 /// - Il porte un paquet MSI (voir [`embedded_msi`]) : le contenu est extrait
@@ -931,20 +970,36 @@ pub fn embedded_msi(entries: &[Entry]) -> Option<&Entry> {
 ///   le paquet est installé par le msiexec de Winlux, puis le dossier est
 ///   effacé.
 /// - Il ne porte qu'un téléchargeur : voir [`super::web`].
+/// - Archive d'installateur sans configuration reconnue ([`is_setup_bundle`],
+///   Adobe) : le MSI nommé par `setup.ini` est installé de même, ou à
+///   défaut le `setup.exe` de l'archive est lancé depuis le dossier
+///   temporaire. Rien n'est jamais annoncé comme installé à sa place (#1738).
 pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     let data = std::fs::read(exe).ok()?;
     let at = find_archive(&data)?;
-    if !runs_own_setup(&data, at) {
-        return None;
-    }
+    let own_setup = runs_own_setup(&data, at);
     let entries = match read_all(&data[at..]) {
         Ok(e) => e,
-        Err(e) => {
+        Err(e) if own_setup => {
             eprintln!("setup : {} : {e}", exe.display());
             return Some(1);
         }
+        Err(_) => return None,
     };
-    let Some(msi) = embedded_msi(&entries) else {
+    let bundle = !own_setup && is_setup_bundle(&entries);
+    if !own_setup && !bundle {
+        return None;
+    }
+    let product = setup_ini_product(&entries);
+    let named_msi = product.iter().find(|(k, _)| k == "msi").and_then(|(_, v)| {
+        entries
+            .iter()
+            .find(|e| !e.dir && e.name.eq_ignore_ascii_case(v.trim_matches('"')))
+    });
+    let Some(msi) = named_msi.or_else(|| embedded_msi(&entries)) else {
+        if bundle {
+            return Some(run_bundle_setup(&entries, args));
+        }
         return super::web::is_downloader(&entries)
             .then(|| super::web::run(&data, exe, args, allow_download));
     };
@@ -980,6 +1035,12 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     drop(entries);
     let msi_path = msi_path?;
     let mut log = crate::msi::install::Logger { file: None, quiet };
+    // Correctif nommé par setup.ini (Acrobat) : pas encore appliqué (#1715).
+    if let Some((_, patch)) = product.iter().find(|(k, _)| k == "patch") {
+        log.log(&format!(
+            "correctif .msp non pris en charge, installation de la version de base : {patch} (#1715)"
+        ));
+    }
     let opts = crate::msi::install::Options {
         props: Vec::new(),
         quiet,
@@ -988,6 +1049,51 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     let rc = crate::msi::install::install(&msi_path, &opts, &mut log);
     let _ = std::fs::remove_dir_all(&work);
     Some(rc)
+}
+
+/// Archive d'installateur sans MSI : extraite dans un dossier temporaire,
+/// puis son `setup.exe` est lancé et attendu ; son code est rendu (#1738).
+fn run_bundle_setup(entries: &[Entry], args: &[String]) -> i32 {
+    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    let mut setup = None;
+    for e in entries {
+        let path = work.join(e.name.split('\\').collect::<std::path::PathBuf>());
+        let written = if e.dir {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, &e.data))
+        };
+        if let Err(err) = written {
+            eprintln!("setup : {} : {err}", path.display());
+            let _ = std::fs::remove_dir_all(&work);
+            return 1;
+        }
+        if !e.dir && e.name.eq_ignore_ascii_case("setup.exe") {
+            setup = Some(path);
+        }
+    }
+    let Some(setup) = setup else {
+        let _ = std::fs::remove_dir_all(&work);
+        eprintln!("setup : archive d'installateur sans setup.exe ni paquet MSI");
+        return 1;
+    };
+    let win = crate::paths::to_windows(&setup);
+    let dir = crate::paths::to_windows(&work);
+    let params = args.join(" ");
+    let outcome = super::run::program(&win, &params, &dir, true, false);
+    eprintln!("setup : {}", super::run::describe(&win, &outcome));
+    // Toujours en cours : son dossier reste, il en a encore besoin.
+    if !matches!(outcome, super::run::Outcome::TimedOut) {
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    match outcome {
+        super::run::Outcome::Exited(c) => c,
+        super::run::Outcome::Started | super::run::Outcome::TimedOut => 0,
+        _ => 1,
+    }
 }
 
 /// Installe : les fichiers vont dans Program Files\<produit>, un
@@ -1006,6 +1112,12 @@ pub fn install(
         );
     }
     let entries = read_all(&data[at..])?;
+    if is_setup_bundle(&entries) {
+        // Jamais copié dans Program Files ni annoncé comme installé (#1738).
+        return Err(
+            "archive d'installateur (setup.exe, setup.ini) : à lancer, pas à copier".into(),
+        );
+    }
     let (name, version, publisher) = names(data, path);
     let x64 = entries
         .iter()
@@ -1278,5 +1390,34 @@ pub mod tests {
         assert!(embedded_msi(&[e("setup.exe")]).is_none());
         let ambigu = [e("a.msi"), e("b.msi")];
         assert!(embedded_msi(&ambigu).is_none());
+    }
+
+    /// Auto-extracteur d'Adobe : setup.exe et setup.ini à la racine, le MSI
+    /// et le correctif nommés par `[Product]` (#1738).
+    #[test]
+    fn archive_d_installateur_reconnue() {
+        let f = |n: &str, d: &[u8]| Entry {
+            name: n.into(),
+            dir: false,
+            data: d.to_vec(),
+        };
+        let ini =
+            b"[Startup]\r\nRequireOS64=1\r\n[Product]\r\nmsi=AcroPro.msi\r\nPATCH=Upd.msp\r\n";
+        let bundle = [
+            f("setup.exe", b"MZ"),
+            f("setup.ini", ini),
+            f("AcroPro.msi", b""),
+            f("Transforms\\1036.mst", b""),
+        ];
+        assert!(is_setup_bundle(&bundle));
+        let p = setup_ini_product(&bundle);
+        assert!(p.contains(&("msi".into(), "AcroPro.msi".into())));
+        assert!(p.contains(&("patch".into(), "Upd.msp".into())));
+        assert!(!p.iter().any(|(k, _)| k == "requireos64"));
+        // Application portable : setup.exe dans un sous-dossier ne compte pas.
+        assert!(!is_setup_bundle(&[
+            f("App\\setup.exe", b"MZ"),
+            f("app.exe", b"MZ")
+        ]));
     }
 }
