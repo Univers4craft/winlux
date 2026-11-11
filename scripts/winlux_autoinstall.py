@@ -17,6 +17,8 @@ SEARCH_PATHS = [
 
 LANGUAGES = {"fr_FR": "fr", "en_US": "us", "de_DE": "de", "es_ES": "es", "it_IT": "it", "pt_BR": "br"}
 KEYBOARDS = {"fr", "us", "gb", "de", "es", "it", "br", "ch", "be", "ca"}
+# Navigateurs proposés (docs/BROWSERS.md, #1716), ordre alphabétique des noms affichés.
+BROWSERS = ("brave", "chrome", "edge", "firefox", "opera", "operagx", "tor", "vivaldi")
 TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "license_accepted",
             "partitioning", "account", "packages", "browser", "store_catalogs", "reboot"}
 PARTITION_KEYS = {"disk", "mode"}
@@ -233,8 +235,8 @@ def validate(data):
     browser = data.get("browser")
     if browser is not None:
         # Navigateur téléchargé chez l'éditeur au premier démarrage ; null = aucun.
-        if browser not in ("chrome", "edge", "firefox"):
-            raise AnswerFileError(f"browser : chrome, edge, firefox ou null attendu : {browser!r}")
+        if browser not in BROWSERS:
+            raise AnswerFileError(f"browser : {', '.join(BROWSERS)} ou null attendu : {browser!r}")
         settings["browser"] = browser
     stores = data.get("store_catalogs")
     if stores is not None:

@@ -430,6 +430,14 @@ jobs:
         run: |
           WINLUX_STORE_CATALOGS_DEFS=integration/store-catalogs.json python3 -B scripts/winlux-store-catalogs.py --check-key flathub
 
+      - name: Navigateurs proposés présents chez leurs éditeurs (informatif, #1716)
+        # Index officiels de Brave, Chrome, Edge, Firefox, Opera, Opera GX et
+        # Vivaldi ; liste signée de Tor Browser (clé épinglée). Informatif :
+        # une panne chez un éditeur ne bloque pas les autres PR.
+        continue-on-error: true
+        timeout-minutes: 10
+        run: sh scripts/check-navigateurs-editeurs.sh
+
       - name: Sonder les dépôts des éditeurs du Store (informatif)
         continue-on-error: true
         timeout-minutes: 20

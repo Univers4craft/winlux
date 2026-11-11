@@ -157,6 +157,11 @@ pub fn cli(args: &[String]) -> i32 {
             eprintln!("{USAGE}");
             ERROR_INVALID_COMMAND_LINE
         }
+        Some(Mode::Install(p)) | Some(Mode::Admin(p))
+            if crate::anticheat::check_launch(&host_path(&p)).is_some() =>
+        {
+            crate::anticheat::REFUSED
+        }
         Some(Mode::Install(p)) => {
             refuse_patches(&opts.props, &mut log);
             install::install(&host_path(&p), &opts, &mut log)

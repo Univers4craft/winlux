@@ -6,6 +6,55 @@ L'utilisateur choisit le sien dans **Paramètres > Navigateurs**. Winlux le
 télécharge sur le site officiel de son éditeur, vérifie le fichier et
 l'installe pour lui, sans qu'il ait rien à faire à la main.
 
+## Navigateurs proposés (#1716)
+
+Le 11 novembre 2026, damien a demandé d'ajouter les navigateurs de sa liste
+qui ont une version Linux officielle, et d'essayer en `.exe`, sans jamais le
+proposer par défaut, un navigateur qui n'en aurait pas. Relevé fait ce
+jour-là : **les cinq ont une version Linux officielle**, aucun ne passe donc
+par le `.exe`.
+
+| Navigateur | Éditeur | Source officielle | Format |
+|---|---|---|---|
+| Brave | Brave Software, Inc. | brave-browser-apt-release.s3.brave.com (`stable main`, paquet `brave-browser`) | .deb, dépôt APT |
+| Google Chrome | Google LLC | dl.google.com/linux/chrome/deb | .deb, dépôt APT |
+| Microsoft Edge | Microsoft Corporation | packages.microsoft.com/repos/edge | .deb, dépôt APT |
+| Mozilla Firefox | Mozilla Corporation | packages.mozilla.org/apt | .deb, dépôt APT |
+| Opera | Opera Norway AS | deb.opera.com/opera-stable (`stable non-free`, paquet `opera-stable`) | .deb, dépôt APT |
+| Opera GX | Opera Norway AS | deb.opera.com/opera-gx-stable (`stable non-free`) ; version Linux sortie le 19 mars 2026 | .deb, dépôt APT |
+| Tor Browser | The Tor Project, Inc. | dist.torproject.org (`tor-browser-linux-x86_64-<version>.tar.xz`) | archive signée |
+| Vivaldi | Vivaldi Technologies AS | repo.vivaldi.com/archive/deb (`stable main`, paquet `vivaldi-stable`) | .deb, dépôt APT |
+
+Le conteneur de développement n'atteint pas ces sites : l'étape de CI
+« Navigateurs proposés présents chez leurs éditeurs »
+(`scripts/check-navigateurs-editeurs.sh`) lit les vrais index et affiche, pour
+chacun, la version, l'adresse et le SHA-256 du paquet retenu. Si un éditeur
+renomme son paquet ou son programme, `winlux-browsers` cherche le programme
+par le lien que le paquet pose dans `/usr/bin` et note le chemin trouvé dans
+`/opt/winlux/browsers/<id>/program`.
+
+**Tor Browser** n'a ni `.deb` ni dépôt APT. Son archive n'est acceptée que si :
+1. la liste `sha256sums-signed-build.txt` de la version est signée par la clé
+   des développeurs de Tor Browser, d'empreinte
+   `EF6E 286D DA85 EA2A 4BA7 DE68 4E2C 6E87 9329 8290` (épinglée dans
+   `prepare-browser-packages.py` et dans `winlux-browsers.sh`) ;
+2. son SHA-256 est celui de cette liste ;
+3. sa propre signature `.asc` est valide avec la même clé, vérifiée au
+   téléchargement puis à nouveau juste avant l'extraction ;
+4. elle ne contient que le dossier `tor-browser` (aucun chemin absolu ni `..`).
+
+La clé est lue chez le projet Tor (WKD de torproject.org, puis
+keys.openpgp.org, le serveur que cite sa documentation) et refusée si son
+empreinte principale n'est pas celle épinglée. La vérification utilise
+`gpgv`, copié dans l'image. Tor Browser écrit son profil dans son propre
+dossier : il tourne depuis une copie personnelle
+(`~/.local/share/winlux/tor-browser`, compte `winlux-web`), refaite à chaque
+nouvelle version en gardant le profil.
+
+Hors de cette demande : Internet Download Manager, JDownloader 2 et Free
+Download Manager (gestionnaires de téléchargement), FileZilla et WinSCP
+(transfert de fichiers) ne sont pas des navigateurs.
+
 ## Pourquoi ce choix
 
 1. **La licence d'Edge interdit de le redistribuer.** Le texte « MICROSOFT
@@ -39,8 +88,9 @@ c'est sa copie, faite sur sa machine.
 
 ## Comment ça marche maintenant
 
-- **Écran de choix** : Paramètres > Navigateurs liste Google Chrome, Microsoft
-  Edge et Mozilla Firefox dans l'ordre alphabétique, sans mise en avant, avec
+- **Écran de choix** : Paramètres > Navigateurs liste Brave, Google Chrome,
+  Microsoft Edge, Mozilla Firefox, Opera, Opera GX, Tor Browser et Vivaldi
+  dans l'ordre alphabétique, sans mise en avant, avec
   pour chacun « Installer », « Par défaut » (qui l'installe au besoin) et
   « Ouvrir ». Aucun navigateur par défaut tant que l'utilisateur n'en a pas
   choisi un.
@@ -67,7 +117,7 @@ c'est sa copie, faite sur sa machine.
   `sh scripts/check-firefox-langue.sh`, sur le Winlux installé, vérifie la
   langue réellement affichée (en-tête Accept-Language) sur un profil neuf
   puis relancé.
-- **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`
+- **Téléchargement automatique** : `winlux-browsers --install <id>` (brave, chrome, edge, firefox, opera, operagx, tor, vivaldi)
   lance `/usr/lib/winlux/winlux-browser-fetch` (copie de
   `scripts/prepare-browser-packages.py`). Il lit l'index du dépôt officiel de
   l'éditeur en HTTPS (packages.microsoft.com, dl.google.com,

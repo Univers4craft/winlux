@@ -235,6 +235,7 @@ pub mod shcore_obsolete;
 pub mod shell32;
 pub mod shell32_releve;
 pub mod shell_folder_com;
+pub mod shell_link;
 pub mod shlwapi;
 pub mod shlwapi_path;
 pub mod shlwapi_reg;
