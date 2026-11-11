@@ -170,11 +170,19 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let user = std::env::var("USER").unwrap_or_else(|_| "winlux".into());
     let lang = language_id();
     let fixed: Vec<(&str, String)> = vec![
+        // Valeurs que Windows Installer 5 donne sur Windows 10 et 11 x64
+        // (documentation « Operating System Property Values ») ; un
+        // paquet qui teste le système ou la version de Windows Installer
+        // doit s'y reconnaître (#1756).
         ("VersionNT", "603".into()),
         ("VersionNT64", "603".into()),
         ("WindowsBuild", "9600".into()),
         ("ServicePackLevel", "0".into()),
+        ("VersionMsi", "5.00".into()),
+        ("MsiNTProductType", "1".into()),
         ("Msix64", "6".into()),
+        ("MsiAMD64", "6".into()),
+        ("PhysicalMemory", physical_memory_mb().to_string()),
         ("Privileged", "1".into()),
         ("AdminUser", "1".into()),
         ("LogonUser", user.clone()),
@@ -189,6 +197,18 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     for (k, v) in folders.into_iter().chain(fixed) {
         ctx.props.insert(k.to_string(), v);
     }
+}
+
+/// Mémoire physique en Mo (propriété PhysicalMemory), lue dans /proc/meminfo.
+fn physical_memory_mb() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("MemTotal:"))
+                .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+        })
+        .map_or(4096, |kb| kb / 1024)
 }
 
 struct DirInfo {
