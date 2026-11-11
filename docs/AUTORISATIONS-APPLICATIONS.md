@@ -232,8 +232,8 @@ session » en tête de sa propre section, « Lancer sans isolation » sous
   interrupteur (comme Windows liste les applications sous « Micro »).
 - Page 44 « Démarrage » (Applications) : section 2.5.
 
-Les numéros 43 et 44 sont à réserver auprès du fil Paramètres, les numéros
-se télescopant entre quatre fichiers.
+Les numéros 43 et 44 sont réservés à ce chantier (le plus grand sur master
+est 42, `PAGE_PARENTAL`), les numéros se télescopant entre quatre fichiers.
 
 ## 3. Découpage en PR (après la 0.2.21)
 
