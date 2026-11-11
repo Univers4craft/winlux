@@ -417,6 +417,14 @@ impl XftRenderer {
         if display.is_null() {
             return None;
         }
+        // Xft et cairo dessinent sur des fenêtres et des tampons de la
+        // connexion x11rb, depuis cette seconde connexion Xlib. Si l'un
+        // d'eux vient d'être détruit, le serveur répond BadDrawable et le
+        // gestionnaire Xlib par défaut tuait tout le programme : FileZilla
+        // mourait à l'ouverture de « Se souvenir des mots de passe ? »
+        // (#1577). L'erreur est journalisée, le dessin perdu est refait au
+        // prochain WM_PAINT.
+        super::dxgi::install_x_error_guard();
         let screen = (api.default_screen)(display);
         let visual = (api.default_visual)(display, screen);
         let colormap = (api.default_colormap)(display, screen);
@@ -3887,6 +3895,23 @@ pub(crate) fn winlux_window_icon() -> &'static [u32] {
 
 #[cfg(test)]
 mod tests {
+    /// #1577 : un texte Xft sur une fenêtre ou un tampon déjà détruit
+    /// (BadDrawable) ne tue plus le processus. Sans affichage X, rien à
+    /// vérifier.
+    #[test]
+    fn xft_sur_un_dessin_detruit_ne_tue_pas_le_processus() {
+        if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
+            return;
+        }
+        let Some(mut xft) = (unsafe { super::XftRenderer::connect() }) else {
+            return;
+        };
+        let spec = crate::dlls::gui::FontSpec::default();
+        // Identifiant jamais attribué par le serveur : BadDrawable.
+        let _ = xft.draw(0x1F, &spec, 2, 12, b"FileZilla", 0);
+        xft.sync();
+    }
+
     /// #1421 : SDL lié en statique est reconnu à sa classe de fenêtre.
     #[test]
     fn sdl_statique_reconnu() {

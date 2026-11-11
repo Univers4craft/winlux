@@ -26,7 +26,9 @@ fn seh_trace() -> bool {
 macro_rules! seh_trace {
     ($($arg:tt)*) => {
         if seh_trace() {
-            eprintln!("winlux[seh] {}", format_args!($($arg)*));
+            let line = format!($($arg)*);
+            eprintln!("winlux[seh] {line}");
+            crate::log::copy_to_file(crate::log::Level::Debug, "seh", &line);
         }
     };
 }
@@ -1566,6 +1568,7 @@ unsafe fn unhandled(rec: &ExceptionRecord, ctx: &mut Context) -> ! {
     if filter != 0 {
         let line = describe_for_app_filter(rec, ctx);
         eprintln!("{line}");
+        crate::log::copy_to_file(crate::log::Level::Error, "seh", &line);
         crate::thunks::api_note(&line);
         let mut copy = *rec;
         let mut ptrs = ExceptionPointers {

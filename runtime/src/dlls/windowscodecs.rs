@@ -1827,7 +1827,7 @@ const fn pf(
     }
 }
 
-const FMT_ALPHA8: Guid = guid(
+pub const FMT_ALPHA8: Guid = guid(
     0xe6cd0116,
     0xeeba,
     0x4161,
