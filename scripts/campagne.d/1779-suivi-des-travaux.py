@@ -30,3 +30,6 @@ ok("suivi-galerie-precedente.py" in _etape
 ok("MIN_ARTEFACT" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
    and 'size_in_bytes", 0) >= MIN_ARTEFACT' in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8"),
    "Suivi des travaux : les artefacts de captures vides ne chassent pas les vraies captures (#1912)")
+ok("def cadrage(" in (SCRIPTS / "suivi-travaux.py").read_text(encoding="utf-8")
+   and "(#1925)" in (SCRIPTS / "test-suivi-travaux.py").read_text(encoding="utf-8"),
+   "Suivi des travaux : vignettes 1440p/4K recadrées sur la fenêtre, pas un bureau noir (#1925)")

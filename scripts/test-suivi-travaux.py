@@ -140,6 +140,25 @@ def main():
                                str(tmp / "sans"), "--archive", str(vide)], capture_output=True, text=True)
         check(sans.returncode == 1, "archive sans galerie : rien de repris, code 1 (#1871)")
 
+        # Vignette recadrée sur une petite fenêtre posée sur un bureau noir (#1925).
+        import importlib.util
+        from PIL import Image
+        spec = importlib.util.spec_from_file_location("suivi_travaux", HERE / "suivi-travaux.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        quatre_k = Image.new("RGB", (3840, 2160), (0, 0, 0))
+        quatre_k.paste(Image.new("RGB", (600, 700), (240, 240, 245)), (3100, 1300))
+        boite = module.cadrage(quatre_k)
+        check(boite is not None and boite[0] <= 3100 and boite[1] <= 1300 and boite[2] >= 3700 and boite[3] >= 2000
+              and boite[2] <= 3840 and boite[3] <= 2160 and abs((boite[2] - boite[0]) / (boite[3] - boite[1]) - 1.6) < 0.01
+              and (boite[2] - boite[0]) < 1600,
+              f"4K à fond noir : vignette recadrée sur la fenêtre, en 16:10 (#1925) ({boite})")
+        bureau = Image.new("RGB", (1920, 1080), (40, 60, 120))
+        bureau.paste(Image.new("RGB", (1920, 48), (20, 20, 30)), (0, 1032))
+        bureau.paste(Image.new("RGB", (1200, 800), (240, 240, 245)), (300, 100))
+        check(module.cadrage(bureau) is None and module.cadrage(Image.new("RGB", (800, 500))) is None,
+              "capture remplie ou vide : vignette de l'image entière (#1925)")
+
         # Page index.html de l'artefact captures-ui.
         artefact = work / "102" / "images"
         (artefact / "r.json").write_text('{"ecrans": {"parametres-02": 3.5}}', encoding="utf-8")
