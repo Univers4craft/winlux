@@ -56,12 +56,15 @@ b[sec + 8:sec + 24] = struct.pack("<IIII", len(r), rva, len(r), 0x400)
 open(sys.argv[1], "wb").write(bytes(b) + bytes(r))
 PY
 
-run() { HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" "$runtime" "$@"; }
+# WINLUX_SETUP_RUN=0 : le lancement de fin d'installation est journalisé
+# sans démarrer le faux programme (#1730).
+run() { HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_SETUP_RUN=0 "$runtime" "$@"; }
 mkdir -p "$work/home"
 info=$(run --setup --info "$work/Demo-Setup.exe")
 case "$info" in squirrel*Demo*2.0.1*'Demo SA'*'AppData\Local\DemoApp'*) ;; *) echo "info inattendue : $info" >&2; exit 1 ;; esac
 run --setup "$work/Demo-Setup.exe" >"$work/out.txt" 2>&1 || { cat "$work/out.txt"; exit 1; }
 app="$work/home/AppData/Local/DemoApp"
+grep -q 'Demo.exe --squirrel-firstrun' "$work/out.txt" || { echo "lancement de fin d'installation absent" >&2; cat "$work/out.txt" >&2; exit 1; }
 for f in "$app/Update.exe" "$app/app-2.0.1/Demo.exe" "$app/app-2.0.1/resources/app.asar" "$app/app-2.0.1/locales/fr.pak"; do
     test -f "$f" || { echo "fichier absent : $f" >&2; exit 1; }
 done

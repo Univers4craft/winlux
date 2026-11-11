@@ -369,6 +369,14 @@ pub fn install(
     inst.manifest.version = o.spec.version.clone();
     inst.manifest.publisher = company;
     inst.manifest.location = root;
+    // Squirrel lance l'application à la fin de l'installation, avec
+    // `--squirrel-firstrun` (documentation publique de Squirrel.Windows) ;
+    // sans attendre, comme le Setup.exe d'origine (#1730).
+    let outcome = super::run::program(&target, "--squirrel-firstrun", &app, false, false);
+    inst.log.log(&super::run::describe(
+        &format!("{target} --squirrel-firstrun"),
+        &outcome,
+    ));
     Ok(())
 }
 

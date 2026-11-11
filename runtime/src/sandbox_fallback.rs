@@ -6,12 +6,11 @@
 //! fenêtre. Ce cas est sans ambiguïté : Chromium ne tue jamais autrement un
 //! enfant `--type=…` qu'il n'a pas encore laissé démarrer.
 //!
-//! Winlux le détecte alors et propose clairement (fr/en/de/es, fenêtre
-//! `winlux-permission ask sandbox`) de relancer l'application sans son bac
-//! à sable (`--no-sandbox`). La réponse est mémorisée comme les autres
-//! autorisations et reste visible et modifiable dans Paramètres >
-//! Confidentialité et sécurité : aux lancements suivants, `--no-sandbox` est
-//! ajouté d'office. Rien n'est désactivé en silence.
+//! Winlux le détecte alors et relance l'application sans son bac à sable
+//! (`--no-sandbox`), sans poser de question (#1733) : ses enfants sont
+//! confinés par Winlux. Le choix est consigné dans le journal, mémorisé et
+//! visible dans Paramètres > Confidentialité et sécurité, où un refus est
+//! respecté ; aux lancements suivants, `--no-sandbox` est ajouté d'office.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,7 +59,7 @@ fn sandbox_failed() {
     }
     crate::log_warn!(
         "process",
-        "bac à sable de Chromium impossible : proposition de relancer sans"
+        "bac à sable de Chromium impossible : relance sans, enfants confinés par Winlux (#1733)"
     );
     if !crate::permissions::allowed(Capability::Sandbox) {
         return;
