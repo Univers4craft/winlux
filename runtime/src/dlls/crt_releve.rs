@@ -1642,7 +1642,7 @@ unsafe extern "win64" fn vcrt_init_cs_ex(cs: usize, spin: u32, flags: u32) -> i3
 // Entrées-sorties formatées
 // ---------------------------------------------------------------------
 
-unsafe extern "win64" fn stdio_common_vfscanf(
+pub(crate) unsafe extern "win64" fn stdio_common_vfscanf(
     options: u64,
     stream: *mut c_void,
     fmt: *const u8,
@@ -1662,7 +1662,7 @@ unsafe extern "win64" fn stdio_common_vfscanf(
     })
 }
 
-unsafe extern "win64" fn stdio_common_vfwscanf(
+pub(crate) unsafe extern "win64" fn stdio_common_vfwscanf(
     options: u64,
     stream: *mut c_void,
     fmt: *const u16,
@@ -1681,7 +1681,7 @@ unsafe extern "win64" fn stdio_common_vfwscanf(
 
 /// `__conio_common_vcprintf` : vers la console, c'est-à-dire la sortie
 /// standard du terminal.
-unsafe extern "win64" fn conio_common_vcprintf(
+pub(crate) unsafe extern "win64" fn conio_common_vcprintf(
     options: u64,
     fmt: *const u8,
     _locale: usize,
@@ -1729,7 +1729,7 @@ unsafe extern "win64" fn vscprintf(fmt: *const u8, va: *const u64) -> i32 {
 }
 
 /// `fgetws(tampon, n, flux)` : une ligne de texte large (fgetwc).
-unsafe extern "win64" fn fgetws(buf: *mut u16, n: i32, f: *mut c_void) -> *mut u16 {
+pub(crate) unsafe extern "win64" fn fgetws(buf: *mut u16, n: i32, f: *mut c_void) -> *mut u16 {
     if buf.is_null() || n <= 0 || f.is_null() {
         *errno() = EINVAL;
         return std::ptr::null_mut();
