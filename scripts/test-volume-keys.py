@@ -31,7 +31,7 @@ bin_dir = tmp / "bin"
 bin_dir.mkdir()
 state_file = tmp / "state.json"
 FAKE = r'''#!PYTHON
-import json, sys
+import json, os, sys
 path = "STATE"
 state = json.load(open(path))
 args = sys.argv[1:]
@@ -57,7 +57,10 @@ elif name == "pactl":
     elif args[0] == "set-source-mute": state["mic_muted"] = not state["mic_muted"]
     elif args[0] == "get-source-mute": print("Mute: " + ("yes" if state["mic_muted"] else "no"))
     else: sys.exit(1)
-json.dump(state, open(path, "w"))
+# Écriture atomique : le test relit ce fichier pendant que la touche est traitée.
+with open(path + ".tmp", "w") as f:
+    json.dump(state, f)
+os.replace(path + ".tmp", path)
 '''.replace("PYTHON", sys.executable).replace("STATE", str(state_file))
 
 

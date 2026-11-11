@@ -1687,9 +1687,30 @@ pub fn create_pen(style: u32, width: i32, color: u32) -> usize {
 }
 
 pub fn create_font(spec: FontSpec) -> usize {
+    trace_font_once(&spec.face, spec.weight, spec.italic);
     let handle = next_handle(0x0021_0000);
     lock(objects()).insert(handle, GdiObject::Font(spec));
     handle
+}
+
+/// WINLUX_TRACE : police retenue pour chaque nom demandé, une seule fois
+/// par nom (#1670 : vgui de Steam ne trouvait aucune police).
+fn trace_font_once(face: &str, weight: i32, italic: bool) {
+    if !crate::log::enabled(crate::log::Level::Trace) {
+        return;
+    }
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let key = face.to_ascii_lowercase();
+    {
+        let mut seen = lock(&SEEN);
+        if seen.contains(&key) {
+            return;
+        }
+        seen.push(key);
+    }
+    let weight = if weight <= 0 { 400 } else { weight as u32 };
+    let file = super::dwrite::gdi_face(face, weight, italic).map(|i| i.path);
+    crate::trace!("CreateFont({face}) → {file:?}");
 }
 
 /// Crée une bitmap compatible 32 bits dont les pixels internes sont des COLORREF.

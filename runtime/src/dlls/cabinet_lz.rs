@@ -203,6 +203,38 @@ unsafe extern "win64" fn fdi_is_cabinet(h: usize, hf: isize, info: *mut FdiCabin
     }
 }
 
+/// Appelle le rappel de FDICopy avec la FDINOTIFICATION de l'appelant :
+/// pour un programme x86, la disposition 32 bits (40 octets ; cb 0, psz1 4,
+/// psz2 8, psz3 12, pv 16, hf 20, date 24, time 26, attribs 28, setID 30,
+/// iCabinet 32, iFolder 34, fdie 36), d'après fdi.h de mingw-w64.
+unsafe fn call_notify(notify: PfnNotify, kind: i32, n: &mut FdiNotification) -> isize {
+    if crate::wow32::pointer_size() != 4 {
+        return notify(kind, n);
+    }
+    let mut b = x86_notification(n);
+    notify(kind, b.as_mut_ptr().cast())
+}
+
+/// FDINOTIFICATION à la disposition x86.
+fn x86_notification(n: &FdiNotification) -> [u8; 40] {
+    let mut b = [0u8; 40];
+    let mut put = |at: usize, v: &[u8]| b[at..at + v.len()].copy_from_slice(v);
+    put(0, &n.cb.to_le_bytes());
+    put(4, &(n.psz1 as usize as u32).to_le_bytes());
+    put(8, &(n.psz2 as usize as u32).to_le_bytes());
+    put(12, &(n.psz3 as usize as u32).to_le_bytes());
+    put(16, &(n.pv as usize as u32).to_le_bytes());
+    put(20, &(n.hf as u32).to_le_bytes());
+    put(24, &n.date.to_le_bytes());
+    put(26, &n.time.to_le_bytes());
+    put(28, &n.attribs.to_le_bytes());
+    put(30, &n.set_id.to_le_bytes());
+    put(32, &n.i_cabinet.to_le_bytes());
+    put(34, &n.i_folder.to_le_bytes());
+    put(36, &n.fdie.to_le_bytes());
+    b
+}
+
 unsafe extern "win64" fn fdi_copy(
     h: usize,
     cabinet: *const u8,
@@ -248,7 +280,8 @@ unsafe extern "win64" fn fdi_copy(
             return 0;
         }
     };
-    let empty = b"\0";
+    // Sur la pile (sous 4 Go pour un programme x86), pas dans l'image.
+    let empty = [0u8; 1];
     let mut n: FdiNotification = std::mem::zeroed();
     n.psz1 = empty.as_ptr();
     n.psz2 = empty.as_ptr();
@@ -256,7 +289,7 @@ unsafe extern "win64" fn fdi_copy(
     n.pv = pv;
     n.set_id = info.set_id;
     n.i_cabinet = info.i_cabinet;
-    if notify(FDINT_CABINET_INFO, &mut n) == -1 {
+    if call_notify(notify, FDINT_CABINET_INFO, &mut n) == -1 {
         set_erf(fdi.erf, FDIERROR_USER_ABORT);
         return 0;
     }
@@ -279,7 +312,7 @@ unsafe extern "win64" fn fdi_copy(
         n.attribs = attribs;
         n.set_id = info.set_id;
         n.i_cabinet = info.i_cabinet;
-        let out = notify(FDINT_COPY_FILE, &mut n);
+        let out = call_notify(notify, FDINT_COPY_FILE, &mut n);
         if out == -1 {
             failure = FDIERROR_USER_ABORT;
             return Err("abandon".into());
@@ -295,7 +328,7 @@ unsafe extern "win64" fn fdi_copy(
         }
         n.hf = out;
         n.cb = 0;
-        if notify(FDINT_CLOSE_FILE_INFO, &mut n) == 0 {
+        if call_notify(notify, FDINT_CLOSE_FILE_INFO, &mut n) == 0 {
             failure = FDIERROR_TARGET_FILE;
             return Err("fermeture".into());
         }
@@ -672,6 +705,29 @@ pub fn lz32_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FDINOTIFICATION x86 : 40 octets aux décalages de fdi.h (#1758).
+    #[test]
+    fn notification_x86() {
+        let mut n: FdiNotification = unsafe { std::mem::zeroed() };
+        n.cb = 7;
+        n.psz1 = 0x1234_5678 as *const u8;
+        n.pv = 0x0040_0000 as *mut c_void;
+        n.hf = 9;
+        n.date = 0x1111;
+        n.attribs = 0x20;
+        n.i_folder = 3;
+        n.fdie = 5;
+        let b = x86_notification(&n);
+        assert_eq!(&b[0..4], &7i32.to_le_bytes());
+        assert_eq!(&b[4..8], &0x1234_5678u32.to_le_bytes());
+        assert_eq!(&b[16..20], &0x0040_0000u32.to_le_bytes());
+        assert_eq!(&b[20..24], &9u32.to_le_bytes());
+        assert_eq!(&b[24..26], &0x1111u16.to_le_bytes());
+        assert_eq!(&b[28..30], &0x20u16.to_le_bytes());
+        assert_eq!(&b[34..36], &3u16.to_le_bytes());
+        assert_eq!(&b[36..40], &5i32.to_le_bytes());
+    }
 
     /// Fichier SZDD construit à la main : « ABCABCABC » = 3 littéraux puis
     /// une référence de 6 octets vers ce qu'on vient d'écrire.
