@@ -2876,17 +2876,43 @@ mod tests {
             assert_eq!(k::get_process_id(dup), std::process::id());
             assert!(k::is_current_process_handle(dup));
             k::close_handle(dup);
-            // TerminateProcess(GetCurrentProcess()) termine sans rendre la main.
-            let pid = libc::fork();
-            if pid == 0 {
-                k::terminate_process(me, 7);
+        }
+        // TerminateProcess(GetCurrentProcess()) termine sans rendre la main.
+        // Vérifié dans un processus neuf (ce même test relancé seul) : un
+        // fork() de l'exécuteur multithread pouvait hériter d'un verrou tenu
+        // par un autre test et rester bloqué pour toujours (#1982).
+        const ENFANT: &str = "WINLUX_TEST_ARRET_IMMEDIAT";
+        if std::env::var_os(ENFANT).is_some() {
+            unsafe {
+                k::terminate_process(k::get_current_process(), 7);
                 libc::_exit(99);
             }
-            let mut st = 0;
-            assert_eq!(libc::waitpid(pid, &mut st, 0), pid);
-            assert!(libc::WIFEXITED(st));
-            assert_eq!(libc::WEXITSTATUS(st), 7);
         }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::electron_win32::tests::handle_vers_soi_et_arret_immediat",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("TerminateProcess(GetCurrentProcess()) n'a pas terminé en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(7));
     }
 
     #[test]
