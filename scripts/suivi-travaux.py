@@ -40,6 +40,7 @@ LANGS = ("fr", "en", "de", "es")
 MAX_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 THUMB_WIDTH = 480
+OCR_DELAI = 90
 # Mots refusés à la lecture OCR. « Windows » seul reste permis : il décrit les
 # raccourcis et les programmes, comme le texte du site.
 INTERDIT = re.compile(
@@ -116,18 +117,24 @@ def ocr_disponible():
 
 
 def texte_ocr(image):
-    """Texte lu par tesseract sur l'image agrandie en niveaux de gris, puis inversée
-    (les thèmes sombres se lisent mieux en noir sur blanc)."""
+    """Texte lu par tesseract en niveaux de gris, puis inversé (les thèmes sombres
+    se lisent mieux en noir sur blanc). L'image est ramenée à 1920 px de large au
+    plus et n'est agrandie que sous 1600 px : une 4K agrandie ou un 1080p doublé
+    dépassaient deux minutes (#1829). Un fil OpenMP par tesseract, puisque
+    plusieurs tournent déjà en parallèle."""
     from PIL import ImageOps
     gris = image.convert("L")
-    if gris.width < 2400:
+    if gris.width > 1920:
+        gris = gris.resize((1920, round(gris.height * 1920 / gris.width)))
+    elif gris.width < 1600:
         gris = gris.resize((gris.width * 2, gris.height * 2))
+    env = dict(os.environ, OMP_THREAD_LIMIT="1")
     textes = []
     for variante in (gris, ImageOps.invert(gris)):
         with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
             variante.save(tmp.name)
             sortie = subprocess.run(["tesseract", tmp.name, "-", "-l", langues_ocr(), "--psm", "11"],
-                                    capture_output=True, text=True, timeout=120)
+                                    capture_output=True, text=True, timeout=OCR_DELAI, env=env, check=True)
             textes.append(sortie.stdout)
     return "\n".join(textes)
 
@@ -165,7 +172,12 @@ def empreinte_de(image):
 
 
 def verdict_ocr(png):
-    trouve = INTERDIT.search(texte_ocr(ouvrir(png)))
+    """(publiable, raison). Une image que l'OCR ne relit pas est refusée (#1829)."""
+    try:
+        texte = texte_ocr(ouvrir(png))
+    except (subprocess.SubprocessError, OSError) as exc:
+        return (False, f"OCR impossible ({type(exc).__name__})")
+    trouve = INTERDIT.search(texte)
     return (trouve is None, f"OCR : « {trouve.group(0)} »" if trouve else "")
 
 
@@ -237,6 +249,12 @@ def construire(travail, sortie, exiger_ocr, liste=LISTE, cache=None, travaux=4):
         with ThreadPoolExecutor(max_workers=max(1, travaux)) as pool:
             for empreinte, verdict in zip(a_lire, pool.map(lambda e: verdict_ocr(source_de[e]), a_lire)):
                 verdicts[empreinte] = verdict
+    # Cache écrit dès l'OCR fini ; un échec d'OCR n'y entre pas, il sera retenté.
+    if cache and ocr:
+        connus.update({k: v for k, v in verdicts.items()
+                       if (k in a_lire or k in connus) and not v[1].startswith("OCR impossible")})
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"motif": INTERDIT.pattern, "verdicts": connus}), encoding="utf-8")
     # 3. Images publiées, ré-encodées, une fois par empreinte.
     for empreinte, png in source_de.items():
         if verdicts[empreinte][0]:
@@ -262,10 +280,6 @@ def construire(travail, sortie, exiger_ocr, liste=LISTE, cache=None, travaux=4):
             images.sort(key=lambda i: ordre.index(i["nom"]))
             runs.append({k: meta.get(k) for k in ("run", "numero", "url", "commit", "branche", "evenement",
                                                   "pr", "titre", "date", "conclusion")} | {"images": images})
-    if cache and ocr:
-        connus.update({k: v for k, v in verdicts.items() if k in a_lire or k in connus})
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"motif": INTERDIT.pattern, "verdicts": connus}), encoding="utf-8")
     data = {"genere": max((r["date"] for r in runs), default=None), "executions": runs}
     (sortie / "data.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     poids = sum(p.stat().st_size for p in sortie.rglob("*") if p.is_file())
