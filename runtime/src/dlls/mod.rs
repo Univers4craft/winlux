@@ -215,6 +215,7 @@ pub mod print_pdf;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
+pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
 pub mod remote_vm;
@@ -1144,6 +1145,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "icu",
                 exports: icuuc::exports(),
+                handle: 0,
+            },
+            // Qualité de service qWAVE (discord_voice.node, #NNNN).
+            Builtin {
+                name: "qwave",
+                exports: qwave::exports(),
                 handle: 0,
             },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
