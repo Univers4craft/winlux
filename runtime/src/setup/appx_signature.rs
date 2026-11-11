@@ -1107,15 +1107,34 @@ const PE_MAX: u64 = 512 << 20;
 /// (#1382). `Verified.signer` / `Unverified.signer` : nom à afficher (CN du
 /// certificat, sinon O).
 pub fn examine_pe(path: &Path) -> Signature {
+    examine_pe_with_certs(path).0
+}
+
+/// Comme `examine_pe`, avec les certificats de la signature en DER, celui
+/// du signataire en tête (vide sans signature lisible) : WinVerifyTrust en
+/// tire ses données d'état (#1728).
+pub fn examine_pe_with_certs(path: &Path) -> (Signature, Vec<Vec<u8>>) {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 || size > PE_MAX {
-        return Signature::Absent;
+        return (Signature::Absent, Vec::new());
     }
     let data = match std::fs::read(path) {
         Ok(d) => d,
-        Err(e) => return Signature::Invalid(format!("{} : {e}", path.display())),
+        Err(e) => {
+            return (
+                Signature::Invalid(format!("{} : {e}", path.display())),
+                Vec::new(),
+            )
+        }
     };
-    examine_pe_bytes(&data)
+    let mut certs = Vec::new();
+    let sig = examine_pe_parts(&data, &mut certs);
+    (sig, certs)
+}
+
+#[cfg(test)]
+fn examine_pe_bytes(d: &[u8]) -> Signature {
+    examine_pe_parts(d, &mut Vec::new())
 }
 
 /// Zones de l'image : (somme de contrôle, entrée « sécurité » du répertoire
@@ -1146,7 +1165,7 @@ fn pe_layout(d: &[u8]) -> Option<(usize, usize, usize, usize)> {
     Some((opt + 64, entry, start, len))
 }
 
-fn examine_pe_bytes(d: &[u8]) -> Signature {
+fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     let Some((checksum, entry, start, len)) = pe_layout(d) else {
         return Signature::Absent;
     };
@@ -1172,6 +1191,14 @@ fn examine_pe_bytes(d: &[u8]) -> Signature {
     let Some(signer) = parsed.certs.iter().find(|c| parsed.signer_id.matches(c)) else {
         return Signature::Invalid("le certificat du signataire est absent de la signature".into());
     };
+    certs.push(signer.der.clone());
+    certs.extend(
+        parsed
+            .certs
+            .iter()
+            .filter(|c| c.der != signer.der)
+            .map(|c| c.der.clone()),
+    );
     let name = display_name(&signer.subject);
     if let Some(failure) = check_signer(&parsed, signer, &name) {
         return failure;
@@ -1208,7 +1235,7 @@ fn display_name(subject: &[(String, String)]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1522,14 +1549,10 @@ mod tests {
     /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
     /// Signature d'essai faite par la commande openssl (certificat
     /// autosigné : signature juste mais autorité inconnue).
-    #[test]
-    fn executable_signe_lu_et_verifie() {
+    /// Exécutable minimal signé (Authenticode, SHA-256) par un certificat
+    /// auto-signé « Testeur Winlux » ; None sans la commande openssl.
+    pub(crate) fn signed_test_pe() -> Option<Vec<u8>> {
         let pe = pe_minimal();
-        assert_eq!(examine_pe_bytes(&pe), Signature::Absent);
-        if hostssl::ssl().is_none() {
-            eprintln!("OpenSSL du système absent : vérification non testée");
-            return;
-        }
         let (checksum, entry, _, _) = pe_layout(&pe).unwrap();
         let mut image = pe[..checksum].to_vec();
         image.extend_from_slice(&pe[checksum + 4..entry]);
@@ -1569,7 +1592,7 @@ mod tests {
             .is_err()
         {
             eprintln!("commande openssl absente : vérification non testée");
-            return;
+            return None;
         }
         std::fs::write(dir.join("spc.der"), &spc).unwrap();
         run(&[
@@ -1624,6 +1647,21 @@ mod tests {
         signed[entry..entry + 4].copy_from_slice(&(start as u32).to_le_bytes());
         signed[entry + 4..entry + 8].copy_from_slice(&(padded as u32).to_le_bytes());
 
+        Some(signed)
+    }
+
+    #[test]
+    fn executable_signe_lu_et_verifie() {
+        let pe = pe_minimal();
+        assert_eq!(examine_pe_bytes(&pe), Signature::Absent);
+        if hostssl::ssl().is_none() {
+            eprintln!("OpenSSL du système absent : vérification non testée");
+            return;
+        }
+        let Some(signed) = signed_test_pe() else {
+            return;
+        };
+        let (checksum, _, _, _) = pe_layout(&pe).unwrap();
         match examine_pe_bytes(&signed) {
             Signature::Unverified { signer, reason } => {
                 assert_eq!(signer, "Testeur Winlux");

@@ -23,6 +23,7 @@ pub mod advapi32_crypto;
 pub mod advapi32_releve;
 pub mod advapi32_rsa;
 pub mod advapi32_services;
+pub mod afd;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
@@ -285,10 +286,12 @@ pub mod winmm_midi;
 pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
+pub mod winrt_ui;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
 pub mod winusb;
+pub mod wldap32;
 pub mod wpf_native;
 pub mod write_watch;
 pub mod ws2_32;
@@ -1127,6 +1130,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: cabinet_lz::cabinet_exports(),
                 handle: 0,
             },
+            // Client LDAP sans connexion (libcurl d'OBS, #1765).
+            Builtin {
+                name: "wldap32",
+                exports: wldap32::exports(),
+                handle: 0,
+            },
             Builtin {
                 name: "lz32",
                 exports: cabinet_lz::lz32_exports(),
@@ -1452,6 +1461,15 @@ fn add_basics(all: &mut [Builtin]) {
             }
         }
     }
+    // wldap32 n'est importée que par numéro d'ordre.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "wldap32") {
+        for &(ord, name) in wldap32::ORDINALS {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
+        }
+    }
     // Winsock importé par numéro d'ordre.
     if let Some(b) = all.iter_mut().find(|b| b.name == "ws2_32") {
         for &(ord, name) in apps_win32::WS2_32_ORDINALS {
@@ -1610,7 +1628,9 @@ pub fn normalize(dll: &str) -> String {
     }
     // Security API-set contracts expose the same public security functions
     // implemented by our Advapi32 backend, rather than a separate disk DLL.
-    if base.starts_with("api-ms-win-security-base-l1-") {
+    if base.starts_with("api-ms-win-security-base-l1-")
+        || base.starts_with("api-ms-win-security-sddl-l1-")
+    {
         return "advapi32".into();
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
@@ -1724,6 +1744,10 @@ pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
 
+/// Fonctions de jeton du contrat api-ms-win-core-processthreads, servies
+/// par advapi32 (liste de la documentation publique des API sets).
+const PROCESSTHREADS_TOKENS: [&str; 3] = ["OpenProcessToken", "OpenThreadToken", "SetThreadToken"];
+
 pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let b = builtins().iter().find(|b| b.name == normalized)?;
     let r = b.exports.get(func).copied();
@@ -1737,7 +1761,9 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
         if normalized == "kernel32" {
             // KernelBase exporte aussi les Reg* (api-ms-win-core-registry).
             lookup("ntdll", func).or_else(|| {
-                func.starts_with("Reg")
+                // KernelBase sert aussi les Reg* (api-ms-win-core-registry)
+                // et les jetons du contrat processthreads (Teams, #1767).
+                (func.starts_with("Reg") || PROCESSTHREADS_TOKENS.contains(&func))
                     .then(|| lookup("advapi32", func))
                     .flatten()
             })
@@ -2293,6 +2319,43 @@ mod tests {
                 "api-ms-win-downlevel-kernel32-l2-1-0.dll",
                 "kernel32",
                 "GetCurrentProcessId",
+            ),
+            // Teams (#1767) : contrat sddl en entier et jetons de
+            // processthreads.
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertSidToStringSidW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSidToSidW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertStringSecurityDescriptorToSecurityDescriptorW",
+            ),
+            (
+                "api-ms-win-security-sddl-l1-1-0.dll",
+                "advapi32",
+                "ConvertSecurityDescriptorToStringSecurityDescriptorW",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-0.dll",
+                "advapi32",
+                "OpenProcessToken",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-0.dll",
+                "advapi32",
+                "OpenThreadToken",
+            ),
+            (
+                "api-ms-win-core-processthreads-l1-1-2.dll",
+                "advapi32",
+                "SetThreadToken",
             ),
         ] {
             let expected = lookup(host, symbol).expect("backend export must exist");
