@@ -114,6 +114,27 @@ int entry() {
     if (HidD_GetFeature(h, value, 65) || GetLastError() != 5) ExitProcess(3);
     CloseHandle(h);
     if (CreateFileW(closed, 0x80000000, 3, 0, 3, 0, 0) != INVALID) ExitProcess(3);
+    void *pre = 0;
+    // 7. Collection clavier : un rapport 1 (Maj gauche) revient en lecture
+    //    et se décode. Fait AVANT toute autre ouverture de hidraw0 : le faux
+    //    hidraw est une seule FIFO, et le relais d'un autre handle encore
+    //    vivant pourrait y prendre le rapport (un vrai hidraw en donne une
+    //    copie à chaque ouverture). Sans cela, le test restait bloqué.
+    h = CreateFileW(kbd, 0xC0000000, 3, 0, 3, 0, 0);
+    if (h == INVALID) ExitProcess(7);
+    u8 key[2] = {1, 0x02};
+    u32 done = 0;
+    if (!WriteFile(h, key, 2, &done, 0) || done != 2) ExitProcess(7);
+    u8 in[64];
+    done = 0;
+    if (!ReadFile(h, in, sizeof in, &done, 0) || done != 2 || in[0] != 1 || in[1] != 0x02) ExitProcess(7);
+    if (!HidD_GetPreparsedData(h, &pre)) ExitProcess(7);
+    u16 usages[8];
+    u32 nu = 8;
+    if (HidP_GetUsages(0, 7, 0, usages, &nu, pre, in, 2) != 0x00110000 || nu != 1 || usages[0] != 0xE1)
+        ExitProcess(7);
+    HidD_FreePreparsedData(pre);
+    if (!CloseHandle(h)) ExitProcess(8);
     // 4. Chaînes USB : fabricant, produit, série, et par indice.
     h = CreateFileW(rgb, 0xC0000000, 3, 0, 3, 0, 0);
     if (h == INVALID) ExitProcess(4);
@@ -123,7 +144,7 @@ int entry() {
     if (!HidD_GetIndexedString(h, 2, text, sizeof text) || !wcontains(text, "Clavier RVB", 0)) ExitProcess(4);
     if (!HidD_GetAttributes(h, &at) || at.version != 0x0105) ExitProcess(4);
     // 5. Capacités de la collection fabricant : Output 33, Feature 65.
-    void *pre = 0;
+    pre = 0;
     Caps caps;
     if (!HidD_GetPreparsedData(h, &pre) || HidP_GetCaps(pre, &caps) != 0x00110000) ExitProcess(5);
     if (caps.page != 0xFF00 || caps.usage != 1 || caps.in_len != 0 || caps.out_len != 33 || caps.feat_len != 65)
@@ -148,23 +169,6 @@ int entry() {
     if (GetTickCount64() - start > 2000) ExitProcess(6);
     HidD_FreePreparsedData(pre);
     CloseHandle(h);
-    // 7. Collection clavier : un rapport 1 (Maj gauche) revient en lecture
-    //    et se décode ; les trames de couleurs (rapport 8) n'y passent pas.
-    h = CreateFileW(kbd, 0xC0000000, 3, 0, 3, 0, 0);
-    if (h == INVALID) ExitProcess(7);
-    u8 key[2] = {1, 0x02};
-    u32 done = 0;
-    if (!WriteFile(h, key, 2, &done, 0) || done != 2) ExitProcess(7);
-    u8 in[64];
-    done = 0;
-    if (!ReadFile(h, in, sizeof in, &done, 0) || done != 2 || in[0] != 1 || in[1] != 0x02) ExitProcess(7);
-    if (!HidD_GetPreparsedData(h, &pre)) ExitProcess(7);
-    u16 usages[8];
-    u32 nu = 8;
-    if (HidP_GetUsages(0, 7, 0, usages, &nu, pre, in, 2) != 0x00110000 || nu != 1 || usages[0] != 0xE1)
-        ExitProcess(7);
-    HidD_FreePreparsedData(pre);
-    if (!CloseHandle(h)) ExitProcess(8);
     ExitProcess(0);
     return 0;
 }
