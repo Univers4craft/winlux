@@ -295,6 +295,10 @@ struct Vm<'a, 'b> {
     reg: HashMap<(String, String), String>,
     uninstall_ids: Vec<String>,
     skipped: Vec<String>,
+    /// Redirection WOW64 coupée par le script (`${DisableX64FSRedirection}`,
+    /// System::Call Wow64EnableWow64FsRedirection(i0)) : `$SYSDIR` vise
+    /// alors System32 (#1800).
+    fs_redirect_off: bool,
 }
 
 fn hex_int(s: &str) -> i64 {
@@ -443,6 +447,12 @@ impl<'a, 'b> Vm<'a, 'b> {
             0x22 => profile("AppData\\Local\\Microsoft\\Windows\\History"),
             0x23 => "C:\\ProgramData".into(),
             0x24 => "C:\\windows".into(),
+            // CSIDL_SYSTEM : l'installateur 32 bits voit System32 redirigé
+            // vers SysWOW64 par Windows 64 bits, sauf redirection coupée ;
+            // une DLL x86 n'y remplace donc pas celle de System32 (#1800).
+            0x25 if is_x86_stub(self.stub) && !self.fs_redirect_off => {
+                "C:\\windows\\syswow64".into()
+            }
             0x25 => "C:\\windows\\system32".into(),
             0x26 => Folders { x64: false }.program_files().into(),
             0x27 => profile("Pictures"),
@@ -1060,6 +1070,9 @@ impl<'a, 'b> Vm<'a, 'b> {
                         for (var, value) in done.vars {
                             self.set_var(var, value);
                         }
+                        if let Some(on) = done.fs_redirection {
+                            self.fs_redirect_off = !on;
+                        }
                         if let Some(note) = done.note {
                             self.skip(note);
                         }
@@ -1613,6 +1626,7 @@ fn execute(
         reg: HashMap::new(),
         uninstall_ids: Vec::new(),
         skipped: Vec::new(),
+        fs_redirect_off: false,
     };
     vm.flags[F_SILENT] = 1;
     // Dossier par défaut (InstallDir, ou InstallDirRegKey s'il existe).
@@ -1755,6 +1769,35 @@ fn is_nsexec(dll: &str, func: &str) -> bool {
         )
 }
 
+/// Vrai si l'exécutable de l'installateur est un PE x86 (IMAGE_FILE_MACHINE_I386).
+fn is_x86_stub(stub: &[u8]) -> bool {
+    let at = |o: usize, n: usize| stub.get(o..o + n);
+    let Some(pe) = at(0x3C, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    else {
+        return false;
+    };
+    at(pe, 4) == Some(b"PE\0\0") && at(pe + 4, 2) == Some(&[0x4C, 0x01][..])
+}
+
+/// Effet d'un System::Call sur la redirection WOW64 du système de
+/// fichiers : Wow64EnableWow64FsRedirection(i0|i1), Wow64Disable… et
+/// Wow64Revert….
+fn fs_redirection_call(call: &str) -> Option<bool> {
+    let c = call.to_ascii_lowercase().replace(' ', "");
+    if c.contains("wow64disablewow64fsredirection") {
+        return Some(false);
+    }
+    if c.contains("wow64revertwow64fsredirection") {
+        return Some(true);
+    }
+    let rest = &c[c.find("wow64enablewow64fsredirection")? + 29..];
+    if rest.starts_with("(i0") || rest.starts_with("(b0") {
+        Some(false)
+    } else {
+        Some(true)
+    }
+}
+
 /// Effet d'un greffon NSIS reproduit par Winlux.
 #[derive(Debug, Default, PartialEq)]
 struct PluginDone {
@@ -1762,6 +1805,8 @@ struct PluginDone {
     vars: Vec<(i32, String)>,
     /// Ce qui n'a pas été fait réellement (journal de l'installation).
     note: Option<String>,
+    /// Redirection WOW64 rétablie (`Some(true)`) ou coupée (`Some(false)`).
+    fs_redirection: Option<bool>,
 }
 
 /// Greffons NSIS courants, interprétés sans exécuter leur code : chacun
@@ -1845,6 +1890,7 @@ fn plugin_call(dll: &str, func: &str, stack: &mut Vec<String>, lang: &str) -> Op
             if call.contains("?e") {
                 push.push("0".into());
             }
+            done.fs_redirection = fs_redirection_call(&call);
             done.note = Some(format!(
                 "appel système ignoré : {}",
                 call.chars().take(80).collect::<String>()
@@ -1937,6 +1983,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sysdir_d_un_installateur_x86() {
+        // $SYSDIR (#1800) : SysWOW64 seulement pour un installateur x86.
+        let mut pe = vec![0u8; 0x100];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[0x3C] = 0x80;
+        pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        pe[0x84..0x86].copy_from_slice(&0x014Cu16.to_le_bytes());
+        assert!(is_x86_stub(&pe));
+        pe[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        assert!(!is_x86_stub(&pe));
+        assert!(!is_x86_stub(b"MZ"));
+    }
+
+    #[test]
     fn greffons_courants() {
         // LangDLL : la langue de la session parmi celles proposées.
         let mut stack: Vec<String> = [
@@ -1962,8 +2022,21 @@ mod tests {
         // System::Call : sorties .r0 et .R1, ?e pose l'erreur.
         let mut stack = vec!["kernel32::CreateMutex(i 0, i 0, t \"x\") i .r0 ?e".to_string()];
         let done = plugin_call("System.dll", "Call", &mut stack, "en").unwrap();
+        assert_eq!(done.fs_redirection, None);
         assert_eq!(done.vars, vec![(0, "0".to_string())]);
         assert_eq!(stack, vec!["0"]);
+        // ${DisableX64FSRedirection} / ${EnableX64FSRedirection} (#1800).
+        let mut stack = vec!["kernel32::Wow64EnableWow64FsRedirection(i0)".to_string()];
+        let done = plugin_call("System.dll", "Call", &mut stack, "en").unwrap();
+        assert_eq!(done.fs_redirection, Some(false));
+        assert_eq!(
+            fs_redirection_call("kernel32::Wow64EnableWow64FsRedirection(i 1)"),
+            Some(true)
+        );
+        assert_eq!(
+            fs_redirection_call("kernel32::Wow64DisableWow64FsRedirection(*i.r0)"),
+            Some(false)
+        );
         // nsDialogs : la pile reste équilibrée.
         let mut stack: Vec<String> = ["base", "Texte", "10", "200", "0", "0", "0", "0", "STATIC"]
             .iter()
