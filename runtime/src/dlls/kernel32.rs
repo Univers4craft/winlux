@@ -3634,6 +3634,13 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
     if flags & AS_DATA != 0 {
         return load_as_data(&value, flags);
     }
+    // DONT_RESOLVE_DLL_REFERENCES : image projetée sans imports ni DllMain,
+    // mais vue comme un module (GetModuleFileName, ressources). Le
+    // lanceur CEF de Spotify charge ainsi Spotify.dll pour vérifier son
+    // emplacement et sa signature avant le vrai chargement (#1809).
+    if flags & 0x1 != 0 {
+        return load_as_data(&value, 0);
+    }
     // Never execute DLL entry points for resource/data-only loading requests.
     // Signature flags are not supported; return an error rather than
     // searching an unsafe fallback path. 0x400 = AddDllDirectory dirs.
@@ -3708,7 +3715,15 @@ fn load_as_data(value: &str, flags: u32) -> usize {
         crate::process::set_last_error(2);
         return 0;
     };
-    let tag = if flags & 0x20 != 0 { 2 } else { 1 };
+    // 0 : DONT_RESOLVE_DLL_REFERENCES, handle sans marque, comme une base
+    // d'image ordinaire.
+    let tag = if flags == 0 {
+        0
+    } else if flags & 0x20 != 0 {
+        2
+    } else {
+        1
+    };
     match crate::loader::load_data(&path, tag) {
         Ok(handle) => handle,
         Err(error) => {
@@ -3737,6 +3752,12 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
         return 0;
     }
     if crate::dlls::builtin_by_handle(module).is_some() {
+        return 1;
+    }
+    // Image DONT_RESOLVE_DLL_REFERENCES : handle sans marque (#1809).
+    if crate::loader::data_image(module).is_some_and(|m| m.base == module)
+        && crate::loader::free_data(module).is_some()
+    {
         return 1;
     }
     if module == crate::loader::main_module().map(|m| m.base).unwrap_or(0) {
@@ -7263,6 +7284,14 @@ fn module_path(module: usize) -> Option<String> {
             .map(|m| crate::paths::to_windows(&m.path))
             // DLL système intégrée : son chemin sous Windows (#1113).
             .or_else(|| crate::dlls::builtin_file_path(module))
+            // Image chargée par DONT_RESOLVE_DLL_REFERENCES (#1809).
+            .or_else(|| {
+                (module & crate::loader::DATA_HANDLE_BITS == 0)
+                    .then(|| crate::loader::data_image(module))
+                    .flatten()
+                    .filter(|m| m.base == module)
+                    .map(|m| crate::paths::to_windows(&m.path))
+            })
     }
 }
 pub unsafe extern "win64" fn get_environment_variable_a(
@@ -11024,6 +11053,34 @@ mod tests {
             let missing = b"winlux-introuvable-xyz.dll\0";
             assert_eq!(load_library_ex_a(missing.as_ptr(), 0, 0x2), 0);
             assert_eq!(crate::process::last_error(), 2);
+        }
+        let _ = std::fs::remove_file(linux);
+    }
+
+    /// #1809 : DONT_RESOLVE_DLL_REFERENCES (lanceur CEF de Spotify) rend
+    /// une base d'image sans marque, que GetModuleFileName, FindResource et
+    /// FreeLibrary reconnaissent.
+    #[test]
+    fn load_library_ex_sans_resoudre_les_references() {
+        let _teb = crate::process::test_teb();
+        let name = format!("winlux-nonresolue-{}.dll", std::process::id());
+        let linux = std::path::Path::new("/tmp").join(&name);
+        std::fs::write(&linux, resource_only_dll()).unwrap();
+        let windows = format!("Z:\\tmp\\{name}");
+        let wide: Vec<u16> = windows.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let h = load_library_ex_w(wide.as_ptr(), 0, 0x1 | 0x8);
+            assert_ne!(h, 0, "erreur {}", crate::process::last_error());
+            assert_eq!(h & 3, 0, "base d'image sans marque");
+            let mut buf = [0u16; 260];
+            let n = get_module_file_name_w(h, buf.as_mut_ptr(), 260);
+            assert_ne!(n, 0);
+            let path = String::from_utf16_lossy(&buf[..n as usize]);
+            assert!(path.ends_with(&name), "{path}");
+            let found = crate::dlls::resource::find_resource_w(h, 1 as *const u16, 6 as *const u16);
+            assert_ne!(found, 0, "FindResource sur l'image non résolue");
+            assert_eq!(free_library(h), 1);
+            assert!(crate::loader::data_image(h).is_none(), "image libérée");
         }
         let _ = std::fs::remove_file(linux);
     }

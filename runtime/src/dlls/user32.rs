@@ -1089,6 +1089,8 @@ pub unsafe extern "win64" fn post_quit_message(code: i32) {
     gui::post_quit(&q, code);
 }
 
+const HWND_BROADCAST: usize = 0xFFFF;
+
 pub unsafe extern "win64" fn post_message_a(
     hwnd: usize,
     message: u32,
@@ -1098,6 +1100,16 @@ pub unsafe extern "win64" fn post_message_a(
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
+    }
+    // HWND_BROADCAST : chaque fenêtre de premier niveau du processus
+    // reçoit le message ; les autres programmes n'en ont pas d'ici. Comme
+    // Windows, l'envoi réussit même sans destinataire (BroadcastUnload…
+    // d'Acrobat échouait, #1757).
+    if hwnd == HWND_BROADCAST {
+        for w in gui::enum_top_level_windows() {
+            post_message_a(w, message, wparam, lparam);
+        }
+        return 1;
     }
     let m = Msg {
         hwnd,
@@ -4003,6 +4015,30 @@ unsafe fn system_parameters_info_common(
         }
         _ => {}
     }
+    // Délais et vitesses du clavier et des menus : valeurs par défaut
+    // documentées de SystemParametersInfo. Sans elles, le succès générique
+    // laissait le tampon à 0, et un minuteur WinForms réglé dessus refuse 0
+    // (#1803) : SPI_GETKEYBOARDSPEED (31), SPI_GETKEYBOARDDELAY (1, soit
+    // 500 ms), SPI_GETMENUSHOWDELAY (400 ms), SPI_GETFOREGROUNDLOCKTIMEOUT
+    // (200 000 ms), SPI_GETFOCUSBORDERWIDTH / HEIGHT (1 pixel),
+    // SPI_GETMESSAGEDURATION (5 s) et SPI_GETCARETTIMEOUT (5 000 ms).
+    let default = match action {
+        0x000A => Some(31),
+        0x0016 => Some(1),
+        0x006A => Some(400),
+        0x2000 => Some(200_000),
+        0x200E | 0x2010 => Some(1),
+        0x2016 => Some(5),
+        0x2022 => Some(5000),
+        _ => None,
+    };
+    if let Some(v) = default {
+        if data.is_null() {
+            return 0;
+        }
+        *data.cast::<u32>() = v;
+        return 1;
+    }
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
         // Sans la barre des tâches : une fenêtre placée ici n'est pas cachée dessous.
@@ -5628,6 +5664,25 @@ mod tests {
     #[test]
     fn delai_et_zone_de_survol() {
         for (action, want) in [(0x0066u32, 400u32), (0x0062, 4), (0x0064, 4)] {
+            let mut v = 0u32;
+            let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
+            assert_eq!((r, v), (1, want), "action {action:#x}");
+        }
+    }
+
+    /// #1803 : aucun délai de clavier, de menu ou de message ne reste à 0.
+    #[test]
+    fn delais_clavier_menus_et_messages() {
+        for (action, want) in [
+            (0x000Au32, 31u32),
+            (0x0016, 1),
+            (0x006A, 400),
+            (0x2000, 200_000),
+            (0x200E, 1),
+            (0x2010, 1),
+            (0x2016, 5),
+            (0x2022, 5000),
+        ] {
             let mut v = 0u32;
             let r = unsafe { system_parameters_info_w(action, 0, (&mut v as *mut u32).cast(), 0) };
             assert_eq!((r, v), (1, want), "action {action:#x}");

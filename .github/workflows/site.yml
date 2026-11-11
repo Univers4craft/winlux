@@ -31,9 +31,13 @@ on:
 permissions:
   contents: read
 
+# Sur une PR, un nouveau commit annule le test en cours. Sur master, une
+# publication en cours n'est jamais annulée : la CI finit toutes les une ou
+# deux minutes et annulait chaque publication avant la fin (#1801). GitHub
+# garde alors une seule publication en attente, la plus récente.
 concurrency:
   group: site-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tester:
