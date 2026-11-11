@@ -94,6 +94,33 @@ const CLASSES: &[(Guid, u8)] = &[
     (g(0x88d9_6a06, 0xf192, 0x11d4, MS_TAIL_40), 6),
 ];
 
+/// ProgID des classes servies (documentation publique MSXML, « GUID and
+/// ProgID Information ») : sans clé HKCR dans le registre de Winlux,
+/// CLSIDFromProgID s'y rabat (#1758, outil de déploiement d'Office).
+const PROG_IDS: &[(&str, usize)] = &[
+    ("Microsoft.XMLDOM", 0),
+    ("MSXML.DOMDocument", 0),
+    ("Msxml2.DOMDocument", 1),
+    ("Msxml2.FreeThreadedDOMDocument", 2),
+    ("Msxml2.DOMDocument.2.6", 3),
+    ("Msxml2.FreeThreadedDOMDocument.2.6", 4),
+    ("Msxml2.DOMDocument.3.0", 5),
+    ("Msxml2.FreeThreadedDOMDocument.3.0", 6),
+    ("Msxml2.DOMDocument.4.0", 7),
+    ("Msxml2.FreeThreadedDOMDocument.4.0", 8),
+    ("Msxml2.DOMDocument.6.0", 9),
+    ("Msxml2.FreeThreadedDOMDocument.6.0", 10),
+];
+
+/// CLSID d'une classe de document MSXML intégrée, d'après son ProgID
+/// (sans distinction de casse, comme les clés de HKCR).
+pub fn clsid_for_prog_id(name: &str) -> Option<Guid> {
+    PROG_IDS
+        .iter()
+        .find(|(p, _)| p.eq_ignore_ascii_case(name))
+        .map(|&(_, i)| CLASSES[i].0)
+}
+
 type DocRef = Arc<Mutex<Doc>>;
 
 enum What {
@@ -1878,5 +1905,27 @@ mod tests {
             release(root);
             release(doc);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_prog_id {
+    /// #1758 : CLSIDFromProgID trouve les classes MSXML sans clé HKCR.
+    #[test]
+    fn prog_id_msxml_sans_registre() {
+        let ddd = super::clsid_for_prog_id("MSXML2.DOMDocument.6.0").unwrap();
+        assert_eq!(ddd, super::CLASSES[9].0);
+        assert_eq!(
+            super::clsid_for_prog_id("Microsoft.XMLDOM"),
+            Some(super::CLASSES[0].0)
+        );
+        assert!(super::clsid_for_prog_id("Msxml2.SAXXMLReader.6.0").is_none());
+        let nom: Vec<u16> = "Msxml2.FreeThreadedDOMDocument.6.0\0"
+            .encode_utf16()
+            .collect();
+        let mut g = super::Guid::default();
+        let hr = unsafe { crate::dlls::ole32::clsid_from_prog_id(nom.as_ptr(), &mut g) };
+        assert_eq!(hr, 0);
+        assert_eq!(g, super::CLASSES[10].0);
     }
 }
