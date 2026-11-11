@@ -283,10 +283,18 @@ pub struct CertContext {
 }
 
 /// Contexte complet : la partie publique en tête, puis les données possédées.
+///
+/// `view` est le CERT_CONTEXT que lit l'application, à l'adresse rendue :
+/// la copie de `ctx` en x64, ou sa disposition x86 (5 cases de 4 octets,
+/// CERT_INFO de 112 octets et CERT_EXTENSION de 16) pour un programme
+/// 32 bits (#1667). Le code de Winlux lit toujours `ctx` et `info`.
 #[repr(C)]
 pub struct Cert {
+    view: [u64; 5],
     pub ctx: CertContext,
     info: CertInfo,
+    info32: [u32; 28],
+    exts32: Vec<[u32; 4]>,
     refs: AtomicUsize,
     der: Vec<u8>,
     serial_le: Vec<u8>,
@@ -318,6 +326,7 @@ fn blob(b: &[u8]) -> Blob {
 /// Décode un certificat DER en contexte (référence 1), rattaché à `store`.
 pub fn new_cert(der: &[u8], store: usize) -> Option<*mut Cert> {
     let mut c = Box::new(Cert {
+        view: [0; 5],
         ctx: CertContext {
             encoding: X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
             der: std::ptr::null(),
@@ -346,6 +355,8 @@ pub fn new_cert(der: &[u8], store: usize) -> Option<*mut Cert> {
             ext_count: 0,
             exts: std::ptr::null(),
         },
+        info32: [0; 28],
+        exts32: Vec::new(),
         refs: AtomicUsize::new(1),
         der: der.to_vec(),
         serial_le: Vec::new(),
@@ -455,8 +466,98 @@ pub fn new_cert(der: &[u8], store: usize) -> Option<*mut Cert> {
     c.ctx.der = c.der.as_ptr();
     c.ctx.der_len = c.der.len() as u32;
     let p = Box::into_raw(c);
-    unsafe { (*p).ctx.info = &(*p).info };
+    unsafe {
+        (*p).ctx.info = &(*p).info;
+        fill_view(&mut *p);
+    }
     Some(p)
+}
+
+/// Écrit le CERT_CONTEXT vu par l'application (`view`) : copie de `ctx` en
+/// x64 ; en x86, CERT_CONTEXT { dwCertEncodingType, pbCertEncoded,
+/// cbCertEncoded, pCertInfo, hCertStore } et CERT_INFO à pointeurs de
+/// 4 octets (wincrypt.h). Les adresses sont sous 4 Go dans un processus
+/// x86 (réservation de wow32).
+/// Vue x86 d'un contexte (CERT_CONTEXT puis CERT_INFO), pour les tests (#1667).
+#[cfg(test)]
+pub(crate) unsafe fn x86_view(ctx: usize) -> ([u32; 5], [u32; 28]) {
+    let c = &mut *(ctx as *mut Cert);
+    fill_view_ps(c, 4);
+    let v = std::ptr::read(c.view.as_ptr() as *const [u32; 5]);
+    let i = c.info32;
+    fill_view_ps(c, 8);
+    (v, i)
+}
+
+fn fill_view(c: &mut Cert) {
+    fill_view_ps(c, crate::wow32::pointer_size())
+}
+
+fn fill_view_ps(c: &mut Cert, ps: usize) {
+    if ps == 8 {
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &c.ctx as *const CertContext as *const u8,
+                c.view.as_mut_ptr() as *mut u8,
+                std::mem::size_of::<CertContext>(),
+            )
+        };
+        return;
+    }
+    let p = |x: *const u8| x as usize as u32;
+    let i = &c.info;
+    c.exts32 = (0..i.ext_count as usize)
+        .map(|k| {
+            let e = unsafe { &*i.exts.add(k) };
+            [
+                p(e.oid.cast()),
+                e.critical as u32,
+                e.value.cb,
+                p(e.value.pb),
+            ]
+        })
+        .collect();
+    let blob = |b: &Blob| [b.cb, p(b.pb)];
+    let bits = |b: &BitBlob| [b.cb, p(b.pb), b.unused];
+    let mut w = Vec::with_capacity(28);
+    w.push(i.version);
+    w.extend(blob(&i.serial));
+    w.push(p(i.sig_alg.oid.cast()));
+    w.extend(blob(&i.sig_alg.params));
+    w.extend(blob(&i.issuer));
+    w.extend(i.not_before);
+    w.extend(i.not_after);
+    w.extend(blob(&i.subject));
+    w.push(p(i.spki_alg.oid.cast()));
+    w.extend(blob(&i.spki_alg.params));
+    w.extend(bits(&i.spki_key));
+    w.extend(bits(&i.issuer_uid));
+    w.extend(bits(&i.subject_uid));
+    w.push(i.ext_count);
+    w.push(if c.exts32.is_empty() {
+        0
+    } else {
+        p(c.exts32.as_ptr().cast())
+    });
+    c.info32.copy_from_slice(&w);
+    let v = [
+        c.ctx.encoding,
+        p(c.ctx.der),
+        c.ctx.der_len,
+        p(c.info32.as_ptr().cast()),
+        c.ctx.store as u32,
+    ];
+    unsafe {
+        std::ptr::copy_nonoverlapping(v.as_ptr(), c.view.as_mut_ptr() as *mut u32, 5);
+    }
+}
+
+/// CERT_CONTEXT interne (disposition x64) d'un contexte rendu par Winlux.
+///
+/// # Safety
+/// `ctx` doit être un PCCERT_CONTEXT créé par Winlux.
+pub(crate) unsafe fn context<'a>(ctx: usize) -> &'a CertContext {
+    &(*(ctx as *const Cert)).ctx
 }
 
 /// Le contexte derrière un PCCERT_CONTEXT créé par Winlux.
@@ -842,12 +943,17 @@ pub unsafe extern "win64" fn CertFindCertificateInStore(
     if prev != 0 {
         release(prev);
     }
+    // CRYPT_*_BLOB { cbData, pbData } : pbData à +4 en x86, +8 en x64.
     let para_blob = || -> &[u8] {
-        let b = para as *const Blob;
-        if b.is_null() || (*b).pb.is_null() {
+        if para == 0 {
+            return &[];
+        }
+        let cb = (para as *const u32).read_unaligned() as usize;
+        let pb = crate::wow32::read_ptr(para + crate::wow32::pointer_size()) as *const u8;
+        if pb.is_null() {
             &[]
         } else {
-            std::slice::from_raw_parts((*b).pb, (*b).cb as usize)
+            std::slice::from_raw_parts(pb, cb)
         }
     };
     let wanted_str = match find {
@@ -2562,7 +2668,7 @@ mod tests {
             assert_eq!(String::from_utf16_lossy(&buf), "a.example\0b.example\0\0");
 
             // Noms alternatifs décodés, alloués par LocalAlloc.
-            let info = &*(*(ctx as *const CertContext)).info;
+            let info = &*context(ctx).info;
             let ext = CertFindExtension(
                 c"2.5.29.17".as_ptr() as *const u8,
                 info.ext_count,

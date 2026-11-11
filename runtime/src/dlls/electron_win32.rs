@@ -2187,17 +2187,21 @@ unsafe extern "win64" fn CertGetEnhancedKeyUsage(
     if len.is_null() {
         return 0;
     }
+    // CERT_ENHKEY_USAGE { cUsageIdentifier, rgpszUsageIdentifier } : 8 octets
+    // en x86, 16 en x64 (#1667).
+    let ps = crate::wow32::pointer_size();
+    let size = 2 * ps as u32;
     if usage.is_null() {
-        *len = 16;
+        *len = size;
         return 1;
     }
-    if *len < 16 {
-        *len = 16;
+    if *len < size {
+        *len = size;
         set_last_error(234); // ERROR_MORE_DATA
         return 0;
     }
     *usage = 0; // cUsageIdentifier
-    *(usage.add(2) as *mut usize) = 0;
+    crate::wow32::write_ptr(usage as usize + ps, 0);
     set_last_error(CRYPT_E_NOT_FOUND);
     1
 }
