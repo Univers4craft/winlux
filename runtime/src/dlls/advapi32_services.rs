@@ -309,19 +309,47 @@ fn running_elsewhere(name: &str) -> Option<u32> {
     if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
         return Some(pid.unwrap_or(0));
     }
-    let pid = pid.filter(|&p| p > 0)?;
-    let alive = unsafe { libc::kill(pid as i32, 0) } == 0
-        && !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
-            s.rsplit(')')
-                .next()
-                .is_some_and(|r| r.trim_start().starts_with('Z'))
-        });
-    if alive {
-        Some(pid)
-    } else {
+    if let Some(pid) = pid.filter(|&p| p > 0) {
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0
+            && !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+                s.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            });
+        if alive {
+            return Some(pid);
+        }
         let _ = std::fs::remove_file(sock.with_extension("pid"));
-        None
     }
+    // Sans canal ni .pid (service lancé par une autre session de Winlux,
+    // fichiers effacés) : le processus porte WINLUX_SERVICE_NAME dans son
+    // environnement, posé par spawn_service (#1675, #1676).
+    service_process(std::path::Path::new("/proc"), name)
+}
+
+/// Processus vivant du compte dont l'environnement porte
+/// `WINLUX_SERVICE_NAME=<name>` (casse ignorée, comme les noms de service).
+fn service_process(proc_dir: &std::path::Path, name: &str) -> Option<u32> {
+    let me = std::process::id();
+    let wanted = format!("WINLUX_SERVICE_NAME={name}").to_ascii_lowercase();
+    std::fs::read_dir(proc_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| pid != me)
+        .find(|pid| {
+            let dir = proc_dir.join(pid.to_string());
+            let zombie = std::fs::read_to_string(dir.join("stat")).is_ok_and(|s| {
+                s.rsplit(')')
+                    .next()
+                    .is_some_and(|r| r.trim_start().starts_with('Z'))
+            });
+            !zombie
+                && std::fs::read(dir.join("environ")).is_ok_and(|env| {
+                    env.split(|&b| b == 0)
+                        .any(|v| v.to_ascii_lowercase() == wanted.as_bytes())
+                })
+        })
 }
 fn write_status(record: &ServiceRecord, out: *mut u8) {
     unsafe {
@@ -1848,6 +1876,30 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn service_retrouve_par_son_environnement() {
+        // Faux /proc : 41 est le service, 42 un autre programme, 43 un zombie.
+        let tmp = std::env::temp_dir().join(format!("winlux-proc-{}", std::process::id()));
+        for (pid, env, state) in [
+            (
+                "41",
+                "HOME=/x\0WINLUX_SERVICE_NAME=CorsairLLAService\0",
+                "S",
+            ),
+            ("42", "HOME=/x\0", "S"),
+            ("43", "WINLUX_SERVICE_NAME=Zombie\0", "Z"),
+        ] {
+            let d = tmp.join(pid);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("environ"), env).unwrap();
+            std::fs::write(d.join("stat"), format!("{pid} (exe) {state} 1")).unwrap();
+        }
+        assert_eq!(super::service_process(&tmp, "corsairllaservice"), Some(41));
+        assert_eq!(super::service_process(&tmp, "Absent"), None);
+        assert_eq!(super::service_process(&tmp, "Zombie"), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn canal_de_controle_par_compte() {
         use std::os::unix::fs::PermissionsExt;
