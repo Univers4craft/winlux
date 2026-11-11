@@ -471,7 +471,8 @@ def installed_registry(home, registry=None):
         icon = values.get("displayicon", "").rsplit(",", 1)[0]
         if name and icon:
             target = windows_path(expand(icon), home)
-            if valid_exe(target): entries.append((target, name))
+            # DisplayIcon vers le désinstalleur (NSIS) : lancer l'entrée désinstallerait.
+            if valid_exe(target) and not is_uninstaller(target.stem): entries.append((target, name))
     return entries
 
 # Variables d'environnement Windows des commandes du registre (REG_EXPAND_SZ),
@@ -766,6 +767,30 @@ def lnk_resolve(path, home=None):
     icon = windows_path(expand(values["icon"]), home) if values.get("icon") else None
     return target, command_arguments(expand(values.get("arguments", ""))), workdir, icon, values["icon_index"]
 
+# #1748 : le menu aplatit les dossiers de Programmes. Un désinstalleur n'est pas
+# une application (la désinstallation passe par « Applications installées ») ;
+# un raccourci au nom générique garde le nom de son dossier.
+UNINSTALLER = re.compile(r"^(unins\d*|uninst|uninstall|uninstaller|deinstall|deinstallieren|désinstaller|desinstaller|"
+                         r"désinstallation|desinstalar|desinstalación|desinstalacion)\b", re.IGNORECASE)
+GENERIC_NAMES = {"readme", "read me", "lisez-moi", "lisezmoi", "liesmich", "lies mich", "léame", "leame", "léeme", "leeme",
+                 "help", "aide", "hilfe", "ayuda", "manual", "manuel", "handbuch", "documentation", "dokumentation",
+                 "documentación", "documentacion", "website", "web site", "site web", "webseite", "sitio web",
+                 "home page", "homepage", "license", "licence", "lizenz", "licencia", "what's new", "whats new",
+                 "nouveautés", "neuigkeiten", "novedades", "changelog", "release notes", "notes de version", "faq",
+                 "support", "online help", "aide en ligne", "user guide", "guide de l'utilisateur", "settings",
+                 "paramètres", "einstellungen", "configuración"}
+
+def is_uninstaller(name, target=None):
+    names = [name.strip()] + ([target.stem] if target is not None else [])
+    return any(UNINSTALLER.search(value) for value in names)
+
+def menu_name(path, root):
+    """Nom affiché d'un raccourci de Programmes, avec son dossier s'il est générique."""
+    name = path.stem.strip()
+    folder = path.parent.name.strip() if path.parent != root else ""
+    if folder and name.lower() in GENERIC_NAMES: return f"{folder} › {name}"
+    return name
+
 def shortcuts(home):
     roots = [home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
              home / "ProgramData/Microsoft/Windows/Start Menu/Programs", home / "Start Menu/Programs"]
@@ -777,7 +802,8 @@ def shortcuts(home):
             if count > 4096: return
             try:
                 executable, extra, _, _, _ = lnk_resolve(path, home)
-                if valid_exe(executable): yield executable, path.stem, extra
+                if not valid_exe(executable) or is_uninstaller(path.stem, executable): continue
+                yield executable, menu_name(path, root), extra
             except (OSError, ValueError, UnicodeError, struct.error): continue
 
 def thumbnail(source, output, size):
@@ -941,18 +967,19 @@ def link_shortcuts(home):
             count += 1
             if count > 4096: return
             try:
+                name = menu_name(path, root)
                 if suffix == ".url":
                     url = url_of(path)
-                    if url: yield path.stem, url, "web-browser"
+                    if url: yield name, url, "web-browser"
                     continue
                 target, _, _, _, _ = lnk_resolve(path, home)
                 if valid_exe(target) or not target.is_file(): continue
                 if target.suffix.lower() == ".url":
                     url = url_of(target)
-                    if url: yield path.stem, url, "web-browser"
+                    if url: yield name, url, "web-browser"
                     continue
                 if target.suffix.lower() in (".exe", ".com", ".bat", ".cmd", ".msi", ".dll", ".lnk"): continue
-                yield path.stem, str(target), LINK_ICONS.get(target.suffix.lower(), "text-x-generic")
+                yield name, str(target), LINK_ICONS.get(target.suffix.lower(), "text-x-generic")
             except (OSError, ValueError, UnicodeError, struct.error): continue
 
 def link_launcher(name, target, icon, profile="desktop"):
