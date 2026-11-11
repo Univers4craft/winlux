@@ -2156,7 +2156,13 @@ pub unsafe extern "win64" fn validate_rect(hwnd: usize, _rect: *const Rect) -> i
 pub extern "win64" fn get_desktop_window() -> usize {
     1
 }
+/// GetForegroundWindow : la fenêtre active du programme quand il a le
+/// focus (une boîte possédée cliquée, #1804), sinon la plus haute.
 pub extern "win64" fn get_foreground_window() -> usize {
+    let active = gui::active_top();
+    if active != 0 && gui::is_window(active) {
+        return active;
+    }
     gui::first_window().unwrap_or(1)
 }
 
@@ -4128,8 +4134,14 @@ pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut
     tid
 }
 
+/// GetActiveWindow : fenêtre de premier niveau active du fil appelant,
+/// jamais un contrôle (#1804).
 pub extern "win64" fn get_active_window() -> usize {
-    gui::focused_window()
+    let active = gui::active_top();
+    if active != 0 && gui::window_owner(active).as_ref() == Some(&std::thread::current().id()) {
+        return active;
+    }
+    gui::top_level_of(gui::focused_window())
 }
 
 pub extern "win64" fn set_active_window(hwnd: usize) -> usize {
