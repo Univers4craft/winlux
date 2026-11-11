@@ -1407,6 +1407,9 @@ struct Bitmap {
     /// Mémoire d'un IWICBitmapLock partagée (CreateSharedBitmap) : relue à
     /// chaque usage, comme le partage réel de Direct2D (#1609).
     shared: Option<SharedLock>,
+    /// Liste de commandes : boîte de ce qui y a été dessiné, même hors de
+    /// sa surface (#1743). GetImageLocalBounds la rend, comme Direct2D.
+    drawn: Mutex<Option<[f32; 4]>>,
 }
 
 /// Verrou WIC dont un bitmap partage les pixels.
@@ -1430,6 +1433,7 @@ impl Bitmap {
             surface: std::ptr::null_mut(),
             alpha_only: false,
             shared: None,
+            drawn: Mutex::new(None),
         }
     }
 
@@ -1845,6 +1849,9 @@ impl Target {
     }
     fn fill(&mut self, polys: &[Vec<Pt>], rule: FillRule, paint: &dyn Fn(f32, f32) -> Color) {
         let clip = self.clip();
+        if let Output::Bitmap(list) = self.out {
+            unsafe { v11::record_list_bounds(list, polys, clip) };
+        }
         let mode = self.fill_mode();
         let (w, h) = (self.w, self.h);
         let mut c = Canvas {
