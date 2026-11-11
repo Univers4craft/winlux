@@ -133,6 +133,17 @@ fn guid_text(guid: &Guid) -> String {
     )
 }
 
+/// Adresses de retour de l'appli (« module+rva »), pour les journaux
+/// d'échec : « aucun » quand seul Winlux est sur la pile.
+fn caller_text() -> String {
+    let calls = super::seh::caller_stack(4);
+    if calls.is_empty() {
+        "aucun".into()
+    } else {
+        calls.join(" < ")
+    }
+}
+
 fn parse_hex_u32(value: &str) -> Option<u32> {
     u32::from_str_radix(value, 16).ok()
 }
@@ -951,10 +962,16 @@ pub unsafe extern "win64" fn co_create_instance(
                 return hr;
             }
         }
+        // Interface, contexte et appelants : sans eux, un CLSID mal formé
+        // ({00000000-0000-0000-0700-…} chez WinRAR, #1830) ne dit pas qui
+        // l'a fourni, de l'appli ou d'une fonction de Winlux.
         crate::log_warn!(
             "com",
-            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG)",
-            guid_text(&guid)
+            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG), interface {}, contexte {:#x}, appelants {}",
+            guid_text(&guid),
+            guid_text(&iid),
+            ctx,
+            caller_text()
         );
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
@@ -1070,8 +1087,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         }
         crate::log_warn!(
             "com",
-            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG)",
-            guid_text(&guid)
+            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG), interface {}, contexte {:#x}, appelants {}",
+            guid_text(&guid),
+            guid_text(&iid),
+            ctx,
+            caller_text()
         );
         return REGDB_E_CLASSNOTREG;
     };
