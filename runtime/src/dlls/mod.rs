@@ -210,6 +210,7 @@ pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
 pub mod rtti;
+pub mod saisie;
 pub mod sandbox_dlls;
 pub mod schannel;
 pub mod sechost;

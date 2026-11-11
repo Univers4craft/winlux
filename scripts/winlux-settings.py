@@ -149,6 +149,7 @@ _TR = {
     'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
     'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
     'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Taper et piloter la souris à votre place': ('Type and control the mouse for you', 'Escribir y controlar el ratón por usted', 'Für Sie tippen und die Maus steuern'),
     'Lancer sans isolation (Chromium, Electron)': ('Start without isolation (Chromium, Electron)', 'Iniciar sin aislamiento (Chromium, Electron)', 'Ohne Isolierung starten (Chromium, Electron)'),
     'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
@@ -404,10 +405,11 @@ def lock_delay_text(seconds):
     return _t("{n} minutes").format(n=seconds // 60)
 
 
-PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox")
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox", "input")
 PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
                     "screen": "Capture de l’écran", "network": "Réseau et Internet",
-                    "sandbox": "Lancer sans isolation (Chromium, Electron)"}
+                    "sandbox": "Lancer sans isolation (Chromium, Electron)",
+                    "input": "Taper et piloter la souris à votre place"}
 
 
 def permission_tool():

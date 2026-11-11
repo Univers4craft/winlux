@@ -3793,7 +3793,7 @@ fn effective_keysym(syms: &[u32], shift: bool, caps: bool, level3: bool) -> Opti
         .or(Some(base))
 }
 
-fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
+pub(crate) fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
     // Sur AZERTY le chiffre est au niveau Maj (&/1, é/2…), mais le VK reste
     // VK_1/VK_2 ; les lettres suivent la disposition choisie sur le serveur.
     if matches!(shifted, 0x30..=0x39) && !matches!(base, 0x41..=0x5A | 0x61..=0x7A) {
