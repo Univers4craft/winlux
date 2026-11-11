@@ -96,7 +96,7 @@ pub struct Database {
     pub word_count: i32,
 }
 
-fn decode(bytes: &[u8], codepage: u32) -> String {
+pub(super) fn decode(bytes: &[u8], codepage: u32) -> String {
     if codepage == 65001 {
         return String::from_utf8_lossy(bytes).into_owned();
     }

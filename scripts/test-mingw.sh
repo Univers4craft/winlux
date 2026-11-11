@@ -197,6 +197,10 @@ if test -f "$dir/driver_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-drivers.sh"
 fi
 
+# setupapi en x86 : structures à la taille 32 bits, sans débordement (#1656),
+# bloquant (le script se construit lui-même et se saute sans clang).
+WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-setupapi32.sh"
+
 # DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
 if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"
