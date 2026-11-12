@@ -721,6 +721,19 @@ impl Assembly {
         })
     }
 
+    /// Description de marshaling d'un champ (`MarshalAs`, table FieldMarshal,
+    /// ECMA-335 §II.22.17 et §II.23.4) : le blob NativeType, ou rien.
+    pub fn field_marshal_of(&self, field_row: u32) -> Option<&[u8]> {
+        let wanted = CodedIndex::HasFieldMarshal.encode(TableId::Field, field_row)?;
+        (1..=self.row_count(TableId::FieldMarshal)).find_map(|r| {
+            let d = self.row_data(TableId::FieldMarshal, r);
+            let mut o = 0;
+            let parent = self.coded_idx(CodedIndex::HasFieldMarshal, d, &mut o);
+            let blob = self.blob_idx(d, &mut o);
+            (parent == wanted).then(|| self.get_blob(blob))
+        })
+    }
+
     pub fn get_field_rva(&self, row: u32) -> FieldRvaRow {
         let d = self.row_data(TableId::FieldRva, row);
         let mut o = 0;

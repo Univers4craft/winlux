@@ -4085,6 +4085,32 @@ pub extern "win64" fn set_last_error(code: u32) {
 pub extern "win64" fn get_process_heap() -> usize {
     process_heap()
 }
+/// Diagnostic `WINLUX_HEAP_DIAG` (#2052, pour #1818) : `trace` journalise chaque
+/// HeapAlloc et HeapFree (pointeur, taille) ; `nofree` garde les blocs
+/// libérés au lieu de les rendre à glibc, dont `free` écrit ses chaînages
+/// dans les 16 premiers octets du bloc. Les deux se combinent (`trace,nofree`).
+/// Sert à établir en boîte noire qu'un programme se sert d'un objet après
+/// l'avoir libéré, ce que le tas de Windows laisse souvent passer.
+fn heap_diag() -> (bool, bool) {
+    static DIAG: OnceLock<(bool, bool)> = OnceLock::new();
+    *DIAG.get_or_init(|| heap_diag_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
+}
+fn heap_diag_parse(v: &str) -> (bool, bool) {
+    let has = |w: &str| v.split(',').any(|x| x.trim() == w);
+    (has("trace"), has("nofree"))
+}
+#[cfg(test)]
+mod tests_diagnostic_tas {
+    #[test]
+    fn valeurs_de_winlux_heap_diag() {
+        assert_eq!(super::heap_diag_parse(""), (false, false));
+        assert_eq!(super::heap_diag_parse("trace"), (true, false));
+        assert_eq!(super::heap_diag_parse("nofree"), (false, true));
+        assert_eq!(super::heap_diag_parse("trace, nofree"), (true, true));
+        assert_eq!(super::heap_diag_parse("1"), (false, false));
+    }
+}
+
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
     let p = libc::malloc(size.max(1));
     if !p.is_null() {
@@ -4093,6 +4119,16 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
         }
         lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
             .insert(p as usize, size.max(1));
+    }
+    if heap_diag().0 {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!(
+                "HeapAlloc({size}) = {p:p} (fil {})",
+                libc::syscall(libc::SYS_gettid)
+            ),
+        );
     }
     p
 }
@@ -4116,7 +4152,27 @@ pub unsafe extern "win64" fn heap_realloc(
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     };
-    let q = libc::realloc(p, size.max(1));
+    let (trace, nofree) = heap_diag();
+    let q = if nofree {
+        // WINLUX_HEAP_DIAG=nofree : l'ancien bloc reste intact.
+        let q = libc::malloc(size.max(1));
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+        }
+        q
+    } else {
+        libc::realloc(p, size.max(1))
+    };
+    if trace {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!(
+                "HeapReAlloc({p:p}, {size}) = {q:p} (fil {})",
+                libc::syscall(libc::SYS_gettid)
+            ),
+        );
+    }
     if q.is_null() {
         crate::process::set_last_error(8);
         return q;
@@ -4140,7 +4196,17 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
         crate::process::set_last_error(87);
         return 0;
     }
-    libc::free(p);
+    let (trace, nofree) = heap_diag();
+    if trace {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
+        );
+    }
+    if !nofree {
+        libc::free(p);
+    }
     1
 }
 pub(crate) fn create_global_memory(
@@ -6740,7 +6806,7 @@ fn os_process_alive(pid: i32) -> bool {
 /// meneur de groupe sorti seul (ExitThread du fil principal) apparaît aussi
 /// « Z » tant que ses autres fils tournent : il n'est fini que s'il ne reste
 /// plus que lui dans /proc/<pid>/task.
-fn os_process_zombie(pid: i32) -> bool {
+pub(crate) fn os_process_zombie(pid: i32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };

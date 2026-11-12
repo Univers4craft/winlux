@@ -134,7 +134,7 @@ enum AttrType {
 impl Interpreter {
     /// (assembly, ligne TypeDef) d'un type, y compris d'un type intégré au
     /// moteur que notre mscorlib déclare (String, Int32…).
-    fn def_of(&self, id: TypeId) -> Option<(usize, u32)> {
+    pub(super) fn def_of(&self, id: TypeId) -> Option<(usize, u32)> {
         if let Some(def) = types::with_types(|reg| reg.get(id).and_then(|t| t.def)) {
             return Some(def);
         }
@@ -153,7 +153,7 @@ impl Interpreter {
             .map(|r| (asm, r))
     }
 
-    fn gen_of(&self, owner: TypeId) -> Gen {
+    pub(super) fn gen_of(&self, owner: TypeId) -> Gen {
         Gen {
             t: types::with_types(|reg| reg.get(owner).map(|t| t.type_args.clone()))
                 .unwrap_or_default(),
@@ -1270,6 +1270,13 @@ impl Interpreter {
                     }
                     None => Value::Null,
                 }
+            }
+            // AppDomain.GetAssemblies (#2054) : toutes les assemblies chargées.
+            "Assemblies" => {
+                let v: Vec<Value> = (0..self.domain.len())
+                    .map(|i| self.assembly_object(i))
+                    .collect();
+                ref_array(&v)
             }
             "TypeDansAssembly" => {
                 let asm = arg_i64(args, 0);

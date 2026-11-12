@@ -488,6 +488,12 @@ impl Interpreter {
             let namespace = self.assembly.get_string(td.namespace).to_string();
             let class = self.assembly.get_string(td.name).to_string();
             let name = self.assembly.get_string(md.name).to_string();
+            if let Some(r) = self.marshal_call(&namespace, &class, &name, &args, Some(&gen)) {
+                return match r {
+                    Ok(v) => ExecResult::Return(v),
+                    Err(e) => ExecResult::Exception(e),
+                };
+            }
             return match self.call_native(&namespace, &class, &name, args, &sig.param_types) {
                 Ok(v) => ExecResult::Return(v),
                 Err(e) => ExecResult::Exception(e),
@@ -613,6 +619,10 @@ impl Interpreter {
                 class,
                 name,
             } => {
+                // Marshal.SizeOf<T>() : T est un argument de la méthode.
+                if let Some(r) = self.marshal_call(&namespace, &class, &name, &args, Some(&gen)) {
+                    return r;
+                }
                 let params = self.get_method_sig(token).param_types;
                 self.call_native(&namespace, &class, &name, args, &params)
             }
@@ -705,6 +715,12 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.registry_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.process_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.marshal_call(namespace, class, name, &args, None) {
             return r;
         }
         match (namespace, class, name) {
