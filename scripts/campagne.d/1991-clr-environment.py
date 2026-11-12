@@ -11,5 +11,5 @@ bcl_attr = (ROOT / "bcl" / "mscorlib" / "Attributs.cs").read_text(encoding="utf-
 ok("public sealed class AssemblyFileVersionAttribute" in bcl_attr and "public sealed class TargetFrameworkAttribute" in bcl_attr
    and "Code de sortie attendu : 200." in (ROOT / "bcl" / "temoins" / "Environnement.cs").read_text(encoding="utf-8"),
    "CLR : attributs d'assembly dans notre mscorlib, témoin Environnement (#1992)")
-ok("fn is_string_empty" in (runtime_dlls.parent / "clr" / "il.rs").read_text(encoding="utf-8"),
-   "CLR : String.Empty vaut la chaîne vide (#1997)")
+ok("fn builtin_field" in (runtime_dlls.parent / "clr" / "il.rs").read_text(encoding="utf-8"),
+   "CLR : champs statiques des types intégrés (String.Empty, Boolean.TrueString) initialisés (#1997)")

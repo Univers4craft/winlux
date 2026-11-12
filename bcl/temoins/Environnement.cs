@@ -22,8 +22,8 @@ namespace Temoins
     {
         static int Main()
         {
-            // String.Empty était nul avant tout appel qui touche String (#1997).
-            if (string.Empty == null || string.Empty.Length != 0) return 1;
+            // String.Empty et Boolean.TrueString étaient nuls (#1997).
+            if (string.Empty == null || string.Empty.Length != 0 || bool.TrueString != "True" || bool.FalseString != "False") return 1;
             // Lancé hors du gestionnaire de services : interactif.
             if (!Environment.UserInteractive || Environment.HasShutdownStarted) return 1;
             OperatingSystem os = Environment.OSVersion;
