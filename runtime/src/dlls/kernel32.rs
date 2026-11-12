@@ -5243,6 +5243,26 @@ fn share_named(
 }
 
 pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
+    let Some(name) = name else {
+        return add_sync_named(obj, None);
+    };
+    let kind = kind_label(sync_kind(&obj));
+    let h = add_sync_named(obj, Some(name.clone()));
+    let err = crate::process::last_error();
+    remember_name(h, &name);
+    crate::trace!(
+        "Create{kind}({name}) = 0x{h:x}, clé {:?}, {} (erreur {err})",
+        crate::dlls::named_objects::name_key(&name),
+        match (h, err) {
+            (0, _) => "refusé",
+            (_, 183) => "existait déjà",
+            _ => "créé",
+        }
+    );
+    h
+}
+
+fn add_sync_named(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
         let key = crate::dlls::named_objects::name_key(&name);
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
@@ -5273,7 +5293,12 @@ pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
                     crate::process::set_last_error(e);
                     return 0;
                 }
-                None => obj,
+                None => {
+                    crate::trace!(
+                        "objet nommé {name} : partage entre processus indisponible, objet local"
+                    );
+                    obj
+                }
             };
             crate::dlls::named_objects::retain(crate::dlls::named_objects::SYNC, &key);
             names.insert(key, (obj.clone(), 1));
@@ -5323,6 +5348,7 @@ pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
         .cloned()
 }
 fn remove_sync(h: usize) -> bool {
+    forget_name(h);
     let Some(obj) = lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&h) else {
         return false;
     };
@@ -5343,6 +5369,49 @@ fn remove_sync(h: usize) -> bool {
     }
     true
 }
+/// WINLUX_TRACE (#2072) : nom des handles d'objets nommés, pour tracer
+/// leurs signalements et leurs attentes entre processus (connexion de
+/// steam.exe au webhelper, #1995). Rempli seulement quand la trace est
+/// active.
+static TRACED_NAMES: Mutex<Option<HashMap<usize, String>>> = Mutex::new(None);
+
+fn trace_on() -> bool {
+    crate::log::enabled(crate::log::Level::Trace)
+}
+
+fn remember_name(h: usize, name: &str) {
+    if h != 0 && trace_on() {
+        lock(&TRACED_NAMES)
+            .get_or_insert_with(HashMap::new)
+            .insert(h, name.to_string());
+    }
+}
+
+fn forget_name(h: usize) {
+    if trace_on() {
+        if let Some(m) = lock(&TRACED_NAMES).as_mut() {
+            m.remove(&h);
+        }
+    }
+}
+
+/// Nom de l'objet du handle `h` s'il est nommé et la trace active.
+fn traced_name(h: usize) -> Option<String> {
+    if !trace_on() {
+        return None;
+    }
+    lock(&TRACED_NAMES).as_ref()?.get(&h).cloned()
+}
+
+fn kind_label(kind: u32) -> &'static str {
+    match kind {
+        SHARED_KIND_EVENT => "Event",
+        SHARED_KIND_MUTEX => "Mutex",
+        SHARED_KIND_SEMAPHORE => "Semaphore",
+        _ => "objet",
+    }
+}
+
 fn named_event(name: *const u8) -> Option<String> {
     if name.is_null() {
         None
@@ -7151,9 +7220,20 @@ pub unsafe extern "win64" fn create_event_a(
     name: *const u8,
 ) -> usize {
     let obj = SyncHandle::Event(Arc::new(EventObject::new(manual != 0, initial != 0)));
-    let h = add_sync(obj, named_event(name));
+    let h = create_sync(obj, named_event(name));
     crate::dlls::inherit::from_security_attributes(h, _sec);
     h
+}
+
+/// Create{Event,Mutex,Semaphore,WaitableTimer} : GetLastError est remis à 0
+/// avant la création, puis vaut ERROR_ALREADY_EXISTS (183) seulement si
+/// l'objet nommé existait, comme Windows (#2079). Un IPCWrapper (flux maître
+/// de Steam) teste GetLastError() pour savoir s'il a créé l'objet : nous
+/// laissions la valeur d'un appel précédent (122, ou un 183 resté d'un
+/// CreateFileMapping qui faisait croire qu'un canal neuf existait déjà).
+fn create_sync(obj: SyncHandle, name: Option<String>) -> usize {
+    crate::process::set_last_error(0);
+    add_sync(obj, name)
 }
 pub extern "win64" fn set_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
@@ -7165,6 +7245,9 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if let Some(n) = traced_name(h) {
+        crate::trace!("SetEvent({n}, 0x{h:x})");
+    }
     let _gate = sync_gate();
     v.store(&mut lock(&v.signaled), true);
     if let Some(w) = v.shared.get() {
@@ -7185,24 +7268,27 @@ pub extern "win64" fn reset_event(h: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ResetEvent({n}, 0x{h:x})");
+    }
     let _gate = sync_gate();
     v.store(&mut lock(&v.signaled), false);
     1
 }
 pub unsafe extern "win64" fn create_mutex_a(_sec: usize, initial: i32, name: *const u8) -> usize {
     let obj = SyncHandle::Mutex(Arc::new(MutexObject::new(initial != 0)));
-    add_sync(obj, named_event(name))
+    create_sync(obj, named_event(name))
 }
 pub extern "win64" fn release_mutex(h: usize) -> i32 {
     let Some(SyncHandle::Mutex(m)) = lookup_sync(h) else {
         crate::process::set_last_error(6);
         return 0;
     };
-    if leave_mutex(&m) {
-        1
-    } else {
-        0
+    let ok = leave_mutex(&m);
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ReleaseMutex({n}, 0x{h:x}) = {ok}");
     }
+    i32::from(ok)
 }
 
 /// System.Threading.Mutex de la mscorlib Winlux (#1988) : le mutex .NET est
@@ -7267,6 +7353,21 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
 /// Open{Event,Mutex,Semaphore} : objet nommé de ce processus, ou d'un autre
 /// processus du même compte (#20).
 fn open_sync_by_name(name: &str, kind: u32) -> usize {
+    let h = open_sync_by_name_inner(name, kind);
+    remember_name(h, name);
+    crate::trace!(
+        "Open{}({name}) = 0x{h:x} (erreur {})",
+        kind_label(kind),
+        if h == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    h
+}
+
+fn open_sync_by_name_inner(name: &str, kind: u32) -> usize {
     let key = crate::dlls::named_objects::name_key(name);
     let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
     if !names.contains_key(&key) {
@@ -7356,6 +7457,54 @@ mod reviewed_named_sync_tests {
         }
     }
 }
+#[cfg(test)]
+mod created_last_error_tests {
+    use super::*;
+
+    /// Création réussie : GetLastError vaut 0, ou 183 si le nom existait,
+    /// jamais la valeur d'un appel précédent (#2079).
+    #[test]
+    fn creation_reussie_remet_last_error_a_zero() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let name = format!("winlux-2079-{}\0", std::process::id());
+            let n = name.as_ptr();
+            for named in [false, true] {
+                let p = if named { n } else { std::ptr::null() };
+                // 183 resté d'un appel précédent : pas « existait déjà ».
+                crate::process::set_last_error(183);
+                let ev = create_event_a(0, 1, 0, p);
+                assert_ne!(ev, 0);
+                assert_eq!(crate::process::last_error(), 0, "CreateEvent nommé={named}");
+                crate::process::set_last_error(122);
+                let again = create_event_a(0, 1, 0, p);
+                assert_eq!(
+                    crate::process::last_error(),
+                    if named { 183 } else { 0 },
+                    "second CreateEvent nommé={named}"
+                );
+                close_handle(again);
+                close_handle(ev);
+            }
+            let m = format!("winlux-2079-m-{}\0", std::process::id());
+            crate::process::set_last_error(122);
+            let mx = create_mutex_a(0, 0, m.as_ptr());
+            assert_ne!(mx, 0);
+            assert_eq!(crate::process::last_error(), 0, "CreateMutex");
+            close_handle(mx);
+            crate::process::set_last_error(122);
+            let sem = create_semaphore_a(0, 0, 1, std::ptr::null());
+            assert_ne!(sem, 0);
+            assert_eq!(crate::process::last_error(), 0, "CreateSemaphore");
+            close_handle(sem);
+            crate::process::set_last_error(122);
+            let t = create_waitable_timer_a(0, 1, std::ptr::null());
+            assert_ne!(t, 0);
+            assert_eq!(crate::process::last_error(), 0, "CreateWaitableTimer");
+            close_handle(t);
+        }
+    }
+}
 pub unsafe extern "win64" fn open_event_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
     if _inherit != 0 {
         crate::process::set_last_error(50);
@@ -7371,6 +7520,39 @@ pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *co
     open_named_sync(name, false)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
+    if !trace_on() {
+        return wait_for_single_object_inner(h, timeout);
+    }
+    let start = std::time::Instant::now();
+    let r = wait_for_single_object_inner(h, timeout);
+    if let Some(n) = traced_name(h) {
+        crate::trace!("WaitForSingleObject({n}, 0x{h:x}, {timeout} ms) = 0x{r:x}");
+    } else {
+        trace_long_wait("WaitForSingleObject", &[h], timeout, r, start);
+    }
+    r
+}
+
+/// WINLUX_TRACE (#2072) : attente d'au moins 200 ms sur des handles
+/// anonymes, avec le type de chaque objet, pour savoir où un processus
+/// s'est arrêté sans attente nommée visible.
+fn trace_long_wait(api: &str, hs: &[usize], timeout: u32, r: u32, start: std::time::Instant) {
+    let took = start.elapsed();
+    if took < std::time::Duration::from_millis(200) {
+        return;
+    }
+    let what: Vec<String> = hs
+        .iter()
+        .map(|&h| format!("{} 0x{h:x}", object_type_name(h).unwrap_or("?")))
+        .collect();
+    crate::trace!(
+        "{api}([{}], {timeout} ms) = 0x{r:x} après {} ms (fil {})",
+        what.join(", "),
+        took.as_millis(),
+        os_thread_id()
+    );
+}
+fn wait_for_single_object_inner(h: usize, timeout: u32) -> u32 {
     // Entrée de la console (terminal) : signalée quand une touche attend.
     if crate::dlls::console_input::is_console_input(h) {
         return if crate::dlls::console_input::wait(timeout) {
@@ -7444,6 +7626,42 @@ fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
+    count: u32,
+    handles: *const usize,
+    wait_all: i32,
+    timeout: u32,
+) -> u32 {
+    let names: Vec<String> = if trace_on() && !handles.is_null() && (1..=64).contains(&count) {
+        std::slice::from_raw_parts(handles, count as usize)
+            .iter()
+            .map(|&h| traced_name(h).unwrap_or_else(|| format!("0x{h:x}")))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let start = std::time::Instant::now();
+    let r = wait_for_multiple_objects_inner(count, handles, wait_all, timeout);
+    if names.len() != count as usize {
+        return r;
+    }
+    if names.iter().all(|n| n.starts_with("0x")) {
+        trace_long_wait(
+            "WaitForMultipleObjects",
+            std::slice::from_raw_parts(handles, count as usize),
+            timeout,
+            r,
+            start,
+        );
+        return r;
+    }
+    crate::trace!(
+        "WaitForMultipleObjects([{}], tous {}, {timeout} ms) = 0x{r:x}",
+        names.join(", "),
+        wait_all != 0
+    );
+    r
+}
+unsafe fn wait_for_multiple_objects_inner(
     count: u32,
     handles: *const usize,
     wait_all: i32,
@@ -9240,7 +9458,7 @@ pub unsafe extern "win64" fn create_waitable_timer_a(
     name: *const u8,
 ) -> usize {
     let obj = SyncHandle::Event(Arc::new(EventObject::new(manual != 0, false)));
-    let h = add_sync(obj, named_event(name));
+    let h = create_sync(obj, named_event(name));
     if h != 0 {
         lock(waitable_timers()).insert(h, Arc::new(AtomicUsize::new(0)));
     }
@@ -10862,7 +11080,7 @@ pub unsafe extern "win64" fn create_semaphore_w(
     let name = (!_name.is_null())
         .then(|| crate::dlls::wstr(_name))
         .filter(|n| !n.is_empty());
-    add_sync(obj, name)
+    create_sync(obj, name)
 }
 pub unsafe extern "win64" fn create_semaphore_a(
     sa: usize,
@@ -10882,6 +11100,9 @@ pub unsafe extern "win64" fn create_semaphore_a(
 /// ReleaseSemaphore : ajoute `count` au compteur sans dépasser le maximum
 /// (ERROR_TOO_MANY_POSTS sinon), renvoie l'ancienne valeur dans `prev`.
 pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut i32) -> i32 {
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ReleaseSemaphore({n}, 0x{h:x}, {count})");
+    }
     let Some(SyncHandle::Semaphore(sem)) = lookup_sync(h) else {
         crate::process::set_last_error(6);
         return 0;
