@@ -196,6 +196,7 @@ pub mod ncrypt;
 pub mod netfw;
 pub mod netfw2;
 pub mod netlistmgr;
+pub mod network_information;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
