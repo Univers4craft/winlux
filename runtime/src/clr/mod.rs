@@ -13,6 +13,7 @@ pub mod fichiers;
 pub mod gc;
 pub mod il;
 pub mod interop;
+pub mod marshal;
 pub mod membres;
 pub mod metadata;
 pub mod nombres;
