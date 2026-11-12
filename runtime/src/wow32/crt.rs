@@ -89,6 +89,10 @@ const D_PWCTYPE: usize = 0x400;
 /// `struct lconv` x86 : 10 pointeurs, 8 octets, 8 pointeurs larges.
 const D_LCONV: usize = 0x700;
 const D_STRINGS: usize = 0x780;
+/// `___lc_locale_name_func` : six pointeurs x86 nuls (locale « C » sans
+/// nom), sous 4 Go (#2168).
+const D_LC_NAMES: usize = 0x7c0;
+const LC_CATEGORIES: usize = 6;
 const DATA_SIZE: usize = 0x1000;
 
 /// Champs du tampon par thread, après le TEB 32 bits (voir `TEB32_SCRATCH`).
@@ -105,6 +109,9 @@ fn data() -> usize {
             let w32 = |o: usize, v: u32| *((d + o) as *mut u32) = v;
             w32(D_FMODE, 0x4000);
             w32(D_MB_CUR_MAX, 1);
+            for i in 0..LC_CATEGORIES {
+                w32(D_LC_NAMES + i * 4, 0);
+            }
             // Flux standard : alias des trois flux du runtime.
             crate::dlls::crt_stdio::register_std_aliases(d + D_IOB, FILE32_SIZE);
             // Classes de caractères : table 64 bits recopiée, EOF à zéro.
@@ -1712,6 +1719,15 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "__iob_func" | "__p__iob" => raw(ret_aux, d + D_IOB),
         "__acrt_iob_func" => raw(iob_at, 0),
         "localeconv" => raw(ret_aux, d + D_LCONV),
+        // La table 64 bits est une donnée du runtime, au-dessus de 4 Go :
+        // l'outil de déploiement d'Office lisait son pointeur tronqué (#2168).
+        "___lc_locale_name_func" => raw(ret_aux, d + D_LC_NAMES),
+        // tmpnam(NULL) rend le tampon statique du runtime ; un tampon de
+        // l'appelant est déjà sous 4 Go et revient tel quel.
+        "tmpnam" => native(n, func, "i>i", Fix::Str { wide: false })?,
+        // Ligne de commande : copie basse si elle n'est pas déjà atteignable.
+        "_get_narrow_winmain_command_line" => native(n, func, ">i", Fix::Str { wide: false })?,
+        "_get_wide_winmain_command_line" => native(n, func, ">i", Fix::Str { wide: true })?,
         "__getmainargs" => raw(getmainargs, 0),
         "__wgetmainargs" => raw(getmainargs, 1),
         "_initterm" => raw(initterm, 0),
@@ -2184,6 +2200,20 @@ mod tests {
         }
         for f in ["ceil", "ceilf", "cosl", "cbrtl"] {
             assert!(complex_code(f).is_none(), "{f}");
+        }
+    }
+
+    #[test]
+    fn noms_de_locale_x86_sous_4_go() {
+        // #2168 : six pointeurs x86 nuls, lisibles par le programme.
+        let names = data() + D_LC_NAMES;
+        assert!(names + LC_CATEGORIES * 4 <= 1 << 32);
+        assert!(D_LC_NAMES >= D_STRINGS + 12 && D_LC_NAMES + LC_CATEGORIES * 4 <= DATA_SIZE);
+        let slots = unsafe { std::slice::from_raw_parts(names as *const u32, LC_CATEGORIES) };
+        assert!(slots.iter().all(|&p| p == 0));
+        match override_for("ucrtbase", "___lc_locale_name_func") {
+            Some(Override::Raw { aux, .. }) => assert_eq!(aux, names),
+            _ => panic!("___lc_locale_name_func doit rendre la table basse"),
         }
     }
 

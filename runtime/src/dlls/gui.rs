@@ -424,6 +424,11 @@ pub fn thread_of_win32(tid: u32) -> Option<ThreadId> {
     lock(win32_threads()).get(&tid).copied()
 }
 
+/// Vrai si le thread appelant a déjà une file de messages (IsGUIThread).
+pub fn current_thread_has_queue() -> bool {
+    lock(queues()).contains_key(&std::thread::current().id())
+}
+
 pub fn current_queue() -> Arc<Queue> {
     let tid = std::thread::current().id();
     thread_local!(static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
