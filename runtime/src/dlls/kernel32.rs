@@ -2353,7 +2353,7 @@ unsafe fn create_file_opened(
     }
     if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
         crate::trace!("CreateFile({path}) : effacé à la fermeture");
-        lock(delete_on_close()).insert(h, p);
+        crate::dlls::doomed::register(h, p);
     }
     h
 }
@@ -2365,7 +2365,7 @@ const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 /// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
 /// effacement à la fermeture. Rien si le fichier n'a plus de nom
 /// (déjà effacé : /proc rend « … (deleted) »), #1885.
-fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+pub(crate) fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
     if fd < 0 {
         return None;
     }
@@ -6864,9 +6864,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
     // renommé depuis son ouverture (#1885).
-    let doomed = lock(delete_on_close())
-        .remove(&handle)
-        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
+    let doomed = lock(delete_on_close()).remove(&handle).and_then(|_| {
+        crate::dlls::doomed::forget(handle);
+        doomed_on_close(handle_to_fd(handle))
+    });
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -8268,6 +8269,7 @@ pub fn terminate_self(code: u32) -> ! {
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -8279,6 +8281,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
