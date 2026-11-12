@@ -5,18 +5,25 @@ stage=${1:?stage required}
 iso_root=${2:?ISO root required}
 kernel_release=${3:?kernel release required}
 project=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-linkage=$(LC_ALL=C ldd /usr/bin/busybox 2>&1 || true)
+# Binaires du petit initramfs pris dans la racine native ($stage, paquets
+# amd64 de la base APT), jamais sur la machine de construction : le runner
+# ubuntu-26.04 installe la variante amd64v3 (AVX2), et son busybox plantait
+# dès /init sur tout processeur sans AVX (Atom, Celeron, Core 1re gén., #2146).
+busybox="$stage/usr/bin/busybox"
+test -f "$busybox" || busybox="$stage/bin/busybox"
+test -f "$busybox" || { echo "busybox absent de la racine $stage" >&2; exit 1; }
+linkage=$(LC_ALL=C ldd "$busybox" 2>&1 || true)
 case "$linkage" in *'not a dynamic executable'*|*'statically linked'*) ;;
     *) echo 'busybox-static requis pour le petit initramfs' >&2; exit 1 ;;
 esac
 for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum loadkmap reboot sync mv rm cp grep sed head dd chown; do
-    /usr/bin/busybox --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
+    "$busybox" --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
 done
 work=$(mktemp -d "$project/build/live-boot.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 tiny="$work/root"
 mkdir -p "$tiny/bin" "$tiny/dev" "$tiny/etc" "$tiny/proc" "$tiny/run" "$tiny/sys" "$tiny/media" "$tiny/lower" "$tiny/cow" "$tiny/newroot" "$iso_root/boot"
-cp /usr/bin/busybox "$tiny/bin/busybox"
+cp -L "$busybox" "$tiny/bin/busybox"
 ln -s busybox "$tiny/bin/sh"
 cp "$project/scripts/winlux-live-init.sh" "$tiny/init"
 cp "$project/scripts/winlux-reset-apply.sh" "$tiny/reset-apply.sh"
@@ -30,24 +37,39 @@ for driver in loop isofs squashfs overlay ext4; do
     }
 done
 crypt_drivers=
-cryptsetup=$(command -v cryptsetup 2>/dev/null || true)
-if test -n "$cryptsetup"; then
+# cryptsetup et ses bibliothèques : ceux de la racine native, résolus par son
+# propre chargeur (le ldd de l'hôte rendrait les bibliothèques de l'hôte).
+cryptsetup=
+for candidate in "$stage/usr/sbin/cryptsetup" "$stage/sbin/cryptsetup"; do
+    if test -f "$candidate"; then cryptsetup=$candidate; break; fi
+done
+native_libs="$stage/usr/lib/x86_64-linux-gnu"
+loader="$native_libs/ld-linux-x86-64.so.2"
+if test -n "$cryptsetup" && test -f "$loader"; then
     # Installed systems with an encrypted root unlock it from this initramfs.
     cp -L "$cryptsetup" "$tiny/bin/cryptsetup"
     chmod 755 "$tiny/bin/cryptsetup"
-    LC_ALL=C ldd "$cryptsetup" | awk '$2 == "=>" && $3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' | sort -u |
-    while IFS= read -r lib; do
-        mkdir -p "$tiny$(dirname -- "$lib")"
-        cp -L "$lib" "$tiny$lib"
-    done
     # glibc dlopens libgcc_s when the Argon2 threads exit; ldd does not list it.
-    libgcc=$(ldconfig -p | awk '/libgcc_s\.so\.1 .*x86-64/ { print $NF; exit }')
-    test -n "$libgcc" || { echo 'libgcc_s.so.1 introuvable (requis par cryptsetup)' >&2; exit 1; }
-    mkdir -p "$tiny$(dirname -- "$libgcc")"
-    cp -L "$libgcc" "$tiny$libgcc"
+    test -f "$native_libs/libgcc_s.so.1" || { echo 'libgcc_s.so.1 absente de la racine native (requise par cryptsetup)' >&2; exit 1; }
+    { LC_ALL=C "$loader" --library-path "$native_libs" --list "$cryptsetup" |
+        awk '$2 == "=>" && $3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }'
+      echo "$native_libs/libgcc_s.so.1"; } | sort -u >"$work/crypt-libs"
+    while IFS= read -r lib; do
+        case "$lib" in
+            "$stage"/*) relative=${lib#"$stage"} ;;
+            /lib64/ld-linux-x86-64.so.2) relative=$lib; lib=$loader ;;
+            *) echo "cryptsetup : bibliothèque hors de la racine native : $lib" >&2; exit 1 ;;
+        esac
+        relative=$(printf '%s' "$relative" | sed 's|^/lib/|/usr/lib/|')
+        mkdir -p "$tiny$(dirname -- "$relative")"
+        cp -L "$lib" "$tiny$relative"
+    done <"$work/crypt-libs"
+    # Chemin du chargeur inscrit dans les binaires (PT_INTERP).
+    mkdir -p "$tiny/lib64"
+    cp -L "$loader" "$tiny/lib64/ld-linux-x86-64.so.2"
     crypt_drivers='dm_mod dm_crypt xts cbc aesni_intel aes_generic sha256_generic'
 else
-    echo 'cryptsetup absent : les installations chiffrées (LUKS) ne seront pas proposées' >&2
+    echo 'cryptsetup absent de la racine native : les installations chiffrées (LUKS) ne seront pas proposées' >&2
 fi
 for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme vmd usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core mmc_block sdhci sdhci_pci sdhci_acpi loop isofs squashfs overlay vfat ext4 $crypt_drivers; do
     # Pas de pipeline : l'échec de modprobe (pilote absent) est visible et la
@@ -92,6 +114,8 @@ fakeroot sh -c '
     # shellcheck disable=SC2086 # $3 : options facultatives séparées par des espaces
     mksquashfs "$1" "$2" -noappend -all-root -processors "$(nproc)" -comp xz -Xbcj x86 -Xdict-size 100% -b 1M -no-progress $3
 ' sh "$stage" "$iso_root/boot/winlux-rootfs.squashfs" "$squash_time_options"
+# Garde-fou #2146 : aucun binaire de l'initramfs ne doit exiger AVX.
+sh "$project/scripts/check-initramfs-baseline.sh" "$tiny"
 fakeroot sh -c '
     set -eu
     cd "$1"
