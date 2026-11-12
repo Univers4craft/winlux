@@ -56,7 +56,8 @@ with tempfile.TemporaryDirectory() as tmp:
     env["WINLUX_STORE_CONFIRM"] = str(bindir / "confirm")
 
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---
-    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
+    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n"
+         "[ -n \"${DPKG_MORE:-}\" ] && printf '%b' \"$DPKG_MORE\"\nexit 0\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
     mock(bindir, "apt-cache", """case "$1" in
 policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad|inconnu) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
@@ -401,6 +402,14 @@ esac
     # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
     st("remove", "apt:vlc")
     check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
+    # Traductions de LibreOffice (#2183) : rien ne les recommande, donc
+    # désinstaller Writer les retirerait à Calc ; la Boutique les remet.
+    env["DPKG_MORE"] = "libreoffice-calc\\tii \\t24.2\\t100\\n"
+    st("remove", "apt:libreoffice-writer")
+    env.pop("DPKG_MORE")
+    check("purge --autoremove -- libreoffice-writer" in log.read_text()
+          and "install --no-install-recommends --mark-auto -- libreoffice-l10n-de libreoffice-l10n-es libreoffice-l10n-fr" in log.read_text(),
+          "compagnons des logiciels restants remis après une désinstallation (#2183)")
     relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
     apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
     check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")

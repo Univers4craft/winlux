@@ -827,20 +827,24 @@ class Source:
         return 0
 
 
-def apt_companions(pkg):
-    """Paquets à installer avec « pkg » : lignes « compagnons=pkg:a,b » du
-    catalogue (#2075), quand l'application ne marche pas sans ce qu'apt ne
-    fait que recommander."""
+def all_companions():
+    """Lignes « compagnons=pkg:a,b » du catalogue (#2075) : paquet -> compagnons."""
     try:
         lines = CATALOG.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
+        return {}
+    out = {}
     for line in lines:
         if line.startswith("compagnons="):
             name, _, rest = line[11:].partition(":")
-            if name == pkg:
-                return [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)]
-    return []
+            out.setdefault(name, [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)])
+    return out
+
+
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg », quand l'application ne marche pas sans
+    ce qu'apt ne fait que recommander (#2075)."""
+    return all_companions().get(pkg, [])
 
 
 class Apt(Source):
@@ -1074,7 +1078,17 @@ class Apt(Source):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
         # paquet et dépendances installées pour lui seul partent aussi (apt
         # remove laissait 10 bibliothèques et les réglages de Démineur).
-        return self.apt(["purge", "--autoremove", "--", ref], progress)
+        code = self.apt(["purge", "--autoremove", "--", ref], progress)
+        if code == 0:
+            # Un compagnon que rien ne recommande (traductions de LibreOffice)
+            # part avec --autoremove même si un autre logiciel du catalogue en
+            # a besoin : on le remet pour ceux qui restent (#2183).
+            installed = self.installed()
+            missing = sorted({c for p, cs in all_companions().items() if p in installed
+                              for c in cs if c not in installed})
+            if missing:
+                self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *missing], progress)
+        return code
 
     def update(self, refs, progress):
         return self.apt(["install", "--only-upgrade", "--", *refs], progress)
