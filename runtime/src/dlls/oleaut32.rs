@@ -398,6 +398,80 @@ pub unsafe extern "win64" fn safe_array_create(vt: u16, dims: u32, bounds_ptr: u
     ))
 }
 
+/// SafeArrayCopy (#2110) : copie profonde. Chaînes BSTR recopiées,
+/// VARIANT copiés par VariantCopy, interfaces AddRef, structures par
+/// IRecordInfo::RecordCopy. Échec : E_INVALIDARG si le tableau n'est pas
+/// connu, E_OUTOFMEMORY si une copie manque de mémoire.
+pub unsafe extern "win64" fn safe_array_copy(sa: usize, out: *mut usize) -> i32 {
+    const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = 0;
+    if sa == 0 {
+        return S_OK_COPY;
+    }
+    let mut copy = {
+        let map = lock(safe_arrays());
+        let Some(src) = map.get(&sa) else {
+            return E_INVALIDARG;
+        };
+        let mut c = SafeArrayInner::new(
+            src.vt,
+            src.bounds.clone(),
+            src.data.clone(),
+            src.element_size,
+        );
+        c.record = src.record;
+        c
+    };
+    unk_call(1, copy.record);
+    let size = copy.element_size as usize;
+    let mut failed = false;
+    if size != 0 {
+        let src_data = copy.data.clone();
+        for (i, cell) in copy.data.chunks_exact_mut(size).enumerate() {
+            let from = src_data.as_ptr().add(i * size);
+            let to = cell.as_mut_ptr();
+            match copy.vt {
+                VT_BSTR => {
+                    let b = read_cell(from) as *const u16;
+                    let dup = if b.is_null() {
+                        std::ptr::null_mut()
+                    } else {
+                        let d = sys_alloc_string_byte_len(b as *const u8, sys_string_byte_len(b));
+                        failed |= d.is_null();
+                        d
+                    };
+                    write_cell(to, dup as usize);
+                }
+                9 | 13 => unk_call(1, read_cell(from)),
+                12 => {
+                    std::ptr::write_bytes(to, 0, size);
+                    failed |= variant_copy(to as *mut c_void, from as *const c_void) < 0;
+                }
+                VT_RECORD if copy.record != 0 && crate::wow32::pointer_size() == 8 => {
+                    let rec = copy.record;
+                    std::ptr::write_bytes(to, 0, size);
+                    let rcopy: unsafe extern "win64" fn(usize, *const u8, *mut u8) -> i32 =
+                        std::mem::transmute(*(*(rec as *const *const usize)).add(5));
+                    failed |= rcopy(rec, from, to) < 0;
+                }
+                _ => {}
+            }
+        }
+    }
+    copy.sync_header();
+    if failed {
+        clear_elements(&copy);
+        unk_call(2, copy.record);
+        return E_OUTOFMEMORY;
+    }
+    *out = register(copy);
+    S_OK_COPY
+}
+const S_OK_COPY: i32 = 0;
+
 pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count: u32) -> usize {
     let bound = SafeArrayBound {
         elements: count,
@@ -1086,6 +1160,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SafeArrayCreate" => fn safe_array_create,
         "SafeArrayCreateVector" => fn safe_array_create_vector,
         "SafeArrayDestroy" => fn safe_array_destroy,
+        "SafeArrayCopy" => fn safe_array_copy,
         "SafeArrayAccessData" => fn safe_array_access_data,
         "SafeArrayUnaccessData" => fn safe_array_unaccess_data,
         "SafeArrayGetDim" => fn safe_array_get_dim,
