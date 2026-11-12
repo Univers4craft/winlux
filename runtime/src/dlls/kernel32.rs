@@ -162,7 +162,8 @@ struct CompletionPacket {
 }
 struct CompletionPortState {
     queue: VecDeque<CompletionPacket>,
-    active: HashSet<ThreadId>,
+    /// Fils qui ont retiré un paquet, avec leur numéro de fil Linux.
+    active: HashMap<ThreadId, i32>,
 }
 pub(crate) struct CompletionPort {
     state: Mutex<CompletionPortState>,
@@ -947,7 +948,7 @@ pub(crate) fn release_iocp_slots_for_current_thread() {
     }
     for p in ports {
         let mut state = lock(&p.state);
-        if state.active.remove(&tid) {
+        if state.active.remove(&tid).is_some() {
             p.changed.notify_all();
         }
     }
@@ -1377,6 +1378,13 @@ fn start_overlapped_io(
     // au port de complétion (libuv s'en sert pour ses lectures d'essai).
     let raw_event = unsafe { (*ov).event };
     let event = raw_event & !1;
+    // ReadFile et WriteFile remettent l'événement de l'OVERLAPPED à non
+    // signalé au début de l'E/S (documentation Learn, « Synchronization and
+    // File Position ») : resté signalé d'une E/S précédente, il réveillait
+    // l'attente avant la fin de celle-ci (#2055).
+    if event != 0 {
+        let _ = reset_event(event);
+    }
     let completion = if raw_event & 1 != 0 {
         None
     } else {
@@ -1681,6 +1689,30 @@ pub unsafe extern "win64" fn cancel_io_ex(h: usize, overlapped: *mut Overlapped)
         1
     }
 }
+/// Fils actifs d'un port qui tournent vraiment. Comme sous Windows, un fil
+/// qui a retiré un paquet puis s'est bloqué ailleurs (WaitFor*, Sleep, E/S
+/// synchrone, verrou) ne compte plus dans la limite de concurrence : il
+/// laisse sa place à un autre fil qui attend le port (#2055). Un fil est en
+/// cours s'il est « R » dans /proc/self/task/TID/stat.
+fn running_threads(active: &HashMap<ThreadId, i32>) -> usize {
+    active
+        .values()
+        .filter(|&&tid| {
+            std::fs::read_to_string(format!("/proc/self/task/{tid}/stat"))
+                .ok()
+                .and_then(|st| {
+                    let rest = &st[st.rfind(')')? + 1..];
+                    rest.split_whitespace().next().map(|c| c == "R")
+                })
+                // Fil disparu : il ne tourne plus.
+                .unwrap_or(false)
+        })
+        .count()
+}
+/// Délai entre deux examens quand la file attend parce que la limite de
+/// concurrence est atteinte : un fil qui se bloque ailleurs ne prévient
+/// pas le port.
+const IOCP_CONCURRENCY_RECHECK_MS: u32 = 10;
 fn dequeue_iocp(
     port: &CompletionPort,
     max_packets: usize,
@@ -1689,15 +1721,38 @@ fn dequeue_iocp(
     let start = std::time::Instant::now();
     let current = std::thread::current().id();
     let mut state = lock(&port.state);
-    if state.active.remove(&current) {
+    if state.active.remove(&current).is_some() {
         port.changed.notify_all();
     }
+    let mut noted = false;
     loop {
-        if !state.queue.is_empty() && state.active.len() < port.max_concurrency {
+        let room = |state: &CompletionPortState| {
+            state.active.len() < port.max_concurrency
+                || running_threads(&state.active) < port.max_concurrency
+        };
+        let gated = !state.queue.is_empty() && !room(&state);
+        if !state.queue.is_empty() && !gated {
+            if state.active.len() >= port.max_concurrency {
+                // Avant #2055, ce paquet serait resté en file.
+                crate::trace!(
+                    "GetQueuedCompletionStatus : place d'un fil bloqué ailleurs reprise ({} actif(s), limite {}, {} paquet(s))",
+                    state.active.len(),
+                    port.max_concurrency,
+                    state.queue.len()
+                );
+            }
             let n = max_packets.min(state.queue.len());
             let packets = state.queue.drain(..n).collect();
-            state.active.insert(current);
+            state.active.insert(current, unsafe { libc::gettid() });
             return Ok(packets);
+        }
+        if gated && !noted {
+            noted = true;
+            crate::trace!(
+                "GetQueuedCompletionStatus : {} paquet(s) en attente, limite de concurrence {} atteinte par des fils qui tournent",
+                state.queue.len(),
+                port.max_concurrency
+            );
         }
         if timeout == 0 {
             return Err(258);
@@ -1711,9 +1766,14 @@ fn dequeue_iocp(
             }
             timeout - elapsed
         };
-        let (next, timed) = wait_condvar(&port.changed, state, left);
+        let wait = if gated {
+            left.min(IOCP_CONCURRENCY_RECHECK_MS)
+        } else {
+            left
+        };
+        let (next, timed) = wait_condvar(&port.changed, state, wait);
         state = next;
-        if timed && (state.queue.is_empty() || state.active.len() >= port.max_concurrency) {
+        if timed && wait == left && (state.queue.is_empty() || !room(&state)) {
             return Err(258);
         }
     }
@@ -1735,7 +1795,7 @@ pub extern "win64" fn create_io_completion_port(
         let p = Arc::new(CompletionPort {
             state: Mutex::new(CompletionPortState {
                 queue: VecDeque::new(),
-                active: HashSet::new(),
+                active: HashMap::new(),
             }),
             changed: Condvar::new(),
             max_concurrency: concurrency.max(1),
@@ -2353,7 +2413,7 @@ unsafe fn create_file_opened(
     }
     if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
         crate::trace!("CreateFile({path}) : effacé à la fermeture");
-        lock(delete_on_close()).insert(h, p);
+        crate::dlls::doomed::register(h, p);
     }
     h
 }
@@ -2365,7 +2425,7 @@ const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 /// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
 /// effacement à la fermeture. Rien si le fichier n'a plus de nom
 /// (déjà effacé : /proc rend « … (deleted) »), #1885.
-fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+pub(crate) fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
     if fd < 0 {
         return None;
     }
@@ -6930,9 +6990,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
     // renommé depuis son ouverture (#1885).
-    let doomed = lock(delete_on_close())
-        .remove(&handle)
-        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
+    let doomed = lock(delete_on_close()).remove(&handle).and_then(|_| {
+        crate::dlls::doomed::forget(handle);
+        doomed_on_close(handle_to_fd(handle))
+    });
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -8247,15 +8308,19 @@ pub extern "win64" fn query_performance_frequency(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryPerformanceCounter : nanosecondes de CLOCK_MONOTONIC, la même
+/// horloge que ntdll!RtlQueryPerformanceCounter et NtQueryPerformanceCounter.
+/// Sous Windows, le compteur a une origine commune à tous les processus.
+/// L'ancienne version comptait depuis le démarrage du processus : les
+/// processus de Chromium vivaient alors dans des temps décalés de plusieurs
+/// minutes, et le renderer de Discord attendait des échéances de viz
+/// placées loin dans le futur (page noire, #1886).
 pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
     unsafe {
-        if out.is_null() {
-            return 0;
-        }
-        *out = CLOCK_START
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_nanos() as i64;
+        crate::dlls::ntdll::rtl_query_performance_counter(out);
     }
     1
 }
@@ -8334,6 +8399,7 @@ pub fn terminate_self(code: u32) -> ! {
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -8345,6 +8411,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
@@ -11699,20 +11766,105 @@ mod tests {
         unsafe {
             post_queued_completion_status(port, 2, 2, std::ptr::null_mut());
         }
-        let second = std::thread::spawn(move || {
+        // Le premier fil tourne (boucle active) pendant que le second essaie :
+        // il garde sa place, comme sous Windows.
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let got = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+        let (d, g) = (done.clone(), got.clone());
+        let t = std::thread::spawn(move || {
             let (mut bytes, mut key) = (0u32, 0usize);
             let mut ov = std::ptr::null_mut();
-            unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) }
-        })
-        .join()
-        .unwrap();
-        assert_eq!(second, 0); // le premier thread détient encore le slot actif
+            let r = unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) };
+            g.store(r, Ordering::SeqCst);
+            d.store(true, Ordering::SeqCst);
+        });
+        while !done.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
+        t.join().unwrap();
+        assert_eq!(got.load(Ordering::SeqCst), 0); // le premier thread tourne et détient le slot
         assert_eq!(
             unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) },
             1
         );
         assert_eq!(key, 2);
         assert_eq!(close_handle(port), 1);
+    }
+
+    /// #2055 : un fil qui a retiré un paquet puis se bloque ailleurs (ici
+    /// dans join) laisse sa place, comme sous Windows.
+    #[test]
+    fn iocp_place_d_un_fil_bloque_reprise_par_un_autre() {
+        let port = create_io_completion_port(usize::MAX, 0, 0, 1);
+        unsafe {
+            post_queued_completion_status(port, 1, 1, std::ptr::null_mut());
+        }
+        let (mut bytes, mut key) = (0u32, 0usize);
+        let mut ov = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) },
+            1
+        );
+        unsafe {
+            post_queued_completion_status(port, 2, 2, std::ptr::null_mut());
+        }
+        let second = std::thread::spawn(move || {
+            let (mut bytes, mut key) = (0u32, 0usize);
+            let mut ov = std::ptr::null_mut();
+            let r =
+                unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 5000) };
+            (r, key)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            second,
+            (1, 2),
+            "paquet retiré pendant que le premier fil attend"
+        );
+        assert_eq!(close_handle(port), 1);
+    }
+
+    /// #2055 : ReadFile avec chevauchement remet l'événement à non signalé
+    /// au début de l'E/S.
+    #[test]
+    fn readfile_avec_chevauchement_remet_l_evenement_a_zero() {
+        init();
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let h = next_handle();
+        lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+            h,
+            FileHandle::File(Arc::new(Mutex::new(unsafe {
+                <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fds[0])
+            }))),
+        );
+        lock(overlapped_handles()).insert(h);
+        let ev = unsafe { create_event_a(0, 1, 1, std::ptr::null()) };
+        assert_eq!(wait_for_single_object(ev, 0), 0, "signalé avant l'E/S");
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        ov.event = ev;
+        let mut buf = [0u8; 4];
+        let r = unsafe {
+            read_file(
+                h,
+                buf.as_mut_ptr(),
+                4,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+            )
+        };
+        assert_eq!((r, ov.internal), (0, 0x103), "E/S en attente");
+        assert_eq!(wait_for_single_object(ev, 0), 258, "remis à zéro au début");
+        assert_eq!(
+            unsafe { libc::write(fds[1], b"abcd".as_ptr().cast(), 4) },
+            4
+        );
+        assert_eq!(wait_for_single_object(ev, 5000), 0, "signalé à la fin");
+        assert_eq!(&buf, b"abcd");
+        unsafe { libc::close(fds[1]) };
+        close_handle(ev);
+        close_handle(h);
     }
 
     extern "win64" fn iocp_one_packet_worker(port: usize) -> u32 {
@@ -13053,6 +13205,28 @@ fn wait_until_stopped(pid: u32) {
 
 #[cfg(test)]
 mod interrupt_time_tests {
+    use super::{query_performance_counter, query_performance_frequency};
+    #[test]
+    fn qpc_a_la_meme_origine_que_ntdll_et_le_systeme() {
+        // #1886 : QueryPerformanceCounter et RtlQueryPerformanceCounter
+        // concordent, et l'origine est celle du système (CLOCK_MONOTONIC),
+        // commune à tous les processus, pas le démarrage du processus.
+        let (mut freq, mut a, mut rtl, mut b) = (0i64, 0i64, 0i64, 0i64);
+        assert_eq!(query_performance_frequency(&mut freq), 1);
+        assert_eq!(freq, 1_000_000_000);
+        assert_eq!(query_performance_counter(&mut a), 1);
+        unsafe { crate::dlls::ntdll::rtl_query_performance_counter(&mut rtl) };
+        assert_eq!(query_performance_counter(&mut b), 1);
+        assert!(a <= rtl && rtl <= b, "{a} {rtl} {b}");
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+        let sys = ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64;
+        assert!(b <= sys && sys - b < 1_000_000_000, "{b} {sys}");
+    }
+
     #[test]
     fn query_unbiased_interrupt_time_avance_en_100_ns() {
         let (mut a, mut b) = (0u64, 0u64);

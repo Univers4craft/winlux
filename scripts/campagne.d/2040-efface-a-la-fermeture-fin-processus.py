@@ -1,0 +1,10 @@
+# FILE_FLAG_DELETE_ON_CLOSE : effacé aussi à la fin du processus et après un SIGKILL (#2040).
+_d = (ROOT / "runtime/src/dlls/doomed.rs").read_text(encoding="utf-8")
+_k = (ROOT / "runtime/src/dlls/kernel32.rs").read_text(encoding="utf-8")
+_c = (ROOT / "runtime/src/crash.rs").read_text(encoding="utf-8")
+_m = (ROOT / "runtime/src/main.rs").read_text(encoding="utf-8")
+ok(_k.count("crate::dlls::doomed::on_exit();") == 2, "ExitProcess et TerminateProcess effacent les fichiers restés ouverts (#2040)")
+ok("crate::dlls::doomed::on_exit();" in _c, "un plantage les efface aussi (#2040)")
+ok("dlls::doomed::sweep();" in _m and "fn sweep_in(" in _d, "au démarrage, ceux d'un processus tué sont effacés (#2040)")
+ok("open_elsewhere(dev, ino)" in _d, "jamais un fichier encore ouvert par un processus vivant (#2040)")
+ok("m.uid() == uid" in _d, "jamais le fichier d'un autre compte (#2040)")

@@ -137,6 +137,14 @@ namespace System.Reflection
         public TargetException(string message) : base(message) { }
     }
 
+    // Argument que le moteur refuse avant l'appel (#2037) : il n'a pas le
+    // type du paramètre. Rendu tel quel, comme ArgumentException, et non
+    // enveloppé dans TargetInvocationException.
+    internal sealed class ArgumentInconvertibleException : ArgumentException
+    {
+        public ArgumentInconvertibleException(string message) : base(message) { }
+    }
+
     public sealed class TargetParameterCountException : ApplicationException
     {
         public TargetParameterCountException() : base("Parameter count mismatch.") { }
@@ -338,6 +346,7 @@ namespace System.Reflection
             }
             catch (TargetParameterCountException) { throw; }
             catch (TargetException) { throw; }
+            catch (ArgumentInconvertibleException e) { throw new ArgumentException(e.Message); }
             catch (Exception e)
             {
                 throw new TargetInvocationException(e);

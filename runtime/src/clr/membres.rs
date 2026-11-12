@@ -45,9 +45,10 @@ fn argument_exception(class: &str, msg: &str) -> ClrException {
     ClrException::new("System", class, msg)
 }
 
-/// Éléments d'un tableau de références (longueur à +0, données à +8).
+/// Éléments d'un tableau de références (longueur à +0, données à +8) ;
+/// vide pour tout autre objet, que la réflexion peut passer ici (#2037).
 fn array_refs(arr: *mut u8) -> Vec<Value> {
-    if arr.is_null() {
+    if gc::type_of(arr) != Some(types::TYPE_ARRAY) || gc::array_elem_type(arr) != 0 {
         return Vec::new();
     }
     let len = unsafe { *(arr as *const u64) } as usize;
@@ -187,6 +188,80 @@ impl Interpreter {
         }
     }
 
+    /// L'argument `v`, passé par MethodInfo.Invoke ou ConstructorInfo.Invoke,
+    /// convient-il au paramètre de type `et` (#2037) ? Null convient toujours
+    /// (valeur nulle pour un type valeur). Un type valeur veut un objet
+    /// encadré de même représentation, un tableau des éléments compatibles,
+    /// une classe un objet qui en dérive. Sinon le message de .NET :
+    /// « Object of type 'X' cannot be converted to type 'Y'. »
+    fn argument_fits(
+        &self,
+        asm: usize,
+        et: &ElementType,
+        gen: &Gen,
+        v: Value,
+    ) -> Result<(), ClrException> {
+        let Value::Ref(p) = v else { return Ok(()) };
+        if p.is_null() {
+            return Ok(());
+        }
+        let id = self.resolve_sig(asm, et, gen);
+        let actual = gc::type_of(p);
+        let fits = match (actual, et) {
+            // Un objet hors du tas n'est pas un argument de réflexion.
+            (None, _) => false,
+            (Some(a), ElementType::SzArray(inner)) => {
+                let elem = self.resolve_sig(asm, inner, gen);
+                a == types::TYPE_ARRAY && self.array_elements_fit(elem, p)
+            }
+            (Some(a), _) => self.value_fits(id, a),
+        };
+        if fits {
+            return Ok(());
+        }
+        let name = |t: TypeId| {
+            types::with_types(|reg| reg.get(t).map_or_else(|| "?".into(), |i| i.full_name()))
+        };
+        Err(argument_exception(
+            "Reflection.ArgumentInconvertibleException",
+            &format!(
+                "Object of type '{}' cannot be converted to type '{}'.",
+                actual.map_or_else(|| "?".into(), name),
+                name(id)
+            ),
+        ))
+    }
+
+    /// Un objet de type `actual` convient-il à un paramètre de type `id` ?
+    fn value_fits(&self, id: TypeId, actual: TypeId) -> bool {
+        if id == 0 || id == actual || id == types::TYPE_OBJECT {
+            return true;
+        }
+        let ak = self.kind_of_type(actual);
+        match self.kind_of_type(id) {
+            Kind::Ref => {
+                let mut t = actual;
+                while t != 0 {
+                    if t == id {
+                        return true;
+                    }
+                    t = types::with_types(|reg| reg.get(t).map_or(0, |i| i.parent));
+                }
+                let iface = types::with_types(|reg| reg.get(id).is_some_and(|i| i.is_interface));
+                // Une interface dont la définition manque ne refuse rien.
+                iface && self.implements(actual, id).unwrap_or(true)
+            }
+            // Nullable<T> reçoit un T encadré.
+            Kind::Struct(_) => types::with_types(|reg| {
+                reg.get(id)
+                    .is_some_and(|t| t.namespace == "System" && t.name == "Nullable`1")
+            }),
+            // Entier, flottant, booléen, enum : un objet encadré primitif
+            // (Binder élargit int en long, enum en son entier).
+            _ => !matches!(ak, Kind::Ref | Kind::Struct(_)),
+        }
+    }
+
     /// Valeur de type `id` tirée d'un objet encadré (null : valeur nulle).
     fn unbox_as(&self, id: TypeId, v: Value) -> Value {
         match self.kind_of_type(id) {
@@ -287,11 +362,23 @@ impl Interpreter {
     }
 
     fn field_type(&self, asm: usize, field: u32, owner: TypeId) -> TypeId {
+        self.resolve_sig(asm, &self.field_sig(asm, field), &self.gen_of(owner))
+    }
+
+    fn field_sig(&self, asm: usize, field: u32) -> ElementType {
         let a = self.assembly_at(asm);
         let blob = a.get_blob(a.get_field(field).signature);
         let mut off = 1;
-        let et = metadata::decode_type(blob, &mut off);
-        self.resolve_sig(asm, &et, &self.gen_of(owner))
+        metadata::decode_type(blob, &mut off)
+    }
+
+    /// La cible d'un membre d'instance est-elle un objet du type `owner`
+    /// (#2037) ? Sinon les décalages des champs tomberaient hors de l'objet.
+    fn target_fits(&self, owner: TypeId, target: *mut u8) -> bool {
+        let Some(actual) = gc::type_of(target) else {
+            return false;
+        };
+        actual == owner || self.kind_of_type(owner) == Kind::Ref && self.value_fits(owner, actual)
     }
 
     /// Valeur de la table Constant d'un champ (énumérations, const).
@@ -369,6 +456,12 @@ impl Interpreter {
                     "Non-static field requires a target.",
                 ));
             }
+            if !self.target_fits(owner, target) {
+                return Err(argument_exception(
+                    "ArgumentException",
+                    "Field is not a field on the target object.",
+                ));
+            }
             Ok((unsafe { target.add(info.offset) }, info.kind))
         }
     }
@@ -422,6 +515,12 @@ impl Interpreter {
             call_args.push(this);
         } else if !is_static {
             match target {
+                Value::Ref(p) if !p.is_null() && !self.target_fits(owner, p) => {
+                    return Err(argument_exception(
+                        "Reflection.TargetException",
+                        "Object does not match target type.",
+                    ))
+                }
                 Value::Ref(p) if !p.is_null() => call_args.push(target),
                 _ => {
                     return Err(argument_exception(
@@ -429,6 +528,16 @@ impl Interpreter {
                         "Non-static method requires a target.",
                     ))
                 }
+            }
+        }
+        for (i, et) in sig.param_types.iter().enumerate() {
+            let et = match et {
+                ElementType::ByRef(inner) => inner,
+                et => et,
+            };
+            if let Err(e) = self.argument_fits(asm, et, &gen, boxed[i]) {
+                self.pins.truncate(pinned);
+                return Err(e);
             }
         }
         let mut byrefs = Vec::new();
@@ -1063,7 +1172,9 @@ impl Interpreter {
                 let (asm, row) = h();
                 let owner = self.owner_arg(args, 1);
                 let id = self.field_type(asm, row, owner);
-                let v = self.unbox_as(id, args.get(3).copied().unwrap_or(Value::Null));
+                let value = args.get(3).copied().unwrap_or(Value::Null);
+                self.argument_fits(asm, &self.field_sig(asm, row), &self.gen_of(owner), value)?;
+                let v = self.unbox_as(id, value);
                 let (ptr, kind) = self.field_slot(asm, row, owner, arg_ref(args, 2))?;
                 store(ptr, kind, v);
                 Value::Null
@@ -1116,7 +1227,9 @@ impl Interpreter {
                 if p.is_null() {
                     return Ok(Value::I64(0));
                 }
-                let id = gc::type_of(p).unwrap_or(types::TYPE_INT32);
+                let Some(id) = gc::type_of(p) else {
+                    return Ok(Value::I64(0));
+                };
                 let v = match self.kind_of_type(id) {
                     Kind::Ref | Kind::Struct(_) => Value::I64(0),
                     k => load(p, k),
