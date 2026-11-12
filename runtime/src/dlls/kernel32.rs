@@ -6776,7 +6776,7 @@ fn os_process_alive(pid: i32) -> bool {
 /// meneur de groupe sorti seul (ExitThread du fil principal) apparaît aussi
 /// « Z » tant que ses autres fils tournent : il n'est fini que s'il ne reste
 /// plus que lui dans /proc/<pid>/task.
-fn os_process_zombie(pid: i32) -> bool {
+pub(crate) fn os_process_zombie(pid: i32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
