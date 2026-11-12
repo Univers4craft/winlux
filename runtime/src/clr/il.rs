@@ -1076,7 +1076,9 @@ impl Interpreter {
             }
             _ => return false,
         };
-        a.get_string(name) == "Empty" && a.get_string(ns) == "System" && a.get_string(class) == "String"
+        a.get_string(name) == "Empty"
+            && a.get_string(ns) == "System"
+            && a.get_string(class) == "String"
     }
 
     /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.
