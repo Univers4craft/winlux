@@ -320,8 +320,10 @@ impl Interpreter {
             0x0D => Value::F64(f64::from_bits(r.u64().unwrap_or(0))),
             0x0E => {
                 let units: Vec<u16> = blob
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
                     .collect();
                 return super::bcl::alloc_utf16(&units);
             }
@@ -827,7 +829,47 @@ impl Interpreter {
         Some(r)
     }
 
+    /// Une poignée de membre vient du code managé (un champ privé de
+    /// MethodInfo peut être réécrit par réflexion) : elle doit désigner une
+    /// assembly du domaine et une ligne existante de la bonne table, sinon
+    /// `assembly_at` ou la lecture de la ligne paniqueraient.
+    fn member_handle_ok(&self, h: i64, table: TableId) -> bool {
+        let (asm, row) = split(h);
+        if h < 0 || asm >= self.parked.len() {
+            return false;
+        }
+        if asm != self.current && self.parked[asm].is_none() {
+            return false;
+        }
+        row >= 1 && row <= self.assembly_at(asm).row_count(table)
+    }
+
     fn member_call_inner(&mut self, name: &str, args: &[Value]) -> Result<Value, ClrException> {
+        let table = match name {
+            "NomMethode"
+            | "DrapeauxMethode"
+            | "Retour"
+            | "TypesParametres"
+            | "ParametresParReference"
+            | "NomsParametres"
+            | "AriteMethode"
+            | "Invoquer"
+            | "AttributsMethode" => Some(TableId::MethodDef),
+            "NomChamp" | "DrapeauxChamp" | "TypeChamp" | "Constante" | "LireChamp"
+            | "EcrireChamp" | "AttributsChamp" => Some(TableId::Field),
+            "NomPropriete" | "TypePropriete" | "Accesseur" | "AttributsPropriete" => {
+                Some(TableId::Property)
+            }
+            _ => None,
+        };
+        if let Some(table) = table {
+            if !self.member_handle_ok(arg_i64(args, 0), table) {
+                return Err(argument_exception(
+                    "ArgumentException",
+                    "Invalid member handle.",
+                ));
+            }
+        }
         let h = || split(arg_i64(args, 0));
         Ok(match name {
             // --- Type ---

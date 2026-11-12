@@ -2,7 +2,9 @@
 // GetMethod/Invoke, propriétés, champs, constructeurs, Activator, attributs
 // personnalisés, énumérations, types génériques et interfaces.
 // Code de sortie attendu : 200.
-// Sinon : le numéro (1 à 12) de la première vérification qui échoue.
+// Sinon : le numéro (1 à 13) de la première vérification qui échoue.
+// La 13 forge une poignée de membre par réflexion : elle doit lever
+// ArgumentException au lieu de faire paniquer le moteur.
 // Corsair.Service.exe (iCUE 4.18) appelait Type::GetMethod (11 fois),
 // MemberInfo::GetCustomAttributes, MethodBase::Invoke, PropertyInfo,
 // Activator::CreateInstance (10) et Enum::GetValues, Parse, ToObject.
@@ -124,6 +126,14 @@ namespace Temoins
             if (!def.IsGenericTypeDefinition || def.MakeGenericType(typeof(string)) != liste) return 12;
             object dico = Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(string), typeof(int)));
             if (!(dico is Dictionary<string, int>)) return 12;
+
+            // Poignée forgée par réflexion : ArgumentException, pas de panique.
+            MethodInfo forgee = t.GetMethod("Ajouter");
+            FieldInfo poignee = forgee.GetType().GetField("_h", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (poignee == null) return 13;
+            poignee.SetValue(forgee, (long)0x7FFF0000FFFFL);
+            try { string n = forgee.Name; return 13; }
+            catch (ArgumentException) { }
             return 200;
         }
     }

@@ -240,7 +240,7 @@ pub struct Interpreter {
     frames: Vec<CallFrame>,
     /// Assembly de la méthode en cours ; les autres attendent dans `parked`.
     pub assembly: Assembly,
-    parked: Vec<Option<Assembly>>,
+    pub(super) parked: Vec<Option<Assembly>>,
     pub(super) current: usize,
     pub(super) domain: Vec<AsmInfo>,
     /// État commun à tous les fils managés.
