@@ -11,8 +11,11 @@
 //! - entrantes : le service relève les ports où l'application écoute
 //!   (`/proc/net/{tcp,udp}{,6}`) et ouvre ou ferme exactement ces ports ;
 //! - sortantes : les processus de l'application sont placés dans le cgroup
-//!   `/sys/fs/cgroup/winlux-fw/r<id>`, filtré par `socket cgroupv2`.
-//!   Un processus est rattaché au plus deux secondes après son démarrage.
+//!   `/sys/fs/cgroup/winlux-fw/r<id>`, filtré par `socket cgroupv2`. Le
+//!   service est prévenu de chaque `exec` par le noyau (connecteur « proc »)
+//!   et rattache le processus aussitôt ; un .exe filtré attend en plus, au
+//!   lancement, d'être rattaché avant d'exécuter son propre code (#2157).
+//!   Le balayage toutes les deux secondes reste en secours.
 
 use crate::admin;
 use std::collections::{BTreeMap, BTreeSet};
@@ -670,21 +673,82 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
             ""
         };
         write_status(cfg, rules.is_some(), note, count);
+        publish_targets(cfg, cgroups && rules.is_some());
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
         write_status(cfg, false, &msg, count);
+        publish_targets(cfg, false);
         Err(msg)
+    }
+}
+
+/// Programmes filtrés en sortie et leur cgroup.
+fn out_targets(cfg: &Config) -> Vec<(PathBuf, String)> {
+    cfg.active_rules()
+        .filter(|r| r.dir == Dir::Out)
+        .filter_map(|r| r.program_path().map(|p| (p, cgroup_of(r))))
+        .collect()
+}
+
+/// Liste publiée des programmes filtrés en sortie (#2157) :
+/// `chemin<TAB>winlux-fw/r<id>` par ligne, lisible par tous, car
+/// firewall.conf ne l'est pas (umask 077 de /init). Vide quand le filtre
+/// n'est pas en place : personne n'attend alors de rattachement.
+pub const TARGETS: &str = "run/winlux/firewall/programmes.txt";
+
+pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
+    targets
+        .iter()
+        .map(|(p, g)| format!("{}\t{g}\n", p.display()))
+        .collect()
+}
+
+pub fn parse_targets(text: &str) -> Vec<(PathBuf, String)> {
+    text.lines()
+        .filter_map(|l| l.rsplit_once('\t'))
+        .map(|(p, g)| (PathBuf::from(p), g.to_string()))
+        .collect()
+}
+
+fn publish_targets(cfg: &Config, filtered: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let text = if filtered {
+        targets_text(&out_targets(cfg))
+    } else {
+        String::new()
+    };
+    let path = admin::path(TARGETS);
+    if admin::read_text(&path).as_deref() == Some(text.as_str()) {
+        return;
+    }
+    if admin::write_text(&path, &text).is_ok() {
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    }
+}
+
+/// Place un processus dans le cgroup de sa règle s'il n'y est pas déjà.
+fn assign_one(pid_dir: &Path, targets: &[(PathBuf, String)]) {
+    let Some(prog) = program_of(pid_dir) else {
+        return;
+    };
+    let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) else {
+        return;
+    };
+    let current = admin::read_text(&pid_dir.join("cgroup")).unwrap_or_default();
+    if !current.trim_end().ends_with(&format!("/{group}")) {
+        if let Some(pid) = pid_dir.file_name() {
+            let _ = std::fs::write(
+                cgroup_root().join(group).join("cgroup.procs"),
+                pid.to_string_lossy().as_bytes(),
+            );
+        }
     }
 }
 
 /// Rattache les processus des applications filtrées en sortie à leur cgroup.
 fn assign_cgroups(cfg: &Config) {
-    let targets: Vec<(PathBuf, String)> = cfg
-        .active_rules()
-        .filter(|r| r.dir == Dir::Out)
-        .filter_map(|r| r.program_path().map(|p| (p, cgroup_of(r))))
-        .collect();
+    let targets = out_targets(cfg);
     if targets.is_empty() || !cgroups_available() {
         return;
     }
@@ -696,16 +760,165 @@ fn assign_cgroups(cfg: &Config) {
         if !name.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
-        let Some(prog) = program_of(&p.path()) else {
-            continue;
-        };
-        if let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) {
-            let current = admin::read_text(&p.path().join("cgroup")).unwrap_or_default();
-            if !current.trim_end().ends_with(&format!("/{group}")) {
-                let _ = std::fs::write(cgroup_root().join(group).join("cgroup.procs"), &name);
+        assign_one(&p.path(), &targets);
+    }
+}
+
+// ---------- Rattachement dès l'exec (#2157) ----------
+
+const PROC_EVENT_EXEC: u32 = 0x0000_0002;
+
+/// Processus (tgid) des événements `exec` d'un datagramme du connecteur
+/// « proc » : nlmsghdr (16 octets), cn_msg (20), puis proc_event
+/// (what, cpu, horodatage, puis pour exec : pid, tgid).
+pub fn exec_tgids(buf: &[u8]) -> Vec<i32> {
+    let u32_at = |b: &[u8], o: usize| {
+        b.get(o..o + 4)
+            .map(|s| u32::from_ne_bytes([s[0], s[1], s[2], s[3]]))
+    };
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while let Some(len) = u32_at(buf, at).map(|l| l as usize) {
+        if len < 16 || at + len > buf.len() {
+            break;
+        }
+        let msg = &buf[at..at + len];
+        if u32_at(msg, 36) == Some(PROC_EVENT_EXEC) {
+            if let Some(tgid) = u32_at(msg, 36 + 20) {
+                out.push(tgid as i32);
             }
         }
+        at += (len + 3) & !3;
     }
+    out
+}
+
+/// Socket netlink abonnée aux événements de processus du noyau (root seul).
+fn proc_connector() -> Option<i32> {
+    const NETLINK_CONNECTOR: i32 = 11;
+    const CN_IDX_PROC: u32 = 1;
+    const CN_VAL_PROC: u32 = 1;
+    const PROC_CN_MCAST_LISTEN: u32 = 1;
+    // SAFETY : appels système sur un descripteur que l'on possède, tampons
+    // locaux de la taille annoncée.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            NETLINK_CONNECTOR,
+        );
+        if fd < 0 {
+            return None;
+        }
+        let mut addr: libc::sockaddr_nl = std::mem::zeroed();
+        addr.nl_family = libc::AF_NETLINK as u16;
+        addr.nl_groups = CN_IDX_PROC;
+        let addr_len = std::mem::size_of::<libc::sockaddr_nl>() as u32;
+        if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, addr_len) != 0 {
+            libc::close(fd);
+            return None;
+        }
+        let mut msg = Vec::with_capacity(40);
+        msg.extend_from_slice(&40u32.to_ne_bytes()); // nlmsg_len
+        msg.extend_from_slice(&(libc::NLMSG_DONE as u16).to_ne_bytes());
+        msg.extend_from_slice(&0u16.to_ne_bytes()); // flags
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // seq
+        msg.extend_from_slice(&libc::getpid().to_ne_bytes());
+        msg.extend_from_slice(&CN_IDX_PROC.to_ne_bytes());
+        msg.extend_from_slice(&CN_VAL_PROC.to_ne_bytes());
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // seq
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // ack
+        msg.extend_from_slice(&4u16.to_ne_bytes()); // len
+        msg.extend_from_slice(&0u16.to_ne_bytes()); // flags
+        msg.extend_from_slice(&PROC_CN_MCAST_LISTEN.to_ne_bytes());
+        if libc::send(fd, msg.as_ptr().cast(), msg.len(), 0) != msg.len() as isize {
+            libc::close(fd);
+            return None;
+        }
+        Some(fd)
+    }
+}
+
+/// Fil du service : rattache chaque programme filtré dès son `exec`, avant
+/// qu'il ait chargé ses bibliothèques, au lieu d'attendre le balayage.
+fn watch_execs() {
+    let Some(fd) = proc_connector() else {
+        eprintln!(
+            "winlux-firewall : connecteur « proc » indisponible ({}), rattachement par balayage seulement",
+            std::io::Error::last_os_error()
+        );
+        return;
+    };
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut cached: Option<(std::time::SystemTime, Vec<(PathBuf, String)>)> = None;
+    loop {
+        // SAFETY : `buf` est un tampon local de la taille annoncée.
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n <= 0 {
+            // ENOBUFS : des événements ont été perdus, le balayage les rattrape.
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                return;
+            }
+            continue;
+        }
+        let tgids = exec_tgids(&buf[..n as usize]);
+        if tgids.is_empty() {
+            continue;
+        }
+        let path = admin::path(TARGETS);
+        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let fresh = matches!((&cached, stamp), (Some((s, _)), Some(t)) if *s == t);
+        if !fresh {
+            cached = stamp.map(|t| {
+                (
+                    t,
+                    parse_targets(&admin::read_text(&path).unwrap_or_default()),
+                )
+            });
+        }
+        let Some((_, targets)) = &cached else {
+            continue;
+        };
+        if targets.is_empty() {
+            continue;
+        }
+        for tgid in tgids {
+            assign_one(&admin::path(&format!("proc/{tgid}")), targets);
+        }
+    }
+}
+
+/// Au lancement d'un .exe filtré en sortie : son propre code ne s'exécute
+/// qu'une fois le processus dans le cgroup de sa règle, donc aucun octet ne
+/// part avant le filtre (#2157). Rien à attendre pour un programme non visé.
+pub fn wait_for_cgroup() {
+    let Some(text) = admin::read_text(&admin::path(TARGETS)) else {
+        return;
+    };
+    let targets = parse_targets(&text);
+    if targets.is_empty() {
+        return;
+    }
+    let me = admin::path("proc/self");
+    let Some(prog) = program_of(&me) else {
+        return;
+    };
+    let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) else {
+        return;
+    };
+    let suffix = format!("/{group}");
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        let current = admin::read_text(&me.join("cgroup")).unwrap_or_default();
+        if current.trim_end().ends_with(&suffix) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    eprintln!(
+        "winlux : {} n'a pas été rattaché au filtre du pare-feu ({group}) en 3 s",
+        prog.display()
+    );
 }
 
 // ---------- Journal des connexions bloquées ----------
@@ -923,6 +1136,15 @@ fn config_stamp() -> Option<std::time::SystemTime> {
 
 pub fn daemon() -> ! {
     let _ = std::fs::create_dir_all(admin::path(RUN_DIR));
+    {
+        // Les .exe lisent la liste des programmes filtrés (#2157).
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            std::fs::set_permissions(admin::path(RUN_DIR), std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = std::thread::Builder::new()
+        .name("winlux-fw-exec".into())
+        .spawn(watch_execs);
     let _ = admin::write_text(
         &admin::path(RUN_DIR).join("daemon.pid"),
         &std::process::id().to_string(),
@@ -1374,5 +1596,45 @@ mod tests {
         write_status(&cfg, true, "", 0);
         let status = admin::read_text(&r.dir.join(RUN_DIR).join("status.txt")).unwrap();
         assert!(status.contains("profile=public\n"));
+    }
+
+    /// Datagramme du connecteur « proc » : un fork ignoré, puis un exec (#2157).
+    #[test]
+    fn exec_events_give_the_new_program_tgid() {
+        fn event(what: u32, pid: i32, tgid: i32) -> Vec<u8> {
+            let mut m = Vec::new();
+            m.extend_from_slice(&60u32.to_ne_bytes());
+            m.extend_from_slice(&[0u8; 12]);
+            m.extend_from_slice(&[0u8; 16]);
+            m.extend_from_slice(&24u16.to_ne_bytes());
+            m.extend_from_slice(&0u16.to_ne_bytes());
+            m.extend_from_slice(&what.to_ne_bytes());
+            m.extend_from_slice(&0u32.to_ne_bytes());
+            m.extend_from_slice(&0u64.to_ne_bytes());
+            m.extend_from_slice(&pid.to_ne_bytes());
+            m.extend_from_slice(&tgid.to_ne_bytes());
+            assert_eq!(m.len(), 60);
+            m
+        }
+        let mut buf = event(1, 41, 41);
+        buf.extend(event(PROC_EVENT_EXEC, 4243, 4242));
+        assert_eq!(exec_tgids(&buf), vec![4242]);
+        assert!(exec_tgids(&buf[..30]).is_empty());
+    }
+
+    #[test]
+    fn published_targets_round_trip() {
+        let targets = vec![
+            (
+                PathBuf::from("/usr/bin/wget"),
+                "winlux-fw/r9900".to_string(),
+            ),
+            (
+                PathBuf::from("/home/d/Program Files/App\tx/app.exe"),
+                "winlux-fw/r3".into(),
+            ),
+        ];
+        assert_eq!(parse_targets(&targets_text(&targets)), targets);
+        assert!(parse_targets("").is_empty());
     }
 }
