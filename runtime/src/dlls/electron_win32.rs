@@ -2066,6 +2066,17 @@ unsafe extern "win64" fn WSAEnumProtocolsW(
     0
 }
 
+/// WSAEnumNameSpaceProviders(A|W|ExA|ExW) : aucun fournisseur d'espace de
+/// noms n'est enregistré (la résolution passe par getaddrinfo et les
+/// requêtes NLA ci-dessous) ; 0 entrée, longueur requise nulle (#2000).
+unsafe extern "win64" fn WSAEnumNameSpaceProviders(len: *mut u32, _buf: *mut c_void) -> i32 {
+    if len.is_null() {
+        return wsa_error(10014); // WSAEFAULT
+    }
+    *len = 0;
+    0
+}
+
 /// NS_NLA : l'emplacement réseau (Network Location Awareness), que
 /// Chromium interroge pour savoir si la machine est connectée.
 const NS_NLA: u32 = 15;
@@ -2184,6 +2195,10 @@ unsafe extern "win64" fn WSASetServiceW(_info: *mut c_void, _op: u32, _flags: u3
 pub fn ws2_32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "WSAEnumProtocolsW" => fn WSAEnumProtocolsW,
+        "WSAEnumNameSpaceProvidersA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersW" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExW" => fn WSAEnumNameSpaceProviders,
         "WSALookupServiceBeginW" => fn WSALookupServiceBeginW,
         "WSALookupServiceNextW" => fn WSALookupServiceNextW,
         "WSALookupServiceEnd" => fn WSALookupServiceEnd,
@@ -2698,6 +2713,21 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Steam, utility storage (#2000) : aucun fournisseur, longueur nulle.
+    #[test]
+    fn aucun_fournisseur_d_espace_de_noms() {
+        unsafe {
+            let mut len = 77u32;
+            assert_eq!(WSAEnumNameSpaceProviders(&mut len, std::ptr::null_mut()), 0);
+            assert_eq!(len, 0);
+            let e = ws2_32_exports();
+            for n in ["A", "W", "ExA", "ExW"] {
+                let nom = format!("WSAEnumNameSpaceProviders{n}");
+                assert!(e.contains_key(nom.as_str()), "{nom} absent");
+            }
+        }
+    }
 
     fn etat(pid: u32) -> char {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
