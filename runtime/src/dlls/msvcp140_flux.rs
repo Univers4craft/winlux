@@ -285,8 +285,18 @@ const CAT_TIME: i32 = 16;
 const CAT_ALL: i32 = 63;
 
 static GLOBAL: AtomicUsize = AtomicUsize::new(0);
-/// L'objet `locale` « C » rendu par `locale::classic()` (un pointeur).
+/// Le `_Locimp` de la locale « C ».
 static CLASSIC: AtomicUsize = AtomicUsize::new(0);
+
+/// Objet `std::locale` de MSVC : deux bases vides (`_Locbase<int>` et
+/// `_Crt_new_delete`) ; MSVC n'en fond qu'une, la seconde prend un octet et
+/// `_Ptr` tombe à +8 (16 octets en tout, « TRANSITION, ABI, affects
+/// sizeof(locale) » dans xlocale de la MS STL). Index en mots de `_Ptr`.
+const LOC_PTR: usize = 1;
+const LOC_SIZE: usize = 16;
+
+/// L'objet `locale` « C » rendu par `locale::classic()`.
+static CLASSIC_OBJ: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
 
 unsafe fn locimp_alloc() -> P {
     let p = alloc_zeroed(LI_SIZE);
@@ -450,7 +460,7 @@ unsafe extern "win64" fn makeloc(lobj: P, cat: i32, imp: P, ploc: *const usize) 
         if ploc.is_null() {
             locimp_addfac(imp, make(), idx);
         } else {
-            let f = use_own_facet(*ploc as P, id, make);
+            let f = use_own_facet(*ploc.add(LOC_PTR) as P, id, make);
             locimp_addfac(imp, f, idx);
         }
     }
@@ -470,6 +480,7 @@ unsafe extern "win64" fn locale_init(do_incref: bool) -> P {
         yarn_set(p.add(LI_NAME), c"C".as_ptr() as *const u8);
         incref(p);
         CLASSIC.store(p as usize, Ordering::Release);
+        CLASSIC_OBJ[LOC_PTR].store(p as usize, Ordering::Release);
         GLOBAL.store(p as usize, Ordering::Release);
     }
     if do_incref {
@@ -486,34 +497,38 @@ unsafe extern "win64" fn locale_classic() -> *const AtomicUsize {
     if CLASSIC.load(Ordering::Acquire) == 0 {
         locale_init(false);
     }
-    &CLASSIC
+    CLASSIC_OBJ.as_ptr()
 }
 
 /// `new locale` : un objet `locale` sur le tas, copie de la globale.
 unsafe fn new_locale() -> *mut usize {
-    let l = alloc_zeroed(8) as *mut usize;
-    *l = locale_init(true) as usize;
+    let l = alloc_zeroed(LOC_SIZE) as *mut usize;
+    *l.add(LOC_PTR) = locale_init(true) as usize;
     l
 }
 
+/// Construit l'objet `locale` `dst` (16 octets) par copie de `src`.
 unsafe fn locale_copy(dst: *mut usize, src: *const usize) {
-    *dst = *src;
-    if *dst != 0 {
-        incref(*dst as P);
+    *dst = 0;
+    let imp = *src.add(LOC_PTR);
+    *dst.add(LOC_PTR) = imp;
+    if imp != 0 {
+        incref(imp as P);
     }
 }
 
 unsafe fn locale_assign(dst: *mut usize, src: *const usize) {
-    if *dst != *src {
-        release(*dst as P);
-        *dst = *src;
-        incref(*dst as P);
+    let (d, s) = (dst.add(LOC_PTR), *src.add(LOC_PTR));
+    if *d != s {
+        release(*d as P);
+        *d = s;
+        incref(s as P);
     }
 }
 
 unsafe fn delete_locale(l: *mut usize) {
     if !l.is_null() {
-        release(*l as P);
+        release(*l.add(LOC_PTR) as P);
         free(l);
     }
 }

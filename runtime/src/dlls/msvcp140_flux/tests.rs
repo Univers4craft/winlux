@@ -31,8 +31,16 @@ unsafe fn new_ostream(sb: P) -> P {
     os
 }
 
+/// Les tests de ce fichier partagent la locale globale et son compteur de
+/// références : ils passent un par un pour que les comptes restent exacts.
+fn serie() -> std::sync::MutexGuard<'static, ()> {
+    static VERROU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    VERROU.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn ostream_construit_comme_msvc() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -54,6 +62,7 @@ fn ostream_construit_comme_msvc() {
 
 #[test]
 fn ostream_entiers_et_remplissage() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -86,6 +95,7 @@ fn ostream_entiers_et_remplissage() {
 
 #[test]
 fn ostream_reels_et_booleens() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -107,6 +117,7 @@ fn ostream_reels_et_booleens() {
 
 #[test]
 fn ostream_plein_passe_en_badbit() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -120,6 +131,7 @@ fn ostream_plein_passe_en_badbit() {
 
 #[test]
 fn istream_lit_des_entiers() {
+    let _serie = serie();
     unsafe {
         let mut text = *b"  -42\n17 0x1f zz";
         let sb = in_buf(&mut text);
@@ -145,6 +157,7 @@ fn istream_lit_des_entiers() {
 
 #[test]
 fn istream_getline_et_gcount() {
+    let _serie = serie();
     unsafe {
         let mut text = *b"bonjour\nmonde";
         let sb = in_buf(&mut text);
@@ -161,6 +174,7 @@ fn istream_getline_et_gcount() {
 
 #[test]
 fn iostream_deux_vbptr_une_base() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -176,12 +190,18 @@ fn iostream_deux_vbptr_une_base() {
 
 #[test]
 fn locale_globale_et_classique() {
+    let _serie = serie();
     unsafe {
         let g = locale_init(false);
         assert!(!g.is_null());
         assert_eq!(locale_init(false), g);
         assert_eq!(getgloballocale(), g);
-        assert_eq!((*locale_classic()).load(Ordering::Acquire) as P, g);
+        // locale::classic() rend un objet `locale` MSVC : `_Ptr` à +8.
+        assert_eq!(LOC_SIZE, 16);
+        assert_eq!(
+            (*locale_classic().add(LOC_PTR)).load(Ordering::Acquire) as P,
+            g
+        );
         let before = refs(g).load(Ordering::Acquire);
         let l = new_locale();
         assert_eq!(refs(g).load(Ordering::Acquire), before + 1);
@@ -199,6 +219,7 @@ fn locale_globale_et_classique() {
 
 #[test]
 fn ids_de_facettes_distincts() {
+    let _serie = serie();
     let ids = [
         id_index(&ID_CTYPE_C),
         id_index(&ID_CTYPE_W),
@@ -218,6 +239,7 @@ fn ids_de_facettes_distincts() {
 
 #[test]
 fn setw_et_setprecision() {
+    let _serie = serie();
     unsafe {
         let mut store = [0u8; 64];
         let sb = out_buf(&mut store);
@@ -239,6 +261,7 @@ fn setw_et_setprecision() {
 
 #[test]
 fn tables_virtuelles_completes() {
+    let _serie = serie();
     let t = tables();
     let all: [&[usize]; 18] = [
         &t.facet,
@@ -271,6 +294,7 @@ fn tables_virtuelles_completes() {
 
 #[test]
 fn exports_du_mur_observe() {
+    let _serie = serie();
     let m = exports();
     // Le mur d'OBS Studio (#2195) et ses voisins immédiats.
     for name in [
@@ -284,4 +308,46 @@ fn exports_du_mur_observe() {
     let base = super::super::msvcp140::exports();
     let doubles: Vec<_> = m.keys().filter(|k| base.contains_key(*k)).collect();
     assert!(doubles.is_empty(), "{doubles:?}");
+}
+
+/// `delete _Ptr->_Decref()` d'un `~locale` inline de l'appli.
+unsafe fn app_locale_dtor(l: *mut usize) {
+    release(*l.add(LOC_PTR) as P);
+}
+
+#[test]
+fn fstream_comme_l_appli_rend_ses_references() {
+    let _serie = serie();
+    unsafe {
+        let g = locale_init(false);
+        let base = refs(g).load(Ordering::Acquire);
+        for _ in 0..3 {
+            // basic_fstream : basic_iostream (exporté) puis le basic_filebuf
+            // membre (constructeur de basic_streambuf exporté).
+            let fs = alloc_zeroed(128 + SB_SIZE + 64);
+            let fb = fs.add(128);
+            iostream_ctor::<u8>(fs, fb, 1);
+            sb_ctor::<u8>(fb);
+            // open : getloc() dans un `locale` de 16 octets sur la pile de
+            // l'appli, puis use_facet<codecvt<char>> inline, qui lit `_Ptr`
+            // à +8 (OBS, fstream::open, #2195).
+            let mut loc = [usize::MAX; 2];
+            sb_getloc(fb, loc.as_mut_ptr());
+            let id = id_index(&ID_CODECVT_C);
+            let imp = loc[1] as P;
+            assert_eq!(imp, g, "_Ptr de la locale rendue à +8");
+            let _ = getfacet(imp, id);
+            let mut psave: P = std::ptr::null_mut();
+            getcat_codecvt_c(&mut psave, loc.as_ptr());
+            assert!(!psave.is_null());
+            app_locale_dtor(loc.as_mut_ptr());
+            // ~basic_fstream : ~basic_filebuf/~basic_streambuf, ~basic_iostream,
+            // puis la base virtuelle ~basic_ios.
+            sb_dtor::<u8>(fb);
+            stream_dtor(fs);
+            bios_dtor::<u8>(vbase(fs));
+            free(fs);
+            assert_eq!(refs(g).load(Ordering::Acquire), base);
+        }
+    }
 }
