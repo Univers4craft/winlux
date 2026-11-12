@@ -54,6 +54,13 @@ const IID_IDXGI_SWAP_CHAIN: Guid = Guid {
     data3: 0x4c0a,
     data4: [0xaa, 0x04, 0x6a, 0x9d, 0x23, 0xb8, 0x88, 0x6a],
 };
+/// IDXGISwapChain2 (DXGI 1.3, dxgi1_3.h), demandé par OBS Studio (#2242).
+const IID_IDXGI_SWAP_CHAIN2: Guid = Guid {
+    data1: 0xa8be2ac4,
+    data2: 0x199f,
+    data3: 0x4946,
+    data4: [0xb3, 0x31, 0x79, 0x59, 0x9f, 0xb9, 0x8d, 0xe7],
+};
 /// IDXGISwapChain1 (DXGI 1.2), demandé par ANGLE et Chromium (#1244).
 const IID_IDXGI_SWAP_CHAIN1: Guid = Guid {
     data1: 0x790a45f7,
@@ -1301,6 +1308,14 @@ struct DxgiSwapChainVTable {
     get_background_color: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut [f32; 4]) -> i32,
     set_rotation: unsafe extern "win64" fn(*mut DxgiSwapChain, u32) -> i32,
     get_rotation: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut u32) -> i32,
+    // IDXGISwapChain2 (#2242)
+    set_source_size: unsafe extern "win64" fn(*mut DxgiSwapChain, u32, u32) -> i32,
+    get_source_size: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut u32, *mut u32) -> i32,
+    set_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiSwapChain, u32) -> i32,
+    get_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut u32) -> i32,
+    get_frame_latency_waitable_object: unsafe extern "win64" fn(*mut DxgiSwapChain) -> usize,
+    set_matrix_transform: unsafe extern "win64" fn(*mut DxgiSwapChain, *const [f32; 6]) -> i32,
+    get_matrix_transform: unsafe extern "win64" fn(*mut DxgiSwapChain, *mut [f32; 6]) -> i32,
 }
 
 /// DXGI_SWAP_CHAIN_FULLSCREEN_DESC (20 octets, sans pointeur).
@@ -1338,6 +1353,12 @@ pub(crate) struct DxgiSwapChain {
     alpha: u32,
     background: Mutex<[f32; 4]>,
     rotation: AtomicU32,
+    /// IDXGISwapChain2 : taille source (0 = tampon entier) et latence.
+    source_size: Mutex<(u32, u32)>,
+    max_latency: AtomicU32,
+    /// Sémaphore de DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT (0 sans
+    /// ce drapeau) : un jeton par image que la chaîne peut accepter.
+    waitable: usize,
 }
 
 unsafe impl Send for DxgiSwapChain {}
@@ -1353,7 +1374,10 @@ impl DxgiSwapChain {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        if *riid == IID_IUNKNOWN || *riid == IID_IDXGI_SWAP_CHAIN || *riid == IID_IDXGI_SWAP_CHAIN1
+        if *riid == IID_IUNKNOWN
+            || *riid == IID_IDXGI_SWAP_CHAIN
+            || *riid == IID_IDXGI_SWAP_CHAIN1
+            || *riid == IID_IDXGI_SWAP_CHAIN2
         {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
@@ -1370,7 +1394,10 @@ impl DxgiSwapChain {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
             crate::dlls::dxgi_private::forget(this as *const c_void);
-            let _ = Box::from_raw(this);
+            let sc = Box::from_raw(this);
+            if sc.waitable != 0 {
+                crate::dlls::kernel32::close_handle(sc.waitable);
+            }
             return 0;
         }
         prev - 1
@@ -1438,6 +1465,11 @@ unsafe extern "win64" fn sc_present(this: *mut DxgiSwapChain, _sync: u32, flags:
         ctx.present();
     }
     (*this).present_count.fetch_add(1, Ordering::Relaxed);
+    // L'image est affichée dès le retour de Present : la chaîne peut en
+    // accepter une autre, le handle attendable est signalé.
+    if (*this).waitable != 0 {
+        crate::dlls::kernel32::release_semaphore((*this).waitable, 1, std::ptr::null_mut());
+    }
     S_OK
 }
 
@@ -1664,6 +1696,100 @@ unsafe extern "win64" fn sc_get_present_count(this: *mut DxgiSwapChain, out: *mu
     S_OK
 }
 
+/// DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT (dxgi.h).
+const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 64;
+/// DXGI_MAX_SWAP_CHAIN_BUFFERS : borne de SetMaximumFrameLatency.
+const DXGI_MAX_SWAP_CHAIN_BUFFERS: u32 = 16;
+
+/// SetSourceSize : la zone du tampon arrière à présenter, au plus le tampon.
+unsafe extern "win64" fn sc_set_source_size(this: *mut DxgiSwapChain, w: u32, h: u32) -> i32 {
+    let d = &(*this).desc.buffer_desc;
+    if w == 0 || h == 0 || w > d.width || h > d.height {
+        return E_INVALIDARG;
+    }
+    *(*this)
+        .source_size
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = (w, h);
+    S_OK
+}
+unsafe extern "win64" fn sc_get_source_size(
+    this: *mut DxgiSwapChain,
+    w: *mut u32,
+    h: *mut u32,
+) -> i32 {
+    if w.is_null() || h.is_null() {
+        return E_INVALIDARG;
+    }
+    let (sw, sh) = *(*this)
+        .source_size
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let d = &(*this).desc.buffer_desc;
+    *w = if sw == 0 { d.width } else { sw };
+    *h = if sh == 0 { d.height } else { sh };
+    S_OK
+}
+/// SetMaximumFrameLatency : seulement pour une chaîne créée avec
+/// DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, 1 à 16 images.
+unsafe extern "win64" fn sc_set_max_latency(this: *mut DxgiSwapChain, n: u32) -> i32 {
+    if (*this).waitable == 0 {
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    if n == 0 || n > DXGI_MAX_SWAP_CHAIN_BUFFERS {
+        return E_INVALIDARG;
+    }
+    let old = (*this).max_latency.swap(n, Ordering::AcqRel);
+    if n > old {
+        // Les images de plus que la chaîne accepte désormais.
+        crate::dlls::kernel32::release_semaphore(
+            (*this).waitable,
+            (n - old) as i32,
+            std::ptr::null_mut(),
+        );
+    }
+    S_OK
+}
+unsafe extern "win64" fn sc_get_max_latency(this: *mut DxgiSwapChain, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    if (*this).waitable == 0 {
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    *out = (*this).max_latency.load(Ordering::Acquire);
+    S_OK
+}
+/// GetFrameLatencyWaitableObject : un nouveau handle sur le sémaphore, que
+/// l'appli ferme avec CloseHandle ; NULL sans le drapeau.
+unsafe extern "win64" fn sc_get_waitable(this: *mut DxgiSwapChain) -> usize {
+    if (*this).waitable == 0 {
+        return 0;
+    }
+    let me = usize::MAX; // GetCurrentProcess()
+    let mut h = 0usize;
+    // DUPLICATE_SAME_ACCESS (2).
+    if crate::dlls::kernel32::duplicate_handle(me, (*this).waitable, me, &mut h, 0, 0, 2) == 0 {
+        return 0;
+    }
+    h
+}
+/// SetMatrixTransform / GetMatrixTransform : réservés aux chaînes de
+/// composition (CreateSwapChainForComposition) ; une chaîne de fenêtre
+/// répond DXGI_ERROR_INVALID_CALL.
+unsafe extern "win64" fn sc_set_matrix(_: *mut DxgiSwapChain, m: *const [f32; 6]) -> i32 {
+    if m.is_null() {
+        return E_INVALIDARG;
+    }
+    DXGI_ERROR_INVALID_CALL
+}
+unsafe extern "win64" fn sc_get_matrix(_: *mut DxgiSwapChain, m: *mut [f32; 6]) -> i32 {
+    if m.is_null() {
+        return E_INVALIDARG;
+    }
+    DXGI_ERROR_INVALID_CALL
+}
+
 static SWAP_CHAIN_VTABLE: DxgiSwapChainVTable = DxgiSwapChainVTable {
     query_interface: DxgiSwapChain::query_interface,
     add_ref: DxgiSwapChain::add_ref,
@@ -1694,6 +1820,13 @@ static SWAP_CHAIN_VTABLE: DxgiSwapChainVTable = DxgiSwapChainVTable {
     get_background_color: sc_get_background,
     set_rotation: sc_set_rotation,
     get_rotation: sc_get_rotation,
+    set_source_size: sc_set_source_size,
+    get_source_size: sc_get_source_size,
+    set_maximum_frame_latency: sc_set_max_latency,
+    get_maximum_frame_latency: sc_get_max_latency,
+    get_frame_latency_waitable_object: sc_get_waitable,
+    set_matrix_transform: sc_set_matrix,
+    get_matrix_transform: sc_get_matrix,
 };
 
 pub(crate) fn create_swap_chain(
@@ -1733,6 +1866,19 @@ pub(crate) fn create_swap_chain(
             hwnd
         );
     }
+    // Chaîne attendable : latence 1 par défaut, une image acceptée d'emblée.
+    let waitable = if desc.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0 {
+        unsafe {
+            crate::dlls::kernel32::create_semaphore_w(
+                0,
+                1,
+                DXGI_MAX_SWAP_CHAIN_BUFFERS as i32,
+                std::ptr::null(),
+            )
+        }
+    } else {
+        0
+    };
     Box::into_raw(Box::new(DxgiSwapChain {
         vtable: crate::dlls::dx11_x86::abi(&SWAP_CHAIN_VTABLE, "dlls::dxgi", "DxgiSwapChainVTable"),
         ref_count: AtomicU32::new(1),
@@ -1744,6 +1890,9 @@ pub(crate) fn create_swap_chain(
         alpha: 0,
         background: Mutex::new([0.0; 4]),
         rotation: AtomicU32::new(0),
+        source_size: Mutex::new((0, 0)),
+        max_latency: AtomicU32::new(1),
+        waitable,
     }))
 }
 
@@ -2349,6 +2498,106 @@ mod swap_chain1_tests {
         *(*(p as *const *const usize)).add(i)
     }
 
+    /// Chaîne Direct3D 11 de 64x32 avec les drapeaux demandés.
+    unsafe fn chaine(f: *mut DxgiFactory, device: *mut c_void, flags: u32) -> *mut c_void {
+        let desc = crate::dlls::d3d12::SwapDesc1 {
+            width: 64,
+            height: 32,
+            format: 87,
+            stereo: 0,
+            sample: DxgiSampleDesc {
+                count: 1,
+                quality: 0,
+            },
+            usage: 0x20,
+            count: 2,
+            scaling: 1,
+            effect: 4,
+            alpha: 0,
+            flags,
+        };
+        let mut sc = std::ptr::null_mut();
+        assert_eq!(
+            fac_create_sc_hwnd(
+                f,
+                device,
+                0x4_0000,
+                &desc,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                &mut sc,
+            ),
+            S_OK
+        );
+        sc
+    }
+
+    /// OBS Studio (#2242) : FLIP_DISCARD avec la chaîne attendable, puis
+    /// IDXGISwapChain2::GetFrameLatencyWaitableObject.
+    #[test]
+    fn chaine_d_echange_attendable_en_idxgiswapchain2() {
+        use crate::dlls::kernel32::{close_handle, wait_for_single_object};
+        unsafe {
+            let f = create_factory();
+            let mut fake_device = [0usize; 4];
+            let dev = fake_device.as_mut_ptr().cast();
+            let sc = chaine(f, dev, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+            let mut sc2 = std::ptr::null_mut();
+            assert_eq!(
+                DxgiSwapChain::query_interface(sc.cast(), &IID_IDXGI_SWAP_CHAIN2, &mut sc2),
+                S_OK,
+                "IDXGISwapChain2 accepté"
+            );
+            assert_eq!(sc2, sc);
+            // GetFrameLatencyWaitableObject (33) : latence 1, une image d'emblée.
+            let waitable: unsafe extern "win64" fn(*mut c_void) -> usize =
+                std::mem::transmute(slot(sc2, 33));
+            let h = waitable(sc2);
+            assert_ne!(h, 0);
+            assert_eq!(wait_for_single_object(h, 0), 0, "première image acceptée");
+            assert_eq!(wait_for_single_object(h, 0), 258, "latence 1 atteinte");
+            // Present (8) rend une place.
+            let present: unsafe extern "win64" fn(*mut c_void, u32, u32) -> i32 =
+                std::mem::transmute(slot(sc2, 8));
+            assert_eq!(present(sc2, 1, 0), S_OK);
+            assert_eq!(wait_for_single_object(h, 0), 0, "signalé après Present");
+            // GetMaximumFrameLatency (32) / SetMaximumFrameLatency (31).
+            let set_lat: unsafe extern "win64" fn(*mut c_void, u32) -> i32 =
+                std::mem::transmute(slot(sc2, 31));
+            let get_lat: unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32 =
+                std::mem::transmute(slot(sc2, 32));
+            let mut n = 0;
+            assert_eq!(get_lat(sc2, &mut n), S_OK);
+            assert_eq!(n, 1);
+            assert_eq!(set_lat(sc2, 0), E_INVALIDARG);
+            assert_eq!(set_lat(sc2, 2), S_OK);
+            assert_eq!(wait_for_single_object(h, 0), 0, "une place de plus");
+            // GetSourceSize (30) : le tampon entier par défaut.
+            let get_src: unsafe extern "win64" fn(*mut c_void, *mut u32, *mut u32) -> i32 =
+                std::mem::transmute(slot(sc2, 30));
+            let (mut w, mut hh) = (0, 0);
+            assert_eq!(get_src(sc2, &mut w, &mut hh), S_OK);
+            assert_eq!((w, hh), (64, 32));
+            // SetMatrixTransform (34) : chaîne de fenêtre, appel refusé.
+            let set_m: unsafe extern "win64" fn(*mut c_void, *const [f32; 6]) -> i32 =
+                std::mem::transmute(slot(sc2, 34));
+            assert_eq!(
+                set_m(sc2, &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+                DXGI_ERROR_INVALID_CALL
+            );
+            assert_eq!(close_handle(h), 1);
+            assert_eq!(DxgiSwapChain::release(sc2.cast()), 1);
+            assert_eq!(DxgiSwapChain::release(sc.cast()), 0);
+
+            // Sans le drapeau : NULL et SetMaximumFrameLatency refusé.
+            let sc = chaine(f, dev, 0);
+            assert_eq!(waitable(sc), 0);
+            assert_eq!(set_lat(sc, 2), DXGI_ERROR_INVALID_CALL);
+            assert_eq!(DxgiSwapChain::release(sc.cast()), 0);
+            DxgiFactory::release(f);
+        }
+    }
+
     #[test]
     fn chaine_d_echange_direct3d11_en_idxgiswapchain1() {
         unsafe {
@@ -2434,7 +2683,7 @@ mod swap_chain1_tests {
 
     #[test]
     fn tables_dxgi_aux_tailles_de_windows() {
-        assert_eq!(std::mem::size_of::<DxgiSwapChainVTable>() / 8, 29);
+        assert_eq!(std::mem::size_of::<DxgiSwapChainVTable>() / 8, 36);
         assert_eq!(std::mem::size_of::<FrameStatistics>(), 32);
         assert_eq!(std::mem::size_of::<FullscreenDesc>(), 20);
         assert_eq!(std::mem::size_of::<crate::dlls::d3d12::SwapDesc1>(), 48);
