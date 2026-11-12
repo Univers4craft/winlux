@@ -42,7 +42,7 @@ extern "C" {
 
 /// errno de la CRT Windows pour une erreur de domaine.
 const EDOM: i32 = 33;
-const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+use std::f64::consts::EULER_GAMMA;
 
 fn domain_error() -> f64 {
     super::crt_runtime::set_errno_value(EDOM);
