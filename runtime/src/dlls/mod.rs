@@ -259,6 +259,7 @@ pub mod sysdlls;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -1481,6 +1482,8 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(lot_f)
         // discord_utils.node (#1823).
         .chain(discord_win32::all())
+        // ms-teams.exe et ses DLL (#2110).
+        .chain(teams_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {

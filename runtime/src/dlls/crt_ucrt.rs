@@ -766,6 +766,11 @@ pub extern "win64" fn seh_filter(_code: u32, _pointers: *mut c_void) -> i32 {
     0
 }
 pub extern "win64" fn terminate() -> ! {
+    // Fonction installée par set_terminate (#2110) : elle ne doit pas
+    // revenir ; si elle revient, le programme s'arrête comme abort().
+    if let Some(handler) = super::teams_win32::terminate_handler() {
+        unsafe { handler() };
+    }
     crate::log_error!("crt", "terminate() appelée : le programme s'arrête");
     eprintln!("winlux: le programme a appelé terminate() et s'arrête.");
     crate::dlls::kernel32::flush_and_exit(3)
