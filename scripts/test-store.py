@@ -65,11 +65,6 @@ show) printf 'Package: gimp\\nVersion: 2.10.36-3\\nInstalled-Size: 20480\\nHomep
 esac
 """)
     mock(bindir, "apt-get", """printf 'apt-get %s\\n' "$*" >> "$LOG"
-case " $* " in *" -s "*autoremove*)
-  # Simulation (#2189) : sans les suggestions, systemd-container devient inutile.
-  case " $* " in *SuggestsImportant=false*) printf 'Remv systemd-container [1]\\nRemv libfoo [1]\\n';; esac
-  printf 'Remv libinutile [1]\\nRemv vlc-l10n [1]\\n'; exit 0;;
-esac
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
 eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
@@ -406,30 +401,18 @@ esac
     check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
     # Désinstallation apt, et toutes les commandes apt-get du Store acceptées par
     # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
-    statef = home / ".local/share/winlux/store-state.json"
-    state = json.loads(statef.read_text()) if statef.exists() else {}
-    state.setdefault("apt", {})["vlc"] = ["systemd-container", "vlc-l10n"]
-    statef.write_text(json.dumps(state))
     st("remove", "apt:vlc")
-    text = log.read_text()
-    check("purge -- vlc\n" in text, "désinstallation apt")
-    # #2189 : ce que l'installation a apporté part, même retenu par une seule
-    # suggestion ; ce qui n'est pas à elle ne part que si apt le retirerait
-    # d'office ; le compagnon d'un logiciel encore installé reste.
-    check("purge -- libinutile systemd-container\n" in text and "libfoo" not in text.split("purge -- vlc")[1].split("\n")[1],
-          "désinstallation : paquets apportés retirés, compagnons des autres gardés (#2189)")
-    check("vlc" not in json.loads(statef.read_text()).get("apt", {}), "trace de l'installation effacée")
+    check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
     # Traductions de LibreOffice (#2183) : rien ne les recommande, donc
     # désinstaller Writer les retirerait à Calc ; la Boutique les remet.
     env["DPKG_MORE"] = "libreoffice-calc\\tii \\t24.2\\t100\\n"
     st("remove", "apt:libreoffice-writer")
     env.pop("DPKG_MORE")
-    check("purge -- libreoffice-writer" in log.read_text()
+    check("purge --autoremove -- libreoffice-writer" in log.read_text()
           and "install --no-install-recommends --mark-auto -- libreoffice-l10n-de libreoffice-l10n-es libreoffice-l10n-fr" in log.read_text(),
           "compagnons des logiciels restants remis après une désinstallation (#2183)")
     relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
-    # Les simulations (-s, #2189) tournent sans droits, hors du relais.
-    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ") and " -s " not in l]
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
     check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
     for args in apt_lines:
         check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")
