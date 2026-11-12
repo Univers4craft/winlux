@@ -2945,7 +2945,11 @@ pub unsafe extern "win64" fn find_window_ex_a(
     class: *const u8,
     title: *const u8,
 ) -> usize {
-    let cls = (!class.is_null()).then(|| read_class_name_a(class));
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_a(class))
+    };
     let ttl = (!title.is_null()).then(|| crate::dlls::cstr(title));
     find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
@@ -2956,7 +2960,11 @@ pub unsafe extern "win64" fn find_window_ex_w(
     class: *const u16,
     title: *const u16,
 ) -> usize {
-    let cls = (!class.is_null()).then(|| read_class_name_w(class));
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_w(class))
+    };
     let ttl = (!title.is_null()).then(|| crate::dlls::wstr(title));
     find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
