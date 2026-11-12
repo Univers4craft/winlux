@@ -106,7 +106,7 @@ impl PageMap {
 /// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
 pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     let pages = protection.len();
-    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+    allocs().insert(
         base,
         VmRegion {
             size: pages * 4096,
@@ -117,6 +117,36 @@ pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     );
 }
 static ALLOCS: OnceLock<Mutex<HashMap<usize, VmRegion>>> = OnceLock::new();
+
+/// Table des réservations VirtualAlloc, verrouillée : le thread qui la
+/// tient ne peut pas être arrêté par SuspendThread (#2065), sinon le
+/// thread qui suspend resterait bloqué dans son `VirtualQuery` suivant.
+/// Les champs se libèrent dans l'ordre : le verrou, puis la garde.
+struct AllocsGuard {
+    maps: std::sync::MutexGuard<'static, HashMap<usize, VmRegion>>,
+    _hold: super::thread_ctl::NoPark,
+}
+
+impl std::ops::Deref for AllocsGuard {
+    type Target = HashMap<usize, VmRegion>;
+    fn deref(&self) -> &Self::Target {
+        &self.maps
+    }
+}
+
+impl std::ops::DerefMut for AllocsGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.maps
+    }
+}
+
+fn allocs() -> AllocsGuard {
+    let hold = super::thread_ctl::no_park();
+    AllocsGuard {
+        maps: lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))),
+        _hold: hold,
+    }
+}
 static HEAP_ALLOCS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
 pub(crate) struct GlobalMemory {
     pub(crate) bytes: Vec<u8>,
@@ -4348,7 +4378,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         };
         let base = addr as usize & !(PAGE - 1);
         let end = end0 & !(PAGE - 1);
-        let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+        let mut maps = allocs();
         let Some((&region_base, _r)) = maps
             .iter_mut()
             .find(|(b, r)| r.kind == 0x20000 && base >= **b && end <= **b + r.size)
@@ -4373,7 +4403,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         };
         let page_base = addr as usize & !(PAGE - 1);
         let page_end = page_end0 & !(PAGE - 1);
-        let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+        let mut maps = allocs();
         let Some((&region_base, r)) = maps
             .iter_mut()
             .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
@@ -4479,7 +4509,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         return std::ptr::null_mut();
     }
     let pages = mapped_size / PAGE;
-    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+    allocs().insert(
         p,
         VmRegion {
             size: mapped_size,
@@ -4497,7 +4527,7 @@ pub unsafe extern "win64" fn virtual_alloc(
 /// Pages engagées (indices) de la région réservée à `base`, dans
 /// [first, end) : pour GetWriteWatch.
 pub(crate) fn committed_pages(base: usize, first: usize, end: usize) -> Vec<usize> {
-    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let maps = allocs();
     let Some(r) = maps.get(&base) else {
         return Vec::new();
     };
@@ -4522,7 +4552,7 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
         crate::process::set_last_error(487);
         return 0;
     }
-    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let mut maps = allocs();
     let p = addr as usize;
     if kind == MEM_RELEASE {
         if size != 0 {
@@ -4631,7 +4661,7 @@ pub unsafe extern "win64" fn virtual_protect(
         return 0;
     };
     let end = end0 & !(PAGE - 1);
-    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let mut maps = allocs();
     let Some((&base, r)) = maps
         .iter_mut()
         .find(|(b, r)| start >= **b && end <= **b + r.size)
@@ -4694,10 +4724,10 @@ pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
 /// dans une page de garde VirtualAlloc. Hors contexte de signal.
 pub(crate) fn clear_guard_page(addr: usize) -> bool {
     const PAGE: usize = 4096;
-    let Some(table) = ALLOCS.get() else {
+    if ALLOCS.get().is_none() {
         return false;
-    };
-    let mut maps = lock(table);
+    }
+    let mut maps = allocs();
     let Some((&base, r)) = maps
         .iter_mut()
         .find(|(&b, r)| addr >= b && addr < b + r.size)
@@ -4861,7 +4891,7 @@ pub unsafe extern "win64" fn virtual_query(
     }
     let address = addr as usize;
     let page = address & !(PAGE - 1);
-    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let maps = allocs();
     let region = maps
         .iter()
         .find(|(base, r)| address >= **base && address < **base + r.size);
