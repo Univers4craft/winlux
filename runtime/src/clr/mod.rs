@@ -9,14 +9,17 @@ pub mod domain;
 #[cfg(test)]
 pub mod emit;
 pub mod exceptions;
+pub mod fichiers;
 pub mod gc;
 pub mod il;
 pub mod interop;
+pub mod membres;
 pub mod metadata;
 pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
 pub mod reflection;
+pub mod registre;
 pub mod resolve;
 pub mod tableaux;
 pub mod tables;

@@ -119,7 +119,7 @@ fn same_image(a: &str, b: &str) -> bool {
 
 // ----- Conversions -----
 
-unsafe fn bstr_in(p: *const u16) -> String {
+pub(super) unsafe fn bstr_in(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
@@ -130,7 +130,7 @@ unsafe fn bstr_in(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
 }
 
-unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
+pub(super) unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -139,7 +139,7 @@ unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
     S_OK
 }
 
-unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
+pub(super) unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -147,7 +147,7 @@ unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
     S_OK
 }
 
-unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
+pub(super) unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -156,7 +156,7 @@ unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
 }
 
 /// VARIANT de type VT_BOOL (disposition x64 : vt à 0, valeur à 8).
-unsafe fn variant_bool(out: *mut u8, v: bool) {
+pub(super) unsafe fn variant_bool(out: *mut u8, v: bool) {
     if out.is_null() {
         return;
     }
@@ -190,21 +190,42 @@ fn as_ptr(s: &'static Static) -> *mut c_void {
     s as *const Static as *mut c_void
 }
 
-extern "win64" fn static_add_ref(_: usize) -> u32 {
+pub(super) extern "win64" fn static_add_ref(_: usize) -> u32 {
     2
 }
-extern "win64" fn static_release(_: usize) -> u32 {
+pub(super) extern "win64" fn static_release(_: usize) -> u32 {
     1
 }
-unsafe extern "win64" fn type_info_count(_: usize, out: *mut u32) -> i32 {
+pub(super) unsafe extern "win64" fn type_info_count(_: usize, out: *mut u32) -> i32 {
     u32_out(out, 0)
 }
-extern "win64" fn not_impl(_: usize) -> i32 {
-    E_NOTIMPL
+/// Méthodes non prises en charge : chacune rend E_NOTIMPL et le dit dans
+/// la trace, pour savoir laquelle un programme attendait (#1919).
+macro_rules! unsupported {
+    ($($f:ident => $label:literal;)*) => {
+        $(
+            pub(super) extern "win64" fn $f(_: usize) -> i32 {
+                crate::trace!("{} : non pris en charge (E_NOTIMPL)", $label);
+                E_NOTIMPL
+            }
+        )*
+    };
+}
+unsupported! {
+    get_type_info => "IDispatch::GetTypeInfo (pare-feu)";
+    get_ids_of_names => "IDispatch::GetIDsOfNames (pare-feu)";
+    invoke => "IDispatch::Invoke (pare-feu)";
+    profile_remote_admin => "INetFwProfile::get_RemoteAdminSettings";
+    profile_icmp => "INetFwProfile::get_IcmpSettings";
+    profile_open_ports => "INetFwProfile::get_GloballyOpenPorts";
+    profile_services => "INetFwProfile::get_Services";
+    apps_new_enum => "INetFwAuthorizedApplications::get__NewEnum";
+    policy2_service_restriction => "INetFwPolicy2::get_ServiceRestriction";
+    rules_new_enum => "INetFwRules::get__NewEnum";
 }
 /// Méthode acceptée sans effet. En x64, l'appelant nettoie la pile : une
 /// seule fonction convient à toutes les signatures.
-extern "win64" fn ok(_: usize) -> i32 {
+pub(super) extern "win64" fn ok(_: usize) -> i32 {
     S_OK
 }
 
@@ -264,9 +285,9 @@ static MGR_VT: VTable<12> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (), // GetTypeInfo
-    not_impl as *const (), // GetIDsOfNames
-    not_impl as *const (), // Invoke
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     mgr_local_policy as *const (),
     mgr_profile_type as *const (),
     ok as *const (), // RestoreDefaults
@@ -313,9 +334,9 @@ static POLICY_VT: VTable<9> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     policy_current_profile as *const (),
     policy_profile_by_type as *const (),
 ]);
@@ -336,23 +357,23 @@ static PROFILE_VT: VTable<21> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    mgr_profile_type as *const (), // get_Type
-    bool_true as *const (),        // get_FirewallEnabled
-    ok as *const (),               // put_FirewallEnabled
-    bool_false as *const (),       // get_ExceptionsNotAllowed
-    ok as *const (),               // put_ExceptionsNotAllowed
-    bool_false as *const (),       // get_NotificationsDisabled
-    ok as *const (),               // put_NotificationsDisabled
-    bool_false as *const (),       // get_UnicastResponsesToMulticastBroadcastDisabled
-    ok as *const (),               // put_UnicastResponsesToMulticastBroadcastDisabled
-    not_impl as *const (),         // get_RemoteAdminSettings
-    not_impl as *const (),         // get_IcmpSettings
-    not_impl as *const (),         // get_GloballyOpenPorts
-    not_impl as *const (),         // get_Services
-    profile_apps as *const (),     // get_AuthorizedApplications
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
+    mgr_profile_type as *const (),     // get_Type
+    bool_true as *const (),            // get_FirewallEnabled
+    ok as *const (),                   // put_FirewallEnabled
+    bool_false as *const (),           // get_ExceptionsNotAllowed
+    ok as *const (),                   // put_ExceptionsNotAllowed
+    bool_false as *const (),           // get_NotificationsDisabled
+    ok as *const (),                   // put_NotificationsDisabled
+    bool_false as *const (),           // get_UnicastResponsesToMulticastBroadcastDisabled
+    ok as *const (),                   // put_UnicastResponsesToMulticastBroadcastDisabled
+    profile_remote_admin as *const (), // get_RemoteAdminSettings
+    profile_icmp as *const (),         // get_IcmpSettings
+    profile_open_ports as *const (),   // get_GloballyOpenPorts
+    profile_services as *const (),     // get_Services
+    profile_apps as *const (),         // get_AuthorizedApplications
 ]);
 
 unsafe extern "win64" fn bool_true(_: usize, out: *mut i16) -> i32 {
@@ -370,14 +391,14 @@ static APPS_VT: VTable<12> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     apps_count as *const (),
     apps_add as *const (),
     apps_remove as *const (),
     apps_item as *const (),
-    not_impl as *const (), // get__NewEnum
+    apps_new_enum as *const (), // get__NewEnum
 ]);
 
 unsafe extern "win64" fn apps_count(_: usize, out: *mut i32) -> i32 {
@@ -390,7 +411,7 @@ unsafe extern "win64" fn apps_count(_: usize, out: *mut i32) -> i32 {
 
 /// Lit une propriété BSTR d'un INetFwAuthorizedApplication quelconque
 /// (le nôtre, ou celui d'un programme x86 derrière son mandataire).
-unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
+pub(super) unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
     let vt = *(app as *const *const usize);
     let get: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32 =
         std::mem::transmute(*vt.add(index));
@@ -403,7 +424,7 @@ unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
     Some(s)
 }
 
-unsafe fn read_u32_prop(app: usize, index: usize) -> Option<u32> {
+pub(super) unsafe fn read_u32_prop(app: usize, index: usize) -> Option<u32> {
     let vt = *(app as *const *const usize);
     let get: unsafe extern "win64" fn(usize, *mut u32) -> i32 = std::mem::transmute(*vt.add(index));
     let mut v = 0u32;
@@ -501,9 +522,9 @@ static APP_VT: VTable<19> = VTable([
     app_add_ref as *const (),
     app_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     app_get_name as *const (),
     app_put_name as *const (),
     app_get_image as *const (),
@@ -622,7 +643,7 @@ pub unsafe fn create_builtin(
         app_release(app);
         return Some(hr);
     }
-    None
+    super::netfw2::create_builtin(clsid, iid, out)
 }
 
 #[cfg(test)]

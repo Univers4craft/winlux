@@ -2066,6 +2066,17 @@ unsafe extern "win64" fn WSAEnumProtocolsW(
     0
 }
 
+/// WSAEnumNameSpaceProviders(A|W|ExA|ExW) : aucun fournisseur d'espace de
+/// noms n'est enregistré (la résolution passe par getaddrinfo et les
+/// requêtes NLA ci-dessous) ; 0 entrée, longueur requise nulle (#2000).
+unsafe extern "win64" fn WSAEnumNameSpaceProviders(len: *mut u32, _buf: *mut c_void) -> i32 {
+    if len.is_null() {
+        return wsa_error(10014); // WSAEFAULT
+    }
+    *len = 0;
+    0
+}
+
 /// NS_NLA : l'emplacement réseau (Network Location Awareness), que
 /// Chromium interroge pour savoir si la machine est connectée.
 const NS_NLA: u32 = 15;
@@ -2184,6 +2195,10 @@ unsafe extern "win64" fn WSASetServiceW(_info: *mut c_void, _op: u32, _flags: u3
 pub fn ws2_32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "WSAEnumProtocolsW" => fn WSAEnumProtocolsW,
+        "WSAEnumNameSpaceProvidersA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersW" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExW" => fn WSAEnumNameSpaceProviders,
         "WSALookupServiceBeginW" => fn WSALookupServiceBeginW,
         "WSALookupServiceNextW" => fn WSALookupServiceNextW,
         "WSALookupServiceEnd" => fn WSALookupServiceEnd,
@@ -2699,6 +2714,21 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 mod tests {
     use super::*;
 
+    /// Steam, utility storage (#2000) : aucun fournisseur, longueur nulle.
+    #[test]
+    fn aucun_fournisseur_d_espace_de_noms() {
+        unsafe {
+            let mut len = 77u32;
+            assert_eq!(WSAEnumNameSpaceProviders(&mut len, std::ptr::null_mut()), 0);
+            assert_eq!(len, 0);
+            let e = ws2_32_exports();
+            for n in ["A", "W", "ExA", "ExW"] {
+                let nom = format!("WSAEnumNameSpaceProviders{n}");
+                assert!(e.contains_key(nom.as_str()), "{nom} absent");
+            }
+        }
+    }
+
     fn etat(pid: u32) -> char {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
         stat[stat.rfind(')').unwrap() + 1..]
@@ -2876,17 +2906,43 @@ mod tests {
             assert_eq!(k::get_process_id(dup), std::process::id());
             assert!(k::is_current_process_handle(dup));
             k::close_handle(dup);
-            // TerminateProcess(GetCurrentProcess()) termine sans rendre la main.
-            let pid = libc::fork();
-            if pid == 0 {
-                k::terminate_process(me, 7);
+        }
+        // TerminateProcess(GetCurrentProcess()) termine sans rendre la main.
+        // Vérifié dans un processus neuf (ce même test relancé seul) : un
+        // fork() de l'exécuteur multithread pouvait hériter d'un verrou tenu
+        // par un autre test et rester bloqué pour toujours (#1982).
+        const ENFANT: &str = "WINLUX_TEST_ARRET_IMMEDIAT";
+        if std::env::var_os(ENFANT).is_some() {
+            unsafe {
+                k::terminate_process(k::get_current_process(), 7);
                 libc::_exit(99);
             }
-            let mut st = 0;
-            assert_eq!(libc::waitpid(pid, &mut st, 0), pid);
-            assert!(libc::WIFEXITED(st));
-            assert_eq!(libc::WEXITSTATUS(st), 7);
         }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::electron_win32::tests::handle_vers_soi_et_arret_immediat",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("TerminateProcess(GetCurrentProcess()) n'a pas terminé en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(7));
     }
 
     #[test]

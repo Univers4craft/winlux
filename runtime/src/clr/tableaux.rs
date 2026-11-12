@@ -10,8 +10,9 @@
 use super::exceptions::ClrException;
 use super::gc;
 use super::il::{load, store, Interpreter, Value};
+use super::metadata::{self, ElementType};
 use super::tables::{TableId, Token};
-use super::types::Kind;
+use super::types::{self, Kind};
 
 /// Données d'un tableau à une dimension : longueur (u64) puis éléments.
 const DATA: usize = 8;
@@ -51,7 +52,236 @@ pub(super) fn field_handle(assembly: usize, token: u32) -> i64 {
     (((assembly as u64) + 1) << 32 | token as u64) as i64
 }
 
+/// Interfaces de collection qu'un tableau à une dimension implémente
+/// (ECMA-335 §II.14.2 et documentation « Array Class » : `T[]` est un
+/// `IList<T>` et un `IReadOnlyList<T>`) (#1975).
+pub(super) const ARRAY_INTERFACES: &[&str] = &[
+    "IEnumerable`1",
+    "IEnumerable",
+    "ICollection`1",
+    "ICollection",
+    "IList`1",
+    "IList",
+    "IReadOnlyCollection`1",
+    "IReadOnlyList`1",
+];
+
+/// Énumérateur d'un tableau : tableau à +8, indice courant à +16 (-1 avant
+/// le premier MoveNext), 1 à +24 s'il rend les éléments sans les encadrer
+/// (`IEnumerator<T>`).
+const E_ARRAY: usize = 8;
+const E_INDEX: usize = 16;
+const E_GENERIC: usize = 24;
+
+fn read_word(p: *mut u8, off: usize) -> u64 {
+    unsafe { (p.add(off) as *const u64).read_unaligned() }
+}
+
+fn write_word(p: *mut u8, off: usize, v: u64) {
+    unsafe { (p.add(off) as *mut u64).write_unaligned(v) }
+}
+
+fn fixed_size() -> ClrException {
+    ClrException::new(
+        "System",
+        "NotSupportedException",
+        "Collection was of a fixed size.",
+    )
+}
+
+fn enumerator_type() -> u32 {
+    super::types::with_types(|reg| reg.ensure_external("System", "SZArrayEnumerator"))
+}
+
 impl Interpreter {
+    /// Encadre l'élément `v` d'un tableau de valeurs, pour le rendre comme
+    /// `object`.
+    fn box_elem(&mut self, arr: *mut u8, kind: Kind, v: Value) -> Value {
+        if kind == Kind::Ref {
+            return v;
+        }
+        let id = gc::array_elem_type(arr);
+        let boxed = if matches!(kind, Kind::Struct(_)) {
+            self.new_struct(id)
+        } else {
+            gc::with_gc(|gc| gc.alloc(id, 8))
+        };
+        store(boxed, kind, v);
+        Value::Ref(boxed)
+    }
+
+    /// Égalité de deux éléments pour Contains/IndexOf : octets égaux pour
+    /// une valeur ; même objet, ou même contenu pour une chaîne ou une
+    /// valeur encadrée, pour une référence.
+    fn elem_equal(kind: Kind, a: Value, b: Value) -> bool {
+        match kind {
+            Kind::Ref => {
+                let (x, y) = (a.as_ref(), b.as_ref());
+                x == y || (!x.is_null() && !y.is_null() && super::bcl::boxed_equal(x, y))
+            }
+            Kind::R4 | Kind::R8 => a.as_f64() == b.as_f64(),
+            Kind::Struct(_) => {
+                let n = kind.elem_size();
+                let (x, y) = (a.as_ref(), b.as_ref());
+                !x.is_null()
+                    && !y.is_null()
+                    && unsafe {
+                        std::slice::from_raw_parts(x, n) == std::slice::from_raw_parts(y, n)
+                    }
+            }
+            _ => a.as_i64() == b.as_i64(),
+        }
+    }
+
+    /// Membres des interfaces de collection appelés sur un tableau ou sur
+    /// son énumérateur : le tableau n'a pas de table de méthodes à lui.
+    fn array_interface_call(
+        &mut self,
+        namespace: &str,
+        class: &str,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, ClrException>> {
+        let this = match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => *p,
+            _ => return None,
+        };
+        let ty = gc::type_of(this)?;
+        if ty == enumerator_type() {
+            return self.array_enumerator_call(this, name);
+        }
+        if ty != super::types::TYPE_ARRAY
+            || !(namespace == "System.Collections.Generic" || namespace == "System.Collections")
+            || !ARRAY_INTERFACES.contains(&class)
+        {
+            return None;
+        }
+        let kind = self.elem_kind(this);
+        let size = kind.elem_size();
+        let n = length(this);
+        let at = |i: i64| unsafe { this.add(DATA + i as usize * size) };
+        let index_arg = |i: usize| args.get(i).map_or(-1, |v| v.as_i64());
+        let generic = class.ends_with("`1");
+        let r = match name {
+            "GetEnumerator" => {
+                let e = gc::with_gc(|gc| {
+                    gc.alloc(enumerator_type(), super::types::EXTERNAL_OBJECT_SIZE)
+                });
+                write_word(e, E_ARRAY, this as u64);
+                write_word(e, E_INDEX, u64::MAX);
+                write_word(e, E_GENERIC, generic as u64);
+                Ok(Value::Ref(e))
+            }
+            "get_Count" => Ok(Value::I32(n as i32)),
+            "get_IsReadOnly" | "get_IsFixedSize" | "get_IsSynchronized" => {
+                Ok(Value::I32((name == "get_IsFixedSize") as i32))
+            }
+            "get_SyncRoot" => Ok(Value::Ref(this)),
+            "get_Item" => {
+                let i = index_arg(1);
+                if i < 0 || i >= n {
+                    Err(out_of_range("index"))
+                } else {
+                    let v = load(at(i), kind);
+                    Ok(if generic {
+                        v
+                    } else {
+                        self.box_elem(this, kind, v)
+                    })
+                }
+            }
+            "set_Item" => {
+                let i = index_arg(1);
+                if i < 0 || i >= n {
+                    Err(out_of_range("index"))
+                } else {
+                    store(at(i), kind, args.get(2).copied().unwrap_or(Value::Null));
+                    Ok(Value::Null)
+                }
+            }
+            "Contains" | "IndexOf" => {
+                let item = args.get(1).copied().unwrap_or(Value::Null);
+                // IList.Contains(object) sur un tableau de valeurs : la
+                // valeur arrive encadrée.
+                let item = if !generic && kind != Kind::Ref {
+                    match item {
+                        Value::Ref(p) if !p.is_null() => load(p, kind),
+                        _ => return Some(Ok(Value::I32(if name == "Contains" { 0 } else { -1 }))),
+                    }
+                } else {
+                    item
+                };
+                let found = (0..n).find(|&i| Self::elem_equal(kind, load(at(i), kind), item));
+                Ok(Value::I32(match (name, found) {
+                    ("Contains", f) => f.is_some() as i32,
+                    (_, Some(i)) => i as i32,
+                    (_, None) => -1,
+                }))
+            }
+            "CopyTo" => match args {
+                [_, dst, index] => {
+                    self.array_copy(&[Value::Ref(this), Value::I32(0), *dst, *index, Value::I64(n)])
+                }
+                _ => return None,
+            },
+            "Add" | "Insert" | "Remove" | "RemoveAt" | "Clear" => Err(fixed_size()),
+            _ => return None,
+        };
+        Some(r)
+    }
+
+    fn array_enumerator_call(
+        &mut self,
+        e: *mut u8,
+        name: &str,
+    ) -> Option<Result<Value, ClrException>> {
+        let arr = read_word(e, E_ARRAY) as *mut u8;
+        let index = read_word(e, E_INDEX) as i64;
+        let r = match name {
+            "MoveNext" => {
+                let next = index + 1;
+                if next < length(arr) {
+                    write_word(e, E_INDEX, next as u64);
+                    Ok(Value::I32(1))
+                } else {
+                    write_word(e, E_INDEX, length(arr) as u64);
+                    Ok(Value::I32(0))
+                }
+            }
+            "get_Current" => {
+                if index < 0 || index >= length(arr) {
+                    Err(ClrException::new(
+                        "System",
+                        "InvalidOperationException",
+                        if index < 0 {
+                            "Enumeration has not started. Call MoveNext."
+                        } else {
+                            "Enumeration already finished."
+                        },
+                    ))
+                } else {
+                    let kind = self.elem_kind(arr);
+                    let v = load(
+                        unsafe { arr.add(DATA + index as usize * kind.elem_size()) },
+                        kind,
+                    );
+                    Ok(if read_word(e, E_GENERIC) != 0 {
+                        v
+                    } else {
+                        self.box_elem(arr, kind, v)
+                    })
+                }
+            }
+            "Reset" => {
+                write_word(e, E_INDEX, u64::MAX);
+                Ok(Value::Null)
+            }
+            "Dispose" => Ok(Value::Null),
+            _ => return None,
+        };
+        Some(r)
+    }
+
     /// `RuntimeHelpers.InitializeArray(array, champ)` : copie dans le
     /// tableau les octets du champ à RVA que le compilateur a émis pour son
     /// initialiseur (ECMA-335 §II.16.3.2, table FieldRVA §II.22.18).
@@ -69,7 +299,8 @@ impl Interpreter {
         if index == 0 || Token(token).table() != TableId::Field as u8 {
             return Err(bad());
         }
-        let asm = self.assembly_at(index - 1);
+        // Poignée forgée possible : indice borné au domaine (#1968).
+        let asm = self.try_assembly_at(index - 1).ok_or_else(bad)?;
         let field = Token(token).rid();
         let rva = (1..=asm.row_count(TableId::FieldRva))
             .map(|row| asm.get_field_rva(row))
@@ -88,6 +319,55 @@ impl Interpreter {
         let src = asm.rva_slice(rva, size).ok_or_else(bad)?;
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), arr.add(DATA), size) };
         Ok(Value::Null)
+    }
+
+    /// `isinst`/`castclass` vers un type tableau `T[]` (jeton TypeSpec) :
+    /// l'objet doit être un tableau dont les éléments conviennent (#2023).
+    /// Un tableau de références ne garde pas le type de ses éléments : tout
+    /// `U[]` de références est accepté pour un `T[]` de références. Pour les
+    /// types valeur, l'élément doit être le même, au signe près pour les
+    /// entiers (int[] vers uint[], une énumération vers son type de base),
+    /// comme le permet ECMA-335 §I.8.7.1. `None` : pas un type tableau.
+    pub(super) fn array_cast(&self, token: u32, obj: *mut u8) -> Option<bool> {
+        if obj.is_null() || Token(token).table() != TableId::TypeSpec as u8 {
+            return None;
+        }
+        let blob = {
+            let a = &self.assembly;
+            a.get_blob(a.get_type_spec(Token(token).rid()).signature)
+                .to_vec()
+        };
+        let mut off = 0;
+        let ElementType::SzArray(inner) = metadata::decode_type(&blob, &mut off) else {
+            return None;
+        };
+        let actual = gc::type_of(obj)?;
+        if actual != types::TYPE_ARRAY {
+            return Some(false);
+        }
+        let target = self.resolve_sig(self.current, &inner, &self.current_gen());
+        let target_kind = self.kind_of_type(target);
+        let elem = gc::array_elem_type(obj);
+        if target_kind == Kind::Ref {
+            return Some(elem == 0);
+        }
+        if elem == 0 {
+            return Some(false);
+        }
+        let kind = self.kind_of_type(elem);
+        let integer = |k: Kind| match k {
+            Kind::I1 | Kind::U1 => Some(1),
+            Kind::I2 | Kind::U2 => Some(2),
+            Kind::I4 | Kind::U4 => Some(4),
+            Kind::I8 | Kind::U8 => Some(8),
+            Kind::I => Some(16),
+            _ => None,
+        };
+        Some(
+            elem == target
+                || kind == target_kind && !matches!(kind, Kind::Struct(_))
+                || integer(kind).is_some() && integer(kind) == integer(target_kind),
+        )
     }
 
     /// Façon de ranger un élément du tableau `arr`.
@@ -113,6 +393,9 @@ impl Interpreter {
             )
         {
             return Some(self.initialize_array(args));
+        }
+        if let Some(r) = self.array_interface_call(namespace, class, name, args) {
+            return Some(r);
         }
         if namespace != "System" || class != "Array" {
             return None;
@@ -141,6 +424,42 @@ impl Interpreter {
             }
             "get_LongLength" | "GetLongLength" => {
                 array_arg(args.first(), "this").map(|a| Value::I64(length(a)))
+            }
+            // Array.GetValue / SetValue (#2008) : élément encadré.
+            "GetValue" | "SetValue" => {
+                let set = name == "SetValue";
+                match array_arg(args.first(), "this") {
+                    Err(e) => Err(e),
+                    Ok(a) => {
+                        let i = args.get(if set { 2 } else { 1 }).map_or(-1, |v| v.as_i64());
+                        if i < 0 || i >= length(a) {
+                            Err(out_of_range("index"))
+                        } else {
+                            let kind = self.elem_kind(a);
+                            let size = kind.elem_size();
+                            let at = unsafe { a.add(8 + i as usize * size) };
+                            if set {
+                                let v = args.get(1).copied().unwrap_or(Value::Null);
+                                let raw = if kind == Kind::Ref {
+                                    v
+                                } else {
+                                    match v {
+                                        Value::Ref(p) if !p.is_null() => load(p, kind),
+                                        _ => {
+                                            unsafe { std::ptr::write_bytes(at, 0, size) };
+                                            return Some(Ok(Value::Null));
+                                        }
+                                    }
+                                };
+                                store(at, kind, raw);
+                                Ok(Value::Null)
+                            } else {
+                                let v = load(at, kind);
+                                Ok(self.box_elem(a, kind, v))
+                            }
+                        }
+                    }
+                }
             }
             "get_Rank" => Ok(Value::I32(1)),
             "GetLowerBound" => Ok(Value::I32(0)),
@@ -192,14 +511,7 @@ impl Interpreter {
                 }
                 for (i, v) in items.into_iter().enumerate() {
                     let v = if dk == Kind::Ref && sk != Kind::Ref {
-                        let id = gc::array_elem_type(src);
-                        let boxed = if matches!(sk, Kind::Struct(_)) {
-                            self.new_struct(id)
-                        } else {
-                            gc::with_gc(|gc| gc.alloc(id, 8))
-                        };
-                        store(boxed, sk, v);
-                        Value::Ref(boxed)
+                        self.box_elem(src, sk, v)
                     } else {
                         v
                     };
