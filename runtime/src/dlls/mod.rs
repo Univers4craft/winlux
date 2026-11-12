@@ -123,6 +123,7 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;

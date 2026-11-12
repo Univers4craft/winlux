@@ -1810,6 +1810,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::winrt_ui::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.System.UserProfile.GlobalizationPreferences (#2172).
+    if let Some(hr) = super::globalization_prefs::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     // Windows.Storage.ApplicationData d'un programme empaqueté (#2122).
     if let Some(hr) = super::storage_appdata::activation_factory(&name, iid as *const u8, out) {
         return hr;
