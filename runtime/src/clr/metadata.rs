@@ -729,6 +729,75 @@ impl Assembly {
         FieldRvaRow { rva, field }
     }
 
+    pub fn get_constant(&self, row: u32) -> ConstantRow {
+        let d = self.row_data(TableId::Constant, row);
+        let mut o = 0;
+        // Type (1 octet) puis un octet de remplissage (ECMA-335 §II.22.9).
+        let typ = self.read_u16(d, &mut o) as u8;
+        let parent = self.coded_idx(CodedIndex::HasConstant, d, &mut o);
+        let value = self.blob_idx(d, &mut o);
+        ConstantRow { typ, parent, value }
+    }
+
+    pub fn get_custom_attribute(&self, row: u32) -> CustomAttributeRow {
+        let d = self.row_data(TableId::CustomAttribute, row);
+        let mut o = 0;
+        let parent = self.coded_idx(CodedIndex::HasCustomAttribute, d, &mut o);
+        let typ = self.coded_idx(CodedIndex::CustomAttributeType, d, &mut o);
+        let value = self.blob_idx(d, &mut o);
+        CustomAttributeRow { parent, typ, value }
+    }
+
+    pub fn get_property_map(&self, row: u32) -> PropertyMapRow {
+        let d = self.row_data(TableId::PropertyMap, row);
+        let mut o = 0;
+        let parent = self.table_idx(TableId::TypeDef, d, &mut o);
+        let property_list = self.table_idx(TableId::Property, d, &mut o);
+        PropertyMapRow {
+            parent,
+            property_list,
+        }
+    }
+
+    pub fn get_property(&self, row: u32) -> PropertyRow {
+        let d = self.row_data(TableId::Property, row);
+        let mut o = 0;
+        let flags = self.read_u16(d, &mut o);
+        let name = self.str_idx(d, &mut o);
+        let typ = self.blob_idx(d, &mut o);
+        PropertyRow { flags, name, typ }
+    }
+
+    pub fn get_method_semantics(&self, row: u32) -> MethodSemanticsRow {
+        let d = self.row_data(TableId::MethodSemantics, row);
+        let mut o = 0;
+        let semantics = self.read_u16(d, &mut o);
+        let method = self.table_idx(TableId::MethodDef, d, &mut o);
+        let association = self.coded_idx(CodedIndex::HasSemantics, d, &mut o);
+        MethodSemanticsRow {
+            semantics,
+            method,
+            association,
+        }
+    }
+
+    /// Propriétés déclarées par un type (table PropertyMap, §II.22.35).
+    pub fn type_properties(&self, type_row: u32) -> std::ops::Range<u32> {
+        let maps = self.row_count(TableId::PropertyMap);
+        for r in 1..=maps {
+            let m = self.get_property_map(r);
+            if m.parent == type_row {
+                let end = if r < maps {
+                    self.get_property_map(r + 1).property_list
+                } else {
+                    self.row_count(TableId::Property) + 1
+                };
+                return m.property_list..end;
+            }
+        }
+        0..0
+    }
+
     pub fn get_interface_impl(&self, row: u32) -> InterfaceImplRow {
         let d = self.row_data(TableId::InterfaceImpl, row);
         let mut o = 0;

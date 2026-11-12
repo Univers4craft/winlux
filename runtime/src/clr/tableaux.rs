@@ -298,7 +298,8 @@ impl Interpreter {
         if index == 0 || Token(token).table() != TableId::Field as u8 {
             return Err(bad());
         }
-        let asm = self.assembly_at(index - 1);
+        // Poignée forgée possible : indice borné au domaine (#1968).
+        let asm = self.try_assembly_at(index - 1).ok_or_else(bad)?;
         let field = Token(token).rid();
         let rva = (1..=asm.row_count(TableId::FieldRva))
             .map(|row| asm.get_field_rva(row))
@@ -373,6 +374,42 @@ impl Interpreter {
             }
             "get_LongLength" | "GetLongLength" => {
                 array_arg(args.first(), "this").map(|a| Value::I64(length(a)))
+            }
+            // Array.GetValue / SetValue (#2008) : élément encadré.
+            "GetValue" | "SetValue" => {
+                let set = name == "SetValue";
+                match array_arg(args.first(), "this") {
+                    Err(e) => Err(e),
+                    Ok(a) => {
+                        let i = args.get(if set { 2 } else { 1 }).map_or(-1, |v| v.as_i64());
+                        if i < 0 || i >= length(a) {
+                            Err(out_of_range("index"))
+                        } else {
+                            let kind = self.elem_kind(a);
+                            let size = kind.elem_size();
+                            let at = unsafe { a.add(8 + i as usize * size) };
+                            if set {
+                                let v = args.get(1).copied().unwrap_or(Value::Null);
+                                let raw = if kind == Kind::Ref {
+                                    v
+                                } else {
+                                    match v {
+                                        Value::Ref(p) if !p.is_null() => load(p, kind),
+                                        _ => {
+                                            unsafe { std::ptr::write_bytes(at, 0, size) };
+                                            return Some(Ok(Value::Null));
+                                        }
+                                    }
+                                };
+                                store(at, kind, raw);
+                                Ok(Value::Null)
+                            } else {
+                                let v = load(at, kind);
+                                Ok(self.box_elem(a, kind, v))
+                            }
+                        }
+                    }
+                }
             }
             "get_Rank" => Ok(Value::I32(1)),
             "GetLowerBound" => Ok(Value::I32(0)),

@@ -291,6 +291,14 @@ impl TypeRegistry {
         self.instances.get(&(def, args.to_vec())).copied()
     }
 
+    /// Définition générique d'une instanciation.
+    pub fn find_definition(&self, instance: TypeId) -> Option<TypeId> {
+        self.instances
+            .iter()
+            .find(|(_, &id)| id == instance)
+            .map(|((def, _), _)| *def)
+    }
+
     /// Enregistre une instanciation générique (sans l'inscrire par nom).
     pub fn register_instance(&mut self, def: TypeId, args: Vec<TypeId>, info: TypeInfo) -> TypeId {
         let id = self.next_id;

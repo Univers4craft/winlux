@@ -12,6 +12,7 @@ pub mod exceptions;
 pub mod gc;
 pub mod il;
 pub mod interop;
+pub mod membres;
 pub mod metadata;
 pub mod nombres;
 pub mod opcodes;
