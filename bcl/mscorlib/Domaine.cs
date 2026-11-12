@@ -6,7 +6,7 @@
 // Winlux n'a qu'un domaine par processus, le domaine par défaut.
 // AssemblyResolve est consulté par Assembly.Load quand une assembly manque ;
 // les autres événements se mémorisent, mais le moteur ne lève pas encore
-// ProcessExit ni UnhandledException.
+// ProcessExit ni UnhandledException (#2058).
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
