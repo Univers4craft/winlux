@@ -20,6 +20,38 @@ pub fn dispatch_internal_call(
         ("System", "Environment", m) => environment_dispatch(m, args),
         ("System", "Math", m) => math_dispatch(m, args),
         ("System", "String", m) => string_dispatch(m, args),
+        ("System", "Number", m) => number_dispatch(m, args),
+        ("System", "Char", m) => char_dispatch(m, args),
+        // Horloge de DateTime (#1963) : graduations de 100 ns depuis le
+        // 1er janvier de l'an 1 (UTC), et décalage de l'heure locale.
+        ("System", "Horloge", "UtcNowTicks") => {
+            let since_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            Some(Value::I64(
+                UNIX_EPOCH_TICKS + (since_unix.as_nanos() / 100) as i64,
+            ))
+        }
+        ("System", "Horloge", "LocalOffsetTicks") => {
+            let utc = args.first()?.as_i64();
+            Some(Value::I64(local_offset_ticks(utc)))
+        }
+        // Octets aléatoires de Guid.NewGuid (#1962).
+        ("System", "Guid", "FillRandom") => {
+            let buf = args.first()?.as_ref();
+            if !buf.is_null() {
+                let len = unsafe { *(buf as *const u64) } as usize;
+                let mut filled = 0;
+                while filled < len {
+                    let n = unsafe { libc::getrandom(buf.add(8 + filled).cast(), len - filled, 0) };
+                    if n <= 0 {
+                        return None;
+                    }
+                    filled += n as usize;
+                }
+            }
+            Some(Value::Null)
+        }
         ("System", "Object", m) => object_dispatch(m, args),
         ("System", "Array", m) => array_dispatch(m, args),
         ("System", "GC", m) => gc_dispatch(m, args),
@@ -29,6 +61,12 @@ pub fn dispatch_internal_call(
         ("System.IO", "File", m) => file_dispatch(m, args),
         ("System.IO", "Path", m) => path_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
+        // Horloge monotone de Stopwatch, en graduations de 100 ns (#1922).
+        ("System.Diagnostics", "Stopwatch", "GetTimestamp") => {
+            static DEBUT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let ecoule = DEBUT.get_or_init(std::time::Instant::now).elapsed();
+            Some(Value::I64((ecoule.as_nanos() / 100) as i64))
+        }
         _ => {
             crate::log_warn!(
                 "clr-bcl",
@@ -42,12 +80,30 @@ pub fn dispatch_internal_call(
     }
 }
 
+/// 1970-01-01 en graduations de 100 ns depuis 0001-01-01.
+const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+
+/// Décalage de l'heure locale (fuseau du système, heure d'été comprise) à
+/// l'instant UTC `utc_ticks`, en graduations de 100 ns.
+fn local_offset_ticks(utc_ticks: i64) -> i64 {
+    let t = ((utc_ticks - UNIX_EPOCH_TICKS) / 10_000_000) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    tm.tm_gmtoff * 10_000_000
+}
+
 /// Méthode connue de la classe mais pas encore écrite : l'appel lève une
 /// `MissingMethodException` qui la nomme, au lieu de rendre une valeur vide
 /// qui finirait en `NullReferenceException` trompeuse (#1190).
 fn missing(class: &str, method: &str) -> Option<Value> {
     crate::log_warn!("clr-bcl", "{}.{} non implémenté", class, method);
     None
+}
+
+fn is_null(v: &Value) -> bool {
+    matches!(v, Value::Null) || matches!(v, Value::Ref(p) if p.is_null())
 }
 
 /// Chaîne managée : longueur (u64) suivie des unités UTF-16.
@@ -59,6 +115,173 @@ pub fn alloc_managed_string(s: &str) -> Value {
         std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr.add(8) as *mut u16, utf16.len());
     }
     Value::Ref(ptr)
+}
+
+/// Chaîne managée faite d'unités UTF-16.
+pub fn alloc_utf16(units: &[u16]) -> Value {
+    let ptr = gc::with_gc(|gc| gc.alloc(TYPE_STRING, 8 + units.len() * 2));
+    unsafe {
+        *(ptr as *mut u64) = units.len() as u64;
+        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr.add(8) as *mut u16, units.len());
+    }
+    Value::Ref(ptr)
+}
+
+/// Unités UTF-16 d'une chaîne managée (vide pour null).
+pub fn managed_utf16(ptr: *mut u8) -> Vec<u16> {
+    if ptr.is_null() {
+        return Vec::new();
+    }
+    unsafe {
+        let len = *(ptr as *const u64) as usize;
+        std::slice::from_raw_parts(ptr.add(8) as *const u16, len).to_vec()
+    }
+}
+
+/// `newobj System.String::.ctor` (#1956) : (char[]), (char[], int, int),
+/// (char, int), (char*), (char*, int, int), (sbyte*). Rend la chaîne, ou
+/// `None` pour une surcharge inconnue.
+pub fn new_string(args: &[Value], params: &[ElementType]) -> Result<Value, &'static str> {
+    use ElementType as E;
+    let int = |v: &Value| v.as_i64();
+    match (params, args) {
+        ([E::SzArray(_)], [a]) | ([E::SzArray(_), E::I4, E::I4], [a, _, _]) => {
+            let arr = a.as_ref();
+            if arr.is_null() {
+                return Ok(alloc_utf16(&[]));
+            }
+            let len = unsafe { *(arr as *const u64) } as i64;
+            let (start, count) = if args.len() == 3 {
+                (int(&args[1]), int(&args[2]))
+            } else {
+                (0, len)
+            };
+            if start < 0 || count < 0 || start + count > len {
+                return Err("ArgumentOutOfRangeException");
+            }
+            let units = unsafe {
+                std::slice::from_raw_parts(
+                    (arr.add(8) as *const u16).add(start as usize),
+                    count as usize,
+                )
+            };
+            Ok(alloc_utf16(units))
+        }
+        ([E::Char, E::I4], [c, n]) => {
+            if int(n) < 0 {
+                return Err("ArgumentOutOfRangeException");
+            }
+            Ok(alloc_utf16(&vec![c.as_i32() as u16; int(n) as usize]))
+        }
+        ([E::Ptr(inner)], [p]) | ([E::Ptr(inner), E::I4, E::I4], [p, _, _]) => {
+            let base = p.as_ref();
+            if base.is_null() {
+                return Ok(alloc_utf16(&[]));
+            }
+            let wide = matches!(**inner, E::Char);
+            let (start, count) = if args.len() == 3 {
+                (int(&args[1]), Some(int(&args[2])))
+            } else {
+                (0, None)
+            };
+            let mut units = Vec::new();
+            let mut i = start as usize;
+            loop {
+                if count.is_some_and(|c| units.len() as i64 >= c) {
+                    break;
+                }
+                let u = unsafe {
+                    if wide {
+                        *(base as *const u16).add(i)
+                    } else {
+                        u16::from(*base.add(i))
+                    }
+                };
+                if count.is_none() && u == 0 {
+                    break;
+                }
+                units.push(u);
+                i += 1;
+            }
+            Ok(alloc_utf16(&units))
+        }
+        _ => Err("MissingMethodException"),
+    }
+}
+
+// ── System.Char : casse et catégories Unicode (#1956) ──
+
+fn char_dispatch(method: &str, args: &[Value]) -> Option<Value> {
+    let unit = args.first()?.as_i32() as u16;
+    // Une demi-paire de substitution n'a ni casse ni catégorie de lettre.
+    let c = char::from_u32(u32::from(unit));
+    let map = |up: bool| -> u16 {
+        let Some(c) = c else { return unit };
+        let mut it: Box<dyn Iterator<Item = char>> = if up {
+            Box::new(c.to_uppercase())
+        } else {
+            Box::new(c.to_lowercase())
+        };
+        match (it.next(), it.next()) {
+            (Some(m), None) if (m as u32) < 0x10000 => m as u32 as u16,
+            _ => unit,
+        }
+    };
+    let test = |f: fn(char) -> bool| Value::I32(c.is_some_and(f) as i32);
+    Some(match method {
+        "ToUpper" | "ToUpperInvariant" => Value::I32(i32::from(map(true))),
+        "ToLower" | "ToLowerInvariant" => Value::I32(i32::from(map(false))),
+        "IsLetter" => test(char::is_alphabetic),
+        "IsUpper" => test(char::is_uppercase),
+        "IsLower" => test(char::is_lowercase),
+        "IsNumber" => test(char::is_numeric),
+        "IsControl" => test(char::is_control),
+        "IsPunctuation" => test(is_punctuation),
+        _ => return missing("Char", method),
+    })
+}
+
+/// Catégories P* d'Unicode pour les blocs courants : ASCII sans les
+/// symboles `$+<=>^`|~`, Latin-1, ponctuation générale et CJK.
+fn is_punctuation(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_punctuation() && !"$+<=>^`|~".contains(c);
+    }
+    matches!(c as u32,
+        0xA1 | 0xA7 | 0xAB | 0xB6 | 0xB7 | 0xBB | 0xBF
+        | 0x2010..=0x2027 | 0x2030..=0x2043 | 0x2045..=0x2051 | 0x2053..=0x205E
+        | 0x3001..=0x3003 | 0x3008..=0x3011 | 0x3014..=0x301F)
+}
+
+// ── System.Number (interne à notre mscorlib, #1956) ──
+
+fn number_dispatch(method: &str, args: &[Value]) -> Option<Value> {
+    let text = |v: &Value| match v {
+        Value::Ref(p) if !p.is_null() => read_managed_string(*p),
+        _ => String::new(),
+    };
+    match (method, args) {
+        ("FormatInteger", [v, unsigned, size, fmt]) => {
+            Some(alloc_managed_string(&super::nombres::format_integer(
+                v.as_i64(),
+                unsigned.as_i32() != 0,
+                size.as_i32() as usize,
+                &text(fmt),
+            )))
+        }
+        ("FormatDouble", [v, single, fmt]) => Some(alloc_managed_string(
+            &super::nombres::format_double(v.as_f64(), single.as_i32() != 0, &text(fmt)),
+        )),
+        ("TryParseDouble", [s, out]) => {
+            let parsed = super::nombres::parse_double(&text(s));
+            let p = out.as_ref();
+            if !p.is_null() {
+                unsafe { (p as *mut f64).write_unaligned(parsed.unwrap_or(0.0)) };
+            }
+            Some(Value::I32(parsed.is_some() as i32))
+        }
+        _ => missing("Number", method),
+    }
 }
 
 pub fn read_managed_string(ptr: *mut u8) -> String {
@@ -135,6 +358,39 @@ pub fn value_to_string(v: &Value) -> String {
             None => String::new(),
         },
     }
+}
+
+/// Contenu d'une valeur encadrée (type valeur) ou d'une chaîne : ce que
+/// comparent ValueType.Equals et String.Equals (#1896, clés de
+/// Dictionary<int, …>).
+fn boxed_bytes(p: *mut u8) -> Option<(types::TypeId, Vec<u8>)> {
+    let id = gc::type_of(p)?;
+    if id == TYPE_STRING {
+        let s = read_managed_string(p);
+        return Some((id, s.encode_utf16().flat_map(u16::to_le_bytes).collect()));
+    }
+    let size = types::with_types(|reg| {
+        let t = reg.get(id)?;
+        t.is_value.then_some(t.instance_size)
+    })?;
+    let size = if is_boxed_primitive(id) { 8 } else { size };
+    Some((id, unsafe { std::slice::from_raw_parts(p, size) }.to_vec()))
+}
+
+pub(super) fn boxed_equal(a: *mut u8, b: *mut u8) -> bool {
+    match (boxed_bytes(a), boxed_bytes(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn boxed_hash(p: *mut u8) -> Option<i32> {
+    let (_, bytes) = boxed_bytes(p)?;
+    let mut h: u32 = 0x811C_9DC5;
+    for b in bytes {
+        h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
+    }
+    Some(h as i32)
 }
 
 fn is_boxed_primitive(id: types::TypeId) -> bool {
@@ -384,38 +640,57 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         },
         "op_Equality" => {
             if args.len() >= 2 {
-                let a = value_to_string(&args[args.len() - 2]);
-                let b = value_to_string(&args[args.len() - 1]);
-                Some(Value::I32(if a == b { 1 } else { 0 }))
+                let (x, y) = (&args[args.len() - 2], &args[args.len() - 1]);
+                // null n'est égal qu'à null, pas à "" (String.op_Equality).
+                let eq = match (is_null(x), is_null(y)) {
+                    (true, true) => true,
+                    (false, false) => value_to_string(x) == value_to_string(y),
+                    _ => false,
+                };
+                Some(Value::I32(eq as i32))
             } else {
                 Some(Value::I32(0))
             }
         }
-        "op_Inequality" => {
-            if args.len() >= 2 {
-                let a = value_to_string(&args[args.len() - 2]);
-                let b = value_to_string(&args[args.len() - 1]);
-                Some(Value::I32(if a != b { 1 } else { 0 }))
-            } else {
-                Some(Value::I32(1))
+        // String.Equals(object) : vrai pour une chaîne de même contenu.
+        "Equals" => match args {
+            [Value::Ref(a), Value::Ref(b)] if gc::type_of(*b) == Some(TYPE_STRING) => Some(
+                Value::I32((read_managed_string(*a) == read_managed_string(*b)) as i32),
+            ),
+            [_, _] => Some(Value::I32(0)),
+            _ => None,
+        },
+        // Empreinte du contenu (FNV-1a sur l'UTF-16) : deux chaînes égales
+        // ont la même, quel que soit l'objet.
+        "GetHashCode" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let mut h: u32 = 0x811C_9DC5;
+                for u in read_managed_string(*p).encode_utf16() {
+                    h = (h ^ u32::from(u)).wrapping_mul(0x0100_0193);
+                }
+                Some(Value::I32(h as i32))
             }
-        }
+            _ => None,
+        },
+        "op_Inequality" => match string_dispatch("op_Equality", args) {
+            Some(Value::I32(eq)) => Some(Value::I32((eq == 0) as i32)),
+            other => other,
+        },
+        // Indices en unités UTF-16, comme .NET.
         "Substring" => {
-            let this_str = match args.first() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
+            let units = match args.first() {
+                Some(Value::Ref(p)) if !p.is_null() => managed_utf16(*p),
                 _ => return Some(Value::Null),
             };
-            let start = match args.get(1) {
-                Some(Value::I32(s)) => *s as usize,
-                _ => 0,
+            let start = args.get(1).map_or(0, |v| v.as_i64());
+            let len = match args.get(2) {
+                Some(v) => v.as_i64(),
+                None => units.len() as i64 - start,
             };
-            let sub = if let Some(Value::I32(len)) = args.get(2) {
-                let end = (start + *len as usize).min(this_str.len());
-                &this_str[start..end]
-            } else {
-                &this_str[start.min(this_str.len())..]
-            };
-            Some(alloc_managed_string(sub))
+            if start < 0 || len < 0 || start + len > units.len() as i64 {
+                return None;
+            }
+            Some(alloc_utf16(&units[start as usize..(start + len) as usize]))
         }
         "ToUpper" => {
             let s = match args.first() {
@@ -492,19 +767,15 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             let text = format_composite(&value_to_string(&args[0]), &args[1..]);
             Some(alloc_managed_string(&text))
         }
-        "get_Chars" => {
-            if args.len() >= 2 {
-                let s = value_to_string(&args[0]);
-                let idx = match &args[1] {
-                    Value::I32(i) => *i as usize,
-                    _ => 0,
-                };
-                let ch = s.chars().nth(idx).unwrap_or('\0') as i32;
-                Some(Value::I32(ch))
-            } else {
-                Some(Value::I32(0))
+        "get_Chars" => match args {
+            [Value::Ref(p), i] if !p.is_null() => {
+                let units = managed_utf16(*p);
+                let i = i.as_i64();
+                (i >= 0 && (i as usize) < units.len())
+                    .then(|| Value::I32(i32::from(units[i as usize])))
             }
-        }
+            _ => None,
+        },
         "ToString" => match args.first() {
             Some(v) => Some(alloc_managed_string(&value_to_string(v))),
             None => Some(alloc_managed_string("")),
@@ -524,7 +795,7 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 let eq = match (&args[0], &args[1]) {
                     (Value::I32(a), Value::I32(b)) => a == b,
                     (Value::I64(a), Value::I64(b)) => a == b,
-                    (Value::Ref(a), Value::Ref(b)) => std::ptr::eq(*a, *b),
+                    (Value::Ref(a), Value::Ref(b)) => std::ptr::eq(*a, *b) || boxed_equal(*a, *b),
                     (Value::Null, Value::Null) => true,
                     _ => false,
                 };
@@ -534,7 +805,7 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             }
         }
         "GetHashCode" => match args.first() {
-            Some(Value::Ref(p)) => Some(Value::I32(*p as i32)),
+            Some(Value::Ref(p)) => Some(Value::I32(boxed_hash(*p).unwrap_or(*p as i32))),
             Some(Value::I32(v)) => Some(Value::I32(*v)),
             Some(Value::I64(v)) => Some(Value::I32(*v as i32)),
             _ => Some(Value::I32(0)),

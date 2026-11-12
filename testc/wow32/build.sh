@@ -35,6 +35,8 @@ GetCurrentProcessId@0
 GetCurrentProcess@0
 GetEnvironmentVariableA@12
 GetPhysicallyInstalledSystemMemory@4
+LoadLibraryA@4
+GetProcAddress@8
 DEF
 llvm-dlltool -m i386 -k -d "$tmp/kernel32.def" -l "$tmp/kernel32.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/hello32.c" -o "$tmp/hello32.obj"

@@ -404,7 +404,8 @@ pub fn load_data(path: &Path, tag: usize) -> Result<usize, String> {
         let hs = (pe.size_of_headers as usize).min(file.len()).min(size);
         dst[..hs].copy_from_slice(&file[..hs]);
         for s in &pe.sections {
-            if s.raw_size == 0 || s.raw_ptr == 0 {
+            if s.raw_size == 0 || s.raw_ptr == 0 || s.raw_ptr as usize >= file.len() {
+                // Au-delà de la fin du fichier (.exe tronqué, #1916) : rien à lire.
                 continue;
             }
             let start = s.raw_ptr as usize;
@@ -803,6 +804,17 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
                 continue;
             }
             let start = s.raw_ptr as usize;
+            // Données de section au-delà de la fin du fichier : .exe tronqué.
+            // Windows refuse l'image (ERROR_BAD_EXE_FORMAT) ; ici aussi, au
+            // lieu de paniquer sur la tranche (#1916).
+            if start >= file.len() {
+                return Err(format!(
+                    "{} : fichier tronqué ({} octets), la section {} commence à {start} (image invalide)",
+                    path.display(),
+                    file.len(),
+                    s.name
+                ));
+            }
             let mut n = (s.raw_size as usize).min(file.len().saturating_sub(start));
             if s.virtual_size != 0 {
                 n = n.min(s.virtual_size as usize);
@@ -834,6 +846,9 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         }
     }
 
+    // Image en cours d'exécution : plus d'écriture ni de troncature tant que
+    // ce processus vit, comme sous Windows (#1917).
+    crate::image_lock::hold(path);
     let name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -1271,6 +1286,16 @@ fn delay_rva(m: &Module, attrs: u32, value: u32) -> Result<usize, String> {
     }
 }
 
+/// Liste de fonctions bornée : les 60 premières, puis leur nombre.
+fn shorten(names: &[String]) -> String {
+    const MAX: usize = 60;
+    let mut text = names[..names.len().min(MAX)].join(", ");
+    if names.len() > MAX {
+        text.push_str(&format!(" … (+{} autres)", names.len() - MAX));
+    }
+    text
+}
+
 /// Noms (ou « #ordinal ») des fonctions d'une table d'imports.
 fn import_names(m: &Module, lookup_rva: usize) -> Vec<String> {
     let b = m.bytes();
@@ -1340,13 +1365,19 @@ fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Resu
             // fonctions qu'il en attend, pour qu'un seul passage au banc
             // dise tout ce qu'il faut fournir (#1792).
             Err(e) if e.starts_with("DLL introuvable") => {
+                let me = m
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // Déjà détaillé par un module plus profond : on ne nomme que
+                // le chaînon, pour que le message reste court (#1816).
+                if e.contains(" ; importée par ") {
+                    return Err(format!("{e} ← {me}"));
+                }
                 return Err(format!(
-                    "{e} ; importée par {} : {}",
-                    m.path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                    import_names(m, lookup_rva).join(", ")
+                    "{e} ; importée par {me} : {}",
+                    shorten(&import_names(m, lookup_rva))
                 ));
             }
             Err(e) => return Err(e),
@@ -1785,5 +1816,19 @@ mod tests {
 fn libc_munmap(base: usize, size: usize) {
     unsafe {
         libc::munmap(base as *mut libc::c_void, size);
+    }
+}
+
+#[cfg(test)]
+mod tests_dll_introuvable {
+    /// #1816 : 60 noms au plus, puis leur nombre.
+    #[test]
+    fn liste_de_fonctions_bornee() {
+        let names: Vec<String> = (0..75).map(|i| format!("f{i}")).collect();
+        let s = super::shorten(&names);
+        assert!(s.starts_with("f0, f1"));
+        assert!(s.contains("f59") && !s.contains("f60,"));
+        assert!(s.ends_with("… (+15 autres)"));
+        assert_eq!(super::shorten(&names[..2]), "f0, f1");
     }
 }

@@ -469,6 +469,98 @@ impl Path {
     /// Contour d'épaisseur `width` (en unités utilisateur), à jointures et
     /// extrémités rondes, sous forme de polygones orientés pour une union
     /// par règle non nulle.
+    /// Découpe le tracé en tirets (#1867) : `pattern` alterne longueurs
+    /// tracées et vides (unités de l'espace du tracé), `offset` décale le
+    /// motif le long de chaque figure. Un tiret de longueur nulle devient un
+    /// point, que le trait arrondit.
+    pub fn dashed(&self, pattern: &[f32], offset: f32) -> Path {
+        let total: f32 = pattern.iter().map(|d| d.max(0.0)).sum();
+        if pattern.is_empty() || total <= 1e-6 || !total.is_finite() {
+            return self.clone();
+        }
+        let mut out = Path::default();
+        for (pts, closed) in &self.figures {
+            if pts.len() < 2 {
+                out.figures.push((pts.clone(), false));
+                continue;
+            }
+            // Position de départ dans le motif.
+            let mut idx = 0usize;
+            let mut left = pattern[0].max(0.0);
+            let mut skip = offset.rem_euclid(total);
+            while skip > 0.0 {
+                if skip >= left {
+                    skip -= left;
+                    idx = (idx + 1) % pattern.len();
+                    left = pattern[idx].max(0.0);
+                } else {
+                    left -= skip;
+                    skip = 0.0;
+                }
+            }
+            let on = |i: usize| i.is_multiple_of(2);
+            let mut zeros = 0usize;
+            while left <= 1e-6 && zeros < pattern.len() {
+                zeros += 1;
+                if on(idx) {
+                    out.figures.push((vec![pts[0]], false));
+                }
+                idx = (idx + 1) % pattern.len();
+                left = pattern[idx].max(0.0);
+            }
+            let mut cur: Vec<Pt> = if on(idx) { vec![pts[0]] } else { Vec::new() };
+            let n = if *closed { pts.len() } else { pts.len() - 1 };
+            let mut guard = 0usize;
+            for i in 0..n {
+                let (mut a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                let mut len = dist(a, b);
+                while len > 1e-6 && guard < 1_000_000 {
+                    guard += 1;
+                    if left >= len {
+                        left -= len;
+                        if on(idx) {
+                            cur.push(b);
+                        }
+                        break;
+                    }
+                    let t = left / len;
+                    let p = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                    if on(idx) {
+                        cur.push(p);
+                        out.figures.push((std::mem::take(&mut cur), false));
+                    } else {
+                        cur = vec![p];
+                    }
+                    len -= left;
+                    a = p;
+                    idx = (idx + 1) % pattern.len();
+                    left = pattern[idx].max(0.0);
+                    // Tiret nul : un point.
+                    while left <= 1e-6 && guard < 1_000_000 {
+                        guard += 1;
+                        if on(idx) {
+                            out.figures.push((vec![a], false));
+                            cur.clear();
+                        } else {
+                            cur = vec![a];
+                        }
+                        idx = (idx + 1) % pattern.len();
+                        left = pattern[idx].max(0.0);
+                    }
+                    if !on(idx) {
+                        cur.clear();
+                    } else if cur.is_empty() {
+                        cur.push(a);
+                    }
+                }
+            }
+            if on(idx) && cur.len() >= 2 {
+                out.figures.push((cur, false));
+            }
+        }
+        out
+    }
+
     pub fn stroke_polys(&self, m: &Matrix, width: f32) -> Vec<Vec<Pt>> {
         let hw = (width * m.scale() / 2.0).max(0.35);
         let mut out = Vec::new();
@@ -533,6 +625,35 @@ fn oriented(mut p: Vec<Pt>) -> Vec<Pt> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #1867 : tirets d'un trait (contour de sélection de Paint.NET).
+    #[test]
+    fn trait_en_tirets() {
+        let mut p = Path::default();
+        p.begin((0.0, 0.0));
+        p.line((10.0, 0.0));
+        let d = p.dashed(&[2.0, 2.0], 0.0);
+        let spans: Vec<(f32, f32)> = d
+            .figures
+            .iter()
+            .map(|(f, _)| (f[0].0, f.last().unwrap().0))
+            .collect();
+        assert_eq!(spans, vec![(0.0, 2.0), (4.0, 6.0), (8.0, 10.0)]);
+        // Décalage d'un demi-tiret : le motif commence au milieu d'un tiret.
+        let d = p.dashed(&[2.0, 2.0], 1.0);
+        assert_eq!((d.figures[0].0[0].0, d.figures[0].0[1].0), (0.0, 1.0));
+        assert_eq!(d.figures[1].0[0].0, 3.0);
+        // Rectangle fermé : le motif suit les côtés, coins compris.
+        let r = Path::rect(0.0, 0.0, 4.0, 4.0).dashed(&[3.0, 1.0], 0.0);
+        assert_eq!(r.figures.len(), 4);
+        assert_eq!(r.figures[0].0, vec![(0.0, 0.0), (3.0, 0.0)]);
+        assert_eq!(r.figures[1].0, vec![(4.0, 0.0), (4.0, 3.0)]);
+        // Points (tiret nul) : une figure d'un point chacun.
+        let d = p.dashed(&[0.0, 5.0], 0.0);
+        assert_eq!(d.figures.len(), 2);
+        assert!(d.figures.iter().all(|(f, _)| f.len() == 1));
+    }
+
     use super::*;
 
     fn canvas(px: &mut [u8], w: u32, h: u32) -> Canvas<'_> {

@@ -15,6 +15,18 @@ use std::path::{Path, PathBuf};
 /// Nom (en minuscules) de l'assembly de base.
 pub const CORLIB: &str = "mscorlib";
 
+/// Assembly du .NET Framework (ou de sa façade netstandard) dont les types
+/// sont servis par notre mscorlib tant qu'elle n'est pas fournie à part.
+pub fn is_framework_assembly(lower_name: &str) -> bool {
+    lower_name == CORLIB
+        || lower_name == "system"
+        || lower_name == "netstandard"
+        || lower_name.starts_with("system.")
+        || lower_name == "microsoft.csharp"
+        || lower_name == "microsoft.visualbasic"
+        || lower_name == "windowsbase"
+}
+
 /// Assemblies fournies par la BCL Winlux plutôt que par le dossier de l'appli.
 const BCL_ASSEMBLIES: [&str; 1] = [CORLIB];
 
@@ -54,6 +66,8 @@ pub struct AsmInfo {
     pub method_owner: Vec<u32>,
     /// Field → TypeDef qui le déclare.
     pub field_owner: Vec<u32>,
+    /// Fichier d'où vient l'assembly (`Assembly.Location`, #1869).
+    pub path: Option<PathBuf>,
 }
 
 impl AsmInfo {
@@ -85,14 +99,20 @@ impl AsmInfo {
             type_ids: vec![None; types as usize + 1],
             method_owner,
             field_owner,
+            path: None,
         }
     }
 }
 
 /// Charge `main` puis, de proche en proche, les assemblies privées qu'elle
-/// référence. L'indice 0 est toujours le programme.
-pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmInfo>) {
-    let info = AsmInfo::new(&main, "programme");
+/// référence. L'indice 0 est toujours le programme, lu dans `main_path`.
+pub fn load(
+    main: Assembly,
+    main_path: Option<&Path>,
+    app_dir: Option<&Path>,
+) -> (Vec<Assembly>, Vec<AsmInfo>) {
+    let mut info = AsmInfo::new(&main, "programme");
+    info.path = main_path.map(Path::to_path_buf);
     let mut assemblies = vec![main];
     let mut infos = vec![info];
     let mut next = 0;
@@ -129,6 +149,7 @@ pub fn load(main: Assembly, app_dir: Option<&Path>) -> (Vec<Assembly>, Vec<AsmIn
                     );
                     let mut info = AsmInfo::new(&a, &name);
                     info.name = key;
+                    info.path = Some(path.clone());
                     assemblies.push(a);
                     infos.push(info);
                 }

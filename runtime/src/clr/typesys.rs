@@ -6,6 +6,7 @@
 //! ce qui dépend de `T` (taille, boxing, champs statiques) est résolu à
 //! l'exécution grâce au contexte générique (`Gen`) de la méthode en cours.
 
+use super::domain;
 use super::il::{Gen, Interpreter};
 use super::metadata::{self, Assembly, ElementType};
 use super::tables::{CodedIndex, TableId};
@@ -373,6 +374,26 @@ impl Interpreter {
         Kind::Struct(id)
     }
 
+    /// Instanciation `System.Nullable<T>` : (décalage de `hasValue`,
+    /// décalage de `value`, type `T`). Les deux champs sont, dans cet ordre,
+    /// ceux de bcl/mscorlib/Valeurs.cs (#1952).
+    pub fn nullable_parts(&self, id: TypeId) -> Option<(usize, usize, TypeId)> {
+        let t = types::with_types(|reg| {
+            reg.get(id).and_then(|t| {
+                (t.is_value
+                    && t.namespace == "System"
+                    && t.name == "Nullable`1"
+                    && t.type_args.len() == 1)
+                    .then(|| t.type_args[0])
+            })
+        })?;
+        self.ensure_layout(id);
+        types::with_types(|reg| {
+            let f = &reg.get(id)?.fields;
+            (f.len() >= 2).then(|| (f[0].offset, f[1].offset, t))
+        })
+    }
+
     /// Façon de ranger une valeur d'un élément de signature.
     pub fn kind_of_sig(&self, asm: usize, et: &ElementType, gen: &Gen) -> Kind {
         use ElementType as E;
@@ -441,7 +462,19 @@ impl Interpreter {
                 let wanted = a
                     .get_string(a.get_assembly_ref(srow).name)
                     .to_ascii_lowercase();
-                let asm = self.domain.iter().position(|i| i.name == wanted)?;
+                // Une assembly du .NET Framework non chargée (System,
+                // System.Core…) : ses types sont dans notre mscorlib, comme
+                // si elle les y redirigeait (ECMA-335 §II.22.14, #1947 :
+                // Stopwatch est dans System.dll).
+                let asm = self
+                    .domain
+                    .iter()
+                    .position(|i| i.name == wanted)
+                    .or_else(|| {
+                        domain::is_framework_assembly(&wanted)
+                            .then(|| self.domain.iter().position(|i| i.name == domain::CORLIB))
+                            .flatten()
+                    })?;
                 let target = self.assembly_at(asm);
                 let t = (1..=target.row_count(TableId::TypeDef)).find(|&t| {
                     let td = target.get_type_def(t);
@@ -469,4 +502,111 @@ impl Interpreter {
 
 fn is_nested(a: &Assembly, type_row: u32) -> bool {
     (1..=a.row_count(TableId::NestedClass)).any(|n| a.get_nested_class(n).nested_class == type_row)
+}
+
+impl Interpreter {
+    /// Définition (assembly, ligne TypeDef) d'un type, y compris d'un type
+    /// intégré servi par notre mscorlib.
+    fn type_def_of(&self, id: TypeId) -> Option<(usize, u32)> {
+        if let Some(def) = types::with_types(|reg| reg.get(id).and_then(|t| t.def)) {
+            return Some(def);
+        }
+        self.domain.iter().enumerate().find_map(|(asm, d)| {
+            d.type_ids
+                .iter()
+                .position(|t| *t == Some(id))
+                .map(|row| (asm, row as u32))
+        })
+    }
+
+    /// Le type `actual` implémente-t-il l'interface `target` (ECMA-335
+    /// §II.12, table InterfaceImpl §II.22.23), directement, par un parent ou
+    /// par une interface héritée (#1975) ? Les arguments de type sont
+    /// comparés quand ils sont connus, avec la covariance des types
+    /// référence (`IEnumerable<string>` est un `IEnumerable<object>`).
+    /// `None` : le type n'a pas de définition connue.
+    pub(super) fn implements(&self, actual: TypeId, target: TypeId) -> Option<bool> {
+        if let Some(r) = types::with_types(|reg| reg.implements.get(&(actual, target)).copied()) {
+            return Some(r);
+        }
+        let info = |id: TypeId| {
+            types::with_types(|reg| {
+                reg.get(id).map(|t| {
+                    (
+                        (t.namespace.clone(), t.name.clone()),
+                        t.type_args.clone(),
+                        t.generic_params,
+                        t.parent,
+                    )
+                })
+            })
+        };
+        let (wanted, wanted_args, _, _) = info(target)?;
+        if actual == types::TYPE_ARRAY {
+            let r = (wanted.0 == "System.Collections.Generic" || wanted.0 == "System.Collections")
+                && super::tableaux::ARRAY_INTERFACES.contains(&wanted.1.as_str())
+                || (wanted.0 == "System" && wanted.1 == "ICloneable");
+            return Some(r);
+        }
+        let arg_fits = |found: TypeId, want: TypeId| {
+            found == want
+                || types::with_types(|reg| {
+                    let value = |id| reg.get(id).is_some_and(|t| t.is_value);
+                    !value(want) && !value(found) && reg.is_subclass_of(found, want)
+                })
+        };
+        // (type, arguments de type connus ?)
+        let mut todo = vec![(actual, true)];
+        let mut seen = Vec::new();
+        let mut any_def = false;
+        let mut found = false;
+        while let Some((id, known)) = todo.pop() {
+            if id == 0 || seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some((name, args, generic_params, parent)) = info(id) else {
+                continue;
+            };
+            if id != actual && name == wanted {
+                let fits = !known
+                    || args.len() != wanted_args.len()
+                    || args.iter().zip(&wanted_args).all(|(&f, &w)| arg_fits(f, w));
+                if fits {
+                    found = true;
+                    break;
+                }
+                continue;
+            }
+            // Le parent est rangé sous sa définition ouverte.
+            todo.push((parent, false));
+            let Some((asm, row)) = self.type_def_of(id) else {
+                continue;
+            };
+            any_def = true;
+            let a = self.assembly_at(asm);
+            let impls: Vec<u32> = (1..=a.row_count(TableId::InterfaceImpl))
+                .map(|r| a.get_interface_impl(r))
+                .filter(|i| i.class == row)
+                .map(|i| i.interface)
+                .collect();
+            let instantiated = known && args.len() as u32 == generic_params;
+            for coded in impls {
+                if instantiated {
+                    let gen = Gen {
+                        t: args.clone(),
+                        m: Vec::new(),
+                    };
+                    todo.push((self.resolve_coded(asm, coded, &gen), true));
+                } else {
+                    todo.push((self.resolve_coded_open(asm, coded), false));
+                }
+            }
+        }
+        if !any_def {
+            return None;
+        }
+        types::with_types(|reg| reg.implements.insert((actual, target), found));
+        Some(found)
+    }
 }

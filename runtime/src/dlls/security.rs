@@ -422,6 +422,61 @@ pub unsafe extern "win64" fn LookupPrivilegeValueA(
 // ---------- Fonctions SID ----------
 
 /// Mémoire libérable par `FreeSid` / `LocalFree` (tas Winlux).
+/// Disposition d'EXPLICIT_ACCESS et de son TRUSTEE selon la taille de
+/// pointeur du programme (#1915). x64 : TRUSTEE à 16 (forme 28, nom 40),
+/// 48 octets ; x86 : TRUSTEE à 12 (forme 20, nom 28), 32 octets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AccessLayout {
+    pub size: usize,
+    pub form: usize,
+    pub kind: usize,
+    pub name: usize,
+}
+
+pub(crate) fn access_layout(ptr: usize) -> AccessLayout {
+    let (t, l) = trustee_layout(ptr);
+    AccessLayout {
+        size: t + l.size,
+        form: t + l.form,
+        kind: t + l.kind,
+        name: t + l.name,
+    }
+}
+
+/// (décalage du TRUSTEE dans EXPLICIT_ACCESS, disposition du TRUSTEE seul).
+pub(crate) fn trustee_layout(ptr: usize) -> (usize, AccessLayout) {
+    if ptr == 4 {
+        (
+            12,
+            AccessLayout {
+                size: 20,
+                form: 8,
+                kind: 12,
+                name: 16,
+            },
+        )
+    } else {
+        (
+            16,
+            AccessLayout {
+                size: 32,
+                form: 12,
+                kind: 16,
+                name: 24,
+            },
+        )
+    }
+}
+
+/// Lit une case pointeur de `ptr` octets.
+unsafe fn read_ptr_of(at: *const u8, ptr: usize) -> usize {
+    if ptr == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned(at as *const usize)
+    }
+}
+
 unsafe fn heap_copy(b: &[u8]) -> *mut u8 {
     let p = crate::dlls::kernel32::heap_alloc(0, 0, b.len()) as *mut u8;
     if !p.is_null() {
@@ -778,7 +833,7 @@ pub unsafe extern "win64" fn GetFileSecurityA(
 unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
     let control = std::ptr::read_unaligned(sd.add(2) as *const u16);
     if control & SE_SELF_RELATIVE == 0 {
-        return std::ptr::read_unaligned(sd.add(field * 2) as *const *mut u8);
+        return read_abs_slot(sd, field);
     }
     let off = std::ptr::read_unaligned(sd.add(field) as *const u32) as usize;
     if off == 0 {
@@ -786,6 +841,46 @@ unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
     } else {
         sd.add(off) as *mut u8
     }
+}
+
+/// Parties d'un descripteur (absolu ou auto-relatif) : propriétaire,
+/// groupe, SACL et DACL, copiées.
+pub(crate) unsafe fn sd_parts(sd: *const u8) -> [Option<Vec<u8>>; 4] {
+    let part = |field: usize| -> Option<Vec<u8>> {
+        let p = sd_part(sd, field);
+        if p.is_null() {
+            return None;
+        }
+        if field == 12 || field == 16 {
+            let len = std::ptr::read_unaligned(p.add(2) as *const u16) as usize;
+            (len >= 8).then(|| std::slice::from_raw_parts(p, len).to_vec())
+        } else {
+            sid_at(p).map(<[u8]>::to_vec)
+        }
+    };
+    [part(4), part(8), part(12), part(16)]
+}
+
+/// Descripteur auto-relatif d'après ses parties (ordre de `sd_parts`) et
+/// les bits de contrôle hors SE_SELF_RELATIVE et *_PRESENT.
+pub(crate) fn self_relative_sd(parts: &[Option<Vec<u8>>; 4], control: u16) -> Vec<u8> {
+    let mut sd = vec![0u8; 20];
+    sd[0] = 1;
+    let mut c = (control & !(SE_SELF_RELATIVE | SE_DACL_PRESENT | 0x10)) | SE_SELF_RELATIVE;
+    for (i, field) in [4usize, 8, 12, 16].into_iter().enumerate() {
+        if let Some(bytes) = &parts[i] {
+            let off = sd.len() as u32;
+            sd[field..field + 4].copy_from_slice(&off.to_le_bytes());
+            sd.extend_from_slice(bytes);
+            match field {
+                12 => c |= 0x10, // SE_SACL_PRESENT
+                16 => c |= SE_DACL_PRESENT,
+                _ => {}
+            }
+        }
+    }
+    sd[2..4].copy_from_slice(&c.to_le_bytes());
+    sd
 }
 
 unsafe fn named_security_info(
@@ -994,8 +1089,51 @@ const SE_SELF_RELATIVE: u16 = 0x8000;
 const SE_DACL_PRESENT: u16 = 0x4;
 const SE_DACL_DEFAULTED: u16 = 0x8;
 const SE_OWNER_DEFAULTED: u16 = 0x1;
-/// Taille d'un SECURITY_DESCRIPTOR absolu en x64.
-const ABSOLUTE_SD_SIZE: usize = 40;
+/// Taille d'un SECURITY_DESCRIPTOR absolu : 40 octets en x64, 20 pour un
+/// programme x86 (pointeurs sur 4 octets). Écrire 40 octets dans la
+/// structure x86, souvent sur la pile, écrasait les variables voisines :
+/// SteamService.exe abandonnait l'installation du service (#1881).
+fn absolute_sd_size(ptr: usize) -> usize {
+    if ptr == 4 {
+        20
+    } else {
+        40
+    }
+}
+
+/// Case d'un descripteur absolu pour la partie `field` (décalage
+/// auto-relatif : 4 propriétaire, 8 groupe, 12 SACL, 16 DACL) : x64 aux
+/// décalages 8, 16, 24, 32 ; x86 aux mêmes décalages que l'auto-relatif.
+fn abs_slot(field: usize, ptr: usize) -> usize {
+    if ptr == 4 {
+        field
+    } else {
+        field * 2
+    }
+}
+
+pub(crate) unsafe fn read_abs_slot(sd: *const u8, field: usize) -> *mut u8 {
+    let ptr = crate::wow32::pointer_size();
+    let at = sd.add(abs_slot(field, ptr));
+    if ptr == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize as *mut u8
+    } else {
+        std::ptr::read_unaligned(at as *const *mut u8)
+    }
+}
+
+pub(crate) unsafe fn write_abs_slot(sd: *mut u8, field: usize, value: *mut u8) {
+    write_abs_slot_for(sd, field, value, crate::wow32::pointer_size());
+}
+
+unsafe fn write_abs_slot_for(sd: *mut u8, field: usize, value: *mut u8, ptr: usize) {
+    let at = sd.add(abs_slot(field, ptr));
+    if ptr == 4 {
+        std::ptr::write_unaligned(at as *mut u32, value as usize as u32);
+    } else {
+        std::ptr::write_unaligned(at as *mut *mut u8, value);
+    }
+}
 
 /// InitializeSecurityDescriptor : descripteur absolu vide (révision 1).
 pub unsafe extern "win64" fn InitializeSecurityDescriptor(sd: *mut u8, revision: u32) -> i32 {
@@ -1003,7 +1141,7 @@ pub unsafe extern "win64" fn InitializeSecurityDescriptor(sd: *mut u8, revision:
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    std::ptr::write_bytes(sd, 0, ABSOLUTE_SD_SIZE);
+    std::ptr::write_bytes(sd, 0, absolute_sd_size(crate::wow32::pointer_size()));
     *sd = 1;
     1
 }
@@ -1038,8 +1176,9 @@ pub unsafe extern "win64" fn SetSecurityDescriptorDacl(
         }
     }
     std::ptr::write_unaligned(control, c);
-    std::ptr::write_unaligned(
-        sd.add(32) as *mut *mut u8,
+    write_abs_slot(
+        sd,
+        16,
         if present != 0 {
             dacl
         } else {
@@ -1062,7 +1201,7 @@ pub unsafe extern "win64" fn SetSecurityDescriptorOwner(
         c |= SE_OWNER_DEFAULTED;
     }
     std::ptr::write_unaligned(control, c);
-    std::ptr::write_unaligned(sd.add(8) as *mut *mut u8, owner);
+    write_abs_slot(sd, 4, owner);
     1
 }
 
@@ -1074,7 +1213,7 @@ pub unsafe extern "win64" fn SetSecurityDescriptorGroup(
     if absolute_sd(sd).is_none() {
         return 0;
     }
-    std::ptr::write_unaligned(sd.add(16) as *mut *mut u8, group);
+    write_abs_slot(sd, 8, group);
     1
 }
 
@@ -1172,6 +1311,18 @@ unsafe fn set_entries_in_acl(
     out: *mut *mut u8,
     wide: bool,
 ) -> u32 {
+    set_entries_in_acl_for(count, entries, old, out, wide, crate::wow32::pointer_size())
+}
+
+/// SetEntriesInAcl pour un programme dont les pointeurs font `ptr` octets.
+unsafe fn set_entries_in_acl_for(
+    count: u32,
+    entries: *const u8,
+    old: *const u8,
+    out: *mut *mut u8,
+    wide: bool,
+    ptr: usize,
+) -> u32 {
     if out.is_null() || (count > 0 && entries.is_null()) {
         return ERROR_INVALID_PARAMETER;
     }
@@ -1193,13 +1344,14 @@ unsafe fn set_entries_in_acl(
             off += len.max(8);
         }
     }
+    let lay = access_layout(ptr);
     for i in 0..count as usize {
-        let e = entries.add(i * 48);
+        let e = entries.add(i * lay.size);
         let mask = std::ptr::read_unaligned(e as *const u32);
         let mode = std::ptr::read_unaligned(e.add(4) as *const u32);
         let inherit = std::ptr::read_unaligned(e.add(8) as *const u32) as u8;
-        let form = std::ptr::read_unaligned(e.add(28) as *const u32);
-        let name = std::ptr::read_unaligned(e.add(40) as *const *const u8);
+        let form = std::ptr::read_unaligned(e.add(lay.form) as *const u32);
+        let name = read_ptr_of(e.add(lay.name), ptr) as *const u8;
         let sid = match form {
             0 => sid_at(name).map(<[u8]>::to_vec),
             1 => {
@@ -1213,6 +1365,9 @@ unsafe fn set_entries_in_acl(
             _ => None,
         };
         let Some(sid) = sid else {
+            crate::trace!(
+                "SetEntriesInAcl : administré {i} (forme {form}) introuvable → ERROR_NONE_MAPPED"
+            );
             return 1332; // ERROR_NONE_MAPPED
         };
         match mode {
@@ -1257,6 +1412,17 @@ fn trustee_sid(name: &str) -> Option<Vec<u8>> {
     let account = name.rsplit('\\').next().unwrap_or(name);
     if account.eq_ignore_ascii_case("Everyone") || account.eq_ignore_ascii_case("Tout le monde") {
         return sid_bytes(EVERYONE);
+    }
+    // Comptes et groupes bien connus (noms anglais de l'API, #1915).
+    let known = match account.to_ascii_lowercase().as_str() {
+        "system" | "local system" => Some("S-1-5-18"),
+        "administrators" | "administrateurs" => Some("S-1-5-32-544"),
+        "users" | "utilisateurs" => Some("S-1-5-32-545"),
+        "authenticated users" => Some("S-1-5-11"),
+        _ => None,
+    };
+    if let Some(sid) = known {
+        return sid_bytes(sid);
     }
     let c = std::ffi::CString::new(account).ok()?;
     let pw = unsafe { libc::getpwnam(c.as_ptr()) };
@@ -1539,6 +1705,37 @@ pub unsafe extern "win64" fn CreateWellKnownSid(
     1
 }
 
+const SACL_SECURITY_INFORMATION: u32 = 0x8;
+const LABEL_SECURITY_INFORMATION: u32 = 0x10;
+
+/// Ajoute au descripteur auto-relatif `sd` une SACL portant l'étiquette
+/// d'intégrité du processus (SYSTEM_MANDATORY_LABEL_ACE, NO_WRITE_UP), comme
+/// TokenIntegrityLevel. Un jeton ou un processus Windows en a toujours une ;
+/// Acrobat lit AceCount de cette SACL sans tester le pointeur (#1828).
+fn with_integrity_label(mut sd: Vec<u8>) -> Vec<u8> {
+    let level = if elevated() {
+        "S-1-16-12288"
+    } else {
+        "S-1-16-8192"
+    };
+    let sid = sid_bytes(level).unwrap_or_default();
+    let ace_size = 8 + sid.len();
+    let off = sd.len() as u32;
+    sd[12..16].copy_from_slice(&off.to_le_bytes());
+    sd.extend_from_slice(&[2, 0]);
+    sd.extend_from_slice(&((8 + ace_size) as u16).to_le_bytes());
+    sd.extend_from_slice(&1u16.to_le_bytes());
+    sd.extend_from_slice(&[0, 0]);
+    // SYSTEM_MANDATORY_LABEL_ACE_TYPE 0x11, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP.
+    sd.extend_from_slice(&[0x11, 0]);
+    sd.extend_from_slice(&(ace_size as u16).to_le_bytes());
+    sd.extend_from_slice(&1u32.to_le_bytes());
+    sd.extend_from_slice(&sid);
+    let control = u16::from_le_bytes([sd[2], sd[3]]) | 0x10; // SE_SACL_PRESENT
+    sd[2..4].copy_from_slice(&control.to_le_bytes());
+    sd
+}
+
 /// GetKernelObjectSecurity : descripteur de l'objet (au nom du compte).
 pub unsafe extern "win64" fn GetKernelObjectSecurity(
     _handle: usize,
@@ -1548,6 +1745,9 @@ pub unsafe extern "win64" fn GetKernelObjectSecurity(
     needed: *mut u32,
 ) -> i32 {
     let d = match file_descriptor(std::path::Path::new("/proc/self"), info & 7) {
+        Ok(d) if info & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION) != 0 => {
+            with_integrity_label(d)
+        }
         Ok(d) => d,
         Err(e) => {
             crate::process::set_last_error(crate::dlls::kernel32::io_error_code(&e));
@@ -1952,7 +2152,7 @@ pub unsafe extern "win64" fn GetAuditedPermissionsFromAclW(
 }
 
 /// GetExplicitEntriesFromAclW : un tableau EXPLICIT_ACCESS_W (48 octets
-/// chacun) suivi des SID, en un seul bloc LocalAlloc.
+/// chacun, 32 pour un programme x86) suivi des SID, en un seul bloc LocalAlloc.
 pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     acl: *const u8,
     count: *mut u32,
@@ -1963,6 +2163,8 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     }
     *count = 0;
     *out = std::ptr::null_mut();
+    let ptr = crate::wow32::pointer_size();
+    let lay = access_layout(ptr);
     let entries: Vec<_> = acl_entries(acl)
         .into_iter()
         .filter(|e| e.1 & 0x10 == 0 && matches!(e.0, 0..=2)) // pas INHERITED_ACE
@@ -1970,7 +2172,7 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     if entries.is_empty() {
         return 0;
     }
-    let head = entries.len() * 48;
+    let head = entries.len() * lay.size;
     let total = head + entries.iter().map(|e| e.3.len()).sum::<usize>();
     let mut block = vec![0u8; total];
     let base = heap_copy(&block);
@@ -1979,7 +2181,7 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
     }
     let mut at = head;
     for (i, (kind, flags, mask, sid)) in entries.iter().enumerate() {
-        let e = i * 48;
+        let e = i * lay.size;
         let mode: u32 = match (kind, flags & 0xC0) {
             (0, _) => 1,    // GRANT_ACCESS
             (1, _) => 3,    // DENY_ACCESS
@@ -1990,7 +2192,8 @@ pub unsafe extern "win64" fn GetExplicitEntriesFromAclW(
         block[e + 4..e + 8].copy_from_slice(&mode.to_le_bytes());
         block[e + 8..e + 12].copy_from_slice(&u32::from(flags & 0x0F).to_le_bytes());
         // TRUSTEE_W : forme TRUSTEE_IS_SID (0), type inconnu (0).
-        block[e + 40..e + 48].copy_from_slice(&(base as usize + at).to_le_bytes());
+        let sid_at = (base as usize + at).to_le_bytes();
+        block[e + lay.name..e + lay.name + ptr].copy_from_slice(&sid_at[..ptr]);
         block[at..at + sid.len()].copy_from_slice(sid);
         at += sid.len();
     }

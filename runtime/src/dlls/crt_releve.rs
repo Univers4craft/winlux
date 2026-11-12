@@ -1642,7 +1642,7 @@ unsafe extern "win64" fn vcrt_init_cs_ex(cs: usize, spin: u32, flags: u32) -> i3
 // Entrées-sorties formatées
 // ---------------------------------------------------------------------
 
-unsafe extern "win64" fn stdio_common_vfscanf(
+pub(crate) unsafe extern "win64" fn stdio_common_vfscanf(
     options: u64,
     stream: *mut c_void,
     fmt: *const u8,
@@ -1662,7 +1662,7 @@ unsafe extern "win64" fn stdio_common_vfscanf(
     })
 }
 
-unsafe extern "win64" fn stdio_common_vfwscanf(
+pub(crate) unsafe extern "win64" fn stdio_common_vfwscanf(
     options: u64,
     stream: *mut c_void,
     fmt: *const u16,
@@ -1681,7 +1681,7 @@ unsafe extern "win64" fn stdio_common_vfwscanf(
 
 /// `__conio_common_vcprintf` : vers la console, c'est-à-dire la sortie
 /// standard du terminal.
-unsafe extern "win64" fn conio_common_vcprintf(
+pub(crate) unsafe extern "win64" fn conio_common_vcprintf(
     options: u64,
     fmt: *const u8,
     _locale: usize,
@@ -1729,7 +1729,7 @@ unsafe extern "win64" fn vscprintf(fmt: *const u8, va: *const u64) -> i32 {
 }
 
 /// `fgetws(tampon, n, flux)` : une ligne de texte large (fgetwc).
-unsafe extern "win64" fn fgetws(buf: *mut u16, n: i32, f: *mut c_void) -> *mut u16 {
+pub(crate) unsafe extern "win64" fn fgetws(buf: *mut u16, n: i32, f: *mut c_void) -> *mut u16 {
     if buf.is_null() || n <= 0 || f.is_null() {
         *errno() = EINVAL;
         return std::ptr::null_mut();
@@ -1836,6 +1836,98 @@ unsafe extern "win64" fn crt_lcmap_string_a(
     }
 }
 
+/// `__crtGetShowWindowMode()` (msvcr110/120) : `wShowWindow` de
+/// STARTUPINFO si STARTF_USESHOWWINDOW est posé, sinon SW_SHOWDEFAULT.
+/// Manquait à gldriverquery64.exe de Steam (#1950).
+extern "win64" fn crt_get_show_window_mode() -> u16 {
+    show_window_mode(&super::kernel32::startup_info())
+}
+
+fn show_window_mode(si: &super::kernel32::StartupInfo) -> u16 {
+    const STARTF_USESHOWWINDOW: u32 = 1;
+    const SW_SHOWDEFAULT: u16 = 10;
+    if si.flags & STARTF_USESHOWWINDOW != 0 {
+        si.show_window
+    } else {
+        SW_SHOWDEFAULT
+    }
+}
+
+/// Famille `__crt*` de msvcr110/120 (#1972) : enveloppes de fonctions de
+/// kernel32 du même nom, que la CRT appelle à la place de l'API pour
+/// rester utilisable sur les Windows plus anciens. Liste des noms :
+/// bibliothèque d'import libmsvcr120.a de mingw-w64. Chaque enveloppe
+/// passe ses arguments tels quels (au plus neuf, entiers ou pointeurs) à la
+/// fonction de kernel32.
+macro_rules! crt_forward {
+    ($($f:ident => $name:literal),* $(,)?) => {
+        $(
+            #[allow(clippy::too_many_arguments)]
+            unsafe extern "win64" fn $f(
+                a: usize, b: usize, c: usize, d: usize, e: usize,
+                f: usize, g: usize, h: usize, i: usize,
+            ) -> usize {
+                type Target = unsafe extern "win64" fn(
+                    usize, usize, usize, usize, usize, usize, usize, usize, usize,
+                ) -> usize;
+                match super::lookup("kernel32", $name) {
+                    Some(p) => std::mem::transmute::<usize, Target>(p)(a, b, c, d, e, f, g, h, i),
+                    None => 0,
+                }
+            }
+        )*
+        /// Noms de kernel32 que la famille `__crt*` enveloppe (test).
+        #[cfg(test)]
+        const CRT_FORWARDED: &[&str] = &[$($name),*];
+    };
+}
+
+crt_forward! {
+    crt_compare_string_a => "CompareStringA",
+    crt_compare_string_w => "CompareStringW",
+    crt_compare_string_ex => "CompareStringEx",
+    crt_create_event_ex_w => "CreateEventExW",
+    crt_create_semaphore_ex_w => "CreateSemaphoreExW",
+    crt_create_symbolic_link_w => "CreateSymbolicLinkW",
+    crt_enum_system_locales_ex => "EnumSystemLocalesEx",
+    crt_fls_alloc => "FlsAlloc",
+    crt_fls_free => "FlsFree",
+    crt_fls_get_value => "FlsGetValue",
+    crt_fls_set_value => "FlsSetValue",
+    crt_get_date_format_ex => "GetDateFormatEx",
+    crt_get_file_information_by_handle_ex => "GetFileInformationByHandleEx",
+    crt_get_locale_info_ex => "GetLocaleInfoEx",
+    crt_get_tick_count64 => "GetTickCount64",
+    crt_get_time_format_ex => "GetTimeFormatEx",
+    crt_get_user_default_locale_name => "GetUserDefaultLocaleName",
+    crt_initialize_critical_section_ex => "InitializeCriticalSectionEx",
+    crt_is_valid_locale_name => "IsValidLocaleName",
+    crt_lcmap_string_ex => "LCMapStringEx",
+    crt_set_file_information_by_handle => "SetFileInformationByHandle",
+    crt_set_thread_stack_guarantee => "SetThreadStackGuarantee",
+    crt_set_unhandled_exception_filter => "SetUnhandledExceptionFilter",
+    crt_sleep => "Sleep",
+    crt_unhandled_exception => "UnhandledExceptionFilter",
+    crt_capture_current_context => "RtlCaptureContext",
+}
+
+/// `__crtCapturePreviousContext(ctx)` : contexte de l'appelant. Sans
+/// déroulement d'un cadre, le contexte courant ; la CRT ne s'en sert que
+/// pour un rapport juste avant d'arrêter le programme.
+unsafe extern "win64" fn crt_capture_previous_context(ctx: usize) {
+    crt_capture_current_context(ctx, 0, 0, 0, 0, 0, 0, 0, 0);
+}
+
+/// `__crtIsPackagedApp()` : jamais une application empaquetée (#1832).
+extern "win64" fn crt_is_packaged_app() -> i32 {
+    0
+}
+
+/// `__crtTerminateProcess(code)` : arrêt immédiat du processus courant.
+extern "win64" fn crt_terminate_process(code: u32) -> ! {
+    super::kernel32::terminate_self(code)
+}
+
 /// `__crtGetStringTypeW(type, src, n, out, page, lcid)`.
 unsafe extern "win64" fn crt_get_string_type_w(
     kind: u32,
@@ -1925,12 +2017,66 @@ pub fn exports() -> crate::dlls::Exports {
         // msvcrt.
         "__crtLCMapStringW" => fn crt_lcmap_string_w, "__crtLCMapStringA" => fn crt_lcmap_string_a,
         "__crtGetStringTypeW" => fn crt_get_string_type_w,
+        "__crtGetShowWindowMode" => fn crt_get_show_window_mode,
+        // Le reste de la famille __crt* (#1972).
+        "__crtCompareStringA" => fn crt_compare_string_a, "__crtCompareStringW" => fn crt_compare_string_w,
+        "__crtCompareStringEx" => fn crt_compare_string_ex,
+        "__crtCreateEventExW" => fn crt_create_event_ex_w, "__crtCreateSemaphoreExW" => fn crt_create_semaphore_ex_w,
+        "__crtCreateSymbolicLinkW" => fn crt_create_symbolic_link_w,
+        "__crtEnumSystemLocalesEx" => fn crt_enum_system_locales_ex,
+        "__crtFlsAlloc" => fn crt_fls_alloc, "__crtFlsFree" => fn crt_fls_free,
+        "__crtFlsGetValue" => fn crt_fls_get_value, "__crtFlsSetValue" => fn crt_fls_set_value,
+        "__crtGetDateFormatEx" => fn crt_get_date_format_ex, "__crtGetTimeFormatEx" => fn crt_get_time_format_ex,
+        "__crtGetFileInformationByHandleEx" => fn crt_get_file_information_by_handle_ex,
+        "__crtSetFileInformationByHandle" => fn crt_set_file_information_by_handle,
+        "__crtGetLocaleInfoEx" => fn crt_get_locale_info_ex, "__crtGetTickCount64" => fn crt_get_tick_count64,
+        "__crtGetUserDefaultLocaleName" => fn crt_get_user_default_locale_name,
+        "__crtInitializeCriticalSectionEx" => fn crt_initialize_critical_section_ex,
+        "__crtIsValidLocaleName" => fn crt_is_valid_locale_name, "__crtLCMapStringEx" => fn crt_lcmap_string_ex,
+        "__crtSetThreadStackGuarantee" => fn crt_set_thread_stack_guarantee,
+        "__crtSetUnhandledExceptionFilter" => fn crt_set_unhandled_exception_filter,
+        "__crtSleep" => fn crt_sleep, "__crtUnhandledException" => fn crt_unhandled_exception,
+        "__crtCaptureCurrentContext" => fn crt_capture_current_context,
+        "__crtCapturePreviousContext" => fn crt_capture_previous_context,
+        "__crtIsPackagedApp" => fn crt_is_packaged_app, "__crtTerminateProcess" => fn crt_terminate_process,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1972 : chaque enveloppe __crt* trouve sa fonction dans kernel32.
+    #[test]
+    fn famille_crt_enveloppe_des_fonctions_existantes() {
+        for name in CRT_FORWARDED {
+            assert!(
+                super::super::lookup("kernel32", name).is_some(),
+                "kernel32!{name}"
+            );
+        }
+        unsafe {
+            // __crtGetTickCount64 rend bien le compteur, __crtSleep revient.
+            let t = crt_get_tick_count64(0, 0, 0, 0, 0, 0, 0, 0, 0);
+            crt_sleep(1, 0, 0, 0, 0, 0, 0, 0, 0);
+            assert!(crt_get_tick_count64(0, 0, 0, 0, 0, 0, 0, 0, 0) >= t);
+            // __crtFlsAlloc / Free (les valeurs vivent dans le TEB d'un fil
+            // du programme, absent d'un fil de test).
+            let slot = crt_fls_alloc(0, 0, 0, 0, 0, 0, 0, 0, 0);
+            assert_ne!(slot as u32, u32::MAX);
+            crt_fls_free(slot, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        assert_eq!(crt_is_packaged_app(), 0);
+    }
+
+    #[test]
+    fn mode_d_affichage_par_defaut() {
+        let mut si = super::super::kernel32::startup_info();
+        assert_eq!(show_window_mode(&si), 10);
+        si.flags = 1;
+        si.show_window = 0;
+        assert_eq!(show_window_mode(&si), 0);
+    }
 
     #[test]
     fn fonctions_s_de_pythonwin() {

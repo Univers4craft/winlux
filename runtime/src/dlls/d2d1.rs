@@ -1421,6 +1421,8 @@ struct SharedLock {
     straight: bool,
     ignore: bool,
     wide: Option<super::wic_pixels::Layout>,
+    /// GUID_WICPixelFormat8bppAlpha : un octet d'alpha par pixel (#1849).
+    alpha8: bool,
 }
 
 impl Bitmap {
@@ -1449,6 +1451,7 @@ impl Bitmap {
                 s.straight,
                 s.ignore,
                 s.wide,
+                s.alpha8,
             );
             *crate::dlls::lock(&self.px) = px;
         }
@@ -1465,7 +1468,20 @@ unsafe fn lock_pixels(
     straight: bool,
     ignore: bool,
     wide: Option<super::wic_pixels::Layout>,
+    alpha8: bool,
 ) -> Vec<u8> {
+    if alpha8 {
+        // Masque d'alpha : noir prémultiplié de cette opacité, comme un
+        // bitmap DXGI_FORMAT_A8_UNORM.
+        let mut px = vec![0u8; w * h * 4];
+        for y in 0..h {
+            let line = std::slice::from_raw_parts(ptr.add(y * stride), w);
+            for (x, &a) in line.iter().enumerate() {
+                px[(y * w + x) * 4 + 3] = a;
+            }
+        }
+        return px;
+    }
     let src_bpp = wide.map_or(4, |l| l.bpp as usize);
     let src_row = w * src_bpp;
     if let Some(l) = wide {
@@ -2191,13 +2207,15 @@ unsafe fn shared_bitmap(
             return hr;
         }
     }
-    use super::windowscodecs::{FMT_BGR32, FMT_BGRA32, FMT_PBGRA32};
+    use super::windowscodecs::{FMT_ALPHA8, FMT_BGR32, FMT_BGRA32, FMT_PBGRA32};
     let straight = fmt == FMT_BGRA32;
+    // Masque de sélection de Paint.NET (#1849).
+    let alpha8 = fmt == FMT_ALPHA8;
     // D2D1_ALPHA_MODE_IGNORE (3) : alpha ignoré, pixels opaques.
     let ignore = fmt == FMT_BGR32 || props.as_ref().is_some_and(|p| p[1] == 3);
     // Formats larges (#1520) : 16 bits, demi-flottants, flottants.
     let wide = super::wic_pixels::layout(&fmt);
-    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && wide.is_none() {
+    if fmt != FMT_PBGRA32 && !straight && fmt != FMT_BGR32 && !alpha8 && wide.is_none() {
         crate::log_warn!(
             "d2d1",
             "CreateSharedBitmap : format de verrou {:?} non pris en charge",
@@ -2208,7 +2226,11 @@ unsafe fn shared_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let src_bpp = wide.map_or(4, |l| l.bpp as usize);
+    let src_bpp = if alpha8 {
+        1
+    } else {
+        wide.map_or(4, |l| l.bpp as usize)
+    };
     let src_row = w as usize * src_bpp;
     if ptr.is_null()
         || (stride as usize) < src_row
@@ -2224,8 +2246,10 @@ unsafe fn shared_bitmap(
         straight,
         ignore,
         wide,
+        alpha8,
     );
     let mut b = Bitmap::new(w, h, px);
+    b.alpha_only = alpha8;
     // Le bitmap partage la mémoire du verrou (#1609) : il le tient.
     method::<unsafe extern "win64" fn(*mut c_void) -> u32>(data, 1)(data);
     b.shared = Some(SharedLock {
@@ -2235,6 +2259,7 @@ unsafe fn shared_bitmap(
         straight,
         ignore,
         wide,
+        alpha8,
     });
     put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
 }
@@ -2354,12 +2379,40 @@ unsafe fn fill_path(this: *mut TargetObj, path: &Path, rule: FillRule, brush: *m
     target(this).fill(&polys, rule, &*paint);
 }
 
-unsafe fn stroke_path(this: *mut TargetObj, path: &Path, brush: *mut c_void, width: f32) {
+unsafe fn stroke_path(
+    this: *mut TargetObj,
+    path: &Path,
+    brush: *mut c_void,
+    width: f32,
+    style: *mut c_void,
+) {
     let world = target(this).transform();
     let paint = brushes::paint(brush, &world);
     trace_fill(this, "Trait", path, brush, paint.is_some());
     let Some(paint) = paint else {
         return;
+    };
+    // Tirets du style de trait (#1867), en multiples de l'épaisseur. Un
+    // trait « fixe » (1) ou « fin » (2) garde son épaisseur en pixels.
+    let dashed;
+    let (path, width) = match v11::stroke_pattern(style) {
+        Some((pattern, offset, kind)) => {
+            let scale = world.scale();
+            let w = match kind {
+                1 => width / scale,
+                2 => 1.0 / scale,
+                _ => width,
+            };
+            let unit = w.max(1e-3);
+            let pattern: Vec<f32> = pattern.iter().map(|d| d * unit).collect();
+            dashed = path.dashed(&pattern, offset * unit);
+            (&dashed, w)
+        }
+        None => match v11::stroke_pattern_kind(style) {
+            1 => (path, width / world.scale()),
+            2 => (path, 1.0 / world.scale()),
+            _ => (path, width),
+        },
     };
     let polys = path.stroke_polys(&world, width);
     target(this).fill(&polys, FillRule::NonZero, &*paint);
@@ -2474,22 +2527,22 @@ unsafe extern "win64" fn draw_line(
     b: u64,
     brush: *mut c_void,
     width: f32,
-    _style: *mut c_void,
+    style: *mut c_void,
 ) {
     let mut p = Path::default();
     p.begin(point(a));
     p.line(point(b));
-    stroke_path(this, &p, brush, width);
+    stroke_path(this, &p, brush, width, style);
 }
 unsafe extern "win64" fn draw_rect(
     this: *mut TargetObj,
     r: *const RectF,
     brush: *mut c_void,
     width: f32,
-    _style: *mut c_void,
+    style: *mut c_void,
 ) {
     if let Some(r) = r.as_ref() {
-        stroke_path(this, &Path::rect(r.l, r.t, r.r, r.b), brush, width);
+        stroke_path(this, &Path::rect(r.l, r.t, r.r, r.b), brush, width, style);
     }
 }
 unsafe extern "win64" fn fill_rect(this: *mut TargetObj, r: *const RectF, brush: *mut c_void) {
@@ -2507,11 +2560,11 @@ unsafe extern "win64" fn draw_rounded(
     r: *const RoundedRect,
     brush: *mut c_void,
     width: f32,
-    _s: *mut c_void,
+    s: *mut c_void,
 ) {
     if let Some(r) = r.as_ref() {
         let p = Path::rounded_rect(r.rect.l, r.rect.t, r.rect.r, r.rect.b, r.rx, r.ry, 4.0);
-        stroke_path(this, &p, brush, width);
+        stroke_path(this, &p, brush, width, s);
     }
 }
 unsafe extern "win64" fn fill_rounded(
@@ -2529,7 +2582,7 @@ unsafe extern "win64" fn draw_ellipse(
     e: *const Ellipse,
     brush: *mut c_void,
     width: f32,
-    _s: *mut c_void,
+    s: *mut c_void,
 ) {
     if let Some(e) = e.as_ref() {
         stroke_path(
@@ -2537,6 +2590,7 @@ unsafe extern "win64" fn draw_ellipse(
             &Path::ellipse(e.x, e.y, e.rx, e.ry, 4.0),
             brush,
             width,
+            s,
         );
     }
 }
@@ -2572,10 +2626,10 @@ unsafe extern "win64" fn draw_geometry(
     g: *mut c_void,
     brush: *mut c_void,
     width: f32,
-    _s: *mut c_void,
+    s: *mut c_void,
 ) {
     if let Some((p, _)) = geometry_of(g) {
-        stroke_path(this, &p, brush, width);
+        stroke_path(this, &p, brush, width, s);
     }
 }
 unsafe extern "win64" fn fill_geometry(
@@ -4074,6 +4128,20 @@ mod tests {
         assert_eq!(&opaque[4..], &[0, 0, 188, 255]);
     }
 
+    /// #1849 : verrou WIC 8bppAlpha (masque de sélection de Paint.NET) lu
+    /// en noir prémultiplié de l'opacité de chaque octet, pas refusé.
+    #[test]
+    fn verrou_wic_alpha_8_bits() {
+        // 3×2, pas de ligne 4 octets.
+        let src = [10u8, 20, 30, 0, 40, 50, 60, 0];
+        let px = unsafe { lock_pixels(src.as_ptr(), 4, 3, 2, false, false, None, true) };
+        assert_eq!(px.len(), 3 * 2 * 4);
+        assert_eq!(&px[0..4], &[0, 0, 0, 10]);
+        assert_eq!(&px[8..12], &[0, 0, 0, 30]);
+        assert_eq!(&px[12..16], &[0, 0, 0, 40]);
+        assert_eq!(&px[20..24], &[0, 0, 0, 60]);
+    }
+
     /// #1399, #1609 : CreateSharedBitmap partage un IWICBitmapLock
     /// (Paint.NET : DrawBackground, tampon du pinceau) en ID2D1Bitmap.
     #[test]
@@ -4517,6 +4585,55 @@ mod tests {
     /// #1743 : le DPI de la cible (SetDpi ou D2D1_RENDER_TARGET_PROPERTIES)
     /// met les DIP à l'échelle, SetAntialiasMode(ALIASED) couvre les pixels
     /// dont le centre est dans la forme, et le mélange MAX garde le plus fort.
+    /// #1867 : DrawLine avec un style de trait en tirets laisse les vides
+    /// transparents (contour de sélection de Paint.NET, tracé en tirets).
+    #[test]
+    fn trait_en_tirets_dans_une_cible() {
+        unsafe {
+            type DrawLine =
+                unsafe extern "win64" fn(*mut c_void, u64, u64, *mut c_void, f32, *mut c_void);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            type SetAa = unsafe extern "win64" fn(*mut c_void, u32);
+            let (f, bmp, rt) = setup();
+            let noir = solid(
+                rt,
+                ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            // Tirets personnalisés (5) de 3 et vides de 3, en épaisseurs.
+            let props: [u32; 7] = [0, 0, 0, 0, 10f32.to_bits(), 5, 0f32.to_bits()];
+            let dashes = [3.0f32, 3.0];
+            let mut style = std::ptr::null_mut();
+            assert_eq!(
+                v11::factory_stroke_style(
+                    f.cast(),
+                    props.as_ptr().cast(),
+                    dashes.as_ptr(),
+                    2,
+                    &mut style
+                ),
+                S_OK
+            );
+            let pt = |x: f32, y: f32| (x.to_bits() as u64) | ((y.to_bits() as u64) << 32);
+            method::<Unary>(rt, 48)(rt);
+            method::<SetAa>(rt, 32)(rt, 1);
+            method::<DrawLine>(rt, 15)(rt, pt(0.0, 4.5), pt(8.0, 4.5), noir, 1.0, style);
+            method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut());
+            let p = pixels(bmp);
+            // Tirets sur [0,3] et [6,8], vide sur [3,6].
+            assert_eq!(px(&p, 1, 4)[3], 255);
+            assert_eq!(px(&p, 6, 4)[3], 255);
+            assert_eq!(px(&p, 4, 4)[3], 0, "vide du motif");
+            for o in [style, noir, rt, bmp, f] {
+                release_obj(o);
+            }
+        }
+    }
+
     #[test]
     fn dpi_anticrenelage_et_melange() {
         unsafe {

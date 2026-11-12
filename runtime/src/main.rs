@@ -18,6 +18,7 @@ mod firewall;
 mod gamemode;
 mod gpu;
 mod image_cache;
+mod image_lock;
 mod imaging;
 mod intl;
 mod journal;
@@ -313,15 +314,16 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let app_dir = std::fs::canonicalize(&exe)
-            .ok()
+        let exe_path = std::fs::canonicalize(&exe).ok();
+        let app_dir = exe_path
+            .as_deref()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
         // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
         // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
         if process::teb() == 0 {
             process::init_thread();
         }
-        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
+        let code = clr::execute_assembly_at(&assembly, exe_path.as_deref(), app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),

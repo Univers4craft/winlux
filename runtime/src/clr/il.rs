@@ -27,6 +27,7 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
+use super::tableaux;
 use super::tables::{TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
@@ -216,6 +217,8 @@ struct CallFrame {
     /// Méthode exécutée (ligne MethodDef de l'assembly en cours), pour
     /// nommer l'endroit d'une erreur.
     method: u32,
+    /// Assembly de la méthode (`Assembly.GetExecutingAssembly`, #1869).
+    asm: usize,
     ip: usize,
     code: Rc<Vec<u8>>,
     locals: Slots,
@@ -512,6 +515,7 @@ impl Interpreter {
 
         self.frames.push(CallFrame {
             method: method_row,
+            asm: self.current,
             ip: 0,
             code: Rc::new(body.code),
             locals: Slots::new(&local_kinds),
@@ -524,6 +528,15 @@ impl Interpreter {
             constrained: None,
         });
         self.run_loop()
+    }
+
+    /// Assembly de la méthode `depth` cadres sous la méthode en cours
+    /// (l'appelante d'une méthode interne), le programme à défaut (#1869).
+    pub(super) fn frame_assembly(&self, depth: usize) -> usize {
+        let n = self.frames.len();
+        n.checked_sub(depth + 1)
+            .and_then(|i| self.frames.get(i))
+            .map_or(0, |f| f.asm)
     }
 
     /// « Espace.Type::Méthode IL_xxxx » de la méthode en cours.
@@ -591,9 +604,15 @@ impl Interpreter {
             return;
         };
         let name = self.method_name(token);
-        let argc = self.get_method_sig(token).param_types.len();
+        let params = self.get_method_sig(token).param_types;
+        let argc = params.len();
+        let iface = match target {
+            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+            _ => None,
+        };
         let found = types::with_types(|reg| {
-            let (asm, tok, decl) = reg.find_override(type_id, &name, argc)?;
+            let (asm, tok, decl) =
+                reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
             Some((
                 asm,
                 tok,
@@ -606,6 +625,28 @@ impl Interpreter {
             *target = Target::Managed(asm, Token(tok).rid());
             gen.t = type_args;
         }
+    }
+
+    /// « Espace.Nom » (sans arité) de l'interface qui déclare la méthode
+    /// `row` de l'assembly `asm`, si c'en est une.
+    fn interface_of(&self, asm: usize, row: u32) -> Option<String> {
+        let owner = *self.domain.get(asm)?.method_owner.get(row as usize)?;
+        if owner == 0 {
+            return None;
+        }
+        let a = self.assembly_at(asm);
+        let td = a.get_type_def(owner);
+        if !td.is_interface() {
+            return None;
+        }
+        let name = a.get_string(td.name);
+        let name = name.split('`').next().unwrap_or(name);
+        let ns = a.get_string(td.namespace);
+        Some(if ns.is_empty() {
+            name.to_string()
+        } else {
+            format!("{ns}.{name}")
+        })
     }
 
     /// Méthode implémentée par le runtime (bibliothèque intégrée).
@@ -621,6 +662,12 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.thread_call(namespace, class, name, &args, params) {
+            return r;
+        }
+        if let Some(r) = self.reflection_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.array_call(namespace, class, name, &args) {
             return r;
         }
         match (namespace, class, name) {
@@ -683,8 +730,13 @@ impl Interpreter {
         self.pins.extend(args.iter().copied());
         let mut args = args;
         let first_param = args.len() - params.len().min(args.len());
+        // Égalité et empreinte comparent les objets eux-mêmes, pas leur
+        // texte (#1896 : clés encadrées de Dictionary).
+        let compares_objects = namespace == "System"
+            && class == "Object"
+            && matches!(name, "Equals" | "ReferenceEquals" | "GetHashCode");
         for (i, param) in params.iter().enumerate() {
-            if matches!(param, ElementType::Object) {
+            if matches!(param, ElementType::Object) && !compares_objects {
                 match self.managed_to_string(args[first_param + i]) {
                     Ok(v) => {
                         args[first_param + i] = v;
@@ -716,6 +768,11 @@ impl Interpreter {
         };
         let found = types::with_types(|reg| {
             let (asm, tok, decl) = reg.find_override(type_id, "ToString", 0)?;
+            // Object.ToString de notre mscorlib est elle-même servie par
+            // bcl.rs : rien à convertir (#1896).
+            if decl == types::TYPE_OBJECT {
+                return None;
+            }
             Some((
                 asm,
                 tok,
@@ -899,15 +956,17 @@ impl Interpreter {
         let Some(actual) = gc::type_of(obj) else {
             return true;
         };
+        if types::with_types(|reg| reg.get(target).is_some_and(|t| t.is_interface)) {
+            // Interfaces suivies par la table InterfaceImpl (#1975) ; un
+            // type sans définition connue reste accepté.
+            return self.implements(actual, target).unwrap_or(true);
+        }
         types::with_types(|reg| {
             let Some(t) = reg.get(target) else {
                 return true;
             };
-            // Les interfaces implémentées ne sont pas encore suivies, ni la
-            // hiérarchie des types de la bibliothèque intégrée : on accepte.
-            if t.is_interface {
-                return true;
-            }
+            // La hiérarchie des types de la bibliothèque intégrée n'est pas
+            // suivie : on accepte.
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
                 || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
@@ -930,6 +989,7 @@ impl Interpreter {
         });
         roots.extend(threads::roots());
         roots.extend(super::callbacks::roots());
+        roots.extend(super::reflection::roots());
         for data in self.shared.external_statics.lock().unwrap().values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
@@ -1426,10 +1486,23 @@ impl Interpreter {
                     } else {
                         let name = self.method_name(token);
                         let argc = sig.param_types.len();
+                        let iface = match &callee.target {
+                            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+                            _ => None,
+                        };
+                        // Seule une redéfinition de la méthode appelée (même
+                        // signature) compte : Int32.Equals(int) ne remplace
+                        // pas Object.Equals(object) (#1956).
                         let own = types::with_types(|reg| {
                             let t = reg.get(ct)?;
-                            let (asm, tok) = reg.find_own_method(ct, &name, argc)?;
-                            Some((asm, tok, t.type_args.clone()))
+                            let (asm, tok, decl) = reg.find_override_of(
+                                ct,
+                                &name,
+                                argc,
+                                iface.as_deref(),
+                                &sig.param_types,
+                            )?;
+                            (decl == ct).then(|| (asm, tok, t.type_args.clone()))
                         });
                         if let Some((asm, tok, t)) = own {
                             // Méthode du type valeur lui-même : `this` reste
@@ -1444,8 +1517,13 @@ impl Interpreter {
                             store(boxed, kind, load(ptr, kind));
                             args[0] = Value::Ref(boxed);
                         } else {
-                            args[0] = load(ptr, kind);
-                            virtual_call = false;
+                            // Primitive ou énumération : encadrée comme le
+                            // demande ECMA-335 §III.2.1, pour que
+                            // Object.Equals compare deux valeurs encadrées
+                            // (EqualityComparer<int>, #1896).
+                            let boxed = gc::with_gc(|gc| gc.alloc(ct, 8));
+                            store(boxed, kind, load(ptr, kind));
+                            args[0] = Value::Ref(boxed);
                         }
                     }
                 }
@@ -1479,6 +1557,15 @@ impl Interpreter {
                 let f = frame!();
                 let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
                 let mut args = f.eval_stack.split_off(split);
+                // Une chaîne est immuable et de taille variable : son
+                // constructeur rend la chaîne entière (#1956).
+                if type_id == types::TYPE_STRING {
+                    let made = bcl::new_string(&args, &sig.param_types);
+                    push!(made.map_err(|kind| {
+                        exception(kind, "String::.ctor : arguments refusés")
+                    })?);
+                    return Ok(StepResult::Continue);
+                }
                 let kind = self.kind_of_type(type_id);
                 let obj = if kind == Kind::Ref {
                     self.ensure_layout(type_id);
@@ -1779,6 +1866,28 @@ impl Interpreter {
             O::Box => {
                 let (id, kind) = self.kind_of_token(tok1());
                 let val = pop!();
+                // Nullable<T> (ECMA-335 III.4.1) : null sans valeur, sinon la
+                // valeur T encadrée.
+                if let Some((has, at, t)) = self.nullable_parts(id) {
+                    let src = val.as_ref();
+                    let boxed = if src.is_null() || unsafe { *src.add(has) } == 0 {
+                        Value::Null
+                    } else {
+                        let tk = self.kind_of_type(t);
+                        let inner = load(unsafe { src.add(at) }, tk);
+                        match tk {
+                            Kind::Ref => inner,
+                            Kind::Struct(_) => inner,
+                            k => {
+                                let b = gc::with_gc(|gc| gc.alloc(t, 8));
+                                store(b, k, inner);
+                                Value::Ref(b)
+                            }
+                        }
+                    };
+                    push!(boxed);
+                    return Ok(StepResult::Continue);
+                }
                 let boxed = match kind {
                     Kind::Ref => val,
                     Kind::Struct(_) => {
@@ -1809,6 +1918,29 @@ impl Interpreter {
                     return Ok(StepResult::Continue);
                 }
                 let p = obj.as_ref();
+                // Vers Nullable<T> : null donne un Nullable sans valeur, un T
+                // encadré un Nullable qui le porte (ECMA-335 III.4.33).
+                if let Some((has, at, t)) = self.nullable_parts(id) {
+                    let n = self.new_struct(id);
+                    if !p.is_null() {
+                        let tk = self.kind_of_type(t);
+                        if gc::type_of(p) != Some(t) && gc::type_of(p) != Some(id) {
+                            return Err(invalid_cast());
+                        }
+                        if gc::type_of(p) == Some(id) {
+                            store(n, kind, Value::Ref(p));
+                        } else {
+                            unsafe { *n.add(has) = 1 };
+                            store(unsafe { n.add(at) }, tk, load(p, tk));
+                        }
+                    }
+                    push!(if op == O::Unbox {
+                        Value::Ref(n)
+                    } else {
+                        load(n, kind)
+                    });
+                    return Ok(StepResult::Continue);
+                }
                 let Some(actual) = gc::type_of(p) else {
                     return Err(ClrException::null_reference());
                 };
@@ -1914,6 +2046,12 @@ impl Interpreter {
                 let token = tok1();
                 let handle = match self.resolve_type_token(token) {
                     Some(id) => id as i64,
+                    // Champ : l'assembly qui le déclare voyage avec le
+                    // jeton, car `RuntimeHelpers.InitializeArray` s'exécute
+                    // dans le contexte de notre mscorlib (#1965).
+                    None if Token(token).table() == TableId::Field as u8 => {
+                        tableaux::field_handle(self.current, token)
+                    }
                     None => token as i64,
                 };
                 push!(Value::I64(handle));

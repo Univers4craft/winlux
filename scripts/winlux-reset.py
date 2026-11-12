@@ -135,6 +135,11 @@ EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bit
               'set winlux_efi_args=\n'
               'if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then\n'
               '    set winlux_efi_args=efi=noruntime\n'
+              '    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable\n'
+              '    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).\n'
+              '    insmod efi_gop\n'
+              '    insmod efi_uga\n'
+              '    set gfxpayload=keep\n'
               'fi\n')
 
 
@@ -949,6 +954,11 @@ def grub_template(search_uuid, root_arg, extra, windows_esp_uuid=None):
 set winlux_efi_args=
 if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
     set winlux_efi_args=efi=noruntime
+    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
+    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
+    insmod efi_gop
+    insmod efi_uga
+    set gfxpayload=keep
 fi
 set timeout={timeout}
 set timeout_style={style}

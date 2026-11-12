@@ -2224,6 +2224,15 @@ unsafe fn create_file_opened(
             }
         }
     }
+    // .exe ou DLL chargé par un processus vivant : ni écriture ni
+    // troncature (CREATE_ALWAYS 2, TRUNCATE_EXISTING 5), comme sous
+    // Windows (#1917).
+    if existed && (want_write_access(access) || matches!(creation, 2 | 5)) {
+        if let Some(code) = crate::image_lock::refuse_write(&p, "CreateFile") {
+            crate::process::set_last_error(code);
+            return usize::MAX;
+        }
+    }
     let want_read = access & (0x8000_0000 | 0x1000_0000 | 0x0200_0000 | 1) != 0;
     // GENERIC_WRITE, GENERIC_ALL, MAXIMUM_ALLOWED ou FILE_WRITE_DATA.
     let want_write = access & (0x4000_0000 | 0x1000_0000 | 0x0200_0000 | 2) != 0;
@@ -2353,7 +2362,25 @@ unsafe fn create_file_opened(
 /// handle (documentation de CreateFile, #1252).
 const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 
-fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
+/// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
+/// effacement à la fermeture. Rien si le fichier n'a plus de nom
+/// (déjà effacé : /proc rend « … (deleted) »), #1885.
+fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+    if fd < 0 {
+        return None;
+    }
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || st.st_nlink == 0 {
+        return None;
+    }
+    let path = crate::dlls::ntdll_file::path_of_fd(fd)?;
+    if path.to_string_lossy().ends_with(" (deleted)") {
+        return None;
+    }
+    Some((path, st.st_dev, st.st_ino))
+}
+
+pub(crate) fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
     static S: OnceLock<Mutex<HashMap<usize, std::path::PathBuf>>> = OnceLock::new();
     S.get_or_init(Default::default)
 }
@@ -3272,7 +3299,7 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
     }
     match std::fs::rename(&s, &d) {
         Ok(()) => 1,
-        Err(_) if flags & 0x2 != 0 => match std::fs::copy(&s, &d) {
+        Err(_) if flags & 0x2 != 0 => match copy_keeping_write_time(&s, &d) {
             Ok(_) => {
                 let _ = std::fs::remove_file(&s);
                 1
@@ -4909,7 +4936,9 @@ fn share_named(
             let Some(obj) = obj else {
                 return false;
             };
-            if f.set_len(4096).is_err() {
+            // Page réservée avant la projection : sur un tmpfs plein, la
+            // première écriture plantait au lieu d'échouer (#1905).
+            if !crate::dlls::inherit::reserve_page(std::os::fd::AsRawFd::as_raw_fd(f)) {
                 return false;
             }
             let Some(w) = named::dup(f).and_then(SharedWord::map) else {
@@ -5267,7 +5296,9 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
 fn poll_process(p: &ProcessObject) -> bool {
     let mut s = lock(&p.state);
     if let Some(pid) = s.foreign {
-        if !os_process_alive(pid) {
+        // Un processus terminé que son parent n'a pas encore réclamé reste
+        // un zombie : il est fini, son handle doit être signalé (#1859).
+        if !os_process_alive(pid) || os_process_zombie(pid) {
             s.foreign = None;
             s.exit_code = 0;
             p.changed.notify_all();
@@ -6615,6 +6646,22 @@ fn os_process_alive(pid: i32) -> bool {
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
+/// Processus terminé mais pas encore réclamé par son parent (zombie). Un
+/// meneur de groupe sorti seul (ExitThread du fil principal) apparaît aussi
+/// « Z » tant que ses autres fils tournent : il n'est fini que s'il ne reste
+/// plus que lui dans /proc/<pid>/task.
+fn os_process_zombie(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .rfind(')')
+        .and_then(|i| stat[i + 1..].trim_start().chars().next());
+    if !matches!(state, Some('Z' | 'X')) {
+        return false;
+    }
+    std::fs::read_dir(format!("/proc/{pid}/task")).map_or(true, |d| d.count() <= 1)
+}
 pub unsafe extern "win64" fn get_exit_code_process(handle: usize, code: *mut u32) -> i32 {
     if code.is_null() {
         crate::process::set_last_error(87);
@@ -6815,6 +6862,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         return 1;
     }
+    // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
+    // renommé depuis son ouverture (#1885).
+    let doomed = lock(delete_on_close())
+        .remove(&handle)
+        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -6822,8 +6874,25 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
         forget_dir_watcher(handle);
-        if let Some(path) = lock(delete_on_close()).remove(&handle) {
-            let _ = std::fs::remove_file(path);
+        if let Some((path, dev, ino)) = doomed {
+            // Le nom doit toujours désigner le même fichier : jamais un
+            // autre qui l'aurait pris entre-temps.
+            let same = std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.dev() == dev && m.ino() == ino
+            });
+            let removed = if !same {
+                Err(std::io::Error::other("nom repris par un autre fichier"))
+            } else if path.is_dir() {
+                std::fs::remove_dir(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            crate::trace!(
+                "CloseHandle({handle:#x}) : effacement à la fermeture de {} = {}",
+                path.display(),
+                removed.map_or_else(|e| e.to_string(), |_| "ok".into())
+            );
         }
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
@@ -7675,7 +7744,10 @@ pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
             return u32::MAX;
         }
     };
-    get_file_attributes_str(&s.to_string_lossy())
+    let path = s.to_string_lossy();
+    let r = get_file_attributes_str(&path);
+    crate::trace!("GetFileAttributesW({path}) = {r:#x}");
+    r
 }
 pub unsafe extern "win64" fn delete_file_w(path: *const u16) -> i32 {
     let s = match cstring_from_wide(path) {
@@ -7788,6 +7860,23 @@ pub unsafe extern "win64" fn get_full_path_name_w(
     }
     text.len() as u32
 }
+/// Copie comme CopyFile : contenu et attributs, et **date de dernière
+/// écriture conservée** (documentation de CopyFile). `std::fs::copy` mettait
+/// l'heure courante : SteamService comparait les dates de ses deux copies,
+/// se croyait périmé à chaque démarrage et relançait sa mise à jour sans
+/// fin (#1949).
+fn copy_keeping_write_time(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<u64> {
+    let n = std::fs::copy(source, target)?;
+    if let Ok(modified) = std::fs::metadata(source).and_then(|m| m.modified()) {
+        if let Ok(f) = std::fs::File::open(target) {
+            let _ = f.set_modified(modified);
+        }
+    }
+    Ok(n)
+}
 pub unsafe extern "win64" fn copy_file_a(
     src: *const u8,
     dst: *const u8,
@@ -7803,7 +7892,11 @@ pub unsafe extern "win64" fn copy_file_a(
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::copy(source, target) {
+    if let Some(code) = crate::image_lock::refuse_write(&target, "CopyFile") {
+        crate::process::set_last_error(code);
+        return 0;
+    }
+    match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -7836,7 +7929,11 @@ pub unsafe extern "win64" fn copy_file_w(
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::copy(source, target) {
+    if let Some(code) = crate::image_lock::refuse_write(&target, "CopyFile") {
+        crate::process::set_last_error(code);
+        return 0;
+    }
+    match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -9077,6 +9174,41 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
     if fd < 0 {
         crate::process::set_last_error(6);
         return 0;
+    }
+    // Listes de dossier (FileIdBothDirectory(Restart)Info,
+    // FileFullDirectory(Restart)Info) : celles de NtQueryDirectoryFile.
+    // `remove_dir_all` de la bibliothèque Rust parcourt ainsi le dossier à
+    // effacer ; sans elles le dossier restait (rm-* de Discord, #1885).
+    if let Some((nt, restart)) = match class {
+        10 => Some((37, false)),
+        11 => Some((37, true)),
+        14 => Some((2, false)),
+        15 => Some((2, true)),
+        _ => None,
+    } {
+        let mut iosb = [0u64; 2];
+        let st = crate::dlls::ntdll_file::NtQueryDirectoryFile(
+            handle,
+            0,
+            0,
+            0,
+            iosb.as_mut_ptr() as *mut std::ffi::c_void,
+            out,
+            size,
+            nt,
+            0,
+            std::ptr::null(),
+            u8::from(restart),
+        );
+        if st != 0 {
+            crate::process::set_last_error(match st {
+                0x8000_0006 => 18,  // STATUS_NO_MORE_FILES → ERROR_NO_MORE_FILES
+                0x8000_0005 => 234, // STATUS_BUFFER_OVERFLOW → ERROR_MORE_DATA
+                _ => crate::dlls::ntdll::rtl_nt_status_to_dos_error(st as i32),
+            });
+            return 0;
+        }
+        return 1;
     }
     let mut st: libc::stat = std::mem::zeroed();
     if libc::fstat(fd, &mut st) != 0 {
@@ -10693,6 +10825,25 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    use super::copy_keeping_write_time;
+
+    #[test]
+    fn copie_garde_la_date_de_derniere_ecriture() {
+        let dir = std::env::temp_dir().join(format!("winlux-copie-date-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("SteamService.exe");
+        let dst = dir.join("Copie.exe");
+        std::fs::write(&src, b"MZ").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_761_091_200);
+        std::fs::File::open(&src)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert_eq!(copy_keeping_write_time(&src, &dst).unwrap(), 2);
+        assert_eq!(std::fs::metadata(&dst).unwrap().modified().unwrap(), old);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn dllmain_des_dependances_dans_l_ordre_des_imports() {
         // #1584 : steamui importe libavcodec, SDL3, tier0, video64 et
@@ -12800,5 +12951,54 @@ mod interrupt_time_tests {
             super::query_unbiased_interrupt_time(std::ptr::null_mut()),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_downlevel {
+    /// Acrobat (#1818) : LoadLibraryEx d'un contrat « downlevel » avec
+    /// LOAD_LIBRARY_SEARCH_SYSTEM32, puis GetProcAddress.
+    #[test]
+    fn contrat_downlevel_charge_avec_search_system32() {
+        unsafe {
+            let h = super::load_library_ex_a(
+                c"api-ms-win-downlevel-shell32-l1-1-0.dll".as_ptr().cast(),
+                0,
+                0x800,
+            );
+            assert_ne!(h, 0);
+            for f in [
+                c"CommandLineToArgvW",
+                c"SHGetKnownFolderPath",
+                c"SHGetFolderPathW",
+                c"ShellExecuteExW",
+            ] {
+                assert_ne!(super::get_proc_address(h, f.as_ptr().cast()), 0, "{f:?}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_processus_zombie {
+    use super::*;
+
+    #[test]
+    fn processus_etranger_fini_mais_non_reclame_est_signale() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !os_process_zombie(pid) {
+            assert!(std::time::Instant::now() < deadline, "jamais zombie");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Zombie : encore « vivant » pour kill(0), mais fini pour Windows.
+        assert!(os_process_alive(pid));
+        let h = unsafe { open_process(0x0010_0000, 0, pid as u32) };
+        assert_ne!(h, 0);
+        assert_eq!(wait_for_single_object(h, 2000), 0);
+        assert!(!os_process_zombie(std::process::id() as i32));
+        unsafe { close_handle(h) };
+        child.wait().unwrap();
     }
 }

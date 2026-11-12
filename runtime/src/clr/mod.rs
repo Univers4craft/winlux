@@ -13,9 +13,12 @@ pub mod gc;
 pub mod il;
 pub mod interop;
 pub mod metadata;
+pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
+pub mod reflection;
 pub mod resolve;
+pub mod tableaux;
 pub mod tables;
 pub mod threads;
 pub mod types;
@@ -29,7 +32,18 @@ use types::TypeId;
 /// Exécute le point d'entrée d'une assembly .NET et renvoie le code de
 /// sortie. Les assemblies privées référencées sont cherchées dans `app_dir`,
 /// le dossier du programme.
+#[cfg(test)]
 pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) -> i32 {
+    execute_assembly_at(pe_data, None, app_dir)
+}
+
+/// Comme `execute_assembly_in`, en connaissant le fichier du programme
+/// (`Assembly.Location`, #1869).
+pub fn execute_assembly_at(
+    pe_data: &[u8],
+    exe_path: Option<&std::path::Path>,
+    app_dir: Option<&std::path::Path>,
+) -> i32 {
     types::init();
     gc::init();
     crate::dlls::kernel32::init();
@@ -54,7 +68,7 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
         return 1;
     }
 
-    let (assemblies, mut infos) = domain::load(assembly, app_dir);
+    let (assemblies, mut infos) = domain::load(assembly, exe_path, app_dir);
     // Les assemblies référencées d'abord : une classe du programme qui dérive
     // d'une classe d'une bibliothèque y trouve son parent déjà enregistré.
     for idx in (0..assemblies.len()).rev() {
@@ -66,6 +80,10 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
     let interp_ptr: *const Interpreter = &*interp;
     threads::register(interp_ptr);
     interp.link_types();
+    // Relevé d'un coup des méthodes .NET non servies (#1922).
+    if let Some(dest) = std::env::var_os("WINLUX_CLR_MANQUANTS") {
+        interp.report_missing(&dest.to_string_lossy());
+    }
 
     let row = Token(entry).rid();
     let sig = interp.assembly.get_method_def(row).signature;
@@ -128,14 +146,15 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
             .type_methods(row)
             .map(|m| {
                 let md = assembly.get_method_def(m);
+                let params =
+                    metadata::decode_method_sig(assembly.get_blob(md.signature)).param_types;
                 types::MethodInfo {
                     name: assembly.get_string(md.name).to_string(),
                     assembly: asm_index,
                     token: Token::new(TableId::MethodDef, m).0,
                     is_virtual: md.is_virtual(),
-                    param_count: metadata::decode_method_sig(assembly.get_blob(md.signature))
-                        .param_types
-                        .len(),
+                    param_count: params.len(),
+                    params,
                 }
             })
             .collect();

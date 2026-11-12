@@ -171,5 +171,37 @@ namespace System.Threading
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
         public static extern void Exit(object obj);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern bool TryEnter(object obj);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern bool TryEnter(object obj, int millisecondsTimeout);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern void TryEnter(object obj, ref bool lockTaken);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern void TryEnter(object obj, int millisecondsTimeout, ref bool lockTaken);
+
+        public static bool TryEnter(object obj, TimeSpan timeout) { return TryEnter(obj, (int)timeout.TotalMilliseconds); }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern bool IsEntered(object obj);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern bool Wait(object obj);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern bool Wait(object obj, int millisecondsTimeout);
+
+        public static bool Wait(object obj, TimeSpan timeout) { return Wait(obj, (int)timeout.TotalMilliseconds); }
+        public static bool Wait(object obj, int millisecondsTimeout, bool exitContext) { return Wait(obj, millisecondsTimeout); }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern void Pulse(object obj);
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
+        public static extern void PulseAll(object obj);
     }
 }

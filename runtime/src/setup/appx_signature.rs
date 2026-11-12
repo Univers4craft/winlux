@@ -650,6 +650,13 @@ fn digest_len(md: &CStr) -> usize {
 
 /// PKCS #7 SignedData Authenticode (DER) : certificats, signataire et
 /// condensat signé du `SpcIndirectDataContent`.
+/// PKCS #7 SignedData décodé pour CryptMsgOpenToDecode (#1823) :
+/// certificats (DER), contenu signé et nombre de signataires lus.
+pub(crate) fn signed_data_parts(der: &[u8]) -> Option<(Vec<Vec<u8>>, Vec<u8>)> {
+    let p = parse_signed_any(der).ok()?;
+    Some((p.certs.iter().map(|c| c.der.clone()).collect(), p.content))
+}
+
 fn parse_signed_data(der: &[u8]) -> Result<Parsed, String> {
     let mut p = parse_signed_any(der)?;
     if p.content_type != OID_SPC_INDIRECT_DATA {

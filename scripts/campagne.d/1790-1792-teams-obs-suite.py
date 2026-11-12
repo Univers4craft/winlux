@@ -7,5 +7,5 @@ ok('base.starts_with("api-ms-win-eventing-controller-l1-")' in m and '"EnableTra
    "api-ms-win-eventing-controller est servi par advapi32 (#1790)")
 ok('"WinVerifyTrustEx" => fn WinVerifyTrustEx' in w,
    "wintrust sert WinVerifyTrustEx (#1791)")
-ok("importée par {}" in l and "fn import_names(" in l,
+ok("importée par {me}" in l and "fn import_names(" in l,
    "une DLL introuvable est signalée avec son importateur et ses fonctions (#1792)")
