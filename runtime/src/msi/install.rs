@@ -184,8 +184,6 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("Msix64", "6".into()),
         ("MsiAMD64", "6".into()),
         ("PhysicalMemory", physical_memory_mb().to_string()),
-        ("Privileged", "1".into()),
-        ("AdminUser", "1".into()),
         ("LogonUser", user.clone()),
         ("USERNAME", user),
         ("ComputerName", "WINLUX".into()),
@@ -197,6 +195,13 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     ];
     for (k, v) in folders.into_iter().chain(fixed) {
         ctx.props.insert(k.to_string(), v);
+    }
+    // Droits d'administrateur (#2180) : processus élevé (UAC accordé, ou
+    // compte administrateur, pour qui l'élévation est accordée sans
+    // question, #1739). Un compte standard sans élévation ne les a pas.
+    if crate::dlls::security::elevated() || crate::dlls::security::admin_capable() {
+        ctx.props.insert("Privileged".into(), "1".into());
+        ctx.props.insert("AdminUser".into(), "1".into());
     }
 }
 
@@ -808,6 +813,14 @@ pub fn license_text(msi: &Path) -> Option<String> {
         }
     }
     best.map(|(_, t)| crate::setup::license::from_text(&t))
+}
+
+/// Valeur de la propriété ALLUSERS du paquet (vide si absente), pour le
+/// niveau d'élévation demandé (#2180).
+pub fn allusers(msi: &Path) -> Option<String> {
+    let data = std::fs::read(msi).ok()?;
+    let db = Database::parse(&data).ok()?;
+    Some(db.property("ALLUSERS").unwrap_or_default())
 }
 
 /// Noms longs des fichiers que pose un paquet (table File), pour la

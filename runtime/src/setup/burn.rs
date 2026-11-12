@@ -193,6 +193,9 @@ pub struct Payload {
 
 #[derive(Debug, Default)]
 pub struct Manifest {
+    /// Bundle « par machine » (`Registration PerMachine="yes"`) : demande
+    /// les droits d'administrateur (#2180).
+    pub per_machine: bool,
     pub name: String,
     pub version: String,
     pub publisher: String,
@@ -219,6 +222,7 @@ pub fn parse_manifest(xml: &str) -> Manifest {
         }
         match e.name.as_str() {
             "Registration" => {
+                m.per_machine |= e.attr("PerMachine").eq_ignore_ascii_case("yes");
                 if m.version.is_empty() {
                     m.version = e.attr("Version").to_string();
                 }
@@ -954,6 +958,26 @@ fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
     }
     let url = info.attr("LicenseUrl");
     (!url.is_empty()).then(|| url.to_string())
+}
+
+/// Bundle « par machine » (#2180) ; `None` si ce n'est pas un bundle.
+pub fn per_machine(path: &Path) -> Option<bool> {
+    if !is_bundle_file(path) {
+        return None;
+    }
+    let data = crate::loader::ImageFile::open(path).ok()?;
+    let s = find_section(&data)?;
+    let mut xml = None;
+    Cabinet::parse(container(&data, &s, 0)?)
+        .ok()?
+        .extract(&mut |name, bytes| {
+            if name == "0" {
+                xml = Some(xml_text(bytes));
+            }
+            Ok(())
+        })
+        .ok()?;
+    Some(parse_manifest(&xml?).per_machine)
 }
 
 /// Lancement direct d'un bundle (double-clic, ou par un autre installeur).

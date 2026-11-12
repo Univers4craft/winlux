@@ -562,6 +562,9 @@ jobs:
       - name: Dossier système des installateurs NSIS 32 bits (#1800)
         run: sh scripts/test-sysdir-32bits.sh
 
+      - name: Élévation des installateurs (#2180)
+        run: sh scripts/test-elevation-installateurs.sh
+
       - name: Actions personnalisées et services msiexec (#833)
         run: |
           sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
