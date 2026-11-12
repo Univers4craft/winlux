@@ -319,6 +319,43 @@ impl XIdle {
             }
         }
     }
+
+    /// #2148 : le serveur X n'éteint plus jamais l'écran de lui-même. Ses
+    /// délais DPMS (600 s par défaut chez Xorg, puis ceux que recopie
+    /// xscreensaver-gfx depuis `~/.xscreensaver`) ignoraient le délai choisi
+    /// dans Paramètres : « Jamais » ou 30 min s'éteignaient quand même à
+    /// 10 min. Ils sont remis à 0 (niveau désactivé) à chaque passage ; ce
+    /// démon éteint l'écran lui-même au délai de `power.conf` (secteur ou
+    /// batterie, mode Économie, demandes « écran allumé »). Le DPMS reste
+    /// activé : `xset dpms force off` en a besoin.
+    fn hold_server_dpms(&self) {
+        use x11rb::connection::RequestConnection as _;
+        use x11rb::protocol::dpms::ConnectionExt as _;
+        let Some((c, _)) = self.conn.as_ref() else {
+            return;
+        };
+        if !matches!(
+            c.extension_information(x11rb::protocol::dpms::X11_EXTENSION_NAME),
+            Ok(Some(_))
+        ) {
+            return;
+        }
+        let current = c
+            .dpms_get_timeouts()
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| (r.standby_timeout, r.suspend_timeout, r.off_timeout));
+        if server_dpms_needs_reset(current) {
+            if let Ok(cookie) = c.dpms_set_timeouts(0, 0, 0) {
+                let _ = cookie.check();
+            }
+        }
+    }
+}
+
+/// Délais DPMS du serveur X à remettre à zéro (voir `hold_server_dpms`).
+pub fn server_dpms_needs_reset(current: Option<(u16, u16, u16)>) -> bool {
+    current.is_some_and(|t| t != (0, 0, 0))
 }
 
 fn log(root: &Path, msg: &str) {
@@ -486,6 +523,7 @@ pub fn run(root: &Path) -> i32 {
         if let Some(x) = x_idle.secs(now) {
             idle = idle.min(x);
         }
+        x_idle.hold_server_dpms();
         let caps = sleep::capabilities_at(root);
         match idle_step(
             idle,
