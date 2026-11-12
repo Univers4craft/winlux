@@ -1361,8 +1361,8 @@ unsafe extern "win64" fn v_get_channel_volumes(v: *mut Voice, n: u32, p: *mut f3
     }
     with_voice(v, |g, id| {
         if let Some(s) = g.voices.get(&id) {
-            for i in 0..(n as usize).min(s.channel_volumes.len()) {
-                *p.add(i) = s.channel_volumes[i];
+            for (i, &v) in s.channel_volumes.iter().enumerate().take(n as usize) {
+                *p.add(i) = v;
             }
         }
     })
