@@ -9,6 +9,7 @@ pub mod domain;
 #[cfg(test)]
 pub mod emit;
 pub mod exceptions;
+pub mod fichiers;
 pub mod gc;
 pub mod il;
 pub mod interop;

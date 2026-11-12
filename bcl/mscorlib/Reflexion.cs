@@ -247,12 +247,21 @@ namespace System.IO
     {
         public IOException() { }
         public IOException(string message) : base(message) { }
+        public IOException(string message, Exception innerException) : base(message, innerException) { }
+        public IOException(string message, int hresult) : base(message) { }
     }
 
     public class FileNotFoundException : IOException
     {
+        private readonly string _fichier;
+
         public FileNotFoundException() { }
         public FileNotFoundException(string message) : base(message) { }
+        public FileNotFoundException(string message, Exception innerException) : base(message, innerException) { }
+        public FileNotFoundException(string message, string fileName) : base(message) { _fichier = fileName; }
+        public FileNotFoundException(string message, string fileName, Exception innerException) : base(message, innerException) { _fichier = fileName; }
+
+        public string FileName { get { return _fichier; } }
     }
 }
 
