@@ -625,6 +625,23 @@ namespace System.Threading
             _noyau = 0;
             if (h != 0) FermerNoyau(h);
         }
+
+        // Handle du noyau vu comme SafeWaitHandle (#2019). Un objet géré
+        // (ManualResetEvent…) n'en a pas : la poignée est alors invalide.
+        protected static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        public Microsoft.Win32.SafeHandles.SafeWaitHandle SafeWaitHandle
+        {
+            get { return new Microsoft.Win32.SafeHandles.SafeWaitHandle(_noyau == 0 ? InvalidHandle : new IntPtr(_noyau), false); }
+            set { _noyau = value == null || value.IsInvalid ? 0 : value.DangerousGetHandle().ToInt64(); }
+        }
+
+        [Obsolete("Use the SafeWaitHandle property instead.")]
+        public virtual IntPtr Handle
+        {
+            get { return _noyau == 0 ? InvalidHandle : new IntPtr(_noyau); }
+            set { _noyau = value == InvalidHandle ? 0 : value.ToInt64(); }
+        }
     }
 
     public class EventWaitHandle : WaitHandle

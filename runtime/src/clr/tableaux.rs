@@ -10,8 +10,9 @@
 use super::exceptions::ClrException;
 use super::gc;
 use super::il::{load, store, Interpreter, Value};
+use super::metadata::{self, ElementType};
 use super::tables::{TableId, Token};
-use super::types::Kind;
+use super::types::{self, Kind};
 
 /// Données d'un tableau à une dimension : longueur (u64) puis éléments.
 const DATA: usize = 8;
@@ -318,6 +319,55 @@ impl Interpreter {
         let src = asm.rva_slice(rva, size).ok_or_else(bad)?;
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), arr.add(DATA), size) };
         Ok(Value::Null)
+    }
+
+    /// `isinst`/`castclass` vers un type tableau `T[]` (jeton TypeSpec) :
+    /// l'objet doit être un tableau dont les éléments conviennent (#2023).
+    /// Un tableau de références ne garde pas le type de ses éléments : tout
+    /// `U[]` de références est accepté pour un `T[]` de références. Pour les
+    /// types valeur, l'élément doit être le même, au signe près pour les
+    /// entiers (int[] vers uint[], une énumération vers son type de base),
+    /// comme le permet ECMA-335 §I.8.7.1. `None` : pas un type tableau.
+    pub(super) fn array_cast(&self, token: u32, obj: *mut u8) -> Option<bool> {
+        if obj.is_null() || Token(token).table() != TableId::TypeSpec as u8 {
+            return None;
+        }
+        let blob = {
+            let a = &self.assembly;
+            a.get_blob(a.get_type_spec(Token(token).rid()).signature)
+                .to_vec()
+        };
+        let mut off = 0;
+        let ElementType::SzArray(inner) = metadata::decode_type(&blob, &mut off) else {
+            return None;
+        };
+        let actual = gc::type_of(obj)?;
+        if actual != types::TYPE_ARRAY {
+            return Some(false);
+        }
+        let target = self.resolve_sig(self.current, &inner, &self.current_gen());
+        let target_kind = self.kind_of_type(target);
+        let elem = gc::array_elem_type(obj);
+        if target_kind == Kind::Ref {
+            return Some(elem == 0);
+        }
+        if elem == 0 {
+            return Some(false);
+        }
+        let kind = self.kind_of_type(elem);
+        let integer = |k: Kind| match k {
+            Kind::I1 | Kind::U1 => Some(1),
+            Kind::I2 | Kind::U2 => Some(2),
+            Kind::I4 | Kind::U4 => Some(4),
+            Kind::I8 | Kind::U8 => Some(8),
+            Kind::I => Some(16),
+            _ => None,
+        };
+        Some(
+            elem == target
+                || kind == target_kind && !matches!(kind, Kind::Struct(_))
+                || integer(kind).is_some() && integer(kind) == integer(target_kind),
+        )
     }
 
     /// Façon de ranger un élément du tableau `arr`.
