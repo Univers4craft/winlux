@@ -244,6 +244,7 @@ shlwapi_reg.rs	RegStream	a-verifier
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskbarlist_com.rs	Obj	a-verifier	
 taskschd.rs	Obj	a-verifier	
+teams_win32.rs	AssocReg	a-verifier	
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
