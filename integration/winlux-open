@@ -350,7 +350,7 @@ run_wizard() {
     if [ -z "$wizard" ]; then
         # Sans assistant, un contrat de licence ne peut pas être accepté :
         # rien n'est installé (#2123). /S, /qn… restent possibles.
-        if "$winlux" --setup --license "$exe" >/dev/null 2>&1; then
+        if contract=$("$winlux" --setup --license "$exe" 2>/dev/null) && [ -n "$contract" ]; then
             show_error "« $(basename -- "$exe") » contient un contrat de licence à accepter, mais l'assistant d'installation n'est pas disponible. Rien n'a été installé."
             exit 1602
         fi
