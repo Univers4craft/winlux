@@ -175,6 +175,7 @@ namespace System.Reflection
         [MethodImpl(MethodImplOptions.InternalCall)] internal static extern object[] AttributsAssembly(long assembly);
         [MethodImpl(MethodImplOptions.InternalCall)] internal static extern long AssemblyDe(Assembly a);
         [MethodImpl(MethodImplOptions.InternalCall)] internal static extern Assembly AssemblyParNom(string nom);
+        [MethodImpl(MethodImplOptions.InternalCall)] internal static extern Assembly[] Assemblies();
         [MethodImpl(MethodImplOptions.InternalCall)] internal static extern Type TypeDansAssembly(long assembly, string nom, bool ignorerCasse);
         [MethodImpl(MethodImplOptions.InternalCall)] internal static extern Type[] TypesAssembly(long assembly);
 
@@ -707,6 +708,8 @@ namespace System.Reflection
         {
             if (assemblyString == null) throw new ArgumentNullException("assemblyString");
             Assembly a = Rtti.AssemblyParNom(assemblyString);
+            // Introuvable : les gestionnaires d'AppDomain.AssemblyResolve (#2054).
+            if (a == null) a = AppDomain.CurrentDomain.Resoudre(assemblyString, null);
             if (a == null)
                 throw new System.IO.FileNotFoundException("Could not load file or assembly '" + assemblyString + "' or one of its dependencies. The system cannot find the file specified.");
             return a;

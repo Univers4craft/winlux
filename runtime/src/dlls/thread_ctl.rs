@@ -14,9 +14,10 @@
 //! PE, code JIT) : arrêté dans du code de Winlux, il pourrait tenir un verrou
 //! dont le thread qui suspend a besoin. Il répond alors « plus tard » et le
 //! signal est renvoyé jusqu'à ce qu'il soit revenu au code invité. Un thread
-//! qui reste longtemps dans Winlux (attente bloquante) est arrêté quand
-//! même, et `GetThreadContext` le signale par CONTEXT_SERVICE_ACTIVE comme
-//! Windows pour un thread dans un appel système.
+//! qui reste dans Winlux est arrêté quand même s'il dort dans le noyau
+//! (attente bloquante) ou au bout de 200 ms, sauf s'il tient une garde
+//! [`NoPark`] (#2065), et `GetThreadContext` le signale par
+//! CONTEXT_SERVICE_ACTIVE comme Windows pour un thread dans un appel système.
 
 use super::seh::{self, Context, CONTEXT_SIZE};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
@@ -33,9 +34,53 @@ const REQUEST: u32 = 1;
 const PARKED: u32 = 2;
 const DEFERRED: u32 = 3;
 
-/// Après ce délai passé dans le code de Winlux, le thread est arrêté où il
-/// se trouve (attente bloquante probable).
-const FORCE_AFTER: Duration = Duration::from_millis(20);
+/// Après ce délai passé dans le code de Winlux, un thread endormi dans le
+/// noyau (attente bloquante) est arrêté où il se trouve.
+const FORCE_ASLEEP_AFTER: Duration = Duration::from_millis(20);
+
+/// Après ce délai, le thread est arrêté où il se trouve même s'il tourne
+/// encore dans le code de Winlux (#2065).
+const FORCE_AFTER: Duration = Duration::from_millis(200);
+
+thread_local! {
+    /// Profondeur des sections où le thread courant tient un verrou de
+    /// Winlux que le thread qui suspend peut demander (#2065).
+    static HOLD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Le thread courant ne peut pas être arrêté tant que cette garde vit : il
+/// tient un verrou de Winlux (table des réservations VirtualAlloc, journal
+/// d'API) que le thread qui suspend demanderait ensuite, par exemple dans
+/// `VirtualQuery` après `GetThreadContext`, et les deux resteraient bloqués.
+pub struct NoPark(());
+
+pub fn no_park() -> NoPark {
+    let _ = HOLD.try_with(|h| h.set(h.get() + 1));
+    NoPark(())
+}
+
+impl Drop for NoPark {
+    fn drop(&mut self) {
+        let _ = HOLD.try_with(|h| h.set(h.get().saturating_sub(1)));
+    }
+}
+
+/// Contexte de signal : le thread courant tient-il une garde [`NoPark`] ?
+fn held() -> bool {
+    HOLD.try_with(|h| h.get() > 0).unwrap_or(false)
+}
+
+/// Le thread `tid` du processus dort-il dans le noyau (états S ou D de
+/// `/proc/self/task/<tid>/stat`) ?
+fn asleep(tid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/self/task/{tid}/stat")) else {
+        return false;
+    };
+    let Some(end) = stat.rfind(')') else {
+        return false;
+    };
+    matches!(stat[end + 1..].trim_start().chars().next(), Some('S' | 'D'))
+}
 
 /// État de suspension d'un thread Windows, lu par son gestionnaire de
 /// signal : uniquement des atomiques.
@@ -221,7 +266,9 @@ unsafe fn park_here(uc: *mut libc::ucontext_t) {
     }
     let rip = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as usize;
     let guest = super::seh_hw::is_guest_code_pub(rip);
-    if !guest && !slot.force.load(Ordering::Acquire) {
+    // Jamais arrêté en tenant un verrou de Winlux ; hors du code invité,
+    // seulement quand `park` le force.
+    if held() || (!guest && !slot.force.load(Ordering::Acquire)) {
         if slot
             .state
             .compare_exchange(REQUEST, DEFERRED, Ordering::AcqRel, Ordering::Acquire)
@@ -295,7 +342,8 @@ fn park(slot: &SuspendSlot, tid: i32) -> bool {
         if slot.state.load(Ordering::Acquire) == DEFERRED {
             std::thread::sleep(delay);
             delay = (delay * 2).min(Duration::from_millis(1));
-            if start.elapsed() > FORCE_AFTER {
+            let elapsed = start.elapsed();
+            if elapsed > FORCE_AFTER || (elapsed > FORCE_ASLEEP_AFTER && asleep(tid)) {
                 slot.force.store(true, Ordering::Release);
             }
             let _ =
@@ -587,5 +635,82 @@ mod tests {
         h.join().unwrap();
         // Thread terminé : plus rien à arrêter.
         assert!(!unsafe { get_context(&slot, tid, ctx.ptr()) });
+    }
+
+    /// Thread qui tourne en tenant une garde NoPark : jamais arrêté tant
+    /// qu'il la tient, même au-delà de FORCE_AFTER (#2065).
+    #[test]
+    fn pas_d_arret_sous_garde_no_park() {
+        use std::sync::Arc;
+        static RELEASE: AtomicBool = AtomicBool::new(false);
+        static RELEASED: AtomicBool = AtomicBool::new(false);
+        static DONE: AtomicBool = AtomicBool::new(false);
+        let slot = Arc::new(SuspendSlot::new());
+        let tid = Arc::new(AtomicI32::new(0));
+        let (s2, t2) = (slot.clone(), tid.clone());
+        let h = std::thread::spawn(move || {
+            let me = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
+            register(me, &s2);
+            let hold = no_park();
+            t2.store(me, Ordering::Release);
+            while !RELEASE.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            RELEASED.store(true, Ordering::Release);
+            drop(hold);
+            while !DONE.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            unregister(me, &s2);
+        });
+        while tid.load(Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        let tid = tid.load(Ordering::Acquire);
+        let releaser = std::thread::spawn(|| {
+            std::thread::sleep(FORCE_AFTER * 2);
+            RELEASE.store(true, Ordering::Release);
+        });
+        assert_eq!(suspend(&slot, tid), Ok(0));
+        assert!(
+            RELEASED.load(Ordering::Acquire),
+            "arrêté en tenant la garde"
+        );
+        assert_eq!(resume(&slot), 1);
+        DONE.store(true, Ordering::Release);
+        releaser.join().unwrap();
+        h.join().unwrap();
+    }
+
+    /// Thread endormi dans le noyau depuis Winlux : arrêté sans attendre
+    /// FORCE_AFTER (#2065).
+    #[test]
+    fn arret_rapide_d_un_thread_endormi() {
+        use std::sync::Arc;
+        let slot = Arc::new(SuspendSlot::new());
+        let tid = Arc::new(AtomicI32::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (s2, t2, st2) = (slot.clone(), tid.clone(), stop.clone());
+        let h = std::thread::spawn(move || {
+            let me = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
+            register(me, &s2);
+            t2.store(me, Ordering::Release);
+            while !st2.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            unregister(me, &s2);
+        });
+        while tid.load(Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        let tid = tid.load(Ordering::Acquire);
+        std::thread::sleep(Duration::from_millis(5));
+        let t0 = Instant::now();
+        assert_eq!(suspend(&slot, tid), Ok(0));
+        let took = t0.elapsed();
+        assert_eq!(resume(&slot), 1);
+        stop.store(true, Ordering::Release);
+        h.join().unwrap();
+        assert!(took < FORCE_AFTER, "arrêt en {took:?}");
     }
 }
