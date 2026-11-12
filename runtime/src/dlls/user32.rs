@@ -2965,6 +2965,30 @@ pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32
         return 0;
     }
     let windows = gui::enum_top_level_windows();
+    if window_diag() {
+        // #1886 : ce que voit le suivi d'occultation de Chromium (son fil
+        // relit la liste, la visibilité et le rectangle de chaque fenêtre).
+        let tid = libc::syscall(libc::SYS_gettid);
+        let list: Vec<String> = windows
+            .iter()
+            .map(|&h| {
+                let r = gui::screen_rect(h).map_or("-".into(), |r| {
+                    format!("{},{}-{},{}", r.left, r.top, r.right, r.bottom)
+                });
+                format!(
+                    "{h:#x} {} v={} st={:#x} ex={:#x} {r}",
+                    gui::window_class(h).unwrap_or_default(),
+                    gui::is_window_visible(h) as u8,
+                    gui::window_style(h).unwrap_or(0),
+                    gui::window_ex_style(h).unwrap_or(0),
+                )
+            })
+            .collect();
+        eprintln!(
+            "winlux[fenetre] EnumWindows fil {tid} : {}",
+            list.join(" | ")
+        );
+    }
     type EnumCallback = unsafe extern "win64" fn(usize, isize) -> i32;
     let cb: EnumCallback = std::mem::transmute(callback);
     for hwnd in windows {

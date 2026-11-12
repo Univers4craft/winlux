@@ -141,6 +141,8 @@ dxgi.rs	DxgiSwapChainVTable	x86	objet COM : passerelles x86 tirées des signatur
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
 electron_win32.rs	Header	interne	test unitaire : HSTRING bâti par le programme (C++/WinRT, windows-rs), lu à la taille de pointeur du programme (#1712)
+enum_variant.rs	EnumVariant	x86	objet COM du runtime (IEnumVARIANT) ; un programme x86 le reçoit par le mandataire décrit dans wow32/com_netfw.rs, jamais la structure elle-même (#2036)
+enum_variant.rs	Item	interne	objet COM factice des tests unitaires, jamais vu par un programme (#2036)
 fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 filedialog_com.rs	FakeSink	interne	test unitaire (faux IFileDialogEvents, #1288)
 games_win32.rs	WsaBuf	a-verifier	
