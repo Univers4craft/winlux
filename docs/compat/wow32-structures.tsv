@@ -186,6 +186,7 @@ mscms.rs	Profile	interne	test unitaire (PROFILE lu aux décalages x64 dans open_
 msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TSF) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msctf_profiles.rs	Profiles	interne	objet COM du runtime (TF_InputProcessorProfiles) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msvcp140.rs	Thrd	a-verifier	
+msvcp140_1.rs	Resource	a-verifier	objet std::pmr::memory_resource rendu au programme (table virtuelle) ; disposition 64 bits seulement, aucun chemin x86 vérifié (#2178)
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 netfw.rs	App	x86	objet COM du runtime (INetFwAuthorizedApplication) ; un programme x86 le reçoit par le mandataire décrit dans wow32/com_netfw.rs, jamais la structure elle-même (#1919)
 netfw.rs	Static	x86	objets COM du runtime (INetFwMgr, INetFwPolicy, INetFwProfile, INetFwAuthorizedApplications) ; mandataires x86 décrits dans wow32/com_netfw.rs (#1919)
