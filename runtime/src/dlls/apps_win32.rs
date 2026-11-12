@@ -1569,19 +1569,26 @@ struct TpWait {
 unsafe extern "win64" fn create_threadpool_wait(
     callback: Option<WaitCallback>,
     context: usize,
-    _env: usize,
+    env: usize,
 ) -> usize {
     let Some(callback) = callback else {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    std::sync::Arc::into_raw(std::sync::Arc::new(TpWait {
+    let wait = std::sync::Arc::into_raw(std::sync::Arc::new(TpWait {
         callback,
         context,
         generation: std::sync::atomic::AtomicU64::new(0),
         running: std::sync::Mutex::new(0),
         idle: std::sync::Condvar::new(),
-    })) as usize
+    })) as usize;
+    // Groupe de nettoyage de l'environnement (#2110).
+    crate::dlls::threadpool::join_group_with_context(
+        env,
+        crate::dlls::threadpool::Member::Wait(wait),
+        context,
+    );
+    wait
 }
 
 /// Délai FILETIME de SetThreadpoolWait en millisecondes (None = infini).
@@ -1664,6 +1671,16 @@ unsafe extern "win64" fn close_threadpool_wait(wait: usize) {
     if wait == 0 {
         return;
     }
+    crate::dlls::threadpool::leave_groups(wait);
+    let w = std::sync::Arc::from_raw(wait as *const TpWait);
+    w.generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Libération d'une attente par CloseThreadpoolCleanupGroupMembers :
+/// annulée si demandé, ses rappels en cours attendus, puis fermée.
+pub(crate) unsafe fn release_threadpool_wait(wait: usize, cancel: bool) {
+    wait_for_threadpool_wait_callbacks(wait, i32::from(cancel));
     let w = std::sync::Arc::from_raw(wait as *const TpWait);
     w.generation
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

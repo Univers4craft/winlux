@@ -1607,8 +1607,8 @@ unsafe extern "win64" fn raise_exception_impl(
     let n = nargs.min(15);
     rec.nparams = n;
     if !args.is_null() {
-        for i in 0..n as usize {
-            rec.info[i] = *args.add(i);
+        for (i, slot) in rec.info.iter_mut().enumerate().take(n as usize) {
+            *slot = *args.add(i);
         }
     }
     if code == 0xE06D_7363 && seh_trace() {
