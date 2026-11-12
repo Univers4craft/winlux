@@ -1142,15 +1142,13 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: cabinet_lz::cabinet_exports(),
                 handle: 0,
             },
-            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792) ;
-            // icu.dll (Windows 10 1903+) exporte les mêmes noms.
+            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792).
+            // Surtout pas d'icu.dll : le runtime .NET la charge en premier
+            // et exige toute l'API ICU (u_charsToUChars, ucol_*, …) ; une
+            // icu.dll partielle fait avorter Paint.NET au démarrage, alors
+            // qu'en son absence .NET retombe sur les API NLS (#2056).
             Builtin {
                 name: "icuuc",
-                exports: icuuc::exports(),
-                handle: 0,
-            },
-            Builtin {
-                name: "icu",
                 exports: icuuc::exports(),
                 handle: 0,
             },

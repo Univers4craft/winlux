@@ -1337,7 +1337,6 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "wldap32"
         // U_EXPORT2 d'ICU est __cdecl (#1792).
         || n == "icuuc"
-        || n == "icu"
         // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
         // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
         || (n == "cabinet"
