@@ -260,8 +260,12 @@ with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME":
     calls = []
     apt = store["Apt"].__new__(store["Apt"])
     apt.apt = lambda arguments, progress: calls.append(arguments) or 0
+    apt.installed = lambda: {}
+    apt.autoremovable = lambda suggests=True: {"libgnome-games-support-1-3"}
     store["Apt"].remove(apt, "gnome-mines", None)
-    ok(calls and calls[0][:2] == ["purge", "--autoremove"], "Boutique : désinstaller = purge --autoremove (réglages et dépendances partent)")
+    # #2189 : purge, puis ce qui est devenu inutile, calculé à part.
+    ok(calls[:2] == [["purge", "--", "gnome-mines"], ["purge", "--", "libgnome-games-support-1-3"]],
+       "Boutique : désinstaller = purge, puis dépendances devenues inutiles (#2189)")
 store_source = (SCRIPTS / "winlux-store.py").read_text()
 ok(store_source.index("write_index(sources, apps, False)") < store_source.index('progress(100, tr(done'),
    "Boutique : index réécrit avant « done » (plus de « Obtenir » après installation)")
