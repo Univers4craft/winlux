@@ -6965,6 +6965,53 @@ pub extern "win64" fn release_mutex(h: usize) -> i32 {
     }
 }
 
+/// System.Threading.Mutex de la mscorlib Winlux (#1988) : le mutex .NET est
+/// le mutex nommé de kernel32, donc partagé avec les autres processus du
+/// compte (#20). Rend le handle (0 en cas d'échec) et le dernier code
+/// d'erreur : 183 quand le nom existait déjà.
+pub(crate) fn clr_mutex_create(owned: bool, name: Option<&str>) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let c = name
+        .filter(|n| !n.is_empty())
+        .and_then(|n| std::ffi::CString::new(n).ok());
+    let h = unsafe {
+        create_mutex_a(
+            0,
+            owned as i32,
+            c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+        )
+    };
+    (h, crate::process::last_error())
+}
+/// Semaphore de la mscorlib (#1988) : sémaphore de kernel32, nommé ou non.
+pub(crate) fn clr_semaphore_create(initial: i32, maximum: i32, name: Option<&str>) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let c = name
+        .filter(|n| !n.is_empty())
+        .and_then(|n| std::ffi::CString::new(n).ok());
+    let h = unsafe {
+        create_semaphore_a(
+            0,
+            initial,
+            maximum,
+            c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+        )
+    };
+    (h, crate::process::last_error())
+}
+/// Mutex.OpenExisting et Semaphore.OpenExisting (#1988) : 0 et le code
+/// d'erreur (2 = introuvable, 6 = le nom désigne un autre type d'objet).
+pub(crate) fn clr_sync_open(name: &str, semaphore: bool) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let kind = if semaphore {
+        SHARED_KIND_SEMAPHORE
+    } else {
+        SHARED_KIND_MUTEX
+    };
+    let h = open_sync_by_name(name, kind);
+    (h, crate::process::last_error())
+}
+
 unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
     if name.is_null() {
         crate::process::set_last_error(87);

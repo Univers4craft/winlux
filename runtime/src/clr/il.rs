@@ -28,7 +28,7 @@ use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
 use super::tableaux;
-use super::tables::{TableId, Token};
+use super::tables::{CodedIndex, TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
 
@@ -1021,10 +1021,16 @@ impl Interpreter {
         let Some(field) = self.resolve_field(token) else {
             // Champ statique de la bibliothèque intégrée : emplacement propre
             // au jeton.
+            // String.Empty : String est un type intégré, son constructeur
+            // statique ne tourne pas ; le champ vaut la chaîne vide (#1997).
+            let empty = self.is_string_empty(token);
             let mut statics = self.shared.external_statics.lock().unwrap();
             let slot = statics
                 .entry((self.current, token))
                 .or_insert_with(|| Box::new([0u64; 4]));
+            if empty && slot[0] == 0 {
+                slot[0] = bcl::alloc_managed_string("").as_ref() as u64;
+            }
             return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
         };
         self.ensure_initialized(field.owner)?;
@@ -1035,6 +1041,42 @@ impl Interpreter {
         let ptr =
             types::with_types(|reg| reg.static_field_ptr(field.owner, field.info.offset, size));
         Ok((ptr, field.info.kind))
+    }
+
+    /// Le jeton de champ désigne-t-il System.String::Empty ?
+    fn is_string_empty(&self, token: u32) -> bool {
+        let a = &self.assembly;
+        let row = Token(token).rid();
+        let (name, ns, class) = match Token(token).table() {
+            t if t == TableId::Field as u8 => {
+                let owner = self.domain[self.current]
+                    .field_owner
+                    .get(row as usize)
+                    .copied()
+                    .unwrap_or(0);
+                if owner == 0 {
+                    return false;
+                }
+                let td = a.get_type_def(owner);
+                (a.get_field(row).name, td.namespace, td.name)
+            }
+            t if t == TableId::MemberRef as u8 => {
+                let mr = a.get_member_ref(row);
+                match CodedIndex::MemberRefParent.decode(mr.class) {
+                    (Some(TableId::TypeRef), prow) => {
+                        let tr = a.get_type_ref(prow);
+                        (mr.name, tr.namespace, tr.name)
+                    }
+                    (Some(TableId::TypeDef), prow) => {
+                        let td = a.get_type_def(prow);
+                        (mr.name, td.namespace, td.name)
+                    }
+                    _ => return false,
+                }
+            }
+            _ => return false,
+        };
+        a.get_string(name) == "Empty" && a.get_string(ns) == "System" && a.get_string(class) == "String"
     }
 
     /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.
