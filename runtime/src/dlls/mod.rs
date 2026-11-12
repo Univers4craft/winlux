@@ -47,6 +47,7 @@ pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
+pub mod crt_mbs;
 pub mod crt_more;
 pub mod crt_proc;
 pub mod crt_releve;
@@ -449,6 +450,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_mbs::exports());
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
