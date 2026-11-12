@@ -910,8 +910,27 @@ pub fn license(path: &Path) -> Option<String> {
     license_from_ux(&ux, super::user_language())
 }
 
+/// Texte d'un fichier XML de l'interface : UTF-8 ou UTF-16, reconnu à sa
+/// marque d'ordre des octets ou, sans marque, à « < » suivi d'un octet nul
+/// (détection de l'annexe F de la recommandation XML 1.0 du W3C). Le
+/// `BootstrapperApplicationData.xml` des bundles comme vc_redist est en
+/// UTF-16 (#2126).
+fn xml_text(b: &[u8]) -> String {
+    use crate::intl::text::{decode, Encoding};
+    let enc = if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(b"<\0") {
+        Encoding::Utf16Le
+    } else if b.starts_with(&[0xFE, 0xFF]) || b.starts_with(b"\0<") {
+        Encoding::Utf16Be
+    } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        Encoding::Utf8Bom
+    } else {
+        Encoding::Utf8
+    };
+    decode(b, enc)
+}
+
 fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
-    let manifest = parse_manifest(&String::from_utf8_lossy(ux.get("0")?));
+    let manifest = parse_manifest(&xml_text(ux.get("0")?));
     let by_path = |want: &str| {
         manifest
             .payloads
@@ -919,7 +938,7 @@ fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
             .find(|p| p.file_path.replace('/', "\\").eq_ignore_ascii_case(want))
             .and_then(|p| ux.get(&p.source_path))
     };
-    let ba = String::from_utf8_lossy(by_path("BootstrapperApplicationData.xml")?).into_owned();
+    let ba = xml_text(by_path("BootstrapperApplicationData.xml")?);
     let info = elements(&ba)
         .into_iter()
         .find(|e| e.name == "WixStdbaInformation")?;
@@ -1095,6 +1114,35 @@ pub mod tests {
             license_from_ux(&url, 0x040C).as_deref(),
             Some("https://exemple.org/eula")
         );
+        // vc_redist : BootstrapperApplicationData.xml en UTF-16 LE avec BOM,
+        // ou sans BOM ; UTF-16 BE ; UTF-8 avec BOM.
+        let utf16 = |be: bool, bom: bool| -> Vec<u8> {
+            let text = std::str::from_utf8(&ba[..]).unwrap();
+            let mut v: Vec<u8> = if bom { vec![0xFF, 0xFE] } else { vec![] };
+            if be && bom {
+                v = vec![0xFE, 0xFF];
+            }
+            for u in text.encode_utf16() {
+                v.extend(if be { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            v
+        };
+        let mut utf8_bom = b"\xEF\xBB\xBF".to_vec();
+        utf8_bom.extend_from_slice(&ba[..]);
+        for data in [
+            utf16(false, true),
+            utf16(false, false),
+            utf16(true, true),
+            utf16(true, false),
+            utf8_bom,
+        ] {
+            let mut enc = ux.clone();
+            enc.insert("u0".into(), data);
+            assert_eq!(
+                license_from_ux(&enc, 0x040C).as_deref().map(str::trim),
+                Some("Contrat français")
+            );
+        }
         let mut none = ux;
         none.remove("u0");
         assert_eq!(license_from_ux(&none, 0x040C), None);
