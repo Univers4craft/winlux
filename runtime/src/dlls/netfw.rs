@@ -219,9 +219,7 @@ unsupported! {
     profile_icmp => "INetFwProfile::get_IcmpSettings";
     profile_open_ports => "INetFwProfile::get_GloballyOpenPorts";
     profile_services => "INetFwProfile::get_Services";
-    apps_new_enum => "INetFwAuthorizedApplications::get__NewEnum";
     policy2_service_restriction => "INetFwPolicy2::get_ServiceRestriction";
-    rules_new_enum => "INetFwRules::get__NewEnum";
 }
 /// Méthode acceptée sans effet. En x64, l'appelant nettoie la pile : une
 /// seule fonction convient à toutes les signatures.
@@ -496,6 +494,25 @@ unsafe extern "win64" fn apps_item(_: usize, image: *const u16, out: *mut *mut c
     }
 }
 
+/// get__NewEnum : IEnumVARIANT sur une copie des autorisations retenues.
+/// SteamService parcourt la liste et notait « Failed to add firewall
+/// exception » tant qu'elle rendait E_NOTIMPL (#2036).
+unsafe extern "win64" fn apps_new_enum(_: usize, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let items: Vec<usize> = authorized()
+        .iter()
+        .map(|a| new_app(a.clone()) as usize)
+        .collect();
+    crate::trace!(
+        "INetFwAuthorizedApplications::get__NewEnum : {} autorisation(s)",
+        items.len()
+    );
+    *out = super::enum_variant::new_enum(items);
+    S_OK
+}
+
 // ----- INetFwAuthorizedApplication : objet compté, propriétés modifiables -----
 
 #[repr(C)]
@@ -668,6 +685,7 @@ mod tests {
     /// → AuthorizedApplications → Add, puis Item retrouve l'autorisation.
     #[test]
     fn autorisation_de_programme_acceptee_et_retrouvee() {
+        const S_FALSE: i32 = 1;
         unsafe {
             let mut mgr: *mut c_void = std::ptr::null_mut();
             assert_eq!(
@@ -725,6 +743,42 @@ mod tests {
                 HR_NOT_FOUND
             );
             assert!(missing.is_null());
+
+            // _NewEnum : IEnumVARIANT qui rend l'autorisation (#2036).
+            let new_enum: extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
+                method(apps, 11);
+            let mut unk = std::ptr::null_mut();
+            assert_eq!(new_enum(apps, &mut unk), S_OK);
+            let qi: extern "win64" fn(
+                *mut c_void,
+                *const super::super::ole32::Guid,
+                *mut *mut c_void,
+            ) -> i32 = method(unk, 0);
+            let mut en = std::ptr::null_mut();
+            assert_eq!(
+                qi(
+                    unk,
+                    g(&super::super::enum_variant::IID_IENUM_VARIANT),
+                    &mut en
+                ),
+                S_OK
+            );
+            let next: extern "win64" fn(*mut c_void, u32, *mut u8, *mut u32) -> i32 = method(en, 3);
+            let mut v = [0u8; 24];
+            let mut got = 0u32;
+            assert_eq!(next(en, 1, v.as_mut_ptr(), &mut got), S_OK);
+            assert_eq!((got, *(v.as_ptr() as *const u16)), (1, 9));
+            let listed = *(v.as_ptr().add(8) as *const *mut c_void);
+            let mut b2 = std::ptr::null_mut();
+            let image_of: extern "win64" fn(*mut c_void, *mut *mut u16) -> i32 = method(listed, 9);
+            assert_eq!(image_of(listed, &mut b2), S_OK);
+            assert!(bstr_in(b2).eq_ignore_ascii_case("C:\\Program Files (x86)\\Steam\\steam.exe"));
+            assert_eq!(next(en, 1, v.as_mut_ptr(), &mut got), S_FALSE);
+            let rel: extern "win64" fn(*mut c_void) -> u32 = method(listed, 2);
+            rel(listed);
+            let rel_en: extern "win64" fn(*mut c_void) -> u32 = method(en, 2);
+            rel_en(en);
+            rel_en(unk);
 
             let remove: extern "win64" fn(*mut c_void, *mut u16) -> i32 = method(apps, 9);
             assert_eq!(remove(apps, image), S_OK);
