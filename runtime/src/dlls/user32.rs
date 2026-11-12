@@ -987,6 +987,10 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
         return 0;
     }
+    // ShowWindowAsync venu d'un autre thread (#2110).
+    if super::teams_win32::dispatch_private(m.hwnd, m.message, m.wparam) {
+        return 0;
+    }
     // WM_TIMER d'un minuteur à fonction de rappel : lParam est la TIMERPROC,
     // appelée à la place de la procédure de fenêtre.
     if m.message == 0x0113 && m.lparam != 0 {
