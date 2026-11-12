@@ -76,18 +76,6 @@ verrous sont utilisés tels quels : `apt update` / `apt upgrade` en terminal
 continuent de fonctionner, et ce que le Store installe se met à jour aussi
 par `apt upgrade`, `flatpak update` ou `snap refresh`.
 
-Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
-`apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
-niveau « user »), et aussi quand les fiches AppStream manquent, au plus toutes
-les 6 h (#2184). `/etc/apt/apt.conf.d/50winlux-appstream` demande à apt les
-fiches DEP-11 (`Components-amd64.yml.gz`) de chaque dépôt ; la Boutique les lit
-dans `/var/lib/apt/lists` comme dans `/var/lib/swcatalog`, avec les icônes
-64x64 du miroir : vraies icônes et environ 2 000 applications au lieu de la
-seule sélection (#2185). Pendant les déclencheurs de dpkg (shared-mime-info…),
-le bandeau dit « Mise à jour du système après l'installation » sans
-pourcentage ; un clic sur un autre « Installer » y affiche « Une installation
-est déjà en cours : attendez qu'elle se termine » (#2186).
-
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
 boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls
