@@ -1864,6 +1864,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     {
         return hr;
     }
+    // Windows.System.Profile.WindowsIntegrityPolicy (#2217).
+    if let Some(hr) = super::integrity_policy::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
