@@ -1,7 +1,11 @@
 // Témoin de System.IO dans la mscorlib Winlux (#2012, #2013) et de
 // System.Random (#2015).
 // Code de sortie attendu : 200.
-// Sinon : le numéro (1 à 12) de la première vérification qui échoue.
+// Sinon : le numéro (1 à 13) de la première vérification qui échoue.
+// La 13 appelle les primitives de System.IO.Natif par réflexion avec des
+// bornes qui débordent ou un objet qui n'est pas un tableau d'octets :
+// elles doivent refuser (-87, ERROR_INVALID_PARAMETER) sans toucher la
+// mémoire hors du tableau.
 // Corsair.Service.exe (iCUE 4.18) appelait TextWriter::Write (9 fois),
 // Path::Combine (9), FileStream::.ctor (8), File::Exists (8),
 // BinaryWriter::Write (8), Stream::Read/Write, StringWriter, StringReader,
@@ -9,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 
 namespace Temoins
@@ -112,6 +117,32 @@ namespace Temoins
             Random a = new Random(42), b = new Random(42);
             int x = a.Next(10, 20);
             if (x != b.Next(10, 20) || x < 10 || x >= 20 || a.NextDouble() >= 1.0 || new Random().Next(5) >= 5) return 12;
+
+            Type natif = typeof(FileStream).Assembly.GetType("System.IO.Natif");
+            MethodInfo lire = natif == null ? null : natif.GetMethod("Lire", BindingFlags.NonPublic | BindingFlags.Static);
+            MethodInfo ecrire = natif == null ? null : natif.GetMethod("Ecrire", BindingFlags.NonPublic | BindingFlags.Static);
+            if (lire == null || ecrire == null) return 13;
+            string sonde = Path.Combine(temp, "temoin-sonde-" + Environment.TickCount);
+            using (FileStream fs = new FileStream(sonde, FileMode.Create))
+            {
+                fs.Write(new byte[64], 0, 64);
+                fs.Flush();
+                fs.Position = 0;
+                long h = (long)typeof(FileStream).GetField("_h", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(fs);
+                object[][] essais = {
+                    new object[] { h, new byte[4], int.MaxValue, int.MaxValue },
+                    new object[] { h, new byte[4], 2, int.MaxValue },
+                    new object[] { h, new byte[4], -1, 2 },
+                    new object[] { h, "pas un tableau", 0, 8 },
+                    new object[] { h, new int[4], 0, 8 },
+                };
+                foreach (object[] e in essais)
+                {
+                    if ((int)lire.Invoke(null, e) != -87 || (int)ecrire.Invoke(null, e) != -87) return 13;
+                }
+                if ((int)lire.Invoke(null, new object[] { h, new byte[8], 0, 8 }) != 8) return 13;
+            }
+            File.Delete(sonde);
             return 200;
         }
     }

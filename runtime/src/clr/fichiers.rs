@@ -59,8 +59,20 @@ fn byte_span(arr: *mut u8, off: i64, count: i64) -> Option<*mut u8> {
     if arr.is_null() || off < 0 || count < 0 {
         return None;
     }
+    // Un vrai tableau d'octets : la réflexion peut passer n'importe quel
+    // objet, dont les premiers octets ne sont pas une longueur.
+    if gc::type_of(arr) != Some(types::TYPE_ARRAY)
+        || !matches!(
+            gc::array_elem_type(arr),
+            types::TYPE_BYTE | types::TYPE_SBYTE
+        )
+    {
+        return None;
+    }
+    // Addition vérifiée : la primitive est joignable par réflexion depuis
+    // du code géré, qui peut passer n'importe quelles bornes.
     let len = unsafe { *(arr as *const u64) } as i64;
-    if off + count > len {
+    if off.checked_add(count).is_none_or(|end| end > len) {
         return None;
     }
     Some(unsafe { arr.add(DATA + off as usize) })
