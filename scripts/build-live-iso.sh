@@ -575,6 +575,12 @@ umask 077
 
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
+# cgroup v2 (#2142) : sans lui le pare-feu abandonne ses règles sortantes par
+# application (« socket cgroupv2 ») et /sys/fs/cgroup reste un dossier vide.
+# Monté une seule fois : /init se relance après une mise à jour A/B.
+if test -d /sys/fs/cgroup && ! /bin/busybox grep -q ' /sys/fs/cgroup cgroup2 ' /proc/mounts; then
+    /bin/busybox mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null || true
+fi
 # Variables UEFI (efibootmgr, entrée « Winlux » de l'installateur) : sans
 # efivarfs, efibootmgr répond « EFI variables are not supported ». Échoue
 # sans bruit avec efi=noruntime (UEFI 32 bits) ou au démarrage BIOS.

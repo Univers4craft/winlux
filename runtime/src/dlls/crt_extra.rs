@@ -800,6 +800,27 @@ extern "win64" fn set_invalid_parameter_handler(h: usize) -> usize {
 extern "win64" fn get_invalid_parameter_handler() -> usize {
     *crate::dlls::lock(&INVALID_PARAMETER)
 }
+
+/// Paramètre invalide détecté par une fonction de la CRT (#2128) : appelle
+/// le gestionnaire installé par `_set_invalid_parameter_handler` avec des
+/// arguments nuls, comme la CRT de diffusion. Sans gestionnaire, Winlux
+/// journalise et l'appelant rend son code d'erreur
+/// (`_invalid_parameter_noinfo`).
+pub(crate) fn invoke_invalid_parameter() {
+    let h = get_invalid_parameter_handler();
+    if h == 0 {
+        crate::dlls::crt_ucrt::invalid_parameter_noinfo();
+        return;
+    }
+    if crate::wow32::active() {
+        // Programme x86 : gestionnaire cdecl de 5 arguments.
+        crate::wow32::call32(h, &[0, 0, 0, 0, 0]);
+        return;
+    }
+    let f: extern "win64" fn(*const u16, *const u16, *const u16, u32, usize) =
+        unsafe { std::mem::transmute(h) };
+    f(std::ptr::null(), std::ptr::null(), std::ptr::null(), 0, 0);
+}
 /// Printf « positionnel » (%1$d) : les jeux s'en servent comme d'un printf
 /// ordinaire ; le moteur de formatage commun suffit.
 unsafe extern "win64" fn stdio_common_vsprintf_p(
