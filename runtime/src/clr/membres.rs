@@ -835,13 +835,10 @@ impl Interpreter {
     /// `assembly_at` ou la lecture de la ligne paniqueraient.
     fn member_handle_ok(&self, h: i64, table: TableId) -> bool {
         let (asm, row) = split(h);
-        if h < 0 || asm >= self.parked.len() {
-            return false;
-        }
-        if asm != self.current && self.parked[asm].is_none() {
-            return false;
-        }
-        row >= 1 && row <= self.assembly_at(asm).row_count(table)
+        h >= 0
+            && self
+                .try_assembly_at(asm)
+                .is_some_and(|a| row >= 1 && row <= a.row_count(table))
     }
 
     fn member_call_inner(&mut self, name: &str, args: &[Value]) -> Result<Value, ClrException> {

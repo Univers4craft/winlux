@@ -298,7 +298,8 @@ impl Interpreter {
         if index == 0 || Token(token).table() != TableId::Field as u8 {
             return Err(bad());
         }
-        let asm = self.assembly_at(index - 1);
+        // Poignée forgée possible : indice borné au domaine (#1968).
+        let asm = self.try_assembly_at(index - 1).ok_or_else(bad)?;
         let field = Token(token).rid();
         let rva = (1..=asm.row_count(TableId::FieldRva))
             .map(|row| asm.get_field_rva(row))

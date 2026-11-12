@@ -240,7 +240,7 @@ pub struct Interpreter {
     frames: Vec<CallFrame>,
     /// Assembly de la méthode en cours ; les autres attendent dans `parked`.
     pub assembly: Assembly,
-    pub(super) parked: Vec<Option<Assembly>>,
+    parked: Vec<Option<Assembly>>,
     pub(super) current: usize,
     pub(super) domain: Vec<AsmInfo>,
     /// État commun à tous les fils managés.
@@ -365,6 +365,16 @@ impl Interpreter {
             &self.assembly
         } else {
             self.parked[index].as_ref().expect("assembly du domaine")
+        }
+    }
+
+    /// Comme `assembly_at`, pour un indice venu du code managé (une poignée
+    /// peut être forgée) : `None` au lieu de paniquer hors du domaine.
+    pub(super) fn try_assembly_at(&self, index: usize) -> Option<&Assembly> {
+        if index == self.current {
+            Some(&self.assembly)
+        } else {
+            self.parked.get(index)?.as_ref()
         }
     }
 
