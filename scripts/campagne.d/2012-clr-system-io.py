@@ -3,6 +3,7 @@
 # Fichiers.
 # #2013 : File et Path suivent les règles de Windows, plus celles de Linux.
 # #2015 : System.Random dans notre mscorlib.
+# #2017 : bornes et type du tableau vérifiés dans les primitives de fichiers.
 bcl = ROOT / "bcl" / "mscorlib"
 fichiers = (bcl / "Fichiers.cs").read_text(encoding="utf-8")
 ok("public class FileStream : Stream" in (bcl / "Flux.cs").read_text(encoding="utf-8")
@@ -14,3 +15,6 @@ ok("internal static int LongueurRacine(string path)" in fichiers
    and "fn path_dispatch" not in (runtime_dlls.parent / "clr" / "bcl.rs").read_text(encoding="utf-8"),
    "CLR : File et Path suivent les règles de chemin de Windows (#2013)")
 ok("public class Random" in fichiers, "CLR : System.Random dans notre mscorlib (#2015)")
+fichiers_rs = (runtime_dlls.parent / "clr" / "fichiers.rs").read_text(encoding="utf-8")
+ok("off.checked_add(count)" in fichiers_rs and "types::TYPE_BYTE | types::TYPE_SBYTE" in fichiers_rs,
+   "CLR : les primitives de fichiers refusent des bornes ou un tableau invalides passés par réflexion (#2017)")
