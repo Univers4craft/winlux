@@ -324,6 +324,7 @@ GetFileTime
 GetFileType
 GetFinalPathNameByHandleA
 GetFinalPathNameByHandleW
+GetFirmwareType
 GetFullPathNameA
 GetFullPathNameTransactedA
 GetFullPathNameTransactedW

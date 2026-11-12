@@ -265,6 +265,8 @@ pub fn api_note(line: &str) {
 /// fichier ne peut pas être créé).
 fn api_log(line: &str) {
     static LOG: Mutex<Option<Option<ApiLog>>> = Mutex::new(None);
+    // Pas d'arrêt par SuspendThread en tenant le journal (#2065).
+    let _hold = crate::dlls::thread_ctl::no_park();
     let mut g = LOG
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

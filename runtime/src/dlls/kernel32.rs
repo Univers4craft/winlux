@@ -106,7 +106,7 @@ impl PageMap {
 /// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
 pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     let pages = protection.len();
-    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+    allocs().insert(
         base,
         VmRegion {
             size: pages * 4096,
@@ -117,6 +117,36 @@ pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     );
 }
 static ALLOCS: OnceLock<Mutex<HashMap<usize, VmRegion>>> = OnceLock::new();
+
+/// Table des réservations VirtualAlloc, verrouillée : le thread qui la
+/// tient ne peut pas être arrêté par SuspendThread (#2065), sinon le
+/// thread qui suspend resterait bloqué dans son `VirtualQuery` suivant.
+/// Les champs se libèrent dans l'ordre : le verrou, puis la garde.
+struct AllocsGuard {
+    maps: std::sync::MutexGuard<'static, HashMap<usize, VmRegion>>,
+    _hold: super::thread_ctl::NoPark,
+}
+
+impl std::ops::Deref for AllocsGuard {
+    type Target = HashMap<usize, VmRegion>;
+    fn deref(&self) -> &Self::Target {
+        &self.maps
+    }
+}
+
+impl std::ops::DerefMut for AllocsGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.maps
+    }
+}
+
+fn allocs() -> AllocsGuard {
+    let hold = super::thread_ctl::no_park();
+    AllocsGuard {
+        maps: lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))),
+        _hold: hold,
+    }
+}
 static HEAP_ALLOCS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
 pub(crate) struct GlobalMemory {
     pub(crate) bytes: Vec<u8>,
@@ -162,7 +192,8 @@ struct CompletionPacket {
 }
 struct CompletionPortState {
     queue: VecDeque<CompletionPacket>,
-    active: HashSet<ThreadId>,
+    /// Fils qui ont retiré un paquet, avec leur numéro de fil Linux.
+    active: HashMap<ThreadId, i32>,
 }
 pub(crate) struct CompletionPort {
     state: Mutex<CompletionPortState>,
@@ -947,7 +978,7 @@ pub(crate) fn release_iocp_slots_for_current_thread() {
     }
     for p in ports {
         let mut state = lock(&p.state);
-        if state.active.remove(&tid) {
+        if state.active.remove(&tid).is_some() {
             p.changed.notify_all();
         }
     }
@@ -1377,6 +1408,13 @@ fn start_overlapped_io(
     // au port de complétion (libuv s'en sert pour ses lectures d'essai).
     let raw_event = unsafe { (*ov).event };
     let event = raw_event & !1;
+    // ReadFile et WriteFile remettent l'événement de l'OVERLAPPED à non
+    // signalé au début de l'E/S (documentation Learn, « Synchronization and
+    // File Position ») : resté signalé d'une E/S précédente, il réveillait
+    // l'attente avant la fin de celle-ci (#2055).
+    if event != 0 {
+        let _ = reset_event(event);
+    }
     let completion = if raw_event & 1 != 0 {
         None
     } else {
@@ -1681,6 +1719,30 @@ pub unsafe extern "win64" fn cancel_io_ex(h: usize, overlapped: *mut Overlapped)
         1
     }
 }
+/// Fils actifs d'un port qui tournent vraiment. Comme sous Windows, un fil
+/// qui a retiré un paquet puis s'est bloqué ailleurs (WaitFor*, Sleep, E/S
+/// synchrone, verrou) ne compte plus dans la limite de concurrence : il
+/// laisse sa place à un autre fil qui attend le port (#2055). Un fil est en
+/// cours s'il est « R » dans /proc/self/task/TID/stat.
+fn running_threads(active: &HashMap<ThreadId, i32>) -> usize {
+    active
+        .values()
+        .filter(|&&tid| {
+            std::fs::read_to_string(format!("/proc/self/task/{tid}/stat"))
+                .ok()
+                .and_then(|st| {
+                    let rest = &st[st.rfind(')')? + 1..];
+                    rest.split_whitespace().next().map(|c| c == "R")
+                })
+                // Fil disparu : il ne tourne plus.
+                .unwrap_or(false)
+        })
+        .count()
+}
+/// Délai entre deux examens quand la file attend parce que la limite de
+/// concurrence est atteinte : un fil qui se bloque ailleurs ne prévient
+/// pas le port.
+const IOCP_CONCURRENCY_RECHECK_MS: u32 = 10;
 fn dequeue_iocp(
     port: &CompletionPort,
     max_packets: usize,
@@ -1689,15 +1751,38 @@ fn dequeue_iocp(
     let start = std::time::Instant::now();
     let current = std::thread::current().id();
     let mut state = lock(&port.state);
-    if state.active.remove(&current) {
+    if state.active.remove(&current).is_some() {
         port.changed.notify_all();
     }
+    let mut noted = false;
     loop {
-        if !state.queue.is_empty() && state.active.len() < port.max_concurrency {
+        let room = |state: &CompletionPortState| {
+            state.active.len() < port.max_concurrency
+                || running_threads(&state.active) < port.max_concurrency
+        };
+        let gated = !state.queue.is_empty() && !room(&state);
+        if !state.queue.is_empty() && !gated {
+            if state.active.len() >= port.max_concurrency {
+                // Avant #2055, ce paquet serait resté en file.
+                crate::trace!(
+                    "GetQueuedCompletionStatus : place d'un fil bloqué ailleurs reprise ({} actif(s), limite {}, {} paquet(s))",
+                    state.active.len(),
+                    port.max_concurrency,
+                    state.queue.len()
+                );
+            }
             let n = max_packets.min(state.queue.len());
             let packets = state.queue.drain(..n).collect();
-            state.active.insert(current);
+            state.active.insert(current, unsafe { libc::gettid() });
             return Ok(packets);
+        }
+        if gated && !noted {
+            noted = true;
+            crate::trace!(
+                "GetQueuedCompletionStatus : {} paquet(s) en attente, limite de concurrence {} atteinte par des fils qui tournent",
+                state.queue.len(),
+                port.max_concurrency
+            );
         }
         if timeout == 0 {
             return Err(258);
@@ -1711,9 +1796,14 @@ fn dequeue_iocp(
             }
             timeout - elapsed
         };
-        let (next, timed) = wait_condvar(&port.changed, state, left);
+        let wait = if gated {
+            left.min(IOCP_CONCURRENCY_RECHECK_MS)
+        } else {
+            left
+        };
+        let (next, timed) = wait_condvar(&port.changed, state, wait);
         state = next;
-        if timed && (state.queue.is_empty() || state.active.len() >= port.max_concurrency) {
+        if timed && wait == left && (state.queue.is_empty() || !room(&state)) {
             return Err(258);
         }
     }
@@ -1735,7 +1825,7 @@ pub extern "win64" fn create_io_completion_port(
         let p = Arc::new(CompletionPort {
             state: Mutex::new(CompletionPortState {
                 queue: VecDeque::new(),
-                active: HashSet::new(),
+                active: HashMap::new(),
             }),
             changed: Condvar::new(),
             max_concurrency: concurrency.max(1),
@@ -2353,7 +2443,7 @@ unsafe fn create_file_opened(
     }
     if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
         crate::trace!("CreateFile({path}) : effacé à la fermeture");
-        lock(delete_on_close()).insert(h, p);
+        crate::dlls::doomed::register(h, p);
     }
     h
 }
@@ -2365,7 +2455,7 @@ const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 /// Nom actuel et identité (st_dev, st_ino) d'un fichier ouvert avec
 /// effacement à la fermeture. Rien si le fichier n'a plus de nom
 /// (déjà effacé : /proc rend « … (deleted) »), #1885.
-fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
+pub(crate) fn doomed_on_close(fd: i32) -> Option<(std::path::PathBuf, u64, u64)> {
     if fd < 0 {
         return None;
     }
@@ -3995,14 +4085,123 @@ pub extern "win64" fn set_last_error(code: u32) {
 pub extern "win64" fn get_process_heap() -> usize {
     process_heap()
 }
+/// Diagnostic `WINLUX_HEAP_DIAG` (#2052, pour #1818) : `trace` journalise chaque
+/// HeapAlloc et HeapFree (pointeur, taille) ; `nofree` garde les blocs
+/// libérés au lieu de les rendre à glibc, dont `free` écrit ses chaînages
+/// dans les 16 premiers octets du bloc. Les deux se combinent (`trace,nofree`).
+/// Sert à établir en boîte noire qu'un programme se sert d'un objet après
+/// l'avoir libéré, ce que le tas de Windows laisse souvent passer.
+fn heap_diag() -> (bool, bool) {
+    let d = heap_diag_all();
+    (d.0, d.1)
+}
+/// `lfh` (#2067) : comme le tas à fragmentation réduite de Windows, un bloc
+/// libéré de moins de 16 Kio est gardé par classe de taille (multiple de 16)
+/// et rendu tel quel, contenu intact, au prochain HeapAlloc de la même
+/// classe ; glibc, elle, réécrit le début du bloc en le libérant.
+fn heap_lfh() -> bool {
+    heap_diag_all().2
+}
+fn heap_diag_all() -> (bool, bool, bool) {
+    static DIAG: OnceLock<(bool, bool, bool)> = OnceLock::new();
+    *DIAG.get_or_init(|| heap_diag_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
+}
+fn heap_diag_parse(v: &str) -> (bool, bool, bool) {
+    let has = |w: &str| v.split(',').any(|x| x.trim() == w);
+    (has("trace"), has("nofree"), has("lfh"))
+}
+const LFH_LIMIT: usize = 16 * 1024;
+const LFH_PER_CLASS: usize = 4096;
+fn lfh_class(size: usize) -> usize {
+    size.max(1).div_ceil(16) * 16
+}
+static LFH_CACHE: OnceLock<Mutex<HashMap<usize, Vec<usize>>>> = OnceLock::new();
+/// Bloc d'au moins `size` octets : un bloc libéré de la même classe s'il y
+/// en a un (contenu intact), sinon un bloc neuf de la taille de la classe.
+unsafe fn lfh_alloc(size: usize) -> *mut c_void {
+    let class = lfh_class(size);
+    if class <= LFH_LIMIT {
+        let reused = lock(LFH_CACHE.get_or_init(|| Mutex::new(HashMap::new())))
+            .get_mut(&class)
+            .and_then(|v| v.pop());
+        if let Some(p) = reused {
+            return p as *mut c_void;
+        }
+        return libc::malloc(class);
+    }
+    libc::malloc(size.max(1))
+}
+/// Libère un bloc de `size` octets demandés : gardé pour sa classe, sans
+/// toucher à son contenu, ou rendu à glibc au-delà de la limite.
+unsafe fn lfh_free(p: *mut c_void, size: usize) {
+    let class = lfh_class(size);
+    if class <= LFH_LIMIT {
+        let mut cache = lock(LFH_CACHE.get_or_init(|| Mutex::new(HashMap::new())));
+        let v = cache.entry(class).or_default();
+        if v.len() < LFH_PER_CLASS {
+            v.push(p as usize);
+            return;
+        }
+    }
+    libc::free(p);
+}
+#[cfg(test)]
+mod tests_diagnostic_tas {
+    #[test]
+    fn valeurs_de_winlux_heap_diag() {
+        assert_eq!(super::heap_diag_parse(""), (false, false, false));
+        assert_eq!(super::heap_diag_parse("trace"), (true, false, false));
+        assert_eq!(super::heap_diag_parse("nofree"), (false, true, false));
+        assert_eq!(super::heap_diag_parse("trace, nofree"), (true, true, false));
+        assert_eq!(super::heap_diag_parse("lfh,trace"), (true, false, true));
+        assert_eq!(super::heap_diag_parse("1"), (false, false, false));
+    }
+
+    /// #2067 : un bloc libéré revient, contenu intact, au HeapAlloc suivant
+    /// de la même classe de taille.
+    #[test]
+    fn lfh_rend_le_bloc_libere_intact() {
+        unsafe {
+            let p = super::lfh_alloc(40) as *mut u64;
+            *p = 0x1122_3344_5566_7788;
+            *p.add(1) = 0x99;
+            super::lfh_free(p as *mut _, 40);
+            let q = super::lfh_alloc(33) as *mut u64;
+            assert_eq!(q, p, "même classe (48) : même bloc");
+            assert_eq!(*q, 0x1122_3344_5566_7788);
+            assert_eq!(*q.add(1), 0x99);
+            super::lfh_free(q as *mut _, 33);
+            let big = super::lfh_alloc(20_000);
+            assert!(!big.is_null());
+            super::lfh_free(big, 20_000);
+        }
+        assert_eq!(super::lfh_class(0), 16);
+        assert_eq!(super::lfh_class(17), 32);
+    }
+}
+
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
-    let p = libc::malloc(size.max(1));
+    let p = if heap_lfh() {
+        lfh_alloc(size)
+    } else {
+        libc::malloc(size.max(1))
+    };
     if !p.is_null() {
         if flags & 8 != 0 {
             std::ptr::write_bytes(p, 0, size);
         }
         lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
             .insert(p as usize, size.max(1));
+    }
+    if heap_diag().0 {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!(
+                "HeapAlloc({size}) = {p:p} (fil {})",
+                libc::syscall(libc::SYS_gettid)
+            ),
+        );
     }
     p
 }
@@ -4026,7 +4225,36 @@ pub unsafe extern "win64" fn heap_realloc(
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     };
-    let q = libc::realloc(p, size.max(1));
+    let (trace, nofree) = heap_diag();
+    let q = if heap_lfh() {
+        // Mode lfh : nouveau bloc de la bonne classe, l'ancien est gardé
+        // pour sa classe avec son contenu.
+        let q = lfh_alloc(size);
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+            lfh_free(p, old);
+        }
+        q
+    } else if nofree {
+        // WINLUX_HEAP_DIAG=nofree : l'ancien bloc reste intact.
+        let q = libc::malloc(size.max(1));
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+        }
+        q
+    } else {
+        libc::realloc(p, size.max(1))
+    };
+    if trace {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!(
+                "HeapReAlloc({p:p}, {size}) = {q:p} (fil {})",
+                libc::syscall(libc::SYS_gettid)
+            ),
+        );
+    }
     if q.is_null() {
         crate::process::set_last_error(8);
         return q;
@@ -4043,14 +4271,25 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
         crate::process::set_last_error(87);
         return 0;
     }
-    if lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
-        .remove(&(p as usize))
-        .is_none()
-    {
+    let Some(old) =
+        lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&(p as usize))
+    else {
         crate::process::set_last_error(87);
         return 0;
+    };
+    let (trace, nofree) = heap_diag();
+    if trace {
+        crate::log::emit(
+            crate::log::Level::Warn,
+            "tas",
+            &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
+        );
     }
-    libc::free(p);
+    if heap_lfh() {
+        lfh_free(p, old);
+    } else if !nofree {
+        libc::free(p);
+    }
     1
 }
 pub(crate) fn create_global_memory(
@@ -4222,7 +4461,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         };
         let base = addr as usize & !(PAGE - 1);
         let end = end0 & !(PAGE - 1);
-        let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+        let mut maps = allocs();
         let Some((&region_base, _r)) = maps
             .iter_mut()
             .find(|(b, r)| r.kind == 0x20000 && base >= **b && end <= **b + r.size)
@@ -4247,7 +4486,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         };
         let page_base = addr as usize & !(PAGE - 1);
         let page_end = page_end0 & !(PAGE - 1);
-        let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+        let mut maps = allocs();
         let Some((&region_base, r)) = maps
             .iter_mut()
             .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
@@ -4353,7 +4592,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         return std::ptr::null_mut();
     }
     let pages = mapped_size / PAGE;
-    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+    allocs().insert(
         p,
         VmRegion {
             size: mapped_size,
@@ -4371,7 +4610,7 @@ pub unsafe extern "win64" fn virtual_alloc(
 /// Pages engagées (indices) de la région réservée à `base`, dans
 /// [first, end) : pour GetWriteWatch.
 pub(crate) fn committed_pages(base: usize, first: usize, end: usize) -> Vec<usize> {
-    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let maps = allocs();
     let Some(r) = maps.get(&base) else {
         return Vec::new();
     };
@@ -4396,7 +4635,7 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
         crate::process::set_last_error(487);
         return 0;
     }
-    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let mut maps = allocs();
     let p = addr as usize;
     if kind == MEM_RELEASE {
         if size != 0 {
@@ -4505,7 +4744,7 @@ pub unsafe extern "win64" fn virtual_protect(
         return 0;
     };
     let end = end0 & !(PAGE - 1);
-    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let mut maps = allocs();
     let Some((&base, r)) = maps
         .iter_mut()
         .find(|(b, r)| start >= **b && end <= **b + r.size)
@@ -4568,10 +4807,10 @@ pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
 /// dans une page de garde VirtualAlloc. Hors contexte de signal.
 pub(crate) fn clear_guard_page(addr: usize) -> bool {
     const PAGE: usize = 4096;
-    let Some(table) = ALLOCS.get() else {
+    if ALLOCS.get().is_none() {
         return false;
-    };
-    let mut maps = lock(table);
+    }
+    let mut maps = allocs();
     let Some((&base, r)) = maps
         .iter_mut()
         .find(|(&b, r)| addr >= b && addr < b + r.size)
@@ -4735,7 +4974,7 @@ pub unsafe extern "win64" fn virtual_query(
     }
     let address = addr as usize;
     let page = address & !(PAGE - 1);
-    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let maps = allocs();
     let region = maps
         .iter()
         .find(|(base, r)| address >= **base && address < **base + r.size);
@@ -6650,7 +6889,7 @@ fn os_process_alive(pid: i32) -> bool {
 /// meneur de groupe sorti seul (ExitThread du fil principal) apparaît aussi
 /// « Z » tant que ses autres fils tournent : il n'est fini que s'il ne reste
 /// plus que lui dans /proc/<pid>/task.
-fn os_process_zombie(pid: i32) -> bool {
+pub(crate) fn os_process_zombie(pid: i32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
         return false;
     };
@@ -6864,9 +7103,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     // Effacement à la fermeture : au nom actuel du fichier, qui a pu être
     // renommé depuis son ouverture (#1885).
-    let doomed = lock(delete_on_close())
-        .remove(&handle)
-        .and_then(|_| doomed_on_close(handle_to_fd(handle)));
+    let doomed = lock(delete_on_close()).remove(&handle).and_then(|_| {
+        crate::dlls::doomed::forget(handle);
+        doomed_on_close(handle_to_fd(handle))
+    });
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -6963,6 +7203,53 @@ pub extern "win64" fn release_mutex(h: usize) -> i32 {
     } else {
         0
     }
+}
+
+/// System.Threading.Mutex de la mscorlib Winlux (#1988) : le mutex .NET est
+/// le mutex nommé de kernel32, donc partagé avec les autres processus du
+/// compte (#20). Rend le handle (0 en cas d'échec) et le dernier code
+/// d'erreur : 183 quand le nom existait déjà.
+pub(crate) fn clr_mutex_create(owned: bool, name: Option<&str>) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let c = name
+        .filter(|n| !n.is_empty())
+        .and_then(|n| std::ffi::CString::new(n).ok());
+    let h = unsafe {
+        create_mutex_a(
+            0,
+            owned as i32,
+            c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+        )
+    };
+    (h, crate::process::last_error())
+}
+/// Semaphore de la mscorlib (#1988) : sémaphore de kernel32, nommé ou non.
+pub(crate) fn clr_semaphore_create(initial: i32, maximum: i32, name: Option<&str>) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let c = name
+        .filter(|n| !n.is_empty())
+        .and_then(|n| std::ffi::CString::new(n).ok());
+    let h = unsafe {
+        create_semaphore_a(
+            0,
+            initial,
+            maximum,
+            c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+        )
+    };
+    (h, crate::process::last_error())
+}
+/// Mutex.OpenExisting et Semaphore.OpenExisting (#1988) : 0 et le code
+/// d'erreur (2 = introuvable, 6 = le nom désigne un autre type d'objet).
+pub(crate) fn clr_sync_open(name: &str, semaphore: bool) -> (usize, u32) {
+    crate::process::set_last_error(0);
+    let kind = if semaphore {
+        SHARED_KIND_SEMAPHORE
+    } else {
+        SHARED_KIND_MUTEX
+    };
+    let h = open_sync_by_name(name, kind);
+    (h, crate::process::last_error())
 }
 
 unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
@@ -8134,15 +8421,19 @@ pub extern "win64" fn query_performance_frequency(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryPerformanceCounter : nanosecondes de CLOCK_MONOTONIC, la même
+/// horloge que ntdll!RtlQueryPerformanceCounter et NtQueryPerformanceCounter.
+/// Sous Windows, le compteur a une origine commune à tous les processus.
+/// L'ancienne version comptait depuis le démarrage du processus : les
+/// processus de Chromium vivaient alors dans des temps décalés de plusieurs
+/// minutes, et le renderer de Discord attendait des échéances de viz
+/// placées loin dans le futur (page noire, #1886).
 pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
     unsafe {
-        if out.is_null() {
-            return 0;
-        }
-        *out = CLOCK_START
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_nanos() as i64;
+        crate::dlls::ntdll::rtl_query_performance_counter(out);
     }
     1
 }
@@ -8221,6 +8512,7 @@ pub fn terminate_self(code: u32) -> ! {
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -8232,6 +8524,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
+    crate::dlls::doomed::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
@@ -11586,20 +11879,105 @@ mod tests {
         unsafe {
             post_queued_completion_status(port, 2, 2, std::ptr::null_mut());
         }
-        let second = std::thread::spawn(move || {
+        // Le premier fil tourne (boucle active) pendant que le second essaie :
+        // il garde sa place, comme sous Windows.
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let got = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+        let (d, g) = (done.clone(), got.clone());
+        let t = std::thread::spawn(move || {
             let (mut bytes, mut key) = (0u32, 0usize);
             let mut ov = std::ptr::null_mut();
-            unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) }
-        })
-        .join()
-        .unwrap();
-        assert_eq!(second, 0); // le premier thread détient encore le slot actif
+            let r = unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) };
+            g.store(r, Ordering::SeqCst);
+            d.store(true, Ordering::SeqCst);
+        });
+        while !done.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
+        t.join().unwrap();
+        assert_eq!(got.load(Ordering::SeqCst), 0); // le premier thread tourne et détient le slot
         assert_eq!(
             unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) },
             1
         );
         assert_eq!(key, 2);
         assert_eq!(close_handle(port), 1);
+    }
+
+    /// #2055 : un fil qui a retiré un paquet puis se bloque ailleurs (ici
+    /// dans join) laisse sa place, comme sous Windows.
+    #[test]
+    fn iocp_place_d_un_fil_bloque_reprise_par_un_autre() {
+        let port = create_io_completion_port(usize::MAX, 0, 0, 1);
+        unsafe {
+            post_queued_completion_status(port, 1, 1, std::ptr::null_mut());
+        }
+        let (mut bytes, mut key) = (0u32, 0usize);
+        let mut ov = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 0) },
+            1
+        );
+        unsafe {
+            post_queued_completion_status(port, 2, 2, std::ptr::null_mut());
+        }
+        let second = std::thread::spawn(move || {
+            let (mut bytes, mut key) = (0u32, 0usize);
+            let mut ov = std::ptr::null_mut();
+            let r =
+                unsafe { get_queued_completion_status(port, &mut bytes, &mut key, &mut ov, 5000) };
+            (r, key)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            second,
+            (1, 2),
+            "paquet retiré pendant que le premier fil attend"
+        );
+        assert_eq!(close_handle(port), 1);
+    }
+
+    /// #2055 : ReadFile avec chevauchement remet l'événement à non signalé
+    /// au début de l'E/S.
+    #[test]
+    fn readfile_avec_chevauchement_remet_l_evenement_a_zero() {
+        init();
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let h = next_handle();
+        lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+            h,
+            FileHandle::File(Arc::new(Mutex::new(unsafe {
+                <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fds[0])
+            }))),
+        );
+        lock(overlapped_handles()).insert(h);
+        let ev = unsafe { create_event_a(0, 1, 1, std::ptr::null()) };
+        assert_eq!(wait_for_single_object(ev, 0), 0, "signalé avant l'E/S");
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        ov.event = ev;
+        let mut buf = [0u8; 4];
+        let r = unsafe {
+            read_file(
+                h,
+                buf.as_mut_ptr(),
+                4,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+            )
+        };
+        assert_eq!((r, ov.internal), (0, 0x103), "E/S en attente");
+        assert_eq!(wait_for_single_object(ev, 0), 258, "remis à zéro au début");
+        assert_eq!(
+            unsafe { libc::write(fds[1], b"abcd".as_ptr().cast(), 4) },
+            4
+        );
+        assert_eq!(wait_for_single_object(ev, 5000), 0, "signalé à la fin");
+        assert_eq!(&buf, b"abcd");
+        unsafe { libc::close(fds[1]) };
+        close_handle(ev);
+        close_handle(h);
     }
 
     extern "win64" fn iocp_one_packet_worker(port: usize) -> u32 {
@@ -12940,6 +13318,28 @@ fn wait_until_stopped(pid: u32) {
 
 #[cfg(test)]
 mod interrupt_time_tests {
+    use super::{query_performance_counter, query_performance_frequency};
+    #[test]
+    fn qpc_a_la_meme_origine_que_ntdll_et_le_systeme() {
+        // #1886 : QueryPerformanceCounter et RtlQueryPerformanceCounter
+        // concordent, et l'origine est celle du système (CLOCK_MONOTONIC),
+        // commune à tous les processus, pas le démarrage du processus.
+        let (mut freq, mut a, mut rtl, mut b) = (0i64, 0i64, 0i64, 0i64);
+        assert_eq!(query_performance_frequency(&mut freq), 1);
+        assert_eq!(freq, 1_000_000_000);
+        assert_eq!(query_performance_counter(&mut a), 1);
+        unsafe { crate::dlls::ntdll::rtl_query_performance_counter(&mut rtl) };
+        assert_eq!(query_performance_counter(&mut b), 1);
+        assert!(a <= rtl && rtl <= b, "{a} {rtl} {b}");
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+        let sys = ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64;
+        assert!(b <= sys && sys - b < 1_000_000_000, "{b} {sys}");
+    }
+
     #[test]
     fn query_unbiased_interrupt_time_avance_en_100_ns() {
         let (mut a, mut b) = (0u64, 0u64);

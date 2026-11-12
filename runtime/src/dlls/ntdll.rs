@@ -1473,7 +1473,7 @@ pub unsafe extern "win64" fn nt_create_file(
                     "NtCreateFile({}) : effacé à la fermeture",
                     linux_path.display()
                 );
-                crate::dlls::lock(super::kernel32::delete_on_close()).insert(h, linux_path);
+                crate::dlls::doomed::register(h, linux_path);
             }
             if !io.is_null() {
                 (io as *mut u64).write(0);

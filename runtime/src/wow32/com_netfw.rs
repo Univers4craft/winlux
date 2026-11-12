@@ -186,7 +186,23 @@ pub(super) static INETFWRULE: Iface = Iface {
     ],
 };
 
+/// IEnumVARIANT des collections du pare-feu (oaidl.h) : Next est décrit
+/// pour un élément à la fois, comme IEnumWbemClassObject ; l'énumérateur
+/// du runtime n'en rend jamais plus d'un à un programme x86 (#2036).
+pub(super) static IENUMVARIANT: Iface = Iface {
+    name: "IEnumVARIANT",
+    iid: crate::dlls::enum_variant::IID_IENUM_VARIANT,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, Var, OutPtr]),     // Next
+        ONE,                         // Skip
+        NONE,                        // Reset
+        Some(&[Out(&IENUMVARIANT)]), // Clone
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
+    &IENUMVARIANT,
     &INETFWPOLICY2,
     &INETFWRULES,
     &INETFWRULE,
