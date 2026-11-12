@@ -383,7 +383,7 @@ impl Interpreter {
     }
 
     /// Exécute une méthode d'une assembly quelconque du domaine.
-    fn execute_in(
+    pub(super) fn execute_in(
         &mut self,
         asm: usize,
         method_row: u32,
@@ -496,8 +496,13 @@ impl Interpreter {
 
         let mut arg_kinds = Vec::with_capacity(sig.param_types.len() + 1);
         if sig.has_this() {
-            let value_this = owner
-                .is_some_and(|o| types::with_types(|reg| reg.get(o).is_some_and(|t| t.is_value)));
+            // System.Enum et System.ValueType sont des classes (ECMA-335
+            // §II.13) : leurs méthodes reçoivent l'objet encadré (#2009).
+            let value_this = owner.is_some_and(|o| {
+                o != types::TYPE_ENUM
+                    && o != types::TYPE_VALUETYPE
+                    && types::with_types(|reg| reg.get(o).is_some_and(|t| t.is_value))
+            });
             arg_kinds.push(if value_this { Kind::I } else { Kind::Ref });
         }
         for p in &sig.param_types {
@@ -606,7 +611,13 @@ impl Interpreter {
 
     /// Remplace la méthode appelée par la redéfinition du type réel de
     /// `this`.
-    fn devirtualize(&self, token: u32, this: *mut u8, target: &mut Target, gen: &mut Gen) {
+    pub(super) fn devirtualize(
+        &self,
+        token: u32,
+        this: *mut u8,
+        target: &mut Target,
+        gen: &mut Gen,
+    ) {
         let Some(type_id) = gc::type_of(this) else {
             return;
         };
@@ -675,6 +686,9 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.array_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.member_call(namespace, class, name, &args) {
             return r;
         }
         match (namespace, class, name) {
