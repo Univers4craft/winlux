@@ -1870,6 +1870,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::composition::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Networking.Connectivity.NetworkInformation (#2215).
+    if let Some(hr) = super::network_information::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::winrt_ui::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
