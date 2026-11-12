@@ -61,12 +61,46 @@ fn nested() -> bool {
         .is_some_and(|d| d > 0)
 }
 
+/// Réponse de l'utilisateur à la page du contrat.
+enum Answer {
+    Accepted,
+    Refused,
+    /// Pas d'affichage ou pas d'assistant : la page n'a pas pu s'ouvrir.
+    NoDisplay,
+}
+
+/// Ouvre la page « Contrat de licence » de l'assistant
+/// (`winlux-setup-wizard FICHIER --contrat-seulement`, ou le programme
+/// désigné par `WINLUX_SETUP_WIZARD`) et attend la réponse.
+fn ask(path: &Path) -> Answer {
+    let display = ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some_and(|d| !d.is_empty()));
+    if !display {
+        return Answer::NoDisplay;
+    }
+    let wizard = std::env::var_os("WINLUX_SETUP_WIZARD")
+        .filter(|w| !w.is_empty())
+        .unwrap_or_else(|| "winlux-setup-wizard".into());
+    let mut cmd = std::process::Command::new(wizard);
+    cmd.arg(path).arg("--contrat-seulement");
+    if let Ok(me) = std::env::current_exe() {
+        cmd.env("WINLUX_BIN", me);
+    }
+    match cmd.status().map(|s| s.code()) {
+        Ok(Some(0)) => Answer::Accepted,
+        Ok(Some(c)) if c == REFUSED || c == REFUSED % 256 => Answer::Refused,
+        _ => Answer::NoDisplay,
+    }
+}
+
 /// Installation demandée avec interface (ni option silencieuse, ni
-/// assistant) d'un paquet qui porte un contrat : Winlux n'a pas d'interface
-/// pour le faire accepter ici, l'installation est refusée net, avec un
-/// message, plutôt que faite sans acceptation (#2123). Rend le code à
-/// renvoyer, `None` si l'installation peut se faire.
-pub fn refuse_unaccepted(path: &Path, args: &[String]) -> Option<i32> {
+/// assistant déjà passé) d'un paquet qui porte un contrat (#2123) : la page
+/// du contrat s'ouvre, l'installation se fait si l'utilisateur accepte et
+/// rend 1602 s'il refuse. Sans affichage, la page ne peut pas s'ouvrir :
+/// refus avec un message qui dit comment faire. Rend le code à renvoyer,
+/// `None` si l'installation peut se faire.
+pub fn require_acceptance(path: &Path, args: &[String]) -> Option<i32> {
     if silent_flag(args) || nested() {
         return None;
     }
@@ -75,13 +109,26 @@ pub fn refuse_unaccepted(path: &Path, args: &[String]) -> Option<i32> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    eprintln!(
-        "winlux : « {name} » contient un contrat de licence à accepter. Ouvrez-le par \
-         double-clic (assistant d'installation), ou lisez-le avec `winlux --setup --license` \
-         puis installez sans interface (/S, /VERYSILENT, /quiet ou /qn), ce qui vaut \
-         acceptation. Rien n'a été installé (code {REFUSED})."
-    );
-    Some(REFUSED)
+    match ask(path) {
+        Answer::Accepted => None,
+        Answer::Refused => {
+            eprintln!(
+                "winlux : contrat de licence de « {name} » non accepté, rien n'a été installé \
+                 (code {REFUSED})."
+            );
+            Some(REFUSED)
+        }
+        Answer::NoDisplay => {
+            eprintln!(
+                "winlux : « {name} » contient un contrat de licence à accepter, et aucun \
+                 affichage ne permet de le présenter ici. Ouvrez-le depuis la session \
+                 graphique (double-clic), ou lisez-le avec `winlux --setup --license` puis \
+                 installez sans interface (/S, /VERYSILENT, /quiet ou /qn), ce qui vaut \
+                 acceptation. Rien n'a été installé (code {REFUSED})."
+            );
+            Some(REFUSED)
+        }
+    }
 }
 
 /// Texte lu dans un fichier de licence (octets bruts) : RTF, UTF-16 ou

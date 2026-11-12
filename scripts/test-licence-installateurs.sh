@@ -3,8 +3,10 @@
 #   - `winlux --setup --license` rend le contrat d'un .msi (licence.msi), d'un
 #     installateur NSIS ANSI (LicenseData texte) et Unicode (MUI, RTF), et
 #     rien (code 1) pour un paquet sans contrat ;
-#   - lancé directement sans /S ni /qn, un paquet à contrat est refusé net
-#     (1602, message) ; avec, il s'installe (l'option vaut acceptation) ;
+#   - lancé directement sans /S ni /qn (`winlux setup.exe`, `msiexec /i`),
+#     un paquet à contrat ouvre la page du contrat : refus = 1602, rien
+#     d'installé ; acceptation = installé. Sans affichage, refus net avec
+#     message ; /S, /qn valent acceptation ;
 #   - sous Xvfb, l'assistant présente le contrat : sans acceptation rien
 #     n'est installé (code 1602, aucun fichier, raccourci ni registre),
 #     après acceptation l'installation se fait.
@@ -85,16 +87,17 @@ printf '%s\n' "$out" | grep -qx 'CONTRAT DE LICENCE DE TEST' || fail "MSI : $out
 if lic sans.exe >/dev/null; then fail "NSIS sans contrat : un contrat a été inventé"; fi
 if lic sample.msi >/dev/null; then fail "MSI sans contrat : un contrat a été inventé"; fi
 
-# Lancement direct sans option silencieuse : refus net avec message, rien
-# d'installé ; /S vaut acceptation (porte de sortie des tests en VM).
+# Lancement direct sans option silencieuse et sans affichage : la page du
+# contrat ne peut pas s'ouvrir, refus net avec message, rien d'installé ;
+# /S vaut acceptation (porte de sortie des tests en VM).
 mkdir direct
-run_direct() { HOME="$work/direct" WINLUX_HOME="$work/direct" WINLUX_DRIVE_C="$work/direct" \
-    "$runtime" "$@" >"$work/out.txt" 2>&1; }
+run_direct() { env -u DISPLAY -u WAYLAND_DISPLAY HOME="$work/direct" WINLUX_HOME="$work/direct" \
+    WINLUX_DRIVE_C="$work/direct" "$runtime" "$@" >"$work/out.txt" 2>&1; }
 set +e
 run_direct ansi.exe; rc=$?
 set -e
 test "$rc" -eq "$refus" || fail "lancement direct sans /S : code $rc au lieu de 1602"
-grep -q "contrat de licence" "$work/out.txt" || fail "lancement direct sans /S : pas de message"
+grep -q "aucun affichage" "$work/out.txt" || fail "lancement direct sans /S ni affichage : pas de message"
 test ! -e "$work/direct/Program Files" || fail "lancement direct sans /S : quelque chose a été installé"
 set +e
 run_direct --msiexec /i licence.msi; rc=$?
@@ -139,6 +142,35 @@ wiz ansi.exe accepte || fail "NSIS : installation après acceptation en échec"
 test -f "$work/home/Program Files/Licence Ansi/lisezmoi.txt" || fail "NSIS : non installé après acceptation"
 wiz licence.msi accepte || fail "MSI : installation après acceptation en échec"
 test -f "$work/home/Program Files/Winlux Exemple/app.exe" || fail "MSI : non installé après acceptation"
+# Lancement direct avec affichage : la page du contrat s'ouvre ; refus =
+# 1602 sans rien installer, acceptation = installation dans le même appel.
+printf '#!/bin/sh\nexec %s %s "$@"\n' "$py" "$wizard" >"$work/assistant.sh"
+chmod +x "$work/assistant.sh"
+mkdir direct2
+direct_gui() {
+    HOME="$work/direct2" WINLUX_HOME="$work/direct2" WINLUX_DRIVE_C="$work/direct2" WINLUX_LANG=fr \
+    WINLUX_SETUP_WIZARD="$work/assistant.sh" WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_SETUP_WIZARD_AUTO_LICENCE=${2:-} \
+        timeout 180 xvfb-run -a "$runtime" "$1" >"$work/out.txt" 2>&1
+}
+direct_msi() {
+    HOME="$work/direct2" WINLUX_HOME="$work/direct2" WINLUX_DRIVE_C="$work/direct2" WINLUX_LANG=fr \
+    WINLUX_SETUP_WIZARD="$work/assistant.sh" WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_SETUP_WIZARD_AUTO_LICENCE=${2:-} \
+        timeout 180 xvfb-run -a "$runtime" --msiexec /i "$1" >"$work/out.txt" 2>&1
+}
+set +e
+direct_gui ansi.exe; rc=$?
+set -e
+test "$rc" -eq "$refus" || fail "lancement direct, contrat refusé : code $rc au lieu de 1602"
+test ! -e "$work/direct2/Program Files" || fail "lancement direct, contrat refusé : quelque chose a été installé"
+set +e
+direct_msi licence.msi; rc=$?
+set -e
+test "$rc" -eq "$refus" || fail "msiexec /i, contrat refusé : code $rc au lieu de 1602"
+test ! -e "$work/direct2/Program Files" || fail "msiexec /i, contrat refusé : quelque chose a été installé"
+direct_gui ansi.exe accepte || fail "lancement direct, contrat accepté : installation en échec"
+test -f "$work/direct2/Program Files/Licence Ansi/lisezmoi.txt" || fail "lancement direct, contrat accepté : non installé"
+direct_msi licence.msi accepte || fail "msiexec /i, contrat accepté : installation en échec"
+test -f "$work/direct2/Program Files/Winlux Exemple/app.exe" || fail "msiexec /i, contrat accepté : non installé"
 wiz sans.exe || fail "NSIS sans contrat : l'assistant ne doit rien demander"
 test -f "$work/home/Program Files/Sans Licence/lisezmoi.txt" || fail "NSIS sans contrat : non installé"
-echo "licence : contrats .msi et NSIS lus, refus par défaut (1602), installation après acceptation"
+echo "licence : contrats .msi et NSIS lus, page du contrat à l'assistant et au lancement direct, refus = 1602, installation après acceptation"

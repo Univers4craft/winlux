@@ -9,3 +9,5 @@ ok("refuse.set_active(True)" in _wiz and "if license and not accept.get_active()
    "Assistant : « Je n'accepte pas » par défaut, rien installé sans acceptation (#2123)")
 ok("--setup --license" in _open and "exit 1602" in _open,
    "winlux-open : pas d'installation silencieuse d'un paquet à contrat sans assistant (#2123)")
+ok("fn require_acceptance(" in _lic and "--contrat-seulement" in _lic and "--contrat-seulement" in _wiz,
+   "Lancement direct d'un paquet à contrat : page du contrat, installation si acceptée (#2123)")

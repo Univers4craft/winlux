@@ -14,7 +14,10 @@ runtime (actions personnalisées et programmes lancés par l'installateur compri
   winlux --setup FICHIER.exe [/D=dossier] [/nodesktop]
   winlux --msiexec /i FICHIER.msi /qn
 
-Usage : winlux-setup-wizard FICHIER [--runtime CHEMIN]
+Usage : winlux-setup-wizard FICHIER [--runtime CHEMIN] [--contrat-seulement]
+--contrat-seulement : seulement la page du contrat, pour une installation
+lancée directement (`winlux setup.exe`, `msiexec /i` sans /q) : 0 si
+l'utilisateur accepte (le runtime installe alors), 1602 sinon.
 Code de sortie : celui de l'installation, 1602 si l'utilisateur annule.
 WINLUX_SETUP_WIZARD_AUTO=1 enchaîne les pages sans clic (tests) ; devant un
 contrat il annule, sauf avec WINLUX_SETUP_WIZARD_AUTO_LICENCE=accepte.
@@ -191,12 +194,20 @@ def main(argv):
         i = args.index("--runtime")
         runtime = args[i + 1]
         del args[i:i + 2]
+    only_license = "--contrat-seulement" in args
+    if only_license:
+        args.remove("--contrat-seulement")
     if not args:
         print(__doc__, file=sys.stderr)
         return 2
     path = os.path.abspath(args[0])
     info = read_info(runtime, path)
     license = read_license(runtime, path) if info is not None else None
+    if only_license:
+        if license is None:
+            return 0
+        if info is None:
+            info = {"kind": "", "name": Path(path).stem, "version": "", "publisher": "", "folder": ""}
     import gi
     gi.require_version("Gtk", "3.0")
     from gi.repository import GLib, Gtk, Pango
@@ -382,20 +393,29 @@ def main(argv):
         GLib.timeout_add(120, pulse)
         threading.Thread(target=work, args=(argv,), daemon=True).start()
 
+    def show_license():
+        stack.set_visible_child_name("license")
+        install.set_label(tr("Installer"))
+        install.set_sensitive(accept.get_active())
+        if not only_license:
+            back.show()
+        if auto:
+            if os.environ.get("WINLUX_SETUP_WIZARD_AUTO_LICENCE") == "accepte":
+                GLib.timeout_add(300, lambda: accept.set_active(True) or install.clicked() or False)
+            else:
+                GLib.timeout_add(300, lambda: cancel.clicked() or False)
+
     def next_page(button):
         if license and stack.get_visible_child_name() == "welcome":
-            stack.set_visible_child_name("license")
-            install.set_label(tr("Installer"))
-            install.set_sensitive(accept.get_active())
-            back.show()
-            if auto:
-                if os.environ.get("WINLUX_SETUP_WIZARD_AUTO_LICENCE") == "accepte":
-                    GLib.timeout_add(300, lambda: accept.set_active(True) or install.clicked() or False)
-                else:
-                    GLib.timeout_add(300, lambda: cancel.clicked() or False)
+            show_license()
             return
         # Rien n'est installé sans acceptation du contrat (#2123).
         if license and not accept.get_active():
+            return
+        if only_license:
+            # Contrat accepté : le runtime qui a ouvert cette page installe.
+            state["code"] = 0
+            win.destroy()
             return
         back.hide()
         start(button)
@@ -414,7 +434,10 @@ def main(argv):
     finish.connect("clicked", lambda _b: win.destroy())
     win.connect("destroy", Gtk.main_quit)
     win.show_all()
-    if auto:
+    if only_license:
+        stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        show_license()
+    elif auto:
         GLib.timeout_add(300, lambda: install.clicked() or False)
     Gtk.main()
     return state["code"]
