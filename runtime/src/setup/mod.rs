@@ -15,6 +15,7 @@ pub mod appx_signature;
 pub mod burn;
 pub mod inno;
 mod inno_layout;
+pub mod license;
 pub mod lzma;
 pub mod msix;
 pub mod nsis;
@@ -34,6 +35,7 @@ const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup, paquets MSIX et 
   winlux --setup paquet.msix|.appx|.msixbundle   installer un paquet MSIX
         [--allow-unverified]                      même d'un éditeur non vérifié (code 3 sinon)
   winlux --setup --info installateur.exe          type, nom, version, dossier
+  winlux --setup --license installateur.exe|.msi  contrat de licence (code 1 : aucun)
   winlux --setup --list                           applications installées ainsi
   winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe
   winlux --setup --programs [--out FICHIER]       toutes les applications inscrites
@@ -1002,6 +1004,19 @@ pub fn cli(args: &[String]) -> i32 {
                     }
                 };
             }
+            "--license" => {
+                let Some(p) = args.get(i + 1) else {
+                    eprintln!("{USAGE}");
+                    return 2;
+                };
+                return match license::of_package(&host_path(p)) {
+                    Some(text) => {
+                        println!("{text}");
+                        0
+                    }
+                    None => 1,
+                };
+            }
             "--programs" => {
                 let text = programs::format_list(&programs::list());
                 match &out {
@@ -1187,6 +1202,11 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         let mut log = Logger { quiet: false };
         remove(&m, &mut log);
         return Some(0);
+    }
+    // Contrat de licence ni accepté (assistant) ni couvert par une option
+    // silencieuse : refus net (#2123).
+    if let Some(code) = license::refuse_unaccepted(exe, args) {
+        return Some(code);
     }
     // Bundles WiX Burn (vc_redist…) : chaîne de paquets MSI installée ici.
     if let Some(code) = burn::launch(exe, args) {

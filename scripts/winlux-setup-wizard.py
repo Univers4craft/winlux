@@ -5,14 +5,19 @@ sur un installateur Windows (.msi, ou .exe NSIS / Inno Setup reconnu).
 Comme l'assistant d'un programme d'installation sous Windows : une page
 d'accueil (nom, version, éditeur, dossier d'installation modifiable pour
 NSIS et Inno, raccourci sur le Bureau), la progression, puis la fin
-(réussite ou erreur avec le journal). Le travail lui-même est fait par le
+(réussite ou erreur avec le journal). Quand le paquet porte un contrat de
+licence (.msi, NSIS, Inno Setup, bundle Burn), une page « Contrat de
+licence » vient avant l'installation : « Je n'accepte pas » est coché au
+départ et rien n'est installé tant que l'utilisateur n'a pas accepté
+(#2123 à #2126) ; Annuler rend 1602. Le travail lui-même est fait par le
 runtime (actions personnalisées et programmes lancés par l'installateur compris) :
   winlux --setup FICHIER.exe [/D=dossier] [/nodesktop]
   winlux --msiexec /i FICHIER.msi /qn
 
 Usage : winlux-setup-wizard FICHIER [--runtime CHEMIN]
 Code de sortie : celui de l'installation, 1602 si l'utilisateur annule.
-WINLUX_SETUP_WIZARD_AUTO=1 enchaîne les pages sans clic (tests).
+WINLUX_SETUP_WIZARD_AUTO=1 enchaîne les pages sans clic (tests) ; devant un
+contrat il annule, sauf avec WINLUX_SETUP_WIZARD_AUTO_LICENCE=accepte.
 """
 import os
 import subprocess
@@ -69,6 +74,23 @@ _TR = {
     "Le dossier est choisi par le paquet.": ("The package chooses the location.", "El paquete elige la carpeta.",
                                              "Das Paket legt den Ordner fest."),
     "Programme d'installation inconnu": ("Unknown installer", "Instalador desconocido", "Unbekanntes Installationsprogramm"),
+    "Contrat de licence": ("License Agreement", "Contrato de licencia", "Lizenzvertrag"),
+    "Lisez le contrat de licence de {name}. Vous devez l'accepter pour installer ce programme.":
+        ("Please read the {name} license agreement. You must accept it to install this program.",
+         "Lea el contrato de licencia de {name}. Debe aceptarlo para instalar este programa.",
+         "Lesen Sie den Lizenzvertrag von {name}. Sie müssen ihn annehmen, um dieses Programm zu installieren."),
+    "Le contrat de licence est publié à cette adresse :":
+        ("The license agreement is published at this address:",
+         "El contrato de licencia está publicado en esta dirección:",
+         "Der Lizenzvertrag ist unter dieser Adresse veröffentlicht:"),
+    "J'accepte les termes du contrat de licence": ("I accept the terms of the license agreement",
+                                                   "Acepto los términos del contrato de licencia",
+                                                   "Ich akzeptiere die Bedingungen des Lizenzvertrags"),
+    "Je n'accepte pas les termes du contrat de licence": ("I do not accept the terms of the license agreement",
+                                                          "No acepto los términos del contrato de licencia",
+                                                          "Ich akzeptiere die Bedingungen des Lizenzvertrags nicht"),
+    "Suivant": ("Next", "Siguiente", "Weiter"),
+    "Précédent": ("Back", "Atrás", "Zurück"),
 }
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
@@ -94,6 +116,25 @@ def read_info(runtime, path):
     kind, name, version, publisher, folder = parts[:5]
     return {"kind": kind, "name": name or Path(path).stem, "version": version,
             "publisher": publisher, "folder": folder}
+
+
+def read_license(runtime, path):
+    """`winlux --setup --license` : texte du contrat porté par le paquet, ou None."""
+    try:
+        res = subprocess.run([runtime, "--setup", "--license", path], capture_output=True, text=True,
+                             timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = res.stdout.strip("\n")
+    return text if res.returncode == 0 and text.strip() else None
+
+
+def license_shown(text):
+    """Texte affiché : un contrat publié en ligne (LicenseUrl) est présenté comme tel."""
+    one = text.strip()
+    if "\n" not in one and one.lower().startswith(("http://", "https://")):
+        return tr("Le contrat de licence est publié à cette adresse :") + "\n\n" + one
+    return text
 
 
 def win_to_linux(folder):
@@ -155,6 +196,7 @@ def main(argv):
         return 2
     path = os.path.abspath(args[0])
     info = read_info(runtime, path)
+    license = read_license(runtime, path) if info is not None else None
     import gi
     gi.require_version("Gtk", "3.0")
     from gi.repository import GLib, Gtk, Pango
@@ -170,7 +212,7 @@ def main(argv):
         return 1
 
     win = Gtk.Window(title=tr("Installation de {name}", name=info["name"]))
-    win.set_default_size(560, 380)
+    win.set_default_size(600, 460 if license else 380)
     win.set_resizable(False)
     win.set_position(Gtk.WindowPosition.CENTER)
     win.set_icon_name("system-software-install")
@@ -240,6 +282,24 @@ def main(argv):
     welcome.pack_start(frame, False, False, 0)
     stack.add_named(welcome, "welcome")
 
+    # Contrat de licence : « Je n'accepte pas » coché au départ.
+    accept = Gtk.RadioButton.new_with_label(None, tr("J'accepte les termes du contrat de licence"))
+    refuse = Gtk.RadioButton.new_with_label_from_widget(accept, tr("Je n'accepte pas les termes du contrat de licence"))
+    refuse.set_active(True)
+    if license:
+        license_page = page(tr("Contrat de licence"))
+        text(license_page, tr("Lisez le contrat de licence de {name}. Vous devez l'accepter pour installer ce programme.",
+                              name=info["name"]))
+        view = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR,
+                            left_margin=8, right_margin=8, top_margin=6, bottom_margin=6)
+        view.get_buffer().set_text(license_shown(license))
+        frame_scroll = Gtk.ScrolledWindow(vexpand=True, shadow_type=Gtk.ShadowType.IN)
+        frame_scroll.add(view)
+        license_page.pack_start(frame_scroll, True, True, 0)
+        license_page.pack_start(accept, False, False, 0)
+        license_page.pack_start(refuse, False, False, 0)
+        stack.add_named(license_page, "license")
+
     # Progression.
     progress_page = page(tr("Installation en cours…"))
     text(progress_page, tr("Veuillez patienter pendant l'installation de {name}.", name=info["name"]))
@@ -260,11 +320,12 @@ def main(argv):
     stack.add_named(done_page, "done")
 
     cancel = Gtk.Button(label=tr("Annuler"))
-    install = Gtk.Button(label=tr("Installer"))
+    back = Gtk.Button(label=tr("Précédent"), no_show_all=True)
+    install = Gtk.Button(label=tr("Suivant") if license else tr("Installer"))
     install.get_style_context().add_class("suggested-action")
     finish = Gtk.Button(label=tr("Terminer"), no_show_all=True)
     finish.get_style_context().add_class("suggested-action")
-    for b in (cancel, install, finish):
+    for b in (cancel, back, install, finish):
         b.set_size_request(110, -1)
         buttons.pack_start(b, False, False, 0)
 
@@ -321,7 +382,34 @@ def main(argv):
         GLib.timeout_add(120, pulse)
         threading.Thread(target=work, args=(argv,), daemon=True).start()
 
-    install.connect("clicked", start)
+    def next_page(button):
+        if license and stack.get_visible_child_name() == "welcome":
+            stack.set_visible_child_name("license")
+            install.set_label(tr("Installer"))
+            install.set_sensitive(accept.get_active())
+            back.show()
+            if auto:
+                if os.environ.get("WINLUX_SETUP_WIZARD_AUTO_LICENCE") == "accepte":
+                    GLib.timeout_add(300, lambda: accept.set_active(True) or install.clicked() or False)
+                else:
+                    GLib.timeout_add(300, lambda: cancel.clicked() or False)
+            return
+        # Rien n'est installé sans acceptation du contrat (#2123).
+        if license and not accept.get_active():
+            return
+        back.hide()
+        start(button)
+
+    def previous_page(_button):
+        stack.set_visible_child_name("welcome")
+        install.set_label(tr("Suivant"))
+        install.set_sensitive(True)
+        back.hide()
+
+    accept.connect("toggled", lambda b: install.set_sensitive(
+        stack.get_visible_child_name() != "license" or b.get_active()))
+    install.connect("clicked", next_page)
+    back.connect("clicked", previous_page)
     cancel.connect("clicked", lambda _b: win.destroy())
     finish.connect("clicked", lambda _b: win.destroy())
     win.connect("destroy", Gtk.main_quit)
