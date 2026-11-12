@@ -41,6 +41,7 @@ pub mod comdlg32_ui;
 pub mod common_apps;
 pub mod comobj;
 pub mod composition;
+mod conformite_codes_erreur;
 pub mod console_input;
 pub mod controls;
 pub mod coremessaging;

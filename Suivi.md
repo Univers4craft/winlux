@@ -58,6 +58,8 @@
 
 ### Priorité 2 — Compatibilité Windows
 
+- [ ] Conformité des codes d'erreur (revue du 12/11/2026, 71 cas sondés, 21 écarts) : PATH_NOT_FOUND quand le parent manque (#2112), GetModuleHandle sans 126 (#2113), Open* héritables (#2114), WaitNamedPipe (#2115), GetFileSize/SetFilePointer à 0xFFFFFFFF (#2116), GetLongPathName sur un absent (#2117), MoveFile 80 au lieu de 183 (#2118).
+
 - [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs (#16).
 - [ ] Services Windows (#17) : version A livrée (#63) ; restent les variantes W, le démarrage automatique et un vrai service.
 - [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides (#18).
@@ -140,6 +142,8 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
+
+- [x] Codes d'erreur : tube sans lecteur → 232 au lieu de 31, errno sans retombée sur le générique 31, test de conformité permanent `conformite_codes_erreur` (#2111).
 
 ### Tri des issues GitHub (07/11/2026, PR #564)
 
