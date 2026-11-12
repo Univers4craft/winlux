@@ -265,6 +265,14 @@ esac
     progress = (run / "store-progress.txt").read_text()
     check("state=done" in progress and "percent=100" in progress, "installation apt terminée")
     check("install --no-install-recommends -- gimp" in log.read_text(), "commande apt")
+    # Paquets compagnons (#2075) : virt-manager arrive avec QEMU et le pilote
+    # libvirt, marqués automatiques, jamais libvirt-daemon-system (systemd).
+    st("install", "apt:virt-manager")
+    text = log.read_text()
+    check("install --no-install-recommends -- virt-manager" in text
+          and "install --no-install-recommends --mark-auto -- qemu-system-x86 " in text
+          and "libvirt-daemon-driver-qemu" in text and "libvirt-daemon-system" not in text,
+          "compagnons de virt-manager (#2075)")
     st("update", "flatpak:org.kde.krita")
     check("flatpak update org.kde.krita -y --noninteractive" in log.read_text(), "mise à jour Flatpak")
     env["CONFIRM_ANSWER"] = "1"
@@ -416,7 +424,7 @@ esac
     # Sélection de l'équipe (#716) : au moins 250 logiciels, chacun décrit
     # dans les quatre langues, rangés dans une catégorie connue.
     rows = [l.split("|") for l in (project / "integration/store-catalog.txt").read_text().splitlines()
-            if l and not l.startswith("#") and not l.startswith("featured=")]
+            if l and not l.startswith("#") and not l.startswith(("featured=", "compagnons="))]
     check(len(rows) >= 250, f"sélection étendue ({len(rows)} logiciels)")
     check(all(len(r) == 9 and all(r[5:]) for r in rows), "descriptions fr/en/es/de")
     check(all(r[1] in ns["CATEGORIES"] for r in rows), "catégories connues")
