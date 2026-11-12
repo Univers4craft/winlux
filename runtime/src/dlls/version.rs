@@ -66,7 +66,20 @@ fn version_resource(file: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn read_version(path: &str) -> Result<Vec<u8>, u32> {
-    match std::fs::read(crate::paths::to_linux(path)) {
+    // Un nom nu (« msvcp140.dll ») suit l'ordre de recherche des DLL, comme
+    // LoadLibraryEx sous Windows : dossier de l'appli, puis System32 (#2062).
+    let on_disk = if path.contains(['\\', '/']) || path.as_bytes().get(1) == Some(&b':') {
+        crate::paths::to_linux(path)
+    } else {
+        let importer = crate::loader::main_module()
+            .map(|m| m.path)
+            .unwrap_or_default();
+        match crate::loader::find_dll_file(path, &importer) {
+            Some(found) => found,
+            None => return builtin_version(path).ok_or(ERROR_FILE_NOT_FOUND),
+        }
+    };
+    match std::fs::read(on_disk) {
         Ok(file) => version_resource(&file).ok_or(ERROR_RESOURCE_TYPE_NOT_FOUND),
         Err(_) => builtin_version(path).ok_or(ERROR_FILE_NOT_FOUND),
     }
@@ -111,6 +124,26 @@ fn text_node(key: &str, text: &str) -> Vec<u8> {
 /// Version des DLL système de Winlux (Windows 10 22H2, 10.0.19045).
 pub const SYSTEM_VERSION: (u16, u16, u16, u16) = (10, 0, 19045, 1);
 
+/// Version du runtime Visual C++ servi par les DLL intégrées msvcp140,
+/// vcruntime140, concrt140… : celle du redistribuable de Visual Studio 2022
+/// 17.14 (14.44.35211.0). Les applis vérifient le numéro mineur : OBS
+/// Studio exige 14.40 ou plus et refuse de démarrer sinon (#2062).
+pub const VC_RUNTIME_VERSION: (u16, u16, u16, u16) = (14, 44, 35211, 0);
+
+/// DLL du runtime Visual C++ (redistribuable 2015-2022), d'après son nom.
+fn is_vc_runtime(file: &str) -> bool {
+    let base = file.strip_suffix(".dll").unwrap_or(file);
+    [
+        "msvcp140",
+        "vcruntime140",
+        "concrt140",
+        "vccorlib140",
+        "vcomp140",
+    ]
+    .iter()
+    .any(|p| base == *p || base.strip_prefix(p).is_some_and(|r| r.starts_with('_')))
+}
+
 /// DLL système intégrée (kernel32.dll, kernelbase.dll…), sans fichier sur
 /// disque : Windows y trouve une ressource de version, que Chromium exige
 /// (base::win::OSInfo lit celle de kernelbase.dll, puis de kernel32.dll,
@@ -131,7 +164,11 @@ fn builtin_version(path: &str) -> Option<Vec<u8>> {
     if !system_dir || !crate::dlls::is_builtin(&crate::dlls::normalize(file)) {
         return None;
     }
-    let (a, b, c, d) = SYSTEM_VERSION;
+    let (a, b, c, d) = if is_vc_runtime(&lower) {
+        VC_RUNTIME_VERSION
+    } else {
+        SYSTEM_VERSION
+    };
     let ms = (u32::from(a) << 16) | u32::from(b);
     let ls = (u32::from(c) << 16) | u32::from(d);
     let mut fixed = Vec::with_capacity(52);
@@ -491,6 +528,38 @@ mod tests {
                 get_file_version_info_size_w(unknown.as_ptr(), std::ptr::null_mut()),
                 0
             );
+        }
+    }
+
+    #[test]
+    fn runtime_visual_cpp_en_version_14() {
+        // OBS Studio lit la version de « msvcp140.dll » et exige 14.40 ou plus (#2062).
+        let _teb = crate::process::test_teb();
+        assert!(is_vc_runtime("msvcp140.dll"));
+        assert!(is_vc_runtime("vcruntime140_1.dll"));
+        assert!(!is_vc_runtime("msvcp140x.dll"));
+        assert!(!is_vc_runtime("kernel32.dll"));
+        unsafe {
+            for name in ["msvcp140.dll", "C:\\Windows\\System32\\vcruntime140.dll"] {
+                let path = wide(name);
+                let size = get_file_version_info_size_w(path.as_ptr(), std::ptr::null_mut());
+                assert!(size > 52, "{name}");
+                let mut buf = vec![0u8; size as usize];
+                assert_eq!(
+                    get_file_version_info_w(path.as_ptr(), 0, size, buf.as_mut_ptr()),
+                    1
+                );
+                let mut p: *mut u8 = std::ptr::null_mut();
+                let mut n = 0u32;
+                let root = wide("\\");
+                assert_eq!(
+                    ver_query_value_w(buf.as_ptr(), root.as_ptr(), &mut p, &mut n),
+                    1
+                );
+                let fixed = std::slice::from_raw_parts(p as *const u32, 13);
+                assert_eq!(fixed[2] >> 16, 14, "{name}");
+                assert!(fixed[2] & 0xFFFF >= 40, "{name}");
+            }
         }
     }
 

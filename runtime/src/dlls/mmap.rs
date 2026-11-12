@@ -669,7 +669,8 @@ unsafe fn map_view_at(
         // OpenFileMapping, même après CloseHandle, comme sous Windows.
         crate::dlls::named_objects::retain(crate::dlls::named_objects::SECTION, n);
         crate::trace!(
-            "MapViewOfFile({n}, accès 0x{access:x}, décalage {offset}, demandé {bytes_to_map}) = 0x{addr:x}, {len} octets"
+            "MapViewOfFile({n}, accès 0x{access:x}, décalage {offset}, demandé {bytes_to_map}) = 0x{addr:x}, {len} octets, début {}",
+            head_hex(addr, len)
         );
     }
     drop(guard);
@@ -683,6 +684,17 @@ unsafe fn map_view_at(
         },
     );
     addr
+}
+
+/// WINLUX_TRACE (#2072) : les 64 premiers octets d'une vue nommée, en
+/// hexadécimal, pour voir ce qu'un processus lit de ce qu'un autre a écrit.
+fn head_hex(addr: usize, len: usize) -> String {
+    if !crate::log::enabled(crate::log::Level::Trace) {
+        return String::new();
+    }
+    let n = len.min(64);
+    let bytes = unsafe { std::slice::from_raw_parts(addr as *const u8, n) };
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Nom de la section d'une vue qui contient `addr` (trace de VirtualQuery).
@@ -737,6 +749,13 @@ pub unsafe extern "win64" fn unmap_view_of_file(addr: usize) -> i32 {
     let view = views().as_mut().and_then(|m| m.remove(&addr));
     match view {
         Some(v) => {
+            if let Some(n) = v.name.as_deref() {
+                crate::trace!(
+                    "UnmapViewOfFile({n}, 0x{:x}), début {}",
+                    v.addr,
+                    head_hex(v.addr, v.len)
+                );
+            }
             libc::munmap(v.addr as *mut _, v.len);
             if let Some(k) = v.name.as_deref() {
                 crate::dlls::named_objects::release(crate::dlls::named_objects::SECTION, k);
