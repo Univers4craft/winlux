@@ -35,6 +35,21 @@ assert not uac["verify"]("alice", "admin-7")
 os.environ["WINLUX_SESSION_USER"] = "bob"
 assert uac["target_account"]() == ("alice", False)
 
+assert uac["admin_choices"]() == ["alice"]
+
+# Deuxième administrateur (#2198) : un compte standard peut choisir l'un ou
+# l'autre, et le mot de passe de chacun est accepté ; root n'est pas proposé.
+digest_dan = lock["_crypt"]("Parent-9", "$6$winluxuac$")
+(tmp / "etc/passwd").write_text((tmp / "etc/passwd").read_text() + "dan:x:1004:1004:Dan:/home/dan:/bin/bash\n")
+(tmp / "etc/shadow").write_text((tmp / "etc/shadow").read_text() + f"dan:{digest_dan}:19000:0:99999:7:::\n")
+(tmp / "etc/group").write_text("root:x:0:\nsudo:x:27:alice,dan\nusers:x:100:bob\n")
+assert uac["admin_choices"]() == ["alice", "dan"]
+assert uac["verify"]("dan", "Parent-9")
+assert not uac["verify"]("dan", "Admin-7")
+os.environ["WINLUX_SESSION_USER"] = "dan"
+assert uac["admin_choices"]() == ["dan"]
+os.environ["WINLUX_SESSION_USER"] = "bob"
+
 # Rôle administrateur de la session Live.
 (tmp / "etc/winlux/users.conf").write_text("carla:admin:live-pass\n")
 assert "carla" in uac["admin_accounts"]()
