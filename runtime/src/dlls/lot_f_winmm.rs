@@ -216,8 +216,8 @@ unsafe extern "win64" fn joyGetPos(id: u32, out: *mut u32) -> u32 {
     }
     match position(id) {
         Ok(p) => {
-            for i in 0..3 {
-                std::ptr::write_unaligned(out.add(i), p.axes[i]);
+            for (i, &axe) in p.axes.iter().enumerate().take(3) {
+                std::ptr::write_unaligned(out.add(i), axe);
             }
             std::ptr::write_unaligned(out.add(3), p.buttons & 0xF);
             JOYERR_NOERROR
@@ -234,8 +234,8 @@ unsafe extern "win64" fn joyGetPosEx(id: u32, out: *mut u32) -> u32 {
     }
     match position(id) {
         Ok(p) => {
-            for i in 0..6 {
-                std::ptr::write_unaligned(out.add(2 + i), p.axes[i]);
+            for (i, &axe) in p.axes.iter().enumerate().take(6) {
+                std::ptr::write_unaligned(out.add(2 + i), axe);
             }
             std::ptr::write_unaligned(out.add(8), p.buttons);
             std::ptr::write_unaligned(out.add(9), p.pressed);
