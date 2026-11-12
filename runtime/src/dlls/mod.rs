@@ -88,6 +88,7 @@ pub mod dinput8;
 pub mod dirwatch;
 pub mod discord_win32;
 pub mod displaymode;
+pub mod doomed;
 pub mod dpapi;
 pub mod dplayx;
 pub mod dpnet;
