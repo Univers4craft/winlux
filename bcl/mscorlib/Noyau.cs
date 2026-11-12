@@ -38,7 +38,7 @@ namespace System
     }
 
     public abstract class ValueType { }
-    public abstract class Enum : ValueType { }
+    public abstract partial class Enum : ValueType { }
     public struct Void { }
 
     public partial struct Boolean { private bool m_value; }
@@ -230,7 +230,7 @@ namespace System
     }
 
     [AttributeUsage(AttributeTargets.All, Inherited = true, AllowMultiple = false)]
-    public abstract class Attribute { }
+    public abstract partial class Attribute { }
 
     [Flags]
     public enum AttributeTargets
