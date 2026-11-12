@@ -79,6 +79,7 @@ pub mod d3dx9_effect;
 pub mod d3dx9_hlsl;
 pub mod d3dx9_mesh;
 pub mod d3dx9_shader;
+pub mod data_json;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
