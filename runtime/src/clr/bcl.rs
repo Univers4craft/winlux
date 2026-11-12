@@ -126,13 +126,21 @@ pub fn alloc_utf16(units: &[u16]) -> Value {
 }
 
 /// Unités UTF-16 d'une chaîne managée (vide pour null).
+/// Un objet qui n'est pas une `System.String` du tas (un tableau passé par
+/// réflexion à une primitive, #2037) se lit aussi comme la chaîne vide : sa
+/// première case n'est pas une longueur.
 pub fn managed_utf16(ptr: *mut u8) -> Vec<u16> {
-    if ptr.is_null() {
-        return Vec::new();
+    string_units(ptr).to_vec()
+}
+
+/// Les unités d'une vraie chaîne managée, ou rien (#2037).
+fn string_units<'a>(ptr: *mut u8) -> &'a [u16] {
+    if gc::type_of(ptr) != Some(TYPE_STRING) {
+        return &[];
     }
     unsafe {
         let len = *(ptr as *const u64) as usize;
-        std::slice::from_raw_parts(ptr.add(8) as *const u16, len).to_vec()
+        std::slice::from_raw_parts(ptr.add(8) as *const u16, len)
     }
 }
 
@@ -282,15 +290,10 @@ fn number_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     }
 }
 
+/// Texte d'une chaîne managée ; vide pour null ou pour un objet qui n'est
+/// pas une chaîne (#2037).
 pub fn read_managed_string(ptr: *mut u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = *(ptr as *const u64) as usize;
-        let slice = std::slice::from_raw_parts(ptr.add(8) as *const u16, len);
-        String::from_utf16_lossy(slice)
-    }
+    String::from_utf16_lossy(string_units(ptr))
 }
 
 pub fn alloc_string_array(items: &[String]) -> Value {
