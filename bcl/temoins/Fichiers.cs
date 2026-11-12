@@ -3,9 +3,10 @@
 // Code de sortie attendu : 200.
 // Sinon : le numéro (1 à 13) de la première vérification qui échoue.
 // La 13 appelle les primitives de System.IO.Natif par réflexion avec des
-// bornes qui débordent ou un objet qui n'est pas un tableau d'octets :
-// elles doivent refuser (-87, ERROR_INVALID_PARAMETER) sans toucher la
-// mémoire hors du tableau.
+// bornes qui débordent : elles doivent refuser (-87,
+// ERROR_INVALID_PARAMETER) sans toucher la mémoire hors du tableau. Un objet
+// qui n'est pas un tableau d'octets est refusé dès Invoke (ArgumentException,
+// #2037).
 // Corsair.Service.exe (iCUE 4.18) appelait TextWriter::Write (9 fois),
 // Path::Combine (9), FileStream::.ctor (8), File::Exists (8),
 // BinaryWriter::Write (8), Stream::Read/Write, StringWriter, StringReader,
@@ -133,12 +134,20 @@ namespace Temoins
                     new object[] { h, new byte[4], int.MaxValue, int.MaxValue },
                     new object[] { h, new byte[4], 2, int.MaxValue },
                     new object[] { h, new byte[4], -1, 2 },
-                    new object[] { h, "pas un tableau", 0, 8 },
-                    new object[] { h, new int[4], 0, 8 },
                 };
                 foreach (object[] e in essais)
                 {
                     if ((int)lire.Invoke(null, e) != -87 || (int)ecrire.Invoke(null, e) != -87) return 13;
+                }
+                // Un autre objet qu'un byte[] : Invoke le refuse avant (#2037).
+                object[][] faux = {
+                    new object[] { h, "pas un tableau", 0, 8 },
+                    new object[] { h, new int[4], 0, 8 },
+                };
+                foreach (object[] e in faux)
+                {
+                    try { lire.Invoke(null, e); return 13; } catch (ArgumentException) { }
+                    try { ecrire.Invoke(null, e); return 13; } catch (ArgumentException) { }
                 }
                 if ((int)lire.Invoke(null, new object[] { h, new byte[8], 0, 8 }) != 8) return 13;
             }

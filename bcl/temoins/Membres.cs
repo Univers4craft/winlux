@@ -2,9 +2,13 @@
 // GetMethod/Invoke, propriétés, champs, constructeurs, Activator, attributs
 // personnalisés, énumérations, types génériques et interfaces.
 // Code de sortie attendu : 200.
-// Sinon : le numéro (1 à 13) de la première vérification qui échoue.
+// Sinon : le numéro (1 à 14) de la première vérification qui échoue.
 // La 13 forge une poignée de membre par réflexion : elle doit lever
 // ArgumentException au lieu de faire paniquer le moteur.
+// La 14 passe à Invoke des arguments qui n'ont pas le type du paramètre
+// (int[] pour string, string pour int…) : ArgumentException, non
+// enveloppée, avant l'appel ; une cible d'un autre type donne
+// TargetException, et FieldInfo.GetValue/SetValue refusent de même (#2037).
 // Corsair.Service.exe (iCUE 4.18) appelait Type::GetMethod (11 fois),
 // MemberInfo::GetCustomAttributes, MethodBase::Invoke, PropertyInfo,
 // Activator::CreateInstance (10) et Enum::GetValues, Parse, ToObject.
@@ -43,6 +47,9 @@ namespace Temoins
         [Marque("méthode")]
         public int Ajouter(int a, int b) { return a + b; }
         public static string Saluer(string qui) { return "bonjour " + qui; }
+        public static int Taille(byte[] octets) { return octets.Length; }
+        public static int Allumees(IAppareil a) { return a.Leds; }
+        public static long Doubler(long v) { return 2 * v; }
         public virtual string Genre() { return "clavier"; }
         public bool Essayer(string s, out int n) { n = s.Length; return true; }
         public void Echouer() { throw new InvalidOperationException("raté"); }
@@ -134,6 +141,40 @@ namespace Temoins
             poignee.SetValue(forgee, (long)0x7FFF0000FFFFL);
             try { string n = forgee.Name; return 13; }
             catch (ArgumentException) { }
+
+            // Arguments du mauvais type : refusés avant l'appel (#2037).
+            object[][] faux = {
+                new object[] { "Saluer", null, new int[] { 1, 2 } },
+                new object[] { "Saluer", null, 42 },
+                new object[] { "Ajouter", c, "x", 1 },
+                new object[] { "Ajouter", c, new int[1], 1 },
+                new object[] { "Taille", null, new int[3] },
+                new object[] { "Taille", null, "abc" },
+                new object[] { "Allumees", null, "pas un appareil" },
+            };
+            foreach (object[] f in faux)
+            {
+                object[] args = new object[f.Length - 2];
+                Array.Copy(f, 2, args, 0, args.Length);
+                try { t.GetMethod((string)f[0]).Invoke(f[1], args); return 14; }
+                catch (TargetInvocationException) { return 14; }
+                catch (ArgumentException e) { if (e.GetType() != typeof(ArgumentException)) return 14; }
+            }
+            try { t.GetConstructor(new Type[] { typeof(int) }).Invoke(new object[] { "x" }); return 14; }
+            catch (ArgumentException) { }
+            // Cible d'un autre type : TargetException ; champ : ArgumentException.
+            try { t.GetMethod("Ajouter").Invoke("pas un clavier", new object[] { 1, 2 }); return 14; }
+            catch (TargetException) { }
+            try { nom.GetValue(new int[2]); return 14; } catch (ArgumentException) { }
+            try { nom.SetValue("pas un clavier", "x"); return 14; } catch (ArgumentException) { }
+            try { nom.SetValue(c, new int[2]); return 14; } catch (ArgumentException) { }
+            nom.SetValue(c, "K95");
+            if (c.Nom != "K95" || (string)nom.GetValue(new ClavierSansFil()) != "K70") return 14;
+            // Les bons types passent toujours, null et l'élargissement compris.
+            if ((int)t.GetMethod("Taille").Invoke(null, new object[] { new byte[3] }) != 3) return 14;
+            if ((int)t.GetMethod("Allumees").Invoke(null, new object[] { new ClavierSansFil() }) != 104) return 14;
+            if ((long)t.GetMethod("Doubler").Invoke(null, new object[] { 21 }) != 42) return 14;
+            if ((string)t.GetMethod("Saluer").Invoke(null, new object[] { null }) != "bonjour ") return 14;
             return 200;
         }
     }

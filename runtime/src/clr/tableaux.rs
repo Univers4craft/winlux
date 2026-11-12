@@ -12,7 +12,7 @@ use super::gc;
 use super::il::{load, store, Interpreter, Value};
 use super::metadata::{self, ElementType};
 use super::tables::{TableId, Token};
-use super::types::{self, Kind};
+use super::types::{self, Kind, TypeId};
 
 /// Données d'un tableau à une dimension : longueur (u64) puis éléments.
 const DATA: usize = 8;
@@ -195,8 +195,20 @@ impl Interpreter {
                 if i < 0 || i >= n {
                     Err(out_of_range("index"))
                 } else {
-                    store(at(i), kind, args.get(2).copied().unwrap_or(Value::Null));
-                    Ok(Value::Null)
+                    let v = args.get(2).copied().unwrap_or(Value::Null);
+                    // IList.this[] (non générique) reçoit un objet encadré.
+                    match (generic || kind == Kind::Ref, self.unbox_elem(this, kind, v)) {
+                        (true, _) => {
+                            store(at(i), kind, v);
+                            Ok(Value::Null)
+                        }
+                        (false, Ok(Some(raw))) => {
+                            store(at(i), kind, raw);
+                            Ok(Value::Null)
+                        }
+                        (false, Ok(None)) => Err(ClrException::null_reference()),
+                        (false, Err(e)) => Err(e),
+                    }
                 }
             }
             "Contains" | "IndexOf" => {
@@ -204,8 +216,9 @@ impl Interpreter {
                 // IList.Contains(object) sur un tableau de valeurs : la
                 // valeur arrive encadrée.
                 let item = if !generic && kind != Kind::Ref {
-                    match item {
-                        Value::Ref(p) if !p.is_null() => load(p, kind),
+                    match self.unbox_elem(this, kind, item) {
+                        Ok(Some(raw)) => raw,
+                        // null ou un objet d'un autre type n'y est pas.
                         _ => return Some(Ok(Value::I32(if name == "Contains" { 0 } else { -1 }))),
                     }
                 } else {
@@ -346,13 +359,20 @@ impl Interpreter {
             return Some(false);
         }
         let target = self.resolve_sig(self.current, &inner, &self.current_gen());
+        Some(self.array_elements_fit(target, obj))
+    }
+
+    /// Vrai si les éléments du tableau `obj` conviennent à un `target[]`
+    /// (#2023) : références pour un type référence, même représentation
+    /// pour un type valeur (int[] pour uint[], enum pour son entier).
+    pub(super) fn array_elements_fit(&self, target: TypeId, obj: *mut u8) -> bool {
         let target_kind = self.kind_of_type(target);
         let elem = gc::array_elem_type(obj);
         if target_kind == Kind::Ref {
-            return Some(elem == 0);
+            return elem == 0;
         }
         if elem == 0 {
-            return Some(false);
+            return false;
         }
         let kind = self.kind_of_type(elem);
         let integer = |k: Kind| match k {
@@ -363,11 +383,39 @@ impl Interpreter {
             Kind::I => Some(16),
             _ => None,
         };
-        Some(
-            elem == target
-                || kind == target_kind && !matches!(kind, Kind::Struct(_))
-                || integer(kind).is_some() && integer(kind) == integer(target_kind),
-        )
+        elem == target
+            || kind == target_kind && !matches!(kind, Kind::Struct(_))
+            || integer(kind).is_some() && integer(kind) == integer(target_kind)
+    }
+
+    /// Valeur à ranger dans un tableau de valeurs `arr` depuis un objet
+    /// encadré (Array.SetValue, IList.this[], IList.Contains) : l'objet doit
+    /// être de même représentation que les éléments, sinon on lirait une
+    /// structure dans un objet plus petit (#2037). `Ok(None)` : null.
+    fn unbox_elem(
+        &self,
+        arr: *mut u8,
+        kind: Kind,
+        v: Value,
+    ) -> Result<Option<Value>, ClrException> {
+        let p = match v {
+            Value::Ref(p) if !p.is_null() => p,
+            _ => return Ok(None),
+        };
+        let fits = match (gc::type_of(p), kind) {
+            (None, _) => false,
+            (Some(actual), Kind::Struct(_)) => actual == gc::array_elem_type(arr),
+            (Some(actual), _) => !matches!(self.kind_of_type(actual), Kind::Ref | Kind::Struct(_)),
+        };
+        if fits {
+            Ok(Some(load(p, kind)))
+        } else {
+            Err(ClrException::new(
+                "System",
+                "InvalidCastException",
+                "Object cannot be stored in an array of this type.",
+            ))
+        }
     }
 
     /// Façon de ranger un élément du tableau `arr`.
@@ -443,12 +491,13 @@ impl Interpreter {
                                 let raw = if kind == Kind::Ref {
                                     v
                                 } else {
-                                    match v {
-                                        Value::Ref(p) if !p.is_null() => load(p, kind),
-                                        _ => {
+                                    match self.unbox_elem(a, kind, v) {
+                                        Ok(Some(raw)) => raw,
+                                        Ok(None) => {
                                             unsafe { std::ptr::write_bytes(at, 0, size) };
                                             return Some(Ok(Value::Null));
                                         }
+                                        Err(e) => return Some(Err(e)),
                                     }
                                 };
                                 store(at, kind, raw);
@@ -497,6 +546,16 @@ impl Interpreter {
         }
         let (sk, dk) = (self.elem_kind(src), self.elem_kind(dst));
         let (ss, ds) = (sk.elem_size(), dk.elem_size());
+        // Structures : seulement vers le même type, sinon des références
+        // tomberaient dans des entiers ou l'inverse (#2037).
+        let structs = matches!(sk, Kind::Struct(_)) || matches!(dk, Kind::Struct(_));
+        if structs && !(dk == Kind::Ref || gc::array_elem_type(src) == gc::array_elem_type(dst)) {
+            return Err(ClrException::new(
+                "System",
+                "ArrayTypeMismatchException",
+                "Source array type cannot be assigned to destination array type.",
+            ));
+        }
         unsafe {
             let from = src.add(DATA + si as usize * ss);
             let to = dst.add(DATA + di as usize * ds);
@@ -512,6 +571,12 @@ impl Interpreter {
                 for (i, v) in items.into_iter().enumerate() {
                     let v = if dk == Kind::Ref && sk != Kind::Ref {
                         self.box_elem(src, sk, v)
+                    } else if sk == Kind::Ref {
+                        // object[] vers int[] : chaque objet est désencadré.
+                        match self.unbox_elem(dst, dk, v)? {
+                            Some(raw) => raw,
+                            None => return Err(ClrException::null_reference()),
+                        }
                     } else {
                         v
                     };
