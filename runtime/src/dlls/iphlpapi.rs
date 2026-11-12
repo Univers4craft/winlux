@@ -590,7 +590,242 @@ pub unsafe extern "win64" fn GetNetworkParams(info: *mut u8, size: *mut u32) -> 
     *size = need as u32;
     0
 }
-pub unsafe extern "win64" fn GetBestRoute(_dest: u32, _src: u32, _route: usize) -> u32 {
+// --- Meilleure route (Steam, #1876) -----------------------------------------
+// Les tables de routage Linux (/proc/net/route, /proc/net/ipv6_route) donnent
+// la route la plus spécifique, puis la plus petite métrique. Une adresse de
+// la machine elle-même (table « local » de Linux) passe par son interface.
+// Source : documentation publique de Microsoft (iphlpapi, MIB_IPFORWARDROW).
+
+const ERROR_NETWORK_UNREACHABLE: u32 = 1231;
+
+/// Route choisie : interface, passerelle IPv4 (0 : directe), préfixe, métrique.
+#[derive(Debug, PartialEq)]
+struct Route {
+    iface: String,
+    dest: std::net::IpAddr,
+    prefix: u8,
+    gateway: Option<std::net::IpAddr>,
+    metric: u32,
+}
+
+fn ipv4_routes(text: &str) -> Vec<Route> {
+    text.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.len() < 8 {
+                return None;
+            }
+            let hex = |i: usize| u32::from_str_radix(f[i], 16).ok();
+            let (dest, gw, flags, metric, mask) = (hex(1)?, hex(2)?, hex(3)?, hex(6)?, hex(7)?);
+            // RTF_UP
+            if flags & 1 == 0 {
+                return None;
+            }
+            // Valeurs écrites dans l'ordre des octets du réseau.
+            let ip = |v: u32| std::net::IpAddr::from(v.to_le_bytes());
+            Some(Route {
+                iface: f[0].to_string(),
+                dest: ip(dest),
+                prefix: mask.count_ones() as u8,
+                gateway: (gw != 0).then(|| ip(gw)),
+                metric,
+            })
+        })
+        .collect()
+}
+
+fn ipv6_routes(text: &str) -> Vec<Route> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.len() < 10 {
+                return None;
+            }
+            let addr = |s: &str| {
+                u128::from_str_radix(s, 16)
+                    .ok()
+                    .map(std::net::Ipv6Addr::from)
+            };
+            let flags = u32::from_str_radix(f[8], 16).ok()?;
+            // RTF_UP ; RTF_REJECT (0x200) : route de refus.
+            if flags & 1 == 0 || flags & 0x200 != 0 || f[9] == "lo" {
+                return None;
+            }
+            let gw = addr(f[4])?;
+            Some(Route {
+                iface: f[9].to_string(),
+                dest: std::net::IpAddr::V6(addr(f[0])?),
+                prefix: u8::from_str_radix(f[1], 16).ok()?,
+                gateway: (!gw.is_unspecified()).then_some(std::net::IpAddr::V6(gw)),
+                metric: u32::from_str_radix(f[5], 16).ok()?,
+            })
+        })
+        .collect()
+}
+
+fn in_prefix(addr: std::net::IpAddr, net: std::net::IpAddr, prefix: u8) -> bool {
+    match (addr, net) {
+        (std::net::IpAddr::V4(a), std::net::IpAddr::V4(n)) => {
+            let m = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - u32::from(prefix.min(32)))
+            };
+            u32::from(a) & m == u32::from(n) & m
+        }
+        (std::net::IpAddr::V6(a), std::net::IpAddr::V6(n)) => {
+            let m = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - u32::from(prefix.min(128)))
+            };
+            u128::from(a) & m == u128::from(n) & m
+        }
+        _ => false,
+    }
+}
+
+/// Meilleure route vers `dest` : adresses locales d'abord (interface qui la
+/// porte, ou boucle locale), puis le plus long préfixe à métrique minimale.
+fn best_route(
+    dest: std::net::IpAddr,
+    routes: &[Route],
+    local: &[(String, std::net::IpAddr)],
+) -> Option<Route> {
+    if dest.is_loopback() {
+        return Some(Route {
+            iface: "lo".into(),
+            dest,
+            prefix: if dest.is_ipv4() { 8 } else { 128 },
+            gateway: None,
+            metric: 0,
+        });
+    }
+    if let Some((iface, _)) = local.iter().find(|(_, a)| *a == dest) {
+        let prefix = if dest.is_ipv4() { 32 } else { 128 };
+        return Some(Route {
+            iface: iface.clone(),
+            dest,
+            prefix,
+            gateway: None,
+            metric: 0,
+        });
+    }
+    routes
+        .iter()
+        .filter(|r| in_prefix(dest, r.dest, r.prefix))
+        .min_by_key(|r| (std::cmp::Reverse(r.prefix), r.metric))
+        .map(|r| Route {
+            iface: r.iface.clone(),
+            dest: r.dest,
+            prefix: r.prefix,
+            gateway: r.gateway,
+            metric: r.metric,
+        })
+}
+
+fn system_best_route(dest: std::net::IpAddr) -> Option<(Route, u32)> {
+    let routes = if dest.is_ipv4() {
+        ipv4_routes(&std::fs::read_to_string("/proc/net/route").unwrap_or_default())
+    } else {
+        ipv6_routes(&std::fs::read_to_string("/proc/net/ipv6_route").unwrap_or_default())
+    };
+    let local: Vec<(String, std::net::IpAddr)> = adapters()
+        .into_iter()
+        .flat_map(|a| {
+            a.addrs
+                .iter()
+                .map(|(ip, _)| (a.name.clone(), *ip))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let r = best_route(dest, &routes, &local)?;
+    let name = std::ffi::CString::new(r.iface.clone()).ok()?;
+    // SAFETY : nom terminé par zéro.
+    let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    (index != 0).then_some((r, index))
+}
+
+/// GetBestInterface : `dest` est une adresse IPv4 dans l'ordre du réseau.
+pub unsafe extern "win64" fn GetBestInterface(dest: u32, index: *mut u32) -> u32 {
+    if index.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    match system_best_route(std::net::IpAddr::from(dest.to_ne_bytes())) {
+        Some((_, i)) => {
+            *index = i;
+            0
+        }
+        None => ERROR_NETWORK_UNREACHABLE,
+    }
+}
+
+/// GetBestInterfaceEx : SOCKADDR_IN (adresse à +4) ou SOCKADDR_IN6 (+8).
+pub unsafe extern "win64" fn GetBestInterfaceEx(addr: *const u8, index: *mut u32) -> u32 {
+    if addr.is_null() || index.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let family = (addr as *const u16).read_unaligned();
+    let dest = match family {
+        AF_INET_WIN => {
+            let mut b = [0u8; 4];
+            std::ptr::copy_nonoverlapping(addr.add(4), b.as_mut_ptr(), 4);
+            std::net::IpAddr::from(b)
+        }
+        AF_INET6_WIN => {
+            let mut b = [0u8; 16];
+            std::ptr::copy_nonoverlapping(addr.add(8), b.as_mut_ptr(), 16);
+            std::net::IpAddr::from(b)
+        }
+        _ => return ERROR_INVALID_PARAMETER,
+    };
+    match system_best_route(dest) {
+        Some((_, i)) => {
+            *index = i;
+            0
+        }
+        None => ERROR_NETWORK_UNREACHABLE,
+    }
+}
+
+/// GetBestRoute : MIB_IPFORWARDROW (14 DWORD, adresses dans l'ordre du
+/// réseau) de la meilleure route IPv4.
+pub unsafe extern "win64" fn GetBestRoute(dest: u32, _src: u32, row: *mut u32) -> u32 {
+    if row.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let Some((r, index)) = system_best_route(std::net::IpAddr::from(dest.to_ne_bytes())) else {
+        return ERROR_NETWORK_UNREACHABLE;
+    };
+    let raw = |ip: std::net::IpAddr| match ip {
+        std::net::IpAddr::V4(v) => u32::from_ne_bytes(v.octets()),
+        std::net::IpAddr::V6(_) => 0,
+    };
+    let mask = if r.prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - u32::from(r.prefix.min(32)))
+    };
+    let fields = [
+        raw(r.dest),
+        u32::from_ne_bytes(mask.to_be_bytes()),
+        0,
+        r.gateway.map_or(dest, raw),
+        index,
+        if r.gateway.is_some() { 4 } else { 3 }, // MIB_IPROUTE_TYPE_INDIRECT / DIRECT
+        3,                                       // MIB_IPPROTO_NETMGMT
+        0,
+        0,
+        r.metric,
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+        u32::MAX,
+    ];
+    for (i, v) in fields.iter().enumerate() {
+        row.add(i).write_unaligned(*v);
+    }
     0
 }
 fn stat(name: &str, file: &str) -> u32 {
@@ -658,9 +893,6 @@ pub unsafe extern "win64" fn GetIfTable(table: *mut u8, size: *mut u32, order: i
     *size = need as u32;
     0
 }
-pub unsafe extern "win64" fn GetBestInterfaceEx(_addr: usize, _idx: *mut u32) -> u32 {
-    0
-}
 pub unsafe extern "win64" fn GetNumberOfInterfaces(num: *mut u32) -> u32 {
     if !num.is_null() {
         *num = 1;
@@ -676,6 +908,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetBestRoute" => fn GetBestRoute,
         "GetIfTable" => fn GetIfTable,
         "GetBestInterfaceEx" => fn GetBestInterfaceEx,
+        "GetBestInterface" => fn GetBestInterface,
         "GetNumberOfInterfaces" => fn GetNumberOfInterfaces,
         "GetExtendedTcpTable" => fn crate::netports::get_extended_tcp_table,
         "GetExtendedUdpTable" => fn crate::netports::get_extended_udp_table,
@@ -688,6 +921,75 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Steam (#1876) : plus long préfixe, puis métrique ; adresses locales
+    /// et boucle locale par leur interface.
+    #[test]
+    fn meilleure_route_ipv4_et_ipv6() {
+        let v4 =
+            "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+                  eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+                  wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+                  eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n\
+                  tun0\t0000000A\t00000000\t0001\t0\t0\t50\t000000FF\t0\t0\t0\n";
+        let routes = ipv4_routes(v4);
+        assert_eq!(routes.len(), 4);
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        let local = vec![("eth0".to_string(), ip("192.168.0.42"))];
+        let r = best_route(ip("8.8.8.8"), &routes, &local).unwrap();
+        assert_eq!(
+            (r.iface.as_str(), r.gateway, r.prefix),
+            ("eth0", Some(ip("192.168.0.1")), 0)
+        );
+        let r = best_route(ip("192.168.0.7"), &routes, &local).unwrap();
+        assert_eq!((r.iface.as_str(), r.gateway, r.prefix), ("eth0", None, 24));
+        assert_eq!(
+            best_route(ip("10.1.2.3"), &routes, &local).unwrap().iface,
+            "tun0"
+        );
+        assert_eq!(
+            best_route(ip("192.168.0.42"), &routes, &local)
+                .unwrap()
+                .prefix,
+            32
+        );
+        assert_eq!(
+            best_route(ip("127.0.0.1"), &routes, &local).unwrap().iface,
+            "lo"
+        );
+        assert!(best_route(ip("8.8.8.8"), &[], &local).is_none());
+        let v6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 eth0\n\
+                  fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001 eth0\n";
+        let r6 = ipv6_routes(v6);
+        let r = best_route(ip("2001:db8::1"), &r6, &[]).unwrap();
+        assert_eq!((r.iface.as_str(), r.gateway), ("eth0", Some(ip("fe80::1"))));
+        assert_eq!(best_route(ip("fe80::5"), &r6, &[]).unwrap().prefix, 64);
+    }
+
+    #[test]
+    fn meilleure_interface_de_la_boucle_locale() {
+        unsafe {
+            let mut index = 0u32;
+            assert_eq!(
+                GetBestInterface(u32::from_ne_bytes([127, 0, 0, 1]), &mut index),
+                0
+            );
+            assert_eq!(index, libc::if_nametoindex(c"lo".as_ptr()));
+            let mut sa = [0u8; 28];
+            sa[0..2].copy_from_slice(&23u16.to_le_bytes());
+            sa[23] = 1; // ::1
+            index = 0;
+            assert_eq!(GetBestInterfaceEx(sa.as_ptr(), &mut index), 0);
+            assert_eq!(index, libc::if_nametoindex(c"lo".as_ptr()));
+            let mut row = [0u32; 14];
+            assert_eq!(
+                GetBestRoute(u32::from_ne_bytes([127, 0, 0, 1]), 0, row.as_mut_ptr()),
+                0
+            );
+            assert_eq!(row[4], index);
+            assert_eq!(row[5], 3);
+        }
+    }
 
     #[test]
     fn parametres_reseau_taille_puis_contenu() {

@@ -739,6 +739,75 @@ impl Interpreter {
             | ("System", "Environment", "get_CurrentManagedThreadId") => {
                 Some(Ok(Value::I32(managed_id())))
             }
+            // Mutex et Semaphore de la mscorlib (#1988) : objets de kernel32,
+            // nommés et partagés avec les processus du compte (#20). Un
+            // handle rendu négatif est l'opposé du code d'erreur ; à la
+            // création, le bit 0 dit si l'objet est neuf.
+            ("System.Threading", "Mutex" | "Semaphore", "Creer") => {
+                let semaphore = class == "Semaphore";
+                let name_at = if semaphore { 2 } else { 1 };
+                let name = match args.get(name_at) {
+                    Some(Value::Ref(p)) if !p.is_null() => {
+                        Some(super::bcl::read_managed_string(*p))
+                    }
+                    _ => None,
+                };
+                let (h, err) = if semaphore {
+                    crate::dlls::kernel32::clr_semaphore_create(
+                        int_arg(0),
+                        int_arg(1),
+                        name.as_deref(),
+                    )
+                } else {
+                    crate::dlls::kernel32::clr_mutex_create(int_arg(0) != 0, name.as_deref())
+                };
+                Some(Ok(Value::I64(if h == 0 {
+                    -(err.max(1) as i64)
+                } else {
+                    ((h as i64) << 1) | i64::from(err != 183)
+                })))
+            }
+            ("System.Threading", "Mutex" | "Semaphore", "Ouvrir") => {
+                let name = if this.is_null() {
+                    String::new()
+                } else {
+                    super::bcl::read_managed_string(this)
+                };
+                let (h, err) = crate::dlls::kernel32::clr_sync_open(&name, class == "Semaphore");
+                Some(Ok(Value::I64(if h == 0 {
+                    -(err.max(1) as i64)
+                } else {
+                    h as i64
+                })))
+            }
+            ("System.Threading", "Mutex", "Liberer") => {
+                let h = args.first().map_or(0, |v| v.as_i64()) as usize;
+                Some(Ok(Value::I32(crate::dlls::kernel32::release_mutex(h))))
+            }
+            ("System.Threading", "Semaphore", "Liberer") => {
+                let h = args.first().map_or(0, |v| v.as_i64()) as usize;
+                let mut prev = 0i32;
+                let ok =
+                    unsafe { crate::dlls::kernel32::release_semaphore(h, int_arg(1), &mut prev) };
+                Some(Ok(Value::I64(if ok != 0 {
+                    prev as i64
+                } else {
+                    -(crate::process::last_error().max(1) as i64)
+                })))
+            }
+            ("System.Threading", "WaitHandle", "AttendreNoyau") => {
+                let h = args.first().map_or(0, |v| v.as_i64()) as usize;
+                let ms = int_arg(1);
+                let depth = gil_release_all();
+                let r = crate::dlls::kernel32::wait_for_single_object(h, ms as u32);
+                gil_restore(depth);
+                Some(Ok(Value::I32(r as i32)))
+            }
+            ("System.Threading", "WaitHandle", "FermerNoyau") => {
+                let h = args.first().map_or(0, |v| v.as_i64()) as usize;
+                crate::dlls::kernel32::close_handle(h);
+                Some(Ok(Value::Null))
+            }
             ("System.Threading", "ThreadPool", "QueueUserWorkItem") => {
                 let cb = this;
                 if cb.is_null() {

@@ -215,6 +215,57 @@ fn sid_alloues_et_convertis() {
     }
 }
 
+/// SteamService.exe (#1915) : un programme x86 passe des EXPLICIT_ACCESS
+/// de 32 octets (TRUSTEE à 12, nom à 28).
+#[test]
+fn explicit_access_x86_de_32_octets() {
+    assert_eq!(
+        access_layout(4),
+        AccessLayout {
+            size: 32,
+            form: 20,
+            kind: 24,
+            name: 28
+        }
+    );
+    assert_eq!(
+        access_layout(8),
+        AccessLayout {
+            size: 48,
+            form: 28,
+            kind: 32,
+            name: 40
+        }
+    );
+    let users = sid_bytes("S-1-5-32-545").unwrap();
+    let system = sid_bytes("S-1-5-18").unwrap();
+    let mut entries = [0u8; 64];
+    for (i, sid) in [&users, &system].iter().enumerate() {
+        let e = i * 32;
+        entries[e..e + 4].copy_from_slice(&0x1F_01FFu32.to_le_bytes());
+        entries[e + 4..e + 8].copy_from_slice(&2u32.to_le_bytes()); // SET_ACCESS
+        entries[e + 8..e + 12].copy_from_slice(&3u32.to_le_bytes()); // héritage
+                                                                     // forme TRUSTEE_IS_SID (0) ; adresse du SID sur 4 octets.
+        let low = (sid.as_ptr() as usize as u32).to_le_bytes();
+        entries[e + 28..e + 32].copy_from_slice(&low);
+    }
+    if users.as_ptr() as usize > u32::MAX as usize {
+        return; // tas de test au-dessus de 4 Go : pas d'adresse x86 possible
+    }
+    // La passerelle wow32 prête une case de 8 octets pour `out` (type `p`).
+    let mut acl: *mut u8 = std::ptr::null_mut();
+    unsafe {
+        assert_eq!(
+            set_entries_in_acl_for(2, entries.as_ptr(), std::ptr::null(), &mut acl, true, 4),
+            0
+        );
+        assert_eq!(std::ptr::read_unaligned(acl.add(4) as *const u16), 2);
+    }
+    let names = trustee_sid("Users").unwrap();
+    assert_eq!(names, users);
+    assert_eq!(trustee_sid("SYSTEM").unwrap(), system);
+}
+
 #[test]
 fn absolute_descriptor_and_explicit_acl() {
     unsafe {
@@ -368,5 +419,100 @@ fn comptes_bien_connus_resolus() {
         assert_eq!(String::from_utf16_lossy(&n[..nl as usize]), name);
         assert_eq!(String::from_utf16_lossy(&d[..dl as usize]), domain);
         assert_eq!(u, use_);
+    }
+}
+
+/// SECURITY_DESCRIPTOR absolu d'un programme x86 : 20 octets, pointeurs sur
+/// 4 octets aux décalages 4, 8, 12, 16. Rien n'est écrit au-delà
+/// (SteamService.exe, #1881).
+#[test]
+fn descripteur_absolu_x86_tient_dans_20_octets() {
+    assert_eq!((absolute_sd_size(4), absolute_sd_size(8)), (20, 40));
+    assert_eq!(
+        [4, 8, 12, 16].map(|f| abs_slot(f, 4)),
+        [4, 8, 12, 16],
+        "x86 : même place que l'auto-relatif"
+    );
+    assert_eq!([4, 8, 12, 16].map(|f| abs_slot(f, 8)), [8, 16, 24, 32]);
+    let mut buf = [0xAAu8; 28];
+    unsafe {
+        write_abs_slot_for(buf.as_mut_ptr(), 16, 0x1234_5678usize as *mut u8, 4);
+    }
+    assert_eq!(&buf[16..20], &0x1234_5678u32.to_le_bytes());
+    assert!(
+        buf[20..].iter().all(|&b| b == 0xAA),
+        "rien après la DACL x86"
+    );
+}
+
+/// Acrobat (#1828) : le descripteur d'un jeton demandé avec
+/// LABEL_SECURITY_INFORMATION porte une SACL et son étiquette d'intégrité.
+#[test]
+fn descripteur_du_jeton_porte_l_etiquette_d_integrite() {
+    unsafe {
+        let mut needed = 0u32;
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, std::ptr::null_mut(), 0, &mut needed),
+            0
+        );
+        let mut buf = vec![0u8; needed as usize];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 0x10, buf.as_mut_ptr(), needed, &mut needed),
+            1
+        );
+        let (mut present, mut defaulted) = (0i32, 0i32);
+        let mut sacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            crate::dlls::chromium_win32::GetSecurityDescriptorSacl(
+                buf.as_ptr(),
+                &mut present,
+                &mut sacl,
+                &mut defaulted
+            ),
+            1
+        );
+        assert_eq!(present, 1);
+        assert!(!sacl.is_null());
+        assert_eq!(std::ptr::read_unaligned(sacl.add(4) as *const u16), 1); // AceCount
+        assert_eq!(*sacl.add(8), 0x11); // SYSTEM_MANDATORY_LABEL_ACE_TYPE
+        let sid = std::slice::from_raw_parts(sacl.add(16), 12);
+        let text = sid_text(sid).unwrap();
+        assert!(text == "S-1-16-8192" || text == "S-1-16-12288", "{text}");
+        let mut buf = vec![0u8; 256];
+        assert_eq!(
+            GetKernelObjectSecurity(0, 4, buf.as_mut_ptr(), 256, &mut needed),
+            1
+        );
+        assert_eq!(u16::from_le_bytes([buf[2], buf[3]]) & 0x10, 0);
+    }
+}
+
+/// Descripteur absolu (SetSecurityDescriptorDacl) recopié en auto-relatif
+/// pour SetServiceObjectSecurity, puis relu partie par partie (#1993).
+#[test]
+fn descripteur_absolu_recopie_en_auto_relatif() {
+    unsafe {
+        let mut abs = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(abs.as_mut_ptr(), 1), 1);
+        // ACL vide : révision 2, taille 8, aucune ACE.
+        let mut acl = [2u8, 0, 8, 0, 0, 0, 0, 0];
+        assert_eq!(
+            SetSecurityDescriptorDacl(abs.as_mut_ptr(), 1, acl.as_mut_ptr(), 0),
+            1
+        );
+        let parts = sd_parts(abs.as_ptr());
+        assert_eq!(parts[3].as_deref(), Some(&acl[..]));
+        assert!(parts[0].is_none());
+        let rel = self_relative_sd(&parts, 0);
+        assert_eq!(rel.len(), 28);
+        assert_eq!(GetSecurityDescriptorLength(rel.as_ptr()), 28);
+        let mut present = 0;
+        let mut dacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            GetSecurityDescriptorDacl(rel.as_ptr(), &mut present, &mut dacl, std::ptr::null_mut()),
+            1
+        );
+        assert_eq!(present, 1);
+        assert_eq!(std::slice::from_raw_parts(dacl, 8), &acl[..]);
     }
 }

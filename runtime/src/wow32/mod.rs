@@ -23,6 +23,7 @@
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
 mod com;
+mod com_netfw;
 mod com_taskschd;
 mod comctl;
 mod comdlg;
@@ -45,6 +46,7 @@ pub fn virtual_query_ex32(process: u32, addr: u32, info: u32, len: u32) -> u32 {
 mod layout;
 mod seh;
 mod user;
+mod vulkan;
 mod wow64;
 
 pub use wow64::{
@@ -1333,6 +1335,9 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
         // LDAPAPI de winldap.h est __cdecl (#1765).
         || n == "wldap32"
+        // U_EXPORT2 d'ICU est __cdecl (#1792).
+        || n == "icuuc"
+        || n == "icu"
         // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
         // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
         || (n == "cabinet"
@@ -1646,6 +1651,7 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
                 .or_else(|| com::override_for(&n, func))
                 .or_else(|| comdlg::override_for(&n, func))
                 .or_else(|| comctl::override_for(&n, func))
+                .or_else(|| vulkan::override_for(&n, func))
         }? {
             crt::Override::Data(addr) => return Some(addr),
             crt::Override::Native { target, sig, fix } => (target, sig, fix),
@@ -2246,6 +2252,10 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumCalendarInfoExW"
         | "EnumWindows" => bit(0),
         "InitOnceExecuteOnce"
+        | "RegisterServiceCtrlHandlerA"
+        | "RegisterServiceCtrlHandlerW"
+        | "RegisterServiceCtrlHandlerExA"
+        | "RegisterServiceCtrlHandlerExW"
         | "SetTimerQueueTimer"
         | "CreateFiber"
         | "CreateThreadpoolIo"

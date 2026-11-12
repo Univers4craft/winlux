@@ -1121,13 +1121,39 @@ struct MainCall {
     main: ServiceMainFn,
     argv: [usize; 2],
     _name: Vec<u8>,
+    /// argv x86 : deux cases de 4 octets et le nom, sous 4 Go (malloc du
+    /// processus x86). Jamais libérés : ServiceMain peut garder argv (#1971).
+    argv32: usize,
 }
 extern "win64" fn service_main_thread(param: usize) -> u32 {
     let call = unsafe { Box::from_raw(param as *mut MainCall) };
-    unsafe { (call.main)(1, call.argv.as_ptr() as *const *const u8) };
+    let argv = if call.argv32 != 0 {
+        call.argv32
+    } else {
+        call.argv.as_ptr() as usize
+    };
+    unsafe { (call.main)(1, argv as *const *const u8) };
     0
 }
-unsafe fn call_service_main(main: ServiceMainFn, name: &[u8], wide: bool) -> Option<usize> {
+
+/// argv[0] = nom pour un ServiceMain x86 : un seul bloc, les deux cases
+/// de 4 octets (nom, NULL) puis le nom terminé par zéro.
+unsafe fn argv32(name: &[u8]) -> usize {
+    let block = libc::calloc(1, 8 + name.len() + 2) as *mut u8;
+    if block.is_null() {
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(name.as_ptr(), block.add(8), name.len());
+    *(block as *mut u32) = block.add(8) as usize as u32;
+    block as usize
+}
+
+unsafe fn call_service_main(
+    main: ServiceMainFn,
+    name: &[u8],
+    wide: bool,
+    x86: bool,
+) -> Option<usize> {
     let mut bytes = if wide {
         let mut name_w: Vec<u8> = String::from_utf8_lossy(name)
             .encode_utf16()
@@ -1141,10 +1167,12 @@ unsafe fn call_service_main(main: ServiceMainFn, name: &[u8], wide: bool) -> Opt
     if !wide {
         bytes.push(0);
     }
+    let argv32 = if x86 { argv32(&bytes) } else { 0 };
     let mut call = Box::new(MainCall {
         main,
         argv: [0, 0],
         _name: bytes,
+        argv32,
     });
     call.argv[0] = call._name.as_ptr() as usize;
     let param = Box::into_raw(call) as usize;
@@ -1166,6 +1194,9 @@ unsafe fn call_service_main(main: ServiceMainFn, name: &[u8], wide: bool) -> Opt
 /// Corps de `StartServiceCtrlDispatcherA` pour le service `svc_name` (le nom
 /// vient de `WINLUX_SERVICE_NAME`, posé par le gestionnaire de services).
 unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -> i32 {
+    // Trace visible du banc : dit si le programme se met en mode service
+    // avant de sortir (#1918).
+    crate::trace!("StartServiceCtrlDispatcher(service « {svc_name} »)");
     let sock_path = control_sock_path(svc_name);
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
@@ -1201,18 +1232,26 @@ unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -
         }
     });
 
-    // Walk the SERVICE_TABLE_ENTRY array (name: *const u8, proc: fn).
+    // SERVICE_TABLE_ENTRY : nom puis procédure, chacun de la taille d'un
+    // pointeur du programme (4 octets en x86, #1971).
+    let slot = crate::wow32::pointer_size();
+    let x86 = slot == 4;
     let mut threads = Vec::new();
     let mut ptr = table;
     loop {
-        let name_ptr = std::ptr::read_unaligned(ptr as *const usize) as *const u8;
-        let proc_ptr =
-            std::ptr::read_unaligned(ptr.add(std::mem::size_of::<usize>()) as *const usize);
+        let name_ptr = crate::wow32::read_ptr(ptr as usize) as *const u8;
+        let proc_ptr = crate::wow32::read_ptr(ptr as usize + slot);
         if name_ptr.is_null() && proc_ptr == 0 {
             break;
         }
         if proc_ptr != 0 {
-            let svc_main: ServiceMainFn = std::mem::transmute(proc_ptr);
+            // ServiceMain x86 : appelé par une passerelle 64 → 32.
+            let target = if x86 {
+                crate::wow32::callback64(proc_ptr as u32)
+            } else {
+                proc_ptr
+            };
+            let svc_main: ServiceMainFn = std::mem::transmute(target);
             // Nom de l'entrée de la table (vide pour SERVICE_WIN32_OWN_PROCESS
             // possible) : sinon celui donné par le gestionnaire.
             let entry = if name_ptr.is_null() {
@@ -1227,11 +1266,11 @@ unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -
             } else {
                 entry
             };
-            if let Some(h) = call_service_main(svc_main, name.as_bytes(), wide) {
+            if let Some(h) = call_service_main(svc_main, name.as_bytes(), wide, x86) {
                 threads.push(h);
             }
         }
-        ptr = ptr.add(std::mem::size_of::<usize>() * 2);
+        ptr = ptr.add(slot * 2);
     }
 
     for h in threads {
@@ -1851,23 +1890,97 @@ pub unsafe extern "win64" fn query_service_object_security(
     size: u32,
     needed: *mut u32,
 ) -> i32 {
-    if let Err(e) = service_record(service, |_| ()) {
-        return fail(e);
+    let name = match service_record(service, |r| r.name.clone()) {
+        Ok(n) => n,
+        Err(e) => return fail(e),
+    };
+    let Some(stored) = lock(service_security())
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+    else {
+        return crate::dlls::security::GetKernelObjectSecurity(service, info, sd, size, needed);
+    };
+    if !needed.is_null() {
+        *needed = stored.len() as u32;
     }
-    crate::dlls::security::GetKernelObjectSecurity(service, info, sd, size, needed)
+    if sd.is_null() || (size as usize) < stored.len() {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(stored.as_ptr(), sd, stored.len());
+    1
 }
 
-/// Les droits d'un service ne se changent pas (ERROR_ACCESS_DENIED, ce que
-/// rend Windows à un compte sans WRITE_DAC).
+/// Descripteurs posés par SetServiceObjectSecurity (nom du service en
+/// minuscules → descripteur auto-relatif), relus par
+/// QueryServiceObjectSecurity (#1993).
+fn service_security() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    static SD: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+    SD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// SetServiceObjectSecurity : un appelant élevé (administrateur, comme
+/// l'installateur de SteamService) pose les parties demandées par `info` ;
+/// les autres gardent leur valeur. Sans élévation, ERROR_ACCESS_DENIED,
+/// comme Windows à un compte sans WRITE_DAC (#1993). Winlux ne filtre pas
+/// l'accès aux services par ce descripteur : il est retenu et relu.
 pub unsafe extern "win64" fn set_service_object_security(
     service: usize,
-    _info: u32,
-    _sd: usize,
+    info: u32,
+    sd: *const u8,
 ) -> i32 {
-    if let Err(e) = service_record(service, |_| ()) {
-        return fail(e);
+    let name = match service_record(service, |r| r.name.clone()) {
+        Ok(n) => n,
+        Err(e) => return fail(e),
+    };
+    if sd.is_null() || *sd != 1 {
+        return fail(1338); // ERROR_INVALID_SECURITY_DESCR
     }
-    fail(ERROR_ACCESS_DENIED as u32)
+    if !crate::dlls::security::elevated() {
+        crate::trace!("SetServiceObjectSecurity({name}) : appelant non élevé, accès refusé");
+        return fail(ERROR_ACCESS_DENIED as u32);
+    }
+    use crate::dlls::security::{sd_parts, self_relative_sd};
+    let key = name.to_ascii_lowercase();
+    let current = lock(service_security()).get(&key).cloned();
+    let current = current.unwrap_or_else(|| {
+        let mut need = 0u32;
+        crate::dlls::security::GetKernelObjectSecurity(
+            service,
+            7,
+            std::ptr::null_mut(),
+            0,
+            &mut need,
+        );
+        let mut buf = vec![0u8; need as usize];
+        if need == 0
+            || crate::dlls::security::GetKernelObjectSecurity(
+                service,
+                7,
+                buf.as_mut_ptr(),
+                need,
+                &mut need,
+            ) == 0
+        {
+            buf = self_relative_sd(&[None, None, None, None], 0);
+        }
+        buf
+    });
+    let mut parts = sd_parts(current.as_ptr());
+    let given = sd_parts(sd);
+    // OWNER 1, GROUP 2, DACL 4, SACL 8 → indices 0, 1, 3, 2.
+    for (bit, i) in [(1u32, 0usize), (2, 1), (4, 3), (8, 2)] {
+        if info & bit != 0 {
+            parts[i] = given[i].clone();
+        }
+    }
+    let control = std::ptr::read_unaligned(current.as_ptr().add(2) as *const u16);
+    let stored = self_relative_sd(&parts, control);
+    crate::trace!(
+        "SetServiceObjectSecurity({name}, info {info:#x}) : descripteur retenu ({} octets)",
+        stored.len()
+    );
+    lock(service_security()).insert(key, stored);
+    1
 }
 
 pub fn releve_exports() -> crate::dlls::Exports {
@@ -2067,6 +2180,23 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn argv_x86_du_service_en_cases_de_4_octets() {
+        unsafe {
+            let block = super::argv32(b"steam client service\0");
+            assert_ne!(block, 0);
+            let name = *(block as *const u32) as usize;
+            // Sous 4 Go dans un processus x86 ; ici, seuls les 32 bits bas comptent.
+            assert_eq!(name as u32, (block + 8) as u32, "argv[0] pointe sur le nom");
+            assert_eq!(*((block + 4) as *const u32), 0, "argv[1] = NULL");
+            assert_eq!(
+                crate::dlls::cstr((block + 8) as *const u8),
+                "steam client service"
+            );
+            libc::free(block as *mut libc::c_void);
+        }
+    }
+
     #[test]
     fn service_retrouve_par_son_environnement() {
         // Faux /proc : 41 est le service, 42 un autre programme, 43 un zombie.

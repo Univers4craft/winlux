@@ -162,7 +162,8 @@ unsafe fn control(sd: *const u8) -> u16 {
 /// descripteur absolu ou auto-relatif.
 unsafe fn part(sd: *const u8, index: usize) -> *mut u8 {
     if control(sd) & SE_SELF_RELATIVE == 0 {
-        std::ptr::read_unaligned(sd.add(8 + index * 8) as *const *mut u8)
+        // Places x86 ou x64 selon le programme (#1881).
+        crate::dlls::security::read_abs_slot(sd, 4 + index * 4)
     } else {
         let off = std::ptr::read_unaligned(sd.add(4 + index * 4) as *const u32) as usize;
         if off == 0 {
@@ -272,8 +273,9 @@ pub unsafe extern "win64" fn SetSecurityDescriptorSacl(
         }
     }
     std::ptr::write_unaligned(sd.add(2) as *mut u16, c);
-    std::ptr::write_unaligned(
-        sd.add(24) as *mut *mut u8,
+    crate::dlls::security::write_abs_slot(
+        sd,
+        12,
         if present != 0 {
             sacl
         } else {
@@ -624,6 +626,12 @@ pub extern "win64" fn SetWinEventHook(
         return 0;
     }
     let handle = NEXT_WIN_EVENT_HOOK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if crate::dlls::user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] SetWinEventHook({min:#06x}..{max:#06x}) -> {handle:#x}, fil {}",
+            crate::dlls::kernel32::get_current_thread_id()
+        );
+    }
     lock_hooks().push(WinEventHook {
         handle,
         min,
@@ -639,6 +647,12 @@ pub extern "win64" fn UnhookWinEvent(hook: usize) -> i32 {
     let before = hooks.len();
     hooks.retain(|h| h.handle != hook);
     lock_win_events().retain(|c| c.handle != hook);
+    if crate::dlls::user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] UnhookWinEvent({hook:#x}) : {} crochet(s) restant(s)",
+            hooks.len()
+        );
+    }
     i32::from(hooks.len() != before)
 }
 
@@ -710,6 +724,12 @@ pub unsafe fn deliver_win_events() {
         // Décroché entre-temps : plus de rappel.
         if !lock_hooks().iter().any(|h| h.handle == c.handle) {
             continue;
+        }
+        if crate::dlls::user32::window_diag() {
+            eprintln!(
+                "winlux[fenetre] événement {:#06x} sur {:#x} livré au crochet {:#x}",
+                c.event, c.hwnd, c.handle
+            );
         }
         let f: WinEventProc = std::mem::transmute(c.proc_);
         f(c.handle, c.event, c.hwnd, 0, 0, tid, c.time);

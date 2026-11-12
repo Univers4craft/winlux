@@ -53,9 +53,28 @@ compile -unsafe -runtimemetadataversion:v4.0.30319 -nowarn:0169 -target:library 
     -out:"$root/build/bcl/mscorlib.dll" "$root"/bcl/mscorlib/*.cs
 
 if [ "${1:-}" = "--temoins" ]; then
-    mkdir -p "$root/build/bcl-temoins"
+    mkdir -p "$root/build/bcl-temoins" "$root/build/bcl-facades"
+    # Façades de compilation (jamais livrées) : un témoin qui le demande
+    # référence ses types dans « System » comme un programme du .NET
+    # Framework, et le moteur doit les trouver dans notre mscorlib (#1947).
+    for src in "$root"/bcl/facades/*.cs; do
+        compile -r:"$root/build/bcl/mscorlib.dll" -target:library -nowarn:0436 \
+            -out:"$root/build/bcl-facades/$(basename "$src" .cs).dll" "$src"
+    done
     for src in "$root"/bcl/temoins/*.cs; do
-        compile -r:"$root/build/bcl/mscorlib.dll" \
+        refs=(-r:"$root/build/bcl/mscorlib.dll")
+        for facade in $(sed -n 's/.*Façade de compilation : \([A-Za-z.]*\)\..*/\1/p' "$src"); do
+            # Alias « Facade » : le témoin choisit ce type plutôt que celui
+            # de notre mscorlib, qui porte le même nom.
+            refs+=(-r:Facade="$root/build/bcl-facades/$facade.dll")
+        done
+        # « Option de compilation : -optimize+. » : un témoin compilé en
+        # version optimisée, comme les programmes livrés (machines à états
+        # async en structures).
+        for option in $(sed -n 's/.*Option de compilation : \(-[a-z+-]*\)\..*/\1/p' "$src"); do
+            refs+=("$option")
+        done
+        compile "${refs[@]}" \
             -out:"$root/build/bcl-temoins/$(basename "$src" .cs).exe" "$src"
     done
 fi

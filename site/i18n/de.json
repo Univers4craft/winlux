@@ -46,5 +46,7 @@
   "suivi_run": "Lauf",
   "suivi_pr": "PR",
   "suivi_test": "Test",
-  "suivi_failed": "CI fehlgeschlagen"
+  "suivi_failed": "CI fehlgeschlagen",
+  "suivi_updated": "Neueste Aufnahmen:",
+  "suivi_stale": "Die CI konnte die Galerie nicht aktualisieren: Dies ist die zuletzt veröffentlichte Fassung."
 }

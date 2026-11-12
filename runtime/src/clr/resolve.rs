@@ -327,3 +327,90 @@ fn type_key(a: &Assembly, et: &ElementType) -> String {
         other => format!("{other:?}"),
     }
 }
+
+/// Classes dont `bcl.rs` et le moteur servent eux-mêmes une partie des
+/// méthodes : une référence vers elles peut marcher sans notre mscorlib.
+const SERVIES_PAR_LE_MOTEUR: [&str; 15] = [
+    "System.Console",
+    "System.Environment",
+    "System.Math",
+    "System.String",
+    "System.Object",
+    "System.Array",
+    "System.GC",
+    "System.Convert",
+    "System.Type",
+    "System.Activator",
+    "System.IO.File",
+    "System.IO.Path",
+    "System.Runtime.InteropServices.Marshal",
+    "System.Threading.Monitor",
+    "System.Threading.Interlocked",
+];
+
+impl Interpreter {
+    /// WINLUX_CLR_MANQUANTS : résout d'avance chaque MemberRef de méthode
+    /// des assemblies chargées et liste celles que ni notre mscorlib ni une
+    /// assembly du programme ne définit (#1922). C'est l'équivalent de
+    /// manquants.log pour .NET : le travail de résolution du moteur fait
+    /// d'un coup, au lieu d'un mur par lancement. La liste va dans le
+    /// journal et, si la variable nomme un fichier, dans ce fichier.
+    pub(super) fn report_missing(&mut self, destination: &str) {
+        let mut missing: std::collections::BTreeMap<String, (usize, bool)> = Default::default();
+        for index in 0..self.domain.len() {
+            if self.domain[index].name == super::domain::CORLIB {
+                continue;
+            }
+            let previous = self.enter(index);
+            for row in 1..=self.assembly.row_count(TableId::MemberRef) {
+                let mr = self.assembly.get_member_ref(row);
+                // Signature de champ (0x06) : pas une méthode.
+                if self.assembly.get_blob(mr.signature).first() == Some(&0x06) {
+                    continue;
+                }
+                let token = Token::new(TableId::MemberRef, row).0;
+                if let Target::External {
+                    namespace,
+                    class,
+                    name,
+                } = self.resolve_callee(token).target
+                {
+                    let class_full = if namespace.is_empty() {
+                        class
+                    } else {
+                        format!("{namespace}.{class}")
+                    };
+                    let served = SERVIES_PAR_LE_MOTEUR.contains(&class_full.as_str());
+                    let entry = missing
+                        .entry(format!("{class_full}::{name}"))
+                        .or_insert((0, served));
+                    entry.0 += 1;
+                }
+            }
+            self.enter(previous);
+        }
+        let mut text = String::new();
+        for (member, (count, served)) in &missing {
+            let note = if *served {
+                " (classe servie en partie par le moteur)"
+            } else {
+                ""
+            };
+            text.push_str(&format!("{member}\t{count}{note}\n"));
+            crate::log_warn!("clr-manquants", "{member} ({count} référence(s)){note}");
+        }
+        crate::log_warn!(
+            "clr-manquants",
+            "{} méthode(s) .NET référencée(s) non définie(s) dans notre mscorlib ni dans le programme",
+            missing.len()
+        );
+        if destination != "1" && !destination.is_empty() {
+            if let Err(e) = std::fs::write(destination, text) {
+                crate::log_warn!(
+                    "clr-manquants",
+                    "écriture de {destination} impossible : {e}"
+                );
+            }
+        }
+    }
+}

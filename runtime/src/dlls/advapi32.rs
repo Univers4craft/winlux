@@ -164,7 +164,7 @@ pub unsafe extern "win64" fn reg_open_key_ex_a(
     access: u32,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_a(sub), access, result)
+    traced_open(root, &text_a(sub), access, result)
 }
 pub unsafe extern "win64" fn reg_open_key_ex_w(
     root: usize,
@@ -173,7 +173,16 @@ pub unsafe extern "win64" fn reg_open_key_ex_w(
     access: u32,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_w(sub), access, result)
+    traced_open(root, &text_w(sub), access, result)
+}
+
+/// RegOpenKeyEx tracé (WINLUX_TRACE=1) : clé et résultat. Un programme qui
+/// s'arrête après quelques lectures du registre, sans rien dire, y laisse
+/// la clé qui lui manquait (SteamService, #1805).
+unsafe fn traced_open(root: usize, sub: &str, access: u32, result: *mut usize) -> i32 {
+    let r = open_impl(root, sub, access, result);
+    crate::trace!("RegOpenKeyEx({root:#x}, {sub:?}, accès {access:#x}) = {r}");
+    r
 }
 pub unsafe extern "win64" fn reg_open_key_a(
     root: usize,
@@ -446,7 +455,10 @@ pub unsafe extern "win64" fn reg_query_value_ex_a(
     data: *mut u8,
     size: *mut u32,
 ) -> i32 {
-    query_impl(handle, &text_a(name), true, kind, data, size)
+    let name = text_a(name);
+    let r = query_impl(handle, &name, true, kind, data, size);
+    crate::trace!("RegQueryValueExA({handle:#x}, {name:?}) = {r}");
+    r
 }
 pub unsafe extern "win64" fn reg_query_value_ex_w(
     handle: usize,
@@ -456,7 +468,10 @@ pub unsafe extern "win64" fn reg_query_value_ex_w(
     data: *mut u8,
     size: *mut u32,
 ) -> i32 {
-    query_impl(handle, &text_w(name), false, kind, data, size)
+    let name = text_w(name);
+    let r = query_impl(handle, &name, false, kind, data, size);
+    crate::trace!("RegQueryValueExW({handle:#x}, {name:?}) = {r}");
+    r
 }
 
 /// RegQueryValue (Win16) : texte de la valeur par défaut d'une sous-clé.
@@ -904,6 +919,12 @@ pub unsafe extern "win64" fn reg_notify_change_key_value(
         if event == 0 {
             return ERROR_INVALID_PARAMETER;
         }
+        // L'abonnement est une E/S asynchrone (NtNotifyChangeKey) : comme
+        // toute E/S qui reçoit un événement, il le remet à zéro en partant.
+        // Chromium réarme avec un événement à réinitialisation manuelle
+        // resté signalé : sans cette remise à zéro, il relisait sa
+        // configuration DNS en boucle, plus de mille fois par seconde (#1954).
+        crate::dlls::kernel32::reset_event(event);
         if !watch_key(handle, event) {
             return ERROR_NOT_ENOUGH_MEMORY;
         }
@@ -1783,6 +1804,9 @@ mod tests {
                 0
             );
             assert!(!lock(watches()).iter().any(|w| w.0 == h && w.1 == event));
+            // #1954 : réarmer remet l'événement (manuel, resté signalé) à zéro.
+            assert_eq!(reg_notify_change_key_value(h, 1, 4, event, 1), 0);
+            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 0), 258);
             assert_eq!(reg_close_key(h), 0);
             crate::dlls::kernel32::close_handle(event);
         }

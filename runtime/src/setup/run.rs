@@ -276,6 +276,13 @@ pub fn spawn_with(
         .stdin(Stdio::null());
     if capture {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    } else if !wait {
+        // Programme lancé sans attendre (l'appli en fin d'installation) :
+        // il ne garde pas la sortie de l'installation. Sinon l'assistant,
+        // qui lit cette sortie jusqu'à sa fin, restait ouvert tant que
+        // l'appli tournait (Discord, #1865). Son journal reste dans
+        // WINLUX_JOURNAL_DIR.
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,

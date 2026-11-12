@@ -370,6 +370,17 @@ fn is_service() -> bool {
 }
 
 /// Ouvre la fenêtre de demande. `None` : impossible de demander.
+/// `ask`, en notant le fil qui pose la question, pour la viser (#1882).
+fn ask_logged(app: &App, cap: Capability) -> Option<Option<Decision>> {
+    crate::log_info!(
+        "permissions",
+        "question « {} » posée depuis le fil {:?}",
+        cap.key(),
+        std::thread::current().name().unwrap_or("?")
+    );
+    ask(app, cap)
+}
+
 fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
     // Un service sans fenêtre ne pose pas de question au démarrage de la
     // session (#1620) : refus, mémorisé pour qu'il apparaisse dans
@@ -413,6 +424,21 @@ pub fn decided(cap: Capability) -> Option<Decision> {
     stored_in(&text, &app.exe, cap)
 }
 
+/// La capacité n'est-elle pas refusée, sans jamais rien demander ? Pour
+/// énumérer les périphériques (nombre de micros, leurs caractéristiques) :
+/// Steam les compte dès son démarrage, et la question « micro » s'ouvrait
+/// au lancement, contre la règle #1733. La question reste posée au moment
+/// d'ouvrir vraiment le périphérique, par `allowed` (#1882).
+pub fn not_refused(cap: Capability) -> bool {
+    if globally_denied(cap) {
+        return false;
+    }
+    if let Some(&known) = lock(&SESSION).as_ref().and_then(|m| m.get(&cap)) {
+        return known;
+    }
+    decided(cap) != Some(Decision::Deny)
+}
+
 /// L'application lancée a-t-elle droit à cette capacité ? Peut ouvrir la
 /// fenêtre de demande (le fil appelant attend la réponse).
 pub fn allowed(cap: Capability) -> bool {
@@ -444,7 +470,7 @@ pub fn allowed(cap: Capability) -> bool {
             remember(&app.exe, cap, Decision::Allow);
             true
         }
-        None => match ask(app, cap) {
+        None => match ask_logged(app, cap) {
             Some(Some(d)) => {
                 remember(&app.exe, cap, d);
                 d == Decision::Allow
@@ -625,6 +651,16 @@ mod tests {
     }
 
     use super::*;
+
+    /// Compter les micros ne demande rien : sans décision ni refus global,
+    /// le micro n'est pas refusé (#1882).
+    #[test]
+    fn enumerer_le_micro_ne_demande_rien() {
+        assert_eq!(
+            not_refused(Capability::Microphone),
+            !globally_denied(Capability::Microphone)
+        );
+    }
 
     /// Lancer une application ne pose pas de question (#1733) : bac à
     /// sable et dossiers personnels sont accordés d'office ; caméra, micro,

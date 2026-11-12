@@ -1309,7 +1309,7 @@ unsafe extern "win64" fn SystemFunction036(buf: *mut u8, len: u32) -> u8 {
 }
 unsafe extern "win64" fn BuildExplicitAccessWithNameW(
     ea: *mut u8,
-    _name: *const u16,
+    name: *const u16,
     perms: u32,
     mode: u32,
     inherit: u32,
@@ -1317,11 +1317,22 @@ unsafe extern "win64" fn BuildExplicitAccessWithNameW(
     if ea.is_null() {
         return;
     }
-    // EXPLICIT_ACCESS_W : grfAccessPermissions, grfAccessMode, grfInheritance, TRUSTEE_W.
-    std::ptr::write_bytes(ea, 0, 48);
+    // EXPLICIT_ACCESS_W : grfAccessPermissions, grfAccessMode, grfInheritance,
+    // puis TRUSTEE_W { forme TRUSTEE_IS_NAME (1), type inconnu, nom }.
+    // 32 octets pour un programme x86, 48 sinon (#1915) : écrire 48 octets
+    // débordait sur la variable suivante.
+    let ptr = crate::wow32::pointer_size();
+    let lay = crate::dlls::security::access_layout(ptr);
+    std::ptr::write_bytes(ea, 0, lay.size);
     std::ptr::write_unaligned(ea as *mut u32, perms);
     std::ptr::write_unaligned(ea.add(4) as *mut u32, mode);
     std::ptr::write_unaligned(ea.add(8) as *mut u32, inherit);
+    std::ptr::write_unaligned(ea.add(lay.form) as *mut u32, 1);
+    if ptr == 4 {
+        std::ptr::write_unaligned(ea.add(lay.name) as *mut u32, name as usize as u32);
+    } else {
+        std::ptr::write_unaligned(ea.add(lay.name) as *mut usize, name as usize);
+    }
 }
 /// BuildSecurityDescriptorW(owner, group, nacc, acc, naud, aud, old, size,
 /// out) : descripteur relatif minimal (DACL nulle), comme

@@ -413,7 +413,49 @@ mod tests {
         let rtl = unsafe { manual_lookup(ntdll, "RtlInitializeSRWLock") }.expect("export Rtl");
         assert_eq!(unsafe { *(rtl as *const u16) }, 0x25FF);
 
-        // Appel réel dans un processus fils, seul à poser son gestionnaire.
+        // Appel réel dans un processus neuf, seul à poser son gestionnaire :
+        // le binaire de test relancé sur ce seul test (#1984). Un fork de
+        // l'exécuteur multithread pouvait hériter d'un verrou tenu par un
+        // autre test (tables de handles de NtClose) et rester bloqué.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::pe_image::tests::relais_de_service_enfant",
+                "--test-threads=1",
+            ])
+            .env(RELAIS_ENFANT, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break st;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("processus enfant bloqué plus de 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(0), "processus enfant : {status:?}");
+    }
+
+    /// Variable qui fait de `relais_de_service_enfant` le processus enfant.
+    const RELAIS_ENFANT: &str = "WINLUX_TEST_RELAIS_ENFANT";
+
+    /// Partie enfant de `relais_de_service_au_format_windows` : ne fait
+    /// rien dans l'exécuteur ordinaire, appelle le relais dans le processus
+    /// neuf lancé par ce test, et sort avec 0 si tout est conforme.
+    #[test]
+    fn relais_de_service_enfant() {
+        if std::env::var_os(RELAIS_ENFANT).is_none() {
+            return;
+        }
+        let ntdll = super::super::module_handle("ntdll").expect("ntdll intégrée");
+        let stub = unsafe { manual_lookup(ntdll, "NtClose") }.expect("NtClose exporté");
         extern "C" fn on_segv(_: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
             unsafe {
                 if !super::redirect_service(info, ctx.cast()) {
@@ -422,38 +464,30 @@ mod tests {
             }
         }
         unsafe {
-            let pid = libc::fork();
-            assert!(pid >= 0);
-            if pid == 0 {
-                let mut sa: libc::sigaction = std::mem::zeroed();
-                sa.sa_sigaction = on_segv as *const () as usize;
-                sa.sa_flags = libc::SA_SIGINFO;
-                libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
-                // Sans la page SharedUserData, la faute tombe sur le `test`.
-                let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(stub);
-                let absent = f(0xDEAD_0000);
-                super::map_shared_user_data();
-                let present = f(0xDEAD_0000);
-                // Copie du relais ailleurs, comme le fait le courtier.
-                let copy = libc::mmap(
-                    std::ptr::null_mut(),
-                    0x1000,
-                    libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                );
-                std::ptr::copy_nonoverlapping(stub as *const u8, copy as *mut u8, super::STUB);
-                let g: extern "win64" fn(usize) -> u32 = std::mem::transmute(copy);
-                let copied = g(0xDEAD_0000);
-                let invalid = 0xC000_0008; // STATUS_INVALID_HANDLE
-                let ok = absent == invalid && present == invalid && copied == invalid;
-                libc::_exit(if ok { 0 } else { 1 });
-            }
-            let mut st = 0;
-            libc::waitpid(pid, &mut st, 0);
-            assert!(libc::WIFEXITED(st), "fils tué : {st:#x}");
-            assert_eq!(libc::WEXITSTATUS(st), 0);
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_segv as *const () as usize;
+            sa.sa_flags = libc::SA_SIGINFO;
+            libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+            // Sans la page SharedUserData, la faute tombe sur le `test`.
+            let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(stub);
+            let absent = f(0xDEAD_0000);
+            super::map_shared_user_data();
+            let present = f(0xDEAD_0000);
+            // Copie du relais ailleurs, comme le fait le courtier.
+            let copy = libc::mmap(
+                std::ptr::null_mut(),
+                0x1000,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            std::ptr::copy_nonoverlapping(stub as *const u8, copy as *mut u8, super::STUB);
+            let g: extern "win64" fn(usize) -> u32 = std::mem::transmute(copy);
+            let copied = g(0xDEAD_0000);
+            let invalid = 0xC000_0008; // STATUS_INVALID_HANDLE
+            let ok = absent == invalid && present == invalid && copied == invalid;
+            libc::_exit(if ok { 0 } else { 1 });
         }
     }
 }

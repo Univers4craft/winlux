@@ -98,7 +98,10 @@ const FDIERROR_NOT_A_CABINET: i32 = 2;
 const FDIERROR_CORRUPT_CABINET: i32 = 4;
 const FDIERROR_TARGET_FILE: i32 = 8;
 const FDIERROR_USER_ABORT: i32 = 11;
-const FDINT_CABINET_INFO: i32 = 1;
+/// FDINOTIFICATIONTYPE (fdi.h de mingw-w64) : fdintCABINET_INFO vaut 0,
+/// fdintPARTIAL_FILE 1. L'ODT recevait 1 en premier, croyait à un fichier
+/// commencé dans un cabinet précédent et abandonnait l'extraction (#1856).
+const FDINT_CABINET_INFO: i32 = 0;
 const FDINT_COPY_FILE: i32 = 2;
 const FDINT_CLOSE_FILE_INFO: i32 = 3;
 /// _O_BINARY | _O_RDONLY | _O_SEQUENTIAL.
@@ -746,6 +749,90 @@ mod tests {
         assert_eq!(expanded_name("SETUP.EX_", &f), "SETUP.EXT");
         assert_eq!(expanded_name("lisez.tx_", &f), "lisez.txt");
         assert_eq!(expanded_name("plain.txt", b"rien"), "plain.txt");
+    }
+
+    #[test]
+    fn fdi_copy_annonce_le_cabinet_puis_les_fichiers() {
+        use std::cell::RefCell;
+        thread_local! {
+            static CAB: RefCell<(Vec<u8>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+            static KINDS: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
+            static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        unsafe extern "win64" fn alloc(n: u32) -> *mut c_void {
+            libc::malloc(n as usize)
+        }
+        unsafe extern "win64" fn free(p: *mut c_void) {
+            libc::free(p)
+        }
+        unsafe extern "win64" fn open(_p: *const u8, _f: i32, _m: i32) -> isize {
+            CAB.with(|c| c.borrow_mut().1 = 0);
+            1
+        }
+        unsafe extern "win64" fn read(_h: isize, buf: *mut c_void, n: u32) -> u32 {
+            CAB.with(|c| {
+                let mut c = c.borrow_mut();
+                let at = c.1;
+                let k = (n as usize).min(c.0.len() - at);
+                std::ptr::copy_nonoverlapping(c.0[at..].as_ptr(), buf.cast(), k);
+                c.1 += k;
+                k as u32
+            })
+        }
+        unsafe extern "win64" fn write(_h: isize, buf: *const c_void, n: u32) -> u32 {
+            let b = std::slice::from_raw_parts(buf.cast::<u8>(), n as usize);
+            OUT.with(|o| o.borrow_mut().extend_from_slice(b));
+            n
+        }
+        unsafe extern "win64" fn close(_h: isize) -> i32 {
+            0
+        }
+        unsafe extern "win64" fn seek(_h: isize, _d: i32, _t: i32) -> i32 {
+            0
+        }
+        unsafe extern "win64" fn notify(kind: i32, _n: *mut FdiNotification) -> isize {
+            KINDS.with(|k| k.borrow_mut().push(kind));
+            match kind {
+                FDINT_COPY_FILE => 7,
+                _ => 1,
+            }
+        }
+        let cab = crate::msi::cab::tests::build_mszip(&[("a.txt", b"bonjour")]);
+        CAB.with(|c| *c.borrow_mut() = (cab, 0));
+        let mut erf = Erf {
+            oper: 0,
+            kind: 0,
+            error: 0,
+        };
+        unsafe {
+            let h = fdi_create(
+                Some(alloc),
+                Some(free),
+                Some(open),
+                Some(read),
+                Some(write),
+                Some(close),
+                Some(seek),
+                1,
+                &mut erf,
+            );
+            assert_ne!(h, 0);
+            let name = b"a.cab\0";
+            let ok = fdi_copy(
+                h,
+                name.as_ptr(),
+                std::ptr::null(),
+                0,
+                Some(notify),
+                0,
+                std::ptr::null_mut(),
+            );
+            fdi_destroy(h);
+            assert_eq!(ok, 1);
+        }
+        // fdintCABINET_INFO (0), fdintCOPY_FILE (2), fdintCLOSE_FILE_INFO (3).
+        assert_eq!(KINDS.with(|k| k.borrow().clone()), vec![0, 2, 3]);
+        assert_eq!(OUT.with(|o| o.borrow().clone()), b"bonjour");
     }
 
     #[test]
