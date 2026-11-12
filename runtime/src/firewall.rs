@@ -598,7 +598,42 @@ fn cgroup_root() -> PathBuf {
 }
 
 fn cgroups_available() -> bool {
-    cgroup_root().join("cgroup.controllers").exists()
+    let controllers = cgroup_root().join("cgroup.controllers");
+    if !cfg!(test) && !controllers.exists() && admin::root() == Path::new("/") {
+        mount_cgroup2();
+    }
+    controllers.exists()
+}
+
+/// Monte cgroup v2 s'il manque (#2142) : un /init antérieur au correctif
+/// laissait /sys/fs/cgroup vide, et le pare-feu, qui tourne en root,
+/// répare lui-même plutôt que d'abandonner ses règles par application.
+fn mount_cgroup2() {
+    let mounted = admin::read_text(Path::new("/proc/mounts"))
+        .unwrap_or_default()
+        .lines()
+        .any(|l| l.split(' ').nth(1) == Some("/sys/fs/cgroup"));
+    if mounted || unsafe { libc::geteuid() } != 0 || !Path::new("/sys/fs/cgroup").is_dir() {
+        return;
+    }
+    let source = c"cgroup2";
+    let target = c"/sys/fs/cgroup";
+    // SAFETY : chaînes C terminées par NUL, aucune donnée de montage.
+    let rc = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            source.as_ptr(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if rc != 0 {
+        eprintln!(
+            "winlux-firewall : montage de cgroup2 impossible : {}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 fn write_status(cfg: &Config, active: bool, error: &str, rules: usize) {
