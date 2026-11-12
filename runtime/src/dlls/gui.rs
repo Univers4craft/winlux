@@ -4786,6 +4786,12 @@ pub fn default_nccalcsize_seen() -> bool {
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     crate::dlls::pointer::on_default(message);
     match message {
+        // WM_WINDOWPOSCHANGED : WM_MOVE et WM_SIZE du SetWindowPos en cours
+        // (#2044).
+        0x0047 => {
+            crate::dlls::user32::window_pos_changed_default(hwnd);
+            0
+        }
         // WM_SETCURSOR : le parent d'une fenêtre enfant décide d'abord ; puis
         // le curseur de classe dans la zone cliente, la flèche ailleurs.
         0x0020 => {
