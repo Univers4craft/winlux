@@ -30,6 +30,17 @@ main le reste. virt-manager et GNOME Boxes reçoivent ainsi QEMU, le pilote
 libvirt, `passt`, OVMF et swtpm. Jamais `libvirt-daemon-system`, qui tire la
 variante systemd : libvirt tourne en mode compte (`qemu:///session`), sans
 root, sans polkit et sans systemd.
+Relecture des 157 entrées qui perdent une recommandation : 23 logiciels ne
+marchent pas, ou pas dans la langue de l'interface, sans elle, et ont leur
+ligne (#2081 à #2103) : protocoles de Remmina et KRDC, moteurs de Knights et
+Kigo, compilateurs des IDE et de CMake, outils d'archives, gravure DVD de K3b,
+serveur local de Freeciv, graphismes libres d'OpenTTD, bibliothèques de KiCad,
+service Syncthing, serveur d'agendas, pilotes de base de LibreOffice Base,
+encodeurs d'Asunder, extensions d'Inkscape, traductions de VLC, SMPlayer,
+nomacs et Claws Mail. Le reste (aide, documentation, thèmes, fonctions
+annexes) n'est pas ajouté. Écartés après lecture du contenu des paquets :
+`obs-plugins` (DeckLink, JACK, PipeWire seulement ; la capture X11 est dans
+`obs-studio`) et `brasero-cdrkit` (Brasero grave déjà par libburn).
 
 **Présentation (#716).** Une barre d'icônes à gauche (Accueil, Applis,
 Jeux, Windows ; Bibliothèque et Actualiser en bas), la recherche en haut. L'accueil
