@@ -15,7 +15,8 @@
 
 use super::comobj::{guid, log_no_interface, Guid, VTable};
 use super::netfw::{
-    bool_out, bstr_in, bstr_out, not_impl, ok, read_bstr_prop, read_u32_prop, static_add_ref,
+    bool_out, bstr_in, bstr_out, get_ids_of_names, get_type_info, invoke, ok,
+    policy2_service_restriction, read_bstr_prop, read_u32_prop, rules_new_enum, static_add_ref,
     static_release, type_info_count, u32_out,
 };
 use std::ffi::c_void;
@@ -198,9 +199,9 @@ static POLICY2_VT: VTable<29> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (), // GetTypeInfo
-    not_impl as *const (), // GetIDsOfNames
-    not_impl as *const (), // Invoke
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     policy2_profile_types as *const (),
     policy2_true as *const (),          // get_FirewallEnabled
     ok as *const (),                    // put_FirewallEnabled
@@ -213,10 +214,10 @@ static POLICY2_VT: VTable<29> = VTable([
     policy2_false as *const (), // get_UnicastResponsesToMulticastBroadcastDisabled
     ok as *const (),
     policy2_rules as *const (),
-    not_impl as *const (),              // get_ServiceRestriction
-    ok as *const (),                    // EnableRuleGroup
-    policy2_group_enabled as *const (), // IsRuleGroupEnabled
-    ok as *const (),                    // RestoreLocalFirewallDefaults
+    policy2_service_restriction as *const (), // get_ServiceRestriction
+    ok as *const (),                          // EnableRuleGroup
+    policy2_group_enabled as *const (),       // IsRuleGroupEnabled
+    ok as *const (),                          // RestoreLocalFirewallDefaults
     policy2_inbound as *const (),
     ok as *const (),
     policy2_outbound as *const (),
@@ -275,14 +276,14 @@ static RULES_VT: VTable<12> = VTable([
     static_add_ref as *const (),
     static_release as *const (),
     type_info_count as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
-    not_impl as *const (),
+    get_type_info as *const (),
+    get_ids_of_names as *const (),
+    invoke as *const (),
     rules_count as *const (),
     rules_add as *const (),
     rules_remove as *const (),
     rules_item as *const (),
-    not_impl as *const (), // get__NewEnum
+    rules_new_enum as *const (), // get__NewEnum
 ]);
 
 unsafe extern "win64" fn rules_count(_: usize, out: *mut i32) -> i32 {
@@ -459,9 +460,9 @@ macro_rules! rule_props {
             rule_add_ref as *const (),
             rule_release as *const (),
             type_info_count as *const (),
-            not_impl as *const (),
-            not_impl as *const (),
-            not_impl as *const (),
+            get_type_info as *const (),
+            get_ids_of_names as *const (),
+            invoke as *const (),
             $($get as *const (), $put as *const (),)*
         ]);
     };
