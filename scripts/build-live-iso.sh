@@ -1435,6 +1435,10 @@ for unit in smbd nmbd samba samba-ad-dc wsdd; do
     fi
 done
 
+# Fiches AppStream des dépôts téléchargées par apt-get update : icônes et
+# liste complète de la Boutique (#2185).
+install -D -m 644 "$root/integration/apt/50winlux-appstream" "$stage/etc/apt/apt.conf.d/50winlux-appstream"
+
 # policy-rc.d (« exit 101 ») ne sert qu'à la construction (prepare-apt-base) :
 # laissé dans l'image, il empêchait tout service d'un paquet installé plus
 # tard (Boutique, pilotes) de démarrer. L'installateur pose le sien le temps
