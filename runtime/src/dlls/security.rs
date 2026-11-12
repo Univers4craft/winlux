@@ -2425,6 +2425,8 @@ pub fn releve_exports() -> crate::dlls::Exports {
         "GetEffectiveRightsFromAclW" => fn GetEffectiveRightsFromAclW,
         "GetAuditedPermissionsFromAclW" => fn GetAuditedPermissionsFromAclW,
         "GetExplicitEntriesFromAclW" => fn GetExplicitEntriesFromAclW,
+        // TRUSTEE_IS_SID : ptstrName est un SID, même disposition en A (#2029).
+        "GetExplicitEntriesFromAclA" => fn GetExplicitEntriesFromAclW,
         "ConvertSecurityDescriptorToStringSecurityDescriptorW" => fn ConvertSecurityDescriptorToStringSecurityDescriptorW,
         "AdjustTokenGroups" => fn AdjustTokenGroups,
         "LookupPrivilegeNameW" => fn LookupPrivilegeNameW,
