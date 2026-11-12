@@ -103,6 +103,7 @@ pub mod dxgi;
 pub(crate) mod dxgi_private;
 pub mod dxva2;
 pub mod electron_win32;
+pub mod enum_variant;
 pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;

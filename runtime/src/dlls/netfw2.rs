@@ -16,8 +16,8 @@
 use super::comobj::{guid, log_no_interface, Guid, VTable};
 use super::netfw::{
     bool_out, bstr_in, bstr_out, get_ids_of_names, get_type_info, invoke, ok,
-    policy2_service_restriction, read_bstr_prop, read_u32_prop, rules_new_enum, static_add_ref,
-    static_release, type_info_count, u32_out,
+    policy2_service_restriction, read_bstr_prop, read_u32_prop, static_add_ref, static_release,
+    type_info_count, u32_out,
 };
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -368,6 +368,20 @@ unsafe extern "win64" fn rules_item(_: usize, name: *const u16, out: *mut *mut c
         }
         None => HR_NOT_FOUND,
     }
+}
+
+/// get__NewEnum : IEnumVARIANT sur une copie des règles retenues (#2036).
+unsafe extern "win64" fn rules_new_enum(_: usize, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let items: Vec<usize> = rules()
+        .iter()
+        .map(|r| new_rule(r.clone()) as usize)
+        .collect();
+    crate::trace!("INetFwRules::get__NewEnum : {} règle(s)", items.len());
+    *out = super::enum_variant::new_enum(items);
+    S_OK
 }
 
 // ----- INetFwRule : objet compté -----
