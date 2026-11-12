@@ -38,19 +38,21 @@ pub unsafe extern "win64" fn set_thread_error_mode(mode: u32, previous: *mut u32
     THREAD_ERROR_MODE.with(|value| value.set(Some(mode)));
     1
 }
+/// Réglages de rapport d'erreurs du processus (#2202) : WerSetFlags les
+/// mémorise, WerGetFlags les rend, les deux avec S_OK comme le documente
+/// werapi.h. Aucun rapport n'est envoyé, faute de service WER.
+static WER_FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub unsafe extern "win64" fn wer_get_flags(_process: usize, flags: *mut u32) -> i32 {
     if flags.is_null() {
         return 0x80004003u32 as i32;
     }
-    *flags = 0;
-    // There is no Windows Error Reporting service. Let optional callers handle
-    // an explicit unsupported HRESULT instead of pretending reports are sent.
-    crate::trace!("WerGetFlags: service WER non disponible");
-    0x80004001u32 as i32
+    *flags = WER_FLAGS.load(std::sync::atomic::Ordering::Relaxed);
+    0
 }
-pub extern "win64" fn wer_set_flags(_flags: u32) -> i32 {
-    crate::trace!("WerSetFlags: service WER non disponible, journal local conservé");
-    0x80004001u32 as i32
+pub extern "win64" fn wer_set_flags(flags: u32) -> i32 {
+    WER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
+    0
 }
 
 fn is_console(h: usize) -> bool {
@@ -1571,6 +1573,24 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Teams (#2202) : WerSetFlags puis WerGetFlags rendent S_OK et les drapeaux.
+    #[test]
+    fn drapeaux_wer_2202() {
+        unsafe {
+            assert_eq!(
+                super::wer_get_flags(usize::MAX, std::ptr::null_mut()),
+                0x80004003u32 as i32
+            );
+            assert_eq!(super::wer_set_flags(4), 0);
+            let mut f = 0xFFFF_FFFFu32;
+            assert_eq!(super::wer_get_flags(usize::MAX, &mut f), 0);
+            assert_eq!(f, 4);
+            assert_eq!(super::wer_set_flags(0), 0);
+            assert_eq!(super::wer_get_flags(usize::MAX, &mut f), 0);
+            assert_eq!(f, 0);
+        }
+    }
+
     /// Steam, utility storage (#1999) : BIOS ou UEFI selon le démarrage.
     #[test]
     fn type_de_micrologiciel() {
