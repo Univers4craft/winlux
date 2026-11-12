@@ -2,7 +2,7 @@
 
 use super::daemon::{
     acpi_inputs, brightness_key, brightness_step, decode_event, external_display_at, has_key,
-    idle_step, lid_action, server_dpms_needs_reset, Hw, IdleStep,
+    idle_step, lid_action, server_dpms_needs_reset, session_displays_at, Hw, IdleStep,
 };
 use super::*;
 use std::sync::atomic::AtomicUsize;
@@ -604,4 +604,34 @@ fn delais_dpms_du_serveur_remis_a_zero() {
     assert!(server_dpms_needs_reset(Some((0, 0, 600))));
     assert!(!server_dpms_needs_reset(Some((0, 0, 0))));
     assert!(!server_dpms_needs_reset(None));
+}
+
+/// #2149 : l'inactivité et l'extinction de l'écran visent aussi les écrans X
+/// des autres sessions (« Changer d'utilisateur »), pas seulement `:0`.
+#[test]
+fn ecrans_des_sessions_du_registre() {
+    let f = Fake::new();
+    let first = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    assert_eq!(session_displays_at(&f.0), vec![first.clone()]);
+    f.put(
+        "run/winlux/sessions/alice",
+        "display=:0\nvt=7\npid=\nstarted=1",
+    );
+    f.put(
+        "run/winlux/sessions/bob",
+        "display=:1\nvt=8\npid=42\nstarted=2",
+    );
+    f.put("run/winlux/sessions/.carol.123", "display=:2");
+    f.put("run/winlux/sessions/dave", "display=:3;rm\nvt=9");
+    f.put("run/winlux/sessions/eve", "vt=10");
+    let displays = session_displays_at(&f.0);
+    assert_eq!(displays[0], first);
+    assert!(displays.contains(&":0".to_string()) && displays.contains(&":1".to_string()));
+    assert!(!displays.iter().any(|d| d == ":2" || d.starts_with(":3")));
+    let unique: std::collections::HashSet<_> = displays.iter().collect();
+    assert_eq!(
+        unique.len(),
+        displays.len(),
+        "écran en double : {displays:?}"
+    );
 }
