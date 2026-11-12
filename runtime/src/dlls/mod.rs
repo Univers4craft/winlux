@@ -291,6 +291,7 @@ pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
 pub mod wbem;
+pub mod weak_ref;
 pub mod webview2;
 pub mod webview2_iids;
 pub mod wevtapi;
