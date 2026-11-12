@@ -1325,6 +1325,79 @@ pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: 
     }
 }
 
+/// Opération asynchrone hors ReadFile/WriteFile (ConnectNamedPipe, #2219)
+/// inscrite comme les autres : GetOverlappedResult la connaît et peut
+/// l'attendre quand `bWait` vaut TRUE.
+pub(crate) struct PendingIo {
+    h: usize,
+    overlapped: usize,
+    op: Arc<IoOperation>,
+}
+
+/// Début d'une E/S asynchrone sur `h` : `Internal` = STATUS_PENDING et
+/// hEvent remis à non signalé (« the function that started the operation
+/// resets the hEvent member », page GetOverlappedResult). `None` si une
+/// opération est déjà en cours sur ce même OVERLAPPED (ERROR_IO_PENDING posé).
+///
+/// # Safety
+/// `overlapped` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn begin_overlapped(h: usize, overlapped: usize) -> Option<PendingIo> {
+    let op = Arc::new(IoOperation {
+        file_handle: h,
+        issuing_thread: std::thread::current().id(),
+        state: Mutex::new(IoResult {
+            done: false,
+            bytes: 0,
+            error: 0,
+        }),
+        changed: Condvar::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops.get(&overlapped).is_some_and(|o| !lock(&o.state).done) {
+            crate::process::set_last_error(997);
+            return None;
+        }
+        ops.insert(overlapped, op.clone());
+    }
+    ov_set(overlapped, 0x103, 0);
+    let event = ov_event(overlapped) & !1;
+    if event != 0 {
+        let _ = reset_event(event);
+    }
+    Some(PendingIo { h, overlapped, op })
+}
+
+impl PendingIo {
+    /// L'opération est-elle annulée (CancelIo/CancelIoEx) ?
+    pub(crate) fn cancelled(&self) -> bool {
+        self.op.cancelled.load(Ordering::Acquire)
+    }
+    /// Fin de l'opération : résultat noté pour GetOverlappedResult, puis
+    /// `Internal`, événement et port de complétion comme `complete_overlapped`.
+    pub(crate) fn finish(self, bytes: u32, error: u32) {
+        {
+            let mut state = lock(&self.op.state);
+            state.bytes = bytes;
+            state.error = error;
+            state.done = true;
+            self.op.changed.notify_all();
+        }
+        complete_overlapped(self.h, self.overlapped, bytes, error);
+    }
+    /// Le fil n'a pas pu partir : l'opération est oubliée.
+    pub(crate) fn abandon(self) {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops
+            .get(&self.overlapped)
+            .is_some_and(|o| Arc::ptr_eq(o, &self.op))
+        {
+            ops.remove(&self.overlapped);
+        }
+    }
+}
+
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
         let raw = ov_event(overlapped);
