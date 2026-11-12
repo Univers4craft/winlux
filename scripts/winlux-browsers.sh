@@ -14,6 +14,10 @@ fetch=${WINLUX_BROWSER_FETCH:-"$root/usr/lib/winlux/winlux-browser-fetch"}
 installed="$root/opt/winlux/browsers"
 config="$root/etc/winlux/browser.conf"
 run="$root/run/winlux"
+# Demande « ouvrir Paramètres > Navigateurs », propre au compte (#2243) :
+# /run/winlux est commun et sticky, un nom sans uid appartenait au premier
+# compte qui l'écrivait et refusait les autres (Permission denied).
+chooser="$run/browser-chooser-$(id -u)"
 browser=${2:-none}
 mode=${1:---status}
 # Catalogue, ordre alphabétique des noms affichés (Brave, Google Chrome,
@@ -310,7 +314,7 @@ launch() {
     program=$(binary "$id")
     if ! test -x "$program"; then
         mkdir -p "$run"
-        printf '1\n' > "$run/browser-chooser"
+        printf '1\n' > "$chooser" || true
         echo 'Choisissez un navigateur dans Paramètres > Navigateurs.' >&2
         return 0
     fi
@@ -353,7 +357,7 @@ launch() {
             notice="$run/action.txt"
             if test "$(id -u)" != 0; then mkdir -p "$run/control-$(id -u)" 2>/dev/null && notice="$run/control-$(id -u)/action.txt"; fi
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$notice" || true
-            printf '1\n' > "$run/browser-chooser"
+            printf '1\n' > "$chooser" || true
             return 1
         fi
     fi
