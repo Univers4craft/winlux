@@ -862,8 +862,12 @@ class Apt(Source):
                 result[parts[0]] = (parts[2], int(parts[3] or 0) if parts[3].isdigit() else 0)
         return result
 
+    # Sorties d'apt analysées : LC_ALL=C et non LANG=C, que LC_ALL de la
+    # session (/etc/default/locale) emportait ; apt écrivait alors « Candidat : »
+    # et les comptes créés après l'installation n'avaient aucun logiciel Ubuntu
+    # (#2235).
     def upgradable(self):
-        code, out = run(["apt", "list", "--upgradable"], 60, env={**os.environ, "LANG": "C"})
+        code, out = run(["apt", "list", "--upgradable"], 60, env={**os.environ, "LC_ALL": "C"})
         result = {}
         for line in out.splitlines():
             m = re.match(r"^([^/\s]+)/\S+\s+(\S+)", line)
@@ -874,7 +878,7 @@ class Apt(Source):
     def candidates(self, pkgs):
         if not pkgs or not have("apt-cache"):
             return {}
-        code, out = run(["apt-cache", "policy", *pkgs], 60, env={**os.environ, "LANG": "C"})
+        code, out = run(["apt-cache", "policy", *pkgs], 60, env={**os.environ, "LC_ALL": "C"})
         result, pkg = {}, None
         for line in out.splitlines():
             if line and not line.startswith(" ") and line.endswith(":"):
@@ -891,7 +895,7 @@ class Apt(Source):
             return set()
         code, out = run(["apt-cache", "rdepends", "--no-recommends", "--no-suggests", "--no-enhances",
                          "--no-conflicts", "--no-breaks", "--no-replaces", "snapd"], 60,
-                        env={**os.environ, "LANG": "C"})
+                        env={**os.environ, "LC_ALL": "C"})
         names, started = set(), False
         for line in out.splitlines():
             if line.startswith("Reverse Depends:"):
