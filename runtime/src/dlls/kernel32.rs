@@ -5945,6 +5945,16 @@ fn register_thread_object(tid: i32, t: &Arc<ThreadObject>) {
 fn unregister_thread_object(tid: i32) {
     lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).remove(&tid);
 }
+/// Threads Windows vivants du processus (WINLUX_THREAD_DUMP, #2147).
+pub(crate) fn thread_slots() -> Vec<(i32, Arc<ThreadObject>)> {
+    let mut v: Vec<(i32, Arc<ThreadObject>)> =
+        lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
+            .iter()
+            .filter_map(|(&t, w)| Some((t, w.upgrade()?)))
+            .collect();
+    v.sort_by_key(|(t, _)| *t);
+    v
+}
 fn thread_object_by_tid(tid: i32) -> Option<Arc<ThreadObject>> {
     lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&tid)
