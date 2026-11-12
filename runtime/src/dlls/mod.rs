@@ -109,6 +109,7 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod fiber64;
+pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -183,6 +184,7 @@ pub mod mscoree;
 pub mod msctf_profiles;
 pub mod mshwgst;
 pub mod msvcp140;
+pub mod msvcp140_1;
 pub mod msvcrt;
 pub mod msxml;
 pub mod msxml_dom;
@@ -1281,6 +1283,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             Builtin {
+                name: "msvcp140_1",
+                exports: msvcp140_1::exports(),
+                handle: 0,
+            },
+            Builtin {
                 name: "opengl32",
                 exports: opengl32::exports(),
                 handle: 0,
@@ -1787,7 +1794,12 @@ pub fn prefers_real_file(normalized: &str) -> bool {
     // (FileZilla, wxWidgets…) en a besoin en entier (#783).
     matches!(
         normalized,
-        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+        "msvcp140"
+            | "msvcp140_1"
+            | "libstdc++-6"
+            | "libgcc_s_seh-1"
+            | "libgcc_s_dw2-1"
+            | "libwinpthread-1"
     )
 }
 

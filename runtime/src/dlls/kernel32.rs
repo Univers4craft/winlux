@@ -5945,6 +5945,16 @@ fn register_thread_object(tid: i32, t: &Arc<ThreadObject>) {
 fn unregister_thread_object(tid: i32) {
     lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).remove(&tid);
 }
+/// Threads Windows vivants du processus (WINLUX_THREAD_DUMP, #2147).
+pub(crate) fn thread_slots() -> Vec<(i32, Arc<ThreadObject>)> {
+    let mut v: Vec<(i32, Arc<ThreadObject>)> =
+        lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
+            .iter()
+            .filter_map(|(&t, w)| Some((t, w.upgrade()?)))
+            .collect();
+    v.sort_by_key(|(t, _)| *t);
+    v
+}
 fn thread_object_by_tid(tid: i32) -> Option<Arc<ThreadObject>> {
     lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&tid)
@@ -7043,6 +7053,32 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
     s.exit_code = code;
     p.changed.notify_all();
     1
+}
+/// Ce que désigne un handle, pour la trace des fils (#2161) : « fil 1234
+/// vivant », « fil 1234 fini (0) », « événement »… Lecture seule.
+pub(crate) fn describe_handle(h: usize) -> String {
+    if h == (-2isize) as usize {
+        return format!("fil courant {}", unsafe { libc::syscall(libc::SYS_gettid) });
+    }
+    if h == usize::MAX {
+        return "processus courant".into();
+    }
+    match lookup_sync(h) {
+        Some(SyncHandle::Thread(t)) => {
+            let s = lock(&t.state);
+            if s.finished {
+                format!("fil {} fini ({:#x})", s.win_tid, s.exit_code)
+            } else {
+                format!("fil {} vivant", s.win_tid)
+            }
+        }
+        Some(SyncHandle::Process(_)) => "processus".into(),
+        Some(SyncHandle::Event(_)) => "événement".into(),
+        Some(SyncHandle::Mutex(_)) => "mutex".into(),
+        Some(SyncHandle::Semaphore(_)) => "sémaphore".into(),
+        Some(SyncHandle::CompletionPort(_)) => "port de complétion".into(),
+        None => "autre".into(),
+    }
 }
 pub unsafe extern "win64" fn get_exit_code_thread(handle: usize, code: *mut u32) -> i32 {
     if code.is_null() {
@@ -11284,12 +11320,12 @@ pub unsafe extern "win64" fn get_overlapped_result_ex(
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "GetStdHandle"=>fn get_std_handle,"SetStdHandle"=>fn set_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
-     "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
+     "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn super::fil_trace::wait_for_single_object,"WaitForMultipleObjects"=>fn super::fil_trace::wait_for_multiple_objects,"GetExitCodeThread"=>fn super::fil_trace::get_exit_code_thread,"ResumeThread"=>fn super::fil_trace::resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
       "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch,"ResetWriteWatch"=>fn crate::dlls::write_watch::reset_write_watch,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
-     "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
+     "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn super::fil_trace::create_thread,"CloseHandle"=>fn super::fil_trace::close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
      "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetLocalTime"=>fn get_local_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
       "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
       "GetEnvironmentVariableW"=>fn get_environment_variable_w,"SetEnvironmentVariableW"=>fn set_environment_variable_w,"GetCurrentDirectoryW"=>fn get_current_directory_w,"SetCurrentDirectoryW"=>fn set_current_directory_w,
@@ -11332,7 +11368,7 @@ pub fn exports() -> crate::dlls::Exports {
      "CreateEventW"=>fn create_event_w,"CreateMutexW"=>fn create_mutex_w,
      "GetProcessId"=>fn get_process_id,"GetModuleHandleExW"=>fn get_module_handle_ex_w,
      "CreateSemaphoreW"=>fn create_semaphore_w,"CreateSemaphoreA"=>fn create_semaphore_a,"CreateSemaphoreExW"=>fn create_semaphore_ex_w,"CreateEventExW"=>fn create_event_ex_w,"CreateMutexExW"=>fn create_mutex_ex_w,"AreFileApisANSI"=>fn are_file_apis_ansi,"ReleaseSemaphore"=>fn release_semaphore,
-     "SleepEx"=>fn sleep_ex,"WaitForSingleObjectEx"=>fn wait_for_single_object_ex,"SignalObjectAndWait"=>fn signal_object_and_wait,
+     "SleepEx"=>fn sleep_ex,"WaitForSingleObjectEx"=>fn super::fil_trace::wait_for_single_object_ex,"SignalObjectAndWait"=>fn signal_object_and_wait,
      "CreateNamedPipeW"=>fn create_named_pipe_w,"SetNamedPipeHandleState"=>fn set_named_pipe_handle_state,"PeekNamedPipe"=>fn peek_named_pipe
      }
 }
