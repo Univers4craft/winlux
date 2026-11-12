@@ -4062,27 +4062,100 @@ pub extern "win64" fn get_process_heap() -> usize {
 /// Sert à établir en boîte noire qu'un programme se sert d'un objet après
 /// l'avoir libéré, ce que le tas de Windows laisse souvent passer.
 fn heap_diag() -> (bool, bool) {
-    static DIAG: OnceLock<(bool, bool)> = OnceLock::new();
+    let d = heap_diag_all();
+    (d.0, d.1)
+}
+/// `lfh` (#2067) : comme le tas à fragmentation réduite de Windows, un bloc
+/// libéré de moins de 16 Kio est gardé par classe de taille (multiple de 16)
+/// et rendu tel quel, contenu intact, au prochain HeapAlloc de la même
+/// classe ; glibc, elle, réécrit le début du bloc en le libérant.
+fn heap_lfh() -> bool {
+    heap_diag_all().2
+}
+fn heap_diag_all() -> (bool, bool, bool) {
+    static DIAG: OnceLock<(bool, bool, bool)> = OnceLock::new();
     *DIAG.get_or_init(|| heap_diag_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
 }
-fn heap_diag_parse(v: &str) -> (bool, bool) {
+fn heap_diag_parse(v: &str) -> (bool, bool, bool) {
     let has = |w: &str| v.split(',').any(|x| x.trim() == w);
-    (has("trace"), has("nofree"))
+    (has("trace"), has("nofree"), has("lfh"))
+}
+const LFH_LIMIT: usize = 16 * 1024;
+const LFH_PER_CLASS: usize = 4096;
+fn lfh_class(size: usize) -> usize {
+    size.max(1).div_ceil(16) * 16
+}
+static LFH_CACHE: OnceLock<Mutex<HashMap<usize, Vec<usize>>>> = OnceLock::new();
+/// Bloc d'au moins `size` octets : un bloc libéré de la même classe s'il y
+/// en a un (contenu intact), sinon un bloc neuf de la taille de la classe.
+unsafe fn lfh_alloc(size: usize) -> *mut c_void {
+    let class = lfh_class(size);
+    if class <= LFH_LIMIT {
+        let reused = lock(LFH_CACHE.get_or_init(|| Mutex::new(HashMap::new())))
+            .get_mut(&class)
+            .and_then(|v| v.pop());
+        if let Some(p) = reused {
+            return p as *mut c_void;
+        }
+        return libc::malloc(class);
+    }
+    libc::malloc(size.max(1))
+}
+/// Libère un bloc de `size` octets demandés : gardé pour sa classe, sans
+/// toucher à son contenu, ou rendu à glibc au-delà de la limite.
+unsafe fn lfh_free(p: *mut c_void, size: usize) {
+    let class = lfh_class(size);
+    if class <= LFH_LIMIT {
+        let mut cache = lock(LFH_CACHE.get_or_init(|| Mutex::new(HashMap::new())));
+        let v = cache.entry(class).or_default();
+        if v.len() < LFH_PER_CLASS {
+            v.push(p as usize);
+            return;
+        }
+    }
+    libc::free(p);
 }
 #[cfg(test)]
 mod tests_diagnostic_tas {
     #[test]
     fn valeurs_de_winlux_heap_diag() {
-        assert_eq!(super::heap_diag_parse(""), (false, false));
-        assert_eq!(super::heap_diag_parse("trace"), (true, false));
-        assert_eq!(super::heap_diag_parse("nofree"), (false, true));
-        assert_eq!(super::heap_diag_parse("trace, nofree"), (true, true));
-        assert_eq!(super::heap_diag_parse("1"), (false, false));
+        assert_eq!(super::heap_diag_parse(""), (false, false, false));
+        assert_eq!(super::heap_diag_parse("trace"), (true, false, false));
+        assert_eq!(super::heap_diag_parse("nofree"), (false, true, false));
+        assert_eq!(super::heap_diag_parse("trace, nofree"), (true, true, false));
+        assert_eq!(super::heap_diag_parse("lfh,trace"), (true, false, true));
+        assert_eq!(super::heap_diag_parse("1"), (false, false, false));
+    }
+
+    /// #2067 : un bloc libéré revient, contenu intact, au HeapAlloc suivant
+    /// de la même classe de taille.
+    #[test]
+    fn lfh_rend_le_bloc_libere_intact() {
+        unsafe {
+            let p = super::lfh_alloc(40) as *mut u64;
+            *p = 0x1122_3344_5566_7788;
+            *p.add(1) = 0x99;
+            super::lfh_free(p as *mut _, 40);
+            let q = super::lfh_alloc(33) as *mut u64;
+            assert_eq!(q, p, "même classe (48) : même bloc");
+            assert_eq!(*q, 0x1122_3344_5566_7788);
+            assert_eq!(*q.add(1), 0x99);
+            super::lfh_free(q as *mut _, 33);
+            let big = super::lfh_alloc(20_000);
+            assert!(!big.is_null());
+            super::lfh_free(big, 20_000);
+        }
+        assert_eq!(super::lfh_class(0), 16);
+        assert_eq!(super::lfh_class(17), 32);
     }
 }
 
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
-    let p = libc::malloc(size.max(1));
+    let p = if heap_lfh() {
+        lfh_alloc(size)
+    } else {
+        libc::malloc(size.max(1))
+    };
     if !p.is_null() {
         if flags & 8 != 0 {
             std::ptr::write_bytes(p, 0, size);
@@ -4123,7 +4196,16 @@ pub unsafe extern "win64" fn heap_realloc(
         return std::ptr::null_mut();
     };
     let (trace, nofree) = heap_diag();
-    let q = if nofree {
+    let q = if heap_lfh() {
+        // Mode lfh : nouveau bloc de la bonne classe, l'ancien est gardé
+        // pour sa classe avec son contenu.
+        let q = lfh_alloc(size);
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+            lfh_free(p, old);
+        }
+        q
+    } else if nofree {
         // WINLUX_HEAP_DIAG=nofree : l'ancien bloc reste intact.
         let q = libc::malloc(size.max(1));
         if !q.is_null() {
@@ -4159,13 +4241,12 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
         crate::process::set_last_error(87);
         return 0;
     }
-    if lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
-        .remove(&(p as usize))
-        .is_none()
-    {
+    let Some(old) =
+        lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&(p as usize))
+    else {
         crate::process::set_last_error(87);
         return 0;
-    }
+    };
     let (trace, nofree) = heap_diag();
     if trace {
         crate::log::emit(
@@ -4174,7 +4255,9 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
             &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
         );
     }
-    if !nofree {
+    if heap_lfh() {
+        lfh_free(p, old);
+    } else if !nofree {
         libc::free(p);
     }
     1
