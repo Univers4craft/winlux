@@ -1204,9 +1204,14 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         return Some(0);
     }
     // Contrat de licence ni accepté (assistant) ni couvert par une option
-    // silencieuse : sa page s'ouvre, refus = 1602 (#2123).
-    if let Some(code) = license::require_acceptance(exe, args) {
-        return Some(code);
+    // silencieuse : sa page s'ouvre, refus = 1602 (#2123). Seulement pour
+    // un installateur : un programme ordinaire n'est pas relu (#997).
+    if (burn::is_bundle_file(exe) || matches!(detect_file(exe), Some(Kind::Nsis | Kind::Inno)))
+        && !license::silent_flag(args)
+    {
+        if let Some(code) = license::require_acceptance(exe, args) {
+            return Some(code);
+        }
     }
     // Bundles WiX Burn (vc_redist…) : chaîne de paquets MSI installée ici.
     if let Some(code) = burn::launch(exe, args) {
