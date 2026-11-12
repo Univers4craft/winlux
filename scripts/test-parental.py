@@ -354,6 +354,16 @@ finally:
 daemon = lib.Daemon()
 daemon.configs = {"bob": lib.load_config("bob")}
 victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "C:\\Jeux\\jeu.exe"])
+# Attendre la fin de l'exec : juste après Popen, /proc/PID/cmdline peut être
+# encore vide, et le faux jeu passerait pour python (#1987).
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    try:
+        if b"jeu.exe" in Path(f"/proc/{victim.pid}/cmdline").read_bytes():
+            break
+    except OSError:
+        pass
+    time.sleep(0.01)
 real_app_of, real_pids, real_uid = lib.app_of, lib.pids_of, lib.uid_of
 lib.uid_of = lambda name: os.getuid() if name == "bob" else None
 lib.pids_of = lambda uids: {victim.pid: os.getuid()} if os.getuid() in uids else {}

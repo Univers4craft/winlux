@@ -119,7 +119,7 @@ fn same_image(a: &str, b: &str) -> bool {
 
 // ----- Conversions -----
 
-unsafe fn bstr_in(p: *const u16) -> String {
+pub(super) unsafe fn bstr_in(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
@@ -130,7 +130,7 @@ unsafe fn bstr_in(p: *const u16) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
 }
 
-unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
+pub(super) unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -139,7 +139,7 @@ unsafe fn bstr_out(out: *mut *mut u16, s: &str) -> i32 {
     S_OK
 }
 
-unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
+pub(super) unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -147,7 +147,7 @@ unsafe fn bool_out(out: *mut i16, v: bool) -> i32 {
     S_OK
 }
 
-unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
+pub(super) unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -156,7 +156,7 @@ unsafe fn u32_out(out: *mut u32, v: u32) -> i32 {
 }
 
 /// VARIANT de type VT_BOOL (disposition x64 : vt à 0, valeur à 8).
-unsafe fn variant_bool(out: *mut u8, v: bool) {
+pub(super) unsafe fn variant_bool(out: *mut u8, v: bool) {
     if out.is_null() {
         return;
     }
@@ -190,21 +190,21 @@ fn as_ptr(s: &'static Static) -> *mut c_void {
     s as *const Static as *mut c_void
 }
 
-extern "win64" fn static_add_ref(_: usize) -> u32 {
+pub(super) extern "win64" fn static_add_ref(_: usize) -> u32 {
     2
 }
-extern "win64" fn static_release(_: usize) -> u32 {
+pub(super) extern "win64" fn static_release(_: usize) -> u32 {
     1
 }
-unsafe extern "win64" fn type_info_count(_: usize, out: *mut u32) -> i32 {
+pub(super) unsafe extern "win64" fn type_info_count(_: usize, out: *mut u32) -> i32 {
     u32_out(out, 0)
 }
-extern "win64" fn not_impl(_: usize) -> i32 {
+pub(super) extern "win64" fn not_impl(_: usize) -> i32 {
     E_NOTIMPL
 }
 /// Méthode acceptée sans effet. En x64, l'appelant nettoie la pile : une
 /// seule fonction convient à toutes les signatures.
-extern "win64" fn ok(_: usize) -> i32 {
+pub(super) extern "win64" fn ok(_: usize) -> i32 {
     S_OK
 }
 
@@ -390,7 +390,7 @@ unsafe extern "win64" fn apps_count(_: usize, out: *mut i32) -> i32 {
 
 /// Lit une propriété BSTR d'un INetFwAuthorizedApplication quelconque
 /// (le nôtre, ou celui d'un programme x86 derrière son mandataire).
-unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
+pub(super) unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
     let vt = *(app as *const *const usize);
     let get: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32 =
         std::mem::transmute(*vt.add(index));
@@ -403,7 +403,7 @@ unsafe fn read_bstr_prop(app: usize, index: usize) -> Option<String> {
     Some(s)
 }
 
-unsafe fn read_u32_prop(app: usize, index: usize) -> Option<u32> {
+pub(super) unsafe fn read_u32_prop(app: usize, index: usize) -> Option<u32> {
     let vt = *(app as *const *const usize);
     let get: unsafe extern "win64" fn(usize, *mut u32) -> i32 = std::mem::transmute(*vt.add(index));
     let mut v = 0u32;
@@ -622,7 +622,7 @@ pub unsafe fn create_builtin(
         app_release(app);
         return Some(hr);
     }
-    None
+    super::netfw2::create_builtin(clsid, iid, out)
 }
 
 #[cfg(test)]
