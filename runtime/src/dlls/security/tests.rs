@@ -486,3 +486,33 @@ fn descripteur_du_jeton_porte_l_etiquette_d_integrite() {
         assert_eq!(u16::from_le_bytes([buf[2], buf[3]]) & 0x10, 0);
     }
 }
+
+/// Descripteur absolu (SetSecurityDescriptorDacl) recopié en auto-relatif
+/// pour SetServiceObjectSecurity, puis relu partie par partie (#1993).
+#[test]
+fn descripteur_absolu_recopie_en_auto_relatif() {
+    unsafe {
+        let mut abs = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(abs.as_mut_ptr(), 1), 1);
+        // ACL vide : révision 2, taille 8, aucune ACE.
+        let mut acl = [2u8, 0, 8, 0, 0, 0, 0, 0];
+        assert_eq!(
+            SetSecurityDescriptorDacl(abs.as_mut_ptr(), 1, acl.as_mut_ptr(), 0),
+            1
+        );
+        let parts = sd_parts(abs.as_ptr());
+        assert_eq!(parts[3].as_deref(), Some(&acl[..]));
+        assert!(parts[0].is_none());
+        let rel = self_relative_sd(&parts, 0);
+        assert_eq!(rel.len(), 28);
+        assert_eq!(GetSecurityDescriptorLength(rel.as_ptr()), 28);
+        let mut present = 0;
+        let mut dacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            GetSecurityDescriptorDacl(rel.as_ptr(), &mut present, &mut dacl, std::ptr::null_mut()),
+            1
+        );
+        assert_eq!(present, 1);
+        assert_eq!(std::slice::from_raw_parts(dacl, 8), &acl[..]);
+    }
+}

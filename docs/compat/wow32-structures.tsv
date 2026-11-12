@@ -187,6 +187,8 @@ msvcp140.rs	Thrd	a-verifier
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 netfw.rs	App	x86	objet COM du runtime (INetFwAuthorizedApplication) ; un programme x86 le reçoit par le mandataire décrit dans wow32/com_netfw.rs, jamais la structure elle-même (#1919)
 netfw.rs	Static	x86	objets COM du runtime (INetFwMgr, INetFwPolicy, INetFwProfile, INetFwAuthorizedApplications) ; mandataires x86 décrits dans wow32/com_netfw.rs (#1919)
+netfw2.rs	Rule	x86	objet COM du runtime (INetFwRule) ; un programme x86 le reçoit par le mandataire décrit dans wow32/com_netfw.rs, jamais la structure elle-même (#1919)
+netfw2.rs	Static	x86	objets COM du runtime (INetFwPolicy2, INetFwRules) ; mandataires x86 décrits dans wow32/com_netfw.rs (#1919)
 netlistmgr.rs	Enum	interne	objet COM du runtime (énumération vide de réseaux) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
 netlistmgr.rs	Manager	interne	objet COM du runtime (NetworkListManager) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
 ole32.rs	ComStream	a-verifier	
