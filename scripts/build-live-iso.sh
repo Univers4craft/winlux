@@ -799,6 +799,28 @@ if test -n "$desktop_user"; then
     for node in /dev/dri/renderD* /dev/kfd; do test -c "$node" && /bin/busybox chmod 666 "$node"; done 2>/dev/null
     for node in /dev/input/js* /dev/input/event*; do test -c "$node" && /bin/busybox chgrp input "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
 fi
+# Virtualisation (#2069) : /dev/kvm et /dev/net/tun au groupe kvm en 0660,
+# jamais au monde. Le groupe est créé s'il manque, et le compte du bureau
+# (l'administrateur de l'installation) y entre une seule fois : un retrait
+# fait ensuite par l'administrateur est respecté, et les autres comptes,
+# dont ceux du contrôle parental, n'y sont pas mis d'office.
+if test -n "$desktop_user" && { test -c /dev/kvm || test -c /dev/net/tun; }; then
+    if ! /bin/busybox grep -q '^kvm:' /etc/group; then
+        kvm_gid=999
+        while /bin/busybox awk -F: -v n="$kvm_gid" '$3 == n { found=1 } END { exit !found }' /etc/group; do kvm_gid=$((kvm_gid - 1)); done
+        echo "kvm:x:$kvm_gid:" >>/etc/group
+        if test -f /etc/gshadow && ! /bin/busybox grep -q '^kvm:' /etc/gshadow; then echo 'kvm:!::' >>/etc/gshadow; fi
+    fi
+    if ! test -e /etc/winlux/kvm-compte-ajoute; then
+        /bin/busybox awk -F: -v OFS=: -v u="$desktop_user" '
+            $1 == "kvm" { n = split($4, m, ","); f = 0; for (i = 1; i <= n; i++) if (m[i] == u) f = 1; if (!f) $4 = ($4 == "" ? u : $4 "," u) }
+            { print }' /etc/group >/etc/group.winlux-kvm &&
+            /bin/busybox cat /etc/group.winlux-kvm >/etc/group &&
+            /bin/busybox mkdir -p /etc/winlux && /bin/busybox touch /etc/winlux/kvm-compte-ajoute
+        /bin/busybox rm -f /etc/group.winlux-kvm
+    fi
+    for node in /dev/kvm /dev/net/tun; do test -c "$node" && /bin/busybox chgrp kvm "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
+fi
 # Enregistrer binfmt pour les .exe (MZ) : « ./programme.exe » dans un
 # terminal lance winlux. Une règle par écriture et sans les commentaires du
 # fichier : le noyau refusait tout le bloc, donc rien n'était enregistré en
