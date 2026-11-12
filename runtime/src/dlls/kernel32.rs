@@ -1017,6 +1017,38 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         _ => 31,
     }
 }
+/// Code d'erreur d'une opération sur le chemin `p` : quand un dossier du
+/// chemin manque, ou qu'un de ses composants est un fichier, Windows rend
+/// ERROR_PATH_NOT_FOUND (3), pas ERROR_FILE_NOT_FOUND (2) ni ERROR_DIRECTORY
+/// (267) ; Linux rend ENOENT ou ENOTDIR sans distinguer le parent. La
+/// documentation de CreateDirectory le dit explicitement, et les programmes
+/// qui créent une arborescence s'en servent pour créer d'abord le parent
+/// (#2112, comme CreateFile depuis #1674).
+pub(crate) fn path_error_code(e: &std::io::Error, p: &std::path::Path) -> u32 {
+    let ambigu = matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    if ambigu
+        && p.parent()
+            .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+    {
+        3
+    } else {
+        io_error_code(e)
+    }
+}
+/// Même chose pour une opération à deux chemins (MoveFile, CopyFile).
+pub(crate) fn two_paths_error_code(
+    e: &std::io::Error,
+    a: &std::path::Path,
+    b: &std::path::Path,
+) -> u32 {
+    match path_error_code(e, a) {
+        3 => 3,
+        _ => path_error_code(e, b),
+    }
+}
 unsafe fn bytes<'a>(p: *const u8, len: usize) -> Option<&'a [u8]> {
     if len != 0 && p.is_null() {
         None
@@ -2418,14 +2450,7 @@ unsafe fn create_file_opened(
         Err(e) => {
             // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
             // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
-            let code = if e.kind() == std::io::ErrorKind::NotFound
-                && p.parent()
-                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
-            {
-                3
-            } else {
-                io_error_code(&e)
-            };
+            let code = path_error_code(&e, &p);
             // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
             crate::trace!(
                 "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
@@ -2589,7 +2614,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         }
         Err(e) if builtin_attribute_data(&e, &win, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -2625,7 +2650,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
         }
         Err(e) if builtin_attribute_data(&e, &s, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -3010,7 +3035,7 @@ unsafe fn set_file_attributes_str(path: &str, attributes: u32) -> i32 {
     let m = match std::fs::metadata(&p) {
         Ok(m) => m,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             return 0;
         }
     };
@@ -3407,12 +3432,12 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
                 1
             }
             Err(e) => {
-                crate::process::set_last_error(io_error_code(&e));
+                crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
                 0
             }
         },
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -7738,10 +7763,11 @@ pub unsafe extern "win64" fn set_current_directory_a(path: *const u8) -> i32 {
 /// Corps commun de `set_current_directory_a` et `set_current_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn set_current_directory_str(path: &str) -> i32 {
-    match std::env::set_current_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::env::set_current_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -7828,7 +7854,7 @@ unsafe fn get_file_attributes_str(path: &str) -> u32 {
             BUILTIN_FILE_ATTRIBUTES
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             u32::MAX
         }
     }
@@ -7855,10 +7881,11 @@ unsafe fn delete_file_str(path: &str) -> i32 {
     r
 }
 unsafe fn delete_file_str_inner(path: &str) -> i32 {
-    match std::fs::remove_file(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::remove_file(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -7885,10 +7912,11 @@ unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
     r
 }
 unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
-    match std::fs::create_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::create_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8198,7 +8226,7 @@ pub unsafe extern "win64" fn copy_file_a(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8235,7 +8263,7 @@ pub unsafe extern "win64" fn copy_file_w(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8251,10 +8279,10 @@ pub unsafe extern "win64" fn move_file_a(src: *const u8, dst: *const u8) -> i32 
         crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8280,10 +8308,10 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8307,10 +8335,11 @@ pub unsafe extern "win64" fn remove_directory_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match remove_dir_or_link(&crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    match remove_dir_or_link(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8324,13 +8353,14 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
         }
     };
     let path = s.to_string_lossy();
-    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+    let p = crate::paths::to_linux(&path);
+    match remove_dir_or_link(&p) {
         Ok(()) => {
             crate::trace!("RemoveDirectory({path}) = 1");
             1
         }
         Err(e) => {
-            let code = io_error_code(&e);
+            let code = path_error_code(&e, &p);
             crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
             crate::process::set_last_error(code);
             0
