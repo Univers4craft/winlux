@@ -8181,15 +8181,19 @@ pub extern "win64" fn query_performance_frequency(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryPerformanceCounter : nanosecondes de CLOCK_MONOTONIC, la même
+/// horloge que ntdll!RtlQueryPerformanceCounter et NtQueryPerformanceCounter.
+/// Sous Windows, le compteur a une origine commune à tous les processus.
+/// L'ancienne version comptait depuis le démarrage du processus : les
+/// processus de Chromium vivaient alors dans des temps décalés de plusieurs
+/// minutes, et le renderer de Discord attendait des échéances de viz
+/// placées loin dans le futur (page noire, #1886).
 pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
     unsafe {
-        if out.is_null() {
-            return 0;
-        }
-        *out = CLOCK_START
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_nanos() as i64;
+        crate::dlls::ntdll::rtl_query_performance_counter(out);
     }
     1
 }
@@ -12987,6 +12991,28 @@ fn wait_until_stopped(pid: u32) {
 
 #[cfg(test)]
 mod interrupt_time_tests {
+    use super::{query_performance_counter, query_performance_frequency};
+    #[test]
+    fn qpc_a_la_meme_origine_que_ntdll_et_le_systeme() {
+        // #1886 : QueryPerformanceCounter et RtlQueryPerformanceCounter
+        // concordent, et l'origine est celle du système (CLOCK_MONOTONIC),
+        // commune à tous les processus, pas le démarrage du processus.
+        let (mut freq, mut a, mut rtl, mut b) = (0i64, 0i64, 0i64, 0i64);
+        assert_eq!(query_performance_frequency(&mut freq), 1);
+        assert_eq!(freq, 1_000_000_000);
+        assert_eq!(query_performance_counter(&mut a), 1);
+        unsafe { crate::dlls::ntdll::rtl_query_performance_counter(&mut rtl) };
+        assert_eq!(query_performance_counter(&mut b), 1);
+        assert!(a <= rtl && rtl <= b, "{a} {rtl} {b}");
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+        let sys = ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64;
+        assert!(b <= sys && sys - b < 1_000_000_000, "{b} {sys}");
+    }
+
     #[test]
     fn query_unbiased_interrupt_time_avance_en_100_ns() {
         let (mut a, mut b) = (0u64, 0u64);

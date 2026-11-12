@@ -32,6 +32,8 @@ enum Place {
     ProgramFiles(&'static str),
 }
 
+/// CSIDL documentés → emplacement ; 0x13, 0x1b, 0x1f, 0x2d, 0x30, 0x38 et
+/// 0x3b ajoutés pour #2043.
 fn csidl_place(csidl: i32) -> Option<Place> {
     use Place::*;
     Some(match csidl & 0xff {
@@ -45,6 +47,7 @@ fn csidl_place(csidl: i32) -> Option<Place> {
         0x0b => StartMenu(""),
         0x0d => Profile("Music"),
         0x0e => Profile("Videos"),
+        0x13 => Profile("AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts"),
         0x14 => Fixed("C:\\Windows\\Fonts"),
         0x15 => Profile("AppData\\Roaming\\Microsoft\\Windows\\Templates"),
         0x16 => CommonStartMenu(""),
@@ -52,7 +55,9 @@ fn csidl_place(csidl: i32) -> Option<Place> {
         0x18 => CommonStartMenu("Programs\\Startup"),
         0x19 => Fixed("C:\\Users\\Public\\Desktop"),
         0x1a => Profile("AppData\\Roaming"),
+        0x1b => Profile("AppData\\Roaming\\Microsoft\\Windows\\Printer Shortcuts"),
         0x1c => Profile("AppData\\Local"),
+        0x1f => Profile("Favorites"),
         0x20 => Profile("AppData\\Local\\Microsoft\\Windows\\INetCache"),
         0x21 => Profile("AppData\\Local\\Microsoft\\Windows\\INetCookies"),
         0x22 => Profile("AppData\\Local\\Microsoft\\Windows\\History"),
@@ -66,11 +71,15 @@ fn csidl_place(csidl: i32) -> Option<Place> {
         0x2a => Fixed("C:\\Program Files (x86)"),
         0x2b => ProgramFiles("Common Files"),
         0x2c => Fixed("C:\\Program Files (x86)\\Common Files"),
+        0x2d => Fixed("C:\\ProgramData\\Microsoft\\Windows\\Templates"),
         0x2e => Fixed("C:\\Users\\Public\\Documents"),
         0x2f => CommonStartMenu("Programs\\Administrative Tools"),
+        0x30 => StartMenu("Programs\\Administrative Tools"),
         0x35 => Fixed("C:\\Users\\Public\\Music"),
         0x36 => Fixed("C:\\Users\\Public\\Pictures"),
         0x37 => Fixed("C:\\Users\\Public\\Videos"),
+        0x38 => Fixed("C:\\Windows\\Resources"),
+        0x3b => Profile("AppData\\Local\\Microsoft\\Windows\\Burn\\Burn"),
         _ => return None,
     })
 }
@@ -289,6 +298,7 @@ pub unsafe extern "win64" fn sh_get_folder_path_a(
     _flags: u32,
     path: *mut u8,
 ) -> i32 {
+    crate::trace!("SHGetFolderPathA(csidl {csidl:#x})");
     match csidl_path(csidl) {
         Some(p) if write_ansi(&p, path, MAX_PATH) => S_OK,
         Some(_) => E_INVALIDARG,
@@ -303,7 +313,11 @@ pub unsafe extern "win64" fn sh_get_folder_path_w(
     _flags: u32,
     path: *mut u16,
 ) -> i32 {
-    match csidl_path(csidl) {
+    let found = csidl_path(csidl);
+    crate::trace!(
+        "SHGetFolderPathW(csidl {csidl:#x}, token {_token:#x}, flags {_flags}) -> {found:?}"
+    );
+    match found {
         Some(p) if write_wide(&p, path, MAX_PATH) => S_OK,
         _ => E_INVALIDARG,
     }

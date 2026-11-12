@@ -1918,6 +1918,10 @@ unsafe extern "win64" fn crt_capture_previous_context(ctx: usize) {
     crt_capture_current_context(ctx, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+/// `__crt_debugger_hook(code)` : point d'arrêt pour un débogueur attaché ;
+/// sans débogueur, ne fait rien (#2027).
+extern "win64" fn crt_debugger_hook(_code: i32) {}
+
 /// `__crtIsPackagedApp()` : jamais une application empaquetée (#1832).
 extern "win64" fn crt_is_packaged_app() -> i32 {
     0
@@ -2039,6 +2043,8 @@ pub fn exports() -> crate::dlls::Exports {
         "__crtCaptureCurrentContext" => fn crt_capture_current_context,
         "__crtCapturePreviousContext" => fn crt_capture_previous_context,
         "__crtIsPackagedApp" => fn crt_is_packaged_app, "__crtTerminateProcess" => fn crt_terminate_process,
+        "__crt_debugger_hook" => fn crt_debugger_hook,
+        "_calloc_crt" => fn super::crt_runtime::calloc,
     }
 }
 
@@ -2067,6 +2073,14 @@ mod tests {
             crt_fls_free(slot, 0, 0, 0, 0, 0, 0, 0, 0);
         }
         assert_eq!(crt_is_packaged_app(), 0);
+        // #2027 : __crt_debugger_hook et _calloc_crt (msvcr120).
+        crt_debugger_hook(0);
+        let e = exports();
+        assert_eq!(
+            e["_calloc_crt"],
+            super::super::crt_runtime::calloc as *const () as usize
+        );
+        assert!(e.contains_key("__crt_debugger_hook"));
     }
 
     #[test]
