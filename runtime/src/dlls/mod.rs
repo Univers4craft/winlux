@@ -229,6 +229,7 @@ pub mod rawinput;
 pub mod redist_dlls;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
 pub mod msvcp140_2;
+pub mod msvcp140_flux;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -1283,7 +1284,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "msvcp140",
-                exports: msvcp140::exports(),
+                exports: {
+                    let mut m = msvcp140::exports();
+                    m.extend(msvcp140_flux::exports());
+                    m
+                },
                 handle: 0,
             },
             Builtin {
