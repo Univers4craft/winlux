@@ -433,7 +433,29 @@ pub fn now_filetime() -> u64 {
 /// créé s'il ne les a pas. Composants d'Internet Explorer 11, présents sous
 /// Windows 10 et 11 : des installeurs (Acrobat) exigent « Internet
 /// Explorer 7.0 » (#1756).
-const LATER_DEFAULTS: [(&str, &str, &str); 2] = [
+const LATER_DEFAULTS: [(&str, &str, &str); 6] = [
+    // Vue 32 bits de CurrentVersion : un programme x86 y lit ses dossiers
+    // `Program Files (x86)` (#2002).
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "ProgramFilesDir",
+        "C:\\Program Files (x86)",
+    ),
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "ProgramFilesDir (x86)",
+        "C:\\Program Files (x86)",
+    ),
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "CommonFilesDir",
+        "C:\\Program Files (x86)\\Common Files",
+    ),
+    (
+        "hklm\\Software\\Microsoft\\Windows\\CurrentVersion",
+        "CommonFilesDir (x86)",
+        "C:\\Program Files (x86)\\Common Files",
+    ),
     (
         "hklm\\Software\\Microsoft\\Internet Explorer",
         "Version",
