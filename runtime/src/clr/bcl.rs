@@ -967,8 +967,10 @@ fn activator_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
 
 fn marshal_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "SizeOf" => Some(Value::I32(8)),
-        "GetLastWin32Error" | "GetLastPInvokeError" => Some(Value::I32(0)),
+        // SizeOf est servi par marshal.rs (#2026).
+        "GetLastWin32Error" | "GetLastPInvokeError" => {
+            Some(Value::I32(crate::process::last_error() as i32))
+        }
         "PtrToStringAnsi" | "PtrToStringUni" => match args.last() {
             Some(Value::Ref(p)) if !p.is_null() => {
                 let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
