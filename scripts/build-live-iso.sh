@@ -1112,7 +1112,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         # Xorg est épargné par le tueur du noyau (#2132) : seul Xorg, car un
         # réglage posé sur la session passerait à toutes ses applications.
         # shellcheck disable=SC2016
-        setsid /bin/sh -c 'echo -900 >/proc/self/oom_score_adj 2>/dev/null; trap "kill \$x 2>/dev/null" TERM INT HUP; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; echo -900 >/proc/self/oom_score_adj 2>/dev/null; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
     else
         # shellcheck disable=SC2086
         /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
