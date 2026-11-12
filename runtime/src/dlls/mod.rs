@@ -188,6 +188,7 @@ pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod netfw;
+pub mod netfw2;
 pub mod netlistmgr;
 pub mod nls;
 pub mod normaliz;
