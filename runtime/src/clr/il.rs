@@ -701,6 +701,9 @@ impl Interpreter {
         if let Some(r) = self.member_call(namespace, class, name, &args) {
             return r;
         }
+        if let Some(r) = self.file_call(namespace, class, name, &args) {
+            return r;
+        }
         match (namespace, class, name) {
             (_, _, ".ctor") => {
                 // Constructeurs de la BCL (Object, Exception…) : seul le message

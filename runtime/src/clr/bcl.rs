@@ -58,8 +58,6 @@ pub fn dispatch_internal_call(
         ("System", "Convert", m) => convert_dispatch(m, args),
         ("System", "Type", m) => type_dispatch(m, args),
         ("System", "Activator", m) => activator_dispatch(m, args),
-        ("System.IO", "File", m) => file_dispatch(m, args),
-        ("System.IO", "Path", m) => path_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
         // Horloge monotone de Stopwatch, en graduations de 100 ns (#1922).
         ("System.Diagnostics", "Stopwatch", "GetTimestamp") => {
@@ -959,90 +957,8 @@ fn activator_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
     }
 }
 
-// ── System.IO.File ──
-
-fn file_dispatch(method: &str, args: &[Value]) -> Option<Value> {
-    match method {
-        "Exists" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::I32(0)),
-            };
-            Some(Value::I32(if std::path::Path::new(&path).exists() {
-                1
-            } else {
-                0
-            }))
-        }
-        "ReadAllText" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::Null),
-            };
-            match std::fs::read_to_string(&path) {
-                Ok(content) => Some(alloc_managed_string(&content)),
-                Err(_) => Some(Value::Null),
-            }
-        }
-        "WriteAllText" => {
-            if args.len() >= 2 {
-                let path = value_to_string(&args[args.len() - 2]);
-                let content = value_to_string(&args[args.len() - 1]);
-                let _ = std::fs::write(&path, &content);
-            }
-            Some(Value::I32(0))
-        }
-        "Delete" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::I32(0)),
-            };
-            let _ = std::fs::remove_file(&path);
-            Some(Value::I32(0))
-        }
-        _ => missing("File", method),
-    }
-}
-
-// ── System.IO.Path ──
-
-fn path_dispatch(method: &str, args: &[Value]) -> Option<Value> {
-    match method {
-        "Combine" => {
-            let parts: Vec<String> = args.iter().map(value_to_string).collect();
-            let mut path = std::path::PathBuf::new();
-            for p in &parts {
-                path.push(p);
-            }
-            Some(alloc_managed_string(&path.to_string_lossy()))
-        }
-        "GetFileName" => {
-            let s = value_to_string(args.last()?);
-            let name = std::path::Path::new(&s)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            Some(alloc_managed_string(&name))
-        }
-        "GetExtension" => {
-            let s = value_to_string(args.last()?);
-            let ext = std::path::Path::new(&s)
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy()))
-                .unwrap_or_default();
-            Some(alloc_managed_string(&ext))
-        }
-        "GetDirectoryName" => {
-            let s = value_to_string(args.last()?);
-            let dir = std::path::Path::new(&s)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            Some(alloc_managed_string(&dir))
-        }
-        _ => missing("Path", method),
-    }
-}
+// System.IO (File, Path, Directory, flux) est écrit en C# dans notre
+// mscorlib, au-dessus des primitives de fichiers.rs (#2012, #2013).
 
 // ── System.Runtime.InteropServices.Marshal ──
 
