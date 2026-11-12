@@ -661,33 +661,215 @@ static LC_HANDLES: [u32; 6] = [0; 6];
 pub extern "win64" fn localeconv() -> *const c_void {
     &LCONV as *const Lconv as *const c_void
 }
-/// Seule la locale « C » est disponible : toute demande la renvoie.
-pub unsafe extern "win64" fn setlocale(_cat: i32, locale: *const u8) -> *const u8 {
-    if locale.is_null() {
-        return LOCALE_C.as_ptr();
+// ------------------------------------------------------------
+//  setlocale / _wsetlocale (#2175)
+// ------------------------------------------------------------
+//
+// Le comportement des fonctions du CRT reste celui de la locale « C »
+// (UTF-8 pour les conversions), mais setlocale accepte les noms de locale
+// documentés par l'UCRT et retient le nom de chaque catégorie :
+// - nom de locale IETF : `en-US`, `bs-Cyrl-BA` ;
+// - langue[_pays/région[.page de codes]] : `en_US.UTF-8`, `English_United
+//   States.1252`, `ja_JP.Utf-8` ;
+// - `.page de codes` seule : `.UTF8`, `.utf-8`, `.1252`, `.ACP`, `.OCP` ;
+// - "", "C", "POSIX" ;
+// - la forme composée rendue pour LC_ALL quand les catégories diffèrent :
+//   `LC_COLLATE=…;LC_CTYPE=…;LC_MONETARY=…;LC_NUMERIC=…;LC_TIME=…`.
+// Un nom hors de ces formes est refusé (NULL), comme sous Windows.
+//
+// Source : documentation publique de l'UCRT (setlocale, _wsetlocale ;
+// « Locale names, languages, and country/region strings » ; section
+// « UTF-8 support »). msvcp140 construit std::locale("en_US.UTF-8") par
+// setlocale(LC_ALL, nom) et lève « bad locale name » sur NULL (STL de
+// Microsoft, Apache 2.0, stl/src/locale.cpp) : c'est ce qui arrêtait Teams.
+
+/// LC_ALL, LC_COLLATE, LC_CTYPE, LC_MONETARY, LC_NUMERIC, LC_TIME.
+const LC_MAX: usize = 5;
+const LC_NAMES: [&str; LC_MAX] = [
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+];
+/// Longueur maximale acceptée d'un nom (LOCALE_NAME_MAX_LENGTH et marge
+/// pour la forme langue_pays.page).
+const LOCALE_NAME_MAX: usize = 130;
+
+/// Noms courants des catégories 1 à 5, et dernières chaînes rendues
+/// (chaque appel rend un pointeur valable jusqu'au suivant, comme l'UCRT).
+struct LocaleState {
+    names: [String; LC_MAX],
+    ret: Vec<u8>,
+    wret: Vec<u16>,
+}
+
+static LOCALE_STATE: std::sync::Mutex<Option<LocaleState>> = std::sync::Mutex::new(None);
+
+/// Au moins deux lettres, éventuellement séparées par des espaces ou des tirets
+/// (`american english`, `chinese-simplified`, `United States`).
+fn locale_words(s: &str) -> bool {
+    s.len() >= 2
+        && s.len() <= 64
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.chars()
+            .all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '-')
+}
+
+/// Page de codes après le point : chiffres, UTF8, UTF-8, ACP, OCP.
+fn locale_codepage(s: &str) -> bool {
+    (!s.is_empty() && s.len() <= 5 && s.bytes().all(|b| b.is_ascii_digit()))
+        || ["utf8", "utf-8", "acp", "ocp"]
+            .iter()
+            .any(|k| s.eq_ignore_ascii_case(k))
+}
+
+/// Nom de locale IETF : langue de 2 ou 3 lettres, puis sous-étiquettes
+/// alphanumériques de 2 à 8 caractères (`en-US`, `zh-Hans-CN`), avec un
+/// éventuel suffixe d'ordre de tri (`de-DE_phoneb`).
+fn locale_bcp47(s: &str) -> bool {
+    let (tag, sort) = s.split_once('_').unwrap_or((s, ""));
+    let mut parts = tag.split('-');
+    let lang = parts.next().unwrap_or("");
+    (2..=3).contains(&lang.len())
+        && lang.bytes().all(|b| b.is_ascii_alphabetic())
+        && tag.contains('-')
+        && parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+        && (sort.is_empty() || (sort.len() <= 8 && sort.bytes().all(|b| b.is_ascii_alphanumeric())))
+}
+
+/// Nom simple (non composé) accepté par setlocale.
+fn locale_name_ok(name: &str) -> bool {
+    if name.is_empty() || name == "C" || name == "POSIX" {
+        return true;
     }
-    let name = crate::dlls::cstr(locale);
+    if name.len() > LOCALE_NAME_MAX || name.contains(['=', ';']) {
+        return false;
+    }
+    if locale_bcp47(name) {
+        return true;
+    }
+    let (base, cp) = match name.rsplit_once('.') {
+        Some((b, c)) => (b, Some(c)),
+        None => (name, None),
+    };
+    if cp.is_some_and(|c| !locale_codepage(c)) {
+        return false;
+    }
+    if base.is_empty() {
+        return cp.is_some();
+    }
+    match base.split_once('_') {
+        Some((lang, country)) => locale_words(lang) && locale_words(country),
+        None => locale_words(base),
+    }
+}
+
+/// Nom retenu pour une catégorie : les noms neutres valent « C », comme
+/// avant #2175 ; les autres sont gardés tels que demandés.
+fn locale_stored(name: &str) -> String {
     if name.is_empty()
-        || name == "C"
         || name == "POSIX"
         || name.eq_ignore_ascii_case(".utf8")
         || name.eq_ignore_ascii_case(".ACP")
     {
-        LOCALE_C.as_ptr()
+        "C".to_string()
     } else {
-        std::ptr::null()
+        name.to_string()
     }
 }
-pub unsafe extern "win64" fn wsetlocale(_cat: i32, locale: *const u16) -> *const u16 {
-    if locale.is_null() {
+
+/// Applique `setlocale(cat, name)` (ou la lecture si `name` est `None`) et
+/// rend le nom résultant, `None` si la demande est refusée.
+fn locale_apply(cat: i32, name: Option<&str>) -> Option<String> {
+    if !(0..=LC_MAX as i32).contains(&cat) {
+        return None;
+    }
+    let mut guard = LOCALE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let st = guard.get_or_insert_with(|| LocaleState {
+        names: std::array::from_fn(|_| "C".to_string()),
+        ret: Vec::new(),
+        wret: Vec::new(),
+    });
+    if let Some(name) = name {
+        if cat == 0 && name.contains('=') {
+            // Forme composée : chaque catégorie nommée une fois au plus.
+            let mut next = st.names.clone();
+            for part in name.split(';').filter(|p| !p.is_empty()) {
+                let (key, value) = part.split_once('=')?;
+                let i = LC_NAMES.iter().position(|k| *k == key)?;
+                if !locale_name_ok(value) {
+                    return None;
+                }
+                next[i] = locale_stored(value);
+            }
+            st.names = next;
+        } else {
+            if !locale_name_ok(name) {
+                return None;
+            }
+            let v = locale_stored(name);
+            if cat == 0 {
+                st.names = std::array::from_fn(|_| v.clone());
+            } else {
+                st.names[cat as usize - 1] = v;
+            }
+        }
+    }
+    Some(if cat != 0 {
+        st.names[cat as usize - 1].clone()
+    } else if st.names.iter().all(|n| *n == st.names[0]) {
+        st.names[0].clone()
+    } else {
+        LC_NAMES
+            .iter()
+            .zip(st.names.iter())
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(";")
+    })
+}
+
+pub unsafe extern "win64" fn setlocale(cat: i32, locale: *const u8) -> *const u8 {
+    let name = (!locale.is_null()).then(|| crate::dlls::cstr(locale));
+    let Some(result) = locale_apply(cat, name.as_deref()) else {
+        crate::log_warn!(
+            "crt",
+            "setlocale({cat}, « {} ») refusé (NULL)",
+            name.as_deref().unwrap_or("")
+        );
+        return std::ptr::null();
+    };
+    if result == "C" {
+        return LOCALE_C.as_ptr();
+    }
+    let mut guard = LOCALE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let st = guard
+        .as_mut()
+        .expect("état de locale initialisé par locale_apply");
+    st.ret = result.into_bytes();
+    st.ret.push(0);
+    st.ret.as_ptr()
+}
+pub unsafe extern "win64" fn wsetlocale(cat: i32, locale: *const u16) -> *const u16 {
+    let name = (!locale.is_null()).then(|| crate::dlls::wstr(locale));
+    let Some(result) = locale_apply(cat, name.as_deref()) else {
+        crate::log_warn!(
+            "crt",
+            "_wsetlocale({cat}, « {} ») refusé (NULL)",
+            name.as_deref().unwrap_or("")
+        );
+        return std::ptr::null();
+    };
+    if result == "C" {
         return WLOCALE_C.as_ptr();
     }
-    let s = crate::dlls::wstr(locale);
-    if s.is_empty() || s == "C" {
-        WLOCALE_C.as_ptr()
-    } else {
-        std::ptr::null()
-    }
+    let mut guard = LOCALE_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let st = guard
+        .as_mut()
+        .expect("état de locale initialisé par locale_apply");
+    st.wret = result.encode_utf16().chain(std::iter::once(0)).collect();
+    st.wret.as_ptr()
 }
 pub extern "win64" fn lc_codepage_func() -> u32 {
     0
@@ -2180,10 +2362,78 @@ mod tests {
     }
 
     #[test]
+    fn noms_de_locale_documentes_2175() {
+        // Formes documentées par l'UCRT : acceptées.
+        for ok in [
+            "en_US.UTF-8",
+            "en_us.utf8",
+            "ja_JP.Utf-8",
+            ".UTF-8",
+            ".1252",
+            "en-US",
+            "bs-Cyrl-BA",
+            "de-DE_phoneb",
+            "English_United States.1252",
+            "american english",
+            "C",
+            "POSIX",
+            "",
+        ] {
+            assert!(locale_name_ok(ok), "{ok:?}");
+        }
+        // Formes invalides : refusées.
+        for bad in [
+            "12_??",
+            "en_US.UTF-16",
+            "en_US.",
+            "e",
+            ".",
+            "en_US=1",
+            "x".repeat(200).as_str(),
+        ] {
+            assert!(!locale_name_ok(bad), "{bad:?}");
+        }
+        // Comme msvcp140 pour std::locale("en_US.UTF-8") : sauvegarde,
+        // changement, lecture, restauration (forme composée comprise).
+        let _l = LOCALE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(locale_apply(0, Some("C")).as_deref(), Some("C"));
+        assert_eq!(
+            locale_apply(0, Some("en_US.UTF-8")).as_deref(),
+            Some("en_US.UTF-8")
+        );
+        assert_eq!(locale_apply(4, None).as_deref(), Some("en_US.UTF-8"));
+        assert_eq!(locale_apply(4, Some("C")).as_deref(), Some("C"));
+        let mixed = locale_apply(0, None).unwrap();
+        assert_eq!(
+            mixed,
+            "LC_COLLATE=en_US.UTF-8;LC_CTYPE=en_US.UTF-8;LC_MONETARY=en_US.UTF-8;LC_NUMERIC=C;LC_TIME=en_US.UTF-8"
+        );
+        assert_eq!(locale_apply(0, Some("C")).as_deref(), Some("C"));
+        assert_eq!(
+            locale_apply(0, Some(&mixed)).as_deref(),
+            Some(mixed.as_str())
+        );
+        assert_eq!(locale_apply(0, Some("LC_BIDON=C")), None);
+        assert_eq!(locale_apply(6, None), None);
+        unsafe {
+            let p = setlocale(0, b"en_US.UTF-8\0".as_ptr());
+            assert_eq!(crate::dlls::cstr(p), "en_US.UTF-8");
+            let w: Vec<u16> = "C".encode_utf16().chain([0]).collect();
+            assert_eq!(crate::dlls::wstr(wsetlocale(0, w.as_ptr())), "C");
+            assert!(setlocale(0, b"12_??\0".as_ptr()).is_null());
+            assert_eq!(crate::dlls::cstr(setlocale(0, std::ptr::null())), "C");
+        }
+    }
+
+    /// Les tests qui changent la locale du processus passent un à un.
+    static LOCALE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
     fn locale_c_et_conversions() {
+        let _l = LOCALE_TEST.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             assert!(!setlocale(0, b"\0".as_ptr()).is_null());
-            assert!(setlocale(0, b"fr_FR\0".as_ptr()).is_null());
+            assert!(setlocale(0, b"12_??\0".as_ptr()).is_null());
             let mut w = [0u16; 8];
             assert_eq!(mbstowcs(w.as_mut_ptr(), b"abc\0".as_ptr(), 8), 3);
             assert_eq!(&w[..4], &[97, 98, 99, 0]);

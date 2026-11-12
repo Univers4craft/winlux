@@ -366,6 +366,47 @@ pub unsafe extern "win64" fn fopen_s(
     }
 }
 
+/// Fichier temporaire anonyme de `tmpfile_s` (#2128), lu et écrit en
+/// binaire : créé dans le dossier temporaire de l'hôte puis effacé tout de
+/// suite, il disparaît à sa fermeture ou à la fin du programme. Rend le
+/// `FILE*` ou un code errno.
+pub(crate) fn open_tmpfile() -> Result<*mut c_void, i32> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir();
+    let mut last = 13;
+    for _ in 0..16 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let name = dir.join(format!(
+            "winlux-tmpfile-{}-{}-{nanos:08x}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&name)
+        {
+            Ok(f) => {
+                let _ = std::fs::remove_file(&name);
+                return Ok(register(Kind::Disk, Some(f)));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                last = match e.kind() {
+                    std::io::ErrorKind::NotFound => 2,
+                    std::io::ErrorKind::PermissionDenied => 13,
+                    _ => 13,
+                };
+                break;
+            }
+        }
+    }
+    Err(last)
+}
+
 pub unsafe extern "win64" fn fclose(p: *mut c_void) -> i32 {
     let s = match lookup(p) {
         Some(s) => s,

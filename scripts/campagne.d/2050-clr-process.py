@@ -9,3 +9,6 @@ ok("public static Process GetProcessById(int processId)" in (bcl / "Processus.cs
 ok("fn same_account" in (clr / "processus.rs").read_text(encoding="utf-8")
    and "os_process_zombie" in (clr / "processus.rs").read_text(encoding="utf-8"),
    "CLR : Process n'ouvre pas un autre compte et tient un zombie pour fini (#2050)")
+# #2071 : le pid 0 est le processus « Idle », comme sous Windows.
+ok('if (processId == Inactif) return new Process(Inactif, "Idle");' in (bcl / "Processus.cs").read_text(encoding="utf-8"),
+   "CLR : Process.GetProcessById(0) rend le processus Idle (#2071)")
