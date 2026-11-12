@@ -379,6 +379,10 @@ fn main() {
         playtime::start(&exe);
     }
     dlls::kernel32::init();
+    // Fichiers « effacés à la fermeture » d'un processus tué (#2040).
+    dlls::doomed::sweep();
+    // WINLUX_THREAD_DUMP (#2147) : rien sans la variable.
+    dlls::thread_ctl::install_dump();
     dlls::inherit::adopt();
     dlls::handle_broker::adopt();
     process::init_process(&image, &launch::windows_args(&rest));

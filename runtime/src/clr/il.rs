@@ -27,7 +27,8 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
-use super::tables::{TableId, Token};
+use super::tableaux;
+use super::tables::{CodedIndex, TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
 
@@ -261,6 +262,13 @@ pub struct Shared {
     initialized: Mutex<HashSet<TypeId>>,
     /// Champs statiques des types de la bibliothèque intégrée.
     external_statics: Mutex<HashMap<(usize, u32), Box<[u64; 4]>>>,
+    /// Champs statiques des types intégrés au moteur (String, Boolean…)
+    /// que notre mscorlib déclare, par nom complet : une seule case pour
+    /// toutes les assemblies (#1997).
+    builtin_statics: Mutex<HashMap<String, Box<[u64; 4]>>>,
+    /// Types intégrés dont le constructeur statique de notre mscorlib a
+    /// été lancé.
+    builtin_initialized: Mutex<HashSet<String>>,
     /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
     pub(super) fns: Mutex<FnTable>,
 }
@@ -360,6 +368,16 @@ impl Interpreter {
         }
     }
 
+    /// Comme `assembly_at`, pour un indice venu du code managé (une poignée
+    /// peut être forgée) : `None` au lieu de paniquer hors du domaine.
+    pub(super) fn try_assembly_at(&self, index: usize) -> Option<&Assembly> {
+        if index == self.current {
+            Some(&self.assembly)
+        } else {
+            self.parked.get(index)?.as_ref()
+        }
+    }
+
     /// Contexte générique de la méthode en cours.
     pub(super) fn current_gen(&self) -> Gen {
         self.frames
@@ -375,7 +393,7 @@ impl Interpreter {
     }
 
     /// Exécute une méthode d'une assembly quelconque du domaine.
-    fn execute_in(
+    pub(super) fn execute_in(
         &mut self,
         asm: usize,
         method_row: u32,
@@ -470,6 +488,12 @@ impl Interpreter {
             let namespace = self.assembly.get_string(td.namespace).to_string();
             let class = self.assembly.get_string(td.name).to_string();
             let name = self.assembly.get_string(md.name).to_string();
+            if let Some(r) = self.marshal_call(&namespace, &class, &name, &args, Some(&gen)) {
+                return match r {
+                    Ok(v) => ExecResult::Return(v),
+                    Err(e) => ExecResult::Exception(e),
+                };
+            }
             return match self.call_native(&namespace, &class, &name, args, &sig.param_types) {
                 Ok(v) => ExecResult::Return(v),
                 Err(e) => ExecResult::Exception(e),
@@ -488,8 +512,13 @@ impl Interpreter {
 
         let mut arg_kinds = Vec::with_capacity(sig.param_types.len() + 1);
         if sig.has_this() {
-            let value_this = owner
-                .is_some_and(|o| types::with_types(|reg| reg.get(o).is_some_and(|t| t.is_value)));
+            // System.Enum et System.ValueType sont des classes (ECMA-335
+            // §II.13) : leurs méthodes reçoivent l'objet encadré (#2009).
+            let value_this = owner.is_some_and(|o| {
+                o != types::TYPE_ENUM
+                    && o != types::TYPE_VALUETYPE
+                    && types::with_types(|reg| reg.get(o).is_some_and(|t| t.is_value))
+            });
             arg_kinds.push(if value_this { Kind::I } else { Kind::Ref });
         }
         for p in &sig.param_types {
@@ -590,6 +619,10 @@ impl Interpreter {
                 class,
                 name,
             } => {
+                // Marshal.SizeOf<T>() : T est un argument de la méthode.
+                if let Some(r) = self.marshal_call(&namespace, &class, &name, &args, Some(&gen)) {
+                    return r;
+                }
                 let params = self.get_method_sig(token).param_types;
                 self.call_native(&namespace, &class, &name, args, &params)
             }
@@ -598,18 +631,26 @@ impl Interpreter {
 
     /// Remplace la méthode appelée par la redéfinition du type réel de
     /// `this`.
-    fn devirtualize(&self, token: u32, this: *mut u8, target: &mut Target, gen: &mut Gen) {
+    pub(super) fn devirtualize(
+        &self,
+        token: u32,
+        this: *mut u8,
+        target: &mut Target,
+        gen: &mut Gen,
+    ) {
         let Some(type_id) = gc::type_of(this) else {
             return;
         };
         let name = self.method_name(token);
-        let argc = self.get_method_sig(token).param_types.len();
+        let params = self.get_method_sig(token).param_types;
+        let argc = params.len();
         let iface = match target {
             Target::Managed(asm, row) => self.interface_of(*asm, *row),
             _ => None,
         };
         let found = types::with_types(|reg| {
-            let (asm, tok, decl) = reg.find_override_of(type_id, &name, argc, iface.as_deref())?;
+            let (asm, tok, decl) =
+                reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
             Some((
                 asm,
                 tok,
@@ -662,6 +703,24 @@ impl Interpreter {
             return r;
         }
         if let Some(r) = self.reflection_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.array_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.member_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.file_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.registry_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.process_call(namespace, class, name, &args) {
+            return r;
+        }
+        if let Some(r) = self.marshal_call(namespace, class, name, &args, None) {
             return r;
         }
         match (namespace, class, name) {
@@ -950,15 +1009,17 @@ impl Interpreter {
         let Some(actual) = gc::type_of(obj) else {
             return true;
         };
+        if types::with_types(|reg| reg.get(target).is_some_and(|t| t.is_interface)) {
+            // Interfaces suivies par la table InterfaceImpl (#1975) ; un
+            // type sans définition connue reste accepté.
+            return self.implements(actual, target).unwrap_or(true);
+        }
         types::with_types(|reg| {
             let Some(t) = reg.get(target) else {
                 return true;
             };
-            // Les interfaces implémentées ne sont pas encore suivies, ni la
-            // hiérarchie des types de la bibliothèque intégrée : on accepte.
-            if t.is_interface {
-                return true;
-            }
+            // La hiérarchie des types de la bibliothèque intégrée n'est pas
+            // suivie : on accepte.
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
                 || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
@@ -983,6 +1044,9 @@ impl Interpreter {
         roots.extend(super::callbacks::roots());
         roots.extend(super::reflection::roots());
         for data in self.shared.external_statics.lock().unwrap().values() {
+            roots.extend(data.iter().map(|&w| w as usize));
+        }
+        for data in self.shared.builtin_statics.lock().unwrap().values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
         types::with_types(|reg| {
@@ -1013,6 +1077,18 @@ impl Interpreter {
         let Some(field) = self.resolve_field(token) else {
             // Champ statique de la bibliothèque intégrée : emplacement propre
             // au jeton.
+            // Type intégré au moteur que notre mscorlib déclare (String,
+            // Boolean…) : son constructeur statique n'était jamais lancé et
+            // chaque assembly avait sa propre case, d'où String.Empty et
+            // Boolean.TrueString nuls (#1997).
+            if let Some((class, field)) = self.builtin_field(token) {
+                self.ensure_builtin_initialized(&class)?;
+                let mut statics = self.shared.builtin_statics.lock().unwrap();
+                let slot = statics
+                    .entry(format!("System.{class}::{field}"))
+                    .or_insert_with(|| Box::new([0u64; 4]));
+                return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
+            }
             let mut statics = self.shared.external_statics.lock().unwrap();
             let slot = statics
                 .entry((self.current, token))
@@ -1027,6 +1103,91 @@ impl Interpreter {
         let ptr =
             types::with_types(|reg| reg.static_field_ptr(field.owner, field.info.offset, size));
         Ok((ptr, field.info.kind))
+    }
+
+    /// Classe et nom du champ quand le jeton désigne un champ d'un type
+    /// intégré au moteur (System.String, System.Boolean…).
+    fn builtin_field(&self, token: u32) -> Option<(String, String)> {
+        let a = &self.assembly;
+        let row = Token(token).rid();
+        let (name, ns, class) = match Token(token).table() {
+            t if t == TableId::Field as u8 => {
+                let owner = self.domain[self.current]
+                    .field_owner
+                    .get(row as usize)
+                    .copied()
+                    .unwrap_or(0);
+                if owner == 0 {
+                    return None;
+                }
+                let td = a.get_type_def(owner);
+                (a.get_field(row).name, td.namespace, td.name)
+            }
+            t if t == TableId::MemberRef as u8 => {
+                let mr = a.get_member_ref(row);
+                match CodedIndex::MemberRefParent.decode(mr.class) {
+                    (Some(TableId::TypeRef), prow) => {
+                        let tr = a.get_type_ref(prow);
+                        (mr.name, tr.namespace, tr.name)
+                    }
+                    (Some(TableId::TypeDef), prow) => {
+                        let td = a.get_type_def(prow);
+                        (mr.name, td.namespace, td.name)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        if a.get_string(ns) != "System" {
+            return None;
+        }
+        let class = a.get_string(class);
+        types::with_types(|reg| reg.find_by_name("System", class))
+            .filter(|&id| id < types::FIRST_USER_TYPE)?;
+        Some((class.to_string(), a.get_string(name).to_string()))
+    }
+
+    /// Lance une seule fois le constructeur statique que notre mscorlib
+    /// donne à un type intégré au moteur (#1997).
+    fn ensure_builtin_initialized(&mut self, class: &str) -> Result<(), ClrException> {
+        if !self
+            .shared
+            .builtin_initialized
+            .lock()
+            .unwrap()
+            .insert(class.to_string())
+        {
+            return Ok(());
+        }
+        let Some(asm) = self
+            .domain
+            .iter()
+            .position(|info| info.name == super::domain::CORLIB)
+        else {
+            return Ok(());
+        };
+        let a = self.assembly_at(asm);
+        let cctor = (1..=a.row_count(TableId::TypeDef)).find_map(|row| {
+            let td = a.get_type_def(row);
+            if a.get_string(td.namespace) != "System" || a.get_string(td.name) != class {
+                return None;
+            }
+            a.type_methods(row).find(|&m| {
+                let md = a.get_method_def(m);
+                md.is_cctor() && md.rva != 0 && a.get_string(md.name) == ".cctor"
+            })
+        });
+        let Some(m) = cctor else {
+            return Ok(());
+        };
+        self.cctor_depth += 1;
+        let r = self.execute_in(asm, m, Vec::new(), Gen::default());
+        self.cctor_depth -= 1;
+        match r {
+            ExecResult::Exception(e) => Err(e),
+            ExecResult::Return(_) => Ok(()),
+        }
     }
 
     /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.
@@ -1478,10 +1639,23 @@ impl Interpreter {
                     } else {
                         let name = self.method_name(token);
                         let argc = sig.param_types.len();
+                        let iface = match &callee.target {
+                            Target::Managed(asm, row) => self.interface_of(*asm, *row),
+                            _ => None,
+                        };
+                        // Seule une redéfinition de la méthode appelée (même
+                        // signature) compte : Int32.Equals(int) ne remplace
+                        // pas Object.Equals(object) (#1956).
                         let own = types::with_types(|reg| {
                             let t = reg.get(ct)?;
-                            let (asm, tok) = reg.find_own_method(ct, &name, argc)?;
-                            Some((asm, tok, t.type_args.clone()))
+                            let (asm, tok, decl) = reg.find_override_of(
+                                ct,
+                                &name,
+                                argc,
+                                iface.as_deref(),
+                                &sig.param_types,
+                            )?;
+                            (decl == ct).then(|| (asm, tok, t.type_args.clone()))
                         });
                         if let Some((asm, tok, t)) = own {
                             // Méthode du type valeur lui-même : `this` reste
@@ -1536,6 +1710,15 @@ impl Interpreter {
                 let f = frame!();
                 let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
                 let mut args = f.eval_stack.split_off(split);
+                // Une chaîne est immuable et de taille variable : son
+                // constructeur rend la chaîne entière (#1956).
+                if type_id == types::TYPE_STRING {
+                    let made = bcl::new_string(&args, &sig.param_types);
+                    push!(made.map_err(|kind| {
+                        exception(kind, "String::.ctor : arguments refusés")
+                    })?);
+                    return Ok(StepResult::Continue);
+                }
                 let kind = self.kind_of_type(type_id);
                 let obj = if kind == Kind::Ref {
                     self.ensure_layout(type_id);
@@ -1821,7 +2004,9 @@ impl Interpreter {
                 let (target, _) = self.kind_of_token(tok1());
                 let obj = pop!();
                 let fits = match obj {
-                    Value::Ref(p) => self.is_instance(p, target),
+                    Value::Ref(p) => self
+                        .array_cast(tok1(), p)
+                        .unwrap_or_else(|| self.is_instance(p, target)),
                     _ => true,
                 };
                 if fits {
@@ -1880,7 +2065,10 @@ impl Interpreter {
                 if kind == Kind::Ref {
                     // unbox.any d'un type référence : castclass.
                     if let Value::Ref(p) = obj {
-                        if !self.is_instance(p, id) {
+                        let fits = self
+                            .array_cast(tok1(), p)
+                            .unwrap_or_else(|| self.is_instance(p, id));
+                        if !fits {
                             return Err(invalid_cast());
                         }
                     }
@@ -2016,6 +2204,12 @@ impl Interpreter {
                 let token = tok1();
                 let handle = match self.resolve_type_token(token) {
                     Some(id) => id as i64,
+                    // Champ : l'assembly qui le déclare voyage avec le
+                    // jeton, car `RuntimeHelpers.InitializeArray` s'exécute
+                    // dans le contexte de notre mscorlib (#1965).
+                    None if Token(token).table() == TableId::Field as u8 => {
+                        tableaux::field_handle(self.current, token)
+                    }
                     None => token as i64,
                 };
                 push!(Value::I64(handle));

@@ -107,6 +107,15 @@ pub unsafe extern "win64" fn rtl_allocate_heap(
 pub unsafe extern "win64" fn rtl_free_heap(_heap: usize, _flags: u32, p: *mut c_void) -> u8 {
     crate::dlls::kernel32::heap_free(0, 0, p) as u8
 }
+/// RtlDisownModuleHeapAllocation(HeapHandle, Address) -> NTSTATUS
+/// (#2121). Signature d'après WIL (microsoft/wil, licence MIT,
+/// result_macros.h, `ProcessHeapAlloc`) : un module déclare qu'un bloc du
+/// tas qu'il garde jusqu'à la fin du processus n'est pas une fuite, pour
+/// les détecteurs de fuites par module. Winlux n'en a pas : le bloc reste
+/// valide et intact, l'appel réussit.
+pub extern "win64" fn rtl_disown_module_heap_allocation(_heap: usize, _address: usize) -> i32 {
+    0 // STATUS_SUCCESS
+}
 pub unsafe extern "win64" fn rtl_reallocate_heap(
     _heap: usize,
     flags: u32,
@@ -1473,7 +1482,7 @@ pub unsafe extern "win64" fn nt_create_file(
                     "NtCreateFile({}) : effacé à la fermeture",
                     linux_path.display()
                 );
-                crate::dlls::lock(super::kernel32::delete_on_close()).insert(h, linux_path);
+                crate::dlls::doomed::register(h, linux_path);
             }
             if !io.is_null() {
                 (io as *mut u64).write(0);
@@ -2654,6 +2663,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlNtStatusToDosError" => fn rtl_nt_status_to_dos_error,
         "RtlAllocateHeap" => fn rtl_allocate_heap,
         "RtlFreeHeap" => fn rtl_free_heap,
+        "RtlDisownModuleHeapAllocation" => fn rtl_disown_module_heap_allocation,
         "RtlReAllocateHeap" => fn rtl_reallocate_heap,
         "RtlInitUnicodeString" => fn rtl_init_unicode_string,
         "RtlFormatCurrentUserKeyPath" => fn rtl_format_current_user_key_path,
@@ -3078,5 +3088,20 @@ mod ouvertures_tests {
             object_name_for_kernel32("\\BaseNamedObjects\\evt"),
             "Global\\evt"
         );
+    }
+}
+
+#[cfg(test)]
+mod disown_tests {
+    /// #2121 : WIL résout RtlDisownModuleHeapAllocation par GetProcAddress
+    /// et l'appelle sur chaque bloc gardé ; le bloc reste utilisable.
+    #[test]
+    fn bloc_desavoue_reste_valide() {
+        let f = crate::dlls::lookup("ntdll", "RtlDisownModuleHeapAllocation")
+            .expect("ntdll!RtlDisownModuleHeapAllocation");
+        let f: extern "win64" fn(usize, usize) -> i32 = unsafe { std::mem::transmute(f) };
+        let mut bloc = vec![7u8; 32];
+        assert_eq!(f(0, bloc.as_mut_ptr() as usize), 0);
+        assert!(bloc.iter().all(|&b| b == 7));
     }
 }

@@ -77,7 +77,7 @@ run() {
 }
 
 run hello32
-echo "hello32 : programme x86 lancé, 21 vérifications passées"
+echo "hello32 : programme x86 lancé, 25 vérifications passées (dont Vulkan sans pilote 32 bits, #1951)"
 run hello32_reloc
 echo "hello32_reloc : image déplacée sous 2 Go, relocations HIGHLOW"
 run hello32 WINLUX_WOW32_NO_FSGSBASE=1
@@ -130,7 +130,7 @@ if test -f "$out/crt32.exe"; then
             exit 1
         fi
     done
-    echo "crt32 : CRT msvcrt 32 bits, 41 vérifications (printf de MinGW et de msvcrt)"
+    echo "crt32 : CRT msvcrt 32 bits, 44 vérifications (printf de MinGW et de msvcrt)"
 else
     echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
 fi

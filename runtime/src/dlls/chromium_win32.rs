@@ -626,6 +626,12 @@ pub extern "win64" fn SetWinEventHook(
         return 0;
     }
     let handle = NEXT_WIN_EVENT_HOOK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if crate::dlls::user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] SetWinEventHook({min:#06x}..{max:#06x}) -> {handle:#x}, fil {}",
+            crate::dlls::kernel32::get_current_thread_id()
+        );
+    }
     lock_hooks().push(WinEventHook {
         handle,
         min,
@@ -641,6 +647,12 @@ pub extern "win64" fn UnhookWinEvent(hook: usize) -> i32 {
     let before = hooks.len();
     hooks.retain(|h| h.handle != hook);
     lock_win_events().retain(|c| c.handle != hook);
+    if crate::dlls::user32::window_diag() {
+        eprintln!(
+            "winlux[fenetre] UnhookWinEvent({hook:#x}) : {} crochet(s) restant(s)",
+            hooks.len()
+        );
+    }
     i32::from(hooks.len() != before)
 }
 
@@ -712,6 +724,12 @@ pub unsafe fn deliver_win_events() {
         // Décroché entre-temps : plus de rappel.
         if !lock_hooks().iter().any(|h| h.handle == c.handle) {
             continue;
+        }
+        if crate::dlls::user32::window_diag() {
+            eprintln!(
+                "winlux[fenetre] événement {:#06x} sur {:#x} livré au crochet {:#x}",
+                c.event, c.hwnd, c.handle
+            );
         }
         let f: WinEventProc = std::mem::transmute(c.proc_);
         f(c.handle, c.event, c.hwnd, 0, 0, tid, c.time);

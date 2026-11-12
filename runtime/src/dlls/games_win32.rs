@@ -1453,9 +1453,24 @@ unsafe extern "win64" fn WSASendTo(
     flags: u32,
     to: *const u8,
     tolen: i32,
-    _ovl: usize,
-    _cb: usize,
+    ovl: usize,
+    cb: usize,
 ) -> i32 {
+    // Avec OVERLAPPED : fin signalée par l'OVERLAPPED, l'événement et le
+    // port, comme sous Windows (#2164).
+    if let Some(rc) = crate::dlls::ws2_32::wsa_send_to_overlapped(
+        s,
+        bufs as usize,
+        count,
+        sent,
+        flags,
+        to,
+        tolen,
+        ovl,
+        cb,
+    ) {
+        return rc;
+    }
     if bufs.is_null() {
         crate::dlls::ws2_32::wsa_set_last_error(10014);
         return -1;
@@ -1482,9 +1497,24 @@ unsafe extern "win64" fn WSARecvFrom(
     flags: *mut u32,
     from: *mut u8,
     fromlen: *mut i32,
-    _ovl: usize,
-    _cb: usize,
+    ovl: usize,
+    cb: usize,
 ) -> i32 {
+    // Avec OVERLAPPED : jamais de lecture bloquante, WSA_IO_PENDING tant
+    // qu'aucun datagramme n'est là (#2164).
+    if let Some(rc) = crate::dlls::ws2_32::wsa_recv_from_overlapped(
+        s,
+        bufs as usize,
+        count,
+        recvd,
+        flags,
+        from,
+        fromlen,
+        ovl,
+        cb,
+    ) {
+        return rc;
+    }
     if bufs.is_null() || count == 0 {
         crate::dlls::ws2_32::wsa_set_last_error(10014);
         return -1;
@@ -1548,26 +1578,31 @@ pub fn dbghelp_exports() -> Exports {
     }
 }
 
+/// PathAppendW : ajoute `more` à `path` avec un seul séparateur, résultat
+/// canonique (« . » et « .. » résolus, comme PathCombine). Un résultat qui
+/// ne tient pas dans MAX_PATH rend FALSE sans toucher au tampon, au lieu
+/// d'être tronqué (#2042).
 unsafe extern "win64" fn PathAppendW(path: *mut u16, more: *const u16) -> i32 {
-    if path.is_null() {
+    if path.is_null() || more.is_null() {
         return 0;
     }
-    let base = crate::dlls::wstr(path);
-    let extra = if more.is_null() {
-        String::new()
-    } else {
-        crate::dlls::wstr(more)
-    };
-    let extra = extra.trim_start_matches(['\\', '/']);
-    let joined = if extra.is_empty() {
-        base
-    } else if base.is_empty() {
-        extra.to_string()
-    } else {
-        format!("{}\\{}", base.trim_end_matches(['\\', '/']), extra)
-    };
-    let w: Vec<u16> = joined.encode_utf16().take(259).chain([0]).collect();
-    std::ptr::copy_nonoverlapping(w.as_ptr(), path, w.len());
+    let extra: Vec<u16> = crate::dlls::wstr(more)
+        .trim_start_matches(['\\', '/'])
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    let joined = crate::dlls::shlwapi::path_combine_units(path, extra.as_ptr());
+    crate::trace!(
+        "PathAppendW({:?}, {:?}) -> {:?}",
+        crate::dlls::wstr(path),
+        crate::dlls::wstr(more),
+        String::from_utf16_lossy(&joined)
+    );
+    if joined.len() >= 260 {
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(joined.as_ptr(), path, joined.len());
+    *path.add(joined.len()) = 0;
     1
 }
 /// Recopie l'URL (déjà canonique pour les usages des jeux : http(s)://…).
@@ -1821,6 +1856,37 @@ pub fn rpcrt4_exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Acrobat (#2042) : PathAppendW canonique, refus au-delà de MAX_PATH.
+    #[test]
+    fn path_append_canonique_et_borne() {
+        let w = |t: &str| t.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        unsafe {
+            let mut buf = vec![0u16; 260];
+            let base = w("C:\\Users\\a\\AppData");
+            buf[..base.len()].copy_from_slice(&base);
+            assert_eq!(
+                super::PathAppendW(buf.as_mut_ptr(), w("\\Roaming\\.\\x\\..\\Adobe").as_ptr()),
+                1
+            );
+            assert_eq!(
+                crate::dlls::wstr(buf.as_ptr()),
+                "C:\\Users\\a\\AppData\\Roaming\\Adobe"
+            );
+            let mut vide = vec![0u16; 260];
+            assert_eq!(
+                super::PathAppendW(vide.as_mut_ptr(), w("Adobe").as_ptr()),
+                1
+            );
+            assert_eq!(crate::dlls::wstr(vide.as_ptr()), "Adobe");
+            let long = "x".repeat(250);
+            assert_eq!(super::PathAppendW(buf.as_mut_ptr(), w(&long).as_ptr()), 0);
+            assert_eq!(
+                crate::dlls::wstr(buf.as_ptr()),
+                "C:\\Users\\a\\AppData\\Roaming\\Adobe"
+            );
+        }
+    }
 
     #[test]
     fn md5_vecteurs_rfc1321() {

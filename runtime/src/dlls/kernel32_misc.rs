@@ -38,19 +38,21 @@ pub unsafe extern "win64" fn set_thread_error_mode(mode: u32, previous: *mut u32
     THREAD_ERROR_MODE.with(|value| value.set(Some(mode)));
     1
 }
+/// Réglages de rapport d'erreurs du processus (#2202) : WerSetFlags les
+/// mémorise, WerGetFlags les rend, les deux avec S_OK comme le documente
+/// werapi.h. Aucun rapport n'est envoyé, faute de service WER.
+static WER_FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub unsafe extern "win64" fn wer_get_flags(_process: usize, flags: *mut u32) -> i32 {
     if flags.is_null() {
         return 0x80004003u32 as i32;
     }
-    *flags = 0;
-    // There is no Windows Error Reporting service. Let optional callers handle
-    // an explicit unsupported HRESULT instead of pretending reports are sent.
-    crate::trace!("WerGetFlags: service WER non disponible");
-    0x80004001u32 as i32
+    *flags = WER_FLAGS.load(std::sync::atomic::Ordering::Relaxed);
+    0
 }
-pub extern "win64" fn wer_set_flags(_flags: u32) -> i32 {
-    crate::trace!("WerSetFlags: service WER non disponible, journal local conservé");
-    0x80004001u32 as i32
+pub extern "win64" fn wer_set_flags(flags: u32) -> i32 {
+    WER_FLAGS.store(flags, std::sync::atomic::Ordering::Relaxed);
+    0
 }
 
 fn is_console(h: usize) -> bool {
@@ -452,6 +454,23 @@ pub unsafe extern "win64" fn output_debug_string_a(s: *const u8) {
 pub unsafe extern "win64" fn output_debug_string_w(s: *const u16) {
     if !s.is_null() {
         debug_string(crate::dlls::wstr(s));
+    }
+}
+/// GetFirmwareType : FirmwareTypeUefi (2) quand le noyau a démarré par UEFI
+/// (/sys/firmware/efi présent), FirmwareTypeBios (1) sinon (#1999).
+pub unsafe extern "win64" fn get_firmware_type(out: *mut u32) -> i32 {
+    if out.is_null() {
+        crate::dlls::kernel32::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    *out = firmware_type();
+    1
+}
+fn firmware_type() -> u32 {
+    if std::path::Path::new("/sys/firmware/efi").is_dir() {
+        2
+    } else {
+        1
     }
 }
 /// Fonctionnalités processeur (PF_*) : on répond pour celles qu'impose x86-64
@@ -1520,7 +1539,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetUnhandledExceptionFilter" => fn set_unhandled_exception_filter, "UnhandledExceptionFilter" => fn unhandled_exception_filter,
         "IsDebuggerPresent" => fn is_debugger_present,
         "OutputDebugStringA" => fn output_debug_string_a, "OutputDebugStringW" => fn output_debug_string_w,
-        "IsProcessorFeaturePresent" => fn is_processor_feature_present, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
+        "IsProcessorFeaturePresent" => fn is_processor_feature_present, "GetFirmwareType" => fn get_firmware_type, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
         "lstrlenA" => fn lstrlen_a, "lstrlenW" => fn lstrlen_w, "lstrcpyA" => fn lstrcpy_a, "lstrcpyW" => fn lstrcpy_w,
         "lstrcatA" => fn lstrcat_a, "lstrcatW" => fn lstrcat_w, "lstrcmpA" => fn lstrcmp_a, "lstrcmpiA" => fn lstrcmpi_a,
         "lstrcmpW" => fn lstrcmp_w, "lstrcmpiW" => fn lstrcmpi_w,
@@ -1554,6 +1573,39 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Teams (#2202) : WerSetFlags puis WerGetFlags rendent S_OK et les drapeaux.
+    #[test]
+    fn drapeaux_wer_2202() {
+        unsafe {
+            assert_eq!(
+                super::wer_get_flags(usize::MAX, std::ptr::null_mut()),
+                0x80004003u32 as i32
+            );
+            assert_eq!(super::wer_set_flags(4), 0);
+            let mut f = 0xFFFF_FFFFu32;
+            assert_eq!(super::wer_get_flags(usize::MAX, &mut f), 0);
+            assert_eq!(f, 4);
+            assert_eq!(super::wer_set_flags(0), 0);
+            assert_eq!(super::wer_get_flags(usize::MAX, &mut f), 0);
+            assert_eq!(f, 0);
+        }
+    }
+
+    /// Steam, utility storage (#1999) : BIOS ou UEFI selon le démarrage.
+    #[test]
+    fn type_de_micrologiciel() {
+        unsafe {
+            let mut t = 0u32;
+            assert_eq!(super::get_firmware_type(&mut t), 1);
+            let attendu = if std::path::Path::new("/sys/firmware/efi").is_dir() {
+                2
+            } else {
+                1
+            };
+            assert_eq!(t, attendu);
+        }
+    }
+
     /// Spotify et Acrobat (#1832) : noms de paquet et réponse sans paquet.
     #[test]
     fn noms_de_paquet_appmodel() {

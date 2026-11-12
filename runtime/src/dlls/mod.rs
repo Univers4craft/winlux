@@ -52,6 +52,8 @@ pub mod crt_proc;
 pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
+pub mod crt_secure;
+pub mod crt_secure_reste;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
@@ -87,6 +89,7 @@ pub mod dinput8;
 pub mod dirwatch;
 pub mod discord_win32;
 pub mod displaymode;
+pub mod doomed;
 pub mod dpapi;
 pub mod dplayx;
 pub mod dpnet;
@@ -102,10 +105,12 @@ pub mod dxgi;
 pub(crate) mod dxgi_private;
 pub mod dxva2;
 pub mod electron_win32;
+pub mod enum_variant;
 pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod fiber64;
+pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -180,12 +185,15 @@ pub mod mscoree;
 pub mod msctf_profiles;
 pub mod mshwgst;
 pub mod msvcp140;
+pub mod msvcp140_1;
 pub mod msvcrt;
 pub mod msxml;
 pub mod msxml_dom;
 pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
+pub mod netfw;
+pub mod netfw2;
 pub mod netlistmgr;
 pub mod nls;
 pub mod normaliz;
@@ -247,10 +255,12 @@ pub mod shlwapi;
 pub mod shlwapi_path;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod storage_appdata;
 pub mod sysdlls;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -441,6 +451,8 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e.extend(crt_releve::exports());
+            e.extend(crt_secure::exports());
+            e.extend(crt_secure_reste::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -1136,15 +1148,13 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: cabinet_lz::cabinet_exports(),
                 handle: 0,
             },
-            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792) ;
-            // icu.dll (Windows 10 1903+) exporte les mêmes noms.
+            // Convertisseurs de l'ICU de Windows (Qt6Core d'OBS, #1792).
+            // Surtout pas d'icu.dll : le runtime .NET la charge en premier
+            // et exige toute l'API ICU (u_charsToUChars, ucol_*, …) ; une
+            // icu.dll partielle fait avorter Paint.NET au démarrage, alors
+            // qu'en son absence .NET retombe sur les API NLS (#2056).
             Builtin {
                 name: "icuuc",
-                exports: icuuc::exports(),
-                handle: 0,
-            },
-            Builtin {
-                name: "icu",
                 exports: icuuc::exports(),
                 handle: 0,
             },
@@ -1272,6 +1282,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "msvcp140",
                 exports: msvcp140::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "msvcp140_1",
+                exports: msvcp140_1::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1469,6 +1484,8 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(lot_f)
         // discord_utils.node (#1823).
         .chain(discord_win32::all())
+        // ms-teams.exe et ses DLL (#2110).
+        .chain(teams_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1779,7 +1796,12 @@ pub fn prefers_real_file(normalized: &str) -> bool {
     // (FileZilla, wxWidgets…) en a besoin en entier (#783).
     matches!(
         normalized,
-        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+        "msvcp140"
+            | "msvcp140_1"
+            | "libstdc++-6"
+            | "libgcc_s_seh-1"
+            | "libgcc_s_dw2-1"
+            | "libwinpthread-1"
     )
 }
 

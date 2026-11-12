@@ -14,7 +14,7 @@ using System.Runtime.CompilerServices;
 
 namespace System
 {
-    public abstract class Type : MemberInfo
+    public abstract partial class Type : MemberInfo
     {
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern Type GetTypeFromHandle(RuntimeTypeHandle handle);
@@ -131,7 +131,7 @@ namespace System
         public Version(int major, int minor)
         {
             if (major < 0 || minor < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _major = major;
             _minor = minor;
             _build = -1;
@@ -141,14 +141,14 @@ namespace System
         public Version(int major, int minor, int build) : this(major, minor)
         {
             if (build < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _build = build;
         }
 
         public Version(int major, int minor, int build, int revision) : this(major, minor, build)
         {
             if (revision < 0)
-                throw new ArgumentOutOfRangeException("Version's parameters must be greater than or equal to zero.");
+                throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _revision = revision;
         }
 
@@ -226,7 +226,18 @@ namespace System
     public class ArgumentOutOfRangeException : ArgumentException
     {
         public ArgumentOutOfRangeException() { }
-        public ArgumentOutOfRangeException(string message) : base(message) { }
+        public ArgumentOutOfRangeException(string paramName)
+            : base(WithParam("Specified argument was out of the range of valid values.", paramName)) { }
+
+        public ArgumentOutOfRangeException(string paramName, string message)
+            : base(WithParam(message, paramName)) { }
+
+        private static string WithParam(string message, string paramName)
+        {
+            if (string.IsNullOrEmpty(paramName))
+                return message;
+            return string.Concat(message, "\r\nParameter name: ", paramName);
+        }
     }
 }
 
@@ -236,23 +247,66 @@ namespace System.IO
     {
         public IOException() { }
         public IOException(string message) : base(message) { }
+        public IOException(string message, Exception innerException) : base(message, innerException) { }
+        public IOException(string message, int hresult) : base(message) { }
     }
 
     public class FileNotFoundException : IOException
     {
+        private readonly string _fichier;
+
         public FileNotFoundException() { }
         public FileNotFoundException(string message) : base(message) { }
+        public FileNotFoundException(string message, Exception innerException) : base(message, innerException) { }
+        public FileNotFoundException(string message, string fileName) : base(message) { _fichier = fileName; }
+        public FileNotFoundException(string message, string fileName, Exception innerException) : base(message, innerException) { _fichier = fileName; }
+
+        public string FileName { get { return _fichier; } }
     }
 }
 
 namespace System.Reflection
 {
-    public abstract class MemberInfo
+    public abstract class MemberInfo : ICustomAttributeProvider
     {
         public abstract string Name { get; }
+
+        // Type qui déclare le membre ; le moteur le fixe pour les membres
+        // qu'il rend (#2008).
+        public virtual Type DeclaringType { get { return null; } }
+        public virtual Type ReflectedType { get { return DeclaringType; } }
+        public virtual MemberTypes MemberType { get { return MemberTypes.Custom; } }
+
+        // Attributs personnalisés, construits à chaque appel comme le fait
+        // .NET.
+        internal virtual object[] AttributsBruts() { return new object[0]; }
+
+        public virtual object[] GetCustomAttributes(bool inherit) { return AttributsBruts(); }
+
+        public virtual object[] GetCustomAttributes(Type attributeType, bool inherit)
+        {
+            if ((object)attributeType == null) throw new ArgumentNullException("attributeType");
+            return Rtti.Filtrer(GetCustomAttributes(inherit), attributeType);
+        }
+
+        public virtual bool IsDefined(Type attributeType, bool inherit)
+        {
+            return GetCustomAttributes(attributeType, inherit).Length != 0;
+        }
+
+        public static bool operator ==(MemberInfo left, MemberInfo right)
+        {
+            if ((object)left == null) return (object)right == null;
+            return left.Equals(right);
+        }
+
+        public static bool operator !=(MemberInfo left, MemberInfo right) { return !(left == right); }
+
+        public override bool Equals(object obj) { return base.Equals(obj); }
+        public override int GetHashCode() { return base.GetHashCode(); }
     }
 
-    public abstract class Assembly
+    public abstract partial class Assembly
     {
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern Assembly GetExecutingAssembly();

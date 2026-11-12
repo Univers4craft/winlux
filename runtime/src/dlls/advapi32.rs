@@ -719,6 +719,21 @@ pub unsafe extern "win64" fn reg_delete_key_value_w(
 
 // ── Suppression, copie, renommage de clés ──────────────────────────
 
+/// RegDisableReflectionKey / RegEnableReflectionKey : la réflexion WOW64 du
+/// registre n'existe plus depuis Windows 7 et Winlux n'en a pas ; succès
+/// sans effet (#2030).
+pub extern "win64" fn reg_set_reflection_key(_key: usize) -> u32 {
+    0
+}
+/// RegQueryReflectionKey : la réflexion est toujours désactivée (#2030).
+pub unsafe extern "win64" fn reg_query_reflection_key(_key: usize, disabled: *mut i32) -> u32 {
+    if disabled.is_null() {
+        return 87; // ERROR_INVALID_PARAMETER
+    }
+    *disabled = 1;
+    0
+}
+
 /// RegDeleteKey : la clé doit exister et ne plus avoir de sous-clé.
 fn delete_key_impl(root: usize, sub: &str) -> i32 {
     if sub.trim_matches('\\').is_empty() {
@@ -919,6 +934,12 @@ pub unsafe extern "win64" fn reg_notify_change_key_value(
         if event == 0 {
             return ERROR_INVALID_PARAMETER;
         }
+        // L'abonnement est une E/S asynchrone (NtNotifyChangeKey) : comme
+        // toute E/S qui reçoit un événement, il le remet à zéro en partant.
+        // Chromium réarme avec un événement à réinitialisation manuelle
+        // resté signalé : sans cette remise à zéro, il relisait sa
+        // configuration DNS en boucle, plus de mille fois par seconde (#1954).
+        crate::dlls::kernel32::reset_event(event);
         if !watch_key(handle, event) {
             return ERROR_NOT_ENOUGH_MEMORY;
         }
@@ -1714,6 +1735,8 @@ pub fn exports() -> crate::dlls::Exports {
      "RegDeleteKeyValueA"=>fn reg_delete_key_value_a,"RegDeleteKeyValueW"=>fn reg_delete_key_value_w,
      "RegDeleteKeyA"=>fn reg_delete_key_a,"RegDeleteKeyW"=>fn reg_delete_key_w,
      "RegDeleteKeyExA"=>fn reg_delete_key_ex_a,"RegDeleteKeyExW"=>fn reg_delete_key_ex_w,
+     "RegDisableReflectionKey"=>fn reg_set_reflection_key,"RegEnableReflectionKey"=>fn reg_set_reflection_key,
+     "RegQueryReflectionKey"=>fn reg_query_reflection_key,
      "RegDeleteTreeA"=>fn reg_delete_tree_a,"RegDeleteTreeW"=>fn reg_delete_tree_w,
      "RegCopyTreeA"=>fn reg_copy_tree_a,"RegCopyTreeW"=>fn reg_copy_tree_w,
      "RegRenameKey"=>fn reg_rename_key,"RegNotifyChangeKeyValue"=>fn reg_notify_change_key_value,
@@ -1732,6 +1755,36 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
     use std::ffi::CString;
+
+    /// SteamService (#2030, #2029) et steamwebhelper (#2031) : réflexion du
+    /// registre sans effet, GetExplicitEntriesFromAclA et oleaut32 #313.
+    #[test]
+    fn reflexion_acl_a_et_ordinal_313() {
+        assert_eq!(reg_set_reflection_key(0x8000_0002), 0);
+        let mut off = 0i32;
+        assert_eq!(
+            unsafe { reg_query_reflection_key(0x8000_0002, &mut off) },
+            0
+        );
+        assert_eq!(off, 1);
+        for n in [
+            "RegDisableReflectionKey",
+            "RegEnableReflectionKey",
+            "RegQueryReflectionKey",
+        ] {
+            assert!(crate::dlls::lookup("advapi32", n).is_some(), "{n}");
+        }
+        assert_eq!(
+            crate::dlls::lookup("advapi32", "GetExplicitEntriesFromAclA"),
+            crate::dlls::lookup("advapi32", "GetExplicitEntriesFromAclW")
+        );
+        assert!(crate::dlls::lookup("advapi32", "GetExplicitEntriesFromAclA").is_some());
+        assert_eq!(
+            crate::dlls::lookup("oleaut32", "#313"),
+            crate::dlls::lookup("oleaut32", "VarBstrCat")
+        );
+        assert!(crate::dlls::lookup("oleaut32", "#313").is_some());
+    }
 
     /// #1300 : réarmer RegNotifyChangeKeyValue ne crée plus un thread par
     /// appel ; l'événement est signalé au changement suivant du registre.
@@ -1798,6 +1851,9 @@ mod tests {
                 0
             );
             assert!(!lock(watches()).iter().any(|w| w.0 == h && w.1 == event));
+            // #1954 : réarmer remet l'événement (manuel, resté signalé) à zéro.
+            assert_eq!(reg_notify_change_key_value(h, 1, 4, event, 1), 0);
+            assert_eq!(crate::dlls::kernel32::wait_for_single_object(event, 0), 258);
             assert_eq!(reg_close_key(h), 0);
             crate::dlls::kernel32::close_handle(event);
         }

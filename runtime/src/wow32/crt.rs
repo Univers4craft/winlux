@@ -89,6 +89,10 @@ const D_PWCTYPE: usize = 0x400;
 /// `struct lconv` x86 : 10 pointeurs, 8 octets, 8 pointeurs larges.
 const D_LCONV: usize = 0x700;
 const D_STRINGS: usize = 0x780;
+/// `___lc_locale_name_func` : six pointeurs x86 nuls (locale « C » sans
+/// nom), sous 4 Go (#2168).
+const D_LC_NAMES: usize = 0x7c0;
+const LC_CATEGORIES: usize = 6;
 const DATA_SIZE: usize = 0x1000;
 
 /// Champs du tampon par thread, après le TEB 32 bits (voir `TEB32_SCRATCH`).
@@ -105,6 +109,9 @@ fn data() -> usize {
             let w32 = |o: usize, v: u32| *((d + o) as *mut u32) = v;
             w32(D_FMODE, 0x4000);
             w32(D_MB_CUR_MAX, 1);
+            for i in 0..LC_CATEGORIES {
+                w32(D_LC_NAMES + i * 4, 0);
+            }
             // Flux standard : alias des trois flux du runtime.
             crate::dlls::crt_stdio::register_std_aliases(d + D_IOB, FILE32_SIZE);
             // Classes de caractères : table 64 bits recopiée, EOF à zéro.
@@ -272,6 +279,8 @@ struct Fmt {
     scan: bool,
     /// Un `va_list` suit les arguments fixes (sinon `...`).
     va: bool,
+    /// Variante `*scanf_s` : taille après %s, %c et %[ (#1980).
+    secure: bool,
 }
 
 /// Valeur x86 de 4 octets en case 64 bits : signe gardé pour -1, -2…
@@ -443,7 +452,7 @@ extern "win64" fn fmt_call(args: u32, aux: usize) -> u64 {
     let fmt = read_format(fmt_ptr, s.wide);
     let src = if s.va { rd(p) } else { p };
     // __stdio_common_v*scanf : bit 0 des options = variante « _s ».
-    let secure = s.scan && s.fixed.first() == Some(&b'q') && slots[0] & 1 != 0;
+    let secure = s.secure || (s.scan && s.fixed.first() == Some(&b'q') && slots[0] & 1 != 0);
     let mut conv = convert_args(&fmt, src, s.scan, secure);
     if s.va {
         // Quelques cases de plus : une lecture au-delà du format reste
@@ -513,6 +522,36 @@ const FORMATS: &[FmtRow] = &[
     ("vswscanf", b"ii", 1, true, true, true, false),
     ("vfscanf", b"ii", 1, false, true, true, false),
     ("vscanf", b"i", 0, false, true, true, false),
+    // Variantes sécurisées de msvcr80…120 (#1980).
+    ("printf_s", b"i", 0, false, false, false, false),
+    ("wprintf_s", b"i", 0, true, false, false, false),
+    ("fprintf_s", b"ii", 1, false, false, false, false),
+    ("fwprintf_s", b"ii", 1, true, false, false, false),
+    ("_cprintf_s", b"i", 0, false, false, false, false),
+    ("_cwprintf_s", b"i", 0, true, false, false, false),
+    ("vprintf_s", b"i", 0, false, false, true, false),
+    ("vwprintf_s", b"i", 0, true, false, true, false),
+    ("vfprintf_s", b"ii", 1, false, false, true, false),
+    ("vfwprintf_s", b"ii", 1, true, false, true, false),
+    ("vsnprintf_s", b"iiii", 3, false, false, true, false),
+    ("_vcprintf_s", b"i", 0, false, false, true, false),
+    ("_vcwprintf_s", b"i", 0, true, false, true, false),
+    ("scanf_s", b"i", 0, false, true, false, false),
+    ("wscanf_s", b"i", 0, true, true, false, false),
+    ("_cscanf_s", b"i", 0, false, true, false, false),
+    ("_cwscanf_s", b"i", 0, true, true, false, false),
+    ("fscanf_s", b"ii", 1, false, true, false, false),
+    ("fwscanf_s", b"ii", 1, true, true, false, false),
+    ("sscanf_s", b"ii", 1, false, true, false, false),
+    ("swscanf_s", b"ii", 1, true, true, false, false),
+    ("_snscanf_s", b"iii", 2, false, true, false, false),
+    ("_snwscanf_s", b"iii", 2, true, true, false, false),
+    ("vscanf_s", b"i", 0, false, true, true, false),
+    ("vwscanf_s", b"i", 0, true, true, true, false),
+    ("vfscanf_s", b"ii", 1, false, true, true, false),
+    ("vfwscanf_s", b"ii", 1, true, true, true, false),
+    ("vsscanf_s", b"ii", 1, false, true, true, false),
+    ("vswscanf_s", b"ii", 1, true, true, true, false),
     // CRT universelle : options (64 bits) d'abord, locale après le format.
     (
         "__stdio_common_vfprintf",
@@ -653,6 +692,7 @@ fn fmt_override(dll: &str, func: &str) -> Option<Override> {
         wide,
         scan,
         va,
+        secure: scan && func.ends_with("_s"),
     }));
     let slots: usize = fixed
         .iter()
@@ -981,6 +1021,217 @@ extern "win64" fn bsearch32(args: u32, _aux: usize) -> u64 {
         }
     }
     0
+}
+
+/// `qsort_s(base, n, taille, cmp, contexte)` : cmp(contexte, a, b) (#1980).
+extern "win64" fn qsort_s32(args: u32, _aux: usize) -> u64 {
+    let (base, n, size, cmp, ctx) = (
+        rd(args),
+        rd(args + 4),
+        rd(args + 8),
+        rd(args + 12),
+        rd(args + 16),
+    );
+    if base == 0 || n < 2 || size == 0 || cmp == 0 {
+        return 0;
+    }
+    let mut idx: Vec<u32> = (0..n).collect();
+    let mut tmp = vec![0u32; n as usize];
+    let elem = |i: u32| base + i * size;
+    merge_sort(&mut idx, &mut tmp, &mut |a, b| {
+        call32(cmp as usize, &[ctx, elem(a), elem(b)]) as i32
+    });
+    let total = (n * size) as usize;
+    let copy: Vec<u8> =
+        unsafe { std::slice::from_raw_parts(base as usize as *const u8, total).to_vec() };
+    for (dst, &src) in idx.iter().enumerate() {
+        let s = src as usize * size as usize;
+        let d = dst * size as usize;
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                copy.as_ptr().add(s),
+                (base as usize + d) as *mut u8,
+                size as usize,
+            );
+        }
+    }
+    0
+}
+
+/// `bsearch_s(clé, base, n, taille, cmp, contexte)` (#1980).
+extern "win64" fn bsearch_s32(args: u32, _aux: usize) -> u64 {
+    let (key, base, n, size, cmp, ctx) = (
+        rd(args),
+        rd(args + 4),
+        rd(args + 8),
+        rd(args + 12),
+        rd(args + 16),
+        rd(args + 20),
+    );
+    if key == 0 || base == 0 || size == 0 || cmp == 0 {
+        return 0;
+    }
+    let (mut lo, mut hi) = (0u32, n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let e = base + mid * size;
+        match call32(cmp as usize, &[ctx, key, e]) as i32 {
+            0 => return e as u64,
+            r if r < 0 => hi = mid,
+            _ => lo = mid + 1,
+        }
+    }
+    0
+}
+
+/// `_lfind_s` (aux 0) et `_lsearch_s` (aux 1) :
+/// (clé, base, &n, taille, cmp, contexte) (#1980).
+extern "win64" fn lfind_s32(args: u32, aux: usize) -> u64 {
+    let (key, base, num, size, cmp, ctx) = (
+        rd(args),
+        rd(args + 4),
+        rd(args + 8),
+        rd(args + 12),
+        rd(args + 16),
+        rd(args + 20),
+    );
+    if key == 0 || num == 0 || size == 0 || cmp == 0 {
+        return 0;
+    }
+    let n = rd(num);
+    for i in 0..n {
+        let e = base + i * size;
+        if call32(cmp as usize, &[ctx, key, e]) as i32 == 0 {
+            return e as u64;
+        }
+    }
+    if aux == 0 || base == 0 {
+        return 0;
+    }
+    let end = base + n * size;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            key as usize as *const u8,
+            end as usize as *mut u8,
+            size as usize,
+        );
+    }
+    wr(num, n + 1);
+    end as u64
+}
+
+/// Fonction `*_s` 64 bits de msvcrt, appelée avec six cases.
+fn call_s64(name: &str, a: [u64; 6]) -> u64 {
+    let Some(f) = crate::dlls::lookup("msvcrt", name) else {
+        return 22; // EINVAL
+    };
+    let f: extern "win64" fn(u64, u64, u64, u64, u64, u64) -> u64 =
+        unsafe { std::mem::transmute(f) };
+    f(a[0], a[1], a[2], a[3], a[4], a[5])
+}
+
+/// `_cgets_s` / `_cgetws_s` (tampon, taille, &lus) : `size_t` de 4 octets
+/// en x86 (#1980).
+extern "win64" fn cgets_s32(args: u32, aux: usize) -> u64 {
+    let (buf, size, read) = (rd(args), rd(args + 4), rd(args + 8));
+    let mut n: usize = 0;
+    let name = if aux == 0 { "_cgets_s" } else { "_cgetws_s" };
+    let p = if read == 0 {
+        0
+    } else {
+        &mut n as *mut usize as u64
+    };
+    let r = call_s64(name, [buf as u64, size as u64, p, 0, 0, 0]);
+    if read != 0 {
+        wr(read, n as u32);
+    }
+    r as u32 as u64
+}
+
+/// `mbsrtowcs_s` (aux 0) / `wcsrtombs_s` (aux 1) :
+/// (&n, dst, taille, &src, nombre, état), `size_t` et `src` de 4 octets
+/// en x86 (#1980).
+extern "win64" fn rtowcs_s32(args: u32, aux: usize) -> u64 {
+    let (ret, dst, size, src, count, state) = (
+        rd(args),
+        rd(args + 4),
+        rd(args + 8),
+        rd(args + 12),
+        rd(args + 16),
+        rd(args + 20),
+    );
+    let mut n: usize = 0;
+    let mut from: u64 = if src == 0 { 0 } else { rd(src) as u64 };
+    let name = if aux == 0 {
+        "mbsrtowcs_s"
+    } else {
+        "wcsrtombs_s"
+    };
+    let r = call_s64(
+        name,
+        [
+            if ret == 0 {
+                0
+            } else {
+                &mut n as *mut usize as u64
+            },
+            dst as u64,
+            size as u64,
+            if src == 0 {
+                0
+            } else {
+                &mut from as *mut u64 as u64
+            },
+            ext(count),
+            state as u64,
+        ],
+    );
+    if ret != 0 {
+        wr(ret, n as u32);
+    }
+    if src != 0 {
+        wr(src, from as u32);
+    }
+    r as u32 as u64
+}
+
+/// `_dupenv_s(&tampon, &taille, nom)` : pointeur et `size_t` de 4 octets
+/// en x86 (#1980).
+extern "win64" fn dupenv_s32(args: u32, _aux: usize) -> u64 {
+    let (out, len, name) = (rd(args), rd(args + 4), rd(args + 8));
+    if out == 0 {
+        return 22;
+    }
+    let mut p: u64 = 0;
+    let mut n: usize = 0;
+    let r = call_s64(
+        "_dupenv_s",
+        [
+            &mut p as *mut u64 as u64,
+            if len == 0 {
+                0
+            } else {
+                &mut n as *mut usize as u64
+            },
+            name as u64,
+            0,
+            0,
+            0,
+        ],
+    );
+    if p as usize >= limit() {
+        call_s64("free", [p, 0, 0, 0, 0, 0]);
+        wr(out, 0);
+        if len != 0 {
+            wr(len, 0);
+        }
+        return 12; // ENOMEM : copie inaccessible au programme x86
+    }
+    wr(out, p as u32);
+    if len != 0 {
+        wr(len, n as u32);
+    }
+    r as u32 as u64
 }
 
 // ---------------------------------------------------------------------
@@ -1468,6 +1719,15 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "__iob_func" | "__p__iob" => raw(ret_aux, d + D_IOB),
         "__acrt_iob_func" => raw(iob_at, 0),
         "localeconv" => raw(ret_aux, d + D_LCONV),
+        // La table 64 bits est une donnée du runtime, au-dessus de 4 Go :
+        // l'outil de déploiement d'Office lisait son pointeur tronqué (#2168).
+        "___lc_locale_name_func" => raw(ret_aux, d + D_LC_NAMES),
+        // tmpnam(NULL) rend le tampon statique du runtime ; un tampon de
+        // l'appelant est déjà sous 4 Go et revient tel quel.
+        "tmpnam" => native(n, func, "i>i", Fix::Str { wide: false })?,
+        // Ligne de commande : copie basse si elle n'est pas déjà atteignable.
+        "_get_narrow_winmain_command_line" => native(n, func, ">i", Fix::Str { wide: false })?,
+        "_get_wide_winmain_command_line" => native(n, func, ">i", Fix::Str { wide: true })?,
         "__getmainargs" => raw(getmainargs, 0),
         "__wgetmainargs" => raw(getmainargs, 1),
         "_initterm" => raw(initterm, 0),
@@ -1481,6 +1741,15 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_execute_onexit_table" => raw(onexit_table, 2),
         "qsort" => raw(qsort32, 0),
         "bsearch" => raw(bsearch32, 0),
+        "qsort_s" => raw(qsort_s32, 0),
+        "bsearch_s" => raw(bsearch_s32, 0),
+        "_lfind_s" => raw(lfind_s32, 0),
+        "_lsearch_s" => raw(lfind_s32, 1),
+        "_cgets_s" => raw(cgets_s32, 0),
+        "_cgetws_s" => raw(cgets_s32, 1),
+        "mbsrtowcs_s" => raw(rtowcs_s32, 0),
+        "wcsrtombs_s" => raw(rtowcs_s32, 1),
+        "_dupenv_s" => raw(dupenv_s32, 0),
         "signal" => raw(signal32, 0),
         "_setjmp3" => raw(setjmp32, 1),
         "_setjmp" | "setjmp" => raw(setjmp32, 0),
@@ -1931,6 +2200,20 @@ mod tests {
         }
         for f in ["ceil", "ceilf", "cosl", "cbrtl"] {
             assert!(complex_code(f).is_none(), "{f}");
+        }
+    }
+
+    #[test]
+    fn noms_de_locale_x86_sous_4_go() {
+        // #2168 : six pointeurs x86 nuls, lisibles par le programme.
+        let names = data() + D_LC_NAMES;
+        assert!(names + LC_CATEGORIES * 4 <= 1 << 32);
+        assert!(D_LC_NAMES >= D_STRINGS + 12 && D_LC_NAMES + LC_CATEGORIES * 4 <= DATA_SIZE);
+        let slots = unsafe { std::slice::from_raw_parts(names as *const u32, LC_CATEGORIES) };
+        assert!(slots.iter().all(|&p| p == 0));
+        match override_for("ucrtbase", "___lc_locale_name_func") {
+            Some(Override::Raw { aux, .. }) => assert_eq!(aux, names),
+            _ => panic!("___lc_locale_name_func doit rendre la table basse"),
         }
     }
 

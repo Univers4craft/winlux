@@ -996,6 +996,7 @@ static ALL: &[&Iface] = &[
 fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
+        .chain(super::com_netfw::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }

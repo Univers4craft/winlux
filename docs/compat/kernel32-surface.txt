@@ -21,6 +21,7 @@ BackupWrite
 Beep
 BeginUpdateResourceA
 BeginUpdateResourceW
+BindIoCompletionCallback
 BuildCommDCBA
 BuildCommDCBAndTimeoutsA
 BuildCommDCBAndTimeoutsW
@@ -41,6 +42,8 @@ ClosePackageInfo
 ClosePrivateNamespace
 ClosePseudoConsole
 CloseThreadpool
+CloseThreadpoolCleanupGroup
+CloseThreadpoolCleanupGroupMembers
 CloseThreadpoolTimer
 CloseThreadpoolWait
 CloseThreadpoolWork
@@ -109,6 +112,7 @@ CreateSymbolicLinkTransactedW
 CreateSymbolicLinkW
 CreateThread
 CreateThreadpool
+CreateThreadpoolCleanupGroup
 CreateThreadpoolTimer
 CreateThreadpoolWait
 CreateThreadpoolWork
@@ -198,6 +202,7 @@ FindNextFileNameW
 FindNextFileW
 FindNextStreamW
 FindNextVolumeW
+FindPackagesByPackageFamily
 FindResourceA
 FindResourceExA
 FindResourceExW
@@ -324,6 +329,7 @@ GetFileTime
 GetFileType
 GetFinalPathNameByHandleA
 GetFinalPathNameByHandleW
+GetFirmwareType
 GetFullPathNameA
 GetFullPathNameTransactedA
 GetFullPathNameTransactedW
@@ -381,6 +387,7 @@ GetPackageFullName
 GetPackageId
 GetPackageInfo
 GetPackagePath
+GetPackagePathByFullName
 GetPackagesByPackageFamily
 GetPhysicallyInstalledSystemMemory
 GetPriorityClass
@@ -401,6 +408,7 @@ GetProcessHandleCount
 GetProcessHeap
 GetProcessHeaps
 GetProcessId
+GetProcessIdOfThread
 GetProcessInformation
 GetProcessIoCounters
 GetProcessMitigationPolicy
@@ -738,6 +746,7 @@ RegSetValueExA
 RegSetValueExW
 RegUnLoadKeyA
 RegUnLoadKeyW
+RegisterApplicationRecoveryCallback
 RegisterApplicationRestart
 RegisterWaitForSingleObject
 ReleaseActCtx
@@ -827,6 +836,7 @@ SetProcessMitigationPolicy
 SetProcessPriorityBoost
 SetProcessShutdownParameters
 SetProcessWorkingSetSize
+SetSearchPathMode
 SetStdHandle
 SetSystemFileCacheSize
 SetSystemPowerState
@@ -850,6 +860,7 @@ SetThreadUILanguage
 SetThreadpoolThreadMaximum
 SetThreadpoolThreadMinimum
 SetThreadpoolTimer
+SetThreadpoolTimerEx
 SetThreadpoolWait
 SetTimeZoneInformation
 SetTimerQueueTimer
@@ -892,6 +903,7 @@ UnhandledExceptionFilter
 UnlockFile
 UnlockFileEx
 UnmapViewOfFile
+UnregisterApplicationRecoveryCallback
 UnregisterApplicationRestart
 UnregisterWait
 UnregisterWaitEx
@@ -929,6 +941,9 @@ WaitNamedPipeW
 WakeAllConditionVariable
 WakeConditionVariable
 WerGetFlags
+WerRegisterAdditionalProcess
+WerRegisterCustomMetadata
+WerRegisterFile
 WerRegisterMemoryBlock
 WerRegisterRuntimeExceptionModule
 WerSetFlags

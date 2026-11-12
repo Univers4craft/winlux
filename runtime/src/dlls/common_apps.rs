@@ -1594,6 +1594,7 @@ pub const ORDINALS: &[(&str, u16, &str)] = &[
     ("winspool", 204, "SetDefaultPrinterW"),
     ("shlwapi", 515, "SHGetViewStatePropertyBag"),
     ("oleaut32", 185, "VariantTimeToSystemTime"),
+    ("oleaut32", 313, "VarBstrCat"), // #2031
     ("oleaut32", 314, "VarBstrCmp"),
     ("d3d12", 101, "D3D12CreateDevice"),
     ("d3d12", 102, "D3D12GetDebugInterface"),
@@ -1610,6 +1611,17 @@ pub const ORDINALS: &[(&str, u16, &str)] = &[
     ("comctl32", 412, "RemoveWindowSubclass"),
     ("comctl32", 413, "DefSubclassProc"),
     ("shell32", 165, "SHCreateDirectory"),
+    // Teams (#2110) : numéros lus dans OleAut32.Lib et ShLwApi.Lib (c/um/x64)
+    // du paquet NuGet Microsoft.Windows.SDK.CPP.x64 10.0.26100.9457.
+    ("oleaut32", 27, "SafeArrayCopy"),
+    ("oleaut32", 146, "DispCallFunc"),
+    ("oleaut32", 184, "SystemTimeToVariantTime"),
+    ("oleaut32", 442, "RegisterTypeLibForUser"),
+    ("shlwapi", 12, "SHCreateMemStream"),
+    ("shlwapi", 184, "IStream_Read"),
+    ("shlwapi", 213, "IStream_Reset"),
+    ("shlwapi", 214, "IStream_Size"),
+    ("shlwapi", 633, "SHGlobalCounterIncrement"),
     // Lot D du relevé (#1512) : numéros lus dans les bibliothèques
     // d'importation c/um/x64 (Cabinet.Lib, dsound.lib, Uxtheme.lib,
     // shell32.lib) du paquet NuGet Microsoft.Windows.SDK.CPP.x64

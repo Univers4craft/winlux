@@ -424,6 +424,11 @@ pub fn thread_of_win32(tid: u32) -> Option<ThreadId> {
     lock(win32_threads()).get(&tid).copied()
 }
 
+/// Vrai si le thread appelant a déjà une file de messages (IsGUIThread).
+pub fn current_thread_has_queue() -> bool {
+    lock(queues()).contains_key(&std::thread::current().id())
+}
+
 pub fn current_queue() -> Arc<Queue> {
     let tid = std::thread::current().id();
     thread_local!(static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
@@ -4786,6 +4791,12 @@ pub fn default_nccalcsize_seen() -> bool {
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     crate::dlls::pointer::on_default(message);
     match message {
+        // WM_WINDOWPOSCHANGED : WM_MOVE et WM_SIZE du SetWindowPos en cours
+        // (#2044).
+        0x0047 => {
+            crate::dlls::user32::window_pos_changed_default(hwnd);
+            0
+        }
         // WM_SETCURSOR : le parent d'une fenêtre enfant décide d'abord ; puis
         // le curseur de classe dans la zone cliente, la flèche ailleurs.
         0x0020 => {
