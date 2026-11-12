@@ -97,7 +97,12 @@ impl Interpreter {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, ClrException>> {
-        if (namespace, class) != ("System.IO", "Natif") {
+        // SafeFileHandle et SafeWaitHandle ferment leur handle par la même
+        // primitive (#2019).
+        if !matches!(
+            (namespace, class),
+            ("System.IO", "Natif") | ("Microsoft.Win32.SafeHandles", "Noyau")
+        ) {
             return None;
         }
         Some(Ok(unsafe { natif(name, args) }?))

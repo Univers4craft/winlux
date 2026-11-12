@@ -70,8 +70,8 @@ namespace System
         public static bool IsNaN(double d) { return d != d; }
 #pragma warning restore 1718
     }
-    public unsafe struct IntPtr { private void* m_value; }
-    public unsafe struct UIntPtr { private void* m_value; }
+    public unsafe partial struct IntPtr { private void* m_value; }
+    public unsafe partial struct UIntPtr { private void* m_value; }
 
     public partial struct Char
     {
