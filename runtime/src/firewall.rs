@@ -691,23 +691,29 @@ fn out_targets(cfg: &Config) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// Liste publiée des programmes filtrés en sortie (#2157) :
-/// `chemin<TAB>winlux-fw/r<id>` par ligne, lisible par tous, car
-/// firewall.conf ne l'est pas (umask 077 de /init). Vide quand le filtre
-/// n'est pas en place : personne n'attend alors de rattachement.
+/// Liste publiée des programmes filtrés en sortie (#2157) : un chemin par
+/// ligne, rien d'autre (ni règle, ni profil, ni port, ni adresse). Un .exe y
+/// lit seulement s'il doit attendre son rattachement, car firewall.conf
+/// n'est lisible que par root (umask 077 de /init). Écrite par le service
+/// root, 0644 dans un dossier root 0755 : aucun compte ne peut la modifier.
+/// Vide quand le filtre n'est pas en place : personne n'attend alors.
 pub const TARGETS: &str = "run/winlux/firewall/programmes.txt";
 
 pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
-    targets
+    let mut paths: Vec<String> = targets
         .iter()
-        .map(|(p, g)| format!("{}\t{g}\n", p.display()))
-        .collect()
+        .map(|(p, _)| p.display().to_string())
+        .filter(|p| !p.contains('\n'))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths.into_iter().map(|p| p + "\n").collect()
 }
 
-pub fn parse_targets(text: &str) -> Vec<(PathBuf, String)> {
+pub fn parse_targets(text: &str) -> Vec<PathBuf> {
     text.lines()
-        .filter_map(|l| l.rsplit_once('\t'))
-        .map(|(p, g)| (PathBuf::from(p), g.to_string()))
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
         .collect()
 }
 
@@ -850,6 +856,7 @@ fn watch_execs() {
         return;
     };
     let mut buf = vec![0u8; 16 * 1024];
+    // Règles relues quand la liste publiée change (configuration ou profil).
     let mut cached: Option<(std::time::SystemTime, Vec<(PathBuf, String)>)> = None;
     loop {
         // SAFETY : `buf` est un tampon local de la taille annoncée.
@@ -869,11 +876,14 @@ fn watch_execs() {
         let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let fresh = matches!((&cached, stamp), (Some((s, _)), Some(t)) if *s == t);
         if !fresh {
+            let published = !admin::read_text(&path).unwrap_or_default().is_empty();
             cached = stamp.map(|t| {
-                (
-                    t,
-                    parse_targets(&admin::read_text(&path).unwrap_or_default()),
-                )
+                let targets = if published {
+                    out_targets(&Config::load())
+                } else {
+                    Vec::new()
+                };
+                (t, targets)
             });
         }
         let Some((_, targets)) = &cached else {
@@ -903,20 +913,19 @@ pub fn wait_for_cgroup() {
     let Some(prog) = program_of(&me) else {
         return;
     };
-    let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) else {
+    if !targets.contains(&prog) {
         return;
-    };
-    let suffix = format!("/{group}");
+    }
     let start = std::time::Instant::now();
     while start.elapsed() < std::time::Duration::from_secs(3) {
         let current = admin::read_text(&me.join("cgroup")).unwrap_or_default();
-        if current.trim_end().ends_with(&suffix) {
+        if current.contains("/winlux-fw/r") {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     eprintln!(
-        "winlux : {} n'a pas été rattaché au filtre du pare-feu ({group}) en 3 s",
+        "winlux : {} n'a pas été rattaché au filtre du pare-feu en 3 s",
         prog.display()
     );
 }
@@ -1634,7 +1643,13 @@ mod tests {
                 "winlux-fw/r3".into(),
             ),
         ];
-        assert_eq!(parse_targets(&targets_text(&targets)), targets);
+        let text = targets_text(&targets);
+        // Chemins seuls : ni numéro de règle ni cgroup.
+        assert!(!text.contains("winlux-fw") && !text.contains("r9900"));
+        let paths: Vec<PathBuf> = targets.iter().map(|(p, _)| p.clone()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(parse_targets(&text), sorted);
         assert!(parse_targets("").is_empty());
     }
 }
