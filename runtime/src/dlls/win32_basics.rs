@@ -2212,7 +2212,22 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id() as i32;
-        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+        // Juste après spawn(), l'enfant peut ne pas avoir fait son exec :
+        // /proc/<pid>/exe désigne encore le binaire de test (#2109). On
+        // attend, au plus 10 s, qu'il soit devenu « sleep ».
+        let me = std::fs::read_link("/proc/self/exe").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let exe = loop {
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+            if exe != me {
+                break exe;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sleep n'a pas été exécuté en 10 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         let got = super::foreign_image_path(pid);
         let _ = child.kill();
         let _ = child.wait();
