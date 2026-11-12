@@ -704,6 +704,9 @@ impl Interpreter {
         if let Some(r) = self.file_call(namespace, class, name, &args) {
             return r;
         }
+        if let Some(r) = self.registry_call(namespace, class, name, &args) {
+            return r;
+        }
         match (namespace, class, name) {
             (_, _, ".ctor") => {
                 // Constructeurs de la BCL (Object, Exception…) : seul le message
@@ -1985,7 +1988,9 @@ impl Interpreter {
                 let (target, _) = self.kind_of_token(tok1());
                 let obj = pop!();
                 let fits = match obj {
-                    Value::Ref(p) => self.is_instance(p, target),
+                    Value::Ref(p) => self
+                        .array_cast(tok1(), p)
+                        .unwrap_or_else(|| self.is_instance(p, target)),
                     _ => true,
                 };
                 if fits {
@@ -2044,7 +2049,10 @@ impl Interpreter {
                 if kind == Kind::Ref {
                     // unbox.any d'un type référence : castclass.
                     if let Value::Ref(p) = obj {
-                        if !self.is_instance(p, id) {
+                        let fits = self
+                            .array_cast(tok1(), p)
+                            .unwrap_or_else(|| self.is_instance(p, id));
+                        if !fits {
                             return Err(invalid_cast());
                         }
                     }

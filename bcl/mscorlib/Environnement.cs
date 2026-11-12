@@ -162,6 +162,27 @@ namespace System
             return target == EnvironmentVariableTarget.Process ? GetEnvironmentVariable(variable) : null;
         }
 
+        // %NOM% remplacé par la variable d'environnement ; un nom inconnu est
+        // laissé tel quel, comme ExpandEnvironmentStrings (#2020).
+        public static string ExpandEnvironmentVariables(string name)
+        {
+            if (name == null) throw new ArgumentNullException("name");
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            int i = 0;
+            while (i < name.Length)
+            {
+                int debut = name.IndexOf('%', i);
+                if (debut < 0) { sb.Append(name, i, name.Length - i); break; }
+                int fin = name.IndexOf('%', debut + 1);
+                if (fin < 0) { sb.Append(name, i, name.Length - i); break; }
+                sb.Append(name, i, debut - i);
+                string valeur = fin > debut + 1 ? GetEnvironmentVariable(name.Substring(debut + 1, fin - debut - 1)) : null;
+                if (valeur != null) { sb.Append(valeur); i = fin + 1; }
+                else { sb.Append(name, debut, fin - debut); i = fin; }
+            }
+            return sb.ToString();
+        }
+
         public static string GetFolderPath(SpecialFolder folder) { return GetFolderPath(folder, SpecialFolderOption.None); }
 
         public static string GetFolderPath(SpecialFolder folder, SpecialFolderOption option)
