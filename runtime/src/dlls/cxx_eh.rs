@@ -1005,7 +1005,7 @@ pub unsafe extern "win64" fn uncaught_exceptions() -> i32 {
 }
 pub unsafe extern "win64" fn std_terminate() {
     eprintln!("winlux: std::terminate() appelé par le programme (exception C++ non capturée)");
-    std::process::exit(3);
+    crate::dlls::kernel32::exit_with(3);
 }
 pub unsafe extern "win64" fn is_exception_typeof(
     _type_desc: *const c_void,
