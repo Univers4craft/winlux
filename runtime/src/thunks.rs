@@ -144,11 +144,23 @@ pub fn describe_site(addr: usize) -> String {
         .unwrap_or_else(|| format!("{addr:#x}"))
 }
 
+/// Secondes depuis le premier appel, pour situer les lignes du journal
+/// d'API les unes par rapport aux autres entre fils (#2161).
+pub fn api_clock() -> f64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
 extern "win64" fn traced_called(info: *const Traced, ret: usize) {
     let label = unsafe { &(*info).label };
     let site = describe_site(ret);
     let tid = unsafe { libc::syscall(libc::SYS_gettid) };
-    api_log(&format!("winlux[api] {tid} {label} <- {site}"));
+    api_log(&format!(
+        "winlux[api] {tid} {label} <- {site} @{:.6}",
+        api_clock()
+    ));
 }
 
 /// Plafond d'un fichier de journal d'API ; au-delà, il devient `.1` (le

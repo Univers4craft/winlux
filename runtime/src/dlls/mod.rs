@@ -109,6 +109,7 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod fiber64;
+pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
