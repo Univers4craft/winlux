@@ -24,12 +24,21 @@ AppImage, Windows. Les autres sources restent choisissables dans la fiche.
 **Paquets compagnons (#2075).** apt installe sans les paquets recommandés.
 Quand une application ne marche pas sans l'un d'eux, une ligne
 `compagnons=paquet:a,b` du catalogue les installe avec elle, marqués
-automatiques (`--mark-auto`) : `purge --autoremove` les retire avec
+automatiques (`--mark-auto`) : la désinstallation les retire avec
 l'application si plus rien ne les utilise, et un paquet déjà installé à la
 main le reste. virt-manager et GNOME Boxes reçoivent ainsi QEMU, le pilote
 libvirt, `passt`, OVMF et swtpm. Jamais `libvirt-daemon-system`, qui tire la
 variante systemd : libvirt tourne en mode compte (`qemu:///session`), sans
 root, sans polkit et sans systemd.
+
+**Désinstaller un logiciel des dépôts (#2189).** La Boutique note les paquets
+que chaque installation apporte (`store-state.json`, clé `apt`). Désinstaller
+fait `apt-get purge` du logiciel, puis retire ce qui est devenu inutile : ce
+qu'`apt-get autoremove` retirerait (simulation sans droits), plus ce que cette
+installation a apporté et qu'une simple suggestion retient (`systemd-container`,
+suggéré par `systemd`). Les compagnons d'un logiciel du catalogue encore
+installé ne sont jamais retirés, et sont remis s'il en manque :
+`purge --autoremove` de Knights emportait le QEMU de virt-manager.
 
 **Présentation (#716).** Une barre d'icônes à gauche (Accueil, Applis,
 Jeux, Windows ; Bibliothèque et Actualiser en bas), la recherche en haut. L'accueil
