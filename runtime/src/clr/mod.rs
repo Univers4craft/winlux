@@ -18,6 +18,7 @@ pub mod metadata;
 pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
+pub mod processus;
 pub mod reflection;
 pub mod registre;
 pub mod resolve;

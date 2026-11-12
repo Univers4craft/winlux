@@ -328,6 +328,16 @@ namespace System.IO
         private long _debutAjout;
         private byte[] _tampon;
         private int _remplis;
+        // Bout de tube (Process.StandardOutput…, #2050) : ni position ni
+        // longueur ; la fin du tube (ERROR_BROKEN_PIPE) est une fin de flux.
+        private readonly bool _tube;
+
+        internal FileStream(long tube, FileAccess access)
+        {
+            _h = tube;
+            _acces = access;
+            _tube = true;
+        }
 
         public FileStream(string path, FileMode mode)
             : this(path, mode, mode == FileMode.Append ? FileAccess.Write : FileAccess.ReadWrite, FileShare.Read, 4096, FileOptions.None) { }
@@ -379,9 +389,15 @@ namespace System.IO
 
         public override bool CanRead { get { return _h >= 0 && (_acces & FileAccess.Read) != 0; } }
         public override bool CanWrite { get { return _h >= 0 && (_acces & FileAccess.Write) != 0; } }
-        public override bool CanSeek { get { return _h >= 0; } }
+        public override bool CanSeek { get { return _h >= 0 && !_tube; } }
 
         private void Ouvert() { if (_h < 0) throw new ObjectDisposedException(null, "Cannot access a closed file."); }
+
+        private void Positionnable()
+        {
+            Ouvert();
+            if (_tube) throw new NotSupportedException("Stream does not support seeking.");
+        }
 
         private void Vider()
         {
@@ -400,7 +416,7 @@ namespace System.IO
         {
             get
             {
-                Ouvert();
+                Positionnable();
                 Vider();
                 long t = Natif.Taille(_h);
                 if (t < 0) throw Natif.Erreur((int)t, _nom);
@@ -412,7 +428,7 @@ namespace System.IO
         {
             get
             {
-                Ouvert();
+                Positionnable();
                 long p = Natif.Positionner(_h, 0, 1);
                 if (p < 0) throw Natif.Erreur((int)p, _nom);
                 return p + _remplis;
@@ -440,13 +456,14 @@ namespace System.IO
             Vider();
             if (count == 0) return 0;
             int n = Natif.Lire(_h, array, offset, count);
+            if (n == -109 && _tube) return 0;
             if (n < 0) throw Natif.Erreur(n, _nom);
             return n;
         }
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            Ouvert();
+            Positionnable();
             if (origin < SeekOrigin.Begin || origin > SeekOrigin.End) throw new ArgumentException("Invalid seek origin.");
             Vider();
             long avant = Natif.Positionner(_h, 0, 1);
@@ -463,7 +480,7 @@ namespace System.IO
         public override void SetLength(long value)
         {
             if (value < 0) throw new ArgumentOutOfRangeException("value", "Non-negative number required.");
-            Ouvert();
+            Positionnable();
             if ((_acces & FileAccess.Write) == 0) throw new NotSupportedException("Stream does not support writing.");
             Vider();
             Natif.Verifier(Natif.FixerTaille(_h, value), _nom);
