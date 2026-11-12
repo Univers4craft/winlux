@@ -495,7 +495,22 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 Some(Value::I64(t))
             }
         }
-        "get_ProcessorCount" => Some(Value::I32(1)),
+        "get_ProcessorCount" => Some(Value::I32(
+            std::thread::available_parallelism().map_or(1, |n| n.get() as i32),
+        )),
+        // Faux dans un service Windows : le gestionnaire de services de
+        // Winlux le lance avec WINLUX_SERVICE_NAME (#1991).
+        "get_UserInteractive" => Some(Value::I32(
+            std::env::var_os("WINLUX_SERVICE_NAME").is_none_or(|n| n.is_empty()) as i32,
+        )),
+        // Environment.GetFolderPath : chemin du CSIDL, comme SHGetFolderPath.
+        "CheminSpecial" => {
+            let csidl = args.first().map_or(-1, |v| v.as_i32());
+            Some(match crate::dlls::knownfolders::csidl_path(csidl) {
+                Some(p) => alloc_managed_string(&p),
+                None => Value::Null,
+            })
+        }
         "get_Is64BitProcess" => Some(Value::I32(1)),
         "get_Is64BitOperatingSystem" => Some(Value::I32(1)),
         "GetCommandLineArgs" => Some(Value::Null),

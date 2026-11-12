@@ -28,7 +28,7 @@ use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
 use super::tableaux;
-use super::tables::{TableId, Token};
+use super::tables::{CodedIndex, TableId, Token};
 use super::threads;
 use super::types::{self, Kind, TypeId};
 
@@ -262,6 +262,13 @@ pub struct Shared {
     initialized: Mutex<HashSet<TypeId>>,
     /// Champs statiques des types de la bibliothèque intégrée.
     external_statics: Mutex<HashMap<(usize, u32), Box<[u64; 4]>>>,
+    /// Champs statiques des types intégrés au moteur (String, Boolean…)
+    /// que notre mscorlib déclare, par nom complet : une seule case pour
+    /// toutes les assemblies (#1997).
+    builtin_statics: Mutex<HashMap<String, Box<[u64; 4]>>>,
+    /// Types intégrés dont le constructeur statique de notre mscorlib a
+    /// été lancé.
+    builtin_initialized: Mutex<HashSet<String>>,
     /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
     pub(super) fns: Mutex<FnTable>,
 }
@@ -993,6 +1000,9 @@ impl Interpreter {
         for data in self.shared.external_statics.lock().unwrap().values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
+        for data in self.shared.builtin_statics.lock().unwrap().values() {
+            roots.extend(data.iter().map(|&w| w as usize));
+        }
         types::with_types(|reg| {
             for data in reg.static_data.values() {
                 roots.extend(data.iter().map(|&w| w as usize));
@@ -1021,6 +1031,18 @@ impl Interpreter {
         let Some(field) = self.resolve_field(token) else {
             // Champ statique de la bibliothèque intégrée : emplacement propre
             // au jeton.
+            // Type intégré au moteur que notre mscorlib déclare (String,
+            // Boolean…) : son constructeur statique n'était jamais lancé et
+            // chaque assembly avait sa propre case, d'où String.Empty et
+            // Boolean.TrueString nuls (#1997).
+            if let Some((class, field)) = self.builtin_field(token) {
+                self.ensure_builtin_initialized(&class)?;
+                let mut statics = self.shared.builtin_statics.lock().unwrap();
+                let slot = statics
+                    .entry(format!("System.{class}::{field}"))
+                    .or_insert_with(|| Box::new([0u64; 4]));
+                return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));
+            }
             let mut statics = self.shared.external_statics.lock().unwrap();
             let slot = statics
                 .entry((self.current, token))
@@ -1035,6 +1057,91 @@ impl Interpreter {
         let ptr =
             types::with_types(|reg| reg.static_field_ptr(field.owner, field.info.offset, size));
         Ok((ptr, field.info.kind))
+    }
+
+    /// Classe et nom du champ quand le jeton désigne un champ d'un type
+    /// intégré au moteur (System.String, System.Boolean…).
+    fn builtin_field(&self, token: u32) -> Option<(String, String)> {
+        let a = &self.assembly;
+        let row = Token(token).rid();
+        let (name, ns, class) = match Token(token).table() {
+            t if t == TableId::Field as u8 => {
+                let owner = self.domain[self.current]
+                    .field_owner
+                    .get(row as usize)
+                    .copied()
+                    .unwrap_or(0);
+                if owner == 0 {
+                    return None;
+                }
+                let td = a.get_type_def(owner);
+                (a.get_field(row).name, td.namespace, td.name)
+            }
+            t if t == TableId::MemberRef as u8 => {
+                let mr = a.get_member_ref(row);
+                match CodedIndex::MemberRefParent.decode(mr.class) {
+                    (Some(TableId::TypeRef), prow) => {
+                        let tr = a.get_type_ref(prow);
+                        (mr.name, tr.namespace, tr.name)
+                    }
+                    (Some(TableId::TypeDef), prow) => {
+                        let td = a.get_type_def(prow);
+                        (mr.name, td.namespace, td.name)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        if a.get_string(ns) != "System" {
+            return None;
+        }
+        let class = a.get_string(class);
+        types::with_types(|reg| reg.find_by_name("System", class))
+            .filter(|&id| id < types::FIRST_USER_TYPE)?;
+        Some((class.to_string(), a.get_string(name).to_string()))
+    }
+
+    /// Lance une seule fois le constructeur statique que notre mscorlib
+    /// donne à un type intégré au moteur (#1997).
+    fn ensure_builtin_initialized(&mut self, class: &str) -> Result<(), ClrException> {
+        if !self
+            .shared
+            .builtin_initialized
+            .lock()
+            .unwrap()
+            .insert(class.to_string())
+        {
+            return Ok(());
+        }
+        let Some(asm) = self
+            .domain
+            .iter()
+            .position(|info| info.name == super::domain::CORLIB)
+        else {
+            return Ok(());
+        };
+        let a = self.assembly_at(asm);
+        let cctor = (1..=a.row_count(TableId::TypeDef)).find_map(|row| {
+            let td = a.get_type_def(row);
+            if a.get_string(td.namespace) != "System" || a.get_string(td.name) != class {
+                return None;
+            }
+            a.type_methods(row).find(|&m| {
+                let md = a.get_method_def(m);
+                md.is_cctor() && md.rva != 0 && a.get_string(md.name) == ".cctor"
+            })
+        });
+        let Some(m) = cctor else {
+            return Ok(());
+        };
+        self.cctor_depth += 1;
+        let r = self.execute_in(asm, m, Vec::new(), Gen::default());
+        self.cctor_depth -= 1;
+        match r {
+            ExecResult::Exception(e) => Err(e),
+            ExecResult::Return(_) => Ok(()),
+        }
     }
 
     /// Adresse d'un champ d'instance dans l'objet ou la structure `base`.
