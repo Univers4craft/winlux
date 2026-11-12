@@ -1804,6 +1804,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.UI.ViewManagement.UISettings (#2206).
+    if let Some(hr) = super::ui_settings::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::composition::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
