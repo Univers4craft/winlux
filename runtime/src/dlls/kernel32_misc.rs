@@ -454,6 +454,23 @@ pub unsafe extern "win64" fn output_debug_string_w(s: *const u16) {
         debug_string(crate::dlls::wstr(s));
     }
 }
+/// GetFirmwareType : FirmwareTypeUefi (2) quand le noyau a démarré par UEFI
+/// (/sys/firmware/efi présent), FirmwareTypeBios (1) sinon (#1999).
+pub unsafe extern "win64" fn get_firmware_type(out: *mut u32) -> i32 {
+    if out.is_null() {
+        crate::dlls::kernel32::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    *out = firmware_type();
+    1
+}
+fn firmware_type() -> u32 {
+    if std::path::Path::new("/sys/firmware/efi").is_dir() {
+        2
+    } else {
+        1
+    }
+}
 /// Fonctionnalités processeur (PF_*) : on répond pour celles qu'impose x86-64
 /// et on interroge CPUID pour les autres.
 pub extern "win64" fn is_processor_feature_present(feature: u32) -> i32 {
@@ -1520,7 +1537,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetUnhandledExceptionFilter" => fn set_unhandled_exception_filter, "UnhandledExceptionFilter" => fn unhandled_exception_filter,
         "IsDebuggerPresent" => fn is_debugger_present,
         "OutputDebugStringA" => fn output_debug_string_a, "OutputDebugStringW" => fn output_debug_string_w,
-        "IsProcessorFeaturePresent" => fn is_processor_feature_present, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
+        "IsProcessorFeaturePresent" => fn is_processor_feature_present, "GetFirmwareType" => fn get_firmware_type, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
         "lstrlenA" => fn lstrlen_a, "lstrlenW" => fn lstrlen_w, "lstrcpyA" => fn lstrcpy_a, "lstrcpyW" => fn lstrcpy_w,
         "lstrcatA" => fn lstrcat_a, "lstrcatW" => fn lstrcat_w, "lstrcmpA" => fn lstrcmp_a, "lstrcmpiA" => fn lstrcmpi_a,
         "lstrcmpW" => fn lstrcmp_w, "lstrcmpiW" => fn lstrcmpi_w,
@@ -1554,6 +1571,21 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Steam, utility storage (#1999) : BIOS ou UEFI selon le démarrage.
+    #[test]
+    fn type_de_micrologiciel() {
+        unsafe {
+            let mut t = 0u32;
+            assert_eq!(super::get_firmware_type(&mut t), 1);
+            let attendu = if std::path::Path::new("/sys/firmware/efi").is_dir() {
+                2
+            } else {
+                1
+            };
+            assert_eq!(t, attendu);
+        }
+    }
+
     /// Spotify et Acrobat (#1832) : noms de paquet et réponse sans paquet.
     #[test]
     fn noms_de_paquet_appmodel() {

@@ -25,8 +25,15 @@ enum Place {
     /// Menu Démarrer de l'utilisateur, avec un sous-dossier.
     StartMenu(&'static str),
     CommonStartMenu(&'static str),
+    /// `Program Files` vu par l'appelant, avec un sous-dossier : un
+    /// programme 32 bits reçoit `Program Files (x86)`, comme sous WOW64
+    /// (CSIDL_PROGRAM_FILES, CSIDL_PROGRAM_FILES_COMMON, FOLDERID_ProgramFiles,
+    /// FOLDERID_ProgramFilesCommon) (#2002).
+    ProgramFiles(&'static str),
 }
 
+/// CSIDL documentés → emplacement ; 0x13, 0x1b, 0x1f, 0x2d, 0x30, 0x38 et
+/// 0x3b ajoutés pour #2043.
 fn csidl_place(csidl: i32) -> Option<Place> {
     use Place::*;
     Some(match csidl & 0xff {
@@ -40,6 +47,7 @@ fn csidl_place(csidl: i32) -> Option<Place> {
         0x0b => StartMenu(""),
         0x0d => Profile("Music"),
         0x0e => Profile("Videos"),
+        0x13 => Profile("AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts"),
         0x14 => Fixed("C:\\Windows\\Fonts"),
         0x15 => Profile("AppData\\Roaming\\Microsoft\\Windows\\Templates"),
         0x16 => CommonStartMenu(""),
@@ -47,25 +55,31 @@ fn csidl_place(csidl: i32) -> Option<Place> {
         0x18 => CommonStartMenu("Programs\\Startup"),
         0x19 => Fixed("C:\\Users\\Public\\Desktop"),
         0x1a => Profile("AppData\\Roaming"),
+        0x1b => Profile("AppData\\Roaming\\Microsoft\\Windows\\Printer Shortcuts"),
         0x1c => Profile("AppData\\Local"),
+        0x1f => Profile("Favorites"),
         0x20 => Profile("AppData\\Local\\Microsoft\\Windows\\INetCache"),
         0x21 => Profile("AppData\\Local\\Microsoft\\Windows\\INetCookies"),
         0x22 => Profile("AppData\\Local\\Microsoft\\Windows\\History"),
         0x23 => Fixed("C:\\ProgramData"),
         0x24 => Fixed("C:\\Windows"),
         0x25 => Fixed("C:\\Windows\\System32"),
-        0x26 => Fixed("C:\\Program Files"),
+        0x26 => ProgramFiles(""),
         0x27 => Profile("Pictures"),
         0x28 => Profile(""),
         0x29 => Fixed("C:\\Windows\\SysWOW64"),
         0x2a => Fixed("C:\\Program Files (x86)"),
-        0x2b => Fixed("C:\\Program Files\\Common Files"),
+        0x2b => ProgramFiles("Common Files"),
         0x2c => Fixed("C:\\Program Files (x86)\\Common Files"),
+        0x2d => Fixed("C:\\ProgramData\\Microsoft\\Windows\\Templates"),
         0x2e => Fixed("C:\\Users\\Public\\Documents"),
         0x2f => CommonStartMenu("Programs\\Administrative Tools"),
+        0x30 => StartMenu("Programs\\Administrative Tools"),
         0x35 => Fixed("C:\\Users\\Public\\Music"),
         0x36 => Fixed("C:\\Users\\Public\\Pictures"),
         0x37 => Fixed("C:\\Users\\Public\\Videos"),
+        0x38 => Fixed("C:\\Windows\\Resources"),
+        0x3b => Profile("AppData\\Local\\Microsoft\\Windows\\Burn\\Burn"),
         _ => return None,
     })
 }
@@ -123,7 +137,19 @@ const KNOWN_FOLDERS: &[(&str, Place)] = &[
     ),
     (
         "905E63B6-C1BF-494E-B29C-65B732D3D21A",
-        Place::Fixed("C:\\Program Files"),
+        Place::ProgramFiles(""),
+    ),
+    (
+        "F7F1ED05-9F6D-47A2-AAAE-29D317C6F066",
+        Place::ProgramFiles("Common Files"),
+    ),
+    (
+        "6365D5A7-0F0D-45E5-87F6-0DA56B6A4F7D",
+        Place::Fixed("C:\\Program Files\\Common Files"),
+    ),
+    (
+        "DE974D24-D9C6-4D3E-BF91-F4455120B917",
+        Place::Fixed("C:\\Program Files (x86)\\Common Files"),
     ),
     (
         "6D809377-6AF0-444B-8957-A3773F02200E",
@@ -189,6 +215,16 @@ fn place_path(place: &Place) -> String {
         Place::Fixed(p) => (*p).to_string(),
         Place::StartMenu(sub) => join(crate::paths::profile_path(START_MENU), sub),
         Place::CommonStartMenu(sub) => join(COMMON_START_MENU.to_string(), sub),
+        Place::ProgramFiles(sub) => join(program_files(crate::wow32::active()).into(), sub),
+    }
+}
+
+/// `Program Files` d'un programme 64 bits ou 32 bits.
+fn program_files(x86: bool) -> &'static str {
+    if x86 {
+        "C:\\Program Files (x86)"
+    } else {
+        "C:\\Program Files"
     }
 }
 
@@ -262,6 +298,7 @@ pub unsafe extern "win64" fn sh_get_folder_path_a(
     _flags: u32,
     path: *mut u8,
 ) -> i32 {
+    crate::trace!("SHGetFolderPathA(csidl {csidl:#x})");
     match csidl_path(csidl) {
         Some(p) if write_ansi(&p, path, MAX_PATH) => S_OK,
         Some(_) => E_INVALIDARG,
@@ -276,7 +313,11 @@ pub unsafe extern "win64" fn sh_get_folder_path_w(
     _flags: u32,
     path: *mut u16,
 ) -> i32 {
-    match csidl_path(csidl) {
+    let found = csidl_path(csidl);
+    crate::trace!(
+        "SHGetFolderPathW(csidl {csidl:#x}, token {_token:#x}, flags {_flags}) -> {found:?}"
+    );
+    match found {
         Some(p) if write_wide(&p, path, MAX_PATH) => S_OK,
         _ => E_INVALIDARG,
     }
@@ -471,5 +512,27 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn program_files_selon_l_architecture() {
+        assert_eq!(program_files(false), "C:\\Program Files");
+        assert_eq!(program_files(true), "C:\\Program Files (x86)");
+        // FOLDERID_ProgramFilesCommonX86 et X64 ne dépendent pas de l'appelant.
+        assert_eq!(
+            known_folder_path("DE974D24-D9C6-4D3E-BF91-F4455120B917", 0).unwrap(),
+            "C:\\Program Files (x86)\\Common Files"
+        );
+        assert_eq!(
+            known_folder_path("6365D5A7-0F0D-45E5-87F6-0DA56B6A4F7D", 0).unwrap(),
+            "C:\\Program Files\\Common Files"
+        );
+        if !crate::wow32::active() {
+            assert_eq!(csidl_path(0x2b).unwrap(), "C:\\Program Files\\Common Files");
+            assert_eq!(
+                known_folder_path("F7F1ED05-9F6D-47A2-AAAE-29D317C6F066", 0).unwrap(),
+                "C:\\Program Files\\Common Files"
+            );
+        }
     }
 }

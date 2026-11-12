@@ -58,8 +58,6 @@ pub fn dispatch_internal_call(
         ("System", "Convert", m) => convert_dispatch(m, args),
         ("System", "Type", m) => type_dispatch(m, args),
         ("System", "Activator", m) => activator_dispatch(m, args),
-        ("System.IO", "File", m) => file_dispatch(m, args),
-        ("System.IO", "Path", m) => path_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
         // Horloge monotone de Stopwatch, en graduations de 100 ns (#1922).
         ("System.Diagnostics", "Stopwatch", "GetTimestamp") => {
@@ -128,13 +126,21 @@ pub fn alloc_utf16(units: &[u16]) -> Value {
 }
 
 /// Unités UTF-16 d'une chaîne managée (vide pour null).
+/// Un objet qui n'est pas une `System.String` du tas (un tableau passé par
+/// réflexion à une primitive, #2037) se lit aussi comme la chaîne vide : sa
+/// première case n'est pas une longueur.
 pub fn managed_utf16(ptr: *mut u8) -> Vec<u16> {
-    if ptr.is_null() {
-        return Vec::new();
+    string_units(ptr).to_vec()
+}
+
+/// Les unités d'une vraie chaîne managée, ou rien (#2037).
+fn string_units<'a>(ptr: *mut u8) -> &'a [u16] {
+    if gc::type_of(ptr) != Some(TYPE_STRING) {
+        return &[];
     }
     unsafe {
         let len = *(ptr as *const u64) as usize;
-        std::slice::from_raw_parts(ptr.add(8) as *const u16, len).to_vec()
+        std::slice::from_raw_parts(ptr.add(8) as *const u16, len)
     }
 }
 
@@ -284,15 +290,10 @@ fn number_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     }
 }
 
+/// Texte d'une chaîne managée ; vide pour null ou pour un objet qui n'est
+/// pas une chaîne (#2037).
 pub fn read_managed_string(ptr: *mut u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe {
-        let len = *(ptr as *const u64) as usize;
-        let slice = std::slice::from_raw_parts(ptr.add(8) as *const u16, len);
-        String::from_utf16_lossy(slice)
-    }
+    String::from_utf16_lossy(string_units(ptr))
 }
 
 pub fn alloc_string_array(items: &[String]) -> Value {
@@ -495,7 +496,22 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 Some(Value::I64(t))
             }
         }
-        "get_ProcessorCount" => Some(Value::I32(1)),
+        "get_ProcessorCount" => Some(Value::I32(
+            std::thread::available_parallelism().map_or(1, |n| n.get() as i32),
+        )),
+        // Faux dans un service Windows : le gestionnaire de services de
+        // Winlux le lance avec WINLUX_SERVICE_NAME (#1991).
+        "get_UserInteractive" => Some(Value::I32(
+            std::env::var_os("WINLUX_SERVICE_NAME").is_none_or(|n| n.is_empty()) as i32,
+        )),
+        // Environment.GetFolderPath : chemin du CSIDL, comme SHGetFolderPath.
+        "CheminSpecial" => {
+            let csidl = args.first().map_or(-1, |v| v.as_i32());
+            Some(match crate::dlls::knownfolders::csidl_path(csidl) {
+                Some(p) => alloc_managed_string(&p),
+                None => Value::Null,
+            })
+        }
         "get_Is64BitProcess" => Some(Value::I32(1)),
         "get_Is64BitOperatingSystem" => Some(Value::I32(1)),
         "GetCommandLineArgs" => Some(Value::Null),
@@ -944,97 +960,17 @@ fn activator_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
     }
 }
 
-// ── System.IO.File ──
-
-fn file_dispatch(method: &str, args: &[Value]) -> Option<Value> {
-    match method {
-        "Exists" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::I32(0)),
-            };
-            Some(Value::I32(if std::path::Path::new(&path).exists() {
-                1
-            } else {
-                0
-            }))
-        }
-        "ReadAllText" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::Null),
-            };
-            match std::fs::read_to_string(&path) {
-                Ok(content) => Some(alloc_managed_string(&content)),
-                Err(_) => Some(Value::Null),
-            }
-        }
-        "WriteAllText" => {
-            if args.len() >= 2 {
-                let path = value_to_string(&args[args.len() - 2]);
-                let content = value_to_string(&args[args.len() - 1]);
-                let _ = std::fs::write(&path, &content);
-            }
-            Some(Value::I32(0))
-        }
-        "Delete" => {
-            let path = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
-                _ => return Some(Value::I32(0)),
-            };
-            let _ = std::fs::remove_file(&path);
-            Some(Value::I32(0))
-        }
-        _ => missing("File", method),
-    }
-}
-
-// ── System.IO.Path ──
-
-fn path_dispatch(method: &str, args: &[Value]) -> Option<Value> {
-    match method {
-        "Combine" => {
-            let parts: Vec<String> = args.iter().map(value_to_string).collect();
-            let mut path = std::path::PathBuf::new();
-            for p in &parts {
-                path.push(p);
-            }
-            Some(alloc_managed_string(&path.to_string_lossy()))
-        }
-        "GetFileName" => {
-            let s = value_to_string(args.last()?);
-            let name = std::path::Path::new(&s)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            Some(alloc_managed_string(&name))
-        }
-        "GetExtension" => {
-            let s = value_to_string(args.last()?);
-            let ext = std::path::Path::new(&s)
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy()))
-                .unwrap_or_default();
-            Some(alloc_managed_string(&ext))
-        }
-        "GetDirectoryName" => {
-            let s = value_to_string(args.last()?);
-            let dir = std::path::Path::new(&s)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            Some(alloc_managed_string(&dir))
-        }
-        _ => missing("Path", method),
-    }
-}
+// System.IO (File, Path, Directory, flux) est écrit en C# dans notre
+// mscorlib, au-dessus des primitives de fichiers.rs (#2012, #2013).
 
 // ── System.Runtime.InteropServices.Marshal ──
 
 fn marshal_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "SizeOf" => Some(Value::I32(8)),
-        "GetLastWin32Error" | "GetLastPInvokeError" => Some(Value::I32(0)),
+        // SizeOf est servi par marshal.rs (#2026).
+        "GetLastWin32Error" | "GetLastPInvokeError" => {
+            Some(Value::I32(crate::process::last_error() as i32))
+        }
         "PtrToStringAnsi" | "PtrToStringUni" => match args.last() {
             Some(Value::Ref(p)) if !p.is_null() => {
                 let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };

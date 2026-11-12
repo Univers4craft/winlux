@@ -1594,6 +1594,7 @@ pub const ORDINALS: &[(&str, u16, &str)] = &[
     ("winspool", 204, "SetDefaultPrinterW"),
     ("shlwapi", 515, "SHGetViewStatePropertyBag"),
     ("oleaut32", 185, "VariantTimeToSystemTime"),
+    ("oleaut32", 313, "VarBstrCat"), // #2031
     ("oleaut32", 314, "VarBstrCmp"),
     ("d3d12", 101, "D3D12CreateDevice"),
     ("d3d12", 102, "D3D12GetDebugInterface"),

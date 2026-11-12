@@ -12,7 +12,7 @@
 //! `Var`.
 
 use super::com::{Iface, A, A::*, IDISPATCH, IUNKNOWN};
-use crate::dlls::netfw;
+use crate::dlls::{netfw, netfw2};
 
 const BS_GET: Option<&[A]> = Some(&[OutPtr]);
 const ONE: Option<&[A]> = Some(&[I]);
@@ -96,7 +96,116 @@ pub(super) static INETFWAUTHORIZEDAPPLICATION: Iface = Iface {
     ],
 };
 
+pub(super) static INETFWPOLICY2: Iface = Iface {
+    name: "INetFwPolicy2",
+    iid: netfw2::IID_INET_FW_POLICY2,
+    parent: Some(&IDISPATCH),
+    methods: &[
+        ONE,                        // get_CurrentProfileTypes
+        Some(&[I, I]),              // get_FirewallEnabled
+        Some(&[I, I]),              // put_FirewallEnabled
+        Some(&[I, Var]),            // get_ExcludedInterfaces
+        Some(&[I, VarIn]),          // put_ExcludedInterfaces
+        Some(&[I, I]),              // get_BlockAllInboundTraffic
+        Some(&[I, I]),              // put_BlockAllInboundTraffic
+        Some(&[I, I]),              // get_NotificationsDisabled
+        Some(&[I, I]),              // put_NotificationsDisabled
+        Some(&[I, I]),              // get_UnicastResponsesToMulticastBroadcastDisabled
+        Some(&[I, I]),              // put_UnicastResponsesToMulticastBroadcastDisabled
+        Some(&[Out(&INETFWRULES)]), // get_Rules
+        None,                       // get_ServiceRestriction (non servi)
+        Some(&[I, I, I]),           // EnableRuleGroup
+        Some(&[I, I, I]),           // IsRuleGroupEnabled
+        NONE,                       // RestoreLocalFirewallDefaults
+        Some(&[I, I]),              // get_DefaultInboundAction
+        Some(&[I, I]),              // put_DefaultInboundAction
+        Some(&[I, I]),              // get_DefaultOutboundAction
+        Some(&[I, I]),              // put_DefaultOutboundAction
+        Some(&[I, I]),              // get_IsRuleGroupCurrentlyEnabled
+        ONE,                        // get_LocalPolicyModifyState
+    ],
+};
+
+pub(super) static INETFWRULES: Iface = Iface {
+    name: "INetFwRules",
+    iid: netfw2::IID_INET_FW_RULES,
+    parent: Some(&IDISPATCH),
+    methods: &[
+        ONE,                          // get_Count
+        Some(&[In(&INETFWRULE)]),     // Add
+        ONE,                          // Remove
+        Some(&[I, Out(&INETFWRULE)]), // Item
+        Some(&[Out(&IUNKNOWN)]),      // get__NewEnum
+    ],
+};
+
+/// INetFwRule : 18 propriétés, get_ puis put_. Chaînes : BSTR rendu
+/// (`OutPtr`) et passé (`I`) ; Interfaces : VARIANT (`Var` / `VarIn`) ;
+/// le reste (LONG, VARIANT_BOOL, énumérations) : `I`.
+pub(super) static INETFWRULE: Iface = Iface {
+    name: "INetFwRule",
+    iid: netfw2::IID_INET_FW_RULE,
+    parent: Some(&IDISPATCH),
+    methods: &[
+        BS_GET,
+        ONE, // Name
+        BS_GET,
+        ONE, // Description
+        BS_GET,
+        ONE, // ApplicationName
+        BS_GET,
+        ONE, // ServiceName
+        ONE,
+        ONE, // Protocol
+        BS_GET,
+        ONE, // LocalPorts
+        BS_GET,
+        ONE, // RemotePorts
+        BS_GET,
+        ONE, // LocalAddresses
+        BS_GET,
+        ONE, // RemoteAddresses
+        BS_GET,
+        ONE, // IcmpTypesAndCodes
+        ONE,
+        ONE, // Direction
+        Some(&[Var]),
+        Some(&[VarIn]), // Interfaces
+        BS_GET,
+        ONE, // InterfaceTypes
+        ONE,
+        ONE, // Enabled
+        BS_GET,
+        ONE, // Grouping
+        ONE,
+        ONE, // Profiles
+        ONE,
+        ONE, // EdgeTraversal
+        ONE,
+        ONE, // Action
+    ],
+};
+
+/// IEnumVARIANT des collections du pare-feu (oaidl.h) : Next est décrit
+/// pour un élément à la fois, comme IEnumWbemClassObject ; l'énumérateur
+/// du runtime n'en rend jamais plus d'un à un programme x86 (#2036).
+pub(super) static IENUMVARIANT: Iface = Iface {
+    name: "IEnumVARIANT",
+    iid: crate::dlls::enum_variant::IID_IENUM_VARIANT,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, Var, OutPtr]),     // Next
+        ONE,                         // Skip
+        NONE,                        // Reset
+        Some(&[Out(&IENUMVARIANT)]), // Clone
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
+    &IENUMVARIANT,
+    &INETFWPOLICY2,
+    &INETFWRULES,
+    &INETFWRULE,
     &INETFWMGR,
     &INETFWPOLICY,
     &INETFWPROFILE,

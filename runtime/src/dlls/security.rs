@@ -843,6 +843,46 @@ unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
     }
 }
 
+/// Parties d'un descripteur (absolu ou auto-relatif) : propriétaire,
+/// groupe, SACL et DACL, copiées.
+pub(crate) unsafe fn sd_parts(sd: *const u8) -> [Option<Vec<u8>>; 4] {
+    let part = |field: usize| -> Option<Vec<u8>> {
+        let p = sd_part(sd, field);
+        if p.is_null() {
+            return None;
+        }
+        if field == 12 || field == 16 {
+            let len = std::ptr::read_unaligned(p.add(2) as *const u16) as usize;
+            (len >= 8).then(|| std::slice::from_raw_parts(p, len).to_vec())
+        } else {
+            sid_at(p).map(<[u8]>::to_vec)
+        }
+    };
+    [part(4), part(8), part(12), part(16)]
+}
+
+/// Descripteur auto-relatif d'après ses parties (ordre de `sd_parts`) et
+/// les bits de contrôle hors SE_SELF_RELATIVE et *_PRESENT.
+pub(crate) fn self_relative_sd(parts: &[Option<Vec<u8>>; 4], control: u16) -> Vec<u8> {
+    let mut sd = vec![0u8; 20];
+    sd[0] = 1;
+    let mut c = (control & !(SE_SELF_RELATIVE | SE_DACL_PRESENT | 0x10)) | SE_SELF_RELATIVE;
+    for (i, field) in [4usize, 8, 12, 16].into_iter().enumerate() {
+        if let Some(bytes) = &parts[i] {
+            let off = sd.len() as u32;
+            sd[field..field + 4].copy_from_slice(&off.to_le_bytes());
+            sd.extend_from_slice(bytes);
+            match field {
+                12 => c |= 0x10, // SE_SACL_PRESENT
+                16 => c |= SE_DACL_PRESENT,
+                _ => {}
+            }
+        }
+    }
+    sd[2..4].copy_from_slice(&c.to_le_bytes());
+    sd
+}
+
 unsafe fn named_security_info(
     name: &str,
     kind: u32,
@@ -2385,6 +2425,8 @@ pub fn releve_exports() -> crate::dlls::Exports {
         "GetEffectiveRightsFromAclW" => fn GetEffectiveRightsFromAclW,
         "GetAuditedPermissionsFromAclW" => fn GetAuditedPermissionsFromAclW,
         "GetExplicitEntriesFromAclW" => fn GetExplicitEntriesFromAclW,
+        // TRUSTEE_IS_SID : ptstrName est un SID, même disposition en A (#2029).
+        "GetExplicitEntriesFromAclA" => fn GetExplicitEntriesFromAclW,
         "ConvertSecurityDescriptorToStringSecurityDescriptorW" => fn ConvertSecurityDescriptorToStringSecurityDescriptorW,
         "AdjustTokenGroups" => fn AdjustTokenGroups,
         "LookupPrivilegeNameW" => fn LookupPrivilegeNameW,

@@ -38,7 +38,7 @@ namespace System
     }
 
     public abstract class ValueType { }
-    public abstract class Enum : ValueType { }
+    public abstract partial class Enum : ValueType { }
     public struct Void { }
 
     public partial struct Boolean { private bool m_value; }
@@ -70,8 +70,8 @@ namespace System
         public static bool IsNaN(double d) { return d != d; }
 #pragma warning restore 1718
     }
-    public unsafe struct IntPtr { private void* m_value; }
-    public unsafe struct UIntPtr { private void* m_value; }
+    public unsafe partial struct IntPtr { private void* m_value; }
+    public unsafe partial struct UIntPtr { private void* m_value; }
 
     public partial struct Char
     {
@@ -230,7 +230,7 @@ namespace System
     }
 
     [AttributeUsage(AttributeTargets.All, Inherited = true, AllowMultiple = false)]
-    public abstract class Attribute { }
+    public abstract partial class Attribute { }
 
     [Flags]
     public enum AttributeTargets
