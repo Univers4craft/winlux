@@ -5160,6 +5160,26 @@ fn share_named(
 }
 
 pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
+    let Some(name) = name else {
+        return add_sync_named(obj, None);
+    };
+    let kind = kind_label(sync_kind(&obj));
+    let h = add_sync_named(obj, Some(name.clone()));
+    let err = crate::process::last_error();
+    remember_name(h, &name);
+    crate::trace!(
+        "Create{kind}({name}) = 0x{h:x}, clé {:?}, {} (erreur {err})",
+        crate::dlls::named_objects::name_key(&name),
+        match (h, err) {
+            (0, _) => "refusé",
+            (_, 183) => "existait déjà",
+            _ => "créé",
+        }
+    );
+    h
+}
+
+fn add_sync_named(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
         let key = crate::dlls::named_objects::name_key(&name);
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
@@ -5190,7 +5210,12 @@ pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
                     crate::process::set_last_error(e);
                     return 0;
                 }
-                None => obj,
+                None => {
+                    crate::trace!(
+                        "objet nommé {name} : partage entre processus indisponible, objet local"
+                    );
+                    obj
+                }
             };
             crate::dlls::named_objects::retain(crate::dlls::named_objects::SYNC, &key);
             names.insert(key, (obj.clone(), 1));
@@ -5240,6 +5265,7 @@ pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
         .cloned()
 }
 fn remove_sync(h: usize) -> bool {
+    forget_name(h);
     let Some(obj) = lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&h) else {
         return false;
     };
@@ -5260,6 +5286,49 @@ fn remove_sync(h: usize) -> bool {
     }
     true
 }
+/// WINLUX_TRACE (#2072) : nom des handles d'objets nommés, pour tracer
+/// leurs signalements et leurs attentes entre processus (connexion de
+/// steam.exe au webhelper, #1995). Rempli seulement quand la trace est
+/// active.
+static TRACED_NAMES: Mutex<Option<HashMap<usize, String>>> = Mutex::new(None);
+
+fn trace_on() -> bool {
+    crate::log::enabled(crate::log::Level::Trace)
+}
+
+fn remember_name(h: usize, name: &str) {
+    if h != 0 && trace_on() {
+        lock(&TRACED_NAMES)
+            .get_or_insert_with(HashMap::new)
+            .insert(h, name.to_string());
+    }
+}
+
+fn forget_name(h: usize) {
+    if trace_on() {
+        if let Some(m) = lock(&TRACED_NAMES).as_mut() {
+            m.remove(&h);
+        }
+    }
+}
+
+/// Nom de l'objet du handle `h` s'il est nommé et la trace active.
+fn traced_name(h: usize) -> Option<String> {
+    if !trace_on() {
+        return None;
+    }
+    lock(&TRACED_NAMES).as_ref()?.get(&h).cloned()
+}
+
+fn kind_label(kind: u32) -> &'static str {
+    match kind {
+        SHARED_KIND_EVENT => "Event",
+        SHARED_KIND_MUTEX => "Mutex",
+        SHARED_KIND_SEMAPHORE => "Semaphore",
+        _ => "objet",
+    }
+}
+
 fn named_event(name: *const u8) -> Option<String> {
     if name.is_null() {
         None
@@ -7082,6 +7151,9 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if let Some(n) = traced_name(h) {
+        crate::trace!("SetEvent({n}, 0x{h:x})");
+    }
     let _gate = sync_gate();
     v.store(&mut lock(&v.signaled), true);
     if let Some(w) = v.shared.get() {
@@ -7102,6 +7174,9 @@ pub extern "win64" fn reset_event(h: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ResetEvent({n}, 0x{h:x})");
+    }
     let _gate = sync_gate();
     v.store(&mut lock(&v.signaled), false);
     1
@@ -7115,11 +7190,11 @@ pub extern "win64" fn release_mutex(h: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
-    if leave_mutex(&m) {
-        1
-    } else {
-        0
+    let ok = leave_mutex(&m);
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ReleaseMutex({n}, 0x{h:x}) = {ok}");
     }
+    i32::from(ok)
 }
 
 /// System.Threading.Mutex de la mscorlib Winlux (#1988) : le mutex .NET est
@@ -7184,6 +7259,21 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
 /// Open{Event,Mutex,Semaphore} : objet nommé de ce processus, ou d'un autre
 /// processus du même compte (#20).
 fn open_sync_by_name(name: &str, kind: u32) -> usize {
+    let h = open_sync_by_name_inner(name, kind);
+    remember_name(h, name);
+    crate::trace!(
+        "Open{}({name}) = 0x{h:x} (erreur {})",
+        kind_label(kind),
+        if h == 0 {
+            crate::process::last_error()
+        } else {
+            0
+        }
+    );
+    h
+}
+
+fn open_sync_by_name_inner(name: &str, kind: u32) -> usize {
     let key = crate::dlls::named_objects::name_key(name);
     let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
     if !names.contains_key(&key) {
@@ -7288,6 +7378,14 @@ pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *co
     open_named_sync(name, false)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
+    let Some(n) = traced_name(h) else {
+        return wait_for_single_object_inner(h, timeout);
+    };
+    let r = wait_for_single_object_inner(h, timeout);
+    crate::trace!("WaitForSingleObject({n}, 0x{h:x}, {timeout} ms) = 0x{r:x}");
+    r
+}
+fn wait_for_single_object_inner(h: usize, timeout: u32) -> u32 {
     // Entrée de la console (terminal) : signalée quand une touche attend.
     if crate::dlls::console_input::is_console_input(h) {
         return if crate::dlls::console_input::wait(timeout) {
@@ -7361,6 +7459,31 @@ fn wait_wsa_events(hs: &[usize], timeout: u32) -> u32 {
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
+    count: u32,
+    handles: *const usize,
+    wait_all: i32,
+    timeout: u32,
+) -> u32 {
+    let names: Vec<String> = if trace_on() && !handles.is_null() && (1..=64).contains(&count) {
+        std::slice::from_raw_parts(handles, count as usize)
+            .iter()
+            .map(|&h| traced_name(h).unwrap_or_else(|| format!("0x{h:x}")))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let r = wait_for_multiple_objects_inner(count, handles, wait_all, timeout);
+    if names.len() != count as usize || names.iter().all(|n| n.starts_with("0x")) {
+        return r;
+    }
+    crate::trace!(
+        "WaitForMultipleObjects([{}], tous {}, {timeout} ms) = 0x{r:x}",
+        names.join(", "),
+        wait_all != 0
+    );
+    r
+}
+unsafe fn wait_for_multiple_objects_inner(
     count: u32,
     handles: *const usize,
     wait_all: i32,
@@ -10799,6 +10922,9 @@ pub unsafe extern "win64" fn create_semaphore_a(
 /// ReleaseSemaphore : ajoute `count` au compteur sans dépasser le maximum
 /// (ERROR_TOO_MANY_POSTS sinon), renvoie l'ancienne valeur dans `prev`.
 pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut i32) -> i32 {
+    if let Some(n) = traced_name(h) {
+        crate::trace!("ReleaseSemaphore({n}, 0x{h:x}, {count})");
+    }
     let Some(SyncHandle::Semaphore(sem)) = lookup_sync(h) else {
         crate::process::set_last_error(6);
         return 0;
