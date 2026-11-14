@@ -47,6 +47,7 @@ pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
+pub mod crt_mbs;
 pub mod crt_more;
 pub mod crt_proc;
 pub mod crt_releve;
@@ -195,6 +196,7 @@ pub mod ncrypt;
 pub mod netfw;
 pub mod netfw2;
 pub mod netlistmgr;
+pub mod network_information;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
@@ -227,6 +229,9 @@ pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+// msvcp140_2 (#2187), rangée avec les autres redistribuables.
+pub mod msvcp140_2;
+pub mod msvcp140_flux;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -447,6 +452,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_mbs::exports());
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
@@ -1281,7 +1287,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "msvcp140",
-                exports: msvcp140::exports(),
+                exports: {
+                    let mut m = msvcp140::exports();
+                    m.extend(msvcp140_flux::exports());
+                    m
+                },
                 handle: 0,
             },
             Builtin {
@@ -1331,6 +1341,8 @@ fn builtins() -> &'static Vec<Builtin> {
             ("mfc42", redist_dlls::mfc42_exports()),
             ("mssign32", redist_dlls::mssign32_exports()),
             ("concrt140", redist_dlls::concrt140_exports()),
+            // Fonctions mathématiques spéciales de C++17 : Qt6Gui (OBS) (#2187).
+            ("msvcp140_2", msvcp140_2::exports()),
             ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
@@ -1791,6 +1803,10 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
+    // msvcp140_2 : la vraie DLL du redistribuable passe avant (#2187).
+    if normalized == "msvcp140_2" {
+        return true;
+    }
     // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
     // couvre que les petits tests C++ ; une appli qui livre la sienne
     // (FileZilla, wxWidgets…) en a besoin en entier (#783).
