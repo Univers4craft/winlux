@@ -63,10 +63,11 @@ const NLM_CONNECTIVITY_DISCONNECTED: u32 = 0;
 const NLM_CONNECTIVITY_IPV4_LOCALNETWORK: u32 = 0x20;
 const NLM_CONNECTIVITY_IPV4_INTERNET: u32 = 0x40;
 const NLM_CONNECTIVITY_IPV6_INTERNET: u32 = 0x400;
-const NLM_INTERNET: u32 = NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET;
+pub(crate) const NLM_INTERNET: u32 =
+    NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET;
 
 /// Connectivité d'après /proc/net/route et /proc/net/ipv6_route.
-fn connectivity_from(route: &str, ipv6_route: &str) -> u32 {
+pub(crate) fn connectivity_from(route: &str, ipv6_route: &str) -> u32 {
     let mut c = NLM_CONNECTIVITY_DISCONNECTED;
     for l in route.lines().skip(1) {
         let f: Vec<&str> = l.split_whitespace().collect();

@@ -345,6 +345,66 @@ def dark_theme(Gtk):
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
 
 
+def _screen_suffix():
+    """Même nommage que winlux-lock : :0 sans suffixe, :1 → « -1 »."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    return "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+
+
+def screen_locked():
+    """Vrai si winlux-lock tient l'écran (pid vivant dans son marqueur)."""
+    try:
+        with open(ROOT + "/run/winlux/lock/active" + _screen_suffix()) as marker:
+            pid = int(marker.read().strip())
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def power_request_path():
+    return ROOT + "/run/winlux/lock/power" + _screen_suffix()
+
+
+def request_lock_yield():
+    """Demande à l'écran de verrouillage de céder la saisie à cet écran d'arrêt
+    (#2254). winlux-lock vérifie le pid, son propriétaire et son programme."""
+    target = power_request_path()
+    tmp = f"{target}.{os.getpid()}"
+    try:
+        with open(tmp, "w") as marker:
+            # Lisible par le compte verrouillé quel que soit l'umask : le
+            # démon root tourne en umask 077, et une demande en 0600 restait
+            # illisible pour winlux-lock (banc 2, 12 nov.). Jamais inscriptible.
+            os.fchmod(marker.fileno(), 0o644)
+            marker.write(f"{os.getpid()}\n")
+        os.replace(tmp, target)
+        return True
+    except OSError as error:
+        log(f"demande de saisie au verrou impossible : {error}")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def release_lock_yield():
+    try:
+        with open(power_request_path()) as marker:
+            if int(marker.read().strip()) != os.getpid():
+                return
+        os.unlink(power_request_path())
+    except (OSError, ValueError):
+        pass
+
+
+def log(message):
+    print(f"winlux-power {time.strftime('%H:%M:%S')} : {message}", file=sys.stderr, flush=True)
+
+
 def open_windows():
     """Fenêtres d'applications ouvertes : {id: (classe, titre, pid)}.
 
@@ -418,12 +478,40 @@ class PowerUI:
         self.window.add(self.overlay)
         self.card = None
         self.ticker = None
+        self.locked = screen_locked()
         if self.mode == "confirm":
             self.show_confirm()
         else:
             self.start_shutdown()
         self.window.show_all()
+        # Session verrouillée (#2254) : l'écran de verrouillage tient la saisie
+        # et cachait la carte « Ces applications empêchent l'arrêt ». Il la
+        # cède à cet écran, plein écran et sans rien montrer de la session.
+        self.yield_requested = self.locked and request_lock_yield()
+        self.window.connect("destroy", lambda *_: release_lock_yield())
+        self.grabbed = False
+        self.grab_failures = 0
         self.GLib.idle_add(self.grab)
+        self.GLib.timeout_add(1000, self.watch_lock)
+
+    def watch_lock(self):
+        """Verrouillage survenu pendant l'écran d'arrêt (inactivité pendant
+        l'attente d'une application) : même passation que ci-dessus, et cet
+        écran repasse au premier plan."""
+        if self.yield_requested or not screen_locked():
+            return not self.yield_requested
+        self.locked = True
+        self.yield_requested = request_lock_yield()
+        gdk_window = self.window.get_window()
+        if gdk_window is not None:
+            gdk_window.raise_()
+        if not self.grabbed:
+            self.GLib.idle_add(self.grab)
+        if self.mode == "blocked":
+            # Plus de titres de fenêtres sur un écran verrouillé.
+            self.show_blocked(self.blockers)
+        log("écran verrouillé pendant l'arrêt : saisie demandée au verrou")
+        return False
 
     # Saisie exclusive : la fenêtre POPUP n'a pas de gestionnaire de fenêtres.
     def grab(self):
@@ -431,14 +519,25 @@ class PowerUI:
         if gdk_window is None:
             return False
         seat = self.window.get_display().get_default_seat()
-        for _ in range(20):
-            if seat.grab(gdk_window, self.Gdk.SeatCapabilities.ALL, True, None, None, None, None) == self.Gdk.GrabStatus.SUCCESS:
-                break
-            time.sleep(0.05)
+        status = seat.grab(gdk_window, self.Gdk.SeatCapabilities.ALL, True, None, None, None, None)
+        if status == self.Gdk.GrabStatus.SUCCESS:
+            if self.grab_failures:
+                log(f"saisie obtenue après {self.grab_failures} refus")
+            self.grabbed = True
+            return False
+        self.grab_failures += 1
+        if self.grab_failures == 1:
+            # Échec auparavant silencieux : la carte restait affichée mais
+            # inutilisable, sans aucune trace (#2254).
+            log(f"saisie refusée ({status.value_nick}), "
+                + ("écran de verrouillage actif, nouvel essai" if self.locked else "nouvel essai"))
+        # On réessaie tant que l'écran est là : la carte doit rester atteignable.
+        self.GLib.timeout_add(20 if self.yield_requested else 50, self.grab)
         return False
 
     def ungrab(self):
         self.window.get_display().get_default_seat().ungrab()
+        release_lock_yield()
 
     # ── Cartes ──
     def set_card(self, widget):
@@ -516,19 +615,24 @@ class PowerUI:
         Gtk = self.Gtk
         shutdown = self.action == "poweroff"
         self.mode = "blocked"
+        self.blockers = blockers
         report("blocked")
         listing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         seen = set()
         for window_class, title, _pid in blockers.values():
-            if title in seen:
+            key = window_class if self.locked else title
+            if key in seen:
                 continue
-            seen.add(title)
+            seen.add(key)
             row = Gtk.Box(spacing=10)
             icon = window_class.split(".")[0].casefold()
             row.pack_start(Gtk.Image.new_from_icon_name(icon if Gtk.IconTheme.get_default().has_icon(icon)
                                                         else "application-x-executable", Gtk.IconSize.LARGE_TOOLBAR),
                            False, False, 0)
-            name = Gtk.Label(label=title, xalign=0, ellipsize=3, max_width_chars=40)
+            # Session verrouillée : le nom de l'application, jamais le titre de
+            # sa fenêtre (nom de document, objet d'un message…).
+            shown = window_class.split(".")[-1] if self.locked else title
+            name = Gtk.Label(label=shown, xalign=0, ellipsize=3, max_width_chars=40)
             name.get_style_context().add_class("app")
             row.pack_start(name, True, True, 0)
             listing.pack_start(row, False, False, 0)

@@ -47,12 +47,14 @@ pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
+pub mod crt_mbs;
 pub mod crt_more;
 pub mod crt_proc;
 pub mod crt_releve;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_secure;
+pub mod crt_secure_reste;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
@@ -109,6 +111,7 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod fiber64;
+pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -183,6 +186,7 @@ pub mod mscoree;
 pub mod msctf_profiles;
 pub mod mshwgst;
 pub mod msvcp140;
+pub mod msvcp140_1;
 pub mod msvcrt;
 pub mod msxml;
 pub mod msxml_dom;
@@ -192,6 +196,7 @@ pub mod ncrypt;
 pub mod netfw;
 pub mod netfw2;
 pub mod netlistmgr;
+pub mod network_information;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
@@ -224,6 +229,9 @@ pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+// msvcp140_2 (#2187), rangée avec les autres redistribuables.
+pub mod msvcp140_2;
+pub mod msvcp140_flux;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -257,6 +265,7 @@ pub mod sysdlls;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
@@ -443,11 +452,13 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_mbs::exports());
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e.extend(crt_releve::exports());
             e.extend(crt_secure::exports());
+            e.extend(crt_secure_reste::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -1276,7 +1287,16 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "msvcp140",
-                exports: msvcp140::exports(),
+                exports: {
+                    let mut m = msvcp140::exports();
+                    m.extend(msvcp140_flux::exports());
+                    m
+                },
+                handle: 0,
+            },
+            Builtin {
+                name: "msvcp140_1",
+                exports: msvcp140_1::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1321,6 +1341,8 @@ fn builtins() -> &'static Vec<Builtin> {
             ("mfc42", redist_dlls::mfc42_exports()),
             ("mssign32", redist_dlls::mssign32_exports()),
             ("concrt140", redist_dlls::concrt140_exports()),
+            // Fonctions mathématiques spéciales de C++17 : Qt6Gui (OBS) (#2187).
+            ("msvcp140_2", msvcp140_2::exports()),
             ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
@@ -1474,6 +1496,8 @@ fn add_basics(all: &mut [Builtin]) {
         .chain(lot_f)
         // discord_utils.node (#1823).
         .chain(discord_win32::all())
+        // ms-teams.exe et ses DLL (#2110).
+        .chain(teams_win32::all())
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1779,12 +1803,21 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
+    // msvcp140_2 : la vraie DLL du redistribuable passe avant (#2187).
+    if normalized == "msvcp140_2" {
+        return true;
+    }
     // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
     // couvre que les petits tests C++ ; une appli qui livre la sienne
     // (FileZilla, wxWidgets…) en a besoin en entier (#783).
     matches!(
         normalized,
-        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+        "msvcp140"
+            | "msvcp140_1"
+            | "libstdc++-6"
+            | "libgcc_s_seh-1"
+            | "libgcc_s_dw2-1"
+            | "libwinpthread-1"
     )
 }
 
