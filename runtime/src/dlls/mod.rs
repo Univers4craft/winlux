@@ -124,6 +124,7 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod global_options;
 pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
@@ -298,6 +299,7 @@ pub mod wbem;
 pub mod weak_ref;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wer;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -1178,6 +1180,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "qwave",
                 exports: qwave::exports(),
+                handle: 0,
+            },
+            // Rapports d'erreurs, jamais transmis (OneDrive, #2391).
+            Builtin {
+                name: "wer",
+                exports: wer::exports(),
                 handle: 0,
             },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).

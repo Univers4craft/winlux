@@ -24,6 +24,9 @@ impl Env {
         std::fs::create_dir_all(root.join("c")).unwrap();
         let vars = [
             ("WINLUX_DRIVE_C", root.join("c")),
+            // C: et le profil (C:\Users\<compte>) sont le même dossier,
+            // comme sur une installation (drive_c vaut home par défaut).
+            ("WINLUX_HOME", root.join("c")),
             ("XDG_DATA_HOME", root.join("data")),
             ("XDG_CONFIG_HOME", root.join("config")),
             ("WINLUX_REGISTRY_PATH", root.join("registry.tsv")),
@@ -424,6 +427,50 @@ fn systemfolder_reste_syswow64_pour_un_paquet_x64() {
         "C:\\Program Files (x86)\\Common Files\\"
     );
     assert_eq!(ctx.get("ProgramFiles64Folder"), "C:\\Program Files\\");
+}
+
+/// #2404 : les dossiers du profil sont sous C:\Users\<compte>, comme sous
+/// Windows ; TempFolder est ce que rend GetTempPath.
+#[test]
+fn dossiers_du_profil_sous_users_compte() {
+    let db = db::Database::parse(SAMPLE).unwrap();
+    let mut ctx = cond::Context::default();
+    install::system_props(&mut ctx, &db, &install::Options::default());
+    let profile = format!("{}\\", crate::paths::profile_windows());
+    assert!(profile.starts_with("C:\\Users\\"), "{profile}");
+    assert_eq!(ctx.get("TempFolder"), crate::dlls::kernel32::temp_path());
+    assert_eq!(
+        ctx.get("AppDataFolder"),
+        format!("{profile}AppData\\Roaming\\")
+    );
+    assert_eq!(
+        ctx.get("LocalAppDataFolder"),
+        format!("{profile}AppData\\Local\\")
+    );
+    assert_eq!(ctx.get("PersonalFolder"), format!("{profile}Documents\\"));
+    for name in [
+        "TempFolder",
+        "AppDataFolder",
+        "LocalAppDataFolder",
+        "PersonalFolder",
+        "MyPicturesFolder",
+        "FavoritesFolder",
+        "StartMenuFolder",
+        "ProgramMenuFolder",
+        "StartupFolder",
+        "AdminToolsFolder",
+        "SendToFolder",
+        "TemplateFolder",
+        "RecentFolder",
+        "NetHoodFolder",
+        "PrintHoodFolder",
+    ] {
+        assert!(
+            ctx.get(name).starts_with(&profile),
+            "{name} = {}",
+            ctx.get(name)
+        );
+    }
 }
 
 /// `testdata/licence.msi` : la boîte de licence est préférée au lisez-moi,

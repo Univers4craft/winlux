@@ -240,8 +240,11 @@ fn is_int_resource(p: usize) -> bool {
     p < 0x10000
 }
 
-/// FindResourceA : renvoie un HRSRC (encodage du RVA et de la taille).
-pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *const u8) -> usize {
+/// Recherche commune de FindResourceA/W. `name` et `ty` sont un entier
+/// (MAKEINTRESOURCE), une chaîne, ou une chaîne « #NNN » : la documentation
+/// de FindResource dit que le nombre décimal qui suit « # » est alors
+/// l'identifiant entier (#2395).
+unsafe fn find_resource_args(hmod: usize, name: usize, ty: usize, ansi: bool) -> usize {
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
@@ -251,31 +254,23 @@ pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *
         crate::process::set_last_error(6);
         return 0;
     }
-
-    // Les chaînes converties doivent survivre jusqu'à la fin de la recherche :
-    // elles sont déclarées ici (et non dans les branches `else`, où elles
-    // étaient libérées avant d'être lues).
-    let type_w: Vec<u16>;
-    let name_w: Vec<u16>;
-    let type_id = if is_int_resource(ty as usize) {
-        ty as usize
-    } else {
-        // Convertir la chaîne ANSI en UTF-16 pour la comparaison.
-        let s = crate::dlls::cstr(ty);
-        type_w = s.encode_utf16().chain(std::iter::once(0)).collect();
-        type_w.as_ptr() as usize
+    // Les noms convertis vivent jusqu'à la fin de la recherche.
+    let ty_key = arg_key(ty, ansi);
+    let name_key = arg_key(name, ansi);
+    let lookup_arg = |k: &ResKey, buf: &mut Vec<u16>| -> (usize, bool) {
+        match k {
+            ResKey::Id(n) => (*n as usize, false),
+            ResKey::Name(w) => {
+                buf.extend_from_slice(w);
+                buf.push(0);
+                (buf.as_ptr() as usize, true)
+            }
+        }
     };
-    let name_id = if is_int_resource(name as usize) {
-        name as usize
-    } else {
-        let s = crate::dlls::cstr(name);
-        name_w = s.encode_utf16().chain(std::iter::once(0)).collect();
-        name_w.as_ptr() as usize
-    };
-
-    let type_is_str = !is_int_resource(ty as usize);
-    let name_is_str = !is_int_resource(name as usize);
-
+    let mut ty_buf = Vec::new();
+    let mut name_buf = Vec::new();
+    let (type_id, type_is_str) = lookup_arg(&ty_key, &mut ty_buf);
+    let (name_id, name_is_str) = lookup_arg(&name_key, &mut name_buf);
     match lookup_resource(base, type_id, name_id, type_is_str, name_is_str) {
         Ok(entry) => entry,
         Err(code) => {
@@ -285,33 +280,17 @@ pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *
     }
 }
 
+/// FindResourceA : renvoie un HRSRC, l'adresse de l'entrée de données.
+pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *const u8) -> usize {
+    find_resource_args(hmod, name as usize, ty as usize, true)
+}
+
 pub unsafe extern "win64" fn find_resource_w(
     hmod: usize,
     name: *const u16,
     ty: *const u16,
 ) -> usize {
-    let base = if hmod == 0 {
-        loader::main_module().map(|m| m.base).unwrap_or(0)
-    } else {
-        hmod & !loader::DATA_HANDLE_BITS
-    };
-    if base == 0 {
-        crate::process::set_last_error(6);
-        return 0;
-    }
-
-    let type_id = ty as usize;
-    let name_id = name as usize;
-    let type_is_str = !is_int_resource(ty as usize);
-    let name_is_str = !is_int_resource(name as usize);
-
-    match lookup_resource(base, type_id, name_id, type_is_str, name_is_str) {
-        Ok(entry) => entry,
-        Err(code) => {
-            crate::process::set_last_error(code);
-            0
-        }
-    }
+    find_resource_args(hmod, name as usize, ty as usize, false)
 }
 
 /// HRSRC plausible : l'adresse d'une entrée de données (jamais une petite
@@ -813,6 +792,48 @@ mod tests {
         b
     }
 
+    /// Image PE32+ minimale dont la seule section, .rsrc (RVA 0x1000), contient
+    /// `rsrc`, chargée comme données ; rend le handle.
+    fn image_de_donnees_avec(rsrc: &[u8], nom: &str) -> usize {
+        assert!(rsrc.len() <= 0x200);
+        let mut f = vec![0u8; 0x400];
+        let w16 = |f: &mut Vec<u8>, o: usize, v: u16| f[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let w32 = |f: &mut Vec<u8>, o: usize, v: u32| f[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        f[0..2].copy_from_slice(b"MZ");
+        w32(&mut f, 0x3c, 0x40);
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let coff = 0x44;
+        w16(&mut f, coff, 0x8664);
+        w16(&mut f, coff + 2, 1);
+        w16(&mut f, coff + 16, 0xf0);
+        w16(&mut f, coff + 18, 0x2022);
+        let opt = coff + 20;
+        w16(&mut f, opt, 0x20b);
+        w32(&mut f, opt + 32, 0x1000);
+        w32(&mut f, opt + 36, 0x200);
+        w32(&mut f, opt + 56, 0x2000);
+        w32(&mut f, opt + 60, 0x200);
+        w16(&mut f, opt + 68, 2);
+        w32(&mut f, opt + 108, 16);
+        w32(&mut f, opt + 108 + 4 + DIR_RESOURCE * 8, 0x1000);
+        w32(&mut f, opt + 108 + 8 + DIR_RESOURCE * 8, rsrc.len() as u32);
+        let sec = opt + 0xf0;
+        f[sec..sec + 5].copy_from_slice(b".rsrc");
+        w32(&mut f, sec + 8, rsrc.len() as u32);
+        w32(&mut f, sec + 12, 0x1000);
+        w32(&mut f, sec + 16, 0x200);
+        w32(&mut f, sec + 20, 0x200);
+        f[0x200..0x200 + rsrc.len()].copy_from_slice(rsrc);
+        let dir = std::env::temp_dir().join(format!(
+            "winlux-test-ressources-{}-{nom}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("module.dll");
+        std::fs::write(&path, &f).unwrap();
+        loader::load_data(&path, 2).unwrap()
+    }
+
     /// #2394 : chaque niveau de l'arbre manqué donne son propre code.
     #[test]
     fn find_resource_code_d_erreur_par_niveau() {
@@ -830,6 +851,47 @@ mod tests {
             walk_resource_tree(&r, 10, 6, false, false),
             Err(ERROR_RESOURCE_LANG_NOT_FOUND)
         );
+    }
+
+    /// #2395 : « #5 » (A comme W) désigne l'identifiant entier 5 ; « #x » et
+    /// « #70000 » restent des noms.
+    #[test]
+    fn find_resource_forme_diese_nnn() {
+        let w: Vec<u16> = "#5\0".encode_utf16().collect();
+        let a = b"#5\0";
+        assert!(matches!(
+            unsafe { arg_key(w.as_ptr() as usize, false) },
+            ResKey::Id(5)
+        ));
+        assert!(matches!(
+            unsafe { arg_key(a.as_ptr() as usize, true) },
+            ResKey::Id(5)
+        ));
+        let x: Vec<u16> = "#x\0".encode_utf16().collect();
+        assert!(matches!(
+            unsafe { arg_key(x.as_ptr() as usize, false) },
+            ResKey::Name(_)
+        ));
+        let big = b"#70000\0";
+        assert!(matches!(
+            unsafe { arg_key(big.as_ptr() as usize, true) },
+            ResKey::Name(_)
+        ));
+        // De bout en bout : « #5 » trouve la ressource d'identifiant 5 d'une
+        // image chargée comme données, « #7 » rend « nom absent ».
+        let _teb = crate::process::test_teb();
+        let h = image_de_donnees_avec(&section_rsrc(), "diese");
+        let base = h & !loader::DATA_HANDLE_BITS;
+        let w7: Vec<u16> = "#7\0".encode_utf16().collect();
+        let r = unsafe { find_resource_w(h, w.as_ptr(), 10 as *const u16) };
+        assert_eq!(r, base + 0x1000 + 0x60);
+        let r = unsafe { find_resource_a(h, a.as_ptr(), 10 as *const u8) };
+        assert_eq!(r, base + 0x1000 + 0x60);
+        assert_eq!(
+            unsafe { find_resource_w(h, w7.as_ptr(), 10 as *const u16) },
+            0
+        );
+        assert_eq!(crate::process::last_error(), ERROR_RESOURCE_NAME_NOT_FOUND);
     }
 
     /// #2394 : un module sans section de ressources rend 1812, et

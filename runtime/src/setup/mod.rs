@@ -13,6 +13,7 @@
 
 pub mod appx_signature;
 pub mod burn;
+pub mod elevation;
 pub mod inno;
 mod inno_layout;
 pub mod license;
@@ -1169,6 +1170,10 @@ pub fn cli(args: &[String]) -> i32 {
     if let Some(code) = crate::anticheat::check_launch(&path) {
         return code;
     }
+    // Droits d'administrateur demandés par l'installateur (#2180).
+    if let Err(code) = elevation::require(&path, &[]) {
+        return code;
+    }
     if detect_file(&path) == Some(Kind::SevenZip) {
         let rest: Vec<String> = args
             .iter()
@@ -1285,6 +1290,14 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         let mut log = Logger { quiet: false };
         remove(&m, &mut log);
         return Some(0);
+    }
+    // Droits d'administrateur demandés par l'installateur (#2180) : comme
+    // sous Windows, la demande d'élévation vient au lancement, avant toute
+    // page de l'installateur, contrat compris.
+    if burn::is_bundle_file(exe) || detect_file(exe).is_some() {
+        if let Err(code) = elevation::require(exe, &[]) {
+            return Some(code);
+        }
     }
     // Contrat de licence ni accepté (assistant) ni couvert par une option
     // silencieuse : sa page s'ouvre, refus = 1602 (#2123). Seulement pour

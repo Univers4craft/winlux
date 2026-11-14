@@ -1389,7 +1389,15 @@ const GUID_VENDOR_BUILTIN: Guid = guid(
     0x4589,
     [0xa7, 0x3a, 0xee, 0x0e, 0x62, 0x6a, 0x2a, 0x2b],
 );
+/// IWICBitmapEncoderInfo (wincodec.h des en-têtes mingw-w64).
+const IID_BITMAP_ENCODER_INFO: Guid = guid(
+    0x94c9b4ee,
+    0xa09f,
+    0x4f92,
+    [0x8a, 0x1e, 0x4a, 0x9b, 0xce, 0x7e, 0x76, 0xfb],
+);
 const WIC_DECODER: u32 = 1;
+const WIC_ENCODER: u32 = 2;
 const WIC_COMPONENT_SIGNED: u32 = 1;
 const ERROR_INSUFFICIENT_BUFFER_HR: i32 = 0x8007_007Au32 as i32;
 
@@ -1527,6 +1535,25 @@ const CODECS: [CodecDesc; 8] = [
     },
 ];
 
+/// Encodeurs intégrés (#1868). Paint.NET demande les informations de
+/// l'encodeur PNG (IWICBitmapEncoderInfo) avant de copier une image dans
+/// le presse-papiers ; leur indice suit ceux des décodeurs.
+const ENCODER_CODECS: [CodecDesc; 1] = [CodecDesc {
+    container: CONTAINER_PNG,
+    clsid: guid(
+        0x27949969,
+        0x876a,
+        0x41d7,
+        [0x94, 0x47, 0x56, 0x8f, 0x6a, 0x35, 0xa4, 0xdc],
+    ),
+    name: "PNG Encoder",
+    mimes: "image/png",
+    exts: ".png",
+    multiframe: false,
+    animation: false,
+    lossless: true,
+}];
+
 type InfoObj = Com<usize>;
 
 unsafe fn new_codec_info(index: usize, out: *mut *mut c_void) -> i32 {
@@ -1542,7 +1569,27 @@ unsafe fn codec_info_for_container(container: &Guid, out: *mut *mut c_void) -> i
 }
 
 unsafe fn codec(this: *mut InfoObj) -> &'static CodecDesc {
-    &CODECS[*Com::get(this)]
+    let i = *Com::get(this);
+    match CODECS.get(i) {
+        Some(c) => c,
+        None => &ENCODER_CODECS[i - CODECS.len()],
+    }
+}
+
+unsafe fn is_encoder_info(this: *mut InfoObj) -> bool {
+    *Com::get(this) >= CODECS.len()
+}
+
+/// Informations de l'encodeur intégré pour un format de conteneur
+/// (IWICBitmapEncoder::GetEncoderInfo, #1868).
+pub(super) unsafe fn encoder_info_for_container(container: &Guid, out: *mut *mut c_void) -> i32 {
+    match ENCODER_CODECS
+        .iter()
+        .position(|c| c.container == *container)
+    {
+        Some(i) => put(out, Com::create(ENCODER_INFO_VT.ptr(), CODECS.len() + i)),
+        None => WINCODEC_ERR_COMPONENTNOTFOUND,
+    }
 }
 
 /// Chaîne WIC : (taille du tampon en caractères, tampon, taille réelle).
@@ -1576,19 +1623,27 @@ unsafe extern "win64" fn info_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    let last = if is_encoder_info(this) {
+        IID_BITMAP_ENCODER_INFO
+    } else {
+        IID_BITMAP_DECODER_INFO
+    };
     qi_list(
         this,
         riid,
         out,
-        &[
-            IID_COMPONENT_INFO,
-            IID_BITMAP_CODEC_INFO,
-            IID_BITMAP_DECODER_INFO,
-        ],
+        &[IID_COMPONENT_INFO, IID_BITMAP_CODEC_INFO, last],
     )
 }
-unsafe extern "win64" fn info_component_type(_this: *mut InfoObj, out: *mut u32) -> i32 {
-    put_value(out, WIC_DECODER)
+unsafe extern "win64" fn info_component_type(this: *mut InfoObj, out: *mut u32) -> i32 {
+    put_value(
+        out,
+        if is_encoder_info(this) {
+            WIC_ENCODER
+        } else {
+            WIC_DECODER
+        },
+    )
 }
 unsafe extern "win64" fn info_clsid(this: *mut InfoObj, out: *mut Guid) -> i32 {
     put_value(out, codec(this).clsid)
@@ -1757,6 +1812,42 @@ static CODEC_INFO_VT: VTable<26> = VTable([
     info_patterns as *const (),
     info_matches_pattern as *const (),
     info_create_instance as *const (),
+]);
+
+unsafe extern "win64" fn encoder_info_create_instance(
+    this: *mut InfoObj,
+    out: *mut *mut c_void,
+) -> i32 {
+    let container = codec(this).container;
+    encoder::create_encoder(std::ptr::null_mut(), &container, std::ptr::null(), out)
+}
+
+/// IWICBitmapEncoderInfo : IWICBitmapCodecInfo puis CreateInstance.
+static ENCODER_INFO_VT: VTable<24> = VTable([
+    info_qi as *const (),
+    add_ref::<usize> as *const (),
+    release::<usize> as *const (),
+    info_component_type as *const (),
+    info_clsid as *const (),
+    info_signing as *const (),
+    info_author as *const (),
+    info_vendor as *const (),
+    info_version as *const (),
+    info_version as *const (), // GetSpecVersion
+    info_friendly_name as *const (),
+    info_container as *const (),
+    info_pixel_formats as *const (),
+    info_version as *const (),      // GetColorManagementVersion
+    info_empty_string as *const (), // GetDeviceManufacturer
+    info_empty_string as *const (), // GetDeviceModels
+    info_mime_types as *const (),
+    info_extensions as *const (),
+    info_animation as *const (),
+    info_chromakey as *const (),
+    info_lossless as *const (),
+    info_multiframe as *const (),
+    info_matches_mime as *const (),
+    encoder_info_create_instance as *const (),
 ]);
 
 unsafe extern "win64" fn decoder_info(this: *mut DecoderObj, out: *mut *mut c_void) -> i32 {
@@ -2222,8 +2313,8 @@ static PIXEL_FORMAT_INFO_VT: VTable<18> = VTable([
     pfi_numeric as *const (),
 ]);
 
-/// IWICImagingFactory::CreateComponentInfo : décodeurs intégrés et formats
-/// de pixel (#1503).
+/// IWICImagingFactory::CreateComponentInfo : décodeurs et encodeurs
+/// intégrés, formats de pixel (#1503, #1868).
 unsafe extern "win64" fn create_component_info(
     _this: *mut c_void,
     clsid: *const Guid,
@@ -2235,6 +2326,9 @@ unsafe extern "win64" fn create_component_info(
     *out = std::ptr::null_mut();
     if clsid.is_null() {
         return E_INVALIDARG;
+    }
+    if let Some(e) = ENCODER_CODECS.iter().find(|c| c.clsid == *clsid) {
+        return encoder_info_for_container(&e.container, out);
     }
     match CODECS.iter().position(|c| c.clsid == *clsid) {
         Some(i) => new_codec_info(i, out),

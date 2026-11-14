@@ -465,6 +465,7 @@ jobs:
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
+          python3 -B scripts/test-store-declencheurs.py
           python3 -B scripts/test-store-listes-neuves.py
           python3 -B scripts/test-store-editeurs.py
           python3 -B scripts/test-store-licence.py
@@ -554,6 +555,9 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Auto-extractible 7-Zip qui lance son programme (#2390)
+        run: sh scripts/test-sfx-programme.sh
+
       - name: Programmes lancés par les installeurs NSIS (#179)
         run: |
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
@@ -564,6 +568,9 @@ jobs:
 
       - name: Dossier système des installateurs NSIS 32 bits (#1800)
         run: sh scripts/test-sysdir-32bits.sh
+
+      - name: Élévation des installateurs (#2180)
+        run: sh scripts/test-elevation-installateurs.sh
 
       - name: Actions personnalisées et services msiexec (#833)
         run: |
@@ -595,6 +602,9 @@ jobs:
 
       - name: Journal de l'assistant écrit au fil de l'eau (#2328)
         run: sh scripts/test-assistant-journal.sh
+
+      - name: Consigne du programme dans les boîtes de fichiers (#2400)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
@@ -673,6 +683,9 @@ jobs:
 
       - name: Texte lisible dans les applications maison du shell PE, dans chaque thème
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-pe-text-contrast.py --seconds 5 --jobs 4
+
+      - name: Store, second clic sur « Installer » pendant une installation expliqué dans le bandeau (#2186)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-store-bandeau-xvfb.py
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py

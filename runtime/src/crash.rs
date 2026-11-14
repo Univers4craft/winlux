@@ -279,6 +279,9 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         write_literal(b" rdx=0x");
         write_hex(rdx);
         write_literal(b"\n");
+        // Fil fautif (#2405) : tid Linux, celui des lignes de tas et de fils,
+        // et heure monotone comparable à WINLUX_THREAD_TRACE.
+        write_fault_thread();
 
         // Dump complet des registres x86-64
         write_literal(b"winlux: rax=0x");
@@ -552,6 +555,8 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
             alloc_tid,
             free_seq,
             free_tid,
+            alloc_frames,
+            free_frames,
             offset,
         } => {
             write_literal(b"winlux: tas page ");
@@ -586,8 +591,55 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
                 write_fd_dec(2, free_tid as u64);
                 write_literal(b"\n");
             }
+            write_heap_frames(name, b"allocation", &alloc_frames);
+            if free_seq != 0 {
+                write_heap_frames(name, b"liberation", &free_frames);
+            }
         }
     }
+}
+
+/// `winlux: fil <tid> @<secondes>.<microsecondes>` (CLOCK_MONOTONIC).
+/// Async-signal-safe : gettid et clock_gettime sont des appels système.
+unsafe fn write_fault_thread() {
+    let tid = libc::syscall(libc::SYS_gettid) as u64;
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t);
+    write_literal(b"winlux: fil ");
+    write_fd_dec(2, tid);
+    write_literal(b" @");
+    write_fd_dec(2, t.tv_sec as u64);
+    write_literal(b".");
+    let us = (t.tv_nsec / 1000) as u64;
+    // Six chiffres, zéros en tête compris.
+    let mut d = [b'0'; 6];
+    let mut v = us;
+    for i in (0..6).rev() {
+        d[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    write_literal(&d);
+    write_literal(b"\n");
+}
+
+/// `winlux: tas page <nom> pile <quoi> : ?0x… module+0x… …` (#2379) :
+/// adresses de retour probables relevées sur la pile à l'allocation ou à
+/// la libération du bloc.
+unsafe fn write_heap_frames(name: &[u8], what: &[u8], frames: &[usize]) {
+    write_literal(b"winlux: tas page ");
+    write_literal(name);
+    write_literal(b" pile ");
+    write_literal(what);
+    write_literal(b" :");
+    for &f in frames.iter().take_while(|&&f| f != 0) {
+        write_literal(b" ?0x");
+        write_hex(f);
+        write_place(f);
+    }
+    write_literal(b"\n");
 }
 
 unsafe fn write_literal(s: &[u8]) {
@@ -830,6 +882,15 @@ mod tests {
         assert_eq!(status.code(), Some(0x09), "{status:?}\n{err}");
         assert!(err.contains("STATUS_STACK_BUFFER_OVERRUN"), "{err}");
         assert!(!err.contains("EXCEPTION_ACCESS_VIOLATION"), "{err}");
+        // #2405 : le rapport nomme le fil fautif, avec l'heure monotone.
+        let fil = err
+            .lines()
+            .find(|l| l.starts_with("winlux: fil "))
+            .unwrap_or_else(|| panic!("{err}"));
+        let (tid, at) = fil["winlux: fil ".len()..].split_once(" @").unwrap();
+        assert!(tid.parse::<u64>().unwrap() > 0, "{fil}");
+        let (s, us) = at.split_once('.').unwrap();
+        assert!(s.parse::<u64>().is_ok() && us.len() == 6, "{fil}");
         assert!(log.is_empty() || log.contains("c0000409"), "{log}");
     }
 
@@ -907,6 +968,16 @@ mod tests {
             "{line}"
         );
         assert!(line.contains(" libere n"), "{line}");
+        // Piles d'allocation et de libération : au moins une adresse de
+        // retour dans le code du binaire (ici, le test lui-même).
+        for what in ["allocation", "liberation"] {
+            let head = format!("winlux: tas page addr pile {what} :");
+            let pile = err
+                .lines()
+                .find(|l| l.starts_with(&head))
+                .unwrap_or_else(|| panic!("{err}"));
+            assert!(pile.contains(" winlux+0x"), "{pile}");
+        }
 
         let err = tas_page_lancer("depasse");
         let line = err

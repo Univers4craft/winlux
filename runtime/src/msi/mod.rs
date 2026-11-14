@@ -162,6 +162,12 @@ pub fn cli(args: &[String]) -> i32 {
         {
             crate::anticheat::REFUSED
         }
+        Some(Mode::Install(p)) | Some(Mode::Admin(p))
+            if crate::setup::elevation::require(&host_path(&p), &opts.props).is_err() =>
+        {
+            // Élévation refusée (#2180) : rien n'est installé.
+            crate::uac::CANCELLED
+        }
         Some(Mode::Install(p)) => {
             // Sans /q ni /passive, msiexec montre la boîte de licence : la
             // page du contrat s'ouvre, pas d'installation sans acceptation (#2123).
