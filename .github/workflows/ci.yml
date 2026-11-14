@@ -603,6 +603,9 @@ jobs:
       - name: Journal de l'assistant écrit au fil de l'eau (#2328)
         run: sh scripts/test-assistant-journal.sh
 
+      - name: Consigne du programme dans les boîtes de fichiers (#2400)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
