@@ -124,6 +124,7 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod global_options;
 pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
@@ -236,6 +237,7 @@ pub mod mdi;
 pub mod msvcp140_2;
 pub mod msvcp140_eptr;
 pub mod msvcp140_flux;
+pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -297,6 +299,7 @@ pub mod wbem;
 pub mod weak_ref;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wer;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -1179,6 +1182,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: qwave::exports(),
                 handle: 0,
             },
+            // Rapports d'erreurs, jamais transmis (OneDrive, #2391).
+            Builtin {
+                name: "wer",
+                exports: wer::exports(),
+                handle: 0,
+            },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
             Builtin {
                 name: "wldap32",
@@ -1300,6 +1309,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut m = msvcp140::exports();
                     m.extend(msvcp140_flux::exports());
                     m.extend(msvcp140_eptr::exports());
+                    m.extend(msvcp140_ppl::exports());
                     m
                 },
                 handle: 0,
