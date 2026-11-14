@@ -478,7 +478,9 @@ impl Interpreter {
 
     /// Fin d'un fil sur une exception non gérée : comme le .NET Framework,
     /// le processus s'arrête.
-    fn thread_failed(e: ClrException) -> ! {
+    /// AppDomain.UnhandledException est levé d'abord (#2058).
+    fn thread_failed(&mut self, e: ClrException) -> ! {
+        self.raise_domain_event("LeverExceptionNonGeree", vec![Value::Ref(e.obj_ptr)]);
         eprintln!("Unhandled exception. {e}");
         crate::log_error!("clr", "exception non gérée dans un fil : {e}");
         std::process::exit(0xE0434352u32 as i32)
@@ -508,7 +510,7 @@ impl Interpreter {
             CURRENT_THREAD.with(|c| c.set(obj as usize));
             let args = arg.map(|a| vec![a]).unwrap_or_default();
             if let Err(e) = interp.invoke_delegate(delegate, args) {
-                Interpreter::thread_failed(e);
+                interp.thread_failed(e);
             }
             with_registry(|r| {
                 if let Some(s) = r.threads.get_mut(&key) {
@@ -568,13 +570,13 @@ impl Interpreter {
                     if let Some(cb) = callback {
                         if let Err(e) = interp.invoke_delegate(cb, vec![Value::Ref(ar as *mut u8)])
                         {
-                            Interpreter::thread_failed(e);
+                            interp.thread_failed(e);
                         }
                     }
                 }
                 None => {
                     if let Err(e) = result {
-                        Interpreter::thread_failed(e);
+                        interp.thread_failed(e);
                     }
                 }
             }
