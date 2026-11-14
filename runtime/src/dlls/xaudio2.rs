@@ -2053,7 +2053,7 @@ mod tests {
                 ),
                 S_OK
             );
-            unknown_release(meter);
+            crate::dlls::legacy_com::unknown_call(meter as usize, 2);
             let mut send = Al([0u8; 12]);
             send[4..12].copy_from_slice(&(sub as usize).to_le_bytes());
             let mut sends = Al([0u8; 12]);
