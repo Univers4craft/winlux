@@ -2503,9 +2503,14 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), b"RIFF");
             let _ = std::fs::remove_file(&path);
             // Le numéro `fd` peut déjà resservir à un test qui tourne en
-            // parallèle (#1320) : on vérifie l'oubli dans la table, pas un
-            // appel à get_osfhandle(fd).
-            assert!(osf_handles().lock().unwrap().get(&fd).is_none());
+            // parallèle, et y avoir sa propre entrée (#1320, #2498) : on
+            // vérifie que le handle `h` de ce test a quitté la table. Les
+            // numéros de handle ne sont jamais réattribués.
+            let table = osf_handles().lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !table.values().any(|&v| v == h as usize),
+                "handle {h:#x} oublié avec son descripteur"
+            );
         }
     }
 
