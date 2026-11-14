@@ -1074,6 +1074,10 @@ class Apt(Source):
             os.close(r)
             os.close(w)
             return 126
+        if os.path.basename(cmd[0]) in ("winlux-root", "pkexec"):
+            # Une demande d'autorisation peut s'ouvrir avant la première ligne
+            # d'apt : le dire plutôt qu'un pourcentage figé (#2199).
+            progress(None, tr("ed_authorize"))
         env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "LC_ALL": "C.UTF-8"}
         with open(STORE_RUN / "store.log", "ab") as log:
             try:
@@ -1102,20 +1106,55 @@ class Apt(Source):
 
     def install(self, ref, progress):
         before = set(self.installed())
-        code = self.apt(["install", "--no-install-recommends", "--", ref], progress)
-        extras = apt_companions(ref)
-        if code == 0 and extras:
-            # Paquets compagnons (#2075) : sans les recommandations d'apt,
-            # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt.
-            # Marqués « automatiques » : la désinstallation les retire quand
-            # plus rien ne les utilise ; un paquet déjà installé à la main le reste.
-            code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
+        # Paquets compagnons (#2075) : sans les recommandations d'apt,
+        # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt. Dans le
+        # même appel qu'eux : un second apt-get redemandait l'autorisation
+        # administrateur une fois les 5 minutes de la première passées (#2199).
+        # Un compagnon déjà installé n'est pas nommé, pour ne pas changer sa marque.
+        extras = [c for c in apt_companions(ref) if c not in before]
+        code = self.apt(["install", "--no-install-recommends", "--", ref, *extras], progress)
         if code == 0:
-            # Ce que cette installation a apporté, pour le retirer avec elle (#2189).
+            # Ce que cette installation a apporté, pour le retirer avec elle
+            # (#2189), et les compagnons qu'elle a installés (#2199).
             state = load_json(STATE, {})
             state.setdefault("apt", {})[ref] = sorted(set(self.installed()) - before - {ref})
+            state.setdefault("apt_companions", {})[ref] = extras
             save_state(state)
         return code
+
+    def purge_set(self, refs):
+        """Paquets qu'« apt-get purge refs » retirerait (simulation, sans droits)."""
+        code, out = run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "purge", "--", *refs], 120,
+                        env={**os.environ, "LC_ALL": "C"})
+        return {m.group(1) for m in re.finditer(r"^(?:Purg|Remv) (\S+)", out, re.M)} if code == 0 else None
+
+    def own_companions(self, ref, state, installed):
+        """Compagnons installés par ref (#2199), qui partent avec lui : ni
+        compagnon d'un autre logiciel du catalogue installé, ni dépendance
+        d'un autre paquet (sa purge en retirerait d'autres)."""
+        owners = {}
+        for p, cs in all_companions().items():
+            if p in installed and p != ref:
+                for c in cs:
+                    owners.setdefault(c, p)
+        mine = [c for c in state.get("apt_companions", {}).get(ref, []) if c in installed]
+        # Compagnon d'un autre logiciel installé (traductions de LibreOffice
+        # partagées par Writer et Calc) : il reste, et passe à ce logiciel pour
+        # partir avec lui plus tard.
+        for c in [c for c in mine if c in owners]:
+            kept = state.setdefault("apt_companions", {}).setdefault(owners[c], [])
+            if c not in kept:
+                kept.append(c)
+        mine = [c for c in mine if c not in owners]
+        alone = self.purge_set([ref]) if mine else None
+        if alone is None:
+            return []
+        keep = []
+        for c in mine:
+            gone = self.purge_set([ref, c])
+            if gone is not None and not gone - alone - {c}:
+                keep.append(c)
+        return keep
 
     def removal_blocker(self, ref):
         """Paquet essentiel ou protégé (winlux-desktop) qui dépend de ref : apt
@@ -1154,11 +1193,13 @@ class Apt(Source):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
         # paquet et dépendances installées pour lui seul partent aussi (apt
         # remove laissait 10 bibliothèques et les réglages de Démineur).
-        code = self.apt(["purge", "--", ref], progress)
+        state = load_json(STATE, {})
+        companions = self.own_companions(ref, state, self.installed())
+        code = self.apt(["purge", "--", ref, *companions], progress)
         if code != 0:
             return code
-        state = load_json(STATE, {})
         brought = set(state.get("apt", {}).pop(ref, []))
+        state.get("apt_companions", {}).pop(ref, None)
         save_state(state)
         installed = self.installed()
         # Compagnons des logiciels du catalogue encore installés : jamais
