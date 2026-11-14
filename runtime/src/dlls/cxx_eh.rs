@@ -276,10 +276,56 @@ unsafe fn copy_object(obj: usize, ct: usize, base: usize, h: &Handler, frame: u6
 }
 
 unsafe fn destroy_object(obj: usize, ti: usize, base: usize) {
+    destroy_thrown(obj, ti, base);
+    // Une copie levée par std::rethrow_exception est rendue avec son objet.
+    super::msvcp140_eptr::liberer_copie_relancee(obj);
+}
+
+/// Destructeur du ThrowInfo appliqué à `obj` (aussi pour `exception_ptr`).
+pub(crate) unsafe fn destroy_thrown(obj: usize, ti: usize, base: usize) {
     let dtor = rd32(ti + 4);
     if obj != 0 && dtor != 0 {
         let f: unsafe extern "win64" fn(usize) = std::mem::transmute(base + dtor as usize);
         f(obj);
+    }
+}
+
+/// Premier type capturable d'un ThrowInfo : le type exact de l'objet lancé.
+unsafe fn exact_catchable(ti: usize, base: usize) -> Option<usize> {
+    let cta = base + rd32(ti + 12) as usize;
+    if rdi(cta) <= 0 {
+        return None;
+    }
+    Some(base + rd32(cta + 4) as usize)
+}
+
+/// Taille de l'objet lancé, d'après son type exact (0 si inconnue).
+pub(crate) unsafe fn thrown_size(ti: usize, base: usize) -> usize {
+    exact_catchable(ti, base).map_or(0, |ct| rdi(ct + 20).max(0) as usize)
+}
+
+/// Copie l'objet lancé `obj` dans `dest` avec le constructeur de copie de
+/// son type exact (`_CopyExceptionObject` de la MS STL), ou octet par
+/// octet pour un type simple.
+pub(crate) unsafe fn copy_thrown(dest: usize, obj: usize, ti: usize, base: usize) {
+    let Some(ct) = exact_catchable(ti, base) else {
+        return;
+    };
+    let props = rd32(ct);
+    let size = rdi(ct + 20).max(0) as usize;
+    let copy = rd32(ct + 24);
+    if props & CT_SIMPLE != 0 || copy == 0 {
+        std::ptr::copy_nonoverlapping(obj as *const u8, dest as *mut u8, size);
+        return;
+    }
+    let src = adjust(obj, ct);
+    if props & CT_VIRTUAL_BASE != 0 {
+        let f: unsafe extern "win64" fn(usize, usize, i32) =
+            std::mem::transmute(base + copy as usize);
+        f(dest, src, 1);
+    } else {
+        let f: unsafe extern "win64" fn(usize, usize) = std::mem::transmute(base + copy as usize);
+        f(dest, src);
     }
 }
 

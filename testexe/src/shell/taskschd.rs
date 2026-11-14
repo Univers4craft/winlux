@@ -2,9 +2,11 @@
 //! création et modification (déclencheur, action, conditions), exécution à la
 //! demande et historique.
 //!
-//! Les tâches sont les fichiers `Z:\etc\winlux\tasks\<id>.task` lus et
-//! déclenchés par le service `winlux --tasks daemon` ; les programmes Windows
-//! qui utilisent `ITaskService` écrivent les mêmes fichiers.
+//! Les tâches sont des fichiers `<id>.task` lus et déclenchés par le service
+//! `winlux --tasks daemon` ; les programmes Windows qui utilisent
+//! `ITaskService` écrivent les mêmes fichiers. Le runtime choisit le magasin
+//! (WinluxTaskList, WinluxTaskSave) : celui du système pour root, le dossier
+//! personnel du compte sinon, sans aucune demande (#1824, #2230).
 
 use crate::admin_ui::*;
 use crate::gfx::*;
@@ -104,6 +106,10 @@ fn day_short(d: usize) -> &'static [u8] {
 #[derive(Clone, Copy)]
 struct Item {
     id: Field<64>,
+    /// Clé de l'état (`u<uid>-<id>` pour une tâche de compte).
+    key: Field<80>,
+    /// Le compte courant peut la modifier (la sienne, ou toutes pour root).
+    mine: bool,
     raw: [u8; RAW],
     len: usize,
     running: bool,
@@ -114,6 +120,8 @@ struct Item {
 
 const EMPTY_ITEM: Item = Item {
     id: Field::new(),
+    key: Field::new(),
+    mine: false,
     raw: [0; RAW],
     len: 0,
     running: false,
@@ -136,6 +144,7 @@ static mut HISTORY: [u8; 32768] = [0; 32768];
 static mut HISTORY_LEN: usize = 0;
 static mut HISTORY_SCROLL: usize = 0;
 static mut NOTICE: &[u8] = b"";
+static mut LIST: [u8; 16384] = [0; 16384];
 
 impl Item {
     fn data(&self) -> &[u8] {
@@ -184,35 +193,31 @@ unsafe fn refresh() {
         selected_id = ITEMS[SELECTED].id;
     }
     COUNT = 0;
-    let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(c"Z:\\etc\\winlux\\tasks\\*".as_ptr(), &mut data);
-    if !h.is_null() && h != -1isize as Handle {
-        loop {
-            let name = &*(&data.file_name as *const [i8; 260] as *const [u8; 260]);
-            let n = name.iter().position(|&c| c == 0).unwrap_or(0);
-            if n > 5 && &name[n - 5..n] == b".task" && COUNT < MAX_TASKS {
-                let it = &mut ITEMS[COUNT];
-                *it = EMPTY_ITEM;
-                it.id.set(&name[..n - 5]);
-                let mut p = Path::new(b"Z:\\etc\\winlux\\tasks\\");
-                p.push(&name[..n]);
-                it.len = read_file(p.ptr(), &mut it.raw, false);
-                let mut run = Path::new(b"Z:\\run\\winlux\\tasks\\running\\");
-                run.push(it.id.get());
-                it.running = exists(run.ptr());
-                let mut last = Path::new(b"Z:\\var\\lib\\winlux\\tasks\\");
-                last.push(it.id.get()).push(b".last");
-                let mut buf = [0u8; 256];
-                let ln = read_file(last.ptr(), &mut buf, false);
-                it.last.set(field(&buf[..ln], b"last_run_text"));
-                it.result.set(field(&buf[..ln], b"last_result"));
-                COUNT += 1;
-            }
-            if FindNextFileA(h, &mut data) == 0 {
-                break;
-            }
+    // Le runtime donne les tâches visibles du compte, une par ligne :
+    // id, clé d'état, fichier (chemin Windows), modifiable.
+    let n = WinluxTaskList(LIST.as_mut_ptr(), LIST.len() as u32) as usize;
+    let n = if n < LIST.len() { n } else { 0 };
+    for line in LIST[..n].split(|&c| c == b'\n') {
+        if line.is_empty() || COUNT >= MAX_TASKS {
+            continue;
         }
-        FindClose(h);
+        let it = &mut ITEMS[COUNT];
+        *it = EMPTY_ITEM;
+        it.id.set(column(line, 0));
+        it.key.set(column(line, 1));
+        it.mine = column(line, 3) == b"1";
+        let p = Path::new(column(line, 2));
+        it.len = read_file(p.ptr(), &mut it.raw, false);
+        let mut run = Path::new(b"Z:\\run\\winlux\\tasks\\running\\");
+        run.push(it.key.get());
+        it.running = exists(run.ptr());
+        let mut last = Path::new(b"Z:\\var\\lib\\winlux\\tasks\\");
+        last.push(it.key.get()).push(b".last");
+        let mut buf = [0u8; 256];
+        let ln = read_file(last.ptr(), &mut buf, false);
+        it.last.set(field(&buf[..ln], b"last_run_text"));
+        it.result.set(field(&buf[..ln], b"last_result"));
+        COUNT += 1;
     }
     // Ordre alphabétique stable.
     for i in 1..COUNT {
@@ -229,8 +234,9 @@ unsafe fn refresh() {
     );
     for i in 0..COUNT {
         let id = ITEMS[i].id;
+        let key = ITEMS[i].key;
         for line in NEXT_BUF[..NEXT_LEN].split(|&c| c == b'\n') {
-            if column(line, 0) == id.get() {
+            if column(line, 0) == key.get() {
                 ITEMS[i].next.set(column(line, 2));
             }
         }
@@ -546,6 +552,13 @@ unsafe fn save_editor() {
         )
     } else if KIND == 2 && WEEKDAYS == 0 {
         t(b"Choisissez au moins un jour.", b"Choose at least one day.")
+    } else if EDIT_INDEX < COUNT && !ITEMS[EDIT_INDEX].mine {
+        // Une copie chez le compte masquerait la tâche du système pour lui
+        // seul, sans rien changer à celle qui tourne (#2230).
+        t(
+            b"T\xE2che du syst\xE8me : seul root peut la modifier.",
+            b"System task: only root can change it.",
+        )
     } else {
         b""
     };
@@ -639,19 +652,17 @@ unsafe fn save_editor() {
         o.line(b"folder=", b"\\");
         o.line(b"time_limit=", b"4320");
     }
-    CreateDirectoryA(c"Z:\\etc\\winlux".as_ptr(), core::ptr::null_mut());
-    CreateDirectoryA(c"Z:\\etc\\winlux\\tasks".as_ptr(), core::ptr::null_mut());
-    let mut p = Path::new(b"Z:\\etc\\winlux\\tasks\\");
-    p.push(id.get()).push(b".task");
     let len = o.len;
-    if write_file(&p, &out[..len]) {
+    let mut cid = [0u8; 65];
+    cid[..id.get().len()].copy_from_slice(id.get());
+    if WinluxTaskSave(cid.as_ptr(), out.as_ptr(), len as u32) == 0 {
         EDITING = false;
         FORCE = true;
         NOTICE = t(b"T\xE2che enregistr\xE9e.", b"Task saved.");
     } else {
         ERROR = t(
-            b"Enregistrement impossible : droits insuffisants sur /etc/winlux/tasks.",
-            b"Cannot save: no write access to /etc/winlux/tasks.",
+            b"Enregistrement impossible : droits insuffisants sur le dossier des t\xE2ches.",
+            b"Cannot save: no write access to the task folder.",
         );
     }
 }
@@ -791,6 +802,7 @@ unsafe fn draw_library(g: &mut Gfx, h: &mut Hits, a: &Rect) {
     let has = SELECTED < COUNT;
     let running = has && ITEMS[SELECTED].running;
     let enabled = has && ITEMS[SELECTED].enabled();
+    let mine = has && ITEMS[SELECTED].mine;
     let buttons: [(u16, &[u8], bool, bool); 7] = [
         (
             ID_CREATE,
@@ -809,9 +821,9 @@ unsafe fn draw_library(g: &mut Gfx, h: &mut Hits, a: &Rect) {
                 t(b"Activer", b"Enable")
             },
             false,
-            has,
+            mine,
         ),
-        (ID_DELETE, t(b"Supprimer", b"Delete"), false, has),
+        (ID_DELETE, t(b"Supprimer", b"Delete"), false, mine),
         (ID_REFRESH, t(b"Actualiser", b"Refresh"), false, true),
     ];
     // Les libellés allemands ou espagnols sont plus longs : la barre passe

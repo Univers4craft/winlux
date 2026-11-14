@@ -409,6 +409,143 @@ pub(super) unsafe fn send(
     )
 }
 
+/// WSARecvFrom avec OVERLAPPED (#2164) : comme WSARecv, plus l'adresse de
+/// l'expéditeur. `from` et `fromlen` restent valables jusqu'à la fin de
+/// l'opération (contrat Win32). Chromium lit ainsi l'UDP sur son fil d'E/S :
+/// une lecture bloquante y figeait tout Mojo.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn recv_from(
+    s: usize,
+    bufs: usize,
+    count: u32,
+    received: *mut u32,
+    flags: *mut u32,
+    from: *mut u8,
+    fromlen: *mut i32,
+    overlapped: usize,
+) -> i32 {
+    let list = buffers(bufs, count);
+    let fl = if flags.is_null() {
+        0
+    } else {
+        let f = recv_flags(*flags as i32);
+        *flags = 0;
+        f
+    };
+    let (from, fromlen) = (from as usize, fromlen as usize);
+    let attempt = move |fd: i32| -> Option<(u32, i32)> {
+        // SAFETY : tampons, adresse et longueur valables jusqu'à la fin de
+        // l'opération.
+        unsafe { recv_from_now(fd, &list, fl, from as *mut u8, fromlen as *mut i32) }
+    };
+    let now = attempt(s as i32);
+    if let Some(rc) = conclude(s, overlapped, now, received) {
+        return rc;
+    }
+    start(s, overlapped, libc::POLLIN, Box::new(attempt))
+}
+
+unsafe fn recv_from_now(
+    fd: i32,
+    list: &[(usize, usize)],
+    flags: i32,
+    from: *mut u8,
+    fromlen: *mut i32,
+) -> Option<(u32, i32)> {
+    let mut iovs: Vec<libc::iovec> = list
+        .iter()
+        .map(|&(len, buf)| libc::iovec {
+            iov_base: buf as *mut libc::c_void,
+            iov_len: len,
+        })
+        .collect();
+    let mut msg: libc::msghdr = std::mem::zeroed();
+    msg.msg_iov = iovs.as_mut_ptr();
+    msg.msg_iovlen = iovs.len();
+    if !from.is_null() && !fromlen.is_null() && *fromlen > 0 {
+        msg.msg_name = from.cast();
+        msg.msg_namelen = *fromlen as libc::socklen_t;
+    }
+    let r = libc::recvmsg(fd, &mut msg, flags | libc::MSG_DONTWAIT);
+    if r >= 0 {
+        if !msg.msg_name.is_null() {
+            super::addr_out(from, msg.msg_namelen as usize);
+            *fromlen = msg.msg_namelen as i32;
+        }
+        return Some((r as u32, 0));
+    }
+    let e = errno();
+    if would_block(e) {
+        None
+    } else {
+        Some((0, error_from_errno(e)))
+    }
+}
+
+/// WSASendTo avec OVERLAPPED (#2164) : un datagramme part en entier ou
+/// attend que la socket accepte ; la fin passe par l'OVERLAPPED, son
+/// événement et le port, comme WSASend. `to` est copiée tout de suite.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn send_to(
+    s: usize,
+    bufs: usize,
+    count: u32,
+    sent: *mut u32,
+    flags: u32,
+    to: *const u8,
+    tolen: i32,
+    overlapped: usize,
+) -> i32 {
+    let list = buffers(bufs, count);
+    let fl = (flags as i32) & libc::MSG_OOB;
+    let addr = if to.is_null() {
+        None
+    } else {
+        Some((super::addr_in(to, tolen), tolen.max(0) as libc::socklen_t))
+    };
+    let attempt = move |fd: i32| -> Option<(u32, i32)> {
+        // SAFETY : tampons valables jusqu'à la fin de l'opération.
+        unsafe { send_to_now(fd, &list, fl, addr.as_ref()) }
+    };
+    let now = attempt(s as i32);
+    if let Some(rc) = conclude(s, overlapped, now, sent) {
+        return rc;
+    }
+    start(s, overlapped, libc::POLLOUT, Box::new(attempt))
+}
+
+unsafe fn send_to_now(
+    fd: i32,
+    list: &[(usize, usize)],
+    flags: i32,
+    addr: Option<&(libc::sockaddr_storage, libc::socklen_t)>,
+) -> Option<(u32, i32)> {
+    let mut iovs: Vec<libc::iovec> = list
+        .iter()
+        .map(|&(len, buf)| libc::iovec {
+            iov_base: buf as *mut libc::c_void,
+            iov_len: len,
+        })
+        .collect();
+    let mut msg: libc::msghdr = std::mem::zeroed();
+    msg.msg_iov = iovs.as_mut_ptr();
+    msg.msg_iovlen = iovs.len();
+    if let Some((st, len)) = addr {
+        msg.msg_name = st as *const libc::sockaddr_storage as *mut libc::c_void;
+        msg.msg_namelen = *len;
+    }
+    let r = libc::sendmsg(fd, &msg, flags | libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL);
+    if r >= 0 {
+        return Some((r as u32, 0));
+    }
+    let e = errno();
+    if would_block(e) {
+        None
+    } else {
+        Some((0, error_from_errno(e)))
+    }
+}
+
 /// Erreur en attente sur une socket après un connect non bloquant.
 fn socket_error(fd: i32) -> i32 {
     let mut v: i32 = 0;

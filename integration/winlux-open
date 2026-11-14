@@ -345,8 +345,17 @@ installed_name() {
 # l'installation reste silencieuse. Rend 1 si l'assistant ne s'applique pas.
 run_wizard() {
     [ "$#" -eq 0 ] || return 1
-    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
-    wizard=$(command -v winlux-setup-wizard 2>/dev/null) || return 1
+    wizard=
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && wizard=$(command -v winlux-setup-wizard 2>/dev/null)
+    if [ -z "$wizard" ]; then
+        # Sans assistant, un contrat de licence ne peut pas être accepté :
+        # rien n'est installé (#2123). /S, /qn… restent possibles.
+        if contract=$("$winlux" --setup --license "$exe" 2>/dev/null) && [ -n "$contract" ]; then
+            show_error "« $(basename -- "$exe") » contient un contrat de licence à accepter, mais l'assistant d'installation n'est pas disponible. Rien n'a été installé."
+            exit 1602
+        fi
+        return 1
+    fi
     "$winlux" --setup --info "$exe" >/dev/null 2>&1 || return 1
     cd "$(dirname -- "$exe")" 2>/dev/null || true
     mkdir -p "$state" 2>/dev/null || log=/dev/null

@@ -476,7 +476,7 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "GlobalMemoryStatusEx" => fn global_memory_status_ex,
         "GetPhysicallyInstalledSystemMemory" => fn get_physically_installed_system_memory,
-        "WaitForMultipleObjectsEx" => fn wait_for_multiple_objects_ex,
+        "WaitForMultipleObjectsEx" => fn super::fil_trace::wait_for_multiple_objects_ex,
         "OpenEventW" => fn open_event_w,
         "CreateMemoryResourceNotification" => fn create_memory_resource_notification,
         "QueryMemoryResourceNotification" => fn query_memory_resource_notification,

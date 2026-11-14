@@ -564,6 +564,26 @@ pub fn load(id: &str) -> Option<Task> {
 }
 
 pub fn save(task: &Task) -> std::io::Result<()> {
+    save_text(&task.id, &task.to_text())
+}
+
+/// Identifiant utilisable comme nom de fichier `.task` : celui que produit
+/// [`id_for`] (lettres, chiffres, `-`, `.`, `_`), sans `.` en tête.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('.')
+        && id.len() <= 200
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+}
+
+/// Écrit le texte d'une tâche dans le magasin du compte courant : celui du
+/// système pour root, le dossier personnel sinon (#1824, #2230).
+pub fn save_text(id: &str, text: &str) -> std::io::Result<()> {
+    if !valid_id(id) {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
     let dir = store_dir();
     if !writes_system() {
         // Dossier privé du compte : personne d'autre n'y lit ses tâches.
@@ -573,7 +593,31 @@ pub fn save(task: &Task) -> std::io::Result<()> {
             .mode(0o700)
             .create(&dir)?;
     }
-    admin::write_text(&dir.join(format!("{}.task", task.id)), &task.to_text())
+    admin::write_text(&dir.join(format!("{id}.task")), text)
+}
+
+/// Une tâche vue par le Planificateur du bureau.
+pub struct Entry {
+    pub id: String,
+    /// Clé de son état (instance en cours, dernière exécution, prochaine).
+    pub key: String,
+    pub file: PathBuf,
+    /// Le compte courant peut la modifier : la sienne, ou toutes pour root.
+    pub mine: bool,
+}
+
+/// Tâches visibles du compte courant, pour le Planificateur du bureau
+/// (#2230) : il lit ainsi les deux magasins sans connaître leurs chemins.
+pub fn entries() -> Vec<Entry> {
+    load_all()
+        .into_iter()
+        .map(|t| Entry {
+            file: task_file(&t.id),
+            key: t.key(),
+            mine: writes_system() || t.owner.is_some(),
+            id: t.id,
+        })
+        .collect()
 }
 
 pub fn delete(id: &str) -> bool {
@@ -1072,6 +1116,12 @@ pub fn cli(args: &[String]) -> i32 {
         },
         "end" => i32::from(!end_task(arg(1))),
         "enable" | "disable" => match load(arg(1)) {
+            // Un compte ordinaire ne recopie pas une tâche du système chez
+            // lui : elle la masquerait pour lui seul (#2230).
+            Some(t) if !writes_system() && t.owner.is_none() => {
+                eprintln!("tâche du système : seul root peut la modifier : {}", arg(1));
+                1
+            }
             Some(mut t) => {
                 t.enabled = arg(0) == "enable";
                 i32::from(save(&t).is_err())

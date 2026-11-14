@@ -21,6 +21,16 @@ Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
 AppStream ou nom) : la source installée, sinon apt, sinon Flatpak, Snap,
 AppImage, Windows. Les autres sources restent choisissables dans la fiche.
 
+**Paquets compagnons (#2075).** apt installe sans les paquets recommandés.
+Quand une application ne marche pas sans l'un d'eux, une ligne
+`compagnons=paquet:a,b` du catalogue les installe avec elle, marqués
+automatiques (`--mark-auto`) : `purge --autoremove` les retire avec
+l'application si plus rien ne les utilise, et un paquet déjà installé à la
+main le reste. virt-manager et GNOME Boxes reçoivent ainsi QEMU, le pilote
+libvirt, `passt`, OVMF et swtpm. Jamais `libvirt-daemon-system`, qui tire la
+variante systemd : libvirt tourne en mode compte (`qemu:///session`), sans
+root, sans polkit et sans systemd.
+
 **Présentation (#716).** Une barre d'icônes à gauche (Accueil, Applis,
 Jeux, Windows ; Bibliothèque et Actualiser en bas), la recherche en haut. L'accueil
 montre un grand bandeau tournant (sélection Winlux, vignettes des autres
@@ -54,6 +64,15 @@ télécharge les vignettes, et réécrit l'index. Les outils standards et leurs
 verrous sont utilisés tels quels : `apt update` / `apt upgrade` en terminal
 continuent de fonctionner, et ce que le Store installe se met à jour aussi
 par `apt upgrade`, `flatpak update` ou `snap refresh`.
+
+Pendant les déclencheurs de dpkg (shared-mime-info…), le bandeau dit « Mise à
+jour du système après l'installation » sans pourcentage ; un clic sur un autre
+« Installer » y affiche « Une installation est déjà en cours : attendez qu'elle
+se termine » (#2186).
+
+Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
+`apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
+niveau « user »), jamais hors ligne (#2184).
 
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
@@ -210,6 +229,19 @@ SHA-256 (ou `sha512`) est ignorée, et un installateur dont l'empreinte diffère
 est refusé. Un autre format se branche en ajoutant un adaptateur à
 `WindowsCatalog.FORMATS` (fonction : octets du catalogue → fiches au format
 ci-dessus), sans modifier le reste du Store.
+
+**Contrat de licence (#2129).** Une installation sans interface (`args` avec
+`/S`, `/SILENT`, `/VERYSILENT`, `/quiet`, `/passive` ou `/q…`, et tout `.msi`,
+installé par `msiexec /i … /qn`) ne montre pas le contrat de l'installateur ;
+comme sous Windows, l'option silencieuse vaudrait acceptation. Le Store ouvre
+donc d'abord la page « Contrat de licence » de l'assistant
+(`winlux-setup-wizard FICHIER --contrat-seulement`, contrat lu par
+`winlux --setup --license`, « Je n'accepte pas » coché au départ). Paquet sans
+contrat ou contrat accepté : l'installation suit. Refus, page fermée ou
+impossible à ouvrir : rien n'est lancé, et le Store affiche « Contrat de
+licence non accepté : rien n'a été installé. ». Un `.exe` ouvert par
+« Installer un fichier » garde son interface : le runtime présente lui-même le
+contrat, et un refus (1602, vu 66 sur 8 bits) est dit de la même façon.
 
 ## Gestionnaire de polices
 

@@ -593,8 +593,8 @@ impl Big {
     pub fn sub(&self, other: &Big) -> Big {
         let mut out = Vec::with_capacity(self.0.len());
         let mut borrow = 0i64;
-        for i in 0..self.0.len() {
-            let mut d = self.0[i] as i64 - other.0.get(i).copied().unwrap_or(0) as i64 - borrow;
+        for (i, &a) in self.0.iter().enumerate() {
+            let mut d = a as i64 - other.0.get(i).copied().unwrap_or(0) as i64 - borrow;
             borrow = 0;
             if d < 0 {
                 d += 1 << 32;

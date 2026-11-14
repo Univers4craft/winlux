@@ -156,7 +156,7 @@ fn temp_file(tag: &str) -> std::path::PathBuf {
     // et lecture des informations) ne partagent pas leurs copies.
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    std::env::temp_dir().join(format!("winlux-squirrel-{}-{n}-{tag}", std::process::id()))
+    crate::paths::profile_temp().join(format!("winlux-squirrel-{}-{n}-{tag}", std::process::id()))
 }
 
 /// Ouvre le ZIP porté par le `Setup.exe` et le paquet complet qu'il contient.

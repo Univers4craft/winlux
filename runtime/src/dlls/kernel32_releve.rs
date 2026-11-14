@@ -127,6 +127,42 @@ unsafe fn dir_of(f: impl FnOnce(*mut u16, u32) -> u32) -> Option<String> {
 
 /// Dossiers de SearchPath sans chemin donné : celui du programme, le
 /// dossier système, le dossier Windows, le dossier courant, puis PATH.
+/// Mode de recherche de SearchPath (SetSearchPathMode, documentation
+/// Microsoft Learn) : `Some(false)` quand le programme a désactivé le mode
+/// sûr (dossier courant juste après celui de l'appli), sinon l'ordre sûr
+/// (dossier courant après les dossiers système) ; le booléen dit si le
+/// réglage est devenu permanent (#2179).
+static SEARCH_MODE: Mutex<(Option<bool>, bool)> = Mutex::new((None, false));
+
+const BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE: u32 = 0x1;
+const BASE_SEARCH_PATH_DISABLE_SAFE_SEARCHMODE: u32 = 0x1_0000;
+const BASE_SEARCH_PATH_PERMANENT: u32 = 0x8000;
+
+/// SetSearchPathMode(indicateurs) : un seul de ENABLE ou DISABLE, PERMANENT
+/// seulement avec ENABLE ; une fois permanent, plus aucun changement
+/// (ERROR_ACCESS_DENIED). OBS Studio l'appelle au démarrage.
+pub unsafe extern "win64" fn set_search_path_mode(flags: u32) -> i32 {
+    let enable = flags & BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE != 0;
+    let disable = flags & BASE_SEARCH_PATH_DISABLE_SAFE_SEARCHMODE != 0;
+    let permanent = flags & BASE_SEARCH_PATH_PERMANENT != 0;
+    let known = BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE
+        | BASE_SEARCH_PATH_DISABLE_SAFE_SEARCHMODE
+        | BASE_SEARCH_PATH_PERMANENT;
+    if flags & !known != 0 || enable == disable || (permanent && disable) {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let mut mode = SEARCH_MODE.lock().unwrap_or_else(|e| e.into_inner());
+    if mode.1 {
+        return fail(ERROR_ACCESS_DENIED);
+    }
+    *mode = (Some(enable), permanent);
+    1
+}
+
+fn safe_search_disabled() -> bool {
+    SEARCH_MODE.lock().unwrap_or_else(|e| e.into_inner()).0 == Some(false)
+}
+
 unsafe fn default_search_dirs() -> Vec<String> {
     let mut dirs = Vec::new();
     if let Some(exe) = dir_of(|b, n| {
@@ -144,6 +180,7 @@ unsafe fn default_search_dirs() -> Vec<String> {
             dirs.push(exe[..i].to_string());
         }
     }
+    let after_app = dirs.len();
     for name in ["GetSystemDirectoryW", "GetWindowsDirectoryW"] {
         let addr = lookup("kernel32", name);
         if let Some(d) = dir_of(|b, n| match addr {
@@ -167,7 +204,13 @@ unsafe fn default_search_dirs() -> Vec<String> {
         )
         .unwrap_or(0)
     }) {
-        dirs.push(cwd);
+        // Mode sûr désactivé : le dossier courant vient juste après celui
+        // de l'appli, avant les dossiers système.
+        if safe_search_disabled() {
+            dirs.insert(after_app, cwd);
+        } else {
+            dirs.push(cwd);
+        }
     }
     let path = wide("PATH");
     if let Some(p) = dir_of(|b, n| {
@@ -1955,6 +1998,7 @@ pub extern "win64" fn set_file_apis_to_ansi() {}
 pub fn exports() -> Exports {
     crate::exports! {
         "SearchPathW" => fn search_path_w,
+        "SetSearchPathMode" => fn set_search_path_mode,
         "WinExec" => fn win_exec,
         "OpenFile" => fn open_file,
         "CreateFile2" => fn create_file_2,
@@ -2052,6 +2096,27 @@ pub fn exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_search_path_mode_valide_les_indicateurs() {
+        // Documentation de SetSearchPathMode ; OBS Studio l'appelle au
+        // démarrage (#2179).
+        let _teb = crate::process::test_teb();
+        unsafe {
+            assert_eq!(set_search_path_mode(0), 0);
+            assert_eq!(set_search_path_mode(0x1 | 0x1_0000), 0);
+            assert_eq!(set_search_path_mode(0x1_0000 | 0x8000), 0);
+            assert_eq!(set_search_path_mode(0x2), 0);
+            assert_eq!(set_search_path_mode(0x1_0000), 1);
+            assert!(safe_search_disabled());
+            assert_eq!(set_search_path_mode(0x1 | 0x8000), 1);
+            assert!(!safe_search_disabled());
+            // Permanent : plus aucun changement.
+            assert_eq!(set_search_path_mode(0x1_0000), 0);
+            assert_eq!(crate::process::last_error(), ERROR_ACCESS_DENIED);
+            *SEARCH_MODE.lock().unwrap() = (None, false);
+        }
+    }
 
     #[test]
     fn searchpath_ajoute_l_extension_et_parcourt_les_dossiers() {

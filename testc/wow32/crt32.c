@@ -316,5 +316,28 @@ int main(int argc, char **argv) {
         }
         CHECK(43, ok);
     }
+    /* #2168 : données du runtime rendues par pointeur, lisibles en x86
+       (l'outil de déploiement d'Office lisait ___lc_locale_name_func). */
+    {
+        typedef wchar_t **(__cdecl *names_t)(void);
+        typedef wchar_t *(__cdecl *wcmd_t)(void);
+        typedef char *(__cdecl *tmp_t)(char *);
+        HMODULE u = LoadLibraryA("ucrtbase.dll");
+        HMODULE m = GetModuleHandleA("msvcrt.dll");
+        names_t names = u ? (names_t)GetProcAddress(u, "___lc_locale_name_func") : 0;
+        wcmd_t wcmd = u ? (wcmd_t)GetProcAddress(u, "_get_wide_winmain_command_line") : 0;
+        tmp_t tmp = m ? (tmp_t)GetProcAddress(m, "tmpnam") : 0;
+        int ok = names && wcmd && tmp;
+        if (ok) {
+            wchar_t **n = names();
+            for (int i = 0; i < 6; i++)
+                ok = ok && n[i] == 0;
+            const wchar_t *c = wcmd();
+            ok = ok && c && wcsstr(c, L"argument-de-test") != 0;
+            char *t = tmp(0);
+            ok = ok && t && t[0] != 0 && strlen(t) < 260;
+        }
+        CHECK(44, ok);
+    }
     return fails;
 }
