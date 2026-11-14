@@ -146,37 +146,66 @@ fn find_resource_entry(
     type_is_str: bool,
     name_is_str: bool,
 ) -> Option<usize> {
-    let (rsrc_rva, rsrc) = resource_root(base)?;
+    lookup_resource(base, type_id, name_id, type_is_str, name_is_str).ok()
+}
 
+/// Comme `find_resource_entry`, mais l'échec porte le code que FindResource
+/// laisse dans GetLastError : 1812 si le module n'a pas de ressources, 1813
+/// si le type manque, 1814 si le nom manque, 1815 si aucune langue (#2394).
+fn lookup_resource(
+    base: usize,
+    type_id: usize,
+    name_id: usize,
+    type_is_str: bool,
+    name_is_str: bool,
+) -> Result<usize, u32> {
+    let (rsrc_rva, rsrc) = resource_root(base).ok_or(ERROR_RESOURCE_DATA_NOT_FOUND)?;
+    let data_entry_off = walk_resource_tree(rsrc, type_id, name_id, type_is_str, name_is_str)?;
+    Ok((base & !loader::DATA_HANDLE_BITS) + rsrc_rva + data_entry_off)
+}
+
+/// Parcourt l'arbre type → nom → langue (première langue) d'une section
+/// .rsrc et rend l'offset de l'IMAGE_RESOURCE_DATA_ENTRY, ou le code
+/// d'erreur du niveau où la recherche s'arrête.
+fn walk_resource_tree(
+    rsrc: &[u8],
+    type_id: usize,
+    name_id: usize,
+    type_is_str: bool,
+    name_is_str: bool,
+) -> Result<usize, u32> {
     // Niveau 1 : type
-    let type_val = find_entry(rsrc, 0, type_id, type_is_str)?;
+    let type_val =
+        find_entry(rsrc, 0, type_id, type_is_str).ok_or(ERROR_RESOURCE_TYPE_NOT_FOUND)?;
     if type_val & 0x8000_0000 == 0 {
-        return None;
+        return Err(ERROR_RESOURCE_TYPE_NOT_FOUND);
     }
     let name_dir = (type_val & 0x7FFF_FFFF) as usize;
 
     // Niveau 2 : nom/id
-    let name_val = find_entry(rsrc, name_dir, name_id, name_is_str)?;
+    let name_val =
+        find_entry(rsrc, name_dir, name_id, name_is_str).ok_or(ERROR_RESOURCE_NAME_NOT_FOUND)?;
     if name_val & 0x8000_0000 == 0 {
-        return None;
+        return Err(ERROR_RESOURCE_NAME_NOT_FOUND);
     }
     let lang_dir = (name_val & 0x7FFF_FFFF) as usize;
 
     // Niveau 3 : on prend la première langue.
-    let named = rd16(rsrc, lang_dir + 12)? as usize;
-    let id_entries = rd16(rsrc, lang_dir + 14)? as usize;
+    let lang_missing = ERROR_RESOURCE_LANG_NOT_FOUND;
+    let named = rd16(rsrc, lang_dir + 12).ok_or(lang_missing)? as usize;
+    let id_entries = rd16(rsrc, lang_dir + 14).ok_or(lang_missing)? as usize;
     if named + id_entries == 0 {
-        return None;
+        return Err(lang_missing);
     }
     let off = lang_dir + 16;
-    let data_entry_off = rd32(rsrc, off + 4)? as usize;
+    let data_entry_off = rd32(rsrc, off + 4).ok_or(lang_missing)? as usize;
     if data_entry_off & 0x8000_0000 != 0 {
-        return None;
+        return Err(lang_missing);
     }
 
     // IMAGE_RESOURCE_DATA_ENTRY : OffsetToData, Size, CodePage, Reserved.
-    rd32(rsrc, data_entry_off + 4)?;
-    Some((base & !loader::DATA_HANDLE_BITS) + rsrc_rva + data_entry_off)
+    rd32(rsrc, data_entry_off + 4).ok_or(ERROR_RESOURCE_DATA_NOT_FOUND)?;
+    Ok(data_entry_off)
 }
 
 /// Manifeste d'application (RT_MANIFEST, identifiant 1) d'un module chargé.
@@ -242,10 +271,10 @@ unsafe fn find_resource_args(hmod: usize, name: usize, ty: usize, ansi: bool) ->
     let mut name_buf = Vec::new();
     let (type_id, type_is_str) = lookup_arg(&ty_key, &mut ty_buf);
     let (name_id, name_is_str) = lookup_arg(&name_key, &mut name_buf);
-    match find_resource_entry(base, type_id, name_id, type_is_str, name_is_str) {
-        Some(entry) => entry,
-        None => {
-            crate::process::set_last_error(1813);
+    match lookup_resource(base, type_id, name_id, type_is_str, name_is_str) {
+        Ok(entry) => entry,
+        Err(code) => {
+            crate::process::set_last_error(code);
             0
         }
     }
@@ -805,6 +834,25 @@ mod tests {
         loader::load_data(&path, 2).unwrap()
     }
 
+    /// #2394 : chaque niveau de l'arbre manqué donne son propre code.
+    #[test]
+    fn find_resource_code_d_erreur_par_niveau() {
+        let r = section_rsrc();
+        assert_eq!(walk_resource_tree(&r, 10, 5, false, false), Ok(0x60));
+        assert_eq!(
+            walk_resource_tree(&r, 3, 5, false, false),
+            Err(ERROR_RESOURCE_TYPE_NOT_FOUND)
+        );
+        assert_eq!(
+            walk_resource_tree(&r, 10, 7, false, false),
+            Err(ERROR_RESOURCE_NAME_NOT_FOUND)
+        );
+        assert_eq!(
+            walk_resource_tree(&r, 10, 6, false, false),
+            Err(ERROR_RESOURCE_LANG_NOT_FOUND)
+        );
+    }
+
     /// #2395 : « #5 » (A comme W) désigne l'identifiant entier 5 ; « #x » et
     /// « #70000 » restent des noms.
     #[test]
@@ -830,7 +878,7 @@ mod tests {
             ResKey::Name(_)
         ));
         // De bout en bout : « #5 » trouve la ressource d'identifiant 5 d'une
-        // image chargée comme données, « #7 » ne trouve rien.
+        // image chargée comme données, « #7 » rend « nom absent ».
         let _teb = crate::process::test_teb();
         let h = image_de_donnees_avec(&section_rsrc(), "diese");
         let base = h & !loader::DATA_HANDLE_BITS;
@@ -843,5 +891,21 @@ mod tests {
             unsafe { find_resource_w(h, w7.as_ptr(), 10 as *const u16) },
             0
         );
+        assert_eq!(crate::process::last_error(), ERROR_RESOURCE_NAME_NOT_FOUND);
+    }
+
+    /// #2394 : un module sans section de ressources rend 1812, et
+    /// FindResourceW le laisse dans GetLastError.
+    #[test]
+    fn find_resource_sans_section_rend_1812() {
+        let _teb = crate::process::test_teb();
+        let base = 0x7ff0_0000_0000usize;
+        assert_eq!(
+            lookup_resource(base, 10, 5, false, false),
+            Err(ERROR_RESOURCE_DATA_NOT_FOUND)
+        );
+        let h = unsafe { find_resource_w(base, 5 as *const u16, 10 as *const u16) };
+        assert_eq!(h, 0);
+        assert_eq!(crate::process::last_error(), ERROR_RESOURCE_DATA_NOT_FOUND);
     }
 }

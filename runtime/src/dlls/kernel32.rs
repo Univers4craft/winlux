@@ -4297,7 +4297,10 @@ mod tests_diagnostic_tas {
 }
 
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
-    let p = if heap_lfh() {
+    let p = if super::tas_page::enabled() {
+        // WINLUX_HEAP_DIAG=page (#2158) : bloc sur ses pages, page de garde.
+        super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)))
+    } else if heap_lfh() {
         lfh_alloc(size)
     } else {
         libc::malloc(size.max(1))
@@ -4344,7 +4347,18 @@ pub unsafe extern "win64" fn heap_realloc(
         return std::ptr::null_mut();
     };
     let (trace, nofree) = heap_diag();
-    let q = if heap_lfh() {
+    let q = if super::tas_page::enabled() {
+        // Mode page (#2158) : nouveau bloc, l'ancien part en quarantaine
+        // inaccessible ; une lecture par l'ancien pointeur fait une faute.
+        let q = super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)));
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+            if !super::tas_page::free(p) && !nofree {
+                libc::free(p);
+            }
+        }
+        q
+    } else if heap_lfh() {
         // Mode lfh : nouveau bloc de la bonne classe, l'ancien est gardé
         // pour sa classe avec son contenu.
         let q = lfh_alloc(size);
@@ -4405,7 +4419,9 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
             &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
         );
     }
-    if heap_lfh() {
+    if super::tas_page::enabled() && super::tas_page::free(p) {
+        // Mode page (#2158) : bloc rendu inaccessible, en quarantaine.
+    } else if heap_lfh() {
         lfh_free(p, old);
     } else if !nofree {
         libc::free(p);
@@ -8890,6 +8906,8 @@ pub fn record_exit_code(code: u32) {
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
     crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
+    // WINLUX_WOW32_HISTORY (#2368) : historique écrit à toute fin.
+    crate::wow32::dump_history_at_exit(&format!("TerminateProcess (code {code:#x})"));
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -8902,6 +8920,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // WINLUX_WOW32_HISTORY (#2368) : ExitProcess, fail-fast, _invoke_watson.
+    crate::wow32::dump_history_at_exit(&format!("fin du processus (code {:#x})", code as u32));
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
