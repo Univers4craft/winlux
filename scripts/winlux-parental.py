@@ -42,6 +42,7 @@ Le compte surveillé ne peut ni lire ni modifier ses restrictions :
   winlux-parental forget COMPTE              (admin) efface configuration et activité
   winlux-parental check-login COMPTE         (root) 0 si le compte peut ouvrir sa session
   winlux-parental daemon                     (root) suivi, blocages, DNS filtrant
+  winlux-parental supervise                  (root) lance le service et le relance s'il s'arrête
   winlux-parental screen COMPTE ÉCRAN        (root) écran « Temps d'écran terminé »
 
 Tests : WINLUX_PARENTAL_ROOT (racine factice), WINLUX_PARENTAL_NOW (heure
@@ -885,27 +886,48 @@ def blocked_ids(cfg):
     return {app["id"]: app["name"] for app in cfg.get("apps", [])}
 
 
-def desktop_names():
-    """Nom affiché des applications Linux d'après leurs lanceurs (bin:firefox → Firefox)."""
-    names = {}
+def desktop_entries():
+    """{bin:programme: (nom, visible)} d'après les lanceurs des applications.
+
+    Plusieurs lanceurs peuvent lancer le même programme (Mousepad et ses
+    réglages, « mousepad --preferences ») : celui qui figure au menu passe
+    avant un lanceur caché (NoDisplay, Hidden) ou secondaire, quel que soit
+    l'ordre des fichiers (#2248). Spécification Desktop Entry de freedesktop.org."""
+    found = {}
     for folder in (Path(ROOT + "/usr/share/applications"), Path(ROOT + "/usr/local/share/applications")):
         try:
             files = sorted(folder.glob("*.desktop"))
         except OSError:
             continue
         for path in files:
-            name = exec_bin = None
+            values = {}
             for line in read_lines(path):
                 if line.startswith("[") and line.strip() != "[Desktop Entry]":
                     break
-                if line.startswith("Name=") and name is None:
-                    name = line[5:].strip()
-                elif line.startswith("Exec=") and exec_bin is None:
-                    words = [w for w in line[5:].split() if w != "env" and "=" not in w]
-                    exec_bin = os.path.basename(words[0]) if words else None
-            if name and exec_bin:
-                names.setdefault("bin:" + exec_bin, name)
-    return names
+                key, sep, value = line.partition("=")
+                if sep and key.strip() not in values:
+                    values[key.strip()] = value.strip()
+            name, command = values.get("Name"), values.get("Exec", "")
+            words = [w for w in command.split() if w != "env" and "=" not in w]
+            if not name or not words or values.get("Type", "Application") != "Application":
+                continue
+            ident = "bin:" + os.path.basename(words[0])
+            visible = values.get("NoDisplay", "").lower() != "true" and values.get("Hidden", "").lower() != "true"
+            # Le lanceur principal : au menu, et sans option qui le spécialise.
+            rank = (visible, not any(w.startswith("-") for w in words[1:]))
+            if ident not in found or rank > found[ident][2]:
+                found[ident] = (name, visible, rank)
+    return {ident: (name, visible) for ident, (name, visible, _rank) in found.items()}
+
+
+def desktop_names():
+    """Nom affiché des applications Linux d'après leurs lanceurs (bin:firefox → Firefox)."""
+    return {ident: name for ident, (name, _visible) in desktop_entries().items()}
+
+
+def desktop_choices():
+    """Applications proposées au blocage : celles du menu, sous leur nom."""
+    return {ident: name for ident, (name, visible) in desktop_entries().items() if visible and not protected(ident)}
 
 
 def display_name(ident, names):
@@ -1762,6 +1784,44 @@ class Daemon:
             time.sleep(1)
 
 
+# ── Supervision ─────────────────────────────────────────────────────────────
+
+SUPERVISE_DELAYS = (1, 2, 5, 10, 30, 60)
+
+
+def supervise(command, log, rounds=None, sleep=time.sleep, stable=60):
+    """Lance le service et le relance après chaque arrêt (#2247) : sans systemd,
+    rien d'autre ne le ferait, et un contrôle parental arrêté laisse tout passer.
+    Délai croissant si le service s'arrête aussitôt (au plus une minute), remis à
+    zéro après une minute de marche. Le verrou d'instance unique du service
+    évite les doublons : une relance pendant qu'un autre tourne s'arrête seule."""
+    child = {"proc": None}
+
+    def stop(*_):
+        proc = child["proc"]
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    failures = 0
+    done = 0
+    while rounds is None or done < rounds:
+        started = time.monotonic()
+        try:
+            child["proc"] = subprocess.Popen(command, stdin=subprocess.DEVNULL)
+            code = child["proc"].wait()
+        except OSError as error:
+            code = f"impossible de lancer : {error}"
+        done += 1
+        failures = 0 if time.monotonic() - started >= stable else failures + 1
+        delay = SUPERVISE_DELAYS[min(failures, len(SUPERVISE_DELAYS) - 1)]
+        log(f"service arrêté (code {code}), relancé dans {delay} s")
+        sleep(delay)
+    return 0
+
+
 # ── Commandes ───────────────────────────────────────────────────────────────
 
 def emit(**values):
@@ -1821,6 +1881,14 @@ def main(argv):
     try:
         if command == "daemon":
             return Daemon().run()
+        if command == "supervise" and not rest:
+            if os.geteuid() != 0 and not ROOT:
+                print("winlux-parental supervise doit tourner en root", file=sys.stderr)
+                return 1
+
+            def log(text):
+                print(time.strftime("%Y-%m-%d %H:%M:%S"), "supervision :", text, flush=True)
+            return supervise([sys.executable, "-B", SELF, "daemon"], log)
         if command == "status" and not rest:
             user = peer()
             state = state_of(user)
@@ -2430,11 +2498,11 @@ class ParentalPanel:
             self.line(box, app["name"], app["id"].split(":", 1)[1],
                       [self.button(_t("Débloquer"), lambda i=app["id"]: self.unblock(i))])
         choices = {}
+        names = desktop_names()
         for app in report.get("apps", []):
-            choices.setdefault(app["id"], app["name"])
-        for ident, name in sorted(desktop_names().items(), key=lambda item: item[1].casefold()):
-            if not protected(ident):
-                choices.setdefault(ident, name)
+            choices.setdefault(app["id"], names.get(app["id"], app["name"]))
+        for ident, name in sorted(desktop_choices().items(), key=lambda item: item[1].casefold()):
+            choices.setdefault(ident, name)
         blocked = {app["id"] for app in self.cfg["apps"]}
         combo = Gtk.ComboBoxText.new_with_entry()
         combo.set_name("parental-app-choice")
