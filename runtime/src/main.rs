@@ -98,15 +98,15 @@ fn main() {
         .is_some_and(|n| n == "winlux-drives");
     if invoked_as {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(netdrive::main(&rest));
+        dlls::kernel32::exit_with(netdrive::main(&rest));
     }
     let Some(exe) = args.next() else {
         eprintln!("winlux: usage: winlux PROGRAM.exe [arguments...]");
-        std::process::exit(2);
+        dlls::kernel32::exit_with(2);
     };
     if exe == "--drives" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(netdrive::main(&rest));
+        dlls::kernel32::exit_with(netdrive::main(&rest));
     }
     if exe == "--exports" {
         // Une ligne « dll<TAB>fonction » par export intégré : la base des
@@ -135,7 +135,7 @@ fn main() {
         // (lecteurs, profil, dossiers connus) : Paramètres > « Réglages de
         // l'exécutable » ouvert depuis l'Explorateur (#739).
         let Some(win) = args.next() else {
-            std::process::exit(2);
+            dlls::kernel32::exit_with(2);
         };
         let linux = paths::to_linux(&win.to_string_lossy());
         use std::io::Write;
@@ -151,55 +151,55 @@ fn main() {
     }
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(power::cli::main(&rest));
+        dlls::kernel32::exit_with(power::cli::main(&rest));
     }
     if exe == "--intl" {
-        std::process::exit(intl::report());
+        dlls::kernel32::exit_with(intl::report());
     }
     if exe == "--services" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(dlls::advapi32_services::cli(&rest));
+        dlls::kernel32::exit_with(dlls::advapi32_services::cli(&rest));
     }
     if exe == "--text" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(intl::text::cli(&rest));
+        dlls::kernel32::exit_with(intl::text::cli(&rest));
     }
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(boottime::cli(&rest));
+        dlls::kernel32::exit_with(boottime::cli(&rest));
     }
     if exe == "--ab-boot" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(abslots::cli(&rest));
+        dlls::kernel32::exit_with(abslots::cli(&rest));
     }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(bootsplash::cli(&rest));
+        dlls::kernel32::exit_with(bootsplash::cli(&rest));
     }
     if exe == "--gamemode" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(gamemode::cli(&rest));
+        dlls::kernel32::exit_with(gamemode::cli(&rest));
     }
     if exe == "--clipboard-bridge" {
-        std::process::exit(clipbridge::run());
+        dlls::kernel32::exit_with(clipbridge::run());
     }
     if exe == "--display-restore" {
-        std::process::exit(dlls::displaymode::restore_guard());
+        dlls::kernel32::exit_with(dlls::displaymode::restore_guard());
     }
     if exe == "--display" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(display::main(&rest));
+        dlls::kernel32::exit_with(display::main(&rest));
     }
     if exe == "--audio-test" {
-        std::process::exit(audio::self_test());
+        dlls::kernel32::exit_with(audio::self_test());
     }
     if exe == "--volumes" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(volumes::cli(&rest));
+        dlls::kernel32::exit_with(volumes::cli(&rest));
     }
     if exe == "--tasks" || exe == "--firewall" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
-        std::process::exit(if exe == "--tasks" {
+        dlls::kernel32::exit_with(if exe == "--tasks" {
             tasks::cli(&rest)
         } else {
             firewall::cli(&rest)
@@ -207,11 +207,11 @@ fn main() {
     }
     let root_arg = |a: Option<std::ffi::OsString>| a.map(PathBuf::from);
     if exe == "--cpu-report" {
-        std::process::exit(cpu::report_command(root_arg(args.next()).as_deref()));
+        dlls::kernel32::exit_with(cpu::report_command(root_arg(args.next()).as_deref()));
     }
     if exe == "--cpu-profile" {
         let profile = args.next().unwrap_or_default();
-        std::process::exit(cpu::profile_command(
+        dlls::kernel32::exit_with(cpu::profile_command(
             &profile.to_string_lossy(),
             root_arg(args.next()).as_deref(),
         ));
@@ -220,37 +220,37 @@ fn main() {
         let sys = root_arg(args.next())
             .map(cpu::Sys::at)
             .unwrap_or_else(cpu::Sys::host);
-        std::process::exit(cpu::fan_daemon(&sys));
+        dlls::kernel32::exit_with(cpu::fan_daemon(&sys));
     }
     if exe == "--inspect" {
         let Some(path) = args.next() else {
             eprintln!("winlux: usage: winlux --inspect PROGRAM.exe");
-            std::process::exit(2);
+            dlls::kernel32::exit_with(2);
         };
-        std::process::exit(inspect(&paths::launch_path(&path)));
+        dlls::kernel32::exit_with(inspect(&paths::launch_path(&path)));
     }
     if exe == "--image-info" {
         let Some(path) = args.next() else {
             eprintln!("winlux: usage: winlux --image-info IMAGE");
-            std::process::exit(2);
+            dlls::kernel32::exit_with(2);
         };
-        std::process::exit(imaging::cli_info(&PathBuf::from(path)));
+        dlls::kernel32::exit_with(imaging::cli_info(&PathBuf::from(path)));
     }
     if let Some(code) = gpu_command(&exe, &mut args) {
-        std::process::exit(code);
+        dlls::kernel32::exit_with(code);
     }
     let exe = paths::launch_path(exe.as_ref());
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
     // msiexec.exe est fourni par Winlux lui-même (module msi).
     if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
-        std::process::exit(msi::cli(&rest));
+        dlls::kernel32::exit_with(msi::cli(&rest));
     }
     // reg.exe et regedit.exe sont fournis par Winlux (module registry).
     if exe.as_os_str() == "--reg" || (registry::cli::is_reg(&exe) && !is_real_pe(&exe)) {
-        std::process::exit(registry::cli::reg_main(&rest));
+        dlls::kernel32::exit_with(registry::cli::reg_main(&rest));
     }
     if exe.as_os_str() == "--regedit" || (registry::cli::is_regedit(&exe) && !is_real_pe(&exe)) {
-        std::process::exit(registry::cli::regedit_main(&rest));
+        dlls::kernel32::exit_with(registry::cli::regedit_main(&rest));
     }
     // Installateurs NSIS / Inno Setup et leurs désinstalleurs : pris en
     // charge par Winlux lui-même (module setup), sans exécuter leur code.
@@ -261,15 +261,15 @@ fn main() {
         msi_script_action(&rest);
     }
     if exe.as_os_str() == "--setup" {
-        std::process::exit(setup::cli(&rest));
+        dlls::kernel32::exit_with(setup::cli(&rest));
     }
     // Anti-triche noyau embarqué : refusé avant toute écriture (#1720).
     if let Some(code) = anticheat::check_launch(&exe) {
-        std::process::exit(code);
+        dlls::kernel32::exit_with(code);
     }
     if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
         if let Some(code) = setup::launch(&exe, &rest) {
-            std::process::exit(code);
+            dlls::kernel32::exit_with(code);
         }
     }
     // Variables d'environnement Windows écrites par les installateurs.
@@ -279,7 +279,7 @@ fn main() {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("winlux: lecture impossible de {} : {error}", exe.display());
-            std::process::exit(1);
+            dlls::kernel32::exit_with(1);
         }
     };
     // Programme x86 : relancé tout de suite si la mémoire haute n'a pas
@@ -307,7 +307,7 @@ fn main() {
             );
             let err = managed::exec_squirrel_update(&exe);
             log_error!("managed", "winlux-squirrel-update introuvable : {err}");
-            std::process::exit(1);
+            dlls::kernel32::exit_with(1);
         }
         log_info!(
             "managed",
@@ -341,7 +341,7 @@ fn main() {
         Ok(m) => m,
         Err(e) => {
             log_error!("loader", "chargement impossible : {e}");
-            std::process::exit(1);
+            dlls::kernel32::exit_with(1);
         }
     };
     if image.pe.is_dll() {
@@ -350,7 +350,7 @@ fn main() {
             "{} est une DLL, pas un exécutable lançable directement",
             exe.display()
         );
-        std::process::exit(1);
+        dlls::kernel32::exit_with(1);
     }
     trace!(
         "sous-système PE : {}, DLL flags=0x{:04x}, stack reserve/commit={}/{}",
@@ -438,7 +438,7 @@ fn gpu_command(flag: &std::ffi::OsStr, args: &mut std::env::ArgsOs) -> Option<i3
 fn msi_dll_action(args: &[String]) -> ! {
     let (Some(dll), Some(entry)) = (args.first(), args.get(1)) else {
         eprintln!("usage : winlux --msi-dll-action DLL ENTREE");
-        std::process::exit(1639);
+        dlls::kernel32::exit_with(1639);
     };
     let path = std::path::PathBuf::from(dll);
     // Dans la trace, quelle action tourne dans ce processus (#1639).
@@ -459,12 +459,12 @@ fn msi_dll_action(args: &[String]) -> ! {
         Ok(m) => m,
         Err(e) => {
             eprintln!("DLL {dll} non chargée : {e}");
-            std::process::exit(1603);
+            dlls::kernel32::exit_with(1603);
         }
     };
     let Some(export) = loader::export_by_name(&image, entry) else {
         eprintln!("point d'entrée {entry} absent de {dll}");
-        std::process::exit(1603);
+        dlls::kernel32::exit_with(1603);
     };
     dlls::kernel32::init();
     process::init_process(&image, &[]);
@@ -477,13 +477,13 @@ fn msi_dll_action(args: &[String]) -> ! {
 fn msi_script_action(args: &[String]) -> ! {
     let (Some(lang), Some(file)) = (args.first(), args.get(1)) else {
         eprintln!("usage : winlux --msi-script-action JScript|VBScript FICHIER [FONCTION]");
-        std::process::exit(1639);
+        dlls::kernel32::exit_with(1639);
     };
     paths::install_windows_env();
     let function = args.get(2).map(String::as_str).unwrap_or("");
     let code = msi::script::msi_action(lang, file, function);
     msi::session::save(code);
-    std::process::exit(code as i32)
+    dlls::kernel32::exit_with(code as i32)
 }
 
 /// Vrai si le fichier existe et commence par la signature MZ d'un PE.

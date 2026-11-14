@@ -160,7 +160,7 @@ pub fn check_launch(base: usize, exe: &Path) {
             crate::log_info!("uac", "élévation refusée pour {}", exe.display());
             // ERROR_CANCELLED : l'opération a été annulée par l'utilisateur
             // (199 pour un parent Linux, qui ne voit que 8 bits).
-            std::process::exit(1223);
+            crate::dlls::kernel32::exit_with(1223);
         }
         Answer::Unavailable => {
             crate::log_warn!(

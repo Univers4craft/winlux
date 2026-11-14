@@ -9,6 +9,29 @@ set -u
 umask 077
 
 winlux=${WINLUX_RUNTIME:-winlux}
+# Code de sortie Windows complet pour un parent Windows (#2267) : un
+# programme qui nous a lancés par ShellExecuteEx le lit dans ce fichier, le
+# statut Linux n'en gardant que 8 bits (1602 lu 66). Retiré de
+# l'environnement : seuls les codes que nous connaissons y sont écrits.
+parent_code_file=${WINLUX_EXIT_CODE_FILE:-}
+unset WINLUX_EXIT_CODE_FILE
+full_code=
+forward_code() {
+    st=$?
+    [ -n "$parent_code_file" ] || return 0
+    case $full_code in
+        0x[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]) printf '%s\n' "$full_code" ;;
+        *) printf '0x%08X\n' "$st" ;;
+    esac >"$parent_code_file" 2>/dev/null
+    return 0
+}
+trap forward_code EXIT
+# Code complet laissé par le runtime ou l'assistant dans un fichier.
+read_code_file() {
+    c=$(head -c 16 "$1" 2>/dev/null)
+    rm -f "$1"
+    case $c in 0x[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]) printf '%s' "$c" ;; esac
+}
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
 log="$state/last-launch.log"
 
@@ -352,6 +375,7 @@ run_wizard() {
         # rien n'est installé (#2123). /S, /qn… restent possibles.
         if contract=$("$winlux" --setup --license "$exe" 2>/dev/null) && [ -n "$contract" ]; then
             show_error "« $(basename -- "$exe") » contient un contrat de licence à accepter, mais l'assistant d'installation n'est pas disponible. Rien n'a été installé."
+            full_code=0x0000063A
             exit 1602
         fi
         return 1
@@ -359,9 +383,11 @@ run_wizard() {
     "$winlux" --setup --info "$exe" >/dev/null 2>&1 || return 1
     cd "$(dirname -- "$exe")" 2>/dev/null || true
     mkdir -p "$state" 2>/dev/null || log=/dev/null
-    WINLUX_BIN="$winlux" "$wizard" "$exe" >"$log" 2>&1
+    wizard_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || wizard_code=/dev/null
+    WINLUX_EXIT_CODE_FILE=$wizard_code WINLUX_BIN="$winlux" "$wizard" "$exe" >"$log" 2>&1
     status=$?
-    if [ "$status" -eq 0 ] || [ "$status" -eq 3010 ]; then
+    [ "$wizard_code" = /dev/null ] || full_code=$(read_code_file "$wizard_code")
+    if [ "$status" -eq 0 ] || [ "$full_code" = 0x00000BC2 ]; then
         command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
         exit 0
     fi
@@ -439,18 +465,22 @@ case "$kind" in
         [ "$kind" = uninstall ] || run_wizard "$@" || true
         cd "$(dirname -- "$exe")" 2>/dev/null || true
         mkdir -p "$state" 2>/dev/null || log=/dev/null
-        "$winlux" "$exe" "$@" >"$log" 2>&1
+        setup_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || setup_code=/dev/null
+        WINLUX_EXIT_CODE_FILE=$setup_code "$winlux" "$exe" "$@" >"$log" 2>&1
         status=$?
-        # Code 4 : installeur web, téléchargement à accepter (#896).
+        [ "$setup_code" = /dev/null ] || full_code=$(read_code_file "$setup_code")
         if [ "$status" -eq 4 ] && [ "$kind" = setup ]; then
             if confirm_download "$log"; then
-                "$winlux" --setup --allow-download "$exe" "$@" >"$log" 2>&1
+                setup_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || setup_code=/dev/null
+                WINLUX_EXIT_CODE_FILE=$setup_code "$winlux" --setup --allow-download "$exe" "$@" >"$log" 2>&1
                 status=$?
+                [ "$setup_code" = /dev/null ] || full_code=$(read_code_file "$setup_code")
             else
                 exit 4
             fi
         fi
-        if [ "$status" -eq 0 ] || [ "$status" -eq 3010 ]; then
+        # 3010 (redémarrage requis) : réussite, lue sur le code complet.
+        if [ "$status" -eq 0 ] || [ "$full_code" = 0x00000BC2 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             if [ "$kind" = uninstall ]; then
                 show_message "Le programme est désinstallé." info
@@ -461,7 +491,7 @@ case "$kind" in
         fi
         if [ "$kind" = uninstall ]; then what="Désinstallation"; else what="Installation de « $(basename -- "$exe") »"; fi
         refused_by_anticheat && exit "$status"
-        show_error "$what impossible (code $status).
+        show_error "$what impossible (code ${full_code:-$status}).
 $(tail -n 5 "$log" 2>/dev/null)"
         exit "$status"
         ;;
@@ -504,9 +534,8 @@ WINLUX_EXIT_CODE_FILE=$exit_file "$winlux" "$exe" "$@" 2>"$log"
 status=$?
 code=$status
 if [ -n "$exit_file" ]; then
-    full=$(head -c 16 "$exit_file" 2>/dev/null)
-    case $full in 0x[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]) code=$full ;; esac
-    rm -f "$exit_file"
+    full_code=$(read_code_file "$exit_file")
+    [ -z "$full_code" ] || code=$full_code
 fi
 # 0x100, 0x200… : statut Linux 0, mais échec pour Windows.
 if [ "$status" -eq 0 ] && [ "$code" != 0 ] && [ "$code" != 0x00000000 ]; then status=1; fi
