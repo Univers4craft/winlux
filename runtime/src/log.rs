@@ -36,6 +36,58 @@ struct Config {
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
+
+/// Descripteur où vont les lignes de diagnostic de Winlux (#2515) : 2 par
+/// défaut, -1 pour aucun. Un programme Windows lancé avec
+/// STARTF_USESTDHANDLES a pour descripteur 2 le tube que son parent lit
+/// comme une donnée : le parent Winlux lui passe alors sa propre sortie de
+/// diagnostic dans `WINLUX_DIAG_FD`, et nos lignes n'entrent jamais dans
+/// le tube du programme. Lu par le gestionnaire de plantage : atomique.
+static DIAG_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(2);
+
+/// Variable qui transmet ce descripteur à un enfant.
+pub const DIAG_FD_ENV: &str = "WINLUX_DIAG_FD";
+
+/// Lit `WINLUX_DIAG_FD`, au démarrage, tant qu'il n'y a qu'un fil.
+pub fn init_diag_fd() {
+    let Some(v) = std::env::var_os(DIAG_FD_ENV) else {
+        return;
+    };
+    let fd = match v.to_str().and_then(|v| v.trim().parse::<i32>().ok()) {
+        // Descripteur hérité valide : il ne doit pas passer aux petits-
+        // enfants par un exec (ils reçoivent le leur par la même variable).
+        Some(fd) if fd > 2 && unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } == 0 => {
+            fd
+        }
+        Some(2) => 2,
+        _ => -1,
+    };
+    DIAG_FD.store(fd, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Descripteur des lignes de diagnostic (-1 : aucun).
+pub fn diag_fd() -> i32 {
+    DIAG_FD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Écrit tout `bytes` sur le descripteur de diagnostic.
+pub fn write_diag(bytes: &[u8]) {
+    let fd = diag_fd();
+    if fd < 0 {
+        return;
+    }
+    let mut done = 0;
+    while done < bytes.len() {
+        let n = unsafe { libc::write(fd, bytes[done..].as_ptr().cast(), bytes.len() - done) };
+        if n <= 0 {
+            if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        done += n as usize;
+    }
+}
 static LOG_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
 static JOURNAL_FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
 
@@ -331,8 +383,9 @@ pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
         write_to_journal(level, target, &msg_str);
     }
 
-    let stderr = std::io::stderr();
-    let mut w = stderr.lock();
+    // Une seule écriture par ligne, sur le descripteur de diagnostic
+    // (#2515), jamais dans le tube qu'un programme lit.
+    let mut w: Vec<u8> = Vec::new();
     match cfg.format {
         Format::Text => {
             let _ = writeln!(w, "winlux[{}/{}]: {}", level.as_str(), target, msg_str);
@@ -348,7 +401,13 @@ pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
             let _ = writeln!(w, "}}");
         }
     }
-    drop(w);
+    if diag_fd() == 2 {
+        let stderr = std::io::stderr();
+        let mut e = stderr.lock();
+        let _ = e.write_all(&w);
+    } else {
+        write_diag(&w);
+    }
 
     // Écriture dans le fichier de log si configuré
     if let Some(file_mutex) = log_file() {
@@ -491,5 +550,90 @@ mod file_line_tests {
         rotate_journal(&mut a, &path, 100);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 12);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests_diag {
+    use super::*;
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    const ENFANT: &str = "WINLUX_TEST_DIAG_ENFANT";
+
+    /// #2515 : avec `WINLUX_DIAG_FD`, une ligne du journal va au descripteur
+    /// de diagnostic et jamais sur le descripteur 2, qui est alors le tube
+    /// qu'un programme Windows lit. Relancé dans un processus enfant, dont
+    /// le descripteur 2 est un tube, borné à 60 s.
+    #[test]
+    fn diagnostic_hors_du_tube_du_programme() {
+        if std::env::var_os(ENFANT).is_some() {
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("winlux-diag-{}.txt", std::process::id()));
+        let diag = std::fs::File::create(&path).unwrap();
+        // Copie héritable (sans FD_CLOEXEC), comme dans CreateProcess.
+        let copy = unsafe { libc::fcntl(diag.as_raw_fd(), libc::F_DUPFD, 3) };
+        assert!(copy > 2);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "log::tests_diag::enfant_diagnostic",
+                "--test-threads=1",
+                "--include-ignored",
+            ])
+            .env(ENFANT, "1")
+            .env(DIAG_FD_ENV, copy.to_string())
+            .env("WINLUX_JOURNAL", "0")
+            .env_remove("WINLUX_LOG_FILE")
+            .env_remove("WINLUX_LOG")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        unsafe { libc::close(copy) };
+        let t0 = Instant::now();
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break Some(st);
+            }
+            if t0.elapsed() > Duration::from_secs(60) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut tube = String::new();
+        std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut tube).unwrap();
+        let ecrit = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        assert!(status.expect("enfant bloqué").success(), "enfant : {tube}");
+        assert!(
+            ecrit.contains("ligne-de-diagnostic-2515"),
+            "diagnostic : {ecrit:?}"
+        );
+        assert!(
+            !tube.contains("ligne-de-diagnostic-2515"),
+            "tube : {tube:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "lancé par diagnostic_hors_du_tube_du_programme"]
+    fn enfant_diagnostic() {
+        if std::env::var_os(ENFANT).is_none() {
+            return;
+        }
+        init_diag_fd();
+        assert!(diag_fd() > 2);
+        // Le descripteur hérité ne passe pas à un exec suivant.
+        let flags = unsafe { libc::fcntl(diag_fd(), libc::F_GETFD) };
+        assert_eq!(flags & libc::FD_CLOEXEC, libc::FD_CLOEXEC);
+        emit(
+            Level::Warn,
+            "test",
+            &format_args!("ligne-de-diagnostic-2515"),
+        );
     }
 }
