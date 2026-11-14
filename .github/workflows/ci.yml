@@ -455,6 +455,7 @@ jobs:
           python3 -B scripts/test-quick-menu-position.py
           python3 -B scripts/test-power.py
           python3 -B scripts/test-power-reboot-guard.py
+          python3 -B scripts/test-power-terminal-hangup.py
           python3 -B scripts/test-power-lock-handover.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
