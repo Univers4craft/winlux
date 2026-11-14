@@ -919,11 +919,16 @@ class Apt(Source):
             age = time.time() - max((p.stat().st_mtime for p in lists.glob("*_Packages*")), default=0)
         except OSError:
             age = 0
-        if age > REMOTE_TTL and not OFFLINE and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
+        if age > REMOTE_TTL and not OFFLINE and network_up() and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
             run(admin(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"]) or ["true"], 600)
 
     def apps(self, force=False):
-        if force:
+        # Système neuf : l'image est livrée sans listes apt
+        # (prepare-apt-base.py). Sans elles la Boutique n'avait aucun
+        # logiciel des dépôts avant « Actualiser » ; apt-get update est admis
+        # sans autorisation par le relais (niveau « user ») (#2184).
+        # Pas pendant la première passe, locale et rapide, du rafraîchissement.
+        if force or (not self.local_only and not any(Path(ROOT + "/var/lib/apt/lists").glob("*_Packages*"))):
             self.refresh_lists()
         if not OFFLINE and not self.local_only:
             dep11_icon_archives(force)

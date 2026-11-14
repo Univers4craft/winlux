@@ -60,6 +60,10 @@ jour du système après l'installation » sans pourcentage ; un clic sur un autr
 « Installer » y affiche « Une installation est déjà en cours : attendez qu'elle
 se termine » (#2186).
 
+Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
+`apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
+niveau « user »), jamais hors ligne (#2184).
+
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
 boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls

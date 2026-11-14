@@ -439,38 +439,26 @@ unsafe extern "win64" fn get_scroll_bar_info(hwnd: usize, object: i32, out: *mut
 
 unsafe extern "win64" fn def_frame_proc_w(
     hwnd: usize,
-    _client: usize,
+    client: usize,
     msg: u32,
     wp: usize,
     lp: isize,
 ) -> isize {
-    call!(
-        "DefWindowProcW",
-        fn(usize, u32, usize, isize) -> isize,
-        hwnd,
-        msg,
-        wp,
-        lp
-    )
-    .unwrap_or(0)
+    super::controls::with_charset(true, || {
+        super::mdi::def_frame_proc(hwnd, client, msg, wp, lp)
+    })
 }
 
 unsafe extern "win64" fn def_frame_proc_a(
     hwnd: usize,
-    _client: usize,
+    client: usize,
     msg: u32,
     wp: usize,
     lp: isize,
 ) -> isize {
-    call!(
-        "DefWindowProcA",
-        fn(usize, u32, usize, isize) -> isize,
-        hwnd,
-        msg,
-        wp,
-        lp
-    )
-    .unwrap_or(0)
+    super::controls::with_charset(false, || {
+        super::mdi::def_frame_proc(hwnd, client, msg, wp, lp)
+    })
 }
 
 unsafe extern "win64" fn def_mdi_child_proc_w(
@@ -479,15 +467,7 @@ unsafe extern "win64" fn def_mdi_child_proc_w(
     wp: usize,
     lp: isize,
 ) -> isize {
-    call!(
-        "DefWindowProcW",
-        fn(usize, u32, usize, isize) -> isize,
-        hwnd,
-        msg,
-        wp,
-        lp
-    )
-    .unwrap_or(0)
+    super::controls::with_charset(true, || super::mdi::def_mdi_child_proc(hwnd, msg, wp, lp))
 }
 
 unsafe extern "win64" fn def_mdi_child_proc_a(
@@ -496,15 +476,7 @@ unsafe extern "win64" fn def_mdi_child_proc_a(
     wp: usize,
     lp: isize,
 ) -> isize {
-    call!(
-        "DefWindowProcA",
-        fn(usize, u32, usize, isize) -> isize,
-        hwnd,
-        msg,
-        wp,
-        lp
-    )
-    .unwrap_or(0)
+    super::controls::with_charset(false, || super::mdi::def_mdi_child_proc(hwnd, msg, wp, lp))
 }
 
 unsafe extern "win64" fn translate_mdi_sys_accel(_client: usize, _msg: usize) -> i32 {

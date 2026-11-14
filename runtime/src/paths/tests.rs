@@ -429,3 +429,24 @@ fn programme_lance_par_un_chemin_windows() {
         PathBuf::from("absent.exe")
     );
 }
+
+/// #2326 : un installateur se décompresse dans le dossier temporaire du
+/// profil, sur le disque, et %TEMP%/%TMP% le désignent, jamais /tmp.
+#[test]
+fn dossier_temporaire_du_profil_sur_le_disque() {
+    let env = Env::new("temp");
+    let temp = profile_temp();
+    assert_eq!(temp, env.home.join("AppData/Local/Temp"));
+    assert!(temp.is_dir());
+    let work = setup_work_dir("sfx");
+    assert!(work.starts_with(&temp), "{}", work.display());
+    let vars = windows_env();
+    for k in ["TEMP", "TMP"] {
+        let v = vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(
+            v.as_deref().map(to_linux),
+            Some(temp.clone()),
+            "{k} désigne le dossier du profil"
+        );
+    }
+}

@@ -160,8 +160,8 @@ namespace System.ComponentModel
         public void Dispose()
         {
             Dispose(true);
-            // GC.SuppressFinalize n'est pas encore dans notre mscorlib (#2077) ;
-            // Dispose(false) reste sans effet si un finaliseur passe ensuite.
+            // Libéré explicitement : plus de finalisation (#2320).
+            GC.SuppressFinalize(this);
         }
 
         protected virtual void Dispose(bool disposing)
@@ -306,8 +306,8 @@ namespace System.ComponentModel
         public void Dispose()
         {
             Dispose(true);
-            // GC.SuppressFinalize n'est pas encore dans notre mscorlib (#2077) ;
-            // Dispose(false) reste sans effet si un finaliseur passe ensuite.
+            // Libéré explicitement : plus de finalisation (#2320).
+            GC.SuppressFinalize(this);
         }
 
         // Les composants sont libérés du dernier ajouté au premier.
