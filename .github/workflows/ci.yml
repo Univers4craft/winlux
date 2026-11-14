@@ -555,6 +555,9 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Auto-extractible 7-Zip qui lance son programme (#2390)
+        run: sh scripts/test-sfx-programme.sh
+
       - name: Programmes lancés par les installeurs NSIS (#179)
         run: |
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
