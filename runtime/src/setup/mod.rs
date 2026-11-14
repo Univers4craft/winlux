@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup, paquets MSIX et AppX
   winlux --setup installateur.exe [/D=dossier]   installer
+        [/nodesktop | --desktop]                  sans raccourci sur le Bureau, ou avec
   winlux --setup paquet.msix|.appx|.msixbundle   installer un paquet MSIX
         [--allow-unverified]                      même d'un éditeur non vérifié (code 3 sinon)
   winlux --setup --info installateur.exe          type, nom, version, dossier
@@ -127,6 +128,9 @@ pub struct Options {
     pub dir: Option<String>,
     /// Pas de raccourci sur le Bureau.
     pub no_desktop: bool,
+    /// Raccourci sur le Bureau demandé (case cochée de l'assistant,
+    /// `--desktop`) : posé même si l'installateur ne le fait pas (#2295).
+    pub desktop: bool,
     /// L'utilisateur a confirmé l'installation d'un paquet MSIX dont
     /// l'éditeur n'est pas vérifié (`--allow-unverified`).
     pub allow_unverified: bool,
@@ -412,6 +416,14 @@ pub struct Installer {
     /// elle échoue (#1723).
     created: Vec<PathBuf>,
     pub log: Logger,
+    /// Choix de l'utilisateur pour le raccourci du Bureau (#2295) :
+    /// `Some(false)` aucun, `Some(true)` un, `None` ce que fait l'installateur.
+    pub desktop: Option<bool>,
+    /// Un raccourci a été posé sur le Bureau.
+    desktop_done: bool,
+    /// Premier raccourci du menu Démarrer vers un programme qui n'est pas
+    /// un désinstalleur : (nom, cible, arguments, dossier, description).
+    menu_app: Option<(String, String, String, String, String)>,
 }
 
 /// Clé de registre sous sa racine (`hklm\Software\…`). La casse des
@@ -437,6 +449,27 @@ impl Installer {
             files_seen: HashSet::new(),
             created: Vec::new(),
             log,
+            desktop: None,
+            desktop_done: false,
+            menu_app: None,
+        }
+    }
+
+    /// Raccourci du Bureau demandé par l'utilisateur et que l'installateur
+    /// n'a pas posé : copie de son raccourci du menu Démarrer (#2295).
+    pub fn ensure_desktop(&mut self) {
+        if self.desktop != Some(true) || self.desktop_done {
+            return;
+        }
+        let Some((name, target, args, workdir, desc)) = self.menu_app.clone() else {
+            return;
+        };
+        let link = format!("{}\\{name}", Folders::desktop());
+        match self.shortcut(&link, &target, &args, &workdir, &desc) {
+            Ok(()) => self
+                .log
+                .log(&format!("raccourci du Bureau ajouté : {name}")),
+            Err(e) => self.log.log(&format!("raccourci du Bureau : {e}")),
         }
     }
 
@@ -541,6 +574,24 @@ impl Installer {
             let body = format!("[InternetShortcut]\r\nURL={target}\r\n");
             self.write_file(&link, body.as_bytes())?;
             return Ok(());
+        }
+        if is_desktop_link(link) {
+            if self.desktop == Some(false) {
+                // Case décochée dans l'assistant (#2295).
+                self.log
+                    .log(&format!("raccourci du Bureau non créé (refusé) : {link}"));
+                return Ok(());
+            }
+            self.desktop_done = true;
+        } else if self.menu_app.is_none() && is_menu_app_link(link, target) {
+            let name = link.rsplit('\\').next().unwrap_or(link).to_string();
+            self.menu_app = Some((
+                name,
+                target.into(),
+                args.into(),
+                workdir.into(),
+                desc.into(),
+            ));
         }
         let bytes = crate::msi::shortcut_bytes(target, args, workdir, desc);
         hide_desktop_link(link);
@@ -828,6 +879,13 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
         let kind =
             detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
         inst = Installer::new(kind, log);
+        inst.desktop = if opts.no_desktop {
+            Some(false)
+        } else if opts.desktop {
+            Some(true)
+        } else {
+            None
+        };
         match kind {
             Kind::Inno => inno::install(&data, path, opts, &mut inst),
             Kind::Nsis => nsis::install(&data, path, opts, &mut inst),
@@ -841,6 +899,7 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
         inst.rollback();
         return Err(e);
     }
+    inst.ensure_desktop();
     // Réinstallation : les fichiers de l'ancienne version absents de la
     // nouvelle sont retirés, le reste est conservé.
     if let Some(old) = Manifest::find(&inst.manifest.id) {
@@ -878,6 +937,29 @@ fn refresh_launchers() {
 /// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
 /// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
 /// winlux-applications pose ensuite le lanceur « Claude » à sa place.
+/// Raccourci posé sur un Bureau (celui du compte ou le Bureau public).
+fn is_desktop_link(link: &str) -> bool {
+    let Some((dir, _)) = link.rsplit_once('\\') else {
+        return false;
+    };
+    dir.eq_ignore_ascii_case(&Folders::desktop()) || dir.to_ascii_lowercase().ends_with("\\desktop")
+}
+
+/// Raccourci du menu Démarrer vers le programme lui-même, pas vers son
+/// désinstalleur, sa documentation ou un site.
+fn is_menu_app_link(link: &str, target: &str) -> bool {
+    let link_l = link.to_ascii_lowercase();
+    let target_l = target.to_ascii_lowercase();
+    let file = target_l.rsplit('\\').next().unwrap_or(&target_l);
+    link_l.contains("\\start menu\\")
+        && link_l.ends_with(".lnk")
+        && file.ends_with(".exe")
+        && !file.starts_with("unins")
+        && !file.starts_with("uninst")
+        && !link_l.contains("uninstall")
+        && !link_l.contains("désinstaller")
+}
+
 pub(crate) fn hide_desktop_link(link: &str) {
     let desktop = Folders::desktop();
     let Some((dir, name)) = link.rsplit_once('\\') else {
@@ -1061,6 +1143,7 @@ pub fn cli(args: &[String]) -> i32 {
             "/s" | "/silent" | "/verysilent" | "/sp-" | "/suppressmsgboxes" | "/norestart"
             | "--quiet" => log.quiet = lower == "--quiet",
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
+            "--desktop" => opts.desktop = true,
             "--allow-unverified" => opts.allow_unverified = true,
             "--allow-download" => allow_download = true,
             _ => {

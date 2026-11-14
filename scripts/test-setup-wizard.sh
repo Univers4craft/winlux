@@ -27,7 +27,7 @@ for fr, row in w._TR.items():
 msi = {"kind": "msi", "folder": ""}
 assert w.command("w", "/a.msi", msi, "", True) == ["w", "--msiexec", "/i", "/a.msi", "/qn"]
 nsis = {"kind": "nsis", "folder": "C:\\Program Files\\A"}
-assert w.command("w", "/a.exe", nsis, "C:\\Program Files\\A", True) == ["w", "--setup", "/a.exe"]
+assert w.command("w", "/a.exe", nsis, "C:\\Program Files\\A", True) == ["w", "--setup", "/a.exe", "--desktop"]
 assert w.command("w", "/a.exe", nsis, "D:\\A", False) == ["w", "--setup", "/a.exe", "/D=D:\\A", "/nodesktop"]
 PY
 
