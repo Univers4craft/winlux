@@ -230,7 +230,11 @@ pub unsafe extern "win64" fn wide_char_to_multi_byte(
         return 0;
     }
     if cp == CP_UTF8 {
-        if flags & !WC_ERR_INVALID_CHARS != 0 {
+        // WC_NO_BEST_FIT_CHARS est accepté et sans effet : l'UTF-8 représente
+        // tous les caractères. La documentation n'admet que 0 ou
+        // WC_ERR_INVALID_CHARS, mais des programmes qui fonctionnent sous
+        // Windows passent ce drapeau (installeur de G HUB, #2280).
+        if flags & !(WC_ERR_INVALID_CHARS | WC_NO_BEST_FIT_CHARS) != 0 {
             set_last_error(ERROR_INVALID_FLAGS);
             return 0;
         }
@@ -1824,6 +1828,33 @@ mod tests {
                 std::ptr::null_mut(),
             );
             assert_eq!(&out[..n as usize - 1], "Noël – œuf".as_bytes());
+            // #2280 : WC_NO_BEST_FIT_CHARS (avec WC_ERR_INVALID_CHARS) est
+            // accepté et sans effet en UTF-8 ; un autre drapeau reste refusé.
+            out.fill(0);
+            let n = wide_char_to_multi_byte(
+                65001,
+                0x480,
+                text.as_ptr(),
+                -1,
+                out.as_mut_ptr(),
+                32,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            );
+            assert_eq!(&out[..n as usize - 1], "Noël – œuf".as_bytes());
+            assert_eq!(
+                wide_char_to_multi_byte(
+                    65001,
+                    0x200,
+                    text.as_ptr(),
+                    -1,
+                    out.as_mut_ptr(),
+                    32,
+                    std::ptr::null(),
+                    std::ptr::null_mut()
+                ),
+                0
+            );
             assert_eq!(
                 wide_char_to_multi_byte(
                     65001,
