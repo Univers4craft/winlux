@@ -228,6 +228,7 @@ pub mod pe_image;
 pub mod pointer;
 pub mod powrprof;
 pub mod print_pdf;
+pub mod property_value;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
