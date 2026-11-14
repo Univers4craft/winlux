@@ -56,7 +56,7 @@ pub use wow64::{
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Sélecteurs de segments de Linux x86-64 : code 32 bits, code 64 bits, données.
@@ -1832,28 +1832,132 @@ struct Passage {
 
 const HISTORY_LEN: usize = 64;
 
-type Ring = std::sync::Arc<Mutex<std::collections::VecDeque<Passage>>>;
+/// Places d'historique : une par fil x86, prise au premier passage noté.
+/// Table statique d'atomiques et non plus `Mutex` : le gestionnaire de
+/// plantage (fail-fast `int 0x29` venu du code x86, faute fatale) la relit
+/// dans un contexte de signal, où seules des lectures d'atomiques et des
+/// write(2) sont permises (#2426).
+const HISTORY_SLOTS: usize = 512;
 
-/// Historiques de tous les fils x86, pour les écrire à la fin du processus
-/// quel que soit le fil qui la décide (#2368). (tid, historique)
-static RINGS: Mutex<Vec<(i64, Ring)>> = Mutex::new(Vec::new());
+/// Mots d'un passage : desc, target, esp, ret, args[4], rendu bas, rendu
+/// haut, rendu présent.
+const PASSAGE_WORDS: usize = 11;
 
-thread_local! {
-    static HISTORY: Ring = {
-        let ring: Ring = std::sync::Arc::new(Mutex::new(
-            std::collections::VecDeque::with_capacity(HISTORY_LEN),
-        ));
-        let tid = unsafe { libc::syscall(libc::SYS_gettid) };
-        RINGS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((tid, std::sync::Arc::clone(&ring)));
-        ring
-    };
+struct Slot {
+    /// tid du fil propriétaire ; -tid une fois le fil fini (place reprise
+    /// seulement quand aucune n'est libre) ; 0 : libre.
+    owner: AtomicI64,
+    /// Passages notés depuis la prise de la place.
+    count: AtomicU64,
+    /// Écrits par le seul fil propriétaire ; un lecteur concurrent (fin de
+    /// processus, signal) peut lire un passage à moitié écrit, sans danger
+    /// autre qu'une ligne fausse.
+    entries: [[AtomicU32; PASSAGE_WORDS]; HISTORY_LEN],
 }
 
-fn ring_lock(r: &Ring) -> std::sync::MutexGuard<'_, std::collections::VecDeque<Passage>> {
-    r.lock().unwrap_or_else(|e| e.into_inner())
+#[allow(clippy::declare_interior_mutable_const)]
+const SLOT_INIT: Slot = Slot {
+    owner: AtomicI64::new(0),
+    count: AtomicU64::new(0),
+    entries: [const { [const { AtomicU32::new(0) }; PASSAGE_WORDS] }; HISTORY_LEN],
+};
+
+static SLOTS: [Slot; HISTORY_SLOTS] = [SLOT_INIT; HISTORY_SLOTS];
+
+/// L'historique de fin de processus est écrit une seule fois, par la sortie
+/// ordinaire ou par le gestionnaire de plantage (#2368, #2426).
+static HISTORY_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Place du fil courant ; rendue (tid négatif) à la fin du fil.
+struct OwnedSlot(usize);
+
+impl Drop for OwnedSlot {
+    fn drop(&mut self) {
+        let s = &SLOTS[self.0];
+        let tid = s.owner.load(Ordering::Relaxed);
+        if tid > 0 {
+            s.owner.store(-tid, Ordering::Release);
+        }
+    }
+}
+
+/// Prend une place libre, sinon celle d'un fil fini. Aucune : le fil n'a
+/// pas d'historique, signalé une fois.
+fn claim_slot() -> Option<OwnedSlot> {
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    for reuse in [false, true] {
+        for (i, s) in SLOTS.iter().enumerate() {
+            let v = s.owner.load(Ordering::Relaxed);
+            let free = if reuse { v < 0 } else { v == 0 };
+            if free
+                && s.owner
+                    .compare_exchange(v, tid, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            {
+                s.count.store(0, Ordering::Release);
+                return Some(OwnedSlot(i));
+            }
+        }
+    }
+    static FULL: AtomicBool = AtomicBool::new(false);
+    if !FULL.swap(true, Ordering::Relaxed) {
+        history_emit(&format_args!(
+            "historique : {HISTORY_SLOTS} fils x86 vivants, le fil {tid} n'a pas d'historique"
+        ));
+    }
+    None
+}
+
+thread_local! {
+    static MY_SLOT: Option<OwnedSlot> = claim_slot();
+}
+
+fn my_slot() -> Option<&'static Slot> {
+    MY_SLOT
+        .try_with(|s| s.as_ref().map(|o| o.0))
+        .ok()
+        .flatten()
+        .map(|i| &SLOTS[i])
+}
+
+fn store_passage(e: &[AtomicU32; PASSAGE_WORDS], p: &Passage) {
+    let r = p.result.unwrap_or(0);
+    let words = [
+        p.desc,
+        p.target,
+        p.esp,
+        p.ret,
+        p.args[0],
+        p.args[1],
+        p.args[2],
+        p.args[3],
+        r as u32,
+        (r >> 32) as u32,
+        p.result.is_some() as u32,
+    ];
+    for (d, w) in e.iter().zip(words) {
+        d.store(w, Ordering::Relaxed);
+    }
+}
+
+fn load_passage(e: &[AtomicU32; PASSAGE_WORDS]) -> Passage {
+    let w: [u32; PASSAGE_WORDS] = std::array::from_fn(|i| e[i].load(Ordering::Relaxed));
+    Passage {
+        desc: w[0],
+        target: w[1],
+        esp: w[2],
+        ret: w[3],
+        args: [w[4], w[5], w[6], w[7]],
+        result: (w[10] != 0).then_some(w[8] as u64 | (w[9] as u64) << 32),
+    }
+}
+
+/// Indices (dans `entries`) des passages gardés, du plus ancien au plus
+/// récent.
+fn slot_range(s: &Slot) -> impl Iterator<Item = usize> {
+    let c = s.count.load(Ordering::Acquire);
+    let k = c.min(HISTORY_LEN as u64);
+    (c - k..c).map(|n| (n % HISTORY_LEN as u64) as usize)
 }
 
 /// `WINLUX_WOW32_HISTORY=1` : chaque fil garde ses 64 derniers passages
@@ -1917,24 +2021,26 @@ fn passage_line(p: &Passage) -> String {
 /// passage le plus récent qui lui correspond (des rappels x86 ont pu être
 /// notés entre-temps).
 fn note_result(desc: u32, esp: u32, r: u64) {
-    let _ = HISTORY.try_with(|h| {
-        let mut h = ring_lock(h);
-        if let Some(p) = h
-            .iter_mut()
-            .rev()
-            .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
-        {
+    let Some(s) = my_slot() else {
+        return;
+    };
+    let idx: Vec<usize> = slot_range(s).collect();
+    for i in idx.into_iter().rev() {
+        let mut p = load_passage(&s.entries[i]);
+        if p.desc == desc && p.esp == esp && p.result.is_none() {
             p.result = Some(r);
+            store_passage(&s.entries[i], &p);
             // Mode flux : la valeur rendue suit aussitôt (#1616), sinon
             // seule une faute la montrait.
             if let Some(filter) = history_stream() {
-                let line = passage_line(p);
+                let line = passage_line(&p);
                 if stream_match(filter, &line) {
                     eprintln!("winlux[wow32] {line}");
                 }
             }
+            return;
         }
-    });
+    }
 }
 
 fn note(p: Passage) {
@@ -1944,20 +2050,23 @@ fn note(p: Passage) {
             eprintln!("winlux[wow32] {line}");
         }
     }
-    let _ = HISTORY.try_with(|h| {
-        let mut h = ring_lock(h);
-        if h.len() == HISTORY_LEN {
-            h.pop_front();
-        }
-        h.push_back(p);
-    });
+    let Some(s) = my_slot() else {
+        return;
+    };
+    let n = s.count.load(Ordering::Relaxed);
+    store_passage(&s.entries[(n % HISTORY_LEN as u64) as usize], &p);
+    s.count.store(n + 1, Ordering::Release);
 }
 
-/// Passages notés, du plus ancien au plus récent, en texte.
+/// Passages notés par le fil courant, du plus ancien au plus récent, en
+/// texte.
 fn history_lines() -> Vec<String> {
-    HISTORY
-        .try_with(|h| ring_lock(h).iter().map(passage_line).collect())
-        .unwrap_or_default()
+    let Some(s) = my_slot() else {
+        return Vec::new();
+    };
+    slot_range(s)
+        .map(|i| passage_line(&load_passage(&s.entries[i])))
+        .collect()
 }
 
 /// Écrit l'historique au niveau Warn : sortie d'erreur et journal, sans
@@ -1966,32 +2075,178 @@ fn history_emit(line: &std::fmt::Arguments<'_>) {
     crate::log::emit(crate::log::Level::Warn, "wow32", line);
 }
 
-/// Fin du processus (ExitProcess, TerminateProcess sur soi, fail-fast,
-/// exception non gérée) : avec WINLUX_WOW32_HISTORY, l'historique de chaque
-/// fil x86 est écrit, une seule fois (#2368).
+/// Places occupées : (tid, fil fini, place).
+fn used_slots() -> impl Iterator<Item = (i64, bool, &'static Slot)> {
+    SLOTS.iter().filter_map(|s| {
+        let v = s.owner.load(Ordering::Acquire);
+        (v != 0).then_some((v.abs(), v < 0, s))
+    })
+}
+
+/// Fin du processus (ExitProcess, TerminateProcess sur soi, fail-fast
+/// demandé au runtime, exception non gérée) : avec WINLUX_WOW32_HISTORY,
+/// l'historique de chaque fil x86 est écrit, une seule fois (#2368).
 pub fn dump_history_at_exit(why: &str) {
-    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !history_on() || DONE.swap(true, Ordering::Relaxed) {
+    if !history_on() || HISTORY_DONE.swap(true, Ordering::Relaxed) {
         return;
     }
-    let rings: Vec<(i64, Ring)> = RINGS.try_lock().map(|r| r.clone()).unwrap_or_default();
     let me = unsafe { libc::syscall(libc::SYS_gettid) };
     history_emit(&format_args!(
         "{why} : historique des passages x86 ↔ runtime de {} fil(s)",
-        rings.len()
+        used_slots().count()
     ));
-    for (tid, ring) in rings {
-        // try_lock : un fil arrêté en plein passage garde son verrou.
-        let Ok(h) = ring.try_lock() else {
-            history_emit(&format_args!("fil {tid} : historique occupé"));
-            continue;
+    for (tid, ended, s) in used_slots() {
+        let lines: Vec<String> = slot_range(s)
+            .map(|i| passage_line(&load_passage(&s.entries[i])))
+            .collect();
+        let mark = if tid == me {
+            " (fil qui termine)"
+        } else if ended {
+            " (fil fini)"
+        } else {
+            ""
         };
-        let lines: Vec<String> = h.iter().map(passage_line).collect();
-        drop(h);
-        let mark = if tid == me { " (fil qui termine)" } else { "" };
         history_emit(&format_args!("fil {tid}{mark} : {} passages", lines.len()));
         for (i, l) in lines.iter().enumerate() {
             history_emit(&format_args!("fil {tid}   {i:2} {l}"));
+        }
+    }
+}
+
+/// Ligne en construction dans un tampon fixe : aucune allocation, pour le
+/// gestionnaire de signal. Ce qui dépasse est coupé.
+struct SigLine {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl SigLine {
+    fn new() -> Self {
+        let mut l = SigLine {
+            buf: [0; 512],
+            len: 0,
+        };
+        l.push(b"winlux[warn/wow32]: ");
+        l
+    }
+
+    fn push(&mut self, s: &[u8]) {
+        let n = s.len().min(self.buf.len() - self.len);
+        self.buf[self.len..self.len + n].copy_from_slice(&s[..n]);
+        self.len += n;
+    }
+
+    /// Hexadécimal sans zéros de tête, comme `{:x}`.
+    fn hex(&mut self, v: u64) {
+        let mut b = [0u8; 16];
+        let mut i = 16;
+        let mut v = v;
+        loop {
+            i -= 1;
+            b[i] = b"0123456789abcdef"[(v & 15) as usize];
+            v >>= 4;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&b[i..]);
+    }
+
+    fn dec(&mut self, v: u64) {
+        let mut b = [0u8; 20];
+        let mut i = 20;
+        let mut v = v;
+        loop {
+            i -= 1;
+            b[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&b[i..]);
+    }
+
+    /// Termine la ligne et l'écrit sur la sortie d'erreur en un seul write(2).
+    fn write(mut self) {
+        if self.len == self.buf.len() {
+            self.len -= 1;
+        }
+        self.buf[self.len] = b'\n';
+        unsafe {
+            libc::write(2, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+        }
+    }
+}
+
+/// Faute fatale (fail-fast `int 0x29` du code x86, faute non rattrapée),
+/// depuis le gestionnaire de signal de crash.rs : même historique que
+/// `dump_history_at_exit`, écrit sur la sortie d'erreur seulement, avec des
+/// lectures d'atomiques, la libellé déjà construit de chaque passerelle et
+/// write(2) — ni allocation, ni verrou, ni journal (#2426). Rien sans
+/// historique noté (WINLUX_WOW32_HISTORY absente).
+///
+/// # Safety
+/// Appelée seulement depuis le gestionnaire de plantage, le processus va
+/// finir ; les `Desc` notés vivent jusqu'à la fin du processus.
+pub(crate) unsafe fn dump_history_in_signal(what: &[u8]) {
+    let fils = used_slots().count();
+    if fils == 0 || HISTORY_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let me = libc::syscall(libc::SYS_gettid);
+    let mut l = SigLine::new();
+    l.push(what);
+    l.push(" : historique des passages x86 ↔ runtime de ".as_bytes());
+    l.dec(fils as u64);
+    l.push(b" fil(s)");
+    l.write();
+    for (tid, ended, s) in used_slots() {
+        let idx = slot_range(s);
+        let mut l = SigLine::new();
+        l.push(b"fil ");
+        l.dec(tid as u64);
+        if tid == me {
+            l.push(b" (fil qui termine)");
+        } else if ended {
+            l.push(b" (fil fini)");
+        }
+        l.push(b" : ");
+        l.dec(idx.size_hint().0 as u64);
+        l.push(b" passages");
+        l.write();
+        for (j, i) in idx.enumerate() {
+            let p = load_passage(&s.entries[i]);
+            let mut l = SigLine::new();
+            l.push(b"fil ");
+            l.dec(tid as u64);
+            l.push(if j < 10 { b"    " } else { b"   " });
+            l.dec(j as u64);
+            l.push(b" ");
+            if p.desc != 0 {
+                let d = &*(p.desc as usize as *const Desc);
+                l.push(d.label.as_bytes());
+            } else {
+                l.push(b"rappel x86 0x");
+                l.hex(p.target as u64);
+            }
+            l.push(b" (esp 0x");
+            l.hex(p.esp as u64);
+            l.push(b", retour 0x");
+            l.hex(p.ret as u64);
+            l.push(b") [");
+            for (k, a) in p.args.iter().enumerate() {
+                if k > 0 {
+                    l.push(b", ");
+                }
+                l.hex(*a as u64);
+            }
+            l.push(b"]");
+            if let Some(r) = p.result {
+                l.push(b" = 0x");
+                l.hex(r as u32 as u64);
+            }
+            l.write();
         }
     }
 }
@@ -2013,7 +2268,9 @@ fn pas_a_pas_cible() {
 }
 
 /// Variable qui fait de `historique_enfant` le processus enfant (#2368) :
-/// `sortie` finit par ExitProcess, `failfast` par RaiseFailFastException.
+/// `sortie` finit par ExitProcess, `failfast` par RaiseFailFastException,
+/// `int29` par l'instruction `int 0x29` elle-même, comme le code x86 d'un
+/// programme (#2426).
 #[cfg(test)]
 const HISTORIQUE_ENFANT: &str = "WINLUX_TEST_HISTORIQUE_ENFANT";
 
@@ -2031,12 +2288,20 @@ fn historique_enfant() {
         args: [0; 4],
         result: None,
     };
-    note(passage(0x40_1111));
+    // Comme aux points d'appel réels : rien n'est noté sans la variable.
+    let noter = move |t: u32| {
+        if history_on() {
+            note(passage(t));
+        }
+    };
+    noter(0x40_1111);
     // Un second fil : son historique doit aussi sortir, écrit par le fil
     // qui termine.
-    std::thread::spawn(move || note(passage(0x40_2222)))
-        .join()
-        .unwrap();
+    std::thread::spawn(move || noter(0x40_2222)).join().unwrap();
+    if mode == "int29" {
+        crate::crash::install();
+        unsafe { std::arch::asm!("int 0x29", in("rcx") 7usize, options(noreturn)) };
+    }
     if mode == "failfast" {
         crate::dlls::seh::raise_fail_fast_exception(std::ptr::null(), std::ptr::null(), 0);
     }
@@ -2081,11 +2346,12 @@ fn historique_lancer(mode: &str, history: bool) -> (Option<i32>, String) {
 }
 
 /// #2368 : avec WINLUX_WOW32_HISTORY seule, l'historique de chaque fil sort
-/// sur ExitProcess et sur un fail-fast ; sans elle, rien.
+/// sur ExitProcess et sur un fail-fast, y compris l'instruction `int 0x29`
+/// qui passe par le gestionnaire de signal (#2426) ; sans elle, rien.
 #[cfg(test)]
 #[test]
 fn historique_ecrit_a_la_fin_du_processus() {
-    for mode in ["sortie", "failfast"] {
+    for mode in ["sortie", "failfast", "int29"] {
         let (code, err) = historique_lancer(mode, true);
         let want = if mode == "sortie" { 3 } else { 0x09 };
         assert_eq!(code, Some(want), "{mode} : {err}");
@@ -2096,9 +2362,29 @@ fn historique_ecrit_a_la_fin_du_processus() {
         assert!(err.contains("rappel x86 0x401111"), "{mode} : {err}");
         assert!(err.contains("rappel x86 0x402222"), "{mode} : {err}");
         assert!(err.contains("(fil qui termine)"), "{mode} : {err}");
+        // Même ligne par le journal et par le gestionnaire de signal.
+        assert!(
+            err.contains("rappel x86 0x401111 (esp 0x0, retour 0x0) [0, 0, 0, 0]"),
+            "{mode} : {err}"
+        );
     }
-    let (_, err) = historique_lancer("sortie", false);
-    assert!(!err.contains("historique des passages"), "{err}");
+    for mode in ["sortie", "int29"] {
+        let (_, err) = historique_lancer(mode, false);
+        assert!(!err.contains("historique des passages"), "{mode} : {err}");
+    }
+    // Fail-fast par le signal : une seule écriture, et le fil fini est
+    // nommé comme tel (#2426).
+    let (_, err) = historique_lancer("int29", true);
+    assert_eq!(
+        err.matches("historique des passages x86").count(),
+        1,
+        "{err}"
+    );
+    assert!(
+        err.contains("STATUS_STACK_BUFFER_OVERRUN : historique"),
+        "{err}"
+    );
+    assert!(err.contains("(fil fini)"), "{err}");
 }
 
 #[cfg(test)]
