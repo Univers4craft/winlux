@@ -69,6 +69,11 @@ CONF_DIR = Path(ROOT + "/etc/winlux/parental")
 DATA_DIR = Path(ROOT + "/var/lib/winlux/parental")
 RUN_DIR = Path(ROOT + "/run/winlux")
 SESSIONS = RUN_DIR / "sessions"
+# État du service qui doit survivre à sa relance (#2246) : comptes gelés.
+# Hors du dossier collant /run/winlux, qu'un compte peut préparer (#633).
+STATE_DIR = Path(ROOT + "/run/winlux-parental")
+FROZEN_FILE = STATE_DIR / "frozen.json"
+ORPHAN_GRACE = 5
 USERS_CONF = Path(ROOT + "/etc/winlux/users.conf")
 PASSWD = Path(ROOT + "/etc/passwd")
 GROUP = Path(ROOT + "/etc/group")
@@ -857,6 +862,25 @@ def pids_of(uids):
     return out
 
 
+def stale_screens():
+    """PID des écrans de blocage (« winlux-parental screen ») de root qui ne
+    sont pas les enfants de ce service."""
+    owner = 0 if not ROOT else os.getuid()
+    found = []
+    for pid in pids_of({owner}):
+        if pid == os.getpid():
+            continue
+        _exe, cmdline = proc_info(pid)
+        if len(cmdline) >= 4 and os.path.realpath(cmdline[-4]) == os.path.realpath(SELF) and cmdline[-3] == "screen":
+            try:
+                parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            if parent != os.getpid():
+                found.append(pid)
+    return found
+
+
 def blocked_ids(cfg):
     return {app["id"]: app["name"] for app in cfg.get("apps", [])}
 
@@ -1334,6 +1358,8 @@ class Daemon:
         self.prints = {}
         self.samples = {}
         self.seen = {}
+        self.orphans = []
+        self.orphans_at = 0
 
     def log(self, text):
         print(time.strftime("%H:%M:%S"), text, flush=True)
@@ -1618,12 +1644,56 @@ class Daemon:
     def freeze(self, uid):
         if uid not in self.frozen:
             self.frozen.add(uid)
+            self.save_frozen()
             signal_all(uid, signal.SIGSTOP)
 
     def thaw(self, uid):
         if uid in self.frozen:
             self.frozen.discard(uid)
             signal_all(uid, signal.SIGCONT)
+            self.save_frozen()
+
+    def close_orphans(self, force=False):
+        """Ferme les écrans de l'instance précédente, une fois le délai passé."""
+        if not self.orphans or (not force and time.monotonic() < self.orphans_at):
+            return
+        for pid in self.orphans:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                self.log(f"écran de blocage laissé par le service précédent fermé (pid {pid})")
+            except OSError:
+                pass
+        self.orphans = []
+
+    def save_frozen(self):
+        """Comptes gelés, écrits avant le gel : un service relancé les retrouve."""
+        try:
+            write_private(FROZEN_FILE, sorted(self.frozen))
+        except OSError as error:
+            self.log(f"comptes gelés : {error}")
+
+    def recover(self):
+        """Au démarrage, reprend l'état laissé par une instance précédente
+        (arrêtée, plantée) : ses écrans de blocage sont fermés et les comptes
+        qu'elle avait gelés sont dégelés. Les règles s'appliquent ensuite comme
+        d'habitude : l'écran revient si le temps n'est pas permis (#2246).
+
+        Les écrans laissés ne sont fermés qu'après ORPHAN_GRACE secondes : le
+        nouveau service a d'abord rouvert les siens, l'écran de l'enfant n'est
+        jamais découvert pendant la reprise."""
+        self.orphans = stale_screens()
+        self.orphans_at = time.monotonic() + ORPHAN_GRACE
+        try:
+            uids = [uid for uid in json.loads(FROZEN_FILE.read_text(encoding="utf-8")) if isinstance(uid, int)]
+        except (OSError, ValueError, TypeError):
+            uids = []
+        for uid in uids:
+            if uid >= 1000:
+                signal_all(uid, signal.SIGCONT)
+                self.log(f"compte {uid} gelé par le service précédent : dégelé")
+        self.frozen = set()
+        if uids:
+            self.save_frozen()
 
     def count_minute(self):
         """Une minute d'écran pour chaque session surveillée active et déverrouillée."""
@@ -1661,6 +1731,7 @@ class Daemon:
             return 0
         for directory in (CONF_DIR, DATA_DIR):
             private_dir(directory)
+        self.recover()
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         last_reload = last_time = 0
         next_minute = time.monotonic() + 60
@@ -1675,6 +1746,7 @@ class Daemon:
                 if now - last_time >= 3:
                     self.enforce_time()
                     last_time = now
+                self.close_orphans()
                 if now >= next_minute:
                     next_minute += 60
                     if next_minute < now:
