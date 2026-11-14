@@ -919,6 +919,31 @@ impl GlContext {
         Some(previous)
     }
 
+    /// Rend au thread créateur le contexte qu'il avait avant la chaîne.
+    ///
+    /// Un contexte GLX n'est courant que sur un thread à la fois : laissé
+    /// sur le thread qui a créé la chaîne, il refusait tout Present venu
+    /// d'un thread de rendu (BadAccess sur glXMakeCurrent). C'est le cas
+    /// d'OBS Studio, qui crée sa chaîne sur le thread de l'interface et
+    /// présente depuis son thread graphique (#2289). Un thread qui n'avait
+    /// aucun contexte garde celui de la chaîne : il est le seul à le
+    /// connaître et y rend souvent lui-même (un seul thread, cas courant).
+    pub(crate) fn release_to_creator(&self, creator: Binding) {
+        if creator.context == 0 || creator.context == self.context as usize {
+            return;
+        }
+        unsafe {
+            if current_binding().context == self.context as usize {
+                // Ce qui a été dessiné dans le contexte de la chaîne doit
+                // être visible d'un autre contexte partagé.
+                if let Some(g) = gl::gl() {
+                    (g.Flush)();
+                }
+                self.restore_binding(Some(creator));
+            }
+        }
+    }
+
     unsafe fn restore_binding(&self, previous: Option<Binding>) {
         let (Some(glx), Some(previous)) = (gl::glx(), previous) else {
             return;
@@ -1834,6 +1859,8 @@ pub(crate) fn create_swap_chain(
     device: *mut c_void,
 ) -> *mut DxgiSwapChain {
     let hwnd = desc.output_window;
+    // Liaison GL du thread créateur, avant que la chaîne ne s'y installe.
+    let creator = current_binding();
     let mut gl_ctx = GlContext::create_for_window(hwnd);
     let mut desc = *desc;
     if let Some(ctx) = gl_ctx.as_mut() {
@@ -1858,6 +1885,7 @@ pub(crate) fn create_swap_chain(
         }
         desc.buffer_desc.width = ctx.width;
         desc.buffer_desc.height = ctx.height;
+        ctx.release_to_creator(creator);
     }
     if gl_ctx.is_none() {
         log_warn!(
@@ -2802,6 +2830,110 @@ mod presentation_x11_tests {
             (g.DeleteFramebuffers)(1, &fb);
             (g.Finish)();
         }
+    }
+
+    /// #2289 : OBS Studio crée sa chaîne sur le thread de l'interface, où
+    /// le contexte du périphérique est courant, et présente depuis son
+    /// thread graphique. Le contexte de la chaîne ne doit pas rester pris
+    /// par le thread créateur.
+    #[test]
+    #[ignore = "requires an X11 server with GLX"]
+    fn present_depuis_un_autre_thread_que_le_createur_x11() {
+        let (conn, screen) = x11rb::connect(None).expect("X11");
+        let root = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            root.root_depth,
+            win,
+            root.root,
+            0,
+            0,
+            200,
+            100,
+            0,
+            x11rb::protocol::xproto::WindowClass::INPUT_OUTPUT,
+            root.root_visual,
+            &CreateWindowAux::new().background_pixel(root.black_pixel),
+        )
+        .unwrap();
+        conn.map_window(win).unwrap();
+        conn.sync().unwrap();
+        let glx = gl::glx().expect("GLX");
+        let g = gl::gl().expect("GL");
+        unsafe {
+            // Thread de l'interface : le contexte du périphérique y est courant.
+            let device = GlContext::create_for_window(0).expect("contexte du périphérique");
+            assert_ne!(
+                (glx.MakeCurrent)(device.display, device.drawable, device.context),
+                0
+            );
+            let creator = current_binding();
+            // Création de la chaîne pour la fenêtre : son contexte devient
+            // courant sur ce thread, comme dans create_for_window(hwnd).
+            let mut chain = GlContext::create_for_window(0).expect("contexte de la chaîne");
+            chain.drawable = u64::from(win);
+            assert_ne!(
+                (glx.MakeCurrent)(chain.display, chain.drawable, chain.context),
+                0
+            );
+            chain.resize(200, 100);
+            chain.release_to_creator(creator);
+            assert_eq!(
+                current_binding().context,
+                device.context as usize,
+                "le thread créateur retrouve son contexte"
+            );
+            // Thread graphique : son propre contexte partagé, il dessine dans
+            // le tampon arrière puis présente.
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    let worker = GlContext::create_for_window(0).expect("contexte de travail");
+                    assert_ne!(
+                        (glx.MakeCurrent)(worker.display, worker.drawable, worker.context),
+                        0
+                    );
+                    let mut fb = 0;
+                    (g.GenFramebuffers)(1, &mut fb);
+                    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fb);
+                    (g.FramebufferTexture2D)(
+                        gl::GL_FRAMEBUFFER,
+                        gl::GL_COLOR_ATTACHMENT0,
+                        gl::GL_TEXTURE_2D,
+                        chain.back_texture,
+                        0,
+                    );
+                    (g.ClearColor)(0.0, 0.0, 1.0, 1.0);
+                    (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+                    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+                    (g.DeleteFramebuffers)(1, &fb);
+                    (g.Finish)();
+                    chain.present();
+                    (g.Finish)();
+                    assert_eq!(
+                        current_binding().context,
+                        worker.context as usize,
+                        "le thread graphique garde son contexte"
+                    );
+                    (glx.MakeCurrent)(worker.display, 0, std::ptr::null_mut());
+                });
+            });
+            assert_eq!(
+                chain.suivi.failed.load(Ordering::Relaxed),
+                0,
+                "Present refusée"
+            );
+            let img = conn
+                .get_image(ImageFormat::Z_PIXMAP, win, 10, 10, 1, 1, !0)
+                .unwrap()
+                .reply()
+                .unwrap();
+            let px = u32::from_le_bytes([img.data[0], img.data[1], img.data[2], 0]);
+            assert_eq!(px, 0x0000FF, "l'image du thread graphique est à l'écran");
+            drop(chain);
+            assert_eq!(current_binding().context, device.context as usize);
+        }
+        conn.destroy_window(win).unwrap();
+        conn.sync().unwrap();
     }
 
     /// #1565 : ResizeBuffers arrive avec le contexte du périphérique courant
