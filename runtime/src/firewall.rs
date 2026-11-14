@@ -504,10 +504,11 @@ pub fn ruleset(
         "udp sport 67 udp dport 68 accept".into(),
         "udp sport 547 udp dport 546 accept".into(),
     ];
-    let mut output = vec![
-        "ct state established,related accept".to_string(),
-        "oif \"lo\" accept".into(),
-    ];
+    let mut output: Vec<String> = Vec::new();
+    // Blocages sortants par application, placés avant l'acceptation des
+    // connexions établies : une connexion déjà ouverte est coupée elle aussi
+    // (#2176). La boucle locale reste libre.
+    let mut app_blocks: Vec<String> = Vec::new();
     if cfg.outbound[p] == Verdict::Block {
         output.push("udp dport { 67, 547 } accept".into());
         output.push(
@@ -559,6 +560,11 @@ pub fn ruleset(
                     }
                     let base = proto_match(r.proto, &ports, true).unwrap_or_default();
                     let m = format!("socket cgroupv2 level 2 \"{}\" {base}", cgroup_of(r));
+                    let chain = if r.verdict == Verdict::Block {
+                        &mut app_blocks
+                    } else {
+                        chain
+                    };
                     verdict_lines(chain, m.trim_end(), r.verdict, prefix);
                 }
             }
@@ -572,6 +578,11 @@ pub fn ruleset(
     } else {
         "accept"
     };
+    let mut head = vec!["oif \"lo\" accept".to_string()];
+    head.append(&mut app_blocks);
+    head.push("ct state established,related accept".into());
+    head.append(&mut output);
+    let mut output = head;
     let policy_out = if cfg.outbound[p] == Verdict::Block {
         output.push(
             "limit rate 10/second burst 20 packets log prefix \"winlux-fw-out: \" level info"
@@ -770,8 +781,9 @@ fn publish_targets(cfg: &Config, filtered: bool) {
     }
 }
 
-/// Place un processus dans le cgroup de sa règle s'il n'y est pas déjà.
-fn assign_one(pid_dir: &Path, targets: &[(PathBuf, String)]) {
+/// Place un processus dans le cgroup de sa règle s'il n'y est pas déjà ;
+/// si la règle le bloque, ses connexions déjà ouvertes sont coupées (#2176).
+fn assign_one(pid_dir: &Path, targets: &[(PathBuf, String)], blocks: &[BlockCut]) {
     let Some(prog) = program_of(pid_dir) else {
         return;
     };
@@ -781,10 +793,224 @@ fn assign_one(pid_dir: &Path, targets: &[(PathBuf, String)]) {
     let current = admin::read_text(&pid_dir.join("cgroup")).unwrap_or_default();
     if !current.trim_end().ends_with(&format!("/{group}")) {
         if let Some(pid) = pid_dir.file_name() {
-            let _ = std::fs::write(
+            let moved = std::fs::write(
                 cgroup_root().join(group).join("cgroup.procs"),
                 pid.to_string_lossy().as_bytes(),
-            );
+            )
+            .is_ok();
+            if moved {
+                if let Some(cut) = blocks.iter().find(|c| c.group == *group) {
+                    cut_connections(pid_dir, cut);
+                }
+            }
+        }
+    }
+}
+
+// ---------- Coupure des connexions déjà ouvertes (#2176) ----------
+
+/// Règle sortante « Bloquer » d'un programme : son cgroup et ce qu'elle vise.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockCut {
+    pub group: String,
+    pub proto: Proto,
+    pub ports: Vec<(u16, u16)>,
+}
+
+fn block_cuts(cfg: &Config) -> Vec<BlockCut> {
+    cfg.active_rules()
+        .filter(|r| r.dir == Dir::Out && r.verdict == Verdict::Block && !r.program.is_empty())
+        .map(|r| BlockCut {
+            group: cgroup_of(r),
+            proto: r.proto,
+            ports: parse_ports(&r.ports).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Inodes des sockets ouverts par un processus (`/proc/<pid>/fd`).
+fn socket_inodes(pid_dir: &Path) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(fds) = std::fs::read_dir(pid_dir.join("fd")) else {
+        return out;
+    };
+    for fd in fds.flatten() {
+        if let Ok(link) = std::fs::read_link(fd.path()) {
+            let link = link.to_string_lossy();
+            if let Some(n) = link
+                .strip_prefix("socket:[")
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|n| n.parse().ok())
+            {
+                out.insert(n);
+            }
+        }
+    }
+    out
+}
+
+/// Adresse distante de boucle locale (127.0.0.0/8, ::1, ::ffff:127.x).
+pub fn diag_dst_is_loopback(family: u8, dst: &[u8]) -> bool {
+    if family == libc::AF_INET as u8 {
+        dst.first() == Some(&127)
+    } else {
+        dst.len() >= 16
+            && ((dst[..15].iter().all(|&b| b == 0) && dst[15] == 1)
+                || (dst[..10].iter().all(|&b| b == 0)
+                    && dst[10] == 0xff
+                    && dst[11] == 0xff
+                    && dst[12] == 127))
+    }
+}
+
+/// Le socket décrit par une réponse `inet_diag_msg` est-il visé par la
+/// coupure ? Seulement une connexion vers l'extérieur, sur un protocole et
+/// un port distant que la règle bloque.
+pub fn diag_msg_matches(msg: &[u8], udp: bool, cut: &BlockCut) -> bool {
+    // inet_diag_msg : family, state, timer, retrans, puis inet_diag_sockid
+    // (sport, dport en gros-boutiste, src[16], dst[16], if, cookie[8]).
+    if msg.len() < 72 {
+        return false;
+    }
+    let family = msg[0];
+    let dport = u16::from_be_bytes([msg[6], msg[7]]);
+    if dport == 0 || diag_dst_is_loopback(family, &msg[24..40]) {
+        return false;
+    }
+    let proto_ok = match cut.proto {
+        Proto::Any => true,
+        Proto::Tcp => !udp,
+        Proto::Udp => udp,
+        Proto::Icmp => false,
+    };
+    proto_ok && (cut.ports.is_empty() || cut.ports.iter().any(|&(a, b)| (a..=b).contains(&dport)))
+}
+
+/// Ferme, par `SOCK_DESTROY` du noyau, les connexions déjà ouvertes d'un
+/// processus que sa règle bloque : il reçoit « connexion interrompue »,
+/// comme sous Windows quand on bloque une application en cours (#2176).
+fn cut_connections(pid_dir: &Path, cut: &BlockCut) {
+    let inodes = socket_inodes(pid_dir);
+    if inodes.is_empty() {
+        return;
+    }
+    let mut closed = 0usize;
+    for family in [libc::AF_INET as u8, libc::AF_INET6 as u8] {
+        for (proto, udp) in [
+            (libc::IPPROTO_TCP as u8, false),
+            (libc::IPPROTO_UDP as u8, true),
+        ] {
+            closed += destroy_matching(family, proto, udp, &inodes, cut);
+        }
+    }
+    if closed > 0 {
+        eprintln!(
+            "winlux-firewall : {closed} connexion(s) ouverte(s) coupée(s) pour {} ({})",
+            pid_dir.display(),
+            cut.group
+        );
+    }
+}
+
+const SOCK_DIAG_BY_FAMILY: u16 = 20;
+const SOCK_DESTROY: u16 = 21;
+
+fn diag_request(kind: u16, flags: u16, family: u8, proto: u8, id: Option<&[u8]>) -> Vec<u8> {
+    let mut m = Vec::with_capacity(72);
+    m.extend_from_slice(&72u32.to_ne_bytes());
+    m.extend_from_slice(&kind.to_ne_bytes());
+    m.extend_from_slice(&flags.to_ne_bytes());
+    m.extend_from_slice(&0u32.to_ne_bytes());
+    m.extend_from_slice(&0u32.to_ne_bytes());
+    // inet_diag_req_v2 : family, protocol, ext, pad, states, id (48 octets).
+    m.extend_from_slice(&[family, proto, 0, 0]);
+    m.extend_from_slice(&u32::MAX.to_ne_bytes());
+    match id {
+        Some(id) => m.extend_from_slice(&id[..48]),
+        None => m.extend_from_slice(&[0u8; 48]),
+    }
+    m
+}
+
+fn destroy_matching(
+    family: u8,
+    proto: u8,
+    udp: bool,
+    inodes: &std::collections::HashSet<u32>,
+    cut: &BlockCut,
+) -> usize {
+    const NETLINK_SOCK_DIAG: i32 = 4;
+    let request = (libc::NLM_F_REQUEST | libc::NLM_F_DUMP) as u16;
+    let mut victims: Vec<Vec<u8>> = Vec::new();
+    // SAFETY : descripteur possédé ici, tampons locaux de la taille annoncée.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            NETLINK_SOCK_DIAG,
+        );
+        if fd < 0 {
+            return 0;
+        }
+        let dump = diag_request(SOCK_DIAG_BY_FAMILY, request, family, proto, None);
+        if libc::send(fd, dump.as_ptr().cast(), dump.len(), 0) != dump.len() as isize {
+            libc::close(fd);
+            return 0;
+        }
+        let mut buf = vec![0u8; 64 * 1024];
+        'recv: loop {
+            let n = libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0);
+            if n <= 0 {
+                break;
+            }
+            let data = &buf[..n as usize];
+            let mut at = 0usize;
+            while at + 16 <= data.len() {
+                let len = u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+                    as usize;
+                let kind = u16::from_ne_bytes([data[at + 4], data[at + 5]]);
+                if len < 16 || at + len > data.len() {
+                    break 'recv;
+                }
+                if kind == libc::NLMSG_DONE as u16 || kind == libc::NLMSG_ERROR as u16 {
+                    break 'recv;
+                }
+                let msg = &data[at + 16..at + len];
+                if msg.len() >= 72 {
+                    let inode = u32::from_ne_bytes([msg[68], msg[69], msg[70], msg[71]]);
+                    if inodes.contains(&inode) && diag_msg_matches(msg, udp, cut) {
+                        victims.push(msg[4..52].to_vec());
+                    }
+                }
+                at += (len + 3) & !3;
+            }
+        }
+        let mut closed = 0;
+        let flags = (libc::NLM_F_REQUEST | libc::NLM_F_ACK) as u16;
+        for id in &victims {
+            let req = diag_request(SOCK_DESTROY, flags, family, proto, Some(id));
+            if libc::send(fd, req.as_ptr().cast(), req.len(), 0) == req.len() as isize {
+                let mut ack = [0u8; 256];
+                let n = libc::recv(fd, ack.as_mut_ptr().cast(), ack.len(), 0);
+                // NLMSG_ERROR avec errno 0 : socket fermé.
+                if n >= 20 && i32::from_ne_bytes([ack[16], ack[17], ack[18], ack[19]]) == 0 {
+                    closed += 1;
+                }
+            }
+        }
+        libc::close(fd);
+        closed
+    }
+}
+
+/// Après une nouvelle configuration : les processus déjà dans le cgroup
+/// d'une règle « Bloquer » perdent leurs connexions ouvertes (#2176).
+fn cut_blocked_groups(cfg: &Config) {
+    for cut in block_cuts(cfg) {
+        let procs = admin::read_text(&cgroup_root().join(&cut.group).join("cgroup.procs"))
+            .unwrap_or_default();
+        for pid in procs.lines().filter(|l| !l.is_empty()) {
+            cut_connections(&admin::path(&format!("proc/{pid}")), &cut);
         }
     }
 }
@@ -798,12 +1024,13 @@ fn assign_cgroups(cfg: &Config) {
     let Ok(procs) = std::fs::read_dir(admin::path("proc")) else {
         return;
     };
+    let blocks = block_cuts(cfg);
     for p in procs.flatten() {
         let name = p.file_name().to_string_lossy().into_owned();
         if !name.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
-        assign_one(&p.path(), &targets);
+        assign_one(&p.path(), &targets, &blocks);
     }
 }
 
@@ -889,6 +1116,7 @@ struct PublishedTargets {
     stamp: Option<std::time::SystemTime>,
     loaded: bool,
     targets: Vec<(PathBuf, String)>,
+    blocks: Vec<BlockCut>,
 }
 
 impl PublishedTargets {
@@ -900,10 +1128,11 @@ impl PublishedTargets {
             return false;
         }
         let published = !admin::read_text(&path).unwrap_or_default().is_empty();
-        self.targets = if stamp.is_some() && published {
-            out_targets(&Config::load())
+        (self.targets, self.blocks) = if stamp.is_some() && published {
+            let cfg = Config::load();
+            (out_targets(&cfg), block_cuts(&cfg))
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         self.stamp = stamp;
         self.loaded = true;
@@ -958,7 +1187,11 @@ fn follow_execs() {
             continue;
         }
         for tgid in tgids {
-            assign_one(&admin::path(&format!("proc/{tgid}")), &published.targets);
+            assign_one(
+                &admin::path(&format!("proc/{tgid}")),
+                &published.targets,
+                &published.blocks,
+            );
         }
     }
 }
@@ -1106,10 +1339,18 @@ fn guard_execs(fd: i32) {
                     .ok()
                     .and_then(|p| file_identity(&p));
                 if let Some((_, group)) = marked.iter().find(|(m, _)| m.is_some() && *m == id) {
-                    let _ = std::fs::write(
+                    let moved = std::fs::write(
                         cgroup_root().join(group).join("cgroup.procs"),
                         pid.to_string(),
-                    );
+                    )
+                    .is_ok();
+                    // Sockets hérités à travers l'exec : coupés avant que le
+                    // programme ne démarre (#2176).
+                    if moved {
+                        if let Some(cut) = published.blocks.iter().find(|c| c.group == *group) {
+                            cut_connections(&admin::path(&format!("proc/{pid}")), cut);
+                        }
+                    }
                 }
                 allow(fd, event_fd);
             }
@@ -1408,7 +1649,10 @@ pub fn daemon() -> ! {
             .iter()
             .any(|r| r.dir == Dir::In && !r.program.is_empty());
         if reload || (program_rules && new_apps != apps) {
-            let _ = apply(&cfg, &new_apps);
+            let applied = apply(&cfg, &new_apps).is_ok();
+            if applied && reload && cgroups_available() {
+                cut_blocked_groups(&cfg);
+            }
         }
         publish_profile(&cfg, &mut published);
         assign_cgroups(&cfg);
@@ -1951,5 +2195,89 @@ mod tests {
         sorted.sort();
         assert_eq!(parse_targets(&text), sorted);
         assert!(parse_targets("").is_empty());
+    }
+
+    /// Une règle « Bloquer » par application passe avant l'acceptation des
+    /// connexions établies ; seules les connexions vers l'extérieur, sur le
+    /// protocole et le port visés, sont coupées (#2176).
+    #[test]
+    fn blocked_app_cuts_established_but_not_loopback() {
+        let mut cfg = Config::default();
+        cfg.rules.push(rule(
+            7,
+            Dir::Out,
+            Verdict::Block,
+            Proto::Any,
+            "",
+            "/usr/bin/wget",
+        ));
+        let rs = ruleset(&cfg, &BTreeMap::new(), true).unwrap();
+        let lo = rs.find("oif \"lo\" accept").unwrap();
+        let block = rs
+            .find("socket cgroupv2 level 2 \"winlux-fw/r7\" drop")
+            .unwrap();
+        let est = rs.rfind("ct state established,related accept").unwrap();
+        assert!(lo < block && block < est, "{rs}");
+
+        let cut = BlockCut {
+            group: "winlux-fw/r7".into(),
+            proto: Proto::Tcp,
+            ports: vec![(443, 443)],
+        };
+        let msg = |family: u8, dport: u16, dst: [u8; 4]| {
+            let mut m = vec![0u8; 72];
+            m[0] = family;
+            m[6..8].copy_from_slice(&dport.to_be_bytes());
+            m[24..28].copy_from_slice(&dst);
+            m
+        };
+        let inet = libc::AF_INET as u8;
+        assert!(diag_msg_matches(
+            &msg(inet, 443, [93, 184, 216, 34]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 443, [127, 0, 0, 1]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 80, [93, 184, 216, 34]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 443, [93, 184, 216, 34]),
+            true,
+            &cut
+        ));
+        assert!(!diag_msg_matches(&msg(inet, 0, [0, 0, 0, 0]), false, &cut));
+        let mut v6 = [0u8; 16];
+        v6[15] = 1;
+        assert!(diag_dst_is_loopback(libc::AF_INET6 as u8, &v6));
+    }
+
+    /// Essai réel (root, noyau avec INET_DIAG_DESTROY) : une connexion TCP
+    /// vers une adresse non locale est coupée (#2176). `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn open_connection_is_cut() {
+        use std::io::{Read, Write};
+        let ip = std::env::var("WINLUX_TEST_IP").expect("WINLUX_TEST_IP");
+        let listener = std::net::TcpListener::bind((ip.as_str(), 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        let (_server, _) = listener.accept().unwrap();
+        client.write_all(b"x").unwrap();
+        let cut = BlockCut {
+            group: "essai".into(),
+            proto: Proto::Tcp,
+            ports: vec![(addr.port(), addr.port())],
+        };
+        cut_connections(Path::new("/proc/self"), &cut);
+        let mut b = [0u8; 1];
+        let err = client.read(&mut b).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ECONNABORTED), "{err}");
     }
 }
