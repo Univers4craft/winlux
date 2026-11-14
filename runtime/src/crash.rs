@@ -227,6 +227,10 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         // de faute est dans `what` (#1308).
         let stop_code = APPLICATION_STOP_CODE;
         let (what, code) = match sig {
+            // __fastfail : code d'échec dans RCX, noté avec les registres (#2287).
+            libc::SIGSEGV if crate::dlls::seh_hw::is_fastfail(uc) => {
+                (b"STATUS_STACK_BUFFER_OVERRUN".as_slice(), 0xC000_0409u32)
+            }
             libc::SIGSEGV | libc::SIGBUS if is_stack_overflow(addr, rsp) => {
                 (b"EXCEPTION_STACK_OVERFLOW".as_slice(), 0xC000_00FDu32)
             }
@@ -686,6 +690,63 @@ pub fn install() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Variable qui fait de `fastfail_enfant` le processus enfant (#2287).
+    const FASTFAIL_ENFANT: &str = "WINLUX_TEST_FASTFAIL_ENFANT";
+
+    /// Partie enfant : pose le gestionnaire de plantage puis exécute un vrai
+    /// `int 0x29` (code d'échec 7, FAST_FAIL_FATAL_APP_EXIT). Ne fait rien
+    /// dans l'exécuteur ordinaire.
+    #[test]
+    fn fastfail_enfant() {
+        if std::env::var_os(FASTFAIL_ENFANT).is_none() {
+            return;
+        }
+        install();
+        unsafe { std::arch::asm!("int 0x29", in("rcx") 7usize, options(noreturn)) };
+    }
+
+    #[test]
+    fn fastfail_rapporte_stack_buffer_overrun() {
+        // Processus neuf, relancé sur le seul test enfant : jamais de fork
+        // dans l'exécuteur multithread.
+        let dir = std::env::temp_dir().join(format!("winlux-fastfail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "crash::tests::fastfail_enfant",
+                "--test-threads=1",
+            ])
+            .env(FASTFAIL_ENFANT, "1")
+            .env("WINLUX_JOURNAL_DIR", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break st;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("processus enfant bloqué plus de 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let mut err = String::new();
+        use std::io::Read;
+        let _ = child.stderr.take().unwrap().read_to_string(&mut err);
+        let log = std::fs::read_to_string(dir.join("crash.log")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        // Code de sortie 0xC0000409 : Linux n'en garde que l'octet bas.
+        assert_eq!(status.code(), Some(0x09), "{status:?}\n{err}");
+        assert!(err.contains("STATUS_STACK_BUFFER_OVERRUN"), "{err}");
+        assert!(!err.contains("EXCEPTION_ACCESS_VIOLATION"), "{err}");
+        assert!(log.is_empty() || log.contains("c0000409"), "{log}");
+    }
 
     #[test]
     fn plantage_d_application_bien_nomme() {
