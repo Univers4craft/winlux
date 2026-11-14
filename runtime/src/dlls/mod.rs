@@ -302,6 +302,7 @@ pub mod winlux_capture;
 pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
+pub mod winlux_tasks;
 pub mod winmm;
 pub mod winmm_midi;
 pub mod winmm_midi_in;
@@ -488,6 +489,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_tasks::exports());
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
