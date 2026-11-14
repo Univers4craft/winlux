@@ -613,6 +613,8 @@ unsafe extern "win64" fn NtQueryObject(
                         format!("\\??\\{w}")
                     })
                     .unwrap_or_default()
+            } else if kind == "Key" {
+                crate::registry::key_nt_name(h).unwrap_or_default()
             } else {
                 String::new()
             };
@@ -969,6 +971,21 @@ fn new_user_object() -> usize {
 
 /// Bureau « Default » de la station WinSta0.
 const DEFAULT_DESKTOP: usize = 0x4445_0001;
+/// Station « WinSta0 » (GetProcessWindowStation, user32.rs).
+const WINSTA0: usize = 0x5753_0001;
+
+/// DuplicateHandle d'un handle de station ou de bureau (#2443) : la page
+/// de DuplicateHandle compte « Desktop » et « Window station » parmi les
+/// objets duplicables. WinSta0 et le bureau Default sont des constantes,
+/// rendues telles quelles ; un objet créé reçoit un nouveau numéro, que
+/// la fermeture de l'original n'invalide pas. None : pas un tel handle.
+pub(crate) fn duplicate_user_object(h: usize) -> Option<usize> {
+    if h == WINSTA0 || h == DEFAULT_DESKTOP {
+        return Some(h);
+    }
+    let next = NEXT_USER_OBJECT.load(std::sync::atomic::Ordering::Relaxed);
+    (h >= 0x5753_0100 && h < next && (h - 0x5753_0100).is_multiple_of(4)).then(new_user_object)
+}
 
 unsafe extern "win64" fn CreateWindowStation(
     _name: usize,
@@ -3392,6 +3409,86 @@ mod tests {
                 0x0800_0000
             );
             crate::dlls::kernel32::close_handle(h);
+        }
+    }
+
+    /// Une clé ouverte est un objet « Key » nommé \\REGISTRY\\… ; un tampon
+    /// trop court rend la taille utile (#2413).
+    /// Station et bureau du bac à sable : DuplicateHandle les copie (#2443).
+    #[test]
+    fn duplicatehandle_copie_station_et_bureau() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let station = CreateWindowStation(0, 0, 0x37f, 0);
+            let desktop = CreateDesktop(0, 0, 0, 0, 0x1ff, 0, 0, 0);
+            let me = crate::dlls::kernel32::get_current_process();
+            for h in [station, desktop, WINSTA0, DEFAULT_DESKTOP] {
+                let mut copy = 0usize;
+                assert_eq!(
+                    crate::dlls::kernel32::duplicate_handle(me, h, me, &mut copy, 0, 0, 2),
+                    1,
+                    "{h:#x}"
+                );
+                assert_ne!(copy, 0);
+            }
+            // Un numéro jamais servi reste refusé.
+            let mut copy = 0usize;
+            assert_eq!(
+                crate::dlls::kernel32::duplicate_handle(me, 0x5753_00f0, me, &mut copy, 0, 0, 2),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn nom_nt_d_une_cle_du_registre() {
+        let _teb = crate::process::test_teb();
+        let hkcu = crate::registry::new_handle("hkcu\\Software\\Essai2413".into());
+        let hklm = crate::registry::new_handle("hklm".into());
+        let read = |h: usize, class: u32| unsafe {
+            let mut buf = [0u64; 64];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(h, class, buf.as_mut_ptr().cast(), 512, &mut got),
+                0
+            );
+            let b = buf.as_ptr() as *const u8;
+            let n = (b as *const u16).read_unaligned() as usize / 2;
+            let p = (b.add(8) as *const usize).read_unaligned() as *const u16;
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+        };
+        assert_eq!(read(hkcu, 2), "Key");
+        assert_eq!(
+            read(hkcu, 1),
+            format!(
+                "\\REGISTRY\\USER\\{}\\Software\\Essai2413",
+                crate::dlls::security::user_sid()
+            )
+        );
+        assert_eq!(read(hklm, 1), "\\REGISTRY\\MACHINE");
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0004
+            );
+            assert!(got > 16);
+            // Racine prédéfinie : pas un handle d'objet.
+            assert_eq!(
+                NtQueryObject(0x8000_0001, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
+        }
+        crate::registry::close_handle(hkcu);
+        crate::registry::close_handle(hklm);
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
         }
     }
 

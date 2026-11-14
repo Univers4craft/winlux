@@ -462,6 +462,7 @@ jobs:
           python3 -B scripts/test-power-lock-handover.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          python3 -B scripts/test-store-paquet-systeme.py
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
@@ -563,8 +564,14 @@ jobs:
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
           sh scripts/test-setup-run.sh
 
+      - name: Raccourci du Bureau choisi dans l'assistant (#2295)
+        run: sh scripts/test-raccourci-bureau.sh
+
       - name: Dossier système des installateurs NSIS 32 bits (#1800)
         run: sh scripts/test-sysdir-32bits.sh
+
+      - name: Élévation des installateurs (#2180)
+        run: sh scripts/test-elevation-installateurs.sh
 
       - name: Actions personnalisées et services msiexec (#833)
         run: |
@@ -596,6 +603,9 @@ jobs:
 
       - name: Journal de l'assistant écrit au fil de l'eau (#2328)
         run: sh scripts/test-assistant-journal.sh
+
+      - name: Consigne du programme dans les boîtes de fichiers (#2400)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
