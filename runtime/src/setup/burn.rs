@@ -698,6 +698,7 @@ fn split_args(s: &str) -> Vec<String> {
 pub fn run(
     path: &Path,
     uninstall: bool,
+    repair: bool,
     quiet: bool,
     log_file: Option<&Path>,
     overrides: &[(String, String)],
@@ -734,6 +735,8 @@ pub fn run(
         "{} de {name} {} (WiX Burn, {} paquet(s))",
         if uninstall {
             "Désinstallation"
+        } else if repair {
+            "Réparation"
         } else {
             "Installation"
         },
@@ -769,6 +772,21 @@ pub fn run(
                         log.log(&format!("{} : déjà absent ({r})", p.id));
                     }
                 }
+            }
+            // Paquet déjà inscrit : rien ne change sans /repair (#2181). La
+            // page « Modify » de WixStdBA n'est montrée qu'« after the
+            // bundle has been installed, to allow for repair and
+            // uninstall » : relancer un bundle installé ne le réinstalle pas.
+            PackageKind::Msi
+                if !repair
+                    && !p.product_code.is_empty()
+                    && crate::msi::install::Manifest::find(&p.product_code).is_some() =>
+            {
+                log.log(&format!(
+                    "{} : déjà installé, inchangé (/repair pour le réinstaller)",
+                    p.id
+                ));
+                installed += 1;
             }
             PackageKind::Msi => match stage(&bundle, p, &dir) {
                 Ok(Some(msi)) => {
@@ -995,6 +1013,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     Some(run(
         exe,
         has("uninstall"),
+        has("repair"),
         quiet,
         log.as_deref(),
         &overrides(args),
@@ -1430,6 +1449,14 @@ pub mod tests {
             .as_ref()
             .is_some_and(|p| std::fs::read(p).unwrap() == b"MZ-winlux-redist");
         assert!(ok, "DLL trouvée dans System32 : {found:?}");
+        // #2181 : relancé alors qu'il est installé, le bundle ne réinstalle
+        // rien ; /repair remet les fichiers en place.
+        let dll = found.unwrap();
+        std::fs::write(&dll, b"abime").unwrap();
+        assert_eq!(launch(&exe, &["/install".into(), "/quiet".into()]), Some(0));
+        let after_rerun = std::fs::read(&dll).unwrap();
+        assert_eq!(launch(&exe, &["/repair".into(), "/quiet".into()]), Some(0));
+        let after_repair = std::fs::read(&dll).unwrap();
         assert_eq!(
             launch(&exe, &["/uninstall".into(), "/quiet".into()]),
             Some(0)
@@ -1443,6 +1470,8 @@ pub mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(after_rerun, b"abime", "relancé : rien de réinstallé");
+        assert_eq!(after_repair, b"MZ-winlux-redist", "/repair : fichier remis");
         assert!(gone.is_none(), "désinstallé");
     }
 }
