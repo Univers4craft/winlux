@@ -210,6 +210,45 @@ fn installe_puis_desinstalle() {
     );
 }
 
+/// #2315 : retirer un produit laisse en place un fichier qu'un autre produit
+/// installé a posé au même chemin (compteur de clients des composants).
+#[test]
+fn desinstaller_garde_les_fichiers_d_un_autre_produit() {
+    let _a = crate::mounts::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _b = crate::dlls::advapi32::REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let env = Env::new("partage");
+    let msi = env.root.join("Exemple.msi");
+    std::fs::write(&msi, SAMPLE).unwrap();
+    let code = cli(&[
+        "/i".into(),
+        msi.to_string_lossy().into_owned(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    let dir = env.root.join("c/Program Files/Winlux Exemple");
+    // Un second produit a posé app.exe au même chemin (casse différente).
+    let autre = install::Manifest {
+        product: "{0B0B0B0B-1111-4222-8333-944455556666}".into(),
+        name: "Autre produit".into(),
+        files: vec![dir.join("APP.exe")],
+        ..Default::default()
+    };
+    autre.save().unwrap();
+    let code = cli(&[
+        "/x".into(),
+        "{6A1B5C0E-1111-4222-8333-944455556666}".into(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(dir.join("app.exe").is_file(), "fichier partagé conservé");
+    assert!(!dir.join("Lisez-moi.txt").exists(), "fichier propre retiré");
+    assert_eq!(install::Manifest::all().len(), 1);
+}
+
 #[test]
 fn installation_administrative_et_erreurs() {
     let _a = crate::mounts::TEST_ENV_LOCK

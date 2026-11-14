@@ -33,7 +33,7 @@ unsafe fn new_ostream(sb: P) -> P {
 
 /// Les tests de ce fichier partagent la locale globale et son compteur de
 /// références : ils passent un par un pour que les comptes restent exacts.
-fn serie() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn serie() -> std::sync::MutexGuard<'static, ()> {
     static VERROU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     VERROU.lock().unwrap_or_else(|e| e.into_inner())
 }
