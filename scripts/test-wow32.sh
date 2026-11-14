@@ -32,6 +32,8 @@
 # timeSetEvent et waveOut avec rappel, en x86 puis en x64.
 # wasapi32.exe et wasapi64.exe : WASAPI en x86 et en x64 (IMMDeviceEnumerator,
 # PROPVARIANT chaîne et BLOB, IAudioClient, tampon de rendu, volumes flottants).
+# audioact32.exe et audioact64.exe (#2428) : ActivateAudioInterfaceAsync et
+# DllGetClassObject de mmdevapi et de dsound, en x86 et en x64.
 # mf32.exe et mf64.exe (#2428) : objets de base de Media Foundation en x86
 # et en x64 (attributs, types, tampons, échantillons, collection, événements,
 # file d'événements avec rappel x86, descripteurs, mise en flux).
@@ -48,7 +50,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 mf32"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32 mf32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -207,7 +209,7 @@ check cxx32 'C++ MSVC 32 bits : tout est correct'
 echo "cxx32 : exceptions C++ MSVC x86 (catch par valeur et référence, catch(...), throw;, try dans un catch)"
 if test -f "$out/com32.exe"; then
     check com32 'COM 32 bits, .* Tout est correct'
-    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
+    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo, NetworkListManager)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
     check msxml32 'MSXML : tout est correct'
@@ -277,6 +279,22 @@ for name in wasapi32 wasapi64; do
     fi
 done
 echo "wasapi32/wasapi64 : WASAPI en x86 et en x64 (énumération, PROPVARIANT chaîne et BLOB, IAudioClient, rendu, horloge, volumes flottants)"
+
+# Activation audio (#2428) : ni ActivateAudioInterfaceAsync ni DllGetClassObject
+# n'avaient de passerelle COM pour un programme x86.
+for name in audioact32 audioact64; do
+    set +e
+    WINLUX_AUDIO=null WINLUX_GUI=headless timeout 60 "$runtime" "$out/$name.exe" >"$work/audioact.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'Activation audio : tout est correct' "$work/audioact.txt" \
+        || grep -q 'non décrite pour les programmes 32 bits' "$work/audioact.txt"; then
+        tail -20 "$work/audioact.txt"
+        echo "$name.exe : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+done
+echo "audioact32/audioact64 : ActivateAudioInterfaceAsync et DllGetClassObject (mmdevapi, dsound) en x86 et en x64"
 
 # Media Foundation, objets de base (#2428) : un programme x86 recevait des
 # objets à table win64 et plantait au premier appel de méthode.
