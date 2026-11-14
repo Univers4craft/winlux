@@ -462,6 +462,7 @@ jobs:
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
           python3 -B scripts/test-store-editeurs.py
+          python3 -B scripts/test-store-licence.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
