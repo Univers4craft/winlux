@@ -240,7 +240,7 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
+for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait taches_compte chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -628,6 +628,32 @@ safe_power() {
     if /usr/bin/winlux-update --busy; then
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
         return
+    fi
+    # L'affichage part en premier (#2270) : un « kill -TERM -1 » commun
+    # terminait l'écran de verrouillage (un script GTK, aussitôt mort) avant
+    # Xorg et les applications, et le bureau déverrouillé restait visible
+    # jusqu'à l'extinction. Xorg arrêté, plus rien de la session ne s'affiche ;
+    # au bout de 3 s il est tué. Règle de sécurité Winlux : une session
+    # verrouillée ne montre jamais son contenu, même pendant un arrêt.
+    xorg_pids=$(/bin/busybox pidof Xorg 2>/dev/null || true)
+    if test -n "$xorg_pids"; then
+        echo "Winlux : arrêt de l'affichage ($1)"
+        # shellcheck disable=SC2086
+        /bin/busybox kill -TERM $xorg_pids 2>/dev/null || true
+        xorg_wait=0
+        while test "$xorg_wait" -lt 30; do
+            xorg_alive=
+            for xorg_pid in $xorg_pids; do
+                # Un Xorg zombie (sorti, pas encore récupéré) n'affiche plus rien.
+                xorg_state=$(/bin/busybox awk '{ print $3 }' "/proc/$xorg_pid/stat" 2>/dev/null || true)
+                test -n "$xorg_state" && test "$xorg_state" != Z && xorg_alive=1
+            done
+            test -z "$xorg_alive" && break
+            /bin/busybox sleep 0.1
+            xorg_wait=$((xorg_wait + 1))
+        done
+        # shellcheck disable=SC2086
+        test -n "$xorg_alive" && /bin/busybox kill -KILL $xorg_pids 2>/dev/null
     fi
     # Ask remaining background services to terminate before flushing disks.
     echo "Winlux : arrêt des programmes ($1)"

@@ -1662,8 +1662,7 @@ pub fn shell32_exports() -> Exports {
     crate::exports! {
         "SHCreateDirectoryExW" => fn SHCreateDirectoryExW, "SHCreateDirectoryExA" => fn SHCreateDirectoryExA,
         "SHCreateDirectory" => fn SHCreateDirectory,
-        // Sélecteur de dossier : pas encore de boîte, l'appel équivaut à « Annuler ».
-        "SHBrowseForFolderW" => fn null_ptr, "SHBrowseForFolderA" => fn null_ptr,
+        // SHBrowseForFolderA/W : apps_win32.rs (#2333).
         "SHGetPathFromIDListW" => fn zero, "SHGetPathFromIDListA" => fn zero,
     }
 }

@@ -269,7 +269,7 @@ for name in ("edge", "chrome", "firefox"):
     assert f"browser_{name}=downloadable" in status, status
 assert "browser_default=none" in status, status
 assert not any(Path("/usr/share/winlux/browsers").glob("*.deb"))
-chooser = Path("/run/winlux/browser-chooser")
+chooser = Path(f"/run/winlux/browser-chooser-{os.getuid()}")
 run("winlux-browsers", "--open", html.as_uri())
 deadline = time.monotonic() + 15
 while time.monotonic() < deadline and not chooser.exists() and not Path("/run/winlux/browser-settings.log").exists():

@@ -234,6 +234,32 @@ def shown_file():
     return path("/run/winlux/lock/shown" + _screen_suffix())
 
 
+def power_request_file():
+    return path("/run/winlux/lock/power" + _screen_suffix())
+
+
+def power_request_pid():
+    """Écran d'arrêt (winlux-power) qui demande la saisie au-dessus du verrou
+    (#2254) : pid vivant d'un processus winlux-power appartenant à root ou au
+    compte verrouillé, fichier écrit par l'un des deux. Tout le reste (autre
+    compte, pid mort, autre programme) est ignoré : le verrou garde la main."""
+    request = power_request_file()
+    allowed = {0, os.getuid()}
+    try:
+        if request.stat().st_uid not in allowed:
+            return None
+        pid = int(request.read_text().strip())
+        proc = Path(f"/proc/{pid}")
+        if proc.stat().st_uid not in allowed:
+            return None
+        cmdline = (proc / "cmdline").read_bytes().split(b"\0")
+    except (OSError, ValueError):
+        return None
+    if not any(os.path.basename(arg.decode(errors="replace")) == "winlux-power" for arg in cmdline[:2]):
+        return None
+    return pid
+
+
 def is_locked():
     try:
         pid = int(active_file().read_text().strip())
@@ -583,12 +609,18 @@ def text_veil(pixbuf, base, minimum=4.5):
     return round(alpha, 2)
 
 
+# Sommet du prisme du fond d'écran par défaut, en 1920x1080. #2160 : c'était
+# 367 (fonds Aube et Nuit) ; le fond Aurore installé par défaut a son sommet
+# vers la ligne 303, et l'invite passait sous le logo en 1920x1080.
+LOGO_TOP_1080 = 300
+
+
 def clock_scale(width, height):
-    """Échelle de l'horloge pour qu'elle finisse au-dessus du losange du fond
-    d'écran Winlux (1920x1080, losange dès la ligne 367, image mise à
-    l'échelle pour couvrir l'écran). L'horloge mesure ~330 px à l'échelle 1."""
+    """Échelle de l'horloge pour qu'elle finisse au-dessus du prisme du fond
+    d'écran Winlux (1920x1080, sommet à LOGO_TOP_1080, image mise à l'échelle
+    pour couvrir l'écran). L'horloge mesure ~330 px à l'échelle 1."""
     cover = max(width / 1920, height / 1080)
-    logo_top = (height - 1080 * cover) / 2 + 367 * cover
+    logo_top = (height - 1080 * cover) / 2 + LOGO_TOP_1080 * cover
     return max(0.5, min(1.0, (logo_top - 24) / 330))
 
 
@@ -691,8 +723,10 @@ def run_lock(start="clock"):
             display.connect("monitor-removed", lambda *_: GLib.idle_add(self.cover_monitors))
             Gdk.Screen.get_default().connect("monitors-changed", lambda *_: GLib.idle_add(self.cover_monitors))
             self.grab_tries = 0
+            self.power_yield = None
             GLib.timeout_add(100, self.grab)
             GLib.timeout_add(1000, self.tick)
+            GLib.timeout_add(100, self.watch_power)
             self.tick()
             if start == "signin":
                 self.show_signin()
@@ -1152,7 +1186,27 @@ def run_lock(start="clock"):
                     self.show_clock()
             return True
 
+        def watch_power(self):
+            """Bouton d'alimentation pendant le verrouillage (#2254) : l'écran
+            d'arrêt, plein écran et au-dessus du verrou, reçoit la saisie le
+            temps de sa carte ; le verrou la reprend dès qu'il disparaît. Il ne
+            montre que ses propres boutons (Annuler, Déverrouiller : #2300) : rien
+            de la session verrouillée ne devient accessible."""
+            pid = power_request_pid()
+            if pid is not None and self.power_yield is None:
+                self.power_yield = pid
+                print(f"winlux-lock : saisie cédée à l'écran d'arrêt (pid {pid})", file=sys.stderr, flush=True)
+                Gdk.Display.get_default().get_default_seat().ungrab()
+            elif pid is None and self.power_yield is not None:
+                print("winlux-lock : écran d'arrêt fermé, saisie reprise", file=sys.stderr, flush=True)
+                self.power_yield = None
+                self.main.present()
+                GLib.timeout_add(50, self.grab)
+            return True
+
         def grab(self):
+            if self.power_yield is not None:
+                return False
             gdk_window = self.main.get_window()
             if gdk_window is not None:
                 seat = Gdk.Display.get_default().get_default_seat()
