@@ -1054,13 +1054,15 @@ const IID_D2D1_TRANSFORMED_GEOMETRY: Guid = guid(
 
 /// Envoie des figures aplaties à un ID2D1SimplifiedGeometrySink (ou un
 /// ID2D1GeometrySink, qui le prolonge) : SetFillMode, BeginFigure,
-/// AddLines, EndFigure, Close.
+/// AddLines, EndFigure. Jamais Close : le puits appartient à l'appelant,
+/// qui le ferme lui-même (Simplify, Widen, CombineWithGeometry, Stream).
+/// Paint.NET lève « This IGeometrySink has already been closed » si nous
+/// le fermons à sa place (#2499).
 unsafe fn emit_figures(sink: *mut c_void, figures: &[(Vec<Pt>, bool)], rule: FillRule) -> i32 {
     type SetFill = unsafe extern "win64" fn(*mut c_void, u32);
     type Begin = unsafe extern "win64" fn(*mut c_void, u64, u32);
     type Lines = unsafe extern "win64" fn(*mut c_void, *const Pt, u32);
     type End = unsafe extern "win64" fn(*mut c_void, u32);
-    type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
     let packed = |p: Pt| (p.0.to_bits() as u64) | ((p.1.to_bits() as u64) << 32);
     method::<SetFill>(sink, 3)(sink, u32::from(rule == FillRule::NonZero));
     for (pts, closed) in figures {
@@ -1072,7 +1074,7 @@ unsafe fn emit_figures(sink: *mut c_void, figures: &[(Vec<Pt>, bool)], rule: Fil
         }
         method::<End>(sink, 8)(sink, u32::from(*closed));
     }
-    method::<Close>(sink, 9)(sink)
+    S_OK
 }
 
 /// Simplify(option, transform, tolérance, sink) : nos figures sont déjà
@@ -4613,7 +4615,7 @@ mod tests {
                 S_OK
             );
             assert!((len - 80.0).abs() < 0.01, "{len}");
-            // Widen : figures fermées, règle non nulle, Close appelé.
+            // Widen : figures fermées, règle non nulle, puits laissé ouvert (#2499).
             puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
             let mut sink = puits::VT.ptr();
             let sink_ptr = &mut sink as *mut *const () as *mut c_void;
@@ -4639,7 +4641,7 @@ mod tests {
             puits::RECU.with(|r| {
                 let r = r.borrow();
                 assert!(r.0 >= 8, "figures : {}", r.0);
-                assert_eq!((r.2, r.3), (1, true));
+                assert_eq!((r.2, r.3), (1, false), "Close est à l'appelant");
             });
             for o in [tg, g] {
                 release_obj(o);
@@ -4726,7 +4728,7 @@ mod tests {
                 method::<Simplify>(grp, 9)(grp, 0, std::ptr::null(), 0.25, sink_ptr),
                 S_OK
             );
-            puits::RECU.with(|r| assert_eq!(*r.borrow(), (2, 8, 1, true)));
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (2, 8, 1, false)));
             // Stream d'un chemin.
             puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
             let mut path = std::ptr::null_mut();
@@ -4746,7 +4748,7 @@ mod tests {
             release_obj(s);
             type Stream = unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32;
             assert_eq!(method::<Stream>(path, 18)(path, sink_ptr), S_OK);
-            puits::RECU.with(|r| assert_eq!(*r.borrow(), (1, 3, 0, true)));
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (1, 3, 0, false)));
             for o in [path, tg, grp, a, b] {
                 release_obj(o);
             }
