@@ -733,13 +733,15 @@ if test -f /usr/sbin/policy-rc.d && test "$(/bin/busybox cat /usr/sbin/policy-rc
     /bin/busybox rm -f /usr/sbin/policy-rc.d
 fi
 desktop_user=
-desktop_autologin=1
+# Connexion automatique seulement sur un choix explicite (#2134) : sans la
+# clé, le mot de passe est demandé, comme sous Windows.
+desktop_autologin=0
 if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
     desktop_user=$(/bin/busybox sed -n 's/^[[:space:]]*"username":[[:space:]]*"\([a-z_][a-z0-9_.-]*\)".*/\1/p' /etc/winlux/install-config.json | /bin/busybox head -n 1)
     if test -n "$desktop_user" && ! /bin/busybox awk -F: -v u="$desktop_user" '$1 == u && $3 >= 1000 && $3 < 60000 { found=1 } END { exit !found }' /etc/passwd; then
         desktop_user=
     fi
-    if /bin/busybox grep -q '"autologin":[[:space:]]*false' /etc/winlux/install-config.json; then desktop_autologin=0; fi
+    if /bin/busybox grep -q '"autologin":[[:space:]]*true' /etc/winlux/install-config.json; then desktop_autologin=1; fi
 fi
 if test -n "$desktop_user"; then
     # Fichiers d'état et réglages lisibles par le bureau (il n'est plus root).

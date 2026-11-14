@@ -3366,7 +3366,7 @@ class InstallerApp(Gtk.Application):
             "username": "",
             "fullname": "",
             "password": "",
-            "autologin": True,
+            "autologin": False,
             # Envoi automatique des plantages (#438) : proposé coché.
             "crash_reports": True,
             "password_hash": "",
@@ -5349,7 +5349,8 @@ class InstallerApp(Gtk.Application):
         self.account_error.set_margin_top(8)
         box.pack_start(self.account_error, False, False, 0)
         autologin = Gtk.CheckButton(label=tr("autologin"))
-        autologin.set_active(True)
+        # Mot de passe demandé par défaut, comme sous Windows (#2134).
+        autologin.set_active(False)
         autologin.connect("toggled", lambda b: self.config.update({"autologin": b.get_active()}))
         autologin.set_margin_top(8)
         box.pack_start(autologin, False, False, 0)
