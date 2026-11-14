@@ -74,6 +74,19 @@ try:
     assert calls == [("alice", "admin-check")] * 2, calls
     lock["relay_check"] = lambda *a, **k: None
     assert not uac["verify"]("alice", "Admin-7"), "relais injoignable : refus"
+    # Compte installé : il figure aussi dans users.conf avec « shadow »
+    # (#2415) ; la vérification passe quand même par admin-check.
+    conf = tmp / "etc/winlux/users.conf"
+    saved = conf.read_text() if conf.exists() else None
+    conf.write_text("alice:admin:shadow\nbob:user:shadow\n")
+    calls.clear()
+    lock["relay_check"] = lambda user, password, op="check": calls.append((user, op)) or password == "Admin-7"
+    assert uac["verify"]("alice", "Admin-7"), "administrateur installé accepté"
+    assert calls == [("alice", "admin-check")], calls
+    if saved is None:
+        conf.unlink()
+    else:
+        conf.write_text(saved)
 finally:
     lock["relay_check"], os.geteuid = real_relay, real_euid
     (tmp / "etc/shadow.cache").rename(tmp / "etc/shadow")
