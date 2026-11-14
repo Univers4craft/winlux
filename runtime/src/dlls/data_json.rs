@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::comobj::{
-    guid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
+    guid, pinterface_iid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
 };
 
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
@@ -64,23 +64,6 @@ const MAX_DEPTH: usize = 512;
 // ============================================================
 //  Identifiants des interfaces paramétrées
 // ============================================================
-
-/// Identifiant d'une interface paramétrée : UUID v5 (SHA-1) de sa
-/// signature dans l'espace de noms {11f47ad5-7b73-42c0-abae-878b1e16adee}.
-pub fn pinterface_iid(signature: &str) -> Guid {
-    const NS: [u8; 16] = [
-        0x11, 0xf4, 0x7a, 0xd5, 0x7b, 0x73, 0x42, 0xc0, 0xab, 0xae, 0x87, 0x8b, 0x1e, 0x16, 0xad,
-        0xee,
-    ];
-    let h = super::bcrypt::crypto::sha1(&[&NS, signature.as_bytes()]);
-    let d1 = u32::from_be_bytes([h[0], h[1], h[2], h[3]]);
-    let d2 = u16::from_be_bytes([h[4], h[5]]);
-    let d3 = (u16::from_be_bytes([h[6], h[7]]) & 0x0fff) | 0x5000;
-    let mut d4 = [0u8; 8];
-    d4.copy_from_slice(&h[8..16]);
-    d4[0] = (d4[0] & 0x3f) | 0x80;
-    guid(d1, d2, d3, d4)
-}
 
 struct Generic {
     map: Guid,
