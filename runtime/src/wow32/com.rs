@@ -1227,7 +1227,7 @@ fn vtable64(iface: &'static Iface) -> usize {
 }
 
 /// Libère une référence d'un objet 64 bits.
-unsafe fn release64(obj: u64) {
+pub(super) unsafe fn release64(obj: u64) {
     let vt = *(obj as usize as *const *const usize);
     let f: unsafe extern "win64" fn(u64) -> u32 = std::mem::transmute(*vt.add(2));
     f(obj);
