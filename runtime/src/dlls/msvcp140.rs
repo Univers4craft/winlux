@@ -424,7 +424,7 @@ extern "win64" fn thrd_join(t: *const Thrd, res: *mut i32) -> i32 {
 
 // ---------- Erreurs ----------
 
-fn fatal(what: &str, msg: *const u8) -> ! {
+pub(crate) fn fatal(what: &str, msg: *const u8) -> ! {
     let detail = if msg.is_null() {
         String::new()
     } else {
@@ -435,6 +435,10 @@ fn fatal(what: &str, msg: *const u8) -> ! {
     crate::dlls::kernel32::flush_and_exit(3)
 }
 
+/// std::bad_alloc non rattrapable, aussi pour msvcp140_1 (#2178).
+pub(crate) fn bad_alloc_fatal() -> ! {
+    fatal("bad_alloc", std::ptr::null())
+}
 extern "win64" fn x_bad_alloc() {
     fatal("bad_alloc", std::ptr::null())
 }
