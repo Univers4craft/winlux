@@ -493,7 +493,7 @@ check('_t("Contrôle parental")]' in settings and '(_t("Comptes"), [33, 38, 42])
 check('(42, "Contrôle parental"' in (HERE / "winlux-start-menu.py").read_text(), "recherche du menu Démarrer")
 check("PAGE_PARENTAL = 42" in pages and 'PAGE_PARENTAL: "page_parental"' in pages, "page branchée sur winlux-parental")
 check("winlux-parental" in (HERE / "stage-desktop-components.sh").read_text()
-      and "winlux-parental daemon" in (HERE / "winlux-system-services.sh").read_text(),
+      and "winlux-parental supervise" in (HERE / "winlux-system-services.sh").read_text(),
       "installé dans /usr/bin et lancé en root au démarrage")
 
 shutil.rmtree(work, ignore_errors=True)

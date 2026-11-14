@@ -62,40 +62,120 @@ pub fn lock_on_resume_at(root: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// Affiche l'écran de verrouillage avant la mise en veille, pour que le
-/// bureau ne soit jamais visible au réveil. Attend au plus trois secondes
-/// qu'il ait pris le clavier (`run/winlux/lock/shown`) ; sans `winlux-lock`
-/// installé, ne fait rien.
-fn lock_before_sleep(root: &Path) {
+/// Écrans de session à verrouiller avant la veille : `:0` (bureau
+/// principal) et ceux du registre de `winlux-sessions`
+/// (`/run/winlux/sessions/<compte>`, `display=:n`), avec leur compte.
+/// #2152 : seul `:0` l'était ; une seconde session (« Changer
+/// d'utilisateur ») restait visible au réveil jusqu'au passage suivant de son
+/// propre `winlux-lock daemon`.
+pub fn lock_targets_at(root: &Path) -> Vec<(String, Option<String>)> {
+    let main = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    let mut targets: Vec<(String, Option<String>)> = vec![(main, None)];
+    let mut files: Vec<std::path::PathBuf> = fs::read_dir(run_dir_at(root).join("sessions"))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.sort();
+    for file in files {
+        let Some(account) = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        // Fichiers temporaires « .<compte>.<pid> » de winlux-sessions ignorés ;
+        // un nom de compte n'a que des caractères sûrs (check_user).
+        let safe = !account.starts_with('.')
+            && account
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+        if !safe {
+            continue;
+        }
+        let text = fs::read_to_string(&file).unwrap_or_default();
+        let Some(display) = text.lines().find_map(|l| l.strip_prefix("display=")) else {
+            continue;
+        };
+        let display = display.trim();
+        let valid = display
+            .strip_prefix(':')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !valid {
+            continue;
+        }
+        match targets.iter_mut().find(|(d, _)| d == display) {
+            Some(existing) => existing.1 = Some(account),
+            None => targets.push((display.to_string(), Some(account))),
+        }
+    }
+    targets
+}
+
+/// Marqueur « écran de verrouillage affiché » d'un écran, comme
+/// `shown_file()` de `winlux-lock` : `shown` pour `:0`, `shown-<n>` sinon.
+pub fn lock_shown_marker(root: &Path, display: &str) -> std::path::PathBuf {
+    let number = display
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
+    let suffix = if number.is_empty() || number == "0" {
+        String::new()
+    } else {
+        format!(
+            "-{}",
+            number
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>()
+        )
+    };
+    root.join(format!("run/winlux/lock/shown{suffix}"))
+}
+
+/// Affiche l'écran de verrouillage de chaque session avant la mise en
+/// veille, pour que son bureau ne soit jamais visible au réveil. Attend au
+/// plus trois secondes que chaque écran ait pris le clavier (marqueur
+/// `shown`) ; sans `winlux-lock` installé, ne fait rien.
+pub(crate) fn lock_before_sleep(root: &Path) {
     let program = root.join("usr/bin/winlux-lock");
     if !program.is_file() || !lock_on_resume_at(root) {
         return;
     }
-    let shown = root.join("run/winlux/lock/shown");
-    if shown.is_file() {
-        return;
-    }
-    let spawned = std::process::Command::new(&program)
-        .arg("now")
-        .env(
-            "DISPLAY",
-            std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
-        )
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    if let Ok(mut child) = spawned {
-        // L'écran reste affiché après la reprise : il est récolté à part.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        for _ in 0..30 {
-            if shown.is_file() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+    let mut waiting = Vec::new();
+    for (display, account) in lock_targets_at(root) {
+        let shown = lock_shown_marker(root, &display);
+        if shown.is_file() {
+            continue;
         }
+        let mut command = std::process::Command::new(&program);
+        command
+            .arg("now")
+            .env("DISPLAY", &display)
+            .env("WINLUX_POWER_ROOT", root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // Le compte de la session : lancé en root, winlux-lock retiendrait
+        // sinon le premier compte personnel (session_account).
+        if let Some(account) = &account {
+            command.env("WINLUX_SESSION_USER", account);
+        }
+        if let Ok(mut child) = command.spawn() {
+            // L'écran reste affiché après la reprise : il est récolté à part.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            waiting.push(shown);
+        }
+    }
+    for _ in 0..30 {
+        if waiting.iter().all(|shown| shown.is_file()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 

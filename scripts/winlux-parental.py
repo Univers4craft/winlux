@@ -42,6 +42,7 @@ Le compte surveillé ne peut ni lire ni modifier ses restrictions :
   winlux-parental forget COMPTE              (admin) efface configuration et activité
   winlux-parental check-login COMPTE         (root) 0 si le compte peut ouvrir sa session
   winlux-parental daemon                     (root) suivi, blocages, DNS filtrant
+  winlux-parental supervise                  (root) lance le service et le relance s'il s'arrête
   winlux-parental screen COMPTE ÉCRAN        (root) écran « Temps d'écran terminé »
 
 Tests : WINLUX_PARENTAL_ROOT (racine factice), WINLUX_PARENTAL_NOW (heure
@@ -1762,6 +1763,44 @@ class Daemon:
             time.sleep(1)
 
 
+# ── Supervision ─────────────────────────────────────────────────────────────
+
+SUPERVISE_DELAYS = (1, 2, 5, 10, 30, 60)
+
+
+def supervise(command, log, rounds=None, sleep=time.sleep, stable=60):
+    """Lance le service et le relance après chaque arrêt (#2247) : sans systemd,
+    rien d'autre ne le ferait, et un contrôle parental arrêté laisse tout passer.
+    Délai croissant si le service s'arrête aussitôt (au plus une minute), remis à
+    zéro après une minute de marche. Le verrou d'instance unique du service
+    évite les doublons : une relance pendant qu'un autre tourne s'arrête seule."""
+    child = {"proc": None}
+
+    def stop(*_):
+        proc = child["proc"]
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    failures = 0
+    done = 0
+    while rounds is None or done < rounds:
+        started = time.monotonic()
+        try:
+            child["proc"] = subprocess.Popen(command, stdin=subprocess.DEVNULL)
+            code = child["proc"].wait()
+        except OSError as error:
+            code = f"impossible de lancer : {error}"
+        done += 1
+        failures = 0 if time.monotonic() - started >= stable else failures + 1
+        delay = SUPERVISE_DELAYS[min(failures, len(SUPERVISE_DELAYS) - 1)]
+        log(f"service arrêté (code {code}), relancé dans {delay} s")
+        sleep(delay)
+    return 0
+
+
 # ── Commandes ───────────────────────────────────────────────────────────────
 
 def emit(**values):
@@ -1821,6 +1860,14 @@ def main(argv):
     try:
         if command == "daemon":
             return Daemon().run()
+        if command == "supervise" and not rest:
+            if os.geteuid() != 0 and not ROOT:
+                print("winlux-parental supervise doit tourner en root", file=sys.stderr)
+                return 1
+
+            def log(text):
+                print(time.strftime("%Y-%m-%d %H:%M:%S"), "supervision :", text, flush=True)
+            return supervise([sys.executable, "-B", SELF, "daemon"], log)
         if command == "status" and not rest:
             user = peer()
             state = state_of(user)
