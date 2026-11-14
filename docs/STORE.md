@@ -59,6 +59,13 @@ Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
 `apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
 niveau « user »), jamais hors ligne (#2184).
 
+`/etc/apt/apt.conf.d/50winlux-appstream` (paquet winlux-desktop) demande à apt
+les fiches DEP-11 (`Components-amd64.yml.gz`) de chaque dépôt ; la Boutique les
+lit dans `/var/lib/apt/lists` comme dans `/var/lib/swcatalog`, avec les icônes
+64x64 du miroir : vraies icônes et environ 2 000 applications au lieu de la
+seule sélection. Sans ces fiches, les listes sont remises à jour, au plus
+toutes les 6 h (#2185).
+
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
 boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls

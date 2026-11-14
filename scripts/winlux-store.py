@@ -599,26 +599,37 @@ def _parse_map(lines, i, indent):
 def dep11_dirs():
     return [Path(ROOT + d) for d in ("/var/lib/swcatalog", "/var/lib/app-info")]
 
+def dep11_yaml_files(pattern="*.yml*"):
+    """Fiches AppStream : dossiers d'appstream, et directement les listes
+    d'apt, où apt-get update les range grâce à 50winlux-appstream (#2185)."""
+    for base in dep11_dirs():
+        for path in sorted((base / "yaml").glob(pattern)):
+            yield base, path
+    lists = Path(ROOT + "/var/lib/apt/lists")
+    for path in sorted(lists.glob("*_dep11_Components-*.yml*")):
+        if not path.name.endswith((".yml", ".yml.gz")):
+            continue
+        yield lists, path
+
 def dep11_components():
     """Composants AppStream des dépôts apt (paquet -> fiche brute)."""
     found = {}
-    for base in dep11_dirs():
-        for path in sorted((base / "yaml").glob("*.yml*")):
-            try:
-                raw = path.read_bytes()
-                text = (gzip.decompress(raw) if path.suffix == ".gz" else raw).decode("utf-8", "replace")
-            except (OSError, EOFError):
+    for base, path in dep11_yaml_files():
+        try:
+            raw = path.read_bytes()
+            text = (gzip.decompress(raw) if path.suffix == ".gz" else raw).decode("utf-8", "replace")
+        except (OSError, EOFError):
+            continue
+        docs = parse_yaml(text)
+        if not docs:
+            continue
+        header, origin = docs[0], docs[0].get("Origin", "")
+        media_base = header.get("MediaBaseUrl", "")
+        for doc in docs[1:]:
+            if not isinstance(doc, dict) or doc.get("Type") != "desktop-application" or not doc.get("Package"):
                 continue
-            docs = parse_yaml(text)
-            if not docs:
-                continue
-            header, origin = docs[0], docs[0].get("Origin", "")
-            media_base = header.get("MediaBaseUrl", "")
-            for doc in docs[1:]:
-                if not isinstance(doc, dict) or doc.get("Type") != "desktop-application" or not doc.get("Package"):
-                    continue
-                doc["_origin"], doc["_media"], doc["_base"] = origin, media_base, base
-                found.setdefault(doc["Package"], doc)
+            doc["_origin"], doc["_media"], doc["_base"] = origin, media_base, base
+            found.setdefault(doc["Package"], doc)
     return found
 
 def dep11_icon_archives(force=False):
@@ -626,42 +637,45 @@ def dep11_icon_archives(force=False):
     les télécharge appstream) quand le système ne les a pas extraites."""
     import tarfile
     import io
-    for base in dep11_dirs():
-        for path in sorted((base / "yaml").glob("*_dists_*_dep11_Components-*.yml*")):
-            m = re.match(r"^(.+)_dists_(.+)_([^_]+)_dep11_Components-", path.name)
-            if not m:
-                continue
-            try:
-                head = gzip.open(path, "rt", errors="replace").read(4096) if path.suffix == ".gz" else path.read_text()[:4096]
-            except (OSError, EOFError):
-                continue
-            origin = re.search(r"^Origin:\s*(\S+)", head, re.M)
-            if not origin:
-                continue
-            dest = CACHE / "dep11-icons" / origin.group(1) / "64x64"
-            if dest.is_dir() and not force:
-                continue
-            url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
-            data = fetch(url, 30, 256 << 20)
-            if not data:
-                continue
-            # Extraction dans un dossier temporaire puis renommage : un
-            # rafraîchissement interrompu ne laisse jamais un dossier partiel.
-            tmp = dest.with_name(f".64x64.{os.getpid()}")
+    seen = set()
+    for base, path in dep11_yaml_files("*_dists_*_dep11_Components-*.yml*"):
+        if path.name in seen:
+            continue
+        seen.add(path.name)
+        m = re.match(r"^(.+)_dists_(.+)_([^_]+)_dep11_Components-", path.name)
+        if not m:
+            continue
+        try:
+            head = gzip.open(path, "rt", errors="replace").read(4096) if path.suffix == ".gz" else path.read_text()[:4096]
+        except (OSError, EOFError):
+            continue
+        origin = re.search(r"^Origin:\s*(\S+)", head, re.M)
+        if not origin:
+            continue
+        dest = CACHE / "dep11-icons" / origin.group(1) / "64x64"
+        if dest.is_dir() and not force:
+            continue
+        url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
+        data = fetch(url, 30, 256 << 20)
+        if not data:
+            continue
+        # Extraction dans un dossier temporaire puis renommage : un
+        # rafraîchissement interrompu ne laisse jamais un dossier partiel.
+        tmp = dest.with_name(f".64x64.{os.getpid()}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                for member in tar:
+                    name = os.path.basename(member.name)
+                    if member.isfile() and name.endswith(".png") and not name.startswith("."):
+                        src = tar.extractfile(member)
+                        if src:
+                            (tmp / name).write_bytes(src.read())
+            shutil.rmtree(dest, ignore_errors=True)
+            os.replace(tmp, dest)
+        except (tarfile.TarError, OSError, EOFError):
             shutil.rmtree(tmp, ignore_errors=True)
-            tmp.mkdir(parents=True)
-            try:
-                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-                    for member in tar:
-                        name = os.path.basename(member.name)
-                        if member.isfile() and name.endswith(".png") and not name.startswith("."):
-                            src = tar.extractfile(member)
-                            if src:
-                                (tmp / name).write_bytes(src.read())
-                shutil.rmtree(dest, ignore_errors=True)
-                os.replace(tmp, dest)
-            except (tarfile.TarError, OSError, EOFError):
-                shutil.rmtree(tmp, ignore_errors=True)
 
 def dep11_icon(doc):
     icon = doc.get("Icon") or {}
@@ -701,15 +715,23 @@ def dep11_index():
     """Fiches AppStream apt compactes (langue de la session), mises en cache
     pour que l'ouverture d'une fiche reste instantanée."""
     path = CACHE / f"dep11-{LANG}.json"
-    sources = [p for base in dep11_dirs() for p in (base / "yaml").glob("*.yml*")]
-    stamp = max([p.stat().st_mtime for p in sources] + [0])
+    # Clé : nom, taille et date de chaque fichier lu. apt garde la date du
+    # serveur (2023 pour noble main), plus ancienne que le cache : une simple
+    # comparaison de dates gardait pour toujours un cache vide écrit avant
+    # l'arrivée des fiches (#2185).
+    key = []
+    for _, p in dep11_yaml_files():
+        try:
+            st = p.stat()
+            key.append([str(p), st.st_size, int(st.st_mtime)])
+        except OSError:
+            pass
     icons = CACHE / "dep11-icons"
     if icons.is_dir():
-        stamp = max([stamp] + [d.stat().st_mtime for d in icons.iterdir()])
-    if path.exists() and path.stat().st_mtime >= stamp:
-        cached = load_json(path, None)
-        if isinstance(cached, dict):
-            return cached
+        key += [[str(d), 0, int(d.stat().st_mtime)] for d in sorted(icons.iterdir())]
+    cached = load_json(path, None) if path.exists() else None
+    if isinstance(cached, dict) and cached.get("key") == key and isinstance(cached.get("apps"), dict):
+        return cached["apps"]
     out = {}
     for pkg, doc in dep11_components().items():
         out[pkg] = {
@@ -721,7 +743,7 @@ def dep11_index():
             "screenshots": dep11_screens(doc), "releases": dep11_releases(doc),
         }
     try:
-        atomic_write(path, json.dumps(out))
+        atomic_write(path, json.dumps({"key": key, "apps": out}))
     except OSError:
         pass
     return out
@@ -916,7 +938,11 @@ class Apt(Source):
         # logiciel des dépôts avant « Actualiser » ; apt-get update est admis
         # sans autorisation par le relais (niveau « user ») (#2184).
         # Pas pendant la première passe, locale et rapide, du rafraîchissement.
-        if force or (not self.local_only and not any(Path(ROOT + "/var/lib/apt/lists").glob("*_Packages*"))):
+        # Listes d'avant 50winlux-appstream, sans fiches AppStream : mises à
+        # jour aussi, au plus toutes les 6 h (refresh_lists) (#2185).
+        lists = Path(ROOT + "/var/lib/apt/lists")
+        if force or (not self.local_only and (not any(lists.glob("*_Packages*"))
+                                               or not any(lists.glob("*_dep11_Components-*")))):
             self.refresh_lists()
         if not OFFLINE and not self.local_only:
             dep11_icon_archives(force)

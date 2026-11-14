@@ -114,6 +114,10 @@ def build(stage, base, output):
         (hooks / "90winlux-desktop").write_text(
             'DPkg::Post-Invoke { "if test -x /usr/bin/winlux-applications; then /usr/bin/winlux-applications refresh; fi"; };\n'
             'DPkg::Post-Invoke { "if test -x /usr/share/winlux/apt-service-hook; then /usr/share/winlux/apt-service-hook; fi"; };\n')
+        # Fiches AppStream (DEP-11) des dépôts, lues par la Boutique : icônes et
+        # liste complète (#2185). Dans le paquet, pour arriver aussi par mise à jour.
+        shutil.copy2(Path(__file__).resolve().parent.parent / "integration/apt/50winlux-appstream",
+                     hooks / "50winlux-appstream")
         metadata = package / "DEBIAN"; metadata.mkdir()
         installed_kib = (sum(path.lstat().st_size for path in package.rglob("*") if path.is_file() and not path.is_symlink()) + 1023) // 1024
         (metadata / "control").write_text(
@@ -140,7 +144,7 @@ def build(stage, base, output):
             '# Menu GRUB court et noyau silencieux sur les installations existantes.\n'
             'if test -x /usr/share/winlux/boot-menu; then /usr/share/winlux/boot-menu || true; fi\n')
         (metadata / "postinst").chmod(0o755)
-        (metadata / "conffiles").write_text("/etc/apt/apt.conf.d/90winlux-desktop\n")
+        (metadata / "conffiles").write_text("/etc/apt/apt.conf.d/90winlux-desktop\n/etc/apt/apt.conf.d/50winlux-appstream\n")
         output.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(package), str(output)], check=True)
         # Our scripts explicitly honour DPKG_ROOT and do not execute programs from
