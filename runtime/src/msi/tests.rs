@@ -433,6 +433,12 @@ fn systemfolder_reste_syswow64_pour_un_paquet_x64() {
 /// Windows ; TempFolder est ce que rend GetTempPath.
 #[test]
 fn dossiers_du_profil_sous_users_compte() {
+    // Les chemins Windows dépendent de WINLUX_HOME, que d'autres tests
+    // changent sous ce verrou : sans lui, TempFolder et temp_path() étaient
+    // convertis avec deux profils différents (#2466).
+    let _a = crate::mounts::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let db = db::Database::parse(SAMPLE).unwrap();
     let mut ctx = cond::Context::default();
     install::system_props(&mut ctx, &db, &install::Options::default());
