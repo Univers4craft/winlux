@@ -25,6 +25,7 @@
 mod com;
 mod com_netfw;
 mod com_nlm;
+mod com_shell;
 mod com_taskschd;
 mod comctl;
 mod comdlg;
