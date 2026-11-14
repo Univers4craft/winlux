@@ -294,6 +294,7 @@ pub mod vulkan1;
 pub mod wbem;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wer;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -1174,6 +1175,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "qwave",
                 exports: qwave::exports(),
+                handle: 0,
+            },
+            // Rapports d'erreurs, jamais transmis (OneDrive, #2391).
+            Builtin {
+                name: "wer",
+                exports: wer::exports(),
                 handle: 0,
             },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
