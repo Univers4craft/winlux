@@ -35,12 +35,14 @@ const PARKED: u32 = 2;
 const DEFERRED: u32 = 3;
 
 /// Après ce délai passé dans le code de Winlux, un thread endormi dans le
-/// noyau (attente bloquante) est arrêté où il se trouve.
+/// noyau (attente bloquante) est arrêté dans cet appel système.
+///
+/// Un thread qui *tourne* dans le code de Winlux ou de la glibc n'est jamais
+/// arrêté de force : il peut tenir un verrou d'arène de malloc, et le thread
+/// qui suspend bloquerait à sa prochaine allocation sans jamais le reprendre
+/// (#2165). Comme Windows pour un thread dans le noyau, l'arrêt attend qu'il
+/// revienne au code du programme ou qu'il s'endorme.
 const FORCE_ASLEEP_AFTER: Duration = Duration::from_millis(20);
-
-/// Après ce délai, le thread est arrêté où il se trouve même s'il tourne
-/// encore dans le code de Winlux (#2065).
-const FORCE_AFTER: Duration = Duration::from_millis(200);
 
 thread_local! {
     /// Profondeur des sections où le thread courant tient un verrou de
@@ -94,8 +96,11 @@ pub struct SuspendSlot {
     state: AtomicU32,
     /// 1 quand le thread peut repartir (mot de futex).
     resume: AtomicU32,
-    /// S'arrêter même dans le code de Winlux.
+    /// S'arrêter dans le code de Winlux, mais seulement endormi dans un
+    /// appel système bloquant.
     force: AtomicBool,
+    /// S'arrêter n'importe où (le thread se suspend lui-même).
+    anywhere: AtomicBool,
     /// `ucontext_t` publié tant que le thread est arrêté.
     uc: AtomicUsize,
     /// Arrêté hors du code invité.
@@ -121,6 +126,7 @@ impl SuspendSlot {
             state: AtomicU32::new(IDLE),
             resume: AtomicU32::new(0),
             force: AtomicBool::new(false),
+            anywhere: AtomicBool::new(false),
             uc: AtomicUsize::new(0),
             in_host: AtomicBool::new(false),
             gone: AtomicBool::new(false),
@@ -283,8 +289,11 @@ unsafe fn park_here(uc: *mut libc::ucontext_t) {
     let rip = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as usize;
     let guest = super::seh_hw::is_guest_code_pub(rip);
     // Jamais arrêté en tenant un verrou de Winlux ; hors du code invité,
-    // seulement quand `park` le force.
-    if held() || (!guest && !slot.force.load(Ordering::Acquire)) {
+    // seulement quand `park` le force et que le thread est dans un appel
+    // système bloquant (jamais au milieu de malloc, #2144).
+    let forced = slot.anywhere.load(Ordering::Acquire)
+        || (slot.force.load(Ordering::Acquire) && in_blocking_syscall(uc));
+    if held() || (!guest && !forced) {
         if slot
             .state
             .compare_exchange(REQUEST, DEFERRED, Ordering::AcqRel, Ordering::Acquire)
@@ -313,6 +322,49 @@ unsafe fn park_here(uc: *mut libc::ucontext_t) {
     futex_wake(&slot.state);
 }
 
+/// Appels système où un thread attend sans tenir de verrou de la glibc :
+/// futex, sommeils, attentes d'E/S.
+const BLOCKING_SYSCALLS: &[i64] = &[
+    libc::SYS_futex,
+    libc::SYS_restart_syscall,
+    libc::SYS_nanosleep,
+    libc::SYS_clock_nanosleep,
+    libc::SYS_read,
+    libc::SYS_poll,
+    libc::SYS_ppoll,
+    libc::SYS_select,
+    libc::SYS_pselect6,
+    libc::SYS_epoll_wait,
+    libc::SYS_epoll_pwait,
+    libc::SYS_recvfrom,
+    libc::SYS_recvmsg,
+    libc::SYS_wait4,
+    libc::SYS_waitid,
+    libc::SYS_pause,
+    libc::SYS_rt_sigtimedwait,
+    libc::SYS_accept,
+    libc::SYS_accept4,
+];
+
+/// Le signal a interrompu un appel système bloquant : soit le noyau va le
+/// relancer (rip sur `syscall`, rax = numéro d'un appel bloquant), soit il
+/// rend EINTR (rip juste après `syscall`). Un thread arrêté au milieu de
+/// malloc n'est dans aucun de ces cas (#2165).
+unsafe fn in_blocking_syscall(uc: *const libc::ucontext_t) -> bool {
+    let g = &(*uc).uc_mcontext.gregs;
+    let rip = g[libc::REG_RIP as usize] as usize;
+    let rax = g[libc::REG_RAX as usize];
+    let is_syscall = |a: usize| -> bool {
+        // Le code autour de rip vient d'être exécuté : lisible.
+        let mut b = [0u8; 2];
+        read_own_memory(a, &mut b) == 2 && b == [0x0f, 0x05]
+    };
+    if is_syscall(rip) {
+        return BLOCKING_SYSCALLS.contains(&rax);
+    }
+    rax == -(libc::EINTR as i64) && rip >= 2 && is_syscall(rip - 2)
+}
+
 // ============================================================
 //  Arrêt et reprise
 // ============================================================
@@ -328,6 +380,7 @@ fn park_until(slot: &SuspendSlot, tid: i32, deadline: Option<Instant>) -> bool {
     install_handler();
     slot.resume.store(0, Ordering::Release);
     slot.force.store(false, Ordering::Release);
+    slot.anywhere.store(false, Ordering::Release);
     slot.state.store(REQUEST, Ordering::Release);
     let start = Instant::now();
     let mut delay = Duration::from_micros(20);
@@ -380,7 +433,7 @@ fn park_until(slot: &SuspendSlot, tid: i32, deadline: Option<Instant>) -> bool {
             std::thread::sleep(delay);
             delay = (delay * 2).min(Duration::from_millis(1));
             let elapsed = start.elapsed();
-            if elapsed > FORCE_AFTER || (elapsed > FORCE_ASLEEP_AFTER && asleep(tid)) {
+            if elapsed > FORCE_ASLEEP_AFTER && asleep(tid) {
                 slot.force.store(true, Ordering::Release);
             }
             let _ =
@@ -419,6 +472,7 @@ pub fn suspend(slot: &SuspendSlot, tid: i32) -> Result<u32, u32> {
         install_handler();
         slot.resume.store(0, Ordering::Release);
         slot.force.store(true, Ordering::Release);
+        slot.anywhere.store(true, Ordering::Release);
         slot.state.store(REQUEST, Ordering::Release);
         drop(op);
         unsafe {
@@ -941,8 +995,12 @@ mod tests {
             let me = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
             register(me, &s2);
             t2.store(me, Ordering::Release);
+            // Calcul entrecoupé de courts sommeils : seuls points où un
+            // thread de Winlux peut être arrêté (#2165).
             while !STOP.load(Ordering::Relaxed) {
-                COUNTER.fetch_add(1, Ordering::Relaxed);
+                if COUNTER.fetch_add(1, Ordering::Relaxed) % 4096 == 0 {
+                    std::thread::sleep(Duration::from_micros(50));
+                }
             }
             unregister(me, &s2);
         });
@@ -986,7 +1044,7 @@ mod tests {
     }
 
     /// Thread qui tourne en tenant une garde NoPark : jamais arrêté tant
-    /// qu'il la tient, même au-delà de FORCE_AFTER (#2065).
+    /// qu'il la tient (#2065).
     #[test]
     fn pas_d_arret_sous_garde_no_park() {
         use std::sync::Arc;
@@ -1006,8 +1064,9 @@ mod tests {
             }
             RELEASED.store(true, Ordering::Release);
             drop(hold);
+            // Garde rendue : arrêtable à son prochain sommeil (#2165).
             while !DONE.load(Ordering::Acquire) {
-                std::hint::spin_loop();
+                std::thread::sleep(Duration::from_micros(50));
             }
             unregister(me, &s2);
         });
@@ -1016,7 +1075,7 @@ mod tests {
         }
         let tid = tid.load(Ordering::Acquire);
         let releaser = std::thread::spawn(|| {
-            std::thread::sleep(FORCE_AFTER * 2);
+            std::thread::sleep(Duration::from_millis(400));
             RELEASE.store(true, Ordering::Release);
         });
         assert_eq!(suspend(&slot, tid), Ok(0));
@@ -1030,8 +1089,7 @@ mod tests {
         h.join().unwrap();
     }
 
-    /// Thread endormi dans le noyau depuis Winlux : arrêté sans attendre
-    /// FORCE_AFTER (#2065).
+    /// Thread endormi dans le noyau depuis Winlux : arrêté vite (#2065).
     #[test]
     fn arret_rapide_d_un_thread_endormi() {
         use std::sync::Arc;
@@ -1059,7 +1117,7 @@ mod tests {
         assert_eq!(resume(&slot), 1);
         stop.store(true, Ordering::Release);
         h.join().unwrap();
-        assert!(took < FORCE_AFTER, "arrêt en {took:?}");
+        assert!(took < Duration::from_millis(200), "arrêt en {took:?}");
     }
 
     /// Sans WINLUX_THREAD_DUMP : rien n'est installé, SIGUSR2 garde son
@@ -1090,7 +1148,9 @@ mod tests {
             register(me, &s2);
             t2.store(me, Ordering::Release);
             while !st2.load(Ordering::Relaxed) {
-                COUNTER.fetch_add(1, Ordering::Relaxed);
+                if COUNTER.fetch_add(1, Ordering::Relaxed) % 4096 == 0 {
+                    std::thread::sleep(Duration::from_micros(50));
+                }
             }
             unregister(me, &s2);
         });
@@ -1219,7 +1279,10 @@ mod tests {
                         if kind % 2 == 0 {
                             std::thread::sleep(Duration::from_millis(2));
                         } else {
-                            std::hint::spin_loop();
+                            for _ in 0..10_000 {
+                                std::hint::spin_loop();
+                            }
+                            std::thread::sleep(Duration::from_micros(50));
                         }
                     }
                 };
@@ -1246,5 +1309,90 @@ mod tests {
         for (_, s) in &slots {
             assert_eq!(s.state.load(Ordering::Acquire), IDLE);
         }
+    }
+    /// Variable du processus enfant de `jamais_arrete_au_milieu_de_malloc`.
+    const ENFANT_MALLOC: &str = "WINLUX_TEST_2165_ENFANT";
+
+    /// Un thread qui tourne dans malloc/free n'est jamais arrêté là : le
+    /// thread qui suspend alloue ensuite (comme notre GetThreadContext ou la
+    /// trace) et resterait bloqué sur le verrou d'arène tenu par le thread
+    /// arrêté, que plus personne ne reprendrait (#2165). Une seule arène
+    /// (MALLOC_ARENA_MAX=1, lu au démarrage) : relancé dans un processus
+    /// enfant, borné à 60 s.
+    #[test]
+    fn jamais_arrete_au_milieu_de_malloc() {
+        if std::env::var_os(ENFANT_MALLOC).is_some() {
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::thread_ctl::tests::enfant_suspension_dans_malloc",
+                "--test-threads=1",
+                "--include-ignored",
+            ])
+            .env(ENFANT_MALLOC, "1")
+            .env("MALLOC_ARENA_MAX", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let t0 = Instant::now();
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break Some(st);
+            }
+            if t0.elapsed() > Duration::from_secs(60) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let status = status.expect("interblocage : thread arrêté dans malloc (#2165)");
+        assert!(status.success(), "processus enfant : {status:?}");
+    }
+
+    #[test]
+    #[ignore = "lancé par jamais_arrete_au_milieu_de_malloc"]
+    fn enfant_suspension_dans_malloc() {
+        use std::sync::Arc;
+        if std::env::var_os(ENFANT_MALLOC).is_none() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let slot = Arc::new(SuspendSlot::new());
+        let tid = Arc::new(AtomicI32::new(0));
+        let (s2, t2, st2) = (slot.clone(), tid.clone(), stop.clone());
+        let h = std::thread::spawn(move || {
+            let me = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
+            register(me, &s2);
+            t2.store(me, Ordering::Release);
+            let mut n = 0u32;
+            while !st2.load(Ordering::Relaxed) {
+                // Tailles hors du cache par thread : verrou d'arène pris.
+                for size in [5000usize, 9000, 20000, 70000] {
+                    let p = unsafe { libc::malloc(size) };
+                    unsafe { libc::free(p) };
+                }
+                n = n.wrapping_add(1);
+                if n % 64 == 0 {
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+            }
+            unregister(me, &s2);
+        });
+        while tid.load(Ordering::Acquire) == 0 {
+            std::thread::yield_now();
+        }
+        let tid = tid.load(Ordering::Acquire);
+        for i in 0..300usize {
+            assert_eq!(suspend(&slot, tid), Ok(0));
+            let v: Vec<u8> = Vec::with_capacity(3000 + i * 211);
+            drop(std::hint::black_box(v));
+            assert_eq!(resume(&slot), 1);
+        }
+        stop.store(true, Ordering::Relaxed);
+        h.join().unwrap();
     }
 }
