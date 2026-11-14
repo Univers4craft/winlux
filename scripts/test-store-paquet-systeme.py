@@ -99,7 +99,8 @@ esac; done
 
     # Un paquet libre se désinstalle toujours, après la simulation.
     r, progress, journal = remove("lynx", "fr")
-    real = [l for l in journal.splitlines() if l.startswith("apt-get ") and " -s " not in l]
+    # Purge réelle, directe (root) ou par le relais (winlux-root, pkexec, sudo), hors simulations.
+    real = [l for l in journal.splitlines() if "apt-get" in l and " -s " not in l]
     ok(any("purge -- lynx" in l for l in real),
        "un paquet sans dépendant protégé est bien purgé (#2234)")
     ok(progress.get("state") == "done", f"désinstallation de lynx terminée ({progress.get('message')!r}) (#2234)")
