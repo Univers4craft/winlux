@@ -55,6 +55,11 @@ verrous sont utilisés tels quels : `apt update` / `apt upgrade` en terminal
 continuent de fonctionner, et ce que le Store installe se met à jour aussi
 par `apt upgrade`, `flatpak update` ou `snap refresh`.
 
+Pendant les déclencheurs de dpkg (shared-mime-info…), le bandeau dit « Mise à
+jour du système après l'installation » sans pourcentage ; un clic sur un autre
+« Installer » y affiche « Une installation est déjà en cours : attendez qu'elle
+se termine » (#2186).
+
 Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
 `apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
 niveau « user »), jamais hors ligne (#2184).
