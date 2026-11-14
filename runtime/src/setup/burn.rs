@@ -736,7 +736,7 @@ pub fn run(
         bundle.manifest.version,
         bundle.manifest.chain.len()
     ));
-    let work = std::env::temp_dir().join(format!("winlux-burn-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("burn");
     let vars = initial_vars(&bundle.manifest, overrides);
     let mut status = 0;
     // Paquets réellement installés : un bundle qui n'en installe aucun n'a

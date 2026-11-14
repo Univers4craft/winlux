@@ -572,6 +572,7 @@ _TR = {
     "S’applique aux fenêtres ouvertes ensuite.": ("Applies to windows opened afterwards.", "Se aplica a las ventanas que se abran después.", "Gilt für danach geöffnete Fenster."),
     "Disposition du clavier": ("Keyboard layout", "Distribución del teclado", "Tastaturlayout"),
     "Fuseau horaire": ("Time zone", "Zona horaria", "Zeitzone"),
+    "Fuseau horaire inconnu : choisissez-le dans la liste.": ("Unknown time zone: choose it from the list.", "Zona horaria desconocida: elíjala de la lista.", "Unbekannte Zeitzone: Wählen Sie sie aus der Liste."),
     "Date et heure actuelles : {now}": ("Current date and time: {now}", "Fecha y hora actuales: {now}", "Aktuelles Datum und Uhrzeit: {now}"),
     "Français (France)": ("French (France)", "Francés (Francia)", "Französisch (Frankreich)"),
     "Français (AZERTY)": ("French (AZERTY)", "Francés (AZERTY)", "Französisch (AZERTY)"),
@@ -2748,10 +2749,28 @@ class ExtraPages:
             line = Gtk.Box(spacing=8)
             line.pack_start(zone, False, False, 0)
             apply = Gtk.Button(label=_t("Appliquer"))
-            apply.connect("clicked", lambda *_: zone.get_child().get_text() in zones and zone.get_child().get_text() != current
-                          and self.execute("tz-" + zone.get_child().get_text()))
+            apply.set_name("timezone-apply")
+            apply.connect("clicked", lambda *_: zone.get_child().get_text().strip() in zones
+                          and zone.get_child().get_text().strip() != current
+                          and self.execute("tz-" + zone.get_child().get_text().strip()))
             line.pack_start(apply, False, False, 0)
-            self.row(box, _t("Fuseau horaire"), line)
+            # Un nom tapé qui n'est pas un fuseau connu est signalé, et « Appliquer »
+            # reste grisé : rien n'était dit avant (#2249).
+            unknown = Gtk.Label(xalign=0)
+            unknown.set_name("timezone-unknown")
+            unknown.set_no_show_all(True)
+
+            def zone_typed(*_):
+                text = zone.get_child().get_text().strip()
+                apply.set_sensitive(text in zones and text != current)
+                unknown.set_text("" if not text or text in zones else _t("Fuseau horaire inconnu : choisissez-le dans la liste."))
+                unknown.set_visible(bool(unknown.get_text()))
+            zone.get_child().connect("changed", zone_typed)
+            zone_typed()
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            column.pack_start(line, False, False, 0)
+            column.pack_start(unknown, False, False, 0)
+            self.row(box, _t("Fuseau horaire"), column)
         now = GLib.DateTime.new_now_local().format("%x %X")
         self.hint(_t("Date et heure actuelles : {now}").format(now=now), box)
         # Heure réglée automatiquement : une date fausse fait refuser tous les sites sécurisés.
