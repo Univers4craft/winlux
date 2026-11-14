@@ -552,6 +552,8 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
             alloc_tid,
             free_seq,
             free_tid,
+            alloc_frames,
+            free_frames,
             offset,
         } => {
             write_literal(b"winlux: tas page ");
@@ -586,8 +588,29 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
                 write_fd_dec(2, free_tid as u64);
                 write_literal(b"\n");
             }
+            write_heap_frames(name, b"allocation", &alloc_frames);
+            if free_seq != 0 {
+                write_heap_frames(name, b"liberation", &free_frames);
+            }
         }
     }
+}
+
+/// `winlux: tas page <nom> pile <quoi> : ?0x… module+0x… …` (#2379) :
+/// adresses de retour probables relevées sur la pile à l'allocation ou à
+/// la libération du bloc.
+unsafe fn write_heap_frames(name: &[u8], what: &[u8], frames: &[usize]) {
+    write_literal(b"winlux: tas page ");
+    write_literal(name);
+    write_literal(b" pile ");
+    write_literal(what);
+    write_literal(b" :");
+    for &f in frames.iter().take_while(|&&f| f != 0) {
+        write_literal(b" ?0x");
+        write_hex(f);
+        write_place(f);
+    }
+    write_literal(b"\n");
 }
 
 unsafe fn write_literal(s: &[u8]) {
@@ -907,6 +930,16 @@ mod tests {
             "{line}"
         );
         assert!(line.contains(" libere n"), "{line}");
+        // Piles d'allocation et de libération : au moins une adresse de
+        // retour dans le code du binaire (ici, le test lui-même).
+        for what in ["allocation", "liberation"] {
+            let head = format!("winlux: tas page addr pile {what} :");
+            let pile = err
+                .lines()
+                .find(|l| l.starts_with(&head))
+                .unwrap_or_else(|| panic!("{err}"));
+            assert!(pile.contains(" winlux+0x"), "{pile}");
+        }
 
         let err = tas_page_lancer("depasse");
         let line = err
