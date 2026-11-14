@@ -2914,33 +2914,33 @@ fn leave_message_only(hwnd: usize, parent: usize) {
 
 /// FindWindowA/W : `class` peut être un atome (MAKEINTATOM, 16 bits hauts
 /// nuls), qu'Acrobat passe pour la classe des boîtes de dialogue (#32770) ;
-/// il ne se lit pas comme une chaîne (#1754).
+/// il ne se lit pas comme une chaîne (#1754). Comme FindWindowEx(NULL,
+/// NULL, …) : fenêtres de premier niveau seulement (#2106).
 pub unsafe extern "win64" fn find_window_a(class: *const u8, title: *const u8) -> usize {
-    let cls = if class.is_null() {
-        None
-    } else {
-        Some(read_class_name_a(class))
-    };
-    let ttl = if title.is_null() {
-        None
-    } else {
-        Some(crate::dlls::cstr(title))
-    };
-    gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
+    find_window_ex_a(0, 0, class, title)
 }
 
 pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16) -> usize {
-    let cls = if class.is_null() {
-        None
-    } else {
-        Some(read_class_name_w(class))
+    find_window_ex_w(0, 0, class, title)
+}
+
+/// Recherche commune à FindWindowExA/W (#2106). Parent NULL ou bureau :
+/// fenêtres de premier niveau, sans les fenêtres message-only ;
+/// HWND_MESSAGE : les seules fenêtres message-only ; sinon les enfants
+/// directs. La recherche reprend après `after`, sinon une boucle
+/// `while ((h = FindWindowEx(0, h, …)))` tourne sans fin.
+fn find_window_among(
+    parent: usize,
+    after: usize,
+    class: Option<&str>,
+    title: Option<&str>,
+) -> usize {
+    let found = match parent {
+        0 | 1 => gui::find_window_ex(0, after, class, title, |h| !is_message_only(h)),
+        HWND_MESSAGE => gui::find_window_ex(0, after, class, title, is_message_only),
+        p => gui::find_window_ex(p, after, class, title, |_| true),
     };
-    let ttl = if title.is_null() {
-        None
-    } else {
-        Some(crate::dlls::wstr(title))
-    };
-    gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
+    found.unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn find_window_ex_a(
@@ -2949,9 +2949,13 @@ pub unsafe extern "win64" fn find_window_ex_a(
     class: *const u8,
     title: *const u8,
 ) -> usize {
-    // Simplifié : ignore parent/after et cherche globalement
-    let _ = (parent, after);
-    find_window_a(class, title)
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_a(class))
+    };
+    let ttl = (!title.is_null()).then(|| crate::dlls::cstr(title));
+    find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
 
 pub unsafe extern "win64" fn find_window_ex_w(
@@ -2960,8 +2964,13 @@ pub unsafe extern "win64" fn find_window_ex_w(
     class: *const u16,
     title: *const u16,
 ) -> usize {
-    let _ = (parent, after);
-    find_window_w(class, title)
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_w(class))
+    };
+    let ttl = (!title.is_null()).then(|| crate::dlls::wstr(title));
+    find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
 
 pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32 {
@@ -7403,6 +7412,90 @@ mod tests_messages {
             destroy_window(msg);
             destroy_window(top);
             assert!(!is_message_only(msg));
+        }
+    }
+
+    /// #2106 : FindWindowEx reprend après `after` et respecte le parent ;
+    /// une boucle d'énumération s'arrête, FindWindow ignore les enfants et
+    /// les fenêtres message-only.
+    #[test]
+    fn find_window_ex_enumere_et_s_arrete() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let title: Vec<u16> = "winlux-2106\0".encode_utf16().collect();
+            let make = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    style,
+                    0,
+                    0,
+                    1,
+                    1,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let a = make(0, 0);
+            let b = make(0, 0);
+            let child1 = make(WS_CHILD, a);
+            let child2 = make(WS_CHILD, a);
+            let msg = make(0, HWND_MESSAGE);
+            assert!([a, b, child1, child2, msg].iter().all(|&h| h != 0));
+
+            // Premier niveau : a et b, chacun une fois, puis NULL.
+            let mut seen = Vec::new();
+            let mut h = 0;
+            loop {
+                h = find_window_ex_w(0, h, class.as_ptr(), title.as_ptr());
+                if h == 0 {
+                    break;
+                }
+                assert!(seen.len() < 64, "boucle sans fin");
+                seen.push(h);
+            }
+            seen.sort_unstable();
+            let mut expected = vec![a, b];
+            expected.sort_unstable();
+            assert_eq!(seen, expected);
+            // Bureau comme parent : pareil que NULL.
+            assert!([a, b].contains(&find_window_ex_w(1, 0, class.as_ptr(), title.as_ptr())));
+
+            // Enfants directs de a, dans l'ordre, puis NULL.
+            let first = find_window_ex_w(a, 0, class.as_ptr(), std::ptr::null());
+            let second = find_window_ex_w(a, first, class.as_ptr(), std::ptr::null());
+            assert_eq!((first, second), (child1.min(child2), child1.max(child2)));
+            assert_eq!(
+                find_window_ex_w(a, second, class.as_ptr(), std::ptr::null()),
+                0
+            );
+            assert_eq!(find_window_ex_w(b, 0, class.as_ptr(), std::ptr::null()), 0);
+            // `after` qui n'est pas un enfant du parent : rien.
+            assert_eq!(find_window_ex_w(a, b, class.as_ptr(), std::ptr::null()), 0);
+
+            // Message-only : seulement sous HWND_MESSAGE.
+            assert_eq!(
+                find_window_ex_w(HWND_MESSAGE, 0, class.as_ptr(), title.as_ptr()),
+                msg
+            );
+            assert_eq!(
+                find_window_ex_w(HWND_MESSAGE, msg, class.as_ptr(), title.as_ptr()),
+                0
+            );
+
+            // FindWindow : un des deux premiers niveaux, jamais un enfant.
+            let found = find_window_w(class.as_ptr(), title.as_ptr());
+            assert!([a, b].contains(&found), "{found:#x}");
+            let ansi = find_window_a(c"STATIC".as_ptr().cast(), c"winlux-2106".as_ptr().cast());
+            assert!([a, b].contains(&ansi), "{ansi:#x}");
+
+            for h in [child1, child2, a, b, msg] {
+                destroy_window(h);
+            }
+            assert_eq!(find_window_ex_w(0, 0, class.as_ptr(), title.as_ptr()), 0);
         }
     }
 
