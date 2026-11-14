@@ -1453,9 +1453,24 @@ unsafe extern "win64" fn WSASendTo(
     flags: u32,
     to: *const u8,
     tolen: i32,
-    _ovl: usize,
-    _cb: usize,
+    ovl: usize,
+    cb: usize,
 ) -> i32 {
+    // Avec OVERLAPPED : fin signalée par l'OVERLAPPED, l'événement et le
+    // port, comme sous Windows (#2164).
+    if let Some(rc) = crate::dlls::ws2_32::wsa_send_to_overlapped(
+        s,
+        bufs as usize,
+        count,
+        sent,
+        flags,
+        to,
+        tolen,
+        ovl,
+        cb,
+    ) {
+        return rc;
+    }
     if bufs.is_null() {
         crate::dlls::ws2_32::wsa_set_last_error(10014);
         return -1;
@@ -1482,9 +1497,24 @@ unsafe extern "win64" fn WSARecvFrom(
     flags: *mut u32,
     from: *mut u8,
     fromlen: *mut i32,
-    _ovl: usize,
-    _cb: usize,
+    ovl: usize,
+    cb: usize,
 ) -> i32 {
+    // Avec OVERLAPPED : jamais de lecture bloquante, WSA_IO_PENDING tant
+    // qu'aucun datagramme n'est là (#2164).
+    if let Some(rc) = crate::dlls::ws2_32::wsa_recv_from_overlapped(
+        s,
+        bufs as usize,
+        count,
+        recvd,
+        flags,
+        from,
+        fromlen,
+        ovl,
+        cb,
+    ) {
+        return rc;
+    }
     if bufs.is_null() || count == 0 {
         crate::dlls::ws2_32::wsa_set_last_error(10014);
         return -1;
@@ -1632,8 +1662,7 @@ pub fn shell32_exports() -> Exports {
     crate::exports! {
         "SHCreateDirectoryExW" => fn SHCreateDirectoryExW, "SHCreateDirectoryExA" => fn SHCreateDirectoryExA,
         "SHCreateDirectory" => fn SHCreateDirectory,
-        // Sélecteur de dossier : pas encore de boîte, l'appel équivaut à « Annuler ».
-        "SHBrowseForFolderW" => fn null_ptr, "SHBrowseForFolderA" => fn null_ptr,
+        // SHBrowseForFolderA/W : apps_win32.rs (#2333).
         "SHGetPathFromIDListW" => fn zero, "SHGetPathFromIDListA" => fn zero,
     }
 }

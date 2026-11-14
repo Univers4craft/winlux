@@ -613,6 +613,8 @@ unsafe extern "win64" fn NtQueryObject(
                         format!("\\??\\{w}")
                     })
                     .unwrap_or_default()
+            } else if kind == "Key" {
+                crate::registry::key_nt_name(h).unwrap_or_default()
             } else {
                 String::new()
             };
@@ -1326,6 +1328,68 @@ unsafe extern "win64" fn WindowOk2(_hwnd: usize, _arg: u32) -> i32 {
     1
 }
 
+/// Réglages d'affichage posés par `SetWindowDisplayAffinity`, par HWND.
+/// Un HWND n'est jamais réattribué (`gui::alloc_hwnd`), une entrée d'une
+/// fenêtre détruite est retirée à la lecture suivante.
+fn affinites() -> &'static std::sync::Mutex<std::collections::HashMap<usize, u32>> {
+    static A: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, u32>>> =
+        std::sync::OnceLock::new();
+    A.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+const WDA_NONE: u32 = 0;
+const WDA_MONITOR: u32 = 1;
+const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
+const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+
+/// `SetWindowDisplayAffinity` (winuser.h, Windows 7) : le réglage est
+/// retenu et relu par `GetWindowDisplayAffinity`. Winlux ne propose aucune
+/// capture d'écran qui devrait le respecter : il ne change rien à l'affichage.
+unsafe extern "win64" fn SetWindowDisplayAffinity(hwnd: usize, affinite: u32) -> i32 {
+    if !crate::dlls::gui::is_window(hwnd) {
+        crate::process::set_last_error(ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if !matches!(affinite, WDA_NONE | WDA_MONITOR | WDA_EXCLUDEFROMCAPTURE) {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let mut a = super::lock(affinites());
+    if affinite == WDA_NONE {
+        a.remove(&hwnd);
+    } else {
+        a.insert(hwnd, affinite);
+    }
+    1
+}
+
+/// `GetWindowDisplayAffinity` (winuser.h, Windows 7) : rend le réglage posé
+/// par `SetWindowDisplayAffinity`, `WDA_NONE` par défaut et pour une fenêtre
+/// d'un autre processus du compte. Choix Winlux : l'appel réussit même pour
+/// une fenêtre non superposée, le compositeur étant toujours actif.
+unsafe extern "win64" fn GetWindowDisplayAffinity(hwnd: usize, sortie: *mut u32) -> i32 {
+    let locale = crate::dlls::gui::is_window(hwnd);
+    if !locale && crate::dlls::gui::foreign_window(hwnd).is_none() {
+        super::lock(affinites()).remove(&hwnd);
+        crate::process::set_last_error(ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if sortie.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let valeur = if locale {
+        super::lock(affinites())
+            .get(&hwnd)
+            .copied()
+            .unwrap_or(WDA_NONE)
+    } else {
+        WDA_NONE
+    };
+    *sortie = valeur;
+    1
+}
+
 /// GetGestureInfo : Winlux n'envoie jamais WM_GESTURE, aucun handle n'est valide.
 unsafe extern "win64" fn GetGestureInfo(_handle: usize, _info: *mut u8) -> i32 {
     crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
@@ -1504,7 +1568,8 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "SetGestureConfig" => fn GestureOk,
         "CloseGestureInfoHandle" => fn GestureOk,
         "UnregisterTouchWindow" => fn WindowOk,
-        "SetWindowDisplayAffinity" => fn WindowOk2,
+        "SetWindowDisplayAffinity" => fn SetWindowDisplayAffinity,
+        "GetWindowDisplayAffinity" => fn GetWindowDisplayAffinity,
         "RegisterHotKey" => fn RegisterHotKey,
         "UnregisterHotKey" => fn UnregisterHotKey,
         "RegisterPointerDeviceNotifications" => fn WindowOk2,
@@ -1789,8 +1854,9 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
     WindowsSubstringWithSpecifiedLength(h, start, n - start, out)
 }
 
-/// Sont inscrites `Windows.System.DispatcherQueue` (#1355) et les classes
-/// d'activation de Windows.UI.Composition (#1416). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
+/// Sont inscrites `Windows.System.DispatcherQueue` (#1355), les classes
+/// d'activation de Windows.UI.Composition (#1416) et
+/// `Windows.Storage.ApplicationData` (#2122). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
 /// Automation) se rabat sur l'API Win32.
 unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
     let name = String::from_utf16_lossy(hstring_slice(class));
@@ -1800,13 +1866,33 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     {
         return hr;
     }
+    // Windows.System.Profile.WindowsIntegrityPolicy (#2217).
+    if let Some(hr) = super::integrity_policy::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.UI.ViewManagement.UISettings (#2206).
+    if let Some(hr) = super::ui_settings::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if let Some(hr) = super::composition::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Networking.Connectivity.NetworkInformation (#2215).
+    if let Some(hr) = super::network_information::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::winrt_ui::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.System.UserProfile.GlobalizationPreferences (#2172).
+    if let Some(hr) = super::globalization_prefs::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Storage.ApplicationData d'un programme empaqueté (#2122).
+    if let Some(hr) = super::storage_appdata::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if !out.is_null() {
@@ -2714,6 +2800,61 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn affinite_d_affichage_retenue_et_relue() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut v = 0xFFu32;
+            crate::process::set_last_error(0);
+            assert_eq!(GetWindowDisplayAffinity(0xDEAD_0000, &mut v), 0);
+            assert_eq!(crate::process::last_error(), ERROR_INVALID_WINDOW_HANDLE);
+            assert_eq!(SetWindowDisplayAffinity(0xDEAD_0000, WDA_MONITOR), 0);
+            assert_eq!(crate::process::last_error(), ERROR_INVALID_WINDOW_HANDLE);
+
+            use crate::dlls::gui;
+            extern "win64" fn inerte(_h: usize, _m: u32, _w: usize, _l: isize) -> isize {
+                0
+            }
+            let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = inerte;
+            let hwnd = gui::alloc_hwnd();
+            gui::insert_window(
+                hwnd,
+                gui::Window {
+                    class: "Test".to_string(),
+                    wnd_proc: proc_addr as usize,
+                    background: 0,
+                    title: "test".to_string(),
+                    rect: gui::Rect::from_size(0, 0, 200, 100),
+                    visible: false,
+                    parent: 0,
+                    owner: std::thread::current().id(),
+                    needs_paint: false,
+                    paint_queued: false,
+                    style: 0,
+                    ex_style: 0,
+                    pending: Vec::new(),
+                    menu_bar: 0,
+                    painting: false,
+                },
+            );
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_NONE);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE), 1);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_EXCLUDEFROMCAPTURE);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, 7), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, std::ptr::null_mut()), 0);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, WDA_NONE), 1);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_NONE);
+            let e = all();
+            assert!(e.iter().any(|(dll, t)| dll.eq_ignore_ascii_case("user32")
+                && t.contains_key("GetWindowDisplayAffinity")));
+            gui::destroy_window(hwnd);
+        }
+    }
+
     /// Steam, utility storage (#2000) : aucun fournisseur, longueur nulle.
     #[test]
     fn aucun_fournisseur_d_espace_de_noms() {
@@ -3253,6 +3394,60 @@ mod tests {
                 0x0800_0000
             );
             crate::dlls::kernel32::close_handle(h);
+        }
+    }
+
+    /// Une clé ouverte est un objet « Key » nommé \\REGISTRY\\… ; un tampon
+    /// trop court rend la taille utile (#2413).
+    #[test]
+    fn nom_nt_d_une_cle_du_registre() {
+        let _teb = crate::process::test_teb();
+        let hkcu = crate::registry::new_handle("hkcu\\Software\\Essai2413".into());
+        let hklm = crate::registry::new_handle("hklm".into());
+        let read = |h: usize, class: u32| unsafe {
+            let mut buf = [0u64; 64];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(h, class, buf.as_mut_ptr().cast(), 512, &mut got),
+                0
+            );
+            let b = buf.as_ptr() as *const u8;
+            let n = (b as *const u16).read_unaligned() as usize / 2;
+            let p = (b.add(8) as *const usize).read_unaligned() as *const u16;
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+        };
+        assert_eq!(read(hkcu, 2), "Key");
+        assert_eq!(
+            read(hkcu, 1),
+            format!(
+                "\\REGISTRY\\USER\\{}\\Software\\Essai2413",
+                crate::dlls::security::user_sid()
+            )
+        );
+        assert_eq!(read(hklm, 1), "\\REGISTRY\\MACHINE");
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0004
+            );
+            assert!(got > 16);
+            // Racine prédéfinie : pas un handle d'objet.
+            assert_eq!(
+                NtQueryObject(0x8000_0001, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
+        }
+        crate::registry::close_handle(hkcu);
+        crate::registry::close_handle(hklm);
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
         }
     }
 

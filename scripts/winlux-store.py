@@ -113,7 +113,9 @@ T = {
            "apt_download": "Téléchargement des fichiers...", "apt_prepare": "Préparation de {name}...",
            "apt_unpack": "Décompression de {name}...", "apt_configure": "Configuration de {name}...",
            "apt_installed": "{name} installé", "apt_remove": "Suppression de {name}...",
-           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...", "apt_working": "Opération en cours...",
+           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...",
+           "apt_triggers": "Mise à jour du système après l'installation ({name}) : cela peut prendre quelques minutes...",
+           "apt_working": "Opération en cours...",
            "installed_version": "installé",
            "ed_label": "Site de l'éditeur",
            "ed_title": "Installer {name} ?",
@@ -140,7 +142,9 @@ T = {
            "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
-           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
+           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée.",
+           "licence_refused": "Contrat de licence non accepté : rien n'a été installé.",
+           "licence_waiting": "Lisez le contrat de licence de {name} pour continuer..."},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
            "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
@@ -156,7 +160,9 @@ T = {
            "apt_download": "Downloading files...", "apt_prepare": "Preparing {name}...",
            "apt_unpack": "Unpacking {name}...", "apt_configure": "Configuring {name}...",
            "apt_installed": "{name} installed", "apt_remove": "Removing {name}...",
-           "apt_removed": "{name} removed", "apt_finish": "Finishing...", "apt_working": "Working...",
+           "apt_removed": "{name} removed", "apt_finish": "Finishing...",
+           "apt_triggers": "Updating the system after installation ({name}): this can take a few minutes...",
+           "apt_working": "Working...",
            "installed_version": "installed",
            "ed_label": "Publisher's website",
            "ed_title": "Install {name}?",
@@ -183,7 +189,9 @@ T = {
            "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
-           "ed_mismatch": "The file received is not the announced version: installation refused."},
+           "ed_mismatch": "The file received is not the announced version: installation refused.",
+           "licence_refused": "License agreement not accepted: nothing was installed.",
+           "licence_waiting": "Read the {name} license agreement to continue..."},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
            "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
@@ -199,7 +207,9 @@ T = {
            "apt_download": "Descargando archivos...", "apt_prepare": "Preparando {name}...",
            "apt_unpack": "Desempaquetando {name}...", "apt_configure": "Configurando {name}...",
            "apt_installed": "{name} instalado", "apt_remove": "Eliminando {name}...",
-           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...", "apt_working": "Operación en curso...",
+           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...",
+           "apt_triggers": "Actualizando el sistema tras la instalación ({name}): puede tardar unos minutos...",
+           "apt_working": "Operación en curso...",
            "installed_version": "instalado",
            "ed_label": "Sitio del editor",
            "ed_title": "¿Instalar {name}?",
@@ -226,7 +236,9 @@ T = {
            "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
-           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
+           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada.",
+           "licence_refused": "Contrato de licencia no aceptado: no se ha instalado nada.",
+           "licence_waiting": "Lea el contrato de licencia de {name} para continuar..."},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
            "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
@@ -243,7 +255,9 @@ T = {
            "apt_download": "Dateien werden heruntergeladen...", "apt_prepare": "{name} wird vorbereitet...",
            "apt_unpack": "{name} wird entpackt...", "apt_configure": "{name} wird eingerichtet...",
            "apt_installed": "{name} installiert", "apt_remove": "{name} wird entfernt...",
-           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...", "apt_working": "Vorgang läuft...",
+           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...",
+           "apt_triggers": "System wird nach der Installation aktualisiert ({name}): Das kann einige Minuten dauern...",
+           "apt_working": "Vorgang läuft...",
            "installed_version": "installiert",
            "ed_label": "Website des Herausgebers",
            "ed_title": "{name} installieren?",
@@ -270,7 +284,9 @@ T = {
            "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
-           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
+           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt.",
+           "licence_refused": "Lizenzvertrag nicht akzeptiert: Es wurde nichts installiert.",
+           "licence_waiting": "Lesen Sie den Lizenzvertrag von {name}, um fortzufahren..."},
 }
 
 
@@ -284,7 +300,11 @@ APT_STEPS = [(r"Preparing to configure (\S+)", "apt_configure"), (r"Preparing fo
              (r"Preparing (\S+)", "apt_prepare"), (r"Unpacking (\S+)", "apt_unpack"),
              (r"(?:Configuring|Installing) (\S+)", "apt_configure"), (r"Installed (\S+)", "apt_installed"),
              (r"(?:Completely )?[Rr]emoving (\S+)", "apt_remove"), (r"(?:Completely )?[Rr]emoved (\S+)", "apt_removed"),
+             # Déclencheurs de dpkg (shared-mime-info…) : plusieurs minutes (#2186).
+             (r"(?:Processing triggers for|Running post-installation trigger) (\S+)", "apt_triggers"),
              (r"Running ", "apt_finish")]
+
+TRIGGERS = r"(?:Processing triggers for|Running post-installation trigger) "
 
 def apt_message(kind, text):
     if kind == "dlstatus":
@@ -827,6 +847,22 @@ class Source:
         return 0
 
 
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg » : lignes « compagnons=pkg:a,b » du
+    catalogue (#2075), quand l'application ne marche pas sans ce qu'apt ne
+    fait que recommander."""
+    try:
+        lines = CATALOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if line.startswith("compagnons="):
+            name, _, rest = line[11:].partition(":")
+            if name == pkg:
+                return [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)]
+    return []
+
+
 class Apt(Source):
     name, label = "apt", "Ubuntu"
     local_only = False
@@ -907,11 +943,16 @@ class Apt(Source):
             age = time.time() - max((p.stat().st_mtime for p in lists.glob("*_Packages*")), default=0)
         except OSError:
             age = 0
-        if age > REMOTE_TTL and not OFFLINE and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
+        if age > REMOTE_TTL and not OFFLINE and network_up() and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
             run(admin(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"]) or ["true"], 600)
 
     def apps(self, force=False):
-        if force:
+        # Système neuf : l'image est livrée sans listes apt
+        # (prepare-apt-base.py). Sans elles la Boutique n'avait aucun
+        # logiciel des dépôts avant « Actualiser » ; apt-get update est admis
+        # sans autorisation par le relais (niveau « user ») (#2184).
+        # Pas pendant la première passe, locale et rapide, du rafraîchissement.
+        if force or (not self.local_only and not any(Path(ROOT + "/var/lib/apt/lists").glob("*_Packages*"))):
             self.refresh_lists()
         if not OFFLINE and not self.local_only:
             dep11_icon_archives(force)
@@ -1039,11 +1080,25 @@ class Apt(Source):
                             pct = int(float(parts[2]))
                         except ValueError:
                             pct = 0
-                        progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
+                        if parts[0] == "pmstatus" and re.match(TRIGGERS, parts[3].strip()):
+                            # Déclencheurs de dpkg : sans avancement mesurable,
+                            # dit tel quel plutôt qu'un 99 % figé (#2186).
+                            progress(None, apt_message(parts[0], parts[3]))
+                        else:
+                            progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
             return proc.wait()
 
     def install(self, ref, progress):
-        return self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        code = self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        extras = apt_companions(ref)
+        if code == 0 and extras:
+            # Paquets compagnons (#2075) : sans les recommandations d'apt,
+            # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt.
+            # Marqués « automatiques » : la désinstallation (purge
+            # --autoremove) les retire quand plus rien ne les utilise ; un
+            # paquet déjà installé à la main le reste.
+            code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
+        return code
 
     def remove(self, ref, progress):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
@@ -2123,20 +2178,65 @@ def install_portable(app, path, kind, entry, progress):
         run(["winlux-applications", "refresh"], 120)
     return 0
 
+# Installation refusée par l'utilisateur (ERROR_INSTALL_USEREXIT), et ce
+# même code vu à travers un code de sortie sur 8 bits.
+LICENCE_REFUSED = 1602
+
+
+def silent_flag(args):
+    """Option sans interface (`/S`, `/SILENT`, `/VERYSILENT`, `/quiet`,
+    `/passive`, `/q…`) : comme sous Windows, la passer vaut acceptation du
+    contrat ; même règle que le runtime (setup/license.rs)."""
+    for a in args:
+        o = a.lower()
+        if o[:1] in ("/", "-"):
+            o = o[1:]
+            if o in ("s", "silent", "verysilent", "quiet", "passive") or o.startswith("q"):
+                return True
+    return False
+
+
+def accept_licence(path, progress):
+    """Contrat de licence du paquet présenté avant une installation sans
+    interface (#2129) : la page « Contrat de licence » de l'assistant
+    (`winlux-setup-wizard --contrat-seulement`, « Je n'accepte pas » coché
+    au départ) rend 0 si le paquet n'a pas de contrat ou si la personne
+    l'accepte. Refus, fenêtre fermée ou page impossible à ouvrir : rien
+    n'est installé."""
+    wizard = os.environ.get("WINLUX_SETUP_WIZARD") or "winlux-setup-wizard"
+    env = dict(os.environ)
+    runtime = shutil.which("winlux")
+    if runtime:
+        env["WINLUX_BIN"] = runtime
+    progress(None, tr("licence_waiting", name=path.name))
+    try:
+        code = subprocess.run([wizard, str(path), "--contrat-seulement"], env=env,
+                              stdin=subprocess.DEVNULL, timeout=3600).returncode
+    except (OSError, subprocess.SubprocessError):
+        code = LICENCE_REFUSED
+    return code == 0
+
+
 def install_windows_file(path, progress, args=(), entry=None):
     """Lance un installateur .exe, ou le msiexec intégré au runtime pour un .msi."""
-    progress(15, tr("runtime", name=path.name))
     msi = path.suffix.lower() == ".msi"
     if msi:
         cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
+    # Sans interface, l'installateur ne montre pas son contrat : la Boutique
+    # le fait accepter d'abord. Avec interface, le runtime le présente lui-même.
+    if silent_flag(cmd[2:]) and not accept_licence(path, progress):
+        return LICENCE_REFUSED
+    progress(15, tr("runtime", name=path.name))
     with open(STORE_RUN / "store.log", "ab") as log:
         try:
             code = subprocess.run(cmd, cwd=str(path.parent), stdout=log, stderr=log,
                                   stdin=subprocess.DEVNULL).returncode
         except OSError:
             code = 127
+    if code == LICENCE_REFUSED % 256:
+        code = LICENCE_REFUSED  # refus devant la page du contrat ouverte par le runtime
     if code == 0 and msi and entry is not None:
         info = run(["winlux", "--msiexec", "--info", str(path)], 60)
         product = info[1].split("\t")[0].strip() if info[0] == 0 and info[1] else ""
@@ -2338,6 +2438,7 @@ class Progress:
             self.hook(0 if percent is None else shown)
 
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
+            LICENCE_REFUSED: "licence_refused",
             1223 % 256: "denied"}
 
 def apt_candidate(name):

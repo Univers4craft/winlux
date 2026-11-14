@@ -28,11 +28,14 @@ PE_EXT = (".exe", ".dll", ".pyd", ".node")
 
 # Miroir de runtime/src/dlls/mod.rs::prefers_real_file : pour ces DLL, le
 # chargeur prend la copie livrée avec l'appli avant la version maison.
-PREFERS_REAL = {"msvcp140", "libstdc++-6", "libgcc_s_seh-1", "libgcc_s_dw2-1", "libwinpthread-1"}
+PREFERS_REAL = {"msvcp140", "msvcp140_1", "libstdc++-6", "libgcc_s_seh-1", "libgcc_s_dw2-1", "libwinpthread-1"}
 
 # Motifs (fnmatch) de DLL supposées livrées par l'écosystème de l'appli,
 # par exemple « --fourni=python3*.dll » pour des modules Python.
 ASSUMED = []
+
+# msvcp140_2 (#2187) : la vraie DLL passe aussi avant la version maison.
+PREFERS_REAL.add("msvcp140_2")
 
 
 def normalize(dll: str) -> str:

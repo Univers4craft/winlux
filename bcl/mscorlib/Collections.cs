@@ -482,6 +482,12 @@ namespace System.Collections.Generic
             return ~lo;
         }
 
+        // Enveloppe sans copie : les changements de la liste s'y voient (#2306).
+        public System.Collections.ObjectModel.ReadOnlyCollection<T> AsReadOnly()
+        {
+            return new System.Collections.ObjectModel.ReadOnlyCollection<T>(this);
+        }
+
         public T[] ToArray()
         {
             T[] array = new T[_size];
