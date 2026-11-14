@@ -39,7 +39,7 @@ fail() { echo "ÉCHEC : $*" >&2; exit 1; }
 # 1. Aucun navigateur : le choix s'ouvre et le lien est gardé.
 WINLUX_BROWSER_STATUS="$work/etat" browser 'https://example.invalid/connexion?code=1&state=a b' 2>/dev/null || true
 test "$(cat "$work/etat")" = attente || fail "état sans navigateur : $(cat "$work/etat" 2>/dev/null)"
-test -f "$run/browser-chooser" || fail "le choix du navigateur ne s'ouvre pas sans navigateur"
+test -f "$run/browser-chooser-$(id -u)" || fail "le choix du navigateur ne s'ouvre pas sans navigateur"
 grep -Fxq 'https://example.invalid/connexion?code=1&state=a b' "$pending" || fail 'lien perdu pendant le choix'
 # Toujours aucun navigateur : le lien attend.
 browser --pending
@@ -48,13 +48,13 @@ test ! -e "$log" || fail 'navigateur lancé sans navigateur'
 
 # 2. Firefox installé sans être « par défaut » (bouton Installer, ou reprise au
 #    démarrage connecté) : le lien s'ouvre dedans, sans passer par les Paramètres.
-rm -f "$run/browser-chooser"
+rm -f "$run/browser-chooser-$(id -u)"
 catalogue firefox
 sh "$project/scripts/winlux-browsers.sh" --status | grep -qx 'browser_default=none'
 browser 'https://example.invalid/apres'
 test "$(sed -n 1p "$log")" = firefox || fail "navigateur installé ignoré : $(cat "$log")"
 grep -Fxq 'https://example.invalid/apres' "$log"
-test ! -e "$run/browser-chooser" || fail 'Paramètres ouverts alors qu’un navigateur est installé'
+test ! -e "$run/browser-chooser-$(id -u)" || fail 'Paramètres ouverts alors qu’un navigateur est installé'
 
 # 3. Le lien gardé s'ouvre dès que le navigateur est là, une seule fois.
 rm -f "$log"
@@ -109,7 +109,7 @@ WINLUX_BROWSER_STATUS="$work/etat" WINLUX_BROWSER_CANDIDATES=autre-navigateur br
 test ! -e "$log" || fail 'navigateur ouvert après Annuler'
 # winlux-report lit cet état pour ne pas annoncer un formulaire jamais ouvert (#612).
 test "$(cat "$work/etat")" = annule || fail "état après Annuler : $(cat "$work/etat" 2>/dev/null)"
-test ! -e "$run/browser-chooser" || fail 'Paramètres ouverts après Annuler'
+test ! -e "$run/browser-chooser-$(id -u)" || fail 'Paramètres ouverts après Annuler'
 # « Toujours utiliser ce navigateur » : il devient le navigateur par défaut.
 printf 'toujours catalogue:chrome\n' > "$work/reponse"
 browser 'https://example.invalid/toujours'
@@ -146,7 +146,7 @@ fixture system "$work/bin/autre-navigateur"
 WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/systeme'
 test "$(sed -n 1p "$log")" = system || fail "navigateur du système ignoré : $(cat "$log")"
 grep -Fxq 'https://example.invalid/systeme' "$log"
-test ! -e "$run/browser-chooser"
+test ! -e "$run/browser-chooser-$(id -u)"
 
 # 6. Un lien resté en attente plus d'une heure n'est plus ouvert.
 printf 'https://example.invalid/ancien\n' > "$pending"

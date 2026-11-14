@@ -526,7 +526,9 @@ def check_request(uid, name, request):
     # autre compte, il passe par « elevate » (mot de passe d'administrateur).
     if user != name and uid != 0 and request.get("op") == "check":
         return {"ok": False}
-    if request.get("op") == "elevate" and not is_admin(user):
+    # « admin-check » : la fenêtre UAC d'un compte standard vérifie le mot de
+    # passe de l'administrateur choisi sans ouvrir d'élévation au compte (#2292).
+    if request.get("op") in ("elevate", "admin-check") and not is_admin(user):
         return {"ok": False}
     throttle(uid)
     ok = password_ok(user, password)
@@ -909,7 +911,7 @@ def effective_level(op, args, uid, name):
 
 def handle(connection, uid, name, request, fds, admitted_here=False):
     op = request.get("op")
-    if op in ("check", "elevate"):
+    if op in ("check", "elevate", "admin-check"):
         return check_request(uid, name, request)
     if op == "switch":
         return switch_request(uid, name, request, connection)
