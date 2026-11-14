@@ -231,6 +231,7 @@ pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
+pub mod mdi;
 pub mod msvcp140_2;
 pub mod msvcp140_eptr;
 pub mod msvcp140_flux;

@@ -320,6 +320,8 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
             "#32768" => popup::popup_proc,
+            // Client MDI (#2321).
+            "mdiclient" => super::mdi::mdiclient_proc,
             n if richedit::is_rich_class(n) => richedit::rich_edit_proc,
             n if syslink::is_link_class(n) => syslink::syslink_proc,
             _ => match comctl::class_kind(&lower).or_else(|| bars::class_kind(&lower))? {
