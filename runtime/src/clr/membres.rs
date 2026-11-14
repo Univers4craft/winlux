@@ -132,6 +132,39 @@ enum AttrType {
 }
 
 impl Interpreter {
+    /// Appelle une méthode statique interne de System.AppDomain de notre
+    /// mscorlib (LeverSortie, LeverExceptionNonGeree, #2058). Une exception
+    /// levée par un gestionnaire est journalisée, puis la sortie continue.
+    pub(super) fn raise_domain_event(&mut self, method: &str, args: Vec<Value>) {
+        let Some(corlib) = self
+            .domain
+            .iter()
+            .position(|i| i.name == super::domain::CORLIB)
+        else {
+            return;
+        };
+        let Some((asm, type_row)) = self
+            .find_type_in(corlib, "System.AppDomain", false)
+            .and_then(|id| self.def_of(id))
+        else {
+            return;
+        };
+        let a = self.assembly_at(asm);
+        let Some(row) = a.type_methods(type_row).find(|&m| {
+            let md = a.get_method_def(m);
+            md.is_static() && a.get_string(md.name) == method
+        }) else {
+            return;
+        };
+        let pinned = self.pins.len();
+        self.pins.extend(args.iter().copied());
+        if let super::il::ExecResult::Exception(e) = self.execute_in(asm, row, args, Gen::default())
+        {
+            crate::log_error!("clr", "exception dans AppDomain.{method} : {e}");
+        }
+        self.pins.truncate(pinned);
+    }
+
     /// (assembly, ligne TypeDef) d'un type, y compris d'un type intégré au
     /// moteur que notre mscorlib déclare (String, Int32…).
     pub(super) fn def_of(&self, id: TypeId) -> Option<(usize, u32)> {

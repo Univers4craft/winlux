@@ -461,7 +461,7 @@ with tempfile.TemporaryDirectory() as directory:
     env.pop("WINLUX_BROWSER", None)
     url = "https://example.invalid/oauth?code=1"
     subprocess.run(["sh", str(ROOT / "integration/winlux-browser"), url], env=env, check=True)
-    ok((base / "ouvert").read_text().split() == [url] and not (base / "system/run/winlux/browser-chooser").exists(),
+    ok((base / "ouvert").read_text().split() == [url] and not (base / f"system/run/winlux/browser-chooser-{os.getuid()}").exists(),
        "lien d'une application : ouvert dans le navigateur installé, sans renvoyer aux Paramètres")
 
 # Retour du testeur sur #418 : lien gardé jamais ouvert après l'installation

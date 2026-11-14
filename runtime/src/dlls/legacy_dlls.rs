@@ -17,6 +17,7 @@ const ERROR_NO_NETWORK: u32 = 1222;
 const ERROR_NOT_CONNECTED: u32 = 2250;
 const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_UNKNOWN_PRODUCT: u32 = 1605;
+const ERROR_UNKNOWN_COMPONENT: u32 = 1607;
 const ERROR_FUNCTION_FAILED: u32 = 1627;
 const INSTALLSTATE_UNKNOWN: i32 = -1;
 
@@ -248,6 +249,8 @@ pub fn msi_exports() -> super::Exports {
         "MsiLocateComponentA" => fn msi_locate_component,
         "MsiGetProductInfoW" => fn msi_get_product_info,
         "MsiGetProductInfoA" => fn msi_get_product_info,
+        "MsiEnumComponentQualifiersW" => fn msi_enum_component_qualifiers,
+        "MsiEnumComponentQualifiersA" => fn msi_enum_component_qualifiers,
         "MsiEnumRelatedProductsW" => fn msi_enum_related_products,
         "MsiEnumRelatedProductsA" => fn msi_enum_related_products,
         "MsiSourceListAddSourceW" => fn msi_source_list_ok,
@@ -297,6 +300,26 @@ fn with_msi_ordinals(mut all: super::Exports) -> super::Exports {
     all
 }
 
+/// MsiEnumComponentQualifiersA/W(szComponent, iIndex, lpQualifierBuf,
+/// pcchQualifierBuf, lpApplicationDataBuf, pcchApplicationDataBuf) : aucun
+/// composant n'est inscrit dans Winlux, donc aucun qualificatif à énumérer.
+/// La documentation rend ERROR_UNKNOWN_COMPONENT pour un composant inconnu,
+/// ce que voit l'outil de déploiement d'Office sur une machine sans Office
+/// (ordinal 39, #2200).
+pub extern "win64" fn msi_enum_component_qualifiers(
+    component: usize,
+    _index: u32,
+    _qualifier: usize,
+    pcch_qualifier: usize,
+    _app_data: usize,
+    _pcch_app_data: usize,
+) -> u32 {
+    if component == 0 || pcch_qualifier == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    ERROR_UNKNOWN_COMPONENT
+}
+
 /// MsiEnumRelatedProducts : aucun produit apparenté inscrit.
 pub extern "win64" fn msi_enum_related_products(_u: usize, _r: u32, _i: u32, _b: usize) -> u32 {
     ERROR_NO_MORE_ITEMS
@@ -314,6 +337,34 @@ pub fn shfolder_exports() -> super::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qualificatifs_de_composant_par_ordinal() {
+        // Outil de déploiement d'Office (#2200) : msi!#39 en chargement
+        // différé ; 38 et 39 d'après Msi.Lib x86 et x64 du SDK public.
+        let e = msi_exports();
+        assert_eq!(e.get("#39"), e.get("MsiEnumComponentQualifiersW"));
+        assert_eq!(e.get("#38"), e.get("MsiEnumComponentQualifiersA"));
+        assert!(e.get("#39").is_some());
+        let component: Vec<u16> = "{00000000-0000-0000-0000-000000000000}\0"
+            .encode_utf16()
+            .collect();
+        let mut buf = [0u16; 64];
+        let mut cch = buf.len() as u32;
+        let r = msi_enum_component_qualifiers(
+            component.as_ptr() as usize,
+            0,
+            buf.as_mut_ptr() as usize,
+            &mut cch as *mut u32 as usize,
+            0,
+            0,
+        );
+        assert_eq!(r, ERROR_UNKNOWN_COMPONENT);
+        assert_eq!(
+            msi_enum_component_qualifiers(0, 0, 0, 0, 0, 0),
+            ERROR_INVALID_PARAMETER
+        );
+    }
 
     #[test]
     fn msi_par_ordinal_comme_wixca() {

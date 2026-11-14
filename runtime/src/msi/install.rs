@@ -108,7 +108,12 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let x64 = db.is_64bit();
     let pf32 = "C:\\Program Files (x86)\\".to_string();
     let pf64 = "C:\\Program Files\\".to_string();
-    let roaming = "C:\\AppData\\Roaming\\";
+    // Dossiers du profil sous C:\Users\<compte>, comme Windows Installer
+    // (documentation : « the full path of the Roaming folder for the
+    // current user »…) et comme le reste du runtime (#2404).
+    let profile = format!("{}\\", crate::paths::profile_windows());
+    let roaming = format!("{profile}AppData\\Roaming\\");
+    let roaming = roaming.as_str();
     let menu = format!("{roaming}Microsoft\\Windows\\Start Menu\\");
     let folders: Vec<(&str, String)> = vec![
         ("ROOTDRIVE", "C:\\".into()),
@@ -132,12 +137,13 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("System64Folder", SYSTEM_FOLDER_64.into()),
         ("System16Folder", "C:\\windows\\system\\".into()),
         ("FontsFolder", "C:\\windows\\Fonts\\".into()),
-        ("TempFolder", "C:\\AppData\\Local\\Temp\\".into()),
+        // « Windows Installer uses the GetTempPath function » (TempFolder).
+        ("TempFolder", crate::dlls::kernel32::temp_path()),
         ("AppDataFolder", roaming.into()),
-        ("LocalAppDataFolder", "C:\\AppData\\Local\\".into()),
+        ("LocalAppDataFolder", format!("{profile}AppData\\Local\\")),
         ("CommonAppDataFolder", "C:\\ProgramData\\".into()),
-        ("PersonalFolder", "C:\\Documents\\".into()),
-        ("MyPicturesFolder", "C:\\Pictures\\".into()),
+        ("PersonalFolder", format!("{profile}Documents\\")),
+        ("MyPicturesFolder", format!("{profile}Pictures\\")),
         ("DesktopFolder", desktop_dir()),
         ("StartMenuFolder", menu.clone()),
         ("ProgramMenuFolder", format!("{menu}Programs\\")),
@@ -150,7 +156,7 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
             "SendToFolder",
             format!("{roaming}Microsoft\\Windows\\SendTo\\"),
         ),
-        ("FavoritesFolder", "C:\\Favorites\\".into()),
+        ("FavoritesFolder", format!("{profile}Favorites\\")),
         (
             "TemplateFolder",
             format!("{roaming}Microsoft\\Windows\\Templates\\"),
@@ -184,8 +190,6 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("Msix64", "6".into()),
         ("MsiAMD64", "6".into()),
         ("PhysicalMemory", physical_memory_mb().to_string()),
-        ("Privileged", "1".into()),
-        ("AdminUser", "1".into()),
         ("LogonUser", user.clone()),
         ("USERNAME", user),
         ("ComputerName", "WINLUX".into()),
@@ -197,6 +201,13 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     ];
     for (k, v) in folders.into_iter().chain(fixed) {
         ctx.props.insert(k.to_string(), v);
+    }
+    // Droits d'administrateur (#2180) : processus élevé (UAC accordé, ou
+    // compte administrateur, pour qui l'élévation est accordée sans
+    // question, #1739). Un compte standard sans élévation ne les a pas.
+    if crate::dlls::security::elevated() || crate::dlls::security::admin_capable() {
+        ctx.props.insert("Privileged".into(), "1".into());
+        ctx.props.insert("AdminUser".into(), "1".into());
     }
 }
 
@@ -548,7 +559,7 @@ fn manifest_path(code: &str) -> PathBuf {
 }
 
 impl Manifest {
-    fn save(&self) -> std::io::Result<()> {
+    pub(super) fn save(&self) -> std::io::Result<()> {
         let mut text = String::from("WINLUX-MSI-1\n");
         for (k, v) in [
             ("product", &self.product),
@@ -808,6 +819,14 @@ pub fn license_text(msi: &Path) -> Option<String> {
         }
     }
     best.map(|(_, t)| crate::setup::license::from_text(&t))
+}
+
+/// Valeur de la propriété ALLUSERS du paquet (vide si absente), pour le
+/// niveau d'élévation demandé (#2180).
+pub fn allusers(msi: &Path) -> Option<String> {
+    let data = std::fs::read(msi).ok()?;
+    let db = Database::parse(&data).ok()?;
+    Some(db.property("ALLUSERS").unwrap_or_default())
 }
 
 /// Noms longs des fichiers que pose un paquet (table File), pour la
@@ -1467,11 +1486,31 @@ fn run_uninstall_actions(code: &str, log: &mut Logger) {
     );
 }
 
+/// Clé de comparaison d'un chemin posé : insensible à la casse, comme NTFS.
+fn path_key(p: &Path) -> String {
+    p.to_string_lossy().to_lowercase()
+}
+
+/// Fichiers listés par les manifestes des autres produits installés.
+fn files_of_other_products(product: &str) -> HashSet<String> {
+    Manifest::all()
+        .iter()
+        .filter(|o| !o.product.eq_ignore_ascii_case(product))
+        .flat_map(|o| o.files.iter().map(|f| path_key(f)))
+        .collect()
+}
+
 fn remove_manifest(m: &Manifest, log: &mut Logger) {
     run_uninstall_actions(&m.product, log);
     let _ = std::fs::remove_file(cached_package(&m.product));
+    // Comme le compteur de clients des composants de Windows Installer :
+    // un fichier qu'un autre produit installé a posé au même chemin reste
+    // en place (runtime VC partagé, #2315).
+    let shared = files_of_other_products(&m.product);
     for f in &m.files {
-        let _ = std::fs::remove_file(f);
+        if !shared.contains(&path_key(f)) {
+            let _ = std::fs::remove_file(f);
+        }
     }
     // RemoveFile (mode 2) et fichiers INI avant les dossiers, comme
     // RemoveFiles avant RemoveFolders sous Windows : un dossier vidé par

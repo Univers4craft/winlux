@@ -608,6 +608,13 @@ impl Parser {
                     self.p += 1;
                 }
             }
+            // Bloc d'états d'un échantillonneur, syntaxe Direct3D 10 :
+            // « SamplerState s { Filter = Linear; AddressU = Clamp; }; ».
+            // Il ne sert qu'au cadre Effects ; l'appli donne ses états par
+            // PSSetSamplers, le bloc est donc lu puis ignoré (#2288).
+            if matches!(base, Ty::Sampler(_)) && self.is("{") {
+                self.skip_state_block()?;
+            }
             let mut init = None;
             if self.eat("=") {
                 let e = self.assign_expr_or_list()?;
@@ -644,6 +651,26 @@ impl Parser {
             }
         }
         Ok(())
+    }
+
+    /// Passe un bloc « { … } » équilibré, sans l'interpréter.
+    fn skip_state_block(&mut self) -> R<()> {
+        let mut depth = 0usize;
+        loop {
+            if self.p >= self.t.len() {
+                return self.err("« } » attendu");
+            }
+            if self.is("{") {
+                depth += 1;
+            } else if self.is("}") {
+                depth -= 1;
+                if depth == 0 {
+                    self.p += 1;
+                    return Ok(());
+                }
+            }
+            self.p += 1;
+        }
     }
 
     fn assign_expr_or_list(&mut self) -> R<Expr> {

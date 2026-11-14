@@ -5114,24 +5114,44 @@ pub fn enum_top_level_windows() -> Vec<usize> {
     top_level_in_z_order(&lock(windows()))
 }
 
-/// Cherche une fenêtre par nom de classe et/ou titre.
-pub fn find_window(class: Option<&str>, title: Option<&str>) -> Option<usize> {
-    lock(windows())
-        .iter()
-        .find(|(_, w)| {
-            if let Some(c) = class {
-                if !c.eq_ignore_ascii_case(&w.class) {
-                    return false;
-                }
-            }
-            if let Some(t) = title {
-                if w.title != t {
-                    return false;
-                }
-            }
-            true
+/// FindWindowEx (#2106) : parmi les enfants directs de `parent` (0 : les
+/// fenêtres de premier niveau, dans l'ordre Z, que `keep` filtre), la
+/// première qui suit `after` (0 : depuis le début) et dont la classe
+/// (sans casse) et le titre correspondent. `after` absent de la liste :
+/// aucune, une boucle d'énumération s'arrête toujours.
+pub fn find_window_ex(
+    parent: usize,
+    after: usize,
+    class: Option<&str>,
+    title: Option<&str>,
+    keep: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let map = lock(windows());
+    let list: Vec<usize> = if parent == 0 {
+        top_level_in_z_order(&map)
+            .into_iter()
+            .filter(|&h| keep(h))
+            .collect()
+    } else {
+        let mut v: Vec<usize> = map
+            .iter()
+            .filter(|(_, w)| w.parent == parent && !is_top_level(w))
+            .map(|(h, _)| *h)
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    let start = if after == 0 {
+        0
+    } else {
+        list.iter().position(|&h| h == after)? + 1
+    };
+    list[start..].iter().copied().find(|h| {
+        map.get(h).is_some_and(|w| {
+            class.is_none_or(|c| c.eq_ignore_ascii_case(&w.class))
+                && title.is_none_or(|t| w.title == t)
         })
-        .map(|(h, _)| *h)
+    })
 }
 
 /// Renvoie un « voisin » de la fenêtre (GetWindow / GW_*).

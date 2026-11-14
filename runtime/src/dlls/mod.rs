@@ -41,6 +41,7 @@ pub mod comdlg32_ui;
 pub mod common_apps;
 pub mod comobj;
 pub mod composition;
+mod conformite_codes_erreur;
 pub mod console_input;
 pub mod controls;
 pub mod coremessaging;
@@ -124,6 +125,8 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod global_options;
+pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
@@ -143,6 +146,7 @@ pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
+pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
@@ -230,8 +234,11 @@ pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
+pub mod mdi;
 pub mod msvcp140_2;
+pub mod msvcp140_eptr;
 pub mod msvcp140_flux;
+pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -262,6 +269,7 @@ pub mod shlwapi_reg;
 pub mod spirv;
 pub mod storage_appdata;
 pub mod sysdlls;
+pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
@@ -269,6 +277,7 @@ pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
+pub mod ui_settings;
 pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
@@ -288,8 +297,10 @@ pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
 pub mod wbem;
+pub mod weak_ref;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wer;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -302,6 +313,7 @@ pub mod winlux_capture;
 pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
+pub mod winlux_tasks;
 pub mod winmm;
 pub mod winmm_midi;
 pub mod winmm_midi_in;
@@ -488,6 +500,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_tasks::exports());
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
@@ -1170,6 +1183,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: qwave::exports(),
                 handle: 0,
             },
+            // Rapports d'erreurs, jamais transmis (OneDrive, #2391).
+            Builtin {
+                name: "wer",
+                exports: wer::exports(),
+                handle: 0,
+            },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
             Builtin {
                 name: "wldap32",
@@ -1290,6 +1309,8 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut m = msvcp140::exports();
                     m.extend(msvcp140_flux::exports());
+                    m.extend(msvcp140_eptr::exports());
+                    m.extend(msvcp140_ppl::exports());
                     m
                 },
                 handle: 0,

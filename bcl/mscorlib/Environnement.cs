@@ -121,8 +121,15 @@ namespace System
 
         // --- Servi par le moteur ---
 
+        // ProcessExit est levé avant la sortie (#2058).
+        public static void Exit(int exitCode)
+        {
+            AppDomain.LeverSortie();
+            Quitter(exitCode);
+        }
+
         [MethodImpl(MethodImplOptions.InternalCall)]
-        public static extern void Exit(int exitCode);
+        private static extern void Quitter(int exitCode);
 
         public static extern int ExitCode
         {
@@ -151,6 +158,11 @@ namespace System
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern string[] GetCommandLineArgs();
 
+        // Le bloc d'environnement du processus, « NOM=valeur » par entrée,
+        // comme GetEnvironmentStringsW (#2233).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern string[] BlocEnvironnement();
+
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern string CheminSpecial(int csidl);
 
@@ -160,6 +172,57 @@ namespace System
         {
             if (variable == null) throw new ArgumentNullException("variable");
             return target == EnvironmentVariableTarget.Process ? GetEnvironmentVariable(variable) : null;
+        }
+
+        // Toutes les variables du processus, dans une Hashtable (#2233).
+        public static System.Collections.IDictionary GetEnvironmentVariables()
+        {
+            System.Collections.Hashtable table = new System.Collections.Hashtable();
+            string[] bloc = BlocEnvironnement();
+            if (bloc == null) return table;
+            for (int i = 0; i < bloc.Length; i++)
+            {
+                string entree = bloc[i];
+                // Un nom peut commencer par « = » (=C:) : le séparateur est
+                // le premier « = » après le premier caractère.
+                int egal = entree == null || entree.Length < 2 ? -1 : entree.IndexOf('=', 1);
+                if (egal > 0) table[entree.Substring(0, egal)] = entree.Substring(egal + 1);
+            }
+            return table;
+        }
+
+        // User et Machine se lisent dans le registre, aux clés que Windows
+        // documente pour ces variables.
+        public static System.Collections.IDictionary GetEnvironmentVariables(EnvironmentVariableTarget target)
+        {
+            if (target == EnvironmentVariableTarget.Process) return GetEnvironmentVariables();
+            Microsoft.Win32.RegistryKey racine;
+            string chemin;
+            if (target == EnvironmentVariableTarget.User)
+            {
+                racine = Microsoft.Win32.Registry.CurrentUser;
+                chemin = "Environment";
+            }
+            else if (target == EnvironmentVariableTarget.Machine)
+            {
+                racine = Microsoft.Win32.Registry.LocalMachine;
+                chemin = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+            }
+            else
+            {
+                throw new ArgumentException("Enum value was out of legal range.", "target");
+            }
+            System.Collections.Hashtable table = new System.Collections.Hashtable();
+            Microsoft.Win32.RegistryKey cle = racine.OpenSubKey(chemin, false);
+            if (cle == null) return table;
+            string[] noms = cle.GetValueNames();
+            for (int i = 0; i < noms.Length; i++)
+            {
+                object v = cle.GetValue(noms[i]);
+                if (v != null) table[noms[i]] = v.ToString();
+            }
+            cle.Close();
+            return table;
         }
 
         // %NOM% remplacé par la variable d'environnement ; un nom inconnu est

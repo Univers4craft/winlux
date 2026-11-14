@@ -1652,7 +1652,7 @@ fn execute(
         .unwrap_or_default();
     let temp = Folders::temp().to_string();
     let plugins_dir = if inst.is_some() {
-        let d = std::env::temp_dir().join(format!("winlux-nsis-{}", std::process::id()));
+        let d = crate::paths::setup_work_dir("nsis");
         let _ = std::fs::create_dir_all(&d);
         Some(d)
     } else {

@@ -33,7 +33,7 @@ unsafe fn new_ostream(sb: P) -> P {
 
 /// Les tests de ce fichier partagent la locale globale et son compteur de
 /// références : ils passent un par un pour que les comptes restent exacts.
-fn serie() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn serie() -> std::sync::MutexGuard<'static, ()> {
     static VERROU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     VERROU.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -349,5 +349,84 @@ fn fstream_comme_l_appli_rend_ses_references() {
             free(fs);
             assert_eq!(refs(g).load(Ordering::Acquire), base);
         }
+    }
+}
+
+/// Installeur de Logitech G HUB (#2229) : les 40 imports msvcp140 relevés
+/// au banc 1 sur master 7bd9d090, absents de notre msvcp140 avant #2195.
+const IMPORTS_G_HUB: [&str; 40] = [
+    "??0?$codecvt@_WDU_Mbstatet@@@std@@QEAA@_K@Z",
+    "??1?$codecvt@_WDU_Mbstatet@@@std@@MEAA@XZ",
+    "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@K@Z",
+    "??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV01@P6AAEAV01@AEAV01@@Z@Z",
+    "??6?$basic_ostream@_WU?$char_traits@_W@std@@@std@@QEAAAEAV01@P6AAEAV01@AEAV01@@Z@Z",
+    "?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ",
+    "?_Incref@facet@locale@std@@UEAAXXZ",
+    "?_Osfx@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAXXZ",
+    "?_Osfx@?$basic_ostream@_WU?$char_traits@_W@std@@@std@@QEAAXXZ",
+    "?cerr@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A",
+    "?do_always_noconv@?$codecvt@_WDU_Mbstatet@@@std@@MEBA_NXZ",
+    "?do_encoding@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ",
+    "?do_in@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEA_W3AEAPEA_W@Z",
+    "?do_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1_K@Z",
+    "?do_max_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ",
+    "?do_out@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEB_W1AEAPEB_WPEAD3AEAPEAD@Z",
+    "?do_unshift@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z",
+    "?fill@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBADXZ",
+    "?fill@?$basic_ios@_WU?$char_traits@_W@std@@@std@@QEBA_WXZ",
+    "?flags@ios_base@std@@QEBAHXZ",
+    "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ",
+    "?flush@?$basic_ostream@_WU?$char_traits@_W@std@@@std@@QEAAAEAV12@XZ",
+    "?good@ios_base@std@@QEBA_NXZ",
+    "?put@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@D@Z",
+    "?put@?$basic_ostream@_WU?$char_traits@_W@std@@@std@@QEAAAEAV12@_W@Z",
+    "?rdbuf@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBAPEAV?$basic_streambuf@DU?$char_traits@D@std@@@2@XZ",
+    "?rdbuf@?$basic_ios@_WU?$char_traits@_W@std@@@std@@QEBAPEAV?$basic_streambuf@_WU?$char_traits@_W@std@@@2@XZ",
+    "?setstate@?$basic_ios@DU?$char_traits@D@std@@@std@@QEAAXH_N@Z",
+    "?setstate@?$basic_ios@_WU?$char_traits@_W@std@@@std@@QEAAXH_N@Z",
+    "?sputc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAAHD@Z",
+    "?sputc@?$basic_streambuf@_WU?$char_traits@_W@std@@@std@@QEAAG_W@Z",
+    "?sputn@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QEAA_JPEBD_J@Z",
+    "?sputn@?$basic_streambuf@_WU?$char_traits@_W@std@@@std@@QEAA_JPEB_W_J@Z",
+    "?tie@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBAPEAV?$basic_ostream@DU?$char_traits@D@std@@@2@XZ",
+    "?tie@?$basic_ios@_WU?$char_traits@_W@std@@@std@@QEBAPEAV?$basic_ostream@_WU?$char_traits@_W@std@@@2@XZ",
+    "?wcerr@std@@3V?$basic_ostream@_WU?$char_traits@_W@std@@@1@A",
+    "?widen@?$basic_ios@DU?$char_traits@D@std@@@std@@QEBADD@Z",
+    "?widen@?$basic_ios@_WU?$char_traits@_W@std@@@std@@QEBA_WD@Z",
+    "?width@ios_base@std@@QEAA_J_J@Z",
+    "?width@ios_base@std@@QEBA_JXZ",
+];
+
+#[test]
+fn installeur_g_hub_trouve_ses_imports() {
+    let _serie = serie();
+    let m = exports();
+    let base = super::super::msvcp140::exports();
+    let absents: Vec<_> = IMPORTS_G_HUB
+        .iter()
+        .filter(|n| !m.get(**n).is_some_and(|&a| a != 0) && !base.contains_key(**n))
+        .collect();
+    assert!(absents.is_empty(), "{absents:?}");
+    unsafe {
+        // Les membres protégés de codecvt<wchar_t> sont ceux de sa table.
+        let t = &tables().codecvt_w;
+        for (slot, nom) in [
+            (3, "?do_always_noconv@?$codecvt@_WDU_Mbstatet@@@std@@MEBA_NXZ"),
+            (4, "?do_max_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ"),
+            (5, "?do_encoding@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ"),
+            (6, "?do_in@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEA_W3AEAPEA_W@Z"),
+            (7, "?do_out@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEB_W1AEAPEB_WPEAD3AEAPEAD@Z"),
+            (8, "?do_unshift@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z"),
+            (9, "?do_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1_K@Z"),
+        ] {
+            assert_eq!(m[nom], t[slot], "{nom}");
+        }
+        // wcerr : un basic_ostream<wchar_t> sur stderr, sans tampon.
+        let wcerr = m["?wcerr@std@@3V?$basic_ostream@_WU?$char_traits@_W@std@@@1@A"] as P;
+        let b = vbase(wcerr);
+        let sb: P = rd(b, BIOS_STRBUF);
+        assert_eq!(rd::<*const usize>(sb, 0), tables().console_w.as_ptr());
+        assert_eq!(rd::<usize>(sb, CON_FILE), 2);
+        assert_ne!(rd::<i32>(b, IOS_FMTFL) & UNITBUF, 0);
     }
 }

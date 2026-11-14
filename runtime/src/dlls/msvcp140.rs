@@ -528,6 +528,24 @@ extern "win64" fn uncaught_exceptions() -> i32 {
     0
 }
 
+/// `Concurrency::task_continuation_context::task_continuation_context()`
+/// (#2308), ici sur le bureau.
+///
+/// Corps d'après la MS STL publique (`stl/src/ppltasks.cpp`, branche hors
+/// `_CRT_APP`) : `_ContextCallback(false), _M_RunInline(false)`.
+///
+/// Disposition x64, notre choix, dit dans la PR : la MS STL ne publie pas
+/// `ppltasks.h`. Seul le premier mot est certain (la base, construite sans
+/// contexte ; `pplxtasks.h` du C++ REST SDK de Microsoft, sous licence MIT,
+/// y range le contexte COM). Nous le mettons à zéro et n'écrivons rien
+/// au-delà : le décalage de `_M_RunInline` n'est qu'une inférence, et une
+/// écriture de trop écraserait la pile de l'appelant. `_M_RunInline` garde
+/// donc la valeur que l'appelant y a laissée.
+unsafe extern "win64" fn task_continuation_context_ctor(this: *mut u8) -> *mut u8 {
+    (this as *mut usize).write_unaligned(0);
+    this
+}
+
 pub fn exports() -> Exports {
     crate::exports! {
         "_Mtx_init_in_situ" => fn mtx_init_in_situ,
@@ -580,6 +598,7 @@ pub fn exports() -> Exports {
         "?_Winerror_map@std@@YAHH@Z" => fn winerror_map,
         "?uncaught_exception@std@@YA_NXZ" => fn ret_false,
         "?uncaught_exceptions@std@@YAHXZ" => fn uncaught_exceptions,
+        "??0task_continuation_context@Concurrency@@AEAA@XZ" => fn task_continuation_context_ctor,
     }
 }
 
@@ -587,6 +606,16 @@ pub fn exports() -> Exports {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn task_continuation_context_par_defaut() {
+        let mut o = [0xA5u8; 24];
+        let p = o.as_mut_ptr();
+        assert_eq!(unsafe { task_continuation_context_ctor(p) }, p);
+        assert_eq!(&o[..8], &[0; 8], "contexte nul");
+        assert_eq!(&o[8..], &[0xA5; 16], "rien écrit au-delà du premier mot");
+        assert!(exports().contains_key("??0task_continuation_context@Concurrency@@AEAA@XZ"));
+    }
 
     #[test]
     fn mutex_recursif_et_simple() {

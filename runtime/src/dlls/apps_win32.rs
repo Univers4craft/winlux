@@ -904,6 +904,85 @@ pub(super) unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> u
     pidl_from_path(&crate::paths::full_windows(&p))
 }
 
+/// BROWSEINFOW/A en x64 (shlobj_core.h) : hwndOwner, pidlRoot,
+/// pszDisplayName, lpszTitle, ulFlags, lpfn, lParam, iImage.
+const BI_OWNER: usize = 0;
+const BI_ROOT: usize = 8;
+const BI_DISPLAY: usize = 16;
+const BI_TITLE: usize = 24;
+const BI_IMAGE: usize = 56;
+
+/// SHBrowseForFolderW (#2333) : la boîte de choix de dossier de Winlux
+/// (l'Explorateur en mode « dossier », comme IFileDialog avec
+/// FOS_PICKFOLDERS). Rend l'identifiant du dossier choisi (à libérer par
+/// CoTaskMemFree/ILFree), NULL si l'utilisateur annule ; pszDisplayName
+/// reçoit le nom du dossier (MAX_PATH). Le dossier de départ est
+/// pidlRoot s'il est donné. Limite : la procédure lpfn (BFFM_*) n'est pas
+/// appelée, la boîte étant dans un autre processus.
+unsafe extern "win64" fn sh_browse_for_folder_w(bi: *mut u8) -> usize {
+    browse_for_folder(bi, true)
+}
+
+/// SHBrowseForFolderA : même boîte, chaînes ANSI.
+unsafe extern "win64" fn sh_browse_for_folder_a(bi: *mut u8) -> usize {
+    browse_for_folder(bi, false)
+}
+
+unsafe fn browse_for_folder(bi: *mut u8, wide: bool) -> usize {
+    if bi.is_null() {
+        return 0;
+    }
+    let rd = |off: usize| std::ptr::read_unaligned(bi.add(off) as *const usize);
+    let owner = rd(BI_OWNER);
+    let title_ptr = rd(BI_TITLE);
+    let title = if title_ptr == 0 {
+        String::new()
+    } else if wide {
+        wstr(title_ptr as *const u16)
+    } else {
+        crate::dlls::cstr(title_ptr as *const u8)
+    };
+    let title = if title.trim().is_empty() {
+        super::comdlg32_ui::tr(
+            "Rechercher un dossier",
+            "Browse For Folder",
+            "Ordner suchen",
+            "Buscar carpeta",
+        )
+        .to_string()
+    } else {
+        title
+    };
+    let start = path_from_pidl(rd(BI_ROOT) as *const u8);
+    match super::filedialog_com::pick_folder(owner, &title, start, "") {
+        Ok((paths, _)) => match paths.first() {
+            Some(path) => browse_result(bi, wide, path),
+            None => 0,
+        },
+        Err(_) => 0,
+    }
+}
+
+/// Résultat de SHBrowseForFolder pour le dossier `path` : nom affiché dans
+/// pszDisplayName, iImage à 0, identifiant rendu.
+unsafe fn browse_result(bi: *mut u8, wide: bool, path: &str) -> usize {
+    let display = std::ptr::read_unaligned(bi.add(BI_DISPLAY) as *const usize);
+    if display != 0 {
+        let name = path.trim_end_matches('\\');
+        let name = name.rsplit('\\').next().unwrap_or(name);
+        if wide {
+            put_fixed(name, display as *mut u16, 260);
+        } else {
+            let bytes = crate::dlls::encode_ansi(name);
+            let n = bytes.len().min(259);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), display as *mut u8, n);
+            *(display as *mut u8).add(n) = 0;
+        }
+    }
+    std::ptr::write_unaligned(bi.add(BI_IMAGE) as *mut i32, 0);
+    pidl_from_path(path)
+}
+
 /// SHOpenFolderAndSelectItems (« Afficher dans le dossier » de Chrome,
 /// Electron, des lanceurs…) : l'Explorateur Winlux sur le dossier, comme
 /// `explorer.exe /select,CHEMIN`. Les éléments enfants relatifs ne sont pas
@@ -2086,6 +2165,8 @@ pub fn shell32_exports() -> Exports {
         "SHFileOperationW" => fn sh_file_operation_w,
         "SHChangeNotify" => fn sh_change_notify,
         "ILCreateFromPathW" => fn il_create_from_path_w,
+        "SHBrowseForFolderW" => fn sh_browse_for_folder_w,
+        "SHBrowseForFolderA" => fn sh_browse_for_folder_a,
         "SHGetKnownFolderIDList" => fn sh_get_known_folder_id_list,
         "ILFree" => fn il_free,
         "SHOpenFolderAndSelectItems" => fn sh_open_folder_and_select_items,
@@ -2369,6 +2450,53 @@ mod tests {
         assert!(!dir.join("dst/copie").exists());
         assert_eq!(file_operation(FO_DELETE, &[dir.join("absent")], &[], 0), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn choix_de_dossier_rend_le_nom_et_l_identifiant() {
+        // #2333 : SHBrowseForFolderW remplit pszDisplayName avec le nom du
+        // dossier et rend un identifiant que SHGetPathFromIDListW relit.
+        unsafe {
+            let mut nom = [0xffffu16; 260];
+            let mut bi = [0u8; 64];
+            std::ptr::write_unaligned(
+                bi.as_mut_ptr().add(BI_DISPLAY) as *mut usize,
+                nom.as_mut_ptr() as usize,
+            );
+            std::ptr::write_unaligned(bi.as_mut_ptr().add(BI_IMAGE) as *mut i32, 7);
+            let p = browse_result(bi.as_mut_ptr(), true, "C:\\Users\\Testeur\\Projets\\");
+            let end = nom.iter().position(|&c| c == 0).unwrap();
+            assert_eq!(String::from_utf16_lossy(&nom[..end]), "Projets");
+            assert_eq!(
+                std::ptr::read_unaligned(bi.as_ptr().add(BI_IMAGE) as *const i32),
+                0
+            );
+            if p == 0 {
+                return; // CoTaskMemAlloc absent de cette configuration
+            }
+            let mut out = [0u16; 260];
+            assert_eq!(
+                sh_get_path_from_id_list_w(p as *const u8, out.as_mut_ptr()),
+                1
+            );
+            let end = out.iter().position(|&c| c == 0).unwrap();
+            assert_eq!(
+                String::from_utf16_lossy(&out[..end]),
+                "C:\\Users\\Testeur\\Projets\\"
+            );
+            il_free(p);
+            // Version ANSI : nom en octets terminés par 0.
+            let mut nom_a = [0xffu8; 260];
+            std::ptr::write_unaligned(
+                bi.as_mut_ptr().add(BI_DISPLAY) as *mut usize,
+                nom_a.as_mut_ptr() as usize,
+            );
+            let p = browse_result(bi.as_mut_ptr(), false, "C:\\Dossier");
+            assert_eq!(&nom_a[..8], b"Dossier\0");
+            il_free(p);
+            // Sans structure : NULL, comme une annulation.
+            assert_eq!(sh_browse_for_folder_w(std::ptr::null_mut()), 0);
+        }
     }
 
     #[test]

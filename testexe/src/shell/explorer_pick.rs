@@ -47,7 +47,9 @@ static mut SAVE: bool = false;
 /// FOS_PICKFOLDERS : la boîte choisit un dossier, pas un fichier.
 static mut FOLDER: bool = false;
 static mut FLAGS: u32 = 0;
-static mut TITLE: [u8; 128] = [0; 128];
+/// Titre du programme (lpstrTitle, SetTitle) ou consigne de SHBrowseForFolder
+/// (lpszTitle), qui peut tenir une phrase entière.
+static mut TITLE: [u8; 260] = [0; 260];
 static mut TITLE_LEN: usize = 0;
 static mut FILTERS: [Filter; MAX_FILTERS] = [EMPTY_FILTER; MAX_FILTERS];
 static mut NFILTERS: usize = 0;
@@ -723,6 +725,15 @@ pub(super) unsafe fn draw(g: &mut Gfx, s: &Rect) {
     if active && GetTickCount() / 530 % 2 == 0 {
         let cx = l.name.left + 12 + text_width(NAME.get(), 13).min(w);
         fill(g.hdc, g.b, cx, l.name.top + 7, cx + crate::gfx::caret_w(1), l.name.bottom - 7, p.text);
+    }
+    // Ce que le programme demande (son titre, ou la consigne lpszTitle de
+    // SHBrowseForFolder) : la fenêtre n'a pas de barre de titre, la boîte
+    // l'affiche sur la ligne des boutons (#2400).
+    if let Some(t) = title() {
+        let w = l.ok.left - l.label_x - 16;
+        if w > 40 {
+            text_fit(g.hdc, g.f.body, 13, p.text, l.label_x, l.ok.top + 8, t, w);
+        }
     }
     if FOLDER {
         copy::button(g, &l.ok, ok_label(), true);

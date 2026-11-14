@@ -95,6 +95,14 @@ try:
     check(client("conf", "shadow", "X", "1").returncode != 0, "fichier hors liste refusé")
     check(client("conf", "lock.conf", "LOCK_AFTER", "1;rm").returncode != 0, "valeur douteuse refusée")
     check(client("conf", "cpu.conf", "CPU_PROFILE", "performance").returncode != 0, "clé système refusée")
+    # Réglage de l'appareil (#2269) : un compte standard ne réactive pas la
+    # caméra de tous sans administrateur ; sa langue d'affichage, si.
+    (work / "etc/winlux/privacy.conf").write_text("CAMERA=deny\n")
+    run = client("conf", "privacy.conf", "CAMERA", "allow", extra_env={"DISPLAY": ""})
+    check(run.returncode != 0 and "administrateur" in run.stderr, f"caméra de l'appareil refusée au compte standard : {run}")
+    check((work / "etc/winlux/privacy.conf").read_text() == "CAMERA=deny\n", "privacy.conf inchangé")
+    check(client("conf", "locale.conf", "LANG", "en", extra_env={"DISPLAY": ""}).returncode == 0,
+          "langue d'affichage réglée sans élévation par un compte standard")
     # Action utilisateur : exécutée, sortie et code transmis, dossier courant gardé.
     run = client("control", "theme-dark")
     check(run.returncode == 3 and "sortie-relais" in run.stdout, f"action relayée : {run}")
@@ -107,6 +115,19 @@ try:
     check(client("check", "bob", stdin="bob\n").returncode == 0, "bon mot de passe")
     check(client("check", "bob", stdin="faux\n").returncode != 0, "mauvais mot de passe")
     check(client("check", "alice", stdin="motdepasse\n").returncode != 0, "mot de passe d'un autre compte via check")
+    # Fenêtre UAC d'un compte standard (#2292) : le relais vérifie le mot de
+    # passe de l'administrateur choisi, sans ouvrir d'élévation au compte.
+    def admin_check(user, password):
+        import json as _j
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.connect(str(work / "root.sock"))
+            sock.sendall((_j.dumps({"op": "admin-check", "user": user, "password": password}) + "\n").encode())
+            return _j.loads(sock.makefile().readline()).get("ok")
+    check(admin_check("alice", "motdepasse") is True, "mot de passe d'administrateur accepté (admin-check)")
+    check(admin_check("alice", "faux") is False, "mauvais mot de passe d'administrateur refusé")
+    check(admin_check("bob", "bob") is False, "compte standard refusé par admin-check")
+    run = client("control", "share-add", str(work), extra_env={"DISPLAY": ""})
+    check(run.returncode != 0, "admin-check n'ouvre pas d'élévation")
     # Élévation : un compte standard ne s'élève pas avec son propre mot de passe…
     check(client("elevate", "bob", stdin="bob\n").returncode != 0, "compte standard non administrateur")
     # … mais avec celui d'un administrateur, comme le Contrôle de compte Windows.
@@ -114,6 +135,9 @@ try:
     run = client("control", "share-add", str(work), extra_env={"DISPLAY": ""})
     check(run.returncode == 3, f"partage après élévation : {run}")
     check(log.read_text().splitlines()[-1].endswith(f"share-add {work}"), "partage exécuté")
+    check(client("conf", "privacy.conf", "CAMERA", "allow", extra_env={"DISPLAY": ""}).returncode == 0,
+          "caméra de l'appareil après élévation")
+    check("CAMERA=allow" in (work / "etc/winlux/privacy.conf").read_text(), "privacy.conf écrit après élévation")
     # « Changer d'utilisateur » (#811) : la bascule échoue (code 3), le relais
     # ne doit pas répondre « réussi » malgré SIGCHLD ignoré.
     import json as _json
@@ -134,6 +158,17 @@ server = start("1005:winlux-web")
 try:
     run = client("control", "theme-dark")
     check(run.returncode != 0 and "refusé" in run.stderr, "compte hors bureau refusé")
+finally:
+    server.terminate()
+    server.wait(timeout=10)
+
+# Administratrice (#2269) : elle change la caméra de l'appareil sans UAC.
+server = start("1001:alice")
+try:
+    (work / "etc/winlux/privacy.conf").write_text("CAMERA=allow\n")
+    run = client("conf", "privacy.conf", "CAMERA", "deny", extra_env={"DISPLAY": ""})
+    check(run.returncode == 0 and "CAMERA=deny" in (work / "etc/winlux/privacy.conf").read_text(),
+          f"caméra de l'appareil coupée par un administrateur : {run}")
 finally:
     server.terminate()
     server.wait(timeout=10)

@@ -177,7 +177,7 @@ pub fn run(sfx: &[u8], exe: &Path, args: &[String], allow_download: bool) -> i32
         );
         return NEEDS_CONSENT;
     }
-    let work = std::env::temp_dir().join(format!("winlux-web-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("web");
     let _ = std::fs::remove_dir_all(&work);
     let result = (|| -> Result<i32, String> {
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;

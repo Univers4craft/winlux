@@ -568,21 +568,57 @@ extern "win64" fn iswctype(c: u32, mask: u16) -> i32 {
 extern "win64" fn iswctype_l(c: u32, mask: u16, _l: usize) -> i32 {
     iswctype(c, mask)
 }
-macro_rules! wclass_l {
-    ($($name:ident => $mask:expr),*) => {$(
-        extern "win64" fn $name(c: u32, _l: usize) -> i32 { iswctype(c, $mask) }
-    )*};
+// Écrites une à une, pas par macro : build.rs ne relève la signature x86
+// que d'un `extern "win64" fn nom(` écrit dans le source, et une fonction
+// engendrée par macro_rules! n'avait pas de passerelle 32 bits (#2367).
+extern "win64" fn iswalpha_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, ALPHA)
 }
-wclass_l!(iswalpha_l => ALPHA, iswcntrl_l => CONTROL, iswdigit_l => DIGIT, iswlower_l => LOWER,
-    iswpunct_l => PUNCT, iswspace_l => SPACE, iswupper_l => UPPER, iswxdigit_l => HEX,
-    iswblank_l => BLANK);
-macro_rules! wclass {
-    ($($name:ident => $mask:expr),*) => {$(
-        extern "win64" fn $name(c: u32) -> i32 { iswctype(c, $mask) }
-    )*};
+extern "win64" fn iswcntrl_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, CONTROL)
 }
-wclass!(iswalpha => ALPHA, iswcntrl => CONTROL, iswdigit => DIGIT, iswlower => LOWER,
-    iswpunct => PUNCT, iswxdigit => HEX, iswblank => BLANK);
+extern "win64" fn iswdigit_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, DIGIT)
+}
+extern "win64" fn iswlower_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, LOWER)
+}
+extern "win64" fn iswpunct_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, PUNCT)
+}
+extern "win64" fn iswspace_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, SPACE)
+}
+extern "win64" fn iswupper_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, UPPER)
+}
+extern "win64" fn iswxdigit_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, HEX)
+}
+extern "win64" fn iswblank_l(c: u32, _l: usize) -> i32 {
+    iswctype(c, BLANK)
+}
+extern "win64" fn iswalpha(c: u32) -> i32 {
+    iswctype(c, ALPHA)
+}
+extern "win64" fn iswcntrl(c: u32) -> i32 {
+    iswctype(c, CONTROL)
+}
+extern "win64" fn iswdigit(c: u32) -> i32 {
+    iswctype(c, DIGIT)
+}
+extern "win64" fn iswlower(c: u32) -> i32 {
+    iswctype(c, LOWER)
+}
+extern "win64" fn iswpunct(c: u32) -> i32 {
+    iswctype(c, PUNCT)
+}
+extern "win64" fn iswxdigit(c: u32) -> i32 {
+    iswctype(c, HEX)
+}
+extern "win64" fn iswblank(c: u32) -> i32 {
+    iswctype(c, BLANK)
+}
 extern "win64" fn iswalnum(c: u32) -> i32 {
     iswctype(c, ALPHA | DIGIT)
 }
@@ -1504,24 +1540,67 @@ unsafe fn find_next(h: isize, out: *mut u8, layout: FindLayout, wide: bool) -> i
     store_find(out, &d, layout, wide);
     0
 }
-macro_rules! find_variants {
-    ($($first:ident, $next:ident, $wfirst:ident, $wnext:ident: $layout:expr;)*) => {$(
-        unsafe extern "win64" fn $first(p: *const u8, out: *mut u8) -> isize {
-            if p.is_null() { *errno() = 22; return -1; }
-            find_first(&crate::dlls::cstr(p), out, $layout, false)
-        }
-        unsafe extern "win64" fn $next(h: isize, out: *mut u8) -> i32 { find_next(h, out, $layout, false) }
-        unsafe extern "win64" fn $wfirst(p: *const u16, out: *mut u8) -> isize {
-            if p.is_null() { *errno() = 22; return -1; }
-            find_first(&crate::dlls::wstr(p), out, $layout, true)
-        }
-        unsafe extern "win64" fn $wnext(h: isize, out: *mut u8) -> i32 { find_next(h, out, $layout, true) }
-    )*};
+// Écrites une à une, pas par macro : sans quoi build.rs ne relève pas leur
+// signature et un programme x86 ne les trouve pas (#2367).
+unsafe extern "win64" fn findfirst64(p: *const u8, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::cstr(p), out, FindLayout::T64, false)
 }
-find_variants! {
-    findfirst64, findnext64, wfindfirst64, wfindnext64: FindLayout::T64;
-    findfirst64i32, findnext64i32, wfindfirst64i32, wfindnext64i32: FindLayout::T64I32;
-    findfirst32, findnext32, wfindfirst32, wfindnext32: FindLayout::T32;
+unsafe extern "win64" fn findnext64(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T64, false)
+}
+unsafe extern "win64" fn wfindfirst64(p: *const u16, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::wstr(p), out, FindLayout::T64, true)
+}
+unsafe extern "win64" fn wfindnext64(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T64, true)
+}
+unsafe extern "win64" fn findfirst64i32(p: *const u8, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::cstr(p), out, FindLayout::T64I32, false)
+}
+unsafe extern "win64" fn findnext64i32(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T64I32, false)
+}
+unsafe extern "win64" fn wfindfirst64i32(p: *const u16, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::wstr(p), out, FindLayout::T64I32, true)
+}
+unsafe extern "win64" fn wfindnext64i32(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T64I32, true)
+}
+unsafe extern "win64" fn findfirst32(p: *const u8, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::cstr(p), out, FindLayout::T32, false)
+}
+unsafe extern "win64" fn findnext32(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T32, false)
+}
+unsafe extern "win64" fn wfindfirst32(p: *const u16, out: *mut u8) -> isize {
+    if p.is_null() {
+        *errno() = 22;
+        return -1;
+    }
+    find_first(&crate::dlls::wstr(p), out, FindLayout::T32, true)
+}
+unsafe extern "win64" fn wfindnext32(h: isize, out: *mut u8) -> i32 {
+    find_next(h, out, FindLayout::T32, true)
 }
 extern "win64" fn findclose(h: isize) -> i32 {
     if crate::dlls::winfile::find_close(h as usize) != 0 {

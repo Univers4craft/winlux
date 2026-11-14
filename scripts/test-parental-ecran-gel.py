@@ -33,6 +33,25 @@ WIDTH, HEIGHT = 1024, 768
 failures = 0
 
 
+def require(tools, pygtk, modules):
+    """Prérequis du test : chacun manquant est nommé avec son paquet, puis le
+    test échoue sans aucun autre contrôle ; il n'est jamais sauté (#2296)."""
+    missing = [f"{tool} (paquet {package})" for tool, package in tools if not shutil.which(tool)]
+    code = "import gi\n" + "".join(f"gi.require_version({name!r}, {version!r})\n" for name, version in modules) + \
+        "".join(f"from gi.repository import {name}\n" for name, _version in modules)
+    try:
+        probe = subprocess.run([pygtk, "-I", "-c", code], capture_output=True, timeout=60).returncode
+    except (OSError, subprocess.SubprocessError):
+        probe = 1
+    if probe != 0:
+        names = ", ".join(f"{name} {version}" for name, version in modules)
+        missing.append(f"PyGObject ({names}) pour {pygtk} (paquets python3-gi, gir1.2-gtk-3.0 ; "
+                       "ou WINLUX_TEST_PYGTK=un Python qui les a)")
+    if missing:
+        print("ÉCHEC prérequis manquant : " + " ; ".join(missing), flush=True)
+        sys.exit(1)
+
+
 def check(cond, label):
     global failures
     print(("OK   " if cond else "ÉCHEC ") + label, flush=True)
@@ -40,9 +59,7 @@ def check(cond, label):
         failures += 1
 
 
-if not shutil.which("Xvfb"):
-    print("ÉCHEC Xvfb manquant (paquet xvfb)")
-    sys.exit(1)
+require([("Xvfb", "xvfb")], PYGTK, [("Gtk", "3.0")])
 
 work = Path(tempfile.mkdtemp(prefix="winlux-parental-gel."))
 number = 90 + os.getpid() % 300

@@ -193,6 +193,9 @@ pub struct Payload {
 
 #[derive(Debug, Default)]
 pub struct Manifest {
+    /// Bundle « par machine » (`Registration PerMachine="yes"`) : demande
+    /// les droits d'administrateur (#2180).
+    pub per_machine: bool,
     pub name: String,
     pub version: String,
     pub publisher: String,
@@ -219,6 +222,7 @@ pub fn parse_manifest(xml: &str) -> Manifest {
         }
         match e.name.as_str() {
             "Registration" => {
+                m.per_machine |= e.attr("PerMachine").eq_ignore_ascii_case("yes");
                 if m.version.is_empty() {
                     m.version = e.attr("Version").to_string();
                 }
@@ -694,6 +698,7 @@ fn split_args(s: &str) -> Vec<String> {
 pub fn run(
     path: &Path,
     uninstall: bool,
+    repair: bool,
     quiet: bool,
     log_file: Option<&Path>,
     overrides: &[(String, String)],
@@ -730,13 +735,15 @@ pub fn run(
         "{} de {name} {} (WiX Burn, {} paquet(s))",
         if uninstall {
             "Désinstallation"
+        } else if repair {
+            "Réparation"
         } else {
             "Installation"
         },
         bundle.manifest.version,
         bundle.manifest.chain.len()
     ));
-    let work = std::env::temp_dir().join(format!("winlux-burn-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("burn");
     let vars = initial_vars(&bundle.manifest, overrides);
     let mut status = 0;
     // Paquets réellement installés : un bundle qui n'en installe aucun n'a
@@ -765,6 +772,21 @@ pub fn run(
                         log.log(&format!("{} : déjà absent ({r})", p.id));
                     }
                 }
+            }
+            // Paquet déjà inscrit : rien ne change sans /repair (#2181). La
+            // page « Modify » de WixStdBA n'est montrée qu'« after the
+            // bundle has been installed, to allow for repair and
+            // uninstall » : relancer un bundle installé ne le réinstalle pas.
+            PackageKind::Msi
+                if !repair
+                    && !p.product_code.is_empty()
+                    && crate::msi::install::Manifest::find(&p.product_code).is_some() =>
+            {
+                log.log(&format!(
+                    "{} : déjà installé, inchangé (/repair pour le réinstaller)",
+                    p.id
+                ));
+                installed += 1;
             }
             PackageKind::Msi => match stage(&bundle, p, &dir) {
                 Ok(Some(msi)) => {
@@ -910,8 +932,27 @@ pub fn license(path: &Path) -> Option<String> {
     license_from_ux(&ux, super::user_language())
 }
 
+/// Texte d'un fichier XML de l'interface : UTF-8 ou UTF-16, reconnu à sa
+/// marque d'ordre des octets ou, sans marque, à « < » suivi d'un octet nul
+/// (détection de l'annexe F de la recommandation XML 1.0 du W3C). Le
+/// `BootstrapperApplicationData.xml` des bundles comme vc_redist est en
+/// UTF-16 (#2126).
+fn xml_text(b: &[u8]) -> String {
+    use crate::intl::text::{decode, Encoding};
+    let enc = if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(b"<\0") {
+        Encoding::Utf16Le
+    } else if b.starts_with(&[0xFE, 0xFF]) || b.starts_with(b"\0<") {
+        Encoding::Utf16Be
+    } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        Encoding::Utf8Bom
+    } else {
+        Encoding::Utf8
+    };
+    decode(b, enc)
+}
+
 fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
-    let manifest = parse_manifest(&String::from_utf8_lossy(ux.get("0")?));
+    let manifest = parse_manifest(&xml_text(ux.get("0")?));
     let by_path = |want: &str| {
         manifest
             .payloads
@@ -919,7 +960,7 @@ fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
             .find(|p| p.file_path.replace('/', "\\").eq_ignore_ascii_case(want))
             .and_then(|p| ux.get(&p.source_path))
     };
-    let ba = String::from_utf8_lossy(by_path("BootstrapperApplicationData.xml")?).into_owned();
+    let ba = xml_text(by_path("BootstrapperApplicationData.xml")?);
     let info = elements(&ba)
         .into_iter()
         .find(|e| e.name == "WixStdbaInformation")?;
@@ -937,6 +978,26 @@ fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
     (!url.is_empty()).then(|| url.to_string())
 }
 
+/// Bundle « par machine » (#2180) ; `None` si ce n'est pas un bundle.
+pub fn per_machine(path: &Path) -> Option<bool> {
+    if !is_bundle_file(path) {
+        return None;
+    }
+    let data = crate::loader::ImageFile::open(path).ok()?;
+    let s = find_section(&data)?;
+    let mut xml = None;
+    Cabinet::parse(container(&data, &s, 0)?)
+        .ok()?
+        .extract(&mut |name, bytes| {
+            if name == "0" {
+                xml = Some(xml_text(bytes));
+            }
+            Ok(())
+        })
+        .ok()?;
+    Some(parse_manifest(&xml?).per_machine)
+}
+
 /// Lancement direct d'un bundle (double-clic, ou par un autre installeur).
 /// Options reconnues : /install, /repair, /uninstall, /quiet, /passive, /norestart.
 pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
@@ -952,6 +1013,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     Some(run(
         exe,
         has("uninstall"),
+        has("repair"),
         quiet,
         log.as_deref(),
         &overrides(args),
@@ -1095,6 +1157,35 @@ pub mod tests {
             license_from_ux(&url, 0x040C).as_deref(),
             Some("https://exemple.org/eula")
         );
+        // vc_redist : BootstrapperApplicationData.xml en UTF-16 LE avec BOM,
+        // ou sans BOM ; UTF-16 BE ; UTF-8 avec BOM.
+        let utf16 = |be: bool, bom: bool| -> Vec<u8> {
+            let text = std::str::from_utf8(&ba[..]).unwrap();
+            let mut v: Vec<u8> = if bom { vec![0xFF, 0xFE] } else { vec![] };
+            if be && bom {
+                v = vec![0xFE, 0xFF];
+            }
+            for u in text.encode_utf16() {
+                v.extend(if be { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            v
+        };
+        let mut utf8_bom = b"\xEF\xBB\xBF".to_vec();
+        utf8_bom.extend_from_slice(&ba[..]);
+        for data in [
+            utf16(false, true),
+            utf16(false, false),
+            utf16(true, true),
+            utf16(true, false),
+            utf8_bom,
+        ] {
+            let mut enc = ux.clone();
+            enc.insert("u0".into(), data);
+            assert_eq!(
+                license_from_ux(&enc, 0x040C).as_deref().map(str::trim),
+                Some("Contrat français")
+            );
+        }
         let mut none = ux;
         none.remove("u0");
         assert_eq!(license_from_ux(&none, 0x040C), None);
@@ -1358,6 +1449,14 @@ pub mod tests {
             .as_ref()
             .is_some_and(|p| std::fs::read(p).unwrap() == b"MZ-winlux-redist");
         assert!(ok, "DLL trouvée dans System32 : {found:?}");
+        // #2181 : relancé alors qu'il est installé, le bundle ne réinstalle
+        // rien ; /repair remet les fichiers en place.
+        let dll = found.unwrap();
+        std::fs::write(&dll, b"abime").unwrap();
+        assert_eq!(launch(&exe, &["/install".into(), "/quiet".into()]), Some(0));
+        let after_rerun = std::fs::read(&dll).unwrap();
+        assert_eq!(launch(&exe, &["/repair".into(), "/quiet".into()]), Some(0));
+        let after_repair = std::fs::read(&dll).unwrap();
         assert_eq!(
             launch(&exe, &["/uninstall".into(), "/quiet".into()]),
             Some(0)
@@ -1371,6 +1470,8 @@ pub mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(after_rerun, b"abime", "relancé : rien de réinstallé");
+        assert_eq!(after_repair, b"MZ-winlux-redist", "/repair : fichier remis");
         assert!(gone.is_none(), "désinstallé");
     }
 }

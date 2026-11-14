@@ -506,8 +506,11 @@ pub unsafe fn system_tick() -> bool {
     }
     LAST_POLL = now;
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
-    if GetFileAttributesA(c"Z:\\run\\winlux\\browser-chooser".as_ptr()) != u32::MAX {
-        DeleteFileA(c"Z:\\run\\winlux\\browser-chooser".as_ptr());
+    // Demande propre au compte (#2243) : son chemin vient de winlux-shell-app.
+    let mut chooser = [0u8; 96];
+    let n = GetEnvironmentVariableA(c"WINLUX_BROWSER_CHOOSER".as_ptr(), chooser.as_mut_ptr().cast(), 95) as usize;
+    if n > 0 && n < 95 && GetFileAttributesA(chooser.as_ptr().cast()) != u32::MAX {
+        DeleteFileA(chooser.as_ptr().cast());
         // open_page() relancerait system_tick() : on bascule la page ici,
         // le reste de ce passage lit déjà tout ce que la page 11 affiche.
         if !crate::wm::native_settings(11) {

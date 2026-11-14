@@ -2629,6 +2629,9 @@ static CERR: Raw<112> = Raw::new();
 static COUT_BUF: Raw<112> = Raw::new();
 static CERR_BUF: Raw<112> = Raw::new();
 const CON_FILE: usize = SB_SIZE;
+/// `wcerr` (#2229) : basic_ostream<wchar_t> sans tampon sur stderr.
+static WCERR: Raw<112> = Raw::new();
+static WCERR_BUF: Raw<112> = Raw::new();
 
 unsafe fn con_file(sb: P) -> *mut c_void {
     super::crt_stdio::std_stream(rd::<usize>(sb, CON_FILE))
@@ -2657,6 +2660,33 @@ unsafe extern "win64" fn con_sync(sb: P) -> i32 {
     }
 }
 
+/// Caractères larges vers le FILE de la CRT, en UTF-8 comme `fputwc`.
+unsafe fn con_w_write(sb: P, s: &[u16]) -> bool {
+    let text = String::from_utf16_lossy(s);
+    super::crt_stdio::write_bytes(con_file(sb), text.as_bytes()) >= 0
+}
+unsafe extern "win64" fn con_w_overflow(sb: P, c: i32) -> i32 {
+    // WEOF (0xFFFF) : rien à écrire, succès.
+    if c == 0xFFFF || c == -1 {
+        return 0;
+    }
+    if con_w_write(sb, &[c as u16]) {
+        c & 0xFFFF
+    } else {
+        0xFFFF
+    }
+}
+unsafe extern "win64" fn con_w_xsputn(sb: P, s: *const u16, n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    if con_w_write(sb, std::slice::from_raw_parts(s, n as usize)) {
+        n
+    } else {
+        0
+    }
+}
+
 fn init_std_streams() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
@@ -2670,6 +2700,13 @@ fn init_std_streams() {
         let b = vbase(CERR.ptr());
         wr(b, BIOS_TIE, COUT.ptr());
         ios_setf(b, UNITBUF);
+        // wcerr : sans tampon (unitbuf), sur stderr. Choix Winlux : pas de
+        // wcout exporté, donc aucun flux lié.
+        sb_ctor::<u16>(WCERR_BUF.ptr());
+        wr(WCERR_BUF.ptr(), 0, tables().console_w.as_ptr());
+        wr(WCERR_BUF.ptr(), CON_FILE, 2usize);
+        os_ctor::<u16>(WCERR.ptr(), WCERR_BUF.ptr(), false, 1);
+        ios_setf(vbase(WCERR.ptr()), UNITBUF);
     });
 }
 
@@ -2811,6 +2848,7 @@ struct Tables {
     sb_c: [usize; 15],
     sb_w: [usize; 15],
     console: [usize; 15],
+    console_w: [usize; 15],
     os_c: [usize; 1],
     os_w: [usize; 1],
     is_c: [usize; 1],
@@ -2877,6 +2915,10 @@ fn tables() -> &'static Tables {
         console[3] = a!(con_overflow);
         console[9] = a!(con_xsputn);
         console[13] = a!(con_sync);
+        let mut console_w = sb_table::<u16>();
+        console_w[3] = a!(con_w_overflow);
+        console_w[9] = a!(con_w_xsputn);
+        console_w[13] = a!(con_sync);
         Tables {
             facet: [a!(facet_deleting), a!(facet_incref), a!(facet_decref)],
             locimp: [a!(locimp_deleting), a!(facet_incref), a!(facet_decref)],
@@ -2945,6 +2987,7 @@ fn tables() -> &'static Tables {
             sb_c: sb_table::<u8>(),
             sb_w: sb_table::<u16>(),
             console,
+            console_w,
             os_c: [a!(os_deleting::<u8>)],
             os_w: [a!(os_deleting::<u16>)],
             is_c: [a!(is_deleting::<u8>)],
@@ -2959,7 +3002,7 @@ fn tables() -> &'static Tables {
 
 pub fn exports() -> Exports {
     init_std_streams();
-    crate::exports! {
+    let mut m = crate::exports! {
         // basic_ios
         "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IEAA@XZ" => fn bios_ctor::<u8>,
         "??0?$basic_ios@_WU?$char_traits@_W@std@@@std@@IEAA@XZ" => fn bios_ctor::<u16>,
@@ -3116,6 +3159,7 @@ pub fn exports() -> Exports {
         // Objets globaux et manipulateurs
         "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A" => data COUT,
         "?cerr@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A" => data CERR,
+        "?wcerr@std@@3V?$basic_ostream@_WU?$char_traits@_W@std@@@1@A" => data WCERR,
         "?setw@std@@YA?AU?$_Smanip@_J@1@_J@Z" => fn setw,
         "?setprecision@std@@YA?AU?$_Smanip@_J@1@_J@Z" => fn setprecision,
         "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z" => fn fiopen,
@@ -3164,6 +3208,15 @@ pub fn exports() -> Exports {
         "?widen@?$ctype@_W@std@@QEBA_WD@Z" => fn ctype_w_widen,
         "??0?$codecvt@_WDU_Mbstatet@@@std@@QEAA@_K@Z" => fn codecvt_w_ctor,
         "??1?$codecvt@_WDU_Mbstatet@@@std@@MEAA@XZ" => fn codecvt_w_dtor,
+        // Membres protégés de codecvt<wchar_t>, appelés directement par une
+        // facette dérivée de l'appli (#2229) : ceux de la table virtuelle.
+        "?do_always_noconv@?$codecvt@_WDU_Mbstatet@@@std@@MEBA_NXZ" => fn cvt_false,
+        "?do_max_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ" => fn cvt_w_max_length,
+        "?do_encoding@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHXZ" => fn cvt_w_encoding,
+        "?do_in@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEA_W3AEAPEA_W@Z" => fn cvt_w_do_in,
+        "?do_out@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEB_W1AEAPEB_WPEAD3AEAPEAD@Z" => fn cvt_w_do_out,
+        "?do_unshift@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z" => fn cvt_w_do_unshift,
+        "?do_length@?$codecvt@_WDU_Mbstatet@@@std@@MEBAHAEAU_Mbstatet@@PEBD1_K@Z" => fn cvt_length,
         "?in@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z" => fn cvt_c_in,
         "?out@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEBD1AEAPEBDPEAD3AEAPEAD@Z" => fn cvt_c_out,
         "?unshift@?$codecvt@DDU_Mbstatet@@@std@@QEBAHAEAU_Mbstatet@@PEAD1AEAPEAD@Z" => fn cvt_c_unshift_pub,
@@ -3172,8 +3225,12 @@ pub fn exports() -> Exports {
         "?put@?$time_put@DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@QEBA?AV?$ostreambuf_iterator@DU?$char_traits@D@std@@@2@V32@AEAVios_base@2@DPEBUtm@@PEBD3@Z" => fn time_put_put,
         "_Strcoll" => fn strcoll,
         "_Strxfrm" => fn strxfrm,
-    }
+    };
+    m.extend(complements::exports());
+    m
 }
+
+mod complements;
 
 #[cfg(test)]
 mod tests;
