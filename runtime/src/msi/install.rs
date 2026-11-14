@@ -108,7 +108,12 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
     let x64 = db.is_64bit();
     let pf32 = "C:\\Program Files (x86)\\".to_string();
     let pf64 = "C:\\Program Files\\".to_string();
-    let roaming = "C:\\AppData\\Roaming\\";
+    // Dossiers du profil sous C:\Users\<compte>, comme Windows Installer
+    // (documentation : « the full path of the Roaming folder for the
+    // current user »…) et comme le reste du runtime (#2404).
+    let profile = format!("{}\\", crate::paths::profile_windows());
+    let roaming = format!("{profile}AppData\\Roaming\\");
+    let roaming = roaming.as_str();
     let menu = format!("{roaming}Microsoft\\Windows\\Start Menu\\");
     let folders: Vec<(&str, String)> = vec![
         ("ROOTDRIVE", "C:\\".into()),
@@ -132,12 +137,13 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("System64Folder", SYSTEM_FOLDER_64.into()),
         ("System16Folder", "C:\\windows\\system\\".into()),
         ("FontsFolder", "C:\\windows\\Fonts\\".into()),
-        ("TempFolder", "C:\\AppData\\Local\\Temp\\".into()),
+        // « Windows Installer uses the GetTempPath function » (TempFolder).
+        ("TempFolder", crate::dlls::kernel32::temp_path()),
         ("AppDataFolder", roaming.into()),
-        ("LocalAppDataFolder", "C:\\AppData\\Local\\".into()),
+        ("LocalAppDataFolder", format!("{profile}AppData\\Local\\")),
         ("CommonAppDataFolder", "C:\\ProgramData\\".into()),
-        ("PersonalFolder", "C:\\Documents\\".into()),
-        ("MyPicturesFolder", "C:\\Pictures\\".into()),
+        ("PersonalFolder", format!("{profile}Documents\\")),
+        ("MyPicturesFolder", format!("{profile}Pictures\\")),
         ("DesktopFolder", desktop_dir()),
         ("StartMenuFolder", menu.clone()),
         ("ProgramMenuFolder", format!("{menu}Programs\\")),
@@ -150,7 +156,7 @@ pub(super) fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
             "SendToFolder",
             format!("{roaming}Microsoft\\Windows\\SendTo\\"),
         ),
-        ("FavoritesFolder", "C:\\Favorites\\".into()),
+        ("FavoritesFolder", format!("{profile}Favorites\\")),
         (
             "TemplateFolder",
             format!("{roaming}Microsoft\\Windows\\Templates\\"),
