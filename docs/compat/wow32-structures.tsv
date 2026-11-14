@@ -194,6 +194,8 @@ netfw2.rs	Rule	x86	objet COM du runtime (INetFwRule) ; un programme x86 le reço
 netfw2.rs	Static	x86	objets COM du runtime (INetFwPolicy2, INetFwRules) ; mandataires x86 décrits dans wow32/com_netfw.rs (#1919)
 netlistmgr.rs	Enum	interne	objet COM du runtime (énumération vide de réseaux) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
 netlistmgr.rs	Manager	interne	objet COM du runtime (NetworkListManager) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1844)
+network_information.rs	Object	a-verifier	objet WinRT NetworkInformation (#2215), servi aux programmes x64
+network_information.rs	View	a-verifier	objet WinRT NetworkInformation (#2215), servi aux programmes x64
 ole32.rs	ComStream	a-verifier	
 ole32.rs	ContextVtbl	a-verifier	
 ole32.rs	Factory	a-verifier	
