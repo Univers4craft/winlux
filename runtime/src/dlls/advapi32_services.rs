@@ -21,6 +21,8 @@ const SERVICE_START_PENDING: u32 = 2;
 const SERVICE_STOP_PENDING: u32 = 3;
 const SERVICE_RUNNING: u32 = 4;
 const SERVICE_CONTROL_STOP: u32 = 1;
+const SERVICE_WIN32_SHARE_PROCESS: u32 = 0x20;
+const SERVICE_AUTO_START: u32 = 2;
 const SERVICE_CONTROL_INTERROGATE: u32 = 4;
 
 struct ServiceRecord {
@@ -262,6 +264,10 @@ fn reported_state(name: &str) -> Option<u32> {
 }
 
 fn refresh(record: &mut ServiceRecord) {
+    // Service système (#1845) : état tenu en mémoire, aucun processus.
+    if system_service(&record.name).is_some() {
+        return;
+    }
     // Pilote Windows (#1532) : jamais de processus, état tenu par Winlux.
     if is_driver(record.service_type) {
         record.state = if driver_started(record) {
@@ -445,7 +451,10 @@ unsafe fn create_service(
         }
     }
     let key = raw.to_lowercase();
-    if lock(services()).contains_key(&key) || load_persisted(&key).is_some() {
+    if lock(services()).contains_key(&key)
+        || load_persisted(&key).is_some()
+        || system_service(&key).is_some()
+    {
         crate::process::set_last_error(ERROR_SERVICE_EXISTS as u32);
         return 0;
     }
@@ -629,6 +638,41 @@ pub(crate) fn install_driver_service(s: &crate::dlls::drivers::DriverService) ->
     Ok(())
 }
 
+/// Services système de Windows que des installeurs arrêtent puis
+/// redémarrent autour de leur travail (`-temp-down-service`, #1845) : nom de
+/// service (identifiant de l'API) et nom affiché, rédigé par Winlux. Leur
+/// rôle est tenu par Winlux lui-même (pile audio, périphériques d'entrée) :
+/// ils sont toujours présents et démarrés, et un arrêt ou un démarrage
+/// demandé par un programme ne change que l'état vu par ce programme.
+const SYSTEM_SERVICES: &[(&str, &str)] = &[
+    ("audiosrv", "Audio"),
+    ("hidserv", "Périphériques d'entrée (HID)"),
+];
+
+/// Nom affiché d'un service système de [`SYSTEM_SERVICES`].
+fn system_service(name: &str) -> Option<&'static str> {
+    SYSTEM_SERVICES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, d)| *d)
+}
+
+/// Enregistrement d'un service système : processus partagé, démarrage
+/// automatique, en cours d'exécution, jamais inscrit dans le registre.
+fn system_record(key: &str, display: &str) -> ServiceRecord {
+    ServiceRecord {
+        name: key.to_string(),
+        display: display.to_string(),
+        command: "C:\\Windows\\System32\\svchost.exe".to_string(),
+        service_type: SERVICE_WIN32_SHARE_PROCESS,
+        start_type: SERVICE_AUTO_START,
+        state: SERVICE_RUNNING,
+        win32_exit_code: 0,
+        process_id: 0,
+        child: None,
+    }
+}
+
 fn open_service(manager: usize, name: Option<String>) -> usize {
     if !matches!(handle(manager), Some(ScmHandle::Manager)) {
         crate::process::set_last_error(6);
@@ -642,6 +686,8 @@ fn open_service(manager: usize, name: Option<String>) -> usize {
     if !lock(services()).contains_key(&key) {
         if let Some(r) = load_persisted(&key) {
             lock(services()).insert(key.clone(), r);
+        } else if let Some(display) = system_service(&key) {
+            lock(services()).insert(key.clone(), system_record(&key, display));
         } else {
             // WINLUX_TRACE : le nom demandé et l'erreur rendue, pour les
             // installeurs qui s'arrêtent sur un service absent (#1659, #1699).
@@ -677,6 +723,13 @@ fn start_service(service: usize, extra: Vec<String>) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if system_service(&name).is_some() {
+        if r.state == SERVICE_RUNNING {
+            return fail(ERROR_SERVICE_ALREADY_RUNNING as u32);
+        }
+        r.state = SERVICE_RUNNING;
+        return 1;
+    }
     if is_driver(r.service_type) {
         return match start_driver(r) {
             Ok(()) => 1,
@@ -814,6 +867,13 @@ pub unsafe extern "win64" fn control_service(service: usize, control: u32, statu
         SERVICE_CONTROL_STOP => {
             if r.state != SERVICE_RUNNING {
                 return fail(ERROR_SERVICE_NOT_ACTIVE as u32);
+            }
+            if system_service(&name).is_some() {
+                r.state = SERVICE_STOPPED;
+                if !status.is_null() {
+                    write_status_basic(r, status);
+                }
+                return 1;
             }
             if is_driver(r.service_type) {
                 let _ = std::fs::remove_file(driver_state_path(&name));
@@ -959,6 +1019,9 @@ pub unsafe extern "win64" fn delete_service(service: usize) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if system_service(&name).is_some() {
+        return fail(ERROR_ACCESS_DENIED as u32);
+    }
     if r.state == SERVICE_RUNNING {
         return fail(1072);
     }
@@ -2253,6 +2316,52 @@ mod tests {
             parse_command_line(r#"agent.exe a\"b"#),
             vec!["agent.exe", "a\"b"]
         );
+    }
+
+    #[test]
+    fn services_systeme_arretes_puis_redemarres_par_un_installeur() {
+        // #1845 : driverinstalltool d'iCUE ouvre AudioSrv et hidserv pour les
+        // arrêter le temps d'installer un pilote, puis les redémarre.
+        let manager = unsafe { open_sc_manager_a(std::ptr::null(), std::ptr::null(), 0xf003f) };
+        assert_ne!(manager, 0);
+        for raw in ["AudioSrv", "hidserv"] {
+            let name: Vec<u16> = raw.encode_utf16().chain([0]).collect();
+            let service = unsafe { open_service_w(manager, name.as_ptr(), 0xf01ff) };
+            assert_ne!(service, 0, "{raw}");
+            let mut status = [0u8; 36];
+            unsafe {
+                assert_eq!(query_service_status(service, status.as_mut_ptr()), 1);
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_RUNNING
+                );
+                assert_eq!(u32::from_le_bytes(status[0..4].try_into().unwrap()), 0x20);
+                assert_eq!(
+                    control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_STOPPED
+                );
+                assert_eq!(start_service_w(service, 0, std::ptr::null()), 1);
+                assert_eq!(start_service_w(service, 0, std::ptr::null()), 0);
+                assert_eq!(query_service_status(service, status.as_mut_ptr()), 1);
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_RUNNING
+                );
+                // Jamais supprimé, ni recréé par un installeur.
+                assert_eq!(delete_service(service), 0);
+                assert_eq!(close_service_handle(service), 1);
+            }
+        }
+        let absent: Vec<u16> = "WinluxServiceAbsent".encode_utf16().chain([0]).collect();
+        assert_eq!(
+            unsafe { open_service_w(manager, absent.as_ptr(), 0xf01ff) },
+            0
+        );
+        unsafe { close_service_handle(manager) };
     }
 
     #[test]

@@ -58,11 +58,29 @@ check(not any("brightness" in key for key in keys), "luminosité affichée sans 
 check("power-screen-ac" in keys and "power-sleep-ac" in keys and "power-suspend" in keys, "réglages secteur gardés")
 laptop_fields, laptop_actions = items(fields, actions, (True, True, True))
 check(laptop_fields == fields and laptop_actions == actions, "portable : tout est affiché")
+# #2150 : « Veille prolongée » seulement quand le noyau a une zone de reprise.
+ready = settings["hibernate_ready"]
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    check(ready(root) is False, "veille prolongée prête sans /sys/power")
+    (root / "sys/power").mkdir(parents=True)
+    (root / "sys/power/state").write_text("freeze mem disk\n")
+    (root / "sys/power/resume").write_text("0:0\n")
+    check(ready(root) is False, "veille prolongée prête sans zone de reprise (0:0)")
+    (root / "sys/power/resume").write_text("259:2\n")
+    check(ready(root) is True, "zone de reprise configurée : veille prolongée prête")
+    (root / "sys/power/state").write_text("freeze mem\n")
+    check(ready(root) is False, "noyau sans « disk » : veille prolongée prête")
+_, no_hibernate = items([], actions, (True, True, True), False)
+check("power-hibernate" not in [key for _, key in no_hibernate] and "power-suspend" in [key for _, key in no_hibernate],
+      "bouton « Veille prolongée » affiché alors qu'elle n'est pas prête")
+_source = (HERE / "winlux-settings.py").read_text()
+check("hibernate_ready()" in _source
+      and 'if ready or key != "hibernate"' in _source, "page 23 : veille prolongée filtrée (bouton, capot, bouton d'alimentation)")
 check(settings["_TR"]["Alimentation"] == ("Power", "Energía", "Energie"), "« Alimentation » en quatre langues")
 source = (HERE / "winlux-settings.py").read_text()
 check('if not power_hardware()[0]: PAGES[23] = _t("Alimentation")' in source, "titre sans batterie")
-check("power_page_items(fields, [], hardware, idle_sleep_available(hardware[0]))" in source
-      and "power_page_items([], actions, hardware, idle_sleep_available(hardware[0]))" in source,
+check(source.count("power_page_items(") >= 3 and "idle_sleep=idle_sleep_available(" in source and "hibernate_ready()" in source,
       "page 23 filtrée à l'affichage")
 
 # #2151 : en VM sans batterie, le démon ne met jamais en veille sur inactivité ;
@@ -77,7 +95,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (root / "proc/cpuinfo").write_text("processor\t: 0\nflags\t\t: fpu vme sse2 hypervisor\n")
     check(idle(False, root) is False, "VM sans batterie : pas de veille sur inactivité")
     check(idle(True, root) is True, "VM avec batterie : délais de veille gardés")
-vm_fields, vm_actions = items(fields, actions, (False, False, False), False)
+vm_fields, vm_actions = items(fields, actions, (False, False, False), idle_sleep=False)
 vm_keys = [key for _, key in vm_fields] + [key for _, key in vm_actions]
 check(not any(key.startswith("power-sleep-") for key in vm_keys), f"VM sans batterie : délais de veille affichés {vm_keys}")
 check("power-suspend" in vm_keys and "power-screen-ac" in vm_keys, "VM sans batterie : « Mettre en veille » et écran gardés")

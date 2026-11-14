@@ -635,13 +635,29 @@ def idle_sleep_available(battery, root=None):
     return not any(line.startswith("flags") and "hypervisor" in line.split() for line in cpuinfo.splitlines())
 
 
-def power_page_items(fields, actions, hardware, idle_sleep=True):
+def hibernate_ready(root=None):
+    """Veille prolongée réellement possible : le noyau la propose (« disk »
+    dans /sys/power/state) et une zone de reprise est configurée
+    (/sys/power/resume différent de 0:0), comme `winlux --power`
+    (capabilities_at). #2150 : sinon le bouton échouait toujours."""
+    base = Path(root or os.environ.get("WINLUX_HW_ROOT", "/"))
+    try:
+        states = (base / "sys/power/state").read_text().split()
+        resume = (base / "sys/power/resume").read_text().strip()
+    except OSError:
+        return False
+    return "disk" in states and resume not in ("", "0:0")
+
+
+def power_page_items(fields, actions, hardware, hibernate=True, idle_sleep=True):
     """Champs et boutons de la page Alimentation selon le matériel détecté.
 
     idle_sleep faux (VM sans batterie, #2151) : les délais « Veille » sont
     masqués ; « Mettre en veille » reste, la veille demandée marche."""
     battery, lid, backlight = hardware
     def keep(key):
+        if not hibernate and key == "power-hibernate":
+            return False
         if not idle_sleep and key.startswith("power-sleep-"):
             return False
         if not battery and (key == "battery" or key.endswith("-dc")):
@@ -1025,7 +1041,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
             hardware = power_hardware()
-            _, actions = power_page_items([], actions, hardware, idle_sleep_available(hardware[0]))
+            _, actions = power_page_items([], actions, hardware, hibernate_ready(), idle_sleep=idle_sleep_available(hardware[0]))
             choices = [(title, action) for title, action in actions if action.startswith(POWER_CHOICES)]
             actions = [(title, action) for title, action in actions if not action.startswith(POWER_CHOICES)]
         if self.page == 11:
@@ -1160,7 +1176,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.label(_t("Boutons et capot"), "section")
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             card.get_style_context().add_class("card")
-            items = [(key, _t(label)) for key, label in POWER_BUTTON_ACTIONS]
+            # #2150 : « veille prolongée » seulement quand elle est prête ; une
+            # valeur déjà choisie reste affichée (choice_row l'ajoute).
+            ready = hibernate_ready()
+            items = [(key, _t(label)) for key, label in POWER_BUTTON_ACTIONS if ready or key != "hibernate"]
             for action, key in (("power-lid", "power_lid"), ("power-button", "power_button")):
                 if action in names:
                     self.choice_row(card, names[action], items, status.get(key) or "sleep", f"power-set-{action[len('power-'):]}-")
@@ -1356,7 +1375,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         fields = FIELDS.get(self.page, [])
         if self.page == 23:
             hardware = power_hardware()
-            fields, _ = power_page_items(fields, [], hardware, idle_sleep_available(hardware[0]))
+            fields, _ = power_page_items(fields, [], hardware, idle_sleep=idle_sleep_available(hardware[0]))
         def shown(key):
             value = status.get(key)
             # Échelle non réglée : automatique (et non « Indisponible »), en %.

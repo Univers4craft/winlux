@@ -709,3 +709,32 @@ void main(uint3 id : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID,
         assert!(g.contains(want), "« {want} » absent :\n{}", numbered(g));
     }
 }
+
+/// Échantillonneur déclaré avec son bloc d'états (syntaxe Direct3D 10),
+/// comme dans le HLSL qu'OBS Studio tire de ses fichiers .effect (#2288).
+#[test]
+fn sampler_avec_bloc_d_etats() {
+    let src = "static const bool deja_glsl = false;\n\n\
+               uniform Texture2D image;\n\n\n\
+               SamplerState echant {\n\tFilter = Linear;\n\n\tAddressU = Clamp;\n\n\tAddressV = Wrap;\n\n};\n\
+               SamplerState paire[2] { MaxAnisotropy = 4; BorderColor = { 0, 0, 0, 1 }; };\n\
+               struct Entree { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n\
+               float4 main(Entree e) : SV_Target\n\
+               {\n\treturn image.Sample(echant, e.uv) + image.Sample(paire[1], e.uv);\n}\n";
+    let ps = build(src, "main", "ps_4_0");
+    assert!(ps.glsl.contains("uniform sampler2D"), "{}", ps.glsl);
+    assert!(!ps.pairs.is_empty());
+    // Un bloc non fermé reste une erreur, sur la ligne de la déclaration.
+    let mut inc = |_: &str, _: bool| None;
+    let e = compile(
+        "SamplerState s { Filter = Linear;\n",
+        &[],
+        &mut inc,
+        "main",
+        "ps_4_0",
+        0,
+    )
+    .err()
+    .expect("bloc non fermé accepté");
+    assert!(e.contains("« } » attendu"), "{e}");
+}
