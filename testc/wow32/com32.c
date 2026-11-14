@@ -446,6 +446,48 @@ int main(void)
     sys_size_fn sys_size = (sys_size_fn)(void *)GetProcAddress(ux, "GetThemeSysSize");
     CHECK(sys_size(NULL, SM_CXVSCROLL) == GetSystemMetrics(SM_CXVSCROLL), "GetThemeSysSize");
 
+    /* NetworkListManager, demandé par l'outil de déploiement d'Office
+     * (#2459) : objet du runtime rendu par un mandataire x86. Appels par
+     * la table, indices de la documentation d'INetworkListManager. */
+    {
+        static const GUID clsid_nlm = { 0xdcb00c01, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_nlm = { 0xdcb00000, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_nlm_events = { 0xdcb00001, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_cpc = { 0xb196b284, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 } };
+        typedef HRESULT (STDMETHODCALLTYPE *qi_fn)(void *, REFIID, void **);
+        typedef ULONG (STDMETHODCALLTYPE *rel_fn)(void *);
+        typedef HRESULT (STDMETHODCALLTYPE *ptr_fn)(void *, void *);
+        typedef HRESULT (STDMETHODCALLTYPE *enum_fn)(void *, int, void **);
+        typedef HRESULT (STDMETHODCALLTYPE *next_fn)(void *, ULONG, void **, ULONG *);
+        typedef HRESULT (STDMETHODCALLTYPE *find_fn)(void *, REFIID, void **);
+        void *nlm = NULL;
+        CHECK(CoCreateInstance(&clsid_nlm, NULL, CLSCTX_ALL, &iid_nlm, &nlm) == S_OK && nlm != NULL,
+              "CoCreateInstance(NetworkListManager)");
+        void **vt = nlm ? *(void ***)nlm : NULL;
+        DWORD conn = 0xFFFFFFFF;
+        CHECK(vt && ((ptr_fn)vt[13])(nlm, &conn) == S_OK && conn != 0xFFFFFFFF, "INetworkListManager::GetConnectivity");
+        SHORT on = 7;
+        CHECK(vt && ((ptr_fn)vt[12])(nlm, &on) == S_OK && (on == 0 || on == -1), "INetworkListManager::get_IsConnected");
+        void *en = NULL;
+        CHECK(vt && ((enum_fn)vt[7])(nlm, 3, &en) == S_OK && en != NULL, "INetworkListManager::GetNetworks");
+        void *item = NULL;
+        ULONG got = 9;
+        CHECK(en && ((next_fn)(*(void ***)en)[8])(en, 1, &item, &got) == S_FALSE && got == 0 && item == NULL,
+              "IEnumNetworks::Next (liste vide)");
+        if (en)
+            ((rel_fn)(*(void ***)en)[2])(en);
+        void *cpc = NULL, *cp = NULL;
+        CHECK(vt && ((qi_fn)vt[0])(nlm, &iid_cpc, &cpc) == S_OK && cpc != NULL, "QI IConnectionPointContainer");
+        CHECK(cpc && ((find_fn)(*(void ***)cpc)[4])(cpc, &iid_nlm_events, &cp) == S_OK && cp != NULL,
+              "FindConnectionPoint(INetworkListManagerEvents)");
+        if (cp)
+            ((rel_fn)(*(void ***)cp)[2])(cp);
+        if (cpc)
+            ((rel_fn)(*(void ***)cpc)[2])(cpc);
+        if (nlm)
+            ((rel_fn)vt[2])(nlm);
+    }
+
     CoUninitialize();
     printf("com32 : COM 32 bits, %d vérifications passées. Tout est correct\n", step);
     return 0;

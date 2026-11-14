@@ -80,11 +80,11 @@ pub(super) struct Iface {
 }
 
 impl Iface {
-    fn count(&'static self) -> usize {
+    pub(super) fn count(&'static self) -> usize {
         self.parent.map_or(0, |p| p.count()) + self.methods.len()
     }
 
-    fn method(&'static self, idx: usize) -> Option<&'static [A]> {
+    pub(super) fn method(&'static self, idx: usize) -> Option<&'static [A]> {
         let base = self.parent.map_or(0, |p| p.count());
         if idx < base {
             self.parent.and_then(|p| p.method(idx))
@@ -1018,10 +1018,11 @@ static ALL: &[&Iface] = &[
     &IENUMIDLIST,
 ];
 
-fn by_iid(iid: &Guid) -> Option<&'static Iface> {
+pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_nlm::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1144,7 +1145,7 @@ fn vtable32(iface: &'static Iface) -> u32 {
     maps(|m| *m.vt32.entry(key(iface)).or_insert(at))
 }
 
-fn slots(kinds: &[A]) -> usize {
+pub(super) fn slots(kinds: &[A]) -> usize {
     kinds
         .iter()
         .map(|k| match k {
