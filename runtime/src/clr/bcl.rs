@@ -442,6 +442,22 @@ fn console_dispatch(method: &str, args: &[Value], params: &[ElementType]) -> Opt
         "get_Out" | "get_Error" | "get_In" => Some(Value::Null),
         "SetOut" | "SetError" | "SetIn" => Some(Value::I32(0)),
         "Beep" => Some(Value::I32(0)),
+        // Console.CursorLeft (#2233) : X de dwCursorPosition, ou moins
+        // l'erreur Win32 quand la sortie n'est pas une console.
+        "Colonne" => {
+            let mut info = [0u16; 11];
+            let ok = unsafe {
+                crate::dlls::kernel32_misc::get_console_screen_buffer_info(
+                    (-11isize) as usize,
+                    info.as_mut_ptr(),
+                )
+            };
+            Some(Value::I32(if ok != 0 {
+                info[2] as i32
+            } else {
+                -(crate::process::last_error() as i32)
+            }))
+        }
         _ => missing("Console", method),
     }
 }
@@ -515,6 +531,14 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "get_Is64BitProcess" => Some(Value::I32(1)),
         "get_Is64BitOperatingSystem" => Some(Value::I32(1)),
         "GetCommandLineArgs" => Some(Value::Null),
+        // Environment.GetEnvironmentVariables (#2233) : le bloc du processus,
+        // le même que GetEnvironmentStringsW.
+        "BlocEnvironnement" => {
+            let vars: Vec<String> = std::env::vars_os()
+                .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
+                .collect();
+            Some(alloc_string_array(&vars))
+        }
         _ => missing("Environment", method),
     }
 }

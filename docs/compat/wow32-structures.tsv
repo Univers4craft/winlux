@@ -148,6 +148,7 @@ filedialog_com.rs	FakeSink	interne	test unitaire (faux IFileDialogEvents, #1288)
 games_win32.rs	WsaBuf	a-verifier	
 gdi32.rs	BitmapObject	a-verifier	
 gdi32.rs	LogBrush	a-verifier	
+globalization_prefs.rs	Iter	a-verifier	objet WinRT GlobalizationPreferences (#2172), servi aux programmes x64
 gui.rs	CreateStructA	a-verifier	
 gui.rs	Msg	a-verifier	
 gui.rs	PaintStruct	a-verifier	
