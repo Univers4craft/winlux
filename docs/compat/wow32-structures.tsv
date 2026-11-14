@@ -316,5 +316,5 @@ ws2_32.rs	WinServent	x86	wow64.c n° 74 (SERVENT de 16 octets sous 4 Go)
 ws2_32.rs	WsaBuf	x86	WSABUF de 8 octets lu par read_wsabuf (WSASend/WSARecv)
 ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
-xaudio2.rs	Cb	a-verifier	
-xaudio2.rs	Voice	a-verifier	
+xaudio2.rs	Cb	interne	rappel IXAudio2VoiceCallback des tests unitaires, x64 seulement
+xaudio2.rs	Voice	x86	voix XAudio2 sans IUnknown : table x86 deux ABI dans xaudio2_x86.rs, seule la table (offset 0) est lue par le programme (#2428) ; xaudio32.c
