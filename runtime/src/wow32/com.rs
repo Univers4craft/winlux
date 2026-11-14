@@ -1903,6 +1903,9 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        // ASSOCIATIONELEMENT lu à la disposition x86 par le runtime (#2475) ;
+        // l'IQueryAssociations rendu suit sa description quand elle existe.
+        ("shell32", "AssocCreateForClasses") => k!(I, I, Iid, OutQ),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
@@ -2028,6 +2031,10 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+        // #2475 : 16 octets (stdcall.tsv), interface rendue d'après son IID.
+        let (k, r) = api_kinds("shell32", "AssocCreateForClasses").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(r.is_none() && matches!(k[2..], [Iid, OutQ]));
     }
 
     /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
