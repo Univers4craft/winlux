@@ -530,12 +530,21 @@ started=$(date +%s)
 # l'octet de poids faible (0x780148E0 devenait « code 224 »). Le runtime
 # l'écrit ici en hexadécimal, sans le transmettre aux programmes qu'il lance.
 exit_file=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || exit_file=
-WINLUX_EXIT_CODE_FILE=$exit_file "$winlux" "$exe" "$@" 2>"$log"
+# Marque d'une exception non gérée (#2272) : le runtime y écrit quand le
+# programme plante, jamais quand il sort de lui-même.
+crash_file=$(mktemp "${TMPDIR:-/tmp}/winlux-plantage.XXXXXX" 2>/dev/null) || crash_file=
+WINLUX_EXIT_CODE_FILE=$exit_file WINLUX_CRASH_MARK_FILE=$crash_file "$winlux" "$exe" "$@" 2>"$log"
 status=$?
 code=$status
+full_code=
 if [ -n "$exit_file" ]; then
     full_code=$(read_code_file "$exit_file")
     [ -z "$full_code" ] || code=$full_code
+fi
+crashed=0
+if [ -n "$crash_file" ]; then
+    [ -s "$crash_file" ] && crashed=1
+    rm -f "$crash_file"
 fi
 # 0x100, 0x200… : statut Linux 0, mais échec pour Windows.
 if [ "$status" -eq 0 ] && [ "$code" != 0 ] && [ "$code" != 0x00000000 ]; then status=1; fi
@@ -543,6 +552,15 @@ if [ "$status" -eq 0 ] && [ "$code" != 0 ] && [ "$code" != 0x00000000 ]; then st
 # Ctrl+C) : 128 + numéro du signal, sans code Windows écrit par le runtime.
 # Ce n'est pas un plantage, rien à afficher (#1490).
 case $status:$code in 129:129|130:130|143:143) exit "$status" ;; esac
+# Sortie volontaire (ExitProcess, exit) en code non nul : le runtime a écrit
+# le code, aucune exception, aucun composant manquant. Sous Windows rien ne
+# s'affiche (1602 annulé, 3010, « déjà lancé »…) ; le code reste au journal
+# (#2272).
+if [ "$status" -ne 0 ] && [ -n "$full_code" ] && [ "$crashed" = 0 ] && [ -n "$crash_file" ] \
+    && ! grep -q -e 'DLL introuvable : ' -e 'fonction introuvable : ' "$log" 2>/dev/null; then
+    printf 'winlux-open : %s terminé de lui-même, code %s\n' "$(basename -- "$exe")" "$full_code" >>"$log" 2>/dev/null
+    exit "$status"
+fi
 if [ "$status" -ne 0 ]; then
     # Un plantage enregistré depuis le lancement : la boîte « Signaler un
     # problème » explique la cause et propose l'envoi (jamais automatique).

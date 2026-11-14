@@ -369,6 +369,8 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
     }
     print_debug_tail();
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
+    // Plantage, pas une sortie voulue : winlux-open le signalera (#2272).
+    crate::dlls::kernel32::record_crash();
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 /// Type (nom décoré) et valeur d'une exception C++ MSVC x64 : `throw hr;` de
