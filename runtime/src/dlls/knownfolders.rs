@@ -8,8 +8,9 @@
 const S_OK: i32 = 0;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
-/// HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : dossier connu inconnu.
-const E_NOTFOUND: i32 = 0x8007_0002u32 as i32;
+/// Dossier connu sans chemin (KF_CATEGORY_VIRTUAL), documenté pour
+/// SHGetKnownFolderPath.
+const E_FAIL: i32 = 0x8000_4005u32 as i32;
 const CSIDL_FLAG_CREATE: i32 = 0x8000;
 const KF_FLAG_CREATE: u32 = 0x8000;
 
@@ -30,6 +31,12 @@ enum Place {
     /// (CSIDL_PROGRAM_FILES, CSIDL_PROGRAM_FILES_COMMON, FOLDERID_ProgramFiles,
     /// FOLDERID_ProgramFilesCommon) (#2002).
     ProgramFiles(&'static str),
+    /// Fichier du profil (bibliothèque `.library-ms`) : jamais créé comme
+    /// un dossier.
+    ProfileFile(&'static str),
+    /// Dossier virtuel (Panneau de configuration, Ordinateur…) : pas de
+    /// chemin, SHGetKnownFolderPath rend E_FAIL.
+    Virtual,
 }
 
 /// CSIDL documentés → emplacement ; 0x13, 0x1b, 0x1f, 0x2d, 0x30, 0x38 et
@@ -84,7 +91,11 @@ fn csidl_place(csidl: i32) -> Option<Place> {
     })
 }
 
-/// FOLDERID_* les plus utilisés → emplacement.
+/// FOLDERID_* → emplacement. Les GUID et chemins par défaut viennent de la
+/// page publique KNOWNFOLDERID (Microsoft Learn, win32 docs,
+/// desktop-src/shell/knownfolderid.md) : les 124 identifiants qu'elle
+/// documente sont servis (#2477), sauf ceux de OneDrive, absents tant
+/// qu'aucun compte n'est configuré.
 const KNOWN_FOLDERS: &[(&str, Place)] = &[
     (
         "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",
@@ -168,10 +179,6 @@ const KNOWN_FOLDERS: &[(&str, Place)] = &[
         Place::Fixed("C:\\Windows\\System32"),
     ),
     (
-        "FD228CB7-AE11-4AE3-864C-16F3910AB8B0",
-        Place::Fixed("C:\\Windows\\Fonts"),
-    ),
-    (
         "DFDF76A2-C82A-4D63-906A-5644AC457385",
         Place::Fixed("C:\\Users\\Public"),
     ),
@@ -200,6 +207,193 @@ const KNOWN_FOLDERS: &[(&str, Place)] = &[
         "0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8",
         Place::CommonStartMenu("Programs"),
     ),
+    // Complément de la page KNOWNFOLDERID (#2477).
+    // FOLDERID_AccountPictures
+    ("008CA0B1-55B4-4C56-B8A8-4DE4B299D3BE", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\AccountPictures")),
+    // FOLDERID_AddNewPrograms
+    ("DE61D971-5EBC-4F02-A3A9-6C82895E5C04", Place::Virtual),
+    // FOLDERID_AdminTools
+    ("724EF170-A42D-4FEF-9F26-B60E846FBA4F", Place::StartMenu("Programs\\Administrative Tools")),
+    // FOLDERID_AppDataDesktop
+    ("B2C5E279-7ADD-439F-B28C-C41FE1BBF672", Place::Profile("AppData\\Local\\Desktop")),
+    // FOLDERID_AppDataDocuments
+    ("7BE16610-1F7F-44AC-BFF0-83E15F2FFCA1", Place::Profile("AppData\\Local\\Documents")),
+    // FOLDERID_AppDataFavorites
+    ("7CFBEFBC-DE1F-45AA-B843-A542AC536CC9", Place::Profile("AppData\\Local\\Favorites")),
+    // FOLDERID_AppDataProgramData
+    ("559D40A3-A036-40FA-AF61-84CB430A4D34", Place::Profile("AppData\\Local\\ProgramData")),
+    // FOLDERID_ApplicationShortcuts
+    ("A3918781-E5F2-4890-B3D9-A7E54332328C", Place::Profile("AppData\\Local\\Microsoft\\Windows\\Application Shortcuts")),
+    // FOLDERID_AppsFolder
+    ("1E87508D-89C2-42F0-8A7E-645A0F50CA58", Place::Virtual),
+    // FOLDERID_AppUpdates
+    ("A305CE99-F527-492B-8B1A-7E76FA98D6E4", Place::Virtual),
+    // FOLDERID_CameraRoll
+    ("AB5FB87B-7CE2-4F83-915D-550846C9537B", Place::Profile("Pictures\\Camera Roll")),
+    // FOLDERID_CDBurning
+    ("9E52AB10-F80D-49DF-ACB8-4330F5687855", Place::Profile("AppData\\Local\\Microsoft\\Windows\\Burn\\Burn")),
+    // FOLDERID_ChangeRemovePrograms
+    ("DF7266AC-9274-4867-8D55-3BD661DE872D", Place::Virtual),
+    // FOLDERID_CommonAdminTools
+    ("D0384E7D-BAC3-4797-8F14-CBA229B392B5", Place::CommonStartMenu("Programs\\Administrative Tools")),
+    // FOLDERID_CommonOEMLinks
+    ("C1BAE2D0-10DF-4334-BEDD-7AA20B227A9D", Place::Fixed("C:\\ProgramData\\OEM Links")),
+    // FOLDERID_CommonStartup
+    ("82A5EA35-D9CD-47C5-9629-E15D2F714E6E", Place::CommonStartMenu("Programs\\Startup")),
+    // FOLDERID_CommonTemplates
+    ("B94237E7-57AC-4347-9151-B08C6C32D1F7", Place::Fixed("C:\\ProgramData\\Microsoft\\Windows\\Templates")),
+    // FOLDERID_ComputerFolder
+    ("0AC0837C-BBF8-452A-850D-79D08E667CA7", Place::Virtual),
+    // FOLDERID_ConflictFolder
+    ("4BFEFB45-347D-4006-A5BE-AC0CB0567192", Place::Virtual),
+    // FOLDERID_ConnectionsFolder
+    ("6F0CD92B-2E97-45D1-88FF-B0D186B8DEDD", Place::Virtual),
+    // FOLDERID_Contacts
+    ("56784854-C6CB-462B-8169-88E350ACB882", Place::Profile("Contacts")),
+    // FOLDERID_ControlPanelFolder
+    ("82A74AEB-AEB4-465C-A014-D097EE346D63", Place::Virtual),
+    // FOLDERID_Cookies
+    ("2B0F765D-C0E9-4171-908E-08A611B84FF6", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Cookies")),
+    // FOLDERID_DeviceMetadataStore
+    ("5CE4A5E9-E4EB-479D-B89F-130C02886155", Place::Fixed("C:\\ProgramData\\Microsoft\\Windows\\DeviceMetadataStore")),
+    // FOLDERID_DocumentsLibrary
+    ("7B0DB17D-9CD2-4A93-9733-46CC89022E7C", Place::ProfileFile("AppData\\Roaming\\Microsoft\\Windows\\Libraries\\Documents.library-ms")),
+    // FOLDERID_Fonts
+    ("FD228CB7-AE11-4AE3-864C-16F3910AB8FE", Place::Fixed("C:\\Windows\\Fonts")),
+    // FOLDERID_Games
+    ("CAC52C1A-B53D-4EDC-92D7-6B2E8AC19434", Place::Virtual),
+    // FOLDERID_GameTasks
+    ("054FAE61-4DD8-4787-80B6-090220C4B700", Place::Profile("AppData\\Local\\Microsoft\\Windows\\GameExplorer")),
+    // FOLDERID_History
+    ("D9DC8A3B-B784-432E-A781-5A1130A75963", Place::Profile("AppData\\Local\\Microsoft\\Windows\\History")),
+    // FOLDERID_HomeGroup
+    ("52528A6B-B9E3-4ADD-B60D-588C2DBA842D", Place::Virtual),
+    // FOLDERID_HomeGroupCurrentUser
+    ("9B74B6A3-0DFD-4F11-9E78-5F7800F2E772", Place::Virtual),
+    // FOLDERID_ImplicitAppShortcuts
+    ("BCB5256F-79F6-4CEE-B725-DC34E402FD46", Place::Profile("AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\ImplicitAppShortcuts")),
+    // FOLDERID_InternetCache
+    ("352481E8-33BE-4251-BA85-6007CAEDCF9D", Place::Profile("AppData\\Local\\Microsoft\\Windows\\Temporary Internet Files")),
+    // FOLDERID_InternetFolder
+    ("4D9F7874-4E0C-4904-967B-40B0D20C3E4B", Place::Virtual),
+    // FOLDERID_Libraries
+    ("1B3EA5DC-B587-4786-B4EF-BD1DC332AEAE", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Libraries")),
+    // FOLDERID_Links
+    ("BFB9D5E0-C6A9-404C-B2B2-AE6DB6AF4968", Place::Profile("Links")),
+    // FOLDERID_LocalizedResourcesDir
+    ("2A00375E-224C-49DE-B8D1-440DF7EF3DDC", Place::Fixed("C:\\Windows\\Resources\\0409")),
+    // FOLDERID_MusicLibrary
+    ("2112AB0A-C86A-4FFE-A368-0DE96E47012E", Place::ProfileFile("AppData\\Roaming\\Microsoft\\Windows\\Libraries\\Music.library-ms")),
+    // FOLDERID_NetHood
+    ("C5ABBF53-E17F-4121-8900-86626FC2C973", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Network Shortcuts")),
+    // FOLDERID_NetworkFolder
+    ("D20BEEC4-5CA8-4905-AE3B-BF251EA09B53", Place::Virtual),
+    // FOLDERID_Objects3D
+    ("31C0DD25-9439-4F12-BF41-7FF4EDA38722", Place::Profile("3D Objects")),
+    // FOLDERID_OriginalImages
+    ("2C36C0AA-5812-4B87-BFD0-4CD0DFB19B39", Place::Profile("AppData\\Local\\Microsoft\\Windows Photo Gallery\\Original Images")),
+    // FOLDERID_PhotoAlbums
+    ("69D2CF90-FC33-4FB7-9A0C-EBB0F0FCB43C", Place::Profile("Pictures\\Slide Shows")),
+    // FOLDERID_PicturesLibrary
+    ("A990AE9F-A03B-4E80-94BC-9912D7504104", Place::ProfileFile("AppData\\Roaming\\Microsoft\\Windows\\Libraries\\Pictures.library-ms")),
+    // FOLDERID_Playlists
+    ("DE92C1C7-837F-4F69-A3BB-86E631204A23", Place::Profile("Music\\Playlists")),
+    // FOLDERID_PrintersFolder
+    ("76FC4E2D-D6AD-4519-A663-37BD56068185", Place::Virtual),
+    // FOLDERID_PrintHood
+    ("9274BD8D-CFD1-41C3-B35E-B13F55A758F4", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Printer Shortcuts")),
+    // FOLDERID_PublicDesktop
+    ("C4AA340D-F20F-4863-AFEF-F87EF2E6BA25", Place::Fixed("C:\\Users\\Public\\Desktop")),
+    // FOLDERID_PublicDownloads
+    ("3D644C9B-1FB8-4F30-9B45-F670235F79C0", Place::Fixed("C:\\Users\\Public\\Downloads")),
+    // FOLDERID_PublicGameTasks
+    ("DEBF2536-E1A8-4C59-B6A2-414586476AEA", Place::Fixed("C:\\ProgramData\\Microsoft\\Windows\\GameExplorer")),
+    // FOLDERID_PublicLibraries
+    ("48DAF80B-E6CF-4F4E-B800-0E69D84EE384", Place::Fixed("C:\\ProgramData\\Microsoft\\Windows\\Libraries")),
+    // FOLDERID_PublicMusic
+    ("3214FAB5-9757-4298-BB61-92A9DEAA44FF", Place::Fixed("C:\\Users\\Public\\Music")),
+    // FOLDERID_PublicPictures
+    ("B6EBFB86-6907-413C-9AF7-4FC2ABF07CC5", Place::Fixed("C:\\Users\\Public\\Pictures")),
+    // FOLDERID_PublicRingtones
+    ("E555AB60-153B-4D17-9F04-A5FE99FC15EC", Place::Fixed("C:\\ProgramData\\Microsoft\\Windows\\Ringtones")),
+    // FOLDERID_PublicUserTiles
+    ("0482AF6C-08F1-4C34-8C90-E17EC98B1E17", Place::Fixed("C:\\Users\\Public\\AccountPictures")),
+    // FOLDERID_PublicVideos
+    ("2400183A-6185-49FB-A2D8-4A392A602BA3", Place::Fixed("C:\\Users\\Public\\Videos")),
+    // FOLDERID_QuickLaunch
+    ("52A4F021-7B75-48A9-9F6B-4B87A210BC8F", Place::Profile("AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch")),
+    // FOLDERID_Recent
+    ("AE50C081-EBD2-438A-8655-8A092E34987A", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Recent")),
+    // FOLDERID_RecordedTVLibrary
+    ("1A6FDBA2-F42D-4358-A798-B74D745926C5", Place::Fixed("C:\\Users\\Public\\RecordedTV.library-ms")),
+    // FOLDERID_RecycleBinFolder
+    ("B7534046-3ECB-4C18-BE4E-64CD4CB7D6AC", Place::Virtual),
+    // FOLDERID_ResourceDir
+    ("8AD10C31-2ADB-4296-A8F7-E4701232C972", Place::Fixed("C:\\Windows\\Resources")),
+    // FOLDERID_Ringtones
+    ("C870044B-F49E-4126-A9C3-B52A1FF411E8", Place::Profile("AppData\\Local\\Microsoft\\Windows\\Ringtones")),
+    // FOLDERID_RoamedTileImages
+    ("AAA8D5A5-F1D6-4259-BAA8-78E7EF60835E", Place::Profile("AppData\\Local\\Microsoft\\Windows\\RoamedTileImages")),
+    // FOLDERID_RoamingTiles
+    ("00BCFC5A-ED94-4E48-96A1-3F6217F21990", Place::Profile("AppData\\Local\\Microsoft\\Windows\\RoamingTiles")),
+    // FOLDERID_SampleMusic
+    ("B250C668-F57D-4EE1-A63C-290EE7D1AA1F", Place::Fixed("C:\\Users\\Public\\Music\\Sample Music")),
+    // FOLDERID_SamplePictures
+    ("C4900540-2379-4C75-844B-64E6FAF8716B", Place::Fixed("C:\\Users\\Public\\Pictures\\Sample Pictures")),
+    // FOLDERID_SamplePlaylists
+    ("15CA69B3-30EE-49C1-ACE1-6B5EC372AFB5", Place::Fixed("C:\\Users\\Public\\Music\\Sample Playlists")),
+    // FOLDERID_SampleVideos
+    ("859EAD94-2E85-48AD-A71A-0969CB56A6CD", Place::Fixed("C:\\Users\\Public\\Videos\\Sample Videos")),
+    // FOLDERID_SavedPictures
+    ("3B193882-D3AD-4EAB-965A-69829D1FB59F", Place::Profile("Pictures\\Saved Pictures")),
+    // FOLDERID_SavedPicturesLibrary
+    ("E25B5812-BE88-4BD9-94B0-29233477B6C3", Place::ProfileFile("AppData\\Roaming\\Microsoft\\Windows\\Libraries\\SavedPictures.library-ms")),
+    // FOLDERID_SavedSearches
+    ("7D1D3A04-DEBB-4115-95CF-2F29DA2920DA", Place::Profile("Searches")),
+    // FOLDERID_Screenshots
+    ("B7BEDE81-DF94-4682-A7D8-57A52620B86F", Place::Profile("Pictures\\Screenshots")),
+    // FOLDERID_SEARCH_CSC
+    ("EE32E446-31CA-4ABA-814F-A5EBD2FD6D5E", Place::Virtual),
+    // FOLDERID_SearchHistory
+    ("0D4C3DB6-03A3-462F-A0E6-08924C41B5D4", Place::Profile("AppData\\Local\\Microsoft\\Windows\\ConnectedSearch\\History")),
+    // FOLDERID_SearchHome
+    ("190337D1-B8CA-4121-A639-6D472D16972A", Place::Virtual),
+    // FOLDERID_SEARCH_MAPI
+    ("98EC0E18-2098-4D44-8644-66979315A281", Place::Virtual),
+    // FOLDERID_SearchTemplates
+    ("7E636BFE-DFA9-4D5E-B456-D7B39851D8A9", Place::Profile("AppData\\Local\\Microsoft\\Windows\\ConnectedSearch\\Templates")),
+    // FOLDERID_SendTo
+    ("8983036C-27C0-404B-8F08-102D10DCFD74", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\SendTo")),
+    // FOLDERID_SidebarDefaultParts
+    ("7B396E54-9EC5-4300-BE0A-2482EBAE1A26", Place::ProgramFiles("Windows Sidebar\\Gadgets")),
+    // FOLDERID_SidebarParts
+    ("A75D362E-50FC-4FB7-AC2C-A8BEAA314493", Place::Profile("AppData\\Local\\Microsoft\\Windows Sidebar\\Gadgets")),
+    // FOLDERID_SkyDrive : OneDrive non configuré, dossier absent du système.
+    // FOLDERID_SkyDriveCameraRoll : OneDrive non configuré, dossier absent du système.
+    // FOLDERID_SkyDriveDocuments : OneDrive non configuré, dossier absent du système.
+    // FOLDERID_SkyDrivePictures : OneDrive non configuré, dossier absent du système.
+    // FOLDERID_SyncManagerFolder
+    ("43668BF8-C14E-49B2-97C9-747784D784B7", Place::Virtual),
+    // FOLDERID_SyncResultsFolder
+    ("289A9A43-BE44-4057-A41B-587A76D7E7F9", Place::Virtual),
+    // FOLDERID_SyncSetupFolder
+    ("0F214138-B1D3-4A90-BBA9-27CBC0C5389A", Place::Virtual),
+    // FOLDERID_SystemX86
+    ("D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27", Place::Fixed("C:\\Windows\\SysWOW64")),
+    // FOLDERID_Templates
+    ("A63293E8-664E-48DB-A079-DF759E0509F7", Place::Profile("AppData\\Roaming\\Microsoft\\Windows\\Templates")),
+    // FOLDERID_UserPinned
+    ("9E3995AB-1F9C-4F13-B827-48B24B6C7174", Place::Profile("AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned")),
+    // FOLDERID_UserProgramFiles
+    ("5CD7AEE2-2219-4A67-B85D-6C9CE15660CB", Place::Profile("AppData\\Local\\Programs")),
+    // FOLDERID_UserProgramFilesCommon
+    ("BCBD3057-CA5C-4622-B42D-BC56DB0AE516", Place::Profile("AppData\\Local\\Programs\\Common")),
+    // FOLDERID_UsersFiles
+    ("F3CE0F7C-4901-4ACC-8648-D5D44B04EF8F", Place::Virtual),
+    // FOLDERID_UsersLibraries
+    ("A302545D-DEFF-464B-ABE8-61C8648D939B", Place::Virtual),
+    // FOLDERID_VideosLibrary
+    ("491E922F-5643-4AF4-A7EB-4E7A138D8174", Place::ProfileFile("AppData\\Roaming\\Microsoft\\Windows\\Libraries\\Videos.library-ms")),
 ];
 
 fn place_path(place: &Place) -> String {
@@ -216,6 +410,8 @@ fn place_path(place: &Place) -> String {
         Place::StartMenu(sub) => join(crate::paths::profile_path(START_MENU), sub),
         Place::CommonStartMenu(sub) => join(COMMON_START_MENU.to_string(), sub),
         Place::ProgramFiles(sub) => join(program_files(crate::wow32::active()).into(), sub),
+        Place::ProfileFile(rel) => crate::paths::profile_path(rel),
+        Place::Virtual => String::new(),
     }
 }
 
@@ -259,14 +455,36 @@ pub(crate) fn guid_text(p: *const u8) -> Option<String> {
     ))
 }
 
-/// Chemin Windows d'un FOLDERID (texte `XXXXXXXX-XXXX-…`).
-pub fn known_folder_path(guid: &str, flags: u32) -> Option<String> {
-    let (_, place) = KNOWN_FOLDERS
+/// Résultat de la recherche d'un FOLDERID.
+pub(crate) enum KnownFolder {
+    Path(String),
+    /// Dossier virtuel : connu, mais sans chemin.
+    Virtual,
+    /// GUID absent de la table : « not present on the system ».
+    Unknown,
+}
+
+pub(crate) fn known_folder(guid: &str, flags: u32) -> KnownFolder {
+    let Some((_, place)) = KNOWN_FOLDERS
         .iter()
-        .find(|(g, _)| g.eq_ignore_ascii_case(guid))?;
+        .find(|(g, _)| g.eq_ignore_ascii_case(guid))
+    else {
+        return KnownFolder::Unknown;
+    };
+    if matches!(place, Place::Virtual) {
+        return KnownFolder::Virtual;
+    }
     let path = place_path(place);
     ensure(place, &path, flags & KF_FLAG_CREATE != 0);
-    Some(path)
+    KnownFolder::Path(path)
+}
+
+/// Chemin Windows d'un FOLDERID (texte `XXXXXXXX-XXXX-…`).
+pub fn known_folder_path(guid: &str, flags: u32) -> Option<String> {
+    match known_folder(guid, flags) {
+        KnownFolder::Path(p) => Some(p),
+        _ => None,
+    }
 }
 
 unsafe fn write_ansi(s: &str, buf: *mut u8, cap: usize) -> bool {
@@ -356,8 +574,26 @@ pub unsafe extern "win64" fn sh_get_known_folder_path(
     let Some(guid) = guid_text(id) else {
         return E_INVALIDARG;
     };
-    let Some(path) = known_folder_path(&guid, flags) else {
-        return E_NOTFOUND;
+    // Codes documentés par SHGetKnownFolderPath : E_FAIL pour un dossier
+    // sans chemin (virtuel), E_INVALIDARG pour un FOLDERID absent du
+    // système. Le refus est journalisé : sans trace d'API, rien ne disait
+    // quel GUID manquait (#2477).
+    let path = match known_folder(&guid, flags) {
+        KnownFolder::Path(p) => p,
+        KnownFolder::Virtual => {
+            crate::log_info!(
+                "shell32",
+                "SHGetKnownFolderPath({{{guid}}}) : dossier virtuel, sans chemin"
+            );
+            return E_FAIL;
+        }
+        KnownFolder::Unknown => {
+            crate::log_warn!(
+                "shell32",
+                "SHGetKnownFolderPath({{{guid}}}) : FOLDERID inconnu"
+            );
+            return E_INVALIDARG;
+        }
     };
     let w: Vec<u16> = path.encode_utf16().chain([0]).collect();
     let mem = crate::dlls::ole32::co_task_mem_alloc(w.len() * 2) as *mut u16;
@@ -512,6 +748,80 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// GUID texte → 16 octets en mémoire, comme le passe une appli.
+    fn guid_bytes(t: &str) -> [u8; 16] {
+        let h: String = t.chars().filter(|c| *c != '-').collect();
+        let b: Vec<u8> = (0..16)
+            .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        let mut g = [0u8; 16];
+        g[..4].copy_from_slice(&[b[3], b[2], b[1], b[0]]);
+        g[4..6].copy_from_slice(&[b[5], b[4]]);
+        g[6..8].copy_from_slice(&[b[7], b[6]]);
+        g[8..].copy_from_slice(&b[8..]);
+        g
+    }
+
+    unsafe fn sh_path(guid: &str) -> (i32, Option<String>) {
+        let g = guid_bytes(guid);
+        let mut out: *mut u16 = std::ptr::null_mut();
+        let hr = sh_get_known_folder_path(g.as_ptr(), 0, 0, &mut out);
+        let text = (!out.is_null()).then(|| crate::dlls::wstr(out));
+        if !out.is_null() {
+            crate::dlls::ole32::co_task_mem_free(out.cast());
+        }
+        (hr, text)
+    }
+
+    /// #2477 : FOLDERID documentés servis, codes d'échec documentés.
+    #[test]
+    fn folderid_documentes_et_codes_d_echec() {
+        // Tous les GUID de la table sont uniques et bien formés.
+        let mut vus = std::collections::HashSet::new();
+        for (g, _) in KNOWN_FOLDERS {
+            assert_eq!(g.len(), 36, "{g}");
+            assert_eq!(guid_text(guid_bytes(g).as_ptr()).as_deref(), Some(*g));
+            assert!(vus.insert(g.to_ascii_uppercase()), "GUID en double : {g}");
+        }
+        // 124 GUID documentés, moins les 4 de OneDrive.
+        assert_eq!(KNOWN_FOLDERS.len(), 120);
+        unsafe {
+            // Ceux que demandait l'installeur de Google Drive, entre autres.
+            for (guid, attendu) in [
+                (
+                    "C4AA340D-F20F-4863-AFEF-F87EF2E6BA25",
+                    "C:\\Users\\Public\\Desktop",
+                ),
+                (
+                    "B94237E7-57AC-4347-9151-B08C6C32D1F7",
+                    "C:\\ProgramData\\Microsoft\\Windows\\Templates",
+                ),
+                (
+                    "3D644C9B-1FB8-4F30-9B45-F670235F79C0",
+                    "C:\\Users\\Public\\Downloads",
+                ),
+                ("FD228CB7-AE11-4AE3-864C-16F3910AB8FE", "C:\\Windows\\Fonts"),
+            ] {
+                assert_eq!(sh_path(guid), (S_OK, Some(attendu.to_string())), "{guid}");
+            }
+            let (hr, p) = sh_path("52A4F021-7B75-48A9-9F6B-4B87A210BC8F");
+            assert_eq!(hr, S_OK);
+            assert!(p
+                .unwrap()
+                .ends_with("\\AppData\\Roaming\\Microsoft\\Internet Explorer\\Quick Launch"));
+            // FOLDERID_ControlPanelFolder : virtuel, E_FAIL.
+            assert_eq!(
+                sh_path("82A74AEB-AEB4-465C-A014-D097EE346D63"),
+                (E_FAIL, None)
+            );
+            // GUID absent du système : E_INVALIDARG, plus 0x80070002.
+            assert_eq!(
+                sh_path("01234567-89AB-CDEF-0123-456789ABCDEF"),
+                (E_INVALIDARG, None)
+            );
+        }
     }
 
     #[test]
