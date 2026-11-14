@@ -34,6 +34,19 @@ fn user_locale() -> &'static Locale {
         .expect("fr-FR est dans la table")
 }
 
+/// Préférences de l'utilisateur pour Windows.System.UserProfile.
+/// GlobalizationPreferences (#2172) : nom de la locale, région ISO 3166,
+/// devise ISO 4217, horloge 24 h, premier jour (0 = lundi … 6 = dimanche).
+pub(crate) fn user_preferences() -> (&'static str, &'static str, &'static str, bool, u32) {
+    let l = user_locale();
+    let clock24 = l
+        .short_times
+        .first()
+        .or(l.long_times.first())
+        .is_some_and(|t| t.contains('H'));
+    (l.name, l.ctry2, l.intl_currency, clock24, l.first_day)
+}
+
 pub struct Locale {
     pub name: &'static str,
     pub lcid: u32,
