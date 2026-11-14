@@ -619,6 +619,9 @@ jobs:
       - name: Code de sortie complet pour le parent Windows (#2267)
         run: sh scripts/test-code-sortie-parent.sh
 
+      - name: Sortie volontaire sans message de plantage (#2272)
+        run: sh scripts/test-sortie-volontaire.sh
+
       - name: Installer Winlux sur l'hôte Ubuntu (binfmt, ./hello.exe, association, désinstallation, #27)
         run: |
           sudo apt-get install -y -q binfmt-support xdg-utils || { sudo apt-get update -q && sudo apt-get install -y -q binfmt-support xdg-utils; }

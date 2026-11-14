@@ -88,6 +88,7 @@ fn main() {
     journal::init();
     // Code de sortie Windows complet pour winlux-open (#1205).
     dlls::kernel32::exit_code_file_init();
+    dlls::kernel32::crash_mark_file_init();
     let mut args = std::env::args_os();
     let program = args.next();
     // `winlux-drives …` (lien vers winlux) ou `winlux --drives …` : lecteurs réseau.

@@ -6899,6 +6899,7 @@ unsafe fn create_process_common(
         cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
     cmd.env_remove("WINLUX_EXIT_CODE_FILE");
+    cmd.env_remove("WINLUX_CRASH_MARK_FILE");
     let code_file = if is_pe {
         exit_code_channel(&mut cmd)
     } else {
@@ -8938,6 +8939,47 @@ pub fn exit_code_file_init() {
     }
 }
 
+/// Fichier marqué quand le processus finit sur une exception non gérée
+/// (`WINLUX_CRASH_MARK_FILE`, posé par winlux-open, #2272). Une sortie
+/// volontaire (ExitProcess, exit), quel que soit son code, ne le touche pas :
+/// comme sous Windows, elle n'affiche rien.
+static CRASH_MARK_FILE: OnceLock<std::ffi::CString> = OnceLock::new();
+
+/// Lu au démarrage comme `exit_code_file_init`, puis retiré de
+/// l'environnement : un programme lancé par celui-ci n'y écrit pas.
+pub fn crash_mark_file_init() {
+    if let Some(path) = std::env::var_os("WINLUX_CRASH_MARK_FILE") {
+        std::env::remove_var("WINLUX_CRASH_MARK_FILE");
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(path) = std::ffi::CString::new(path.as_bytes()) {
+            if !path.as_bytes().is_empty() {
+                let _ = CRASH_MARK_FILE.set(path);
+            }
+        }
+    }
+}
+
+/// Note que le processus finit sur une exception non gérée (faute matérielle
+/// ou logicielle) ; sûr dans un gestionnaire de signal (open/write).
+pub fn record_crash() {
+    let Some(path) = CRASH_MARK_FILE.get() else {
+        return;
+    };
+    let text = b"exception\n";
+    // SAFETY: chemin terminé par NUL, tampon statique ; appels sûrs en signal.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+            0o600,
+        );
+        if fd >= 0 {
+            libc::write(fd, text.as_ptr().cast(), text.len());
+            libc::close(fd);
+        }
+    }
+}
+
 /// Texte écrit pour un code : « 0x780148E0 ». Sans allocation.
 fn exit_code_text(code: u32) -> [u8; 11] {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -9038,6 +9080,27 @@ pub fn exit_with(code: i32) -> ! {
 #[cfg(test)]
 mod tests_code_enfant {
     use super::*;
+
+    /// #2272 : la marque de plantage n'est écrite que par `record_crash`
+    /// (exception non gérée), jamais par une sortie avec code.
+    #[test]
+    fn marque_de_plantage_distincte_du_code() {
+        let dir = std::env::temp_dir().join(format!("winlux-2272-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mark = dir.join("plantage");
+        let _ = CRASH_MARK_FILE.set(std::ffi::CString::new(mark.to_str().unwrap()).unwrap());
+        let mark = std::path::PathBuf::from(CRASH_MARK_FILE.get().unwrap().to_str().unwrap());
+        let _ = std::fs::remove_file(&mark);
+        record_exit_code(1);
+        assert!(
+            !mark.exists(),
+            "un code de sortie ne marque pas de plantage"
+        );
+        record_crash();
+        assert_eq!(std::fs::read_to_string(&mark).unwrap(), "exception\n");
+        let _ = std::fs::remove_file(&mark);
+        let _ = std::fs::remove_dir(&dir);
+    }
     use std::os::unix::process::ExitStatusExt;
 
     /// #2267 : le code écrit par l'enfant prime sur ses 8 bits Linux ;
