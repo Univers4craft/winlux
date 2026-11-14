@@ -103,6 +103,11 @@ pub fn uid_sid(uid: u32) -> String {
     format!("{}-{rid}", machine_part())
 }
 
+/// SID du compte qui fait tourner le processus (TokenUser).
+pub fn user_sid() -> String {
+    uid_sid(euid())
+}
+
 pub fn gid_sid(gid: u32) -> String {
     if gid == 0 {
         return "S-1-5-32-544".into();
