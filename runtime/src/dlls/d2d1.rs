@@ -2537,7 +2537,12 @@ unsafe fn describe_state(this: *mut TargetObj) -> String {
         return String::new();
     }
     let t = target(this);
-    t.ext.describe_state(&t.world(), t.state.antialias)
+    let mut s = t.ext.describe_state(&t.world(), t.state.antialias);
+    // Découpe active (#2431) : elle peut rogner une colonne du dessin.
+    if let Some(c) = t.clip() {
+        s += &format!(" découpe ({}, {}, {}, {})", c.l, c.t, c.r, c.b);
+    }
+    s
 }
 
 /// WINLUX_D2D_TRACE (#1669) : forme, boîte et pinceau d'un remplissage,
