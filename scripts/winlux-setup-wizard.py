@@ -72,6 +72,14 @@ _TR = {
                                                  "Lo encontrará en el menú Inicio.", "Sie finden es im Startmenü."),
     "L'installation a échoué (code {code}).": ("Setup failed (code {code}).", "La instalación ha fallado (código {code}).",
                                                 "Die Installation ist fehlgeschlagen (Code {code})."),
+    "L'installation a été arrêtée par le système (signal {signal}).":
+        ("Setup was stopped by the system (signal {signal}).",
+         "El sistema ha detenido la instalación (señal {signal}).",
+         "Die Installation wurde vom System beendet (Signal {signal})."),
+    "Le plus souvent, la mémoire disponible ne suffisait pas.":
+        ("This usually means there was not enough free memory.",
+         "Lo más habitual es que no hubiera suficiente memoria disponible.",
+         "Meistens reichte der verfügbare Arbeitsspeicher nicht aus."),
     "Choisir le dossier d'installation": ("Choose the install location", "Elegir la carpeta de instalación",
                                           "Installationsordner auswählen"),
     "Le dossier est choisi par le paquet.": ("The package chooses the location.", "El paquete elige la carpeta.",
@@ -102,6 +110,29 @@ def tr(text, **values):
     if LANG in _COLUMN and text in _TR:
         text = _TR[text][_COLUMN[LANG]]
     return text.format(**values) if values else text
+
+
+def failure_message(code):
+    """Titre et explication d'un échec (#2327).
+
+    Un statut négatif de subprocess signifie « tué par le signal -code » :
+    il n'y a alors pas de code de sortie Windows à montrer. SIGKILL est le
+    signal qu'envoie le noyau quand la mémoire manque (OOM killer)."""
+    if code < 0:
+        title = tr("L'installation a été arrêtée par le système (signal {signal}).",
+                   signal=_signal_name(-code))
+        if -code == 9:
+            return title, tr("Le plus souvent, la mémoire disponible ne suffisait pas.")
+        return title, ""
+    return tr("L'installation a échoué (code {code}).", code=code), ""
+
+
+def _signal_name(number):
+    try:
+        import signal
+        return signal.Signals(number).name
+    except ValueError:
+        return str(number)
 
 
 def read_info(runtime, path):
@@ -350,9 +381,12 @@ def main(argv):
             if menu_entries() != state["menu"]:
                 done_text.set_text(tr("Vous le trouverez dans le menu Démarrer."))
         else:
+            title, cause = failure_message(code)
+            # Aussi dans la sortie, donc dans last-launch.log.
+            print(" ".join(t for t in (title, cause) if t), flush=True)
             done_title.set_markup("<span size='x-large' weight='bold'>%s</span>"
-                                  % GLib.markup_escape_text(tr("L'installation a échoué (code {code}).", code=code)))
-            done_text.set_text(os.path.basename(path))
+                                  % GLib.markup_escape_text(title))
+            done_text.set_text("\n".join(t for t in (cause, os.path.basename(path)) if t))
             log_view.get_buffer().set_text("\n".join(output.strip().splitlines()[-15:]))
             scroll.show_all()
         stack.set_visible_child_name("done")
@@ -368,12 +402,15 @@ def main(argv):
                                     cwd=os.path.dirname(path) or None)
             for line in proc.stdout:
                 lines.append(line)
+                # Écrite au fil de l'eau : last-launch.log garde la trace
+                # même si l'assistant est tué avant la fin (#2328).
+                print(line, end="", flush=True)
                 GLib.idle_add(status.set_text, line.strip())
             code = proc.wait()
         except OSError as e:
             lines.append(str(e))
+            print(e, flush=True)
             code = 1
-        print("".join(lines), end="", flush=True)
         GLib.idle_add(finished, code, "".join(lines))
 
     def pulse():

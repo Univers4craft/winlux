@@ -144,6 +144,7 @@ pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
+pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
@@ -235,6 +236,7 @@ pub mod mdi;
 pub mod msvcp140_2;
 pub mod msvcp140_eptr;
 pub mod msvcp140_flux;
+pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -265,6 +267,7 @@ pub mod shlwapi_reg;
 pub mod spirv;
 pub mod storage_appdata;
 pub mod sysdlls;
+pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
@@ -1298,6 +1301,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut m = msvcp140::exports();
                     m.extend(msvcp140_flux::exports());
                     m.extend(msvcp140_eptr::exports());
+                    m.extend(msvcp140_ppl::exports());
                     m
                 },
                 handle: 0,
