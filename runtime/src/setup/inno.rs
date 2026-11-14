@@ -1002,6 +1002,14 @@ pub fn info(data: &[u8]) -> Result<Info, String> {
     })
 }
 
+/// Contrat de licence (`LicenseFile`, champ LicenseText de l'en-tête),
+/// fichier texte ou RTF tel que compilé (#2125).
+pub fn license(data: &[u8]) -> Option<String> {
+    let setup = parse(data).ok()?;
+    let raw = setup.header.raw("LicenseText")?;
+    (!raw.is_empty()).then(|| super::license::from_bytes(raw))
+}
+
 /// Décompresseur d'un bloc de fichiers de `setup-1`.
 fn chunk_reader<'a>(
     setup: &Setup,

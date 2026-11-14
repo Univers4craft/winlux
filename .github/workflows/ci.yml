@@ -455,6 +455,7 @@ jobs:
           python3 -B scripts/test-quick-menu-position.py
           python3 -B scripts/test-power.py
           python3 -B scripts/test-power-reboot-guard.py
+          python3 -B scripts/test-power-lock-handover.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
           sudo apt-get update -q
@@ -579,6 +580,9 @@ jobs:
         run: |
           sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
           sh scripts/test-setup-wizard.sh
+
+      - name: Contrat de licence des installateurs (#2123 à #2126)
+        run: sh scripts/test-licence-installateurs.sh
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh

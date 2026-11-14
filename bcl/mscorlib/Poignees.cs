@@ -192,21 +192,7 @@ namespace System.Runtime.InteropServices
         }
     }
 
-    // Marshal (#2026) : SizeOf est calculé par le moteur (marshal.rs) selon
-    // les règles de marshaling (BOOL de 4 octets, char ANSI, Pack, Size,
-    // FieldOffset, ByValTStr, ByValArray). Un membre absent d'ici
-    // (AllocHGlobal, PtrToString…) reste servi par bcl.rs.
-    public static class Marshal
-    {
-        public static readonly int SystemDefaultCharSize = 2;
-        public static readonly int SystemMaxDBCSCharSize = 1;
-
-        [MethodImpl(MethodImplOptions.InternalCall)] public static extern int SizeOf(Type t);
-        [MethodImpl(MethodImplOptions.InternalCall)] public static extern int SizeOf(object structure);
-        [MethodImpl(MethodImplOptions.InternalCall)] public static extern int SizeOf<T>();
-        [MethodImpl(MethodImplOptions.InternalCall)] public static extern int SizeOf<T>(T structure);
-        [MethodImpl(MethodImplOptions.InternalCall)] public static extern int GetLastWin32Error();
-    }
+    // Marshal : voir Interop.cs (#2026, #2105).
 }
 
 namespace Microsoft.Win32.SafeHandles

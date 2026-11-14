@@ -2,7 +2,7 @@
 
 use super::daemon::{
     acpi_inputs, brightness_key, brightness_step, decode_event, external_display_at, has_key,
-    idle_step, lid_action, Hw, IdleStep,
+    idle_step, lid_action, server_dpms_needs_reset, Hw, IdleStep,
 };
 use super::*;
 use std::sync::atomic::AtomicUsize;
@@ -593,4 +593,15 @@ fn cli_set_values() {
     assert_eq!(c.brightness, 5);
     assert!(cli::set(&mut c, "lid", "explode", true).is_err());
     assert!(cli::set(&mut c, "unknown", "1", true).is_err());
+}
+
+/// #2148 : les délais DPMS du serveur X (600 s de Xorg, ou ceux de
+/// ~/.xscreensaver) sont remis à zéro ; un serveur sans DPMS est laissé tel quel.
+#[test]
+fn delais_dpms_du_serveur_remis_a_zero() {
+    assert!(server_dpms_needs_reset(Some((600, 600, 600))));
+    assert!(server_dpms_needs_reset(Some((65535, 65535, 65535))));
+    assert!(server_dpms_needs_reset(Some((0, 0, 600))));
+    assert!(!server_dpms_needs_reset(Some((0, 0, 0))));
+    assert!(!server_dpms_needs_reset(None));
 }
