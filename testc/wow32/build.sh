@@ -457,6 +457,35 @@ clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "
 lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
     "$tmp/wasapi64/wasapi64.obj" "$tmp/wasapi64/wasapi_k32.lib" "$tmp/wasapi64/wasapi_ole32.lib" \
     /out:"$out/wasapi64.exe"
+# XAudio2 2.9 (#2428) : xaudio32.exe (x86) et xaudio64.exe (x64).
+cat >"$tmp/xaudio_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+Sleep@4
+GetTickCount@0
+DEF
+cat >"$tmp/xaudio_xa29.def" <<'DEF'
+LIBRARY xaudio2_9.dll
+EXPORTS
+XAudio2Create@12
+CreateAudioVolumeMeter@4
+DEF
+mkdir -p "$tmp/xaudio64"
+for lib in xaudio_k32 xaudio_xa29; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/xaudio64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/xaudio64/$lib.def" -l "$tmp/xaudio64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/xaudio32.c" -o "$tmp/xaudio32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/xaudio32.obj" "$tmp/xaudio_k32.lib" "$tmp/xaudio_xa29.lib" /out:"$out/xaudio32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/xaudio32.c" -o "$tmp/xaudio64/xaudio64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
+    "$tmp/xaudio64/xaudio64.obj" "$tmp/xaudio64/xaudio_k32.lib" "$tmp/xaudio64/xaudio_xa29.lib" \
+    /out:"$out/xaudio64.exe"
 # Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
 cat >"$tmp/d3d11_k32.def" <<'DEF'
 LIBRARY kernel32.dll
