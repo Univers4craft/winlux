@@ -1194,7 +1194,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             row = Gtk.Box(spacing=12)
             row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
             switch = Gtk.Switch(active=status.get(key, "allow") != "deny", valign=Gtk.Align.CENTER)
-            switch.connect("notify::active", lambda widget, _, base=action: self.execute(base + ("-allow" if widget.get_active() else "-deny")))
+            switch.connect("notify::active", self.privacy_toggled, action)
             row.pack_start(switch, False, False, 0)
             self.body.pack_start(row, False, False, 0)
         apps = permission_apps()
@@ -1232,6 +1232,29 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         except (OSError, subprocess.SubprocessError) as error:
             self.show_error(_t("L’opération a échoué"), str(error))
         if refresh: self.select(self.nav, None)
+
+    def privacy_toggled(self, switch, _param, base):
+        """Interrupteur caméra ou micro de tout l'appareil. Si l'opération
+        ne démarre pas, ou échoue (UAC refusée, #2416), il revient à sa
+        position précédente : l'affichage dit toujours le réglage réel."""
+        if getattr(self, "restoring_switch", False):
+            return
+        action = base + ("-allow" if switch.get_active() else "-deny")
+        self.execute(action)
+        if self.active_action != action:
+            # Pas depuis le signal même de l'interrupteur : GTK n'y supporte
+            # pas un nouveau changement d'état, on attend la boucle.
+            GLib.idle_add(lambda: (self.restore_switch(switch), False)[1])
+        else:
+            self.pending_switch = switch
+
+    def restore_switch(self, switch):
+        """Remet un interrupteur sur sa position précédente sans relancer d'action."""
+        self.restoring_switch = True
+        try:
+            switch.set_active(not switch.get_active())
+        finally:
+            self.restoring_switch = False
 
     def execute(self, action, *extra):
         if self.process is not None or self.busy: return
@@ -1325,6 +1348,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             action = self.active_action
             self.process = None
             self.active_action = None
+            switch, self.pending_switch = getattr(self, "pending_switch", None), None
+            if result and switch is not None and switch.get_parent() is not None:
+                # Réglage refusé ou en échec : l'interrupteur dit l'état réel (#2416).
+                self.restore_switch(switch)
             if result == 75 and action and action.startswith(("browser-", "store-catalog-")):
                 # Reporté faute de réseau : une information, pas une erreur technique.
                 self.show_info(_t("Pas de connexion Internet"), _t("Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté."))
