@@ -548,7 +548,7 @@ fn manifest_path(code: &str) -> PathBuf {
 }
 
 impl Manifest {
-    fn save(&self) -> std::io::Result<()> {
+    pub(super) fn save(&self) -> std::io::Result<()> {
         let mut text = String::from("WINLUX-MSI-1\n");
         for (k, v) in [
             ("product", &self.product),
@@ -1467,11 +1467,31 @@ fn run_uninstall_actions(code: &str, log: &mut Logger) {
     );
 }
 
+/// Clé de comparaison d'un chemin posé : insensible à la casse, comme NTFS.
+fn path_key(p: &Path) -> String {
+    p.to_string_lossy().to_lowercase()
+}
+
+/// Fichiers listés par les manifestes des autres produits installés.
+fn files_of_other_products(product: &str) -> HashSet<String> {
+    Manifest::all()
+        .iter()
+        .filter(|o| !o.product.eq_ignore_ascii_case(product))
+        .flat_map(|o| o.files.iter().map(|f| path_key(f)))
+        .collect()
+}
+
 fn remove_manifest(m: &Manifest, log: &mut Logger) {
     run_uninstall_actions(&m.product, log);
     let _ = std::fs::remove_file(cached_package(&m.product));
+    // Comme le compteur de clients des composants de Windows Installer :
+    // un fichier qu'un autre produit installé a posé au même chemin reste
+    // en place (runtime VC partagé, #2315).
+    let shared = files_of_other_products(&m.product);
     for f in &m.files {
-        let _ = std::fs::remove_file(f);
+        if !shared.contains(&path_key(f)) {
+            let _ = std::fs::remove_file(f);
+        }
     }
     // RemoveFile (mode 2) et fichiers INI avant les dossiers, comme
     // RemoveFiles avant RemoveFolders sous Windows : un dossier vidé par
