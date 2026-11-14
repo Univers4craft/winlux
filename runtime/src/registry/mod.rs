@@ -1158,6 +1158,40 @@ pub fn new_handle(path: String) -> usize {
     h
 }
 
+/// Nom NT d'un handle de clé ouvert (NtQueryObject, classe
+/// ObjectNameInformation), ou None si ce n'est pas une clé ouverte. Les
+/// racines prédéfinies (HKEY_CURRENT_USER…) ne sont pas des handles du
+/// gestionnaire d'objets et restent refusées. Préfixes de la page « Registry
+/// Trees and Keys » des documentations pilotes : HKLM est
+/// `\REGISTRY\MACHINE`, HKU `\REGISTRY\USER`, HKCU la sous-clé du SID de
+/// l'utilisateur. HKCR est servi comme HKLM\Software\Classes (simplification :
+/// notre vue fusionne HKCU puis HKLM, #2413).
+pub fn key_nt_name(handle: usize) -> Option<String> {
+    let path = crate::dlls::lock(&HANDLES)
+        .as_ref()?
+        .get(&handle)
+        .cloned()?;
+    let (root, rest) = match path.split_once('\\') {
+        Some((r, rest)) => (r, Some(rest)),
+        None => (path.as_str(), None),
+    };
+    let user = || format!("\\REGISTRY\\USER\\{}", crate::dlls::security::user_sid());
+    let prefix = match root.to_ascii_lowercase().as_str() {
+        "hklm" => "\\REGISTRY\\MACHINE".to_string(),
+        "hku" => "\\REGISTRY\\USER".to_string(),
+        "hkcu" => user(),
+        "hkcr" => "\\REGISTRY\\MACHINE\\SOFTWARE\\Classes".to_string(),
+        "hkcc" => {
+            "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current".to_string()
+        }
+        _ => return None,
+    };
+    Some(match rest {
+        Some(r) if !r.is_empty() => format!("{prefix}\\{r}"),
+        _ => prefix,
+    })
+}
+
 pub fn close_handle(handle: usize) -> bool {
     crate::dlls::lock(&HANDLES)
         .as_mut()

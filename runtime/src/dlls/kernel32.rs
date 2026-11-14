@@ -5465,7 +5465,11 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
     if crate::dlls::mmap::export(h).is_some() {
         return Some("Section");
     }
-    Some(match lookup_sync(h)? {
+    let Some(sync) = lookup_sync(h) else {
+        // Clé du registre ouverte (#2413).
+        return crate::registry::key_nt_name(h).map(|_| "Key");
+    };
+    Some(match sync {
         SyncHandle::Event(_) => "Event",
         SyncHandle::Mutex(_) => "Mutant",
         SyncHandle::Thread(_) => "Thread",
