@@ -353,6 +353,12 @@ fn codes_d_erreur_des_modules_du_texte_et_du_registre() {
         s.poison();
         let r = k::load_library_w(w("winlux-codes-absent.dll").as_ptr());
         s.code("LoadLibraryW, DLL absente", r, 126);
+        s.poison();
+        let r = k::get_module_handle_w(w("winlux-codes-absent.dll").as_ptr());
+        s.code("GetModuleHandleW, module non chargé (#2113)", r, 126);
+        s.poison();
+        let r = k::get_module_handle_a(c"winlux-codes-absent.dll".as_ptr().cast());
+        s.code("GetModuleHandleA, module non chargé (#2113)", r, 126);
         let k32 = k::load_library_w(w("kernel32.dll").as_ptr());
         s.poison();
         let r = k::get_proc_address(k32, c"WinluxFonctionAbsente".as_ptr().cast());
