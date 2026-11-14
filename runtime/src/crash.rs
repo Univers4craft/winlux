@@ -366,6 +366,10 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
             write_place(frame);
             write_literal(b"\n");
         }
+        // WINLUX_WOW32_HISTORY : un fail-fast venu du code x86 ou une faute
+        // fatale finit ici sans passer par ExitProcess ; l'historique de
+        // chaque fil x86 est écrit quand même, sur stderr seulement (#2426).
+        crate::wow32::dump_history_in_signal(what);
         code
     }
 }
