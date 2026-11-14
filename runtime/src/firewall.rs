@@ -747,6 +747,28 @@ pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
     paths.into_iter().map(|p| p + "\n").collect()
 }
 
+/// Une ligne par programme filtré en sortie, pour `status` (#2436) : un
+/// programme présent est surveillé (marque fanotify, cgroup de sa règle) ;
+/// un programme absent laisse sa règle en attente, et le démon le surveille
+/// dès que le fichier apparaît. Les règles nftables ne disent pas la
+/// différence, car elles visent le cgroup et non le fichier.
+pub fn targets_status(targets: &[(PathBuf, String)]) -> String {
+    let mut lines: Vec<String> = targets
+        .iter()
+        .map(|(path, group)| {
+            let state = if file_identity(path).is_some() {
+                "présent, surveillé"
+            } else {
+                "absent, règle en attente"
+            };
+            format!("programme {state} : {} ({group})\n", path.display())
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines.concat()
+}
+
 pub fn parse_targets(text: &str) -> Vec<PathBuf> {
     text.lines()
         .filter(|l| !l.is_empty())
@@ -1496,7 +1518,10 @@ pub fn cli(args: &[String]) -> i32 {
                 text.push_str(&s);
             }
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
-                Some(r) => text.push_str(&r),
+                Some(r) => {
+                    text.push_str(&r);
+                    text.push_str(&targets_status(&out_targets(&cfg)));
+                }
                 None => text.push_str("pare-feu désactivé pour ce profil\n"),
             }
             print_out(&text)
@@ -1951,5 +1976,35 @@ mod tests {
         sorted.sort();
         assert_eq!(parse_targets(&text), sorted);
         assert!(parse_targets("").is_empty());
+    }
+
+    /// #2436 : `status` dit pour chaque programme filtré s'il est présent
+    /// (surveillé) ou absent (règle en attente).
+    #[test]
+    fn status_distingue_programme_absent() {
+        let dir = std::env::temp_dir().join(format!("winlux-fw-2436-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("app.exe");
+        std::fs::write(&present, b"MZ").unwrap();
+        let absent = dir.join("wget");
+        let targets = vec![
+            (absent.clone(), "winlux-fw/r901".to_string()),
+            (present.clone(), "winlux-fw/r3".to_string()),
+        ];
+        let text = targets_status(&targets);
+        assert!(text.contains(&format!(
+            "programme absent, règle en attente : {} (winlux-fw/r901)\n",
+            absent.display()
+        )));
+        assert!(text.contains(&format!(
+            "programme présent, surveillé : {} (winlux-fw/r3)\n",
+            present.display()
+        )));
+        assert_eq!(text.lines().count(), 2);
+        // Le fichier apparaît : la même règle passe à « surveillé ».
+        std::fs::write(&absent, b"").unwrap();
+        assert!(!targets_status(&targets).contains("absent"));
+        assert!(targets_status(&[]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
