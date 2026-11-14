@@ -188,6 +188,9 @@ msctf_profiles.rs	Enum	interne	objet COM du runtime (énumérateur de profils TS
 msctf_profiles.rs	Profiles	interne	objet COM du runtime (TF_InputProcessorProfiles) ; non décrit pour wow32, un programme x86 ne le reçoit pas (#1602)
 msvcp140.rs	Thrd	a-verifier	
 msvcp140_1.rs	Resource	a-verifier	objet std::pmr::memory_resource rendu au programme (table virtuelle) ; disposition 64 bits seulement, aucun chemin x86 vérifié (#2178)
+msvcp140_eptr.rs	Bloc	a-verifier	bloc de std::exception_ptr ; son EXCEPTION_RECORD est lu par le programme via _Ptr, disposition 64 bits seulement, aucun chemin x86 vérifié (#2307)
+msvcp140_eptr.rs	Eptr	a-verifier	std::exception_ptr du programme (16 octets en x64, 8 en x86) ; disposition 64 bits seulement, aucun chemin x86 vérifié (#2307)
+msvcp140_eptr.rs	Relance	interne	arguments de RaiseException préparés par Rethrow, propres au fil, jamais remis au programme (#2307)
 msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 netfw.rs	App	x86	objet COM du runtime (INetFwAuthorizedApplication) ; un programme x86 le reçoit par le mandataire décrit dans wow32/com_netfw.rs, jamais la structure elle-même (#1919)
 netfw.rs	Static	x86	objets COM du runtime (INetFwMgr, INetFwPolicy, INetFwProfile, INetFwAuthorizedApplications) ; mandataires x86 décrits dans wow32/com_netfw.rs (#1919)
