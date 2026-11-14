@@ -1017,6 +1017,38 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         _ => 31,
     }
 }
+/// Code d'erreur d'une opération sur le chemin `p` : quand un dossier du
+/// chemin manque, ou qu'un de ses composants est un fichier, Windows rend
+/// ERROR_PATH_NOT_FOUND (3), pas ERROR_FILE_NOT_FOUND (2) ni ERROR_DIRECTORY
+/// (267) ; Linux rend ENOENT ou ENOTDIR sans distinguer le parent. La
+/// documentation de CreateDirectory le dit explicitement, et les programmes
+/// qui créent une arborescence s'en servent pour créer d'abord le parent
+/// (#2112, comme CreateFile depuis #1674).
+pub(crate) fn path_error_code(e: &std::io::Error, p: &std::path::Path) -> u32 {
+    let ambigu = matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    if ambigu
+        && p.parent()
+            .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+    {
+        3
+    } else {
+        io_error_code(e)
+    }
+}
+/// Même chose pour une opération à deux chemins (MoveFile, CopyFile).
+pub(crate) fn two_paths_error_code(
+    e: &std::io::Error,
+    a: &std::path::Path,
+    b: &std::path::Path,
+) -> u32 {
+    match path_error_code(e, a) {
+        3 => 3,
+        _ => path_error_code(e, b),
+    }
+}
 unsafe fn bytes<'a>(p: *const u8, len: usize) -> Option<&'a [u8]> {
     if len != 0 && p.is_null() {
         None
@@ -2491,14 +2523,7 @@ unsafe fn create_file_opened(
         Err(e) => {
             // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
             // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
-            let code = if e.kind() == std::io::ErrorKind::NotFound
-                && p.parent()
-                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
-            {
-                3
-            } else {
-                io_error_code(&e)
-            };
+            let code = path_error_code(&e, &p);
             // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
             crate::trace!(
                 "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
@@ -2662,7 +2687,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         }
         Err(e) if builtin_attribute_data(&e, &win, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -2698,7 +2723,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
         }
         Err(e) if builtin_attribute_data(&e, &s, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -3083,7 +3108,7 @@ unsafe fn set_file_attributes_str(path: &str, attributes: u32) -> i32 {
     let m = match std::fs::metadata(&p) {
         Ok(m) => m,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             return 0;
         }
     };
@@ -3480,12 +3505,12 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
                 1
             }
             Err(e) => {
-                crate::process::set_last_error(io_error_code(&e));
+                crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
                 0
             }
         },
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -5768,7 +5793,7 @@ fn poll_process(p: &ProcessObject) -> bool {
     if let Some(child) = s.child.as_mut() {
         match child.try_wait() {
             Ok(Some(status)) => {
-                s.exit_code = status.code().unwrap_or(1) as u32;
+                s.exit_code = child_exit_code(child.id(), status);
                 s.child = None;
                 p.changed.notify_all();
             }
@@ -6873,7 +6898,21 @@ unsafe fn create_process_common(
     if let Some(d) = desk.as_ref() {
         cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
+    cmd.env_remove("WINLUX_EXIT_CODE_FILE");
+    let code_file = if is_pe {
+        exit_code_channel(&mut cmd)
+    } else {
+        None
+    };
     let spawned = cmd.spawn();
+    match spawned.as_ref() {
+        Ok(c) => remember_code_file(c.id(), code_file),
+        Err(_) => {
+            if let Some(f) = code_file {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
     // Les copies héritables restent chez l'enfant ; le parent les ferme.
     drop(passed);
     if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
@@ -7197,6 +7236,10 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     crate::dlls::handle_broker::forget_pid(child.id() as i32);
+    // TerminateProcess fixe le code : le fichier de l'enfant ne compte plus.
+    if let Some(f) = child_code_files().remove(&child.id()) {
+        let _ = std::fs::remove_file(f);
+    }
     if child.kill().is_err() {
         crate::process::set_last_error(5);
         return 0;
@@ -8134,10 +8177,11 @@ pub unsafe extern "win64" fn set_current_directory_a(path: *const u8) -> i32 {
 /// Corps commun de `set_current_directory_a` et `set_current_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn set_current_directory_str(path: &str) -> i32 {
-    match std::env::set_current_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::env::set_current_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8231,7 +8275,7 @@ unsafe fn get_file_attributes_str(path: &str) -> u32 {
             BUILTIN_FILE_ATTRIBUTES
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             u32::MAX
         }
     }
@@ -8258,10 +8302,11 @@ unsafe fn delete_file_str(path: &str) -> i32 {
     r
 }
 unsafe fn delete_file_str_inner(path: &str) -> i32 {
-    match std::fs::remove_file(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::remove_file(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8288,10 +8333,11 @@ unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
     r
 }
 unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
-    match std::fs::create_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::create_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8601,7 +8647,7 @@ pub unsafe extern "win64" fn copy_file_a(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8638,7 +8684,7 @@ pub unsafe extern "win64" fn copy_file_w(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8654,10 +8700,10 @@ pub unsafe extern "win64" fn move_file_a(src: *const u8, dst: *const u8) -> i32 
         crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8683,10 +8729,10 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8710,10 +8756,11 @@ pub unsafe extern "win64" fn remove_directory_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match remove_dir_or_link(&crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    match remove_dir_or_link(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8727,13 +8774,14 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
         }
     };
     let path = s.to_string_lossy();
-    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+    let p = crate::paths::to_linux(&path);
+    match remove_dir_or_link(&p) {
         Ok(()) => {
             crate::trace!("RemoveDirectory({path}) = 1");
             1
         }
         Err(e) => {
-            let code = io_error_code(&e);
+            let code = path_error_code(&e, &p);
             crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
             crate::process::set_last_error(code);
             0
@@ -8917,6 +8965,108 @@ pub fn record_exit_code(code: u32) {
             libc::write(fd, text.as_ptr().cast(), text.len());
             libc::close(fd);
         }
+    }
+}
+
+/// Code de sortie complet d'un enfant lancé par CreateProcess (#2267) :
+/// le statut Linux n'en garde que 8 bits (3010 lu 194, 1602 lu 66), alors
+/// que `GetExitCodeProcess` rend un DWORD. L'enfant l'écrit dans un fichier
+/// (`WINLUX_EXIT_CODE_FILE`, #1205) que le parent relit à sa fin. Clé : PID.
+static CHILD_CODE_FILES: OnceLock<Mutex<HashMap<u32, std::path::PathBuf>>> = OnceLock::new();
+
+fn child_code_files() -> std::sync::MutexGuard<'static, HashMap<u32, std::path::PathBuf>> {
+    lock(CHILD_CODE_FILES.get_or_init(|| Mutex::new(HashMap::new())))
+}
+
+/// Crée le fichier du code de sortie d'un enfant et le lui désigne.
+pub(crate) fn exit_code_channel(cmd: &mut Command) -> Option<std::path::PathBuf> {
+    let dir = std::env::temp_dir();
+    for _ in 0..8 {
+        let n = NEXT_CODE_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("winlux-code-{}-{n}", std::process::id()));
+        let created = std::os::unix::fs::OpenOptionsExt::mode(
+            OpenOptions::new().write(true).create_new(true),
+            0o600,
+        )
+        .open(&path);
+        if created.is_ok() {
+            cmd.env("WINLUX_EXIT_CODE_FILE", &path);
+            return Some(path);
+        }
+    }
+    None
+}
+static NEXT_CODE_FILE: AtomicU32 = AtomicU32::new(0);
+
+/// Enfant lancé : son fichier de code est retenu jusqu'à sa fin.
+pub(crate) fn remember_code_file(pid: u32, path: Option<std::path::PathBuf>) {
+    if let Some(path) = path {
+        child_code_files().insert(pid, path);
+    }
+}
+
+/// Code « 0x780148E0 » écrit par `record_exit_code`.
+fn parse_exit_code_text(text: &str) -> Option<u32> {
+    let hex = text.trim().strip_prefix("0x")?;
+    (hex.len() == 8).then(|| u32::from_str_radix(hex, 16).ok())?
+}
+
+/// Code de sortie Windows d'un enfant terminé : le code complet qu'il a
+/// écrit, sinon le statut Linux. Le fichier est supprimé.
+pub(crate) fn child_exit_code(pid: u32, status: std::process::ExitStatus) -> u32 {
+    let linux = status.code().unwrap_or(1) as u32;
+    let Some(path) = child_code_files().remove(&pid) else {
+        return linux;
+    };
+    let full = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| parse_exit_code_text(&t));
+    let _ = std::fs::remove_file(&path);
+    // Fichier vide : l'enfant est mort sans écrire (signal), statut Linux.
+    // Il est créé neuf pour cet enfant, qui le retire de son environnement
+    // dès son démarrage : rien d'autre n'y écrit.
+    full.unwrap_or(linux)
+}
+
+/// Fin du processus avec un code Windows complet : écrit pour le parent,
+/// puis `exit` (atexit et destructeurs, comme `std::process::exit`).
+pub fn exit_with(code: i32) -> ! {
+    record_exit_code(code as u32);
+    std::process::exit(code)
+}
+
+#[cfg(test)]
+mod tests_code_enfant {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// #2267 : le code écrit par l'enfant prime sur ses 8 bits Linux ;
+    /// fichier vide (mort par signal) ou absent, le statut Linux reste.
+    #[test]
+    fn code_complet_de_l_enfant() {
+        assert_eq!(parse_exit_code_text("0x00000BC2\n"), Some(3010));
+        assert_eq!(parse_exit_code_text("0xE0434352"), Some(0xE0434352));
+        assert_eq!(parse_exit_code_text(""), None);
+        assert_eq!(parse_exit_code_text("0x63A"), None);
+        let mut cmd = Command::new("true");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        std::fs::write(&path, exit_code_text(1602)).unwrap();
+        remember_code_file(4_000_001, Some(path.clone()));
+        assert_eq!(
+            child_exit_code(4_000_001, std::process::ExitStatus::from_raw(66 << 8)),
+            1602
+        );
+        assert!(!path.exists(), "fichier du code supprimé");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        remember_code_file(4_000_002, Some(path));
+        assert_eq!(
+            child_exit_code(4_000_002, std::process::ExitStatus::from_raw(9)),
+            1
+        );
+        assert_eq!(
+            child_exit_code(4_000_003, std::process::ExitStatus::from_raw(42 << 8)),
+            42
+        );
     }
 }
 

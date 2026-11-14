@@ -151,6 +151,50 @@ fn codes_d_erreur_des_fichiers_et_dossiers() {
         let r = k::move_file_ex_w(d.win("a").as_ptr(), d.win("b").as_ptr(), 0);
         s.code("MoveFileExW, destination existante", r, 183);
 
+        // Dossier parent absent, ou composant du chemin qui est un fichier :
+        // ERROR_PATH_NOT_FOUND (3), documenté pour CreateDirectory (#2112).
+        for chemin in ["absent\\x", "absent\\y\\x", "a\\x"] {
+            let c = d.win(chemin);
+            let cible = d.win("cible");
+            let mut attr = [0u8; 64];
+            s.poison();
+            let r = k::create_directory_w(c.as_ptr(), 0);
+            s.code(&format!("CreateDirectoryW({chemin})"), r, 3);
+            s.poison();
+            let r = k::get_file_attributes_w(c.as_ptr());
+            s.code(&format!("GetFileAttributesW({chemin})"), r, 3);
+            s.poison();
+            let r = k::get_file_attributes_ex_w(c.as_ptr(), 0, attr.as_mut_ptr().cast());
+            s.code(&format!("GetFileAttributesExW({chemin})"), r, 3);
+            s.poison();
+            let r = k::set_file_attributes_w(c.as_ptr(), 0x80);
+            s.code(&format!("SetFileAttributesW({chemin})"), r, 3);
+            s.poison();
+            let r = k::delete_file_w(c.as_ptr());
+            s.code(&format!("DeleteFileW({chemin})"), r, 3);
+            s.poison();
+            let r = k::remove_directory_w(c.as_ptr());
+            s.code(&format!("RemoveDirectoryW({chemin})"), r, 3);
+            s.poison();
+            let r = k::set_current_directory_w(c.as_ptr());
+            s.code(&format!("SetCurrentDirectoryW({chemin})"), r, 3);
+            s.poison();
+            let r = k::move_file_w(c.as_ptr(), cible.as_ptr());
+            s.code(&format!("MoveFileW({chemin}, cible)"), r, 3);
+            s.poison();
+            let r = k::move_file_ex_w(c.as_ptr(), cible.as_ptr(), 0);
+            s.code(&format!("MoveFileExW({chemin}, cible)"), r, 3);
+            s.poison();
+            let r = k::copy_file_w(c.as_ptr(), cible.as_ptr(), 0);
+            s.code(&format!("CopyFileW({chemin}, cible)"), r, 3);
+            s.poison();
+            let r = k::copy_file_w(d.win("b").as_ptr(), c.as_ptr(), 0);
+            s.code(&format!("CopyFileW(b, {chemin})"), r, 3);
+            s.poison();
+            let h = k::create_file_w(c.as_ptr(), 0x8000_0000, 0, 0, 3, 0, 0);
+            s.code(&format!("CreateFileW({chemin})"), h, 3);
+        }
+
         let h = k::create_file_w(d.win("a").as_ptr(), 0x8000_0000, 1, 0, 3, 0, 0);
         let mut buf = [0u8; 8];
         let mut n = 0u32;
