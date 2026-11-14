@@ -466,7 +466,7 @@ fn console_dispatch(method: &str, args: &[Value], params: &[ElementType]) -> Opt
 
 fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "Exit" => {
+        "Exit" | "Quitter" => {
             let code = match args.last() {
                 Some(Value::I32(c)) => *c,
                 _ => 0,
