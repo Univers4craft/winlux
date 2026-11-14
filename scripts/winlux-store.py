@@ -851,20 +851,24 @@ class Source:
         return 0
 
 
-def apt_companions(pkg):
-    """Paquets à installer avec « pkg » : lignes « compagnons=pkg:a,b » du
-    catalogue (#2075), quand l'application ne marche pas sans ce qu'apt ne
-    fait que recommander."""
+def all_companions():
+    """Lignes « compagnons=pkg:a,b » du catalogue (#2075) : paquet -> compagnons."""
     try:
         lines = CATALOG.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
+        return {}
+    out = {}
     for line in lines:
         if line.startswith("compagnons="):
             name, _, rest = line[11:].partition(":")
-            if name == pkg:
-                return [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)]
-    return []
+            out.setdefault(name, [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)])
+    return out
+
+
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg », quand l'application ne marche pas sans
+    ce qu'apt ne fait que recommander (#2075)."""
+    return all_companions().get(pkg, [])
 
 
 class Apt(Source):
@@ -1097,15 +1101,20 @@ class Apt(Source):
             return proc.wait()
 
     def install(self, ref, progress):
+        before = set(self.installed())
         code = self.apt(["install", "--no-install-recommends", "--", ref], progress)
         extras = apt_companions(ref)
         if code == 0 and extras:
             # Paquets compagnons (#2075) : sans les recommandations d'apt,
             # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt.
-            # Marqués « automatiques » : la désinstallation (purge
-            # --autoremove) les retire quand plus rien ne les utilise ; un
-            # paquet déjà installé à la main le reste.
+            # Marqués « automatiques » : la désinstallation les retire quand
+            # plus rien ne les utilise ; un paquet déjà installé à la main le reste.
             code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
+        if code == 0:
+            # Ce que cette installation a apporté, pour le retirer avec elle (#2189).
+            state = load_json(STATE, {})
+            state.setdefault("apt", {})[ref] = sorted(set(self.installed()) - before - {ref})
+            save_state(state)
         return code
 
     def removal_blocker(self, ref):
@@ -1145,7 +1154,37 @@ class Apt(Source):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
         # paquet et dépendances installées pour lui seul partent aussi (apt
         # remove laissait 10 bibliothèques et les réglages de Démineur).
-        return self.apt(["purge", "--autoremove", "--", ref], progress)
+        code = self.apt(["purge", "--", ref], progress)
+        if code != 0:
+            return code
+        state = load_json(STATE, {})
+        brought = set(state.get("apt", {}).pop(ref, []))
+        save_state(state)
+        installed = self.installed()
+        # Compagnons des logiciels du catalogue encore installés : jamais
+        # retirés (purge --autoremove de Knights emportait le QEMU de
+        # virt-manager), et remis s'il en manque (#2189).
+        protected = {c for p, cs in all_companions().items() if p in installed for c in cs}
+        # Devenu inutile : ce qu'apt retirerait d'office, plus ce que cette
+        # installation a apporté et que seule une suggestion retient
+        # (systemd-container, suggéré par systemd) (#2189).
+        unneeded = self.autoremovable() | (self.autoremovable(suggests=False) & brought)
+        unneeded -= protected
+        if unneeded:
+            self.apt(["purge", "--", *sorted(unneeded)], progress)
+            installed = self.installed()
+        missing = sorted(c for c in protected if c not in installed)
+        if missing:
+            self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *missing], progress)
+        return code
+
+    def autoremovable(self, suggests=True):
+        """Paquets qu'« apt-get autoremove » retirerait (simulation, sans droits)."""
+        cmd = ["apt-get", "-s", "-o", "Debug::NoLocking=1", "autoremove"]
+        if not suggests:
+            cmd[2:2] = ["-o", "APT::AutoRemove::SuggestsImportant=false"]
+        code, out = run(cmd, 120, env={**os.environ, "LC_ALL": "C"})
+        return {m.group(1) for m in re.finditer(r"^Remv (\S+)", out, re.M)} if code == 0 else set()
 
     def update(self, refs, progress):
         return self.apt(["install", "--only-upgrade", "--", *refs], progress)
