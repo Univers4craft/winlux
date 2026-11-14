@@ -17,6 +17,7 @@ const STATUS_SUCCESS: u32 = 0;
 const STATUS_BUFFER_OVERFLOW: u32 = 0x8000_0005;
 const STATUS_NO_MORE_FILES: u32 = 0x8000_0006;
 const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
+const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
 const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
 const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
 const STATUS_END_OF_FILE: u32 = 0xC000_0011;
@@ -539,36 +540,38 @@ pub unsafe extern "win64" fn NtSetInformationFile(
             iosb(io, STATUS_SUCCESS, 0)
         }
         13 | 64 if len >= 1 => {
-            // FileDispositionInformation(Ex) : suppression immédiate (le
-            // fichier reste lisible par les handles ouverts, comme la
-            // sémantique POSIX que Windows 10 applique par défaut).
-            let delete = if class == 13 {
-                *buf != 0
+            // FileDispositionInformation(Ex) : le fichier est marqué, et
+            // effacé à la fermeture du handle ; DeleteFile = FALSE (ou
+            // FILE_DISPOSITION_DO_NOT_DELETE) retire la marque. Même la
+            // sémantique POSIX n'efface le nom qu'à la fermeture (WDK,
+            // FILE_DISPOSITION_INFORMATION(_EX)), #2509.
+            let (delete, on_close) = if class == 13 {
+                (*buf != 0, false)
+            } else if len >= 4 {
+                let flags = rd32(0);
+                (flags & 1 != 0, flags & 8 != 0)
             } else {
-                rd32(0) & 1 != 0
+                return iosb(io, STATUS_INFO_LENGTH_MISMATCH, 0);
             };
             if !delete {
+                crate::dlls::doomed::unmark(handle, on_close);
+                crate::trace!("NtSetInformationFile(classe {class}) : marque d'effacement retirée");
                 return iosb(io, STATUS_SUCCESS, 0);
             }
             let Some(p) = path_of_fd(fd) else {
                 return iosb(io, STATUS_INVALID_HANDLE, 0);
             };
-            let c = cpath(&p);
-            let is_dir = fstat(fd).is_ok_and(|st| st.st_mode & libc::S_IFMT == libc::S_IFDIR);
-            let rc = if is_dir {
-                libc::rmdir(c.as_ptr())
-            } else {
-                libc::unlink(c.as_ptr())
-            };
-            let e = (rc != 0).then(errno);
-            crate::trace!(
-                "NtSetInformationFile(classe {class}) : suppression de {} = {}",
-                p.display(),
-                e.map_or("ok".to_string(), |e| format!("errno {e}"))
-            );
-            if let Some(e) = e {
-                return iosb(io, status_of_errno(e), 0);
+            // Un dossier non vide ne peut pas être marqué (MS-FSA 2.1.5.15.3,
+            // FileDispositionInformation : STATUS_DIRECTORY_NOT_EMPTY).
+            let non_empty_dir = std::fs::read_dir(&p).is_ok_and(|mut d| d.next().is_some());
+            if non_empty_dir {
+                return iosb(io, STATUS_DIRECTORY_NOT_EMPTY, 0);
             }
+            crate::trace!(
+                "NtSetInformationFile(classe {class}) : {} effacé à la fermeture",
+                p.display()
+            );
+            crate::dlls::doomed::mark(handle, p);
             iosb(io, STATUS_SUCCESS, 0)
         }
         14 if len >= 8 => {
@@ -1357,6 +1360,113 @@ mod tests {
             crate::dlls::kernel32::close_handle(dir);
             assert!(!rm.exists(), "rm-0 doit disparaître");
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FileDispositionInfo : le fichier marqué reste en place jusqu'à la
+    /// fermeture, et DeleteFile = FALSE retire la marque, comme le fait
+    /// `UnbufferedFileWriter` de Chromium (Google Update, #2509).
+    #[test]
+    fn marque_d_effacement_retiree_avant_fermeture() {
+        let base = std::env::temp_dir().join(format!("winlux-disp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let disp = |h: usize, del: u8| unsafe {
+            crate::dlls::kernel32_node::SetFileInformationByHandle(h, 4, [del].as_ptr(), 1)
+        };
+        let ouvrir = |nom: &str| {
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(base.join(nom))
+                .unwrap();
+            crate::dlls::kernel32::insert_file(f)
+        };
+        unsafe {
+            // Marqué puis démarqué : le fichier survit à la fermeture.
+            let h = ouvrir("garde.7z");
+            assert_eq!(disp(h, 1), 1);
+            assert!(
+                base.join("garde.7z").exists(),
+                "pas effacé avant la fermeture"
+            );
+            assert_eq!(disp(h, 0), 1);
+            crate::dlls::kernel32::close_handle(h);
+            assert!(base.join("garde.7z").exists(), "la marque a été retirée");
+
+            // Marqué : effacé à la fermeture.
+            let h = ouvrir("efface.tmp");
+            assert_eq!(disp(h, 1), 1);
+            assert!(base.join("efface.tmp").exists());
+            crate::dlls::kernel32::close_handle(h);
+            assert!(!base.join("efface.tmp").exists(), "effacé à la fermeture");
+
+            // FileDispositionInfoEx : FILE_DISPOSITION_DELETE | POSIX_SEMANTICS,
+            // le nom part lui aussi à la fermeture.
+            let h = ouvrir("posix.tmp");
+            let ex = 3u32.to_le_bytes();
+            assert_eq!(
+                crate::dlls::kernel32_node::SetFileInformationByHandle(h, 21, ex.as_ptr(), 4),
+                1
+            );
+            assert!(base.join("posix.tmp").exists());
+            crate::dlls::kernel32::close_handle(h);
+            assert!(!base.join("posix.tmp").exists());
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// DeleteFile = FALSE est sans effet sur un handle ouvert avec
+    /// FILE_FLAG_DELETE_ON_CLOSE (FILE_DISPOSITION_INFO, #2509).
+    #[test]
+    fn delete_on_close_de_creation_garde_l_effacement() {
+        let base = std::env::temp_dir().join(format!("winlux-disp2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let p = base.join("temp.bin");
+        let wp: Vec<u16> = crate::paths::to_windows(&p)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let h = crate::dlls::kernel32::create_file_w(
+                wp.as_ptr(),
+                0x4000_0000 | 0x0001_0000,
+                7,
+                0,
+                2,
+                0x80 | 0x0400_0000,
+                0,
+            );
+            assert!(h != 0 && h != usize::MAX);
+            assert_eq!(
+                crate::dlls::kernel32_node::SetFileInformationByHandle(h, 4, [0u8].as_ptr(), 1),
+                1
+            );
+            crate::dlls::kernel32::close_handle(h);
+        }
+        assert!(!p.exists(), "FILE_FLAG_DELETE_ON_CLOSE l'emporte");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Un dossier non vide ne peut pas être marqué (MS-FSA 2.1.5.15.3).
+    #[test]
+    fn dossier_non_vide_refuse_la_marque() {
+        let base = std::env::temp_dir().join(format!("winlux-disp3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("x"), b"x").unwrap();
+        unsafe {
+            let dir = crate::dlls::kernel32::insert_file(std::fs::File::open(&base).unwrap());
+            let mut io = [0u64; 2];
+            assert_eq!(
+                NtSetInformationFile(dir, io.as_mut_ptr() as *mut c_void, [1u8].as_ptr(), 1, 13),
+                STATUS_DIRECTORY_NOT_EMPTY
+            );
+            crate::dlls::kernel32::close_handle(dir);
+        }
+        assert!(base.join("x").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 
