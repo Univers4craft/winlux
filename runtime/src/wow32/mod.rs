@@ -23,6 +23,7 @@
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
 mod com;
+mod com_mf;
 mod com_netfw;
 mod com_shell;
 mod com_taskschd;
