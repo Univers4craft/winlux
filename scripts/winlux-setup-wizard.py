@@ -402,12 +402,15 @@ def main(argv):
                                     cwd=os.path.dirname(path) or None)
             for line in proc.stdout:
                 lines.append(line)
+                # Écrite au fil de l'eau : last-launch.log garde la trace
+                # même si l'assistant est tué avant la fin (#2328).
+                print(line, end="", flush=True)
                 GLib.idle_add(status.set_text, line.strip())
             code = proc.wait()
         except OSError as e:
             lines.append(str(e))
+            print(e, flush=True)
             code = 1
-        print("".join(lines), end="", flush=True)
         GLib.idle_add(finished, code, "".join(lines))
 
     def pulse():
