@@ -858,6 +858,17 @@ if test -n "$desktop_user"; then
 else
     /bin/busybox touch /etc/winlux/live-session
 fi
+# Anti-gel mémoire (#2132) : sans swap, un programme qui dévore la RAM
+# chassait du cache les pages de code du bureau, relues en boucle depuis le
+# disque, et tout se figeait plusieurs minutes (seule la souris bougeait).
+# Le noyau (MGLRU) garde désormais en mémoire tout ce qui a servi dans la
+# dernière seconde ; s'il ne le peut plus, il tue tout de suite le plus gros
+# consommateur au lieu de laisser la machine s'effondrer. 1000 ms est la
+# valeur conseillée par la documentation du noyau (multigen_lru.rst).
+if test -w /sys/kernel/mm/lru_gen/min_ttl_ms; then
+    echo y >/sys/kernel/mm/lru_gen/enabled 2>/dev/null || true
+    echo 1000 >/sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null || true
+fi
 # Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
 # d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
 /usr/bin/winlux --power daemon >/run/winlux/power-daemon.log 2>&1 &
@@ -1104,8 +1115,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     fi
     xorg_args=':0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log'
     if command -v setsid >/dev/null 2>&1; then
+        # Xorg est épargné par le tueur du noyau (#2132) : seul Xorg, car un
+        # réglage posé sur la session passerait à toutes ses applications.
         # shellcheck disable=SC2016
-        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; echo -900 >/proc/self/oom_score_adj 2>/dev/null; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
     else
         # shellcheck disable=SC2086
         /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
