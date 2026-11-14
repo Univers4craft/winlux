@@ -313,6 +313,33 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         write_hex((*uc).uc_mcontext.gregs[libc::REG_R15 as usize] as usize);
         write_literal(b"\n");
 
+        // Mode WINLUX_HEAP_DIAG=page (#2158) : bloc de tas qui contient
+        // l'adresse fautive ou la valeur d'un registre.
+        if crate::dlls::tas_page::enabled() {
+            let g = |r: i32| (*uc).uc_mcontext.gregs[r as usize] as usize;
+            let values: [(&[u8], usize); 16] = [
+                (b"addr", addr),
+                (b"rax", g(libc::REG_RAX)),
+                (b"rbx", g(libc::REG_RBX)),
+                (b"rcx", g(libc::REG_RCX)),
+                (b"rdx", g(libc::REG_RDX)),
+                (b"rsi", g(libc::REG_RSI)),
+                (b"rdi", g(libc::REG_RDI)),
+                (b"r8", g(libc::REG_R8)),
+                (b"r9", g(libc::REG_R9)),
+                (b"r10", g(libc::REG_R10)),
+                (b"r11", g(libc::REG_R11)),
+                (b"r12", g(libc::REG_R12)),
+                (b"r13", g(libc::REG_R13)),
+                (b"r14", g(libc::REG_R14)),
+                (b"r15", g(libc::REG_R15)),
+                (b"rbp", rbp),
+            ];
+            for (name, value) in values {
+                write_heap_page(name, value);
+            }
+        }
+
         // Identification du module (try_lock pour rester async-signal-safe)
         if module_len > 0 {
             write_literal(b"winlux: module=");
@@ -502,6 +529,64 @@ unsafe fn write_place(addr: usize) {
     if n > 0 {
         write_literal(b" ");
         write_literal(&place[..n]);
+    }
+}
+
+/// Une ligne `winlux: tas page <nom>=0x… bloc 0x… taille … servie … +décalage
+/// alloué n°… fil … [libéré n°… fil …|vivant]` si la valeur tombe dans un bloc
+/// du mode page (#2158) ; rien sinon. Sans allocation.
+unsafe fn write_heap_page(name: &[u8], value: usize) {
+    use crate::dlls::tas_page::{locate, Where};
+    match locate(value) {
+        Where::None => {}
+        Where::Busy => {
+            write_literal(b"winlux: tas page ");
+            write_literal(name);
+            write_literal(b" : registre du tas pris, bloc inconnu\n");
+        }
+        Where::Block {
+            ptr,
+            size,
+            served,
+            alloc_seq,
+            alloc_tid,
+            free_seq,
+            free_tid,
+            offset,
+        } => {
+            write_literal(b"winlux: tas page ");
+            write_literal(name);
+            write_literal(b"=0x");
+            write_hex(value);
+            write_literal(b" bloc 0x");
+            write_hex(ptr);
+            write_literal(b" taille ");
+            write_fd_dec(2, size as u64);
+            write_literal(b" servie ");
+            write_fd_dec(2, served as u64);
+            write_literal(if offset < 0 { b" -" } else { b" +" });
+            write_fd_dec(2, offset.unsigned_abs() as u64);
+            write_literal(if offset < 0 {
+                b" (avant le bloc)".as_slice()
+            } else if offset as usize >= size {
+                b" (au-dela de la taille)".as_slice()
+            } else {
+                b" (dans le bloc)".as_slice()
+            });
+            write_literal(b" alloue n");
+            write_fd_dec(2, alloc_seq);
+            write_literal(b" fil ");
+            write_fd_dec(2, alloc_tid as u64);
+            if free_seq == 0 {
+                write_literal(b" vivant\n");
+            } else {
+                write_literal(b" libere n");
+                write_fd_dec(2, free_seq);
+                write_literal(b" fil ");
+                write_fd_dec(2, free_tid as u64);
+                write_literal(b"\n");
+            }
+        }
     }
 }
 
@@ -746,6 +831,93 @@ mod tests {
         assert!(err.contains("STATUS_STACK_BUFFER_OVERRUN"), "{err}");
         assert!(!err.contains("EXCEPTION_ACCESS_VIOLATION"), "{err}");
         assert!(log.is_empty() || log.contains("c0000409"), "{log}");
+    }
+
+    /// Variable qui fait de `tas_page_enfant` le processus enfant (#2158) :
+    /// `apres` lit un bloc après HeapFree, `depasse` lit au-delà de sa fin.
+    const TAS_PAGE_ENFANT: &str = "WINLUX_TEST_TAS_PAGE_ENFANT";
+
+    #[test]
+    fn tas_page_enfant() {
+        let Some(mode) = std::env::var_os(TAS_PAGE_ENFANT) else {
+            return;
+        };
+        install();
+        unsafe {
+            let p = crate::dlls::kernel32::heap_alloc(0, 8, 40) as *const u64;
+            if mode == "apres" {
+                crate::dlls::kernel32::heap_free(0, 0, p as *mut _);
+                std::ptr::read_volatile(p.add(1));
+            } else {
+                // 40 demandés, 48 servis : l'octet 48 est sur la page de garde.
+                std::ptr::read_volatile(p.add(6));
+            }
+        }
+        unreachable!("la lecture devait fauter");
+    }
+
+    fn tas_page_lancer(mode: &str) -> String {
+        let dir =
+            std::env::temp_dir().join(format!("winlux-taspage-{mode}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "crash::tests::tas_page_enfant",
+                "--test-threads=1",
+            ])
+            .env(TAS_PAGE_ENFANT, mode)
+            .env("WINLUX_HEAP_DIAG", "page")
+            .env("WINLUX_JOURNAL_DIR", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("processus enfant bloqué plus de 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let mut err = String::new();
+        use std::io::Read;
+        let _ = child.stderr.take().unwrap().read_to_string(&mut err);
+        let _ = std::fs::remove_dir_all(&dir);
+        err
+    }
+
+    /// #2158 : une lecture après HeapFree faute au moment même, et la faute
+    /// nomme le bloc libéré ; un dépassement nomme un bloc vivant.
+    #[test]
+    fn tas_page_nomme_le_bloc_a_la_faute() {
+        let err = tas_page_lancer("apres");
+        assert!(err.contains("EXCEPTION_ACCESS_VIOLATION"), "{err}");
+        let line = err
+            .lines()
+            .find(|l| l.starts_with("winlux: tas page addr="))
+            .unwrap_or_else(|| panic!("{err}"));
+        assert!(
+            line.contains("taille 40 servie 48 +8 (dans le bloc)"),
+            "{line}"
+        );
+        assert!(line.contains(" libere n"), "{line}");
+
+        let err = tas_page_lancer("depasse");
+        let line = err
+            .lines()
+            .find(|l| l.starts_with("winlux: tas page addr="))
+            .unwrap_or_else(|| panic!("{err}"));
+        assert!(
+            line.contains("taille 40 servie 48 +48 (au-dela de la taille)"),
+            "{line}"
+        );
+        assert!(line.ends_with(" vivant"), "{line}");
     }
 
     #[test]
