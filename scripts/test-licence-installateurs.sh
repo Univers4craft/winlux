@@ -7,7 +7,7 @@
 #     un paquet à contrat ouvre la page du contrat : refus = 1602, rien
 #     d'installé ; acceptation = installé. Sans affichage, refus net avec
 #     message ; /S, /qn valent acceptation ;
-#   - sous Xvfb, l'assistant présente le contrat : sans acceptation rien
+#   - sous Xvfb (un seul serveur, lancé ici), l'assistant présente le contrat : sans acceptation rien
 #     n'est installé (code 1602, aucun fichier, raccourci ni registre),
 #     après acceptation l'installation se fait.
 set -eu
@@ -113,15 +113,31 @@ py=
 for c in python3 python3.12; do
     if command -v "$c" >/dev/null && "$c" -c 'import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk' 2>/dev/null; then py=$c; break; fi
 done
-if [ -z "$py" ] || ! command -v xvfb-run >/dev/null; then
-    echo "licence : contrats lus (python3-gi ou xvfb-run absent : assistant non testé)"
+if [ -z "$py" ] || ! command -v Xvfb >/dev/null; then
+    echo "licence : contrats lus (python3-gi ou Xvfb absent : assistant non testé)"
     exit 0
 fi
+# Un seul Xvfb pour tout le script (#2458) : xvfb-run rend 5 quand il ne
+# parvient pas à effacer son dossier temporaire, et ce 5 remplaçait le code
+# de l'assistant (« code 5 au lieu de 1602 », run 43639544421). Le code lu
+# ci-dessous est donc toujours celui du programme testé. Numéro d'affichage
+# libre choisi par Xvfb lui-même.
+Xvfb -displayfd 3 -screen 0 1280x1024x24 -nolisten tcp 3>"$work/display" >"$work/xvfb.log" 2>&1 &
+xvfb=$!
+trap 'kill "$xvfb" 2>/dev/null || true; rm -rf "$work"' EXIT
+n=0
+while [ ! -s "$work/display" ]; do
+    kill -0 "$xvfb" 2>/dev/null || { cat "$work/xvfb.log" >&2; echo "Xvfb n'a pas démarré" >&2; exit 1; }
+    n=$((n + 1)); test "$n" -le 100 || { echo "Xvfb : pas d'affichage après 10 s" >&2; exit 1; }
+    sleep 0.1
+done
+DISPLAY=:$(head -n 1 "$work/display")
+export DISPLAY
 mkdir home
 wiz() {
     HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_LANG=fr \
     WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_SETUP_WIZARD_AUTO_LICENCE=${2:-} WINLUX_BIN="$runtime" \
-        timeout 180 xvfb-run -a "$py" "$wizard" "$1" >"$work/out.txt" 2>&1
+        timeout 180 "$py" "$wizard" "$1" >"$work/out.txt" 2>&1
 }
 set +e
 wiz ansi.exe; rc=$?
@@ -150,12 +166,12 @@ mkdir direct2
 direct_gui() {
     HOME="$work/direct2" WINLUX_HOME="$work/direct2" WINLUX_DRIVE_C="$work/direct2" WINLUX_LANG=fr \
     WINLUX_SETUP_WIZARD="$work/assistant.sh" WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_SETUP_WIZARD_AUTO_LICENCE=${2:-} \
-        timeout 180 xvfb-run -a "$runtime" "$1" >"$work/out.txt" 2>&1
+        timeout 180 "$runtime" "$1" >"$work/out.txt" 2>&1
 }
 direct_msi() {
     HOME="$work/direct2" WINLUX_HOME="$work/direct2" WINLUX_DRIVE_C="$work/direct2" WINLUX_LANG=fr \
     WINLUX_SETUP_WIZARD="$work/assistant.sh" WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_SETUP_WIZARD_AUTO_LICENCE=${2:-} \
-        timeout 180 xvfb-run -a "$runtime" --msiexec /i "$1" >"$work/out.txt" 2>&1
+        timeout 180 "$runtime" --msiexec /i "$1" >"$work/out.txt" 2>&1
 }
 set +e
 direct_gui ansi.exe; rc=$?
