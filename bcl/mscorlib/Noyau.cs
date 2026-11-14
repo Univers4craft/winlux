@@ -222,6 +222,23 @@ namespace System
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern void Write(string value);
+
+        // Colonne du curseur que donne GetConsoleScreenBufferInfo, ou moins
+        // le code d'erreur Win32 sans console (#2233).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int Colonne();
+
+        // Sans console (sortie redirigée, programme fenêtré), .NET Framework
+        // lève IOException avec le message de l'erreur Win32.
+        public static int CursorLeft
+        {
+            get
+            {
+                int c = Colonne();
+                if (c < 0) throw new System.IO.IOException("The handle is invalid.", unchecked((int)0x80070006));
+                return c;
+            }
+        }
     }
 
     public interface IDisposable
