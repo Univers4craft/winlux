@@ -1827,6 +1827,11 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("ole32", "OleSetClipboard") => k!(In(&IDATAOBJECT)),
         ("ole32", "RegisterDragDrop") => k!(I, In(&IDROPTARGET)),
         ("ole32", "DoDragDrop") => k!(In(&IDATAOBJECT), In(&IDROPSOURCE), I, I),
+        // Magasins de propriétés (#2428, lot B) : l'interface demandée,
+        // IPropertyStore en pratique, revient par REFIID.
+        ("shell32", "SHGetPropertyStoreForWindow") => k!(I, Iid, OutQ),
+        ("shell32", "SHGetPropertyStoreFromParsingName") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
+        ("propsys", "PSCreateMemoryPropertyStore") => k!(Iid, OutQ),
         ("oleaut32", "VariantInit" | "VariantClear" | "#8" | "#9") => k!(Var),
         ("oleaut32", "VariantCopy" | "#10") => k!(Var, Var),
         ("oleaut32", "VariantChangeType" | "#12") => k!(Var, Var, I, I),
@@ -1992,5 +1997,25 @@ mod tests {
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
         // ProcessUrlAction : huit arguments.
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2428, lot B : les fonctions qui rendent un magasin de propriétés
+    /// passent par un mandataire x86, à la taille de stdcall.tsv.
+    #[test]
+    fn magasins_de_proprietes_decrits() {
+        for (dll, f) in [
+            ("shell32", "SHGetPropertyStoreForWindow"),
+            ("shell32", "SHGetPropertyStoreFromParsingName"),
+            ("propsys", "PSCreateMemoryPropertyStore"),
+        ] {
+            let (k, r) = api_kinds(dll, f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            let octets = super::super::stdcall_bytes(dll, f).unwrap_or_else(|| panic!("{f}"));
+            assert_eq!(slots(k) * 4, octets as usize, "{f}");
+            // L'interface rendue est choisie par REFIID, en avant-dernière case.
+            assert!(matches!(k[k.len() - 2..], [Iid, OutQ]), "{f}");
+        }
+        let iid = g(mmd::IID_IPROPERTYSTORE);
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IPROPERTYSTORE)));
     }
 }
