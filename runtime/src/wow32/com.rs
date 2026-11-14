@@ -81,11 +81,11 @@ pub(super) struct Iface {
 }
 
 impl Iface {
-    fn count(&'static self) -> usize {
+    pub(super) fn count(&'static self) -> usize {
         self.parent.map_or(0, |p| p.count()) + self.methods.len()
     }
 
-    fn method(&'static self, idx: usize) -> Option<&'static [A]> {
+    pub(super) fn method(&'static self, idx: usize) -> Option<&'static [A]> {
         let base = self.parent.map_or(0, |p| p.count());
         if idx < base {
             self.parent.and_then(|p| p.method(idx))
@@ -1019,10 +1019,12 @@ static ALL: &[&Iface] = &[
     &IENUMIDLIST,
 ];
 
-fn by_iid(iid: &Guid) -> Option<&'static Iface> {
+pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
+        .chain(super::com_audio::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_nlm::ALL.iter())
         .chain(super::com_shell::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
@@ -1829,6 +1831,11 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("ole32", "OleSetClipboard") => k!(In(&IDATAOBJECT)),
         ("ole32", "RegisterDragDrop") => k!(I, In(&IDROPTARGET)),
         ("ole32", "DoDragDrop") => k!(In(&IDATAOBJECT), In(&IDROPSOURCE), I, I),
+        // Magasins de propriétés (#2428, lot B) : l'interface demandée,
+        // IPropertyStore en pratique, revient par REFIID.
+        ("shell32", "SHGetPropertyStoreForWindow") => k!(I, Iid, OutQ),
+        ("shell32", "SHGetPropertyStoreFromParsingName") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
+        ("propsys", "PSCreateMemoryPropertyStore") => k!(Iid, OutQ),
         ("oleaut32", "VariantInit" | "VariantClear" | "#8" | "#9") => k!(Var),
         ("oleaut32", "VariantCopy" | "#10") => k!(Var, Var),
         ("oleaut32", "VariantChangeType" | "#12") => k!(Var, Var, I, I),
@@ -1887,6 +1894,18 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
             k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
+        // pActivationParams (PROPVARIANT*) : non lu par IMMDevice::Activate.
+        ("mmdevapi", "ActivateAudioInterfaceAsync" | "#17") => k!(
+            I,
+            Iid,
+            I,
+            In(&super::com_audio::IACTIVATEAUDIOINTERFACECOMPLETIONHANDLER),
+            Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
+        ),
+        // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
+        ("mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9", "DllGetClassObject") => {
+            k!(I, Iid, OutQ)
         }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
@@ -2024,5 +2043,25 @@ mod tests {
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
         // ProcessUrlAction : huit arguments.
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2428, lot B : les fonctions qui rendent un magasin de propriétés
+    /// passent par un mandataire x86, à la taille de stdcall.tsv.
+    #[test]
+    fn magasins_de_proprietes_decrits() {
+        for (dll, f) in [
+            ("shell32", "SHGetPropertyStoreForWindow"),
+            ("shell32", "SHGetPropertyStoreFromParsingName"),
+            ("propsys", "PSCreateMemoryPropertyStore"),
+        ] {
+            let (k, r) = api_kinds(dll, f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            let octets = super::super::stdcall_bytes(dll, f).unwrap_or_else(|| panic!("{f}"));
+            assert_eq!(slots(k) * 4, octets as usize, "{f}");
+            // L'interface rendue est choisie par REFIID, en avant-dernière case.
+            assert!(matches!(k[k.len() - 2..], [Iid, OutQ]), "{f}");
+        }
+        let iid = g(mmd::IID_IPROPERTYSTORE);
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IPROPERTYSTORE)));
     }
 }

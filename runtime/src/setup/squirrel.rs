@@ -518,6 +518,11 @@ pub mod tests {
 
     #[test]
     fn description_et_programme_principal() {
+        // Le profil (HOME) peut être changé puis effacé par un test parallèle
+        // (paths::tests) : même verrou que lui (#2466).
+        let _env = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let o = open(&sample_setup()).unwrap();
         assert_eq!(
             o.spec,
@@ -562,6 +567,11 @@ pub mod tests {
 
     #[test]
     fn dossier_sous_le_profil() {
+        // Le profil (HOME) peut être changé puis effacé par un test parallèle
+        // (paths::tests) : même verrou que lui (#2466).
+        let _env = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let o = open(&sample_setup()).unwrap();
         let root = default_root(&o.spec);
         assert!(root.starts_with("C:\\Users\\"), "{root}");
