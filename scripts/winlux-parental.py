@@ -1394,7 +1394,7 @@ class Daemon:
         self.warned = set()
         self.killed = set()
         self.names = {}
-        self.names_at = 0
+        self.names_at = None
         self.site_notes = {}
         self.lock = threading.Lock()
         self.filtered = {}
@@ -1490,7 +1490,9 @@ class Daemon:
                 self.thaw(uid)
 
     def app_names(self):
-        if time.monotonic() - self.names_at > 600:
+        # Premier appel : charger tout de suite. time.monotonic() compte depuis le
+        # démarrage : avec 0 pour départ, le cache restait vide 10 minutes (#2387).
+        if self.names_at is None or time.monotonic() - self.names_at > 600:
             self.names, self.names_at = desktop_names(), time.monotonic()
         return self.names
 
