@@ -234,6 +234,7 @@ pub mod redist_dlls;
 pub mod msvcp140_2;
 pub mod msvcp140_eptr;
 pub mod msvcp140_flux;
+pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -1295,6 +1296,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut m = msvcp140::exports();
                     m.extend(msvcp140_flux::exports());
                     m.extend(msvcp140_eptr::exports());
+                    m.extend(msvcp140_ppl::exports());
                     m
                 },
                 handle: 0,
