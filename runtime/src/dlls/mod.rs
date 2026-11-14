@@ -144,6 +144,7 @@ pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
+pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
