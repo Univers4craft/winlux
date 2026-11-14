@@ -988,11 +988,31 @@ pub fn windows_env() -> Vec<(String, String)> {
         ("PUBLIC".into(), "C:\\Users\\Public".into()),
         ("SystemDrive".into(), "C:".into()),
         ("SystemRoot".into(), "C:\\Windows".into()),
+        // Dossier temporaire du profil, sur le disque (#2326), comme sous
+        // Windows : /tmp est un tmpfs, en mémoire.
+        ("TEMP".into(), format!("{profile}\\AppData\\Local\\Temp")),
+        ("TMP".into(), format!("{profile}\\AppData\\Local\\Temp")),
         ("USERDOMAIN".into(), host),
         ("USERNAME".into(), user_name()),
         ("USERPROFILE".into(), profile),
         ("windir".into(), "C:\\Windows".into()),
     ]
+}
+
+/// Dossier temporaire Windows du profil (`%LOCALAPPDATA%\Temp`), sur le
+/// disque, créé au besoin (#2326).
+pub fn profile_temp() -> PathBuf {
+    let dir = to_linux(&format!("{}\\AppData\\Local\\Temp", profile_windows()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Dossier de travail d'un installateur que Winlux déroule (archive
+/// décompressée, MSI d'un bundle…) : dans le dossier temporaire du profil,
+/// sur le disque, jamais dans /tmp, qui est en mémoire : un installateur de
+/// plusieurs centaines de Mo ne doit pas dépendre de la RAM (#2326).
+pub fn setup_work_dir(tag: &str) -> PathBuf {
+    profile_temp().join(format!("winlux-{tag}-{}", std::process::id()))
 }
 
 /// Ajoute à l'environnement du processus les variables Windows absentes

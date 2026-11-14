@@ -8061,11 +8061,18 @@ unsafe fn set_current_directory_str(path: &str) -> i32 {
         }
     }
 }
+/// GetTempPath : TMP, puis TEMP, sinon le dossier temporaire du profil
+/// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
+/// défaut : c'est un tmpfs, et un installateur qui y décompresse des
+/// centaines de Mo épuise la mémoire (#2326).
 fn temp_path() -> String {
-    let p = std::env::var_os("TMPDIR")
-        .map(std::path::PathBuf::from)
+    let p = ["TMP", "TEMP"]
+        .iter()
+        .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
+        .map(|v| crate::paths::to_linux(&v))
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        .unwrap_or_else(crate::paths::profile_temp);
+    let _ = std::fs::create_dir_all(&p);
     let mut s = crate::paths::to_windows(&p);
     if !s.ends_with('\\') {
         s.push('\\');
