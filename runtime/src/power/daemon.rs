@@ -433,7 +433,15 @@ pub fn run(root: &Path) -> i32 {
                     }
                     Some(action)
                 }
-                Hw::PowerButton => Some(config.button_action(has_battery)),
+                Hw::PowerButton => {
+                    // Écran éteint par inactivité : on le rallume, sinon
+                    // l'écran d'arrêt (et sa carte « Ces applications
+                    // empêchent l'arrêt ») restait invisible (#2254).
+                    display_on(root);
+                    screen_off = false;
+                    touch_activity_at(root);
+                    Some(config.button_action(has_battery))
+                }
                 Hw::SleepButton => Some(Action::Sleep),
                 Hw::BrightnessUp | Hw::BrightnessDown => None,
                 Hw::LidOpened => {
