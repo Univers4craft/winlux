@@ -1184,7 +1184,7 @@ def run_lock(start="clock"):
             """Bouton d'alimentation pendant le verrouillage (#2254) : l'écran
             d'arrêt, plein écran et au-dessus du verrou, reçoit la saisie le
             temps de sa carte ; le verrou la reprend dès qu'il disparaît. Il ne
-            montre que ses propres boutons (Arrêter quand même, Annuler) : rien
+            montre que ses propres boutons (Annuler, Déverrouiller : #2300) : rien
             de la session verrouillée ne devient accessible."""
             pid = power_request_pid()
             if pid is not None and self.power_yield is None:
