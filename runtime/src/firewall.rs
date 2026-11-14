@@ -11,8 +11,13 @@
 //! - entrantes : le service relève les ports où l'application écoute
 //!   (`/proc/net/{tcp,udp}{,6}`) et ouvre ou ferme exactement ces ports ;
 //! - sortantes : les processus de l'application sont placés dans le cgroup
-//!   `/sys/fs/cgroup/winlux-fw/r<id>`, filtré par `socket cgroupv2`.
-//!   Un processus est rattaché au plus deux secondes après son démarrage.
+//!   `/sys/fs/cgroup/winlux-fw/r<id>`, filtré par `socket cgroupv2`. Le
+//!   noyau suspend l'`exec` d'un programme filtré (fanotify
+//!   `FAN_OPEN_EXEC_PERM`) jusqu'à ce que le service l'ait rattaché : aucune
+//!   socket n'est créée hors du filtre (#2157). Sans fanotify, le connecteur
+//!   « proc » rattache juste après l'exec, sans garantie. Un .exe filtré
+//!   attend en plus, au lancement, d'être rattaché avant d'exécuter son
+//!   propre code. Le balayage toutes les deux secondes reste en secours.
 
 use crate::admin;
 use std::collections::{BTreeMap, BTreeSet};
@@ -499,10 +504,11 @@ pub fn ruleset(
         "udp sport 67 udp dport 68 accept".into(),
         "udp sport 547 udp dport 546 accept".into(),
     ];
-    let mut output = vec![
-        "ct state established,related accept".to_string(),
-        "oif \"lo\" accept".into(),
-    ];
+    let mut output: Vec<String> = Vec::new();
+    // Blocages sortants par application, placés avant l'acceptation des
+    // connexions établies : une connexion déjà ouverte est coupée elle aussi
+    // (#2176). La boucle locale reste libre.
+    let mut app_blocks: Vec<String> = Vec::new();
     if cfg.outbound[p] == Verdict::Block {
         output.push("udp dport { 67, 547 } accept".into());
         output.push(
@@ -554,6 +560,11 @@ pub fn ruleset(
                     }
                     let base = proto_match(r.proto, &ports, true).unwrap_or_default();
                     let m = format!("socket cgroupv2 level 2 \"{}\" {base}", cgroup_of(r));
+                    let chain = if r.verdict == Verdict::Block {
+                        &mut app_blocks
+                    } else {
+                        chain
+                    };
                     verdict_lines(chain, m.trim_end(), r.verdict, prefix);
                 }
             }
@@ -567,6 +578,11 @@ pub fn ruleset(
     } else {
         "accept"
     };
+    let mut head = vec!["oif \"lo\" accept".to_string()];
+    head.append(&mut app_blocks);
+    head.push("ct state established,related accept".into());
+    head.append(&mut output);
+    let mut output = head;
     let policy_out = if cfg.outbound[p] == Verdict::Block {
         output.push(
             "limit rate 10/second burst 20 packets log prefix \"winlux-fw-out: \" level info"
@@ -598,7 +614,42 @@ fn cgroup_root() -> PathBuf {
 }
 
 fn cgroups_available() -> bool {
-    cgroup_root().join("cgroup.controllers").exists()
+    let controllers = cgroup_root().join("cgroup.controllers");
+    if !cfg!(test) && !controllers.exists() && admin::root() == Path::new("/") {
+        mount_cgroup2();
+    }
+    controllers.exists()
+}
+
+/// Monte cgroup v2 s'il manque (#2142) : un /init antérieur au correctif
+/// laissait /sys/fs/cgroup vide, et le pare-feu, qui tourne en root,
+/// répare lui-même plutôt que d'abandonner ses règles par application.
+fn mount_cgroup2() {
+    let mounted = admin::read_text(Path::new("/proc/mounts"))
+        .unwrap_or_default()
+        .lines()
+        .any(|l| l.split(' ').nth(1) == Some("/sys/fs/cgroup"));
+    if mounted || unsafe { libc::geteuid() } != 0 || !Path::new("/sys/fs/cgroup").is_dir() {
+        return;
+    }
+    let source = c"cgroup2";
+    let target = c"/sys/fs/cgroup";
+    // SAFETY : chaînes C terminées par NUL, aucune donnée de montage.
+    let rc = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            source.as_ptr(),
+            0,
+            std::ptr::null(),
+        )
+    };
+    if rc != 0 {
+        eprintln!(
+            "winlux-firewall : montage de cgroup2 impossible : {}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 fn write_status(cfg: &Config, active: bool, error: &str, rules: usize) {
@@ -670,42 +721,728 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
             ""
         };
         write_status(cfg, rules.is_some(), note, count);
+        publish_targets(cfg, cgroups && rules.is_some());
+        wait_armed(std::time::Duration::from_secs(3));
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
         write_status(cfg, false, &msg, count);
+        publish_targets(cfg, false);
         Err(msg)
+    }
+}
+
+/// Programmes filtrés en sortie et leur cgroup.
+fn out_targets(cfg: &Config) -> Vec<(PathBuf, String)> {
+    cfg.active_rules()
+        .filter(|r| r.dir == Dir::Out)
+        .filter_map(|r| r.program_path().map(|p| (p, cgroup_of(r))))
+        .collect()
+}
+
+/// Liste publiée des programmes filtrés en sortie (#2157) : un chemin par
+/// ligne, rien d'autre (ni règle, ni profil, ni port, ni adresse). Un .exe y
+/// lit seulement s'il doit attendre son rattachement, car firewall.conf
+/// n'est lisible que par root (umask 077 de /init). Écrite par le service
+/// root, 0644 dans un dossier root 0755 : aucun compte ne peut la modifier.
+/// Vide quand le filtre n'est pas en place : personne n'attend alors.
+pub const TARGETS: &str = "run/winlux/firewall/programmes.txt";
+
+/// Liste que le fil fanotify du service a effectivement marquée (#2446) :
+/// même contenu que `programmes.txt` une fois les marques posées. Absente
+/// quand ce fil ne tourne pas (pas de service, ou fanotify indisponible).
+pub const ARMED: &str = "run/winlux/firewall/arme.txt";
+
+/// Attend que le service ait marqué la liste publiée, pour qu'un programme
+/// lancé juste après `apply` soit déjà suspendu à son exec (#2446). Ne
+/// fait rien si le fil fanotify ne tourne pas ; vrai si la liste est armée.
+pub fn wait_armed(limit: std::time::Duration) -> bool {
+    let armed = admin::path(ARMED);
+    if !armed.exists() {
+        return false;
+    }
+    let want = admin::read_text(&admin::path(TARGETS)).unwrap_or_default();
+    let start = std::time::Instant::now();
+    loop {
+        if admin::read_text(&armed).unwrap_or_default() == want {
+            return true;
+        }
+        if start.elapsed() >= limit {
+            eprintln!("winlux-firewall : liste des programmes filtrés pas encore armée");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
+    let mut paths: Vec<String> = targets
+        .iter()
+        .map(|(p, _)| p.display().to_string())
+        .filter(|p| !p.contains('\n'))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths.into_iter().map(|p| p + "\n").collect()
+}
+
+/// Une ligne par programme filtré en sortie, pour `status` (#2436) : un
+/// programme présent est surveillé (marque fanotify, cgroup de sa règle) ;
+/// un programme absent laisse sa règle en attente, et le démon le surveille
+/// dès que le fichier apparaît. Les règles nftables ne disent pas la
+/// différence, car elles visent le cgroup et non le fichier.
+pub fn targets_status(targets: &[(PathBuf, String)]) -> String {
+    let mut lines: Vec<String> = targets
+        .iter()
+        .map(|(path, group)| {
+            let state = if file_identity(path).is_some() {
+                "présent, surveillé"
+            } else {
+                "absent, règle en attente"
+            };
+            format!("programme {state} : {} ({group})\n", path.display())
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines.concat()
+}
+
+pub fn parse_targets(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn publish_targets(cfg: &Config, filtered: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let text = if filtered {
+        targets_text(&out_targets(cfg))
+    } else {
+        String::new()
+    };
+    let path = admin::path(TARGETS);
+    if admin::read_text(&path).as_deref() == Some(text.as_str()) {
+        return;
+    }
+    if admin::write_text(&path, &text).is_ok() {
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    }
+}
+
+/// Place un processus dans le cgroup de sa règle s'il n'y est pas déjà ;
+/// si la règle le bloque, ses connexions déjà ouvertes sont coupées (#2176).
+fn assign_one(pid_dir: &Path, targets: &[(PathBuf, String)], blocks: &[BlockCut]) {
+    let Some(prog) = program_of(pid_dir) else {
+        return;
+    };
+    let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) else {
+        return;
+    };
+    let current = admin::read_text(&pid_dir.join("cgroup")).unwrap_or_default();
+    if !current.trim_end().ends_with(&format!("/{group}")) {
+        if let Some(pid) = pid_dir.file_name() {
+            let moved = std::fs::write(
+                cgroup_root().join(group).join("cgroup.procs"),
+                pid.to_string_lossy().as_bytes(),
+            )
+            .is_ok();
+            if moved {
+                if let Some(cut) = blocks.iter().find(|c| c.group == *group) {
+                    cut_connections(pid_dir, cut);
+                }
+            }
+        }
+    }
+}
+
+// ---------- Coupure des connexions déjà ouvertes (#2176) ----------
+
+/// Règle sortante « Bloquer » d'un programme : son cgroup et ce qu'elle vise.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockCut {
+    pub group: String,
+    pub proto: Proto,
+    pub ports: Vec<(u16, u16)>,
+}
+
+fn block_cuts(cfg: &Config) -> Vec<BlockCut> {
+    cfg.active_rules()
+        .filter(|r| r.dir == Dir::Out && r.verdict == Verdict::Block && !r.program.is_empty())
+        .map(|r| BlockCut {
+            group: cgroup_of(r),
+            proto: r.proto,
+            ports: parse_ports(&r.ports).unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Inodes des sockets ouverts par un processus (`/proc/<pid>/fd`).
+fn socket_inodes(pid_dir: &Path) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(fds) = std::fs::read_dir(pid_dir.join("fd")) else {
+        return out;
+    };
+    for fd in fds.flatten() {
+        if let Ok(link) = std::fs::read_link(fd.path()) {
+            let link = link.to_string_lossy();
+            if let Some(n) = link
+                .strip_prefix("socket:[")
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|n| n.parse().ok())
+            {
+                out.insert(n);
+            }
+        }
+    }
+    out
+}
+
+/// Adresse distante de boucle locale (127.0.0.0/8, ::1, ::ffff:127.x).
+pub fn diag_dst_is_loopback(family: u8, dst: &[u8]) -> bool {
+    if family == libc::AF_INET as u8 {
+        dst.first() == Some(&127)
+    } else {
+        dst.len() >= 16
+            && ((dst[..15].iter().all(|&b| b == 0) && dst[15] == 1)
+                || (dst[..10].iter().all(|&b| b == 0)
+                    && dst[10] == 0xff
+                    && dst[11] == 0xff
+                    && dst[12] == 127))
+    }
+}
+
+/// Le socket décrit par une réponse `inet_diag_msg` est-il visé par la
+/// coupure ? Seulement une connexion vers l'extérieur, sur un protocole et
+/// un port distant que la règle bloque.
+pub fn diag_msg_matches(msg: &[u8], udp: bool, cut: &BlockCut) -> bool {
+    // inet_diag_msg : family, state, timer, retrans, puis inet_diag_sockid
+    // (sport, dport en gros-boutiste, src[16], dst[16], if, cookie[8]).
+    if msg.len() < 72 {
+        return false;
+    }
+    let family = msg[0];
+    let dport = u16::from_be_bytes([msg[6], msg[7]]);
+    if dport == 0 || diag_dst_is_loopback(family, &msg[24..40]) {
+        return false;
+    }
+    let proto_ok = match cut.proto {
+        Proto::Any => true,
+        Proto::Tcp => !udp,
+        Proto::Udp => udp,
+        Proto::Icmp => false,
+    };
+    proto_ok && (cut.ports.is_empty() || cut.ports.iter().any(|&(a, b)| (a..=b).contains(&dport)))
+}
+
+/// Ferme, par `SOCK_DESTROY` du noyau, les connexions déjà ouvertes d'un
+/// processus que sa règle bloque : il reçoit « connexion interrompue »,
+/// comme sous Windows quand on bloque une application en cours (#2176).
+fn cut_connections(pid_dir: &Path, cut: &BlockCut) {
+    let inodes = socket_inodes(pid_dir);
+    if inodes.is_empty() {
+        return;
+    }
+    let mut closed = 0usize;
+    for family in [libc::AF_INET as u8, libc::AF_INET6 as u8] {
+        for (proto, udp) in [
+            (libc::IPPROTO_TCP as u8, false),
+            (libc::IPPROTO_UDP as u8, true),
+        ] {
+            closed += destroy_matching(family, proto, udp, &inodes, cut);
+        }
+    }
+    if closed > 0 {
+        eprintln!(
+            "winlux-firewall : {closed} connexion(s) ouverte(s) coupée(s) pour {} ({})",
+            pid_dir.display(),
+            cut.group
+        );
+    }
+}
+
+const SOCK_DIAG_BY_FAMILY: u16 = 20;
+const SOCK_DESTROY: u16 = 21;
+
+fn diag_request(kind: u16, flags: u16, family: u8, proto: u8, id: Option<&[u8]>) -> Vec<u8> {
+    let mut m = Vec::with_capacity(72);
+    m.extend_from_slice(&72u32.to_ne_bytes());
+    m.extend_from_slice(&kind.to_ne_bytes());
+    m.extend_from_slice(&flags.to_ne_bytes());
+    m.extend_from_slice(&0u32.to_ne_bytes());
+    m.extend_from_slice(&0u32.to_ne_bytes());
+    // inet_diag_req_v2 : family, protocol, ext, pad, states, id (48 octets).
+    m.extend_from_slice(&[family, proto, 0, 0]);
+    m.extend_from_slice(&u32::MAX.to_ne_bytes());
+    match id {
+        Some(id) => m.extend_from_slice(&id[..48]),
+        None => m.extend_from_slice(&[0u8; 48]),
+    }
+    m
+}
+
+fn destroy_matching(
+    family: u8,
+    proto: u8,
+    udp: bool,
+    inodes: &std::collections::HashSet<u32>,
+    cut: &BlockCut,
+) -> usize {
+    const NETLINK_SOCK_DIAG: i32 = 4;
+    let request = (libc::NLM_F_REQUEST | libc::NLM_F_DUMP) as u16;
+    let mut victims: Vec<Vec<u8>> = Vec::new();
+    // SAFETY : descripteur possédé ici, tampons locaux de la taille annoncée.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            NETLINK_SOCK_DIAG,
+        );
+        if fd < 0 {
+            return 0;
+        }
+        let dump = diag_request(SOCK_DIAG_BY_FAMILY, request, family, proto, None);
+        if libc::send(fd, dump.as_ptr().cast(), dump.len(), 0) != dump.len() as isize {
+            libc::close(fd);
+            return 0;
+        }
+        let mut buf = vec![0u8; 64 * 1024];
+        'recv: loop {
+            let n = libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0);
+            if n <= 0 {
+                break;
+            }
+            let data = &buf[..n as usize];
+            let mut at = 0usize;
+            while at + 16 <= data.len() {
+                let len = u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+                    as usize;
+                let kind = u16::from_ne_bytes([data[at + 4], data[at + 5]]);
+                if len < 16 || at + len > data.len() {
+                    break 'recv;
+                }
+                if kind == libc::NLMSG_DONE as u16 || kind == libc::NLMSG_ERROR as u16 {
+                    break 'recv;
+                }
+                let msg = &data[at + 16..at + len];
+                if msg.len() >= 72 {
+                    let inode = u32::from_ne_bytes([msg[68], msg[69], msg[70], msg[71]]);
+                    if inodes.contains(&inode) && diag_msg_matches(msg, udp, cut) {
+                        victims.push(msg[4..52].to_vec());
+                    }
+                }
+                at += (len + 3) & !3;
+            }
+        }
+        let mut closed = 0;
+        let flags = (libc::NLM_F_REQUEST | libc::NLM_F_ACK) as u16;
+        for id in &victims {
+            let req = diag_request(SOCK_DESTROY, flags, family, proto, Some(id));
+            if libc::send(fd, req.as_ptr().cast(), req.len(), 0) == req.len() as isize {
+                let mut ack = [0u8; 256];
+                let n = libc::recv(fd, ack.as_mut_ptr().cast(), ack.len(), 0);
+                // NLMSG_ERROR avec errno 0 : socket fermé.
+                if n >= 20 && i32::from_ne_bytes([ack[16], ack[17], ack[18], ack[19]]) == 0 {
+                    closed += 1;
+                }
+            }
+        }
+        libc::close(fd);
+        closed
+    }
+}
+
+/// Après une nouvelle configuration : les processus déjà dans le cgroup
+/// d'une règle « Bloquer » perdent leurs connexions ouvertes (#2176).
+fn cut_blocked_groups(cfg: &Config) {
+    for cut in block_cuts(cfg) {
+        let procs = admin::read_text(&cgroup_root().join(&cut.group).join("cgroup.procs"))
+            .unwrap_or_default();
+        for pid in procs.lines().filter(|l| !l.is_empty()) {
+            cut_connections(&admin::path(&format!("proc/{pid}")), &cut);
+        }
     }
 }
 
 /// Rattache les processus des applications filtrées en sortie à leur cgroup.
 fn assign_cgroups(cfg: &Config) {
-    let targets: Vec<(PathBuf, String)> = cfg
-        .active_rules()
-        .filter(|r| r.dir == Dir::Out)
-        .filter_map(|r| r.program_path().map(|p| (p, cgroup_of(r))))
-        .collect();
+    let targets = out_targets(cfg);
     if targets.is_empty() || !cgroups_available() {
         return;
     }
     let Ok(procs) = std::fs::read_dir(admin::path("proc")) else {
         return;
     };
+    let blocks = block_cuts(cfg);
     for p in procs.flatten() {
         let name = p.file_name().to_string_lossy().into_owned();
         if !name.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
-        let Some(prog) = program_of(&p.path()) else {
-            continue;
-        };
-        if let Some((_, group)) = targets.iter().find(|(t, _)| *t == prog) {
-            let current = admin::read_text(&p.path().join("cgroup")).unwrap_or_default();
-            if !current.trim_end().ends_with(&format!("/{group}")) {
-                let _ = std::fs::write(cgroup_root().join(group).join("cgroup.procs"), &name);
+        assign_one(&p.path(), &targets, &blocks);
+    }
+}
+
+// ---------- Rattachement dès l'exec (#2157) ----------
+
+const PROC_EVENT_EXEC: u32 = 0x0000_0002;
+
+/// Processus (tgid) des événements `exec` d'un datagramme du connecteur
+/// « proc » : nlmsghdr (16 octets), cn_msg (20), puis proc_event
+/// (what, cpu, horodatage, puis pour exec : pid, tgid).
+pub fn exec_tgids(buf: &[u8]) -> Vec<i32> {
+    let u32_at = |b: &[u8], o: usize| {
+        b.get(o..o + 4)
+            .map(|s| u32::from_ne_bytes([s[0], s[1], s[2], s[3]]))
+    };
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while let Some(len) = u32_at(buf, at).map(|l| l as usize) {
+        if len < 16 || at + len > buf.len() {
+            break;
+        }
+        let msg = &buf[at..at + len];
+        if u32_at(msg, 36) == Some(PROC_EVENT_EXEC) {
+            if let Some(tgid) = u32_at(msg, 36 + 20) {
+                out.push(tgid as i32);
             }
         }
+        at += (len + 3) & !3;
     }
+    out
+}
+
+/// Socket netlink abonnée aux événements de processus du noyau (root seul).
+fn proc_connector() -> Option<i32> {
+    const NETLINK_CONNECTOR: i32 = 11;
+    const CN_IDX_PROC: u32 = 1;
+    const CN_VAL_PROC: u32 = 1;
+    const PROC_CN_MCAST_LISTEN: u32 = 1;
+    // SAFETY : appels système sur un descripteur que l'on possède, tampons
+    // locaux de la taille annoncée.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
+            NETLINK_CONNECTOR,
+        );
+        if fd < 0 {
+            return None;
+        }
+        let mut addr: libc::sockaddr_nl = std::mem::zeroed();
+        addr.nl_family = libc::AF_NETLINK as u16;
+        addr.nl_groups = CN_IDX_PROC;
+        let addr_len = std::mem::size_of::<libc::sockaddr_nl>() as u32;
+        if libc::bind(fd, &addr as *const _ as *const libc::sockaddr, addr_len) != 0 {
+            libc::close(fd);
+            return None;
+        }
+        let mut msg = Vec::with_capacity(40);
+        msg.extend_from_slice(&40u32.to_ne_bytes()); // nlmsg_len
+        msg.extend_from_slice(&(libc::NLMSG_DONE as u16).to_ne_bytes());
+        msg.extend_from_slice(&0u16.to_ne_bytes()); // flags
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // seq
+        msg.extend_from_slice(&libc::getpid().to_ne_bytes());
+        msg.extend_from_slice(&CN_IDX_PROC.to_ne_bytes());
+        msg.extend_from_slice(&CN_VAL_PROC.to_ne_bytes());
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // seq
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // ack
+        msg.extend_from_slice(&4u16.to_ne_bytes()); // len
+        msg.extend_from_slice(&0u16.to_ne_bytes()); // flags
+        msg.extend_from_slice(&PROC_CN_MCAST_LISTEN.to_ne_bytes());
+        if libc::send(fd, msg.as_ptr().cast(), msg.len(), 0) != msg.len() as isize {
+            libc::close(fd);
+            return None;
+        }
+        Some(fd)
+    }
+}
+
+/// Règles publiées, relues seulement quand `programmes.txt` change
+/// (configuration ou profil).
+#[derive(Default)]
+struct PublishedTargets {
+    stamp: Option<std::time::SystemTime>,
+    loaded: bool,
+    targets: Vec<(PathBuf, String)>,
+    blocks: Vec<BlockCut>,
+}
+
+impl PublishedTargets {
+    /// Relit les règles si la liste publiée a changé ; vrai si relu.
+    fn refresh(&mut self) -> bool {
+        let path = admin::path(TARGETS);
+        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.loaded && stamp == self.stamp {
+            return false;
+        }
+        let published = !admin::read_text(&path).unwrap_or_default().is_empty();
+        (self.targets, self.blocks) = if stamp.is_some() && published {
+            let cfg = Config::load();
+            (out_targets(&cfg), block_cuts(&cfg))
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        self.stamp = stamp;
+        self.loaded = true;
+        true
+    }
+}
+
+/// Fil du service : rattache chaque programme filtré dès son `exec`. Avec
+/// fanotify, l'exec attend le rattachement (garantie stricte) ; sinon, le
+/// connecteur « proc » le fait juste après, sans garantie.
+fn watch_execs() {
+    match exec_guard() {
+        Some(fd) => guard_execs(fd),
+        None => {
+            eprintln!(
+                "winlux-firewall : fanotify indisponible ({}), rattachement après l'exec seulement",
+                std::io::Error::last_os_error()
+            );
+            follow_execs();
+        }
+    }
+}
+
+/// Connecteur « proc » : rattachement juste après l'exec. Le programme tourne
+/// déjà ; une socket ouverte avant le rattachement échappe à la règle.
+fn follow_execs() {
+    let Some(fd) = proc_connector() else {
+        eprintln!(
+            "winlux-firewall : connecteur « proc » indisponible ({}), rattachement par balayage seulement",
+            std::io::Error::last_os_error()
+        );
+        return;
+    };
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut published = PublishedTargets::default();
+    loop {
+        // SAFETY : `buf` est un tampon local de la taille annoncée.
+        let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n <= 0 {
+            // ENOBUFS : des événements ont été perdus, le balayage les rattrape.
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                return;
+            }
+            continue;
+        }
+        let tgids = exec_tgids(&buf[..n as usize]);
+        if tgids.is_empty() {
+            continue;
+        }
+        published.refresh();
+        if published.targets.is_empty() {
+            continue;
+        }
+        for tgid in tgids {
+            assign_one(
+                &admin::path(&format!("proc/{tgid}")),
+                &published.targets,
+                &published.blocks,
+            );
+        }
+    }
+}
+
+// ---------- Exec suspendu jusqu'au rattachement (#2157) ----------
+//
+// fanotify `FAN_OPEN_EXEC_PERM`, posé sur les seuls programmes filtrés : le
+// noyau suspend l'`execve` du programme jusqu'à la réponse du service, qui
+// place d'abord le processus dans le cgroup de sa règle. Le programme ne
+// s'exécute donc jamais hors du filtre, et toute socket qu'il crée est
+// filtrée. La réponse est toujours « autoriser » : le pare-feu ne bloque
+// pas le lancement, seulement le réseau. Si le service s'arrête, le noyau
+// autorise les exec en attente à la fermeture du descripteur.
+
+/// Groupe fanotify de classe « contenu » (événements de permission).
+fn exec_guard() -> Option<i32> {
+    // SAFETY : appel système sans pointeur.
+    let fd = unsafe {
+        libc::fanotify_init(
+            libc::FAN_CLASS_CONTENT | libc::FAN_CLOEXEC,
+            (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_LARGEFILE) as u32,
+        )
+    };
+    (fd >= 0).then_some(fd)
+}
+
+/// Identité d'un fichier (périphérique, inode), liens symboliques suivis
+/// comme par `fanotify_mark`.
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// Pose les marques sur les programmes filtrés et rend leur identité avec
+/// leur cgroup. Un programme remplacé (mise à jour) change d'inode : la
+/// boucle compare les identités et repose les marques.
+fn mark_targets(fd: i32, targets: &[(PathBuf, String)]) -> Vec<(Option<(u64, u64)>, String)> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY : descripteur fanotify possédé ; chemins terminés par NUL.
+    unsafe {
+        libc::fanotify_mark(
+            fd,
+            libc::FAN_MARK_FLUSH,
+            0,
+            libc::AT_FDCWD,
+            std::ptr::null(),
+        );
+    }
+    let mut marked = Vec::new();
+    for (path, group) in targets {
+        let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            continue;
+        };
+        // SAFETY : voir plus haut.
+        let rc = unsafe {
+            libc::fanotify_mark(
+                fd,
+                libc::FAN_MARK_ADD,
+                libc::FAN_OPEN_EXEC_PERM,
+                libc::AT_FDCWD,
+                c.as_ptr(),
+            )
+        };
+        if rc == 0 {
+            marked.push((file_identity(path), group.clone()));
+        } else {
+            // Programme absent pour l'instant : réessayé au prochain tour.
+            marked.push((None, group.clone()));
+        }
+    }
+    marked
+}
+
+/// Événement fanotify : (masque, descripteur du fichier, processus).
+pub fn fanotify_events(buf: &[u8]) -> Vec<(u64, i32, i32)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at + 24 <= buf.len() {
+        let m = &buf[at..];
+        let len = u32::from_ne_bytes([m[0], m[1], m[2], m[3]]) as usize;
+        if len < 24 || at + len > buf.len() || m[4] != libc::FANOTIFY_METADATA_VERSION {
+            break;
+        }
+        let mut mask = [0u8; 8];
+        mask.copy_from_slice(&m[8..16]);
+        let fd = i32::from_ne_bytes([m[16], m[17], m[18], m[19]]);
+        let pid = i32::from_ne_bytes([m[20], m[21], m[22], m[23]]);
+        out.push((u64::from_ne_bytes(mask), fd, pid));
+        at += len;
+    }
+    out
+}
+
+/// Répond à un événement de permission : toujours « autoriser ».
+fn allow(group_fd: i32, event_fd: i32) {
+    let response = libc::fanotify_response {
+        fd: event_fd,
+        response: libc::FAN_ALLOW,
+    };
+    // SAFETY : structure locale de la taille annoncée.
+    unsafe {
+        libc::write(
+            group_fd,
+            (&response as *const libc::fanotify_response).cast(),
+            std::mem::size_of::<libc::fanotify_response>(),
+        );
+    }
+}
+
+fn guard_execs(fd: i32) {
+    let mut published = PublishedTargets::default();
+    let mut marked: Vec<(Option<(u64, u64)>, String)> = Vec::new();
+    let mut buf = vec![0u8; 8 * 1024];
+    loop {
+        let stale = marked
+            .iter()
+            .zip(&published.targets)
+            .any(|((id, _), (path, _))| *id != file_identity(path));
+        if published.refresh() || stale {
+            marked = mark_targets(fd, &published.targets);
+            // `apply` attend ce fichier avant de rendre la main (#2446).
+            let _ = admin::write_text(&admin::path(ARMED), &targets_text(&published.targets));
+        }
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY : une seule structure locale. 200 ms : une liste publiée
+        // est relue vite, `apply` attendant qu'elle soit armée (#2446).
+        if unsafe { libc::poll(&mut poll, 1, 200) } <= 0 {
+            continue;
+        }
+        // SAFETY : `buf` est un tampon local de la taille annoncée.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n <= 0 {
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                return;
+            }
+            continue;
+        }
+        for (mask, event_fd, pid) in fanotify_events(&buf[..n as usize]) {
+            if event_fd < 0 {
+                continue;
+            }
+            if mask & libc::FAN_OPEN_EXEC_PERM != 0 {
+                let id = std::fs::read_link(format!("/proc/self/fd/{event_fd}"))
+                    .ok()
+                    .and_then(|p| file_identity(&p));
+                if let Some((_, group)) = marked.iter().find(|(m, _)| m.is_some() && *m == id) {
+                    let moved = std::fs::write(
+                        cgroup_root().join(group).join("cgroup.procs"),
+                        pid.to_string(),
+                    )
+                    .is_ok();
+                    // Sockets hérités à travers l'exec : coupés avant que le
+                    // programme ne démarre (#2176).
+                    if moved {
+                        if let Some(cut) = published.blocks.iter().find(|c| c.group == *group) {
+                            cut_connections(&admin::path(&format!("proc/{pid}")), cut);
+                        }
+                    }
+                }
+                allow(fd, event_fd);
+            }
+            // SAFETY : descripteur reçu avec l'événement, fermé une fois.
+            unsafe { libc::close(event_fd) };
+        }
+    }
+}
+
+/// Au lancement d'un .exe filtré en sortie : son propre code ne s'exécute
+/// qu'une fois le processus dans le cgroup de sa règle, donc aucun octet ne
+/// part avant le filtre (#2157). Rien à attendre pour un programme non visé.
+pub fn wait_for_cgroup() {
+    let Some(text) = admin::read_text(&admin::path(TARGETS)) else {
+        return;
+    };
+    let targets = parse_targets(&text);
+    if targets.is_empty() {
+        return;
+    }
+    let me = admin::path("proc/self");
+    let Some(prog) = program_of(&me) else {
+        return;
+    };
+    if !targets.contains(&prog) {
+        return;
+    }
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        let current = admin::read_text(&me.join("cgroup")).unwrap_or_default();
+        if current.contains("/winlux-fw/r") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    eprintln!(
+        "winlux : {} n'a pas été rattaché au filtre du pare-feu en 3 s",
+        prog.display()
+    );
 }
 
 // ---------- Journal des connexions bloquées ----------
@@ -923,6 +1660,15 @@ fn config_stamp() -> Option<std::time::SystemTime> {
 
 pub fn daemon() -> ! {
     let _ = std::fs::create_dir_all(admin::path(RUN_DIR));
+    {
+        // Les .exe lisent la liste des programmes filtrés (#2157).
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            std::fs::set_permissions(admin::path(RUN_DIR), std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = std::thread::Builder::new()
+        .name("winlux-fw-exec".into())
+        .spawn(watch_execs);
     let _ = admin::write_text(
         &admin::path(RUN_DIR).join("daemon.pid"),
         &std::process::id().to_string(),
@@ -956,7 +1702,10 @@ pub fn daemon() -> ! {
             .iter()
             .any(|r| r.dir == Dir::In && !r.program.is_empty());
         if reload || (program_rules && new_apps != apps) {
-            let _ = apply(&cfg, &new_apps);
+            let applied = apply(&cfg, &new_apps).is_ok();
+            if applied && reload && cgroups_available() {
+                cut_blocked_groups(&cfg);
+            }
         }
         publish_profile(&cfg, &mut published);
         assign_cgroups(&cfg);
@@ -1044,7 +1793,10 @@ pub fn cli(args: &[String]) -> i32 {
                 text.push_str(&s);
             }
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
-                Some(r) => text.push_str(&r),
+                Some(r) => {
+                    text.push_str(&r);
+                    text.push_str(&targets_status(&out_targets(&cfg)));
+                }
                 None => text.push_str("pare-feu désactivé pour ce profil\n"),
             }
             print_out(&text)
@@ -1085,8 +1837,116 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// Datagramme fanotify : deux événements à la suite, version vérifiée.
+    #[test]
+    fn analyse_des_evenements_fanotify() {
+        let event = |mask: u64, fd: i32, pid: i32| {
+            let mut e = Vec::new();
+            e.extend_from_slice(&24u32.to_ne_bytes());
+            e.push(libc::FANOTIFY_METADATA_VERSION);
+            e.push(0);
+            e.extend_from_slice(&24u16.to_ne_bytes());
+            e.extend_from_slice(&mask.to_ne_bytes());
+            e.extend_from_slice(&fd.to_ne_bytes());
+            e.extend_from_slice(&pid.to_ne_bytes());
+            e
+        };
+        let mut buf = event(libc::FAN_OPEN_EXEC_PERM, 7, 4242);
+        buf.extend(event(libc::FAN_OPEN_EXEC_PERM, 8, 4343));
+        assert_eq!(
+            super::fanotify_events(&buf),
+            vec![
+                (libc::FAN_OPEN_EXEC_PERM, 7, 4242),
+                (libc::FAN_OPEN_EXEC_PERM, 8, 4343)
+            ]
+        );
+        let mut wrong = event(libc::FAN_OPEN_EXEC_PERM, 7, 1);
+        wrong[4] = 99;
+        assert!(super::fanotify_events(&wrong).is_empty());
+        assert!(super::fanotify_events(&buf[..20]).is_empty());
+    }
+
+    /// Réel (root, fanotify) : l'exec d'un programme marqué reste suspendu
+    /// jusqu'à la réponse, et l'événement donne le processus qui démarre.
+    /// `cargo test --release --bin winlux exec_suspendu -- --ignored`
+    #[test]
+    #[ignore]
+    fn exec_suspendu_jusqu_a_la_reponse() {
+        let dir = std::env::temp_dir().join(format!("winlux-fan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("vrai");
+        std::fs::copy("/bin/true", &prog).unwrap();
+        let fd = super::exec_guard().expect("fanotify_init");
+        let marked = super::mark_targets(fd, &[(prog.clone(), "winlux-fw/r1".into())]);
+        assert!(marked[0].0.is_some(), "marque posée");
+        let p = prog.clone();
+        let child = std::thread::spawn(move || {
+            let mut c = std::process::Command::new(&p).spawn().unwrap();
+            let id = c.id() as i32;
+            c.wait().unwrap();
+            id
+        });
+        let mut buf = vec![0u8; 4096];
+        // SAFETY : tampon local de la taille annoncée.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        let events = super::fanotify_events(&buf[..n as usize]);
+        assert_eq!(events.len(), 1);
+        let (mask, event_fd, pid) = events[0];
+        assert!(mask & libc::FAN_OPEN_EXEC_PERM != 0);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!child.is_finished(), "l'exec attend la réponse");
+        let id = std::fs::read_link(format!("/proc/self/fd/{event_fd}"))
+            .ok()
+            .and_then(|p| super::file_identity(&p));
+        assert_eq!(
+            id, marked[0].0,
+            "le fichier de l'événement est le programme marqué"
+        );
+        super::allow(fd, event_fd);
+        // SAFETY : descripteurs possédés.
+        unsafe {
+            libc::close(event_fd);
+            libc::close(fd);
+        }
+        assert_eq!(
+            child.join().unwrap(),
+            pid,
+            "processus de l'événement = programme lancé"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use crate::admin::test_root::Root;
+
+    #[test]
+    fn apply_attend_la_liste_armee() {
+        let _r = Root::new("firewall-arme");
+        let limit = std::time::Duration::from_millis(300);
+        let targets = admin::path(TARGETS);
+        std::fs::create_dir_all(targets.parent().unwrap()).unwrap();
+        admin::write_text(&targets, "/usr/bin/curl\n").unwrap();
+        // Pas de fil fanotify : rien à attendre.
+        let t = std::time::Instant::now();
+        assert!(!wait_armed(limit));
+        assert!(t.elapsed() < limit);
+        // Liste armée en retard : attendue jusqu'à ce qu'elle arrive.
+        admin::write_text(&admin::path(ARMED), "").unwrap();
+        let armed = admin::path(ARMED);
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::write(armed, "/usr/bin/curl\n").unwrap();
+        });
+        let t = std::time::Instant::now();
+        assert!(wait_armed(std::time::Duration::from_secs(3)));
+        assert!(t.elapsed() >= std::time::Duration::from_millis(80));
+        late.join().unwrap();
+        // Jamais armée : la limite est tenue.
+        admin::write_text(&targets, "/usr/bin/wget\n").unwrap();
+        let t = std::time::Instant::now();
+        assert!(!wait_armed(limit));
+        assert!(t.elapsed() >= limit);
+    }
 
     /// Lecteur qui a fermé le tube, comme `| head` (#1105).
     struct ClosedPipe;
@@ -1374,5 +2234,165 @@ mod tests {
         write_status(&cfg, true, "", 0);
         let status = admin::read_text(&r.dir.join(RUN_DIR).join("status.txt")).unwrap();
         assert!(status.contains("profile=public\n"));
+    }
+
+    /// Datagramme du connecteur « proc » : un fork ignoré, puis un exec (#2157).
+    #[test]
+    fn exec_events_give_the_new_program_tgid() {
+        fn event(what: u32, pid: i32, tgid: i32) -> Vec<u8> {
+            let mut m = Vec::new();
+            m.extend_from_slice(&60u32.to_ne_bytes());
+            m.extend_from_slice(&[0u8; 12]);
+            m.extend_from_slice(&[0u8; 16]);
+            m.extend_from_slice(&24u16.to_ne_bytes());
+            m.extend_from_slice(&0u16.to_ne_bytes());
+            m.extend_from_slice(&what.to_ne_bytes());
+            m.extend_from_slice(&0u32.to_ne_bytes());
+            m.extend_from_slice(&0u64.to_ne_bytes());
+            m.extend_from_slice(&pid.to_ne_bytes());
+            m.extend_from_slice(&tgid.to_ne_bytes());
+            assert_eq!(m.len(), 60);
+            m
+        }
+        let mut buf = event(1, 41, 41);
+        buf.extend(event(PROC_EVENT_EXEC, 4243, 4242));
+        assert_eq!(exec_tgids(&buf), vec![4242]);
+        assert!(exec_tgids(&buf[..30]).is_empty());
+    }
+
+    #[test]
+    fn published_targets_round_trip() {
+        let targets = vec![
+            (
+                PathBuf::from("/usr/bin/wget"),
+                "winlux-fw/r9900".to_string(),
+            ),
+            (
+                PathBuf::from("/home/d/Program Files/App\tx/app.exe"),
+                "winlux-fw/r3".into(),
+            ),
+        ];
+        let text = targets_text(&targets);
+        // Chemins seuls : ni numéro de règle ni cgroup.
+        assert!(!text.contains("winlux-fw") && !text.contains("r9900"));
+        let paths: Vec<PathBuf> = targets.iter().map(|(p, _)| p.clone()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(parse_targets(&text), sorted);
+        assert!(parse_targets("").is_empty());
+    }
+
+    /// Une règle « Bloquer » par application passe avant l'acceptation des
+    /// connexions établies ; seules les connexions vers l'extérieur, sur le
+    /// protocole et le port visés, sont coupées (#2176).
+    #[test]
+    fn blocked_app_cuts_established_but_not_loopback() {
+        let mut cfg = Config::default();
+        cfg.rules.push(rule(
+            7,
+            Dir::Out,
+            Verdict::Block,
+            Proto::Any,
+            "",
+            "/usr/bin/wget",
+        ));
+        let rs = ruleset(&cfg, &BTreeMap::new(), true).unwrap();
+        let lo = rs.find("oif \"lo\" accept").unwrap();
+        let block = rs
+            .find("socket cgroupv2 level 2 \"winlux-fw/r7\" drop")
+            .unwrap();
+        let est = rs.rfind("ct state established,related accept").unwrap();
+        assert!(lo < block && block < est, "{rs}");
+
+        let cut = BlockCut {
+            group: "winlux-fw/r7".into(),
+            proto: Proto::Tcp,
+            ports: vec![(443, 443)],
+        };
+        let msg = |family: u8, dport: u16, dst: [u8; 4]| {
+            let mut m = vec![0u8; 72];
+            m[0] = family;
+            m[6..8].copy_from_slice(&dport.to_be_bytes());
+            m[24..28].copy_from_slice(&dst);
+            m
+        };
+        let inet = libc::AF_INET as u8;
+        assert!(diag_msg_matches(
+            &msg(inet, 443, [93, 184, 216, 34]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 443, [127, 0, 0, 1]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 80, [93, 184, 216, 34]),
+            false,
+            &cut
+        ));
+        assert!(!diag_msg_matches(
+            &msg(inet, 443, [93, 184, 216, 34]),
+            true,
+            &cut
+        ));
+        assert!(!diag_msg_matches(&msg(inet, 0, [0, 0, 0, 0]), false, &cut));
+        let mut v6 = [0u8; 16];
+        v6[15] = 1;
+        assert!(diag_dst_is_loopback(libc::AF_INET6 as u8, &v6));
+    }
+
+    /// Essai réel (root, noyau avec INET_DIAG_DESTROY) : une connexion TCP
+    /// vers une adresse non locale est coupée (#2176). `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn open_connection_is_cut() {
+        use std::io::{Read, Write};
+        let ip = std::env::var("WINLUX_TEST_IP").expect("WINLUX_TEST_IP");
+        let listener = std::net::TcpListener::bind((ip.as_str(), 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        let (_server, _) = listener.accept().unwrap();
+        client.write_all(b"x").unwrap();
+        let cut = BlockCut {
+            group: "essai".into(),
+            proto: Proto::Tcp,
+            ports: vec![(addr.port(), addr.port())],
+        };
+        cut_connections(Path::new("/proc/self"), &cut);
+        let mut b = [0u8; 1];
+        let err = client.read(&mut b).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ECONNABORTED), "{err}");
+    }
+
+    /// #2436 : `status` dit pour chaque programme filtré s'il est présent
+    /// (surveillé) ou absent (règle en attente).
+    #[test]
+    fn status_distingue_programme_absent() {
+        let dir = std::env::temp_dir().join(format!("winlux-fw-2436-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("app.exe");
+        std::fs::write(&present, b"MZ").unwrap();
+        let absent = dir.join("wget");
+        let targets = vec![
+            (absent.clone(), "winlux-fw/r901".to_string()),
+            (present.clone(), "winlux-fw/r3".to_string()),
+        ];
+        let text = targets_status(&targets);
+        assert!(text.contains(&format!(
+            "programme absent, règle en attente : {} (winlux-fw/r901)\n",
+            absent.display()
+        )));
+        assert!(text.contains(&format!(
+            "programme présent, surveillé : {} (winlux-fw/r3)\n",
+            present.display()
+        )));
+        assert_eq!(text.lines().count(), 2);
+        // Le fichier apparaît : la même règle passe à « surveillé ».
+        std::fs::write(&absent, b"").unwrap();
+        assert!(!targets_status(&targets).contains("absent"));
+        assert!(targets_status(&[]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -6,7 +6,7 @@
 // Winlux n'a qu'un domaine par processus, le domaine par défaut.
 // AssemblyResolve est consulté par Assembly.Load quand une assembly manque ;
 // les autres événements se mémorisent, mais le moteur ne lève pas encore
-// ProcessExit ni UnhandledException (#2058).
+// ProcessExit ni UnhandledException (#2058), levés depuis par le moteur.
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -127,6 +127,30 @@ namespace System
         {
             ResolveEventHandler h = AssemblyResolve;
             return h == null ? null : h(this, new ResolveEventArgs(nom, demandeur));
+        }
+
+        // Appelé par le moteur au retour de Main et par Environment.Exit
+        // (#2058). Les gestionnaires ne sont levés qu'une fois, même si l'un
+        // d'eux appelle Environment.Exit. Sans CurrentDomain lu, personne
+        // n'a pu s'abonner.
+        internal static void LeverSortie()
+        {
+            AppDomain d = _courant;
+            if (d == null) return;
+            EventHandler h = d.ProcessExit;
+            d.ProcessExit = null;
+            if (h != null) h(d, EventArgs.Empty);
+        }
+
+        // Appelé par le moteur avant l'arrêt sur une exception non gérée
+        // (#2058) : IsTerminating vaut true.
+        internal static void LeverExceptionNonGeree(object exception)
+        {
+            AppDomain d = _courant;
+            if (d == null) return;
+            UnhandledExceptionEventHandler h = d.UnhandledException;
+            d.UnhandledException = null;
+            if (h != null) h(d, new UnhandledExceptionEventArgs(exception, true));
         }
 
         public override string ToString() { return "Name:" + _nom + "\nThere are no context policies.\n"; }

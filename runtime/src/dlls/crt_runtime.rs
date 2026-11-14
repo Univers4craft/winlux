@@ -2012,6 +2012,7 @@ pub unsafe extern "win64" fn beginthreadex(
     id: *mut u32,
 ) -> usize {
     let h = crate::dlls::kernel32::create_thread(attrs, stack as usize, start, arg, flags, id);
+    crate::dlls::fil_trace::note_created("_beginthreadex", start, arg, flags, h);
     if h == 0 {
         *errno() = 11;
     }
@@ -2026,6 +2027,7 @@ pub unsafe extern "win64" fn beginthread(start: usize, stack: u32, arg: usize) -
         0,
         std::ptr::null_mut(),
     );
+    crate::dlls::fil_trace::note_created("_beginthread", start, arg, 0, h);
     if h == 0 {
         *errno() = 11;
         usize::MAX
@@ -2501,9 +2503,14 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), b"RIFF");
             let _ = std::fs::remove_file(&path);
             // Le numéro `fd` peut déjà resservir à un test qui tourne en
-            // parallèle (#1320) : on vérifie l'oubli dans la table, pas un
-            // appel à get_osfhandle(fd).
-            assert!(osf_handles().lock().unwrap().get(&fd).is_none());
+            // parallèle, et y avoir sa propre entrée (#1320, #2498) : on
+            // vérifie que le handle `h` de ce test a quitté la table. Les
+            // numéros de handle ne sont jamais réattribués.
+            let table = osf_handles().lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !table.values().any(|&v| v == h as usize),
+                "handle {h:#x} oublié avec son descripteur"
+            );
         }
     }
 

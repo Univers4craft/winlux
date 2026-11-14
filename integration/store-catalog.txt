@@ -6,6 +6,38 @@
 # dépôts configurés est simplement masqué. Les navigateurs restent sans préférence
 # (ordre alphabétique, jamais en vedette : docs/BROWSERS.md).
 featured=writer,vlc,gimp,thunderbird,keepassxc,obs,krita,kdenlive,supertuxkart,0ad,inkscape,audacity
+# compagnons=paquet:a,b : installés avec l'application, marqués automatiques
+# (retirés avec elle). Pour ce qu'apt ne fait que recommander alors que
+# l'application ne marche pas sans (#2075). Jamais libvirt-daemon-system,
+# qui tire la variante systemd : libvirt tourne en mode compte (qemu:///session).
+compagnons=virt-manager:qemu-system-x86,qemu-utils,libvirt-daemon-driver-qemu,libvirt-clients,passt,ovmf,swtpm-tools,gir1.2-spiceclientgtk-3.0
+compagnons=gnome-boxes:qemu-system-x86,qemu-utils,libvirt-daemon-driver-qemu,passt,ovmf,swtpm-tools
+# Relecture des 157 entrées qui perdent une recommandation (#2075) : seules
+# celles où le logiciel ne marche pas, ou pas dans la langue de l'interface,
+# sans elle (#2081 à #2103). Aide, documentation et thèmes restent absents.
+compagnons=remmina:remmina-plugin-rdp,remmina-plugin-vnc
+compagnons=krdc:freerdp2-x11
+compagnons=knights:gnuchess,stockfish
+compagnons=kigo:gnugo
+compagnons=codeblocks:gcc,g++,xterm
+compagnons=kdevelop:gcc,g++,make
+compagnons=cmake:gcc,g++,make
+compagnons=gnome-builder:build-essential,meson
+compagnons=xarchiver:unzip,zip,p7zip-full,bzip2
+compagnons=ark:p7zip-full,unar
+compagnons=k3b:growisofs,k3b-i18n
+compagnons=freeciv-client-gtk3:freeciv-server
+compagnons=openttd:openttd-opengfx,openttd-opensfx,openttd-openmsx
+compagnons=kicad:kicad-symbols,kicad-footprints,kicad-templates
+compagnons=syncthing-gtk:syncthing
+compagnons=gnome-calendar:evolution-data-server
+compagnons=libreoffice-base:libreoffice-sdbc-hsqldb,libreoffice-sdbc-firebird,libreoffice-java-common,default-jre,libreoffice-writer
+compagnons=asunder:lame,flac,vorbis-tools,opus-tools
+compagnons=inkscape:python3-lxml,python3-numpy,python3-scour,python3-cssselect
+compagnons=vlc:vlc-l10n
+compagnons=smplayer:smplayer-l10n
+compagnons=nomacs:nomacs-l10n
+compagnons=claws-mail:claws-mail-i18n
 # --- Internet ---
 epiphany|internet|GNOME Web|epiphany-browser|GNOME|Navigateur web simple et rapide, intégré au bureau.|Simple, fast web browser integrated with the desktop.|Navegador web sencillo y rápido, integrado en el escritorio.|Einfacher, schneller Webbrowser, in den Desktop integriert.
 falkon|internet|Falkon|falkon|KDE|Navigateur léger avec bloqueur de publicités.|Lightweight browser with an ad blocker.|Navegador ligero con bloqueador de anuncios.|Leichter Browser mit Werbeblocker.

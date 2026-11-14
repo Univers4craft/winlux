@@ -149,6 +149,45 @@ static PRINTDLGEX: Layout = Layout {
     ],
 };
 
+/// BROWSEINFOA/W (shlobj_core.h), sans champ de taille : hwndOwner,
+/// pidlRoot, pszDisplayName, lpszTitle, ulFlags, lpfn, lParam, iImage
+/// (#2333).
+static BROWSEINFO: Layout = Layout {
+    size32: 32,
+    size64: 64,
+    fields: &[
+        P(0, 0),
+        P(4, 8),
+        P(8, 16),
+        P(12, 24),
+        D(16, 32),
+        P(20, 40),
+        P(24, 48),
+        D(28, 56),
+    ],
+};
+
+/// SHBrowseForFolderA/W pour un programme x86 : BROWSEINFO recopiée en
+/// x64, appel, iImage recopié au retour. L'identifiant rendu vient de
+/// CoTaskMemAlloc, sous 4 Go comme le reste du tas en wow32.
+extern "win64" fn browse32(args: u32, aux: usize) -> u64 {
+    let target = aux;
+    let ptr = rd(args);
+    let f: extern "win64" fn(*mut u8) -> u64 = unsafe { std::mem::transmute(target) };
+    if ptr == 0 {
+        return f(std::ptr::null_mut());
+    }
+    let mut x86 = [0u8; 32];
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr as usize as *const u8, x86.as_mut_ptr(), 32);
+        let mut wide = BROWSEINFO.boxed64(x86.as_ptr() as usize);
+        let r = f(wide.as_mut_ptr() as *mut u8);
+        BROWSEINFO.to32(wide.as_ptr() as *const u8, x86.as_mut_ptr() as usize);
+        std::ptr::copy_nonoverlapping(x86.as_ptr(), ptr as usize as *mut u8, 32);
+        r
+    }
+}
+
 fn layout_of(func: &str) -> Option<&'static Layout> {
     Some(match func {
         "GetOpenFileNameA" | "GetOpenFileNameW" | "GetSaveFileNameA" | "GetSaveFileNameW" => {
@@ -214,6 +253,14 @@ extern "win64" fn find32(args: u32, aux: usize) -> u64 {
 
 /// Passerelle x86 des boîtes communes de comdlg32.
 pub(super) fn override_for(dll: &str, func: &str) -> Option<super::crt::Override> {
+    if dll == "shell32" && matches!(func, "SHBrowseForFolderA" | "SHBrowseForFolderW") {
+        let target = crate::dlls::lookup(dll, func)?;
+        return Some(super::crt::Override::Raw {
+            target: browse32 as *const () as usize,
+            aux: target,
+            pop: Some(4),
+        });
+    }
     if dll != "comdlg32" {
         return None;
     }

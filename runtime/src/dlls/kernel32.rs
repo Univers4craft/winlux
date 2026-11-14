@@ -994,6 +994,18 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         Some(libc::EISDIR) | Some(libc::EPERM) => return 5, // ERROR_ACCESS_DENIED
         Some(libc::EBUSY) | Some(libc::ETXTBSY) => return 32, // ERROR_SHARING_VIOLATION
         Some(libc::EFAULT) => return 998,       // ERROR_NOACCESS : tampon invalide (#18)
+        // Tube dont l'autre bout est fermé : ERROR_NO_DATA (232) en écriture,
+        // ERROR_BROKEN_PIPE (109) en lecture, comme le chemin asynchrone.
+        // libuv (Node, Electron) et CPython y lisent une fermeture normale ;
+        // le 31 générique devenait une panne d'entrée-sortie (#2111).
+        Some(libc::EPIPE) => return 232,
+        Some(libc::ECONNRESET) => return 109,
+        Some(libc::EMFILE) | Some(libc::ENFILE) => return 4, // ERROR_TOO_MANY_OPEN_FILES
+        Some(libc::ENOMEM) => return 8,                      // ERROR_NOT_ENOUGH_MEMORY
+        Some(libc::EBADF) => return 6,                       // ERROR_INVALID_HANDLE
+        Some(libc::EIO) => return 1117,                      // ERROR_IO_DEVICE
+        Some(libc::EFBIG) => return 223,                     // ERROR_FILE_TOO_LARGE
+        Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => return 50, // ERROR_NOT_SUPPORTED
         _ => {}
     }
     match e.kind() {
@@ -1003,6 +1015,38 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         std::io::ErrorKind::InvalidInput => 87,
         std::io::ErrorKind::NotADirectory => 267,
         _ => 31,
+    }
+}
+/// Code d'erreur d'une opération sur le chemin `p` : quand un dossier du
+/// chemin manque, ou qu'un de ses composants est un fichier, Windows rend
+/// ERROR_PATH_NOT_FOUND (3), pas ERROR_FILE_NOT_FOUND (2) ni ERROR_DIRECTORY
+/// (267) ; Linux rend ENOENT ou ENOTDIR sans distinguer le parent. La
+/// documentation de CreateDirectory le dit explicitement, et les programmes
+/// qui créent une arborescence s'en servent pour créer d'abord le parent
+/// (#2112, comme CreateFile depuis #1674).
+pub(crate) fn path_error_code(e: &std::io::Error, p: &std::path::Path) -> u32 {
+    let ambigu = matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    if ambigu
+        && p.parent()
+            .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+    {
+        3
+    } else {
+        io_error_code(e)
+    }
+}
+/// Même chose pour une opération à deux chemins (MoveFile, CopyFile).
+pub(crate) fn two_paths_error_code(
+    e: &std::io::Error,
+    a: &std::path::Path,
+    b: &std::path::Path,
+) -> u32 {
+    match path_error_code(e, a) {
+        3 => 3,
+        _ => path_error_code(e, b),
     }
 }
 unsafe fn bytes<'a>(p: *const u8, len: usize) -> Option<&'a [u8]> {
@@ -1321,6 +1365,79 @@ pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: 
         let raw = ov_event(overlapped);
         if signal && raw & !1 != 0 {
             let _ = set_event(raw & !1);
+        }
+    }
+}
+
+/// Opération asynchrone hors ReadFile/WriteFile (ConnectNamedPipe, #2219)
+/// inscrite comme les autres : GetOverlappedResult la connaît et peut
+/// l'attendre quand `bWait` vaut TRUE.
+pub(crate) struct PendingIo {
+    h: usize,
+    overlapped: usize,
+    op: Arc<IoOperation>,
+}
+
+/// Début d'une E/S asynchrone sur `h` : `Internal` = STATUS_PENDING et
+/// hEvent remis à non signalé (« the function that started the operation
+/// resets the hEvent member », page GetOverlappedResult). `None` si une
+/// opération est déjà en cours sur ce même OVERLAPPED (ERROR_IO_PENDING posé).
+///
+/// # Safety
+/// `overlapped` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn begin_overlapped(h: usize, overlapped: usize) -> Option<PendingIo> {
+    let op = Arc::new(IoOperation {
+        file_handle: h,
+        issuing_thread: std::thread::current().id(),
+        state: Mutex::new(IoResult {
+            done: false,
+            bytes: 0,
+            error: 0,
+        }),
+        changed: Condvar::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops.get(&overlapped).is_some_and(|o| !lock(&o.state).done) {
+            crate::process::set_last_error(997);
+            return None;
+        }
+        ops.insert(overlapped, op.clone());
+    }
+    ov_set(overlapped, 0x103, 0);
+    let event = ov_event(overlapped) & !1;
+    if event != 0 {
+        let _ = reset_event(event);
+    }
+    Some(PendingIo { h, overlapped, op })
+}
+
+impl PendingIo {
+    /// L'opération est-elle annulée (CancelIo/CancelIoEx) ?
+    pub(crate) fn cancelled(&self) -> bool {
+        self.op.cancelled.load(Ordering::Acquire)
+    }
+    /// Fin de l'opération : résultat noté pour GetOverlappedResult, puis
+    /// `Internal`, événement et port de complétion comme `complete_overlapped`.
+    pub(crate) fn finish(self, bytes: u32, error: u32) {
+        {
+            let mut state = lock(&self.op.state);
+            state.bytes = bytes;
+            state.error = error;
+            state.done = true;
+            self.op.changed.notify_all();
+        }
+        complete_overlapped(self.h, self.overlapped, bytes, error);
+    }
+    /// Le fil n'a pas pu partir : l'opération est oubliée.
+    pub(crate) fn abandon(self) {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops
+            .get(&self.overlapped)
+            .is_some_and(|o| Arc::ptr_eq(o, &self.op))
+        {
+            ops.remove(&self.overlapped);
         }
     }
 }
@@ -2406,14 +2523,7 @@ unsafe fn create_file_opened(
         Err(e) => {
             // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
             // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
-            let code = if e.kind() == std::io::ErrorKind::NotFound
-                && p.parent()
-                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
-            {
-                3
-            } else {
-                io_error_code(&e)
-            };
+            let code = path_error_code(&e, &p);
             // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
             crate::trace!(
                 "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
@@ -2577,7 +2687,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         }
         Err(e) if builtin_attribute_data(&e, &win, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -2613,7 +2723,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
         }
         Err(e) if builtin_attribute_data(&e, &s, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -2998,7 +3108,7 @@ unsafe fn set_file_attributes_str(path: &str, attributes: u32) -> i32 {
     let m = match std::fs::metadata(&p) {
         Ok(m) => m,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             return 0;
         }
     };
@@ -3395,12 +3505,12 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
                 1
             }
             Err(e) => {
-                crate::process::set_last_error(io_error_code(&e));
+                crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
                 0
             }
         },
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -4110,6 +4220,29 @@ fn heap_diag_parse(v: &str) -> (bool, bool, bool) {
     let has = |w: &str| v.split(',').any(|x| x.trim() == w);
     (has("trace"), has("nofree"), has("lfh"))
 }
+/// `fill` (#2156) : un bloc rendu par HeapAlloc sans HEAP_ZERO_MEMORY, ou
+/// la partie agrandie par HeapReAlloc, est rempli de [`HEAP_FILL_PATTERN`].
+/// Un programme qui suit un pointeur lu dans un champ jamais initialisé
+/// fait alors une faute avec ce motif dans le registre fautif (Acrobat,
+/// #1818). Jamais actif par défaut.
+fn heap_fill() -> bool {
+    static FILL: OnceLock<bool> = OnceLock::new();
+    *FILL.get_or_init(|| heap_fill_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
+}
+fn heap_fill_parse(v: &str) -> bool {
+    v.split(',').any(|x| x.trim() == "fill")
+}
+/// Motif de `WINLUX_HEAP_DIAG=fill` : quadmot non canonique, distinct de
+/// celui de WINLUX_STACK_SCRUB (0xF1F15C2B…).
+pub(crate) const HEAP_FILL_PATTERN: u64 = 0xF2F2_5A11_F2F2_5A11;
+/// Remplit `len` octets à `p` du motif, dans l'ordre de la mémoire (petit
+/// boutiste), y compris un reste de moins de 8 octets.
+unsafe fn heap_fill_bytes(p: *mut u8, len: usize) {
+    let pat = HEAP_FILL_PATTERN.to_le_bytes();
+    for i in 0..len {
+        *p.add(i) = pat[i % 8];
+    }
+}
 const LFH_LIMIT: usize = 16 * 1024;
 const LFH_PER_CLASS: usize = 4096;
 fn lfh_class(size: usize) -> usize {
@@ -4178,10 +4311,33 @@ mod tests_diagnostic_tas {
         assert_eq!(super::lfh_class(0), 16);
         assert_eq!(super::lfh_class(17), 32);
     }
+
+    /// WINLUX_HEAP_DIAG=fill (#2156) : motif reconnaissable, octet par
+    /// octet, y compris un reste de moins de 8 octets.
+    #[test]
+    fn remplissage_du_tas() {
+        assert!(super::heap_fill_parse("trace,fill"));
+        assert!(!super::heap_fill_parse("trace,lfh"));
+        assert!(!super::heap_fill_parse(""));
+        let mut b = [0u8; 21];
+        unsafe { super::heap_fill_bytes(b.as_mut_ptr(), 19) };
+        let pat = super::HEAP_FILL_PATTERN.to_le_bytes();
+        for (i, x) in b.iter().enumerate().take(19) {
+            assert_eq!(*x, pat[i % 8]);
+        }
+        assert_eq!(&b[19..], &[0, 0]);
+        assert_eq!(
+            u64::from_le_bytes(b[8..16].try_into().unwrap()),
+            0xF2F2_5A11_F2F2_5A11
+        );
+    }
 }
 
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
-    let p = if heap_lfh() {
+    let p = if super::tas_page::enabled() {
+        // WINLUX_HEAP_DIAG=page (#2158) : bloc sur ses pages, page de garde.
+        super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)))
+    } else if heap_lfh() {
         lfh_alloc(size)
     } else {
         libc::malloc(size.max(1))
@@ -4189,6 +4345,8 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
     if !p.is_null() {
         if flags & 8 != 0 {
             std::ptr::write_bytes(p, 0, size);
+        } else if heap_fill() {
+            heap_fill_bytes(p as *mut u8, size);
         }
         lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
             .insert(p as usize, size.max(1));
@@ -4198,7 +4356,7 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapAlloc({size}) = {p:p} (fil {})",
+                "HeapAlloc({size}, drapeaux {flags:#x}) = {p:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4226,7 +4384,18 @@ pub unsafe extern "win64" fn heap_realloc(
         return std::ptr::null_mut();
     };
     let (trace, nofree) = heap_diag();
-    let q = if heap_lfh() {
+    let q = if super::tas_page::enabled() {
+        // Mode page (#2158) : nouveau bloc, l'ancien part en quarantaine
+        // inaccessible ; une lecture par l'ancien pointeur fait une faute.
+        let q = super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)));
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+            if !super::tas_page::free(p) && !nofree {
+                libc::free(p);
+            }
+        }
+        q
+    } else if heap_lfh() {
         // Mode lfh : nouveau bloc de la bonne classe, l'ancien est gardé
         // pour sa classe avec son contenu.
         let q = lfh_alloc(size);
@@ -4250,7 +4419,7 @@ pub unsafe extern "win64" fn heap_realloc(
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapReAlloc({p:p}, {size}) = {q:p} (fil {})",
+                "HeapReAlloc({p:p}, {size}, drapeaux {flags:#x}) = {q:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4263,6 +4432,8 @@ pub unsafe extern "win64" fn heap_realloc(
     allocations.insert(q as usize, size.max(1));
     if flags & 8 != 0 && size > old {
         std::ptr::write_bytes((q as *mut u8).add(old), 0, size - old);
+    } else if heap_fill() && size > old {
+        heap_fill_bytes((q as *mut u8).add(old), size - old);
     }
     q
 }
@@ -4285,7 +4456,9 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
             &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
         );
     }
-    if heap_lfh() {
+    if super::tas_page::enabled() && super::tas_page::free(p) {
+        // Mode page (#2158) : bloc rendu inaccessible, en quarantaine.
+    } else if heap_lfh() {
         lfh_free(p, old);
     } else if !nofree {
         libc::free(p);
@@ -5329,7 +5502,11 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
     if crate::dlls::mmap::export(h).is_some() {
         return Some("Section");
     }
-    Some(match lookup_sync(h)? {
+    let Some(sync) = lookup_sync(h) else {
+        // Clé du registre ouverte (#2413).
+        return crate::registry::key_nt_name(h).map(|_| "Key");
+    };
+    Some(match sync {
         SyncHandle::Event(_) => "Event",
         SyncHandle::Mutex(_) => "Mutant",
         SyncHandle::Thread(_) => "Thread",
@@ -5616,7 +5793,7 @@ fn poll_process(p: &ProcessObject) -> bool {
     if let Some(child) = s.child.as_mut() {
         match child.try_wait() {
             Ok(Some(status)) => {
-                s.exit_code = status.code().unwrap_or(1) as u32;
+                s.exit_code = child_exit_code(child.id(), status);
                 s.child = None;
                 p.changed.notify_all();
             }
@@ -6162,6 +6339,8 @@ pub(crate) fn exit_current_thread(code: u32) -> ! {
 }
 
 pub(crate) fn finish_current_thread(code: u32) {
+    // WINLUX_THREAD_TRACE / WINLUX_APITRACE (#2405) : fin du fil.
+    super::fil_trace::note_end(code);
     crate::process::thread_detach_current();
     release_iocp_slots_for_current_thread();
     let thread = CURRENT_THREAD
@@ -6719,7 +6898,21 @@ unsafe fn create_process_common(
     if let Some(d) = desk.as_ref() {
         cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
+    cmd.env_remove("WINLUX_EXIT_CODE_FILE");
+    let code_file = if is_pe {
+        exit_code_channel(&mut cmd)
+    } else {
+        None
+    };
     let spawned = cmd.spawn();
+    match spawned.as_ref() {
+        Ok(c) => remember_code_file(c.id(), code_file),
+        Err(_) => {
+            if let Some(f) = code_file {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
     // Les copies héritables restent chez l'enfant ; le parent les ferme.
     drop(passed);
     if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
@@ -7043,6 +7236,10 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     crate::dlls::handle_broker::forget_pid(child.id() as i32);
+    // TerminateProcess fixe le code : le fichier de l'enfant ne compte plus.
+    if let Some(f) = child_code_files().remove(&child.id()) {
+        let _ = std::fs::remove_file(f);
+    }
     if child.kill().is_err() {
         crate::process::set_last_error(5);
         return 0;
@@ -7980,19 +8177,27 @@ pub unsafe extern "win64" fn set_current_directory_a(path: *const u8) -> i32 {
 /// Corps commun de `set_current_directory_a` et `set_current_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn set_current_directory_str(path: &str) -> i32 {
-    match std::env::set_current_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::env::set_current_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
 }
-fn temp_path() -> String {
-    let p = std::env::var_os("TMPDIR")
-        .map(std::path::PathBuf::from)
+/// GetTempPath : TMP, puis TEMP, sinon le dossier temporaire du profil
+/// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
+/// défaut : c'est un tmpfs, et un installateur qui y décompresse des
+/// centaines de Mo épuise la mémoire (#2326).
+pub(crate) fn temp_path() -> String {
+    let p = ["TMP", "TEMP"]
+        .iter()
+        .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
+        .map(|v| crate::paths::to_linux(&v))
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        .unwrap_or_else(crate::paths::profile_temp);
+    let _ = std::fs::create_dir_all(&p);
     let mut s = crate::paths::to_windows(&p);
     if !s.ends_with('\\') {
         s.push('\\');
@@ -8070,7 +8275,7 @@ unsafe fn get_file_attributes_str(path: &str) -> u32 {
             BUILTIN_FILE_ATTRIBUTES
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             u32::MAX
         }
     }
@@ -8097,10 +8302,11 @@ unsafe fn delete_file_str(path: &str) -> i32 {
     r
 }
 unsafe fn delete_file_str_inner(path: &str) -> i32 {
-    match std::fs::remove_file(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::remove_file(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8127,10 +8333,11 @@ unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
     r
 }
 unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
-    match std::fs::create_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::create_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8440,7 +8647,7 @@ pub unsafe extern "win64" fn copy_file_a(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8477,7 +8684,7 @@ pub unsafe extern "win64" fn copy_file_w(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8493,10 +8700,10 @@ pub unsafe extern "win64" fn move_file_a(src: *const u8, dst: *const u8) -> i32 
         crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8522,10 +8729,10 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8549,10 +8756,11 @@ pub unsafe extern "win64" fn remove_directory_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match remove_dir_or_link(&crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    match remove_dir_or_link(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8566,13 +8774,14 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
         }
     };
     let path = s.to_string_lossy();
-    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+    let p = crate::paths::to_linux(&path);
+    match remove_dir_or_link(&p) {
         Ok(()) => {
             crate::trace!("RemoveDirectory({path}) = 1");
             1
         }
         Err(e) => {
-            let code = io_error_code(&e);
+            let code = path_error_code(&e, &p);
             crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
             crate::process::set_last_error(code);
             0
@@ -8759,10 +8968,114 @@ pub fn record_exit_code(code: u32) {
     }
 }
 
+/// Code de sortie complet d'un enfant lancé par CreateProcess (#2267) :
+/// le statut Linux n'en garde que 8 bits (3010 lu 194, 1602 lu 66), alors
+/// que `GetExitCodeProcess` rend un DWORD. L'enfant l'écrit dans un fichier
+/// (`WINLUX_EXIT_CODE_FILE`, #1205) que le parent relit à sa fin. Clé : PID.
+static CHILD_CODE_FILES: OnceLock<Mutex<HashMap<u32, std::path::PathBuf>>> = OnceLock::new();
+
+fn child_code_files() -> std::sync::MutexGuard<'static, HashMap<u32, std::path::PathBuf>> {
+    lock(CHILD_CODE_FILES.get_or_init(|| Mutex::new(HashMap::new())))
+}
+
+/// Crée le fichier du code de sortie d'un enfant et le lui désigne.
+pub(crate) fn exit_code_channel(cmd: &mut Command) -> Option<std::path::PathBuf> {
+    let dir = std::env::temp_dir();
+    for _ in 0..8 {
+        let n = NEXT_CODE_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("winlux-code-{}-{n}", std::process::id()));
+        let created = std::os::unix::fs::OpenOptionsExt::mode(
+            OpenOptions::new().write(true).create_new(true),
+            0o600,
+        )
+        .open(&path);
+        if created.is_ok() {
+            cmd.env("WINLUX_EXIT_CODE_FILE", &path);
+            return Some(path);
+        }
+    }
+    None
+}
+static NEXT_CODE_FILE: AtomicU32 = AtomicU32::new(0);
+
+/// Enfant lancé : son fichier de code est retenu jusqu'à sa fin.
+pub(crate) fn remember_code_file(pid: u32, path: Option<std::path::PathBuf>) {
+    if let Some(path) = path {
+        child_code_files().insert(pid, path);
+    }
+}
+
+/// Code « 0x780148E0 » écrit par `record_exit_code`.
+fn parse_exit_code_text(text: &str) -> Option<u32> {
+    let hex = text.trim().strip_prefix("0x")?;
+    (hex.len() == 8).then(|| u32::from_str_radix(hex, 16).ok())?
+}
+
+/// Code de sortie Windows d'un enfant terminé : le code complet qu'il a
+/// écrit, sinon le statut Linux. Le fichier est supprimé.
+pub(crate) fn child_exit_code(pid: u32, status: std::process::ExitStatus) -> u32 {
+    let linux = status.code().unwrap_or(1) as u32;
+    let Some(path) = child_code_files().remove(&pid) else {
+        return linux;
+    };
+    let full = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| parse_exit_code_text(&t));
+    let _ = std::fs::remove_file(&path);
+    // Fichier vide : l'enfant est mort sans écrire (signal), statut Linux.
+    // Il est créé neuf pour cet enfant, qui le retire de son environnement
+    // dès son démarrage : rien d'autre n'y écrit.
+    full.unwrap_or(linux)
+}
+
+/// Fin du processus avec un code Windows complet : écrit pour le parent,
+/// puis `exit` (atexit et destructeurs, comme `std::process::exit`).
+pub fn exit_with(code: i32) -> ! {
+    record_exit_code(code as u32);
+    std::process::exit(code)
+}
+
+#[cfg(test)]
+mod tests_code_enfant {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// #2267 : le code écrit par l'enfant prime sur ses 8 bits Linux ;
+    /// fichier vide (mort par signal) ou absent, le statut Linux reste.
+    #[test]
+    fn code_complet_de_l_enfant() {
+        assert_eq!(parse_exit_code_text("0x00000BC2\n"), Some(3010));
+        assert_eq!(parse_exit_code_text("0xE0434352"), Some(0xE0434352));
+        assert_eq!(parse_exit_code_text(""), None);
+        assert_eq!(parse_exit_code_text("0x63A"), None);
+        let mut cmd = Command::new("true");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        std::fs::write(&path, exit_code_text(1602)).unwrap();
+        remember_code_file(4_000_001, Some(path.clone()));
+        assert_eq!(
+            child_exit_code(4_000_001, std::process::ExitStatus::from_raw(66 << 8)),
+            1602
+        );
+        assert!(!path.exists(), "fichier du code supprimé");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        remember_code_file(4_000_002, Some(path));
+        assert_eq!(
+            child_exit_code(4_000_002, std::process::ExitStatus::from_raw(9)),
+            1
+        );
+        assert_eq!(
+            child_exit_code(4_000_003, std::process::ExitStatus::from_raw(42 << 8)),
+            42
+        );
+    }
+}
+
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
     crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
+    // WINLUX_WOW32_HISTORY (#2368) : historique écrit à toute fin.
+    crate::wow32::dump_history_at_exit(&format!("TerminateProcess (code {code:#x})"));
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -8775,6 +9088,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // WINLUX_WOW32_HISTORY (#2368) : ExitProcess, fail-fast, _invoke_watson.
+    crate::wow32::dump_history_at_exit(&format!("fin du processus (code {:#x})", code as u32));
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -10466,7 +10781,7 @@ pub unsafe extern "win64" fn get_short_path_name_w(
 // --- CompareStringA/W, CompareStringOrdinal ---
 pub unsafe extern "win64" fn compare_string_a(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u8,
     n1: i32,
     s2: *const u8,
@@ -10482,35 +10797,43 @@ pub unsafe extern "win64" fn compare_string_a(
     } else {
         crate::dlls::decode_ansi(std::slice::from_raw_parts(s2, n2 as usize))
     };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
+    let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+    compare_result(&a, &b, flags)
+}
+
+/// CompareStringA/W appliquent `dwCmpFlags` comme CompareStringEx (#2255) :
+/// sans NORM_IGNORECASE, deux chaînes qui ne diffèrent que par la casse ne
+/// sont pas égales.
+fn compare_result(a: &[u16], b: &[u16], flags: u32) -> i32 {
+    match super::nls::compare(a, b, flags) {
         std::cmp::Ordering::Less => 1,
         std::cmp::Ordering::Equal => 2,
         std::cmp::Ordering::Greater => 3,
     }
 }
+
 pub unsafe extern "win64" fn compare_string_w(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u16,
     n1: i32,
     s2: *const u16,
     n2: i32,
 ) -> i32 {
-    let a = if n1 < 0 {
-        crate::dlls::wstr(s1)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s1, n1 as usize))
-    };
-    let b = if n2 < 0 {
-        crate::dlls::wstr(s2)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s2, n2 as usize))
-    };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
-        std::cmp::Ordering::Less => 1,
-        std::cmp::Ordering::Equal => 2,
-        std::cmp::Ordering::Greater => 3,
+    if s1.is_null() || s2.is_null() {
+        set_last_error(87);
+        return 0;
     }
+    let len = |p: *const u16, n: i32| {
+        if n < 0 {
+            crate::printf::wide_len(p)
+        } else {
+            n as usize
+        }
+    };
+    let a = std::slice::from_raw_parts(s1, len(s1, n1));
+    let b = std::slice::from_raw_parts(s2, len(s2, n2));
+    compare_result(a, b, flags)
 }
 pub unsafe extern "win64" fn compare_string_ordinal(
     s1: *const u16,
@@ -10934,6 +11257,9 @@ unsafe fn duplicate_local(
     } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
         // Jeton unique du compte (voir security.rs) : la copie est lui-même.
         Some(src_handle)
+    } else if let Some(h) = crate::dlls::electron_win32::duplicate_user_object(src_handle) {
+        // Station de fenêtres ou bureau (#2443).
+        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le
@@ -11320,7 +11646,7 @@ pub unsafe extern "win64" fn get_overlapped_result_ex(
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "GetStdHandle"=>fn get_std_handle,"SetStdHandle"=>fn set_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
-     "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn super::fil_trace::wait_for_single_object,"WaitForMultipleObjects"=>fn super::fil_trace::wait_for_multiple_objects,"GetExitCodeThread"=>fn super::fil_trace::get_exit_code_thread,"ResumeThread"=>fn super::fil_trace::resume_thread,
+     "CreateEventA"=>fn create_event_a,"SetEvent"=>fn super::fil_trace::set_event,"ResetEvent"=>fn super::fil_trace::reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn super::fil_trace::release_mutex,"WaitForSingleObject"=>fn super::fil_trace::wait_for_single_object,"WaitForMultipleObjects"=>fn super::fil_trace::wait_for_multiple_objects,"GetExitCodeThread"=>fn super::fil_trace::get_exit_code_thread,"ResumeThread"=>fn super::fil_trace::resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
@@ -11367,7 +11693,7 @@ pub fn exports() -> crate::dlls::Exports {
      "SetHandleInformation"=>fn set_handle_information,"GetHandleInformation"=>fn get_handle_information,"DuplicateHandle"=>fn duplicate_handle,
      "CreateEventW"=>fn create_event_w,"CreateMutexW"=>fn create_mutex_w,
      "GetProcessId"=>fn get_process_id,"GetModuleHandleExW"=>fn get_module_handle_ex_w,
-     "CreateSemaphoreW"=>fn create_semaphore_w,"CreateSemaphoreA"=>fn create_semaphore_a,"CreateSemaphoreExW"=>fn create_semaphore_ex_w,"CreateEventExW"=>fn create_event_ex_w,"CreateMutexExW"=>fn create_mutex_ex_w,"AreFileApisANSI"=>fn are_file_apis_ansi,"ReleaseSemaphore"=>fn release_semaphore,
+     "CreateSemaphoreW"=>fn create_semaphore_w,"CreateSemaphoreA"=>fn create_semaphore_a,"CreateSemaphoreExW"=>fn create_semaphore_ex_w,"CreateEventExW"=>fn create_event_ex_w,"CreateMutexExW"=>fn create_mutex_ex_w,"AreFileApisANSI"=>fn are_file_apis_ansi,"ReleaseSemaphore"=>fn super::fil_trace::release_semaphore,
      "SleepEx"=>fn sleep_ex,"WaitForSingleObjectEx"=>fn super::fil_trace::wait_for_single_object_ex,"SignalObjectAndWait"=>fn signal_object_and_wait,
      "CreateNamedPipeW"=>fn create_named_pipe_w,"SetNamedPipeHandleState"=>fn set_named_pipe_handle_state,"PeekNamedPipe"=>fn peek_named_pipe
      }
@@ -11376,6 +11702,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    #[test]
+    fn compare_string_respecte_la_casse_sans_ignorecase() {
+        // #2255 : sans NORM_IGNORECASE, « Abc » et « abc » ne sont pas égales.
+        let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (maj, min) = (w("Abc"), w("abc"));
+        unsafe {
+            let cw = |f, a: &[u16], b: &[u16]| {
+                super::compare_string_w(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(cw(0, &maj, &min), 2);
+            assert_eq!(cw(1, &maj, &min), 2); // NORM_IGNORECASE
+            assert_eq!(cw(0, &min, &min), 2);
+            assert_eq!(cw(0, &w("abc"), &w("abd")), 1);
+            assert_eq!(cw(0x2, &w("été"), &w("ete")), 2); // NORM_IGNORENONSPACE
+            assert_eq!(
+                super::compare_string_w(0x400, 0, maj.as_ptr(), 3, min.as_ptr(), 2),
+                3
+            );
+            let ca = |f, a: &[u8], b: &[u8]| {
+                super::compare_string_a(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(ca(0, b"Abc\0", b"abc\0"), 2);
+            assert_eq!(ca(1, b"Abc\0", b"abc\0"), 2);
+        }
+    }
 
     #[test]
     fn copie_garde_la_date_de_derniere_ecriture() {

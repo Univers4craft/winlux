@@ -41,12 +41,14 @@ pub mod comdlg32_ui;
 pub mod common_apps;
 pub mod comobj;
 pub mod composition;
+mod conformite_codes_erreur;
 pub mod console_input;
 pub mod controls;
 pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
+pub mod crt_mbs;
 pub mod crt_more;
 pub mod crt_proc;
 pub mod crt_releve;
@@ -123,6 +125,8 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod global_options;
+pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
@@ -142,6 +146,7 @@ pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
+pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
@@ -195,6 +200,7 @@ pub mod ncrypt;
 pub mod netfw;
 pub mod netfw2;
 pub mod netlistmgr;
+pub mod network_information;
 pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
@@ -221,12 +227,19 @@ pub mod pe_image;
 pub mod pointer;
 pub mod powrprof;
 pub mod print_pdf;
+pub mod property_value;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
 pub mod qwave;
 pub mod rawinput;
 pub mod redist_dlls;
+// msvcp140_2 (#2187), rangée avec les autres redistribuables.
+pub mod mdi;
+pub mod msvcp140_2;
+pub mod msvcp140_eptr;
+pub mod msvcp140_flux;
+pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
@@ -257,6 +270,7 @@ pub mod shlwapi_reg;
 pub mod spirv;
 pub mod storage_appdata;
 pub mod sysdlls;
+pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
@@ -264,6 +278,7 @@ pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
+pub mod ui_settings;
 pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
@@ -283,8 +298,10 @@ pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
 pub mod wbem;
+pub mod weak_ref;
 pub mod webview2;
 pub mod webview2_iids;
+pub mod wer;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -297,6 +314,7 @@ pub mod winlux_capture;
 pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
+pub mod winlux_tasks;
 pub mod winmm;
 pub mod winmm_midi;
 pub mod winmm_midi_in;
@@ -447,6 +465,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(cxx_eh::exports());
             e.extend(rtti::exports());
             e.extend(crt_more::exports());
+            e.extend(crt_mbs::exports());
             e.extend(crt_proc::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
@@ -482,6 +501,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_tasks::exports());
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
@@ -495,6 +515,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
@@ -1164,6 +1185,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: qwave::exports(),
                 handle: 0,
             },
+            // Rapports d'erreurs, jamais transmis (OneDrive, #2391).
+            Builtin {
+                name: "wer",
+                exports: wer::exports(),
+                handle: 0,
+            },
             // Client LDAP sans connexion (libcurl d'OBS, #1765).
             Builtin {
                 name: "wldap32",
@@ -1281,7 +1308,13 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "msvcp140",
-                exports: msvcp140::exports(),
+                exports: {
+                    let mut m = msvcp140::exports();
+                    m.extend(msvcp140_flux::exports());
+                    m.extend(msvcp140_eptr::exports());
+                    m.extend(msvcp140_ppl::exports());
+                    m
+                },
                 handle: 0,
             },
             Builtin {
@@ -1331,6 +1364,8 @@ fn builtins() -> &'static Vec<Builtin> {
             ("mfc42", redist_dlls::mfc42_exports()),
             ("mssign32", redist_dlls::mssign32_exports()),
             ("concrt140", redist_dlls::concrt140_exports()),
+            // Fonctions mathématiques spéciales de C++17 : Qt6Gui (OBS) (#2187).
+            ("msvcp140_2", msvcp140_2::exports()),
             ("wintypes", redist_dlls::wintypes_exports()),
         ] {
             all.push(Builtin {
@@ -1791,6 +1826,10 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
+    // msvcp140_2 : la vraie DLL du redistribuable passe avant (#2187).
+    if normalized == "msvcp140_2" {
+        return true;
+    }
     // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
     // couvre que les petits tests C++ ; une appli qui livre la sienne
     // (FileZilla, wxWidgets…) en a besoin en entier (#783).
@@ -1863,6 +1902,8 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
+    "CreateAppContainerToken",
 ];
 
 /// Fonctions rangées dans la table kernel32 de Winlux pour servir des

@@ -1,0 +1,6 @@
+Dialog_	Control	Type	X	Y	Width	Height	Attributes	Property	Text	Control_Next	Help
+s72	s50	s20	i2	i2	i2	i2	I4	S72	L0	S50	S50
+Control	Dialog_	Control
+LicenseAgreementDlg	LicenseText	ScrollableText	20	60	330	140	7		{\rtf1\ansi\ansicpg1252{\fonttbl{\f0 Arial;}}\f0 CONTRAT DE LICENCE DE TEST\par Accepter avant d\rquote installer. Caf\'e9\par}		
+LicenseAgreementDlg	LicenseAcceptedCheckBox	CheckBox	20	207	330	18	3	LicenseAccepted	J'accepte		
+ReadmeDlg	Readme	ScrollableText	20	60	330	140	7		{\rtf1 Lisez-moi\par}		

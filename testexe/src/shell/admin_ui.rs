@@ -641,10 +641,16 @@ const TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
         b"Aufgabe gespeichert.",
     ),
     (
-        b"Enregistrement impossible : droits insuffisants sur /etc/winlux/tasks.",
-        b"Cannot save: no write access to /etc/winlux/tasks.",
-        b"No se puede guardar: sin permiso de escritura en /etc/winlux/tasks.",
-        b"Speichern nicht m\xF6glich: kein Schreibzugriff auf /etc/winlux/tasks.",
+        b"Enregistrement impossible : droits insuffisants sur le dossier des t\xE2ches.",
+        b"Cannot save: no write access to the task folder.",
+        b"No se puede guardar: sin permiso de escritura en la carpeta de tareas.",
+        b"Speichern nicht m\xF6glich: kein Schreibzugriff auf den Aufgabenordner.",
+    ),
+    (
+        b"T\xE2che du syst\xE8me : seul root peut la modifier.",
+        b"System task: only root can change it.",
+        b"Tarea del sistema: solo root puede modificarla.",
+        b"Systemaufgabe: nur root kann sie \xE4ndern.",
     ),
     (
         b"Ex\xE9cution demand\xE9e.",

@@ -40,19 +40,19 @@ const fn nlm(d1: u32) -> Guid {
 }
 
 pub const CLSID_NETWORK_LIST_MANAGER: Guid = nlm(0xDCB0_0C01);
-const IID_INETWORK_LIST_MANAGER: Guid = nlm(0xDCB0_0000);
+pub(crate) const IID_INETWORK_LIST_MANAGER: Guid = nlm(0xDCB0_0000);
 const IID_INETWORK_LIST_MANAGER_EVENTS: Guid = nlm(0xDCB0_0001);
-const IID_IENUM_NETWORKS: Guid = nlm(0xDCB0_0003);
-const IID_IENUM_NETWORK_CONNECTIONS: Guid = nlm(0xDCB0_0006);
+pub(crate) const IID_IENUM_NETWORKS: Guid = nlm(0xDCB0_0003);
+pub(crate) const IID_IENUM_NETWORK_CONNECTIONS: Guid = nlm(0xDCB0_0006);
 const IID_IUNKNOWN: Guid = guid(0, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
 const IID_IDISPATCH: Guid = guid(0x0002_0400, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
-const IID_ICONNECTION_POINT_CONTAINER: Guid = guid(
+pub(crate) const IID_ICONNECTION_POINT_CONTAINER: Guid = guid(
     0xB196_B284,
     0xBAB4,
     0x101A,
     [0xB6, 0x9C, 0x00, 0xAA, 0x00, 0x34, 0x1D, 0x07],
 );
-const IID_ICONNECTION_POINT: Guid = guid(
+pub(crate) const IID_ICONNECTION_POINT: Guid = guid(
     0xB196_B286,
     0xBAB4,
     0x101A,
@@ -63,10 +63,11 @@ const NLM_CONNECTIVITY_DISCONNECTED: u32 = 0;
 const NLM_CONNECTIVITY_IPV4_LOCALNETWORK: u32 = 0x20;
 const NLM_CONNECTIVITY_IPV4_INTERNET: u32 = 0x40;
 const NLM_CONNECTIVITY_IPV6_INTERNET: u32 = 0x400;
-const NLM_INTERNET: u32 = NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET;
+pub(crate) const NLM_INTERNET: u32 =
+    NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET;
 
 /// Connectivité d'après /proc/net/route et /proc/net/ipv6_route.
-fn connectivity_from(route: &str, ipv6_route: &str) -> u32 {
+pub(crate) fn connectivity_from(route: &str, ipv6_route: &str) -> u32 {
     let mut c = NLM_CONNECTIVITY_DISCONNECTED;
     for l in route.lines().skip(1) {
         let f: Vec<&str> = l.split_whitespace().collect();

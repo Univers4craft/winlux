@@ -34,6 +34,9 @@ PREFERS_REAL = {"msvcp140", "msvcp140_1", "libstdc++-6", "libgcc_s_seh-1", "libg
 # par exemple « --fourni=python3*.dll » pour des modules Python.
 ASSUMED = []
 
+# msvcp140_2 (#2187) : la vraie DLL passe aussi avant la version maison.
+PREFERS_REAL.add("msvcp140_2")
+
 
 def normalize(dll: str) -> str:
     """Miroir de runtime/src/dlls/mod.rs::normalize."""

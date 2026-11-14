@@ -2,6 +2,9 @@
 set -eu
 export WINLUX_NATIVE_SHELL=1
 unset WINLUX_DESKTOP_DEMO
+# Demande du choix du navigateur propre au compte (#2243), lue par Paramètres PE.
+WINLUX_BROWSER_CHOOSER="Z:\\run\\winlux\\browser-chooser-$(id -u)"
+export WINLUX_BROWSER_CHOOSER
 
 # Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
 # (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,

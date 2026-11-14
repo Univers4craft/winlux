@@ -988,6 +988,10 @@ pub fn windows_env() -> Vec<(String, String)> {
         ("PUBLIC".into(), "C:\\Users\\Public".into()),
         ("SystemDrive".into(), "C:".into()),
         ("SystemRoot".into(), "C:\\Windows".into()),
+        // Dossier temporaire du profil, sur le disque (#2326), comme sous
+        // Windows : /tmp est un tmpfs, en mémoire.
+        ("TEMP".into(), format!("{profile}\\AppData\\Local\\Temp")),
+        ("TMP".into(), format!("{profile}\\AppData\\Local\\Temp")),
         ("USERDOMAIN".into(), host),
         ("USERNAME".into(), user_name()),
         ("USERPROFILE".into(), profile),
@@ -995,16 +999,67 @@ pub fn windows_env() -> Vec<(String, String)> {
     ]
 }
 
+/// Dossier temporaire Windows du profil (`%LOCALAPPDATA%\Temp`), sur le
+/// disque, créé au besoin (#2326).
+pub fn profile_temp() -> PathBuf {
+    let dir = to_linux(&format!("{}\\AppData\\Local\\Temp", profile_windows()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Dossier de travail d'un installateur que Winlux déroule (archive
+/// décompressée, MSI d'un bundle…) : dans le dossier temporaire du profil,
+/// sur le disque, jamais dans /tmp, qui est en mémoire : un installateur de
+/// plusieurs centaines de Mo ne doit pas dépendre de la RAM (#2326).
+pub fn setup_work_dir(tag: &str) -> PathBuf {
+    profile_temp().join(format!("winlux-{tag}-{}", std::process::id()))
+}
+
 /// Ajoute à l'environnement du processus les variables Windows absentes
 /// (au lancement d'un .exe). L'appli peut ensuite les modifier ou les
 /// supprimer comme sous Windows, et ses enfants en héritent.
 pub fn install_windows_env() {
+    ensure_system_folders();
     let present: Vec<String> = std::env::vars_os()
         .map(|(k, _)| k.to_string_lossy().to_ascii_uppercase())
         .collect();
     for (k, v) in windows_env() {
         if !present.contains(&k.to_ascii_uppercase()) {
             std::env::set_var(k, v);
+        }
+    }
+}
+
+/// Dossiers que toute installation de Windows contient, et que les
+/// installeurs vérifient avant de copier (Google Drive : « C:\\Program Files
+/// doesn't exist! », #2478). Créés au lancement d'un .exe s'ils manquent,
+/// sur le lecteur C: lui-même (sans redirection WOW64) ; un C: en lecture
+/// seule n'empêche pas le lancement.
+pub(crate) const SYSTEM_FOLDERS: &[&str] = &[
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
+];
+
+pub fn ensure_system_folders() {
+    let root = drive_root('C');
+    if !root.is_dir() {
+        return;
+    }
+    for rel in SYSTEM_FOLDERS {
+        let mut p = root.clone();
+        for c in rel.split('\\') {
+            // Un dossier déjà présent sous une autre casse est réutilisé.
+            let exact = p.join(c);
+            p = if exact.exists() {
+                exact
+            } else {
+                fix_case(&exact).unwrap_or(exact)
+            };
+        }
+        if !p.is_dir() {
+            let _ = std::fs::create_dir_all(&p);
         }
     }
 }

@@ -64,6 +64,11 @@ with tempfile.TemporaryDirectory() as directory:
         ok(written and written == tray["render"](kind), f"service : sortie « {kind} » identique au calcul direct")
     ok("ancienne" not in (out / "out-balance").read_text(), "service : sortie de la session précédente effacée (#602)")
     ok(not (out / "serve.pid").exists(), "service : fichier pid retiré à l'arrêt")
+    ok((out / "serve.panel").read_text().strip() == str(os.getpid()),
+       "service : sorties marquées de la barre pour laquelle elles sont calculées (#2467)")
+    serve.__globals__["SETTLE"] = 10 ** 9
+    serve(clock=lambda: float(next(ticks)), sleep=lambda _: None, rounds=1)
+    ok(not (out / "serve.panel").exists(), "service : barre relancée → sorties de l'ancienne plus servies (#2467)")
 
     # Verrou : un second service pour le même compte rend la main aussitôt.
     import fcntl
@@ -89,6 +94,17 @@ with tempfile.TemporaryDirectory() as directory:
         (out / "out-status").write_text(status)
         result = subprocess.run(reader + ["status"], env=env, capture_output=True, text=True)
         ok(result.stdout == status, f"lecteur : sortie du service recopiée en entier, infobulle sur plusieurs lignes ({result.stdout!r})")
+        # Greffon d'une barre (un processus nommé xfce4-panel, qui lance un
+        # wrapper, qui lance le lecteur) : servi seulement si les sorties ont
+        # été calculées pour cette barre (#2467).
+        panel_bin = base / "panel/xfce4-panel"
+        panel_bin.parent.mkdir()
+        shutil.copy(shutil.which("sh"), panel_bin)
+        for mark, expected, label in (("$$", status, "sorties calculées pour cette barre → recopiées"),
+                                      ("1", "direct status\n", "sorties d'une autre barre (relancée) → calcul direct")):
+            script = f'echo {mark} > "{out}/serve.panel"; sh -c \'"{reader[0]}" status; true\'; true'
+            result = subprocess.run([str(panel_bin), "-c", script], env=env, capture_output=True, text=True)
+            ok(result.stdout == expected, f"lecteur : {label} (#2467) ({result.stdout!r})")
         (out / "out-search").unlink(missing_ok=True)
         result = subprocess.run(reader + ["search"], env=env, capture_output=True, text=True)
         ok(result.stdout == "direct search\n", f"lecteur : sortie absente → calcul direct ({result.stdout!r})")

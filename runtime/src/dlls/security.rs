@@ -103,6 +103,11 @@ pub fn uid_sid(uid: u32) -> String {
     format!("{}-{rid}", machine_part())
 }
 
+/// SID du compte qui fait tourner le processus (TokenUser).
+pub fn user_sid() -> String {
+    uid_sid(euid())
+}
+
 pub fn gid_sid(gid: u32) -> String {
     if gid == 0 {
         return "S-1-5-32-544".into();
@@ -1551,6 +1556,35 @@ pub unsafe extern "win64" fn CreateRestrictedToken(
     out: *mut usize,
 ) -> i32 {
     give_token(out)
+}
+
+/// CreateAppContainerToken (KernelBase, #2496) : jeton de conteneur tiré
+/// du jeton donné et d'un SECURITY_CAPABILITIES. Microsoft ne documente pas
+/// cette fonction ; le prototype vient de la source permissive (BSD) de
+/// Chromium, base/win/access_token.cc : BOOL (HANDLE, PSECURITY_CAPABILITIES,
+/// PHANDLE). Comme les autres jetons du bac à sable, le jeton rendu est
+/// l'unique jeton du compte : la séparation réelle vient des comptes Linux.
+pub unsafe extern "win64" fn CreateAppContainerToken(
+    _token: usize,
+    capabilities: *const u8,
+    out: *mut usize,
+) -> i32 {
+    if capabilities.is_null() {
+        if !out.is_null() {
+            *out = 0;
+        }
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    give_token(out)
+}
+
+/// Fonctions de KernelBase rangées dans la table kernel32 de Winlux, mais
+/// visibles seulement par KernelBase et les API-sets (KERNELBASE_ONLY).
+pub fn kernelbase_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "CreateAppContainerToken" => fn CreateAppContainerToken,
+    }
 }
 
 /// SetTokenInformation (niveau d'intégrité, DACL par défaut…) : accepté.

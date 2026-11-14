@@ -7,6 +7,6 @@ mode:           one
 selected:       0
 programs:       GL: /usr/libexec/xscreensaver/pipes -root
 dpmsEnabled:    True
-dpmsStandby:    0:10:00
-dpmsSuspend:    0:10:00
-dpmsOff:        0:10:00
+dpmsStandby:    18:12:15
+dpmsSuspend:    18:12:15
+dpmsOff:        18:12:15
