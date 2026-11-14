@@ -70,6 +70,15 @@ _TR = {
         "Speichern Sie Ihre Arbeit in diesen Apps oder fahren Sie fort: Nicht gespeicherte Änderungen gehen verloren."),
     "Arrêter quand même": ("Shut down anyway", "Apagar de todos modos", "Trotzdem herunterfahren"),
     "Redémarrer quand même": ("Restart anyway", "Reiniciar de todos modos", "Trotzdem neu starten"),
+    "Déverrouiller": ("Unlock", "Desbloquear", "Entsperren"),
+    "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour arrêter quand même.": (
+        "Unlock the PC to save your work in these apps or to shut down anyway.",
+        "Desbloquee el equipo para guardar su trabajo en estas aplicaciones o para apagarlo de todos modos.",
+        "Entsperren Sie den PC, um Ihre Arbeit in diesen Apps zu speichern oder trotzdem herunterzufahren."),
+    "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour redémarrer quand même.": (
+        "Unlock the PC to save your work in these apps or to restart anyway.",
+        "Desbloquee el equipo para guardar su trabajo en estas aplicaciones o para reiniciarlo de todos modos.",
+        "Entsperren Sie den PC, um Ihre Arbeit in diesen Apps zu speichern oder trotzdem neu zu starten."),
     "Impossible d’arrêter le PC": ("Couldn’t shut down the PC", "No se pudo apagar el equipo", "PC konnte nicht heruntergefahren werden"),
     "Impossible de redémarrer le PC": ("Couldn’t restart the PC", "No se pudo reiniciar el equipo", "PC konnte nicht neu gestartet werden"),
     "Une mise à jour est en cours d’installation. Réessayez quand elle sera terminée.": (
@@ -498,6 +507,8 @@ class PowerUI:
         """Verrouillage survenu pendant l'écran d'arrêt (inactivité pendant
         l'attente d'une application) : même passation que ci-dessus, et cet
         écran repasse au premier plan."""
+        if self.mode == "unlock":
+            return False  # wait_unlock relance cette veille après le déverrouillage
         if self.yield_requested or not screen_locked():
             return not self.yield_requested
         self.locked = True
@@ -638,9 +649,25 @@ class PowerUI:
             listing.pack_start(row, False, False, 0)
             if len(seen) >= 6:
                 break
+        title = _t("Ces applications empêchent l’arrêt") if shutdown else _t("Ces applications empêchent le redémarrage")
+        if self.locked:
+            # #2300, décision de damien du 14 nov. : sur un écran verrouillé,
+            # personne ne force l'arrêt sans le mot de passe. La carte n'offre
+            # que « Annuler » et « Déverrouiller » ; l'arrêt reste en attente,
+            # sans délai, jusqu'à la réponse de l'utilisateur déverrouillé.
+            # Windows propose « Arrêter quand même » sur l'écran verrouillé :
+            # Winlux s'en écarte volontairement.
+            self.set_card(self.make_card(
+                "dialog-warning-symbolic", title,
+                _t("Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour arrêter quand même."
+                   if shutdown else
+                   "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour redémarrer quand même."),
+                [(_t("Annuler"), self.cancel, True),
+                 (_t("Déverrouiller"), self.unlock_first, False)],
+                extra=listing))
+            return
         self.set_card(self.make_card(
-            "dialog-warning-symbolic",
-            _t("Ces applications empêchent l’arrêt") if shutdown else _t("Ces applications empêchent le redémarrage"),
+            "dialog-warning-symbolic", title,
             _t("Enregistrez votre travail dans ces applications, ou continuez : les modifications non enregistrées seront perdues."),
             # #2299 : « Annuler » par défaut. Sur un écran verrouillé, la touche
             # qui réveille l'écran déclenchait « Arrêter quand même » et
@@ -648,6 +675,39 @@ class PowerUI:
             [(_t("Annuler"), self.cancel, True),
              (_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.finish, False)],
             extra=listing))
+
+    def unlock_first(self):
+        """« Déverrouiller » (#2300) : l'écran d'arrêt s'efface et rend la
+        saisie au verrou, qui demande le mot de passe. L'arrêt reste en
+        attente ; une fois la session déverrouillée, la carte complète revient
+        avec « Arrêter quand même »."""
+        self.mode = "unlock"
+        report("blocked")
+        self.ungrab()
+        self.grabbed = False
+        self.yield_requested = False
+        self.window.hide()
+        log("déverrouillage demandé : l'arrêt attend la session déverrouillée")
+        self.GLib.timeout_add(500, self.wait_unlock)
+
+    def wait_unlock(self):
+        if self.mode != "unlock":
+            return False
+        if screen_locked():
+            return True
+        self.locked = False
+        self.window.show_all()
+        gdk_window = self.window.get_window()
+        if gdk_window is not None:
+            gdk_window.raise_()
+        self.GLib.idle_add(self.grab)
+        self.GLib.timeout_add(1000, self.watch_lock)
+        remaining = {key: value for key, value in open_windows().items() if key in getattr(self, "windows", {})}
+        log("session déverrouillée : carte de l'arrêt en attente affichée")
+        # Même si tout a été fermé entre-temps, on demande : l'arrêt ne part
+        # jamais sans réponse.
+        self.show_blocked(remaining or self.blockers)
+        return False
 
     def show_error(self, message):
         self.mode = "error"

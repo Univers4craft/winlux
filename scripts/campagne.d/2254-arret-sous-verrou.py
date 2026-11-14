@@ -12,8 +12,8 @@ ok("if self.locked else title" in _p, "écran verrouillé : noms d'applications,
 # #2299) : lu dans l'arbre syntaxique de winlux-power.py, pas dans son texte.
 # 1. Quand le délai de fermeture expire (branche qui teste self.deadline),
 #    wait_windows montre la carte « bloqué » et n'appelle pas self.finish.
-# 2. show_blocked n'appelle jamais self.finish : il ne le passe qu'en
-#    rappel d'un bouton.
+# 2. show_blocked n'appelle jamais self.finish ; s'il le mentionne, ce n'est
+#    qu'en rappel d'un bouton (#2300 retire ce bouton sous le verrou).
 # 3. Aucune minuterie GLib (timeout_add*) n'a self.finish pour rappel.
 _tree = _ast.parse(_p)
 _cls = next(n for n in _tree.body if isinstance(n, _ast.ClassDef) and n.name == "PowerUI")
@@ -38,7 +38,8 @@ ok(len(_deadline) == 1
    and any(_calls(s, "show_blocked") for s in _deadline[0].body)
    and not any(_calls(s, "finish") for s in _deadline[0].body)
    and not _calls(_meth["show_blocked"], "finish")
-   and any(any(_is_self(e, "finish") for e in t.elts) for t in _tuples)
+   and all(any(n is e for t in _tuples for e in t.elts)
+           for n in _ast.walk(_meth["show_blocked"]) if _is_self(n, "finish"))
    and not any(any(_is_self(a, "finish") for a in t.args) for t in _timers),
    "aucun arrêt automatique au bout d'un délai, choix laissé à la personne (#2254)")
 ok("display_on(root);" in _d[_d.index("Hw::PowerButton => {"):][:400], "bouton d'alimentation : écran rallumé (#2254)")
