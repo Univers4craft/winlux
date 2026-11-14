@@ -386,3 +386,21 @@ fn systemfolder_reste_syswow64_pour_un_paquet_x64() {
     );
     assert_eq!(ctx.get("ProgramFiles64Folder"), "C:\\Program Files\\");
 }
+
+/// `testdata/licence.msi` : la boîte de licence est préférée au lisez-moi,
+/// son RTF est rendu en texte (#2123) ; un paquet sans licence n'en a pas.
+#[test]
+fn contrat_de_licence_du_paquet() {
+    let dir = std::env::temp_dir().join(format!("winlux-msi-licence-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let msi = dir.join("licence.msi");
+    std::fs::write(&msi, include_bytes!("testdata/licence.msi")).unwrap();
+    assert_eq!(
+        crate::setup::license::of_package(&msi).as_deref(),
+        Some("CONTRAT DE LICENCE DE TEST\nAccepter avant d\u{2019}installer. Café")
+    );
+    let sans = dir.join("sample.msi");
+    std::fs::write(&sans, SAMPLE).unwrap();
+    assert_eq!(crate::setup::license::of_package(&sans), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
