@@ -1,0 +1,12 @@
+# Bouton d'alimentation pendant le verrouillage : la carte d'arrêt reste atteignable (#2254).
+_p = (ROOT / "scripts/winlux-power.py").read_text(encoding="utf-8")
+_l = (ROOT / "scripts/winlux-lock.py").read_text(encoding="utf-8")
+_d = (ROOT / "runtime/src/power/daemon.rs").read_text(encoding="utf-8")
+ok("request_lock_yield()" in _p and "def watch_power(self):" in _l, "écran d'arrêt : saisie cédée par le verrou (#2254)")
+ok("def power_request_pid():" in _l and "allowed = {0, os.getuid()}" in _l, "verrou : ne cède qu'à un vrai winlux-power de root ou du compte (#2254)")
+ok('log(f"saisie refusée' in _p, "écran d'arrêt : échec de saisie journalisé (#2254)")
+ok("if self.locked else title" in _p, "écran verrouillé : noms d'applications, jamais les titres de fenêtres (#2254)")
+ok("CLOSE_TIMEOUT" in _p and "self.finish, True" in _p, "aucun arrêt automatique au bout d'un délai, choix laissé à la personne (#2254)")
+ok("display_on(root);" in _d[_d.index("Hw::PowerButton => {"):][:400], "bouton d'alimentation : écran rallumé (#2254)")
+ok((ROOT / "scripts/test-all.d/2254-arret-sous-verrou.sh").exists(), "test hors ligne de la passation (#2254)")
+ok("os.fchmod(marker.fileno(), 0o644)" in _p, "demande d'arrêt lisible par le compte verrouillé malgré l'umask 077 du démon (#2254)")

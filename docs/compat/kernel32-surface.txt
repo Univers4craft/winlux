@@ -836,6 +836,7 @@ SetProcessMitigationPolicy
 SetProcessPriorityBoost
 SetProcessShutdownParameters
 SetProcessWorkingSetSize
+SetSearchPathMode
 SetStdHandle
 SetSystemFileCacheSize
 SetSystemPowerState
