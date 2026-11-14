@@ -587,6 +587,9 @@ jobs:
       - name: Contrat de licence des installateurs (#2123 à #2126)
         run: sh scripts/test-licence-installateurs.sh
 
+      - name: Consigne du programme dans les boîtes de fichiers (#2400)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
