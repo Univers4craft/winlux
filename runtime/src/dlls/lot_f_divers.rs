@@ -26,11 +26,17 @@ const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 
 // ---------- mmdevapi : ActivateAudioInterfaceAsync (ordinal 17) ----------
 
-const IID_IACTIVATEAUDIOINTERFACEASYNCOPERATION: Guid = guid(
+pub(crate) const IID_IACTIVATEAUDIOINTERFACEASYNCOPERATION: Guid = guid(
     0x72a22d78,
     0xcde4,
     0x431d,
     [0xb8, 0xcc, 0x84, 0x3a, 0x71, 0x19, 0x9b, 0x6d],
+);
+pub(crate) const IID_IACTIVATEAUDIOINTERFACECOMPLETIONHANDLER: Guid = guid(
+    0x41d949ab,
+    0x9862,
+    0x444a,
+    [0x80, 0xf6, 0xc2, 0x61, 0x33, 0x4d, 0xa5, 0xeb],
 );
 const DEVINTERFACE_AUDIO_RENDER: Guid = guid(
     0xe6327cad,
@@ -52,6 +58,8 @@ struct Operation {
     refs: AtomicU32,
     hr: i32,
     iface: usize,
+    /// Interface demandée à l'activation (type de `iface`).
+    riid: Guid,
 }
 
 unsafe extern "win64" fn op_qi(
@@ -100,6 +108,16 @@ unsafe extern "win64" fn op_get_result(
     *out = (*this).iface as *mut c_void;
     if !(*out).is_null() {
         com_addref(*out);
+        // Programme x86 : la méthode est appelée par un mandataire, qui
+        // rend la valeur telle quelle (`OutPtr`) ; l'interface est donc
+        // convertie ici, sous le type demandé à l'activation (#2428).
+        if crate::wow32::active() {
+            let x = crate::wow32::iface_to32((*this).iface, &(*this).riid);
+            if x == 0 {
+                *hr = E_NOINTERFACE;
+            }
+            *out = x as usize as *mut c_void;
+        }
     }
     S_OK
 }
@@ -195,6 +213,7 @@ pub unsafe extern "win64" fn ActivateAudioInterfaceAsync(
         refs: AtomicU32::new(1),
         hr,
         iface,
+        riid: comobj::read_guid(riid).unwrap_or_default(),
     })) as *mut c_void;
     let completed: unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32 =
         std::mem::transmute(slot(handler, 3));

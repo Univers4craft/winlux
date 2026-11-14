@@ -516,3 +516,25 @@ fn descripteur_absolu_recopie_en_auto_relatif() {
         assert_eq!(std::slice::from_raw_parts(dacl, 8), &acl[..]);
     }
 }
+
+/// CreateAppContainerToken : servi par KernelBase seulement, il rend le
+/// jeton du compte et refuse un SECURITY_CAPABILITIES absent (#2496).
+#[test]
+fn jeton_de_conteneur_par_kernelbase_seulement() {
+    assert!(crate::dlls::kernel32_proc("CreateAppContainerToken", true).is_some());
+    assert!(crate::dlls::kernel32_proc("CreateAppContainerToken", false).is_none());
+    let caps = [0u8; 24];
+    let mut out = 0usize;
+    unsafe {
+        assert_eq!(
+            CreateAppContainerToken(TOKEN_HANDLE, caps.as_ptr(), &mut out),
+            1
+        );
+        assert_eq!(out, TOKEN_HANDLE);
+        assert_eq!(
+            CreateAppContainerToken(TOKEN_HANDLE, std::ptr::null(), &mut out),
+            0
+        );
+        assert_eq!(out, 0);
+    }
+}

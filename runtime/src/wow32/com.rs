@@ -23,6 +23,7 @@
 //! refusée (E_NOINTERFACE) plutôt que de donner au programme une table
 //! qu'il ne saurait pas appeler.
 
+use super::com_ole::{IBINDCTX, IRUNNINGOBJECTTABLE};
 use super::com_shell;
 use super::layout::widen;
 use super::{call32, rd, wr};
@@ -81,11 +82,11 @@ pub(super) struct Iface {
 }
 
 impl Iface {
-    fn count(&'static self) -> usize {
+    pub(super) fn count(&'static self) -> usize {
         self.parent.map_or(0, |p| p.count()) + self.methods.len()
     }
 
-    fn method(&'static self, idx: usize) -> Option<&'static [A]> {
+    pub(super) fn method(&'static self, idx: usize) -> Option<&'static [A]> {
         let base = self.parent.map_or(0, |p| p.count());
         if idx < base {
             self.parent.and_then(|p| p.method(idx))
@@ -183,26 +184,28 @@ pub(super) static IPERSISTSTREAM: Iface = Iface {
 };
 
 /// IMoniker : liaison à un IStream, nom affiché et type (moniker d'URL).
+/// Le contexte de liaison et le moniker de gauche sont de vrais
+/// IBindCtx et IMoniker (#2428, lot C).
 pub(super) static IMONIKER: Iface = Iface {
     name: "IMoniker",
     iid: ole(0xF),
     parent: Some(&IPERSISTSTREAM),
     methods: &[
-        Some(&[I, I, Iid, OutQ]), // BindToObject
-        Some(&[I, I, Iid, OutQ]), // BindToStorage
-        None,                     // Reduce
-        None,                     // ComposeWith
-        None,                     // Enum
-        Some(&[In(&IMONIKER)]),   // IsEqual
-        Some(&[I]),               // Hash
-        None,                     // IsRunning
-        None,                     // GetTimeOfLastChange
-        None,                     // Inverse
-        None,                     // CommonPrefixWith
-        None,                     // RelativePathTo
-        Some(&[I, I, OutPtr]),    // GetDisplayName
-        None,                     // ParseDisplayName
-        Some(&[I]),               // IsSystemMoniker
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToObject
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToStorage
+        None,                                             // Reduce
+        None,                                             // ComposeWith
+        None,                                             // Enum
+        Some(&[In(&IMONIKER)]),                           // IsEqual
+        Some(&[I]),                                       // Hash
+        None,                                             // IsRunning
+        None,                                             // GetTimeOfLastChange
+        None,                                             // Inverse
+        None,                                             // CommonPrefixWith
+        None,                                             // RelativePathTo
+        Some(&[In(&IBINDCTX), In(&IMONIKER), OutPtr]),    // GetDisplayName
+        None,                                             // ParseDisplayName
+        Some(&[I]),                                       // IsSystemMoniker
     ],
 };
 
@@ -1019,11 +1022,14 @@ static ALL: &[&Iface] = &[
     &IENUMIDLIST,
 ];
 
-fn by_iid(iid: &Guid) -> Option<&'static Iface> {
+pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
+        .chain(super::com_audio::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_nlm::ALL.iter())
         .chain(super::com_shell::ALL.iter())
+        .chain(super::com_ole::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1227,7 +1233,7 @@ fn vtable64(iface: &'static Iface) -> usize {
 }
 
 /// Libère une référence d'un objet 64 bits.
-unsafe fn release64(obj: u64) {
+pub(super) unsafe fn release64(obj: u64) {
     let vt = *(obj as usize as *const *const usize);
     let f: unsafe extern "win64" fn(u64) -> u32 = std::mem::transmute(*vt.add(2));
     f(obj);
@@ -1829,6 +1835,11 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("ole32", "OleSetClipboard") => k!(In(&IDATAOBJECT)),
         ("ole32", "RegisterDragDrop") => k!(I, In(&IDROPTARGET)),
         ("ole32", "DoDragDrop") => k!(In(&IDATAOBJECT), In(&IDROPSOURCE), I, I),
+        // Magasins de propriétés (#2428, lot B) : l'interface demandée,
+        // IPropertyStore en pratique, revient par REFIID.
+        ("shell32", "SHGetPropertyStoreForWindow") => k!(I, Iid, OutQ),
+        ("shell32", "SHGetPropertyStoreFromParsingName") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
+        ("propsys", "PSCreateMemoryPropertyStore") => k!(Iid, OutQ),
         ("oleaut32", "VariantInit" | "VariantClear" | "#8" | "#9") => k!(Var),
         ("oleaut32", "VariantCopy" | "#10") => k!(Var, Var),
         ("oleaut32", "VariantChangeType" | "#12") => k!(Var, Var, I, I),
@@ -1836,7 +1847,16 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "SafeArrayPtrOfIndex" | "#148") => k!(I, I, OutPtr),
         ("oleaut32", "VariantCopyInd" | "#11") => k!(Var, Var),
         ("oleaut32", "GetActiveObject" | "#35") => k!(I, I, Out(&IUNKNOWN)),
-        ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
+        ("ole32", "OleRegEnumVerbs") => k!(I, OutPtr),
+        // Contexte de liaison, table des objets actifs, monikers (#2428, lot C).
+        ("ole32", "CreateBindCtx") => k!(I, Out(&IBINDCTX)),
+        ("ole32", "GetRunningObjectTable") => k!(I, Out(&IRUNNINGOBJECTTABLE)),
+        ("ole32", "CreateFileMoniker") => k!(I, Out(&IMONIKER)),
+        ("ole32", "CreateItemMoniker") => k!(I, I, Out(&IMONIKER)),
+        ("ole32", "CreatePointerMoniker") => k!(In(&IUNKNOWN), Out(&IMONIKER)),
+        ("ole32", "MkParseDisplayName") => k!(In(&IBINDCTX), I, I, Out(&IMONIKER)),
+        ("ole32", "CoGetObject") => k!(I, I, Iid, OutQ),
+        ("ole32", "OleLoadFromStream") => k!(In(&ISTREAM), Iid, OutQ),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
         // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
@@ -1893,6 +1913,18 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
             k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
+        // pActivationParams (PROPVARIANT*) : non lu par IMMDevice::Activate.
+        ("mmdevapi", "ActivateAudioInterfaceAsync" | "#17") => k!(
+            I,
+            Iid,
+            I,
+            In(&super::com_audio::IACTIVATEAUDIOINTERFACECOMPLETIONHANDLER),
+            Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
+        ),
+        // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
+        ("mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9", "DllGetClassObject") => {
+            k!(I, Iid, OutQ)
         }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
@@ -2030,5 +2062,25 @@ mod tests {
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
         // ProcessUrlAction : huit arguments.
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2428, lot B : les fonctions qui rendent un magasin de propriétés
+    /// passent par un mandataire x86, à la taille de stdcall.tsv.
+    #[test]
+    fn magasins_de_proprietes_decrits() {
+        for (dll, f) in [
+            ("shell32", "SHGetPropertyStoreForWindow"),
+            ("shell32", "SHGetPropertyStoreFromParsingName"),
+            ("propsys", "PSCreateMemoryPropertyStore"),
+        ] {
+            let (k, r) = api_kinds(dll, f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            let octets = super::super::stdcall_bytes(dll, f).unwrap_or_else(|| panic!("{f}"));
+            assert_eq!(slots(k) * 4, octets as usize, "{f}");
+            // L'interface rendue est choisie par REFIID, en avant-dernière case.
+            assert!(matches!(k[k.len() - 2..], [Iid, OutQ]), "{f}");
+        }
+        let iid = g(mmd::IID_IPROPERTYSTORE);
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IPROPERTYSTORE)));
     }
 }
