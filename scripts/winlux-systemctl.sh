@@ -9,8 +9,6 @@ ENABLED_DIR="/etc/winlux/services-enabled"
 RUN_DIR="/run/winlux/services"
 LOG_DIR="/run/winlux"
 
-mkdir -p "$ENABLED_DIR" "$RUN_DIR"
-
 usage() {
     echo "Usage: systemctl {start|stop|restart|reload|status|enable|disable|is-active|is-enabled|daemon-reload|mask|unmask|list-unit-files} [unit]"
     exit 1
@@ -304,6 +302,60 @@ boot_start_enabled() {
     done
 }
 
+# Arrêt et redémarrage (#2273). Sur Ubuntu, systemd-sysv fait de reboot,
+# poweroff, halt et shutdown des liens vers systemctl, qui reconnaît son nom
+# d'appel. Ce shim les remplace : sans ce choix par argv0, « reboot » tombait
+# sur usage() et ne redémarrait rien. L'arrêt passe par winlux-power execute,
+# qui vérifie qu'aucune mise à jour n'est en cours puis signale l'init (TERM
+# redémarre, USR2 éteint). Choix Winlux : halt éteint la machine, l'init ne
+# sait pas arrêter le processeur sans couper l'alimentation.
+power_action() {
+    action=$1; shift
+    for option in "$@"; do
+        case "$option" in
+            -w|--wtmp-only) return 0 ;;  # n'écrit que le journal wtmp : aucun arrêt
+            -f|--force|-ff|-n|--no-sync|-d|--no-wtmp|--no-wall|-i|-p|--poweroff|-q|--quiet) ;;
+            --reboot) action=reboot ;;
+            --halt) action=poweroff ;;
+            --help) echo "Usage: ${invoked} [--no-wall]"; return 0 ;;
+            *) echo "${invoked} : option non prise en charge sous Winlux : $option" >&2; return 1 ;;
+        esac
+    done
+    winlux-power execute "$action"
+}
+
+# shutdown [-r|-h|-P|-H] now : seul l'arrêt immédiat existe sous Winlux.
+# Sans « now », shutdown(8) programme l'arrêt dans une minute ; un délai, un
+# message ou -k ne doivent donc jamais éteindre la machine sur-le-champ.
+shutdown_command() {
+    action=poweroff; when=
+    for option in "$@"; do
+        case "$option" in
+            -r|--reboot) action=reboot ;;
+            -h|-P|-H|--poweroff|--halt|--no-wall) ;;
+            now|+0) when=now ;;
+            -c) echo "shutdown : aucun arrêt programmé sous Winlux." >&2; return 1 ;;
+            --help) echo "Usage: shutdown [-r|-h] now"; return 0 ;;
+            *) test "$when" = now && continue  # message affiché aux sessions : ignoré
+               when=; break ;;  # une heure (+5, 22:00) : arrêt différé
+        esac
+    done
+    if test "$when" != now; then
+        echo "shutdown : seul l'arrêt immédiat (shutdown -h now, shutdown -r now) est pris en charge sous Winlux." >&2
+        return 1
+    fi
+    winlux-power execute "$action"
+}
+
+invoked=${0##*/}
+case "$invoked" in
+    reboot) power_action reboot "$@"; exit $? ;;
+    poweroff|halt) power_action poweroff "$@"; exit $? ;;
+    shutdown) shutdown_command "$@"; exit $? ;;
+esac
+
+mkdir -p "$ENABLED_DIR" "$RUN_DIR"
+
 test "$#" -ge 1 || usage
 command=$1; shift
 
@@ -326,6 +378,8 @@ case "$command" in
     show)       exit 0 ;;
     cat)        test "$#" -ge 1 || usage; find_unit_file "$1" | xargs cat ;;
     is-system-running) echo "running"; exit 0 ;;
+    reboot)     invoked="systemctl reboot"; power_action reboot "$@"; exit $? ;;
+    poweroff|halt) invoked="systemctl $command"; power_action poweroff "$@"; exit $? ;;
     --version)  echo "systemctl shim (winlux)"; exit 0 ;;
     --boot-start) boot_start_enabled ;;
     *)          echo "systemctl: unsupported command: $command" >&2; exit 1 ;;
