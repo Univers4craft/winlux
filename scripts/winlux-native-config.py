@@ -862,19 +862,32 @@ if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver
 # serveur X à son premier affichage : l'écran ne se mettait plus jamais en
 # veille. Ajouté aux fichiers déjà copiés qui ne le précisent pas ; un choix
 # fait dans les réglages de l'économiseur (clé présente) est gardé.
+# #2148 : les anciens délais DPMS du modèle (0:10:00, recopiés dans le serveur
+# X par xscreensaver-gfx) éteignaient l'écran à 10 min même avec « Jamais »
+# dans Paramètres > Alimentation. Ils prennent la valeur du modèle quand les
+# trois valent encore 0:10:00 ; des délais choisis à la main sont gardés.
 def migrate_xscreensaver(path, template):
     try:
         text = path.read_text(encoding="utf-8")
         wanted = [line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("dpms")]
     except (OSError, UnicodeDecodeError):
         return
-    if any(line.split(":", 1)[0].strip() == "dpmsEnabled" for line in text.splitlines()): return
-    present = {line.split(":", 1)[0].strip() for line in text.splitlines() if ":" in line}
-    added = [line for line in wanted if line.split(":", 1)[0].strip() not in present]
-    if not added: return
+    lines = text.splitlines()
+    key = lambda line: line.split(":", 1)[0].strip()
+    value = lambda line: line.split(":", 1)[1].strip() if ":" in line else ""
+    delays = ("dpmsStandby", "dpmsSuspend", "dpmsOff")
+    template_values = {key(line): line for line in wanted}
+    old = [line for line in lines if key(line) in delays]
+    if len(old) == 3 and all(value(line) == "0:10:00" for line in old) and all(k in template_values for k in delays):
+        lines = [template_values[key(line)] if key(line) in delays else line for line in lines]
+    if not any(key(line) == "dpmsEnabled" for line in lines):
+        present = {key(line) for line in lines if ":" in line}
+        lines += [line for line in wanted if key(line) not in present]
+    new_text = "\n".join(lines) + "\n" if lines else text
+    if new_text == text: return
     try:
         temporary = path.with_name(".xscreensaver.tmp")
-        temporary.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(added) + "\n", encoding="utf-8")
+        temporary.write_text(new_text, encoding="utf-8")
         temporary.replace(path)
     except OSError:
         pass
