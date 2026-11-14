@@ -463,6 +463,7 @@ jobs:
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
+          python3 -B scripts/test-store-listes-neuves.py
           python3 -B scripts/test-store-editeurs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
