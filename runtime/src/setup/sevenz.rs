@@ -824,7 +824,14 @@ pub fn sfx_config(data: &[u8], archive_at: usize) -> Option<Vec<(String, String)
         text.lines()
             .filter_map(|l| {
                 let (k, v) = l.split_once('=')?;
-                Some((k.trim().to_string(), v.trim().trim_matches('"').to_string()))
+                // Une seule paire de guillemets autour de la valeur : un
+                // `\"` final (RunProgram="\"%%T\\setup.exe\"") reste entier.
+                let v = v.trim();
+                let v = v
+                    .strip_prefix('"')
+                    .and_then(|x| x.strip_suffix('"'))
+                    .unwrap_or(v);
+                Some((k.trim().to_string(), v.to_string()))
             })
             .collect(),
     )
@@ -1000,8 +1007,13 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
         if bundle {
             return Some(run_bundle_setup(&entries, args));
         }
-        return super::web::is_downloader(&entries)
-            .then(|| super::web::run(&data, exe, args, allow_download));
+        if super::web::is_downloader(&entries) {
+            return Some(super::web::run(&data, exe, args, allow_download));
+        }
+        // Programme nommé par la configuration du SFX (Zoom, #2390).
+        let config = sfx_config(&data, at).unwrap_or_default();
+        drop(data);
+        return Some(run_sfx_program(&entries, &config, args));
     };
     let quiet = args.iter().any(|a| {
         let w = a.trim_start_matches(['/', '-']).to_ascii_lowercase();
@@ -1034,6 +1046,14 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     }
     drop(entries);
     let msi_path = msi_path?;
+    // Contrat de licence du MSI porté (Acrobat Reader, #2330) : la même
+    // page que pour msiexec, avant toute installation. Refus = 1602, le
+    // contenu extrait est effacé et rien n'est installé. Une option
+    // silencieuse vaut acceptation, comme sous Windows.
+    if let Some(code) = super::license::require_acceptance(&msi_path, args) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Some(code);
+    }
     let mut log = crate::msi::install::Logger { file: None, quiet };
     // Correctif nommé par setup.ini (Acrobat) : pas encore appliqué (#1715).
     if let Some((_, patch)) = product.iter().find(|(k, _)| k == "patch") {
@@ -1049,6 +1069,139 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     let rc = crate::msi::install::install(&msi_path, &opts, &mut log);
     let _ = std::fs::remove_dir_all(&work);
     Some(rc)
+}
+
+/// Programme et paramètres que le module SFX de 7-Zip lance après
+/// extraction, d'après sa configuration (aide de 7-Zip, commutateur `-sfx`) :
+/// - `RunProgram` : « Command for executing », `setup.exe` par défaut,
+///   précédée du préfixe `Directory` (`.\` par défaut, c'est-à-dire le
+///   dossier d'extraction) ; `%%T` y désigne le dossier d'extraction ;
+/// - sinon `ExecuteFile` (« Name of file for executing ») avec
+///   `ExecuteParameters`.
+///
+/// Rend le programme (relatif au dossier d'extraction, ou chemin Windows
+/// tel quel) et ses paramètres, `%%T` remplacé par `temp`.
+pub(crate) fn sfx_program(config: &[(String, String)], temp: &str) -> (String, String) {
+    let get = |k: &str| {
+        config
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| unescape(v).replace("%%T", temp))
+    };
+    let (program, params) = match (get("RunProgram"), get("ExecuteFile")) {
+        (Some(cmd), _) => split_command(&cmd),
+        (None, Some(file)) => (file, get("ExecuteParameters").unwrap_or_default()),
+        (None, None) => ("setup.exe".to_string(), String::new()),
+    };
+    let program = match get("Directory") {
+        Some(dir) if !dir.is_empty() && !is_absolute_windows(&program) => {
+            format!("{}\\{}", dir.trim_end_matches('\\'), program)
+        }
+        _ => program,
+    };
+    let program = program
+        .strip_prefix(".\\")
+        .map(str::to_string)
+        .unwrap_or(program);
+    (program, params)
+}
+
+/// `\\` et `\"` dans une valeur : l'aide de 7-Zip écrit le préfixe par
+/// défaut de `Directory` `".\\"`, soit `.\` une fois l'échappement retiré.
+fn unescape(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut chars = v.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('\\' | '"'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_absolute_windows(p: &str) -> bool {
+    let b = p.as_bytes();
+    p.starts_with("\\\\") || (b.len() > 2 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+/// Premier mot d'une ligne de commande (entre guillemets ou jusqu'à
+/// l'espace) et le reste.
+fn split_command(cmd: &str) -> (String, String) {
+    let cmd = cmd.trim();
+    if let Some(rest) = cmd.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return (rest[..end].to_string(), rest[end + 1..].trim().to_string());
+        }
+    }
+    match cmd.split_once(' ') {
+        Some((p, r)) => (p.to_string(), r.trim().to_string()),
+        None => (cmd.to_string(), String::new()),
+    }
+}
+
+/// Auto-extractible 7-Zip qui lance son propre programme (Zoom, #2390),
+/// comme le module SFX : archive extraite dans le dossier temporaire du
+/// profil (sur le disque, #2326), programme de la configuration lancé et
+/// attendu, son code rendu tel quel (un contrat refusé dans ce programme
+/// rend son propre code, 1602 pour une annulation), dossier effacé ensuite.
+fn run_sfx_program(entries: &[Entry], config: &[(String, String)], args: &[String]) -> i32 {
+    let work = crate::paths::setup_work_dir("sfx");
+    let _ = std::fs::remove_dir_all(&work);
+    if let Err(code) = extract_entries(entries, &work) {
+        return code;
+    }
+    let dir = crate::paths::to_windows(&work);
+    let (program, mut params) = sfx_program(config, &dir);
+    let inside = work.join(program.split('\\').collect::<std::path::PathBuf>());
+    let win = if !is_absolute_windows(&program)
+        && !program.split('\\').any(|p| p == "..")
+        && inside.is_file()
+    {
+        crate::paths::to_windows(&inside)
+    } else {
+        program
+    };
+    if !args.is_empty() {
+        if !params.is_empty() {
+            params.push(' ');
+        }
+        params.push_str(&args.join(" "));
+    }
+    let outcome = super::run::program(&win, &params, &dir, true, false);
+    eprintln!("setup : {}", super::run::describe(&win, &outcome));
+    if !matches!(outcome, super::run::Outcome::TimedOut) {
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    match outcome {
+        super::run::Outcome::Exited(c) => c,
+        super::run::Outcome::Started | super::run::Outcome::TimedOut => 0,
+        _ => 1,
+    }
+}
+
+/// Écrit les entrées de l'archive sous `work` ; en cas d'erreur, le
+/// dossier est effacé et le code 1 rendu.
+fn extract_entries(entries: &[Entry], work: &Path) -> Result<(), i32> {
+    for e in entries {
+        let path = work.join(e.name.split('\\').collect::<std::path::PathBuf>());
+        let written = if e.dir {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, &e.data))
+        };
+        if let Err(err) = written {
+            eprintln!("setup : {} : {err}", path.display());
+            let _ = std::fs::remove_dir_all(work);
+            return Err(1);
+        }
+    }
+    Ok(())
 }
 
 /// Archive d'installateur sans MSI : extraite dans un dossier temporaire,
@@ -1350,6 +1503,56 @@ pub mod tests {
         assert!(!runs_own_setup(&plain, 6));
     }
 
+    /// #2390 : programme lancé par le module SFX, d'après sa configuration
+    /// (aide de 7-Zip, commutateur -sfx).
+    #[test]
+    fn programme_du_module_sfx() {
+        let c = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let t = "C:\\Users\\a\\AppData\\Local\\Temp\\winlux-sfx-1";
+        // Rien : setup.exe par défaut.
+        assert_eq!(sfx_program(&[], t), ("setup.exe".into(), String::new()));
+        // ExecuteFile et ses paramètres.
+        assert_eq!(
+            sfx_program(
+                &c(&[
+                    ("ExecuteFile", "msiexec.exe"),
+                    ("ExecuteParameters", "/i 7zip.msi REINSTALL=ALL")
+                ]),
+                t
+            ),
+            ("msiexec.exe".into(), "/i 7zip.msi REINSTALL=ALL".into())
+        );
+        // RunProgram : %%T, guillemets échappés, paramètres.
+        let (p, a) = sfx_program(
+            &c(&[("RunProgram", "\\\"%%T\\\\bin\\\\setup.exe\\\" /x")]),
+            t,
+        );
+        assert_eq!(p, format!("{t}\\bin\\setup.exe"));
+        assert_eq!(a, "/x");
+        // Directory : préfixe du programme ; « .\\ » par défaut.
+        assert_eq!(
+            sfx_program(&c(&[("Directory", "bin"), ("RunProgram", "go.exe")]), t).0,
+            "bin\\go.exe"
+        );
+        assert_eq!(
+            sfx_program(&c(&[("Directory", ".\\\\"), ("RunProgram", "go.exe")]), t).0,
+            "go.exe"
+        );
+        // Bloc de configuration : une seule paire de guillemets retirée.
+        let mut d = b"MZ....".to_vec();
+        d.extend(b";!@Install@!UTF-8!\r\nRunProgram=\"\\\"%%T\\\\a.exe\\\"\"\r\n;!@InstallEnd@!");
+        let at = d.len();
+        d.extend(SIGNATURE);
+        let cfg = sfx_config(&d, at).unwrap();
+        assert_eq!(cfg[0].1, "\\\"%%T\\\\a.exe\\\"");
+        assert_eq!(sfx_program(&cfg, t).0, format!("{t}\\a.exe"));
+    }
+
     #[test]
     fn installeur_web_inconnu_refuse_sans_rien_telecharger() {
         // Auto-extractible qui lance SetupShim.exe et ne porte qu'un
@@ -1373,6 +1576,72 @@ pub mod tests {
         std::fs::write(&exe, &d).unwrap();
         assert_eq!(chain(&exe, &[], false), Some(1));
         assert_eq!(chain(&exe, &[], true), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #2330 : un auto-extractible qui porte un MSI à contrat (Acrobat
+    /// Reader) montre la page du contrat avant d'installer ; refus ou pas
+    /// d'affichage = 1602, rien d'installé, le contenu extrait effacé.
+    #[test]
+    fn contrat_du_msi_porte_par_l_auto_extractible() {
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("winlux-sfx-licence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut d = vec![0u8; 0x200];
+        d[0..2].copy_from_slice(b"MZ");
+        d[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        d[0x80..0x84].copy_from_slice(b"PE\0\0");
+        d[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        d.extend(b";!@Install@!UTF-8!\r\nExecuteFile=\"setup.exe\"\r\n;!@InstallEnd@!");
+        d.extend(build_copy_archive(
+            &[
+                ("setup.exe", b"MZ"),
+                (
+                    "x64\\Licence.msi",
+                    include_bytes!("../msi/testdata/licence.msi"),
+                ),
+            ],
+            "x64",
+        ));
+        let exe = dir.join("Reader.exe");
+        std::fs::write(&exe, &d).unwrap();
+        let refuse = dir.join("refuse.sh");
+        std::fs::write(&refuse, "#!/bin/sh\nexit 66\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&refuse, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let keys = [
+            "WINLUX_HOME",
+            "WINLUX_DRIVE_C",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "WINLUX_SETUP_WIZARD",
+            "WINLUX_SETUP_DEPTH",
+        ];
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        std::env::set_var("WINLUX_HOME", &home);
+        std::env::set_var("WINLUX_DRIVE_C", &home);
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("WINLUX_SETUP_DEPTH");
+        // Page du contrat, refusée.
+        std::env::set_var("DISPLAY", ":99");
+        std::env::set_var("WINLUX_SETUP_WIZARD", &refuse);
+        let refused = chain(&exe, &[], false);
+        // Sans affichage : la page ne peut pas s'ouvrir.
+        std::env::remove_var("DISPLAY");
+        let headless = chain(&exe, &[], false);
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        assert_eq!(refused, Some(1602));
+        assert_eq!(headless, Some(1602));
+        assert!(!home.join("Program Files").exists(), "rien d'installé");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

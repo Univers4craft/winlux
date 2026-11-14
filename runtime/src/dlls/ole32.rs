@@ -983,6 +983,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Options globales du runtime COM (IGlobalOptions, Teams #2208).
+        if let Some(hr) = super::global_options::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Serveur en processus inscrit au registre (InprocServer32, #16).
         if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
             if let Some(hr) = create_from_registry(&guid, &iid, out) {

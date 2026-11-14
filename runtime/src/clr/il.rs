@@ -754,6 +754,29 @@ impl Interpreter {
                 let msg = ClrException { obj_ptr: this }.message();
                 return Ok(bcl::alloc_managed_string(&msg));
             }
+            ("System", "Exception", "LireDonnees") => {
+                let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
+                if this.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                let data = unsafe { *(this.add(exceptions::DATA_SLOT) as *const *mut u8) };
+                return Ok(if gc::type_of(data).is_some() {
+                    Value::Ref(data)
+                } else {
+                    Value::Null
+                });
+            }
+            ("System", "Exception", "EcrireDonnees") => {
+                let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
+                if this.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                let data = args.get(1).map_or(std::ptr::null_mut(), |v| v.as_ref());
+                unsafe {
+                    *(this.add(exceptions::DATA_SLOT) as *mut *mut u8) = data;
+                }
+                return Ok(Value::Null);
+            }
             (_, c, "get_InnerException") if c.ends_with("Exception") => {
                 let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
                 if this.is_null() {

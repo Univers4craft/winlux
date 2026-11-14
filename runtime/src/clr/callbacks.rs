@@ -42,6 +42,12 @@ pub fn set_current(interp: *mut Interpreter) -> *mut Interpreter {
     CURRENT.with(|c| c.replace(interp))
 }
 
+/// Délégué derrière un pointeur de fonction rendu par `callback_for`.
+pub fn delegate_for_pointer(p: usize) -> Option<usize> {
+    let i = THUNKS.iter().position(|t| *t as usize == p)?;
+    SLOTS.lock().unwrap().get(i).map(|s| s.delegate)
+}
+
 /// Délégués confiés au code natif, racines du ramasse-miettes.
 pub fn roots() -> Vec<usize> {
     SLOTS.lock().unwrap().iter().map(|s| s.delegate).collect()
@@ -205,12 +211,54 @@ fn dispatch(index: usize, raw: [usize; 8]) -> usize {
         (s.delegate, s.params.clone(), s.unicode)
     };
     if interp.is_null() {
-        crate::log_warn!("clr-interop", "rappel natif hors de l'interpréteur");
-        return 0;
+        return dispatch_foreign(delegate, &params, unicode, raw);
     }
     // SAFETY : l'interpréteur attend le retour de l'appel natif qui nous
     // rappelle (`with_interpreter`) et ne touche pas à son état d'ici là.
     let interp = unsafe { &mut *interp };
+    run(interp, delegate, &params, unicode, raw)
+}
+
+/// Rappel arrivé sur un fil que le code natif a créé lui-même
+/// (`CreateThread`, ServiceMain de `StartServiceCtrlDispatcher`, #2383) :
+/// le fil entre dans le runtime avec son propre interpréteur, le temps du
+/// rappel, comme un fil managé (`threads::launch`).
+fn dispatch_foreign(
+    delegate: usize,
+    params: &[(Kind, bool)],
+    unicode: bool,
+    raw: [usize; 8],
+) -> usize {
+    super::threads::gil_acquire();
+    let Some(model) = super::threads::any_interpreter() else {
+        super::threads::gil_release();
+        crate::log_warn!("clr-interop", "rappel natif sans interpréteur vivant");
+        return 0;
+    };
+    if crate::process::teb() == 0 {
+        crate::process::init_thread();
+    }
+    // SAFETY : le verrou global est pris ; l'interpréteur modèle n'est que
+    // lu (assemblies, domaine), son fil attend ce verrou ou un appel natif.
+    let mut own = Box::new(unsafe { &*model }.fork());
+    let p: *mut Interpreter = &mut *own;
+    super::threads::register(p);
+    let previous = set_current(p);
+    let result = run(&mut own, delegate, params, unicode, raw);
+    set_current(previous);
+    super::threads::unregister(p);
+    drop(own);
+    super::threads::gil_release();
+    result
+}
+
+fn run(
+    interp: &mut Interpreter,
+    delegate: usize,
+    params: &[(Kind, bool)],
+    unicode: bool,
+    raw: [usize; 8],
+) -> usize {
     let count = if params.is_empty() {
         4
     } else {

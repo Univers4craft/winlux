@@ -62,6 +62,10 @@ _TR = {
         "To continue, enter the password for {name}.",
         "Para continuar, escribe la contraseña de {name}.",
         "Geben Sie zum Fortfahren das Kennwort für {name} ein."),
+    "Pour continuer, choisissez un administrateur et entrez son mot de passe.": (
+        "To continue, choose an administrator and enter their password.",
+        "Para continuar, elige un administrador y escribe su contraseña.",
+        "Wählen Sie zum Fortfahren einen Administrator aus, und geben Sie sein Kennwort ein."),
     "Pour continuer, entrez le mot de passe d'un administrateur.": (
         "To continue, enter an admin password.",
         "Para continuar, escribe la contraseña de un administrador.",
@@ -180,6 +184,20 @@ def target_account():
     return (admins[0] if admins else None), False
 
 
+def admin_choices():
+    """Administrateurs qui peuvent autoriser l'élévation de la session (#2198).
+
+    Un administrateur s'autorise lui-même. Pour un compte standard, n'importe
+    quel administrateur de l'appareil convient, comme sous Windows ; root
+    n'est proposé que s'il n'y a aucun compte administrateur personnel."""
+    me = LOCK["session_account"]()
+    admins = admin_accounts()
+    if me in admins:
+        return [me]
+    personal = [a for a in admins if a != "root"]
+    return personal or admins
+
+
 def _known(user):
     """Le mot de passe de ce compte est-il lisible ici (shadow ou fichier Live) ?"""
     return LOCK["shadow_hash"](user) is not None or LOCK["users_conf_password"](user) is not None
@@ -221,11 +239,16 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk, Gtk
 
-    user, _self_admin = target_account()
+    user, self_admin = target_account()
+    # Compte standard : la personne choisit l'administrateur qui autorise
+    # (#2198) ; le mot de passe vérifié est celui du compte choisi.
+    choices = [] if self_admin else admin_choices()
+    if choices:
+        user = choices[0]
     # --elevate : le relais root (winlux-root) ouvre l'élévation après avoir
     # vérifié lui-même le mot de passe ; il est donc toujours demandé.
     ask_password = elevate or needs_password(user)
-    result = {"ok": False}
+    result = {"ok": False, "user": user}
 
     css = b"""
       .uac { background: #f3f3f3; color: #1b1b1b; }
@@ -295,9 +318,25 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
         error.set_text(_t("Aucun compte administrateur n'existe sur cet appareil."))
         body.pack_start(error, False, False, 6)
     elif ask_password:
-        prompt = (_t("Pour continuer, entrez le mot de passe de {name}.", name=user) if user != "root"
-                  else _t("Pour continuer, entrez le mot de passe d'un administrateur."))
+        if len(choices) > 1:
+            prompt = _t("Pour continuer, choisissez un administrateur et entrez son mot de passe.")
+        elif user != "root":
+            prompt = _t("Pour continuer, entrez le mot de passe de {name}.", name=user)
+        else:
+            prompt = _t("Pour continuer, entrez le mot de passe d'un administrateur.")
         body.pack_start(Gtk.Label(label=prompt, xalign=0, wrap=True, margin_top=10), False, False, 0)
+        if len(choices) > 1:
+            picker = Gtk.ComboBoxText()
+            for account in choices:
+                picker.append(account, account)
+            picker.set_active_id(user)
+
+            def on_pick(combo):
+                result["user"] = combo.get_active_id() or choices[0]
+                entry.set_text("")
+                error.set_text("")
+            picker.connect("changed", on_pick)
+            body.pack_start(picker, False, False, 0)
         osk = osk_command()
         if osk:
             # Tablette sans clavier : bouton du clavier tactile dans le champ,
@@ -322,8 +361,9 @@ def run_dialog(app, win_path, elevate=False, publisher=""):
     yes.set_sensitive(user is not None)
 
     def on_yes(_button):
-        checked = (LOCK["relay_check"](user, entry.get_text(), "elevate") if elevate
-                   else verify(user, entry.get_text()) if ask_password else True)
+        chosen = result["user"]
+        checked = (LOCK["relay_check"](chosen, entry.get_text(), "elevate") if elevate
+                   else verify(chosen, entry.get_text()) if ask_password else True)
         if not checked:
             entry.set_text("")
             error.set_text(_t("Le mot de passe est incorrect. Réessayez."))
