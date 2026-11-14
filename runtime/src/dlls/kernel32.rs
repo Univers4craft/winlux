@@ -11095,6 +11095,9 @@ unsafe fn duplicate_local(
     } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
         // Jeton unique du compte (voir security.rs) : la copie est lui-même.
         Some(src_handle)
+    } else if let Some(h) = crate::dlls::electron_win32::duplicate_user_object(src_handle) {
+        // Station de fenêtres ou bureau (#2443).
+        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le
