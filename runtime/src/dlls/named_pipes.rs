@@ -386,9 +386,15 @@ pub unsafe extern "win64" fn wait_named_pipe_w(name: *const u16, timeout: u32) -
         crate::process::set_last_error(87);
         return 0;
     }
-    if wait(&crate::dlls::wstr(name), timeout) {
+    let nom = crate::dlls::wstr(name);
+    // Diagnostic (#2115) : un client bloqué ici se voit dans WINLUX_TRACE,
+    // avec le délai demandé (0xffffffff = NMPWAIT_WAIT_FOREVER).
+    crate::trace!("WaitNamedPipe({nom}, délai {timeout:#x}) : attente d'une instance libre");
+    if wait(&nom, timeout) {
+        crate::trace!("WaitNamedPipe({nom}) : instance libre");
         1
     } else {
+        crate::trace!("WaitNamedPipe({nom}) : délai écoulé, aucune instance");
         crate::process::set_last_error(if timeout == 0 {
             121
         } else {
