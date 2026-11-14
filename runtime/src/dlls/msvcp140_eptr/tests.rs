@@ -45,7 +45,12 @@ fn tables(t: &mut Tables) -> (usize, usize) {
     let adr = &*t as *const Tables as usize;
     let copie = copie_essai as *const () as usize;
     let dtor = dtor_essai as *const () as usize;
-    let base = adr.min(copie).min(dtor) & !0xFFF;
+    // Une page sous la plus basse des trois adresses : aucune RVA ne vaut
+    // 0, valeur qui signifie « pas de destructeur » (pmfnUnwind) ou « pas
+    // de constructeur de copie ». Arrondie seulement à la page, la base
+    // tombait sur dtor_essai quand le lieur la plaçait en début de page, et
+    // le destructeur n'était plus appelé (#2378).
+    let base = (adr.min(copie).min(dtor) & !0xFFF) - 0x1000;
     let rva = |a: usize| u32::try_from(a - base).expect("même image");
     let cta = adr + std::mem::offset_of!(Tables, cta);
     let ct = adr + std::mem::offset_of!(Tables, ct);
