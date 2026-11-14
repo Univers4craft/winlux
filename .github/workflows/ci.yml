@@ -233,6 +233,8 @@ jobs:
 
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
+      - name: Carte d'arrêt, « Annuler » par défaut (#2299)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-carte-annuler.py
       - name: Vérifier Paramètres › Sauvegarde (destination, planification, restauration)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
 

@@ -44,6 +44,25 @@ assert not uac["verify"]("carla", "faux")
 # Aucun compte inconnu n'est accepté.
 assert not uac["verify"]("personne", "x")
 
+# Session non root d'un compte standard (#2292) : /etc/shadow est illisible,
+# le mot de passe de l'administrateur choisi est vérifié par le relais root
+# (« admin-check »), jamais refusé d'office.
+os.environ["WINLUX_SESSION_USER"] = "bob"
+(tmp / "etc/shadow").rename(tmp / "etc/shadow.cache")
+calls = []
+real_relay, real_euid = lock["relay_check"], os.geteuid
+lock["relay_check"] = lambda user, password, op="check": calls.append((user, op)) or password == "Admin-7"
+os.geteuid = lambda: 1001
+try:
+    assert uac["verify"]("alice", "Admin-7")
+    assert not uac["verify"]("alice", "faux")
+    assert calls == [("alice", "admin-check")] * 2, calls
+    lock["relay_check"] = lambda *a, **k: None
+    assert not uac["verify"]("alice", "Admin-7"), "relais injoignable : refus"
+finally:
+    lock["relay_check"], os.geteuid = real_relay, real_euid
+    (tmp / "etc/shadow.cache").rename(tmp / "etc/shadow")
+
 # Traductions : chaque texte existe dans les quatre langues.
 for fr, row in uac["_TR"].items():
     assert len(row) == 3 and all(row), fr
