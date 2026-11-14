@@ -70,6 +70,15 @@ _TR = {
         "Speichern Sie Ihre Arbeit in diesen Apps oder fahren Sie fort: Nicht gespeicherte Änderungen gehen verloren."),
     "Arrêter quand même": ("Shut down anyway", "Apagar de todos modos", "Trotzdem herunterfahren"),
     "Redémarrer quand même": ("Restart anyway", "Reiniciar de todos modos", "Trotzdem neu starten"),
+    "Déverrouiller": ("Unlock", "Desbloquear", "Entsperren"),
+    "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour arrêter quand même.": (
+        "Unlock the PC to save your work in these apps or to shut down anyway.",
+        "Desbloquee el equipo para guardar su trabajo en estas aplicaciones o para apagarlo de todos modos.",
+        "Entsperren Sie den PC, um Ihre Arbeit in diesen Apps zu speichern oder trotzdem herunterzufahren."),
+    "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour redémarrer quand même.": (
+        "Unlock the PC to save your work in these apps or to restart anyway.",
+        "Desbloquee el equipo para guardar su trabajo en estas aplicaciones o para reiniciarlo de todos modos.",
+        "Entsperren Sie den PC, um Ihre Arbeit in diesen Apps zu speichern oder trotzdem neu zu starten."),
     "Impossible d’arrêter le PC": ("Couldn’t shut down the PC", "No se pudo apagar el equipo", "PC konnte nicht heruntergefahren werden"),
     "Impossible de redémarrer le PC": ("Couldn’t restart the PC", "No se pudo reiniciar el equipo", "PC konnte nicht neu gestartet werden"),
     "Une mise à jour est en cours d’installation. Réessayez quand elle sera terminée.": (
@@ -345,6 +354,66 @@ def dark_theme(Gtk):
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
 
 
+def _screen_suffix():
+    """Même nommage que winlux-lock : :0 sans suffixe, :1 → « -1 »."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    return "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+
+
+def screen_locked():
+    """Vrai si winlux-lock tient l'écran (pid vivant dans son marqueur)."""
+    try:
+        with open(ROOT + "/run/winlux/lock/active" + _screen_suffix()) as marker:
+            pid = int(marker.read().strip())
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def power_request_path():
+    return ROOT + "/run/winlux/lock/power" + _screen_suffix()
+
+
+def request_lock_yield():
+    """Demande à l'écran de verrouillage de céder la saisie à cet écran d'arrêt
+    (#2254). winlux-lock vérifie le pid, son propriétaire et son programme."""
+    target = power_request_path()
+    tmp = f"{target}.{os.getpid()}"
+    try:
+        with open(tmp, "w") as marker:
+            # Lisible par le compte verrouillé quel que soit l'umask : le
+            # démon root tourne en umask 077, et une demande en 0600 restait
+            # illisible pour winlux-lock (banc 2, 12 nov.). Jamais inscriptible.
+            os.fchmod(marker.fileno(), 0o644)
+            marker.write(f"{os.getpid()}\n")
+        os.replace(tmp, target)
+        return True
+    except OSError as error:
+        log(f"demande de saisie au verrou impossible : {error}")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def release_lock_yield():
+    try:
+        with open(power_request_path()) as marker:
+            if int(marker.read().strip()) != os.getpid():
+                return
+        os.unlink(power_request_path())
+    except (OSError, ValueError):
+        pass
+
+
+def log(message):
+    print(f"winlux-power {time.strftime('%H:%M:%S')} : {message}", file=sys.stderr, flush=True)
+
+
 def open_windows():
     """Fenêtres d'applications ouvertes : {id: (classe, titre, pid)}.
 
@@ -418,12 +487,42 @@ class PowerUI:
         self.window.add(self.overlay)
         self.card = None
         self.ticker = None
+        self.locked = screen_locked()
         if self.mode == "confirm":
             self.show_confirm()
         else:
             self.start_shutdown()
         self.window.show_all()
+        # Session verrouillée (#2254) : l'écran de verrouillage tient la saisie
+        # et cachait la carte « Ces applications empêchent l'arrêt ». Il la
+        # cède à cet écran, plein écran et sans rien montrer de la session.
+        self.yield_requested = self.locked and request_lock_yield()
+        self.window.connect("destroy", lambda *_: release_lock_yield())
+        self.grabbed = False
+        self.grab_failures = 0
         self.GLib.idle_add(self.grab)
+        self.GLib.timeout_add(1000, self.watch_lock)
+
+    def watch_lock(self):
+        """Verrouillage survenu pendant l'écran d'arrêt (inactivité pendant
+        l'attente d'une application) : même passation que ci-dessus, et cet
+        écran repasse au premier plan."""
+        if self.mode == "unlock":
+            return False  # wait_unlock relance cette veille après le déverrouillage
+        if self.yield_requested or not screen_locked():
+            return not self.yield_requested
+        self.locked = True
+        self.yield_requested = request_lock_yield()
+        gdk_window = self.window.get_window()
+        if gdk_window is not None:
+            gdk_window.raise_()
+        if not self.grabbed:
+            self.GLib.idle_add(self.grab)
+        if self.mode == "blocked":
+            # Plus de titres de fenêtres sur un écran verrouillé.
+            self.show_blocked(self.blockers)
+        log("écran verrouillé pendant l'arrêt : saisie demandée au verrou")
+        return False
 
     # Saisie exclusive : la fenêtre POPUP n'a pas de gestionnaire de fenêtres.
     def grab(self):
@@ -431,14 +530,25 @@ class PowerUI:
         if gdk_window is None:
             return False
         seat = self.window.get_display().get_default_seat()
-        for _ in range(20):
-            if seat.grab(gdk_window, self.Gdk.SeatCapabilities.ALL, True, None, None, None, None) == self.Gdk.GrabStatus.SUCCESS:
-                break
-            time.sleep(0.05)
+        status = seat.grab(gdk_window, self.Gdk.SeatCapabilities.ALL, True, None, None, None, None)
+        if status == self.Gdk.GrabStatus.SUCCESS:
+            if self.grab_failures:
+                log(f"saisie obtenue après {self.grab_failures} refus")
+            self.grabbed = True
+            return False
+        self.grab_failures += 1
+        if self.grab_failures == 1:
+            # Échec auparavant silencieux : la carte restait affichée mais
+            # inutilisable, sans aucune trace (#2254).
+            log(f"saisie refusée ({status.value_nick}), "
+                + ("écran de verrouillage actif, nouvel essai" if self.locked else "nouvel essai"))
+        # On réessaie tant que l'écran est là : la carte doit rester atteignable.
+        self.GLib.timeout_add(20 if self.yield_requested else 50, self.grab)
         return False
 
     def ungrab(self):
         self.window.get_display().get_default_seat().ungrab()
+        release_lock_yield()
 
     # ── Cartes ──
     def set_card(self, widget):
@@ -516,31 +626,88 @@ class PowerUI:
         Gtk = self.Gtk
         shutdown = self.action == "poweroff"
         self.mode = "blocked"
+        self.blockers = blockers
         report("blocked")
         listing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         seen = set()
         for window_class, title, _pid in blockers.values():
-            if title in seen:
+            key = window_class if self.locked else title
+            if key in seen:
                 continue
-            seen.add(title)
+            seen.add(key)
             row = Gtk.Box(spacing=10)
             icon = window_class.split(".")[0].casefold()
             row.pack_start(Gtk.Image.new_from_icon_name(icon if Gtk.IconTheme.get_default().has_icon(icon)
                                                         else "application-x-executable", Gtk.IconSize.LARGE_TOOLBAR),
                            False, False, 0)
-            name = Gtk.Label(label=title, xalign=0, ellipsize=3, max_width_chars=40)
+            # Session verrouillée : le nom de l'application, jamais le titre de
+            # sa fenêtre (nom de document, objet d'un message…).
+            shown = window_class.split(".")[-1] if self.locked else title
+            name = Gtk.Label(label=shown, xalign=0, ellipsize=3, max_width_chars=40)
             name.get_style_context().add_class("app")
             row.pack_start(name, True, True, 0)
             listing.pack_start(row, False, False, 0)
             if len(seen) >= 6:
                 break
+        title = _t("Ces applications empêchent l’arrêt") if shutdown else _t("Ces applications empêchent le redémarrage")
+        if self.locked:
+            # #2300, décision de damien du 14 nov. : sur un écran verrouillé,
+            # personne ne force l'arrêt sans le mot de passe. La carte n'offre
+            # que « Annuler » et « Déverrouiller » ; l'arrêt reste en attente,
+            # sans délai, jusqu'à la réponse de l'utilisateur déverrouillé.
+            # Windows propose « Arrêter quand même » sur l'écran verrouillé :
+            # Winlux s'en écarte volontairement.
+            self.set_card(self.make_card(
+                "dialog-warning-symbolic", title,
+                _t("Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour arrêter quand même."
+                   if shutdown else
+                   "Déverrouillez le PC pour enregistrer votre travail dans ces applications ou pour redémarrer quand même."),
+                [(_t("Annuler"), self.cancel, True),
+                 (_t("Déverrouiller"), self.unlock_first, False)],
+                extra=listing))
+            return
         self.set_card(self.make_card(
-            "dialog-warning-symbolic",
-            _t("Ces applications empêchent l’arrêt") if shutdown else _t("Ces applications empêchent le redémarrage"),
+            "dialog-warning-symbolic", title,
             _t("Enregistrez votre travail dans ces applications, ou continuez : les modifications non enregistrées seront perdues."),
-            [(_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.finish, True),
-             (_t("Annuler"), self.cancel, False)],
+            # #2299 : « Annuler » par défaut. Sur un écran verrouillé, la touche
+            # qui réveille l'écran déclenchait « Arrêter quand même » et
+            # perdait le travail non enregistré.
+            [(_t("Annuler"), self.cancel, True),
+             (_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.finish, False)],
             extra=listing))
+
+    def unlock_first(self):
+        """« Déverrouiller » (#2300) : l'écran d'arrêt s'efface et rend la
+        saisie au verrou, qui demande le mot de passe. L'arrêt reste en
+        attente ; une fois la session déverrouillée, la carte complète revient
+        avec « Arrêter quand même »."""
+        self.mode = "unlock"
+        report("blocked")
+        self.ungrab()
+        self.grabbed = False
+        self.yield_requested = False
+        self.window.hide()
+        log("déverrouillage demandé : l'arrêt attend la session déverrouillée")
+        self.GLib.timeout_add(500, self.wait_unlock)
+
+    def wait_unlock(self):
+        if self.mode != "unlock":
+            return False
+        if screen_locked():
+            return True
+        self.locked = False
+        self.window.show_all()
+        gdk_window = self.window.get_window()
+        if gdk_window is not None:
+            gdk_window.raise_()
+        self.GLib.idle_add(self.grab)
+        self.GLib.timeout_add(1000, self.watch_lock)
+        remaining = {key: value for key, value in open_windows().items() if key in getattr(self, "windows", {})}
+        log("session déverrouillée : carte de l'arrêt en attente affichée")
+        # Même si tout a été fermé entre-temps, on demande : l'arrêt ne part
+        # jamais sans réponse.
+        self.show_blocked(remaining or self.blockers)
+        return False
 
     def show_error(self, message):
         self.mode = "error"

@@ -1325,6 +1325,79 @@ pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: 
     }
 }
 
+/// Opération asynchrone hors ReadFile/WriteFile (ConnectNamedPipe, #2219)
+/// inscrite comme les autres : GetOverlappedResult la connaît et peut
+/// l'attendre quand `bWait` vaut TRUE.
+pub(crate) struct PendingIo {
+    h: usize,
+    overlapped: usize,
+    op: Arc<IoOperation>,
+}
+
+/// Début d'une E/S asynchrone sur `h` : `Internal` = STATUS_PENDING et
+/// hEvent remis à non signalé (« the function that started the operation
+/// resets the hEvent member », page GetOverlappedResult). `None` si une
+/// opération est déjà en cours sur ce même OVERLAPPED (ERROR_IO_PENDING posé).
+///
+/// # Safety
+/// `overlapped` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn begin_overlapped(h: usize, overlapped: usize) -> Option<PendingIo> {
+    let op = Arc::new(IoOperation {
+        file_handle: h,
+        issuing_thread: std::thread::current().id(),
+        state: Mutex::new(IoResult {
+            done: false,
+            bytes: 0,
+            error: 0,
+        }),
+        changed: Condvar::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops.get(&overlapped).is_some_and(|o| !lock(&o.state).done) {
+            crate::process::set_last_error(997);
+            return None;
+        }
+        ops.insert(overlapped, op.clone());
+    }
+    ov_set(overlapped, 0x103, 0);
+    let event = ov_event(overlapped) & !1;
+    if event != 0 {
+        let _ = reset_event(event);
+    }
+    Some(PendingIo { h, overlapped, op })
+}
+
+impl PendingIo {
+    /// L'opération est-elle annulée (CancelIo/CancelIoEx) ?
+    pub(crate) fn cancelled(&self) -> bool {
+        self.op.cancelled.load(Ordering::Acquire)
+    }
+    /// Fin de l'opération : résultat noté pour GetOverlappedResult, puis
+    /// `Internal`, événement et port de complétion comme `complete_overlapped`.
+    pub(crate) fn finish(self, bytes: u32, error: u32) {
+        {
+            let mut state = lock(&self.op.state);
+            state.bytes = bytes;
+            state.error = error;
+            state.done = true;
+            self.op.changed.notify_all();
+        }
+        complete_overlapped(self.h, self.overlapped, bytes, error);
+    }
+    /// Le fil n'a pas pu partir : l'opération est oubliée.
+    pub(crate) fn abandon(self) {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops
+            .get(&self.overlapped)
+            .is_some_and(|o| Arc::ptr_eq(o, &self.op))
+        {
+            ops.remove(&self.overlapped);
+        }
+    }
+}
+
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
         let raw = ov_event(overlapped);
@@ -4110,6 +4183,29 @@ fn heap_diag_parse(v: &str) -> (bool, bool, bool) {
     let has = |w: &str| v.split(',').any(|x| x.trim() == w);
     (has("trace"), has("nofree"), has("lfh"))
 }
+/// `fill` (#2156) : un bloc rendu par HeapAlloc sans HEAP_ZERO_MEMORY, ou
+/// la partie agrandie par HeapReAlloc, est rempli de [`HEAP_FILL_PATTERN`].
+/// Un programme qui suit un pointeur lu dans un champ jamais initialisé
+/// fait alors une faute avec ce motif dans le registre fautif (Acrobat,
+/// #1818). Jamais actif par défaut.
+fn heap_fill() -> bool {
+    static FILL: OnceLock<bool> = OnceLock::new();
+    *FILL.get_or_init(|| heap_fill_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
+}
+fn heap_fill_parse(v: &str) -> bool {
+    v.split(',').any(|x| x.trim() == "fill")
+}
+/// Motif de `WINLUX_HEAP_DIAG=fill` : quadmot non canonique, distinct de
+/// celui de WINLUX_STACK_SCRUB (0xF1F15C2B…).
+pub(crate) const HEAP_FILL_PATTERN: u64 = 0xF2F2_5A11_F2F2_5A11;
+/// Remplit `len` octets à `p` du motif, dans l'ordre de la mémoire (petit
+/// boutiste), y compris un reste de moins de 8 octets.
+unsafe fn heap_fill_bytes(p: *mut u8, len: usize) {
+    let pat = HEAP_FILL_PATTERN.to_le_bytes();
+    for i in 0..len {
+        *p.add(i) = pat[i % 8];
+    }
+}
 const LFH_LIMIT: usize = 16 * 1024;
 const LFH_PER_CLASS: usize = 4096;
 fn lfh_class(size: usize) -> usize {
@@ -4178,10 +4274,33 @@ mod tests_diagnostic_tas {
         assert_eq!(super::lfh_class(0), 16);
         assert_eq!(super::lfh_class(17), 32);
     }
+
+    /// WINLUX_HEAP_DIAG=fill (#2156) : motif reconnaissable, octet par
+    /// octet, y compris un reste de moins de 8 octets.
+    #[test]
+    fn remplissage_du_tas() {
+        assert!(super::heap_fill_parse("trace,fill"));
+        assert!(!super::heap_fill_parse("trace,lfh"));
+        assert!(!super::heap_fill_parse(""));
+        let mut b = [0u8; 21];
+        unsafe { super::heap_fill_bytes(b.as_mut_ptr(), 19) };
+        let pat = super::HEAP_FILL_PATTERN.to_le_bytes();
+        for (i, x) in b.iter().enumerate().take(19) {
+            assert_eq!(*x, pat[i % 8]);
+        }
+        assert_eq!(&b[19..], &[0, 0]);
+        assert_eq!(
+            u64::from_le_bytes(b[8..16].try_into().unwrap()),
+            0xF2F2_5A11_F2F2_5A11
+        );
+    }
 }
 
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
-    let p = if heap_lfh() {
+    let p = if super::tas_page::enabled() {
+        // WINLUX_HEAP_DIAG=page (#2158) : bloc sur ses pages, page de garde.
+        super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)))
+    } else if heap_lfh() {
         lfh_alloc(size)
     } else {
         libc::malloc(size.max(1))
@@ -4189,6 +4308,8 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
     if !p.is_null() {
         if flags & 8 != 0 {
             std::ptr::write_bytes(p, 0, size);
+        } else if heap_fill() {
+            heap_fill_bytes(p as *mut u8, size);
         }
         lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
             .insert(p as usize, size.max(1));
@@ -4198,7 +4319,7 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapAlloc({size}) = {p:p} (fil {})",
+                "HeapAlloc({size}, drapeaux {flags:#x}) = {p:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4226,7 +4347,18 @@ pub unsafe extern "win64" fn heap_realloc(
         return std::ptr::null_mut();
     };
     let (trace, nofree) = heap_diag();
-    let q = if heap_lfh() {
+    let q = if super::tas_page::enabled() {
+        // Mode page (#2158) : nouveau bloc, l'ancien part en quarantaine
+        // inaccessible ; une lecture par l'ancien pointeur fait une faute.
+        let q = super::tas_page::alloc(size).unwrap_or_else(|| libc::malloc(size.max(1)));
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, old.min(size));
+            if !super::tas_page::free(p) && !nofree {
+                libc::free(p);
+            }
+        }
+        q
+    } else if heap_lfh() {
         // Mode lfh : nouveau bloc de la bonne classe, l'ancien est gardé
         // pour sa classe avec son contenu.
         let q = lfh_alloc(size);
@@ -4250,7 +4382,7 @@ pub unsafe extern "win64" fn heap_realloc(
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapReAlloc({p:p}, {size}) = {q:p} (fil {})",
+                "HeapReAlloc({p:p}, {size}, drapeaux {flags:#x}) = {q:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4263,6 +4395,8 @@ pub unsafe extern "win64" fn heap_realloc(
     allocations.insert(q as usize, size.max(1));
     if flags & 8 != 0 && size > old {
         std::ptr::write_bytes((q as *mut u8).add(old), 0, size - old);
+    } else if heap_fill() && size > old {
+        heap_fill_bytes((q as *mut u8).add(old), size - old);
     }
     q
 }
@@ -4285,7 +4419,9 @@ pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void
             &format_args!("HeapFree({p:p}) (fil {})", libc::syscall(libc::SYS_gettid)),
         );
     }
-    if heap_lfh() {
+    if super::tas_page::enabled() && super::tas_page::free(p) {
+        // Mode page (#2158) : bloc rendu inaccessible, en quarantaine.
+    } else if heap_lfh() {
         lfh_free(p, old);
     } else if !nofree {
         libc::free(p);
@@ -5329,7 +5465,11 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
     if crate::dlls::mmap::export(h).is_some() {
         return Some("Section");
     }
-    Some(match lookup_sync(h)? {
+    let Some(sync) = lookup_sync(h) else {
+        // Clé du registre ouverte (#2413).
+        return crate::registry::key_nt_name(h).map(|_| "Key");
+    };
+    Some(match sync {
         SyncHandle::Event(_) => "Event",
         SyncHandle::Mutex(_) => "Mutant",
         SyncHandle::Thread(_) => "Thread",
@@ -7988,11 +8128,18 @@ unsafe fn set_current_directory_str(path: &str) -> i32 {
         }
     }
 }
-fn temp_path() -> String {
-    let p = std::env::var_os("TMPDIR")
-        .map(std::path::PathBuf::from)
+/// GetTempPath : TMP, puis TEMP, sinon le dossier temporaire du profil
+/// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
+/// défaut : c'est un tmpfs, et un installateur qui y décompresse des
+/// centaines de Mo épuise la mémoire (#2326).
+pub(crate) fn temp_path() -> String {
+    let p = ["TMP", "TEMP"]
+        .iter()
+        .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
+        .map(|v| crate::paths::to_linux(&v))
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        .unwrap_or_else(crate::paths::profile_temp);
+    let _ = std::fs::create_dir_all(&p);
     let mut s = crate::paths::to_windows(&p);
     if !s.ends_with('\\') {
         s.push('\\');
@@ -8763,6 +8910,8 @@ pub fn record_exit_code(code: u32) {
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
     crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
+    // WINLUX_WOW32_HISTORY (#2368) : historique écrit à toute fin.
+    crate::wow32::dump_history_at_exit(&format!("TerminateProcess (code {code:#x})"));
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -8775,6 +8924,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // WINLUX_WOW32_HISTORY (#2368) : ExitProcess, fail-fast, _invoke_watson.
+    crate::wow32::dump_history_at_exit(&format!("fin du processus (code {:#x})", code as u32));
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -10466,7 +10617,7 @@ pub unsafe extern "win64" fn get_short_path_name_w(
 // --- CompareStringA/W, CompareStringOrdinal ---
 pub unsafe extern "win64" fn compare_string_a(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u8,
     n1: i32,
     s2: *const u8,
@@ -10482,35 +10633,43 @@ pub unsafe extern "win64" fn compare_string_a(
     } else {
         crate::dlls::decode_ansi(std::slice::from_raw_parts(s2, n2 as usize))
     };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
+    let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+    compare_result(&a, &b, flags)
+}
+
+/// CompareStringA/W appliquent `dwCmpFlags` comme CompareStringEx (#2255) :
+/// sans NORM_IGNORECASE, deux chaînes qui ne diffèrent que par la casse ne
+/// sont pas égales.
+fn compare_result(a: &[u16], b: &[u16], flags: u32) -> i32 {
+    match super::nls::compare(a, b, flags) {
         std::cmp::Ordering::Less => 1,
         std::cmp::Ordering::Equal => 2,
         std::cmp::Ordering::Greater => 3,
     }
 }
+
 pub unsafe extern "win64" fn compare_string_w(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u16,
     n1: i32,
     s2: *const u16,
     n2: i32,
 ) -> i32 {
-    let a = if n1 < 0 {
-        crate::dlls::wstr(s1)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s1, n1 as usize))
-    };
-    let b = if n2 < 0 {
-        crate::dlls::wstr(s2)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s2, n2 as usize))
-    };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
-        std::cmp::Ordering::Less => 1,
-        std::cmp::Ordering::Equal => 2,
-        std::cmp::Ordering::Greater => 3,
+    if s1.is_null() || s2.is_null() {
+        set_last_error(87);
+        return 0;
     }
+    let len = |p: *const u16, n: i32| {
+        if n < 0 {
+            crate::printf::wide_len(p)
+        } else {
+            n as usize
+        }
+    };
+    let a = std::slice::from_raw_parts(s1, len(s1, n1));
+    let b = std::slice::from_raw_parts(s2, len(s2, n2));
+    compare_result(a, b, flags)
 }
 pub unsafe extern "win64" fn compare_string_ordinal(
     s1: *const u16,
@@ -11376,6 +11535,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    #[test]
+    fn compare_string_respecte_la_casse_sans_ignorecase() {
+        // #2255 : sans NORM_IGNORECASE, « Abc » et « abc » ne sont pas égales.
+        let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (maj, min) = (w("Abc"), w("abc"));
+        unsafe {
+            let cw = |f, a: &[u16], b: &[u16]| {
+                super::compare_string_w(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(cw(0, &maj, &min), 2);
+            assert_eq!(cw(1, &maj, &min), 2); // NORM_IGNORECASE
+            assert_eq!(cw(0, &min, &min), 2);
+            assert_eq!(cw(0, &w("abc"), &w("abd")), 1);
+            assert_eq!(cw(0x2, &w("été"), &w("ete")), 2); // NORM_IGNORENONSPACE
+            assert_eq!(
+                super::compare_string_w(0x400, 0, maj.as_ptr(), 3, min.as_ptr(), 2),
+                3
+            );
+            let ca = |f, a: &[u8], b: &[u8]| {
+                super::compare_string_a(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(ca(0, b"Abc\0", b"abc\0"), 2);
+            assert_eq!(ca(1, b"Abc\0", b"abc\0"), 2);
+        }
+    }
 
     #[test]
     fn copie_garde_la_date_de_derniere_ecriture() {

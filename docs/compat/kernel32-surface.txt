@@ -1007,6 +1007,8 @@ WinluxRecordStop
 WinluxResizePty
 WinluxSavePng
 WinluxSetGraphicsOption
+WinluxTaskList
+WinluxTaskSave
 WinluxWritePty
 Wow64DisableWow64FsRedirection
 Wow64EnableWow64FsRedirection

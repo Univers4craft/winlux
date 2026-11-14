@@ -14,6 +14,8 @@ use std::sync::{Mutex, OnceLock};
 use super::gui::{self, Msg, Rect};
 use super::{controls, lock, user32, Exports};
 
+/// Index de la procédure de dialogue dans les données de fenêtre (x64).
+const DWLP_DLGPROC: i32 = 8;
 const WM_DESTROY: u32 = 0x0002;
 const WM_SETFOCUS: u32 = 0x0007;
 const WM_CLOSE: u32 = 0x0010;
@@ -66,7 +68,6 @@ pub const DIALOG_CLASS: &str = "#32770";
 // ---------- État des boîtes ----------
 
 struct Dialog {
-    proc_addr: usize,
     wide: bool,
     font: usize,
     def_id: usize,
@@ -429,7 +430,6 @@ unsafe fn create_from_template(
     lock(dialogs()).insert(
         hwnd,
         Dialog {
-            proc_addr,
             wide,
             font,
             def_id: IDOK,
@@ -438,8 +438,8 @@ unsafe fn create_from_template(
             focus: 0,
         },
     );
-    user32::set_window_long_ptr_w(hwnd, 8, proc_addr as isize); // DWLP_DLGPROC
-                                                                // Contrôles du modèle, dans l'ordre (c'est l'ordre de tabulation).
+    user32::set_window_long_ptr_w(hwnd, DWLP_DLGPROC, proc_addr as isize);
+    // Contrôles du modèle, dans l'ordre (c'est l'ordre de tabulation).
     for item in &t.items {
         let Some(cls) = class_name(&item.class) else {
             continue;
@@ -514,11 +514,16 @@ fn top_level(mut hwnd: usize) -> usize {
 }
 
 /// Appelle la procédure de dialogue du programme ; 0 si elle n'en a pas.
+/// C'est celle de DWLP_DLGPROC à cet instant : un programme peut la
+/// remplacer par SetWindowLongPtr(DWLP_DLGPROC), comme l'installeur de
+/// Google Drive, dont les boutons dessinés par le programme restaient vides
+/// faute de WM_DRAWITEM dans la nouvelle procédure (#2421).
 unsafe fn call_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
-    let (proc_addr, wide) = match lock(dialogs()).get(&hwnd) {
-        Some(d) => (d.proc_addr, d.wide),
+    let wide = match lock(dialogs()).get(&hwnd) {
+        Some(d) => d.wide,
         None => return 0,
     };
+    let proc_addr = user32::get_window_long_ptr_w(hwnd, DWLP_DLGPROC) as usize;
     if proc_addr == 0 {
         return 0;
     }
@@ -562,7 +567,6 @@ pub unsafe fn def_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize
             lock(dialogs()).insert(
                 hwnd,
                 Dialog {
-                    proc_addr: 0,
                     wide: true,
                     font: 0,
                     def_id: IDOK,

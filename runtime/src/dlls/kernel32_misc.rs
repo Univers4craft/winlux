@@ -334,6 +334,7 @@ pub fn current_unhandled_filter() -> usize {
 /// recours n'ont prise en charge : diagnostic puis arrêt avec son code, comme
 /// le ferait Windows.
 pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
+    crate::wow32::dump_history_at_exit(&format!("exception 0x{code:08X} non gérée"));
     let detail = if args.is_empty() {
         String::new()
     } else {

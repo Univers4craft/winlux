@@ -193,6 +193,9 @@ pub struct Payload {
 
 #[derive(Debug, Default)]
 pub struct Manifest {
+    /// Bundle « par machine » (`Registration PerMachine="yes"`) : demande
+    /// les droits d'administrateur (#2180).
+    pub per_machine: bool,
     pub name: String,
     pub version: String,
     pub publisher: String,
@@ -219,6 +222,7 @@ pub fn parse_manifest(xml: &str) -> Manifest {
         }
         match e.name.as_str() {
             "Registration" => {
+                m.per_machine |= e.attr("PerMachine").eq_ignore_ascii_case("yes");
                 if m.version.is_empty() {
                     m.version = e.attr("Version").to_string();
                 }
@@ -736,7 +740,7 @@ pub fn run(
         bundle.manifest.version,
         bundle.manifest.chain.len()
     ));
-    let work = std::env::temp_dir().join(format!("winlux-burn-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("burn");
     let vars = initial_vars(&bundle.manifest, overrides);
     let mut status = 0;
     // Paquets réellement installés : un bundle qui n'en installe aucun n'a
@@ -889,6 +893,93 @@ pub fn info(path: &Path) -> Option<(String, String, String)> {
     Some((name, b.manifest.version, b.manifest.publisher))
 }
 
+/// Contrat de licence de l'interface standard du bundle (#2126) :
+/// `WixStdbaInformation` de `BootstrapperApplicationData.xml` désigne un
+/// fichier (`LicenseFile`, souvent RTF, éventuellement par langue sous
+/// `1036\\`) ou une adresse (`LicenseUrl`).
+pub fn license(path: &Path) -> Option<String> {
+    if !is_bundle_file(path) {
+        return None;
+    }
+    let data = crate::loader::ImageFile::open(path).ok()?;
+    let s = find_section(&data)?;
+    let mut ux = HashMap::new();
+    Cabinet::parse(container(&data, &s, 0)?)
+        .ok()?
+        .extract(&mut |name, bytes| {
+            ux.insert(name.to_string(), bytes.to_vec());
+            Ok(())
+        })
+        .ok()?;
+    license_from_ux(&ux, super::user_language())
+}
+
+/// Texte d'un fichier XML de l'interface : UTF-8 ou UTF-16, reconnu à sa
+/// marque d'ordre des octets ou, sans marque, à « < » suivi d'un octet nul
+/// (détection de l'annexe F de la recommandation XML 1.0 du W3C). Le
+/// `BootstrapperApplicationData.xml` des bundles comme vc_redist est en
+/// UTF-16 (#2126).
+fn xml_text(b: &[u8]) -> String {
+    use crate::intl::text::{decode, Encoding};
+    let enc = if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(b"<\0") {
+        Encoding::Utf16Le
+    } else if b.starts_with(&[0xFE, 0xFF]) || b.starts_with(b"\0<") {
+        Encoding::Utf16Be
+    } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        Encoding::Utf8Bom
+    } else {
+        Encoding::Utf8
+    };
+    decode(b, enc)
+}
+
+fn license_from_ux(ux: &HashMap<String, Vec<u8>>, lang: u16) -> Option<String> {
+    let manifest = parse_manifest(&xml_text(ux.get("0")?));
+    let by_path = |want: &str| {
+        manifest
+            .payloads
+            .values()
+            .find(|p| p.file_path.replace('/', "\\").eq_ignore_ascii_case(want))
+            .and_then(|p| ux.get(&p.source_path))
+    };
+    let ba = xml_text(by_path("BootstrapperApplicationData.xml")?);
+    let info = elements(&ba)
+        .into_iter()
+        .find(|e| e.name == "WixStdbaInformation")?;
+    let file = info.attr("LicenseFile").replace('/', "\\");
+    if !file.is_empty() {
+        let localized = |id: u16| by_path(&format!("{id}\\{file}"));
+        if let Some(b) = localized(lang)
+            .or_else(|| by_path(&file))
+            .or_else(|| localized(0x0409))
+        {
+            return Some(super::license::from_bytes(b));
+        }
+    }
+    let url = info.attr("LicenseUrl");
+    (!url.is_empty()).then(|| url.to_string())
+}
+
+/// Bundle « par machine » (#2180) ; `None` si ce n'est pas un bundle.
+pub fn per_machine(path: &Path) -> Option<bool> {
+    if !is_bundle_file(path) {
+        return None;
+    }
+    let data = crate::loader::ImageFile::open(path).ok()?;
+    let s = find_section(&data)?;
+    let mut xml = None;
+    Cabinet::parse(container(&data, &s, 0)?)
+        .ok()?
+        .extract(&mut |name, bytes| {
+            if name == "0" {
+                xml = Some(xml_text(bytes));
+            }
+            Ok(())
+        })
+        .ok()?;
+    Some(parse_manifest(&xml?).per_machine)
+}
+
 /// Lancement direct d'un bundle (double-clic, ou par un autre installeur).
 /// Options reconnues : /install, /repair, /uninstall, /quiet, /passive, /norestart.
 pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
@@ -964,7 +1055,18 @@ pub mod tests {
     }
 
     pub fn build_bundle_with(manifest: &str, files: &[(&str, &[u8])]) -> Vec<u8> {
-        let ux = build_mszip(&[("0", manifest.as_bytes())]);
+        build_bundle_ux(manifest, &[], files)
+    }
+
+    /// Bundle dont le conteneur d'interface porte aussi `ux` (u0, u1…).
+    pub fn build_bundle_ux(
+        manifest: &str,
+        ux_files: &[(&str, &[u8])],
+        files: &[(&str, &[u8])],
+    ) -> Vec<u8> {
+        let mut ux_all: Vec<(&str, &[u8])> = vec![("0", manifest.as_bytes())];
+        ux_all.extend_from_slice(ux_files);
+        let ux = build_mszip(&ux_all);
         let attached = build_mszip(files);
         let mut pe = vec![0u8; 0x400];
         pe[..2].copy_from_slice(b"MZ");
@@ -999,6 +1101,87 @@ pub mod tests {
             quiet_summary("Python", true, 1603, None),
             "winlux : Python : désinstallation en échec (code 1603)."
         );
+    }
+
+    #[test]
+    fn contrat_de_l_interface_standard() {
+        // #2126 : LicenseFile par langue, sinon à la racine ; LicenseUrl.
+        let manifest = r#"<BurnManifest><UX>
+<Payload Id="ba" FilePath="BootstrapperApplicationData.xml" SourcePath="u0" />
+<Payload Id="l1036" FilePath="1036\licence.rtf" SourcePath="u1" />
+<Payload Id="l" FilePath="licence.rtf" SourcePath="u2" />
+</UX><Registration Version="1.0" /></BurnManifest>"#;
+        let ba = br#"<BootstrapperApplicationData><WixStdbaInformation LicenseFile="licence.rtf" /></BootstrapperApplicationData>"#;
+        let ux: HashMap<String, Vec<u8>> = [
+            ("0", manifest.as_bytes()),
+            ("u0", &ba[..]),
+            ("u1", br"{\rtf1\ansi Contrat fran\'e7ais\par}"),
+            ("u2", b"English license"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_vec()))
+        .collect();
+        assert_eq!(
+            license_from_ux(&ux, 0x040C).as_deref().map(str::trim),
+            Some("Contrat français")
+        );
+        assert_eq!(
+            license_from_ux(&ux, 0x0407).as_deref(),
+            Some("English license")
+        );
+        let mut url = ux.clone();
+        url.insert(
+            "u0".into(),
+            br#"<BootstrapperApplicationData><WixStdbaInformation LicenseUrl="https://exemple.org/eula" /></BootstrapperApplicationData>"#.to_vec(),
+        );
+        assert_eq!(
+            license_from_ux(&url, 0x040C).as_deref(),
+            Some("https://exemple.org/eula")
+        );
+        // vc_redist : BootstrapperApplicationData.xml en UTF-16 LE avec BOM,
+        // ou sans BOM ; UTF-16 BE ; UTF-8 avec BOM.
+        let utf16 = |be: bool, bom: bool| -> Vec<u8> {
+            let text = std::str::from_utf8(&ba[..]).unwrap();
+            let mut v: Vec<u8> = if bom { vec![0xFF, 0xFE] } else { vec![] };
+            if be && bom {
+                v = vec![0xFE, 0xFF];
+            }
+            for u in text.encode_utf16() {
+                v.extend(if be { u.to_be_bytes() } else { u.to_le_bytes() });
+            }
+            v
+        };
+        let mut utf8_bom = b"\xEF\xBB\xBF".to_vec();
+        utf8_bom.extend_from_slice(&ba[..]);
+        for data in [
+            utf16(false, true),
+            utf16(false, false),
+            utf16(true, true),
+            utf16(true, false),
+            utf8_bom,
+        ] {
+            let mut enc = ux.clone();
+            enc.insert("u0".into(), data);
+            assert_eq!(
+                license_from_ux(&enc, 0x040C).as_deref().map(str::trim),
+                Some("Contrat français")
+            );
+        }
+        let mut none = ux;
+        none.remove("u0");
+        assert_eq!(license_from_ux(&none, 0x040C), None);
+        // Bout à bout : un bundle avec son conteneur d'interface.
+        let dir = std::env::temp_dir().join(format!("winlux-burn-licence-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("bundle.exe");
+        let mut data = build_bundle_ux(manifest, &[("u0", ba), ("u2", b"English license")], &[]);
+        data.resize(data.len().max(8192), 0);
+        std::fs::write(&exe, &data).unwrap();
+        assert_eq!(
+            crate::setup::license::of_package(&exe).as_deref(),
+            Some("English license")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

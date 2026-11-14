@@ -24,6 +24,9 @@ impl Env {
         std::fs::create_dir_all(root.join("c")).unwrap();
         let vars = [
             ("WINLUX_DRIVE_C", root.join("c")),
+            // C: et le profil (C:\Users\<compte>) sont le même dossier,
+            // comme sur une installation (drive_c vaut home par défaut).
+            ("WINLUX_HOME", root.join("c")),
             ("XDG_DATA_HOME", root.join("data")),
             ("XDG_CONFIG_HOME", root.join("config")),
             ("WINLUX_REGISTRY_PATH", root.join("registry.tsv")),
@@ -210,6 +213,45 @@ fn installe_puis_desinstalle() {
     );
 }
 
+/// #2315 : retirer un produit laisse en place un fichier qu'un autre produit
+/// installé a posé au même chemin (compteur de clients des composants).
+#[test]
+fn desinstaller_garde_les_fichiers_d_un_autre_produit() {
+    let _a = crate::mounts::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _b = crate::dlls::advapi32::REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let env = Env::new("partage");
+    let msi = env.root.join("Exemple.msi");
+    std::fs::write(&msi, SAMPLE).unwrap();
+    let code = cli(&[
+        "/i".into(),
+        msi.to_string_lossy().into_owned(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    let dir = env.root.join("c/Program Files/Winlux Exemple");
+    // Un second produit a posé app.exe au même chemin (casse différente).
+    let autre = install::Manifest {
+        product: "{0B0B0B0B-1111-4222-8333-944455556666}".into(),
+        name: "Autre produit".into(),
+        files: vec![dir.join("APP.exe")],
+        ..Default::default()
+    };
+    autre.save().unwrap();
+    let code = cli(&[
+        "/x".into(),
+        "{6A1B5C0E-1111-4222-8333-944455556666}".into(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(dir.join("app.exe").is_file(), "fichier partagé conservé");
+    assert!(!dir.join("Lisez-moi.txt").exists(), "fichier propre retiré");
+    assert_eq!(install::Manifest::all().len(), 1);
+}
+
 #[test]
 fn installation_administrative_et_erreurs() {
     let _a = crate::mounts::TEST_ENV_LOCK
@@ -385,4 +427,66 @@ fn systemfolder_reste_syswow64_pour_un_paquet_x64() {
         "C:\\Program Files (x86)\\Common Files\\"
     );
     assert_eq!(ctx.get("ProgramFiles64Folder"), "C:\\Program Files\\");
+}
+
+/// #2404 : les dossiers du profil sont sous C:\Users\<compte>, comme sous
+/// Windows ; TempFolder est ce que rend GetTempPath.
+#[test]
+fn dossiers_du_profil_sous_users_compte() {
+    let db = db::Database::parse(SAMPLE).unwrap();
+    let mut ctx = cond::Context::default();
+    install::system_props(&mut ctx, &db, &install::Options::default());
+    let profile = format!("{}\\", crate::paths::profile_windows());
+    assert!(profile.starts_with("C:\\Users\\"), "{profile}");
+    assert_eq!(ctx.get("TempFolder"), crate::dlls::kernel32::temp_path());
+    assert_eq!(
+        ctx.get("AppDataFolder"),
+        format!("{profile}AppData\\Roaming\\")
+    );
+    assert_eq!(
+        ctx.get("LocalAppDataFolder"),
+        format!("{profile}AppData\\Local\\")
+    );
+    assert_eq!(ctx.get("PersonalFolder"), format!("{profile}Documents\\"));
+    for name in [
+        "TempFolder",
+        "AppDataFolder",
+        "LocalAppDataFolder",
+        "PersonalFolder",
+        "MyPicturesFolder",
+        "FavoritesFolder",
+        "StartMenuFolder",
+        "ProgramMenuFolder",
+        "StartupFolder",
+        "AdminToolsFolder",
+        "SendToFolder",
+        "TemplateFolder",
+        "RecentFolder",
+        "NetHoodFolder",
+        "PrintHoodFolder",
+    ] {
+        assert!(
+            ctx.get(name).starts_with(&profile),
+            "{name} = {}",
+            ctx.get(name)
+        );
+    }
+}
+
+/// `testdata/licence.msi` : la boîte de licence est préférée au lisez-moi,
+/// son RTF est rendu en texte (#2123) ; un paquet sans licence n'en a pas.
+#[test]
+fn contrat_de_licence_du_paquet() {
+    let dir = std::env::temp_dir().join(format!("winlux-msi-licence-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let msi = dir.join("licence.msi");
+    std::fs::write(&msi, include_bytes!("testdata/licence.msi")).unwrap();
+    assert_eq!(
+        crate::setup::license::of_package(&msi).as_deref(),
+        Some("CONTRAT DE LICENCE DE TEST\nAccepter avant d\u{2019}installer. Café")
+    );
+    let sans = dir.join("sample.msi");
+    std::fs::write(&sans, SAMPLE).unwrap();
+    assert_eq!(crate::setup::license::of_package(&sans), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
