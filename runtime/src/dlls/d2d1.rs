@@ -2394,6 +2394,7 @@ unsafe fn stroke_path(
     };
     // Tirets du style de trait (#1867), en multiples de l'épaisseur. Un
     // trait « fixe » (1) ou « fin » (2) garde son épaisseur en pixels.
+    let original = path;
     let dashed;
     let (path, width) = match v11::stroke_pattern(style) {
         Some((pattern, offset, kind)) => {
@@ -2415,7 +2416,50 @@ unsafe fn stroke_path(
         },
     };
     let polys = path.stroke_polys(&world, width);
+    if v11::trace_on() {
+        trace_stroke(original, path.figures.len(), &polys, width, style);
+    }
     target(this).fill(&polys, FillRule::NonZero, &*paint);
+}
+
+/// WINLUX_D2D_TRACE (#2431) : détail d'un trait. Figures (points, fermée),
+/// épaisseur, motif de tirets, et boîte des polygones en pixels de la
+/// cible, pour voir quel côté d'un contour se perd.
+unsafe fn trace_stroke(
+    path: &Path,
+    pieces: usize,
+    polys: &[Vec<Pt>],
+    width: f32,
+    style: *mut c_void,
+) {
+    let figures: Vec<String> = path
+        .figures
+        .iter()
+        .take(4)
+        .map(|(pts, closed)| {
+            let pts: Vec<String> = pts
+                .iter()
+                .take(6)
+                .map(|p| format!("({},{})", p.0, p.1))
+                .collect();
+            format!("{}{}", pts.join(" "), if *closed { " fermée" } else { "" })
+        })
+        .collect();
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in polys.iter().flatten() {
+        b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    }
+    d2d_trace!(
+        "  trait : {} figures [{}] épaisseur {} style {} motif {:?} → {} morceaux, {} polygones boîte {:?}",
+        path.figures.len(),
+        figures.join(" | "),
+        width,
+        v11::stroke_pattern_kind(style),
+        v11::stroke_pattern(style).map(|(m, o, _)| (m, o)),
+        pieces,
+        polys.len(),
+        b
+    );
 }
 
 /// WINLUX_D2D_TRACE (#1743) : transformation, DPI, anticrénelage et
