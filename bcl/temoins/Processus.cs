@@ -1,6 +1,7 @@
 // Témoin de System.Diagnostics.Process dans la mscorlib Winlux (#2050).
 // Code de sortie attendu : 200.
-// Sinon : le numéro (1 à 8) de la première vérification qui échoue.
+// Sinon : le numéro (1 à 9) de la première vérification qui échoue.
+// La 9 vérifie le processus « Idle » de pid 0, comme sous Windows (#2071).
 // Le témoin se relance lui-même comme processus enfant (« enfant N » rend N
 // après avoir écrit sur sa sortie, « attente » dort 30 s).
 // Corsair.Service.exe (iCUE 4.18) appelait Process::GetProcessById, puis
@@ -96,6 +97,16 @@ namespace Temoins
             try { Process.Start(absent); return 8; }
             catch (Win32Exception e) { if (e.NativeErrorCode != 2) return 8; }
             try { new Process().Start(); return 8; } catch (InvalidOperationException) { }
+
+            // Pid 0 : « Idle », listé, nommé, mais jamais ouvert (#2071).
+            Process idle = Process.GetProcessById(0);
+            if (idle.Id != 0 || idle.ProcessName != "Idle") return 9;
+            trouve = false;
+            foreach (Process p in Process.GetProcesses()) if (p.Id == 0 && p.ProcessName == "Idle") trouve = true;
+            if (!trouve) return 9;
+            try { idle.Kill(); return 9; } catch (Win32Exception) { }
+            try { object m = idle.MainModule; return 9; } catch (Win32Exception) { }
+            try { bool b = idle.HasExited; return 9; } catch (Win32Exception) { }
             return 200;
         }
     }

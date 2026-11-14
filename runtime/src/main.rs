@@ -267,6 +267,10 @@ fn main() {
     if let Some(code) = anticheat::check_launch(&exe) {
         std::process::exit(code);
     }
+    // Programme filtré en sortie par le pare-feu : aucun de ses octets, ni
+    // ceux de ses DLL, ne part avant que le service l'ait placé dans le
+    // cgroup de sa règle (#2157).
+    firewall::wait_for_cgroup();
     if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
         if let Some(code) = setup::launch(&exe, &rest) {
             std::process::exit(code);

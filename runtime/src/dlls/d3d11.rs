@@ -2034,8 +2034,13 @@ unsafe extern "win64" fn ctx_get_render_targets(
             v.cast::<c_void>()
         };
         if !rtv.is_null() {
-            for i in 0..(n as usize).min(s.num_rtvs as usize) {
-                *rtv.add(i) = held(s.rtvs[i]);
+            for (i, &r) in s
+                .rtvs
+                .iter()
+                .enumerate()
+                .take((n as usize).min(s.num_rtvs as usize))
+            {
+                *rtv.add(i) = held(r);
             }
         }
         if !dsv.is_null() {
@@ -2106,8 +2111,8 @@ unsafe extern "win64" fn ctx_rs_get_viewports(
     }
     let n = (*count).min(s.num_viewports);
     let out = vps as *mut D3D11Viewport;
-    for i in 0..n as usize {
-        *out.add(i) = s.viewports[i];
+    for (i, vp) in s.viewports.iter().enumerate().take(n as usize) {
+        *out.add(i) = *vp;
     }
     *count = n;
 }
@@ -2697,8 +2702,8 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
         (count as usize).min(MAX_RTVS)
     };
     s.rtvs = [std::ptr::null_mut(); MAX_RTVS];
-    for i in 0..n {
-        s.rtvs[i] = as_simple(*rtvs.add(i)).unwrap_or(std::ptr::null_mut());
+    for (i, slot) in s.rtvs.iter_mut().enumerate().take(n) {
+        *slot = as_simple(*rtvs.add(i)).unwrap_or(std::ptr::null_mut());
     }
     s.num_rtvs = n as u32;
     s.current_rtv = s.rtvs[0];

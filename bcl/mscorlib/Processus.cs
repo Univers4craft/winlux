@@ -175,8 +175,13 @@ namespace System.Diagnostics
             return new Process(pid, ProcessusNatif.Nom(pid));
         }
 
+        // Le pid 0 est le processus « Idle » du système (#2071) : il existe
+        // toujours, se nomme, mais ne s'ouvre pas (accès refusé).
+        private const int Inactif = 0;
+
         public static Process GetProcessById(int processId)
         {
+            if (processId == Inactif) return new Process(Inactif, "Idle");
             string nom = ProcessusNatif.Nom(processId);
             if (nom == null) throw new ArgumentException("Process with an Id of " + processId + " is not running.");
             return new Process(processId, nom);
@@ -192,11 +197,12 @@ namespace System.Diagnostics
         {
             long[] liste = ProcessusNatif.Liste();
             List<Process> res = new List<Process>();
+            res.Add(new Process(Inactif, "Idle"));
             for (int i = 0; i + 2 < liste.Length; i += 3)
             {
                 int pid = (int)liste[i];
                 string nom = ProcessusNatif.Nom(pid);
-                if (nom != null) res.Add(new Process(pid, nom));
+                if (pid != Inactif && nom != null) res.Add(new Process(pid, nom));
             }
             return res.ToArray();
         }
@@ -245,7 +251,7 @@ namespace System.Diagnostics
             get
             {
                 Associe();
-                if (_nom == null) _nom = ProcessusNatif.Nom(_pid);
+                if (_nom == null) _nom = _pid == Inactif ? "Idle" : ProcessusNatif.Nom(_pid);
                 if (_nom == null) throw new InvalidOperationException("Process has exited, so the requested information is not available.");
                 return _nom.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? _nom.Substring(0, _nom.Length - 4) : _nom;
             }
@@ -263,6 +269,7 @@ namespace System.Diagnostics
         private long Poignee()
         {
             Associe();
+            if (_pid == Inactif) throw new Win32Exception(5);
             if (_h > 0) return _h;
             long h = ProcessusNatif.Ouvrir(_pid);
             if (h == -87) throw new InvalidOperationException("Process has exited, so the requested information is not available.");
@@ -289,6 +296,7 @@ namespace System.Diagnostics
             {
                 if (_fini) return true;
                 Associe();
+                if (_pid == Inactif) throw new Win32Exception(5);
                 long h = _h;
                 if (h <= 0)
                 {

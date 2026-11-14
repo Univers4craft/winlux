@@ -1652,8 +1652,8 @@ pub(super) unsafe extern "win64" fn rs_set_viewports(
     let Some(g) = gl_here() else { return };
     let mut st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     let n = if vps.is_null() { 0 } else { n.min(16) };
-    for i in 0..n as usize {
-        st.viewports[i] = *vps.add(i);
+    for (i, vp) in st.viewports.iter_mut().enumerate().take(n as usize) {
+        *vp = *vps.add(i);
     }
     st.num_viewports = n;
     if n > 0 && !vps.is_null() {

@@ -23,6 +23,8 @@ real=$(command -v apt-get)
 cat > "$work/bin/apt-get" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$work/apt.log"
+# Simulation (-s, #2234) : la Boutique la lance sans droits, jamais par le relais.
+if test "\$1" = -s; then exec "$real" "\$@"; fi
 if ! python3 -I -B "$project/scripts/winlux-root.py" policy apt-get "\$@" >/dev/null; then
     echo "refusé par winlux-root : apt-get \$*" >> "$work/refused.log"
     exit 1

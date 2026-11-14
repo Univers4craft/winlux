@@ -431,7 +431,7 @@ fn open_app_package(
         .iter()
         .find(|e| decode_name(&e.name).eq_ignore_ascii_case(&chosen.replace('/', "\\")))
         .ok_or_else(|| format!("{chosen} annoncé par le bundle mais absent"))?;
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = crate::paths::profile_temp().join(format!(
         "winlux-msix-{}-{}.msix",
         std::process::id(),
         chosen.replace(['/', '\\'], "_")

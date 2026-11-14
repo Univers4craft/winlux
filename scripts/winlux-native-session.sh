@@ -240,8 +240,8 @@ echo $! > /run/winlux/catalogue.pid
 # Demandes ponctuelles des navigateurs : deux tests de fichier, pas de Python.
 (
     while :; do
-        if test -f /run/winlux/browser-chooser; then
-            rm -f /run/winlux/browser-chooser
+        if test -O "/run/winlux/browser-chooser-$(id -u)"; then
+            rm -f "/run/winlux/browser-chooser-$(id -u)"
             /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
         fi
         # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.

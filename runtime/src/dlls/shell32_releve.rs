@@ -1110,6 +1110,14 @@ unsafe extern "win64" fn not_in_process(_a: usize, _b: usize, out: *mut *mut c_v
     E_NOTIMPL
 }
 
+/// Même refus pour les fonctions à deux arguments, `SHCreateShellFolderView`
+/// et `SHCreateDefaultExtractIcon` (shlobj_core.h), dont la sortie est le
+/// deuxième argument (#2453).
+unsafe extern "win64" fn not_in_process2(_a: usize, out: *mut *mut c_void) -> i32 {
+    clear_out(out);
+    E_NOTIMPL
+}
+
 pub fn exports() -> Exports {
     let mut m = crate::exports! {
         "SHParseDisplayName" => fn sh_parse_display_name,
@@ -1138,9 +1146,9 @@ pub fn exports() -> Exports {
         "SHGetInstanceExplorer" => fn sh_get_instance_explorer,
         "SHUpdateImageW" => fn sh_update_image_w,
         "SHSetFolderPathW" => fn sh_set_folder_path_w,
-        "SHCreateShellFolderView" => fn not_in_process,
+        "SHCreateShellFolderView" => fn not_in_process2,
         "SHCreateDefaultContextMenu" => fn not_in_process,
-        "SHCreateDefaultExtractIcon" => fn not_in_process,
+        "SHCreateDefaultExtractIcon" => fn not_in_process2,
     };
     // Variantes ANSI qui manquaient (SHFileOperationA de l'ODT, #1841).
     for (k, v) in super::shell32_ansi::exports() {
@@ -1156,6 +1164,25 @@ pub fn exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refus_hors_processus_met_la_bonne_sortie_a_zero() {
+        // #2453 : deux arguments pour la vue de dossier et l'extracteur
+        // d'icônes, trois pour le menu contextuel (shlobj_core.h).
+        let m = exports();
+        for name in ["SHCreateShellFolderView", "SHCreateDefaultExtractIcon"] {
+            let f: unsafe extern "win64" fn(usize, *mut *mut c_void) -> i32 =
+                unsafe { std::mem::transmute(m[name]) };
+            let mut out = 0x1234usize as *mut c_void;
+            assert_eq!(unsafe { f(0, &mut out) }, E_NOTIMPL, "{name}");
+            assert!(out.is_null(), "{name}");
+        }
+        let f: unsafe extern "win64" fn(usize, usize, *mut *mut c_void) -> i32 =
+            unsafe { std::mem::transmute(m["SHCreateDefaultContextMenu"]) };
+        let mut out = 0x1234usize as *mut c_void;
+        assert_eq!(unsafe { f(0, 0, &mut out) }, E_NOTIMPL);
+        assert!(out.is_null());
+    }
 
     #[test]
     fn corbeille_comptee() {

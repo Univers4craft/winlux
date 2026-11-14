@@ -151,7 +151,9 @@ print("#750 : service activé par D-Bus : screensaver-inhibit.log dans les journ
 template = ROOT / "integration/native/xscreensaver"
 keys = dict(line.split(":", 1) for line in template.read_text().splitlines() if ":" in line)
 assert keys.get("dpmsEnabled", "").strip() == "True", keys
-assert all(keys.get(k, "").strip() == "0:10:00" for k in ("dpmsStandby", "dpmsSuspend", "dpmsOff")), keys
+# #2148 : délais DPMS au maximum (18:12:15 = 0xFFFF s) ; c'est le démon
+# d'alimentation qui éteint l'écran au délai de Paramètres > Alimentation.
+assert all(keys.get(k, "").strip() == "18:12:15" for k in ("dpmsStandby", "dpmsSuspend", "dpmsOff")), keys
 source = (ROOT / "scripts/winlux-native-config.py").read_text(encoding="utf-8")
 assert 'migrate_xscreensaver(home / ".xscreensaver", source / "xscreensaver")' in source
 function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "migrate_xscreensaver")
@@ -169,7 +171,20 @@ with tempfile.TemporaryDirectory() as tmp:
     chosen.write_text("timeout: 0:05:00\ndpmsEnabled: False\n")
     space["migrate_xscreensaver"](chosen, template)
     assert chosen.read_text() == "timeout: 0:05:00\ndpmsEnabled: False\n", "choix de l'utilisateur écrasé"
-print("XScreenSaver : dpmsEnabled True dans le modèle et ajouté aux comptes existants, choix explicite gardé")
+    # #2148 : compte migré par #736 (délais 0:10:00 du modèle) → 18:12:15.
+    v736 = Path(tmp) / "v736"
+    v736.write_text("timeout:        0:10:00\nmode:           one\ndpmsEnabled:    True\ndpmsStandby:    0:10:00\n"
+                    "dpmsSuspend:    0:10:00\ndpmsOff:        0:10:00\n")
+    space["migrate_xscreensaver"](v736, template)
+    text = v736.read_text()
+    assert text.count("18:12:15") == 3 and "timeout:        0:10:00" in text and "dpmsEnabled:    True" in text, text
+    space["migrate_xscreensaver"](v736, template)
+    assert v736.read_text() == text, "migration #2148 répétée"
+    hand = Path(tmp) / "main"
+    hand.write_text("dpmsEnabled: True\ndpmsStandby: 0:20:00\ndpmsSuspend: 0:10:00\ndpmsOff: 0:10:00\n")
+    space["migrate_xscreensaver"](hand, template)
+    assert hand.read_text() == "dpmsEnabled: True\ndpmsStandby: 0:20:00\ndpmsSuspend: 0:10:00\ndpmsOff: 0:10:00\n", "délais choisis écrasés"
+print("XScreenSaver : dpmsEnabled True et délais DPMS au maximum dans le modèle, comptes existants migrés, choix explicite gardé (#2148)")
 
 # 6. Service réel sur un bus de session.
 try:

@@ -135,6 +135,12 @@ CONF_KEYS = {
     "overlay.conf": None,
     "cpu.conf": ("GAME_MODE", "HYBRID_POLICY"),
 }
+# Réglages valables pour tout l'appareil (#2269) : un administrateur les
+# change, un compte standard passe par le Contrôle de compte d'utilisateur,
+# comme l'accès à la caméra ou au micro de l'appareil sous Windows. Les
+# autres fichiers de CONF_KEYS sont des réglages de l'utilisateur (langue
+# d'affichage, thème, souris, verrouillage) et restent sans élévation.
+CONF_MACHINE = {"privacy.conf"}
 CONF_VALUE = re.compile(r"^[A-Za-z0-9._/+-]{0,64}$")
 CONF_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,40}$")
 
@@ -527,7 +533,9 @@ def check_request(uid, name, request):
     # autre compte, il passe par « elevate » (mot de passe d'administrateur).
     if user != name and uid != 0 and request.get("op") == "check":
         return {"ok": False}
-    if request.get("op") == "elevate" and not is_admin(user):
+    # « admin-check » : la fenêtre UAC d'un compte standard vérifie le mot de
+    # passe de l'administrateur choisi sans ouvrir d'élévation au compte (#2292).
+    if request.get("op") in ("elevate", "admin-check") and not is_admin(user):
         return {"ok": False}
     throttle(uid)
     ok = password_ok(user, password)
@@ -910,7 +918,7 @@ def effective_level(op, args, uid, name):
 
 def handle(connection, uid, name, request, fds, admitted_here=False):
     op = request.get("op")
-    if op in ("check", "elevate"):
+    if op in ("check", "elevate", "admin-check"):
         return check_request(uid, name, request)
     if op == "switch":
         return switch_request(uid, name, request, connection)
@@ -922,6 +930,8 @@ def handle(connection, uid, name, request, fds, admitted_here=False):
         if allowed is False or not isinstance(key, str) or not CONF_KEY.match(key) or \
                 not isinstance(value, str) or not CONF_VALUE.match(value) or (allowed and key not in allowed):
             return {"error": "Réglage refusé"}
+        if file in CONF_MACHINE and not admitted_here and not (is_admin(name) or elevated(uid, name)):
+            return {"auth": "required"}
         write_conf(file, key, value)
         return {"status": 0}
     if op in ("control", "exec"):
@@ -1192,14 +1202,25 @@ def main(argv):
             os.execv(CONTROL, [CONTROL, *rest])
         return run_relayed(command, rest)
     if command == "conf" and len(rest) == 3:
-        answer = request({"op": "conf", "file": rest[0], "key": rest[1], "value": rest[2]})
-        if answer is None:
-            print("winlux-root : le service système ne répond pas", file=sys.stderr)
-            return 125
-        if "error" in answer:
-            print(answer["error"], file=sys.stderr)
-            return 1
-        return int(answer.get("status", 1))
+        for attempt in range(2):
+            answer = request({"op": "conf", "file": rest[0], "key": rest[1], "value": rest[2]})
+            if answer is None:
+                print("winlux-root : le service système ne répond pas", file=sys.stderr)
+                return 125
+            # Réglage de l'appareil demandé par un compte standard (#2269).
+            if answer.get("auth") == "required" and attempt == 0 and os.environ.get("DISPLAY"):
+                if not ask_elevation():
+                    print("Opération annulée : confirmation d'un administrateur refusée.", file=sys.stderr)
+                    return 1223 % 256
+                continue
+            if answer.get("auth") == "required":
+                print("Droits administrateur requis.", file=sys.stderr)
+                return 1
+            if "error" in answer:
+                print(answer["error"], file=sys.stderr)
+                return 1
+            return int(answer.get("status", 1))
+        return 1
     if command in ("check", "elevate") and len(rest) == 1:
         password = sys.stdin.readline().rstrip("\n")
         return 0 if verify(command, rest[0], password) else 1

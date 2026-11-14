@@ -768,6 +768,9 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    // Planificateur de tâches : magasin du compte courant (runtime/src/dlls/winlux_tasks.rs).
+    pub fn WinluxTaskList(out: *mut u8, cap: u32) -> u32;
+    pub fn WinluxTaskSave(id: *const u8, text: *const u8, len: u32) -> u32;
     // Images (décodeurs maison du runtime, voir runtime/src/imaging/api.rs).
     pub fn WinluxImageOpen(path: *const u16) -> usize;
     pub fn WinluxImageLastError(buf: *mut u8, cap: u32) -> i32;

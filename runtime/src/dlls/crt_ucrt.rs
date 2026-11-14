@@ -766,6 +766,11 @@ pub extern "win64" fn seh_filter(_code: u32, _pointers: *mut c_void) -> i32 {
     0
 }
 pub extern "win64" fn terminate() -> ! {
+    // Fonction installée par set_terminate (#2110) : elle ne doit pas
+    // revenir ; si elle revient, le programme s'arrête comme abort().
+    if let Some(handler) = super::teams_win32::terminate_handler() {
+        unsafe { handler() };
+    }
     crate::log_error!("crt", "terminate() appelée : le programme s'arrête");
     eprintln!("winlux: le programme a appelé terminate() et s'arrête.");
     crate::dlls::kernel32::flush_and_exit(3)
@@ -1029,18 +1034,22 @@ unsafe extern "win64" fn w_get_months() -> *mut u16 {
     malloc_wide(&time_names(&MONTHS))
 }
 
-/// Chaîne vide, à la fois étroite et large.
-static EMPTY: [u64; 8] = [0; 8];
-
 /// _Gettnames : bloc de données horaires opaque, libéré par free(). Seuls
 /// _Strftime et _Wcsftime le reçoivent ; chaque case pointe une chaîne vide
-/// pour qu'une lecture directe reste sans danger.
+/// pour qu'une lecture directe reste sans danger. Cette chaîne vide est à
+/// la fin du bloc lui-même, alloué sur le tas : un programme x86 la voit
+/// sous 4 Go, alors qu'une donnée du runtime est au-dessus (#2168).
 unsafe extern "win64" fn get_tnames() -> *mut u8 {
     const SLOTS: usize = 128;
-    let p = libc::malloc(SLOTS * 8) as *mut usize;
+    const EMPTY_LEN: usize = 8;
+    let p = libc::malloc(SLOTS * 8 + EMPTY_LEN * 8) as *mut usize;
     if !p.is_null() {
+        let empty = p.add(SLOTS);
+        for i in 0..EMPTY_LEN {
+            *empty.add(i) = 0;
+        }
         for i in 0..SLOTS {
-            *p.add(i) = EMPTY.as_ptr() as usize;
+            *p.add(i) = empty as usize;
         }
     }
     p as *mut u8
@@ -1124,6 +1133,21 @@ mod tests {
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().chain([0]).collect()
+    }
+
+    #[test]
+    fn gettnames_pointe_dans_son_propre_bloc() {
+        // #2168 : aucune case ne vise une donnée du runtime (au-dessus de
+        // 4 Go pour un programme x86) ; la chaîne vide est dans le bloc.
+        unsafe {
+            let p = get_tnames() as *mut usize;
+            assert!(!p.is_null());
+            let empty = *p;
+            assert_eq!(empty, p.add(128) as usize);
+            assert!((0..128).all(|i| *p.add(i) == empty));
+            assert_eq!(*(empty as *const u64), 0);
+            libc::free(p.cast());
+        }
     }
 
     #[test]
