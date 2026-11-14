@@ -1711,6 +1711,22 @@ fn well_known_sid(kind: u32) -> Option<&'static str> {
         67 => "S-1-16-8192",
         68 => "S-1-16-12288",
         69 => "S-1-16-16384",
+        // WinCreatorOwnerRightsSid : SECURITY_CREATOR_SID_AUTHORITY, RID 4 (#2517).
+        71 => "S-1-3-4",
+        // WinBuiltinAnyPackageSid, puis les SID de capacité d'AppContainer :
+        // SECURITY_APP_PACKAGE_AUTHORITY (15), SECURITY_CAPABILITY_BASE_RID (3) et le
+        // RID SECURITY_CAPABILITY_* de même nom (winnt.h, en-têtes mingw-w64) (#2517).
+        84 => "S-1-15-2-1",
+        85 => "S-1-15-3-1",  // WinCapabilityInternetClientSid
+        86 => "S-1-15-3-2",  // WinCapabilityInternetClientServerSid
+        87 => "S-1-15-3-3",  // WinCapabilityPrivateNetworkClientServerSid
+        88 => "S-1-15-3-4",  // WinCapabilityPicturesLibrarySid
+        89 => "S-1-15-3-5",  // WinCapabilityVideosLibrarySid
+        90 => "S-1-15-3-6",  // WinCapabilityMusicLibrarySid
+        91 => "S-1-15-3-7",  // WinCapabilityDocumentsLibrarySid
+        92 => "S-1-15-3-9",  // WinCapabilitySharedUserCertificatesSid
+        93 => "S-1-15-3-8",  // WinCapabilityEnterpriseAuthenticationSid
+        94 => "S-1-15-3-10", // WinCapabilityRemovableStorageSid
         _ => return None,
     })
 }

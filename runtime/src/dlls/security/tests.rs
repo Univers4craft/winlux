@@ -538,3 +538,30 @@ fn jeton_de_conteneur_par_kernelbase_seulement() {
         assert_eq!(out, 0);
     }
 }
+
+/// #2517 : WinCreatorOwnerRightsSid et les SID de capacité d'AppContainer,
+/// valeurs de WELL_KNOWN_SID_TYPE et des RID de winnt.h (en-têtes mingw-w64).
+#[test]
+fn sid_bien_connus_des_conteneurs() {
+    for (kind, text) in [
+        (71u32, "S-1-3-4"),
+        (84, "S-1-15-2-1"),
+        (85, "S-1-15-3-1"),
+        (92, "S-1-15-3-9"),
+        (93, "S-1-15-3-8"),
+        (94, "S-1-15-3-10"),
+    ] {
+        let mut sid = [0u8; 68];
+        let mut size = sid.len() as u32;
+        assert_eq!(
+            unsafe { CreateWellKnownSid(kind, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+            1,
+            "{kind}"
+        );
+        assert_eq!(
+            sid_text(&sid[..size as usize]).as_deref(),
+            Some(text),
+            "{kind}"
+        );
+    }
+}
