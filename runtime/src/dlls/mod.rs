@@ -124,6 +124,7 @@ pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
+pub mod globalization_prefs;
 pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
@@ -231,6 +232,7 @@ pub mod rawinput;
 pub mod redist_dlls;
 // msvcp140_2 (#2187), rangée avec les autres redistribuables.
 pub mod msvcp140_2;
+pub mod msvcp140_eptr;
 pub mod msvcp140_flux;
 pub mod remote_vm;
 pub mod resource;
@@ -1292,6 +1294,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut m = msvcp140::exports();
                     m.extend(msvcp140_flux::exports());
+                    m.extend(msvcp140_eptr::exports());
                     m
                 },
                 handle: 0,

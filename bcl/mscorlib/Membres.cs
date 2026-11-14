@@ -1533,9 +1533,28 @@ namespace System.Globalization
 
         public CultureInfo(int culture) : this(culture == 0x7F ? "" : "en-US") { }
 
+        // Cultures par défaut des threads du domaine (#2279) : null tant que
+        // rien n'y est écrit. Un thread de Winlux n'a pas de culture propre,
+        // donc CurrentCulture et CurrentUICulture rendent la valeur par
+        // défaut quand elle existe (MS Learn, « DefaultThreadCurrentCulture »).
+        private static CultureInfo s_defaut;
+        private static CultureInfo s_defautInterface;
+
         public static CultureInfo InvariantCulture { get { return s_invariante; } }
-        public static CultureInfo CurrentCulture { get { return s_invariante; } }
-        public static CultureInfo CurrentUICulture { get { return s_invariante; } }
+        public static CultureInfo CurrentCulture { get { return s_defaut ?? s_invariante; } }
+        public static CultureInfo CurrentUICulture { get { return s_defautInterface ?? s_invariante; } }
+
+        public static CultureInfo DefaultThreadCurrentCulture
+        {
+            get { return s_defaut; }
+            set { s_defaut = value; }
+        }
+
+        public static CultureInfo DefaultThreadCurrentUICulture
+        {
+            get { return s_defautInterface; }
+            set { s_defautInterface = value; }
+        }
         public virtual string Name { get { return _nom; } }
         public virtual string TwoLetterISOLanguageName { get { return _nom.Length >= 2 ? _nom.Substring(0, 2) : "iv"; } }
         public virtual object GetFormat(Type formatType) { return null; }
