@@ -642,8 +642,11 @@ class PowerUI:
             "dialog-warning-symbolic",
             _t("Ces applications empêchent l’arrêt") if shutdown else _t("Ces applications empêchent le redémarrage"),
             _t("Enregistrez votre travail dans ces applications, ou continuez : les modifications non enregistrées seront perdues."),
-            [(_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.finish, True),
-             (_t("Annuler"), self.cancel, False)],
+            # #2299 : « Annuler » par défaut. Sur un écran verrouillé, la touche
+            # qui réveille l'écran déclenchait « Arrêter quand même » et
+            # perdait le travail non enregistré.
+            [(_t("Annuler"), self.cancel, True),
+             (_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.finish, False)],
             extra=listing))
 
     def show_error(self, message):
