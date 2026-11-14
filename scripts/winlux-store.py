@@ -847,6 +847,22 @@ class Source:
         return 0
 
 
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg » : lignes « compagnons=pkg:a,b » du
+    catalogue (#2075), quand l'application ne marche pas sans ce qu'apt ne
+    fait que recommander."""
+    try:
+        lines = CATALOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if line.startswith("compagnons="):
+            name, _, rest = line[11:].partition(":")
+            if name == pkg:
+                return [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)]
+    return []
+
+
 class Apt(Source):
     name, label = "apt", "Ubuntu"
     local_only = False
@@ -1073,7 +1089,16 @@ class Apt(Source):
             return proc.wait()
 
     def install(self, ref, progress):
-        return self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        code = self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        extras = apt_companions(ref)
+        if code == 0 and extras:
+            # Paquets compagnons (#2075) : sans les recommandations d'apt,
+            # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt.
+            # Marqués « automatiques » : la désinstallation (purge
+            # --autoremove) les retire quand plus rien ne les utilise ; un
+            # paquet déjà installé à la main le reste.
+            code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
+        return code
 
     def remove(self, ref, progress):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
