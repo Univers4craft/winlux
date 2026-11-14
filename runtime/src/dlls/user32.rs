@@ -1196,9 +1196,49 @@ unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         crate::process::set_last_error(87);
         return 0;
     }
+    if gui::wnd_proc_of(hwnd).is_none() && gui::foreign_window(hwnd).is_some() {
+        return send_to_foreign(hwnd, message, wparam, lparam);
+    }
     match gui::wnd_proc_of(hwnd) {
         Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
         None => gui::def_window_proc(hwnd, message, wparam, lparam),
+    }
+}
+
+/// Message pour la fenêtre d'un autre processus (#2046) : seule la lecture
+/// de son titre (WM_GETTEXT, WM_GETTEXTLENGTH) reçoit une réponse, tirée de
+/// l'annuaire. Rien d'autre n'est transmis : un programme ne ferme, ne
+/// déplace ni ne pilote au clavier la fenêtre d'un autre.
+unsafe fn send_to_foreign(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+    const WM_GETTEXT: u32 = 0x000D;
+    const WM_GETTEXTLENGTH: u32 = 0x000E;
+    let title = || {
+        gui::foreign_named(hwnd)
+            .map(|l| l.title)
+            .unwrap_or_default()
+    };
+    let wide = super::controls::message_is_wide(hwnd);
+    match message {
+        WM_GETTEXTLENGTH => {
+            let t = title();
+            if wide {
+                t.encode_utf16().count() as isize
+            } else {
+                t.len() as isize
+            }
+        }
+        WM_GETTEXT if lparam != 0 => {
+            let t = title();
+            if wide {
+                crate::dlls::put_text_w(&t, lparam as *mut u16, wparam as u32) as isize
+            } else {
+                crate::dlls::put_text_a(&t, lparam as *mut u8, wparam as u32) as isize
+            }
+        }
+        _ => {
+            crate::process::set_last_error(5); // ERROR_ACCESS_DENIED
+            0
+        }
     }
 }
 
@@ -1262,6 +1302,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     // SW_MAXIMIZE (3) donne une taille à la fenêtre : elle est montrée.
     let map = cmd != gui::SW_HIDE && (cmd == 3 || !empty_top_level(hwnd));
     with_backend(|b| b.show_window(hwnd, map));
+    if was != show {
+        publish_shared(hwnd);
+    }
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
     if gui::window_parent(hwnd).unwrap_or(0) == 0 {
@@ -1568,7 +1611,8 @@ pub unsafe extern "win64" fn get_window_rect(hwnd: usize, out: *mut Rect) -> i32
         crate::process::set_last_error(87);
         return 0;
     }
-    match gui::screen_rect(hwnd) {
+    // Fenêtre d'un autre processus : lue sur le serveur X (#2046).
+    match gui::screen_rect(hwnd).or_else(|| gui::foreign_screen_rect(hwnd)) {
         Some(r) => {
             std::ptr::write_unaligned(out, r);
             1
@@ -1717,6 +1761,10 @@ pub unsafe extern "win64" fn set_window_pos(
     } else if flags & SWP_HIDEWINDOW != 0 {
         visibility_changed = gui::set_visible(hwnd, false);
         with_backend(|backend| backend.show_window(hwnd, false));
+    }
+
+    if visibility_changed {
+        publish_shared(hwnd);
     }
 
     if flags & SWP_FRAMECHANGED != 0 {
@@ -2096,6 +2144,7 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
     if gui::set_title(hwnd, &t) {
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
+        publish_shared(hwnd);
         1
     } else {
         0
@@ -2107,6 +2156,7 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
     if gui::set_title(hwnd, &t) {
         with_backend(|b| b.set_title(hwnd, &t));
         super::controls::text_changed(hwnd);
+        publish_shared(hwnd);
         1
     } else {
         0
@@ -2496,18 +2546,7 @@ use super::lock;
 /// partagé avec ses styles (#1228, #1357). Les fenêtres sans fenêtre X11
 /// n'y figurent pas.
 fn publish_shared(hwnd: usize) {
-    if gui::foreign_window(hwnd).is_some() {
-        return;
-    }
-    if let Some(xid) = gui::native_window(hwnd) {
-        super::gui_shared::publish(
-            hwnd,
-            gui::window_thread_id(hwnd).unwrap_or_else(|| super::kernel32::get_current_thread_id()),
-            xid,
-            gui::window_style(hwnd).unwrap_or(0),
-            gui::window_ex_style(hwnd).unwrap_or(0),
-        );
-    }
+    gui::publish_shared(hwnd);
 }
 
 unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
@@ -2840,8 +2879,8 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
 }
 
 pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
-    let mut state = gui::WINDOW_NORMAL;
-    with_backend(|b| state = b.window_state(hwnd));
+    // Fenêtre d'un autre processus comprise (#2046).
+    let state = gui::any_window_state(hwnd);
     let v = (state == gui::WINDOW_MINIMIZED) as i32;
     if window_diag() {
         eprintln!("winlux[fenetre] IsIconic({hwnd:#x}) -> {v}");
@@ -2850,8 +2889,7 @@ pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {
-    let mut state = gui::WINDOW_NORMAL;
-    with_backend(|b| state = b.window_state(hwnd));
+    let state = gui::any_window_state(hwnd);
     (state == gui::WINDOW_MAXIMIZED) as i32
 }
 
@@ -2884,6 +2922,9 @@ pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).
         let rect = gui::window_rect(hwnd).unwrap_or_default();
         with_backend(|b| b.reparent_window(hwnd, new_parent, rect));
+    }
+    if new_parent != old {
+        publish_shared(hwnd);
     }
     old
 }
@@ -2927,7 +2968,7 @@ pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16)
 /// Recherche commune à FindWindowExA/W (#2106). Parent NULL ou bureau :
 /// fenêtres de premier niveau, sans les fenêtres message-only ;
 /// HWND_MESSAGE : les seules fenêtres message-only ; sinon les enfants
-/// directs. La recherche reprend après `after`, sinon une boucle
+/// directs. Le premier niveau comprend les autres processus (#2046). La recherche reprend après `after`, sinon une boucle
 /// `while ((h = FindWindowEx(0, h, …)))` tourne sans fin.
 fn find_window_among(
     parent: usize,
@@ -2935,12 +2976,12 @@ fn find_window_among(
     class: Option<&str>,
     title: Option<&str>,
 ) -> usize {
-    let found = match parent {
-        0 | 1 => gui::find_window_ex(0, after, class, title, |h| !is_message_only(h)),
-        HWND_MESSAGE => gui::find_window_ex(0, after, class, title, is_message_only),
-        p => gui::find_window_ex(p, after, class, title, |_| true),
+    let scope = match parent {
+        0 | gui::DESKTOP_HWND => gui::FindScope::TopLevel,
+        HWND_MESSAGE => gui::FindScope::MessageOnly,
+        p => gui::FindScope::Children(p),
     };
-    found.unwrap_or(0)
+    gui::find_window_ex(scope, after, class, title).unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn find_window_ex_a(
@@ -2977,7 +3018,9 @@ pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32
     if callback == 0 {
         return 0;
     }
-    let windows = gui::enum_top_level_windows();
+    // Toutes les fenêtres de premier niveau du compte, sans les
+    // message-only, du sommet vers le fond (#2046).
+    let windows = gui::all_top_level_windows();
     if window_diag() {
         // #1886 : ce que voit le suivi d'occultation de Chromium (son fil
         // relit la liste, la visibilité et le rectangle de chaque fenêtre).
@@ -3051,7 +3094,10 @@ pub extern "win64" fn get_window(hwnd: usize, cmd: u32) -> usize {
     gui::get_window_relative(hwnd, cmd).unwrap_or(0)
 }
 
+/// GetTopWindow : premier enfant ; NULL ou le bureau donnent la fenêtre de
+/// premier niveau la plus haute, tous processus confondus (#2046).
 pub extern "win64" fn get_top_window(hwnd: usize) -> usize {
+    let hwnd = if hwnd == 0 { gui::DESKTOP_HWND } else { hwnd };
     gui::get_window_relative(hwnd, 5).unwrap_or(0) // GW_CHILD
 }
 
@@ -7497,6 +7543,137 @@ mod tests_messages {
             }
             assert_eq!(find_window_ex_w(0, 0, class.as_ptr(), title.as_ptr()), 0);
         }
+    }
+
+    /// #2046 : EnumWindows, GetWindow, FindWindow et les lectures voient la
+    /// fenêtre de premier niveau d'un autre processus du compte ; ses
+    /// contrôles et nos fenêtres message-only restent hors liste ; on ne
+    /// peut ni la renommer ni lui envoyer d'autre message que la lecture de
+    /// son titre.
+    #[test]
+    fn enum_windows_voit_les_autres_processus() {
+        use crate::dlls::gui_shared::{self, Foreign, FLAG_TOP_LEVEL, FLAG_VISIBLE};
+        unsafe extern "win64" fn collect(hwnd: usize, lp: isize) -> i32 {
+            (*(lp as *mut Vec<usize>)).push(hwnd);
+            1
+        }
+        let enumerate = || {
+            let mut v: Vec<usize> = Vec::new();
+            unsafe { enum_windows(collect as *const () as usize, &mut v as *mut _ as isize) };
+            v
+        };
+        let other = unsafe { libc::getppid() } as u32;
+        let top = gui::alloc_hwnd();
+        let child = gui::alloc_hwnd();
+        let f = Foreign {
+            pid: other,
+            tid: 4242,
+            start: gui_shared::start_time(other).unwrap_or(0),
+            flags: FLAG_TOP_LEVEL | FLAG_VISIBLE,
+            style: 0x10cf_0000,
+            ..Default::default()
+        };
+        // Écrit comme le ferait l'autre processus.
+        let dir = crate::dlls::named_objects::dir().unwrap().join("fenetres");
+        let write = |h: usize, f: Foreign, class: &str, title: &str| {
+            std::fs::write(
+                dir.join(format!("{h:x}")),
+                format!(
+                    "{} {} {} {} {} {} {} {} {}\n{class}\n{title}\n",
+                    f.pid, f.tid, f.xid, f.style, f.ex_style, f.top, f.parent, f.flags, f.start
+                ),
+            )
+            .unwrap();
+        };
+        write(top, f, "Winlux2046Classe", "Bloc-notes 2046");
+        write(
+            child,
+            Foreign {
+                flags: FLAG_VISIBLE,
+                xid: 0x1c0_0099,
+                parent: top,
+                ..f
+            },
+            "Edit",
+            "",
+        );
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let msg = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                1,
+                1,
+                HWND_MESSAGE,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(msg, 0);
+
+            let all = enumerate();
+            assert!(all.contains(&top), "{all:x?}");
+            assert!(!all.contains(&child));
+            assert!(!all.contains(&msg));
+
+            let mut buf = [0u16; 64];
+            let n = get_window_text_w(top, buf.as_mut_ptr(), 64);
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..n as usize]),
+                "Bloc-notes 2046"
+            );
+            let n = get_class_name_w(top, buf.as_mut_ptr(), 64);
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..n as usize]),
+                "Winlux2046Classe"
+            );
+            assert_eq!(is_window_visible(top), 1);
+            assert_eq!(get_window_long_w(top, -16), 0x10cf_0000);
+            let mut pid = 0u32;
+            assert_eq!(get_window_thread_process_id(top, &mut pid), 4242);
+            assert_eq!(pid, other);
+
+            let cls: Vec<u16> = "winlux2046classe\0".encode_utf16().collect();
+            let ttl: Vec<u16> = "Bloc-notes 2046\0".encode_utf16().collect();
+            assert_eq!(find_window_w(cls.as_ptr(), ttl.as_ptr()), top);
+            assert_eq!(find_window_ex_w(0, top, cls.as_ptr(), ttl.as_ptr()), 0);
+
+            // Le bureau a un premier enfant, et la fratrie comprend l'autre
+            // processus.
+            assert_ne!(get_window(gui::DESKTOP_HWND, 5), 0);
+            assert_ne!(get_top_window(0), 0);
+            let mut h = get_window(top, 0);
+            let mut walked = Vec::new();
+            while h != 0 && walked.len() < 10_000 {
+                walked.push(h);
+                h = get_window(h, 2);
+            }
+            assert!(walked.contains(&top));
+            assert_eq!(get_window(child, 2), 0);
+
+            // Lecture du titre seulement.
+            assert_eq!(send_message_w(top, 0x000E, 0, 0), 15);
+            assert_eq!(send_message_w(top, 0x0010, 0, 0), 0); // WM_CLOSE
+            let t: Vec<u16> = "pirate\0".encode_utf16().collect();
+            assert_eq!(set_window_text_w(top, t.as_ptr()), 0);
+            let n = get_window_text_w(top, buf.as_mut_ptr(), 64);
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..n as usize]),
+                "Bloc-notes 2046"
+            );
+            assert_eq!(is_window(top), 1);
+
+            destroy_window(msg);
+        }
+        // L'autre processus s'en va : plus rien.
+        let _ = std::fs::remove_file(dir.join(format!("{top:x}")));
+        let _ = std::fs::remove_file(dir.join(format!("{child:x}")));
+        assert!(!enumerate().contains(&top));
+        assert_eq!(unsafe { is_window(top) }, 0);
     }
 
     #[test]

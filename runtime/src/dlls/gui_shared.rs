@@ -10,8 +10,23 @@
 //! utilisateur), sous-dossier `fenetres` :
 //! - un compteur, pour que deux processus ne donnent jamais le même HWND
 //!   (chaque processus en réserve un bloc à la fois) ;
-//! - un annuaire : un fichier par fenêtre ayant une fenêtre X11, nommé par
-//!   son HWND, qui donne le processus, le fil et la fenêtre X11.
+//! - un annuaire : un fichier par fenêtre, nommé par son HWND, qui donne le
+//!   processus, le fil et la fenêtre X11. Les fenêtres de premier niveau y
+//!   sont toutes, même cachées ou sans fenêtre X11, avec leur classe et leur
+//!   titre : `EnumWindows` voit ainsi celles des autres programmes (#2046).
+//!   Les contrôles enfants n'y sont que s'ils ont une fenêtre X11, sans
+//!   titre (un champ de saisie réécrirait son entrée à chaque touche).
+//!
+//! Ce qui bouge sans cesse (position, taille, état réduit) n'est pas publié :
+//! il se lit sur le serveur X par la fenêtre X11.
+//!
+//! Sécurité (#2046) : le dossier est privé au compte, un autre compte (et un
+//! processus lancé en root, qui a son propre dossier) n'y voit rien. Un
+//! autre processus du compte peut lire ces métadonnées, comme sous Windows ;
+//! le serveur X les montre déjà à tous ses clients. Il ne peut ni modifier
+//! la fenêtre, ni lui envoyer de messages, ni en lire le contenu. Une
+//! entrée est lue avec méfiance : taille et nombre bornés, champs mal
+//! formés ignorés.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -36,7 +51,37 @@ pub struct Foreign {
     /// chemin de peinture d'après WS_EX_LAYERED (#1357).
     pub style: u32,
     pub ex_style: u32,
+    /// Fenêtre X11 gérée par le gestionnaire de fenêtres (cadre de la barre
+    /// de menus, sinon `xid`) : clé de l'ordre Z du serveur (#2046).
+    pub top: u64,
+    /// Parent (contrôle) ou propriétaire (premier niveau), 0 sans.
+    pub parent: usize,
+    /// `FLAG_*`.
+    pub flags: u32,
+    /// Démarrage du processus (champ 22 de /proc/PID/stat) : un PID
+    /// réutilisé ne ressuscite pas la fenêtre d'un mort. 0 : inconnu.
+    pub start: u64,
 }
+
+/// Le drapeau « visible » de la fenêtre (WS_VISIBLE).
+pub const FLAG_VISIBLE: u32 = 1;
+/// Fenêtre de premier niveau (ni contrôle enfant, ni message-only).
+pub const FLAG_TOP_LEVEL: u32 = 2;
+
+/// Fenêtre d'un autre processus avec ses noms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub hwnd: usize,
+    pub f: Foreign,
+    pub class: String,
+    pub title: String,
+}
+
+/// Bornes de lecture : une entrée forgée ne peut ni épuiser la mémoire ni
+/// bloquer le lecteur.
+const MAX_ENTRY: u64 = 4096;
+const MAX_ENTRIES: usize = 4096;
+const MAX_NAME: usize = 256;
 
 fn dir() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -105,9 +150,42 @@ fn entry(dir: &Path, hwnd: usize) -> PathBuf {
     dir.join(format!("{hwnd:x}"))
 }
 
+fn clean(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_NAME)
+        .collect()
+}
+
+fn entry_text(f: &Foreign, class: &str, title: &str) -> String {
+    format!(
+        "{} {} {} {} {} {} {} {} {}\n{}\n{}\n",
+        f.pid,
+        f.tid,
+        f.xid,
+        f.style,
+        f.ex_style,
+        f.top,
+        f.parent,
+        f.flags,
+        f.start,
+        clean(class),
+        clean(title)
+    )
+}
+
+#[cfg(test)]
 fn publish_in(dir: &Path, hwnd: usize, f: Foreign) {
-    let tmp = dir.join(format!(".{hwnd:x}-{}", f.pid));
-    let text = format!("{} {} {} {} {}\n", f.pid, f.tid, f.xid, f.style, f.ex_style);
+    publish_named_in(dir, hwnd, f, "", "");
+}
+
+#[cfg(test)]
+fn publish_named_in(dir: &Path, hwnd: usize, f: Foreign, class: &str, title: &str) {
+    write_entry(dir, hwnd, f.pid, &entry_text(&f, class, title));
+}
+
+fn write_entry(dir: &Path, hwnd: usize, pid: u32, text: &str) {
+    let tmp = dir.join(format!(".{hwnd:x}-{pid}"));
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -130,21 +208,63 @@ fn withdraw_in(dir: &Path, hwnd: usize, pid: u32) {
 }
 
 fn read_in(dir: &Path, hwnd: usize) -> Option<Foreign> {
-    let text = std::fs::read_to_string(entry(dir, hwnd)).ok()?;
-    let mut it = text.split_whitespace().map(|s| s.parse::<u64>().ok());
-    let pid = it.next()?? as u32;
-    let tid = it.next()?? as u32;
+    read_full_in(dir, hwnd).map(|(f, _, _)| f)
+}
+
+/// Entrée complète : numéros, classe, titre. Une entrée trop grosse ou mal
+/// formée est ignorée.
+fn read_full_in(dir: &Path, hwnd: usize) -> Option<(Foreign, String, String)> {
+    let mut text = String::new();
+    std::fs::File::open(entry(dir, hwnd))
+        .ok()?
+        .take(MAX_ENTRY)
+        .read_to_string(&mut text)
+        .ok()?;
+    parse_entry(&text)
+}
+
+fn parse_entry(text: &str) -> Option<(Foreign, String, String)> {
+    let mut lines = text.split('\n');
+    let mut it = lines
+        .next()?
+        .split_whitespace()
+        .map(|s| s.parse::<u64>().ok());
+    let pid = u32::try_from(it.next()??).ok()?;
+    let tid = u32::try_from(it.next()??).ok()?;
     let xid = it.next()??;
-    // Styles absents (entrée d'un Winlux antérieur) : 0.
-    let style = it.next().flatten().unwrap_or(0) as u32;
-    let ex_style = it.next().flatten().unwrap_or(0) as u32;
-    Some(Foreign {
-        pid,
-        tid,
-        xid,
-        style,
-        ex_style,
-    })
+    // Champs absents (entrée d'un Winlux antérieur) : 0.
+    let mut more = || it.next().flatten().unwrap_or(0);
+    let style = more() as u32;
+    let ex_style = more() as u32;
+    let top = more();
+    let parent = more() as usize;
+    let flags = more() as u32;
+    let start = more();
+    let class = clean(lines.next().unwrap_or(""));
+    let title = clean(lines.next().unwrap_or(""));
+    Some((
+        Foreign {
+            pid,
+            tid,
+            xid,
+            style,
+            ex_style,
+            top,
+            parent,
+            flags,
+            start,
+        },
+        class,
+        title,
+    ))
+}
+
+/// Démarrage du processus `pid`, en tops d'horloge depuis l'amorçage.
+pub fn start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Le nom (champ 2) est entre parenthèses et peut contenir des espaces.
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(19)?.parse().ok()
 }
 
 fn alive(pid: u32) -> bool {
@@ -153,40 +273,150 @@ fn alive(pid: u32) -> bool {
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
+/// Le processus de l'entrée vit-il encore, et est-ce bien le même ?
+fn owner_alive(f: &Foreign) -> bool {
+    alive(f.pid) && (f.start == 0 || start_time(f.pid).is_none_or(|s| s == f.start))
+}
+
 /// Fenêtre `hwnd` d'un autre processus vivant, vue depuis le processus `me`.
 /// Une entrée laissée par un processus mort est effacée.
 fn lookup_in(dir: &Path, hwnd: usize, me: u32) -> Option<Foreign> {
-    let f = read_in(dir, hwnd)?;
+    lookup_full_in(dir, hwnd, me).map(|l| l.f)
+}
+
+fn lookup_full_in(dir: &Path, hwnd: usize, me: u32) -> Option<Listed> {
+    let (f, class, title) = read_full_in(dir, hwnd)?;
     if f.pid == me {
         return None;
     }
-    if !alive(f.pid) {
+    if !owner_alive(&f) {
         let _ = std::fs::remove_file(entry(dir, hwnd));
         return None;
     }
-    Some(f)
+    Some(Listed {
+        hwnd,
+        f,
+        class,
+        title,
+    })
 }
 
-/// Inscrit une fenêtre de ce processus qui a une fenêtre X11, ou met à
-/// jour ses styles.
-pub fn publish(hwnd: usize, tid: u32, xid: u64, style: u32, ex_style: u32) {
-    if let Some(d) = dir() {
-        publish_in(
-            &d,
-            hwnd,
-            Foreign {
-                pid: std::process::id(),
-                tid,
-                xid,
-                style,
-                ex_style,
-            },
-        );
+/// Entrées lues : relues seulement quand le dossier change (création,
+/// renommage, effacement changent sa date). Le suivi d'occultation de
+/// Chromium appelle `EnumWindows` à chaque déplacement de fenêtre.
+type Cache = Option<(PathBuf, std::time::SystemTime, Vec<Listed>)>;
+static CACHE: Mutex<Cache> = Mutex::new(None);
+
+fn read_all_in(dir: &Path) -> Vec<Listed> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut hwnds: Vec<usize> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_str()?;
+            if name.starts_with('.') || name.len() > 16 {
+                return None;
+            }
+            usize::from_str_radix(name, 16).ok()
+        })
+        .filter(|&h| (FIRST_HWND..LAST_HWND).contains(&h))
+        .take(MAX_ENTRIES)
+        .collect();
+    hwnds.sort_unstable();
+    hwnds
+        .into_iter()
+        .filter_map(|hwnd| {
+            let (f, class, title) = read_full_in(dir, hwnd)?;
+            Some(Listed {
+                hwnd,
+                f,
+                class,
+                title,
+            })
+        })
+        .collect()
+}
+
+/// Fenêtres des autres processus vivants du compte, par HWND croissant.
+/// Les entrées des morts sont effacées au passage.
+fn list_in(dir: &Path, me: u32) -> Vec<Listed> {
+    let mtime = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+    let all = {
+        let mut cache = crate::dlls::lock(&CACHE);
+        match (&*cache, mtime) {
+            // Une date trop récente ne dit rien : deux changements dans le
+            // même tic d'horloge du noyau la laissent identique.
+            (Some((d, t, list)), Some(m)) if d == dir && *t == m => list.clone(),
+            _ => {
+                let list = read_all_in(dir);
+                // Une date trop récente ne garantit rien : deux changements
+                // dans le même tic d'horloge du noyau la laissent identique.
+                let settled = |m: &std::time::SystemTime| {
+                    m.elapsed()
+                        .is_ok_and(|e| e > std::time::Duration::from_millis(100))
+                };
+                *cache = mtime
+                    .filter(settled)
+                    .map(|m| (dir.to_path_buf(), m, list.clone()));
+                list
+            }
+        }
+    };
+    // Un seul contrôle par processus.
+    let mut alive_pids: std::collections::HashMap<(u32, u64), bool> = Default::default();
+    all.into_iter()
+        .filter(|l| l.f.pid != me)
+        .filter(|l| {
+            let ok = *alive_pids
+                .entry((l.f.pid, l.f.start))
+                .or_insert_with(|| owner_alive(&l.f));
+            if !ok {
+                let _ = std::fs::remove_file(entry(dir, l.hwnd));
+            }
+            ok
+        })
+        .collect()
+}
+
+/// Dernier texte écrit par HWND de ce processus : une entrée inchangée
+/// n'est pas réécrite.
+fn written() -> &'static Mutex<std::collections::HashMap<usize, String>> {
+    static W: std::sync::OnceLock<Mutex<std::collections::HashMap<usize, String>>> =
+        std::sync::OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+/// Démarrage de ce processus, lu une fois.
+fn my_start() -> u64 {
+    static S: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *S.get_or_init(|| start_time(std::process::id()).unwrap_or(0))
+}
+
+/// Inscrit (ou met à jour) une fenêtre de ce processus. `f.pid` et
+/// `f.start` sont remplis ici.
+pub fn publish(hwnd: usize, f: Foreign, class: &str, title: &str) {
+    let Some(d) = dir() else {
+        return;
+    };
+    let f = Foreign {
+        pid: std::process::id(),
+        start: my_start(),
+        ..f
+    };
+    let text = entry_text(&f, class, title);
+    let mut w = crate::dlls::lock(written());
+    if w.get(&hwnd) == Some(&text) {
+        return;
     }
+    write_entry(&d, hwnd, f.pid, &text);
+    w.insert(hwnd, text);
 }
 
 /// Retire une fenêtre détruite de ce processus.
 pub fn withdraw(hwnd: usize) {
+    crate::dlls::lock(written()).remove(&hwnd);
     if let Some(d) = dir() {
         withdraw_in(&d, hwnd, std::process::id());
     }
@@ -198,6 +428,25 @@ pub fn foreign(hwnd: usize) -> Option<Foreign> {
         return None;
     }
     lookup_in(&dir()?, hwnd, std::process::id())
+}
+
+/// Fenêtre d'un autre processus du compte, avec sa classe et son titre.
+pub fn foreign_named(hwnd: usize) -> Option<Listed> {
+    if hwnd < FIRST_HWND {
+        return None;
+    }
+    lookup_full_in(&dir()?, hwnd, std::process::id())
+}
+
+/// Fenêtres de premier niveau des autres processus du compte (#2046).
+pub fn foreign_top_levels() -> Vec<Listed> {
+    let Some(d) = dir() else {
+        return Vec::new();
+    };
+    list_in(&d, std::process::id())
+        .into_iter()
+        .filter(|l| l.f.flags & FLAG_TOP_LEVEL != 0)
+        .collect()
 }
 
 #[cfg(test)]
@@ -259,6 +508,136 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// #2046 : classe et titre relus, nettoyés et bornés ; une entrée d'un
+    /// Winlux antérieur se lit encore, une entrée mal formée est ignorée.
+    #[test]
+    fn entree_complete_relue_et_bornee() {
+        let d = temp_dir("entree");
+        let other = unsafe { libc::getppid() } as u32;
+        let f = Foreign {
+            pid: other,
+            tid: 9,
+            xid: 0x1c0_0007,
+            style: 0x10cf_0000,
+            ex_style: 0x100,
+            top: 0x1c0_0006,
+            parent: 0x40200,
+            flags: FLAG_VISIBLE | FLAG_TOP_LEVEL,
+            start: 0,
+        };
+        let long = "é".repeat(1000);
+        publish_named_in(&d, 0x40300, f, "Notepad++", &format!("a\nb\r{long}"));
+        let (g, class, title) = read_full_in(&d, 0x40300).unwrap();
+        assert_eq!(g, f);
+        assert_eq!(class, "Notepad++");
+        assert!(title.starts_with("a b "), "{title}");
+        assert_eq!(title.chars().count(), MAX_NAME);
+        // Entrée d'avant #2046 : cinq nombres, sans noms.
+        std::fs::write(entry(&d, 0x40301), format!("{other} 7 5 1 2\n")).unwrap();
+        let (old, class, title) = read_full_in(&d, 0x40301).unwrap();
+        assert_eq!((old.tid, old.style, old.ex_style, old.flags), (7, 1, 2, 0));
+        assert_eq!((class.as_str(), title.as_str()), ("", ""));
+        // Mal formées : ignorées sans panique.
+        for (h, text) in [
+            (0x40302, "abc 7 5\n".to_string()),
+            (0x40303, "99999999999 1 2\n".to_string()),
+            (0x40304, String::new()),
+            (
+                0x40305,
+                format!("{other} 1 2 3 4 5 6 7 8\n{}", "x".repeat(10_000)),
+            ),
+        ] {
+            std::fs::write(entry(&d, h), text).unwrap();
+            let r = read_full_in(&d, h);
+            if h == 0x40305 {
+                // Fichier géant : lu jusqu'à la borne, nom tronqué.
+                assert!(r.is_some_and(|(_, c, _)| c.len() == MAX_NAME));
+            } else {
+                assert!(r.is_none(), "{h:#x}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #2046 : un PID réutilisé par un autre processus ne ressuscite pas
+    /// la fenêtre d'un mort.
+    #[test]
+    fn pid_reutilise_ne_ressuscite_pas() {
+        let d = temp_dir("pid");
+        let other = unsafe { libc::getppid() } as u32;
+        let start = start_time(other).expect("/proc lisible");
+        let me = std::process::id();
+        let f = Foreign {
+            pid: other,
+            start,
+            flags: FLAG_TOP_LEVEL,
+            ..Default::default()
+        };
+        publish_in(&d, 0x40400, f);
+        assert_eq!(lookup_in(&d, 0x40400, me), Some(f));
+        publish_in(
+            &d,
+            0x40401,
+            Foreign {
+                start: start + 1,
+                ..f
+            },
+        );
+        assert_eq!(lookup_in(&d, 0x40401, me), None);
+        assert!(!entry(&d, 0x40401).exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #2046 : la liste rend les fenêtres des autres processus vivants,
+    /// jamais les siennes, et efface celles des morts.
+    #[test]
+    fn liste_des_fenetres_des_autres() {
+        let d = temp_dir("liste");
+        let other = unsafe { libc::getppid() } as u32;
+        let me = std::process::id();
+        let top = Foreign {
+            pid: other,
+            flags: FLAG_TOP_LEVEL | FLAG_VISIBLE,
+            ..Default::default()
+        };
+        publish_named_in(&d, 0x40500, top, "A", "Fenêtre A");
+        publish_named_in(
+            &d,
+            0x40501,
+            Foreign {
+                flags: 0,
+                xid: 3,
+                ..top
+            },
+            "Edit",
+            "",
+        );
+        publish_named_in(&d, 0x40502, Foreign { pid: me, ..top }, "Moi", "");
+        publish_named_in(
+            &d,
+            0x40503,
+            Foreign {
+                pid: 0x3fff_fff0,
+                ..top
+            },
+            "Mort",
+            "",
+        );
+        // Fichiers étrangers à l'annuaire : ignorés.
+        std::fs::write(d.join("compteur"), [0u8; 8]).unwrap();
+        std::fs::write(d.join(".40504-1"), "temporaire").unwrap();
+        std::fs::write(d.join("1"), format!("{other} 1 1\n")).unwrap();
+        let list = list_in(&d, me);
+        let hwnds: Vec<usize> = list.iter().map(|l| l.hwnd).collect();
+        assert_eq!(hwnds, vec![0x40500, 0x40501]);
+        assert_eq!(list[0].title, "Fenêtre A");
+        assert!(!entry(&d, 0x40503).exists());
+        // Une nouvelle entrée se voit tout de suite.
+        publish_named_in(&d, 0x40506, top, "B", "Fenêtre B");
+        assert!(list_in(&d, me).iter().any(|l| l.hwnd == 0x40506));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn is_window_voit_la_fenetre_d_un_autre_processus() {
         let Some(d) = dir() else { return };
@@ -296,6 +675,7 @@ mod tests {
             xid: 0x1c0_0043,
             style: 0x8400_0000,    // WS_POPUP | WS_CLIPSIBLINGS
             ex_style: 0x0008_0088, // WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
+            ..Default::default()
         };
         publish_in(&d, h, f);
         assert_eq!(lookup_in(&d, h, std::process::id()), Some(f));

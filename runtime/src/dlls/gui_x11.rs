@@ -3257,6 +3257,40 @@ impl X11Backend {
         }
     }
 
+    /// Réduite (WM_STATE Iconic), agrandie ou normale : état d'une fenêtre
+    /// X11 gérée, de ce processus ou d'un autre (#2046).
+    fn x_window_state(&mut self, top: Window) -> u8 {
+        let atom = |c: &RustConnection, name: &[u8]| {
+            c.intern_atom(false, name)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .map(|r| r.atom)
+        };
+        let read = |c: &RustConnection, prop: Atom| -> Vec<u32> {
+            c.get_property(false, top, prop, AtomEnum::ANY, 0, 64)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .and_then(|r| r.value32().map(|v| v.collect()))
+                .unwrap_or_default()
+        };
+        if let Some(wm_state) = atom(&self.conn, b"WM_STATE") {
+            if read(&self.conn, wm_state).first() == Some(&3) {
+                return gui::WINDOW_MINIMIZED;
+            }
+        }
+        if let (Some(net_state), Some(vert), Some(horz)) = (
+            atom(&self.conn, b"_NET_WM_STATE"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_VERT"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_HORZ"),
+        ) {
+            let states = read(&self.conn, net_state);
+            if states.contains(&vert) && states.contains(&horz) {
+                return gui::WINDOW_MAXIMIZED;
+            }
+        }
+        gui::WINDOW_NORMAL
+    }
+
     fn top_xwin(w: &XWin) -> Window {
         if w.frame != 0 {
             w.frame
@@ -5872,35 +5906,66 @@ impl gui::GuiBackend for X11Backend {
             return gui::WINDOW_NORMAL;
         };
         let top = Self::top_xwin(w);
-        let atom = |c: &RustConnection, name: &[u8]| {
-            c.intern_atom(false, name)
-                .ok()
-                .and_then(|r| r.reply().ok())
-                .map(|r| r.atom)
+        self.x_window_state(top)
+    }
+
+    fn native_top_window(&mut self, hwnd: usize) -> Option<u64> {
+        self.windows.get(&hwnd).map(|w| Self::top_xwin(w) as u64)
+    }
+
+    /// _NET_CLIENT_LIST_STACKING de la racine, du fond vers le sommet
+    /// (#2046) : l'ordre Z de toutes les fenêtres gérées, de tous les
+    /// processus.
+    fn client_stacking(&mut self) -> Vec<u64> {
+        let root = self.conn.setup().roots[self.screen].root;
+        let Some(atom) = self
+            .conn
+            .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| r.atom)
+        else {
+            return Vec::new();
         };
-        let read = |c: &RustConnection, prop: Atom| -> Vec<u32> {
-            c.get_property(false, top, prop, AtomEnum::ANY, 0, 64)
-                .ok()
-                .and_then(|r| r.reply().ok())
-                .and_then(|r| r.value32().map(|v| v.collect()))
-                .unwrap_or_default()
-        };
-        if let Some(wm_state) = atom(&self.conn, b"WM_STATE") {
-            if read(&self.conn, wm_state).first() == Some(&3) {
-                return gui::WINDOW_MINIMIZED;
-            }
+        self.conn
+            .get_property(false, root, atom, AtomEnum::WINDOW, 0, 4096)
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .and_then(|r| r.value32().map(|v| v.map(u64::from).collect()))
+            .unwrap_or_default()
+    }
+
+    /// Rectangle écran logique de la fenêtre X11 d'un autre processus.
+    fn foreign_geometry(&mut self, xid: u64) -> Option<Rect> {
+        let xid = u32::try_from(xid).ok()?;
+        let root = self.conn.setup().roots[self.screen].root;
+        let g = self.conn.get_geometry(xid).ok()?.reply().ok()?;
+        let t = self
+            .conn
+            .translate_coordinates(xid, root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        let (x, y) = (self.logical(t.dst_x as i32), self.logical(t.dst_y as i32));
+        Some(Rect {
+            left: x,
+            top: y,
+            right: x + self.logical(g.width as i32).max(1),
+            bottom: y + self.logical(g.height as i32).max(1),
+        })
+    }
+
+    fn foreign_viewable(&mut self, xid: u64) -> Option<bool> {
+        let xid = u32::try_from(xid).ok()?;
+        let a = self.conn.get_window_attributes(xid).ok()?.reply().ok()?;
+        Some(a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE)
+    }
+
+    fn foreign_state(&mut self, xid: u64) -> u8 {
+        match u32::try_from(xid) {
+            Ok(x) if x != 0 => self.x_window_state(x),
+            _ => gui::WINDOW_NORMAL,
         }
-        if let (Some(net_state), Some(vert), Some(horz)) = (
-            atom(&self.conn, b"_NET_WM_STATE"),
-            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_VERT"),
-            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_HORZ"),
-        ) {
-            let states = read(&self.conn, net_state);
-            if states.contains(&vert) && states.contains(&horz) {
-                return gui::WINDOW_MAXIMIZED;
-            }
-        }
-        gui::WINDOW_NORMAL
     }
 
     fn begin_move_resize(&mut self, hwnd: usize, edge: u32) {
