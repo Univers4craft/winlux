@@ -140,7 +140,9 @@ T = {
            "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
-           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
+           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée.",
+           "licence_refused": "Contrat de licence non accepté : rien n'a été installé.",
+           "licence_waiting": "Lisez le contrat de licence de {name} pour continuer..."},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
            "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
@@ -183,7 +185,9 @@ T = {
            "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
-           "ed_mismatch": "The file received is not the announced version: installation refused."},
+           "ed_mismatch": "The file received is not the announced version: installation refused.",
+           "licence_refused": "License agreement not accepted: nothing was installed.",
+           "licence_waiting": "Read the {name} license agreement to continue..."},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
            "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
@@ -226,7 +230,9 @@ T = {
            "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
-           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
+           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada.",
+           "licence_refused": "Contrato de licencia no aceptado: no se ha instalado nada.",
+           "licence_waiting": "Lea el contrato de licencia de {name} para continuar..."},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
            "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
@@ -270,7 +276,9 @@ T = {
            "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
-           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
+           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt.",
+           "licence_refused": "Lizenzvertrag nicht akzeptiert: Es wurde nichts installiert.",
+           "licence_waiting": "Lesen Sie den Lizenzvertrag von {name}, um fortzufahren..."},
 }
 
 
@@ -2128,20 +2136,65 @@ def install_portable(app, path, kind, entry, progress):
         run(["winlux-applications", "refresh"], 120)
     return 0
 
+# Installation refusée par l'utilisateur (ERROR_INSTALL_USEREXIT), et ce
+# même code vu à travers un code de sortie sur 8 bits.
+LICENCE_REFUSED = 1602
+
+
+def silent_flag(args):
+    """Option sans interface (`/S`, `/SILENT`, `/VERYSILENT`, `/quiet`,
+    `/passive`, `/q…`) : comme sous Windows, la passer vaut acceptation du
+    contrat ; même règle que le runtime (setup/license.rs)."""
+    for a in args:
+        o = a.lower()
+        if o[:1] in ("/", "-"):
+            o = o[1:]
+            if o in ("s", "silent", "verysilent", "quiet", "passive") or o.startswith("q"):
+                return True
+    return False
+
+
+def accept_licence(path, progress):
+    """Contrat de licence du paquet présenté avant une installation sans
+    interface (#2129) : la page « Contrat de licence » de l'assistant
+    (`winlux-setup-wizard --contrat-seulement`, « Je n'accepte pas » coché
+    au départ) rend 0 si le paquet n'a pas de contrat ou si la personne
+    l'accepte. Refus, fenêtre fermée ou page impossible à ouvrir : rien
+    n'est installé."""
+    wizard = os.environ.get("WINLUX_SETUP_WIZARD") or "winlux-setup-wizard"
+    env = dict(os.environ)
+    runtime = shutil.which("winlux")
+    if runtime:
+        env["WINLUX_BIN"] = runtime
+    progress(None, tr("licence_waiting", name=path.name))
+    try:
+        code = subprocess.run([wizard, str(path), "--contrat-seulement"], env=env,
+                              stdin=subprocess.DEVNULL, timeout=3600).returncode
+    except (OSError, subprocess.SubprocessError):
+        code = LICENCE_REFUSED
+    return code == 0
+
+
 def install_windows_file(path, progress, args=(), entry=None):
     """Lance un installateur .exe, ou le msiexec intégré au runtime pour un .msi."""
-    progress(15, tr("runtime", name=path.name))
     msi = path.suffix.lower() == ".msi"
     if msi:
         cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
+    # Sans interface, l'installateur ne montre pas son contrat : la Boutique
+    # le fait accepter d'abord. Avec interface, le runtime le présente lui-même.
+    if silent_flag(cmd[2:]) and not accept_licence(path, progress):
+        return LICENCE_REFUSED
+    progress(15, tr("runtime", name=path.name))
     with open(STORE_RUN / "store.log", "ab") as log:
         try:
             code = subprocess.run(cmd, cwd=str(path.parent), stdout=log, stderr=log,
                                   stdin=subprocess.DEVNULL).returncode
         except OSError:
             code = 127
+    if code == LICENCE_REFUSED % 256:
+        code = LICENCE_REFUSED  # refus devant la page du contrat ouverte par le runtime
     if code == 0 and msi and entry is not None:
         info = run(["winlux", "--msiexec", "--info", str(path)], 60)
         product = info[1].split("\t")[0].strip() if info[0] == 0 and info[1] else ""
@@ -2343,6 +2396,7 @@ class Progress:
             self.hook(0 if percent is None else shown)
 
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
+            LICENCE_REFUSED: "licence_refused",
             1223 % 256: "denied"}
 
 def apt_candidate(name):
