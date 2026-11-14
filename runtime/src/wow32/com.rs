@@ -23,6 +23,7 @@
 //! refusée (E_NOINTERFACE) plutôt que de donner au programme une table
 //! qu'il ne saurait pas appeler.
 
+use super::com_shell;
 use super::layout::widen;
 use super::{call32, rd, wr};
 use crate::dlls::comobj::{guid, guid_str, Guid};
@@ -1023,6 +1024,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_taskschd::ALL.iter())
         .chain(super::com_audio::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_shell::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1145,7 +1147,7 @@ fn vtable32(iface: &'static Iface) -> u32 {
     maps(|m| *m.vt32.entry(key(iface)).or_insert(at))
 }
 
-fn slots(kinds: &[A]) -> usize {
+pub(super) fn slots(kinds: &[A]) -> usize {
     kinds
         .iter()
         .map(|k| match k {
@@ -1811,7 +1813,7 @@ macro_rules! k {
     }};
 }
 
-fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
+pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
     let k: &'static [A] = match (dll, func) {
         ("ole32", "CoCreateInstance") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
         ("ole32", "CoGetClassObject") => k!(I, I, I, Iid, OutQ),
@@ -1838,6 +1840,36 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
+        // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
+        // Le IBindCtx passé est vu comme IUnknown, comme dans IShellFolder.
+        ("shell32", "SHCreateItemFromParsingName") => k!(I, In(&IUNKNOWN), Iid, OutQ),
+        ("shell32", "SHCreateItemFromIDList") => k!(I, Iid, OutQ),
+        ("shell32", "SHCreateItemWithParent") => k!(I, In(&ISHELLFOLDER), I, Iid, OutQ),
+        ("shell32", "SHCreateItemFromRelativeName") => {
+            k!(In(&com_shell::ISHELLITEM), I, In(&IUNKNOWN), Iid, OutQ)
+        }
+        ("shell32", "SHCreateItemInKnownFolder") => k!(I, I, I, Iid, OutQ),
+        ("shell32", "SHCreateShellItem") => {
+            k!(I, In(&ISHELLFOLDER), I, Out(&com_shell::ISHELLITEM))
+        }
+        ("shell32", "SHCreateShellItemArray") => {
+            k!(
+                I,
+                In(&ISHELLFOLDER),
+                I,
+                Pidls,
+                Out(&com_shell::ISHELLITEMARRAY)
+            )
+        }
+        ("shell32", "SHCreateShellItemArrayFromDataObject") => k!(In(&IDATAOBJECT), Iid, OutQ),
+        ("shell32", "SHCreateShellItemArrayFromIDLists") => {
+            k!(I, Pidls, Out(&com_shell::ISHELLITEMARRAY))
+        }
+        ("shell32", "SHCreateShellItemArrayFromShellItem") => {
+            k!(In(&com_shell::ISHELLITEM), Iid, OutQ)
+        }
+        // ppidlLast pointe dans la PIDL reçue, en mémoire x86 : valeur.
+        ("shell32", "SHBindToParent") => k!(I, Iid, OutQ, OutPtr),
         ("comctl32", "ImageList_Read") => k!(In(&ISTREAM)),
         ("comctl32", "ImageList_Write") => k!(I, In(&ISTREAM)),
         ("oleaut32", "GetErrorInfo" | "#200") | ("ole32", "GetErrorInfo") => {

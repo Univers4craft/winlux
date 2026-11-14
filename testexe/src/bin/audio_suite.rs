@@ -523,11 +523,12 @@ unsafe fn test_xaudio2() {
         ) == 0,
         "CreateSourceVoice avec rappel"
     );
-    let mut b = Bytes([0u8; 48]);
+    // XAUDIO2_BUFFER compacte (pack(1) de xaudio2.h) : 44 octets (#2442).
+    let mut b = Bytes([0u8; 44]);
     b.0[0..4].copy_from_slice(&0x40u32.to_le_bytes()); // END_OF_STREAM
     b.0[4..8].copy_from_slice(&8820u32.to_le_bytes());
     b.0[8..16].copy_from_slice(&(pcm_ptr() as usize).to_le_bytes());
-    b.0[40..48].copy_from_slice(&0x5151usize.to_le_bytes());
+    b.0[36..44].copy_from_slice(&0x5151usize.to_le_bytes());
     check!(
         vcall!(
             src,
@@ -559,17 +560,18 @@ unsafe fn test_xaudio2() {
         PASSES.load(Ordering::SeqCst) > 5,
         "OnVoiceProcessingPassStart à chaque passe"
     );
+    // XAUDIO2_VOICE_STATE compacte : SamplesPlayed @12 (#2442).
     let mut state = Bytes([0u8; 24]);
     vcall!(src, 25, fn(*mut u8, u32) -> (), state.0.as_mut_ptr(), 0);
     let played = u64::from_le_bytes([
+        state.0[12],
+        state.0[13],
+        state.0[14],
+        state.0[15],
         state.0[16],
         state.0[17],
         state.0[18],
         state.0[19],
-        state.0[20],
-        state.0[21],
-        state.0[22],
-        state.0[23],
     ]);
     check!(played == 4410, "SamplesPlayed = 4410");
     vcall!(src, 18, fn() -> (),);
