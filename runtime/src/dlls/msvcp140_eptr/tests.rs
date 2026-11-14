@@ -1,7 +1,7 @@
 //! Tests de `std::exception_ptr` (#2307).
 
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 
 thread_local! {
     static COPIES: Cell<u32> = const { Cell::new(0) };
@@ -41,8 +41,8 @@ struct Tables {
 
 /// Prépare les tables d'un objet de 8 octets, non simple, avec
 /// constructeur de copie et destructeur. Renvoie (ThrowInfo, base).
-fn tables(t: &mut Box<Tables>) -> (usize, usize) {
-    let adr = &**t as *const Tables as usize;
+fn tables(t: &mut Tables) -> (usize, usize) {
+    let adr = &*t as *const Tables as usize;
     let copie = copie_essai as *const () as usize;
     let dtor = dtor_essai as *const () as usize;
     let base = adr.min(copie).min(dtor) & !0xFFF;
@@ -57,12 +57,34 @@ fn tables(t: &mut Box<Tables>) -> (usize, usize) {
     (adr, base)
 }
 
-fn neuves() -> Box<Tables> {
-    Box::new(Tables {
+impl Tables {
+    const VIDES: Tables = Tables {
         ti: [0; 4],
         cta: [0; 2],
         ct: [0; 7],
-    })
+    };
+}
+
+/// Les tables vivent dans l'image du binaire de test (#2325) : un tas peut
+/// se trouver à plus de 4 Gio du code, et les déplacements relatifs à la
+/// base, sur 32 bits, ne tiendraient plus. Un emplacement par test, les
+/// tests tournant en parallèle.
+struct Emplacements(UnsafeCell<[Tables; 4]>);
+// SAFETY : chaque test n'emploie que son propre emplacement.
+unsafe impl Sync for Emplacements {}
+static EMPLACEMENTS: Emplacements = Emplacements(UnsafeCell::new([Tables::VIDES; 4]));
+
+const CAPTURE: usize = 0;
+const AFFECTATION: usize = 1;
+const RELANCE: usize = 2;
+const SIMPLE: usize = 3;
+
+/// Les tables vierges de l'emplacement `i`, propre à un seul test.
+fn neuves(i: usize) -> &'static mut Tables {
+    // SAFETY : `i` n'est employé que par un seul test.
+    let t = unsafe { &mut (*EMPLACEMENTS.0.get())[i] };
+    *t = Tables::VIDES;
+    t
 }
 
 fn nul() -> [usize; 2] {
@@ -96,8 +118,8 @@ fn vide_construit_compare_et_detruit() {
 
 #[test]
 fn capture_copie_l_objet_et_le_detruit_au_dernier_lacher() {
-    let mut t = neuves();
-    let (ti, base) = tables(&mut t);
+    let t = neuves(CAPTURE);
+    let (ti, base) = tables(t);
     unsafe {
         let obj = 7u64;
         let mut p = nul();
@@ -127,8 +149,8 @@ fn capture_copie_l_objet_et_le_detruit_au_dernier_lacher() {
 
 #[test]
 fn affectation_lache_l_ancien_et_echange() {
-    let mut t = neuves();
-    let (ti, base) = tables(&mut t);
+    let t = neuves(AFFECTATION);
+    let (ti, base) = tables(t);
     unsafe {
         let (o1, o2) = (1u64, 2u64);
         let mut a = nul();
@@ -174,8 +196,8 @@ fn exception_courante_absente_ou_seh() {
 
 #[test]
 fn relance_leve_une_nouvelle_copie_rendue_apres_le_catch() {
-    let mut t = neuves();
-    let (ti, base) = tables(&mut t);
+    let t = neuves(RELANCE);
+    let (ti, base) = tables(t);
     unsafe {
         let obj = 5u64;
         let mut p = nul();
@@ -205,8 +227,8 @@ fn relance_leve_une_nouvelle_copie_rendue_apres_le_catch() {
 
 #[test]
 fn make_exception_ptr_par_copy_exception() {
-    let mut t = neuves();
-    let (ti, _base) = tables(&mut t);
+    let t = neuves(SIMPLE);
+    let (ti, _base) = tables(t);
     // module_base ne connaît pas ces tables : on vérifie seulement que la
     // capture d'un objet simple (type sans constructeur) recopie ses octets.
     t.ct[0] = 1;
