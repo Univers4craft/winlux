@@ -405,7 +405,9 @@ esac
     st("remove", "apt:vlc")
     check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
     relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
-    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
+    # La simulation (-s, #2234) tourne sans droits, hors du relais.
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines()
+                 if l.startswith("apt-get ") and not l.startswith("apt-get -s ")]
     check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
     for args in apt_lines:
         check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")

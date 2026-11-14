@@ -144,7 +144,8 @@ T = {
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
            "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée.",
            "licence_refused": "Contrat de licence non accepté : rien n'a été installé.",
-           "licence_waiting": "Lisez le contrat de licence de {name} pour continuer..."},
+           "licence_waiting": "Lisez le contrat de licence de {name} pour continuer...",
+           "system_part": "{name} fait partie de Winlux : le système en a besoin ({blocker}), il ne peut pas être désinstallé. Rien n'a été modifié."},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
            "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
@@ -191,7 +192,8 @@ T = {
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
            "ed_mismatch": "The file received is not the announced version: installation refused.",
            "licence_refused": "License agreement not accepted: nothing was installed.",
-           "licence_waiting": "Read the {name} license agreement to continue..."},
+           "licence_waiting": "Read the {name} license agreement to continue...",
+           "system_part": "{name} is part of Winlux: the system needs it ({blocker}), so it cannot be uninstalled. Nothing was changed."},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
            "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
@@ -238,7 +240,8 @@ T = {
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
            "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada.",
            "licence_refused": "Contrato de licencia no aceptado: no se ha instalado nada.",
-           "licence_waiting": "Lea el contrato de licencia de {name} para continuar..."},
+           "licence_waiting": "Lea el contrato de licencia de {name} para continuar...",
+           "system_part": "{name} forma parte de Winlux: el sistema lo necesita ({blocker}), no se puede desinstalar. No se ha modificado nada."},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
            "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
@@ -286,7 +289,8 @@ T = {
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
            "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt.",
            "licence_refused": "Lizenzvertrag nicht akzeptiert: Es wurde nichts installiert.",
-           "licence_waiting": "Lesen Sie den Lizenzvertrag von {name}, um fortzufahren..."},
+           "licence_waiting": "Lesen Sie den Lizenzvertrag von {name}, um fortzufahren...",
+           "system_part": "{name} ist Teil von Winlux: Das System benötigt es ({blocker}), daher kann es nicht deinstalliert werden. Es wurde nichts geändert."},
 }
 
 
@@ -1100,7 +1104,40 @@ class Apt(Source):
             code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
         return code
 
+    def removal_blocker(self, ref):
+        """Paquet essentiel ou protégé (winlux-desktop) qui dépend de ref : apt
+        refuserait de le retirer (code 100) et la Boutique n'affichait que
+        « Échec (100) » (#2234). Simulation sans droits, donc avant toute
+        demande d'autorisation ; "" si rien ne bloque ou si l'on ne sait pas."""
+        try:
+            out = subprocess.run(["apt-get", "-s", "-q", "purge", "--autoremove", "--", ref],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+                                 stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if out.returncode == 0:
+            return ""
+        # apt nomme le paquet qui perdrait sa dépendance (« winlux-desktop :
+        # Depends: espeak-ng but it is not going to be installed ») ou liste
+        # les paquets essentiels qu'il faudrait retirer.
+        named = re.findall(r"^\s*(\S+) : (?:Pre-)?Depends:", out.stdout, re.M)
+        warn = re.search(r"essential packages will be removed\.?\n((?:\s+\S.*\n?)+)", out.stdout)
+        if warn:
+            named += warn.group(1).split()
+        if not named:
+            return ""
+        code, info = run(["dpkg-query", "-W", "-f", "${Package}\t${Essential}\t${Protected}\n", *dict.fromkeys(named)],
+                         30, env={**os.environ, "LC_ALL": "C"})
+        for line in info.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and "yes" in (parts[1], parts[2]):
+                return parts[0]
+        return ""
+
     def remove(self, ref, progress):
+        self.blocker = self.removal_blocker(ref)
+        if self.blocker:
+            return SYSTEM_PART
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
         # paquet et dépendances installées pour lui seul partent aussi (apt
         # remove laissait 10 bibliothèques et les réglages de Démineur).
@@ -2437,6 +2474,9 @@ class Progress:
         if self.hook:
             self.hook(0 if percent is None else shown)
 
+# Paquet nécessaire au système : rien n'est retiré, la Boutique dit pourquoi (#2234).
+SYSTEM_PART = 11
+
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
             LICENCE_REFUSED: "licence_refused",
             1223 % 256: "denied"}
@@ -2504,6 +2544,8 @@ def operate(action, target, hook=None, reindex=True, known=""):
                 pass
         if code == 0:
             progress(100, tr(done, name=name) if done else name, "done")
+        elif code == SYSTEM_PART and action == "remove" and getattr(src, "blocker", ""):
+            progress(0, tr("system_part", name=name, blocker=src.blocker), "error")
         elif code in MESSAGES:
             progress(0, tr(MESSAGES[code]), "error")
         elif not network_up():
