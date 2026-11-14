@@ -994,6 +994,18 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         Some(libc::EISDIR) | Some(libc::EPERM) => return 5, // ERROR_ACCESS_DENIED
         Some(libc::EBUSY) | Some(libc::ETXTBSY) => return 32, // ERROR_SHARING_VIOLATION
         Some(libc::EFAULT) => return 998,       // ERROR_NOACCESS : tampon invalide (#18)
+        // Tube dont l'autre bout est fermé : ERROR_NO_DATA (232) en écriture,
+        // ERROR_BROKEN_PIPE (109) en lecture, comme le chemin asynchrone.
+        // libuv (Node, Electron) et CPython y lisent une fermeture normale ;
+        // le 31 générique devenait une panne d'entrée-sortie (#2111).
+        Some(libc::EPIPE) => return 232,
+        Some(libc::ECONNRESET) => return 109,
+        Some(libc::EMFILE) | Some(libc::ENFILE) => return 4, // ERROR_TOO_MANY_OPEN_FILES
+        Some(libc::ENOMEM) => return 8,                      // ERROR_NOT_ENOUGH_MEMORY
+        Some(libc::EBADF) => return 6,                       // ERROR_INVALID_HANDLE
+        Some(libc::EIO) => return 1117,                      // ERROR_IO_DEVICE
+        Some(libc::EFBIG) => return 223,                     // ERROR_FILE_TOO_LARGE
+        Some(libc::EOPNOTSUPP) | Some(libc::ENOSYS) => return 50, // ERROR_NOT_SUPPORTED
         _ => {}
     }
     match e.kind() {
