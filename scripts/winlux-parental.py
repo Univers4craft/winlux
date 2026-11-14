@@ -1842,6 +1842,13 @@ window.parental entry { min-width: 280px; padding: 6px; }
 
 
 def screen_main(user, display):
+    # L'écran tourne en root par-dessus une session qu'il peut geler (SIGSTOP,
+    # deuxième fermeture forcée) : il ne doit dépendre d'aucun service de cette
+    # session. Sans cela, GTK suit la propriété AT_SPI_BUS de la fenêtre racine
+    # jusqu'au bus d'accessibilité du compte, gelé, et attend sa réponse sans
+    # fin avant de créer la moindre fenêtre (#2244). NO_AT_BRIDGE=1 est la
+    # variable d'at-spi2-atk qui coupe ce pont ; posée avant de charger GTK.
+    os.environ["NO_AT_BRIDGE"] = "1"
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
