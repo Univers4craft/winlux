@@ -271,6 +271,7 @@ pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
 pub mod timer_queue;
+pub mod ui_settings;
 pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;

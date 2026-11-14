@@ -312,10 +312,35 @@ pub unsafe extern "win64" fn clsid_from_string(value: *const u16, out: *mut Guid
         *out = Guid::default();
         return S_OK;
     }
-    let Some(value) = read_wide_string(value) else {
+    // Échec : GUID_NULL. La documentation ne dit rien de la sortie en cas
+    // d'échec ; règle à nous, comme CLSIDFromProgID (#2274).
+    *out = Guid::default();
+    let Some(text) = read_wide_string(value) else {
         return CO_E_CLASSSTRING;
     };
-    let Some(guid) = parse_guid(&value) else {
+    if let Some(guid) = parse_guid(&text) {
+        *out = guid;
+        return S_OK;
+    }
+    // « Passing the ProgID results in saving associated CLSID in pclsid »
+    // (CLSIDFromString, Remarks) : un ProgID se résout comme CLSIDFromProgID.
+    if text.starts_with('{') || clsid_from_prog_id(value, out) != S_OK {
+        *out = Guid::default();
+        return CO_E_CLASSSTRING;
+    }
+    S_OK
+}
+
+/// IIDFromString : la forme `{…}` seule, un IID n'a pas de ProgID (#2274).
+pub unsafe extern "win64" fn iid_from_string(value: *const u16, out: *mut Guid) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    if value.is_null() {
+        *out = Guid::default();
+        return S_OK;
+    }
+    let Some(guid) = read_wide_string(value).and_then(|v| parse_guid(&v)) else {
         return CO_E_CLASSSTRING;
     };
     *out = guid;
@@ -1791,7 +1816,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CoInitialize"=>fn co_initialize,"CoInitializeEx"=>fn co_initialize_ex,"CoUninitialize"=>fn co_uninitialize,
         "OleInitialize"=>fn ole_initialize,"OleUninitialize"=>fn ole_uninitialize,
         "CoTaskMemAlloc"=>fn co_task_mem_alloc,"CoTaskMemRealloc"=>fn co_task_mem_realloc,"CoTaskMemFree"=>fn co_task_mem_free,
-        "CoCreateGuid"=>fn co_create_guid,"CLSIDFromString"=>fn clsid_from_string,"IIDFromString"=>fn clsid_from_string,
+        "CoCreateGuid"=>fn co_create_guid,"CLSIDFromString"=>fn clsid_from_string,"IIDFromString"=>fn iid_from_string,
         "StringFromGUID2"=>fn string_from_guid2,"StringFromCLSID"=>fn string_from_clsid,"StringFromIID"=>fn string_from_clsid,
         "CreateStreamOnHGlobal"=>fn create_stream_on_hglobal,"GetHGlobalFromStream"=>fn get_hglobal_from_stream,
         "CoCreateInstance"=>fn co_create_instance,"CoCreateInstanceEx"=>fn co_create_instance_ex,
@@ -1845,6 +1870,39 @@ mod tests {
             assert_eq!(co_decrement_mta_usage(a), S_OK);
             assert_eq!(co_increment_mta_usage(std::ptr::null_mut()), E_INVALIDARG);
             assert_eq!(co_decrement_mta_usage(0), E_INVALIDARG);
+        }
+    }
+
+    #[test]
+    fn clsid_from_string_resout_un_progid() {
+        // #2274 : « Passing the ProgID results in saving associated CLSID in
+        // pclsid » (CLSIDFromString, Remarks).
+        let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let rempli = || parse_guid("{11111111-1111-1111-1111-111111111111}").unwrap();
+        unsafe {
+            let prog = w("Msxml2.DOMDocument");
+            let mut attendu = Guid::default();
+            assert_eq!(clsid_from_prog_id(prog.as_ptr(), &mut attendu), S_OK);
+            let mut g = rempli();
+            assert_eq!(clsid_from_string(prog.as_ptr(), &mut g), S_OK);
+            assert_eq!(guid_text(&g), guid_text(&attendu));
+            // La forme {…} reste servie.
+            let texte = w("{00112233-4455-6677-8899-AABBCCDDEEFF}");
+            assert_eq!(clsid_from_string(texte.as_ptr(), &mut g), S_OK);
+            assert_eq!(guid_text(&g), "{00112233-4455-6677-8899-AABBCCDDEEFF}");
+            // Échec : GUID_NULL (règle à nous, la documentation est muette).
+            for faux in ["Winlux.ProgIdInexistant", "{pas-un-guid}"] {
+                let mut g = rempli();
+                assert_eq!(
+                    clsid_from_string(w(faux).as_ptr(), &mut g),
+                    CO_E_CLASSSTRING
+                );
+                assert_eq!(guid_text(&g), guid_text(&Guid::default()));
+            }
+            // IIDFromString : pas de ProgID.
+            let mut g = rempli();
+            assert_eq!(iid_from_string(prog.as_ptr(), &mut g), CO_E_CLASSSTRING);
+            assert_eq!(iid_from_string(texte.as_ptr(), &mut g), S_OK);
         }
     }
 
