@@ -23,6 +23,7 @@
 //! refusée (E_NOINTERFACE) plutôt que de donner au programme une table
 //! qu'il ne saurait pas appeler.
 
+use super::com_shell;
 use super::layout::widen;
 use super::{call32, rd, wr};
 use crate::dlls::comobj::{guid, guid_str, Guid};
@@ -330,6 +331,30 @@ pub(super) static IACCPROPSERVICES: Iface = Iface {
         Some(&[I, I, I, I]),                            // ClearHmenuProps
         Some(&[I, I, OutPtr, I]),                       // ComposeHmenuIdentityString
         Some(&[I, I, OutPtr, I]),                       // DecomposeHmenuIdentityString
+    ],
+};
+
+/// IInternetSecurityManager (urlmon) : gestionnaire de zones rendu par
+/// CoInternetCreateSecurityManager (#2409). Ordre des méthodes et
+/// paramètres d'après la documentation publique d'urlmon.
+pub(super) static IINTERNETSECURITYMANAGER: Iface = Iface {
+    name: "IInternetSecurityManager",
+    iid: guid(
+        0x79EA_C9EE,
+        0xBAF9,
+        0x11CE,
+        [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),                        // SetSecuritySite (site ignoré)
+        Some(&[Out(&IUNKNOWN)]),           // GetSecuritySite
+        Some(&[I, I, I]),                  // MapUrlToZone
+        Some(&[I, I, I, I]),               // GetSecurityId
+        Some(&[I, I, I, I, I, I, I, I]),   // ProcessUrlAction
+        Some(&[I, I, OutPtr, I, I, I, I]), // QueryCustomPolicy
+        Some(&[I, I, I]),                  // SetZoneMapping
+        Some(&[I, Out(&IUNKNOWN), I]),     // GetZoneMappings (IEnumString, jamais rendu)
     ],
 };
 
@@ -970,6 +995,7 @@ static ALL: &[&Iface] = &[
     &ICUSTOMDESTINATIONLIST,
     &IACCPROPSERVER,
     &IACCPROPSERVICES,
+    &IINTERNETSECURITYMANAGER,
     &IWBEMLOCATOR,
     &IWBEMSERVICES,
     &IENUMWBEMCLASSOBJECT,
@@ -997,6 +1023,7 @@ fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_shell::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1119,7 +1146,7 @@ fn vtable32(iface: &'static Iface) -> u32 {
     maps(|m| *m.vt32.entry(key(iface)).or_insert(at))
 }
 
-fn slots(kinds: &[A]) -> usize {
+pub(super) fn slots(kinds: &[A]) -> usize {
     kinds
         .iter()
         .map(|k| match k {
@@ -1785,7 +1812,7 @@ macro_rules! k {
     }};
 }
 
-fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
+pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
     let k: &'static [A] = match (dll, func) {
         ("ole32", "CoCreateInstance") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
         ("ole32", "CoGetClassObject") => k!(I, I, I, Iid, OutQ),
@@ -1812,6 +1839,36 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
+        // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
+        // Le IBindCtx passé est vu comme IUnknown, comme dans IShellFolder.
+        ("shell32", "SHCreateItemFromParsingName") => k!(I, In(&IUNKNOWN), Iid, OutQ),
+        ("shell32", "SHCreateItemFromIDList") => k!(I, Iid, OutQ),
+        ("shell32", "SHCreateItemWithParent") => k!(I, In(&ISHELLFOLDER), I, Iid, OutQ),
+        ("shell32", "SHCreateItemFromRelativeName") => {
+            k!(In(&com_shell::ISHELLITEM), I, In(&IUNKNOWN), Iid, OutQ)
+        }
+        ("shell32", "SHCreateItemInKnownFolder") => k!(I, I, I, Iid, OutQ),
+        ("shell32", "SHCreateShellItem") => {
+            k!(I, In(&ISHELLFOLDER), I, Out(&com_shell::ISHELLITEM))
+        }
+        ("shell32", "SHCreateShellItemArray") => {
+            k!(
+                I,
+                In(&ISHELLFOLDER),
+                I,
+                Pidls,
+                Out(&com_shell::ISHELLITEMARRAY)
+            )
+        }
+        ("shell32", "SHCreateShellItemArrayFromDataObject") => k!(In(&IDATAOBJECT), Iid, OutQ),
+        ("shell32", "SHCreateShellItemArrayFromIDLists") => {
+            k!(I, Pidls, Out(&com_shell::ISHELLITEMARRAY))
+        }
+        ("shell32", "SHCreateShellItemArrayFromShellItem") => {
+            k!(In(&com_shell::ISHELLITEM), Iid, OutQ)
+        }
+        // ppidlLast pointe dans la PIDL reçue, en mémoire x86 : valeur.
+        ("shell32", "SHBindToParent") => k!(I, Iid, OutQ, OutPtr),
         ("comctl32", "ImageList_Read") => k!(In(&ISTREAM)),
         ("comctl32", "ImageList_Write") => k!(I, In(&ISTREAM)),
         ("oleaut32", "GetErrorInfo" | "#200") | ("ole32", "GetErrorInfo") => {
@@ -1828,6 +1885,9 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
+        ("urlmon", "CoInternetCreateSecurityManager") => {
+            k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
@@ -1936,5 +1996,33 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+    }
+
+    /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
+    /// un mandataire. Sans description, le pointeur 64 bits était écrit tel
+    /// quel dans la case 32 bits et l'appel de MapUrlToZone fautait.
+    #[test]
+    fn gestionnaire_de_zones_decrit() {
+        let (k, r) = api_kinds("urlmon", "CoInternetCreateSecurityManager").unwrap();
+        // stdcall.tsv : 12 octets d'arguments.
+        assert_eq!(slots(k), 3);
+        assert!(r.is_none());
+        assert!(matches!(k[1], Out(f) if std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // IUnknown (3) + 8 méthodes, comme la table du runtime.
+        assert_eq!(IINTERNETSECURITYMANAGER.count(), 11);
+        for i in 0..IINTERNETSECURITYMANAGER.count() {
+            assert!(IINTERNETSECURITYMANAGER.method(i).is_some(), "méthode {i}");
+        }
+        let iid = guid(
+            0x79EA_C9EE,
+            0xBAF9,
+            0x11CE,
+            [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+        );
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // MapUrlToZone : URL, DWORD*, flags.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
+        // ProcessUrlAction : huit arguments.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
     }
 }

@@ -12,10 +12,12 @@
 //!   (`/proc/net/{tcp,udp}{,6}`) et ouvre ou ferme exactement ces ports ;
 //! - sortantes : les processus de l'application sont placés dans le cgroup
 //!   `/sys/fs/cgroup/winlux-fw/r<id>`, filtré par `socket cgroupv2`. Le
-//!   service est prévenu de chaque `exec` par le noyau (connecteur « proc »)
-//!   et rattache le processus aussitôt ; un .exe filtré attend en plus, au
-//!   lancement, d'être rattaché avant d'exécuter son propre code (#2157).
-//!   Le balayage toutes les deux secondes reste en secours.
+//!   noyau suspend l'`exec` d'un programme filtré (fanotify
+//!   `FAN_OPEN_EXEC_PERM`) jusqu'à ce que le service l'ait rattaché : aucune
+//!   socket n'est créée hors du filtre (#2157). Sans fanotify, le connecteur
+//!   « proc » rattache juste après l'exec, sans garantie. Un .exe filtré
+//!   attend en plus, au lancement, d'être rattaché avant d'exécuter son
+//!   propre code. Le balayage toutes les deux secondes reste en secours.
 
 use crate::admin;
 use std::collections::{BTreeMap, BTreeSet};
@@ -745,6 +747,28 @@ pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
     paths.into_iter().map(|p| p + "\n").collect()
 }
 
+/// Une ligne par programme filtré en sortie, pour `status` (#2436) : un
+/// programme présent est surveillé (marque fanotify, cgroup de sa règle) ;
+/// un programme absent laisse sa règle en attente, et le démon le surveille
+/// dès que le fichier apparaît. Les règles nftables ne disent pas la
+/// différence, car elles visent le cgroup et non le fichier.
+pub fn targets_status(targets: &[(PathBuf, String)]) -> String {
+    let mut lines: Vec<String> = targets
+        .iter()
+        .map(|(path, group)| {
+            let state = if file_identity(path).is_some() {
+                "présent, surveillé"
+            } else {
+                "absent, règle en attente"
+            };
+            format!("programme {state} : {} ({group})\n", path.display())
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines.concat()
+}
+
 pub fn parse_targets(text: &str) -> Vec<PathBuf> {
     text.lines()
         .filter(|l| !l.is_empty())
@@ -880,9 +904,54 @@ fn proc_connector() -> Option<i32> {
     }
 }
 
-/// Fil du service : rattache chaque programme filtré dès son `exec`, avant
-/// qu'il ait chargé ses bibliothèques, au lieu d'attendre le balayage.
+/// Règles publiées, relues seulement quand `programmes.txt` change
+/// (configuration ou profil).
+#[derive(Default)]
+struct PublishedTargets {
+    stamp: Option<std::time::SystemTime>,
+    loaded: bool,
+    targets: Vec<(PathBuf, String)>,
+}
+
+impl PublishedTargets {
+    /// Relit les règles si la liste publiée a changé ; vrai si relu.
+    fn refresh(&mut self) -> bool {
+        let path = admin::path(TARGETS);
+        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.loaded && stamp == self.stamp {
+            return false;
+        }
+        let published = !admin::read_text(&path).unwrap_or_default().is_empty();
+        self.targets = if stamp.is_some() && published {
+            out_targets(&Config::load())
+        } else {
+            Vec::new()
+        };
+        self.stamp = stamp;
+        self.loaded = true;
+        true
+    }
+}
+
+/// Fil du service : rattache chaque programme filtré dès son `exec`. Avec
+/// fanotify, l'exec attend le rattachement (garantie stricte) ; sinon, le
+/// connecteur « proc » le fait juste après, sans garantie.
 fn watch_execs() {
+    match exec_guard() {
+        Some(fd) => guard_execs(fd),
+        None => {
+            eprintln!(
+                "winlux-firewall : fanotify indisponible ({}), rattachement après l'exec seulement",
+                std::io::Error::last_os_error()
+            );
+            follow_execs();
+        }
+    }
+}
+
+/// Connecteur « proc » : rattachement juste après l'exec. Le programme tourne
+/// déjà ; une socket ouverte avant le rattachement échappe à la règle.
+fn follow_execs() {
     let Some(fd) = proc_connector() else {
         eprintln!(
             "winlux-firewall : connecteur « proc » indisponible ({}), rattachement par balayage seulement",
@@ -891,8 +960,7 @@ fn watch_execs() {
         return;
     };
     let mut buf = vec![0u8; 16 * 1024];
-    // Règles relues quand la liste publiée change (configuration ou profil).
-    let mut cached: Option<(std::time::SystemTime, Vec<(PathBuf, String)>)> = None;
+    let mut published = PublishedTargets::default();
     loop {
         // SAFETY : `buf` est un tampon local de la taille annoncée.
         let n = unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
@@ -907,28 +975,168 @@ fn watch_execs() {
         if tgids.is_empty() {
             continue;
         }
-        let path = admin::path(TARGETS);
-        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        let fresh = matches!((&cached, stamp), (Some((s, _)), Some(t)) if *s == t);
-        if !fresh {
-            let published = !admin::read_text(&path).unwrap_or_default().is_empty();
-            cached = stamp.map(|t| {
-                let targets = if published {
-                    out_targets(&Config::load())
-                } else {
-                    Vec::new()
-                };
-                (t, targets)
-            });
-        }
-        let Some((_, targets)) = &cached else {
-            continue;
-        };
-        if targets.is_empty() {
+        published.refresh();
+        if published.targets.is_empty() {
             continue;
         }
         for tgid in tgids {
-            assign_one(&admin::path(&format!("proc/{tgid}")), targets);
+            assign_one(&admin::path(&format!("proc/{tgid}")), &published.targets);
+        }
+    }
+}
+
+// ---------- Exec suspendu jusqu'au rattachement (#2157) ----------
+//
+// fanotify `FAN_OPEN_EXEC_PERM`, posé sur les seuls programmes filtrés : le
+// noyau suspend l'`execve` du programme jusqu'à la réponse du service, qui
+// place d'abord le processus dans le cgroup de sa règle. Le programme ne
+// s'exécute donc jamais hors du filtre, et toute socket qu'il crée est
+// filtrée. La réponse est toujours « autoriser » : le pare-feu ne bloque
+// pas le lancement, seulement le réseau. Si le service s'arrête, le noyau
+// autorise les exec en attente à la fermeture du descripteur.
+
+/// Groupe fanotify de classe « contenu » (événements de permission).
+fn exec_guard() -> Option<i32> {
+    // SAFETY : appel système sans pointeur.
+    let fd = unsafe {
+        libc::fanotify_init(
+            libc::FAN_CLASS_CONTENT | libc::FAN_CLOEXEC,
+            (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_LARGEFILE) as u32,
+        )
+    };
+    (fd >= 0).then_some(fd)
+}
+
+/// Identité d'un fichier (périphérique, inode), liens symboliques suivis
+/// comme par `fanotify_mark`.
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// Pose les marques sur les programmes filtrés et rend leur identité avec
+/// leur cgroup. Un programme remplacé (mise à jour) change d'inode : la
+/// boucle compare les identités et repose les marques.
+fn mark_targets(fd: i32, targets: &[(PathBuf, String)]) -> Vec<(Option<(u64, u64)>, String)> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY : descripteur fanotify possédé ; chemins terminés par NUL.
+    unsafe {
+        libc::fanotify_mark(
+            fd,
+            libc::FAN_MARK_FLUSH,
+            0,
+            libc::AT_FDCWD,
+            std::ptr::null(),
+        );
+    }
+    let mut marked = Vec::new();
+    for (path, group) in targets {
+        let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            continue;
+        };
+        // SAFETY : voir plus haut.
+        let rc = unsafe {
+            libc::fanotify_mark(
+                fd,
+                libc::FAN_MARK_ADD,
+                libc::FAN_OPEN_EXEC_PERM,
+                libc::AT_FDCWD,
+                c.as_ptr(),
+            )
+        };
+        if rc == 0 {
+            marked.push((file_identity(path), group.clone()));
+        } else {
+            // Programme absent pour l'instant : réessayé au prochain tour.
+            marked.push((None, group.clone()));
+        }
+    }
+    marked
+}
+
+/// Événement fanotify : (masque, descripteur du fichier, processus).
+pub fn fanotify_events(buf: &[u8]) -> Vec<(u64, i32, i32)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    while at + 24 <= buf.len() {
+        let m = &buf[at..];
+        let len = u32::from_ne_bytes([m[0], m[1], m[2], m[3]]) as usize;
+        if len < 24 || at + len > buf.len() || m[4] != libc::FANOTIFY_METADATA_VERSION {
+            break;
+        }
+        let mut mask = [0u8; 8];
+        mask.copy_from_slice(&m[8..16]);
+        let fd = i32::from_ne_bytes([m[16], m[17], m[18], m[19]]);
+        let pid = i32::from_ne_bytes([m[20], m[21], m[22], m[23]]);
+        out.push((u64::from_ne_bytes(mask), fd, pid));
+        at += len;
+    }
+    out
+}
+
+/// Répond à un événement de permission : toujours « autoriser ».
+fn allow(group_fd: i32, event_fd: i32) {
+    let response = libc::fanotify_response {
+        fd: event_fd,
+        response: libc::FAN_ALLOW,
+    };
+    // SAFETY : structure locale de la taille annoncée.
+    unsafe {
+        libc::write(
+            group_fd,
+            (&response as *const libc::fanotify_response).cast(),
+            std::mem::size_of::<libc::fanotify_response>(),
+        );
+    }
+}
+
+fn guard_execs(fd: i32) {
+    let mut published = PublishedTargets::default();
+    let mut marked: Vec<(Option<(u64, u64)>, String)> = Vec::new();
+    let mut buf = vec![0u8; 8 * 1024];
+    loop {
+        let stale = marked
+            .iter()
+            .zip(&published.targets)
+            .any(|((id, _), (path, _))| *id != file_identity(path));
+        if published.refresh() || stale {
+            marked = mark_targets(fd, &published.targets);
+        }
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY : une seule structure locale.
+        if unsafe { libc::poll(&mut poll, 1, 1000) } <= 0 {
+            continue;
+        }
+        // SAFETY : `buf` est un tampon local de la taille annoncée.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        if n <= 0 {
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                return;
+            }
+            continue;
+        }
+        for (mask, event_fd, pid) in fanotify_events(&buf[..n as usize]) {
+            if event_fd < 0 {
+                continue;
+            }
+            if mask & libc::FAN_OPEN_EXEC_PERM != 0 {
+                let id = std::fs::read_link(format!("/proc/self/fd/{event_fd}"))
+                    .ok()
+                    .and_then(|p| file_identity(&p));
+                if let Some((_, group)) = marked.iter().find(|(m, _)| m.is_some() && *m == id) {
+                    let _ = std::fs::write(
+                        cgroup_root().join(group).join("cgroup.procs"),
+                        pid.to_string(),
+                    );
+                }
+                allow(fd, event_fd);
+            }
+            // SAFETY : descripteur reçu avec l'événement, fermé une fois.
+            unsafe { libc::close(event_fd) };
         }
     }
 }
@@ -1310,7 +1518,10 @@ pub fn cli(args: &[String]) -> i32 {
                 text.push_str(&s);
             }
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
-                Some(r) => text.push_str(&r),
+                Some(r) => {
+                    text.push_str(&r);
+                    text.push_str(&targets_status(&out_targets(&cfg)));
+                }
                 None => text.push_str("pare-feu désactivé pour ce profil\n"),
             }
             print_out(&text)
@@ -1351,6 +1562,85 @@ pub fn cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// Datagramme fanotify : deux événements à la suite, version vérifiée.
+    #[test]
+    fn analyse_des_evenements_fanotify() {
+        let event = |mask: u64, fd: i32, pid: i32| {
+            let mut e = Vec::new();
+            e.extend_from_slice(&24u32.to_ne_bytes());
+            e.push(libc::FANOTIFY_METADATA_VERSION);
+            e.push(0);
+            e.extend_from_slice(&24u16.to_ne_bytes());
+            e.extend_from_slice(&mask.to_ne_bytes());
+            e.extend_from_slice(&fd.to_ne_bytes());
+            e.extend_from_slice(&pid.to_ne_bytes());
+            e
+        };
+        let mut buf = event(libc::FAN_OPEN_EXEC_PERM, 7, 4242);
+        buf.extend(event(libc::FAN_OPEN_EXEC_PERM, 8, 4343));
+        assert_eq!(
+            super::fanotify_events(&buf),
+            vec![
+                (libc::FAN_OPEN_EXEC_PERM, 7, 4242),
+                (libc::FAN_OPEN_EXEC_PERM, 8, 4343)
+            ]
+        );
+        let mut wrong = event(libc::FAN_OPEN_EXEC_PERM, 7, 1);
+        wrong[4] = 99;
+        assert!(super::fanotify_events(&wrong).is_empty());
+        assert!(super::fanotify_events(&buf[..20]).is_empty());
+    }
+
+    /// Réel (root, fanotify) : l'exec d'un programme marqué reste suspendu
+    /// jusqu'à la réponse, et l'événement donne le processus qui démarre.
+    /// `cargo test --release --bin winlux exec_suspendu -- --ignored`
+    #[test]
+    #[ignore]
+    fn exec_suspendu_jusqu_a_la_reponse() {
+        let dir = std::env::temp_dir().join(format!("winlux-fan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("vrai");
+        std::fs::copy("/bin/true", &prog).unwrap();
+        let fd = super::exec_guard().expect("fanotify_init");
+        let marked = super::mark_targets(fd, &[(prog.clone(), "winlux-fw/r1".into())]);
+        assert!(marked[0].0.is_some(), "marque posée");
+        let p = prog.clone();
+        let child = std::thread::spawn(move || {
+            let mut c = std::process::Command::new(&p).spawn().unwrap();
+            let id = c.id() as i32;
+            c.wait().unwrap();
+            id
+        });
+        let mut buf = vec![0u8; 4096];
+        // SAFETY : tampon local de la taille annoncée.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+        let events = super::fanotify_events(&buf[..n as usize]);
+        assert_eq!(events.len(), 1);
+        let (mask, event_fd, pid) = events[0];
+        assert!(mask & libc::FAN_OPEN_EXEC_PERM != 0);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!child.is_finished(), "l'exec attend la réponse");
+        let id = std::fs::read_link(format!("/proc/self/fd/{event_fd}"))
+            .ok()
+            .and_then(|p| super::file_identity(&p));
+        assert_eq!(
+            id, marked[0].0,
+            "le fichier de l'événement est le programme marqué"
+        );
+        super::allow(fd, event_fd);
+        // SAFETY : descripteurs possédés.
+        unsafe {
+            libc::close(event_fd);
+            libc::close(fd);
+        }
+        assert_eq!(
+            child.join().unwrap(),
+            pid,
+            "processus de l'événement = programme lancé"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use crate::admin::test_root::Root;
 
@@ -1686,5 +1976,35 @@ mod tests {
         sorted.sort();
         assert_eq!(parse_targets(&text), sorted);
         assert!(parse_targets("").is_empty());
+    }
+
+    /// #2436 : `status` dit pour chaque programme filtré s'il est présent
+    /// (surveillé) ou absent (règle en attente).
+    #[test]
+    fn status_distingue_programme_absent() {
+        let dir = std::env::temp_dir().join(format!("winlux-fw-2436-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("app.exe");
+        std::fs::write(&present, b"MZ").unwrap();
+        let absent = dir.join("wget");
+        let targets = vec![
+            (absent.clone(), "winlux-fw/r901".to_string()),
+            (present.clone(), "winlux-fw/r3".to_string()),
+        ];
+        let text = targets_status(&targets);
+        assert!(text.contains(&format!(
+            "programme absent, règle en attente : {} (winlux-fw/r901)\n",
+            absent.display()
+        )));
+        assert!(text.contains(&format!(
+            "programme présent, surveillé : {} (winlux-fw/r3)\n",
+            present.display()
+        )));
+        assert_eq!(text.lines().count(), 2);
+        // Le fichier apparaît : la même règle passe à « surveillé ».
+        std::fs::write(&absent, b"").unwrap();
+        assert!(!targets_status(&targets).contains("absent"));
+        assert!(targets_status(&[]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

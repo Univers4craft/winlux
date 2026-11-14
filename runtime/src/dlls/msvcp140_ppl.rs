@@ -31,9 +31,23 @@
 //!   `bad_function_call`, arrête le programme avec un message, comme nos
 //!   autres fonctions `_X*`.
 //!
-//! En suspens dans #2308, faute de source admissible pour leur disposition
-//! en mémoire : `_Schedule_chore`, `_Release_chore`, le constructeur de
-//! `task_continuation_context` et `_ExceptionHolder::ReportUnhandledError`.
+//! `_ExceptionHolder::ReportUnhandledError` : aucune source admissible n'en
+//! donne le corps de bureau. Notre choix : arrêt avec message, comme
+//! `_ReportUnobservedException`. Sous Windows, une exception de tâche non
+//! observée termine aussi le processus ; l'écart porte sur le message, pas
+//! sur l'issue de l'appel.
+//!
+//! `_Schedule_chore` et `_Release_chore` : le corps est connu
+//! (`stl/src/taskscheduler.cpp` : `CreateThreadpoolWork`,
+//! `SubmitThreadpoolWork`, `CloseThreadpoolWork`, rappel
+//! `_M_callback(_M_data)`), mais l'ordre des champs de `_Threadpool_chore`
+//! est dans `ppltaskscheduler.h`, absent de la MS STL. Appeler un pointeur
+//! de fonction lu au mauvais endroit sauterait n'importe où : nous
+//! n'appelons donc rien. À l'appel, nous relevons les trois mots reçus
+//! (valeur, et pour chacun le module et la nature de la section où il
+//! tombe), puis arrêtons le programme en nommant #2308. Le relevé d'un banc
+//! donnera l'ordre mesuré. Lire la mémoire que le programme nous passe
+//! n'est pas lire son binaire.
 
 use super::Exports;
 
@@ -98,6 +112,77 @@ unsafe extern "win64" fn call_in_context(_this: usize, func: *mut usize, _ignore
     }
 }
 
+/// `_ExceptionHolder::ReportUnhandledError` (thiscall : `this` seul).
+extern "win64" fn report_unhandled_error(_this: usize) {
+    eprintln!(
+        "winlux: exception d'une tâche PPL non gérée (_ExceptionHolder::ReportUnhandledError) : arrêt du programme"
+    );
+    crate::crash::record_failure(
+        "FAST_FAIL",
+        "Concurrency::details::_ExceptionHolder::ReportUnhandledError",
+    );
+    crate::dlls::kernel32::flush_and_exit(STATUS_STACK_BUFFER_OVERRUN as i32)
+}
+
+const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+
+/// Où tombe `v` : nul, hors module, ou module+rva et nature de la section.
+fn classer(v: usize) -> String {
+    if v == 0 {
+        return "nul".into();
+    }
+    let Some(m) = crate::loader::find_module_by_addr(v) else {
+        return "hors module".into();
+    };
+    let rva = v - m.base;
+    let sec = m.pe.sections.iter().find(|s| {
+        rva >= s.rva as usize && rva < s.rva as usize + s.virtual_size.max(s.raw_size) as usize
+    });
+    match sec {
+        Some(s) if s.characteristics & IMAGE_SCN_MEM_EXECUTE != 0 => {
+            format!("{}+{rva:#x}, section exécutable {}", m.name, s.name)
+        }
+        Some(s) => format!("{}+{rva:#x}, section de données {}", m.name, s.name),
+        None => format!("{}+{rva:#x}, hors section", m.name),
+    }
+}
+
+/// Relevé des trois mots d'un `_Threadpool_chore`.
+unsafe fn releve_chore(chore: *const usize) -> String {
+    if chore.is_null() {
+        return "_Threadpool_chore nul".into();
+    }
+    (0..3)
+        .map(|i| {
+            let v = chore.add(i).read_unaligned();
+            format!("+{}={v:#x} ({})", i * 8, classer(v))
+        })
+        .collect::<Vec<_>>()
+        .join(" ; ")
+}
+
+unsafe fn chore_non_servi(fonction: &str, chore: *const usize) -> ! {
+    let releve = releve_chore(chore);
+    eprintln!(
+        "winlux: Concurrency::details::{fonction} non servi, disposition de _Threadpool_chore non établie (#2308) : {releve} ; arrêt du programme"
+    );
+    crate::crash::record_failure(
+        "ENTRYPOINT_NOT_SERVED",
+        &format!("Concurrency::details::{fonction} (#2308) {releve}"),
+    );
+    crate::dlls::kernel32::flush_and_exit(3)
+}
+
+/// `_Schedule_chore(_Threadpool_chore*)` : relevé puis arrêt (voir l'en-tête).
+unsafe extern "win64" fn schedule_chore(chore: *const usize) -> i32 {
+    chore_non_servi("_Schedule_chore", chore)
+}
+
+/// `_Release_chore(_Threadpool_chore*)` : relevé puis arrêt (voir l'en-tête).
+unsafe extern "win64" fn release_chore(chore: *const usize) {
+    chore_non_servi("_Release_chore", chore)
+}
+
 pub fn exports() -> Exports {
     crate::exports! {
         "?_LogScheduleTask@_TaskEventLogger@details@Concurrency@@QEAAX_N@Z" => fn log_schedule_task,
@@ -111,6 +196,9 @@ pub fn exports() -> Exports {
         "?_Capture@_ContextCallback@details@Concurrency@@AEAAXXZ" => fn context_vide,
         "?_Reset@_ContextCallback@details@Concurrency@@AEAAXXZ" => fn context_vide,
         "?_CallInContext@_ContextCallback@details@Concurrency@@QEBAXV?$function@$$A6AXXZ@std@@_N@Z" => fn call_in_context,
+        "?ReportUnhandledError@_ExceptionHolder@details@Concurrency@@AEAAXXZ" => fn report_unhandled_error,
+        "?_Schedule_chore@details@Concurrency@@YAHPEAU_Threadpool_chore@12@@Z" => fn schedule_chore,
+        "?_Release_chore@details@Concurrency@@YAXPEAU_Threadpool_chore@12@@Z" => fn release_chore,
     }
 }
 
@@ -174,6 +262,20 @@ mod tests {
     }
 
     #[test]
+    fn releve_d_un_chore() {
+        let mot = [0usize, 0x10, journaux_et_identifiant as *const () as usize];
+        let r = unsafe { releve_chore(mot.as_ptr()) };
+        assert!(
+            r.starts_with("+0=0x0 (nul) ; +8=0x10 (hors module) ; +16=0x"),
+            "{r}"
+        );
+        assert_eq!(
+            unsafe { releve_chore(std::ptr::null()) },
+            "_Threadpool_chore nul"
+        );
+    }
+
+    #[test]
     fn journaux_et_identifiant() {
         log_vide(0);
         log_schedule_task(0, true);
@@ -183,7 +285,7 @@ mod tests {
         assert!(id > 0);
         assert!(super::super::lookup("kernel32", "GetCurrentThreadId").is_some() || id == tid);
         let e = exports();
-        assert_eq!(e.len(), 11);
+        assert_eq!(e.len(), 14);
         assert!(e.contains_key("?_ReportUnobservedException@details@Concurrency@@YAXXZ"));
     }
 }

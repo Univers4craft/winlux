@@ -109,7 +109,9 @@ pub fn ports() -> Vec<Port> {
 
 fn dos_devices() -> Vec<(String, String)> {
     let mut v = Vec::new();
-    let mask = crate::mounts::drive_mask() | 0x4; // C: toujours
+    // Les mêmes lettres que GetLogicalDrives : C:, Z: et les lecteurs
+    // dynamiques (#2448).
+    let mask = crate::dlls::kernel32::get_logical_drives();
     let mut volume = 1;
     for i in 0..26u32 {
         if mask & (1 << i) != 0 {
@@ -665,6 +667,24 @@ mod tests {
         assert_eq!(u32::from_le_bytes(d[4..8].try_into().unwrap()), 9600);
         assert!(!parse_dcb("baud=x", &mut d));
         assert!(!parse_dcb("9600,q,8,1", &mut d));
+    }
+
+    /// Chaque lettre de GetLogicalDrives a une cible \\Device\\… (#2448).
+    #[test]
+    fn chaque_lecteur_annonce_a_une_cible_dos() {
+        let mask = crate::dlls::kernel32::get_logical_drives();
+        assert_ne!(mask & 0x0200_0000, 0, "Z: annoncé");
+        let all = query_dos_device(None).unwrap();
+        for i in 0..26u32 {
+            if mask & (1 << i) != 0 {
+                let letter = format!("{}:", (b'A' + i as u8) as char);
+                assert!(all.contains(&letter), "{letter} listé");
+                assert!(
+                    query_dos_device(Some(&letter)).unwrap()[0].starts_with("\\Device\\"),
+                    "{letter}"
+                );
+            }
+        }
     }
 
     #[test]

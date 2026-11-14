@@ -563,6 +563,9 @@ jobs:
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
           sh scripts/test-setup-run.sh
 
+      - name: Raccourci du Bureau choisi dans l'assistant (#2295)
+        run: sh scripts/test-raccourci-bureau.sh
+
       - name: Dossier système des installateurs NSIS 32 bits (#1800)
         run: sh scripts/test-sysdir-32bits.sh
 
@@ -599,6 +602,9 @@ jobs:
 
       - name: Journal de l'assistant écrit au fil de l'eau (#2328)
         run: sh scripts/test-assistant-journal.sh
+
+      - name: Consigne du programme dans les boîtes de fichiers (#2400)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
