@@ -559,6 +559,9 @@ jobs:
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
           sh scripts/test-setup-run.sh
 
+      - name: Raccourci du Bureau choisi dans l'assistant (#2295)
+        run: sh scripts/test-raccourci-bureau.sh
+
       - name: Dossier système des installateurs NSIS 32 bits (#1800)
         run: sh scripts/test-sysdir-32bits.sh
 
