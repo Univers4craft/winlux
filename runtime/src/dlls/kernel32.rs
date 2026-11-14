@@ -8128,7 +8128,7 @@ unsafe fn set_current_directory_str(path: &str) -> i32 {
 /// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
 /// défaut : c'est un tmpfs, et un installateur qui y décompresse des
 /// centaines de Mo épuise la mémoire (#2326).
-fn temp_path() -> String {
+pub(crate) fn temp_path() -> String {
     let p = ["TMP", "TEMP"]
         .iter()
         .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
