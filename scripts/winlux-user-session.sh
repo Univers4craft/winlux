@@ -348,8 +348,9 @@ wait_desktop() {
     pids="$pids $!"
     (
         while :; do
-            if test "$primary" = 1 && test -O /run/winlux/browser-chooser; then
-                rm -f /run/winlux/browser-chooser
+            # Choix du navigateur demandé par ce compte (#2243), principal ou non.
+            if test -O "/run/winlux/browser-chooser-$uid"; then
+                rm -f "/run/winlux/browser-chooser-$uid"
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
             fi
             # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
