@@ -178,7 +178,7 @@ pub fn run_phase(
         .find(|s| s.1 == "InstallFiles")
         .map(|s| s.0)
         .unwrap_or(4000);
-    let temp = std::env::temp_dir().join(format!("winlux-msi-ca-{}", std::process::id()));
+    let temp = crate::paths::setup_work_dir("msi-ca");
     // Les affectations de propriété (51) placées après le calcul des
     // chemins préparent souvent la ligne de commande d'une action
     // différée (CustomActionData) : rejouées ici à leur place.
