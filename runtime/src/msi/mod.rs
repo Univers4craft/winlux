@@ -163,6 +163,16 @@ pub fn cli(args: &[String]) -> i32 {
             crate::anticheat::REFUSED
         }
         Some(Mode::Install(p)) => {
+            // Sans /q ni /passive, msiexec montre la boîte de licence : la
+            // page du contrat s'ouvre, pas d'installation sans acceptation (#2123).
+            let flags: Vec<String> = if opts.quiet {
+                vec!["/q".into()]
+            } else {
+                Vec::new()
+            };
+            if let Some(code) = crate::setup::license::require_acceptance(&host_path(&p), &flags) {
+                return code;
+            }
             refuse_patches(&opts.props, &mut log);
             install::install(&host_path(&p), &opts, &mut log)
         }
