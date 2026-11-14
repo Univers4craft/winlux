@@ -767,6 +767,49 @@ pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
     ))
 }
 
+/// Contrat de licence du paquet (#2123) : texte du contrôle `ScrollableText`
+/// de la boîte de licence. La boîte est reconnue à son nom (« License »,
+/// « Eula »…) ou à un contrôle qui règle une propriété d'acceptation
+/// (`LicenseAccepted`, `AgreeToLicense`, `ACCEPTEULA`…).
+pub fn license_text(msi: &Path) -> Option<String> {
+    let data = std::fs::read(msi).ok()?;
+    let db = Database::parse(&data).ok()?;
+    let looks_like = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        s.contains("licen") || s.contains("eula") || s.contains("agree")
+    };
+    let accept_dialogs: Vec<String> = db
+        .rows("Control")
+        .filter(|r| looks_like(&r.str("Property")))
+        .map(|r| r.str("Dialog_"))
+        .collect();
+    let mut best: Option<(u8, String)> = None;
+    for r in db.rows("Control") {
+        if !r.str("Type").eq_ignore_ascii_case("ScrollableText") {
+            continue;
+        }
+        let dialog = r.str("Dialog_");
+        let rank = if accept_dialogs.contains(&dialog) {
+            2
+        } else if looks_like(&dialog) || looks_like(&r.str("Control")) {
+            1
+        } else {
+            continue;
+        };
+        let text = r.str("Text");
+        if text.trim().is_empty() {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(b, t)| rank > *b || (rank == *b && text.len() > t.len()))
+        {
+            best = Some((rank, text));
+        }
+    }
+    best.map(|(_, t)| crate::setup::license::from_text(&t))
+}
+
 /// Noms longs des fichiers que pose un paquet (table File), pour la
 /// détection des anti-triche noyau (#1720). Vide si le paquet est illisible.
 pub fn file_names(msi: &Path) -> Vec<String> {
