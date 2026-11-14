@@ -3541,8 +3541,15 @@ pub unsafe extern "win64" fn get_module_handle_a(name: *const u8) -> usize {
 /// Corps commun de `get_module_handle_a` et `get_module_handle_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn get_module_handle_str(name: &str) -> usize {
-    let n = name;
-    crate::dlls::module_handle(n).unwrap_or(0)
+    match crate::dlls::module_handle(name) {
+        Some(h) => h,
+        None => {
+            // Documentation de GetModuleHandle : en cas d'échec, le code s'obtient par
+            // GetLastError ; comme GetModuleHandleEx et LoadLibrary, ERROR_MOD_NOT_FOUND (#2113).
+            crate::process::set_last_error(126);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
     if name.is_null() {
@@ -11576,6 +11583,21 @@ mod tests {
             };
             assert_ne!(ca(0, b"Abc\0", b"abc\0"), 2);
             assert_eq!(ca(1, b"Abc\0", b"abc\0"), 2);
+        }
+    }
+
+    #[test]
+    fn module_absent_pose_mod_not_found() {
+        // #2113 : GetModuleHandleA/W d'un module non chargé rend NULL avec ERROR_MOD_NOT_FOUND.
+        let _teb = crate::process::test_teb();
+        let w: Vec<u16> = "absent-2113.dll".encode_utf16().chain([0]).collect();
+        unsafe {
+            crate::process::set_last_error(122);
+            assert_eq!(super::get_module_handle_w(w.as_ptr()), 0);
+            assert_eq!(crate::process::last_error(), 126);
+            crate::process::set_last_error(122);
+            assert_eq!(super::get_module_handle_a(b"absent-2113.dll\0".as_ptr()), 0);
+            assert_eq!(crate::process::last_error(), 126);
         }
     }
 
