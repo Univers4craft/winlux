@@ -2012,6 +2012,7 @@ pub unsafe extern "win64" fn beginthreadex(
     id: *mut u32,
 ) -> usize {
     let h = crate::dlls::kernel32::create_thread(attrs, stack as usize, start, arg, flags, id);
+    crate::dlls::fil_trace::note_created("_beginthreadex", start, arg, flags, h);
     if h == 0 {
         *errno() = 11;
     }
@@ -2026,6 +2027,7 @@ pub unsafe extern "win64" fn beginthread(start: usize, stack: u32, arg: usize) -
         0,
         std::ptr::null_mut(),
     );
+    crate::dlls::fil_trace::note_created("_beginthread", start, arg, 0, h);
     if h == 0 {
         *errno() = 11;
         usize::MAX

@@ -333,6 +333,30 @@ pub(super) static IACCPROPSERVICES: Iface = Iface {
     ],
 };
 
+/// IInternetSecurityManager (urlmon) : gestionnaire de zones rendu par
+/// CoInternetCreateSecurityManager (#2409). Ordre des méthodes et
+/// paramètres d'après la documentation publique d'urlmon.
+pub(super) static IINTERNETSECURITYMANAGER: Iface = Iface {
+    name: "IInternetSecurityManager",
+    iid: guid(
+        0x79EA_C9EE,
+        0xBAF9,
+        0x11CE,
+        [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),                        // SetSecuritySite (site ignoré)
+        Some(&[Out(&IUNKNOWN)]),           // GetSecuritySite
+        Some(&[I, I, I]),                  // MapUrlToZone
+        Some(&[I, I, I, I]),               // GetSecurityId
+        Some(&[I, I, I, I, I, I, I, I]),   // ProcessUrlAction
+        Some(&[I, I, OutPtr, I, I, I, I]), // QueryCustomPolicy
+        Some(&[I, I, I]),                  // SetZoneMapping
+        Some(&[I, Out(&IUNKNOWN), I]),     // GetZoneMappings (IEnumString, jamais rendu)
+    ],
+};
+
 /// IWbemLocator : WMI en lecture (#1198).
 pub(super) static IWBEMLOCATOR: Iface = Iface {
     name: "IWbemLocator",
@@ -970,6 +994,7 @@ static ALL: &[&Iface] = &[
     &ICUSTOMDESTINATIONLIST,
     &IACCPROPSERVER,
     &IACCPROPSERVICES,
+    &IINTERNETSECURITYMANAGER,
     &IWBEMLOCATOR,
     &IWBEMSERVICES,
     &IENUMWBEMCLASSOBJECT,
@@ -1828,6 +1853,9 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
+        ("urlmon", "CoInternetCreateSecurityManager") => {
+            k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
@@ -1936,5 +1964,33 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+    }
+
+    /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
+    /// un mandataire. Sans description, le pointeur 64 bits était écrit tel
+    /// quel dans la case 32 bits et l'appel de MapUrlToZone fautait.
+    #[test]
+    fn gestionnaire_de_zones_decrit() {
+        let (k, r) = api_kinds("urlmon", "CoInternetCreateSecurityManager").unwrap();
+        // stdcall.tsv : 12 octets d'arguments.
+        assert_eq!(slots(k), 3);
+        assert!(r.is_none());
+        assert!(matches!(k[1], Out(f) if std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // IUnknown (3) + 8 méthodes, comme la table du runtime.
+        assert_eq!(IINTERNETSECURITYMANAGER.count(), 11);
+        for i in 0..IINTERNETSECURITYMANAGER.count() {
+            assert!(IINTERNETSECURITYMANAGER.method(i).is_some(), "méthode {i}");
+        }
+        let iid = guid(
+            0x79EA_C9EE,
+            0xBAF9,
+            0x11CE,
+            [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+        );
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // MapUrlToZone : URL, DWORD*, flags.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
+        // ProcessUrlAction : huit arguments.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
     }
 }

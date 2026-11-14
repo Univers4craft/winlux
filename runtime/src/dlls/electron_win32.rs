@@ -613,6 +613,8 @@ unsafe extern "win64" fn NtQueryObject(
                         format!("\\??\\{w}")
                     })
                     .unwrap_or_default()
+            } else if kind == "Key" {
+                crate::registry::key_nt_name(h).unwrap_or_default()
             } else {
                 String::new()
             };
@@ -3392,6 +3394,60 @@ mod tests {
                 0x0800_0000
             );
             crate::dlls::kernel32::close_handle(h);
+        }
+    }
+
+    /// Une clé ouverte est un objet « Key » nommé \\REGISTRY\\… ; un tampon
+    /// trop court rend la taille utile (#2413).
+    #[test]
+    fn nom_nt_d_une_cle_du_registre() {
+        let _teb = crate::process::test_teb();
+        let hkcu = crate::registry::new_handle("hkcu\\Software\\Essai2413".into());
+        let hklm = crate::registry::new_handle("hklm".into());
+        let read = |h: usize, class: u32| unsafe {
+            let mut buf = [0u64; 64];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(h, class, buf.as_mut_ptr().cast(), 512, &mut got),
+                0
+            );
+            let b = buf.as_ptr() as *const u8;
+            let n = (b as *const u16).read_unaligned() as usize / 2;
+            let p = (b.add(8) as *const usize).read_unaligned() as *const u16;
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+        };
+        assert_eq!(read(hkcu, 2), "Key");
+        assert_eq!(
+            read(hkcu, 1),
+            format!(
+                "\\REGISTRY\\USER\\{}\\Software\\Essai2413",
+                crate::dlls::security::user_sid()
+            )
+        );
+        assert_eq!(read(hklm, 1), "\\REGISTRY\\MACHINE");
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0004
+            );
+            assert!(got > 16);
+            // Racine prédéfinie : pas un handle d'objet.
+            assert_eq!(
+                NtQueryObject(0x8000_0001, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
+        }
+        crate::registry::close_handle(hkcu);
+        crate::registry::close_handle(hklm);
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
         }
     }
 

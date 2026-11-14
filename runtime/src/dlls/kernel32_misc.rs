@@ -347,6 +347,12 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
         )
     };
     let _ = std::io::stdout().flush();
+    // Fil fautif (#2405), même forme que le rapport de faute.
+    eprintln!(
+        "winlux: fil {} @{:.6}",
+        unsafe { libc::syscall(libc::SYS_gettid) },
+        crate::dlls::fil_trace::monotonic()
+    );
     eprintln!(
         "\nwinlux: exception Windows 0x{code:08X} non gérée par le programme{}{detail}",
         if flags & 1 != 0 {
