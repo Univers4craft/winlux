@@ -42,6 +42,12 @@ pub fn set_current(interp: *mut Interpreter) -> *mut Interpreter {
     CURRENT.with(|c| c.replace(interp))
 }
 
+/// Délégué derrière un pointeur de fonction rendu par `callback_for`.
+pub fn delegate_for_pointer(p: usize) -> Option<usize> {
+    let i = THUNKS.iter().position(|t| *t as usize == p)?;
+    SLOTS.lock().unwrap().get(i).map(|s| s.delegate)
+}
+
 /// Délégués confiés au code natif, racines du ramasse-miettes.
 pub fn roots() -> Vec<usize> {
     SLOTS.lock().unwrap().iter().map(|s| s.delegate).collect()
