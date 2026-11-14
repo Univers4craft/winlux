@@ -67,6 +67,7 @@ esac
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
 eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
+eval "echo 'pmstatus:shared-mime-info:99.0:Processing triggers for shared-mime-info (2.4-4)' >&$fd"
 printf 'LC_ALL=%s\\n' "$LC_ALL" >> "$LOG"
 """)
     mock(bindir, "id", "echo 0\n")
@@ -183,6 +184,8 @@ esac
     (conf / "local.json").write_text(json.dumps({"id": "local", "name": "Catalogue local", "file": str(catalog)}))
     mock(bindir, "winlux", 'printf "winlux %s\\n" "$*" >> "$LOG"\n'
          'if [ "$1" = --msiexec ] && [ "$2" = --info ]; then printf "{AAAA-BBBB}\\tApp\\t1\\n"; fi\n')
+    # Page du contrat de licence (#2129) : paquet sans contrat, l'installation suit.
+    mock(bindir, "winlux-setup-wizard", 'printf "assistant %s\\n" "$*" >> "$LOG"\nexit 0\n')
 
     # --- Dépôt Scoop (archive .tar.gz de manifestes) ---
     pe64 = b"MZ" + b"\0" * 0x3A + (0x40).to_bytes(4, "little") + b"PE\0\0\x64\x86" + b"\0" * 64
@@ -418,6 +421,9 @@ esac
         check(apt_message("pmstatus", "Unpacking abiword:amd64 (3.0.5-1)") != "Unpacking abiword:amd64 (3.0.5-1)",
               f"décompression traduite ({lang})")
         check(apt_message("dlstatus", "Retrieving file 1 of 3") == ns["T"][lang]["apt_download"], f"téléchargement ({lang})")
+        check("shared-mime-info" in apt_message("pmstatus", "Processing triggers for shared-mime-info (2.4-4)")
+              and apt_message("pmstatus", "Processing triggers for shared-mime-info (2.4-4)") != ns["T"][lang]["apt_working"],
+              f"déclencheurs de dpkg expliqués ({lang}, #2186)")
         check(apt_message("pmstatus", "Quelque chose d'inconnu") == ns["T"][lang]["apt_working"], f"repli générique ({lang})")
     check("Installed abiword" not in (run / "store-progress.txt").read_text(), "pas d'anglais brut dans le Store")
 

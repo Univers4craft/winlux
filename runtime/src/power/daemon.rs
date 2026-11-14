@@ -193,30 +193,26 @@ fn lid_closed_proc(root: &Path) -> Option<bool> {
     None
 }
 
+/// `xset dpms force on|off` sur chaque écran de session (#2149).
+fn force_dpms(root: &Path, level: &str) {
+    for display in session_displays_at(root) {
+        let _ = std::process::Command::new("xset")
+            .args(["dpms", "force", level])
+            .env("DISPLAY", display)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
 fn display_off(root: &Path) {
     set_backlight_power_at(root, false);
-    let _ = std::process::Command::new("xset")
-        .args(["dpms", "force", "off"])
-        .env(
-            "DISPLAY",
-            std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
-        )
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    force_dpms(root, "off");
 }
 
 fn display_on(root: &Path) {
     set_backlight_power_at(root, true);
-    let _ = std::process::Command::new("xset")
-        .args(["dpms", "force", "on"])
-        .env(
-            "DISPLAY",
-            std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
-        )
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    force_dpms(root, "on");
 }
 
 /// Exécute une action d'alimentation ; renvoie le message de journal.
@@ -284,41 +280,129 @@ pub fn idle_step(
     }
 }
 
-/// Inactivité vue par le serveur X (extension MIT-SCREEN-SAVER) : couvre
+/// Écrans X des sessions ouvertes : `:0` (bureau principal) et ceux du
+/// registre de `winlux-sessions` (`/run/winlux/sessions/<compte>`,
+/// `display=:n`). #2149 : seul `:0` était surveillé ; pendant qu'on
+/// travaillait dans une seconde session (« Changer d'utilisateur »),
+/// l'écran s'éteignait puis l'ordinateur se mettait en veille.
+pub fn session_displays_at(root: &Path) -> Vec<String> {
+    let mut displays = vec![std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into())];
+    let mut files: Vec<PathBuf> = fs::read_dir(super::run_dir_at(root).join("sessions"))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.sort();
+    for file in files {
+        // Fichiers temporaires « .<compte>.<pid> » de winlux-sessions ignorés.
+        if file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| n.starts_with('.'))
+        {
+            continue;
+        }
+        let text = fs::read_to_string(&file).unwrap_or_default();
+        let Some(display) = text.lines().find_map(|l| l.strip_prefix("display=")) else {
+            continue;
+        };
+        let display = display.trim();
+        let valid = display
+            .strip_prefix(':')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if valid && !displays.iter().any(|d| d == display) {
+            displays.push(display.to_string());
+        }
+    }
+    displays
+}
+
+/// Inactivité vue par les serveurs X (extension MIT-SCREEN-SAVER) : couvre
 /// aussi les applications natives (navigateur, terminal) qui ne passent pas
-/// par le runtime Winlux.
+/// par le runtime Winlux. La plus petite inactivité de toutes les sessions
+/// compte : une activité dans n'importe laquelle garde la machine éveillée.
 struct XIdle {
-    conn: Option<(x11rb::rust_connection::RustConnection, u32)>,
-    retry_at: u64,
+    conns: std::collections::HashMap<String, (x11rb::rust_connection::RustConnection, u32)>,
+    retry_at: std::collections::HashMap<String, u64>,
 }
 
 impl XIdle {
-    fn secs(&mut self, now: u64) -> Option<u64> {
+    fn new() -> Self {
+        Self {
+            conns: std::collections::HashMap::new(),
+            retry_at: std::collections::HashMap::new(),
+        }
+    }
+
+    fn secs(&mut self, displays: &[String], now: u64) -> Option<u64> {
         use x11rb::connection::Connection as _;
         use x11rb::protocol::screensaver::ConnectionExt as _;
-        if self.conn.is_none() && now >= self.retry_at {
-            self.retry_at = now + 30;
-            let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
-            if let Ok((c, screen)) = x11rb::connect(Some(&display)) {
-                let root = c.setup().roots.get(screen).map(|s| s.root);
-                if let Some(root) = root {
-                    self.conn = Some((c, root));
+        self.conns.retain(|d, _| displays.contains(d));
+        let mut idle: Option<u64> = None;
+        for display in displays {
+            if !self.conns.contains_key(display)
+                && self.retry_at.get(display).is_none_or(|&at| now >= at)
+            {
+                self.retry_at.insert(display.clone(), now + 30);
+                if let Ok((c, screen)) = x11rb::connect(Some(display)) {
+                    if let Some(root) = c.setup().roots.get(screen).map(|s| s.root) {
+                        self.conns.insert(display.clone(), (c, root));
+                    }
+                }
+            }
+            let Some((c, root)) = self.conns.get(display) else {
+                continue;
+            };
+            match c
+                .screensaver_query_info(*root)
+                .ok()
+                .and_then(|r| r.reply().ok())
+            {
+                Some(info) => {
+                    let secs = u64::from(info.ms_since_user_input) / 1000;
+                    idle = Some(idle.map_or(secs, |i| i.min(secs)));
+                }
+                None => {
+                    self.conns.remove(display);
                 }
             }
         }
-        let (c, root) = self.conn.as_ref()?;
-        match c
-            .screensaver_query_info(*root)
-            .ok()
-            .and_then(|r| r.reply().ok())
-        {
-            Some(info) => Some(u64::from(info.ms_since_user_input) / 1000),
-            None => {
-                self.conn = None;
-                None
+        idle
+    }
+
+    /// #2148 : le serveur X n'éteint plus jamais l'écran de lui-même. Ses
+    /// délais DPMS (600 s par défaut chez Xorg, puis ceux que recopie
+    /// xscreensaver-gfx depuis `~/.xscreensaver`) ignoraient le délai choisi
+    /// dans Paramètres : « Jamais » ou 30 min s'éteignaient quand même à
+    /// 10 min. Ils sont remis à 0 (niveau désactivé) à chaque passage, sur
+    /// chaque écran de session ; ce démon éteint l'écran lui-même au délai
+    /// de `power.conf` (secteur ou batterie, mode Économie, demandes « écran
+    /// allumé »). Le DPMS reste activé : `xset dpms force off` en a besoin.
+    fn hold_server_dpms(&self) {
+        use x11rb::connection::RequestConnection as _;
+        use x11rb::protocol::dpms::ConnectionExt as _;
+        for (c, _) in self.conns.values() {
+            if !matches!(
+                c.extension_information(x11rb::protocol::dpms::X11_EXTENSION_NAME),
+                Ok(Some(_))
+            ) {
+                continue;
+            }
+            let current = c
+                .dpms_get_timeouts()
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .map(|r| (r.standby_timeout, r.suspend_timeout, r.off_timeout));
+            if server_dpms_needs_reset(current) {
+                if let Ok(cookie) = c.dpms_set_timeouts(0, 0, 0) {
+                    let _ = cookie.check();
+                }
             }
         }
     }
+}
+
+/// Délais DPMS du serveur X à remettre à zéro (voir `hold_server_dpms`).
+pub fn server_dpms_needs_reset(current: Option<(u16, u16, u16)>) -> bool {
+    current.is_some_and(|t| t != (0, 0, 0))
 }
 
 fn log(root: &Path, msg: &str) {
@@ -392,10 +476,7 @@ pub fn run(root: &Path) -> i32 {
     // En VM sans batterie, la veille sur inactivité figerait la machine de
     // test : seule la veille demandée explicitement reste possible.
     let virtual_machine = super::is_virtual_at(root);
-    let mut x_idle = XIdle {
-        conn: None,
-        retry_at: 0,
-    };
+    let mut x_idle = XIdle::new();
     loop {
         let event = rx.recv_timeout(Duration::from_secs(2)).ok();
         let config = Config::load_at(root);
@@ -433,7 +514,15 @@ pub fn run(root: &Path) -> i32 {
                     }
                     Some(action)
                 }
-                Hw::PowerButton => Some(config.button_action(has_battery)),
+                Hw::PowerButton => {
+                    // Écran éteint par inactivité : on le rallume, sinon
+                    // l'écran d'arrêt (et sa carte « Ces applications
+                    // empêchent l'arrêt ») restait invisible (#2254).
+                    display_on(root);
+                    screen_off = false;
+                    touch_activity_at(root);
+                    Some(config.button_action(has_battery))
+                }
                 Hw::SleepButton => Some(Action::Sleep),
                 Hw::BrightnessUp | Hw::BrightnessDown => None,
                 Hw::LidOpened => {
@@ -483,9 +572,10 @@ pub fn run(root: &Path) -> i32 {
         // Inactivité.
         let last = last_activity_at(root).unwrap_or(now);
         let mut idle = now.saturating_sub(last);
-        if let Some(x) = x_idle.secs(now) {
+        if let Some(x) = x_idle.secs(&session_displays_at(root), now) {
             idle = idle.min(x);
         }
+        x_idle.hold_server_dpms();
         let caps = sleep::capabilities_at(root);
         match idle_step(
             idle,

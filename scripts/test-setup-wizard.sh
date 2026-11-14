@@ -81,4 +81,23 @@ test -f appel.txt || fail "winlux-open n'a pas ouvert l'assistant (MSI)"
 rm -f appel.txt
 open_ "$work/demo.exe" /S || true
 test ! -e appel.txt || fail "winlux-open a ouvert l'assistant malgré /S"
-echo "setup-wizard : quatre langues, commandes, assistant NSIS et MSI sous Xvfb, winlux-open"
+# Installateur tué par un signal (#2327) : l'assistant dit que le système l'a
+# arrêté (SIGKILL : mémoire probablement insuffisante), jamais « code -9 ».
+cat >"$work/tue.sh" <<'SH'
+#!/bin/sh
+case "$1 $2" in
+    "--setup --info") printf 'nsis\tTué\t1.0\tDémo\tC:\\Program Files\\Tue\n' ;;
+    "--setup --license") exit 1 ;;
+    *) kill -KILL $$ ;;
+esac
+SH
+chmod +x "$work/tue.sh"
+for lang in fr en; do
+    HOME="$work/home" WINLUX_LANG=$lang WINLUX_SETUP_WIZARD_AUTO=1 WINLUX_BIN="$work/tue.sh" \
+        timeout 180 xvfb-run -a "$py" "$wizard" demo.exe >"$work/out.txt" 2>&1 && fail "signal : succès annoncé ($lang)"
+    grep -q "code -9" "$work/out.txt" && fail "signal : « code -9 » affiché ($lang)"
+    grep -q "(signal SIGKILL)" "$work/out.txt" || fail "signal : SIGKILL non nommé ($lang)"
+done
+grep -q "Setup was stopped by the system (signal SIGKILL). This usually means there was not enough free memory." \
+    "$work/out.txt" || fail "signal : cause absente (en)"
+echo "setup-wizard : quatre langues, commandes, assistant NSIS et MSI sous Xvfb, installateur tué par un signal, winlux-open"

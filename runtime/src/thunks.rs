@@ -144,11 +144,23 @@ pub fn describe_site(addr: usize) -> String {
         .unwrap_or_else(|| format!("{addr:#x}"))
 }
 
+/// Secondes depuis le premier appel, pour situer les lignes du journal
+/// d'API les unes par rapport aux autres entre fils (#2161).
+pub fn api_clock() -> f64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
 extern "win64" fn traced_called(info: *const Traced, ret: usize) {
     let label = unsafe { &(*info).label };
     let site = describe_site(ret);
     let tid = unsafe { libc::syscall(libc::SYS_gettid) };
-    api_log(&format!("winlux[api] {tid} {label} <- {site}"));
+    api_log(&format!(
+        "winlux[api] {tid} {label} <- {site} @{:.6}",
+        api_clock()
+    ));
 }
 
 /// Plafond d'un fichier de journal d'API ; au-delà, il devient `.1` (le
@@ -301,6 +313,11 @@ fn api_log(line: &str) {
 /// journalisé avec l'adresse de l'appelant (voir [`api_log_dir`]), puis transmis tel
 /// quel. Outil de diagnostic pour les programmes qui se bloquent.
 pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
+    // Le pont de remplissage de pile (#2120) passe sous la trace, qui
+    // garde ainsi l'adresse de l'appelant.
+    let target = stack_scrub(dll, func, target);
+    // Valeur rendue et dernière erreur (#2167), sous la trace d'entrée.
+    let target = api_ret(dll, func, target);
     let Some(filter) = api_trace_filter() else {
         return target;
     };
@@ -344,6 +361,292 @@ pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
     c.extend_from_slice(&[0xFF, 0xE0]);
     let t = alloc_code(&c);
     CACHE.lock().unwrap().push((target, t));
+    t
+}
+
+/// Motif de `WINLUX_STACK_SCRUB` : quadmot non canonique, si bien qu'un
+/// pointeur lu dans ces restes fait une faute de protection générale dès
+/// qu'il est suivi, et se reconnaît tel quel dans les registres de
+/// crash.log (#2120).
+pub const STACK_SCRUB_PATTERN: u64 = 0xF1F1_5C2B_F1F1_5C2B;
+/// Pile morte remplie sous le rsp de l'appelant à chaque retour.
+const STACK_SCRUB_BYTES: usize = 16 << 10;
+/// Octets laissés intacts juste sous le rsp de l'appelant. Windows x64 n'a
+/// pas de zone rouge (tout ce qui est sous rsp est volatil) ; la marge
+/// n'est qu'une précaution.
+const STACK_SCRUB_MARGIN: usize = 32;
+
+/// Fonctions jamais enveloppées : leur cadre, leur retour ou leur pile ne
+/// doivent pas changer (setjmp revient deux fois, les exceptions déroulent
+/// les cadres, `__chkstk` a une convention d'appel à part…).
+const STACK_SCRUB_EXCLUDED: &[&str] = &[
+    "setjmp",
+    "longjmp",
+    "raiseexception",
+    "cxxthrowexception",
+    "rtlunwind",
+    "restorecontext",
+    "ntcontinue",
+    "capturecontext",
+    "capturestackbacktrace",
+    "virtualunwind",
+    "chkstk",
+    "alloca_probe",
+    "specific_handler",
+    "framehandler",
+    "gshandler",
+    "fiber",
+    "exitthread",
+    "exitprocess",
+    "terminatethread",
+    "terminateprocess",
+    "_exit",
+    "abort",
+];
+
+fn stack_scrub_filter() -> Option<&'static [String]> {
+    static F: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| {
+        let raw = std::env::var("WINLUX_STACK_SCRUB").ok()?;
+        if raw.is_empty() || raw == "0" {
+            return None;
+        }
+        eprintln!(
+            "winlux: WINLUX_STACK_SCRUB actif, pile morte remplie de {STACK_SCRUB_PATTERN:#018x} au retour des API (#2120)"
+        );
+        Some(
+            raw.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty() && s != "1")
+                .collect(),
+        )
+    })
+    .as_deref()
+}
+
+/// Vrai si `label` (« dll!fonction ») doit passer par le pont de
+/// remplissage pour ce filtre.
+fn stack_scrub_wanted(filter: &[String], label: &str) -> bool {
+    let lower = label.to_ascii_lowercase();
+    let func = lower.rsplit('!').next().unwrap_or(&lower);
+    if STACK_SCRUB_EXCLUDED.iter().any(|x| func.contains(x)) {
+        return false;
+    }
+    filter.is_empty() || filter.iter().any(|f| lower.contains(f.as_str()))
+}
+
+/// Bornes [début, fin) de la projection lisible et inscriptible qui
+/// contient `addr`, d'après /proc/self/maps.
+fn rw_mapping_containing(maps: &str, addr: usize) -> Option<(usize, usize)> {
+    maps.lines().find_map(|l| {
+        let mut f = l.split_whitespace();
+        let (lo, hi) = f.next()?.split_once('-')?;
+        let perms = f.next()?;
+        let lo = usize::from_str_radix(lo, 16).ok()?;
+        let hi = usize::from_str_radix(hi, 16).ok()?;
+        (perms.starts_with("rw") && addr >= lo && addr < hi).then_some((lo, hi))
+    })
+}
+
+/// Début du remplissage pour un appelant dont le rsp, au retour, vaut
+/// `caller_rsp`. La zone rendue, [début, caller_rsp - marge), reste dans la
+/// projection de la pile du thread ; début = fin quand il n'y a rien à
+/// remplir sans risque. Appelé depuis le pont, sur la pile même qui sera
+/// remplie : son propre cadre est mort dès son retour.
+extern "win64" fn stack_scrub_start(caller_rsp: usize) -> usize {
+    use std::cell::Cell;
+    thread_local!(static STACK: Cell<(usize, usize)> = const { Cell::new((0, 0)) });
+    let Some(top) = caller_rsp.checked_sub(STACK_SCRUB_MARGIN) else {
+        return caller_rsp;
+    };
+    if !caller_rsp.is_multiple_of(8) {
+        return top;
+    }
+    let inside = |(lo, hi): (usize, usize)| top > lo && caller_rsp <= hi;
+    let mut range = STACK.with(Cell::get);
+    if !inside(range) {
+        let Some(r) = std::fs::read_to_string("/proc/self/maps")
+            .ok()
+            .and_then(|m| rw_mapping_containing(&m, top))
+        else {
+            return top;
+        };
+        range = r;
+        STACK.with(|s| s.set(r));
+        if !inside(range) {
+            return top;
+        }
+    }
+    stack_scrub_bounds(top, range.0)
+}
+
+/// Début aligné du remplissage sous `top`, jamais sous `lo`.
+fn stack_scrub_bounds(top: usize, lo: usize) -> usize {
+    let want = top.saturating_sub(STACK_SCRUB_BYTES).max(lo);
+    // Multiple de 8 sous `top` : rep stosq remplit exactement [début, top).
+    top - ((top - want) & !7)
+}
+
+/// Pont qui appelle `target` (jusqu'à 20 arguments win64, rax et xmm0
+/// rendus intacts, rdi préservé), puis, une fois son propre cadre défait,
+/// remplit la pile morte sous le rsp de l'appelant du motif
+/// [`STACK_SCRUB_PATTERN`] avant de revenir à l'appelant.
+fn stack_scrub_thunk(target: usize) -> usize {
+    let mut c: Vec<u8> = Vec::with_capacity(320);
+    // push rbp; mov rbp, rsp; sub rsp, 0xE0
+    c.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x81, 0xEC, 0xE0, 0, 0, 0]);
+    // Arguments 5 à 20 recopiés : mov rax, [rbp+0x30+8i]; mov [rsp+0x20+8i], rax
+    for i in 0..16u32 {
+        c.extend_from_slice(&[0x48, 0x8B, 0x85]);
+        c.extend_from_slice(&(0x30 + 8 * i).to_le_bytes());
+        c.extend_from_slice(&[0x48, 0x89, 0x84, 0x24]);
+        c.extend_from_slice(&(0x20 + 8 * i).to_le_bytes());
+    }
+    // mov rax, target; call rax
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(target as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]);
+    // mov [rsp+0xC0], rax; movdqu [rsp+0xD0], xmm0
+    c.extend_from_slice(&[0x48, 0x89, 0x84, 0x24, 0xC0, 0, 0, 0]);
+    c.extend_from_slice(&[0xF3, 0x0F, 0x7F, 0x84, 0x24, 0xD0, 0, 0, 0]);
+    // lea rcx, [rbp+0x10]; mov rax, stack_scrub_start; call rax
+    c.extend_from_slice(&[0x48, 0x8D, 0x4D, 0x10]);
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(stack_scrub_start as *const () as usize as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]);
+    // mov r10, rax; mov r11, [rsp+0xC0]; movdqu xmm0, [rsp+0xD0]
+    c.extend_from_slice(&[0x49, 0x89, 0xC2]);
+    c.extend_from_slice(&[0x4C, 0x8B, 0x9C, 0x24, 0xC0, 0, 0, 0]);
+    c.extend_from_slice(&[0xF3, 0x0F, 0x6F, 0x84, 0x24, 0xD0, 0, 0, 0]);
+    // mov rsp, rbp; pop rbp; pop r9 (adresse de retour) : rsp = celui de l'appelant
+    c.extend_from_slice(&[0x48, 0x89, 0xEC, 0x5D, 0x41, 0x59]);
+    // mov rdx, rdi; mov rdi, r10; lea rcx, [rsp-marge]; sub rcx, rdi; shr rcx, 3
+    c.extend_from_slice(&[0x48, 0x89, 0xFA, 0x4C, 0x89, 0xD7]);
+    c.extend_from_slice(&[
+        0x48,
+        0x8D,
+        0x4C,
+        0x24,
+        (STACK_SCRUB_MARGIN as u8).wrapping_neg(),
+    ]);
+    c.extend_from_slice(&[0x48, 0x29, 0xF9, 0x48, 0xC1, 0xE9, 0x03]);
+    // mov rax, motif; cld; rep stosq
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&STACK_SCRUB_PATTERN.to_le_bytes());
+    c.extend_from_slice(&[0xFC, 0xF3, 0x48, 0xAB]);
+    // mov rdi, rdx; mov rax, r11; jmp r9
+    c.extend_from_slice(&[0x48, 0x89, 0xD7, 0x4C, 0x89, 0xD8, 0x41, 0xFF, 0xE1]);
+    alloc_code(&c)
+}
+
+/// Diagnostic `WINLUX_STACK_SCRUB` (#2120) : avec `1` ou une liste de
+/// fragments de noms, chaque fonction intégrée importée par une image x64
+/// passe par [`stack_scrub_thunk`], qui remplit au retour la pile morte de
+/// l'appelant d'un motif reconnaissable. Un programme qui lit une variable
+/// locale jamais initialisée lit alors ce motif au lieu des restes de nos
+/// fonctions (Acrobat, #1818). Jamais actif par défaut ; sans effet dans
+/// un processus x86.
+pub fn stack_scrub(dll: &str, func: &str, target: usize) -> usize {
+    let Some(filter) = stack_scrub_filter() else {
+        return target;
+    };
+    if crate::wow32::active() || !stack_scrub_wanted(filter, &format!("{dll}!{func}")) {
+        return target;
+    }
+    if !is_executable(target) {
+        return target;
+    }
+    static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, t)) = cache.iter().find(|(a, _)| *a == target) {
+        return t;
+    }
+    let t = stack_scrub_thunk(target);
+    cache.push((target, t));
+    t
+}
+
+/// Fragments de `WINLUX_APITRACE_RET` (vide : toutes les fonctions), ou
+/// `None` quand la trace des retours est éteinte (#2167).
+fn api_ret_filter() -> Option<&'static [String]> {
+    static F: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| api_ret_parse(&std::env::var("WINLUX_APITRACE_RET").ok()?))
+        .as_deref()
+}
+fn api_ret_parse(raw: &str) -> Option<Vec<String>> {
+    if raw.is_empty() || raw == "0" {
+        return None;
+    }
+    Some(
+        raw.split(',')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty() && s != "1")
+            .collect(),
+    )
+}
+
+/// Fonction dont le retour est tracé.
+struct RetTraced {
+    label: String,
+}
+
+#[cfg(test)]
+static RET_LAST: Mutex<String> = Mutex::new(String::new());
+
+/// Ligne `winlux[ret]` au retour d'une fonction tracée : fil, nom, quatre
+/// premiers arguments, rax, dernière erreur du fil et appelant (#2167).
+extern "win64" fn ret_traced(
+    info: *const RetTraced,
+    ret: usize,
+    args: *const usize,
+    caller: usize,
+) {
+    let label = unsafe { &(*info).label };
+    let a = unsafe { std::slice::from_raw_parts(args, 4) };
+    let err = crate::process::last_error();
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    let site = describe_site(caller);
+    let line = format!(
+        "winlux[ret] {tid} {label}({:#x}, {:#x}, {:#x}, {:#x}) = {ret:#x} (eax {:#010x}) erreur {err} <- {site} @{:.6}",
+        a[0],
+        a[1],
+        a[2],
+        a[3],
+        ret as u32,
+        api_clock()
+    );
+    #[cfg(test)]
+    {
+        *RET_LAST.lock().unwrap_or_else(|e| e.into_inner()) = line;
+    }
+    #[cfg(not(test))]
+    api_log(&line);
+}
+
+/// Diagnostic `WINLUX_APITRACE_RET` (#2167) : avec `1` ou une liste de
+/// fragments de noms (« kernel32,user32 »), chaque fonction intégrée visée,
+/// importée par une image x64, passe par un pont qui l'appelle puis note
+/// sa valeur rendue et la dernière erreur dans le journal d'API. Jamais
+/// actif par défaut : sans la variable, `target` est rendue telle quelle.
+pub fn api_ret(dll: &str, func: &str, target: usize) -> usize {
+    let Some(filter) = api_ret_filter() else {
+        return target;
+    };
+    api_ret_with(filter, dll, func, target)
+}
+fn api_ret_with(filter: &[String], dll: &str, func: &str, target: usize) -> usize {
+    let label = format!("{}!{}", dll.to_ascii_lowercase(), func);
+    if crate::wow32::active() || !stack_scrub_wanted(filter, &label) || !is_executable(target) {
+        return target;
+    }
+    static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, t)) = cache.iter().find(|(a, _)| *a == target) {
+        return t;
+    }
+    let info = Box::into_raw(Box::new(RetTraced { label })) as u64;
+    let t = call_then_log_thunk(info, target, ret_traced as *const () as usize);
+    cache.push((target, t));
     t
 }
 
@@ -423,6 +726,12 @@ static COM_LAST: Mutex<String> = Mutex::new(String::new());
 /// Pont qui appelle `target` (jusqu'à 20 arguments win64, xmm0 rendu
 /// intact) puis journalise l'appel par [`com_traced`].
 fn com_trace_thunk(info: *const ComTraced, target: usize) -> usize {
+    call_then_log_thunk(info as u64, target, com_traced as *const () as usize)
+}
+
+/// Pont qui appelle `target` (jusqu'à 20 arguments win64, rax et xmm0
+/// rendus intacts) puis `log(info, rax, &[rcx, rdx, r8, r9], appelant)`.
+fn call_then_log_thunk(info: u64, target: usize, log: usize) -> usize {
     let mut c: Vec<u8> = Vec::with_capacity(320);
     // push rbp; mov rbp, rsp; sub rsp, 0xE0
     c.extend_from_slice(&[0x55, 0x48, 0x89, 0xE5, 0x48, 0x81, 0xEC, 0xE0, 0, 0, 0]);
@@ -447,13 +756,13 @@ fn com_trace_thunk(info: *const ComTraced, target: usize) -> usize {
     c.extend_from_slice(&[0xF3, 0x0F, 0x7F, 0x84, 0x24, 0xD0, 0, 0, 0]);
     // mov rcx, info; mov rdx, rax; lea r8, [rsp+0xA0]; mov r9, [rbp+8]
     c.extend_from_slice(&[0x48, 0xB9]);
-    c.extend_from_slice(&(info as u64).to_le_bytes());
+    c.extend_from_slice(&info.to_le_bytes());
     c.extend_from_slice(&[0x48, 0x89, 0xC2]);
     c.extend_from_slice(&[0x4C, 0x8D, 0x84, 0x24, 0xA0, 0, 0, 0]);
     c.extend_from_slice(&[0x4C, 0x8B, 0x4D, 0x08]);
-    // mov rax, com_traced; call rax
+    // mov rax, log; call rax
     c.extend_from_slice(&[0x48, 0xB8]);
-    c.extend_from_slice(&(com_traced as *const () as usize as u64).to_le_bytes());
+    c.extend_from_slice(&(log as u64).to_le_bytes());
     c.extend_from_slice(&[0xFF, 0xD0]);
     // mov rax, [rsp+0xC0]; movdqu xmm0, [rsp+0xD0]; mov rsp, rbp; pop rbp; ret
     c.extend_from_slice(&[0x48, 0x8B, 0x84, 0x24, 0xC0, 0, 0, 0]);
@@ -657,6 +966,124 @@ mod api_trace_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    extern "win64" fn somme_six(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64) -> u64 {
+        // Un cadre un peu épais, pour salir la pile sous l'appelant.
+        let mut t = [0u64; 64];
+        for (i, x) in t.iter_mut().enumerate() {
+            *x = std::hint::black_box(i as u64);
+        }
+        std::hint::black_box(&t);
+        a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f
+    }
+
+    extern "win64" fn flottant(x: f64) -> f64 {
+        x * 2.5
+    }
+
+    #[test]
+    fn remplissage_de_pile_rend_valeurs_et_remplit_la_pile_morte() {
+        let t = stack_scrub_thunk(somme_six as *const () as usize);
+        let f: extern "win64" fn(u64, u64, u64, u64, u64, u64) -> u64 =
+            unsafe { std::mem::transmute(t) };
+        assert_eq!(f(1, 2, 3, 4, 5, 6), 1 + 4 + 9 + 16 + 25 + 36);
+        let g: extern "win64" fn(f64) -> f64 =
+            unsafe { std::mem::transmute(stack_scrub_thunk(flottant as *const () as usize)) };
+        assert_eq!(g(4.0), 10.0);
+        // Appel en assembleur pour lire la pile morte juste après le retour,
+        // avant que du code Rust ne la réutilise ; rdi doit être préservé.
+        let (lu, rdi_apres, rendu): (u64, u64, u64);
+        unsafe {
+            std::arch::asm!(
+                "mov r12, rsp",
+                "and rsp, -16",
+                "sub rsp, 0x40",
+                "mov rcx, 1", "mov rdx, 1", "mov r8, 1", "mov r9, 1",
+                "mov qword ptr [rsp+0x20], 1",
+                "mov qword ptr [rsp+0x28], 1",
+                "call r13",
+                "mov rsi, [rsp-0x800]",
+                "mov rsp, r12",
+                in("r13") t,
+                out("rsi") lu,
+                inout("rdi") 0x1234_5678u64 => rdi_apres,
+                out("rax") rendu,
+                out("r12") _,
+                clobber_abi("win64"),
+            );
+        }
+        assert_eq!(rendu, 21);
+        assert_eq!(rdi_apres, 0x1234_5678);
+        assert_eq!(lu, STACK_SCRUB_PATTERN);
+    }
+
+    #[test]
+    fn trace_des_retours_sans_variable_ne_change_rien() {
+        // Sans WINLUX_APITRACE_RET (jamais posée par les tests), la cible
+        // est rendue telle quelle : aucun pont, aucun comportement changé.
+        assert!(std::env::var_os("WINLUX_APITRACE_RET").is_none());
+        let f = somme_six as *const () as usize;
+        assert_eq!(api_ret("kernel32", "CreateFileW", f), f);
+        assert_eq!(api_ret_parse(""), None);
+        assert_eq!(api_ret_parse("0"), None);
+        assert_eq!(api_ret_parse("1"), Some(vec![]));
+        assert_eq!(
+            api_ret_parse("kernel32, User32"),
+            Some(vec!["kernel32".to_string(), "user32".to_string()])
+        );
+    }
+
+    #[test]
+    fn trace_des_retours_note_valeur_et_erreur() {
+        let filtre = vec!["kernel32".to_string()];
+        let f = somme_six as *const () as usize;
+        assert_eq!(api_ret_with(&filtre, "user32", "FindWindowW", f), f);
+        assert_eq!(api_ret_with(&filtre, "kernel32", "RaiseException", f), f);
+        let t = api_ret_with(&filtre, "kernel32", "SommeSix", f);
+        assert_ne!(t, f);
+        let g: extern "win64" fn(u64, u64, u64, u64, u64, u64) -> u64 =
+            unsafe { std::mem::transmute(t) };
+        assert_eq!(g(1, 2, 3, 4, 5, 6), 91);
+        let l = RET_LAST.lock().unwrap().clone();
+        assert!(
+            l.contains("kernel32!SommeSix(0x1, 0x2, 0x3, 0x4) = 0x5b"),
+            "{l}"
+        );
+        assert!(l.contains(" erreur "), "{l}");
+    }
+
+    #[test]
+    fn remplissage_de_pile_bornes_et_exclusions() {
+        // Hors de toute projection : rien à remplir.
+        assert_eq!(stack_scrub_start(0x1000), 0x1000 - STACK_SCRUB_MARGIN);
+        // Jamais sous le bas de la projection, toujours un multiple de 8.
+        assert_eq!(stack_scrub_bounds(0x10_0000, 0x0F_F000), 0x0F_F000);
+        assert_eq!(
+            stack_scrub_bounds(0x10_0000, 0x1000),
+            0x10_0000 - STACK_SCRUB_BYTES
+        );
+        assert_eq!(
+            (0x10_0000 - stack_scrub_bounds(0x10_0000, 0x0F_F003)) % 8,
+            0
+        );
+        assert!(stack_scrub_bounds(0x10_0000, 0x0F_F003) >= 0x0F_F003);
+        let maps = "7f0000000000-7f0000200000 rw-p 00000000 00:00 0\n\
+                    7f0000200000-7f0000201000 ---p 00000000 00:00 0\n";
+        assert_eq!(
+            rw_mapping_containing(maps, 0x7f00001fff00),
+            Some((0x7f0000000000, 0x7f0000200000))
+        );
+        assert_eq!(rw_mapping_containing(maps, 0x7f0000200800), None);
+        let tout: Vec<String> = Vec::new();
+        assert!(stack_scrub_wanted(&tout, "shlwapi!PathAddBackslashW"));
+        assert!(!stack_scrub_wanted(&tout, "msvcrt!_setjmp"));
+        assert!(!stack_scrub_wanted(&tout, "kernel32!RaiseException"));
+        assert!(!stack_scrub_wanted(&tout, "ntdll!__chkstk"));
+        assert!(!stack_scrub_wanted(&tout, "kernel32!SwitchToFiber"));
+        let shlwapi = vec!["shlwapi".to_string()];
+        assert!(stack_scrub_wanted(&shlwapi, "shlwapi!PathAppendW"));
+        assert!(!stack_scrub_wanted(&shlwapi, "kernel32!CreateFileW"));
+    }
 
     #[test]
     fn journal_api_plafonne() {

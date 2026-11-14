@@ -1566,6 +1566,74 @@ fn load(data: &[u8]) -> Result<(Script, Data<'_>, usize), String> {
     Ok((script, data_src, fh))
 }
 
+/// Type de page `PWP_LICENSE` (en-tête NSIS 3, `page.wndproc_id`).
+const PWP_LICENSE: i32 = 0;
+
+impl Script {
+    /// Texte de licence : pas de limite de 4 Kio, codes de
+    /// variables ignorés, caractères échappés (code 4) gardés.
+    fn long_string(&self, ptr: i32) -> String {
+        let ptr = if ptr < 0 {
+            self.lang_offset(-(ptr + 1))
+        } else {
+            ptr
+        };
+        if ptr < 0 {
+            return String::new();
+        }
+        let mut i = ptr as usize;
+        // Texte de licence : le premier caractère donne son format pour le
+        // contrôle d'édition (texte ou RTF, Unicode). Il n'est ni un code
+        // de variable ni du contenu (#2124).
+        let first = self.ch(i);
+        if first != 0 && first < 0x20 && !matches!(first, 9 | 10 | 13) {
+            i += 1;
+        }
+        let mut units = Vec::new();
+        while units.len() < 8 << 20 {
+            let c = self.ch(i);
+            i += 1;
+            match c {
+                0 => break,
+                4 => {
+                    units.push(self.ch(i));
+                    i += 1;
+                }
+                1..=3 => i += if self.unicode { 1 } else { 2 },
+                _ => units.push(c),
+            }
+        }
+        if self.unicode {
+            String::from_utf16_lossy(&units)
+        } else {
+            units.iter().map(|&u| cp1252(u as u8)).collect()
+        }
+    }
+}
+
+/// Texte de la page de licence (`LicenseData`) de l'installateur (#2124).
+/// Une page compte 16 entiers : `dlg_id`, `wndproc_id`, trois fonctions,
+/// `flags`, cinq textes de boutons et de titre, puis `parms[5]`, dont
+/// `parms[1]` désigne la chaîne de licence.
+pub fn license(data: &[u8]) -> Option<String> {
+    let (script, _, _) = load(data).ok()?;
+    let (off, num) = script.blocks[NB_PAGES];
+    let size = script.blocks[NB_SECTIONS]
+        .0
+        .saturating_sub(off)
+        .checked_div(num)
+        .unwrap_or(0);
+    if size < 64 {
+        return None;
+    }
+    (0..num.min(64))
+        .map(|k| off + k * size)
+        .filter(|&p| script.int(p + 4) == PWP_LICENSE)
+        .map(|p| script.long_string(script.int(p + 48)))
+        .map(|t| super::license::from_text(&t))
+        .find(|t| !t.trim().is_empty())
+}
+
 /// Exécute .onInit puis les sections cochées. `inst` absent : simulation
 /// (pour lire le nom et le dossier sans rien écrire).
 fn execute(
@@ -1584,7 +1652,7 @@ fn execute(
         .unwrap_or_default();
     let temp = Folders::temp().to_string();
     let plugins_dir = if inst.is_some() {
-        let d = std::env::temp_dir().join(format!("winlux-nsis-{}", std::process::id()));
+        let d = crate::paths::setup_work_dir("nsis");
         let _ = std::fs::create_dir_all(&d);
         Some(d)
     } else {
