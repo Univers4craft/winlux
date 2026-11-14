@@ -1019,9 +1019,10 @@ static ALL: &[&Iface] = &[
     &IENUMIDLIST,
 ];
 
-fn by_iid(iid: &Guid) -> Option<&'static Iface> {
+pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
+        .chain(super::com_audio::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
         .chain(super::com_shell::ALL.iter())
         .copied()
@@ -1887,6 +1888,18 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
             k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
+        // pActivationParams (PROPVARIANT*) : non lu par IMMDevice::Activate.
+        ("mmdevapi", "ActivateAudioInterfaceAsync" | "#17") => k!(
+            I,
+            Iid,
+            I,
+            In(&super::com_audio::IACTIVATEAUDIOINTERFACECOMPLETIONHANDLER),
+            Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
+        ),
+        // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
+        ("mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9", "DllGetClassObject") => {
+            k!(I, Iid, OutQ)
         }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
