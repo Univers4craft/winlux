@@ -204,7 +204,7 @@ check cxx32 'C++ MSVC 32 bits : tout est correct'
 echo "cxx32 : exceptions C++ MSVC x86 (catch par valeur et référence, catch(...), throw;, try dans un catch)"
 if test -f "$out/com32.exe"; then
     check com32 'COM 32 bits, .* Tout est correct'
-    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
+    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo, NetworkListManager)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
     check msxml32 'MSXML : tout est correct'
