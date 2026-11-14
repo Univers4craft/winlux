@@ -548,7 +548,7 @@ fn manifest_path(code: &str) -> PathBuf {
 }
 
 impl Manifest {
-    fn save(&self) -> std::io::Result<()> {
+    pub(super) fn save(&self) -> std::io::Result<()> {
         let mut text = String::from("WINLUX-MSI-1\n");
         for (k, v) in [
             ("product", &self.product),
@@ -765,6 +765,49 @@ pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
         get("ProductVersion"),
         get("Manufacturer"),
     ))
+}
+
+/// Contrat de licence du paquet (#2123) : texte du contrôle `ScrollableText`
+/// de la boîte de licence. La boîte est reconnue à son nom (« License »,
+/// « Eula »…) ou à un contrôle qui règle une propriété d'acceptation
+/// (`LicenseAccepted`, `AgreeToLicense`, `ACCEPTEULA`…).
+pub fn license_text(msi: &Path) -> Option<String> {
+    let data = std::fs::read(msi).ok()?;
+    let db = Database::parse(&data).ok()?;
+    let looks_like = |s: &str| {
+        let s = s.to_ascii_lowercase();
+        s.contains("licen") || s.contains("eula") || s.contains("agree")
+    };
+    let accept_dialogs: Vec<String> = db
+        .rows("Control")
+        .filter(|r| looks_like(&r.str("Property")))
+        .map(|r| r.str("Dialog_"))
+        .collect();
+    let mut best: Option<(u8, String)> = None;
+    for r in db.rows("Control") {
+        if !r.str("Type").eq_ignore_ascii_case("ScrollableText") {
+            continue;
+        }
+        let dialog = r.str("Dialog_");
+        let rank = if accept_dialogs.contains(&dialog) {
+            2
+        } else if looks_like(&dialog) || looks_like(&r.str("Control")) {
+            1
+        } else {
+            continue;
+        };
+        let text = r.str("Text");
+        if text.trim().is_empty() {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(b, t)| rank > *b || (rank == *b && text.len() > t.len()))
+        {
+            best = Some((rank, text));
+        }
+    }
+    best.map(|(_, t)| crate::setup::license::from_text(&t))
 }
 
 /// Noms longs des fichiers que pose un paquet (table File), pour la
@@ -1424,11 +1467,31 @@ fn run_uninstall_actions(code: &str, log: &mut Logger) {
     );
 }
 
+/// Clé de comparaison d'un chemin posé : insensible à la casse, comme NTFS.
+fn path_key(p: &Path) -> String {
+    p.to_string_lossy().to_lowercase()
+}
+
+/// Fichiers listés par les manifestes des autres produits installés.
+fn files_of_other_products(product: &str) -> HashSet<String> {
+    Manifest::all()
+        .iter()
+        .filter(|o| !o.product.eq_ignore_ascii_case(product))
+        .flat_map(|o| o.files.iter().map(|f| path_key(f)))
+        .collect()
+}
+
 fn remove_manifest(m: &Manifest, log: &mut Logger) {
     run_uninstall_actions(&m.product, log);
     let _ = std::fs::remove_file(cached_package(&m.product));
+    // Comme le compteur de clients des composants de Windows Installer :
+    // un fichier qu'un autre produit installé a posé au même chemin reste
+    // en place (runtime VC partagé, #2315).
+    let shared = files_of_other_products(&m.product);
     for f in &m.files {
-        let _ = std::fs::remove_file(f);
+        if !shared.contains(&path_key(f)) {
+            let _ = std::fs::remove_file(f);
+        }
     }
     // RemoveFile (mode 2) et fichiers INI avant les dossiers, comme
     // RemoveFiles avant RemoveFolders sous Windows : un dossier vidé par
