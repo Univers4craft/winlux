@@ -231,6 +231,7 @@ _TR = {
     'Veille prolongée': ('Hibernate', 'Hibernar', 'Ruhezustand'),
     'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
     'Définition recommandée': ('Recommended resolution', 'Resolución recomendada', 'Empfohlene Auflösung'),
+    'Machine virtuelle sans batterie : elle ne se met pas en veille toute seule, pour ne pas se figer. « Mettre en veille » reste possible.': ('Virtual machine without a battery: it doesn’t go to sleep on its own, so it doesn’t freeze. “Sleep” is still available.', 'Máquina virtual sin batería: no se suspende sola, para no bloquearse. «Suspender» sigue disponible.', 'Virtuelle Maschine ohne Akku: Sie wechselt nicht von selbst in den Energiesparmodus, damit sie nicht einfriert. „Energie sparen“ bleibt verfügbar.'),
     'Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).': ('Virtual machine detected ({name}): display adapted to the VM (software cursor).', 'Máquina virtual detectada ({name}): pantalla adaptada a la VM (cursor por software).', 'Virtuelle Maschine erkannt ({name}): Anzeige an die VM angepasst (Software-Cursor).'),
     "Adaptation à l'écran": ('Fit to screen', 'Ajuste a la pantalla', 'An Bildschirm anpassen'),
     'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
@@ -619,6 +620,21 @@ def power_hardware(root=None):
     return battery, lid, backlight
 
 
+def idle_sleep_available(battery, root=None):
+    """Faux en machine virtuelle sans batterie : le démon d'alimentation n'y met
+    jamais en veille sur inactivité, pour ne pas figer la machine de test
+    (power/daemon.rs, même test « hypervisor » que power::is_virtual_at).
+    Les délais « Veille » n'y ont donc aucun effet (#2151)."""
+    if battery:
+        return True
+    base = Path(root or os.environ.get("WINLUX_HW_ROOT", "/"))
+    try:
+        cpuinfo = (base / "proc/cpuinfo").read_text(errors="replace")
+    except OSError:
+        return True
+    return not any(line.startswith("flags") and "hypervisor" in line.split() for line in cpuinfo.splitlines())
+
+
 def hibernate_ready(root=None):
     """Veille prolongée réellement possible : le noyau la propose (« disk »
     dans /sys/power/state) et une zone de reprise est configurée
@@ -633,11 +649,16 @@ def hibernate_ready(root=None):
     return "disk" in states and resume not in ("", "0:0")
 
 
-def power_page_items(fields, actions, hardware, hibernate=True):
-    """Champs et boutons de la page Alimentation selon le matériel détecté."""
+def power_page_items(fields, actions, hardware, hibernate=True, idle_sleep=True):
+    """Champs et boutons de la page Alimentation selon le matériel détecté.
+
+    idle_sleep faux (VM sans batterie, #2151) : les délais « Veille » sont
+    masqués ; « Mettre en veille » reste, la veille demandée marche."""
     battery, lid, backlight = hardware
     def keep(key):
         if not hibernate and key == "power-hibernate":
+            return False
+        if not idle_sleep and key.startswith("power-sleep-"):
             return False
         if not battery and (key == "battery" or key.endswith("-dc")):
             return False
@@ -1019,7 +1040,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             available = _power_modes()
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
-            _, actions = power_page_items([], actions, power_hardware(), hibernate_ready())
+            hardware = power_hardware()
+            _, actions = power_page_items([], actions, hardware, hibernate_ready(), idle_sleep=idle_sleep_available(hardware[0]))
             choices = [(title, action) for title, action in actions if action.startswith(POWER_CHOICES)]
             actions = [(title, action) for title, action in actions if not action.startswith(POWER_CHOICES)]
         if self.page == 11:
@@ -1147,6 +1169,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 value = int(value) if value.isdigit() else 600
                 self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-", delay_text)
             self.body.pack_start(card, False, False, 0)
+            if not idle_sleep_available(power_hardware()[0]):
+                # #2151 : dire pourquoi il n'y a pas de délai de veille.
+                self.label(_t("Machine virtuelle sans batterie : elle ne se met pas en veille toute seule, pour ne pas se figer. « Mettre en veille » reste possible."))
         if "power-lid" in names or "power-button" in names:
             self.label(_t("Boutons et capot"), "section")
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -1194,7 +1219,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             row = Gtk.Box(spacing=12)
             row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
             switch = Gtk.Switch(active=status.get(key, "allow") != "deny", valign=Gtk.Align.CENTER)
-            switch.connect("notify::active", lambda widget, _, base=action: self.execute(base + ("-allow" if widget.get_active() else "-deny")))
+            switch.connect("notify::active", self.privacy_toggled, action)
             row.pack_start(switch, False, False, 0)
             self.body.pack_start(row, False, False, 0)
         apps = permission_apps()
@@ -1232,6 +1257,29 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         except (OSError, subprocess.SubprocessError) as error:
             self.show_error(_t("L’opération a échoué"), str(error))
         if refresh: self.select(self.nav, None)
+
+    def privacy_toggled(self, switch, _param, base):
+        """Interrupteur caméra ou micro de tout l'appareil. Si l'opération
+        ne démarre pas, ou échoue (UAC refusée, #2416), il revient à sa
+        position précédente : l'affichage dit toujours le réglage réel."""
+        if getattr(self, "restoring_switch", False):
+            return
+        action = base + ("-allow" if switch.get_active() else "-deny")
+        self.execute(action)
+        if self.active_action != action:
+            # Pas depuis le signal même de l'interrupteur : GTK n'y supporte
+            # pas un nouveau changement d'état, on attend la boucle.
+            GLib.idle_add(lambda: (self.restore_switch(switch), False)[1])
+        else:
+            self.pending_switch = switch
+
+    def restore_switch(self, switch):
+        """Remet un interrupteur sur sa position précédente sans relancer d'action."""
+        self.restoring_switch = True
+        try:
+            switch.set_active(not switch.get_active())
+        finally:
+            self.restoring_switch = False
 
     def execute(self, action, *extra):
         if self.process is not None or self.busy: return
@@ -1325,6 +1373,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             action = self.active_action
             self.process = None
             self.active_action = None
+            switch, self.pending_switch = getattr(self, "pending_switch", None), None
+            if result and switch is not None and switch.get_parent() is not None:
+                # Réglage refusé ou en échec : l'interrupteur dit l'état réel (#2416).
+                self.restore_switch(switch)
             if result == 75 and action and action.startswith(("browser-", "store-catalog-")):
                 # Reporté faute de réseau : une information, pas une erreur technique.
                 self.show_info(_t("Pas de connexion Internet"), _t("Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté."))
@@ -1349,7 +1401,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.keep_screen_on(self.busy or (self.process is not None and self.active_action in UPDATE_ACTIONS))
         fields = FIELDS.get(self.page, [])
         if self.page == 23:
-            fields, _ = power_page_items(fields, [], power_hardware())
+            hardware = power_hardware()
+            fields, _ = power_page_items(fields, [], hardware, idle_sleep=idle_sleep_available(hardware[0]))
         def shown(key):
             value = status.get(key)
             # Échelle non réglée : automatique (et non « Indisponible »), en %.

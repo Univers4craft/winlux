@@ -824,7 +824,14 @@ pub fn sfx_config(data: &[u8], archive_at: usize) -> Option<Vec<(String, String)
         text.lines()
             .filter_map(|l| {
                 let (k, v) = l.split_once('=')?;
-                Some((k.trim().to_string(), v.trim().trim_matches('"').to_string()))
+                // Une seule paire de guillemets autour de la valeur : un
+                // `\"` final (RunProgram="\"%%T\\setup.exe\"") reste entier.
+                let v = v.trim();
+                let v = v
+                    .strip_prefix('"')
+                    .and_then(|x| x.strip_suffix('"'))
+                    .unwrap_or(v);
+                Some((k.trim().to_string(), v.to_string()))
             })
             .collect(),
     )
@@ -1000,8 +1007,13 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
         if bundle {
             return Some(run_bundle_setup(&entries, args));
         }
-        return super::web::is_downloader(&entries)
-            .then(|| super::web::run(&data, exe, args, allow_download));
+        if super::web::is_downloader(&entries) {
+            return Some(super::web::run(&data, exe, args, allow_download));
+        }
+        // Programme nommé par la configuration du SFX (Zoom, #2390).
+        let config = sfx_config(&data, at).unwrap_or_default();
+        drop(data);
+        return Some(run_sfx_program(&entries, &config, args));
     };
     let quiet = args.iter().any(|a| {
         let w = a.trim_start_matches(['/', '-']).to_ascii_lowercase();
@@ -1057,6 +1069,139 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     let rc = crate::msi::install::install(&msi_path, &opts, &mut log);
     let _ = std::fs::remove_dir_all(&work);
     Some(rc)
+}
+
+/// Programme et paramètres que le module SFX de 7-Zip lance après
+/// extraction, d'après sa configuration (aide de 7-Zip, commutateur `-sfx`) :
+/// - `RunProgram` : « Command for executing », `setup.exe` par défaut,
+///   précédée du préfixe `Directory` (`.\` par défaut, c'est-à-dire le
+///   dossier d'extraction) ; `%%T` y désigne le dossier d'extraction ;
+/// - sinon `ExecuteFile` (« Name of file for executing ») avec
+///   `ExecuteParameters`.
+///
+/// Rend le programme (relatif au dossier d'extraction, ou chemin Windows
+/// tel quel) et ses paramètres, `%%T` remplacé par `temp`.
+pub(crate) fn sfx_program(config: &[(String, String)], temp: &str) -> (String, String) {
+    let get = |k: &str| {
+        config
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| unescape(v).replace("%%T", temp))
+    };
+    let (program, params) = match (get("RunProgram"), get("ExecuteFile")) {
+        (Some(cmd), _) => split_command(&cmd),
+        (None, Some(file)) => (file, get("ExecuteParameters").unwrap_or_default()),
+        (None, None) => ("setup.exe".to_string(), String::new()),
+    };
+    let program = match get("Directory") {
+        Some(dir) if !dir.is_empty() && !is_absolute_windows(&program) => {
+            format!("{}\\{}", dir.trim_end_matches('\\'), program)
+        }
+        _ => program,
+    };
+    let program = program
+        .strip_prefix(".\\")
+        .map(str::to_string)
+        .unwrap_or(program);
+    (program, params)
+}
+
+/// `\\` et `\"` dans une valeur : l'aide de 7-Zip écrit le préfixe par
+/// défaut de `Directory` `".\\"`, soit `.\` une fois l'échappement retiré.
+fn unescape(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    let mut chars = v.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('\\' | '"'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_absolute_windows(p: &str) -> bool {
+    let b = p.as_bytes();
+    p.starts_with("\\\\") || (b.len() > 2 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+/// Premier mot d'une ligne de commande (entre guillemets ou jusqu'à
+/// l'espace) et le reste.
+fn split_command(cmd: &str) -> (String, String) {
+    let cmd = cmd.trim();
+    if let Some(rest) = cmd.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return (rest[..end].to_string(), rest[end + 1..].trim().to_string());
+        }
+    }
+    match cmd.split_once(' ') {
+        Some((p, r)) => (p.to_string(), r.trim().to_string()),
+        None => (cmd.to_string(), String::new()),
+    }
+}
+
+/// Auto-extractible 7-Zip qui lance son propre programme (Zoom, #2390),
+/// comme le module SFX : archive extraite dans le dossier temporaire du
+/// profil (sur le disque, #2326), programme de la configuration lancé et
+/// attendu, son code rendu tel quel (un contrat refusé dans ce programme
+/// rend son propre code, 1602 pour une annulation), dossier effacé ensuite.
+fn run_sfx_program(entries: &[Entry], config: &[(String, String)], args: &[String]) -> i32 {
+    let work = crate::paths::setup_work_dir("sfx");
+    let _ = std::fs::remove_dir_all(&work);
+    if let Err(code) = extract_entries(entries, &work) {
+        return code;
+    }
+    let dir = crate::paths::to_windows(&work);
+    let (program, mut params) = sfx_program(config, &dir);
+    let inside = work.join(program.split('\\').collect::<std::path::PathBuf>());
+    let win = if !is_absolute_windows(&program)
+        && !program.split('\\').any(|p| p == "..")
+        && inside.is_file()
+    {
+        crate::paths::to_windows(&inside)
+    } else {
+        program
+    };
+    if !args.is_empty() {
+        if !params.is_empty() {
+            params.push(' ');
+        }
+        params.push_str(&args.join(" "));
+    }
+    let outcome = super::run::program(&win, &params, &dir, true, false);
+    eprintln!("setup : {}", super::run::describe(&win, &outcome));
+    if !matches!(outcome, super::run::Outcome::TimedOut) {
+        let _ = std::fs::remove_dir_all(&work);
+    }
+    match outcome {
+        super::run::Outcome::Exited(c) => c,
+        super::run::Outcome::Started | super::run::Outcome::TimedOut => 0,
+        _ => 1,
+    }
+}
+
+/// Écrit les entrées de l'archive sous `work` ; en cas d'erreur, le
+/// dossier est effacé et le code 1 rendu.
+fn extract_entries(entries: &[Entry], work: &Path) -> Result<(), i32> {
+    for e in entries {
+        let path = work.join(e.name.split('\\').collect::<std::path::PathBuf>());
+        let written = if e.dir {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, &e.data))
+        };
+        if let Err(err) = written {
+            eprintln!("setup : {} : {err}", path.display());
+            let _ = std::fs::remove_dir_all(work);
+            return Err(1);
+        }
+    }
+    Ok(())
 }
 
 /// Archive d'installateur sans MSI : extraite dans un dossier temporaire,
@@ -1356,6 +1501,56 @@ pub mod tests {
         // Sans bloc : une archive simple (7-Zip lui-même).
         let plain = [b"MZ....".as_slice(), SIGNATURE].concat();
         assert!(!runs_own_setup(&plain, 6));
+    }
+
+    /// #2390 : programme lancé par le module SFX, d'après sa configuration
+    /// (aide de 7-Zip, commutateur -sfx).
+    #[test]
+    fn programme_du_module_sfx() {
+        let c = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let t = "C:\\Users\\a\\AppData\\Local\\Temp\\winlux-sfx-1";
+        // Rien : setup.exe par défaut.
+        assert_eq!(sfx_program(&[], t), ("setup.exe".into(), String::new()));
+        // ExecuteFile et ses paramètres.
+        assert_eq!(
+            sfx_program(
+                &c(&[
+                    ("ExecuteFile", "msiexec.exe"),
+                    ("ExecuteParameters", "/i 7zip.msi REINSTALL=ALL")
+                ]),
+                t
+            ),
+            ("msiexec.exe".into(), "/i 7zip.msi REINSTALL=ALL".into())
+        );
+        // RunProgram : %%T, guillemets échappés, paramètres.
+        let (p, a) = sfx_program(
+            &c(&[("RunProgram", "\\\"%%T\\\\bin\\\\setup.exe\\\" /x")]),
+            t,
+        );
+        assert_eq!(p, format!("{t}\\bin\\setup.exe"));
+        assert_eq!(a, "/x");
+        // Directory : préfixe du programme ; « .\\ » par défaut.
+        assert_eq!(
+            sfx_program(&c(&[("Directory", "bin"), ("RunProgram", "go.exe")]), t).0,
+            "bin\\go.exe"
+        );
+        assert_eq!(
+            sfx_program(&c(&[("Directory", ".\\\\"), ("RunProgram", "go.exe")]), t).0,
+            "go.exe"
+        );
+        // Bloc de configuration : une seule paire de guillemets retirée.
+        let mut d = b"MZ....".to_vec();
+        d.extend(b";!@Install@!UTF-8!\r\nRunProgram=\"\\\"%%T\\\\a.exe\\\"\"\r\n;!@InstallEnd@!");
+        let at = d.len();
+        d.extend(SIGNATURE);
+        let cfg = sfx_config(&d, at).unwrap();
+        assert_eq!(cfg[0].1, "\\\"%%T\\\\a.exe\\\"");
+        assert_eq!(sfx_program(&cfg, t).0, format!("{t}\\a.exe"));
     }
 
     #[test]

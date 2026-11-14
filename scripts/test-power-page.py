@@ -75,13 +75,32 @@ _, no_hibernate = items([], actions, (True, True, True), False)
 check("power-hibernate" not in [key for _, key in no_hibernate] and "power-suspend" in [key for _, key in no_hibernate],
       "bouton « Veille prolongée » affiché alors qu'elle n'est pas prête")
 _source = (HERE / "winlux-settings.py").read_text()
-check("power_page_items([], actions, power_hardware(), hibernate_ready())" in _source
+check("hibernate_ready()" in _source
       and 'if ready or key != "hibernate"' in _source, "page 23 : veille prolongée filtrée (bouton, capot, bouton d'alimentation)")
 check(settings["_TR"]["Alimentation"] == ("Power", "Energía", "Energie"), "« Alimentation » en quatre langues")
 source = (HERE / "winlux-settings.py").read_text()
 check('if not power_hardware()[0]: PAGES[23] = _t("Alimentation")' in source, "titre sans batterie")
-check("power_page_items(fields, [], power_hardware())" in source and "power_page_items([], actions, power_hardware()" in source,
+check(source.count("power_page_items(") >= 3 and "idle_sleep=idle_sleep_available(" in source and "hibernate_ready()" in source,
       "page 23 filtrée à l'affichage")
+
+# #2151 : en VM sans batterie, le démon ne met jamais en veille sur inactivité ;
+# les délais « Veille » sont masqués et une phrase dit pourquoi.
+idle = settings["idle_sleep_available"]
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    check(idle(False, root) is True, "sans /proc/cpuinfo : délais de veille gardés")
+    (root / "proc").mkdir()
+    (root / "proc/cpuinfo").write_text("processor\t: 0\nflags\t\t: fpu vme sse2\n")
+    check(idle(False, root) is True, "vrai PC sans batterie : délais de veille gardés")
+    (root / "proc/cpuinfo").write_text("processor\t: 0\nflags\t\t: fpu vme sse2 hypervisor\n")
+    check(idle(False, root) is False, "VM sans batterie : pas de veille sur inactivité")
+    check(idle(True, root) is True, "VM avec batterie : délais de veille gardés")
+vm_fields, vm_actions = items(fields, actions, (False, False, False), idle_sleep=False)
+vm_keys = [key for _, key in vm_fields] + [key for _, key in vm_actions]
+check(not any(key.startswith("power-sleep-") for key in vm_keys), f"VM sans batterie : délais de veille affichés {vm_keys}")
+check("power-suspend" in vm_keys and "power-screen-ac" in vm_keys, "VM sans batterie : « Mettre en veille » et écran gardés")
+note = "Machine virtuelle sans batterie : elle ne se met pas en veille toute seule, pour ne pas se figer. « Mettre en veille » reste possible."
+check(note in source and len(settings["_TR"].get(note, ())) == 3, "phrase de la VM sans batterie en quatre langues")
 
 # Menus déroulants plutôt que des boutons qui font défiler la valeur (#895).
 delay_text = settings["delay_text"]

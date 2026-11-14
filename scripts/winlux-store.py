@@ -113,7 +113,9 @@ T = {
            "apt_download": "Téléchargement des fichiers...", "apt_prepare": "Préparation de {name}...",
            "apt_unpack": "Décompression de {name}...", "apt_configure": "Configuration de {name}...",
            "apt_installed": "{name} installé", "apt_remove": "Suppression de {name}...",
-           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...", "apt_working": "Opération en cours...",
+           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...",
+           "apt_triggers": "Mise à jour du système après l'installation ({name}) : cela peut prendre quelques minutes...",
+           "apt_working": "Opération en cours...",
            "installed_version": "installé",
            "ed_label": "Site de l'éditeur",
            "ed_title": "Installer {name} ?",
@@ -158,7 +160,9 @@ T = {
            "apt_download": "Downloading files...", "apt_prepare": "Preparing {name}...",
            "apt_unpack": "Unpacking {name}...", "apt_configure": "Configuring {name}...",
            "apt_installed": "{name} installed", "apt_remove": "Removing {name}...",
-           "apt_removed": "{name} removed", "apt_finish": "Finishing...", "apt_working": "Working...",
+           "apt_removed": "{name} removed", "apt_finish": "Finishing...",
+           "apt_triggers": "Updating the system after installation ({name}): this can take a few minutes...",
+           "apt_working": "Working...",
            "installed_version": "installed",
            "ed_label": "Publisher's website",
            "ed_title": "Install {name}?",
@@ -203,7 +207,9 @@ T = {
            "apt_download": "Descargando archivos...", "apt_prepare": "Preparando {name}...",
            "apt_unpack": "Desempaquetando {name}...", "apt_configure": "Configurando {name}...",
            "apt_installed": "{name} instalado", "apt_remove": "Eliminando {name}...",
-           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...", "apt_working": "Operación en curso...",
+           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...",
+           "apt_triggers": "Actualizando el sistema tras la instalación ({name}): puede tardar unos minutos...",
+           "apt_working": "Operación en curso...",
            "installed_version": "instalado",
            "ed_label": "Sitio del editor",
            "ed_title": "¿Instalar {name}?",
@@ -249,7 +255,9 @@ T = {
            "apt_download": "Dateien werden heruntergeladen...", "apt_prepare": "{name} wird vorbereitet...",
            "apt_unpack": "{name} wird entpackt...", "apt_configure": "{name} wird eingerichtet...",
            "apt_installed": "{name} installiert", "apt_remove": "{name} wird entfernt...",
-           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...", "apt_working": "Vorgang läuft...",
+           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...",
+           "apt_triggers": "System wird nach der Installation aktualisiert ({name}): Das kann einige Minuten dauern...",
+           "apt_working": "Vorgang läuft...",
            "installed_version": "installiert",
            "ed_label": "Website des Herausgebers",
            "ed_title": "{name} installieren?",
@@ -292,7 +300,11 @@ APT_STEPS = [(r"Preparing to configure (\S+)", "apt_configure"), (r"Preparing fo
              (r"Preparing (\S+)", "apt_prepare"), (r"Unpacking (\S+)", "apt_unpack"),
              (r"(?:Configuring|Installing) (\S+)", "apt_configure"), (r"Installed (\S+)", "apt_installed"),
              (r"(?:Completely )?[Rr]emoving (\S+)", "apt_remove"), (r"(?:Completely )?[Rr]emoved (\S+)", "apt_removed"),
+             # Déclencheurs de dpkg (shared-mime-info…) : plusieurs minutes (#2186).
+             (r"(?:Processing triggers for|Running post-installation trigger) (\S+)", "apt_triggers"),
              (r"Running ", "apt_finish")]
+
+TRIGGERS = r"(?:Processing triggers for|Running post-installation trigger) "
 
 def apt_message(kind, text):
     if kind == "dlstatus":
@@ -835,6 +847,22 @@ class Source:
         return 0
 
 
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg » : lignes « compagnons=pkg:a,b » du
+    catalogue (#2075), quand l'application ne marche pas sans ce qu'apt ne
+    fait que recommander."""
+    try:
+        lines = CATALOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if line.startswith("compagnons="):
+            name, _, rest = line[11:].partition(":")
+            if name == pkg:
+                return [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)]
+    return []
+
+
 class Apt(Source):
     name, label = "apt", "Ubuntu"
     local_only = False
@@ -1052,11 +1080,25 @@ class Apt(Source):
                             pct = int(float(parts[2]))
                         except ValueError:
                             pct = 0
-                        progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
+                        if parts[0] == "pmstatus" and re.match(TRIGGERS, parts[3].strip()):
+                            # Déclencheurs de dpkg : sans avancement mesurable,
+                            # dit tel quel plutôt qu'un 99 % figé (#2186).
+                            progress(None, apt_message(parts[0], parts[3]))
+                        else:
+                            progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
             return proc.wait()
 
     def install(self, ref, progress):
-        return self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        code = self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        extras = apt_companions(ref)
+        if code == 0 and extras:
+            # Paquets compagnons (#2075) : sans les recommandations d'apt,
+            # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt.
+            # Marqués « automatiques » : la désinstallation (purge
+            # --autoremove) les retire quand plus rien ne les utilise ; un
+            # paquet déjà installé à la main le reste.
+            code = self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *extras], progress)
+        return code
 
     def remove(self, ref, progress):
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
