@@ -3002,7 +3002,7 @@ fn tables() -> &'static Tables {
 
 pub fn exports() -> Exports {
     init_std_streams();
-    crate::exports! {
+    let mut m = crate::exports! {
         // basic_ios
         "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IEAA@XZ" => fn bios_ctor::<u8>,
         "??0?$basic_ios@_WU?$char_traits@_W@std@@@std@@IEAA@XZ" => fn bios_ctor::<u16>,
@@ -3225,8 +3225,12 @@ pub fn exports() -> Exports {
         "?put@?$time_put@DV?$ostreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@QEBA?AV?$ostreambuf_iterator@DU?$char_traits@D@std@@@2@V32@AEAVios_base@2@DPEBUtm@@PEBD3@Z" => fn time_put_put,
         "_Strcoll" => fn strcoll,
         "_Strxfrm" => fn strxfrm,
-    }
+    };
+    m.extend(complements::exports());
+    m
 }
+
+mod complements;
 
 #[cfg(test)]
 mod tests;
