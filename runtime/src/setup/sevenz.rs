@@ -1010,7 +1010,7 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
             "s" | "q" | "qn" | "quiet" | "silent" | "verysilent"
         )
     });
-    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("sfx");
     let _ = std::fs::remove_dir_all(&work);
     let mut msi_path = None;
     for e in &entries {
@@ -1034,6 +1034,14 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     }
     drop(entries);
     let msi_path = msi_path?;
+    // Contrat de licence du MSI porté (Acrobat Reader, #2330) : la même
+    // page que pour msiexec, avant toute installation. Refus = 1602, le
+    // contenu extrait est effacé et rien n'est installé. Une option
+    // silencieuse vaut acceptation, comme sous Windows.
+    if let Some(code) = super::license::require_acceptance(&msi_path, args) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Some(code);
+    }
     let mut log = crate::msi::install::Logger { file: None, quiet };
     // Correctif nommé par setup.ini (Acrobat) : pas encore appliqué (#1715).
     if let Some((_, patch)) = product.iter().find(|(k, _)| k == "patch") {
@@ -1054,7 +1062,7 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
 /// Archive d'installateur sans MSI : extraite dans un dossier temporaire,
 /// puis son `setup.exe` est lancé et attendu ; son code est rendu (#1738).
 fn run_bundle_setup(entries: &[Entry], args: &[String]) -> i32 {
-    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("sfx");
     let _ = std::fs::remove_dir_all(&work);
     let mut setup = None;
     for e in entries {
@@ -1373,6 +1381,72 @@ pub mod tests {
         std::fs::write(&exe, &d).unwrap();
         assert_eq!(chain(&exe, &[], false), Some(1));
         assert_eq!(chain(&exe, &[], true), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #2330 : un auto-extractible qui porte un MSI à contrat (Acrobat
+    /// Reader) montre la page du contrat avant d'installer ; refus ou pas
+    /// d'affichage = 1602, rien d'installé, le contenu extrait effacé.
+    #[test]
+    fn contrat_du_msi_porte_par_l_auto_extractible() {
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("winlux-sfx-licence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut d = vec![0u8; 0x200];
+        d[0..2].copy_from_slice(b"MZ");
+        d[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        d[0x80..0x84].copy_from_slice(b"PE\0\0");
+        d[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        d.extend(b";!@Install@!UTF-8!\r\nExecuteFile=\"setup.exe\"\r\n;!@InstallEnd@!");
+        d.extend(build_copy_archive(
+            &[
+                ("setup.exe", b"MZ"),
+                (
+                    "x64\\Licence.msi",
+                    include_bytes!("../msi/testdata/licence.msi"),
+                ),
+            ],
+            "x64",
+        ));
+        let exe = dir.join("Reader.exe");
+        std::fs::write(&exe, &d).unwrap();
+        let refuse = dir.join("refuse.sh");
+        std::fs::write(&refuse, "#!/bin/sh\nexit 66\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&refuse, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let keys = [
+            "WINLUX_HOME",
+            "WINLUX_DRIVE_C",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "WINLUX_SETUP_WIZARD",
+            "WINLUX_SETUP_DEPTH",
+        ];
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        std::env::set_var("WINLUX_HOME", &home);
+        std::env::set_var("WINLUX_DRIVE_C", &home);
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("WINLUX_SETUP_DEPTH");
+        // Page du contrat, refusée.
+        std::env::set_var("DISPLAY", ":99");
+        std::env::set_var("WINLUX_SETUP_WIZARD", &refuse);
+        let refused = chain(&exe, &[], false);
+        // Sans affichage : la page ne peut pas s'ouvrir.
+        std::env::remove_var("DISPLAY");
+        let headless = chain(&exe, &[], false);
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        assert_eq!(refused, Some(1602));
+        assert_eq!(headless, Some(1602));
+        assert!(!home.join("Program Files").exists(), "rien d'installé");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

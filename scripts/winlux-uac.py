@@ -197,6 +197,12 @@ def needs_password(user):
 def verify(user, password):
     if _known(user):
         return LOCK["check_password"](user, password)
+    # Autre compte (un compte standard tape le mot de passe d'un
+    # administrateur) : /etc/shadow est illisible ici, le relais root vérifie
+    # que c'est un administrateur et que le mot de passe est le sien (#2292).
+    if os.geteuid() != 0 and user != LOCK["session_account"]():
+        answer = LOCK["relay_check"](user, password, "admin-check")
+        return bool(answer)
     # sudo vérifie le mot de passe de l'utilisateur courant et son
     # appartenance aux administrateurs.
     if os.geteuid() != 0 and user == LOCK["session_account"]():

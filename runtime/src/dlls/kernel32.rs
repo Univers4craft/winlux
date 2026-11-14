@@ -4183,6 +4183,29 @@ fn heap_diag_parse(v: &str) -> (bool, bool, bool) {
     let has = |w: &str| v.split(',').any(|x| x.trim() == w);
     (has("trace"), has("nofree"), has("lfh"))
 }
+/// `fill` (#2156) : un bloc rendu par HeapAlloc sans HEAP_ZERO_MEMORY, ou
+/// la partie agrandie par HeapReAlloc, est rempli de [`HEAP_FILL_PATTERN`].
+/// Un programme qui suit un pointeur lu dans un champ jamais initialisé
+/// fait alors une faute avec ce motif dans le registre fautif (Acrobat,
+/// #1818). Jamais actif par défaut.
+fn heap_fill() -> bool {
+    static FILL: OnceLock<bool> = OnceLock::new();
+    *FILL.get_or_init(|| heap_fill_parse(&std::env::var("WINLUX_HEAP_DIAG").unwrap_or_default()))
+}
+fn heap_fill_parse(v: &str) -> bool {
+    v.split(',').any(|x| x.trim() == "fill")
+}
+/// Motif de `WINLUX_HEAP_DIAG=fill` : quadmot non canonique, distinct de
+/// celui de WINLUX_STACK_SCRUB (0xF1F15C2B…).
+pub(crate) const HEAP_FILL_PATTERN: u64 = 0xF2F2_5A11_F2F2_5A11;
+/// Remplit `len` octets à `p` du motif, dans l'ordre de la mémoire (petit
+/// boutiste), y compris un reste de moins de 8 octets.
+unsafe fn heap_fill_bytes(p: *mut u8, len: usize) {
+    let pat = HEAP_FILL_PATTERN.to_le_bytes();
+    for i in 0..len {
+        *p.add(i) = pat[i % 8];
+    }
+}
 const LFH_LIMIT: usize = 16 * 1024;
 const LFH_PER_CLASS: usize = 4096;
 fn lfh_class(size: usize) -> usize {
@@ -4251,6 +4274,26 @@ mod tests_diagnostic_tas {
         assert_eq!(super::lfh_class(0), 16);
         assert_eq!(super::lfh_class(17), 32);
     }
+
+    /// WINLUX_HEAP_DIAG=fill (#2156) : motif reconnaissable, octet par
+    /// octet, y compris un reste de moins de 8 octets.
+    #[test]
+    fn remplissage_du_tas() {
+        assert!(super::heap_fill_parse("trace,fill"));
+        assert!(!super::heap_fill_parse("trace,lfh"));
+        assert!(!super::heap_fill_parse(""));
+        let mut b = [0u8; 21];
+        unsafe { super::heap_fill_bytes(b.as_mut_ptr(), 19) };
+        let pat = super::HEAP_FILL_PATTERN.to_le_bytes();
+        for (i, x) in b.iter().enumerate().take(19) {
+            assert_eq!(*x, pat[i % 8]);
+        }
+        assert_eq!(&b[19..], &[0, 0]);
+        assert_eq!(
+            u64::from_le_bytes(b[8..16].try_into().unwrap()),
+            0xF2F2_5A11_F2F2_5A11
+        );
+    }
 }
 
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
@@ -4262,6 +4305,8 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
     if !p.is_null() {
         if flags & 8 != 0 {
             std::ptr::write_bytes(p, 0, size);
+        } else if heap_fill() {
+            heap_fill_bytes(p as *mut u8, size);
         }
         lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
             .insert(p as usize, size.max(1));
@@ -4271,7 +4316,7 @@ pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapAlloc({size}) = {p:p} (fil {})",
+                "HeapAlloc({size}, drapeaux {flags:#x}) = {p:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4323,7 +4368,7 @@ pub unsafe extern "win64" fn heap_realloc(
             crate::log::Level::Warn,
             "tas",
             &format_args!(
-                "HeapReAlloc({p:p}, {size}) = {q:p} (fil {})",
+                "HeapReAlloc({p:p}, {size}, drapeaux {flags:#x}) = {q:p} (fil {})",
                 libc::syscall(libc::SYS_gettid)
             ),
         );
@@ -4336,6 +4381,8 @@ pub unsafe extern "win64" fn heap_realloc(
     allocations.insert(q as usize, size.max(1));
     if flags & 8 != 0 && size > old {
         std::ptr::write_bytes((q as *mut u8).add(old), 0, size - old);
+    } else if heap_fill() && size > old {
+        heap_fill_bytes((q as *mut u8).add(old), size - old);
     }
     q
 }
@@ -8061,11 +8108,18 @@ unsafe fn set_current_directory_str(path: &str) -> i32 {
         }
     }
 }
+/// GetTempPath : TMP, puis TEMP, sinon le dossier temporaire du profil
+/// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
+/// défaut : c'est un tmpfs, et un installateur qui y décompresse des
+/// centaines de Mo épuise la mémoire (#2326).
 fn temp_path() -> String {
-    let p = std::env::var_os("TMPDIR")
-        .map(std::path::PathBuf::from)
+    let p = ["TMP", "TEMP"]
+        .iter()
+        .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
+        .map(|v| crate::paths::to_linux(&v))
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        .unwrap_or_else(crate::paths::profile_temp);
+    let _ = std::fs::create_dir_all(&p);
     let mut s = crate::paths::to_windows(&p);
     if !s.ends_with('\\') {
         s.push('\\');
