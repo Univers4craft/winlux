@@ -898,6 +898,28 @@ unsafe extern "win64" fn geometry_stroke_contains(
     S_OK
 }
 
+/// Segments des figures aplaties, dans l'ordre du tracé.
+unsafe fn flat_segments(this: *mut GeometryObj, m: *const Matrix) -> Vec<(Pt, Pt)> {
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
+    let mut out = Vec::new();
+    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
+        let n = if *closed {
+            poly.len()
+        } else {
+            poly.len().saturating_sub(1)
+        };
+        for i in 0..n {
+            out.push((poly[i], poly[(i + 1) % poly.len()]));
+        }
+    }
+    out
+}
+
+fn seg_len(a: Pt, b: Pt) -> f32 {
+    ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
+}
+
 /// ComputeLength(transform, tolérance, *longueur) : somme des segments
 /// des figures aplaties.
 unsafe extern "win64" fn geometry_length(
@@ -909,21 +931,65 @@ unsafe extern "win64" fn geometry_length(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
-    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
-    let mut len = 0.0;
-    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
-        let n = if *closed {
-            poly.len()
-        } else {
-            poly.len().saturating_sub(1)
-        };
-        for i in 0..n {
-            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-            len += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
-        }
+    *out = flat_segments(this, m)
+        .iter()
+        .map(|&(a, b)| seg_len(a, b))
+        .sum();
+    S_OK
+}
+
+/// Point et tangente unitaire à une longueur donnée le long des figures
+/// aplaties, la longueur étant ramenée entre 0 et la longueur totale.
+fn point_at_length(segs: &[(Pt, Pt)], length: f32) -> (Pt, Pt) {
+    let segs: Vec<&(Pt, Pt)> = segs
+        .iter()
+        .filter(|&&(a, b)| seg_len(a, b) > 1e-6)
+        .collect();
+    let Some(&&(first, _)) = segs.first() else {
+        return ((0.0, 0.0), (0.0, 0.0));
+    };
+    let tangent = |a: Pt, b: Pt| {
+        let l = seg_len(a, b);
+        ((b.0 - a.0) / l, (b.1 - a.1) / l)
+    };
+    let mut left = length.max(0.0);
+    if length <= 0.0 {
+        let (a, b) = *segs[0];
+        return (first, tangent(a, b));
     }
-    *out = len;
+    for &&(a, b) in &segs {
+        let l = seg_len(a, b);
+        if left <= l {
+            let t = left / l;
+            return (
+                (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t),
+                tangent(a, b),
+            );
+        }
+        left -= l;
+    }
+    let &&(a, b) = segs.last().unwrap();
+    (b, tangent(a, b))
+}
+
+/// ComputePointAtLength(longueur, transform, tolérance, *point, *tangente)
+/// (#2454) : le sélecteur d'ancrage du dialogue « Nouvelle image » de
+/// Paint.NET en tire ses flèches. Prototype : d2d1.h des en-têtes mingw-w64.
+unsafe extern "win64" fn geometry_point_at_length(
+    this: *mut GeometryObj,
+    length: f32,
+    m: *const Matrix,
+    _tol: f32,
+    point_out: *mut [f32; 2],
+    tangent_out: *mut [f32; 2],
+) -> i32 {
+    let (p, t) = point_at_length(&flat_segments(this, m), length);
+    if !point_out.is_null() {
+        *point_out = [p.0, p.1];
+    }
+    if !tangent_out.is_null() {
+        *tangent_out = [t.0, t.1];
+    }
     S_OK
 }
 
@@ -1148,7 +1214,7 @@ macro_rules! geometry_vtable {
             unsupported!("Outline"),
             unsupported!("ComputeArea"),
             geometry_length as *const (),
-            unsupported!("ComputePointAtLength"),
+            geometry_point_at_length as *const (),
             geometry_widen as *const (),
             $($extra),*
         ]);
@@ -1190,7 +1256,7 @@ static GEOMETRY_VT: VTable<22> = VTable([
     unsupported!("Outline"),
     unsupported!("ComputeArea"),
     geometry_length as *const (),
-    unsupported!("ComputePointAtLength"),
+    geometry_point_at_length as *const (),
     geometry_widen as *const (),
     path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
     path_stream as *const (),
@@ -4332,6 +4398,68 @@ mod tests {
             release_obj(path);
             release_obj(b);
             release_obj(a);
+            release_obj(f.cast());
+        }
+    }
+
+    /// #2454 : ComputePointAtLength sur un rectangle 10×10 (sens du tracé
+    /// haut, droite, bas, gauche), longueur ramenée dans [0, 40].
+    #[test]
+    fn point_a_une_longueur() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            type PointAt = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *const Matrix,
+                f32,
+                *mut [f32; 2],
+                *mut [f32; 2],
+            ) -> i32;
+            let mut g = std::ptr::null_mut();
+            let rc = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 10.0,
+                b: 10.0,
+            };
+            assert_eq!(method::<RectGeo>(f.cast(), 5)(f.cast(), &rc, &mut g), S_OK);
+            let at = |len: f32| {
+                let (mut p, mut t) = ([9.0f32; 2], [9.0f32; 2]);
+                assert_eq!(
+                    method::<PointAt>(g, 15)(g, len, std::ptr::null(), 0.25, &mut p, &mut t),
+                    S_OK
+                );
+                (p, t)
+            };
+            let close =
+                |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+            let total = {
+                type Len =
+                    unsafe extern "win64" fn(*mut c_void, *const Matrix, f32, *mut f32) -> i32;
+                let mut l = 0.0;
+                method::<Len>(g, 14)(g, std::ptr::null(), 0.25, &mut l);
+                l
+            };
+            assert!((total - 40.0).abs() < 1e-3);
+            let (p0, t0) = at(0.0);
+            let (p5, t5) = at(5.0);
+            // Le premier côté part du premier point dans sa direction.
+            assert!((p5[0] - p0[0] - 5.0 * t0[0]).abs() < 1e-3);
+            assert!((p5[1] - p0[1] - 5.0 * t0[1]).abs() < 1e-3);
+            assert!(close(t5, t0));
+            assert!((t0[0].hypot(t0[1]) - 1.0).abs() < 1e-3, "tangente unitaire");
+            // À mi-parcours, le point opposé au départ.
+            let (p20, _) = at(20.0);
+            assert!(close(p20, [10.0 - p0[0], 10.0 - p0[1]]));
+            // Au-delà de la longueur : la fin, c'est-à-dire le départ.
+            let (pf, _) = at(100.0);
+            assert!(close(pf, p0));
+            let (pn, _) = at(-3.0);
+            assert!(close(pn, p0));
+            release_obj(g);
             release_obj(f.cast());
         }
     }
