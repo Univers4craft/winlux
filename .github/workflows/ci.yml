@@ -586,6 +586,9 @@ jobs:
       - name: Contrat de licence des installateurs (#2123 à #2126)
         run: sh scripts/test-licence-installateurs.sh
 
+      - name: Journal de l'assistant écrit au fil de l'eau (#2328)
+        run: sh scripts/test-assistant-journal.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
