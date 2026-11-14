@@ -1,7 +1,7 @@
 #!/bin/sh
 # Régénère les paquets MSI de test à partir de nos propres sources.
 #
-# Origine : sample.msi et tables.msi sont produits ici par msitools
+# Origine : sample.msi, tables.msi et licence.msi sont produits ici par msitools
 # (wixl et msibuild, logiciel libre du projet GNOME, LGPL), à partir des
 # descriptions sample.wxs / tables.wxs et des tables tables/*.idt écrites
 # par l'équipe Winlux. Les fichiers embarqués sont des textes de test
@@ -30,4 +30,8 @@ wixl -a x64 -o "$here/tables.msi" "$here/tables.wxs"
 for t in "$here"/tables/*.idt; do
     msibuild "$here/tables.msi" -i "$t"
 done
+# licence.msi (#2123) : sample.msi plus une table Control avec une boîte de
+# licence (texte RTF écrit par l'équipe Winlux) et un lisez-moi.
+cp "$here/sample.msi" "$here/licence.msi"
+msibuild "$here/licence.msi" -i "$here/licence/Control.idt"
 echo "Paquets régénérés dans $here"
