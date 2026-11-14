@@ -76,6 +76,27 @@ def key(name):
     pump(0.3)
 
 
+def wallpaper_apex(path):
+    """Première ligne (en 1920x1080) où le centre du fond d'écran s'écarte
+    nettement du ciel voisin : le sommet du prisme."""
+    from gi.repository import GdkPixbuf
+    image = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 1920, 1080, False)
+    pixels, stride, channels = image.get_pixels(), image.get_rowstride(), image.get_n_channels()
+    def at(x, y):
+        offset = y * stride + x * channels
+        return pixels[offset:offset + 3]
+    for y in range(150, 540):
+        if sum(abs(a - b) for a, b in zip(at(958, y), at(900, y))) > 80:
+            return y
+    raise AssertionError(f"sommet du prisme introuvable dans {path}")
+
+
+BUILD = (HERE / "build-live-iso.sh").read_text(encoding="utf-8")
+DEFAULT_WALLPAPER = BUILD.split('wallpaper_src="$root/', 1)[1].split('"', 1)[0]
+APEX_1080 = wallpaper_apex(HERE.parent / DEFAULT_WALLPAPER)
+print(f"fond par défaut {DEFAULT_WALLPAPER} : sommet du prisme à {APEX_1080}/1080")
+
+
 def scenario():
     app = find_lock()
     try:
@@ -89,12 +110,13 @@ def scenario():
         pump(0.2)
         if app.view != "clock":
             failures.append(f"vue de départ {app.view!r} au lieu de l'horloge")
-        # Le losange du fond d'écran (1920x1080, mis à l'échelle « cover »)
-        # commence à 367/1080 de la hauteur : l'horloge doit finir au-dessus.
-        # En 1366x768 il recouvrait la date et l'invite (VM, 3 novembre).
+        # Le prisme du fond d'écran par défaut (mis à l'échelle « cover ») :
+        # l'horloge doit finir au-dessus. En 1366x768 il recouvrait la date et
+        # l'invite (VM, 3 novembre) ; en 1920x1080 l'invite (#2160, fond
+        # Aurore). Sommet mesuré dans l'image elle-même, pas recopié du code.
         width, height = window.get_width(), window.get_height()
         cover = max(width / 1920, height / 1080)
-        logo_top = (height - 1080 * cover) / 2 + 367 * cover
+        logo_top = (height - 1080 * cover) / 2 + APEX_1080 * cover
         hint = app.clock.get_children()[-1]
         bottom = hint.translate_coordinates(hint.get_toplevel(), 0, 0)[1] + hint.get_allocation().height
         print(f"écran {width}x{height} : horloge jusqu'à {bottom}, losange dès {logo_top:.0f}")

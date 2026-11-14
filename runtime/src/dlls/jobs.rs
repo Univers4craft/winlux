@@ -16,7 +16,7 @@
 //!   liste des PID) répondent d'après cet état.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const KILL_ON_JOB_CLOSE: u32 = 0x2000;
@@ -64,6 +64,93 @@ fn jobs() -> &'static Mutex<HashMap<usize, Job>> {
     J.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// PID à tuer au plantage du processus : membres des jobs
+/// KILL_ON_JOB_CLOSE, sauf soi (#2220). Le gestionnaire de signal les lit
+/// sans prendre le verrou des jobs, qu'un autre fil (ou le fil qui plante)
+/// peut tenir à cet instant ; sous Windows, la fermeture des jobs à la mort
+/// du processus ne dépend d'aucun verrou non plus. 0 = case libre.
+const CRASH_SLOTS: usize = 512;
+static CRASH_KILL: [AtomicI32; CRASH_SLOTS] = [const { AtomicI32::new(0) }; CRASH_SLOTS];
+
+/// Verrou des jobs qui, en le rendant, recopie dans `CRASH_KILL` les
+/// membres à tuer au plantage : toute modification passe par lui.
+struct Jobs(std::sync::MutexGuard<'static, HashMap<usize, Job>>);
+
+impl std::ops::Deref for Jobs {
+    type Target = HashMap<usize, Job>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Jobs {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Jobs {
+    fn drop(&mut self) {
+        let me = std::process::id() as i32;
+        let wanted: Vec<i32> = self
+            .0
+            .values()
+            .filter(|j| j.flags() & KILL_ON_JOB_CLOSE != 0)
+            .flat_map(|j| j.members.iter().map(|&(pid, _)| pid))
+            .filter(|&pid| pid > 1 && pid != me)
+            .collect();
+        for pid in sync_crash_table(&CRASH_KILL, &wanted) {
+            crate::log_warn!(
+                "jobs",
+                "plus de {CRASH_SLOTS} membres KILL_ON_JOB_CLOSE : {pid} ne sera pas tué si le processus plante (il le reste à la fermeture du job et à la fin normale)"
+            );
+        }
+    }
+}
+
+/// Met `table` en accord avec `wanted` ; rend les PID qui n'y ont pas
+/// trouvé de case (table pleine). Ces PID-là ne sont pas tués au plantage ;
+/// la fermeture du job et la fin normale du processus, qui passent par le
+/// verrou, les tuent toujours.
+fn sync_crash_table(table: &[AtomicI32], wanted: &[i32]) -> Vec<i32> {
+    let mut lost = Vec::new();
+    // ORDRE VOULU : ajouts d'abord, retraits ensuite. Le gestionnaire de
+    // signal lit la table à tout instant, sans verrou : un plantage au
+    // milieu de cette mise à jour trouve toujours chaque membre actuel (au
+    // pire, il tue aussi un membre qui vient de quitter le job), jamais
+    // l'inverse.
+    for &pid in wanted {
+        if table.iter().any(|c| c.load(Ordering::Relaxed) == pid) {
+            continue;
+        }
+        let placed = table.iter().any(|c| {
+            c.compare_exchange(0, pid, Ordering::Release, Ordering::Relaxed)
+                .is_ok()
+        });
+        if !placed {
+            lost.push(pid);
+        }
+    }
+    for c in table {
+        let pid = c.load(Ordering::Relaxed);
+        if pid != 0 && !wanted.contains(&pid) {
+            c.store(0, Ordering::Release);
+        }
+    }
+    // Les retraits ont pu libérer des cases : seconde chance.
+    lost.retain(|&pid| {
+        !table.iter().any(|c| {
+            c.compare_exchange(0, pid, Ordering::Release, Ordering::Relaxed)
+                .is_ok()
+        })
+    });
+    lost
+}
+
+fn lock_jobs() -> Jobs {
+    Jobs(crate::dlls::lock(jobs()))
+}
+
 fn alive(pid: i32) -> bool {
     if pid == std::process::id() as i32 {
         return true;
@@ -79,7 +166,7 @@ fn alive(pid: i32) -> bool {
 }
 
 fn create(name: Option<String>) -> usize {
-    let mut all = crate::dlls::lock(jobs());
+    let mut all = lock_jobs();
     if let Some(n) = name.as_deref() {
         if let Some((&h, _)) = all.iter().find(|(_, j)| j.name.as_deref() == Some(n)) {
             crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
@@ -118,7 +205,7 @@ fn open(name: Option<String>) -> usize {
         crate::process::set_last_error(87);
         return 0;
     };
-    let all = crate::dlls::lock(jobs());
+    let all = lock_jobs();
     match all
         .iter()
         .find(|(_, j)| j.name.as_deref() == Some(name.as_str()))
@@ -148,7 +235,7 @@ pub unsafe extern "win64" fn open_job_object_a(
 }
 
 fn add_member(job: usize, pid: i32, process: usize) -> bool {
-    let mut all = crate::dlls::lock(jobs());
+    let mut all = lock_jobs();
     let Some(j) = all.get_mut(&job) else {
         return false;
     };
@@ -177,7 +264,7 @@ pub unsafe extern "win64" fn set_information_job_object(
     info: *const u8,
     len: u32,
 ) -> i32 {
-    let mut all = crate::dlls::lock(jobs());
+    let mut all = lock_jobs();
     let Some(j) = all.get_mut(&job) else {
         crate::process::set_last_error(6);
         return 0;
@@ -208,7 +295,7 @@ pub unsafe extern "win64" fn query_information_job_object(
         crate::process::set_last_error(87);
         return 0;
     }
-    let mut all = crate::dlls::lock(jobs());
+    let mut all = lock_jobs();
     // Job nul : celui du processus appelant (aucun ici, d'où des zéros).
     let mut empty = Job {
         limits: vec![0; EXTENDED_LIMIT_SIZE],
@@ -298,7 +385,7 @@ pub unsafe extern "win64" fn is_process_in_job(
         crate::process::set_last_error(6);
         return 0;
     };
-    let all = crate::dlls::lock(jobs());
+    let all = lock_jobs();
     let member = |j: &Job| j.members.iter().any(|&(p, _)| p == pid);
     *result = i32::from(if job == 0 {
         all.values().any(member)
@@ -329,7 +416,7 @@ fn kill_members(members: Vec<(i32, usize)>, code: u32) -> u32 {
 
 pub unsafe extern "win64" fn terminate_job_object(job: usize, code: u32) -> i32 {
     let members = {
-        let mut all = crate::dlls::lock(jobs());
+        let mut all = lock_jobs();
         let Some(j) = all.get_mut(&job) else {
             crate::process::set_last_error(6);
             return 0;
@@ -337,12 +424,12 @@ pub unsafe extern "win64" fn terminate_job_object(job: usize, code: u32) -> i32 
         j.active()
     };
     let killed = kill_members(members, code);
-    if let Some(j) = crate::dlls::lock(jobs()).get_mut(&job) {
+    if let Some(j) = lock_jobs().get_mut(&job) {
         j.terminated += killed;
     }
     // Le processus courant fait partie du job : il s'arrête aussi.
     let me = std::process::id() as i32;
-    let self_member = crate::dlls::lock(jobs())
+    let self_member = lock_jobs()
         .get(&job)
         .is_some_and(|j| j.members.iter().any(|&(p, _)| p == me));
     if self_member {
@@ -353,7 +440,7 @@ pub unsafe extern "win64" fn terminate_job_object(job: usize, code: u32) -> i32 
 
 /// CloseHandle d'un job (vrai si `h` en était un).
 pub(crate) fn close(h: usize) -> bool {
-    let Some(mut j) = crate::dlls::lock(jobs()).remove(&h) else {
+    let Some(mut j) = lock_jobs().remove(&h) else {
         return false;
     };
     if j.flags() & KILL_ON_JOB_CLOSE != 0 {
@@ -384,18 +471,14 @@ pub(crate) fn on_exit() {
 /// Appelé depuis le gestionnaire de signal : pas d'attente de verrou ni de
 /// handle de processus, seulement `kill(SIGKILL)` sur les membres vivants.
 pub(crate) fn on_crash() {
-    let Ok(g) = jobs().try_lock() else {
-        return;
-    };
-    let me = std::process::id() as i32;
-    for j in g.values() {
-        if j.flags() & KILL_ON_JOB_CLOSE == 0 {
-            continue;
-        }
-        for &(pid, _) in &j.members {
-            if pid != me && pid > 1 && alive(pid) {
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-            }
+    // Appelé depuis le gestionnaire de signal : seulement des opérations
+    // async-signal-safe, lecture d'atomiques puis kill(2). Ni verrou, ni
+    // allocation, ni journal (#2220). La table ne contient jamais le
+    // processus courant ; un PID mort reçoit un kill sans effet.
+    for c in &CRASH_KILL {
+        let pid = c.load(Ordering::Acquire);
+        if pid > 1 {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
         }
     }
 }
@@ -404,7 +487,7 @@ pub(crate) fn on_crash() {
 /// (le processus courant), il rejoint ce job, sauf départ autorisé.
 pub(crate) fn on_child_created(pid: i32, process: usize, creation_flags: u32) {
     let me = std::process::id() as i32;
-    let mut all = crate::dlls::lock(jobs());
+    let mut all = lock_jobs();
     for j in all.values_mut() {
         if !j.members.iter().any(|&(p, _)| p == me) {
             continue;
@@ -423,6 +506,15 @@ pub(crate) fn on_child_created(pid: i32, process: usize, creation_flags: u32) {
 mod tests {
     use super::*;
 
+    /// on_crash tue les membres KILL_ON_JOB_CLOSE de tous les jobs du
+    /// processus, donc aussi ceux d'un autre test qui tourne en parallèle :
+    /// les tests qui lancent des membres passent un par un (#2220).
+    static SERIE: Mutex<()> = Mutex::new(());
+
+    fn serie() -> std::sync::MutexGuard<'static, ()> {
+        SERIE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn limits(flags: u32) -> Vec<u8> {
         let mut v = vec![0u8; EXTENDED_LIMIT_SIZE];
         v[16..20].copy_from_slice(&flags.to_le_bytes());
@@ -431,6 +523,7 @@ mod tests {
 
     #[test]
     fn job_tue_ses_membres_a_la_fermeture() {
+        let _serie = serie();
         let job = create(None);
         let mut child = std::process::Command::new("sleep")
             .arg("30")
@@ -467,11 +560,12 @@ mod tests {
         assert!(close(job));
         let status = child.wait().unwrap();
         assert!(!status.success(), "l'enfant est tué à la fermeture du job");
-        assert!(!crate::dlls::lock(jobs()).contains_key(&job));
+        assert!(!lock_jobs().contains_key(&job));
     }
 
     #[test]
     fn plantage_tue_les_membres_kill_on_close() {
+        let _serie = serie();
         let job = create(None);
         let mut child = std::process::Command::new("sleep")
             .arg("30")
@@ -491,8 +585,57 @@ mod tests {
         assert!(close(job));
     }
 
+    /// #2220 : table pleine, comportement défini. Les PID sans case sont
+    /// rendus (pour le journal), ceux déjà placés restent, et un retrait
+    /// libère sa case pour le suivant.
+    #[test]
+    fn table_de_plantage_pleine() {
+        let _serie = serie();
+        let t: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
+        let get = |t: &[AtomicI32]| {
+            let mut v: Vec<i32> = t.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(sync_crash_table(&t, &[10, 11, 12]), vec![12]);
+        assert_eq!(get(&t), vec![10, 11]);
+        // 10 part, 12 arrive : 12 prend la case libérée par le retrait.
+        assert_eq!(sync_crash_table(&t, &[11, 12]), Vec::<i32>::new());
+        assert_eq!(get(&t), vec![11, 12]);
+        assert_eq!(sync_crash_table(&t, &[]), Vec::<i32>::new());
+        assert_eq!(get(&t), vec![0, 0]);
+    }
+
+    /// #2220 : un autre fil (ou le fil qui plante) tient le verrou des jobs
+    /// au moment du plantage ; les membres KILL_ON_JOB_CLOSE meurent quand
+    /// même, comme sous Windows où la fermeture ne dépend d'aucun verrou.
+    #[test]
+    fn plantage_tue_les_membres_meme_verrou_tenu() {
+        let _serie = serie();
+        let job = create(None);
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        assert!(add_member(job, child.id() as i32, 0));
+        let l = limits(KILL_ON_JOB_CLOSE);
+        assert_eq!(
+            unsafe {
+                set_information_job_object(job, CLASS_EXTENDED_LIMIT, l.as_ptr(), l.len() as u32)
+            },
+            1
+        );
+        let tenu = lock_jobs();
+        on_crash();
+        drop(tenu);
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "tué malgré le verrou tenu");
+        assert!(close(job));
+    }
+
     #[test]
     fn job_sans_kill_on_close_laisse_vivre() {
+        let _serie = serie();
         let job = create(None);
         let mut child = std::process::Command::new("sleep")
             .arg("30")
@@ -508,6 +651,7 @@ mod tests {
 
     #[test]
     fn terminate_job_object_et_liste_des_pid() {
+        let _serie = serie();
         let job = create(Some("winlux-test-job".into()));
         assert_eq!(open(Some("winlux-test-job".into())), job);
         let mut a = std::process::Command::new("sleep")
@@ -562,6 +706,7 @@ mod tests {
 
     #[test]
     fn enfant_d_un_membre_rejoint_le_job_sauf_depart_autorise() {
+        let _serie = serie();
         let job = create(None);
         let me = std::process::id() as i32;
         add_member(job, me, 0);
@@ -572,11 +717,11 @@ mod tests {
         };
         on_child_created(4_000_002, 0, CREATE_BREAKAWAY_FROM_JOB);
         on_child_created(4_000_003, 0, 0);
-        let all = crate::dlls::lock(jobs());
+        let all = lock_jobs();
         let pids: Vec<i32> = all[&job].members.iter().map(|&(p, _)| p).collect();
         drop(all);
         assert!(pids.contains(&4_000_001) && pids.contains(&4_000_003));
         assert!(!pids.contains(&4_000_002), "départ demandé et autorisé");
-        crate::dlls::lock(jobs()).remove(&job);
+        lock_jobs().remove(&job);
     }
 }

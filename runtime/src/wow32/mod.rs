@@ -24,6 +24,7 @@
 
 mod com;
 mod com_netfw;
+mod com_shell;
 mod com_taskschd;
 mod comctl;
 mod comdlg;
@@ -1831,9 +1832,28 @@ struct Passage {
 
 const HISTORY_LEN: usize = 64;
 
+type Ring = std::sync::Arc<Mutex<std::collections::VecDeque<Passage>>>;
+
+/// Historiques de tous les fils x86, pour les écrire à la fin du processus
+/// quel que soit le fil qui la décide (#2368). (tid, historique)
+static RINGS: Mutex<Vec<(i64, Ring)>> = Mutex::new(Vec::new());
+
 thread_local! {
-    static HISTORY: std::cell::RefCell<std::collections::VecDeque<Passage>> =
-        std::cell::RefCell::new(std::collections::VecDeque::with_capacity(HISTORY_LEN));
+    static HISTORY: Ring = {
+        let ring: Ring = std::sync::Arc::new(Mutex::new(
+            std::collections::VecDeque::with_capacity(HISTORY_LEN),
+        ));
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+        RINGS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((tid, std::sync::Arc::clone(&ring)));
+        ring
+    };
+}
+
+fn ring_lock(r: &Ring) -> std::sync::MutexGuard<'_, std::collections::VecDeque<Passage>> {
+    r.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// `WINLUX_WOW32_HISTORY=1` : chaque fil garde ses 64 derniers passages
@@ -1897,8 +1917,8 @@ fn passage_line(p: &Passage) -> String {
 /// passage le plus récent qui lui correspond (des rappels x86 ont pu être
 /// notés entre-temps).
 fn note_result(desc: u32, esp: u32, r: u64) {
-    HISTORY.with(|h| {
-        let mut h = h.borrow_mut();
+    let _ = HISTORY.try_with(|h| {
+        let mut h = ring_lock(h);
         if let Some(p) = h
             .iter_mut()
             .rev()
@@ -1924,8 +1944,8 @@ fn note(p: Passage) {
             eprintln!("winlux[wow32] {line}");
         }
     }
-    HISTORY.with(|h| {
-        let mut h = h.borrow_mut();
+    let _ = HISTORY.try_with(|h| {
+        let mut h = ring_lock(h);
         if h.len() == HISTORY_LEN {
             h.pop_front();
         }
@@ -1935,7 +1955,45 @@ fn note(p: Passage) {
 
 /// Passages notés, du plus ancien au plus récent, en texte.
 fn history_lines() -> Vec<String> {
-    HISTORY.with(|h| h.borrow().iter().map(passage_line).collect())
+    HISTORY
+        .try_with(|h| ring_lock(h).iter().map(passage_line).collect())
+        .unwrap_or_default()
+}
+
+/// Écrit l'historique au niveau Warn : sortie d'erreur et journal, sans
+/// exiger WINLUX_LOG=trace (#2368).
+fn history_emit(line: &std::fmt::Arguments<'_>) {
+    crate::log::emit(crate::log::Level::Warn, "wow32", line);
+}
+
+/// Fin du processus (ExitProcess, TerminateProcess sur soi, fail-fast,
+/// exception non gérée) : avec WINLUX_WOW32_HISTORY, l'historique de chaque
+/// fil x86 est écrit, une seule fois (#2368).
+pub fn dump_history_at_exit(why: &str) {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !history_on() || DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let rings: Vec<(i64, Ring)> = RINGS.try_lock().map(|r| r.clone()).unwrap_or_default();
+    let me = unsafe { libc::syscall(libc::SYS_gettid) };
+    history_emit(&format_args!(
+        "{why} : historique des passages x86 ↔ runtime de {} fil(s)",
+        rings.len()
+    ));
+    for (tid, ring) in rings {
+        // try_lock : un fil arrêté en plein passage garde son verrou.
+        let Ok(h) = ring.try_lock() else {
+            history_emit(&format_args!("fil {tid} : historique occupé"));
+            continue;
+        };
+        let lines: Vec<String> = h.iter().map(passage_line).collect();
+        drop(h);
+        let mark = if tid == me { " (fil qui termine)" } else { "" };
+        history_emit(&format_args!("fil {tid}{mark} : {} passages", lines.len()));
+        for (i, l) in lines.iter().enumerate() {
+            history_emit(&format_args!("fil {tid}   {i:2} {l}"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1952,6 +2010,95 @@ fn pas_a_pas_cible() {
     assert_eq!(parse_step("GetObjectW"), Some(("GetObjectW".into(), None)));
     assert_eq!(parse_step(":12"), None);
     assert_eq!(parse_step("F:zz"), None);
+}
+
+/// Variable qui fait de `historique_enfant` le processus enfant (#2368) :
+/// `sortie` finit par ExitProcess, `failfast` par RaiseFailFastException.
+#[cfg(test)]
+const HISTORIQUE_ENFANT: &str = "WINLUX_TEST_HISTORIQUE_ENFANT";
+
+#[cfg(test)]
+#[test]
+fn historique_enfant() {
+    let Some(mode) = std::env::var_os(HISTORIQUE_ENFANT) else {
+        return;
+    };
+    let passage = |t: u32| Passage {
+        desc: 0,
+        target: t,
+        esp: 0,
+        ret: 0,
+        args: [0; 4],
+        result: None,
+    };
+    note(passage(0x40_1111));
+    // Un second fil : son historique doit aussi sortir, écrit par le fil
+    // qui termine.
+    std::thread::spawn(move || note(passage(0x40_2222)))
+        .join()
+        .unwrap();
+    if mode == "failfast" {
+        crate::dlls::seh::raise_fail_fast_exception(std::ptr::null(), std::ptr::null(), 0);
+    }
+    crate::dlls::kernel32::exit_process(3);
+}
+
+#[cfg(test)]
+fn historique_lancer(mode: &str, history: bool) -> (Option<i32>, String) {
+    let dir = std::env::temp_dir().join(format!("winlux-hist-{mode}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", "wow32::historique_enfant", "--test-threads=1"])
+        .env(HISTORIQUE_ENFANT, mode)
+        .env("WINLUX_JOURNAL_DIR", &dir)
+        .env_remove("WINLUX_LOG")
+        .env_remove("WINLUX_TRACE")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    if history {
+        cmd.env("WINLUX_WOW32_HISTORY", "1");
+    } else {
+        cmd.env_remove("WINLUX_WOW32_HISTORY");
+    }
+    let mut child = cmd.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("processus enfant bloqué plus de 60 s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut err = String::new();
+    use std::io::Read;
+    let _ = child.stderr.take().unwrap().read_to_string(&mut err);
+    let _ = std::fs::remove_dir_all(&dir);
+    (status.code(), err)
+}
+
+/// #2368 : avec WINLUX_WOW32_HISTORY seule, l'historique de chaque fil sort
+/// sur ExitProcess et sur un fail-fast ; sans elle, rien.
+#[cfg(test)]
+#[test]
+fn historique_ecrit_a_la_fin_du_processus() {
+    for mode in ["sortie", "failfast"] {
+        let (code, err) = historique_lancer(mode, true);
+        let want = if mode == "sortie" { 3 } else { 0x09 };
+        assert_eq!(code, Some(want), "{mode} : {err}");
+        assert!(
+            err.contains("historique des passages x86"),
+            "{mode} : {err}"
+        );
+        assert!(err.contains("rappel x86 0x401111"), "{mode} : {err}");
+        assert!(err.contains("rappel x86 0x402222"), "{mode} : {err}");
+        assert!(err.contains("(fil qui termine)"), "{mode} : {err}");
+    }
+    let (_, err) = historique_lancer("sortie", false);
+    assert!(!err.contains("historique des passages"), "{err}");
 }
 
 #[cfg(test)]
@@ -2101,10 +2248,14 @@ pub(super) fn trace_history() {
     if !history_on() {
         return;
     }
+    // Niveau Warn : la variable suffit, sans WINLUX_LOG=trace (#2368).
     let lines = history_lines();
-    crate::trace!("wow32 : {} derniers passages x86 ↔ runtime :", lines.len());
+    history_emit(&format_args!(
+        "faute x86 : {} derniers passages x86 ↔ runtime du fil",
+        lines.len()
+    ));
     for (i, l) in lines.iter().enumerate() {
-        crate::trace!("wow32 :   {i:2} {l}");
+        history_emit(&format_args!("  {i:2} {l}"));
     }
 }
 

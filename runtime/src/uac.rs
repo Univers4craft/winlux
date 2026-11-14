@@ -133,6 +133,44 @@ fn ask(exe: &Path, admin_capable: bool) -> Answer {
     }
 }
 
+/// ERROR_CANCELLED : l'opération a été annulée par l'utilisateur (199 pour
+/// un parent Linux, qui ne voit que 8 bits).
+pub const CANCELLED: i32 = 1223;
+
+/// Demande l'élévation pour `exe` au niveau `level` si la règle l'exige.
+/// Accordée : le processus et ses enfants reçoivent le jeton administrateur
+/// (`WINLUX_ELEVATED=1`). Rend `Err(CANCELLED)` si l'utilisateur refuse.
+pub fn request(level: Level, forced: bool, exe: &Path) -> Result<(), i32> {
+    let admin_capable = crate::dlls::security::admin_capable();
+    if !needs_prompt(
+        level,
+        forced,
+        crate::dlls::security::elevated(),
+        admin_capable,
+    ) {
+        return Ok(());
+    }
+    match ask(exe, admin_capable) {
+        Answer::Allowed => {
+            crate::log_info!("uac", "élévation accordée pour {}", exe.display());
+            std::env::set_var("WINLUX_ELEVATED", "1");
+            Ok(())
+        }
+        Answer::Refused => {
+            crate::log_info!("uac", "élévation refusée pour {}", exe.display());
+            Err(CANCELLED)
+        }
+        Answer::Unavailable => {
+            crate::log_warn!(
+                "uac",
+                "{} demande les droits administrateur, mais aucune fenêtre UAC n'est disponible : lancement sans élévation",
+                exe.display()
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Au lancement d'un .exe : lit le manifeste, demande l'élévation si besoin.
 /// Ne revient pas si l'utilisateur refuse.
 pub fn check_launch(base: usize, exe: &Path) {
@@ -142,34 +180,55 @@ pub fn check_launch(base: usize, exe: &Path) {
     // `runas` (ShellExecuteEx) : le parent pose WINLUX_ELEVATE=1.
     let forced = std::env::var("WINLUX_ELEVATE").is_ok_and(|v| v == "1");
     std::env::remove_var("WINLUX_ELEVATE");
-    let admin_capable = crate::dlls::security::admin_capable();
-    if !needs_prompt(
-        level,
-        forced,
-        crate::dlls::security::elevated(),
-        admin_capable,
-    ) {
-        return;
+    if let Err(code) = request(level, forced, exe) {
+        std::process::exit(code);
     }
-    match ask(exe, admin_capable) {
-        Answer::Allowed => {
-            crate::log_info!("uac", "élévation accordée pour {}", exe.display());
-            std::env::set_var("WINLUX_ELEVATED", "1");
-        }
-        Answer::Refused => {
-            crate::log_info!("uac", "élévation refusée pour {}", exe.display());
-            // ERROR_CANCELLED : l'opération a été annulée par l'utilisateur
-            // (199 pour un parent Linux, qui ne voit que 8 bits).
-            std::process::exit(1223);
-        }
-        Answer::Unavailable => {
-            crate::log_warn!(
-                "uac",
-                "{} demande les droits administrateur, mais aucune fenêtre UAC n'est disponible : lancement sans élévation",
-                exe.display()
-            );
-        }
+}
+
+/// Niveau demandé par le manifeste d'un PE sur disque, lu dans l'image
+/// seule (en-têtes et sections) : les données qu'un installateur NSIS ou
+/// Inno colle après son image ne comptent pas (#2180).
+pub fn level_of_file(data: &[u8]) -> Level {
+    let end = pe_image_end(data).unwrap_or(0).min(data.len());
+    let image = &data[..end];
+    let Some(at) = find(image, b"requestedExecutionLevel") else {
+        return Level::AsInvoker;
+    };
+    let from = at.saturating_sub(16);
+    let to = (at + 256).min(image.len());
+    level_of(&String::from_utf8_lossy(&image[from..to]))
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Fin de l'image PE dans le fichier : fin des données brutes de la
+/// dernière section (le reste est une « surcouche » ajoutée au fichier).
+fn pe_image_end(d: &[u8]) -> Option<usize> {
+    let u16_at = |o: usize| {
+        d.get(o..o + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
+    let u32_at = |o: usize| {
+        d.get(o..o + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    if d.get(..2) != Some(b"MZ") {
+        return None;
     }
+    let pe = u32_at(0x3c)?;
+    if d.get(pe..pe + 4) != Some(b"PE\0\0") {
+        return None;
+    }
+    let sections = u16_at(pe + 6)?;
+    let first = pe + 24 + u16_at(pe + 20)?;
+    (0..sections.min(96))
+        .filter_map(|i| {
+            let s = first + 40 * i;
+            Some(u32_at(s + 20)? + u32_at(s + 16)?)
+        })
+        .max()
 }
 
 #[cfg(test)]

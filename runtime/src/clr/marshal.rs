@@ -77,7 +77,9 @@ enum Native {
     },
     /// Type valeur imbriqué.
     Struct(TypeId),
-    /// Autre référence (tableau, délégué, classe) : un pointeur nul.
+    /// Délégué : pointeur de fonction natif qui le rappelle (#2382).
+    FnPtr { wide: bool },
+    /// Autre référence (tableau, classe) : un pointeur nul.
     NullPtr,
 }
 
@@ -404,6 +406,13 @@ impl Interpreter {
                 align: size,
             });
         }
+        if is_delegate_type(id) {
+            return Ok(Item {
+                how: Native::FnPtr { wide },
+                size: 8,
+                align: 8,
+            });
+        }
         if is_value {
             let l = self.native_layout(id, depth + 1)?;
             return Ok(Item {
@@ -530,13 +539,13 @@ impl Interpreter {
             })
     }
 
-    unsafe fn write_fields(&self, layout: &Layout, src: *const u8, dst: *mut u8) {
+    unsafe fn write_fields(&mut self, layout: &Layout, src: *const u8, dst: *mut u8) {
         for f in &layout.fields {
             self.write_item(&f.item, f.kind, src.add(f.managed), dst.add(f.native));
         }
     }
 
-    unsafe fn write_item(&self, item: &Item, kind: Kind, src: *const u8, dst: *mut u8) {
+    unsafe fn write_item(&mut self, item: &Item, kind: Kind, src: *const u8, dst: *mut u8) {
         match &item.how {
             Native::Plain => {
                 std::ptr::copy(src, dst, item.size.min(kind.elem_size()));
@@ -604,6 +613,24 @@ impl Interpreter {
                 if let Ok(l) = self.native_layout(*id, 0) {
                     self.write_fields(&l, src, dst);
                 }
+            }
+            Native::FnPtr { wide } => {
+                let d = (src as *const *mut u8).read_unaligned();
+                let p = if d.is_null() || !gc::is_delegate(d) {
+                    0
+                } else {
+                    // Plus de porte libre : pointeur nul, comme un champ
+                    // vide, et le journal le dit.
+                    self.callback_for(d, *wide).unwrap_or_else(|| {
+                        crate::log_warn!(
+                            "clr-interop",
+                            "StructureToPtr : plus de {} délégués confiés au code natif",
+                            super::callbacks::CAPACITY
+                        );
+                        0
+                    })
+                };
+                (dst as *mut usize).write_unaligned(p);
             }
             Native::NullPtr => (dst as *mut usize).write_unaligned(0),
         }
@@ -679,6 +706,14 @@ impl Interpreter {
                     self.read_fields(&l, src, dst);
                 }
             }
+            Native::FnPtr { .. } => {
+                // Un pointeur donné par nous rend son délégué ; un pointeur
+                // natif quelconque demanderait GetDelegateForFunctionPointer.
+                let p = (src as *const usize).read_unaligned();
+                let v = super::callbacks::delegate_for_pointer(p)
+                    .map_or(Value::Null, |d| Value::Ref(d as *mut u8));
+                il::store(dst, Kind::Ref, v);
+            }
             Native::NullPtr => il::store(dst, Kind::Ref, Value::Null),
         }
     }
@@ -713,6 +748,27 @@ impl Interpreter {
             _ => {}
         }
     }
+}
+
+/// Type délégué : descend de System.Delegate (MulticastDelegate compris).
+fn is_delegate_type(id: TypeId) -> bool {
+    let mut cur = id;
+    for _ in 0..64 {
+        let Some((ns, name, parent)) = types::with_types(|reg| {
+            reg.get(cur)
+                .map(|t| (t.namespace.clone(), t.name.clone(), t.parent))
+        }) else {
+            return false;
+        };
+        if cur != id && ns == "System" && (name == "MulticastDelegate" || name == "Delegate") {
+            return true;
+        }
+        if parent == 0 || parent == cur {
+            return false;
+        }
+        cur = parent;
+    }
+    false
 }
 
 /// Allouer(long cb, bool coTask) : LocalAlloc (AllocHGlobal) ou

@@ -11,7 +11,7 @@ licence » vient avant l'installation : « Je n'accepte pas » est coché au
 départ et rien n'est installé tant que l'utilisateur n'a pas accepté
 (#2123 à #2126) ; Annuler rend 1602. Le travail lui-même est fait par le
 runtime (actions personnalisées et programmes lancés par l'installateur compris) :
-  winlux --setup FICHIER.exe [/D=dossier] [/nodesktop]
+  winlux --setup FICHIER.exe [/D=dossier] [/nodesktop | --desktop]
   winlux --msiexec /i FICHIER.msi /qn
 
 Usage : winlux-setup-wizard FICHIER [--runtime CHEMIN] [--contrat-seulement]
@@ -198,8 +198,8 @@ def command(runtime, path, info, folder=None, desktop=True):
     argv = [runtime, "--setup", path]
     if folder and folder != info["folder"]:
         argv.append("/D=" + folder)
-    if not desktop:
-        argv.append("/nodesktop")
+    # La case décide du raccourci du Bureau, dans les deux sens (#2295).
+    argv.append("--desktop" if desktop else "/nodesktop")
     return argv
 
 
@@ -402,12 +402,15 @@ def main(argv):
                                     cwd=os.path.dirname(path) or None)
             for line in proc.stdout:
                 lines.append(line)
+                # Écrite au fil de l'eau : last-launch.log garde la trace
+                # même si l'assistant est tué avant la fin (#2328).
+                print(line, end="", flush=True)
                 GLib.idle_add(status.set_text, line.strip())
             code = proc.wait()
         except OSError as e:
             lines.append(str(e))
+            print(e, flush=True)
             code = 1
-        print("".join(lines), end="", flush=True)
         GLib.idle_add(finished, code, "".join(lines))
 
     def pulse():

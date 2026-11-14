@@ -318,6 +318,19 @@ _TR = {
     "Liste vide.": ("Empty list.", "Lista vacía.", "Leere Liste."),
     "Adresse non valable : {name}": ("Invalid address: {name}", "Dirección no válida: {name}",
                                       "Ungültige Adresse: {name}"),
+    "Application introuvable : {name}. Rien n’a été bloqué ; choisissez-la dans la liste.": (
+        "App not found: {name}. Nothing was blocked; choose it from the list.",
+        "Aplicación no encontrada: {name}. No se ha bloqueado nada; elíjala de la lista.",
+        "App nicht gefunden: {name}. Es wurde nichts gesperrt; wählen Sie sie aus der Liste."),
+    "Rien n’a été bloqué. Vouliez-vous dire {names} ? Choisissez-la puis cliquez sur Bloquer.": (
+        "Nothing was blocked. Did you mean {names}? Choose it, then select Block.",
+        "No se ha bloqueado nada. ¿Quería decir {names}? Elíjala y haga clic en Bloquear.",
+        "Es wurde nichts gesperrt. Meinten Sie {names}? Wählen Sie sie aus und klicken Sie auf Sperren."),
+    "Rien n’a été bloqué. Vouliez-vous dire {names} ? Elle est sélectionnée : cliquez à nouveau sur Bloquer.": (
+        "Nothing was blocked. Did you mean {names}? It is selected: select Block again.",
+        "No se ha bloqueado nada. ¿Quería decir {names}? Está seleccionada: vuelva a hacer clic en Bloquear.",
+        "Es wurde nichts gesperrt. Meinten Sie {names}? Sie ist ausgewählt: Klicken Sie erneut auf Sperren."),
+    " ou ": (" or ", " o ", " oder "),
     "Activité des 7 derniers jours": ("Activity over the last 7 days", "Actividad de los últimos 7 días",
                                       "Aktivität der letzten 7 Tage"),
     "Applications les plus utilisées": ("Most used apps", "Aplicaciones más usadas", "Meistgenutzte Apps"),
@@ -905,6 +918,13 @@ def stale_screens():
     return found
 
 
+def shown_name(ident, stored, names):
+    """Nom affiché d'une application bloquée. Pour un programme Linux, le nom du
+    lanceur du menu (#2248) l'emporte sur celui enregistré au moment du blocage :
+    un blocage fait avant #2248 gardait « Text Editor Settings » pour Mousepad (#2351)."""
+    return names.get(ident, stored) if ident.startswith("bin:") else stored
+
+
 def blocked_ids(cfg):
     return {app["id"]: app["name"] for app in cfg.get("apps", [])}
 
@@ -951,6 +971,42 @@ def desktop_names():
 def desktop_choices():
     """Applications proposées au blocage : celles du menu, sous leur nom."""
     return {ident: name for ident, (name, visible) in desktop_entries().items() if visible and not protected(ident)}
+
+
+PROGRAM_DIRS = ("/usr/bin", "/usr/local/bin", "/bin", "/usr/games")
+
+
+def typed_app(text, choices):
+    """Identifiant de l'application tapée dans « Choisir une application », ou None.
+
+    Un texte qui n'est ni une application de la liste (nom ou programme), ni un
+    .exe, ni un programme installé ne bloque rien : le panneau le refuse au lieu
+    d'enregistrer en silence un programme inexistant (« mouse » → bin:mouse, #2350)."""
+    text = text.strip()
+    if not text:
+        return None
+    folded = text.casefold()
+    for ident, name in choices.items():
+        program = ident.split(":", 1)[1]
+        if folded in (name.casefold(), program.casefold(), f"{name} ({program})".casefold()):
+            return ident
+    if folded.endswith(".exe"):
+        return "exe:" + re.split(r"[\\/]", text)[-1].lower()
+    program = os.path.basename(text)
+    if program and any(os.access(f"{ROOT}{folder}/{program}", os.X_OK) and Path(f"{ROOT}{folder}/{program}").is_file()
+                       for folder in PROGRAM_DIRS):
+        return "bin:" + program
+    return None
+
+
+def typed_suggestions(text, choices, limit=3):
+    """Applications de la liste dont le nom ou le programme contient le texte tapé."""
+    folded = text.strip().casefold()
+    if not folded:
+        return []
+    found = [ident for ident, name in sorted(choices.items(), key=lambda item: item[1].casefold())
+             if folded in name.casefold() or folded in ident.split(":", 1)[1].casefold()]
+    return found[:limit]
 
 
 def display_name(ident, names):
@@ -1394,7 +1450,7 @@ class Daemon:
         self.warned = set()
         self.killed = set()
         self.names = {}
-        self.names_at = 0
+        self.names_at = None
         self.site_notes = {}
         self.lock = threading.Lock()
         self.filtered = {}
@@ -1490,7 +1546,9 @@ class Daemon:
                 self.thaw(uid)
 
     def app_names(self):
-        if time.monotonic() - self.names_at > 600:
+        # Premier appel : charger tout de suite. time.monotonic() compte depuis le
+        # démarrage : avec 0 pour départ, le cache restait vide 10 minutes (#2387).
+        if self.names_at is None or time.monotonic() - self.names_at > 600:
             self.names, self.names_at = desktop_names(), time.monotonic()
         return self.names
 
@@ -1525,7 +1583,7 @@ class Daemon:
                 alive.add(key)
                 if key not in self.killed:
                     self.killed.add(key)
-                    name = blocked[ident]
+                    name = shown_name(ident, blocked[ident], self.app_names())
                     update_usage(user, lambda u: (u["blocked_apps"].__setitem__(ident, u["blocked_apps"].get(ident, 0) + 1),
                                                   u["names"].__setitem__(ident, name)))
                     for display, _vt in session_displays(user):
@@ -2521,11 +2579,11 @@ class ParentalPanel:
         box = self.card()
         if not self.cfg["apps"]:
             self.text(_t("Aucune application bloquée."), "subtitle", box)
+        names = desktop_names()
         for app in self.cfg["apps"]:
-            self.line(box, app["name"], app["id"].split(":", 1)[1],
+            self.line(box, shown_name(app["id"], app["name"], names), app["id"].split(":", 1)[1],
                       [self.button(_t("Débloquer"), lambda i=app["id"]: self.unblock(i))])
         choices = {}
-        names = desktop_names()
         for app in report.get("apps", []):
             choices.setdefault(app["id"], names.get(app["id"], app["name"]))
         for ident, name in sorted(desktop_choices().items(), key=lambda item: item[1].casefold()):
@@ -2538,18 +2596,58 @@ class ParentalPanel:
             if ident not in blocked:
                 combo.append(ident, f"{name} ({ident.split(':', 1)[1]})")
         combo.set_hexpand(True)
+        # Proposer pendant la saisie les applications dont le nom contient le texte (#2350).
+        completion = Gtk.EntryCompletion()
+        completion.set_model(combo.get_model())
+        completion.set_text_column(0)
+        completion.set_minimum_key_length(1)
+        completion.set_match_func(
+            lambda _c, key, it, model: key.strip().casefold() in (model[it][0] or "").casefold(), combo.get_model())
+
+        def picked(_completion, model, it):
+            combo.set_active_id(model[it][1])
+            return True
+        completion.connect("match-selected", picked)
+        combo.get_child().set_completion(completion)
         row = Gtk.Box(spacing=8)
         row.pack_start(combo, True, True, 0)
-        row.pack_start(self.button(_t("Bloquer"), lambda: self.block_choice(combo, choices), "parental-block"), False, False, 0)
+        unknown = Gtk.Label(xalign=0, wrap=True)
+        unknown.set_name("parental-app-unknown")
+        unknown.get_style_context().add_class("error")
+        unknown.set_no_show_all(True)
+        combo.get_child().connect("changed", lambda *_: unknown.hide())
+        row.pack_start(self.button(_t("Bloquer"), lambda: self.block_choice(combo, choices, unknown), "parental-block"),
+                       False, False, 0)
         box.pack_start(row, False, False, 0)
+        box.pack_start(unknown, False, False, 0)
 
-    def block_choice(self, combo, choices):
+    def block_choice(self, combo, choices, unknown=None):
         ident = combo.get_active_id()
         if ident is None:
             typed = combo.get_child().get_text().strip()
             if not typed:
                 return
-            ident = ("exe:" + typed.lower()) if typed.lower().endswith(".exe") else "bin:" + os.path.basename(typed)
+            ident = typed_app(typed, choices)
+            if ident is None:
+                # Rien n'est bloqué : le dire sous le champ, au moment du clic, et
+                # proposer l'application si elle existe sous un autre nom (#2350).
+                found = typed_suggestions(typed, choices)
+                names = _t(" ou ").join(f"« {choices[i]} »" for i in found)
+                if len(found) == 1:
+                    combo.set_active_id(found[0])
+                    text = _t("Rien n’a été bloqué. Vouliez-vous dire {names} ? Elle est sélectionnée : "
+                              "cliquez à nouveau sur Bloquer.").format(names=names)
+                elif found:
+                    text = _t("Rien n’a été bloqué. Vouliez-vous dire {names} ? Choisissez-la puis cliquez sur Bloquer.") \
+                        .format(names=names)
+                else:
+                    text = _t("Application introuvable : {name}. Rien n’a été bloqué ; choisissez-la dans la liste.") \
+                        .format(name=typed)
+                if unknown is None:
+                    return self.failed({"error": text})
+                unknown.set_text(text)
+                unknown.show()
+                return None
         self.block(ident, choices.get(ident))
 
     def block(self, ident, name=None):
