@@ -55,6 +55,10 @@ verrous sont utilisés tels quels : `apt update` / `apt upgrade` en terminal
 continuent de fonctionner, et ce que le Store installe se met à jour aussi
 par `apt upgrade`, `flatpak update` ou `snap refresh`.
 
+Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
+`apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
+niveau « user »), jamais hors ligne (#2184).
+
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
 boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls
@@ -210,6 +214,19 @@ SHA-256 (ou `sha512`) est ignorée, et un installateur dont l'empreinte diffère
 est refusé. Un autre format se branche en ajoutant un adaptateur à
 `WindowsCatalog.FORMATS` (fonction : octets du catalogue → fiches au format
 ci-dessus), sans modifier le reste du Store.
+
+**Contrat de licence (#2129).** Une installation sans interface (`args` avec
+`/S`, `/SILENT`, `/VERYSILENT`, `/quiet`, `/passive` ou `/q…`, et tout `.msi`,
+installé par `msiexec /i … /qn`) ne montre pas le contrat de l'installateur ;
+comme sous Windows, l'option silencieuse vaudrait acceptation. Le Store ouvre
+donc d'abord la page « Contrat de licence » de l'assistant
+(`winlux-setup-wizard FICHIER --contrat-seulement`, contrat lu par
+`winlux --setup --license`, « Je n'accepte pas » coché au départ). Paquet sans
+contrat ou contrat accepté : l'installation suit. Refus, page fermée ou
+impossible à ouvrir : rien n'est lancé, et le Store affiche « Contrat de
+licence non accepté : rien n'a été installé. ». Un `.exe` ouvert par
+« Installer un fichier » garde son interface : le runtime présente lui-même le
+contrat, et un refus (1602, vu 66 sur 8 bits) est dit de la même façon.
 
 ## Gestionnaire de polices
 
