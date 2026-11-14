@@ -353,6 +353,12 @@ case "$invoked" in
     poweroff|halt) power_action poweroff "$@"; exit $? ;;
     shutdown) shutdown_command "$@"; exit $? ;;
 esac
+# systemctl reboot|poweroff|halt : même chemin, avant le mkdir des dossiers de
+# services, qu'un compte non root ne peut pas créer.
+case "${1:-}" in
+    reboot) invoked="systemctl reboot"; shift; power_action reboot "$@"; exit $? ;;
+    poweroff|halt) invoked="systemctl $1"; shift; power_action poweroff "$@"; exit $? ;;
+esac
 
 mkdir -p "$ENABLED_DIR" "$RUN_DIR"
 
@@ -378,8 +384,6 @@ case "$command" in
     show)       exit 0 ;;
     cat)        test "$#" -ge 1 || usage; find_unit_file "$1" | xargs cat ;;
     is-system-running) echo "running"; exit 0 ;;
-    reboot)     invoked="systemctl reboot"; power_action reboot "$@"; exit $? ;;
-    poweroff|halt) invoked="systemctl $command"; power_action poweroff "$@"; exit $? ;;
     --version)  echo "systemctl shim (winlux)"; exit 0 ;;
     --boot-start) boot_start_enabled ;;
     *)          echo "systemctl: unsupported command: $command" >&2; exit 1 ;;
