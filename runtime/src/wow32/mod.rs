@@ -2321,6 +2321,18 @@ fn runtime_com_object(v: u64) -> bool {
     qi >= start && qi < end
 }
 
+/// Objets du runtime qui servent aussi de handle, laissés passer par la
+/// garde de #2429 : SHGetImageList (ordinal 727) rend un IImageList que la
+/// documentation publique déclare interchangeable avec un HIMAGELIST ; un
+/// programme x86 le passe à ImageList_* (WinSCP), il doit le recevoir tel
+/// quel (image_list_com.rs).
+fn handle_object(label: &str) -> bool {
+    let Some(func) = label.strip_prefix("shell32.dll!") else {
+        return false;
+    };
+    matches!(func, "SHGetImageList" | "#727")
+}
+
 /// Refus nommé d'une interface rendue sans mandataire (#2429) : la
 /// référence est rendue à l'objet, le programme reçoit 0. Ceci ne corrige
 /// pas la fonction (il faut la décrire dans `com::api_kinds`, famille
@@ -2418,7 +2430,7 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let mut refused = false;
     for &(at, [v, _]) in &wide {
         // #2429 : interface du runtime rendue sans mandataire 32 bits.
-        let v = if runtime_com_object(v) {
+        let v = if runtime_com_object(v) && !handle_object(&d.label) {
             refuse_runtime_object(&d.label, v);
             refused = true;
             0
@@ -3083,6 +3095,17 @@ mod tests {
         assert_eq!(r as u32, E_NOINTERFACE_32);
         assert_eq!(cell, 0);
         assert_eq!(GARDE_RELEASES.load(Ordering::SeqCst), avant + 1);
+        // Objet qui sert aussi de handle (SHGetImageList) : laissé passer.
+        let avant = GARDE_RELEASES.load(Ordering::SeqCst);
+        let (r, cell) = garde_appel(
+            garde_rend_objet as *const () as usize,
+            "shell32.dll!SHGetImageList",
+        );
+        assert_eq!(r, 0);
+        assert_ne!(cell, 0);
+        assert_eq!(GARDE_RELEASES.load(Ordering::SeqCst), avant);
+        assert!(handle_object("shell32.dll!#727"));
+        assert!(!handle_object("urlmon.dll!CoInternetCreateSecurityManager"));
         // Valeur ordinaire (handle) : recopiée telle quelle.
         let (r, cell) = garde_appel(garde_rend_valeur as *const () as usize, "test!RendValeur");
         assert_eq!(r, 0);
