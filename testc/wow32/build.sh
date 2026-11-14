@@ -457,6 +457,36 @@ clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "
 lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
     "$tmp/wasapi64/wasapi64.obj" "$tmp/wasapi64/wasapi_k32.lib" "$tmp/wasapi64/wasapi_ole32.lib" \
     /out:"$out/wasapi64.exe"
+# Activation audio et DllGetClassObject (#2428) : audioact32.exe (x86) et audioact64.exe (x64).
+cat >"$tmp/audioact_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+Sleep@4
+LoadLibraryA@4
+GetProcAddress@8
+DEF
+cat >"$tmp/audioact_mmdev.def" <<'DEF'
+LIBRARY mmdevapi.dll
+EXPORTS
+ActivateAudioInterfaceAsync@20
+DllGetClassObject@12
+DEF
+mkdir -p "$tmp/audioact64"
+for lib in audioact_k32 audioact_mmdev; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/audioact64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/audioact64/$lib.def" -l "$tmp/audioact64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/audioact32.c" -o "$tmp/audioact32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/audioact32.obj" "$tmp/audioact_k32.lib" "$tmp/audioact_mmdev.lib" /out:"$out/audioact32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/audioact32.c" -o "$tmp/audioact64/audioact64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
+    "$tmp/audioact64/audioact64.obj" "$tmp/audioact64/audioact_k32.lib" "$tmp/audioact64/audioact_mmdev.lib" \
+    /out:"$out/audioact64.exe"
 # Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
 cat >"$tmp/d3d11_k32.def" <<'DEF'
 LIBRARY kernel32.dll
