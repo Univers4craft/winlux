@@ -27,6 +27,7 @@ mod com_audio;
 mod com_mf;
 mod com_netfw;
 mod com_nlm;
+mod com_ole;
 mod com_shell;
 mod com_taskschd;
 mod comctl;

@@ -34,6 +34,8 @@
 # PROPVARIANT chaîne et BLOB, IAudioClient, tampon de rendu, volumes flottants).
 # audioact32.exe et audioact64.exe (#2428) : ActivateAudioInterfaceAsync et
 # DllGetClassObject de mmdevapi et de dsound, en x86 et en x64.
+# xaudio32.exe et xaudio64.exe (#2428) : XAudio2 2.9 en x86 et en x64 (voix,
+# vumètre, envois, rappels écrits dans le programme, XAUDIO2_VOICE_STATE).
 # mf32.exe et mf64.exe (#2428) : objets de base de Media Foundation en x86
 # et en x64 (attributs, types, tampons, échantillons, collection, événements,
 # file d'événements avec rappel x86, descripteurs, mise en flux).
@@ -50,7 +52,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32 mf32"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32 xaudio32 mf32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -295,6 +297,21 @@ for name in audioact32 audioact64; do
     fi
 done
 echo "audioact32/audioact64 : ActivateAudioInterfaceAsync et DllGetClassObject (mmdevapi, dsound) en x86 et en x64"
+
+# XAudio2 (#2428) : un programme x86 n'avait pas de pont pour IXAudio2 ni ses voix.
+for name in xaudio32 xaudio64; do
+    set +e
+    WINLUX_AUDIO=null WINLUX_GUI=headless timeout 60 "$runtime" "$out/$name.exe" >"$work/xaudio.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'XAudio2 : tout est correct' "$work/xaudio.txt" \
+        || grep -q 'non décrite pour les programmes 32 bits' "$work/xaudio.txt"; then
+        tail -20 "$work/xaudio.txt"
+        echo "$name.exe : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+done
+echo "xaudio32/xaudio64 : XAudio2 2.9 en x86 et en x64 (voix, vumètre, envois, rappels, état de voix)"
 
 # Media Foundation, objets de base (#2428) : un programme x86 recevait des
 # objets à table win64 et plantait au premier appel de méthode.
