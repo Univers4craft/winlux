@@ -882,6 +882,13 @@ def stale_screens():
     return found
 
 
+def shown_name(ident, stored, names):
+    """Nom affiché d'une application bloquée. Pour un programme Linux, le nom du
+    lanceur du menu (#2248) l'emporte sur celui enregistré au moment du blocage :
+    un blocage fait avant #2248 gardait « Text Editor Settings » pour Mousepad (#2351)."""
+    return names.get(ident, stored) if ident.startswith("bin:") else stored
+
+
 def blocked_ids(cfg):
     return {app["id"]: app["name"] for app in cfg.get("apps", [])}
 
@@ -1502,7 +1509,7 @@ class Daemon:
                 alive.add(key)
                 if key not in self.killed:
                     self.killed.add(key)
-                    name = blocked[ident]
+                    name = shown_name(ident, blocked[ident], self.app_names())
                     update_usage(user, lambda u: (u["blocked_apps"].__setitem__(ident, u["blocked_apps"].get(ident, 0) + 1),
                                                   u["names"].__setitem__(ident, name)))
                     for display, _vt in session_displays(user):
@@ -2494,11 +2501,11 @@ class ParentalPanel:
         box = self.card()
         if not self.cfg["apps"]:
             self.text(_t("Aucune application bloquée."), "subtitle", box)
+        names = desktop_names()
         for app in self.cfg["apps"]:
-            self.line(box, app["name"], app["id"].split(":", 1)[1],
+            self.line(box, shown_name(app["id"], app["name"], names), app["id"].split(":", 1)[1],
                       [self.button(_t("Débloquer"), lambda i=app["id"]: self.unblock(i))])
         choices = {}
-        names = desktop_names()
         for app in report.get("apps", []):
             choices.setdefault(app["id"], names.get(app["id"], app["name"]))
         for ident, name in sorted(desktop_choices().items(), key=lambda item: item[1].casefold()):
