@@ -279,6 +279,9 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         write_literal(b" rdx=0x");
         write_hex(rdx);
         write_literal(b"\n");
+        // Fil fautif (#2405) : tid Linux, celui des lignes de tas et de fils,
+        // et heure monotone comparable à WINLUX_THREAD_TRACE.
+        write_fault_thread();
 
         // Dump complet des registres x86-64
         write_literal(b"winlux: rax=0x");
@@ -596,6 +599,32 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
     }
 }
 
+/// `winlux: fil <tid> @<secondes>.<microsecondes>` (CLOCK_MONOTONIC).
+/// Async-signal-safe : gettid et clock_gettime sont des appels système.
+unsafe fn write_fault_thread() {
+    let tid = libc::syscall(libc::SYS_gettid) as u64;
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t);
+    write_literal(b"winlux: fil ");
+    write_fd_dec(2, tid);
+    write_literal(b" @");
+    write_fd_dec(2, t.tv_sec as u64);
+    write_literal(b".");
+    let us = (t.tv_nsec / 1000) as u64;
+    // Six chiffres, zéros en tête compris.
+    let mut d = [b'0'; 6];
+    let mut v = us;
+    for i in (0..6).rev() {
+        d[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    write_literal(&d);
+    write_literal(b"\n");
+}
+
 /// `winlux: tas page <nom> pile <quoi> : ?0x… module+0x… …` (#2379) :
 /// adresses de retour probables relevées sur la pile à l'allocation ou à
 /// la libération du bloc.
@@ -853,6 +882,15 @@ mod tests {
         assert_eq!(status.code(), Some(0x09), "{status:?}\n{err}");
         assert!(err.contains("STATUS_STACK_BUFFER_OVERRUN"), "{err}");
         assert!(!err.contains("EXCEPTION_ACCESS_VIOLATION"), "{err}");
+        // #2405 : le rapport nomme le fil fautif, avec l'heure monotone.
+        let fil = err
+            .lines()
+            .find(|l| l.starts_with("winlux: fil "))
+            .unwrap_or_else(|| panic!("{err}"));
+        let (tid, at) = fil["winlux: fil ".len()..].split_once(" @").unwrap();
+        assert!(tid.parse::<u64>().unwrap() > 0, "{fil}");
+        let (s, us) = at.split_once('.').unwrap();
+        assert!(s.parse::<u64>().is_ok() && us.len() == 6, "{fil}");
         assert!(log.is_empty() || log.contains("c0000409"), "{log}");
     }
 
