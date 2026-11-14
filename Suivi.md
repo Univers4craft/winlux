@@ -141,6 +141,8 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ## DÉJÀ FAIT
 
+- [x] SHGetKnownFolderPath : les 120 FOLDERID de la page publique KNOWNFOLDERID (hors OneDrive) sont servis, E_INVALIDARG pour un GUID inconnu et E_FAIL pour un dossier virtuel, refus journalisé ; GUID de FOLDERID_Fonts corrigé (#2477).
+
 ### Tri des issues GitHub (07/11/2026, PR #564)
 
 - [x] Issues vérifiées une à une sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées (livrées sans avoir été closes), #498 fermée comme doublon de #521 ; #23, #28, #179, #183 commentées (partielles).
