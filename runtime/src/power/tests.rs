@@ -2,7 +2,7 @@
 
 use super::daemon::{
     acpi_inputs, brightness_key, brightness_step, decode_event, external_display_at, has_key,
-    idle_step, lid_action, Hw, IdleStep,
+    idle_step, lid_action, server_dpms_needs_reset, Hw, IdleStep,
 };
 use super::*;
 use std::sync::atomic::AtomicUsize;
@@ -593,4 +593,78 @@ fn cli_set_values() {
     assert_eq!(c.brightness, 5);
     assert!(cli::set(&mut c, "lid", "explode", true).is_err());
     assert!(cli::set(&mut c, "unknown", "1", true).is_err());
+}
+
+/// #2148 : les délais DPMS du serveur X (600 s de Xorg, ou ceux de
+/// ~/.xscreensaver) sont remis à zéro ; un serveur sans DPMS est laissé tel quel.
+#[test]
+fn delais_dpms_du_serveur_remis_a_zero() {
+    assert!(server_dpms_needs_reset(Some((600, 600, 600))));
+    assert!(server_dpms_needs_reset(Some((65535, 65535, 65535))));
+    assert!(server_dpms_needs_reset(Some((0, 0, 600))));
+    assert!(!server_dpms_needs_reset(Some((0, 0, 0))));
+    assert!(!server_dpms_needs_reset(None));
+}
+
+/// #2152 : avant la veille, chaque session ouverte (« Changer
+/// d'utilisateur ») est verrouillée, avec son propre compte ; un écran déjà
+/// verrouillé n'est pas relancé.
+#[test]
+fn verrouillage_de_toutes_les_sessions_avant_la_veille() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fake::new();
+    let main = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    f.put("run/winlux/sessions/alice", "display=:0\nvt=7");
+    f.put("run/winlux/sessions/bob", "display=:1\nvt=8");
+    f.put("run/winlux/sessions/.tmp.12", "display=:5");
+    f.put("run/winlux/sessions/eve", "display=:2;x");
+    let targets = sleep::lock_targets_at(&f.0);
+    assert_eq!(targets[0].0, main);
+    assert!(
+        targets.contains(&(":1".into(), Some("bob".into()))),
+        "{targets:?}"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|(d, a)| d == ":0" && a.as_deref() == Some("alice")),
+        "{targets:?}"
+    );
+    assert!(
+        !targets
+            .iter()
+            .any(|(d, _)| d == ":5" || d.starts_with(":2")),
+        "{targets:?}"
+    );
+    assert_eq!(
+        sleep::lock_shown_marker(&f.0, ":0"),
+        f.0.join("run/winlux/lock/shown")
+    );
+    assert_eq!(
+        sleep::lock_shown_marker(&f.0, ":1"),
+        f.0.join("run/winlux/lock/shown-1")
+    );
+
+    // Faux winlux-lock : note l'écran et le compte, pose le marqueur.
+    let tool = f.0.join("usr/bin/winlux-lock");
+    fs::create_dir_all(tool.parent().unwrap()).unwrap();
+    fs::create_dir_all(f.0.join("run/winlux/lock")).unwrap();
+    fs::write(
+        &tool,
+        "#!/bin/sh\nn=${DISPLAY#:}; n=${n%%.*}; s=; test \"$n\" = 0 || s=\"-$n\"\n\
+         echo \"$DISPLAY $WINLUX_SESSION_USER\" >> \"$WINLUX_POWER_ROOT/lock-calls\"\n\
+         : > \"$WINLUX_POWER_ROOT/run/winlux/lock/shown$s\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    // :0 déjà verrouillé (la session d'Alice, quittée par « Changer d'utilisateur »).
+    fs::write(sleep::lock_shown_marker(&f.0, ":0"), "1\n").unwrap();
+    sleep::lock_before_sleep(&f.0);
+    let calls = f.get("lock-calls");
+    assert!(calls.lines().any(|l| l == ":1 bob"), "{calls:?}");
+    assert!(
+        !calls.lines().any(|l| l.starts_with(":0 ")),
+        "écran déjà verrouillé relancé : {calls:?}"
+    );
+    assert!(f.0.join("run/winlux/lock/shown-1").is_file());
 }

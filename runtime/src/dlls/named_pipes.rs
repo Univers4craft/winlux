@@ -28,6 +28,7 @@ const ERROR_INVALID_NAME: u32 = 123;
 const ERROR_PIPE_BUSY: u32 = 231;
 const ERROR_PIPE_CONNECTED: u32 = 535;
 const ERROR_IO_PENDING: u32 = 997;
+const ERROR_OPERATION_ABORTED: u32 = 995;
 const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 
@@ -241,35 +242,44 @@ pub(crate) fn connect(h: usize, overlapped: usize) -> i32 {
         }
     }
     drop(st);
-    unsafe {
-        // OVERLAPPED.Internal = STATUS_PENDING jusqu'à la connexion.
-        (overlapped as *mut usize).write(0x103);
-    }
+    // Opération inscrite comme ReadFile/WriteFile (#2219) : Internal =
+    // STATUS_PENDING, hEvent remis à non signalé, et GetOverlappedResult
+    // attend la connexion quand bWait vaut TRUE.
+    let Some(pending) = (unsafe { crate::dlls::kernel32::begin_overlapped(h, overlapped) }) else {
+        return 0;
+    };
+    let pending = std::sync::Arc::new(Mutex::new(Some(pending)));
+    let in_thread = pending.clone();
     let spawned = std::thread::Builder::new()
         .name("winlux-pipe-connect".into())
         .spawn(move || {
+            let Some(pending) = crate::dlls::lock(&in_thread).take() else {
+                return;
+            };
             let reg = registry();
             let mut st = crate::dlls::lock(&reg.state);
-            loop {
+            let error = loop {
+                if pending.cancelled() {
+                    break ERROR_OPERATION_ABORTED;
+                }
                 match find_server(&mut st, h) {
-                    Some(i) if i.connected => break,
+                    Some(i) if i.connected => break 0,
                     Some(_) => {}
-                    None => {
-                        drop(st);
-                        crate::dlls::kernel32::complete_overlapped(h, overlapped, 0, 995);
-                        return;
-                    }
+                    None => break ERROR_OPERATION_ABORTED,
                 }
                 let (g, _) = reg
                     .changed
                     .wait_timeout(st, std::time::Duration::from_millis(200))
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 st = g;
-            }
+            };
             drop(st);
-            crate::dlls::kernel32::complete_overlapped(h, overlapped, 0, 0);
+            pending.finish(0, error);
         });
     if spawned.is_err() {
+        if let Some(p) = crate::dlls::lock(&pending).take() {
+            p.abandon();
+        }
         crate::process::set_last_error(8);
         return 0;
     }
@@ -726,6 +736,54 @@ mod tests {
             .map(|c| u16::from_le_bytes(*c))
             .collect();
         assert_eq!(String::from_utf16_lossy(&wide), format!("\\{name}"));
+        close_server(h);
+    }
+
+    /// #2219 : ConnectNamedPipe asynchrone. L'événement de l'OVERLAPPED,
+    /// laissé signalé, est remis à non signalé ; GetOverlappedResult rend
+    /// ERROR_IO_INCOMPLETE avec bWait = FALSE et attend la connexion avec
+    /// bWait = TRUE (Teams attendait l'événement, qui rendait tout de suite,
+    /// puis GetOverlappedResult échouait).
+    #[test]
+    fn connexion_asynchrone_attendue_2219() {
+        use crate::dlls::kernel32 as k;
+        let _teb = crate::process::test_teb();
+        let name = format!("winlux-test-2219-{}", std::process::id());
+        let h = create(&format!("\\\\.\\pipe\\{name}"), 3 | 0x4000_0000, 0, 1);
+        assert_ne!(h, usize::MAX);
+        // Événement à réinitialisation manuelle, créé signalé.
+        let event = unsafe { k::create_event_a(0, 1, 1, std::ptr::null()) };
+        let mut ov: k::Overlapped = unsafe { std::mem::zeroed() };
+        ov.event = event;
+        let ov_ptr = &mut ov as *mut k::Overlapped;
+        assert_eq!(connect(h, ov_ptr as usize), 0);
+        assert_eq!(crate::process::last_error(), ERROR_IO_PENDING);
+        assert_eq!(
+            unsafe { std::ptr::read_volatile(&(*ov_ptr).internal) },
+            0x103
+        );
+        assert_eq!(
+            k::wait_for_single_object(event, 0),
+            0x102,
+            "événement non remis à zéro"
+        );
+        let mut n = 7u32;
+        assert_eq!(unsafe { k::get_overlapped_result(h, ov_ptr, &mut n, 0) }, 0);
+        assert_eq!(crate::process::last_error(), 996);
+        let client_name = name.clone();
+        let client = std::thread::spawn(move || {
+            let _teb = crate::process::test_teb();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            open_client(&client_name, 0)
+        });
+        assert_eq!(unsafe { k::get_overlapped_result(h, ov_ptr, &mut n, 1) }, 1);
+        assert_eq!(n, 0);
+        assert_eq!(unsafe { std::ptr::read_volatile(&(*ov_ptr).internal) }, 0);
+        assert_eq!(k::wait_for_single_object(event, 0), 0);
+        let c = client.join().unwrap();
+        assert_ne!(c, usize::MAX);
+        k::close_handle(c);
+        k::close_handle(event);
         close_server(h);
     }
 }

@@ -424,7 +424,7 @@ extern "win64" fn thrd_join(t: *const Thrd, res: *mut i32) -> i32 {
 
 // ---------- Erreurs ----------
 
-fn fatal(what: &str, msg: *const u8) -> ! {
+pub(crate) fn fatal(what: &str, msg: *const u8) -> ! {
     let detail = if msg.is_null() {
         String::new()
     } else {

@@ -136,6 +136,12 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
     // BCRYPT_ALG_HANDLE_HMAC_FLAG = 0x8
     let hmac = flags & 0x8 != 0;
     let name = crate::dlls::wstr(id);
+    if !hmac {
+        if let Some(h) = ecdsa::open(&name) {
+            put_handle(out, h);
+            return 0;
+        }
+    }
     match alg_from_name(&name) {
         Some(h) if hmac && h == ALG_RNG => {
             put_handle(out, 0);
@@ -161,7 +167,7 @@ unsafe fn put_handle(out: *mut usize, h: usize) {
 }
 
 pub extern "win64" fn bcrypt_close_algorithm_provider(h: usize, _flags: u32) -> i32 {
-    if aes::close(h) {
+    if aes::close(h) || ecdsa::close(h) {
         return 0;
     }
     if (1..=6).contains(&(h & !HMAC_BIT)) {
@@ -184,6 +190,9 @@ pub unsafe extern "win64" fn bcrypt_get_property(
     }
     let name = crate::dlls::wstr(prop);
     if let Some(r) = aes::get_property(h, &name, output, output_len, result_len) {
+        return r;
+    }
+    if let Some(r) = ecdsa::get_property(h, &name, output, output_len, result_len) {
         return r;
     }
     let h = resolve(h);
@@ -541,13 +550,23 @@ pub unsafe extern "win64" fn bcrypt_hash(
 }
 
 mod aes;
+mod ecdsa;
+
+/// BCryptDestroyKey : clé ECDSA ou AES.
+unsafe extern "win64" fn bcrypt_destroy_key(key: usize) -> i32 {
+    match ecdsa::destroy_key(key) {
+        Some(r) => r,
+        None => aes::destroy_key(key),
+    }
+}
 
 // --- Clés asymétriques, secrets, énumérations (ISCC, #1860) -----------------
 // ISCmplr.dll (Inno Setup 6.7) résout ces fonctions au chargement et refuse
 // de se charger s'il en manque une ; il ne s'en sert que pour les signatures
-// ISSig. Winlux n'a pas encore de fournisseur RSA/ECC sous CNG : chaque
-// fonction répond STATUS_NOT_SUPPORTED, comme un fournisseur qui ne connaît
-// pas l'algorithme demandé. Source : documentation publique de bcrypt.h.
+// ISSig. La vérification ECDSA (clé publique importée, BCryptVerifySignature)
+// est servie par bcrypt/ecdsa.rs (#2173) ; le reste répond
+// STATUS_NOT_SUPPORTED, comme un fournisseur qui ne connaît pas l'opération.
+// Source : documentation publique de bcrypt.h.
 
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 
@@ -564,16 +583,21 @@ pub extern "win64" fn bcrypt_finalize_key_pair(_key: usize, _flags: u32) -> i32 
     STATUS_INVALID_HANDLE
 }
 #[allow(clippy::too_many_arguments)]
-pub extern "win64" fn bcrypt_import_key_pair(
-    _alg: usize,
+pub unsafe extern "win64" fn bcrypt_import_key_pair(
+    alg: usize,
     _import: usize,
-    _blob_type: usize,
-    _key: usize,
-    _input: usize,
-    _len: u32,
+    blob_type: usize,
+    key: usize,
+    input: usize,
+    len: u32,
     _flags: u32,
 ) -> i32 {
-    STATUS_NOT_SUPPORTED
+    if blob_type == 0 {
+        return 0xC000_000Du32 as i32; // STATUS_INVALID_PARAMETER
+    }
+    let kind = crate::dlls::wstr(blob_type as *const u16);
+    ecdsa::import_key_pair(alg, &kind, key as *mut usize, input as *const u8, len)
+        .unwrap_or(STATUS_NOT_SUPPORTED)
 }
 #[allow(clippy::too_many_arguments)]
 pub extern "win64" fn bcrypt_sign_hash(
@@ -589,16 +613,17 @@ pub extern "win64" fn bcrypt_sign_hash(
     STATUS_NOT_SUPPORTED
 }
 #[allow(clippy::too_many_arguments)]
-pub extern "win64" fn bcrypt_verify_signature(
-    _key: usize,
+pub unsafe extern "win64" fn bcrypt_verify_signature(
+    key: usize,
     _padding: usize,
-    _hash: usize,
-    _hash_len: u32,
-    _sig: usize,
-    _sig_len: u32,
+    hash: usize,
+    hash_len: u32,
+    sig: usize,
+    sig_len: u32,
     _flags: u32,
 ) -> i32 {
-    STATUS_NOT_SUPPORTED
+    ecdsa::verify_signature(key, hash as *const u8, hash_len, sig as *const u8, sig_len)
+        .unwrap_or(STATUS_NOT_SUPPORTED)
 }
 pub extern "win64" fn bcrypt_secret_agreement(
     _private: usize,
@@ -647,7 +672,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "BCryptGenRandom"=>fn bcrypt_gen_random,"BCryptOpenAlgorithmProvider"=>fn bcrypt_open_algorithm_provider,
      "BCryptCloseAlgorithmProvider"=>fn bcrypt_close_algorithm_provider,
-     "BCryptDestroyKey"=>fn aes::destroy_key,"BCryptEncrypt"=>fn aes::encrypt,"BCryptDecrypt"=>fn aes::decrypt,
+     "BCryptDestroyKey"=>fn bcrypt_destroy_key,"BCryptEncrypt"=>fn aes::encrypt,"BCryptDecrypt"=>fn aes::decrypt,
      "BCryptGenerateSymmetricKey"=>fn aes::generate_symmetric_key,"BCryptImportKey"=>fn aes::import_key,
      "BCryptExportKey"=>fn aes::export_key,"BCryptDuplicateKey"=>fn aes::duplicate_key,
      "BCryptSetProperty"=>fn aes::set_property,"BCryptDuplicateHash"=>fn bcrypt_duplicate_hash,

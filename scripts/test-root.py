@@ -115,6 +115,19 @@ try:
     check(client("check", "bob", stdin="bob\n").returncode == 0, "bon mot de passe")
     check(client("check", "bob", stdin="faux\n").returncode != 0, "mauvais mot de passe")
     check(client("check", "alice", stdin="motdepasse\n").returncode != 0, "mot de passe d'un autre compte via check")
+    # Fenêtre UAC d'un compte standard (#2292) : le relais vérifie le mot de
+    # passe de l'administrateur choisi, sans ouvrir d'élévation au compte.
+    def admin_check(user, password):
+        import json as _j
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.connect(str(work / "root.sock"))
+            sock.sendall((_j.dumps({"op": "admin-check", "user": user, "password": password}) + "\n").encode())
+            return _j.loads(sock.makefile().readline()).get("ok")
+    check(admin_check("alice", "motdepasse") is True, "mot de passe d'administrateur accepté (admin-check)")
+    check(admin_check("alice", "faux") is False, "mauvais mot de passe d'administrateur refusé")
+    check(admin_check("bob", "bob") is False, "compte standard refusé par admin-check")
+    run = client("control", "share-add", str(work), extra_env={"DISPLAY": ""})
+    check(run.returncode != 0, "admin-check n'ouvre pas d'élévation")
     # Élévation : un compte standard ne s'élève pas avec son propre mot de passe…
     check(client("elevate", "bob", stdin="bob\n").returncode != 0, "compte standard non administrateur")
     # … mais avec celui d'un administrateur, comme le Contrôle de compte Windows.

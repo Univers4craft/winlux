@@ -442,6 +442,22 @@ fn console_dispatch(method: &str, args: &[Value], params: &[ElementType]) -> Opt
         "get_Out" | "get_Error" | "get_In" => Some(Value::Null),
         "SetOut" | "SetError" | "SetIn" => Some(Value::I32(0)),
         "Beep" => Some(Value::I32(0)),
+        // Console.CursorLeft (#2233) : X de dwCursorPosition, ou moins
+        // l'erreur Win32 quand la sortie n'est pas une console.
+        "Colonne" => {
+            let mut info = [0u16; 11];
+            let ok = unsafe {
+                crate::dlls::kernel32_misc::get_console_screen_buffer_info(
+                    (-11isize) as usize,
+                    info.as_mut_ptr(),
+                )
+            };
+            Some(Value::I32(if ok != 0 {
+                info[2] as i32
+            } else {
+                -(crate::process::last_error() as i32)
+            }))
+        }
         _ => missing("Console", method),
     }
 }
@@ -515,6 +531,14 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "get_Is64BitProcess" => Some(Value::I32(1)),
         "get_Is64BitOperatingSystem" => Some(Value::I32(1)),
         "GetCommandLineArgs" => Some(Value::Null),
+        // Environment.GetEnvironmentVariables (#2233) : le bloc du processus,
+        // le même que GetEnvironmentStringsW.
+        "BlocEnvironnement" => {
+            let vars: Vec<String> = std::env::vars_os()
+                .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
+                .collect();
+            Some(alloc_string_array(&vars))
+        }
         _ => missing("Environment", method),
     }
 }
@@ -547,6 +571,9 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "Asin" => Some(Value::F64(to_f64(args.last()?).asin())),
         "Acos" => Some(Value::F64(to_f64(args.last()?).acos())),
         "Atan" => Some(Value::F64(to_f64(args.last()?).atan())),
+        "Sinh" => Some(Value::F64(to_f64(args.last()?).sinh())),
+        "Cosh" => Some(Value::F64(to_f64(args.last()?).cosh())),
+        "Tanh" => Some(Value::F64(to_f64(args.last()?).tanh())),
         "Atan2" => {
             if args.len() >= 2 {
                 Some(Value::F64(
@@ -571,7 +598,8 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "Exp" => Some(Value::F64(to_f64(args.last()?).exp())),
         "Floor" => Some(Value::F64(to_f64(args.last()?).floor())),
         "Ceiling" => Some(Value::F64(to_f64(args.last()?).ceil())),
-        "Round" => Some(Value::F64(to_f64(args.last()?).round())),
+        // Arrondi bancaire, comme Math.Round(double) (#2077).
+        "Round" => Some(Value::F64(to_f64(args.last()?).round_ties_even())),
         "Truncate" => Some(Value::F64(to_f64(args.last()?).trunc())),
         "Min" => {
             if args.len() >= 2 {
@@ -872,7 +900,7 @@ fn gc_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
         "SuppressFinalize" | "ReRegisterForFinalize" | "WaitForPendingFinalizers" => {
             Some(Value::I32(0))
         }
-        "GetTotalMemory" => {
+        "GetTotalMemory" | "Alloue" => {
             let total = gc::with_gc(|gc| gc.total_allocated());
             Some(Value::I64(total as i64))
         }

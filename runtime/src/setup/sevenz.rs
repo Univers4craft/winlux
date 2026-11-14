@@ -1010,7 +1010,7 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
             "s" | "q" | "qn" | "quiet" | "silent" | "verysilent"
         )
     });
-    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("sfx");
     let _ = std::fs::remove_dir_all(&work);
     let mut msi_path = None;
     for e in &entries {
@@ -1054,7 +1054,7 @@ pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
 /// Archive d'installateur sans MSI : extraite dans un dossier temporaire,
 /// puis son `setup.exe` est lancé et attendu ; son code est rendu (#1738).
 fn run_bundle_setup(entries: &[Entry], args: &[String]) -> i32 {
-    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let work = crate::paths::setup_work_dir("sfx");
     let _ = std::fs::remove_dir_all(&work);
     let mut setup = None;
     for e in entries {
