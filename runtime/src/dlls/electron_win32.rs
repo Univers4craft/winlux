@@ -23,7 +23,6 @@ const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_IO_PENDING: u32 = 997;
 const ERROR_NOT_FOUND: u32 = 1168;
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
-const E_NOTIMPL: u32 = 0x8000_4001;
 const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
 const WSASERVICE_NOT_FOUND: u32 = 10108;
 const WSA_E_NO_MORE: u32 = 10110;
@@ -1754,7 +1753,7 @@ unsafe extern "win64" fn WindowsCreateStringReference(
     0
 }
 
-unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
+pub(crate) unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
     if h == 0 || is_reference(h) {
         return 0;
     }
@@ -1764,7 +1763,7 @@ unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
     0
 }
 
-unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i32 {
+pub(crate) unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
@@ -1871,7 +1870,8 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
 
 /// Sont inscrites `Windows.System.DispatcherQueue` (#1355), les classes
 /// d'activation de Windows.UI.Composition (#1416) et
-/// `Windows.Storage.ApplicationData` (#2122), `Windows.Foundation.PropertyValue` (#2192). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
+/// `Windows.Storage.ApplicationData` (#2122), `Windows.Foundation.PropertyValue` (#2192),
+/// les classes de `Windows.Data.Json` (#2171). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
 /// Automation) se rabat sur l'API Win32.
 unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
     let name = String::from_utf16_lossy(hstring_slice(class));
@@ -1912,6 +1912,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     }
     // Windows.Foundation.PropertyValue (#2192).
     if let Some(hr) = super::property_value::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Data.Json : JsonObject, JsonArray, JsonValue, JsonError (#2171).
+    if let Some(hr) = super::data_json::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if !out.is_null() {
@@ -2392,20 +2396,135 @@ pub fn oleaut32_exports() -> crate::dlls::Exports {
     }
 }
 
-/// Pas de conteneurs d'applis (AppContainer) sous Winlux.
-unsafe extern "win64" fn DeriveAppContainerSidFromAppContainerName(
-    _name: *const u16,
+// ============================================================
+//  userenv : profils de conteneurs d'applications (AppContainer)
+// ============================================================
+//
+// Pages publiques de CreateAppContainerProfile et de
+// DeriveAppContainerSidFromAppContainerName (userenv.h) : le profil est
+// créé une fois (ERROR_ALREADY_EXISTS ensuite), le SID rendu est un SID
+// d'application S-1-15-2-… libéré par FreeSid. Winlux n'isole pas le
+// conteneur : la séparation réelle vient des comptes Linux, comme pour les
+// jetons du bac à sable (security.rs). Le calcul des sept sous-autorités
+// n'est pas documenté : celui-ci est notre choix, stable pour un nom donné
+// (sans distinction de casse), et ce n'est pas celui de Windows (#2495).
+
+const HR_INVALIDARG: u32 = 0x8007_0057;
+/// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS).
+const HR_ALREADY_EXISTS: u32 = 0x8007_00B7;
+
+/// Nom de conteneur valide : 1 à 64 caractères (page de
+/// CreateAppContainerProfile), sans séparateur de chemin.
+fn appcontainer_name(name: *const u16) -> Option<String> {
+    if name.is_null() {
+        return None;
+    }
+    let text = unsafe { crate::dlls::wstr(name) };
+    let n = text.chars().count();
+    ((1..=64).contains(&n) && !text.contains(['\\', '/'])).then_some(text)
+}
+
+/// Sept sous-autorités stables tirées du nom (notre choix, voir plus haut).
+pub(crate) fn appcontainer_subauthorities(name: &str) -> [u32; 7] {
+    let lower = name.to_lowercase();
+    let mut h: u32 = 0x811c_9dc5;
+    let mut subs = [0u32; 7];
+    for (i, b) in lower
+        .bytes()
+        .cycle()
+        .take(lower.len().max(1) * 7)
+        .enumerate()
+    {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+        subs[i % 7] ^= h;
+    }
+    subs
+}
+
+/// Écrit dans `*sid` un SID S-1-15-2-… alloué comme par
+/// AllocateAndInitializeSid (FreeSid le libère).
+unsafe fn give_appcontainer_sid(name: &str, sid: *mut usize) -> u32 {
+    let subs = appcontainer_subauthorities(name);
+    let auth = [0u8, 0, 0, 0, 0, 15];
+    let mut out: *mut u8 = std::ptr::null_mut();
+    if crate::dlls::security::AllocateAndInitializeSid(
+        auth.as_ptr(),
+        8,
+        2,
+        subs[0],
+        subs[1],
+        subs[2],
+        subs[3],
+        subs[4],
+        subs[5],
+        subs[6],
+        &mut out,
+    ) == 0
+    {
+        crate::wow32::write_ptr(sid as usize, 0);
+        return 0x8007_000E; // E_OUTOFMEMORY
+    }
+    crate::wow32::write_ptr(sid as usize, out as usize);
+    0
+}
+
+/// Clé où Winlux note les profils créés (emplacement de notre choix).
+fn appcontainer_key(name: &str) -> String {
+    format!(
+        "hkcu\\Software\\Winlux\\AppContainer\\{}",
+        name.to_lowercase()
+    )
+}
+
+/// CreateAppContainerProfile : S_OK et le SID la première fois,
+/// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) ensuite.
+pub(crate) unsafe extern "win64" fn CreateAppContainerProfile(
+    name: *const u16,
+    _display: *const u16,
+    _description: *const u16,
+    _caps: usize,
+    _count: u32,
     sid: *mut usize,
 ) -> u32 {
-    if !sid.is_null() {
-        *sid = 0;
+    if sid.is_null() {
+        return HR_INVALIDARG;
     }
-    E_NOTIMPL
+    crate::wow32::write_ptr(sid as usize, 0);
+    let Some(name) = appcontainer_name(name) else {
+        return HR_INVALIDARG;
+    };
+    match crate::registry::create(&appcontainer_key(&name)) {
+        Ok((h, created)) => {
+            crate::registry::close_handle(h);
+            if !created {
+                return HR_ALREADY_EXISTS;
+            }
+        }
+        Err(e) => return 0x8007_0000 | (e as u32 & 0xFFFF),
+    }
+    give_appcontainer_sid(&name, sid)
+}
+
+/// DeriveAppContainerSidFromAppContainerName : le même SID que
+/// CreateAppContainerProfile pour ce nom, que le profil existe ou non.
+unsafe extern "win64" fn DeriveAppContainerSidFromAppContainerName(
+    name: *const u16,
+    sid: *mut usize,
+) -> u32 {
+    if sid.is_null() {
+        return HR_INVALIDARG;
+    }
+    let Some(name) = appcontainer_name(name) else {
+        crate::wow32::write_ptr(sid as usize, 0);
+        return HR_INVALIDARG;
+    };
+    give_appcontainer_sid(&name, sid)
 }
 
 pub fn userenv_exports() -> crate::dlls::Exports {
     crate::exports! {
         "DeriveAppContainerSidFromAppContainerName" => fn DeriveAppContainerSidFromAppContainerName,
+        "CreateAppContainerProfile" => fn CreateAppContainerProfile,
     }
 }
 
@@ -3418,6 +3537,74 @@ mod tests {
 
     /// Une clé ouverte est un objet « Key » nommé \\REGISTRY\\… ; un tampon
     /// trop court rend la taille utile (#2413).
+    /// Profil AppContainer créé une fois, SID S-1-15-2-… stable et identique
+    /// à celui de DeriveAppContainerSidFromAppContainerName (#2495).
+    #[test]
+    fn profil_appcontainer_cree_puis_existant() {
+        let _teb = crate::process::test_teb();
+        let _lock = crate::registry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = std::env::temp_dir().join(format!("winlux-reg-ac-{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+        std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+        let name: Vec<u16> = "Essai.Conteneur".encode_utf16().chain(Some(0)).collect();
+        let text = |sid: usize| unsafe {
+            let mut s: *mut u16 = std::ptr::null_mut();
+            assert_ne!(
+                crate::dlls::security::ConvertSidToStringSidW(sid as *const u8, &mut s),
+                0
+            );
+            crate::dlls::wstr(s)
+        };
+        unsafe {
+            let mut sid = 0usize;
+            let r = CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                &mut sid,
+            );
+            assert_eq!(r, 0);
+            let first = text(sid);
+            assert!(first.starts_with("S-1-15-2-"), "{first}");
+            assert_eq!(first.split('-').count(), 11, "{first}");
+            let mut again = 0usize;
+            assert_eq!(
+                CreateAppContainerProfile(
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0,
+                    0,
+                    &mut again
+                ),
+                HR_ALREADY_EXISTS
+            );
+            assert_eq!(again, 0);
+            let mut derived = 0usize;
+            assert_eq!(
+                DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut derived),
+                0
+            );
+            assert_eq!(text(derived), first);
+            let empty: [u16; 1] = [0];
+            assert_eq!(
+                DeriveAppContainerSidFromAppContainerName(empty.as_ptr(), &mut derived),
+                HR_INVALIDARG
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
+        match previous {
+            Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
+            None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+        }
+    }
+
     /// Station et bureau du bac à sable : DuplicateHandle les copie (#2443).
     #[test]
     fn duplicatehandle_copie_station_et_bureau() {

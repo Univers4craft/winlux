@@ -23,6 +23,7 @@
 //! refusée (E_NOINTERFACE) plutôt que de donner au programme une table
 //! qu'il ne saurait pas appeler.
 
+use super::com_ole::{IBINDCTX, IRUNNINGOBJECTTABLE};
 use super::com_shell;
 use super::layout::widen;
 use super::{call32, rd, wr};
@@ -183,26 +184,28 @@ pub(super) static IPERSISTSTREAM: Iface = Iface {
 };
 
 /// IMoniker : liaison à un IStream, nom affiché et type (moniker d'URL).
+/// Le contexte de liaison et le moniker de gauche sont de vrais
+/// IBindCtx et IMoniker (#2428, lot C).
 pub(super) static IMONIKER: Iface = Iface {
     name: "IMoniker",
     iid: ole(0xF),
     parent: Some(&IPERSISTSTREAM),
     methods: &[
-        Some(&[I, I, Iid, OutQ]), // BindToObject
-        Some(&[I, I, Iid, OutQ]), // BindToStorage
-        None,                     // Reduce
-        None,                     // ComposeWith
-        None,                     // Enum
-        Some(&[In(&IMONIKER)]),   // IsEqual
-        Some(&[I]),               // Hash
-        None,                     // IsRunning
-        None,                     // GetTimeOfLastChange
-        None,                     // Inverse
-        None,                     // CommonPrefixWith
-        None,                     // RelativePathTo
-        Some(&[I, I, OutPtr]),    // GetDisplayName
-        None,                     // ParseDisplayName
-        Some(&[I]),               // IsSystemMoniker
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToObject
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToStorage
+        None,                                             // Reduce
+        None,                                             // ComposeWith
+        None,                                             // Enum
+        Some(&[In(&IMONIKER)]),                           // IsEqual
+        Some(&[I]),                                       // Hash
+        None,                                             // IsRunning
+        None,                                             // GetTimeOfLastChange
+        None,                                             // Inverse
+        None,                                             // CommonPrefixWith
+        None,                                             // RelativePathTo
+        Some(&[In(&IBINDCTX), In(&IMONIKER), OutPtr]),    // GetDisplayName
+        None,                                             // ParseDisplayName
+        Some(&[I]),                                       // IsSystemMoniker
     ],
 };
 
@@ -1026,6 +1029,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_netfw::ALL.iter())
         .chain(super::com_nlm::ALL.iter())
         .chain(super::com_shell::ALL.iter())
+        .chain(super::com_ole::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1843,7 +1847,16 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "SafeArrayPtrOfIndex" | "#148") => k!(I, I, OutPtr),
         ("oleaut32", "VariantCopyInd" | "#11") => k!(Var, Var),
         ("oleaut32", "GetActiveObject" | "#35") => k!(I, I, Out(&IUNKNOWN)),
-        ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
+        ("ole32", "OleRegEnumVerbs") => k!(I, OutPtr),
+        // Contexte de liaison, table des objets actifs, monikers (#2428, lot C).
+        ("ole32", "CreateBindCtx") => k!(I, Out(&IBINDCTX)),
+        ("ole32", "GetRunningObjectTable") => k!(I, Out(&IRUNNINGOBJECTTABLE)),
+        ("ole32", "CreateFileMoniker") => k!(I, Out(&IMONIKER)),
+        ("ole32", "CreateItemMoniker") => k!(I, I, Out(&IMONIKER)),
+        ("ole32", "CreatePointerMoniker") => k!(In(&IUNKNOWN), Out(&IMONIKER)),
+        ("ole32", "MkParseDisplayName") => k!(In(&IBINDCTX), I, I, Out(&IMONIKER)),
+        ("ole32", "CoGetObject") => k!(I, I, Iid, OutQ),
+        ("ole32", "OleLoadFromStream") => k!(In(&ISTREAM), Iid, OutQ),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
         // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
@@ -1890,6 +1903,9 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        // ASSOCIATIONELEMENT lu à la disposition x86 par le runtime (#2475) ;
+        // l'IQueryAssociations rendu suit sa description quand elle existe.
+        ("shell32", "AssocCreateForClasses") => k!(I, I, Iid, OutQ),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
@@ -2015,6 +2031,10 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+        // #2475 : 16 octets (stdcall.tsv), interface rendue d'après son IID.
+        let (k, r) = api_kinds("shell32", "AssocCreateForClasses").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(r.is_none() && matches!(k[2..], [Iid, OutQ]));
     }
 
     /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
