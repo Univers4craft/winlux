@@ -252,6 +252,18 @@ unsafe fn is_privileged(rip: usize) -> bool {
     }
 }
 
+/// `__fastfail` (#2287) : `int 0x29` lève une faute #GP (trapno 13) sous
+/// Linux. Windows arrête alors le processus sans répartition, avec
+/// STATUS_STACK_BUFFER_OVERRUN (0xC0000409) et le code d'échec dans RCX.
+pub(crate) unsafe fn is_fastfail(uc: *const libc::ucontext_t) -> bool {
+    let g = &(*uc).uc_mcontext.gregs;
+    let rip = g[libc::REG_RIP as usize] as usize;
+    g[libc::REG_TRAPNO as usize] == 13
+        && rip != 0
+        && code_byte(rip) == 0xCD
+        && code_byte(rip + 1) == 0x29
+}
+
 pub(crate) struct Fault {
     pub code: u32,
     pub address: usize,
@@ -286,8 +298,9 @@ pub(crate) unsafe fn classify(
             let trapno = g[libc::REG_TRAPNO as usize];
             let err = g[libc::REG_ERR as usize];
             if trapno == 13 {
-                // __fastfail (int 0x29) : arrêt immédiat, jamais réparti.
-                if code_byte(rip) == 0xCD && code_byte(rip + 1) == 0x29 {
+                // __fastfail (int 0x29) : arrêt immédiat, jamais réparti ;
+                // le rapport de plantage le nomme (#2287).
+                if is_fastfail(uc) {
                     return None;
                 }
                 if is_privileged(rip) {
