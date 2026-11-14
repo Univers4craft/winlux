@@ -2,7 +2,7 @@
 
 use super::daemon::{
     acpi_inputs, brightness_key, brightness_step, decode_event, external_display_at, has_key,
-    idle_step, lid_action, server_dpms_needs_reset, Hw, IdleStep,
+    idle_step, lid_action, server_dpms_needs_reset, session_displays_at, Hw, IdleStep,
 };
 use super::*;
 use std::sync::atomic::AtomicUsize;
@@ -604,4 +604,97 @@ fn delais_dpms_du_serveur_remis_a_zero() {
     assert!(server_dpms_needs_reset(Some((0, 0, 600))));
     assert!(!server_dpms_needs_reset(Some((0, 0, 0))));
     assert!(!server_dpms_needs_reset(None));
+}
+
+/// #2149 : l'inactivité et l'extinction de l'écran visent aussi les écrans X
+/// des autres sessions (« Changer d'utilisateur »), pas seulement `:0`.
+#[test]
+fn ecrans_des_sessions_du_registre() {
+    let f = Fake::new();
+    let first = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    assert_eq!(session_displays_at(&f.0), vec![first.clone()]);
+    f.put(
+        "run/winlux/sessions/alice",
+        "display=:0\nvt=7\npid=\nstarted=1",
+    );
+    f.put(
+        "run/winlux/sessions/bob",
+        "display=:1\nvt=8\npid=42\nstarted=2",
+    );
+    f.put("run/winlux/sessions/.carol.123", "display=:2");
+    f.put("run/winlux/sessions/dave", "display=:3;rm\nvt=9");
+    f.put("run/winlux/sessions/eve", "vt=10");
+    let displays = session_displays_at(&f.0);
+    assert_eq!(displays[0], first);
+    assert!(displays.contains(&":0".to_string()) && displays.contains(&":1".to_string()));
+    assert!(!displays.iter().any(|d| d == ":2" || d.starts_with(":3")));
+    let unique: std::collections::HashSet<_> = displays.iter().collect();
+    assert_eq!(
+        unique.len(),
+        displays.len(),
+        "écran en double : {displays:?}"
+    );
+}
+
+/// #2152 : avant la veille, chaque session ouverte (« Changer
+/// d'utilisateur ») est verrouillée, avec son propre compte ; un écran déjà
+/// verrouillé n'est pas relancé.
+#[test]
+fn verrouillage_de_toutes_les_sessions_avant_la_veille() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fake::new();
+    let main = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+    f.put("run/winlux/sessions/alice", "display=:0\nvt=7");
+    f.put("run/winlux/sessions/bob", "display=:1\nvt=8");
+    f.put("run/winlux/sessions/.tmp.12", "display=:5");
+    f.put("run/winlux/sessions/eve", "display=:2;x");
+    let targets = sleep::lock_targets_at(&f.0);
+    assert_eq!(targets[0].0, main);
+    assert!(
+        targets.contains(&(":1".into(), Some("bob".into()))),
+        "{targets:?}"
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|(d, a)| d == ":0" && a.as_deref() == Some("alice")),
+        "{targets:?}"
+    );
+    assert!(
+        !targets
+            .iter()
+            .any(|(d, _)| d == ":5" || d.starts_with(":2")),
+        "{targets:?}"
+    );
+    assert_eq!(
+        sleep::lock_shown_marker(&f.0, ":0"),
+        f.0.join("run/winlux/lock/shown")
+    );
+    assert_eq!(
+        sleep::lock_shown_marker(&f.0, ":1"),
+        f.0.join("run/winlux/lock/shown-1")
+    );
+
+    // Faux winlux-lock : note l'écran et le compte, pose le marqueur.
+    let tool = f.0.join("usr/bin/winlux-lock");
+    fs::create_dir_all(tool.parent().unwrap()).unwrap();
+    fs::create_dir_all(f.0.join("run/winlux/lock")).unwrap();
+    fs::write(
+        &tool,
+        "#!/bin/sh\nn=${DISPLAY#:}; n=${n%%.*}; s=; test \"$n\" = 0 || s=\"-$n\"\n\
+         echo \"$DISPLAY $WINLUX_SESSION_USER\" >> \"$WINLUX_POWER_ROOT/lock-calls\"\n\
+         : > \"$WINLUX_POWER_ROOT/run/winlux/lock/shown$s\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+    // :0 déjà verrouillé (la session d'Alice, quittée par « Changer d'utilisateur »).
+    fs::write(sleep::lock_shown_marker(&f.0, ":0"), "1\n").unwrap();
+    sleep::lock_before_sleep(&f.0);
+    let calls = f.get("lock-calls");
+    assert!(calls.lines().any(|l| l == ":1 bob"), "{calls:?}");
+    assert!(
+        !calls.lines().any(|l| l.starts_with(":0 ")),
+        "écran déjà verrouillé relancé : {calls:?}"
+    );
+    assert!(f.0.join("run/winlux/lock/shown-1").is_file());
 }

@@ -112,6 +112,11 @@ PROTECTED = {"xorg", "openbox", "picom", "xfce4-panel", "xfdesktop", "xfconfd", 
              "sh", "bash", "dash", "busybox", "env", "setpriv", "prlimit", "xscreensaver", "at-spi-bus-launcher",
              "at-spi2-registryd", "gvfsd", "polkit-agent-helper-1", "xdg-desktop-portal", "ibus-daemon",
              "notify-send", "thunar"}
+# Applications PE du bureau Winlux (Explorateur, Boutique, Gestionnaire des
+# tâches, Bloc-notes PE…) : toutes tournent comme ce seul programme, lancé par
+# winlux-shell-app. Le bloquer fermait le bureau entier du compte (#2293).
+SHELL_EXE = "gui_demo.exe"
+SHELL_EXE_PATH = ROOT + "/opt/winlux/tests/" + SHELL_EXE
 
 # Résolveurs DNS chiffrés connus : le compte surveillé ne doit pas contourner
 # le DNS filtrant (DoH dans les réglages d'un navigateur). Le domaine
@@ -537,6 +542,12 @@ def load_config(user):
     data = read_json(config_path(user))
     if data is None:
         return None
+    apps = data.get("apps") if isinstance(data, dict) else None
+    if isinstance(apps, list):
+        # Programme du bureau bloqué avant d'être protégé (exe:gui_demo.exe,
+        # #2293) : retiré, sans perdre le reste des règles du compte.
+        data["apps"] = [app for app in apps if not (isinstance(app, dict) and isinstance(app.get("id"), str)
+                                                    and protected(app["id"].lower()))]
     try:
         return validate(data)
     except ValueError:
@@ -700,8 +711,20 @@ def report(user, days=7, moment=None):
 def protected(ident):
     kind, _, name = ident.partition(":")
     name = name.lower()
+    if kind == "exe":
+        return name == SHELL_EXE
     return kind == "bin" and (name in PROTECTED or name.startswith("winlux") or name.startswith("xfce4-")
                               or name.startswith("python3"))
+
+
+def shell_process(pid, exe, cmdline):
+    """Vrai si ce processus fait tourner le gui_demo.exe installé par Winlux
+    (fichier de root), pas une copie qui en aurait pris le nom (#2293)."""
+    path = app_file(pid, exe, cmdline)
+    try:
+        return bool(path) and os.path.samefile(path, SHELL_EXE_PATH)
+    except (OSError, ValueError):
+        return False
 
 
 def app_of(exe, cmdline):
@@ -886,27 +909,48 @@ def blocked_ids(cfg):
     return {app["id"]: app["name"] for app in cfg.get("apps", [])}
 
 
-def desktop_names():
-    """Nom affiché des applications Linux d'après leurs lanceurs (bin:firefox → Firefox)."""
-    names = {}
+def desktop_entries():
+    """{bin:programme: (nom, visible)} d'après les lanceurs des applications.
+
+    Plusieurs lanceurs peuvent lancer le même programme (Mousepad et ses
+    réglages, « mousepad --preferences ») : celui qui figure au menu passe
+    avant un lanceur caché (NoDisplay, Hidden) ou secondaire, quel que soit
+    l'ordre des fichiers (#2248). Spécification Desktop Entry de freedesktop.org."""
+    found = {}
     for folder in (Path(ROOT + "/usr/share/applications"), Path(ROOT + "/usr/local/share/applications")):
         try:
             files = sorted(folder.glob("*.desktop"))
         except OSError:
             continue
         for path in files:
-            name = exec_bin = None
+            values = {}
             for line in read_lines(path):
                 if line.startswith("[") and line.strip() != "[Desktop Entry]":
                     break
-                if line.startswith("Name=") and name is None:
-                    name = line[5:].strip()
-                elif line.startswith("Exec=") and exec_bin is None:
-                    words = [w for w in line[5:].split() if w != "env" and "=" not in w]
-                    exec_bin = os.path.basename(words[0]) if words else None
-            if name and exec_bin:
-                names.setdefault("bin:" + exec_bin, name)
-    return names
+                key, sep, value = line.partition("=")
+                if sep and key.strip() not in values:
+                    values[key.strip()] = value.strip()
+            name, command = values.get("Name"), values.get("Exec", "")
+            words = [w for w in command.split() if w != "env" and "=" not in w]
+            if not name or not words or values.get("Type", "Application") != "Application":
+                continue
+            ident = "bin:" + os.path.basename(words[0])
+            visible = values.get("NoDisplay", "").lower() != "true" and values.get("Hidden", "").lower() != "true"
+            # Le lanceur principal : au menu, et sans option qui le spécialise.
+            rank = (visible, not any(w.startswith("-") for w in words[1:]))
+            if ident not in found or rank > found[ident][2]:
+                found[ident] = (name, visible, rank)
+    return {ident: (name, visible) for ident, (name, visible, _rank) in found.items()}
+
+
+def desktop_names():
+    """Nom affiché des applications Linux d'après leurs lanceurs (bin:firefox → Firefox)."""
+    return {ident: name for ident, (name, _visible) in desktop_entries().items()}
+
+
+def desktop_choices():
+    """Applications proposées au blocage : celles du menu, sous leur nom."""
+    return {ident: name for ident, (name, visible) in desktop_entries().items() if visible and not protected(ident)}
 
 
 def display_name(ident, names):
@@ -1534,6 +1578,10 @@ class Daemon:
 
     def identify(self, user, pid, exe, cmdline, ident, blocked):
         """Application bloquée que ce processus fait tourner, même renommée (#815)."""
+        if ident and protected(ident) and ident.startswith("exe:") and shell_process(pid, exe, cmdline):
+            # Le vrai bureau Winlux n'est jamais fermé, même si une copie
+            # bloquée (renommée) partage son empreinte (#2293).
+            return None
         cache_key = (exe, tuple(cmdline))
         cached = self.seen.get(pid)
         fresh = not cached or cached[0] != cache_key
@@ -2477,11 +2525,11 @@ class ParentalPanel:
             self.line(box, app["name"], app["id"].split(":", 1)[1],
                       [self.button(_t("Débloquer"), lambda i=app["id"]: self.unblock(i))])
         choices = {}
+        names = desktop_names()
         for app in report.get("apps", []):
-            choices.setdefault(app["id"], app["name"])
-        for ident, name in sorted(desktop_names().items(), key=lambda item: item[1].casefold()):
-            if not protected(ident):
-                choices.setdefault(ident, name)
+            choices.setdefault(app["id"], names.get(app["id"], app["name"]))
+        for ident, name in sorted(desktop_choices().items(), key=lambda item: item[1].casefold()):
+            choices.setdefault(ident, name)
         blocked = {app["id"] for app in self.cfg["apps"]}
         combo = Gtk.ComboBoxText.new_with_entry()
         combo.set_name("parental-app-choice")
