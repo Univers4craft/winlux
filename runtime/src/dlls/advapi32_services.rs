@@ -8,6 +8,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const ERROR_ACCESS_DENIED: i32 = 5;
 const ERROR_INVALID_HANDLE: i32 = 6;
+const ERROR_INVALID_DATA: i32 = 13;
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
 const ERROR_CALL_NOT_IMPLEMENTED: i32 = 120;
@@ -1254,12 +1255,50 @@ unsafe fn call_service_main(
     Some(h)
 }
 
+/// Parcourt SERVICE_TABLE_ENTRY jusqu'à l'entrée de fin (nom et procédure
+/// nuls) et trace chaque entrée. Rend le nom de la première entrée dont
+/// `lpServiceProc` est nul (#2369).
+unsafe fn check_service_table(table: *const u8, wide: bool) -> Result<(), String> {
+    let slot = crate::wow32::pointer_size();
+    let mut ptr = table;
+    loop {
+        let name_ptr = crate::wow32::read_ptr(ptr as usize) as *const u8;
+        let proc_ptr = crate::wow32::read_ptr(ptr as usize + slot);
+        if name_ptr.is_null() && proc_ptr == 0 {
+            return Ok(());
+        }
+        let entry = if name_ptr.is_null() {
+            String::new()
+        } else if wide {
+            crate::dlls::wstr(name_ptr as *const u16)
+        } else {
+            crate::dlls::cstr(name_ptr)
+        };
+        crate::trace!("StartServiceCtrlDispatcher : entrée « {entry} », ServiceMain {proc_ptr:#x}");
+        if proc_ptr == 0 {
+            return Err(entry);
+        }
+        ptr = ptr.add(slot * 2);
+    }
+}
+
 /// Corps de `StartServiceCtrlDispatcherA` pour le service `svc_name` (le nom
 /// vient de `WINLUX_SERVICE_NAME`, posé par le gestionnaire de services).
 unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -> i32 {
     // Trace visible du banc : dit si le programme se met en mode service
     // avant de sortir (#1918).
     crate::trace!("StartServiceCtrlDispatcher(service « {svc_name} »)");
+    // Table vérifiée avant d'ouvrir le canal : une entrée sans ServiceMain
+    // n'est pas « au bon format » (ERROR_INVALID_DATA, MS Learn), au lieu
+    // d'un succès qui ne lance rien (#2369).
+    if let Err(entry) = check_service_table(table, wide) {
+        crate::log_warn!(
+            "services",
+            "StartServiceCtrlDispatcher : entrée « {entry} » sans ServiceMain (lpServiceProc nul), table refusée"
+        );
+        crate::process::set_last_error(ERROR_INVALID_DATA as u32);
+        return 0;
+    }
     let sock_path = control_sock_path(svc_name);
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
@@ -2651,6 +2690,33 @@ mod tests {
                 assert_eq!(unsafe { close_service_handle(h) }, 1);
             }
         });
+    }
+
+    #[test]
+    fn dispatcher_refuse_une_entree_sans_service_main() {
+        let _serial = DISPATCH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let svc_name = format!("winlux-test-sans-main-{}", std::process::id());
+        // Nom présent, lpServiceProc nul, puis l'entrée de fin.
+        let entry = wide("SansMain");
+        let mut table = Vec::new();
+        table.extend_from_slice(&(entry.as_ptr() as usize).to_ne_bytes());
+        table.extend_from_slice(&0usize.to_ne_bytes());
+        table.extend_from_slice(&[0u8; 16]);
+        assert_eq!(
+            unsafe { check_service_table(table.as_ptr(), true) },
+            Err("SansMain".to_string())
+        );
+        assert_eq!(
+            unsafe { run_service_dispatcher(&svc_name, table.as_ptr(), true) },
+            0
+        );
+        // Aucun canal de contrôle laissé derrière.
+        assert_eq!(running_elsewhere(&svc_name), None);
+        // Une table vide (seulement l'entrée de fin) reste acceptée.
+        let fin = [0u8; 16];
+        assert_eq!(unsafe { check_service_table(fin.as_ptr(), true) }, Ok(()));
     }
 
     #[test]

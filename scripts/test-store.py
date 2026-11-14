@@ -184,6 +184,8 @@ esac
     (conf / "local.json").write_text(json.dumps({"id": "local", "name": "Catalogue local", "file": str(catalog)}))
     mock(bindir, "winlux", 'printf "winlux %s\\n" "$*" >> "$LOG"\n'
          'if [ "$1" = --msiexec ] && [ "$2" = --info ]; then printf "{AAAA-BBBB}\\tApp\\t1\\n"; fi\n')
+    # Page du contrat de licence (#2129) : paquet sans contrat, l'installation suit.
+    mock(bindir, "winlux-setup-wizard", 'printf "assistant %s\\n" "$*" >> "$LOG"\nexit 0\n')
 
     # --- Dépôt Scoop (archive .tar.gz de manifestes) ---
     pe64 = b"MZ" + b"\0" * 0x3A + (0x40).to_bytes(4, "little") + b"PE\0\0\x64\x86" + b"\0" * 64

@@ -546,6 +546,9 @@ const FORMATS: &[FmtRow] = &[
     ("swscanf_s", b"ii", 1, true, true, false, false),
     ("_snscanf_s", b"iii", 2, false, true, false, false),
     ("_snwscanf_s", b"iii", 2, true, true, false, false),
+    // Sans passerelle x86 jusqu'ici (#2367).
+    ("_snscanf", b"iii", 2, false, true, false, false),
+    ("_swprintf_c", b"iii", 2, true, false, false, false),
     ("vscanf_s", b"i", 0, false, true, true, false),
     ("vwscanf_s", b"i", 0, true, true, true, false),
     ("vfscanf_s", b"ii", 1, false, true, true, false),
@@ -680,6 +683,90 @@ const FORMATS: &[FmtRow] = &[
         false,
     ),
 ];
+
+/// Famille `__crt*` de msvcr110/120 (#1972) : enveloppes cdecl de la
+/// fonction de kernel32 nommée à droite (liste de crt_releve.rs). En x64,
+/// l'enveloppe passe ses arguments tels quels ; en x86, les structures ont
+/// une autre disposition, donc l'appel va à la passerelle x86 de la
+/// fonction de kernel32 elle-même (#2367).
+pub(super) const CRT_KERNEL32: &[(&str, &str)] = &[
+    ("__crtCompareStringA", "CompareStringA"),
+    ("__crtCompareStringW", "CompareStringW"),
+    ("__crtCompareStringEx", "CompareStringEx"),
+    ("__crtCreateEventExW", "CreateEventExW"),
+    ("__crtCreateSemaphoreExW", "CreateSemaphoreExW"),
+    ("__crtCreateSymbolicLinkW", "CreateSymbolicLinkW"),
+    ("__crtEnumSystemLocalesEx", "EnumSystemLocalesEx"),
+    ("__crtFlsAlloc", "FlsAlloc"),
+    ("__crtFlsFree", "FlsFree"),
+    ("__crtFlsGetValue", "FlsGetValue"),
+    ("__crtFlsSetValue", "FlsSetValue"),
+    ("__crtGetDateFormatEx", "GetDateFormatEx"),
+    (
+        "__crtGetFileInformationByHandleEx",
+        "GetFileInformationByHandleEx",
+    ),
+    ("__crtGetLocaleInfoEx", "GetLocaleInfoEx"),
+    ("__crtGetTickCount64", "GetTickCount64"),
+    ("__crtGetTimeFormatEx", "GetTimeFormatEx"),
+    ("__crtGetUserDefaultLocaleName", "GetUserDefaultLocaleName"),
+    (
+        "__crtInitializeCriticalSectionEx",
+        "InitializeCriticalSectionEx",
+    ),
+    ("__crtIsValidLocaleName", "IsValidLocaleName"),
+    ("__crtLCMapStringEx", "LCMapStringEx"),
+    (
+        "__crtSetFileInformationByHandle",
+        "SetFileInformationByHandle",
+    ),
+    ("__crtSetThreadStackGuarantee", "SetThreadStackGuarantee"),
+    (
+        "__crtSetUnhandledExceptionFilter",
+        "SetUnhandledExceptionFilter",
+    ),
+    ("__crtSleep", "Sleep"),
+    ("__crtUnhandledException", "UnhandledExceptionFilter"),
+    ("__crtCaptureCurrentContext", "RtlCaptureContext"),
+];
+
+/// Passerelle x86 d'un `__crt*` : l'appelant (cdecl) dépile lui-même,
+/// la fonction de kernel32 (stdcall) dépile ses arguments. L'adaptateur
+/// les recopie sur la pile, appelle la passerelle stdcall, qui dépile la
+/// copie, puis revient sans toucher aux arguments de l'appelant.
+fn crt_forward32(func: &str) -> Option<Override> {
+    let (_, k) = CRT_KERNEL32.iter().find(|(c, _)| *c == func)?;
+    let bytes = super::stdcall_bytes("kernel32", k)?;
+    let stub = super::kernel32_stub(k)?;
+    Some(Override::Data(
+        super::alloc_code(&cdecl_to_stdcall(stub as u32, bytes)) as usize,
+    ))
+}
+
+/// Code x86 de l'adaptateur cdecl → stdcall pour `bytes` octets d'arguments.
+fn cdecl_to_stdcall(stub: u32, bytes: u16) -> Vec<u8> {
+    let n = bytes / 4;
+    assert!(
+        bytes.is_multiple_of(4) && n <= 31,
+        "adaptateur cdecl : {bytes} octets"
+    );
+    let mut c = Vec::with_capacity(4 * n as usize + 8);
+    // Chaque push décale esp de 4 : le même déplacement atteint
+    // l'argument précédent (du dernier au premier).
+    for _ in 0..n {
+        c.extend_from_slice(&[0xff, 0x74, 0x24, (4 * n) as u8]); // push dword [esp+4n]
+    }
+    c.push(0xb8); // mov eax, stub
+    c.extend_from_slice(&stub.to_le_bytes());
+    c.extend_from_slice(&[0xff, 0xd0]); // call eax
+    c.push(0xc3); // ret
+    c
+}
+
+#[cfg(test)]
+pub(super) fn cdecl_to_stdcall_for_test(stub: u32, bytes: u16) -> Vec<u8> {
+    cdecl_to_stdcall(stub, bytes)
+}
 
 fn fmt_override(dll: &str, func: &str) -> Option<Override> {
     let row = FORMATS.iter().find(|r| r.0 == func)?;
@@ -1635,6 +1722,9 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         return None;
     }
     if let Some(o) = fmt_override(n, func) {
+        return Some(o);
+    }
+    if let Some(o) = crt_forward32(func) {
         return Some(o);
     }
     // msvcrt.dll x86 : time_t de 32 bits pour les noms sans suffixe.

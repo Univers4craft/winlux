@@ -16,6 +16,9 @@ const CLAUSE_FAULT: u32 = 0x0004;
 pub const MESSAGE_SLOT: usize = 0;
 /// Exception interne (`InnerException`), juste après le message.
 pub const INNER_SLOT: usize = 8;
+/// Dictionnaire `Exception.Data`, créé à la première lecture par notre
+/// mscorlib (#2361).
+pub const DATA_SLOT: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClrException {
