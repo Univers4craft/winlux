@@ -15,6 +15,7 @@ compagnons=gnome-boxes:qemu-system-x86,qemu-utils,libvirt-daemon-driver-qemu,pas
 # Relecture des 157 entrées qui perdent une recommandation (#2075) : seules
 # celles où le logiciel ne marche pas, ou pas dans la langue de l'interface,
 # sans elle (#2081 à #2103). Aide, documentation et thèmes restent absents.
+# Traductions de LibreOffice dans les trois langues de Winlux (#2183).
 compagnons=remmina:remmina-plugin-rdp,remmina-plugin-vnc
 compagnons=krdc:freerdp2-x11
 compagnons=knights:gnuchess,stockfish
@@ -31,7 +32,12 @@ compagnons=openttd:openttd-opengfx,openttd-opensfx,openttd-openmsx
 compagnons=kicad:kicad-symbols,kicad-footprints,kicad-templates
 compagnons=syncthing-gtk:syncthing
 compagnons=gnome-calendar:evolution-data-server
-compagnons=libreoffice-base:libreoffice-sdbc-hsqldb,libreoffice-sdbc-firebird,libreoffice-java-common,default-jre,libreoffice-writer
+compagnons=libreoffice-base:libreoffice-sdbc-hsqldb,libreoffice-sdbc-firebird,libreoffice-java-common,default-jre,libreoffice-writer,libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
+compagnons=libreoffice-writer:libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
+compagnons=libreoffice-calc:libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
+compagnons=libreoffice-impress:libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
+compagnons=libreoffice-draw:libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
+compagnons=libreoffice-math:libreoffice-l10n-fr,libreoffice-l10n-de,libreoffice-l10n-es
 compagnons=asunder:lame,flac,vorbis-tools,opus-tools
 compagnons=inkscape:python3-lxml,python3-numpy,python3-scour,python3-cssselect
 compagnons=vlc:vlc-l10n

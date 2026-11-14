@@ -466,6 +466,7 @@ jobs:
           python3 -B scripts/test-store.py
           python3 -B scripts/test-store-paquet-systeme.py
           python3 -B scripts/test-store-compagnons-autorisation.py
+          python3 -B scripts/test-store-libreoffice-traductions.py
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
