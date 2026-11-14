@@ -711,6 +711,7 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
         };
         write_status(cfg, rules.is_some(), note, count);
         publish_targets(cfg, cgroups && rules.is_some());
+        wait_armed(std::time::Duration::from_secs(3));
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -735,6 +736,33 @@ fn out_targets(cfg: &Config) -> Vec<(PathBuf, String)> {
 /// root, 0644 dans un dossier root 0755 : aucun compte ne peut la modifier.
 /// Vide quand le filtre n'est pas en place : personne n'attend alors.
 pub const TARGETS: &str = "run/winlux/firewall/programmes.txt";
+
+/// Liste que le fil fanotify du service a effectivement marquée (#2446) :
+/// même contenu que `programmes.txt` une fois les marques posées. Absente
+/// quand ce fil ne tourne pas (pas de service, ou fanotify indisponible).
+pub const ARMED: &str = "run/winlux/firewall/arme.txt";
+
+/// Attend que le service ait marqué la liste publiée, pour qu'un programme
+/// lancé juste après `apply` soit déjà suspendu à son exec (#2446). Ne
+/// fait rien si le fil fanotify ne tourne pas ; vrai si la liste est armée.
+pub fn wait_armed(limit: std::time::Duration) -> bool {
+    let armed = admin::path(ARMED);
+    if !armed.exists() {
+        return false;
+    }
+    let want = admin::read_text(&admin::path(TARGETS)).unwrap_or_default();
+    let start = std::time::Instant::now();
+    loop {
+        if admin::read_text(&armed).unwrap_or_default() == want {
+            return true;
+        }
+        if start.elapsed() >= limit {
+            eprintln!("winlux-firewall : liste des programmes filtrés pas encore armée");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
 
 pub fn targets_text(targets: &[(PathBuf, String)]) -> String {
     let mut paths: Vec<String> = targets
@@ -1101,14 +1129,17 @@ fn guard_execs(fd: i32) {
             .any(|((id, _), (path, _))| *id != file_identity(path));
         if published.refresh() || stale {
             marked = mark_targets(fd, &published.targets);
+            // `apply` attend ce fichier avant de rendre la main (#2446).
+            let _ = admin::write_text(&admin::path(ARMED), &targets_text(&published.targets));
         }
         let mut poll = libc::pollfd {
             fd,
             events: libc::POLLIN,
             revents: 0,
         };
-        // SAFETY : une seule structure locale.
-        if unsafe { libc::poll(&mut poll, 1, 1000) } <= 0 {
+        // SAFETY : une seule structure locale. 200 ms : une liste publiée
+        // est relue vite, `apply` attendant qu'elle soit armée (#2446).
+        if unsafe { libc::poll(&mut poll, 1, 200) } <= 0 {
             continue;
         }
         // SAFETY : `buf` est un tampon local de la taille annoncée.
@@ -1643,6 +1674,35 @@ mod tests {
 
     use super::*;
     use crate::admin::test_root::Root;
+
+    #[test]
+    fn apply_attend_la_liste_armee() {
+        let _r = Root::new("firewall-arme");
+        let limit = std::time::Duration::from_millis(300);
+        let targets = admin::path(TARGETS);
+        std::fs::create_dir_all(targets.parent().unwrap()).unwrap();
+        admin::write_text(&targets, "/usr/bin/curl\n").unwrap();
+        // Pas de fil fanotify : rien à attendre.
+        let t = std::time::Instant::now();
+        assert!(!wait_armed(limit));
+        assert!(t.elapsed() < limit);
+        // Liste armée en retard : attendue jusqu'à ce qu'elle arrive.
+        admin::write_text(&admin::path(ARMED), "").unwrap();
+        let armed = admin::path(ARMED);
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::write(armed, "/usr/bin/curl\n").unwrap();
+        });
+        let t = std::time::Instant::now();
+        assert!(wait_armed(std::time::Duration::from_secs(3)));
+        assert!(t.elapsed() >= std::time::Duration::from_millis(80));
+        late.join().unwrap();
+        // Jamais armée : la limite est tenue.
+        admin::write_text(&targets, "/usr/bin/wget\n").unwrap();
+        let t = std::time::Instant::now();
+        assert!(!wait_armed(limit));
+        assert!(t.elapsed() >= limit);
+    }
 
     /// Lecteur qui a fermé le tube, comme `| head` (#1105).
     struct ClosedPipe;
