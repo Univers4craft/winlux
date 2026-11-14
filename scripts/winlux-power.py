@@ -791,6 +791,45 @@ class PowerUI:
         return self.result
 
 
+class _TerminalOutput:
+    """Sortie qui survit à la fermeture du terminal d'origine (EIO, EPIPE)."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text):
+        try:
+            return self._stream.write(text)
+        except (OSError, ValueError):
+            return len(text)
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except (OSError, ValueError):
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def detach_from_terminal():
+    """« ask »/« now » ferment toutes les fenêtres, dont le terminal d'où la
+    commande a pu être lancée. Ce terminal envoie alors SIGHUP à ses tâches :
+    l'écran et son gardien mouraient avant de signaler l'init, les applications
+    étaient fermées et la machine restait allumée (#2275). On ignore SIGHUP
+    (hérité par l'écran), on quitte la session du terminal quand c'est possible
+    (impossible pour un chef de groupe, cas d'une commande tapée dans un shell)
+    et les messages vers un terminal disparu ne lèvent plus d'erreur."""
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    sys.stdout = _TerminalOutput(sys.stdout)
+    sys.stderr = _TerminalOutput(sys.stderr)
+
+
 def gui(action, confirm, screen_only=False):
     if screen_only:
         return run_gui(action, confirm, screen_only)
@@ -799,6 +838,7 @@ def gui(action, confirm, screen_only=False):
     # applications se ferment…), le parent, qui n'a chargé ni GTK ni cairo,
     # termine le travail : sinon la machine ne redémarrait jamais.
     global STATE_FD
+    detach_from_terminal()
     read_end, write_end = os.pipe()
     child = os.fork()
     if child == 0:
@@ -808,6 +848,10 @@ def gui(action, confirm, screen_only=False):
         try:
             if os.environ.get("WINLUX_POWER_TEST_GUI_CRASH") == "1":
                 os.kill(os.getpid(), signal.SIGBUS)  # test : écran qui plante
+            if os.environ.get("WINLUX_POWER_TEST_HANGUP_WAIT") == "1":
+                # test : le terminal d'origine se ferme pendant l'écran (#2275).
+                print("winlux-power : écran prêt", flush=True)
+                time.sleep(1.5)
             code = run_gui(action, confirm, screen_only)
         finally:
             os._exit(code if isinstance(code, int) else 1)
