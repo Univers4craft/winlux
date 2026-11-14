@@ -1692,6 +1692,14 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
     ))
 }
 
+/// Passerelle x86 de `kernel32!func`, comme à l'import (#2367).
+pub(super) fn kernel32_stub(func: &str) -> Option<usize> {
+    override_stub("kernel32.dll", func).or_else(|| {
+        let a = crate::dlls::lookup("kernel32", func)?;
+        Some(import_stub("kernel32.dll", func, a, a))
+    })
+}
+
 /// `GetProcAddress` d'un programme x86 : pour une DLL intégrée, la
 /// passerelle x86 de la fonction (une par fonction), jamais son adresse 64 bits.
 extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
@@ -2675,6 +2683,78 @@ mod tests {
             sig_of_path("winlux::dlls::kernel32", "exit_process"),
             Some("i>v")
         );
+    }
+
+    /// Exports de la CRT servis en x64 sans passerelle x86, chacun justifié
+    /// par la bibliothèque d'import x86 de mingw-w64 (ucrtbase-common.def.in,
+    /// lib32/msvcr120.def.in) : ils n'existent pas dans la DLL x86.
+    const CRT_X64_SEULEMENT: &[&str] = &[
+        // F64(__intrinsic_setjmpex) : x64 seulement.
+        "__intrinsic_setjmpex",
+        // Absent de ucrtbase et de msvcr120 x86 (_setjmp et _setjmp3 seuls).
+        "_setjmpex",
+        // F_NON_ARM64 : exporté en x86, mais aucune documentation publique
+        // ne décrit sa forme x86, et MSVC x86 appelle _setjmp3. Laissé sans
+        // passerelle plutôt que deviné (#2367).
+        "__intrinsic_setjmp",
+    ];
+
+    /// #2367 : toute fonction que ucrtbase ou msvcrt sert en x64 a une
+    /// passerelle x86 (signature relevée par build.rs ou version x86 écrite
+    /// à la main). Une fonction engendrée par macro_rules! n'a pas de
+    /// signature : l'outil de déploiement d'Office mourait sur iswalpha.
+    #[test]
+    fn crt_x64_toujours_servie_en_x86() {
+        let notes: std::collections::HashSet<usize> = NOTES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(a, _, _)| *a)
+            .collect();
+        let mut manquants = Vec::new();
+        for (dll, names) in crate::dlls::builtin_exports() {
+            if dll != "ucrtbase" && dll != "msvcrt" {
+                continue;
+            }
+            for n in names {
+                let Some(a) = crate::dlls::lookup(dll, n) else {
+                    continue;
+                };
+                // Données exportées : servies à part, sans signature.
+                if !notes.contains(&a) || CRT_X64_SEULEMENT.contains(&n) {
+                    continue;
+                }
+                if sig_of_addr(a).is_none() && override_stub(dll, n).is_none() {
+                    manquants.push(format!("{dll}!{n}"));
+                }
+            }
+        }
+        manquants.sort();
+        assert!(manquants.is_empty(), "sans passerelle x86 : {manquants:?}");
+        for n in ["iswalpha", "_iswalpha_l", "_findfirst64i32", "_wfindnext32"] {
+            let a = crate::dlls::lookup("ucrtbase", n).unwrap();
+            assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+    }
+
+    /// Adaptateur cdecl → stdcall des `__crt*` : chaque push relit le même
+    /// déplacement, la passerelle dépile la copie (#2367).
+    #[test]
+    fn adaptateur_cdecl_vers_stdcall() {
+        assert_eq!(
+            super::crt::cdecl_to_stdcall_for_test(0x1234_5678, 8),
+            [
+                0xff, 0x74, 0x24, 8, 0xff, 0x74, 0x24, 8, 0xb8, 0x78, 0x56, 0x34, 0x12, 0xff, 0xd0,
+                0xc3
+            ]
+        );
+        assert_eq!(
+            super::crt::cdecl_to_stdcall_for_test(0x10, 0),
+            [0xb8, 0x10, 0, 0, 0, 0xff, 0xd0, 0xc3]
+        );
+        for (c, k) in super::crt::CRT_KERNEL32 {
+            assert!(stdcall_bytes("kernel32", k).is_some(), "{c} → {k}");
+        }
     }
 
     #[test]
