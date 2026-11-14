@@ -56,7 +56,8 @@ with tempfile.TemporaryDirectory() as tmp:
     env["WINLUX_STORE_CONFIRM"] = str(bindir / "confirm")
 
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---
-    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
+    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n"
+         "[ -n \"${DPKG_MORE:-}\" ] && printf '%b' \"$DPKG_MORE\"\nexit 0\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
     mock(bindir, "apt-cache", """case "$1" in
 policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad|inconnu) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
@@ -64,6 +65,12 @@ show) printf 'Package: gimp\\nVersion: 2.10.36-3\\nInstalled-Size: 20480\\nHomep
 esac
 """)
     mock(bindir, "apt-get", """printf 'apt-get %s\\n' "$*" >> "$LOG"
+case " $* " in *" -s "*autoremove*)
+  # Simulation (#2189) : sans les suggestions, systemd-container devient inutile.
+  case " $* " in *SuggestsImportant=false*) printf 'Remv systemd-container [1]\\nRemv libfoo [1]\\n';; esac
+  [ -n "${AUTOREMOVE_MORE:-}" ] && printf '%b' "$AUTOREMOVE_MORE"
+  printf 'Remv libinutile [1]\\nRemv vlc-l10n [1]\\n'; exit 0;;
+esac
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
 eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
@@ -402,12 +409,39 @@ esac
     check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
     # Désinstallation apt, et toutes les commandes apt-get du Store acceptées par
     # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
+    # Compagnons du catalogue (#2075) propres au test, à côté du vrai catalogue.
+    catalog2189 = w / "catalogue-2189.txt"
+    catalog2189.write_text((project / "integration/store-catalog.txt").read_text()
+                           + "compagnons=vlc:vlc-l10n\ncompagnons=remmina:remmina-plugin-rdp,remmina-plugin-vnc\n")
+    env["WINLUX_STORE_CATALOG"] = str(catalog2189)
+    statef = home / ".local/share/winlux/store-state.json"
+    state = json.loads(statef.read_text()) if statef.exists() else {}
+    state.setdefault("apt", {})["vlc"] = ["systemd-container", "vlc-l10n"]
+    statef.write_text(json.dumps(state))
     st("remove", "apt:vlc")
-    check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
+    text = log.read_text()
+    check("purge -- vlc\n" in text, "désinstallation apt")
+    # #2189 : ce que l'installation a apporté part, même retenu par une seule
+    # suggestion ; ce qui n'est pas à elle ne part que si apt le retirerait d'office.
+    check("purge -- libinutile systemd-container\n" in text and "libfoo" not in text.split("purge -- vlc")[1].split("\n")[1],
+          "désinstallation : paquets apportés retirés, le reste gardé (#2189)")
+    check("vlc" not in json.loads(statef.read_text()).get("apt", {}), "trace de l'installation effacée")
+    # #2189 : désinstaller Knights ne retire pas le compagnon d'un logiciel
+    # encore installé (le QEMU de virt-manager partait), et le remet s'il manque.
+    env["DPKG_MORE"] = "remmina\\tii \\t1.4\\t100\\nremmina-plugin-vnc\\tii \\t1.4\\t100\\n"
+    env["AUTOREMOVE_MORE"] = "Remv remmina-plugin-vnc [1]\\n"
+    st("remove", "apt:knights")
+    env.pop("DPKG_MORE"); env.pop("AUTOREMOVE_MORE")
+    env["WINLUX_STORE_CATALOG"] = str(project / "integration/store-catalog.txt")
+    after = log.read_text()[len(text):]
+    check("purge -- knights\n" in after and not any(l.startswith("apt-get purge") and "remmina-plugin-vnc" in l for l in after.splitlines()),
+          "compagnon d'un logiciel restant jamais retiré (#2189)")
+    check("install --no-install-recommends --mark-auto -- remmina-plugin-rdp vlc-l10n\n" in after,
+          "compagnon manquant d'un logiciel restant remis (#2189)")
     relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
-    # La simulation (-s, #2234) tourne sans droits, hors du relais.
-    apt_lines = [l.split()[1:] for l in log.read_text().splitlines()
-                 if l.startswith("apt-get ") and not l.startswith("apt-get -s ")]
+    # Les simulations (-s, #2189, #2234) tournent sans droits, hors du relais.
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ") and " -s " not in l
+                 and not l.startswith("apt-get -s ")]
     check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
     for args in apt_lines:
         check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")
