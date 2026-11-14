@@ -582,6 +582,9 @@ jobs:
           sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
           sh scripts/test-setup-wizard.sh
 
+      - name: Contrat de licence des installateurs (#2123 à #2126)
+        run: sh scripts/test-licence-installateurs.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
