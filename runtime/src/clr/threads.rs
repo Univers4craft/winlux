@@ -121,6 +121,16 @@ pub fn register(interp: *const Interpreter) {
     INTERPRETERS.lock().unwrap().push(interp as usize);
 }
 
+/// Un interpréteur vivant du processus, modèle pour un fil natif qui entre
+/// dans le runtime (#2383).
+pub fn any_interpreter() -> Option<*const Interpreter> {
+    INTERPRETERS
+        .lock()
+        .unwrap()
+        .first()
+        .map(|&p| p as *const Interpreter)
+}
+
 pub fn unregister(interp: *const Interpreter) {
     INTERPRETERS
         .lock()

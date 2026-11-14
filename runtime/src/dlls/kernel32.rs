@@ -8130,7 +8130,7 @@ unsafe fn set_current_directory_str(path: &str) -> i32 {
 /// (`%LOCALAPPDATA%\\Temp`), comme le documente Microsoft. Jamais /tmp par
 /// défaut : c'est un tmpfs, et un installateur qui y décompresse des
 /// centaines de Mo épuise la mémoire (#2326).
-fn temp_path() -> String {
+pub(crate) fn temp_path() -> String {
     let p = ["TMP", "TEMP"]
         .iter()
         .find_map(|k| env_value(k).filter(|v| !v.trim().is_empty()))
@@ -8908,6 +8908,8 @@ pub fn record_exit_code(code: u32) {
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
     crate::trace!("TerminateProcess(processus courant) : fin, code {code:#x}");
+    // WINLUX_WOW32_HISTORY (#2368) : historique écrit à toute fin.
+    crate::wow32::dump_history_at_exit(&format!("TerminateProcess (code {code:#x})"));
     record_exit_code(code);
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();
@@ -8920,6 +8922,8 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // WINLUX_WOW32_HISTORY (#2368) : ExitProcess, fail-fast, _invoke_watson.
+    crate::wow32::dump_history_at_exit(&format!("fin du processus (code {:#x})", code as u32));
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
     crate::dlls::named_objects::on_exit();

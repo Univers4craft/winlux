@@ -609,12 +609,18 @@ def text_veil(pixbuf, base, minimum=4.5):
     return round(alpha, 2)
 
 
+# Sommet du prisme du fond d'écran par défaut, en 1920x1080. #2160 : c'était
+# 367 (fonds Aube et Nuit) ; le fond Aurore installé par défaut a son sommet
+# vers la ligne 303, et l'invite passait sous le logo en 1920x1080.
+LOGO_TOP_1080 = 300
+
+
 def clock_scale(width, height):
-    """Échelle de l'horloge pour qu'elle finisse au-dessus du losange du fond
-    d'écran Winlux (1920x1080, losange dès la ligne 367, image mise à
-    l'échelle pour couvrir l'écran). L'horloge mesure ~330 px à l'échelle 1."""
+    """Échelle de l'horloge pour qu'elle finisse au-dessus du prisme du fond
+    d'écran Winlux (1920x1080, sommet à LOGO_TOP_1080, image mise à l'échelle
+    pour couvrir l'écran). L'horloge mesure ~330 px à l'échelle 1."""
     cover = max(width / 1920, height / 1080)
-    logo_top = (height - 1080 * cover) / 2 + 367 * cover
+    logo_top = (height - 1080 * cover) / 2 + LOGO_TOP_1080 * cover
     return max(0.5, min(1.0, (logo_top - 24) / 330))
 
 
