@@ -6793,6 +6793,9 @@ unsafe fn create_process_common(
     // EXTENDED_STARTUPINFO_PRESENT + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE :
     // le programme s'attache à la pseudo-console (pty) de CreatePseudoConsole.
     let mut pseudo_console = false;
+    // Le descripteur 2 de l'enfant est-il la sortie d'erreur que le
+    // programme lui donne (STARTF_USESTDHANDLES) ? (#2515)
+    let mut program_stderr = false;
     if creation_flags & 0x0008_0000 != 0
         && !startup.is_null()
         && (*startup).cb as usize >= std::mem::size_of::<StartupInfoA>() + 8
@@ -6822,6 +6825,7 @@ unsafe fn create_process_common(
         ) {
             (Some(i), Some(o), Some(e)) => {
                 cmd.stdin(i).stdout(o).stderr(e);
+                program_stderr = true;
             }
             _ => {
                 crate::process::set_last_error(6);
@@ -6884,6 +6888,24 @@ unsafe fn create_process_common(
     // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
     // suspendu) : ouvert ici, hérité, renommé d'après son PID.
     cmd.env_remove(crate::dlls::handle_broker::ENV);
+    // Lignes de diagnostic de l'enfant (#2515) : jamais dans la sortie
+    // d'erreur qu'un programme Windows lui donne, que son parent lit comme
+    // une donnée ; elles vont à notre propre descripteur de diagnostic,
+    // passé en copie héritable le temps du lancement.
+    cmd.env_remove(crate::log::DIAG_FD_ENV);
+    let _diag_copy: Option<std::os::fd::OwnedFd> =
+        if is_pe && (program_stderr || pseudo_console || crate::log::diag_fd() != 2) {
+            let d = crate::log::diag_fd();
+            let copy = if d >= 0 {
+                libc::fcntl(d, libc::F_DUPFD, 3)
+            } else {
+                -1
+            };
+            cmd.env(crate::log::DIAG_FD_ENV, copy.to_string());
+            (copy >= 0).then(|| <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(copy))
+        } else {
+            None
+        };
     // Gestionnaire de crashpad connu : l'enfant le désigne à son tour pour
     // qu'il puisse lire sa mémoire (#767).
     cmd.env_remove(CRASH_HANDLER_ENV);
