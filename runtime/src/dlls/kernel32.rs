@@ -10466,7 +10466,7 @@ pub unsafe extern "win64" fn get_short_path_name_w(
 // --- CompareStringA/W, CompareStringOrdinal ---
 pub unsafe extern "win64" fn compare_string_a(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u8,
     n1: i32,
     s2: *const u8,
@@ -10482,35 +10482,43 @@ pub unsafe extern "win64" fn compare_string_a(
     } else {
         crate::dlls::decode_ansi(std::slice::from_raw_parts(s2, n2 as usize))
     };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
+    let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+    compare_result(&a, &b, flags)
+}
+
+/// CompareStringA/W appliquent `dwCmpFlags` comme CompareStringEx (#2255) :
+/// sans NORM_IGNORECASE, deux chaînes qui ne diffèrent que par la casse ne
+/// sont pas égales.
+fn compare_result(a: &[u16], b: &[u16], flags: u32) -> i32 {
+    match super::nls::compare(a, b, flags) {
         std::cmp::Ordering::Less => 1,
         std::cmp::Ordering::Equal => 2,
         std::cmp::Ordering::Greater => 3,
     }
 }
+
 pub unsafe extern "win64" fn compare_string_w(
     _locale: u32,
-    _flags: u32,
+    flags: u32,
     s1: *const u16,
     n1: i32,
     s2: *const u16,
     n2: i32,
 ) -> i32 {
-    let a = if n1 < 0 {
-        crate::dlls::wstr(s1)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s1, n1 as usize))
-    };
-    let b = if n2 < 0 {
-        crate::dlls::wstr(s2)
-    } else {
-        String::from_utf16_lossy(std::slice::from_raw_parts(s2, n2 as usize))
-    };
-    match a.to_lowercase().cmp(&b.to_lowercase()) {
-        std::cmp::Ordering::Less => 1,
-        std::cmp::Ordering::Equal => 2,
-        std::cmp::Ordering::Greater => 3,
+    if s1.is_null() || s2.is_null() {
+        set_last_error(87);
+        return 0;
     }
+    let len = |p: *const u16, n: i32| {
+        if n < 0 {
+            crate::printf::wide_len(p)
+        } else {
+            n as usize
+        }
+    };
+    let a = std::slice::from_raw_parts(s1, len(s1, n1));
+    let b = std::slice::from_raw_parts(s2, len(s2, n2));
+    compare_result(a, b, flags)
 }
 pub unsafe extern "win64" fn compare_string_ordinal(
     s1: *const u16,
@@ -11376,6 +11384,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    #[test]
+    fn compare_string_respecte_la_casse_sans_ignorecase() {
+        // #2255 : sans NORM_IGNORECASE, « Abc » et « abc » ne sont pas égales.
+        let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (maj, min) = (w("Abc"), w("abc"));
+        unsafe {
+            let cw = |f, a: &[u16], b: &[u16]| {
+                super::compare_string_w(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(cw(0, &maj, &min), 2);
+            assert_eq!(cw(1, &maj, &min), 2); // NORM_IGNORECASE
+            assert_eq!(cw(0, &min, &min), 2);
+            assert_eq!(cw(0, &w("abc"), &w("abd")), 1);
+            assert_eq!(cw(0x2, &w("été"), &w("ete")), 2); // NORM_IGNORENONSPACE
+            assert_eq!(
+                super::compare_string_w(0x400, 0, maj.as_ptr(), 3, min.as_ptr(), 2),
+                3
+            );
+            let ca = |f, a: &[u8], b: &[u8]| {
+                super::compare_string_a(0x400, f, a.as_ptr(), -1, b.as_ptr(), -1)
+            };
+            assert_ne!(ca(0, b"Abc\0", b"abc\0"), 2);
+            assert_eq!(ca(1, b"Abc\0", b"abc\0"), 2);
+        }
+    }
 
     #[test]
     fn copie_garde_la_date_de_derniere_ecriture() {
