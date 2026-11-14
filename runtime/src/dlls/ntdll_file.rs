@@ -561,8 +561,9 @@ pub unsafe extern "win64" fn NtSetInformationFile(
             let Some(p) = path_of_fd(fd) else {
                 return iosb(io, STATUS_INVALID_HANDLE, 0);
             };
-            // Un dossier non vide ne peut pas être marqué (MS-FSA 2.1.5.15.3,
-            // FileDispositionInformation : STATUS_DIRECTORY_NOT_EMPTY).
+            // Un dossier non vide refuse la marque, comme l'ancien `rmdir`
+            // immédiat (STATUS_DIRECTORY_NOT_EMPTY) : comportement gardé, que
+            // la documentation publique consultée ne précise pas.
             let non_empty_dir = std::fs::read_dir(&p).is_ok_and(|mut d| d.next().is_some());
             if non_empty_dir {
                 return iosb(io, STATUS_DIRECTORY_NOT_EMPTY, 0);
@@ -1450,7 +1451,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Un dossier non vide ne peut pas être marqué (MS-FSA 2.1.5.15.3).
+    /// Un dossier non vide refuse la marque (comportement d'avant #2509 gardé).
     #[test]
     fn dossier_non_vide_refuse_la_marque() {
         let base = std::env::temp_dir().join(format!("winlux-disp3-{}", std::process::id()));
