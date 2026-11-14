@@ -235,6 +235,8 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
       - name: Carte d'arrêt, « Annuler » par défaut (#2299)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-carte-annuler.py
+      - name: Carte d'arrêt sur le verrou, mot de passe pour forcer (#2300)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-carte-verrou.py
       - name: Vérifier Paramètres › Sauvegarde (destination, planification, restauration)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
 
@@ -465,6 +467,7 @@ jobs:
           python3 -B scripts/test-store-catalogs.py
           python3 -B scripts/test-store-listes-neuves.py
           python3 -B scripts/test-store-editeurs.py
+          python3 -B scripts/test-store-licence.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
@@ -586,6 +589,9 @@ jobs:
 
       - name: Contrat de licence des installateurs (#2123 à #2126)
         run: sh scripts/test-licence-installateurs.sh
+
+      - name: Journal de l'assistant écrit au fil de l'eau (#2328)
+        run: sh scripts/test-assistant-journal.sh
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh

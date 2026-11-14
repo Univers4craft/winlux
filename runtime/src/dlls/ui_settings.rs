@@ -24,6 +24,9 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use super::comobj::{
     guid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
 };
+use super::weak_ref::{
+    get_weak_reference as get_weak_reference_of, WeakControl, IID_IWEAK_REFERENCE_SOURCE,
+};
 
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
 
@@ -170,8 +173,11 @@ fn element_color(kind: i32) -> Option<Color> {
 
 #[repr(C)]
 struct Settings {
-    vt: [&'static VTable<19>; 6],
+    /// IUISettings…IUISettings6 puis IWeakReferenceSource (#2207).
+    vt: [&'static VTable<19>; 7],
     refs: AtomicU32,
+    /// Cible des références faibles, créée au premier GetWeakReference.
+    weak: std::sync::OnceLock<std::sync::Arc<WeakControl>>,
 }
 
 /// Jetons d'abonnement aux événements (jamais déclenchés).
@@ -179,15 +185,16 @@ static NEXT_TOKEN: AtomicI64 = AtomicI64::new(1);
 
 fn new_settings() -> usize {
     Box::into_raw(Box::new(Settings {
-        vt: [&VT1, &VT2, &VT3, &VT4, &VT5, &VT6],
+        vt: [&VT1, &VT2, &VT3, &VT4, &VT5, &VT6, &VT_WEAK],
         refs: AtomicU32::new(1),
+        weak: std::sync::OnceLock::new(),
     })) as usize
 }
 
-/// Adresse de l'objet depuis l'une de ses six interfaces.
+/// Adresse de l'objet depuis l'une de ses sept interfaces.
 unsafe fn base_of(this: usize) -> usize {
     let vt = *(this as *const *const VTable<19>);
-    let n = [&VT1, &VT2, &VT3, &VT4, &VT5, &VT6]
+    let n = [&VT1, &VT2, &VT3, &VT4, &VT5, &VT6, &VT_WEAK]
         .iter()
         .position(|t| std::ptr::eq(*t, vt))
         .unwrap_or(0);
@@ -208,6 +215,8 @@ unsafe extern "win64" fn s_qi(this: usize, iid: *const u8, out: *mut usize) -> i
     let base = base_of(this);
     *out = if let Some(n) = IID_UI_SETTINGS.iter().position(|g| *g == iid) {
         base + 8 * n
+    } else if iid == IID_IWEAK_REFERENCE_SOURCE {
+        base + 8 * 6
     } else if [IID_IUNKNOWN, IID_IINSPECTABLE, IID_IAGILEOBJECT].contains(&iid) {
         base
     } else {
@@ -226,9 +235,24 @@ unsafe extern "win64" fn s_release(this: usize) -> u32 {
     let base = base_of(this);
     let n = settings_of(this).refs.fetch_sub(1, Ordering::SeqCst) - 1;
     if n == 0 {
+        let s = &*(base as *const Settings);
+        if s.weak.get().is_some_and(|w| !w.release_last(&s.refs)) {
+            // Repris par IWeakReference::Resolve entre-temps.
+            return 0;
+        }
         drop(Box::from_raw(base as *mut Settings));
     }
     n
+}
+
+/// IWeakReferenceSource::GetWeakReference (#2207).
+unsafe extern "win64" fn get_weak_reference(this: usize, out: *mut usize) -> i32 {
+    let base = base_of(this);
+    let s = &*(base as *const Settings);
+    let control = s
+        .weak
+        .get_or_init(|| WeakControl::new(base, s_qi, &s.refs as *const AtomicU32));
+    get_weak_reference_of(control, out)
 }
 
 unsafe fn put<T>(out: *mut T, v: T) -> i32 {
@@ -413,6 +437,29 @@ static VT6: VTable<19> = table([
     REM, NUL, NUL, NUL, NUL, NUL, NUL, NUL, NUL, NUL,
 ]);
 
+/// IWeakReferenceSource : IUnknown puis GetWeakReference.
+static VT_WEAK: VTable<19> = VTable([
+    s_qi as *const (),
+    s_add_ref as *const (),
+    s_release as *const (),
+    get_weak_reference as *const (),
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+    NUL,
+]);
+
 // ============================================================
 //  Fabrique : IActivationFactory
 // ============================================================
@@ -573,10 +620,42 @@ mod tests {
             assert_eq!(e, sys_color(5));
             assert_eq!(ui_element_color(obj, 13, &mut e), E_INVALIDARG);
 
+            // Référence faible (#2207) : QI, GetWeakReference, Resolve.
+            let mut ws = 0usize;
+            assert_eq!(
+                s_qi(obj, IID_IWEAK_REFERENCE_SOURCE.as_ptr(), &mut ws),
+                S_OK
+            );
+            assert_eq!(ws, obj + 48);
+            let gwr: unsafe extern "win64" fn(usize, *mut usize) -> i32 =
+                std::mem::transmute(slot(ws, 3));
+            let mut weak = 0usize;
+            assert_eq!(gwr(ws, &mut weak), S_OK);
+            assert_eq!(s_release(ws), 1);
+            let weak_slot = |n: usize| (*(weak as *const &VTable<4>)).0[n];
+            let resolve: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> i32 =
+                std::mem::transmute(weak_slot(3));
+            let mut strong = 0usize;
+            assert_eq!(
+                resolve(weak, IID_UI_SETTINGS[2].as_ptr(), &mut strong),
+                S_OK
+            );
+            assert_eq!(strong, obj + 16);
+            assert_eq!(s_release(strong), 1);
+
             let mut scale = 0f64;
             assert_eq!(text_scale_factor(obj + 8, &mut scale), S_OK);
             assert_eq!(scale, 1.0);
             assert_eq!(s_release(obj), 0);
+            // Objet détruit : Resolve rend S_OK et un pointeur nul.
+            strong = 1;
+            assert_eq!(
+                resolve(weak, IID_UI_SETTINGS[0].as_ptr(), &mut strong),
+                S_OK
+            );
+            assert_eq!(strong, 0);
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(weak_slot(2));
+            assert_eq!(release(weak), 0);
         }
     }
 }
