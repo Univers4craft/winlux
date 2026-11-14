@@ -1269,24 +1269,49 @@ def user_session_env(uid, display):
     return None
 
 
-def notify(user, display, title, body):
-    """Bulle dans la session du compte (son propre notify-send, sous son identité)."""
-    entry = passwd().get(user)
+def gvariant_string(text):
+    """Chaîne au format texte de GVariant, telle que gdbus call la lit."""
+    escaped = str(text).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r") \
+        .replace("\t", "\\t")
+    return "'" + escaped + "'"
+
+
+def notify_command(title, body):
+    """Commande qui affiche la bulle sur le bus de session courant.
+
+    org.freedesktop.Notifications.Notify (winlux-notifications) par gdbus, de
+    GLib, toujours dans l'image ; notify-send n'y est pas (#630, #2245) et ne
+    reste qu'un repli."""
+    gdbus = shutil.which("gdbus")
+    if gdbus:
+        return [gdbus, "call", "--session", "--timeout", "5", "--dest", "org.freedesktop.Notifications",
+                "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify", "--",
+                gvariant_string(_t("Contrôle parental")), "0", gvariant_string("dialog-warning"),
+                gvariant_string(title), gvariant_string(body), "@as []", "@a{sv} {}", "-1"]
     tool = shutil.which("notify-send")
-    if not entry or not tool or ROOT:
-        return
+    if tool:
+        return [tool, "-a", _t("Contrôle parental"), "-i", "dialog-warning", title, body]
+    return None
+
+
+def notify(user, display, title, body):
+    """Bulle dans la session du compte, sous son identité, sur son propre bus."""
+    entry = passwd().get(user)
+    if not entry or ROOT:
+        return False
     env = user_session_env(entry[0], display)
-    if env is None:
-        return
+    command = notify_command(title, body)
+    if env is None or command is None:
+        return False
     child_env = {"PATH": "/usr/bin:/bin", "HOME": entry[3], "DISPLAY": display,
                  "DBUS_SESSION_BUS_ADDRESS": env["DBUS_SESSION_BUS_ADDRESS"], "LANG": env.get("LANG", "C.UTF-8")}
     try:
-        subprocess.Popen(["setpriv", f"--reuid={entry[0]}", f"--regid={entry[1]}", "--init-groups",
-                          tool, "-a", _t("Contrôle parental"), "-i", "dialog-warning", title, body],
+        subprocess.Popen(["setpriv", f"--reuid={entry[0]}", f"--regid={entry[1]}", "--init-groups", *command],
                          env=child_env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError:
-        pass
+        return False
+    return True
 
 
 def lock_running(uid, display):
@@ -1459,8 +1484,9 @@ class Daemon:
                     update_usage(user, lambda u: (u["blocked_apps"].__setitem__(ident, u["blocked_apps"].get(ident, 0) + 1),
                                                   u["names"].__setitem__(ident, name)))
                     for display, _vt in session_displays(user):
-                        notify(user, display, _t("Contrôle parental"),
-                               _t("« {name} » est bloquée par le contrôle parental.").format(name=name))
+                        if not notify(user, display, _t("Contrôle parental"),
+                                      _t("« {name} » est bloquée par le contrôle parental.").format(name=name)):
+                            self.log(f"{user} : bulle « application bloquée » impossible sur {display}")
         # Une nouvelle tentative, plus tard, compte à nouveau.
         self.killed &= alive | {key for key in self.killed if key[0] not in by_uid}
         live = set(pids_of(set(by_uid))) if self.seen else set()
@@ -1585,7 +1611,9 @@ class Daemon:
                         self.warned.add(mark)
                         title = _t("Temps d’écran : il reste 1 minute") if remaining <= 1 else \
                             _t("Temps d’écran : il reste {minutes} minutes").format(minutes=remaining)
-                        notify(user, display, title, _t("Enregistrez votre travail : l’ordinateur sera bientôt bloqué."))
+                        if not notify(user, display, title,
+                                      _t("Enregistrez votre travail : l’ordinateur sera bientôt bloqué.")):
+                            self.log(f"{user} : bulle « {title} » impossible sur {display}")
                         break
                 continue
             if screen is None and not lock_running(uid, display):
