@@ -121,8 +121,15 @@ namespace System
 
         // --- Servi par le moteur ---
 
+        // ProcessExit est levé avant la sortie (#2058).
+        public static void Exit(int exitCode)
+        {
+            AppDomain.LeverSortie();
+            Quitter(exitCode);
+        }
+
         [MethodImpl(MethodImplOptions.InternalCall)]
-        public static extern void Exit(int exitCode);
+        private static extern void Quitter(int exitCode);
 
         public static extern int ExitCode
         {
