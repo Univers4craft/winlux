@@ -120,6 +120,11 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// Adresse du PEB x86 du programme (0 avant `init_peb32`).
+pub fn peb32() -> usize {
+    PEB32.load(Ordering::Relaxed) as usize
+}
+
 /// Test seulement, dans un processus de test relancé à part : fait comme si
 /// le programme était x86, pour lire les structures à sa disposition.
 #[cfg(test)]
