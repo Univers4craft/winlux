@@ -14,6 +14,14 @@
 //! et le disent au journal.
 //!
 //! Paint.NET crée son `PdnCompositor` au démarrage (#1416).
+//!
+//! `ICompositor2` (#2710) : visuels de calque (`LayerVisual`, dessinés comme
+//! des conteneurs ; un effet posé est gardé et le journal dit qu'il n'est pas
+//! appliqué) et pinceaux d'arrière-plan (`CompositionBackdropBrush`, qui
+//! laissent voir ce qui est dessous, donc ne dessinent rien). Les classes que
+//! Winlux ne sert pas encore (lumières, ombre portée, masque, neuf-grilles,
+//! groupes et collections d'animations, easing en escalier) rendent
+//! E_NOTIMPL, notées une fois au journal avec leur fichier et leur ligne.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -93,6 +101,21 @@ const IID_DRAWING_SURFACE: Guid = iid("a166c300-fad0-4d11-9e67-e433162ff49e");
 const IID_DRAWING_SURFACE2: Guid = iid("fad0e88b-e354-44e8-8e3d-c4880d5a213f");
 const IID_SURFACE_INTEROP: Guid = iid("fd04e6e3-fe0c-4c3c-ab19-a07601a576ee");
 const IID_PROPERTY_SET: Guid = iid("c9d6d202-5f67-4453-9117-9eadd430d3c2");
+/// ICompositor2, ILayerVisual, ICompositionBackdropBrush (#2710).
+const IID_COMPOSITOR2: Guid = iid("735081dc-5e24-45da-a38f-e32cc349a9a0");
+const IID_LAYER_VISUAL: Guid = iid("af843985-0444-4887-8e83-b40b253f822c");
+const IID_BACKDROP_BRUSH: Guid = iid("c5acae58-3898-499e-8d7f-224e91286a5d");
+
+/// Méthode qui créerait une classe que Winlux ne sert pas encore : E_NOTIMPL,
+/// noté une fois au journal avec son nom, son fichier et sa ligne (#2710).
+macro_rules! sans_classe {
+    ($name:literal) => {{
+        unsafe extern "win64" fn f() -> i32 {
+            $crate::dlls::d2d1::unsupported_call(concat!($name, " (", file!(), ":", line!(), ")"))
+        }
+        f as *const ()
+    }};
+}
 
 const CONTROLLER_CLASS: &str = "Windows.UI.Composition.Core.CompositorController";
 const COMPOSITOR_CLASS: &str = "Windows.UI.Composition.Compositor";
@@ -159,9 +182,11 @@ enum Kind {
     Compositor,
     ContainerVisual,
     SpriteVisual,
+    LayerVisual,
     Collection,
     ColorBrush,
     SurfaceBrush,
+    BackdropBrush,
     InsetClip,
     Target,
     Device,
@@ -177,9 +202,11 @@ impl Kind {
             Kind::Compositor => COMPOSITOR_CLASS,
             Kind::ContainerVisual => "Windows.UI.Composition.ContainerVisual",
             Kind::SpriteVisual => "Windows.UI.Composition.SpriteVisual",
+            Kind::LayerVisual => "Windows.UI.Composition.LayerVisual",
             Kind::Collection => "Windows.UI.Composition.VisualCollection",
             Kind::ColorBrush => "Windows.UI.Composition.CompositionColorBrush",
             Kind::SurfaceBrush => "Windows.UI.Composition.CompositionSurfaceBrush",
+            Kind::BackdropBrush => "Windows.UI.Composition.CompositionBackdropBrush",
             Kind::InsetClip => "Windows.UI.Composition.InsetClip",
             Kind::Target => "Windows.UI.Composition.Desktop.DesktopWindowTarget",
             Kind::Device => "Windows.UI.Composition.CompositionGraphicsDevice",
@@ -205,6 +232,7 @@ impl Kind {
             Kind::Compositor => {
                 return vec![
                     (IID_COMPOSITOR, COMPOSITOR_VT.ptr()),
+                    (IID_COMPOSITOR2, COMPOSITOR2_VT.ptr()),
                     (IID_DESKTOP_INTEROP, DESKTOP_INTEROP_VT.ptr()),
                     (IID_COMPOSITOR_INTEROP, COMPOSITOR_INTEROP_VT.ptr()),
                     (IID_CLOSABLE, CLOSABLE_VT.ptr()),
@@ -227,6 +255,12 @@ impl Kind {
                 (IID_VISUAL, VISUAL_VT.ptr()),
                 (IID_VISUAL2, VISUAL2_VT.ptr()),
             ],
+            Kind::LayerVisual => vec![
+                (IID_LAYER_VISUAL, LAYER_VISUAL_VT.ptr()),
+                (IID_CONTAINER, CONTAINER_VT.ptr()),
+                (IID_VISUAL, VISUAL_VT.ptr()),
+                (IID_VISUAL2, VISUAL2_VT.ptr()),
+            ],
             Kind::Collection => vec![(IID_COLLECTION, COLLECTION_VT.ptr())],
             Kind::ColorBrush => vec![
                 (IID_COLOR_BRUSH, COLOR_BRUSH_VT.ptr()),
@@ -234,6 +268,11 @@ impl Kind {
             ],
             Kind::SurfaceBrush => vec![
                 (IID_SURFACE_BRUSH, SURFACE_BRUSH_VT.ptr()),
+                (IID_BRUSH, EMPTY_VT.ptr()),
+            ],
+            // ICompositionBackdropBrush n'a aucun membre propre.
+            Kind::BackdropBrush => vec![
+                (IID_BACKDROP_BRUSH, BACKDROP_BRUSH_VT.ptr()),
                 (IID_BRUSH, EMPTY_VT.ptr()),
             ],
             Kind::InsetClip => vec![
@@ -331,6 +370,8 @@ struct VisualData {
     brush: *mut c_void,
     /// IVisual2::ParentForTransform (tenu, #2224).
     transform_parent: *mut c_void,
+    /// ILayerVisual::Effect (tenu, #2710) : gardé, non appliqué.
+    effect: *mut c_void,
     /// Enfants de bas en haut (tenus).
     children: Vec<*mut Obj>,
     /// Parent (non tenu : il retire ses enfants en mourant).
@@ -507,6 +548,7 @@ unsafe fn destroy(obj: *mut Obj) {
             com_release(v.clip);
             com_release(v.brush);
             com_release(v.transform_parent);
+            com_release(v.effect);
             for c in v.children {
                 if let Data::Visual(cv) = &mut lock(&(*c).st).data {
                     cv.parent = std::ptr::null_mut();
@@ -1080,17 +1122,28 @@ static ASYNC_INFO_VT: VTable<11> = VTable(table::<11>(
 // ---------------------------------------------------------------------
 
 unsafe fn new_visual(c: *mut Obj, sprite: bool) -> *mut Obj {
-    new_obj(
+    new_visual_of(
+        c,
         if sprite {
             Kind::SpriteVisual
         } else {
             Kind::ContainerVisual
         },
+    )
+}
+
+/// Visuels que l'on peut placer dans un arbre.
+const VISUAL_KINDS: [Kind; 3] = [Kind::ContainerVisual, Kind::SpriteVisual, Kind::LayerVisual];
+
+unsafe fn new_visual_of(c: *mut Obj, kind: Kind) -> *mut Obj {
+    new_obj(
+        kind,
         c,
         Data::Visual(Box::new(VisualData {
             p: Visual::default(),
             clip: std::ptr::null_mut(),
             transform_parent: std::ptr::null_mut(),
+            effect: std::ptr::null_mut(),
             brush: std::ptr::null_mut(),
             children: Vec::new(),
             parent: std::ptr::null_mut(),
@@ -1214,6 +1267,68 @@ static COMPOSITOR_VT: VTable<30> = VTable(table::<30>(
         unsupported!("ICompositor::CreateVector4KeyFrameAnimation"),
         unsupported!("ICompositor::GetCommitBatch"),
     ],
+));
+
+// ICompositor2 (#2710) ----------------------------------------------------
+
+unsafe extern "win64" fn compositor_backdrop_brush(this: *mut Slot, out: *mut *mut c_void) -> i32 {
+    put_obj(out, new_obj(Kind::BackdropBrush, owner(this), Data::None))
+}
+
+unsafe extern "win64" fn compositor_layer_visual(this: *mut Slot, out: *mut *mut c_void) -> i32 {
+    put_obj(out, new_visual_of(owner(this), Kind::LayerVisual))
+}
+
+/// Ordre des métadonnées publiques (windows-rs, `ICompositor2_Vtbl`).
+static COMPOSITOR2_VT: VTable<19> = VTable(table::<19>(
+    &INSPECTABLE,
+    &[
+        sans_classe!("ICompositor2::CreateAmbientLight"),
+        sans_classe!("ICompositor2::CreateAnimationGroup"),
+        compositor_backdrop_brush as *const (),
+        sans_classe!("ICompositor2::CreateDistantLight"),
+        sans_classe!("ICompositor2::CreateDropShadow"),
+        sans_classe!("ICompositor2::CreateImplicitAnimationCollection"),
+        compositor_layer_visual as *const (),
+        sans_classe!("ICompositor2::CreateMaskBrush"),
+        sans_classe!("ICompositor2::CreateNineGridBrush"),
+        sans_classe!("ICompositor2::CreatePointLight"),
+        sans_classe!("ICompositor2::CreateSpotLight"),
+        sans_classe!("ICompositor2::CreateStepEasingFunction"),
+        sans_classe!("ICompositor2::CreateStepEasingFunctionWithStepCount"),
+    ],
+));
+
+static BACKDROP_BRUSH_VT: VTable<6> = VTable(INSPECTABLE);
+
+// ILayerVisual (#2710) ----------------------------------------------------
+
+unsafe extern "win64" fn layer_get_effect(this: *mut Slot, out: *mut *mut c_void) -> i32 {
+    let e = with_visual(owner(this), |v| v.effect).unwrap_or(std::ptr::null_mut());
+    put_com(out, e)
+}
+
+unsafe extern "win64" fn layer_set_effect(this: *mut Slot, effect: *mut c_void) -> i32 {
+    let obj = owner(this);
+    if !effect.is_null() {
+        crate::log_warn!(
+            "composition",
+            "LayerVisual.Effect : effet gardé mais non appliqué au dessin"
+        );
+    }
+    com_add_ref(effect);
+    let old = with_visual(obj, |v| std::mem::replace(&mut v.effect, effect));
+    com_release(old.unwrap_or(effect));
+    if old.is_none() {
+        return E_FAIL;
+    }
+    changed(obj);
+    S_OK
+}
+
+static LAYER_VISUAL_VT: VTable<8> = VTable(table::<8>(
+    &INSPECTABLE,
+    &[layer_get_effect as *const (), layer_set_effect as *const ()],
 ));
 
 // ICompositorDesktopInterop ---------------------------------------------
@@ -1542,7 +1657,13 @@ unsafe extern "win64" fn sprite_get_brush(this: *mut Slot, out: *mut *mut c_void
 
 unsafe extern "win64" fn sprite_set_brush(this: *mut Slot, brush: *mut c_void) -> i32 {
     let obj = owner(this);
-    if !brush.is_null() && ours_of(brush, &[Kind::ColorBrush, Kind::SurfaceBrush]).is_none() {
+    if !brush.is_null()
+        && ours_of(
+            brush,
+            &[Kind::ColorBrush, Kind::SurfaceBrush, Kind::BackdropBrush],
+        )
+        .is_none()
+    {
         crate::log_warn!(
             "composition",
             "SpriteVisual.Brush : pinceau non pris en charge, rien ne sera dessiné"
@@ -1590,7 +1711,7 @@ enum At {
 
 unsafe fn insert_child(this: *mut Slot, child: *mut c_void, at: At) -> i32 {
     let parent = collection_visual(this);
-    let Some(child) = ours_of(child, &[Kind::ContainerVisual, Kind::SpriteVisual]) else {
+    let Some(child) = ours_of(child, &VISUAL_KINDS) else {
         return E_INVALIDARG;
     };
     if child == parent {
@@ -1879,7 +2000,7 @@ unsafe extern "win64" fn target_set_root(this: *mut Slot, value: *mut c_void) ->
     let new_root = if value.is_null() {
         std::ptr::null_mut()
     } else {
-        match ours_of(value, &[Kind::ContainerVisual, Kind::SpriteVisual]) {
+        match ours_of(value, &VISUAL_KINDS) {
             Some(v) => v,
             None => return E_INVALIDARG,
         }
@@ -2441,7 +2562,7 @@ static PROPERTY_SET_VT: VTable<22> = VTable(table::<22>(
 ));
 
 /// Toutes les tables de ce module (pour reconnaître nos objets).
-static ALL_VTS: [fn() -> *const (); 25] = [
+static ALL_VTS: [fn() -> *const (); 28] = [
     || EMPTY_VT.ptr(),
     || CLOSABLE_VT.ptr(),
     || OBJECT_VT.ptr(),
@@ -2467,6 +2588,9 @@ static ALL_VTS: [fn() -> *const (); 25] = [
     || DRAWING_SURFACE2_VT.ptr(),
     || SURFACE_INTEROP_VT.ptr(),
     || PROPERTY_SET_VT.ptr(),
+    || COMPOSITOR2_VT.ptr(),
+    || BACKDROP_BRUSH_VT.ptr(),
+    || LAYER_VISUAL_VT.ptr(),
 ];
 
 // ---------------------------------------------------------------------
@@ -2871,6 +2995,7 @@ unsafe fn present(hwnd: usize, frame: &Frame) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::comobj::E_NOTIMPL;
     use super::*;
 
     type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
@@ -2977,6 +3102,87 @@ mod tests {
 
     /// Teams (#2224) : un ContainerVisual répond à IVisual2, mémorise
     /// RelativeOffsetAdjustment, RelativeSizeAdjustment et ParentForTransform.
+    /// #2710 : le compositeur sert ICompositor2 ; LayerVisual et
+    /// CompositionBackdropBrush sont servis, les autres créations rendent
+    /// E_NOTIMPL.
+    #[test]
+    fn compositeur2_2710() {
+        unsafe {
+            let comp = default_iface(new_compositor());
+            let c2 = call_qi(comp, &IID_COMPOSITOR2);
+            assert_eq!(ours(c2), ours(comp));
+            // CreateLayerVisual (7e méthode).
+            let layer = out0(c2, 12);
+            assert_eq!(
+                ours_of(layer, &VISUAL_KINDS).map(|o| (*o).kind),
+                Some(Kind::LayerVisual)
+            );
+            assert_eq!(layer, call_qi(layer, &IID_LAYER_VISUAL));
+            com_release(layer);
+            let get_e: unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
+                vcall(layer, 6);
+            let set_e: unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32 = vcall(layer, 7);
+            let mut e = 1 as *mut c_void;
+            assert_eq!(get_e(layer, &mut e), S_OK);
+            assert!(e.is_null());
+            assert_eq!(set_e(layer, std::ptr::null_mut()), S_OK);
+            // Un LayerVisual se place dans un arbre, et reçoit des enfants.
+            let root = out0(comp, 9);
+            let kids = out0(root, 6);
+            let top: unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32 = vcall(kids, 9);
+            let count: unsafe extern "win64" fn(*mut c_void, *mut i32) -> i32 = vcall(kids, 6);
+            let lvis = call_qi(layer, &IID_VISUAL);
+            assert_eq!(top(kids, lvis), S_OK);
+            let mut n = 0;
+            assert_eq!(count(kids, &mut n), S_OK);
+            assert_eq!(n, 1);
+            let lcont = call_qi(layer, &IID_CONTAINER);
+            let lkids = out0(lcont, 6);
+            let child = out0(comp, 9);
+            let cvis = call_qi(child, &IID_VISUAL);
+            assert_eq!(top(lkids, cvis), S_OK);
+            com_release(cvis);
+            com_release(child);
+            com_release(lkids);
+            com_release(lcont);
+            com_release(lvis);
+            com_release(kids);
+            com_release(root);
+            // CreateBackdropBrush (3e méthode), accepté par un SpriteVisual.
+            let backdrop = out0(c2, 8);
+            assert_eq!(ours(backdrop).map(|o| (*o).kind), Some(Kind::BackdropBrush));
+            let brush = call_qi(backdrop, &IID_BRUSH);
+            let sprite = out0(comp, 22);
+            let set_b: unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32 = vcall(sprite, 7);
+            assert_eq!(set_b(sprite, brush), S_OK);
+            let mut b = std::ptr::null_mut();
+            let get_b: unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
+                vcall(sprite, 6);
+            assert_eq!(get_b(sprite, &mut b), S_OK);
+            assert_eq!(b, brush);
+            com_release(b);
+            // Les classes absentes : E_NOTIMPL, rien d'écrit.
+            for slot in [6usize, 7, 9, 10, 11, 13, 14, 15, 16, 17] {
+                let f: unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
+                    vcall(c2, slot);
+                let mut o = std::ptr::null_mut();
+                assert_eq!(f(c2, &mut o), E_NOTIMPL, "emplacement {slot}");
+                assert!(o.is_null());
+            }
+            let f: unsafe extern "win64" fn(*mut c_void, i32, *mut *mut c_void) -> i32 =
+                vcall(c2, 18);
+            let mut o = std::ptr::null_mut();
+            assert_eq!(f(c2, 4, &mut o), E_NOTIMPL);
+            assert!(o.is_null());
+            com_release(sprite);
+            com_release(brush);
+            com_release(backdrop);
+            com_release(layer);
+            com_release(c2);
+            com_release(comp);
+        }
+    }
+
     #[test]
     fn visual2_des_conteneurs_2224() {
         unsafe {
