@@ -1289,8 +1289,17 @@ pub(super) unsafe extern "win64" fn bitmap_surface(
 /// D2D1_MAPPED_RECT { pitch, bits }.
 #[repr(C)]
 pub(super) struct MappedRect {
-    pitch: u32,
-    bits: *mut u8,
+    pub(super) pitch: u32,
+    pub(super) bits: *mut u8,
+}
+
+impl Default for MappedRect {
+    fn default() -> Self {
+        MappedRect {
+            pitch: 0,
+            bits: std::ptr::null_mut(),
+        }
+    }
 }
 
 /// Map : accès direct aux pixels (bitmap CPU_READ) jusqu'à Unmap.
@@ -1304,14 +1313,49 @@ pub(super) unsafe extern "win64" fn bitmap_map(
     }
     let b = &Com::get(this).data;
     let mut px = crate::dlls::lock(&b.px);
-    *out = MappedRect {
-        pitch: b.w * 4,
-        bits: px.as_mut_ptr(),
-    };
-    d2d_trace!("Map {:p} {}x{} options {:#x}", this, b.w, b.h, _options);
+    if b.alpha_only {
+        // DXGI_FORMAT_A8_UNORM : un octet d'alpha par pixel, comme le
+        // format du bitmap. Lu en BGRA, la ligne serait quatre fois trop
+        // large et Paint.NET perdait le bord droit de son contour de
+        // sélection (#2431).
+        let mut m = crate::dlls::lock(&b.mapped);
+        *m = px.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+        *out = MappedRect {
+            pitch: b.w,
+            bits: m.as_mut_ptr(),
+        };
+    } else {
+        *out = MappedRect {
+            pitch: b.w * 4,
+            bits: px.as_mut_ptr(),
+        };
+    }
+    d2d_trace!(
+        "Map {:p} {}x{} options {:#x}{}",
+        this,
+        b.w,
+        b.h,
+        _options,
+        if b.alpha_only { " alpha seul" } else { "" }
+    );
     S_OK
 }
-pub(super) unsafe extern "win64" fn bitmap_unmap(_: *mut BitmapObj) -> i32 {
+/// Unmap : pour un bitmap A8, recopie l'alpha éventuellement écrit
+/// (noir prémultiplié de cette opacité, comme CopyFromMemory) et libère la
+/// copie.
+pub(super) unsafe extern "win64" fn bitmap_unmap(this: *mut BitmapObj) -> i32 {
+    let b = &Com::get(this).data;
+    if b.alpha_only {
+        let m = std::mem::take(&mut *crate::dlls::lock(&b.mapped));
+        let mut px = crate::dlls::lock(&b.px);
+        if m.len() * 4 == px.len() {
+            for (p, &a) in px.as_chunks_mut::<4>().0.iter_mut().zip(&m) {
+                if p[3] != a {
+                    *p = [0, 0, 0, a];
+                }
+            }
+        }
+    }
     S_OK
 }
 
