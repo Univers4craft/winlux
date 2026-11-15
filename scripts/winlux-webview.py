@@ -185,10 +185,19 @@ def offer_install():
         + _t("Paquet : {package}\nVersion : {version}\nÉditeur : {publisher}\nSource : {source}\n"
              "Les signatures et sommes SHA-256 du dépôt sont vérifiées pendant le téléchargement.").format(
             package=ENGINE_PACKAGE, version=version, publisher=publisher, source=source))
-    dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
+    later = dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
     dialog.add_button(_t("Télécharger"), Gtk.ResponseType.OK)
     # Refus par défaut, comme pour tout téléchargement proposé (#2589).
     dialog.set_default_response(Gtk.ResponseType.CANCEL)
+    # Bouton par défaut visible (#2602), comme dans la Boutique (#1448) :
+    # « Plus tard » porte la couleur d'accent et seul il a le cadre de focus
+    # dès l'ouverture (GTK ne le dessine sinon qu'après une touche du clavier ;
+    # l'affichage de la fenêtre remet ce réglage à zéro, d'où « map »).
+    later.get_style_context().add_class("suggested-action")
+    later.set_can_default(True)
+    later.grab_default()
+    later.grab_focus()
+    dialog.connect("map", lambda d: d.set_focus_visible(True))
     answer = dialog.run()
     dialog.destroy()
     if answer != Gtk.ResponseType.OK:
