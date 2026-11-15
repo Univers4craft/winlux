@@ -4,10 +4,13 @@
 //! WinINet est l'API réseau historique de Windows : téléchargements,
 //! mises à jour intégrées, vérification de licence… Ses poignées sont celles
 //! de WinHTTP, ses constantes de requête (`HTTP_QUERY_*`, `HTTP_ADDREQ_*`,
-//! `INTERNET_FLAG_SECURE`) ont les mêmes valeurs. Seul le mode synchrone est
-//! pris en charge : une session ouverte avec `INTERNET_FLAG_ASYNC` est
-//! refusée plutôt que de ne jamais rappeler le programme. FTP et Gopher ne
-//! sont pas gérés.
+//! `INTERNET_FLAG_SECURE`) ont les mêmes valeurs. Une session ouverte avec
+//! `INTERNET_FLAG_ASYNC` est acceptée (#2587) : chaque opération y aboutit
+//! tout de suite et rend TRUE, ce que les pages HttpSendRequest et
+//! InternetReadFile de Microsoft Learn permettent en mode asynchrone ; le
+//! programme n'attend le rappel INTERNET_STATUS_REQUEST_COMPLETE qu'après
+//! ERROR_IO_PENDING, que Winlux ne rend jamais. FTP et Gopher ne sont pas
+//! gérés.
 
 use super::winhttp;
 use super::{lock, Exports};
@@ -379,9 +382,13 @@ unsafe fn open_inner(
     bypass: *const u16,
     flags: u32,
 ) -> usize {
+    // INTERNET_FLAG_ASYNC : accepté, chaque opération aboutit tout de suite
+    // (voir l'en-tête du module, #2587).
     if flags & INTERNET_FLAG_ASYNC != 0 {
-        crate::log_warn!("wininet", "InternetOpen asynchrone non pris en charge");
-        return fail(ERROR_NOT_SUPPORTED);
+        crate::log_info!(
+            "wininet",
+            "InternetOpen asynchrone : chaque opération aboutit tout de suite"
+        );
     }
     // INTERNET_OPEN_TYPE_* = WINHTTP_ACCESS_TYPE_* (0 préconfiguré, 1 direct, 3 proxy, 4).
     winhttp::open(agent, access, proxy, bypass, 0)
@@ -1375,6 +1382,40 @@ mod tests {
         assert_eq!((d(28), d(32), d(36), d(40)), (0, 0, 0, 0));
         assert_eq!(d(0), 60);
         assert!(b[60..].iter().all(|&x| x == 0xAA), "rien après 60 octets");
+    }
+
+    /// #2587 : une session INTERNET_FLAG_ASYNC est ouverte, et une requête y
+    /// aboutit tout de suite (TRUE, jamais ERROR_IO_PENDING).
+    #[test]
+    fn session_asynchrone_aboutit_tout_de_suite() {
+        let _teb = crate::process::test_teb();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = [0u8; 2048];
+            let _ = s.read(&mut req).unwrap();
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nasync"
+            );
+        });
+        let agent = b"Test\0";
+        let session = internet_open_a(agent.as_ptr(), 1, null(), null(), INTERNET_FLAG_ASYNC);
+        assert_ne!(session, 0, "InternetOpenA asynchrone");
+        let url = format!("http://127.0.0.1:{port}/v64.cab\0");
+        let req = internet_open_url_a(session, url.as_ptr(), null(), 0, 0, 1);
+        assert_ne!(req, 0, "InternetOpenUrlA dans la session asynchrone");
+        let mut buf = [0u8; 16];
+        let mut got = 0u32;
+        assert_eq!(
+            internet_read_file(req, buf.as_mut_ptr().cast(), 16, &mut got),
+            1
+        );
+        assert_eq!(&buf[..got as usize], b"async");
+        assert_eq!(internet_close_handle(req), 1);
+        assert_eq!(internet_close_handle(session), 1);
+        server.join().unwrap();
     }
 
     #[test]
