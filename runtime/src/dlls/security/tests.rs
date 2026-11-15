@@ -566,10 +566,14 @@ fn sid_bien_connus_des_conteneurs() {
     }
 }
 
+/// Les tests qui écrivent le SID d'AppContainer retenu passent l'un après l'autre.
+static CONTENEUR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// #2527 : GetAppContainerNamedObjectPath, servie par kernel32, rend le chemin
 /// (forme choisie par Winlux) d'un SID donné ou du jeton d'AppContainer.
 #[test]
 fn chemin_des_objets_nommes_d_un_conteneur() {
+    let _seul = CONTENEUR.lock().unwrap_or_else(|e| e.into_inner());
     let _teb = crate::process::test_teb();
     assert!(crate::dlls::kernel32_proc("GetAppContainerNamedObjectPath", false).is_some());
     let sid = sid_bytes("S-1-15-2-1-2-3-4-5-6-7").unwrap();
@@ -608,5 +612,48 @@ fn chemin_des_objets_nommes_d_un_conteneur() {
             0
         );
         assert_eq!(crate::process::last_error(), 87);
+    }
+}
+
+/// #2540 : NtCreateLowBoxToken, exportée par ntdll, rend le jeton du compte et
+/// retient le SID de paquet pour GetAppContainerNamedObjectPath.
+#[test]
+fn jeton_lowbox_par_ntdll() {
+    let _seul = CONTENEUR.lock().unwrap_or_else(|e| e.into_inner());
+    let _teb = crate::process::test_teb();
+    assert!(crate::dlls::lookup("ntdll", "NtCreateLowBoxToken").is_some());
+    let paquet = sid_bytes("S-1-15-2-9-8-7-6-5-4-3").unwrap();
+    let mut jeton = 0usize;
+    let mut buf = [0u16; 128];
+    let mut n = 0u32;
+    let z = std::ptr::null_mut::<usize>() as usize;
+    unsafe {
+        let creer = |sid: *const u8, out: *mut usize, existant: usize| {
+            nt_create_low_box_token(out, existant, 0xF01FF, 0, sid, 0, 0, 0, 0)
+        };
+        assert_eq!(creer(paquet.as_ptr(), &mut jeton, TOKEN_HANDLE), 0);
+        assert_eq!(jeton, TOKEN_HANDLE);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(jeton, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(
+            String::from_utf16_lossy(&buf[..n as usize - 1]),
+            "AppContainerNamedObjects\\S-1-15-2-9-8-7-6-5-4-3"
+        );
+        // Un SID hors du groupe des paquets LowBox, ou pas de sortie : STATUS_INVALID_PARAMETER.
+        let autre = sid_bytes("S-1-5-32-545").unwrap();
+        assert_eq!(
+            creer(autre.as_ptr(), &mut jeton, TOKEN_HANDLE) as u32,
+            0xC000_000D
+        );
+        assert_eq!(
+            creer(paquet.as_ptr(), z as *mut usize, TOKEN_HANDLE) as u32,
+            0xC000_000D
+        );
+        assert_eq!(
+            creer(paquet.as_ptr(), &mut jeton, 0x1234) as u32,
+            0xC000_0008
+        );
     }
 }

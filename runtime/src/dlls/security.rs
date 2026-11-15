@@ -1584,6 +1584,42 @@ pub unsafe extern "win64" fn CreateAppContainerToken(
     give_token(out)
 }
 
+/// NtCreateLowBoxToken (ntdll, documentation publique « NtCreateLowBoxToken
+/// function (Ntseapi.h) », Microsoft Learn) : crée le jeton LowBox d'un
+/// AppContainer. Comme CreateAppContainerToken, c'est le jeton unique du compte
+/// (TOKEN_HANDLE) ; PackageSid, qui doit appartenir au groupe des SID de paquet
+/// LowBox (S-1-15-2-…), est retenu pour GetAppContainerNamedObjectPath. Les
+/// capacités et les handles de répertoires d'objets nommés ne changent rien sous
+/// Winlux, où la séparation vient des comptes Linux (#2540).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn nt_create_low_box_token(
+    token: *mut usize,
+    existing: usize,
+    _access: u32,
+    _attributes: usize,
+    package: *const u8,
+    _capability_count: u32,
+    _capabilities: usize,
+    _handle_count: u32,
+    _handles: usize,
+) -> i32 {
+    const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
+    const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+    let package = sid_at(package)
+        .and_then(sid_text)
+        .filter(|t| t.starts_with("S-1-15-2-"));
+    let (false, Some(package)) = (token.is_null(), package) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    // Le jeton existant : celui du compte, ou le pseudo-handle du processus courant.
+    if existing != TOKEN_HANDLE && existing != usize::MAX - 3 {
+        return STATUS_INVALID_HANDLE;
+    }
+    *crate::dlls::lock(&APPCONTAINER_SID) = Some(package);
+    *token = TOKEN_HANDLE;
+    0
+}
+
 /// SID du dernier AppContainer passé à CreateAppContainerToken. Winlux n'a qu'un
 /// jeton par compte (TOKEN_HANDLE), donc le jeton seul ne le porte pas.
 static APPCONTAINER_SID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
