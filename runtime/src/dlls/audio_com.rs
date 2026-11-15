@@ -223,6 +223,11 @@ fn builtin_creator(clsid: &Guid) -> Option<Creator> {
         .or_else(|| super::mmdevapi::creator(clsid))
         .or_else(|| super::xaudio2::creator(clsid))
         .or_else(|| super::windowscodecs::creator(clsid))
+        .or_else(|| {
+            // taskschd.dll intégrée (#2577) : ITaskService par sa fabrique.
+            (*clsid == super::taskschd::CLSID_TASK_SCHEDULER)
+                .then_some(super::taskschd_dll::create_service as Creator)
+        })
 }
 
 /// Crée une instance d'une classe audio intégrée (appelé par CoCreateInstance

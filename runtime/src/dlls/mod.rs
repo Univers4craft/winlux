@@ -276,6 +276,7 @@ pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod taskschd_dll;
 pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
@@ -798,6 +799,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mmdevapi",
                 exports: mmdevapi::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "taskschd",
+                exports: taskschd_dll::exports(),
                 handle: 0,
             },
             Builtin {
