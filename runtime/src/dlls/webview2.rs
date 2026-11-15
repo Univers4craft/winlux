@@ -298,6 +298,8 @@ struct Com {
     hosts: Mutex<Vec<HostObject>>,
     /// Réglages de vue Settings3 à 9, lus tels qu'écrits (#2601).
     more_settings: Mutex<[u32; 8]>,
+    /// MemoryUsageTargetLevel de la vue (#2613) : 0 normal, 1 bas.
+    memory_level: AtomicU32,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -311,6 +313,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         opts: Mutex::new(ControllerOpts::default()),
         hosts: Mutex::new(Vec::new()),
         more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
+        memory_level: AtomicU32::new(0),
     });
     Box::into_raw(b) as usize
 }
@@ -1438,6 +1441,9 @@ fn webview_methods() -> Vec<(usize, usize)> {
         (54, ok2 as *const () as usize),
         (55, ok2 as *const () as usize),
     ];
+    // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
+    m.push((116, web_get_memory_level as *const () as usize));
+    m.push((117, web_put_memory_level as *const () as usize));
     // Événements acceptés mais jamais déclenchés (cadres, dialogues,
     // autorisations, nouvelles fenêtres, requêtes, fermeture…).
     for (add, remove) in [
@@ -1795,6 +1801,27 @@ unsafe extern "win64" fn web_remove_host_object(this: usize, name: *const u16) -
     S_OK
 }
 
+/// ICoreWebView2_19::get_MemoryUsageTargetLevel (#2613).
+unsafe extern "win64" fn web_get_memory_level(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = com(this).memory_level.load(Ordering::Relaxed) as i32;
+    S_OK
+}
+/// ICoreWebView2_19::put_MemoryUsageTargetLevel (#2613) : NORMAL (0) ou
+/// LOW (1), d'après l'IDL public. L'écriture est « best effort » selon la
+/// documentation : le moteur WebKitGTK n'en tient pas compte, la valeur se
+/// relit. Une autre valeur est refusée (E_INVALIDARG, non documenté).
+unsafe extern "win64" fn web_put_memory_level(this: usize, level: i32) -> i32 {
+    if !(0..=1).contains(&level) {
+        return E_INVALIDARG;
+    }
+    com(this)
+        .memory_level
+        .store(level as u32, Ordering::Relaxed);
+    S_OK
+}
 unsafe extern "win64" fn web_title(this: usize, out: *mut *mut u16) -> i32 {
     let Some(v) = view_of(this) else {
         return E_FAIL;
@@ -2372,5 +2399,28 @@ mod tests {
             unsafe { std::mem::transmute(set[3 + 20]) };
         assert_eq!(unsafe { f(obj, std::ptr::null_mut()) }, E_POINTER);
         com_release(obj);
+    }
+
+    /// #2613 : MemoryUsageTargetLevel se lit (normal par défaut) et se
+    /// relit tel qu'écrit ; une valeur hors de l'énumération est refusée.
+    #[test]
+    fn niveau_memoire_2613() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 116], web_get_memory_level as *const () as usize);
+        assert_eq!(web[3 + 117], web_put_memory_level as *const () as usize);
+        let view = new_com(Family::WebView, None, None, Args::default());
+        let mut level = 7i32;
+        unsafe {
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 0);
+            assert_eq!(web_put_memory_level(view, 1), S_OK);
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 1);
+            assert_eq!(web_put_memory_level(view, 2), E_INVALIDARG);
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 1);
+            assert_eq!(web_get_memory_level(view, std::ptr::null_mut()), E_POINTER);
+        }
+        com_release(view);
     }
 }
