@@ -461,7 +461,7 @@ unsafe fn open_request_inner(
     object: *const u16,
     version: *const u16,
     referrer: *const u16,
-    accept: *const *const u16,
+    accept: Option<Vec<String>>,
     flags: u32,
 ) -> usize {
     let verb_default = w("GET");
@@ -479,7 +479,7 @@ unsafe fn open_request_inner(
     // Seul INTERNET_FLAG_SECURE compte : cache, cookies et maintien de la
     // connexion sont gérés par le moteur ; les drapeaux qui désactiveraient
     // la vérification des certificats sont ignorés (plus sûr).
-    winhttp::open_request(
+    winhttp::open_request_types(
         conn,
         verb,
         object,
@@ -501,7 +501,13 @@ extern "win64" fn http_open_request_w(
     flags: u32,
     _ctx: usize,
 ) -> usize {
-    unsafe { open_request_inner(conn, verb, object, version, referrer, accept, flags) }
+    unsafe {
+        // Types acceptés : pointeurs de la taille de ceux du programme (#2597).
+        match winhttp::accept_types_wide(accept as usize) {
+            Ok(types) => open_request_inner(conn, verb, object, version, referrer, types, flags),
+            Err(code) => fail(code),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -517,22 +523,22 @@ extern "win64" fn http_open_request_a(
 ) -> usize {
     unsafe {
         let (v, o, ver, r) = (a2w(verb), a2w(object), a2w(version), a2w(referrer));
-        let mut types: Vec<Vec<u16>> = Vec::new();
-        if !accept.is_null() {
-            let mut p = accept;
-            while !(*p).is_null() && types.len() < 64 {
-                types.push(w(&super::cstr(*p)));
-                p = p.add(1);
-            }
-        }
-        let mut list: Vec<*const u16> = types.iter().map(|t| t.as_ptr()).collect();
-        list.push(null());
-        let acc = if accept.is_null() {
-            null()
+        // Types acceptés : pointeurs de la taille de ceux du programme, 4
+        // octets en x86 (#2597).
+        let types = if accept.is_null() {
+            None
         } else {
-            list.as_ptr()
+            match winhttp::program_pointers(accept as usize, 63) {
+                Some(pointers) => Some(
+                    pointers
+                        .into_iter()
+                        .map(|p| super::cstr(p as *const u8))
+                        .collect(),
+                ),
+                None => return fail(ERROR_INVALID_PARAMETER),
+            }
         };
-        open_request_inner(conn, ptr(&v), ptr(&o), ptr(&ver), ptr(&r), acc, flags)
+        open_request_inner(conn, ptr(&v), ptr(&o), ptr(&ver), ptr(&r), types, flags)
     }
 }
 
@@ -779,7 +785,7 @@ unsafe fn open_url_inner(
         object.as_ptr(),
         null(),
         null(),
-        null(),
+        None,
         secure | flags,
     );
     if req == 0 {
