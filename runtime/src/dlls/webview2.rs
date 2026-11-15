@@ -243,6 +243,7 @@ enum Family {
     Message,
     ContentLoading,
     SourceChanged,
+    ControllerOptions,
 }
 
 impl Family {
@@ -257,6 +258,7 @@ impl Family {
             Family::Message => &MESSAGE_ARGS_IIDS,
             Family::ContentLoading => &CONTENT_LOADING_ARGS_IIDS,
             Family::SourceChanged => &SOURCE_CHANGED_ARGS_IIDS,
+            Family::ControllerOptions => &CONTROLLER_OPTIONS_IIDS,
         }
     }
 }
@@ -272,6 +274,15 @@ struct Args {
     string: Option<String>,
 }
 
+/// Réglages d'un ICoreWebView2ControllerOptions (#2570).
+#[derive(Default, Clone)]
+struct ControllerOpts {
+    profile: String,
+    private: bool,
+    locale: String,
+    background: Option<u32>,
+}
+
 #[repr(C)]
 struct Com {
     vtbl: *const usize,
@@ -280,6 +291,7 @@ struct Com {
     env: Option<Arc<Env>>,
     view: Option<Arc<View>>,
     args: Args,
+    opts: Mutex<ControllerOpts>,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -290,6 +302,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         env,
         view,
         args,
+        opts: Mutex::new(ControllerOpts::default()),
     });
     Box::into_raw(b) as usize
 }
@@ -396,6 +409,7 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::Message => (MESSAGE_ARGS_SLOTS, message_methods()),
         Family::ContentLoading => (CONTENT_LOADING_ARGS_SLOTS, content_loading_methods()),
         Family::SourceChanged => (SOURCE_CHANGED_ARGS_SLOTS, source_changed_methods()),
+        Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
@@ -629,7 +643,96 @@ fn environment_methods() -> Vec<(usize, usize)> {
         (2, env_browser_version as *const () as usize),
         (3, add_ignored as *const () as usize),
         (4, remove_ignored as *const () as usize),
+        // ICoreWebView2Environment10 (#2570).
+        (17, env_create_controller_options as *const () as usize),
+        (18, env_create_controller_with_options as *const () as usize),
     ]
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerOptions : un
+/// objet de réglages neuf (profil vide, navigation privée désactivée).
+unsafe extern "win64" fn env_create_controller_options(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::ControllerOptions,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
+    S_OK
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerWithOptions :
+/// comme CreateCoreWebView2Controller. Les réglages (profil, navigation
+/// privée, langue des scripts, couleur de fond) restent dans leur objet :
+/// le moteur WebKitGTK de Winlux n'a qu'un profil par dossier de données,
+/// et la couleur se règle ensuite par put_DefaultBackgroundColor.
+unsafe extern "win64" fn env_create_controller_with_options(
+    this: usize,
+    parent: usize,
+    _options: usize,
+    handler: usize,
+) -> i32 {
+    env_create_controller(this, parent, handler)
+}
+
+// --- ICoreWebView2ControllerOptions (…3) ---
+
+fn controller_options_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, opt_get_profile as *const () as usize),
+        (1, opt_put_profile as *const () as usize),
+        (2, opt_get_private as *const () as usize),
+        (3, opt_put_private as *const () as usize),
+        (4, opt_get_locale as *const () as usize),
+        (5, opt_put_locale as *const () as usize),
+        (6, opt_get_background as *const () as usize),
+        (7, opt_put_background as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn opt_get_profile(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).profile.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_profile(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).profile = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_private(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&com(this).opts).private);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_private(this: usize, on: i32) -> i32 {
+    super::lock(&com(this).opts).private = on != 0;
+    S_OK
+}
+unsafe extern "win64" fn opt_get_locale(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).locale.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_locale(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).locale = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_background(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // COREWEBVIEW2_COLOR : blanc opaque par défaut (documentation de
+    // DefaultBackgroundColor).
+    *out = super::lock(&com(this).opts)
+        .background
+        .unwrap_or(0xFFFF_FFFF);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_background(this: usize, color: u32) -> i32 {
+    super::lock(&com(this).opts).background = Some(color);
+    S_OK
 }
 
 unsafe extern "win64" fn env_browser_version(_this: usize, out: *mut *mut u16) -> i32 {
@@ -1811,5 +1914,47 @@ mod tests {
             vtable(Family::Controller)[3 + 29],
             add_ignored as *const () as usize
         );
+    }
+
+    /// #2570 : ICoreWebView2Environment10 rend un objet de réglages de
+    /// contrôleur dont les propriétés se relisent.
+    #[test]
+    fn reglages_de_controleur_2570() {
+        let env = vtable(Family::Environment);
+        assert_eq!(
+            env[3 + 17],
+            env_create_controller_options as *const () as usize
+        );
+        assert_eq!(
+            env[3 + 18],
+            env_create_controller_with_options as *const () as usize
+        );
+        let envobj = new_com(Family::Environment, None, None, Args::default());
+        let mut opts = 0usize;
+        assert_eq!(
+            unsafe { env_create_controller_options(envobj, &mut opts) },
+            S_OK
+        );
+        assert_ne!(opts, 0);
+        let vt = vtable(Family::ControllerOptions);
+        assert_eq!(vt.len(), CONTROLLER_OPTIONS_SLOTS);
+        let mut out = 0usize;
+        let iid = CONTROLLER_OPTIONS_IIDS[2].as_ptr();
+        assert_eq!(query_interface(opts, iid, &mut out), S_OK);
+        unsafe {
+            assert_eq!(opt_put_private(opts, 1), S_OK);
+            let mut on = 0i32;
+            assert_eq!(opt_get_private(opts, &mut on), S_OK);
+            assert_eq!(on, 1);
+            let mut color = 0u32;
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0xFFFF_FFFF);
+            assert_eq!(opt_put_background(opts, 0x00FF_0000), S_OK);
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0x00FF_0000);
+            com_release(out);
+            com_release(opts);
+            com_release(envobj);
+        }
     }
 }
