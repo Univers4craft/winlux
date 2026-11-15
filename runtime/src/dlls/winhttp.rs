@@ -30,6 +30,10 @@ struct Options {
     /// WINHTTP_OPTION_SECURE_PROTOCOLS : versions TLS 1.x permises
     /// (minimum, maximum), x de 0 à 3 (#2609).
     tls: Option<(u8, u8)>,
+    /// Rappel de WinHttpSetStatusCallback, hérité par les poignées filles
+    /// ouvertes ensuite (#2619). Jamais appelé : Winlux n'ouvre que des
+    /// sessions synchrones, où chaque appel rend lui-même son erreur.
+    callback: usize,
 }
 #[derive(Clone)]
 struct Request {
@@ -195,6 +199,7 @@ pub unsafe extern "win64" fn open(
             total_ms: 120000,
             context: 0,
             tls: None,
+            callback: 0,
         }),
     )
 }
@@ -1107,18 +1112,41 @@ pub unsafe extern "win64" fn detect_auto_proxy_config_url(flags: u32, out: *mut 
     crate::wow32::write_ptr(out as usize, 0);
     fail(12180)
 }
+/// WinHttpSetStatusCallback (#2619) : d'après Microsoft Learn, rend le
+/// rappel défini auparavant sur la poignée (NULL s'il n'y en avait pas), et
+/// WINHTTP_INVALID_STATUS_CALLBACK seulement en cas d'échec. Le rappel est
+/// retenu et hérité par les poignées filles, mais jamais appelé : les
+/// sessions de Winlux sont synchrones (WINHTTP_FLAG_ASYNC est refusé par
+/// WinHttpOpen), et les notifications d'achèvement comme REQUEST_ERROR ne
+/// concernent que le mode asynchrone ; l'erreur est rendue par l'appel.
 pub unsafe extern "win64" fn status_callback(
     handle: usize,
-    _callback: usize,
+    callback: usize,
     _flags: u32,
     _reserved: usize,
 ) -> usize {
-    crate::process::set_last_error(if lock(handles()).contains_key(&handle) {
-        50
+    let mut entries = lock(handles());
+    let Some(entry) = entries.get_mut(&handle) else {
+        crate::process::set_last_error(6);
+        return invalid_status_callback();
+    };
+    // Valeur du programme : 4 octets en x86 (WINHTTP_STATUS_CALLBACK).
+    let callback = if crate::wow32::pointer_size() == 4 {
+        callback & 0xffff_ffff
     } else {
-        6
-    });
-    usize::MAX
+        callback
+    };
+    std::mem::replace(&mut options_mut(&mut entry.kind).callback, callback)
+}
+
+/// WINHTTP_INVALID_STATUS_CALLBACK, ((WINHTTP_STATUS_CALLBACK)(-1L)), à la
+/// taille d'un pointeur du programme.
+fn invalid_status_callback() -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        0xffff_ffff
+    } else {
+        usize::MAX
+    }
 }
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -1262,6 +1290,37 @@ mod tests {
             assert_ne!(connection, 0);
             assert_eq!(set_option(connection, 84, (&v as *const u32).cast(), 4), 0);
             assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+    /// départ), le rappel est hérité par une requête ouverte ensuite, et
+    /// WINHTTP_INVALID_STATUS_CALLBACK seulement sur une poignée inconnue.
+    #[test]
+    fn rappel_d_etat_retenu_et_rendu() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            assert_eq!(status_callback(session, 0x1234, 0x10000, 0), 0);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(status_callback(request, 0x5678, 0x10000, 0), 0x1234);
+            assert_eq!(status_callback(request, 0, 0, 0), 0x5678);
+            assert_eq!(status_callback(session, 0, 0, 0), 0x1234);
+            assert_eq!(status_callback(0xdead_0000, 1, 0, 0), usize::MAX);
+            assert_eq!(crate::process::last_error(), 6);
             assert_eq!(close(session), 1);
         }
     }
