@@ -132,24 +132,25 @@ pub fn crack(url: &str) -> Option<Url> {
 /// (INTERNET_SCHEME) après le schéma, nPort (WORD) après l'hôte.
 /// Pour un programme x86 (#2554), la même suite de champs avec des pointeurs
 /// de 4 octets : 60 octets, lus et réécrits par `from_x86`/`write_x86`.
+/// WinHttpCrackUrl (games_win32.rs) s'en sert aussi (#2574).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct UrlComponents {
-    struct_size: u32,
-    scheme: usize,
-    scheme_len: u32,
-    n_scheme: i32,
-    host: usize,
-    host_len: u32,
-    port: u16,
-    user: usize,
-    user_len: u32,
-    password: usize,
-    password_len: u32,
-    path: usize,
-    path_len: u32,
-    extra: usize,
-    extra_len: u32,
+pub(crate) struct UrlComponents {
+    pub(crate) struct_size: u32,
+    pub(crate) scheme: usize,
+    pub(crate) scheme_len: u32,
+    pub(crate) n_scheme: i32,
+    pub(crate) host: usize,
+    pub(crate) host_len: u32,
+    pub(crate) port: u16,
+    pub(crate) user: usize,
+    pub(crate) user_len: u32,
+    pub(crate) password: usize,
+    pub(crate) password_len: u32,
+    pub(crate) path: usize,
+    pub(crate) path_len: u32,
+    pub(crate) extra: usize,
+    pub(crate) extra_len: u32,
 }
 
 /// Taille de URL_COMPONENTS pour un programme x86.
@@ -158,7 +159,7 @@ const URL_COMPONENTS_X86: usize = 60;
 impl UrlComponents {
     /// (pointeur, longueur) de chaque partie, dans l'ordre schéma, hôte,
     /// utilisateur, mot de passe, chemin, informations en plus.
-    fn parts(&mut self) -> [(&mut usize, &mut u32); 6] {
+    pub(crate) fn parts(&mut self) -> [(&mut usize, &mut u32); 6] {
         [
             (&mut self.scheme, &mut self.scheme_len),
             (&mut self.host, &mut self.host_len),
@@ -167,6 +168,30 @@ impl UrlComponents {
             (&mut self.path, &mut self.path_len),
             (&mut self.extra, &mut self.extra_len),
         ]
+    }
+
+    /// Lit l'URL_COMPONENTS du programme : 60 octets si `x86`, 104 sinon.
+    ///
+    /// # Safety
+    /// `comps` doit être lisible sur la taille de la disposition choisie.
+    pub(crate) unsafe fn load(comps: *const u8, x86: bool) -> Self {
+        if x86 {
+            Self::from_x86(&*(comps as *const [u8; URL_COMPONENTS_X86]))
+        } else {
+            std::ptr::read_unaligned(comps as *const Self)
+        }
+    }
+
+    /// Réécrit l'URL_COMPONENTS du programme dans la disposition choisie.
+    ///
+    /// # Safety
+    /// `comps` doit être inscriptible sur la taille de la disposition choisie.
+    pub(crate) unsafe fn store(&self, comps: *mut u8, x86: bool) {
+        if x86 {
+            self.write_x86(&mut *(comps as *mut [u8; URL_COMPONENTS_X86]));
+        } else {
+            std::ptr::write_unaligned(comps as *mut Self, *self);
+        }
     }
 
     /// Disposition x86 : dwStructSize 0, lpszScheme 4, dwSchemeLength 8,
@@ -228,17 +253,9 @@ unsafe fn fill_components(
     wide: bool,
     x86: bool,
 ) -> Result<(), u32> {
-    let mut c = if x86 {
-        UrlComponents::from_x86(&*(comps as *const [u8; URL_COMPONENTS_X86]))
-    } else {
-        std::ptr::read_unaligned(comps as *const UrlComponents)
-    };
+    let mut c = UrlComponents::load(comps, x86);
     let r = fill_parts(url, base, u, &mut c, wide);
-    if x86 {
-        c.write_x86(&mut *(comps as *mut [u8; URL_COMPONENTS_X86]));
-    } else {
-        std::ptr::write_unaligned(comps as *mut UrlComponents, c);
-    }
+    c.store(comps, x86);
     r
 }
 
