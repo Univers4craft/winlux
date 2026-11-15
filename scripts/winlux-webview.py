@@ -68,6 +68,17 @@ _TR = {
         ("This app shows web pages. Winlux first needs to download its web display engine (about 40 MB).",
          "Esta aplicación muestra páginas web. Winlux primero debe descargar su motor de visualización web (unos 40 MB).",
          "Diese App zeigt Webseiten an. Winlux muss zuerst die Webanzeige-Engine herunterladen (etwa 40 MB)."),
+    "Paquet : {package}\nVersion : {version}\nÉditeur : {publisher}\nSource : {source}\n"
+    "Les signatures et sommes SHA-256 du dépôt sont vérifiées pendant le téléchargement.":
+        ("Package: {package}\nVersion: {version}\nPublisher: {publisher}\nSource: {source}\n"
+         "The repository signatures and SHA-256 sums are checked during the download.",
+         "Paquete: {package}\nVersión: {version}\nEditor: {publisher}\nOrigen: {source}\n"
+         "Las firmas y sumas SHA-256 del repositorio se comprueban durante la descarga.",
+         "Paket: {package}\nVersion: {version}\nHerausgeber: {publisher}\nQuelle: {source}\n"
+         "Die Signaturen und SHA-256-Summen des Repositorys werden beim Herunterladen geprüft."),
+    "inconnue": ("unknown", "desconocida", "unbekannt"),
+    "dépôt APT de la distribution": ("distribution APT repository", "repositorio APT de la distribución",
+                                     "APT-Repository der Distribution"),
     "Télécharger": ("Download", "Descargar", "Herunterladen"),
     "Plus tard": ("Later", "Más tarde", "Später"),
     "Téléchargement du moteur d’affichage web…": ("Downloading the web display engine…",
@@ -109,6 +120,38 @@ def engine_available():
         return False
 
 
+def package_details():
+    """Version candidate, éditeur et source du moteur, d'après APT et
+    /etc/os-release, pour les nommer avant tout téléchargement (#2591)."""
+    version, source = _t("inconnue"), _t("dépôt APT de la distribution")
+    try:
+        out = subprocess.run(["apt-cache", "policy", ENGINE_PACKAGE], capture_output=True, text=True,
+                             timeout=20, env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    candidate, in_candidate = None, False
+    for line in out.splitlines():
+        words = line.split()
+        if line.strip().startswith("Candidate:") and len(words) > 1 and words[1] != "(none)":
+            candidate = words[1]
+        elif candidate and words and words[-1] != "Packages" and candidate in words:
+            in_candidate = True
+        elif in_candidate and len(words) >= 3 and "://" in words[1]:
+            source = f"{words[1]} {words[2]}"
+            break
+    if candidate:
+        version = candidate
+    publisher = "Debian"
+    try:
+        with open("/etc/os-release", encoding="utf-8") as rel:
+            for line in rel:
+                if line.startswith("NAME="):
+                    publisher = line[5:].strip().strip('"') or publisher
+    except OSError:
+        pass
+    return version, publisher, source
+
+
 def install_command():
     """Commande d'installation du moteur (relais root, ou root direct)."""
     apt = ["apt-get", "install", "-y", "-q", "--no-install-recommends", ENGINE_PACKAGE]
@@ -135,8 +178,13 @@ def offer_install():
         return False
     dialog = Gtk.MessageDialog(message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
                                text=_t("Affichage web"))
-    dialog.format_secondary_text(_t("Cette application affiche des pages web. Winlux doit d’abord "
-                                    "télécharger son moteur d’affichage web (environ 40 Mo)."))
+    version, publisher, source = package_details()
+    dialog.format_secondary_text(
+        _t("Cette application affiche des pages web. Winlux doit d’abord "
+           "télécharger son moteur d’affichage web (environ 40 Mo).") + "\n\n"
+        + _t("Paquet : {package}\nVersion : {version}\nÉditeur : {publisher}\nSource : {source}\n"
+             "Les signatures et sommes SHA-256 du dépôt sont vérifiées pendant le téléchargement.").format(
+            package=ENGINE_PACKAGE, version=version, publisher=publisher, source=source))
     dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
     dialog.add_button(_t("Télécharger"), Gtk.ResponseType.OK)
     dialog.set_default_response(Gtk.ResponseType.OK)
