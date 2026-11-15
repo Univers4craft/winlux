@@ -25,6 +25,7 @@
 mod com;
 mod com_audio;
 mod com_mf;
+mod com_mf_chaine;
 mod com_netfw;
 mod com_nlm;
 mod com_ole;
@@ -55,6 +56,7 @@ mod vulkan;
 mod wow64;
 
 pub(crate) use com_audio::iface_to32;
+pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
