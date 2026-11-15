@@ -2357,8 +2357,10 @@ unsafe extern "win64" fn web_remove_host_object(this: usize, name: *const u16) -
 /// `target` : (identifiant, titre, URL) de la page de la vue.
 fn cdp_result(method: &str, target: (&str, &str, &str)) -> Option<String> {
     match method {
-        // Domain.enable rend un objet vide (protocole Chrome DevTools).
-        "Log.enable" | "Runtime.enable" | "Network.enable" | "Page.enable" => Some("{}".into()),
+        // Domain.enable et Domain.disable rendent un objet vide (protocole
+        // Chrome DevTools) ; .disable (#2647).
+        "Log.enable" | "Runtime.enable" | "Network.enable" | "Page.enable" | "Log.disable"
+        | "Runtime.disable" | "Network.disable" | "Page.disable" => Some("{}".into()),
         // Target.getTargets : une seule cible, la page de la vue.
         "Target.getTargets" => {
             let (id, title, url) = target;
@@ -3478,6 +3480,14 @@ mod tests {
             com_release(rx);
         }
         com_release(view);
+    }
+
+    /// #2647 : les commandes .disable répondent comme les .enable.
+    #[test]
+    fn devtools_disable_2647() {
+        for m in ["Network.disable", "Log.disable", "Runtime.disable"] {
+            assert_eq!(cdp_result(m, ("a", "", "")).as_deref(), Some("{}"), "{m}");
+        }
     }
 
     /// #2635 : les filtres avec types de source se retiennent et se
