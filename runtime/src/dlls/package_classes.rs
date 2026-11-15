@@ -106,11 +106,6 @@ mod tests {
     static REFS: AtomicU32 = AtomicU32::new(0);
     static CLASSE_VUE: AtomicU32 = AtomicU32::new(0);
 
-    #[repr(C)]
-    struct Fabrique {
-        vtbl: *const usize,
-    }
-
     unsafe extern "win64" fn qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
         let iid = std::slice::from_raw_parts(iid, 16);
         if iid == IID_ACTIVATION_FACTORY {
@@ -134,9 +129,8 @@ mod tests {
         *F.get_or_init(|| {
             let vtbl: &'static [usize; 3] =
                 Box::leak(Box::new([qi as usize, add_ref as usize, release as usize]));
-            Box::leak(Box::new(Fabrique {
-                vtbl: vtbl.as_ptr(),
-            })) as *const Fabrique as usize
+            // Un objet COM : son premier mot pointe sur la vtable.
+            Box::leak(Box::new(vtbl.as_ptr() as usize)) as *const usize as usize
         })
     }
 
