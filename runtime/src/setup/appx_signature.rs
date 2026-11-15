@@ -1199,6 +1199,10 @@ fn pe_layout(d: &[u8]) -> Option<(usize, usize, usize, usize)> {
 }
 
 fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
+    // Cabinet signé (.cab) : même vérification, autre disposition (#2656).
+    if d.starts_with(b"MSCF") {
+        return examine_cab_parts(d, certs);
+    }
     let Some((checksum, entry, start, len)) = pe_layout(d) else {
         return Signature::Absent;
     };
@@ -1217,7 +1221,24 @@ fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     if kind != 2 || cert_len < 8 || cert_len > table.len() {
         return Signature::Invalid("certificat Authenticode illisible".into());
     }
-    let parsed = match parse_signed_data(&table[8..cert_len]) {
+    // Condensat de l'image : tout le fichier sauf la somme de contrôle,
+    // l'entrée « sécurité » du répertoire et la table des certificats.
+    if !(checksum + 4 <= entry && entry + 8 <= start && start + len <= d.len()) {
+        return Signature::Invalid("disposition de l'image inattendue".into());
+    }
+    let mut image = Vec::with_capacity(d.len());
+    image.extend_from_slice(&d[..checksum]);
+    image.extend_from_slice(&d[checksum + 4..entry]);
+    image.extend_from_slice(&d[entry + 8..start]);
+    image.extend_from_slice(&d[start + len..]);
+    verify_blob(&table[8..cert_len], &image, certs)
+}
+
+/// Vérifie une signature Authenticode (ContentInfo SignedData DER) dont le
+/// `SpcIndirectDataContent` porte le condensat de `image` : signataire,
+/// condensat, puis chaîne. `certs` reçoit les certificats, signataire en tête.
+fn verify_blob(blob: &[u8], image: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
+    let parsed = match parse_signed_data(blob) {
         Ok(p) => p,
         Err(e) => return Signature::Invalid(format!("signature illisible : {e}")),
     };
@@ -1236,17 +1257,7 @@ fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     if let Some(failure) = check_signer(&parsed, signer, &name) {
         return failure;
     }
-    // Condensat de l'image : tout le fichier sauf la somme de contrôle,
-    // l'entrée « sécurité » du répertoire et la table des certificats.
-    if !(checksum + 4 <= entry && entry + 8 <= start && start + len <= d.len()) {
-        return Signature::Invalid("disposition de l'image inattendue".into());
-    }
-    let mut image = Vec::with_capacity(d.len());
-    image.extend_from_slice(&d[..checksum]);
-    image.extend_from_slice(&d[checksum + 4..entry]);
-    image.extend_from_slice(&d[entry + 8..start]);
-    image.extend_from_slice(&d[start + len..]);
-    match hostssl::digest(parsed.appx_md, &image) {
+    match hostssl::digest(parsed.appx_md, image) {
         Some(h) if h == parsed.indirect => {}
         Some(_) => return Signature::Invalid("le fichier a été modifié après sa signature".into()),
         None => {
@@ -1257,6 +1268,105 @@ fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
         }
     }
     check_chain(&parsed, signer, name)
+}
+
+/// Signature et octets couverts d'un cabinet Microsoft (.cab) signé (#2656).
+///
+/// En-tête CFHEADER et drapeau cfhdrRESERVE_PRESENT (4) : Microsoft Cabinet
+/// Format, public. Disposition de la signature et plages du condensat :
+/// jsign (Apache-2.0, ebourg/jsign, `jsign-core/src/main/java/net/jsign/mscab/`
+/// MSCabinetFile.computeDigest, CFHeader.headerDigestUpdate,
+/// CFReserve.digest, CABSignature), lu avec l'accord de damien :
+/// - abReserve (cbCFHeader octets à +40) : longueur1 (u16), longueur2
+///   (u16), structure 1, puis structure 2 ; une structure 2 de 16 octets
+///   désigne la signature (position u32, taille u32, 8 octets inutilisés),
+///   placée à la fin du fichier, à partir de cbCabinet ; plus longue, elle
+///   est la signature elle-même ;
+/// - condensat : les 36 octets de l'en-tête sans csumHeader (+4) ni les
+///   quatre octets cbCFHeader/cbCFFolder/cbCFData ; puis, si la réserve
+///   n'est pas vide, longueur1 (u16) et la structure 1 ; puis les noms de
+///   cabinet précédent et suivant (avec leur zéro final) ; puis tout le
+///   reste jusqu'à cbCabinet (CFFOLDER et leurs réserves, CFFILE, CFDATA).
+fn examine_cab_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
+    let Some((blob, image)) = cab_signed_parts(d) else {
+        return Signature::Absent;
+    };
+    match blob {
+        Ok(blob) => verify_blob(blob, &image, certs),
+        Err(e) => Signature::Invalid(e),
+    }
+}
+
+/// (signature ou erreur de disposition, octets couverts), ou None pour un
+/// cabinet sans signature.
+type CabParts<'a> = (Result<&'a [u8], String>, Vec<u8>);
+
+fn cab_signed_parts(d: &[u8]) -> Option<CabParts<'_>> {
+    let u16_at = |o: usize| Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?));
+    let u32_at = |o: usize| Some(u32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?));
+    const RESERVE_PRESENT: u16 = 0x0004;
+    const PREV_CABINET: u16 = 0x0001;
+    const NEXT_CABINET: u16 = 0x0002;
+    let bad = |e: &str| Some((Err(e.to_string()), Vec::new()));
+    let cb_cabinet = u32_at(8)? as usize;
+    let flags = u16_at(30)?;
+    if flags & RESERVE_PRESENT == 0 {
+        return None;
+    }
+    let cb_header = u16_at(36)? as usize;
+    let reserve = d.get(40..40 + cb_header)?;
+    if reserve.len() < 4 {
+        return None;
+    }
+    let l1 = u16::from_le_bytes([reserve[0], reserve[1]]) as usize;
+    let l2 = u16::from_le_bytes([reserve[2], reserve[3]]) as usize;
+    if 4 + l1 + l2 > reserve.len() {
+        return bad("réserve du cabinet incohérente");
+    }
+    let s1 = &reserve[4..4 + l1];
+    let s2 = &reserve[4 + l1..4 + l1 + l2];
+    if s2.len() < 16 {
+        return None;
+    }
+    if cb_cabinet > d.len() {
+        return bad("cbCabinet dépasse le fichier");
+    }
+    let blob = if s2.len() == 16 {
+        let off = u32::from_le_bytes([s2[0], s2[1], s2[2], s2[3]]) as usize;
+        let len = u32::from_le_bytes([s2[4], s2[5], s2[6], s2[7]]) as usize;
+        if off != cb_cabinet {
+            return bad("signature du cabinet hors de sa place");
+        }
+        match off.checked_add(len).and_then(|end| d.get(off..end)) {
+            Some(b) => b,
+            None => return bad("signature du cabinet hors du fichier"),
+        }
+    } else {
+        s2
+    };
+    let mut image = Vec::with_capacity(cb_cabinet);
+    image.extend_from_slice(&d[..4]);
+    image.extend_from_slice(&d[8..36]);
+    if l1 != 0 || l2 != 0 {
+        image.extend_from_slice(&(l1 as u16).to_le_bytes());
+        image.extend_from_slice(s1);
+    }
+    let mut pos = 40 + cb_header;
+    for flag in [PREV_CABINET, NEXT_CABINET] {
+        if flags & flag != 0 {
+            for _ in 0..2 {
+                let n = d.get(pos..)?.iter().position(|&b| b == 0)? + 1;
+                pos += n;
+            }
+        }
+    }
+    if pos > cb_cabinet {
+        return bad("en-tête du cabinet plus long que cbCabinet");
+    }
+    // Noms de cabinets voisins (zéro final compris), dossiers, fichiers et
+    // blocs de données, jusqu'à cbCabinet.
+    image.extend_from_slice(&d[40 + cb_header..cb_cabinet]);
+    Some((Ok(blob), image))
 }
 
 /// Nom d'éditeur affiché : CN du certificat, sinon O, sinon le nom complet.
@@ -1598,34 +1708,16 @@ pub(crate) mod tests {
         assert_eq!(der_time(0x18, b"2021060112Z"), None);
     }
 
-    /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
-    /// Signature d'essai faite par la commande openssl (certificat
-    /// autosigné : signature juste mais autorité inconnue).
-    /// Exécutable minimal signé (Authenticode, SHA-256) par un certificat
-    /// auto-signé « Testeur Winlux » ; None sans la commande openssl.
-    pub(crate) fn signed_test_pe() -> Option<Vec<u8>> {
-        let pe = pe_minimal();
-        let (checksum, entry, _, _) = pe_layout(&pe).unwrap();
-        let mut image = pe[..checksum].to_vec();
-        image.extend_from_slice(&pe[checksum + 4..entry]);
-        image.extend_from_slice(&pe[entry + 8..]);
-        let digest = hostssl::digest(c"SHA256", &image).unwrap();
-        // SpcIndirectDataContent : { { SPC_PE_IMAGE_DATAOBJ, SpcPeImageData },
-        // { { sha256, NULL }, condensat } }.
-        let oid_pe = der(
-            0x06,
-            &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F],
-        );
-        let attr = der(0x30, &[oid_pe, der(0x30, &der(0x03, &[0]))].concat());
-        let sha256 = der(
-            0x06,
-            &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
-        );
-        let alg = der(0x30, &[sha256, vec![0x05, 0x00]].concat());
-        let digest_info = der(0x30, &[alg, der(0x04, &digest)].concat());
-        let spc = der(0x30, &[attr, digest_info].concat());
-
-        let dir = std::env::temp_dir().join(format!("winlux-authenticode-{}", std::process::id()));
+    /// Signe `spc` (SpcIndirectDataContent DER) en CMS Authenticode par un
+    /// certificat auto-signé « Testeur Winlux » ; None sans la commande openssl.
+    pub(crate) fn openssl_sign_spc(spc: &[u8], tag: &str) -> Option<Vec<u8>> {
+        // Un dossier par appel : plusieurs tests signent en parallèle.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "winlux-authenticode-{tag}-{}-{n}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
@@ -1646,7 +1738,7 @@ pub(crate) mod tests {
             eprintln!("commande openssl absente : vérification non testée");
             return None;
         }
-        std::fs::write(dir.join("spc.der"), &spc).unwrap();
+        std::fs::write(dir.join("spc.der"), spc).unwrap();
         run(&[
             "req",
             "-x509",
@@ -1686,6 +1778,37 @@ pub(crate) mod tests {
         ]);
         let sig = std::fs::read(dir.join("sig.der")).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+        Some(sig)
+    }
+
+    /// #1382 : l'éditeur d'un .exe signé est lu dans sa table de sécurité.
+    /// Signature d'essai faite par la commande openssl (certificat
+    /// autosigné : signature juste mais autorité inconnue).
+    /// Exécutable minimal signé (Authenticode, SHA-256) par un certificat
+    /// auto-signé « Testeur Winlux » ; None sans la commande openssl.
+    pub(crate) fn signed_test_pe() -> Option<Vec<u8>> {
+        let pe = pe_minimal();
+        let (checksum, entry, _, _) = pe_layout(&pe).unwrap();
+        let mut image = pe[..checksum].to_vec();
+        image.extend_from_slice(&pe[checksum + 4..entry]);
+        image.extend_from_slice(&pe[entry + 8..]);
+        let digest = hostssl::digest(c"SHA256", &image).unwrap();
+        // SpcIndirectDataContent : { { SPC_PE_IMAGE_DATAOBJ, SpcPeImageData },
+        // { { sha256, NULL }, condensat } }.
+        let oid_pe = der(
+            0x06,
+            &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F],
+        );
+        let attr = der(0x30, &[oid_pe, der(0x30, &der(0x03, &[0]))].concat());
+        let sha256 = der(
+            0x06,
+            &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+        );
+        let alg = der(0x30, &[sha256, vec![0x05, 0x00]].concat());
+        let digest_info = der(0x30, &[alg, der(0x04, &digest)].concat());
+        let spc = der(0x30, &[attr, digest_info].concat());
+
+        let sig = openssl_sign_spc(&spc, "pe")?;
         let mut table = Vec::new();
         let padded = (8 + sig.len()).div_ceil(8) * 8;
         table.extend_from_slice(&(padded as u32).to_le_bytes());
@@ -1732,6 +1855,109 @@ pub(crate) mod tests {
             examine_pe_bytes(&patched),
             Signature::Unverified { .. }
         ));
+    }
+
+    /// Cabinet minimal : en-tête avec réserve (structure 1 de 2 octets,
+    /// structure 2 de 16 octets), un dossier, un fichier et un bloc.
+    fn cab_minimal() -> Vec<u8> {
+        let mut d = vec![0u8; 40];
+        d[..4].copy_from_slice(b"MSCF");
+        d[24] = 3;
+        d[25] = 1;
+        d[26..28].copy_from_slice(&1u16.to_le_bytes()); // cFolders
+        d[28..30].copy_from_slice(&1u16.to_le_bytes()); // cFiles
+        d[30..32].copy_from_slice(&4u16.to_le_bytes()); // cfhdrRESERVE_PRESENT
+        d[36..38].copy_from_slice(&20u16.to_le_bytes()); // cbCFHeader
+        let mut reserve = Vec::new();
+        reserve.extend_from_slice(&0u16.to_le_bytes());
+        reserve.extend_from_slice(&16u16.to_le_bytes());
+        reserve.extend_from_slice(&[0u8; 16]);
+        d.extend_from_slice(&reserve);
+        // CFFOLDER : coffCabStart, cCFData, typeCompress.
+        let folder_at = d.len();
+        d.extend_from_slice(&[0u8; 8]);
+        let files_at = d.len();
+        // CFFILE : cbFile, uoffFolderStart, iFolder, date, time, attribs, nom.
+        d.extend_from_slice(&5u32.to_le_bytes());
+        d.extend_from_slice(&[0u8; 12]);
+        d.extend_from_slice(b"a.txt\0");
+        let data_at = d.len();
+        // CFDATA : csum, cbData, cbUncomp, données.
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.extend_from_slice(&5u16.to_le_bytes());
+        d.extend_from_slice(&5u16.to_le_bytes());
+        d.extend_from_slice(b"salut");
+        d[folder_at..folder_at + 4].copy_from_slice(&(data_at as u32).to_le_bytes());
+        d[folder_at + 4..folder_at + 6].copy_from_slice(&1u16.to_le_bytes());
+        d[16..20].copy_from_slice(&(files_at as u32).to_le_bytes());
+        let len = d.len() as u32;
+        d[8..12].copy_from_slice(&len.to_le_bytes());
+        d
+    }
+
+    #[test]
+    fn cabinet_signe_lu_et_verifie_2656() {
+        let cab = cab_minimal();
+        // Structure 2 vide de position : la signature n'est pas à sa place.
+        assert!(matches!(examine_pe_bytes(&cab), Signature::Invalid(_)));
+        // Sans réserve : pas de signature.
+        let mut plain = cab.clone();
+        plain[30] = 0;
+        assert_eq!(examine_pe_bytes(&plain), Signature::Absent);
+        // Octets couverts : en-tête sans csumHeader ni cbCFHeader…cbCFData,
+        // longueur 1 et structure 1 (vide), puis tout jusqu'à cbCabinet.
+        // Structure 2 placée à cbCabinet (bloc vide) : la position, comme
+        // la structure 2, est hors du condensat.
+        let mut placed = cab.clone();
+        placed[44..48].copy_from_slice(&(cab.len() as u32).to_le_bytes());
+        let (blob, image) = cab_signed_parts(&placed).unwrap();
+        assert_eq!(blob, Ok(&[][..]));
+        let mut attendu = cab[..4].to_vec();
+        attendu.extend_from_slice(&cab[8..36]);
+        attendu.extend_from_slice(&0u16.to_le_bytes());
+        attendu.extend_from_slice(&cab[60..]);
+        assert_eq!(image, attendu);
+        if hostssl::ssl().is_none() {
+            eprintln!("OpenSSL du système absent : vérification non testée");
+            return;
+        }
+        let digest = hostssl::digest(c"SHA256", &image).unwrap();
+        // SpcIndirectDataContent : { { SPC_CAB_DATA_OBJID, SpcPeImageData },
+        // { { sha256, NULL }, condensat } }.
+        let oid_cab = der(
+            0x06,
+            &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x19],
+        );
+        let attr = der(0x30, &[oid_cab, der(0x30, &der(0x03, &[0]))].concat());
+        let digest_info = der(0x30, &[sha256_alg(), der(0x04, &digest)].concat());
+        let spc = der(0x30, &[attr, digest_info].concat());
+        let Some(sig) = openssl_sign_spc(&spc, "cab") else {
+            return;
+        };
+        let mut signed = cab.clone();
+        let off = signed.len() as u32;
+        signed[44..48].copy_from_slice(&off.to_le_bytes());
+        signed[48..52].copy_from_slice(&(sig.len() as u32).to_le_bytes());
+        signed.extend_from_slice(&sig);
+        match examine_pe_bytes(&signed) {
+            Signature::Unverified { signer, reason } => {
+                assert_eq!(signer, "Testeur Winlux");
+                assert!(reason.contains("autorité"), "{reason}");
+            }
+            other => panic!("attendu : signature juste, autorité inconnue ; obtenu {other:?}"),
+        }
+        // csumHeader n'est pas couvert.
+        let mut patched = signed.clone();
+        patched[4] ^= 0xFF;
+        assert!(matches!(
+            examine_pe_bytes(&patched),
+            Signature::Unverified { .. }
+        ));
+        // Un octet des données changé : refusé.
+        let mut altered = signed;
+        let last = cab.len() - 1;
+        altered[last] ^= 1;
+        assert!(matches!(examine_pe_bytes(&altered), Signature::Invalid(_)));
     }
 
     #[test]
