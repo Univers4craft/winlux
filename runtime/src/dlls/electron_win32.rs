@@ -982,8 +982,32 @@ pub(crate) fn duplicate_user_object(h: usize) -> Option<usize> {
     if h == WINSTA0 || h == DEFAULT_DESKTOP {
         return Some(h);
     }
+    is_user_object(h).then(new_user_object)
+}
+
+/// Stations et bureaux reçus d'un autre processus (DuplicateHandle vers ce
+/// processus, ou héritage) : leur numéro est choisi par l'expéditeur (#2545).
+static ADOPTED_USER_OBJECTS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `h` désigne-t-il une station de fenêtres ou un bureau de ce processus ?
+pub(crate) fn is_user_object(h: usize) -> bool {
     let next = NEXT_USER_OBJECT.load(std::sync::atomic::Ordering::Relaxed);
-    (h >= 0x5753_0100 && h < next && (h - 0x5753_0100).is_multiple_of(4)).then(new_user_object)
+    h == WINSTA0
+        || h == DEFAULT_DESKTOP
+        || (h >= 0x5753_0100 && h < next && (h - 0x5753_0100).is_multiple_of(4))
+        || crate::dlls::lock(&ADOPTED_USER_OBJECTS).contains(&h)
+}
+
+/// Recrée sous le numéro `h` une station ou un bureau transmis par un autre
+/// processus (inherit::adopt_one, #2545). Sous Winlux ces objets n'ont pas
+/// d'état : le numéro suffit.
+pub(crate) fn adopt_user_object(h: usize) {
+    if h != WINSTA0 && h != DEFAULT_DESKTOP {
+        let mut adopted = crate::dlls::lock(&ADOPTED_USER_OBJECTS);
+        if !adopted.contains(&h) {
+            adopted.push(h);
+        }
+    }
 }
 
 unsafe extern "win64" fn CreateWindowStation(
@@ -3628,6 +3652,32 @@ mod tests {
                 crate::dlls::kernel32::duplicate_handle(me, 0x5753_00f0, me, &mut copy, 0, 0, 2),
                 0
             );
+        }
+    }
+
+    #[test]
+    fn station_et_bureau_transmissibles_a_un_autre_processus() {
+        // #2545 : un DuplicateHandle vers un autre processus passe par
+        // inherit::describe puis inherit::adopt_one dans ce processus.
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let station = CreateWindowStation(0, 0, 0x37f, 0);
+            let desktop = CreateDesktop(0, 0, 0, 0, 0x1ff, 0, 0, 0);
+            for (h, recu) in [
+                (WINSTA0, 0x5A7F_0010usize),
+                (station, 0x5A7F_0014),
+                (desktop, 0x5A7F_0018),
+            ] {
+                let (desc, fds) = crate::dlls::inherit::describe(h, false).expect("transmissible");
+                assert!(fds.is_empty(), "{h:#x}");
+                assert!(!is_user_object(recu));
+                let adopte = crate::dlls::inherit::adopt_one(&desc, recu, |_| None);
+                assert_eq!(adopte, Some(recu), "{h:#x}");
+                // Chez le destinataire, le handle reçu se duplique à son tour.
+                assert!(is_user_object(recu));
+                assert!(duplicate_user_object(recu).is_some());
+            }
+            assert!(crate::dlls::inherit::describe(0x5753_00f0, false).is_none());
         }
     }
 
