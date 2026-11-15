@@ -70,6 +70,10 @@ pub(super) enum A {
     /// Tableau de pointeurs lu et écrit (PCUITEMID_CHILD_ARRAY, PITEMID_CHILD*)
     /// ; le nombre d'éléments est l'argument `I` qui le précède.
     Pidls,
+    /// Tableau d'interfaces passées, du type donné (IMFMediaType **
+    /// de MFCreateStreamDescriptor) ; le nombre d'éléments est l'argument
+    /// `I` qui le précède (#2428).
+    InArr(&'static Iface),
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -1029,6 +1033,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_netfw::ALL.iter())
         .chain(super::com_nlm::ALL.iter())
         .chain(super::com_shell::ALL.iter())
+        .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
@@ -1476,6 +1481,8 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     // STRRET et tableaux : tampons à part (le tampon d'un Vec ne bouge
     // pas quand le Vec est déplacé).
     let mut big: Vec<(Vec<u64>, u32, A, u32)> = Vec::new();
+    // Tableaux d'interfaces passées : gardés jusqu'au retour.
+    let mut arrays: Vec<Vec<u64>> = Vec::new();
     let mut count = 0u32;
     let mut slots: Vec<u64> = Vec::with_capacity(kinds.len() + 5);
     slots.extend(this);
@@ -1518,6 +1525,17 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
             }
             InQ => slots.push(to64(v, by_iid(&iid))),
             In(f) => slots.push(to64(v, Some(f))),
+            InArr(f) => {
+                if v == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                let t: Vec<u64> = (0..count.min(4096))
+                    .map(|j| to64(rd(v + 4 * j), Some(f)))
+                    .collect();
+                slots.push(t.as_ptr() as u64);
+                arrays.push(t);
+            }
             VarIn => {
                 // Le VARIANT occupe quatre cases de la pile x86.
                 temps.push([0; 10]);
@@ -1562,6 +1580,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     }
     let mut xmm0 = 0u64;
     let mut r = super::winlux_wow_call64(target, slots.as_ptr(), n, &mut xmm0);
+    drop(arrays);
     for (i, dst, k, f, g) in post {
         let t = temps[i].as_ptr() as *const u8;
         match k {
@@ -1650,6 +1669,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let mut post: Vec<(usize, u64, A, Option<&'static Iface>)> = Vec::new();
         // STRRET et tableaux en x86 (le tas est sous 4 Go).
         let mut big: Vec<(Vec<u32>, u64, A, u32)> = Vec::new();
+        let mut arrays: Vec<Vec<u32>> = Vec::new();
         let mut count = 0u32;
         let mut iid: Guid = [0; 16];
         for (i, &k) in kinds.iter().enumerate().take(11) {
@@ -1701,6 +1721,18 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                 }
                 InQ => a.push(to32_borrowed(v, by_iid(&iid), &iid)),
                 In(f) => a.push(to32_borrowed(v, Some(f), &f.iid)),
+                InArr(f) => {
+                    if v == 0 {
+                        a.push(0);
+                        continue;
+                    }
+                    let src = v as usize as *const u64;
+                    let t: Vec<u32> = (0..count.min(4096) as usize)
+                        .map(|j| to32_borrowed(src.add(j).read_unaligned(), Some(f), &f.iid))
+                        .collect();
+                    a.push(t.as_ptr() as usize as u32);
+                    arrays.push(t);
+                }
                 VarIn => {
                     // Case basse : variant32 écrit à une adresse 32 bits.
                     temps.push([0; 10]);
@@ -1747,6 +1779,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         }
         let target = rd(rd(p.obj) + 4 * m.idx as u32);
         let r = call32(target as usize, &a) as u32;
+        drop(arrays);
         for (j, dst, k, f) in post {
             let t = temps[j].as_ptr() as *const u8;
             let d = dst as usize as *mut u8;
@@ -1926,6 +1959,7 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
+        ("mfplat", _) => super::com_mf::api_kinds(func)?,
         _ => return None,
     };
     Some((k, None))
