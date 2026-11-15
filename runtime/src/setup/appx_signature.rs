@@ -34,12 +34,25 @@
 /// - Root Certificate Authority 2011 : 847df6a7…07ed7c61 ;
 /// - Identity Verification Root Certificate Authority 2020 : 5367f20c…292e1270 ;
 /// - Time Stamp Root Certificate Authority 2014 : 65af95f4…82109e4f.
-pub(crate) const CODE_ROOTS: [&[u8]; 4] = [
+///
+/// S'y ajoute DigiCert High Assurance EV Root CA, retirée du magasin TLS
+/// (ca-certificates) mais toujours racine de la chaîne « DigiCert EV Code
+/// Signing CA (SHA2) » qui signe des greffons d'éditeurs (#2593).
+/// Certificat public de DigiCert
+/// (https://cacerts.digicert.com/DigiCertHighAssuranceEVRootCA.crt),
+/// SHA-256 : 7431e5f4c3c1ce4690774f0b61e05440883ba9a01ed00ba6abd7806ed3b118cf.
+pub(crate) const CODE_ROOTS: [&[u8]; 5] = [
     include_bytes!("racines_code/microsoft-root-2010.cer"),
     include_bytes!("racines_code/microsoft-root-2011.cer"),
     include_bytes!("racines_code/microsoft-identity-verification-root-2020.cer"),
     include_bytes!("racines_code/microsoft-time-stamp-root-2014.cer"),
+    include_bytes!("racines_code/digicert-high-assurance-ev-root.cer"),
 ];
+
+/// Empreinte SHA-256 attendue de la racine DigiCert de `CODE_ROOTS` (#2593).
+#[cfg(test)]
+const DIGICERT_EV_ROOT_SHA256: &str =
+    "7431e5f4c3c1ce4690774f0b61e05440883ba9a01ed00ba6abd7806ed3b118cf";
 
 use crate::archive::zip::{self, ZipEntry};
 use crate::dlls::hostssl;
@@ -1398,6 +1411,26 @@ pub(crate) mod tests {
             "{why}"
         );
         assert!(why.contains("émis par"), "{why}");
+    }
+
+    #[test]
+    fn racine_digicert_ev_pour_la_signature_de_code() {
+        // #2593 : la racine DigiCert High Assurance EV est celle publiée par
+        // DigiCert (empreinte vérifiée) et elle est bien dans CODE_ROOTS.
+        let root = CODE_ROOTS[4];
+        let hex: String = crate::dlls::bcrypt::sha256(root)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(hex, DIGICERT_EV_ROOT_SHA256);
+        let t = expect(root, 0x30).expect("certificat");
+        let cert = parse_cert(root, t.body).expect("certificat");
+        assert!(format_dn(&cert.subject).contains("DigiCert High Assurance EV Root CA"));
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let v = hostssl::verify_code(root, &[], &CODE_ROOTS, None).expect("vérifiable");
+        assert_eq!(v.error, 0, "{}", chain_reason_of(&v));
     }
 
     #[test]
