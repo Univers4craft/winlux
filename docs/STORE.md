@@ -24,12 +24,32 @@ AppImage, Windows. Les autres sources restent choisissables dans la fiche.
 **Paquets compagnons (#2075).** apt installe sans les paquets recommandés.
 Quand une application ne marche pas sans l'un d'eux, une ligne
 `compagnons=paquet:a,b` du catalogue les installe avec elle, marqués
-automatiques (`--mark-auto`) : `purge --autoremove` les retire avec
+automatiques (`--mark-auto`) : la désinstallation les retire avec
 l'application si plus rien ne les utilise, et un paquet déjà installé à la
 main le reste. virt-manager et GNOME Boxes reçoivent ainsi QEMU, le pilote
 libvirt, `passt`, OVMF et swtpm. Jamais `libvirt-daemon-system`, qui tire la
 variante systemd : libvirt tourne en mode compte (`qemu:///session`), sans
 root, sans polkit et sans systemd.
+Relecture des 157 entrées qui perdent une recommandation : 23 logiciels ne
+marchent pas, ou pas dans la langue de l'interface, sans elle, et ont leur
+ligne (#2081 à #2103) : protocoles de Remmina et KRDC, moteurs de Knights et
+Kigo, compilateurs des IDE et de CMake, outils d'archives, gravure DVD de K3b,
+serveur local de Freeciv, graphismes libres d'OpenTTD, bibliothèques de KiCad,
+service Syncthing, serveur d'agendas, pilotes de base de LibreOffice Base,
+encodeurs d'Asunder, extensions d'Inkscape, traductions de VLC, SMPlayer,
+nomacs et Claws Mail. Le reste (aide, documentation, thèmes, fonctions
+annexes) n'est pas ajouté. Écartés après lecture du contenu des paquets :
+`obs-plugins` (DeckLink, JACK, PipeWire seulement ; la capture X11 est dans
+`obs-studio`) et `brasero-cdrkit` (Brasero grave déjà par libburn).
+
+**Désinstaller un logiciel des dépôts (#2189).** La Boutique note les paquets
+que chaque installation apporte (`store-state.json`, clé `apt`). Désinstaller
+fait `apt-get purge` du logiciel, puis retire ce qui est devenu inutile : ce
+qu'`apt-get autoremove` retirerait (simulation sans droits), plus ce que cette
+installation a apporté et qu'une simple suggestion retient (`systemd-container`,
+suggéré par `systemd`). Les compagnons d'un logiciel du catalogue encore
+installé ne sont jamais retirés, et sont remis s'il en manque :
+`purge --autoremove` de Knights emportait le QEMU de virt-manager.
 
 **Présentation (#716).** Une barre d'icônes à gauche (Accueil, Applis,
 Jeux, Windows ; Bibliothèque et Actualiser en bas), la recherche en haut. L'accueil
@@ -73,6 +93,13 @@ se termine » (#2186).
 Sur un système neuf, l'image n'a pas de listes apt : la Boutique lance
 `apt-get update` dès l'ouverture, sans autorisation (le relais root l'admet au
 niveau « user »), jamais hors ligne (#2184).
+
+`/etc/apt/apt.conf.d/50winlux-appstream` (paquet winlux-desktop) demande à apt
+les fiches DEP-11 (`Components-amd64.yml.gz`) de chaque dépôt ; la Boutique les
+lit dans `/var/lib/apt/lists` comme dans `/var/lib/swcatalog`, avec les icônes
+64x64 du miroir : vraies icônes et environ 2 000 applications au lieu de la
+seule sélection. Sans ces fiches, les listes sont remises à jour, au plus
+toutes les 6 h (#2185).
 
 **Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
 Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque

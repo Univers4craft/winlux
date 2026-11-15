@@ -77,9 +77,45 @@ static HRESULT STDMETHODCALLTYPE cf_lock(IClassFactory *f, BOOL l) { (void)f; (v
 static IClassFactoryVtbl cf_vtbl = { cf_qi, cf_addref, cf_release, cf_create, cf_lock };
 static IClassFactory the_factory = { &cf_vtbl };
 
+/* ---- Flux x86 en lecture : un BMP 1x1 pour GDI+ (#2531) ---- */
+
+static const unsigned char bmp1[58] = {
+    'B', 'M', 58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+    40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 255, 0 };
+static ULONG src_pos;
+static HRESULT STDMETHODCALLTYPE src_read(IStream *s, void *p, ULONG n, ULONG *got)
+{
+    ULONG k = sizeof bmp1 - src_pos;
+    (void)s;
+    if (k > n)
+        k = n;
+    memcpy(p, bmp1 + src_pos, k);
+    src_pos += k;
+    if (got)
+        *got = k;
+    return k < n ? S_FALSE : S_OK;
+}
+static HRESULT STDMETHODCALLTYPE src_write(IStream *s, const void *p, ULONG n, ULONG *done)
+{ (void)s; (void)p; (void)n; if (done) *done = 0; return STG_E_ACCESSDENIED; }
+static HRESULT STDMETHODCALLTYPE src_seek(IStream *s, LARGE_INTEGER m, DWORD o, ULARGE_INTEGER *p)
+{
+    (void)s;
+    if (o == STREAM_SEEK_SET)
+        src_pos = (ULONG)m.QuadPart;
+    else if (o == STREAM_SEEK_CUR)
+        src_pos += (ULONG)m.QuadPart;
+    else
+        src_pos = sizeof bmp1 + (ULONG)m.QuadPart;
+    if (p)
+        p->QuadPart = src_pos;
+    return S_OK;
+}
+
 /* ---- Flux x86 qui reçoit les octets de IStream::CopyTo ---- */
 
-static char sink_data[64];
+static char sink_data[4096];
 static ULONG sink_len;
 static HRESULT STDMETHODCALLTYPE sink_qi(IStream *s, REFIID iid, void **out)
 {
@@ -114,6 +150,12 @@ static IStreamVtbl sink_vtbl = {
     (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
 };
 static IStream the_sink = { &sink_vtbl };
+static IStreamVtbl src_vtbl = {
+    sink_qi, sink_ref, sink_ref, src_read, src_write, src_seek,
+    (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
+    (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
+};
+static IStream the_source = { &src_vtbl };
 
 int main(void)
 {
@@ -486,6 +528,68 @@ int main(void)
             ((rel_fn)(*(void ***)cpc)[2])(cpc);
         if (nlm)
             ((rel_fn)vt[2])(nlm);
+    }
+
+    /* #2556 : IGlobalOptions, créée par Google Update (x86) au démarrage
+     * pour COMGLB_EXCEPTION_HANDLING (1) = COMGLB_EXCEPTION_DONOT_HANDLE (1)
+     * (valeurs de GLOBALOPT_PROPERTIES et GLOBALOPT_EH_VALUES, objidlbase.idl).
+     * Indices de la table : IUnknown, Set (3), Query (4). */
+    {
+        static const GUID clsid_go = { 0x0000034b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        static const GUID iid_go = { 0x0000015b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        typedef HRESULT (STDMETHODCALLTYPE *set_fn)(void *, DWORD, ULONG_PTR);
+        typedef HRESULT (STDMETHODCALLTYPE *query_fn)(void *, DWORD, ULONG_PTR *);
+        typedef ULONG (STDMETHODCALLTYPE *rel_fn)(void *);
+        void *go = NULL;
+        CHECK(CoCreateInstance(&clsid_go, NULL, CLSCTX_INPROC_SERVER, &iid_go, &go) == S_OK && go != NULL,
+              "CoCreateInstance(GlobalOptions)");
+        void **vt = go ? *(void ***)go : NULL;
+        CHECK(vt && ((set_fn)vt[3])(go, 1, 1) == S_OK, "IGlobalOptions::Set");
+        ULONG_PTR v = 7;
+        CHECK(vt && ((query_fn)vt[4])(go, 1, &v) == S_OK && v == 1, "IGlobalOptions::Query");
+        if (go)
+            ((rel_fn)vt[2])(go);
+    }
+
+    /* #2531 : GDI+ lit et écrit un IStream x86 (l'outil de déploiement
+       d'Office fautait dans GdipLoadImageFromStream). */
+    {
+        typedef int (__stdcall *start_fn)(ULONG_PTR *, const void *, void *);
+        typedef int (__stdcall *load_fn)(IStream *, void **);
+        typedef int (__stdcall *size_fn)(void *, UINT *);
+        typedef int (__stdcall *save_fn)(void *, IStream *, const GUID *, const void *);
+        typedef int (__stdcall *dispose_fn)(void *);
+        static const GUID clsid_bmp = { 0x557cf400, 0x1a04, 0x11d3,
+            { 0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e } };
+        struct { UINT32 version; void *cb; BOOL no_thread, no_codecs; } in = { 1, NULL, FALSE, FALSE };
+        HMODULE g = LoadLibraryA("gdiplus.dll");
+        start_fn start = g ? (start_fn)GetProcAddress(g, "GdiplusStartup") : NULL;
+        ULONG_PTR token = 0;
+        CHECK(start && start(&token, &in, NULL) == 0, "GdiplusStartup");
+        load_fn loads[2] = { (load_fn)GetProcAddress(g, "GdipLoadImageFromStream"),
+                             (load_fn)GetProcAddress(g, "GdipCreateBitmapFromStream") };
+        size_fn width = (size_fn)GetProcAddress(g, "GdipGetImageWidth");
+        save_fn save = (save_fn)GetProcAddress(g, "GdipSaveImageToStream");
+        dispose_fn dispose = (dispose_fn)GetProcAddress(g, "GdipDisposeImage");
+        void *img = NULL;
+        for (int i = 0; i < 2; i++) {
+            void *im = NULL;
+            UINT w = 0;
+            src_pos = 0;
+            CHECK(loads[i] && loads[i](&the_source, &im) == 0 && im != NULL,
+                  i ? "GdipCreateBitmapFromStream (IStream x86)" : "GdipLoadImageFromStream (IStream x86)");
+            CHECK(width && width(im, &w) == 0 && w == 1, "GdipGetImageWidth après lecture du flux x86");
+            if (i == 0)
+                img = im;
+            else if (dispose)
+                dispose(im);
+        }
+        sink_len = 0;
+        CHECK(save && save(img, &the_sink, &clsid_bmp, NULL) == 0 && sink_len > 54
+                  && sink_data[0] == 'B' && sink_data[1] == 'M',
+              "GdipSaveImageToStream vers un flux x86");
+        if (dispose)
+            dispose(img);
     }
 
     CoUninitialize();
