@@ -18,8 +18,13 @@
 //!   `IsReadOnlyPropertyPresent`, `IsWriteablePropertyPresent` et
 //!   `IsEnumNamedValuePresent` : la réponse de `IsTypePresent` pour le type
 //!   nommé. Winlux ne tient pas d'inventaire des membres ;
-//! - `IsApiContractPresent` : faux. Winlux ne sert aucun contrat d'API en
-//!   entier.
+//! - `IsApiContractPresent` : vrai pour `Windows.Foundation.UniversalApiContract`
+//!   jusqu'à la version 10.0, celle que la documentation publique donne pour
+//!   le build 10.0.19041.0 (page « Device families overview » de Learn), dont
+//!   le build annoncé par Winlux (10.0.19045) est une mise à jour ; faux
+//!   au-delà et pour tout autre contrat, dont aucune source publique lue ne
+//!   donne la version pour ce build (#2702). Les questions par type gardent
+//!   leur sonde réelle.
 //!
 //! Chaque question et sa réponse sont écrites une fois au journal (avertis-
 //! sement), pour savoir ce qu'un programme cherche.
@@ -268,11 +273,8 @@ unsafe extern "win64" fn is_contract_major(
     out: *mut u8,
 ) -> i32 {
     let c = hstr_in(c);
-    answer(
-        out,
-        format!("IsApiContractPresent(« {c} », {major})"),
-        false,
-    )
+    let v = contract_present(&c, major, 0);
+    answer(out, format!("IsApiContractPresent(« {c} », {major})"), v)
 }
 unsafe extern "win64" fn is_contract_major_minor(
     _this: usize,
@@ -282,11 +284,25 @@ unsafe extern "win64" fn is_contract_major_minor(
     out: *mut u8,
 ) -> i32 {
     let c = hstr_in(c);
+    let v = contract_present(&c, major, minor);
     answer(
         out,
         format!("IsApiContractPresent(« {c} », {major}, {minor})"),
-        false,
+        v,
     )
+}
+
+/// Version de `Windows.Foundation.UniversalApiContract` livrée avec le build
+/// 10.0.19041.0 : « was at version 10.0 when it shipped with version
+/// 10.0.19041.0 » (Learn, « Device families overview ») (#2702).
+const UNIVERSAL_API_CONTRACT: (u16, u16) = (10, 0);
+
+/// Le contrat `name` est-il présent dans la version `major.minor` ? Les
+/// versions d'un contrat s'ajoutent les unes aux autres (déduction : la
+/// documentation ne dit pas explicitement qu'une version inférieure répond
+/// vrai).
+fn contract_present(name: &str, major: u16, minor: u16) -> bool {
+    name == "Windows.Foundation.UniversalApiContract" && (major, minor) <= UNIVERSAL_API_CONTRACT
 }
 
 static ACTIVATION_VTBL: VTable<7> = VTable([
@@ -350,7 +366,8 @@ mod tests {
     }
 
     /// #2297 : la fabrique sert IApiInformationStatics ; un type est
-    /// présent si Winlux sert sa classe ; aucun contrat n'est présent.
+    /// présent si Winlux sert sa classe ; UniversalApiContract est présent
+    /// (#2702), les autres contrats non.
     #[test]
     fn api_information_2297() {
         unsafe {
@@ -403,7 +420,7 @@ mod tests {
                 ),
                 S_OK
             );
-            assert_eq!(b, 0);
+            assert_eq!(b, 1);
             assert_eq!(
                 is_contract_major_minor(
                     fac,
@@ -419,6 +436,43 @@ mod tests {
                 is_type_present(fac, hs("Windows.Foundation.Uri"), std::ptr::null_mut()),
                 E_POINTER
             );
+        }
+    }
+
+    /// #2702 : UniversalApiContract jusqu'à 10.0, comme le build 19041 que
+    /// Winlux annonce ; Win2D demande la version 2 avant de servir
+    /// CanvasComposition.
+    #[test]
+    fn contrat_universel_2702() {
+        let u = "Windows.Foundation.UniversalApiContract";
+        assert!(contract_present(u, 1, 0));
+        assert!(contract_present(u, 2, 0));
+        assert!(contract_present(u, 10, 0));
+        assert!(!contract_present(u, 10, 1));
+        assert!(!contract_present(u, 11, 0));
+        assert!(!contract_present(
+            "Windows.Foundation.FoundationContract",
+            1,
+            0
+        ));
+        assert!(!contract_present(
+            "windows.foundation.universalapicontract",
+            2,
+            0
+        ));
+        unsafe {
+            let mut fac = 0usize;
+            assert_eq!(
+                activation_factory(CLASS, IID_API_INFORMATION.as_ptr(), &mut fac),
+                Some(S_OK)
+            );
+            let mut b = 7u8;
+            assert_eq!(is_contract_major(fac, hs(u), 2, &mut b), S_OK);
+            assert_eq!(b, 1);
+            assert_eq!(is_contract_major_minor(fac, hs(u), 10, 1, &mut b), S_OK);
+            assert_eq!(b, 0);
+            assert_eq!(is_contract_major(fac, hs(u), 11, &mut b), S_OK);
+            assert_eq!(b, 0);
         }
     }
 }
