@@ -489,12 +489,22 @@ unsafe fn navigate_to(this: usize, url: String, via: &str) -> i32 {
         Ok(html) => texte::html_to_text(&html),
         Err(_) => String::new(),
     };
-    {
+    let hwnd = {
         let mut s = state(b);
         s.url = url;
         s.text = Some(text);
-    }
+        s.hwnd
+    };
     show_text(b);
+    // Événements de fin de navigation : après le retour de Navigate, par
+    // la file de la fenêtre ; sans fenêtre, tout de suite.
+    b.refs.fetch_add(1, Ordering::SeqCst);
+    if hwnd == 0
+        || super::user32::post_message_w(hwnd, WM_FIRE_EVENTS, 0, b as *const Browser as isize) == 0
+    {
+        fire_navigation_events(b);
+        release_obj(b);
+    }
     S_OK
 }
 
@@ -853,6 +863,127 @@ unsafe extern "win64" fn close(this: usize, _save: u32) -> i32 {
 }
 
 const CLASS: &str = "Shell Embedding";
+const WM_SIZE: u32 = 0x0005;
+/// Événements de navigation à envoyer (lParam : le contrôle, retenu).
+const WM_FIRE_EVENTS: u32 = 0x8000 + 0x2228;
+const GW_CHILD: u32 = 5;
+
+/// Fenêtre du contrôle : la zone de lecture suit sa taille, quel que soit
+/// celui qui la redimensionne (SetObjectRects ou l'hôte directement), et
+/// les événements de navigation partent de sa file, après le retour de
+/// Navigate, comme ceux d'Internet Explorer.
+unsafe extern "win64" fn embed_wnd_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+    match msg {
+        WM_SIZE => {
+            let child = super::user32::get_window(hwnd, GW_CHILD);
+            if child != 0 {
+                let (w, h) = ((lp & 0xffff) as i32, ((lp >> 16) & 0xffff) as i32);
+                super::user32::move_window(child, 0, 0, w, h, 1);
+            }
+            0
+        }
+        WM_FIRE_EVENTS if lp != 0 => {
+            let b = &*(lp as *const Browser);
+            fire_navigation_events(b);
+            release_obj(b);
+            0
+        }
+        _ => super::user32::def_window_proc_w(hwnd, msg, wp, lp),
+    }
+}
+
+/// DWebBrowserEvents2 (exdisp.h, DISPID de exdispid.h) : NavigateComplete2
+/// (252), DownloadComplete (104) puis DocumentComplete (259), chacun avec
+/// (pDisp, URL) pour 252 et 259. DISPPARAMS : arguments en ordre inverse.
+unsafe fn fire_navigation_events(b: &Browser) {
+    let (url, sinks) = {
+        let s = state(b);
+        (s.url.clone(), s.sinks.clone())
+    };
+    if sinks.is_empty() {
+        return;
+    }
+    let wide: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    let bstr = super::oleaut32::sys_alloc_string(wide.as_ptr());
+    // VARIANT x64 : vt (u16) à 0, valeur à +8, 24 octets.
+    let mut url_var = [0u64; 3];
+    *(url_var.as_mut_ptr() as *mut u16) = VT_BSTR;
+    url_var[1] = bstr as u64;
+    let me = iface(b, SLOT_BROWSER) as u64;
+    let mut args = [[0u64; 3]; 2];
+    *(args[0].as_mut_ptr() as *mut u16) = VT_VARIANT | VT_BYREF;
+    args[0][1] = url_var.as_mut_ptr() as u64;
+    *(args[1].as_mut_ptr() as *mut u16) = VT_DISPATCH;
+    args[1][1] = me;
+    for (_, sink) in &sinks {
+        com_add_ref(*sink);
+    }
+    for (_, sink) in &sinks {
+        for (id, n) in [(252, 2u32), (104, 0), (259, 2)] {
+            let hr = invoke_event(
+                *sink,
+                id,
+                if n == 0 {
+                    std::ptr::null_mut()
+                } else {
+                    args.as_mut_ptr()
+                },
+                n,
+            );
+            note(format_args!("événement {id} envoyé : {hr:#x}"));
+        }
+    }
+    for (_, sink) in &sinks {
+        com_release(*sink);
+    }
+    super::oleaut32::sys_free_string(bstr);
+}
+
+const VT_BSTR: u16 = 8;
+const VT_DISPATCH: u16 = 9;
+const VT_VARIANT: u16 = 12;
+const VT_BYREF: u16 = 0x4000;
+
+/// IDispatch::Invoke(dispid, IID_NULL, 0, DISPATCH_METHOD, &params, NULL,
+/// NULL, NULL).
+unsafe fn invoke_event(disp: usize, id: i32, args: *mut [u64; 3], count: u32) -> i32 {
+    #[repr(C)]
+    struct DispParams {
+        rgvarg: *mut [u64; 3],
+        named: *mut i32,
+        args: u32,
+        named_args: u32,
+    }
+    let mut p = DispParams {
+        rgvarg: args,
+        named: std::ptr::null_mut(),
+        args: count,
+        named_args: 0,
+    };
+    let null = Guid::default();
+    let invoke: unsafe extern "win64" fn(
+        usize,
+        i32,
+        *const Guid,
+        u32,
+        u16,
+        *mut DispParams,
+        *mut c_void,
+        *mut c_void,
+        *mut u32,
+    ) -> i32 = std::mem::transmute(method(disp, 6));
+    invoke(
+        disp,
+        id,
+        &null,
+        0,
+        1,
+        &mut p,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    )
+}
 
 unsafe fn ensure_class() {
     static REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -863,7 +994,7 @@ unsafe fn ensure_class() {
     let wc = super::gui::WndClassExA {
         size: std::mem::size_of::<super::gui::WndClassExA>() as u32,
         style: 0,
-        wnd_proc: super::user32::def_window_proc_w as *const () as usize,
+        wnd_proc: embed_wnd_proc as *const () as usize,
         cls_extra: 0,
         wnd_extra: 0,
         instance: 0,

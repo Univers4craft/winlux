@@ -180,3 +180,84 @@ fn adresses_de_page_lues() {
         assert!(load("res://module-absent.dll/licence.htm").is_err());
     }
 }
+
+// Abonné qui note les événements reçus par IDispatch::Invoke.
+static EVENTS: Mutex<Vec<(i32, usize, String)>> = Mutex::new(Vec::new());
+static EVENT_SINK_VT: VTable<7> = VTable([
+    sink_qi as *const (),
+    sink_add_ref as *const (),
+    sink_release as *const (),
+    sink_release as *const (), // GetTypeInfoCount (non appelé)
+    sink_release as *const (), // GetTypeInfo (non appelé)
+    sink_release as *const (), // GetIDsOfNames (non appelé)
+    event_invoke as *const (),
+]);
+static EVENT_SINK: Sink = Sink {
+    vtbl: &EVENT_SINK_VT as *const _ as *const (),
+};
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn event_invoke(
+    _this: usize,
+    id: i32,
+    _iid: *const Guid,
+    _lcid: u32,
+    flags: u16,
+    params: *const [usize; 3],
+    _result: usize,
+    _exc: usize,
+    _arg_err: usize,
+) -> i32 {
+    assert_eq!(flags, 1);
+    let rgvarg = (*params)[0] as *const [u64; 3];
+    let count = ((*params)[2] & 0xffff_ffff) as usize;
+    let (mut disp, mut url) = (0usize, String::new());
+    if count == 2 {
+        // Ordre inverse : [0] = URL (VARIANT* par référence), [1] = pDisp.
+        let a0 = &*rgvarg;
+        assert_eq!(a0[0] as u16, 0x400c);
+        let inner = a0[1] as *const [u64; 3];
+        assert_eq!((*inner)[0] as u16, 8);
+        url = wide_text((*inner)[1] as *const u16);
+        let a1 = &*rgvarg.add(1);
+        assert_eq!(a1[0] as u16, 9);
+        disp = a1[1] as usize;
+    }
+    EVENTS.lock().unwrap().push((id, disp, url));
+    S_OK
+}
+
+#[test]
+fn fin_de_navigation_annoncee_aux_abonnes() {
+    // #2228 : l'installeur WinRAR navigue vers about:blank puis attend la
+    // fin du chargement avant d'écrire son contrat dans la page.
+    unsafe {
+        let wb = create(&IID_IWEB_BROWSER2);
+        let (_, cpc) = qi(wb, &IID_ICONNECTION_POINT_CONTAINER);
+        let find: unsafe extern "win64" fn(usize, *const Guid, *mut usize) -> i32 =
+            std::mem::transmute(method(cpc, 4));
+        let mut cp = 0usize;
+        assert_eq!(find(cpc, &DIID_DWEB_BROWSER_EVENTS2, &mut cp), S_OK);
+        let advise: unsafe extern "win64" fn(usize, usize, *mut u32) -> i32 =
+            std::mem::transmute(method(cp, 5));
+        let mut cookie = 0u32;
+        let sink = &EVENT_SINK as *const Sink as usize;
+        assert_eq!(advise(cp, sink, &mut cookie), S_OK);
+        let url: Vec<u16> = "about:blank\0".encode_utf16().collect();
+        let nav: unsafe extern "win64" fn(usize, *const u16) -> i32 =
+            std::mem::transmute(method(wb, 11));
+        assert_eq!(nav(wb, url.as_ptr()), S_OK);
+        let got = std::mem::take(&mut *EVENTS.lock().unwrap());
+        let ids: Vec<i32> = got.iter().map(|e| e.0).collect();
+        assert_eq!(ids, [252, 104, 259]);
+        for (id, disp, u) in got.iter().filter(|e| e.0 != 104) {
+            assert_eq!(*disp, wb, "pDisp de {id}");
+            assert_eq!(u, "about:blank");
+        }
+        let unadvise: unsafe extern "win64" fn(usize, u32) -> i32 =
+            std::mem::transmute(method(cp, 6));
+        assert_eq!(unadvise(cp, cookie), S_OK);
+        release(cp);
+        release(cpc);
+        assert_eq!(release(wb), 0);
+    }
+}
