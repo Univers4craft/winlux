@@ -439,6 +439,14 @@ pub(crate) fn has_code_signing_usage(der: &[u8]) -> bool {
         .is_some_and(|l| l.iter().any(|o| o[..] == CODE_SIGNING))
 }
 
+/// OID de l'extension d'usage étendu (EKU) d'un certificat DER, en
+/// notation pointée ; None sans extension (CertGetEnhancedKeyUsage, #2708).
+pub(crate) fn extended_key_usages(der: &[u8]) -> Option<Vec<String>> {
+    let t = expect(der, 0x30).ok()?;
+    let eku = parse_cert(der, t.body).ok()?.eku?;
+    Some(eku.iter().map(|o| dotted(o)).collect())
+}
+
 /// « chaîne arrêtée à « sujet », émis par « émetteur » » pour un certificat DER.
 pub(crate) fn chain_top(der: &[u8]) -> Option<String> {
     let t = expect(der, 0x30).ok()?;
