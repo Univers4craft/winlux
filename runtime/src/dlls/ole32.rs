@@ -1168,17 +1168,7 @@ unsafe fn create_from_registry(guid: &Guid, iid: &Guid, out: *mut *mut c_void) -
     Some(result)
 }
 
-// ---------- CoCreateFreeThreadedMarshaler ----------
-
-pub unsafe extern "win64" fn co_create_free_threaded_marshaler(
-    _outer: usize,
-    ppunk: *mut *mut c_void,
-) -> i32 {
-    if !ppunk.is_null() {
-        *ppunk = std::ptr::null_mut();
-    }
-    S_OK
-}
+// CoCreateFreeThreadedMarshaler : ole32_ftm.rs (#2674).
 
 // ---------- ProgIDFromCLSID / CLSIDFromProgID ----------
 
@@ -1826,7 +1816,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateInstance"=>fn co_create_instance,"CoCreateInstanceEx"=>fn co_create_instance_ex,
         "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object,
         "CoGetClassObject"=>fn co_get_class_object,
-        "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
+        "CoCreateFreeThreadedMarshaler"=>fn super::ole32_ftm::co_create_free_threaded_marshaler,
         "ProgIDFromCLSID"=>fn prog_id_from_clsid,"CLSIDFromProgID"=>fn clsid_from_prog_id,
         "CoGetMalloc"=>fn co_get_malloc,
         "CoLockObjectExternal"=>fn ole_s_ok,

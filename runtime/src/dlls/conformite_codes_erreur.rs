@@ -348,6 +348,11 @@ fn codes_d_erreur_de_la_synchronisation() {
 
 #[test]
 fn codes_d_erreur_des_modules_du_texte_et_du_registre() {
+    // Le registre ne doit pas changer de fichier sous ce test : d'autres
+    // tests changent WINLUX_REGISTRY_PATH sous ce verrou (#2632).
+    let _registre = crate::registry::TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = Sonde::new();
     unsafe {
         s.poison();

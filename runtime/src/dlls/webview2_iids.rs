@@ -460,3 +460,90 @@ pub const PROCESS_COLLECTION_IIDS: [Guid; 2] = [
         [0xbe, 0x56, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02],
     ), // ICoreWebView2ProcessExtendedInfoCollection
 ];
+/// ICoreWebView2Profile … ICoreWebView2Profile8 (ajouté à la main, IDL
+/// public, #2614) : 7 + 3 + 2 + 2 + 1 + 4 + 2 + 3 méthodes.
+pub const PROFILE_SLOTS: usize = 27;
+pub const PROFILE_IIDS: [Guid; 8] = [
+    guid(
+        0x79110ad3,
+        0xcd5d,
+        0x4373,
+        [0x8b, 0xc3, 0xc6, 0x06, 0x58, 0xf1, 0x7a, 0x5f],
+    ), // ICoreWebView2Profile
+    guid(
+        0xfa740d4b,
+        0x5eae,
+        0x4344,
+        [0xa8, 0xad, 0x74, 0xbe, 0x31, 0x92, 0x53, 0x97],
+    ), // ICoreWebView2Profile2
+    guid(
+        0xb188e659,
+        0x5685,
+        0x4e05,
+        [0xbd, 0xba, 0xfc, 0x64, 0x0e, 0x0f, 0x19, 0x92],
+    ), // ICoreWebView2Profile3
+    guid(
+        0x8f4ae680,
+        0x192e,
+        0x4ec8,
+        [0x83, 0x3a, 0x21, 0xcf, 0xad, 0xae, 0xf6, 0x28],
+    ), // ICoreWebView2Profile4
+    guid(
+        0x2ee5b76e,
+        0x6e80,
+        0x4df2,
+        [0xbc, 0xd3, 0xd4, 0xec, 0x33, 0x40, 0xa0, 0x1b],
+    ), // ICoreWebView2Profile5
+    guid(
+        0xbd82fa6a,
+        0x1d65,
+        0x4c33,
+        [0xb2, 0xb4, 0x03, 0x93, 0x02, 0x0c, 0xc6, 0x1b],
+    ), // ICoreWebView2Profile6
+    guid(
+        0x7b4c7906,
+        0xa1aa,
+        0x4cb4,
+        [0xb7, 0x23, 0xdb, 0x09, 0xf8, 0x13, 0xd5, 0x41],
+    ), // ICoreWebView2Profile7
+    guid(
+        0xfbf70c2f,
+        0xeb1f,
+        0x4383,
+        [0x85, 0xa0, 0x16, 0x3e, 0x92, 0x04, 0x40, 0x11],
+    ), // ICoreWebView2Profile8
+];
+/// ICoreWebView2CookieManager (ajouté à la main, IDL public, #2637) :
+/// 8 méthodes, sans version suivante.
+pub const COOKIE_MANAGER_SLOTS: usize = 11;
+pub const COOKIE_MANAGER_IIDS: [Guid; 1] = [guid(
+    0x177cd9e7,
+    0xb6f5,
+    0x451a,
+    [0x94, 0xa0, 0x5d, 0x7a, 0x3a, 0x4c, 0x41, 0x41],
+)];
+/// ICoreWebView2Cookie (ajouté à la main, IDL public, #2637) : 14 méthodes.
+pub const COOKIE_SLOTS: usize = 17;
+pub const COOKIE_IIDS: [Guid; 1] = [guid(
+    0xad26d6be,
+    0x1486,
+    0x43e6,
+    [0xbf, 0x87, 0xa2, 0x03, 0x40, 0x06, 0xca, 0x21],
+)];
+/// ICoreWebView2CookieList (ajouté à la main, IDL public, #2637) : 2 méthodes.
+pub const COOKIE_LIST_SLOTS: usize = 5;
+pub const COOKIE_LIST_IIDS: [Guid; 1] = [guid(
+    0xf7f6f714,
+    0x5d2a,
+    0x43c6,
+    [0x95, 0x03, 0x34, 0x6e, 0xce, 0x02, 0xd1, 0x86],
+)];
+/// ICoreWebView2DevToolsProtocolEventReceiver (ajouté à la main, IDL
+/// public, #2643) : add_/remove_DevToolsProtocolEventReceived.
+pub const DEVTOOLS_RECEIVER_SLOTS: usize = 5;
+pub const DEVTOOLS_RECEIVER_IIDS: [Guid; 1] = [guid(
+    0xb32ca51a,
+    0x8371,
+    0x45e9,
+    [0x93, 0x17, 0xaf, 0x02, 0x1d, 0x08, 0x03, 0x67],
+)];

@@ -1942,6 +1942,24 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::data_json::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Foundation.Uri (#2645).
+    if let Some(hr) = super::winrt_uri::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.ApplicationModel.Core.CoreApplication (#2681).
+    if let Some(hr) = super::winrt_coreapp::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Foundation.Metadata.ApiInformation (#2297).
+    if let Some(hr) = super::winrt_apiinfo::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Classes déclarées par le manifeste du paquet du programme (#2657).
+    if let Some(hr) =
+        super::package_classes::activation_factory(class, &name, iid as *const u8, out)
+    {
+        return hr;
+    }
     if !out.is_null() {
         crate::wow32::write_ptr(out as usize, 0);
     }
@@ -1949,11 +1967,28 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     // (#1659), comme le journal de CoCreateInstance.
     let iid_text = super::comobj::read_guid(iid as *const u8)
         .map_or_else(|| "NULL".to_string(), |g| super::comobj::guid_str(&g));
-    crate::log_warn!(
-        "com",
-        "RoGetActivationFactory : classe « {name} » (interface {iid_text}) inconnue (REGDB_E_CLASSNOTREG)"
-    );
+    if !QUIET_PROBE.with(|q| q.get()) {
+        crate::log_warn!(
+            "com",
+            "RoGetActivationFactory : classe « {name} » (interface {iid_text}) inconnue (REGDB_E_CLASSNOTREG)"
+        );
+    }
     REGDB_E_CLASSNOTREG
+}
+
+thread_local! {
+    /// Vrai pendant une question d'ApiInformation (#2297) : une classe
+    /// inconnue n'est alors pas un manque à journaliser.
+    static QUIET_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `RoGetActivationFactory` sans l'avertissement « inconnue », pour
+/// ApiInformation.IsTypePresent (#2297).
+pub(crate) unsafe fn quiet_activation_factory(class: usize, iid: usize, out: *mut usize) -> i32 {
+    QUIET_PROBE.with(|q| q.set(true));
+    let hr = RoGetActivationFactory(class, iid, out);
+    QUIET_PROBE.with(|q| q.set(false));
+    hr
 }
 
 /// IID_IActivationFactory {00000035-0000-0000-C000-000000000046}.

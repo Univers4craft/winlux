@@ -27,6 +27,18 @@ struct Options {
     connect_ms: i32,
     total_ms: i32,
     context: usize,
+    /// WINHTTP_OPTION_SECURE_PROTOCOLS : versions TLS 1.x permises
+    /// (minimum, maximum), x de 0 à 3 (#2609).
+    tls: Option<(u8, u8)>,
+    /// Rappel de WinHttpSetStatusCallback, hérité par les poignées filles
+    /// ouvertes ensuite (#2619). Jamais appelé : Winlux n'ouvre que des
+    /// sessions synchrones, où chaque appel rend lui-même son erreur.
+    callback: usize,
+    /// WINHTTP_OPTION_REDIRECT_POLICY (#2626) : 0 jamais, 1 tout sauf
+    /// https vers http (valeur par défaut), 2 toujours.
+    redirect_policy: u8,
+    /// WINHTTP_OPTION_DISABLE_FEATURE (#2626) : drapeaux WINHTTP_DISABLE_*.
+    disabled: u32,
 }
 #[derive(Clone)]
 struct Request {
@@ -87,6 +99,11 @@ fn insert(parent: usize, kind: Kind) -> usize {
         return fail(6);
     }
     entries.insert(id, Handle { parent, kind });
+    // Handle rendu : dernier code d'erreur à 0. L'outil de déploiement
+    // d'Office lit GetLastError après un WinHttpConnect ou un
+    // WinHttpOpenRequest réussi, et prenait pour une erreur le 122 laissé
+    // par un GetTokenInformation de dimensionnement (#2651).
+    crate::process::set_last_error(0);
     id
 }
 unsafe fn wide(pointer: *const u16, length: u32) -> Result<String, u32> {
@@ -191,6 +208,10 @@ pub unsafe extern "win64" fn open(
             connect_ms: 60000,
             total_ms: 120000,
             context: 0,
+            tls: None,
+            callback: 0,
+            redirect_policy: 1,
+            disabled: 0,
         }),
     )
 }
@@ -512,13 +533,31 @@ fn perform(request: &Request) -> Result<Response, u32> {
         request.port
     };
     let url = format!("{scheme}://{host}:{port}{path}");
-    let mut config = format!("silent\nshow-error\nlocation\nmax-redirs = 10\nproto = \"=http,https\"\nproto-redir = {}\nmax-filesize = 1073741824\nurl = {}\nrequest = {}\nuser-agent = {}\noutput = {}\ndump-header = {}\n",
-        quote(if request.secure { "=https" } else { "=http,https" }), quote(&url), quote(&request.verb), quote(&request.options.agent), quote(directory.0.join("body").to_str().ok_or(87u32)?), quote(directory.0.join("headers").to_str().ok_or(87u32)?));
+    let mut config = format!("silent\nshow-error\nproto = \"=http,https\"\nmax-filesize = 1073741824\nurl = {}\nrequest = {}\nuser-agent = {}\noutput = {}\ndump-header = {}\n",
+        quote(&url), quote(&request.verb), quote(&request.options.agent), quote(directory.0.join("body").to_str().ok_or(87u32)?), quote(directory.0.join("headers").to_str().ok_or(87u32)?));
+    // Redirections : WINHTTP_DISABLE_REDIRECTS ou REDIRECT_POLICY_NEVER
+    // rendent le 30x à l'appelant ; DISALLOW_HTTPS_TO_HTTP (défaut) ne
+    // quitte pas https ; ALWAYS suit tout, 10 au plus (#2626).
+    let policy = request.options.redirect_policy;
+    if request.options.disabled & 0x2 == 0 && policy != 0 {
+        let allowed = if request.secure && policy == 1 {
+            "=https"
+        } else {
+            "=http,https"
+        };
+        config.push_str(&format!(
+            "location\nmax-redirs = 10\nproto-redir = {}\n",
+            quote(allowed)
+        ));
+    }
     if request.options.connect_ms > 0 {
         config.push_str(&format!(
             "connect-timeout = {:.3}\n",
             request.options.connect_ms as f64 / 1000.0
         ));
+    }
+    if let Some((min, max)) = request.options.tls {
+        config.push_str(&format!("tlsv1.{min}\ntls-max = \"1.{max}\"\n"));
     }
     if request.options.total_ms > 0 {
         config.push_str(&format!(
@@ -925,8 +964,91 @@ pub unsafe extern "win64" fn set_option(
         }
         return 1;
     }
+    // WINHTTP_OPTION_SECURE_PROTOCOLS (84) sur une session : DWORD de
+    // drapeaux WINHTTP_FLAG_SECURE_PROTOCOL_* (SSL2 0x8, SSL3 0x20, TLS1
+    // 0x80, TLS1_1 0x200, TLS1_2 0x800, TLS1_3 0x2000), d'après winhttp.h de
+    // mingw-w64 et la page « Option Flags » de Microsoft Learn. Les
+    // connexions de la session sont tenues entre la plus basse et la plus
+    // haute version TLS demandées ; SSL2/SSL3 ne sont jamais parlés, une
+    // valeur qui ne demande qu'eux est refusée (#2609).
+    if option == 84 {
+        if !matches!(entry.kind, Kind::Session(_)) {
+            return fail(12018);
+        }
+        if size != 4 {
+            return fail(87);
+        }
+        let flags = std::ptr::read_unaligned(value.cast::<u32>());
+        match secure_protocols(flags) {
+            Some(range) => {
+                options_mut(&mut entry.kind).tls = Some(range);
+                return 1;
+            }
+            None => return fail(87),
+        }
+    }
+    // WINHTTP_OPTION_DISABLE_FEATURE (63), sur une requête seulement :
+    // DWORD de drapeaux WINHTTP_DISABLE_COOKIES (1), _REDIRECTS (2),
+    // _AUTHENTICATION (4), _KEEP_ALIVE (8), d'après winhttp.h de mingw-w64
+    // et la page « Option Flags » de Microsoft Learn. Seules les redirections
+    // changent quelque chose ici : Winlux ne garde ni cookie, ni connexion,
+    // ni authentification automatique d'une requête à l'autre (#2626).
+    if option == 63 {
+        if !matches!(entry.kind, Kind::Request(_)) {
+            return fail(12018);
+        }
+        if size != 4 {
+            return fail(87);
+        }
+        let flags = std::ptr::read_unaligned(value.cast::<u32>());
+        if flags & !0xF != 0 {
+            return fail(87);
+        }
+        options_mut(&mut entry.kind).disabled |= flags;
+        return 1;
+    }
+    // WINHTTP_OPTION_AUTOLOGON_POLICY (77) : DWORD
+    // WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM (0), _LOW (1), _HIGH (2).
+    // Winlux n'envoie jamais d'identifiants par défaut : accepté sans effet
+    // (#2626).
+    if option == 77 {
+        if size != 4 || std::ptr::read_unaligned(value.cast::<u32>()) > 2 {
+            return fail(87);
+        }
+        return 1;
+    }
+    // WINHTTP_OPTION_REDIRECT_POLICY (88), sur une session ou une requête :
+    // _NEVER (0), _DISALLOW_HTTPS_TO_HTTP (1, défaut), _ALWAYS (2) (#2626).
+    if option == 88 {
+        if matches!(entry.kind, Kind::Connection(..)) {
+            return fail(12018);
+        }
+        let policy = if size == 4 {
+            std::ptr::read_unaligned(value.cast::<u32>())
+        } else {
+            u32::MAX
+        };
+        if policy > 2 {
+            return fail(87);
+        }
+        options_mut(&mut entry.kind).redirect_policy = policy as u8;
+        return 1;
+    }
     // In particular, do not silently honor certificate-validation bypass flags.
     fail(50)
+}
+
+/// Versions TLS 1.x (minimum, maximum) d'une valeur de
+/// WINHTTP_OPTION_SECURE_PROTOCOLS ; `None` pour un drapeau inconnu ou
+/// une valeur sans aucune version TLS.
+fn secure_protocols(flags: u32) -> Option<(u8, u8)> {
+    const SSL: u32 = 0x8 | 0x20;
+    const TLS: [u32; 4] = [0x80, 0x200, 0x800, 0x2000];
+    if flags & !(SSL | TLS.iter().fold(0, |a, b| a | b)) != 0 {
+        return None;
+    }
+    let present: Vec<u8> = (0..4u8).filter(|i| flags & TLS[*i as usize] != 0).collect();
+    Some((*present.first()?, *present.last()?))
 }
 pub unsafe extern "win64" fn query_option(
     handle: usize,
@@ -1064,18 +1186,41 @@ pub unsafe extern "win64" fn detect_auto_proxy_config_url(flags: u32, out: *mut 
     crate::wow32::write_ptr(out as usize, 0);
     fail(12180)
 }
+/// WinHttpSetStatusCallback (#2619) : d'après Microsoft Learn, rend le
+/// rappel défini auparavant sur la poignée (NULL s'il n'y en avait pas), et
+/// WINHTTP_INVALID_STATUS_CALLBACK seulement en cas d'échec. Le rappel est
+/// retenu et hérité par les poignées filles, mais jamais appelé : les
+/// sessions de Winlux sont synchrones (WINHTTP_FLAG_ASYNC est refusé par
+/// WinHttpOpen), et les notifications d'achèvement comme REQUEST_ERROR ne
+/// concernent que le mode asynchrone ; l'erreur est rendue par l'appel.
 pub unsafe extern "win64" fn status_callback(
     handle: usize,
-    _callback: usize,
+    callback: usize,
     _flags: u32,
     _reserved: usize,
 ) -> usize {
-    crate::process::set_last_error(if lock(handles()).contains_key(&handle) {
-        50
+    let mut entries = lock(handles());
+    let Some(entry) = entries.get_mut(&handle) else {
+        crate::process::set_last_error(6);
+        return invalid_status_callback();
+    };
+    // Valeur du programme : 4 octets en x86 (WINHTTP_STATUS_CALLBACK).
+    let callback = if crate::wow32::pointer_size() == 4 {
+        callback & 0xffff_ffff
     } else {
-        6
-    });
-    usize::MAX
+        callback
+    };
+    std::mem::replace(&mut options_mut(&mut entry.kind).callback, callback)
+}
+
+/// WINHTTP_INVALID_STATUS_CALLBACK, ((WINHTTP_STATUS_CALLBACK)(-1L)), à la
+/// taille d'un pointeur du programme.
+fn invalid_status_callback() -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        0xffff_ffff
+    } else {
+        usize::MAX
+    }
 }
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -1190,6 +1335,230 @@ mod tests {
             assert_eq!(crate::process::last_error(), 12018);
             assert_eq!(close(session), 1);
         }
+    }
+
+    /// #2609 : WINHTTP_OPTION_SECURE_PROTOCOLS (84) acceptée sur une session
+    /// et retenue comme bornes TLS ; SSL seul, drapeau inconnu ou autre
+    /// poignée refusés.
+    #[test]
+    fn option_protocoles_securises_sur_une_session() {
+        let _teb = crate::process::test_teb();
+        assert_eq!(secure_protocols(0x800 | 0x2000), Some((2, 3)));
+        assert_eq!(secure_protocols(0x80 | 0x200 | 0x800), Some((0, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20 | 0x800), Some((2, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20), None);
+        assert_eq!(secure_protocols(0x800 | 0x1), None);
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            let v = 0x800u32 | 0x2000;
+            assert_eq!(set_option(session, 84, (&v as *const u32).cast(), 4), 1);
+            match &lock(handles()).get(&session).unwrap().kind {
+                Kind::Session(o) => assert_eq!(o.tls, Some((2, 3))),
+                _ => unreachable!(),
+            }
+            let ssl = 0x20u32;
+            assert_eq!(set_option(session, 84, (&ssl as *const u32).cast(), 4), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            assert_eq!(set_option(connection, 84, (&v as *const u32).cast(), 4), 0);
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+    /// départ), le rappel est hérité par une requête ouverte ensuite, et
+    /// WINHTTP_INVALID_STATUS_CALLBACK seulement sur une poignée inconnue.
+    /// #2651 : un handle rendu remet le dernier code d'erreur à 0.
+    #[test]
+    fn handle_rendu_efface_la_derniere_erreur() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            crate::process::set_last_error(122);
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            crate::process::set_last_error(122);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            crate::process::set_last_error(122);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            // Un échec garde son propre code.
+            assert_eq!(connect(0xdead_0000, w("127.0.0.1").as_ptr(), 80, 0), 0);
+            assert_eq!(crate::process::last_error(), 6);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    #[test]
+    fn rappel_d_etat_retenu_et_rendu() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            assert_eq!(status_callback(session, 0x1234, 0x10000, 0), 0);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(status_callback(request, 0x5678, 0x10000, 0), 0x1234);
+            assert_eq!(status_callback(request, 0, 0, 0), 0x5678);
+            assert_eq!(status_callback(session, 0, 0, 0), 0x1234);
+            assert_eq!(status_callback(0xdead_0000, 1, 0, 0), usize::MAX);
+            assert_eq!(crate::process::last_error(), 6);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2626 : DISABLE_FEATURE (63), AUTOLOGON_POLICY (77) et
+    /// REDIRECT_POLICY (88) acceptées avec une valeur valide, refusées sinon.
+    #[test]
+    fn options_redirection_et_ouverture_de_session_2626() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let (session, connection, request) = request_for(80, "GET", "/", false);
+            let set = |h: usize, option: u32, value: u32| {
+                set_option(h, option, (&value as *const u32).cast(), 4)
+            };
+            for flags in [1u32, 2, 4, 8, 0xF] {
+                assert_eq!(set(request, 63, flags), 1);
+            }
+            assert_eq!(set(request, 63, 0x10), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(set(session, 63, 2), 0);
+            assert_eq!(crate::process::last_error(), 12018);
+            for level in 0..=2u32 {
+                assert_eq!(set(request, 77, level), 1);
+                assert_eq!(set(session, 77, level), 1);
+            }
+            assert_eq!(set(request, 77, 3), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            for policy in 0..=2u32 {
+                assert_eq!(set(request, 88, policy), 1);
+                assert_eq!(set(session, 88, policy), 1);
+            }
+            assert_eq!(set(session, 88, 3), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(set(connection, 88, 0), 0);
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2626 : une redirection est suivie par défaut ; WINHTTP_DISABLE_REDIRECTS
+    /// sur la requête ou REDIRECT_POLICY_NEVER sur la session rendent le 302.
+    #[test]
+    fn redirections_suivies_ou_rendues_2626() {
+        let _teb = crate::process::test_teb();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut served = 0;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while served < 4 && Instant::now() < deadline {
+                let (stream, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("HTTP fixture: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                if first.starts_with("GET /depart ") {
+                    write!(reader.get_mut(), "HTTP/1.1 302 Found\r\nLocation: /cible\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                } else {
+                    write!(
+                        reader.get_mut(),
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                    )
+                    .unwrap();
+                }
+                served += 1;
+            }
+        });
+        let status_of = |request: usize| unsafe {
+            assert_eq!(send_request(request, null(), 0, null(), 0, 0, 0), 1);
+            assert_eq!(receive_response(request, null()), 1);
+            let mut status = 0u32;
+            let mut size = 4;
+            assert_eq!(
+                query_headers(
+                    request,
+                    19 | 0x2000_0000,
+                    null(),
+                    (&mut status as *mut u32).cast(),
+                    &mut size,
+                    null_mut()
+                ),
+                1
+            );
+            status
+        };
+        unsafe {
+            let (session, _, request) = request_for(port, "GET", "/depart", false);
+            assert_eq!(status_of(request), 200);
+            assert_eq!(close(session), 1);
+
+            let (session, _, request) = request_for(port, "GET", "/depart", false);
+            let flag = 2u32;
+            assert_eq!(set_option(request, 63, (&flag as *const u32).cast(), 4), 1);
+            assert_eq!(status_of(request), 302);
+            assert_eq!(close(session), 1);
+
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            let never = 0u32;
+            assert_eq!(set_option(session, 88, (&never as *const u32).cast(), 4), 1);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), port, 0);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/depart").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(status_of(request), 302);
+            assert_eq!(close(session), 1);
+        }
+        server.join().unwrap();
     }
 
     #[test]

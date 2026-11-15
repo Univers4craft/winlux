@@ -219,6 +219,7 @@ ole32.rs	StatStg	a-verifier
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
+ole32_ftm.rs	Ftm	interne	marshaleur libre (#2674) ; un appelant x86 le reçoit enveloppé par wow32/com.rs (Out IUNKNOWN), jamais sa disposition
 ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
 ole32_lot_c.rs	AgileRef	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 ole32_lot_c/tests.rs	Probe	interne	test unitaire
@@ -311,6 +312,10 @@ winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)
 wininet.rs	UrlComponents	x86	URL_COMPONENTSA/W de 60 octets lu et réécrit par from_x86/write_x86 ; test url_components_x86 et crt32.c n° 46 (#2554) ; aussi pour WinHttpCrackUrl, crt32.c n° 47 (#2574)
 winlux_media.rs	OpenOptions	a-verifier	
 winmm_waveout.rs	WaveHdr	a-verifier	
+winrt_coreapp.rs	IterObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	PairObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	SetObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	ViewObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
 wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)

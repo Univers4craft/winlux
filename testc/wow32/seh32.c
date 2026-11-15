@@ -133,6 +133,47 @@ static __declspec(noinline) void raise_deep(int n) {
 
 /* Dans une fonction à part : clang ne compte pas l'assembleur en ligne
  * comme une instruction qui peut lever dans le bloc __try. */
+/* Cas 12 (#2648) : pendant l'appel d'un gestionnaire, la tête de fs:[0]
+ * est un cadre du répartiteur dont le suivant est l'ancienne tête (le
+ * gestionnaire C++ de la CRT de MSVC la relève et la remet en place) ; au
+ * retour, la chaîne est revenue telle qu'avant. */
+volatile DWORD probe_head, probe_next, probe_frame, probe_after;
+void WINAPI nested_probe(void);
+__asm__(
+    ".intel_syntax noprefix\n"
+    ".text\n"
+    ".globl _nested_probe@0\n"
+    "_nested_probe@0:\n"
+    "    push ebp\n"
+    "    mov ebp, esp\n"
+    "    sub esp, 8\n"
+    "    mov eax, dword ptr fs:[0]\n"
+    "    mov dword ptr [esp], eax\n"
+    "    mov dword ptr [esp + 4], offset _probe_handler\n"
+    "    mov dword ptr fs:[0], esp\n"
+    "    mov dword ptr [_probe_frame], esp\n"
+    "    push 0\n"
+    "    push 0\n"
+    "    push 0\n"
+    "    push 0xE0000012\n"
+    "    call dword ptr [__imp__RaiseException@16]\n"
+    "    mov eax, dword ptr fs:[0]\n"
+    "    mov dword ptr [_probe_after], eax\n"
+    "    mov ecx, dword ptr [esp]\n"
+    "    mov dword ptr fs:[0], ecx\n"
+    "    mov esp, ebp\n"
+    "    pop ebp\n"
+    "    ret\n"
+    /* Gestionnaire (cdecl) : relève la tête, puis ExceptionContinueExecution. */
+    "_probe_handler:\n"
+    "    mov eax, dword ptr fs:[0]\n"
+    "    mov dword ptr [_probe_head], eax\n"
+    "    mov eax, dword ptr [eax]\n"
+    "    mov dword ptr [_probe_next], eax\n"
+    "    xor eax, eax\n"
+    "    ret\n"
+    ".att_syntax\n");
+
 static __declspec(noinline) void illegal(void) { __asm__ volatile("ud2"); }
 
 static long WINAPI last_resort(EXCEPTION_POINTERS *p) {
@@ -204,6 +245,9 @@ void __stdcall entry(void) {
     ok = 0;
     __try { *(volatile int *)8 = 1; } __except (1) { ok = 11; }
     if (ok != 11) ExitProcess(11);
+    /* 12. Cadre du répartiteur en tête pendant le gestionnaire (#2648). */
+    nested_probe();
+    if (probe_head == probe_frame || probe_next != probe_frame || probe_after != probe_frame) ExitProcess(12);
     say("SEH 32 bits : tout est correct.\r\n");
     ExitProcess(0);
 }

@@ -2541,6 +2541,11 @@ mod tests {
 
     #[test]
     fn afficher_dans_le_dossier_ouvre_l_explorateur_winlux() {
+        if crate::launch::path_isole(
+            "dlls::apps_win32::tests::afficher_dans_le_dossier_ouvre_l_explorateur_winlux",
+        ) {
+            return;
+        }
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("winlux-shopen-{}", std::process::id()));
         let bin = dir.join("bin");
@@ -2552,7 +2557,11 @@ mod tests {
         let opener = bin.join("xdg-open");
         std::fs::write(
             &opener,
-            format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", log.display()),
+            // Écrit puis renomme : le test ne voit jamais un journal vide (#2661).
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$1\" > '{0}.tmp' && /bin/mv '{0}.tmp' '{0}'\n",
+                log.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2569,7 +2578,7 @@ mod tests {
                     0
                 );
                 il_free(p);
-                for _ in 0..200 {
+                for _ in 0..1000 {
                     if log.exists() {
                         break;
                     }
