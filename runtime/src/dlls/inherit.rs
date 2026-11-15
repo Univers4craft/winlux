@@ -307,6 +307,12 @@ pub(crate) fn describe(h: usize, move_pipe: bool) -> Option<(String, Vec<OwnedFd
     if let Some(pid) = crate::dlls::kernel32::inheritable_process_pid(h) {
         return Some((format!("p,{h:x},{pid}"), Vec::new()));
     }
+    if crate::dlls::electron_win32::is_user_object(h) {
+        // Station de fenêtres ou bureau : la page de DuplicateHandle les compte
+        // parmi les objets duplicables ; le bac à sable de Chromium en donne un
+        // à chaque enfant (#2545). Aucun descripteur à transmettre.
+        return Some((format!("u,{h:x}"), Vec::new()));
+    }
     None
 }
 
@@ -423,6 +429,7 @@ pub(crate) fn adopt_one(
             let pid = f.get(2)?.parse::<i32>().ok()?;
             crate::dlls::kernel32::insert_sync_at(h, crate::dlls::kernel32::foreign_process(pid));
         }
+        "u" => crate::dlls::electron_win32::adopt_user_object(h),
         _ => return None,
     }
     Some(h)
