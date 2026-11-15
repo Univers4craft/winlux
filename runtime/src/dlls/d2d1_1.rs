@@ -442,6 +442,29 @@ fn visible(px: &[u8]) -> String {
     format!("{n} moy {:?}", m)
 }
 
+/// Pixels visibles sur les bords d'une image (#2431) : colonnes 0, 1,
+/// avant-dernière et dernière, puis premières et dernières lignes. Le
+/// contour de sélection de Paint.NET perd sa colonne de droite : ces
+/// comptes disent à quelle étape elle disparaît.
+fn bords(px: &[u8], w: u32, h: u32) -> String {
+    let (w, h) = (w as usize, h as usize);
+    if w < 2 || h < 2 || px.len() < w * h * 4 {
+        return String::new();
+    }
+    let a = |x: usize, y: usize| px[(y * w + x) * 4 + 3] != 0;
+    let col = |x: usize| (0..h).filter(|&y| a(x, y)).count();
+    let row = |y: usize| (0..w).filter(|&x| a(x, y)).count();
+    format!(
+        " bords colonnes {}/{}…{}/{} lignes {}…{}",
+        col(0),
+        col(1),
+        col(w - 2),
+        col(w - 1),
+        row(0),
+        row(h - 1)
+    )
+}
+
 /// Destination d'une cible pour le journal.
 pub(super) fn describe_target(t: &Target) -> String {
     let out = match t.out {
@@ -478,9 +501,11 @@ pub(super) unsafe fn describe_image(image: *mut c_void) -> String {
         } else {
             "liste"
         };
-        let n = visible(&crate::dlls::lock(&b.px));
+        let px = crate::dlls::lock(&b.px);
+        let n = visible(&px);
+        let e = bords(&px, b.w, b.h);
         return format!(
-            "{kind} {image:p} {}x{} options {:#x} visibles {n}",
+            "{kind} {image:p} {}x{} options {:#x} visibles {n}{e}",
             b.w, b.h, b.options
         );
     }
@@ -1264,8 +1289,17 @@ pub(super) unsafe extern "win64" fn bitmap_surface(
 /// D2D1_MAPPED_RECT { pitch, bits }.
 #[repr(C)]
 pub(super) struct MappedRect {
-    pitch: u32,
-    bits: *mut u8,
+    pub(super) pitch: u32,
+    pub(super) bits: *mut u8,
+}
+
+impl Default for MappedRect {
+    fn default() -> Self {
+        MappedRect {
+            pitch: 0,
+            bits: std::ptr::null_mut(),
+        }
+    }
 }
 
 /// Map : accès direct aux pixels (bitmap CPU_READ) jusqu'à Unmap.
@@ -1279,14 +1313,49 @@ pub(super) unsafe extern "win64" fn bitmap_map(
     }
     let b = &Com::get(this).data;
     let mut px = crate::dlls::lock(&b.px);
-    *out = MappedRect {
-        pitch: b.w * 4,
-        bits: px.as_mut_ptr(),
-    };
-    d2d_trace!("Map {:p} {}x{} options {:#x}", this, b.w, b.h, _options);
+    if b.alpha_only {
+        // DXGI_FORMAT_A8_UNORM : un octet d'alpha par pixel, comme le
+        // format du bitmap. Lu en BGRA, la ligne serait quatre fois trop
+        // large et Paint.NET perdait le bord droit de son contour de
+        // sélection (#2431).
+        let mut m = crate::dlls::lock(&b.mapped);
+        *m = px.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+        *out = MappedRect {
+            pitch: b.w,
+            bits: m.as_mut_ptr(),
+        };
+    } else {
+        *out = MappedRect {
+            pitch: b.w * 4,
+            bits: px.as_mut_ptr(),
+        };
+    }
+    d2d_trace!(
+        "Map {:p} {}x{} options {:#x}{}",
+        this,
+        b.w,
+        b.h,
+        _options,
+        if b.alpha_only { " alpha seul" } else { "" }
+    );
     S_OK
 }
-pub(super) unsafe extern "win64" fn bitmap_unmap(_: *mut BitmapObj) -> i32 {
+/// Unmap : pour un bitmap A8, recopie l'alpha éventuellement écrit
+/// (noir prémultiplié de cette opacité, comme CopyFromMemory) et libère la
+/// copie.
+pub(super) unsafe extern "win64" fn bitmap_unmap(this: *mut BitmapObj) -> i32 {
+    let b = &Com::get(this).data;
+    if b.alpha_only {
+        let m = std::mem::take(&mut *crate::dlls::lock(&b.mapped));
+        let mut px = crate::dlls::lock(&b.px);
+        if m.len() * 4 == px.len() {
+            for (p, &a) in px.as_chunks_mut::<4>().0.iter_mut().zip(&m) {
+                if p[3] != a {
+                    *p = [0, 0, 0, a];
+                }
+            }
+        }
+    }
     S_OK
 }
 
@@ -2171,12 +2240,13 @@ unsafe fn image_of_effect(effect: *mut c_void, depth: u32, hint: (u32, u32)) -> 
         how,
         depth,
         img.as_ref().map_or("rien".to_string(), |i| format!(
-            "{}x{} @{},{} visibles {}",
+            "{}x{} @{},{} visibles {}{}",
             i.w,
             i.h,
             i.x,
             i.y,
-            visible(&i.px)
+            visible(&i.px),
+            bords(&i.px, i.w, i.h)
         ))
     );
     img
@@ -2366,19 +2436,24 @@ unsafe extern "win64" fn dc_draw_image(
     };
     let img = image_img(image, 0, hint);
     d2d_trace!(
-        "DrawImage {:p} ← {} offset {:?} src {:?} → {}",
+        "DrawImage {:p} ← {} offset {:?} src {:?} interpolation {} → {}{}",
         this,
         describe_image(image),
         offset.as_ref(),
         rect.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        interp,
         img.as_ref().map_or("rien".to_string(), |i| format!(
-            "{}x{} @{},{} visibles {}",
+            "{}x{} @{},{} visibles {}{}",
             i.w,
             i.h,
             i.x,
             i.y,
-            visible(&i.px)
-        ))
+            visible(&i.px),
+            bords(&i.px, i.w, i.h)
+        )),
+        // Transformation, DPI, mode (#2431) : le contour de sélection de
+        // Paint.NET perd sa dernière colonne au dessin.
+        super::describe_state(this)
     );
     let Some(img) = img else {
         return;
@@ -4164,6 +4239,20 @@ mod tests {
             Com::release(dc);
             Com::release(f);
         }
+    }
+
+    /// #2431 : comptes des bords d'une image pour la trace.
+    #[test]
+    fn bords_d_une_image_pour_la_trace() {
+        // 4×3, colonne de droite opaque, plus le pixel (0, 0).
+        let (w, h) = (4u32, 3u32);
+        let mut px = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            px[((y * w + 3) * 4 + 3) as usize] = 255;
+        }
+        px[3] = 255;
+        assert_eq!(bords(&px, w, h), " bords colonnes 1/0…0/3 lignes 2…1");
+        assert_eq!(bords(&px, 1, 1), "");
     }
 
     #[test]

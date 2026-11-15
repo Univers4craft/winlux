@@ -12,7 +12,7 @@
 //! visible dans Paramètres > Confidentialité et sécurité, où un refus est
 //! respecté ; aux lancements suivants, `--no-sandbox` est ajouté d'office.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -20,11 +20,11 @@ use crate::permissions::{Capability, Decision};
 
 const FLAG: &str = "--no-sandbox";
 
-/// Enfants Chromium créés suspendus par ce processus.
-static SUSPENDED_CHILDREN: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
+/// Enfants Chromium créés suspendus par ce processus, avec leur `--type=`.
+static SUSPENDED_CHILDREN: Mutex<Option<HashMap<i32, String>>> = Mutex::new(None);
 static ASKED: AtomicBool = AtomicBool::new(false);
 
-fn lock() -> std::sync::MutexGuard<'static, Option<HashSet<i32>>> {
+fn lock() -> std::sync::MutexGuard<'static, Option<HashMap<i32, String>>> {
     SUSPENDED_CHILDREN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -36,16 +36,34 @@ pub fn is_chromium_child_line(line: &str) -> bool {
 /// CreateProcess vient de lancer `pid` suspendu avec cette ligne.
 pub fn note_child(pid: u32, line: &str) {
     if is_chromium_child_line(line) {
-        lock().get_or_insert_with(HashSet::new).insert(pid as i32);
+        lock()
+            .get_or_insert_with(HashMap::new)
+            .insert(pid as i32, child_type(line).to_string());
     }
 }
 
 /// TerminateProcess sur `pid` ; `still_suspended` : jamais relancé.
 pub fn on_terminate(pid: i32, still_suspended: bool) {
-    let known = lock().as_mut().is_some_and(|s| s.remove(&pid));
-    if known && still_suspended {
-        sandbox_failed();
+    let kind = lock().as_mut().and_then(|s| s.remove(&pid));
+    if let (Some(kind), true) = (kind, still_suspended) {
+        sandbox_failed(&cause(pid, &kind, std::process::id()));
     }
+}
+
+/// Valeur de `--type=` d'une ligne d'enfant (« renderer », « gpu-process »…).
+fn child_type(line: &str) -> &str {
+    line.split_whitespace()
+        .find_map(|w| w.strip_prefix("--type="))
+        .unwrap_or("?")
+}
+
+/// Ce qui a déclenché le repli, pour le journal (#2562) : l'enfant terminé
+/// encore suspendu, son type et le processus qui l'a terminé.
+fn cause(pid: i32, kind: &str, requester: u32) -> String {
+    format!(
+        "l'enfant {pid} (--type={kind}) a été terminé avant d'avoir démarré, \
+         par le processus {requester} (TerminateProcess)"
+    )
 }
 
 fn own_line_has_flag() -> bool {
@@ -53,13 +71,13 @@ fn own_line_has_flag() -> bool {
 }
 
 /// Le bac à sable n'a pas pu démarrer : proposer de relancer sans.
-fn sandbox_failed() {
+fn sandbox_failed(cause: &str) {
     if ASKED.swap(true, Ordering::SeqCst) || own_line_has_flag() {
         return;
     }
     crate::log_warn!(
         "process",
-        "bac à sable de Chromium impossible : relance sans, enfants confinés par Winlux (#1733)"
+        "bac à sable de Chromium impossible ({cause}) : relance sans, enfants confinés par Winlux (#1733)"
     );
     if !crate::permissions::allowed(Capability::Sandbox) {
         return;
@@ -139,7 +157,21 @@ mod tests {
         note_child(4242, "app.exe --type=gpu-process");
         // Déjà relancé (pas suspendu) : rien.
         on_terminate(4242, false);
-        assert!(!lock().as_ref().unwrap().contains(&4242));
+        assert!(!lock().as_ref().unwrap().contains_key(&4242));
         assert!(!ASKED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cause_du_repli_journalisee() {
+        assert_eq!(
+            child_type("\"C:\\a\\b.exe\" --type=renderer --lang=fr"),
+            "renderer"
+        );
+        assert_eq!(child_type("--type=gpu-process"), "gpu-process");
+        let c = cause(6788, "renderer", 6756);
+        assert!(c.contains("6788"), "{c}");
+        assert!(c.contains("--type=renderer"), "{c}");
+        assert!(c.contains("6756"), "{c}");
+        assert!(c.contains("TerminateProcess"), "{c}");
     }
 }

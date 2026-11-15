@@ -79,6 +79,7 @@ pub mod d3dx9_effect;
 pub mod d3dx9_hlsl;
 pub mod d3dx9_mesh;
 pub mod d3dx9_shader;
+pub mod data_json;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
@@ -206,6 +207,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod object_directory;
 pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
@@ -227,6 +229,7 @@ pub mod pe_image;
 pub mod pointer;
 pub mod powrprof;
 pub mod print_pdf;
+pub mod property_value;
 pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
@@ -273,6 +276,7 @@ pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod taskschd_dll;
 pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
@@ -514,6 +518,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
@@ -794,6 +799,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mmdevapi",
                 exports: mmdevapi::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "taskschd",
+                exports: taskschd_dll::exports(),
                 handle: 0,
             },
             Builtin {
@@ -1900,6 +1910,8 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
+    "CreateAppContainerToken",
 ];
 
 /// Fonctions rangées dans la table kernel32 de Winlux pour servir des

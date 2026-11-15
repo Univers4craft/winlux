@@ -234,6 +234,7 @@ GenerateConsoleCtrlEvent
 GetACP
 GetActiveProcessorCount
 GetActiveProcessorGroupCount
+GetAppContainerNamedObjectPath
 GetApplicationRestartSettings
 GetApplicationUserModelId
 GetAtomNameA
@@ -800,6 +801,7 @@ SetConsoleTextAttribute
 SetConsoleTitleA
 SetConsoleTitleW
 SetConsoleWindowInfo
+SetCriticalSectionSpinCount
 SetCurrentDirectoryA
 SetCurrentDirectoryW
 SetDefaultDllDirectories

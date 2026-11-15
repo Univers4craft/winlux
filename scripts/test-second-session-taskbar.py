@@ -108,7 +108,7 @@ with tempfile.TemporaryDirectory() as directory:
     camille()
     result, ids, expand = align("left")
     ok(result.returncode == 0, f"align-left réussit ({result.stderr.strip()[:200]})")
-    ok(ids == "3 13 1 2 8 10 12 4 7 9" and expand == "false",
+    ok(ids == "3 13 1 2 8 46 10 12 4 7 9" and expand == "false",
        f"à gauche : séparateur 3 non étiré, Démarrer contre le bord (ids {ids}, expand {expand})")
     ok("xfce4-panel -r" not in log.read_text(), "pas de relance de la barre (13 déjà chargé)")
 
@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory() as directory:
     ok(result.returncode == 0, "align-center réussit")
     ok(ids.startswith("3 13 1 2 8") and expand == "true",
        f"centrée : contrepoids 13 juste après le séparateur 3 (ids {ids})")
-    ok(re.fullmatch(r"3 13 1 2 8 10 12 4 7 9", ids) is not None, "centrée : zone de notification et clavier gardés")
+    ok(re.fullmatch(r"3 13 1 2 8 46 10 12 4 7 9", ids) is not None, "centrée : zone de notification et clavier gardés")
     ok("xfce4-panel -r" not in log.read_text(), "centrée : pas de relance de la barre")
 
 # ── 3. Fichiers propres au compte (relevé VM du 7 novembre 2026) ───────────
@@ -232,7 +232,7 @@ with tempfile.TemporaryDirectory() as directory:
         "X-XFCE-Source=file:///usr/share/applications/winlux-taskview.desktop\n")
     (panel / "launcher-16/123.desktop").write_text("[Desktop Entry]\nName=Rechercher\nExec=winlux-search\n")
     store, log = work / "xfconf.json", work / "xfconf.log"
-    for how, expected in (("center", "3 13 1 16 15 2 8 10 12 4 7 9"), ("left", "3 13 1 16 15 2 8 10 12 4 7 9")):
+    for how, expected in (("center", "3 13 1 16 15 2 8 46 10 12 4 7 9"), ("left", "3 13 1 16 15 2 8 46 10 12 4 7 9")):
         state = {"/panels/panel-1/plugin-ids": "3 1 2 8 10 12 4 7 9 13".split(),
                  "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
                  "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon",
@@ -298,7 +298,7 @@ with tempfile.TemporaryDirectory() as directory:
         (work / "bin" / tool).chmod(0o755)
     store, log = work / "xfconf.json", work / "xfconf.log"
     conf = work / "home/.config/winlux/taskbar.conf"
-    state = {"/panels": ["1"], "/panels/panel-1/plugin-ids": "3 13 1 2 8 10 12 4 7 9".split(),
+    state = {"/panels": ["1"], "/panels/panel-1/plugin-ids": "3 13 1 2 8 46 10 12 4 7 9".split(),
              "/panels/panel-1/size": "40", "/panels/panel-1/length": "100",
              "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
              "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon"}
@@ -335,7 +335,7 @@ with tempfile.TemporaryDirectory() as directory:
     conf.write_text("STYLE=classic\nALIGN=center\n")
     result, state = run("center")
     main = " ".join(state["/panels/panel-1/plugin-ids"])
-    ok(result.returncode == 0 and state["/panels"] == ["1"] and main == "3 13 1 2 8 10 12 4 7 9"
+    ok(result.returncode == 0 and state["/panels"] == ["1"] and main == "3 13 1 2 8 46 10 12 4 7 9"
        and state["/panels/panel-1/length"] == "100" and state["/panels/panel-1/position"] == "p=10;x=0;y=0",
        f"retour au style classique : un seul panneau pleine largeur, rien de perdu ({main})")
 
@@ -356,7 +356,7 @@ with tempfile.TemporaryDirectory() as directory:
     (work / "bin/xfce4-panel").write_text('#!/bin/sh\necho "xfce4-panel $*" >> "$FAKE_XFCONF_LOG"\n')
     for tool in ("pgrep", "xfce4-panel"):
         (work / "bin" / tool).chmod(0o755)
-    state = {"/panels/panel-1/plugin-ids": "3 13 1 2 8 10 12 4 7 9".split(),
+    state = {"/panels/panel-1/plugin-ids": "3 13 1 2 8 46 10 12 4 7 9".split(),
              "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
              "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon"}
     for number in (4, 7, 9, 13):
@@ -373,7 +373,7 @@ with tempfile.TemporaryDirectory() as directory:
         data = json.loads(store.read_text())
         calls = log.read_text()
         saved = (work / "root/etc/winlux/preferences.conf").read_text()
-        ok(result.returncode == 0 and " ".join(data["/panels/panel-1/plugin-ids"]) == "3 13 1 2 8 10 12 4 7 9"
+        ok(result.returncode == 0 and " ".join(data["/panels/panel-1/plugin-ids"]) == "3 13 1 2 8 46 10 12 4 7 9"
            and data["/plugins/plugin-3/expand"] == expand,
            f"align-{how} en direct : même ordre, séparateur 3 étiré = {expand} {result.stderr.strip()[:200]}")
         ok("xfce4-panel -r" not in calls and "--plugin-event=genmon-13:refresh:bool:true" in calls,

@@ -17,6 +17,12 @@ environ 2,2 s à 110 px à gauche du centre avant d'y revenir.
 
 Vérifie à chaque lancement : position finale au milieu de l'écran, et moins
 de MAX_OFF secondes passées loin de cette position.
+
+Troisième lancement (#2467) : le bouton de l'assistant, lanceur interne à la
+barre (sans fenêtre X), ouvre le bloc de droite juste après le repère 46.
+Avant le correctif, il échappait à la mesure : contrepoids trop court de sa
+largeur et Démarrer 23 px à gauche de sa place. Démarrer doit rester où il
+est sans ce bouton.
 """
 import os
 from pathlib import Path
@@ -30,7 +36,8 @@ import time
 directory = Path(__file__).resolve().parent
 project = directory.parent
 shipped = project / "integration/native/config"
-CENTERED = (3, 13, 1, 15, 14, 2, 8, 10, 4, 7, 9)
+CENTERED = (3, 13, 1, 15, 14, 2, 8, 46, 10, 4, 7, 9)
+ASSISTANT = 31
 MAX_OFF = 1.2
 TOLERANCE = 8
 # Boutons de la barre en magenta uni : sans fenêtre ouverte, le premier depuis
@@ -90,6 +97,20 @@ def prepare(home):
     program.chmod(0o755)
 
 
+def add_assistant(home):
+    """Bouton de l'assistant comme le pose winlux-assistant : lanceur juste après le repère 46."""
+    path = home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+    text = path.read_text(encoding="utf-8")
+    launcher = (f'<property name="plugin-{ASSISTANT}" type="string" value="launcher"><property name="items" type="array">'
+                f'<value type="string" value="{home / "winlux-start.desktop"}"/></property>'
+                '<property name="show-label" type="bool" value="false"/></property>')
+    text = text.replace('<property name="plugin-13"', launcher + '<property name="plugin-13"', 1)
+    text = text.replace('<value type="int" value="46"/>', f'<value type="int" value="46"/><value type="int" value="{ASSISTANT}"/>', 1)
+    path.write_text(text, encoding="utf-8")
+    # Autre ordre de greffons : la valeur gardée du contrepoids ne vaut plus.
+    (home / ".cache/winlux/taskbar-balance").unlink(missing_ok=True)
+
+
 def start_x(Gdk, root, width, height):
     pixbuf = Gdk.pixbuf_get_from_window(root, 0, height - 30, width, 1)
     if pixbuf is None:
@@ -146,7 +167,7 @@ def boot(home, label, problems):
     shown = [(moment, x) for moment, x in samples if x is not None]
     if not shown:
         problems.append(f"{label} : bouton Démarrer introuvable")
-        return
+        return None
     final = shown[-1][1]
     changes = [(moment, x) for index, (moment, x) in enumerate(shown) if index == 0 or x != shown[index - 1][1]]
     print(f"{label} : " + ", ".join(f"{moment:.2f} s x={x}" for moment, x in changes))
@@ -159,6 +180,7 @@ def boot(home, label, problems):
     print(f"{label} : {off:.2f} s loin de sa place")
     if off > MAX_OFF:
         problems.append(f"{label} : Démarrer passe {off:.2f} s loin de sa place (x={final}) au lancement de la barre")
+    return final
 
 
 def main():
@@ -171,8 +193,13 @@ def main():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
         home = Path(temp) / "compte"
         prepare(home)
-        boot(home, "premier démarrage", problems)
+        reference = boot(home, "premier démarrage", problems)
         boot(home, "démarrage suivant", problems)
+        add_assistant(home)
+        moved = boot(home, "bouton de l'assistant", problems)
+        if reference is not None and moved is not None and abs(moved - reference) > 2:
+            problems.append(f"bouton de l'assistant : Démarrer à x={moved} au lieu de x={reference}, "
+                            "groupe décalé de la moitié du bouton (#2467)")
         if problems:
             # Ce qu'a vu le contrepoids pendant le lancement (diagnostic CI).
             log = home / "balance.log"

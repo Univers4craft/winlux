@@ -53,7 +53,22 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
-def balance_width(screen_width, children, right_ids, left_ids=()):
+def balance_sides(ids):
+    """(greffons du bloc de droite, greffons à gauche du séparateur 3) de la
+    barre centrée, ou None sans contrepoids 13 juste après le séparateur 3.
+
+    Le contrepoids n'est jamais compté dans le bloc de gauche, même listé
+    aussi avant le séparateur 3 (#2467) : il se serait retranché de lui-même."""
+    if 3 not in ids or 8 not in ids or ids[ids.index(3) + 1:ids.index(3) + 2] != [13]:
+        return None
+    return set(ids[ids.index(8) + 1:]), set(ids[:ids.index(3)]) - {13}
+
+
+# Repère du bloc de droite (#2467) : genmon d'un pixel posé juste après le
+# séparateur 8. Le bloc commence souvent par un greffon interne à la barre
+# (bouton de l'assistant, flèche des icônes cachées), sans fenêtre X : seul
+# ce repère, externe, donne son vrai bord gauche.
+def balance_width(screen_width, children, right_ids, left_ids=(), edge=46):
     """Largeur du contrepoids placé juste après le séparateur 3 (barre centrée).
 
     xfce4-panel 4.20 n'a pas de zone centrale : les deux séparateurs extensibles
@@ -68,15 +83,26 @@ def balance_width(screen_width, children, right_ids, left_ids=()):
     « écran − x du bloc » se confirmait alors tout seul (3760 px en 4K, toute la
     barre collée à gauche). La marge au bord droit ne compte que si le bloc y
     est collé ; décollé, le calcul suivant le recolle puis retrouve la valeur exacte.
+
+    Avec le repère `edge` (greffon 46, juste après le séparateur 8), le bloc
+    va de ce repère au bout de la barre : les greffons internes du début du
+    bloc (bouton de l'assistant, flèche des icônes cachées), sans fenêtre X,
+    comptent alors aussi. Sans lui, ils manquaient : contrepoids trop court de
+    leur largeur et groupe décalé de la moitié vers la gauche (#2467).
     """
+    marks = [x for plugin, x, _ in children if edge is not None and plugin == edge and plugin in right_ids]
     right = [(x, width) for plugin, x, width in children if plugin in right_ids and width > 1]
-    if not right:
+    if marks and 0 <= min(marks) < screen_width:
+        block = screen_width - min(marks)
+    elif right:
+        start = min(x for x, _ in right)
+        end = max(x + width for x, width in right)
+        margin = screen_width - end
+        block = end - start + (margin if 0 <= margin <= 16 else 0)
+    else:
         return 0
-    start = min(x for x, _ in right)
-    end = max(x + width for x, width in right)
-    margin = screen_width - end
-    block = end - start + (margin if 0 <= margin <= 16 else 0)
-    left = [(x, width) for plugin, x, width in children if plugin in left_ids and width > 1]
+    # Le contrepoids n'est jamais dans le bloc de gauche (#2467).
+    left = [(x, width) for plugin, x, width in children if plugin in left_ids and plugin != 13 and width > 1]
     occupied = max(x + width for x, width in left) - min(x for x, _ in left) if left else 0
     return max(0, min(block - occupied, screen_width // 2))
 
@@ -203,7 +229,8 @@ def _settled_balance(ids, right_ids, left_ids, parent=None):
         # Ceux-là ne comptent pas dans le bloc de droite (#887).
         commands = {int(found[1]): found[2].strip() for found in
                     re.finditer(r"^/plugins/plugin-(\d+)/command\s+(.+)$", listing, re.M)}
-        expected = {plugin for plugin in (genmon & set(right_ids)) - {13}
+        # Le repère 46 ne fait qu'un pixel : l'attendre bloquerait la mesure.
+        expected = {plugin for plugin in (genmon & set(right_ids)) - {13, 46}
                     if not _genmon_blank(commands.get(plugin))}
         try:
             cached = _balance_cache().read_text().split()
@@ -231,6 +258,28 @@ def _settled_balance(ids, right_ids, left_ids, parent=None):
     if not screen:
         return 0
     width = balance_width(screen, children, right_ids, left_ids)
+    # Barre en train de se réarranger (bascule gauche ↔ centre, fenêtre qui
+    # s'ouvre) : une mesure isolée pouvait servir un contrepoids faux pendant
+    # 2 s, et le groupe sautait de plusieurs centaines de pixels (#2467). La
+    # valeur n'est retenue que si une seconde mesure la confirme ; sinon la
+    # précédente reste.
+    for _ in range(5):
+        time.sleep(0.15)
+        again, again_screen = _panel_children()
+        if not again_screen:
+            break
+        second = balance_width(again_screen, again, right_ids, left_ids)
+        if second == width:
+            break
+        _balance_log(f"instable : {width} puis {second} px")
+        width, children = second, again
+    else:
+        try:
+            cached = _balance_cache().read_text().split()
+        except OSError:
+            cached = []
+        _balance_log("instable : valeur précédente gardée")
+        return int(cached[1]) if len(cached) == 2 and cached[0] == key and cached[1].isdigit() else (width or 0)
     _balance_log(f"mesure : {width} px, âge {age}, greffons {children}")
     cache = _balance_cache()
     try:
@@ -623,9 +672,9 @@ def render(kind, parent=None):
         # greffon, puis seulement étire ou non le séparateur 3.
         if taskbar_alignment() == "left":
             floating = True
-        if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
-            right = set(ids[ids.index(8) + 1:])
-            width = _settled_balance(ids, right, set(ids[:ids.index(3)]), parent)
+        sides = None if floating else balance_sides(ids)
+        if sides:
+            width = _settled_balance(ids, *sides, parent)
         body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
         icon = directory / f"spacer-{width}.svg"
         if not icon.exists():
@@ -637,6 +686,15 @@ def render(kind, parent=None):
             temporary.replace(icon)
         # <tool></tool> vide : sans balise, genmon affiche son infobulle par défaut
         # (« (genmon) », commande, période) au survol de la zone à côté de Démarrer (#645).
+        return f"<img>{icon}</img><tool></tool>"
+    elif kind == "edge":
+        # Repère du bloc de droite (#2467) : un pixel transparent, sans infobulle.
+        icon = directory / "spacer-1.svg"
+        if not icon.exists():
+            temporary = icon.with_name(icon.name + f".{os.getpid()}")
+            temporary.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1">'
+                                 '<rect width="1" height="1" fill="none"/></svg>')
+            temporary.replace(icon)
         return f"<img>{icon}</img><tool></tool>"
     elif kind == "notifications":
         count = notification_count()
@@ -729,6 +787,13 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
             rounds -= 1
         now = clock()
         panel = _panel_pid()
+        if panel is None or (_seconds_since_start(panel) or 0) < SETTLE:
+            # Sorties calculées pour une barre qui n'est plus là : le lecteur
+            # ne les sert plus (#2467).
+            try:
+                (folder / "serve.panel").unlink()
+            except OSError:
+                pass
         if panel is None:
             missing_since = missing_since or now
             if now - missing_since > 20:
@@ -755,6 +820,9 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
                     if kind == "balance":
                         _balance_log(f"service : {line}")
                     _write_if_changed(folder / f"out-{kind}", line + "\n")
+            # Barre pour laquelle ces sorties valent : le lecteur vérifie
+            # qu'elle tourne encore avant de les servir.
+            _write_if_changed(folder / "serve.panel", f"{panel}\n")
         sleep(1)
     try:
         (folder / "serve.pid").unlink()
@@ -778,7 +846,7 @@ def main(argv):
     if len(argv) >= 2 and argv[1] == "overflow":
         return overflow(argv)
     if len(argv) != 2:
-        print("usage : winlux-tray status|search|balance|notifications|battery|audio|network|serve", file=sys.stderr)
+        print("usage : winlux-tray status|search|balance|edge|notifications|battery|audio|network|serve", file=sys.stderr)
         return 2
     if argv[1] == "serve":
         # Lancé depuis un greffon : ne garder aucun descripteur hérité de genmon.
