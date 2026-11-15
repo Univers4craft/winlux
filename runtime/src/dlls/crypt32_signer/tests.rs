@@ -117,3 +117,143 @@ fn informations_du_signataire_rendues() {
         assert_eq!(u32::from_le_bytes(bytes[44..48].try_into().unwrap()), 256);
     }
 }
+
+/// DER minimal : étiquette, longueur (forme courte ou longue), contenu.
+fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag];
+    let n = body.len();
+    if n < 0x80 {
+        v.push(n as u8);
+    } else if n < 0x100 {
+        v.extend_from_slice(&[0x81, n as u8]);
+    } else {
+        v.extend_from_slice(&[0x82, (n >> 8) as u8, n as u8]);
+    }
+    v.extend_from_slice(body);
+    v
+}
+
+/// #2705 : CMSG_SIGNER_AUTH_ATTR_PARAM (9) et CMSG_SIGNER_UNAUTH_ATTR_PARAM
+/// (10) rendent un CRYPT_ATTRIBUTES ; un signataire sans attributs non
+/// authentifiés donne CRYPT_E_ATTRIBUTES_MISSING.
+#[test]
+fn attributs_du_signataire_rendus_2705() {
+    // SignedData dont le SignerInfo porte [0] { contentType } et
+    // [1] { 1.3.6.1.4.1.311.2.4.1 (signature imbriquée) : SEQUENCE {} }.
+    let oid_ct = der(
+        0x06,
+        &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x03],
+    );
+    let oid_data = der(
+        0x06,
+        &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01],
+    );
+    let oid_nested = der(
+        0x06,
+        &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01],
+    );
+    let oid_sha256 = der(
+        0x06,
+        &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+    );
+    let oid_rsa = der(
+        0x06,
+        &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01],
+    );
+    let oid_signed = der(
+        0x06,
+        &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02],
+    );
+    let auth = der(
+        0xA0,
+        &der(0x30, &[oid_ct.clone(), der(0x31, &oid_data)].concat()),
+    );
+    let nested_value = der(0x30, &[]);
+    let unauth = der(
+        0xA1,
+        &der(0x30, &[oid_nested, der(0x31, &nested_value)].concat()),
+    );
+    let sid = der(0x30, &[der(0x30, &[]), der(0x02, &[5])].concat());
+    let signer = |with_unauth: bool| {
+        let mut f = vec![
+            der(0x02, &[1]),
+            sid.clone(),
+            der(0x30, &oid_sha256),
+            auth.clone(),
+            der(0x30, &oid_rsa),
+            der(0x04, &[1, 2, 3]),
+        ];
+        if with_unauth {
+            f.push(unauth.clone());
+        }
+        der(0x30, &f.concat())
+    };
+    let message = |with_unauth: bool| {
+        let sd = der(
+            0x30,
+            &[
+                der(0x02, &[1]),
+                der(0x31, &[]),
+                der(0x30, &oid_data),
+                der(0x31, &signer(with_unauth)),
+            ]
+            .concat(),
+        );
+        der(0x30, &[oid_signed.clone(), der(0xA0, &sd)].concat())
+    };
+    let msg = message(true);
+    for p in [4usize, 8] {
+        // Non authentifiés : un attribut, sa valeur en DER.
+        let (bytes, fixups) = signer_attrs(&msg, 0, p, true).unwrap().unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1);
+        // rgAttr (case 1) puis pszObjId, rgValue[0].pbData relogés.
+        assert!(fixups.iter().any(|&(at, _)| at == p));
+        let mut buf = vec![0u64; bytes.len().div_ceil(8) + 1];
+        unsafe { write_packed(&bytes, &fixups, p, buf.as_mut_ptr().cast()) };
+        if p == 8 {
+            let b = buf.as_ptr() as *const u8;
+            unsafe {
+                let rg = rd_ptr(b, 8);
+                assert_eq!(sz(rd_ptr(rg, 0)), "1.3.6.1.4.1.311.2.4.1");
+                assert_eq!(rd32(rg, 8), 1);
+                let values = rd_ptr(rg, 16);
+                assert_eq!(blob(values, 0), &nested_value[..]);
+            }
+        }
+        // Authentifiés : contentType.
+        let (bytes, _) = signer_attrs(&msg, 0, p, false).unwrap().unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1);
+    }
+    // Sans [1] : attributs manquants ; signataire absent : None.
+    assert_eq!(signer_attrs(&message(false), 0, 8, true), Some(None));
+    assert_eq!(signer_attrs(&msg, 1, 8, true), None);
+
+    // Par l'export, sur un message signé par openssl : attributs
+    // authentifiés présents, aucun attribut non authentifié.
+    let spc = [0x30, 0x03, 0x02, 0x01, 0x00];
+    let Some(sig) = crate::setup::appx_signature::tests::openssl_sign_spc(&spc, "attributs") else {
+        return;
+    };
+    let _teb = crate::process::test_teb();
+    unsafe {
+        let open: OpenFn = export("CryptMsgOpenToDecode");
+        let update: UpdateFn = export("CryptMsgUpdate");
+        let get: GetParamFn = export("CryptMsgGetParam");
+        let close: CloseFn = export("CryptMsgClose");
+        let h = open(1 | 0x10000, 0, 0, 0, 0, std::ptr::null());
+        assert_ne!(h, 0);
+        assert_eq!(update(h, sig.as_ptr(), sig.len() as u32, 1), 1);
+        let mut len = 0u32;
+        assert_eq!(get(h, 9, 0, std::ptr::null_mut(), &mut len), 1);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        assert_eq!(get(h, 9, 0, buf.as_mut_ptr().cast(), &mut len), 1);
+        assert!(
+            rd32(buf.as_ptr().cast(), 0) >= 3,
+            "contentType, signingTime, messageDigest"
+        );
+        let mut len = 0u32;
+        assert_eq!(get(h, 10, 0, std::ptr::null_mut(), &mut len), 0);
+        assert_eq!(crate::process::last_error(), 0x8009_100F);
+        close(h);
+    }
+}
