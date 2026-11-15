@@ -1936,6 +1936,12 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        // Associations, objet de données, service d'un objet x86 (#2428, lot E).
+        // SHGetImageList (#727) n'a jamais de mandataire : son IImageList
+        // reste un HIMAGELIST valable (#2435).
+        ("shell32", "SHCreateDataObject") => k!(I, I, Pidls, In(&IDATAOBJECT), Iid, OutQ),
+        ("shlwapi", "AssocCreate") => k!(GuidIn, Iid, OutQ),
+        ("shlwapi", "IUnknown_QueryService" | "#176") => k!(In(&IUNKNOWN), I, Iid, OutQ),
         // ASSOCIATIONELEMENT lu à la disposition x86 par le runtime (#2475) ;
         // l'IQueryAssociations rendu suit sa description quand elle existe.
         ("shell32", "AssocCreateForClasses") => k!(I, I, Iid, OutQ),

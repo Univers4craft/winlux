@@ -66,7 +66,48 @@ pub(super) static ISHELLITEMARRAY: Iface = Iface {
 };
 
 /// Toutes les interfaces du shell décrites ici, pour `com::by_iid`.
-pub(super) static ALL: &[&Iface] = &[&ISHELLITEM, &ISHELLITEMARRAY];
+/// IQueryAssociations {C46CA590-3C3F-11D2-BEE6-0000F805CA57} (shlwapi.h ;
+/// #2428, lot E). Objet de `dlls/shell32_releve.rs` (ASSOC_VT 8 = 3 + 5).
+pub(super) static IQUERYASSOCIATIONS: Iface = Iface {
+    name: "IQueryAssociations",
+    iid: iid(
+        0xC46C_A590,
+        0x3C3F,
+        0x11D2,
+        [0xBE, 0xE6, 0x00, 0x00, 0xF8, 0x05, 0xCA, 0x57],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, I, I]),         // Init(flags, pszAssoc, hkProgid, hwnd)
+        Some(&[I, I, I, I, I]),      // GetString(flags, str, extra, pszOut, pcchOut)
+        Some(&[I, I, I, OutPtr]),    // GetKey(flags, key, extra, HKEY*)
+        Some(&[I, I, I, I, I]),      // GetData(flags, data, extra, pvOut, pcbOut)
+        Some(&[I, I, I, Iid, OutQ]), // GetEnum(flags, assocenum, extra, riid, ppv)
+    ],
+};
+
+/// IServiceProvider {6D5140C1-7436-11CE-8034-00AA006009FA} (servprov.h ;
+/// #2428, lot E). IUnknown_QueryService le demande à un objet x86.
+pub(super) static ISERVICEPROVIDER: Iface = Iface {
+    name: "IServiceProvider",
+    iid: iid(
+        0x6D51_40C1,
+        0x7436,
+        0x11CE,
+        [0x80, 0x34, 0x00, 0xAA, 0x00, 0x60, 0x09, 0xFA],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, Iid, OutQ]), // QueryService(guidService, riid, ppv)
+    ],
+};
+
+pub(super) static ALL: &[&Iface] = &[
+    &ISHELLITEM,
+    &ISHELLITEMARRAY,
+    &IQUERYASSOCIATIONS,
+    &ISERVICEPROVIDER,
+];
 
 #[cfg(test)]
 mod tests {
@@ -117,5 +158,37 @@ mod tests {
                 "{f}"
             );
         }
+    }
+
+    /// #2428, lot E : associations, objet de données et service demandé à
+    /// un objet x86 passent par un mandataire, à la taille de stdcall.tsv.
+    #[test]
+    fn fonctions_du_lot_e_decrites_a_la_taille_de_stdcall() {
+        assert_eq!(IQUERYASSOCIATIONS.methods.len(), 5);
+        assert_eq!(ISERVICEPROVIDER.methods.len(), 1);
+        for (dll, f, octets) in [
+            ("shell32", "SHCreateDataObject", 24),
+            ("shlwapi", "AssocCreate", 24),
+            ("shlwapi", "IUnknown_QueryService", 16),
+            ("shlwapi", "#176", 16),
+        ] {
+            let (k, r) = api_kinds(dll, f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            assert_eq!(slots(k) * 4, octets, "{f}");
+            if !f.starts_with('#') {
+                assert_eq!(
+                    super::super::stdcall_bytes(dll, f),
+                    Some(octets as u16),
+                    "{f}"
+                );
+            }
+            assert!(matches!(k[k.len() - 2..], [Iid, OutQ]), "{f}");
+        }
+        // L'objet x86 interrogé est converti, pas passé brut.
+        let (k, _) = api_kinds("shlwapi", "IUnknown_QueryService").unwrap();
+        assert!(matches!(k[0], In(f) if std::ptr::eq(f, &IUNKNOWN)));
+        // AssocCreate reçoit son CLSID par valeur : quatre cases x86.
+        let (k, _) = api_kinds("shlwapi", "AssocCreate").unwrap();
+        assert!(matches!(k[0], GuidIn));
     }
 }
