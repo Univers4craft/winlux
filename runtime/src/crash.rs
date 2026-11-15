@@ -210,6 +210,8 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
 /// le code d'exception Windows. Appelé aussi par le gestionnaire de
 /// `quality`, qui s'installe après celui-ci, avant son propre dump.
 pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) -> u32 {
+    // Faute matérielle : plantage pour winlux-open (#2272).
+    crate::dlls::kernel32::record_crash();
     // Processus figés par celui-ci (Crashpad en plein vidage) : relancés
     // avant toute autre chose, sinon ils restent figés pour toujours (#1787).
     crate::dlls::electron_win32::resume_suspended();
