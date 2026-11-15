@@ -2361,6 +2361,9 @@ fn cdp_result(method: &str, target: (&str, &str, &str)) -> Option<String> {
         // Chrome DevTools) ; .disable (#2647).
         "Log.enable" | "Runtime.enable" | "Network.enable" | "Page.enable" | "Log.disable"
         | "Runtime.disable" | "Network.disable" | "Page.disable" => Some("{}".into()),
+        // HeapProfiler.collectGarbage rend un objet vide ; WebKitGTK n'a pas
+        // de ramasse-miettes déclenché par l'hôte : accepté sans effet (#2653).
+        "HeapProfiler.collectGarbage" => Some("{}".into()),
         // Target.getTargets : une seule cible, la page de la vue.
         "Target.getTargets" => {
             let (id, title, url) = target;
@@ -3488,6 +3491,15 @@ mod tests {
         for m in ["Network.disable", "Log.disable", "Runtime.disable"] {
             assert_eq!(cdp_result(m, ("a", "", "")).as_deref(), Some("{}"), "{m}");
         }
+    }
+
+    /// #2653 : HeapProfiler.collectGarbage répond par un objet vide.
+    #[test]
+    fn devtools_ramasse_miettes_2653() {
+        assert_eq!(
+            cdp_result("HeapProfiler.collectGarbage", ("a", "", "")).as_deref(),
+            Some("{}")
+        );
     }
 
     /// #2635 : les filtres avec types de source se retiennent et se
