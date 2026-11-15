@@ -985,14 +985,28 @@ mod tests {
             assert_eq!(crate::process::last_error(), 487);
             assert_eq!(map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, rx), 0);
             assert_eq!(crate::process::last_error(), 487);
-            // Adresse libre : la vue y est posée.
+            // Adresse libre : la vue y est posée. Une adresse libérée est
+            // commune au processus de test, un autre test peut la prendre
+            // avant nous (refus 487, à raison) : nouvelle adresse libre,
+            // 20 essais au plus (#2672).
             unmap_view_of_file(rx);
-            assert_eq!(
-                map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, rx),
-                rx
-            );
-            assert_eq!(*(rx as *const u8), 0xC3);
-            unmap_view_of_file(rx);
+            let mut libre = rx;
+            let mut posee = false;
+            for _ in 0..20 {
+                let v = map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, libre);
+                if v == libre {
+                    assert_eq!(*(v as *const u8), 0xC3);
+                    unmap_view_of_file(v);
+                    posee = true;
+                    break;
+                }
+                assert_eq!(v, 0);
+                assert_eq!(crate::process::last_error(), 487);
+                libre = map_view_of_file(h, _FILE_MAP_READ, 0, 0, 0x10000);
+                assert_ne!(libre, 0);
+                unmap_view_of_file(libre);
+            }
+            assert!(posee, "aucune adresse libre obtenue en 20 essais");
             unmap_view_of_file(rw);
             close_handle(h);
         }
