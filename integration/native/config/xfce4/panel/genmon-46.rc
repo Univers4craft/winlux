@@ -1,0 +1,5 @@
+Command=/usr/bin/winlux-tray edge
+UseLabel=0
+Text=
+UpdatePeriod=600000
+Font=DejaVu Sans 10

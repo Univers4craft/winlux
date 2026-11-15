@@ -24,8 +24,11 @@
 
 mod com;
 mod com_audio;
+mod com_mf;
+mod com_mf_chaine;
 mod com_netfw;
 mod com_nlm;
+mod com_ole;
 mod com_shell;
 mod com_taskschd;
 mod comctl;
@@ -53,6 +56,7 @@ mod vulkan;
 mod wow64;
 
 pub(crate) use com_audio::iface_to32;
+pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
@@ -114,6 +118,13 @@ static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 /// Un programme 32 bits est-il en cours dans ce processus ?
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Test seulement, dans un processus de test relancé à part : fait comme si
+/// le programme était x86, pour lire les structures à sa disposition.
+#[cfg(test)]
+pub(crate) fn force_active_for_test() {
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
@@ -722,6 +733,8 @@ pub fn reexec_if_needed() {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os();
     let _ = args.next();
+    // Le descripteur de diagnostic passe à l'exécutable relancé (#2530).
+    crate::log::keep_diag_fd_across_exec();
     let error = std::process::Command::new("/proc/self/exe")
         .arg0(std::env::args_os().next().unwrap_or_default())
         .args(args)
@@ -2038,7 +2051,7 @@ fn note_result(desc: u32, esp: u32, r: u64) {
             if let Some(filter) = history_stream() {
                 let line = passage_line(&p);
                 if stream_match(filter, &line) {
-                    eprintln!("winlux[wow32] {line}");
+                    crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
                 }
             }
             return;
@@ -2050,7 +2063,7 @@ fn note(p: Passage) {
     if let Some(filter) = history_stream() {
         let line = passage_line(&p);
         if stream_match(filter, &line) {
-            eprintln!("winlux[wow32] {line}");
+            crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
         }
     }
     let Some(s) = my_slot() else {
@@ -2170,14 +2183,18 @@ impl SigLine {
         self.push(&b[i..]);
     }
 
-    /// Termine la ligne et l'écrit sur la sortie d'erreur en un seul write(2).
+    /// Termine la ligne et l'écrit sur le descripteur de diagnostic (#2530),
+    /// jamais dans le tube d'un programme, en un seul write(2).
     fn write(mut self) {
         if self.len == self.buf.len() {
             self.len -= 1;
         }
         self.buf[self.len] = b'\n';
-        unsafe {
-            libc::write(2, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+        let fd = crate::log::diag_fd();
+        if fd >= 0 {
+            unsafe {
+                libc::write(fd, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+            }
         }
     }
 }
@@ -2649,9 +2666,12 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         });
     }
     if !d.supported {
-        eprintln!(
-            "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).",
-            d.label
+        crate::log::write_diag(
+            format!(
+                "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).\n",
+                d.label
+            )
+            .as_bytes(),
         );
         crate::thunks::log_missing(&format!("{} (32 bits)", d.label), true);
         crate::crash::record_failure(
@@ -3262,6 +3282,61 @@ mod tests {
         for n in ["iswalpha", "_iswalpha_l", "_findfirst64i32", "_wfindnext32"] {
             let a = crate::dlls::lookup("ucrtbase", n).unwrap();
             assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+    }
+
+    /// #2512 : toute fonction que shlwapi sert en x64 a une passerelle x86.
+    /// Les enveloppes A et W engendrées par macro_rules! n'avaient pas de
+    /// signature : l'outil de déploiement d'Office mourait sur PathIsUNCW.
+    #[test]
+    fn shlwapi_toujours_servie_en_x86() {
+        let exports: Vec<&str> = crate::dlls::builtin_exports()
+            .into_iter()
+            .filter(|(dll, _)| *dll == "shlwapi")
+            .flat_map(|(_, names)| names)
+            .collect();
+        assert!(exports.contains(&"PathIsUNCW"));
+        // Les adresses sont notées au premier lookup.
+        let addrs: Vec<(&str, usize)> = exports
+            .iter()
+            .filter_map(|n| Some((*n, crate::dlls::lookup("shlwapi", n)?)))
+            .collect();
+        let notes: std::collections::HashSet<usize> = NOTES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(a, _, _)| *a)
+            .collect();
+        let mut manquants: Vec<&str> = addrs
+            .iter()
+            .filter(|(n, a)| {
+                notes.contains(a)
+                    && sig_of_addr(*a).is_none()
+                    && override_stub("shlwapi", n).is_none()
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        manquants.sort();
+        assert!(manquants.is_empty(), "sans passerelle x86 : {manquants:?}");
+        for n in [
+            "PathIsUNCW",
+            "PathGetArgsW",
+            "PathStripToRootW",
+            "PathIsSystemFolderW",
+        ] {
+            let a = crate::dlls::lookup("shlwapi", n).unwrap();
+            assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+        assert_eq!(
+            sig_of_addr(crate::dlls::lookup("shlwapi", "PathIsSystemFolderW").unwrap()).map(|s| s
+                .split('>')
+                .next()
+                .unwrap()
+                .len()),
+            Some(2)
+        );
+        for n in ["wnsprintfA", "wnsprintfW"] {
+            assert!(override_stub("shlwapi", n).is_some(), "{n}");
         }
     }
 
