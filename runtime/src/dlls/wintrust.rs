@@ -98,6 +98,9 @@ struct State {
     _certs: Vec<u64>,
     _steps: Vec<u32>,
     contexts: Vec<usize>,
+    /// Chaîne du signataire (CRYPT_PROVIDER_SGNR.pChainContext), libérée
+    /// à la fermeture ; 0 sans certificat.
+    chain: usize,
     signer_at: usize,
     certs_at: usize,
     cert_count: usize,
@@ -164,6 +167,13 @@ unsafe fn build_state(
             contexts.push(ctx);
         }
     }
+    // Chaîne du signataire, comme celle que Windows range dans
+    // CRYPT_PROVIDER_SGNR.pChainContext : l'application la passe telle
+    // quelle à CertVerifyCertificateChainPolicy (#2692).
+    let mut chain = 0usize;
+    if let Some(&leaf) = contexts.first() {
+        crate::dlls::crypt32::CertGetCertificateChain(0, leaf, 0, store, 0, 0, 0, &mut chain);
+    }
     let mut cert_block = block(pc_size * contexts.len().max(1));
     let cb = cert_block.as_mut_ptr() as usize;
     for (i, &ctx) in contexts.iter().enumerate() {
@@ -183,6 +193,7 @@ unsafe fn build_state(
     put32(sb, sg[2], contexts.len() as u32);
     put_ptr(sb, sg[3], cb);
     put32(sb, sg[6], status);
+    put_ptr(sb, sg[9], chain);
     let mut steps = vec![0u32; TRUST_STEPS];
     let mut data_block = block(pd_size);
     let db = data_block.as_mut_ptr() as usize;
@@ -208,6 +219,7 @@ unsafe fn build_state(
             _steps: steps,
             cert_count: contexts.len(),
             contexts,
+            chain,
             signer_at: sb,
             certs_at: cb,
         },
@@ -217,6 +229,9 @@ unsafe fn build_state(
 
 fn close_state(h: usize) {
     if let Some(s) = states().remove(&h) {
+        if s.chain != 0 {
+            unsafe { crate::dlls::crypt32::CertFreeCertificateChain(s.chain) };
+        }
         for c in s.contexts {
             crate::dlls::crypt32::CertFreeCertificateContext(c);
         }
@@ -442,6 +457,35 @@ mod tests {
                 .collect();
             assert_eq!(ders, vec![CODE_ROOTS[0], CODE_ROOTS[1]]);
             drop(s);
+            close_state(h);
+        }
+    }
+
+    #[test]
+    fn chaine_du_signataire_dans_l_etat_2692() {
+        // pChainContext du signataire rempli (champ 9 du SGNR, +56 en x64),
+        // chaîne qui commence par le signataire : l'outil d'Office la passe
+        // telle quelle à CertVerifyCertificateChainPolicy.
+        use crate::setup::appx_signature::CODE_ROOTS;
+        if crate::dlls::hostssl::ssl().is_none() {
+            return;
+        }
+        let certs = vec![CODE_ROOTS[0].to_vec(), CODE_ROOTS[1].to_vec()];
+        let mut data = vec![0u64; 16];
+        unsafe {
+            let h = build_state(data.as_mut_ptr() as usize, 0, 0, 0, &certs);
+            let (sg, _) = layout(PROVIDER_SGNR, 8);
+            assert_eq!(sg[9], 56);
+            let sgnr = WTHelperGetProvSignerFromChain(h, 0, 0, 0);
+            assert_ne!(sgnr, 0);
+            let chain = *((sgnr + sg[9]) as *const usize);
+            assert_ne!(chain, 0, "pChainContext rempli");
+            // CERT_CHAIN_CONTEXT x64 : rgpChain à +16 ; CERT_SIMPLE_CHAIN :
+            // rgpElement à +16 ; CERT_CHAIN_ELEMENT : pCertContext à +8.
+            let simple = **((chain + 16) as *const *const usize);
+            let element = **((simple + 16) as *const *const usize);
+            let cert = *((element + 8) as *const usize);
+            assert_eq!(crate::dlls::crypt32::cert_der(cert), CODE_ROOTS[0]);
             close_state(h);
         }
     }
