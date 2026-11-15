@@ -60,6 +60,7 @@ pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
 pub mod crypt32_encode;
+pub mod crypt32_signer;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_combine;
