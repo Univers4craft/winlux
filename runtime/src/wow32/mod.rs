@@ -120,6 +120,13 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// Test seulement, dans un processus de test relancé à part : fait comme si
+/// le programme était x86, pour lire les structures à sa disposition.
+#[cfg(test)]
+pub(crate) fn force_active_for_test() {
+    ACTIVE.store(true, Ordering::Relaxed);
+}
+
 /// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
 pub fn refresh_environ() {
     if active() {

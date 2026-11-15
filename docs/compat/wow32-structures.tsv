@@ -169,7 +169,7 @@ jumplist_com.rs	Obj	interne	objets ICustomDestinationList et IObjectArray du run
 kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
 kernel32.rs	Entry	interne	test unitaire
 kernel32.rs	MemoryBasicInformation	x86	wow64.c n° 8-9 (28 octets)
-kernel32.rs	Overlapped	a-verifier	
+kernel32.rs	Overlapped	a-verifier	kernel32 (ReadFile, WriteFile, GetOverlappedResult, ReadDirectoryChangesW) passe par ov_get, ov_set, ov_offset et ov_event (#1408, #2537) ; ws2_32, tubes nommés, DeviceIoControl encore à vérifier
 kernel32.rs	OverlappedEntry	a-verifier	
 kernel32.rs	ProcessInformation	x86	wow64.c n° 42-45 (PROCESS_INFORMATION de 16 octets)
 kernel32.rs	SecurityAttributes	a-verifier	
