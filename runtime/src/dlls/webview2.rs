@@ -296,6 +296,8 @@ struct Com {
     opts: Mutex<ControllerOpts>,
     /// Objets hôtes de la vue (AddHostObjectToScript, #2596).
     hosts: Mutex<Vec<HostObject>>,
+    /// Réglages de vue Settings3 à 9, lus tels qu'écrits (#2601).
+    more_settings: Mutex<[u32; 8]>,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -308,6 +310,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         args,
         opts: Mutex::new(ControllerOpts::default()),
         hosts: Mutex::new(Vec::new()),
+        more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
     });
     Box::into_raw(b) as usize
 }
@@ -1869,7 +1872,71 @@ fn settings_methods() -> Vec<(usize, usize)> {
         m.push((get, get_true as *const () as usize));
         m.push((put, ok1 as *const () as usize));
     }
+    // ICoreWebView2Settings3 à 9 (#2601) : un get/put par propriété, aux
+    // méthodes 20 à 35, valeurs par défaut de la documentation publique.
+    let more: [(usize, usize); 8] = [
+        (
+            more_get::<0> as *const () as usize,
+            more_put::<0> as *const () as usize,
+        ),
+        (
+            more_get::<1> as *const () as usize,
+            more_put::<1> as *const () as usize,
+        ),
+        (
+            more_get::<2> as *const () as usize,
+            more_put::<2> as *const () as usize,
+        ),
+        (
+            more_get::<3> as *const () as usize,
+            more_put::<3> as *const () as usize,
+        ),
+        (
+            more_get::<4> as *const () as usize,
+            more_put::<4> as *const () as usize,
+        ),
+        (
+            more_get::<5> as *const () as usize,
+            more_put::<5> as *const () as usize,
+        ),
+        (
+            more_get::<6> as *const () as usize,
+            more_put::<6> as *const () as usize,
+        ),
+        (
+            more_get::<7> as *const () as usize,
+            more_put::<7> as *const () as usize,
+        ),
+    ];
+    for (k, (get, put)) in more.into_iter().enumerate() {
+        m.push((20 + 2 * k, get));
+        m.push((21 + 2 * k, put));
+    }
     m
+}
+
+/// Défauts documentés (learn.microsoft.com, ICoreWebView2Settings3 à 9) :
+/// AreBrowserAcceleratorKeysEnabled TRUE, IsPasswordAutosaveEnabled FALSE,
+/// IsGeneralAutofillEnabled TRUE, IsPinchZoomEnabled TRUE,
+/// IsSwipeNavigationEnabled TRUE, HiddenPdfToolbarItems
+/// COREWEBVIEW2_PDF_TOOLBAR_ITEMS_NONE (0), IsReputationCheckingRequired
+/// TRUE, IsNonClientRegionSupportEnabled FALSE. Le moteur WebKitGTK n'en
+/// applique encore aucun : ils se relisent tels qu'écrits.
+const MORE_SETTINGS_DEFAULTS: [u32; 8] = [1, 0, 1, 1, 1, 0, 1, 0];
+
+unsafe extern "win64" fn more_get<const K: usize>(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = super::lock(&com(this).more_settings)[K];
+    S_OK
+}
+unsafe extern "win64" fn more_put<const K: usize>(this: usize, value: u32) -> i32 {
+    // Les BOOL sont rendus 0 ou 1 ; HiddenPdfToolbarItems (5) est un
+    // masque, gardé tel quel.
+    let value = if K == 5 { value } else { u32::from(value != 0) };
+    super::lock(&com(this).more_settings)[K] = value;
+    S_OK
 }
 unsafe extern "win64" fn get_true(_this: usize, out: *mut i32) -> i32 {
     if out.is_null() {
@@ -2268,5 +2335,42 @@ mod tests {
         // La vue libérée rend l'objet encore retenu.
         com_release(view);
         assert_eq!(REFS.load(Ordering::SeqCst), 1);
+    }
+
+    /// #2601 : les réglages de vue Settings3 à 9 se lisent avec leurs
+    /// défauts documentés et se relisent tels qu'écrits.
+    #[test]
+    fn reglages_de_vue_3_a_9_2601() {
+        let set = vtable(Family::Settings);
+        let stub = not_implemented as *const () as usize;
+        for m in 20..36 {
+            assert_ne!(set[3 + m], stub, "méthode {m}");
+        }
+        let obj = new_com(Family::Settings, None, None, Args::default());
+        let get = |m: usize| -> u32 {
+            let f: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+                unsafe { std::mem::transmute(set[3 + m]) };
+            let mut v = 7u32;
+            assert_eq!(unsafe { f(obj, &mut v) }, S_OK);
+            v
+        };
+        let put = |m: usize, v: u32| {
+            let f: unsafe extern "win64" fn(usize, u32) -> i32 =
+                unsafe { std::mem::transmute(set[3 + m]) };
+            assert_eq!(unsafe { f(obj, v) }, S_OK);
+        };
+        let defaults: Vec<u32> = (0..8).map(|k| get(20 + 2 * k)).collect();
+        assert_eq!(defaults, [1, 0, 1, 1, 1, 0, 1, 0]);
+        // put_AreBrowserAcceleratorKeysEnabled(FALSE), vu chez Teams.
+        put(21, 0);
+        assert_eq!(get(20), 0);
+        put(23, 5);
+        assert_eq!(get(22), 1);
+        put(31, 0x41);
+        assert_eq!(get(30), 0x41);
+        let f: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+            unsafe { std::mem::transmute(set[3 + 20]) };
+        assert_eq!(unsafe { f(obj, std::ptr::null_mut()) }, E_POINTER);
+        com_release(obj);
     }
 }
