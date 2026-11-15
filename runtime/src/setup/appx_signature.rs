@@ -41,13 +41,26 @@
 /// Certificat public de DigiCert
 /// (https://cacerts.digicert.com/DigiCertHighAssuranceEVRootCA.crt),
 /// SHA-256 : 7431e5f4c3c1ce4690774f0b61e05440883ba9a01ed00ba6abd7806ed3b118cf.
-pub(crate) const CODE_ROOTS: [&[u8]; 5] = [
+///
+/// Et DigiCert Assured ID Root CA, retirée elle aussi du magasin TLS mais
+/// racine de « DigiCert SHA2 Assured ID Timestamping CA », l'autorité qui
+/// horodate des greffons d'éditeurs dont le certificat a expiré depuis
+/// (#2683). Certificat public de DigiCert
+/// (https://cacerts.digicert.com/DigiCertAssuredIDRootCA.crt),
+/// SHA-256 : 3e9099b5015e8f486c00bcea9d111ee721faba355a89bcf1df69561e3dc6325c.
+pub(crate) const CODE_ROOTS: [&[u8]; 6] = [
     include_bytes!("racines_code/microsoft-root-2010.cer"),
     include_bytes!("racines_code/microsoft-root-2011.cer"),
     include_bytes!("racines_code/microsoft-identity-verification-root-2020.cer"),
     include_bytes!("racines_code/microsoft-time-stamp-root-2014.cer"),
     include_bytes!("racines_code/digicert-high-assurance-ev-root.cer"),
+    include_bytes!("racines_code/digicert-assured-id-root.cer"),
 ];
+
+/// Empreinte SHA-256 attendue de la racine DigiCert Assured ID (#2683).
+#[cfg(test)]
+const DIGICERT_ASSURED_ID_ROOT_SHA256: &str =
+    "3e9099b5015e8f486c00bcea9d111ee721faba355a89bcf1df69561e3dc6325c";
 
 /// Empreinte SHA-256 attendue de la racine DigiCert de `CODE_ROOTS` (#2593).
 #[cfg(test)]
@@ -390,7 +403,7 @@ fn check_tsa(tsa: &Cert, extra: &[Vec<u8>], at: i64) -> Result<(), String> {
     }
     match hostssl::verify_code(&tsa.der, extra, &CODE_ROOTS, Some(at)) {
         Some(v) if v.error == 0 => Ok(()),
-        Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason(v.error))),
+        Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason_of(&v))),
         None => Err("chaîne de l'autorité d'horodatage non vérifiable".into()),
     }
 }
@@ -1443,6 +1456,26 @@ pub(crate) mod tests {
         let t = expect(root, 0x30).expect("certificat");
         let cert = parse_cert(root, t.body).expect("certificat");
         assert!(format_dn(&cert.subject).contains("DigiCert High Assurance EV Root CA"));
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let v = hostssl::verify_code(root, &[], &CODE_ROOTS, None).expect("vérifiable");
+        assert_eq!(v.error, 0, "{}", chain_reason_of(&v));
+    }
+
+    #[test]
+    fn racine_d_horodatage_digicert_assured_id() {
+        // #2683 : la racine DigiCert Assured ID est celle publiée par
+        // DigiCert (empreinte vérifiée) et elle est dans CODE_ROOTS.
+        let root = CODE_ROOTS[5];
+        let hex: String = crate::dlls::bcrypt::sha256(root)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(hex, DIGICERT_ASSURED_ID_ROOT_SHA256);
+        let t = expect(root, 0x30).expect("certificat");
+        let cert = parse_cert(root, t.body).expect("certificat");
+        assert!(format_dn(&cert.subject).contains("DigiCert Assured ID Root CA"));
         if hostssl::ssl().is_none() {
             return;
         }
