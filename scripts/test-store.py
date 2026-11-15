@@ -276,11 +276,12 @@ esac
     check("state=done" in progress and "percent=100" in progress, "installation apt terminée")
     check("install --no-install-recommends -- gimp" in log.read_text(), "commande apt")
     # Paquets compagnons (#2075) : virt-manager arrive avec QEMU et le pilote
-    # libvirt, marqués automatiques, jamais libvirt-daemon-system (systemd).
+    # libvirt dans le même appel apt (une seule autorisation, #2199), jamais
+    # libvirt-daemon-system (systemd).
     st("install", "apt:virt-manager")
     text = log.read_text()
-    check("install --no-install-recommends -- virt-manager" in text
-          and "install --no-install-recommends --mark-auto -- qemu-system-x86 " in text
+    check("install --no-install-recommends -- virt-manager qemu-system-x86 " in text
+          and "--mark-auto -- qemu-system-x86" not in text
           and "libvirt-daemon-driver-qemu" in text and "libvirt-daemon-system" not in text,
           "compagnons de virt-manager (#2075)")
     st("update", "flatpak:org.kde.krita")
