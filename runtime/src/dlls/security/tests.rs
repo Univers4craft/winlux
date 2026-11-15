@@ -657,3 +657,24 @@ fn jeton_lowbox_par_ntdll() {
         );
     }
 }
+
+#[test]
+fn taille_requise_d_un_sid() {
+    // #2533 : même taille que GetLengthSid sur le SID construit.
+    let nt = [0u8, 0, 0, 0, 0, 5];
+    for count in 0u8..=8 {
+        let mut sid = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                AllocateAndInitializeSid(nt.as_ptr(), count, 32, 544, 1, 2, 3, 4, 5, 6, &mut sid),
+                1
+            );
+            assert_eq!(GetSidLengthRequired(count), GetLengthSid(sid), "{count}");
+            FreeSid(sid as *mut c_void);
+        }
+    }
+    unsafe {
+        assert_eq!(GetSidLengthRequired(2), 16);
+        assert_eq!(GetSidLengthRequired(15), 68);
+    }
+}
