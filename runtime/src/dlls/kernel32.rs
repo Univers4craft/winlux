@@ -7644,11 +7644,11 @@ pub(crate) fn clr_sync_open(name: &str, semaphore: bool) -> (usize, u32) {
     } else {
         SHARED_KIND_MUTEX
     };
-    let h = open_sync_by_name(name, kind);
+    let h = open_sync_by_name(name, kind, false);
     (h, crate::process::last_error())
 }
 
-unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
+unsafe fn open_named_sync(name: *const u8, event: bool, inherit: bool) -> usize {
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
@@ -7658,13 +7658,17 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
     } else {
         SHARED_KIND_MUTEX
     };
-    open_sync_by_name(&crate::dlls::cstr(name), kind)
+    open_sync_by_name(&crate::dlls::cstr(name), kind, inherit)
 }
 /// Open{Event,Mutex,Semaphore} : objet nommé de ce processus, ou d'un autre
-/// processus du même compte (#20).
-fn open_sync_by_name(name: &str, kind: u32) -> usize {
+/// processus du même compte (#20). `inherit` (bInheritHandle) rend le handle
+/// héritable par les enfants, comme OpenFileMapping (#2114).
+fn open_sync_by_name(name: &str, kind: u32, inherit: bool) -> usize {
     let h = open_sync_by_name_inner(name, kind);
     remember_name(h, name);
+    if h != 0 && inherit {
+        crate::dlls::inherit::set(h, true);
+    }
     crate::trace!(
         "Open{}({name}) = 0x{h:x} (erreur {})",
         kind_label(kind),
@@ -7715,15 +7719,15 @@ pub unsafe extern "win64" fn open_semaphore_w(
     inherit: i32,
     name: *const u16,
 ) -> usize {
-    if inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    open_sync_by_name(&crate::dlls::wstr(name), SHARED_KIND_SEMAPHORE)
+    open_sync_by_name(
+        &crate::dlls::wstr(name),
+        SHARED_KIND_SEMAPHORE,
+        inherit != 0,
+    )
 }
 /// OpenSemaphoreA
 pub unsafe extern "win64" fn open_semaphore_a(
@@ -7731,19 +7735,61 @@ pub unsafe extern "win64" fn open_semaphore_a(
     inherit: i32,
     name: *const u8,
 ) -> usize {
-    if inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    open_sync_by_name(&crate::dlls::cstr(name), SHARED_KIND_SEMAPHORE)
+    open_sync_by_name(
+        &crate::dlls::cstr(name),
+        SHARED_KIND_SEMAPHORE,
+        inherit != 0,
+    )
 }
 #[cfg(test)]
 mod reviewed_named_sync_tests {
     use super::*;
+    #[test]
+    fn ouverture_heritable_des_objets_nommes() {
+        // #2114 : bInheritHandle=TRUE rend un handle héritable au lieu de refuser avec 50.
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let ev = create_event_a(0, 1, 0, b"winlux-2114-ev\0".as_ptr());
+            let mx = create_mutex_a(0, 0, b"winlux-2114-mx\0".as_ptr());
+            let se = create_semaphore_a(0, 1, 2, b"winlux-2114-se\0".as_ptr());
+            assert!(ev != 0 && mx != 0 && se != 0);
+            let wide = |t: &str| t.encode_utf16().chain([0]).collect::<Vec<u16>>();
+            let opened = [
+                open_event_a(0x1F0003, 1, b"winlux-2114-ev\0".as_ptr()),
+                crate::dlls::kernel32_ext::open_event_w(
+                    0x1F0003,
+                    1,
+                    wide("winlux-2114-ev").as_ptr(),
+                ),
+                open_mutex_a(0x1F0001, 1, b"winlux-2114-mx\0".as_ptr()),
+                crate::dlls::kernel32_legacy::open_mutex_w(
+                    0x1F0001,
+                    1,
+                    wide("winlux-2114-mx").as_ptr(),
+                ),
+                open_semaphore_a(0x1F0003, 1, b"winlux-2114-se\0".as_ptr()),
+                open_semaphore_w(0x1F0003, 1, wide("winlux-2114-se").as_ptr()),
+            ];
+            for (i, &h) in opened.iter().enumerate() {
+                assert_ne!(
+                    h,
+                    0,
+                    "ouverture {i}, erreur {}",
+                    crate::process::last_error()
+                );
+                assert!(crate::dlls::inherit::is(h), "ouverture {i} héritable");
+            }
+            let simple = open_event_a(0x1F0003, 0, b"winlux-2114-ev\0".as_ptr());
+            assert!(simple != 0 && !crate::dlls::inherit::is(simple));
+            for h in opened.into_iter().chain([simple, ev, mx, se]) {
+                assert_eq!(close_handle(h), 1);
+            }
+        }
+    }
     #[test]
     fn opened_event_keeps_name_alive_until_last_close() {
         unsafe {
@@ -7815,19 +7861,11 @@ mod created_last_error_tests {
         }
     }
 }
-pub unsafe extern "win64" fn open_event_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
-    if _inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
-    open_named_sync(name, true)
+pub unsafe extern "win64" fn open_event_a(_access: u32, inherit: i32, name: *const u8) -> usize {
+    open_named_sync(name, true, inherit != 0)
 }
-pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
-    if _inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
-    open_named_sync(name, false)
+pub unsafe extern "win64" fn open_mutex_a(_access: u32, inherit: i32, name: *const u8) -> usize {
+    open_named_sync(name, false, inherit != 0)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
     if !trace_on() {
