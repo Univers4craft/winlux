@@ -3602,8 +3602,16 @@ pub unsafe extern "win64" fn get_module_handle_a(name: *const u8) -> usize {
 /// Corps commun de `get_module_handle_a` et `get_module_handle_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn get_module_handle_str(name: &str) -> usize {
-    let n = name;
-    crate::dlls::module_handle(n).unwrap_or(0)
+    match crate::dlls::module_handle(name) {
+        Some(h) => h,
+        None => {
+            // ERROR_MOD_NOT_FOUND, comme GetModuleHandleEx et LoadLibrary :
+            // sans code, le programme relisait celui d'un appel précédent,
+            // parfois 0, et HRESULT_FROM_WIN32 en faisait un succès (#2113).
+            crate::process::set_last_error(126);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
     if name.is_null() {
