@@ -86,6 +86,8 @@ mod version_tests {
 fn main() {
     // Journal du compte (#633), fixé tant qu'il n'y a qu'un fil.
     journal::init();
+    // Où vont nos lignes de diagnostic, si un parent Winlux l'a dit (#2515).
+    log::init_diag_fd();
     // Code de sortie Windows complet pour winlux-open (#1205).
     dlls::kernel32::exit_code_file_init();
     let mut args = std::env::args_os();
