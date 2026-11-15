@@ -664,8 +664,33 @@ pub fn shell32_exports() -> crate::dlls::Exports {
     }
 }
 
+/// GetAppContainerFolderPath (userenv) : selon la documentation publique, le
+/// même chemin que SHGetKnownFolderPath(FOLDERID_LocalAppData), rendu par
+/// CoTaskMemAlloc ; E_INVALIDARG si un des deux paramètres est NULL (#2548).
+pub unsafe extern "win64" fn GetAppContainerFolderPath(sid: *const u16, out: *mut *mut u16) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+    const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
+    const E_FAIL: i32 = 0x8000_4005u32 as i32;
+    if sid.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = std::ptr::null_mut();
+    let Some(path) = known_folder_path("F1B32785-6FBA-4FCF-9D55-7B8E7F157091", 0) else {
+        return E_FAIL;
+    };
+    let w: Vec<u16> = path.encode_utf16().chain([0]).collect();
+    let p = crate::dlls::ole32::co_task_mem_alloc(w.len() * 2) as *mut u16;
+    if p.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+    *out = p;
+    0
+}
+
 pub fn userenv_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "GetAppContainerFolderPath" => fn GetAppContainerFolderPath,
         "GetUserProfileDirectoryW" => fn GetUserProfileDirectoryW,
         "GetUserProfileDirectoryA" => fn GetUserProfileDirectoryA,
         "GetProfilesDirectoryW" => fn GetProfilesDirectoryW,
@@ -676,6 +701,35 @@ pub fn userenv_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dossier_d_un_conteneur_est_local_app_data() {
+        // #2548 : même chemin que FOLDERID_LocalAppData ; NULL refusé.
+        let _teb = crate::process::test_teb();
+        let _g = crate::mounts::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(crate::dlls::lookup("userenv", "GetAppContainerFolderPath").is_some());
+        let sid: Vec<u16> = "S-1-15-2-1-2-3-4-5-6-7".encode_utf16().chain([0]).collect();
+        let mut out = std::ptr::null_mut::<u16>();
+        unsafe {
+            assert_eq!(GetAppContainerFolderPath(sid.as_ptr(), &mut out), 0);
+            assert!(!out.is_null());
+            assert_eq!(
+                Some(crate::dlls::wstr(out)),
+                known_folder_path("F1B32785-6FBA-4FCF-9D55-7B8E7F157091", 0)
+            );
+            crate::dlls::ole32::co_task_mem_free(out.cast());
+            assert_eq!(
+                GetAppContainerFolderPath(std::ptr::null(), &mut out) as u32,
+                0x8007_0057
+            );
+            assert_eq!(
+                GetAppContainerFolderPath(sid.as_ptr(), std::ptr::null_mut()) as u32,
+                0x8007_0057
+            );
+        }
+    }
 
     #[test]
     fn dossiers_speciaux() {
