@@ -246,6 +246,9 @@ enum Family {
     ControllerOptions,
     ProcessCollection,
     Profile,
+    CookieManager,
+    Cookie,
+    CookieList,
 }
 
 impl Family {
@@ -265,6 +268,9 @@ impl Family {
             // Seule l'interface de base est servie (#2614) : Profile2 à 8
             // sont refusées plutôt que rendues vides.
             Family::Profile => &PROFILE_IIDS[..1],
+            Family::CookieManager => &COOKIE_MANAGER_IIDS,
+            Family::Cookie => &COOKIE_IIDS,
+            Family::CookieList => &COOKIE_LIST_IIDS,
         }
     }
 }
@@ -304,6 +310,8 @@ struct Com {
     more_settings: Mutex<[u32; 8]>,
     /// MemoryUsageTargetLevel de la vue (#2613) : 0 normal, 1 bas.
     memory_level: AtomicU32,
+    /// Cookie (un élément) ou liste de cookies (#2637).
+    cookies: Mutex<Vec<CookieData>>,
     /// Filtres WebResourceRequested avec types de source (#2635) :
     /// (URI, contexte, types restants), dans l'ordre d'ajout.
     filters: Mutex<Vec<(String, i32, u32)>>,
@@ -323,6 +331,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         hosts: Mutex::new(Vec::new()),
         more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
         memory_level: AtomicU32::new(0),
+        cookies: Mutex::new(Vec::new()),
         filters: Mutex::new(Vec::new()),
         frame_id: AtomicU32::new(0),
     });
@@ -435,6 +444,9 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
         Family::ProcessCollection => (PROCESS_COLLECTION_SLOTS, process_collection_methods()),
         Family::Profile => (PROFILE_SLOTS, profile_methods()),
+        Family::CookieManager => (COOKIE_MANAGER_SLOTS, cookie_manager_methods()),
+        Family::Cookie => (COOKIE_SLOTS, cookie_methods()),
+        Family::CookieList => (COOKIE_LIST_SLOTS, cookie_list_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
@@ -556,6 +568,9 @@ struct Env {
     user_data_win: String,
     /// Profil par défaut de l'environnement (#2614).
     profile: Mutex<ProfileState>,
+    /// Cookies posés par l'application (#2637), gardés en mémoire : ils
+    /// ne sont pas encore partagés avec le moteur WebKitGTK.
+    cookies: Mutex<Vec<CookieData>>,
 }
 
 /// Réglages modifiables du profil (#2614).
@@ -611,6 +626,7 @@ unsafe extern "win64" fn create_environment_with_options(
         language,
         user_data_win: wstr(user_data_folder),
         profile: Mutex::new(ProfileState::default()),
+        cookies: Mutex::new(Vec::new()),
     });
     crate::trace!("WebView2 : environnement (données {:?})", env.user_data);
     add_ref(handler);
@@ -818,6 +834,398 @@ unsafe extern "win64" fn web_get_profile(this: usize, out: *mut usize) -> i32 {
         Args::default(),
     );
     S_OK
+}
+
+// --- ICoreWebView2CookieManager, Cookie, CookieList (#2637) ---
+
+/// Un cookie, avec les défauts de la documentation publique de
+/// ICoreWebView2Cookie : chemin « / », session (-1), LAX, ni HttpOnly ni
+/// Secure.
+#[derive(Clone, Debug, PartialEq)]
+struct CookieData {
+    name: String,
+    value: String,
+    domain: String,
+    path: String,
+    expires: f64,
+    http_only: bool,
+    /// COREWEBVIEW2_COOKIE_SAME_SITE_KIND : 0 NONE, 1 LAX, 2 STRICT.
+    same_site: i32,
+    secure: bool,
+}
+
+impl CookieData {
+    fn same_key(&self, o: &CookieData) -> bool {
+        self.name == o.name && self.domain.eq_ignore_ascii_case(&o.domain) && self.path == o.path
+    }
+}
+
+/// Nom de cookie : un « token » de la RFC 6265 (non vide, sans contrôle,
+/// espace ni séparateur).
+fn cookie_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !"()<>@,;:\\\"/[]?={}".contains(c))
+}
+
+/// Découpe une URI en (https, hôte, chemin). None si ce n'est pas une URI.
+fn cookie_uri(uri: &str) -> Option<(bool, String, String)> {
+    let (scheme, rest) = uri.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let path = rest[end..].split(['?', '#']).next().unwrap_or("");
+    let path = if path.is_empty() { "/" } else { path };
+    Some((scheme.eq_ignore_ascii_case("https"), host, path.to_string()))
+}
+
+/// Correspondance d'un cookie et d'une URI (RFC 6265, §5.1.3 et §5.1.4).
+fn cookie_matches(c: &CookieData, https: bool, host: &str, path: &str) -> bool {
+    let d = c.domain.trim_start_matches('.').to_ascii_lowercase();
+    let domain = !d.is_empty() && (host == d || host.ends_with(&format!(".{d}")));
+    let p = c.path.as_str();
+    let path_ok = path == p
+        || (path.starts_with(p) && (p.ends_with('/') || path[p.len()..].starts_with('/')));
+    domain && path_ok && (https || !c.secure)
+}
+
+fn cookie_manager_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, cookies_create as *const () as usize),
+        (1, cookies_copy as *const () as usize),
+        (2, cookies_get as *const () as usize),
+        (3, cookies_add_or_update as *const () as usize),
+        (4, cookies_delete_one as *const () as usize),
+        (5, cookies_delete_by_uri as *const () as usize),
+        (6, cookies_delete_domain_path as *const () as usize),
+        (7, cookies_delete_all as *const () as usize),
+    ]
+}
+fn cookie_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, cookie_name as *const () as usize),
+        (1, cookie_value as *const () as usize),
+        (2, cookie_set_value as *const () as usize),
+        (3, cookie_domain as *const () as usize),
+        (4, cookie_path as *const () as usize),
+        (5, cookie_expires as *const () as usize),
+        (6, cookie_set_expires as *const () as usize),
+        (7, cookie_http_only as *const () as usize),
+        (8, cookie_set_http_only as *const () as usize),
+        (9, cookie_same_site as *const () as usize),
+        (10, cookie_set_same_site as *const () as usize),
+        (11, cookie_secure as *const () as usize),
+        (12, cookie_set_secure as *const () as usize),
+        (13, cookie_is_session as *const () as usize),
+    ]
+}
+fn cookie_list_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, cookie_list_count as *const () as usize),
+        (1, cookie_list_at as *const () as usize),
+    ]
+}
+
+/// ICoreWebView2_2::get_CookieManager : le gestionnaire du profil, c'est-à-
+/// dire de l'environnement de la vue (#2637).
+unsafe extern "win64" fn web_get_cookie_manager(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::CookieManager,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
+    S_OK
+}
+
+fn new_cookie(c: CookieData) -> usize {
+    let obj = new_com(Family::Cookie, None, None, Args::default());
+    unsafe { super::lock(&com(obj).cookies).push(c) };
+    obj
+}
+
+/// Données d'un cookie créé par Winlux. Un objet d'une autre origine est
+/// refusé : la documentation fait passer par CreateCookie ou CopyCookie.
+unsafe fn cookie_of(obj: usize) -> Option<CookieData> {
+    if obj == 0 || *(obj as *const *const usize) != vtable(Family::Cookie).as_ptr() {
+        return None;
+    }
+    super::lock(&com(obj).cookies).first().cloned()
+}
+
+unsafe fn with_cookie<R>(this: usize, f: impl FnOnce(&mut CookieData) -> R) -> Option<R> {
+    super::lock(&com(this).cookies).first_mut().map(f)
+}
+
+/// Applique `f` aux cookies de l'environnement du gestionnaire.
+unsafe fn with_store(this: usize, f: impl FnOnce(&mut Vec<CookieData>)) -> i32 {
+    match com(this).env.as_ref() {
+        Some(e) => {
+            f(&mut super::lock(&e.cookies));
+            S_OK
+        }
+        None => E_FAIL,
+    }
+}
+
+fn opt_wstr(p: *const u16) -> String {
+    if p.is_null() {
+        String::new()
+    } else {
+        wstr(p)
+    }
+}
+
+unsafe extern "win64" fn cookies_create(
+    _this: usize,
+    name: *const u16,
+    value: *const u16,
+    domain: *const u16,
+    path: *const u16,
+    out: *mut usize,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let name = opt_wstr(name);
+    if !cookie_name_ok(&name) {
+        return E_INVALIDARG;
+    }
+    let path = opt_wstr(path);
+    *out = new_cookie(CookieData {
+        name,
+        value: opt_wstr(value),
+        domain: opt_wstr(domain),
+        path: if path.is_empty() {
+            "/".to_string()
+        } else {
+            path
+        },
+        expires: -1.0,
+        http_only: false,
+        same_site: 1,
+        secure: false,
+    });
+    S_OK
+}
+unsafe extern "win64" fn cookies_copy(_this: usize, cookie: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Some(c) = cookie_of(cookie) else {
+        return E_INVALIDARG;
+    };
+    *out = new_cookie(c);
+    S_OK
+}
+/// Cookies de l'environnement qui correspondent à `uri` ; vide : tous.
+fn cookies_for(env: &Env, uri: &str) -> Option<Vec<CookieData>> {
+    let all = super::lock(&env.cookies).clone();
+    if uri.is_empty() {
+        return Some(all);
+    }
+    let (https, host, path) = cookie_uri(uri)?;
+    Some(
+        all.into_iter()
+            .filter(|c| cookie_matches(c, https, &host, &path))
+            .collect(),
+    )
+}
+/// GetCookies : rappel asynchrone (boucle de messages, comme les autres
+/// rappels) avec S_OK et la liste.
+unsafe extern "win64" fn cookies_get(this: usize, uri: *const u16, handler: usize) -> i32 {
+    if handler == 0 {
+        return E_INVALIDARG;
+    }
+    let Some(env) = com(this).env.clone() else {
+        return E_FAIL;
+    };
+    let Some(found) = cookies_for(&env, &opt_wstr(uri)) else {
+        return E_INVALIDARG;
+    };
+    let list = new_com(Family::CookieList, None, None, Args::default());
+    *super::lock(&com(list).cookies) = found;
+    add_ref(handler);
+    post(
+        env.dispatcher,
+        Box::new(move || unsafe {
+            invoke(handler, S_OK as usize, list);
+            release(list);
+            release(handler);
+        }),
+    );
+    S_OK
+}
+/// AddOrUpdateCookie : un cookie sans domaine est refusé (documentation
+/// publique). Même nom, domaine et chemin : le cookie est remplacé.
+unsafe extern "win64" fn cookies_add_or_update(this: usize, cookie: usize) -> i32 {
+    let Some(c) = cookie_of(cookie) else {
+        return E_INVALIDARG;
+    };
+    if c.domain.trim_start_matches('.').is_empty() {
+        return E_INVALIDARG;
+    }
+    with_store(this, |store| {
+        match store.iter_mut().find(|o| o.same_key(&c)) {
+            Some(o) => *o = c,
+            None => store.push(c),
+        }
+    })
+}
+unsafe extern "win64" fn cookies_delete_one(this: usize, cookie: usize) -> i32 {
+    let Some(c) = cookie_of(cookie) else {
+        return E_INVALIDARG;
+    };
+    with_store(this, |store| store.retain(|o| !o.same_key(&c)))
+}
+/// DeleteCookies(name, uri) : les cookies de ce nom qui correspondent à
+/// l'URI.
+unsafe extern "win64" fn cookies_delete_by_uri(
+    this: usize,
+    name: *const u16,
+    uri: *const u16,
+) -> i32 {
+    if name.is_null() || uri.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    let Some((https, host, path)) = cookie_uri(&wstr(uri)) else {
+        return E_INVALIDARG;
+    };
+    with_store(this, |store| {
+        store.retain(|c| !(c.name == name && cookie_matches(c, https, &host, &path)))
+    })
+}
+/// DeleteCookiesWithDomainAndPath : la documentation ne dit pas ce que
+/// vaut un domaine ou un chemin vide ; Winlux le lit comme « tous ».
+unsafe extern "win64" fn cookies_delete_domain_path(
+    this: usize,
+    name: *const u16,
+    domain: *const u16,
+    path: *const u16,
+) -> i32 {
+    if name.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    let (domain, path) = (opt_wstr(domain), opt_wstr(path));
+    with_store(this, |store| {
+        store.retain(|c| {
+            !(c.name == name
+                && (domain.is_empty() || c.domain.eq_ignore_ascii_case(&domain))
+                && (path.is_empty() || c.path == path))
+        })
+    })
+}
+unsafe extern "win64" fn cookies_delete_all(this: usize) -> i32 {
+    with_store(this, |store| store.clear())
+}
+
+unsafe fn cookie_string(this: usize, out: *mut *mut u16, f: fn(&CookieData) -> &str) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    match with_cookie(this, |c| f(c).to_string()) {
+        Some(s) => co_string(&s, out),
+        None => E_FAIL,
+    }
+}
+unsafe fn cookie_read<T: Copy>(this: usize, out: *mut T, f: fn(&CookieData) -> T) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    match with_cookie(this, |c| f(c)) {
+        Some(v) => {
+            *out = v;
+            S_OK
+        }
+        None => E_FAIL,
+    }
+}
+unsafe fn cookie_write(this: usize, f: impl FnOnce(&mut CookieData)) -> i32 {
+    with_cookie(this, f).map_or(E_FAIL, |_| S_OK)
+}
+unsafe extern "win64" fn cookie_name(this: usize, out: *mut *mut u16) -> i32 {
+    cookie_string(this, out, |c| &c.name)
+}
+unsafe extern "win64" fn cookie_value(this: usize, out: *mut *mut u16) -> i32 {
+    cookie_string(this, out, |c| &c.value)
+}
+unsafe extern "win64" fn cookie_domain(this: usize, out: *mut *mut u16) -> i32 {
+    cookie_string(this, out, |c| &c.domain)
+}
+unsafe extern "win64" fn cookie_path(this: usize, out: *mut *mut u16) -> i32 {
+    cookie_string(this, out, |c| &c.path)
+}
+unsafe extern "win64" fn cookie_set_value(this: usize, value: *const u16) -> i32 {
+    let v = opt_wstr(value);
+    cookie_write(this, |c| c.value = v)
+}
+unsafe extern "win64" fn cookie_expires(this: usize, out: *mut f64) -> i32 {
+    cookie_read(this, out, |c| c.expires)
+}
+/// put_Expires : NaN, l'infini et les négatifs autres que -1 sont refusés
+/// (documentation publique).
+unsafe extern "win64" fn cookie_set_expires(this: usize, expires: f64) -> i32 {
+    if !expires.is_finite() || (expires < 0.0 && expires != -1.0) {
+        return E_INVALIDARG;
+    }
+    cookie_write(this, |c| c.expires = expires)
+}
+unsafe extern "win64" fn cookie_http_only(this: usize, out: *mut i32) -> i32 {
+    cookie_read(this, out, |c| c.http_only as i32)
+}
+unsafe extern "win64" fn cookie_set_http_only(this: usize, v: i32) -> i32 {
+    cookie_write(this, |c| c.http_only = v != 0)
+}
+unsafe extern "win64" fn cookie_same_site(this: usize, out: *mut i32) -> i32 {
+    cookie_read(this, out, |c| c.same_site)
+}
+unsafe extern "win64" fn cookie_set_same_site(this: usize, v: i32) -> i32 {
+    if !(0..=2).contains(&v) {
+        return E_INVALIDARG;
+    }
+    cookie_write(this, |c| c.same_site = v)
+}
+unsafe extern "win64" fn cookie_secure(this: usize, out: *mut i32) -> i32 {
+    cookie_read(this, out, |c| c.secure as i32)
+}
+unsafe extern "win64" fn cookie_set_secure(this: usize, v: i32) -> i32 {
+    cookie_write(this, |c| c.secure = v != 0)
+}
+unsafe extern "win64" fn cookie_is_session(this: usize, out: *mut i32) -> i32 {
+    cookie_read(this, out, |c| (c.expires == -1.0) as i32)
+}
+unsafe extern "win64" fn cookie_list_count(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = super::lock(&com(this).cookies).len() as u32;
+    S_OK
+}
+unsafe extern "win64" fn cookie_list_at(this: usize, index: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let c = super::lock(&com(this).cookies).get(index as usize).cloned();
+    match c {
+        Some(c) => {
+            *out = new_cookie(c);
+            S_OK
+        }
+        None => {
+            *out = 0;
+            E_INVALIDARG
+        }
+    }
 }
 
 // --- ICoreWebView2ProcessInfoCollection / …ExtendedInfoCollection ---
@@ -1568,6 +1976,8 @@ fn webview_methods() -> Vec<(usize, usize)> {
     ];
     // ICoreWebView2_13 : Profile (#2614).
     m.push((102, web_get_profile as *const () as usize));
+    // ICoreWebView2_2 : CookieManager (#2637).
+    m.push((63, web_get_cookie_manager as *const () as usize));
     // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
     m.push((116, web_get_memory_level as *const () as usize));
     m.push((117, web_put_memory_level as *const () as usize));
@@ -2628,6 +3038,7 @@ mod tests {
             language: String::new(),
             user_data_win: "C:\\Données\\Teams\\".to_string(),
             profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
         });
         let view = new_com(Family::WebView, Some(env), None, Args::default());
         let mut profile = 0usize;
@@ -2722,6 +3133,187 @@ mod tests {
         assert_ne!(x, z);
         com_release(a);
         com_release(b);
+    }
+
+    /// #2637 : le gestionnaire de cookies crée, range, rend et retire les
+    /// cookies comme le dit la documentation publique.
+    #[test]
+    fn gestionnaire_de_cookies_2637() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 63], web_get_cookie_manager as *const () as usize);
+        // Une fenêtre qui n'existe pas : les rappels se rejouent à la main.
+        let dispatcher = 0x2637_0000usize;
+        let env = Arc::new(Env {
+            dispatcher,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: String::new(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let view = new_com(Family::WebView, Some(env.clone()), None, Args::default());
+        let mut mgr = 0usize;
+        let w = |s: &str| -> Vec<u16> { s.encode_utf16().chain([0]).collect() };
+        let read = |obj: usize, f: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32| {
+            let mut p: *mut u16 = std::ptr::null_mut();
+            assert_eq!(unsafe { f(obj, &mut p) }, S_OK);
+            wstr(p)
+        };
+        unsafe {
+            assert_eq!(web_get_cookie_manager(view, &mut mgr), S_OK);
+            let mut out = 0usize;
+            assert_eq!(
+                query_interface(mgr, COOKIE_MANAGER_IIDS[0].as_ptr(), &mut out),
+                S_OK
+            );
+            com_release(out);
+
+            // Création : défauts documentés.
+            let (sid, val, dom, empty) = (w("sid"), w("v1"), w(".example.com"), w(""));
+            let mut c = 0usize;
+            assert_eq!(
+                cookies_create(
+                    mgr,
+                    empty.as_ptr(),
+                    val.as_ptr(),
+                    dom.as_ptr(),
+                    empty.as_ptr(),
+                    &mut c
+                ),
+                E_INVALIDARG
+            );
+            let bad = w("a b");
+            assert_eq!(
+                cookies_create(
+                    mgr,
+                    bad.as_ptr(),
+                    val.as_ptr(),
+                    dom.as_ptr(),
+                    empty.as_ptr(),
+                    &mut c
+                ),
+                E_INVALIDARG
+            );
+            assert_eq!(
+                cookies_create(
+                    mgr,
+                    sid.as_ptr(),
+                    val.as_ptr(),
+                    dom.as_ptr(),
+                    empty.as_ptr(),
+                    &mut c
+                ),
+                S_OK
+            );
+            assert_eq!(query_interface(c, COOKIE_IIDS[0].as_ptr(), &mut out), S_OK);
+            com_release(out);
+            assert_eq!(read(c, cookie_name), "sid");
+            assert_eq!(read(c, cookie_path), "/");
+            let (mut f, mut b, mut k) = (0f64, 7i32, 7i32);
+            assert_eq!(cookie_expires(c, &mut f), S_OK);
+            assert_eq!(f, -1.0);
+            assert_eq!(cookie_is_session(c, &mut b), S_OK);
+            assert_eq!(b, 1);
+            assert_eq!(cookie_same_site(c, &mut k), S_OK);
+            assert_eq!(k, 1);
+            assert_eq!(cookie_set_expires(c, f64::NAN), E_INVALIDARG);
+            assert_eq!(cookie_set_expires(c, -2.0), E_INVALIDARG);
+            assert_eq!(cookie_set_same_site(c, 3), E_INVALIDARG);
+            assert_eq!(cookie_set_secure(c, 1), S_OK);
+
+            // Rangement, remplacement à clé égale.
+            assert_eq!(cookies_add_or_update(mgr, c), S_OK);
+            let v2 = w("v2");
+            assert_eq!(cookie_set_value(c, v2.as_ptr()), S_OK);
+            assert_eq!(cookies_add_or_update(mgr, c), S_OK);
+            assert_eq!(super::super::lock(&env.cookies).len(), 1);
+            assert_eq!(super::super::lock(&env.cookies)[0].value, "v2");
+            // Sans domaine : refusé.
+            let mut nd = 0usize;
+            assert_eq!(
+                cookies_create(
+                    mgr,
+                    sid.as_ptr(),
+                    val.as_ptr(),
+                    empty.as_ptr(),
+                    empty.as_ptr(),
+                    &mut nd
+                ),
+                S_OK
+            );
+            assert_eq!(cookies_add_or_update(mgr, nd), E_INVALIDARG);
+            com_release(nd);
+
+            // Correspondance : domaine, et Secure seulement en https.
+            assert_eq!(
+                cookies_for(&env, "https://teams.example.com/v2/")
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                cookies_for(&env, "http://teams.example.com/")
+                    .unwrap()
+                    .len(),
+                0
+            );
+            assert_eq!(cookies_for(&env, "https://example.org/").unwrap().len(), 0);
+            assert_eq!(cookies_for(&env, "").unwrap().len(), 1);
+            assert!(cookies_for(&env, "pas une uri").is_none());
+
+            // GetCookies : rappel asynchrone avec la liste.
+            static SEEN: AtomicU32 = AtomicU32::new(u32::MAX);
+            unsafe extern "win64" fn on_list(_h: usize, hr: usize, list: usize) -> i32 {
+                let mut n = 0u32;
+                assert_eq!(hr as i32, S_OK);
+                assert_eq!(unsafe { cookie_list_count(list, &mut n) }, S_OK);
+                let mut one = 0usize;
+                assert_eq!(unsafe { cookie_list_at(list, 0, &mut one) }, S_OK);
+                com_release(one);
+                assert_eq!(unsafe { cookie_list_at(list, n, &mut one) }, E_INVALIDARG);
+                SEEN.store(n, Ordering::SeqCst);
+                S_OK
+            }
+            let handler_vt: &'static [usize] = Box::leak(
+                vec![
+                    0,
+                    noop_ref as *const () as usize,
+                    noop_ref as *const () as usize,
+                    on_list as *const () as usize,
+                ]
+                .into_boxed_slice(),
+            );
+            extern "win64" fn noop_ref(_h: usize) -> u32 {
+                1
+            }
+            let handler: &'static *const usize = Box::leak(Box::new(handler_vt.as_ptr()));
+            let handler = handler as *const *const usize as usize;
+            let uri = w("https://teams.example.com/");
+            assert_eq!(cookies_get(mgr, uri.as_ptr(), handler), S_OK);
+            assert_eq!(SEEN.load(Ordering::SeqCst), u32::MAX);
+            run_jobs(dispatcher);
+            assert_eq!(SEEN.load(Ordering::SeqCst), 1);
+
+            // Retraits.
+            let u = w("https://teams.example.com/");
+            assert_eq!(cookies_delete_by_uri(mgr, sid.as_ptr(), u.as_ptr()), S_OK);
+            assert!(super::super::lock(&env.cookies).is_empty());
+            assert_eq!(cookies_add_or_update(mgr, c), S_OK);
+            assert_eq!(cookies_delete_one(mgr, c), S_OK);
+            assert!(super::super::lock(&env.cookies).is_empty());
+            assert_eq!(cookies_add_or_update(mgr, c), S_OK);
+            assert_eq!(
+                cookies_delete_domain_path(mgr, sid.as_ptr(), dom.as_ptr(), empty.as_ptr()),
+                S_OK
+            );
+            assert!(super::super::lock(&env.cookies).is_empty());
+            assert_eq!(cookies_add_or_update(mgr, c), S_OK);
+            assert_eq!(cookies_delete_all(mgr), S_OK);
+            assert!(super::super::lock(&env.cookies).is_empty());
+            com_release(c);
+        }
+        com_release(mgr);
+        com_release(view);
     }
 
     /// #2635 : les filtres avec types de source se retiennent et se

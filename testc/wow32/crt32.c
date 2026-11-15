@@ -568,5 +568,24 @@ int main(int argc, char **argv) {
         }
         CHECK(50, ok);
     }
+    /* #2639 : InternetGetCookieExW exportée en x86 (l'outil de déploiement
+       d'Office l'importe en différé). Sans cookie pour l'URL : FALSE et
+       ERROR_NO_MORE_ITEMS ; taille NULL : ERROR_INVALID_PARAMETER. */
+    {
+        typedef BOOL (__stdcall *gcx_t)(const wchar_t *, const wchar_t *, wchar_t *, DWORD *, DWORD, void *);
+        HMODULE h = LoadLibraryA("wininet.dll");
+        gcx_t gcx = h ? (gcx_t)GetProcAddress(h, "InternetGetCookieExW") : 0;
+        int ok = gcx != 0;
+        if (ok) {
+            wchar_t buf[64];
+            DWORD n = 64;
+            SetLastError(0);
+            ok = !gcx(L"http://crt32.invalid/", 0, buf, &n, 0, 0) && GetLastError() == ERROR_NO_MORE_ITEMS;
+            SetLastError(0);
+            ok = ok && !gcx(L"http://crt32.invalid/", 0, buf, 0, 0, 0)
+                 && GetLastError() == ERROR_INVALID_PARAMETER;
+        }
+        CHECK(51, ok);
+    }
     return fails;
 }
