@@ -5546,6 +5546,9 @@ pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
     if crate::dlls::mmap::export(h).is_some() {
         return Some("Section");
     }
+    if crate::dlls::object_directory::is_directory(h) {
+        return Some("Directory");
+    }
     let Some(sync) = lookup_sync(h) else {
         // Clé du registre ouverte (#2413).
         return crate::registry::key_nt_name(h).map(|_| "Key");
@@ -7467,6 +7470,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     if crate::dlls::kernel32_node::close_snapshot(handle)
         || crate::dlls::jobs::close(handle)
         || crate::dlls::kernel32_releve::close(handle)
+        || crate::dlls::object_directory::close(handle)
     {
         return 1;
     }

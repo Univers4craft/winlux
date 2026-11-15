@@ -207,6 +207,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod object_directory;
 pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
