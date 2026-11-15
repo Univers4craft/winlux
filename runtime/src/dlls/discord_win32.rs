@@ -284,6 +284,11 @@ const CMSG_SIGNER_INFO_PARAM: u32 = 6;
 const CMSG_CERT_COUNT_PARAM: u32 = 11;
 const CMSG_CERT_PARAM: u32 = 12;
 const CRYPT_E_INVALID_MSG_TYPE: u32 = 0x8009_1010;
+/// CMSG_SIGNER_AUTH_ATTR_PARAM et CMSG_SIGNER_UNAUTH_ATTR_PARAM
+/// (wincrypt.h, windows-rs) ; CRYPT_E_ATTRIBUTES_MISSING (winerror.h).
+const CMSG_SIGNER_AUTH_ATTR_PARAM: u32 = 9;
+const CMSG_SIGNER_UNAUTH_ATTR_PARAM: u32 = 10;
+const CRYPT_E_ATTRIBUTES_MISSING: u32 = 0x8009_100F;
 const CRYPT_E_STREAM_MSG_NOT_READY: u32 = 0x8009_1011;
 const CRYPT_E_ASN1_BADTAG: u32 = 0x8009_3104;
 const CRYPT_E_INVALID_INDEX: u32 = 0x8009_1008;
@@ -438,6 +443,39 @@ pub(crate) unsafe fn get_param(
                     super::crypt32_signer::write_packed(&bytes, &fixups, p, data.cast());
                     *len = need;
                     1
+                }
+                None => {
+                    set_last_error(CRYPT_E_INVALID_INDEX);
+                    0
+                }
+            }
+        }
+        CMSG_SIGNER_AUTH_ATTR_PARAM | CMSG_SIGNER_UNAUTH_ATTR_PARAM => {
+            // CRYPT_ATTRIBUTES du signataire (#2705) : l'outil de
+            // déploiement d'Office lit les attributs non authentifiés
+            // (contre-signature, signature imbriquée) après le nom du
+            // signataire.
+            let p = crate::wow32::pointer_size();
+            let unauth = ty == CMSG_SIGNER_UNAUTH_ATTR_PARAM;
+            match super::crypt32_signer::signer_attrs(&m.data, index as usize, p, unauth) {
+                Some(Some((bytes, fixups))) => {
+                    let need = bytes.len() as u32;
+                    if data.is_null() {
+                        *len = need;
+                        return 1;
+                    }
+                    if *len < need {
+                        *len = need;
+                        set_last_error(ERROR_MORE_DATA);
+                        return 0;
+                    }
+                    super::crypt32_signer::write_packed(&bytes, &fixups, p, data.cast());
+                    *len = need;
+                    1
+                }
+                Some(None) => {
+                    set_last_error(CRYPT_E_ATTRIBUTES_MISSING);
+                    0
                 }
                 None => {
                     set_last_error(CRYPT_E_INVALID_INDEX);

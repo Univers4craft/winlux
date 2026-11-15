@@ -159,6 +159,31 @@ pub(crate) fn signer_info(
     Some((k.buf, k.fixups))
 }
 
+/// CMSG_SIGNER_AUTH_ATTR_PARAM (`unauth` faux) ou
+/// CMSG_SIGNER_UNAUTH_ATTR_PARAM (vrai) : les attributs du signataire
+/// `index` en `CRYPT_ATTRIBUTES`, empaquetés comme dans `signer_info`
+/// (#2705). None : pas de tel signataire ; Some(None) : le signataire n'a
+/// pas ces attributs (CRYPT_E_ATTRIBUTES_MISSING, documentation de
+/// CryptMsgGetParam).
+pub(crate) type Packed = (Vec<u8>, Vec<(usize, usize)>);
+
+pub(crate) fn signer_attrs(
+    der: &[u8],
+    index: usize,
+    p: usize,
+    unauth: bool,
+) -> Option<Option<Packed>> {
+    let infos = signer_infos(der)?;
+    let si = infos.get(index)?;
+    let tag = if unauth { 0xa1 } else { 0xa0 };
+    let Some(set) = children(si.body).into_iter().find(|t| t.tag == tag) else {
+        return Some(None);
+    };
+    let mut k = Packer::new(p, 2);
+    k.attrs(0, Some(&set));
+    Some(Some((k.buf, k.fixups)))
+}
+
 /// Recopie dans le tampon de l'appelant, pointeurs relogés.
 ///
 /// # Safety
