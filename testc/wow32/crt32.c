@@ -429,5 +429,57 @@ int main(int argc, char **argv) {
         }
         CHECK(47, ok);
     }
+    /* #2597 : HttpOpenRequestA/W et WinHttpOpenRequest lisent le tableau des
+       types acceptés (lplpszAcceptTypes, terminé par NULL) avec des pointeurs
+       de 4 octets (l'outil de déploiement d'Office mourait dans
+       HttpOpenRequestA). Ouvrir une requête n'envoie rien. */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE n = LoadLibraryA("wininet.dll");
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        typedef HINTERNET (__stdcall *io_t)(const char *, DWORD, const char *, const char *, DWORD);
+        typedef HINTERNET (__stdcall *ic_t)(HINTERNET, const char *, WORD, const char *, const char *,
+                                            DWORD, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *ra_t)(HINTERNET, const char *, const char *, const char *,
+                                            const char *, const char **, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *rw_t)(HINTERNET, const wchar_t *, const wchar_t *, const wchar_t *,
+                                            const wchar_t *, const wchar_t **, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *icl_t)(HINTERNET);
+        io_t iopen = n ? (io_t)GetProcAddress(n, "InternetOpenA") : 0;
+        ic_t iconn = n ? (ic_t)GetProcAddress(n, "InternetConnectA") : 0;
+        ra_t hra = n ? (ra_t)GetProcAddress(n, "HttpOpenRequestA") : 0;
+        rw_t hrw = n ? (rw_t)GetProcAddress(n, "HttpOpenRequestW") : 0;
+        icl_t iclose = n ? (icl_t)GetProcAddress(n, "InternetCloseHandle") : 0;
+        int ok = iopen && iconn && hra && hrw && iclose && wopen && wconn && wreq && wclose;
+        if (ok) {
+            static const char *types_a[] = {"text/*", "application/octet-stream", 0};
+            static const wchar_t *types_w[] = {L"text/*", L"*/*", 0};
+            HINTERNET s = iopen("crt32", INTERNET_OPEN_TYPE_DIRECT, 0, 0, 0);
+            HINTERNET c = s ? iconn(s, "127.0.0.1", 80, 0, 0, INTERNET_SERVICE_HTTP, 0, 0) : 0;
+            HINTERNET ra = c ? hra(c, "GET", "/v64.cab", 0, 0, types_a, 0, 0) : 0;
+            HINTERNET rw = c ? hrw(c, L"GET", L"/v64.cab", 0, 0, types_w, 0, 0) : 0;
+            ok = ra && rw;
+            if (ra) iclose(ra);
+            if (rw) iclose(rw);
+            if (c) iclose(c);
+            if (s) iclose(s);
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, types_w, 0) : 0;
+            ok = ok && wr;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(48, ok);
+    }
     return fails;
 }

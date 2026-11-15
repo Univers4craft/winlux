@@ -274,16 +274,16 @@ fn check_chain(p: &Parsed, signer: &Cert, name: String) -> Signature {
             Ok(Some(at)) => match hostssl::verify_code(&signer.der, &others, &CODE_ROOTS, Some(at))
             {
                 Some(w) if w.error == 0 => Signature::Verified { signer: name },
-                Some(w) => unverified(chain_reason(w.error)),
+                Some(w) => unverified(&chain_reason_of(&w)),
                 None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
             },
-            Ok(None) => unverified(chain_reason(v.error)),
+            Ok(None) => unverified(&chain_reason_of(&v)),
             Err(e) => unverified(&format!(
                 "{}, et son horodatage est refusé ({e})",
-                chain_reason(v.error)
+                chain_reason_of(&v)
             )),
         },
-        Some(v) => unverified(chain_reason(v.error)),
+        Some(v) => unverified(&chain_reason_of(&v)),
     }
 }
 
@@ -380,6 +380,32 @@ fn check_tsa(tsa: &Cert, extra: &[Vec<u8>], at: i64) -> Result<(), String> {
         Some(v) => Err(format!("autorité d'horodatage : {}", chain_reason(v.error))),
         None => Err("chaîne de l'autorité d'horodatage non vérifiable".into()),
     }
+}
+
+/// Raison d'une chaîne refusée. Quand l'autorité n'est pas reconnue, elle
+/// nomme aussi le dernier certificat de la chaîne construite et son émetteur,
+/// pour savoir quelle racine manque (#2594).
+fn chain_reason_of(v: &hostssl::Verified) -> String {
+    let base = chain_reason(v.error);
+    if !matches!(v.error, 2 | 18 | 19 | 20 | 21) {
+        return base.to_string();
+    }
+    match v.chain.last().and_then(|der| chain_top(der)) {
+        Some(top) => format!("{base} ({top})"),
+        None => base.to_string(),
+    }
+}
+
+/// « chaîne arrêtée à « sujet », émis par « émetteur » » pour un certificat DER.
+fn chain_top(der: &[u8]) -> Option<String> {
+    let t = expect(der, 0x30).ok()?;
+    let cert = parse_cert(der, t.body).ok()?;
+    let issuer = parse_name(expect(&cert.issuer, 0x30).ok()?.body).ok()?;
+    Some(format!(
+        "chaîne arrêtée à « {} », émis par « {} »",
+        format_dn(&cert.subject),
+        format_dn(&issuer)
+    ))
 }
 
 fn chain_reason(error: i32) -> &'static str {
@@ -1244,6 +1270,25 @@ fn display_name(subject: &[(String, String)]) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn racine_absente_nommee_dans_la_raison() {
+        // #2594 : une chaîne qui s'arrête sur une autorité non reconnue
+        // nomme ce dernier certificat et son émetteur.
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let root = CODE_ROOTS[0];
+        let v = hostssl::verify_code(root, &[], &[], None).expect("vérifiable");
+        assert_ne!(v.error, 0);
+        let why = chain_reason_of(&v);
+        assert!(why.contains("autorité reconnue"), "{why}");
+        assert!(
+            why.contains("Microsoft Root Certificate Authority 2010"),
+            "{why}"
+        );
+        assert!(why.contains("émis par"), "{why}");
+    }
 
     #[test]
     fn racines_de_signature_de_code_reconnues() {

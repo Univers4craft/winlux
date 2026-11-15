@@ -6005,6 +6005,24 @@ pub unsafe extern "win64" fn initialize_critical_section_and_spin_count(
     reset_critical_fields(cs, -1, spin as usize);
     1
 }
+/// SetCriticalSectionSpinCount (Microsoft Learn, synchapi.h) : « returns the
+/// previous spin count for the critical section » (#2569). Le compte est
+/// rangé dans le champ SpinCount de la section, comme à l'initialisation.
+pub unsafe extern "win64" fn set_critical_section_spin_count(cs: *mut c_void, spin: u32) -> u32 {
+    if cs.is_null() {
+        return 0;
+    }
+    if crate::wow32::active() {
+        let p = (cs as *mut u32).add(5);
+        let old = p.read_unaligned();
+        p.write_unaligned(spin);
+        return old;
+    }
+    let c = cs as *mut CriticalSection;
+    let old = (*c).spin_count as u32;
+    (*c).spin_count = spin as usize;
+    old
+}
 pub unsafe extern "win64" fn initialize_critical_section_ex(
     cs: *mut c_void,
     spin: u32,
@@ -11833,7 +11851,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "GetStdHandle"=>fn get_std_handle,"SetStdHandle"=>fn set_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
      "CreateEventA"=>fn create_event_a,"SetEvent"=>fn super::fil_trace::set_event,"ResetEvent"=>fn super::fil_trace::reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn super::fil_trace::release_mutex,"WaitForSingleObject"=>fn super::fil_trace::wait_for_single_object,"WaitForMultipleObjects"=>fn super::fil_trace::wait_for_multiple_objects,"GetExitCodeThread"=>fn super::fil_trace::get_exit_code_thread,"ResumeThread"=>fn super::fil_trace::resume_thread,
-     "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
+     "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"SetCriticalSectionSpinCount"=>fn set_critical_section_spin_count,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
       "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch,"ResetWriteWatch"=>fn crate::dlls::write_watch::reset_write_watch,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
@@ -11912,6 +11930,22 @@ mod tests {
             };
             assert_ne!(ca(0, b"Abc\0", b"abc\0"), 2);
             assert_eq!(ca(1, b"Abc\0", b"abc\0"), 2);
+        }
+    }
+
+    #[test]
+    fn compte_de_rotation_d_une_section_critique() {
+        // #2569 : SetCriticalSectionSpinCount rend l'ancien compte.
+        let mut cs = std::mem::MaybeUninit::<[usize; 5]>::zeroed();
+        let p = cs.as_mut_ptr() as *mut std::ffi::c_void;
+        unsafe {
+            assert_eq!(
+                super::initialize_critical_section_and_spin_count(p, 4000),
+                1
+            );
+            assert_eq!(super::set_critical_section_spin_count(p, 1500), 4000);
+            assert_eq!(super::set_critical_section_spin_count(p, 0), 1500);
+            super::delete_critical_section(p);
         }
     }
 
