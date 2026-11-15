@@ -2671,20 +2671,62 @@ unsafe extern "win64" fn CertFindChainInStore(
     0
 }
 
-/// Aucune restriction d'usage : tous les usages sont permis.
+/// CERT_ENHKEY_USAGE `{ cUsageIdentifier, rgpszUsageIdentifier }` d'une
+/// liste d'OID, empaqueté pour des pointeurs de `ps` octets à l'adresse
+/// `base` : la structure, le tableau de pointeurs puis les chaînes.
+fn pack_enhkey_usage(oids: &[String], ps: usize, base: usize) -> Vec<u8> {
+    let head = 2 * ps;
+    let table = oids.len() * ps;
+    let mut out = vec![0u8; head + table];
+    out[..4].copy_from_slice(&(oids.len() as u32).to_le_bytes());
+    let put = |out: &mut Vec<u8>, at: usize, v: usize| {
+        if ps == 4 {
+            out[at..at + 4].copy_from_slice(&(v as u32).to_le_bytes());
+        } else {
+            out[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
+        }
+    };
+    if !oids.is_empty() {
+        put(&mut out, ps, base + head);
+    }
+    for (i, oid) in oids.iter().enumerate() {
+        let at = out.len();
+        out.extend_from_slice(oid.as_bytes());
+        out.push(0);
+        put(&mut out, head + i * ps, base + at);
+    }
+    out
+}
+
+/// CertGetEnhancedKeyUsage : OID de l'extension EKU du certificat (Microsoft
+/// Learn : « information from the enhanced key usage (EKU) extension or the
+/// EKU extended property »). Sans extension : aucun identifiant et
+/// CRYPT_E_NOT_FOUND, c'est-à-dire valide pour tous les usages (#2708).
+/// La propriété étendue EKU n'est pas gérée.
 unsafe extern "win64" fn CertGetEnhancedKeyUsage(
-    _cert: usize,
-    _flags: u32,
+    cert: usize,
+    flags: u32,
     usage: *mut u32,
     len: *mut u32,
 ) -> i32 {
     if len.is_null() {
         return 0;
     }
-    // CERT_ENHKEY_USAGE { cUsageIdentifier, rgpszUsageIdentifier } : 8 octets
-    // en x86, 16 en x64 (#1667).
+    // CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG : la propriété seule, absente ici.
+    const PROP_ONLY: u32 = 0x4;
+    let der = if cert == 0 {
+        &[][..]
+    } else {
+        crate::dlls::crypt32::cert_der(cert)
+    };
+    let oids = if flags & PROP_ONLY != 0 {
+        None
+    } else {
+        crate::setup::appx_signature::extended_key_usages(der)
+    };
     let ps = crate::wow32::pointer_size();
-    let size = 2 * ps as u32;
+    let list = oids.clone().unwrap_or_default();
+    let size = pack_enhkey_usage(&list, ps, 0).len() as u32;
     if usage.is_null() {
         *len = size;
         return 1;
@@ -2694,9 +2736,12 @@ unsafe extern "win64" fn CertGetEnhancedKeyUsage(
         set_last_error(234); // ERROR_MORE_DATA
         return 0;
     }
-    *usage = 0; // cUsageIdentifier
-    crate::wow32::write_ptr(usage as usize + ps, 0);
-    set_last_error(CRYPT_E_NOT_FOUND);
+    let bytes = pack_enhkey_usage(&list, ps, usage as usize);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), usage.cast::<u8>(), bytes.len());
+    *len = size;
+    // Liste vide : tous usages (CRYPT_E_NOT_FOUND) sans extension, aucun
+    // usage (0) pour une extension vide.
+    set_last_error(if oids.is_none() { CRYPT_E_NOT_FOUND } else { 0 });
     1
 }
 
@@ -3034,6 +3079,109 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usages_etendus_du_certificat_2708() {
+        // Certificat avec extension EKU (signature de code et un OID
+        // Microsoft), produit par openssl ; racine sans EKU.
+        if std::process::Command::new("openssl")
+            .arg("version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-eku-2708-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                "k.pem",
+                "-outform",
+                "DER",
+                "-out",
+                "c.der",
+                "-days",
+                "2",
+                "-subj",
+                "/CN=Essai 2708",
+                "-addext",
+                "extendedKeyUsage=codeSigning,1.3.6.1.4.1.311.10.3.6",
+            ])
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok);
+        let der = std::fs::read(dir.join("c.der")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let ctx = crate::dlls::crypt32::CertCreateCertificateContext(
+                1,
+                der.as_ptr(),
+                der.len() as u32,
+            );
+            assert_ne!(ctx, 0);
+            let mut len = 0u32;
+            assert_eq!(
+                CertGetEnhancedKeyUsage(ctx, 0, std::ptr::null_mut(), &mut len),
+                1
+            );
+            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+            let u = buf.as_mut_ptr().cast::<u32>();
+            assert_eq!(CertGetEnhancedKeyUsage(ctx, 0, u, &mut len), 1);
+            assert_eq!(*u, 2, "deux usages");
+            let rg = *(u.cast::<u8>().add(8) as *const *const *const std::ffi::c_char);
+            let oid = |i: usize| {
+                std::ffi::CStr::from_ptr(*rg.add(i))
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            };
+            assert_eq!(oid(0), "1.3.6.1.5.5.7.3.3");
+            assert_eq!(oid(1), "1.3.6.1.4.1.311.10.3.6");
+            assert_eq!(crate::process::last_error(), 0);
+            // Propriété seule : absente, donc tous usages.
+            let mut len = 0u32;
+            assert_eq!(
+                CertGetEnhancedKeyUsage(ctx, 4, std::ptr::null_mut(), &mut len),
+                1
+            );
+            assert_eq!(len, 16);
+            crate::dlls::crypt32::CertFreeCertificateContext(ctx);
+
+            // Sans extension (racine) : aucun identifiant, CRYPT_E_NOT_FOUND.
+            let root = crate::setup::appx_signature::CODE_ROOTS[0];
+            let ctx = crate::dlls::crypt32::CertCreateCertificateContext(
+                1,
+                root.as_ptr(),
+                root.len() as u32,
+            );
+            let mut len = 16u32;
+            let mut two = [0u64; 2];
+            assert_eq!(
+                CertGetEnhancedKeyUsage(ctx, 0, two.as_mut_ptr().cast(), &mut len),
+                1
+            );
+            assert_eq!(two[0] as u32, 0);
+            assert_eq!(crate::process::last_error(), CRYPT_E_NOT_FOUND);
+            crate::dlls::crypt32::CertFreeCertificateContext(ctx);
+        }
+        // Disposition x86 : 8 octets d'en-tête, pointeurs de 4 octets.
+        let p = pack_enhkey_usage(&["1.2".into()], 4, 0x1000);
+        assert_eq!(&p[..4], &1u32.to_le_bytes());
+        assert_eq!(&p[4..8], &0x1008u32.to_le_bytes());
+        assert_eq!(&p[8..12], &0x100Cu32.to_le_bytes());
+        assert_eq!(&p[12..], b"1.2\0");
+    }
 
     #[test]
     fn affinite_d_affichage_retenue_et_relue() {
