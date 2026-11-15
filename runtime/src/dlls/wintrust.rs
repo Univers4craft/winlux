@@ -143,12 +143,22 @@ unsafe fn build_state(
     let (sg, sg_size) = layout(PROVIDER_SGNR, ps);
     let (pc, pc_size) = layout(PROVIDER_CERT, ps);
     let now = now_filetime();
+    // Un seul magasin pour tous les certificats de la signature, comme le
+    // magasin du message signé sous Windows : CertGetCertificateChain sur
+    // le signataire y trouve les autorités intermédiaires jointes (#2686).
+    // Il n'est jamais fermé : un contexte dupliqué par l'application peut
+    // survivre à l'état, comme ceux de CertCreateCertificateContext.
+    let store = crate::dlls::crypt32::new_store();
     let mut contexts = Vec::new();
     for der in certs {
-        let ctx = crate::dlls::crypt32::CertCreateCertificateContext(
+        let mut ctx = 0usize;
+        crate::dlls::crypt32::CertAddEncodedCertificateToStore(
+            store,
             0x0001_0001, // X509_ASN_ENCODING | PKCS_7_ASN_ENCODING
             der.as_ptr(),
             der.len() as u32,
+            4, // CERT_STORE_ADD_ALWAYS
+            &mut ctx,
         );
         if ctx != 0 {
             contexts.push(ctx);
@@ -407,6 +417,33 @@ mod tests {
             signer: "Adobe Inc.".into(),
         };
         assert!(refusal_line(p, &ok, 0).is_none());
+    }
+
+    #[test]
+    fn certificats_de_l_etat_dans_un_seul_magasin_2686() {
+        // L'autorité intermédiaire jointe à la signature doit être dans le
+        // magasin du signataire, pour que CertGetCertificateChain la trouve.
+        use crate::setup::appx_signature::CODE_ROOTS;
+        let certs = vec![CODE_ROOTS[0].to_vec(), CODE_ROOTS[1].to_vec()];
+        let mut data = vec![0u64; 16];
+        unsafe {
+            let h = build_state(data.as_mut_ptr() as usize, 0, 0, 0, &certs);
+            let s = states();
+            let st = s.get(&h).expect("état");
+            assert_eq!(st.contexts.len(), 2);
+            // CERT_CONTEXT x64 : hCertStore à +32.
+            let store = |c: usize| *((c + 32) as *const usize);
+            let magasin = store(st.contexts[0]);
+            assert_ne!(magasin, 0);
+            assert_eq!(store(st.contexts[1]), magasin);
+            let ders: Vec<&[u8]> = crate::dlls::crypt32::store_certs(magasin)
+                .into_iter()
+                .map(crate::dlls::crypt32::cert_der)
+                .collect();
+            assert_eq!(ders, vec![CODE_ROOTS[0], CODE_ROOTS[1]]);
+            drop(s);
+            close_state(h);
+        }
     }
 
     #[test]
