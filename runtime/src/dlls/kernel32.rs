@@ -1086,7 +1086,7 @@ unsafe fn sync_io_at_overlapped(
     overlapped: usize,
     is_write: bool,
 ) -> i32 {
-    if !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+    if ov_misaligned(overlapped) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -1102,14 +1102,13 @@ unsafe fn sync_io_at_overlapped(
         };
         f.clone()
     };
-    let ov = overlapped as *mut Overlapped;
-    let offset = ((*ov).offset_high as u64) << 32 | (*ov).offset as u64;
+    let offset = ov_offset(overlapped);
     let mut f = lock(&file);
     // Un tube n'a pas de position : on lit ou écrit simplement dans l'ordre.
     let seekable = f.stream_position().is_ok();
     if seekable {
         if let Err(e) = f.seek(SeekFrom::Start(offset)) {
-            (*ov).internal = 0xC000_000D; // STATUS_INVALID_PARAMETER
+            ov_set(overlapped, 0xC000_000D, 0); // STATUS_INVALID_PARAMETER
             crate::process::set_last_error(io_error_code(&e));
             return 0;
         }
@@ -1128,22 +1127,22 @@ unsafe fn sync_io_at_overlapped(
     drop(f);
     match result {
         Ok(n) => {
-            (*ov).internal = 0;
-            (*ov).internal_high = n;
+            ov_set(overlapped, 0, n);
             if !done.is_null() {
                 *done = n as u32;
             }
-            if (*ov).event != 0 {
-                set_event((*ov).event);
+            let event = ov_event(overlapped);
+            if event != 0 {
+                set_event(event);
             }
             1
         }
         Err(e) => {
             let code = io_error_code(&e);
-            (*ov).internal = 0xC000_0001; // STATUS_UNSUCCESSFUL
-            (*ov).internal_high = 0;
-            if (*ov).event != 0 {
-                set_event((*ov).event);
+            ov_set(overlapped, 0xC000_0001, 0); // STATUS_UNSUCCESSFUL
+            let event = ov_event(overlapped);
+            if event != 0 {
+                set_event(event);
             }
             crate::process::set_last_error(code);
             0
@@ -1359,6 +1358,47 @@ pub(crate) unsafe fn ov_event(ov: usize) -> usize {
     }
 }
 
+/// Internal et InternalHigh d'un OVERLAPPED, à la disposition de l'appelant
+/// (champs de 4 octets pour un programme 32 bits).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_get(ov: usize) -> (usize, usize) {
+    if crate::wow32::pointer_size() == 4 {
+        (
+            std::ptr::read_volatile(ov as *const u32) as usize,
+            std::ptr::read_volatile((ov + 4) as *const u32) as usize,
+        )
+    } else {
+        let p = ov as *const Overlapped;
+        (
+            std::ptr::read_volatile(&(*p).internal),
+            std::ptr::read_volatile(&(*p).internal_high),
+        )
+    }
+}
+
+/// Offset et OffsetHigh d'un OVERLAPPED : décalage 8 en x86, 16 en x64
+/// (minwinbase.h, ULONG_PTR Internal et InternalHigh en tête), #2537.
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_offset(ov: usize) -> u64 {
+    let at = if crate::wow32::pointer_size() == 4 {
+        8
+    } else {
+        16
+    };
+    let low = std::ptr::read_unaligned((ov + at) as *const u32) as u64;
+    let high = std::ptr::read_unaligned((ov + at + 4) as *const u32) as u64;
+    high << 32 | low
+}
+
+/// Alignement exigé d'un OVERLAPPED : celui d'un pointeur de l'appelant.
+fn ov_misaligned(ov: usize) -> bool {
+    !ov.is_multiple_of(crate::wow32::pointer_size())
+}
+
 pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: bool) {
     unsafe {
         ov_set(overlapped, 0, bytes as usize);
@@ -1504,10 +1544,7 @@ fn start_overlapped_io(
 ) -> i32 {
     const ERROR_IO_PENDING: u32 = 997;
     const STATUS_PENDING: usize = 0x103;
-    if overlapped == 0
-        || !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>())
-        || (len != 0 && buffer == 0)
-    {
+    if overlapped == 0 || ov_misaligned(overlapped) || (len != 0 && buffer == 0) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -1519,11 +1556,10 @@ fn start_overlapped_io(
         };
         f.clone()
     };
-    let ov = overlapped as *mut Overlapped;
-    let offset = unsafe { ((*ov).offset_high as u64) << 32 | (*ov).offset as u64 };
+    let offset = unsafe { ov_offset(overlapped) };
     // hEvent avec le bit 0 levé : signaler l'événement mais ne rien poster
     // au port de complétion (libuv s'en sert pour ses lectures d'essai).
-    let raw_event = unsafe { (*ov).event };
+    let raw_event = unsafe { ov_event(overlapped) };
     let event = raw_event & !1;
     // ReadFile et WriteFile remettent l'événement de l'OVERLAPPED à non
     // signalé au début de l'E/S (documentation Learn, « Synchronization and
@@ -1562,8 +1598,7 @@ fn start_overlapped_io(
                     lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
                         .insert(overlapped, op);
                     unsafe {
-                        (*ov).internal = 0;
-                        (*ov).internal_high = n as usize;
+                        ov_set(overlapped, 0, n as usize);
                         if !done_out.is_null() {
                             *done_out = n;
                         }
@@ -1589,8 +1624,7 @@ fn start_overlapped_io(
                     lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
                         .remove(&overlapped);
                     unsafe {
-                        (*ov).internal = ntstatus_of_win32(e) as usize;
-                        (*ov).internal_high = 0;
+                        ov_set(overlapped, ntstatus_of_win32(e) as usize, 0);
                     }
                     crate::process::set_last_error(e);
                     return 0;
@@ -1624,8 +1658,7 @@ fn start_overlapped_io(
         ops.insert(overlapped, operation.clone());
     }
     unsafe {
-        (*ov).internal = STATUS_PENDING;
-        (*ov).internal_high = 0;
+        ov_set(overlapped, STATUS_PENDING, 0);
     }
     let op = operation.clone();
     if std::thread::Builder::new()
@@ -1683,9 +1716,11 @@ fn start_overlapped_io(
                 op.changed.notify_all();
             }
             unsafe {
-                let p = overlapped as *mut Overlapped;
-                (*p).internal = ntstatus_of_win32(error) as usize;
-                (*p).internal_high = bytes as usize;
+                ov_set(
+                    overlapped,
+                    ntstatus_of_win32(error) as usize,
+                    bytes as usize,
+                );
             }
             if event != 0 {
                 let _ = set_event(event);
@@ -1706,7 +1741,8 @@ fn start_overlapped_io(
     {
         lock(IO_OPERATIONS.get().unwrap()).remove(&overlapped);
         unsafe {
-            (*ov).internal = 0;
+            let (_, high) = ov_get(overlapped);
+            ov_set(overlapped, 0, high);
         }
         crate::process::set_last_error(8);
         return 0;
@@ -1733,12 +1769,12 @@ pub unsafe extern "win64" fn get_overlapped_result(
     let Some(op) = operation else {
         // Opération déjà relevée (port de complétion) : Windows relit
         // simplement OVERLAPPED.Internal / InternalHigh.
-        let status = (*overlapped).internal;
+        let (status, high) = ov_get(overlapped as usize);
         if status == 0x103 {
             crate::process::set_last_error(996);
             return 0;
         }
-        *transferred = (*overlapped).internal_high as u32;
+        *transferred = high as u32;
         if status == 0 {
             return 1;
         }
@@ -3566,8 +3602,16 @@ pub unsafe extern "win64" fn get_module_handle_a(name: *const u8) -> usize {
 /// Corps commun de `get_module_handle_a` et `get_module_handle_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn get_module_handle_str(name: &str) -> usize {
-    let n = name;
-    crate::dlls::module_handle(n).unwrap_or(0)
+    match crate::dlls::module_handle(name) {
+        Some(h) => h,
+        None => {
+            // ERROR_MOD_NOT_FOUND, comme GetModuleHandleEx et LoadLibrary :
+            // sans code, le programme relisait celui d'un appel précédent,
+            // parfois 0, et HRESULT_FROM_WIN32 en faisait un succès (#2113).
+            crate::process::set_last_error(126);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
     if name.is_null() {
@@ -6793,6 +6837,9 @@ unsafe fn create_process_common(
     // EXTENDED_STARTUPINFO_PRESENT + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE :
     // le programme s'attache à la pseudo-console (pty) de CreatePseudoConsole.
     let mut pseudo_console = false;
+    // Le descripteur 2 de l'enfant est-il la sortie d'erreur que le
+    // programme lui donne (STARTF_USESTDHANDLES) ? (#2515)
+    let mut program_stderr = false;
     if creation_flags & 0x0008_0000 != 0
         && !startup.is_null()
         && (*startup).cb as usize >= std::mem::size_of::<StartupInfoA>() + 8
@@ -6822,6 +6869,7 @@ unsafe fn create_process_common(
         ) {
             (Some(i), Some(o), Some(e)) => {
                 cmd.stdin(i).stdout(o).stderr(e);
+                program_stderr = true;
             }
             _ => {
                 crate::process::set_last_error(6);
@@ -6884,6 +6932,24 @@ unsafe fn create_process_common(
     // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
     // suspendu) : ouvert ici, hérité, renommé d'après son PID.
     cmd.env_remove(crate::dlls::handle_broker::ENV);
+    // Lignes de diagnostic de l'enfant (#2515) : jamais dans la sortie
+    // d'erreur qu'un programme Windows lui donne, que son parent lit comme
+    // une donnée ; elles vont à notre propre descripteur de diagnostic,
+    // passé en copie héritable le temps du lancement.
+    cmd.env_remove(crate::log::DIAG_FD_ENV);
+    let _diag_copy: Option<std::os::fd::OwnedFd> =
+        if is_pe && (program_stderr || pseudo_console || crate::log::diag_fd() != 2) {
+            let d = crate::log::diag_fd();
+            let copy = if d >= 0 {
+                libc::fcntl(d, libc::F_DUPFD, 3)
+            } else {
+                -1
+            };
+            cmd.env(crate::log::DIAG_FD_ENV, copy.to_string());
+            (copy >= 0).then(|| <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(copy))
+        } else {
+            None
+        };
     // Gestionnaire de crashpad connu : l'enfant le désigne à son tour pour
     // qu'il puisse lire sa mémoire (#767).
     cmd.env_remove(CRASH_HANDLER_ENV);
@@ -6899,6 +6965,7 @@ unsafe fn create_process_common(
         cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
     cmd.env_remove("WINLUX_EXIT_CODE_FILE");
+    cmd.env_remove("WINLUX_CRASH_MARK_FILE");
     let code_file = if is_pe {
         exit_code_channel(&mut cmd)
     } else {
@@ -8976,6 +9043,47 @@ pub fn exit_code_file_init() {
     }
 }
 
+/// Fichier marqué quand le processus finit sur une exception non gérée
+/// (`WINLUX_CRASH_MARK_FILE`, posé par winlux-open, #2272). Une sortie
+/// volontaire (ExitProcess, exit), quel que soit son code, ne le touche pas :
+/// comme sous Windows, elle n'affiche rien.
+static CRASH_MARK_FILE: OnceLock<std::ffi::CString> = OnceLock::new();
+
+/// Lu au démarrage comme `exit_code_file_init`, puis retiré de
+/// l'environnement : un programme lancé par celui-ci n'y écrit pas.
+pub fn crash_mark_file_init() {
+    if let Some(path) = std::env::var_os("WINLUX_CRASH_MARK_FILE") {
+        std::env::remove_var("WINLUX_CRASH_MARK_FILE");
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(path) = std::ffi::CString::new(path.as_bytes()) {
+            if !path.as_bytes().is_empty() {
+                let _ = CRASH_MARK_FILE.set(path);
+            }
+        }
+    }
+}
+
+/// Note que le processus finit sur une exception non gérée (faute matérielle
+/// ou logicielle) ; sûr dans un gestionnaire de signal (open/write).
+pub fn record_crash() {
+    let Some(path) = CRASH_MARK_FILE.get() else {
+        return;
+    };
+    let text = b"exception\n";
+    // SAFETY: chemin terminé par NUL, tampon statique ; appels sûrs en signal.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+            0o600,
+        );
+        if fd >= 0 {
+            libc::write(fd, text.as_ptr().cast(), text.len());
+            libc::close(fd);
+        }
+    }
+}
+
 /// Texte écrit pour un code : « 0x780148E0 ». Sans allocation.
 fn exit_code_text(code: u32) -> [u8; 11] {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -9076,6 +9184,27 @@ pub fn exit_with(code: i32) -> ! {
 #[cfg(test)]
 mod tests_code_enfant {
     use super::*;
+
+    /// #2272 : la marque de plantage n'est écrite que par `record_crash`
+    /// (exception non gérée), jamais par une sortie avec code.
+    #[test]
+    fn marque_de_plantage_distincte_du_code() {
+        let dir = std::env::temp_dir().join(format!("winlux-2272-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mark = dir.join("plantage");
+        let _ = CRASH_MARK_FILE.set(std::ffi::CString::new(mark.to_str().unwrap()).unwrap());
+        let mark = std::path::PathBuf::from(CRASH_MARK_FILE.get().unwrap().to_str().unwrap());
+        let _ = std::fs::remove_file(&mark);
+        record_exit_code(1);
+        assert!(
+            !mark.exists(),
+            "un code de sortie ne marque pas de plantage"
+        );
+        record_crash();
+        assert_eq!(std::fs::read_to_string(&mark).unwrap(), "exception\n");
+        let _ = std::fs::remove_file(&mark);
+        let _ = std::fs::remove_dir(&dir);
+    }
     use std::os::unix::process::ExitStatusExt;
 
     /// #2267 : le code écrit par l'enfant prime sur ses 8 bits Linux ;
@@ -10422,7 +10551,7 @@ unsafe fn read_directory_changes(
         crate::process::set_last_error(error);
         return 1;
     }
-    if !ov.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+    if ov_misaligned(ov) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -10447,11 +10576,9 @@ unsafe fn read_directory_changes(
         }
         ops.insert(ov, operation.clone());
     }
-    let overlapped = ov as *mut Overlapped;
-    (*overlapped).internal = 0x103; // STATUS_PENDING
-    (*overlapped).internal_high = 0;
-    // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
-    let event = (*overlapped).event;
+    ov_set(ov, 0x103, 0); // STATUS_PENDING
+                          // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
+    let event = ov_event(ov);
     if event != 0 {
         let _ = reset_event(event);
     }
@@ -10480,12 +10607,12 @@ unsafe fn read_directory_changes(
                 (0, error)
             };
             unsafe {
-                (*(ov as *mut Overlapped)).internal = match error {
+                let status = match error {
                     0 if count == 0 => 0x10C, // STATUS_NOTIFY_ENUM_DIR
                     0 => 0,
                     _ => 0xC000_0120, // STATUS_CANCELLED
                 };
-                (*(ov as *mut Overlapped)).internal_high = count as usize;
+                ov_set(ov, status, count as usize);
             }
             {
                 let mut state = lock(&op.state);
@@ -13251,6 +13378,96 @@ mod audit_tests {
         // … et l'id rendu par CreateThread est celui de GetCurrentThreadId.
         assert_eq!(seen, tid);
         assert_eq!(close_handle(h), 1);
+    }
+
+    /// #2537 : OVERLAPPED x86 (20 octets : Internal, InternalHigh, Offset à
+    /// +8, OffsetHigh à +12, hEvent à +16). Une écriture positionnée sur un
+    /// handle synchrone (base::File::Write de Chromium, Google Update) doit
+    /// écrire à Offset et remplir les champs de 4 octets ; lu à la
+    /// disposition x64, Offset tombait sur hEvent et l'octet suivant.
+    /// Vérifié dans un processus neuf (ce test relancé seul), le seul où le
+    /// drapeau « programme x86 » peut être levé.
+    #[test]
+    fn overlapped_x86_ecriture_positionnee() {
+        const ENFANT: &str = "WINLUX_TEST_OVERLAPPED_X86";
+        let dir = std::env::temp_dir().join(format!("winlux-ov86-{}", std::process::id()));
+        if std::env::var_os(ENFANT).is_some() {
+            crate::wow32::force_active_for_test();
+            let p = std::path::PathBuf::from(std::env::var_os(ENFANT).unwrap());
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&p)
+                .unwrap();
+            let h = insert_file(f);
+            // Bloc x86, aligné sur 4 octets seulement ; après hEvent, des
+            // octets non nuls qu'une lecture x64 prendrait pour OffsetHigh.
+            let mut bloc = [0u32; 8];
+            bloc[2] = 3; // Offset
+            bloc[3] = 0; // OffsetHigh
+            bloc[4] = 0; // hEvent
+            bloc[5] = 0xdead_beef;
+            let ov = bloc.as_mut_ptr() as usize + 4;
+            let ov = ov - ov % 4;
+            unsafe {
+                std::ptr::copy(bloc.as_ptr(), ov as *mut u32, 6);
+                let mut ecrit = 0u32;
+                let r = write_file(h, b"abc".as_ptr(), 3, &mut ecrit, ov);
+                assert_eq!(r, 1);
+                assert_eq!(ecrit, 3);
+                assert_eq!(ov_get(ov), (0, 3), "Internal et InternalHigh sur 4 octets");
+                assert_eq!(*((ov + 16) as *const u32), 0, "hEvent intact");
+            }
+            close_handle(h);
+            assert_eq!(std::fs::read(&p).unwrap(), b"\0\0\0abc");
+            unsafe { libc::_exit(0) };
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let fichier = dir.join("ecrit.bin");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::audit_tests::overlapped_x86_ecriture_positionnee",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, &fichier)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("le test x86 relancé n'a pas fini en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(status.code(), Some(0), "écriture x86 positionnée");
+    }
+
+    /// Offset d'un OVERLAPPED aux deux dispositions (#2537).
+    #[test]
+    fn overlapped_decalages_x86_et_x64() {
+        let ov = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0x1234,
+            offset_high: 1,
+            event: 0,
+        };
+        assert_eq!(
+            unsafe { ov_offset(&ov as *const Overlapped as usize) },
+            0x1_0000_1234
+        );
     }
 
     #[test]

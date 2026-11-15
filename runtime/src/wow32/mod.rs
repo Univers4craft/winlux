@@ -24,6 +24,8 @@
 
 mod com;
 mod com_audio;
+mod com_mf;
+mod com_mf_chaine;
 mod com_netfw;
 mod com_nlm;
 mod com_ole;
@@ -54,6 +56,7 @@ mod vulkan;
 mod wow64;
 
 pub(crate) use com_audio::iface_to32;
+pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
@@ -115,6 +118,13 @@ static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 /// Un programme 32 bits est-il en cours dans ce processus ?
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Test seulement, dans un processus de test relancé à part : fait comme si
+/// le programme était x86, pour lire les structures à sa disposition.
+#[cfg(test)]
+pub(crate) fn force_active_for_test() {
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
@@ -3263,6 +3273,61 @@ mod tests {
         for n in ["iswalpha", "_iswalpha_l", "_findfirst64i32", "_wfindnext32"] {
             let a = crate::dlls::lookup("ucrtbase", n).unwrap();
             assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+    }
+
+    /// #2512 : toute fonction que shlwapi sert en x64 a une passerelle x86.
+    /// Les enveloppes A et W engendrées par macro_rules! n'avaient pas de
+    /// signature : l'outil de déploiement d'Office mourait sur PathIsUNCW.
+    #[test]
+    fn shlwapi_toujours_servie_en_x86() {
+        let exports: Vec<&str> = crate::dlls::builtin_exports()
+            .into_iter()
+            .filter(|(dll, _)| *dll == "shlwapi")
+            .flat_map(|(_, names)| names)
+            .collect();
+        assert!(exports.contains(&"PathIsUNCW"));
+        // Les adresses sont notées au premier lookup.
+        let addrs: Vec<(&str, usize)> = exports
+            .iter()
+            .filter_map(|n| Some((*n, crate::dlls::lookup("shlwapi", n)?)))
+            .collect();
+        let notes: std::collections::HashSet<usize> = NOTES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(a, _, _)| *a)
+            .collect();
+        let mut manquants: Vec<&str> = addrs
+            .iter()
+            .filter(|(n, a)| {
+                notes.contains(a)
+                    && sig_of_addr(*a).is_none()
+                    && override_stub("shlwapi", n).is_none()
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        manquants.sort();
+        assert!(manquants.is_empty(), "sans passerelle x86 : {manquants:?}");
+        for n in [
+            "PathIsUNCW",
+            "PathGetArgsW",
+            "PathStripToRootW",
+            "PathIsSystemFolderW",
+        ] {
+            let a = crate::dlls::lookup("shlwapi", n).unwrap();
+            assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+        assert_eq!(
+            sig_of_addr(crate::dlls::lookup("shlwapi", "PathIsSystemFolderW").unwrap()).map(|s| s
+                .split('>')
+                .next()
+                .unwrap()
+                .len()),
+            Some(2)
+        );
+        for n in ["wnsprintfA", "wnsprintfW"] {
+            assert!(override_stub("shlwapi", n).is_some(), "{n}");
         }
     }
 

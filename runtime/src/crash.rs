@@ -210,6 +210,8 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
 /// le code d'exception Windows. Appelé aussi par le gestionnaire de
 /// `quality`, qui s'installe après celui-ci, avant son propre dump.
 pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) -> u32 {
+    // Faute matérielle : plantage pour winlux-open (#2272).
+    crate::dlls::kernel32::record_crash();
     // Processus figés par celui-ci (Crashpad en plein vidage) : relancés
     // avant toute autre chose, sinon ils restent figés pour toujours (#1787).
     crate::dlls::electron_win32::resume_suspended();
@@ -647,7 +649,11 @@ unsafe fn write_heap_frames(name: &[u8], what: &[u8], frames: &[usize]) {
 }
 
 unsafe fn write_literal(s: &[u8]) {
-    let _ = libc::write(2, s.as_ptr() as *const libc::c_void, s.len());
+    // Descripteur de diagnostic, pas le tube d'un programme (#2515).
+    let fd = crate::log::diag_fd();
+    if fd >= 0 {
+        let _ = libc::write(fd, s.as_ptr() as *const libc::c_void, s.len());
+    }
 }
 
 unsafe fn write_hex(mut n: usize) {

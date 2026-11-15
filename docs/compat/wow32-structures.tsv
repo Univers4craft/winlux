@@ -169,7 +169,7 @@ jumplist_com.rs	Obj	interne	objets ICustomDestinationList et IObjectArray du run
 kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
 kernel32.rs	Entry	interne	test unitaire
 kernel32.rs	MemoryBasicInformation	x86	wow64.c n° 8-9 (28 octets)
-kernel32.rs	Overlapped	a-verifier	
+kernel32.rs	Overlapped	a-verifier	kernel32 (ReadFile, WriteFile, GetOverlappedResult, ReadDirectoryChangesW) passe par ov_get, ov_set, ov_offset et ov_event (#1408, #2537) ; ws2_32, tubes nommés, DeviceIoControl encore à vérifier
 kernel32.rs	OverlappedEntry	a-verifier	
 kernel32.rs	ProcessInformation	x86	wow64.c n° 42-45 (PROCESS_INFORMATION de 16 octets)
 kernel32.rs	SecurityAttributes	a-verifier	
@@ -252,7 +252,7 @@ shell_folder_com.rs	Enum	interne	objet IEnumIDList du runtime ; en x86, la passe
 shell_folder_com.rs	Folder	interne	objet IShellFolder du runtime ; en x86, la passerelle COM (wow32/com.rs, ISHELLFOLDER) l'enveloppe
 shell_link.rs	Link	interne	objet ShellLink (#1732), x64 seulement (refusé si wow32 actif)
 shell_ordinaux.rs	Obj	interne	test unitaire
-shell_ordinaux.rs	QiTab	a-verifier	QITAB x86 = 8 octets (pointeur 4 + int 4), x64 = 16 ; seul le chemin x64 est servi par #1750 (WinRAR x64)
+shell_ordinaux.rs	QiTab	x86	QITAB x86 = 8 octets (dwOffset à +4), x64 = 16 (à +8), mesurés ; QISearch lit la disposition de l'appelant et appelle l'AddRef x86 (#2476) ; test table_qitab_x86
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskbarlist_com.rs	Obj	a-verifier	

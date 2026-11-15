@@ -234,6 +234,7 @@ GenerateConsoleCtrlEvent
 GetACP
 GetActiveProcessorCount
 GetActiveProcessorGroupCount
+GetAppContainerNamedObjectPath
 GetApplicationRestartSettings
 GetApplicationUserModelId
 GetAtomNameA

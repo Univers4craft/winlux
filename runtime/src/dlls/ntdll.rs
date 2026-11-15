@@ -2777,6 +2777,7 @@ pub fn exports() -> crate::dlls::Exports {
         "NtQueryFullAttributesFile" => fn nt_query_full_attributes_file,
         "NtOpenProcess" => fn nt_open_process,
         "NtOpenThread" => fn nt_open_thread,
+        "NtCreateLowBoxToken" => fn crate::dlls::security::nt_create_low_box_token,
         "NtOpenProcessToken" => fn nt_open_process_token,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
