@@ -801,6 +801,7 @@ SetConsoleTextAttribute
 SetConsoleTitleA
 SetConsoleTitleW
 SetConsoleWindowInfo
+SetCriticalSectionSpinCount
 SetCurrentDirectoryA
 SetCurrentDirectoryW
 SetDefaultDllDirectories
