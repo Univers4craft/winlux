@@ -494,6 +494,8 @@ const FORMATS: &[FmtRow] = &[
     ("_snwprintf_s", b"iiii", 3, true, false, false, false),
     ("wsprintfA", b"ii", 1, false, false, false, false),
     ("wsprintfW", b"ii", 1, true, false, false, false),
+    ("wnsprintfA", b"iii", 2, false, false, false, false),
+    ("wnsprintfW", b"iii", 2, true, false, false, false),
     ("vprintf", b"i", 0, false, false, true, false),
     ("vwprintf", b"i", 0, true, false, true, false),
     ("vfprintf", b"ii", 1, false, false, true, false),
@@ -1713,6 +1715,9 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         }
     }
     if n == "user32" && func.starts_with("w") {
+        return fmt_override(n, func);
+    }
+    if n == "shlwapi" && func.starts_with("wnsprintf") {
         return fmt_override(n, func);
     }
     if n == "ntdll" && func.contains("printf") {
