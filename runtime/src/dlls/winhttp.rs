@@ -94,6 +94,11 @@ fn insert(parent: usize, kind: Kind) -> usize {
         return fail(6);
     }
     entries.insert(id, Handle { parent, kind });
+    // Handle rendu : dernier code d'erreur à 0. L'outil de déploiement
+    // d'Office lit GetLastError après un WinHttpConnect ou un
+    // WinHttpOpenRequest réussi, et prenait pour une erreur le 122 laissé
+    // par un GetTokenInformation de dimensionnement (#2651).
+    crate::process::set_last_error(0);
     id
 }
 unsafe fn wide(pointer: *const u16, length: u32) -> Result<String, u32> {
@@ -1297,6 +1302,38 @@ mod tests {
     /// #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
     /// départ), le rappel est hérité par une requête ouverte ensuite, et
     /// WINHTTP_INVALID_STATUS_CALLBACK seulement sur une poignée inconnue.
+    /// #2651 : un handle rendu remet le dernier code d'erreur à 0.
+    #[test]
+    fn handle_rendu_efface_la_derniere_erreur() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            crate::process::set_last_error(122);
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            crate::process::set_last_error(122);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            crate::process::set_last_error(122);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(crate::process::last_error(), 0);
+            // Un échec garde son propre code.
+            assert_eq!(connect(0xdead_0000, w("127.0.0.1").as_ptr(), 80, 0), 0);
+            assert_eq!(crate::process::last_error(), 6);
+            assert_eq!(close(session), 1);
+        }
+    }
+
     #[test]
     fn rappel_d_etat_retenu_et_rendu() {
         let _teb = crate::process::test_teb();
