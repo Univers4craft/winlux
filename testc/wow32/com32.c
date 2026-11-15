@@ -530,6 +530,26 @@ int main(void)
             ((rel_fn)vt[2])(nlm);
     }
 
+    /* #2556 : IGlobalOptions, créée par Google Update (x86) au démarrage
+     * pour COMGLB_EXCEPTION_HANDLING (2) = COMGLB_EXCEPTION_DONOT_HANDLE (1).
+     * Indices de la table : IUnknown, Set (3), Query (4). */
+    {
+        static const GUID clsid_go = { 0x0000034b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        static const GUID iid_go = { 0x0000015b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        typedef HRESULT (STDMETHODCALLTYPE *set_fn)(void *, DWORD, ULONG_PTR);
+        typedef HRESULT (STDMETHODCALLTYPE *query_fn)(void *, DWORD, ULONG_PTR *);
+        typedef ULONG (STDMETHODCALLTYPE *rel_fn)(void *);
+        void *go = NULL;
+        CHECK(CoCreateInstance(&clsid_go, NULL, CLSCTX_INPROC_SERVER, &iid_go, &go) == S_OK && go != NULL,
+              "CoCreateInstance(GlobalOptions)");
+        void **vt = go ? *(void ***)go : NULL;
+        CHECK(vt && ((set_fn)vt[3])(go, 2, 1) == S_OK, "IGlobalOptions::Set");
+        ULONG_PTR v = 7;
+        CHECK(vt && ((query_fn)vt[4])(go, 2, &v) == S_OK && v == 1, "IGlobalOptions::Query");
+        if (go)
+            ((rel_fn)vt[2])(go);
+    }
+
     /* #2531 : GDI+ lit et écrit un IStream x86 (l'outil de déploiement
        d'Office fautait dans GdipLoadImageFromStream). */
     {

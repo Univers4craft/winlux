@@ -60,7 +60,24 @@ pub(super) static IRUNNINGOBJECTTABLE: Iface = Iface {
     ],
 };
 
-pub(super) static ALL: &[&Iface] = &[&IBINDCTX, &IRUNNINGOBJECTTABLE];
+/// IGlobalOptions {0000015B-0000-0000-C000-000000000046} (#2556), servie
+/// par `dlls/global_options.rs`. Google Update (x86) la crée au démarrage
+/// pour régler COMGLB_EXCEPTION_HANDLING et s'arrête sur un CHECK si elle
+/// manque. Set(DWORD, ULONG_PTR) : deux cases de 4 octets en x86 ;
+/// Query(DWORD, ULONG_PTR*) : la valeur rendue a la taille d'un pointeur.
+/// Seule COMGLB_APPID rend un pointeur (vers la copie du GUID gardée par
+/// le runtime) ; une valeur réglée par du code x86 tient dans 32 bits.
+pub(super) static IGLOBALOPTIONS: Iface = Iface {
+    name: "IGlobalOptions",
+    iid: ole(0x15B),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I]),      // Set(dwProperty, dwValue)
+        Some(&[I, OutPtr]), // Query(dwProperty, pdwValue)
+    ],
+};
+
+pub(super) static ALL: &[&Iface] = &[&IBINDCTX, &IRUNNINGOBJECTTABLE, &IGLOBALOPTIONS];
 
 #[cfg(test)]
 mod tests {
@@ -82,6 +99,15 @@ mod tests {
         let bind = IMONIKER.method(8).expect("BindToObject");
         assert!(matches!(bind[0], In(f) if std::ptr::eq(f, &IBINDCTX)));
         assert!(matches!(bind[1], In(f) if std::ptr::eq(f, &IMONIKER)));
+    }
+
+    #[test]
+    fn options_globales_decrites_pour_le_code_x86() {
+        assert_eq!(IGLOBALOPTIONS.count(), 5);
+        assert_eq!(ole(0x15B), crate::dlls::global_options::IID_IGLOBAL_OPTIONS);
+        assert!(by_iid(&ole(0x15B)).is_some_and(|f| std::ptr::eq(f, &IGLOBALOPTIONS)));
+        assert!(matches!(IGLOBALOPTIONS.method(3), Some([I, I])));
+        assert!(matches!(IGLOBALOPTIONS.method(4), Some([I, OutPtr])));
     }
 
     #[test]
