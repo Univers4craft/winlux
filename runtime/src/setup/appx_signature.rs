@@ -409,8 +409,25 @@ fn chain_reason_of(v: &hostssl::Verified) -> String {
     }
 }
 
+/// Sujet d'un certificat DER, en clair (journal de crypt32, #2679).
+pub(crate) fn subject_of(der: &[u8]) -> Option<String> {
+    let t = expect(der, 0x30).ok()?;
+    Some(format_dn(&parse_cert(der, t.body).ok()?.subject))
+}
+
+/// Vrai si le certificat DER porte l'usage étendu « signature de code »
+/// (id-kp-codeSigning, 1.3.6.1.5.5.7.3.3, RFC 5280 § 4.2.1.12).
+pub(crate) fn has_code_signing_usage(der: &[u8]) -> bool {
+    const CODE_SIGNING: [u8; 8] = [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03];
+    expect(der, 0x30)
+        .ok()
+        .and_then(|t| parse_cert(der, t.body).ok())
+        .and_then(|c| c.eku)
+        .is_some_and(|l| l.iter().any(|o| o[..] == CODE_SIGNING))
+}
+
 /// « chaîne arrêtée à « sujet », émis par « émetteur » » pour un certificat DER.
-fn chain_top(der: &[u8]) -> Option<String> {
+pub(crate) fn chain_top(der: &[u8]) -> Option<String> {
     let t = expect(der, 0x30).ok()?;
     let cert = parse_cert(der, t.body).ok()?;
     let issuer = parse_name(expect(&cert.issuer, 0x30).ok()?.body).ok()?;
