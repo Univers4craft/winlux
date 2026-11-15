@@ -544,12 +544,14 @@ unsafe fn ensure_parsed(r: &mut Reader) -> Result<(), (i32, String)> {
 fn decode(bytes: &[u8], charset: u32) -> String {
     let utf16 = |be: bool| {
         let u: Vec<u16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| {
                 if be {
-                    u16::from_be_bytes([c[0], c[1]])
+                    u16::from_be_bytes(*c)
                 } else {
-                    u16::from_le_bytes([c[0], c[1]])
+                    u16::from_le_bytes(*c)
                 }
             })
             .collect();
