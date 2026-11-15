@@ -244,12 +244,26 @@ fn api_log_program() -> String {
         .unwrap_or_else(|| "winlux".into())
 }
 
+/// Nom libre du journal : `<programme>-<pid>.log`, ou `-<pid>-2.log`… quand
+/// il existe déjà. Le repli #1733 relance l'application par execv sous le
+/// même pid : sans cela, sa trace écrasait celle d'avant la relance (#2566).
+fn free_log_path(dir: &std::path::Path, exe: &str, pid: u32) -> std::path::PathBuf {
+    let first = dir.join(format!("{exe}-{pid}.log"));
+    if !first.exists() {
+        return first;
+    }
+    (2u32..1000)
+        .map(|n| dir.join(format!("{exe}-{pid}-{n}.log")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
 fn open_api_log() -> Option<ApiLog> {
     let dir = api_log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     prune_api_logs(&dir, API_LOG_DIR_MAX);
     let exe = api_log_program();
-    let path = dir.join(format!("{exe}-{}.log", std::process::id()));
+    let path = free_log_path(&dir, &exe, std::process::id());
     let file = std::fs::File::create(&path).ok()?;
     eprintln!("winlux[api] journal des appels : {}", path.display());
     Some(ApiLog {
@@ -966,6 +980,27 @@ mod api_trace_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le processus relancé sous le même pid (#1733) garde la trace d'avant
+    /// la relance (#2566).
+    #[test]
+    fn journal_d_api_relance_sans_ecraser() {
+        let dir = std::env::temp_dir().join(format!("winlux-2566-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = free_log_path(&dir, "Acrobat", 14385);
+        assert_eq!(first, dir.join("Acrobat-14385.log"));
+        std::fs::write(&first, "avant la relance").unwrap();
+        let second = free_log_path(&dir, "Acrobat", 14385);
+        assert_eq!(second, dir.join("Acrobat-14385-2.log"));
+        std::fs::write(&second, "après").unwrap();
+        assert_eq!(
+            free_log_path(&dir, "Acrobat", 14385),
+            dir.join("Acrobat-14385-3.log")
+        );
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "avant la relance");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     extern "win64" fn somme_six(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64) -> u64 {
         // Un cadre un peu épais, pour salir la pile sous l'appelant.

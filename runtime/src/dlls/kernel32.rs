@@ -10950,6 +10950,9 @@ pub unsafe extern "win64" fn get_long_path_name_a(short: *const u8, buf: *mut u8
         return 0;
     }
     let s = crate::dlls::cstr(short);
+    if get_file_attributes_str(&s) == u32::MAX {
+        return 0; // #2117 : chemin absent, code posé (2 ou 3)
+    }
     crate::dlls::put_a(&s, buf, cap)
 }
 pub unsafe extern "win64" fn get_long_path_name_w(
@@ -10962,6 +10965,9 @@ pub unsafe extern "win64" fn get_long_path_name_w(
         return 0;
     }
     let s = crate::dlls::wstr(short);
+    if get_file_attributes_str(&s) == u32::MAX {
+        return 0; // #2117 : chemin absent, code posé (2 ou 3)
+    }
     crate::dlls::put_w(&s, buf, cap)
 }
 pub unsafe extern "win64" fn get_short_path_name_a(long: *const u8, buf: *mut u8, cap: u32) -> u32 {
@@ -11940,6 +11946,44 @@ mod tests {
             assert_eq!(super::set_critical_section_spin_count(p, 0), 1500);
             super::delete_critical_section(p);
         }
+    }
+
+    #[test]
+    fn chemin_long_ou_court_d_un_fichier_absent_echoue() {
+        // #2117 : GetLongPathName et GetShortPathName échouent sur un chemin qui n'existe pas.
+        let _teb = crate::process::test_teb();
+        let dir = std::env::temp_dir().join(format!("winlux-2117-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("present.txt"), b"x").unwrap();
+        let present = format!("{}/present.txt", dir.display());
+        let absent = format!("{}/absent.txt", dir.display());
+        let w = |t: &str| t.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let mut buf = [0u16; 512];
+        let mut abuf = [0u8; 512];
+        unsafe {
+            let n = super::get_long_path_name_w(w(&present).as_ptr(), buf.as_mut_ptr(), 512);
+            assert_eq!(n as usize, present.len());
+            crate::process::set_last_error(122);
+            assert_eq!(
+                super::get_long_path_name_w(w(&absent).as_ptr(), buf.as_mut_ptr(), 512),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 2);
+            crate::process::set_last_error(122);
+            assert_eq!(
+                super::get_short_path_name_w(w(&absent).as_ptr(), buf.as_mut_ptr(), 512),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 2);
+            let a = format!("{absent}\0");
+            crate::process::set_last_error(122);
+            assert_eq!(
+                super::get_long_path_name_a(a.as_ptr(), abuf.as_mut_ptr(), 512),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 2);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -308,6 +308,7 @@ webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; We
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
 winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)
+wininet.rs	UrlComponents	x86	URL_COMPONENTSA/W de 60 octets lu et réécrit par from_x86/write_x86 ; test url_components_x86 et crt32.c n° 46 (#2554)
 winlux_media.rs	OpenOptions	a-verifier	
 winmm_waveout.rs	WaveHdr	a-verifier	
 winusb.rs	Bulk	a-verifier	
