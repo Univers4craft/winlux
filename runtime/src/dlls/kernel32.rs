@@ -3765,6 +3765,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         return 0;
     }
     note_renders_itself(n);
+    if super::atlthunk::hidden_for_x86(n) {
+        crate::process::set_last_error(126);
+        return 0;
+    }
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
