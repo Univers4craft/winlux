@@ -531,6 +531,13 @@ pub unsafe extern "win64" fn GetLengthSid(sid: *const u8) -> u32 {
     sid_at(sid).map_or(0, |s| s.len() as u32)
 }
 
+/// Taille d'un SID à `n` sous-autorités : révision, nombre, autorité (6
+/// octets), puis 4 octets par sous-autorité (structure `SID` de winnt.h ;
+/// import d'armsvc.exe, #2533).
+pub unsafe extern "win64" fn GetSidLengthRequired(n: u8) -> u32 {
+    8 + 4 * n as u32
+}
+
 pub unsafe extern "win64" fn EqualSid(a: *const u8, b: *const u8) -> i32 {
     match (sid_at(a), sid_at(b)) {
         (Some(x), Some(y)) => (x == y) as i32,
@@ -2586,6 +2593,7 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "FreeSid" => fn FreeSid,
         "IsValidSid" => fn IsValidSid,
         "GetLengthSid" => fn GetLengthSid,
+        "GetSidLengthRequired" => fn GetSidLengthRequired,
         "EqualSid" => fn EqualSid,
         "CopySid" => fn CopySid,
         "GetSidSubAuthority" => fn GetSidSubAuthority,
