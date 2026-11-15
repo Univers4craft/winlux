@@ -25,6 +25,7 @@ contrat il annule, sauf avec WINLUX_SETUP_WIZARD_AUTO_LICENCE=accepte.
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -218,6 +219,44 @@ def menu_entries():
     return entries
 
 
+# Code de sortie Windows complet (#2267) : un statut Linux n'en garde que
+# 8 bits (3010 devient 194). Le runtime l'écrit dans WINLUX_EXIT_CODE_FILE.
+PARENT_CODE_FILE = os.environ.pop("WINLUX_EXIT_CODE_FILE", "")
+
+
+def code_file():
+    fd, name = tempfile.mkstemp(prefix="winlux-code.")
+    os.close(fd)
+    return name
+
+
+def full_code(name, status):
+    """Code complet écrit par le runtime, sinon le statut Linux."""
+    try:
+        text = Path(name).read_text(errors="replace").strip()
+    except OSError:
+        text = ""
+    finally:
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+    if len(text) == 10 and text.startswith("0x"):
+        try:
+            return int(text[2:], 16)
+        except ValueError:
+            pass
+    return status
+
+
+def record_code(code):
+    if PARENT_CODE_FILE:
+        try:
+            Path(PARENT_CODE_FILE).write_text("0x%08X\n" % (code & 0xFFFFFFFF))
+        except OSError:
+            pass
+
+
 def main(argv):
     args = [a for a in argv[1:]]
     runtime = os.environ.get("WINLUX_BIN", "/usr/bin/winlux")
@@ -398,15 +437,17 @@ def main(argv):
     def work(argv):
         lines = []
         try:
+            name = code_file()
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                    cwd=os.path.dirname(path) or None)
+                                    cwd=os.path.dirname(path) or None,
+                                    env=dict(os.environ, WINLUX_EXIT_CODE_FILE=name))
             for line in proc.stdout:
                 lines.append(line)
                 # Écrite au fil de l'eau : last-launch.log garde la trace
                 # même si l'assistant est tué avant la fin (#2328).
                 print(line, end="", flush=True)
                 GLib.idle_add(status.set_text, line.strip())
-            code = proc.wait()
+            code = full_code(name, proc.wait())
         except OSError as e:
             lines.append(str(e))
             print(e, flush=True)
@@ -481,4 +522,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    _code = main(sys.argv)
+    record_code(_code or 0)
+    sys.exit(_code)
