@@ -172,8 +172,27 @@ pub(crate) fn is_overlapped_handle(h: usize) -> bool {
 }
 struct IoResult {
     done: bool,
+    /// Internal, InternalHigh et hEvent sont à jour : GetOverlappedResult
+    /// avec bWait = TRUE peut rendre la main (#2629).
+    signalled: bool,
     bytes: u32,
     error: u32,
+}
+impl IoOperation {
+    /// Résultat noté : l'OVERLAPPED n'est plus « en cours » pour une
+    /// nouvelle opération (Internal déjà écrit par l'appelant).
+    fn note_result(&self, bytes: u32, error: u32) {
+        let mut state = lock(&self.state);
+        state.bytes = bytes;
+        state.error = error;
+        state.done = true;
+    }
+    /// Événement signalé après Internal : GetOverlappedResult est réveillé.
+    fn mark_signalled(&self) {
+        let mut state = lock(&self.state);
+        state.signalled = true;
+        self.changed.notify_all();
+    }
 }
 struct IoOperation {
     file_handle: usize,
@@ -1431,6 +1450,7 @@ pub(crate) unsafe fn begin_overlapped(h: usize, overlapped: usize) -> Option<Pen
         issuing_thread: std::thread::current().id(),
         state: Mutex::new(IoResult {
             done: false,
+            signalled: false,
             bytes: 0,
             error: 0,
         }),
@@ -1461,14 +1481,18 @@ impl PendingIo {
     /// Fin de l'opération : résultat noté pour GetOverlappedResult, puis
     /// `Internal`, événement et port de complétion comme `complete_overlapped`.
     pub(crate) fn finish(self, bytes: u32, error: u32) {
-        {
-            let mut state = lock(&self.op.state);
-            state.bytes = bytes;
-            state.error = error;
-            state.done = true;
-            self.op.changed.notify_all();
+        // Internal et InternalHigh d'abord : dès que `done` est vu,
+        // GetOverlappedResult rend la main et l'appelant peut relire
+        // l'OVERLAPPED (#2629).
+        unsafe {
+            ov_set(
+                self.overlapped,
+                ntstatus_of_win32(error) as usize,
+                bytes as usize,
+            );
         }
-        complete_overlapped(self.h, self.overlapped, bytes, error);
+        self.op.note_result(bytes, error);
+        signal_overlapped(self.h, self.overlapped, bytes, error, Some(&self.op));
     }
     /// Le fil n'a pas pu partir : l'opération est oubliée.
     pub(crate) fn abandon(self) {
@@ -1484,14 +1508,32 @@ impl PendingIo {
 
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
-        let raw = ov_event(overlapped);
         ov_set(
             overlapped,
             ntstatus_of_win32(error) as usize,
             bytes as usize,
         );
+    }
+    signal_overlapped(h, overlapped, bytes, error, None);
+}
+
+/// Fin d'opération après écriture de `Internal` : événement, puis paquet au
+/// port de complétion lié à `h` (sauf bit 0 de hEvent posé). `op` est
+/// marquée signalée entre les deux.
+fn signal_overlapped(
+    h: usize,
+    overlapped: usize,
+    bytes: u32,
+    error: u32,
+    op: Option<&IoOperation>,
+) {
+    unsafe {
+        let raw = ov_event(overlapped);
         if raw & !1 != 0 {
             let _ = set_event(raw & !1);
+        }
+        if let Some(op) = op {
+            op.mark_signalled();
         }
         if raw & 1 != 0 {
             return;
@@ -1589,6 +1631,7 @@ fn start_overlapped_io(
                         issuing_thread: std::thread::current().id(),
                         state: Mutex::new(IoResult {
                             done: true,
+                            signalled: true,
                             bytes: n,
                             error: 0,
                         }),
@@ -1643,6 +1686,7 @@ fn start_overlapped_io(
         issuing_thread: std::thread::current().id(),
         state: Mutex::new(IoResult {
             done: false,
+            signalled: false,
             bytes: 0,
             error: 0,
         }),
@@ -1708,13 +1752,8 @@ fn start_overlapped_io(
                 Ok(n) => bytes = n,
                 Err(e) => error = e,
             }
-            {
-                let mut state = lock(&op.state);
-                state.bytes = bytes;
-                state.error = error;
-                state.done = true;
-                op.changed.notify_all();
-            }
+            // Internal avant `done` : GetOverlappedResult rend la main dès
+            // qu'il voit `done` (#2629).
             unsafe {
                 ov_set(
                     overlapped,
@@ -1722,9 +1761,11 @@ fn start_overlapped_io(
                     bytes as usize,
                 );
             }
+            op.note_result(bytes, error);
             if event != 0 {
                 let _ = set_event(event);
             }
+            op.mark_signalled();
             if let Some((port, key)) = completion {
                 post_iocp(
                     &port,
@@ -1791,7 +1832,9 @@ pub unsafe extern "win64" fn get_overlapped_result(
         crate::process::set_last_error(996);
         return 0;
     }
-    while !state.done {
+    // Attente jusqu'à l'événement signalé : Internal et hEvent sont alors à
+    // jour pour l'appelant (#2629).
+    while !state.signalled {
         state = op
             .changed
             .wait(state)
@@ -10595,6 +10638,7 @@ unsafe fn read_directory_changes(
         issuing_thread: std::thread::current().id(),
         state: Mutex::new(IoResult {
             done: false,
+            signalled: false,
             bytes: 0,
             error: 0,
         }),
@@ -10647,16 +10691,11 @@ unsafe fn read_directory_changes(
                 };
                 ov_set(ov, status, count as usize);
             }
-            {
-                let mut state = lock(&op.state);
-                state.bytes = count;
-                state.error = error;
-                state.done = true;
-                op.changed.notify_all();
-            }
+            op.note_result(count, error);
             if event != 0 {
                 let _ = set_event(event);
             }
+            op.mark_signalled();
             if let Some((port, key)) = completion {
                 post_iocp(
                     &port,
@@ -14411,5 +14450,47 @@ mod tests_processus_zombie {
         assert!(!os_process_zombie(std::process::id() as i32));
         unsafe { close_handle(h) };
         child.wait().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests_internal_avant_fin_2629 {
+    use super::*;
+
+    /// #2629 : dès que l'opération est vue signalée (ce que GetOverlappedResult
+    /// attend), `Internal` et `InternalHigh` portent déjà le statut final et
+    /// hEvent est signalé.
+    /// Le test guette `done` sans relâche pendant que `finish` tourne sur un
+    /// autre fil, sur de nombreux tours.
+    #[test]
+    fn internal_ecrit_avant_la_fin_2629() {
+        let _teb = crate::process::test_teb();
+        let h = 0x7629_0001usize;
+        for tour in 0..2000 {
+            let event = unsafe { create_event_a(0, 1, 0, std::ptr::null()) };
+            let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+            ov.event = event;
+            let key = &mut ov as *mut Overlapped as usize;
+            let pending = unsafe { begin_overlapped(h, key) }.expect("opération inscrite");
+            let op = pending.op.clone();
+            let fil = std::thread::spawn(move || pending.finish(37, 0));
+            loop {
+                if lock(&op.state).signalled {
+                    let (status, high) = unsafe { ov_get(key) };
+                    assert_eq!(status, 0, "Internal encore en attente au tour {tour}");
+                    assert_eq!(high, 37, "InternalHigh non écrit au tour {tour}");
+                    assert_eq!(
+                        wait_for_single_object(event, 0),
+                        0,
+                        "événement non signalé au tour {tour}"
+                    );
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+            fil.join().unwrap();
+            lock(IO_OPERATIONS.get().unwrap()).remove(&key);
+            close_handle(event);
+        }
     }
 }
