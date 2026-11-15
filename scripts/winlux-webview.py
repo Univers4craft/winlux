@@ -187,7 +187,8 @@ def offer_install():
             package=ENGINE_PACKAGE, version=version, publisher=publisher, source=source))
     dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
     dialog.add_button(_t("Télécharger"), Gtk.ResponseType.OK)
-    dialog.set_default_response(Gtk.ResponseType.OK)
+    # Refus par défaut, comme pour tout téléchargement proposé (#2589).
+    dialog.set_default_response(Gtk.ResponseType.CANCEL)
     answer = dialog.run()
     dialog.destroy()
     if answer != Gtk.ResponseType.OK:
