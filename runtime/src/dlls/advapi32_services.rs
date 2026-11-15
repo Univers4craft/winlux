@@ -214,6 +214,17 @@ fn spawn_service(record: &mut ServiceRecord, args: &[String]) -> Result<(), u32>
     };
     command.args(argv.iter());
     command.env("WINLUX_SERVICE_NAME", &record.name);
+    // Sous Windows, le processus d'un service est créé par le SCM, pas par
+    // l'appelant de StartService : il n'hérite d'aucun de ses handles. Ici,
+    // il est l'enfant de l'appelant ; sans cela, il gardait ouverts les
+    // tubes de sortie de l'action personnalisée qui l'a démarré, et
+    // l'installeur, qui lit ces tubes jusqu'à leur fin, attendait aussi
+    // longtemps que le service tournait (#2529 : StartArmService d'Acrobat).
+    // Son journal reste dans WINLUX_JOURNAL_DIR.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     let _ = std::fs::remove_file(control_sock_path(&record.name).with_extension("state"));
     record.state = SERVICE_START_PENDING;
     let child = command.spawn().map_err(|e| {
@@ -2467,6 +2478,72 @@ mod tests {
         assert_eq!(unsafe { delete_service(service) }, 1);
         assert_eq!(unsafe { close_service_handle(service) }, 1);
         assert_eq!(unsafe { close_service_handle(manager) }, 1);
+    }
+
+    #[test]
+    fn service_lance_sans_les_tubes_de_l_appelant() {
+        // #2529 : le service ne doit garder ni l'entrée ni les sorties de
+        // l'appelant de StartService, sinon un installeur qui lit la sortie
+        // de son action personnalisée attend la fin du service.
+        let _serial = crate::dlls::advapi32::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("winlux-test-svc-fd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("svc.sh");
+        let out = dir.join("fd.txt");
+        std::fs::write(
+            &script,
+            format!(
+                "a=$(readlink /proc/$$/fd/0) b=$(readlink /proc/$$/fd/1) c=$(readlink /proc/$$/fd/2)\nprintf '%s\\n' \"$a\" \"$b\" \"$c\" > {}.tmp\nmv {}.tmp {}\nexec sleep 30\n",
+                out.display(),
+                out.display(),
+                out.display()
+            ),
+        )
+        .unwrap();
+        let name = CString::new(format!("winlux-test-svc-fd-{}", std::process::id())).unwrap();
+        let command = CString::new(format!("/bin/sh {}", script.display())).unwrap();
+        let manager = unsafe { open_sc_manager_a(std::ptr::null(), std::ptr::null(), 0xf003f) };
+        assert_ne!(manager, 0);
+        let service = unsafe {
+            create_service_a(
+                manager,
+                name.as_ptr() as *const u8,
+                std::ptr::null(),
+                0xf01ff,
+                0x10,
+                3,
+                0,
+                command.as_ptr() as *const u8,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(service, 0);
+        assert_eq!(unsafe { start_service_a(service, 0, std::ptr::null()) }, 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !out.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let fds = std::fs::read_to_string(&out).unwrap_or_default();
+        let mut status = [0u8; 36];
+        unsafe {
+            control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr());
+            delete_service(service);
+            close_service_handle(service);
+            close_service_handle(manager);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            fds.lines().collect::<Vec<_>>(),
+            ["/dev/null", "/dev/null", "/dev/null"],
+            "entrée, sortie et erreur du service"
+        );
     }
 
     static DISPATCH_TEST_LOCK: Mutex<()> = Mutex::new(());
