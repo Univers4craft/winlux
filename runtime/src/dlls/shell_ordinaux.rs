@@ -71,8 +71,9 @@ pub unsafe extern "win64" fn iunknown_query_service(
     hr
 }
 
-/// Une entrée de QITAB : { const IID *piid; int dwOffset; } (8 + 4 octets,
-/// alignée sur 8 en x64). La table finit par une entrée dont piid est nul.
+/// Une entrée de QITAB à la disposition x64, pour les tests : lue par
+/// `find_entry` d'après `qitab_layout`.
+#[cfg(test)]
 #[repr(C)]
 struct QiTab {
     piid: *const Guid,
@@ -96,24 +97,56 @@ pub unsafe extern "win64" fn qi_search(
     if that.is_null() || table.is_null() || riid.is_null() {
         return E_POINTER;
     }
-    let table = table as *const QiTab;
-    let wanted = *riid;
+    let x86 = crate::wow32::active();
+    let Some(offset) = find_entry(table as *const u8, &*riid, x86) else {
+        return E_NOINTERFACE;
+    };
+    let p = (that as *mut u8).offset(offset as isize) as *mut c_void;
+    if x86 {
+        // Objet du programme x86 : AddRef est la 2e case de sa table x86,
+        // en stdcall (#2476).
+        let vt = crate::wow32::rd(p as usize as u32);
+        crate::wow32::call32(crate::wow32::rd(vt + 4) as usize, &[p as usize as u32]);
+    } else {
+        let add_ref: AddRef = std::mem::transmute(slot(p, 1));
+        add_ref(p);
+    }
+    *out = p;
+    0
+}
+
+/// QITAB (shlwapi.h) : `{ const IID *piid; DWORD dwOffset; }`. Décalages
+/// mesurés par `sizeof`/`offsetof` sur l'en-tête mingw-w64 (#2476) :
+/// 8 octets et dwOffset à +4 pour un appelant x86, 16 octets et dwOffset
+/// à +8 en x64.
+fn qitab_layout(x86: bool) -> (usize, usize) {
+    if x86 {
+        (8, 4)
+    } else {
+        (16, 8)
+    }
+}
+
+/// dwOffset de l'entrée qui répond à `wanted` ; IUnknown répond par la
+/// première entrée. La table finit par une entrée dont piid est nul.
+unsafe fn find_entry(table: *const u8, wanted: &Guid, x86: bool) -> Option<i32> {
+    let (size, at) = qitab_layout(x86);
     let mut i = 0;
     loop {
-        let e = &*table.add(i);
-        if e.piid.is_null() {
-            break;
+        let e = table.add(i * size);
+        let piid = if x86 {
+            std::ptr::read_unaligned(e as *const u32) as usize as *const Guid
+        } else {
+            std::ptr::read_unaligned(e as *const *const Guid)
+        };
+        if piid.is_null() {
+            return None;
         }
-        if *e.piid == wanted || (i == 0 && wanted == IID_IUNKNOWN) {
-            let p = (that as *mut u8).offset(e.offset as isize) as *mut c_void;
-            let add_ref: AddRef = std::mem::transmute(slot(p, 1));
-            add_ref(p);
-            *out = p;
-            return 0;
+        if std::ptr::read_unaligned(piid) == *wanted || (i == 0 && *wanted == IID_IUNKNOWN) {
+            return Some(std::ptr::read_unaligned(e.add(at) as *const i32));
         }
         i += 1;
     }
-    E_NOINTERFACE
 }
 
 pub fn shell32() -> crate::dlls::Exports {
@@ -184,6 +217,41 @@ mod tests {
         qi(this, riid, out)
     }
 
+    /// #2476 : table QITAB d'un programme x86, entrées de 8 octets dans de
+    /// la mémoire sous 4 Go. Lue à la disposition x64, l'IID de l'entrée 1
+    /// était pris pour celui de l'entrée 0.
+    #[test]
+    fn table_qitab_x86() {
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let base = low as *mut u8;
+        unsafe {
+            let g1 = base.add(256) as *mut Guid;
+            let g2 = base.add(272) as *mut Guid;
+            *g1 = IID_ISERVICEPROVIDER;
+            *g2 = IID_AUTRE;
+            let t = std::slice::from_raw_parts_mut(base as *mut u32, 6);
+            // { &IID_IServiceProvider, 0 }, { &IID_AUTRE, 4 }, { NULL, 0 }
+            t.copy_from_slice(&[g1 as usize as u32, 0, g2 as usize as u32, 4, 0, 0]);
+            assert_eq!(find_entry(base, &IID_ISERVICEPROVIDER, true), Some(0));
+            assert_eq!(find_entry(base, &IID_AUTRE, true), Some(4));
+            assert_eq!(find_entry(base, &IID_IUNKNOWN, true), Some(0));
+            let inconnu = super::super::comobj::guid(7, 7, 7, [7; 8]);
+            assert_eq!(find_entry(base, &inconnu, true), None);
+            libc::munmap(low, 4096);
+        }
+        assert_eq!(qitab_layout(true), (8, 4));
+    }
+
     #[test]
     fn ordinaux_du_shell() {
         unsafe {
@@ -213,6 +281,7 @@ mod tests {
             let inconnu = super::super::comobj::guid(7, 7, 7, [7; 8]);
             assert_eq!(qi(p, &inconnu, &mut out), E_NOINTERFACE);
             assert!(out.is_null());
+            assert_eq!(qitab_layout(false), (16, 8));
 
             // IUnknown_QueryService : passe par IServiceProvider et le relâche.
             let avant = REFS.load(Ordering::SeqCst);

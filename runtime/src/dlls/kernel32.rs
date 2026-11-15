@@ -1017,6 +1017,38 @@ pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
         _ => 31,
     }
 }
+/// Code d'erreur d'une opération sur le chemin `p` : quand un dossier du
+/// chemin manque, ou qu'un de ses composants est un fichier, Windows rend
+/// ERROR_PATH_NOT_FOUND (3), pas ERROR_FILE_NOT_FOUND (2) ni ERROR_DIRECTORY
+/// (267) ; Linux rend ENOENT ou ENOTDIR sans distinguer le parent. La
+/// documentation de CreateDirectory le dit explicitement, et les programmes
+/// qui créent une arborescence s'en servent pour créer d'abord le parent
+/// (#2112, comme CreateFile depuis #1674).
+pub(crate) fn path_error_code(e: &std::io::Error, p: &std::path::Path) -> u32 {
+    let ambigu = matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    );
+    if ambigu
+        && p.parent()
+            .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
+    {
+        3
+    } else {
+        io_error_code(e)
+    }
+}
+/// Même chose pour une opération à deux chemins (MoveFile, CopyFile).
+pub(crate) fn two_paths_error_code(
+    e: &std::io::Error,
+    a: &std::path::Path,
+    b: &std::path::Path,
+) -> u32 {
+    match path_error_code(e, a) {
+        3 => 3,
+        _ => path_error_code(e, b),
+    }
+}
 unsafe fn bytes<'a>(p: *const u8, len: usize) -> Option<&'a [u8]> {
     if len != 0 && p.is_null() {
         None
@@ -1054,7 +1086,7 @@ unsafe fn sync_io_at_overlapped(
     overlapped: usize,
     is_write: bool,
 ) -> i32 {
-    if !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+    if ov_misaligned(overlapped) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -1070,14 +1102,13 @@ unsafe fn sync_io_at_overlapped(
         };
         f.clone()
     };
-    let ov = overlapped as *mut Overlapped;
-    let offset = ((*ov).offset_high as u64) << 32 | (*ov).offset as u64;
+    let offset = ov_offset(overlapped);
     let mut f = lock(&file);
     // Un tube n'a pas de position : on lit ou écrit simplement dans l'ordre.
     let seekable = f.stream_position().is_ok();
     if seekable {
         if let Err(e) = f.seek(SeekFrom::Start(offset)) {
-            (*ov).internal = 0xC000_000D; // STATUS_INVALID_PARAMETER
+            ov_set(overlapped, 0xC000_000D, 0); // STATUS_INVALID_PARAMETER
             crate::process::set_last_error(io_error_code(&e));
             return 0;
         }
@@ -1096,22 +1127,22 @@ unsafe fn sync_io_at_overlapped(
     drop(f);
     match result {
         Ok(n) => {
-            (*ov).internal = 0;
-            (*ov).internal_high = n;
+            ov_set(overlapped, 0, n);
             if !done.is_null() {
                 *done = n as u32;
             }
-            if (*ov).event != 0 {
-                set_event((*ov).event);
+            let event = ov_event(overlapped);
+            if event != 0 {
+                set_event(event);
             }
             1
         }
         Err(e) => {
             let code = io_error_code(&e);
-            (*ov).internal = 0xC000_0001; // STATUS_UNSUCCESSFUL
-            (*ov).internal_high = 0;
-            if (*ov).event != 0 {
-                set_event((*ov).event);
+            ov_set(overlapped, 0xC000_0001, 0); // STATUS_UNSUCCESSFUL
+            let event = ov_event(overlapped);
+            if event != 0 {
+                set_event(event);
             }
             crate::process::set_last_error(code);
             0
@@ -1327,6 +1358,47 @@ pub(crate) unsafe fn ov_event(ov: usize) -> usize {
     }
 }
 
+/// Internal et InternalHigh d'un OVERLAPPED, à la disposition de l'appelant
+/// (champs de 4 octets pour un programme 32 bits).
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_get(ov: usize) -> (usize, usize) {
+    if crate::wow32::pointer_size() == 4 {
+        (
+            std::ptr::read_volatile(ov as *const u32) as usize,
+            std::ptr::read_volatile((ov + 4) as *const u32) as usize,
+        )
+    } else {
+        let p = ov as *const Overlapped;
+        (
+            std::ptr::read_volatile(&(*p).internal),
+            std::ptr::read_volatile(&(*p).internal_high),
+        )
+    }
+}
+
+/// Offset et OffsetHigh d'un OVERLAPPED : décalage 8 en x86, 16 en x64
+/// (minwinbase.h, ULONG_PTR Internal et InternalHigh en tête), #2537.
+///
+/// # Safety
+/// `ov` désigne un OVERLAPPED valable.
+pub(crate) unsafe fn ov_offset(ov: usize) -> u64 {
+    let at = if crate::wow32::pointer_size() == 4 {
+        8
+    } else {
+        16
+    };
+    let low = std::ptr::read_unaligned((ov + at) as *const u32) as u64;
+    let high = std::ptr::read_unaligned((ov + at + 4) as *const u32) as u64;
+    high << 32 | low
+}
+
+/// Alignement exigé d'un OVERLAPPED : celui d'un pointeur de l'appelant.
+fn ov_misaligned(ov: usize) -> bool {
+    !ov.is_multiple_of(crate::wow32::pointer_size())
+}
+
 pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: bool) {
     unsafe {
         ov_set(overlapped, 0, bytes as usize);
@@ -1472,10 +1544,7 @@ fn start_overlapped_io(
 ) -> i32 {
     const ERROR_IO_PENDING: u32 = 997;
     const STATUS_PENDING: usize = 0x103;
-    if overlapped == 0
-        || !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>())
-        || (len != 0 && buffer == 0)
-    {
+    if overlapped == 0 || ov_misaligned(overlapped) || (len != 0 && buffer == 0) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -1487,11 +1556,10 @@ fn start_overlapped_io(
         };
         f.clone()
     };
-    let ov = overlapped as *mut Overlapped;
-    let offset = unsafe { ((*ov).offset_high as u64) << 32 | (*ov).offset as u64 };
+    let offset = unsafe { ov_offset(overlapped) };
     // hEvent avec le bit 0 levé : signaler l'événement mais ne rien poster
     // au port de complétion (libuv s'en sert pour ses lectures d'essai).
-    let raw_event = unsafe { (*ov).event };
+    let raw_event = unsafe { ov_event(overlapped) };
     let event = raw_event & !1;
     // ReadFile et WriteFile remettent l'événement de l'OVERLAPPED à non
     // signalé au début de l'E/S (documentation Learn, « Synchronization and
@@ -1530,8 +1598,7 @@ fn start_overlapped_io(
                     lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
                         .insert(overlapped, op);
                     unsafe {
-                        (*ov).internal = 0;
-                        (*ov).internal_high = n as usize;
+                        ov_set(overlapped, 0, n as usize);
                         if !done_out.is_null() {
                             *done_out = n;
                         }
@@ -1557,8 +1624,7 @@ fn start_overlapped_io(
                     lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
                         .remove(&overlapped);
                     unsafe {
-                        (*ov).internal = ntstatus_of_win32(e) as usize;
-                        (*ov).internal_high = 0;
+                        ov_set(overlapped, ntstatus_of_win32(e) as usize, 0);
                     }
                     crate::process::set_last_error(e);
                     return 0;
@@ -1592,8 +1658,7 @@ fn start_overlapped_io(
         ops.insert(overlapped, operation.clone());
     }
     unsafe {
-        (*ov).internal = STATUS_PENDING;
-        (*ov).internal_high = 0;
+        ov_set(overlapped, STATUS_PENDING, 0);
     }
     let op = operation.clone();
     if std::thread::Builder::new()
@@ -1651,9 +1716,11 @@ fn start_overlapped_io(
                 op.changed.notify_all();
             }
             unsafe {
-                let p = overlapped as *mut Overlapped;
-                (*p).internal = ntstatus_of_win32(error) as usize;
-                (*p).internal_high = bytes as usize;
+                ov_set(
+                    overlapped,
+                    ntstatus_of_win32(error) as usize,
+                    bytes as usize,
+                );
             }
             if event != 0 {
                 let _ = set_event(event);
@@ -1674,7 +1741,8 @@ fn start_overlapped_io(
     {
         lock(IO_OPERATIONS.get().unwrap()).remove(&overlapped);
         unsafe {
-            (*ov).internal = 0;
+            let (_, high) = ov_get(overlapped);
+            ov_set(overlapped, 0, high);
         }
         crate::process::set_last_error(8);
         return 0;
@@ -1701,12 +1769,12 @@ pub unsafe extern "win64" fn get_overlapped_result(
     let Some(op) = operation else {
         // Opération déjà relevée (port de complétion) : Windows relit
         // simplement OVERLAPPED.Internal / InternalHigh.
-        let status = (*overlapped).internal;
+        let (status, high) = ov_get(overlapped as usize);
         if status == 0x103 {
             crate::process::set_last_error(996);
             return 0;
         }
-        *transferred = (*overlapped).internal_high as u32;
+        *transferred = high as u32;
         if status == 0 {
             return 1;
         }
@@ -2491,14 +2559,7 @@ unsafe fn create_file_opened(
         Err(e) => {
             // Dossier parent absent : ERROR_PATH_NOT_FOUND (3), comme
             // Windows, et non ERROR_FILE_NOT_FOUND (2) (#1674).
-            let code = if e.kind() == std::io::ErrorKind::NotFound
-                && p.parent()
-                    .is_some_and(|d| !d.as_os_str().is_empty() && !d.is_dir())
-            {
-                3
-            } else {
-                io_error_code(&e)
-            };
+            let code = path_error_code(&e, &p);
             // Sous WINLUX_TRACE : quel fichier, pour quel accès (#1663).
             crate::trace!(
                 "CreateFile({path} → {}, disposition {creation}) : erreur {code} ({e})",
@@ -2662,7 +2723,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         }
         Err(e) if builtin_attribute_data(&e, &win, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -2698,7 +2759,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
         }
         Err(e) if builtin_attribute_data(&e, &s, data) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -3083,7 +3144,7 @@ unsafe fn set_file_attributes_str(path: &str, attributes: u32) -> i32 {
     let m = match std::fs::metadata(&p) {
         Ok(m) => m,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             return 0;
         }
     };
@@ -3480,12 +3541,12 @@ fn move_file_ex_inner(src: &str, dst: &str, flags: u32) -> i32 {
                 1
             }
             Err(e) => {
-                crate::process::set_last_error(io_error_code(&e));
+                crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
                 0
             }
         },
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -3541,8 +3602,16 @@ pub unsafe extern "win64" fn get_module_handle_a(name: *const u8) -> usize {
 /// Corps commun de `get_module_handle_a` et `get_module_handle_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn get_module_handle_str(name: &str) -> usize {
-    let n = name;
-    crate::dlls::module_handle(n).unwrap_or(0)
+    match crate::dlls::module_handle(name) {
+        Some(h) => h,
+        None => {
+            // ERROR_MOD_NOT_FOUND, comme GetModuleHandleEx et LoadLibrary :
+            // sans code, le programme relisait celui d'un appel précédent,
+            // parfois 0, et HRESULT_FROM_WIN32 en faisait un succès (#2113).
+            crate::process::set_last_error(126);
+            0
+        }
+    }
 }
 pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
     if name.is_null() {
@@ -5768,7 +5837,7 @@ fn poll_process(p: &ProcessObject) -> bool {
     if let Some(child) = s.child.as_mut() {
         match child.try_wait() {
             Ok(Some(status)) => {
-                s.exit_code = status.code().unwrap_or(1) as u32;
+                s.exit_code = child_exit_code(child.id(), status);
                 s.child = None;
                 p.changed.notify_all();
             }
@@ -6768,6 +6837,9 @@ unsafe fn create_process_common(
     // EXTENDED_STARTUPINFO_PRESENT + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE :
     // le programme s'attache à la pseudo-console (pty) de CreatePseudoConsole.
     let mut pseudo_console = false;
+    // Le descripteur 2 de l'enfant est-il la sortie d'erreur que le
+    // programme lui donne (STARTF_USESTDHANDLES) ? (#2515)
+    let mut program_stderr = false;
     if creation_flags & 0x0008_0000 != 0
         && !startup.is_null()
         && (*startup).cb as usize >= std::mem::size_of::<StartupInfoA>() + 8
@@ -6797,6 +6869,7 @@ unsafe fn create_process_common(
         ) {
             (Some(i), Some(o), Some(e)) => {
                 cmd.stdin(i).stdout(o).stderr(e);
+                program_stderr = true;
             }
             _ => {
                 crate::process::set_last_error(6);
@@ -6859,6 +6932,24 @@ unsafe fn create_process_common(
     // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
     // suspendu) : ouvert ici, hérité, renommé d'après son PID.
     cmd.env_remove(crate::dlls::handle_broker::ENV);
+    // Lignes de diagnostic de l'enfant (#2515) : jamais dans la sortie
+    // d'erreur qu'un programme Windows lui donne, que son parent lit comme
+    // une donnée ; elles vont à notre propre descripteur de diagnostic,
+    // passé en copie héritable le temps du lancement.
+    cmd.env_remove(crate::log::DIAG_FD_ENV);
+    let _diag_copy: Option<std::os::fd::OwnedFd> =
+        if is_pe && (program_stderr || pseudo_console || crate::log::diag_fd() != 2) {
+            let d = crate::log::diag_fd();
+            let copy = if d >= 0 {
+                libc::fcntl(d, libc::F_DUPFD, 3)
+            } else {
+                -1
+            };
+            cmd.env(crate::log::DIAG_FD_ENV, copy.to_string());
+            (copy >= 0).then(|| <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(copy))
+        } else {
+            None
+        };
     // Gestionnaire de crashpad connu : l'enfant le désigne à son tour pour
     // qu'il puisse lire sa mémoire (#767).
     cmd.env_remove(CRASH_HANDLER_ENV);
@@ -6873,7 +6964,22 @@ unsafe fn create_process_common(
     if let Some(d) = desk.as_ref() {
         cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
+    cmd.env_remove("WINLUX_EXIT_CODE_FILE");
+    cmd.env_remove("WINLUX_CRASH_MARK_FILE");
+    let code_file = if is_pe {
+        exit_code_channel(&mut cmd)
+    } else {
+        None
+    };
     let spawned = cmd.spawn();
+    match spawned.as_ref() {
+        Ok(c) => remember_code_file(c.id(), code_file),
+        Err(_) => {
+            if let Some(f) = code_file {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+    }
     // Les copies héritables restent chez l'enfant ; le parent les ferme.
     drop(passed);
     if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
@@ -7197,6 +7303,10 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     crate::dlls::handle_broker::forget_pid(child.id() as i32);
+    // TerminateProcess fixe le code : le fichier de l'enfant ne compte plus.
+    if let Some(f) = child_code_files().remove(&child.id()) {
+        let _ = std::fs::remove_file(f);
+    }
     if child.kill().is_err() {
         crate::process::set_last_error(5);
         return 0;
@@ -7524,11 +7634,11 @@ pub(crate) fn clr_sync_open(name: &str, semaphore: bool) -> (usize, u32) {
     } else {
         SHARED_KIND_MUTEX
     };
-    let h = open_sync_by_name(name, kind);
+    let h = open_sync_by_name(name, kind, false);
     (h, crate::process::last_error())
 }
 
-unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
+unsafe fn open_named_sync(name: *const u8, event: bool, inherit: bool) -> usize {
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
@@ -7538,13 +7648,17 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
     } else {
         SHARED_KIND_MUTEX
     };
-    open_sync_by_name(&crate::dlls::cstr(name), kind)
+    open_sync_by_name(&crate::dlls::cstr(name), kind, inherit)
 }
 /// Open{Event,Mutex,Semaphore} : objet nommé de ce processus, ou d'un autre
-/// processus du même compte (#20).
-fn open_sync_by_name(name: &str, kind: u32) -> usize {
+/// processus du même compte (#20). `inherit` (bInheritHandle) rend le handle
+/// héritable par les enfants, comme OpenFileMapping (#2114).
+fn open_sync_by_name(name: &str, kind: u32, inherit: bool) -> usize {
     let h = open_sync_by_name_inner(name, kind);
     remember_name(h, name);
+    if h != 0 && inherit {
+        crate::dlls::inherit::set(h, true);
+    }
     crate::trace!(
         "Open{}({name}) = 0x{h:x} (erreur {})",
         kind_label(kind),
@@ -7595,15 +7709,15 @@ pub unsafe extern "win64" fn open_semaphore_w(
     inherit: i32,
     name: *const u16,
 ) -> usize {
-    if inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    open_sync_by_name(&crate::dlls::wstr(name), SHARED_KIND_SEMAPHORE)
+    open_sync_by_name(
+        &crate::dlls::wstr(name),
+        SHARED_KIND_SEMAPHORE,
+        inherit != 0,
+    )
 }
 /// OpenSemaphoreA
 pub unsafe extern "win64" fn open_semaphore_a(
@@ -7611,19 +7725,61 @@ pub unsafe extern "win64" fn open_semaphore_a(
     inherit: i32,
     name: *const u8,
 ) -> usize {
-    if inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
     if name.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    open_sync_by_name(&crate::dlls::cstr(name), SHARED_KIND_SEMAPHORE)
+    open_sync_by_name(
+        &crate::dlls::cstr(name),
+        SHARED_KIND_SEMAPHORE,
+        inherit != 0,
+    )
 }
 #[cfg(test)]
 mod reviewed_named_sync_tests {
     use super::*;
+    #[test]
+    fn ouverture_heritable_des_objets_nommes() {
+        // #2114 : bInheritHandle=TRUE rend un handle héritable au lieu de refuser avec 50.
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let ev = create_event_a(0, 1, 0, b"winlux-2114-ev\0".as_ptr());
+            let mx = create_mutex_a(0, 0, b"winlux-2114-mx\0".as_ptr());
+            let se = create_semaphore_a(0, 1, 2, b"winlux-2114-se\0".as_ptr());
+            assert!(ev != 0 && mx != 0 && se != 0);
+            let wide = |t: &str| t.encode_utf16().chain([0]).collect::<Vec<u16>>();
+            let opened = [
+                open_event_a(0x1F0003, 1, b"winlux-2114-ev\0".as_ptr()),
+                crate::dlls::kernel32_ext::open_event_w(
+                    0x1F0003,
+                    1,
+                    wide("winlux-2114-ev").as_ptr(),
+                ),
+                open_mutex_a(0x1F0001, 1, b"winlux-2114-mx\0".as_ptr()),
+                crate::dlls::kernel32_legacy::open_mutex_w(
+                    0x1F0001,
+                    1,
+                    wide("winlux-2114-mx").as_ptr(),
+                ),
+                open_semaphore_a(0x1F0003, 1, b"winlux-2114-se\0".as_ptr()),
+                open_semaphore_w(0x1F0003, 1, wide("winlux-2114-se").as_ptr()),
+            ];
+            for (i, &h) in opened.iter().enumerate() {
+                assert_ne!(
+                    h,
+                    0,
+                    "ouverture {i}, erreur {}",
+                    crate::process::last_error()
+                );
+                assert!(crate::dlls::inherit::is(h), "ouverture {i} héritable");
+            }
+            let simple = open_event_a(0x1F0003, 0, b"winlux-2114-ev\0".as_ptr());
+            assert!(simple != 0 && !crate::dlls::inherit::is(simple));
+            for h in opened.into_iter().chain([simple, ev, mx, se]) {
+                assert_eq!(close_handle(h), 1);
+            }
+        }
+    }
     #[test]
     fn opened_event_keeps_name_alive_until_last_close() {
         unsafe {
@@ -7695,19 +7851,11 @@ mod created_last_error_tests {
         }
     }
 }
-pub unsafe extern "win64" fn open_event_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
-    if _inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
-    open_named_sync(name, true)
+pub unsafe extern "win64" fn open_event_a(_access: u32, inherit: i32, name: *const u8) -> usize {
+    open_named_sync(name, true, inherit != 0)
 }
-pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
-    if _inherit != 0 {
-        crate::process::set_last_error(50);
-        return 0;
-    }
-    open_named_sync(name, false)
+pub unsafe extern "win64" fn open_mutex_a(_access: u32, inherit: i32, name: *const u8) -> usize {
+    open_named_sync(name, false, inherit != 0)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
     if !trace_on() {
@@ -8134,10 +8282,11 @@ pub unsafe extern "win64" fn set_current_directory_a(path: *const u8) -> i32 {
 /// Corps commun de `set_current_directory_a` et `set_current_directory_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
 unsafe fn set_current_directory_str(path: &str) -> i32 {
-    match std::env::set_current_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::env::set_current_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8231,7 +8380,7 @@ unsafe fn get_file_attributes_str(path: &str) -> u32 {
             BUILTIN_FILE_ATTRIBUTES
         }
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             u32::MAX
         }
     }
@@ -8258,10 +8407,11 @@ unsafe fn delete_file_str(path: &str) -> i32 {
     r
 }
 unsafe fn delete_file_str_inner(path: &str) -> i32 {
-    match std::fs::remove_file(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::remove_file(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8288,10 +8438,11 @@ unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
     r
 }
 unsafe fn create_directory_str_inner(path: &str, _sec: usize) -> i32 {
-    match std::fs::create_dir(crate::paths::to_linux(path)) {
+    let p = crate::paths::to_linux(path);
+    match std::fs::create_dir(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8601,7 +8752,7 @@ pub unsafe extern "win64" fn copy_file_a(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8638,7 +8789,7 @@ pub unsafe extern "win64" fn copy_file_w(
     match copy_keeping_write_time(&source, &target) {
         Ok(_) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &source, &target));
             0
         }
     }
@@ -8654,10 +8805,10 @@ pub unsafe extern "win64" fn move_file_a(src: *const u8, dst: *const u8) -> i32 
         crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8683,10 +8834,10 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
         crate::process::set_last_error(80);
         return 0;
     }
-    match std::fs::rename(s, d) {
+    match std::fs::rename(&s, &d) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(two_paths_error_code(&e, &s, &d));
             0
         }
     }
@@ -8710,10 +8861,11 @@ pub unsafe extern "win64" fn remove_directory_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match remove_dir_or_link(&crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    match remove_dir_or_link(&p) {
         Ok(()) => 1,
         Err(e) => {
-            crate::process::set_last_error(io_error_code(&e));
+            crate::process::set_last_error(path_error_code(&e, &p));
             0
         }
     }
@@ -8727,13 +8879,14 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
         }
     };
     let path = s.to_string_lossy();
-    match remove_dir_or_link(&crate::paths::to_linux(&path)) {
+    let p = crate::paths::to_linux(&path);
+    match remove_dir_or_link(&p) {
         Ok(()) => {
             crate::trace!("RemoveDirectory({path}) = 1");
             1
         }
         Err(e) => {
-            let code = io_error_code(&e);
+            let code = path_error_code(&e, &p);
             crate::trace!("RemoveDirectory({path}) = 0 (erreur {code})");
             crate::process::set_last_error(code);
             0
@@ -8890,6 +9043,47 @@ pub fn exit_code_file_init() {
     }
 }
 
+/// Fichier marqué quand le processus finit sur une exception non gérée
+/// (`WINLUX_CRASH_MARK_FILE`, posé par winlux-open, #2272). Une sortie
+/// volontaire (ExitProcess, exit), quel que soit son code, ne le touche pas :
+/// comme sous Windows, elle n'affiche rien.
+static CRASH_MARK_FILE: OnceLock<std::ffi::CString> = OnceLock::new();
+
+/// Lu au démarrage comme `exit_code_file_init`, puis retiré de
+/// l'environnement : un programme lancé par celui-ci n'y écrit pas.
+pub fn crash_mark_file_init() {
+    if let Some(path) = std::env::var_os("WINLUX_CRASH_MARK_FILE") {
+        std::env::remove_var("WINLUX_CRASH_MARK_FILE");
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(path) = std::ffi::CString::new(path.as_bytes()) {
+            if !path.as_bytes().is_empty() {
+                let _ = CRASH_MARK_FILE.set(path);
+            }
+        }
+    }
+}
+
+/// Note que le processus finit sur une exception non gérée (faute matérielle
+/// ou logicielle) ; sûr dans un gestionnaire de signal (open/write).
+pub fn record_crash() {
+    let Some(path) = CRASH_MARK_FILE.get() else {
+        return;
+    };
+    let text = b"exception\n";
+    // SAFETY: chemin terminé par NUL, tampon statique ; appels sûrs en signal.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+            0o600,
+        );
+        if fd >= 0 {
+            libc::write(fd, text.as_ptr().cast(), text.len());
+            libc::close(fd);
+        }
+    }
+}
+
 /// Texte écrit pour un code : « 0x780148E0 ». Sans allocation.
 fn exit_code_text(code: u32) -> [u8; 11] {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
@@ -8917,6 +9111,129 @@ pub fn record_exit_code(code: u32) {
             libc::write(fd, text.as_ptr().cast(), text.len());
             libc::close(fd);
         }
+    }
+}
+
+/// Code de sortie complet d'un enfant lancé par CreateProcess (#2267) :
+/// le statut Linux n'en garde que 8 bits (3010 lu 194, 1602 lu 66), alors
+/// que `GetExitCodeProcess` rend un DWORD. L'enfant l'écrit dans un fichier
+/// (`WINLUX_EXIT_CODE_FILE`, #1205) que le parent relit à sa fin. Clé : PID.
+static CHILD_CODE_FILES: OnceLock<Mutex<HashMap<u32, std::path::PathBuf>>> = OnceLock::new();
+
+fn child_code_files() -> std::sync::MutexGuard<'static, HashMap<u32, std::path::PathBuf>> {
+    lock(CHILD_CODE_FILES.get_or_init(|| Mutex::new(HashMap::new())))
+}
+
+/// Crée le fichier du code de sortie d'un enfant et le lui désigne.
+pub(crate) fn exit_code_channel(cmd: &mut Command) -> Option<std::path::PathBuf> {
+    let dir = std::env::temp_dir();
+    for _ in 0..8 {
+        let n = NEXT_CODE_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("winlux-code-{}-{n}", std::process::id()));
+        let created = std::os::unix::fs::OpenOptionsExt::mode(
+            OpenOptions::new().write(true).create_new(true),
+            0o600,
+        )
+        .open(&path);
+        if created.is_ok() {
+            cmd.env("WINLUX_EXIT_CODE_FILE", &path);
+            return Some(path);
+        }
+    }
+    None
+}
+static NEXT_CODE_FILE: AtomicU32 = AtomicU32::new(0);
+
+/// Enfant lancé : son fichier de code est retenu jusqu'à sa fin.
+pub(crate) fn remember_code_file(pid: u32, path: Option<std::path::PathBuf>) {
+    if let Some(path) = path {
+        child_code_files().insert(pid, path);
+    }
+}
+
+/// Code « 0x780148E0 » écrit par `record_exit_code`.
+fn parse_exit_code_text(text: &str) -> Option<u32> {
+    let hex = text.trim().strip_prefix("0x")?;
+    (hex.len() == 8).then(|| u32::from_str_radix(hex, 16).ok())?
+}
+
+/// Code de sortie Windows d'un enfant terminé : le code complet qu'il a
+/// écrit, sinon le statut Linux. Le fichier est supprimé.
+pub(crate) fn child_exit_code(pid: u32, status: std::process::ExitStatus) -> u32 {
+    let linux = status.code().unwrap_or(1) as u32;
+    let Some(path) = child_code_files().remove(&pid) else {
+        return linux;
+    };
+    let full = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| parse_exit_code_text(&t));
+    let _ = std::fs::remove_file(&path);
+    // Fichier vide : l'enfant est mort sans écrire (signal), statut Linux.
+    // Il est créé neuf pour cet enfant, qui le retire de son environnement
+    // dès son démarrage : rien d'autre n'y écrit.
+    full.unwrap_or(linux)
+}
+
+/// Fin du processus avec un code Windows complet : écrit pour le parent,
+/// puis `exit` (atexit et destructeurs, comme `std::process::exit`).
+pub fn exit_with(code: i32) -> ! {
+    record_exit_code(code as u32);
+    std::process::exit(code)
+}
+
+#[cfg(test)]
+mod tests_code_enfant {
+    use super::*;
+
+    /// #2272 : la marque de plantage n'est écrite que par `record_crash`
+    /// (exception non gérée), jamais par une sortie avec code.
+    #[test]
+    fn marque_de_plantage_distincte_du_code() {
+        let dir = std::env::temp_dir().join(format!("winlux-2272-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mark = dir.join("plantage");
+        let _ = CRASH_MARK_FILE.set(std::ffi::CString::new(mark.to_str().unwrap()).unwrap());
+        let mark = std::path::PathBuf::from(CRASH_MARK_FILE.get().unwrap().to_str().unwrap());
+        let _ = std::fs::remove_file(&mark);
+        record_exit_code(1);
+        assert!(
+            !mark.exists(),
+            "un code de sortie ne marque pas de plantage"
+        );
+        record_crash();
+        assert_eq!(std::fs::read_to_string(&mark).unwrap(), "exception\n");
+        let _ = std::fs::remove_file(&mark);
+        let _ = std::fs::remove_dir(&dir);
+    }
+    use std::os::unix::process::ExitStatusExt;
+
+    /// #2267 : le code écrit par l'enfant prime sur ses 8 bits Linux ;
+    /// fichier vide (mort par signal) ou absent, le statut Linux reste.
+    #[test]
+    fn code_complet_de_l_enfant() {
+        assert_eq!(parse_exit_code_text("0x00000BC2\n"), Some(3010));
+        assert_eq!(parse_exit_code_text("0xE0434352"), Some(0xE0434352));
+        assert_eq!(parse_exit_code_text(""), None);
+        assert_eq!(parse_exit_code_text("0x63A"), None);
+        let mut cmd = Command::new("true");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        std::fs::write(&path, exit_code_text(1602)).unwrap();
+        remember_code_file(4_000_001, Some(path.clone()));
+        assert_eq!(
+            child_exit_code(4_000_001, std::process::ExitStatus::from_raw(66 << 8)),
+            1602
+        );
+        assert!(!path.exists(), "fichier du code supprimé");
+        let path = exit_code_channel(&mut cmd).unwrap();
+        remember_code_file(4_000_002, Some(path));
+        assert_eq!(
+            child_exit_code(4_000_002, std::process::ExitStatus::from_raw(9)),
+            1
+        );
+        assert_eq!(
+            child_exit_code(4_000_003, std::process::ExitStatus::from_raw(42 << 8)),
+            42
+        );
     }
 }
 
@@ -10234,7 +10551,7 @@ unsafe fn read_directory_changes(
         crate::process::set_last_error(error);
         return 1;
     }
-    if !ov.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+    if ov_misaligned(ov) {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -10259,11 +10576,9 @@ unsafe fn read_directory_changes(
         }
         ops.insert(ov, operation.clone());
     }
-    let overlapped = ov as *mut Overlapped;
-    (*overlapped).internal = 0x103; // STATUS_PENDING
-    (*overlapped).internal_high = 0;
-    // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
-    let event = (*overlapped).event;
+    ov_set(ov, 0x103, 0); // STATUS_PENDING
+                          // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
+    let event = ov_event(ov);
     if event != 0 {
         let _ = reset_event(event);
     }
@@ -10292,12 +10607,12 @@ unsafe fn read_directory_changes(
                 (0, error)
             };
             unsafe {
-                (*(ov as *mut Overlapped)).internal = match error {
+                let status = match error {
                     0 if count == 0 => 0x10C, // STATUS_NOTIFY_ENUM_DIR
                     0 => 0,
                     _ => 0xC000_0120, // STATUS_CANCELLED
                 };
-                (*(ov as *mut Overlapped)).internal_high = count as usize;
+                ov_set(ov, status, count as usize);
             }
             {
                 let mut state = lock(&op.state);
@@ -13107,6 +13422,96 @@ mod audit_tests {
         // … et l'id rendu par CreateThread est celui de GetCurrentThreadId.
         assert_eq!(seen, tid);
         assert_eq!(close_handle(h), 1);
+    }
+
+    /// #2537 : OVERLAPPED x86 (20 octets : Internal, InternalHigh, Offset à
+    /// +8, OffsetHigh à +12, hEvent à +16). Une écriture positionnée sur un
+    /// handle synchrone (base::File::Write de Chromium, Google Update) doit
+    /// écrire à Offset et remplir les champs de 4 octets ; lu à la
+    /// disposition x64, Offset tombait sur hEvent et l'octet suivant.
+    /// Vérifié dans un processus neuf (ce test relancé seul), le seul où le
+    /// drapeau « programme x86 » peut être levé.
+    #[test]
+    fn overlapped_x86_ecriture_positionnee() {
+        const ENFANT: &str = "WINLUX_TEST_OVERLAPPED_X86";
+        let dir = std::env::temp_dir().join(format!("winlux-ov86-{}", std::process::id()));
+        if std::env::var_os(ENFANT).is_some() {
+            crate::wow32::force_active_for_test();
+            let p = std::path::PathBuf::from(std::env::var_os(ENFANT).unwrap());
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&p)
+                .unwrap();
+            let h = insert_file(f);
+            // Bloc x86, aligné sur 4 octets seulement ; après hEvent, des
+            // octets non nuls qu'une lecture x64 prendrait pour OffsetHigh.
+            let mut bloc = [0u32; 8];
+            bloc[2] = 3; // Offset
+            bloc[3] = 0; // OffsetHigh
+            bloc[4] = 0; // hEvent
+            bloc[5] = 0xdead_beef;
+            let ov = bloc.as_mut_ptr() as usize + 4;
+            let ov = ov - ov % 4;
+            unsafe {
+                std::ptr::copy(bloc.as_ptr(), ov as *mut u32, 6);
+                let mut ecrit = 0u32;
+                let r = write_file(h, b"abc".as_ptr(), 3, &mut ecrit, ov);
+                assert_eq!(r, 1);
+                assert_eq!(ecrit, 3);
+                assert_eq!(ov_get(ov), (0, 3), "Internal et InternalHigh sur 4 octets");
+                assert_eq!(*((ov + 16) as *const u32), 0, "hEvent intact");
+            }
+            close_handle(h);
+            assert_eq!(std::fs::read(&p).unwrap(), b"\0\0\0abc");
+            unsafe { libc::_exit(0) };
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let fichier = dir.join("ecrit.bin");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::audit_tests::overlapped_x86_ecriture_positionnee",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, &fichier)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("le test x86 relancé n'a pas fini en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(status.code(), Some(0), "écriture x86 positionnée");
+    }
+
+    /// Offset d'un OVERLAPPED aux deux dispositions (#2537).
+    #[test]
+    fn overlapped_decalages_x86_et_x64() {
+        let ov = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0x1234,
+            offset_high: 1,
+            event: 0,
+        };
+        assert_eq!(
+            unsafe { ov_offset(&ov as *const Overlapped as usize) },
+            0x1_0000_1234
+        );
     }
 
     #[test]

@@ -34,6 +34,15 @@
 # PROPVARIANT chaîne et BLOB, IAudioClient, tampon de rendu, volumes flottants).
 # audioact32.exe et audioact64.exe (#2428) : ActivateAudioInterfaceAsync et
 # DllGetClassObject de mmdevapi et de dsound, en x86 et en x64.
+# xaudio32.exe et xaudio64.exe (#2428) : XAudio2 2.9 en x86 et en x64 (voix,
+# vumètre, envois, rappels écrits dans le programme, XAUDIO2_VOICE_STATE).
+# mf32.exe et mf64.exe (#2428) : objets de base de Media Foundation en x86
+# et en x64 (attributs, types, tampons, échantillons, collection, événements,
+# file d'événements avec rappel x86, descripteurs, mise en flux).
+# mfread32.exe et mfread64.exe (#2428, lot 4) : chaîne de lecture Media
+# Foundation en x86 et en x64 (MFTEnum*, caméras, lecteur de source
+# synchrone et asynchrone sur un WAV). Sans ffprobe, seul le refus du
+# lecteur est vérifié : la lecture n'est alors pas jouée.
 # d3d1132.exe et d3d1164.exe (#1090) : Direct3D 11 et DXGI en x86 et en x64,
 # sous Xvfb (contexte OpenGL).
 # d3d1032.exe et d3d1064.exe (#1090, étape 2) : Direct3D 10 et 10.1 sur
@@ -47,8 +56,8 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32"
-command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32 xaudio32 mf32 mfread32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32 tube32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
@@ -132,7 +141,7 @@ if test -f "$out/crt32.exe"; then
             exit 1
         fi
     done
-    echo "crt32 : CRT msvcrt 32 bits, 44 vérifications (printf de MinGW et de msvcrt)"
+    echo "crt32 : CRT msvcrt 32 bits, 45 vérifications (printf de MinGW et de msvcrt)"
 else
     echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
 fi
@@ -149,6 +158,10 @@ check() {
         exit 1
     fi
 }
+if test -f "$out/tube32.exe"; then
+    check tube32 'diagnostic hors du tube, tout est correct'
+    echo "tube32 : enfant x86 sur un tube (STARTF_USESTDHANDLES) qui faute : aucune ligne de Winlux dans le tube"
+fi
 if test -f "$out/net32.exe"; then
     check net32 'Réseau 32 bits : tout est correct'
     echo "net32 : Winsock x86 (AcceptEx, ConnectEx, GetAcceptExSockaddrs, OVERLAPPED x86 et port de complétion)"
@@ -206,7 +219,7 @@ check cxx32 'C++ MSVC 32 bits : tout est correct'
 echo "cxx32 : exceptions C++ MSVC x86 (catch par valeur et référence, catch(...), throw;, try dans un catch)"
 if test -f "$out/com32.exe"; then
     check com32 'COM 32 bits, .* Tout est correct'
-    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo, NetworkListManager)"
+    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo, NetworkListManager, GDI+ sur un flux x86)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
     check msxml32 'MSXML : tout est correct'
@@ -292,6 +305,60 @@ for name in audioact32 audioact64; do
     fi
 done
 echo "audioact32/audioact64 : ActivateAudioInterfaceAsync et DllGetClassObject (mmdevapi, dsound) en x86 et en x64"
+
+# XAudio2 (#2428) : un programme x86 n'avait pas de pont pour IXAudio2 ni ses voix.
+for name in xaudio32 xaudio64; do
+    set +e
+    WINLUX_AUDIO=null WINLUX_GUI=headless timeout 60 "$runtime" "$out/$name.exe" >"$work/xaudio.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'XAudio2 : tout est correct' "$work/xaudio.txt" \
+        || grep -q 'non décrite pour les programmes 32 bits' "$work/xaudio.txt"; then
+        tail -20 "$work/xaudio.txt"
+        echo "$name.exe : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+done
+echo "xaudio32/xaudio64 : XAudio2 2.9 en x86 et en x64 (voix, vumètre, envois, rappels, état de voix)"
+
+# Media Foundation, objets de base (#2428) : un programme x86 recevait des
+# objets à table win64 et plantait au premier appel de méthode.
+for name in mf32 mf64; do
+    set +e
+    WINLUX_AUDIO=null WINLUX_GUI=headless timeout 60 "$runtime" "$out/$name.exe" >"$work/mf.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'MF : tout est correct' "$work/mf.txt" \
+        || grep -q 'non décrite pour les programmes 32 bits' "$work/mf.txt"; then
+        tail -20 "$work/mf.txt"
+        echo "$name.exe : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+done
+echo "mf32/mf64 : objets de base de Media Foundation, x86 et x64"
+
+# Media Foundation, chaîne de lecture (#2428, lot 4) : un programme x86
+# recevait un IMFSourceReader à table win64, et MFTEnum* décalaient leurs
+# arguments (GUID de 16 octets passé par valeur).
+if command -v ffprobe >/dev/null 2>&1; then
+    sans_ffmpeg=
+else
+    sans_ffmpeg=1
+    echo "mfread : ffprobe absent, la lecture par FFmpeg n'est pas jouée (refus du lecteur seulement)"
+fi
+for name in mfread32 mfread64; do
+    set +e
+    env ${sans_ffmpeg:+WINLUX_TEST_SANS_FFMPEG=1} WINLUX_AUDIO=null WINLUX_GUI=headless timeout 120 "$runtime" "$out/$name.exe" >"$work/mfread.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'MF lecture : tout est correct' "$work/mfread.txt" \
+        || grep -q 'non décrite pour les programmes 32 bits' "$work/mfread.txt"; then
+        tail -20 "$work/mfread.txt"
+        echo "$name.exe : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+done
+echo "mfread32/mfread64 : MFTEnum*, caméras et lecteur de source Media Foundation, x86 et x64"
 
 # Direct3D 11 et DXGI (#1090) : il faut un contexte OpenGL, donc Xvfb.
 if command -v xvfb-run >/dev/null 2>&1; then

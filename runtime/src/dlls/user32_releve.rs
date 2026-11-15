@@ -81,6 +81,31 @@ unsafe extern "win64" fn get_cursor_info(info: *mut u8) -> i32 {
     1
 }
 
+/// GetGUIThreadInfo (documentation publique, winuser.h) : GUITHREADINFO de
+/// 72 octets en 64 bits (cbSize, flags, six HWND, RECT rcCaret). idThread 0
+/// désigne le fil de premier plan ; un fil de ce processus est accepté, un
+/// fil inconnu échoue (« If the specified thread does not exist … the
+/// function will fail »), avec ERROR_INVALID_PARAMETER, code choisi par nous.
+/// Winlux ne suit ni menu, ni boucle de déplacement, ni curseur de texte par
+/// fil : flags, hwndMenuOwner, hwndMoveSize, hwndCaret et rcCaret valent 0
+/// (#2551).
+unsafe extern "win64" fn get_gui_thread_info(tid: u32, info: *mut u8) -> i32 {
+    if info.is_null() || std::ptr::read_unaligned(info as *const u32) != 72 {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    if tid != 0 && !std::path::Path::new(&format!("/proc/self/task/{tid}")).exists() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let active = api!("user32", "GetActiveWindow", fn() -> usize).unwrap_or(0);
+    let focus = api!("user32", "GetFocus", fn() -> usize).unwrap_or(0);
+    let capture = api!("user32", "GetCapture", fn() -> usize).unwrap_or(0);
+    std::ptr::write_bytes(info.add(4), 0, 68);
+    for (i, h) in [active, focus, capture].into_iter().enumerate() {
+        std::ptr::write_unaligned(info.add(8 + 8 * i) as *mut usize, h);
+    }
+    1
+}
+
 /// GetKeyboardType : clavier étendu 101/102 touches, douze touches de
 /// fonction (le clavier PC courant).
 extern "win64" fn get_keyboard_type(kind: i32) -> i32 {
@@ -1916,6 +1941,7 @@ unsafe extern "win64" fn get_window_context_help_id(hwnd: usize) -> u32 {
 pub fn user32_exports() -> Exports {
     crate::exports! {
         "GetCursorInfo" => fn get_cursor_info,
+        "GetGUIThreadInfo" => fn get_gui_thread_info,
         "GetMenuCheckMarkDimensions" => fn get_menu_check_mark_dimensions,
         "SetWindowContextHelpId" => fn set_window_context_help_id,
         "GetWindowContextHelpId" => fn get_window_context_help_id,
@@ -1994,6 +2020,28 @@ pub fn uxtheme_exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn infos_du_fil_graphique() {
+        // #2551 : GetGUIThreadInfo exportée ; fil courant ou 0 acceptés, fil
+        // inconnu ou cbSize faux refusés.
+        let _teb = crate::process::test_teb();
+        assert!(lookup("user32", "GetGUIThreadInfo").is_some());
+        let mut info = [0xAAu8; 72];
+        info[..4].copy_from_slice(&72u32.to_le_bytes());
+        let me = crate::dlls::kernel32::get_current_thread_id();
+        unsafe {
+            assert_eq!(get_gui_thread_info(me, info.as_mut_ptr()), 1);
+            assert_eq!(&info[..4], &72u32.to_le_bytes());
+            // flags, hwndMenuOwner, hwndMoveSize, hwndCaret et rcCaret à zéro.
+            assert!(info[4..8].iter().chain(&info[32..72]).all(|&b| b == 0));
+            assert_eq!(get_gui_thread_info(0, info.as_mut_ptr()), 1);
+            assert_eq!(get_gui_thread_info(0x7FFF_FFF0, info.as_mut_ptr()), 0);
+            info[..4].copy_from_slice(&48u32.to_le_bytes());
+            assert_eq!(get_gui_thread_info(0, info.as_mut_ptr()), 0);
+            assert_eq!(get_gui_thread_info(0, std::ptr::null_mut()), 0);
+        }
+    }
 
     #[test]
     fn coche_de_menu_en_makelong() {

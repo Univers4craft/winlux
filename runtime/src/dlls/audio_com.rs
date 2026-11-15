@@ -152,28 +152,6 @@ pub unsafe fn call1(obj: *mut c_void, index: usize, a: usize) {
     f(obj, a)
 }
 
-/// AddRef / Release d'une interface du programme.
-///
-/// # Safety
-/// `obj` doit être nul ou un IUnknown valide.
-pub unsafe fn unknown_add_ref(obj: *mut c_void) {
-    if !obj.is_null() {
-        let vt = *(obj as *const *const usize);
-        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(1));
-        f(obj);
-    }
-}
-
-/// # Safety
-/// `obj` doit être nul ou un IUnknown valide.
-pub unsafe fn unknown_release(obj: *mut c_void) {
-    if !obj.is_null() {
-        let vt = *(obj as *const *const usize);
-        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(2));
-        f(obj);
-    }
-}
-
 /// Signale un événement Win32 (s'il existe).
 pub fn signal(event: usize) {
     if event != 0 {

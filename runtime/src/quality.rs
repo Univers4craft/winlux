@@ -394,8 +394,9 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
             libc::close(fd);
         }
 
-        // Also print to stderr
-        let stderr = 2;
+        // Aussi sur le descripteur de diagnostic, jamais dans le tube d'un
+        // programme (#2530).
+        let stderr = crate::log::diag_fd();
         write_crash_fd(stderr, b"\nwinlux: crash dump written to ");
         write_crash_fd(stderr, &path_buf[..pos]);
         write_crash_fd(stderr, b"\n");

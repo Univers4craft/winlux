@@ -493,7 +493,7 @@ impl Interpreter {
         self.raise_domain_event("LeverExceptionNonGeree", vec![Value::Ref(e.obj_ptr)]);
         eprintln!("Unhandled exception. {e}");
         crate::log_error!("clr", "exception non gérée dans un fil : {e}");
-        std::process::exit(0xE0434352u32 as i32)
+        crate::dlls::kernel32::exit_with(0xE0434352u32 as i32)
     }
 
     fn start_thread(&mut self, obj: *mut u8, arg: Option<Value>) -> Result<(), ClrException> {

@@ -66,6 +66,7 @@ DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
+BALANCE_EDGE = 46  # repère d'un pixel du début du bloc de droite (#2467) : le bouton vient après lui
 FLOAT_CORNER = 45  # barre flottante : séparateur gardant le coin droit de la capsule libre (#889)
 NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
 # Révisions figées, empreinte SHA-256 écrite ici (#911) : jamais « la dernière
@@ -1253,7 +1254,8 @@ def panel_add():
         if FLOAT_CORNER in ids:  # barre flottante (#889) : avant la réserve du coin droit
             position = ids.index(FLOAT_CORNER)
         else:
-            position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
+            after = BALANCE_EDGE if BALANCE_EDGE in ids else PANEL_AFTER
+            position = ids.index(after) + 1 if after in ids else max(len(ids) - 1, 0)
         ids.insert(position, int(number))
         if not _set_panel_ids(ids):
             return False
