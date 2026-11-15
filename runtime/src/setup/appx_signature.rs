@@ -1241,6 +1241,24 @@ fn pe_layout(d: &[u8]) -> Option<(usize, usize, usize, usize)> {
     Some((opt + 64, entry, start, len))
 }
 
+/// Signature PKCS #7 (SignedData DER) incorporée à un PE : contenu de la
+/// première entrée WIN_CERTIFICATE de type PKCS #7 de sa table de
+/// sécurité, sans vérification. C'est ce que CryptQueryObject rend pour
+/// CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED (#2685).
+pub(crate) fn pe_embedded_pkcs7(d: &[u8]) -> Option<&[u8]> {
+    let (_, entry, start, len) = pe_layout(d)?;
+    if len == 0 || entry == 0 {
+        return None;
+    }
+    let table = d.get(start..start.checked_add(len)?)?;
+    let cert_len = u32::from_le_bytes(table.get(..4)?.try_into().ok()?) as usize;
+    let kind = u16::from_le_bytes(table.get(6..8)?.try_into().ok()?);
+    if kind != 2 || cert_len < 8 {
+        return None;
+    }
+    table.get(8..cert_len)
+}
+
 fn examine_pe_parts(d: &[u8], certs: &mut Vec<Vec<u8>>) -> Signature {
     // Cabinet signé (.cab) : même vérification, autre disposition (#2656).
     if d.starts_with(b"MSCF") {

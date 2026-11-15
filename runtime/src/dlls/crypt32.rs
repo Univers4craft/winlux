@@ -2120,6 +2120,10 @@ const CERT_QUERY_OBJECT_FILE: u32 = 1;
 const CERT_QUERY_OBJECT_BLOB: u32 = 2;
 const CERT_QUERY_CONTENT_CERT: u32 = 1;
 const CERT_QUERY_CONTENT_FLAG_CERT: u32 = 1 << CERT_QUERY_CONTENT_CERT;
+/// Message PKCS #7 signé incorporé à un fichier (signature Authenticode
+/// d'un PE), wincrypt.h.
+const CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED: u32 = 10;
+const CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED: u32 = 1 << CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED;
 const CERT_QUERY_FORMAT_BINARY: u32 = 1;
 const CERT_QUERY_FORMAT_BASE64_ENCODED: u32 = 2;
 const CRYPT_E_NO_MATCH: u32 = 0x8009_2009;
@@ -2141,9 +2145,10 @@ fn query_cert(data: &[u8], formats: u32) -> Option<(Vec<u8>, u32)> {
     Some((der, CERT_QUERY_FORMAT_BASE64_ENCODED))
 }
 
-/// CryptQueryObject : seul le contenu « certificat » (binaire, PEM, base64)
-/// est reconnu, dans un tampon ou un fichier. C'est ce que lit le Schannel de
-/// libcurl pour charger son fichier d'autorités (CURLOPT_CAINFO).
+/// CryptQueryObject : contenu « certificat » (binaire, PEM, base64), que
+/// lit le Schannel de libcurl pour son fichier d'autorités
+/// (CURLOPT_CAINFO), et signature PKCS #7 incorporée à un PE, que lit
+/// Acrobat pour ses greffons (#2685), dans un tampon ou un fichier.
 pub unsafe extern "win64" fn CryptQueryObject(
     object_type: u32,
     object: usize,
@@ -2178,6 +2183,39 @@ pub unsafe extern "win64" fn CryptQueryObject(
             return 0;
         }
     };
+    if content_flags & CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED != 0
+        && format_flags & (1 << CERT_QUERY_FORMAT_BINARY) != 0
+    {
+        if let Some(p7) = crate::setup::appx_signature::pe_embedded_pkcs7(&data) {
+            if let Some((certs, _)) = crate::setup::appx_signature::signed_data_parts(p7) {
+                let store = new_store();
+                for der in &certs {
+                    store_add_der(store, der);
+                }
+                if !encoding.is_null() {
+                    *encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+                }
+                if !content_type.is_null() {
+                    *content_type = CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED;
+                }
+                if !format_type.is_null() {
+                    *format_type = CERT_QUERY_FORMAT_BINARY;
+                }
+                if !context_out.is_null() {
+                    *context_out = 0;
+                }
+                if !msg_out.is_null() {
+                    *msg_out = super::discord_win32::open_decoded(p7).unwrap_or(0);
+                }
+                if store_out.is_null() {
+                    CertCloseStore(store, 0);
+                } else {
+                    *store_out = store;
+                }
+                return 1;
+            }
+        }
+    }
     let found = (content_flags & CERT_QUERY_CONTENT_FLAG_CERT != 0)
         .then(|| query_cert(&data, if format_flags == 0 { !0 } else { format_flags }))
         .flatten();
@@ -2672,6 +2710,71 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_incorporee_d_un_greffon_lue() {
+        // #2685 : Acrobat lit la signature de ses greffons par
+        // CryptQueryObject(CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+        // binaire) ; il obtient un magasin des certificats et le message.
+        let Some(pe) = crate::setup::appx_signature::tests::signed_test_pe() else {
+            return;
+        };
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let b = Blob {
+                cb: pe.len() as u32,
+                pb: pe.as_ptr(),
+            };
+            let (mut enc, mut content, mut format) = (0u32, 0u32, 0u32);
+            let (mut store, mut msg, mut ctx) = (0usize, 0usize, 1usize);
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &b as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                    1 << CERT_QUERY_FORMAT_BINARY,
+                    0,
+                    &mut enc,
+                    &mut content,
+                    &mut format,
+                    &mut store,
+                    &mut msg,
+                    &mut ctx,
+                ),
+                1
+            );
+            assert_eq!(content, CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED);
+            assert_eq!(format, CERT_QUERY_FORMAT_BINARY);
+            assert_eq!(enc, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING);
+            assert_eq!(ctx, 0);
+            assert_ne!(CertEnumCertificatesInStore(store, 0), 0);
+            assert!(super::super::discord_win32::is_decode_msg(msg));
+            assert!(super::super::discord_win32::close_msg(msg));
+            CertCloseStore(store, 0);
+            // Un PE sans signature n'est pas reconnu.
+            let plain = vec![0u8; 64];
+            let b = Blob {
+                cb: plain.len() as u32,
+                pb: plain.as_ptr(),
+            };
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &b as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                    1 << CERT_QUERY_FORMAT_BINARY,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+        }
+    }
 
     /// CERT_CHAIN_ENGINE_CONFIG : tailles de wincrypt.h en x64 et en x86 (#1708).
     #[test]
