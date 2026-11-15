@@ -224,6 +224,7 @@ pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
+pub mod package_classes;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;

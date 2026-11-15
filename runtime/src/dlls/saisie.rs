@@ -1087,25 +1087,43 @@ mod tests {
             std::env::temp_dir().join(format!("winlux-consent-test-{}.lock", std::process::id()));
         let old = std::env::var_os("WINLUX_CONSENT_LOCK");
         std::env::set_var("WINLUX_CONSENT_LOCK", &path);
+        // Un verrou relâché peut rester tenu un instant par un processus
+        // qu'un autre test lance (copie du descripteur entre fork et exec) :
+        // ce qui doit réussir est retenté, au plus 2 s (#2668).
+        let borne = || std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let exclusif = |f: &std::fs::File| {
+            let limite = borne();
+            loop {
+                // SAFETY: descripteur valide, tenu par `f`.
+                let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if r == 0 || std::time::Instant::now() > limite {
+                    return r;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        let garde = || {
+            let limite = borne();
+            loop {
+                let g = consent_guard();
+                if g.is_some() || std::time::Instant::now() > limite {
+                    return g;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
         // Deux envois en même temps : verrous partagés compatibles.
         let a = consent_guard().expect("premier envoi");
         let b = consent_guard().expect("second envoi");
         drop((a, b));
         // Une fenêtre de consentement (verrou exclusif) bloque tout envoi.
         let window = std::fs::File::open(&path).unwrap();
-        // SAFETY: descripteur valide.
-        assert_eq!(
-            unsafe { libc::flock(window.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-            0
-        );
+        assert_eq!(exclusif(&window), 0);
         assert!(consent_guard().is_none());
         drop(window);
-        assert!(
-            consent_guard().is_some(),
-            "fenêtre fermée : l'envoi reprend"
-        );
+        assert!(garde().is_some(), "fenêtre fermée : l'envoi reprend");
         // Pendant un envoi, la fenêtre attend qu'il se termine.
-        let sending = consent_guard().unwrap();
+        let sending = garde().unwrap();
         let window = std::fs::File::open(&path).unwrap();
         // SAFETY: descripteur valide.
         assert_ne!(
@@ -1117,14 +1135,10 @@ mod tests {
         // nouvelle saisie, même si le verrou principal est libre (#1711).
         let gate_path = path.with_extension("porte");
         let gate = std::fs::File::open(&gate_path).unwrap();
-        // SAFETY: descripteur valide.
-        assert_eq!(
-            unsafe { libc::flock(gate.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-            0
-        );
+        assert_eq!(exclusif(&gate), 0);
         assert!(consent_guard().is_none(), "porte fermée : aucune saisie");
         drop(gate);
-        assert!(consent_guard().is_some());
+        assert!(garde().is_some());
         let _ = std::fs::remove_file(&gate_path);
         // Lien symbolique posé à la place du verrou : refus, jamais suivi.
         let _ = std::fs::remove_file(&path);
