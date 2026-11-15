@@ -513,3 +513,37 @@ pub const PROFILE_IIDS: [Guid; 8] = [
         [0x85, 0xa0, 0x16, 0x3e, 0x92, 0x04, 0x40, 0x11],
     ), // ICoreWebView2Profile8
 ];
+/// ICoreWebView2CookieManager (ajouté à la main, IDL public, #2637) :
+/// 8 méthodes, sans version suivante.
+pub const COOKIE_MANAGER_SLOTS: usize = 11;
+pub const COOKIE_MANAGER_IIDS: [Guid; 1] = [guid(
+    0x177cd9e7,
+    0xb6f5,
+    0x451a,
+    [0x94, 0xa0, 0x5d, 0x7a, 0x3a, 0x4c, 0x41, 0x41],
+)];
+/// ICoreWebView2Cookie (ajouté à la main, IDL public, #2637) : 14 méthodes.
+pub const COOKIE_SLOTS: usize = 17;
+pub const COOKIE_IIDS: [Guid; 1] = [guid(
+    0xad26d6be,
+    0x1486,
+    0x43e6,
+    [0xbf, 0x87, 0xa2, 0x03, 0x40, 0x06, 0xca, 0x21],
+)];
+/// ICoreWebView2CookieList (ajouté à la main, IDL public, #2637) : 2 méthodes.
+pub const COOKIE_LIST_SLOTS: usize = 5;
+pub const COOKIE_LIST_IIDS: [Guid; 1] = [guid(
+    0xf7f6f714,
+    0x5d2a,
+    0x43c6,
+    [0x95, 0x03, 0x34, 0x6e, 0xce, 0x02, 0xd1, 0x86],
+)];
+/// ICoreWebView2DevToolsProtocolEventReceiver (ajouté à la main, IDL
+/// public, #2643) : add_/remove_DevToolsProtocolEventReceived.
+pub const DEVTOOLS_RECEIVER_SLOTS: usize = 5;
+pub const DEVTOOLS_RECEIVER_IIDS: [Guid; 1] = [guid(
+    0xb32ca51a,
+    0x8371,
+    0x45e9,
+    [0x93, 0x17, 0xaf, 0x02, 0x1d, 0x08, 0x03, 0x67],
+)];
