@@ -1932,8 +1932,46 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     REGDB_E_CLASSNOTREG
 }
 
-unsafe extern "win64" fn RoActivateInstance(_class: usize, out: *mut usize) -> i32 {
-    RoGetActivationFactory(0, 0, out)
+/// IID_IActivationFactory {00000035-0000-0000-C000-000000000046}.
+const IID_ACTIVATION_FACTORY: [u8; 16] = [0x35, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+
+/// RoActivateInstance (#2560) : fabrique de la classe demandée, puis
+/// IActivationFactory::ActivateInstance (entrée 6 de la vtable, après
+/// IUnknown et IInspectable), d'après les pages RoActivateInstance et
+/// IActivationFactory de Microsoft Learn.
+unsafe extern "win64" fn RoActivateInstance(class: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    crate::wow32::write_ptr(out as usize, 0);
+    if crate::wow32::active() {
+        // Les fabriques rendues à un programme x86 peuvent être les siennes
+        // (RoRegisterActivationFactories) : pas d'appel x64 dans leur vtable
+        // tant que Ro* n'a pas ses deux ABI (#2471).
+        let name = String::from_utf16_lossy(hstring_slice(class));
+        crate::log_warn!(
+            "com",
+            "RoActivateInstance : classe « {name} » pas encore activée pour un programme x86 (REGDB_E_CLASSNOTREG)"
+        );
+        return REGDB_E_CLASSNOTREG;
+    }
+    let mut factory = 0usize;
+    let hr = RoGetActivationFactory(
+        class,
+        IID_ACTIVATION_FACTORY.as_ptr() as usize,
+        &mut factory,
+    );
+    if hr < 0 || factory == 0 {
+        return if hr < 0 { hr } else { E_POINTER };
+    }
+    type Activate = unsafe extern "win64" fn(usize, *mut usize) -> i32;
+    type Release = unsafe extern "win64" fn(usize) -> u32;
+    let vtbl = *(factory as *const *const usize);
+    let activate: Activate = std::mem::transmute(*vtbl.add(6));
+    let release: Release = std::mem::transmute(*vtbl.add(2));
+    let hr = activate(factory, out);
+    release(factory);
+    hr
 }
 
 unsafe extern "win64" fn RoOriginateError(_hr: i32, _message: usize) -> i32 {
@@ -3972,6 +4010,30 @@ mod tests {
             let mut f = 1usize;
             assert_eq!(RoGetActivationFactory(h, 0, &mut f), REGDB_E_CLASSNOTREG);
             assert_eq!(f, 0);
+            // #2560 : RoActivateInstance active la classe demandée.
+            let inconnue: Vec<u16> = "Pas.Une.Classe".encode_utf16().collect();
+            let mut ih = 0usize;
+            assert_eq!(
+                WindowsCreateString(inconnue.as_ptr(), inconnue.len() as u32, &mut ih),
+                0
+            );
+            let mut inst = 1usize;
+            assert_eq!(RoActivateInstance(ih, &mut inst), REGDB_E_CLASSNOTREG);
+            assert_eq!(inst, 0);
+            assert_eq!(WindowsDeleteString(ih), 0);
+            assert_eq!(RoActivateInstance(ih, std::ptr::null_mut()), E_POINTER);
+            let json: Vec<u16> = "Windows.Data.Json.JsonObject".encode_utf16().collect();
+            let mut jh = 0usize;
+            assert_eq!(
+                WindowsCreateString(json.as_ptr(), json.len() as u32, &mut jh),
+                0
+            );
+            assert_eq!(RoActivateInstance(jh, &mut inst), 0);
+            assert_ne!(inst, 0);
+            let vtbl = *(inst as *const *const usize);
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtbl.add(2));
+            release(inst);
+            assert_eq!(WindowsDeleteString(jh), 0);
             assert!(crate::dlls::lookup("ole32", "WindowsCreateString").is_some());
             assert!(crate::dlls::lookup(
                 &crate::dlls::normalize("combase.dll"),
