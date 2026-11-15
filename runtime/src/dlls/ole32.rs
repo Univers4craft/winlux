@@ -951,6 +951,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Contrôle navigateur web « Shell.Explorer » (#2228).
+        if let Some(hr) = super::webbrowser::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Bouton de la barre des tâches : progression, icône superposée (#1434).
         if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
             return hr;
@@ -1215,6 +1219,11 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
         None => {
             // Classes intégrées sans clé HKCR : MSXML (#1758).
             if let Some(g) = super::msxml::clsid_for_prog_id(&name) {
+                *clsid = g;
+                return S_OK;
+            }
+            // Contrôle navigateur web « Shell.Explorer » (#2228).
+            if let Some(g) = super::webbrowser::clsid_for_prog_id(&name) {
                 *clsid = g;
                 return S_OK;
             }
