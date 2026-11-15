@@ -138,11 +138,14 @@ pub fn lock_shown_marker(root: &Path, display: &str) -> std::path::PathBuf {
 /// Affiche l'écran de verrouillage de chaque session avant la mise en
 /// veille, pour que son bureau ne soit jamais visible au réveil. Attend au
 /// plus trois secondes que chaque écran ait pris le clavier (marqueur
-/// `shown`) ; sans `winlux-lock` installé, ne fait rien.
-pub(crate) fn lock_before_sleep(root: &Path) {
+/// `shown`) ; sans `winlux-lock` installé, ne fait rien. Rend les écrans
+/// dont l'écran de verrouillage n'a pas pu être lancé, avec la cause : un
+/// échec n'est plus avalé (#2621), il est journalisé et vérifiable.
+pub(crate) fn lock_before_sleep(root: &Path) -> Vec<(String, std::io::Error)> {
+    let mut failed = Vec::new();
     let program = root.join("usr/bin/winlux-lock");
     if !program.is_file() || !lock_on_resume_at(root) {
-        return;
+        return failed;
     }
     let mut waiting = Vec::new();
     for (display, account) in lock_targets_at(root) {
@@ -163,19 +166,45 @@ pub(crate) fn lock_before_sleep(root: &Path) {
         if let Some(account) = &account {
             command.env("WINLUX_SESSION_USER", account);
         }
-        if let Ok(mut child) = command.spawn() {
-            // L'écran reste affiché après la reprise : il est récolté à part.
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            waiting.push(shown);
+        match spawn_retrying_busy(&mut command) {
+            Ok(mut child) => {
+                // L'écran reste affiché après la reprise : il est récolté à part.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                waiting.push(shown);
+            }
+            Err(error) => {
+                eprintln!("winlux-power : écran de verrouillage de {display} non lancé : {error}");
+                failed.push((display, error));
+            }
         }
     }
     for _ in 0..30 {
         if waiting.iter().all(|shown| shown.is_file()) {
-            return;
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    failed
+}
+
+/// `execve` rend ETXTBSY tant qu'un autre processus garde le programme
+/// ouvert en écriture : fenêtre brève d'une mise à jour qui le réécrit, ou
+/// descripteur hérité par un fork concurrent avant son exec (#2621). On
+/// réessaie un court instant, une demi-seconde au plus, avant d'abandonner.
+pub(crate) fn spawn_retrying_busy(
+    command: &mut std::process::Command,
+) -> std::io::Result<std::process::Child> {
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 25 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
     }
 }
 
