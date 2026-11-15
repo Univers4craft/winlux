@@ -294,6 +294,8 @@ struct Com {
     view: Option<Arc<View>>,
     args: Args,
     opts: Mutex<ControllerOpts>,
+    /// Objets hôtes de la vue (AddHostObjectToScript, #2596).
+    hosts: Mutex<Vec<HostObject>>,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -305,6 +307,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         view,
         args,
         opts: Mutex::new(ControllerOpts::default()),
+        hosts: Mutex::new(Vec::new()),
     });
     Box::into_raw(b) as usize
 }
@@ -340,6 +343,7 @@ extern "win64" fn com_release(this: usize) -> u32 {
         let left = com(this).refs.fetch_sub(1, Ordering::AcqRel) - 1;
         if left == 0 {
             let c = Box::from_raw(this as *mut Com);
+            super::lock(&c.hosts).clear();
             // Le contrôleur libéré par l'application ferme sa vue.
             if c.family == Family::Controller {
                 if let Some(v) = c.view.as_ref() {
@@ -1424,7 +1428,8 @@ fn webview_methods() -> Vec<(usize, usize)> {
         (43, add_title_changed as *const () as usize),
         (44, web_remove as *const () as usize),
         (45, web_title as *const () as usize),
-        (47, ok1 as *const () as usize),
+        (46, web_add_host_object as *const () as usize),
+        (47, web_remove_host_object as *const () as usize),
         (48, ok0 as *const () as usize),
         (51, get_false as *const () as usize),
         (54, ok2 as *const () as usize),
@@ -1648,6 +1653,145 @@ unsafe extern "win64" fn web_can_go_forward(this: usize, out: *mut i32) -> i32 {
     *out = i32::from(super::lock(&v.state).can_forward);
     S_OK
 }
+/// Objet hôte retenu par une vue (#2596) : le VARIANT de l'application,
+/// copié avec sa propre référence (interface AddRef, BSTR et tableau
+/// dupliqués), libéré au remplacement, au retrait ou avec la vue.
+struct HostObject {
+    name: String,
+    vt: u16,
+    data: usize,
+}
+
+const VT_DECIMAL: u16 = 14;
+const VT_DISPATCH: u16 = 9;
+const VT_UNKNOWN: u16 = 13;
+const VT_BSTR: u16 = 8;
+const VT_RECORD: u16 = 36;
+const VT_ARRAY: u16 = 0x2000;
+const VT_BYREF: u16 = 0x4000;
+/// {00020400-0000-0000-C000-000000000046}
+const IID_IDISPATCH_BYTES: [u8; 16] = [
+    0x00, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+impl Drop for HostObject {
+    fn drop(&mut self) {
+        unsafe {
+            if self.vt & VT_ARRAY != 0 {
+                super::oleaut32::safe_array_destroy(self.data);
+            } else if self.vt == VT_DISPATCH {
+                release(self.data);
+            } else if self.vt == VT_BSTR {
+                super::oleaut32::sys_free_string(self.data as *mut u16);
+            }
+        }
+    }
+}
+
+/// Copie le VARIANT `v` avec sa propre référence. Types refusés par la
+/// documentation publique (IUnknown générique, VT_DECIMAL, VT_RECORD,
+/// tableaux par référence) : None.
+unsafe fn host_object(name: String, v: *const u8) -> Option<HostObject> {
+    let vt = *(v as *const u16);
+    let data = *(v.add(8) as *const usize);
+    if vt & VT_BYREF != 0 || vt == VT_DECIMAL || vt & !VT_ARRAY == VT_RECORD {
+        return None;
+    }
+    if vt & VT_ARRAY != 0 {
+        let mut copy = 0usize;
+        if data == 0 || super::oleaut32::safe_array_copy(data, &mut copy) != S_OK {
+            return None;
+        }
+        return Some(HostObject {
+            name,
+            vt,
+            data: copy,
+        });
+    }
+    match vt {
+        VT_DISPATCH => {
+            add_ref(data);
+            Some(HostObject { name, vt, data })
+        }
+        // Un IUnknown qui implémente IDispatch est traité comme IDispatch.
+        VT_UNKNOWN => {
+            if data == 0 {
+                return None;
+            }
+            let qi: extern "win64" fn(usize, *const u8, *mut usize) -> i32 =
+                std::mem::transmute(**(data as *const *const usize));
+            let mut disp = 0usize;
+            (qi(data, IID_IDISPATCH_BYTES.as_ptr(), &mut disp) == S_OK && disp != 0).then_some(
+                HostObject {
+                    name,
+                    vt: VT_DISPATCH,
+                    data: disp,
+                },
+            )
+        }
+        VT_BSTR => {
+            let copy = if data == 0 {
+                0
+            } else {
+                super::oleaut32::sys_alloc_string(data as *const u16) as usize
+            };
+            Some(HostObject {
+                name,
+                vt,
+                data: copy,
+            })
+        }
+        _ => Some(HostObject { name, vt, data }),
+    }
+}
+
+/// ICoreWebView2::AddHostObjectToScript (#2596). Un même nom remplace
+/// l'objet précédent. Le pont vers `chrome.webview.hostObjects` (appels
+/// IDispatch depuis le script) n'est pas encore là.
+unsafe extern "win64" fn web_add_host_object(
+    this: usize,
+    name: *const u16,
+    object: *const u8,
+) -> i32 {
+    if name.is_null() || object.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    if name.is_empty() {
+        return E_INVALIDARG;
+    }
+    let Some(obj) = host_object(name, object) else {
+        return E_INVALIDARG;
+    };
+    let mut hosts = super::lock(&com(this).hosts);
+    // L'ancien objet est libéré hors du verrou.
+    let old = hosts
+        .iter()
+        .position(|h| h.name == obj.name)
+        .map(|i| hosts.remove(i));
+    hosts.push(obj);
+    drop(hosts);
+    drop(old);
+    S_OK
+}
+
+/// ICoreWebView2::RemoveHostObjectFromScript (#2596). Un nom inconnu ne
+/// change rien (la documentation publique ne dit pas ce qu'il rend).
+unsafe extern "win64" fn web_remove_host_object(this: usize, name: *const u16) -> i32 {
+    if name.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    let mut hosts = super::lock(&com(this).hosts);
+    let old = hosts
+        .iter()
+        .position(|h| h.name == name)
+        .map(|i| hosts.remove(i));
+    drop(hosts);
+    drop(old);
+    S_OK
+}
+
 unsafe extern "win64" fn web_title(this: usize, out: *mut *mut u16) -> i32 {
     let Some(v) = view_of(this) else {
         return E_FAIL;
@@ -2052,5 +2196,77 @@ mod tests {
             unsafe { env_get_process_extended_infos(0, 0) },
             E_INVALIDARG
         );
+    }
+
+    /// #2596 : AddHostObjectToScript garde sa référence, remplace un même
+    /// nom, refuse un IUnknown sans IDispatch ; RemoveHostObjectFromScript
+    /// et la fin de la vue la rendent.
+    #[test]
+    fn objets_hotes_2596() {
+        static REFS: AtomicU32 = AtomicU32::new(1);
+        static DISPATCH: AtomicBool = AtomicBool::new(true);
+        extern "win64" fn qi(this: usize, _iid: *const u8, out: *mut usize) -> i32 {
+            if !DISPATCH.load(Ordering::SeqCst) {
+                unsafe { *out = 0 };
+                return E_NOINTERFACE;
+            }
+            REFS.fetch_add(1, Ordering::SeqCst);
+            unsafe { *out = this };
+            S_OK
+        }
+        extern "win64" fn add(_this: usize) -> u32 {
+            REFS.fetch_add(1, Ordering::SeqCst) + 1
+        }
+        extern "win64" fn rel(_this: usize) -> u32 {
+            REFS.fetch_sub(1, Ordering::SeqCst) - 1
+        }
+        let vt: &'static [usize; 3] = Box::leak(Box::new([
+            qi as *const () as usize,
+            add as *const () as usize,
+            rel as *const () as usize,
+        ]));
+        let obj: &'static usize = Box::leak(Box::new(vt.as_ptr() as usize));
+        let obj = obj as *const usize as usize;
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 46], web_add_host_object as *const () as usize);
+        assert_eq!(web[3 + 47], web_remove_host_object as *const () as usize);
+        let view = new_com(Family::WebView, None, None, Args::default());
+        let name: Vec<u16> = "teams\0".encode_utf16().collect();
+        let mut v = [0u8; 24];
+        let variant = |v: &mut [u8; 24], vt: u16| {
+            v[..2].copy_from_slice(&vt.to_le_bytes());
+            v[8..16].copy_from_slice(&obj.to_le_bytes());
+        };
+        variant(&mut v, VT_DISPATCH);
+        unsafe {
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            // Même nom : l'objet précédent est rendu.
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            assert_eq!(web_remove_host_object(view, name.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 1);
+            // IUnknown qui implémente IDispatch : accepté ; sinon refusé.
+            variant(&mut v, VT_UNKNOWN);
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            DISPATCH.store(false, Ordering::SeqCst);
+            let other: Vec<u16> = "autre\0".encode_utf16().collect();
+            assert_eq!(
+                web_add_host_object(view, other.as_ptr(), v.as_ptr()),
+                E_INVALIDARG
+            );
+            variant(&mut v, VT_DECIMAL);
+            assert_eq!(
+                web_add_host_object(view, other.as_ptr(), v.as_ptr()),
+                E_INVALIDARG
+            );
+            // Un nom inconnu ne change rien.
+            assert_eq!(web_remove_host_object(view, other.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+        }
+        // La vue libérée rend l'objet encore retenu.
+        com_release(view);
+        assert_eq!(REFS.load(Ordering::SeqCst), 1);
     }
 }
