@@ -312,6 +312,9 @@ struct Com {
     memory_level: AtomicU32,
     /// Cookie (un élément) ou liste de cookies (#2637).
     cookies: Mutex<Vec<CookieData>>,
+    /// Filtres WebResourceRequested avec types de source (#2635) :
+    /// (URI, contexte, types restants), dans l'ordre d'ajout.
+    filters: Mutex<Vec<(String, i32, u32)>>,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -327,6 +330,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
         memory_level: AtomicU32::new(0),
         cookies: Mutex::new(Vec::new()),
+        filters: Mutex::new(Vec::new()),
     });
     Box::into_raw(b) as usize
 }
@@ -1974,6 +1978,9 @@ fn webview_methods() -> Vec<(usize, usize)> {
     // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
     m.push((116, web_get_memory_level as *const () as usize));
     m.push((117, web_put_memory_level as *const () as usize));
+    // ICoreWebView2_22 : filtres avec types de source (#2635).
+    m.push((120, web_add_filter_kinds as *const () as usize));
+    m.push((121, web_remove_filter_kinds as *const () as usize));
     // Événements acceptés mais jamais déclenchés (cadres, dialogues,
     // autorisations, nouvelles fenêtres, requêtes, fermeture…).
     for (add, remove) in [
@@ -2350,6 +2357,49 @@ unsafe extern "win64" fn web_put_memory_level(this: usize, level: i32) -> i32 {
     com(this)
         .memory_level
         .store(level as u32, Ordering::Relaxed);
+    S_OK
+}
+/// ICoreWebView2_22::AddWebResourceRequestedFilterWithRequestSourceKinds
+/// (#2635). D'après la documentation publique, `requestSourceKinds` à NONE
+/// (0) est refusé ; un filtre ajouté plusieurs fois se retire autant de
+/// fois. Le filtre est retenu ; WebResourceRequested n'est pas encore levé.
+unsafe extern "win64" fn web_add_filter_kinds(
+    this: usize,
+    uri: *const u16,
+    ctx: i32,
+    kinds: i32,
+) -> i32 {
+    if uri.is_null() || kinds == 0 {
+        return E_INVALIDARG;
+    }
+    super::lock(&com(this).filters).push((wstr(uri), ctx, kinds as u32));
+    S_OK
+}
+/// ICoreWebView2_22::RemoveWebResourceRequestedFilterWithRequestSourceKinds
+/// (#2635) : retire les types demandés du dernier filtre identique qui les
+/// porte ; un filtre jamais ajouté rend E_INVALIDARG (documentation
+/// publique). Les types non retirés restent filtrés.
+unsafe extern "win64" fn web_remove_filter_kinds(
+    this: usize,
+    uri: *const u16,
+    ctx: i32,
+    kinds: i32,
+) -> i32 {
+    if uri.is_null() || kinds == 0 {
+        return E_INVALIDARG;
+    }
+    let uri = wstr(uri);
+    let mut filters = super::lock(&com(this).filters);
+    let Some(i) = filters
+        .iter()
+        .rposition(|(u, c, k)| *u == uri && *c == ctx && *k & kinds as u32 != 0)
+    else {
+        return E_INVALIDARG;
+    };
+    filters[i].2 &= !(kinds as u32);
+    if filters[i].2 == 0 {
+        filters.remove(i);
+    }
     S_OK
 }
 unsafe extern "win64" fn web_title(this: usize, out: *mut *mut u16) -> i32 {
@@ -3216,6 +3266,56 @@ mod tests {
             com_release(c);
         }
         com_release(mgr);
+        com_release(view);
+    }
+
+    /// #2635 : les filtres avec types de source se retiennent et se
+    /// retirent comme le dit la documentation publique.
+    #[test]
+    fn filtres_de_requetes_2635() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 120], web_add_filter_kinds as *const () as usize);
+        assert_eq!(web[3 + 121], web_remove_filter_kinds as *const () as usize);
+        let view = new_com(Family::WebView, None, None, Args::default());
+        let uri: Vec<u16> = "https://*.example.com/*\0".encode_utf16().collect();
+        let autre: Vec<u16> = "https://autre/*\0".encode_utf16().collect();
+        let tous = -1i32;
+        unsafe {
+            // NONE est refusé.
+            assert_eq!(web_add_filter_kinds(view, uri.as_ptr(), 0, 0), E_INVALIDARG);
+            // Un filtre jamais ajouté ne se retire pas.
+            assert_eq!(
+                web_remove_filter_kinds(view, uri.as_ptr(), 0, tous),
+                E_INVALIDARG
+            );
+            // Deux ajouts, deux retraits.
+            assert_eq!(web_add_filter_kinds(view, uri.as_ptr(), 0, tous), S_OK);
+            assert_eq!(web_add_filter_kinds(view, uri.as_ptr(), 0, tous), S_OK);
+            assert_eq!(web_remove_filter_kinds(view, uri.as_ptr(), 0, tous), S_OK);
+            assert_eq!(web_remove_filter_kinds(view, uri.as_ptr(), 0, tous), S_OK);
+            assert_eq!(
+                web_remove_filter_kinds(view, uri.as_ptr(), 0, tous),
+                E_INVALIDARG
+            );
+            // Retrait partiel : DOCUMENT (1) part, SHARED_WORKER (2) reste.
+            assert_eq!(web_add_filter_kinds(view, uri.as_ptr(), 3, 1 | 2), S_OK);
+            assert_eq!(web_remove_filter_kinds(view, uri.as_ptr(), 3, 1), S_OK);
+            assert_eq!(
+                web_remove_filter_kinds(view, uri.as_ptr(), 3, 1),
+                E_INVALIDARG
+            );
+            // Un autre contexte ou une autre URI ne correspond pas.
+            assert_eq!(
+                web_remove_filter_kinds(view, uri.as_ptr(), 4, 2),
+                E_INVALIDARG
+            );
+            assert_eq!(
+                web_remove_filter_kinds(view, autre.as_ptr(), 3, 2),
+                E_INVALIDARG
+            );
+            assert_eq!(web_remove_filter_kinds(view, uri.as_ptr(), 3, 2), S_OK);
+            assert!(super::super::lock(&com(view).filters).is_empty());
+        }
         com_release(view);
     }
 
