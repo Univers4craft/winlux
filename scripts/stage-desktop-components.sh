@@ -154,6 +154,11 @@ chmod 755 "$stage/usr/lib/winlux/mesure-barre-taches.sh"
 # (winlux-start-menu.sh), le menu en Python est installé ici.
 cp --remove-destination "$project/scripts/winlux-start-menu.py" "$stage/usr/lib/winlux/winlux-start-menu"
 chmod 755 "$stage/usr/lib/winlux/winlux-start-menu"
+# Valeurs par défaut GSettings de Winlux pour des logiciels de la Boutique
+# (#2190) : prises en compte quand dpkg recompile les schémas à leur
+# installation ; une surcharge sans son schéma est ignorée.
+mkdir -p "$stage/usr/share/glib-2.0/schemas"
+install -m 644 "$project"/integration/native/glib-schemas/*.gschema.override "$stage/usr/share/glib-2.0/schemas/"
 "$components/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" --library-path "$components/usr/lib/x86_64-linux-gnu" \
     "$components/usr/bin/glib-compile-schemas" "$stage/usr/share/glib-2.0/schemas"
 for database in mime desktop; do
