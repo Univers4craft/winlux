@@ -214,12 +214,22 @@ pub unsafe extern "win64" fn mf_enum_device_sources(
     if list.is_empty() {
         return S_OK;
     }
-    let array = super::ole32::co_task_mem_alloc(list.len() * 8) as *mut *mut c_void;
+    // Programme x86 : un tableau de pointeurs de 4 octets, chacun le
+    // mandataire x86 de son IMFActivate ; la passerelle rend l'adresse du
+    // tableau telle quelle (#2428).
+    let x86 = crate::wow32::active();
+    let width = if x86 { 4 } else { 8 };
+    let array = super::ole32::co_task_mem_alloc(list.len() * width) as *mut *mut c_void;
     if array.is_null() {
         return 0x8007000Eu32 as i32; // E_OUTOFMEMORY
     }
     for (i, a) in list.iter().enumerate() {
-        *array.add(i) = *a;
+        if x86 {
+            let p = crate::wow32::iface_to32(*a as usize, &crate::wow32::IID_IMFACTIVATE);
+            *(array as *mut u32).add(i) = p;
+        } else {
+            *array.add(i) = *a;
+        }
     }
     *out_devices = array;
     *out_count = list.len() as u32;

@@ -1583,14 +1583,68 @@ pub unsafe extern "win64" fn CreateAppContainerToken(
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
+    // SECURITY_CAPABILITIES commence par AppContainerSid (PSID) : on le garde pour
+    // GetAppContainerNamedObjectPath appelée avec ce jeton et sans SID (#2527).
+    if let Some(text) = sid_at(*(capabilities as *const *const u8)).and_then(sid_text) {
+        *crate::dlls::lock(&APPCONTAINER_SID) = Some(text);
+    }
     give_token(out)
+}
+
+/// SID du dernier AppContainer passé à CreateAppContainerToken. Winlux n'a qu'un
+/// jeton par compte (TOKEN_HANDLE), donc le jeton seul ne le porte pas.
+static APPCONTAINER_SID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// GetAppContainerNamedObjectPath (securityappcontainer.h, Kernel32.dll) : chemin
+/// des objets nommés d'un AppContainer (#2527). La documentation ne fixe pas la
+/// forme du chemin ; « AppContainerNamedObjects\<SID> » est **notre choix**.
+/// ObjectPathLength et ReturnLength sont comptés en WCHAR, zéro final compris
+/// (ObjectPath est un LPWSTR ; la documentation dit seulement « length »).
+/// Sans SID : le jeton rendu par CreateAppContainerToken désigne le dernier
+/// AppContainer créé ; le jeton du processus (NULL) n'est jamais un AppContainer
+/// sous Winlux, d'où FALSE et ERROR_INVALID_PARAMETER (code choisi par nous, la
+/// documentation n'en nomme aucun).
+pub unsafe extern "win64" fn GetAppContainerNamedObjectPath(
+    token: usize,
+    sid: *const u8,
+    length: u32,
+    path: *mut u16,
+    returned: *mut u32,
+) -> i32 {
+    let text = if !sid.is_null() {
+        sid_at(sid).and_then(sid_text)
+    } else if token == TOKEN_HANDLE {
+        crate::dlls::lock(&APPCONTAINER_SID).clone()
+    } else {
+        None
+    };
+    let (Some(text), false) = (text, returned.is_null()) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let wide: Vec<u16> = format!("AppContainerNamedObjects\\{text}")
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    *returned = wide.len() as u32;
+    if path.is_null() || (length as usize) < wide.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), path, wide.len());
+    crate::process::set_last_error(0);
+    1
 }
 
 /// Fonctions de KernelBase rangées dans la table kernel32 de Winlux, mais
 /// visibles seulement par KernelBase et les API-sets (KERNELBASE_ONLY).
+/// Exports d'AppContainer ajoutés à kernel32 : CreateAppContainerToken n'y est
+/// visible que par KernelBase (KERNELBASE_ONLY) ; GetAppContainerNamedObjectPath est
+/// documentée dans Kernel32.dll (#2527).
 pub fn kernelbase_exports() -> crate::dlls::Exports {
     crate::exports! {
         "CreateAppContainerToken" => fn CreateAppContainerToken,
+        "GetAppContainerNamedObjectPath" => fn GetAppContainerNamedObjectPath,
     }
 }
 
