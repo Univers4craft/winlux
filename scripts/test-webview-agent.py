@@ -8,6 +8,8 @@
 2. Si WebKitGTK est installé (sous Xvfb) : chaque chaîne réécrite, y compris
    600 chaînes aléatoires, est appliquée par webkit_settings_set_user_agent
    sans assertion CRITICAL, et une chaîne vide rend l'agent par défaut.
+3. Vraie vue (Xvfb) : l'événement ready porte l'agent par défaut du moteur,
+   que get_UserAgent rend ensuite (#2611).
 """
 import importlib.util
 from pathlib import Path
@@ -75,6 +77,23 @@ else:
         settings.set_user_agent(applied or None)
         want = applied or default
         check(settings.get_user_agent() == want, f"WebKit a refusé {applied!r} (depuis {raw!r})")
+
+    # 3. ready porte l'agent par défaut ; put_UserAgent hors grammaire puis
+    # vide : appliqué réécrit, puis retour au défaut.
+    from gi.repository import Gdk, GdkX11, GLib, Gio
+    events = []
+    webview.emit = lambda **event: events.append(event)
+    view = webview.View(Gtk, Gdk, GdkX11, GLib, Gio, WebKit2)
+    view.create({"parent": 0, "x": 0, "y": 0, "w": 200, "h": 100, "visible": False})
+    ready = [e for e in events if e.get("ev") == "ready"]
+    check(len(ready) == 1 and ready[0].get("user_agent") == default,
+          f"ready sans l'agent par défaut du moteur : {ready}")
+    view.handle({"op": "settings", "user_agent": " Teams/1.0/49"})
+    current = view.view.get_settings().get_user_agent()
+    check(current == "Teams/1.0.49", f"agent appliqué {current!r}")
+    view.handle({"op": "settings", "user_agent": ""})
+    current = view.view.get_settings().get_user_agent()
+    check(current == default, f"chaîne vide : {current!r} au lieu du défaut")
 
 if failures:
     sys.exit(1)

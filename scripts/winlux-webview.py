@@ -16,7 +16,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
-    {"ev": "ready", "xid"}   {"ev": "nav_starting", "uri", "nav"}
+    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
     {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
@@ -402,7 +402,10 @@ class View:
         self.bounds(cmd)
         if not cmd.get("visible", True):
             self.window.hide()
-        emit(ev="ready", xid=gdk_window.get_xid())
+        # Agent par défaut du moteur, que get_UserAgent rend tant que
+        # l'application n'en a pas écrit un autre (#2611).
+        emit(ev="ready", xid=gdk_window.get_xid(),
+             user_agent=self.view.get_settings().get_user_agent() or "")
 
     def reparent(self, parent):
         gdk_window = self.window.get_window() if self.window else None
