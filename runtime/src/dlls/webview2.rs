@@ -339,6 +339,44 @@ extern "win64" fn not_implemented() -> i32 {
     E_NOTIMPL
 }
 
+/// Méthodes `add_X` de chaque famille (rang après IUnknown ; `remove_X`
+/// suit toujours au rang suivant), dans l'ordre de l'IDL public WebView2
+/// (SDK 1.0.2849.39, chaînes de `webview2_iids.rs`) (#2547).
+fn event_slots(family: Family) -> &'static [usize] {
+    match family {
+        // ICoreWebView2 … ICoreWebView2_27 : NavigationStarting (4),
+        // ContentLoading, SourceChanged, HistoryChanged, NavigationCompleted,
+        // FrameNavigationStarting, FrameNavigationCompleted,
+        // ScriptDialogOpening, PermissionRequested, ProcessFailed (22),
+        // WebMessageReceived (31), NewWindowRequested (41),
+        // DocumentTitleChanged (43), ContainsFullScreenElementChanged (49),
+        // WebResourceRequested (52), WindowCloseRequested (56),
+        // WebResourceResponseReceived (58), DOMContentLoaded (61),
+        // FrameCreated (70), DownloadStarting (72),
+        // ClientCertificateRequested (74), IsMutedChanged (78),
+        // IsDocumentPlayingAudioChanged (82),
+        // IsDefaultDownloadDialogOpenChanged (85),
+        // BasicAuthenticationRequested (94), ContextMenuRequested (97),
+        // StatusBarTextChanged (99), ServerCertificateErrorDetected (103),
+        // FaviconChanged (106), LaunchingExternalUriScheme (114),
+        // NotificationReceived (123), SaveAsUIShowing (125),
+        // SaveFileSecurityCheckStarting (128), ScreenCaptureStarting (130).
+        Family::WebView => &[
+            4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 31, 41, 43, 49, 52, 56, 58, 61, 70, 72, 74, 78,
+            82, 85, 94, 97, 99, 103, 106, 114, 123, 125, 128, 130,
+        ],
+        // ICoreWebView2Controller … Controller4 : ZoomFactorChanged (6),
+        // MoveFocusRequested (10), GotFocus (12), LostFocus (14),
+        // AcceleratorKeyPressed (16), RasterizationScaleChanged (29).
+        Family::Controller => &[6, 10, 12, 14, 16, 29],
+        // ICoreWebView2Environment … Environment14 :
+        // NewBrowserVersionAvailable (3), BrowserProcessExited (9),
+        // ProcessInfosChanged (13).
+        Family::Environment => &[3, 9, 13],
+        _ => &[],
+    }
+}
+
 /// Table virtuelle d'une famille : IUnknown, les méthodes écrites, et
 /// E_NOTIMPL pour le reste de la chaîne de versions.
 fn vtable(family: Family) -> &'static [usize] {
@@ -363,6 +401,14 @@ fn vtable(family: Family) -> &'static [usize] {
     v[0] = query_interface as *const () as usize;
     v[1] = com_add_ref as *const () as usize;
     v[2] = com_release as *const () as usize;
+    // Toute inscription à un événement est acceptée, même pour un
+    // événement que Winlux ne déclenche jamais (#2547) : add_X rend un jeton,
+    // remove_X l'accepte. Un E_NOTIMPL ici fait lever une exception à
+    // l'application qui s'abonne (Teams, #2511).
+    for &add in event_slots(family) {
+        v[3 + add] = add_ignored as *const () as usize;
+        v[3 + add + 1] = remove_ignored as *const () as usize;
+    }
     for (i, f) in methods {
         v[3 + i] = f;
     }
@@ -1731,6 +1777,39 @@ mod tests {
         assert_eq!(
             vtable(Family::WebView)[3 + 58 + 7 + 3],
             web_map_host as *const () as usize
+        );
+    }
+
+    /// #2547 : aucune inscription à un événement ne rend E_NOTIMPL, et
+    /// l'inscription rend un jeton que la désinscription accepte.
+    #[test]
+    fn inscriptions_aux_evenements_acceptees_2547() {
+        let stub = not_implemented as *const () as usize;
+        for (family, slots) in [
+            (Family::WebView, WEBVIEW_SLOTS),
+            (Family::Controller, CONTROLLER_SLOTS),
+            (Family::Environment, ENVIRONMENT_SLOTS),
+        ] {
+            let v = vtable(family);
+            for &add in event_slots(family) {
+                assert!(3 + add + 1 < slots);
+                assert_ne!(v[3 + add], stub, "add_ au rang {add}");
+                assert_ne!(v[3 + add + 1], stub, "remove_ au rang {}", add + 1);
+            }
+        }
+        // ICoreWebView2Environment5 : add_BrowserProcessExited (rang 9).
+        let add: unsafe extern "win64" fn(usize, usize, *mut i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 9]) };
+        let remove: unsafe extern "win64" fn(usize, i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 10]) };
+        let mut token = 0i64;
+        assert_eq!(unsafe { add(0, 0, &mut token) }, S_OK);
+        assert_ne!(token, 0);
+        assert_eq!(unsafe { remove(0, token) }, S_OK);
+        // ICoreWebView2Controller3 : add_RasterizationScaleChanged (rang 29).
+        assert_eq!(
+            vtable(Family::Controller)[3 + 29],
+            add_ignored as *const () as usize
         );
     }
 }
