@@ -531,7 +531,8 @@ int main(void)
     }
 
     /* #2556 : IGlobalOptions, créée par Google Update (x86) au démarrage
-     * pour COMGLB_EXCEPTION_HANDLING (2) = COMGLB_EXCEPTION_DONOT_HANDLE (1).
+     * pour COMGLB_EXCEPTION_HANDLING (1) = COMGLB_EXCEPTION_DONOT_HANDLE (1)
+     * (valeurs de GLOBALOPT_PROPERTIES et GLOBALOPT_EH_VALUES, objidlbase.idl).
      * Indices de la table : IUnknown, Set (3), Query (4). */
     {
         static const GUID clsid_go = { 0x0000034b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
@@ -543,9 +544,9 @@ int main(void)
         CHECK(CoCreateInstance(&clsid_go, NULL, CLSCTX_INPROC_SERVER, &iid_go, &go) == S_OK && go != NULL,
               "CoCreateInstance(GlobalOptions)");
         void **vt = go ? *(void ***)go : NULL;
-        CHECK(vt && ((set_fn)vt[3])(go, 2, 1) == S_OK, "IGlobalOptions::Set");
+        CHECK(vt && ((set_fn)vt[3])(go, 1, 1) == S_OK, "IGlobalOptions::Set");
         ULONG_PTR v = 7;
-        CHECK(vt && ((query_fn)vt[4])(go, 2, &v) == S_OK && v == 1, "IGlobalOptions::Query");
+        CHECK(vt && ((query_fn)vt[4])(go, 1, &v) == S_OK && v == 1, "IGlobalOptions::Query");
         if (go)
             ((rel_fn)vt[2])(go);
     }
