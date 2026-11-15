@@ -523,6 +523,57 @@ pub fn is_disguised_linux_tool(p: &Path) -> bool {
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Un test qui remplace tout `PATH` tourne dans un processus enfant (#2658) :
+/// `PATH` est commun au processus de test, et un `PATH` réduit à un dossier
+/// factice fait échouer `sleep`, `stty` ou `sed` lancés au même moment par
+/// d'autres tests. `test` est le nom complet du test. Rend `true` dans le
+/// parent, une fois l'enfant réussi (le test est fini), et `false` dans
+/// l'enfant, où le corps du test s'exécute. L'enfant est borné à 60 s.
+#[cfg(test)]
+pub(crate) fn path_isole(test: &str) -> bool {
+    const ENFANT: &str = "WINLUX_TEST_PATH_ISOLE";
+    if std::env::var(ENFANT).as_deref() == Ok(test) {
+        return false;
+    }
+    let journal = std::env::temp_dir().join(format!(
+        "winlux-path-isole-{}-{}.txt",
+        std::process::id(),
+        test.replace("::", "-")
+    ));
+    let sortie = std::fs::File::create(&journal).unwrap();
+    let mut enfant = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--test-threads=1"])
+        .env(ENFANT, test)
+        .stdin(std::process::Stdio::null())
+        .stdout(sortie.try_clone().unwrap())
+        .stderr(sortie)
+        .spawn()
+        .unwrap();
+    let limite = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let etat = loop {
+        if let Some(etat) = enfant.try_wait().unwrap() {
+            break Some(etat);
+        }
+        if std::time::Instant::now() > limite {
+            let _ = enfant.kill();
+            let _ = enfant.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let texte = std::fs::read_to_string(&journal).unwrap_or_default();
+    let _ = std::fs::remove_file(&journal);
+    assert!(
+        etat.is_some(),
+        "{test} : enfant arrêté au bout de 60 s\n{texte}"
+    );
+    assert!(
+        etat.unwrap().success() && texte.contains("test result: ok. 1 passed"),
+        "{test} : échec dans l'enfant\n{texte}"
+    );
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +659,9 @@ mod tests {
 
     #[test]
     fn cherche_les_programmes_comme_windows_puis_dans_le_path() {
+        if path_isole("launch::tests::cherche_les_programmes_comme_windows_puis_dans_le_path") {
+            return;
+        }
         let d = tmp("which");
         let bin = d.join("bin");
         std::fs::create_dir_all(&bin).unwrap();

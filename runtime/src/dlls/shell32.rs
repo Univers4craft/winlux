@@ -765,6 +765,11 @@ mod tests {
 
     #[test]
     fn explorer_select_ouvre_le_dossier_de_l_element() {
+        if crate::launch::path_isole(
+            "dlls::shell32::tests::explorer_select_ouvre_le_dossier_de_l_element",
+        ) {
+            return;
+        }
         assert_eq!(
             explorer_target("/select,\"C:\\Users\\a b\\x.txt\""),
             ("C:\\Users\\a b\\x.txt".to_string(), true)
@@ -817,6 +822,11 @@ mod tests {
 
     #[test]
     fn protocoles_desktop_et_programmes_linux_du_path() {
+        if crate::launch::path_isole(
+            "dlls::shell32::tests::protocoles_desktop_et_programmes_linux_du_path",
+        ) {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("winlux-proto-{}", std::process::id()));
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
