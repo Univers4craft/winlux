@@ -2366,11 +2366,12 @@ unsafe extern "win64" fn dc_draw_image(
     };
     let img = image_img(image, 0, hint);
     d2d_trace!(
-        "DrawImage {:p} ← {} offset {:?} src {:?} → {}",
+        "DrawImage {:p} ← {} offset {:?} src {:?} interpolation {} → {}{}",
         this,
         describe_image(image),
         offset.as_ref(),
         rect.as_ref().map(|r| (r.l, r.t, r.r, r.b)),
+        interp,
         img.as_ref().map_or("rien".to_string(), |i| format!(
             "{}x{} @{},{} visibles {}",
             i.w,
@@ -2378,7 +2379,10 @@ unsafe extern "win64" fn dc_draw_image(
             i.x,
             i.y,
             visible(&i.px)
-        ))
+        )),
+        // Transformation, DPI, mode (#2431) : le contour de sélection de
+        // Paint.NET perd sa dernière colonne au dessin.
+        super::describe_state(this)
     );
     let Some(img) = img else {
         return;
