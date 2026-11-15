@@ -8863,7 +8863,8 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
     let s = crate::paths::to_linux(&s.to_string_lossy());
     let d = crate::paths::to_linux(&d.to_string_lossy());
     if d.exists() {
-        crate::process::set_last_error(80);
+        // Comme MoveFileA et MoveFileEx sans MOVEFILE_REPLACE_EXISTING (#2118).
+        crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
     match std::fs::rename(&s, &d) {
@@ -11946,6 +11947,35 @@ mod tests {
             assert_eq!(super::set_critical_section_spin_count(p, 0), 1500);
             super::delete_critical_section(p);
         }
+    }
+
+    #[test]
+    fn deplacement_vers_une_destination_existante_rend_183() {
+        // #2118 : MoveFileA/W vers un fichier existant rendent ERROR_ALREADY_EXISTS, pas 80.
+        let _teb = crate::process::test_teb();
+        let dir = std::env::temp_dir().join(format!("winlux-2118-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let w = |p: &std::path::Path| {
+            p.display()
+                .to_string()
+                .encode_utf16()
+                .chain([0])
+                .collect::<Vec<u16>>()
+        };
+        let n = |p: &std::path::Path| format!("{}\0", p.display());
+        unsafe {
+            crate::process::set_last_error(0);
+            assert_eq!(super::move_file_w(w(&a).as_ptr(), w(&b).as_ptr()), 0);
+            assert_eq!(crate::process::last_error(), 183);
+            crate::process::set_last_error(0);
+            assert_eq!(super::move_file_a(n(&a).as_ptr(), n(&b).as_ptr()), 0);
+            assert_eq!(crate::process::last_error(), 183);
+        }
+        assert_eq!(std::fs::read(&b).unwrap(), b"b");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
