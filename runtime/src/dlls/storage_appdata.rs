@@ -17,9 +17,12 @@
 //! l'application. Hors paquet, `Current` rend APPMODEL_ERROR_NO_PACKAGE,
 //! comme Windows.
 //!
+//! GetPublisherCacheFolder (#2524) rend le sous-dossier déclaré du dossier
+//! partagé de l'éditeur, `%LOCALAPPDATA%\Publishers\<éditeur>\<nom>`.
+//!
 //! Pas encore servis (E_NOTIMPL, journalisé une fois par méthode) : les
-//! méthodes asynchrones (StorageFolder, ClearAsync…), LocalSettings et
-//! RoamingSettings.
+//! méthodes asynchrones (StorageFolder, ClearAsync,
+//! ClearPublisherCacheFolderAsync…), LocalSettings et RoamingSettings.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -503,11 +506,84 @@ unsafe extern "win64" fn ad2_local_cache_folder(_this: usize, out: *mut usize) -
 unsafe extern "win64" fn ad3_qi(_this: usize, iid: *const u8, out: *mut usize) -> i32 {
     app_data_qi(iid, out)
 }
-unsafe extern "win64" fn ad3_publisher_cache(_this: usize, _name: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+/// Chemin Windows d'un sous-dossier du dossier partagé de l'éditeur.
+/// La documentation ne donne pas d'emplacement : on prend
+/// `%LOCALAPPDATA%\Publishers\<identifiant d'éditeur>\<nom>`, à côté de
+/// `Packages`.
+pub fn publisher_folder_path(publisher_id: &str, name: &str) -> String {
+    format!(
+        "{}\\AppData\\Local\\Publishers\\{publisher_id}\\{name}",
+        crate::paths::profile_windows()
+    )
+}
+
+/// Nom de sous-dossier acceptable : déclaré par le paquet (casse ignorée),
+/// sans séparateur ni « . » / « .. », jamais la racine partagée.
+fn declared_folder<'a>(declared: &'a [String], name: &str) -> Option<&'a str> {
+    if name.is_empty() || name.contains(['\\', '/', ':']) || name == "." || name == ".." {
+        return None;
     }
-    not_implemented("GetPublisherCacheFolder")
+    declared
+        .iter()
+        .find(|d| d.eq_ignore_ascii_case(name))
+        .map(String::as_str)
+}
+
+/// Crée `root/<éditeur>/<nom>` s'il manque, réservé au compte (0700).
+fn ensure_publisher_dir_in(
+    root: &std::path::Path,
+    publisher_id: &str,
+    name: &str,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let publisher = root.join(publisher_id);
+    let leaf = publisher.join(name);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&leaf)?;
+    for d in [&publisher, &leaf] {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// GetPublisherCacheFolder(folderName) (#2524) : sous-dossier du dossier
+/// partagé de l'éditeur, s'il est déclaré par l'extension
+/// `windows.publisherCacheFolders` du manifeste. La documentation dit
+/// qu'on ne peut atteindre que les sous-dossiers déclarés, jamais la
+/// racine, et que le dossier est créé pour l'application ; elle ne dit pas
+/// quelle erreur rend un nom non déclaré : E_INVALIDARG ici.
+unsafe extern "win64" fn ad3_publisher_cache(_this: usize, name: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    let Some((pkg, _)) = super::kernel32_misc::current_package() else {
+        return E_NO_PACKAGE;
+    };
+    let wanted = String::from_utf16_lossy(super::electron_win32::hstring_slice(name));
+    let Some(folder) = declared_folder(&pkg.publisher_cache_folders, &wanted) else {
+        crate::log_warn!(
+            "com",
+            "ApplicationData : GetPublisherCacheFolder({wanted:?}) : sous-dossier non déclaré par le paquet"
+        );
+        return E_INVALIDARG;
+    };
+    let publisher_id = pkg.publisher_id();
+    let root = crate::paths::to_linux(&format!(
+        "{}\\AppData\\Local\\Publishers",
+        crate::paths::profile_windows()
+    ));
+    if let Err(e) = ensure_publisher_dir_in(&root, &publisher_id, folder) {
+        crate::log_warn!(
+            "com",
+            "ApplicationData : dossier d'éditeur {folder} non créé : {e}"
+        );
+        return E_ACCESS_DENIED;
+    }
+    *out = new_folder(publisher_folder_path(&publisher_id, folder));
+    S_OK
 }
 extern "win64" fn ad3_clear_publisher_cache(_this: usize) -> i32 {
     not_implemented("ClearPublisherCacheFolderAsync")
@@ -756,5 +832,38 @@ mod tests {
             assert_eq!(f_release(folder), 0);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dossier_partage_de_l_editeur_2524() {
+        let _teb = crate::process::test_teb();
+        let declared = vec!["TeamsSharedConfig".to_string()];
+        assert_eq!(
+            declared_folder(&declared, "teamssharedconfig"),
+            Some("TeamsSharedConfig")
+        );
+        for refused in ["", ".", "..", "Autre", "TeamsSharedConfig\\x", "a/b", "C:"] {
+            assert_eq!(declared_folder(&declared, refused), None, "{refused:?}");
+        }
+        assert!(publisher_folder_path("8wekyb3d8bbwe", "TeamsSharedConfig")
+            .ends_with("\\AppData\\Local\\Publishers\\8wekyb3d8bbwe\\TeamsSharedConfig"));
+
+        let dir = std::env::temp_dir().join(format!("winlux-2524-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ensure_publisher_dir_in(&dir, "8wekyb3d8bbwe", "TeamsSharedConfig").unwrap();
+        let leaf = dir.join("8wekyb3d8bbwe").join("TeamsSharedConfig");
+        for d in [&leaf, &dir.join("8wekyb3d8bbwe")] {
+            let mode = std::fs::metadata(d).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{d:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Hors paquet : APPMODEL_ERROR_NO_PACKAGE, sortie nulle.
+        unsafe {
+            let mut out = 1usize;
+            assert_eq!(ad3_publisher_cache(0, 0, &mut out), E_NO_PACKAGE);
+            assert_eq!(out, 0);
+        }
     }
 }
