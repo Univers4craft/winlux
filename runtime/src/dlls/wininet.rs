@@ -126,16 +126,129 @@ pub fn crack(url: &str) -> Option<Url> {
     })
 }
 
-/// URL_COMPONENTS : (pointeur, longueur) aux positions de la structure x64.
-const FIELDS: [(usize, usize); 6] = [(8, 16), (24, 32), (40, 48), (56, 64), (72, 80), (88, 96)];
+/// URL_COMPONENTSA/W à la disposition x64 (104 octets), d'après wininet.h
+/// de mingw-w64 et la page URL_COMPONENTSA de Microsoft Learn : DWORD,
+/// puis pour chaque partie un pointeur et une longueur DWORD, nScheme
+/// (INTERNET_SCHEME) après le schéma, nPort (WORD) après l'hôte.
+/// Pour un programme x86 (#2554), la même suite de champs avec des pointeurs
+/// de 4 octets : 60 octets, lus et réécrits par `from_x86`/`write_x86`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct UrlComponents {
+    struct_size: u32,
+    scheme: usize,
+    scheme_len: u32,
+    n_scheme: i32,
+    host: usize,
+    host_len: u32,
+    port: u16,
+    user: usize,
+    user_len: u32,
+    password: usize,
+    password_len: u32,
+    path: usize,
+    path_len: u32,
+    extra: usize,
+    extra_len: u32,
+}
 
-/// Remplit un URL_COMPONENTS (A ou W) : pointeurs dans l'adresse quand le
-/// programme passe un pointeur nul et une longueur non nulle, copie sinon.
+/// Taille de URL_COMPONENTS pour un programme x86.
+const URL_COMPONENTS_X86: usize = 60;
+
+impl UrlComponents {
+    /// (pointeur, longueur) de chaque partie, dans l'ordre schéma, hôte,
+    /// utilisateur, mot de passe, chemin, informations en plus.
+    fn parts(&mut self) -> [(&mut usize, &mut u32); 6] {
+        [
+            (&mut self.scheme, &mut self.scheme_len),
+            (&mut self.host, &mut self.host_len),
+            (&mut self.user, &mut self.user_len),
+            (&mut self.password, &mut self.password_len),
+            (&mut self.path, &mut self.path_len),
+            (&mut self.extra, &mut self.extra_len),
+        ]
+    }
+
+    /// Disposition x86 : dwStructSize 0, lpszScheme 4, dwSchemeLength 8,
+    /// nScheme 12, lpszHostName 16, dwHostNameLength 20, nPort 24,
+    /// lpszUserName 28, dwUserNameLength 32, lpszPassword 36,
+    /// dwPasswordLength 40, lpszUrlPath 44, dwUrlPathLength 48,
+    /// lpszExtraInfo 52, dwExtraInfoLength 56.
+    fn from_x86(b: &[u8; URL_COMPONENTS_X86]) -> Self {
+        let d = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        Self {
+            struct_size: d(0),
+            scheme: d(4) as usize,
+            scheme_len: d(8),
+            n_scheme: d(12) as i32,
+            host: d(16) as usize,
+            host_len: d(20),
+            port: u16::from_le_bytes([b[24], b[25]]),
+            user: d(28) as usize,
+            user_len: d(32),
+            password: d(36) as usize,
+            password_len: d(40),
+            path: d(44) as usize,
+            path_len: d(48),
+            extra: d(52) as usize,
+            extra_len: d(56),
+        }
+    }
+
+    /// Réécrit les champs dans la disposition x86 (les deux octets de
+    /// remplissage après nPort restent ceux du programme).
+    fn write_x86(&self, b: &mut [u8; URL_COMPONENTS_X86]) {
+        let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        put(0, self.struct_size);
+        put(4, self.scheme as u32);
+        put(8, self.scheme_len);
+        put(12, self.n_scheme as u32);
+        put(16, self.host as u32);
+        put(20, self.host_len);
+        put(28, self.user as u32);
+        put(32, self.user_len);
+        put(36, self.password as u32);
+        put(40, self.password_len);
+        put(44, self.path as u32);
+        put(48, self.path_len);
+        put(52, self.extra as u32);
+        put(56, self.extra_len);
+        b[24..26].copy_from_slice(&self.port.to_le_bytes());
+    }
+}
+
+/// Remplit un URL_COMPONENTS (A ou W) du programme, à la disposition x86
+/// quand `x86`, x64 sinon. Les longueurs et pointeurs déjà mis à jour sont
+/// rendus au programme même en cas d'erreur.
 unsafe fn fill_components(
     url: &str,
     base: usize,
     u: &Url,
     comps: *mut u8,
+    wide: bool,
+    x86: bool,
+) -> Result<(), u32> {
+    let mut c = if x86 {
+        UrlComponents::from_x86(&*(comps as *const [u8; URL_COMPONENTS_X86]))
+    } else {
+        std::ptr::read_unaligned(comps as *const UrlComponents)
+    };
+    let r = fill_parts(url, base, u, &mut c, wide);
+    if x86 {
+        c.write_x86(&mut *(comps as *mut [u8; URL_COMPONENTS_X86]));
+    } else {
+        std::ptr::write_unaligned(comps as *mut UrlComponents, c);
+    }
+    r
+}
+
+/// Pointeurs dans l'adresse quand le programme passe un pointeur nul et une
+/// longueur non nulle, copie sinon.
+unsafe fn fill_parts(
+    url: &str,
+    base: usize,
+    u: &Url,
+    c: &mut UrlComponents,
     wide: bool,
 ) -> Result<(), u32> {
     let parts = [&u.scheme, &u.host, &u.user, &u.password, &u.path, &u.extra];
@@ -155,9 +268,9 @@ unsafe fn fill_components(
         offsets[i] = at;
         from = at + p.len();
     }
-    for (i, (pp, lp)) in FIELDS.iter().enumerate() {
-        let pptr = comps.add(*pp) as *mut usize;
-        let plen = comps.add(*lp) as *mut u32;
+    c.n_scheme = u.scheme_id;
+    c.port = u.port;
+    for (i, (pptr, plen)) in c.parts().into_iter().enumerate() {
         let text = parts[i];
         if *pptr == 0 {
             if *plen != 0 {
@@ -197,8 +310,6 @@ unsafe fn fill_components(
             *plen = bytes.len() as u32;
         }
     }
-    *(comps.add(20) as *mut i32) = u.scheme_id;
-    *(comps.add(36) as *mut u16) = u.port;
     Ok(())
 }
 
@@ -216,7 +327,7 @@ extern "win64" fn crack_url_w(url: *const u16, len: u32, _flags: u32, comps: *mu
     let Some(u) = crack(&s) else {
         return fail(ERROR_INTERNET_UNRECOGNIZED_SCHEME);
     };
-    match unsafe { fill_components(&s, url as usize, &u, comps, true) } {
+    match unsafe { fill_components(&s, url as usize, &u, comps, true, crate::wow32::active()) } {
         Ok(()) => 1,
         Err(e) => fail(e),
     }
@@ -236,7 +347,7 @@ extern "win64" fn crack_url_a(url: *const u8, len: u32, _flags: u32, comps: *mut
     let Some(u) = crack(&s) else {
         return fail(ERROR_INTERNET_UNRECOGNIZED_SCHEME);
     };
-    match unsafe { fill_components(&s, url as usize, &u, comps, false) } {
+    match unsafe { fill_components(&s, url as usize, &u, comps, false, crate::wow32::active()) } {
         Ok(()) => 1,
         Err(e) => fail(e),
     }
@@ -1210,6 +1321,43 @@ mod tests {
         assert_eq!(u16::from_le_bytes([comps[36], comps[37]]), 8443);
         assert_eq!(i32::from_le_bytes(comps[20..24].try_into().unwrap()), 4);
         assert_eq!(String::from_utf16_lossy(&path[..4]), "/a/b");
+    }
+
+    /// #2554 : URL_COMPONENTSA d'un programme x86 (60 octets, pointeurs de
+    /// 4 octets). Mode « pointeurs » pour toutes les parties : chaque pointeur
+    /// est rendu à sa position x86, nScheme à 12 et nPort à 24, et rien
+    /// n'est écrit après le 60e octet.
+    #[test]
+    fn url_components_x86() {
+        let url = "https://exemple.fr:8443/a/b?c=d";
+        let u = crack(url).unwrap();
+        let mut b = [0xAAu8; 104];
+        b[..60].fill(0);
+        b[..4].copy_from_slice(&60u32.to_le_bytes());
+        // Utilisateur et mot de passe : longueur 0, rien demandé.
+        for len_at in [8, 20, 48, 56] {
+            b[len_at..len_at + 4].copy_from_slice(&1u32.to_le_bytes());
+        }
+        let base = 0x0040_0000usize;
+        let r = unsafe { fill_components(url, base, &u, b.as_mut_ptr(), false, true) };
+        assert!(r.is_ok());
+        let d = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+        let attendu = [
+            (4, 0, "https"),
+            (16, 8, "exemple.fr"),
+            (44, 23, "/a/b"),
+            (52, 27, "?c=d"),
+        ];
+        for (at, pos, texte) in attendu {
+            assert_eq!(d(at), base + pos, "pointeur à +{at}");
+            assert_eq!(&url[pos..pos + texte.len()], texte);
+            assert_eq!(d(at + 4), texte.len(), "longueur à +{}", at + 4);
+        }
+        assert_eq!(d(12), 4, "nScheme INTERNET_SCHEME_HTTPS");
+        assert_eq!(u16::from_le_bytes([b[24], b[25]]), 8443);
+        assert_eq!((d(28), d(32), d(36), d(40)), (0, 0, 0, 0));
+        assert_eq!(d(0), 60);
+        assert!(b[60..].iter().all(|&x| x == 0xAA), "rien après 60 octets");
     }
 
     #[test]
