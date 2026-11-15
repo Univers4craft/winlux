@@ -368,10 +368,65 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
         }
     }
     print_debug_tail();
+    // Chargement différé (0xC06D007E/7F) : la DLL ou la fonction manquante
+    // n'apparaissait nulle part (#2624).
+    if let Some(what) = unsafe { delay_load_failure(code, args, crate::wow32::active()) } {
+        eprintln!("winlux: chargement différé impossible : {what}");
+        crate::log_error!("seh", "chargement différé impossible : {what}");
+    }
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     // Plantage, pas une sortie voulue : winlux-open le signalera (#2272).
     crate::dlls::kernel32::record_crash();
     crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+/// DLL (et fonction) qu'un programme n'a pas pu charger en différé.
+/// L'assistant de chargement différé de MSVC lève 0xC06D007E (module
+/// introuvable) ou 0xC06D007F (procédure introuvable) avec pour seul argument
+/// l'adresse de sa `DelayLoadInfo` (Microsoft Learn, « Error handling and
+/// notification » et « Structure and constant definitions » des DLL à
+/// chargement différé ; delayimp.h de mingw-w64). Champs : cb, pidd, ppfn,
+/// szDll, dlp { fImportByName, szProcName | dwOrdinal }, hmodCur, pfnCur,
+/// dwLastError — soit 36 octets en x86 et 72 en x64.
+unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
+    if !matches!(code, 0xC06D_007E | 0xC06D_007F) || args.is_empty() || args[0] == 0 {
+        return None;
+    }
+    let info = args[0];
+    let (ptr, size, dll, by_name, proc_name, last_error) = if x86 {
+        (4, 36, 12, 16, 20, 32)
+    } else {
+        (8, 72, 24, 32, 40, 64)
+    };
+    let read_u32 = |at: usize| std::ptr::read_unaligned((info + at) as *const u32);
+    let read_ptr = |at: usize| {
+        if ptr == 4 {
+            read_u32(at) as usize
+        } else {
+            std::ptr::read_unaligned((info + at) as *const usize)
+        }
+    };
+    if read_u32(0) as usize != size {
+        return None;
+    }
+    let text = |at: usize| {
+        std::ffi::CStr::from_ptr(at as *const std::ffi::c_char)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let name = read_ptr(dll);
+    let mut out = if name == 0 {
+        "DLL sans nom".to_string()
+    } else {
+        format!("« {} »", text(name))
+    };
+    let proc = read_ptr(proc_name);
+    if read_u32(by_name) != 0 && proc != 0 {
+        out.push_str(&format!(", fonction « {} »", text(proc)));
+    } else if read_u32(by_name) == 0 {
+        out.push_str(&format!(", ordinal {}", proc & 0xffff));
+    }
+    out.push_str(&format!(", erreur {}", read_u32(last_error)));
+    Some(out)
 }
 /// Type (nom décoré) et valeur d'une exception C++ MSVC x64 : `throw hr;` de
 /// 7-Zip ou `throw "message";` deviennent lisibles dans le journal.
@@ -1582,6 +1637,63 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chargement_differe_nomme_la_dll() {
+        // DelayLoadInfo x86 (36 octets) : szDll à +12, dlp à +16/+20,
+        // dwLastError à +32.
+        // Chaînes et structure sous 4 Gio, comme dans un processus x86.
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let base = low as usize;
+        assert!(base + 4096 <= u32::MAX as usize);
+        let dll = b"absente.dll\0";
+        let func = b"Fonction\0";
+        unsafe {
+            std::ptr::copy_nonoverlapping(dll.as_ptr(), (base + 256) as *mut u8, dll.len());
+            std::ptr::copy_nonoverlapping(func.as_ptr(), (base + 512) as *mut u8, func.len());
+            let x86 = base as *mut u32;
+            *x86 = 36;
+            *x86.add(3) = (base + 256) as u32;
+            *x86.add(4) = 1;
+            *x86.add(5) = (base + 512) as u32;
+            *x86.add(8) = 126;
+        }
+        let got = unsafe { super::delay_load_failure(0xC06D_007E, &[base], true) };
+        assert_eq!(
+            got.as_deref(),
+            Some("« absente.dll », fonction « Fonction », erreur 126")
+        );
+        unsafe { libc::munmap(low, 4096) };
+        // x64 (72 octets) : szDll à +24, dlp à +32/+40, dwLastError à +64.
+        let mut x64 = [0usize; 9];
+        x64[0] = 72;
+        x64[3] = dll.as_ptr() as usize;
+        x64[4] = 0;
+        x64[5] = 12;
+        x64[8] = 127;
+        let got =
+            unsafe { super::delay_load_failure(0xC06D_007F, &[x64.as_ptr() as usize], false) };
+        assert_eq!(
+            got.as_deref(),
+            Some("« absente.dll », ordinal 12, erreur 127")
+        );
+        // Taille inattendue ou autre code : rien.
+        x64[0] = 40;
+        assert!(
+            unsafe { super::delay_load_failure(0xC06D_007F, &[x64.as_ptr() as usize], false) }
+                .is_none()
+        );
+        assert!(unsafe { super::delay_load_failure(0xC000_0005, &[0], false) }.is_none());
+    }
     /// Teams (#2202) : WerSetFlags puis WerGetFlags rendent S_OK et les drapeaux.
     #[test]
     fn drapeaux_wer_2202() {
