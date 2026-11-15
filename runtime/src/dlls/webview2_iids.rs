@@ -538,3 +538,12 @@ pub const COOKIE_LIST_IIDS: [Guid; 1] = [guid(
     0x43c6,
     [0x95, 0x03, 0x34, 0x6e, 0xce, 0x02, 0xd1, 0x86],
 )];
+/// ICoreWebView2DevToolsProtocolEventReceiver (ajouté à la main, IDL
+/// public, #2643) : add_/remove_DevToolsProtocolEventReceived.
+pub const DEVTOOLS_RECEIVER_SLOTS: usize = 5;
+pub const DEVTOOLS_RECEIVER_IIDS: [Guid; 1] = [guid(
+    0xb32ca51a,
+    0x8371,
+    0x45e9,
+    [0x93, 0x17, 0xaf, 0x02, 0x1d, 0x08, 0x03, 0x67],
+)];
