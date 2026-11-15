@@ -69,6 +69,12 @@ pub unsafe fn activation_factory(
     Some(hr)
 }
 
+/// Vrai si le paquet ou le manifeste de l'exe déclare la classe `name`
+/// (ApiInformation.IsTypePresent, #2297), sans charger sa DLL.
+pub(crate) fn declared(name: &str) -> bool {
+    package_dll(name).is_some() || manifest_dll(name).is_some()
+}
+
 /// DLL du paquet MSIX qui déclare `name` (#2657).
 fn package_dll(name: &str) -> Option<String> {
     let (pkg, dir) = super::kernel32_misc::current_package()?;
