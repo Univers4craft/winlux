@@ -53,6 +53,46 @@ pub unsafe extern "win64" fn rtl_get_version(info: *mut u16) -> i32 {
     }
 }
 
+/// Famille d'appareil rendue par RtlConvertDeviceFamilyInfoToString (#2222) :
+/// valeur « Windows.Desktop » documentée pour AnalyticsVersionInfo.DeviceFamily
+/// (« Desktop PCs and tablets »).
+const DEVICE_FAMILY: &str = "Windows.Desktop";
+/// Forme d'appareil : « Unknown », valeur 0 de la table DeviceForm documentée
+/// (Microsoft-Windows-Deployment), Winlux ne la connaît pas.
+const DEVICE_FORM: &str = "Unknown";
+
+/// RtlConvertDeviceFamilyInfoToString (#2222). Tailles en octets
+/// (`_Out_writes_bytes_`), zéro final compris. Choix non documenté, nommé
+/// comme tel : si un tampon manque ou est trop court, les deux tailles
+/// requises sont écrites, rien n'est copié et STATUS_BUFFER_TOO_SMALL est
+/// rendu.
+pub unsafe extern "win64" fn rtl_convert_device_family_info_to_string(
+    family_size: *mut u32,
+    form_size: *mut u32,
+    family: *mut u16,
+    form: *mut u16,
+) -> u32 {
+    if family_size.is_null() || form_size.is_null() {
+        return STATUS_INVALID_PARAMETER as u32;
+    }
+    let family_w: Vec<u16> = DEVICE_FAMILY.encode_utf16().chain(Some(0)).collect();
+    let form_w: Vec<u16> = DEVICE_FORM.encode_utf16().chain(Some(0)).collect();
+    let need_family = (family_w.len() * 2) as u32;
+    let need_form = (form_w.len() * 2) as u32;
+    let fits = !family.is_null()
+        && !form.is_null()
+        && *family_size >= need_family
+        && *form_size >= need_form;
+    *family_size = need_family;
+    *form_size = need_form;
+    if !fits {
+        return STATUS_BUFFER_TOO_SMALL as u32;
+    }
+    std::ptr::copy_nonoverlapping(family_w.as_ptr(), family, family_w.len());
+    std::ptr::copy_nonoverlapping(form_w.as_ptr(), form, form_w.len());
+    STATUS_SUCCESS as u32
+}
+
 pub extern "win64" fn rtl_nt_status_to_dos_error(status: i32) -> u32 {
     match status as u32 {
         0 => 0,
@@ -2678,6 +2718,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlGetLastWin32Error" => fn rtl_get_last_win32_error,
         "RtlSetLastWin32Error" => fn rtl_set_last_win32_error,
         "RtlGetVersion" => fn rtl_get_version,
+        "RtlConvertDeviceFamilyInfoToString" => fn rtl_convert_device_family_info_to_string,
         "RtlNtStatusToDosError" => fn rtl_nt_status_to_dos_error,
         "RtlAllocateHeap" => fn rtl_allocate_heap,
         "RtlFreeHeap" => fn rtl_free_heap,
@@ -3199,5 +3240,43 @@ mod disown_tests {
         let mut bloc = vec![7u8; 32];
         assert_eq!(f(0, bloc.as_mut_ptr() as usize), 0);
         assert!(bloc.iter().all(|&b| b == 7));
+    }
+}
+
+#[cfg(test)]
+mod tests_famille_appareil_2222 {
+    use super::*;
+
+    /// #2222 : la fonction est exportée, rend les tailles requises en octets
+    /// sur un tampon trop court, puis les deux chaînes.
+    #[test]
+    fn famille_et_forme_d_appareil_2222() {
+        assert!(exports().contains_key("RtlConvertDeviceFamilyInfoToString"));
+        let (mut a, mut b) = (0u32, 0u32);
+        let r = unsafe {
+            rtl_convert_device_family_info_to_string(
+                &mut a,
+                &mut b,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(r, STATUS_BUFFER_TOO_SMALL as u32);
+        assert_eq!((a, b), (32, 16));
+        let mut fam = [0xFFFFu16; 16];
+        let mut forme = [0xFFFFu16; 8];
+        let r = unsafe {
+            rtl_convert_device_family_info_to_string(
+                &mut a,
+                &mut b,
+                fam.as_mut_ptr(),
+                forme.as_mut_ptr(),
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(String::from_utf16_lossy(&fam[..15]), "Windows.Desktop");
+        assert_eq!(fam[15], 0);
+        assert_eq!(String::from_utf16_lossy(&forme[..7]), "Unknown");
+        assert_eq!(forme[7], 0);
     }
 }

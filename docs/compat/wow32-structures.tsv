@@ -219,6 +219,7 @@ ole32.rs	StatStg	a-verifier
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
+ole32_ftm.rs	Ftm	interne	marshaleur libre (#2674) ; un appelant x86 le reçoit enveloppé par wow32/com.rs (Out IUNKNOWN), jamais sa disposition
 ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
 ole32_lot_c.rs	AgileRef	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 ole32_lot_c/tests.rs	Probe	interne	test unitaire

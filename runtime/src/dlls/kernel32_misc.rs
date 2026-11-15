@@ -368,10 +368,147 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
         }
     }
     print_debug_tail();
+    // Chargement différé (0xC06D007E/7F) : la DLL ou la fonction manquante
+    // n'apparaissait nulle part (#2624).
+    if let Some(what) = unsafe { delay_load_failure(code, args, crate::wow32::active()) } {
+        eprintln!("winlux: chargement différé impossible : {what}");
+        crate::log_error!("seh", "chargement différé impossible : {what}");
+        // Toutes les fonctions que le module importe en différé de cette DLL,
+        // lues dans son descripteur : un seul passage les fait connaître
+        // toutes, au lieu d'un 0xC06D007F par fonction manquante (#2627).
+        if let Some(names) = unsafe { delay_import_list(args, crate::wow32::active()) } {
+            eprintln!("winlux: imports différés de cette DLL : {names}");
+            crate::log_error!("seh", "imports différés de cette DLL : {names}");
+        }
+    }
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     // Plantage, pas une sortie voulue : winlux-open le signalera (#2272).
     crate::dlls::kernel32::record_crash();
     crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+/// DLL (et fonction) qu'un programme n'a pas pu charger en différé.
+/// L'assistant de chargement différé de MSVC lève 0xC06D007E (module
+/// introuvable) ou 0xC06D007F (procédure introuvable) avec pour seul argument
+/// l'adresse de sa `DelayLoadInfo` (Microsoft Learn, « Error handling and
+/// notification » et « Structure and constant definitions » des DLL à
+/// chargement différé ; delayimp.h de mingw-w64). Champs : cb, pidd, ppfn,
+/// szDll, dlp { fImportByName, szProcName | dwOrdinal }, hmodCur, pfnCur,
+/// dwLastError — soit 36 octets en x86 et 72 en x64.
+unsafe fn delay_load_failure(code: u32, args: &[usize], x86: bool) -> Option<String> {
+    if !matches!(code, 0xC06D_007E | 0xC06D_007F) || args.is_empty() || args[0] == 0 {
+        return None;
+    }
+    let info = args[0];
+    let (ptr, size, dll, by_name, proc_name, last_error) = if x86 {
+        (4, 36, 12, 16, 20, 32)
+    } else {
+        (8, 72, 24, 32, 40, 64)
+    };
+    let read_u32 = |at: usize| std::ptr::read_unaligned((info + at) as *const u32);
+    let read_ptr = |at: usize| {
+        if ptr == 4 {
+            read_u32(at) as usize
+        } else {
+            std::ptr::read_unaligned((info + at) as *const usize)
+        }
+    };
+    if read_u32(0) as usize != size {
+        return None;
+    }
+    let text = |at: usize| {
+        std::ffi::CStr::from_ptr(at as *const std::ffi::c_char)
+            .to_string_lossy()
+            .into_owned()
+    };
+    let name = read_ptr(dll);
+    let mut out = if name == 0 {
+        "DLL sans nom".to_string()
+    } else {
+        format!("« {} »", text(name))
+    };
+    let proc = read_ptr(proc_name);
+    if read_u32(by_name) != 0 && proc != 0 {
+        out.push_str(&format!(", fonction « {} »", text(proc)));
+    } else if read_u32(by_name) == 0 {
+        out.push_str(&format!(", ordinal {}", proc & 0xffff));
+    }
+    out.push_str(&format!(", erreur {}", read_u32(last_error)));
+    Some(out)
+}
+/// Fonctions qu'un module importe en différé d'une DLL, d'après le
+/// descripteur (`pidd`) de la `DelayLoadInfo`. Descripteur : grAttrs,
+/// rvaDLLName, rvaHmod, rvaIAT, rvaINT, … (« Delay-Load Directory Table » du
+/// format PE sur Microsoft Learn ; `ImgDelayDescr` de delayimp.h de
+/// mingw-w64). grAttrs & 1 (dlattrRva) : adresses relatives, sinon
+/// adresses virtuelles (anciens éditeurs de liens). Chaque entrée de l'INT
+/// est un mot de 4 octets (x86) ou 8 (x64) : bit de poids fort = ordinal,
+/// sinon RVA d'un IMAGE_IMPORT_BY_NAME (indice sur 2 octets puis le nom).
+unsafe fn delay_import_list(args: &[usize], x86: bool) -> Option<String> {
+    let info = *args.first()?;
+    let pidd_at = if x86 { 4 } else { 8 };
+    let pidd = if x86 {
+        std::ptr::read_unaligned((info + pidd_at) as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned((info + pidd_at) as *const usize)
+    };
+    if pidd == 0 {
+        return None;
+    }
+    // try_lock : le fil fautif peut tenir la liste des modules.
+    let (base, size) = {
+        let modules = crate::loader::MODULES.try_lock().ok()?;
+        let m = modules.iter().find(|m| m.contains(pidd))?;
+        (m.base, m.size)
+    };
+    delay_import_names(base, size, pidd, x86).map(|names| names.join(", "))
+}
+/// Noms (ou « #ordinal ») de l'INT d'un descripteur d'import différé situé
+/// dans l'image [base, base + size). Toute adresse hors de l'image arrête
+/// la lecture.
+unsafe fn delay_import_names(
+    base: usize,
+    size: usize,
+    pidd: usize,
+    x86: bool,
+) -> Option<Vec<String>> {
+    let inside = |at: usize, len: usize| {
+        at >= base && at.checked_add(len).is_some_and(|end| end <= base + size)
+    };
+    let rd32 = |at: usize| std::ptr::read_unaligned(at as *const u32);
+    if !inside(pidd, 20) {
+        return None;
+    }
+    let rva = rd32(pidd) & 1 != 0;
+    let to_addr = |value: usize| if rva { base + value } else { value };
+    let int = to_addr(rd32(pidd + 16) as usize);
+    let step = if x86 { 4 } else { 8 };
+    let mut names = Vec::new();
+    let mut at = int;
+    while names.len() < 400 && inside(at, step) {
+        let thunk = if x86 {
+            rd32(at) as u64
+        } else {
+            std::ptr::read_unaligned(at as *const u64)
+        };
+        if thunk == 0 {
+            return Some(names);
+        }
+        let ordinal_bit = if x86 { 1u64 << 31 } else { 1u64 << 63 };
+        if thunk & ordinal_bit != 0 {
+            names.push(format!("#{}", thunk & 0xffff));
+        } else {
+            let name = to_addr(thunk as usize) + 2;
+            if !inside(name, 1) {
+                return None;
+            }
+            let max = base + size - name;
+            let bytes = std::slice::from_raw_parts(name as *const u8, max.min(256));
+            let end = bytes.iter().position(|&b| b == 0)?;
+            names.push(String::from_utf8_lossy(&bytes[..end]).into_owned());
+        }
+        at += step;
+    }
+    (!names.is_empty()).then_some(names)
 }
 /// Type (nom décoré) et valeur d'une exception C++ MSVC x64 : `throw hr;` de
 /// 7-Zip ou `throw "message";` deviennent lisibles dans le journal.
@@ -436,7 +573,12 @@ fn debug_string(text: String) {
     // Journal d'API (WINLUX_APITRACE) : Crashpad y écrit pourquoi il arrête
     // un processus.
     crate::thunks::api_note(&line);
-    let mut tail = crate::dlls::lock(&DEBUG_TAIL);
+    push_tail(&mut crate::dlls::lock(&DEBUG_TAIL), text);
+}
+
+/// Ajoute une ligne à la file des derniers messages, bornée à
+/// DEBUG_TAIL_LEN (la plus ancienne part).
+fn push_tail(tail: &mut std::collections::VecDeque<String>, text: String) {
     if tail.len() == DEBUG_TAIL_LEN {
         tail.pop_front();
     }
@@ -1582,6 +1724,95 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imports_differes_listes() {
+        // Image factice : descripteur RVA à +0x10, INT x86 à +0x40 (deux
+        // noms, un ordinal, fin), IMAGE_IMPORT_BY_NAME à +0x80 et +0xA0.
+        let mut image = vec![0u8; 0x100];
+        let put32 = |img: &mut Vec<u8>, at: usize, v: u32| {
+            img[at..at + 4].copy_from_slice(&v.to_le_bytes())
+        };
+        put32(&mut image, 0x10, 1);
+        put32(&mut image, 0x10 + 16, 0x40);
+        put32(&mut image, 0x40, 0x80);
+        put32(&mut image, 0x44, 0xA0);
+        put32(&mut image, 0x48, 0x8000_0007);
+        image[0x82..0x82 + 14].copy_from_slice(b"WsCreateError\0");
+        image[0xA2..0xA2 + 12].copy_from_slice(b"WsFreeError\0");
+        let base = image.as_ptr() as usize;
+        let got = unsafe { super::delay_import_names(base, image.len(), base + 0x10, true) };
+        assert_eq!(
+            got,
+            Some(vec![
+                "WsCreateError".into(),
+                "WsFreeError".into(),
+                "#7".into()
+            ])
+        );
+        // INT hors de l'image : rien.
+        put32(&mut image, 0x10 + 16, 0x1000);
+        let base = image.as_ptr() as usize;
+        assert!(
+            unsafe { super::delay_import_names(base, image.len(), base + 0x10, true) }.is_none()
+        );
+    }
+    #[test]
+    fn chargement_differe_nomme_la_dll() {
+        // DelayLoadInfo x86 (36 octets) : szDll à +12, dlp à +16/+20,
+        // dwLastError à +32.
+        // Chaînes et structure sous 4 Gio, comme dans un processus x86.
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let base = low as usize;
+        assert!(base + 4096 <= u32::MAX as usize);
+        let dll = b"absente.dll\0";
+        let func = b"Fonction\0";
+        unsafe {
+            std::ptr::copy_nonoverlapping(dll.as_ptr(), (base + 256) as *mut u8, dll.len());
+            std::ptr::copy_nonoverlapping(func.as_ptr(), (base + 512) as *mut u8, func.len());
+            let x86 = base as *mut u32;
+            *x86 = 36;
+            *x86.add(3) = (base + 256) as u32;
+            *x86.add(4) = 1;
+            *x86.add(5) = (base + 512) as u32;
+            *x86.add(8) = 126;
+        }
+        let got = unsafe { super::delay_load_failure(0xC06D_007E, &[base], true) };
+        assert_eq!(
+            got.as_deref(),
+            Some("« absente.dll », fonction « Fonction », erreur 126")
+        );
+        unsafe { libc::munmap(low, 4096) };
+        // x64 (72 octets) : szDll à +24, dlp à +32/+40, dwLastError à +64.
+        let mut x64 = [0usize; 9];
+        x64[0] = 72;
+        x64[3] = dll.as_ptr() as usize;
+        x64[4] = 0;
+        x64[5] = 12;
+        x64[8] = 127;
+        let got =
+            unsafe { super::delay_load_failure(0xC06D_007F, &[x64.as_ptr() as usize], false) };
+        assert_eq!(
+            got.as_deref(),
+            Some("« absente.dll », ordinal 12, erreur 127")
+        );
+        // Taille inattendue ou autre code : rien.
+        x64[0] = 40;
+        assert!(
+            unsafe { super::delay_load_failure(0xC06D_007F, &[x64.as_ptr() as usize], false) }
+                .is_none()
+        );
+        assert!(unsafe { super::delay_load_failure(0xC000_0005, &[0], false) }.is_none());
+    }
     /// Teams (#2202) : WerSetFlags puis WerGetFlags rendent S_OK et les drapeaux.
     #[test]
     fn drapeaux_wer_2202() {
@@ -1893,20 +2124,34 @@ mod tests {
 
     #[test]
     fn output_debug_string_garde_les_derniers_messages() {
-        let w: Vec<u16> = "qt.qpa.plugin: Could not load\r\n"
+        // La file globale est commune à tous les tests : le test n'y vérifie
+        // que ses propres lignes, marquées (#2666).
+        let id = format!("{}-{:?}", std::process::id(), std::thread::current().id());
+        let premiere = format!("qt.qpa.plugin: Could not load {id}");
+        let w: Vec<u16> = format!("{premiere}\r\n")
             .encode_utf16()
             .chain([0])
             .collect();
         unsafe { output_debug_string_w(w.as_ptr()) };
-        unsafe { output_debug_string_a(b"deuxieme\0".as_ptr()) };
+        let deuxieme = format!("deuxieme {id}\0");
+        unsafe { output_debug_string_a(deuxieme.as_ptr()) };
+        let deuxieme = deuxieme.trim_end_matches('\0').to_string();
         let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
-        assert!(tail.contains(&"qt.qpa.plugin: Could not load".to_string()));
-        assert_eq!(tail.last().map(String::as_str), Some("deuxieme"));
-        for n in 0..DEBUG_TAIL_LEN + 5 {
-            debug_string(format!("m{n}"));
-        }
-        assert_eq!(crate::dlls::lock(&DEBUG_TAIL).len(), DEBUG_TAIL_LEN);
+        assert!(tail.contains(&premiere), "{tail:?}");
+        assert!(tail.contains(&deuxieme), "{tail:?}");
         print_debug_tail();
-        assert!(crate::dlls::lock(&DEBUG_TAIL).is_empty());
+        let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
+        assert!(!tail.contains(&premiere) && !tail.contains(&deuxieme));
+        // File bornée, sur une file à soi : les 20 dernières restent.
+        let mut locale = std::collections::VecDeque::new();
+        for n in 0..DEBUG_TAIL_LEN + 5 {
+            push_tail(&mut locale, format!("m{n}"));
+        }
+        assert_eq!(locale.len(), DEBUG_TAIL_LEN);
+        assert_eq!(locale.front().map(String::as_str), Some("m5"));
+        assert_eq!(
+            locale.back().cloned(),
+            Some(format!("m{}", DEBUG_TAIL_LEN + 4))
+        );
     }
 }

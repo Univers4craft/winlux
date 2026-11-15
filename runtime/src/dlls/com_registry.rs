@@ -64,7 +64,7 @@ pub fn local_server(guid: &Guid) -> Option<String> {
 }
 
 /// Charge (une seule fois) la DLL et rend son module.
-unsafe fn load(path: &str) -> Option<usize> {
+pub(crate) unsafe fn load(path: &str) -> Option<usize> {
     let mut loaded = LOADED.lock().unwrap();
     if let Some((_, module)) = loaded.iter().find(|(p, _)| p.eq_ignore_ascii_case(path)) {
         return Some(*module);

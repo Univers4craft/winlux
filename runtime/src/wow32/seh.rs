@@ -253,6 +253,61 @@ fn dispatch(rec: u32, ctx: u32) -> bool {
     result
 }
 
+/// Cadre du répartiteur posé en tête de fs:[0] le temps d'un appel de
+/// gestionnaire (#2648).
+#[repr(C, align(8))]
+struct NestedFrame {
+    next: u32,
+    handler: u32,
+}
+
+/// Gestionnaire x86 du cadre du répartiteur : ExceptionContinueSearch, que
+/// ce soit pour une exception levée pendant le gestionnaire ou pour un
+/// déroulement qui le traverse.
+fn nested_stub() -> u32 {
+    static STUB: AtomicU32 = AtomicU32::new(0);
+    let s = STUB.load(Ordering::Relaxed);
+    if s != 0 {
+        return s;
+    }
+    // mov eax, 1 ; ret
+    let code = super::alloc_code(&[0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3]);
+    match STUB.compare_exchange(0, code, Ordering::Relaxed, Ordering::Relaxed) {
+        Ok(_) => code,
+        Err(other) => other,
+    }
+}
+
+/// Appelle le gestionnaire du cadre `frame` comme le répartiteur x86 :
+/// pendant l'appel, la tête de fs:[0] est un cadre à lui, dont le suivant
+/// est l'ancienne tête. Le gestionnaire C++ de la CRT de MSVC relève cette
+/// tête à l'entrée, la remet au-dessus du cadre cible après RtlUnwind, et
+/// la retire en sautant vers la suite du `catch`. Sans ce cadre, c'est un
+/// cadre du programme qui est remis en tête, et il y reste après le retour
+/// de sa fonction (#2648). Au retour, on retire le cadre en reprenant son
+/// suivant, que le gestionnaire a pu changer.
+fn call_handler(handler: u32, rec: u32, frame: u32, ctx: u32, dc: u32) -> u32 {
+    let teb = teb32();
+    let mut nested = NestedFrame {
+        next: rd(teb),
+        handler: nested_stub(),
+    };
+    let at = &mut nested as *mut NestedFrame as usize;
+    // Le cadre doit être dans la pile x86 du fil, comme ceux du programme.
+    let Some(at) = u32::try_from(at).ok().filter(|a| frame_ok(*a)) else {
+        return call32(handler as usize, &[rec, frame, ctx, dc]) as u32;
+    };
+    wr(teb, at);
+    let r = call32(handler as usize, &[rec, frame, ctx, dc]) as u32;
+    // SAFETY: `nested` est vivant ; le code x86 a pu écrire son champ next.
+    let next = unsafe { std::ptr::read_volatile(std::ptr::addr_of!(nested.next)) };
+    std::hint::black_box(&mut nested);
+    if rd(teb) == at {
+        wr(teb, next);
+    }
+    r
+}
+
 fn walk(rec: u32, ctx: u32) -> bool {
     let teb = teb32();
     let mut frame = rd(teb);
@@ -265,7 +320,7 @@ fn walk(rec: u32, ctx: u32) -> bool {
         }
         let handler = rd(frame + 4);
         crate::trace!("wow32 : gestionnaire SEH 0x{handler:x} (cadre 0x{frame:x})");
-        let r = call32(handler as usize, &[rec, frame, ctx, dc]) as u32;
+        let r = call_handler(handler, rec, frame, ctx, dc);
         crate::trace!("wow32 : gestionnaire SEH 0x{handler:x} → {r}");
         match r {
             // ExceptionContinueExecution

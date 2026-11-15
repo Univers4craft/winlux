@@ -1942,6 +1942,16 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::data_json::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Foundation.Uri (#2645).
+    if let Some(hr) = super::winrt_uri::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Classes déclarées par le manifeste du paquet du programme (#2657).
+    if let Some(hr) =
+        super::package_classes::activation_factory(class, &name, iid as *const u8, out)
+    {
+        return hr;
+    }
     if !out.is_null() {
         crate::wow32::write_ptr(out as usize, 0);
     }

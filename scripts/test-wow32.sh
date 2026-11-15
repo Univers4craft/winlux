@@ -120,7 +120,7 @@ expect() {
     fi
 }
 expect 0 "SEH 32 bits : tout est correct"
-echo "seh32 : 11 cas __try/__except/__finally (NULL, division, RaiseException, déroulement, ud2, reprise, rappel 64 bits rattrapé par saut direct)"
+echo "seh32 : 12 cas __try/__except/__finally (NULL, division, RaiseException, déroulement, ud2, reprise, rappel 64 bits rattrapé par saut direct, cadre du répartiteur)"
 WINLUX_WOW32_NO_FSGSBASE=1 expect 0 "SEH 32 bits : tout est correct"
 echo "seh32 : idem sans FSGSBASE"
 expect 66 "0xE0000042 non gérée" nonrattrapee
@@ -141,7 +141,7 @@ if test -f "$out/crt32.exe"; then
             exit 1
         fi
     done
-    echo "crt32 : CRT msvcrt 32 bits, 47 vérifications (printf de MinGW et de msvcrt)"
+    echo "crt32 : CRT msvcrt 32 bits, 51 vérifications (printf de MinGW et de msvcrt)"
 else
     echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
 fi

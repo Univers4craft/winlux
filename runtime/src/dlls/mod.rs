@@ -211,6 +211,7 @@ pub mod object_directory;
 pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
+pub mod ole32_ftm;
 pub mod ole32_inplace;
 pub mod ole32_lot_c;
 pub mod ole32_moniker;
@@ -224,6 +225,7 @@ pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
+pub mod package_classes;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;
@@ -302,6 +304,7 @@ pub mod vk_bindings;
 pub mod vulkan1;
 pub mod wbem;
 pub mod weak_ref;
+pub mod webservices;
 pub mod webview2;
 pub mod webview2_iids;
 pub mod wer;
@@ -324,6 +327,7 @@ pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
 pub mod winrt_ui;
+pub mod winrt_uri;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
@@ -1129,6 +1133,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "aclui",
                 exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "webservices",
+                exports: webservices::exports(),
                 handle: fake_module(),
             },
             Builtin {

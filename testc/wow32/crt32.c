@@ -429,5 +429,163 @@ int main(int argc, char **argv) {
         }
         CHECK(47, ok);
     }
+    /* #2597 : HttpOpenRequestA/W et WinHttpOpenRequest lisent le tableau des
+       types acceptés (lplpszAcceptTypes, terminé par NULL) avec des pointeurs
+       de 4 octets (l'outil de déploiement d'Office mourait dans
+       HttpOpenRequestA). Ouvrir une requête n'envoie rien. */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE n = LoadLibraryA("wininet.dll");
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        typedef HINTERNET (__stdcall *io_t)(const char *, DWORD, const char *, const char *, DWORD);
+        typedef HINTERNET (__stdcall *ic_t)(HINTERNET, const char *, WORD, const char *, const char *,
+                                            DWORD, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *ra_t)(HINTERNET, const char *, const char *, const char *,
+                                            const char *, const char **, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *rw_t)(HINTERNET, const wchar_t *, const wchar_t *, const wchar_t *,
+                                            const wchar_t *, const wchar_t **, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *icl_t)(HINTERNET);
+        io_t iopen = n ? (io_t)GetProcAddress(n, "InternetOpenA") : 0;
+        ic_t iconn = n ? (ic_t)GetProcAddress(n, "InternetConnectA") : 0;
+        ra_t hra = n ? (ra_t)GetProcAddress(n, "HttpOpenRequestA") : 0;
+        rw_t hrw = n ? (rw_t)GetProcAddress(n, "HttpOpenRequestW") : 0;
+        icl_t iclose = n ? (icl_t)GetProcAddress(n, "InternetCloseHandle") : 0;
+        int ok = iopen && iconn && hra && hrw && iclose && wopen && wconn && wreq && wclose;
+        if (ok) {
+            static const char *types_a[] = {"text/*", "application/octet-stream", 0};
+            static const wchar_t *types_w[] = {L"text/*", L"*/*", 0};
+            HINTERNET s = iopen("crt32", INTERNET_OPEN_TYPE_DIRECT, 0, 0, 0);
+            HINTERNET c = s ? iconn(s, "127.0.0.1", 80, 0, 0, INTERNET_SERVICE_HTTP, 0, 0) : 0;
+            HINTERNET ra = c ? hra(c, "GET", "/v64.cab", 0, 0, types_a, 0, 0) : 0;
+            HINTERNET rw = c ? hrw(c, L"GET", L"/v64.cab", 0, 0, types_w, 0, 0) : 0;
+            ok = ra && rw;
+            if (ra) iclose(ra);
+            if (rw) iclose(rw);
+            if (c) iclose(c);
+            if (s) iclose(s);
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, types_w, 0) : 0;
+            ok = ok && wr;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(48, ok);
+    }
+    /* #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+       départ), pas WINHTTP_INVALID_STATUS_CALLBACK (l'outil de déploiement
+       d'Office fermait chaque requête avant l'envoi). */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef void *(__stdcall *wsc_t)(void *, void *, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wsc_t wcb = h ? (wsc_t)GetProcAddress(h, "WinHttpSetStatusCallback") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        int ok = wopen && wconn && wreq && wcb && wclose;
+        if (ok) {
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, 0, 0) : 0;
+            void *rappel = (void *)(DWORD_PTR)0x00401000;
+            ok = wr && wcb(wr, rappel, 0x10000, 0) == 0 && wcb(wr, 0, 0, 0) == rappel;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(49, ok);
+    }
+    /* #2623 : webservices.dll (WWSAPI) en x86. L'outil de déploiement
+       d'Office la charge en différé pour lire une réponse XML. Structures
+       déclarées ici d'après l'ordre des champs de Microsoft Learn et
+       windows-rs (aucun en-tête webservices.h). */
+    {
+        typedef struct { ULONG length; BYTE *bytes; void *dictionary; ULONG id; } wxs;
+        typedef struct { ULONG mapping; wxs *localName; wxs *ns; ULONG type; void *typeDescription;
+                         ULONG offset; ULONG options; void *defaultValue; ULONG countOffset;
+                         wxs *itemLocalName; wxs *itemNs; void *itemRange; } wfd;
+        typedef struct { ULONG size; ULONG alignment; wfd **fields; ULONG fieldCount; wxs *typeLocalName;
+                         wxs *typeNs; void *parentType; void **subTypes; ULONG subTypeCount;
+                         ULONG structOptions; } wsd;
+        typedef struct { ULONG version; wchar_t *nom; wchar_t **urls; ULONG n; } cfg_t;
+        typedef HRESULT (__stdcall *creader_t)(void *, ULONG, void **, void *);
+        typedef HRESULT (__stdcall *cheap_t)(SIZE_T, SIZE_T, void *, ULONG, void **, void *);
+        typedef HRESULT (__stdcall *input_t)(void *, void *, void *, void *, ULONG, void *);
+        typedef HRESULT (__stdcall *tostart_t)(void *, wxs *, wxs *, BOOL *, void *);
+        typedef HRESULT (__stdcall *start_t)(void *, void *);
+        typedef HRESULT (__stdcall *rtype_t)(void *, ULONG, ULONG, void *, ULONG, void *, void *, ULONG, void *);
+        typedef void (__stdcall *free_t)(void *);
+        HMODULE h = LoadLibraryA("webservices.dll");
+        creader_t creader = h ? (creader_t)GetProcAddress(h, "WsCreateReader") : 0;
+        cheap_t cheap = h ? (cheap_t)GetProcAddress(h, "WsCreateHeap") : 0;
+        input_t input = h ? (input_t)GetProcAddress(h, "WsSetInput") : 0;
+        tostart_t tostart = h ? (tostart_t)GetProcAddress(h, "WsReadToStartElement") : 0;
+        start_t start = h ? (start_t)GetProcAddress(h, "WsReadStartElement") : 0;
+        rtype_t rtype = h ? (rtype_t)GetProcAddress(h, "WsReadType") : 0;
+        free_t freader = h ? (free_t)GetProcAddress(h, "WsFreeReader") : 0;
+        free_t fheap = h ? (free_t)GetProcAddress(h, "WsFreeHeap") : 0;
+        int ok = creader && cheap && input && tostart && start && rtype && freader && fheap;
+        if (ok) {
+            static const char xml[] =
+                "<Liste><Cfg Version=\"16\"><Nom>Office</Nom><Url>a</Url><Url>b</Url></Cfg></Liste>";
+            wxs liste = { 5, (BYTE *)"Liste", 0, 0 }, version = { 7, (BYTE *)"Version", 0, 0 };
+            wxs nom = { 3, (BYTE *)"Nom", 0, 0 }, url = { 3, (BYTE *)"Url", 0, 0 };
+            wfd fv = { 1, &version, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0 };
+            wfd fn_ = { 2, &nom, 0, 17, 0, 4, 0, 0, 0, 0, 0, 0 };
+            wfd fu = { 3, 0, 0, 17, 0, 8, 0, 0, 12, &url, 0, 0 };
+            wfd *fields[3] = { &fv, &fn_, &fu };
+            wsd sd = { sizeof(cfg_t), 4, fields, 3, 0, 0, 0, 0, 0, 0 };
+            ULONG enc[2] = { 1, 1 };
+            struct { ULONG type; const void *data; ULONG size; } in = { 1, xml, sizeof xml - 1 };
+            void *r = 0, *heap = 0;
+            BOOL found = FALSE;
+            cfg_t c;
+            memset(&c, 0, sizeof c);
+            ok = creader(0, 0, &r, 0) == 0 && cheap(1 << 20, 0, 0, 0, &heap, 0) == 0
+                 && input(r, enc, &in, 0, 0, 0) == 0
+                 && tostart(r, &liste, 0, &found, 0) == 0 && found
+                 && start(r, 0) == 0
+                 && rtype(r, 1, 26, &sd, 1, heap, &c, sizeof c, 0) == 0
+                 && c.version == 16 && c.nom && wcscmp(c.nom, L"Office") == 0
+                 && c.n == 2 && c.urls && wcscmp(c.urls[0], L"a") == 0 && wcscmp(c.urls[1], L"b") == 0;
+            if (r) freader(r);
+            if (heap) fheap(heap);
+        }
+        CHECK(50, ok);
+    }
+    /* #2639 : InternetGetCookieExW exportée en x86 (l'outil de déploiement
+       d'Office l'importe en différé). Sans cookie pour l'URL : FALSE et
+       ERROR_NO_MORE_ITEMS ; taille NULL : ERROR_INVALID_PARAMETER. */
+    {
+        typedef BOOL (__stdcall *gcx_t)(const wchar_t *, const wchar_t *, wchar_t *, DWORD *, DWORD, void *);
+        HMODULE h = LoadLibraryA("wininet.dll");
+        gcx_t gcx = h ? (gcx_t)GetProcAddress(h, "InternetGetCookieExW") : 0;
+        int ok = gcx != 0;
+        if (ok) {
+            wchar_t buf[64];
+            DWORD n = 64;
+            SetLastError(0);
+            ok = !gcx(L"http://crt32.invalid/", 0, buf, &n, 0, 0) && GetLastError() == ERROR_NO_MORE_ITEMS;
+            SetLastError(0);
+            ok = ok && !gcx(L"http://crt32.invalid/", 0, buf, 0, 0, 0)
+                 && GetLastError() == ERROR_INVALID_PARAMETER;
+        }
+        CHECK(51, ok);
+    }
     return fails;
 }
