@@ -1382,6 +1382,29 @@ fn trust_error(x509: i32) -> u32 {
     }
 }
 
+/// Chaîne du moteur par défaut. Sous Windows, les racines Microsoft de
+/// signature de code sont dans le magasin des autorités ; elles ne sont pas
+/// dans celui de TLS (ca-certificates). `code_roots` n'est donc reconnu que
+/// pour un certificat qui porte l'usage « signature de code », jamais pour
+/// TLS (#2679).
+fn default_engine_verify(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    code_roots: &[&[u8]],
+) -> Option<hostssl::Verified> {
+    let verified = hostssl::verify_with(leaf, extra, None, false, None);
+    if verified.as_ref().is_some_and(|v| v.error != 0)
+        && crate::setup::appx_signature::has_code_signing_usage(leaf)
+    {
+        if let Some(v) =
+            hostssl::verify_code(leaf, extra, code_roots, None).filter(|v| v.error == 0)
+        {
+            return Some(v);
+        }
+    }
+    verified
+}
+
 pub unsafe extern "win64" fn CertGetCertificateChain(
     engine: usize,
     ctx: usize,
@@ -1424,7 +1447,10 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
             }
         }
     }
-    let verified = hostssl::verify_with(&leaf.der, &extra, roots.as_deref(), partial, None);
+    let verified = match roots {
+        Some(r) => hostssl::verify_with(&leaf.der, &extra, Some(r.as_slice()), partial, None),
+        None => default_engine_verify(&leaf.der, &extra, &crate::setup::appx_signature::CODE_ROOTS),
+    };
     let (x509_error, ders) = match verified {
         Some(v) => (v.error, v.chain),
         // Sans OpenSSL : chaîne d'un seul élément, racine inconnue.
@@ -1653,6 +1679,19 @@ fn policy_error(trust: u32, flags: u32, ssl_checks: u32) -> u32 {
     }
 }
 
+/// Ligne du journal pour une chaîne refusée (#2679) : la stratégie, le
+/// sujet du certificat, le code rendu et où la chaîne s'arrête. Écrite sans
+/// variable de diagnostic, comme le refus de WinVerifyTrust (#2585).
+fn policy_refusal_line(policy: usize, c: &Chain, error: u32) -> String {
+    use crate::setup::appx_signature::{chain_top, subject_of};
+    let der = |e: Option<&ChainElement>| e.map(|e| cert_der(e.cert)).unwrap_or(&[]);
+    let leaf = subject_of(der(c.elements.first())).unwrap_or_else(|| "?".into());
+    let top = chain_top(der(c.elements.last())).unwrap_or_default();
+    format!(
+        "CertVerifyCertificateChainPolicy (stratégie {policy}) refuse la chaîne de « {leaf} » → {error:#x} ; {top}"
+    )
+}
+
 pub unsafe extern "win64" fn CertVerifyCertificateChainPolicy(
     policy: usize,
     chain: usize,
@@ -1697,6 +1736,9 @@ pub unsafe extern "win64" fn CertVerifyCertificateChainPolicy(
         if !host.is_empty() && !hostssl::check_host(leaf, &host) {
             error = CERT_E_CN_NO_MATCH;
         }
+    }
+    if error != 0 {
+        crate::log_warn!("crypt32", "{}", policy_refusal_line(policy, c, error));
     }
     (*st).error = error;
     (*st).chain_index = if error == 0 { -1 } else { 0 };
@@ -2078,6 +2120,10 @@ const CERT_QUERY_OBJECT_FILE: u32 = 1;
 const CERT_QUERY_OBJECT_BLOB: u32 = 2;
 const CERT_QUERY_CONTENT_CERT: u32 = 1;
 const CERT_QUERY_CONTENT_FLAG_CERT: u32 = 1 << CERT_QUERY_CONTENT_CERT;
+/// Message PKCS #7 signé incorporé à un fichier (signature Authenticode
+/// d'un PE), wincrypt.h.
+const CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED: u32 = 10;
+const CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED: u32 = 1 << CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED;
 const CERT_QUERY_FORMAT_BINARY: u32 = 1;
 const CERT_QUERY_FORMAT_BASE64_ENCODED: u32 = 2;
 const CRYPT_E_NO_MATCH: u32 = 0x8009_2009;
@@ -2099,9 +2145,10 @@ fn query_cert(data: &[u8], formats: u32) -> Option<(Vec<u8>, u32)> {
     Some((der, CERT_QUERY_FORMAT_BASE64_ENCODED))
 }
 
-/// CryptQueryObject : seul le contenu « certificat » (binaire, PEM, base64)
-/// est reconnu, dans un tampon ou un fichier. C'est ce que lit le Schannel de
-/// libcurl pour charger son fichier d'autorités (CURLOPT_CAINFO).
+/// CryptQueryObject : contenu « certificat » (binaire, PEM, base64), que
+/// lit le Schannel de libcurl pour son fichier d'autorités
+/// (CURLOPT_CAINFO), et signature PKCS #7 incorporée à un PE, que lit
+/// Acrobat pour ses greffons (#2685), dans un tampon ou un fichier.
 pub unsafe extern "win64" fn CryptQueryObject(
     object_type: u32,
     object: usize,
@@ -2136,6 +2183,39 @@ pub unsafe extern "win64" fn CryptQueryObject(
             return 0;
         }
     };
+    if content_flags & CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED != 0
+        && format_flags & (1 << CERT_QUERY_FORMAT_BINARY) != 0
+    {
+        if let Some(p7) = crate::setup::appx_signature::pe_embedded_pkcs7(&data) {
+            if let Some((certs, _)) = crate::setup::appx_signature::signed_data_parts(p7) {
+                let store = new_store();
+                for der in &certs {
+                    store_add_der(store, der);
+                }
+                if !encoding.is_null() {
+                    *encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+                }
+                if !content_type.is_null() {
+                    *content_type = CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED;
+                }
+                if !format_type.is_null() {
+                    *format_type = CERT_QUERY_FORMAT_BINARY;
+                }
+                if !context_out.is_null() {
+                    *context_out = 0;
+                }
+                if !msg_out.is_null() {
+                    *msg_out = super::discord_win32::open_decoded(p7).unwrap_or(0);
+                }
+                if store_out.is_null() {
+                    CertCloseStore(store, 0);
+                } else {
+                    *store_out = store;
+                }
+                return 1;
+            }
+        }
+    }
     let found = (content_flags & CERT_QUERY_CONTENT_FLAG_CERT != 0)
         .then(|| query_cert(&data, if format_flags == 0 { !0 } else { format_flags }))
         .flatten();
@@ -2631,6 +2711,71 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
 
+    #[test]
+    fn signature_incorporee_d_un_greffon_lue() {
+        // #2685 : Acrobat lit la signature de ses greffons par
+        // CryptQueryObject(CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+        // binaire) ; il obtient un magasin des certificats et le message.
+        let Some(pe) = crate::setup::appx_signature::tests::signed_test_pe() else {
+            return;
+        };
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let b = Blob {
+                cb: pe.len() as u32,
+                pb: pe.as_ptr(),
+            };
+            let (mut enc, mut content, mut format) = (0u32, 0u32, 0u32);
+            let (mut store, mut msg, mut ctx) = (0usize, 0usize, 1usize);
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &b as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                    1 << CERT_QUERY_FORMAT_BINARY,
+                    0,
+                    &mut enc,
+                    &mut content,
+                    &mut format,
+                    &mut store,
+                    &mut msg,
+                    &mut ctx,
+                ),
+                1
+            );
+            assert_eq!(content, CERT_QUERY_CONTENT_PKCS7_SIGNED_EMBED);
+            assert_eq!(format, CERT_QUERY_FORMAT_BINARY);
+            assert_eq!(enc, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING);
+            assert_eq!(ctx, 0);
+            assert_ne!(CertEnumCertificatesInStore(store, 0), 0);
+            assert!(super::super::discord_win32::is_decode_msg(msg));
+            assert!(super::super::discord_win32::close_msg(msg));
+            CertCloseStore(store, 0);
+            // Un PE sans signature n'est pas reconnu.
+            let plain = vec![0u8; 64];
+            let b = Blob {
+                cb: plain.len() as u32,
+                pb: plain.as_ptr(),
+            };
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &b as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                    1 << CERT_QUERY_FORMAT_BINARY,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+        }
+    }
+
     /// CERT_CHAIN_ENGINE_CONFIG : tailles de wincrypt.h en x64 et en x86 (#1708).
     #[test]
     fn config_du_moteur_de_chaines_x86_et_x64() {
@@ -2986,6 +3131,160 @@ mod tests {
                 0
             );
             CertCloseStore(linked, 0);
+            CertFreeCertificateContext(ctx);
+        }
+    }
+
+    /// Autorité de test et deux certificats qu'elle émet, l'un pour signer
+    /// du code, l'autre pour un serveur TLS ; None sans la commande openssl.
+    fn autorite_et_feuilles() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+        if std::process::Command::new("openssl")
+            .arg("version")
+            .output()
+            .is_err()
+        {
+            return None;
+        }
+        // Un dossier par appel : les deux tests tournent en parallèle.
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("winlux-chaine-2679-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("openssl")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "openssl {args:?}");
+        };
+        run(&[
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            "ca.key",
+            "-out",
+            "ca.pem",
+            "-days",
+            "2",
+            "-subj",
+            "/CN=Racine de test 2679",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,keyCertSign",
+        ]);
+        for (nom, usage) in [("code", "codeSigning"), ("tls", "serverAuth")] {
+            std::fs::write(
+                dir.join(format!("{nom}.ext")),
+                format!("extendedKeyUsage={usage}\n"),
+            )
+            .unwrap();
+            run(&[
+                "req",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                &format!("{nom}.key"),
+                "-out",
+                &format!("{nom}.csr"),
+                "-subj",
+                &format!("/CN=Feuille {nom} 2679"),
+            ]);
+            run(&[
+                "x509",
+                "-req",
+                "-in",
+                &format!("{nom}.csr"),
+                "-CA",
+                "ca.pem",
+                "-CAkey",
+                "ca.key",
+                "-CAcreateserial",
+                "-days",
+                "2",
+                "-extfile",
+                &format!("{nom}.ext"),
+                "-outform",
+                "DER",
+                "-out",
+                &format!("{nom}.der"),
+            ]);
+        }
+        run(&["x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der"]);
+        let lire = |n: &str| std::fs::read(dir.join(n)).unwrap();
+        let r = (lire("ca.der"), lire("code.der"), lire("tls.der"));
+        let _ = std::fs::remove_dir_all(&dir);
+        Some(r)
+    }
+
+    #[test]
+    fn racines_de_signature_de_code_au_moteur_par_defaut_2679() {
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let Some((racine, code, tls)) = autorite_et_feuilles() else {
+            return;
+        };
+        let racines: [&[u8]; 1] = [&racine];
+        // Sans les racines de code : chaîne partielle, comme avant #2679.
+        let seul = default_engine_verify(&code, &[], &[]).unwrap();
+        assert_eq!(policy_error(trust_error(seul.error), 0, 0), CERT_E_CHAINING);
+        // Un certificat de signature de code se termine sur ces racines.
+        let v = default_engine_verify(&code, &[], &racines).unwrap();
+        assert_eq!(v.error, 0);
+        assert_eq!(v.chain.len(), 2);
+        // Jamais pour TLS : un certificat de serveur reste partiel.
+        let t = default_engine_verify(&tls, &[], &racines).unwrap();
+        assert_eq!(policy_error(trust_error(t.error), 0, 0), CERT_E_CHAINING);
+        assert!(crate::setup::appx_signature::has_code_signing_usage(&code));
+        assert!(!crate::setup::appx_signature::has_code_signing_usage(&tls));
+        assert!(!crate::setup::appx_signature::has_code_signing_usage(
+            &racine
+        ));
+    }
+
+    #[test]
+    fn refus_de_chaine_journalise_2679() {
+        unsafe {
+            if hostssl::ssl().is_none() {
+                return;
+            }
+            let Some((_, _, tls)) = autorite_et_feuilles() else {
+                return;
+            };
+            let ctx = CertCreateCertificateContext(1, tls.as_ptr(), tls.len() as u32);
+            assert_ne!(ctx, 0);
+            let mut chain = 0usize;
+            assert_eq!(
+                CertGetCertificateChain(0, ctx, 0, 0, 0, 0, 0, &mut chain),
+                1
+            );
+            let mut st = PolicyStatus {
+                cb: std::mem::size_of::<PolicyStatus>() as u32,
+                error: 0,
+                chain_index: 0,
+                element_index: 0,
+                extra: 0,
+            };
+            assert_eq!(
+                CertVerifyCertificateChainPolicy(1, chain, 0, &mut st as *mut _ as usize),
+                1
+            );
+            assert_eq!(st.error, CERT_E_CHAINING);
+            let ligne = policy_refusal_line(1, &*(chain as *const Chain), st.error);
+            assert!(ligne.contains("Feuille tls 2679"), "{ligne}");
+            assert!(ligne.contains("0x800b010a"), "{ligne}");
+            assert!(ligne.contains("Racine de test 2679"), "{ligne}");
+            CertFreeCertificateChain(chain);
             CertFreeCertificateContext(ctx);
         }
     }
