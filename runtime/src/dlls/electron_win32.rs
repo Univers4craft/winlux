@@ -23,7 +23,6 @@ const ERROR_NO_MORE_ITEMS: u32 = 259;
 const ERROR_IO_PENDING: u32 = 997;
 const ERROR_NOT_FOUND: u32 = 1168;
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
-const E_NOTIMPL: u32 = 0x8000_4001;
 const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
 const WSASERVICE_NOT_FOUND: u32 = 10108;
 const WSA_E_NO_MORE: u32 = 10110;
@@ -613,6 +612,8 @@ unsafe extern "win64" fn NtQueryObject(
                         format!("\\??\\{w}")
                     })
                     .unwrap_or_default()
+            } else if kind == "Key" {
+                crate::registry::key_nt_name(h).unwrap_or_default()
             } else {
                 String::new()
             };
@@ -969,6 +970,45 @@ fn new_user_object() -> usize {
 
 /// Bureau « Default » de la station WinSta0.
 const DEFAULT_DESKTOP: usize = 0x4445_0001;
+/// Station « WinSta0 » (GetProcessWindowStation, user32.rs).
+const WINSTA0: usize = 0x5753_0001;
+
+/// DuplicateHandle d'un handle de station ou de bureau (#2443) : la page
+/// de DuplicateHandle compte « Desktop » et « Window station » parmi les
+/// objets duplicables. WinSta0 et le bureau Default sont des constantes,
+/// rendues telles quelles ; un objet créé reçoit un nouveau numéro, que
+/// la fermeture de l'original n'invalide pas. None : pas un tel handle.
+pub(crate) fn duplicate_user_object(h: usize) -> Option<usize> {
+    if h == WINSTA0 || h == DEFAULT_DESKTOP {
+        return Some(h);
+    }
+    is_user_object(h).then(new_user_object)
+}
+
+/// Stations et bureaux reçus d'un autre processus (DuplicateHandle vers ce
+/// processus, ou héritage) : leur numéro est choisi par l'expéditeur (#2545).
+static ADOPTED_USER_OBJECTS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `h` désigne-t-il une station de fenêtres ou un bureau de ce processus ?
+pub(crate) fn is_user_object(h: usize) -> bool {
+    let next = NEXT_USER_OBJECT.load(std::sync::atomic::Ordering::Relaxed);
+    h == WINSTA0
+        || h == DEFAULT_DESKTOP
+        || (h >= 0x5753_0100 && h < next && (h - 0x5753_0100).is_multiple_of(4))
+        || crate::dlls::lock(&ADOPTED_USER_OBJECTS).contains(&h)
+}
+
+/// Recrée sous le numéro `h` une station ou un bureau transmis par un autre
+/// processus (inherit::adopt_one, #2545). Sous Winlux ces objets n'ont pas
+/// d'état : le numéro suffit.
+pub(crate) fn adopt_user_object(h: usize) {
+    if h != WINSTA0 && h != DEFAULT_DESKTOP {
+        let mut adopted = crate::dlls::lock(&ADOPTED_USER_OBJECTS);
+        if !adopted.contains(&h) {
+            adopted.push(h);
+        }
+    }
+}
 
 unsafe extern "win64" fn CreateWindowStation(
     _name: usize,
@@ -1326,6 +1366,68 @@ unsafe extern "win64" fn WindowOk2(_hwnd: usize, _arg: u32) -> i32 {
     1
 }
 
+/// Réglages d'affichage posés par `SetWindowDisplayAffinity`, par HWND.
+/// Un HWND n'est jamais réattribué (`gui::alloc_hwnd`), une entrée d'une
+/// fenêtre détruite est retirée à la lecture suivante.
+fn affinites() -> &'static std::sync::Mutex<std::collections::HashMap<usize, u32>> {
+    static A: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, u32>>> =
+        std::sync::OnceLock::new();
+    A.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+const WDA_NONE: u32 = 0;
+const WDA_MONITOR: u32 = 1;
+const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
+const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+
+/// `SetWindowDisplayAffinity` (winuser.h, Windows 7) : le réglage est
+/// retenu et relu par `GetWindowDisplayAffinity`. Winlux ne propose aucune
+/// capture d'écran qui devrait le respecter : il ne change rien à l'affichage.
+unsafe extern "win64" fn SetWindowDisplayAffinity(hwnd: usize, affinite: u32) -> i32 {
+    if !crate::dlls::gui::is_window(hwnd) {
+        crate::process::set_last_error(ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if !matches!(affinite, WDA_NONE | WDA_MONITOR | WDA_EXCLUDEFROMCAPTURE) {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let mut a = super::lock(affinites());
+    if affinite == WDA_NONE {
+        a.remove(&hwnd);
+    } else {
+        a.insert(hwnd, affinite);
+    }
+    1
+}
+
+/// `GetWindowDisplayAffinity` (winuser.h, Windows 7) : rend le réglage posé
+/// par `SetWindowDisplayAffinity`, `WDA_NONE` par défaut et pour une fenêtre
+/// d'un autre processus du compte. Choix Winlux : l'appel réussit même pour
+/// une fenêtre non superposée, le compositeur étant toujours actif.
+unsafe extern "win64" fn GetWindowDisplayAffinity(hwnd: usize, sortie: *mut u32) -> i32 {
+    let locale = crate::dlls::gui::is_window(hwnd);
+    if !locale && crate::dlls::gui::foreign_window(hwnd).is_none() {
+        super::lock(affinites()).remove(&hwnd);
+        crate::process::set_last_error(ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if sortie.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let valeur = if locale {
+        super::lock(affinites())
+            .get(&hwnd)
+            .copied()
+            .unwrap_or(WDA_NONE)
+    } else {
+        WDA_NONE
+    };
+    *sortie = valeur;
+    1
+}
+
 /// GetGestureInfo : Winlux n'envoie jamais WM_GESTURE, aucun handle n'est valide.
 unsafe extern "win64" fn GetGestureInfo(_handle: usize, _info: *mut u8) -> i32 {
     crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
@@ -1504,7 +1606,8 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "SetGestureConfig" => fn GestureOk,
         "CloseGestureInfoHandle" => fn GestureOk,
         "UnregisterTouchWindow" => fn WindowOk,
-        "SetWindowDisplayAffinity" => fn WindowOk2,
+        "SetWindowDisplayAffinity" => fn SetWindowDisplayAffinity,
+        "GetWindowDisplayAffinity" => fn GetWindowDisplayAffinity,
         "RegisterHotKey" => fn RegisterHotKey,
         "UnregisterHotKey" => fn UnregisterHotKey,
         "RegisterPointerDeviceNotifications" => fn WindowOk2,
@@ -1674,7 +1777,7 @@ unsafe extern "win64" fn WindowsCreateStringReference(
     0
 }
 
-unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
+pub(crate) unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
     if h == 0 || is_reference(h) {
         return 0;
     }
@@ -1684,7 +1787,7 @@ unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
     0
 }
 
-unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i32 {
+pub(crate) unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
@@ -1789,8 +1892,10 @@ unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize)
     WindowsSubstringWithSpecifiedLength(h, start, n - start, out)
 }
 
-/// Sont inscrites `Windows.System.DispatcherQueue` (#1355) et les classes
-/// d'activation de Windows.UI.Composition (#1416). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
+/// Sont inscrites `Windows.System.DispatcherQueue` (#1355), les classes
+/// d'activation de Windows.UI.Composition (#1416) et
+/// `Windows.Storage.ApplicationData` (#2122), `Windows.Foundation.PropertyValue` (#2192),
+/// les classes de `Windows.Data.Json` (#2171). Pour les autres classes, Chromium (notifications, réglages d'accessibilité, UI
 /// Automation) se rabat sur l'API Win32.
 unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *mut usize) -> i32 {
     let name = String::from_utf16_lossy(hstring_slice(class));
@@ -1800,13 +1905,41 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     {
         return hr;
     }
+    // Windows.System.Profile.WindowsIntegrityPolicy (#2217).
+    if let Some(hr) = super::integrity_policy::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::coremessaging::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.UI.ViewManagement.UISettings (#2206).
+    if let Some(hr) = super::ui_settings::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if let Some(hr) = super::composition::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Networking.Connectivity.NetworkInformation (#2215).
+    if let Some(hr) = super::network_information::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     if let Some(hr) = super::winrt_ui::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.System.UserProfile.GlobalizationPreferences (#2172).
+    if let Some(hr) = super::globalization_prefs::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Storage.ApplicationData d'un programme empaqueté (#2122).
+    if let Some(hr) = super::storage_appdata::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Foundation.PropertyValue (#2192).
+    if let Some(hr) = super::property_value::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
+    // Windows.Data.Json : JsonObject, JsonArray, JsonValue, JsonError (#2171).
+    if let Some(hr) = super::data_json::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
     if !out.is_null() {
@@ -1823,8 +1956,46 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     REGDB_E_CLASSNOTREG
 }
 
-unsafe extern "win64" fn RoActivateInstance(_class: usize, out: *mut usize) -> i32 {
-    RoGetActivationFactory(0, 0, out)
+/// IID_IActivationFactory {00000035-0000-0000-C000-000000000046}.
+const IID_ACTIVATION_FACTORY: [u8; 16] = [0x35, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+
+/// RoActivateInstance (#2560) : fabrique de la classe demandée, puis
+/// IActivationFactory::ActivateInstance (entrée 6 de la vtable, après
+/// IUnknown et IInspectable), d'après les pages RoActivateInstance et
+/// IActivationFactory de Microsoft Learn.
+unsafe extern "win64" fn RoActivateInstance(class: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    crate::wow32::write_ptr(out as usize, 0);
+    if crate::wow32::active() {
+        // Les fabriques rendues à un programme x86 peuvent être les siennes
+        // (RoRegisterActivationFactories) : pas d'appel x64 dans leur vtable
+        // tant que Ro* n'a pas ses deux ABI (#2471).
+        let name = String::from_utf16_lossy(hstring_slice(class));
+        crate::log_warn!(
+            "com",
+            "RoActivateInstance : classe « {name} » pas encore activée pour un programme x86 (REGDB_E_CLASSNOTREG)"
+        );
+        return REGDB_E_CLASSNOTREG;
+    }
+    let mut factory = 0usize;
+    let hr = RoGetActivationFactory(
+        class,
+        IID_ACTIVATION_FACTORY.as_ptr() as usize,
+        &mut factory,
+    );
+    if hr < 0 || factory == 0 {
+        return if hr < 0 { hr } else { E_POINTER };
+    }
+    type Activate = unsafe extern "win64" fn(usize, *mut usize) -> i32;
+    type Release = unsafe extern "win64" fn(usize) -> u32;
+    let vtbl = *(factory as *const *const usize);
+    let activate: Activate = std::mem::transmute(*vtbl.add(6));
+    let release: Release = std::mem::transmute(*vtbl.add(2));
+    let hr = activate(factory, out);
+    release(factory);
+    hr
 }
 
 unsafe extern "win64" fn RoOriginateError(_hr: i32, _message: usize) -> i32 {
@@ -2066,6 +2237,17 @@ unsafe extern "win64" fn WSAEnumProtocolsW(
     0
 }
 
+/// WSAEnumNameSpaceProviders(A|W|ExA|ExW) : aucun fournisseur d'espace de
+/// noms n'est enregistré (la résolution passe par getaddrinfo et les
+/// requêtes NLA ci-dessous) ; 0 entrée, longueur requise nulle (#2000).
+unsafe extern "win64" fn WSAEnumNameSpaceProviders(len: *mut u32, _buf: *mut c_void) -> i32 {
+    if len.is_null() {
+        return wsa_error(10014); // WSAEFAULT
+    }
+    *len = 0;
+    0
+}
+
 /// NS_NLA : l'emplacement réseau (Network Location Awareness), que
 /// Chromium interroge pour savoir si la machine est connectée.
 const NS_NLA: u32 = 15;
@@ -2184,6 +2366,10 @@ unsafe extern "win64" fn WSASetServiceW(_info: *mut c_void, _op: u32, _flags: u3
 pub fn ws2_32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "WSAEnumProtocolsW" => fn WSAEnumProtocolsW,
+        "WSAEnumNameSpaceProvidersA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersW" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExA" => fn WSAEnumNameSpaceProviders,
+        "WSAEnumNameSpaceProvidersExW" => fn WSAEnumNameSpaceProviders,
         "WSALookupServiceBeginW" => fn WSALookupServiceBeginW,
         "WSALookupServiceNextW" => fn WSALookupServiceNextW,
         "WSALookupServiceEnd" => fn WSALookupServiceEnd,
@@ -2272,20 +2458,135 @@ pub fn oleaut32_exports() -> crate::dlls::Exports {
     }
 }
 
-/// Pas de conteneurs d'applis (AppContainer) sous Winlux.
-unsafe extern "win64" fn DeriveAppContainerSidFromAppContainerName(
-    _name: *const u16,
+// ============================================================
+//  userenv : profils de conteneurs d'applications (AppContainer)
+// ============================================================
+//
+// Pages publiques de CreateAppContainerProfile et de
+// DeriveAppContainerSidFromAppContainerName (userenv.h) : le profil est
+// créé une fois (ERROR_ALREADY_EXISTS ensuite), le SID rendu est un SID
+// d'application S-1-15-2-… libéré par FreeSid. Winlux n'isole pas le
+// conteneur : la séparation réelle vient des comptes Linux, comme pour les
+// jetons du bac à sable (security.rs). Le calcul des sept sous-autorités
+// n'est pas documenté : celui-ci est notre choix, stable pour un nom donné
+// (sans distinction de casse), et ce n'est pas celui de Windows (#2495).
+
+const HR_INVALIDARG: u32 = 0x8007_0057;
+/// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS).
+const HR_ALREADY_EXISTS: u32 = 0x8007_00B7;
+
+/// Nom de conteneur valide : 1 à 64 caractères (page de
+/// CreateAppContainerProfile), sans séparateur de chemin.
+fn appcontainer_name(name: *const u16) -> Option<String> {
+    if name.is_null() {
+        return None;
+    }
+    let text = unsafe { crate::dlls::wstr(name) };
+    let n = text.chars().count();
+    ((1..=64).contains(&n) && !text.contains(['\\', '/'])).then_some(text)
+}
+
+/// Sept sous-autorités stables tirées du nom (notre choix, voir plus haut).
+pub(crate) fn appcontainer_subauthorities(name: &str) -> [u32; 7] {
+    let lower = name.to_lowercase();
+    let mut h: u32 = 0x811c_9dc5;
+    let mut subs = [0u32; 7];
+    for (i, b) in lower
+        .bytes()
+        .cycle()
+        .take(lower.len().max(1) * 7)
+        .enumerate()
+    {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+        subs[i % 7] ^= h;
+    }
+    subs
+}
+
+/// Écrit dans `*sid` un SID S-1-15-2-… alloué comme par
+/// AllocateAndInitializeSid (FreeSid le libère).
+unsafe fn give_appcontainer_sid(name: &str, sid: *mut usize) -> u32 {
+    let subs = appcontainer_subauthorities(name);
+    let auth = [0u8, 0, 0, 0, 0, 15];
+    let mut out: *mut u8 = std::ptr::null_mut();
+    if crate::dlls::security::AllocateAndInitializeSid(
+        auth.as_ptr(),
+        8,
+        2,
+        subs[0],
+        subs[1],
+        subs[2],
+        subs[3],
+        subs[4],
+        subs[5],
+        subs[6],
+        &mut out,
+    ) == 0
+    {
+        crate::wow32::write_ptr(sid as usize, 0);
+        return 0x8007_000E; // E_OUTOFMEMORY
+    }
+    crate::wow32::write_ptr(sid as usize, out as usize);
+    0
+}
+
+/// Clé où Winlux note les profils créés (emplacement de notre choix).
+fn appcontainer_key(name: &str) -> String {
+    format!(
+        "hkcu\\Software\\Winlux\\AppContainer\\{}",
+        name.to_lowercase()
+    )
+}
+
+/// CreateAppContainerProfile : S_OK et le SID la première fois,
+/// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS) ensuite.
+pub(crate) unsafe extern "win64" fn CreateAppContainerProfile(
+    name: *const u16,
+    _display: *const u16,
+    _description: *const u16,
+    _caps: usize,
+    _count: u32,
     sid: *mut usize,
 ) -> u32 {
-    if !sid.is_null() {
-        *sid = 0;
+    if sid.is_null() {
+        return HR_INVALIDARG;
     }
-    E_NOTIMPL
+    crate::wow32::write_ptr(sid as usize, 0);
+    let Some(name) = appcontainer_name(name) else {
+        return HR_INVALIDARG;
+    };
+    match crate::registry::create(&appcontainer_key(&name)) {
+        Ok((h, created)) => {
+            crate::registry::close_handle(h);
+            if !created {
+                return HR_ALREADY_EXISTS;
+            }
+        }
+        Err(e) => return 0x8007_0000 | (e as u32 & 0xFFFF),
+    }
+    give_appcontainer_sid(&name, sid)
+}
+
+/// DeriveAppContainerSidFromAppContainerName : le même SID que
+/// CreateAppContainerProfile pour ce nom, que le profil existe ou non.
+unsafe extern "win64" fn DeriveAppContainerSidFromAppContainerName(
+    name: *const u16,
+    sid: *mut usize,
+) -> u32 {
+    if sid.is_null() {
+        return HR_INVALIDARG;
+    }
+    let Some(name) = appcontainer_name(name) else {
+        crate::wow32::write_ptr(sid as usize, 0);
+        return HR_INVALIDARG;
+    };
+    give_appcontainer_sid(&name, sid)
 }
 
 pub fn userenv_exports() -> crate::dlls::Exports {
     crate::exports! {
         "DeriveAppContainerSidFromAppContainerName" => fn DeriveAppContainerSidFromAppContainerName,
+        "CreateAppContainerProfile" => fn CreateAppContainerProfile,
     }
 }
 
@@ -2698,6 +2999,76 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affinite_d_affichage_retenue_et_relue() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut v = 0xFFu32;
+            crate::process::set_last_error(0);
+            assert_eq!(GetWindowDisplayAffinity(0xDEAD_0000, &mut v), 0);
+            assert_eq!(crate::process::last_error(), ERROR_INVALID_WINDOW_HANDLE);
+            assert_eq!(SetWindowDisplayAffinity(0xDEAD_0000, WDA_MONITOR), 0);
+            assert_eq!(crate::process::last_error(), ERROR_INVALID_WINDOW_HANDLE);
+
+            use crate::dlls::gui;
+            extern "win64" fn inerte(_h: usize, _m: u32, _w: usize, _l: isize) -> isize {
+                0
+            }
+            let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = inerte;
+            let hwnd = gui::alloc_hwnd();
+            gui::insert_window(
+                hwnd,
+                gui::Window {
+                    class: "Test".to_string(),
+                    wnd_proc: proc_addr as usize,
+                    background: 0,
+                    title: "test".to_string(),
+                    rect: gui::Rect::from_size(0, 0, 200, 100),
+                    visible: false,
+                    parent: 0,
+                    owner: std::thread::current().id(),
+                    needs_paint: false,
+                    paint_queued: false,
+                    style: 0,
+                    ex_style: 0,
+                    pending: Vec::new(),
+                    menu_bar: 0,
+                    painting: false,
+                },
+            );
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_NONE);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE), 1);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_EXCLUDEFROMCAPTURE);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, 7), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, std::ptr::null_mut()), 0);
+            assert_eq!(SetWindowDisplayAffinity(hwnd, WDA_NONE), 1);
+            assert_eq!(GetWindowDisplayAffinity(hwnd, &mut v), 1);
+            assert_eq!(v, WDA_NONE);
+            let e = all();
+            assert!(e.iter().any(|(dll, t)| dll.eq_ignore_ascii_case("user32")
+                && t.contains_key("GetWindowDisplayAffinity")));
+            gui::destroy_window(hwnd);
+        }
+    }
+
+    /// Steam, utility storage (#2000) : aucun fournisseur, longueur nulle.
+    #[test]
+    fn aucun_fournisseur_d_espace_de_noms() {
+        unsafe {
+            let mut len = 77u32;
+            assert_eq!(WSAEnumNameSpaceProviders(&mut len, std::ptr::null_mut()), 0);
+            assert_eq!(len, 0);
+            let e = ws2_32_exports();
+            for n in ["A", "W", "ExA", "ExW"] {
+                let nom = format!("WSAEnumNameSpaceProviders{n}");
+                assert!(e.contains_key(nom.as_str()), "{nom} absent");
+            }
+        }
+    }
 
     fn etat(pid: u32) -> char {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
@@ -3226,6 +3597,180 @@ mod tests {
         }
     }
 
+    /// Une clé ouverte est un objet « Key » nommé \\REGISTRY\\… ; un tampon
+    /// trop court rend la taille utile (#2413).
+    /// Profil AppContainer créé une fois, SID S-1-15-2-… stable et identique
+    /// à celui de DeriveAppContainerSidFromAppContainerName (#2495).
+    #[test]
+    fn profil_appcontainer_cree_puis_existant() {
+        let _teb = crate::process::test_teb();
+        let _lock = crate::registry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = std::env::temp_dir().join(format!("winlux-reg-ac-{}.tsv", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+        std::env::set_var("WINLUX_REGISTRY_PATH", &path);
+        let name: Vec<u16> = "Essai.Conteneur".encode_utf16().chain(Some(0)).collect();
+        let text = |sid: usize| unsafe {
+            let mut s: *mut u16 = std::ptr::null_mut();
+            assert_ne!(
+                crate::dlls::security::ConvertSidToStringSidW(sid as *const u8, &mut s),
+                0
+            );
+            crate::dlls::wstr(s)
+        };
+        unsafe {
+            let mut sid = 0usize;
+            let r = CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                0,
+                &mut sid,
+            );
+            assert_eq!(r, 0);
+            let first = text(sid);
+            assert!(first.starts_with("S-1-15-2-"), "{first}");
+            assert_eq!(first.split('-').count(), 11, "{first}");
+            let mut again = 0usize;
+            assert_eq!(
+                CreateAppContainerProfile(
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0,
+                    0,
+                    &mut again
+                ),
+                HR_ALREADY_EXISTS
+            );
+            assert_eq!(again, 0);
+            let mut derived = 0usize;
+            assert_eq!(
+                DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut derived),
+                0
+            );
+            assert_eq!(text(derived), first);
+            let empty: [u16; 1] = [0];
+            assert_eq!(
+                DeriveAppContainerSidFromAppContainerName(empty.as_ptr(), &mut derived),
+                HR_INVALIDARG
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("lock"));
+        match previous {
+            Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
+            None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+        }
+    }
+
+    /// Station et bureau du bac à sable : DuplicateHandle les copie (#2443).
+    #[test]
+    fn duplicatehandle_copie_station_et_bureau() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let station = CreateWindowStation(0, 0, 0x37f, 0);
+            let desktop = CreateDesktop(0, 0, 0, 0, 0x1ff, 0, 0, 0);
+            let me = crate::dlls::kernel32::get_current_process();
+            for h in [station, desktop, WINSTA0, DEFAULT_DESKTOP] {
+                let mut copy = 0usize;
+                assert_eq!(
+                    crate::dlls::kernel32::duplicate_handle(me, h, me, &mut copy, 0, 0, 2),
+                    1,
+                    "{h:#x}"
+                );
+                assert_ne!(copy, 0);
+            }
+            // Un numéro jamais servi reste refusé.
+            let mut copy = 0usize;
+            assert_eq!(
+                crate::dlls::kernel32::duplicate_handle(me, 0x5753_00f0, me, &mut copy, 0, 0, 2),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn station_et_bureau_transmissibles_a_un_autre_processus() {
+        // #2545 : un DuplicateHandle vers un autre processus passe par
+        // inherit::describe puis inherit::adopt_one dans ce processus.
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let station = CreateWindowStation(0, 0, 0x37f, 0);
+            let desktop = CreateDesktop(0, 0, 0, 0, 0x1ff, 0, 0, 0);
+            for (h, recu) in [
+                (WINSTA0, 0x5A7F_0010usize),
+                (station, 0x5A7F_0014),
+                (desktop, 0x5A7F_0018),
+            ] {
+                let (desc, fds) = crate::dlls::inherit::describe(h, false).expect("transmissible");
+                assert!(fds.is_empty(), "{h:#x}");
+                assert!(!is_user_object(recu));
+                let adopte = crate::dlls::inherit::adopt_one(&desc, recu, |_| None);
+                assert_eq!(adopte, Some(recu), "{h:#x}");
+                // Chez le destinataire, le handle reçu se duplique à son tour.
+                assert!(is_user_object(recu));
+                assert!(duplicate_user_object(recu).is_some());
+            }
+            assert!(crate::dlls::inherit::describe(0x5753_00f0, false).is_none());
+        }
+    }
+
+    #[test]
+    fn nom_nt_d_une_cle_du_registre() {
+        let _teb = crate::process::test_teb();
+        let hkcu = crate::registry::new_handle("hkcu\\Software\\Essai2413".into());
+        let hklm = crate::registry::new_handle("hklm".into());
+        let read = |h: usize, class: u32| unsafe {
+            let mut buf = [0u64; 64];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(h, class, buf.as_mut_ptr().cast(), 512, &mut got),
+                0
+            );
+            let b = buf.as_ptr() as *const u8;
+            let n = (b as *const u16).read_unaligned() as usize / 2;
+            let p = (b.add(8) as *const usize).read_unaligned() as *const u16;
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+        };
+        assert_eq!(read(hkcu, 2), "Key");
+        assert_eq!(
+            read(hkcu, 1),
+            format!(
+                "\\REGISTRY\\USER\\{}\\Software\\Essai2413",
+                crate::dlls::security::user_sid()
+            )
+        );
+        assert_eq!(read(hklm, 1), "\\REGISTRY\\MACHINE");
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0004
+            );
+            assert!(got > 16);
+            // Racine prédéfinie : pas un handle d'objet.
+            assert_eq!(
+                NtQueryObject(0x8000_0001, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
+        }
+        crate::registry::close_handle(hkcu);
+        crate::registry::close_handle(hklm);
+        unsafe {
+            let mut small = [0u64; 2];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(hkcu, 1, small.as_mut_ptr().cast(), 16, &mut got),
+                0xC000_0008
+            );
+        }
+    }
+
     #[test]
     fn type_des_handles() {
         let _teb = crate::process::test_teb();
@@ -3515,6 +4060,30 @@ mod tests {
             let mut f = 1usize;
             assert_eq!(RoGetActivationFactory(h, 0, &mut f), REGDB_E_CLASSNOTREG);
             assert_eq!(f, 0);
+            // #2560 : RoActivateInstance active la classe demandée.
+            let inconnue: Vec<u16> = "Pas.Une.Classe".encode_utf16().collect();
+            let mut ih = 0usize;
+            assert_eq!(
+                WindowsCreateString(inconnue.as_ptr(), inconnue.len() as u32, &mut ih),
+                0
+            );
+            let mut inst = 1usize;
+            assert_eq!(RoActivateInstance(ih, &mut inst), REGDB_E_CLASSNOTREG);
+            assert_eq!(inst, 0);
+            assert_eq!(WindowsDeleteString(ih), 0);
+            assert_eq!(RoActivateInstance(ih, std::ptr::null_mut()), E_POINTER);
+            let json: Vec<u16> = "Windows.Data.Json.JsonObject".encode_utf16().collect();
+            let mut jh = 0usize;
+            assert_eq!(
+                WindowsCreateString(json.as_ptr(), json.len() as u32, &mut jh),
+                0
+            );
+            assert_eq!(RoActivateInstance(jh, &mut inst), 0);
+            assert_ne!(inst, 0);
+            let vtbl = *(inst as *const *const usize);
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtbl.add(2));
+            release(inst);
+            assert_eq!(WindowsDeleteString(jh), 0);
             assert!(crate::dlls::lookup("ole32", "WindowsCreateString").is_some());
             assert!(crate::dlls::lookup(
                 &crate::dlls::normalize("combase.dll"),

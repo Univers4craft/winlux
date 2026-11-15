@@ -73,6 +73,9 @@ const IID_COMPOSITOR_INTEROP: Guid = iid("25297d5c-3ad4-4c9c-b5cf-e36a38512330")
 const IID_OBJECT: Guid = iid("bcb4ad45-7609-4550-934f-16002a68fded");
 const IID_VISUAL: Guid = iid("117e202d-a859-4c89-873b-c2aa566788e3");
 const IID_CONTAINER: Guid = iid("02f6bc74-ed20-4773-afe6-d49b4a93db32");
+/// IVisual2 (#2224) : ParentForTransform, RelativeOffsetAdjustment,
+/// RelativeSizeAdjustment.
+const IID_VISUAL2: Guid = iid("3052b611-56c3-4c3e-8bf3-f6e1ad473f06");
 const IID_SPRITE: Guid = iid("08e05581-1ad1-4f97-9757-402d76e4233b");
 const IID_COLLECTION: Guid = iid("8b745505-fd3e-4a98-84a8-e949468c6bcb");
 const IID_BRUSH: Guid = iid("ab0d7608-30c0-40e9-b568-b60a6bd1fb46");
@@ -216,11 +219,13 @@ impl Kind {
             Kind::ContainerVisual => vec![
                 (IID_CONTAINER, CONTAINER_VT.ptr()),
                 (IID_VISUAL, VISUAL_VT.ptr()),
+                (IID_VISUAL2, VISUAL2_VT.ptr()),
             ],
             Kind::SpriteVisual => vec![
                 (IID_SPRITE, SPRITE_VT.ptr()),
                 (IID_CONTAINER, CONTAINER_VT.ptr()),
                 (IID_VISUAL, VISUAL_VT.ptr()),
+                (IID_VISUAL2, VISUAL2_VT.ptr()),
             ],
             Kind::Collection => vec![(IID_COLLECTION, COLLECTION_VT.ptr())],
             Kind::ColorBrush => vec![
@@ -288,6 +293,9 @@ struct Visual {
     scale: [f32; 3],
     size: [f32; 2],
     matrix: [f32; 16],
+    /// IVisual2 (#2224) : mémorisés, sans effet sur le dessin.
+    relative_offset: [f32; 3],
+    relative_size: [f32; 2],
 }
 
 const IDENTITY4: [f32; 16] = [
@@ -311,6 +319,8 @@ impl Default for Visual {
             scale: [1.0; 3],
             size: [0.0; 2],
             matrix: IDENTITY4,
+            relative_offset: [0.0; 3],
+            relative_size: [0.0; 2],
         }
     }
 }
@@ -319,6 +329,8 @@ struct VisualData {
     p: Visual,
     clip: *mut c_void,
     brush: *mut c_void,
+    /// IVisual2::ParentForTransform (tenu, #2224).
+    transform_parent: *mut c_void,
     /// Enfants de bas en haut (tenus).
     children: Vec<*mut Obj>,
     /// Parent (non tenu : il retire ses enfants en mourant).
@@ -494,6 +506,7 @@ unsafe fn destroy(obj: *mut Obj) {
         Data::Visual(v) => {
             com_release(v.clip);
             com_release(v.brush);
+            com_release(v.transform_parent);
             for c in v.children {
                 if let Data::Visual(cv) = &mut lock(&(*c).st).data {
                     cv.parent = std::ptr::null_mut();
@@ -1077,6 +1090,7 @@ unsafe fn new_visual(c: *mut Obj, sprite: bool) -> *mut Obj {
         Data::Visual(Box::new(VisualData {
             p: Visual::default(),
             clip: std::ptr::null_mut(),
+            transform_parent: std::ptr::null_mut(),
             brush: std::ptr::null_mut(),
             children: Vec::new(),
             parent: std::ptr::null_mut(),
@@ -1428,6 +1442,43 @@ unsafe extern "win64" fn get_parent(this: *mut Slot, out: *mut *mut c_void) -> i
     let parent = with_visual(owner(this), |v| v.parent).unwrap_or(std::ptr::null_mut());
     put_iface(out, parent, &IID_CONTAINER)
 }
+
+visual_prop!(
+    get_relative_offset,
+    set_relative_offset,
+    relative_offset,
+    ref [f32; 3]
+);
+visual_prop!(get_relative_size, set_relative_size, relative_size, v2);
+
+unsafe extern "win64" fn get_transform_parent(this: *mut Slot, out: *mut *mut c_void) -> i32 {
+    let p = with_visual(owner(this), |v| v.transform_parent).unwrap_or(std::ptr::null_mut());
+    put_com(out, p)
+}
+
+unsafe extern "win64" fn set_transform_parent(this: *mut Slot, visual: *mut c_void) -> i32 {
+    let obj = owner(this);
+    com_add_ref(visual);
+    let old = with_visual(obj, |v| std::mem::replace(&mut v.transform_parent, visual));
+    com_release(old.unwrap_or(visual));
+    if old.is_none() {
+        return E_FAIL;
+    }
+    S_OK
+}
+
+/// IVisual2 (#2224), ordre des méthodes publié par windows-rs (MIT).
+static VISUAL2_VT: VTable<12> = VTable(table::<12>(
+    &INSPECTABLE,
+    &[
+        get_transform_parent as *const (),
+        set_transform_parent as *const (),
+        get_relative_offset as *const (),
+        set_relative_offset as *const (),
+        get_relative_size as *const (),
+        set_relative_size as *const (),
+    ],
+));
 
 static VISUAL_VT: VTable<39> = VTable(table::<39>(
     &INSPECTABLE,
@@ -2923,6 +2974,57 @@ mod tests {
         h_rel as *const (),
         h_invoke as *const (),
     ]);
+
+    /// Teams (#2224) : un ContainerVisual répond à IVisual2, mémorise
+    /// RelativeOffsetAdjustment, RelativeSizeAdjustment et ParentForTransform.
+    #[test]
+    fn visual2_des_conteneurs_2224() {
+        unsafe {
+            let ctl = default_iface(new_controller());
+            let comp = out0(ctl, 6);
+            let root = out0(comp, 9);
+            let other = out0(comp, 9);
+            let v2 = call_qi(root, &IID_VISUAL2);
+            assert!(!v2.is_null());
+            let set_off: unsafe extern "win64" fn(*mut c_void, *const [f32; 3]) -> i32 =
+                vcall(v2, 9);
+            let get_off: unsafe extern "win64" fn(*mut c_void, *mut [f32; 3]) -> i32 = vcall(v2, 8);
+            assert_eq!(set_off(v2, &[0.5, 0.25, 0.0]), S_OK);
+            let mut o = [9f32; 3];
+            assert_eq!(get_off(v2, &mut o), S_OK);
+            assert_eq!(o, [0.5, 0.25, 0.0]);
+            let set_size: unsafe extern "win64" fn(*mut c_void, u64) -> i32 = vcall(v2, 11);
+            let get_size: unsafe extern "win64" fn(*mut c_void, *mut [f32; 2]) -> i32 =
+                vcall(v2, 10);
+            assert_eq!(
+                set_size(v2, (1f32.to_bits() as u64) << 32 | 0.5f32.to_bits() as u64),
+                S_OK
+            );
+            let mut z = [0f32; 2];
+            assert_eq!(get_size(v2, &mut z), S_OK);
+            assert_eq!(z, [0.5, 1.0]);
+            assert_eq!(get_size(v2, std::ptr::null_mut()), E_POINTER);
+            // ParentForTransform : nul au départ, puis l'autre visuel.
+            let get_p: unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
+                vcall(v2, 6);
+            let set_p: unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32 = vcall(v2, 7);
+            let mut p = 1 as *mut c_void;
+            assert_eq!(get_p(v2, &mut p), S_OK);
+            assert!(p.is_null());
+            let other_vis = call_qi(other, &IID_VISUAL);
+            assert_eq!(set_p(v2, other_vis), S_OK);
+            assert_eq!(get_p(v2, &mut p), S_OK);
+            assert_eq!(p, other_vis);
+            com_release(p);
+            assert_eq!(set_p(v2, std::ptr::null_mut()), S_OK);
+            com_release(other_vis);
+            com_release(v2);
+            com_release(other);
+            com_release(root);
+            com_release(comp);
+            com_release(ctl);
+        }
+    }
 
     #[test]
     fn arbre_de_sprites_compose() {

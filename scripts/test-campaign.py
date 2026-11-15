@@ -260,8 +260,13 @@ with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME":
     calls = []
     apt = store["Apt"].__new__(store["Apt"])
     apt.apt = lambda arguments, progress: calls.append(arguments) or 0
+    apt.installed = lambda: {}
+    apt.autoremovable = lambda suggests=True: {"libgnome-games-support-1-3"}
     store["Apt"].remove(apt, "gnome-mines", None)
-    ok(calls and calls[0][:2] == ["purge", "--autoremove"], "Boutique : désinstaller = purge --autoremove (réglages et dépendances partent)")
+    # #2189 : purge, puis ce qui est devenu inutile, calculé à part.
+    purged = [c for c in calls if "purge" in c]
+    ok(len(purged) >= 2 and "gnome-mines" in purged[0] and "libgnome-games-support-1-3" in purged[1],
+       "Boutique : désinstaller = purge, puis dépendances devenues inutiles (#2189)")
 store_source = (SCRIPTS / "winlux-store.py").read_text()
 ok(store_source.index("write_index(sources, apps, False)") < store_source.index('progress(100, tr(done'),
    "Boutique : index réécrit avant « done » (plus de « Obtenir » après installation)")
@@ -461,7 +466,7 @@ with tempfile.TemporaryDirectory() as directory:
     env.pop("WINLUX_BROWSER", None)
     url = "https://example.invalid/oauth?code=1"
     subprocess.run(["sh", str(ROOT / "integration/winlux-browser"), url], env=env, check=True)
-    ok((base / "ouvert").read_text().split() == [url] and not (base / "system/run/winlux/browser-chooser").exists(),
+    ok((base / "ouvert").read_text().split() == [url] and not (base / f"system/run/winlux/browser-chooser-{os.getuid()}").exists(),
        "lien d'une application : ouvert dans le navigateur installé, sans renvoyer aux Paramètres")
 
 # Retour du testeur sur #418 : lien gardé jamais ouvert après l'installation

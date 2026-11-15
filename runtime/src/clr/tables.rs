@@ -467,6 +467,12 @@ impl CodedIndex {
         }
     }
 
+    /// Valeur codée d'une ligne de `table` (inverse de `decode`).
+    pub fn encode(self, table: TableId, row: u32) -> Option<u32> {
+        let tag = self.tables().iter().position(|t| *t == Some(table))? as u32;
+        Some((row << self.tag_bits()) | tag)
+    }
+
     pub fn decode(self, value: u32) -> (Option<TableId>, u32) {
         let bits = self.tag_bits();
         let tag = value & ((1 << bits) - 1);

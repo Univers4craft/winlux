@@ -942,7 +942,7 @@ mod tests {
             ("dlls::d3d11", "SimpleComVTable", 9),
             ("dlls::d3d11", "DxgiDeviceVTable", 20),
             ("dlls::dxgi", "DxgiAdapterVTable", 19),
-            ("dlls::dxgi", "DxgiSwapChainVTable", 29),
+            ("dlls::dxgi", "DxgiSwapChainVTable", 36),
             ("dlls::dxgi", "DxgiFactoryVTable", 32),
         ] {
             let s = crate::wow32::vtable_sigs(module, name).expect(name);

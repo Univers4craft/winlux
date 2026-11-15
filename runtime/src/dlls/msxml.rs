@@ -432,12 +432,72 @@ unsafe fn put_bool(out: *mut i16, v: bool) -> i32 {
     put(out, if v { VARIANT_TRUE } else { VARIANT_FALSE })
 }
 
+/// Plafond, en unités UTF-16, d'une chaîne d'entrée (16 Mi).
+const STR_MAX: usize = 1 << 24;
+
+/// Chaîne d'entrée venue du programme (#2488). La documentation demande
+/// un BSTR, mais un programme passe parfois une simple chaîne large
+/// (ODT : une chaîne posée sur sa pile), dont les 4 octets qui précèdent
+/// sont quelconques : le préfixe de longueur n'est donc pas lu. Un BSTR
+/// est toujours terminé par un zéro (SysAllocString, SysAllocStringLen) ;
+/// on lit jusqu'au premier zéro, au plus STR_MAX unités, sans jamais
+/// fauter : une page illisible arrête la lecture. Un zéro intérieur ne
+/// perd rien, le caractère U+0000 étant interdit en XML.
 unsafe fn read_bstr(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
-    let len = super::oleaut32::sys_string_len(p) as usize;
-    String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
+    String::from_utf16_lossy(&input_units(p as usize))
+}
+
+/// Unités UTF-16 d'une chaîne d'entrée, lues sans fauter (voir read_bstr).
+fn input_units(addr: usize) -> Vec<u16> {
+    let limit = STR_MAX;
+    let mut units = Vec::new();
+    let mut page = [0u8; 4096];
+    let mut carry: Option<u8> = None;
+    let mut at = addr;
+    while units.len() < limit {
+        let want = (4096 - at % 4096).min((limit - units.len()) * 2 + 1);
+        let n = read_checked(at, &mut page[..want]);
+        for &b in &page[..n] {
+            match carry.take() {
+                None => carry = Some(b),
+                Some(lo) => {
+                    let u = u16::from_le_bytes([lo, b]);
+                    if u == 0 || units.len() == limit {
+                        return units;
+                    }
+                    units.push(u);
+                }
+            }
+        }
+        if n < want {
+            break;
+        }
+        at += n;
+    }
+    units
+}
+
+/// Copie `dst.len()` octets depuis `addr` de ce processus sans jamais
+/// fauter (process_vm_readv) ; rend le nombre d'octets copiés.
+fn read_checked(addr: usize, dst: &mut [u8]) -> usize {
+    if addr < 0x1_0000 || dst.is_empty() {
+        return 0;
+    }
+    let local = libc::iovec {
+        iov_base: dst.as_mut_ptr().cast(),
+        iov_len: dst.len(),
+    };
+    let remote = libc::iovec {
+        iov_base: addr as *mut libc::c_void,
+        iov_len: dst.len(),
+    };
+    // SAFETY : aucune lecture directe ; le noyau refuse proprement une
+    // adresse illisible.
+    let n = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+    n.max(0) as usize
 }
 
 /// VARIANT de sortie : chaîne, ou VT_NULL.
@@ -1904,6 +1964,84 @@ mod tests {
             super::super::oleaut32::sys_free_string(a);
             release(root);
             release(doc);
+        }
+    }
+
+    /// #2488 : une chaîne d'entrée qui n'est pas un BSTR (posée sur la
+    /// pile, préfixe quelconque) est lue jusqu'à son zéro, sans fauter,
+    /// même collée à une page illisible.
+    #[test]
+    fn chaine_du_programme_lue_sans_fauter() {
+        unsafe {
+            // Deux pages : la seconde est illisible.
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                8192,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            ) as *mut u8;
+            assert_ne!(base as *mut c_void, libc::MAP_FAILED);
+            assert_eq!(
+                libc::mprotect(base.add(4096).cast(), 4096, libc::PROT_NONE),
+                0
+            );
+            // « a » et son zéro tout au bout de la page lisible, précédés
+            // d'un préfixe énorme : l'ancien read_bstr lisait 0x7ffffff8
+            // unités et fautait sur la page suivante.
+            let name = base.add(4096 - 4) as *mut u16;
+            std::ptr::write_unaligned(base.add(4096 - 8) as *mut u32, 0xFFFF_FFF0);
+            *name = b'a' as u16;
+            *name.add(1) = 0;
+            assert_eq!(read_bstr(name), "a");
+            // Sans zéro avant la page illisible : lecture arrêtée, pas de faute.
+            let open = base.add(4096 - 6) as *mut u16;
+            for i in 0..3 {
+                *open.add(i) = b'x' as u16;
+            }
+            assert_eq!(read_bstr(open), "xxx");
+            // Adresse impaire, nul, BSTR véritable.
+            let odd = base.add(101);
+            for (i, b) in [b'o', 0, b'k', 0, 0, 0].iter().enumerate() {
+                *odd.add(i) = *b;
+            }
+            assert_eq!(read_bstr(odd as *const u16), "ok");
+            assert_eq!(read_bstr(std::ptr::null()), "");
+            let real = bstr("héllo");
+            assert_eq!(read_bstr(real), "héllo");
+            super::super::oleaut32::sys_free_string(real);
+
+            // Par la vraie table : getAttribute (méthode 44) avec le nom
+            // « a » au bout de la page, rétabli après le cas sans zéro.
+            *name = b'a' as u16;
+            *name.add(1) = 0;
+            let clsid = CLASSES[5].0;
+            let mut out: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                create_builtin(&clsid, &IID_IXMLDOMDOCUMENT2, &mut out),
+                Some(S_OK)
+            );
+            let doc = out as *mut Obj;
+            let text = bstr("<r a=\"1\"/>");
+            let mut ok = 0i16;
+            let load_xml: unsafe extern "win64" fn(*mut Obj, *const u16, *mut i16) -> i32 =
+                call(doc, 65);
+            assert_eq!(load_xml(doc, text, &mut ok), S_OK);
+            super::super::oleaut32::sys_free_string(text);
+            let get_root: unsafe extern "win64" fn(*mut Obj, *mut *mut Obj) -> i32 = call(doc, 45);
+            let mut root = std::ptr::null_mut();
+            assert_eq!(get_root(doc, &mut root), S_OK);
+            let get_attr: unsafe extern "win64" fn(*mut Obj, *const u16, *mut u8) -> i32 =
+                call(root, 44);
+            let mut buf = [0u64; 3];
+            let v = &mut *(buf.as_mut_ptr() as *mut [u8; 24]);
+            assert_eq!(get_attr(root, name, v.as_mut_ptr()), S_OK);
+            assert_eq!(variant_text(v.as_ptr()).as_deref(), Some("1"));
+            super::super::oleaut32::variant_clear(v.as_mut_ptr().cast());
+            release(root);
+            release(doc);
+            libc::munmap(base.cast(), 8192);
         }
     }
 }

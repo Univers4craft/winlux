@@ -593,6 +593,43 @@ def redesign_taskbar(panel_config, marker_folder, rc_folder):
 redesign_taskbar(panel_config, home / ".config/winlux", home / ".config/xfce4/panel")
 
 
+# Repère du bloc de droite (#2467) : genmon 46 d'un pixel juste après le
+# séparateur 8, posé avant le lancement de la barre et dans l'ordre exact de
+# `winlux-control align-*` (sans quoi la remise en ordre de l'ouverture de
+# session relancerait la barre). Le bloc de droite commence souvent par un
+# greffon interne sans fenêtre X (bouton de l'assistant) : sans ce repère, le
+# contrepoids ne le mesurait pas et le groupe centré tombait à gauche. Barre
+# classique seulement (3 suivi du contrepoids 13) ; la flottante n'en a pas.
+def add_balance_edge(panel_config, rc_folder):
+    """Ajoute le repère 46 après le séparateur 8 ; True si le fichier a changé."""
+    if not panel_config.is_file():
+        return False
+    try:
+        tree = ET.parse(panel_config)
+        root = tree.getroot()
+        plugins = next((item for item in root if item.get("name") == "plugins"), None)
+        panel = next((item for top in root if top.get("name") == "panels" for item in top if item.get("name") == "panel-1"), None)
+        ids = next((item for item in panel if item.get("name") == "plugin-ids"), None) if panel is not None else None
+        if plugins is None or ids is None:
+            return False
+        values = [value.get("value") for value in ids]
+        if "46" in values or "3" not in values or "8" not in values or values[values.index("3") + 1:values.index("3") + 2] != ["13"]:
+            return False
+        if not any(plugin.get("name") == "plugin-46" for plugin in plugins):
+            _set_genmon(ET.SubElement(plugins, "property", {"name": "plugin-46", "type": "string"}), rc_folder,
+                        "/usr/bin/winlux-tray edge", 600000)
+        ids.insert(values.index("8") + 1, ET.Element("value", {"type": "int", "value": "46"}))
+        temporary = panel_config.with_name(panel_config.name + ".tmp")
+        tree.write(temporary, encoding="UTF-8", xml_declaration=True)
+        temporary.replace(panel_config)
+        return True
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        return False
+
+
+add_balance_edge(panel_config, home / ".config/xfce4/panel")
+
+
 # Couleurs de la barre (#703) : elles vivent dans le thème GTK du compte
 # (winlux-personalize), que la barre recharge en direct au passage clair ↔
 # sombre. Les anciennes lignes de tête de ~/.config/gtk-3.0/gtk.css (barre
@@ -862,19 +899,32 @@ if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver
 # serveur X à son premier affichage : l'écran ne se mettait plus jamais en
 # veille. Ajouté aux fichiers déjà copiés qui ne le précisent pas ; un choix
 # fait dans les réglages de l'économiseur (clé présente) est gardé.
+# #2148 : les anciens délais DPMS du modèle (0:10:00, recopiés dans le serveur
+# X par xscreensaver-gfx) éteignaient l'écran à 10 min même avec « Jamais »
+# dans Paramètres > Alimentation. Ils prennent la valeur du modèle quand les
+# trois valent encore 0:10:00 ; des délais choisis à la main sont gardés.
 def migrate_xscreensaver(path, template):
     try:
         text = path.read_text(encoding="utf-8")
         wanted = [line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("dpms")]
     except (OSError, UnicodeDecodeError):
         return
-    if any(line.split(":", 1)[0].strip() == "dpmsEnabled" for line in text.splitlines()): return
-    present = {line.split(":", 1)[0].strip() for line in text.splitlines() if ":" in line}
-    added = [line for line in wanted if line.split(":", 1)[0].strip() not in present]
-    if not added: return
+    lines = text.splitlines()
+    key = lambda line: line.split(":", 1)[0].strip()
+    value = lambda line: line.split(":", 1)[1].strip() if ":" in line else ""
+    delays = ("dpmsStandby", "dpmsSuspend", "dpmsOff")
+    template_values = {key(line): line for line in wanted}
+    old = [line for line in lines if key(line) in delays]
+    if len(old) == 3 and all(value(line) == "0:10:00" for line in old) and all(k in template_values for k in delays):
+        lines = [template_values[key(line)] if key(line) in delays else line for line in lines]
+    if not any(key(line) == "dpmsEnabled" for line in lines):
+        present = {key(line) for line in lines if ":" in line}
+        lines += [line for line in wanted if key(line) not in present]
+    new_text = "\n".join(lines) + "\n" if lines else text
+    if new_text == text: return
     try:
         temporary = path.with_name(".xscreensaver.tmp")
-        temporary.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(added) + "\n", encoding="utf-8")
+        temporary.write_text(new_text, encoding="utf-8")
         temporary.replace(path)
     except OSError:
         pass

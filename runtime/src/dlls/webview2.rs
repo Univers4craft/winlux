@@ -243,6 +243,8 @@ enum Family {
     Message,
     ContentLoading,
     SourceChanged,
+    ControllerOptions,
+    ProcessCollection,
 }
 
 impl Family {
@@ -257,6 +259,8 @@ impl Family {
             Family::Message => &MESSAGE_ARGS_IIDS,
             Family::ContentLoading => &CONTENT_LOADING_ARGS_IIDS,
             Family::SourceChanged => &SOURCE_CHANGED_ARGS_IIDS,
+            Family::ControllerOptions => &CONTROLLER_OPTIONS_IIDS,
+            Family::ProcessCollection => &PROCESS_COLLECTION_IIDS,
         }
     }
 }
@@ -272,6 +276,15 @@ struct Args {
     string: Option<String>,
 }
 
+/// Réglages d'un ICoreWebView2ControllerOptions (#2570).
+#[derive(Default, Clone)]
+struct ControllerOpts {
+    profile: String,
+    private: bool,
+    locale: String,
+    background: Option<u32>,
+}
+
 #[repr(C)]
 struct Com {
     vtbl: *const usize,
@@ -280,6 +293,7 @@ struct Com {
     env: Option<Arc<Env>>,
     view: Option<Arc<View>>,
     args: Args,
+    opts: Mutex<ControllerOpts>,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -290,6 +304,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         env,
         view,
         args,
+        opts: Mutex::new(ControllerOpts::default()),
     });
     Box::into_raw(b) as usize
 }
@@ -339,6 +354,44 @@ extern "win64" fn not_implemented() -> i32 {
     E_NOTIMPL
 }
 
+/// Méthodes `add_X` de chaque famille (rang après IUnknown ; `remove_X`
+/// suit toujours au rang suivant), dans l'ordre de l'IDL public WebView2
+/// (SDK 1.0.2849.39, chaînes de `webview2_iids.rs`) (#2547).
+fn event_slots(family: Family) -> &'static [usize] {
+    match family {
+        // ICoreWebView2 … ICoreWebView2_27 : NavigationStarting (4),
+        // ContentLoading, SourceChanged, HistoryChanged, NavigationCompleted,
+        // FrameNavigationStarting, FrameNavigationCompleted,
+        // ScriptDialogOpening, PermissionRequested, ProcessFailed (22),
+        // WebMessageReceived (31), NewWindowRequested (41),
+        // DocumentTitleChanged (43), ContainsFullScreenElementChanged (49),
+        // WebResourceRequested (52), WindowCloseRequested (56),
+        // WebResourceResponseReceived (58), DOMContentLoaded (61),
+        // FrameCreated (70), DownloadStarting (72),
+        // ClientCertificateRequested (74), IsMutedChanged (78),
+        // IsDocumentPlayingAudioChanged (82),
+        // IsDefaultDownloadDialogOpenChanged (85),
+        // BasicAuthenticationRequested (94), ContextMenuRequested (97),
+        // StatusBarTextChanged (99), ServerCertificateErrorDetected (103),
+        // FaviconChanged (106), LaunchingExternalUriScheme (114),
+        // NotificationReceived (123), SaveAsUIShowing (125),
+        // SaveFileSecurityCheckStarting (128), ScreenCaptureStarting (130).
+        Family::WebView => &[
+            4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 31, 41, 43, 49, 52, 56, 58, 61, 70, 72, 74, 78,
+            82, 85, 94, 97, 99, 103, 106, 114, 123, 125, 128, 130,
+        ],
+        // ICoreWebView2Controller … Controller4 : ZoomFactorChanged (6),
+        // MoveFocusRequested (10), GotFocus (12), LostFocus (14),
+        // AcceleratorKeyPressed (16), RasterizationScaleChanged (29).
+        Family::Controller => &[6, 10, 12, 14, 16, 29],
+        // ICoreWebView2Environment … Environment14 :
+        // NewBrowserVersionAvailable (3), BrowserProcessExited (9),
+        // ProcessInfosChanged (13).
+        Family::Environment => &[3, 9, 13],
+        _ => &[],
+    }
+}
+
 /// Table virtuelle d'une famille : IUnknown, les méthodes écrites, et
 /// E_NOTIMPL pour le reste de la chaîne de versions.
 fn vtable(family: Family) -> &'static [usize] {
@@ -358,11 +411,21 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::Message => (MESSAGE_ARGS_SLOTS, message_methods()),
         Family::ContentLoading => (CONTENT_LOADING_ARGS_SLOTS, content_loading_methods()),
         Family::SourceChanged => (SOURCE_CHANGED_ARGS_SLOTS, source_changed_methods()),
+        Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
+        Family::ProcessCollection => (PROCESS_COLLECTION_SLOTS, process_collection_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
     v[1] = com_add_ref as *const () as usize;
     v[2] = com_release as *const () as usize;
+    // Toute inscription à un événement est acceptée, même pour un
+    // événement que Winlux ne déclenche jamais (#2547) : add_X rend un jeton,
+    // remove_X l'accepte. Un E_NOTIMPL ici fait lever une exception à
+    // l'application qui s'abonne (Teams, #2511).
+    for &add in event_slots(family) {
+        v[3 + add] = add_ignored as *const () as usize;
+        v[3 + add + 1] = remove_ignored as *const () as usize;
+    }
     for (i, f) in methods {
         v[3 + i] = f;
     }
@@ -583,7 +646,156 @@ fn environment_methods() -> Vec<(usize, usize)> {
         (2, env_browser_version as *const () as usize),
         (3, add_ignored as *const () as usize),
         (4, remove_ignored as *const () as usize),
+        // ICoreWebView2Environment10 (#2570).
+        (17, env_create_controller_options as *const () as usize),
+        (18, env_create_controller_with_options as *const () as usize),
+        // ICoreWebView2Environment8 / 13 : processus du moteur (#2581).
+        (15, env_get_process_infos as *const () as usize),
+        (22, env_get_process_extended_infos as *const () as usize),
     ]
+}
+
+/// ICoreWebView2Environment8::GetProcessInfos : collection des processus
+/// du navigateur. Le moteur de Winlux (WebKitGTK) n'expose pas de
+/// processus au sens de WebView2 : la collection est vide (#2581).
+unsafe extern "win64" fn env_get_process_infos(_this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(Family::ProcessCollection, None, None, Args::default());
+    S_OK
+}
+
+/// ICoreWebView2Environment13::GetProcessExtendedInfos(handler) : rappel
+/// asynchrone (boucle de messages, comme les autres rappels) avec S_OK et
+/// une collection vide (#2581).
+unsafe extern "win64" fn env_get_process_extended_infos(this: usize, handler: usize) -> i32 {
+    if handler == 0 {
+        return E_INVALIDARG;
+    }
+    let Some(env) = com(this).env.clone() else {
+        return E_FAIL;
+    };
+    add_ref(handler);
+    let obj = new_com(Family::ProcessCollection, None, None, Args::default());
+    post(
+        env.dispatcher,
+        Box::new(move || unsafe {
+            invoke(handler, S_OK as usize, obj);
+            release(obj);
+            release(handler);
+        }),
+    );
+    S_OK
+}
+
+// --- ICoreWebView2ProcessInfoCollection / …ExtendedInfoCollection ---
+
+fn process_collection_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, collection_count as *const () as usize),
+        (1, collection_value_at as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn collection_count(_this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+unsafe extern "win64" fn collection_value_at(_this: usize, _index: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    E_INVALIDARG
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerOptions : un
+/// objet de réglages neuf (profil vide, navigation privée désactivée).
+unsafe extern "win64" fn env_create_controller_options(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::ControllerOptions,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
+    S_OK
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerWithOptions :
+/// comme CreateCoreWebView2Controller. Les réglages (profil, navigation
+/// privée, langue des scripts, couleur de fond) restent dans leur objet :
+/// le moteur WebKitGTK de Winlux n'a qu'un profil par dossier de données,
+/// et la couleur se règle ensuite par put_DefaultBackgroundColor.
+unsafe extern "win64" fn env_create_controller_with_options(
+    this: usize,
+    parent: usize,
+    _options: usize,
+    handler: usize,
+) -> i32 {
+    env_create_controller(this, parent, handler)
+}
+
+// --- ICoreWebView2ControllerOptions (…3) ---
+
+fn controller_options_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, opt_get_profile as *const () as usize),
+        (1, opt_put_profile as *const () as usize),
+        (2, opt_get_private as *const () as usize),
+        (3, opt_put_private as *const () as usize),
+        (4, opt_get_locale as *const () as usize),
+        (5, opt_put_locale as *const () as usize),
+        (6, opt_get_background as *const () as usize),
+        (7, opt_put_background as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn opt_get_profile(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).profile.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_profile(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).profile = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_private(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&com(this).opts).private);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_private(this: usize, on: i32) -> i32 {
+    super::lock(&com(this).opts).private = on != 0;
+    S_OK
+}
+unsafe extern "win64" fn opt_get_locale(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).locale.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_locale(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).locale = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_background(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // COREWEBVIEW2_COLOR : blanc opaque par défaut (documentation de
+    // DefaultBackgroundColor).
+    *out = super::lock(&com(this).opts)
+        .background
+        .unwrap_or(0xFFFF_FFFF);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_background(this: usize, color: u32) -> i32 {
+    super::lock(&com(this).opts).background = Some(color);
+    S_OK
 }
 
 unsafe extern "win64" fn env_browser_version(_this: usize, out: *mut *mut u16) -> i32 {
@@ -1731,6 +1943,114 @@ mod tests {
         assert_eq!(
             vtable(Family::WebView)[3 + 58 + 7 + 3],
             web_map_host as *const () as usize
+        );
+    }
+
+    /// #2547 : aucune inscription à un événement ne rend E_NOTIMPL, et
+    /// l'inscription rend un jeton que la désinscription accepte.
+    #[test]
+    fn inscriptions_aux_evenements_acceptees_2547() {
+        let stub = not_implemented as *const () as usize;
+        for (family, slots) in [
+            (Family::WebView, WEBVIEW_SLOTS),
+            (Family::Controller, CONTROLLER_SLOTS),
+            (Family::Environment, ENVIRONMENT_SLOTS),
+        ] {
+            let v = vtable(family);
+            for &add in event_slots(family) {
+                assert!(3 + add + 1 < slots);
+                assert_ne!(v[3 + add], stub, "add_ au rang {add}");
+                assert_ne!(v[3 + add + 1], stub, "remove_ au rang {}", add + 1);
+            }
+        }
+        // ICoreWebView2Environment5 : add_BrowserProcessExited (rang 9).
+        let add: unsafe extern "win64" fn(usize, usize, *mut i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 9]) };
+        let remove: unsafe extern "win64" fn(usize, i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 10]) };
+        let mut token = 0i64;
+        assert_eq!(unsafe { add(0, 0, &mut token) }, S_OK);
+        assert_ne!(token, 0);
+        assert_eq!(unsafe { remove(0, token) }, S_OK);
+        // ICoreWebView2Controller3 : add_RasterizationScaleChanged (rang 29).
+        assert_eq!(
+            vtable(Family::Controller)[3 + 29],
+            add_ignored as *const () as usize
+        );
+    }
+
+    /// #2570 : ICoreWebView2Environment10 rend un objet de réglages de
+    /// contrôleur dont les propriétés se relisent.
+    #[test]
+    fn reglages_de_controleur_2570() {
+        let env = vtable(Family::Environment);
+        assert_eq!(
+            env[3 + 17],
+            env_create_controller_options as *const () as usize
+        );
+        assert_eq!(
+            env[3 + 18],
+            env_create_controller_with_options as *const () as usize
+        );
+        let envobj = new_com(Family::Environment, None, None, Args::default());
+        let mut opts = 0usize;
+        assert_eq!(
+            unsafe { env_create_controller_options(envobj, &mut opts) },
+            S_OK
+        );
+        assert_ne!(opts, 0);
+        let vt = vtable(Family::ControllerOptions);
+        assert_eq!(vt.len(), CONTROLLER_OPTIONS_SLOTS);
+        let mut out = 0usize;
+        let iid = CONTROLLER_OPTIONS_IIDS[2].as_ptr();
+        assert_eq!(query_interface(opts, iid, &mut out), S_OK);
+        unsafe {
+            assert_eq!(opt_put_private(opts, 1), S_OK);
+            let mut on = 0i32;
+            assert_eq!(opt_get_private(opts, &mut on), S_OK);
+            assert_eq!(on, 1);
+            let mut color = 0u32;
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0xFFFF_FFFF);
+            assert_eq!(opt_put_background(opts, 0x00FF_0000), S_OK);
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0x00FF_0000);
+            com_release(out);
+            com_release(opts);
+            com_release(envobj);
+        }
+    }
+
+    /// #2581 : GetProcessInfos et GetProcessExtendedInfos rendent une
+    /// collection vide au lieu d'E_NOTIMPL.
+    #[test]
+    fn processus_du_moteur_2581() {
+        let env = vtable(Family::Environment);
+        assert_eq!(env[3 + 15], env_get_process_infos as *const () as usize);
+        assert_eq!(
+            env[3 + 22],
+            env_get_process_extended_infos as *const () as usize
+        );
+        let mut list = 0usize;
+        assert_eq!(unsafe { env_get_process_infos(0, &mut list) }, S_OK);
+        let mut out = 0usize;
+        for iid in PROCESS_COLLECTION_IIDS.iter() {
+            assert_eq!(query_interface(list, iid.as_ptr(), &mut out), S_OK);
+            com_release(out);
+        }
+        let mut n = 7u32;
+        assert_eq!(unsafe { collection_count(list, &mut n) }, S_OK);
+        assert_eq!(n, 0);
+        assert_eq!(
+            unsafe { collection_value_at(list, 0, &mut out) },
+            E_INVALIDARG
+        );
+        assert_eq!(out, 0);
+        com_release(list);
+        // Sans gestionnaire : E_INVALIDARG, rien n'est posté.
+        assert_eq!(
+            unsafe { env_get_process_extended_infos(0, 0) },
+            E_INVALIDARG
         );
     }
 }

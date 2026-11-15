@@ -1716,3 +1716,27 @@ fn threadpool_wait_pulse_et_begin_invoke() {
     );
     assert_eq!(lancer(&b.build(main), None), 1149);
 }
+
+/// Une primitive qui lit une chaîne ne lit que des `System.String` du tas :
+/// un tableau passé à sa place se lit comme la chaîne vide (#2037).
+#[test]
+fn seule_une_chaine_se_lit_comme_une_chaine() {
+    use super::{bcl, gc, types};
+    let _verrou = SERIE.lock().unwrap_or_else(|e| e.into_inner());
+    types::init();
+    gc::init();
+    let texte = bcl::alloc_managed_string("été").as_ref();
+    assert_eq!(bcl::read_managed_string(texte), "été");
+    assert_eq!(
+        bcl::managed_utf16(texte),
+        "été".encode_utf16().collect::<Vec<_>>()
+    );
+    // Un int[] de 1000 éléments : sa première case n'est pas une longueur.
+    let entiers = gc::with_gc(|gc| gc.alloc_array_of(types::TYPE_INT32, 4, 1000));
+    assert!(bcl::managed_utf16(entiers).is_empty());
+    assert!(bcl::read_managed_string(entiers).is_empty());
+    let mut hors_tas = [0x7FFF_FFFFu64, 0];
+    let p = hors_tas.as_mut_ptr() as *mut u8;
+    assert!(bcl::managed_utf16(p).is_empty());
+    assert!(bcl::managed_utf16(std::ptr::null_mut()).is_empty());
+}

@@ -56,7 +56,8 @@ with tempfile.TemporaryDirectory() as tmp:
     env["WINLUX_STORE_CONFIRM"] = str(bindir / "confirm")
 
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---
-    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
+    mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n"
+         "[ -n \"${DPKG_MORE:-}\" ] && printf '%b' \"$DPKG_MORE\"\nexit 0\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
     mock(bindir, "apt-cache", """case "$1" in
 policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad|inconnu) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
@@ -64,9 +65,16 @@ show) printf 'Package: gimp\\nVersion: 2.10.36-3\\nInstalled-Size: 20480\\nHomep
 esac
 """)
     mock(bindir, "apt-get", """printf 'apt-get %s\\n' "$*" >> "$LOG"
+case " $* " in *" -s "*autoremove*)
+  # Simulation (#2189) : sans les suggestions, systemd-container devient inutile.
+  case " $* " in *SuggestsImportant=false*) printf 'Remv systemd-container [1]\\nRemv libfoo [1]\\n';; esac
+  [ -n "${AUTOREMOVE_MORE:-}" ] && printf '%b' "$AUTOREMOVE_MORE"
+  printf 'Remv libinutile [1]\\nRemv vlc-l10n [1]\\n'; exit 0;;
+esac
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
 eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
+eval "echo 'pmstatus:shared-mime-info:99.0:Processing triggers for shared-mime-info (2.4-4)' >&$fd"
 printf 'LC_ALL=%s\\n' "$LC_ALL" >> "$LOG"
 """)
     mock(bindir, "id", "echo 0\n")
@@ -183,6 +191,8 @@ esac
     (conf / "local.json").write_text(json.dumps({"id": "local", "name": "Catalogue local", "file": str(catalog)}))
     mock(bindir, "winlux", 'printf "winlux %s\\n" "$*" >> "$LOG"\n'
          'if [ "$1" = --msiexec ] && [ "$2" = --info ]; then printf "{AAAA-BBBB}\\tApp\\t1\\n"; fi\n')
+    # Page du contrat de licence (#2129) : paquet sans contrat, l'installation suit.
+    mock(bindir, "winlux-setup-wizard", 'printf "assistant %s\\n" "$*" >> "$LOG"\nexit 0\n')
 
     # --- Dépôt Scoop (archive .tar.gz de manifestes) ---
     pe64 = b"MZ" + b"\0" * 0x3A + (0x40).to_bytes(4, "little") + b"PE\0\0\x64\x86" + b"\0" * 64
@@ -265,6 +275,15 @@ esac
     progress = (run / "store-progress.txt").read_text()
     check("state=done" in progress and "percent=100" in progress, "installation apt terminée")
     check("install --no-install-recommends -- gimp" in log.read_text(), "commande apt")
+    # Paquets compagnons (#2075) : virt-manager arrive avec QEMU et le pilote
+    # libvirt dans le même appel apt (une seule autorisation, #2199), jamais
+    # libvirt-daemon-system (systemd).
+    st("install", "apt:virt-manager")
+    text = log.read_text()
+    check("install --no-install-recommends -- virt-manager qemu-system-x86 " in text
+          and "--mark-auto -- qemu-system-x86" not in text
+          and "libvirt-daemon-driver-qemu" in text and "libvirt-daemon-system" not in text,
+          "compagnons de virt-manager (#2075)")
     st("update", "flatpak:org.kde.krita")
     check("flatpak update org.kde.krita -y --noninteractive" in log.read_text(), "mise à jour Flatpak")
     env["CONFIRM_ANSWER"] = "1"
@@ -391,10 +410,39 @@ esac
     check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
     # Désinstallation apt, et toutes les commandes apt-get du Store acceptées par
     # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
+    # Compagnons du catalogue (#2075) propres au test, à côté du vrai catalogue.
+    catalog2189 = w / "catalogue-2189.txt"
+    catalog2189.write_text((project / "integration/store-catalog.txt").read_text()
+                           + "compagnons=vlc:vlc-l10n\ncompagnons=remmina:remmina-plugin-rdp,remmina-plugin-vnc\n")
+    env["WINLUX_STORE_CATALOG"] = str(catalog2189)
+    statef = home / ".local/share/winlux/store-state.json"
+    state = json.loads(statef.read_text()) if statef.exists() else {}
+    state.setdefault("apt", {})["vlc"] = ["systemd-container", "vlc-l10n"]
+    statef.write_text(json.dumps(state))
     st("remove", "apt:vlc")
-    check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
+    text = log.read_text()
+    check("purge -- vlc\n" in text, "désinstallation apt")
+    # #2189 : ce que l'installation a apporté part, même retenu par une seule
+    # suggestion ; ce qui n'est pas à elle ne part que si apt le retirerait d'office.
+    check("purge -- libinutile systemd-container\n" in text and "libfoo" not in text.split("purge -- vlc")[1].split("\n")[1],
+          "désinstallation : paquets apportés retirés, le reste gardé (#2189)")
+    check("vlc" not in json.loads(statef.read_text()).get("apt", {}), "trace de l'installation effacée")
+    # #2189 : désinstaller Knights ne retire pas le compagnon d'un logiciel
+    # encore installé (le QEMU de virt-manager partait), et le remet s'il manque.
+    env["DPKG_MORE"] = "remmina\\tii \\t1.4\\t100\\nremmina-plugin-vnc\\tii \\t1.4\\t100\\n"
+    env["AUTOREMOVE_MORE"] = "Remv remmina-plugin-vnc [1]\\n"
+    st("remove", "apt:knights")
+    env.pop("DPKG_MORE"); env.pop("AUTOREMOVE_MORE")
+    env["WINLUX_STORE_CATALOG"] = str(project / "integration/store-catalog.txt")
+    after = log.read_text()[len(text):]
+    check("purge -- knights\n" in after and not any(l.startswith("apt-get purge") and "remmina-plugin-vnc" in l for l in after.splitlines()),
+          "compagnon d'un logiciel restant jamais retiré (#2189)")
+    check("install --no-install-recommends --mark-auto -- remmina-plugin-rdp vlc-l10n\n" in after,
+          "compagnon manquant d'un logiciel restant remis (#2189)")
     relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
-    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
+    # Les simulations (-s, #2189, #2234) tournent sans droits, hors du relais.
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ") and " -s " not in l
+                 and not l.startswith("apt-get -s ")]
     check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
     for args in apt_lines:
         check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")
@@ -410,13 +458,16 @@ esac
         check(apt_message("pmstatus", "Unpacking abiword:amd64 (3.0.5-1)") != "Unpacking abiword:amd64 (3.0.5-1)",
               f"décompression traduite ({lang})")
         check(apt_message("dlstatus", "Retrieving file 1 of 3") == ns["T"][lang]["apt_download"], f"téléchargement ({lang})")
+        check("shared-mime-info" in apt_message("pmstatus", "Processing triggers for shared-mime-info (2.4-4)")
+              and apt_message("pmstatus", "Processing triggers for shared-mime-info (2.4-4)") != ns["T"][lang]["apt_working"],
+              f"déclencheurs de dpkg expliqués ({lang}, #2186)")
         check(apt_message("pmstatus", "Quelque chose d'inconnu") == ns["T"][lang]["apt_working"], f"repli générique ({lang})")
     check("Installed abiword" not in (run / "store-progress.txt").read_text(), "pas d'anglais brut dans le Store")
 
     # Sélection de l'équipe (#716) : au moins 250 logiciels, chacun décrit
     # dans les quatre langues, rangés dans une catégorie connue.
     rows = [l.split("|") for l in (project / "integration/store-catalog.txt").read_text().splitlines()
-            if l and not l.startswith("#") and not l.startswith("featured=")]
+            if l and not l.startswith("#") and not l.startswith(("featured=", "compagnons="))]
     check(len(rows) >= 250, f"sélection étendue ({len(rows)} logiciels)")
     check(all(len(r) == 9 and all(r[5:]) for r in rows), "descriptions fr/en/es/de")
     check(all(r[1] in ns["CATEGORIES"] for r in rows), "catégories connues")

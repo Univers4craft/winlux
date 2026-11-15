@@ -8,6 +8,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const ERROR_ACCESS_DENIED: i32 = 5;
 const ERROR_INVALID_HANDLE: i32 = 6;
+const ERROR_INVALID_DATA: i32 = 13;
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
 const ERROR_CALL_NOT_IMPLEMENTED: i32 = 120;
@@ -21,6 +22,8 @@ const SERVICE_START_PENDING: u32 = 2;
 const SERVICE_STOP_PENDING: u32 = 3;
 const SERVICE_RUNNING: u32 = 4;
 const SERVICE_CONTROL_STOP: u32 = 1;
+const SERVICE_WIN32_SHARE_PROCESS: u32 = 0x20;
+const SERVICE_AUTO_START: u32 = 2;
 const SERVICE_CONTROL_INTERROGATE: u32 = 4;
 
 struct ServiceRecord {
@@ -211,6 +214,17 @@ fn spawn_service(record: &mut ServiceRecord, args: &[String]) -> Result<(), u32>
     };
     command.args(argv.iter());
     command.env("WINLUX_SERVICE_NAME", &record.name);
+    // Sous Windows, le processus d'un service est créé par le SCM, pas par
+    // l'appelant de StartService : il n'hérite d'aucun de ses handles. Ici,
+    // il est l'enfant de l'appelant ; sans cela, il gardait ouverts les
+    // tubes de sortie de l'action personnalisée qui l'a démarré, et
+    // l'installeur, qui lit ces tubes jusqu'à leur fin, attendait aussi
+    // longtemps que le service tournait (#2529 : StartArmService d'Acrobat).
+    // Son journal reste dans WINLUX_JOURNAL_DIR.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     let _ = std::fs::remove_file(control_sock_path(&record.name).with_extension("state"));
     record.state = SERVICE_START_PENDING;
     let child = command.spawn().map_err(|e| {
@@ -262,6 +276,10 @@ fn reported_state(name: &str) -> Option<u32> {
 }
 
 fn refresh(record: &mut ServiceRecord) {
+    // Service système (#1845) : état tenu en mémoire, aucun processus.
+    if system_service(&record.name).is_some() {
+        return;
+    }
     // Pilote Windows (#1532) : jamais de processus, état tenu par Winlux.
     if is_driver(record.service_type) {
         record.state = if driver_started(record) {
@@ -445,7 +463,10 @@ unsafe fn create_service(
         }
     }
     let key = raw.to_lowercase();
-    if lock(services()).contains_key(&key) || load_persisted(&key).is_some() {
+    if lock(services()).contains_key(&key)
+        || load_persisted(&key).is_some()
+        || system_service(&key).is_some()
+    {
         crate::process::set_last_error(ERROR_SERVICE_EXISTS as u32);
         return 0;
     }
@@ -629,6 +650,41 @@ pub(crate) fn install_driver_service(s: &crate::dlls::drivers::DriverService) ->
     Ok(())
 }
 
+/// Services système de Windows que des installeurs arrêtent puis
+/// redémarrent autour de leur travail (`-temp-down-service`, #1845) : nom de
+/// service (identifiant de l'API) et nom affiché, rédigé par Winlux. Leur
+/// rôle est tenu par Winlux lui-même (pile audio, périphériques d'entrée) :
+/// ils sont toujours présents et démarrés, et un arrêt ou un démarrage
+/// demandé par un programme ne change que l'état vu par ce programme.
+const SYSTEM_SERVICES: &[(&str, &str)] = &[
+    ("audiosrv", "Audio"),
+    ("hidserv", "Périphériques d'entrée (HID)"),
+];
+
+/// Nom affiché d'un service système de [`SYSTEM_SERVICES`].
+fn system_service(name: &str) -> Option<&'static str> {
+    SYSTEM_SERVICES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, d)| *d)
+}
+
+/// Enregistrement d'un service système : processus partagé, démarrage
+/// automatique, en cours d'exécution, jamais inscrit dans le registre.
+fn system_record(key: &str, display: &str) -> ServiceRecord {
+    ServiceRecord {
+        name: key.to_string(),
+        display: display.to_string(),
+        command: "C:\\Windows\\System32\\svchost.exe".to_string(),
+        service_type: SERVICE_WIN32_SHARE_PROCESS,
+        start_type: SERVICE_AUTO_START,
+        state: SERVICE_RUNNING,
+        win32_exit_code: 0,
+        process_id: 0,
+        child: None,
+    }
+}
+
 fn open_service(manager: usize, name: Option<String>) -> usize {
     if !matches!(handle(manager), Some(ScmHandle::Manager)) {
         crate::process::set_last_error(6);
@@ -642,6 +698,8 @@ fn open_service(manager: usize, name: Option<String>) -> usize {
     if !lock(services()).contains_key(&key) {
         if let Some(r) = load_persisted(&key) {
             lock(services()).insert(key.clone(), r);
+        } else if let Some(display) = system_service(&key) {
+            lock(services()).insert(key.clone(), system_record(&key, display));
         } else {
             // WINLUX_TRACE : le nom demandé et l'erreur rendue, pour les
             // installeurs qui s'arrêtent sur un service absent (#1659, #1699).
@@ -677,6 +735,13 @@ fn start_service(service: usize, extra: Vec<String>) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if system_service(&name).is_some() {
+        if r.state == SERVICE_RUNNING {
+            return fail(ERROR_SERVICE_ALREADY_RUNNING as u32);
+        }
+        r.state = SERVICE_RUNNING;
+        return 1;
+    }
     if is_driver(r.service_type) {
         return match start_driver(r) {
             Ok(()) => 1,
@@ -814,6 +879,13 @@ pub unsafe extern "win64" fn control_service(service: usize, control: u32, statu
         SERVICE_CONTROL_STOP => {
             if r.state != SERVICE_RUNNING {
                 return fail(ERROR_SERVICE_NOT_ACTIVE as u32);
+            }
+            if system_service(&name).is_some() {
+                r.state = SERVICE_STOPPED;
+                if !status.is_null() {
+                    write_status_basic(r, status);
+                }
+                return 1;
             }
             if is_driver(r.service_type) {
                 let _ = std::fs::remove_file(driver_state_path(&name));
@@ -959,6 +1031,9 @@ pub unsafe extern "win64" fn delete_service(service: usize) -> i32 {
         return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);
     };
     refresh(r);
+    if system_service(&name).is_some() {
+        return fail(ERROR_ACCESS_DENIED as u32);
+    }
     if r.state == SERVICE_RUNNING {
         return fail(1072);
     }
@@ -1191,12 +1266,50 @@ unsafe fn call_service_main(
     Some(h)
 }
 
+/// Parcourt SERVICE_TABLE_ENTRY jusqu'à l'entrée de fin (nom et procédure
+/// nuls) et trace chaque entrée. Rend le nom de la première entrée dont
+/// `lpServiceProc` est nul (#2369).
+unsafe fn check_service_table(table: *const u8, wide: bool) -> Result<(), String> {
+    let slot = crate::wow32::pointer_size();
+    let mut ptr = table;
+    loop {
+        let name_ptr = crate::wow32::read_ptr(ptr as usize) as *const u8;
+        let proc_ptr = crate::wow32::read_ptr(ptr as usize + slot);
+        if name_ptr.is_null() && proc_ptr == 0 {
+            return Ok(());
+        }
+        let entry = if name_ptr.is_null() {
+            String::new()
+        } else if wide {
+            crate::dlls::wstr(name_ptr as *const u16)
+        } else {
+            crate::dlls::cstr(name_ptr)
+        };
+        crate::trace!("StartServiceCtrlDispatcher : entrée « {entry} », ServiceMain {proc_ptr:#x}");
+        if proc_ptr == 0 {
+            return Err(entry);
+        }
+        ptr = ptr.add(slot * 2);
+    }
+}
+
 /// Corps de `StartServiceCtrlDispatcherA` pour le service `svc_name` (le nom
 /// vient de `WINLUX_SERVICE_NAME`, posé par le gestionnaire de services).
 unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8, wide: bool) -> i32 {
     // Trace visible du banc : dit si le programme se met en mode service
     // avant de sortir (#1918).
     crate::trace!("StartServiceCtrlDispatcher(service « {svc_name} »)");
+    // Table vérifiée avant d'ouvrir le canal : une entrée sans ServiceMain
+    // n'est pas « au bon format » (ERROR_INVALID_DATA, MS Learn), au lieu
+    // d'un succès qui ne lance rien (#2369).
+    if let Err(entry) = check_service_table(table, wide) {
+        crate::log_warn!(
+            "services",
+            "StartServiceCtrlDispatcher : entrée « {entry} » sans ServiceMain (lpServiceProc nul), table refusée"
+        );
+        crate::process::set_last_error(ERROR_INVALID_DATA as u32);
+        return 0;
+    }
     let sock_path = control_sock_path(svc_name);
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
@@ -1890,23 +2003,97 @@ pub unsafe extern "win64" fn query_service_object_security(
     size: u32,
     needed: *mut u32,
 ) -> i32 {
-    if let Err(e) = service_record(service, |_| ()) {
-        return fail(e);
+    let name = match service_record(service, |r| r.name.clone()) {
+        Ok(n) => n,
+        Err(e) => return fail(e),
+    };
+    let Some(stored) = lock(service_security())
+        .get(&name.to_ascii_lowercase())
+        .cloned()
+    else {
+        return crate::dlls::security::GetKernelObjectSecurity(service, info, sd, size, needed);
+    };
+    if !needed.is_null() {
+        *needed = stored.len() as u32;
     }
-    crate::dlls::security::GetKernelObjectSecurity(service, info, sd, size, needed)
+    if sd.is_null() || (size as usize) < stored.len() {
+        return fail(ERROR_INSUFFICIENT_BUFFER as u32);
+    }
+    std::ptr::copy_nonoverlapping(stored.as_ptr(), sd, stored.len());
+    1
 }
 
-/// Les droits d'un service ne se changent pas (ERROR_ACCESS_DENIED, ce que
-/// rend Windows à un compte sans WRITE_DAC).
+/// Descripteurs posés par SetServiceObjectSecurity (nom du service en
+/// minuscules → descripteur auto-relatif), relus par
+/// QueryServiceObjectSecurity (#1993).
+fn service_security() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    static SD: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+    SD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// SetServiceObjectSecurity : un appelant élevé (administrateur, comme
+/// l'installateur de SteamService) pose les parties demandées par `info` ;
+/// les autres gardent leur valeur. Sans élévation, ERROR_ACCESS_DENIED,
+/// comme Windows à un compte sans WRITE_DAC (#1993). Winlux ne filtre pas
+/// l'accès aux services par ce descripteur : il est retenu et relu.
 pub unsafe extern "win64" fn set_service_object_security(
     service: usize,
-    _info: u32,
-    _sd: usize,
+    info: u32,
+    sd: *const u8,
 ) -> i32 {
-    if let Err(e) = service_record(service, |_| ()) {
-        return fail(e);
+    let name = match service_record(service, |r| r.name.clone()) {
+        Ok(n) => n,
+        Err(e) => return fail(e),
+    };
+    if sd.is_null() || *sd != 1 {
+        return fail(1338); // ERROR_INVALID_SECURITY_DESCR
     }
-    fail(ERROR_ACCESS_DENIED as u32)
+    if !crate::dlls::security::elevated() {
+        crate::trace!("SetServiceObjectSecurity({name}) : appelant non élevé, accès refusé");
+        return fail(ERROR_ACCESS_DENIED as u32);
+    }
+    use crate::dlls::security::{sd_parts, self_relative_sd};
+    let key = name.to_ascii_lowercase();
+    let current = lock(service_security()).get(&key).cloned();
+    let current = current.unwrap_or_else(|| {
+        let mut need = 0u32;
+        crate::dlls::security::GetKernelObjectSecurity(
+            service,
+            7,
+            std::ptr::null_mut(),
+            0,
+            &mut need,
+        );
+        let mut buf = vec![0u8; need as usize];
+        if need == 0
+            || crate::dlls::security::GetKernelObjectSecurity(
+                service,
+                7,
+                buf.as_mut_ptr(),
+                need,
+                &mut need,
+            ) == 0
+        {
+            buf = self_relative_sd(&[None, None, None, None], 0);
+        }
+        buf
+    });
+    let mut parts = sd_parts(current.as_ptr());
+    let given = sd_parts(sd);
+    // OWNER 1, GROUP 2, DACL 4, SACL 8 → indices 0, 1, 3, 2.
+    for (bit, i) in [(1u32, 0usize), (2, 1), (4, 3), (8, 2)] {
+        if info & bit != 0 {
+            parts[i] = given[i].clone();
+        }
+    }
+    let control = std::ptr::read_unaligned(current.as_ptr().add(2) as *const u16);
+    let stored = self_relative_sd(&parts, control);
+    crate::trace!(
+        "SetServiceObjectSecurity({name}, info {info:#x}) : descripteur retenu ({} octets)",
+        stored.len()
+    );
+    lock(service_security()).insert(key, stored);
+    1
 }
 
 pub fn releve_exports() -> crate::dlls::Exports {
@@ -2182,6 +2369,52 @@ mod tests {
     }
 
     #[test]
+    fn services_systeme_arretes_puis_redemarres_par_un_installeur() {
+        // #1845 : driverinstalltool d'iCUE ouvre AudioSrv et hidserv pour les
+        // arrêter le temps d'installer un pilote, puis les redémarre.
+        let manager = unsafe { open_sc_manager_a(std::ptr::null(), std::ptr::null(), 0xf003f) };
+        assert_ne!(manager, 0);
+        for raw in ["AudioSrv", "hidserv"] {
+            let name: Vec<u16> = raw.encode_utf16().chain([0]).collect();
+            let service = unsafe { open_service_w(manager, name.as_ptr(), 0xf01ff) };
+            assert_ne!(service, 0, "{raw}");
+            let mut status = [0u8; 36];
+            unsafe {
+                assert_eq!(query_service_status(service, status.as_mut_ptr()), 1);
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_RUNNING
+                );
+                assert_eq!(u32::from_le_bytes(status[0..4].try_into().unwrap()), 0x20);
+                assert_eq!(
+                    control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr()),
+                    1
+                );
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_STOPPED
+                );
+                assert_eq!(start_service_w(service, 0, std::ptr::null()), 1);
+                assert_eq!(start_service_w(service, 0, std::ptr::null()), 0);
+                assert_eq!(query_service_status(service, status.as_mut_ptr()), 1);
+                assert_eq!(
+                    u32::from_le_bytes(status[4..8].try_into().unwrap()),
+                    SERVICE_RUNNING
+                );
+                // Jamais supprimé, ni recréé par un installeur.
+                assert_eq!(delete_service(service), 0);
+                assert_eq!(close_service_handle(service), 1);
+            }
+        }
+        let absent: Vec<u16> = "WinluxServiceAbsent".encode_utf16().chain([0]).collect();
+        assert_eq!(
+            unsafe { open_service_w(manager, absent.as_ptr(), 0xf01ff) },
+            0
+        );
+        unsafe { close_service_handle(manager) };
+    }
+
+    #[test]
     fn scm_lance_un_processus_local_et_peut_larreter() {
         let _serial = crate::dlls::advapi32::REGISTRY_TEST_LOCK
             .lock()
@@ -2245,6 +2478,72 @@ mod tests {
         assert_eq!(unsafe { delete_service(service) }, 1);
         assert_eq!(unsafe { close_service_handle(service) }, 1);
         assert_eq!(unsafe { close_service_handle(manager) }, 1);
+    }
+
+    #[test]
+    fn service_lance_sans_les_tubes_de_l_appelant() {
+        // #2529 : le service ne doit garder ni l'entrée ni les sorties de
+        // l'appelant de StartService, sinon un installeur qui lit la sortie
+        // de son action personnalisée attend la fin du service.
+        let _serial = crate::dlls::advapi32::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join(format!("winlux-test-svc-fd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("svc.sh");
+        let out = dir.join("fd.txt");
+        std::fs::write(
+            &script,
+            format!(
+                "a=$(readlink /proc/$$/fd/0) b=$(readlink /proc/$$/fd/1) c=$(readlink /proc/$$/fd/2)\nprintf '%s\\n' \"$a\" \"$b\" \"$c\" > {}.tmp\nmv {}.tmp {}\nexec sleep 30\n",
+                out.display(),
+                out.display(),
+                out.display()
+            ),
+        )
+        .unwrap();
+        let name = CString::new(format!("winlux-test-svc-fd-{}", std::process::id())).unwrap();
+        let command = CString::new(format!("/bin/sh {}", script.display())).unwrap();
+        let manager = unsafe { open_sc_manager_a(std::ptr::null(), std::ptr::null(), 0xf003f) };
+        assert_ne!(manager, 0);
+        let service = unsafe {
+            create_service_a(
+                manager,
+                name.as_ptr() as *const u8,
+                std::ptr::null(),
+                0xf01ff,
+                0x10,
+                3,
+                0,
+                command.as_ptr() as *const u8,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(service, 0);
+        assert_eq!(unsafe { start_service_a(service, 0, std::ptr::null()) }, 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !out.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let fds = std::fs::read_to_string(&out).unwrap_or_default();
+        let mut status = [0u8; 36];
+        unsafe {
+            control_service(service, SERVICE_CONTROL_STOP, status.as_mut_ptr());
+            delete_service(service);
+            close_service_handle(service);
+            close_service_handle(manager);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            fds.lines().collect::<Vec<_>>(),
+            ["/dev/null", "/dev/null", "/dev/null"],
+            "entrée, sortie et erreur du service"
+        );
     }
 
     static DISPATCH_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -2468,6 +2767,33 @@ mod tests {
                 assert_eq!(unsafe { close_service_handle(h) }, 1);
             }
         });
+    }
+
+    #[test]
+    fn dispatcher_refuse_une_entree_sans_service_main() {
+        let _serial = DISPATCH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let svc_name = format!("winlux-test-sans-main-{}", std::process::id());
+        // Nom présent, lpServiceProc nul, puis l'entrée de fin.
+        let entry = wide("SansMain");
+        let mut table = Vec::new();
+        table.extend_from_slice(&(entry.as_ptr() as usize).to_ne_bytes());
+        table.extend_from_slice(&0usize.to_ne_bytes());
+        table.extend_from_slice(&[0u8; 16]);
+        assert_eq!(
+            unsafe { check_service_table(table.as_ptr(), true) },
+            Err("SansMain".to_string())
+        );
+        assert_eq!(
+            unsafe { run_service_dispatcher(&svc_name, table.as_ptr(), true) },
+            0
+        );
+        // Aucun canal de contrôle laissé derrière.
+        assert_eq!(running_elsewhere(&svc_name), None);
+        // Une table vide (seulement l'entrée de fin) reste acceptée.
+        let fin = [0u8; 16];
+        assert_eq!(unsafe { check_service_table(fin.as_ptr(), true) }, Ok(()));
     }
 
     #[test]

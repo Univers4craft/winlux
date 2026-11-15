@@ -10,7 +10,7 @@ use super::il::{Gen, Interpreter, Value};
 use super::metadata::{ElementType, MethodSig};
 use super::pinvoke::{self, Arg, Import};
 use super::tables::{TableId, Token};
-use super::types::Kind;
+use super::types::{self, Kind, TypeId};
 
 /// Une structure de 1, 2, 4 ou 8 octets voyage dans un registre ; les
 /// autres par adresse (convention Win64).
@@ -118,6 +118,12 @@ impl Interpreter {
                             }
                         }
                     }
+                    // SafeHandle : le code natif reçoit le handle qu'il
+                    // contient, pas l'objet géré (#2019).
+                    (Kind::Ref, Value::Ref(p)) if !p.is_null() => match self.safe_handle_slot(*p) {
+                        Some(slot) => Arg::Word(unsafe { *(slot as *const u64) }),
+                        None => Arg::Word(*p as u64),
+                    },
                     (_, v) => Arg::Word(v.as_i64() as u64),
                 },
                 None => Arg::Word(v.as_i64() as u64),
@@ -160,8 +166,89 @@ impl Interpreter {
             }
             // bool .NET = BOOL Win32 sur 4 octets.
             (_, Some(Kind::Bool)) => Value::I32((raw.int as u32 != 0) as i32),
-            (_, Some(Kind::Ref)) => Value::I64(raw.int as i64),
+            (ret, Some(Kind::Ref)) => match self.wrap_safe_handle(asm, ret, gen, raw.int)? {
+                Some(obj) => obj,
+                None => Value::I64(raw.int as i64),
+            },
             (_, Some(kind)) => super::il::load(&raw.int as *const u64 as *const u8, kind),
         })
+    }
+}
+
+impl Interpreter {
+    /// Type `System.Runtime.InteropServices.SafeHandle` de notre mscorlib.
+    fn safe_handle_type(&self) -> Option<TypeId> {
+        types::with_types(|reg| reg.find_by_name("System.Runtime.InteropServices", "SafeHandle"))
+    }
+
+    /// Adresse du champ `handle` d'un objet qui dérive de SafeHandle.
+    fn safe_handle_slot(&mut self, obj: *mut u8) -> Option<*mut u8> {
+        let base = self.safe_handle_type()?;
+        let actual = gc::type_of(obj)?;
+        if !types::with_types(|reg| reg.is_subclass_of(actual, base)) {
+            return None;
+        }
+        self.ensure_layout(base);
+        let (fields, def) = types::with_types(|reg| {
+            let t = reg.get(base)?;
+            Some((t.fields.clone(), t.def?))
+        })?;
+        let (asm, _) = def;
+        let offset = fields.iter().find_map(|f| {
+            let a = self.assembly_at(asm);
+            (a.get_string(a.get_field(f.metadata_row).name) == "handle").then_some(f.offset)
+        })?;
+        Some(unsafe { obj.add(offset) })
+    }
+
+    /// Retour P/Invoke d'un type SafeHandle : l'objet est créé par son
+    /// constructeur sans argument (qui fixe la propriété du handle), puis
+    /// reçoit le handle natif (#2019). `None` pour tout autre type.
+    fn wrap_safe_handle(
+        &mut self,
+        asm: usize,
+        ret: &ElementType,
+        gen: &Gen,
+        raw: u64,
+    ) -> Result<Option<Value>, ClrException> {
+        if !matches!(ret, ElementType::Class(_)) {
+            return Ok(None);
+        }
+        let Some(base) = self.safe_handle_type() else {
+            return Ok(None);
+        };
+        let id = self.resolve_sig(asm, ret, gen);
+        if !types::with_types(|reg| reg.is_subclass_of(id, base)) {
+            return Ok(None);
+        }
+        self.ensure_layout(id);
+        let (size, ctor) = types::with_types(|reg| {
+            let t = reg.get(id);
+            (
+                t.map_or(types::EXTERNAL_OBJECT_SIZE, |t| t.instance_size),
+                t.and_then(|t| {
+                    t.methods
+                        .iter()
+                        .find(|m| m.name == ".ctor" && m.param_count == 0)
+                        .map(|m| (m.assembly, Token(m.token).rid()))
+                }),
+            )
+        });
+        let obj = gc::with_gc(|gc| gc.alloc(id, size.max(16)));
+        let pinned = self.pins.len();
+        self.pins.push(Value::Ref(obj));
+        if let Some((a, row)) = ctor {
+            if let super::il::ExecResult::Exception(e) =
+                self.execute_in(a, row, vec![Value::Ref(obj)], gen.clone())
+            {
+                self.pins.truncate(pinned);
+                return Err(e);
+            }
+        }
+        if let Some(slot) = self.safe_handle_slot(obj) {
+            unsafe { *(slot as *mut u64) = raw };
+        }
+        self.pins.truncate(pinned);
+        Ok(Some(Value::Ref(obj)))
     }
 }

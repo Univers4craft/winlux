@@ -23,7 +23,13 @@
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
 mod com;
+mod com_audio;
+mod com_mf;
+mod com_mf_chaine;
 mod com_netfw;
+mod com_nlm;
+mod com_ole;
+mod com_shell;
 mod com_taskschd;
 mod comctl;
 mod comdlg;
@@ -49,13 +55,15 @@ mod user;
 mod vulkan;
 mod wow64;
 
+pub(crate) use com_audio::iface_to32;
+pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Sélecteurs de segments de Linux x86-64 : code 32 bits, code 64 bits, données.
@@ -110,6 +118,18 @@ static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 /// Un programme 32 bits est-il en cours dans ce processus ?
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Adresse du PEB x86 du programme (0 avant `init_peb32`).
+pub fn peb32() -> usize {
+    PEB32.load(Ordering::Relaxed) as usize
+}
+
+/// Test seulement, dans un processus de test relancé à part : fait comme si
+/// le programme était x86, pour lire les structures à sa disposition.
+#[cfg(test)]
+pub(crate) fn force_active_for_test() {
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
@@ -718,6 +738,8 @@ pub fn reexec_if_needed() {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os();
     let _ = args.next();
+    // Le descripteur de diagnostic passe à l'exécutable relancé (#2530).
+    crate::log::keep_diag_fd_across_exec();
     let error = std::process::Command::new("/proc/self/exe")
         .arg0(std::env::args_os().next().unwrap_or_default())
         .args(args)
@@ -1337,7 +1359,6 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || n == "wldap32"
         // U_EXPORT2 d'ICU est __cdecl (#1792).
         || n == "icuuc"
-        || n == "icu"
         // FCI et FDI de cabinet.dll sont DIAMONDAPI, c'est-à-dire __cdecl
         // (fci.h / fdi.h de mingw-w64), par nom ou par ordinal (#1758).
         || (n == "cabinet"
@@ -1693,6 +1714,14 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
     ))
 }
 
+/// Passerelle x86 de `kernel32!func`, comme à l'import (#2367).
+pub(super) fn kernel32_stub(func: &str) -> Option<usize> {
+    override_stub("kernel32.dll", func).or_else(|| {
+        let a = crate::dlls::lookup("kernel32", func)?;
+        Some(import_stub("kernel32.dll", func, a, a))
+    })
+}
+
 /// `GetProcAddress` d'un programme x86 : pour une DLL intégrée, la
 /// passerelle x86 de la fonction (une par fonction), jamais son adresse 64 bits.
 extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
@@ -1824,9 +1853,132 @@ struct Passage {
 
 const HISTORY_LEN: usize = 64;
 
+/// Places d'historique : une par fil x86, prise au premier passage noté.
+/// Table statique d'atomiques et non plus `Mutex` : le gestionnaire de
+/// plantage (fail-fast `int 0x29` venu du code x86, faute fatale) la relit
+/// dans un contexte de signal, où seules des lectures d'atomiques et des
+/// write(2) sont permises (#2426).
+const HISTORY_SLOTS: usize = 512;
+
+/// Mots d'un passage : desc, target, esp, ret, args[4], rendu bas, rendu
+/// haut, rendu présent.
+const PASSAGE_WORDS: usize = 11;
+
+struct Slot {
+    /// tid du fil propriétaire ; -tid une fois le fil fini (place reprise
+    /// seulement quand aucune n'est libre) ; 0 : libre.
+    owner: AtomicI64,
+    /// Passages notés depuis la prise de la place.
+    count: AtomicU64,
+    /// Écrits par le seul fil propriétaire ; un lecteur concurrent (fin de
+    /// processus, signal) peut lire un passage à moitié écrit, sans danger
+    /// autre qu'une ligne fausse.
+    entries: [[AtomicU32; PASSAGE_WORDS]; HISTORY_LEN],
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+const SLOT_INIT: Slot = Slot {
+    owner: AtomicI64::new(0),
+    count: AtomicU64::new(0),
+    entries: [const { [const { AtomicU32::new(0) }; PASSAGE_WORDS] }; HISTORY_LEN],
+};
+
+static SLOTS: [Slot; HISTORY_SLOTS] = [SLOT_INIT; HISTORY_SLOTS];
+
+/// L'historique de fin de processus est écrit une seule fois, par la sortie
+/// ordinaire ou par le gestionnaire de plantage (#2368, #2426).
+static HISTORY_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Place du fil courant ; rendue (tid négatif) à la fin du fil.
+struct OwnedSlot(usize);
+
+impl Drop for OwnedSlot {
+    fn drop(&mut self) {
+        let s = &SLOTS[self.0];
+        let tid = s.owner.load(Ordering::Relaxed);
+        if tid > 0 {
+            s.owner.store(-tid, Ordering::Release);
+        }
+    }
+}
+
+/// Prend une place libre, sinon celle d'un fil fini. Aucune : le fil n'a
+/// pas d'historique, signalé une fois.
+fn claim_slot() -> Option<OwnedSlot> {
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    for reuse in [false, true] {
+        for (i, s) in SLOTS.iter().enumerate() {
+            let v = s.owner.load(Ordering::Relaxed);
+            let free = if reuse { v < 0 } else { v == 0 };
+            if free
+                && s.owner
+                    .compare_exchange(v, tid, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            {
+                s.count.store(0, Ordering::Release);
+                return Some(OwnedSlot(i));
+            }
+        }
+    }
+    static FULL: AtomicBool = AtomicBool::new(false);
+    if !FULL.swap(true, Ordering::Relaxed) {
+        history_emit(&format_args!(
+            "historique : {HISTORY_SLOTS} fils x86 vivants, le fil {tid} n'a pas d'historique"
+        ));
+    }
+    None
+}
+
 thread_local! {
-    static HISTORY: std::cell::RefCell<std::collections::VecDeque<Passage>> =
-        std::cell::RefCell::new(std::collections::VecDeque::with_capacity(HISTORY_LEN));
+    static MY_SLOT: Option<OwnedSlot> = claim_slot();
+}
+
+fn my_slot() -> Option<&'static Slot> {
+    MY_SLOT
+        .try_with(|s| s.as_ref().map(|o| o.0))
+        .ok()
+        .flatten()
+        .map(|i| &SLOTS[i])
+}
+
+fn store_passage(e: &[AtomicU32; PASSAGE_WORDS], p: &Passage) {
+    let r = p.result.unwrap_or(0);
+    let words = [
+        p.desc,
+        p.target,
+        p.esp,
+        p.ret,
+        p.args[0],
+        p.args[1],
+        p.args[2],
+        p.args[3],
+        r as u32,
+        (r >> 32) as u32,
+        p.result.is_some() as u32,
+    ];
+    for (d, w) in e.iter().zip(words) {
+        d.store(w, Ordering::Relaxed);
+    }
+}
+
+fn load_passage(e: &[AtomicU32; PASSAGE_WORDS]) -> Passage {
+    let w: [u32; PASSAGE_WORDS] = std::array::from_fn(|i| e[i].load(Ordering::Relaxed));
+    Passage {
+        desc: w[0],
+        target: w[1],
+        esp: w[2],
+        ret: w[3],
+        args: [w[4], w[5], w[6], w[7]],
+        result: (w[10] != 0).then_some(w[8] as u64 | (w[9] as u64) << 32),
+    }
+}
+
+/// Indices (dans `entries`) des passages gardés, du plus ancien au plus
+/// récent.
+fn slot_range(s: &Slot) -> impl Iterator<Item = usize> {
+    let c = s.count.load(Ordering::Acquire);
+    let k = c.min(HISTORY_LEN as u64);
+    (c - k..c).map(|n| (n % HISTORY_LEN as u64) as usize)
 }
 
 /// `WINLUX_WOW32_HISTORY=1` : chaque fil garde ses 64 derniers passages
@@ -1890,45 +2042,238 @@ fn passage_line(p: &Passage) -> String {
 /// passage le plus récent qui lui correspond (des rappels x86 ont pu être
 /// notés entre-temps).
 fn note_result(desc: u32, esp: u32, r: u64) {
-    HISTORY.with(|h| {
-        let mut h = h.borrow_mut();
-        if let Some(p) = h
-            .iter_mut()
-            .rev()
-            .find(|p| p.desc == desc && p.esp == esp && p.result.is_none())
-        {
+    let Some(s) = my_slot() else {
+        return;
+    };
+    let idx: Vec<usize> = slot_range(s).collect();
+    for i in idx.into_iter().rev() {
+        let mut p = load_passage(&s.entries[i]);
+        if p.desc == desc && p.esp == esp && p.result.is_none() {
             p.result = Some(r);
+            store_passage(&s.entries[i], &p);
             // Mode flux : la valeur rendue suit aussitôt (#1616), sinon
             // seule une faute la montrait.
             if let Some(filter) = history_stream() {
-                let line = passage_line(p);
+                let line = passage_line(&p);
                 if stream_match(filter, &line) {
-                    eprintln!("winlux[wow32] {line}");
+                    crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
                 }
             }
+            return;
         }
-    });
+    }
 }
 
 fn note(p: Passage) {
     if let Some(filter) = history_stream() {
         let line = passage_line(&p);
         if stream_match(filter, &line) {
-            eprintln!("winlux[wow32] {line}");
+            crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
         }
     }
-    HISTORY.with(|h| {
-        let mut h = h.borrow_mut();
-        if h.len() == HISTORY_LEN {
-            h.pop_front();
-        }
-        h.push_back(p);
-    });
+    let Some(s) = my_slot() else {
+        return;
+    };
+    let n = s.count.load(Ordering::Relaxed);
+    store_passage(&s.entries[(n % HISTORY_LEN as u64) as usize], &p);
+    s.count.store(n + 1, Ordering::Release);
 }
 
-/// Passages notés, du plus ancien au plus récent, en texte.
+/// Passages notés par le fil courant, du plus ancien au plus récent, en
+/// texte.
 fn history_lines() -> Vec<String> {
-    HISTORY.with(|h| h.borrow().iter().map(passage_line).collect())
+    let Some(s) = my_slot() else {
+        return Vec::new();
+    };
+    slot_range(s)
+        .map(|i| passage_line(&load_passage(&s.entries[i])))
+        .collect()
+}
+
+/// Écrit l'historique au niveau Warn : sortie d'erreur et journal, sans
+/// exiger WINLUX_LOG=trace (#2368).
+fn history_emit(line: &std::fmt::Arguments<'_>) {
+    crate::log::emit(crate::log::Level::Warn, "wow32", line);
+}
+
+/// Places occupées : (tid, fil fini, place).
+fn used_slots() -> impl Iterator<Item = (i64, bool, &'static Slot)> {
+    SLOTS.iter().filter_map(|s| {
+        let v = s.owner.load(Ordering::Acquire);
+        (v != 0).then_some((v.abs(), v < 0, s))
+    })
+}
+
+/// Fin du processus (ExitProcess, TerminateProcess sur soi, fail-fast
+/// demandé au runtime, exception non gérée) : avec WINLUX_WOW32_HISTORY,
+/// l'historique de chaque fil x86 est écrit, une seule fois (#2368).
+pub fn dump_history_at_exit(why: &str) {
+    if !history_on() || HISTORY_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let me = unsafe { libc::syscall(libc::SYS_gettid) };
+    history_emit(&format_args!(
+        "{why} : historique des passages x86 ↔ runtime de {} fil(s)",
+        used_slots().count()
+    ));
+    for (tid, ended, s) in used_slots() {
+        let lines: Vec<String> = slot_range(s)
+            .map(|i| passage_line(&load_passage(&s.entries[i])))
+            .collect();
+        let mark = if tid == me {
+            " (fil qui termine)"
+        } else if ended {
+            " (fil fini)"
+        } else {
+            ""
+        };
+        history_emit(&format_args!("fil {tid}{mark} : {} passages", lines.len()));
+        for (i, l) in lines.iter().enumerate() {
+            history_emit(&format_args!("fil {tid}   {i:2} {l}"));
+        }
+    }
+}
+
+/// Ligne en construction dans un tampon fixe : aucune allocation, pour le
+/// gestionnaire de signal. Ce qui dépasse est coupé.
+struct SigLine {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl SigLine {
+    fn new() -> Self {
+        let mut l = SigLine {
+            buf: [0; 512],
+            len: 0,
+        };
+        l.push(b"winlux[warn/wow32]: ");
+        l
+    }
+
+    fn push(&mut self, s: &[u8]) {
+        let n = s.len().min(self.buf.len() - self.len);
+        self.buf[self.len..self.len + n].copy_from_slice(&s[..n]);
+        self.len += n;
+    }
+
+    /// Hexadécimal sans zéros de tête, comme `{:x}`.
+    fn hex(&mut self, v: u64) {
+        let mut b = [0u8; 16];
+        let mut i = 16;
+        let mut v = v;
+        loop {
+            i -= 1;
+            b[i] = b"0123456789abcdef"[(v & 15) as usize];
+            v >>= 4;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&b[i..]);
+    }
+
+    fn dec(&mut self, v: u64) {
+        let mut b = [0u8; 20];
+        let mut i = 20;
+        let mut v = v;
+        loop {
+            i -= 1;
+            b[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&b[i..]);
+    }
+
+    /// Termine la ligne et l'écrit sur le descripteur de diagnostic (#2530),
+    /// jamais dans le tube d'un programme, en un seul write(2).
+    fn write(mut self) {
+        if self.len == self.buf.len() {
+            self.len -= 1;
+        }
+        self.buf[self.len] = b'\n';
+        let fd = crate::log::diag_fd();
+        if fd >= 0 {
+            unsafe {
+                libc::write(fd, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+            }
+        }
+    }
+}
+
+/// Faute fatale (fail-fast `int 0x29` du code x86, faute non rattrapée),
+/// depuis le gestionnaire de signal de crash.rs : même historique que
+/// `dump_history_at_exit`, écrit sur la sortie d'erreur seulement, avec des
+/// lectures d'atomiques, la libellé déjà construit de chaque passerelle et
+/// write(2) — ni allocation, ni verrou, ni journal (#2426). Rien sans
+/// historique noté (WINLUX_WOW32_HISTORY absente).
+///
+/// # Safety
+/// Appelée seulement depuis le gestionnaire de plantage, le processus va
+/// finir ; les `Desc` notés vivent jusqu'à la fin du processus.
+pub(crate) unsafe fn dump_history_in_signal(what: &[u8]) {
+    let fils = used_slots().count();
+    if fils == 0 || HISTORY_DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let me = libc::syscall(libc::SYS_gettid);
+    let mut l = SigLine::new();
+    l.push(what);
+    l.push(" : historique des passages x86 ↔ runtime de ".as_bytes());
+    l.dec(fils as u64);
+    l.push(b" fil(s)");
+    l.write();
+    for (tid, ended, s) in used_slots() {
+        let idx = slot_range(s);
+        let mut l = SigLine::new();
+        l.push(b"fil ");
+        l.dec(tid as u64);
+        if tid == me {
+            l.push(b" (fil qui termine)");
+        } else if ended {
+            l.push(b" (fil fini)");
+        }
+        l.push(b" : ");
+        l.dec(idx.size_hint().0 as u64);
+        l.push(b" passages");
+        l.write();
+        for (j, i) in idx.enumerate() {
+            let p = load_passage(&s.entries[i]);
+            let mut l = SigLine::new();
+            l.push(b"fil ");
+            l.dec(tid as u64);
+            l.push(if j < 10 { b"    " } else { b"   " });
+            l.dec(j as u64);
+            l.push(b" ");
+            if p.desc != 0 {
+                let d = &*(p.desc as usize as *const Desc);
+                l.push(d.label.as_bytes());
+            } else {
+                l.push(b"rappel x86 0x");
+                l.hex(p.target as u64);
+            }
+            l.push(b" (esp 0x");
+            l.hex(p.esp as u64);
+            l.push(b", retour 0x");
+            l.hex(p.ret as u64);
+            l.push(b") [");
+            for (k, a) in p.args.iter().enumerate() {
+                if k > 0 {
+                    l.push(b", ");
+                }
+                l.hex(*a as u64);
+            }
+            l.push(b"]");
+            if let Some(r) = p.result {
+                l.push(b" = 0x");
+                l.hex(r as u32 as u64);
+            }
+            l.write();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1945,6 +2290,126 @@ fn pas_a_pas_cible() {
     assert_eq!(parse_step("GetObjectW"), Some(("GetObjectW".into(), None)));
     assert_eq!(parse_step(":12"), None);
     assert_eq!(parse_step("F:zz"), None);
+}
+
+/// Variable qui fait de `historique_enfant` le processus enfant (#2368) :
+/// `sortie` finit par ExitProcess, `failfast` par RaiseFailFastException,
+/// `int29` par l'instruction `int 0x29` elle-même, comme le code x86 d'un
+/// programme (#2426).
+#[cfg(test)]
+const HISTORIQUE_ENFANT: &str = "WINLUX_TEST_HISTORIQUE_ENFANT";
+
+#[cfg(test)]
+#[test]
+fn historique_enfant() {
+    let Some(mode) = std::env::var_os(HISTORIQUE_ENFANT) else {
+        return;
+    };
+    let passage = |t: u32| Passage {
+        desc: 0,
+        target: t,
+        esp: 0,
+        ret: 0,
+        args: [0; 4],
+        result: None,
+    };
+    // Comme aux points d'appel réels : rien n'est noté sans la variable.
+    let noter = move |t: u32| {
+        if history_on() {
+            note(passage(t));
+        }
+    };
+    noter(0x40_1111);
+    // Un second fil : son historique doit aussi sortir, écrit par le fil
+    // qui termine.
+    std::thread::spawn(move || noter(0x40_2222)).join().unwrap();
+    if mode == "int29" {
+        crate::crash::install();
+        unsafe { std::arch::asm!("int 0x29", in("rcx") 7usize, options(noreturn)) };
+    }
+    if mode == "failfast" {
+        crate::dlls::seh::raise_fail_fast_exception(std::ptr::null(), std::ptr::null(), 0);
+    }
+    crate::dlls::kernel32::exit_process(3);
+}
+
+#[cfg(test)]
+fn historique_lancer(mode: &str, history: bool) -> (Option<i32>, String) {
+    let dir = std::env::temp_dir().join(format!("winlux-hist-{mode}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", "wow32::historique_enfant", "--test-threads=1"])
+        .env(HISTORIQUE_ENFANT, mode)
+        .env("WINLUX_JOURNAL_DIR", &dir)
+        .env_remove("WINLUX_LOG")
+        .env_remove("WINLUX_TRACE")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    if history {
+        cmd.env("WINLUX_WOW32_HISTORY", "1");
+    } else {
+        cmd.env_remove("WINLUX_WOW32_HISTORY");
+    }
+    let mut child = cmd.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("processus enfant bloqué plus de 60 s");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut err = String::new();
+    use std::io::Read;
+    let _ = child.stderr.take().unwrap().read_to_string(&mut err);
+    let _ = std::fs::remove_dir_all(&dir);
+    (status.code(), err)
+}
+
+/// #2368 : avec WINLUX_WOW32_HISTORY seule, l'historique de chaque fil sort
+/// sur ExitProcess et sur un fail-fast, y compris l'instruction `int 0x29`
+/// qui passe par le gestionnaire de signal (#2426) ; sans elle, rien.
+#[cfg(test)]
+#[test]
+fn historique_ecrit_a_la_fin_du_processus() {
+    for mode in ["sortie", "failfast", "int29"] {
+        let (code, err) = historique_lancer(mode, true);
+        let want = if mode == "sortie" { 3 } else { 0x09 };
+        assert_eq!(code, Some(want), "{mode} : {err}");
+        assert!(
+            err.contains("historique des passages x86"),
+            "{mode} : {err}"
+        );
+        assert!(err.contains("rappel x86 0x401111"), "{mode} : {err}");
+        assert!(err.contains("rappel x86 0x402222"), "{mode} : {err}");
+        assert!(err.contains("(fil qui termine)"), "{mode} : {err}");
+        // Même ligne par le journal et par le gestionnaire de signal.
+        assert!(
+            err.contains("rappel x86 0x401111 (esp 0x0, retour 0x0) [0, 0, 0, 0]"),
+            "{mode} : {err}"
+        );
+    }
+    for mode in ["sortie", "int29"] {
+        let (_, err) = historique_lancer(mode, false);
+        assert!(!err.contains("historique des passages"), "{mode} : {err}");
+    }
+    // Fail-fast par le signal : une seule écriture, et le fil fini est
+    // nommé comme tel (#2426).
+    let (_, err) = historique_lancer("int29", true);
+    assert_eq!(
+        err.matches("historique des passages x86").count(),
+        1,
+        "{err}"
+    );
+    assert!(
+        err.contains("STATUS_STACK_BUFFER_OVERRUN : historique"),
+        "{err}"
+    );
+    assert!(err.contains("(fil fini)"), "{err}");
 }
 
 #[cfg(test)]
@@ -2094,10 +2559,14 @@ pub(super) fn trace_history() {
     if !history_on() {
         return;
     }
+    // Niveau Warn : la variable suffit, sans WINLUX_LOG=trace (#2368).
     let lines = history_lines();
-    crate::trace!("wow32 : {} derniers passages x86 ↔ runtime :", lines.len());
+    history_emit(&format_args!(
+        "faute x86 : {} derniers passages x86 ↔ runtime du fil",
+        lines.len()
+    ));
     for (i, l) in lines.iter().enumerate() {
-        crate::trace!("wow32 :   {i:2} {l}");
+        history_emit(&format_args!("  {i:2} {l}"));
     }
 }
 
@@ -2115,6 +2584,80 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     r
 }
 
+const E_NOINTERFACE_32: u32 = 0x8000_4002;
+
+extern "C" {
+    static __executable_start: u8;
+    static etext: u8;
+}
+
+/// Lit 8 octets à `addr` sans jamais fauter : process_vm_readv vérifie
+/// l'adresse et échoue proprement si elle n'est pas lisible.
+fn read_u64_checked(addr: u64) -> Option<u64> {
+    if addr < 0x1_0000 {
+        return None;
+    }
+    let mut out = 0u64;
+    let local = libc::iovec {
+        iov_base: (&mut out as *mut u64).cast(),
+        iov_len: 8,
+    };
+    let remote = libc::iovec {
+        iov_base: addr as usize as *mut libc::c_void,
+        iov_len: 8,
+    };
+    // SAFETY : aucune lecture directe ; le noyau rend une erreur si
+    // l'adresse n'est pas lisible.
+    let n = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+    (n == 8).then_some(out)
+}
+
+/// `v` est-il un objet COM du runtime, à table win64 (#2429) ? Sa table
+/// est lue à `v`, sa première méthode (QueryInterface) dans la table, et
+/// cette méthode doit être du code de winlux lui-même. Aucune donnée d'un
+/// programme x86 ne contient d'adresse dans notre code (un objet x86 ou un
+/// mandataire P32 a une table de fonctions x86) ; toutes les lectures
+/// passent par `read_u64_checked`.
+fn runtime_com_object(v: u64) -> bool {
+    if v == 0 {
+        return false;
+    }
+    let Some(vt) = read_u64_checked(v) else {
+        return false;
+    };
+    let Some(qi) = read_u64_checked(vt) else {
+        return false;
+    };
+    let start = std::ptr::addr_of!(__executable_start) as u64;
+    let end = std::ptr::addr_of!(etext) as u64;
+    qi >= start && qi < end
+}
+
+/// Objets du runtime qui servent aussi de handle, laissés passer par la
+/// garde de #2429 : SHGetImageList (ordinal 727) rend un IImageList que la
+/// documentation publique déclare interchangeable avec un HIMAGELIST ; un
+/// programme x86 le passe à ImageList_* (WinSCP), il doit le recevoir tel
+/// quel (image_list_com.rs).
+fn handle_object(label: &str) -> bool {
+    let Some(func) = label.strip_prefix("shell32.dll!") else {
+        return false;
+    };
+    matches!(func, "SHGetImageList" | "#727")
+}
+
+/// Refus nommé d'une interface rendue sans mandataire (#2429) : la
+/// référence est rendue à l'objet, le programme reçoit 0. Ceci ne corrige
+/// pas la fonction (il faut la décrire dans `com::api_kinds`, famille
+/// #2428) ; cela rend l'échec visible au lieu d'une faute muette.
+fn refuse_runtime_object(label: &str, v: u64) {
+    crate::log_warn!(
+        "wow32",
+        "{label} a rendu une interface COM du runtime sans mandataire 32 bits : refusée, sortie mise à 0 (#2428)"
+    );
+    // SAFETY : `runtime_com_object` a vérifié que la table est la nôtre.
+    unsafe { com::release64(v) };
+}
+
 fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     if history_on() {
         let rd = |a: u32| unsafe { (a as usize as *const u32).read_unaligned() };
@@ -2128,9 +2671,12 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         });
     }
     if !d.supported {
-        eprintln!(
-            "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).",
-            d.label
+        crate::log::write_diag(
+            format!(
+                "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).\n",
+                d.label
+            )
+            .as_bytes(),
         );
         crate::thunks::log_missing(&format!("{} (32 bits)", d.label), true);
         crate::crash::record_failure(
@@ -2196,7 +2742,16 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         slots.push(0);
     }
     let r = unsafe { winlux_wow_call64(d.target, slots.as_ptr(), n, xmm0) };
+    let mut refused = false;
     for &(at, [v, _]) in &wide {
+        // #2429 : interface du runtime rendue sans mandataire 32 bits.
+        let v = if runtime_com_object(v) && !handle_object(&d.label) {
+            refuse_runtime_object(&d.label, v);
+            refused = true;
+            0
+        } else {
+            v
+        };
         if (v >> 32) != 0 && (v >> 32) != 0xffff_ffff {
             crate::trace!(
                 "wow32 : {} a écrit 0x{v:x} dans une case de 4 octets (tronqué)",
@@ -2204,6 +2759,11 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
             );
         }
         unsafe { (at as *mut u32).write_unaligned(v as u32) };
+    }
+    // S_OK avec une sortie refusée : E_NOINTERFACE, comme com::to32 pour
+    // une interface non décrite. Un autre résultat est laissé tel quel.
+    if refused && d.ret == b'i' && r as u32 == 0 {
+        return E_NOINTERFACE_32 as u64;
     }
     if d.ret == b'i' {
         let r = crt::apply_fix(d.fix, r);
@@ -2678,6 +3238,133 @@ mod tests {
         );
     }
 
+    /// Exports de la CRT servis en x64 sans passerelle x86, chacun justifié
+    /// par la bibliothèque d'import x86 de mingw-w64 (ucrtbase-common.def.in,
+    /// lib32/msvcr120.def.in) : ils n'existent pas dans la DLL x86.
+    const CRT_X64_SEULEMENT: &[&str] = &[
+        // F64(__intrinsic_setjmpex) : x64 seulement.
+        "__intrinsic_setjmpex",
+        // Absent de ucrtbase et de msvcr120 x86 (_setjmp et _setjmp3 seuls).
+        "_setjmpex",
+        // F_NON_ARM64 : exporté en x86, mais aucune documentation publique
+        // ne décrit sa forme x86, et MSVC x86 appelle _setjmp3. Laissé sans
+        // passerelle plutôt que deviné (#2367).
+        "__intrinsic_setjmp",
+    ];
+
+    /// #2367 : toute fonction que ucrtbase ou msvcrt sert en x64 a une
+    /// passerelle x86 (signature relevée par build.rs ou version x86 écrite
+    /// à la main). Une fonction engendrée par macro_rules! n'a pas de
+    /// signature : l'outil de déploiement d'Office mourait sur iswalpha.
+    #[test]
+    fn crt_x64_toujours_servie_en_x86() {
+        let notes: std::collections::HashSet<usize> = NOTES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(a, _, _)| *a)
+            .collect();
+        let mut manquants = Vec::new();
+        for (dll, names) in crate::dlls::builtin_exports() {
+            if dll != "ucrtbase" && dll != "msvcrt" {
+                continue;
+            }
+            for n in names {
+                let Some(a) = crate::dlls::lookup(dll, n) else {
+                    continue;
+                };
+                // Données exportées : servies à part, sans signature.
+                if !notes.contains(&a) || CRT_X64_SEULEMENT.contains(&n) {
+                    continue;
+                }
+                if sig_of_addr(a).is_none() && override_stub(dll, n).is_none() {
+                    manquants.push(format!("{dll}!{n}"));
+                }
+            }
+        }
+        manquants.sort();
+        assert!(manquants.is_empty(), "sans passerelle x86 : {manquants:?}");
+        for n in ["iswalpha", "_iswalpha_l", "_findfirst64i32", "_wfindnext32"] {
+            let a = crate::dlls::lookup("ucrtbase", n).unwrap();
+            assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+    }
+
+    /// #2512 : toute fonction que shlwapi sert en x64 a une passerelle x86.
+    /// Les enveloppes A et W engendrées par macro_rules! n'avaient pas de
+    /// signature : l'outil de déploiement d'Office mourait sur PathIsUNCW.
+    #[test]
+    fn shlwapi_toujours_servie_en_x86() {
+        let exports: Vec<&str> = crate::dlls::builtin_exports()
+            .into_iter()
+            .filter(|(dll, _)| *dll == "shlwapi")
+            .flat_map(|(_, names)| names)
+            .collect();
+        assert!(exports.contains(&"PathIsUNCW"));
+        // Les adresses sont notées au premier lookup.
+        let addrs: Vec<(&str, usize)> = exports
+            .iter()
+            .filter_map(|n| Some((*n, crate::dlls::lookup("shlwapi", n)?)))
+            .collect();
+        let notes: std::collections::HashSet<usize> = NOTES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(a, _, _)| *a)
+            .collect();
+        let mut manquants: Vec<&str> = addrs
+            .iter()
+            .filter(|(n, a)| {
+                notes.contains(a)
+                    && sig_of_addr(*a).is_none()
+                    && override_stub("shlwapi", n).is_none()
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        manquants.sort();
+        assert!(manquants.is_empty(), "sans passerelle x86 : {manquants:?}");
+        for n in [
+            "PathIsUNCW",
+            "PathGetArgsW",
+            "PathStripToRootW",
+            "PathIsSystemFolderW",
+        ] {
+            let a = crate::dlls::lookup("shlwapi", n).unwrap();
+            assert!(sig_of_addr(a).is_some(), "{n}");
+        }
+        assert_eq!(
+            sig_of_addr(crate::dlls::lookup("shlwapi", "PathIsSystemFolderW").unwrap()).map(|s| s
+                .split('>')
+                .next()
+                .unwrap()
+                .len()),
+            Some(2)
+        );
+        for n in ["wnsprintfA", "wnsprintfW"] {
+            assert!(override_stub("shlwapi", n).is_some(), "{n}");
+        }
+    }
+
+    /// Adaptateur cdecl → stdcall des `__crt*` : chaque push relit le même
+    /// déplacement, la passerelle dépile la copie (#2367).
+    #[test]
+    fn adaptateur_cdecl_vers_stdcall() {
+        assert_eq!(
+            super::crt::cdecl_to_stdcall_for_test(0x1234_5678, 8),
+            [
+                0xff, 0x74, 0x24, 8, 0xff, 0x74, 0x24, 8, 0xb8, 0x78, 0x56, 0x34, 0x12, 0xff, 0xd0,
+                0xc3
+            ]
+        );
+        assert_eq!(
+            super::crt::cdecl_to_stdcall_for_test(0x10, 0),
+            [0xb8, 0x10, 0, 0, 0, 0xff, 0xd0, 0xc3]
+        );
+        for (c, k) in super::crt::CRT_KERNEL32 {
+            assert!(stdcall_bytes("kernel32", k).is_some(), "{c} → {k}");
+        }
+    }
+
     #[test]
     fn conventions_d_appel() {
         assert!(is_cdecl("msvcrt.dll", "printf"));
@@ -2690,5 +3377,126 @@ mod tests {
         assert!(is_cdecl("cabinet.dll", "#10"));
         assert!(!is_cdecl("cabinet.dll", "CreateCompressor"));
         assert!(is_cdecl("WLDAP32.dll", "#144"));
+    }
+
+    // #2429 : objet COM du runtime (table win64) rendu par une sortie `p`.
+    static GARDE_RELEASES: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "win64" fn garde_qi(_t: usize, _i: usize, _o: usize) -> i32 {
+        0x8000_4002u32 as i32
+    }
+    unsafe extern "win64" fn garde_add_ref(_t: usize) -> u32 {
+        1
+    }
+    unsafe extern "win64" fn garde_release(_t: usize) -> u32 {
+        GARDE_RELEASES.fetch_add(1, Ordering::SeqCst);
+        0
+    }
+
+    #[repr(C)]
+    struct GardeObjet {
+        vtbl: *const [usize; 3],
+    }
+
+    fn garde_objet() -> u64 {
+        static VT: OnceLock<[usize; 3]> = OnceLock::new();
+        let vt = VT.get_or_init(|| {
+            [
+                garde_qi as *const () as usize,
+                garde_add_ref as *const () as usize,
+                garde_release as *const () as usize,
+            ]
+        });
+        Box::into_raw(Box::new(GardeObjet { vtbl: vt })) as u64
+    }
+
+    unsafe extern "win64" fn garde_rend_objet(out: *mut u64) -> i32 {
+        *out = garde_objet();
+        0
+    }
+
+    unsafe extern "win64" fn garde_rend_valeur(out: *mut u64) -> i32 {
+        *out = 0x1234;
+        0
+    }
+
+    fn garde_appel(target: usize, label: &str) -> (u64, u32) {
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let base = low as usize;
+        // Pile x86 : adresse de retour, puis l'argument (adresse de la case).
+        unsafe {
+            ((base + 64) as *mut u32).write_unaligned(0);
+            ((base + 68) as *mut u32).write_unaligned((base + 256) as u32);
+            ((base + 256) as *mut u32).write_unaligned(0xAAAA_AAAA);
+        }
+        let d = Desc {
+            ret: b'i',
+            supported: true,
+            target,
+            kinds: b"p".to_vec(),
+            label: label.into(),
+            fix: crt::Fix::None,
+            raw: None,
+            callbacks: 0,
+        };
+        let mut xmm0 = 0u64;
+        let r = dispatch_inner(&d, 0, (base + 68) as u32, &mut xmm0);
+        let cell = unsafe { ((base + 256) as *const u32).read_unaligned() };
+        unsafe { libc::munmap(low, 4096) };
+        (r, cell)
+    }
+
+    #[test]
+    fn interface_du_runtime_sans_mandataire_refusee() {
+        // Objet du runtime : reconnu, refusé, référence rendue.
+        assert!(runtime_com_object(garde_objet()));
+        let avant = GARDE_RELEASES.load(Ordering::SeqCst);
+        let (r, cell) = garde_appel(garde_rend_objet as *const () as usize, "test!RendObjet");
+        assert_eq!(r as u32, E_NOINTERFACE_32);
+        assert_eq!(cell, 0);
+        assert_eq!(GARDE_RELEASES.load(Ordering::SeqCst), avant + 1);
+        // Objet qui sert aussi de handle (SHGetImageList) : laissé passer.
+        let avant = GARDE_RELEASES.load(Ordering::SeqCst);
+        let (r, cell) = garde_appel(
+            garde_rend_objet as *const () as usize,
+            "shell32.dll!SHGetImageList",
+        );
+        assert_eq!(r, 0);
+        assert_ne!(cell, 0);
+        assert_eq!(GARDE_RELEASES.load(Ordering::SeqCst), avant);
+        assert!(handle_object("shell32.dll!#727"));
+        assert!(!handle_object("urlmon.dll!CoInternetCreateSecurityManager"));
+        // Valeur ordinaire (handle) : recopiée telle quelle.
+        let (r, cell) = garde_appel(garde_rend_valeur as *const () as usize, "test!RendValeur");
+        assert_eq!(r, 0);
+        assert_eq!(cell, 0x1234);
+        // Adresses illisibles ou données x86 : jamais d'objet, jamais de faute.
+        assert!(!runtime_com_object(0));
+        assert!(!runtime_com_object(0x10));
+        assert!(!runtime_com_object(0xFFFF_FFFF_FFFF_0000));
+        let donnees = Box::new([0x0040_1000u32, 0x0040_2000, 0, 0]);
+        assert!(!runtime_com_object(&*donnees as *const _ as u64));
+        let page = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert!(!runtime_com_object(page as u64));
+        unsafe { libc::munmap(page, 4096) };
     }
 }

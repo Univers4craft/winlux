@@ -312,16 +312,56 @@ pub unsafe extern "win64" fn get_volume_name_for_volume_mount_point_a(
     }
 }
 
-/// QueryFullProcessImageNameW : chemin Windows du programme d'un processus.
-pub unsafe extern "win64" fn query_full_process_image_name_w(
-    process: usize,
-    flags: u32,
-    out: *mut u16,
-    size: *mut u32,
-) -> i32 {
-    if out.is_null() || size.is_null() {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
+/// Chemin Windows du programme d'un autre processus (#2041), pour
+/// QueryFullProcessImageNameW. Seulement pour un processus du même compte :
+/// celui d'un autre compte reste refusé (ERROR_ACCESS_DENIED), ce qui
+/// n'expose rien de plus que Windows. Un programme Windows lancé par
+/// Winlux a pour image l'exécutable Winlux et son .exe en premier argument ;
+/// un programme Linux a pour chemin celui de son exécutable, vu en `Z:\`.
+pub(crate) fn foreign_image_path(pid: i32) -> Result<String, u32> {
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .map_err(|_| ERROR_INVALID_PARAMETER)?;
+    let real_uid = status
+        .lines()
+        .find_map(|l| l.strip_prefix("Uid:"))
+        .and_then(|l| l.split_whitespace().next())
+        .and_then(|u| u.parse::<u32>().ok());
+    if real_uid != Some(unsafe { libc::getuid() }) {
+        return Err(ERROR_ACCESS_DENIED);
+    }
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let runtime = std::fs::read_link("/proc/self/exe").ok();
+    if runtime.as_deref() != Some(exe.as_path()) {
+        return Ok(crate::paths::to_windows(&exe));
+    }
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let arg = cmdline
+        .split(|b| *b == 0)
+        .nth(1)
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .filter(|a| !a.is_empty() && !a.starts_with("--"))
+        .ok_or(ERROR_ACCESS_DENIED)?;
+    let windows_form = arg.contains('\\') || arg.as_bytes().get(1) == Some(&b':');
+    if windows_form {
+        return Ok(crate::paths::full_windows(&arg));
+    }
+    let mut path = std::path::PathBuf::from(&arg);
+    if path.is_relative() {
+        let cwd =
+            std::fs::read_link(format!("/proc/{pid}/cwd")).map_err(|_| ERROR_ACCESS_DENIED)?;
+        path = cwd.join(path);
+    }
+    Ok(crate::paths::to_windows(&path))
+}
+
+/// Chemin Windows du programme désigné par `process` : le nôtre, ou celui
+/// d'un autre processus du même compte (#2041).
+unsafe fn process_image_path(process: usize) -> Result<String, u32> {
+    if let Some(pid) = crate::dlls::kernel32::process_os_pid(process) {
+        if pid != std::process::id() as i32 {
+            return foreign_image_path(pid);
+        }
     }
     let mut buf = vec![0u16; 1024];
     let got = api!(
@@ -335,9 +375,35 @@ pub unsafe extern "win64" fn query_full_process_image_name_w(
     )
     .unwrap_or(0) as usize;
     if got == 0 {
+        return Err(crate::process::last_error());
+    }
+    Ok(String::from_utf16_lossy(&buf[..got]))
+}
+
+/// QueryFullProcessImageNameW : chemin Windows du programme d'un processus.
+pub unsafe extern "win64" fn query_full_process_image_name_w(
+    process: usize,
+    flags: u32,
+    out: *mut u16,
+    size: *mut u32,
+) -> i32 {
+    if out.is_null() || size.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let mut text = String::from_utf16_lossy(&buf[..got]);
+    let found = process_image_path(process);
+    crate::trace!(
+        "QueryFullProcessImageNameW(pid {:?}, flags {flags:#x}) -> {:?}",
+        crate::dlls::kernel32::process_os_pid(process),
+        found
+    );
+    let mut text = match found {
+        Ok(t) => t,
+        Err(e) => {
+            set_last_error(e);
+            return 0;
+        }
+    };
     if flags & 1 != 0 {
         // PROCESS_NAME_NATIVE : forme « \Device\HarddiskVolume1\… ».
         text = format!("\\Device\\HarddiskVolume1{}", text.get(2..).unwrap_or(""));
@@ -2137,6 +2203,40 @@ pub fn crt_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Discord (#2041) : chemin du programme d'un autre processus du même
+    /// compte ; celui d'un autre compte reste refusé.
+    #[test]
+    fn chemin_d_un_autre_processus() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        // Juste après spawn(), l'enfant peut ne pas avoir fait son exec :
+        // /proc/<pid>/exe désigne encore le binaire de test (#2109). On
+        // attend, au plus 10 s, qu'il soit devenu « sleep ».
+        let me = std::fs::read_link("/proc/self/exe").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let exe = loop {
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+            if exe != me {
+                break exe;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sleep n'a pas été exécuté en 10 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let got = super::foreign_image_path(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(got, Ok(crate::paths::to_windows(&exe)));
+        if unsafe { libc::getuid() } != 0 {
+            assert_eq!(super::foreign_image_path(1), Err(5));
+        }
+    }
+
     use super::*;
 
     /// #1220 : fond transparent d'une fenêtre WPF en couches (Flow Launcher)

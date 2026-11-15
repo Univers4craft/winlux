@@ -592,6 +592,10 @@ static mut RESULT_ERROR: bool = false;
 static mut RESULT_AT: u32 = 0;
 pub const RESULT_MS: u32 = 12_000;
 static mut OP_STARTED: u32 = 0;
+/// Clic sur « Installer » pendant une opération : dit dans le bandeau même
+/// qu'il faut attendre, la notification seule passait inaperçue (#2186).
+static mut BUSY_AT: u32 = 0;
+pub const BUSY_MS: u32 = 5_000;
 
 unsafe fn poll_progress() -> bool {
     let mut buf = [0u8; 1024];
@@ -870,6 +874,7 @@ pub fn cp1252_to_utf8(s: &[u8], out: &mut [u8]) -> usize {
 
 unsafe fn operate(verb: &[u8], key: &[u8]) {
     if OP_ACTIVE {
+        BUSY_AT = GetTickCount() | 1;
         crate::desktop::toast(t(
             b"Une installation est d\xE9j\xE0 en cours.",
             b"An installation is already running.",
@@ -1103,7 +1108,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         fill(g.hdc, g.b, b.left, b.top, b.right, b.bottom, p.surface);
         fill(g.hdc, g.b, b.left, b.top, b.right, b.top + 1, p.border);
         let mut line: Buf<220> = Buf::new();
-        line.push(OP_MESSAGE.get());
+        if BUSY_AT != 0 && GetTickCount().wrapping_sub(BUSY_AT) < BUSY_MS {
+            line.push(t(
+                b"Une installation est d\xE9j\xE0 en cours : attendez qu'elle se termine.",
+                b"An installation is already running: wait for it to finish.",
+            ));
+        } else {
+            line.push(OP_MESSAGE.get());
+        }
         text_fit(
             g.hdc,
             g.f.body,
@@ -2756,6 +2768,12 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 /// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
 /// français/anglais passé à `t` (aussi pour fonts.rs).
 const STORE_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"Une installation est d\xE9j\xE0 en cours : attendez qu'elle se termine.",
+        b"An installation is already running: wait for it to finish.",
+        b"Ya hay una instalaci\xF3n en curso: espere a que termine.",
+        b"Es l\xE4uft bereits eine Installation: Warten Sie, bis sie abgeschlossen ist.",
+    ),
     (
         b"Test\xE9s sur Winlux",
         b"Tested on Winlux",

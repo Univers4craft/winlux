@@ -486,3 +486,195 @@ fn descripteur_du_jeton_porte_l_etiquette_d_integrite() {
         assert_eq!(u16::from_le_bytes([buf[2], buf[3]]) & 0x10, 0);
     }
 }
+
+/// Descripteur absolu (SetSecurityDescriptorDacl) recopié en auto-relatif
+/// pour SetServiceObjectSecurity, puis relu partie par partie (#1993).
+#[test]
+fn descripteur_absolu_recopie_en_auto_relatif() {
+    unsafe {
+        let mut abs = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(abs.as_mut_ptr(), 1), 1);
+        // ACL vide : révision 2, taille 8, aucune ACE.
+        let mut acl = [2u8, 0, 8, 0, 0, 0, 0, 0];
+        assert_eq!(
+            SetSecurityDescriptorDacl(abs.as_mut_ptr(), 1, acl.as_mut_ptr(), 0),
+            1
+        );
+        let parts = sd_parts(abs.as_ptr());
+        assert_eq!(parts[3].as_deref(), Some(&acl[..]));
+        assert!(parts[0].is_none());
+        let rel = self_relative_sd(&parts, 0);
+        assert_eq!(rel.len(), 28);
+        assert_eq!(GetSecurityDescriptorLength(rel.as_ptr()), 28);
+        let mut present = 0;
+        let mut dacl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            GetSecurityDescriptorDacl(rel.as_ptr(), &mut present, &mut dacl, std::ptr::null_mut()),
+            1
+        );
+        assert_eq!(present, 1);
+        assert_eq!(std::slice::from_raw_parts(dacl, 8), &acl[..]);
+    }
+}
+
+/// CreateAppContainerToken : servi par KernelBase seulement, il rend le
+/// jeton du compte et refuse un SECURITY_CAPABILITIES absent (#2496).
+#[test]
+fn jeton_de_conteneur_par_kernelbase_seulement() {
+    assert!(crate::dlls::kernel32_proc("CreateAppContainerToken", true).is_some());
+    assert!(crate::dlls::kernel32_proc("CreateAppContainerToken", false).is_none());
+    let caps = [0u8; 24];
+    let mut out = 0usize;
+    unsafe {
+        assert_eq!(
+            CreateAppContainerToken(TOKEN_HANDLE, caps.as_ptr(), &mut out),
+            1
+        );
+        assert_eq!(out, TOKEN_HANDLE);
+        assert_eq!(
+            CreateAppContainerToken(TOKEN_HANDLE, std::ptr::null(), &mut out),
+            0
+        );
+        assert_eq!(out, 0);
+    }
+}
+
+/// #2517 : WinCreatorOwnerRightsSid et les SID de capacité d'AppContainer,
+/// valeurs de WELL_KNOWN_SID_TYPE et des RID de winnt.h (en-têtes mingw-w64).
+#[test]
+fn sid_bien_connus_des_conteneurs() {
+    for (kind, text) in [
+        (71u32, "S-1-3-4"),
+        (84, "S-1-15-2-1"),
+        (85, "S-1-15-3-1"),
+        (92, "S-1-15-3-9"),
+        (93, "S-1-15-3-8"),
+        (94, "S-1-15-3-10"),
+    ] {
+        let mut sid = [0u8; 68];
+        let mut size = sid.len() as u32;
+        assert_eq!(
+            unsafe { CreateWellKnownSid(kind, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+            1,
+            "{kind}"
+        );
+        assert_eq!(
+            sid_text(&sid[..size as usize]).as_deref(),
+            Some(text),
+            "{kind}"
+        );
+    }
+}
+
+/// Les tests qui écrivent le SID d'AppContainer retenu passent l'un après l'autre.
+static CONTENEUR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// #2527 : GetAppContainerNamedObjectPath, servie par kernel32, rend le chemin
+/// (forme choisie par Winlux) d'un SID donné ou du jeton d'AppContainer.
+#[test]
+fn chemin_des_objets_nommes_d_un_conteneur() {
+    let _seul = CONTENEUR.lock().unwrap_or_else(|e| e.into_inner());
+    let _teb = crate::process::test_teb();
+    assert!(crate::dlls::kernel32_proc("GetAppContainerNamedObjectPath", false).is_some());
+    let sid = sid_bytes("S-1-15-2-1-2-3-4-5-6-7").unwrap();
+    let attendu = "AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7";
+    let mut buf = [0u16; 128];
+    let mut n = 0u32;
+    unsafe {
+        // Taille seule : FALSE, ERROR_INSUFFICIENT_BUFFER et la longueur zéro compris.
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, sid.as_ptr(), 0, std::ptr::null_mut(), &mut n),
+            0
+        );
+        assert_eq!(crate::process::last_error(), 122);
+        assert_eq!(n as usize, attendu.len() + 1);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, sid.as_ptr(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize - 1]), attendu);
+        // Le jeton de CreateAppContainerToken désigne le SID de SECURITY_CAPABILITIES.
+        let caps: [usize; 3] = [sid.as_ptr() as usize, 0, 0];
+        let mut jeton = 0usize;
+        assert_eq!(
+            CreateAppContainerToken(0, caps.as_ptr().cast(), &mut jeton),
+            1
+        );
+        buf.fill(0);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(jeton, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize - 1]), attendu);
+        // Le jeton du processus n'est pas un AppContainer.
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            0
+        );
+        assert_eq!(crate::process::last_error(), 87);
+    }
+}
+
+/// #2540 : NtCreateLowBoxToken, exportée par ntdll, rend le jeton du compte et
+/// retient le SID de paquet pour GetAppContainerNamedObjectPath.
+#[test]
+fn jeton_lowbox_par_ntdll() {
+    let _seul = CONTENEUR.lock().unwrap_or_else(|e| e.into_inner());
+    let _teb = crate::process::test_teb();
+    assert!(crate::dlls::lookup("ntdll", "NtCreateLowBoxToken").is_some());
+    let paquet = sid_bytes("S-1-15-2-9-8-7-6-5-4-3").unwrap();
+    let mut jeton = 0usize;
+    let mut buf = [0u16; 128];
+    let mut n = 0u32;
+    let z = std::ptr::null_mut::<usize>() as usize;
+    unsafe {
+        let creer = |sid: *const u8, out: *mut usize, existant: usize| {
+            nt_create_low_box_token(out, existant, 0xF01FF, 0, sid, 0, 0, 0, 0)
+        };
+        assert_eq!(creer(paquet.as_ptr(), &mut jeton, TOKEN_HANDLE), 0);
+        assert_eq!(jeton, TOKEN_HANDLE);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(jeton, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(
+            String::from_utf16_lossy(&buf[..n as usize - 1]),
+            "AppContainerNamedObjects\\S-1-15-2-9-8-7-6-5-4-3"
+        );
+        // Un SID hors du groupe des paquets LowBox, ou pas de sortie : STATUS_INVALID_PARAMETER.
+        let autre = sid_bytes("S-1-5-32-545").unwrap();
+        assert_eq!(
+            creer(autre.as_ptr(), &mut jeton, TOKEN_HANDLE) as u32,
+            0xC000_000D
+        );
+        assert_eq!(
+            creer(paquet.as_ptr(), z as *mut usize, TOKEN_HANDLE) as u32,
+            0xC000_000D
+        );
+        assert_eq!(
+            creer(paquet.as_ptr(), &mut jeton, 0x1234) as u32,
+            0xC000_0008
+        );
+    }
+}
+
+#[test]
+fn taille_requise_d_un_sid() {
+    // #2533 : même taille que GetLengthSid sur le SID construit.
+    let nt = [0u8, 0, 0, 0, 0, 5];
+    for count in 0u8..=8 {
+        let mut sid = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                AllocateAndInitializeSid(nt.as_ptr(), count, 32, 544, 1, 2, 3, 4, 5, 6, &mut sid),
+                1
+            );
+            assert_eq!(GetSidLengthRequired(count), GetLengthSid(sid), "{count}");
+            FreeSid(sid as *mut c_void);
+        }
+    }
+    unsafe {
+        assert_eq!(GetSidLengthRequired(2), 16);
+        assert_eq!(GetSidLengthRequired(15), 68);
+    }
+}

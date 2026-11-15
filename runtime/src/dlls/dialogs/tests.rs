@@ -325,3 +325,61 @@ fn longue_boite_de_message_tient_dans_l_ecran() {
     };
     assert_eq!(clip_to_work_area(second, work).bottom, 720);
 }
+
+/// #2421 : la procédure posée par SetWindowLongPtr(DWLP_DLGPROC) reçoit les
+/// messages suivants ; l'ancienne ne les voit plus.
+#[test]
+fn procedure_remplacee_par_dwlp_dlgproc() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    static VUS_PAR_L_ANCIENNE: StdMutex<Vec<u32>> = StdMutex::new(Vec::new());
+    unsafe extern "win64" fn nouvelle(hwnd: usize, msg: u32, wp: usize, _lp: isize) -> isize {
+        if msg == WM_COMMAND && wp & 0xFFFF == IDCANCEL {
+            end_dialog(hwnd, 3);
+            return 1;
+        }
+        0
+    }
+    unsafe extern "win64" fn ancienne(hwnd: usize, msg: u32, _wp: usize, _lp: isize) -> isize {
+        VUS_PAR_L_ANCIENNE.lock().unwrap().push(msg);
+        if msg == WM_INITDIALOG {
+            user32::set_window_long_ptr_w(hwnd, DWLP_DLGPROC, nouvelle as *const () as isize);
+            return 1;
+        }
+        0
+    }
+    VUS_PAR_L_ANCIENNE.lock().unwrap().clear();
+    let data = template(false);
+    let dlg = unsafe {
+        create_dialog_indirect_param_w(0, data.as_ptr(), 0, ancienne as *const () as usize, 0)
+    };
+    assert_ne!(dlg, 0);
+    assert_eq!(
+        unsafe { user32::get_window_long_ptr_w(dlg, DWLP_DLGPROC) },
+        nouvelle as *const () as isize
+    );
+    VUS_PAR_L_ANCIENNE.lock().unwrap().clear();
+    let edit = user32::get_dlg_item(dlg, 100);
+    let echap = Msg {
+        hwnd: edit,
+        message: WM_KEYDOWN,
+        wparam: 0x1B,
+        lparam: 0,
+        time: 0,
+        pt: gui::Point::default(),
+        l_private: 0,
+    };
+    unsafe {
+        assert!(is_dialog_message(dlg, &echap));
+    }
+    assert!(
+        lock(dialogs())
+            .get(&dlg)
+            .is_some_and(|d| d.ended && d.result == 3),
+        "IDCANCEL atteint la nouvelle procédure"
+    );
+    assert!(
+        VUS_PAR_L_ANCIENNE.lock().unwrap().is_empty(),
+        "l'ancienne procédure ne reçoit plus rien"
+    );
+    gui::destroy_window(dlg);
+}

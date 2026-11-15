@@ -173,7 +173,9 @@ unsafe extern "win64" fn encoder_info(_this: *mut EncoderObj, out: *mut *mut c_v
     if out.is_null() {
         return E_INVALIDARG;
     }
-    super::codec_info_for_container(&CONTAINER_PNG, out)
+    // Des informations d'encodeur (IWICBitmapEncoderInfo), pas celles du
+    // décodeur : Paint.NET les exige pour copier (#1868).
+    super::encoder_info_for_container(&CONTAINER_PNG, out)
 }
 
 /// SetColorContexts, SetPalette : sans effet sur un PNG RVBA.
@@ -666,6 +668,68 @@ mod tests {
                 WINCODEC_ERR_COMPONENTNOTFOUND
             );
             assert!(enc.is_null());
+        }
+    }
+
+    /// Appel d'une méthode de vtable COM à un argument pointeur.
+    unsafe fn call1<T>(obj: *mut c_void, slot: usize, a: *mut T) -> i32 {
+        let vt = *(obj as *const *const usize);
+        let f: unsafe extern "win64" fn(*mut c_void, *mut T) -> i32 =
+            std::mem::transmute(*vt.add(slot));
+        f(obj, a)
+    }
+
+    /// #1868 : GetEncoderInfo rend un IWICBitmapEncoderInfo (type
+    /// WICEncoder, CLSID de l'encodeur PNG) dont CreateInstance crée un
+    /// encodeur ; CreateComponentInfo(CLSID) rend le même. Paint.NET
+    /// l'exige avant de copier dans le presse-papiers.
+    #[test]
+    fn informations_encodeur_png() {
+        unsafe {
+            let mut enc = std::ptr::null_mut();
+            assert_eq!(
+                create_encoder(
+                    std::ptr::null_mut(),
+                    &CONTAINER_PNG,
+                    std::ptr::null(),
+                    &mut enc
+                ),
+                S_OK
+            );
+            let mut info: *mut c_void = std::ptr::null_mut();
+            assert_eq!(encoder_info(enc.cast(), &mut info), S_OK);
+            let iid = super::super::IID_BITMAP_ENCODER_INFO;
+            let mut ei: *mut c_void = std::ptr::null_mut();
+            let vt = *(info as *const *const usize);
+            let qi: unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
+                std::mem::transmute(*vt);
+            assert_eq!(qi(info, &iid, &mut ei), S_OK, "IWICBitmapEncoderInfo");
+            let decoder_iid = super::super::IID_BITMAP_DECODER_INFO;
+            let mut di: *mut c_void = std::ptr::null_mut();
+            assert_ne!(qi(info, &decoder_iid, &mut di), S_OK);
+            let mut kind = 0u32;
+            assert_eq!(call1(ei, 3, &mut kind), S_OK);
+            assert_eq!(kind, 2, "WICEncoder");
+            let mut clsid = Guid::default();
+            assert_eq!(call1(ei, 4, &mut clsid), S_OK);
+            assert_eq!(clsid, super::super::ENCODER_CODECS[0].clsid);
+            let mut cont = Guid::default();
+            assert_eq!(call1(ei, 11, &mut cont), S_OK);
+            assert_eq!(cont, CONTAINER_PNG);
+            let mut autre: *mut c_void = std::ptr::null_mut();
+            assert_eq!(call1(ei, 23, &mut autre), S_OK, "CreateInstance");
+            assert!(!autre.is_null());
+            let mut cont2 = Guid::default();
+            assert_eq!(call1(autre, 4, &mut cont2), S_OK);
+            assert_eq!(cont2, CONTAINER_PNG);
+            let mut ci: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                super::super::create_component_info(std::ptr::null_mut(), &clsid, &mut ci),
+                S_OK
+            );
+            let mut kind2 = 0u32;
+            assert_eq!(call1(ci, 3, &mut kind2), S_OK);
+            assert_eq!(kind2, 2);
         }
     }
 }

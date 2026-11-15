@@ -504,8 +504,42 @@ namespace System.Threading
         // WaitAll s'y endorment et chaque signal les réveille.
         internal static readonly object s_lock = new object();
 
-        internal abstract bool IsSignaled();
-        internal virtual void Acquire() { }
+        // Objet du noyau (Mutex, Semaphore, #1988) : handle de kernel32,
+        // attendu par le noyau ; WaitAny et WaitAll l'interrogent.
+        internal long _noyau;
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern int AttendreNoyau(long handle, int millisecondsTimeout);
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void FermerNoyau(long handle);
+
+        // Un objet du noyau est pris dès qu'il est interrogé avec succès ;
+        // la prise attend ensuite Acquire.
+        private bool _pris;
+
+        internal virtual bool IsSignaled()
+        {
+            if (_noyau == 0) return false;
+            if (!_pris) _pris = Resultat(AttendreNoyau(_noyau, 0));
+            return _pris;
+        }
+
+        internal virtual void Acquire() { _pris = false; }
+
+        // 0 : acquis ; 0x80 : mutex abandonné, acquis quand même ; 258 : délai.
+        internal static bool Resultat(int r)
+        {
+            if (r == 0x80) throw new AbandonedMutexException();
+            return r == 0;
+        }
+
+        private static int Sommeil(WaitHandle[] waitHandles, int reste)
+        {
+            for (int i = 0; i < waitHandles.Length; i++)
+                if (waitHandles[i]._noyau != 0)
+                    return reste == Timeout.Infinite || reste > 10 ? 10 : reste;
+            return reste;
+        }
 
         public virtual bool WaitOne() { return WaitOne(Timeout.Infinite); }
         public virtual bool WaitOne(TimeSpan timeout) { return WaitOne(Horloge2.ToMs(timeout)); }
@@ -514,6 +548,12 @@ namespace System.Threading
 
         public virtual bool WaitOne(int millisecondsTimeout)
         {
+            if (_noyau != 0)
+            {
+                if (millisecondsTimeout < -1) throw new ArgumentOutOfRangeException("millisecondsTimeout");
+                if (_pris) { _pris = false; return true; }
+                return Resultat(AttendreNoyau(_noyau, millisecondsTimeout));
+            }
             return WaitAny(new WaitHandle[] { this }, millisecondsTimeout) != WaitTimeout;
         }
 
@@ -539,7 +579,7 @@ namespace System.Threading
                     }
                     int reste = Horloge2.Remaining(deadline);
                     if (reste == 0) return WaitTimeout;
-                    Monitor.Wait(s_lock, reste);
+                    Monitor.Wait(s_lock, Sommeil(waitHandles, reste));
                 }
             }
         }
@@ -566,7 +606,7 @@ namespace System.Threading
                     }
                     int reste = Horloge2.Remaining(deadline);
                     if (reste == 0) return false;
-                    Monitor.Wait(s_lock, reste);
+                    Monitor.Wait(s_lock, Sommeil(waitHandles, reste));
                 }
             }
         }
@@ -578,7 +618,30 @@ namespace System.Threading
 
         public virtual void Close() { Dispose(true); }
         public void Dispose() { Dispose(true); }
-        protected virtual void Dispose(bool explicitDisposing) { }
+
+        protected virtual void Dispose(bool explicitDisposing)
+        {
+            long h = _noyau;
+            _noyau = 0;
+            if (h != 0) FermerNoyau(h);
+        }
+
+        // Handle du noyau vu comme SafeWaitHandle (#2019). Un objet géré
+        // (ManualResetEvent…) n'en a pas : la poignée est alors invalide.
+        protected static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        public Microsoft.Win32.SafeHandles.SafeWaitHandle SafeWaitHandle
+        {
+            get { return new Microsoft.Win32.SafeHandles.SafeWaitHandle(_noyau == 0 ? InvalidHandle : new IntPtr(_noyau), false); }
+            set { _noyau = value == null || value.IsInvalid ? 0 : value.DangerousGetHandle().ToInt64(); }
+        }
+
+        [Obsolete("Use the SafeWaitHandle property instead.")]
+        public virtual IntPtr Handle
+        {
+            get { return _noyau == 0 ? InvalidHandle : new IntPtr(_noyau); }
+            set { _noyau = value == InvalidHandle ? 0 : value.ToInt64(); }
+        }
     }
 
     public class EventWaitHandle : WaitHandle

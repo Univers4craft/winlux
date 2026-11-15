@@ -412,8 +412,8 @@ pub fn plan(spec: &Spec, expanded: bool) -> (Vec<(Elem, Rect)>, i32, i32) {
         y += 4;
     }
     if links {
-        for i in 0..spec.custom {
-            let h = if spec.buttons[i].1.contains('\n') {
+        for (i, bouton) in spec.buttons.iter().enumerate().take(spec.custom) {
+            let h = if bouton.1.contains('\n') {
                 LINK_H + 8
             } else {
                 LINK_H

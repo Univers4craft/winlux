@@ -904,6 +904,85 @@ pub(super) unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> u
     pidl_from_path(&crate::paths::full_windows(&p))
 }
 
+/// BROWSEINFOW/A en x64 (shlobj_core.h) : hwndOwner, pidlRoot,
+/// pszDisplayName, lpszTitle, ulFlags, lpfn, lParam, iImage.
+const BI_OWNER: usize = 0;
+const BI_ROOT: usize = 8;
+const BI_DISPLAY: usize = 16;
+const BI_TITLE: usize = 24;
+const BI_IMAGE: usize = 56;
+
+/// SHBrowseForFolderW (#2333) : la boîte de choix de dossier de Winlux
+/// (l'Explorateur en mode « dossier », comme IFileDialog avec
+/// FOS_PICKFOLDERS). Rend l'identifiant du dossier choisi (à libérer par
+/// CoTaskMemFree/ILFree), NULL si l'utilisateur annule ; pszDisplayName
+/// reçoit le nom du dossier (MAX_PATH). Le dossier de départ est
+/// pidlRoot s'il est donné. Limite : la procédure lpfn (BFFM_*) n'est pas
+/// appelée, la boîte étant dans un autre processus.
+unsafe extern "win64" fn sh_browse_for_folder_w(bi: *mut u8) -> usize {
+    browse_for_folder(bi, true)
+}
+
+/// SHBrowseForFolderA : même boîte, chaînes ANSI.
+unsafe extern "win64" fn sh_browse_for_folder_a(bi: *mut u8) -> usize {
+    browse_for_folder(bi, false)
+}
+
+unsafe fn browse_for_folder(bi: *mut u8, wide: bool) -> usize {
+    if bi.is_null() {
+        return 0;
+    }
+    let rd = |off: usize| std::ptr::read_unaligned(bi.add(off) as *const usize);
+    let owner = rd(BI_OWNER);
+    let title_ptr = rd(BI_TITLE);
+    let title = if title_ptr == 0 {
+        String::new()
+    } else if wide {
+        wstr(title_ptr as *const u16)
+    } else {
+        crate::dlls::cstr(title_ptr as *const u8)
+    };
+    let title = if title.trim().is_empty() {
+        super::comdlg32_ui::tr(
+            "Rechercher un dossier",
+            "Browse For Folder",
+            "Ordner suchen",
+            "Buscar carpeta",
+        )
+        .to_string()
+    } else {
+        title
+    };
+    let start = path_from_pidl(rd(BI_ROOT) as *const u8);
+    match super::filedialog_com::pick_folder(owner, &title, start, "") {
+        Ok((paths, _)) => match paths.first() {
+            Some(path) => browse_result(bi, wide, path),
+            None => 0,
+        },
+        Err(_) => 0,
+    }
+}
+
+/// Résultat de SHBrowseForFolder pour le dossier `path` : nom affiché dans
+/// pszDisplayName, iImage à 0, identifiant rendu.
+unsafe fn browse_result(bi: *mut u8, wide: bool, path: &str) -> usize {
+    let display = std::ptr::read_unaligned(bi.add(BI_DISPLAY) as *const usize);
+    if display != 0 {
+        let name = path.trim_end_matches('\\');
+        let name = name.rsplit('\\').next().unwrap_or(name);
+        if wide {
+            put_fixed(name, display as *mut u16, 260);
+        } else {
+            let bytes = crate::dlls::encode_ansi(name);
+            let n = bytes.len().min(259);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), display as *mut u8, n);
+            *(display as *mut u8).add(n) = 0;
+        }
+    }
+    std::ptr::write_unaligned(bi.add(BI_IMAGE) as *mut i32, 0);
+    pidl_from_path(path)
+}
+
 /// SHOpenFolderAndSelectItems (« Afficher dans le dossier » de Chrome,
 /// Electron, des lanceurs…) : l'Explorateur Winlux sur le dossier, comme
 /// `explorer.exe /select,CHEMIN`. Les éléments enfants relatifs ne sont pas
@@ -1491,6 +1570,25 @@ pub fn report_event(h: usize, kind: u16, id: u32, strings: &[String]) -> Option<
     Some(line)
 }
 
+/// Lit les `n` cases du tableau lpStrings de ReportEvent. Une case a la
+/// taille d'un pointeur du programme appelant : 4 octets pour un programme
+/// x86, 8 pour un programme x64 (#2507).
+unsafe fn event_string_cells(base: usize, n: u16, cell: usize) -> Vec<usize> {
+    if base == 0 {
+        return Vec::new();
+    }
+    (0..n as usize)
+        .map(|i| {
+            let at = base + i * cell;
+            if cell == 4 {
+                std::ptr::read_unaligned(at as *const u32) as usize
+            } else {
+                std::ptr::read_unaligned(at as *const usize)
+            }
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe extern "win64" fn report_event_w(
     h: usize,
@@ -1503,9 +1601,9 @@ unsafe extern "win64" fn report_event_w(
     strings: *const *const u16,
     _data: usize,
 ) -> i32 {
-    let list: Vec<String> = (0..n as usize)
-        .filter(|_| !strings.is_null())
-        .map(|i| wstr(*strings.add(i)))
+    let list: Vec<String> = event_string_cells(strings as usize, n, crate::wow32::pointer_size())
+        .into_iter()
+        .map(|p| wstr(p as *const u16))
         .collect();
     if report_event(h, kind, id, &list).is_some() {
         1
@@ -1527,9 +1625,9 @@ unsafe extern "win64" fn report_event_a(
     strings: *const *const u8,
     _data: usize,
 ) -> i32 {
-    let list: Vec<String> = (0..n as usize)
-        .filter(|_| !strings.is_null())
-        .map(|i| crate::dlls::cstr(*strings.add(i)))
+    let list: Vec<String> = event_string_cells(strings as usize, n, crate::wow32::pointer_size())
+        .into_iter()
+        .map(|p| crate::dlls::cstr(p as *const u8))
         .collect();
     if report_event(h, kind, id, &list).is_some() {
         1
@@ -1569,19 +1667,26 @@ struct TpWait {
 unsafe extern "win64" fn create_threadpool_wait(
     callback: Option<WaitCallback>,
     context: usize,
-    _env: usize,
+    env: usize,
 ) -> usize {
     let Some(callback) = callback else {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    std::sync::Arc::into_raw(std::sync::Arc::new(TpWait {
+    let wait = std::sync::Arc::into_raw(std::sync::Arc::new(TpWait {
         callback,
         context,
         generation: std::sync::atomic::AtomicU64::new(0),
         running: std::sync::Mutex::new(0),
         idle: std::sync::Condvar::new(),
-    })) as usize
+    })) as usize;
+    // Groupe de nettoyage de l'environnement (#2110).
+    crate::dlls::threadpool::join_group_with_context(
+        env,
+        crate::dlls::threadpool::Member::Wait(wait),
+        context,
+    );
+    wait
 }
 
 /// Délai FILETIME de SetThreadpoolWait en millisecondes (None = infini).
@@ -1664,6 +1769,16 @@ unsafe extern "win64" fn close_threadpool_wait(wait: usize) {
     if wait == 0 {
         return;
     }
+    crate::dlls::threadpool::leave_groups(wait);
+    let w = std::sync::Arc::from_raw(wait as *const TpWait);
+    w.generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Libération d'une attente par CloseThreadpoolCleanupGroupMembers :
+/// annulée si demandé, ses rappels en cours attendus, puis fermée.
+pub(crate) unsafe fn release_threadpool_wait(wait: usize, cancel: bool) {
+    wait_for_threadpool_wait_callbacks(wait, i32::from(cancel));
     let w = std::sync::Arc::from_raw(wait as *const TpWait);
     w.generation
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2069,6 +2184,8 @@ pub fn shell32_exports() -> Exports {
         "SHFileOperationW" => fn sh_file_operation_w,
         "SHChangeNotify" => fn sh_change_notify,
         "ILCreateFromPathW" => fn il_create_from_path_w,
+        "SHBrowseForFolderW" => fn sh_browse_for_folder_w,
+        "SHBrowseForFolderA" => fn sh_browse_for_folder_a,
         "SHGetKnownFolderIDList" => fn sh_get_known_folder_id_list,
         "ILFree" => fn il_free,
         "SHOpenFolderAndSelectItems" => fn sh_open_folder_and_select_items,
@@ -2355,6 +2472,53 @@ mod tests {
     }
 
     #[test]
+    fn choix_de_dossier_rend_le_nom_et_l_identifiant() {
+        // #2333 : SHBrowseForFolderW remplit pszDisplayName avec le nom du
+        // dossier et rend un identifiant que SHGetPathFromIDListW relit.
+        unsafe {
+            let mut nom = [0xffffu16; 260];
+            let mut bi = [0u8; 64];
+            std::ptr::write_unaligned(
+                bi.as_mut_ptr().add(BI_DISPLAY) as *mut usize,
+                nom.as_mut_ptr() as usize,
+            );
+            std::ptr::write_unaligned(bi.as_mut_ptr().add(BI_IMAGE) as *mut i32, 7);
+            let p = browse_result(bi.as_mut_ptr(), true, "C:\\Users\\Testeur\\Projets\\");
+            let end = nom.iter().position(|&c| c == 0).unwrap();
+            assert_eq!(String::from_utf16_lossy(&nom[..end]), "Projets");
+            assert_eq!(
+                std::ptr::read_unaligned(bi.as_ptr().add(BI_IMAGE) as *const i32),
+                0
+            );
+            if p == 0 {
+                return; // CoTaskMemAlloc absent de cette configuration
+            }
+            let mut out = [0u16; 260];
+            assert_eq!(
+                sh_get_path_from_id_list_w(p as *const u8, out.as_mut_ptr()),
+                1
+            );
+            let end = out.iter().position(|&c| c == 0).unwrap();
+            assert_eq!(
+                String::from_utf16_lossy(&out[..end]),
+                "C:\\Users\\Testeur\\Projets\\"
+            );
+            il_free(p);
+            // Version ANSI : nom en octets terminés par 0.
+            let mut nom_a = [0xffu8; 260];
+            std::ptr::write_unaligned(
+                bi.as_mut_ptr().add(BI_DISPLAY) as *mut usize,
+                nom_a.as_mut_ptr() as usize,
+            );
+            let p = browse_result(bi.as_mut_ptr(), false, "C:\\Dossier");
+            assert_eq!(&nom_a[..8], b"Dossier\0");
+            il_free(p);
+            // Sans structure : NULL, comme une annulation.
+            assert_eq!(sh_browse_for_folder_w(std::ptr::null_mut()), 0);
+        }
+    }
+
+    #[test]
     fn pidl_aller_retour() {
         unsafe {
             let p = pidl_from_path("C:\\Users\\Testeur\\Documents");
@@ -2459,6 +2623,19 @@ mod tests {
         assert_eq!(line, "Paint.NET (événement 3) : échec | détail");
         assert_eq!(deregister_event_source(h), 1);
         assert!(report_event(h, 1, 3, &[]).is_none());
+    }
+
+    #[test]
+    fn report_event_lit_des_cases_de_quatre_octets_en_x86() {
+        // Tableau lpStrings tel qu'un programme x86 le passe : deux pointeurs
+        // de 4 octets côte à côte (#2507).
+        let x86: [u32; 2] = [0x7f5e_2f08, 0x0065_0053];
+        let cells = unsafe { event_string_cells(x86.as_ptr() as usize, 2, 4) };
+        assert_eq!(cells, vec![0x7f5e_2f08, 0x0065_0053]);
+        let x64: [usize; 2] = [0x1122_3344_5566_7788, 0x10];
+        let cells = unsafe { event_string_cells(x64.as_ptr() as usize, 2, 8) };
+        assert_eq!(cells, vec![0x1122_3344_5566_7788, 0x10]);
+        assert!(unsafe { event_string_cells(0, 3, 4) }.is_empty());
     }
 
     #[test]

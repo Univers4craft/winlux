@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **315**
+- Réalisé : **322**
 - À faire ou en cours : **46**
-- Total : **361**
-- Progression : **87.3%**
-- Dernière mise à jour : 11/11/2026 (WASAPI pour les programmes 32 bits, #1660) ; 09/11/2026 (lecteur multimédia : un seul flux audio, bouchonné en pause, volume sur le flux, #1013) ; 08/11/2026 (applis .NET autonomes et WinForms #269 : suspension de threads, contexte, WaitMessage, page de garde de pile, MEM_WRITE_WATCH, issues #954 à #965) ; 07/11/2026 (installateurs NSIS/Inno/MSI : actions personnalisées EXE et DLL, services, assistant au double-clic, PR #813 ; anciens jeux #237 : DirectDraw, Direct3D 8, MIDI, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay ; tri des issues GitHub sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées comme livrées, #498 doublon de #521 ; PR #564 pour #209, #214, #14, #26, #575, #590, #591, #592 ; 14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
+- Total : **368**
+- Progression : **87.5%**
+- Dernière mise à jour : 15/11/2026 (codes d'erreur Win32 #2112 à #2118, dossiers système d'un profil neuf #2478) ; 11/11/2026 (WASAPI pour les programmes 32 bits, #1660) ; 09/11/2026 (lecteur multimédia : un seul flux audio, bouchonné en pause, volume sur le flux, #1013) ; 08/11/2026 (applis .NET autonomes et WinForms #269 : suspension de threads, contexte, WaitMessage, page de garde de pile, MEM_WRITE_WATCH, issues #954 à #965) ; 07/11/2026 (installateurs NSIS/Inno/MSI : actions personnalisées EXE et DLL, services, assistant au double-clic, PR #813 ; anciens jeux #237 : DirectDraw, Direct3D 8, MIDI, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay ; tri des issues GitHub sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées comme livrées, #498 doublon de #521 ; PR #564 pour #209, #214, #14, #26, #575, #590, #591, #592 ; 14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
 
@@ -57,6 +57,8 @@
 - [ ] Fautes matérielles (SIGSEGV…) livrées comme exceptions SEH aux `__try` et VEH, et suspension de threads (`SuspendThread`, `GetThreadContext`, `QueueUserAPC2`) pour coreclr, Java et Go (#269).
 
 ### Priorité 2 — Compatibilité Windows
+
+- [ ] Conformité des codes d'erreur, reste de la revue du 12/11/2026 : WaitNamedPipe sur un tube inexistant attend tout le délai et rend 2 au lieu de 121 quand il est occupé (#2115) ; il faut un registre des tubes partagé entre processus, après 0.2.21 ; attente journalisée sous WINLUX_TRACE en attendant (PR #2505).
 
 - [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs (#16).
 - [ ] Services Windows (#17) : version A livrée (#63) ; restent les variantes W, le démarrage automatique et un vrai service.
@@ -140,6 +142,16 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
+
+- [x] SHGetKnownFolderPath : les 120 FOLDERID de la page publique KNOWNFOLDERID (hors OneDrive) sont servis, E_INVALIDARG pour un GUID inconnu et E_FAIL pour un dossier virtuel, refus journalisé ; GUID de FOLDERID_Fonts corrigé (#2477).
+- [x] Codes d'erreur : tube sans lecteur → 232 au lieu de 31, errno sans retombée sur le générique 31, test de conformité permanent `conformite_codes_erreur` (#2111).
+- [x] Codes d'erreur : dossier parent absent ou composant fichier → ERROR_PATH_NOT_FOUND (3) au lieu de 2 dans onze fonctions de fichiers (#2112).
+- [x] Codes d'erreur : GetModuleHandleA/W pose ERROR_MOD_NOT_FOUND (126) quand le module manque (#2113).
+- [x] OpenEvent, OpenMutex, OpenSemaphore et OpenWaitableTimer acceptent bInheritHandle=TRUE et rendent un handle héritable au lieu de 50 (#2114).
+- [x] GetFileSize et SetFilePointer réussis à 0xFFFFFFFF posent NO_ERROR (#2116).
+- [x] GetLongPathName et GetShortPathName échouent sur un chemin absent (2, ou 3 quand le parent manque) (#2117).
+- [x] MoveFileW vers une destination existante rend ERROR_ALREADY_EXISTS (183), comme MoveFileA et MoveFileEx (#2118).
+- [x] Profil neuf : C:\Program Files, C:\Program Files (x86), C:\ProgramData et le dossier Programmes commun du menu Démarrer existent dès le premier lancement (#2478).
 
 ### Tri des issues GitHub (07/11/2026, PR #564)
 

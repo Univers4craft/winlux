@@ -240,7 +240,7 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
+for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait taches_compte chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -575,6 +575,12 @@ umask 077
 
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
+# cgroup v2 (#2142) : sans lui le pare-feu abandonne ses règles sortantes par
+# application (« socket cgroupv2 ») et /sys/fs/cgroup reste un dossier vide.
+# Monté une seule fois : /init se relance après une mise à jour A/B.
+if test -d /sys/fs/cgroup && ! /bin/busybox grep -q ' /sys/fs/cgroup cgroup2 ' /proc/mounts; then
+    /bin/busybox mount -t cgroup2 cgroup2 /sys/fs/cgroup 2>/dev/null || true
+fi
 # Variables UEFI (efibootmgr, entrée « Winlux » de l'installateur) : sans
 # efivarfs, efibootmgr répond « EFI variables are not supported ». Échoue
 # sans bruit avec efi=noruntime (UEFI 32 bits) ou au démarrage BIOS.
@@ -622,6 +628,32 @@ safe_power() {
     if /usr/bin/winlux-update --busy; then
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
         return
+    fi
+    # L'affichage part en premier (#2270) : un « kill -TERM -1 » commun
+    # terminait l'écran de verrouillage (un script GTK, aussitôt mort) avant
+    # Xorg et les applications, et le bureau déverrouillé restait visible
+    # jusqu'à l'extinction. Xorg arrêté, plus rien de la session ne s'affiche ;
+    # au bout de 3 s il est tué. Règle de sécurité Winlux : une session
+    # verrouillée ne montre jamais son contenu, même pendant un arrêt.
+    xorg_pids=$(/bin/busybox pidof Xorg 2>/dev/null || true)
+    if test -n "$xorg_pids"; then
+        echo "Winlux : arrêt de l'affichage ($1)"
+        # shellcheck disable=SC2086
+        /bin/busybox kill -TERM $xorg_pids 2>/dev/null || true
+        xorg_wait=0
+        while test "$xorg_wait" -lt 30; do
+            xorg_alive=
+            for xorg_pid in $xorg_pids; do
+                # Un Xorg zombie (sorti, pas encore récupéré) n'affiche plus rien.
+                xorg_state=$(/bin/busybox awk '{ print $3 }' "/proc/$xorg_pid/stat" 2>/dev/null || true)
+                test -n "$xorg_state" && test "$xorg_state" != Z && xorg_alive=1
+            done
+            test -z "$xorg_alive" && break
+            /bin/busybox sleep 0.1
+            xorg_wait=$((xorg_wait + 1))
+        done
+        # shellcheck disable=SC2086
+        test -n "$xorg_alive" && /bin/busybox kill -KILL $xorg_pids 2>/dev/null
     fi
     # Ask remaining background services to terminate before flushing disks.
     echo "Winlux : arrêt des programmes ($1)"
@@ -727,13 +759,15 @@ if test -f /usr/sbin/policy-rc.d && test "$(/bin/busybox cat /usr/sbin/policy-rc
     /bin/busybox rm -f /usr/sbin/policy-rc.d
 fi
 desktop_user=
-desktop_autologin=1
+# Connexion automatique seulement sur un choix explicite (#2134) : sans la
+# clé, le mot de passe est demandé, comme sous Windows.
+desktop_autologin=0
 if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
     desktop_user=$(/bin/busybox sed -n 's/^[[:space:]]*"username":[[:space:]]*"\([a-z_][a-z0-9_.-]*\)".*/\1/p' /etc/winlux/install-config.json | /bin/busybox head -n 1)
     if test -n "$desktop_user" && ! /bin/busybox awk -F: -v u="$desktop_user" '$1 == u && $3 >= 1000 && $3 < 60000 { found=1 } END { exit !found }' /etc/passwd; then
         desktop_user=
     fi
-    if /bin/busybox grep -q '"autologin":[[:space:]]*false' /etc/winlux/install-config.json; then desktop_autologin=0; fi
+    if /bin/busybox grep -q '"autologin":[[:space:]]*true' /etc/winlux/install-config.json; then desktop_autologin=1; fi
 fi
 if test -n "$desktop_user"; then
     # Fichiers d'état et réglages lisibles par le bureau (il n'est plus root).
@@ -799,6 +833,28 @@ if test -n "$desktop_user"; then
     for node in /dev/dri/renderD* /dev/kfd; do test -c "$node" && /bin/busybox chmod 666 "$node"; done 2>/dev/null
     for node in /dev/input/js* /dev/input/event*; do test -c "$node" && /bin/busybox chgrp input "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
 fi
+# Virtualisation (#2069) : /dev/kvm et /dev/net/tun au groupe kvm en 0660,
+# jamais au monde. Le groupe est créé s'il manque, et le compte du bureau
+# (l'administrateur de l'installation) y entre une seule fois : un retrait
+# fait ensuite par l'administrateur est respecté, et les autres comptes,
+# dont ceux du contrôle parental, n'y sont pas mis d'office.
+if test -n "$desktop_user" && { test -c /dev/kvm || test -c /dev/net/tun; }; then
+    if ! /bin/busybox grep -q '^kvm:' /etc/group; then
+        kvm_gid=999
+        while /bin/busybox awk -F: -v n="$kvm_gid" '$3 == n { found=1 } END { exit !found }' /etc/group; do kvm_gid=$((kvm_gid - 1)); done
+        echo "kvm:x:$kvm_gid:" >>/etc/group
+        if test -f /etc/gshadow && ! /bin/busybox grep -q '^kvm:' /etc/gshadow; then echo 'kvm:!::' >>/etc/gshadow; fi
+    fi
+    if ! test -e /etc/winlux/kvm-compte-ajoute; then
+        /bin/busybox awk -F: -v OFS=: -v u="$desktop_user" '
+            $1 == "kvm" { n = split($4, m, ","); f = 0; for (i = 1; i <= n; i++) if (m[i] == u) f = 1; if (!f) $4 = ($4 == "" ? u : $4 "," u) }
+            { print }' /etc/group >/etc/group.winlux-kvm &&
+            /bin/busybox cat /etc/group.winlux-kvm >/etc/group &&
+            /bin/busybox mkdir -p /etc/winlux && /bin/busybox touch /etc/winlux/kvm-compte-ajoute
+        /bin/busybox rm -f /etc/group.winlux-kvm
+    fi
+    for node in /dev/kvm /dev/net/tun; do test -c "$node" && /bin/busybox chgrp kvm "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
+fi
 # Enregistrer binfmt pour les .exe (MZ) : « ./programme.exe » dans un
 # terminal lance winlux. Une règle par écriture et sans les commentaires du
 # fichier : le noyau refusait tout le bloc, donc rien n'était enregistré en
@@ -851,6 +907,17 @@ if test -n "$desktop_user"; then
     echo 2 >/proc/sys/fs/protected_fifos 2>/dev/null || true
 else
     /bin/busybox touch /etc/winlux/live-session
+fi
+# Anti-gel mémoire (#2132) : sans swap, un programme qui dévore la RAM
+# chassait du cache les pages de code du bureau, relues en boucle depuis le
+# disque, et tout se figeait plusieurs minutes (seule la souris bougeait).
+# Le noyau (MGLRU) garde désormais en mémoire tout ce qui a servi dans la
+# dernière seconde ; s'il ne le peut plus, il tue tout de suite le plus gros
+# consommateur au lieu de laisser la machine s'effondrer. 1000 ms est la
+# valeur conseillée par la documentation du noyau (multigen_lru.rst).
+if test -w /sys/kernel/mm/lru_gen/min_ttl_ms; then
+    echo y >/sys/kernel/mm/lru_gen/enabled 2>/dev/null || true
+    echo 1000 >/sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null || true
 fi
 # Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
 # d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
@@ -1098,8 +1165,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     fi
     xorg_args=':0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log'
     if command -v setsid >/dev/null 2>&1; then
+        # Xorg est épargné par le tueur du noyau (#2132) : seul Xorg, car un
+        # réglage posé sur la session passerait à toutes ses applications.
         # shellcheck disable=SC2016
-        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; echo -900 >/proc/self/oom_score_adj 2>/dev/null; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
     else
         # shellcheck disable=SC2086
         /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &

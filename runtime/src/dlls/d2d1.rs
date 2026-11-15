@@ -898,6 +898,28 @@ unsafe extern "win64" fn geometry_stroke_contains(
     S_OK
 }
 
+/// Segments des figures aplaties, dans l'ordre du tracé.
+unsafe fn flat_segments(this: *mut GeometryObj, m: *const Matrix) -> Vec<(Pt, Pt)> {
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
+    let mut out = Vec::new();
+    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
+        let n = if *closed {
+            poly.len()
+        } else {
+            poly.len().saturating_sub(1)
+        };
+        for i in 0..n {
+            out.push((poly[i], poly[(i + 1) % poly.len()]));
+        }
+    }
+    out
+}
+
+fn seg_len(a: Pt, b: Pt) -> f32 {
+    ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt()
+}
+
 /// ComputeLength(transform, tolérance, *longueur) : somme des segments
 /// des figures aplaties.
 unsafe extern "win64" fn geometry_length(
@@ -909,21 +931,65 @@ unsafe extern "win64" fn geometry_length(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
-    let path = crate::dlls::lock(&Com::get(this).data.path).clone();
-    let mut len = 0.0;
-    for (poly, (_, closed)) in path.fill_polys(&m).iter().zip(&path.figures) {
-        let n = if *closed {
-            poly.len()
-        } else {
-            poly.len().saturating_sub(1)
-        };
-        for i in 0..n {
-            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-            len += ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
-        }
+    *out = flat_segments(this, m)
+        .iter()
+        .map(|&(a, b)| seg_len(a, b))
+        .sum();
+    S_OK
+}
+
+/// Point et tangente unitaire à une longueur donnée le long des figures
+/// aplaties, la longueur étant ramenée entre 0 et la longueur totale.
+fn point_at_length(segs: &[(Pt, Pt)], length: f32) -> (Pt, Pt) {
+    let segs: Vec<&(Pt, Pt)> = segs
+        .iter()
+        .filter(|&&(a, b)| seg_len(a, b) > 1e-6)
+        .collect();
+    let Some(&&(first, _)) = segs.first() else {
+        return ((0.0, 0.0), (0.0, 0.0));
+    };
+    let tangent = |a: Pt, b: Pt| {
+        let l = seg_len(a, b);
+        ((b.0 - a.0) / l, (b.1 - a.1) / l)
+    };
+    let mut left = length.max(0.0);
+    if length <= 0.0 {
+        let (a, b) = *segs[0];
+        return (first, tangent(a, b));
     }
-    *out = len;
+    for &&(a, b) in &segs {
+        let l = seg_len(a, b);
+        if left <= l {
+            let t = left / l;
+            return (
+                (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t),
+                tangent(a, b),
+            );
+        }
+        left -= l;
+    }
+    let &&(a, b) = segs.last().unwrap();
+    (b, tangent(a, b))
+}
+
+/// ComputePointAtLength(longueur, transform, tolérance, *point, *tangente)
+/// (#2454) : le sélecteur d'ancrage du dialogue « Nouvelle image » de
+/// Paint.NET en tire ses flèches. Prototype : d2d1.h des en-têtes mingw-w64.
+unsafe extern "win64" fn geometry_point_at_length(
+    this: *mut GeometryObj,
+    length: f32,
+    m: *const Matrix,
+    _tol: f32,
+    point_out: *mut [f32; 2],
+    tangent_out: *mut [f32; 2],
+) -> i32 {
+    let (p, t) = point_at_length(&flat_segments(this, m), length);
+    if !point_out.is_null() {
+        *point_out = [p.0, p.1];
+    }
+    if !tangent_out.is_null() {
+        *tangent_out = [t.0, t.1];
+    }
     S_OK
 }
 
@@ -988,13 +1054,15 @@ const IID_D2D1_TRANSFORMED_GEOMETRY: Guid = guid(
 
 /// Envoie des figures aplaties à un ID2D1SimplifiedGeometrySink (ou un
 /// ID2D1GeometrySink, qui le prolonge) : SetFillMode, BeginFigure,
-/// AddLines, EndFigure, Close.
+/// AddLines, EndFigure. Jamais Close : le puits appartient à l'appelant,
+/// qui le ferme lui-même (Simplify, Widen, CombineWithGeometry, Stream).
+/// Paint.NET lève « This IGeometrySink has already been closed » si nous
+/// le fermons à sa place (#2499).
 unsafe fn emit_figures(sink: *mut c_void, figures: &[(Vec<Pt>, bool)], rule: FillRule) -> i32 {
     type SetFill = unsafe extern "win64" fn(*mut c_void, u32);
     type Begin = unsafe extern "win64" fn(*mut c_void, u64, u32);
     type Lines = unsafe extern "win64" fn(*mut c_void, *const Pt, u32);
     type End = unsafe extern "win64" fn(*mut c_void, u32);
-    type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
     let packed = |p: Pt| (p.0.to_bits() as u64) | ((p.1.to_bits() as u64) << 32);
     method::<SetFill>(sink, 3)(sink, u32::from(rule == FillRule::NonZero));
     for (pts, closed) in figures {
@@ -1006,7 +1074,7 @@ unsafe fn emit_figures(sink: *mut c_void, figures: &[(Vec<Pt>, bool)], rule: Fil
         }
         method::<End>(sink, 8)(sink, u32::from(*closed));
     }
-    method::<Close>(sink, 9)(sink)
+    S_OK
 }
 
 /// Simplify(option, transform, tolérance, sink) : nos figures sont déjà
@@ -1069,6 +1137,32 @@ unsafe extern "win64" fn geometry_combine(
     let m = if m.is_null() { Matrix::IDENTITY } else { *m };
     let (b, rb) = polys(input as *mut GeometryObj, &m);
     let figures: Vec<(Vec<Pt>, bool)> = combine(&a, ra, &b, rb, mode)
+        .into_iter()
+        .map(|p| (p, true))
+        .collect();
+    emit_figures(sink, &figures, FillRule::NonZero)
+}
+
+/// Outline(transform, tolérance, puits) (#2516) : le contour de la
+/// géométrie, c'est-à-dire sa surface remplie redécrite sans
+/// auto-intersection. Nous l'obtenons par l'union de ses figures aplaties
+/// (transformées) avec rien, en contours fermés à la règle non nulle.
+/// Paint.NET s'en sert pour le sélecteur d'ancrage de Nouvelle image.
+unsafe extern "win64" fn geometry_outline(
+    this: *mut GeometryObj,
+    m: *const Matrix,
+    _tol: f32,
+    sink: *mut c_void,
+) -> i32 {
+    use super::d2d_combine::{combine, CombineMode};
+    if sink.is_null() {
+        return E_INVALIDARG;
+    }
+    let m = if m.is_null() { Matrix::IDENTITY } else { *m };
+    let g = &Com::get(this).data;
+    let polys = crate::dlls::lock(&g.path).fill_polys(&m);
+    let rule = *crate::dlls::lock(&g.rule);
+    let figures: Vec<(Vec<Pt>, bool)> = combine(&polys, rule, &[], rule, CombineMode::Union)
         .into_iter()
         .map(|p| (p, true))
         .collect();
@@ -1145,10 +1239,10 @@ macro_rules! geometry_vtable {
             geometry_simplify as *const (),
             unsupported!("Tessellate"),
             geometry_combine as *const (),
-            unsupported!("Outline"),
+            geometry_outline as *const (),
             unsupported!("ComputeArea"),
             geometry_length as *const (),
-            unsupported!("ComputePointAtLength"),
+            geometry_point_at_length as *const (),
             geometry_widen as *const (),
             $($extra),*
         ]);
@@ -1187,10 +1281,10 @@ static GEOMETRY_VT: VTable<22> = VTable([
     geometry_simplify as *const (),
     unsupported!("Tessellate"),
     geometry_combine as *const (),
-    unsupported!("Outline"),
+    geometry_outline as *const (),
     unsupported!("ComputeArea"),
     geometry_length as *const (),
-    unsupported!("ComputePointAtLength"),
+    geometry_point_at_length as *const (),
     geometry_widen as *const (),
     path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
     path_stream as *const (),
@@ -1410,6 +1504,9 @@ struct Bitmap {
     /// Liste de commandes : boîte de ce qui y a été dessiné, même hors de
     /// sa surface (#1743). GetImageLocalBounds la rend, comme Direct2D.
     drawn: Mutex<Option<[f32; 4]>>,
+    /// Copie à un octet par pixel rendue par Map d'un bitmap A8, tenue
+    /// jusqu'à Unmap (#2431).
+    pub(super) mapped: Mutex<Vec<u8>>,
 }
 
 /// Verrou WIC dont un bitmap partage les pixels.
@@ -1436,6 +1533,7 @@ impl Bitmap {
             alpha_only: false,
             shared: None,
             drawn: Mutex::new(None),
+            mapped: Mutex::new(Vec::new()),
         }
     }
 
@@ -2394,6 +2492,7 @@ unsafe fn stroke_path(
     };
     // Tirets du style de trait (#1867), en multiples de l'épaisseur. Un
     // trait « fixe » (1) ou « fin » (2) garde son épaisseur en pixels.
+    let original = path;
     let dashed;
     let (path, width) = match v11::stroke_pattern(style) {
         Some((pattern, offset, kind)) => {
@@ -2415,7 +2514,50 @@ unsafe fn stroke_path(
         },
     };
     let polys = path.stroke_polys(&world, width);
+    if v11::trace_on() {
+        trace_stroke(original, path.figures.len(), &polys, width, style);
+    }
     target(this).fill(&polys, FillRule::NonZero, &*paint);
+}
+
+/// WINLUX_D2D_TRACE (#2431) : détail d'un trait. Figures (points, fermée),
+/// épaisseur, motif de tirets, et boîte des polygones en pixels de la
+/// cible, pour voir quel côté d'un contour se perd.
+unsafe fn trace_stroke(
+    path: &Path,
+    pieces: usize,
+    polys: &[Vec<Pt>],
+    width: f32,
+    style: *mut c_void,
+) {
+    let figures: Vec<String> = path
+        .figures
+        .iter()
+        .take(4)
+        .map(|(pts, closed)| {
+            let pts: Vec<String> = pts
+                .iter()
+                .take(6)
+                .map(|p| format!("({},{})", p.0, p.1))
+                .collect();
+            format!("{}{}", pts.join(" "), if *closed { " fermée" } else { "" })
+        })
+        .collect();
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for p in polys.iter().flatten() {
+        b = [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)];
+    }
+    d2d_trace!(
+        "  trait : {} figures [{}] épaisseur {} style {} motif {:?} → {} morceaux, {} polygones boîte {:?}",
+        path.figures.len(),
+        figures.join(" | "),
+        width,
+        v11::stroke_pattern_kind(style),
+        v11::stroke_pattern(style).map(|(m, o, _)| (m, o)),
+        pieces,
+        polys.len(),
+        b
+    );
 }
 
 /// WINLUX_D2D_TRACE (#1743) : transformation, DPI, anticrénelage et
@@ -2425,7 +2567,12 @@ unsafe fn describe_state(this: *mut TargetObj) -> String {
         return String::new();
     }
     let t = target(this);
-    t.ext.describe_state(&t.world(), t.state.antialias)
+    let mut s = t.ext.describe_state(&t.world(), t.state.antialias);
+    // Découpe active (#2431) : elle peut rogner une colonne du dessin.
+    if let Some(c) = t.clip() {
+        s += &format!(" découpe ({}, {}, {}, {})", c.l, c.t, c.r, c.b);
+    }
+    s
 }
 
 /// WINLUX_D2D_TRACE (#1669) : forme, boîte et pinceau d'un remplissage,
@@ -4275,6 +4422,41 @@ mod tests {
         }
     }
 
+    /// #2431 : Map d'un bitmap A8 rend un octet d'alpha par pixel (pas de
+    /// la ligne = largeur), comme le format du bitmap ; Unmap recopie
+    /// l'alpha écrit.
+    #[test]
+    fn map_a8_un_octet_par_pixel() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            let (w, h) = (304u32, 2u32);
+            let mut px = vec![0u8; (w * h * 4) as usize];
+            // Dernière colonne opaque (le bord droit du contour).
+            for y in 0..h {
+                let o = ((y * w + w - 1) * 4) as usize;
+                px[o..o + 4].copy_from_slice(&[242, 242, 242, 242]);
+            }
+            let mut b = Bitmap::new(w, h, px);
+            b.alpha_only = true;
+            let obj = new_res(f, BITMAP_VT.ptr(), b);
+            let mut m = v11::MappedRect::default();
+            assert_eq!(v11::bitmap_map(obj, 1, &mut m), S_OK);
+            assert_eq!(m.pitch, w, "un octet par pixel");
+            let row = std::slice::from_raw_parts(m.bits, (w * h) as usize);
+            assert_eq!(row[(w - 1) as usize], 242);
+            assert_eq!(row[(w - 2) as usize], 0);
+            assert_eq!(row[(2 * w - 1) as usize], 242);
+            // Écriture dans la copie, rendue au bitmap par Unmap.
+            *m.bits = 7;
+            assert_eq!(v11::bitmap_unmap(obj), S_OK);
+            let (_, _, px) = bitmap_pixels(obj.cast()).unwrap();
+            assert_eq!(&px[0..4], &[0, 0, 0, 7]);
+            assert_eq!(&px[((w - 1) * 4) as usize..(w * 4) as usize], &[242; 4]);
+            Com::release(obj);
+            Com::release(f);
+        }
+    }
+
     /// #1470 : Widen, GetWidenedBounds, StrokeContainsPoint et ComputeLength.
     /// #1549 : CombineWithGeometry (boutons de couleur de Paint.NET) remplit
     /// un chemin avec l'intersection de deux rectangles.
@@ -4332,6 +4514,68 @@ mod tests {
             release_obj(path);
             release_obj(b);
             release_obj(a);
+            release_obj(f.cast());
+        }
+    }
+
+    /// #2454 : ComputePointAtLength sur un rectangle 10×10 (sens du tracé
+    /// haut, droite, bas, gauche), longueur ramenée dans [0, 40].
+    #[test]
+    fn point_a_une_longueur() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            type PointAt = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *const Matrix,
+                f32,
+                *mut [f32; 2],
+                *mut [f32; 2],
+            ) -> i32;
+            let mut g = std::ptr::null_mut();
+            let rc = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 10.0,
+                b: 10.0,
+            };
+            assert_eq!(method::<RectGeo>(f.cast(), 5)(f.cast(), &rc, &mut g), S_OK);
+            let at = |len: f32| {
+                let (mut p, mut t) = ([9.0f32; 2], [9.0f32; 2]);
+                assert_eq!(
+                    method::<PointAt>(g, 15)(g, len, std::ptr::null(), 0.25, &mut p, &mut t),
+                    S_OK
+                );
+                (p, t)
+            };
+            let close =
+                |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+            let total = {
+                type Len =
+                    unsafe extern "win64" fn(*mut c_void, *const Matrix, f32, *mut f32) -> i32;
+                let mut l = 0.0;
+                method::<Len>(g, 14)(g, std::ptr::null(), 0.25, &mut l);
+                l
+            };
+            assert!((total - 40.0).abs() < 1e-3);
+            let (p0, t0) = at(0.0);
+            let (p5, t5) = at(5.0);
+            // Le premier côté part du premier point dans sa direction.
+            assert!((p5[0] - p0[0] - 5.0 * t0[0]).abs() < 1e-3);
+            assert!((p5[1] - p0[1] - 5.0 * t0[1]).abs() < 1e-3);
+            assert!(close(t5, t0));
+            assert!((t0[0].hypot(t0[1]) - 1.0).abs() < 1e-3, "tangente unitaire");
+            // À mi-parcours, le point opposé au départ.
+            let (p20, _) = at(20.0);
+            assert!(close(p20, [10.0 - p0[0], 10.0 - p0[1]]));
+            // Au-delà de la longueur : la fin, c'est-à-dire le départ.
+            let (pf, _) = at(100.0);
+            assert!(close(pf, p0));
+            let (pn, _) = at(-3.0);
+            assert!(close(pn, p0));
+            release_obj(g);
             release_obj(f.cast());
         }
     }
@@ -4441,7 +4685,7 @@ mod tests {
                 S_OK
             );
             assert!((len - 80.0).abs() < 0.01, "{len}");
-            // Widen : figures fermées, règle non nulle, Close appelé.
+            // Widen : figures fermées, règle non nulle, puits laissé ouvert (#2499).
             puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
             let mut sink = puits::VT.ptr();
             let sink_ptr = &mut sink as *mut *const () as *mut c_void;
@@ -4467,9 +4711,67 @@ mod tests {
             puits::RECU.with(|r| {
                 let r = r.borrow();
                 assert!(r.0 >= 8, "figures : {}", r.0);
-                assert_eq!((r.2, r.3), (1, true));
+                assert_eq!((r.2, r.3), (1, false), "Close est à l'appelant");
             });
             for o in [tg, g] {
+                release_obj(o);
+            }
+            Com::release(f);
+        }
+    }
+
+    /// #2516 : Outline d'un groupe de deux rectangles qui se chevauchent
+    /// (règle non nulle) donne une seule figure fermée, puits laissé ouvert.
+    #[test]
+    fn contour_sans_auto_intersection() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type RectGeo =
+                unsafe extern "win64" fn(*mut c_void, *const RectF, *mut *mut c_void) -> i32;
+            let rect = |l: f32, t: f32, r: f32, b: f32| {
+                let mut g = std::ptr::null_mut();
+                assert_eq!(
+                    method::<RectGeo>(f.cast(), 5)(f.cast(), &RectF { l, t, r, b }, &mut g),
+                    S_OK
+                );
+                g
+            };
+            let a = rect(0.0, 0.0, 10.0, 10.0);
+            let b = rect(5.0, 5.0, 15.0, 15.0);
+            type Group = unsafe extern "win64" fn(
+                *mut c_void,
+                u32,
+                *const *mut c_void,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut grp = std::ptr::null_mut();
+            assert_eq!(
+                method::<Group>(f.cast(), 8)(f.cast(), 1, [a, b].as_ptr(), 2, &mut grp),
+                S_OK
+            );
+            type Outline =
+                unsafe extern "win64" fn(*mut c_void, *const Matrix, f32, *mut c_void) -> i32;
+            for g in [a, grp] {
+                puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
+                let mut sink = puits::VT.ptr();
+                let sink_ptr = &mut sink as *mut *const () as *mut c_void;
+                assert_eq!(
+                    method::<Outline>(g, 12)(g, std::ptr::null(), 0.25, sink_ptr),
+                    S_OK
+                );
+                puits::RECU.with(|r| {
+                    let r = r.borrow();
+                    assert_eq!(r.0, 1, "une seule figure");
+                    assert!(r.1 >= 4, "points : {}", r.1);
+                    assert_eq!((r.2, r.3), (1, false), "non nulle, Close à l'appelant");
+                });
+            }
+            assert_eq!(
+                method::<Outline>(grp, 12)(grp, std::ptr::null(), 0.25, std::ptr::null_mut()),
+                E_INVALIDARG
+            );
+            for o in [grp, a, b] {
                 release_obj(o);
             }
             Com::release(f);
@@ -4554,7 +4856,7 @@ mod tests {
                 method::<Simplify>(grp, 9)(grp, 0, std::ptr::null(), 0.25, sink_ptr),
                 S_OK
             );
-            puits::RECU.with(|r| assert_eq!(*r.borrow(), (2, 8, 1, true)));
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (2, 8, 1, false)));
             // Stream d'un chemin.
             puits::RECU.with(|r| *r.borrow_mut() = (0, 0, 9, false));
             let mut path = std::ptr::null_mut();
@@ -4574,7 +4876,7 @@ mod tests {
             release_obj(s);
             type Stream = unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32;
             assert_eq!(method::<Stream>(path, 18)(path, sink_ptr), S_OK);
-            puits::RECU.with(|r| assert_eq!(*r.borrow(), (1, 3, 0, true)));
+            puits::RECU.with(|r| assert_eq!(*r.borrow(), (1, 3, 0, false)));
             for o in [path, tg, grp, a, b] {
                 release_obj(o);
             }

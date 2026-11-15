@@ -2894,6 +2894,70 @@ pub unsafe extern "win64" fn wsa_recv(
     }
 }
 
+/// WSARecvFrom avec OVERLAPPED (#2164) ; rend `None` sans OVERLAPPED
+/// utilisable, pour le chemin synchrone de l'appelant.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn wsa_recv_from_overlapped(
+    s: usize,
+    bufs: usize,
+    count: u32,
+    received: *mut u32,
+    flags: *mut u32,
+    from: *mut u8,
+    fromlen: *mut i32,
+    ov: usize,
+    completion: usize,
+) -> Option<i32> {
+    if !overlapped::wanted(ov, completion) {
+        return None;
+    }
+    if !valid_socket(s) {
+        set_error(WSAENOTSOCK);
+        return Some(SOCKET_ERROR);
+    }
+    async_arm(s, FD_READ | FD_OOB);
+    if bufs == 0 || count == 0 {
+        set_error(WSAEFAULT);
+        return Some(SOCKET_ERROR);
+    }
+    Some(overlapped::recv_from(
+        s, bufs, count, received, flags, from, fromlen, ov,
+    ))
+}
+
+/// WSASendTo avec OVERLAPPED (#2164) ; `None` comme ci-dessus.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn wsa_send_to_overlapped(
+    s: usize,
+    bufs: usize,
+    count: u32,
+    sent: *mut u32,
+    flags: u32,
+    to: *const u8,
+    tolen: i32,
+    ov: usize,
+    completion: usize,
+) -> Option<i32> {
+    if !overlapped::wanted(ov, completion) {
+        return None;
+    }
+    if !valid_socket(s) {
+        set_error(WSAENOTSOCK);
+        return Some(SOCKET_ERROR);
+    }
+    if bufs == 0 {
+        set_error(WSAEFAULT);
+        return Some(SOCKET_ERROR);
+    }
+    if !to.is_null() && !network_allowed(to, tolen) {
+        set_error(10013); // WSAEACCES : bloqué dans Paramètres
+        return Some(SOCKET_ERROR);
+    }
+    Some(overlapped::send_to(
+        s, bufs, count, sent, flags, to, tolen, ov,
+    ))
+}
+
 // ── WSAConnect ──────────────────────────────────────────────────────────
 pub unsafe extern "win64" fn wsa_connect(
     s: usize,
@@ -4892,6 +4956,211 @@ mod tests {
             port, &mut bytes, &mut key, &mut ov, 2000,
         );
         (ok, bytes, key, ov as usize)
+    }
+
+    /// UDP avec OVERLAPPED, comme le fil d'E/S de Chromium (#2164) :
+    /// WSARecvFrom sans datagramme rend tout de suite WSA_IO_PENDING (une
+    /// lecture bloquante figeait le fil), puis le datagramme arrive par le
+    /// port avec l'adresse de l'expéditeur ; WSASendTo poste son paquet.
+    #[test]
+    fn udp_avec_overlapped_jamais_bloquant() {
+        let _wsa = init();
+        unsafe {
+            let port = crate::dlls::kernel32::create_io_completion_port(usize::MAX, 0, 0, 0);
+            let udp = wsa_socket_w(libc::AF_INET, libc::SOCK_DGRAM, 17, 0, 0, 1);
+            assert_ne!(udp, INVALID_SOCKET);
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as u16;
+            addr.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            assert_eq!(bind(udp, &addr as *const _ as *const u8, 16), 0);
+            let mut len: i32 = 16;
+            get_socket_name(udp, &mut addr as *mut _ as *mut u8, &mut len);
+            assert_eq!(
+                crate::dlls::kernel32::create_io_completion_port(udp, port, 9, 0),
+                port
+            );
+
+            let mut data = [0u8; 1500];
+            let wb = WsaBuf {
+                len: 1500,
+                buf: data.as_mut_ptr(),
+            };
+            let mut from: libc::sockaddr_in = std::mem::zeroed();
+            let mut fromlen: i32 = 16;
+            let mut flags = 0u32;
+            let rov = new_overlapped();
+            let rovp = &*rov as *const _ as usize;
+            let t0 = std::time::Instant::now();
+            assert_eq!(
+                wsa_recv_from_overlapped(
+                    udp,
+                    &wb as *const _ as usize,
+                    1,
+                    std::ptr::null_mut(),
+                    &mut flags,
+                    &mut from as *mut _ as *mut u8,
+                    &mut fromlen,
+                    rovp,
+                    0,
+                ),
+                Some(SOCKET_ERROR)
+            );
+            assert_eq!(wsa_get_last_error(), 997, "WSA_IO_PENDING attendu");
+            assert!(
+                t0.elapsed() < std::time::Duration::from_millis(500),
+                "WSARecvFrom a bloqué"
+            );
+            assert_eq!(next_packet(port).0, 0, "rien avant l'envoi");
+
+            // Un autre socket envoie un datagramme.
+            let other = socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+            let mut me: libc::sockaddr_in = std::mem::zeroed();
+            me.sin_family = libc::AF_INET as u16;
+            me.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            assert_eq!(bind(other, &me as *const _ as *const u8, 16), 0);
+            let mut melen: i32 = 16;
+            get_socket_name(other, &mut me as *mut _ as *mut u8, &mut melen);
+            let msg = b"datagramme";
+            assert_eq!(
+                send_to(
+                    other,
+                    msg.as_ptr(),
+                    msg.len() as i32,
+                    0,
+                    &addr as *const _ as *const u8,
+                    16
+                ),
+                msg.len() as i32
+            );
+            assert_eq!(next_packet(port), (1, msg.len() as u32, 9, rovp));
+            assert_eq!(&data[..msg.len()], msg);
+            assert_eq!(fromlen, 16);
+            assert_eq!(from.sin_family, 2, "AF_INET de Windows");
+            assert_eq!(from.sin_port, me.sin_port, "port de l'expéditeur");
+
+            // Datagramme déjà là : fin immédiate, et un paquet quand même.
+            assert_eq!(
+                send_to(
+                    other,
+                    msg.as_ptr(),
+                    4,
+                    0,
+                    &addr as *const _ as *const u8,
+                    16
+                ),
+                4
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let mut got = 0u32;
+            assert_eq!(
+                wsa_recv_from_overlapped(
+                    udp,
+                    &wb as *const _ as usize,
+                    1,
+                    &mut got,
+                    &mut flags,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    rovp,
+                    0,
+                ),
+                Some(0)
+            );
+            assert_eq!(got, 4);
+            assert_eq!(next_packet(port), (1, 4, 9, rovp));
+
+            // WSASendTo avec OVERLAPPED : rendu 0 et paquet au port.
+            let sb = WsaBuf {
+                len: 5,
+                buf: b"salut".as_ptr() as *mut u8,
+            };
+            let sov = new_overlapped();
+            let sovp = &*sov as *const _ as usize;
+            let mut sent = 0u32;
+            assert_eq!(
+                wsa_send_to_overlapped(
+                    udp,
+                    &sb as *const _ as usize,
+                    1,
+                    &mut sent,
+                    0,
+                    &me as *const _ as *const u8,
+                    16,
+                    sovp,
+                    0,
+                ),
+                Some(0)
+            );
+            assert_eq!(sent, 5);
+            assert_eq!(next_packet(port), (1, 5, 9, sovp));
+            let mut back = [0u8; 8];
+            assert_eq!(
+                recv_from(
+                    other,
+                    back.as_mut_ptr(),
+                    8,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut()
+                ),
+                5
+            );
+            assert_eq!(&back[..5], b"salut");
+
+            // Sans OVERLAPPED : chemin synchrone de l'appelant.
+            assert_eq!(
+                wsa_recv_from_overlapped(
+                    udp,
+                    &wb as *const _ as usize,
+                    1,
+                    &mut got,
+                    &mut flags,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                ),
+                None
+            );
+
+            // Par l'export WSARecvFrom lui-même : jamais bloquant.
+            type RecvFrom = unsafe extern "win64" fn(
+                usize,
+                usize,
+                u32,
+                *mut u32,
+                *mut u32,
+                *mut u8,
+                *mut i32,
+                usize,
+                usize,
+            ) -> i32;
+            let exported: RecvFrom =
+                std::mem::transmute(crate::dlls::games_win32::ws2_32_exports()["WSARecvFrom"]);
+            let t0 = std::time::Instant::now();
+            assert_eq!(
+                exported(
+                    udp,
+                    &wb as *const _ as usize,
+                    1,
+                    std::ptr::null_mut(),
+                    &mut flags,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    rovp,
+                    0,
+                ),
+                SOCKET_ERROR
+            );
+            assert_eq!(wsa_get_last_error(), 997, "WSA_IO_PENDING attendu");
+            assert!(t0.elapsed() < std::time::Duration::from_millis(500));
+            closesocket(other);
+            closesocket(udp);
+            // closesocket annule la lecture : paquet d'annulation.
+            assert_eq!(next_packet(port).2, 9);
+            crate::dlls::kernel32::close_handle(port);
+        }
+        cleanup();
     }
 
     #[test]

@@ -1080,4 +1080,14 @@ mod tests {
             ucnv_close(c);
         }
     }
+
+    /// .NET charge icu.dll en premier et exige toute l'API ICU : une
+    /// icu.dll partielle fait avorter Paint.NET (#2056). Seule icuuc.dll,
+    /// importée par Qt6Core d'OBS (#1792), est servie.
+    #[test]
+    fn pas_d_icu_dll_partielle() {
+        assert!(crate::dlls::is_builtin("icuuc"));
+        assert!(!crate::dlls::is_builtin("icu"));
+        assert!(!crate::dlls::is_builtin("icuin"));
+    }
 }

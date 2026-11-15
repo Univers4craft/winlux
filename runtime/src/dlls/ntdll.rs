@@ -107,6 +107,15 @@ pub unsafe extern "win64" fn rtl_allocate_heap(
 pub unsafe extern "win64" fn rtl_free_heap(_heap: usize, _flags: u32, p: *mut c_void) -> u8 {
     crate::dlls::kernel32::heap_free(0, 0, p) as u8
 }
+/// RtlDisownModuleHeapAllocation(HeapHandle, Address) -> NTSTATUS
+/// (#2121). Signature d'après WIL (microsoft/wil, licence MIT,
+/// result_macros.h, `ProcessHeapAlloc`) : un module déclare qu'un bloc du
+/// tas qu'il garde jusqu'à la fin du processus n'est pas une fuite, pour
+/// les détecteurs de fuites par module. Winlux n'en a pas : le bloc reste
+/// valide et intact, l'appel réussit.
+pub extern "win64" fn rtl_disown_module_heap_allocation(_heap: usize, _address: usize) -> i32 {
+    0 // STATUS_SUCCESS
+}
 pub unsafe extern "win64" fn rtl_reallocate_heap(
     _heap: usize,
     flags: u32,
@@ -1473,7 +1482,7 @@ pub unsafe extern "win64" fn nt_create_file(
                     "NtCreateFile({}) : effacé à la fermeture",
                     linux_path.display()
                 );
-                crate::dlls::lock(super::kernel32::delete_on_close()).insert(h, linux_path);
+                crate::dlls::doomed::register(h, linux_path);
             }
             if !io.is_null() {
                 (io as *mut u64).write(0);
@@ -1538,28 +1547,30 @@ pub unsafe extern "win64" fn nt_query_information_process(
 ) -> i32 {
     match info_class {
         0 => {
-            // ProcessBasicInformation : on renvoie le PEB et le PID.
-            if length < 48 {
+            // ProcessBasicInformation : PEB, PID et PID du parent.
+            // Disposition (winternl.h) : ExitStatus, PebBaseAddress,
+            // AffinityMask, BasePriority, UniqueProcessId,
+            // InheritedFromUniqueProcessId ; 48 octets en x64, 24 pour un
+            // programme 32 bits, où ULONG_PTR et les pointeurs font 4 octets
+            // (#2542).
+            let x86 = crate::wow32::pointer_size() == 4;
+            let size: u32 = if x86 { 24 } else { 48 };
+            if length < size {
                 return STATUS_BUFFER_TOO_SMALL;
             }
             if info.is_null() {
                 return STATUS_INVALID_PARAMETER;
             }
-            std::ptr::write_bytes(info as *mut u8, 0, 48);
+            std::ptr::write_bytes(info as *mut u8, 0, size as usize);
             // Un autre processus Windows de Winlux : son PEB est à l'adresse
             // fixe (crashpad, bac à sable de Chromium le lisent ensuite par
             // ReadProcessMemory).
-            let (peb, pid) = match crate::dlls::kernel32::process_os_pid(handle) {
-                Some(pid) if pid != std::process::id() as i32 => {
-                    (crate::process::PEB_FIXED, pid as u32)
-                }
-                _ => (crate::process::peb(), std::process::id()),
+            let other = crate::dlls::kernel32::process_os_pid(handle)
+                .filter(|&pid| pid != std::process::id() as i32);
+            let (peb, pid) = match other {
+                Some(pid) => (crate::process::PEB_FIXED, pid as u32),
+                None => (crate::process::peb(), std::process::id()),
             };
-            // Offset 8 : PebBaseAddress
-            std::ptr::write_unaligned((info as *mut u8).add(8) as *mut usize, peb);
-            // Offset 16 : UniqueProcessId
-            std::ptr::write_unaligned((info as *mut u8).add(16) as *mut usize, pid as usize);
-            // Offset 40 : InheritedFromUniqueProcessId
             let ppid = std::fs::read_to_string(format!("/proc/{pid}/stat"))
                 .ok()
                 .and_then(|st| {
@@ -1567,9 +1578,25 @@ pub unsafe extern "win64" fn nt_query_information_process(
                     rest.split_whitespace().nth(1)?.parse::<usize>().ok()
                 })
                 .unwrap_or(0);
-            std::ptr::write_unaligned((info as *mut u8).add(40) as *mut usize, ppid);
+            let base = info as *mut u8;
+            if x86 {
+                // PEB x86 du programme lui-même ; celui d'un autre processus
+                // n'est pas connu ici : 0, que Chromium traite en échec.
+                let peb32 = if other.is_none() {
+                    crate::wow32::peb32() as u32
+                } else {
+                    0
+                };
+                std::ptr::write_unaligned(base.add(4) as *mut u32, peb32);
+                std::ptr::write_unaligned(base.add(16) as *mut u32, pid);
+                std::ptr::write_unaligned(base.add(20) as *mut u32, ppid as u32);
+            } else {
+                std::ptr::write_unaligned(base.add(8) as *mut usize, peb);
+                std::ptr::write_unaligned(base.add(16) as *mut usize, pid as usize);
+                std::ptr::write_unaligned(base.add(40) as *mut usize, ppid);
+            }
             if !return_length.is_null() {
-                *return_length = 48;
+                *return_length = size;
             }
             STATUS_SUCCESS
         }
@@ -2654,6 +2681,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlNtStatusToDosError" => fn rtl_nt_status_to_dos_error,
         "RtlAllocateHeap" => fn rtl_allocate_heap,
         "RtlFreeHeap" => fn rtl_free_heap,
+        "RtlDisownModuleHeapAllocation" => fn rtl_disown_module_heap_allocation,
         "RtlReAllocateHeap" => fn rtl_reallocate_heap,
         "RtlInitUnicodeString" => fn rtl_init_unicode_string,
         "RtlFormatCurrentUserKeyPath" => fn rtl_format_current_user_key_path,
@@ -2767,6 +2795,7 @@ pub fn exports() -> crate::dlls::Exports {
         "NtQueryFullAttributesFile" => fn nt_query_full_attributes_file,
         "NtOpenProcess" => fn nt_open_process,
         "NtOpenThread" => fn nt_open_thread,
+        "NtCreateLowBoxToken" => fn crate::dlls::security::nt_create_low_box_token,
         "NtOpenProcessToken" => fn nt_open_process_token,
         "NtOpenProcessTokenEx" => fn nt_open_process_token_ex,
         "NtOpenThreadToken" => fn nt_open_thread_token,
@@ -2901,6 +2930,83 @@ mod section_tests {
 #[cfg(test)]
 mod process_information_tests {
     use super::*;
+
+    /// ProcessBasicInformation x64 : PID et PID du parent (#2542).
+    #[test]
+    fn informations_de_base_x64_avec_le_parent() {
+        let mut buf = [0u8; 48];
+        let mut ret = 0u32;
+        let st = unsafe {
+            nt_query_information_process(
+                usize::MAX,
+                0,
+                buf.as_mut_ptr() as *mut c_void,
+                48,
+                &mut ret,
+            )
+        };
+        assert_eq!(st, STATUS_SUCCESS);
+        assert_eq!(ret, 48);
+        let rd = |o: usize| u64::from_le_bytes(buf[o..o + 8].try_into().unwrap());
+        assert_eq!(rd(16), std::process::id() as u64);
+        assert_eq!(rd(40), unsafe { libc::getppid() } as u64);
+    }
+
+    /// #2542 : ProcessBasicInformation d'un programme 32 bits, 24 octets
+    /// (Google Update : base::GetParentProcessId, puis CHECK(parent) dans
+    /// GetCommandLineForPid). Avant, 24 < 48 était refusé et le parent
+    /// valait 0. Vérifié dans un processus neuf (ce test relancé seul), le
+    /// seul où le drapeau « programme x86 » peut être levé.
+    #[test]
+    fn informations_de_base_x86_avec_le_parent() {
+        const ENFANT: &str = "WINLUX_TEST_PBI_X86";
+        if std::env::var_os(ENFANT).is_some() {
+            crate::wow32::force_active_for_test();
+            let mut buf = [0xAAu8; 32];
+            let mut ret = 0u32;
+            let st = unsafe {
+                nt_query_information_process(
+                    usize::MAX,
+                    0,
+                    buf.as_mut_ptr() as *mut c_void,
+                    24,
+                    &mut ret,
+                )
+            };
+            let rd = |o: usize| u32::from_le_bytes(buf[o..o + 4].try_into().unwrap());
+            let ok = st == STATUS_SUCCESS
+                && ret == 24
+                && rd(16) == std::process::id()
+                && rd(20) == unsafe { libc::getppid() } as u32
+                && buf[24..].iter().all(|&b| b == 0xAA);
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::ntdll::process_information_tests::informations_de_base_x86_avec_le_parent",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(ENFANT, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let fin = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            if std::time::Instant::now() > fin {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("le test x86 relancé n'a pas fini en 60 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(0), "ProcessBasicInformation x86");
+    }
 
     /// Bac à sable de Chromium (#1352) : ProcessHandleTable sur soi-même
     /// réussit avec une liste vide, sinon le renderer se termine en 7010.
@@ -3078,5 +3184,20 @@ mod ouvertures_tests {
             object_name_for_kernel32("\\BaseNamedObjects\\evt"),
             "Global\\evt"
         );
+    }
+}
+
+#[cfg(test)]
+mod disown_tests {
+    /// #2121 : WIL résout RtlDisownModuleHeapAllocation par GetProcAddress
+    /// et l'appelle sur chaque bloc gardé ; le bloc reste utilisable.
+    #[test]
+    fn bloc_desavoue_reste_valide() {
+        let f = crate::dlls::lookup("ntdll", "RtlDisownModuleHeapAllocation")
+            .expect("ntdll!RtlDisownModuleHeapAllocation");
+        let f: extern "win64" fn(usize, usize) -> i32 = unsafe { std::mem::transmute(f) };
+        let mut bloc = vec![7u8; 32];
+        assert_eq!(f(0, bloc.as_mut_ptr() as usize), 0);
+        assert!(bloc.iter().all(|&b| b == 7));
     }
 }

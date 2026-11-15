@@ -1,0 +1,12 @@
+// Winlux : fiches AppStream (DEP-11) des dépôts, lues par la Boutique pour
+// les icônes, descriptions et la liste complète des applications (#2185).
+// Champs documentés par apt (doc/acquire-additional-files.md).
+Acquire::IndexTargets {
+    deb::DEP-11 {
+        MetaKey "$(COMPONENT)/dep11/Components-$(NATIVE_ARCHITECTURE).yml";
+        ShortDescription "Components-$(NATIVE_ARCHITECTURE)";
+        Description "$(RELEASE)/$(COMPONENT) $(NATIVE_ARCHITECTURE) DEP-11 Metadata";
+        KeepCompressed "true";
+        KeepCompressedAs "gz";
+    };
+};

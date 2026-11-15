@@ -23,6 +23,8 @@
 //! refusée (E_NOINTERFACE) plutôt que de donner au programme une table
 //! qu'il ne saurait pas appeler.
 
+use super::com_ole::{IBINDCTX, IRUNNINGOBJECTTABLE};
+use super::com_shell;
 use super::layout::widen;
 use super::{call32, rd, wr};
 use crate::dlls::comobj::{guid, guid_str, Guid};
@@ -68,6 +70,10 @@ pub(super) enum A {
     /// Tableau de pointeurs lu et écrit (PCUITEMID_CHILD_ARRAY, PITEMID_CHILD*)
     /// ; le nombre d'éléments est l'argument `I` qui le précède.
     Pidls,
+    /// Tableau d'interfaces passées, du type donné (IMFMediaType **
+    /// de MFCreateStreamDescriptor) ; le nombre d'éléments est l'argument
+    /// `I` qui le précède (#2428).
+    InArr(&'static Iface),
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -80,11 +86,11 @@ pub(super) struct Iface {
 }
 
 impl Iface {
-    fn count(&'static self) -> usize {
+    pub(super) fn count(&'static self) -> usize {
         self.parent.map_or(0, |p| p.count()) + self.methods.len()
     }
 
-    fn method(&'static self, idx: usize) -> Option<&'static [A]> {
+    pub(super) fn method(&'static self, idx: usize) -> Option<&'static [A]> {
         let base = self.parent.map_or(0, |p| p.count());
         if idx < base {
             self.parent.and_then(|p| p.method(idx))
@@ -182,26 +188,28 @@ pub(super) static IPERSISTSTREAM: Iface = Iface {
 };
 
 /// IMoniker : liaison à un IStream, nom affiché et type (moniker d'URL).
+/// Le contexte de liaison et le moniker de gauche sont de vrais
+/// IBindCtx et IMoniker (#2428, lot C).
 pub(super) static IMONIKER: Iface = Iface {
     name: "IMoniker",
     iid: ole(0xF),
     parent: Some(&IPERSISTSTREAM),
     methods: &[
-        Some(&[I, I, Iid, OutQ]), // BindToObject
-        Some(&[I, I, Iid, OutQ]), // BindToStorage
-        None,                     // Reduce
-        None,                     // ComposeWith
-        None,                     // Enum
-        Some(&[In(&IMONIKER)]),   // IsEqual
-        Some(&[I]),               // Hash
-        None,                     // IsRunning
-        None,                     // GetTimeOfLastChange
-        None,                     // Inverse
-        None,                     // CommonPrefixWith
-        None,                     // RelativePathTo
-        Some(&[I, I, OutPtr]),    // GetDisplayName
-        None,                     // ParseDisplayName
-        Some(&[I]),               // IsSystemMoniker
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToObject
+        Some(&[In(&IBINDCTX), In(&IMONIKER), Iid, OutQ]), // BindToStorage
+        None,                                             // Reduce
+        None,                                             // ComposeWith
+        None,                                             // Enum
+        Some(&[In(&IMONIKER)]),                           // IsEqual
+        Some(&[I]),                                       // Hash
+        None,                                             // IsRunning
+        None,                                             // GetTimeOfLastChange
+        None,                                             // Inverse
+        None,                                             // CommonPrefixWith
+        None,                                             // RelativePathTo
+        Some(&[In(&IBINDCTX), In(&IMONIKER), OutPtr]),    // GetDisplayName
+        None,                                             // ParseDisplayName
+        Some(&[I]),                                       // IsSystemMoniker
     ],
 };
 
@@ -330,6 +338,30 @@ pub(super) static IACCPROPSERVICES: Iface = Iface {
         Some(&[I, I, I, I]),                            // ClearHmenuProps
         Some(&[I, I, OutPtr, I]),                       // ComposeHmenuIdentityString
         Some(&[I, I, OutPtr, I]),                       // DecomposeHmenuIdentityString
+    ],
+};
+
+/// IInternetSecurityManager (urlmon) : gestionnaire de zones rendu par
+/// CoInternetCreateSecurityManager (#2409). Ordre des méthodes et
+/// paramètres d'après la documentation publique d'urlmon.
+pub(super) static IINTERNETSECURITYMANAGER: Iface = Iface {
+    name: "IInternetSecurityManager",
+    iid: guid(
+        0x79EA_C9EE,
+        0xBAF9,
+        0x11CE,
+        [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),                        // SetSecuritySite (site ignoré)
+        Some(&[Out(&IUNKNOWN)]),           // GetSecuritySite
+        Some(&[I, I, I]),                  // MapUrlToZone
+        Some(&[I, I, I, I]),               // GetSecurityId
+        Some(&[I, I, I, I, I, I, I, I]),   // ProcessUrlAction
+        Some(&[I, I, OutPtr, I, I, I, I]), // QueryCustomPolicy
+        Some(&[I, I, I]),                  // SetZoneMapping
+        Some(&[I, Out(&IUNKNOWN), I]),     // GetZoneMappings (IEnumString, jamais rendu)
     ],
 };
 
@@ -970,6 +1002,7 @@ static ALL: &[&Iface] = &[
     &ICUSTOMDESTINATIONLIST,
     &IACCPROPSERVER,
     &IACCPROPSERVICES,
+    &IINTERNETSECURITYMANAGER,
     &IWBEMLOCATOR,
     &IWBEMSERVICES,
     &IENUMWBEMCLASSOBJECT,
@@ -993,10 +1026,16 @@ static ALL: &[&Iface] = &[
     &IENUMIDLIST,
 ];
 
-fn by_iid(iid: &Guid) -> Option<&'static Iface> {
+pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
     ALL.iter()
         .chain(super::com_taskschd::ALL.iter())
+        .chain(super::com_audio::ALL.iter())
         .chain(super::com_netfw::ALL.iter())
+        .chain(super::com_nlm::ALL.iter())
+        .chain(super::com_shell::ALL.iter())
+        .chain(super::com_mf::ALL.iter())
+        .chain(super::com_ole::ALL.iter())
+        .chain(super::com_mf_chaine::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1119,7 +1158,7 @@ fn vtable32(iface: &'static Iface) -> u32 {
     maps(|m| *m.vt32.entry(key(iface)).or_insert(at))
 }
 
-fn slots(kinds: &[A]) -> usize {
+pub(super) fn slots(kinds: &[A]) -> usize {
     kinds
         .iter()
         .map(|k| match k {
@@ -1200,7 +1239,7 @@ fn vtable64(iface: &'static Iface) -> usize {
 }
 
 /// Libère une référence d'un objet 64 bits.
-unsafe fn release64(obj: u64) {
+pub(super) unsafe fn release64(obj: u64) {
     let vt = *(obj as usize as *const *const usize);
     let f: unsafe extern "win64" fn(u64) -> u32 = std::mem::transmute(*vt.add(2));
     f(obj);
@@ -1443,6 +1482,8 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     // STRRET et tableaux : tampons à part (le tampon d'un Vec ne bouge
     // pas quand le Vec est déplacé).
     let mut big: Vec<(Vec<u64>, u32, A, u32)> = Vec::new();
+    // Tableaux d'interfaces passées : gardés jusqu'au retour.
+    let mut arrays: Vec<Vec<u64>> = Vec::new();
     let mut count = 0u32;
     let mut slots: Vec<u64> = Vec::with_capacity(kinds.len() + 5);
     slots.extend(this);
@@ -1485,6 +1526,17 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
             }
             InQ => slots.push(to64(v, by_iid(&iid))),
             In(f) => slots.push(to64(v, Some(f))),
+            InArr(f) => {
+                if v == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                let t: Vec<u64> = (0..count.min(4096))
+                    .map(|j| to64(rd(v + 4 * j), Some(f)))
+                    .collect();
+                slots.push(t.as_ptr() as u64);
+                arrays.push(t);
+            }
             VarIn => {
                 // Le VARIANT occupe quatre cases de la pile x86.
                 temps.push([0; 10]);
@@ -1529,6 +1581,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     }
     let mut xmm0 = 0u64;
     let mut r = super::winlux_wow_call64(target, slots.as_ptr(), n, &mut xmm0);
+    drop(arrays);
     for (i, dst, k, f, g) in post {
         let t = temps[i].as_ptr() as *const u8;
         match k {
@@ -1617,6 +1670,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let mut post: Vec<(usize, u64, A, Option<&'static Iface>)> = Vec::new();
         // STRRET et tableaux en x86 (le tas est sous 4 Go).
         let mut big: Vec<(Vec<u32>, u64, A, u32)> = Vec::new();
+        let mut arrays: Vec<Vec<u32>> = Vec::new();
         let mut count = 0u32;
         let mut iid: Guid = [0; 16];
         for (i, &k) in kinds.iter().enumerate().take(11) {
@@ -1668,6 +1722,18 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                 }
                 InQ => a.push(to32_borrowed(v, by_iid(&iid), &iid)),
                 In(f) => a.push(to32_borrowed(v, Some(f), &f.iid)),
+                InArr(f) => {
+                    if v == 0 {
+                        a.push(0);
+                        continue;
+                    }
+                    let src = v as usize as *const u64;
+                    let t: Vec<u32> = (0..count.min(4096) as usize)
+                        .map(|j| to32_borrowed(src.add(j).read_unaligned(), Some(f), &f.iid))
+                        .collect();
+                    a.push(t.as_ptr() as usize as u32);
+                    arrays.push(t);
+                }
                 VarIn => {
                     // Case basse : variant32 écrit à une adresse 32 bits.
                     temps.push([0; 10]);
@@ -1714,6 +1780,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         }
         let target = rd(rd(p.obj) + 4 * m.idx as u32);
         let r = call32(target as usize, &a) as u32;
+        drop(arrays);
         for (j, dst, k, f) in post {
             let t = temps[j].as_ptr() as *const u8;
             let d = dst as usize as *mut u8;
@@ -1785,7 +1852,7 @@ macro_rules! k {
     }};
 }
 
-fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
+pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
     let k: &'static [A] = match (dll, func) {
         ("ole32", "CoCreateInstance") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
         ("ole32", "CoGetClassObject") => k!(I, I, I, Iid, OutQ),
@@ -1802,6 +1869,11 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("ole32", "OleSetClipboard") => k!(In(&IDATAOBJECT)),
         ("ole32", "RegisterDragDrop") => k!(I, In(&IDROPTARGET)),
         ("ole32", "DoDragDrop") => k!(In(&IDATAOBJECT), In(&IDROPSOURCE), I, I),
+        // Magasins de propriétés (#2428, lot B) : l'interface demandée,
+        // IPropertyStore en pratique, revient par REFIID.
+        ("shell32", "SHGetPropertyStoreForWindow") => k!(I, Iid, OutQ),
+        ("shell32", "SHGetPropertyStoreFromParsingName") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
+        ("propsys", "PSCreateMemoryPropertyStore") => k!(Iid, OutQ),
         ("oleaut32", "VariantInit" | "VariantClear" | "#8" | "#9") => k!(Var),
         ("oleaut32", "VariantCopy" | "#10") => k!(Var, Var),
         ("oleaut32", "VariantChangeType" | "#12") => k!(Var, Var, I, I),
@@ -1809,9 +1881,48 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("oleaut32", "SafeArrayPtrOfIndex" | "#148") => k!(I, I, OutPtr),
         ("oleaut32", "VariantCopyInd" | "#11") => k!(Var, Var),
         ("oleaut32", "GetActiveObject" | "#35") => k!(I, I, Out(&IUNKNOWN)),
-        ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
+        ("ole32", "OleRegEnumVerbs") => k!(I, OutPtr),
+        // Contexte de liaison, table des objets actifs, monikers (#2428, lot C).
+        ("ole32", "CreateBindCtx") => k!(I, Out(&IBINDCTX)),
+        ("ole32", "GetRunningObjectTable") => k!(I, Out(&IRUNNINGOBJECTTABLE)),
+        ("ole32", "CreateFileMoniker") => k!(I, Out(&IMONIKER)),
+        ("ole32", "CreateItemMoniker") => k!(I, I, Out(&IMONIKER)),
+        ("ole32", "CreatePointerMoniker") => k!(In(&IUNKNOWN), Out(&IMONIKER)),
+        ("ole32", "MkParseDisplayName") => k!(In(&IBINDCTX), I, I, Out(&IMONIKER)),
+        ("ole32", "CoGetObject") => k!(I, I, Iid, OutQ),
+        ("ole32", "OleLoadFromStream") => k!(In(&ISTREAM), Iid, OutQ),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
+        // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
+        // Le IBindCtx passé est vu comme IUnknown, comme dans IShellFolder.
+        ("shell32", "SHCreateItemFromParsingName") => k!(I, In(&IUNKNOWN), Iid, OutQ),
+        ("shell32", "SHCreateItemFromIDList") => k!(I, Iid, OutQ),
+        ("shell32", "SHCreateItemWithParent") => k!(I, In(&ISHELLFOLDER), I, Iid, OutQ),
+        ("shell32", "SHCreateItemFromRelativeName") => {
+            k!(In(&com_shell::ISHELLITEM), I, In(&IUNKNOWN), Iid, OutQ)
+        }
+        ("shell32", "SHCreateItemInKnownFolder") => k!(I, I, I, Iid, OutQ),
+        ("shell32", "SHCreateShellItem") => {
+            k!(I, In(&ISHELLFOLDER), I, Out(&com_shell::ISHELLITEM))
+        }
+        ("shell32", "SHCreateShellItemArray") => {
+            k!(
+                I,
+                In(&ISHELLFOLDER),
+                I,
+                Pidls,
+                Out(&com_shell::ISHELLITEMARRAY)
+            )
+        }
+        ("shell32", "SHCreateShellItemArrayFromDataObject") => k!(In(&IDATAOBJECT), Iid, OutQ),
+        ("shell32", "SHCreateShellItemArrayFromIDLists") => {
+            k!(I, Pidls, Out(&com_shell::ISHELLITEMARRAY))
+        }
+        ("shell32", "SHCreateShellItemArrayFromShellItem") => {
+            k!(In(&com_shell::ISHELLITEM), Iid, OutQ)
+        }
+        // ppidlLast pointe dans la PIDL reçue, en mémoire x86 : valeur.
+        ("shell32", "SHBindToParent") => k!(I, Iid, OutQ, OutPtr),
         ("comctl32", "ImageList_Read") => k!(In(&ISTREAM)),
         ("comctl32", "ImageList_Write") => k!(I, In(&ISTREAM)),
         ("oleaut32", "GetErrorInfo" | "#200") | ("ole32", "GetErrorInfo") => {
@@ -1825,12 +1936,54 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("oleaut32", "LoadTypeLibEx" | "#183") => k!(I, I, Out(&ITYPELIB)),
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
+        // GDI+ lit ou écrit le flux du programme (#2531) : mandataire 64
+        // bits de son IStream x86 ; l'image rendue est un handle.
+        (
+            "gdiplus",
+            "GdipLoadImageFromStream"
+            | "GdipLoadImageFromStreamICM"
+            | "GdipCreateBitmapFromStream"
+            | "GdipCreateBitmapFromStreamICM",
+        ) => k!(In(&ISTREAM), OutPtr),
+        ("gdiplus", "GdipSaveImageToStream") => k!(I, In(&ISTREAM), I, I),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        // Associations, objet de données, service d'un objet x86 (#2428, lot E).
+        // SHGetImageList (#727) n'a jamais de mandataire : son IImageList
+        // reste un HIMAGELIST valable (#2435).
+        ("shell32", "SHCreateDataObject") => k!(I, I, Pidls, In(&IDATAOBJECT), Iid, OutQ),
+        ("shlwapi", "AssocCreate") => k!(GuidIn, Iid, OutQ),
+        ("shlwapi", "IUnknown_QueryService" | "#176") => k!(In(&IUNKNOWN), I, Iid, OutQ),
+        // ASSOCIATIONELEMENT lu à la disposition x86 par le runtime (#2475) ;
+        // l'IQueryAssociations rendu suit sa description quand elle existe.
+        ("shell32", "AssocCreateForClasses") => k!(I, I, Iid, OutQ),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
+        ("urlmon", "CoInternetCreateSecurityManager") => {
+            k!(I, Out(&IINTERNETSECURITYMANAGER), I)
+        }
+        // pActivationParams (PROPVARIANT*) : non lu par IMMDevice::Activate.
+        ("mmdevapi", "ActivateAudioInterfaceAsync" | "#17") => k!(
+            I,
+            Iid,
+            I,
+            In(&super::com_audio::IACTIVATEAUDIOINTERFACECOMPLETIONHANDLER),
+            Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
+        ),
+        // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
+        // taskschd (#2577) : même fabrique commune.
+        (
+            "mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9" | "taskschd",
+            "DllGetClassObject",
+        ) => {
+            k!(I, Iid, OutQ)
+        }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
+        ("mfplat", _) => {
+            super::com_mf::api_kinds(func).or_else(|| super::com_mf_chaine::api_kinds(func))?
+        }
+        ("mf" | "mfreadwrite", _) => super::com_mf_chaine::api_kinds(func)?,
         _ => return None,
     };
     Some((k, None))
@@ -1936,5 +2089,78 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+        // #2475 : 16 octets (stdcall.tsv), interface rendue d'après son IID.
+        let (k, r) = api_kinds("shell32", "AssocCreateForClasses").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(r.is_none() && matches!(k[2..], [Iid, OutQ]));
+    }
+
+    /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
+    /// un mandataire. Sans description, le pointeur 64 bits était écrit tel
+    /// quel dans la case 32 bits et l'appel de MapUrlToZone fautait.
+    #[test]
+    fn gestionnaire_de_zones_decrit() {
+        let (k, r) = api_kinds("urlmon", "CoInternetCreateSecurityManager").unwrap();
+        // stdcall.tsv : 12 octets d'arguments.
+        assert_eq!(slots(k), 3);
+        assert!(r.is_none());
+        assert!(matches!(k[1], Out(f) if std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // IUnknown (3) + 8 méthodes, comme la table du runtime.
+        assert_eq!(IINTERNETSECURITYMANAGER.count(), 11);
+        for i in 0..IINTERNETSECURITYMANAGER.count() {
+            assert!(IINTERNETSECURITYMANAGER.method(i).is_some(), "méthode {i}");
+        }
+        let iid = guid(
+            0x79EA_C9EE,
+            0xBAF9,
+            0x11CE,
+            [0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B],
+        );
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IINTERNETSECURITYMANAGER)));
+        // MapUrlToZone : URL, DWORD*, flags.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
+        // ProcessUrlAction : huit arguments.
+        assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2531 : GDI+ reçoit l'IStream x86 du programme par un mandataire,
+    /// à la taille de stdcall.tsv (8 et 16 octets).
+    #[test]
+    fn flux_gdiplus_decrits() {
+        for f in [
+            "GdipLoadImageFromStream",
+            "GdipLoadImageFromStreamICM",
+            "GdipCreateBitmapFromStream",
+            "GdipCreateBitmapFromStreamICM",
+        ] {
+            let (k, r) = api_kinds("gdiplus", f).unwrap();
+            assert_eq!(slots(k), 2, "{f}");
+            assert!(r.is_none());
+            assert!(matches!(k[0], In(i) if std::ptr::eq(i, &ISTREAM)), "{f}");
+            assert!(matches!(k[1], OutPtr), "{f}");
+        }
+        let (k, _) = api_kinds("gdiplus", "GdipSaveImageToStream").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(matches!(k[1], In(i) if std::ptr::eq(i, &ISTREAM)));
+    }
+
+    /// #2428, lot B : les fonctions qui rendent un magasin de propriétés
+    /// passent par un mandataire x86, à la taille de stdcall.tsv.
+    #[test]
+    fn magasins_de_proprietes_decrits() {
+        for (dll, f) in [
+            ("shell32", "SHGetPropertyStoreForWindow"),
+            ("shell32", "SHGetPropertyStoreFromParsingName"),
+            ("propsys", "PSCreateMemoryPropertyStore"),
+        ] {
+            let (k, r) = api_kinds(dll, f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            let octets = super::super::stdcall_bytes(dll, f).unwrap_or_else(|| panic!("{f}"));
+            assert_eq!(slots(k) * 4, octets as usize, "{f}");
+            // L'interface rendue est choisie par REFIID, en avant-dernière case.
+            assert!(matches!(k[k.len() - 2..], [Iid, OutQ]), "{f}");
+        }
+        let iid = g(mmd::IID_IPROPERTYSTORE);
+        assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IPROPERTYSTORE)));
     }
 }

@@ -418,3 +418,45 @@ pub const SOURCE_CHANGED_ARGS_IIDS: [Guid; 1] = [
         [0x89, 0x14, 0xf6, 0x38, 0x48, 0xa1, 0xf7, 0xd7],
     ), // ICoreWebView2SourceChangedEventArgs
 ];
+/// ICoreWebView2ControllerOptions … ICoreWebView2ControllerOptions3
+/// (ajouté à la main, même IDL public, #2570).
+pub const CONTROLLER_OPTIONS_SLOTS: usize = 11;
+pub const CONTROLLER_OPTIONS_IIDS: [Guid; 3] = [
+    guid(
+        0x12aae616,
+        0x8ccb,
+        0x44ec,
+        [0xbc, 0xb3, 0xeb, 0x18, 0x31, 0x88, 0x16, 0x35],
+    ), // ICoreWebView2ControllerOptions
+    guid(
+        0x06c991d8,
+        0x9e7e,
+        0x11ed,
+        [0xa8, 0xfc, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02],
+    ), // ICoreWebView2ControllerOptions2
+    guid(
+        0xb32b191a,
+        0x8998,
+        0x57ca,
+        [0xb7, 0xcb, 0xe0, 0x46, 0x17, 0xe4, 0xce, 0x4a],
+    ), // ICoreWebView2ControllerOptions3
+];
+/// ICoreWebView2ProcessInfoCollection et
+/// ICoreWebView2ProcessExtendedInfoCollection : même forme (Count,
+/// GetValueAtIndex), servies par un même objet (ajouté à la main, IDL
+/// public, #2581).
+pub const PROCESS_COLLECTION_SLOTS: usize = 5;
+pub const PROCESS_COLLECTION_IIDS: [Guid; 2] = [
+    guid(
+        0x402b99cd,
+        0xa0cc,
+        0x4fa5,
+        [0xb7, 0xa5, 0x51, 0xd8, 0x6a, 0x1d, 0x23, 0x39],
+    ), // ICoreWebView2ProcessInfoCollection
+    guid(
+        0x32efa696,
+        0x407a,
+        0x11ee,
+        [0xbe, 0x56, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02],
+    ), // ICoreWebView2ProcessExtendedInfoCollection
+];

@@ -18,6 +18,10 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Tables x86 des objets pour les programmes 32 bits (#2428).
+#[path = "xaudio2_x86.rs"]
+mod x86;
+
 const XAUDIO2_E_INVALID_CALL: i32 = 0x8896_0001u32 as i32;
 
 const XAUDIO2_VOICE_NOSAMPLESPLAYED: u32 = 0x100;
@@ -115,11 +119,11 @@ static FX_VT: VTable<3> = VTable([
 ]);
 
 fn new_fx(kind: FxKind) -> *mut Com<FxObject> {
-    Com::create(FX_VT.ptr(), FxObject { kind })
+    Com::create(x86::abi(&FX_VT, "XAudio2Effect"), FxObject { kind })
 }
 
 unsafe fn fx_kind(obj: *mut c_void) -> Option<FxKind> {
-    if obj.is_null() || *(obj as *const *const ()) != FX_VT.ptr() {
+    if obj.is_null() || *(obj as *const *const ()) != x86::abi(&FX_VT, "XAudio2Effect") {
         return None;
     }
     Some(Com::get(obj as *mut Com<FxObject>).kind)
@@ -167,7 +171,8 @@ impl Effect {
 
 impl Drop for Effect {
     fn drop(&mut self) {
-        unsafe { unknown_release(self.object as *mut c_void) }
+        // Effet du runtime (table win64 ou x86) ou XAPO du programme.
+        unsafe { crate::dlls::legacy_com::unknown_call(self.object, 2) };
     }
 }
 
@@ -569,10 +574,10 @@ impl audio::Source for XaShared {
         }
         unsafe {
             for &cb in &engine_cbs {
-                call0(cb as *mut c_void, 0); // OnProcessingPassStart
+                x86::callback(cb, 0, None); // OnProcessingPassStart
             }
             for &(cb, bytes) in &voice_cbs {
-                call1(cb as *mut c_void, 0, bytes); // OnVoiceProcessingPassStart
+                x86::callback(cb, 0, Some(bytes)); // OnVoiceProcessingPassStart
             }
         }
         // 2. Traitement sous verrou.
@@ -584,16 +589,16 @@ impl audio::Source for XaShared {
         unsafe {
             for e in events {
                 match e {
-                    Ev::BufferStart(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 3, ctx),
-                    Ev::BufferEnd(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 4, ctx),
-                    Ev::LoopEnd(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 5, ctx),
-                    Ev::StreamEnd(cb) if cb != 0 => call0(cb as *mut c_void, 2),
-                    Ev::PassEnd(cb) => call0(cb as *mut c_void, 1),
+                    Ev::BufferStart(cb, ctx) if cb != 0 => x86::callback(cb, 3, Some(ctx)),
+                    Ev::BufferEnd(cb, ctx) if cb != 0 => x86::callback(cb, 4, Some(ctx)),
+                    Ev::LoopEnd(cb, ctx) if cb != 0 => x86::callback(cb, 5, Some(ctx)),
+                    Ev::StreamEnd(cb) if cb != 0 => x86::callback(cb, 2, None),
+                    Ev::PassEnd(cb) => x86::callback(cb, 1, None),
                     _ => {}
                 }
             }
             for &cb in &cbs {
-                call0(cb as *mut c_void, 1); // OnProcessingPassEnd
+                x86::callback(cb, 1, None); // OnProcessingPassEnd
             }
         }
         true
@@ -627,9 +632,9 @@ fn new_engine(version: u8) -> *mut Com<Engine> {
     let source = audio::add_source(sh.clone());
     sh.source.store(source as usize, Ordering::Relaxed);
     let vt = if version == 7 {
-        XA27_VT.ptr()
+        x86::abi(&XA27_VT, "IXAudio2_27")
     } else {
-        XA_VT.ptr()
+        x86::abi(&XA_VT, "IXAudio2")
     };
     Com::create(
         vt,
@@ -701,6 +706,72 @@ unsafe fn shared<'a>(v: *mut Voice) -> &'a XaShared {
     &*(*v).sh
 }
 
+// Structures de xaudio2.h : déclarées en `#pragma pack(1)` (pshpack1.h), donc
+// sans remplissage ; seuls les pointeurs changent de taille avec l'ABI du
+// programme (#2442). Décalages vérifiés par `offsetof` sur l'en-tête
+// mingw-w64, en x86_64 et en i686.
+
+/// Taille d'un pointeur du programme.
+fn ps() -> usize {
+    crate::dlls::legacy_com::ptr_size()
+}
+unsafe fn rd_u32(p: *const u8, off: usize) -> u32 {
+    (p.add(off) as *const u32).read_unaligned()
+}
+unsafe fn rd_ptr(p: *const u8, off: usize) -> usize {
+    if ps() == 4 {
+        rd_u32(p, off) as usize
+    } else {
+        (p.add(off) as *const usize).read_unaligned()
+    }
+}
+/// Décalages compacts de xaudio2.h selon la taille `p` d'un pointeur.
+mod layout {
+    /// XAUDIO2_BUFFER : PlayBegin, juste après pAudioData @8.
+    pub const fn buf_play_begin(p: usize) -> usize {
+        8 + p
+    }
+    /// XAUDIO2_BUFFER : pContext.
+    pub const fn buf_context(p: usize) -> usize {
+        buf_play_begin(p) + 20
+    }
+    #[cfg(test)]
+    pub const fn buf_size(p: usize) -> usize {
+        buf_context(p) + p
+    }
+    /// XAUDIO2_VOICE_SENDS.pSends et XAUDIO2_EFFECT_CHAIN.pEffectDescriptors.
+    pub const LIST_PTR: usize = 4;
+    /// XAUDIO2_SEND_DESCRIPTOR : taille (pOutputVoice @4).
+    pub const fn send_size(p: usize) -> usize {
+        4 + p
+    }
+    /// XAUDIO2_EFFECT_DESCRIPTOR : taille (InitialState @p).
+    pub const fn effect_size(p: usize) -> usize {
+        p + 8
+    }
+    /// XAUDIO2_VOICE_STATE : BuffersQueued, SamplesPlayed, taille.
+    pub const fn state_queued(p: usize) -> usize {
+        p
+    }
+    pub const fn state_played(p: usize) -> usize {
+        p + 4
+    }
+    #[cfg(test)]
+    pub const fn state_size(p: usize) -> usize {
+        p + 12
+    }
+}
+
+unsafe fn wr_ptr(p: *mut u8, off: usize, v: usize) {
+    if ps() == 4 {
+        (p.add(off) as *mut u32).write_unaligned(v as u32);
+    } else {
+        (p.add(off) as *mut usize).write_unaligned(v);
+    }
+}
+
+// XAUDIO2_VOICE_SENDS { UINT32 SendCount; XAUDIO2_SEND_DESCRIPTOR *pSends; }
+// XAUDIO2_SEND_DESCRIPTOR { UINT32 Flags; IXAudio2Voice *pOutputVoice; }
 unsafe fn parse_sends(g: &Graph, list: *const u8) -> Result<Vec<Send>, i32> {
     if list.is_null() {
         return Ok(g
@@ -713,15 +784,16 @@ unsafe fn parse_sends(g: &Graph, list: *const u8) -> Result<Vec<Send>, i32> {
             .into_iter()
             .collect());
     }
-    let count = *(list as *const u32) as usize;
-    let sends = *(list.add(8) as *const *const u8);
+    let count = rd_u32(list, 0) as usize;
+    let sends = rd_ptr(list, layout::LIST_PTR) as *const u8;
+    let stride = layout::send_size(ps());
     if count > 0 && sends.is_null() {
         return Err(E_INVALIDARG);
     }
     let mut v = Vec::with_capacity(count);
     for i in 0..count {
-        let flags = *(sends.add(i * 16) as *const u32);
-        let dest = *(sends.add(i * 16 + 8) as *const usize);
+        let flags = rd_u32(sends, i * stride);
+        let dest = rd_ptr(sends, i * stride + 4);
         if !g.voices.contains_key(&dest) || matches!(g.voices[&dest].role, Role::Source(_)) {
             return Err(E_INVALIDARG);
         }
@@ -734,23 +806,27 @@ unsafe fn parse_sends(g: &Graph, list: *const u8) -> Result<Vec<Send>, i32> {
     Ok(v)
 }
 
+// XAUDIO2_EFFECT_CHAIN { UINT32 EffectCount; XAUDIO2_EFFECT_DESCRIPTOR *p; }
+// XAUDIO2_EFFECT_DESCRIPTOR { IUnknown *pEffect; BOOL InitialState;
+// UINT32 OutputChannels; }
 unsafe fn parse_effects(chain: *const u8) -> Result<Vec<Effect>, i32> {
     if chain.is_null() {
         return Ok(Vec::new());
     }
-    let count = *(chain as *const u32) as usize;
-    let desc = *(chain.add(8) as *const *const u8);
+    let count = rd_u32(chain, 0) as usize;
+    let desc = rd_ptr(chain, layout::LIST_PTR) as *const u8;
+    let stride = layout::effect_size(ps());
     if count > 0 && desc.is_null() {
         return Err(E_INVALIDARG);
     }
     let mut v = Vec::with_capacity(count);
     for i in 0..count {
-        let obj = *(desc.add(i * 16) as *const *mut c_void);
-        let enabled = *(desc.add(i * 16 + 8) as *const i32) != 0;
+        let obj = rd_ptr(desc, i * stride) as *mut c_void;
+        let enabled = rd_u32(desc, i * stride + ps()) != 0;
         if obj.is_null() {
             return Err(E_INVALIDARG);
         }
-        unknown_add_ref(obj);
+        crate::dlls::legacy_com::unknown_call(obj as usize, 1);
         let state = match fx_kind(obj) {
             Some(FxKind::Reverb) => FxState::Reverb(dsp::Reverb::new(audio::RATE)),
             Some(FxKind::Meter) => FxState::Meter {
@@ -838,9 +914,9 @@ unsafe extern "win64" fn xa_create_source(
         Err(e) => return e,
     };
     let vt = if e.version == 7 {
-        SOURCE27_VT.ptr()
+        x86::abi(&SOURCE27_VT, "IXAudio2SourceVoice_27")
     } else {
-        SOURCE_VT.ptr()
+        x86::abi(&SOURCE_VT, "IXAudio2SourceVoice")
     };
     let v = alloc_voice(this, vt);
     let max_ratio = if max_ratio.is_finite() && max_ratio > 0.0 {
@@ -902,7 +978,7 @@ unsafe extern "win64" fn xa_create_submix(
         Ok(f) => f,
         Err(e) => return e,
     };
-    let v = alloc_voice(this, SUBMIX_VT.ptr());
+    let v = alloc_voice(this, x86::abi(&SUBMIX_VT, "IXAudio2SubmixVoice"));
     let state = new_voice_state(
         Role::Submix { stage },
         channels,
@@ -942,7 +1018,7 @@ unsafe extern "win64" fn xa_create_master(
         Ok(f) => f,
         Err(e) => return e,
     };
-    let v = alloc_voice(this, MASTER_VT.ptr());
+    let v = alloc_voice(this, x86::abi(&MASTER_VT, "IXAudio2MasteringVoice"));
     let state = new_voice_state(Role::Master, channels, rate, flags, Vec::new(), effects);
     let mut g = lock(&e.sh.graph);
     g.voices.insert(voice_id(v), state);
@@ -1207,11 +1283,12 @@ unsafe extern "win64" fn v_get_effect_params(
             return E_INVALIDARG;
         };
         match &e.state {
-            // XAUDIO2FX_VOLUMEMETER_LEVELS { float *pPeak; float *pRMS; UINT32 ChannelCount; }
-            FxState::Meter { peak, rms } if size >= 20 => {
-                let pk = *(p as *const *mut f32);
-                let rm = *(p.add(8) as *const *mut f32);
-                let n = *(p.add(16) as *const u32) as usize;
+            // XAUDIO2FX_VOLUMEMETER_LEVELS { float *pPeak; float *pRMS;
+            // UINT32 ChannelCount; } compacte : 20 octets en x64, 12 en x86.
+            FxState::Meter { peak, rms } if size as usize >= 2 * ps() + 4 => {
+                let pk = rd_ptr(p, 0) as *mut f32;
+                let rm = rd_ptr(p, ps()) as *mut f32;
+                let n = rd_u32(p, 2 * ps()) as usize;
                 for c in 0..n {
                     let (a, b) = if c < 2 { (peak[c], rms[c]) } else { (0.0, 0.0) };
                     if !pk.is_null() {
@@ -1361,8 +1438,8 @@ unsafe extern "win64" fn v_get_channel_volumes(v: *mut Voice, n: u32, p: *mut f3
     }
     with_voice(v, |g, id| {
         if let Some(s) = g.voices.get(&id) {
-            for i in 0..(n as usize).min(s.channel_volumes.len()) {
-                *p.add(i) = s.channel_volumes[i];
+            for (i, &v) in s.channel_volumes.iter().enumerate().take(n as usize) {
+                *p.add(i) = v;
             }
         }
     })
@@ -1473,21 +1550,24 @@ unsafe extern "win64" fn s_stop(v: *mut Voice, _flags: u32, _set: u32) -> i32 {
     with_source(v, |s| s.playing = false);
     S_OK
 }
-// XAUDIO2_BUFFER : Flags @0, AudioBytes @4, pAudioData @8, PlayBegin @16,
-// PlayLength @20, LoopBegin @24, LoopLength @28, LoopCount @32, pContext @40.
+// XAUDIO2_BUFFER (compacte) : Flags @0, AudioBytes @4, pAudioData @8, puis,
+// après ce pointeur (P = 8 + taille d'un pointeur), PlayBegin @P,
+// PlayLength @P+4, LoopBegin @P+8, LoopLength @P+12, LoopCount @P+16,
+// pContext @P+20 : 36 et 44 octets en x86 et x64 (#2442).
 unsafe extern "win64" fn s_submit(v: *mut Voice, b: *const u8, _wma: *const u8) -> i32 {
     if b.is_null() {
         return E_INVALIDARG;
     }
-    let flags = *(b as *const u32);
-    let bytes = *(b.add(4) as *const u32) as usize;
-    let data = *(b.add(8) as *const *const u8);
-    let play_begin = *(b.add(16) as *const u32) as usize;
-    let play_len = *(b.add(20) as *const u32) as usize;
-    let loop_begin = *(b.add(24) as *const u32) as usize;
-    let loop_len = *(b.add(28) as *const u32) as usize;
-    let loop_count = *(b.add(32) as *const u32);
-    let ctx = *(b.add(40) as *const usize);
+    let at = layout::buf_play_begin(ps());
+    let flags = rd_u32(b, 0);
+    let bytes = rd_u32(b, 4) as usize;
+    let data = rd_ptr(b, 8) as *const u8;
+    let play_begin = rd_u32(b, at) as usize;
+    let play_len = rd_u32(b, at + 4) as usize;
+    let loop_begin = rd_u32(b, at + 8) as usize;
+    let loop_len = rd_u32(b, at + 12) as usize;
+    let loop_count = rd_u32(b, at + 16);
+    let ctx = rd_ptr(b, layout::buf_context(ps()));
     with_source(v, |s| {
         let block = s.format.block as usize;
         if data.is_null()
@@ -1572,10 +1652,12 @@ unsafe fn write_state(v: *mut Voice, p: *mut u8, flags: u32) {
     }
     with_source(v, |s| {
         let ctx = s.queue.front().map(|b| b.ctx).unwrap_or(0);
-        *(p as *mut usize) = ctx;
-        *(p.add(8) as *mut u32) = s.queue.len() as u32;
+        // XAUDIO2_VOICE_STATE (compacte) : pCurrentBufferContext @0,
+        // BuffersQueued @P, SamplesPlayed @P+4 (P = taille d'un pointeur).
+        wr_ptr(p, 0, ctx);
+        (p.add(layout::state_queued(ps())) as *mut u32).write_unaligned(s.queue.len() as u32);
         if flags & XAUDIO2_VOICE_NOSAMPLESPLAYED == 0 {
-            *(p.add(16) as *mut u64) = s.samples_played;
+            (p.add(layout::state_played(ps())) as *mut u64).write_unaligned(s.samples_played);
         }
     });
 }
@@ -1799,6 +1881,20 @@ pub fn exports() -> crate::dlls::Exports {
     }
 }
 
+/// Tables de méthodes et leur nom, pour vérifier les signatures x86.
+#[cfg(test)]
+fn tables() -> Vec<(&'static str, usize)> {
+    vec![
+        ("IXAudio2", XA_VT.0.len()),
+        ("IXAudio2_27", XA27_VT.0.len()),
+        ("IXAudio2SubmixVoice", SUBMIX_VT.0.len()),
+        ("IXAudio2MasteringVoice", MASTER_VT.0.len()),
+        ("IXAudio2SourceVoice", SOURCE_VT.0.len()),
+        ("IXAudio2SourceVoice_27", SOURCE27_VT.0.len()),
+        ("XAudio2Effect", FX_VT.0.len()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     #[repr(C, align(8))]
@@ -1817,6 +1913,43 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicU32;
 
+    /// Décalages mesurés par `offsetof` sur le xaudio2.h de mingw-w64
+    /// (pshpack1.h), compilé par x86_64-w64-mingw32-gcc et
+    /// i686-w64-mingw32-gcc (#2442). Un retour à l'alignement naturel
+    /// (pContext @40 en x64) échoue ici.
+    #[test]
+    fn dispositions_compactes_de_xaudio2_h() {
+        // (taille d'un pointeur, PlayBegin, LoopCount, pContext, taille)
+        for (p, begin, count, ctx, size) in [(8, 16, 32, 36, 44), (4, 12, 28, 32, 36)] {
+            assert_eq!(layout::buf_play_begin(p), begin);
+            assert_eq!(layout::buf_play_begin(p) + 16, count);
+            assert_eq!(layout::buf_context(p), ctx);
+            assert_eq!(layout::buf_size(p), size);
+        }
+        // XAUDIO2_VOICE_SENDS / EFFECT_CHAIN : pointeur @4, 12 et 8 octets.
+        assert_eq!(layout::LIST_PTR, 4);
+        // SEND_DESCRIPTOR : 12 / 8 ; EFFECT_DESCRIPTOR : 16 / 12.
+        assert_eq!((layout::send_size(8), layout::send_size(4)), (12, 8));
+        assert_eq!((layout::effect_size(8), layout::effect_size(4)), (16, 12));
+        // VOICE_STATE : BuffersQueued 8 / 4, SamplesPlayed 12 / 8, 20 / 16.
+        assert_eq!(
+            (
+                layout::state_queued(8),
+                layout::state_played(8),
+                layout::state_size(8)
+            ),
+            (8, 12, 20)
+        );
+        assert_eq!(
+            (
+                layout::state_queued(4),
+                layout::state_played(4),
+                layout::state_size(4)
+            ),
+            (4, 8, 16)
+        );
+    }
+
     #[test]
     fn matrice_de_sortie_ramenee_en_stereo() {
         let m = collapse(1, 2, &[0.25, 0.75]);
@@ -1832,6 +1965,7 @@ mod tests {
     struct Cb {
         vt: *const usize,
         ends: AtomicU32,
+        last_ctx: AtomicUsize,
         stream_end: AtomicU32,
         starts: AtomicU32,
     }
@@ -1843,7 +1977,8 @@ mod tests {
     unsafe extern "win64" fn stream_end(c: *mut Cb) {
         (*c).stream_end.fetch_add(1, Ordering::SeqCst);
     }
-    unsafe extern "win64" fn buffer_end(c: *mut Cb, _ctx: usize) {
+    unsafe extern "win64" fn buffer_end(c: *mut Cb, ctx: usize) {
+        (*c).last_ctx.store(ctx, Ordering::SeqCst);
         (*c).ends.fetch_add(1, Ordering::SeqCst);
     }
     unsafe extern "win64" fn err(_: *mut Cb, _: usize, _: i32) {}
@@ -1864,6 +1999,7 @@ mod tests {
             let cb = Cb {
                 vt: vt.as_ptr(),
                 ends: AtomicU32::new(0),
+                last_ctx: AtomicUsize::new(0),
                 stream_end: AtomicU32::new(0),
                 starts: AtomicU32::new(0),
             };
@@ -1899,9 +2035,10 @@ mod tests {
             desc[0..8].copy_from_slice(&(meter as usize).to_le_bytes());
             desc[8..12].copy_from_slice(&1i32.to_le_bytes());
             desc[12..16].copy_from_slice(&2u32.to_le_bytes());
-            let mut chain = Al([0u8; 16]);
+            // Dispositions compactes de xaudio2.h (#2442).
+            let mut chain = Al([0u8; 12]);
             chain[0..4].copy_from_slice(&1u32.to_le_bytes());
-            chain[8..16].copy_from_slice(&(desc.as_ptr() as usize).to_le_bytes());
+            chain[4..12].copy_from_slice(&(desc.as_ptr() as usize).to_le_bytes());
             let mut sub: *mut Voice = std::ptr::null_mut();
             assert_eq!(
                 xa_create_submix(
@@ -1916,12 +2053,12 @@ mod tests {
                 ),
                 S_OK
             );
-            unknown_release(meter);
-            let mut send = Al([0u8; 16]);
-            send[8..16].copy_from_slice(&(sub as usize).to_le_bytes());
-            let mut sends = Al([0u8; 16]);
+            crate::dlls::legacy_com::unknown_call(meter as usize, 2);
+            let mut send = Al([0u8; 12]);
+            send[4..12].copy_from_slice(&(sub as usize).to_le_bytes());
+            let mut sends = Al([0u8; 12]);
             sends[0..4].copy_from_slice(&1u32.to_le_bytes());
-            sends[8..16].copy_from_slice(&(send.as_ptr() as usize).to_le_bytes());
+            sends[4..12].copy_from_slice(&(send.as_ptr() as usize).to_le_bytes());
             assert_eq!(
                 xa_create_source(
                     e,
@@ -1937,12 +2074,12 @@ mod tests {
             );
             // 0,1 s de signal constant à 0,5, joué deux fois (LoopCount = 1).
             let pcm: Vec<u8> = (0..2400).flat_map(|_| 0.5f32.to_le_bytes()).collect();
-            let mut b = Al([0u8; 48]);
+            let mut b = Al([0u8; 44]);
             b[0..4].copy_from_slice(&XAUDIO2_END_OF_STREAM.to_le_bytes());
             b[4..8].copy_from_slice(&(pcm.len() as u32).to_le_bytes());
             b[8..16].copy_from_slice(&(pcm.as_ptr() as usize).to_le_bytes());
             b[32..36].copy_from_slice(&1u32.to_le_bytes());
-            b[40..48].copy_from_slice(&7usize.to_le_bytes());
+            b[36..44].copy_from_slice(&7usize.to_le_bytes());
             assert_eq!(s_submit(src, b.as_ptr(), std::ptr::null()), S_OK);
             let mut details = [0u32; 4];
             v_details(src, details.as_mut_ptr());
@@ -1954,10 +2091,17 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             assert_eq!(cb.ends.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                cb.last_ctx.load(Ordering::SeqCst),
+                7,
+                "pContext @36 (#2442)"
+            );
             assert!(cb.starts.load(Ordering::SeqCst) >= 10);
-            let mut state = Al([0u8; 24]);
+            // XAUDIO2_VOICE_STATE : 20 octets, SamplesPlayed @12 (#2442).
+            let mut state = Al([0xEEu8; 24]);
             s_get_state(src, state.as_mut_ptr(), 0);
-            assert_eq!(u64::from_le_bytes(state[16..24].try_into().unwrap()), 4800);
+            assert_eq!(u64::from_le_bytes(state[12..20].try_into().unwrap()), 4800);
+            assert_eq!(&state[20..24], &[0xEE; 4], "rien écrit après la structure");
             // Le vumètre du sous-mixage a vu passer le signal.
             let (mut peak, mut rms) = ([0f32; 2], [0f32; 2]);
             let mut levels = Al([0u8; 24]);

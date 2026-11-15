@@ -1,6 +1,7 @@
 //! Pool de threads Windows (API « Threadpool » de Vista) : minuteurs
-//! (CreateThreadpoolTimer…), travaux (CreateThreadpoolWork…) et
-//! TrySubmitThreadpoolCallback.
+//! (CreateThreadpoolTimer…), travaux (CreateThreadpoolWork…),
+//! TrySubmitThreadpoolCallback et groupes de nettoyage
+//! (CreateThreadpoolCleanupGroup…, Teams #2110).
 //!
 //! Les rappels s'exécutent sur des threads Windows (TEB, notifications
 //! DLL_THREAD_ATTACH) créés à la demande et réutilisés ; un thread dédié
@@ -120,17 +121,19 @@ pub struct Work {
 pub unsafe extern "win64" fn create_threadpool_work(
     callback: Option<WorkCallback>,
     context: usize,
-    _env: usize,
+    env: usize,
 ) -> *const Work {
     let Some(callback) = callback else {
         crate::process::set_last_error(87);
         return std::ptr::null();
     };
-    Arc::into_raw(Arc::new(Work {
+    let work = Arc::into_raw(Arc::new(Work {
         callback,
         context,
         flight: InFlight::default(),
-    }))
+    }));
+    join_group(env, Member::Work(work as usize));
+    work
 }
 
 pub unsafe extern "win64" fn submit_threadpool_work(work: *const Work) {
@@ -156,6 +159,7 @@ pub unsafe extern "win64" fn wait_for_threadpool_work_callbacks(work: *const Wor
 
 pub unsafe extern "win64" fn close_threadpool_work(work: *const Work) {
     if !work.is_null() {
+        leave_groups(work as usize);
         drop(Arc::from_raw(work));
     }
 }
@@ -248,7 +252,7 @@ fn timer_thread() {
 pub unsafe extern "win64" fn create_threadpool_timer(
     callback: Option<TimerCallback>,
     context: usize,
-    _env: usize,
+    env: usize,
 ) -> *const Timer {
     let Some(callback) = callback else {
         crate::process::set_last_error(87);
@@ -261,7 +265,9 @@ pub unsafe extern "win64" fn create_threadpool_timer(
         flight: InFlight::default(),
     });
     lock(&timers().list).push(Arc::clone(&timer));
-    Arc::into_raw(timer)
+    let timer = Arc::into_raw(timer);
+    join_group(env, Member::Timer(timer as usize));
+    timer
 }
 
 /// Échéance FILETIME : négative = relative (unités de 100 ns), positive =
@@ -279,16 +285,29 @@ pub unsafe extern "win64" fn set_threadpool_timer(
     timer: *const Timer,
     due: *const i64,
     period_ms: u32,
-    _window_ms: u32,
+    window_ms: u32,
 ) {
-    let Some(t) = timer.as_ref() else { return };
+    set_threadpool_timer_ex(timer, due, period_ms, window_ms);
+}
+
+/// SetThreadpoolTimerEx : comme SetThreadpoolTimer, et rend TRUE si le
+/// minuteur était armé avant l'appel (il ne partira alors plus pour
+/// l'ancienne échéance).
+pub unsafe extern "win64" fn set_threadpool_timer_ex(
+    timer: *const Timer,
+    due: *const i64,
+    period_ms: u32,
+    _window_ms: u32,
+) -> i32 {
+    let Some(t) = timer.as_ref() else { return 0 };
     // Sous le verrou de la liste, celui de la variable de condition : un
     // réveil émis pendant que le thread des minuteurs recalcule la prochaine
     // échéance (sans la voir) serait sinon perdu et le minuteur ne partirait
     // jamais.
     let _list = lock(&timers().list);
-    {
+    let was_set = {
         let mut d = lock(&t.due);
+        let was_set = d.0.is_some();
         *d = if due.is_null() {
             (None, Duration::ZERO)
         } else {
@@ -297,8 +316,10 @@ pub unsafe extern "win64" fn set_threadpool_timer(
                 Duration::from_millis(period_ms.into()),
             )
         };
-    }
+        was_set
+    };
     timers().changed.notify_all();
+    i32::from(was_set)
 }
 
 pub unsafe extern "win64" fn is_threadpool_timer_set(timer: *const Timer) -> i32 {
@@ -319,9 +340,145 @@ pub unsafe extern "win64" fn close_threadpool_timer(timer: *const Timer) {
     if timer.is_null() {
         return;
     }
+    leave_groups(timer as usize);
     let t = Arc::from_raw(timer);
     lock(&t.due).0 = None;
     lock(&timers().list).retain(|x| !Arc::ptr_eq(x, &t));
+}
+
+// --- Groupes de nettoyage ----------------------------------------------------------
+//
+// Documentation publique : CreateThreadpoolCleanupGroup,
+// CloseThreadpoolCleanupGroupMembers, CloseThreadpoolCleanupGroup et
+// TP_CALLBACK_ENVIRON (winnt.h : Version, Pool, CleanupGroup,
+// CleanupGroupCancelCallback…). Un objet créé avec un environnement qui
+// nomme un groupe en devient membre ; le fermer seul l'en retire.
+
+/// Membre d'un groupe : travail, minuteur ou attente (apps_win32).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Member {
+    Work(usize),
+    Timer(usize),
+    Wait(usize),
+}
+
+impl Member {
+    fn addr(self) -> usize {
+        match self {
+            Member::Work(a) | Member::Timer(a) | Member::Wait(a) => a,
+        }
+    }
+}
+
+/// PTP_CLEANUP_GROUP_CANCEL_CALLBACK(ObjectContext, CleanupContext).
+type CancelCallback = unsafe extern "win64" fn(usize, usize);
+
+/// Groupe → membres, chacun avec la fonction d'annulation de son
+/// environnement (0 si aucune).
+fn groups() -> &'static Mutex<std::collections::HashMap<usize, Vec<(Member, usize, usize)>>> {
+    static G: OnceLock<Mutex<std::collections::HashMap<usize, Vec<(Member, usize, usize)>>>> =
+        OnceLock::new();
+    G.get_or_init(Default::default)
+}
+
+/// Groupe et fonction d'annulation lus dans un TP_CALLBACK_ENVIRON.
+/// Disposition x64 : CleanupGroup à 16, CleanupGroupCancelCallback à 24 ;
+/// x86 : 8 et 12. La fonction d'annulation d'un programme 32 bits n'est
+/// pas appelée (convention d'appel différente).
+unsafe fn env_group(env: usize) -> Option<(usize, usize)> {
+    if env == 0 {
+        return None;
+    }
+    let version = std::ptr::read_unaligned(env as *const u32);
+    if version != 1 && version != 3 {
+        return None;
+    }
+    let (group, cancel) = if crate::wow32::active() {
+        (
+            std::ptr::read_unaligned((env + 8) as *const u32) as usize,
+            0,
+        )
+    } else {
+        (
+            std::ptr::read_unaligned((env + 16) as *const usize),
+            std::ptr::read_unaligned((env + 24) as *const usize),
+        )
+    };
+    (group != 0).then_some((group, cancel))
+}
+
+/// Inscrit un objet tout juste créé dans le groupe de son environnement.
+/// `context` est celui de l'objet, rendu à la fonction d'annulation.
+pub unsafe fn join_group_with_context(env: usize, member: Member, context: usize) {
+    let Some((group, cancel)) = env_group(env) else {
+        return;
+    };
+    if let Some(list) = lock(groups()).get_mut(&group) {
+        list.push((member, cancel, context));
+    }
+}
+
+unsafe fn join_group(env: usize, member: Member) {
+    let context = match member {
+        Member::Work(a) => (*(a as *const Work)).context,
+        Member::Timer(a) => (*(a as *const Timer)).context,
+        Member::Wait(_) => 0,
+    };
+    join_group_with_context(env, member, context);
+}
+
+/// Un objet fermé seul quitte son groupe.
+pub fn leave_groups(addr: usize) {
+    for list in lock(groups()).values_mut() {
+        list.retain(|(m, _, _)| m.addr() != addr);
+    }
+}
+
+pub extern "win64" fn create_threadpool_cleanup_group() -> usize {
+    static NEXT: AtomicUsize = AtomicUsize::new(0x7E00_0000);
+    let h = NEXT.fetch_add(8, Ordering::Relaxed);
+    lock(groups()).insert(h, Vec::new());
+    h
+}
+
+/// Ferme chaque membre : attend ses rappels en cours, annule ceux qui
+/// n'ont pas commencé si `cancel`, puis le libère.
+pub unsafe extern "win64" fn close_threadpool_cleanup_group_members(
+    group: usize,
+    cancel: i32,
+    cleanup_context: usize,
+) {
+    let members = match lock(groups()).get_mut(&group) {
+        Some(list) => std::mem::take(list),
+        None => return,
+    };
+    for (member, cancel_cb, context) in members {
+        match member {
+            Member::Work(a) => {
+                let w = a as *const Work;
+                wait_for_threadpool_work_callbacks(w, cancel);
+                drop(Arc::from_raw(w));
+            }
+            Member::Timer(a) => {
+                let t = a as *const Timer;
+                lock(&(*t).due).0 = None;
+                wait_for_threadpool_timer_callbacks(t, 1);
+                let t = Arc::from_raw(t);
+                lock(&timers().list).retain(|x| !Arc::ptr_eq(x, &t));
+            }
+            Member::Wait(a) => {
+                crate::dlls::apps_win32::release_threadpool_wait(a, cancel != 0);
+            }
+        }
+        if cancel != 0 && cancel_cb != 0 {
+            let f: CancelCallback = std::mem::transmute(cancel_cb);
+            f(context, cleanup_context);
+        }
+    }
+}
+
+pub extern "win64" fn close_threadpool_cleanup_group(group: usize) {
+    lock(groups()).remove(&group);
 }
 
 /// Pools privés (CreateThreadpool, #1606) : les rappels de Winlux passent
@@ -377,6 +534,10 @@ pub fn exports() -> crate::dlls::Exports {
         "TrySubmitThreadpoolCallback" => fn try_submit_threadpool_callback,
         "CreateThreadpoolTimer" => fn create_threadpool_timer,
         "SetThreadpoolTimer" => fn set_threadpool_timer,
+        "SetThreadpoolTimerEx" => fn set_threadpool_timer_ex,
+        "CreateThreadpoolCleanupGroup" => fn create_threadpool_cleanup_group,
+        "CloseThreadpoolCleanupGroupMembers" => fn close_threadpool_cleanup_group_members,
+        "CloseThreadpoolCleanupGroup" => fn close_threadpool_cleanup_group,
         "IsThreadpoolTimerSet" => fn is_threadpool_timer_set,
         "WaitForThreadpoolTimerCallbacks" => fn wait_for_threadpool_timer_callbacks,
         "CloseThreadpoolTimer" => fn close_threadpool_timer,

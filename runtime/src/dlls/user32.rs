@@ -987,6 +987,10 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
         return 0;
     }
+    // ShowWindowAsync venu d'un autre thread (#2110).
+    if super::teams_win32::dispatch_private(m.hwnd, m.message, m.wparam) {
+        return 0;
+    }
     // WM_TIMER d'un minuteur à fonction de rappel : lParam est la TIMERPROC,
     // appelée à la place de la procédure de fenêtre.
     if m.message == 0x0113 && m.lparam != 0 {
@@ -1689,23 +1693,6 @@ pub unsafe extern "win64" fn set_window_pos(
         {
             with_backend(|backend| backend.show_window(hwnd, !empty));
         }
-        if resized {
-            gui::post_to_window(
-                hwnd,
-                Msg::new(
-                    hwnd,
-                    gui::WM_SIZE,
-                    0,
-                    pack_i16_pair(width, (height - gui::menu_bar_height(hwnd)).max(0)),
-                ),
-            );
-        }
-        if moved {
-            gui::post_to_window(
-                hwnd,
-                Msg::new(hwnd, gui::WM_MOVE, 0, pack_i16_pair(left, top)),
-            );
-        }
         if gui::window_parent(hwnd).unwrap_or(0) == 0 {
             super::chromium_win32::notify_win_event(
                 super::chromium_win32::EVENT_OBJECT_LOCATIONCHANGE,
@@ -1739,7 +1726,16 @@ pub unsafe extern "win64" fn set_window_pos(
     // WM_WINDOWPOSCHANGED, envoyé une fois la fenêtre placée : la VCL n'y
     // relit qu'ainsi ses Left/Top/Width/Height. Sans lui, chaque propriété
     // lue du DFM effaçait la précédente et le champ du port de WinSCP
-    // restait en (0,0) (#1251). WM_SIZE et WM_MOVE restent postés.
+    // restait en (0,0) (#1251). Comme sous Windows, DefWindowProc y envoie
+    // WM_SIZE et WM_MOVE avant le retour de SetWindowPos : Qt relit sa
+    // géométrie sur WM_SIZE, et iCUE redimensionné en deux temps (largeur
+    // puis hauteur) retombait à 160x160 quand ils étaient postés (#2044).
+    // Une fenêtre qui ne passe pas WM_WINDOWPOSCHANGED à DefWindowProc les
+    // reçoit postés, comme avant.
+    let size_msg =
+        resized.then(|| pack_i16_pair(width, (height - gui::menu_bar_height(hwnd)).max(0)));
+    let move_msg = moved.then(|| pack_i16_pair(left, top));
+    let mut pending = None;
     if moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0 {
         let mut done = flags;
         if !moved {
@@ -1757,7 +1753,21 @@ pub unsafe extern "win64" fn set_window_pos(
             cy: rect.height(),
             flags: done,
         };
+        pending = Some(push_pending_geometry(hwnd, size_msg, move_msg));
         send_message_w(hwnd, WM_WINDOWPOSCHANGED, 0, &mut pos as *mut _ as isize);
+    }
+    // Ce que DefWindowProc n'a pas envoyé est posté.
+    let (size_msg, move_msg) = match pending {
+        Some(id) => pop_pending_geometry(id),
+        None => (size_msg, move_msg),
+    };
+    if gui::window_rect(hwnd).is_some() {
+        if let Some(l) = size_msg {
+            gui::post_to_window(hwnd, Msg::new(hwnd, gui::WM_SIZE, size_wparam(hwnd), l));
+        }
+        if let Some(l) = move_msg {
+            gui::post_to_window(hwnd, Msg::new(hwnd, gui::WM_MOVE, 0, l));
+        }
     }
 
     if flags & SWP_NOREDRAW == 0
@@ -1770,6 +1780,86 @@ pub unsafe extern "win64" fn set_window_pos(
         }
     }
     1
+}
+
+/// WM_SIZE et WM_MOVE dus par un SetWindowPos en cours, en attendant que
+/// DefWindowProc(WM_WINDOWPOSCHANGED) les envoie. Une pile : un WM_SIZE peut
+/// placer d'autres fenêtres (#2044).
+struct PendingGeometry {
+    id: u64,
+    hwnd: usize,
+    size: Option<isize>,
+    moved: Option<isize>,
+}
+
+thread_local! {
+    static PENDING_GEOMETRY: std::cell::RefCell<Vec<PendingGeometry>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn push_pending_geometry(hwnd: usize, size: Option<isize>, moved: Option<isize>) -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    PENDING_GEOMETRY.with(|p| {
+        p.borrow_mut().push(PendingGeometry {
+            id,
+            hwnd,
+            size,
+            moved,
+        })
+    });
+    id
+}
+
+fn pop_pending_geometry(id: u64) -> (Option<isize>, Option<isize>) {
+    PENDING_GEOMETRY.with(|p| {
+        let mut p = p.borrow_mut();
+        match p.iter().rposition(|g| g.id == id) {
+            Some(i) => {
+                let g = p.remove(i);
+                (g.size, g.moved)
+            }
+            None => (None, None),
+        }
+    })
+}
+
+/// wParam de WM_SIZE selon l'état de la fenêtre.
+fn size_wparam(hwnd: usize) -> usize {
+    const WS_MINIMIZE: u32 = 0x2000_0000;
+    const WS_MAXIMIZE: u32 = 0x0100_0000;
+    match gui::window_style(hwnd) {
+        Some(s) if s & WS_MINIMIZE != 0 => 1, // SIZE_MINIMIZED
+        Some(s) if s & WS_MAXIMIZE != 0 => 2, // SIZE_MAXIMIZED
+        _ => 0,                               // SIZE_RESTORED
+    }
+}
+
+/// DefWindowProc(WM_WINDOWPOSCHANGED) : envoie WM_MOVE puis WM_SIZE dus par
+/// le SetWindowPos en cours sur cette fenêtre, comme Windows (#2044). Un
+/// WM_WINDOWPOSCHANGED venu du gestionnaire de fenêtres n'a rien en attente :
+/// ses WM_SIZE et WM_MOVE sont déjà en file.
+pub(crate) fn window_pos_changed_default(hwnd: usize) {
+    let due = PENDING_GEOMETRY.with(|p| {
+        let mut p = p.borrow_mut();
+        p.iter_mut()
+            .rev()
+            .find(|g| g.hwnd == hwnd)
+            .map(|g| (g.size.take(), g.moved.take()))
+    });
+    let Some((size, moved)) = due else {
+        return;
+    };
+    unsafe {
+        if let Some(l) = moved {
+            send_message_w(hwnd, gui::WM_MOVE, 0, l);
+        }
+        if let Some(l) = size {
+            if gui::window_rect(hwnd).is_some() {
+                send_message_w(hwnd, gui::WM_SIZE, size_wparam(hwnd), l);
+            }
+        }
+    }
 }
 
 /// Applique l'ordre demandé à SetWindowPos pour une fenêtre enfant.
@@ -2824,33 +2914,33 @@ fn leave_message_only(hwnd: usize, parent: usize) {
 
 /// FindWindowA/W : `class` peut être un atome (MAKEINTATOM, 16 bits hauts
 /// nuls), qu'Acrobat passe pour la classe des boîtes de dialogue (#32770) ;
-/// il ne se lit pas comme une chaîne (#1754).
+/// il ne se lit pas comme une chaîne (#1754). Comme FindWindowEx(NULL,
+/// NULL, …) : fenêtres de premier niveau seulement (#2106).
 pub unsafe extern "win64" fn find_window_a(class: *const u8, title: *const u8) -> usize {
-    let cls = if class.is_null() {
-        None
-    } else {
-        Some(read_class_name_a(class))
-    };
-    let ttl = if title.is_null() {
-        None
-    } else {
-        Some(crate::dlls::cstr(title))
-    };
-    gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
+    find_window_ex_a(0, 0, class, title)
 }
 
 pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16) -> usize {
-    let cls = if class.is_null() {
-        None
-    } else {
-        Some(read_class_name_w(class))
+    find_window_ex_w(0, 0, class, title)
+}
+
+/// Recherche commune à FindWindowExA/W (#2106). Parent NULL ou bureau :
+/// fenêtres de premier niveau, sans les fenêtres message-only ;
+/// HWND_MESSAGE : les seules fenêtres message-only ; sinon les enfants
+/// directs. La recherche reprend après `after`, sinon une boucle
+/// `while ((h = FindWindowEx(0, h, …)))` tourne sans fin.
+fn find_window_among(
+    parent: usize,
+    after: usize,
+    class: Option<&str>,
+    title: Option<&str>,
+) -> usize {
+    let found = match parent {
+        0 | 1 => gui::find_window_ex(0, after, class, title, |h| !is_message_only(h)),
+        HWND_MESSAGE => gui::find_window_ex(0, after, class, title, is_message_only),
+        p => gui::find_window_ex(p, after, class, title, |_| true),
     };
-    let ttl = if title.is_null() {
-        None
-    } else {
-        Some(crate::dlls::wstr(title))
-    };
-    gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
+    found.unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn find_window_ex_a(
@@ -2859,9 +2949,13 @@ pub unsafe extern "win64" fn find_window_ex_a(
     class: *const u8,
     title: *const u8,
 ) -> usize {
-    // Simplifié : ignore parent/after et cherche globalement
-    let _ = (parent, after);
-    find_window_a(class, title)
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_a(class))
+    };
+    let ttl = (!title.is_null()).then(|| crate::dlls::cstr(title));
+    find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
 
 pub unsafe extern "win64" fn find_window_ex_w(
@@ -2870,8 +2964,13 @@ pub unsafe extern "win64" fn find_window_ex_w(
     class: *const u16,
     title: *const u16,
 ) -> usize {
-    let _ = (parent, after);
-    find_window_w(class, title)
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(read_class_name_w(class))
+    };
+    let ttl = (!title.is_null()).then(|| crate::dlls::wstr(title));
+    find_window_among(parent, after, cls.as_deref(), ttl.as_deref())
 }
 
 pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32 {
@@ -2879,6 +2978,30 @@ pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32
         return 0;
     }
     let windows = gui::enum_top_level_windows();
+    if window_diag() {
+        // #1886 : ce que voit le suivi d'occultation de Chromium (son fil
+        // relit la liste, la visibilité et le rectangle de chaque fenêtre).
+        let tid = libc::syscall(libc::SYS_gettid);
+        let list: Vec<String> = windows
+            .iter()
+            .map(|&h| {
+                let r = gui::screen_rect(h).map_or("-".into(), |r| {
+                    format!("{},{}-{},{}", r.left, r.top, r.right, r.bottom)
+                });
+                format!(
+                    "{h:#x} {} v={} st={:#x} ex={:#x} {r}",
+                    gui::window_class(h).unwrap_or_default(),
+                    gui::is_window_visible(h) as u8,
+                    gui::window_style(h).unwrap_or(0),
+                    gui::window_ex_style(h).unwrap_or(0),
+                )
+            })
+            .collect();
+        eprintln!(
+            "winlux[fenetre] EnumWindows fil {tid} : {}",
+            list.join(" | ")
+        );
+    }
     type EnumCallback = unsafe extern "win64" fn(usize, isize) -> i32;
     let cb: EnumCallback = std::mem::transmute(callback);
     for hwnd in windows {
@@ -6225,6 +6348,96 @@ mod tests {
         }
     }
 
+    static VUS_2044: std::sync::Mutex<Vec<(u32, isize)>> = std::sync::Mutex::new(Vec::new());
+    static BLOQUE_2044: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    unsafe extern "win64" fn proc_qt_2044(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == gui::WM_SIZE || msg == gui::WM_MOVE {
+            VUS_2044.lock().unwrap().push((msg, l));
+            return 0;
+        }
+        if msg == WM_WINDOWPOSCHANGED && BLOQUE_2044.load(std::sync::atomic::Ordering::Relaxed) {
+            return 0;
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #2044 : DefWindowProc(WM_WINDOWPOSCHANGED) envoie WM_SIZE avant le
+    /// retour de SetWindowPos. Qt relit sa géométrie sur WM_SIZE : iCUE,
+    /// redimensionné en largeur puis en hauteur, retombait à 160x160 quand
+    /// WM_SIZE était seulement posté. Sans DefWindowProc, il reste posté.
+    #[test]
+    fn taille_annoncee_avant_le_retour_de_setwindowpos() {
+        let name: Vec<u16> = "Winlux2044Qt".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_qt_2044 as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let h = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                880,
+                440,
+                160,
+                160,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h, 0);
+            let mut m = Msg::new(0, 0, 0, 0);
+            while peek_message_w(&mut m, h, 0, 0, 1) != 0 {}
+            VUS_2044.lock().unwrap().clear();
+            // Largeur seule, puis hauteur seule (QWindow::setWidth / setHeight).
+            assert_eq!(set_window_pos(h, 0, 880, 440, 1368, 160, SWP_NOZORDER), 1);
+            assert_eq!(
+                *VUS_2044.lock().unwrap(),
+                [(gui::WM_SIZE, pack_i16_pair(1368, 160))]
+            );
+            assert_eq!(set_window_pos(h, 0, 880, 440, 1368, 840, SWP_NOZORDER), 1);
+            assert_eq!(
+                VUS_2044.lock().unwrap()[1],
+                (gui::WM_SIZE, pack_i16_pair(1368, 840))
+            );
+            // Rien de plus en file : pas de second WM_SIZE.
+            assert_eq!(peek_message_w(&mut m, h, gui::WM_SIZE, gui::WM_SIZE, 1), 0);
+            // Déplacement : WM_MOVE envoyé aussi.
+            assert_eq!(
+                set_window_pos(h, 0, 10, 20, 0, 0, SWP_NOZORDER | SWP_NOSIZE),
+                1
+            );
+            assert_eq!(
+                VUS_2044.lock().unwrap()[2],
+                (gui::WM_MOVE, pack_i16_pair(10, 20))
+            );
+            // WM_WINDOWPOSCHANGED gardé par la fenêtre : WM_SIZE posté.
+            VUS_2044.lock().unwrap().clear();
+            BLOQUE_2044.store(true, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(
+                set_window_pos(h, 0, 0, 0, 300, 200, SWP_NOZORDER | SWP_NOMOVE),
+                1
+            );
+            BLOQUE_2044.store(false, std::sync::atomic::Ordering::Relaxed);
+            assert!(VUS_2044.lock().unwrap().is_empty());
+            assert_eq!(peek_message_w(&mut m, h, gui::WM_SIZE, gui::WM_SIZE, 1), 1);
+            assert_eq!(m.lparam, pack_i16_pair(300, 200));
+            destroy_window(h);
+        }
+    }
+
     static CAPTURE_CHANGES: std::sync::Mutex<Vec<(usize, isize)>> =
         std::sync::Mutex::new(Vec::new());
 
@@ -7199,6 +7412,90 @@ mod tests_messages {
             destroy_window(msg);
             destroy_window(top);
             assert!(!is_message_only(msg));
+        }
+    }
+
+    /// #2106 : FindWindowEx reprend après `after` et respecte le parent ;
+    /// une boucle d'énumération s'arrête, FindWindow ignore les enfants et
+    /// les fenêtres message-only.
+    #[test]
+    fn find_window_ex_enumere_et_s_arrete() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let title: Vec<u16> = "winlux-2106\0".encode_utf16().collect();
+            let make = |style: u32, parent: usize| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    style,
+                    0,
+                    0,
+                    1,
+                    1,
+                    parent,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let a = make(0, 0);
+            let b = make(0, 0);
+            let child1 = make(WS_CHILD, a);
+            let child2 = make(WS_CHILD, a);
+            let msg = make(0, HWND_MESSAGE);
+            assert!([a, b, child1, child2, msg].iter().all(|&h| h != 0));
+
+            // Premier niveau : a et b, chacun une fois, puis NULL.
+            let mut seen = Vec::new();
+            let mut h = 0;
+            loop {
+                h = find_window_ex_w(0, h, class.as_ptr(), title.as_ptr());
+                if h == 0 {
+                    break;
+                }
+                assert!(seen.len() < 64, "boucle sans fin");
+                seen.push(h);
+            }
+            seen.sort_unstable();
+            let mut expected = vec![a, b];
+            expected.sort_unstable();
+            assert_eq!(seen, expected);
+            // Bureau comme parent : pareil que NULL.
+            assert!([a, b].contains(&find_window_ex_w(1, 0, class.as_ptr(), title.as_ptr())));
+
+            // Enfants directs de a, dans l'ordre, puis NULL.
+            let first = find_window_ex_w(a, 0, class.as_ptr(), std::ptr::null());
+            let second = find_window_ex_w(a, first, class.as_ptr(), std::ptr::null());
+            assert_eq!((first, second), (child1.min(child2), child1.max(child2)));
+            assert_eq!(
+                find_window_ex_w(a, second, class.as_ptr(), std::ptr::null()),
+                0
+            );
+            assert_eq!(find_window_ex_w(b, 0, class.as_ptr(), std::ptr::null()), 0);
+            // `after` qui n'est pas un enfant du parent : rien.
+            assert_eq!(find_window_ex_w(a, b, class.as_ptr(), std::ptr::null()), 0);
+
+            // Message-only : seulement sous HWND_MESSAGE.
+            assert_eq!(
+                find_window_ex_w(HWND_MESSAGE, 0, class.as_ptr(), title.as_ptr()),
+                msg
+            );
+            assert_eq!(
+                find_window_ex_w(HWND_MESSAGE, msg, class.as_ptr(), title.as_ptr()),
+                0
+            );
+
+            // FindWindow : un des deux premiers niveaux, jamais un enfant.
+            let found = find_window_w(class.as_ptr(), title.as_ptr());
+            assert!([a, b].contains(&found), "{found:#x}");
+            let ansi = find_window_a(c"STATIC".as_ptr().cast(), c"winlux-2106".as_ptr().cast());
+            assert!([a, b].contains(&ansi), "{ansi:#x}");
+
+            for h in [child1, child2, a, b, msg] {
+                destroy_window(h);
+            }
+            assert_eq!(find_window_ex_w(0, 0, class.as_ptr(), title.as_ptr()), 0);
         }
     }
 

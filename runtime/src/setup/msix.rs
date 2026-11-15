@@ -181,6 +181,9 @@ pub struct Package {
     pub file_types: Vec<(String, Vec<String>, String)>,
     /// (protocole, exécutable).
     pub protocols: Vec<(String, String)>,
+    /// Sous-dossiers du dossier partagé de l'éditeur déclarés par
+    /// l'extension `windows.publisherCacheFolders` (#2524).
+    pub publisher_cache_folders: Vec<String>,
 }
 
 /// Identifiant d'éditeur : 8 premiers octets du SHA-256 de l'éditeur en
@@ -283,6 +286,13 @@ impl Package {
                 }
             }
             p.apps.push(app);
+        }
+        for block in blocks(xml, "PublisherCacheFolders") {
+            for folder in tags(block, "Folder") {
+                if let Some(name) = attr(folder, "Name") {
+                    p.publisher_cache_folders.push(name);
+                }
+            }
         }
         Ok(p)
     }
@@ -431,7 +441,7 @@ fn open_app_package(
         .iter()
         .find(|e| decode_name(&e.name).eq_ignore_ascii_case(&chosen.replace('/', "\\")))
         .ok_or_else(|| format!("{chosen} annoncé par le bundle mais absent"))?;
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp = crate::paths::profile_temp().join(format!(
         "winlux-msix-{}-{}.msix",
         std::process::id(),
         chosen.replace(['/', '\\'], "_")
@@ -707,6 +717,14 @@ mod tests {
       <uap:VisualElements DisplayName="ms-resource:Aide" AppListEntry="none" />
     </Application>
   </Applications>
+  <Extensions>
+    <Extension Category="windows.publisherCacheFolders">
+      <PublisherCacheFolders>
+        <Folder Name="Partage" />
+        <Folder Name="Polices"/>
+      </PublisherCacheFolders>
+    </Extension>
+  </Extensions>
 </Package>"#;
 
     #[test]
@@ -717,6 +735,12 @@ mod tests {
             ),
             "8wekyb3d8bbwe"
         );
+    }
+
+    #[test]
+    fn dossiers_partages_de_l_editeur_2524() {
+        let p = Package::parse(MANIFEST).unwrap();
+        assert_eq!(p.publisher_cache_folders, ["Partage", "Polices"]);
     }
 
     #[test]

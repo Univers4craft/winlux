@@ -1081,8 +1081,8 @@ fn finish(c: Ctx) -> Sm9Shader {
                 }
             }
         }
-        for i in 0..4 {
-            if c.uses_outputs.c[i] {
+        for (i, &used) in c.uses_outputs.c.iter().enumerate().take(4) {
+            if used {
                 let _ = writeln!(s, "    vec4 o_c{i} = vec4(0.0);");
             }
         }
@@ -1098,8 +1098,8 @@ fn finish(c: Ctx) -> Sm9Shader {
         } else {
             s.push_str("    vec4 o_fog = vec4(0.0);\n    vec4 o_psize = vec4(1.0);\n");
             s.push_str("    vec4 o_d0 = vec4(1.0);\n    vec4 o_d1 = vec4(0.0);\n");
-            for t in 0..8 {
-                if c.uses_outputs.t[t] {
+            for (t, &used) in c.uses_outputs.t.iter().enumerate().take(8) {
+                if used {
                     let _ = writeln!(s, "    vec4 o_t{t} = vec4(0.0);");
                 }
             }
@@ -1111,8 +1111,8 @@ fn finish(c: Ctx) -> Sm9Shader {
             // ps_1_x : la couleur finale est r0.
             s.push_str("    gl_FragColor = r0;\n");
         } else {
-            for i in 0..4 {
-                if c.uses_outputs.c[i] {
+            for (i, &used) in c.uses_outputs.c.iter().enumerate().take(4) {
+                if used {
                     let _ = writeln!(s, "    gl_FragData[{i}] = o_c{i};");
                 }
             }
@@ -1137,8 +1137,8 @@ fn finish(c: Ctx) -> Sm9Shader {
         } else {
             s.push_str("    gl_FrontColor = o_d0;\n    gl_FrontSecondaryColor = o_d1;\n");
             s.push_str("    gl_FogFragCoord = o_fog.x;\n");
-            for t in 0..8 {
-                if c.uses_outputs.t[t] {
+            for (t, &used) in c.uses_outputs.t.iter().enumerate().take(8) {
+                if used {
                     let _ = writeln!(s, "    gl_TexCoord[{t}] = o_t{t};");
                 }
             }

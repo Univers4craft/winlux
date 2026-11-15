@@ -38,7 +38,7 @@ namespace System
     }
 
     public abstract class ValueType { }
-    public abstract class Enum : ValueType { }
+    public abstract partial class Enum : ValueType { }
     public struct Void { }
 
     public partial struct Boolean { private bool m_value; }
@@ -70,8 +70,8 @@ namespace System
         public static bool IsNaN(double d) { return d != d; }
 #pragma warning restore 1718
     }
-    public unsafe struct IntPtr { private void* m_value; }
-    public unsafe struct UIntPtr { private void* m_value; }
+    public unsafe partial struct IntPtr { private void* m_value; }
+    public unsafe partial struct UIntPtr { private void* m_value; }
 
     public partial struct Char
     {
@@ -212,6 +212,29 @@ namespace System
             [MethodImpl(MethodImplOptions.InternalCall)]
             get;
         }
+
+        // Paires clé/valeur jointes à l'exception, jamais null (MS Learn,
+        // « Exception.Data Property ») ; le dictionnaire est créé à la
+        // première lecture et rangé par le moteur dans l'objet (#2361).
+        public virtual System.Collections.IDictionary Data
+        {
+            get
+            {
+                System.Collections.IDictionary d = LireDonnees() as System.Collections.IDictionary;
+                if (d == null)
+                {
+                    d = new System.Collections.Hashtable();
+                    EcrireDonnees(d);
+                }
+                return d;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern object LireDonnees();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern void EcrireDonnees(object donnees);
     }
 
     public static class Console
@@ -222,6 +245,23 @@ namespace System
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         public static extern void Write(string value);
+
+        // Colonne du curseur que donne GetConsoleScreenBufferInfo, ou moins
+        // le code d'erreur Win32 sans console (#2233).
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int Colonne();
+
+        // Sans console (sortie redirigée, programme fenêtré), .NET Framework
+        // lève IOException avec le message de l'erreur Win32.
+        public static int CursorLeft
+        {
+            get
+            {
+                int c = Colonne();
+                if (c < 0) throw new System.IO.IOException("The handle is invalid.", unchecked((int)0x80070006));
+                return c;
+            }
+        }
     }
 
     public interface IDisposable
@@ -230,7 +270,7 @@ namespace System
     }
 
     [AttributeUsage(AttributeTargets.All, Inherited = true, AllowMultiple = false)]
-    public abstract class Attribute { }
+    public abstract partial class Attribute { }
 
     [Flags]
     public enum AttributeTargets

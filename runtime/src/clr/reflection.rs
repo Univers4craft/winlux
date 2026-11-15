@@ -115,6 +115,16 @@ fn this_handle(args: &[Value], namespace: &str, class: &str) -> Option<usize> {
     .then(|| unsafe { *(p.add(size) as *const u64) } as usize)
 }
 
+/// Indice dans le domaine de l'assembly d'un objet `Assembly` du moteur.
+pub(super) fn assembly_index_of(obj: *mut u8) -> Option<usize> {
+    with_cache(|c| {
+        c.assemblies
+            .iter()
+            .find(|(_, &o)| o == obj as usize)
+            .map(|(&i, _)| i)
+    })
+}
+
 /// Type désigné par un objet `System.Type` créé par le moteur (#1962).
 pub(super) fn type_id_of(obj: *mut u8) -> Option<TypeId> {
     with_cache(|c| {
@@ -149,7 +159,7 @@ impl Interpreter {
         Value::Ref(with_cache(|c| *c.types.entry(id).or_insert(obj as usize)) as *mut u8)
     }
 
-    fn assembly_object(&self, index: usize) -> Value {
+    pub(super) fn assembly_object(&self, index: usize) -> Value {
         if let Some(obj) = with_cache(|c| c.assemblies.get(&index).copied()) {
             return Value::Ref(obj as *mut u8);
         }
@@ -305,9 +315,25 @@ impl Interpreter {
         }
     }
 
+    /// Type.GetType sans exception : l'objet Type, ou null.
+    pub(super) fn type_by_name_value(&self, text: &str) -> Value {
+        self.type_by_name(text, false, false).unwrap_or(Value::Null)
+    }
+
+    /// System.Void, s'il est déclaré dans notre mscorlib.
+    pub(super) fn find_void(&self) -> Option<TypeId> {
+        let corlib = self.domain.iter().position(|i| i.name == domain::CORLIB)?;
+        self.find_type_in(corlib, "System.Void", false)
+    }
+
     /// Type nommé « Espace.Type » ou « Espace.Externe+Imbriqué » parmi les
     /// TypeDef d'une assembly du domaine.
-    fn find_type_in(&self, index: usize, wanted: &str, ignore_case: bool) -> Option<TypeId> {
+    pub(super) fn find_type_in(
+        &self,
+        index: usize,
+        wanted: &str,
+        ignore_case: bool,
+    ) -> Option<TypeId> {
         let info = self.domain.get(index)?;
         let a = self.assembly_at(index);
         let mut enclosing = HashMap::new();

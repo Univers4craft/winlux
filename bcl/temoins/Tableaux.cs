@@ -1,10 +1,14 @@
 // Témoin de System.Array, BitConverter, Guid et Convert dans la mscorlib
 // Winlux (#1962).
 // Code de sortie attendu : 200.
-// Sinon : le numéro (1 à 16) de la première vérification qui échoue.
+// Sinon : le numéro (1 à 17) de la première vérification qui échoue.
+// La 17 range dans un tableau de valeurs un objet d'un autre type
+// (SetValue, IList, Array.Copy) : InvalidCastException ou
+// ArrayTypeMismatchException, jamais une lecture hors de l'objet (#2037).
 // Corsair.Service.exe (iCUE 4.18) appelait Array::Copy (18 fois),
 // BitConverter::GetBytes, Guid::NewGuid et Convert::ToInt32.
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace Temoins
@@ -64,6 +68,19 @@ namespace Temoins
             try { Convert.ToByte(300); return 16; } catch (OverflowException) { }
             if (Convert.ToBase64String(new byte[] { 1, 2, 3, 4 }) != "AQIDBA==" || Convert.FromBase64String("AQIDBA==")[3] != 4) return 16;
             if (!Convert.ToBoolean("True") || Convert.ToDouble("2.5") != 2.5 || Convert.ToString(true) != "True") return 16;
+
+            int[] entiers = new int[2];
+            Point[] points = new Point[2];
+            try { entiers.SetValue("abc", 0); return 17; } catch (InvalidCastException) { }
+            try { points.SetValue("abc", 0); return 17; } catch (InvalidCastException) { }
+            try { ((IList)(object)points)[0] = new int[50]; return 17; } catch (InvalidCastException) { }
+            entiers.SetValue(5, 1);
+            if (entiers[1] != 5 || (int)((IList)(object)entiers)[1] != 5) return 17;
+            Array.Copy(new object[] { 3, 4 }, entiers, 2);
+            if (entiers[0] != 3 || entiers[1] != 4) return 17;
+            try { Array.Copy(new object[] { "x" }, entiers, 1); return 17; } catch (InvalidCastException) { }
+            try { Array.Copy(new long[2], points, 2); return 17; } catch (ArrayTypeMismatchException) { }
+            try { Array.Copy(new Guid[1], points, 1); return 17; } catch (ArrayTypeMismatchException) { }
             return 200;
         }
     }

@@ -23,6 +23,8 @@ real=$(command -v apt-get)
 cat > "$work/bin/apt-get" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$work/apt.log"
+# Simulation (-s, #2234) : la Boutique la lance sans droits, jamais par le relais.
+if test "\$1" = -s; then exec "$real" "\$@"; fi
 if ! python3 -I -B "$project/scripts/winlux-root.py" policy apt-get "\$@" >/dev/null; then
     echo "refusé par winlux-root : apt-get \$*" >> "$work/refused.log"
     exit 1
@@ -55,5 +57,6 @@ installed && fail "$pkg toujours installé après « Désinstaller »"
 grep -q "state=done" "$work/run/store-progress.txt" || fail "désinstallation non signalée comme terminée"
 grep -q "^app=apt:$pkg|[^|]*|[^|]*|[^|]*|[^|]*|a|" "$work/run/store.txt" || fail "index non mis à jour après désinstallation"
 test ! -s "$work/refused.log" || fail "commande refusée par le relais"
-grep -q -- "purge --autoremove -- $pkg" "$work/apt.log" || fail "désinstallation sans purge"
+# Purge réelle, hors simulations (-s) ; dépendances retirées à part (#2189).
+grep -v '^-s ' "$work/apt.log" | grep -q -- "purge -- $pkg" || fail "désinstallation sans purge"
 echo "OK : Store, $pkg réellement installé puis désinstallé (commandes acceptées par winlux-root)"

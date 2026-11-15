@@ -103,6 +103,11 @@ pub fn uid_sid(uid: u32) -> String {
     format!("{}-{rid}", machine_part())
 }
 
+/// SID du compte qui fait tourner le processus (TokenUser).
+pub fn user_sid() -> String {
+    uid_sid(euid())
+}
+
 pub fn gid_sid(gid: u32) -> String {
     if gid == 0 {
         return "S-1-5-32-544".into();
@@ -526,6 +531,13 @@ pub unsafe extern "win64" fn GetLengthSid(sid: *const u8) -> u32 {
     sid_at(sid).map_or(0, |s| s.len() as u32)
 }
 
+/// Taille d'un SID à `n` sous-autorités : révision, nombre, autorité (6
+/// octets), puis 4 octets par sous-autorité (structure `SID` de winnt.h ;
+/// import d'armsvc.exe, #2533).
+pub unsafe extern "win64" fn GetSidLengthRequired(n: u8) -> u32 {
+    8 + 4 * n as u32
+}
+
 pub unsafe extern "win64" fn EqualSid(a: *const u8, b: *const u8) -> i32 {
     match (sid_at(a), sid_at(b)) {
         (Some(x), Some(y)) => (x == y) as i32,
@@ -841,6 +853,46 @@ unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
     } else {
         sd.add(off) as *mut u8
     }
+}
+
+/// Parties d'un descripteur (absolu ou auto-relatif) : propriétaire,
+/// groupe, SACL et DACL, copiées.
+pub(crate) unsafe fn sd_parts(sd: *const u8) -> [Option<Vec<u8>>; 4] {
+    let part = |field: usize| -> Option<Vec<u8>> {
+        let p = sd_part(sd, field);
+        if p.is_null() {
+            return None;
+        }
+        if field == 12 || field == 16 {
+            let len = std::ptr::read_unaligned(p.add(2) as *const u16) as usize;
+            (len >= 8).then(|| std::slice::from_raw_parts(p, len).to_vec())
+        } else {
+            sid_at(p).map(<[u8]>::to_vec)
+        }
+    };
+    [part(4), part(8), part(12), part(16)]
+}
+
+/// Descripteur auto-relatif d'après ses parties (ordre de `sd_parts`) et
+/// les bits de contrôle hors SE_SELF_RELATIVE et *_PRESENT.
+pub(crate) fn self_relative_sd(parts: &[Option<Vec<u8>>; 4], control: u16) -> Vec<u8> {
+    let mut sd = vec![0u8; 20];
+    sd[0] = 1;
+    let mut c = (control & !(SE_SELF_RELATIVE | SE_DACL_PRESENT | 0x10)) | SE_SELF_RELATIVE;
+    for (i, field) in [4usize, 8, 12, 16].into_iter().enumerate() {
+        if let Some(bytes) = &parts[i] {
+            let off = sd.len() as u32;
+            sd[field..field + 4].copy_from_slice(&off.to_le_bytes());
+            sd.extend_from_slice(bytes);
+            match field {
+                12 => c |= 0x10, // SE_SACL_PRESENT
+                16 => c |= SE_DACL_PRESENT,
+                _ => {}
+            }
+        }
+    }
+    sd[2..4].copy_from_slice(&c.to_le_bytes());
+    sd
 }
 
 unsafe fn named_security_info(
@@ -1513,6 +1565,125 @@ pub unsafe extern "win64" fn CreateRestrictedToken(
     give_token(out)
 }
 
+/// CreateAppContainerToken (KernelBase, #2496) : jeton de conteneur tiré
+/// du jeton donné et d'un SECURITY_CAPABILITIES. Microsoft ne documente pas
+/// cette fonction ; le prototype vient de la source permissive (BSD) de
+/// Chromium, base/win/access_token.cc : BOOL (HANDLE, PSECURITY_CAPABILITIES,
+/// PHANDLE). Comme les autres jetons du bac à sable, le jeton rendu est
+/// l'unique jeton du compte : la séparation réelle vient des comptes Linux.
+pub unsafe extern "win64" fn CreateAppContainerToken(
+    _token: usize,
+    capabilities: *const u8,
+    out: *mut usize,
+) -> i32 {
+    if capabilities.is_null() {
+        if !out.is_null() {
+            *out = 0;
+        }
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    // SECURITY_CAPABILITIES commence par AppContainerSid (PSID) : on le garde pour
+    // GetAppContainerNamedObjectPath appelée avec ce jeton et sans SID (#2527).
+    if let Some(text) = sid_at(*(capabilities as *const *const u8)).and_then(sid_text) {
+        *crate::dlls::lock(&APPCONTAINER_SID) = Some(text);
+    }
+    give_token(out)
+}
+
+/// NtCreateLowBoxToken (ntdll, documentation publique « NtCreateLowBoxToken
+/// function (Ntseapi.h) », Microsoft Learn) : crée le jeton LowBox d'un
+/// AppContainer. Comme CreateAppContainerToken, c'est le jeton unique du compte
+/// (TOKEN_HANDLE) ; PackageSid, qui doit appartenir au groupe des SID de paquet
+/// LowBox (S-1-15-2-…), est retenu pour GetAppContainerNamedObjectPath. Les
+/// capacités et les handles de répertoires d'objets nommés ne changent rien sous
+/// Winlux, où la séparation vient des comptes Linux (#2540).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn nt_create_low_box_token(
+    token: *mut usize,
+    existing: usize,
+    _access: u32,
+    _attributes: usize,
+    package: *const u8,
+    _capability_count: u32,
+    _capabilities: usize,
+    _handle_count: u32,
+    _handles: usize,
+) -> i32 {
+    const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
+    const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
+    let package = sid_at(package)
+        .and_then(sid_text)
+        .filter(|t| t.starts_with("S-1-15-2-"));
+    let (false, Some(package)) = (token.is_null(), package) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    // Le jeton existant : celui du compte, ou le pseudo-handle du processus courant.
+    if existing != TOKEN_HANDLE && existing != usize::MAX - 3 {
+        return STATUS_INVALID_HANDLE;
+    }
+    *crate::dlls::lock(&APPCONTAINER_SID) = Some(package);
+    *token = TOKEN_HANDLE;
+    0
+}
+
+/// SID du dernier AppContainer passé à CreateAppContainerToken. Winlux n'a qu'un
+/// jeton par compte (TOKEN_HANDLE), donc le jeton seul ne le porte pas.
+static APPCONTAINER_SID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// GetAppContainerNamedObjectPath (securityappcontainer.h, Kernel32.dll) : chemin
+/// des objets nommés d'un AppContainer (#2527). La documentation ne fixe pas la
+/// forme du chemin ; « AppContainerNamedObjects\<SID> » est **notre choix**.
+/// ObjectPathLength et ReturnLength sont comptés en WCHAR, zéro final compris
+/// (ObjectPath est un LPWSTR ; la documentation dit seulement « length »).
+/// Sans SID : le jeton rendu par CreateAppContainerToken désigne le dernier
+/// AppContainer créé ; le jeton du processus (NULL) n'est jamais un AppContainer
+/// sous Winlux, d'où FALSE et ERROR_INVALID_PARAMETER (code choisi par nous, la
+/// documentation n'en nomme aucun).
+pub unsafe extern "win64" fn GetAppContainerNamedObjectPath(
+    token: usize,
+    sid: *const u8,
+    length: u32,
+    path: *mut u16,
+    returned: *mut u32,
+) -> i32 {
+    let text = if !sid.is_null() {
+        sid_at(sid).and_then(sid_text)
+    } else if token == TOKEN_HANDLE {
+        crate::dlls::lock(&APPCONTAINER_SID).clone()
+    } else {
+        None
+    };
+    let (Some(text), false) = (text, returned.is_null()) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let wide: Vec<u16> = format!("AppContainerNamedObjects\\{text}")
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    *returned = wide.len() as u32;
+    if path.is_null() || (length as usize) < wide.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), path, wide.len());
+    crate::process::set_last_error(0);
+    1
+}
+
+/// Fonctions de KernelBase rangées dans la table kernel32 de Winlux, mais
+/// visibles seulement par KernelBase et les API-sets (KERNELBASE_ONLY).
+/// Exports d'AppContainer ajoutés à kernel32 : CreateAppContainerToken n'y est
+/// visible que par KernelBase (KERNELBASE_ONLY) ; GetAppContainerNamedObjectPath est
+/// documentée dans Kernel32.dll (#2527).
+pub fn kernelbase_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "CreateAppContainerToken" => fn CreateAppContainerToken,
+        "GetAppContainerNamedObjectPath" => fn GetAppContainerNamedObjectPath,
+    }
+}
+
 /// SetTokenInformation (niveau d'intégrité, DACL par défaut…) : accepté.
 pub unsafe extern "win64" fn SetTokenInformation(
     _token: usize,
@@ -1637,6 +1808,22 @@ fn well_known_sid(kind: u32) -> Option<&'static str> {
         67 => "S-1-16-8192",
         68 => "S-1-16-12288",
         69 => "S-1-16-16384",
+        // WinCreatorOwnerRightsSid : SECURITY_CREATOR_SID_AUTHORITY, RID 4 (#2517).
+        71 => "S-1-3-4",
+        // WinBuiltinAnyPackageSid, puis les SID de capacité d'AppContainer :
+        // SECURITY_APP_PACKAGE_AUTHORITY (15), SECURITY_CAPABILITY_BASE_RID (3) et le
+        // RID SECURITY_CAPABILITY_* de même nom (winnt.h, en-têtes mingw-w64) (#2517).
+        84 => "S-1-15-2-1",
+        85 => "S-1-15-3-1",  // WinCapabilityInternetClientSid
+        86 => "S-1-15-3-2",  // WinCapabilityInternetClientServerSid
+        87 => "S-1-15-3-3",  // WinCapabilityPrivateNetworkClientServerSid
+        88 => "S-1-15-3-4",  // WinCapabilityPicturesLibrarySid
+        89 => "S-1-15-3-5",  // WinCapabilityVideosLibrarySid
+        90 => "S-1-15-3-6",  // WinCapabilityMusicLibrarySid
+        91 => "S-1-15-3-7",  // WinCapabilityDocumentsLibrarySid
+        92 => "S-1-15-3-9",  // WinCapabilitySharedUserCertificatesSid
+        93 => "S-1-15-3-8",  // WinCapabilityEnterpriseAuthenticationSid
+        94 => "S-1-15-3-10", // WinCapabilityRemovableStorageSid
         _ => return None,
     })
 }
@@ -2385,6 +2572,8 @@ pub fn releve_exports() -> crate::dlls::Exports {
         "GetEffectiveRightsFromAclW" => fn GetEffectiveRightsFromAclW,
         "GetAuditedPermissionsFromAclW" => fn GetAuditedPermissionsFromAclW,
         "GetExplicitEntriesFromAclW" => fn GetExplicitEntriesFromAclW,
+        // TRUSTEE_IS_SID : ptstrName est un SID, même disposition en A (#2029).
+        "GetExplicitEntriesFromAclA" => fn GetExplicitEntriesFromAclW,
         "ConvertSecurityDescriptorToStringSecurityDescriptorW" => fn ConvertSecurityDescriptorToStringSecurityDescriptorW,
         "AdjustTokenGroups" => fn AdjustTokenGroups,
         "LookupPrivilegeNameW" => fn LookupPrivilegeNameW,
@@ -2404,6 +2593,7 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "FreeSid" => fn FreeSid,
         "IsValidSid" => fn IsValidSid,
         "GetLengthSid" => fn GetLengthSid,
+        "GetSidLengthRequired" => fn GetSidLengthRequired,
         "EqualSid" => fn EqualSid,
         "CopySid" => fn CopySid,
         "GetSidSubAuthority" => fn GetSidSubAuthority,

@@ -31,6 +31,13 @@ namespace System
         public InvalidCastException(string message) : base(message) { }
     }
 
+    // Array.Copy entre tableaux de structures différentes (#2037).
+    public class ArrayTypeMismatchException : SystemException
+    {
+        public ArrayTypeMismatchException() : base("Attempted to access an element as a type incompatible with the array.") { }
+        public ArrayTypeMismatchException(string message) : base(message) { }
+    }
+
     public static class Convert
     {
         private static OverflowException Overflow(string typeName)

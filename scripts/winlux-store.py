@@ -113,7 +113,9 @@ T = {
            "apt_download": "Téléchargement des fichiers...", "apt_prepare": "Préparation de {name}...",
            "apt_unpack": "Décompression de {name}...", "apt_configure": "Configuration de {name}...",
            "apt_installed": "{name} installé", "apt_remove": "Suppression de {name}...",
-           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...", "apt_working": "Opération en cours...",
+           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...",
+           "apt_triggers": "Mise à jour du système après l'installation ({name}) : cela peut prendre quelques minutes...",
+           "apt_working": "Opération en cours...",
            "installed_version": "installé",
            "ed_label": "Site de l'éditeur",
            "ed_title": "Installer {name} ?",
@@ -140,7 +142,10 @@ T = {
            "denied": "Autorisation refusée : rien n'a été téléchargé ni modifié.",
            "ed_waiting": "En attente de votre confirmation...",
            "ed_cancelled": "Installation annulée : rien n'a été téléchargé.",
-           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée."},
+           "ed_mismatch": "Le fichier reçu n'est pas la version annoncée : installation refusée.",
+           "licence_refused": "Contrat de licence non accepté : rien n'a été installé.",
+           "licence_waiting": "Lisez le contrat de licence de {name} pour continuer...",
+           "system_part": "{name} fait partie de Winlux : le système en a besoin ({blocker}), il ne peut pas être désinstallé. Rien n'a été modifié."},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
            "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
@@ -156,7 +161,9 @@ T = {
            "apt_download": "Downloading files...", "apt_prepare": "Preparing {name}...",
            "apt_unpack": "Unpacking {name}...", "apt_configure": "Configuring {name}...",
            "apt_installed": "{name} installed", "apt_remove": "Removing {name}...",
-           "apt_removed": "{name} removed", "apt_finish": "Finishing...", "apt_working": "Working...",
+           "apt_removed": "{name} removed", "apt_finish": "Finishing...",
+           "apt_triggers": "Updating the system after installation ({name}): this can take a few minutes...",
+           "apt_working": "Working...",
            "installed_version": "installed",
            "ed_label": "Publisher's website",
            "ed_title": "Install {name}?",
@@ -183,7 +190,10 @@ T = {
            "denied": "Permission refused: nothing was downloaded or changed.",
            "ed_waiting": "Waiting for your confirmation...",
            "ed_cancelled": "Installation cancelled: nothing was downloaded.",
-           "ed_mismatch": "The file received is not the announced version: installation refused."},
+           "ed_mismatch": "The file received is not the announced version: installation refused.",
+           "licence_refused": "License agreement not accepted: nothing was installed.",
+           "licence_waiting": "Read the {name} license agreement to continue...",
+           "system_part": "{name} is part of Winlux: the system needs it ({blocker}), so it cannot be uninstalled. Nothing was changed."},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
            "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
@@ -199,7 +209,9 @@ T = {
            "apt_download": "Descargando archivos...", "apt_prepare": "Preparando {name}...",
            "apt_unpack": "Desempaquetando {name}...", "apt_configure": "Configurando {name}...",
            "apt_installed": "{name} instalado", "apt_remove": "Eliminando {name}...",
-           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...", "apt_working": "Operación en curso...",
+           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...",
+           "apt_triggers": "Actualizando el sistema tras la instalación ({name}): puede tardar unos minutos...",
+           "apt_working": "Operación en curso...",
            "installed_version": "instalado",
            "ed_label": "Sitio del editor",
            "ed_title": "¿Instalar {name}?",
@@ -226,7 +238,10 @@ T = {
            "denied": "Autorización denegada: no se ha descargado ni modificado nada.",
            "ed_waiting": "Esperando su confirmación...",
            "ed_cancelled": "Instalación cancelada: no se ha descargado nada.",
-           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada."},
+           "ed_mismatch": "El archivo recibido no es la versión anunciada: instalación rechazada.",
+           "licence_refused": "Contrato de licencia no aceptado: no se ha instalado nada.",
+           "licence_waiting": "Lea el contrato de licencia de {name} para continuar...",
+           "system_part": "{name} forma parte de Winlux: el sistema lo necesita ({blocker}), no se puede desinstalar. No se ha modificado nada."},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
            "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
@@ -243,7 +258,9 @@ T = {
            "apt_download": "Dateien werden heruntergeladen...", "apt_prepare": "{name} wird vorbereitet...",
            "apt_unpack": "{name} wird entpackt...", "apt_configure": "{name} wird eingerichtet...",
            "apt_installed": "{name} installiert", "apt_remove": "{name} wird entfernt...",
-           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...", "apt_working": "Vorgang läuft...",
+           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...",
+           "apt_triggers": "System wird nach der Installation aktualisiert ({name}): Das kann einige Minuten dauern...",
+           "apt_working": "Vorgang läuft...",
            "installed_version": "installiert",
            "ed_label": "Website des Herausgebers",
            "ed_title": "{name} installieren?",
@@ -270,7 +287,10 @@ T = {
            "denied": "Zustimmung verweigert: Es wurde nichts heruntergeladen oder geändert.",
            "ed_waiting": "Warten auf Ihre Bestätigung...",
            "ed_cancelled": "Installation abgebrochen: Es wurde nichts heruntergeladen.",
-           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt."},
+           "ed_mismatch": "Die empfangene Datei ist nicht die angekündigte Version: Installation abgelehnt.",
+           "licence_refused": "Lizenzvertrag nicht akzeptiert: Es wurde nichts installiert.",
+           "licence_waiting": "Lesen Sie den Lizenzvertrag von {name}, um fortzufahren...",
+           "system_part": "{name} ist Teil von Winlux: Das System benötigt es ({blocker}), daher kann es nicht deinstalliert werden. Es wurde nichts geändert."},
 }
 
 
@@ -284,7 +304,11 @@ APT_STEPS = [(r"Preparing to configure (\S+)", "apt_configure"), (r"Preparing fo
              (r"Preparing (\S+)", "apt_prepare"), (r"Unpacking (\S+)", "apt_unpack"),
              (r"(?:Configuring|Installing) (\S+)", "apt_configure"), (r"Installed (\S+)", "apt_installed"),
              (r"(?:Completely )?[Rr]emoving (\S+)", "apt_remove"), (r"(?:Completely )?[Rr]emoved (\S+)", "apt_removed"),
+             # Déclencheurs de dpkg (shared-mime-info…) : plusieurs minutes (#2186).
+             (r"(?:Processing triggers for|Running post-installation trigger) (\S+)", "apt_triggers"),
              (r"Running ", "apt_finish")]
+
+TRIGGERS = r"(?:Processing triggers for|Running post-installation trigger) "
 
 def apt_message(kind, text):
     if kind == "dlstatus":
@@ -599,26 +623,37 @@ def _parse_map(lines, i, indent):
 def dep11_dirs():
     return [Path(ROOT + d) for d in ("/var/lib/swcatalog", "/var/lib/app-info")]
 
+def dep11_yaml_files(pattern="*.yml*"):
+    """Fiches AppStream : dossiers d'appstream, et directement les listes
+    d'apt, où apt-get update les range grâce à 50winlux-appstream (#2185)."""
+    for base in dep11_dirs():
+        for path in sorted((base / "yaml").glob(pattern)):
+            yield base, path
+    lists = Path(ROOT + "/var/lib/apt/lists")
+    for path in sorted(lists.glob("*_dep11_Components-*.yml*")):
+        if not path.name.endswith((".yml", ".yml.gz")):
+            continue
+        yield lists, path
+
 def dep11_components():
     """Composants AppStream des dépôts apt (paquet -> fiche brute)."""
     found = {}
-    for base in dep11_dirs():
-        for path in sorted((base / "yaml").glob("*.yml*")):
-            try:
-                raw = path.read_bytes()
-                text = (gzip.decompress(raw) if path.suffix == ".gz" else raw).decode("utf-8", "replace")
-            except (OSError, EOFError):
+    for base, path in dep11_yaml_files():
+        try:
+            raw = path.read_bytes()
+            text = (gzip.decompress(raw) if path.suffix == ".gz" else raw).decode("utf-8", "replace")
+        except (OSError, EOFError):
+            continue
+        docs = parse_yaml(text)
+        if not docs:
+            continue
+        header, origin = docs[0], docs[0].get("Origin", "")
+        media_base = header.get("MediaBaseUrl", "")
+        for doc in docs[1:]:
+            if not isinstance(doc, dict) or doc.get("Type") != "desktop-application" or not doc.get("Package"):
                 continue
-            docs = parse_yaml(text)
-            if not docs:
-                continue
-            header, origin = docs[0], docs[0].get("Origin", "")
-            media_base = header.get("MediaBaseUrl", "")
-            for doc in docs[1:]:
-                if not isinstance(doc, dict) or doc.get("Type") != "desktop-application" or not doc.get("Package"):
-                    continue
-                doc["_origin"], doc["_media"], doc["_base"] = origin, media_base, base
-                found.setdefault(doc["Package"], doc)
+            doc["_origin"], doc["_media"], doc["_base"] = origin, media_base, base
+            found.setdefault(doc["Package"], doc)
     return found
 
 def dep11_icon_archives(force=False):
@@ -626,42 +661,45 @@ def dep11_icon_archives(force=False):
     les télécharge appstream) quand le système ne les a pas extraites."""
     import tarfile
     import io
-    for base in dep11_dirs():
-        for path in sorted((base / "yaml").glob("*_dists_*_dep11_Components-*.yml*")):
-            m = re.match(r"^(.+)_dists_(.+)_([^_]+)_dep11_Components-", path.name)
-            if not m:
-                continue
-            try:
-                head = gzip.open(path, "rt", errors="replace").read(4096) if path.suffix == ".gz" else path.read_text()[:4096]
-            except (OSError, EOFError):
-                continue
-            origin = re.search(r"^Origin:\s*(\S+)", head, re.M)
-            if not origin:
-                continue
-            dest = CACHE / "dep11-icons" / origin.group(1) / "64x64"
-            if dest.is_dir() and not force:
-                continue
-            url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
-            data = fetch(url, 30, 256 << 20)
-            if not data:
-                continue
-            # Extraction dans un dossier temporaire puis renommage : un
-            # rafraîchissement interrompu ne laisse jamais un dossier partiel.
-            tmp = dest.with_name(f".64x64.{os.getpid()}")
+    seen = set()
+    for base, path in dep11_yaml_files("*_dists_*_dep11_Components-*.yml*"):
+        if path.name in seen:
+            continue
+        seen.add(path.name)
+        m = re.match(r"^(.+)_dists_(.+)_([^_]+)_dep11_Components-", path.name)
+        if not m:
+            continue
+        try:
+            head = gzip.open(path, "rt", errors="replace").read(4096) if path.suffix == ".gz" else path.read_text()[:4096]
+        except (OSError, EOFError):
+            continue
+        origin = re.search(r"^Origin:\s*(\S+)", head, re.M)
+        if not origin:
+            continue
+        dest = CACHE / "dep11-icons" / origin.group(1) / "64x64"
+        if dest.is_dir() and not force:
+            continue
+        url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
+        data = fetch(url, 30, 256 << 20)
+        if not data:
+            continue
+        # Extraction dans un dossier temporaire puis renommage : un
+        # rafraîchissement interrompu ne laisse jamais un dossier partiel.
+        tmp = dest.with_name(f".64x64.{os.getpid()}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                for member in tar:
+                    name = os.path.basename(member.name)
+                    if member.isfile() and name.endswith(".png") and not name.startswith("."):
+                        src = tar.extractfile(member)
+                        if src:
+                            (tmp / name).write_bytes(src.read())
+            shutil.rmtree(dest, ignore_errors=True)
+            os.replace(tmp, dest)
+        except (tarfile.TarError, OSError, EOFError):
             shutil.rmtree(tmp, ignore_errors=True)
-            tmp.mkdir(parents=True)
-            try:
-                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-                    for member in tar:
-                        name = os.path.basename(member.name)
-                        if member.isfile() and name.endswith(".png") and not name.startswith("."):
-                            src = tar.extractfile(member)
-                            if src:
-                                (tmp / name).write_bytes(src.read())
-                shutil.rmtree(dest, ignore_errors=True)
-                os.replace(tmp, dest)
-            except (tarfile.TarError, OSError, EOFError):
-                shutil.rmtree(tmp, ignore_errors=True)
 
 def dep11_icon(doc):
     icon = doc.get("Icon") or {}
@@ -701,15 +739,23 @@ def dep11_index():
     """Fiches AppStream apt compactes (langue de la session), mises en cache
     pour que l'ouverture d'une fiche reste instantanée."""
     path = CACHE / f"dep11-{LANG}.json"
-    sources = [p for base in dep11_dirs() for p in (base / "yaml").glob("*.yml*")]
-    stamp = max([p.stat().st_mtime for p in sources] + [0])
+    # Clé : nom, taille et date de chaque fichier lu. apt garde la date du
+    # serveur (2023 pour noble main), plus ancienne que le cache : une simple
+    # comparaison de dates gardait pour toujours un cache vide écrit avant
+    # l'arrivée des fiches (#2185).
+    key = []
+    for _, p in dep11_yaml_files():
+        try:
+            st = p.stat()
+            key.append([str(p), st.st_size, int(st.st_mtime)])
+        except OSError:
+            pass
     icons = CACHE / "dep11-icons"
     if icons.is_dir():
-        stamp = max([stamp] + [d.stat().st_mtime for d in icons.iterdir()])
-    if path.exists() and path.stat().st_mtime >= stamp:
-        cached = load_json(path, None)
-        if isinstance(cached, dict):
-            return cached
+        key += [[str(d), 0, int(d.stat().st_mtime)] for d in sorted(icons.iterdir())]
+    cached = load_json(path, None) if path.exists() else None
+    if isinstance(cached, dict) and cached.get("key") == key and isinstance(cached.get("apps"), dict):
+        return cached["apps"]
     out = {}
     for pkg, doc in dep11_components().items():
         out[pkg] = {
@@ -721,7 +767,7 @@ def dep11_index():
             "screenshots": dep11_screens(doc), "releases": dep11_releases(doc),
         }
     try:
-        atomic_write(path, json.dumps(out))
+        atomic_write(path, json.dumps({"key": key, "apps": out}))
     except OSError:
         pass
     return out
@@ -827,6 +873,26 @@ class Source:
         return 0
 
 
+def all_companions():
+    """Lignes « compagnons=pkg:a,b » du catalogue (#2075) : paquet -> compagnons."""
+    try:
+        lines = CATALOG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    out = {}
+    for line in lines:
+        if line.startswith("compagnons="):
+            name, _, rest = line[11:].partition(":")
+            out.setdefault(name, [p for p in rest.split(",") if re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,127}", p)])
+    return out
+
+
+def apt_companions(pkg):
+    """Paquets à installer avec « pkg », quand l'application ne marche pas sans
+    ce qu'apt ne fait que recommander (#2075)."""
+    return all_companions().get(pkg, [])
+
+
 class Apt(Source):
     name, label = "apt", "Ubuntu"
     local_only = False
@@ -862,8 +928,12 @@ class Apt(Source):
                 result[parts[0]] = (parts[2], int(parts[3] or 0) if parts[3].isdigit() else 0)
         return result
 
+    # Sorties d'apt analysées : LC_ALL=C et non LANG=C, que LC_ALL de la
+    # session (/etc/default/locale) emportait ; apt écrivait alors « Candidat : »
+    # et les comptes créés après l'installation n'avaient aucun logiciel Ubuntu
+    # (#2235).
     def upgradable(self):
-        code, out = run(["apt", "list", "--upgradable"], 60, env={**os.environ, "LANG": "C"})
+        code, out = run(["apt", "list", "--upgradable"], 60, env={**os.environ, "LC_ALL": "C"})
         result = {}
         for line in out.splitlines():
             m = re.match(r"^([^/\s]+)/\S+\s+(\S+)", line)
@@ -874,7 +944,7 @@ class Apt(Source):
     def candidates(self, pkgs):
         if not pkgs or not have("apt-cache"):
             return {}
-        code, out = run(["apt-cache", "policy", *pkgs], 60, env={**os.environ, "LANG": "C"})
+        code, out = run(["apt-cache", "policy", *pkgs], 60, env={**os.environ, "LC_ALL": "C"})
         result, pkg = {}, None
         for line in out.splitlines():
             if line and not line.startswith(" ") and line.endswith(":"):
@@ -891,7 +961,7 @@ class Apt(Source):
             return set()
         code, out = run(["apt-cache", "rdepends", "--no-recommends", "--no-suggests", "--no-enhances",
                          "--no-conflicts", "--no-breaks", "--no-replaces", "snapd"], 60,
-                        env={**os.environ, "LANG": "C"})
+                        env={**os.environ, "LC_ALL": "C"})
         names, started = set(), False
         for line in out.splitlines():
             if line.startswith("Reverse Depends:"):
@@ -907,11 +977,20 @@ class Apt(Source):
             age = time.time() - max((p.stat().st_mtime for p in lists.glob("*_Packages*")), default=0)
         except OSError:
             age = 0
-        if age > REMOTE_TTL and not OFFLINE and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
+        if age > REMOTE_TTL and not OFFLINE and network_up() and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
             run(admin(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"]) or ["true"], 600)
 
     def apps(self, force=False):
-        if force:
+        # Système neuf : l'image est livrée sans listes apt
+        # (prepare-apt-base.py). Sans elles la Boutique n'avait aucun
+        # logiciel des dépôts avant « Actualiser » ; apt-get update est admis
+        # sans autorisation par le relais (niveau « user ») (#2184).
+        # Pas pendant la première passe, locale et rapide, du rafraîchissement.
+        # Listes d'avant 50winlux-appstream, sans fiches AppStream : mises à
+        # jour aussi, au plus toutes les 6 h (refresh_lists) (#2185).
+        lists = Path(ROOT + "/var/lib/apt/lists")
+        if force or (not self.local_only and (not any(lists.glob("*_Packages*"))
+                                               or not any(lists.glob("*_dep11_Components-*")))):
             self.refresh_lists()
         if not OFFLINE and not self.local_only:
             dep11_icon_archives(force)
@@ -1021,6 +1100,10 @@ class Apt(Source):
             os.close(r)
             os.close(w)
             return 126
+        if os.path.basename(cmd[0]) in ("winlux-root", "pkexec"):
+            # Une demande d'autorisation peut s'ouvrir avant la première ligne
+            # d'apt : le dire plutôt qu'un pourcentage figé (#2199).
+            progress(None, tr("ed_authorize"))
         env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "LC_ALL": "C.UTF-8"}
         with open(STORE_RUN / "store.log", "ab") as log:
             try:
@@ -1039,17 +1122,136 @@ class Apt(Source):
                             pct = int(float(parts[2]))
                         except ValueError:
                             pct = 0
-                        progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
+                        if parts[0] == "pmstatus" and re.match(TRIGGERS, parts[3].strip()):
+                            # Déclencheurs de dpkg : sans avancement mesurable,
+                            # dit tel quel plutôt qu'un 99 % figé (#2186).
+                            progress(None, apt_message(parts[0], parts[3]))
+                        else:
+                            progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
             return proc.wait()
 
     def install(self, ref, progress):
-        return self.apt(["install", "--no-install-recommends", "--", ref], progress)
+        before = set(self.installed())
+        # Paquets compagnons (#2075) : sans les recommandations d'apt,
+        # virt-manager et Boxes arrivaient sans QEMU ni pilote libvirt. Dans le
+        # même appel qu'eux : un second apt-get redemandait l'autorisation
+        # administrateur une fois les 5 minutes de la première passées (#2199).
+        # Un compagnon déjà installé n'est pas nommé, pour ne pas changer sa marque.
+        extras = [c for c in apt_companions(ref) if c not in before]
+        code = self.apt(["install", "--no-install-recommends", "--", ref, *extras], progress)
+        if code == 0:
+            # Ce que cette installation a apporté, pour le retirer avec elle
+            # (#2189), et les compagnons qu'elle a installés (#2199).
+            state = load_json(STATE, {})
+            state.setdefault("apt", {})[ref] = sorted(set(self.installed()) - before - {ref})
+            state.setdefault("apt_companions", {})[ref] = extras
+            save_state(state)
+        return code
+
+    def purge_set(self, refs):
+        """Paquets qu'« apt-get purge refs » retirerait (simulation, sans droits)."""
+        code, out = run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "purge", "--", *refs], 120,
+                        env={**os.environ, "LC_ALL": "C"})
+        return {m.group(1) for m in re.finditer(r"^(?:Purg|Remv) (\S+)", out, re.M)} if code == 0 else None
+
+    def own_companions(self, ref, state, installed):
+        """Compagnons installés par ref (#2199), qui partent avec lui : ni
+        compagnon d'un autre logiciel du catalogue installé, ni dépendance
+        d'un autre paquet (sa purge en retirerait d'autres)."""
+        owners = {}
+        for p, cs in all_companions().items():
+            if p in installed and p != ref:
+                for c in cs:
+                    owners.setdefault(c, p)
+        mine = [c for c in state.get("apt_companions", {}).get(ref, []) if c in installed]
+        # Compagnon d'un autre logiciel installé (traductions de LibreOffice
+        # partagées par Writer et Calc) : il reste, et passe à ce logiciel pour
+        # partir avec lui plus tard.
+        for c in [c for c in mine if c in owners]:
+            kept = state.setdefault("apt_companions", {}).setdefault(owners[c], [])
+            if c not in kept:
+                kept.append(c)
+        mine = [c for c in mine if c not in owners]
+        alone = self.purge_set([ref]) if mine else None
+        if alone is None:
+            return []
+        keep = []
+        for c in mine:
+            gone = self.purge_set([ref, c])
+            if gone is not None and not gone - alone - {c}:
+                keep.append(c)
+        return keep
+
+    def removal_blocker(self, ref):
+        """Paquet essentiel ou protégé (winlux-desktop) qui dépend de ref : apt
+        refuserait de le retirer (code 100) et la Boutique n'affichait que
+        « Échec (100) » (#2234). Simulation sans droits, donc avant toute
+        demande d'autorisation ; "" si rien ne bloque ou si l'on ne sait pas."""
+        try:
+            out = subprocess.run(["apt-get", "-s", "-q", "purge", "--autoremove", "--", ref],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+                                 stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        if out.returncode == 0:
+            return ""
+        # apt nomme le paquet qui perdrait sa dépendance (« winlux-desktop :
+        # Depends: espeak-ng but it is not going to be installed ») ou liste
+        # les paquets essentiels qu'il faudrait retirer.
+        named = re.findall(r"^\s*(\S+) : (?:Pre-)?Depends:", out.stdout, re.M)
+        warn = re.search(r"essential packages will be removed\.?\n((?:\s+\S.*\n?)+)", out.stdout)
+        if warn:
+            named += warn.group(1).split()
+        if not named:
+            return ""
+        code, info = run(["dpkg-query", "-W", "-f", "${Package}\t${Essential}\t${Protected}\n", *dict.fromkeys(named)],
+                         30, env={**os.environ, "LC_ALL": "C"})
+        for line in info.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and "yes" in (parts[1], parts[2]):
+                return parts[0]
+        return ""
 
     def remove(self, ref, progress):
+        self.blocker = self.removal_blocker(ref)
+        if self.blocker:
+            return SYSTEM_PART
         # Désinstaller sans trace, comme Windows : fichiers de configuration du
         # paquet et dépendances installées pour lui seul partent aussi (apt
         # remove laissait 10 bibliothèques et les réglages de Démineur).
-        return self.apt(["purge", "--autoremove", "--", ref], progress)
+        state = load_json(STATE, {})
+        companions = self.own_companions(ref, state, self.installed())
+        code = self.apt(["purge", "--", ref, *companions], progress)
+        if code != 0:
+            return code
+        brought = set(state.get("apt", {}).pop(ref, []))
+        state.get("apt_companions", {}).pop(ref, None)
+        save_state(state)
+        installed = self.installed()
+        # Compagnons des logiciels du catalogue encore installés : jamais
+        # retirés (purge --autoremove de Knights emportait le QEMU de
+        # virt-manager), et remis s'il en manque (#2189).
+        protected = {c for p, cs in all_companions().items() if p in installed for c in cs}
+        # Devenu inutile : ce qu'apt retirerait d'office, plus ce que cette
+        # installation a apporté et que seule une suggestion retient
+        # (systemd-container, suggéré par systemd) (#2189).
+        unneeded = self.autoremovable() | (self.autoremovable(suggests=False) & brought)
+        unneeded -= protected
+        if unneeded:
+            self.apt(["purge", "--", *sorted(unneeded)], progress)
+            installed = self.installed()
+        missing = sorted(c for c in protected if c not in installed)
+        if missing:
+            self.apt(["install", "--no-install-recommends", "--mark-auto", "--", *missing], progress)
+        return code
+
+    def autoremovable(self, suggests=True):
+        """Paquets qu'« apt-get autoremove » retirerait (simulation, sans droits)."""
+        cmd = ["apt-get", "-s", "-o", "Debug::NoLocking=1", "autoremove"]
+        if not suggests:
+            cmd[2:2] = ["-o", "APT::AutoRemove::SuggestsImportant=false"]
+        code, out = run(cmd, 120, env={**os.environ, "LC_ALL": "C"})
+        return {m.group(1) for m in re.finditer(r"^Remv (\S+)", out, re.M)} if code == 0 else set()
 
     def update(self, refs, progress):
         return self.apt(["install", "--only-upgrade", "--", *refs], progress)
@@ -2123,20 +2325,65 @@ def install_portable(app, path, kind, entry, progress):
         run(["winlux-applications", "refresh"], 120)
     return 0
 
+# Installation refusée par l'utilisateur (ERROR_INSTALL_USEREXIT), et ce
+# même code vu à travers un code de sortie sur 8 bits.
+LICENCE_REFUSED = 1602
+
+
+def silent_flag(args):
+    """Option sans interface (`/S`, `/SILENT`, `/VERYSILENT`, `/quiet`,
+    `/passive`, `/q…`) : comme sous Windows, la passer vaut acceptation du
+    contrat ; même règle que le runtime (setup/license.rs)."""
+    for a in args:
+        o = a.lower()
+        if o[:1] in ("/", "-"):
+            o = o[1:]
+            if o in ("s", "silent", "verysilent", "quiet", "passive") or o.startswith("q"):
+                return True
+    return False
+
+
+def accept_licence(path, progress):
+    """Contrat de licence du paquet présenté avant une installation sans
+    interface (#2129) : la page « Contrat de licence » de l'assistant
+    (`winlux-setup-wizard --contrat-seulement`, « Je n'accepte pas » coché
+    au départ) rend 0 si le paquet n'a pas de contrat ou si la personne
+    l'accepte. Refus, fenêtre fermée ou page impossible à ouvrir : rien
+    n'est installé."""
+    wizard = os.environ.get("WINLUX_SETUP_WIZARD") or "winlux-setup-wizard"
+    env = dict(os.environ)
+    runtime = shutil.which("winlux")
+    if runtime:
+        env["WINLUX_BIN"] = runtime
+    progress(None, tr("licence_waiting", name=path.name))
+    try:
+        code = subprocess.run([wizard, str(path), "--contrat-seulement"], env=env,
+                              stdin=subprocess.DEVNULL, timeout=3600).returncode
+    except (OSError, subprocess.SubprocessError):
+        code = LICENCE_REFUSED
+    return code == 0
+
+
 def install_windows_file(path, progress, args=(), entry=None):
     """Lance un installateur .exe, ou le msiexec intégré au runtime pour un .msi."""
-    progress(15, tr("runtime", name=path.name))
     msi = path.suffix.lower() == ".msi"
     if msi:
         cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
+    # Sans interface, l'installateur ne montre pas son contrat : la Boutique
+    # le fait accepter d'abord. Avec interface, le runtime le présente lui-même.
+    if silent_flag(cmd[2:]) and not accept_licence(path, progress):
+        return LICENCE_REFUSED
+    progress(15, tr("runtime", name=path.name))
     with open(STORE_RUN / "store.log", "ab") as log:
         try:
             code = subprocess.run(cmd, cwd=str(path.parent), stdout=log, stderr=log,
                                   stdin=subprocess.DEVNULL).returncode
         except OSError:
             code = 127
+    if code == LICENCE_REFUSED % 256:
+        code = LICENCE_REFUSED  # refus devant la page du contrat ouverte par le runtime
     if code == 0 and msi and entry is not None:
         info = run(["winlux", "--msiexec", "--info", str(path)], 60)
         product = info[1].split("\t")[0].strip() if info[0] == 0 and info[1] else ""
@@ -2337,7 +2584,11 @@ class Progress:
         if self.hook:
             self.hook(0 if percent is None else shown)
 
+# Paquet nécessaire au système : rien n'est retiré, la Boutique dit pourquoi (#2234).
+SYSTEM_PART = 11
+
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha", 9: "ed_cancelled", 10: "ed_mismatch",
+            LICENCE_REFUSED: "licence_refused",
             1223 % 256: "denied"}
 
 def apt_candidate(name):
@@ -2403,6 +2654,8 @@ def operate(action, target, hook=None, reindex=True, known=""):
                 pass
         if code == 0:
             progress(100, tr(done, name=name) if done else name, "done")
+        elif code == SYSTEM_PART and action == "remove" and getattr(src, "blocker", ""):
+            progress(0, tr("system_part", name=name, blocker=src.blocker), "error")
         elif code in MESSAGES:
             progress(0, tr(MESSAGES[code]), "error")
         elif not network_up():

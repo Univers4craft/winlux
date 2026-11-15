@@ -429,3 +429,54 @@ fn programme_lance_par_un_chemin_windows() {
         PathBuf::from("absent.exe")
     );
 }
+
+/// #2326 : un installateur se décompresse dans le dossier temporaire du
+/// profil, sur le disque, et %TEMP%/%TMP% le désignent, jamais /tmp.
+#[test]
+fn dossier_temporaire_du_profil_sur_le_disque() {
+    let env = Env::new("temp");
+    let temp = profile_temp();
+    assert_eq!(temp, env.home.join("AppData/Local/Temp"));
+    assert!(temp.is_dir());
+    let work = setup_work_dir("sfx");
+    assert!(work.starts_with(&temp), "{}", work.display());
+    let vars = windows_env();
+    for k in ["TEMP", "TMP"] {
+        let v = vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(
+            v.as_deref().map(to_linux),
+            Some(temp.clone()),
+            "{k} désigne le dossier du profil"
+        );
+    }
+}
+
+/// #2478 : sur un profil neuf, C:\Program Files, C:\Program Files (x86),
+/// C:\ProgramData et le menu Démarrer commun existent dès le lancement.
+#[test]
+fn dossiers_systeme_presents_sur_un_profil_neuf() {
+    let env = Env::new("systeme");
+    for rel in SYSTEM_FOLDERS {
+        assert!(
+            !env.home.join(rel.replace('\\', "/")).exists(),
+            "{rel} déjà là"
+        );
+    }
+    // Un dossier existant sous une autre casse n'est pas doublé.
+    std::fs::create_dir_all(env.home.join("programdata")).unwrap();
+    ensure_system_folders();
+    for w in [
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
+    ] {
+        assert!(to_linux(w).is_dir(), "{w} absent");
+    }
+    assert!(!env.home.join("ProgramData").exists(), "ProgramData doublé");
+    assert!(env
+        .home
+        .join("programdata/Microsoft/Windows/Start Menu/Programs")
+        .is_dir());
+    // Deuxième appel : rien ne change, rien n'échoue.
+    ensure_system_folders();
+}

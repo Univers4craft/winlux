@@ -9,14 +9,19 @@ pub mod domain;
 #[cfg(test)]
 pub mod emit;
 pub mod exceptions;
+pub mod fichiers;
 pub mod gc;
 pub mod il;
 pub mod interop;
+pub mod marshal;
+pub mod membres;
 pub mod metadata;
 pub mod nombres;
 pub mod opcodes;
 pub mod pinvoke;
+pub mod processus;
 pub mod reflection;
+pub mod registre;
 pub mod resolve;
 pub mod tableaux;
 pub mod tables;
@@ -99,12 +104,27 @@ pub fn execute_assembly_at(
     };
 
     let code = match interp.execute_method(row, args) {
-        ExecResult::Return(Value::I32(code)) => code,
-        ExecResult::Return(_) => 0,
-        ExecResult::Exception(exc) => unhandled(&exc),
+        ExecResult::Return(Value::I32(code)) => Ok(code),
+        ExecResult::Return(_) => Ok(0),
+        ExecResult::Exception(exc) => Err(exc),
     };
-    // Le processus attend ses fils de premier plan.
-    threads::wait_foreground();
+    let code = match code {
+        Ok(code) => {
+            // Le processus attend ses fils de premier plan, puis lève
+            // AppDomain.ProcessExit (#2058).
+            threads::wait_foreground();
+            interp.raise_domain_event("LeverSortie", Vec::new());
+            code
+        }
+        Err(exc) => {
+            // UnhandledException avant le message et l'arrêt (#2058) ; comme
+            // sous .NET Framework, ProcessExit n'est pas levé.
+            interp.raise_domain_event("LeverExceptionNonGeree", vec![Value::Ref(exc.obj_ptr)]);
+            let code = unhandled(&exc);
+            threads::wait_foreground();
+            code
+        }
+    };
     threads::unregister(interp_ptr);
     threads::gil_release();
     let _ = std::io::Write::flush(&mut std::io::stdout());

@@ -433,7 +433,29 @@ pub fn now_filetime() -> u64 {
 /// créé s'il ne les a pas. Composants d'Internet Explorer 11, présents sous
 /// Windows 10 et 11 : des installeurs (Acrobat) exigent « Internet
 /// Explorer 7.0 » (#1756).
-const LATER_DEFAULTS: [(&str, &str, &str); 2] = [
+const LATER_DEFAULTS: [(&str, &str, &str); 6] = [
+    // Vue 32 bits de CurrentVersion : un programme x86 y lit ses dossiers
+    // `Program Files (x86)` (#2002).
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "ProgramFilesDir",
+        "C:\\Program Files (x86)",
+    ),
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "ProgramFilesDir (x86)",
+        "C:\\Program Files (x86)",
+    ),
+    (
+        "hklm\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion",
+        "CommonFilesDir",
+        "C:\\Program Files (x86)\\Common Files",
+    ),
+    (
+        "hklm\\Software\\Microsoft\\Windows\\CurrentVersion",
+        "CommonFilesDir (x86)",
+        "C:\\Program Files (x86)\\Common Files",
+    ),
     (
         "hklm\\Software\\Microsoft\\Internet Explorer",
         "Version",
@@ -1134,6 +1156,40 @@ pub fn new_handle(path: String) -> usize {
         .get_or_insert_with(HashMap::new)
         .insert(h, path);
     h
+}
+
+/// Nom NT d'un handle de clé ouvert (NtQueryObject, classe
+/// ObjectNameInformation), ou None si ce n'est pas une clé ouverte. Les
+/// racines prédéfinies (HKEY_CURRENT_USER…) ne sont pas des handles du
+/// gestionnaire d'objets et restent refusées. Préfixes de la page « Registry
+/// Trees and Keys » des documentations pilotes : HKLM est
+/// `\REGISTRY\MACHINE`, HKU `\REGISTRY\USER`, HKCU la sous-clé du SID de
+/// l'utilisateur. HKCR est servi comme HKLM\Software\Classes (simplification :
+/// notre vue fusionne HKCU puis HKLM, #2413).
+pub fn key_nt_name(handle: usize) -> Option<String> {
+    let path = crate::dlls::lock(&HANDLES)
+        .as_ref()?
+        .get(&handle)
+        .cloned()?;
+    let (root, rest) = match path.split_once('\\') {
+        Some((r, rest)) => (r, Some(rest)),
+        None => (path.as_str(), None),
+    };
+    let user = || format!("\\REGISTRY\\USER\\{}", crate::dlls::security::user_sid());
+    let prefix = match root.to_ascii_lowercase().as_str() {
+        "hklm" => "\\REGISTRY\\MACHINE".to_string(),
+        "hku" => "\\REGISTRY\\USER".to_string(),
+        "hkcu" => user(),
+        "hkcr" => "\\REGISTRY\\MACHINE\\SOFTWARE\\Classes".to_string(),
+        "hkcc" => {
+            "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current".to_string()
+        }
+        _ => return None,
+    };
+    Some(match rest {
+        Some(r) if !r.is_empty() => format!("{prefix}\\{r}"),
+        _ => prefix,
+    })
 }
 
 pub fn close_handle(handle: usize) -> bool {

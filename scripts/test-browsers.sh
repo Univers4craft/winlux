@@ -36,7 +36,7 @@ manager() {
 }
 manager --status | grep -qx 'browser_default=none'
 manager --open 'https://example.invalid/'
-test -f "$WINLUX_BROWSER_ROOT/run/winlux/browser-chooser"
+test -f "$WINLUX_BROWSER_ROOT/run/winlux/browser-chooser-$(id -u)"
 umask 077
 manager --default edge
 test "$(stat -c %a "$WINLUX_BROWSER_ROOT/opt/winlux/browsers")" = 755

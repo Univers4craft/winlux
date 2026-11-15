@@ -42,6 +42,18 @@ namespace System
         public static extern Array CreateInstance(Type elementType, int length);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern object GetValue(int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern object GetValue(long index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern void SetValue(object value, int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        public extern void SetValue(object value, long index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         public extern object Clone();
 
         [MethodImpl(MethodImplOptions.InternalCall)]

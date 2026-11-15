@@ -895,6 +895,35 @@ pub(crate) unsafe fn assoc_create_empty(riid: *const u8, out: *mut *mut c_void) 
     hr
 }
 
+/// ASSOCIATIONELEMENT (shlwapi.h) : `{ ASSOCCLASS ac; HKEY hkClass;
+/// PCWSTR pszClass; }`. Décalages mesurés par `sizeof`/`offsetof` sur
+/// l'en-tête mingw-w64 (#2475) : 12 octets et pszClass à +8 pour un
+/// appelant x86, 24 octets et pszClass à +16 en x64.
+fn association_layout(x86: bool) -> (usize, usize) {
+    if x86 {
+        (12, 8)
+    } else {
+        (24, 16)
+    }
+}
+
+/// Première classe nommée du tableau de l'appelant, sinon « * ».
+unsafe fn first_class(list: *const u8, count: u32, x86: bool) -> String {
+    let (size, at) = association_layout(x86);
+    (0..count as usize)
+        .map(|i| {
+            let p = list.add(i * size + at);
+            if x86 {
+                std::ptr::read_unaligned(p as *const u32) as usize as *const u16
+            } else {
+                std::ptr::read_unaligned(p as *const *const u16)
+            }
+        })
+        .find(|p| !p.is_null())
+        .map(|p| wstr(p))
+        .unwrap_or_else(|| "*".into())
+}
+
 unsafe extern "win64" fn assoc_create_for_classes(
     list: *const u8,
     count: u32,
@@ -907,12 +936,7 @@ unsafe extern "win64" fn assoc_create_for_classes(
     if list.is_null() || count == 0 {
         return E_INVALIDARG;
     }
-    // ASSOCIATIONELEMENT : ac, hkClass, pszClass (24 octets).
-    let class = (0..count as usize)
-        .map(|i| std::ptr::read_unaligned(list.add(i * 24 + 16) as *const *const u16))
-        .find(|p| !p.is_null())
-        .map(|p| wstr(p))
-        .unwrap_or_else(|| "*".into());
+    let class = first_class(list, count, crate::wow32::active());
     let obj = Com::create(
         ASSOC_VT.ptr(),
         Assoc {
@@ -1110,6 +1134,14 @@ unsafe extern "win64" fn not_in_process(_a: usize, _b: usize, out: *mut *mut c_v
     E_NOTIMPL
 }
 
+/// Même refus pour les fonctions à deux arguments, `SHCreateShellFolderView`
+/// et `SHCreateDefaultExtractIcon` (shlobj_core.h), dont la sortie est le
+/// deuxième argument (#2453).
+unsafe extern "win64" fn not_in_process2(_a: usize, out: *mut *mut c_void) -> i32 {
+    clear_out(out);
+    E_NOTIMPL
+}
+
 pub fn exports() -> Exports {
     let mut m = crate::exports! {
         "SHParseDisplayName" => fn sh_parse_display_name,
@@ -1138,9 +1170,9 @@ pub fn exports() -> Exports {
         "SHGetInstanceExplorer" => fn sh_get_instance_explorer,
         "SHUpdateImageW" => fn sh_update_image_w,
         "SHSetFolderPathW" => fn sh_set_folder_path_w,
-        "SHCreateShellFolderView" => fn not_in_process,
+        "SHCreateShellFolderView" => fn not_in_process2,
         "SHCreateDefaultContextMenu" => fn not_in_process,
-        "SHCreateDefaultExtractIcon" => fn not_in_process,
+        "SHCreateDefaultExtractIcon" => fn not_in_process2,
     };
     // Variantes ANSI qui manquaient (SHFileOperationA de l'ODT, #1841).
     for (k, v) in super::shell32_ansi::exports() {
@@ -1156,6 +1188,64 @@ pub fn exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2475 : un tableau x86 de deux éléments (12 octets chacun) ; le
+    /// premier n'a pas de nom, le second nomme « txtfile ». Lu à la
+    /// disposition x64, le second nom tombait au-delà du tableau.
+    #[test]
+    fn associations_a_la_disposition_de_l_appelant() {
+        let name: Vec<u16> = "txtfile".encode_utf16().chain([0]).collect();
+        // Mémoire sous 4 Go, comme celle d'un programme x86.
+        let low = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(low, libc::MAP_FAILED);
+        let base = low as *mut u8;
+        unsafe {
+            let s = base.add(1024) as *mut u16;
+            std::ptr::copy_nonoverlapping(name.as_ptr(), s, name.len());
+            let x86 = std::slice::from_raw_parts_mut(base as *mut u32, 6);
+            // { ASSOCCLASS_PROGID_STR (3), NULL, NULL }, { 3, NULL, s }
+            x86.copy_from_slice(&[3, 0, 0, 3, 0, s as usize as u32]);
+            assert_eq!(first_class(base, 2, true), "txtfile");
+            // Même contenu à la disposition x64 : 24 octets par élément.
+            let mut x64 = [0u64; 6];
+            x64[0] = 3;
+            x64[3] = 3;
+            x64[5] = s as u64;
+            assert_eq!(first_class(x64.as_ptr() as *const u8, 2, false), "txtfile");
+            assert_eq!(first_class(x64.as_ptr() as *const u8, 1, false), "*");
+            libc::munmap(low, 4096);
+        }
+        assert_eq!(association_layout(true), (12, 8));
+        assert_eq!(association_layout(false), (24, 16));
+    }
+
+    #[test]
+    fn refus_hors_processus_met_la_bonne_sortie_a_zero() {
+        // #2453 : deux arguments pour la vue de dossier et l'extracteur
+        // d'icônes, trois pour le menu contextuel (shlobj_core.h).
+        let m = exports();
+        for name in ["SHCreateShellFolderView", "SHCreateDefaultExtractIcon"] {
+            let f: unsafe extern "win64" fn(usize, *mut *mut c_void) -> i32 =
+                unsafe { std::mem::transmute(m[name]) };
+            let mut out = 0x1234usize as *mut c_void;
+            assert_eq!(unsafe { f(0, &mut out) }, E_NOTIMPL, "{name}");
+            assert!(out.is_null(), "{name}");
+        }
+        let f: unsafe extern "win64" fn(usize, usize, *mut *mut c_void) -> i32 =
+            unsafe { std::mem::transmute(m["SHCreateDefaultContextMenu"]) };
+        let mut out = 0x1234usize as *mut c_void;
+        assert_eq!(unsafe { f(0, 0, &mut out) }, E_NOTIMPL);
+        assert!(out.is_null());
+    }
 
     #[test]
     fn corbeille_comptee() {

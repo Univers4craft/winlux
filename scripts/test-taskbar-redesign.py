@@ -154,7 +154,7 @@ config_source = (HERE / "winlux-native-config.py").read_text()
 migration = {"ET": ET, "Path": Path, "os": os}
 for node in ast.parse(config_source).body:
     if isinstance(node, ast.FunctionDef) and node.name in ("_plugin_command", "_set_genmon", "redesign_taskbar",
-                                                           "drop_legacy_panel_css", "refresh_account_theme") \
+                                                           "add_balance_edge", "drop_legacy_panel_css", "refresh_account_theme") \
             or isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "LEGACY_PANEL_CSS" for t in node.targets):
         exec(compile(ast.Module([node], []), "winlux-native-config", "exec"), migration)
 old = """<?xml version="1.0" encoding="UTF-8"?><channel name="xfce4-panel" version="1.0">
@@ -177,9 +177,11 @@ panel_xml.write_text(old)
 (rc_folder / "genmon-6.rc").write_text("Command=/usr/bin/winlux-tray battery\nUpdatePeriod=10000\n")
 (rc_folder / "genmon-5.rc").write_text("Command=/usr/bin/winlux-tray audio\n")
 ok(migration["redesign_taskbar"](panel_xml, markers, rc_folder), "migration : ancienne barre réécrite")
+ok(migration["add_balance_edge"](panel_xml, rc_folder) and "winlux-tray edge" in (rc_folder / "genmon-46.rc").read_text()
+   and not migration["add_balance_edge"](panel_xml, rc_folder), "migration : repère 46 du bloc de droite posé une fois (#2467)")
 root = ET.parse(panel_xml).getroot()
 ids = [value.get("value") for value in root.find(".//property[@name='plugin-ids']")]
-ok(ids == "3 13 1 15 14 2 8 10 12 4 7 9".split(), f"migration : son et batterie retirés, l'heure avant la cloche ({' '.join(ids)})")
+ok(ids == "3 13 1 15 14 2 8 46 10 12 4 7 9".split(), f"migration : son et batterie retirés, l'heure avant la cloche ({' '.join(ids)})")
 plugins = {item.get("name"): item for item in root.find(".//property[@name='plugins']")}
 command = lambda name: next((c.get("value") for c in plugins[name] if c.get("name") == "command"), None)
 ok("plugin-5" not in plugins and "plugin-6" not in plugins and not (rc_folder / "genmon-6.rc").exists(),
@@ -252,7 +254,7 @@ ok(result.returncode == 0 and after == " ".join(ids) and "xfce4-panel -r" not in
    f"barre migrée = ordre de winlux-control align-center, pas de relance ({after}) {result.stderr.strip()[:200]}")
 xfconf_from(ids)
 result, after, data = align("center", "STYLE=classic\nSEARCH=hidden\n")
-ok(after == "3 13 1 14 2 8 10 12 4 7 9" and "xfce4-panel -r" in log.read_text(),
+ok(after == "3 13 1 14 2 8 46 10 12 4 7 9" and "xfce4-panel -r" in log.read_text(),
    f"recherche masquée : retirée de la barre, barre relancée ({after})")
 xfconf_from(ids)
 result, after, data = align("center", "STYLE=floating\nSEARCH=box\n")
@@ -260,11 +262,11 @@ ok(data["/plugins/plugin-3/expand"] == "false" and data["/plugins/plugin-8/expan
    "barre flottante : aucun séparateur extensible (elle épouse son contenu)")
 xfconf_from(ids, {"/plugins/plugin-3/expand": "false", "/plugins/plugin-8/expand": "false"})
 result, after, data = align("left", "STYLE=classic\nSEARCH=box\n")
-ok(after == "3 13 1 15 14 2 8 10 12 4 7 9" and data["/plugins/plugin-8/expand"] == "true",
+ok(after == "3 13 1 15 14 2 8 46 10 12 4 7 9" and data["/plugins/plugin-8/expand"] == "true",
    f"retour au style classique : séparateur 8 de nouveau extensible ({after})")
 xfconf_from([*"3 13 1 15 14 2 8 10 12 4 5 6 9 7".split()], {"/plugins/plugin-5": "genmon", "/plugins/plugin-6": "genmon"})
 result, after, data = align("center")
-ok(after == "3 13 1 15 14 2 8 10 12 4 5 6 7 9", f"compte pas encore migré : son et batterie gardés ({after})")
+ok(after == "3 13 1 15 14 2 8 46 10 12 4 5 6 7 9", f"compte pas encore migré : son et batterie gardés ({after})")
 
 # Anciennes couleurs de ~/.config/gtk-3.0/gtk.css retirées, thème du compte réécrit.
 style = account / "gtk.css"
@@ -289,7 +291,7 @@ ok(not migration["refresh_account_theme"](user, HERE / "winlux-personalize.py"),
 # ── 7. Modèle livré et Paramètres ───────────────────────────────────────────
 template = ET.parse(ROOT / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
 template_ids = [value.get("value") for value in template.find(".//property[@name='plugin-ids']")]
-ok(template_ids == "3 13 1 15 14 2 8 10 4 7 9".split(), f"modèle : barre de #703, contrepoids à sa place des deux alignements (#920) ({' '.join(template_ids)})")
+ok(template_ids == "3 13 1 15 14 2 8 46 10 4 7 9".split(), f"modèle : barre de #703, contrepoids à sa place des deux alignements (#920) ({' '.join(template_ids)})")
 rc = ROOT / "integration/native/config/xfce4/panel"
 ok("winlux-tray status" in (rc / "genmon-4.rc").read_text() and "winlux-tray search" in (rc / "genmon-15.rc").read_text()
    and not (rc / "genmon-5.rc").exists() and not (rc / "genmon-6.rc").exists(), "modèle : genmon état et recherche")

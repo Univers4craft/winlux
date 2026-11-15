@@ -177,6 +177,7 @@ fi
 # Contrôle parental (#661) : temps d'écran, applications et sites bloqués des
 # comptes surveillés. Un seul service (il le vérifie lui-même) ; journal hors
 # du dossier collant /run/winlux, qu'un compte ne peut pas préparer (#633).
+# Sans systemd, « supervise » le relance s'il s'arrête (#2247).
 if test -x /usr/bin/winlux-parental && test "$(id -u)" = 0; then
-    setsid /usr/bin/winlux-parental daemon >>/run/winlux-parental.log 2>&1 &
+    setsid /usr/bin/winlux-parental supervise >>/run/winlux-parental.log 2>&1 &
 fi

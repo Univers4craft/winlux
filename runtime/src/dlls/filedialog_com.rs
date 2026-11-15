@@ -482,7 +482,8 @@ fn default_title(save: bool, folder: bool) -> String {
 
 /// FOS_PICKFOLDERS : l'Explorateur en mode « dossier ». Sans Explorateur,
 /// `WINLUX_FILEDLG` (tests) donne le dossier, sinon la boîte est annulée.
-unsafe fn pick_folder(
+/// Sert aussi à SHBrowseForFolder (#2333).
+pub(crate) unsafe fn pick_folder(
     owner: usize,
     title: &str,
     dir: Option<String>,
