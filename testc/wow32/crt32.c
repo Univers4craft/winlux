@@ -402,5 +402,32 @@ int main(int argc, char **argv) {
         }
         CHECK(46, ok);
     }
+    /* #2574 : WinHttpCrackUrl sur un URL_COMPONENTS x86 de 60 octets (l'outil
+       de déploiement d'Office lisait ensuite un pointeur nul). winhttp.h ne
+       s'inclut pas avec wininet.h ; son URL_COMPONENTS a la même suite de
+       champs que URL_COMPONENTSW (pages URL_COMPONENTS de WinINet et WinHTTP
+       sur Microsoft Learn), et nScheme vaut 2 pour https en WinHTTP. */
+    {
+        typedef BOOL (__stdcall *wc_t)(const wchar_t *, DWORD, DWORD, URL_COMPONENTSW *);
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wc_t wc = h ? (wc_t)GetProcAddress(h, "WinHttpCrackUrl") : 0;
+        int ok = wc && sizeof(URL_COMPONENTSW) == 60;
+        if (ok) {
+            static const wchar_t url[] = L"https://exemple.fr:8443/a/b?c=d";
+            struct { URL_COMPONENTSW c; unsigned char garde[16]; } a;
+            wchar_t chemin[32];
+            memset(&a, 0, sizeof a);
+            memset(a.garde, 0x5A, sizeof a.garde);
+            a.c.dwStructSize = sizeof a.c;
+            a.c.dwHostNameLength = 1;
+            a.c.lpszUrlPath = chemin;
+            a.c.dwUrlPathLength = 32;
+            ok = wc(url, 0, 0, &a.c) && a.c.lpszHostName == url + 8
+                 && a.c.dwHostNameLength == 10 && a.c.nPort == 8443 && a.c.nScheme == 2
+                 && a.c.dwUrlPathLength == 4 && wcscmp(chemin, L"/a/b") == 0
+                 && a.garde[0] == 0x5A && a.garde[15] == 0x5A;
+        }
+        CHECK(47, ok);
+    }
     return fails;
 }
