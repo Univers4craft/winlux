@@ -1035,6 +1035,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_shell::ALL.iter())
         .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
+        .chain(super::com_mf_chaine::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1965,7 +1966,10 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
-        ("mfplat", _) => super::com_mf::api_kinds(func)?,
+        ("mfplat", _) => {
+            super::com_mf::api_kinds(func).or_else(|| super::com_mf_chaine::api_kinds(func))?
+        }
+        ("mf" | "mfreadwrite", _) => super::com_mf_chaine::api_kinds(func)?,
         _ => return None,
     };
     Some((k, None))
