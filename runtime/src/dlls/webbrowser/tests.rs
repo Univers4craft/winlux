@@ -322,3 +322,16 @@ fn document_ecrit_par_write_montre_en_texte() {
         assert_eq!(release(doc), 0);
     }
 }
+
+#[test]
+fn flux_d_initialisation_d_atl_accepte() {
+    unsafe {
+        let ps = create(&IID_IPERSIST_STREAM_INIT);
+        let load: unsafe extern "win64" fn(usize, usize) -> i32 =
+            std::mem::transmute(method(ps, 5));
+        assert_eq!(load(ps, 0), E_POINTER);
+        // Le flux n'est pas lu : une adresse non nulle suffit.
+        assert_eq!(load(ps, 0x1000), S_OK);
+        assert_eq!(release(ps), 0);
+    }
+}

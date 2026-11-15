@@ -1354,7 +1354,21 @@ static VO_VT: VTable<10> = VTable([
 
 // ── IPersistStreamInit ──────────────────────────────────────────────
 
-not_impl_fns!(Load, Save, GetSizeMax);
+not_impl_fns!(Save, GetSizeMax);
+
+/// IPersistStreamInit::Load : ATL (AtlAxCreateControl) passe ici le flux
+/// d'initialisation tiré du gabarit de dialogue. Le format des propriétés
+/// persistées du contrôle n'est pas documenté : le flux n'est pas lu, le
+/// contrôle garde ses valeurs par défaut, comme après InitNew.
+extern "win64" fn ps_load(_this: usize, stream: usize) -> i32 {
+    if stream == 0 {
+        return E_POINTER;
+    }
+    note(format_args!(
+        "webbrowser Load : flux d'initialisation accepté, non lu"
+    ));
+    S_OK
+}
 
 unsafe extern "win64" fn ps_get_class_id(_this: usize, out: *mut Guid) -> i32 {
     get_user_class_id(0, out)
@@ -1370,7 +1384,7 @@ static PS_VT: VTable<9> = VTable([
     ps_release as *const (),
     ps_get_class_id as *const (),
     is_dirty as *const (),
-    Load as *const (),
+    ps_load as *const (),
     Save as *const (),
     GetSizeMax as *const (),
     accept as *const (), // InitNew
