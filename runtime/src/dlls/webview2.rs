@@ -244,6 +244,7 @@ enum Family {
     ContentLoading,
     SourceChanged,
     ControllerOptions,
+    ProcessCollection,
 }
 
 impl Family {
@@ -259,6 +260,7 @@ impl Family {
             Family::ContentLoading => &CONTENT_LOADING_ARGS_IIDS,
             Family::SourceChanged => &SOURCE_CHANGED_ARGS_IIDS,
             Family::ControllerOptions => &CONTROLLER_OPTIONS_IIDS,
+            Family::ProcessCollection => &PROCESS_COLLECTION_IIDS,
         }
     }
 }
@@ -410,6 +412,7 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::ContentLoading => (CONTENT_LOADING_ARGS_SLOTS, content_loading_methods()),
         Family::SourceChanged => (SOURCE_CHANGED_ARGS_SLOTS, source_changed_methods()),
         Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
+        Family::ProcessCollection => (PROCESS_COLLECTION_SLOTS, process_collection_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
@@ -646,7 +649,67 @@ fn environment_methods() -> Vec<(usize, usize)> {
         // ICoreWebView2Environment10 (#2570).
         (17, env_create_controller_options as *const () as usize),
         (18, env_create_controller_with_options as *const () as usize),
+        // ICoreWebView2Environment8 / 13 : processus du moteur (#2581).
+        (15, env_get_process_infos as *const () as usize),
+        (22, env_get_process_extended_infos as *const () as usize),
     ]
+}
+
+/// ICoreWebView2Environment8::GetProcessInfos : collection des processus
+/// du navigateur. Le moteur de Winlux (WebKitGTK) n'expose pas de
+/// processus au sens de WebView2 : la collection est vide (#2581).
+unsafe extern "win64" fn env_get_process_infos(_this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(Family::ProcessCollection, None, None, Args::default());
+    S_OK
+}
+
+/// ICoreWebView2Environment13::GetProcessExtendedInfos(handler) : rappel
+/// asynchrone (boucle de messages, comme les autres rappels) avec S_OK et
+/// une collection vide (#2581).
+unsafe extern "win64" fn env_get_process_extended_infos(this: usize, handler: usize) -> i32 {
+    if handler == 0 {
+        return E_INVALIDARG;
+    }
+    let Some(env) = com(this).env.clone() else {
+        return E_FAIL;
+    };
+    add_ref(handler);
+    let obj = new_com(Family::ProcessCollection, None, None, Args::default());
+    post(
+        env.dispatcher,
+        Box::new(move || unsafe {
+            invoke(handler, S_OK as usize, obj);
+            release(obj);
+            release(handler);
+        }),
+    );
+    S_OK
+}
+
+// --- ICoreWebView2ProcessInfoCollection / …ExtendedInfoCollection ---
+
+fn process_collection_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, collection_count as *const () as usize),
+        (1, collection_value_at as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn collection_count(_this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+unsafe extern "win64" fn collection_value_at(_this: usize, _index: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    E_INVALIDARG
 }
 
 /// ICoreWebView2Environment10::CreateCoreWebView2ControllerOptions : un
@@ -1956,5 +2019,38 @@ mod tests {
             com_release(opts);
             com_release(envobj);
         }
+    }
+
+    /// #2581 : GetProcessInfos et GetProcessExtendedInfos rendent une
+    /// collection vide au lieu d'E_NOTIMPL.
+    #[test]
+    fn processus_du_moteur_2581() {
+        let env = vtable(Family::Environment);
+        assert_eq!(env[3 + 15], env_get_process_infos as *const () as usize);
+        assert_eq!(
+            env[3 + 22],
+            env_get_process_extended_infos as *const () as usize
+        );
+        let mut list = 0usize;
+        assert_eq!(unsafe { env_get_process_infos(0, &mut list) }, S_OK);
+        let mut out = 0usize;
+        for iid in PROCESS_COLLECTION_IIDS.iter() {
+            assert_eq!(query_interface(list, iid.as_ptr(), &mut out), S_OK);
+            com_release(out);
+        }
+        let mut n = 7u32;
+        assert_eq!(unsafe { collection_count(list, &mut n) }, S_OK);
+        assert_eq!(n, 0);
+        assert_eq!(
+            unsafe { collection_value_at(list, 0, &mut out) },
+            E_INVALIDARG
+        );
+        assert_eq!(out, 0);
+        com_release(list);
+        // Sans gestionnaire : E_INVALIDARG, rien n'est posté.
+        assert_eq!(
+            unsafe { env_get_process_extended_infos(0, 0) },
+            E_INVALIDARG
+        );
     }
 }
