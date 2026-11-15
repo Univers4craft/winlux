@@ -73,7 +73,40 @@ static FDS: std::sync::Mutex<Vec<(usize, i32)>> = std::sync::Mutex::new(Vec::new
 /// Handle fermé : son entrée du registre n'a plus lieu d'être.
 pub(crate) fn forget(h: usize) {
     crate::dlls::lock(&FDS).retain(|&(k, _)| k != h);
+    crate::dlls::lock(&MARKED).retain(|&k| k != h);
     forget_record(h);
+}
+
+/// Handles marqués à effacer par FileDispositionInformation(Ex), et non à
+/// la création : cette marque-là peut être retirée avant la fermeture.
+static MARKED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// FileDispositionInformation(Ex) avec effacement : le fichier disparaîtra à
+/// la fermeture du handle, pas avant (WDK, FILE_DISPOSITION_INFORMATION :
+/// « not actually deleted until all open handles […] have been closed »).
+pub(crate) fn mark(h: usize, path: PathBuf) {
+    if crate::dlls::lock(super::kernel32::delete_on_close()).contains_key(&h) {
+        return; // déjà marqué (FILE_FLAG_DELETE_ON_CLOSE ou appel précédent)
+    }
+    register(h, path);
+    crate::dlls::lock(&MARKED).push(h);
+}
+
+/// Retire la marque d'effacement (DeleteFile = FALSE). Sans effet sur un
+/// handle ouvert avec FILE_FLAG_DELETE_ON_CLOSE, sauf si `on_close` vaut
+/// vrai (FILE_DISPOSITION_ON_CLOSE, qui règle justement cet état).
+pub(crate) fn unmark(h: usize, on_close: bool) {
+    let marked = crate::dlls::lock(&MARKED).contains(&h);
+    if !marked && !on_close {
+        return;
+    }
+    if crate::dlls::lock(super::kernel32::delete_on_close())
+        .remove(&h)
+        .is_some()
+    {
+        forget(h);
+    }
+    crate::dlls::lock(&MARKED).retain(|&k| k != h);
 }
 
 fn forget_record(h: usize) {

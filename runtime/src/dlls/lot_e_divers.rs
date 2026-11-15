@@ -1429,23 +1429,6 @@ unsafe extern "win64" fn WSCGetProviderPath(
     -1
 }
 
-/// CreateAppContainerProfile : pas de conteneurs d'application sous
-/// Winlux ; HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED). Le bac à sable de
-/// Chromium se passe alors de conteneur.
-unsafe extern "win64" fn CreateAppContainerProfile(
-    _name: usize,
-    _display: usize,
-    _description: usize,
-    _caps: usize,
-    _count: u32,
-    sid: *mut usize,
-) -> i32 {
-    if !sid.is_null() {
-        crate::wow32::write_ptr(sid as usize, 0);
-    }
-    0x8007_0032u32 as i32
-}
-
 /// Section critique de stratégie de groupe : aucune stratégie n'est
 /// appliquée en arrière-plan, la poignée ne protège rien.
 extern "win64" fn EnterCriticalPolicySection(machine: i32) -> usize {
@@ -1485,7 +1468,6 @@ fn cef_exports() -> Vec<(&'static str, crate::dlls::Exports)> {
         (
             "userenv",
             crate::exports! {
-                "CreateAppContainerProfile" => fn CreateAppContainerProfile,
                 "EnterCriticalPolicySection" => fn EnterCriticalPolicySection,
                 "LeaveCriticalPolicySection" => fn LeaveCriticalPolicySection,
                 "RegisterGPNotification" => fn RegisterGPNotification,

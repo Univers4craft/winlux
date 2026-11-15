@@ -593,6 +593,43 @@ def redesign_taskbar(panel_config, marker_folder, rc_folder):
 redesign_taskbar(panel_config, home / ".config/winlux", home / ".config/xfce4/panel")
 
 
+# Repère du bloc de droite (#2467) : genmon 46 d'un pixel juste après le
+# séparateur 8, posé avant le lancement de la barre et dans l'ordre exact de
+# `winlux-control align-*` (sans quoi la remise en ordre de l'ouverture de
+# session relancerait la barre). Le bloc de droite commence souvent par un
+# greffon interne sans fenêtre X (bouton de l'assistant) : sans ce repère, le
+# contrepoids ne le mesurait pas et le groupe centré tombait à gauche. Barre
+# classique seulement (3 suivi du contrepoids 13) ; la flottante n'en a pas.
+def add_balance_edge(panel_config, rc_folder):
+    """Ajoute le repère 46 après le séparateur 8 ; True si le fichier a changé."""
+    if not panel_config.is_file():
+        return False
+    try:
+        tree = ET.parse(panel_config)
+        root = tree.getroot()
+        plugins = next((item for item in root if item.get("name") == "plugins"), None)
+        panel = next((item for top in root if top.get("name") == "panels" for item in top if item.get("name") == "panel-1"), None)
+        ids = next((item for item in panel if item.get("name") == "plugin-ids"), None) if panel is not None else None
+        if plugins is None or ids is None:
+            return False
+        values = [value.get("value") for value in ids]
+        if "46" in values or "3" not in values or "8" not in values or values[values.index("3") + 1:values.index("3") + 2] != ["13"]:
+            return False
+        if not any(plugin.get("name") == "plugin-46" for plugin in plugins):
+            _set_genmon(ET.SubElement(plugins, "property", {"name": "plugin-46", "type": "string"}), rc_folder,
+                        "/usr/bin/winlux-tray edge", 600000)
+        ids.insert(values.index("8") + 1, ET.Element("value", {"type": "int", "value": "46"}))
+        temporary = panel_config.with_name(panel_config.name + ".tmp")
+        tree.write(temporary, encoding="UTF-8", xml_declaration=True)
+        temporary.replace(panel_config)
+        return True
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        return False
+
+
+add_balance_edge(panel_config, home / ".config/xfce4/panel")
+
+
 # Couleurs de la barre (#703) : elles vivent dans le thème GTK du compte
 # (winlux-personalize), que la barre recharge en direct au passage clair ↔
 # sombre. Les anciennes lignes de tête de ~/.config/gtk-3.0/gtk.css (barre
