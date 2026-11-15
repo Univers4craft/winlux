@@ -211,6 +211,7 @@ pub mod object_directory;
 pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
+pub mod ole32_ftm;
 pub mod ole32_inplace;
 pub mod ole32_lot_c;
 pub mod ole32_moniker;
