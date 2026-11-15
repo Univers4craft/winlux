@@ -911,6 +911,20 @@ pub unsafe extern "win64" fn set_option(
         options_mut(&mut entry.kind).context = crate::wow32::read_ptr(value as usize);
         return 1;
     }
+    // WINHTTP_OPTION_CONFIGURE_PASSPORT_AUTH (83) sur une session : DWORD de
+    // drapeaux WINHTTP_{DIS,EN}ABLE_PASSPORT_AUTH (0, 0x10000000) et
+    // _KEYRING (0x20000000, 0x40000000), d'après winhttp.h de mingw-w64 et la
+    // page « Option Flags » de Microsoft Learn. Winlux ne fait pas
+    // d'authentification Passport : l'option est acceptée sans effet (#2606).
+    if option == 83 {
+        if !matches!(entry.kind, Kind::Session(_)) {
+            return fail(12018);
+        }
+        if size != 4 || std::ptr::read_unaligned(value.cast::<u32>()) & !0x7000_0000 != 0 {
+            return fail(87);
+        }
+        return 1;
+    }
     // In particular, do not silently honor certificate-validation bypass flags.
     fail(50)
 }
@@ -1146,6 +1160,36 @@ mod tests {
         );
         assert_ne!(request, 0);
         (session, connection, request)
+    }
+
+    /// #2606 : WINHTTP_OPTION_CONFIGURE_PASSPORT_AUTH (83) acceptée sur une
+    /// session (l'outil de déploiement d'Office n'ouvrait plus de connexion),
+    /// refusée ailleurs ou avec une valeur inconnue.
+    #[test]
+    fn option_passport_acceptee_sur_une_session() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            for value in [0u32, 0x1000_0000, 0x2000_0000, 0x4000_0000] {
+                assert_eq!(set_option(session, 83, (&value as *const u32).cast(), 4), 1);
+            }
+            let inconnue = 1u32;
+            assert_eq!(
+                set_option(session, 83, (&inconnue as *const u32).cast(), 4),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 87);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            let zero = 0u32;
+            assert_eq!(
+                set_option(connection, 83, (&zero as *const u32).cast(), 4),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
     }
 
     #[test]
