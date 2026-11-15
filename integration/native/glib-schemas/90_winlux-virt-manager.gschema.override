@@ -1,0 +1,6 @@
+# virt-manager (Boutique) : session de l'utilisateur par défaut (#2190).
+# Winlux n'installe pas de démon libvirt système ; qemu:///session lance
+# libvirt sous le compte, sans root, sans polkit et sans systemd (#2074).
+[org.virt-manager.virt-manager.connections]
+uris=['qemu:///session']
+autoconnect=['qemu:///session']
