@@ -65,6 +65,16 @@ pub fn init_diag_fd() {
     DIAG_FD.store(fd, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Garde le descripteur de diagnostic ouvert à travers un exec du runtime
+/// lui-même (relance wow32, #2530) : `WINLUX_DIAG_FD` le nomme toujours, et
+/// l'exécutable relancé le remet en FD_CLOEXEC à son démarrage.
+pub fn keep_diag_fd_across_exec() {
+    let fd = diag_fd();
+    if fd > 2 {
+        unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+    }
+}
+
 /// Descripteur des lignes de diagnostic (-1 : aucun).
 pub fn diag_fd() -> i32 {
     DIAG_FD.load(std::sync::atomic::Ordering::Relaxed)
