@@ -513,3 +513,12 @@ pub const PROFILE_IIDS: [Guid; 8] = [
         [0x85, 0xa0, 0x16, 0x3e, 0x92, 0x04, 0x40, 0x11],
     ), // ICoreWebView2Profile8
 ];
+/// ICoreWebView2DevToolsProtocolEventReceiver (ajouté à la main, IDL
+/// public, #2643) : add_/remove_DevToolsProtocolEventReceived.
+pub const DEVTOOLS_RECEIVER_SLOTS: usize = 5;
+pub const DEVTOOLS_RECEIVER_IIDS: [Guid; 1] = [guid(
+    0xb32ca51a,
+    0x8371,
+    0x45e9,
+    [0x93, 0x17, 0xaf, 0x02, 0x1d, 0x08, 0x03, 0x67],
+)];
