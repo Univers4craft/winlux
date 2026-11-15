@@ -998,6 +998,24 @@ pub unsafe extern "win64" fn CertFindCertificateInStore(
                 .to_lowercase()
                 .contains(&wanted_str),
             0xd0000 => k.der.as_slice() == cert_der(para),
+            // CERT_FIND_SUBJECT_CERT (#2694) : émetteur et numéro de série
+            // du CERT_INFO passé. Cases de la taille d'un pointeur :
+            // SerialNumber à une case, Issuer à six (disposition windows-rs).
+            0xb0000 => {
+                para != 0 && {
+                    let ps = crate::wow32::pointer_size();
+                    let field = |at: usize| -> &[u8] {
+                        let cb = ((para + at) as *const u32).read_unaligned() as usize;
+                        let pb = crate::wow32::read_ptr(para + at + ps) as *const u8;
+                        if pb.is_null() || cb == 0 {
+                            &[]
+                        } else {
+                            std::slice::from_raw_parts(pb, cb)
+                        }
+                    };
+                    name(true) == field(6 * ps) && k.serial_le.as_slice() == field(ps)
+                }
+            }
             // CERT_FIND_HAS_PRIVATE_KEY
             0x150000 => super::lock(&k.props).contains_key(&PRIVATE_KEY_PROP),
             _ => false,
@@ -2885,6 +2903,42 @@ mod tests {
             unsafe { CertFindCertificateInStore(root, 1, 0, 0x10000, &b as *const _ as usize, 0) };
         assert_eq!(found, c);
         CertFreeCertificateContext(found);
+    }
+
+    /// #2694 : CERT_FIND_SUBJECT_CERT retrouve le certificat par l'émetteur
+    /// et le numéro de série d'un CERT_INFO (comme après CryptMsgGetParam
+    /// CMSG_SIGNER_INFO_PARAM).
+    #[test]
+    fn certificat_retrouve_par_emetteur_et_numero_de_serie() {
+        use crate::setup::appx_signature::CODE_ROOTS;
+        let store = new_store();
+        let a = store_add_der(store, CODE_ROOTS[4]).unwrap();
+        let b = store_add_der(store, CODE_ROOTS[5]).unwrap();
+        unsafe {
+            for c in [a, b] {
+                let info = &cert(c).unwrap().info as *const CertInfo as usize;
+                let found = CertFindCertificateInStore(store, 1, 0, 0xb0000, info, 0);
+                assert_eq!(found, c);
+                CertFreeCertificateContext(found);
+            }
+            // Même émetteur, autre numéro de série : rien.
+            let k = cert(a).unwrap();
+            let serial = [1u8, 2, 3];
+            let mut other = std::ptr::read(&k.info);
+            other.serial = Blob {
+                cb: 3,
+                pb: serial.as_ptr(),
+            };
+            let none = CertFindCertificateInStore(
+                store,
+                1,
+                0,
+                0xb0000,
+                &other as *const CertInfo as usize,
+                0,
+            );
+            assert_eq!(none, 0);
+        }
     }
 
     /// Certificat auto-signé jetable (openssl de l'hôte), avec trois noms
