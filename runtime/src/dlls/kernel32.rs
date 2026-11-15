@@ -3765,6 +3765,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         return 0;
     }
     note_renders_itself(n);
+    if super::atlthunk::hidden_for_x86(n) {
+        crate::process::set_last_error(126);
+        return 0;
+    }
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -7060,7 +7064,7 @@ unsafe fn create_process_common(
         d.launched(c.id());
     }
     if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
-        crate::sandbox_fallback::note_child(c.id(), &line);
+        crate::sandbox_fallback::note_child(c.id(), &line, same_base.is_some());
         // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
         // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
         // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP

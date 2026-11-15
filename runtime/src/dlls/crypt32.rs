@@ -998,6 +998,24 @@ pub unsafe extern "win64" fn CertFindCertificateInStore(
                 .to_lowercase()
                 .contains(&wanted_str),
             0xd0000 => k.der.as_slice() == cert_der(para),
+            // CERT_FIND_SUBJECT_CERT (#2694) : émetteur et numéro de série
+            // du CERT_INFO passé. Cases de la taille d'un pointeur :
+            // SerialNumber à une case, Issuer à six (disposition windows-rs).
+            0xb0000 => {
+                para != 0 && {
+                    let ps = crate::wow32::pointer_size();
+                    let field = |at: usize| -> &[u8] {
+                        let cb = ((para + at) as *const u32).read_unaligned() as usize;
+                        let pb = crate::wow32::read_ptr(para + at + ps) as *const u8;
+                        if pb.is_null() || cb == 0 {
+                            &[]
+                        } else {
+                            std::slice::from_raw_parts(pb, cb)
+                        }
+                    };
+                    name(true) == field(6 * ps) && k.serial_le.as_slice() == field(ps)
+                }
+            }
             // CERT_FIND_HAS_PRIVATE_KEY
             0x150000 => super::lock(&k.props).contains_key(&PRIVATE_KEY_PROP),
             _ => false,
@@ -1262,11 +1280,27 @@ pub unsafe extern "win64" fn CertGetNameStringA(
     put_a(&name_string(ctx, kind, flags, para), buf, size)
 }
 
+/// Octets d'un CRYPT_*_BLOB du programme : `{ DWORD cbData; BYTE *pbData; }`,
+/// pbData à +4 pour un programme 32 bits et à +8 en x64 (#2698).
 unsafe fn blob_slice<'a>(b: *const Blob) -> &'a [u8] {
-    if b.is_null() || (*b).pb.is_null() {
+    blob_at(b as usize, crate::wow32::pointer_size())
+}
+
+/// `blob_slice` pour une taille de pointeur donnée (4 ou 8).
+unsafe fn blob_at<'a>(at: usize, ps: usize) -> &'a [u8] {
+    if at == 0 {
+        return &[];
+    }
+    let cb = std::ptr::read_unaligned(at as *const u32) as usize;
+    let pb = if ps == 4 {
+        std::ptr::read_unaligned((at + 4) as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned((at + 8) as *const usize)
+    };
+    if cb == 0 || pb == 0 {
         &[]
     } else {
-        std::slice::from_raw_parts((*b).pb, (*b).cb as usize)
+        std::slice::from_raw_parts(pb as *const u8, cb)
     }
 }
 
@@ -2712,6 +2746,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn blob_x86_et_x64_2698() {
+        // CERT_NAME_BLOB d'un programme 32 bits : { cbData, pbData à +4 }.
+        // Lu à la disposition x64, pbData tombait 4 octets plus loin et
+        // CertNameToStrW déréférençait n'importe quoi (passe ODT 2692).
+        unsafe {
+            // Page sous 4 Gio, comme la mémoire d'un programme x86.
+            let page = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            );
+            assert_ne!(page, libc::MAP_FAILED);
+            let base = page as usize;
+            assert!(base + 4096 <= u32::MAX as usize);
+            // Nom X.501 : SEQUENCE { SET { SEQUENCE { CN, "Essai" } } }.
+            let nom: [u8; 18] = [
+                0x30, 0x10, 0x31, 0x0E, 0x30, 0x0C, 0x06, 0x03, 0x55, 0x04, 0x03, 0x0C, 0x05, b'E',
+                b's', b's', b'a', b'i',
+            ];
+            let donnees = base + 64;
+            std::ptr::copy_nonoverlapping(nom.as_ptr(), donnees as *mut u8, nom.len());
+            // Blob x86, suivi d'un mot qui ne doit pas être lu comme pbData.
+            let blob = base as *mut u32;
+            *blob = nom.len() as u32;
+            *blob.add(1) = donnees as u32;
+            *blob.add(2) = 0xDEAD_BEEF;
+            *blob.add(3) = 0xDEAD_BEEF;
+            assert_eq!(blob_at(base, 4), &nom[..]);
+            assert_eq!(name_to_str(blob_at(base, 4), false), "CN=Essai");
+            // Disposition x64 : pbData à +8.
+            let b = Blob {
+                cb: nom.len() as u32,
+                pb: nom.as_ptr(),
+            };
+            assert_eq!(blob_at(&b as *const Blob as usize, 8), &nom[..]);
+            assert_eq!(blob_at(0, 4), &[] as &[u8]);
+            *blob = 0;
+            assert_eq!(blob_at(base, 4), &[] as &[u8]);
+            libc::munmap(page, 4096);
+        }
+    }
+
+    #[test]
     fn signature_incorporee_d_un_greffon_lue() {
         // #2685 : Acrobat lit la signature de ses greffons par
         // CryptQueryObject(CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
@@ -2885,6 +2965,42 @@ mod tests {
             unsafe { CertFindCertificateInStore(root, 1, 0, 0x10000, &b as *const _ as usize, 0) };
         assert_eq!(found, c);
         CertFreeCertificateContext(found);
+    }
+
+    /// #2694 : CERT_FIND_SUBJECT_CERT retrouve le certificat par l'émetteur
+    /// et le numéro de série d'un CERT_INFO (comme après CryptMsgGetParam
+    /// CMSG_SIGNER_INFO_PARAM).
+    #[test]
+    fn certificat_retrouve_par_emetteur_et_numero_de_serie() {
+        use crate::setup::appx_signature::CODE_ROOTS;
+        let store = new_store();
+        let a = store_add_der(store, CODE_ROOTS[4]).unwrap();
+        let b = store_add_der(store, CODE_ROOTS[5]).unwrap();
+        unsafe {
+            for c in [a, b] {
+                let info = &cert(c).unwrap().info as *const CertInfo as usize;
+                let found = CertFindCertificateInStore(store, 1, 0, 0xb0000, info, 0);
+                assert_eq!(found, c);
+                CertFreeCertificateContext(found);
+            }
+            // Même émetteur, autre numéro de série : rien.
+            let k = cert(a).unwrap();
+            let serial = [1u8, 2, 3];
+            let mut other = std::ptr::read(&k.info);
+            other.serial = Blob {
+                cb: 3,
+                pb: serial.as_ptr(),
+            };
+            let none = CertFindCertificateInStore(
+                store,
+                1,
+                0,
+                0xb0000,
+                &other as *const CertInfo as usize,
+                0,
+            );
+            assert_eq!(none, 0);
+        }
     }
 
     /// Certificat auto-signé jetable (openssl de l'hôte), avec trois noms

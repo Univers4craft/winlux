@@ -25,6 +25,7 @@ pub mod advapi32_rsa;
 pub mod advapi32_services;
 pub mod afd;
 pub mod apps_win32;
+pub mod atlthunk;
 pub mod audio_com;
 pub mod bcrypt;
 pub mod cabinet_fci;
@@ -60,6 +61,7 @@ pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
 pub mod crypt32_encode;
+pub mod crypt32_signer;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_combine;
@@ -327,6 +329,7 @@ pub mod winmm_midi;
 pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
+pub mod winrt_apiinfo;
 pub mod winrt_coreapp;
 pub mod winrt_ui;
 pub mod winrt_uri;
@@ -1359,6 +1362,13 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "usp10",
                 exports: usp10::usp10_exports(),
+                handle: 0,
+            },
+            // Thunks de fenêtre d'ATL 14 (#2700), chargés par
+            // LoadLibraryExA(…, LOAD_LIBRARY_SEARCH_SYSTEM32).
+            Builtin {
+                name: "atlthunk",
+                exports: atlthunk::exports(),
                 handle: 0,
             },
             // Client DHCP (WPAD de Chromium), importé par claude.exe.
