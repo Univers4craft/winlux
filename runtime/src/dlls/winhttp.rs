@@ -220,6 +220,45 @@ pub unsafe extern "win64" fn connect(
     };
     insert(session, Kind::Connection(options, host, port))
 }
+/// Pointeurs d'un tableau du programme terminé par NULL (types acceptés de
+/// WinHttpOpenRequest et HttpOpenRequestA/W), lus à la taille d'un pointeur
+/// du programme : 4 octets pour un programme x86 (#2597). `None` au-delà de
+/// `max` entrées.
+///
+/// # Safety
+/// `array` doit désigner un tableau lisible terminé par un pointeur nul.
+pub(crate) unsafe fn program_pointers(array: usize, max: usize) -> Option<Vec<usize>> {
+    let step = crate::wow32::pointer_size();
+    let mut out = Vec::new();
+    loop {
+        let pointer = crate::wow32::read_ptr(array + out.len() * step);
+        if pointer == 0 {
+            return Some(out);
+        }
+        if out.len() == max {
+            return None;
+        }
+        out.push(pointer);
+    }
+}
+
+/// Types acceptés (UTF-16) d'un tableau du programme ; erreur 87 si une
+/// chaîne est illisible ou s'il y en a plus de 63.
+///
+/// # Safety
+/// `accept` est nul ou désigne un tableau lisible terminé par NULL.
+pub(crate) unsafe fn accept_types_wide(accept: usize) -> Result<Option<Vec<String>>, u32> {
+    if accept == 0 {
+        return Ok(None);
+    }
+    let pointers = program_pointers(accept, 63).ok_or(87u32)?;
+    let mut values = Vec::new();
+    for pointer in pointers {
+        values.push(wide(pointer as *const u16, u32::MAX).map_err(|_| 87u32)?);
+    }
+    Ok(Some(values))
+}
+
 pub unsafe extern "win64" fn open_request(
     connection: usize,
     verb: *const u16,
@@ -227,6 +266,25 @@ pub unsafe extern "win64" fn open_request(
     version: *const u16,
     referer: *const u16,
     accept: *const *const u16,
+    flags: u32,
+) -> usize {
+    match accept_types_wide(accept as usize) {
+        Ok(types) => open_request_types(connection, verb, path, version, referer, types, flags),
+        Err(code) => fail(code),
+    }
+}
+
+/// WinHttpOpenRequest, types acceptés déjà lus.
+///
+/// # Safety
+/// Chaînes nulles ou lisibles et terminées par un zéro.
+pub(crate) unsafe fn open_request_types(
+    connection: usize,
+    verb: *const u16,
+    path: *const u16,
+    version: *const u16,
+    referer: *const u16,
+    accept: Option<Vec<String>>,
     flags: u32,
 ) -> usize {
     if flags & !SECURE != 0 {
@@ -267,21 +325,9 @@ pub unsafe extern "win64" fn open_request(
     if !referer.is_empty() {
         headers.push(("Referer".into(), referer));
     }
-    if !accept.is_null() {
-        let mut values = Vec::new();
-        for index in 0..64 {
-            let pointer = *accept.add(index);
-            if pointer.is_null() {
-                break;
-            }
-            let value = match wide(pointer, u32::MAX) {
-                Ok(value) if clean(&value) => value,
-                _ => return fail(87),
-            };
-            values.push(value);
-            if index == 63 {
-                return fail(87);
-            }
+    if let Some(values) = accept {
+        if !values.iter().all(|value| clean(value)) {
+            return fail(87);
         }
         if !values.is_empty() {
             headers.push(("Accept".into(), values.join(", ")));
