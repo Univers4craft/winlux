@@ -12,6 +12,7 @@
 #include <time.h>
 #include <locale.h>
 #include <windows.h>
+#include <wininet.h>
 #include <io.h>
 #include <wchar.h>
 
@@ -367,6 +368,39 @@ int main(int argc, char **argv) {
                  && wcscmp(out, L"42-ab") == 0;
         }
         CHECK(45, ok);
+    }
+    /* #2554 : InternetCrackUrlA/W sur un URL_COMPONENTS x86 de 60 octets
+       (l'outil de déploiement d'Office tombait en faute) : mode pointeurs
+       pour l'hôte en A, copie du chemin en W, rien écrit après la
+       structure. */
+    {
+        typedef BOOL (__stdcall *ca_t)(const char *, DWORD, DWORD, URL_COMPONENTSA *);
+        typedef BOOL (__stdcall *cw_t)(const wchar_t *, DWORD, DWORD, URL_COMPONENTSW *);
+        HMODULE n = LoadLibraryA("wininet.dll");
+        ca_t ca = n ? (ca_t)GetProcAddress(n, "InternetCrackUrlA") : 0;
+        cw_t cw = n ? (cw_t)GetProcAddress(n, "InternetCrackUrlW") : 0;
+        int ok = ca && cw && sizeof(URL_COMPONENTSA) == 60;
+        if (ok) {
+            static const char url[] = "https://exemple.fr:8443/a/b?c=d";
+            struct { URL_COMPONENTSA c; unsigned char garde[16]; } a;
+            memset(&a, 0, sizeof a);
+            memset(a.garde, 0x5A, sizeof a.garde);
+            a.c.dwStructSize = sizeof a.c;
+            a.c.dwHostNameLength = 1;
+            ok = ca(url, 0, 0, &a.c) && a.c.lpszHostName == url + 8
+                 && a.c.dwHostNameLength == 10 && a.c.nPort == 8443
+                 && a.c.nScheme == INTERNET_SCHEME_HTTPS
+                 && a.garde[0] == 0x5A && a.garde[15] == 0x5A;
+            wchar_t chemin[32];
+            URL_COMPONENTSW w;
+            memset(&w, 0, sizeof w);
+            w.dwStructSize = sizeof w;
+            w.lpszUrlPath = chemin;
+            w.dwUrlPathLength = 32;
+            ok = ok && cw(L"http://h.fr/x/y?z", 0, 0, &w) && w.dwUrlPathLength == 4
+                 && wcscmp(chemin, L"/x/y") == 0 && w.nPort == 80;
+        }
+        CHECK(46, ok);
     }
     return fails;
 }
