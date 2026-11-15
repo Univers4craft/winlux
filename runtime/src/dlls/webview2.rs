@@ -245,6 +245,7 @@ enum Family {
     SourceChanged,
     ControllerOptions,
     ProcessCollection,
+    Profile,
 }
 
 impl Family {
@@ -261,6 +262,9 @@ impl Family {
             Family::SourceChanged => &SOURCE_CHANGED_ARGS_IIDS,
             Family::ControllerOptions => &CONTROLLER_OPTIONS_IIDS,
             Family::ProcessCollection => &PROCESS_COLLECTION_IIDS,
+            // Seule l'interface de base est servie (#2614) : Profile2 à 8
+            // sont refusées plutôt que rendues vides.
+            Family::Profile => &PROFILE_IIDS[..1],
         }
     }
 }
@@ -420,6 +424,7 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::SourceChanged => (SOURCE_CHANGED_ARGS_SLOTS, source_changed_methods()),
         Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
         Family::ProcessCollection => (PROCESS_COLLECTION_SLOTS, process_collection_methods()),
+        Family::Profile => (PROFILE_SLOTS, profile_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
@@ -537,6 +542,19 @@ struct Env {
     dispatcher: usize,
     user_data: String,
     language: String,
+    /// Dossier de données tel que l'application l'a donné (chemin Windows).
+    user_data_win: String,
+    /// Profil par défaut de l'environnement (#2614).
+    profile: Mutex<ProfileState>,
+}
+
+/// Réglages modifiables du profil (#2614).
+#[derive(Default)]
+struct ProfileState {
+    /// None : dossier de téléchargement par défaut de l'utilisateur.
+    download_folder: Option<String>,
+    /// COREWEBVIEW2_PREFERRED_COLOR_SCHEME : 0 AUTO (défaut), 1 LIGHT, 2 DARK.
+    color_scheme: u32,
 }
 
 /// Commande du moteur web : `WINLUX_WEBVIEW_HELPER` (« python3.12 x.py »
@@ -581,6 +599,8 @@ unsafe extern "win64" fn create_environment_with_options(
             .to_string_lossy()
             .into_owned(),
         language,
+        user_data_win: wstr(user_data_folder),
+        profile: Mutex::new(ProfileState::default()),
     });
     crate::trace!("WebView2 : environnement (données {:?})", env.user_data);
     add_ref(handler);
@@ -692,6 +712,100 @@ unsafe extern "win64" fn env_get_process_extended_infos(this: usize, handler: us
             release(obj);
             release(handler);
         }),
+    );
+    S_OK
+}
+
+// --- ICoreWebView2Profile (#2614) ---
+
+fn profile_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, profile_name as *const () as usize),
+        (1, get_false as *const () as usize),
+        (2, profile_path as *const () as usize),
+        (3, profile_get_download as *const () as usize),
+        (4, profile_put_download as *const () as usize),
+        (5, profile_get_color as *const () as usize),
+        (6, profile_put_color as *const () as usize),
+    ]
+}
+/// Nom du profil par défaut : la documentation publique ne le donne pas ;
+/// Winlux répond « Default ».
+const DEFAULT_PROFILE: &str = "Default";
+unsafe extern "win64" fn profile_name(_this: usize, out: *mut *mut u16) -> i32 {
+    co_string(DEFAULT_PROFILE, out)
+}
+/// Chemin du profil : `<dossier de données>\Default` (forme non donnée
+/// par la documentation publique, choix de Winlux).
+unsafe extern "win64" fn profile_path(this: usize, out: *mut *mut u16) -> i32 {
+    let base = com(this)
+        .env
+        .as_ref()
+        .map(|e| e.user_data_win.trim_end_matches('\\').to_string())
+        .unwrap_or_default();
+    let path = if base.is_empty() {
+        String::new()
+    } else {
+        format!("{base}\\{DEFAULT_PROFILE}")
+    };
+    co_string(&path, out)
+}
+unsafe extern "win64" fn profile_get_download(this: usize, out: *mut *mut u16) -> i32 {
+    let chosen = com(this)
+        .env
+        .as_ref()
+        .and_then(|e| super::lock(&e.profile).download_folder.clone());
+    // Défaut documenté : le dossier de téléchargement de l'utilisateur.
+    let path = chosen.unwrap_or_else(|| {
+        super::knownfolders::known_folder_path("374DE290-123F-4565-9164-39C4925E467B", 0)
+            .unwrap_or_default()
+    });
+    co_string(&path, out)
+}
+/// Valeur invalide : E_INVALIDARG, comme le dit la documentation publique.
+unsafe extern "win64" fn profile_put_download(this: usize, path: *const u16) -> i32 {
+    if path.is_null() {
+        return E_INVALIDARG;
+    }
+    let path = wstr(path);
+    if path.trim().is_empty() {
+        return E_INVALIDARG;
+    }
+    if let Some(e) = com(this).env.as_ref() {
+        super::lock(&e.profile).download_folder = Some(path);
+    }
+    S_OK
+}
+unsafe extern "win64" fn profile_get_color(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = com(this)
+        .env
+        .as_ref()
+        .map_or(0, |e| super::lock(&e.profile).color_scheme);
+    S_OK
+}
+unsafe extern "win64" fn profile_put_color(this: usize, scheme: u32) -> i32 {
+    if scheme > 2 {
+        return E_INVALIDARG;
+    }
+    if let Some(e) = com(this).env.as_ref() {
+        super::lock(&e.profile).color_scheme = scheme;
+    }
+    S_OK
+}
+/// ICoreWebView2_13::get_Profile : le profil par défaut de l'environnement
+/// (les réglages d'un ControllerOptions ne sont pas encore reportés).
+unsafe extern "win64" fn web_get_profile(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::Profile,
+        com(this).env.clone(),
+        None,
+        Args::default(),
     );
     S_OK
 }
@@ -1438,6 +1552,8 @@ fn webview_methods() -> Vec<(usize, usize)> {
         (54, ok2 as *const () as usize),
         (55, ok2 as *const () as usize),
     ];
+    // ICoreWebView2_13 : Profile (#2614).
+    m.push((102, web_get_profile as *const () as usize));
     // Événements acceptés mais jamais déclenchés (cadres, dialogues,
     // autorisations, nouvelles fenêtres, requêtes, fermeture…).
     for (add, remove) in [
@@ -2372,5 +2488,68 @@ mod tests {
             unsafe { std::mem::transmute(set[3 + 20]) };
         assert_eq!(unsafe { f(obj, std::ptr::null_mut()) }, E_POINTER);
         com_release(obj);
+    }
+
+    /// #2614 : get_Profile rend un ICoreWebView2Profile dont les propriétés
+    /// se lisent, et dont les réglages modifiables se relisent.
+    #[test]
+    fn profil_de_la_vue_2614() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 102], web_get_profile as *const () as usize);
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: "C:\\Données\\Teams\\".to_string(),
+            profile: Mutex::new(ProfileState::default()),
+        });
+        let view = new_com(Family::WebView, Some(env), None, Args::default());
+        let mut profile = 0usize;
+        assert_eq!(unsafe { web_get_profile(view, &mut profile) }, S_OK);
+        let mut out = 0usize;
+        assert_eq!(
+            query_interface(profile, PROFILE_IIDS[0].as_ptr(), &mut out),
+            S_OK
+        );
+        com_release(out);
+        assert_eq!(
+            query_interface(profile, PROFILE_IIDS[1].as_ptr(), &mut out),
+            E_NOINTERFACE
+        );
+        let read = |f: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32| -> String {
+            let mut p: *mut u16 = std::ptr::null_mut();
+            assert_eq!(unsafe { f(profile, &mut p) }, S_OK);
+            wstr(p)
+        };
+        assert_eq!(read(profile_name), "Default");
+        assert_eq!(read(profile_path), "C:\\Données\\Teams\\Default");
+        let mut private = 7i32;
+        assert_eq!(unsafe { get_false(profile, &mut private) }, S_OK);
+        assert_eq!(private, 0);
+        // Dossier de téléchargement : écrit, relu ; vide refusé.
+        let dir: Vec<u16> = "D:\\Reçus\0".encode_utf16().collect();
+        assert_eq!(unsafe { profile_put_download(profile, dir.as_ptr()) }, S_OK);
+        assert_eq!(read(profile_get_download), "D:\\Reçus");
+        let empty: Vec<u16> = vec![0];
+        assert_eq!(
+            unsafe { profile_put_download(profile, empty.as_ptr()) },
+            E_INVALIDARG
+        );
+        // Thème : AUTO par défaut, DARK relu, hors énumération refusé.
+        let mut scheme = 9u32;
+        assert_eq!(unsafe { profile_get_color(profile, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 0);
+        assert_eq!(unsafe { profile_put_color(profile, 2) }, S_OK);
+        assert_eq!(unsafe { profile_put_color(profile, 3) }, E_INVALIDARG);
+        assert_eq!(unsafe { profile_get_color(profile, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 2);
+        // Le même environnement garde ses réglages d'un appel à l'autre.
+        let mut again = 0usize;
+        assert_eq!(unsafe { web_get_profile(view, &mut again) }, S_OK);
+        assert_eq!(unsafe { profile_get_color(again, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 2);
+        com_release(again);
+        com_release(profile);
+        com_release(view);
     }
 }
