@@ -365,7 +365,7 @@ pub(crate) unsafe fn report(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc
         }
         for (i, &(frame, sure)) in frames[..frame_count].iter().enumerate().skip(1) {
             write_literal(b"winlux: cadre ");
-            write_fd_dec(2, i as u64);
+            write_fd_dec(crate::log::diag_fd(), i as u64);
             write_literal(if sure { b" 0x" } else { b" ?0x" });
             write_hex(frame);
             write_place(frame);
@@ -572,11 +572,11 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
             write_literal(b" bloc 0x");
             write_hex(ptr);
             write_literal(b" taille ");
-            write_fd_dec(2, size as u64);
+            write_fd_dec(crate::log::diag_fd(), size as u64);
             write_literal(b" servie ");
-            write_fd_dec(2, served as u64);
+            write_fd_dec(crate::log::diag_fd(), served as u64);
             write_literal(if offset < 0 { b" -" } else { b" +" });
-            write_fd_dec(2, offset.unsigned_abs() as u64);
+            write_fd_dec(crate::log::diag_fd(), offset.unsigned_abs() as u64);
             write_literal(if offset < 0 {
                 b" (avant le bloc)".as_slice()
             } else if offset as usize >= size {
@@ -585,16 +585,16 @@ unsafe fn write_heap_page(name: &[u8], value: usize) {
                 b" (dans le bloc)".as_slice()
             });
             write_literal(b" alloue n");
-            write_fd_dec(2, alloc_seq);
+            write_fd_dec(crate::log::diag_fd(), alloc_seq);
             write_literal(b" fil ");
-            write_fd_dec(2, alloc_tid as u64);
+            write_fd_dec(crate::log::diag_fd(), alloc_tid as u64);
             if free_seq == 0 {
                 write_literal(b" vivant\n");
             } else {
                 write_literal(b" libere n");
-                write_fd_dec(2, free_seq);
+                write_fd_dec(crate::log::diag_fd(), free_seq);
                 write_literal(b" fil ");
-                write_fd_dec(2, free_tid as u64);
+                write_fd_dec(crate::log::diag_fd(), free_tid as u64);
                 write_literal(b"\n");
             }
             write_heap_frames(name, b"allocation", &alloc_frames);
@@ -615,9 +615,9 @@ unsafe fn write_fault_thread() {
     };
     libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t);
     write_literal(b"winlux: fil ");
-    write_fd_dec(2, tid);
+    write_fd_dec(crate::log::diag_fd(), tid);
     write_literal(b" @");
-    write_fd_dec(2, t.tv_sec as u64);
+    write_fd_dec(crate::log::diag_fd(), t.tv_sec as u64);
     write_literal(b".");
     let us = (t.tv_nsec / 1000) as u64;
     // Six chiffres, zéros en tête compris.

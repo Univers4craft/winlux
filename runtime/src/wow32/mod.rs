@@ -733,6 +733,8 @@ pub fn reexec_if_needed() {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os();
     let _ = args.next();
+    // Le descripteur de diagnostic passe à l'exécutable relancé (#2530).
+    crate::log::keep_diag_fd_across_exec();
     let error = std::process::Command::new("/proc/self/exe")
         .arg0(std::env::args_os().next().unwrap_or_default())
         .args(args)
@@ -2049,7 +2051,7 @@ fn note_result(desc: u32, esp: u32, r: u64) {
             if let Some(filter) = history_stream() {
                 let line = passage_line(&p);
                 if stream_match(filter, &line) {
-                    eprintln!("winlux[wow32] {line}");
+                    crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
                 }
             }
             return;
@@ -2061,7 +2063,7 @@ fn note(p: Passage) {
     if let Some(filter) = history_stream() {
         let line = passage_line(&p);
         if stream_match(filter, &line) {
-            eprintln!("winlux[wow32] {line}");
+            crate::log::write_diag(format!("winlux[wow32] {line}\n").as_bytes());
         }
     }
     let Some(s) = my_slot() else {
@@ -2181,14 +2183,18 @@ impl SigLine {
         self.push(&b[i..]);
     }
 
-    /// Termine la ligne et l'écrit sur la sortie d'erreur en un seul write(2).
+    /// Termine la ligne et l'écrit sur le descripteur de diagnostic (#2530),
+    /// jamais dans le tube d'un programme, en un seul write(2).
     fn write(mut self) {
         if self.len == self.buf.len() {
             self.len -= 1;
         }
         self.buf[self.len] = b'\n';
-        unsafe {
-            libc::write(2, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+        let fd = crate::log::diag_fd();
+        if fd >= 0 {
+            unsafe {
+                libc::write(fd, self.buf.as_ptr() as *const libc::c_void, self.len + 1);
+            }
         }
     }
 }
@@ -2660,9 +2666,12 @@ fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         });
     }
     if !d.supported {
-        eprintln!(
-            "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).",
-            d.label
+        crate::log::write_diag(
+            format!(
+                "\nwinlux: le programme 32 bits a appelé {}, pas encore disponible pour les programmes 32 bits (#232).\n",
+                d.label
+            )
+            .as_bytes(),
         );
         crate::thunks::log_missing(&format!("{} (32 bits)", d.label), true);
         crate::crash::record_failure(
