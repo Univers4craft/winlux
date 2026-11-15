@@ -16,7 +16,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
-    {"ev": "ready", "xid"}   {"ev": "nav_starting", "uri", "nav"}
+    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
     {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
@@ -94,6 +94,63 @@ _TR = {
 def _t(text):
     row = _TR.get(text)
     return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
+# Caractères d'un « token » HTTP (RFC 9110, §5.6.2).
+_TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+
+def user_agent_header(value):
+    """Agent utilisateur réécrit selon la grammaire de l'en-tête User-Agent.
+
+    RFC 9110, §10.1.5 : produits « nom[/version] » (tokens) et commentaires
+    entre parenthèses, séparés par des espaces. WebView2 applique toute
+    chaîne (put_UserAgent), WebKitGTK refuse celles hors grammaire et garde
+    l'ancienne (#2611). On garde donc chaque mot : un caractère interdit
+    devient « - » dans un nom, « . » dans une version (« 1951/49 » →
+    « 1951.49 »), « ? » dans un commentaire ; une parenthèse restée ouverte
+    est fermée. Rend "" quand il ne reste rien (agent par défaut).
+    """
+    words, i, n = [], 0, len(value)
+    while i < n:
+        c = value[i]
+        if c in " \t\r\n":
+            i += 1
+        elif c == "(":
+            depth, j, out = 0, i, []
+            while j < n:
+                d = value[j]
+                if d == "(":
+                    depth += 1
+                elif d == ")":
+                    depth -= 1
+                if d in "()" or (" " <= d <= "~" and d != "\\"):
+                    out.append(d)
+                elif d in "\t\r\n":
+                    out.append(" ")
+                else:
+                    out.append("?")
+                j += 1
+                if depth == 0:
+                    break
+            out.append(")" * depth)
+            words.append("".join(out))
+            i = j
+        else:
+            j = i
+            while j < n and value[j] not in " \t\r\n(":
+                j += 1
+            word = value[i:j]
+            name, slash, version = word.partition("/")
+            name = "".join(ch if ch in _TCHAR else "-" for ch in name).strip("-") or "-"
+            version = "".join(ch if ch in _TCHAR else "." for ch in version).strip(".")
+            words.append(name + ("/" + version if slash and version else ""))
+            i = j
+    # Un agent utilisateur commence par un produit, pas par un commentaire.
+    while words and words[0].startswith("("):
+        words.pop(0)
+    return " ".join(words)
 
 
 def emit(**event):
@@ -345,7 +402,10 @@ class View:
         self.bounds(cmd)
         if not cmd.get("visible", True):
             self.window.hide()
-        emit(ev="ready", xid=gdk_window.get_xid())
+        # Agent par défaut du moteur, que get_UserAgent rend tant que
+        # l'application n'en a pas écrit un autre (#2611).
+        emit(ev="ready", xid=gdk_window.get_xid(),
+             user_agent=self.view.get_settings().get_user_agent() or "")
 
     def reparent(self, parent):
         gdk_window = self.window.get_window() if self.window else None
@@ -389,6 +449,15 @@ class View:
             data = f.read()
         stream = self.Gio.MemoryInputStream.new_from_bytes(self.GLib.Bytes.new(data))
         request.finish(stream, len(data), mime)
+
+    def set_user_agent(self, settings, wanted):
+        """put_UserAgent : appliquée telle quelle si WebKit l'accepte (#2611)."""
+        applied = user_agent_header(wanted)
+        if applied != wanted.strip():
+            print(f"winlux-webview : agent utilisateur hors grammaire HTTP {wanted[:400]!r}, "
+                  f"appliqué {applied[:400]!r} (#2611)", file=sys.stderr, flush=True)
+        # "" rend l'agent par défaut du moteur (webkit_settings_set_user_agent).
+        settings.set_user_agent(applied or None)
 
     def bounds(self, cmd):
         if self.window is None:
@@ -509,7 +578,7 @@ class View:
             if "zoom" in cmd:
                 self.view.set_zoom_level(float(cmd["zoom"]) or 1.0)
             if "user_agent" in cmd:
-                settings.set_user_agent(cmd["user_agent"])
+                self.set_user_agent(settings, cmd["user_agent"] or "")
         elif op == "close":
             return False
         return True
