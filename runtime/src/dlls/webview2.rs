@@ -1057,6 +1057,10 @@ impl View {
                 self.controller.store(ctrl, Ordering::SeqCst);
                 self.webview.store(web, Ordering::SeqCst);
                 self.settings.store(settings, Ordering::SeqCst);
+                engine_user_agent(
+                    &mut super::lock(&self.state),
+                    get_str(&ev, "user_agent").unwrap_or_default(),
+                );
                 let h = self.pending_create.swap(0, Ordering::SeqCst);
                 crate::trace!("WebView2 : moteur prêt (fenêtre X {})", get_num(&ev, "xid"));
                 if h != 0 {
@@ -2001,6 +2005,24 @@ bool_setting!(set_get_messages, set_put_messages, messages_enabled, "");
 bool_setting!(set_get_devtools, set_put_devtools, devtools, "devtools");
 bool_setting!(set_get_menus, set_put_menus, context_menus, "menus");
 
+/// Agent par défaut : celui que le moteur annonce dans `ready`, tant que
+/// l'application n'en a pas posé un (#2617). Avant, get_UserAgent rendait
+/// "" et une application qui y ajoute son suffixe envoyait « ␣Appli/… ».
+fn engine_user_agent(state: &mut ViewState, engine: String) {
+    if state.user_agent.is_empty() {
+        state.user_agent = engine;
+    }
+}
+/// put_UserAgent : « If the parameter is empty the User Agent will not be
+/// updated and the current User Agent will remain » (documentation
+/// publique, #2617). Rend vrai si l'agent change.
+fn put_user_agent(state: &mut ViewState, ua: &str) -> bool {
+    if ua.is_empty() {
+        return false;
+    }
+    state.user_agent = ua.to_string();
+    true
+}
 unsafe extern "win64" fn set_get_user_agent(this: usize, out: *mut *mut u16) -> i32 {
     let Some(v) = view_of(this) else {
         return E_FAIL;
@@ -2013,7 +2035,9 @@ unsafe extern "win64" fn set_put_user_agent(this: usize, ua: *const u16) -> i32 
         return E_FAIL;
     };
     let ua = wstr(ua);
-    super::lock(&v.state).user_agent = ua.clone();
+    if !put_user_agent(&mut super::lock(&v.state), &ua) {
+        return S_OK;
+    }
     v.send(&format!(
         "{{\"op\":\"settings\",\"user_agent\":{}}}",
         json_escape(&ua)
@@ -2422,5 +2446,24 @@ mod tests {
             assert_eq!(web_get_memory_level(view, std::ptr::null_mut()), E_POINTER);
         }
         com_release(view);
+    }
+
+    /// #2617 : l'agent du moteur sert de défaut tant que l'application n'en
+    /// a pas posé un ; put_UserAgent("") ne change rien.
+    #[test]
+    fn agent_utilisateur_par_defaut_2617() {
+        let mut state = ViewState::default();
+        engine_user_agent(&mut state, "Mozilla/5.0 (X11) AppleWebKit/605.1.15".into());
+        assert_eq!(state.user_agent, "Mozilla/5.0 (X11) AppleWebKit/605.1.15");
+        // L'appli ajoute son suffixe à ce qu'elle a lu : aucune espace en tête.
+        let teams = format!("{} Teams/2.0", state.user_agent);
+        assert!(put_user_agent(&mut state, &teams));
+        assert!(!state.user_agent.starts_with(' '));
+        // Vide : l'agent courant reste (documentation publique).
+        assert!(!put_user_agent(&mut state, ""));
+        assert_eq!(state.user_agent, teams);
+        // Un `ready` tardif n'écrase pas l'agent choisi par l'application.
+        engine_user_agent(&mut state, "autre".into());
+        assert_eq!(state.user_agent, teams);
     }
 }
