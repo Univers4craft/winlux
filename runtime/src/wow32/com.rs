@@ -1970,7 +1970,11 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
             Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
         ),
         // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
-        ("mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9", "DllGetClassObject") => {
+        // taskschd (#2577) : même fabrique commune.
+        (
+            "mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9" | "taskschd",
+            "DllGetClassObject",
+        ) => {
             k!(I, Iid, OutQ)
         }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
