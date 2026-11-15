@@ -302,6 +302,7 @@ pub mod vk_bindings;
 pub mod vulkan1;
 pub mod wbem;
 pub mod weak_ref;
+pub mod webservices;
 pub mod webview2;
 pub mod webview2_iids;
 pub mod wer;
@@ -324,6 +325,7 @@ pub mod winmm_midi_in;
 pub mod winmm_mmio;
 pub mod winmm_waveout;
 pub mod winrt_ui;
+pub mod winrt_uri;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
@@ -1129,6 +1131,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "aclui",
                 exports: activeds_aclui::aclui_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "webservices",
+                exports: webservices::exports(),
                 handle: fake_module(),
             },
             Builtin {
