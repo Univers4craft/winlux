@@ -516,6 +516,59 @@ clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "
 lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
     "$tmp/xaudio64/xaudio64.obj" "$tmp/xaudio64/xaudio_k32.lib" "$tmp/xaudio64/xaudio_xa29.lib" \
     /out:"$out/xaudio64.exe"
+# Media Foundation, objets de base (#2428, lot 3) : mf32.exe (x86) et
+# mf64.exe (x64).
+cat >"$tmp/mf_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+Sleep@4
+DEF
+cat >"$tmp/mf_ole32.def" <<'DEF'
+LIBRARY ole32.dll
+EXPORTS
+CoInitializeEx@8
+CoTaskMemFree@4
+CreateStreamOnHGlobal@12
+DEF
+cat >"$tmp/mf_mfplat.def" <<'DEF'
+LIBRARY mfplat.dll
+EXPORTS
+MFStartup@8
+MFShutdown@0
+MFCreateAttributes@8
+MFCreateMediaType@4
+MFCreateSample@4
+MFCreateMemoryBuffer@8
+MFCreateAlignedMemoryBuffer@12
+MFCreateMediaBufferWrapper@16
+MFCreateMediaBufferFromMediaType@24
+MFCreateCollection@4
+MFCreateEventQueue@4
+MFCreateMediaEvent@20
+MFCreateAsyncResult@16
+MFInvokeCallback@4
+MFCreateStreamDescriptor@16
+MFCreatePresentationDescriptor@12
+MFSerializeAttributesToStream@12
+MFDeserializeAttributesFromStream@12
+MFShutdownObject@4
+DEF
+mkdir -p "$tmp/mf64"
+for lib in mf_k32 mf_ole32 mf_mfplat; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/mf64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/mf64/$lib.def" -l "$tmp/mf64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/mf32.c" -o "$tmp/mf32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/mf32.obj" "$tmp/mf_k32.lib" "$tmp/mf_ole32.lib" "$tmp/mf_mfplat.lib" /out:"$out/mf32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/mf32.c" -o "$tmp/mf64/mf64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
+    "$tmp/mf64/mf64.obj" "$tmp/mf64/mf_k32.lib" "$tmp/mf64/mf_ole32.lib" "$tmp/mf64/mf_mfplat.lib" \
+    /out:"$out/mf64.exe"
 # Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
 cat >"$tmp/d3d11_k32.def" <<'DEF'
 LIBRARY kernel32.dll

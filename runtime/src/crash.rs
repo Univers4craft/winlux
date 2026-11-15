@@ -647,7 +647,11 @@ unsafe fn write_heap_frames(name: &[u8], what: &[u8], frames: &[usize]) {
 }
 
 unsafe fn write_literal(s: &[u8]) {
-    let _ = libc::write(2, s.as_ptr() as *const libc::c_void, s.len());
+    // Descripteur de diagnostic, pas le tube d'un programme (#2515).
+    let fd = crate::log::diag_fd();
+    if fd >= 0 {
+        let _ = libc::write(fd, s.as_ptr() as *const libc::c_void, s.len());
+    }
 }
 
 unsafe fn write_hex(mut n: usize) {
