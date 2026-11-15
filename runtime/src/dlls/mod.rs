@@ -261,6 +261,7 @@ pub mod seh_hw;
 pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
+pub mod setupapi_cab;
 pub mod setupinf;
 pub mod sfnt;
 pub mod shcore_obsolete;
