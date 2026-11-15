@@ -510,5 +510,63 @@ int main(int argc, char **argv) {
         }
         CHECK(49, ok);
     }
+    /* #2623 : webservices.dll (WWSAPI) en x86. L'outil de déploiement
+       d'Office la charge en différé pour lire une réponse XML. Structures
+       déclarées ici d'après l'ordre des champs de Microsoft Learn et
+       windows-rs (aucun en-tête webservices.h). */
+    {
+        typedef struct { ULONG length; BYTE *bytes; void *dictionary; ULONG id; } wxs;
+        typedef struct { ULONG mapping; wxs *localName; wxs *ns; ULONG type; void *typeDescription;
+                         ULONG offset; ULONG options; void *defaultValue; ULONG countOffset;
+                         wxs *itemLocalName; wxs *itemNs; void *itemRange; } wfd;
+        typedef struct { ULONG size; ULONG alignment; wfd **fields; ULONG fieldCount; wxs *typeLocalName;
+                         wxs *typeNs; void *parentType; void **subTypes; ULONG subTypeCount;
+                         ULONG structOptions; } wsd;
+        typedef struct { ULONG version; wchar_t *nom; wchar_t **urls; ULONG n; } cfg_t;
+        typedef HRESULT (__stdcall *creader_t)(void *, ULONG, void **, void *);
+        typedef HRESULT (__stdcall *cheap_t)(SIZE_T, SIZE_T, void *, ULONG, void **, void *);
+        typedef HRESULT (__stdcall *input_t)(void *, void *, void *, void *, ULONG, void *);
+        typedef HRESULT (__stdcall *tostart_t)(void *, wxs *, wxs *, BOOL *, void *);
+        typedef HRESULT (__stdcall *start_t)(void *, void *);
+        typedef HRESULT (__stdcall *rtype_t)(void *, ULONG, ULONG, void *, ULONG, void *, void *, ULONG, void *);
+        typedef void (__stdcall *free_t)(void *);
+        HMODULE h = LoadLibraryA("webservices.dll");
+        creader_t creader = h ? (creader_t)GetProcAddress(h, "WsCreateReader") : 0;
+        cheap_t cheap = h ? (cheap_t)GetProcAddress(h, "WsCreateHeap") : 0;
+        input_t input = h ? (input_t)GetProcAddress(h, "WsSetInput") : 0;
+        tostart_t tostart = h ? (tostart_t)GetProcAddress(h, "WsReadToStartElement") : 0;
+        start_t start = h ? (start_t)GetProcAddress(h, "WsReadStartElement") : 0;
+        rtype_t rtype = h ? (rtype_t)GetProcAddress(h, "WsReadType") : 0;
+        free_t freader = h ? (free_t)GetProcAddress(h, "WsFreeReader") : 0;
+        free_t fheap = h ? (free_t)GetProcAddress(h, "WsFreeHeap") : 0;
+        int ok = creader && cheap && input && tostart && start && rtype && freader && fheap;
+        if (ok) {
+            static const char xml[] =
+                "<Liste><Cfg Version=\"16\"><Nom>Office</Nom><Url>a</Url><Url>b</Url></Cfg></Liste>";
+            wxs liste = { 5, (BYTE *)"Liste", 0, 0 }, version = { 7, (BYTE *)"Version", 0, 0 };
+            wxs nom = { 3, (BYTE *)"Nom", 0, 0 }, url = { 3, (BYTE *)"Url", 0, 0 };
+            wfd fv = { 1, &version, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0 };
+            wfd fn_ = { 2, &nom, 0, 17, 0, 4, 0, 0, 0, 0, 0, 0 };
+            wfd fu = { 3, 0, 0, 17, 0, 8, 0, 0, 12, &url, 0, 0 };
+            wfd *fields[3] = { &fv, &fn_, &fu };
+            wsd sd = { sizeof(cfg_t), 4, fields, 3, 0, 0, 0, 0, 0, 0 };
+            ULONG enc[2] = { 1, 1 };
+            struct { ULONG type; const void *data; ULONG size; } in = { 1, xml, sizeof xml - 1 };
+            void *r = 0, *heap = 0;
+            BOOL found = FALSE;
+            cfg_t c;
+            memset(&c, 0, sizeof c);
+            ok = creader(0, 0, &r, 0) == 0 && cheap(1 << 20, 0, 0, 0, &heap, 0) == 0
+                 && input(r, enc, &in, 0, 0, 0) == 0
+                 && tostart(r, &liste, 0, &found, 0) == 0 && found
+                 && start(r, 0) == 0
+                 && rtype(r, 1, 26, &sd, 1, heap, &c, sizeof c, 0) == 0
+                 && c.version == 16 && c.nom && wcscmp(c.nom, L"Office") == 0
+                 && c.n == 2 && c.urls && wcscmp(c.urls[0], L"a") == 0 && wcscmp(c.urls[1], L"b") == 0;
+            if (r) freader(r);
+            if (heap) fheap(heap);
+        }
+        CHECK(50, ok);
+    }
     return fails;
 }
