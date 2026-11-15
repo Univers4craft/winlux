@@ -481,5 +481,34 @@ int main(int argc, char **argv) {
         }
         CHECK(48, ok);
     }
+    /* #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+       départ), pas WINHTTP_INVALID_STATUS_CALLBACK (l'outil de déploiement
+       d'Office fermait chaque requête avant l'envoi). */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef void *(__stdcall *wsc_t)(void *, void *, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wsc_t wcb = h ? (wsc_t)GetProcAddress(h, "WinHttpSetStatusCallback") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        int ok = wopen && wconn && wreq && wcb && wclose;
+        if (ok) {
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, 0, 0) : 0;
+            void *rappel = (void *)(DWORD_PTR)0x00401000;
+            ok = wr && wcb(wr, rappel, 0x10000, 0) == 0 && wcb(wr, 0, 0, 0) == rappel;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(49, ok);
+    }
     return fails;
 }
