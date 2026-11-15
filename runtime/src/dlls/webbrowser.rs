@@ -170,6 +170,9 @@ struct State {
     edit: usize,
     /// Texte de la page chargée, posé dans `edit` dès qu'elle existe.
     text: Option<String>,
+    /// Document rendu par get_Document (non retenu : c'est lui qui retient
+    /// le contrôle), 0 s'il n'existe pas.
+    document: usize,
 }
 
 /// L'objet : une table par interface, dans l'ordre de `SLOT_*`.
@@ -383,7 +386,6 @@ not_impl_fns!(
     get_Application,
     get_Parent,
     get_Container,
-    get_Document,
     get_TopLevelContainer,
     get_Type,
     get_Left,
@@ -749,7 +751,7 @@ static WB_VT: VTable<71> = VTable([
     get_Application as *const (),
     get_Parent as *const (),
     get_Container as *const (),
-    get_Document as *const (),
+    get_document as *const (),
     get_TopLevelContainer as *const (),
     get_Type as *const (),
     get_Left as *const (),
@@ -1072,7 +1074,18 @@ unsafe fn in_place_activate(b: &Browser, parent: usize, pos: Option<Rect>) -> i3
         on(ips);
         com_release(ips);
     }
-    let r = pos.unwrap_or_default();
+    let mut r = pos.unwrap_or_default();
+    if (r.right <= r.left || r.bottom <= r.top) && parent != 0 {
+        // Rectangle vide (l'installeur WinRAR passe 0,0,0,0) : la fenêtre
+        // hôte entière, sinon la page resterait invisible.
+        let mut c = Rect::default();
+        if super::user32::get_client_rect(parent, (&mut c as *mut Rect).cast()) != 0 {
+            note(format_args!(
+                "rectangle vide : zone cliente de l'hôte, {c:?}"
+            ));
+            r = c;
+        }
+    }
     let existing = state(b).hwnd;
     if existing != 0 {
         super::user32::move_window(
@@ -1559,6 +1572,19 @@ pub unsafe fn create_builtin(
     ));
     release_obj(&*b);
     Some(hr)
+}
+
+mod document;
+
+/// IWebBrowser2::get_Document : le document de la page (#2228).
+unsafe extern "win64" fn get_document(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let b = from(this, SLOT_BROWSER);
+    *out = document::document_of(b);
+    note(format_args!("get_Document rendu"));
+    S_OK
 }
 
 #[cfg(test)]

@@ -307,6 +307,7 @@ vulkan1.rs	Xlib	a-verifier
 wbem.rs	Com	interne	objet WMI du runtime (locator, services, énumérateur, objet) ; en x86, la passerelle COM (wow32/com.rs, IWBEM*) l'enveloppe (wmi32.exe, #1198)
 webbrowser.rs	Browser	a-verifier	contrôle navigateur web (CLSID_WebBrowser) servi en x64 ; appelants x86 pas encore pris en charge (#2228)
 webbrowser.rs	DispParams	interne	DISPPARAMS des événements DWebBrowserEvents2, passé aux abonnés x64 du contrôle (#2228)
+webbrowser/document.rs	Document	a-verifier	document du contrôle navigateur (IHTMLDocument2, IPersistStreamInit) servi en x64 ; appelants x86 pas encore pris en charge (#2228)
 webbrowser/tests.rs	Sink	interne	test unitaire
 webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	

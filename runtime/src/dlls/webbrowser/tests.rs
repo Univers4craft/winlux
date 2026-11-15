@@ -89,11 +89,9 @@ fn navigation_notee_et_methode_absente_marquee() {
             std::mem::transmute(method(wb, 52));
         assert_eq!(nav2(wb, v.0.as_ptr()), S_OK);
         assert_eq!(state(from(wb, SLOT_BROWSER)).url, "about:blank");
-        // get_Document n'est pas encore servi : E_NOTIMPL, pas un succès vide.
-        let doc: unsafe extern "win64" fn(usize, *mut usize) -> i32 =
-            std::mem::transmute(method(wb, 18));
-        let mut d = 0usize;
-        assert_eq!(doc(wb, &mut d), E_NOTIMPL);
+        // GoBack n'est pas servi : E_NOTIMPL, pas un succès vide.
+        let back: unsafe extern "win64" fn(usize) -> i32 = std::mem::transmute(method(wb, 7));
+        assert_eq!(back(wb), E_NOTIMPL);
         assert_eq!(release(wb), 0);
     }
 }
@@ -259,5 +257,68 @@ fn fin_de_navigation_annoncee_aux_abonnes() {
         release(cp);
         release(cpc);
         assert_eq!(release(wb), 0);
+    }
+}
+
+#[test]
+fn document_ecrit_par_write_montre_en_texte() {
+    // #2228 : l'installeur WinRAR demande le document puis y écrit son
+    // contrat en HTML.
+    unsafe {
+        let wb = create(&IID_IWEB_BROWSER2);
+        let get_doc: unsafe extern "win64" fn(usize, *mut usize) -> i32 =
+            std::mem::transmute(method(wb, 18));
+        let mut doc = 0usize;
+        assert_eq!(get_doc(wb, &mut doc), S_OK);
+        assert_ne!(doc, 0);
+        let mut again = 0usize;
+        assert_eq!(get_doc(wb, &mut again), S_OK);
+        assert_eq!(again, doc);
+        release(again);
+        let iid_doc2 = guid(
+            0x332C_4425,
+            0x26CB,
+            0x11D0,
+            [0xB4, 0x83, 0x00, 0xC0, 0x4F, 0xD9, 0x01, 0x19],
+        );
+        let (hr, d2) = qi(doc, &iid_doc2);
+        assert_eq!(hr, S_OK);
+        assert_eq!(d2, doc);
+        release(d2);
+        let (hr, psi) = qi(doc, &IID_IPERSIST_STREAM_INIT);
+        assert_eq!(hr, S_OK);
+        release(psi);
+        // write(SAFEARRAY d'un VARIANT VT_BSTR).
+        let html: Vec<u16> =
+            "<p>Version de d&eacute;monstration</p><p>&laquo;&nbsp;logiciel&nbsp;&raquo;</p>\0"
+                .encode_utf16()
+                .collect();
+        let bstr = super::super::oleaut32::sys_alloc_string(html.as_ptr());
+        let mut var = [0u64; 3];
+        var[0] = 8; // VT_BSTR
+        var[1] = bstr as u64;
+        let mut sa = [0u8; 32];
+        sa[0..2].copy_from_slice(&1u16.to_le_bytes());
+        sa[4..8].copy_from_slice(&24u32.to_le_bytes());
+        sa[16..24].copy_from_slice(&(var.as_ptr() as u64).to_le_bytes());
+        sa[24..28].copy_from_slice(&1u32.to_le_bytes());
+        let write: unsafe extern "win64" fn(usize, *const u8) -> i32 =
+            std::mem::transmute(method(doc, 59));
+        assert_eq!(write(doc, sa.as_ptr()), S_OK);
+        let b = from(wb, SLOT_BROWSER);
+        let text = state(b).text.clone().unwrap();
+        assert!(text.contains("Version de démonstration"), "{text:?}");
+        assert!(text.contains("logiciel"), "{text:?}");
+        // readyState « complete ».
+        let ready: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32 =
+            std::mem::transmute(method(doc, 22));
+        let mut rs: *mut u16 = std::ptr::null_mut();
+        assert_eq!(ready(doc, &mut rs), S_OK);
+        assert_eq!(wide_text(rs), "complete");
+        super::super::oleaut32::sys_free_string(rs);
+        super::super::oleaut32::sys_free_string(bstr);
+        // Le document retient le contrôle : il est libéré en dernier.
+        assert_eq!(release(wb), 1);
+        assert_eq!(release(doc), 0);
     }
 }
