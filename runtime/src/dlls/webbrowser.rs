@@ -19,6 +19,8 @@
 //! (exdisp.h, oleidl.h, ocidl.h) et documentation Microsoft Learn
 //! d'IWebBrowser2, IOleObject, IOleInPlaceObject et IConnectionPoint.
 
+mod texte;
+
 use super::comobj::{guid, guid_str, Guid, VTable};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -164,6 +166,10 @@ struct State {
     next_cookie: u32,
     /// Dernière adresse demandée par Navigate/Navigate2.
     url: String,
+    /// Zone de texte en lecture seule qui montre la page.
+    edit: usize,
+    /// Texte de la page chargée, posé dans `edit` dès qu'elle existe.
+    text: Option<String>,
 }
 
 /// L'objet : une table par interface, dans l'ordre de `SLOT_*`.
@@ -467,13 +473,212 @@ unsafe fn variant_text(v: *const u8) -> Option<String> {
 
 unsafe fn navigate_to(this: usize, url: String, via: &str) -> i32 {
     let b = from(this, SLOT_BROWSER);
-    crate::log_warn!(
-        "webbrowser",
-        "{via} « {url} » : adresse notée, rien n'est encore affiché, appelants {}",
-        callers()
-    );
-    state(b).url = url;
+    let page = load(&url);
+    match &page {
+        Ok(html) => note(format_args!(
+            "{via} « {url} » : {} caractères chargés",
+            html.chars().count()
+        )),
+        Err(why) => crate::log_warn!(
+            "webbrowser",
+            "{via} « {url} » : {why}, appelants {}",
+            callers()
+        ),
+    }
+    let text = match page {
+        Ok(html) => texte::html_to_text(&html),
+        Err(_) => String::new(),
+    };
+    {
+        let mut s = state(b);
+        s.url = url;
+        s.text = Some(text);
+    }
+    show_text(b);
     S_OK
+}
+
+/// Contenu HTML d'une adresse : about:blank, fichier (file:// ou chemin
+/// Windows) ou ressource d'un module (res://, type RT_HTML par défaut).
+unsafe fn load(url: &str) -> Result<String, String> {
+    let lower = url.to_ascii_lowercase();
+    if lower.is_empty() || lower.starts_with("about:") {
+        return Ok(String::new());
+    }
+    if let Some(rest) = strip_scheme(url, "res://") {
+        return load_resource(rest);
+    }
+    let path = match strip_scheme(url, "file:") {
+        Some(rest) => file_url_path(rest),
+        None if url.as_bytes().get(1) == Some(&b':') || url.starts_with("\\\\") => url.to_string(),
+        None => return Err("schéma non servi (seuls about:, file: et res: le sont)".into()),
+    };
+    read_file(&path).map(|b| texte::decode_page(&b))
+}
+
+fn strip_scheme<'a>(url: &'a str, scheme: &str) -> Option<&'a str> {
+    let head = url.get(..scheme.len())?;
+    head.eq_ignore_ascii_case(scheme)
+        .then(|| &url[scheme.len()..])
+}
+
+/// Chemin Windows d'une adresse file: (RFC 8089) : barres obliques
+/// retournées, octets %XX décodés en UTF-8.
+fn file_url_path(rest: &str) -> String {
+    let rest = rest.trim_start_matches('/');
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'/' { b'\\' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Lit un fichier par nos propres CreateFileW et ReadFile.
+unsafe fn read_file(path: &str) -> Result<Vec<u8>, String> {
+    let w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    // GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING.
+    let h = super::kernel32::create_file_w(w.as_ptr(), 0x8000_0000, 1, 0, 3, 0, 0);
+    if h == usize::MAX {
+        return Err(format!(
+            "fichier « {path} » illisible (erreur {})",
+            crate::process::last_error()
+        ));
+    }
+    let mut data = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let mut n = 0u32;
+        if super::kernel32::read_file(h, buf.as_mut_ptr(), buf.len() as u32, &mut n, 0) == 0
+            || n == 0
+        {
+            break;
+        }
+        data.extend_from_slice(&buf[..n as usize]);
+    }
+    super::kernel32::close_handle(h);
+    Ok(data)
+}
+
+/// Ressource d'une adresse res:// : `module/[type/]nom` (type RT_HTML, 23,
+/// par défaut ; « #N » ou « N » pour un type ou un nom numérique).
+unsafe fn load_resource(rest: &str) -> Result<String, String> {
+    let mut parts: Vec<&str> = rest.rsplitn(3, '/').collect();
+    parts.reverse();
+    let (module, ty, name) = match parts.as_slice() {
+        [m, n] => (*m, "23", *n),
+        [m, t, n] => (*m, *t, *n),
+        _ => return Err("adresse res:// sans nom de ressource".into()),
+    };
+    let module = file_url_path(module);
+    let wm: Vec<u16> = module.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut hmod = super::kernel32::get_module_handle_w(wm.as_ptr());
+    if hmod == 0 {
+        // LOAD_LIBRARY_AS_DATAFILE
+        hmod = super::kernel32::load_library_ex_w(wm.as_ptr(), 0, 2);
+    }
+    if hmod == 0 {
+        return Err(format!("module « {module} » introuvable"));
+    }
+    let id = |s: &str| -> (usize, Vec<u16>) {
+        let n = s.trim_start_matches('#');
+        match n.parse::<u16>() {
+            Ok(v) => (v as usize, Vec::new()),
+            Err(_) => {
+                let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                (0, w)
+            }
+        }
+    };
+    let (ty_id, ty_w) = id(ty);
+    let (name_id, name_w) = id(name);
+    let ty_p = if ty_w.is_empty() {
+        ty_id
+    } else {
+        ty_w.as_ptr() as usize
+    };
+    let name_p = if name_w.is_empty() {
+        name_id
+    } else {
+        name_w.as_ptr() as usize
+    };
+    let res = super::resource::find_resource_w(hmod, name_p as *const u16, ty_p as *const u16);
+    if res == 0 {
+        return Err(format!("ressource « {ty}/{name} » absente de « {module} »"));
+    }
+    let size = super::resource::sizeof_resource(hmod, res) as usize;
+    let data = super::resource::lock_resource(super::resource::load_resource(hmod, res));
+    if data == 0 {
+        return Err(format!("ressource « {ty}/{name} » illisible"));
+    }
+    Ok(texte::decode_page(std::slice::from_raw_parts(
+        data as *const u8,
+        size,
+    )))
+}
+
+const WM_SETTEXT: u32 = 0x000C;
+const WM_SETFONT: u32 = 0x0030;
+const ES_MULTILINE: u32 = 0x4;
+const ES_AUTOVSCROLL: u32 = 0x40;
+const ES_READONLY: u32 = 0x800;
+const WS_VSCROLL: u32 = 0x0020_0000;
+/// DEFAULT_GUI_FONT
+const DEFAULT_GUI_FONT: i32 = 17;
+
+/// Pose le texte de la page dans la zone de lecture, créée au besoin dans
+/// la fenêtre du contrôle (si elle existe déjà).
+unsafe fn show_text(b: &Browser) {
+    let (hwnd, mut edit, text, pos) = {
+        let s = state(b);
+        (s.hwnd, s.edit, s.text.clone(), s.pos)
+    };
+    let Some(text) = text else {
+        return;
+    };
+    if hwnd == 0 {
+        return;
+    }
+    if edit == 0 {
+        let class: Vec<u16> = "EDIT\0".encode_utf16().collect();
+        edit = super::user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            std::ptr::null(),
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+            0,
+            0,
+            pos.right - pos.left,
+            pos.bottom - pos.top,
+            hwnd,
+            0,
+            0,
+            std::ptr::null_mut(),
+        );
+        let font = super::gdi32::get_stock_object(DEFAULT_GUI_FONT);
+        super::user32::send_message_w(edit, WM_SETFONT, font, 0);
+        state(b).edit = edit;
+    }
+    let w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    super::user32::send_message_w(edit, WM_SETTEXT, 0, w.as_ptr() as isize);
+}
+
+/// Place la zone de lecture sur toute la fenêtre du contrôle.
+unsafe fn fit_edit(b: &Browser, r: Rect) {
+    let edit = state(b).edit;
+    if edit != 0 {
+        super::user32::move_window(edit, 0, 0, r.right - r.left, r.bottom - r.top, 1);
+    }
 }
 
 unsafe extern "win64" fn navigate(this: usize, url: *const u16) -> i32 {
@@ -635,7 +840,11 @@ extern "win64" fn accept(_this: usize) -> i32 {
 
 unsafe extern "win64" fn close(this: usize, _save: u32) -> i32 {
     let b = from(this, SLOT_OLE_OBJECT);
-    let hwnd = std::mem::take(&mut state(b).hwnd);
+    let hwnd = {
+        let mut s = state(b);
+        s.edit = 0;
+        std::mem::take(&mut s.hwnd)
+    };
     if hwnd != 0 {
         super::user32::destroy_window(hwnd);
     }
@@ -744,6 +953,8 @@ unsafe fn in_place_activate(b: &Browser, parent: usize, pos: Option<Rect>) -> i3
             1,
         );
         super::user32::show_window(existing, SW_SHOW);
+        state(b).pos = r;
+        fit_edit(b, r);
         return S_OK;
     }
     ensure_class();
@@ -762,13 +973,16 @@ unsafe fn in_place_activate(b: &Browser, parent: usize, pos: Option<Rect>) -> i3
         0,
         std::ptr::null_mut(),
     );
-    let mut s = state(b);
-    s.hwnd = hwnd;
-    s.parent = parent;
-    s.pos = r;
+    {
+        let mut s = state(b);
+        s.hwnd = hwnd;
+        s.parent = parent;
+        s.pos = r;
+    }
     note(format_args!(
         "activé sur place : fenêtre {hwnd:#x} dans {parent:#x}, {r:?}"
     ));
+    show_text(b);
     S_OK
 }
 
@@ -939,6 +1153,7 @@ unsafe extern "win64" fn set_object_rects(
     };
     if hwnd != 0 {
         super::user32::move_window(hwnd, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
+        fit_edit(b, r);
     }
     note(format_args!("SetObjectRects({r:?})"));
     S_OK

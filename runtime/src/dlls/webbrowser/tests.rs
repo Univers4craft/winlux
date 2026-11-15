@@ -163,3 +163,20 @@ fn abonnement_aux_evenements_du_navigateur() {
         assert_eq!(release(wb), 0);
     }
 }
+
+#[test]
+fn adresses_de_page_lues() {
+    // file: (RFC 8089) : barres retournées et octets %XX décodés.
+    assert_eq!(
+        file_url_path("///C:/Program%20Files/Adobe/licence.html"),
+        "C:\\Program Files\\Adobe\\licence.html"
+    );
+    assert_eq!(file_url_path("C:/a%C3%A9.htm"), "C:\\aé.htm");
+    assert_eq!(strip_scheme("RES://x.dll/a", "res://"), Some("x.dll/a"));
+    unsafe {
+        assert_eq!(load("about:blank"), Ok(String::new()));
+        assert!(load("https://example.com/").is_err());
+        // Ressource absente : refus nommé, pas de plantage.
+        assert!(load("res://module-absent.dll/licence.htm").is_err());
+    }
+}
