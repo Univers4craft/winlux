@@ -353,6 +353,21 @@ unsafe extern "win64" fn CryptMsgUpdate(msg: usize, data: *const u8, len: u32, l
     1
 }
 
+/// Message déjà décodé à partir d'un SignedData complet, comme après
+/// CryptMsgOpenToDecode puis CryptMsgUpdate final (CryptQueryObject, #2685).
+pub(crate) fn open_decoded(der: &[u8]) -> Option<usize> {
+    let decoded = crate::setup::appx_signature::signed_data_parts(der)?;
+    let h = NEXT_MSG.fetch_add(8, Ordering::Relaxed);
+    lock().insert(
+        h,
+        Msg {
+            data: der.to_vec(),
+            decoded: Some(decoded),
+        },
+    );
+    Some(h)
+}
+
 /// Le handle vient-il de CryptMsgOpenToDecode ?
 pub(crate) fn is_decode_msg(msg: usize) -> bool {
     lock().contains_key(&msg)
