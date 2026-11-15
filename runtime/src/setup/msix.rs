@@ -184,6 +184,10 @@ pub struct Package {
     /// Sous-dossiers du dossier partagé de l'éditeur déclarés par
     /// l'extension `windows.publisherCacheFolders` (#2524).
     pub publisher_cache_folders: Vec<String>,
+    /// Classes activables en processus déclarées par l'extension
+    /// `windows.activatableClass.inProcessServer` : (classe, chemin de la
+    /// DLL relatif au dossier du paquet).
+    pub activatable_classes: Vec<(String, String)>,
 }
 
 /// Identifiant d'éditeur : 8 premiers octets du SHA-256 de l'éditeur en
@@ -291,6 +295,19 @@ impl Package {
             for folder in tags(block, "Folder") {
                 if let Some(name) = attr(folder, "Name") {
                     p.publisher_cache_folders.push(name);
+                }
+            }
+        }
+        // <Extension Category="windows.activatableClass.inProcessServer">
+        //   <InProcessServer><Path>…</Path><ActivatableClass ActivatableClassId="…"/>
+        // (Learn, schéma du manifeste de paquet, élément InProcessServer).
+        for block in blocks(xml, "InProcessServer") {
+            let Some(path) = text(block, "Path") else {
+                continue;
+            };
+            for class in tags(block, "ActivatableClass") {
+                if let Some(id) = attr(class, "ActivatableClassId") {
+                    p.activatable_classes.push((id, path.clone()));
                 }
             }
         }
@@ -724,6 +741,13 @@ mod tests {
         <Folder Name="Polices"/>
       </PublisherCacheFolders>
     </Extension>
+    <Extension Category="windows.activatableClass.inProcessServer">
+      <InProcessServer>
+        <Path>lib\Bloc.Dessin.dll</Path>
+        <ActivatableClass ActivatableClassId="Bloc.Dessin.Pinceau" ThreadingModel="both" />
+        <ActivatableClass ActivatableClassId="Bloc.Dessin.Toile" ThreadingModel="both"/>
+      </InProcessServer>
+    </Extension>
   </Extensions>
 </Package>"#;
 
@@ -734,6 +758,24 @@ mod tests {
                 "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
             ),
             "8wekyb3d8bbwe"
+        );
+    }
+
+    #[test]
+    fn classes_activables_du_paquet_2657() {
+        let p = Package::parse(MANIFEST).unwrap();
+        assert_eq!(
+            p.activatable_classes,
+            [
+                (
+                    "Bloc.Dessin.Pinceau".to_string(),
+                    "lib\\Bloc.Dessin.dll".to_string()
+                ),
+                (
+                    "Bloc.Dessin.Toile".to_string(),
+                    "lib\\Bloc.Dessin.dll".to_string()
+                ),
+            ]
         );
     }
 
