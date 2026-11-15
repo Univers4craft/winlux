@@ -1035,6 +1035,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_shell::ALL.iter())
         .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
+        .chain(super::com_mf_chaine::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1935,6 +1936,16 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "LoadTypeLibEx" | "#183") => k!(I, I, Out(&ITYPELIB)),
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
+        // GDI+ lit ou écrit le flux du programme (#2531) : mandataire 64
+        // bits de son IStream x86 ; l'image rendue est un handle.
+        (
+            "gdiplus",
+            "GdipLoadImageFromStream"
+            | "GdipLoadImageFromStreamICM"
+            | "GdipCreateBitmapFromStream"
+            | "GdipCreateBitmapFromStreamICM",
+        ) => k!(In(&ISTREAM), OutPtr),
+        ("gdiplus", "GdipSaveImageToStream") => k!(I, In(&ISTREAM), I, I),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
         // Associations, objet de données, service d'un objet x86 (#2428, lot E).
         // SHGetImageList (#727) n'a jamais de mandataire : son IImageList
@@ -1965,7 +1976,10 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
-        ("mfplat", _) => super::com_mf::api_kinds(func)?,
+        ("mfplat", _) => {
+            super::com_mf::api_kinds(func).or_else(|| super::com_mf_chaine::api_kinds(func))?
+        }
+        ("mf" | "mfreadwrite", _) => super::com_mf_chaine::api_kinds(func)?,
         _ => return None,
     };
     Some((k, None))
@@ -2103,6 +2117,27 @@ mod tests {
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
         // ProcessUrlAction : huit arguments.
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2531 : GDI+ reçoit l'IStream x86 du programme par un mandataire,
+    /// à la taille de stdcall.tsv (8 et 16 octets).
+    #[test]
+    fn flux_gdiplus_decrits() {
+        for f in [
+            "GdipLoadImageFromStream",
+            "GdipLoadImageFromStreamICM",
+            "GdipCreateBitmapFromStream",
+            "GdipCreateBitmapFromStreamICM",
+        ] {
+            let (k, r) = api_kinds("gdiplus", f).unwrap();
+            assert_eq!(slots(k), 2, "{f}");
+            assert!(r.is_none());
+            assert!(matches!(k[0], In(i) if std::ptr::eq(i, &ISTREAM)), "{f}");
+            assert!(matches!(k[1], OutPtr), "{f}");
+        }
+        let (k, _) = api_kinds("gdiplus", "GdipSaveImageToStream").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(matches!(k[1], In(i) if std::ptr::eq(i, &ISTREAM)));
     }
 
     /// #2428, lot B : les fonctions qui rendent un magasin de propriétés

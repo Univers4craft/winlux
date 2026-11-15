@@ -979,7 +979,7 @@ pub unsafe extern "win64" fn local_free(p: *mut c_void) -> *mut c_void {
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
 /// Identité de paquet MSIX du programme courant (lancé depuis
 /// `C:\Program Files\WindowsApps\<PackageFullName>`), lue une fois.
-fn current_package() -> Option<&'static (crate::setup::msix::Package, String)> {
+pub(crate) fn current_package() -> Option<&'static (crate::setup::msix::Package, String)> {
     static PACKAGE: std::sync::OnceLock<Option<(crate::setup::msix::Package, String)>> =
         std::sync::OnceLock::new();
     PACKAGE

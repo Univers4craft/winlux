@@ -25,6 +25,7 @@
 mod com;
 mod com_audio;
 mod com_mf;
+mod com_mf_chaine;
 mod com_netfw;
 mod com_nlm;
 mod com_ole;
@@ -55,6 +56,7 @@ mod vulkan;
 mod wow64;
 
 pub(crate) use com_audio::iface_to32;
+pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
@@ -116,6 +118,13 @@ static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 /// Un programme 32 bits est-il en cours dans ce processus ?
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// Test seulement, dans un processus de test relancé à part : fait comme si
+/// le programme était x86, pour lire les structures à sa disposition.
+#[cfg(test)]
+pub(crate) fn force_active_for_test() {
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// `_environ`/`_wenviron` x86 à jour après `_putenv` (#1474).
