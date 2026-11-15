@@ -307,6 +307,8 @@ struct Com {
     /// Filtres WebResourceRequested avec types de source (#2635) :
     /// (URI, contexte, types restants), dans l'ordre d'ajout.
     filters: Mutex<Vec<(String, i32, u32)>>,
+    /// FrameId du cadre principal (#2641), donné à la première lecture.
+    frame_id: AtomicU32,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -322,6 +324,7 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
         memory_level: AtomicU32::new(0),
         filters: Mutex::new(Vec::new()),
+        frame_id: AtomicU32::new(0),
     });
     Box::into_raw(b) as usize
 }
@@ -1568,6 +1571,8 @@ fn webview_methods() -> Vec<(usize, usize)> {
     // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
     m.push((116, web_get_memory_level as *const () as usize));
     m.push((117, web_put_memory_level as *const () as usize));
+    // ICoreWebView2_20 : FrameId (#2641).
+    m.push((118, web_frame_id as *const () as usize));
     // ICoreWebView2_22 : filtres avec types de source (#2635).
     m.push((120, web_add_filter_kinds as *const () as usize));
     m.push((121, web_remove_filter_kinds as *const () as usize));
@@ -1947,6 +1952,26 @@ unsafe extern "win64" fn web_put_memory_level(this: usize, level: i32) -> i32 {
     com(this)
         .memory_level
         .store(level as u32, Ordering::Relaxed);
+    S_OK
+}
+/// ICoreWebView2_20::get_FrameId (#2641) : identifiant du cadre principal.
+/// La documentation publique ne fixe pas sa valeur : Winlux donne à chaque
+/// vue un entier non nul, unique dans le processus, stable pour sa vie.
+unsafe extern "win64" fn web_frame_id(this: usize, out: *mut u32) -> i32 {
+    static NEXT: AtomicU32 = AtomicU32::new(1);
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let slot = &com(this).frame_id;
+    let mut id = slot.load(Ordering::Acquire);
+    if id == 0 {
+        let fresh = NEXT.fetch_add(1, Ordering::Relaxed).max(1);
+        id = match slot.compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => fresh,
+            Err(cur) => cur,
+        };
+    }
+    *out = id;
     S_OK
 }
 /// ICoreWebView2_22::AddWebResourceRequestedFilterWithRequestSourceKinds
@@ -2675,6 +2700,28 @@ mod tests {
             assert_eq!(web_get_memory_level(view, std::ptr::null_mut()), E_POINTER);
         }
         com_release(view);
+    }
+
+    /// #2641 : FrameId est non nul, stable pour une vue, distinct d'une
+    /// vue à l'autre.
+    #[test]
+    fn identifiant_de_cadre_2641() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 118], web_frame_id as *const () as usize);
+        let a = new_com(Family::WebView, None, None, Args::default());
+        let b = new_com(Family::WebView, None, None, Args::default());
+        let (mut x, mut y, mut z) = (0u32, 0u32, 0u32);
+        unsafe {
+            assert_eq!(web_frame_id(a, &mut x), S_OK);
+            assert_eq!(web_frame_id(a, &mut y), S_OK);
+            assert_eq!(web_frame_id(b, &mut z), S_OK);
+            assert_eq!(web_frame_id(a, std::ptr::null_mut()), E_POINTER);
+        }
+        assert_ne!(x, 0);
+        assert_eq!(x, y);
+        assert_ne!(x, z);
+        com_release(a);
+        com_release(b);
     }
 
     /// #2635 : les filtres avec types de source se retiennent et se
