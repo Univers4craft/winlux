@@ -1504,6 +1504,9 @@ struct Bitmap {
     /// Liste de commandes : boîte de ce qui y a été dessiné, même hors de
     /// sa surface (#1743). GetImageLocalBounds la rend, comme Direct2D.
     drawn: Mutex<Option<[f32; 4]>>,
+    /// Copie à un octet par pixel rendue par Map d'un bitmap A8, tenue
+    /// jusqu'à Unmap (#2431).
+    pub(super) mapped: Mutex<Vec<u8>>,
 }
 
 /// Verrou WIC dont un bitmap partage les pixels.
@@ -1530,6 +1533,7 @@ impl Bitmap {
             alpha_only: false,
             shared: None,
             drawn: Mutex::new(None),
+            mapped: Mutex::new(Vec::new()),
         }
     }
 
@@ -4413,6 +4417,41 @@ mod tests {
             assert_eq!((w, h), (3, 2));
             assert_eq!(&px[0..4], &[0, 0, 0, 10]);
             assert_eq!(&px[20..24], &[0, 0, 0, 60]);
+            Com::release(obj);
+            Com::release(f);
+        }
+    }
+
+    /// #2431 : Map d'un bitmap A8 rend un octet d'alpha par pixel (pas de
+    /// la ligne = largeur), comme le format du bitmap ; Unmap recopie
+    /// l'alpha écrit.
+    #[test]
+    fn map_a8_un_octet_par_pixel() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            let (w, h) = (304u32, 2u32);
+            let mut px = vec![0u8; (w * h * 4) as usize];
+            // Dernière colonne opaque (le bord droit du contour).
+            for y in 0..h {
+                let o = ((y * w + w - 1) * 4) as usize;
+                px[o..o + 4].copy_from_slice(&[242, 242, 242, 242]);
+            }
+            let mut b = Bitmap::new(w, h, px);
+            b.alpha_only = true;
+            let obj = new_res(f, BITMAP_VT.ptr(), b);
+            let mut m = v11::MappedRect::default();
+            assert_eq!(v11::bitmap_map(obj, 1, &mut m), S_OK);
+            assert_eq!(m.pitch, w, "un octet par pixel");
+            let row = std::slice::from_raw_parts(m.bits, (w * h) as usize);
+            assert_eq!(row[(w - 1) as usize], 242);
+            assert_eq!(row[(w - 2) as usize], 0);
+            assert_eq!(row[(2 * w - 1) as usize], 242);
+            // Écriture dans la copie, rendue au bitmap par Unmap.
+            *m.bits = 7;
+            assert_eq!(v11::bitmap_unmap(obj), S_OK);
+            let (_, _, px) = bitmap_pixels(obj.cast()).unwrap();
+            assert_eq!(&px[0..4], &[0, 0, 0, 7]);
+            assert_eq!(&px[((w - 1) * 4) as usize..(w * 4) as usize], &[242; 4]);
             Com::release(obj);
             Com::release(f);
         }
