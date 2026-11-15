@@ -7060,7 +7060,7 @@ unsafe fn create_process_common(
         d.launched(c.id());
     }
     if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
-        crate::sandbox_fallback::note_child(c.id(), &line);
+        crate::sandbox_fallback::note_child(c.id(), &line, same_base.is_some());
         // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
         // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
         // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP
