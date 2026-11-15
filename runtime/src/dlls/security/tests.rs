@@ -565,3 +565,48 @@ fn sid_bien_connus_des_conteneurs() {
         );
     }
 }
+
+/// #2527 : GetAppContainerNamedObjectPath, servie par kernel32, rend le chemin
+/// (forme choisie par Winlux) d'un SID donné ou du jeton d'AppContainer.
+#[test]
+fn chemin_des_objets_nommes_d_un_conteneur() {
+    let _teb = crate::process::test_teb();
+    assert!(crate::dlls::kernel32_proc("GetAppContainerNamedObjectPath", false).is_some());
+    let sid = sid_bytes("S-1-15-2-1-2-3-4-5-6-7").unwrap();
+    let attendu = "AppContainerNamedObjects\\S-1-15-2-1-2-3-4-5-6-7";
+    let mut buf = [0u16; 128];
+    let mut n = 0u32;
+    unsafe {
+        // Taille seule : FALSE, ERROR_INSUFFICIENT_BUFFER et la longueur zéro compris.
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, sid.as_ptr(), 0, std::ptr::null_mut(), &mut n),
+            0
+        );
+        assert_eq!(crate::process::last_error(), 122);
+        assert_eq!(n as usize, attendu.len() + 1);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, sid.as_ptr(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize - 1]), attendu);
+        // Le jeton de CreateAppContainerToken désigne le SID de SECURITY_CAPABILITIES.
+        let caps: [usize; 3] = [sid.as_ptr() as usize, 0, 0];
+        let mut jeton = 0usize;
+        assert_eq!(
+            CreateAppContainerToken(0, caps.as_ptr().cast(), &mut jeton),
+            1
+        );
+        buf.fill(0);
+        assert_eq!(
+            GetAppContainerNamedObjectPath(jeton, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            1
+        );
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize - 1]), attendu);
+        // Le jeton du processus n'est pas un AppContainer.
+        assert_eq!(
+            GetAppContainerNamedObjectPath(0, std::ptr::null(), 128, buf.as_mut_ptr(), &mut n),
+            0
+        );
+        assert_eq!(crate::process::last_error(), 87);
+    }
+}
