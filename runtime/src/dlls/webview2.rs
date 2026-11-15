@@ -249,6 +249,7 @@ enum Family {
     CookieManager,
     Cookie,
     CookieList,
+    DevToolsReceiver,
 }
 
 impl Family {
@@ -271,6 +272,7 @@ impl Family {
             Family::CookieManager => &COOKIE_MANAGER_IIDS,
             Family::Cookie => &COOKIE_IIDS,
             Family::CookieList => &COOKIE_LIST_IIDS,
+            Family::DevToolsReceiver => &DEVTOOLS_RECEIVER_IIDS,
         }
     }
 }
@@ -418,6 +420,9 @@ fn event_slots(family: Family) -> &'static [usize] {
         // NewBrowserVersionAvailable (3), BrowserProcessExited (9),
         // ProcessInfosChanged (13).
         Family::Environment => &[3, 9, 13],
+        // ICoreWebView2DevToolsProtocolEventReceiver :
+        // DevToolsProtocolEventReceived (0) (#2643).
+        Family::DevToolsReceiver => &[0],
         _ => &[],
     }
 }
@@ -447,6 +452,7 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::CookieManager => (COOKIE_MANAGER_SLOTS, cookie_manager_methods()),
         Family::Cookie => (COOKIE_SLOTS, cookie_methods()),
         Family::CookieList => (COOKIE_LIST_SLOTS, cookie_list_methods()),
+        Family::DevToolsReceiver => (DEVTOOLS_RECEIVER_SLOTS, Vec::new()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
@@ -1978,6 +1984,9 @@ fn webview_methods() -> Vec<(usize, usize)> {
     m.push((102, web_get_profile as *const () as usize));
     // ICoreWebView2_2 : CookieManager (#2637).
     m.push((63, web_get_cookie_manager as *const () as usize));
+    // ICoreWebView2 : canal DevTools (#2643).
+    m.push((33, web_call_cdp as *const () as usize));
+    m.push((39, web_cdp_receiver as *const () as usize));
     // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
     m.push((116, web_get_memory_level as *const () as usize));
     m.push((117, web_put_memory_level as *const () as usize));
@@ -2340,6 +2349,85 @@ unsafe extern "win64" fn web_remove_host_object(this: usize, name: *const u16) -
         .map(|i| hosts.remove(i));
     drop(hosts);
     drop(old);
+    S_OK
+}
+
+/// Résultat JSON d'une commande du protocole Chrome DevTools que Winlux
+/// sait servir sans canal DevTools vers WebKitGTK (#2643), ou None.
+/// `target` : (identifiant, titre, URL) de la page de la vue.
+fn cdp_result(method: &str, target: (&str, &str, &str)) -> Option<String> {
+    match method {
+        // Domain.enable rend un objet vide (protocole Chrome DevTools).
+        "Log.enable" | "Runtime.enable" | "Network.enable" | "Page.enable" => Some("{}".into()),
+        // Target.getTargets : une seule cible, la page de la vue.
+        "Target.getTargets" => {
+            let (id, title, url) = target;
+            Some(format!(
+                "{{\"targetInfos\":[{{\"targetId\":{},\"type\":\"page\",\"title\":{},\"url\":{},\"attached\":true,\"canAccessOpener\":false}}]}}",
+                json_escape(id),
+                json_escape(title),
+                json_escape(url)
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// ICoreWebView2::CallDevToolsProtocolMethod (#2643) : les commandes de
+/// `cdp_result` répondent par le rappel asynchrone Invoke(HRESULT, LPCWSTR),
+/// sur la boucle de messages comme les autres rappels. Les autres restent
+/// refusées (E_NOTIMPL, webview2.rs) : Winlux n'a pas de canal DevTools.
+unsafe extern "win64" fn web_call_cdp(
+    this: usize,
+    method: *const u16,
+    _params: *const u16,
+    handler: usize,
+) -> i32 {
+    if method.is_null() {
+        return E_INVALIDARG;
+    }
+    let (title, url) = view_of(this).map_or((String::new(), String::new()), |v| {
+        let st = super::lock(&v.state);
+        (st.title.clone(), st.source.clone())
+    });
+    let id = format!("{this:016X}");
+    let Some(json) = cdp_result(&wstr(method), (&id, &title, &url)) else {
+        return E_NOTIMPL;
+    };
+    if handler == 0 {
+        return S_OK;
+    }
+    let Some(env) = com(this).env.clone() else {
+        return E_FAIL;
+    };
+    add_ref(handler);
+    post(
+        env.dispatcher,
+        Box::new(move || unsafe {
+            let w: Vec<u16> = json.encode_utf16().chain([0]).collect();
+            invoke(handler, S_OK as usize, w.as_ptr() as usize);
+            release(handler);
+        }),
+    );
+    S_OK
+}
+
+/// ICoreWebView2::GetDevToolsProtocolEventReceiver (#2643) : un récepteur
+/// qui accepte les abonnements ; aucun événement DevTools n'est levé.
+unsafe extern "win64" fn web_cdp_receiver(this: usize, name: *const u16, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    if name.is_null() || wstr(name).is_empty() {
+        *out = 0;
+        return E_INVALIDARG;
+    }
+    *out = new_com(
+        Family::DevToolsReceiver,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
     S_OK
 }
 
@@ -3313,6 +3401,82 @@ mod tests {
             com_release(c);
         }
         com_release(mgr);
+        com_release(view);
+    }
+
+    /// #2643 : le canal DevTools sert Target.getTargets et les .enable par
+    /// un rappel asynchrone, et rend un récepteur d'événements.
+    #[test]
+    fn canal_devtools_2643() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 33], web_call_cdp as *const () as usize);
+        assert_eq!(web[3 + 39], web_cdp_receiver as *const () as usize);
+        assert_eq!(
+            cdp_result("Log.enable", ("a", "", "")).as_deref(),
+            Some("{}")
+        );
+        assert!(cdp_result("Debugger.enable", ("a", "", "")).is_none());
+        let t = cdp_result("Target.getTargets", ("ID", "Ti\"tre", "https://x/")).unwrap();
+        assert_eq!(
+            t,
+            "{\"targetInfos\":[{\"targetId\":\"ID\",\"type\":\"page\",\"title\":\"Ti\\\"tre\",\"url\":\"https://x/\",\"attached\":true,\"canAccessOpener\":false}]}"
+        );
+        let dispatcher = 0x2643_0000usize;
+        let env = Arc::new(Env {
+            dispatcher,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: String::new(),
+            profile: Mutex::new(ProfileState::default()),
+            cookies: Mutex::new(Vec::new()),
+        });
+        let view = new_com(Family::WebView, Some(env), None, Args::default());
+        static GOT: Mutex<Option<(i32, String)>> = Mutex::new(None);
+        unsafe extern "win64" fn on_result(_h: usize, hr: usize, json: usize) -> i32 {
+            *super::super::lock(&GOT) = Some((hr as i32, wstr(json as *const u16)));
+            S_OK
+        }
+        extern "win64" fn noop_ref(_h: usize) -> u32 {
+            1
+        }
+        let vt: &'static [usize] = Box::leak(
+            vec![
+                0,
+                noop_ref as *const () as usize,
+                noop_ref as *const () as usize,
+                on_result as *const () as usize,
+            ]
+            .into_boxed_slice(),
+        );
+        let handler = Box::leak(Box::new(vt.as_ptr())) as *const *const usize as usize;
+        let w = |s: &str| -> Vec<u16> { s.encode_utf16().chain([0]).collect() };
+        let (enable, other, empty) = (w("Network.enable"), w("Debugger.enable"), w("{}"));
+        unsafe {
+            assert_eq!(
+                web_call_cdp(view, other.as_ptr(), empty.as_ptr(), handler),
+                E_NOTIMPL
+            );
+            assert_eq!(
+                web_call_cdp(view, enable.as_ptr(), empty.as_ptr(), handler),
+                S_OK
+            );
+            assert!(super::super::lock(&GOT).is_none());
+            run_jobs(dispatcher);
+            assert_eq!(*super::super::lock(&GOT), Some((S_OK, "{}".to_string())));
+            let mut rx = 0usize;
+            let ev = w("Runtime.consoleAPICalled");
+            assert_eq!(web_cdp_receiver(view, ev.as_ptr(), &mut rx), S_OK);
+            let mut out = 0usize;
+            assert_eq!(
+                query_interface(rx, DEVTOOLS_RECEIVER_IIDS[0].as_ptr(), &mut out),
+                S_OK
+            );
+            com_release(out);
+            let rvt = vtable(Family::DevToolsReceiver);
+            assert_eq!(rvt[3], add_ignored as *const () as usize);
+            assert_eq!(rvt[4], remove_ignored as *const () as usize);
+            com_release(rx);
+        }
         com_release(view);
     }
 
