@@ -1425,7 +1425,7 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
         "NtQuerySecurityObject" => fn nt_not_supported,
         "NtSetSecurityObject" => fn nt_not_supported,
-        "NtOpenDirectoryObject" => fn nt_not_supported,
+        "NtOpenDirectoryObject" => fn crate::dlls::object_directory::nt_open_directory_object,
         "NtCreateNamedPipeFile" => fn nt_not_supported,
     }
 }
