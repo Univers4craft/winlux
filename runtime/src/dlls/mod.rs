@@ -79,6 +79,7 @@ pub mod d3dx9_effect;
 pub mod d3dx9_hlsl;
 pub mod d3dx9_mesh;
 pub mod d3dx9_shader;
+pub mod data_json;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
@@ -206,6 +207,7 @@ pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
+pub mod object_directory;
 pub mod odbc32;
 pub mod ole32;
 pub mod ole32_embed;
@@ -274,6 +276,7 @@ pub mod tas_page;
 pub mod taskbarlist_com;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod taskschd_dll;
 pub mod teams_win32;
 pub mod thread_ctl;
 pub mod threadpool;
@@ -796,6 +799,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mmdevapi",
                 exports: mmdevapi::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "taskschd",
+                exports: taskschd_dll::exports(),
                 handle: 0,
             },
             Builtin {

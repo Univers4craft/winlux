@@ -569,6 +569,62 @@ clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "
 lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
     "$tmp/mf64/mf64.obj" "$tmp/mf64/mf_k32.lib" "$tmp/mf64/mf_ole32.lib" "$tmp/mf64/mf_mfplat.lib" \
     /out:"$out/mf64.exe"
+# Media Foundation, chaîne de lecture (#2428, lot 4) : mfread32.exe (x86) et
+# mfread64.exe (x64).
+cat >"$tmp/mfread_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+Sleep@4
+GetTempPathW@8
+CreateFileW@28
+CloseHandle@4
+DeleteFileW@4
+GetEnvironmentVariableA@12
+DEF
+cat >"$tmp/mfread_ole32.def" <<'DEF'
+LIBRARY ole32.dll
+EXPORTS
+CoTaskMemFree@4
+DEF
+cat >"$tmp/mfread_mfplat.def" <<'DEF'
+LIBRARY mfplat.dll
+EXPORTS
+MFStartup@8
+MFShutdown@0
+MFCreateAttributes@8
+MFTEnum@40
+MFTEnumEx@36
+MFTEnum2@40
+DEF
+cat >"$tmp/mfread_mf.def" <<'DEF'
+LIBRARY mf.dll
+EXPORTS
+MFEnumDeviceSources@12
+MFCreateDeviceSource@8
+DEF
+cat >"$tmp/mfread_mfrw.def" <<'DEF'
+LIBRARY mfreadwrite.dll
+EXPORTS
+MFCreateSourceReaderFromURL@12
+DEF
+mkdir -p "$tmp/mfread64"
+for lib in mfread_k32 mfread_ole32 mfread_mfplat mfread_mf mfread_mfrw; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/mfread64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/mfread64/$lib.def" -l "$tmp/mfread64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/mfread32.c" -o "$tmp/mfread32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/mfread32.obj" "$tmp/mfread_k32.lib" "$tmp/mfread_ole32.lib" "$tmp/mfread_mfplat.lib" \
+    "$tmp/mfread_mf.lib" "$tmp/mfread_mfrw.lib" /out:"$out/mfread32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/mfread32.c" -o "$tmp/mfread64/mfread64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:console /nodefaultlib \
+    "$tmp/mfread64/mfread64.obj" "$tmp/mfread64/mfread_k32.lib" "$tmp/mfread64/mfread_ole32.lib" \
+    "$tmp/mfread64/mfread_mfplat.lib" "$tmp/mfread64/mfread_mf.lib" "$tmp/mfread64/mfread_mfrw.lib" \
+    /out:"$out/mfread64.exe"
 # Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
 cat >"$tmp/d3d11_k32.def" <<'DEF'
 LIBRARY kernel32.dll
@@ -646,6 +702,8 @@ if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     # Winsock x86 (#1408) : AcceptEx, ConnectEx, port de complétion.
     # « large address aware » : mémoire x86 jusqu'à 4 Go (#1438).
     i686-w64-mingw32-gcc -O1 "$src/net32.c" -o "$out/net32.exe" -lws2_32 -Wl,--large-address-aware
+    # Diagnostic de Winlux hors du tube qu'un programme lit (#2530).
+    i686-w64-mingw32-gcc -O1 "$src/tube32.c" -o "$out/tube32.exe"
 else
     echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
 fi

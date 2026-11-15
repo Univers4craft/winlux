@@ -4,10 +4,13 @@
 //! WinINet est l'API réseau historique de Windows : téléchargements,
 //! mises à jour intégrées, vérification de licence… Ses poignées sont celles
 //! de WinHTTP, ses constantes de requête (`HTTP_QUERY_*`, `HTTP_ADDREQ_*`,
-//! `INTERNET_FLAG_SECURE`) ont les mêmes valeurs. Seul le mode synchrone est
-//! pris en charge : une session ouverte avec `INTERNET_FLAG_ASYNC` est
-//! refusée plutôt que de ne jamais rappeler le programme. FTP et Gopher ne
-//! sont pas gérés.
+//! `INTERNET_FLAG_SECURE`) ont les mêmes valeurs. Une session ouverte avec
+//! `INTERNET_FLAG_ASYNC` est acceptée (#2587) : chaque opération y aboutit
+//! tout de suite et rend TRUE, ce que les pages HttpSendRequest et
+//! InternetReadFile de Microsoft Learn permettent en mode asynchrone ; le
+//! programme n'attend le rappel INTERNET_STATUS_REQUEST_COMPLETE qu'après
+//! ERROR_IO_PENDING, que Winlux ne rend jamais. FTP et Gopher ne sont pas
+//! gérés.
 
 use super::winhttp;
 use super::{lock, Exports};
@@ -126,16 +129,146 @@ pub fn crack(url: &str) -> Option<Url> {
     })
 }
 
-/// URL_COMPONENTS : (pointeur, longueur) aux positions de la structure x64.
-const FIELDS: [(usize, usize); 6] = [(8, 16), (24, 32), (40, 48), (56, 64), (72, 80), (88, 96)];
+/// URL_COMPONENTSA/W à la disposition x64 (104 octets), d'après wininet.h
+/// de mingw-w64 et la page URL_COMPONENTSA de Microsoft Learn : DWORD,
+/// puis pour chaque partie un pointeur et une longueur DWORD, nScheme
+/// (INTERNET_SCHEME) après le schéma, nPort (WORD) après l'hôte.
+/// Pour un programme x86 (#2554), la même suite de champs avec des pointeurs
+/// de 4 octets : 60 octets, lus et réécrits par `from_x86`/`write_x86`.
+/// WinHttpCrackUrl (games_win32.rs) s'en sert aussi (#2574).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UrlComponents {
+    pub(crate) struct_size: u32,
+    pub(crate) scheme: usize,
+    pub(crate) scheme_len: u32,
+    pub(crate) n_scheme: i32,
+    pub(crate) host: usize,
+    pub(crate) host_len: u32,
+    pub(crate) port: u16,
+    pub(crate) user: usize,
+    pub(crate) user_len: u32,
+    pub(crate) password: usize,
+    pub(crate) password_len: u32,
+    pub(crate) path: usize,
+    pub(crate) path_len: u32,
+    pub(crate) extra: usize,
+    pub(crate) extra_len: u32,
+}
 
-/// Remplit un URL_COMPONENTS (A ou W) : pointeurs dans l'adresse quand le
-/// programme passe un pointeur nul et une longueur non nulle, copie sinon.
+/// Taille de URL_COMPONENTS pour un programme x86.
+const URL_COMPONENTS_X86: usize = 60;
+
+impl UrlComponents {
+    /// (pointeur, longueur) de chaque partie, dans l'ordre schéma, hôte,
+    /// utilisateur, mot de passe, chemin, informations en plus.
+    pub(crate) fn parts(&mut self) -> [(&mut usize, &mut u32); 6] {
+        [
+            (&mut self.scheme, &mut self.scheme_len),
+            (&mut self.host, &mut self.host_len),
+            (&mut self.user, &mut self.user_len),
+            (&mut self.password, &mut self.password_len),
+            (&mut self.path, &mut self.path_len),
+            (&mut self.extra, &mut self.extra_len),
+        ]
+    }
+
+    /// Lit l'URL_COMPONENTS du programme : 60 octets si `x86`, 104 sinon.
+    ///
+    /// # Safety
+    /// `comps` doit être lisible sur la taille de la disposition choisie.
+    pub(crate) unsafe fn load(comps: *const u8, x86: bool) -> Self {
+        if x86 {
+            Self::from_x86(&*(comps as *const [u8; URL_COMPONENTS_X86]))
+        } else {
+            std::ptr::read_unaligned(comps as *const Self)
+        }
+    }
+
+    /// Réécrit l'URL_COMPONENTS du programme dans la disposition choisie.
+    ///
+    /// # Safety
+    /// `comps` doit être inscriptible sur la taille de la disposition choisie.
+    pub(crate) unsafe fn store(&self, comps: *mut u8, x86: bool) {
+        if x86 {
+            self.write_x86(&mut *(comps as *mut [u8; URL_COMPONENTS_X86]));
+        } else {
+            std::ptr::write_unaligned(comps as *mut Self, *self);
+        }
+    }
+
+    /// Disposition x86 : dwStructSize 0, lpszScheme 4, dwSchemeLength 8,
+    /// nScheme 12, lpszHostName 16, dwHostNameLength 20, nPort 24,
+    /// lpszUserName 28, dwUserNameLength 32, lpszPassword 36,
+    /// dwPasswordLength 40, lpszUrlPath 44, dwUrlPathLength 48,
+    /// lpszExtraInfo 52, dwExtraInfoLength 56.
+    fn from_x86(b: &[u8; URL_COMPONENTS_X86]) -> Self {
+        let d = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        Self {
+            struct_size: d(0),
+            scheme: d(4) as usize,
+            scheme_len: d(8),
+            n_scheme: d(12) as i32,
+            host: d(16) as usize,
+            host_len: d(20),
+            port: u16::from_le_bytes([b[24], b[25]]),
+            user: d(28) as usize,
+            user_len: d(32),
+            password: d(36) as usize,
+            password_len: d(40),
+            path: d(44) as usize,
+            path_len: d(48),
+            extra: d(52) as usize,
+            extra_len: d(56),
+        }
+    }
+
+    /// Réécrit les champs dans la disposition x86 (les deux octets de
+    /// remplissage après nPort restent ceux du programme).
+    fn write_x86(&self, b: &mut [u8; URL_COMPONENTS_X86]) {
+        let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        put(0, self.struct_size);
+        put(4, self.scheme as u32);
+        put(8, self.scheme_len);
+        put(12, self.n_scheme as u32);
+        put(16, self.host as u32);
+        put(20, self.host_len);
+        put(28, self.user as u32);
+        put(32, self.user_len);
+        put(36, self.password as u32);
+        put(40, self.password_len);
+        put(44, self.path as u32);
+        put(48, self.path_len);
+        put(52, self.extra as u32);
+        put(56, self.extra_len);
+        b[24..26].copy_from_slice(&self.port.to_le_bytes());
+    }
+}
+
+/// Remplit un URL_COMPONENTS (A ou W) du programme, à la disposition x86
+/// quand `x86`, x64 sinon. Les longueurs et pointeurs déjà mis à jour sont
+/// rendus au programme même en cas d'erreur.
 unsafe fn fill_components(
     url: &str,
     base: usize,
     u: &Url,
     comps: *mut u8,
+    wide: bool,
+    x86: bool,
+) -> Result<(), u32> {
+    let mut c = UrlComponents::load(comps, x86);
+    let r = fill_parts(url, base, u, &mut c, wide);
+    c.store(comps, x86);
+    r
+}
+
+/// Pointeurs dans l'adresse quand le programme passe un pointeur nul et une
+/// longueur non nulle, copie sinon.
+unsafe fn fill_parts(
+    url: &str,
+    base: usize,
+    u: &Url,
+    c: &mut UrlComponents,
     wide: bool,
 ) -> Result<(), u32> {
     let parts = [&u.scheme, &u.host, &u.user, &u.password, &u.path, &u.extra];
@@ -155,9 +288,9 @@ unsafe fn fill_components(
         offsets[i] = at;
         from = at + p.len();
     }
-    for (i, (pp, lp)) in FIELDS.iter().enumerate() {
-        let pptr = comps.add(*pp) as *mut usize;
-        let plen = comps.add(*lp) as *mut u32;
+    c.n_scheme = u.scheme_id;
+    c.port = u.port;
+    for (i, (pptr, plen)) in c.parts().into_iter().enumerate() {
         let text = parts[i];
         if *pptr == 0 {
             if *plen != 0 {
@@ -197,8 +330,6 @@ unsafe fn fill_components(
             *plen = bytes.len() as u32;
         }
     }
-    *(comps.add(20) as *mut i32) = u.scheme_id;
-    *(comps.add(36) as *mut u16) = u.port;
     Ok(())
 }
 
@@ -216,7 +347,7 @@ extern "win64" fn crack_url_w(url: *const u16, len: u32, _flags: u32, comps: *mu
     let Some(u) = crack(&s) else {
         return fail(ERROR_INTERNET_UNRECOGNIZED_SCHEME);
     };
-    match unsafe { fill_components(&s, url as usize, &u, comps, true) } {
+    match unsafe { fill_components(&s, url as usize, &u, comps, true, crate::wow32::active()) } {
         Ok(()) => 1,
         Err(e) => fail(e),
     }
@@ -236,7 +367,7 @@ extern "win64" fn crack_url_a(url: *const u8, len: u32, _flags: u32, comps: *mut
     let Some(u) = crack(&s) else {
         return fail(ERROR_INTERNET_UNRECOGNIZED_SCHEME);
     };
-    match unsafe { fill_components(&s, url as usize, &u, comps, false) } {
+    match unsafe { fill_components(&s, url as usize, &u, comps, false, crate::wow32::active()) } {
         Ok(()) => 1,
         Err(e) => fail(e),
     }
@@ -251,9 +382,13 @@ unsafe fn open_inner(
     bypass: *const u16,
     flags: u32,
 ) -> usize {
+    // INTERNET_FLAG_ASYNC : accepté, chaque opération aboutit tout de suite
+    // (voir l'en-tête du module, #2587).
     if flags & INTERNET_FLAG_ASYNC != 0 {
-        crate::log_warn!("wininet", "InternetOpen asynchrone non pris en charge");
-        return fail(ERROR_NOT_SUPPORTED);
+        crate::log_info!(
+            "wininet",
+            "InternetOpen asynchrone : chaque opération aboutit tout de suite"
+        );
     }
     // INTERNET_OPEN_TYPE_* = WINHTTP_ACCESS_TYPE_* (0 préconfiguré, 1 direct, 3 proxy, 4).
     winhttp::open(agent, access, proxy, bypass, 0)
@@ -326,7 +461,7 @@ unsafe fn open_request_inner(
     object: *const u16,
     version: *const u16,
     referrer: *const u16,
-    accept: *const *const u16,
+    accept: Option<Vec<String>>,
     flags: u32,
 ) -> usize {
     let verb_default = w("GET");
@@ -344,7 +479,7 @@ unsafe fn open_request_inner(
     // Seul INTERNET_FLAG_SECURE compte : cache, cookies et maintien de la
     // connexion sont gérés par le moteur ; les drapeaux qui désactiveraient
     // la vérification des certificats sont ignorés (plus sûr).
-    winhttp::open_request(
+    winhttp::open_request_types(
         conn,
         verb,
         object,
@@ -366,7 +501,13 @@ extern "win64" fn http_open_request_w(
     flags: u32,
     _ctx: usize,
 ) -> usize {
-    unsafe { open_request_inner(conn, verb, object, version, referrer, accept, flags) }
+    unsafe {
+        // Types acceptés : pointeurs de la taille de ceux du programme (#2597).
+        match winhttp::accept_types_wide(accept as usize) {
+            Ok(types) => open_request_inner(conn, verb, object, version, referrer, types, flags),
+            Err(code) => fail(code),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -382,22 +523,22 @@ extern "win64" fn http_open_request_a(
 ) -> usize {
     unsafe {
         let (v, o, ver, r) = (a2w(verb), a2w(object), a2w(version), a2w(referrer));
-        let mut types: Vec<Vec<u16>> = Vec::new();
-        if !accept.is_null() {
-            let mut p = accept;
-            while !(*p).is_null() && types.len() < 64 {
-                types.push(w(&super::cstr(*p)));
-                p = p.add(1);
-            }
-        }
-        let mut list: Vec<*const u16> = types.iter().map(|t| t.as_ptr()).collect();
-        list.push(null());
-        let acc = if accept.is_null() {
-            null()
+        // Types acceptés : pointeurs de la taille de ceux du programme, 4
+        // octets en x86 (#2597).
+        let types = if accept.is_null() {
+            None
         } else {
-            list.as_ptr()
+            match winhttp::program_pointers(accept as usize, 63) {
+                Some(pointers) => Some(
+                    pointers
+                        .into_iter()
+                        .map(|p| super::cstr(p as *const u8))
+                        .collect(),
+                ),
+                None => return fail(ERROR_INVALID_PARAMETER),
+            }
         };
-        open_request_inner(conn, ptr(&v), ptr(&o), ptr(&ver), ptr(&r), acc, flags)
+        open_request_inner(conn, ptr(&v), ptr(&o), ptr(&ver), ptr(&r), types, flags)
     }
 }
 
@@ -644,7 +785,7 @@ unsafe fn open_url_inner(
         object.as_ptr(),
         null(),
         null(),
-        null(),
+        None,
         secure | flags,
     );
     if req == 0 {
@@ -1210,6 +1351,77 @@ mod tests {
         assert_eq!(u16::from_le_bytes([comps[36], comps[37]]), 8443);
         assert_eq!(i32::from_le_bytes(comps[20..24].try_into().unwrap()), 4);
         assert_eq!(String::from_utf16_lossy(&path[..4]), "/a/b");
+    }
+
+    /// #2554 : URL_COMPONENTSA d'un programme x86 (60 octets, pointeurs de
+    /// 4 octets). Mode « pointeurs » pour toutes les parties : chaque pointeur
+    /// est rendu à sa position x86, nScheme à 12 et nPort à 24, et rien
+    /// n'est écrit après le 60e octet.
+    #[test]
+    fn url_components_x86() {
+        let url = "https://exemple.fr:8443/a/b?c=d";
+        let u = crack(url).unwrap();
+        let mut b = [0xAAu8; 104];
+        b[..60].fill(0);
+        b[..4].copy_from_slice(&60u32.to_le_bytes());
+        // Utilisateur et mot de passe : longueur 0, rien demandé.
+        for len_at in [8, 20, 48, 56] {
+            b[len_at..len_at + 4].copy_from_slice(&1u32.to_le_bytes());
+        }
+        let base = 0x0040_0000usize;
+        let r = unsafe { fill_components(url, base, &u, b.as_mut_ptr(), false, true) };
+        assert!(r.is_ok());
+        let d = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
+        let attendu = [
+            (4, 0, "https"),
+            (16, 8, "exemple.fr"),
+            (44, 23, "/a/b"),
+            (52, 27, "?c=d"),
+        ];
+        for (at, pos, texte) in attendu {
+            assert_eq!(d(at), base + pos, "pointeur à +{at}");
+            assert_eq!(&url[pos..pos + texte.len()], texte);
+            assert_eq!(d(at + 4), texte.len(), "longueur à +{}", at + 4);
+        }
+        assert_eq!(d(12), 4, "nScheme INTERNET_SCHEME_HTTPS");
+        assert_eq!(u16::from_le_bytes([b[24], b[25]]), 8443);
+        assert_eq!((d(28), d(32), d(36), d(40)), (0, 0, 0, 0));
+        assert_eq!(d(0), 60);
+        assert!(b[60..].iter().all(|&x| x == 0xAA), "rien après 60 octets");
+    }
+
+    /// #2587 : une session INTERNET_FLAG_ASYNC est ouverte, et une requête y
+    /// aboutit tout de suite (TRUE, jamais ERROR_IO_PENDING).
+    #[test]
+    fn session_asynchrone_aboutit_tout_de_suite() {
+        let _teb = crate::process::test_teb();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = [0u8; 2048];
+            let _ = s.read(&mut req).unwrap();
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nasync"
+            );
+        });
+        let agent = b"Test\0";
+        let session = internet_open_a(agent.as_ptr(), 1, null(), null(), INTERNET_FLAG_ASYNC);
+        assert_ne!(session, 0, "InternetOpenA asynchrone");
+        let url = format!("http://127.0.0.1:{port}/v64.cab\0");
+        let req = internet_open_url_a(session, url.as_ptr(), null(), 0, 0, 1);
+        assert_ne!(req, 0, "InternetOpenUrlA dans la session asynchrone");
+        let mut buf = [0u8; 16];
+        let mut got = 0u32;
+        assert_eq!(
+            internet_read_file(req, buf.as_mut_ptr().cast(), 16, &mut got),
+            1
+        );
+        assert_eq!(&buf[..got as usize], b"async");
+        assert_eq!(internet_close_handle(req), 1);
+        assert_eq!(internet_close_handle(session), 1);
+        server.join().unwrap();
     }
 
     #[test]

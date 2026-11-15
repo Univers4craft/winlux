@@ -1570,6 +1570,25 @@ pub fn report_event(h: usize, kind: u16, id: u32, strings: &[String]) -> Option<
     Some(line)
 }
 
+/// Lit les `n` cases du tableau lpStrings de ReportEvent. Une case a la
+/// taille d'un pointeur du programme appelant : 4 octets pour un programme
+/// x86, 8 pour un programme x64 (#2507).
+unsafe fn event_string_cells(base: usize, n: u16, cell: usize) -> Vec<usize> {
+    if base == 0 {
+        return Vec::new();
+    }
+    (0..n as usize)
+        .map(|i| {
+            let at = base + i * cell;
+            if cell == 4 {
+                std::ptr::read_unaligned(at as *const u32) as usize
+            } else {
+                std::ptr::read_unaligned(at as *const usize)
+            }
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe extern "win64" fn report_event_w(
     h: usize,
@@ -1582,9 +1601,9 @@ unsafe extern "win64" fn report_event_w(
     strings: *const *const u16,
     _data: usize,
 ) -> i32 {
-    let list: Vec<String> = (0..n as usize)
-        .filter(|_| !strings.is_null())
-        .map(|i| wstr(*strings.add(i)))
+    let list: Vec<String> = event_string_cells(strings as usize, n, crate::wow32::pointer_size())
+        .into_iter()
+        .map(|p| wstr(p as *const u16))
         .collect();
     if report_event(h, kind, id, &list).is_some() {
         1
@@ -1606,9 +1625,9 @@ unsafe extern "win64" fn report_event_a(
     strings: *const *const u8,
     _data: usize,
 ) -> i32 {
-    let list: Vec<String> = (0..n as usize)
-        .filter(|_| !strings.is_null())
-        .map(|i| crate::dlls::cstr(*strings.add(i)))
+    let list: Vec<String> = event_string_cells(strings as usize, n, crate::wow32::pointer_size())
+        .into_iter()
+        .map(|p| crate::dlls::cstr(p as *const u8))
         .collect();
     if report_event(h, kind, id, &list).is_some() {
         1
@@ -2604,6 +2623,19 @@ mod tests {
         assert_eq!(line, "Paint.NET (événement 3) : échec | détail");
         assert_eq!(deregister_event_source(h), 1);
         assert!(report_event(h, 1, 3, &[]).is_none());
+    }
+
+    #[test]
+    fn report_event_lit_des_cases_de_quatre_octets_en_x86() {
+        // Tableau lpStrings tel qu'un programme x86 le passe : deux pointeurs
+        // de 4 octets côte à côte (#2507).
+        let x86: [u32; 2] = [0x7f5e_2f08, 0x0065_0053];
+        let cells = unsafe { event_string_cells(x86.as_ptr() as usize, 2, 4) };
+        assert_eq!(cells, vec![0x7f5e_2f08, 0x0065_0053]);
+        let x64: [usize; 2] = [0x1122_3344_5566_7788, 0x10];
+        let cells = unsafe { event_string_cells(x64.as_ptr() as usize, 2, 8) };
+        assert_eq!(cells, vec![0x1122_3344_5566_7788, 0x10]);
+        assert!(unsafe { event_string_cells(0, 3, 4) }.is_empty());
     }
 
     #[test]

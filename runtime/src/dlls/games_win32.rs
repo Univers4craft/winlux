@@ -1694,8 +1694,9 @@ pub fn iphlpapi_exports() -> Exports {
     }
 }
 
-/// URL_COMPONENTSW (x64). Pour chaque partie : pointeur + longueur.
-const PARTS: [(usize, usize); 6] = [(8, 16), (24, 32), (40, 48), (56, 64), (72, 80), (88, 96)];
+/// WinHttpCrackUrl : URL_COMPONENTS de WinHTTP, même suite de champs que
+/// celle de WinINet, lu et réécrit à la disposition du programme (60 octets
+/// en x86, #2574).
 unsafe extern "win64" fn WinHttpCrackUrl(
     url: *const u16,
     len: u32,
@@ -1771,39 +1772,44 @@ unsafe extern "win64" fn WinHttpCrackUrl(
         (&tail[q..], 0),
     ];
     let _ = parts[1].1;
-    for (i, (part, _)) in parts.iter().enumerate() {
-        let (po, lo) = PARTS[i];
-        let ptr = std::ptr::read_unaligned(comps.add(po) as *const usize) as *mut u16;
-        let cap = std::ptr::read_unaligned(comps.add(lo) as *const u32);
+    let x86 = crate::wow32::active();
+    let mut c = super::wininet::UrlComponents::load(comps, x86);
+    c.n_scheme = n_scheme;
+    c.port = port;
+    let mut short = false;
+    for (i, (pptr, plen_out)) in c.parts().into_iter().enumerate() {
+        let part = parts[i].0;
+        let ptr = *pptr as *mut u16;
+        let cap = *plen_out;
         let plen = ulen(part);
         if ptr.is_null() {
             if cap != 0 {
                 let start = if part.is_empty() { 0 } else { off(part) };
-                std::ptr::write_unaligned(
-                    comps.add(po) as *mut usize,
-                    if part.is_empty() {
-                        0
-                    } else {
-                        url.add(start) as usize
-                    },
-                );
-                std::ptr::write_unaligned(comps.add(lo) as *mut u32, plen as u32);
+                *pptr = if part.is_empty() {
+                    0
+                } else {
+                    url.add(start) as usize
+                };
+                *plen_out = plen as u32;
             }
         } else {
             if (cap as usize) <= plen {
-                std::ptr::write_unaligned(comps.add(lo) as *mut u32, plen as u32 + 1);
-                set_error(122); // ERROR_INSUFFICIENT_BUFFER
-                return 0;
+                *plen_out = plen as u32 + 1;
+                short = true;
+                break;
             }
-            for (j, c) in part.encode_utf16().enumerate() {
-                *ptr.add(j) = c;
+            for (j, ch) in part.encode_utf16().enumerate() {
+                *ptr.add(j) = ch;
             }
             *ptr.add(plen) = 0;
-            std::ptr::write_unaligned(comps.add(lo) as *mut u32, plen as u32);
+            *plen_out = plen as u32;
         }
     }
-    std::ptr::write_unaligned(comps.add(20) as *mut i32, n_scheme);
-    std::ptr::write_unaligned(comps.add(36) as *mut u16, port);
+    c.store(comps, x86);
+    if short {
+        set_error(122); // ERROR_INSUFFICIENT_BUFFER
+        return 0;
+    }
     1
 }
 pub fn winhttp_exports() -> Exports {
@@ -1942,6 +1948,9 @@ mod tests {
         assert_eq!(unsafe { IntersectRect(&mut r, &a, &c) }, 0);
         assert_eq!(unsafe { IsRectEmpty(&r) }, 1);
     }
+
+    /// URL_COMPONENTSW x64 : (pointeur, longueur) de chaque partie.
+    const PARTS: [(usize, usize); 6] = [(8, 16), (24, 32), (40, 48), (56, 64), (72, 80), (88, 96)];
 
     #[test]
     fn crack_url_decoupe_les_parties() {

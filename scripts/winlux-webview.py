@@ -16,7 +16,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
-    {"ev": "ready", "xid"}   {"ev": "nav_starting", "uri", "nav"}
+    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
     {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
@@ -68,6 +68,17 @@ _TR = {
         ("This app shows web pages. Winlux first needs to download its web display engine (about 40 MB).",
          "Esta aplicación muestra páginas web. Winlux primero debe descargar su motor de visualización web (unos 40 MB).",
          "Diese App zeigt Webseiten an. Winlux muss zuerst die Webanzeige-Engine herunterladen (etwa 40 MB)."),
+    "Paquet : {package}\nVersion : {version}\nÉditeur : {publisher}\nSource : {source}\n"
+    "Les signatures et sommes SHA-256 du dépôt sont vérifiées pendant le téléchargement.":
+        ("Package: {package}\nVersion: {version}\nPublisher: {publisher}\nSource: {source}\n"
+         "The repository signatures and SHA-256 sums are checked during the download.",
+         "Paquete: {package}\nVersión: {version}\nEditor: {publisher}\nOrigen: {source}\n"
+         "Las firmas y sumas SHA-256 del repositorio se comprueban durante la descarga.",
+         "Paket: {package}\nVersion: {version}\nHerausgeber: {publisher}\nQuelle: {source}\n"
+         "Die Signaturen und SHA-256-Summen des Repositorys werden beim Herunterladen geprüft."),
+    "inconnue": ("unknown", "desconocida", "unbekannt"),
+    "dépôt APT de la distribution": ("distribution APT repository", "repositorio APT de la distribución",
+                                     "APT-Repository der Distribution"),
     "Télécharger": ("Download", "Descargar", "Herunterladen"),
     "Plus tard": ("Later", "Más tarde", "Später"),
     "Téléchargement du moteur d’affichage web…": ("Downloading the web display engine…",
@@ -83,6 +94,63 @@ _TR = {
 def _t(text):
     row = _TR.get(text)
     return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
+# Caractères d'un « token » HTTP (RFC 9110, §5.6.2).
+_TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+
+def user_agent_header(value):
+    """Agent utilisateur réécrit selon la grammaire de l'en-tête User-Agent.
+
+    RFC 9110, §10.1.5 : produits « nom[/version] » (tokens) et commentaires
+    entre parenthèses, séparés par des espaces. WebView2 applique toute
+    chaîne (put_UserAgent), WebKitGTK refuse celles hors grammaire et garde
+    l'ancienne (#2611). On garde donc chaque mot : un caractère interdit
+    devient « - » dans un nom, « . » dans une version (« 1951/49 » →
+    « 1951.49 »), « ? » dans un commentaire ; une parenthèse restée ouverte
+    est fermée. Rend "" quand il ne reste rien (agent par défaut).
+    """
+    words, i, n = [], 0, len(value)
+    while i < n:
+        c = value[i]
+        if c in " \t\r\n":
+            i += 1
+        elif c == "(":
+            depth, j, out = 0, i, []
+            while j < n:
+                d = value[j]
+                if d == "(":
+                    depth += 1
+                elif d == ")":
+                    depth -= 1
+                if d in "()" or (" " <= d <= "~" and d != "\\"):
+                    out.append(d)
+                elif d in "\t\r\n":
+                    out.append(" ")
+                else:
+                    out.append("?")
+                j += 1
+                if depth == 0:
+                    break
+            out.append(")" * depth)
+            words.append("".join(out))
+            i = j
+        else:
+            j = i
+            while j < n and value[j] not in " \t\r\n(":
+                j += 1
+            word = value[i:j]
+            name, slash, version = word.partition("/")
+            name = "".join(ch if ch in _TCHAR else "-" for ch in name).strip("-") or "-"
+            version = "".join(ch if ch in _TCHAR else "." for ch in version).strip(".")
+            words.append(name + ("/" + version if slash and version else ""))
+            i = j
+    # Un agent utilisateur commence par un produit, pas par un commentaire.
+    while words and words[0].startswith("("):
+        words.pop(0)
+    return " ".join(words)
 
 
 def emit(**event):
@@ -107,6 +175,38 @@ def engine_available():
         return True
     except (ImportError, ValueError):
         return False
+
+
+def package_details():
+    """Version candidate, éditeur et source du moteur, d'après APT et
+    /etc/os-release, pour les nommer avant tout téléchargement (#2591)."""
+    version, source = _t("inconnue"), _t("dépôt APT de la distribution")
+    try:
+        out = subprocess.run(["apt-cache", "policy", ENGINE_PACKAGE], capture_output=True, text=True,
+                             timeout=20, env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    candidate, in_candidate = None, False
+    for line in out.splitlines():
+        words = line.split()
+        if line.strip().startswith("Candidate:") and len(words) > 1 and words[1] != "(none)":
+            candidate = words[1]
+        elif candidate and words and words[-1] != "Packages" and candidate in words:
+            in_candidate = True
+        elif in_candidate and len(words) >= 3 and "://" in words[1]:
+            source = f"{words[1]} {words[2]}"
+            break
+    if candidate:
+        version = candidate
+    publisher = "Debian"
+    try:
+        with open("/etc/os-release", encoding="utf-8") as rel:
+            for line in rel:
+                if line.startswith("NAME="):
+                    publisher = line[5:].strip().strip('"') or publisher
+    except OSError:
+        pass
+    return version, publisher, source
 
 
 def install_command():
@@ -135,11 +235,26 @@ def offer_install():
         return False
     dialog = Gtk.MessageDialog(message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
                                text=_t("Affichage web"))
-    dialog.format_secondary_text(_t("Cette application affiche des pages web. Winlux doit d’abord "
-                                    "télécharger son moteur d’affichage web (environ 40 Mo)."))
-    dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
+    version, publisher, source = package_details()
+    dialog.format_secondary_text(
+        _t("Cette application affiche des pages web. Winlux doit d’abord "
+           "télécharger son moteur d’affichage web (environ 40 Mo).") + "\n\n"
+        + _t("Paquet : {package}\nVersion : {version}\nÉditeur : {publisher}\nSource : {source}\n"
+             "Les signatures et sommes SHA-256 du dépôt sont vérifiées pendant le téléchargement.").format(
+            package=ENGINE_PACKAGE, version=version, publisher=publisher, source=source))
+    later = dialog.add_button(_t("Plus tard"), Gtk.ResponseType.CANCEL)
     dialog.add_button(_t("Télécharger"), Gtk.ResponseType.OK)
-    dialog.set_default_response(Gtk.ResponseType.OK)
+    # Refus par défaut, comme pour tout téléchargement proposé (#2589).
+    dialog.set_default_response(Gtk.ResponseType.CANCEL)
+    # Bouton par défaut visible (#2602), comme dans la Boutique (#1448) :
+    # « Plus tard » porte la couleur d'accent et seul il a le cadre de focus
+    # dès l'ouverture (GTK ne le dessine sinon qu'après une touche du clavier ;
+    # l'affichage de la fenêtre remet ce réglage à zéro, d'où « map »).
+    later.get_style_context().add_class("suggested-action")
+    later.set_can_default(True)
+    later.grab_default()
+    later.grab_focus()
+    dialog.connect("map", lambda d: d.set_focus_visible(True))
     answer = dialog.run()
     dialog.destroy()
     if answer != Gtk.ResponseType.OK:
@@ -287,7 +402,10 @@ class View:
         self.bounds(cmd)
         if not cmd.get("visible", True):
             self.window.hide()
-        emit(ev="ready", xid=gdk_window.get_xid())
+        # Agent par défaut du moteur, que get_UserAgent rend tant que
+        # l'application n'en a pas écrit un autre (#2611).
+        emit(ev="ready", xid=gdk_window.get_xid(),
+             user_agent=self.view.get_settings().get_user_agent() or "")
 
     def reparent(self, parent):
         gdk_window = self.window.get_window() if self.window else None
@@ -331,6 +449,15 @@ class View:
             data = f.read()
         stream = self.Gio.MemoryInputStream.new_from_bytes(self.GLib.Bytes.new(data))
         request.finish(stream, len(data), mime)
+
+    def set_user_agent(self, settings, wanted):
+        """put_UserAgent : appliquée telle quelle si WebKit l'accepte (#2611)."""
+        applied = user_agent_header(wanted)
+        if applied != wanted.strip():
+            print(f"winlux-webview : agent utilisateur hors grammaire HTTP {wanted[:400]!r}, "
+                  f"appliqué {applied[:400]!r} (#2611)", file=sys.stderr, flush=True)
+        # "" rend l'agent par défaut du moteur (webkit_settings_set_user_agent).
+        settings.set_user_agent(applied or None)
 
     def bounds(self, cmd):
         if self.window is None:
@@ -451,7 +578,7 @@ class View:
             if "zoom" in cmd:
                 self.view.set_zoom_level(float(cmd["zoom"]) or 1.0)
             if "user_agent" in cmd:
-                settings.set_user_agent(cmd["user_agent"])
+                self.set_user_agent(settings, cmd["user_agent"] or "")
         elif op == "close":
             return False
         return True

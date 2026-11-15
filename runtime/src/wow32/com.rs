@@ -1035,6 +1035,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_shell::ALL.iter())
         .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
+        .chain(super::com_mf_chaine::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1935,7 +1936,26 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("oleaut32", "LoadTypeLibEx" | "#183") => k!(I, I, Out(&ITYPELIB)),
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
+        // GDI+ lit ou écrit le flux du programme (#2531) : mandataire 64
+        // bits de son IStream x86 ; l'image rendue est un handle.
+        (
+            "gdiplus",
+            "GdipLoadImageFromStream"
+            | "GdipLoadImageFromStreamICM"
+            | "GdipCreateBitmapFromStream"
+            | "GdipCreateBitmapFromStreamICM",
+        ) => k!(In(&ISTREAM), OutPtr),
+        ("gdiplus", "GdipSaveImageToStream") => k!(I, In(&ISTREAM), I, I),
         ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        // Associations, objet de données, service d'un objet x86 (#2428, lot E).
+        // SHGetImageList (#727) n'a jamais de mandataire : son IImageList
+        // reste un HIMAGELIST valable (#2435).
+        ("shell32", "SHCreateDataObject") => k!(I, I, Pidls, In(&IDATAOBJECT), Iid, OutQ),
+        ("shlwapi", "AssocCreate") => k!(GuidIn, Iid, OutQ),
+        ("shlwapi", "IUnknown_QueryService" | "#176") => k!(In(&IUNKNOWN), I, Iid, OutQ),
+        // ASSOCIATIONELEMENT lu à la disposition x86 par le runtime (#2475) ;
+        // l'IQueryAssociations rendu suit sa description quand elle existe.
+        ("shell32", "AssocCreateForClasses") => k!(I, I, Iid, OutQ),
         ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
         ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("urlmon", "CoInternetCreateSecurityManager") => {
@@ -1950,13 +1970,20 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
             Out(&super::com_audio::IACTIVATEAUDIOINTERFACEASYNCOPERATION)
         ),
         // DllGetClassObject des DLL audio (audio_com::dll_get_class_object).
-        ("mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9", "DllGetClassObject") => {
+        // taskschd (#2577) : même fabrique commune.
+        (
+            "mmdevapi" | "dsound" | "xaudio2_7" | "xaudio2_8" | "xaudio2_9" | "taskschd",
+            "DllGetClassObject",
+        ) => {
             k!(I, Iid, OutQ)
         }
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }
-        ("mfplat", _) => super::com_mf::api_kinds(func)?,
+        ("mfplat", _) => {
+            super::com_mf::api_kinds(func).or_else(|| super::com_mf_chaine::api_kinds(func))?
+        }
+        ("mf" | "mfreadwrite", _) => super::com_mf_chaine::api_kinds(func)?,
         _ => return None,
     };
     Some((k, None))
@@ -2062,6 +2089,10 @@ mod tests {
         let (k, r) = api_kinds("shlwapi", "SHOpenRegStreamW").unwrap();
         assert_eq!(slots(k), 4);
         assert!(r.is_some());
+        // #2475 : 16 octets (stdcall.tsv), interface rendue d'après son IID.
+        let (k, r) = api_kinds("shell32", "AssocCreateForClasses").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(r.is_none() && matches!(k[2..], [Iid, OutQ]));
     }
 
     /// #2409 : le gestionnaire de zones rendu à un programme x86 passe par
@@ -2090,6 +2121,27 @@ mod tests {
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(5).unwrap()), 3);
         // ProcessUrlAction : huit arguments.
         assert_eq!(slots(IINTERNETSECURITYMANAGER.method(7).unwrap()), 8);
+    }
+
+    /// #2531 : GDI+ reçoit l'IStream x86 du programme par un mandataire,
+    /// à la taille de stdcall.tsv (8 et 16 octets).
+    #[test]
+    fn flux_gdiplus_decrits() {
+        for f in [
+            "GdipLoadImageFromStream",
+            "GdipLoadImageFromStreamICM",
+            "GdipCreateBitmapFromStream",
+            "GdipCreateBitmapFromStreamICM",
+        ] {
+            let (k, r) = api_kinds("gdiplus", f).unwrap();
+            assert_eq!(slots(k), 2, "{f}");
+            assert!(r.is_none());
+            assert!(matches!(k[0], In(i) if std::ptr::eq(i, &ISTREAM)), "{f}");
+            assert!(matches!(k[1], OutPtr), "{f}");
+        }
+        let (k, _) = api_kinds("gdiplus", "GdipSaveImageToStream").unwrap();
+        assert_eq!(slots(k), 4);
+        assert!(matches!(k[1], In(i) if std::ptr::eq(i, &ISTREAM)));
     }
 
     /// #2428, lot B : les fonctions qui rendent un magasin de propriétés
