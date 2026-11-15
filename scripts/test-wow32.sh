@@ -57,7 +57,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
 names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032 wasapi32 audioact32 xaudio32 mf32 mfread32"
-command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 net32 thread32 load32 fiber32 com32 dlg32 tube32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
@@ -158,6 +158,10 @@ check() {
         exit 1
     fi
 }
+if test -f "$out/tube32.exe"; then
+    check tube32 'diagnostic hors du tube, tout est correct'
+    echo "tube32 : enfant x86 sur un tube (STARTF_USESTDHANDLES) qui faute : aucune ligne de Winlux dans le tube"
+fi
 if test -f "$out/net32.exe"; then
     check net32 'Réseau 32 bits : tout est correct'
     echo "net32 : Winsock x86 (AcceptEx, ConnectEx, GetAcceptExSockaddrs, OVERLAPPED x86 et port de complétion)"

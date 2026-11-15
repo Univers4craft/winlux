@@ -702,6 +702,8 @@ if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     # Winsock x86 (#1408) : AcceptEx, ConnectEx, port de complétion.
     # « large address aware » : mémoire x86 jusqu'à 4 Go (#1438).
     i686-w64-mingw32-gcc -O1 "$src/net32.c" -o "$out/net32.exe" -lws2_32 -Wl,--large-address-aware
+    # Diagnostic de Winlux hors du tube qu'un programme lit (#2530).
+    i686-w64-mingw32-gcc -O1 "$src/tube32.c" -o "$out/tube32.exe"
 else
     echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
 fi
