@@ -573,7 +573,12 @@ fn debug_string(text: String) {
     // Journal d'API (WINLUX_APITRACE) : Crashpad y écrit pourquoi il arrête
     // un processus.
     crate::thunks::api_note(&line);
-    let mut tail = crate::dlls::lock(&DEBUG_TAIL);
+    push_tail(&mut crate::dlls::lock(&DEBUG_TAIL), text);
+}
+
+/// Ajoute une ligne à la file des derniers messages, bornée à
+/// DEBUG_TAIL_LEN (la plus ancienne part).
+fn push_tail(tail: &mut std::collections::VecDeque<String>, text: String) {
     if tail.len() == DEBUG_TAIL_LEN {
         tail.pop_front();
     }
@@ -2119,20 +2124,34 @@ mod tests {
 
     #[test]
     fn output_debug_string_garde_les_derniers_messages() {
-        let w: Vec<u16> = "qt.qpa.plugin: Could not load\r\n"
+        // La file globale est commune à tous les tests : le test n'y vérifie
+        // que ses propres lignes, marquées (#2666).
+        let id = format!("{}-{:?}", std::process::id(), std::thread::current().id());
+        let premiere = format!("qt.qpa.plugin: Could not load {id}");
+        let w: Vec<u16> = format!("{premiere}\r\n")
             .encode_utf16()
             .chain([0])
             .collect();
         unsafe { output_debug_string_w(w.as_ptr()) };
-        unsafe { output_debug_string_a(b"deuxieme\0".as_ptr()) };
+        let deuxieme = format!("deuxieme {id}\0");
+        unsafe { output_debug_string_a(deuxieme.as_ptr()) };
+        let deuxieme = deuxieme.trim_end_matches('\0').to_string();
         let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
-        assert!(tail.contains(&"qt.qpa.plugin: Could not load".to_string()));
-        assert_eq!(tail.last().map(String::as_str), Some("deuxieme"));
-        for n in 0..DEBUG_TAIL_LEN + 5 {
-            debug_string(format!("m{n}"));
-        }
-        assert_eq!(crate::dlls::lock(&DEBUG_TAIL).len(), DEBUG_TAIL_LEN);
+        assert!(tail.contains(&premiere), "{tail:?}");
+        assert!(tail.contains(&deuxieme), "{tail:?}");
         print_debug_tail();
-        assert!(crate::dlls::lock(&DEBUG_TAIL).is_empty());
+        let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
+        assert!(!tail.contains(&premiere) && !tail.contains(&deuxieme));
+        // File bornée, sur une file à soi : les 20 dernières restent.
+        let mut locale = std::collections::VecDeque::new();
+        for n in 0..DEBUG_TAIL_LEN + 5 {
+            push_tail(&mut locale, format!("m{n}"));
+        }
+        assert_eq!(locale.len(), DEBUG_TAIL_LEN);
+        assert_eq!(locale.front().map(String::as_str), Some("m5"));
+        assert_eq!(
+            locale.back().cloned(),
+            Some(format!("m{}", DEBUG_TAIL_LEN + 4))
+        );
     }
 }
