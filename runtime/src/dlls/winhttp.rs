@@ -27,6 +27,9 @@ struct Options {
     connect_ms: i32,
     total_ms: i32,
     context: usize,
+    /// WINHTTP_OPTION_SECURE_PROTOCOLS : versions TLS 1.x permises
+    /// (minimum, maximum), x de 0 à 3 (#2609).
+    tls: Option<(u8, u8)>,
 }
 #[derive(Clone)]
 struct Request {
@@ -191,6 +194,7 @@ pub unsafe extern "win64" fn open(
             connect_ms: 60000,
             total_ms: 120000,
             context: 0,
+            tls: None,
         }),
     )
 }
@@ -519,6 +523,9 @@ fn perform(request: &Request) -> Result<Response, u32> {
             "connect-timeout = {:.3}\n",
             request.options.connect_ms as f64 / 1000.0
         ));
+    }
+    if let Some((min, max)) = request.options.tls {
+        config.push_str(&format!("tlsv1.{min}\ntls-max = \"1.{max}\"\n"));
     }
     if request.options.total_ms > 0 {
         config.push_str(&format!(
@@ -925,8 +932,44 @@ pub unsafe extern "win64" fn set_option(
         }
         return 1;
     }
+    // WINHTTP_OPTION_SECURE_PROTOCOLS (84) sur une session : DWORD de
+    // drapeaux WINHTTP_FLAG_SECURE_PROTOCOL_* (SSL2 0x8, SSL3 0x20, TLS1
+    // 0x80, TLS1_1 0x200, TLS1_2 0x800, TLS1_3 0x2000), d'après winhttp.h de
+    // mingw-w64 et la page « Option Flags » de Microsoft Learn. Les
+    // connexions de la session sont tenues entre la plus basse et la plus
+    // haute version TLS demandées ; SSL2/SSL3 ne sont jamais parlés, une
+    // valeur qui ne demande qu'eux est refusée (#2609).
+    if option == 84 {
+        if !matches!(entry.kind, Kind::Session(_)) {
+            return fail(12018);
+        }
+        if size != 4 {
+            return fail(87);
+        }
+        let flags = std::ptr::read_unaligned(value.cast::<u32>());
+        match secure_protocols(flags) {
+            Some(range) => {
+                options_mut(&mut entry.kind).tls = Some(range);
+                return 1;
+            }
+            None => return fail(87),
+        }
+    }
     // In particular, do not silently honor certificate-validation bypass flags.
     fail(50)
+}
+
+/// Versions TLS 1.x (minimum, maximum) d'une valeur de
+/// WINHTTP_OPTION_SECURE_PROTOCOLS ; `None` pour un drapeau inconnu ou
+/// une valeur sans aucune version TLS.
+fn secure_protocols(flags: u32) -> Option<(u8, u8)> {
+    const SSL: u32 = 0x8 | 0x20;
+    const TLS: [u32; 4] = [0x80, 0x200, 0x800, 0x2000];
+    if flags & !(SSL | TLS.iter().fold(0, |a, b| a | b)) != 0 {
+        return None;
+    }
+    let present: Vec<u8> = (0..4u8).filter(|i| flags & TLS[*i as usize] != 0).collect();
+    Some((*present.first()?, *present.last()?))
 }
 pub unsafe extern "win64" fn query_option(
     handle: usize,
@@ -1187,6 +1230,37 @@ mod tests {
                 set_option(connection, 83, (&zero as *const u32).cast(), 4),
                 0
             );
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2609 : WINHTTP_OPTION_SECURE_PROTOCOLS (84) acceptée sur une session
+    /// et retenue comme bornes TLS ; SSL seul, drapeau inconnu ou autre
+    /// poignée refusés.
+    #[test]
+    fn option_protocoles_securises_sur_une_session() {
+        let _teb = crate::process::test_teb();
+        assert_eq!(secure_protocols(0x800 | 0x2000), Some((2, 3)));
+        assert_eq!(secure_protocols(0x80 | 0x200 | 0x800), Some((0, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20 | 0x800), Some((2, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20), None);
+        assert_eq!(secure_protocols(0x800 | 0x1), None);
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            let v = 0x800u32 | 0x2000;
+            assert_eq!(set_option(session, 84, (&v as *const u32).cast(), 4), 1);
+            match &lock(handles()).get(&session).unwrap().kind {
+                Kind::Session(o) => assert_eq!(o.tls, Some((2, 3))),
+                _ => unreachable!(),
+            }
+            let ssl = 0x20u32;
+            assert_eq!(set_option(session, 84, (&ssl as *const u32).cast(), 4), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            assert_eq!(set_option(connection, 84, (&v as *const u32).cast(), 4), 0);
             assert_eq!(crate::process::last_error(), 12018);
             assert_eq!(close(session), 1);
         }
