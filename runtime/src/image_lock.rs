@@ -112,6 +112,13 @@ mod tests {
         std::fs::rename(&exe, &moved).unwrap();
         assert!(!in_use(&exe));
         HELD.lock().unwrap().clear();
+        // Un processus lancé au même moment par un autre test garde une copie
+        // du descripteur entre fork et exec : le verrou tombe à son exec, pas
+        // forcément à l'instant même (#2663).
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while in_use(&moved) && std::time::Instant::now() < limite {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(!in_use(&moved), "verrou levé avec le descripteur");
         std::fs::remove_dir_all(&dir).unwrap();
     }

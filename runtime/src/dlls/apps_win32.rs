@@ -2541,6 +2541,11 @@ mod tests {
 
     #[test]
     fn afficher_dans_le_dossier_ouvre_l_explorateur_winlux() {
+        if crate::launch::path_isole(
+            "dlls::apps_win32::tests::afficher_dans_le_dossier_ouvre_l_explorateur_winlux",
+        ) {
+            return;
+        }
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("winlux-shopen-{}", std::process::id()));
         let bin = dir.join("bin");
