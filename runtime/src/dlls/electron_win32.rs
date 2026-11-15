@@ -1946,6 +1946,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::winrt_uri::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.ApplicationModel.Core.CoreApplication (#2681).
+    if let Some(hr) = super::winrt_coreapp::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     // Classes déclarées par le manifeste du paquet du programme (#2657).
     if let Some(hr) =
         super::package_classes::activation_factory(class, &name, iid as *const u8, out)
