@@ -951,10 +951,11 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
-        // Bouton de la barre des tâches : progression, icône superposée (#1434).
+        // Contrôle navigateur web « Shell.Explorer » (#2228).
         if let Some(hr) = super::webbrowser::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Bouton de la barre des tâches : progression, icône superposée (#1434).
         if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }

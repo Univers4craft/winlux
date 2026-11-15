@@ -7,13 +7,12 @@
 //! REGDB_E_CLASSNOTREG : Eula.exe ferme sa boîte (-1), et WinRAR se replie
 //! sur un affichage texte qui perd les entités et des mots.
 //!
-//! Première étape, de mesure : l'objet se laisse créer et activer sur
-//! place (fenêtre fille, rectangles, site client), accepte l'inscription
-//! aux événements DWebBrowserEvents2 et note chaque appel. Ce qu'il ne sait
-//! pas encore faire rend E_NOTIMPL et le journalise avec son fichier et sa
-//! ligne, et chaque interface refusée est notée : une passe de banc dit
-//! ainsi quels chemins Eula.exe et l'installeur WinRAR empruntent avant
-//! qu'on écrive le rendu.
+//! Le contrôle se laisse créer et activer sur place (fenêtre fille,
+//! rectangles, site client), annonce la navigation à ses abonnés
+//! DWebBrowserEvents2 et montre la page chargée en texte dans une zone de
+//! lecture. Son document (IHTMLDocument2, IPersistStreamInit) reçoit le
+//! contrat que l'application écrit par write ou par Load. Ce qu'il ne sait
+//! pas faire rend E_NOTIMPL et le journalise avec son fichier et sa ligne.
 //!
 //! Méthodes, ordre des tables et identifiants : en-têtes MinGW-w64
 //! (exdisp.h, oleidl.h, ocidl.h) et documentation Microsoft Learn
