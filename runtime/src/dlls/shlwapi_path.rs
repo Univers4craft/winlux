@@ -538,17 +538,12 @@ fn find_on_path(file: &[u32], dirs: &[Vec<u32>]) -> Option<Vec<u32>> {
 
 // ── Enveloppes A et W ───────────────────────────────────────────────────
 
+// Les enveloppes A et W sont écrites une à une, pas par macro_rules! :
+// build.rs ne relève la signature x86 que d'un `extern "win64" fn nom(`
+// écrit dans le source, et une fonction engendrée par macro n'avait pas de
+// passerelle 32 bits (PathIsUNCW, outil de déploiement d'Office, #2512).
+
 /// Fonction qui modifie le chemin sur place et rend un BOOL.
-macro_rules! in_place {
-    ($a:ident, $w:ident, |$v:ident| $body:expr) => {
-        unsafe extern "win64" fn $a(path: *mut u8) -> i32 {
-            in_place_impl(path, |$v| $body)
-        }
-        unsafe extern "win64" fn $w(path: *mut u16) -> i32 {
-            in_place_impl(path, |$v| $body)
-        }
-    };
-}
 unsafe fn in_place_impl<T: Unit>(path: *mut T, f: impl FnOnce(&mut Vec<u32>) -> bool) -> i32 {
     if path.is_null() {
         return 0;
@@ -560,94 +555,158 @@ unsafe fn in_place_impl<T: Unit>(path: *mut T, f: impl FnOnce(&mut Vec<u32>) -> 
 }
 
 /// Prédicat sur un chemin.
-macro_rules! query {
-    ($a:ident, $w:ident, |$v:ident| $body:expr) => {
-        unsafe extern "win64" fn $a(path: *const u8) -> i32 {
-            let $v = read(path);
-            ($body) as i32
-        }
-        unsafe extern "win64" fn $w(path: *const u16) -> i32 {
-            let $v = read(path);
-            ($body) as i32
-        }
-    };
+unsafe fn query_impl<T: Unit>(path: *const T, f: impl FnOnce(&[u32]) -> bool) -> i32 {
+    f(&read(path)) as i32
 }
 
 /// Fonction qui rend un pointeur dans le chemin (ou NULL).
-macro_rules! pointer {
-    ($a:ident, $w:ident, |$v:ident| $body:expr) => {
-        unsafe extern "win64" fn $a(path: *const u8) -> *const u8 {
-            if path.is_null() {
-                return std::ptr::null();
-            }
-            let $v = read(path);
-            let at: Option<usize> = $body;
-            at.map_or(std::ptr::null(), |i| path.add(i))
-        }
-        unsafe extern "win64" fn $w(path: *const u16) -> *const u16 {
-            if path.is_null() {
-                return std::ptr::null();
-            }
-            let $v = read(path);
-            let at: Option<usize> = $body;
-            at.map_or(std::ptr::null(), |i| path.add(i))
-        }
-    };
+unsafe fn pointer_impl<T: Unit>(
+    path: *const T,
+    f: impl FnOnce(&[u32]) -> Option<usize>,
+) -> *const T {
+    if path.is_null() {
+        return std::ptr::null();
+    }
+    f(&read(path)).map_or(std::ptr::null(), |i| path.add(i))
 }
 
-in_place!(PathStripToRootA, PathStripToRootW, |v| strip_to_root(v));
+unsafe extern "win64" fn PathStripToRootA(path: *mut u8) -> i32 {
+    in_place_impl(path, strip_to_root)
+}
+unsafe extern "win64" fn PathStripToRootW(path: *mut u16) -> i32 {
+    in_place_impl(path, strip_to_root)
+}
 unsafe extern "win64" fn PathStripPathA(path: *mut u8) -> i32 {
     in_place_impl(path, |v| {
         strip_path(v);
         true
     })
 }
-in_place!(PathRemoveArgsA, PathRemoveArgsW, |v| {
-    remove_args(v);
-    true
-});
-in_place!(PathRemoveBlanksA, PathRemoveBlanksW, |v| {
-    remove_blanks(v);
-    true
-});
-in_place!(PathQuoteSpacesA, PathQuoteSpacesW, |v| quote_spaces(v));
-in_place!(PathUnquoteSpacesA, PathUnquoteSpacesW, |v| unquote_spaces(
-    v
-));
-in_place!(PathUndecorateA, PathUndecorateW, |v| {
-    undecorate(v);
-    true
-});
-in_place!(PathMakePrettyA, PathMakePrettyW, |v| make_pretty(v));
+unsafe extern "win64" fn PathRemoveArgsA(path: *mut u8) -> i32 {
+    in_place_impl(path, |v| {
+        remove_args(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathRemoveArgsW(path: *mut u16) -> i32 {
+    in_place_impl(path, |v| {
+        remove_args(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathRemoveBlanksA(path: *mut u8) -> i32 {
+    in_place_impl(path, |v| {
+        remove_blanks(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathRemoveBlanksW(path: *mut u16) -> i32 {
+    in_place_impl(path, |v| {
+        remove_blanks(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathQuoteSpacesA(path: *mut u8) -> i32 {
+    in_place_impl(path, quote_spaces)
+}
+unsafe extern "win64" fn PathQuoteSpacesW(path: *mut u16) -> i32 {
+    in_place_impl(path, quote_spaces)
+}
+unsafe extern "win64" fn PathUnquoteSpacesA(path: *mut u8) -> i32 {
+    in_place_impl(path, unquote_spaces)
+}
+unsafe extern "win64" fn PathUnquoteSpacesW(path: *mut u16) -> i32 {
+    in_place_impl(path, unquote_spaces)
+}
+unsafe extern "win64" fn PathUndecorateA(path: *mut u8) -> i32 {
+    in_place_impl(path, |v| {
+        undecorate(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathUndecorateW(path: *mut u16) -> i32 {
+    in_place_impl(path, |v| {
+        undecorate(v);
+        true
+    })
+}
+unsafe extern "win64" fn PathMakePrettyA(path: *mut u8) -> i32 {
+    in_place_impl(path, |v| make_pretty(v))
+}
+unsafe extern "win64" fn PathMakePrettyW(path: *mut u16) -> i32 {
+    in_place_impl(path, |v| make_pretty(v))
+}
 
-query!(PathIsUNCA, PathIsUNCW, |v| is_unc(&v));
-query!(PathIsUNCServerA, PathIsUNCServerW, |v| is_unc_server(&v));
-query!(PathIsUNCServerShareA, PathIsUNCServerShareW, |v| {
-    is_unc_server_share(&v)
-});
-query!(PathIsFileSpecA, PathIsFileSpecW, |v| is_file_spec(&v));
-query!(PathIsURLA, PathIsURLW, |v| is_url(&v));
-query!(
-    PathIsLFNFileSpecA,
-    PathIsLFNFileSpecW,
-    |v| is_lfn_file_spec(&v)
-);
+unsafe extern "win64" fn PathIsUNCA(path: *const u8) -> i32 {
+    query_impl(path, is_unc)
+}
+unsafe extern "win64" fn PathIsUNCW(path: *const u16) -> i32 {
+    query_impl(path, is_unc)
+}
+unsafe extern "win64" fn PathIsUNCServerA(path: *const u8) -> i32 {
+    query_impl(path, is_unc_server)
+}
+unsafe extern "win64" fn PathIsUNCServerW(path: *const u16) -> i32 {
+    query_impl(path, is_unc_server)
+}
+unsafe extern "win64" fn PathIsUNCServerShareA(path: *const u8) -> i32 {
+    query_impl(path, is_unc_server_share)
+}
+unsafe extern "win64" fn PathIsUNCServerShareW(path: *const u16) -> i32 {
+    query_impl(path, is_unc_server_share)
+}
+unsafe extern "win64" fn PathIsFileSpecA(path: *const u8) -> i32 {
+    query_impl(path, is_file_spec)
+}
+unsafe extern "win64" fn PathIsFileSpecW(path: *const u16) -> i32 {
+    query_impl(path, is_file_spec)
+}
+unsafe extern "win64" fn PathIsURLA(path: *const u8) -> i32 {
+    query_impl(path, is_url)
+}
+unsafe extern "win64" fn PathIsURLW(path: *const u16) -> i32 {
+    query_impl(path, is_url)
+}
+unsafe extern "win64" fn PathIsLFNFileSpecA(path: *const u8) -> i32 {
+    query_impl(path, is_lfn_file_spec)
+}
+unsafe extern "win64" fn PathIsLFNFileSpecW(path: *const u16) -> i32 {
+    query_impl(path, is_lfn_file_spec)
+}
 unsafe extern "win64" fn PathIsNetworkPathA(path: *const u8) -> i32 {
     read(path).starts_with(&[BS, BS]) as i32
 }
 unsafe extern "win64" fn PathGetDriveNumberA(path: *const u8) -> i32 {
     drive_number(&read(path))
 }
-query!(PathIsDirectoryEmptyA, PathIsDirectoryEmptyW, |v| {
-    std::fs::read_dir(crate::paths::to_linux(&text(&v)))
-        .map(|mut d| d.next().is_none())
-        .unwrap_or(false)
-});
-// Aucun dossier n'est marqué « système » par Winlux.
-query!(PathIsSystemFolderA, PathIsSystemFolderW, |v| {
-    let _ = v;
-    false
-});
+unsafe extern "win64" fn PathIsDirectoryEmptyA(path: *const u8) -> i32 {
+    query_impl(path, |v| {
+        std::fs::read_dir(crate::paths::to_linux(&text(v)))
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
+    })
+}
+unsafe extern "win64" fn PathIsDirectoryEmptyW(path: *const u16) -> i32 {
+    query_impl(path, |v| {
+        std::fs::read_dir(crate::paths::to_linux(&text(v)))
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
+    })
+}
+// Aucun dossier n'est marqué « système » par Winlux. Deuxième argument
+// (dwAttrb) d'après la documentation publique.
+unsafe extern "win64" fn PathIsSystemFolderA(path: *const u8, _attrib: u32) -> i32 {
+    query_impl(path, |v| {
+        let _ = v;
+        false
+    })
+}
+unsafe extern "win64" fn PathIsSystemFolderW(path: *const u16, _attrib: u32) -> i32 {
+    query_impl(path, |v| {
+        let _ = v;
+        false
+    })
+}
 
 unsafe extern "win64" fn PathSkipRootA(path: *const u8) -> *const u8 {
     if path.is_null() {
@@ -655,12 +714,18 @@ unsafe extern "win64" fn PathSkipRootA(path: *const u8) -> *const u8 {
     }
     skip_root(&read(path)).map_or(std::ptr::null(), |i| path.add(i))
 }
-pointer!(PathGetArgsA, PathGetArgsW, |v| Some(
-    args_start(&v).map_or(v.len(), |i| i + 1)
-));
-pointer!(PathFindNextComponentA, PathFindNextComponentW, |v| {
-    next_component(&v)
-});
+unsafe extern "win64" fn PathGetArgsA(path: *const u8) -> *const u8 {
+    pointer_impl(path, |v| Some(args_start(v).map_or(v.len(), |i| i + 1)))
+}
+unsafe extern "win64" fn PathGetArgsW(path: *const u16) -> *const u16 {
+    pointer_impl(path, |v| Some(args_start(v).map_or(v.len(), |i| i + 1)))
+}
+unsafe extern "win64" fn PathFindNextComponentA(path: *const u8) -> *const u8 {
+    pointer_impl(path, next_component)
+}
+unsafe extern "win64" fn PathFindNextComponentW(path: *const u16) -> *const u16 {
+    pointer_impl(path, next_component)
+}
 
 /// PathParseIconLocation rend l'index, pas un BOOL : enveloppes dédiées.
 unsafe extern "win64" fn path_parse_icon_location_a(path: *mut u8) -> i32 {

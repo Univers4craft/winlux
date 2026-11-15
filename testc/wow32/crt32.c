@@ -339,5 +339,34 @@ int main(int argc, char **argv) {
         }
         CHECK(44, ok);
     }
+    /* #2512 : enveloppes de shlwapi servies en x86 (l'outil de déploiement
+       d'Office mourait en 0xC0000139 sur PathIsUNCW). PathIsSystemFolderW
+       dépile deux arguments, wnsprintfW est à arguments variables. */
+    {
+        typedef int (__stdcall *q_t)(const wchar_t *);
+        typedef int (__stdcall *q2_t)(const wchar_t *, unsigned long);
+        typedef const wchar_t *(__stdcall *p_t)(const wchar_t *);
+        typedef int (__stdcall *ip_t)(wchar_t *);
+        typedef int (__cdecl *f_t)(wchar_t *, int, const wchar_t *, ...);
+        HMODULE s = LoadLibraryA("shlwapi.dll");
+        q_t unc = s ? (q_t)GetProcAddress(s, "PathIsUNCW") : 0;
+        q2_t sys = s ? (q2_t)GetProcAddress(s, "PathIsSystemFolderW") : 0;
+        p_t args = s ? (p_t)GetProcAddress(s, "PathGetArgsW") : 0;
+        ip_t root = s ? (ip_t)GetProcAddress(s, "PathStripToRootW") : 0;
+        f_t fmt = s ? (f_t)GetProcAddress(s, "wnsprintfW") : 0;
+        int ok = unc && sys && args && root && fmt;
+        if (ok) {
+            static const wchar_t cmd[] = L"c:\\a.exe -x";
+            wchar_t r[260] = L"c:\\dossier\\f.txt";
+            wchar_t out[16];
+            ok = unc(L"\\\\serveur\\partage") == 1 && unc(L"c:\\x") == 0
+                 && sys(L"c:\\x", 0) == 0
+                 && args(cmd) == cmd + 9
+                 && root(r) == 1 && wcscmp(r, L"c:\\") == 0
+                 && fmt(out, 16, L"%d-%s", 42, L"ab") == 5
+                 && wcscmp(out, L"42-ab") == 0;
+        }
+        CHECK(45, ok);
+    }
     return fails;
 }
