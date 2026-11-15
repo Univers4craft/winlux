@@ -602,6 +602,22 @@ unsafe extern "win64" fn InternetGetCookieW(
     1
 }
 
+/// InternetGetCookieExW (Microsoft Learn) : InternetGetCookieW avec des
+/// drapeaux (INTERNET_COOKIE_HTTPONLY, _THIRD_PARTY,
+/// INTERNET_FLAG_RESTRICTED_ZONE) et un réservé. Le magasin ne distingue ni
+/// HttpOnly ni tiers : les drapeaux ne restreignent rien. L'outil de
+/// déploiement d'Office l'importe en différé (#2639).
+unsafe extern "win64" fn InternetGetCookieExW(
+    url: *const u16,
+    name: *const u16,
+    data: *mut u16,
+    size: *mut u32,
+    _flags: u32,
+    _reserved: usize,
+) -> i32 {
+    InternetGetCookieW(url, name, data, size)
+}
+
 /// Forme canonique d'une URL (drapeaux ICU_* de wininet.h).
 fn canonicalize(url: &str, flags: u32) -> String {
     const ICU_DECODE: u32 = 0x1000_0000;
@@ -765,6 +781,7 @@ pub fn wininet_exports() -> crate::dlls::Exports {
         "SetUrlCacheEntryGroupW" => fn SetUrlCacheEntryGroupW,
         "InternetSetCookieW" => fn InternetSetCookieW,
         "InternetGetCookieW" => fn InternetGetCookieW,
+        "InternetGetCookieExW" => fn InternetGetCookieExW,
         "InternetCanonicalizeUrlW" => fn InternetCanonicalizeUrlW,
         "InternetGoOnlineW" => fn InternetGoOnlineW,
         "FtpCommandW" => fn FtpCommandW,
@@ -1583,6 +1600,21 @@ mod tests {
                 1
             );
             assert_eq!(crate::dlls::wstr(out.as_ptr()), "a=1; b=2");
+            // Forme Ex (#2639) : même magasin, drapeaux sans effet.
+            let mut m = n + 1;
+            let mut ex = vec![0u16; m as usize];
+            assert_eq!(
+                InternetGetCookieExW(
+                    site.as_ptr(),
+                    utf16z("b").as_ptr(),
+                    ex.as_mut_ptr(),
+                    &mut m,
+                    0x2000,
+                    0
+                ),
+                1
+            );
+            assert_eq!(crate::dlls::wstr(ex.as_ptr()), "b=2");
             let other = utf16z("http://autre.org/");
             assert_eq!(
                 InternetGetCookieW(other.as_ptr(), std::ptr::null(), out.as_mut_ptr(), &mut n),
