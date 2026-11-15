@@ -11,6 +11,11 @@
 //! confinés par Winlux. Le choix est consigné dans le journal, mémorisé et
 //! visible dans Paramètres > Confidentialité et sécurité, où un refus est
 //! respecté ; aux lancements suivants, `--no-sandbox` est ajouté d'office.
+//!
+//! Le repli ne vaut que pour un navigateur dont les enfants sont son propre
+//! exécutable (Chromium, Electron) : lui seul lit `--no-sandbox`. Un
+//! programme qui héberge un moteur web dans un autre exécutable (Acrobat et
+//! ses enfants CEF) prendrait l'option pour un document à ouvrir (#2696).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,11 +25,12 @@ use crate::permissions::{Capability, Decision};
 
 const FLAG: &str = "--no-sandbox";
 
-/// Enfants Chromium créés suspendus par ce processus, avec leur `--type=`.
-static SUSPENDED_CHILDREN: Mutex<Option<HashMap<i32, String>>> = Mutex::new(None);
+/// Enfants Chromium créés suspendus par ce processus : leur `--type=` et
+/// s'ils sont notre propre exécutable.
+static SUSPENDED_CHILDREN: Mutex<Option<HashMap<i32, (String, bool)>>> = Mutex::new(None);
 static ASKED: AtomicBool = AtomicBool::new(false);
 
-fn lock() -> std::sync::MutexGuard<'static, Option<HashMap<i32, String>>> {
+fn lock() -> std::sync::MutexGuard<'static, Option<HashMap<i32, (String, bool)>>> {
     SUSPENDED_CHILDREN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -33,20 +39,32 @@ pub fn is_chromium_child_line(line: &str) -> bool {
     line.contains(" --type=") || line.starts_with("--type=")
 }
 
-/// CreateProcess vient de lancer `pid` suspendu avec cette ligne.
-pub fn note_child(pid: u32, line: &str) {
+/// CreateProcess vient de lancer `pid` suspendu avec cette ligne ;
+/// `same_image` : l'enfant est notre propre exécutable.
+pub fn note_child(pid: u32, line: &str, same_image: bool) {
     if is_chromium_child_line(line) {
         lock()
             .get_or_insert_with(HashMap::new)
-            .insert(pid as i32, child_type(line).to_string());
+            .insert(pid as i32, (child_type(line).to_string(), same_image));
     }
 }
 
 /// TerminateProcess sur `pid` ; `still_suspended` : jamais relancé.
 pub fn on_terminate(pid: i32, still_suspended: bool) {
-    let kind = lock().as_mut().and_then(|s| s.remove(&pid));
-    if let (Some(kind), true) = (kind, still_suspended) {
-        sandbox_failed(&cause(pid, &kind, std::process::id()));
+    let child = lock().as_mut().and_then(|s| s.remove(&pid));
+    let Some((kind, same_image)) = child.filter(|_| still_suspended) else {
+        return;
+    };
+    let cause = cause(pid, &kind, std::process::id());
+    if same_image {
+        sandbox_failed(&cause);
+    } else {
+        // Moteur web hébergé dans un autre exécutable : `--no-sandbox` ne le
+        // concerne pas et l'hôte le lirait comme un document (#2696).
+        crate::log_info!(
+            "process",
+            "bac à sable d'un moteur web hébergé ({cause}) : l'enfant n'est pas notre exécutable, pas de relance sans bac à sable (#2696)"
+        );
     }
 }
 
@@ -154,10 +172,20 @@ mod tests {
 
     #[test]
     fn enfant_inconnu_ignore() {
-        note_child(4242, "app.exe --type=gpu-process");
+        note_child(4242, "app.exe --type=gpu-process", true);
         // Déjà relancé (pas suspendu) : rien.
         on_terminate(4242, false);
         assert!(!lock().as_ref().unwrap().contains_key(&4242));
+        assert!(!ASKED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn moteur_heberge_dans_un_autre_executable_sans_relance_2696() {
+        // Acrobat.exe tue un enfant AcroCEF.exe --type=renderer encore
+        // suspendu : pas de relance, rien de mémorisé.
+        note_child(4343, "\"C:\\a\\AcroCEF.exe\" --type=renderer", false);
+        on_terminate(4343, true);
+        assert!(!lock().as_ref().unwrap().contains_key(&4343));
         assert!(!ASKED.load(Ordering::SeqCst));
     }
 
