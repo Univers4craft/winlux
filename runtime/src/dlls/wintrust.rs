@@ -240,6 +240,28 @@ pub unsafe extern "win64" fn WinVerifyTrustEx(hwnd: usize, action: usize, data: 
     WinVerifyTrust(hwnd, action, data)
 }
 
+/// Ligne du journal pour un refus de WinVerifyTrust (#2585) : le fichier,
+/// ce qui manque à sa signature et le code rendu. None quand elle est
+/// acceptée. Écrite sans variable de diagnostic, comme les autres refus qui
+/// changent le comportement d'un programme.
+fn refusal_line(
+    path: &std::path::Path,
+    signature: &crate::setup::appx_signature::Signature,
+    status: u32,
+) -> Option<String> {
+    use crate::setup::appx_signature::Signature;
+    let why = match signature {
+        Signature::Verified { .. } => return None,
+        Signature::Absent => "aucune signature".to_string(),
+        Signature::Unverified { signer, reason } => format!("signée par « {signer} », {reason}"),
+        Signature::Invalid(e) => format!("signature invalide : {e}"),
+    };
+    Some(format!(
+        "WinVerifyTrust refuse {} : {why} → {status:#x}",
+        path.display()
+    ))
+}
+
 pub unsafe extern "win64" fn WinVerifyTrust(_hwnd: usize, action: usize, data: usize) -> i32 {
     if data == 0 {
         return fail(E_INVALIDARG);
@@ -292,10 +314,10 @@ pub unsafe extern "win64" fn WinVerifyTrust(_hwnd: usize, action: usize, data: u
         Signature::Unverified { .. } => CERT_E_UNTRUSTEDROOT,
         Signature::Invalid(_) => TRUST_E_BAD_DIGEST,
     };
-    crate::trace!(
-        "WinVerifyTrust({}) : {signature:?} → {status:#x}",
-        path.display()
-    );
+    match refusal_line(&path, &signature, status) {
+        Some(line) => crate::log_warn!("wintrust", "{line}"),
+        None => crate::trace!("WinVerifyTrust({}) : {signature:?} → 0", path.display()),
+    }
     if state_action == WTD_STATEACTION_VERIFY && !certs.is_empty() {
         let prov_flags = *((data + w[WD_PROV_FLAGS]) as *const u32);
         let h = build_state(data, action, prov_flags, status, &certs);
@@ -367,6 +389,25 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refus_journalise_avec_sa_raison() {
+        use crate::setup::appx_signature::Signature;
+        let p = std::path::Path::new("/x/plug_ins/EScript.api");
+        let s = Signature::Unverified {
+            signer: "Adobe Inc.".into(),
+            reason: "la chaîne de certificats n'a pas pu être vérifiée".into(),
+        };
+        let line = refusal_line(p, &s, CERT_E_UNTRUSTEDROOT).unwrap();
+        assert!(line.contains("EScript.api"), "{line}");
+        assert!(line.contains("Adobe Inc."), "{line}");
+        assert!(line.contains("n'a pas pu être vérifiée"), "{line}");
+        assert!(line.contains("0x800b0109"), "{line}");
+        let ok = Signature::Verified {
+            signer: "Adobe Inc.".into(),
+        };
+        assert!(refusal_line(p, &ok, 0).is_none());
+    }
 
     #[test]
     fn dispositions_x86_et_x64() {
