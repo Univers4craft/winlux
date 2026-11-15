@@ -689,7 +689,21 @@ fn verrouillage_de_toutes_les_sessions_avant_la_veille() {
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     // :0 déjà verrouillé (la session d'Alice, quittée par « Changer d'utilisateur »).
     fs::write(sleep::lock_shown_marker(&f.0, ":0"), "1\n").unwrap();
-    sleep::lock_before_sleep(&f.0);
+    // Un lancement refusé (ETXTBSY d'un fork concurrent, #2621) est rendu,
+    // jamais avalé : l'échec dit sa cause au lieu d'un « lock-calls » vide.
+    let failed = sleep::lock_before_sleep(&f.0);
+    assert!(
+        failed.is_empty(),
+        "écran de verrouillage non lancé : {failed:?}"
+    );
+    // L'attente de la veille est bornée à 3 s ; une CI chargée peut lancer le
+    // faux script plus lentement : on lui laisse 20 s avant de conclure.
+    for _ in 0..200 {
+        if f.0.join("run/winlux/lock/shown-1").is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let calls = f.get("lock-calls");
     assert!(calls.lines().any(|l| l == ":1 bob"), "{calls:?}");
     assert!(
