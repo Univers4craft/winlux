@@ -41,7 +41,7 @@ crt_runtime.rs	OnexitTable	a-verifier
 crt_ucrt.rs	Empty	a-verifier	
 crypt32.rs	AlgId	a-verifier	CRYPT_ALGORITHM_IDENTIFIER 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
 crypt32.rs	BitBlob	a-verifier	CRYPT_BIT_BLOB 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
-crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
+crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; pName de CertNameToStrW/A et le blob de CryptQueryObject lus à la taille de pointeur par blob_slice (#2698) ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
 crypt32.rs	CertContext	x86	CERT_CONTEXT 20 octets en x86 (40 en x64) : vue Cert.view remplie par fill_view (#1667) ; test condensat_et_certificat_auto_signe
 crypt32.rs	CertInfo	x86	CERT_INFO 112 octets en x86 (208 en x64) : Cert.info32 (#1667) ; test condensat_et_certificat_auto_signe
 crypt32.rs	Chain	x86	chaîne Winlux : la vue de tête est x86 pour un programme 32 bits (#1708)
