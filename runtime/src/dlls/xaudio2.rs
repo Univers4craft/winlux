@@ -18,6 +18,10 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Tables x86 des objets pour les programmes 32 bits (#2428).
+#[path = "xaudio2_x86.rs"]
+mod x86;
+
 const XAUDIO2_E_INVALID_CALL: i32 = 0x8896_0001u32 as i32;
 
 const XAUDIO2_VOICE_NOSAMPLESPLAYED: u32 = 0x100;
@@ -115,11 +119,11 @@ static FX_VT: VTable<3> = VTable([
 ]);
 
 fn new_fx(kind: FxKind) -> *mut Com<FxObject> {
-    Com::create(FX_VT.ptr(), FxObject { kind })
+    Com::create(x86::abi(&FX_VT, "XAudio2Effect"), FxObject { kind })
 }
 
 unsafe fn fx_kind(obj: *mut c_void) -> Option<FxKind> {
-    if obj.is_null() || *(obj as *const *const ()) != FX_VT.ptr() {
+    if obj.is_null() || *(obj as *const *const ()) != x86::abi(&FX_VT, "XAudio2Effect") {
         return None;
     }
     Some(Com::get(obj as *mut Com<FxObject>).kind)
@@ -167,7 +171,8 @@ impl Effect {
 
 impl Drop for Effect {
     fn drop(&mut self) {
-        unsafe { unknown_release(self.object as *mut c_void) }
+        // Effet du runtime (table win64 ou x86) ou XAPO du programme.
+        unsafe { crate::dlls::legacy_com::unknown_call(self.object, 2) };
     }
 }
 
@@ -569,10 +574,10 @@ impl audio::Source for XaShared {
         }
         unsafe {
             for &cb in &engine_cbs {
-                call0(cb as *mut c_void, 0); // OnProcessingPassStart
+                x86::callback(cb, 0, None); // OnProcessingPassStart
             }
             for &(cb, bytes) in &voice_cbs {
-                call1(cb as *mut c_void, 0, bytes); // OnVoiceProcessingPassStart
+                x86::callback(cb, 0, Some(bytes)); // OnVoiceProcessingPassStart
             }
         }
         // 2. Traitement sous verrou.
@@ -584,16 +589,16 @@ impl audio::Source for XaShared {
         unsafe {
             for e in events {
                 match e {
-                    Ev::BufferStart(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 3, ctx),
-                    Ev::BufferEnd(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 4, ctx),
-                    Ev::LoopEnd(cb, ctx) if cb != 0 => call1(cb as *mut c_void, 5, ctx),
-                    Ev::StreamEnd(cb) if cb != 0 => call0(cb as *mut c_void, 2),
-                    Ev::PassEnd(cb) => call0(cb as *mut c_void, 1),
+                    Ev::BufferStart(cb, ctx) if cb != 0 => x86::callback(cb, 3, Some(ctx)),
+                    Ev::BufferEnd(cb, ctx) if cb != 0 => x86::callback(cb, 4, Some(ctx)),
+                    Ev::LoopEnd(cb, ctx) if cb != 0 => x86::callback(cb, 5, Some(ctx)),
+                    Ev::StreamEnd(cb) if cb != 0 => x86::callback(cb, 2, None),
+                    Ev::PassEnd(cb) => x86::callback(cb, 1, None),
                     _ => {}
                 }
             }
             for &cb in &cbs {
-                call0(cb as *mut c_void, 1); // OnProcessingPassEnd
+                x86::callback(cb, 1, None); // OnProcessingPassEnd
             }
         }
         true
@@ -627,9 +632,9 @@ fn new_engine(version: u8) -> *mut Com<Engine> {
     let source = audio::add_source(sh.clone());
     sh.source.store(source as usize, Ordering::Relaxed);
     let vt = if version == 7 {
-        XA27_VT.ptr()
+        x86::abi(&XA27_VT, "IXAudio2_27")
     } else {
-        XA_VT.ptr()
+        x86::abi(&XA_VT, "IXAudio2")
     };
     Com::create(
         vt,
@@ -821,7 +826,7 @@ unsafe fn parse_effects(chain: *const u8) -> Result<Vec<Effect>, i32> {
         if obj.is_null() {
             return Err(E_INVALIDARG);
         }
-        unknown_add_ref(obj);
+        crate::dlls::legacy_com::unknown_call(obj as usize, 1);
         let state = match fx_kind(obj) {
             Some(FxKind::Reverb) => FxState::Reverb(dsp::Reverb::new(audio::RATE)),
             Some(FxKind::Meter) => FxState::Meter {
@@ -909,9 +914,9 @@ unsafe extern "win64" fn xa_create_source(
         Err(e) => return e,
     };
     let vt = if e.version == 7 {
-        SOURCE27_VT.ptr()
+        x86::abi(&SOURCE27_VT, "IXAudio2SourceVoice_27")
     } else {
-        SOURCE_VT.ptr()
+        x86::abi(&SOURCE_VT, "IXAudio2SourceVoice")
     };
     let v = alloc_voice(this, vt);
     let max_ratio = if max_ratio.is_finite() && max_ratio > 0.0 {
@@ -973,7 +978,7 @@ unsafe extern "win64" fn xa_create_submix(
         Ok(f) => f,
         Err(e) => return e,
     };
-    let v = alloc_voice(this, SUBMIX_VT.ptr());
+    let v = alloc_voice(this, x86::abi(&SUBMIX_VT, "IXAudio2SubmixVoice"));
     let state = new_voice_state(
         Role::Submix { stage },
         channels,
@@ -1013,7 +1018,7 @@ unsafe extern "win64" fn xa_create_master(
         Ok(f) => f,
         Err(e) => return e,
     };
-    let v = alloc_voice(this, MASTER_VT.ptr());
+    let v = alloc_voice(this, x86::abi(&MASTER_VT, "IXAudio2MasteringVoice"));
     let state = new_voice_state(Role::Master, channels, rate, flags, Vec::new(), effects);
     let mut g = lock(&e.sh.graph);
     g.voices.insert(voice_id(v), state);
@@ -1278,11 +1283,12 @@ unsafe extern "win64" fn v_get_effect_params(
             return E_INVALIDARG;
         };
         match &e.state {
-            // XAUDIO2FX_VOLUMEMETER_LEVELS { float *pPeak; float *pRMS; UINT32 ChannelCount; }
-            FxState::Meter { peak, rms } if size >= 20 => {
-                let pk = *(p as *const *mut f32);
-                let rm = *(p.add(8) as *const *mut f32);
-                let n = *(p.add(16) as *const u32) as usize;
+            // XAUDIO2FX_VOLUMEMETER_LEVELS { float *pPeak; float *pRMS;
+            // UINT32 ChannelCount; } compacte : 20 octets en x64, 12 en x86.
+            FxState::Meter { peak, rms } if size as usize >= 2 * ps() + 4 => {
+                let pk = rd_ptr(p, 0) as *mut f32;
+                let rm = rd_ptr(p, ps()) as *mut f32;
+                let n = rd_u32(p, 2 * ps()) as usize;
                 for c in 0..n {
                     let (a, b) = if c < 2 { (peak[c], rms[c]) } else { (0.0, 0.0) };
                     if !pk.is_null() {
@@ -1875,6 +1881,20 @@ pub fn exports() -> crate::dlls::Exports {
     }
 }
 
+/// Tables de méthodes et leur nom, pour vérifier les signatures x86.
+#[cfg(test)]
+fn tables() -> Vec<(&'static str, usize)> {
+    vec![
+        ("IXAudio2", XA_VT.0.len()),
+        ("IXAudio2_27", XA27_VT.0.len()),
+        ("IXAudio2SubmixVoice", SUBMIX_VT.0.len()),
+        ("IXAudio2MasteringVoice", MASTER_VT.0.len()),
+        ("IXAudio2SourceVoice", SOURCE_VT.0.len()),
+        ("IXAudio2SourceVoice_27", SOURCE27_VT.0.len()),
+        ("XAudio2Effect", FX_VT.0.len()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     #[repr(C, align(8))]
@@ -2033,7 +2053,7 @@ mod tests {
                 ),
                 S_OK
             );
-            unknown_release(meter);
+            crate::dlls::legacy_com::unknown_call(meter as usize, 2);
             let mut send = Al([0u8; 12]);
             send[4..12].copy_from_slice(&(sub as usize).to_le_bytes());
             let mut sends = Al([0u8; 12]);

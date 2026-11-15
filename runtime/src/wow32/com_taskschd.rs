@@ -248,46 +248,68 @@ pub(super) static ITASKSETTINGS: Iface = Iface {
     ),
     parent: Some(&IDISPATCH),
     methods: &[
-        GET,                     // get_AllowDemandStart
-        SET,                     // put_AllowDemandStart
-        BS_GET,                  // get_RestartInterval
-        SET,                     // put_RestartInterval
-        GET,                     // get_RestartCount
-        SET,                     // put_RestartCount
-        GET,                     // get_MultipleInstances
-        SET,                     // put_MultipleInstances
-        GET,                     // get_StopIfGoingOnBatteries
-        SET,                     // put_StopIfGoingOnBatteries
-        GET,                     // get_DisallowStartIfOnBatteries
-        SET,                     // put_DisallowStartIfOnBatteries
-        GET,                     // get_AllowHardTerminate
-        SET,                     // put_AllowHardTerminate
-        GET,                     // get_StartWhenAvailable
-        SET,                     // put_StartWhenAvailable
-        BS_GET,                  // get_XmlText
-        SET,                     // put_XmlText
-        GET,                     // get_RunOnlyIfNetworkAvailable
-        SET,                     // put_RunOnlyIfNetworkAvailable
-        BS_GET,                  // get_ExecutionTimeLimit
-        SET,                     // put_ExecutionTimeLimit
-        GET,                     // get_Enabled
-        SET,                     // put_Enabled
-        BS_GET,                  // get_DeleteExpiredTaskAfter
-        SET,                     // put_DeleteExpiredTaskAfter
-        GET,                     // get_Priority
-        SET,                     // put_Priority
-        GET,                     // get_Compatibility
-        SET,                     // put_Compatibility
-        GET,                     // get_Hidden
-        SET,                     // put_Hidden
-        Some(&[Out(&IUNKNOWN)]), // get_IdleSettings (aucun objet rendu)
-        SET,                     // put_IdleSettings (ignoré)
-        GET,                     // get_RunOnlyIfIdle
-        SET,                     // put_RunOnlyIfIdle
-        GET,                     // get_WakeToRun
-        SET,                     // put_WakeToRun
-        Some(&[Out(&IUNKNOWN)]), // get_NetworkSettings (aucun objet rendu)
-        SET,                     // put_NetworkSettings (ignoré)
+        GET,                          // get_AllowDemandStart
+        SET,                          // put_AllowDemandStart
+        BS_GET,                       // get_RestartInterval
+        SET,                          // put_RestartInterval
+        GET,                          // get_RestartCount
+        SET,                          // put_RestartCount
+        GET,                          // get_MultipleInstances
+        SET,                          // put_MultipleInstances
+        GET,                          // get_StopIfGoingOnBatteries
+        SET,                          // put_StopIfGoingOnBatteries
+        GET,                          // get_DisallowStartIfOnBatteries
+        SET,                          // put_DisallowStartIfOnBatteries
+        GET,                          // get_AllowHardTerminate
+        SET,                          // put_AllowHardTerminate
+        GET,                          // get_StartWhenAvailable
+        SET,                          // put_StartWhenAvailable
+        BS_GET,                       // get_XmlText
+        SET,                          // put_XmlText
+        GET,                          // get_RunOnlyIfNetworkAvailable
+        SET,                          // put_RunOnlyIfNetworkAvailable
+        BS_GET,                       // get_ExecutionTimeLimit
+        SET,                          // put_ExecutionTimeLimit
+        GET,                          // get_Enabled
+        SET,                          // put_Enabled
+        BS_GET,                       // get_DeleteExpiredTaskAfter
+        SET,                          // put_DeleteExpiredTaskAfter
+        GET,                          // get_Priority
+        SET,                          // put_Priority
+        GET,                          // get_Compatibility
+        SET,                          // put_Compatibility
+        GET,                          // get_Hidden
+        SET,                          // put_Hidden
+        Some(&[Out(&IIDLESETTINGS)]), // get_IdleSettings (#2576)
+        SET,                          // put_IdleSettings (ignoré)
+        GET,                          // get_RunOnlyIfIdle
+        SET,                          // put_RunOnlyIfIdle
+        GET,                          // get_WakeToRun
+        SET,                          // put_WakeToRun
+        Some(&[Out(&IUNKNOWN)]),      // get_NetworkSettings (aucun objet rendu)
+        SET,                          // put_NetworkSettings (ignoré)
+    ],
+};
+
+/// IIdleSettings (#2576), ordre de taskschd.idl.
+pub(super) static IIDLESETTINGS: Iface = Iface {
+    name: "IIdleSettings",
+    iid: iid(
+        0x8459_4461,
+        0x0053,
+        0x4342,
+        [0xA8, 0xFD, 0x08, 0x8F, 0xAB, 0xF1, 0x1F, 0x32],
+    ),
+    parent: Some(&IDISPATCH),
+    methods: &[
+        BS_GET, // get_IdleDuration
+        SET,    // put_IdleDuration
+        BS_GET, // get_WaitTimeout
+        SET,    // put_WaitTimeout
+        GET,    // get_StopOnIdleEnd
+        SET,    // put_StopOnIdleEnd
+        GET,    // get_RestartOnIdle
+        SET,    // put_RestartOnIdle
     ],
 };
 
@@ -523,6 +545,7 @@ pub(super) static ALL: &[&Iface] = &[
     &ITASKDEFINITION,
     &IREGISTRATIONINFO,
     &ITASKSETTINGS,
+    &IIDLESETTINGS,
     &IPRINCIPAL,
     &ITRIGGERCOLLECTION,
     &ITRIGGER,
@@ -554,6 +577,7 @@ mod tests {
             (&ITASKDEFINITION, 14),
             (&IREGISTRATIONINFO, 18),
             (&ITASKSETTINGS, 40),
+            (&IIDLESETTINGS, 8),
             (&IPRINCIPAL, 12),
             (&ITRIGGERCOLLECTION, 6),
             (&ITRIGGER, 13),

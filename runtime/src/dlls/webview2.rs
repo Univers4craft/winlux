@@ -243,6 +243,9 @@ enum Family {
     Message,
     ContentLoading,
     SourceChanged,
+    ControllerOptions,
+    ProcessCollection,
+    Profile,
 }
 
 impl Family {
@@ -257,6 +260,11 @@ impl Family {
             Family::Message => &MESSAGE_ARGS_IIDS,
             Family::ContentLoading => &CONTENT_LOADING_ARGS_IIDS,
             Family::SourceChanged => &SOURCE_CHANGED_ARGS_IIDS,
+            Family::ControllerOptions => &CONTROLLER_OPTIONS_IIDS,
+            Family::ProcessCollection => &PROCESS_COLLECTION_IIDS,
+            // Seule l'interface de base est servie (#2614) : Profile2 à 8
+            // sont refusées plutôt que rendues vides.
+            Family::Profile => &PROFILE_IIDS[..1],
         }
     }
 }
@@ -272,6 +280,15 @@ struct Args {
     string: Option<String>,
 }
 
+/// Réglages d'un ICoreWebView2ControllerOptions (#2570).
+#[derive(Default, Clone)]
+struct ControllerOpts {
+    profile: String,
+    private: bool,
+    locale: String,
+    background: Option<u32>,
+}
+
 #[repr(C)]
 struct Com {
     vtbl: *const usize,
@@ -280,6 +297,13 @@ struct Com {
     env: Option<Arc<Env>>,
     view: Option<Arc<View>>,
     args: Args,
+    opts: Mutex<ControllerOpts>,
+    /// Objets hôtes de la vue (AddHostObjectToScript, #2596).
+    hosts: Mutex<Vec<HostObject>>,
+    /// Réglages de vue Settings3 à 9, lus tels qu'écrits (#2601).
+    more_settings: Mutex<[u32; 8]>,
+    /// MemoryUsageTargetLevel de la vue (#2613) : 0 normal, 1 bas.
+    memory_level: AtomicU32,
 }
 
 fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args: Args) -> usize {
@@ -290,6 +314,10 @@ fn new_com(family: Family, env: Option<Arc<Env>>, view: Option<Arc<View>>, args:
         env,
         view,
         args,
+        opts: Mutex::new(ControllerOpts::default()),
+        hosts: Mutex::new(Vec::new()),
+        more_settings: Mutex::new(MORE_SETTINGS_DEFAULTS),
+        memory_level: AtomicU32::new(0),
     });
     Box::into_raw(b) as usize
 }
@@ -325,6 +353,7 @@ extern "win64" fn com_release(this: usize) -> u32 {
         let left = com(this).refs.fetch_sub(1, Ordering::AcqRel) - 1;
         if left == 0 {
             let c = Box::from_raw(this as *mut Com);
+            super::lock(&c.hosts).clear();
             // Le contrôleur libéré par l'application ferme sa vue.
             if c.family == Family::Controller {
                 if let Some(v) = c.view.as_ref() {
@@ -337,6 +366,44 @@ extern "win64" fn com_release(this: usize) -> u32 {
 }
 extern "win64" fn not_implemented() -> i32 {
     E_NOTIMPL
+}
+
+/// Méthodes `add_X` de chaque famille (rang après IUnknown ; `remove_X`
+/// suit toujours au rang suivant), dans l'ordre de l'IDL public WebView2
+/// (SDK 1.0.2849.39, chaînes de `webview2_iids.rs`) (#2547).
+fn event_slots(family: Family) -> &'static [usize] {
+    match family {
+        // ICoreWebView2 … ICoreWebView2_27 : NavigationStarting (4),
+        // ContentLoading, SourceChanged, HistoryChanged, NavigationCompleted,
+        // FrameNavigationStarting, FrameNavigationCompleted,
+        // ScriptDialogOpening, PermissionRequested, ProcessFailed (22),
+        // WebMessageReceived (31), NewWindowRequested (41),
+        // DocumentTitleChanged (43), ContainsFullScreenElementChanged (49),
+        // WebResourceRequested (52), WindowCloseRequested (56),
+        // WebResourceResponseReceived (58), DOMContentLoaded (61),
+        // FrameCreated (70), DownloadStarting (72),
+        // ClientCertificateRequested (74), IsMutedChanged (78),
+        // IsDocumentPlayingAudioChanged (82),
+        // IsDefaultDownloadDialogOpenChanged (85),
+        // BasicAuthenticationRequested (94), ContextMenuRequested (97),
+        // StatusBarTextChanged (99), ServerCertificateErrorDetected (103),
+        // FaviconChanged (106), LaunchingExternalUriScheme (114),
+        // NotificationReceived (123), SaveAsUIShowing (125),
+        // SaveFileSecurityCheckStarting (128), ScreenCaptureStarting (130).
+        Family::WebView => &[
+            4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 31, 41, 43, 49, 52, 56, 58, 61, 70, 72, 74, 78,
+            82, 85, 94, 97, 99, 103, 106, 114, 123, 125, 128, 130,
+        ],
+        // ICoreWebView2Controller … Controller4 : ZoomFactorChanged (6),
+        // MoveFocusRequested (10), GotFocus (12), LostFocus (14),
+        // AcceleratorKeyPressed (16), RasterizationScaleChanged (29).
+        Family::Controller => &[6, 10, 12, 14, 16, 29],
+        // ICoreWebView2Environment … Environment14 :
+        // NewBrowserVersionAvailable (3), BrowserProcessExited (9),
+        // ProcessInfosChanged (13).
+        Family::Environment => &[3, 9, 13],
+        _ => &[],
+    }
 }
 
 /// Table virtuelle d'une famille : IUnknown, les méthodes écrites, et
@@ -358,11 +425,22 @@ fn vtable(family: Family) -> &'static [usize] {
         Family::Message => (MESSAGE_ARGS_SLOTS, message_methods()),
         Family::ContentLoading => (CONTENT_LOADING_ARGS_SLOTS, content_loading_methods()),
         Family::SourceChanged => (SOURCE_CHANGED_ARGS_SLOTS, source_changed_methods()),
+        Family::ControllerOptions => (CONTROLLER_OPTIONS_SLOTS, controller_options_methods()),
+        Family::ProcessCollection => (PROCESS_COLLECTION_SLOTS, process_collection_methods()),
+        Family::Profile => (PROFILE_SLOTS, profile_methods()),
     };
     let mut v = vec![not_implemented as *const () as usize; slots];
     v[0] = query_interface as *const () as usize;
     v[1] = com_add_ref as *const () as usize;
     v[2] = com_release as *const () as usize;
+    // Toute inscription à un événement est acceptée, même pour un
+    // événement que Winlux ne déclenche jamais (#2547) : add_X rend un jeton,
+    // remove_X l'accepte. Un E_NOTIMPL ici fait lever une exception à
+    // l'application qui s'abonne (Teams, #2511).
+    for &add in event_slots(family) {
+        v[3 + add] = add_ignored as *const () as usize;
+        v[3 + add + 1] = remove_ignored as *const () as usize;
+    }
     for (i, f) in methods {
         v[3 + i] = f;
     }
@@ -467,6 +545,19 @@ struct Env {
     dispatcher: usize,
     user_data: String,
     language: String,
+    /// Dossier de données tel que l'application l'a donné (chemin Windows).
+    user_data_win: String,
+    /// Profil par défaut de l'environnement (#2614).
+    profile: Mutex<ProfileState>,
+}
+
+/// Réglages modifiables du profil (#2614).
+#[derive(Default)]
+struct ProfileState {
+    /// None : dossier de téléchargement par défaut de l'utilisateur.
+    download_folder: Option<String>,
+    /// COREWEBVIEW2_PREFERRED_COLOR_SCHEME : 0 AUTO (défaut), 1 LIGHT, 2 DARK.
+    color_scheme: u32,
 }
 
 /// Commande du moteur web : `WINLUX_WEBVIEW_HELPER` (« python3.12 x.py »
@@ -511,6 +602,8 @@ unsafe extern "win64" fn create_environment_with_options(
             .to_string_lossy()
             .into_owned(),
         language,
+        user_data_win: wstr(user_data_folder),
+        profile: Mutex::new(ProfileState::default()),
     });
     crate::trace!("WebView2 : environnement (données {:?})", env.user_data);
     add_ref(handler);
@@ -583,7 +676,250 @@ fn environment_methods() -> Vec<(usize, usize)> {
         (2, env_browser_version as *const () as usize),
         (3, add_ignored as *const () as usize),
         (4, remove_ignored as *const () as usize),
+        // ICoreWebView2Environment10 (#2570).
+        (17, env_create_controller_options as *const () as usize),
+        (18, env_create_controller_with_options as *const () as usize),
+        // ICoreWebView2Environment8 / 13 : processus du moteur (#2581).
+        (15, env_get_process_infos as *const () as usize),
+        (22, env_get_process_extended_infos as *const () as usize),
     ]
+}
+
+/// ICoreWebView2Environment8::GetProcessInfos : collection des processus
+/// du navigateur. Le moteur de Winlux (WebKitGTK) n'expose pas de
+/// processus au sens de WebView2 : la collection est vide (#2581).
+unsafe extern "win64" fn env_get_process_infos(_this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(Family::ProcessCollection, None, None, Args::default());
+    S_OK
+}
+
+/// ICoreWebView2Environment13::GetProcessExtendedInfos(handler) : rappel
+/// asynchrone (boucle de messages, comme les autres rappels) avec S_OK et
+/// une collection vide (#2581).
+unsafe extern "win64" fn env_get_process_extended_infos(this: usize, handler: usize) -> i32 {
+    if handler == 0 {
+        return E_INVALIDARG;
+    }
+    let Some(env) = com(this).env.clone() else {
+        return E_FAIL;
+    };
+    add_ref(handler);
+    let obj = new_com(Family::ProcessCollection, None, None, Args::default());
+    post(
+        env.dispatcher,
+        Box::new(move || unsafe {
+            invoke(handler, S_OK as usize, obj);
+            release(obj);
+            release(handler);
+        }),
+    );
+    S_OK
+}
+
+// --- ICoreWebView2Profile (#2614) ---
+
+fn profile_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, profile_name as *const () as usize),
+        (1, get_false as *const () as usize),
+        (2, profile_path as *const () as usize),
+        (3, profile_get_download as *const () as usize),
+        (4, profile_put_download as *const () as usize),
+        (5, profile_get_color as *const () as usize),
+        (6, profile_put_color as *const () as usize),
+    ]
+}
+/// Nom du profil par défaut : la documentation publique ne le donne pas ;
+/// Winlux répond « Default ».
+const DEFAULT_PROFILE: &str = "Default";
+unsafe extern "win64" fn profile_name(_this: usize, out: *mut *mut u16) -> i32 {
+    co_string(DEFAULT_PROFILE, out)
+}
+/// Chemin du profil : `<dossier de données>\Default` (forme non donnée
+/// par la documentation publique, choix de Winlux).
+unsafe extern "win64" fn profile_path(this: usize, out: *mut *mut u16) -> i32 {
+    let base = com(this)
+        .env
+        .as_ref()
+        .map(|e| e.user_data_win.trim_end_matches('\\').to_string())
+        .unwrap_or_default();
+    let path = if base.is_empty() {
+        String::new()
+    } else {
+        format!("{base}\\{DEFAULT_PROFILE}")
+    };
+    co_string(&path, out)
+}
+unsafe extern "win64" fn profile_get_download(this: usize, out: *mut *mut u16) -> i32 {
+    let chosen = com(this)
+        .env
+        .as_ref()
+        .and_then(|e| super::lock(&e.profile).download_folder.clone());
+    // Défaut documenté : le dossier de téléchargement de l'utilisateur.
+    let path = chosen.unwrap_or_else(|| {
+        super::knownfolders::known_folder_path("374DE290-123F-4565-9164-39C4925E467B", 0)
+            .unwrap_or_default()
+    });
+    co_string(&path, out)
+}
+/// Valeur invalide : E_INVALIDARG, comme le dit la documentation publique.
+unsafe extern "win64" fn profile_put_download(this: usize, path: *const u16) -> i32 {
+    if path.is_null() {
+        return E_INVALIDARG;
+    }
+    let path = wstr(path);
+    if path.trim().is_empty() {
+        return E_INVALIDARG;
+    }
+    if let Some(e) = com(this).env.as_ref() {
+        super::lock(&e.profile).download_folder = Some(path);
+    }
+    S_OK
+}
+unsafe extern "win64" fn profile_get_color(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = com(this)
+        .env
+        .as_ref()
+        .map_or(0, |e| super::lock(&e.profile).color_scheme);
+    S_OK
+}
+unsafe extern "win64" fn profile_put_color(this: usize, scheme: u32) -> i32 {
+    if scheme > 2 {
+        return E_INVALIDARG;
+    }
+    if let Some(e) = com(this).env.as_ref() {
+        super::lock(&e.profile).color_scheme = scheme;
+    }
+    S_OK
+}
+/// ICoreWebView2_13::get_Profile : le profil par défaut de l'environnement
+/// (les réglages d'un ControllerOptions ne sont pas encore reportés).
+unsafe extern "win64" fn web_get_profile(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::Profile,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
+    S_OK
+}
+
+// --- ICoreWebView2ProcessInfoCollection / …ExtendedInfoCollection ---
+
+fn process_collection_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, collection_count as *const () as usize),
+        (1, collection_value_at as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn collection_count(_this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+unsafe extern "win64" fn collection_value_at(_this: usize, _index: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    E_INVALIDARG
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerOptions : un
+/// objet de réglages neuf (profil vide, navigation privée désactivée).
+unsafe extern "win64" fn env_create_controller_options(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = new_com(
+        Family::ControllerOptions,
+        com(this).env.clone(),
+        None,
+        Args::default(),
+    );
+    S_OK
+}
+
+/// ICoreWebView2Environment10::CreateCoreWebView2ControllerWithOptions :
+/// comme CreateCoreWebView2Controller. Les réglages (profil, navigation
+/// privée, langue des scripts, couleur de fond) restent dans leur objet :
+/// le moteur WebKitGTK de Winlux n'a qu'un profil par dossier de données,
+/// et la couleur se règle ensuite par put_DefaultBackgroundColor.
+unsafe extern "win64" fn env_create_controller_with_options(
+    this: usize,
+    parent: usize,
+    _options: usize,
+    handler: usize,
+) -> i32 {
+    env_create_controller(this, parent, handler)
+}
+
+// --- ICoreWebView2ControllerOptions (…3) ---
+
+fn controller_options_methods() -> Vec<(usize, usize)> {
+    vec![
+        (0, opt_get_profile as *const () as usize),
+        (1, opt_put_profile as *const () as usize),
+        (2, opt_get_private as *const () as usize),
+        (3, opt_put_private as *const () as usize),
+        (4, opt_get_locale as *const () as usize),
+        (5, opt_put_locale as *const () as usize),
+        (6, opt_get_background as *const () as usize),
+        (7, opt_put_background as *const () as usize),
+    ]
+}
+unsafe extern "win64" fn opt_get_profile(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).profile.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_profile(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).profile = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_private(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = i32::from(super::lock(&com(this).opts).private);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_private(this: usize, on: i32) -> i32 {
+    super::lock(&com(this).opts).private = on != 0;
+    S_OK
+}
+unsafe extern "win64" fn opt_get_locale(this: usize, out: *mut *mut u16) -> i32 {
+    let v = super::lock(&com(this).opts).locale.clone();
+    co_string(&v, out)
+}
+unsafe extern "win64" fn opt_put_locale(this: usize, v: *const u16) -> i32 {
+    super::lock(&com(this).opts).locale = wstr(v);
+    S_OK
+}
+unsafe extern "win64" fn opt_get_background(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // COREWEBVIEW2_COLOR : blanc opaque par défaut (documentation de
+    // DefaultBackgroundColor).
+    *out = super::lock(&com(this).opts)
+        .background
+        .unwrap_or(0xFFFF_FFFF);
+    S_OK
+}
+unsafe extern "win64" fn opt_put_background(this: usize, color: u32) -> i32 {
+    super::lock(&com(this).opts).background = Some(color);
+    S_OK
 }
 
 unsafe extern "win64" fn env_browser_version(_this: usize, out: *mut *mut u16) -> i32 {
@@ -835,6 +1171,10 @@ impl View {
                 self.controller.store(ctrl, Ordering::SeqCst);
                 self.webview.store(web, Ordering::SeqCst);
                 self.settings.store(settings, Ordering::SeqCst);
+                engine_user_agent(
+                    &mut super::lock(&self.state),
+                    get_str(&ev, "user_agent").unwrap_or_default(),
+                );
                 let h = self.pending_create.swap(0, Ordering::SeqCst);
                 crate::trace!("WebView2 : moteur prêt (fenêtre X {})", get_num(&ev, "xid"));
                 if h != 0 {
@@ -1212,12 +1552,18 @@ fn webview_methods() -> Vec<(usize, usize)> {
         (43, add_title_changed as *const () as usize),
         (44, web_remove as *const () as usize),
         (45, web_title as *const () as usize),
-        (47, ok1 as *const () as usize),
+        (46, web_add_host_object as *const () as usize),
+        (47, web_remove_host_object as *const () as usize),
         (48, ok0 as *const () as usize),
         (51, get_false as *const () as usize),
         (54, ok2 as *const () as usize),
         (55, ok2 as *const () as usize),
     ];
+    // ICoreWebView2_13 : Profile (#2614).
+    m.push((102, web_get_profile as *const () as usize));
+    // ICoreWebView2_19 : MemoryUsageTargetLevel (#2613).
+    m.push((116, web_get_memory_level as *const () as usize));
+    m.push((117, web_put_memory_level as *const () as usize));
     // Événements acceptés mais jamais déclenchés (cadres, dialogues,
     // autorisations, nouvelles fenêtres, requêtes, fermeture…).
     for (add, remove) in [
@@ -1436,6 +1782,166 @@ unsafe extern "win64" fn web_can_go_forward(this: usize, out: *mut i32) -> i32 {
     *out = i32::from(super::lock(&v.state).can_forward);
     S_OK
 }
+/// Objet hôte retenu par une vue (#2596) : le VARIANT de l'application,
+/// copié avec sa propre référence (interface AddRef, BSTR et tableau
+/// dupliqués), libéré au remplacement, au retrait ou avec la vue.
+struct HostObject {
+    name: String,
+    vt: u16,
+    data: usize,
+}
+
+const VT_DECIMAL: u16 = 14;
+const VT_DISPATCH: u16 = 9;
+const VT_UNKNOWN: u16 = 13;
+const VT_BSTR: u16 = 8;
+const VT_RECORD: u16 = 36;
+const VT_ARRAY: u16 = 0x2000;
+const VT_BYREF: u16 = 0x4000;
+/// {00020400-0000-0000-C000-000000000046}
+const IID_IDISPATCH_BYTES: [u8; 16] = [
+    0x00, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+impl Drop for HostObject {
+    fn drop(&mut self) {
+        unsafe {
+            if self.vt & VT_ARRAY != 0 {
+                super::oleaut32::safe_array_destroy(self.data);
+            } else if self.vt == VT_DISPATCH {
+                release(self.data);
+            } else if self.vt == VT_BSTR {
+                super::oleaut32::sys_free_string(self.data as *mut u16);
+            }
+        }
+    }
+}
+
+/// Copie le VARIANT `v` avec sa propre référence. Types refusés par la
+/// documentation publique (IUnknown générique, VT_DECIMAL, VT_RECORD,
+/// tableaux par référence) : None.
+unsafe fn host_object(name: String, v: *const u8) -> Option<HostObject> {
+    let vt = *(v as *const u16);
+    let data = *(v.add(8) as *const usize);
+    if vt & VT_BYREF != 0 || vt == VT_DECIMAL || vt & !VT_ARRAY == VT_RECORD {
+        return None;
+    }
+    if vt & VT_ARRAY != 0 {
+        let mut copy = 0usize;
+        if data == 0 || super::oleaut32::safe_array_copy(data, &mut copy) != S_OK {
+            return None;
+        }
+        return Some(HostObject {
+            name,
+            vt,
+            data: copy,
+        });
+    }
+    match vt {
+        VT_DISPATCH => {
+            add_ref(data);
+            Some(HostObject { name, vt, data })
+        }
+        // Un IUnknown qui implémente IDispatch est traité comme IDispatch.
+        VT_UNKNOWN => {
+            if data == 0 {
+                return None;
+            }
+            let qi: extern "win64" fn(usize, *const u8, *mut usize) -> i32 =
+                std::mem::transmute(**(data as *const *const usize));
+            let mut disp = 0usize;
+            (qi(data, IID_IDISPATCH_BYTES.as_ptr(), &mut disp) == S_OK && disp != 0).then_some(
+                HostObject {
+                    name,
+                    vt: VT_DISPATCH,
+                    data: disp,
+                },
+            )
+        }
+        VT_BSTR => {
+            let copy = if data == 0 {
+                0
+            } else {
+                super::oleaut32::sys_alloc_string(data as *const u16) as usize
+            };
+            Some(HostObject {
+                name,
+                vt,
+                data: copy,
+            })
+        }
+        _ => Some(HostObject { name, vt, data }),
+    }
+}
+
+/// ICoreWebView2::AddHostObjectToScript (#2596). Un même nom remplace
+/// l'objet précédent. Le pont vers `chrome.webview.hostObjects` (appels
+/// IDispatch depuis le script) n'est pas encore là.
+unsafe extern "win64" fn web_add_host_object(
+    this: usize,
+    name: *const u16,
+    object: *const u8,
+) -> i32 {
+    if name.is_null() || object.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    if name.is_empty() {
+        return E_INVALIDARG;
+    }
+    let Some(obj) = host_object(name, object) else {
+        return E_INVALIDARG;
+    };
+    let mut hosts = super::lock(&com(this).hosts);
+    // L'ancien objet est libéré hors du verrou.
+    let old = hosts
+        .iter()
+        .position(|h| h.name == obj.name)
+        .map(|i| hosts.remove(i));
+    hosts.push(obj);
+    drop(hosts);
+    drop(old);
+    S_OK
+}
+
+/// ICoreWebView2::RemoveHostObjectFromScript (#2596). Un nom inconnu ne
+/// change rien (la documentation publique ne dit pas ce qu'il rend).
+unsafe extern "win64" fn web_remove_host_object(this: usize, name: *const u16) -> i32 {
+    if name.is_null() {
+        return E_INVALIDARG;
+    }
+    let name = wstr(name);
+    let mut hosts = super::lock(&com(this).hosts);
+    let old = hosts
+        .iter()
+        .position(|h| h.name == name)
+        .map(|i| hosts.remove(i));
+    drop(hosts);
+    drop(old);
+    S_OK
+}
+
+/// ICoreWebView2_19::get_MemoryUsageTargetLevel (#2613).
+unsafe extern "win64" fn web_get_memory_level(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = com(this).memory_level.load(Ordering::Relaxed) as i32;
+    S_OK
+}
+/// ICoreWebView2_19::put_MemoryUsageTargetLevel (#2613) : NORMAL (0) ou
+/// LOW (1), d'après l'IDL public. L'écriture est « best effort » selon la
+/// documentation : le moteur WebKitGTK n'en tient pas compte, la valeur se
+/// relit. Une autre valeur est refusée (E_INVALIDARG, non documenté).
+unsafe extern "win64" fn web_put_memory_level(this: usize, level: i32) -> i32 {
+    if !(0..=1).contains(&level) {
+        return E_INVALIDARG;
+    }
+    com(this)
+        .memory_level
+        .store(level as u32, Ordering::Relaxed);
+    S_OK
+}
 unsafe extern "win64" fn web_title(this: usize, out: *mut *mut u16) -> i32 {
     let Some(v) = view_of(this) else {
         return E_FAIL;
@@ -1513,7 +2019,71 @@ fn settings_methods() -> Vec<(usize, usize)> {
         m.push((get, get_true as *const () as usize));
         m.push((put, ok1 as *const () as usize));
     }
+    // ICoreWebView2Settings3 à 9 (#2601) : un get/put par propriété, aux
+    // méthodes 20 à 35, valeurs par défaut de la documentation publique.
+    let more: [(usize, usize); 8] = [
+        (
+            more_get::<0> as *const () as usize,
+            more_put::<0> as *const () as usize,
+        ),
+        (
+            more_get::<1> as *const () as usize,
+            more_put::<1> as *const () as usize,
+        ),
+        (
+            more_get::<2> as *const () as usize,
+            more_put::<2> as *const () as usize,
+        ),
+        (
+            more_get::<3> as *const () as usize,
+            more_put::<3> as *const () as usize,
+        ),
+        (
+            more_get::<4> as *const () as usize,
+            more_put::<4> as *const () as usize,
+        ),
+        (
+            more_get::<5> as *const () as usize,
+            more_put::<5> as *const () as usize,
+        ),
+        (
+            more_get::<6> as *const () as usize,
+            more_put::<6> as *const () as usize,
+        ),
+        (
+            more_get::<7> as *const () as usize,
+            more_put::<7> as *const () as usize,
+        ),
+    ];
+    for (k, (get, put)) in more.into_iter().enumerate() {
+        m.push((20 + 2 * k, get));
+        m.push((21 + 2 * k, put));
+    }
     m
+}
+
+/// Défauts documentés (learn.microsoft.com, ICoreWebView2Settings3 à 9) :
+/// AreBrowserAcceleratorKeysEnabled TRUE, IsPasswordAutosaveEnabled FALSE,
+/// IsGeneralAutofillEnabled TRUE, IsPinchZoomEnabled TRUE,
+/// IsSwipeNavigationEnabled TRUE, HiddenPdfToolbarItems
+/// COREWEBVIEW2_PDF_TOOLBAR_ITEMS_NONE (0), IsReputationCheckingRequired
+/// TRUE, IsNonClientRegionSupportEnabled FALSE. Le moteur WebKitGTK n'en
+/// applique encore aucun : ils se relisent tels qu'écrits.
+const MORE_SETTINGS_DEFAULTS: [u32; 8] = [1, 0, 1, 1, 1, 0, 1, 0];
+
+unsafe extern "win64" fn more_get<const K: usize>(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = super::lock(&com(this).more_settings)[K];
+    S_OK
+}
+unsafe extern "win64" fn more_put<const K: usize>(this: usize, value: u32) -> i32 {
+    // Les BOOL sont rendus 0 ou 1 ; HiddenPdfToolbarItems (5) est un
+    // masque, gardé tel quel.
+    let value = if K == 5 { value } else { u32::from(value != 0) };
+    super::lock(&com(this).more_settings)[K] = value;
+    S_OK
 }
 unsafe extern "win64" fn get_true(_this: usize, out: *mut i32) -> i32 {
     if out.is_null() {
@@ -1551,6 +2121,24 @@ bool_setting!(set_get_messages, set_put_messages, messages_enabled, "");
 bool_setting!(set_get_devtools, set_put_devtools, devtools, "devtools");
 bool_setting!(set_get_menus, set_put_menus, context_menus, "menus");
 
+/// Agent par défaut : celui que le moteur annonce dans `ready`, tant que
+/// l'application n'en a pas posé un (#2617). Avant, get_UserAgent rendait
+/// "" et une application qui y ajoute son suffixe envoyait « ␣Appli/… ».
+fn engine_user_agent(state: &mut ViewState, engine: String) {
+    if state.user_agent.is_empty() {
+        state.user_agent = engine;
+    }
+}
+/// put_UserAgent : « If the parameter is empty the User Agent will not be
+/// updated and the current User Agent will remain » (documentation
+/// publique, #2617). Rend vrai si l'agent change.
+fn put_user_agent(state: &mut ViewState, ua: &str) -> bool {
+    if ua.is_empty() {
+        return false;
+    }
+    state.user_agent = ua.to_string();
+    true
+}
 unsafe extern "win64" fn set_get_user_agent(this: usize, out: *mut *mut u16) -> i32 {
     let Some(v) = view_of(this) else {
         return E_FAIL;
@@ -1563,7 +2151,9 @@ unsafe extern "win64" fn set_put_user_agent(this: usize, ua: *const u16) -> i32 
         return E_FAIL;
     };
     let ua = wstr(ua);
-    super::lock(&v.state).user_agent = ua.clone();
+    if !put_user_agent(&mut super::lock(&v.state), &ua) {
+        return S_OK;
+    }
     v.send(&format!(
         "{{\"op\":\"settings\",\"user_agent\":{}}}",
         json_escape(&ua)
@@ -1732,5 +2322,327 @@ mod tests {
             vtable(Family::WebView)[3 + 58 + 7 + 3],
             web_map_host as *const () as usize
         );
+    }
+
+    /// #2547 : aucune inscription à un événement ne rend E_NOTIMPL, et
+    /// l'inscription rend un jeton que la désinscription accepte.
+    #[test]
+    fn inscriptions_aux_evenements_acceptees_2547() {
+        let stub = not_implemented as *const () as usize;
+        for (family, slots) in [
+            (Family::WebView, WEBVIEW_SLOTS),
+            (Family::Controller, CONTROLLER_SLOTS),
+            (Family::Environment, ENVIRONMENT_SLOTS),
+        ] {
+            let v = vtable(family);
+            for &add in event_slots(family) {
+                assert!(3 + add + 1 < slots);
+                assert_ne!(v[3 + add], stub, "add_ au rang {add}");
+                assert_ne!(v[3 + add + 1], stub, "remove_ au rang {}", add + 1);
+            }
+        }
+        // ICoreWebView2Environment5 : add_BrowserProcessExited (rang 9).
+        let add: unsafe extern "win64" fn(usize, usize, *mut i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 9]) };
+        let remove: unsafe extern "win64" fn(usize, i64) -> i32 =
+            unsafe { std::mem::transmute(vtable(Family::Environment)[3 + 10]) };
+        let mut token = 0i64;
+        assert_eq!(unsafe { add(0, 0, &mut token) }, S_OK);
+        assert_ne!(token, 0);
+        assert_eq!(unsafe { remove(0, token) }, S_OK);
+        // ICoreWebView2Controller3 : add_RasterizationScaleChanged (rang 29).
+        assert_eq!(
+            vtable(Family::Controller)[3 + 29],
+            add_ignored as *const () as usize
+        );
+    }
+
+    /// #2570 : ICoreWebView2Environment10 rend un objet de réglages de
+    /// contrôleur dont les propriétés se relisent.
+    #[test]
+    fn reglages_de_controleur_2570() {
+        let env = vtable(Family::Environment);
+        assert_eq!(
+            env[3 + 17],
+            env_create_controller_options as *const () as usize
+        );
+        assert_eq!(
+            env[3 + 18],
+            env_create_controller_with_options as *const () as usize
+        );
+        let envobj = new_com(Family::Environment, None, None, Args::default());
+        let mut opts = 0usize;
+        assert_eq!(
+            unsafe { env_create_controller_options(envobj, &mut opts) },
+            S_OK
+        );
+        assert_ne!(opts, 0);
+        let vt = vtable(Family::ControllerOptions);
+        assert_eq!(vt.len(), CONTROLLER_OPTIONS_SLOTS);
+        let mut out = 0usize;
+        let iid = CONTROLLER_OPTIONS_IIDS[2].as_ptr();
+        assert_eq!(query_interface(opts, iid, &mut out), S_OK);
+        unsafe {
+            assert_eq!(opt_put_private(opts, 1), S_OK);
+            let mut on = 0i32;
+            assert_eq!(opt_get_private(opts, &mut on), S_OK);
+            assert_eq!(on, 1);
+            let mut color = 0u32;
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0xFFFF_FFFF);
+            assert_eq!(opt_put_background(opts, 0x00FF_0000), S_OK);
+            assert_eq!(opt_get_background(opts, &mut color), S_OK);
+            assert_eq!(color, 0x00FF_0000);
+            com_release(out);
+            com_release(opts);
+            com_release(envobj);
+        }
+    }
+
+    /// #2581 : GetProcessInfos et GetProcessExtendedInfos rendent une
+    /// collection vide au lieu d'E_NOTIMPL.
+    #[test]
+    fn processus_du_moteur_2581() {
+        let env = vtable(Family::Environment);
+        assert_eq!(env[3 + 15], env_get_process_infos as *const () as usize);
+        assert_eq!(
+            env[3 + 22],
+            env_get_process_extended_infos as *const () as usize
+        );
+        let mut list = 0usize;
+        assert_eq!(unsafe { env_get_process_infos(0, &mut list) }, S_OK);
+        let mut out = 0usize;
+        for iid in PROCESS_COLLECTION_IIDS.iter() {
+            assert_eq!(query_interface(list, iid.as_ptr(), &mut out), S_OK);
+            com_release(out);
+        }
+        let mut n = 7u32;
+        assert_eq!(unsafe { collection_count(list, &mut n) }, S_OK);
+        assert_eq!(n, 0);
+        assert_eq!(
+            unsafe { collection_value_at(list, 0, &mut out) },
+            E_INVALIDARG
+        );
+        assert_eq!(out, 0);
+        com_release(list);
+        // Sans gestionnaire : E_INVALIDARG, rien n'est posté.
+        assert_eq!(
+            unsafe { env_get_process_extended_infos(0, 0) },
+            E_INVALIDARG
+        );
+    }
+
+    /// #2596 : AddHostObjectToScript garde sa référence, remplace un même
+    /// nom, refuse un IUnknown sans IDispatch ; RemoveHostObjectFromScript
+    /// et la fin de la vue la rendent.
+    #[test]
+    fn objets_hotes_2596() {
+        static REFS: AtomicU32 = AtomicU32::new(1);
+        static DISPATCH: AtomicBool = AtomicBool::new(true);
+        extern "win64" fn qi(this: usize, _iid: *const u8, out: *mut usize) -> i32 {
+            if !DISPATCH.load(Ordering::SeqCst) {
+                unsafe { *out = 0 };
+                return E_NOINTERFACE;
+            }
+            REFS.fetch_add(1, Ordering::SeqCst);
+            unsafe { *out = this };
+            S_OK
+        }
+        extern "win64" fn add(_this: usize) -> u32 {
+            REFS.fetch_add(1, Ordering::SeqCst) + 1
+        }
+        extern "win64" fn rel(_this: usize) -> u32 {
+            REFS.fetch_sub(1, Ordering::SeqCst) - 1
+        }
+        let vt: &'static [usize; 3] = Box::leak(Box::new([
+            qi as *const () as usize,
+            add as *const () as usize,
+            rel as *const () as usize,
+        ]));
+        let obj: &'static usize = Box::leak(Box::new(vt.as_ptr() as usize));
+        let obj = obj as *const usize as usize;
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 46], web_add_host_object as *const () as usize);
+        assert_eq!(web[3 + 47], web_remove_host_object as *const () as usize);
+        let view = new_com(Family::WebView, None, None, Args::default());
+        let name: Vec<u16> = "teams\0".encode_utf16().collect();
+        let mut v = [0u8; 24];
+        let variant = |v: &mut [u8; 24], vt: u16| {
+            v[..2].copy_from_slice(&vt.to_le_bytes());
+            v[8..16].copy_from_slice(&obj.to_le_bytes());
+        };
+        variant(&mut v, VT_DISPATCH);
+        unsafe {
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            // Même nom : l'objet précédent est rendu.
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            assert_eq!(web_remove_host_object(view, name.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 1);
+            // IUnknown qui implémente IDispatch : accepté ; sinon refusé.
+            variant(&mut v, VT_UNKNOWN);
+            assert_eq!(web_add_host_object(view, name.as_ptr(), v.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+            DISPATCH.store(false, Ordering::SeqCst);
+            let other: Vec<u16> = "autre\0".encode_utf16().collect();
+            assert_eq!(
+                web_add_host_object(view, other.as_ptr(), v.as_ptr()),
+                E_INVALIDARG
+            );
+            variant(&mut v, VT_DECIMAL);
+            assert_eq!(
+                web_add_host_object(view, other.as_ptr(), v.as_ptr()),
+                E_INVALIDARG
+            );
+            // Un nom inconnu ne change rien.
+            assert_eq!(web_remove_host_object(view, other.as_ptr()), S_OK);
+            assert_eq!(REFS.load(Ordering::SeqCst), 2);
+        }
+        // La vue libérée rend l'objet encore retenu.
+        com_release(view);
+        assert_eq!(REFS.load(Ordering::SeqCst), 1);
+    }
+
+    /// #2601 : les réglages de vue Settings3 à 9 se lisent avec leurs
+    /// défauts documentés et se relisent tels qu'écrits.
+    #[test]
+    fn reglages_de_vue_3_a_9_2601() {
+        let set = vtable(Family::Settings);
+        let stub = not_implemented as *const () as usize;
+        for m in 20..36 {
+            assert_ne!(set[3 + m], stub, "méthode {m}");
+        }
+        let obj = new_com(Family::Settings, None, None, Args::default());
+        let get = |m: usize| -> u32 {
+            let f: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+                unsafe { std::mem::transmute(set[3 + m]) };
+            let mut v = 7u32;
+            assert_eq!(unsafe { f(obj, &mut v) }, S_OK);
+            v
+        };
+        let put = |m: usize, v: u32| {
+            let f: unsafe extern "win64" fn(usize, u32) -> i32 =
+                unsafe { std::mem::transmute(set[3 + m]) };
+            assert_eq!(unsafe { f(obj, v) }, S_OK);
+        };
+        let defaults: Vec<u32> = (0..8).map(|k| get(20 + 2 * k)).collect();
+        assert_eq!(defaults, [1, 0, 1, 1, 1, 0, 1, 0]);
+        // put_AreBrowserAcceleratorKeysEnabled(FALSE), vu chez Teams.
+        put(21, 0);
+        assert_eq!(get(20), 0);
+        put(23, 5);
+        assert_eq!(get(22), 1);
+        put(31, 0x41);
+        assert_eq!(get(30), 0x41);
+        let f: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+            unsafe { std::mem::transmute(set[3 + 20]) };
+        assert_eq!(unsafe { f(obj, std::ptr::null_mut()) }, E_POINTER);
+        com_release(obj);
+    }
+
+    /// #2614 : get_Profile rend un ICoreWebView2Profile dont les propriétés
+    /// se lisent, et dont les réglages modifiables se relisent.
+    #[test]
+    fn profil_de_la_vue_2614() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 102], web_get_profile as *const () as usize);
+        let env = Arc::new(Env {
+            dispatcher: 0,
+            user_data: String::new(),
+            language: String::new(),
+            user_data_win: "C:\\Données\\Teams\\".to_string(),
+            profile: Mutex::new(ProfileState::default()),
+        });
+        let view = new_com(Family::WebView, Some(env), None, Args::default());
+        let mut profile = 0usize;
+        assert_eq!(unsafe { web_get_profile(view, &mut profile) }, S_OK);
+        let mut out = 0usize;
+        assert_eq!(
+            query_interface(profile, PROFILE_IIDS[0].as_ptr(), &mut out),
+            S_OK
+        );
+        com_release(out);
+        assert_eq!(
+            query_interface(profile, PROFILE_IIDS[1].as_ptr(), &mut out),
+            E_NOINTERFACE
+        );
+        let read = |f: unsafe extern "win64" fn(usize, *mut *mut u16) -> i32| -> String {
+            let mut p: *mut u16 = std::ptr::null_mut();
+            assert_eq!(unsafe { f(profile, &mut p) }, S_OK);
+            wstr(p)
+        };
+        assert_eq!(read(profile_name), "Default");
+        assert_eq!(read(profile_path), "C:\\Données\\Teams\\Default");
+        let mut private = 7i32;
+        assert_eq!(unsafe { get_false(profile, &mut private) }, S_OK);
+        assert_eq!(private, 0);
+        // Dossier de téléchargement : écrit, relu ; vide refusé.
+        let dir: Vec<u16> = "D:\\Reçus\0".encode_utf16().collect();
+        assert_eq!(unsafe { profile_put_download(profile, dir.as_ptr()) }, S_OK);
+        assert_eq!(read(profile_get_download), "D:\\Reçus");
+        let empty: Vec<u16> = vec![0];
+        assert_eq!(
+            unsafe { profile_put_download(profile, empty.as_ptr()) },
+            E_INVALIDARG
+        );
+        // Thème : AUTO par défaut, DARK relu, hors énumération refusé.
+        let mut scheme = 9u32;
+        assert_eq!(unsafe { profile_get_color(profile, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 0);
+        assert_eq!(unsafe { profile_put_color(profile, 2) }, S_OK);
+        assert_eq!(unsafe { profile_put_color(profile, 3) }, E_INVALIDARG);
+        assert_eq!(unsafe { profile_get_color(profile, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 2);
+        // Le même environnement garde ses réglages d'un appel à l'autre.
+        let mut again = 0usize;
+        assert_eq!(unsafe { web_get_profile(view, &mut again) }, S_OK);
+        assert_eq!(unsafe { profile_get_color(again, &mut scheme) }, S_OK);
+        assert_eq!(scheme, 2);
+        com_release(again);
+        com_release(profile);
+        com_release(view);
+    }
+
+    /// #2613 : MemoryUsageTargetLevel se lit (normal par défaut) et se
+    /// relit tel qu'écrit ; une valeur hors de l'énumération est refusée.
+    #[test]
+    fn niveau_memoire_2613() {
+        let web = vtable(Family::WebView);
+        assert_eq!(web[3 + 116], web_get_memory_level as *const () as usize);
+        assert_eq!(web[3 + 117], web_put_memory_level as *const () as usize);
+        let view = new_com(Family::WebView, None, None, Args::default());
+        let mut level = 7i32;
+        unsafe {
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 0);
+            assert_eq!(web_put_memory_level(view, 1), S_OK);
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 1);
+            assert_eq!(web_put_memory_level(view, 2), E_INVALIDARG);
+            assert_eq!(web_get_memory_level(view, &mut level), S_OK);
+            assert_eq!(level, 1);
+            assert_eq!(web_get_memory_level(view, std::ptr::null_mut()), E_POINTER);
+        }
+        com_release(view);
+    }
+
+    /// #2617 : l'agent du moteur sert de défaut tant que l'application n'en
+    /// a pas posé un ; put_UserAgent("") ne change rien.
+    #[test]
+    fn agent_utilisateur_par_defaut_2617() {
+        let mut state = ViewState::default();
+        engine_user_agent(&mut state, "Mozilla/5.0 (X11) AppleWebKit/605.1.15".into());
+        assert_eq!(state.user_agent, "Mozilla/5.0 (X11) AppleWebKit/605.1.15");
+        // L'appli ajoute son suffixe à ce qu'elle a lu : aucune espace en tête.
+        let teams = format!("{} Teams/2.0", state.user_agent);
+        assert!(put_user_agent(&mut state, &teams));
+        assert!(!state.user_agent.starts_with(' '));
+        // Vide : l'agent courant reste (documentation publique).
+        assert!(!put_user_agent(&mut state, ""));
+        assert_eq!(state.user_agent, teams);
+        // Un `ready` tardif n'écrase pas l'agent choisi par l'application.
+        engine_user_agent(&mut state, "autre".into());
+        assert_eq!(state.user_agent, teams);
     }
 }

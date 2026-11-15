@@ -358,6 +358,27 @@ unsafe extern "win64" fn NetGetJoinInformation(_server: usize, name: usize, kind
     NERR_SUCCESS
 }
 
+/// NetGetAadJoinInformation (#2197) : un poste Winlux n'est jamais joint à
+/// Azure AD et ses comptes locaux n'ont aucun compte professionnel ; la
+/// documentation (lmjoin.h) rend alors S_OK avec `*ppJoinInfo` nul, pour
+/// un tenant nommé comme pour le tenant par défaut. Teams l'appelle par
+/// chargement différé : absente, elle levait 0xC06D007F.
+unsafe extern "win64" fn NetGetAadJoinInformation(
+    _tenant: *const u16,
+    join_info: *mut usize,
+) -> i32 {
+    const E_POINTER: i32 = 0x8000_4003u32 as i32;
+    if join_info.is_null() {
+        return E_POINTER;
+    }
+    *join_info = 0;
+    0
+}
+
+/// NetFreeAadJoinInformation : rien n'est jamais alloué par
+/// NetGetAadJoinInformation, le pointeur reçu est nul.
+extern "win64" fn NetFreeAadJoinInformation(_join_info: usize) {}
+
 /// NetValidateName : syntaxe d'un nom d'ordinateur ou de groupe de
 /// travail ; un domaine n'est jamais joignable.
 unsafe extern "win64" fn NetValidateName(
@@ -611,6 +632,8 @@ pub fn netapi32_exports() -> crate::dlls::Exports {
         "NetServerComputerNameAdd" => fn denied,
         "NetServerComputerNameDel" => fn denied,
         "NetGetJoinInformation" => fn NetGetJoinInformation,
+        "NetGetAadJoinInformation" => fn NetGetAadJoinInformation,
+        "NetFreeAadJoinInformation" => fn NetFreeAadJoinInformation,
         "NetValidateName" => fn NetValidateName,
         "NetGetAnyDCName" => fn NetGetAnyDCName,
         "DsGetDcNameW" => fn DsGetDcNameW,
@@ -963,6 +986,23 @@ mod tests {
 
     unsafe fn wide_at(p: usize) -> String {
         crate::dlls::wstr(p as *const u16)
+    }
+
+    #[test]
+    fn poste_non_joint_a_azure_ad_2197() {
+        unsafe {
+            let mut info = 1usize;
+            assert_eq!(NetGetAadJoinInformation(std::ptr::null(), &mut info), 0);
+            assert_eq!(info, 0);
+            let tenant: Vec<u16> = "contoso".encode_utf16().chain([0]).collect();
+            info = 1;
+            assert_eq!(NetGetAadJoinInformation(tenant.as_ptr(), &mut info), 0);
+            assert_eq!(info, 0);
+            NetFreeAadJoinInformation(0);
+            assert!(NetGetAadJoinInformation(std::ptr::null(), std::ptr::null_mut()) < 0);
+        }
+        assert!(crate::dlls::lookup("netapi32", "NetGetAadJoinInformation").is_some());
+        assert!(crate::dlls::lookup("netapi32", "NetFreeAadJoinInformation").is_some());
     }
 
     #[test]

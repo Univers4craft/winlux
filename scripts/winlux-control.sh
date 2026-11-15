@@ -530,7 +530,9 @@ perform() {
                 for spec in 'plugin-8:string:separator' 'plugin-8/style:uint:0' 'plugin-8/expand:bool:true' 'plugin-9:string:genmon' \
                     'plugin-9/command:string:/usr/bin/winlux-tray notifications' 'plugin-9/use-label:bool:false' \
                     'plugin-9/update-period:int:5000' 'plugin-13:string:genmon' 'plugin-13/command:string:/usr/bin/winlux-tray balance' \
-                    'plugin-13/use-label:bool:false' 'plugin-13/update-period:int:2000'; do
+                    'plugin-13/use-label:bool:false' 'plugin-13/update-period:int:2000' 'plugin-46:string:genmon' \
+                    'plugin-46/command:string:/usr/bin/winlux-tray edge' 'plugin-46/use-label:bool:false' \
+                    'plugin-46/update-period:int:600000'; do
                     property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
                     if ! xfconf-query -c xfce4-panel -p "/plugins/$property" >/dev/null 2>&1; then
                         xfconf-query -c xfce4-panel -p "/plugins/$property" -n -t "$kind" -s "$setting" || return
@@ -598,7 +600,9 @@ perform() {
                 # (winlux-tray balance), sans quoi le groupe centré tombe trop
                 # à gauche de la moitié de ce bloc. Barre à gauche : il reste
                 # à la même place, large d'un pixel, pour ne pas relancer la
-                # barre (#920).
+                # barre (#920). Greffon 46 : repère d'un pixel au début du bloc
+                # de droite, seule mesure de son bord quand il commence par un
+                # greffon interne sans fenêtre (bouton de l'assistant, #2467).
                 status_ids=
                 if test "$floating" = 1; then
                     # Barre flottante (#889), maquette 5-B : deux capsules. Au
@@ -621,13 +625,13 @@ perform() {
                         done
                     done
                 elif test "$alignment" = center; then
-                    ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
+                    ids="${widgets:+11 }3 13 1 ${buttons}2 8 46 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 else
                     # Même ordre qu'au centre (#920) : la bascule ne change que
                     # plugin-3/expand et la largeur du contrepoids (1 px à
                     # gauche), sans relancer la barre. Seul le bouton Widgets
                     # change de côté, comme sous Windows 11.
-                    ids="3 13 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
+                    ids="3 13 1 ${buttons}2 8 46 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 panels=$(xfconf-query -c xfce4-panel -p /panels 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
@@ -675,6 +679,11 @@ perform() {
                 save "$config/preferences.conf" TASKBAR_ALIGN "$alignment"
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand" &&
                     pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+                    # La sortie déposée par le service résident date de
+                    # l'alignement précédent (1 px à gauche) : servie telle
+                    # quelle, le groupe sautait le temps du calcul suivant
+                    # (#2467). Sans elle, le lecteur calcule tout de suite.
+                    rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/winlux/tray-out/out-balance"
                     xfce4-panel --plugin-event=genmon-13:refresh:bool:true >/dev/null 2>&1 || true
                 fi
                 # Barre flottante : elle épouse son contenu (aucun séparateur

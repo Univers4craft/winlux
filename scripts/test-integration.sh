@@ -243,7 +243,10 @@ test ! -s "$work/dialogue.log" || fail "bureau PE : boîte en double avec l'écr
 ok "plantage d'un .exe graphique ouvert depuis l'Explorateur : message affiché"
 
 # Code de sortie Windows complet (#1205) : le runtime l'écrit dans
-# WINLUX_EXIT_CODE_FILE ; le message montre 0x780148E0, pas « code 224 ».
+# WINLUX_EXIT_CODE_FILE ; le message d'un plantage montre 0x780148E0, pas
+# « code 224 ». Le faux runtime marque le plantage (WINLUX_CRASH_MARK_FILE) :
+# une sortie volontaire n'affiche aucun message (#2272,
+# test-sortie-volontaire.sh).
 codebin="$work/code-bin"
 mkdir -p "$codebin"
 cat >"$codebin/winlux" <<FIN
@@ -251,6 +254,7 @@ cat >"$codebin/winlux" <<FIN
 if [ "\$1" = --inspect ]; then echo gui; exit 0; fi
 test -n "\${WINLUX_EXIT_CODE_FILE:-}" || exit 99
 cat "$work/code-voulu" >"\$WINLUX_EXIT_CODE_FILE"
+[ -z "\${WINLUX_CRASH_MARK_FILE:-}" ] || echo exception >"\$WINLUX_CRASH_MARK_FILE"
 exit "\$(cat "$work/statut-voulu")"
 FIN
 chmod +x "$codebin/winlux"

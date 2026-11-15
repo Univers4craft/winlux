@@ -77,9 +77,45 @@ static HRESULT STDMETHODCALLTYPE cf_lock(IClassFactory *f, BOOL l) { (void)f; (v
 static IClassFactoryVtbl cf_vtbl = { cf_qi, cf_addref, cf_release, cf_create, cf_lock };
 static IClassFactory the_factory = { &cf_vtbl };
 
+/* ---- Flux x86 en lecture : un BMP 1x1 pour GDI+ (#2531) ---- */
+
+static const unsigned char bmp1[58] = {
+    'B', 'M', 58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+    40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 255, 0 };
+static ULONG src_pos;
+static HRESULT STDMETHODCALLTYPE src_read(IStream *s, void *p, ULONG n, ULONG *got)
+{
+    ULONG k = sizeof bmp1 - src_pos;
+    (void)s;
+    if (k > n)
+        k = n;
+    memcpy(p, bmp1 + src_pos, k);
+    src_pos += k;
+    if (got)
+        *got = k;
+    return k < n ? S_FALSE : S_OK;
+}
+static HRESULT STDMETHODCALLTYPE src_write(IStream *s, const void *p, ULONG n, ULONG *done)
+{ (void)s; (void)p; (void)n; if (done) *done = 0; return STG_E_ACCESSDENIED; }
+static HRESULT STDMETHODCALLTYPE src_seek(IStream *s, LARGE_INTEGER m, DWORD o, ULARGE_INTEGER *p)
+{
+    (void)s;
+    if (o == STREAM_SEEK_SET)
+        src_pos = (ULONG)m.QuadPart;
+    else if (o == STREAM_SEEK_CUR)
+        src_pos += (ULONG)m.QuadPart;
+    else
+        src_pos = sizeof bmp1 + (ULONG)m.QuadPart;
+    if (p)
+        p->QuadPart = src_pos;
+    return S_OK;
+}
+
 /* ---- Flux x86 qui reçoit les octets de IStream::CopyTo ---- */
 
-static char sink_data[64];
+static char sink_data[4096];
 static ULONG sink_len;
 static HRESULT STDMETHODCALLTYPE sink_qi(IStream *s, REFIID iid, void **out)
 {
@@ -114,6 +150,12 @@ static IStreamVtbl sink_vtbl = {
     (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
 };
 static IStream the_sink = { &sink_vtbl };
+static IStreamVtbl src_vtbl = {
+    sink_qi, sink_ref, sink_ref, src_read, src_write, src_seek,
+    (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
+    (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl, (void *)sink_notimpl,
+};
+static IStream the_source = { &src_vtbl };
 
 int main(void)
 {
@@ -445,6 +487,110 @@ int main(void)
     typedef int (WINAPI *sys_size_fn)(HANDLE, int);
     sys_size_fn sys_size = (sys_size_fn)(void *)GetProcAddress(ux, "GetThemeSysSize");
     CHECK(sys_size(NULL, SM_CXVSCROLL) == GetSystemMetrics(SM_CXVSCROLL), "GetThemeSysSize");
+
+    /* NetworkListManager, demandé par l'outil de déploiement d'Office
+     * (#2459) : objet du runtime rendu par un mandataire x86. Appels par
+     * la table, indices de la documentation d'INetworkListManager. */
+    {
+        static const GUID clsid_nlm = { 0xdcb00c01, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_nlm = { 0xdcb00000, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_nlm_events = { 0xdcb00001, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+        static const GUID iid_cpc = { 0xb196b284, 0xbab4, 0x101a, { 0xb6, 0x9c, 0x00, 0xaa, 0x00, 0x34, 0x1d, 0x07 } };
+        typedef HRESULT (STDMETHODCALLTYPE *qi_fn)(void *, REFIID, void **);
+        typedef ULONG (STDMETHODCALLTYPE *rel_fn)(void *);
+        typedef HRESULT (STDMETHODCALLTYPE *ptr_fn)(void *, void *);
+        typedef HRESULT (STDMETHODCALLTYPE *enum_fn)(void *, int, void **);
+        typedef HRESULT (STDMETHODCALLTYPE *next_fn)(void *, ULONG, void **, ULONG *);
+        typedef HRESULT (STDMETHODCALLTYPE *find_fn)(void *, REFIID, void **);
+        void *nlm = NULL;
+        CHECK(CoCreateInstance(&clsid_nlm, NULL, CLSCTX_ALL, &iid_nlm, &nlm) == S_OK && nlm != NULL,
+              "CoCreateInstance(NetworkListManager)");
+        void **vt = nlm ? *(void ***)nlm : NULL;
+        DWORD conn = 0xFFFFFFFF;
+        CHECK(vt && ((ptr_fn)vt[13])(nlm, &conn) == S_OK && conn != 0xFFFFFFFF, "INetworkListManager::GetConnectivity");
+        SHORT on = 7;
+        CHECK(vt && ((ptr_fn)vt[12])(nlm, &on) == S_OK && (on == 0 || on == -1), "INetworkListManager::get_IsConnected");
+        void *en = NULL;
+        CHECK(vt && ((enum_fn)vt[7])(nlm, 3, &en) == S_OK && en != NULL, "INetworkListManager::GetNetworks");
+        void *item = NULL;
+        ULONG got = 9;
+        CHECK(en && ((next_fn)(*(void ***)en)[8])(en, 1, &item, &got) == S_FALSE && got == 0 && item == NULL,
+              "IEnumNetworks::Next (liste vide)");
+        if (en)
+            ((rel_fn)(*(void ***)en)[2])(en);
+        void *cpc = NULL, *cp = NULL;
+        CHECK(vt && ((qi_fn)vt[0])(nlm, &iid_cpc, &cpc) == S_OK && cpc != NULL, "QI IConnectionPointContainer");
+        CHECK(cpc && ((find_fn)(*(void ***)cpc)[4])(cpc, &iid_nlm_events, &cp) == S_OK && cp != NULL,
+              "FindConnectionPoint(INetworkListManagerEvents)");
+        if (cp)
+            ((rel_fn)(*(void ***)cp)[2])(cp);
+        if (cpc)
+            ((rel_fn)(*(void ***)cpc)[2])(cpc);
+        if (nlm)
+            ((rel_fn)vt[2])(nlm);
+    }
+
+    /* #2556 : IGlobalOptions, créée par Google Update (x86) au démarrage
+     * pour COMGLB_EXCEPTION_HANDLING (1) = COMGLB_EXCEPTION_DONOT_HANDLE (1)
+     * (valeurs de GLOBALOPT_PROPERTIES et GLOBALOPT_EH_VALUES, objidlbase.idl).
+     * Indices de la table : IUnknown, Set (3), Query (4). */
+    {
+        static const GUID clsid_go = { 0x0000034b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        static const GUID iid_go = { 0x0000015b, 0, 0, { 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+        typedef HRESULT (STDMETHODCALLTYPE *set_fn)(void *, DWORD, ULONG_PTR);
+        typedef HRESULT (STDMETHODCALLTYPE *query_fn)(void *, DWORD, ULONG_PTR *);
+        typedef ULONG (STDMETHODCALLTYPE *rel_fn)(void *);
+        void *go = NULL;
+        CHECK(CoCreateInstance(&clsid_go, NULL, CLSCTX_INPROC_SERVER, &iid_go, &go) == S_OK && go != NULL,
+              "CoCreateInstance(GlobalOptions)");
+        void **vt = go ? *(void ***)go : NULL;
+        CHECK(vt && ((set_fn)vt[3])(go, 1, 1) == S_OK, "IGlobalOptions::Set");
+        ULONG_PTR v = 7;
+        CHECK(vt && ((query_fn)vt[4])(go, 1, &v) == S_OK && v == 1, "IGlobalOptions::Query");
+        if (go)
+            ((rel_fn)vt[2])(go);
+    }
+
+    /* #2531 : GDI+ lit et écrit un IStream x86 (l'outil de déploiement
+       d'Office fautait dans GdipLoadImageFromStream). */
+    {
+        typedef int (__stdcall *start_fn)(ULONG_PTR *, const void *, void *);
+        typedef int (__stdcall *load_fn)(IStream *, void **);
+        typedef int (__stdcall *size_fn)(void *, UINT *);
+        typedef int (__stdcall *save_fn)(void *, IStream *, const GUID *, const void *);
+        typedef int (__stdcall *dispose_fn)(void *);
+        static const GUID clsid_bmp = { 0x557cf400, 0x1a04, 0x11d3,
+            { 0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e } };
+        struct { UINT32 version; void *cb; BOOL no_thread, no_codecs; } in = { 1, NULL, FALSE, FALSE };
+        HMODULE g = LoadLibraryA("gdiplus.dll");
+        start_fn start = g ? (start_fn)GetProcAddress(g, "GdiplusStartup") : NULL;
+        ULONG_PTR token = 0;
+        CHECK(start && start(&token, &in, NULL) == 0, "GdiplusStartup");
+        load_fn loads[2] = { (load_fn)GetProcAddress(g, "GdipLoadImageFromStream"),
+                             (load_fn)GetProcAddress(g, "GdipCreateBitmapFromStream") };
+        size_fn width = (size_fn)GetProcAddress(g, "GdipGetImageWidth");
+        save_fn save = (save_fn)GetProcAddress(g, "GdipSaveImageToStream");
+        dispose_fn dispose = (dispose_fn)GetProcAddress(g, "GdipDisposeImage");
+        void *img = NULL;
+        for (int i = 0; i < 2; i++) {
+            void *im = NULL;
+            UINT w = 0;
+            src_pos = 0;
+            CHECK(loads[i] && loads[i](&the_source, &im) == 0 && im != NULL,
+                  i ? "GdipCreateBitmapFromStream (IStream x86)" : "GdipLoadImageFromStream (IStream x86)");
+            CHECK(width && width(im, &w) == 0 && w == 1, "GdipGetImageWidth après lecture du flux x86");
+            if (i == 0)
+                img = im;
+            else if (dispose)
+                dispose(im);
+        }
+        sink_len = 0;
+        CHECK(save && save(img, &the_sink, &clsid_bmp, NULL) == 0 && sink_len > 54
+                  && sink_data[0] == 'B' && sink_data[1] == 'M',
+              "GdipSaveImageToStream vers un flux x86");
+        if (dispose)
+            dispose(img);
+    }
 
     CoUninitialize();
     printf("com32 : COM 32 bits, %d vérifications passées. Tout est correct\n", step);

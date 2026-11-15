@@ -181,7 +181,7 @@ pub fn check_launch(base: usize, exe: &Path) {
     let forced = std::env::var("WINLUX_ELEVATE").is_ok_and(|v| v == "1");
     std::env::remove_var("WINLUX_ELEVATE");
     if let Err(code) = request(level, forced, exe) {
-        std::process::exit(code);
+        crate::dlls::kernel32::exit_with(code);
     }
 }
 

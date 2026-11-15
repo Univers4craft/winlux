@@ -12,6 +12,7 @@
 #include <time.h>
 #include <locale.h>
 #include <windows.h>
+#include <wininet.h>
 #include <io.h>
 #include <wchar.h>
 
@@ -338,6 +339,176 @@ int main(int argc, char **argv) {
             ok = ok && t && t[0] != 0 && strlen(t) < 260;
         }
         CHECK(44, ok);
+    }
+    /* #2512 : enveloppes de shlwapi servies en x86 (l'outil de déploiement
+       d'Office mourait en 0xC0000139 sur PathIsUNCW). PathIsSystemFolderW
+       dépile deux arguments, wnsprintfW est à arguments variables. */
+    {
+        typedef int (__stdcall *q_t)(const wchar_t *);
+        typedef int (__stdcall *q2_t)(const wchar_t *, unsigned long);
+        typedef const wchar_t *(__stdcall *p_t)(const wchar_t *);
+        typedef int (__stdcall *ip_t)(wchar_t *);
+        typedef int (__cdecl *f_t)(wchar_t *, int, const wchar_t *, ...);
+        HMODULE s = LoadLibraryA("shlwapi.dll");
+        q_t unc = s ? (q_t)GetProcAddress(s, "PathIsUNCW") : 0;
+        q2_t sys = s ? (q2_t)GetProcAddress(s, "PathIsSystemFolderW") : 0;
+        p_t args = s ? (p_t)GetProcAddress(s, "PathGetArgsW") : 0;
+        ip_t root = s ? (ip_t)GetProcAddress(s, "PathStripToRootW") : 0;
+        f_t fmt = s ? (f_t)GetProcAddress(s, "wnsprintfW") : 0;
+        int ok = unc && sys && args && root && fmt;
+        if (ok) {
+            static const wchar_t cmd[] = L"c:\\a.exe -x";
+            wchar_t r[260] = L"c:\\dossier\\f.txt";
+            wchar_t out[16];
+            ok = unc(L"\\\\serveur\\partage") == 1 && unc(L"c:\\x") == 0
+                 && sys(L"c:\\x", 0) == 0
+                 && args(cmd) == cmd + 9
+                 && root(r) == 1 && wcscmp(r, L"c:\\") == 0
+                 && fmt(out, 16, L"%d-%s", 42, L"ab") == 5
+                 && wcscmp(out, L"42-ab") == 0;
+        }
+        CHECK(45, ok);
+    }
+    /* #2554 : InternetCrackUrlA/W sur un URL_COMPONENTS x86 de 60 octets
+       (l'outil de déploiement d'Office tombait en faute) : mode pointeurs
+       pour l'hôte en A, copie du chemin en W, rien écrit après la
+       structure. */
+    {
+        typedef BOOL (__stdcall *ca_t)(const char *, DWORD, DWORD, URL_COMPONENTSA *);
+        typedef BOOL (__stdcall *cw_t)(const wchar_t *, DWORD, DWORD, URL_COMPONENTSW *);
+        HMODULE n = LoadLibraryA("wininet.dll");
+        ca_t ca = n ? (ca_t)GetProcAddress(n, "InternetCrackUrlA") : 0;
+        cw_t cw = n ? (cw_t)GetProcAddress(n, "InternetCrackUrlW") : 0;
+        int ok = ca && cw && sizeof(URL_COMPONENTSA) == 60;
+        if (ok) {
+            static const char url[] = "https://exemple.fr:8443/a/b?c=d";
+            struct { URL_COMPONENTSA c; unsigned char garde[16]; } a;
+            memset(&a, 0, sizeof a);
+            memset(a.garde, 0x5A, sizeof a.garde);
+            a.c.dwStructSize = sizeof a.c;
+            a.c.dwHostNameLength = 1;
+            ok = ca(url, 0, 0, &a.c) && a.c.lpszHostName == url + 8
+                 && a.c.dwHostNameLength == 10 && a.c.nPort == 8443
+                 && a.c.nScheme == INTERNET_SCHEME_HTTPS
+                 && a.garde[0] == 0x5A && a.garde[15] == 0x5A;
+            wchar_t chemin[32];
+            URL_COMPONENTSW w;
+            memset(&w, 0, sizeof w);
+            w.dwStructSize = sizeof w;
+            w.lpszUrlPath = chemin;
+            w.dwUrlPathLength = 32;
+            ok = ok && cw(L"http://h.fr/x/y?z", 0, 0, &w) && w.dwUrlPathLength == 4
+                 && wcscmp(chemin, L"/x/y") == 0 && w.nPort == 80;
+        }
+        CHECK(46, ok);
+    }
+    /* #2574 : WinHttpCrackUrl sur un URL_COMPONENTS x86 de 60 octets (l'outil
+       de déploiement d'Office lisait ensuite un pointeur nul). winhttp.h ne
+       s'inclut pas avec wininet.h ; son URL_COMPONENTS a la même suite de
+       champs que URL_COMPONENTSW (pages URL_COMPONENTS de WinINet et WinHTTP
+       sur Microsoft Learn), et nScheme vaut 2 pour https en WinHTTP. */
+    {
+        typedef BOOL (__stdcall *wc_t)(const wchar_t *, DWORD, DWORD, URL_COMPONENTSW *);
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wc_t wc = h ? (wc_t)GetProcAddress(h, "WinHttpCrackUrl") : 0;
+        int ok = wc && sizeof(URL_COMPONENTSW) == 60;
+        if (ok) {
+            static const wchar_t url[] = L"https://exemple.fr:8443/a/b?c=d";
+            struct { URL_COMPONENTSW c; unsigned char garde[16]; } a;
+            wchar_t chemin[32];
+            memset(&a, 0, sizeof a);
+            memset(a.garde, 0x5A, sizeof a.garde);
+            a.c.dwStructSize = sizeof a.c;
+            a.c.dwHostNameLength = 1;
+            a.c.lpszUrlPath = chemin;
+            a.c.dwUrlPathLength = 32;
+            ok = wc(url, 0, 0, &a.c) && a.c.lpszHostName == url + 8
+                 && a.c.dwHostNameLength == 10 && a.c.nPort == 8443 && a.c.nScheme == 2
+                 && a.c.dwUrlPathLength == 4 && wcscmp(chemin, L"/a/b") == 0
+                 && a.garde[0] == 0x5A && a.garde[15] == 0x5A;
+        }
+        CHECK(47, ok);
+    }
+    /* #2597 : HttpOpenRequestA/W et WinHttpOpenRequest lisent le tableau des
+       types acceptés (lplpszAcceptTypes, terminé par NULL) avec des pointeurs
+       de 4 octets (l'outil de déploiement d'Office mourait dans
+       HttpOpenRequestA). Ouvrir une requête n'envoie rien. */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE n = LoadLibraryA("wininet.dll");
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        typedef HINTERNET (__stdcall *io_t)(const char *, DWORD, const char *, const char *, DWORD);
+        typedef HINTERNET (__stdcall *ic_t)(HINTERNET, const char *, WORD, const char *, const char *,
+                                            DWORD, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *ra_t)(HINTERNET, const char *, const char *, const char *,
+                                            const char *, const char **, DWORD, DWORD_PTR);
+        typedef HINTERNET (__stdcall *rw_t)(HINTERNET, const wchar_t *, const wchar_t *, const wchar_t *,
+                                            const wchar_t *, const wchar_t **, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *icl_t)(HINTERNET);
+        io_t iopen = n ? (io_t)GetProcAddress(n, "InternetOpenA") : 0;
+        ic_t iconn = n ? (ic_t)GetProcAddress(n, "InternetConnectA") : 0;
+        ra_t hra = n ? (ra_t)GetProcAddress(n, "HttpOpenRequestA") : 0;
+        rw_t hrw = n ? (rw_t)GetProcAddress(n, "HttpOpenRequestW") : 0;
+        icl_t iclose = n ? (icl_t)GetProcAddress(n, "InternetCloseHandle") : 0;
+        int ok = iopen && iconn && hra && hrw && iclose && wopen && wconn && wreq && wclose;
+        if (ok) {
+            static const char *types_a[] = {"text/*", "application/octet-stream", 0};
+            static const wchar_t *types_w[] = {L"text/*", L"*/*", 0};
+            HINTERNET s = iopen("crt32", INTERNET_OPEN_TYPE_DIRECT, 0, 0, 0);
+            HINTERNET c = s ? iconn(s, "127.0.0.1", 80, 0, 0, INTERNET_SERVICE_HTTP, 0, 0) : 0;
+            HINTERNET ra = c ? hra(c, "GET", "/v64.cab", 0, 0, types_a, 0, 0) : 0;
+            HINTERNET rw = c ? hrw(c, L"GET", L"/v64.cab", 0, 0, types_w, 0, 0) : 0;
+            ok = ra && rw;
+            if (ra) iclose(ra);
+            if (rw) iclose(rw);
+            if (c) iclose(c);
+            if (s) iclose(s);
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, types_w, 0) : 0;
+            ok = ok && wr;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(48, ok);
+    }
+    /* #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+       départ), pas WINHTTP_INVALID_STATUS_CALLBACK (l'outil de déploiement
+       d'Office fermait chaque requête avant l'envoi). */
+    {
+        typedef void *(__stdcall *wo_t)(const wchar_t *, DWORD, const wchar_t *, const wchar_t *, DWORD);
+        typedef void *(__stdcall *wcn_t)(void *, const wchar_t *, WORD, DWORD);
+        typedef void *(__stdcall *wor_t)(void *, const wchar_t *, const wchar_t *, const wchar_t *,
+                                         const wchar_t *, const wchar_t **, DWORD);
+        typedef void *(__stdcall *wsc_t)(void *, void *, DWORD, DWORD_PTR);
+        typedef BOOL (__stdcall *wcl_t)(void *);
+        HMODULE h = LoadLibraryA("winhttp.dll");
+        wo_t wopen = h ? (wo_t)GetProcAddress(h, "WinHttpOpen") : 0;
+        wcn_t wconn = h ? (wcn_t)GetProcAddress(h, "WinHttpConnect") : 0;
+        wor_t wreq = h ? (wor_t)GetProcAddress(h, "WinHttpOpenRequest") : 0;
+        wsc_t wcb = h ? (wsc_t)GetProcAddress(h, "WinHttpSetStatusCallback") : 0;
+        wcl_t wclose = h ? (wcl_t)GetProcAddress(h, "WinHttpCloseHandle") : 0;
+        int ok = wopen && wconn && wreq && wcb && wclose;
+        if (ok) {
+            void *ws = wopen(L"crt32", 1, 0, 0, 0);
+            void *wc = ws ? wconn(ws, L"127.0.0.1", 80, 0) : 0;
+            void *wr = wc ? wreq(wc, L"GET", L"/v64.cab", 0, 0, 0, 0) : 0;
+            void *rappel = (void *)(DWORD_PTR)0x00401000;
+            ok = wr && wcb(wr, rappel, 0x10000, 0) == 0 && wcb(wr, 0, 0, 0) == rappel;
+            if (wr) wclose(wr);
+            if (wc) wclose(wc);
+            if (ws) wclose(ws);
+        }
+        CHECK(49, ok);
     }
     return fails;
 }

@@ -27,6 +27,13 @@ struct Options {
     connect_ms: i32,
     total_ms: i32,
     context: usize,
+    /// WINHTTP_OPTION_SECURE_PROTOCOLS : versions TLS 1.x permises
+    /// (minimum, maximum), x de 0 à 3 (#2609).
+    tls: Option<(u8, u8)>,
+    /// Rappel de WinHttpSetStatusCallback, hérité par les poignées filles
+    /// ouvertes ensuite (#2619). Jamais appelé : Winlux n'ouvre que des
+    /// sessions synchrones, où chaque appel rend lui-même son erreur.
+    callback: usize,
 }
 #[derive(Clone)]
 struct Request {
@@ -191,6 +198,8 @@ pub unsafe extern "win64" fn open(
             connect_ms: 60000,
             total_ms: 120000,
             context: 0,
+            tls: None,
+            callback: 0,
         }),
     )
 }
@@ -220,6 +229,45 @@ pub unsafe extern "win64" fn connect(
     };
     insert(session, Kind::Connection(options, host, port))
 }
+/// Pointeurs d'un tableau du programme terminé par NULL (types acceptés de
+/// WinHttpOpenRequest et HttpOpenRequestA/W), lus à la taille d'un pointeur
+/// du programme : 4 octets pour un programme x86 (#2597). `None` au-delà de
+/// `max` entrées.
+///
+/// # Safety
+/// `array` doit désigner un tableau lisible terminé par un pointeur nul.
+pub(crate) unsafe fn program_pointers(array: usize, max: usize) -> Option<Vec<usize>> {
+    let step = crate::wow32::pointer_size();
+    let mut out = Vec::new();
+    loop {
+        let pointer = crate::wow32::read_ptr(array + out.len() * step);
+        if pointer == 0 {
+            return Some(out);
+        }
+        if out.len() == max {
+            return None;
+        }
+        out.push(pointer);
+    }
+}
+
+/// Types acceptés (UTF-16) d'un tableau du programme ; erreur 87 si une
+/// chaîne est illisible ou s'il y en a plus de 63.
+///
+/// # Safety
+/// `accept` est nul ou désigne un tableau lisible terminé par NULL.
+pub(crate) unsafe fn accept_types_wide(accept: usize) -> Result<Option<Vec<String>>, u32> {
+    if accept == 0 {
+        return Ok(None);
+    }
+    let pointers = program_pointers(accept, 63).ok_or(87u32)?;
+    let mut values = Vec::new();
+    for pointer in pointers {
+        values.push(wide(pointer as *const u16, u32::MAX).map_err(|_| 87u32)?);
+    }
+    Ok(Some(values))
+}
+
 pub unsafe extern "win64" fn open_request(
     connection: usize,
     verb: *const u16,
@@ -227,6 +275,25 @@ pub unsafe extern "win64" fn open_request(
     version: *const u16,
     referer: *const u16,
     accept: *const *const u16,
+    flags: u32,
+) -> usize {
+    match accept_types_wide(accept as usize) {
+        Ok(types) => open_request_types(connection, verb, path, version, referer, types, flags),
+        Err(code) => fail(code),
+    }
+}
+
+/// WinHttpOpenRequest, types acceptés déjà lus.
+///
+/// # Safety
+/// Chaînes nulles ou lisibles et terminées par un zéro.
+pub(crate) unsafe fn open_request_types(
+    connection: usize,
+    verb: *const u16,
+    path: *const u16,
+    version: *const u16,
+    referer: *const u16,
+    accept: Option<Vec<String>>,
     flags: u32,
 ) -> usize {
     if flags & !SECURE != 0 {
@@ -267,21 +334,9 @@ pub unsafe extern "win64" fn open_request(
     if !referer.is_empty() {
         headers.push(("Referer".into(), referer));
     }
-    if !accept.is_null() {
-        let mut values = Vec::new();
-        for index in 0..64 {
-            let pointer = *accept.add(index);
-            if pointer.is_null() {
-                break;
-            }
-            let value = match wide(pointer, u32::MAX) {
-                Ok(value) if clean(&value) => value,
-                _ => return fail(87),
-            };
-            values.push(value);
-            if index == 63 {
-                return fail(87);
-            }
+    if let Some(values) = accept {
+        if !values.iter().all(|value| clean(value)) {
+            return fail(87);
         }
         if !values.is_empty() {
             headers.push(("Accept".into(), values.join(", ")));
@@ -473,6 +528,9 @@ fn perform(request: &Request) -> Result<Response, u32> {
             "connect-timeout = {:.3}\n",
             request.options.connect_ms as f64 / 1000.0
         ));
+    }
+    if let Some((min, max)) = request.options.tls {
+        config.push_str(&format!("tlsv1.{min}\ntls-max = \"1.{max}\"\n"));
     }
     if request.options.total_ms > 0 {
         config.push_str(&format!(
@@ -865,8 +923,58 @@ pub unsafe extern "win64" fn set_option(
         options_mut(&mut entry.kind).context = crate::wow32::read_ptr(value as usize);
         return 1;
     }
+    // WINHTTP_OPTION_CONFIGURE_PASSPORT_AUTH (83) sur une session : DWORD de
+    // drapeaux WINHTTP_{DIS,EN}ABLE_PASSPORT_AUTH (0, 0x10000000) et
+    // _KEYRING (0x20000000, 0x40000000), d'après winhttp.h de mingw-w64 et la
+    // page « Option Flags » de Microsoft Learn. Winlux ne fait pas
+    // d'authentification Passport : l'option est acceptée sans effet (#2606).
+    if option == 83 {
+        if !matches!(entry.kind, Kind::Session(_)) {
+            return fail(12018);
+        }
+        if size != 4 || std::ptr::read_unaligned(value.cast::<u32>()) & !0x7000_0000 != 0 {
+            return fail(87);
+        }
+        return 1;
+    }
+    // WINHTTP_OPTION_SECURE_PROTOCOLS (84) sur une session : DWORD de
+    // drapeaux WINHTTP_FLAG_SECURE_PROTOCOL_* (SSL2 0x8, SSL3 0x20, TLS1
+    // 0x80, TLS1_1 0x200, TLS1_2 0x800, TLS1_3 0x2000), d'après winhttp.h de
+    // mingw-w64 et la page « Option Flags » de Microsoft Learn. Les
+    // connexions de la session sont tenues entre la plus basse et la plus
+    // haute version TLS demandées ; SSL2/SSL3 ne sont jamais parlés, une
+    // valeur qui ne demande qu'eux est refusée (#2609).
+    if option == 84 {
+        if !matches!(entry.kind, Kind::Session(_)) {
+            return fail(12018);
+        }
+        if size != 4 {
+            return fail(87);
+        }
+        let flags = std::ptr::read_unaligned(value.cast::<u32>());
+        match secure_protocols(flags) {
+            Some(range) => {
+                options_mut(&mut entry.kind).tls = Some(range);
+                return 1;
+            }
+            None => return fail(87),
+        }
+    }
     // In particular, do not silently honor certificate-validation bypass flags.
     fail(50)
+}
+
+/// Versions TLS 1.x (minimum, maximum) d'une valeur de
+/// WINHTTP_OPTION_SECURE_PROTOCOLS ; `None` pour un drapeau inconnu ou
+/// une valeur sans aucune version TLS.
+fn secure_protocols(flags: u32) -> Option<(u8, u8)> {
+    const SSL: u32 = 0x8 | 0x20;
+    const TLS: [u32; 4] = [0x80, 0x200, 0x800, 0x2000];
+    if flags & !(SSL | TLS.iter().fold(0, |a, b| a | b)) != 0 {
+        return None;
+    }
+    let present: Vec<u8> = (0..4u8).filter(|i| flags & TLS[*i as usize] != 0).collect();
+    Some((*present.first()?, *present.last()?))
 }
 pub unsafe extern "win64" fn query_option(
     handle: usize,
@@ -1004,18 +1112,41 @@ pub unsafe extern "win64" fn detect_auto_proxy_config_url(flags: u32, out: *mut 
     crate::wow32::write_ptr(out as usize, 0);
     fail(12180)
 }
+/// WinHttpSetStatusCallback (#2619) : d'après Microsoft Learn, rend le
+/// rappel défini auparavant sur la poignée (NULL s'il n'y en avait pas), et
+/// WINHTTP_INVALID_STATUS_CALLBACK seulement en cas d'échec. Le rappel est
+/// retenu et hérité par les poignées filles, mais jamais appelé : les
+/// sessions de Winlux sont synchrones (WINHTTP_FLAG_ASYNC est refusé par
+/// WinHttpOpen), et les notifications d'achèvement comme REQUEST_ERROR ne
+/// concernent que le mode asynchrone ; l'erreur est rendue par l'appel.
 pub unsafe extern "win64" fn status_callback(
     handle: usize,
-    _callback: usize,
+    callback: usize,
     _flags: u32,
     _reserved: usize,
 ) -> usize {
-    crate::process::set_last_error(if lock(handles()).contains_key(&handle) {
-        50
+    let mut entries = lock(handles());
+    let Some(entry) = entries.get_mut(&handle) else {
+        crate::process::set_last_error(6);
+        return invalid_status_callback();
+    };
+    // Valeur du programme : 4 octets en x86 (WINHTTP_STATUS_CALLBACK).
+    let callback = if crate::wow32::pointer_size() == 4 {
+        callback & 0xffff_ffff
     } else {
-        6
-    });
-    usize::MAX
+        callback
+    };
+    std::mem::replace(&mut options_mut(&mut entry.kind).callback, callback)
+}
+
+/// WINHTTP_INVALID_STATUS_CALLBACK, ((WINHTTP_STATUS_CALLBACK)(-1L)), à la
+/// taille d'un pointeur du programme.
+fn invalid_status_callback() -> usize {
+    if crate::wow32::pointer_size() == 4 {
+        0xffff_ffff
+    } else {
+        usize::MAX
+    }
 }
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -1100,6 +1231,98 @@ mod tests {
         );
         assert_ne!(request, 0);
         (session, connection, request)
+    }
+
+    /// #2606 : WINHTTP_OPTION_CONFIGURE_PASSPORT_AUTH (83) acceptée sur une
+    /// session (l'outil de déploiement d'Office n'ouvrait plus de connexion),
+    /// refusée ailleurs ou avec une valeur inconnue.
+    #[test]
+    fn option_passport_acceptee_sur_une_session() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            for value in [0u32, 0x1000_0000, 0x2000_0000, 0x4000_0000] {
+                assert_eq!(set_option(session, 83, (&value as *const u32).cast(), 4), 1);
+            }
+            let inconnue = 1u32;
+            assert_eq!(
+                set_option(session, 83, (&inconnue as *const u32).cast(), 4),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 87);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            let zero = 0u32;
+            assert_eq!(
+                set_option(connection, 83, (&zero as *const u32).cast(), 4),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2609 : WINHTTP_OPTION_SECURE_PROTOCOLS (84) acceptée sur une session
+    /// et retenue comme bornes TLS ; SSL seul, drapeau inconnu ou autre
+    /// poignée refusés.
+    #[test]
+    fn option_protocoles_securises_sur_une_session() {
+        let _teb = crate::process::test_teb();
+        assert_eq!(secure_protocols(0x800 | 0x2000), Some((2, 3)));
+        assert_eq!(secure_protocols(0x80 | 0x200 | 0x800), Some((0, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20 | 0x800), Some((2, 2)));
+        assert_eq!(secure_protocols(0x8 | 0x20), None);
+        assert_eq!(secure_protocols(0x800 | 0x1), None);
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            let v = 0x800u32 | 0x2000;
+            assert_eq!(set_option(session, 84, (&v as *const u32).cast(), 4), 1);
+            match &lock(handles()).get(&session).unwrap().kind {
+                Kind::Session(o) => assert_eq!(o.tls, Some((2, 3))),
+                _ => unreachable!(),
+            }
+            let ssl = 0x20u32;
+            assert_eq!(set_option(session, 84, (&ssl as *const u32).cast(), 4), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            assert_eq!(set_option(connection, 84, (&v as *const u32).cast(), 4), 0);
+            assert_eq!(crate::process::last_error(), 12018);
+            assert_eq!(close(session), 1);
+        }
+    }
+
+    /// #2619 : WinHttpSetStatusCallback rend le rappel précédent (NULL au
+    /// départ), le rappel est hérité par une requête ouverte ensuite, et
+    /// WINHTTP_INVALID_STATUS_CALLBACK seulement sur une poignée inconnue.
+    #[test]
+    fn rappel_d_etat_retenu_et_rendu() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), 0);
+            assert_ne!(session, 0);
+            assert_eq!(status_callback(session, 0x1234, 0x10000, 0), 0);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), 80, 0);
+            assert_ne!(connection, 0);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(status_callback(request, 0x5678, 0x10000, 0), 0x1234);
+            assert_eq!(status_callback(request, 0, 0, 0), 0x5678);
+            assert_eq!(status_callback(session, 0, 0, 0), 0x1234);
+            assert_eq!(status_callback(0xdead_0000, 1, 0, 0), usize::MAX);
+            assert_eq!(crate::process::last_error(), 6);
+            assert_eq!(close(session), 1);
+        }
     }
 
     #[test]

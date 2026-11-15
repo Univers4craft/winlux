@@ -164,6 +164,14 @@ const IID_IREPETITIONPATTERN: Guid = g(
     0x400E,
     [0x85, 0xB5, 0x29, 0x4B, 0x9C, 0x75, 0xDF, 0xD6],
 );
+/// IIdleSettings {84594461-0053-4342-A8FD-088FABF11F32} (taskschd.idl de
+/// mingw-w64), #2576.
+const IID_IIDLESETTINGS: Guid = g(
+    0x8459_4461,
+    0x0053,
+    0x4342,
+    [0xA8, 0xFD, 0x08, 0x8F, 0xAB, 0xF1, 0x1F, 0x32],
+);
 const IID_ITASKSETTINGS: Guid = g(
     0x8FD4_711D,
     0x2D02,
@@ -284,6 +292,14 @@ struct SetData {
     allow_hard_terminate: bool,
     wake: bool,
     run_only_idle: bool,
+    /// IIdleSettings (#2576) : la documentation ne donne aucune valeur par
+    /// défaut ; vide et faux sont notre choix (WaitTimeout vide : « attend
+    /// indéfiniment »). Retenues, sans effet : les conditions d'inactivité
+    /// ne sont pas appliquées par le planificateur Winlux.
+    idle_duration: String,
+    idle_wait_timeout: String,
+    idle_stop_on_end: bool,
+    idle_restart: bool,
     priority: i32,
     multiple: i32,
     restart_count: i32,
@@ -307,6 +323,10 @@ impl Default for SetData {
             allow_hard_terminate: true,
             wake: false,
             run_only_idle: false,
+            idle_duration: String::new(),
+            idle_wait_timeout: String::new(),
+            idle_stop_on_end: false,
+            idle_restart: false,
             priority: 7,
             multiple: 2,
             restart_count: 0,
@@ -900,6 +920,7 @@ enum Kind {
     Definition(Def),
     RegInfo(Def),
     Settings(Def),
+    Idle(Def),
     Principal(Def),
     Triggers(Def),
     Trigger(Arc<Mutex<TrigData>>),
@@ -928,6 +949,7 @@ impl Kind {
             Kind::Definition(_) => &[IID_ITASKDEFINITION],
             Kind::RegInfo(_) => &[IID_IREGISTRATIONINFO],
             Kind::Settings(_) => &[IID_ITASKSETTINGS],
+            Kind::Idle(_) => &[IID_IIDLESETTINGS],
             Kind::Principal(_) => &[IID_IPRINCIPAL],
             Kind::Triggers(_) => &[IID_ITRIGGERCOLLECTION],
             Kind::Trigger(t) => match lock(t).kind {
@@ -959,6 +981,7 @@ impl Kind {
             Kind::Definition(_) => vt(&VT_DEFINITION, definition_vt),
             Kind::RegInfo(_) => vt(&VT_REGINFO, reginfo_vt),
             Kind::Settings(_) => vt(&VT_SETTINGS, settings_vt),
+            Kind::Idle(_) => vt(&VT_IDLE, idle_vt),
             Kind::Principal(_) => vt(&VT_PRINCIPAL, principal_vt),
             Kind::Triggers(_) => vt(&VT_TRIGGERS, triggers_vt),
             Kind::Trigger(t) => match lock(t).kind {
@@ -987,6 +1010,7 @@ static VT_REGISTERED: VTable = OnceLock::new();
 static VT_DEFINITION: VTable = OnceLock::new();
 static VT_REGINFO: VTable = OnceLock::new();
 static VT_SETTINGS: VTable = OnceLock::new();
+static VT_IDLE: VTable = OnceLock::new();
 static VT_PRINCIPAL: VTable = OnceLock::new();
 static VT_TRIGGERS: VTable = OnceLock::new();
 static VT_TRIGGER_TIME: VTable = OnceLock::new();
@@ -1858,6 +1882,7 @@ unsafe fn def_of(this: *mut Obj) -> Option<Def> {
         Kind::Definition(d)
         | Kind::RegInfo(d)
         | Kind::Settings(d)
+        | Kind::Idle(d)
         | Kind::Principal(d)
         | Kind::Triggers(d)
         | Kind::Actions(d) => Some(Arc::clone(d)),
@@ -2114,6 +2139,41 @@ int_prop!(
 bool_prop!(ts_get_hidden, ts_put_hidden, def_of, settings.hidden);
 bool_prop!(ts_get_idle, ts_put_idle, def_of, settings.run_only_idle);
 bool_prop!(ts_get_wake, ts_put_wake, def_of, settings.wake);
+def_child!(ts_get_idle_settings, Idle);
+
+// ----- IIdleSettings (#2576) -----
+
+str_prop!(
+    is_get_duration,
+    is_put_duration,
+    def_of,
+    settings.idle_duration
+);
+str_prop!(is_get_wait, is_put_wait, def_of, settings.idle_wait_timeout);
+bool_prop!(is_get_stop, is_put_stop, def_of, settings.idle_stop_on_end);
+bool_prop!(
+    is_get_restart,
+    is_put_restart,
+    def_of,
+    settings.idle_restart
+);
+
+/// Ordre de taskschd.idl : IdleDuration, WaitTimeout, StopOnIdleEnd,
+/// RestartOnIdle (lecture puis écriture).
+fn idle_vt() -> Vec<usize> {
+    let mut v = dispatch_head();
+    v.extend([
+        is_get_duration as *const () as usize,
+        is_put_duration as *const () as usize,
+        is_get_wait as *const () as usize,
+        is_put_wait as *const () as usize,
+        is_get_stop as *const () as usize,
+        is_put_stop as *const () as usize,
+        is_get_restart as *const () as usize,
+        is_put_restart as *const () as usize,
+    ]);
+    v
+}
 
 fn settings_vt() -> Vec<usize> {
     let mut v = dispatch_head();
@@ -2150,7 +2210,7 @@ fn settings_vt() -> Vec<usize> {
         ts_put_compat as *const () as usize,
         ts_get_hidden as *const () as usize,
         ts_put_hidden as *const () as usize,
-        get_no_object as *const () as usize,
+        ts_get_idle_settings as *const () as usize,
         put_ignored as *const () as usize,
         ts_get_idle as *const () as usize,
         ts_put_idle as *const () as usize,
@@ -2596,6 +2656,37 @@ mod tests {
     unsafe fn put_str(p: Raw, i: usize, s: &str) {
         let w = wide(s);
         assert_eq!(call_p(p, i, w.as_ptr() as usize), S_OK);
+    }
+
+    /// #2576 : ITaskSettings::get_IdleSettings rend un IIdleSettings dont
+    /// les quatre propriétés se lisent et s'écrivent (ordre de
+    /// taskschd.idl), sur les réglages de la définition.
+    #[test]
+    fn reglages_d_inactivite_de_la_definition() {
+        unsafe {
+            let def: Def = Arc::new(Mutex::new(DefData::default()));
+            let settings = new_obj(Kind::Settings(Arc::clone(&def)));
+            let idle = get_obj(settings, 7 + 32);
+            let mut via_qi: Raw = std::ptr::null_mut();
+            assert_eq!(qi(idle as *mut Obj, &IID_IIDLESETTINGS, &mut via_qi), S_OK);
+            rel(via_qi);
+            assert_eq!(get_str(idle, 7), "");
+            put_str(idle, 8, "PT10M");
+            put_str(idle, 10, "PT1H");
+            assert_eq!(call_p(idle, 12, VARIANT_TRUE as u16 as usize), S_OK);
+            assert_eq!(call_p(idle, 14, 0), S_OK);
+            assert_eq!(get_str(idle, 7), "PT10M");
+            assert_eq!(get_str(idle, 9), "PT1H");
+            let mut stop: i16 = 0;
+            assert_eq!(call_p(idle, 11, &mut stop as *mut i16 as usize), S_OK);
+            assert_eq!(stop, VARIANT_TRUE);
+            let mut restart: i16 = 7;
+            assert_eq!(call_p(idle, 13, &mut restart as *mut i16 as usize), S_OK);
+            assert_eq!(restart, 0);
+            assert_eq!(lock(&def).settings.idle_duration, "PT10M");
+            rel(idle);
+            rel(settings);
+        }
     }
 
     #[test]
