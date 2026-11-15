@@ -2636,6 +2636,11 @@ pub unsafe extern "win64" fn get_file_size(h: usize, high: *mut u32) -> u32 {
             if !high.is_null() {
                 *high = (n >> 32) as u32;
             }
+            // INVALID_FILE_SIZE est aussi une taille valide : la documentation dit d'appeler
+            // GetLastError, qui doit alors valoir NO_ERROR (#2116).
+            if n as u32 == u32::MAX {
+                crate::process::set_last_error(0);
+            }
             n as u32
         }
         Err(e) => {
@@ -2918,6 +2923,11 @@ pub unsafe extern "win64" fn set_file_pointer(
         Ok(n) => {
             if !high.is_null() {
                 *high = (n >> 32) as i32;
+            }
+            // INVALID_SET_FILE_POINTER est aussi une position valide : GetLastError doit
+            // alors valoir NO_ERROR (#2116).
+            if n as u32 == u32::MAX {
+                crate::process::set_last_error(0);
             }
             n as u32
         }
@@ -11936,6 +11946,31 @@ mod tests {
             assert_eq!(crate::process::last_error(), 2);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn taille_et_position_0xffffffff_remettent_le_code_a_zero() {
+        // #2116 : 0xFFFFFFFF rendu par un succès s'accompagne de GetLastError() == 0.
+        let _teb = crate::process::test_teb();
+        let p = std::env::temp_dir().join(format!("winlux-2116-{}", std::process::id()));
+        let f = std::fs::File::create(&p).unwrap();
+        f.set_len(0xFFFF_FFFF).unwrap(); // fichier creux
+        drop(f);
+        let path = format!("{}\0", p.display());
+        unsafe {
+            let h = super::create_file_a(path.as_ptr(), 0xC000_0000, 3, 0, 3, 0x80, 0);
+            assert_ne!(h, usize::MAX);
+            let mut high = 7u32;
+            crate::process::set_last_error(122);
+            assert_eq!(super::get_file_size(h, &mut high), u32::MAX);
+            assert_eq!((high, crate::process::last_error()), (0, 0));
+            let mut hi = 0i32;
+            crate::process::set_last_error(122);
+            assert_eq!(super::set_file_pointer(h, -1, &mut hi, 0), u32::MAX);
+            assert_eq!((hi, crate::process::last_error()), (0, 0));
+            super::close_handle(h);
+        }
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
