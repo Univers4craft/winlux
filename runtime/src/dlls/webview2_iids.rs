@@ -441,3 +441,22 @@ pub const CONTROLLER_OPTIONS_IIDS: [Guid; 3] = [
         [0xb7, 0xcb, 0xe0, 0x46, 0x17, 0xe4, 0xce, 0x4a],
     ), // ICoreWebView2ControllerOptions3
 ];
+/// ICoreWebView2ProcessInfoCollection et
+/// ICoreWebView2ProcessExtendedInfoCollection : même forme (Count,
+/// GetValueAtIndex), servies par un même objet (ajouté à la main, IDL
+/// public, #2581).
+pub const PROCESS_COLLECTION_SLOTS: usize = 5;
+pub const PROCESS_COLLECTION_IIDS: [Guid; 2] = [
+    guid(
+        0x402b99cd,
+        0xa0cc,
+        0x4fa5,
+        [0xb7, 0xa5, 0x51, 0xd8, 0x6a, 0x1d, 0x23, 0x39],
+    ), // ICoreWebView2ProcessInfoCollection
+    guid(
+        0x32efa696,
+        0x407a,
+        0x11ee,
+        [0xbe, 0x56, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02],
+    ), // ICoreWebView2ProcessExtendedInfoCollection
+];
