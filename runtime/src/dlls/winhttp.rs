@@ -1,14 +1,14 @@
 //! Synchronous WinHTTP subset backed by the OS curl client, with certificate
 //! verification preserved. Uploads are buffered until ReceiveResponse; response
-//! bodies are file-backed. Async callbacks, PAC/WPAD and client certificates are
+//! bodies are streamed from curl's output as they arrive (#2733). Async callbacks, PAC/WPAD and client certificates are
 //! deliberately unsupported rather than reported as successful operations.
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -25,7 +25,9 @@ struct Options {
     /// Accès par défaut ou automatique : proxy système commun à Linux.
     system_proxy: bool,
     connect_ms: i32,
-    total_ms: i32,
+    /// nReceiveTimeout de WinHttpSetTimeouts (0 : sans limite). Porte sur
+    /// une réception qui n'avance plus, jamais sur la durée totale (#2733).
+    receive_ms: i32,
     context: usize,
     /// WINHTTP_OPTION_SECURE_PROTOCOLS : versions TLS 1.x permises
     /// (minimum, maximum), x de 0 à 3 (#2609).
@@ -70,11 +72,51 @@ impl Drop for PrivateDir {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+/// Corps de la réponse, lu sur la sortie de curl au fil de son arrivée
+/// (#2733). `done` garde le résultat de curl une fois la sortie épuisée :
+/// 0, ou l'erreur WinHTTP de sa sortie.
+struct Transfer {
+    child: Child,
+    reader: BufReader<ChildStdout>,
+    done: Option<u32>,
+}
+impl Transfer {
+    /// Fin de la sortie : attend curl et rend son erreur WinHTTP (0 si réussi).
+    fn finish(&mut self) -> u32 {
+        if let Some(code) = self.done {
+            return code;
+        }
+        let code = match self.child.wait() {
+            Ok(status) if status.success() => 0,
+            Ok(status) => curl_error(status.code()),
+            Err(_) => 12030,
+        };
+        self.done = Some(code);
+        code
+    }
+}
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        if self.done.is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+fn curl_error(code: Option<i32>) -> u32 {
+    match code {
+        Some(3) => 12005,
+        Some(5 | 6) => 12007,
+        Some(7) => 12029,
+        Some(28) => 12002,
+        Some(35 | 51 | 58 | 60 | 77 | 83 | 90 | 91) => 12175,
+        Some(47) => 12156,
+        _ => 12030,
+    }
+}
 struct Response {
     _directory: PrivateDir,
-    file: File,
-    length: u64,
-    cursor: u64,
+    transfer: Transfer,
     status: u32,
     reason: String,
     raw: String,
@@ -206,7 +248,7 @@ pub unsafe extern "win64" fn open(
             bypass,
             system_proxy: matches!(access, 0 | 4),
             connect_ms: 60000,
-            total_ms: 120000,
+            receive_ms: 30000,
             context: 0,
             tls: None,
             callback: 0,
@@ -552,8 +594,8 @@ fn perform(request: &Request) -> Result<Response, u32> {
         request.port
     };
     let url = format!("{scheme}://{host}:{port}{path}");
-    let mut config = format!("silent\nshow-error\nproto = \"=http,https\"\nmax-filesize = 1073741824\nurl = {}\nrequest = {}\nuser-agent = {}\noutput = {}\ndump-header = {}\n",
-        quote(&url), quote(&request.verb), quote(&request.options.agent), quote(directory.0.join("body").to_str().ok_or(87u32)?), quote(directory.0.join("headers").to_str().ok_or(87u32)?));
+    let mut config = format!("silent\nshow-error\nproto = \"=http,https\"\ninclude\nsuppress-connect-headers\nurl = {}\nrequest = {}\nuser-agent = {}\n",
+        quote(&url), quote(&request.verb), quote(&request.options.agent));
     // Redirections : WINHTTP_DISABLE_REDIRECTS ou REDIRECT_POLICY_NEVER
     // rendent le 30x à l'appelant ; DISALLOW_HTTPS_TO_HTTP (défaut) ne
     // quitte pas https ; ALWAYS suit tout, 10 au plus (#2626).
@@ -578,10 +620,13 @@ fn perform(request: &Request) -> Result<Response, u32> {
     if let Some((min, max)) = request.options.tls {
         config.push_str(&format!("tlsv1.{min}\ntls-max = \"1.{max}\"\n"));
     }
-    if request.options.total_ms > 0 {
+    // nReceiveTimeout : une réception qui n'avance plus pendant ce délai
+    // est annulée ; un long téléchargement qui progresse ne l'est jamais
+    // (#2733, inférence : Learn ne dit pas comment la mesure est faite).
+    if request.options.receive_ms > 0 {
         config.push_str(&format!(
-            "max-time = {:.3}\n",
-            request.options.total_ms as f64 / 1000.0
+            "speed-limit = 1\nspeed-time = {}\n",
+            (request.options.receive_ms as u64).div_ceil(1000)
         ));
     }
     let system = if request.options.system_proxy {
@@ -628,61 +673,83 @@ fn perform(request: &Request) -> Result<Response, u32> {
     if !crate::permissions::allowed(crate::permissions::Capability::Network) {
         return Err(12029); // ERROR_WINHTTP_CANNOT_CONNECT
     }
-    let output = Command::new("/usr/bin/curl")
+    let mut child = Command::new("/usr/bin/curl")
         .arg("--disable")
         .arg("--config")
         .arg(config)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|_| 12029u32)?;
-    if !output.status.success() {
-        return Err(match output.status.code() {
-            Some(3) => 12005,
-            Some(5 | 6) => 12007,
-            Some(7) => 12029,
-            Some(28) => 12002,
-            Some(35 | 51 | 58 | 60 | 77 | 83 | 90 | 91) => 12175,
-            Some(47) => 12156,
-            Some(63) => 8,
-            _ => 12030,
-        });
-    }
-    let headers = directory.0.join("headers");
-    if fs::metadata(&headers).map_err(|_| 12030u32)?.len() > 1024 * 1024 {
-        return Err(12182);
-    }
-    let raw: String = fs::read(headers)
-        .map_err(|_| 12030u32)?
-        .into_iter()
-        .map(char::from)
-        .collect();
-    let raw = raw
-        .rsplit("\r\n\r\n")
-        .find(|block| block.starts_with("HTTP/"))
-        .ok_or(12152u32)?
-        .to_string()
-        + "\r\n\r\n";
-    let mut lines = raw.split("\r\n");
-    let status_line = lines.next().ok_or(12152u32)?;
-    let mut parts = status_line.splitn(3, ' ');
-    let _version = parts.next();
-    let status = parts
-        .next()
-        .and_then(|status| status.parse::<u32>().ok())
-        .filter(|status| (100..600).contains(status))
-        .ok_or(12152u32)?;
-    let reason = parts.next().unwrap_or("").to_string();
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.into(), value.trim().into()))
-        .collect();
-    let file = File::open(directory.0.join("body")).map_err(|_| 12030u32)?;
-    let length = file.metadata().map_err(|_| 12030u32)?.len();
+    let stdout = child.stdout.take().ok_or(12030u32)?;
+    let mut transfer = Transfer {
+        child,
+        reader: BufReader::with_capacity(64 * 1024, stdout),
+        done: None,
+    };
+    // curl suit lui-même les redirections : chaque bloc d'en-têtes qu'il
+    // écrit est suivi d'un autre tant qu'il y a un 1xx ou une redirection
+    // suivie ; le dernier bloc précède le corps (#2733).
+    let follows = request.options.disabled & 0x2 == 0 && request.options.redirect_policy != 0;
+    let mut total = 0usize;
+    let (raw, status, reason, headers) = loop {
+        let mut block = String::new();
+        loop {
+            let mut line = Vec::new();
+            let count = transfer
+                .reader
+                .read_until(b'\n', &mut line)
+                .map_err(|_| 12030u32)?;
+            total += count;
+            if total > 1024 * 1024 {
+                return Err(12182);
+            }
+            if count == 0 {
+                let error = transfer.finish();
+                return Err(if error == 0 { 12152 } else { error });
+            }
+            let line: String = line.into_iter().map(char::from).collect();
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.is_empty() {
+                if block.is_empty() {
+                    continue;
+                }
+                break;
+            }
+            block.push_str(line);
+            block.push_str("\r\n");
+        }
+        if !block.starts_with("HTTP/") {
+            return Err(12152);
+        }
+        let raw = block + "\r\n";
+        let mut lines = raw.split("\r\n");
+        let status_line = lines.next().ok_or(12152u32)?;
+        let mut parts = status_line.splitn(3, ' ');
+        let _version = parts.next();
+        let status = parts
+            .next()
+            .and_then(|status| status.parse::<u32>().ok())
+            .filter(|status| (100..600).contains(status))
+            .ok_or(12152u32)?;
+        let reason = parts.next().unwrap_or("").to_string();
+        let headers: Vec<(String, String)> = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.into(), value.trim().into()))
+            .collect();
+        let redirected = follows
+            && (300..400).contains(&status)
+            && headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location"));
+        if status >= 200 && !redirected {
+            break (raw, status, reason, headers);
+        }
+    };
     Ok(Response {
         _directory: directory,
-        file,
-        length,
-        cursor: 0,
+        transfer,
         status,
         reason,
         raw,
@@ -730,11 +797,20 @@ pub unsafe extern "win64" fn query_data_available(handle: usize, available: *mut
         Ok(value) => value,
         Err(error) => return fail(error),
     };
-    let response = lock(&response);
-    *available = response
-        .length
-        .saturating_sub(response.cursor)
-        .min(u32::MAX as u64) as u32;
+    let mut response = lock(&response);
+    let transfer = &mut response.transfer;
+    // Session synchrone : attend que des données arrivent (Learn).
+    let count = match transfer.reader.fill_buf() {
+        Ok(bytes) => bytes.len(),
+        Err(_) => return fail(12030),
+    };
+    if count == 0 {
+        let error = transfer.finish();
+        if error != 0 {
+            return fail(error);
+        }
+    }
+    *available = count.min(u32::MAX as usize) as u32;
     1
 }
 pub unsafe extern "win64" fn read_data(
@@ -755,14 +831,21 @@ pub unsafe extern "win64" fn read_data(
     if size == 0 {
         return 1;
     }
-    let count = match response.file.read(std::slice::from_raw_parts_mut(
+    let transfer = &mut response.transfer;
+    let count = match transfer.reader.read(std::slice::from_raw_parts_mut(
         buffer.cast::<u8>(),
         size as usize,
     )) {
         Ok(value) => value,
         Err(_) => return fail(12030),
     };
-    response.cursor += count as u64;
+    // Zéro octet : fin du corps, ou transfert interrompu par curl.
+    if count == 0 {
+        let error = transfer.finish();
+        if error != 0 {
+            return fail(error);
+        }
+    }
     *read = count as u32;
     1
 }
@@ -943,10 +1026,10 @@ pub unsafe extern "win64" fn set_timeouts(
     handle: usize,
     resolve: i32,
     connect: i32,
-    send: i32,
+    _send: i32,
     receive: i32,
 ) -> i32 {
-    if [resolve, connect, send, receive]
+    if [resolve, connect, _send, receive]
         .iter()
         .any(|value| *value < -1)
     {
@@ -958,11 +1041,7 @@ pub unsafe extern "win64" fn set_timeouts(
     };
     let options = options_mut(&mut entry.kind);
     options.connect_ms = connect;
-    options.total_ms = if send <= 0 || receive <= 0 {
-        0
-    } else {
-        connect.max(0).saturating_add(send).saturating_add(receive)
-    };
+    options.receive_ms = receive.max(0);
     1
 }
 pub unsafe extern "win64" fn set_option(
@@ -1537,6 +1616,92 @@ mod tests {
 
     /// #2626 : une redirection est suivie par défaut ; WINHTTP_DISABLE_REDIRECTS
     /// sur la requête ou REDIRECT_POLICY_NEVER sur la session rendent le 302.
+    /// #2733 : une réponse de plus de 1 Gio n'est plus refusée (HEAD comme
+    /// GET), et WinHttpReceiveResponse rend la main dès les en-têtes reçus :
+    /// le corps se lit pendant que le serveur l'envoie encore.
+    #[test]
+    fn gros_corps_lu_au_fil_de_l_eau_2733() {
+        let _teb = crate::process::test_teb();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let (fin, attente) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let mut served = 0;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while served < 2 && Instant::now() < deadline {
+                let (stream, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!("HTTP fixture: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                let head = "HTTP/1.1 200 OK\r\nContent-Length: 3000000000\r\n\r\n";
+                if first.starts_with("HEAD ") {
+                    reader.get_mut().write_all(head.as_bytes()).unwrap();
+                } else {
+                    reader.get_mut().write_all(head.as_bytes()).unwrap();
+                    let _ = reader.get_mut().write_all(&[b'x'; 65536]);
+                    // Le reste ne part jamais : le client doit déjà lire.
+                    let _ = attente.recv_timeout(Duration::from_secs(20));
+                }
+                served += 1;
+            }
+        });
+        unsafe {
+            let (session, _, request) = request_for(port, "HEAD", "/gros", false);
+            assert_eq!(send_request(request, null(), 0, null(), 0, 0, 0), 1);
+            assert_eq!(receive_response(request, null()), 1);
+            let mut status = 0u32;
+            let mut size = 4;
+            assert_eq!(
+                query_headers(
+                    request,
+                    19 | 0x2000_0000,
+                    null(),
+                    (&mut status as *mut u32).cast(),
+                    &mut size,
+                    null_mut()
+                ),
+                1
+            );
+            assert_eq!(status, 200);
+            assert_eq!(close(session), 1);
+
+            let (session, _, request) = request_for(port, "GET", "/gros", false);
+            assert_eq!(send_request(request, null(), 0, null(), 0, 0, 0), 1);
+            assert_eq!(receive_response(request, null()), 1);
+            let mut available = 0u32;
+            assert_eq!(query_data_available(request, &mut available), 1);
+            assert!(available > 0);
+            let mut bytes = [0u8; 8];
+            let mut count = 0;
+            assert_eq!(
+                read_data(request, bytes.as_mut_ptr().cast(), 8, &mut count),
+                1
+            );
+            assert_eq!(&bytes[..count as usize], &b"xxxxxxxx"[..count as usize]);
+            assert!(count > 0);
+            // Fermer avant la fin arrête le transfert sans attendre le serveur.
+            assert_eq!(close(session), 1);
+        }
+        let _ = fin.send(());
+        server.join().unwrap();
+    }
+
     #[test]
     fn redirections_suivies_ou_rendues_2626() {
         let _teb = crate::process::test_teb();
