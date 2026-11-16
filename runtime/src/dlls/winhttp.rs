@@ -747,6 +747,17 @@ pub unsafe extern "win64" fn read_data(
     *read = count as u32;
     1
 }
+/// En-têtes bruts « ligne\0ligne\0 » : la ligne d'état puis chaque
+/// en-tête. Le \0 final de la liste est ajouté par l'appelant avec celui
+/// de toute chaîne rendue ; la longueur rendue en cas de succès l'exclut,
+/// comme pour toute chaîne (inférence : Learn ne précise pas ce cas).
+fn raw_headers_nul(raw: &str) -> String {
+    raw.split("\r\n")
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("{line}\0"))
+        .collect()
+}
+
 unsafe fn output_bytes(
     buffer: *mut c_void,
     length: *mut u32,
@@ -785,6 +796,9 @@ pub unsafe extern "win64" fn query_headers(
     let value = match query {
         19 => response.status.to_string(),
         20 => response.reason.clone(),
+        // WINHTTP_QUERY_RAW_HEADERS (Learn, « Query Info Flags ») : chaque
+        // en-tête terminé par "\0", puis un "\0" final (#2716).
+        21 => raw_headers_nul(&response.raw),
         22 => response.raw.clone(),
         1 | 5 | 65535 => {
             let custom = if query == 1 {
@@ -1241,6 +1255,16 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// #2716 : WINHTTP_QUERY_RAW_HEADERS, chaque ligne terminée par \0.
+    #[test]
+    fn en_tetes_bruts_separes_par_nul_2716() {
+        let raw = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nX-A: 1\r\n\r\n";
+        assert_eq!(
+            raw_headers_nul(raw),
+            "HTTP/1.1 200 OK\0Content-Type: text/xml\0X-A: 1\0"
+        );
+    }
+
     /// #1439 : pas de WPAD, échec documenté et URL nulle.
     #[test]
     fn detection_auto_du_proxy_echoue_proprement() {
@@ -1661,6 +1685,30 @@ mod tests {
             assert!(String::from_utf16(&raw[..required as usize / 2])
                 .unwrap()
                 .contains("201 Created"));
+            // WINHTTP_QUERY_RAW_HEADERS (21) : demande de taille puis lecture (#2716).
+            let mut required = 0;
+            assert_eq!(
+                query_headers(request, 21, null(), null_mut(), &mut required, null_mut()),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 122);
+            let mut nul = vec![0u16; required as usize / 2];
+            assert_eq!(
+                query_headers(
+                    request,
+                    21,
+                    null(),
+                    nul.as_mut_ptr().cast(),
+                    &mut required,
+                    null_mut()
+                ),
+                1
+            );
+            let nul = String::from_utf16(&nul).unwrap();
+            assert!(nul.starts_with("HTTP/1.1 201 Created\0"));
+            assert!(nul.contains("\0X-Test: two\0"));
+            assert!(nul.ends_with("\0\0"));
+            assert!(!nul.contains('\r'));
             let mut index = 0;
             for expected in ["one", "two"] {
                 let mut data = [0u16; 16];
