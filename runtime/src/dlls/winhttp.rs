@@ -323,7 +323,11 @@ pub(crate) unsafe fn open_request_types(
         wide(referer, u32::MAX),
     ) {
         (Ok(v), Ok(p), Ok(version), Ok(r)) => (
-            if v.is_empty() { "GET".into() } else { v },
+            if v.is_empty() {
+                "GET".into()
+            } else {
+                standard_verb(v)
+            },
             if p.is_empty() { "/".into() } else { p },
             version,
             r,
@@ -370,6 +374,21 @@ pub(crate) unsafe fn open_request_types(
             response: None,
         }),
     )
+}
+/// #2730 : un verbe standard écrit en casse mixte (l'ODT d'Office passe
+/// « Get ») part en majuscules. Learn (WinHttpOpenRequest, pwszVerb) : « This
+/// string should be all uppercase. Many servers treat HTTP verbs as
+/// case-sensitive » ; RFC 9110 §9.1 : méthodes standard en majuscules.
+/// Inférence : l'ODT réussit sous Windows avec « Get », donc WinHTTP envoie
+/// « GET ». Un verbe non standard reste tel quel.
+fn standard_verb(verb: String) -> String {
+    const STANDARD: [&str; 9] = [
+        "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+    ];
+    match STANDARD.iter().find(|s| s.eq_ignore_ascii_case(&verb)) {
+        Some(s) => (*s).to_string(),
+        None => verb,
+    }
 }
 pub unsafe extern "win64" fn add_request_headers(
     handle: usize,
@@ -1255,6 +1274,32 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// #2730 : « Get » part en « GET » (la passerelle d'Office refuse « Get »
+    /// par un 400) ; un verbe non standard garde sa casse.
+    #[test]
+    fn verbe_standard_en_majuscules_2730() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            for (given, sent) in [
+                ("Get", "GET"),
+                ("post", "POST"),
+                ("Head", "HEAD"),
+                ("PROPFIND", "PROPFIND"),
+                ("Custom-Verb", "Custom-Verb"),
+            ] {
+                let (session, connection, request) = request_for(80, given, "/", false);
+                let verb = match lock(handles()).get(&request).map(|entry| &entry.kind) {
+                    Some(Kind::Request(r)) => r.verb.clone(),
+                    _ => String::new(),
+                };
+                assert_eq!(verb, sent, "verbe {given}");
+                close(request);
+                close(connection);
+                close(session);
+            }
+        }
+    }
+
     /// #2716 : WINHTTP_QUERY_RAW_HEADERS, chaque ligne terminée par \0.
     #[test]
     fn en_tetes_bruts_separes_par_nul_2716() {
