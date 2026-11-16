@@ -948,11 +948,17 @@ unsafe extern "win64" fn bn_set_offset(this: *mut BuiltinObj, p: u64) {
     *crate::dlls::lock(&Com::get(this).kind) =
         Builtin::Offset(p as u32 as i32, (p >> 32) as u32 as i32);
 }
-unsafe extern "win64" fn bn_get_offset(this: *mut BuiltinObj) -> u64 {
-    match *crate::dlls::lock(&Com::get(this).kind) {
-        Builtin::Offset(x, y) => (x as u32 as u64) | ((y as u32 as u64) << 32),
-        _ => 0,
+/// GetOffset rend une D2D1_POINT_2L par valeur : en x64 MSVC, une fonction
+/// membre qui rend une structure reçoit la zone de retour après `this` et
+/// rend ce pointeur dans RAX (#2723).
+unsafe extern "win64" fn bn_get_offset(this: *mut BuiltinObj, out: *mut [i32; 2]) -> *mut [i32; 2] {
+    if !out.is_null() {
+        *out = match *crate::dlls::lock(&Com::get(this).kind) {
+            Builtin::Offset(x, y) => [x, y],
+            _ => [0, 0],
+        };
     }
+    out
 }
 unsafe extern "win64" fn bn_set_bounds(this: *mut BuiltinObj, r: *const [i32; 4]) {
     if let Some(r) = r.as_ref() {
@@ -2017,5 +2023,202 @@ mod tests {
             [0, 0, 800, 600]
         );
         assert_eq!(clamp_rect([-4, -4, 20, 20], (8, 8)), [-4, -4, 20, 20]);
+    }
+
+    /// #2723 : toute méthode Direct2D qui rend une structure par valeur
+    /// (D2D1_SIZE_F, D2D1_POINT_2F, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    /// D2D1_POINT_2L…) reçoit en x64 MSVC un pointeur caché après `this` et
+    /// doit le rendre dans RAX : l'appelant relit le résultat par RAX. Le test
+    /// appelle chaque emplacement servi par sa table et vérifie la valeur
+    /// rendue.
+    #[test]
+    fn structures_par_valeur_rendues_par_rax() {
+        use super::super::super as d2;
+        unsafe fn rax(obj: *mut c_void, slot: usize, what: &str) {
+            type Get = unsafe extern "win64" fn(*mut c_void, *mut [u64; 4]) -> *mut [u64; 4];
+            let mut buf = [0u64; 4];
+            let back = d2::method::<Get>(obj, slot)(obj, &mut buf);
+            assert_eq!(
+                back, &mut buf as *mut [u64; 4],
+                "{what} : pointeur non rendu dans RAX"
+            );
+        }
+        unsafe fn rel(p: *mut c_void) {
+            type Rel = unsafe extern "win64" fn(*mut c_void) -> u32;
+            d2::method::<Rel>(p, 2)(p);
+        }
+        // Le contrôle à l'exécution peut passer par hasard (RAX garde
+        // souvent `out` après l'écriture) : la forme des fonctions est donc
+        // aussi imposée à la compilation. Une implémentation qui rend `()`
+        // ne se compile pas ici.
+        fn rend<A, S>(f: unsafe extern "win64" fn(*mut A, *mut S) -> *mut S) -> *const () {
+            f as *const ()
+        }
+        let formes = [
+            rend(d2::get_size),
+            rend(d2::get_pixel_size),
+            rend(d2::pixel_format),
+            rend(d2::bitmap_size),
+            rend(d2::bitmap_pixel_size),
+            rend(d2::brush_get_color),
+            rend(d2::brushes::get_point0),
+            rend(d2::brushes::get_point1),
+            rend(d2::svgdoc::doc_get_viewport),
+            rend(bn_get_offset),
+        ];
+        assert!(formes.iter().all(|f| !f.is_null()));
+        unsafe {
+            let f = Com::create(d2::FACTORY_VT.ptr(), d2::Factory);
+            let fake = Com::create(d2::FACTORY_VT.ptr(), d2::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(
+                super::super::factory_create_device(f, fake.cast(), &mut dev),
+                S_OK
+            );
+            Com::release(fake);
+            type CreateDc = unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(d2::method::<CreateDc>(dev, 4)(dev, 0, &mut dc), S_OK);
+
+            // ID2D1RenderTarget : GetPixelFormat, GetSize, GetPixelSize.
+            rax(dc, 50, "ID2D1RenderTarget::GetPixelFormat");
+            rax(dc, 53, "ID2D1RenderTarget::GetSize");
+            rax(dc, 54, "ID2D1RenderTarget::GetPixelSize");
+
+            // ID2D1Bitmap : GetSize, GetPixelSize, GetPixelFormat.
+            type CreateBmp = unsafe extern "win64" fn(
+                *mut c_void,
+                u64,
+                *const c_void,
+                u32,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut bmp = std::ptr::null_mut();
+            let size = 2u64 | (2u64 << 32);
+            assert_eq!(
+                d2::method::<CreateBmp>(dc, 57)(
+                    dc,
+                    size,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut bmp
+                ),
+                S_OK
+            );
+            rax(bmp, 4, "ID2D1Bitmap::GetSize");
+            rax(bmp, 5, "ID2D1Bitmap::GetPixelSize");
+            rax(bmp, 6, "ID2D1Bitmap::GetPixelFormat");
+            rel(bmp);
+
+            // ID2D1SolidColorBrush::GetColor.
+            type CreateSolid = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 4],
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut solid = std::ptr::null_mut();
+            assert_eq!(
+                d2::method::<CreateSolid>(dc, 8)(
+                    dc,
+                    &[1.0, 0.0, 0.0, 1.0],
+                    std::ptr::null(),
+                    &mut solid
+                ),
+                S_OK
+            );
+            rax(solid, 9, "ID2D1SolidColorBrush::GetColor");
+            rel(solid);
+
+            // Dégradés : GetStartPoint/GetEndPoint, GetCenter/GetGradientOriginOffset.
+            type CreateStops = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 5],
+                u32,
+                u32,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let stops_in = [[0.0, 0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0, 1.0]];
+            let mut stops = std::ptr::null_mut();
+            assert_eq!(
+                d2::method::<CreateStops>(dc, 9)(dc, stops_in.as_ptr(), 2, 0, 0, &mut stops),
+                S_OK
+            );
+            type CreateGrad = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 4],
+                *const c_void,
+                *mut c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut lin = std::ptr::null_mut();
+            assert_eq!(
+                d2::method::<CreateGrad>(dc, 10)(
+                    dc,
+                    &[0.0, 0.0, 1.0, 1.0],
+                    std::ptr::null(),
+                    stops,
+                    &mut lin
+                ),
+                S_OK
+            );
+            rax(lin, 10, "ID2D1LinearGradientBrush::GetStartPoint");
+            rax(lin, 11, "ID2D1LinearGradientBrush::GetEndPoint");
+            rel(lin);
+            type CreateRadial = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 6],
+                *const c_void,
+                *mut c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut rad = std::ptr::null_mut();
+            assert_eq!(
+                d2::method::<CreateRadial>(dc, 11)(
+                    dc,
+                    &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0],
+                    std::ptr::null(),
+                    stops,
+                    &mut rad
+                ),
+                S_OK
+            );
+            rax(rad, 12, "ID2D1RadialGradientBrush::GetCenter");
+            rax(rad, 13, "ID2D1RadialGradientBrush::GetGradientOriginOffset");
+            rel(rad);
+            rel(stops);
+
+            // ID2D1SvgDocument::GetViewportSize.
+            let mut doc = std::ptr::null_mut();
+            assert_eq!(
+                d2::svgdoc::create_svg_document(dc.cast(), std::ptr::null_mut(), 0, &mut doc),
+                S_OK
+            );
+            rax(doc, 5, "ID2D1SvgDocument::GetViewportSize");
+            rel(doc);
+
+            // ID2D1OffsetTransform::GetOffset.
+            let mut off = std::ptr::null_mut();
+            assert_eq!(
+                ctx_offset(std::ptr::null_mut(), 3 | (4 << 32), &mut off),
+                S_OK
+            );
+            type GetOff = unsafe extern "win64" fn(*mut c_void, *mut [i32; 2]) -> *mut [i32; 2];
+            let mut p = [0i32; 2];
+            assert_eq!(
+                d2::method::<GetOff>(off, 5)(off, &mut p),
+                &mut p as *mut [i32; 2]
+            );
+            assert_eq!(p, [3, 4]);
+            rax(off, 5, "ID2D1OffsetTransform::GetOffset");
+            rel(off);
+
+            rel(dc);
+            rel(dev);
+            Com::release(f);
+        }
     }
 }
