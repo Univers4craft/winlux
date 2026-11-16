@@ -23,7 +23,9 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"ev": "exec_result", "id", "ok", "json"}   {"ev": "error", "code"}
 
 `window.open` ouvre une fenêtre surgissante liée à la page (#2727), comme
-WebView2 quand l'hôte ne traite pas NewWindowRequested.
+WebView2 quand l'hôte ne traite pas NewWindowRequested. Sa taille et sa
+position ne suivent les options de `window.open` que si la page les donne
+(#2736).
 
 `window.chrome.webview` (postMessage, addEventListener) est fourni aux
 pages, comme l'attendent les applications WebView2.
@@ -337,6 +339,59 @@ BRIDGE = r"""
 """
 
 
+# ── Options de window.open (#2736) ─────────────────────────────────────────
+# WebKitGTK rend toujours une géométrie pour la nouvelle fenêtre, même sans
+# taille demandée (celle de la fenêtre de la page ouvrante, au minimum
+# 100x100) : elle ne dit pas si la page a demandé une taille ou une
+# position. Learn (ICoreWebView2WindowFeatures) : Width/Height et Left/Top
+# sont ignorés si HasSize/HasPosition valent FALSE. Ce script relève donc,
+# juste avant chaque window.open, si les options nomment une taille ou une
+# position, d'après les noms de la norme HTML (« window open steps » :
+# width, innerwidth, height, innerheight, left, screenx, top, screeny).
+# Il ne transmet que deux booléens, jamais l'adresse ni les options.
+POPUP_FEATURES = r"""
+(function () {
+  if (window.__winluxOpen) return;
+  var open = window.open;
+  if (typeof open !== "function") return;
+  window.__winluxOpen = true;
+  function names(features) {
+    var found = {};
+    String(features == null ? "" : features).toLowerCase()
+      .split(/[\s,;]+/).forEach(function (t) {
+        var n = t.split("=")[0];
+        if (n) found[n] = true;
+      });
+    return found;
+  }
+  window.open = function (url, target, features) {
+    try {
+      var n = names(features);
+      window.webkit.messageHandlers.winluxPopup.postMessage(JSON.stringify({
+        size: !!(n.width || n.innerwidth || n.height || n.innerheight),
+        position: !!(n.left || n.screenx || n.top || n.screeny)
+      }));
+    } catch (e) { /* le moteur garde alors la géométrie de WebKit */ }
+    return open.apply(this, arguments);
+  };
+})();
+"""
+
+# Taille d'une fenêtre surgissante sans taille demandée : les deux tiers de
+# la zone de travail de l'écran, au moins 640x480. Learn ne donne aucune
+# taille par défaut ; ce choix est une inférence, pour qu'un contenu prévu
+# pour une fenêtre ordinaire ne soit pas coupé.
+POPUP_DEFAULT_FRACTION = 2 / 3
+POPUP_DEFAULT_MIN = (640, 480)
+
+
+def popup_default_size(workarea):
+    """Taille par défaut, d'après la zone de travail (largeur, hauteur)."""
+    width, height = workarea
+    return (max(POPUP_DEFAULT_MIN[0], int(width * POPUP_DEFAULT_FRACTION)),
+            max(POPUP_DEFAULT_MIN[1], int(height * POPUP_DEFAULT_FRACTION)))
+
+
 LOCAL_SCHEME = "winlux-local"
 
 
@@ -368,6 +423,24 @@ class View:
         self.manager.register_script_message_handler("winlux")
         self.manager.connect("script-message-received::winlux", self.on_message)
         self.add_script(BRIDGE)
+        # Options de window.open (#2736), pour la page et ses fenêtres
+        # surgissantes ; celles-ci n'ont pas le pont chrome.webview.
+        self.popup_request = None
+        self.popup_manager = WebKit2.UserContentManager()
+        for manager in (self.manager, self.popup_manager):
+            manager.register_script_message_handler("winluxPopup")
+            manager.connect("script-message-received::winluxPopup", self.on_popup_request)
+            manager.add_script(WebKit2.UserScript.new(
+                POPUP_FEATURES, WebKit2.UserContentInjectedFrames.ALL_FRAMES,
+                WebKit2.UserScriptInjectionTime.START, None, None))
+
+    def on_popup_request(self, _manager, result):
+        """Taille et position nommées par le prochain window.open (#2736)."""
+        try:
+            request = json.loads(result.get_js_value().to_string())
+            self.popup_request = (bool(request.get("size")), bool(request.get("position")))
+        except (ValueError, AttributeError):
+            self.popup_request = None
 
     # Scripts injetés à chaque document (AddScriptToExecuteOnDocumentCreated).
     def add_script(self, js):
@@ -430,8 +503,11 @@ class View:
         demandée (about:blank compris) dans la vue rendue.
         """
         WebKit2 = self.WebKit2
-        popup = WebKit2.WebView(related_view=view,
-                                user_content_manager=WebKit2.UserContentManager())
+        popup = WebKit2.WebView(related_view=view, user_content_manager=self.popup_manager)
+        # Options relevées juste avant ce window.open ; sans relevé, la
+        # géométrie de WebKit est gardée telle quelle.
+        popup.winlux_request = self.popup_request
+        self.popup_request = None
         popup.get_settings().set_javascript_can_open_windows_automatically(True)
         popup.connect("create", self.on_create)
         popup.connect("ready-to-show", self.on_popup_ready)
@@ -442,20 +518,42 @@ class View:
         return popup
 
     def on_popup_ready(self, popup):
-        """ready-to-show : fenêtre de premier niveau à la taille demandée."""
+        """ready-to-show : fenêtre de premier niveau à la taille demandée.
+
+        Une taille ou une position que la page n'a pas demandée n'est pas
+        reprise de WebKit (#2736) : la taille par défaut vient de la zone de
+        travail, et le gestionnaire de fenêtres place la fenêtre.
+        """
         Gtk = self.Gtk
         window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         geometry = popup.get_window_properties().get_geometry()
-        w = geometry.width if geometry.width > 0 else 640
-        h = geometry.height if geometry.height > 0 else 480
+        size, position = getattr(popup, "winlux_request", None) or (True, True)
+        if size and geometry.width > 0 and geometry.height > 0:
+            w, h = max(100, geometry.width), max(100, geometry.height)
+        else:
+            w, h = popup_default_size(self.workarea())
         window.set_default_size(w, h)
-        if geometry.x or geometry.y:
+        if position and (geometry.x or geometry.y):
             window.move(geometry.x, geometry.y)
         popup.connect("notify::title", lambda v, _p: window.set_title(v.get_title() or ""))
         window.add(popup)
         window.connect("delete-event", lambda *_: (popup.try_close(), True)[1])
         self.popups.append(window)
         window.show_all()
+
+    def workarea(self):
+        """Zone de travail de l'écran de la fenêtre de la page."""
+        display = self.Gdk.Display.get_default()
+        monitor = None
+        gdk_window = self.window.get_window() if self.window else None
+        if display is not None and gdk_window is not None:
+            monitor = display.get_monitor_at_window(gdk_window)
+        if monitor is None and display is not None:
+            monitor = display.get_primary_monitor() or display.get_monitor(0)
+        if monitor is None:
+            return POPUP_DEFAULT_MIN
+        area = monitor.get_workarea()
+        return (area.width, area.height)
 
     def on_popup_close(self, popup):
         """window.close() de la page, ou fermeture acceptée : la fenêtre part."""
