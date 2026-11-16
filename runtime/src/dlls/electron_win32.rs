@@ -2007,11 +2007,12 @@ unsafe extern "win64" fn RoActivateInstance(class: usize, out: *mut usize) -> i3
         return E_POINTER;
     }
     crate::wow32::write_ptr(out as usize, 0);
-    if crate::wow32::active() {
-        // Les fabriques rendues à un programme x86 peuvent être les siennes
-        // (RoRegisterActivationFactories) : pas d'appel x64 dans leur vtable
-        // tant que Ro* n'a pas ses deux ABI (#2471).
-        let name = String::from_utf16_lossy(hstring_slice(class));
+    // Programme x86 : les fabriques du runtime ont une table win64 et
+    // passent par le mandataire de wow32 (#2740) ; une fabrique inscrite
+    // par le programme lui-même (RoRegisterActivationFactories) a une table
+    // x86 qu'on ne peut pas appeler d'ici (#2471).
+    let name = String::from_utf16_lossy(hstring_slice(class));
+    if crate::wow32::active() && super::ole32_lot_c::has_registered_factory(&name) {
         crate::log_warn!(
             "com",
             "RoActivateInstance : classe « {name} » pas encore activée pour un programme x86 (REGDB_E_CLASSNOTREG)"

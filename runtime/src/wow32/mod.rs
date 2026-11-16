@@ -31,6 +31,7 @@ mod com_nlm;
 mod com_ole;
 mod com_shell;
 mod com_taskschd;
+mod com_winrt;
 mod comctl;
 mod comdlg;
 mod crt;
