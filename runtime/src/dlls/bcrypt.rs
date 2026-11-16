@@ -235,21 +235,22 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
             std::slice::from_raw_parts(secret, secret_len as usize).to_vec()
         }
     });
-    if compute(alg, key.as_deref(), b"").is_none() {
+    let Some(state) = crate::dlls::condensat::Condensat::new(alg & !HMAC_BIT, key.as_deref())
+    else {
         return STATUS_NOT_SUPPORTED;
-    }
+    };
     // Handle = algorithme (16 bits bas) | numéro de séquence (bits hauts).
     let seq = HASH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
     let h = alg | (seq << 16) | 0x8000_0000;
     hash_states()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(h, (key, Vec::new()));
+        .insert(h, state);
     put_handle(hash_handle, h);
     0
 }
 
-/// BCryptDuplicateHash : copie l'état (clé HMAC et données déjà reçues).
+/// BCryptDuplicateHash : copie l'état en cours (clé HMAC comprise).
 pub unsafe extern "win64" fn bcrypt_duplicate_hash(
     hash: usize,
     out: *mut usize,
@@ -261,8 +262,11 @@ pub unsafe extern "win64" fn bcrypt_duplicate_hash(
         return 0xC000_000Du32 as i32;
     }
     let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(state) = states.get(&hash).cloned() else {
+    let Some(state) = states.get(&hash) else {
         return 0xC000_0008u32 as i32;
+    };
+    let Some(state) = state.try_clone() else {
+        return 0xC000_0017u32 as i32; // STATUS_NO_MEMORY
     };
     let seq = HASH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
     let h = (hash & 0xFFFF) | (seq << 16) | 0x8000_0000;
@@ -418,9 +422,9 @@ pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
 
 const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
 
-/// Clé HMAC éventuelle et données accumulées par handle de hachage
-/// (BCryptHashData), jusqu'à BCryptFinishHash.
-type HashState = (Option<Vec<u8>>, Vec<u8>);
+/// Condensat en cours par handle de hachage (BCryptHashData), jusqu'à
+/// BCryptFinishHash : un état de taille fixe, jamais les données (#2738).
+type HashState = crate::dlls::condensat::Condensat;
 fn hash_states() -> &'static std::sync::Mutex<std::collections::HashMap<usize, HashState>> {
     static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, HashState>>> =
         std::sync::OnceLock::new();
@@ -465,14 +469,14 @@ pub unsafe extern "win64" fn bcrypt_hash_data(
     _flags: u32,
 ) -> i32 {
     let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
-    let Some((_, buf)) = states.get_mut(&hash) else {
+    let Some(state) = states.get_mut(&hash) else {
         return 0xC000_0008u32 as i32; // STATUS_INVALID_HANDLE
     };
     if input_len > 0 {
         if input.is_null() {
             return 0xC000_000Du32 as i32;
         }
-        buf.extend_from_slice(std::slice::from_raw_parts(input, input_len as usize));
+        state.update(std::slice::from_raw_parts(input, input_len as usize));
     }
     0
 }
@@ -495,10 +499,10 @@ pub unsafe extern "win64" fn bcrypt_finish_hash(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&hash);
-    let Some((key, data)) = data else {
+    let Some(state) = data else {
         return 0xC000_0008u32 as i32;
     };
-    let Some(d) = compute(alg, key.as_deref(), &data) else {
+    let Some(d) = state.finish().filter(|d| d.len() == expected as usize) else {
         return STATUS_NOT_SUPPORTED;
     };
     std::ptr::copy_nonoverlapping(d.as_ptr(), output, d.len());
