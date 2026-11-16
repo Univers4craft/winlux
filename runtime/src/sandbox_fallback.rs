@@ -14,8 +14,15 @@
 //!
 //! Le repli ne vaut que pour un navigateur dont les enfants sont son propre
 //! exécutable (Chromium, Electron) : lui seul lit `--no-sandbox`. Un
-//! programme qui héberge un moteur web dans un autre exécutable (Acrobat et
-//! ses enfants CEF) prendrait l'option pour un document à ouvrir (#2696).
+//! programme qui héberge un moteur web dans un autre exécutable prendrait
+//! l'option pour un document à ouvrir (#2696). Et un programme qui se
+//! relance lui-même en `--type=renderer` sans être Chromium (Acrobat Reader :
+//! « Acrobat.exe --type=renderer /prefetch:1 ») la lirait de même. Un
+//! enfant de contenu de Chromium porte toujours
+//! `--mojo-platform-channel-handle=` : sous Windows, Chromium y passe
+//! l'extrémité du canal Mojo de chaque enfant non élevé (code BSD de
+//! Chromium : content/browser/child_process_launcher_helper_win.cc,
+//! mojo/public/cpp/platform/platform_channel.h, `kHandleSwitch`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +35,14 @@ const FLAG: &str = "--no-sandbox";
 /// Enfants Chromium créés suspendus par ce processus : leur `--type=` et
 /// s'ils sont notre propre exécutable.
 static SUSPENDED_CHILDREN: Mutex<Option<HashMap<i32, (String, bool)>>> = Mutex::new(None);
+
+/// Option que Chromium donne à chaque enfant de contenu (canal Mojo).
+const MOJO_HANDLE: &str = "--mojo-platform-channel-handle=";
+
+/// Enfant de contenu de Chromium : `--type=…` et le canal Mojo.
+fn is_chromium_content_child(line: &str) -> bool {
+    is_chromium_child_line(line) && line.split_whitespace().any(|w| w.starts_with(MOJO_HANDLE))
+}
 static ASKED: AtomicBool = AtomicBool::new(false);
 
 fn lock() -> std::sync::MutexGuard<'static, Option<HashMap<i32, (String, bool)>>> {
@@ -40,30 +55,34 @@ pub fn is_chromium_child_line(line: &str) -> bool {
 }
 
 /// CreateProcess vient de lancer `pid` suspendu avec cette ligne ;
-/// `same_image` : l'enfant est notre propre exécutable.
+/// `same_image` : l'enfant est notre propre exécutable. Le booléen gardé
+/// dit si la relance sans bac à sable vaut pour cet enfant : notre propre
+/// exécutable, lancé comme enfant de contenu de Chromium.
 pub fn note_child(pid: u32, line: &str, same_image: bool) {
     if is_chromium_child_line(line) {
+        let chromium = same_image && is_chromium_content_child(line);
         lock()
             .get_or_insert_with(HashMap::new)
-            .insert(pid as i32, (child_type(line).to_string(), same_image));
+            .insert(pid as i32, (child_type(line).to_string(), chromium));
     }
 }
 
 /// TerminateProcess sur `pid` ; `still_suspended` : jamais relancé.
 pub fn on_terminate(pid: i32, still_suspended: bool) {
     let child = lock().as_mut().and_then(|s| s.remove(&pid));
-    let Some((kind, same_image)) = child.filter(|_| still_suspended) else {
+    let Some((kind, chromium)) = child.filter(|_| still_suspended) else {
         return;
     };
     let cause = cause(pid, &kind, std::process::id());
-    if same_image {
+    if chromium {
         sandbox_failed(&cause);
     } else {
-        // Moteur web hébergé dans un autre exécutable : `--no-sandbox` ne le
-        // concerne pas et l'hôte le lirait comme un document (#2696).
+        // Moteur web hébergé dans un autre exécutable, ou programme qui
+        // n'est pas Chromium : il lirait `--no-sandbox` comme un document
+        // à ouvrir (#2696).
         crate::log_info!(
             "process",
-            "bac à sable d'un moteur web hébergé ({cause}) : l'enfant n'est pas notre exécutable, pas de relance sans bac à sable (#2696)"
+            "bac à sable hors Chromium ({cause}) : l'enfant n'est pas notre exécutable lancé par Chromium (pas de {MOJO_HANDLE}), pas de relance sans bac à sable (#2696)"
         );
     }
 }
@@ -187,6 +206,39 @@ mod tests {
         on_terminate(4343, true);
         assert!(!lock().as_ref().unwrap().contains_key(&4343));
         assert!(!ASKED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn programme_qui_se_relance_sans_etre_chromium_2696() {
+        // Ligne relevée au banc (passe acrobat-ba) : même exécutable, mais
+        // pas de canal Mojo. Pas de relance, rien de mémorisé.
+        let line = "\"C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe\" --type=renderer /prefetch:1";
+        assert!(!is_chromium_content_child(line));
+        note_child(4444, line, true);
+        assert_eq!(
+            lock().as_ref().unwrap().get(&4444).map(|c| c.1),
+            Some(false)
+        );
+        on_terminate(4444, true);
+        assert!(!ASKED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn enfant_de_contenu_de_chromium_reconnu() {
+        let line = "\"C:\\a\\app.exe\" --type=renderer --lang=fr --mojo-platform-channel-handle=1234 /prefetch:1";
+        assert!(is_chromium_content_child(line));
+        // Enregistré, mais pas terminé : le test ne relance rien.
+        note_child(4545, line, true);
+        assert_eq!(lock().as_ref().unwrap().get(&4545).map(|c| c.1), Some(true));
+        note_child(4646, line, false);
+        assert_eq!(
+            lock().as_ref().unwrap().get(&4646).map(|c| c.1),
+            Some(false)
+        );
+        lock()
+            .as_mut()
+            .unwrap()
+            .retain(|k, _| *k != 4545 && *k != 4646);
     }
 
     #[test]
