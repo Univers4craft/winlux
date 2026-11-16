@@ -1,6 +1,10 @@
 // WebView2 maison (#236) : comme une application WebView2, le programme
 // charge WebView2Loader.dll, crée l'environnement puis le contrôleur dans
 // sa fenêtre, et dialogue avec la page :
+//   - la page ouvre about:blank?window=loading par window.open, sans
+//     geste de l'utilisateur, écrit dans son document puis la ferme, et
+//     envoie « fenetre-dom-fermee » (#2727 : comme Teams, qui ne traite
+//     pas NewWindowRequested) ;
 //   - la page envoie « bonjour » (postMessage d'une chaîne) ;
 //   - l'application répond par PostWebMessageAsJson({"x":42}) ;
 //   - la page renvoie {"echo":{"x":42}} ;
@@ -86,7 +90,10 @@ static HRESULT on_message(void *sender, void *args) {
     u16 *json = 0, *text = 0;
     if (CALL(args, 3 + 1, &json) != 0 || !json) fail(20);
     HRESULT is_string = CALL(args, 3 + 2, &text);
-    if (step == 10) {
+    if (step == 5) {
+        if (is_string != 0 || !wsame(text, "fenetre-dom-fermee")) fail(9);
+        step = 10;
+    } else if (step == 10) {
         if (is_string != 0 || !wsame(text, "bonjour") || !wsame(json, "\"bonjour\"")) fail(10);
         step = 20;
         if (CALL(webview, 3 + 29, W("{\"x\":42}")) != 0) fail(21);
@@ -114,11 +121,19 @@ static HRESULT on_controller(void *hr, void *ctrl) {
     if (CALL(webview, 3 + 31, &message, &token) != 0) fail(6);
     int bounds[4] = {0, 0, 640, 480};
     if (CALL(controller, 3 + 3, bounds) != 0) fail(7);
-    step = 10;
+    step = 5;
     if (CALL(webview, 3 + 3,
              W("<html><body><script>"
-               "window.chrome.webview.addEventListener('message', e => window.chrome.webview.postMessage({echo: e.data}));"
-               "window.chrome.webview.postMessage('bonjour');"
+               "var w = window.open('about:blank?window=loading'), r = w ? 'fenetre' : 'null';"
+               "if (w) { var d = w.document.body || w.document.documentElement;"
+               " d.textContent = 'chargement'; if (d.textContent === 'chargement') r += '-dom';"
+               " w.close(); }"
+               "setTimeout(function () {"
+               " if (w && w.closed) r += '-fermee';"
+               " window.chrome.webview.postMessage(r);"
+               " window.chrome.webview.addEventListener('message', e => window.chrome.webview.postMessage({echo: e.data}));"
+               " window.chrome.webview.postMessage('bonjour');"
+               "}, 500);"
                "</script></body></html>")) != 0)
         fail(8);
     return 0;

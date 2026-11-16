@@ -22,6 +22,9 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
     {"ev": "exec_result", "id", "ok", "json"}   {"ev": "error", "code"}
 
+`window.open` ouvre une fenêtre surgissante liée à la page (#2727), comme
+WebView2 quand l'hôte ne traite pas NewWindowRequested.
+
 `window.chrome.webview` (postMessage, addEventListener) est fourni aux
 pages, comme l'attendent les applications WebView2.
 
@@ -384,6 +387,12 @@ class View:
         self.view.connect("notify::title", self.on_title)
         self.view.connect("notify::uri", self.on_uri)
         self.view.connect("decide-policy", self.on_policy)
+        # window.open (#2727) : WebView2 n'a pas de bloqueur de fenêtres
+        # surgissantes ; sans NewWindowRequested traité par l'hôte, il ouvre
+        # une fenêtre surgissante et la page garde la main sur elle.
+        settings.set_javascript_can_open_windows_automatically(True)
+        self.view.connect("create", self.on_create)
+        self.popups = []
         self.window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         self.window.set_decorated(False)
         self.window.set_skip_taskbar_hint(True)
@@ -406,6 +415,57 @@ class View:
         # l'application n'en a pas écrit un autre (#2611).
         emit(ev="ready", xid=gdk_window.get_xid(),
              user_agent=self.view.get_settings().get_user_agent() or "")
+
+    # ── Fenêtres surgissantes (window.open, #2727) ──
+    def on_create(self, view, action):
+        """Signal « create » : la vue rendue devient le résultat de window.open.
+
+        Learn (ICoreWebView2::add_NewWindowRequested) : quand l'hôte ne
+        fournit ni NewWindow ni Handled, WebView2 ouvre une fenêtre surgissante
+        et window.open rend un objet fenêtre que la page manipule (document,
+        postMessage, close). La vue est liée à celle de la page (même
+        processus web, même origine possible pour about:blank) ; elle n'a pas
+        le pont chrome.webview, qui n'appartient qu'à la vue de l'hôte.
+        Aucune navigation n'est lancée ici : WebKit charge lui-même l'adresse
+        demandée (about:blank compris) dans la vue rendue.
+        """
+        WebKit2 = self.WebKit2
+        popup = WebKit2.WebView(related_view=view,
+                                user_content_manager=WebKit2.UserContentManager())
+        popup.get_settings().set_javascript_can_open_windows_automatically(True)
+        popup.connect("create", self.on_create)
+        popup.connect("ready-to-show", self.on_popup_ready)
+        popup.connect("close", self.on_popup_close)
+        uri = action.get_request().get_uri() or ""
+        print(f"winlux-webview : window.open {uri.split('?')[0][:120]!r}, fenêtre surgissante (#2727)",
+              file=sys.stderr, flush=True)
+        return popup
+
+    def on_popup_ready(self, popup):
+        """ready-to-show : fenêtre de premier niveau à la taille demandée."""
+        Gtk = self.Gtk
+        window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        geometry = popup.get_window_properties().get_geometry()
+        w = geometry.width if geometry.width > 0 else 640
+        h = geometry.height if geometry.height > 0 else 480
+        window.set_default_size(w, h)
+        if geometry.x or geometry.y:
+            window.move(geometry.x, geometry.y)
+        popup.connect("notify::title", lambda v, _p: window.set_title(v.get_title() or ""))
+        window.add(popup)
+        window.connect("delete-event", lambda *_: (popup.try_close(), True)[1])
+        self.popups.append(window)
+        window.show_all()
+
+    def on_popup_close(self, popup):
+        """window.close() de la page, ou fermeture acceptée : la fenêtre part."""
+        window = popup.get_toplevel()
+        if window in self.popups:
+            self.popups.remove(window)
+        if isinstance(window, self.Gtk.Window):
+            window.destroy()
+        else:
+            popup.destroy()
 
     def reparent(self, parent):
         gdk_window = self.window.get_window() if self.window else None
