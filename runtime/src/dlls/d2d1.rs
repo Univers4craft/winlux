@@ -43,6 +43,9 @@ mod v11;
 #[path = "d2d1_brush.rs"]
 mod brushes;
 
+#[path = "d2d1_svg.rs"]
+mod svgdoc;
+
 /// Table de 120 relais « this = [this + 8], saut vers ([this + 16])[i] »
 /// pour les vues d'interface (ID2D1DeviceContext d'une ancienne cible,
 /// IDWriteTextFormat3 d'une mise en page).
