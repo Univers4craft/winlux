@@ -939,7 +939,10 @@ unsafe extern "win64" fn doc_set_viewport(this: *mut DocObj, size: u64) -> i32 {
 /// GetViewportSize rend une D2D1_SIZE_F : en x64 MSVC, l'appelant passe la
 /// zone de retour après `this` et relit le résultat par le pointeur rendu
 /// dans RAX, qu'il faut donc rendre (#2721).
-unsafe extern "win64" fn doc_get_viewport(this: *mut DocObj, out: *mut [f32; 2]) -> *mut [f32; 2] {
+pub(super) unsafe extern "win64" fn doc_get_viewport(
+    this: *mut DocObj,
+    out: *mut [f32; 2],
+) -> *mut [f32; 2] {
     if !out.is_null() {
         let v = doc_st(this).viewport;
         *out = [v.0, v.1];
