@@ -790,13 +790,19 @@ unsafe extern "win64" fn set_point1(this: *mut c_void, p: u64) {
 }
 /// Les D2D1_POINT_2F rendus le sont par adresse cachée (convention MSVC
 /// des méthodes C++).
-unsafe extern "win64" fn get_point0(this: *mut c_void, out: *mut [f32; 2]) -> *mut [f32; 2] {
+pub(super) unsafe extern "win64" fn get_point0(
+    this: *mut c_void,
+    out: *mut [f32; 2],
+) -> *mut [f32; 2] {
     if !out.is_null() {
         with_point(this, 0, |f| *out = [f.0, f.1]);
     }
     out
 }
-unsafe extern "win64" fn get_point1(this: *mut c_void, out: *mut [f32; 2]) -> *mut [f32; 2] {
+pub(super) unsafe extern "win64" fn get_point1(
+    this: *mut c_void,
+    out: *mut [f32; 2],
+) -> *mut [f32; 2] {
     if !out.is_null() {
         with_point(this, 1, |f| *out = [f.0, f.1]);
     }
