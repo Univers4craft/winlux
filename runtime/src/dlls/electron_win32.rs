@@ -1954,6 +1954,10 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::winrt_apiinfo::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Security.Authentication.Web.Core.WebAuthenticationCoreManager (#2729).
+    if let Some(hr) = super::winrt_wam::activation_factory(&name, iid as *const u8, out) {
+        return hr;
+    }
     // Classes déclarées par le manifeste du paquet du programme (#2657).
     if let Some(hr) =
         super::package_classes::activation_factory(class, &name, iid as *const u8, out)

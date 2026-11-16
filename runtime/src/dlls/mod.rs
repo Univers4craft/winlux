@@ -334,6 +334,7 @@ pub mod winrt_apiinfo;
 pub mod winrt_coreapp;
 pub mod winrt_ui;
 pub mod winrt_uri;
+pub mod winrt_wam;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
