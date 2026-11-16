@@ -936,11 +936,15 @@ unsafe extern "win64" fn doc_set_viewport(this: *mut DocObj, size: u64) -> i32 {
     S_OK
 }
 
-unsafe extern "win64" fn doc_get_viewport(this: *mut DocObj, out: *mut [f32; 2]) {
+/// GetViewportSize rend une D2D1_SIZE_F : en x64 MSVC, l'appelant passe la
+/// zone de retour après `this` et relit le résultat par le pointeur rendu
+/// dans RAX, qu'il faut donc rendre (#2721).
+unsafe extern "win64" fn doc_get_viewport(this: *mut DocObj, out: *mut [f32; 2]) -> *mut [f32; 2] {
     if !out.is_null() {
         let v = doc_st(this).viewport;
         *out = [v.0, v.1];
     }
+    out
 }
 
 /// SetRoot : la racine doit être un élément `svg` sans parent.
@@ -2324,6 +2328,7 @@ mod tests {
             assert_eq!(tag_of(root), "svg");
             rel(root);
             rel(doc);
+            viewport_rendue_dans_rax_2721(dc_t);
 
             let mut src = stream(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\">\
@@ -2471,6 +2476,44 @@ mod tests {
             rel(root);
             rel(doc);
             rel(bmp);
+            rel(dc);
+            rel(dev);
+            Com::release(f);
+        }
+    }
+
+    /// #2721 : GetViewportSize rend sa structure par pointeur caché ; Win2D
+    /// relit la taille par RAX. La fonction doit rendre ce pointeur.
+    unsafe fn viewport_rendue_dans_rax_2721(dc: *mut TargetObj) {
+        let vp = 3f32.to_bits() as u64 | ((5f32.to_bits() as u64) << 32);
+        let mut doc = std::ptr::null_mut();
+        assert_eq!(
+            create_svg_document(dc, std::ptr::null_mut(), vp, &mut doc),
+            S_OK
+        );
+        type GetVp = unsafe extern "win64" fn(*mut c_void, *mut [f32; 2]) -> *mut [f32; 2];
+        let mut size = [0f32; 2];
+        let back = method::<GetVp>(doc, 5)(doc, &mut size);
+        assert_eq!(back, &mut size as *mut [f32; 2]);
+        assert_eq!(*back, [3.0, 5.0]);
+        rel(doc);
+    }
+
+    #[test]
+    fn viewport_svg_par_rax_2721() {
+        unsafe {
+            let f = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let fake = Com::create(super::super::FACTORY_VT.ptr(), super::super::Factory);
+            let mut dev = std::ptr::null_mut();
+            assert_eq!(
+                super::super::v11::factory_create_device(f, fake.cast(), &mut dev),
+                S_OK
+            );
+            Com::release(fake);
+            type CreateDc = unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
+            let mut dc = std::ptr::null_mut();
+            assert_eq!(method::<CreateDc>(dev, 4)(dev, 0, &mut dc), S_OK);
+            viewport_rendue_dans_rax_2721(dc.cast());
             rel(dc);
             rel(dev);
             Com::release(f);
