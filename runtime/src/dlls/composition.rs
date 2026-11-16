@@ -18,10 +18,10 @@
 //! `ICompositor2` (#2710) : visuels de calque (`LayerVisual`, dessinés comme
 //! des conteneurs ; un effet posé est gardé et le journal dit qu'il n'est pas
 //! appliqué) et pinceaux d'arrière-plan (`CompositionBackdropBrush`, qui
-//! laissent voir ce qui est dessous, donc ne dessinent rien). Les classes que
-//! Winlux ne sert pas encore (lumières, ombre portée, masque, neuf-grilles,
-//! groupes et collections d'animations, easing en escalier) rendent
-//! E_NOTIMPL, notées une fois au journal avec leur fichier et leur ligne.
+//! laissent voir ce qui est dessous, donc ne dessinent rien). Les autres classes
+//! créées par `ICompositor2` (lumières, ombre portée, masque, neuf cases,
+//! groupes et collections d'animations, easing en escalier) sont dans
+//! `composition_classes.rs` (#2715).
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -106,16 +106,8 @@ const IID_COMPOSITOR2: Guid = iid("735081dc-5e24-45da-a38f-e32cc349a9a0");
 const IID_LAYER_VISUAL: Guid = iid("af843985-0444-4887-8e83-b40b253f822c");
 const IID_BACKDROP_BRUSH: Guid = iid("c5acae58-3898-499e-8d7f-224e91286a5d");
 
-/// Méthode qui créerait une classe que Winlux ne sert pas encore : E_NOTIMPL,
-/// noté une fois au journal avec son nom, son fichier et sa ligne (#2710).
-macro_rules! sans_classe {
-    ($name:literal) => {{
-        unsafe extern "win64" fn f() -> i32 {
-            $crate::dlls::d2d1::unsupported_call(concat!($name, " (", file!(), ":", line!(), ")"))
-        }
-        f as *const ()
-    }};
-}
+#[path = "composition_classes.rs"]
+mod classes;
 
 const CONTROLLER_CLASS: &str = "Windows.UI.Composition.Core.CompositorController";
 const COMPOSITOR_CLASS: &str = "Windows.UI.Composition.Compositor";
@@ -193,6 +185,21 @@ enum Kind {
     Surface,
     PropertySet,
     Async,
+    // Classes créées par ICompositor2 (#2715), dans `classes`.
+    MaskBrush,
+    NineGridBrush,
+    DropShadow,
+    AmbientLight,
+    DistantLight,
+    PointLight,
+    SpotLight,
+    AnimationGroup,
+    ImplicitAnimations,
+    StepEasing,
+    VisualSet,
+    Iterator,
+    MapView,
+    Pair,
 }
 
 impl Kind {
@@ -213,6 +220,7 @@ impl Kind {
             Kind::Surface => "Windows.UI.Composition.CompositionDrawingSurface",
             Kind::PropertySet => "Windows.UI.Composition.CompositionPropertySet",
             Kind::Async => "Windows.Foundation.IAsyncAction",
+            _ => classes::class(self),
         }
     }
 
@@ -295,6 +303,10 @@ impl Kind {
                 (IID_SURFACE_INTEROP, SURFACE_INTEROP_VT.ptr()),
             ],
             Kind::PropertySet => vec![(IID_PROPERTY_SET, PROPERTY_SET_VT.ptr())],
+            // Parcours, vues et paires : interfaces données à la création,
+            // pas des CompositionObject.
+            Kind::Iterator | Kind::MapView | Kind::Pair => return Vec::new(),
+            _ => classes::ifaces(self),
         };
         v.extend_from_slice(&object);
         v
@@ -438,10 +450,21 @@ enum Data {
     },
     Surface(Box<SurfaceData>),
     PropertySet(HashMap<String, (u8, Vec<u8>)>),
+    /// Objets de `classes` (#2715).
+    Props(Box<classes::Props>),
 }
 
 unsafe fn new_obj(kind: Kind, compositor: *mut Obj, data: Data) -> *mut Obj {
-    let ifaces = kind.ifaces();
+    new_obj_ifaces(kind, compositor, data, kind.ifaces())
+}
+
+/// Comme `new_obj`, avec des interfaces données (interfaces paramétrées).
+unsafe fn new_obj_ifaces(
+    kind: Kind,
+    compositor: *mut Obj,
+    data: Data,
+    ifaces: Vec<(Guid, *const ())>,
+) -> *mut Obj {
     if !compositor.is_null() {
         obj_add_ref(compositor);
     }
@@ -511,7 +534,7 @@ unsafe fn ours(p: *mut c_void) -> Option<*mut Obj> {
         return None;
     }
     let vt = *(p as *const *const ());
-    if ALL_VTS.iter().any(|f| f() == vt) {
+    if ALL_VTS.iter().any(|f| f() == vt) || classes::is_ours(vt) {
         Some((*(p as *const Slot)).owner)
     } else {
         None
@@ -560,6 +583,7 @@ unsafe fn destroy(obj: *mut Obj) {
             obj_release(visual);
         }
         Data::SurfaceBrush { surface, .. } => com_release(surface),
+        Data::Props(p) => classes::destroy(p),
         Data::Target { root, .. } => {
             let c = (*obj).compositor;
             if let Data::Compositor { targets, .. } = &mut lock(&(*c).st).data {
@@ -1283,19 +1307,19 @@ unsafe extern "win64" fn compositor_layer_visual(this: *mut Slot, out: *mut *mut
 static COMPOSITOR2_VT: VTable<19> = VTable(table::<19>(
     &INSPECTABLE,
     &[
-        sans_classe!("ICompositor2::CreateAmbientLight"),
-        sans_classe!("ICompositor2::CreateAnimationGroup"),
+        classes::create_ambient as *const (),
+        classes::create_group as *const (),
         compositor_backdrop_brush as *const (),
-        sans_classe!("ICompositor2::CreateDistantLight"),
-        sans_classe!("ICompositor2::CreateDropShadow"),
-        sans_classe!("ICompositor2::CreateImplicitAnimationCollection"),
+        classes::create_distant as *const (),
+        classes::create_drop_shadow as *const (),
+        classes::create_implicit as *const (),
         compositor_layer_visual as *const (),
-        sans_classe!("ICompositor2::CreateMaskBrush"),
-        sans_classe!("ICompositor2::CreateNineGridBrush"),
-        sans_classe!("ICompositor2::CreatePointLight"),
-        sans_classe!("ICompositor2::CreateSpotLight"),
-        sans_classe!("ICompositor2::CreateStepEasingFunction"),
-        sans_classe!("ICompositor2::CreateStepEasingFunctionWithStepCount"),
+        classes::create_mask_brush as *const (),
+        classes::create_nine_grid as *const (),
+        classes::create_point as *const (),
+        classes::create_spot as *const (),
+        classes::create_step as *const (),
+        classes::create_step_count as *const (),
     ],
 ));
 
@@ -2995,7 +3019,6 @@ unsafe fn present(hwnd: usize, frame: &Frame) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::comobj::E_NOTIMPL;
     use super::*;
 
     type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
@@ -3103,8 +3126,7 @@ mod tests {
     /// Teams (#2224) : un ContainerVisual répond à IVisual2, mémorise
     /// RelativeOffsetAdjustment, RelativeSizeAdjustment et ParentForTransform.
     /// #2710 : le compositeur sert ICompositor2 ; LayerVisual et
-    /// CompositionBackdropBrush sont servis, les autres créations rendent
-    /// E_NOTIMPL.
+    /// CompositionBackdropBrush sont servis (les autres classes : #2715).
     #[test]
     fn compositeur2_2710() {
         unsafe {
@@ -3161,19 +3183,6 @@ mod tests {
             assert_eq!(get_b(sprite, &mut b), S_OK);
             assert_eq!(b, brush);
             com_release(b);
-            // Les classes absentes : E_NOTIMPL, rien d'écrit.
-            for slot in [6usize, 7, 9, 10, 11, 13, 14, 15, 16, 17] {
-                let f: unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32 =
-                    vcall(c2, slot);
-                let mut o = std::ptr::null_mut();
-                assert_eq!(f(c2, &mut o), E_NOTIMPL, "emplacement {slot}");
-                assert!(o.is_null());
-            }
-            let f: unsafe extern "win64" fn(*mut c_void, i32, *mut *mut c_void) -> i32 =
-                vcall(c2, 18);
-            let mut o = std::ptr::null_mut();
-            assert_eq!(f(c2, 4, &mut o), E_NOTIMPL);
-            assert!(o.is_null());
             com_release(sprite);
             com_release(brush);
             com_release(backdrop);
