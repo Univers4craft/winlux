@@ -711,7 +711,10 @@ unsafe fn read_stream(stream: *mut c_void) -> Result<Vec<u8>, i32> {
 }
 
 unsafe fn new_decoder(dec: Decoder, out: *mut *mut c_void) -> i32 {
-    put(out, Com::create(DECODER_VT.ptr(), Mutex::new(Some(dec))))
+    put(
+        out,
+        Com::create(DECODER_VT.ptr(), DecoderCell::new(dec.container, Some(dec))),
+    )
 }
 
 unsafe extern "win64" fn create_decoder_from_filename(
@@ -812,7 +815,7 @@ unsafe extern "win64" fn create_decoder(
     }
     put(
         out,
-        Com::create(DECODER_VT.ptr(), Mutex::<Option<Decoder>>::new(None)),
+        Com::create(DECODER_VT.ptr(), DecoderCell::new(*container, None)),
     )
 }
 
@@ -1202,7 +1205,25 @@ struct Decoder {
     frames: Vec<Pix>,
 }
 
-type DecoderObj = Com<Mutex<Option<Decoder>>>;
+/// Décodeur : son format de conteneur est fixé dès sa création, comme le
+/// CLSID d'un décodeur Windows ; l'image n'existe qu'après Initialize.
+/// Paint.NET lit GetDecoderInfo d'un décodeur tout juste créé par
+/// CreateDecoder, avant tout Initialize (#2766).
+struct DecoderCell {
+    container: Guid,
+    state: Mutex<Option<Decoder>>,
+}
+
+impl DecoderCell {
+    fn new(container: Guid, decoded: Option<Decoder>) -> Self {
+        Self {
+            container,
+            state: Mutex::new(decoded),
+        }
+    }
+}
+
+type DecoderObj = Com<DecoderCell>;
 
 unsafe extern "win64" fn decoder_qi(
     this: *mut DecoderObj,
@@ -1235,7 +1256,7 @@ unsafe extern "win64" fn decoder_initialize(
 ) -> i32 {
     match read_stream(stream).and_then(|b| decoder_from_bytes(&b)) {
         Ok(d) => {
-            *crate::dlls::lock(Com::get(this)) = Some(d);
+            *crate::dlls::lock(&Com::get(this).state) = Some(d);
             S_OK
         }
         Err(hr) => hr,
@@ -1246,13 +1267,11 @@ unsafe extern "win64" fn decoder_container(this: *mut DecoderObj, out: *mut Guid
     if out.is_null() {
         return E_POINTER;
     }
-    match &*crate::dlls::lock(Com::get(this)) {
-        Some(d) => {
-            *out = d.container;
-            S_OK
-        }
-        None => WINCODEC_ERR_NOTINITIALIZED,
-    }
+    *out = match &*crate::dlls::lock(&Com::get(this).state) {
+        Some(d) => d.container,
+        None => Com::get(this).container,
+    };
+    S_OK
 }
 
 unsafe extern "win64" fn palette_unavailable() -> i32 {
@@ -1283,7 +1302,7 @@ unsafe extern "win64" fn decoder_frame_count(this: *mut DecoderObj, count: *mut 
     if count.is_null() {
         return E_POINTER;
     }
-    match &*crate::dlls::lock(Com::get(this)) {
+    match &*crate::dlls::lock(&Com::get(this).state) {
         Some(d) => {
             *count = d.frames.len() as u32;
             S_OK
@@ -1301,7 +1320,7 @@ unsafe extern "win64" fn decoder_frame(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    let (pix, icon) = match &*crate::dlls::lock(Com::get(this)) {
+    let (pix, icon) = match &*crate::dlls::lock(&Com::get(this).state) {
         Some(d) => match d.frames.get(index as usize) {
             Some(p) => (p.clone(), d.container == CONTAINER_ICO),
             None => return WINCODEC_ERR_FRAMEMISSING,
@@ -1342,8 +1361,8 @@ unsafe extern "win64" fn icon_frame_thumbnail(this: *mut SourceObj, out: *mut *m
 
 static DECODER_VT: VTable<14> = VTable([
     decoder_qi as *const (),
-    add_ref::<Mutex<Option<Decoder>>> as *const (),
-    release::<Mutex<Option<Decoder>>> as *const (),
+    add_ref::<DecoderCell> as *const (),
+    release::<DecoderCell> as *const (),
     decoder_query_capability as *const (),
     decoder_initialize as *const (),
     decoder_container as *const (),
@@ -1855,9 +1874,9 @@ unsafe extern "win64" fn decoder_info(this: *mut DecoderObj, out: *mut *mut c_vo
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    let container = match &*crate::dlls::lock(Com::get(this)) {
+    let container = match &*crate::dlls::lock(&Com::get(this).state) {
         Some(d) => d.container,
-        None => return WINCODEC_ERR_NOTINITIALIZED,
+        None => Com::get(this).container,
     };
     codec_info_for_container(&container, out)
 }
@@ -3541,6 +3560,46 @@ mod tests {
         let mut f = std::ptr::null_mut();
         assert_eq!(create_factory(&IID_IMAGING_FACTORY, &mut f), S_OK);
         f
+    }
+
+    /// Paint.NET (WicHelpers.GetLoadExtensions) : CreateDecoder(format)
+    /// puis GetDecoderInfo, sans Initialize. Le décodeur connaît son format
+    /// dès sa création (#2766).
+    #[test]
+    fn informations_d_un_decodeur_avant_initialize() {
+        type CreateDecoder = unsafe extern "win64" fn(
+            *mut c_void,
+            *const Guid,
+            *const Guid,
+            *mut *mut c_void,
+        ) -> i32;
+        type GetGuid = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+        type Str = unsafe extern "win64" fn(*mut c_void, u32, *mut u16, *mut u32) -> i32;
+        unsafe {
+            let f = factory();
+            let mut dec = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateDecoder>(f, 7)(f, &CONTAINER_PNG, std::ptr::null(), &mut dec),
+                S_OK
+            );
+            let mut container = Guid::default();
+            assert_eq!(method::<GetGuid>(dec, 5)(dec, &mut container), S_OK);
+            assert_eq!(container, CONTAINER_PNG);
+            let mut info = std::ptr::null_mut();
+            assert_eq!(method::<Create>(dec, 6)(dec, &mut info), S_OK);
+            assert!(!info.is_null());
+            let mut buf = [0u16; 64];
+            let mut n = 0;
+            assert_eq!(
+                method::<Str>(info, 17)(info, 64, buf.as_mut_ptr(), &mut n),
+                S_OK
+            );
+            let exts = String::from_utf16_lossy(&buf[..n as usize - 1]).to_lowercase();
+            assert!(exts.split(',').any(|e| e == ".png"), "{exts}");
+            release_obj(info);
+            release_obj(dec);
+            release_obj(f);
+        }
     }
 
     /// Paint.NET (ImagingFactoryWrapper, ColorContexts.Srgb) : la fabrique
