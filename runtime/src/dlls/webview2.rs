@@ -69,7 +69,7 @@ unsafe fn co_string(s: &str, out: *mut *mut u16) -> i32 {
     S_OK
 }
 
-fn json_escape(s: &str) -> String {
+pub(super) fn json_escape(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 2);
     o.push('"');
     for c in s.chars() {
@@ -91,14 +91,14 @@ fn json_escape(s: &str) -> String {
 
 /// Valeur d'un objet JSON plat (les messages de winlux-webview).
 #[derive(Debug, Clone, PartialEq)]
-enum Val {
+pub(super) enum Val {
     Str(String),
     Num(f64),
     Bool(bool),
     Null,
 }
 
-fn parse_flat(text: &str) -> Option<HashMap<String, Val>> {
+pub(super) fn parse_flat(text: &str) -> Option<HashMap<String, Val>> {
     let mut chars = text.trim().chars().peekable();
     let mut map = HashMap::new();
     fn ws(c: &mut std::iter::Peekable<std::str::Chars>) {
@@ -590,7 +590,7 @@ struct ProfileState {
 
 /// Commande du moteur web : `WINLUX_WEBVIEW_HELPER` (« python3.12 x.py »
 /// dans les tests), sinon /usr/bin/winlux-webview.
-fn helper_command() -> Vec<String> {
+pub(super) fn helper_command() -> Vec<String> {
     std::env::var("WINLUX_WEBVIEW_HELPER")
         .ok()
         .map(|s| s.split_whitespace().map(str::to_string).collect::<Vec<_>>())
@@ -598,7 +598,7 @@ fn helper_command() -> Vec<String> {
         .unwrap_or_else(|| vec!["/usr/bin/winlux-webview".to_string()])
 }
 
-fn helper_available() -> bool {
+pub(super) fn helper_available() -> bool {
     let cmd = helper_command();
     std::path::Path::new(&cmd[0]).is_file()
         || std::env::var_os("PATH")

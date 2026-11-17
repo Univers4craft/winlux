@@ -18,6 +18,7 @@
 //! (exdisp.h, oleidl.h, ocidl.h) et documentation Microsoft Learn
 //! d'IWebBrowser2, IOleObject, IOleInPlaceObject et IConnectionPoint.
 
+mod moteur;
 mod texte;
 
 use super::comobj::{guid, guid_str, Guid, VTable};
@@ -172,6 +173,11 @@ struct State {
     /// Document rendu par get_Document (non retenu : c'est lui qui retient
     /// le contrôle), 0 s'il n'existe pas.
     document: usize,
+    /// Page chargée pour le moteur web (#2784) : fichier Linux s'il y en a
+    /// un, et son HTML.
+    page: Option<(Option<std::path::PathBuf>, String)>,
+    /// Vue WebKitGTK dans la fenêtre du contrôle, quand le moteur existe.
+    moteur: Option<moteur::Moteur>,
 }
 
 /// L'objet : une table par interface, dans l'ordre de `SLOT_*`.
@@ -299,6 +305,7 @@ unsafe fn release_obj(b: &Browser) -> u32 {
     if n == 0 {
         let (site, hwnd, sinks) = {
             let mut s = state(b);
+            s.moteur = None;
             (
                 std::mem::take(&mut s.client_site),
                 std::mem::take(&mut s.hwnd),
@@ -486,17 +493,19 @@ unsafe fn navigate_to(this: usize, url: String, via: &str) -> i32 {
             callers()
         ),
     }
-    let text = match page {
-        Ok(html) => texte::html_to_text(&html),
-        Err(_) => String::new(),
+    let (text, html) = match page {
+        Ok(html) => (texte::html_to_text(&html), html),
+        Err(_) => (String::new(), String::new()),
     };
+    let file = page_file(&url);
     let hwnd = {
         let mut s = state(b);
         s.url = url;
         s.text = Some(text);
+        s.page = Some((file, html));
         s.hwnd
     };
-    show_text(b);
+    show_page(b);
     // Événements de fin de navigation : après le retour de Navigate, par
     // la file de la fenêtre ; sans fenêtre, tout de suite.
     b.refs.fetch_add(1, Ordering::SeqCst);
@@ -647,6 +656,43 @@ const WS_VSCROLL: u32 = 0x0020_0000;
 /// DEFAULT_GUI_FONT
 const DEFAULT_GUI_FONT: i32 = 17;
 
+/// Fichier Linux d'une adresse file: ou d'un chemin Windows, s'il existe.
+fn page_file(url: &str) -> Option<std::path::PathBuf> {
+    let path = match strip_scheme(url, "file:") {
+        Some(rest) => file_url_path(rest),
+        None if url.as_bytes().get(1) == Some(&b':') => url.to_string(),
+        None => return None,
+    };
+    let p = crate::paths::to_linux(&path);
+    p.is_file().then_some(p)
+}
+
+/// Montre la page chargée : dans le moteur web s'il existe (#2784), sinon
+/// en texte. Sans fenêtre, attend l'activation sur place.
+unsafe fn show_page(b: &Browser) {
+    let (hwnd, pos, has_page, has_moteur) = {
+        let s = state(b);
+        (s.hwnd, s.pos, s.page.is_some(), s.moteur.is_some())
+    };
+    if hwnd == 0 || !has_page {
+        return show_text(b);
+    }
+    if !has_moteur {
+        if let Some(m) = moteur::Moteur::start(hwnd, pos.right - pos.left, pos.bottom - pos.top) {
+            state(b).moteur = Some(m);
+        }
+    }
+    let mut s = state(b);
+    let page = s.page.clone();
+    match (s.moteur.as_mut(), page) {
+        (Some(m), Some((file, html))) => m.show(file.as_deref(), &html),
+        _ => {
+            drop(s);
+            show_text(b);
+        }
+    }
+}
+
 /// Pose le texte de la page dans la zone de lecture, créée au besoin dans
 /// la fenêtre du contrôle (si elle existe déjà).
 unsafe fn show_text(b: &Browser) {
@@ -686,6 +732,9 @@ unsafe fn show_text(b: &Browser) {
 
 /// Place la zone de lecture sur toute la fenêtre du contrôle.
 unsafe fn fit_edit(b: &Browser, r: Rect) {
+    if let Some(m) = state(b).moteur.as_mut() {
+        m.bounds(r.right - r.left, r.bottom - r.top);
+    }
     let edit = state(b).edit;
     if edit != 0 {
         super::user32::move_window(edit, 0, 0, r.right - r.left, r.bottom - r.top, 1);
@@ -854,6 +903,7 @@ unsafe extern "win64" fn close(this: usize, _save: u32) -> i32 {
     let hwnd = {
         let mut s = state(b);
         s.edit = 0;
+        s.moteur = None;
         std::mem::take(&mut s.hwnd)
     };
     if hwnd != 0 {
@@ -1125,7 +1175,7 @@ unsafe fn in_place_activate(b: &Browser, parent: usize, pos: Option<Rect>) -> i3
     note(format_args!(
         "activé sur place : fenêtre {hwnd:#x} dans {parent:#x}, {r:?}"
     ));
-    show_text(b);
+    show_page(b);
     S_OK
 }
 
