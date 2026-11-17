@@ -59,6 +59,8 @@ pub fn dispatch_internal_call(
         ("System", "Type", m) => type_dispatch(m, args),
         ("System", "Activator", m) => activator_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
+        // Boîte de message WinForms (#2753), sur notre MessageBoxW.
+        ("System.Windows.Forms", "MessageBox", "Show") => message_box_show(args, params),
         // Horloge monotone de Stopwatch, en graduations de 100 ns (#1922).
         ("System.Diagnostics", "Stopwatch", "GetTimestamp") => {
             static DEBUT: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -76,6 +78,42 @@ pub fn dispatch_internal_call(
             None
         }
     }
+}
+
+/// `System.Windows.Forms.MessageBox.Show` (#2753), toutes surcharges de
+/// Learn : `([owner,] text [, caption [, buttons [, icon [, defaultButton
+/// [, options [, aide…]]]]]])`. Les valeurs de `MessageBoxButtons`,
+/// `MessageBoxIcon`, `MessageBoxDefaultButton` et `MessageBoxOptions` sont
+/// celles des drapeaux `MB_*` de MessageBox (Learn les documente ainsi), et
+/// `DialogResult` reprend les `ID*` : le résultat de MessageBoxW est rendu
+/// tel quel. Le propriétaire (`IWin32Window`) n'a pas encore de fenêtre
+/// WinForms derrière lui : la boîte est sans propriétaire. Les arguments
+/// d'aide (bool ou fichier d'aide) sont ignorés : aucun bouton Aide.
+fn message_box_show(args: &[Value], params: &[ElementType]) -> Option<Value> {
+    use ElementType as E;
+    let mut i = 0;
+    // Premier paramètre `IWin32Window owner` : tout sauf une chaîne.
+    if !matches!(params.first(), Some(E::String)) {
+        i = 1;
+    }
+    let text = |v: Option<&Value>| v.map_or(String::new(), |v| read_managed_string(v.as_ref()));
+    let body = text(args.get(i));
+    let caption = match params.get(i + 1) {
+        Some(E::String) => text(args.get(i + 1)),
+        _ => String::new(),
+    };
+    // Les énumérations suivent, jusqu'au premier argument d'aide.
+    let mut kind = 0u32;
+    for (p, v) in params.iter().zip(args).skip(i + 2).take(4) {
+        if !matches!(p, E::ValueType(_) | E::I4 | E::U4) {
+            break;
+        }
+        kind |= v.as_i32() as u32;
+    }
+    // MessageBox.Show n'affiche pas un titre « Erreur » par défaut.
+    let caption = if caption.is_empty() { " " } else { &caption };
+    let result = unsafe { crate::dlls::dialogs::message_box(0, &body, caption, kind) };
+    Some(Value::I32(result))
 }
 
 /// 1970-01-01 en graduations de 100 ns depuis 0001-01-01.
