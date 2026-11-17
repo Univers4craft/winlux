@@ -171,8 +171,13 @@ unsafe fn collect_frames(
         fp = next;
     }
     if count < 3 {
-        let mut at = rsp & !7;
-        let limit = at + 4096 * 2;
+        // Débordement de pile : RSP est déjà dans la page de garde, illisible.
+        // Les cadres des appelants commencent à la première page lisible
+        // au-dessus ; sans ce saut, le rapport n'avait aucune pile (#2756).
+        let Some(mut at) = first_readable(rsp & !7, 64 * 1024, |a| safe_read(a).is_some()) else {
+            return count;
+        };
+        let limit = at + 4096 * 8;
         while count < MAX_FRAMES && at < limit {
             let Some(word) = safe_read(at) else {
                 break;
@@ -188,6 +193,19 @@ unsafe fn collect_frames(
         }
     }
     count
+}
+
+/// Premier mot lisible à partir de `start`, page après page, à moins de
+/// `span` octets de `start` (#2756).
+fn first_readable(start: usize, span: usize, readable: impl Fn(usize) -> bool) -> Option<usize> {
+    let mut at = start;
+    while at < start + span {
+        if readable(at) {
+            return Some(at);
+        }
+        at = (at & !4095) + 4096;
+    }
+    None
 }
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
@@ -999,6 +1017,75 @@ mod tests {
             "{line}"
         );
         assert!(line.ends_with(" vivant"), "{line}");
+    }
+
+    #[test]
+    fn premiere_page_lisible_apres_la_garde() {
+        // RSP dans une page de garde : on reprend au début de la page suivante.
+        let lisible = |a: usize| a >= 0x7000_1000;
+        assert_eq!(
+            first_readable(0x7000_0d70, 64 * 1024, lisible),
+            Some(0x7000_1000)
+        );
+        // Déjà lisible : le mot lui-même.
+        assert_eq!(
+            first_readable(0x7000_1d70, 64 * 1024, lisible),
+            Some(0x7000_1d70)
+        );
+        // Rien de lisible dans la fenêtre : pas de balayage.
+        assert_eq!(first_readable(0x10, 64 * 1024, |_| false), None);
+    }
+
+    /// Variable qui fait de `debordement_enfant` le processus enfant (#2756).
+    const DEBORDEMENT_ENFANT: &str = "WINLUX_TEST_DEBORDEMENT_ENFANT";
+
+    #[inline(never)]
+    #[allow(unconditional_recursion)]
+    fn recursion(n: usize) -> usize {
+        let mut tampon = [0u8; 512];
+        tampon[n % 512] = n as u8;
+        std::hint::black_box(&mut tampon);
+        recursion(n + 1) + tampon[(n + 1) % 512] as usize
+    }
+
+    #[test]
+    fn debordement_enfant() {
+        if std::env::var_os(DEBORDEMENT_ENFANT).is_none() {
+            return;
+        }
+        install();
+        let fil = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| recursion(0))
+            .unwrap();
+        let _ = fil.join();
+    }
+
+    #[test]
+    fn debordement_rapporte_les_appelants() {
+        let dir = std::env::temp_dir().join(format!("winlux-debordement-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "crash::tests::debordement_enfant",
+                "--test-threads=1",
+            ])
+            .env(DEBORDEMENT_ENFANT, "1")
+            .env("WINLUX_JOURNAL_DIR", &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.contains("EXCEPTION_STACK_OVERFLOW"), "{err}");
+        // Au moins un appelant relevé au-dessus de la page de garde.
+        assert!(
+            err.lines()
+                .any(|l| l.starts_with("winlux: cadre 1 ?0x") && l.contains("winlux+0x")),
+            "{err}"
+        );
     }
 
     #[test]
