@@ -1,8 +1,10 @@
 // Façade de compilation « System.Windows.Forms » pour les témoins de la BCL
-// Winlux (#2753). Licence GPL 3. Jamais chargée ni livrée : un témoin compilé
-// contre elle appelle MessageBox.Show dans l'assembly « System.Windows.Forms »,
-// comme une appli WinForms .NET Framework. Valeurs des énumérations : celles
-// documentées sur Learn (System.Windows.Forms.MessageBoxButtons, etc.).
+// Winlux (#2753, #2764). Licence GPL 3. Jamais chargée ni livrée : un témoin
+// compilé contre elle appelle MessageBox, Application et Form dans
+// l'assembly « System.Windows.Forms », comme une appli WinForms .NET
+// Framework ; le moteur les trouve dans notre mscorlib (ou, pour MessageBox,
+// parmi ses appels internes). Valeurs des énumérations : celles documentées
+// sur Learn. Les structures de System.Drawing viennent de notre mscorlib.
 
 [assembly: System.Reflection.AssemblyVersion("4.0.0.0")]
 
@@ -45,5 +47,68 @@ namespace System.Windows.Forms
         public static DialogResult Show(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon,
             MessageBoxDefaultButton defaultButton, MessageBoxOptions options, bool displayHelpButton)
         { throw new InvalidOperationException("façade"); }
+    }
+
+    public enum FormBorderStyle { None = 0, FixedSingle = 1, Fixed3D = 2, FixedDialog = 3, Sizable = 4, FixedToolWindow = 5, SizableToolWindow = 6 }
+
+    public enum FormStartPosition { Manual = 0, CenterScreen = 1, WindowsDefaultLocation = 2, WindowsDefaultBounds = 3, CenterParent = 4 }
+
+    public enum CloseReason
+    {
+        None = 0, WindowsShutDown = 1, MdiFormClosing = 2, UserClosing = 3, TaskManagerClosing = 4,
+        FormOwnerClosing = 5, ApplicationExitCall = 6
+    }
+
+    public class LayoutEventArgs : EventArgs
+    {
+        public LayoutEventArgs(Control affectedControl, string affectedProperty) { throw new InvalidOperationException("façade"); }
+        public string AffectedProperty { get { throw new InvalidOperationException("façade"); } }
+    }
+
+    public class FormClosingEventArgs : System.ComponentModel.CancelEventArgs
+    {
+        public FormClosingEventArgs(CloseReason closeReason, bool cancel) { throw new InvalidOperationException("façade"); }
+        public CloseReason CloseReason { get { throw new InvalidOperationException("façade"); } }
+    }
+
+    public sealed class Application
+    {
+        private Application() { }
+        public static void EnableVisualStyles() { throw new InvalidOperationException("façade"); }
+        public static void SetCompatibleTextRenderingDefault(bool defaultValue) { throw new InvalidOperationException("façade"); }
+        public static void Run(Form mainForm) { throw new InvalidOperationException("façade"); }
+        public static void Exit() { throw new InvalidOperationException("façade"); }
+    }
+
+    public class Control : System.ComponentModel.Component, IWin32Window
+    {
+        public IntPtr Handle { get { throw new InvalidOperationException("façade"); } }
+        public bool IsHandleCreated { get { throw new InvalidOperationException("façade"); } }
+        public bool IsDisposed { get { throw new InvalidOperationException("façade"); } }
+        public virtual string Text { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public bool Visible { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.Size Size { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.Size ClientSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public void Show() { throw new InvalidOperationException("façade"); }
+        public void Hide() { throw new InvalidOperationException("façade"); }
+        public void SuspendLayout() { throw new InvalidOperationException("façade"); }
+        public void ResumeLayout(bool performLayout) { throw new InvalidOperationException("façade"); }
+        public void PerformLayout() { throw new InvalidOperationException("façade"); }
+        protected virtual void OnLayout(LayoutEventArgs levent) { throw new InvalidOperationException("façade"); }
+    }
+
+    public class ScrollableControl : Control { }
+
+    public class ContainerControl : ScrollableControl { }
+
+    public class Form : ContainerControl
+    {
+        public Form() { throw new InvalidOperationException("façade"); }
+        public event EventHandler Shown { add { throw new InvalidOperationException("façade"); } remove { throw new InvalidOperationException("façade"); } }
+        public FormBorderStyle FormBorderStyle { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public FormStartPosition StartPosition { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public bool MaximizeBox { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public void Close() { throw new InvalidOperationException("façade"); }
+        protected virtual void OnFormClosing(FormClosingEventArgs e) { throw new InvalidOperationException("façade"); }
     }
 }
