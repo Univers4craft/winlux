@@ -24,6 +24,7 @@
 
 mod com;
 mod com_audio;
+mod com_disp;
 mod com_mf;
 mod com_mf_chaine;
 mod com_netfw;
