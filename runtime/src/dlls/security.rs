@@ -652,6 +652,22 @@ fn account_of(sid: &str) -> Option<(String, String, u32)> {
     })
 }
 
+/// Écrit `s` dans `buf`, de taille `room` caractères (valeur d'entrée de
+/// `*len`, lue par l'appelant avant toute écriture), et sa longueur dans
+/// `*len`.
+unsafe fn put_name_sized_w(s: &str, buf: *mut u16, len: *mut u32, room: u32) -> bool {
+    let w: Vec<u16> = s.encode_utf16().collect();
+    let fits = !buf.is_null() && (room as usize) > w.len();
+    if fits {
+        std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+        *buf.add(w.len()) = 0;
+        *len = w.len() as u32;
+    } else {
+        *len = w.len() as u32 + 1;
+    }
+    fits
+}
+
 unsafe fn put_name_w(s: &str, buf: *mut u16, len: *mut u32) -> bool {
     let w: Vec<u16> = s.encode_utf16().collect();
     let fits = !buf.is_null() && (*len as usize) > w.len();
@@ -682,8 +698,12 @@ pub unsafe extern "win64" fn LookupAccountSidW(
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let a = put_name_w(&n, name, name_len);
-    let b = put_name_w(&d, domain, domain_len);
+    // Les deux tailles sont des valeurs d'entrée (Learn) : lues avant toute
+    // écriture. Creative Cloud passe la même variable pour les deux ;
+    // écrire d'abord la longueur du nom rendait 122 (#2792).
+    let (room_name, room_domain) = (*name_len, *domain_len);
+    let a = put_name_sized_w(&n, name, name_len, room_name);
+    let b = put_name_sized_w(&d, domain, domain_len, room_domain);
     if !use_.is_null() {
         *use_ = kind;
     }
