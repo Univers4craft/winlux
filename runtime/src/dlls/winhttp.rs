@@ -1,7 +1,9 @@
 //! Synchronous WinHTTP subset backed by the OS curl client, with certificate
 //! verification preserved. Uploads are buffered until ReceiveResponse; response
-//! bodies are streamed from curl's output as they arrive (#2733). Async callbacks, PAC/WPAD and client certificates are
-//! deliberately unsupported rather than reported as successful operations.
+//! bodies are streamed from curl's output as they arrive (#2733). A session opened with WINHTTP_FLAG_ASYNC (#2779)
+//! runs each request operation on a worker thread and reports its completion through the status callback, as
+//! Microsoft Learn documents for asynchronous WinHTTP. PAC/WPAD and client certificates are deliberately
+//! unsupported rather than reported as successful operations.
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::{self, OpenOptions};
@@ -15,6 +17,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 const MAX_UPLOAD: usize = 64 * 1024 * 1024;
 const MAX_WIDE: usize = 32768;
 const SECURE: u32 = 0x0080_0000;
+/// WINHTTP_FLAG_ASYNC (winhttp.h).
+const FLAG_ASYNC: u32 = 0x1000_0000;
 static NEXT: AtomicUsize = AtomicUsize::new(0x5748_0000);
 
 #[derive(Clone)]
@@ -33,9 +37,15 @@ struct Options {
     /// (minimum, maximum), x de 0 à 3 (#2609).
     tls: Option<(u8, u8)>,
     /// Rappel de WinHttpSetStatusCallback, hérité par les poignées filles
-    /// ouvertes ensuite (#2619). Jamais appelé : Winlux n'ouvre que des
-    /// sessions synchrones, où chaque appel rend lui-même son erreur.
+    /// ouvertes ensuite (#2619), à la taille d'un pointeur du programme.
+    /// Appelé seulement dans une session asynchrone (#2779).
     callback: usize,
+    /// dwNotificationFlags de WinHttpSetStatusCallback : notifications
+    /// voulues (les drapeaux WINHTTP_CALLBACK_FLAG_* recouvrent les
+    /// statuts qu'ils annoncent).
+    notify: u32,
+    /// Session ouverte avec WINHTTP_FLAG_ASYNC (#2779), héritée.
+    asynchronous: bool,
     /// WINHTTP_OPTION_REDIRECT_POLICY (#2626) : 0 jamais, 1 tout sauf
     /// https vers http (valeur par défaut), 2 toujours.
     redirect_policy: u8,
@@ -226,7 +236,8 @@ pub unsafe extern "win64" fn open(
     bypass: *const u16,
     flags: u32,
 ) -> usize {
-    if flags != 0 || !matches!(access, 0 | 1 | 3 | 4) {
+    // WINHTTP_FLAG_ASYNC seul ; WINHTTP_FLAG_SECURE_DEFAULTS reste refusé.
+    if (flags != 0 && flags != FLAG_ASYNC) || !matches!(access, 0 | 1 | 3 | 4) {
         return fail(50);
     }
     let (agent, proxy, bypass) = match (
@@ -252,6 +263,8 @@ pub unsafe extern "win64" fn open(
             context: 0,
             tls: None,
             callback: 0,
+            notify: 0,
+            asynchronous: flags == FLAG_ASYNC,
             redirect_policy: 1,
             disabled: 0,
         }),
@@ -492,6 +505,11 @@ pub unsafe extern "win64" fn send_request(
             request.options.context = context;
             request.sent = true;
             request.response = None;
+            if request.options.asynchronous {
+                asynchrone::later(handle, |handle| {
+                    asynchrone::notify(handle, STATUS_SENDREQUEST_COMPLETE, 0, 0)
+                });
+            }
             1
         }
         Some(_) => fail(12018),
@@ -524,6 +542,12 @@ pub unsafe extern "win64" fn write_data(
                     data.cast::<u8>(),
                     size as usize,
                 ));
+            }
+            if request.options.asynchronous {
+                asynchrone::later(handle, move |handle| {
+                    asynchrone::notify_dword(handle, STATUS_WRITE_COMPLETE, size)
+                });
+                return 1;
             }
             if !written.is_null() {
                 *written = size;
@@ -773,6 +797,24 @@ pub unsafe extern "win64" fn receive_response(handle: usize, reserved: *const c_
         Some(_) => return fail(12018),
         None => return fail(6),
     };
+    if request.options.asynchronous {
+        asynchrone::later(handle, move |handle| {
+            let result = perform(&request).map(|value| Arc::new(Mutex::new(value)));
+            match result {
+                Ok(response) => {
+                    if let Some(Kind::Request(request)) = lock(handles())
+                        .get_mut(&handle)
+                        .map(|entry| &mut entry.kind)
+                    {
+                        request.response = Some(response);
+                    }
+                    asynchrone::notify(handle, STATUS_HEADERS_AVAILABLE, 0, 0);
+                }
+                Err(error) => asynchrone::error(handle, API_RECEIVE_RESPONSE, error),
+            }
+        });
+        return 1;
+    }
     let response = match perform(&request) {
         Ok(value) => Arc::new(Mutex::new(value)),
         Err(error) => return fail(error),
@@ -789,6 +831,42 @@ pub unsafe extern "win64" fn receive_response(handle: usize, reserved: *const c_
     }
 }
 pub unsafe extern "win64" fn query_data_available(handle: usize, available: *mut u32) -> i32 {
+    // Session asynchrone : le compte arrive par DATA_AVAILABLE, le
+    // pointeur est NULL d'après Learn ; il n'est jamais écrit plus tard.
+    if asynchrone::is_async(handle) {
+        if !available.is_null() {
+            *available = 0;
+        }
+        let response = match response(handle) {
+            Ok(value) => value,
+            Err(error) => return fail(error),
+        };
+        asynchrone::later(handle, move |handle| {
+            let mut response = lock(&response);
+            let transfer = &mut response.transfer;
+            let count = match transfer.reader.fill_buf() {
+                Ok(bytes) => bytes.len(),
+                Err(_) => {
+                    drop(response);
+                    return asynchrone::error(handle, API_QUERY_DATA_AVAILABLE, 12030);
+                }
+            };
+            if count == 0 {
+                let error = transfer.finish();
+                if error != 0 {
+                    drop(response);
+                    return asynchrone::error(handle, API_QUERY_DATA_AVAILABLE, error);
+                }
+            }
+            drop(response);
+            asynchrone::notify_dword(
+                handle,
+                STATUS_DATA_AVAILABLE,
+                count.min(u32::MAX as usize) as u32,
+            );
+        });
+        return 1;
+    }
     if available.is_null() {
         return fail(87);
     }
@@ -819,6 +897,48 @@ pub unsafe extern "win64" fn read_data(
     size: u32,
     read: *mut u32,
 ) -> i32 {
+    if asynchrone::is_async(handle) {
+        // Learn : lpdwNumberOfBytesRead est NULL ; le compte arrive avec
+        // READ_COMPLETE, dont l'information est le tampon du programme.
+        if size != 0 && buffer.is_null() {
+            return fail(87);
+        }
+        if !read.is_null() {
+            *read = 0;
+        }
+        let response = match response(handle) {
+            Ok(value) => value,
+            Err(error) => return fail(error),
+        };
+        let buffer = buffer as usize;
+        asynchrone::later(handle, move |handle| {
+            let mut response = lock(&response);
+            let transfer = &mut response.transfer;
+            let count = if size == 0 {
+                0
+            } else {
+                match transfer.reader.read(unsafe {
+                    std::slice::from_raw_parts_mut(buffer as *mut u8, size as usize)
+                }) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        drop(response);
+                        return asynchrone::error(handle, API_READ_DATA, 12030);
+                    }
+                }
+            };
+            if count == 0 && size != 0 {
+                let error = transfer.finish();
+                if error != 0 {
+                    drop(response);
+                    return asynchrone::error(handle, API_READ_DATA, error);
+                }
+            }
+            drop(response);
+            asynchrone::notify(handle, STATUS_READ_COMPLETE, buffer, count as u32);
+        });
+        return 1;
+    }
     if read.is_null() || (size != 0 && buffer.is_null()) {
         return fail(87);
     }
@@ -1005,9 +1125,13 @@ pub unsafe extern "win64" fn query_auth_schemes(
 }
 pub unsafe extern "win64" fn close(handle: usize) -> i32 {
     let mut entries = lock(handles());
-    if entries.remove(&handle).is_none() {
+    let Some(entry) = entries.remove(&handle) else {
         return fail(6);
-    }
+    };
+    // HANDLE_CLOSING (#2779) : dernier rappel de la poignée, après lequel
+    // le programme libère son contexte ; une opération encore en cours ne
+    // rappelle plus (la poignée n'est plus dans la table).
+    let closing = asynchrone::closing(&entry.kind);
     let mut pending = vec![handle];
     while let Some(parent) = pending.pop() {
         let children: Vec<usize> = entries
@@ -1019,6 +1143,10 @@ pub unsafe extern "win64" fn close(handle: usize) -> i32 {
             entries.remove(&child);
             pending.push(child);
         }
+    }
+    drop(entries);
+    if let Some(target) = closing {
+        asynchrone::closing_notify(handle, target);
     }
     1
 }
@@ -1300,15 +1428,14 @@ pub unsafe extern "win64" fn detect_auto_proxy_config_url(flags: u32, out: *mut 
 }
 /// WinHttpSetStatusCallback (#2619) : d'après Microsoft Learn, rend le
 /// rappel défini auparavant sur la poignée (NULL s'il n'y en avait pas), et
-/// WINHTTP_INVALID_STATUS_CALLBACK seulement en cas d'échec. Le rappel est
-/// retenu et hérité par les poignées filles, mais jamais appelé : les
-/// sessions de Winlux sont synchrones (WINHTTP_FLAG_ASYNC est refusé par
-/// WinHttpOpen), et les notifications d'achèvement comme REQUEST_ERROR ne
-/// concernent que le mode asynchrone ; l'erreur est rendue par l'appel.
+/// WINHTTP_INVALID_STATUS_CALLBACK seulement en cas d'échec. Le rappel et
+/// ses drapeaux sont retenus et hérités par les poignées filles. Il n'est
+/// appelé que dans une session asynchrone (#2779, module `asynchrone`) ;
+/// en session synchrone, l'erreur est rendue par l'appel lui-même.
 pub unsafe extern "win64" fn status_callback(
     handle: usize,
     callback: usize,
-    _flags: u32,
+    flags: u32,
     _reserved: usize,
 ) -> usize {
     let mut entries = lock(handles());
@@ -1322,7 +1449,9 @@ pub unsafe extern "win64" fn status_callback(
     } else {
         callback
     };
-    std::mem::replace(&mut options_mut(&mut entry.kind).callback, callback)
+    let options = options_mut(&mut entry.kind);
+    options.notify = flags;
+    std::mem::replace(&mut options.callback, callback)
 }
 
 /// WINHTTP_INVALID_STATUS_CALLBACK, ((WINHTTP_STATUS_CALLBACK)(-1L)), à la
@@ -1334,6 +1463,144 @@ fn invalid_status_callback() -> usize {
         usize::MAX
     }
 }
+// ── Mode asynchrone (#2779) ─────────────────────────────────────────
+// Statuts et API de winhttp.h ; comportement d'après Microsoft Learn
+// (WinHttpOpen, WinHttpSetStatusCallback, WINHTTP_STATUS_CALLBACK,
+// WINHTTP_ASYNC_RESULT).
+const STATUS_HANDLE_CLOSING: u32 = 0x0000_0800;
+const STATUS_HEADERS_AVAILABLE: u32 = 0x0002_0000;
+const STATUS_DATA_AVAILABLE: u32 = 0x0004_0000;
+const STATUS_READ_COMPLETE: u32 = 0x0008_0000;
+const STATUS_WRITE_COMPLETE: u32 = 0x0010_0000;
+const STATUS_REQUEST_ERROR: u32 = 0x0020_0000;
+const STATUS_SENDREQUEST_COMPLETE: u32 = 0x0040_0000;
+const API_RECEIVE_RESPONSE: u32 = 1;
+const API_QUERY_DATA_AVAILABLE: u32 = 2;
+const API_READ_DATA: u32 = 3;
+
+mod asynchrone {
+    use super::{handles, lock, options_mut, Kind};
+
+    /// Session asynchrone ?
+    pub(super) fn is_async(handle: usize) -> bool {
+        lock(handles())
+            .get(&handle)
+            .is_some_and(|entry| match &entry.kind {
+                Kind::Session(o) | Kind::Connection(o, _, _) => o.asynchronous,
+                Kind::Request(r) => r.options.asynchronous,
+            })
+    }
+
+    /// Exécute `op` sur un fil de travail : l'appel du programme rend la
+    /// main tout de suite, l'achèvement arrive par le rappel.
+    pub(super) fn later(handle: usize, op: impl FnOnce(usize) + Send + 'static) {
+        let spawned = std::thread::Builder::new()
+            .name("winhttp-async".into())
+            .spawn(move || {
+                op(handle);
+                // TEB reçu pour le rappel (code Windows) : rendu avec le fil.
+                crate::process::free_current_teb();
+            });
+        if spawned.is_err() {
+            crate::log_warn!("winhttp", "fil de travail asynchrone non créé");
+        }
+    }
+
+    /// Rappel, drapeaux et contexte de la poignée, si elle existe encore.
+    fn target(handle: usize) -> Option<(usize, u32, usize)> {
+        let mut entries = lock(handles());
+        let entry = entries.get_mut(&handle)?;
+        let o = options_mut(&mut entry.kind);
+        Some((o.callback, o.notify, o.context))
+    }
+
+    /// Appelle le rappel du programme (WINHTTP_STATUS_CALLBACK) si la
+    /// notification est demandée. Programme x86 : passerelle stdcall de
+    /// wow32 ; les données pointées sont dans le tas, sous 4 Go.
+    fn call(
+        handle: usize,
+        (cb, flags, context): (usize, u32, usize),
+        status: u32,
+        info: usize,
+        len: u32,
+    ) {
+        if cb == 0 || flags & status == 0 {
+            return;
+        }
+        if crate::wow32::pointer_size() == 4 {
+            let f: extern "win64" fn(usize, usize, u32, usize, u32) =
+                unsafe { std::mem::transmute(crate::wow32::callback64(cb as u32)) };
+            f(handle, context & 0xffff_ffff, status, info, len);
+        } else {
+            if crate::process::teb() == 0 {
+                crate::process::init_thread();
+            }
+            let f: extern "win64" fn(usize, usize, u32, usize, u32) =
+                unsafe { std::mem::transmute(cb) };
+            f(handle, context, status, info, len);
+        }
+    }
+
+    pub(super) fn notify(handle: usize, status: u32, info: usize, len: u32) {
+        if let Some(t) = target(handle) {
+            call(handle, t, status, info, len);
+        }
+    }
+
+    /// Notification dont l'information est un DWORD (DATA_AVAILABLE,
+    /// WRITE_COMPLETE).
+    pub(super) fn notify_dword(handle: usize, status: u32, value: u32) {
+        let cell = Box::new(value);
+        notify(handle, status, &*cell as *const u32 as usize, 4);
+    }
+
+    /// REQUEST_ERROR : WINHTTP_ASYNC_RESULT { DWORD_PTR dwResult; DWORD
+    /// dwError; }, 8 octets en x86, 16 en x64.
+    pub(super) fn error(handle: usize, api: u32, code: u32) {
+        let x86 = crate::wow32::pointer_size() == 4;
+        let mut cell = Box::new([0u32; 4]);
+        cell[0] = api;
+        if x86 {
+            cell[1] = code;
+        } else {
+            cell[2] = code;
+        }
+        let len = if x86 { 8 } else { 16 };
+        notify(
+            handle,
+            super::STATUS_REQUEST_ERROR,
+            cell.as_mut_ptr() as usize,
+            len,
+        );
+    }
+
+    /// Rappel à prévenir de la fermeture d'une poignée asynchrone.
+    pub(super) fn closing(kind: &Kind) -> Option<(usize, u32, usize)> {
+        let o = match kind {
+            Kind::Session(o) | Kind::Connection(o, _, _) => o,
+            Kind::Request(r) => &r.options,
+        };
+        (o.asynchronous && o.callback != 0).then_some((o.callback, o.notify, o.context))
+    }
+
+    /// HANDLE_CLOSING : l'information est la poignée (HINTERNET*).
+    pub(super) fn closing_notify(handle: usize, t: (usize, u32, usize)) {
+        let cell = Box::new(handle as u64);
+        let len = if crate::wow32::pointer_size() == 4 {
+            4
+        } else {
+            8
+        };
+        call(
+            handle,
+            t,
+            super::STATUS_HANDLE_CLOSING,
+            &*cell as *const u64 as usize,
+            len,
+        );
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "WinHttpOpen" => fn open, "WinHttpConnect" => fn connect,
@@ -2084,8 +2351,116 @@ mod tests {
             assert_eq!(receive_response(request, null()), 0);
             assert_eq!(crate::process::last_error(), 12175);
             assert_eq!(close(session), 1);
-            assert_eq!(open(null(), 1, null(), null(), 0x1000_0000), 0);
+            // WINHTTP_FLAG_SECURE_DEFAULTS reste refusé ; WINHTTP_FLAG_ASYNC
+            // seul ouvre une session asynchrone (#2779).
+            assert_eq!(open(null(), 1, null(), null(), 0x3000_0000), 0);
             assert_eq!(crate::process::last_error(), 50);
         }
+    }
+
+    /// Notifications reçues par le rappel du test asynchrone (#2779).
+    static VUES: Mutex<Vec<(usize, usize, u32, Vec<u8>)>> = Mutex::new(Vec::new());
+
+    extern "win64" fn rappel(handle: usize, context: usize, status: u32, info: usize, len: u32) {
+        let data = if info == 0 || status == STATUS_REQUEST_ERROR && len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(info as *const u8, len as usize) }.to_vec()
+        };
+        lock(&VUES).push((handle, context, status, data));
+    }
+
+    fn attendre(status: u32) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            {
+                let mut vues = lock(&VUES);
+                if let Some(i) = vues
+                    .iter()
+                    .position(|v| v.2 == status || v.2 == STATUS_REQUEST_ERROR)
+                {
+                    let v = vues.remove(i);
+                    assert_eq!(v.2, status, "REQUEST_ERROR {:?}", v.3);
+                    assert_eq!(v.1, 0x77, "contexte de WinHttpSendRequest");
+                    return v.3;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "notification {status:#x} absente"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// #2779 : une session ouverte avec WINHTTP_FLAG_ASYNC rend la main à
+    /// chaque appel et annonce l'achèvement par le rappel :
+    /// SENDREQUEST_COMPLETE, HEADERS_AVAILABLE, DATA_AVAILABLE (compte),
+    /// READ_COMPLETE (octets lus dans le tampon), HANDLE_CLOSING.
+    #[test]
+    fn session_asynchrone_par_rappels_2779() {
+        let _teb = crate::process::test_teb();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            reader
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nbonjo")
+                .unwrap();
+        });
+        unsafe {
+            let session = open(w("Winlux test").as_ptr(), 1, null(), null(), FLAG_ASYNC);
+            assert_ne!(session, 0);
+            assert_eq!(status_callback(session, rappel as usize, 0xffff_ffff, 0), 0);
+            let connection = connect(session, w("127.0.0.1").as_ptr(), port, 0);
+            let request = open_request(
+                connection,
+                w("GET").as_ptr(),
+                w("/").as_ptr(),
+                null(),
+                null(),
+                null(),
+                0,
+            );
+            assert_ne!(request, 0);
+            assert_eq!(send_request(request, null(), 0, null(), 0, 0, 0x77), 1);
+            attendre(STATUS_SENDREQUEST_COMPLETE);
+            assert_eq!(receive_response(request, null()), 1);
+            attendre(STATUS_HEADERS_AVAILABLE);
+            let mut lu = Vec::new();
+            loop {
+                assert_eq!(query_data_available(request, null_mut()), 1);
+                let n =
+                    u32::from_le_bytes(attendre(STATUS_DATA_AVAILABLE)[..4].try_into().unwrap());
+                if n == 0 {
+                    break;
+                }
+                let mut tampon = vec![0u8; n as usize];
+                assert_eq!(
+                    read_data(request, tampon.as_mut_ptr().cast(), n, null_mut()),
+                    1
+                );
+                let octets = attendre(STATUS_READ_COMPLETE);
+                lu.extend_from_slice(&octets);
+            }
+            assert_eq!(lu, b"bonjo");
+            assert_eq!(close(request), 1);
+            let poignee = attendre(STATUS_HANDLE_CLOSING);
+            assert_eq!(
+                u64::from_le_bytes(poignee[..8].try_into().unwrap()),
+                request as u64
+            );
+            assert_eq!(close(session), 1);
+        }
+        server.join().unwrap();
     }
 }
