@@ -11,8 +11,11 @@
 // de l'API Win32 (RegisterClassExW, CreateWindowExW, AdjustWindowRectEx,
 // GetMessageW…) ; aucun code de Microsoft, de Mono ou de Wine.
 //
-// Les contrôles enfants (Button, Label, ProgressBar), la mise à l'échelle,
-// les polices et les icônes viennent aux murs suivants.
+// Mur 5a (#2795) : AutoSize, taille préférée, tailles minimale et maximale,
+// commandes des contrôles enfants (WM_COMMAND), touches (PreProcessMessage,
+// ProcessCmdKey, ProcessDialogKey), AcceptButton et CancelButton ; Label,
+// Button et ProgressBar sont dans Controles.cs. La mise à l'échelle, les
+// polices et les icônes viennent au mur 5b.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -201,7 +204,8 @@ namespace System.Windows.Forms
     internal static class Natif
     {
         public const int WM_DESTROY = 0x0002, WM_SIZE = 0x0005, WM_SETTEXT = 0x000C, WM_CLOSE = 0x0010,
-            WM_SHOWWINDOW = 0x0018, WM_NCDESTROY = 0x0082, WM_USER = 0x0400;
+            WM_SHOWWINDOW = 0x0018, WM_NCDESTROY = 0x0082, WM_USER = 0x0400, WM_KEYDOWN = 0x0100,
+            WM_SYSKEYDOWN = 0x0104, WM_COMMAND = 0x0111;
         public const int WS_OVERLAPPED = 0, WS_POPUP = unchecked((int)0x80000000), WS_CHILD = 0x40000000,
             WS_VISIBLE = 0x10000000, WS_CLIPSIBLINGS = 0x04000000, WS_CLIPCHILDREN = 0x02000000,
             WS_CAPTION = 0x00C00000, WS_BORDER = 0x00800000, WS_DLGFRAME = 0x00400000, WS_SYSMENU = 0x00080000,
@@ -251,6 +255,67 @@ namespace System.Windows.Forms
         public static extern bool GetClientRect(IntPtr hwnd, IntPtr rect);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr GetModuleHandleW(string name);
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetParent(IntPtr hwnd);
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessageW(IntPtr hwnd, int msg, IntPtr wparam, IntPtr lparam);
+        [DllImport("user32.dll")]
+        public static extern short GetKeyState(int key);
+        [DllImport("user32.dll")]
+        public static extern int GetWindowLongW(IntPtr hwnd, int index);
+        [DllImport("user32.dll")]
+        public static extern int SetWindowLongW(IntPtr hwnd, int index, int value);
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetFocus();
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetDC(IntPtr hwnd);
+        [DllImport("user32.dll")]
+        public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int DrawTextW(IntPtr hdc, string text, int count, IntPtr rect, int format);
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr GetStockObject(int index);
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+
+        public const int GWL_STYLE = -16;
+        public const int DT_CALCRECT = 0x400, DT_WORDBREAK = 0x10, DT_NOPREFIX = 0x800, DT_EXPANDTABS = 0x40;
+
+        // Taille du texte dans la police de la fenêtre (WM_GETFONT), ou la
+        // police d'interface par défaut ; largeur limitée et coupure aux mots
+        // quand `largeurMax` > 0.
+        public static Size MesurerTexte(IntPtr hwnd, string texte, int largeurMax)
+        {
+            if (string.IsNullOrEmpty(texte)) texte = " ";
+            IntPtr hdc = GetDC(IntPtr.Zero);
+            IntPtr police = hwnd != IntPtr.Zero ? SendMessageW(hwnd, 0x0031, IntPtr.Zero, IntPtr.Zero) : IntPtr.Zero;
+            if (police == IntPtr.Zero) police = GetStockObject(17); // DEFAULT_GUI_FONT
+            IntPtr avant = SelectObject(hdc, police);
+            IntPtr r = Marshal.AllocHGlobal(16);
+            Marshal.WriteInt32(r, 0, 0); Marshal.WriteInt32(r, 4, 0);
+            Marshal.WriteInt32(r, 8, largeurMax > 0 ? largeurMax : 0x7FFF); Marshal.WriteInt32(r, 12, 0);
+            int format = DT_CALCRECT | DT_EXPANDTABS | (largeurMax > 0 ? DT_WORDBREAK : 0);
+            DrawTextW(hdc, texte, -1, r, format);
+            Size s = new Size(Marshal.ReadInt32(r, 8) - Marshal.ReadInt32(r, 0), Marshal.ReadInt32(r, 12) - Marshal.ReadInt32(r, 4));
+            Marshal.FreeHGlobal(r);
+            SelectObject(hdc, avant);
+            ReleaseDC(IntPtr.Zero, hdc);
+            return s;
+        }
+
+        // Message de la file : le Control qui doit le voir passer avant
+        // l'envoi (touches), sinon faux.
+        public static bool PreTraiter(IntPtr msg)
+        {
+            int n = IntPtr.Size;
+            int code = Marshal.ReadInt32(msg, n);
+            if (code != WM_KEYDOWN && code != WM_SYSKEYDOWN) return false;
+            IntPtr hwnd = Marshal.ReadIntPtr(msg, 0);
+            Control c = Control.FromChildHandle(hwnd);
+            if (c == null) return false;
+            Message m = Message.Create(hwnd, code, Marshal.ReadIntPtr(msg, 2 * n), Marshal.ReadIntPtr(msg, 3 * n));
+            return c.PreProcessMessage(ref m);
+        }
 
         public const string Classe = "WinluxWindowsForms";
         private static ProcFenetre s_proc;
@@ -349,6 +414,7 @@ namespace System.Windows.Forms
             {
                 while (!s_quitter && Natif.GetMessageW(msg, IntPtr.Zero, 0, 0) > 0)
                 {
+                    if (Natif.PreTraiter(msg)) continue;
                     Natif.TranslateMessage(msg);
                     Natif.DispatchMessageW(msg);
                 }
@@ -367,6 +433,7 @@ namespace System.Windows.Forms
             {
                 while (Natif.PeekMessageW(msg, IntPtr.Zero, 0, 0, 1))
                 {
+                    if (Natif.PreTraiter(msg)) continue;
                     Natif.TranslateMessage(msg);
                     Natif.DispatchMessageW(msg);
                 }
@@ -413,6 +480,8 @@ namespace System.Windows.Forms
         private ControlCollection _enfants;
         private string _nom = "";
         private object _tag;
+        private bool _autoSize;
+        private Size _min, _max;
 
         public Control() { Size d = DefaultSize; _l = d.Width; _h = d.Height; }
 
@@ -428,6 +497,7 @@ namespace System.Windows.Forms
         public event LayoutEventHandler Layout;
         public event EventHandler HandleCreated;
         public event EventHandler HandleDestroyed;
+        public event EventHandler AutoSizeChanged;
 
         // ── Poignée ──
 
@@ -441,7 +511,8 @@ namespace System.Windows.Forms
             get
             {
                 int s = Natif.WS_CLIPCHILDREN | Natif.WS_CLIPSIBLINGS;
-                if (_parent != null) s |= Natif.WS_CHILD;
+                // Un enfant visible naît visible : personne ne l'affichera après.
+                if (_parent != null) s |= Natif.WS_CHILD | (_visible ? Natif.WS_VISIBLE : 0);
                 return s;
             }
         }
@@ -473,6 +544,23 @@ namespace System.Windows.Forms
             if (_enfants != null)
                 foreach (Control c in _enfants) c.CreateControl();
             OnHandleCreated(EventArgs.Empty);
+        }
+
+        // Learn : Control.FromHandle / FromChildHandle.
+        public static Control FromHandle(IntPtr handle)
+        {
+            Control c;
+            lock (s_fenetres) return s_fenetres.TryGetValue(handle, out c) ? c : null;
+        }
+
+        public static Control FromChildHandle(IntPtr handle)
+        {
+            for (IntPtr h = handle; h != IntPtr.Zero; h = Natif.GetParent(h))
+            {
+                Control c = FromHandle(h);
+                if (c != null) return c;
+            }
+            return null;
         }
 
         private void Associer(IntPtr h)
@@ -522,6 +610,15 @@ namespace System.Windows.Forms
                     OnResize(EventArgs.Empty);
                     DefWndProc(ref m);
                     break;
+                case Natif.WM_COMMAND:
+                    // Notification d'un contrôle enfant (BN_CLICKED…) : elle
+                    // revient au Control qui l'a émise.
+                    Control enfant = m.LParam != IntPtr.Zero ? FromHandle(m.LParam) : null;
+                    if (enfant != null && enfant != this)
+                        enfant.CommandeRecue((int)((m.WParam.ToInt64() >> 16) & 0xFFFF));
+                    else
+                        DefWndProc(ref m);
+                    break;
                 case Natif.WM_DESTROY:
                     DefWndProc(ref m);
                     OnHandleDestroyed(EventArgs.Empty);
@@ -536,6 +633,8 @@ namespace System.Windows.Forms
                     break;
             }
         }
+
+        internal virtual void CommandeRecue(int notification) { }
 
         protected void DefWndProc(ref Message m)
         {
@@ -556,6 +655,7 @@ namespace System.Windows.Forms
                 if (v == _texte) return;
                 _texte = v;
                 if (_handle != IntPtr.Zero) Natif.SetWindowTextW(_handle, v);
+                AjusterTaille();
                 OnTextChanged(EventArgs.Empty);
             }
         }
@@ -622,8 +722,70 @@ namespace System.Windows.Forms
             Size = s;
         }
 
+        // ── Taille automatique, préférée, minimale et maximale (Learn) ──
+
+        public virtual bool AutoSize
+        {
+            get { return _autoSize; }
+            set
+            {
+                if (value == _autoSize) return;
+                _autoSize = value;
+                if (value) AjusterTaille();
+                OnAutoSizeChanged(EventArgs.Empty);
+            }
+        }
+
+        protected virtual void OnAutoSizeChanged(EventArgs e) { EventHandler h = AutoSizeChanged; if (h != null) h(this, e); }
+
+        public virtual Size MinimumSize
+        {
+            get { return _min; }
+            set
+            {
+                _min = value;
+                if (_max.Width > 0 && _max.Width < _min.Width) _max.Width = _min.Width;
+                if (_max.Height > 0 && _max.Height < _min.Height) _max.Height = _min.Height;
+                SetBounds(_x, _y, _l, _h);
+            }
+        }
+
+        public virtual Size MaximumSize
+        {
+            get { return _max; }
+            set
+            {
+                _max = value;
+                if (_min.Width > 0 && value.Width > 0 && _min.Width > value.Width) _min.Width = value.Width;
+                if (_min.Height > 0 && value.Height > 0 && _min.Height > value.Height) _min.Height = value.Height;
+                SetBounds(_x, _y, _l, _h);
+            }
+        }
+
+        public Size PreferredSize { get { return GetPreferredSize(Size.Empty); } }
+
+        // Learn : un contrôle sans contenu propre préfère sa taille actuelle.
+        public virtual Size GetPreferredSize(Size proposedSize) { return Size; }
+
+        // Taille préférée imposée quand AutoSize est vrai.
+        internal void AjusterTaille()
+        {
+            if (!_autoSize) return;
+            Size p = GetPreferredSize(Size.Empty);
+            SetBounds(_x, _y, p.Width, p.Height);
+        }
+
+        private int Borner(int v, int min, int max)
+        {
+            if (max > 0 && v > max) v = max;
+            if (min > 0 && v < min) v = min;
+            return v;
+        }
+
         public void SetBounds(int x, int y, int width, int height)
         {
+            width = Borner(width, _min.Width, _max.Width);
+            height = Borner(height, _min.Height, _max.Height);
             bool taille = width != _l || height != _h;
             _x = x; _y = y; _l = width; _h = height;
             if (_handle != IntPtr.Zero)
@@ -692,6 +854,52 @@ namespace System.Windows.Forms
         protected virtual ControlCollection CreateControlsInstance() { return new ControlCollection(this); }
 
         public bool HasChildren { get { return _enfants != null && _enfants.Count > 0; } }
+
+        // ── Touches (Learn : PreProcessMessage, ProcessCmdKey,
+        // ProcessDialogKey) ──
+
+        public static Keys ModifierKeys
+        {
+            get
+            {
+                Keys k = Keys.None;
+                if (Natif.GetKeyState(0x10) < 0) k |= Keys.Shift;
+                if (Natif.GetKeyState(0x11) < 0) k |= Keys.Control;
+                if (Natif.GetKeyState(0x12) < 0) k |= Keys.Alt;
+                return k;
+            }
+        }
+
+        public virtual bool PreProcessMessage(ref Message msg)
+        {
+            if (msg.Msg != Natif.WM_KEYDOWN && msg.Msg != Natif.WM_SYSKEYDOWN) return false;
+            Keys touche = (Keys)(int)(msg.WParam.ToInt64() & 0xFFFF) | ModifierKeys;
+            if (ProcessCmdKey(ref msg, touche)) return true;
+            return ProcessDialogKey(touche);
+        }
+
+        // Raccourcis : le contrôle, puis ses parents.
+        protected virtual bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            return _parent != null && _parent.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected virtual bool ProcessDialogKey(Keys keyData)
+        {
+            return _parent != null && _parent.ProcessDialogKey(keyData);
+        }
+
+        public Form FindForm()
+        {
+            for (Control c = this; c != null; c = c._parent)
+            {
+                Form f = c as Form;
+                if (f != null) return f;
+            }
+            return null;
+        }
+
+        public bool Focused { get { return _handle != IntPtr.Zero && Natif.GetFocus() == _handle; } }
 
         // ── Clic ──
 
@@ -796,8 +1004,58 @@ namespace System.Windows.Forms
         private bool _maximiser = true, _minimiser = true, _controlBox = true, _barreDesTaches = true;
         private bool _montree, _chargee, _fermeture;
         private CloseReason _raison = CloseReason.None;
+        private IButtonControl _accepter, _annuler;
+        private DialogResult _resultat;
 
         public Form() { }
+
+        // Learn : Form redéclare ClientSize et Size.
+        public new Size ClientSize { get { return base.ClientSize; } set { base.ClientSize = value; } }
+        public new Size Size { get { return base.Size; } set { base.Size = value; } }
+
+        public DialogResult DialogResult { get { return _resultat; } set { _resultat = value; } }
+
+        // Learn : le bouton cliqué par Entrée ; il devient le bouton par défaut.
+        public IButtonControl AcceptButton
+        {
+            get { return _accepter; }
+            set
+            {
+                if (_accepter == value) return;
+                if (_accepter != null) _accepter.NotifyDefault(false);
+                _accepter = value;
+                if (value != null) value.NotifyDefault(true);
+            }
+        }
+
+        // Learn : le bouton cliqué par Échap.
+        public IButtonControl CancelButton { get { return _annuler; } set { _annuler = value; } }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            Keys sans = keyData & ~(Keys.Shift | Keys.Control | Keys.Alt);
+            if (keyData == Keys.Enter || (sans == Keys.Enter && (keyData & (Keys.Control | Keys.Alt)) == 0))
+            {
+                // Un bouton qui a le focus se clique lui-même.
+                Control focus = Control.FromHandle(Natif.GetFocus());
+                IButtonControl b = focus as IButtonControl;
+                if (b == null) b = _accepter;
+                if (b != null) { b.PerformClick(); return true; }
+            }
+            else if (keyData == Keys.Escape && _annuler != null)
+            {
+                _annuler.PerformClick();
+                return true;
+            }
+            return base.ProcessDialogKey(keyData);
+        }
+
+        protected override void OnLayout(LayoutEventArgs levent) { base.OnLayout(levent); }
 
         protected override Size DefaultSize { get { return new Size(300, 300); } }
 
