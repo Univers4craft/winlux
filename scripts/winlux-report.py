@@ -1449,16 +1449,38 @@ def memory():
     return values
 
 
+def winlux_binary():
+    """Version et début du sha256 du binaire winlux qui tourne vraiment (#2757) :
+    un binaire posé pour un banc n'est pas celui de l'image installée."""
+    path = os.environ.get("WINLUX_REPORT_BINARY") or shutil.which("winlux") or "/usr/bin/winlux"
+    version = run([path, "--version"]).removeprefix("winlux ").strip()
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+    except OSError:
+        digest = ""
+    return version, digest
+
+
+@functools.lru_cache(maxsize=None)
 def winlux_version():
-    info = read_conf("/usr/share/winlux/BUILD-INFO")
-    version = info.get("version") or run(["winlux", "--version"]).removeprefix("winlux ").strip()
-    if not version:
-        try:
-            version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
-        except OSError:
-            version = "?"
+    info = read_conf(os.environ.get("WINLUX_BUILD_INFO", "/usr/share/winlux/BUILD-INFO"))
     commit = info.get("commit", "")[:10]
-    return f"{version}" + (f" ({commit})" if commit and commit != "unknown" else "")
+    if commit == "unknown":
+        commit = ""
+    image = info.get("version", "") + (f" ({commit})" if commit else "")
+    binary, digest = winlux_binary()
+    if not binary:
+        if image:
+            return image
+        try:
+            return (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+        except OSError:
+            return "?"
+    text = binary + (f", sha256 {digest}" if digest else "")
+    # Image installée nommée à part seulement si elle diffère du binaire.
+    if image and not (commit and commit in binary):
+        text += f" ; image installée {image}"
+    return text
 
 
 def session_type():
