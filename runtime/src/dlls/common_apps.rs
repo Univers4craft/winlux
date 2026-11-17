@@ -318,7 +318,8 @@ unsafe extern "win64" fn enum_thread_windows(tid: u32, cb: usize, lp: isize) -> 
         return 0;
     }
     let f: unsafe extern "win64" fn(usize, isize) -> i32 = std::mem::transmute(cb);
-    for h in gui::enum_top_level_windows() {
+    // Fils des autres processus compris : leurs fenêtres sont publiées (#2046).
+    for h in gui::all_top_level_windows() {
         let owner = api!(
             "user32",
             "GetWindowThreadProcessId",
