@@ -1534,7 +1534,18 @@ pub unsafe fn add_control(
 
 unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp: isize) -> isize {
     match msg {
-        WM_INITDIALOG => 1,
+        WM_INITDIALOG => {
+            // Le bouton par défaut (MB_DEFBUTTON1 à 4) a le focus à
+            // l'ouverture : Entrée le choisit (#2754). Sinon le focus irait
+            // au premier bouton et Entrée répondrait « Oui » au lieu de « Non ».
+            match message_box_default_button(hwnd) {
+                Some(button) => {
+                    set_dlg_focus(hwnd, button);
+                    0
+                }
+                None => 1,
+            }
+        }
         WM_COMMAND => {
             let id = wp & 0xFFFF;
             // Échap sans bouton Annuler : seulement pour une boîte « OK ».
@@ -1551,6 +1562,14 @@ unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp:
         }
         _ => 0,
     }
+}
+
+/// Bouton portant BS_DEFPUSHBUTTON dans une boîte de message : identifiant
+/// IDOK (1) à IDCONTINUE (11) ; le texte, seul autre contrôle, a -1.
+fn message_box_default_button(hwnd: usize) -> Option<usize> {
+    items(hwnd).into_iter().find(|&h| {
+        (1..=11).contains(&user32::control_id(h)) && gui::window_style(h).unwrap_or(0) & 0xF == 1
+    })
 }
 
 /// MessageBox : vraie fenêtre modale quand un affichage est là ; sinon le
