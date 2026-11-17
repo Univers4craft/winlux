@@ -370,6 +370,23 @@ impl TypeRegistry {
         false
     }
 
+    /// Chaque type de la chaîne de `id` jusqu'à Object a une définition
+    /// connue (métadonnées ou type intégré au moteur) : la chaîne est
+    /// complète, et `is_subclass_of` y dit vrai ou faux sans deviner.
+    pub fn hierarchy_known(&self, id: TypeId) -> bool {
+        let mut current = id;
+        while current != 0 {
+            let Some(t) = self.get(current) else {
+                return false;
+            };
+            if t.def.is_none() && !is_builtin(current) {
+                return false;
+            }
+            current = t.parent;
+        }
+        true
+    }
+
     /// Redéfinition virtuelle la plus dérivée : (assembly, jeton MethodDef,
     /// type qui la déclare, éventuellement instancié).
     pub fn find_override(
