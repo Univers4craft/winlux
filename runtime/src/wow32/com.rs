@@ -1036,6 +1036,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
         .chain(super::com_mf_chaine::ALL.iter())
+        .chain(super::com_webbrowser::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
