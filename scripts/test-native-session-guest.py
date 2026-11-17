@@ -379,6 +379,11 @@ for name, window in [("explorer", explorer), ("settings", settings), ("editor", 
         # et les processus du trousseau ou du verrouillage s'il y en a.
         print(f"close: {name} {window} toujours ouverte ; fenêtres : {windows()}", flush=True)
         subprocess.run(["ps", "-eo", "pid,stat,etime,args"], check=False, timeout=10)
+        # #2745 : le SIGHUP de xterm est-il arrivé ? Signaux et appel système
+        # en cours de xterm et de ses descendants.
+        subprocess.run(["sh", "-c", 'for p in $(pgrep -x xterm) $(pgrep -f winlux-terminal-shell) $(pgrep -x bash); do '
+                        'echo "pid $p : $(tr "\\0" " " </proc/$p/cmdline) ; syscall $(cat /proc/$p/syscall)"; '
+                        'grep -E "^(SigPnd|ShdPnd|SigBlk|SigIgn|SigCgt)" /proc/$p/status; done'], check=False, timeout=10)
         for extra in (Path("/run/winlux/keyring.log"), Path("/run/winlux/startup-apps.log")):
             if extra.is_file(): print(f"--- {extra.name}\n{extra.read_text(errors='replace')[-2000:]}", flush=True)
         capture("native-close-failed")

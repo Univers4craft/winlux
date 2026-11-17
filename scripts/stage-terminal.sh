@@ -28,5 +28,8 @@ done
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 cp "$root/integration/winlux-terminal" "$stage/usr/bin/winlux-terminal"
 chmod 755 "$stage/usr/bin/winlux-terminal"
+mkdir -p "$stage/usr/lib/winlux"
+cp "$root/integration/winlux-terminal-shell" "$stage/usr/lib/winlux/winlux-terminal-shell"
+chmod 755 "$stage/usr/lib/winlux/winlux-terminal-shell"
 ln -sf winlux-terminal "$stage/usr/bin/x-terminal-emulator"
 cp "$root/integration/winlux-terminal.desktop" "$stage/usr/share/applications/"
