@@ -74,6 +74,10 @@ pub(super) enum A {
     /// de MFCreateStreamDescriptor) ; le nombre d'éléments est l'argument
     /// `I` qui le précède (#2428).
     InArr(&'static Iface),
+    /// DISPPARAMS* d'IDispatch::Invoke : 16 octets et VARIANT de 16 octets
+    /// en x86, 24 et 24 en x64 ; les VARIANT par référence reviennent
+    /// (#2771, `com_disp.rs`).
+    DispParams,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -270,13 +274,23 @@ pub(super) static ICREATEERRORINFO: Iface = Iface {
     methods: &[Some(&[I]), Some(&[I]), Some(&[I]), Some(&[I]), Some(&[I])],
 };
 
-/// IDispatch et ITypeLib : seules les méthodes d'IUnknown sont décrites
-/// (VARIANT et DISPPARAMS par valeur viendront avec l'automation).
+/// IDispatch (oaidl.h) : GetTypeInfoCount et Invoke sont décrites
+/// (#2771 : événements DWebBrowserEvents2 rendus à un abonné x86).
+/// GetTypeInfo rend un ITypeInfo non décrit ; GetIDsOfNames prend un
+/// tableau de pointeurs dont le compte suit : non décrites.
+/// Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult,
+/// pExcepInfo, puArgErr) : riid est IID_NULL ; EXCEPINFO (32 octets en
+/// x86, 40 en x64) passe tel quel, les appelants du runtime le laissent nul.
 pub(super) static IDISPATCH: Iface = Iface {
     name: "IDispatch",
     iid: ole(0x2_0400),
     parent: Some(&IUNKNOWN),
-    methods: &[None, None, None, None],
+    methods: &[
+        Some(&[I]),                                   // GetTypeInfoCount(UINT*)
+        None,                                         // GetTypeInfo
+        None,                                         // GetIDsOfNames
+        Some(&[I, Iid, I, I, DispParams, Var, I, I]), // Invoke
+    ],
 };
 
 pub(super) static ITYPELIB: Iface = Iface {
@@ -1360,7 +1374,8 @@ const VT_RECORD: u16 = 36;
 const VT_BLOB: u16 = 65;
 const VT_BLOB_OBJECT: u16 = 70;
 const VT_ARRAY: u16 = 0x2000;
-const VT_BYREF: u16 = 0x4000;
+pub(super) const VT_BYREF: u16 = 0x4000;
+pub(super) const VT_VARIANT: u16 = 12;
 
 fn variant_has_pointer(vt: u16) -> bool {
     vt & (VT_ARRAY | VT_BYREF) != 0
@@ -1371,7 +1386,7 @@ fn variant_has_pointer(vt: u16) -> bool {
 }
 
 /// VARIANT x86 (16 octets) → x64 (24 octets).
-unsafe fn variant64(src: u32, dst: *mut u8) {
+pub(super) unsafe fn variant64(src: u32, dst: *mut u8) {
     std::ptr::copy_nonoverlapping(src as usize as *const u8, dst, 16);
     std::ptr::write_bytes(dst.add(16), 0, 8);
     let vt = *(dst as *const u16);
@@ -1396,7 +1411,7 @@ unsafe fn variant64(src: u32, dst: *mut u8) {
 }
 
 /// VARIANT x64 → x86.
-unsafe fn variant32(src: *const u8, dst: u32) {
+pub(super) unsafe fn variant32(src: *const u8, dst: u32) {
     let vt = *(src as *const u16);
     std::ptr::copy_nonoverlapping(src, dst as usize as *mut u8, 8);
     if matches!(vt, VT_BLOB | VT_BLOB_OBJECT) {
@@ -1490,6 +1505,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     slots.extend(this);
     let mut p = args;
     let mut iid: Guid = [0; 16];
+    let mut disps64: Vec<super::com_disp::Disp64> = Vec::new();
     for &k in kinds {
         let v = rd(p);
         p += 4;
@@ -1538,6 +1554,13 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 slots.push(t.as_ptr() as u64);
                 arrays.push(t);
             }
+            DispParams => match super::com_disp::to64(v) {
+                Some(d) => {
+                    slots.push(d.addr());
+                    disps64.push(d);
+                }
+                None => slots.push(0),
+            },
             VarIn => {
                 // Le VARIANT occupe quatre cases de la pile x86.
                 temps.push([0; 10]);
@@ -1583,6 +1606,9 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     let mut xmm0 = 0u64;
     let mut r = super::winlux_wow_call64(target, slots.as_ptr(), n, &mut xmm0);
     drop(arrays);
+    for d in &disps64 {
+        super::com_disp::back32(d);
+    }
     for (i, dst, k, f, g) in post {
         let t = temps[i].as_ptr() as *const u8;
         match k {
@@ -1674,6 +1700,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let mut arrays: Vec<Vec<u32>> = Vec::new();
         let mut count = 0u32;
         let mut iid: Guid = [0; 16];
+        let mut disps32: Vec<super::com_disp::Disp32> = Vec::new();
         for (i, &k) in kinds.iter().enumerate().take(11) {
             let v = *args.add(i + 1);
             match k {
@@ -1735,6 +1762,13 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     a.push(t.as_ptr() as usize as u32);
                     arrays.push(t);
                 }
+                DispParams => match super::com_disp::to32(v) {
+                    Some(d) => {
+                        a.push(d.addr());
+                        disps32.push(d);
+                    }
+                    None => a.push(0),
+                },
                 VarIn => {
                     // Case basse : variant32 écrit à une adresse 32 bits.
                     temps.push([0; 10]);
@@ -1782,6 +1816,9 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let target = rd(rd(p.obj) + 4 * m.idx as u32);
         let r = call32(target as usize, &a) as u32;
         drop(arrays);
+        for d in &disps32 {
+            super::com_disp::back64(d);
+        }
         for (j, dst, k, f) in post {
             let t = temps[j].as_ptr() as *const u8;
             let d = dst as usize as *mut u8;
