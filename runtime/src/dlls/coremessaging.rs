@@ -11,12 +11,11 @@
 //! Paint.NET crée sa file au démarrage (`InitializeDispatcherQueueController`).
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::comobj::{
-    guid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, IID_IUNKNOWN,
-    S_OK,
+    guid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, E_POINTER, IID_IUNKNOWN, S_OK,
 };
 
 const IID_IINSPECTABLE: Guid = guid(
@@ -121,7 +120,10 @@ struct Queue {
     hwnd: usize,
     thread: u32,
     pending: Mutex<VecDeque<usize>>,
-    events: Mutex<Vec<(i64, usize)>>,
+    /// Gestionnaires : (jeton, délégué, ShutdownCompleted ?).
+    events: Mutex<Vec<(i64, usize, bool)>>,
+    /// ShutdownQueueAsync appelée : plus aucun délégué accepté (#2772).
+    shut: AtomicBool,
 }
 
 #[repr(C)]
@@ -228,6 +230,7 @@ unsafe fn queue_for_current_thread() -> *mut Queue {
         thread: me,
         pending: Mutex::new(VecDeque::new()),
         events: Mutex::new(Vec::new()),
+        shut: AtomicBool::new(false),
     }));
     lock(by_hwnd()).insert(hwnd, q as usize);
     lock(by_thread()).insert(me, q as usize);
@@ -235,7 +238,7 @@ unsafe fn queue_for_current_thread() -> *mut Queue {
 }
 
 unsafe fn enqueue(q: *mut Queue, handler: usize) -> bool {
-    if handler == 0 || (*q).hwnd == 0 {
+    if handler == 0 || (*q).hwnd == 0 || (*q).shut.load(Ordering::Acquire) {
         return false;
     }
     add_ref(handler);
@@ -318,11 +321,39 @@ unsafe extern "win64" fn ctl_get_queue(this: usize, out: *mut usize) -> i32 {
     *out = (*(this as *const Controller)).queue as usize;
     S_OK
 }
-unsafe extern "win64" fn not_impl(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+/// ShutdownQueueAsync (Microsoft Learn, DispatcherQueueController) : la
+/// file n'accepte plus de délégué, exécute ceux qui attendent, puis
+/// ShutdownCompleted est levé. Paint.NET l'appelle en se fermant (#2772).
+/// Limite : ShutdownStarting n'est pas levé (ses arguments portent un
+/// report, GetDeferral, que nous ne fournissons pas) ; noté au journal si
+/// un gestionnaire y est inscrit. L'opération rendue est déjà terminée.
+unsafe extern "win64" fn ctl_shutdown(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
     }
-    E_NOTIMPL
+    *out = 0;
+    let q = (*(this as *const Controller)).queue;
+    if !(*q).shut.swap(true, Ordering::AcqRel) {
+        run_pending(q);
+        let handlers: Vec<(usize, bool)> = lock(&(*q).events)
+            .iter()
+            .map(|&(_, h, completed)| (h, completed))
+            .collect();
+        if handlers.iter().any(|&(_, completed)| !completed) {
+            crate::log_warn!(
+                "coremessaging",
+                "DispatcherQueue : ShutdownStarting non levé (report non pris en charge)"
+            );
+        }
+        for (h, completed) in handlers {
+            if completed {
+                add_ref(h);
+                invoke_typed(h, q as usize, 0);
+                release(h);
+            }
+        }
+    }
+    super::composition::completed_action(out as *mut *mut std::ffi::c_void)
 }
 
 static CONTROLLER_VTBL: VTable<8> = VTable([
@@ -333,7 +364,7 @@ static CONTROLLER_VTBL: VTable<8> = VTable([
     ctl_class as *const (),
     get_trust_level as *const (),
     ctl_get_queue as *const (),
-    not_impl as *const (), // ShutdownQueueAsync
+    ctl_shutdown as *const (),
 ]);
 
 // ---------------------------------------------------------------------
@@ -397,20 +428,26 @@ unsafe extern "win64" fn q_try_enqueue_priority(
 ) -> i32 {
     q_try_enqueue(this, handler, result)
 }
-unsafe extern "win64" fn q_add_event(this: usize, handler: usize, token: *mut i64) -> i32 {
+unsafe fn add_event(this: usize, handler: usize, token: *mut i64, completed: bool) -> i32 {
     if token.is_null() {
         return E_POINTER;
     }
     let t = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed) as i64;
     add_ref(handler);
-    lock(&(*(this as *mut Queue)).events).push((t, handler));
+    lock(&(*(this as *mut Queue)).events).push((t, handler, completed));
     *token = t;
     S_OK
 }
+unsafe extern "win64" fn q_add_starting(this: usize, handler: usize, token: *mut i64) -> i32 {
+    add_event(this, handler, token, false)
+}
+unsafe extern "win64" fn q_add_completed(this: usize, handler: usize, token: *mut i64) -> i32 {
+    add_event(this, handler, token, true)
+}
 unsafe extern "win64" fn q_remove_event(this: usize, token: i64) -> i32 {
     let mut ev = lock(&(*(this as *mut Queue)).events);
-    if let Some(i) = ev.iter().position(|(t, _)| *t == token) {
-        let (_, h) = ev.remove(i);
+    if let Some(i) = ev.iter().position(|(t, _, _)| *t == token) {
+        let (_, h, _) = ev.remove(i);
         drop(ev);
         release(h);
     }
@@ -427,9 +464,9 @@ static QUEUE_VTBL: VTable<15> = VTable([
     q_create_timer as *const (),
     q_try_enqueue as *const (),
     q_try_enqueue_priority as *const (),
-    q_add_event as *const (), // add_ShutdownStarting
+    q_add_starting as *const (),
     q_remove_event as *const (),
-    q_add_event as *const (), // add_ShutdownCompleted
+    q_add_completed as *const (),
     q_remove_event as *const (),
     std::ptr::null(),
     std::ptr::null(),
@@ -827,6 +864,54 @@ mod tests {
             }
             assert_eq!(h.calls.load(Ordering::Acquire), 1);
             assert_eq!(h.refs.load(Ordering::Acquire), 1);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// #2772 : Paint.NET se ferme par ShutdownQueueAsync. Les délégués en
+    /// attente sont exécutés, ShutdownCompleted est levé, l'opération rendue
+    /// existe, et la file refuse ensuite tout nouveau délégué.
+    #[test]
+    fn arret_de_la_file_par_shutdown_queue_async() {
+        std::thread::spawn(|| unsafe {
+            let mut c = 0usize;
+            let opts = Options {
+                size: 12,
+                thread_type: DQTYPE_THREAD_CURRENT,
+                apartment: 0,
+            };
+            assert_eq!(create_dispatcher_queue_controller(&opts, &mut c), S_OK);
+            let mut q = 0usize;
+            assert_eq!(ctl_get_queue(c, &mut q), S_OK);
+            let attente = Handler {
+                vtbl: &H_VTBL,
+                refs: AtomicU32::new(1),
+                calls: AtomicU32::new(0),
+            };
+            let fin = Handler {
+                vtbl: &H_VTBL,
+                refs: AtomicU32::new(1),
+                calls: AtomicU32::new(0),
+            };
+            let mut ok = 0u8;
+            q_try_enqueue(q, &attente as *const Handler as usize, &mut ok);
+            assert_eq!(ok, 1);
+            let mut token = 0i64;
+            assert_eq!(
+                q_add_completed(q, &fin as *const Handler as usize, &mut token),
+                S_OK
+            );
+            let mut action = 0usize;
+            assert_eq!(ctl_shutdown(c, &mut action), S_OK);
+            assert_ne!(action, 0);
+            assert_eq!(attente.calls.load(Ordering::Acquire), 1);
+            assert_eq!(fin.calls.load(Ordering::Acquire), 1);
+            q_try_enqueue(q, &attente as *const Handler as usize, &mut ok);
+            assert_eq!(ok, 0, "file arrêtée");
+            // Un second arrêt ne relève pas l'événement.
+            assert_eq!(ctl_shutdown(c, &mut action), S_OK);
+            assert_eq!(fin.calls.load(Ordering::Acquire), 1);
         })
         .join()
         .unwrap();
