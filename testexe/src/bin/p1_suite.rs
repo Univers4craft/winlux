@@ -9,6 +9,7 @@ use winlux_testexe::*;
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     fn GetModuleFileNameA(module: Handle, buf: *mut u8, size: u32) -> u32;
+    fn GetCurrentThreadStackLimits(low: *mut usize, high: *mut usize);
 }
 
 extern "system" fn thread_test_entry(param: *mut core::ffi::c_void) -> u32 {
@@ -1290,6 +1291,15 @@ pub extern "C" fn mainCRTStartup() -> ! {
             null_mut(),
         );
         check!(wr == 11, "WriteConsoleW");
+
+        // Pile du thread principal : réserve de l'en-tête plus la marge de
+        // Winlux pour ses propres cadres (#2755, Paint.NET débordait 1 Mio).
+        let (mut lo, mut hi) = (0usize, 0usize);
+        GetCurrentThreadStackLimits(&mut lo, &mut hi);
+        check!(
+            hi > lo && hi - lo >= 9 << 20,
+            "pile du thread principal : en-tete plus 8 Mio de marge"
+        );
 
         if FAILURES == 0 {
             puts(c"Tous les tests P1 passent.".as_ptr());
