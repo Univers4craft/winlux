@@ -171,8 +171,13 @@ unsafe fn collect_frames(
         fp = next;
     }
     if count < 3 {
-        let mut at = rsp & !7;
-        let limit = at + 4096 * 2;
+        // Débordement de pile : RSP est déjà dans la page de garde, illisible.
+        // Les cadres des appelants commencent à la première page lisible
+        // au-dessus ; sans ce saut, le rapport n'avait aucune pile (#2756).
+        let Some(mut at) = first_readable(rsp & !7, 64 * 1024, |a| safe_read(a).is_some()) else {
+            return count;
+        };
+        let limit = at + 4096 * 8;
         while count < MAX_FRAMES && at < limit {
             let Some(word) = safe_read(at) else {
                 break;
@@ -188,6 +193,19 @@ unsafe fn collect_frames(
         }
     }
     count
+}
+
+/// Premier mot lisible à partir de `start`, page après page, à moins de
+/// `span` octets de `start` (#2756).
+fn first_readable(start: usize, span: usize, readable: impl Fn(usize) -> bool) -> Option<usize> {
+    let mut at = start;
+    while at < start + span {
+        if readable(at) {
+            return Some(at);
+        }
+        at = (at & !4095) + 4096;
+    }
+    None
 }
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
@@ -999,6 +1017,60 @@ mod tests {
             "{line}"
         );
         assert!(line.ends_with(" vivant"), "{line}");
+    }
+
+    #[test]
+    fn premiere_page_lisible_apres_la_garde() {
+        // RSP dans une page de garde : on reprend au début de la page suivante.
+        let lisible = |a: usize| a >= 0x7000_1000;
+        assert_eq!(
+            first_readable(0x7000_0d70, 64 * 1024, lisible),
+            Some(0x7000_1000)
+        );
+        // Déjà lisible : le mot lui-même.
+        assert_eq!(
+            first_readable(0x7000_1d70, 64 * 1024, lisible),
+            Some(0x7000_1d70)
+        );
+        // Rien de lisible dans la fenêtre : pas de balayage.
+        assert_eq!(first_readable(0x10, 64 * 1024, |_| false), None);
+    }
+
+    /// Pile préparée (#2756) : une page de garde illisible où pointe RSP,
+    /// puis une page lisible portant une adresse de retour dans notre code.
+    /// Aucun vrai débordement : le résultat ne dépend ni du compilateur ni
+    /// de la pile de signal.
+    #[test]
+    fn appelants_releves_au_dessus_de_la_garde() {
+        unsafe {
+            if PROBE[0] < 0 {
+                let mut fds = [-1i32; 2];
+                assert_eq!(
+                    libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK),
+                    0
+                );
+                PROBE = fds;
+            }
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                3 * 4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            ) as usize;
+            assert_ne!(base, libc::MAP_FAILED as usize);
+            assert_eq!(libc::mprotect(base as *mut _, 4096, libc::PROT_NONE), 0);
+            // Adresse dans le code du binaire de test (plage de `locate`).
+            let retour = locate as *const () as usize + 1;
+            *((base + 4096 + 0x100) as *mut usize) = retour;
+            let mut frames = [(0usize, false); MAX_FRAMES];
+            // RIP fautif quelconque, RSP dans la garde, RBP inexploitable.
+            let n = collect_frames(0x1000, base + 0xd70, 0, &mut frames);
+            libc::munmap(base as *mut _, 3 * 4096);
+            assert!(n >= 2, "{:?}", &frames[..n]);
+            assert_eq!(frames[1], (retour, false));
+        }
     }
 
     #[test]

@@ -1892,6 +1892,10 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("ole32", "MkParseDisplayName") => k!(In(&IBINDCTX), I, I, Out(&IMONIKER)),
         ("ole32", "CoGetObject") => k!(I, I, Iid, OutQ),
         ("ole32", "OleLoadFromStream") => k!(In(&ISTREAM), Iid, OutQ),
+        // Objet x86 passé aux fonctions d'IRunnableObject (#2765).
+        ("ole32", "OleRun" | "OleIsRunning") => k!(In(&IUNKNOWN)),
+        ("ole32", "OleLockRunning") => k!(In(&IUNKNOWN), I, I),
+        ("ole32", "OleSetContainedObject") => k!(In(&IUNKNOWN), I),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
         // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
