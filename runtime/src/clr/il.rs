@@ -827,6 +827,27 @@ impl Interpreter {
         }
         let result = bcl::dispatch_internal_call(namespace, class, name, &args, params);
         self.pins.truncate(pinned);
+        if result.is_none() {
+            // Le nom seul ne suffit pas quand l'appli rattrape l'exception
+            // (#2780) : l'appelant et le type réel de `this` disent qui
+            // appelle et sur quel objet.
+            let caller = self.frames.last().map_or(0, |f| f.ip);
+            let this = match args.first() {
+                Some(Value::Ref(p)) if !p.is_null() && params.len() < args.len() => gc::type_of(*p)
+                    .and_then(|id| types::with_types(|reg| reg.get(id).map(|t| t.full_name())))
+                    .unwrap_or_else(|| "?".into()),
+                _ => "(statique)".into(),
+            };
+            crate::log_warn!(
+                "clr",
+                "méthode introuvable {}.{}::{} appelée par {}, this : {}",
+                namespace,
+                class,
+                name,
+                self.location(caller),
+                this
+            );
+        }
         result.ok_or_else(|| {
             exception(
                 "MissingMethodException",
