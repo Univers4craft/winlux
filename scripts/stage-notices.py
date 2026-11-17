@@ -4,13 +4,19 @@
     python3 scripts/stage-notices.py RACINE      # pose les fichiers
     python3 scripts/stage-notices.py --verifier  # NOTICES couvre-t-il tout ?
 
-Dans RACINE (la racine de l'image en construction), le script écrit
-usr/share/doc/winlux-desktop/ :
-- copyright : fichier au format Debian (DEP-5) du paquet, qui renvoie à la
-  GPL-3.0-or-later de Winlux et à chaque bibliothèque Rust compilée dedans ;
-- LICENSE et NOTICES du dépôt ;
-- crates/<nom>-<version>/ : les fichiers de licence de chaque bibliothèque
+Dans RACINE (la racine de l'image en construction), le script écrit :
+- usr/share/doc/winlux-desktop/copyright : fichier au format Debian (DEP-5)
+  du paquet, qui renvoie à la GPL-3.0-or-later de Winlux et à chaque
+  bibliothèque Rust compilée dedans ;
+- usr/share/winlux/notices/ : LICENSE et NOTICES du dépôt, et
+  crates/<nom>-<version>/, les fichiers de licence de chaque bibliothèque
   Rust (MIT et Apache exigent de livrer le texte et la mention de copyright).
+
+Seul « copyright » reste sous /usr/share/doc (#2743) : l'image ubuntu-base
+installe avec « path-exclude=/usr/share/doc/* » puis
+« path-include=/usr/share/doc/*/copyright » (/etc/dpkg/dpkg.cfg.d/excludes).
+dpkg n'écrit donc aucun autre fichier de /usr/share/doc, et la vérification
+de la mise à jour (dpkg --verify) les déclarait manquants.
 
 La liste des bibliothèques vient de `cargo metadata` : toutes celles que le
 binaire Linux `winlux` compile (dépendances normales et de construction).
@@ -27,6 +33,8 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-unknown-linux-gnu"
+DOC = "usr/share/doc/winlux-desktop"
+NOTICES_DIR = "usr/share/winlux/notices"
 LICENCE_PREFIXES = ("LICEN", "COPYING", "COPYRIGHT", "NOTICE", "UNLICENSE")
 
 
@@ -81,13 +89,13 @@ def copyright_file(packages: list[dict], version: str) -> str:
     parts = [
         "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
         f"Upstream-Name: Winlux\nSource: https://github.com/Univers4craft/winlux\n"
-        f"Comment: winlux-desktop {version}. Provenance détaillée : NOTICES ; liste des\n"
+        f"Comment: winlux-desktop {version}. Provenance détaillée : /{NOTICES_DIR}/NOTICES ;\n liste des"
         " sources des paquets sous GPL de l'image : /usr/share/doc/winlux/sources-gpl.tsv.\n",
         "Files: *\nCopyright: Winlux contributors\nLicense: GPL-3.0-or-later\n"
-        " Le texte complet est dans LICENSE (et /usr/share/common-licenses/GPL-3).\n",
+        f" Le texte complet est dans /{NOTICES_DIR}/LICENSE (et /usr/share/common-licenses/GPL-3).\n",
     ]
     for package in packages:
-        folder = f"usr/share/doc/winlux-desktop/crates/{package['name']}-{package['version']}"
+        folder = f"{NOTICES_DIR}/crates/{package['name']}-{package['version']}"
         parts.append(
             f"Files: {folder}/*\n"
             f"Copyright: {', '.join(package.get('authors') or []) or 'voir les fichiers du dossier'}\n"
@@ -102,23 +110,25 @@ def stage(root: Path, meta: dict, project: Path = PROJECT) -> Path:
     problems = missing_from_notices((project / "NOTICES").read_text(encoding="utf-8"), packages)
     if problems:
         raise SystemExit("NOTICES incomplet :\n  " + "\n  ".join(problems))
-    doc = root / "usr/share/doc/winlux-desktop"
-    if doc.exists():
-        shutil.rmtree(doc)
-    (doc / "crates").mkdir(parents=True)
-    shutil.copy(project / "LICENSE", doc / "LICENSE")
-    shutil.copy(project / "NOTICES", doc / "NOTICES")
+    doc, notices = root / DOC, root / NOTICES_DIR
+    for folder in (doc, notices):
+        if folder.exists():
+            shutil.rmtree(folder)
+    doc.mkdir(parents=True)
+    (notices / "crates").mkdir(parents=True)
+    shutil.copy(project / "LICENSE", notices / "LICENSE")
+    shutil.copy(project / "NOTICES", notices / "NOTICES")
     version = (project / "VERSION").read_text().strip() if (project / "VERSION").exists() else "?"
     (doc / "copyright").write_text(copyright_file(packages, version), encoding="utf-8")
     for package in packages:
         files = licence_files(package)
         if not files:
             raise SystemExit(f"{package['name']} {package['version']} : aucun fichier de licence trouvé")
-        target = doc / "crates" / f"{package['name']}-{package['version']}"
+        target = notices / "crates" / f"{package['name']}-{package['version']}"
         target.mkdir()
         for licence in files:
             shutil.copy(licence, target / licence.name)
-    return doc
+    return notices
 
 
 def main(argv: list[str]) -> int:
@@ -134,8 +144,8 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    doc = stage(Path(argv[1]), metadata())
-    print(f"Notices et licences posées dans {doc}")
+    notices = stage(Path(argv[1]), metadata())
+    print(f"Notices et licences posées dans {notices} (copyright dans /{DOC})")
     return 0
 
 
