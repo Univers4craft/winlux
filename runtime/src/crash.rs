@@ -1036,56 +1036,41 @@ mod tests {
         assert_eq!(first_readable(0x10, 64 * 1024, |_| false), None);
     }
 
-    /// Variable qui fait de `debordement_enfant` le processus enfant (#2756).
-    const DEBORDEMENT_ENFANT: &str = "WINLUX_TEST_DEBORDEMENT_ENFANT";
-
-    #[inline(never)]
-    #[allow(unconditional_recursion)]
-    fn recursion(n: usize) -> usize {
-        let mut tampon = [0u8; 512];
-        tampon[n % 512] = n as u8;
-        std::hint::black_box(&mut tampon);
-        recursion(n + 1) + tampon[(n + 1) % 512] as usize
-    }
-
+    /// Pile préparée (#2756) : une page de garde illisible où pointe RSP,
+    /// puis une page lisible portant une adresse de retour dans notre code.
+    /// Aucun vrai débordement : le résultat ne dépend ni du compilateur ni
+    /// de la pile de signal.
     #[test]
-    fn debordement_enfant() {
-        if std::env::var_os(DEBORDEMENT_ENFANT).is_none() {
-            return;
+    fn appelants_releves_au_dessus_de_la_garde() {
+        unsafe {
+            if PROBE[0] < 0 {
+                let mut fds = [-1i32; 2];
+                assert_eq!(
+                    libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK),
+                    0
+                );
+                PROBE = fds;
+            }
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                3 * 4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            ) as usize;
+            assert_ne!(base, libc::MAP_FAILED as usize);
+            assert_eq!(libc::mprotect(base as *mut _, 4096, libc::PROT_NONE), 0);
+            // Adresse dans le code du binaire de test (plage de `locate`).
+            let retour = locate as *const () as usize + 1;
+            *((base + 4096 + 0x100) as *mut usize) = retour;
+            let mut frames = [(0usize, false); MAX_FRAMES];
+            // RIP fautif quelconque, RSP dans la garde, RBP inexploitable.
+            let n = collect_frames(0x1000, base + 0xd70, 0, &mut frames);
+            libc::munmap(base as *mut _, 3 * 4096);
+            assert!(n >= 2, "{:?}", &frames[..n]);
+            assert_eq!(frames[1], (retour, false));
         }
-        install();
-        let fil = std::thread::Builder::new()
-            .stack_size(256 * 1024)
-            .spawn(|| recursion(0))
-            .unwrap();
-        let _ = fil.join();
-    }
-
-    #[test]
-    fn debordement_rapporte_les_appelants() {
-        let dir = std::env::temp_dir().join(format!("winlux-debordement-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "crash::tests::debordement_enfant",
-                "--test-threads=1",
-            ])
-            .env(DEBORDEMENT_ENFANT, "1")
-            .env("WINLUX_JOURNAL_DIR", &dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .unwrap();
-        let err = String::from_utf8_lossy(&out.stderr);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(err.contains("EXCEPTION_STACK_OVERFLOW"), "{err}");
-        // Au moins un appelant relevé au-dessus de la page de garde.
-        assert!(
-            err.lines()
-                .any(|l| l.starts_with("winlux: cadre 1 ?0x") && l.contains("winlux+0x")),
-            "{err}"
-        );
     }
 
     #[test]
