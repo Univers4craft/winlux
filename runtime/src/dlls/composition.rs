@@ -1031,6 +1031,15 @@ unsafe extern "win64" fn controller_commit(this: *mut Slot) -> i32 {
     S_OK
 }
 
+/// IAsyncAction déjà terminée, pour les autres modules WinRT
+/// (DispatcherQueueController::ShutdownQueueAsync, #2772).
+pub(crate) unsafe fn completed_action(out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    put_obj(out, new_obj(Kind::Async, std::ptr::null_mut(), Data::None))
+}
+
 /// Le rendu est synchrone : l'opération rendue est déjà terminée.
 unsafe extern "win64" fn controller_ensure_completed(_: *mut Slot, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
