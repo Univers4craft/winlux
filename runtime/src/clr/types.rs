@@ -357,6 +357,19 @@ impl TypeRegistry {
         false
     }
 
+    /// La définition `def` (assembly, ligne TypeDef) est `child` ou l'une de
+    /// ses bases, instanciée ou non.
+    pub fn def_in_chain(&self, child: TypeId, def: (usize, u32)) -> bool {
+        let mut current = child;
+        while let Some(t) = self.get(current) {
+            if t.def == Some(def) {
+                return true;
+            }
+            current = t.parent;
+        }
+        false
+    }
+
     /// Redéfinition virtuelle la plus dérivée : (assembly, jeton MethodDef,
     /// type qui la déclare, éventuellement instancié).
     pub fn find_override(
