@@ -572,12 +572,16 @@ impl Interpreter {
         let Some(frame) = self.frames.last() else {
             return format!("IL_{offset:04x}");
         };
-        let owner = self.domain[self.current]
-            .method_owner
-            .get(frame.method as usize)
+        // La méthode du cadre appartient à son assembly, pas forcément à
+        // l'assembly courante : une méthode interne de mscorlib appelée
+        // depuis une autre assembly n'empile pas de cadre (#2780).
+        let owner = self
+            .domain
+            .get(frame.asm)
+            .and_then(|d| d.method_owner.get(frame.method as usize))
             .copied()
             .unwrap_or(0);
-        let a = &self.assembly;
+        let a = self.assembly_at(frame.asm);
         let name = a.get_string(a.get_method_def(frame.method).name);
         if owner == 0 {
             return format!("{name} IL_{offset:04x}");
@@ -848,6 +852,27 @@ impl Interpreter {
         }
         let result = bcl::dispatch_internal_call(namespace, class, name, &args, params);
         self.pins.truncate(pinned);
+        if result.is_none() {
+            // Le nom seul ne suffit pas quand l'appli rattrape l'exception
+            // (#2780) : l'appelant et le type réel de `this` disent qui
+            // appelle et sur quel objet.
+            let caller = self.frames.last().map_or(0, |f| f.ip);
+            let this = match args.first() {
+                Some(Value::Ref(p)) if !p.is_null() && params.len() < args.len() => gc::type_of(*p)
+                    .and_then(|id| types::with_types(|reg| reg.get(id).map(|t| t.full_name())))
+                    .unwrap_or_else(|| "?".into()),
+                _ => "(statique)".into(),
+            };
+            crate::log_warn!(
+                "clr",
+                "méthode introuvable {}.{}::{} appelée par {}, this : {}",
+                namespace,
+                class,
+                name,
+                self.location(caller),
+                this
+            );
+        }
         result.ok_or_else(|| {
             exception(
                 "MissingMethodException",
