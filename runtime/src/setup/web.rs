@@ -89,12 +89,14 @@ fn host(url: &str) -> String {
 /// Description de ce qui sera téléchargé, pour la question du lanceur.
 pub fn describe(p: &Package) -> String {
     format!(
-        "download.name={}\ndownload.version={}\ndownload.publisher={}\ndownload.source={}\ndownload.size_mb={}\n",
+        "download.name={}\ndownload.version={}\ndownload.publisher={}\ndownload.source={}\ndownload.file={}\ndownload.size_mb={}\ndownload.sha256={}\n",
         p.name,
         p.version,
         p.publisher,
         host(p.url),
-        p.size.div_ceil(1024 * 1024)
+        p.url.rsplit('/').next().unwrap_or_default(),
+        p.size.div_ceil(1024 * 1024),
+        p.sha256
     )
 }
 
@@ -250,6 +252,9 @@ mod tests {
         assert!(d.contains("download.version=5.1.12\n"));
         assert!(d.contains("download.source=github.com/paintdotnet/release\n"));
         assert!(d.contains("download.size_mb=81\n"));
+        // L'assistant nomme le fichier exact et son empreinte (#2750).
+        assert!(d.contains("download.file=paint.net.5.1.12.install.x64.zip\n"));
+        assert!(d.contains(&format!("download.sha256={}\n", p.sha256)));
         assert!(p.url.starts_with("https://"));
     }
 
