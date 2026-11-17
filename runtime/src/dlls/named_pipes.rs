@@ -24,6 +24,7 @@ use std::sync::{Condvar, Mutex};
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_INVALID_HANDLE: u32 = 6;
+const ERROR_SEM_TIMEOUT: u32 = 121;
 const ERROR_INVALID_NAME: u32 = 123;
 const ERROR_PIPE_BUSY: u32 = 231;
 const ERROR_PIPE_CONNECTED: u32 = 535;
@@ -43,6 +44,9 @@ struct Instance {
     /// Change à chaque DisconnectNamedPipe : le fil d'écoute d'une
     /// connexion précédente s'arrête au lieu de servir la nouvelle.
     generation: u64,
+    /// nDefaultTimeOut de CreateNamedPipe (ms), pour WaitNamedPipe avec
+    /// NMPWAIT_USE_DEFAULT_WAIT.
+    default_timeout: u32,
 }
 
 struct State {
@@ -102,7 +106,13 @@ fn socket_pair() -> Option<(OwnedFd, OwnedFd)> {
 }
 
 /// `CreateNamedPipe` : nouvelle instance du tube `name`.
-pub(crate) fn create(path: &str, open_mode: u32, _pipe_mode: u32, max_instances: u32) -> usize {
+pub(crate) fn create(
+    path: &str,
+    open_mode: u32,
+    _pipe_mode: u32,
+    max_instances: u32,
+    default_timeout: u32,
+) -> usize {
     let Some(name) = pipe_name(path) else {
         crate::process::set_last_error(ERROR_INVALID_NAME);
         return usize::MAX;
@@ -137,7 +147,9 @@ pub(crate) fn create(path: &str, open_mode: u32, _pipe_mode: u32, max_instances:
         connected: false,
         listening: false,
         generation: 0,
+        default_timeout,
     });
+    remote::mark(&name, h, default_timeout);
     crate::trace!("CreateNamedPipe({name}) = {h:#x}");
     h
 }
@@ -330,33 +342,90 @@ pub(crate) fn disconnect(h: usize) -> i32 {
 pub(crate) fn close_server(h: usize) {
     let reg = registry();
     let mut st = crate::dlls::lock(&reg.state);
-    let mut found = false;
-    st.pipes.retain(|_, list| {
+    let mut found = None;
+    st.pipes.retain(|name, list| {
         let before = list.len();
         list.retain(|i| i.server != h);
-        found |= list.len() != before;
+        if list.len() != before {
+            found = Some(name.clone());
+        }
         !list.is_empty()
     });
-    if found {
+    if let Some(name) = found {
+        remote::unmark(&name, h);
         reg.changed.notify_all();
     }
 }
 
+/// Issue de `WaitNamedPipe`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Attente {
+    /// Une instance attend un client.
+    Libre,
+    /// Aucune instance du tube n'existe, ici ni ailleurs : retour immédiat.
+    Absent,
+    /// Le tube existe mais aucune instance ne s'est libérée à temps.
+    Delai,
+}
+
+/// Délai par défaut d'un tube existant (NMPWAIT_USE_DEFAULT_WAIT) : celui
+/// donné à CreateNamedPipe, 50 ms s'il valait 0.
+fn default_wait(st: &State, name: &str, remote: Option<u32>) -> u32 {
+    let local = st
+        .pipes
+        .get(name)
+        .and_then(|l| l.first())
+        .map(|i| i.default_timeout);
+    match local.or(remote).unwrap_or(0) {
+        0 => 50,
+        ms => ms,
+    }
+}
+
+/// Le tube a-t-il une instance quelque part (ce processus, un autre
+/// processus, ou un enfant à qui ce processus vient d'en céder une) ?
+/// Rend aussi le délai par défaut connu d'un autre processus.
+fn exists(st: &State, name: &str) -> (bool, Option<u32>) {
+    if st.pipes.contains_key(name) {
+        return (true, None);
+    }
+    if let Some(ms) = remote::exists(name) {
+        return (true, Some(ms));
+    }
+    if remote::available(name) {
+        return (true, None);
+    }
+    let handed = crate::dlls::lock(handed_off())
+        .get(name)
+        .is_some_and(|t| t.elapsed() <= HANDOFF_WINDOW);
+    (handed, None)
+}
+
 /// `WaitNamedPipe` : une instance attend-elle un client ?
-pub(crate) fn wait(path: &str, timeout_ms: u32) -> bool {
+pub(crate) fn wait(path: &str, timeout_ms: u32) -> Attente {
     let Some(name) = pipe_name(path) else {
-        return false;
+        return Attente::Absent;
     };
     let reg = registry();
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(if timeout_ms == 0xFFFF_FFFF {
-            u64::MAX / 4
-        } else if timeout_ms == 0 {
-            50
-        } else {
-            timeout_ms as u64
-        });
     let mut st = crate::dlls::lock(&reg.state);
+    // « If no instances of the specified named pipe exist, the
+    // WaitNamedPipe function returns immediately, regardless of the
+    // time-out value » (#2115).
+    let (present, remote_default) = exists(&st, &name);
+    if !present {
+        return Attente::Absent;
+    }
+    let ms = if timeout_ms == 0 {
+        default_wait(&st, &name, remote_default)
+    } else {
+        timeout_ms
+    };
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(if ms == 0xFFFF_FFFF {
+            u64::MAX / 4
+        } else {
+            ms as u64
+        });
     loop {
         if st
             .pipes
@@ -364,11 +433,11 @@ pub(crate) fn wait(path: &str, timeout_ms: u32) -> bool {
             .is_some_and(|l| l.iter().any(|i| i.client.is_some()))
             || remote::available(&name)
         {
-            return true;
+            return Attente::Libre;
         }
         let now = std::time::Instant::now();
         if now >= deadline {
-            return false;
+            return Attente::Delai;
         }
         let (g, _) = reg
             .changed
@@ -390,17 +459,21 @@ pub unsafe extern "win64" fn wait_named_pipe_w(name: *const u16, timeout: u32) -
     // Diagnostic (#2115) : un client bloqué ici se voit dans WINLUX_TRACE,
     // avec le délai demandé (0xffffffff = NMPWAIT_WAIT_FOREVER).
     crate::trace!("WaitNamedPipe({nom}, délai {timeout:#x}) : attente d'une instance libre");
-    if wait(&nom, timeout) {
-        crate::trace!("WaitNamedPipe({nom}) : instance libre");
-        1
-    } else {
-        crate::trace!("WaitNamedPipe({nom}) : délai écoulé, aucune instance");
-        crate::process::set_last_error(if timeout == 0 {
-            121
-        } else {
-            ERROR_FILE_NOT_FOUND
-        });
-        0
+    match wait(&nom, timeout) {
+        Attente::Libre => {
+            crate::trace!("WaitNamedPipe({nom}) : instance libre");
+            1
+        }
+        Attente::Absent => {
+            crate::trace!("WaitNamedPipe({nom}) : aucune instance du tube");
+            crate::process::set_last_error(ERROR_FILE_NOT_FOUND);
+            0
+        }
+        Attente::Delai => {
+            crate::trace!("WaitNamedPipe({nom}) : délai écoulé, instances occupées");
+            crate::process::set_last_error(ERROR_SEM_TIMEOUT);
+            0
+        }
     }
 }
 
@@ -481,7 +554,9 @@ pub(crate) fn adopt(h: usize, name: &str, client: Option<OwnedFd>, connected: bo
             connected,
             listening: false,
             generation: 0,
+            default_timeout: 0,
         });
+    remote::mark(name, h, 0);
     reg.changed.notify_all();
 }
 
@@ -493,7 +568,7 @@ mod remote {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    fn dir() -> Option<PathBuf> {
+    pub(super) fn dir() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .filter(|d| d.is_dir())
@@ -549,7 +624,10 @@ mod remote {
                 let n = e.file_name().to_string_lossy().into_owned();
                 // Le fichier de verrou partage le préfixe : ce n'est pas une
                 // instance (le prendre pour une instance donnait 231, #803).
-                n.starts_with(&prefix) && !n.starts_with(&mine) && !n.ends_with(".verrou")
+                n.starts_with(&prefix)
+                    && !n.starts_with(&mine)
+                    && !n.ends_with(".verrou")
+                    && !n.ends_with(MARK)
             })
             .map(|e| e.path())
             .collect();
@@ -559,6 +637,73 @@ mod remote {
 
     pub(super) fn available(name: &str) -> bool {
         !candidates(name).is_empty()
+    }
+
+    /// Suffixe du marqueur d'existence d'une instance.
+    const MARK: &str = ".existe";
+
+    pub(super) fn mark_path(d: &std::path::Path, name: &str, pid: u32, h: usize) -> PathBuf {
+        d.join(format!("{}.{pid}.{h:x}{MARK}", key(name)))
+    }
+
+    /// CreateNamedPipe : l'instance `h` existe, même sans écouter. Le
+    /// fichier porte le délai par défaut du tube (#2115).
+    pub(super) fn mark(name: &str, h: usize, default_timeout: u32) {
+        let Some(d) = dir() else {
+            return;
+        };
+        let path = mark_path(&d, name, std::process::id(), h);
+        // Le dossier est déjà en 0700. Un lecteur qui tombe sur le fichier
+        // encore vide lit le délai 0, soit 50 ms.
+        let _ = std::fs::write(&path, default_timeout.to_string());
+    }
+
+    /// Fermeture (ou cession) de l'instance `h`.
+    pub(super) fn unmark(name: &str, h: usize) {
+        if let Some(d) = dir() {
+            let _ = std::fs::remove_file(mark_path(&d, name, std::process::id(), h));
+        }
+    }
+
+    fn alive(pid: i32) -> bool {
+        pid > 0
+            && (unsafe { libc::kill(pid, 0) } == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+    }
+
+    /// Une instance du tube existe-t-elle dans un autre processus vivant ?
+    /// Rend son délai par défaut. Le marqueur d'un processus disparu (tué
+    /// sans fermer ses handles) est effacé.
+    pub(super) fn exists(name: &str) -> Option<u32> {
+        let d = dir()?;
+        let prefix = format!("{}.", key(name));
+        let mine = std::process::id();
+        let mut found = None;
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let Some(rest) = n.strip_prefix(&prefix).and_then(|r| r.strip_suffix(MARK)) else {
+                continue;
+            };
+            let Some(pid) = rest.split('.').next().and_then(|p| p.parse::<u32>().ok()) else {
+                continue;
+            };
+            if pid == mine {
+                continue;
+            }
+            if !alive(pid as i32) {
+                let _ = std::fs::remove_file(e.path());
+                continue;
+            }
+            if found.is_none() {
+                found = Some(
+                    std::fs::read_to_string(e.path())
+                        .ok()
+                        .and_then(|t| t.trim().parse().ok())
+                        .unwrap_or(0),
+                );
+            }
+        }
+        found
     }
 
     /// Connexion à une instance d'un autre processus. Err(true) : il y en
@@ -722,7 +867,7 @@ mod tests {
     fn nom_du_tube_par_file_name_info() {
         let _teb = crate::process::test_teb();
         let name = format!("crashpad_{}_test", std::process::id());
-        let h = create(&format!("\\\\.\\pipe\\{name}"), 3, 0, 255);
+        let h = create(&format!("\\\\.\\pipe\\{name}"), 3, 0, 255, 0);
         assert_ne!(h, usize::MAX);
         let mut buf = [0u8; 4 + 2 * 260];
         let ok = unsafe {
@@ -755,7 +900,7 @@ mod tests {
         use crate::dlls::kernel32 as k;
         let _teb = crate::process::test_teb();
         let name = format!("winlux-test-2219-{}", std::process::id());
-        let h = create(&format!("\\\\.\\pipe\\{name}"), 3 | 0x4000_0000, 0, 1);
+        let h = create(&format!("\\\\.\\pipe\\{name}"), 3 | 0x4000_0000, 0, 1, 0);
         assert_ne!(h, usize::MAX);
         // Événement à réinitialisation manuelle, créé signalé.
         let event = unsafe { k::create_event_a(0, 1, 1, std::ptr::null()) };
@@ -791,5 +936,91 @@ mod tests {
         k::close_handle(c);
         k::close_handle(event);
         close_server(h);
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain([0]).collect()
+    }
+
+    /// #2115 : WaitNamedPipe sur un tube qui n'existe nulle part rend tout
+    /// de suite ERROR_FILE_NOT_FOUND, quel que soit le délai.
+    #[test]
+    fn attente_d_un_tube_absent_immediate_2115() {
+        let _teb = crate::process::test_teb();
+        let name = wide(&format!(
+            "\\\\.\\pipe\\winlux-test-2115-absent-{}",
+            std::process::id()
+        ));
+        for timeout in [1500, 0xFFFF_FFFF, 0] {
+            let t = std::time::Instant::now();
+            assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), timeout) }, 0);
+            assert_eq!(crate::process::last_error(), ERROR_FILE_NOT_FOUND);
+            assert!(
+                t.elapsed() < std::time::Duration::from_millis(1000),
+                "délai {timeout:#x} : {:?}",
+                t.elapsed()
+            );
+        }
+    }
+
+    /// #2115 : tube existant. Instance libre : 1. Toutes occupées : le
+    /// délai demandé, puis ERROR_SEM_TIMEOUT ; avec le délai 0, celui de
+    /// CreateNamedPipe.
+    #[test]
+    fn attente_d_un_tube_occupe_2115() {
+        let _teb = crate::process::test_teb();
+        let short = format!("winlux-test-2115-occupe-{}", std::process::id());
+        let path = format!("\\\\.\\pipe\\{short}");
+        let name = wide(&path);
+        let h = create(&path, 3, 0, 1, 600);
+        assert_ne!(h, usize::MAX);
+        assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), 300) }, 1);
+        let c = open_client(&short, 0);
+        assert_ne!(c, usize::MAX);
+        for (timeout, min) in [(300u32, 300u64), (0, 600)] {
+            let t = std::time::Instant::now();
+            assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), timeout) }, 0);
+            assert_eq!(crate::process::last_error(), ERROR_SEM_TIMEOUT);
+            assert!(
+                t.elapsed() >= std::time::Duration::from_millis(min - 20),
+                "délai {timeout} : {:?}",
+                t.elapsed()
+            );
+        }
+        crate::dlls::kernel32::close_handle(c);
+        close_server(h);
+        assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), 300) }, 0);
+        assert_eq!(crate::process::last_error(), ERROR_FILE_NOT_FOUND);
+    }
+
+    /// #2115 : une instance d'un autre processus vivant, même sans écouter,
+    /// fait exister le tube (et donne son délai par défaut) ; le marqueur
+    /// d'un processus disparu ne compte pas et s'efface.
+    #[test]
+    fn tube_d_un_autre_processus_2115() {
+        let _teb = crate::process::test_teb();
+        let short = format!("winlux-test-2115-autre-{}", std::process::id());
+        let name = wide(&format!("\\\\.\\pipe\\{short}"));
+        let d = remote::dir().unwrap();
+        // Processus vivant qui n'est pas nous : notre parent.
+        let parent = unsafe { libc::getppid() } as u32;
+        let vivant = remote::mark_path(&d, &short, parent, 0x5a);
+        std::fs::write(&vivant, "250").unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), 0) }, 0);
+        assert_eq!(crate::process::last_error(), ERROR_SEM_TIMEOUT);
+        assert!(t.elapsed() >= std::time::Duration::from_millis(230));
+        std::fs::remove_file(&vivant).unwrap();
+        // Processus terminé et récolté : son pid ne désigne plus personne.
+        let mut fini = std::process::Command::new("/bin/true").spawn().unwrap();
+        let mort = fini.id();
+        fini.wait().unwrap();
+        let orphelin = remote::mark_path(&d, &short, mort, 0x5b);
+        std::fs::write(&orphelin, "250").unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(unsafe { wait_named_pipe_w(name.as_ptr(), 1500) }, 0);
+        assert_eq!(crate::process::last_error(), ERROR_FILE_NOT_FOUND);
+        assert!(t.elapsed() < std::time::Duration::from_millis(1000));
+        assert!(!orphelin.exists());
     }
 }
