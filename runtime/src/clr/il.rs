@@ -648,13 +648,34 @@ impl Interpreter {
         let name = self.method_name(token);
         let params = self.get_method_sig(token).param_types;
         let argc = params.len();
-        let iface = match target {
-            Target::Managed(asm, row) => self.interface_of(*asm, *row),
-            _ => None,
+        let (iface, declared) = match target {
+            Target::Managed(asm, row) => {
+                let owner = self.domain[*asm]
+                    .method_owner
+                    .get(*row as usize)
+                    .copied()
+                    .unwrap_or(0);
+                (
+                    self.interface_of(*asm, *row),
+                    (owner != 0).then_some((*asm, owner)),
+                )
+            }
+            _ => (None, None),
         };
         let found = types::with_types(|reg| {
             let (asm, tok, decl) =
                 reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
+            // Une redéfinition se trouve dans le type qui déclare la méthode
+            // appelée ou plus bas, jamais au-dessus : sinon une méthode
+            // virtuelle de même nom d'une base (Collection<T>.Contains)
+            // prendrait la place de KeyedCollection.Contains(TKey) (#2785).
+            // Une méthode d'interface, elle, est implémentée hors de cette
+            // chaîne.
+            if let (Some(declared), None) = (declared, &iface) {
+                if !reg.def_in_chain(decl, declared) {
+                    return None;
+                }
+            }
             Some((
                 asm,
                 tok,
