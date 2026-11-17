@@ -1092,9 +1092,9 @@ pub unsafe extern "win64" fn load_reg_type_lib(
     let Some(g) = read_guid(guid) else {
         return E_INVALIDARG_TL;
     };
-    if crate::wow32::active() {
-        return typelib::NOT_REGISTERED;
-    }
+    // Programme x86 : ITypeLib et ITypeInfo passent par les mandataires de
+    // wow32/com.rs, TYPEATTR et FUNCDESC traduits par wow32/com_typeinfo.rs
+    // (#2796).
     match typelib::load_registered(&g, major) {
         Some(t) => {
             *out = t;

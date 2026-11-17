@@ -29,13 +29,17 @@ const MAX_ARGS: u32 = 64;
 
 /// Tampon de mots de 32 bits que le code x86 lit : le tas du processus
 /// (sous 4 Go) en service, une page MAP_32BIT dans les tests.
-struct Low {
+pub(super) struct Low {
     p: *mut u32,
     n: usize,
 }
 
+// Le tampon appartient au seul `Low` qui le tient (images de TYPEATTR et
+// FUNCDESC gardées dans une table jusqu'à leur Release*, com_typeinfo.rs).
+unsafe impl Send for Low {}
+
 impl Low {
-    fn new(n: usize) -> Low {
+    pub(super) fn new(n: usize) -> Low {
         let n = n.max(1);
         #[cfg(not(test))]
         let p = Box::into_raw(vec![0u32; n].into_boxed_slice()) as *mut u32;
@@ -56,7 +60,7 @@ impl Low {
     }
 
     /// Adresse x86 du mot `i`.
-    fn at(&self, i: usize) -> u32 {
+    pub(super) fn at(&self, i: usize) -> u32 {
         debug_assert!(i < self.n);
         unsafe { self.p.add(i) as usize as u32 }
     }

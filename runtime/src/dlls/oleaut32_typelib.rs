@@ -58,6 +58,7 @@ const VT_UI2: u16 = 18;
 const VT_UI4: u16 = 19;
 const VT_INT: u16 = 22;
 const VT_UINT: u16 = 23;
+const VT_BOOL: u16 = 11;
 const VT_VOID: u16 = 24;
 const VT_HRESULT: u16 = 25;
 const VT_PTR: u16 = 26;
@@ -75,6 +76,7 @@ const PARAMFLAG_FHASDEFAULT: u16 = 0x20;
 
 const FUNC_VIRTUAL: u32 = 0;
 const FUNC_PUREVIRTUAL: u32 = 1;
+const FUNC_DISPATCH: u32 = 4;
 const FUNCFLAG_FRESTRICTED: u16 = 1;
 const VAR_CONST: u32 = 2;
 const TYPEFLAG_FHIDDEN: u16 = 0x10;
@@ -116,6 +118,25 @@ const IID_IACCESSIBLE: Guid = Guid {
     data2: 0x3c3d,
     data3: 0x11cf,
     data4: [0x81, 0x0c, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+};
+
+/// Bibliothèque « Microsoft Internet Controls » (SHDocVw), version 1.1 :
+/// LIBID demandé par LoadRegTypeLib de l'installeur Creative Cloud
+/// (#2796), le même que publie la documentation Microsoft Learn du
+/// contrôle WebBrowser.
+pub const LIBID_SHDOCVW: Guid = Guid {
+    data1: 0xeab2_2ac0,
+    data2: 0x30c1,
+    data3: 0x11cf,
+    data4: [0xa7, 0xeb, 0x00, 0x00, 0xc0, 0x5b, 0xae, 0x0b],
+};
+/// DWebBrowserEvents2 (exdisp.h, mingw-w64 ; même GUID que
+/// `webbrowser.rs`).
+const DIID_DWEB_BROWSER_EVENTS2: Guid = Guid {
+    data1: 0x34a7_15a0,
+    data2: 0x6587,
+    data3: 0x11d0,
+    data4: [0x92, 0x4a, 0x00, 0x20, 0xaf, 0xc7, 0xac, 0x4d],
 };
 
 // ── Données ────────────────────────────────────────────────────────
@@ -2302,6 +2323,231 @@ fn accessibility() -> usize {
     })
 }
 
+/// Bibliothèque « SHDocVw » 1.1 (#2796) : la dispinterface
+/// DWebBrowserEvents2, que les puits d'événements ATL (IDispEventImpl)
+/// lisent pour connaître les arguments de chaque événement avant de
+/// l'appeler. Événements, arguments et types : documentation Microsoft
+/// Learn de DWebBrowserEvents2 ; DISPID : constantes DISPID_* du crate
+/// windows-sys 0.61.2 (MIT, Win32::Web::InternetExplorer), mêmes valeurs
+/// que exdispid.h. Rien n'est tiré d'un binaire éditeur.
+fn shdocvw() -> usize {
+    static LIB: OnceLock<usize> = OnceLock::new();
+    *LIB.get_or_init(|| unsafe {
+        let std = &*(stdole() as *const LibObj);
+        let disp = {
+            let d = lock(std);
+            tinfo_ptr(d.infos.iter().find(|e| e.d.guid == IID_IDISPATCH).unwrap())
+        };
+        lib_add_ref(std);
+        let lib = new_lib(LibData {
+            name: "SHDocVw".into(),
+            guid: LIBID_SHDOCVW,
+            major: 1,
+            minor: 1,
+            doc: "Microsoft Internet Controls".into(),
+            file: "C:\\Windows\\System32\\ieframe.dll".into(),
+            ..Default::default()
+        });
+        let l = &*lib;
+        let mut d = lock(l);
+        let p = TypeDesc::plain;
+        let by_ref = |vt: u16| TypeDesc::ptr(TypeDesc::plain(vt));
+        let ev = |name: &str, memid: i32, params: &[(&str, TypeDesc)]| {
+            let mut names = vec![name.to_string()];
+            names.extend(params.iter().map(|(n, _)| n.to_string()));
+            Func {
+                memid,
+                funckind: FUNC_DISPATCH,
+                invkind: 1,  // INVOKE_FUNC
+                callconv: 4, // CC_STDCALL
+                params: params
+                    .iter()
+                    .map(|(_, td)| Elem {
+                        td: td.clone(),
+                        flags: PARAMFLAG_FIN,
+                        default: None,
+                    })
+                    .collect(),
+                ret: Elem {
+                    td: TypeDesc::plain(VT_VOID),
+                    ..Default::default()
+                },
+                names,
+                ..Default::default()
+            }
+        };
+        let (b, l4, u4, v, s) = (VT_BOOL, VT_I4, VT_UI4, VT_VARIANT, VT_BSTR);
+        let disp_arg = || p(VT_DISPATCH);
+        let funcs = vec![
+            ev("StatusTextChange", 102, &[("Text", p(s))]),
+            ev(
+                "ProgressChange",
+                108,
+                &[("Progress", p(l4)), ("ProgressMax", p(l4))],
+            ),
+            ev(
+                "CommandStateChange",
+                105,
+                &[("Command", p(l4)), ("Enable", p(b))],
+            ),
+            ev("DownloadBegin", 106, &[]),
+            ev("DownloadComplete", 104, &[]),
+            ev("TitleChange", 113, &[("Text", p(s))]),
+            ev("PropertyChange", 112, &[("szProperty", p(s))]),
+            ev(
+                "BeforeNavigate2",
+                250,
+                &[
+                    ("pDisp", disp_arg()),
+                    ("URL", by_ref(v)),
+                    ("Flags", by_ref(v)),
+                    ("TargetFrameName", by_ref(v)),
+                    ("PostData", by_ref(v)),
+                    ("Headers", by_ref(v)),
+                    ("Cancel", by_ref(b)),
+                ],
+            ),
+            ev(
+                "NewWindow2",
+                251,
+                &[("ppDisp", by_ref(VT_DISPATCH)), ("Cancel", by_ref(b))],
+            ),
+            ev(
+                "NavigateComplete2",
+                252,
+                &[("pDisp", disp_arg()), ("URL", by_ref(v))],
+            ),
+            ev(
+                "DocumentComplete",
+                259,
+                &[("pDisp", disp_arg()), ("URL", by_ref(v))],
+            ),
+            ev("OnQuit", 253, &[]),
+            ev("OnVisible", 254, &[("Visible", p(b))]),
+            ev("OnToolBar", 255, &[("ToolBar", p(b))]),
+            ev("OnMenuBar", 256, &[("MenuBar", p(b))]),
+            ev("OnStatusBar", 257, &[("StatusBar", p(b))]),
+            ev("OnFullScreen", 258, &[("FullScreen", p(b))]),
+            ev("OnTheaterMode", 260, &[("TheaterMode", p(b))]),
+            ev("WindowSetResizable", 262, &[("Resizable", p(b))]),
+            ev("WindowSetLeft", 264, &[("Left", p(l4))]),
+            ev("WindowSetTop", 265, &[("Top", p(l4))]),
+            ev("WindowSetWidth", 266, &[("Width", p(l4))]),
+            ev("WindowSetHeight", 267, &[("Height", p(l4))]),
+            ev(
+                "WindowClosing",
+                263,
+                &[("IsChildWindow", p(b)), ("Cancel", by_ref(b))],
+            ),
+            ev(
+                "ClientToHostWindow",
+                268,
+                &[("CX", by_ref(l4)), ("CY", by_ref(l4))],
+            ),
+            ev("SetSecureLockIcon", 269, &[("SecureLockIcon", p(l4))]),
+            ev(
+                "FileDownload",
+                270,
+                &[("ActiveDocument", p(b)), ("Cancel", by_ref(b))],
+            ),
+            ev(
+                "NavigateError",
+                271,
+                &[
+                    ("pDisp", disp_arg()),
+                    ("URL", by_ref(v)),
+                    ("Frame", by_ref(v)),
+                    ("StatusCode", by_ref(v)),
+                    ("Cancel", by_ref(b)),
+                ],
+            ),
+            ev("PrintTemplateInstantiation", 225, &[("pDisp", disp_arg())]),
+            ev("PrintTemplateTeardown", 226, &[("pDisp", disp_arg())]),
+            ev(
+                "UpdatePageStatus",
+                227,
+                &[
+                    ("pDisp", disp_arg()),
+                    ("nPage", by_ref(v)),
+                    ("fDone", by_ref(v)),
+                ],
+            ),
+            ev("PrivacyImpactedStateChange", 272, &[("bImpacted", p(b))]),
+            ev(
+                "NewWindow3",
+                273,
+                &[
+                    ("ppDisp", by_ref(VT_DISPATCH)),
+                    ("Cancel", by_ref(b)),
+                    ("dwFlags", p(u4)),
+                    ("bstrUrlContext", p(s)),
+                    ("bstrUrl", p(s)),
+                ],
+            ),
+            ev(
+                "SetPhishingFilterStatus",
+                282,
+                &[("PhishingFilterStatus", p(l4))],
+            ),
+            ev(
+                "WindowStateChanged",
+                283,
+                &[("dwWindowStateFlags", p(u4)), ("dwValidFlagsMask", p(u4))],
+            ),
+            ev(
+                "NewProcess",
+                284,
+                &[
+                    ("lCauseFlag", p(l4)),
+                    ("pWB2", disp_arg()),
+                    ("Cancel", by_ref(b)),
+                ],
+            ),
+            ev(
+                "ThirdPartyUrlBlocked",
+                285,
+                &[("URL", by_ref(v)), ("dwCount", p(u4))],
+            ),
+            ev(
+                "RedirectXDomainBlocked",
+                286,
+                &[
+                    ("pDisp", disp_arg()),
+                    ("StartURL", by_ref(v)),
+                    ("RedirectURL", by_ref(v)),
+                    ("Frame", by_ref(v)),
+                    ("StatusCode", by_ref(v)),
+                ],
+            ),
+            ev("BeforeScriptExecute", 290, &[("pDispWindow", disp_arg())]),
+            ev(
+                "WebWorkerStarted",
+                288,
+                &[("dwUniqueID", p(u4)), ("bstrWorkerLabel", p(s))],
+            ),
+            ev("WebWorkerFinished", 289, &[("dwUniqueID", p(u4))]),
+        ];
+        let events = push_info(
+            l,
+            &mut d,
+            InfoData {
+                name: "DWebBrowserEvents2".into(),
+                kind: TKIND_DISPATCH,
+                guid: DIID_DWEB_BROWSER_EVENTS2,
+                flags: TYPEFLAG_FHIDDEN,
+                align: 8,
+                funcs,
+                refs: vec![(disp, true)],
+                impls: vec![(HREF_BASE, 0)],
+                ..Default::default()
+            },
+        );
+        layout(&mut d, events);
+        drop(d);
+        lib as usize
+    })
+}
+
 /// Bibliothèques inscrites par RegisterTypeLib (processus seulement).
 fn registered() -> &'static Mutex<Vec<(Guid, u16, u16, String, usize)>> {
     static R: Mutex<Vec<(Guid, u16, u16, String, usize)>> = Mutex::new(Vec::new());
@@ -2329,6 +2575,11 @@ pub unsafe fn load_by_path(path: &str) -> Option<usize> {
         lib_add_ref(&*(lib as *const LibObj));
         return Some(lib + 8);
     }
+    if base == "ieframe.dll" || base == "shdocvw.dll" {
+        let lib = shdocvw();
+        lib_add_ref(&*(lib as *const LibObj));
+        return Some(lib + 8);
+    }
     let r = registered().lock().unwrap_or_else(|e| e.into_inner());
     let &(_, _, _, _, lib) = r
         .iter()
@@ -2349,6 +2600,11 @@ pub unsafe fn load_registered(guid: &Guid, major: u16) -> Option<usize> {
         lib_add_ref(&*(lib as *const LibObj));
         return Some(lib + 8);
     }
+    if *guid == LIBID_SHDOCVW && major == 1 {
+        let lib = shdocvw();
+        lib_add_ref(&*(lib as *const LibObj));
+        return Some(lib + 8);
+    }
     let r = registered().lock().unwrap_or_else(|e| e.into_inner());
     let &(_, _, _, _, lib) = r
         .iter()
@@ -2365,6 +2621,9 @@ pub fn registered_path(guid: &Guid, major: u16) -> Option<String> {
     }
     if *guid == LIBID_ACCESSIBILITY && major == 1 {
         return Some("C:\\Windows\\System32\\oleacc.dll".into());
+    }
+    if *guid == LIBID_SHDOCVW && major == 1 {
+        return Some("C:\\Windows\\System32\\ieframe.dll".into());
     }
     let r = registered().lock().unwrap_or_else(|e| e.into_inner());
     r.iter()
@@ -2749,6 +3008,62 @@ mod tests {
     unsafe extern "win64" fn trois_enfants(_this: usize, n: *mut i32) -> i32 {
         *n = 3;
         0
+    }
+
+    /// #2796 : LoadRegTypeLib(SHDocVw 1.1) rend la dispinterface
+    /// DWebBrowserEvents2 ; DocumentComplete (259) y prend (IDispatch*,
+    /// VARIANT*) et ne rend rien.
+    #[test]
+    fn shdocvw_dwebbrowserevents2_par_loadregtypelib_2796() {
+        unsafe {
+            let mut tl = 0usize;
+            assert_eq!(
+                super::super::oleaut32::load_reg_type_lib(
+                    &LIBID_SHDOCVW as *const _ as *const u8,
+                    1,
+                    1,
+                    0,
+                    &mut tl
+                ),
+                S_OK
+            );
+            let mut ti = 0usize;
+            assert_eq!(
+                slot::<HrPP>(tl, 6)(
+                    tl,
+                    &DIID_DWEB_BROWSER_EVENTS2 as *const _ as usize,
+                    &mut ti as *mut _ as usize
+                ),
+                S_OK
+            );
+            let mut attr = 0usize;
+            assert_eq!(slot::<HrP>(ti, 3)(ti, &mut attr as *mut _ as usize), S_OK);
+            assert_eq!(*((attr + 44) as *const u32), TKIND_DISPATCH);
+            assert_eq!(*((attr + 48) as *const u16), 41, "cFuncs");
+            let n = *((attr + 48) as *const u16) as u32;
+            slot::<unsafe extern "win64" fn(usize, usize)>(ti, 19)(ti, attr);
+            let get_func: unsafe extern "win64" fn(usize, u32, *mut usize) -> i32 = slot(ti, 5);
+            let mut trouve = false;
+            for i in 0..n {
+                let mut f = 0usize;
+                assert_eq!(get_func(ti, i, &mut f), S_OK);
+                if *(f as *const i32) == 259 {
+                    trouve = true;
+                    assert_eq!(*((f + 24) as *const u32), FUNC_DISPATCH);
+                    assert_eq!(*((f + 36) as *const i16), 2, "cParams");
+                    let p = *((f + 16) as *const usize);
+                    assert_eq!(*((p + 8) as *const u16), VT_DISPATCH);
+                    assert_eq!(*((p + 32 + 8) as *const u16), VT_PTR);
+                    let inner = *((p + 32) as *const usize);
+                    assert_eq!(*((inner + 8) as *const u16), VT_VARIANT);
+                    assert_eq!(*((f + 48 + 8) as *const u16), VT_VOID);
+                }
+                slot::<unsafe extern "win64" fn(usize, usize)>(ti, 20)(ti, f);
+            }
+            assert!(trouve, "DocumentComplete absent");
+            slot::<Hr0>(ti, 2)(ti);
+            slot::<Hr0>(tl, 2)(tl);
+        }
     }
 
     /// #1837 : la bibliothèque « Accessibility » 1.1 donne l'ITypeInfo
