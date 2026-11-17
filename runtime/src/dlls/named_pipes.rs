@@ -938,6 +938,62 @@ mod tests {
         close_server(h);
     }
 
+    /// #2786 : PIPE_NOWAIT. ReadFile sur un tube vide rend tout de suite
+    /// ERROR_NO_DATA au lieu de bloquer ; les données arrivées se lisent ;
+    /// SetNamedPipeHandleState(PIPE_WAIT) rend le handle bloquant.
+    #[test]
+    fn tube_non_bloquant_2786() {
+        use crate::dlls::kernel32 as k;
+        let _teb = crate::process::test_teb();
+        let name = format!("winlux-test-2786-{}", std::process::id());
+        let path = format!("\\\\.\\pipe\\{name}\0");
+        let h = unsafe { k::create_named_pipe_a(path.as_ptr(), 3, 1, 1, 4096, 4096, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        let c = open_client(&name, 0);
+        assert_ne!(c, usize::MAX);
+        let mut buf = [0u8; 12];
+        let mut n = 7u32;
+        let t = std::time::Instant::now();
+        assert_eq!(
+            unsafe { k::read_file(h, buf.as_mut_ptr(), 12, &mut n, 0) },
+            0
+        );
+        assert_eq!(crate::process::last_error(), 232);
+        assert_eq!(n, 0);
+        assert!(t.elapsed() < std::time::Duration::from_millis(500));
+        let msg = b"<init/>";
+        let mut w = 0u32;
+        assert_eq!(
+            unsafe { k::write_file(c, msg.as_ptr(), msg.len() as u32, &mut w, 0) },
+            1
+        );
+        assert_eq!(
+            unsafe { k::read_file(h, buf.as_mut_ptr(), 12, &mut n, 0) },
+            1
+        );
+        assert_eq!(&buf[..n as usize], msg);
+        // Retour au mode bloquant : la lecture attend l'écriture du client.
+        let wait = 0u32;
+        assert_eq!(
+            unsafe { k::set_named_pipe_handle_state(h, &wait, std::ptr::null(), std::ptr::null()) },
+            1
+        );
+        let writer = std::thread::spawn(move || {
+            let _teb = crate::process::test_teb();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let mut w = 0u32;
+            unsafe { k::write_file(c, b"ok".as_ptr(), 2, &mut w, 0) }
+        });
+        assert_eq!(
+            unsafe { k::read_file(h, buf.as_mut_ptr(), 12, &mut n, 0) },
+            1
+        );
+        assert_eq!(&buf[..n as usize], b"ok");
+        assert_eq!(writer.join().unwrap(), 1);
+        k::close_handle(c);
+        k::close_handle(h);
+    }
+
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain([0]).collect()
     }
