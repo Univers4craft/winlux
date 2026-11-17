@@ -572,12 +572,16 @@ impl Interpreter {
         let Some(frame) = self.frames.last() else {
             return format!("IL_{offset:04x}");
         };
-        let owner = self.domain[self.current]
-            .method_owner
-            .get(frame.method as usize)
+        // La méthode du cadre appartient à son assembly, pas forcément à
+        // l'assembly courante : une méthode interne de mscorlib appelée
+        // depuis une autre assembly n'empile pas de cadre (#2780).
+        let owner = self
+            .domain
+            .get(frame.asm)
+            .and_then(|d| d.method_owner.get(frame.method as usize))
             .copied()
             .unwrap_or(0);
-        let a = &self.assembly;
+        let a = self.assembly_at(frame.asm);
         let name = a.get_string(a.get_method_def(frame.method).name);
         if owner == 0 {
             return format!("{name} IL_{offset:04x}");

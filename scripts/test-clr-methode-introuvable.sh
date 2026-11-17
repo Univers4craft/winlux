@@ -18,17 +18,32 @@ cat >"$work/F.cs" <<'CS'
 namespace System.Windows.Forms {
     public class EssaiAbsentStatique { public static void SetText(string s) { } }
     public class EssaiAbsent { public EssaiAbsent() { } public void Start() { } }
+    public class EssaiBaseAbsente : System.Collections.Generic.ICollection<int> {
+        public int Count { get { return 0; } }
+        public bool IsReadOnly { get { return false; } }
+        public void Add(int x) { }
+        public void Clear() { }
+        public bool Contains(int x) { return false; }
+        public void CopyTo(int[] a, int i) { }
+        public bool Remove(int x) { return false; }
+        public System.Collections.Generic.IEnumerator<int> GetEnumerator() { return null; }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() { return null; }
+    }
 }
 CS
 cat >"$work/Essai.cs" <<'CS'
 extern alias Facade;
 using System;
+class Derivee : Facade::System.Windows.Forms.EssaiBaseAbsente { }
 static class Essai
 {
     static int Main()
     {
         try { Facade::System.Windows.Forms.EssaiAbsentStatique.SetText("x"); } catch (MissingMethodException) { }
         try { new Facade::System.Windows.Forms.EssaiAbsent().Start(); } catch (MissingMethodException) { }
+        // Méthode d'interface de mscorlib sur un objet dont la base manque :
+        // l'appel entre dans mscorlib, l'appelant reste Essai::Main.
+        try { System.Collections.Generic.ICollection<int> c = new Derivee(); int n = c.Count; } catch (MissingMethodException) { }
         return 200;
     }
 }
@@ -45,4 +60,6 @@ grep -q "méthode introuvable System.Windows.Forms.EssaiAbsentStatique::SetText 
     || fail "appel statique sans appelant"
 grep -q "méthode introuvable System.Windows.Forms.EssaiAbsent::Start appelée par Essai::Main IL_[0-9a-f]*, this : System.Windows.Forms.EssaiAbsent" "$work/out.txt" \
     || fail "appel d'instance sans appelant ni type de this"
+grep -q "méthode introuvable System.Collections.Generic.ICollection\`1::get_Count appelée par Essai::Main IL_[0-9a-f]*, this : Derivee" "$work/out.txt" \
+    || fail "appel entré dans mscorlib attribué à une méthode de mscorlib"
 echo "CLR : méthode introuvable journalisée avec appelant et type de this (#2780)"
