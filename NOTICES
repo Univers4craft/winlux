@@ -37,7 +37,7 @@ Dépendances transitives compilées statiquement :
   zlib-rs             — Zlib
 
 Le texte de licence et les mentions de copyright de chacune de ces
-bibliothèques sont livrés dans /usr/share/doc/winlux-desktop/crates/ ; le
+bibliothèques sont livrés dans /usr/share/winlux/notices/crates/ ; le
 fichier /usr/share/doc/winlux-desktop/copyright les récapitule. La liste est
 vérifiée à chaque construction par scripts/stage-notices.py.
 
