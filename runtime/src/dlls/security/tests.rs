@@ -422,6 +422,36 @@ fn comptes_bien_connus_resolus() {
     }
 }
 
+/// #2792 : une seule variable pour les deux tailles (Creative Cloud) : les
+/// tailles d'entrée (257) suffisent, l'appel réussit.
+#[test]
+fn tailles_partagees_de_lookup_account_sid_2792() {
+    let mut sid = [0u8; 68];
+    let mut size = sid.len() as u32;
+    // WinLocalSystemSid (22) : S-1-5-18, « NT AUTHORITY\SYSTEM ».
+    assert_eq!(
+        unsafe { CreateWellKnownSid(22, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+        1
+    );
+    let (mut n, mut d) = ([0u16; 257], [0u16; 257]);
+    let (mut len, mut u) = (257u32, 0u32);
+    let p: *mut u32 = &mut len;
+    let ok = unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            sid.as_ptr(),
+            n.as_mut_ptr(),
+            p,
+            d.as_mut_ptr(),
+            p,
+            &mut u,
+        )
+    };
+    assert_eq!(ok, 1);
+    assert_eq!(String::from_utf16_lossy(&n[..6]), "SYSTEM");
+    assert_eq!(String::from_utf16_lossy(&d[..12]), "NT AUTHORITY");
+}
+
 /// SECURITY_DESCRIPTOR absolu d'un programme x86 : 20 octets, pointeurs sur
 /// 4 octets aux décalages 4, 8, 12, 16. Rien n'est écrit au-delà
 /// (SteamService.exe, #1881).
