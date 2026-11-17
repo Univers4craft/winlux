@@ -204,7 +204,7 @@ fn tables() -> &'static Tables {
             n_get_specified,
             n_out_null,
             n_get_node_typed_value,
-            n_put_node_value,
+            n_put_node_typed_value,
             n_get_data_type,
             n_put_data_type,
             n_get_xml,
@@ -954,6 +954,23 @@ unsafe extern "win64" fn n_get_node_typed_value(this: *mut Obj, out: *mut u8) ->
         Kind::Document | Kind::Fragment => put_variant_str(out, None),
         _ => put_variant_str(out, Some(&d.text(id))),
     }
+}
+/// `put_nodeTypedValue` : la valeur est convertie vers le type de données
+/// du nœud et l'appel n'échoue que si la conversion est impossible (Learn,
+/// « nodeTypedValue Property »). Sans type de données, un élément reçoit la
+/// chaîne pour contenu, comme put_text ; put_nodeValue, lui, refuse les
+/// éléments. Creative Cloud construit ainsi son XML « CAD » (#2788).
+unsafe extern "win64" fn n_put_node_typed_value(this: *mut Obj, v: *const u8) -> i32 {
+    let o = obj(this);
+    let id = this_node(o);
+    if matches!(lock(&o.doc).node(id).kind, Kind::Document | Kind::Fragment) {
+        return E_FAIL;
+    }
+    let Some(text) = variant_text(v) else {
+        return E_INVALIDARG;
+    };
+    lock(&o.doc).set_text(id, &text);
+    S_OK
 }
 unsafe extern "win64" fn n_get_data_type(_this: *mut Obj, out: *mut u8) -> i32 {
     put_variant_str(out, None)
@@ -1962,6 +1979,49 @@ mod tests {
             assert_eq!(read_bstr(x), "<r a=\"1\"><e>é</e></r>");
             super::super::oleaut32::sys_free_string(x);
             super::super::oleaut32::sys_free_string(a);
+            release(root);
+            release(doc);
+        }
+    }
+
+    /// #2788 : put_nodeTypedValue (emplacement 31) pose une chaîne comme
+    /// contenu d'un élément sans type de données ; put_nodeValue (9) garde
+    /// son refus.
+    #[test]
+    fn valeur_typee_d_un_element_2788() {
+        unsafe {
+            let clsid = CLASSES[9].0;
+            let mut out: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                create_builtin(&clsid, &IID_IXMLDOMDOCUMENT2, &mut out),
+                Some(S_OK)
+            );
+            let doc = out as *mut Obj;
+            let text = bstr("<r/>");
+            let mut ok = 0i16;
+            let load_xml: unsafe extern "win64" fn(*mut Obj, *const u16, *mut i16) -> i32 =
+                call(doc, 65);
+            assert_eq!(load_xml(doc, text, &mut ok), S_OK);
+            super::super::oleaut32::sys_free_string(text);
+            let get_root: unsafe extern "win64" fn(*mut Obj, *mut *mut Obj) -> i32 = call(doc, 45);
+            let mut root = std::ptr::null_mut();
+            assert_eq!(get_root(doc, &mut root), S_OK);
+            let mut buf = [0u64; 3];
+            let v = buf.as_mut_ptr() as *mut u8;
+            *(v as *mut u16) = 8; // VT_BSTR
+            let valeur = bstr("abc");
+            *(v.add(8) as *mut *const u16) = valeur;
+            let put_value: unsafe extern "win64" fn(*mut Obj, *const u8) -> i32 = call(root, 9);
+            assert_eq!(put_value(root, v), E_FAIL);
+            let put_typed: unsafe extern "win64" fn(*mut Obj, *const u8) -> i32 = call(root, 31);
+            assert_eq!(put_typed(root, v), S_OK);
+            assert_eq!(put_typed(root, std::ptr::null()), E_INVALIDARG);
+            let get_xml: unsafe extern "win64" fn(*mut Obj, *mut *mut u16) -> i32 = call(root, 34);
+            let mut x = std::ptr::null_mut();
+            assert_eq!(get_xml(root, &mut x), S_OK);
+            assert_eq!(read_bstr(x), "<r>abc</r>");
+            super::super::oleaut32::sys_free_string(x);
+            super::super::oleaut32::sys_free_string(valeur);
             release(root);
             release(doc);
         }

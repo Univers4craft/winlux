@@ -1,7 +1,11 @@
-# #2757 : le rapport de plantage nomme le binaire winlux qui a tourné (sa
-# version et le début de son sha256), pas seulement l'image installée. Le
-# comportement est gardé par scripts/test-report.py (faux binaire posé).
-rapport = (ROOT / "scripts" / "winlux-report.py").read_text(encoding="utf-8")
-essai = (ROOT / "scripts" / "test-report.py").read_text(encoding="utf-8")
-ok("def winlux_binary" in rapport and "image installée" in essai and "#2757" in essai,
+# #2757 : le rapport de plantage nomme le binaire winlux qui a tourné, avec le
+# début de son sha256, pas l'image installée. Comportement vérifié en chargeant
+# winlux-report.py avec un binaire témoin : l'interpréteur Python, qui répond à
+# --version, et aucune image installée.
+ok((lambda sortie: sortie.startswith("Python 3") and ", sha256 " in sortie)(subprocess.run(
+       [sys.executable, "-I", "-c",
+        "import runpy, sys; print(runpy.run_path(sys.argv[1], run_name='report_test')['winlux_version']())",
+        str(SCRIPTS / "winlux-report.py")],
+       env={**os.environ, "WINLUX_REPORT_BINARY": sys.executable, "WINLUX_BUILD_INFO": "/nonexistent"},
+       capture_output=True, text=True, timeout=60).stdout),
    "rapport : version et empreinte du binaire qui a planté (#2757)")
