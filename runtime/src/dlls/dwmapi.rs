@@ -43,12 +43,16 @@ pub unsafe extern "win64" fn DwmGetWindowAttribute(
     let out = value as *mut u8;
     match attr {
         // Composition annoncée désactivée (DwmIsCompositionEnabled), et
-        // aucune fenêtre n'est jamais masquée par DWM.
+        // aucune fenêtre n'est masquée par DWM, sauf celle d'un autre
+        // processus affichée sur un autre bureau virtuel (#2046) :
+        // DWM_CLOAKED_SHELL.
         DWMWA_NCRENDERING_ENABLED | DWMWA_CLOAKED => {
             if size != 4 {
                 return E_INVALIDARG;
             }
-            out.cast::<u32>().write_unaligned(0);
+            let cloaked = attr == DWMWA_CLOAKED && crate::dlls::gui::foreign_cloaked(hwnd);
+            out.cast::<u32>()
+                .write_unaligned(if cloaked { 2 } else { 0 });
         }
         DWMWA_EXTENDED_FRAME_BOUNDS | DWMWA_CAPTION_BUTTON_BOUNDS => {
             if size != 16 {

@@ -32,15 +32,19 @@ problems = tool["missing_from_notices"](notices, fake)
 ok(len(problems) == 2 and "bidule" in problems[0] + problems[1], f"oubli et licence fausse signalés ({problems})")
 
 with tempfile.TemporaryDirectory() as temp:
-    doc = tool["stage"](Path(temp), meta)
-    ok((doc / "LICENSE").read_text() == (project / "LICENSE").read_text(), "LICENSE (GPL-3.0) livré")
-    ok((doc / "NOTICES").read_text() == notices, "NOTICES livré")
+    notices_dir = tool["stage"](Path(temp), meta)
+    doc = Path(temp) / "usr/share/doc/winlux-desktop"
+    ok(notices_dir == Path(temp) / "usr/share/winlux/notices", "notices sous /usr/share/winlux/notices (#2743)")
+    ok(sorted(p.name for p in doc.iterdir()) == ["copyright"],
+       "seul copyright sous /usr/share/doc/winlux-desktop, gardé par path-include (#2743)")
+    ok((notices_dir / "LICENSE").read_text() == (project / "LICENSE").read_text(), "LICENSE (GPL-3.0) livré")
+    ok((notices_dir / "NOTICES").read_text() == notices, "NOTICES livré")
     copyright = (doc / "copyright").read_text(encoding="utf-8")
     ok(copyright.startswith("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/"),
        "copyright au format Debian")
     ok("License: GPL-3.0-or-later" in copyright, "copyright : Winlux sous GPL-3.0-or-later")
     for package in packages:
-        folder = doc / "crates" / f"{package['name']}-{package['version']}"
+        folder = notices_dir / "crates" / f"{package['name']}-{package['version']}"
         texts = list(folder.iterdir()) if folder.is_dir() else []
         ok(bool(texts), f"{package['name']} {package['version']} : textes de licence livrés ({[t.name for t in texts]})")
         ok(f"crates/{package['name']}-{package['version']}/*" in copyright,
@@ -51,7 +55,8 @@ with tempfile.TemporaryDirectory() as temp:
        f"{len(paragraphs)} paragraphes Files complets")
 
 apt = (project / "scripts/stage-apt-root.py").read_text(encoding="utf-8")
-ok('"usr/share/doc/winlux-desktop/"' in apt, "le paquet winlux-desktop emporte ses notices")
+ok('"usr/share/doc/winlux-desktop/"' in apt and '"usr/share/winlux/"' in apt,
+   "le paquet winlux-desktop emporte ses notices")
 iso = (project / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 ok(iso.index("stage-notices.py") < iso.index("stage-apt-root.py"),
    "l'ISO pose les notices avant de construire le paquet")

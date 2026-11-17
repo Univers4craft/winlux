@@ -10880,14 +10880,20 @@ pub unsafe extern "win64" fn create_named_pipe_a(
     max: u32,
     _out_size: u32,
     _in_size: u32,
-    _timeout: u32,
+    timeout: u32,
     _sa: usize,
 ) -> usize {
     if name.is_null() {
         crate::process::set_last_error(123);
         return usize::MAX;
     }
-    let h = crate::dlls::named_pipes::create(&crate::dlls::cstr(name), open_mode, pipe_mode, max);
+    let h = crate::dlls::named_pipes::create(
+        &crate::dlls::cstr(name),
+        open_mode,
+        pipe_mode,
+        max,
+        timeout,
+    );
     crate::dlls::inherit::from_security_attributes(h, _sa);
     h
 }

@@ -97,6 +97,7 @@ pub struct Ssl {
     // condensats par morceaux et vérification de signature (MSIX)
     pub EVP_MD_CTX_new: unsafe extern "C" fn() -> P,
     pub EVP_MD_CTX_free: unsafe extern "C" fn(P),
+    pub EVP_MD_CTX_copy_ex: unsafe extern "C" fn(P, P) -> c_int,
     pub EVP_DigestInit_ex: unsafe extern "C" fn(P, P, P) -> c_int,
     pub EVP_DigestUpdate: unsafe extern "C" fn(P, *const c_void, usize) -> c_int,
     pub EVP_DigestFinal_ex: unsafe extern "C" fn(P, *mut u8, *mut u32) -> c_int,
@@ -245,6 +246,7 @@ pub fn ssl() -> Option<&'static Ssl> {
             CRYPTO_free: f!(c, "CRYPTO_free"),
             EVP_MD_CTX_new: f!(c, "EVP_MD_CTX_new"),
             EVP_MD_CTX_free: f!(c, "EVP_MD_CTX_free"),
+            EVP_MD_CTX_copy_ex: f!(c, "EVP_MD_CTX_copy_ex"),
             EVP_DigestInit_ex: f!(c, "EVP_DigestInit_ex"),
             EVP_DigestUpdate: f!(c, "EVP_DigestUpdate"),
             EVP_DigestFinal_ex: f!(c, "EVP_DigestFinal_ex"),
@@ -318,6 +320,18 @@ impl Hasher {
             }
         }
     }
+    /// Copie de l'état en cours (BCryptDuplicateHash, CryptDuplicateHash).
+    pub fn try_clone(&self) -> Option<Hasher> {
+        let s = ssl()?;
+        unsafe {
+            let ctx = (s.EVP_MD_CTX_new)();
+            if ctx.is_null() || (s.EVP_MD_CTX_copy_ex)(ctx, self.ctx) != 1 {
+                (s.EVP_MD_CTX_free)(ctx);
+                return None;
+            }
+            Some(Hasher { ctx })
+        }
+    }
     pub fn finish(self) -> Vec<u8> {
         let mut out = vec![0u8; 64];
         let mut n = 0u32;
@@ -330,6 +344,10 @@ impl Hasher {
         out
     }
 }
+
+// Un contexte EVP_MD_CTX n'est lié à aucun thread ; les condensats en cours
+// sont gardés derrière un Mutex (bcrypt, advapi32), jamais partagés.
+unsafe impl Send for Hasher {}
 
 impl Drop for Hasher {
     fn drop(&mut self) {

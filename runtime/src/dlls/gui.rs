@@ -349,6 +349,121 @@ pub fn foreign_window(hwnd: usize) -> Option<super::gui_shared::Foreign> {
     super::gui_shared::foreign(hwnd)
 }
 
+/// Fenêtre d'un autre processus du compte avec sa classe et son titre
+/// (#2046).
+pub fn foreign_named(hwnd: usize) -> Option<super::gui_shared::Listed> {
+    if lock(windows()).contains_key(&hwnd) {
+        return None;
+    }
+    super::gui_shared::foreign_named(hwnd)
+}
+
+/// Inscrit ou met à jour une fenêtre de ce processus dans l'annuaire
+/// partagé du compte (#1228, #2046) : toute fenêtre de premier niveau, et
+/// les contrôles qui ont une fenêtre X11 (processus GPU de Chromium). Les
+/// fenêtres message-only n'y figurent pas, comme dans EnumWindows. À
+/// appeler hors du verrou de la table et du backend.
+pub fn publish_shared(hwnd: usize) {
+    use super::gui_shared::{Foreign, FLAG_TOP_LEVEL, FLAG_VISIBLE};
+    let Some((top_level, parent, visible, style, ex_style, class, title)) =
+        lock(windows()).get(&hwnd).map(|w| {
+            (
+                is_top_level(w),
+                w.parent,
+                w.visible,
+                w.style,
+                w.ex_style,
+                w.class.clone(),
+                w.title.clone(),
+            )
+        })
+    else {
+        return;
+    };
+    if crate::dlls::user32::is_message_only(hwnd) {
+        return;
+    }
+    let (mut xid, mut top) = (None, None);
+    with_backend(|b| {
+        xid = b.native_window(hwnd);
+        top = b.native_top_window(hwnd);
+    });
+    if !top_level && xid.is_none() {
+        return;
+    }
+    let mut flags = 0;
+    if visible {
+        flags |= FLAG_VISIBLE;
+    }
+    if top_level {
+        flags |= FLAG_TOP_LEVEL;
+    }
+    let tid = window_thread_id(hwnd).unwrap_or_else(|| super::kernel32::get_current_thread_id());
+    super::gui_shared::publish(
+        hwnd,
+        Foreign {
+            tid,
+            xid: xid.unwrap_or(0),
+            style,
+            ex_style,
+            top: top.or(xid).unwrap_or(0),
+            parent,
+            flags,
+            ..Default::default()
+        },
+        &class,
+        // Le texte d'un contrôle change à chaque touche : pas publié.
+        if top_level { &title } else { "" },
+    );
+}
+
+/// Rectangle écran d'une fenêtre d'un autre processus, lu sur le serveur X.
+pub fn foreign_screen_rect(hwnd: usize) -> Option<Rect> {
+    let f = foreign_window(hwnd)?;
+    let xid = if f.top != 0 { f.top } else { f.xid };
+    if xid == 0 {
+        return None;
+    }
+    let mut r = None;
+    with_backend(|b| r = b.foreign_geometry(xid));
+    r
+}
+
+/// Fenêtre d'un autre processus « visible » mais absente de l'écran (sur
+/// un autre bureau virtuel, où openbox la démappe) : DWMWA_CLOAKED la dit
+/// masquée, comme Windows pour une fenêtre d'un autre bureau. Sans cela le
+/// suivi d'occultation de Chromium se croirait couvert par elle et
+/// cesserait de peindre (#2046, symptôme de #1886).
+pub fn foreign_cloaked(hwnd: usize) -> bool {
+    let Some(f) = foreign_window(hwnd) else {
+        return false;
+    };
+    let xid = if f.top != 0 { f.top } else { f.xid };
+    if f.flags & super::gui_shared::FLAG_VISIBLE == 0 || xid == 0 {
+        return false;
+    }
+    let mut viewable = None;
+    let mut state = WINDOW_NORMAL;
+    with_backend(|b| {
+        viewable = b.foreign_viewable(xid);
+        state = b.foreign_state(xid);
+    });
+    viewable == Some(false) && state != WINDOW_MINIMIZED
+}
+
+/// État (WINDOW_*) d'une fenêtre, de ce processus ou d'un autre.
+pub fn any_window_state(hwnd: usize) -> u8 {
+    let mut state = WINDOW_NORMAL;
+    match foreign_window(hwnd) {
+        Some(f) => {
+            let xid = if f.top != 0 { f.top } else { f.xid };
+            with_backend(|b| state = b.foreign_state(xid));
+        }
+        None => with_backend(|b| state = b.window_state(hwnd)),
+    }
+    state
+}
+
 // ---------- Files de messages par thread ----------
 
 pub struct Queue {
@@ -3239,6 +3354,28 @@ pub trait GuiBackend: Send {
     fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
         None
     }
+    /// Fenêtre X11 que gère le gestionnaire de fenêtres pour ce HWND (son
+    /// cadre de barre de menus, sinon sa fenêtre), clé de l'ordre Z (#2046).
+    fn native_top_window(&mut self, _hwnd: usize) -> Option<u64> {
+        None
+    }
+    /// Fenêtres gérées de tous les processus, du fond vers le sommet.
+    fn client_stacking(&mut self) -> Vec<u64> {
+        Vec::new()
+    }
+    /// Rectangle écran logique d'une fenêtre X11 d'un autre processus.
+    fn foreign_geometry(&mut self, _xid: u64) -> Option<Rect> {
+        None
+    }
+    /// État (WINDOW_*) d'une fenêtre X11 d'un autre processus.
+    fn foreign_state(&mut self, _xid: u64) -> u8 {
+        WINDOW_NORMAL
+    }
+    /// La fenêtre X11 d'un autre processus est-elle affichée (MapState
+    /// Viewable) ? `None` : on ne sait pas.
+    fn foreign_viewable(&mut self, _xid: u64) -> Option<bool> {
+        None
+    }
     /// Largeur et hauteur logiques d'un texte dans une police GDI.
     fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> {
         None
@@ -4488,8 +4625,11 @@ pub fn window_client_rect(hwnd: usize) -> Option<Rect> {
     lock(windows()).get(&hwnd).map(|w| w.client_rect())
 }
 
+/// Titre d'une fenêtre ; celle d'un autre processus du compte donne son
+/// titre publié (#2046).
 pub fn title_of(hwnd: usize) -> Option<String> {
-    lock(windows()).get(&hwnd).map(|w| w.title.clone())
+    let own = lock(windows()).get(&hwnd).map(|w| w.title.clone());
+    own.or_else(|| super::gui_shared::foreign_named(hwnd).map(|l| l.title))
 }
 
 pub fn set_title(hwnd: usize, title: &str) -> bool {
@@ -4861,6 +5001,7 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             };
             if set_title(hwnd, &text) {
                 with_backend(|b| b.set_title(hwnd, &text));
+                publish_shared(hwnd);
             }
             1
         }
@@ -5064,7 +5205,8 @@ pub fn set_window_ex_style(hwnd: usize, ex_style: u32) -> Option<u32> {
 
 /// Nom de classe d'une fenêtre.
 pub fn window_class(hwnd: usize) -> Option<String> {
-    lock(windows()).get(&hwnd).map(|w| w.class.clone())
+    let own = lock(windows()).get(&hwnd).map(|w| w.class.clone());
+    own.or_else(|| super::gui_shared::foreign_named(hwnd).map(|l| l.class))
 }
 
 /// Le hwnd parent d'une fenêtre.
@@ -5081,7 +5223,11 @@ pub fn set_window_parent(hwnd: usize, new_parent: usize) -> Option<usize> {
 
 /// La fenêtre est-elle visible ?
 pub fn is_window_visible(hwnd: usize) -> bool {
-    lock(windows()).get(&hwnd).is_some_and(|w| w.visible)
+    let own = lock(windows()).get(&hwnd).map(|w| w.visible);
+    own.unwrap_or_else(|| {
+        super::gui_shared::foreign(hwnd)
+            .is_some_and(|f| f.flags & super::gui_shared::FLAG_VISIBLE != 0)
+    })
 }
 
 /// La fenêtre existe-t-elle ?
@@ -5114,25 +5260,161 @@ pub fn enum_top_level_windows() -> Vec<usize> {
     top_level_in_z_order(&lock(windows()))
 }
 
-/// FindWindowEx (#2106) : parmi les enfants directs de `parent` (0 : les
-/// fenêtres de premier niveau, dans l'ordre Z, que `keep` filtre), la
-/// première qui suit `after` (0 : depuis le début) et dont la classe
-/// (sans casse) et le titre correspondent. `after` absent de la liste :
-/// aucune, une boucle d'énumération s'arrête toujours.
+/// Fenêtres de premier niveau de **tous** les processus du compte, du
+/// sommet vers le fond (EnumWindows, GetWindow, FindWindow, #2046), sans
+/// les fenêtres message-only. L'ordre est celui du gestionnaire de fenêtres
+/// (`_NET_CLIENT_LIST_STACKING`) ; viennent ensuite les fenêtres qu'il ne
+/// gère pas (cachées) : celles de ce processus dans son ordre Z, puis celles
+/// des autres, la plus récente d'abord.
+pub fn all_top_level_windows() -> Vec<usize> {
+    let own: Vec<usize> = enum_top_level_windows()
+        .into_iter()
+        .filter(|&h| !crate::dlls::user32::is_message_only(h))
+        .collect();
+    let foreign = super::gui_shared::foreign_top_levels();
+    let mut stacking = Vec::new();
+    let mut own_tops = Vec::with_capacity(own.len());
+    with_backend(|b| {
+        stacking = b.client_stacking();
+        own_tops = own.iter().map(|&h| b.native_top_window(h)).collect();
+    });
+    merge_z_order(&stacking, &own, &own_tops, &foreign)
+}
+
+/// Fusion de l'ordre Z (voir `all_top_level_windows`). `stacking` va du
+/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`.
+fn merge_z_order(
+    stacking: &[u64],
+    own: &[usize],
+    own_tops: &[Option<u64>],
+    foreign: &[super::gui_shared::Listed],
+) -> Vec<usize> {
+    let rank: HashMap<u64, usize> = stacking
+        .iter()
+        .enumerate()
+        .filter(|(_, &x)| x != 0)
+        .map(|(i, &x)| (x, i))
+        .collect();
+    // Clé : (0, sommet d'abord) pour les fenêtres gérées, (1, ordre) pour
+    // les nôtres non gérées, (2, HWND décroissant) pour les autres.
+    let mut keyed: Vec<((u8, usize), usize)> = Vec::with_capacity(own.len() + foreign.len());
+    for (i, &h) in own.iter().enumerate() {
+        let key = match own_tops
+            .get(i)
+            .copied()
+            .flatten()
+            .and_then(|x| rank.get(&x))
+        {
+            Some(&r) => (0, usize::MAX - r),
+            None => (1, i),
+        };
+        keyed.push((key, h));
+    }
+    for l in foreign {
+        let top = if l.f.top != 0 { l.f.top } else { l.f.xid };
+        let key = match rank.get(&top) {
+            Some(&r) => (0, usize::MAX - r),
+            None => (2, usize::MAX - l.hwnd),
+        };
+        keyed.push((key, l.hwnd));
+    }
+    keyed.sort_by_key(|&(k, _)| k);
+    let mut seen = std::collections::HashSet::new();
+    keyed
+        .into_iter()
+        .map(|(_, h)| h)
+        .filter(|h| seen.insert(*h))
+        .collect()
+}
+
+/// Où cherche FindWindowEx (#2106).
+pub enum FindScope {
+    /// Fenêtres de premier niveau de tous les processus du compte (#2046).
+    TopLevel,
+    /// Fenêtres message-only de ce processus (HWND_MESSAGE).
+    MessageOnly,
+    /// Enfants directs d'une fenêtre de ce processus.
+    Children(usize),
+}
+
+/// FindWindowEx (#2106) : dans `scope`, la première fenêtre qui suit
+/// `after` (0 : depuis le début) et dont la classe (sans casse) et le titre
+/// correspondent. `after` absent de la liste : aucune, une boucle
+/// d'énumération s'arrête toujours.
 pub fn find_window_ex(
-    parent: usize,
+    scope: FindScope,
     after: usize,
     class: Option<&str>,
     title: Option<&str>,
-    keep: impl Fn(usize) -> bool,
 ) -> Option<usize> {
-    let map = lock(windows());
-    let list: Vec<usize> = if parent == 0 {
-        top_level_in_z_order(&map)
+    let list: Vec<usize> = match scope {
+        FindScope::TopLevel => all_top_level_windows(),
+        FindScope::MessageOnly => enum_top_level_windows()
             .into_iter()
-            .filter(|&h| keep(h))
-            .collect()
+            .filter(|&h| crate::dlls::user32::is_message_only(h))
+            .collect(),
+        FindScope::Children(parent) => {
+            let map = lock(windows());
+            let mut v: Vec<usize> = map
+                .iter()
+                .filter(|(_, w)| w.parent == parent && !is_top_level(w))
+                .map(|(h, _)| *h)
+                .collect();
+            v.sort_unstable();
+            v
+        }
+    };
+    let start = if after == 0 {
+        0
     } else {
+        list.iter().position(|&h| h == after)? + 1
+    };
+    let matches = |c: &str, t: &str| {
+        class.is_none_or(|want| want.eq_ignore_ascii_case(c)) && title.is_none_or(|want| want == t)
+    };
+    list[start..].iter().copied().find(|&h| {
+        let own = lock(windows()).get(&h).map(|w| matches(&w.class, &w.title));
+        own.unwrap_or_else(|| {
+            super::gui_shared::foreign_named(h).is_some_and(|l| matches(&l.class, &l.title))
+        })
+    })
+}
+
+/// Le bureau (GetDesktopWindow) : parent des fenêtres de premier niveau.
+pub const DESKTOP_HWND: usize = 1;
+
+/// Renvoie un « voisin » de la fenêtre (GetWindow / GW_*). Les fenêtres de
+/// premier niveau ont pour fratrie celles de tous les processus du compte,
+/// dans l'ordre Z (#2046) ; GW_CHILD du bureau donne la plus haute.
+pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
+    // GW_HWNDFIRST=0 GW_HWNDLAST=1 GW_HWNDNEXT=2 GW_HWNDPREV=3
+    // GW_OWNER=4 GW_CHILD=5
+    if hwnd == DESKTOP_HWND {
+        return match cmd {
+            5 => all_top_level_windows().first().copied(),
+            _ => None,
+        };
+    }
+    // (premier niveau ?, parent ou propriétaire) : de ce processus ou d'un
+    // autre.
+    let own = lock(windows())
+        .get(&hwnd)
+        .map(|w| (is_top_level(w), w.parent));
+    let (top_level, parent) = match own {
+        Some(o) => o,
+        None => {
+            let f = foreign_window(hwnd)?;
+            if f.flags & super::gui_shared::FLAG_TOP_LEVEL != 0 {
+                (true, f.parent)
+            } else {
+                // Contrôle d'un autre processus : sa fratrie n'est pas
+                // publiée.
+                return None;
+            }
+        }
+    };
+    let own_children = |parent: usize| -> Vec<usize> {
+        let map = lock(windows());
         let mut v: Vec<usize> = map
             .iter()
             .filter(|(_, w)| w.parent == parent && !is_top_level(w))
@@ -5141,49 +5423,15 @@ pub fn find_window_ex(
         v.sort_unstable();
         v
     };
-    let start = if after == 0 {
-        0
-    } else {
-        list.iter().position(|&h| h == after)? + 1
-    };
-    list[start..].iter().copied().find(|h| {
-        map.get(h).is_some_and(|w| {
-            class.is_none_or(|c| c.eq_ignore_ascii_case(&w.class))
-                && title.is_none_or(|t| w.title == t)
-        })
-    })
-}
-
-/// Renvoie un « voisin » de la fenêtre (GetWindow / GW_*).
-pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
-    let map = lock(windows());
-    if !map.contains_key(&hwnd) {
-        return None;
-    }
-    // GW_HWNDFIRST=0 GW_HWNDLAST=1 GW_HWNDNEXT=2 GW_HWNDPREV=3
-    // GW_OWNER=4 GW_CHILD=5
-    // Fratrie dans un ordre stable : ordre Z pour le premier niveau, handle
-    // croissant pour les enfants d'un même parent.
-    let siblings = |parent: usize| -> Vec<usize> {
-        if parent == 0 {
-            top_level_in_z_order(&map)
-        } else {
-            let mut v: Vec<usize> = map
-                .iter()
-                .filter(|(_, w)| w.parent == parent)
-                .map(|(h, _)| *h)
-                .collect();
-            v.sort_unstable();
-            v
-        }
-    };
     match cmd {
         0..=3 => {
-            let parent = map
-                .get(&hwnd)
-                .filter(|w| !is_top_level(w))
-                .map_or(0, |w| w.parent);
-            let list = siblings(parent);
+            // Fratrie dans un ordre stable : ordre Z pour le premier niveau,
+            // handle croissant pour les enfants d'un même parent.
+            let list = if top_level {
+                all_top_level_windows()
+            } else {
+                own_children(parent)
+            };
             let pos = list.iter().position(|&h| h == hwnd)?;
             match cmd {
                 0 => list.first().copied(),
@@ -5192,12 +5440,9 @@ pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
                 _ => pos.checked_sub(1).and_then(|p| list.get(p).copied()),
             }
         }
-        4 => {
-            // GW_OWNER : même chose que parent ici
-            map.get(&hwnd)
-                .and_then(|w| if w.parent != 0 { Some(w.parent) } else { None })
-        }
-        5 => siblings(hwnd).first().copied(), // GW_CHILD : premier enfant
+        // GW_OWNER : même chose que parent ici
+        4 => (parent != 0).then_some(parent),
+        5 => own_children(hwnd).first().copied(), // GW_CHILD : premier enfant
         _ => None,
     }
 }
@@ -6788,6 +7033,42 @@ pub fn take_raw_mouse() -> (i32, i32, i32, [bool; 8]) {
 
 #[cfg(test)]
 mod tests_survol {
+
+    /// #2046 : ordre Z commun à tous les processus, d'après le gestionnaire
+    /// de fenêtres ; puis nos fenêtres non gérées, puis celles des autres.
+    #[test]
+    fn ordre_z_fusionne_entre_processus() {
+        use super::merge_z_order;
+        use crate::dlls::gui_shared::{Foreign, Listed};
+        let listed = |hwnd: usize, top: u64| Listed {
+            hwnd,
+            f: Foreign {
+                top,
+                ..Default::default()
+            },
+            class: String::new(),
+            title: String::new(),
+        };
+        // Pile du fond vers le sommet : 0x10 (à nous), 0x20 (autre), 0x11.
+        let stacking = [0x10, 0x20, 0x11, 0x99];
+        let own = [0x4_0001, 0x4_0002, 0x4_0003, 0x4_0004];
+        let own_tops = [Some(0x10), Some(0x11), None, None];
+        let foreign = [
+            listed(0x5_0001, 0x20),
+            listed(0x5_0002, 0),
+            listed(0x5_0003, 0x77),
+        ];
+        assert_eq!(
+            merge_z_order(&stacking, &own, &own_tops, &foreign),
+            vec![0x4_0002, 0x5_0001, 0x4_0001, 0x4_0003, 0x4_0004, 0x5_0003, 0x5_0002]
+        );
+        // Sans serveur X : notre ordre, puis les autres.
+        assert_eq!(
+            merge_z_order(&[], &own[..2], &[None, None], &foreign[..1]),
+            vec![0x4_0001, 0x4_0002, 0x5_0001]
+        );
+    }
+
     use super::{hover_tick, Hover};
     use std::time::{Duration, Instant};
 
