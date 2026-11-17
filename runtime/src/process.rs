@@ -1001,8 +1001,21 @@ pub fn call_dllmain(entry: usize, base: usize, reason: u32, reserved: usize) -> 
     f(base, reason, reserved)
 }
 
+/// Marge ajoutée à la pile du thread principal (#2755) : nos fonctions
+/// d'API s'exécutent sur la pile du programme, avec des cadres bien plus
+/// gros que ceux de Windows (client X11, Direct2D, DirectWrite en Rust).
+/// Une pile de 1 Mio, suffisante sous Windows, ne l'est donc pas ici. La
+/// marge n'est que réservée : Linux n'engage une page qu'au premier accès.
+pub const MAIN_STACK_MARGIN: usize = 8 << 20;
+
+/// Taille de la pile du thread principal : réserve de l'en-tête PE
+/// (bornée), plus la marge de Winlux.
+pub fn main_stack_size(header_reserve: u64) -> usize {
+    (header_reserve as usize).clamp(1 << 20, 256 << 20) + MAIN_STACK_MARGIN
+}
+
 pub fn run(exe: Module) -> ! {
-    let reserve = (exe.pe.stack_reserve as usize).clamp(1 << 20, 256 << 20);
+    let reserve = main_stack_size(exe.pe.stack_reserve);
     let h = std::thread::Builder::new()
         .name("win-main".into())
         .stack_size(reserve)
@@ -1065,4 +1078,19 @@ fn is_chromium_dir(dir: &std::path::Path) -> bool {
     dir.join("icudtl.dat").is_file()
         && (dir.join("v8_context_snapshot.bin").is_file()
             || dir.join("snapshot_blob.bin").is_file())
+}
+
+#[cfg(test)]
+mod pile_principale {
+    use super::*;
+
+    #[test]
+    fn marge_ajoutee_a_la_reserve_de_l_en_tete() {
+        // En-tête de 1 Mio (Paint.NET) : 9 Mio en tout.
+        assert_eq!(main_stack_size(1 << 20), 9 << 20);
+        // Réserve absente ou minuscule : au moins 1 Mio, plus la marge.
+        assert_eq!(main_stack_size(0), (1 << 20) + MAIN_STACK_MARGIN);
+        // Réserve démesurée : bornée à 256 Mio, plus la marge.
+        assert_eq!(main_stack_size(1 << 40), (256 << 20) + MAIN_STACK_MARGIN);
+    }
 }
