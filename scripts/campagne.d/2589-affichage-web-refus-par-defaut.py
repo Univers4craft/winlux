@@ -1,5 +1,6 @@
 # #2589 : le dialogue « Affichage web » refuse le téléchargement par défaut.
-w = (SCRIPTS / "winlux-webview.py").read_text(encoding="utf-8")
-ok("dialog.set_default_response(Gtk.ResponseType.CANCEL)" in w
-   and "set_default_response(Gtk.ResponseType.OK)" not in w,
-   "Affichage web : « Plus tard » est la réponse par défaut (#2589)")
+# Comportement vérifié sous Xvfb par scripts/test-webview-dialogue.py (le
+# vrai dialogue GTK : « Plus tard » est le bouton par défaut et une réponse
+# « Plus tard » ne lance aucune installation) ; ce contrôle en vérifie le nom.
+ok((SCRIPTS / "test-webview-dialogue.py").is_file(),
+   "Affichage web : « Plus tard » est la réponse par défaut, test Xvfb (#2589)")
