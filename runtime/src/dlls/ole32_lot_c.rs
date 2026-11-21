@@ -858,6 +858,16 @@ pub extern "win64" fn ro_revoke_activation_factories(cookie: usize) {
         .retain(|(k, _, _)| *k != cookie);
 }
 
+/// Le programme a-t-il inscrit lui-même une fabrique pour `name`
+/// (RoRegisterActivationFactories) ?
+pub(crate) fn has_registered_factory(name: &str) -> bool {
+    factories()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|(_, n, _)| n == name)
+}
+
 /// Fabrique inscrite par le programme pour cette classe :
 /// PFNGETACTIVATIONFACTORY puis QueryInterface vers `iid`.
 pub(crate) unsafe fn registered_activation_factory(

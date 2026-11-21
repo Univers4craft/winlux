@@ -1104,6 +1104,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_ole::ALL.iter())
         .chain(super::com_mf_chaine::ALL.iter())
         .chain(super::com_webbrowser::ALL.iter())
+        .chain(super::com_winrt::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
 }
@@ -1968,6 +1969,12 @@ macro_rules! k {
 pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Iface>)> {
     let k: &'static [A] = match (dll, func) {
         ("ole32", "CoCreateInstance") => k!(I, In(&IUNKNOWN), I, Iid, OutQ),
+        // WinRT (#2740) : fabrique d'une classe, interface choisie par REFIID ;
+        // objet activé par le constructeur par défaut.
+        ("ole32" | "combase", "RoGetActivationFactory") => k!(I, Iid, OutQ),
+        ("ole32" | "combase", "RoActivateInstance") => {
+            k!(I, Out(&super::com_winrt::IINSPECTABLE))
+        }
         ("ole32", "CoGetClassObject") => k!(I, I, I, Iid, OutQ),
         ("ole32", "CoRegisterClassObject") => k!(I, In(&ICLASSFACTORY), I, I, I),
         ("ole32", "CreateStreamOnHGlobal") => k!(I, I, Out(&ISTREAM)),
