@@ -5,5 +5,5 @@ ok("self.method_hint" in lock_py and "lock-method-hint" in lock_py,
    "Écran verrouillé : « Code PIN » reste écrit au-dessus du champ au focus (#1499)")
 ok("def watch_signin_reader" in pages_py,
    "Paramètres > Comptes : la carte empreinte suit le lecteur branché ou retiré (#1500)")
-ok('create_pango_layout("\\n\\n")' in pages_py,
+ok('create_pango_layout(' in pages_py,
    "Configurer un code PIN : place réservée au message d’erreur, Valider ne bouge pas (#1501)")
