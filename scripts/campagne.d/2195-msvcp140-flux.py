@@ -1,6 +1,7 @@
 # Runtime VC++ intégré : flux et locales de msvcp140 (basic_ios, iostream, _Locinfo…) pour OBS sans redistribuable (#2195).
 _m = (ROOT / "runtime/src/dlls/mod.rs").read_text()
-ok("m.extend(msvcp140_flux::exports());" in _m,
+_t = (ROOT / "runtime/src/dlls/msvcp140_flux/tests.rs").read_text()
+ok("pub mod msvcp140_flux;" in _m and "msvcp140_flux::exports" in _m and "fn exports_du_mur_observe(" in _t,
    "msvcp140 sert aussi les flux et les locales (#2195)")
 _p = (ROOT / "runtime/src/dlls/msvcp140_flux.rs").read_text()
 _e = _p[_p.index("pub fn exports()"):]
