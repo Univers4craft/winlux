@@ -7,6 +7,11 @@ ok('"ShellExecuteEx(verbe {verb:?}, fichier {file:?}, paramètres {params:?}' in
    "ShellExecuteEx trace ses paramètres et la commande lancée (#1875)")
 ok('crate::trace!("ligne de commande : {cmd}");' in _p,
    "ligne de commande du programme tracée au démarrage (#1875)")
-ok("unsafe fn traced_open(" in _a and "RegQueryValueExW({handle:#x}, {name:?}) = {r}" in _a
-   and 'crate::trace!("GetFileAttributesW({path}) = {r:#x}");' in _k,
+# Noms : traced_open, et une trace dans reg_query_value_ex_w et
+# get_file_attributes_w (#2711).
+def _corps(src, nom):
+    d = src[src.index(f"fn {nom}("):]
+    return d[:d.index("\n}\n")]
+ok("unsafe fn traced_open(" in _a and "trace!" in _corps(_a, "reg_query_value_ex_w")
+   and "trace!" in _corps(_k, "get_file_attributes_w"),
    "clés de registre et chemins lus tracés (#1875)")

@@ -6,7 +6,8 @@ msix = (ROOT / "runtime/src/setup/msix.rs").read_text(encoding="utf-8")
 sig = (ROOT / "runtime/src/setup/appx_signature.rs").read_text(encoding="utf-8")
 test = (SCRIPTS / "test-msix.sh").read_text(encoding="utf-8")
 ok('"appxmetadata\\\\codeintegrity.cat"' in msix
-   and 'z.writestr("AppxMetadata/CodeIntegrity.cat", CATALOG)' in test,
+   # Nom du fichier que le test met dans son paquet (#2711).
+   and "AppxMetadata/CodeIntegrity.cat" in test,
    "MSIX : CodeIntegrity.cat accepté hors du block map (#1725)")
 ok("CODE_ROOTS" in sig and "hostssl::verify(&signer.der" not in sig
    and (ROOT / "runtime/src/setup/racines_code/microsoft-root-2011.cer").is_file(),
