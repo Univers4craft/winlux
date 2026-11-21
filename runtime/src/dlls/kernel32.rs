@@ -170,6 +170,24 @@ pub(crate) fn mark_overlapped_handle(h: usize) {
 pub(crate) fn is_overlapped_handle(h: usize) -> bool {
     lock(overlapped_handles()).contains(&h)
 }
+/// Tubes en mode non bloquant (PIPE_NOWAIT, par CreateNamedPipe ou
+/// SetNamedPipeHandleState) : ReadFile rend la main tout de suite, avec
+/// ERROR_NO_DATA quand le tube est vide (#2786).
+static NOWAIT_PIPES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+fn nowait_pipes() -> &'static Mutex<HashSet<usize>> {
+    NOWAIT_PIPES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+const PIPE_NOWAIT: u32 = 1;
+fn set_pipe_nowait(h: usize, nowait: bool) {
+    if nowait {
+        lock(nowait_pipes()).insert(h);
+    } else {
+        lock(nowait_pipes()).remove(&h);
+    }
+}
+fn is_nowait_pipe(h: usize) -> bool {
+    lock(nowait_pipes()).contains(&h)
+}
 struct IoResult {
     done: bool,
     /// Internal, InternalHigh et hEvent sont à jour : GetOverlappedResult
@@ -941,6 +959,9 @@ pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
         .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
     if is_overlapped_handle(handle) {
         lock(overlapped_handles()).insert(new_h);
+    }
+    if is_nowait_pipe(handle) {
+        set_pipe_nowait(new_h, true);
     }
     Some(new_h)
 }
@@ -2301,6 +2322,23 @@ pub unsafe extern "win64" fn read_file(
                 return 0;
             }
             return 1;
+        }
+    }
+    // PIPE_NOWAIT : « ReadFile, WriteFile, and ConnectNamedPipe always
+    // return immediately » (CreateNamedPipe, Learn) ; un tube vide rend
+    // ERROR_NO_DATA. Bloquer ici figeait le fil de lecture de Creative
+    // Cloud, qui attend ainsi la réponse de son enfant élevé (#2786).
+    if is_nowait_pipe(h) {
+        if let Some(fd) = fd_of_handle(h) {
+            let mut p = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if libc::poll(&mut p, 1, 0) == 0 {
+                crate::process::set_last_error(232);
+                return 0;
+            }
         }
     }
     if h == (-10isize) as usize {
@@ -3765,6 +3803,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         return 0;
     }
     note_renders_itself(n);
+    if super::atlthunk::hidden_for_x86(n) {
+        crate::process::set_last_error(126);
+        return 0;
+    }
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -7060,7 +7102,7 @@ unsafe fn create_process_common(
         d.launched(c.id());
     }
     if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
-        crate::sandbox_fallback::note_child(c.id(), &line);
+        crate::sandbox_fallback::note_child(c.id(), &line, same_base.is_some());
         // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
         // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
         // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP
@@ -7557,6 +7599,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
+        set_pipe_nowait(handle, false);
         forget_dir_watcher(handle);
         if let Some((path, dev, ino)) = doomed {
             // Le nom doit toujours désigner le même fichier : jamais un
@@ -10890,6 +10933,9 @@ pub unsafe extern "win64" fn create_named_pipe_a(
         max,
         timeout,
     );
+    if h != usize::MAX && pipe_mode & PIPE_NOWAIT != 0 {
+        set_pipe_nowait(h, true);
+    }
     crate::dlls::inherit::from_security_attributes(h, _sa);
     h
 }
@@ -11837,6 +11883,9 @@ pub unsafe extern "win64" fn set_named_pipe_handle_state(
     _max_collect: *const u32,
     _timeout: *const u32,
 ) -> i32 {
+    if !_mode.is_null() {
+        set_pipe_nowait(_h, *_mode & PIPE_NOWAIT != 0);
+    }
     1
 }
 

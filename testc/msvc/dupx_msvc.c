@@ -92,7 +92,9 @@ static int is_child(const u16 *s) { return has(s, "--enfant-dupx"); }
 
 // Bac à sable de Chromium qui ne démarre pas (#236) : le navigateur tue son
 // enfant --type=renderer encore suspendu. Winlux doit proposer de relancer
-// l'application sans bac à sable, puis la relancer avec --no-sandbox.
+// l'application sans bac à sable, puis la relancer avec --no-sandbox. Comme
+// chez Chromium, l'enfant de contenu porte --mojo-platform-channel-handle=
+// (#2696 : sans elle, ce n'est pas Chromium et il n'y a pas de relance).
 static void sandbox_case(void) {
     if (has(GetCommandLineW(), "--no-sandbox")) ExitProcess(0);
     u16 exe[512];
@@ -102,7 +104,7 @@ static void sandbox_case(void) {
     line[n++] = '"';
     for (u32 i = 0; exe[i]; i++) line[n++] = exe[i];
     line[n++] = '"';
-    const char *arg = " --type=renderer --enfant-inutile";
+    const char *arg = " --type=renderer --mojo-platform-channel-handle=0 --enfant-inutile";
     for (u32 i = 0; arg[i]; i++) line[n++] = arg[i];
     line[n] = 0;
     struct startup si;
