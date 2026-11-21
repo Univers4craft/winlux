@@ -1,5 +1,5 @@
 // Façade de compilation « System.Windows.Forms » pour les témoins de la BCL
-// Winlux (#2753, #2764, #2795, #2801). Licence GPL 3. Jamais chargée ni livrée : un témoin
+// Winlux (#2753, #2764, #2795, #2801, #2807). Licence GPL 3. Jamais chargée ni livrée : un témoin
 // compilé contre elle appelle MessageBox, Application et Form dans
 // l'assembly « System.Windows.Forms », comme une appli WinForms .NET
 // Framework ; le moteur les trouve dans notre mscorlib (ou, pour MessageBox,
@@ -79,6 +79,7 @@ namespace System.Windows.Forms
         public static void Run(Form mainForm) { throw new InvalidOperationException("façade"); }
         public static void Exit() { throw new InvalidOperationException("façade"); }
         public static void DoEvents() { throw new InvalidOperationException("façade"); }
+        public static string ProductVersion { get { throw new InvalidOperationException("façade"); } }
     }
 
     public class Control : System.ComponentModel.Component, IWin32Window
@@ -184,6 +185,19 @@ namespace System.Windows.Forms
         public void PerformStep() { throw new InvalidOperationException("façade"); }
     }
 
+    public enum TextDataFormat { Text = 0, UnicodeText = 1, Rtf = 2, Html = 3, CommaSeparatedValue = 4 }
+
+    public sealed class Clipboard
+    {
+        private Clipboard() { }
+        public static void SetText(string text) { throw new InvalidOperationException("façade"); }
+        public static void SetText(string text, TextDataFormat format) { throw new InvalidOperationException("façade"); }
+        public static string GetText() { throw new InvalidOperationException("façade"); }
+        public static string GetText(TextDataFormat format) { throw new InvalidOperationException("façade"); }
+        public static bool ContainsText() { throw new InvalidOperationException("façade"); }
+        public static void Clear() { throw new InvalidOperationException("façade"); }
+    }
+
     public class ScrollableControl : Control { }
 
     public enum AutoScaleMode { None = 0, Font = 1, Dpi = 2, Inherit = 3 }
@@ -214,6 +228,7 @@ namespace System.Windows.Forms
         public DialogResult DialogResult { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
         public IButtonControl AcceptButton { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
         public IButtonControl CancelButton { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.Icon Icon { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData) { throw new InvalidOperationException("façade"); }
         protected override bool ProcessDialogKey(Keys keyData) { throw new InvalidOperationException("façade"); }
         protected override void OnLayout(LayoutEventArgs levent) { throw new InvalidOperationException("façade"); }
