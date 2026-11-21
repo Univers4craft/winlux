@@ -15,6 +15,25 @@ namespace System.Diagnostics
         public long ElapsedTicks { get { throw new InvalidOperationException("façade"); } }
         public bool IsRunning { get { throw new InvalidOperationException("façade"); } }
     }
+
+    public sealed class FileVersionInfo
+    {
+        public static FileVersionInfo GetVersionInfo(string fileName) { throw new InvalidOperationException("façade"); }
+        public string FileName { get { throw new InvalidOperationException("façade"); } }
+        public string FileVersion { get { throw new InvalidOperationException("façade"); } }
+        public string ProductVersion { get { throw new InvalidOperationException("façade"); } }
+        public string CompanyName { get { throw new InvalidOperationException("façade"); } }
+        public string ProductName { get { throw new InvalidOperationException("façade"); } }
+        public string FileDescription { get { throw new InvalidOperationException("façade"); } }
+        public string LegalCopyright { get { throw new InvalidOperationException("façade"); } }
+        public string OriginalFilename { get { throw new InvalidOperationException("façade"); } }
+        public int FileMajorPart { get { throw new InvalidOperationException("façade"); } }
+        public int FileMinorPart { get { throw new InvalidOperationException("façade"); } }
+        public int FileBuildPart { get { throw new InvalidOperationException("façade"); } }
+        public int FilePrivatePart { get { throw new InvalidOperationException("façade"); } }
+        public int ProductMajorPart { get { throw new InvalidOperationException("façade"); } }
+        public bool IsDebug { get { throw new InvalidOperationException("façade"); } }
+    }
 }
 
 namespace System
