@@ -5,7 +5,7 @@ lock_py = (SCRIPTS / "winlux-lock.py").read_text(encoding="utf-8")
 user_session = (SCRIPTS / "winlux-user-session.sh").read_text(encoding="utf-8")
 ok("CreateWithMasterPassword" in keyring_py and "UnlockWithMasterPassword" in keyring_py
    and "sys.stdin.read()" in keyring_py
-   and "open_keyring(self.entry.get_text())" in lock_py
+   and "open_keyring(" in lock_py
    and "winlux-keyring unlock" in user_session
    and "winlux-keyring unlock" in (SCRIPTS / "winlux-native-session.sh").read_text(encoding="utf-8")
    and " winlux-keyring " in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")

@@ -524,6 +524,37 @@ impl Interpreter {
                     "GetPublicKeyTokenText" => {
                         alloc_managed_string(id.token.as_deref().unwrap_or(""))
                     }
+                    // Ressources de manifeste (#2824) : octets d'une ressource
+                    // nommée (null si absente) et liste des noms.
+                    "LireRessource" => {
+                        let nom = match args.get(1) {
+                            Some(Value::Ref(p)) if !p.is_null() => {
+                                super::bcl::read_managed_string(*p)
+                            }
+                            _ => return Some(Err(ClrException::null_reference())),
+                        };
+                        let octets = self
+                            .try_assembly_at(handle.wrapping_sub(1))
+                            .and_then(|a| a.manifest_resource(&nom).map(<[u8]>::to_vec));
+                        match octets {
+                            None => Value::Null,
+                            Some(d) => {
+                                let arr = gc::with_gc(|gc| {
+                                    gc.alloc_array_of(types::TYPE_BYTE, 1, d.len())
+                                });
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(d.as_ptr(), arr.add(8), d.len())
+                                };
+                                Value::Ref(arr)
+                            }
+                        }
+                    }
+                    "NomsRessources" => super::bcl::alloc_string_array(
+                        &self
+                            .try_assembly_at(handle.wrapping_sub(1))
+                            .map(|a| a.manifest_resource_names())
+                            .unwrap_or_default(),
+                    ),
                     _ => return None,
                 }
             }
