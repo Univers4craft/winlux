@@ -231,6 +231,11 @@ struct SetObj {
     /// Valeurs IInspectable retenues (AddRef), ou 0 pour une valeur nulle.
     items: Mutex<BTreeMap<String, usize>>,
     handlers: Mutex<Vec<(u64, usize)>>,
+    /// Nom de classe rendu par GetRuntimeClassName.
+    class: &'static str,
+    /// Appelé après chaque changement, hors de tout verrou : les réglages
+    /// d'ApplicationData s'en servent pour s'enregistrer (#2194).
+    on_change: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 const OFF_OBSERVABLE: usize = W;
@@ -238,6 +243,16 @@ const OFF_MAP: usize = 2 * W;
 const OFF_ITERABLE: usize = 3 * W;
 
 fn new_set() -> usize {
+    new_set_with(CLASS_SET, None)
+}
+
+/// Ensemble de propriétés d'une autre classe (les réglages
+/// `ApplicationDataContainerSettings`, #2194), avec un rappel après chaque
+/// changement. Rend l'interface IPropertySet, avec une référence.
+pub(crate) fn new_set_with(
+    class: &'static str,
+    on_change: Option<Box<dyn Fn() + Send + Sync>>,
+) -> usize {
     Box::into_raw(Box::new(SetObj {
         v_set: &SET_VTBL,
         v_observable: &OBSERVABLE_VTBL,
@@ -246,7 +261,38 @@ fn new_set() -> usize {
         refs: AtomicU32::new(1),
         items: Mutex::new(BTreeMap::new()),
         handlers: Mutex::new(Vec::new()),
+        class,
+        on_change,
     })) as usize
+}
+
+/// IMap<String, Object>, pour les tests des modules qui utilisent
+/// `new_set_with`.
+#[cfg(test)]
+pub(crate) fn map_iid() -> Guid {
+    generic().map
+}
+
+/// Paires d'un ensemble créé par `new_set_with`, chaque valeur retenue une
+/// fois de plus.
+pub(crate) unsafe fn set_entries(base: usize) -> Vec<(String, usize)> {
+    snapshot(base)
+}
+
+/// Pose une valeur sans lever MapChanged ni appeler le rappel (relecture
+/// des réglages enregistrés) ; la référence de `value` est reprise.
+pub(crate) unsafe fn set_put_quiet(base: usize, key: String, value: usize) {
+    if let Some(old) = lock(&set(base).items).insert(key, value) {
+        release(old);
+    }
+}
+
+/// Retenir et libérer un ensemble par son interface IPropertySet.
+pub(crate) unsafe fn set_add_ref_ptr(base: usize) {
+    set_add_ref_base(base);
+}
+pub(crate) unsafe fn set_release_ptr(base: usize) {
+    set_release_base(base);
 }
 
 unsafe fn set<'a>(base: usize) -> &'a SetObj {
@@ -318,12 +364,30 @@ set_thunks!(obs_qi, obs_add_ref, obs_release, OFF_OBSERVABLE);
 set_thunks!(map_qi, map_add_ref, map_release, OFF_MAP);
 set_thunks!(itb_qi, itb_add_ref, itb_release, OFF_ITERABLE);
 
-unsafe extern "win64" fn set_class_name(_this: usize, out: *mut usize) -> i32 {
-    hstr_out(CLASS_SET, out)
+/// Les quatre tables partagent ce nom : `this` est ramené à l'objet par sa
+/// table.
+unsafe fn set_base_of(this: usize) -> usize {
+    let vt = *(this as *const usize);
+    if vt == &OBSERVABLE_VTBL as *const _ as usize {
+        this - OFF_OBSERVABLE
+    } else if vt == &MAP_VTBL as *const _ as usize {
+        this - OFF_MAP
+    } else if vt == &ITERABLE_VTBL as *const _ as usize {
+        this - OFF_ITERABLE
+    } else {
+        this
+    }
+}
+unsafe extern "win64" fn set_class_name(this: usize, out: *mut usize) -> i32 {
+    hstr_out(set(set_base_of(this)).class, out)
 }
 
-/// Lève `MapChanged` vers chaque abonné, hors de tout verrou.
+/// Lève `MapChanged` vers chaque abonné, hors de tout verrou, après avoir
+/// appelé le rappel de changement.
 unsafe fn raise(base: usize, change: i32, key: &str) {
+    if let Some(f) = set(base).on_change.as_ref() {
+        f();
+    }
     let handlers: Vec<usize> = lock(&set(base).handlers)
         .iter()
         .map(|&(_, h)| {
