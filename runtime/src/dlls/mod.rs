@@ -277,6 +277,7 @@ pub mod shlwapi_path;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod storage_appdata;
+pub mod storage_settings;
 pub mod sysdlls;
 pub mod tas_page;
 pub mod taskbarlist_com;
