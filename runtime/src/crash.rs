@@ -220,7 +220,7 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         crate::dlls::jobs::on_crash();
         // Ses fichiers « effacés à la fermeture » aussi (#2040).
         crate::dlls::doomed::on_exit();
-        libc::_exit(code as i32);
+        libc::_exit(crate::dlls::kernel32::linux_exit_status(code));
     }
 }
 

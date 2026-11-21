@@ -93,3 +93,95 @@ fn exports_de_la_famille() {
         assert!(m.contains_key(n), "{n}");
     }
 }
+
+/// #2139 : longueur, pas en avant et en arrière, valeur d'un caractère.
+#[test]
+fn mbslen_mbsdec_en_page_932() {
+    unsafe {
+        let s = b"a\x95\x5Cb\0";
+        let p = s.as_ptr();
+        assert_eq!(mbslen_in(SJIS, p), 3);
+        assert_eq!(mbslen_in(ANSI, p), 4);
+        assert_eq!(mbsdec_in(SJIS, p, p.add(3)), p.add(1));
+        assert_eq!(mbsdec_in(SJIS, p, p.add(1)), p);
+        assert!(mbsdec_in(SJIS, p, p).is_null());
+        assert_eq!(mbsdec_in(ANSI, p, p.add(3)), p.add(2));
+    }
+}
+
+/// #2139 : comparaisons par caractère, avec ou sans casse.
+#[test]
+fn mbsncmp_et_mbsicmp() {
+    unsafe {
+        let a = b"Ab\x95\x5Cz\0".as_ptr();
+        let b = b"aB\x95\x5Cy\0".as_ptr();
+        assert_eq!(mbsncmp_in(SJIS, a, b, 3, true), 0);
+        assert_eq!(mbsncmp_in(SJIS, a, b, 4, true), 1);
+        assert_eq!(mbsncmp_in(SJIS, a, b, 1, false), -1);
+        assert_eq!(mbsicmp(b"ABC\0".as_ptr(), b"abc\0".as_ptr()), 0);
+        assert_eq!(mbsncmp_in(SJIS, a, std::ptr::null(), 1, false), NLSCMPERROR);
+    }
+}
+
+/// #2139 : recherche alignée sur les caractères, empans, inversion.
+#[test]
+fn mbsstr_mbsspn_mbsrev() {
+    unsafe {
+        // En 932, le « \ » de « 表 » (0x95 0x5C) n'est pas une occurrence.
+        let s = b"\x95\x5C\\x\0";
+        let p = s.as_ptr();
+        assert_eq!(mbsstr_in(SJIS, p, b"\\x\0".as_ptr()), p.add(2));
+        assert_eq!(mbsstr_in(ANSI, p, b"\\\0".as_ptr()), p.add(1));
+        assert!(mbsstr_in(SJIS, p, b"zz\0".as_ptr()).is_null());
+        assert_eq!(mbsstr_in(SJIS, p, b"\0".as_ptr()), p);
+        assert_eq!(span_in(SJIS, p, b"\\\0".as_ptr(), false), 2);
+        assert_eq!(span_in(SJIS, b"aab\0".as_ptr(), b"a\0".as_ptr(), true), 2);
+        let mut r = *b"a\x95\x5Cb\0";
+        mbsrev_in(SJIS, r.as_mut_ptr());
+        assert_eq!(&r, b"b\x95\x5Ca\0");
+    }
+}
+
+/// #2139 : copies et ajouts bornés, sans couper un caractère double.
+#[test]
+fn mbsncpy_mbsncat_mbsnbcat() {
+    unsafe {
+        let mut d = [0xFFu8; 8];
+        mbsncpy_in(SJIS, d.as_mut_ptr(), b"\x95\x5Cab\0".as_ptr(), 2);
+        assert_eq!(&d[..4], b"\x95\x5Ca\xFF");
+        mbsncpy_in(SJIS, d.as_mut_ptr(), b"z\0".as_ptr(), 3);
+        assert_eq!(&d[..4], b"z\0\0\xFF");
+        let mut c = [0u8; 8];
+        c[0] = b'x';
+        mbsncat_in(SJIS, c.as_mut_ptr(), b"\x95\x5Cab\0".as_ptr(), 2, false);
+        assert_eq!(&c[..5], b"x\x95\x5Ca\0");
+        let mut c = [0u8; 8];
+        c[0] = b'x';
+        mbsncat_in(SJIS, c.as_mut_ptr(), b"a\x95\x5C\0".as_ptr(), 2, true);
+        assert_eq!(&c[..3], b"xa\0");
+    }
+}
+
+/// #2139 : casse, remplissage et découpage passent par les `*_s`.
+#[test]
+fn mbslwr_mbsset_mbstok() {
+    unsafe {
+        let mut s = *b"AbC\0";
+        assert_eq!(mbslwr(s.as_mut_ptr()), s.as_mut_ptr());
+        assert_eq!(&s, b"abc\0");
+        mbsupr(s.as_mut_ptr());
+        assert_eq!(&s, b"ABC\0");
+        mbsnset(s.as_mut_ptr(), b'z' as u32, 2);
+        assert_eq!(&s, b"zzC\0");
+        mbsset(s.as_mut_ptr(), b'q' as u32);
+        assert_eq!(&s, b"qqq\0");
+        let mut t = *b"a,b\0";
+        let first = mbstok(t.as_mut_ptr(), b",\0".as_ptr());
+        assert_eq!(*first, b'a');
+        let second = mbstok(std::ptr::null_mut(), b",\0".as_ptr());
+        assert_eq!(*second, b'b');
+        assert!(mbstok(std::ptr::null_mut(), b",\0".as_ptr()).is_null());
+        assert_eq!(mbctoupper(b'a' as u32), b'A' as u32);
+        assert_eq!(mbctolower(0x955C), 0x955C);
+    }
+}

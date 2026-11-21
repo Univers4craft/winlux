@@ -4280,7 +4280,38 @@ pub fn destroy_window(hwnd: usize) -> bool {
     lock(windows()).remove(&hwnd);
     lock(destroying()).remove(&hwnd);
     lock(window_props()).retain(|(h, _), _| *h != hwnd);
+    lock(window_icons()).remove(&hwnd);
     true
+}
+
+/// Icônes posées par WM_SETICON : [ICON_SMALL, ICON_BIG] (#2812).
+fn window_icons() -> &'static Mutex<HashMap<usize, [usize; 2]>> {
+    static I: OnceLock<Mutex<HashMap<usize, [usize; 2]>>> = OnceLock::new();
+    I.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// WM_SETICON : l'icône ICON_SMALL (0) ou ICON_BIG (1) de la fenêtre ; rend
+/// la précédente de ce type (Learn « WM_SETICON »).
+fn set_window_icon(hwnd: usize, kind: usize, icon: usize) -> usize {
+    if kind > 1 || !lock(windows()).contains_key(&hwnd) {
+        return 0;
+    }
+    let mut icons = lock(window_icons());
+    let slot = icons.entry(hwnd).or_insert([0, 0]);
+    std::mem::replace(&mut slot[kind], icon)
+}
+
+/// WM_GETICON : ICON_SMALL (0), ICON_BIG (1), ou ICON_SMALL2 (2) — la
+/// petite, sinon la grande (Learn « WM_GETICON »).
+fn window_icon(hwnd: usize, kind: usize) -> usize {
+    let icons = lock(window_icons()).get(&hwnd).copied().unwrap_or([0, 0]);
+    match kind {
+        0 => icons[0],
+        1 => icons[1],
+        2 if icons[0] != 0 => icons[0],
+        2 => icons[1],
+        _ => 0,
+    }
 }
 
 /// Propriétés de fenêtre (SetProp/GetProp) : clé = nom en minuscules, ou
@@ -4982,6 +5013,10 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             }
             MA_ACTIVATE
         }
+        // WM_SETICON / WM_GETICON : l'icône est gardée avec la fenêtre
+        // (#2812).
+        0x0080 => set_window_icon(hwnd, wparam, lparam as usize) as isize,
+        0x007F => window_icon(hwnd, wparam) as isize,
         // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
         // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le
         // rectangle proposé reste donc la zone cliente.
@@ -5791,6 +5826,27 @@ pub(crate) mod tests {
         for h in [bouton, groupe, popup, haut] {
             destroy_window(h);
         }
+    }
+
+    #[test]
+    fn wm_seticon_garde_l_icone_et_rend_la_precedente() {
+        let h = alloc_hwnd();
+        insert_window(h, fenetre_essai(0x00cf_0000, 0, 0));
+        assert_eq!(def_window_proc(h, 0x007F, 1, 0), 0);
+        assert_eq!(def_window_proc(h, 0x0080, 1, 0x1111), 0);
+        assert_eq!(def_window_proc(h, 0x007F, 1, 0), 0x1111);
+        // ICON_SMALL2 : la grande tant qu'il n'y a pas de petite.
+        assert_eq!(def_window_proc(h, 0x007F, 2, 0), 0x1111);
+        assert_eq!(def_window_proc(h, 0x0080, 0, 0x2222), 0);
+        assert_eq!(def_window_proc(h, 0x007F, 0, 0), 0x2222);
+        assert_eq!(def_window_proc(h, 0x007F, 2, 0), 0x2222);
+        // La précédente est rendue ; une icône nulle efface.
+        assert_eq!(def_window_proc(h, 0x0080, 1, 0x3333), 0x1111);
+        assert_eq!(def_window_proc(h, 0x0080, 1, 0), 0x3333);
+        assert_eq!(def_window_proc(h, 0x007F, 1, 0), 0);
+        // Détruite, la fenêtre ne garde rien.
+        destroy_window(h);
+        assert_eq!(def_window_proc(h, 0x007F, 0, 0), 0);
     }
 
     pub(crate) fn fenetre_essai(style: u32, ex_style: u32, parent: usize) -> Window {
