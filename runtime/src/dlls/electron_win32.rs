@@ -1950,6 +1950,11 @@ unsafe extern "win64" fn RoGetActivationFactory(class: usize, iid: usize, out: *
     if let Some(hr) = super::winrt_coreapp::activation_factory(&name, iid as *const u8, out) {
         return hr;
     }
+    // Windows.Management.Deployment.PackageManager (#2740).
+    if let Some(hr) = super::winrt_package_manager::activation_factory(&name, iid as *const u8, out)
+    {
+        return hr;
+    }
     // Windows.Foundation.Metadata.ApiInformation (#2297).
     if let Some(hr) = super::winrt_apiinfo::activation_factory(&name, iid as *const u8, out) {
         return hr;

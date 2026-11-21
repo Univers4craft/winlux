@@ -334,6 +334,7 @@ pub mod winmm_mmio;
 pub mod winmm_waveout;
 pub mod winrt_apiinfo;
 pub mod winrt_coreapp;
+pub mod winrt_package_manager;
 pub mod winrt_ui;
 pub mod winrt_uri;
 pub mod winrt_wam;
