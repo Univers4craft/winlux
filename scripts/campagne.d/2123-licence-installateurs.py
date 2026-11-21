@@ -5,7 +5,11 @@ _open = (ROOT / "integration/winlux-open").read_text(encoding="utf-8")
 ok("crate::msi::install::license_text" in _lic and "nsis::license" in _lic
    and "inno::license" in _lic and "burn::license" in _lic,
    "Contrat de licence lu pour .msi, NSIS, Inno et Burn (#2123)")
-ok("refuse.set_active(True)" in _wiz and "if license and not accept.get_active():" in _wiz,
+# Comportement vérifié sous Xvfb par test-licence-installateurs.sh (étape de test-all et de la CI) :
+# contrat non accepté = code 1602, rien d'installé.
+_step = (ROOT / "scripts/test-all.d/2123-licence-installateurs.sh").read_text(encoding="utf-8")
+ok("test-licence-installateurs.sh" in _step and (ROOT / "scripts/test-licence-installateurs.sh").is_file()
+   and "if license and not accept.get_active():" in _wiz,
    "Assistant : « Je n'accepte pas » par défaut, rien installé sans acceptation (#2123)")
 ok("--setup --license" in _open and "exit 1602" in _open,
    "winlux-open : pas d'installation silencieuse d'un paquet à contrat sans assistant (#2123)")

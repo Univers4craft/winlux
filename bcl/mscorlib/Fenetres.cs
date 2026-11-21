@@ -17,12 +17,14 @@
 // Button et ProgressBar sont dans Controles.cs. Mur 5b (#2801) : Control.Font
 // (ambiante, WM_SETFONT), Control.Scale et la mise à l'échelle automatique de
 // ContainerControl (AutoScaleMode, AutoScaleDimensions) ; Font est dans
-// Dessin.cs. Les icônes viennent au mur 5c.
+// Dessin.cs. Mur 5c (#2807) : Form.Icon et Application.ProductVersion ;
+// Icon et Clipboard sont dans Icones.cs.
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace System.Drawing
@@ -394,6 +396,25 @@ namespace System.Windows.Forms
         }
 
         internal static bool CompatibleTextRendering { get { return s_texteCompatible; } }
+
+        // Learn : la version d'information de l'assembly d'entrée, sinon sa
+        // version de fichier, sinon sa version (#2807).
+        public static string ProductVersion
+        {
+            get
+            {
+                Assembly a = Assembly.GetEntryAssembly();
+                if (a == null) return "";
+                object[] info = a.GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
+                if (info.Length > 0 && !string.IsNullOrEmpty(((AssemblyInformationalVersionAttribute)info[0]).InformationalVersion))
+                    return ((AssemblyInformationalVersionAttribute)info[0]).InformationalVersion;
+                object[] fichier = a.GetCustomAttributes(typeof(AssemblyFileVersionAttribute), false);
+                if (fichier.Length > 0 && !string.IsNullOrEmpty(((AssemblyFileVersionAttribute)fichier[0]).Version))
+                    return ((AssemblyFileVersionAttribute)fichier[0]).Version;
+                Version v = a.GetName().Version;
+                return v == null ? "" : v.ToString();
+            }
+        }
 
         public static void Run() { Boucle(null); }
 
@@ -1163,6 +1184,8 @@ namespace System.Windows.Forms
         private bool _montree, _chargee, _fermeture;
         private CloseReason _raison = CloseReason.None;
         private IButtonControl _accepter, _annuler;
+        private Icon _icone;
+        private static Icon s_iconeParDefaut;
         private DialogResult _resultat;
 
         public Form() { }
@@ -1172,6 +1195,35 @@ namespace System.Windows.Forms
         public new Size Size { get { return base.Size; } set { base.Size = value; } }
 
         public DialogResult DialogResult { get { return _resultat; } set { _resultat = value; } }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr LoadIconW(IntPtr instance, IntPtr name);
+
+        // Learn : sans icône posée, l'icône par défaut (ici celle
+        // d'application du système, IDI_APPLICATION).
+        public Icon Icon
+        {
+            get
+            {
+                if (_icone != null) return _icone;
+                if (s_iconeParDefaut == null) s_iconeParDefaut = Icon.FromHandle(LoadIconW(IntPtr.Zero, new IntPtr(32512)));
+                return s_iconeParDefaut;
+            }
+            set
+            {
+                _icone = value;
+                PoserIcone();
+            }
+        }
+
+        // WM_SETICON, grande (1) et petite (0) icône de la fenêtre.
+        private void PoserIcone()
+        {
+            if (!IsHandleCreated) return;
+            IntPtr h = _icone != null ? _icone.Handle : IntPtr.Zero;
+            Natif.SendMessageW(Handle, 0x0080, new IntPtr(1), h);
+            Natif.SendMessageW(Handle, 0x0080, IntPtr.Zero, h);
+        }
 
         // Learn : le bouton cliqué par Entrée ; il devient le bouton par défaut.
         public IButtonControl AcceptButton
@@ -1312,6 +1364,7 @@ namespace System.Windows.Forms
         protected override void CreateHandle()
         {
             base.CreateHandle();
+            if (_icone != null) PoserIcone();
             lock (s_ouvertes) if (!s_ouvertes.Contains(this)) s_ouvertes.Add(this);
         }
 

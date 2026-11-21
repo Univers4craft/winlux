@@ -14,7 +14,10 @@ nav_init = (SCRIPTS / "build-live-iso.sh").read_text(encoding="utf-8")
 nav_control = (SCRIPTS / "winlux-control.sh").read_text(encoding="utf-8")
 nav_root = (SCRIPTS / "winlux-root.py").read_text(encoding="utf-8")
 nav_auto = (SCRIPTS / "winlux_autoinstall.py").read_text(encoding="utf-8")
-ok(f"ids='{' '.join(nav_ids)}'" in nav_sh and f"case \"$1\" in {nav_alt}) return 0" in nav_sh,
+# Liste des identifiants lue dans winlux-browsers.sh et comparée, dans
+# l'ordre, aux huit noms attendus (#2711).
+_ids = _re.search(r"^ids='([^']*)'", nav_sh, _re.M)
+ok(_ids is not None and _ids.group(1).split() == nav_ids and f"case \"$1\" in {nav_alt}) return 0" in nav_sh,
    "winlux-browsers : huit navigateurs, ordre alphabétique des noms (#1716)")
 ok(all(f'"{i}"' in nav_fetch for i in nav_ids if i != "tor") and 'TOR_ID = "tor"' in nav_fetch
    and 'TOR_FINGERPRINT = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"' in nav_fetch,
@@ -22,9 +25,12 @@ ok(all(f'"{i}"' in nav_fetch for i in nav_ids if i != "tor") and 'TOR_ID = "tor"
 ok("tor_fingerprint=EF6E286DDA85EA2A4BA7DE684E2C6E8793298290" in nav_sh and "tor_signature_ok" in nav_sh
    and "VALIDSIG" in nav_sh, "Tor Browser : signature revérifiée avant extraction (#1716)")
 ok('BROWSER_NAMES = {"brave": "Brave", "chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox",' in nav_settings
-   and '"tor": "The Tor Project, Inc."' in nav_settings and 'dialog.set_default_response(Gtk.ResponseType.CANCEL)' in nav_settings,
+   and '"tor": "The Tor Project, Inc."' in nav_settings
+   # Noms : confirm_browser et la réponse Gtk.ResponseType.CANCEL (#2711).
+   and "def confirm_browser(" in nav_settings and "Gtk.ResponseType.CANCEL" in nav_settings,
    "Paramètres > Navigateurs : huit navigateurs, éditeur nommé, Annuler par défaut (#1716)")
-ok('("tor", "Tor Browser"), ("vivaldi", "Vivaldi")]' in nav_installer and "grid.attach(button, index % 4, index // 4, 1, 1)" in nav_installer,
+# Nom : build_browser_choice, qui bâtit la grille (#2711).
+ok('("tor", "Tor Browser"), ("vivaldi", "Vivaldi")]' in nav_installer and "def build_browser_choice(" in nav_installer,
    "installeur : huit navigateurs en grille, « Choisir plus tard » présélectionné (#1716)")
 ok("operagx Opera_GX tor Tor_Browser vivaldi Vivaldi'" in nav_first and f'case "$BROWSER_CHOICE" in {nav_alt})' in nav_first,
    "premier démarrage : huit navigateurs proposés (#1716)")
