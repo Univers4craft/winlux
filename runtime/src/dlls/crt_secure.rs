@@ -868,6 +868,361 @@ unsafe extern "win64" fn wctomb_s(ret: *mut i32, mb: *mut u8, size: usize, wc: u
     0
 }
 
+// ---------------------------------------------------------------------
+// Variantes `_l` (#2137)
+// ---------------------------------------------------------------------
+//
+// Learn (pages printf_s, sprintf_s, _snprintf_s, vprintf_s, scanf_s,
+// sscanf_s, _strlwr_s, mbstowcs_s, wcstombs_s, wctomb_s) : chaque variante
+// `_l` prend un `_locale_t` juste après le format (ou en dernier pour les
+// conversions) et se comporte comme la fonction sans `_l` avec cette
+// locale. Notre CRT ne sert que la locale « C » : la locale reçue est
+// ignorée, comme dans `_tolower_l` ou les `_mbs*_s_l` (#2128). Liste des
+// noms : en-têtes `sec_api` de mingw-w64 (domaine public).
+
+// Mise en forme, liste d'arguments : la locale précède `va`.
+unsafe extern "win64" fn vprintf_s_l(fmt: *const u8, _l: usize, va: *const u64) -> i32 {
+    vprintf_s(fmt, va)
+}
+unsafe extern "win64" fn vwprintf_s_l(fmt: *const u16, _l: usize, va: *const u64) -> i32 {
+    vwprintf_s(fmt, va)
+}
+unsafe extern "win64" fn vfprintf_s_l(
+    f: *mut c_void,
+    fmt: *const u8,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vfprintf_s(f, fmt, va)
+}
+unsafe extern "win64" fn vfwprintf_s_l(
+    f: *mut c_void,
+    fmt: *const u16,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vfwprintf_s(f, fmt, va)
+}
+unsafe extern "win64" fn vsprintf_s_l(
+    buf: *mut u8,
+    size: usize,
+    fmt: *const u8,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vsprintf_s(buf, size, fmt, va)
+}
+unsafe extern "win64" fn vswprintf_s_l(
+    buf: *mut u16,
+    size: usize,
+    fmt: *const u16,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vswprintf_s(buf, size, fmt, va)
+}
+unsafe extern "win64" fn vsnprintf_s_l(
+    buf: *mut u8,
+    size: usize,
+    count: usize,
+    fmt: *const u8,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vsnprintf_s(buf, size, count, fmt, va)
+}
+unsafe extern "win64" fn vsnwprintf_s_l(
+    buf: *mut u16,
+    size: usize,
+    count: usize,
+    fmt: *const u16,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vsnwprintf_s(buf, size, count, fmt, va)
+}
+unsafe extern "win64" fn vcprintf_s_l(fmt: *const u8, _l: usize, va: *const u64) -> i32 {
+    vcprintf_s(fmt, va)
+}
+unsafe extern "win64" fn vcwprintf_s_l(fmt: *const u16, _l: usize, va: *const u64) -> i32 {
+    vcwprintf_s(fmt, va)
+}
+/// `__conio_common_vcprintf_s(options, format, locale, va)` (ucrtbase).
+unsafe extern "win64" fn conio_common_vcprintf_s(
+    options: u64,
+    fmt: *const u8,
+    l: usize,
+    va: *const u64,
+) -> i32 {
+    super::crt_releve::conio_common_vcprintf(options, fmt, l, va)
+}
+/// `__conio_common_vcwprintf_s(options, format, locale, va)` (ucrtbase).
+unsafe extern "win64" fn conio_common_vcwprintf_s(
+    _options: u64,
+    fmt: *const u16,
+    _l: usize,
+    va: *const u64,
+) -> i32 {
+    vcwprintf_s(fmt, va)
+}
+
+// Mise en forme, arguments variables : `a` pointe sur les arguments, la
+// locale est la case qui suit le format.
+unsafe extern "win64" fn imp_printf_s_l(a: *const u64) -> i32 {
+    vprintf_s(*a as *const u8, a.add(2))
+}
+unsafe extern "win64" fn imp_wprintf_s_l(a: *const u64) -> i32 {
+    vwprintf_s(*a as *const u16, a.add(2))
+}
+unsafe extern "win64" fn imp_fprintf_s_l(a: *const u64) -> i32 {
+    vfprintf_s(*a as *mut c_void, *a.add(1) as *const u8, a.add(3))
+}
+unsafe extern "win64" fn imp_fwprintf_s_l(a: *const u64) -> i32 {
+    vfwprintf_s(*a as *mut c_void, *a.add(1) as *const u16, a.add(3))
+}
+unsafe extern "win64" fn imp_sprintf_s_l(a: *const u64) -> i32 {
+    vsprintf_s(
+        *a as *mut u8,
+        *a.add(1) as usize,
+        *a.add(2) as *const u8,
+        a.add(4),
+    )
+}
+unsafe extern "win64" fn imp_swprintf_s_l(a: *const u64) -> i32 {
+    vswprintf_s(
+        *a as *mut u16,
+        *a.add(1) as usize,
+        *a.add(2) as *const u16,
+        a.add(4),
+    )
+}
+unsafe extern "win64" fn imp_snprintf_s_l(a: *const u64) -> i32 {
+    vsnprintf_s(
+        *a as *mut u8,
+        *a.add(1) as usize,
+        *a.add(2) as usize,
+        *a.add(3) as *const u8,
+        a.add(5),
+    )
+}
+unsafe extern "win64" fn imp_snwprintf_s_l(a: *const u64) -> i32 {
+    vsnwprintf_s(
+        *a as *mut u16,
+        *a.add(1) as usize,
+        *a.add(2) as usize,
+        *a.add(3) as *const u16,
+        a.add(5),
+    )
+}
+unsafe extern "win64" fn imp_cprintf_s_l(a: *const u64) -> i32 {
+    vcprintf_s(*a as *const u8, a.add(2))
+}
+unsafe extern "win64" fn imp_cwprintf_s_l(a: *const u64) -> i32 {
+    vcwprintf_s(*a as *const u16, a.add(2))
+}
+
+crate::varargs_thunk!(printf_s_l_thunk => imp_printf_s_l);
+crate::varargs_thunk!(wprintf_s_l_thunk => imp_wprintf_s_l);
+crate::varargs_thunk!(fprintf_s_l_thunk => imp_fprintf_s_l);
+crate::varargs_thunk!(fwprintf_s_l_thunk => imp_fwprintf_s_l);
+crate::varargs_thunk!(sprintf_s_l_thunk => imp_sprintf_s_l);
+crate::varargs_thunk!(swprintf_s_l_thunk => imp_swprintf_s_l);
+crate::varargs_thunk!(snprintf_s_l_thunk => imp_snprintf_s_l);
+crate::varargs_thunk!(snwprintf_s_l_thunk => imp_snwprintf_s_l);
+crate::varargs_thunk!(cprintf_s_l_thunk => imp_cprintf_s_l);
+crate::varargs_thunk!(cwprintf_s_l_thunk => imp_cwprintf_s_l);
+
+// Lecture.
+unsafe extern "win64" fn imp_sscanf_s_l(a: *const u64) -> i32 {
+    vsscanf_s(*a as *const u8, *a.add(1) as *const u8, a.add(3))
+}
+unsafe extern "win64" fn imp_swscanf_s_l(a: *const u64) -> i32 {
+    vswscanf_s(*a as *const u16, *a.add(1) as *const u16, a.add(3))
+}
+unsafe extern "win64" fn imp_snscanf_s_l(a: *const u64) -> i32 {
+    ucrt::stdio_common_vsscanf(
+        SCAN_S,
+        *a as *const u8,
+        *a.add(1) as usize,
+        *a.add(2) as *const u8,
+        0,
+        a.add(4),
+    )
+}
+unsafe extern "win64" fn imp_snwscanf_s_l(a: *const u64) -> i32 {
+    ucrt::stdio_common_vswscanf(
+        SCAN_S,
+        *a as *const u16,
+        *a.add(1) as usize,
+        *a.add(2) as *const u16,
+        0,
+        a.add(4),
+    )
+}
+unsafe extern "win64" fn imp_fscanf_s_l(a: *const u64) -> i32 {
+    vfscanf_s(*a as *mut c_void, *a.add(1) as *const u8, a.add(3))
+}
+unsafe extern "win64" fn imp_fwscanf_s_l(a: *const u64) -> i32 {
+    vfwscanf_s(*a as *mut c_void, *a.add(1) as *const u16, a.add(3))
+}
+/// `_scanf_s_l` et `_cscanf_s_l` : l'entrée standard, comme `scanf_s`.
+unsafe extern "win64" fn imp_scanf_s_l(a: *const u64) -> i32 {
+    vscanf_s(*a as *const u8, a.add(2))
+}
+unsafe extern "win64" fn imp_wscanf_s_l(a: *const u64) -> i32 {
+    vwscanf_s(*a as *const u16, a.add(2))
+}
+
+crate::varargs_thunk!(sscanf_s_l_thunk => imp_sscanf_s_l);
+crate::varargs_thunk!(swscanf_s_l_thunk => imp_swscanf_s_l);
+crate::varargs_thunk!(snscanf_s_l_thunk => imp_snscanf_s_l);
+crate::varargs_thunk!(snwscanf_s_l_thunk => imp_snwscanf_s_l);
+crate::varargs_thunk!(fscanf_s_l_thunk => imp_fscanf_s_l);
+crate::varargs_thunk!(fwscanf_s_l_thunk => imp_fwscanf_s_l);
+crate::varargs_thunk!(scanf_s_l_thunk => imp_scanf_s_l);
+crate::varargs_thunk!(wscanf_s_l_thunk => imp_wscanf_s_l);
+
+// Chaînes et conversions : la locale vient en dernier.
+unsafe extern "win64" fn strlwr_s_l(s: *mut u8, size: usize, _l: usize) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u8, usize) -> i32>("_strlwr_s") {
+        Some(f) => f(s, size),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn strupr_s_l(s: *mut u8, size: usize, _l: usize) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u8, usize) -> i32>("_strupr_s") {
+        Some(f) => f(s, size),
+        None => fail(EINVAL),
+    }
+}
+type ConvS<D, S> = unsafe extern "win64" fn(*mut usize, *mut D, usize, *const S, usize) -> i32;
+unsafe extern "win64" fn mbstowcs_s_l(
+    done: *mut usize,
+    dst: *mut u16,
+    size: usize,
+    src: *const u8,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<ConvS<u16, u8>>("mbstowcs_s") {
+        Some(f) => f(done, dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn wcstombs_s_l(
+    done: *mut usize,
+    dst: *mut u8,
+    size: usize,
+    src: *const u16,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<ConvS<u8, u16>>("wcstombs_s") {
+        Some(f) => f(done, dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn strncat_s_l(
+    dst: *mut u8,
+    size: usize,
+    src: *const u8,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u8, usize, *const u8, usize) -> i32>("strncat_s") {
+        Some(f) => f(dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn strncpy_s_l(
+    dst: *mut u8,
+    size: usize,
+    src: *const u8,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u8, usize, *const u8, usize) -> i32>("strncpy_s") {
+        Some(f) => f(dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn wcsncat_s_l(
+    dst: *mut u16,
+    size: usize,
+    src: *const u16,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u16, usize, *const u16, usize) -> i32>("wcsncat_s") {
+        Some(f) => f(dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn wcsncpy_s_l(
+    dst: *mut u16,
+    size: usize,
+    src: *const u16,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u16, usize, *const u16, usize) -> i32>("wcsncpy_s") {
+        Some(f) => f(dst, size, src, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn wcsnset_s_l(
+    s: *mut u16,
+    size: usize,
+    c: u16,
+    count: usize,
+    _l: usize,
+) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u16, usize, u16, usize) -> i32>("_wcsnset_s") {
+        Some(f) => f(s, size, c, count),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn wcsset_s_l(s: *mut u16, size: usize, c: u16, _l: usize) -> i32 {
+    match base::<unsafe extern "win64" fn(*mut u16, usize, u16) -> i32>("_wcsset_s") {
+        Some(f) => f(s, size, c),
+        None => fail(EINVAL),
+    }
+}
+unsafe extern "win64" fn strtok_s_l(
+    s: *mut u8,
+    delim: *const u8,
+    ctx: *mut *mut u8,
+    _l: usize,
+) -> *mut u8 {
+    match base::<unsafe extern "win64" fn(*mut u8, *const u8, *mut *mut u8) -> *mut u8>("strtok_s")
+    {
+        Some(f) => f(s, delim, ctx),
+        None => std::ptr::null_mut(),
+    }
+}
+unsafe extern "win64" fn wcstok_s_l(
+    s: *mut u16,
+    delim: *const u16,
+    ctx: *mut *mut u16,
+    _l: usize,
+) -> *mut u16 {
+    match base::<unsafe extern "win64" fn(*mut u16, *const u16, *mut *mut u16) -> *mut u16>(
+        "wcstok_s",
+    ) {
+        Some(f) => f(s, delim, ctx),
+        None => std::ptr::null_mut(),
+    }
+}
+unsafe extern "win64" fn wctomb_s_l(
+    ret: *mut i32,
+    mb: *mut u8,
+    size: usize,
+    wc: u16,
+    _l: usize,
+) -> i32 {
+    wctomb_s(ret, mb, size, wc)
+}
+
 /// Noms servis par ce module (tests, campagne).
 #[cfg(test)]
 pub(crate) const NAMES: &[&str] = &[
@@ -939,6 +1294,52 @@ pub(crate) const NAMES: &[&str] = &[
     "mbsrtowcs_s",
     "wcsrtombs_s",
     "wctomb_s",
+    // Variantes _l (#2137).
+    "_printf_s_l",
+    "_wprintf_s_l",
+    "_fprintf_s_l",
+    "_fwprintf_s_l",
+    "_sprintf_s_l",
+    "_swprintf_s_l",
+    "_snprintf_s_l",
+    "_snwprintf_s_l",
+    "_cprintf_s_l",
+    "_cwprintf_s_l",
+    "_vprintf_s_l",
+    "_vwprintf_s_l",
+    "_vfprintf_s_l",
+    "_vfwprintf_s_l",
+    "_vsprintf_s_l",
+    "_vswprintf_s_l",
+    "_vsnprintf_s_l",
+    "_vsnwprintf_s_l",
+    "_vcprintf_s_l",
+    "_vcwprintf_s_l",
+    "_sscanf_s_l",
+    "_swscanf_s_l",
+    "_snscanf_s_l",
+    "_snwscanf_s_l",
+    "_fscanf_s_l",
+    "_fwscanf_s_l",
+    "_scanf_s_l",
+    "_wscanf_s_l",
+    "_cscanf_s_l",
+    "_cwscanf_s_l",
+    "_strlwr_s_l",
+    "_strupr_s_l",
+    "_mbstowcs_s_l",
+    "_wcstombs_s_l",
+    "_wctomb_s_l",
+    "__conio_common_vcprintf_s",
+    "__conio_common_vcwprintf_s",
+    "_strncat_s_l",
+    "_strncpy_s_l",
+    "_strtok_s_l",
+    "_wcstok_s_l",
+    "_wcsncat_s_l",
+    "_wcsncpy_s_l",
+    "_wcsnset_s_l",
+    "_wcsset_s_l",
 ];
 
 pub fn exports() -> std::collections::HashMap<&'static str, usize> {
@@ -985,6 +1386,31 @@ pub fn exports() -> std::collections::HashMap<&'static str, usize> {
         "_lfind_s" => fn lfind_s, "_lsearch_s" => fn lsearch_s,
         // Multioctets.
         "mbsrtowcs_s" => fn mbsrtowcs_s, "wcsrtombs_s" => fn wcsrtombs_s, "wctomb_s" => fn wctomb_s,
+        // Variantes _l (#2137).
+        "_printf_s_l" => fn printf_s_l_thunk, "_wprintf_s_l" => fn wprintf_s_l_thunk,
+        "_fprintf_s_l" => fn fprintf_s_l_thunk, "_fwprintf_s_l" => fn fwprintf_s_l_thunk,
+        "_sprintf_s_l" => fn sprintf_s_l_thunk, "_swprintf_s_l" => fn swprintf_s_l_thunk,
+        "_snprintf_s_l" => fn snprintf_s_l_thunk, "_snwprintf_s_l" => fn snwprintf_s_l_thunk,
+        "_cprintf_s_l" => fn cprintf_s_l_thunk, "_cwprintf_s_l" => fn cwprintf_s_l_thunk,
+        "_vprintf_s_l" => fn vprintf_s_l, "_vwprintf_s_l" => fn vwprintf_s_l,
+        "_vfprintf_s_l" => fn vfprintf_s_l, "_vfwprintf_s_l" => fn vfwprintf_s_l,
+        "_vsprintf_s_l" => fn vsprintf_s_l, "_vswprintf_s_l" => fn vswprintf_s_l,
+        "_vsnprintf_s_l" => fn vsnprintf_s_l, "_vsnwprintf_s_l" => fn vsnwprintf_s_l,
+        "_vcprintf_s_l" => fn vcprintf_s_l, "_vcwprintf_s_l" => fn vcwprintf_s_l,
+        "__conio_common_vcprintf_s" => fn conio_common_vcprintf_s,
+        "__conio_common_vcwprintf_s" => fn conio_common_vcwprintf_s,
+        "_sscanf_s_l" => fn sscanf_s_l_thunk, "_swscanf_s_l" => fn swscanf_s_l_thunk,
+        "_snscanf_s_l" => fn snscanf_s_l_thunk, "_snwscanf_s_l" => fn snwscanf_s_l_thunk,
+        "_fscanf_s_l" => fn fscanf_s_l_thunk, "_fwscanf_s_l" => fn fwscanf_s_l_thunk,
+        "_scanf_s_l" => fn scanf_s_l_thunk, "_wscanf_s_l" => fn wscanf_s_l_thunk,
+        "_cscanf_s_l" => fn scanf_s_l_thunk, "_cwscanf_s_l" => fn wscanf_s_l_thunk,
+        "_strlwr_s_l" => fn strlwr_s_l, "_strupr_s_l" => fn strupr_s_l,
+        "_mbstowcs_s_l" => fn mbstowcs_s_l, "_wcstombs_s_l" => fn wcstombs_s_l,
+        "_wctomb_s_l" => fn wctomb_s_l,
+        "_strncat_s_l" => fn strncat_s_l, "_strncpy_s_l" => fn strncpy_s_l,
+        "_strtok_s_l" => fn strtok_s_l, "_wcstok_s_l" => fn wcstok_s_l,
+        "_wcsncat_s_l" => fn wcsncat_s_l, "_wcsncpy_s_l" => fn wcsncpy_s_l,
+        "_wcsnset_s_l" => fn wcsnset_s_l, "_wcsset_s_l" => fn wcsset_s_l,
     }
 }
 
@@ -997,6 +1423,93 @@ mod tests {
     fn famille_s_servie_par_msvcrt() {
         for n in NAMES {
             assert!(super::super::lookup("msvcrt", n).is_some(), "msvcrt!{n}");
+        }
+    }
+
+    /// #2137 : les variantes `_l` font comme leur sœur sans `_l`, la
+    /// locale (ici nulle) étant la case qui suit le format.
+    #[test]
+    fn variantes_l_comme_sans_locale() {
+        unsafe {
+            let mut buf = [0u8; 16];
+            let a: [u64; 5] = [
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+                c"%d-%s".as_ptr() as u64,
+                0,
+                42,
+            ];
+            let mut a = a.to_vec();
+            a.push(c"ok".as_ptr() as u64);
+            assert_eq!(imp_sprintf_s_l(a.as_ptr()), 5);
+            assert_eq!(&buf[..6], b"42-ok\0");
+            // _snprintf_s_l avec _TRUNCATE : tronqué, -1.
+            let mut petit = [0u8; 4];
+            let a: [u64; 6] = [
+                petit.as_mut_ptr() as u64,
+                petit.len() as u64,
+                usize::MAX as u64,
+                c"%s".as_ptr() as u64,
+                0,
+                c"abcdef".as_ptr() as u64,
+            ];
+            assert_eq!(imp_snprintf_s_l(a.as_ptr()), -1);
+            assert_eq!(&petit, b"abc\0");
+            // _sscanf_s_l : %s suivi de la taille, après la locale.
+            let mut n: i32 = 0;
+            let mut mot = [0u8; 8];
+            let a: [u64; 6] = [
+                c"7 bonjour".as_ptr() as u64,
+                c"%d %s".as_ptr() as u64,
+                0,
+                &mut n as *mut i32 as u64,
+                mot.as_mut_ptr() as u64,
+                mot.len() as u64,
+            ];
+            assert_eq!(imp_sscanf_s_l(a.as_ptr()), 2);
+            assert_eq!(n, 7);
+            assert_eq!(&mot[..8], b"bonjour\0");
+            // _vsnprintf_s_l : la liste d'arguments suit la locale.
+            let va: [u64; 1] = [12];
+            let mut out = [0u8; 8];
+            assert_eq!(
+                vsnprintf_s_l(
+                    out.as_mut_ptr(),
+                    8,
+                    7,
+                    c"n=%d".as_ptr().cast(),
+                    0,
+                    va.as_ptr()
+                ),
+                4
+            );
+            assert_eq!(&out[..5], b"n=12\0");
+            // _strupr_s_l et _wctomb_s_l.
+            let mut s = *b"abc\0";
+            assert_eq!(strupr_s_l(s.as_mut_ptr(), 4, 0), 0);
+            assert_eq!(&s, b"ABC\0");
+            let mut ret = 0;
+            let mut mb = [0u8; 4];
+            assert_eq!(wctomb_s_l(&mut ret, mb.as_mut_ptr(), 4, b'Z' as u16, 0), 0);
+            assert_eq!((ret, mb[0]), (1, b'Z'));
+            // _wcstombs_s_l.
+            let w: Vec<u16> = "hé".encode_utf16().chain([0]).collect();
+            let mut done = 0usize;
+            let mut dst = [0u8; 8];
+            assert_eq!(
+                wcstombs_s_l(&mut done, dst.as_mut_ptr(), 8, w.as_ptr(), usize::MAX, 0),
+                0
+            );
+            assert_eq!(dst[0], b'h');
+            // _strncpy_s_l puis _strtok_s_l.
+            let mut d = [0u8; 8];
+            assert_eq!(
+                strncpy_s_l(d.as_mut_ptr(), 8, c"a,b".as_ptr().cast(), 3, 0),
+                0
+            );
+            let mut ctx = std::ptr::null_mut();
+            let t = strtok_s_l(d.as_mut_ptr(), c",".as_ptr().cast(), &mut ctx, 0);
+            assert_eq!(std::ffi::CStr::from_ptr(t.cast()).to_bytes(), b"a");
         }
     }
 
