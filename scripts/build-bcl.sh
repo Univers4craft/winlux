@@ -74,6 +74,11 @@ if [ "${1:-}" = "--temoins" ]; then
         for option in $(sed -n 's/.*Option de compilation : \(-[a-z+-]*\)\..*/\1/p' "$src"); do
             refs+=("$option")
         done
+        # « Ressource incorporée : fichier,nom. » : un fichier de
+        # bcl/temoins/ressources incorporé sous ce nom de manifeste (#2824).
+        for res in $(sed -n 's/.*Ressource incorporée : \([A-Za-z0-9._-]*,[A-Za-z0-9._-]*\)\..*/\1/p' "$src"); do
+            refs+=(-resource:"$root/bcl/temoins/ressources/$res")
+        done
         compile "${refs[@]}" \
             -out:"$root/build/bcl-temoins/$(basename "$src" .cs).exe" "$src"
     done

@@ -357,6 +357,37 @@ namespace System.Reflection
         [MethodImpl(MethodImplOptions.InternalCall)]
         private extern int GetVersionPart(int index);
 
+        // Ressources de manifeste (#2824, Learn « GetManifestResourceStream ») :
+        // le moteur lit la table ManifestResource et le répertoire Resources.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern byte[] LireRessource(string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern string[] NomsRessources();
+
+        public virtual System.IO.Stream GetManifestResourceStream(string name)
+        {
+            if (name == null) throw new ArgumentNullException("name");
+            if (name.Length == 0) throw new ArgumentException("String cannot have zero length.", "name");
+            byte[] octets = LireRessource(name);
+            return octets == null ? null : new System.IO.MemoryStream(octets, false);
+        }
+
+        // Learn : le nom est préfixé par l'espace de noms du type, s'il en a un.
+        public virtual System.IO.Stream GetManifestResourceStream(Type type, string name)
+        {
+            if ((object)type == null && name == null) throw new ArgumentNullException("type");
+            string ns = (object)type == null ? null : type.Namespace;
+            if (string.IsNullOrEmpty(ns)) return GetManifestResourceStream(name);
+            return GetManifestResourceStream(name == null ? ns : ns + "." + name);
+        }
+
+        public virtual string[] GetManifestResourceNames()
+        {
+            string[] n = NomsRessources();
+            return n ?? new string[0];
+        }
+
         public virtual AssemblyName GetName()
         {
             Version v = new Version(GetVersionPart(0), GetVersionPart(1), GetVersionPart(2), GetVersionPart(3));
