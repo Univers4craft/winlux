@@ -2,7 +2,8 @@
 a = (runtime_dlls / "afd.rs").read_text(encoding="utf-8")
 n = (runtime_dlls / "ntdll.rs").read_text(encoding="utf-8")
 f = (runtime_dlls / "ntdll_file.rs").read_text(encoding="utf-8")
-ok("afd::is_afd_path(&win_path)" in n and "pub const IOCTL_AFD_POLL: u32 = 0x0001_2024;" in a,
+# Nom qualifié afd::is_afd_path et test evenements_afd (#2711).
+ok("afd::is_afd_path" in n and "fn evenements_afd" in a and "pub const IOCTL_AFD_POLL: u32 = 0x0001_2024;" in a,
    "NtCreateFile ouvre \\Device\\Afd et sert IOCTL_AFD_POLL (#1766)")
 ok('"NtCancelIoFileEx" => fn NtCancelIoFileEx' in f and "afd::device_io_control" in f,
    "NtDeviceIoControlFile et NtCancelIoFileEx passent par le pilote AFD (#1766)")
