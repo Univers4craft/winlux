@@ -729,6 +729,7 @@ fn searchenv_s_dossier_de_la_variable() {
 
 #[test]
 fn tmpfile_s_ouvre_un_fichier_lisible_et_inscriptible() {
+    let _seul = TMPFILES.lock().unwrap_or_else(|e| e.into_inner());
     let f = |n: &str| super::super::lookup("msvcrt", n).unwrap();
     unsafe {
         let fwrite: unsafe extern "win64" fn(*const c_void, usize, usize, *mut c_void) -> usize =
@@ -750,4 +751,76 @@ fn tmpfile_s_ouvre_un_fichier_lisible_et_inscriptible() {
         // Pointeur nul : EINVAL.
         assert_eq!(tmpfile_s(std::ptr::null_mut()), EINVAL);
     }
+}
+
+/// `_rmtmp` ferme tous les fichiers de `tmpfile` du processus : les tests
+/// qui en ouvrent passent l'un après l'autre.
+static TMPFILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// #2139 : `tmpfile` rend un flux, `_rmtmp` ferme ceux encore ouverts et
+/// en rend le nombre, sans toucher un flux déjà fermé par `fclose`.
+#[test]
+fn tmpfile_et_rmtmp() {
+    let _seul = TMPFILES.lock().unwrap_or_else(|e| e.into_inner());
+    let f = |n: &str| super::super::lookup("msvcrt", n).unwrap();
+    unsafe {
+        let fclose: unsafe extern "win64" fn(*mut c_void) -> i32 = std::mem::transmute(f("fclose"));
+        let tmp: unsafe extern "win64" fn() -> *mut c_void = std::mem::transmute(f("tmpfile"));
+        let rm: unsafe extern "win64" fn() -> i32 = std::mem::transmute(f("_rmtmp"));
+        let a = tmp();
+        let b = tmp();
+        let c = tmp();
+        assert!(!a.is_null() && !b.is_null() && !c.is_null());
+        assert_eq!(fclose(b), 0);
+        assert_eq!(rm(), 2);
+        // a et c sont fermés ; leur emplacement peut déjà servir à un autre
+        // flux d'un test parallèle, on ne les touche plus.
+        assert_eq!(rm(), 0);
+    }
+}
+
+/// #2139 : `_gcvt` écrit dans le tampon de l'appelant, `_fcvt` dans le sien.
+#[test]
+fn gcvt_et_fcvt_non_securises() {
+    unsafe {
+        let mut b = [0u8; CVTBUFSIZE];
+        let p = gcvt(1.25, 5, b.as_mut_ptr());
+        assert_eq!(p, b.as_mut_ptr());
+        assert_eq!(text(p), b"1.25");
+        let (mut dec, mut sign) = (0, 0);
+        let p = fcvt(1.2, 5, &mut dec, &mut sign);
+        assert_eq!((text(p), dec, sign), (&b"120000"[..], 1, 0));
+        assert!(fcvt(1.0, 2, std::ptr::null_mut(), &mut sign).is_null());
+    }
+}
+
+/// #2139 : `_searchenv` comme `_searchenv_s`, chaîne vide sinon.
+#[test]
+fn searchenv_non_securise() {
+    let dir = std::env::temp_dir().join(format!("winlux-2139-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("cible-2139.txt"), b"x").unwrap();
+    let win = crate::paths::to_windows(&dir);
+    let putenv_s: unsafe extern "win64" fn(*const u8, *const u8) -> i32 =
+        unsafe { std::mem::transmute(super::super::lookup("msvcrt", "_putenv_s").unwrap()) };
+    let var = c"WINLUX_TEST_2139";
+    let value = std::ffi::CString::new(win.clone()).unwrap();
+    unsafe {
+        assert_eq!(putenv_s(var.as_ptr().cast(), value.as_ptr().cast()), 0);
+        let mut out = [0xAAu8; MAX_PATH];
+        searchenv_ns(
+            c"cible-2139.txt".as_ptr().cast(),
+            var.as_ptr().cast(),
+            out.as_mut_ptr(),
+        );
+        let got = String::from_utf8_lossy(text(out.as_ptr())).to_string();
+        assert!(got.ends_with("\\cible-2139.txt"), "{got}");
+        searchenv_ns(
+            c"absent-2139.txt".as_ptr().cast(),
+            var.as_ptr().cast(),
+            out.as_mut_ptr(),
+        );
+        assert_eq!(out[0], 0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
