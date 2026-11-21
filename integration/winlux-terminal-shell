@@ -1,0 +1,79 @@
+#!/usr/bin/python3 -I
+"""Shell du Terminal Winlux : fermer la fenêtre termine le shell à coup sûr (#2745).
+
+Fermer la fenêtre de xterm (WM_DELETE_WINDOW) envoie un seul SIGHUP au groupe
+de processus de son enfant. Un « bash -i » qui le reçoit pendant qu'il traite
+une saisie peut le perdre : il retourne attendre le clavier dans pselect et la
+fenêtre reste ouverte (reproduit sous Xvfb : 2 fermetures sur 30). Ce relais
+lance le shell, reçoit le SIGHUP de xterm, le renvoie au shell jusqu'à ce qu'il
+se termine et, s'il ne s'est toujours pas terminé, le tue, comme une console
+Windows fermée dont le programme ne rend pas la main.
+
+Les signaux sont bloqués et attendus par sigtimedwait : aucun ne peut se perdre
+entre deux tests.
+"""
+import os
+import signal
+import sys
+import time
+
+# Après le premier SIGHUP : un nouvel envoi toutes les RETRY secondes, puis
+# SIGKILL au bout de GRACE secondes (Windows laisse 5 s à une console fermée).
+RETRY = 0.25
+GRACE = 5.0
+WATCHED = {signal.SIGHUP, signal.SIGTERM, signal.SIGCHLD}
+
+
+def exit_code(status):
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    return 128 + os.WTERMSIG(status)
+
+
+def main(argv):
+    command = argv or ["/bin/bash", "-i"]
+    # Un SIGCHLD ignoré par défaut ne serait pas mis en attente : un
+    # gestionnaire vide le rend observable par sigtimedwait.
+    signal.signal(signal.SIGCHLD, lambda *_: None)
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, WATCHED)
+    child = os.fork()
+    if child == 0:
+        # Python ignore SIGPIPE et SIGXFSZ : le shell et ses commandes
+        # doivent les recevoir comme sans relais (« yes | head »).
+        for number in (signal.SIGCHLD, signal.SIGPIPE, signal.SIGXFSZ):
+            signal.signal(number, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        try:
+            os.execvp(command[0], command)
+        except OSError as error:
+            print(f"Terminal Winlux : {command[0]} : {error.strerror}", file=sys.stderr)
+            os._exit(127)
+    # Ctrl+C va au groupe au premier plan (le shell) ; le relais n'en meurt pas.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGQUIT, signal.SIG_IGN)
+    hangup = None
+    while True:
+        done, status = os.waitpid(child, os.WNOHANG)
+        if done == child:
+            return exit_code(status)
+        if hangup is None:
+            received = signal.sigtimedwait(WATCHED, 3600)
+        else:
+            left = hangup + GRACE - time.monotonic()
+            if left <= 0:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, 0)
+                return 128 + signal.SIGHUP
+            received = signal.sigtimedwait(WATCHED, min(RETRY, left))
+        if received is not None and received.si_signo in (signal.SIGHUP, signal.SIGTERM):
+            if hangup is None:
+                hangup = time.monotonic()
+        if hangup is not None and (received is None or received.si_signo != signal.SIGCHLD):
+            try:
+                os.kill(child, signal.SIGHUP)
+            except ProcessLookupError:
+                pass
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

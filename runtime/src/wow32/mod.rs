@@ -24,6 +24,7 @@
 
 mod com;
 mod com_audio;
+mod com_disp;
 mod com_mf;
 mod com_mf_chaine;
 mod com_netfw;
@@ -31,6 +32,8 @@ mod com_nlm;
 mod com_ole;
 mod com_shell;
 mod com_taskschd;
+mod com_typeinfo;
+mod com_webbrowser;
 mod com_winrt;
 mod comctl;
 mod comdlg;

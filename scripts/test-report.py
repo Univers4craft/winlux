@@ -463,4 +463,22 @@ pages = Path(__file__).with_name("winlux-settings-pages.py").read_text()
 assert '"--account-disconnect"' in pages and '"--mine"' in pages and '"--send-queue"' in pages
 assert '"--account-forget"]' not in pages, "Se déconnecter doit révoquer le jeton"
 g["http"] = real_http
+# #2757 : la version annoncée est celle du binaire qui a tourné, avec son
+# empreinte ; l'image installée n'est nommée à part que si elle diffère.
+fake = tmp / "winlux-pose"
+fake.write_text("#!/bin/sh\necho 'winlux v0.2.21 (commit 7ef0291fc4a2+modifié)'\n")
+fake.chmod(0o755)
+(tmp / "BUILD-INFO-2757").write_text("version=v0.2.21\ncommit=88581e35bf77851a\n")
+os.environ["WINLUX_REPORT_BINARY"] = str(fake)
+os.environ["WINLUX_BUILD_INFO"] = str(tmp / "BUILD-INFO-2757")
+r2757 = runpy.run_path(str(Path(__file__).with_name("winlux-report.py")), run_name="report_test")
+import hashlib
+digest = hashlib.sha256(fake.read_bytes()).hexdigest()[:16]
+v = r2757["winlux_version"]()
+assert v == f"v0.2.21 (commit 7ef0291fc4a2+modifié), sha256 {digest} ; image installée v0.2.21 (88581e35bf)", v
+r2757["winlux_version"].cache_clear()
+(tmp / "BUILD-INFO-2757").write_text("version=v0.2.21\ncommit=7ef0291fc4a2aaaa\n")
+v = r2757["winlux_version"]()
+assert v == f"v0.2.21 (commit 7ef0291fc4a2+modifié), sha256 {digest}", v
+del os.environ["WINLUX_REPORT_BINARY"], os.environ["WINLUX_BUILD_INFO"]
 print("winlux-report : tests OK")

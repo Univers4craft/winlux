@@ -5,6 +5,7 @@ Distribution files keep their dpkg ownership and bytes. Winlux additions are
 installed as a real protected Debian package, never as a synthetic status list.
 """
 import argparse
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,29 @@ def winlux_path(relative):
             or relative in DIVERTED
             or relative == "usr/share/xsessions/winlux.desktop"
             or relative.startswith("usr/share/icons/") and Path(relative).name.lower().startswith("winlux"))
+
+def dpkg_rules(root):
+    """Filtres path-exclude/path-include de dpkg dans la base (#2743).
+
+    dpkg lit /etc/dpkg/dpkg.cfg puis les fichiers de dpkg.cfg.d ; leur ordre
+    alphabétique est une inférence de notre part (dpkg(1), FILES)."""
+    files = [root / "etc/dpkg/dpkg.cfg"] + sorted((root / "etc/dpkg/dpkg.cfg.d").glob("*"))
+    rules = []
+    for config in files:
+        if not config.is_file(): continue
+        for line in config.read_text(errors="replace").splitlines():
+            option, _, pattern = line.strip().partition("=")
+            if option in ("path-exclude", "path-include") and pattern:
+                rules.append((option == "path-exclude", pattern))
+    return rules
+
+def dpkg_filtered(relative, rules):
+    """dpkg(1) : les filtres passent dans l'ordre, la dernière règle qui
+    correspond décide ; « * » et « ? » correspondent aussi à « / », comme fnmatch."""
+    path = "/" + relative; excluded = False
+    for exclude, pattern in rules:
+        if fnmatch.fnmatchcase(path, pattern): excluded = exclude
+    return excluded
 
 def build(stage, base, output):
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +142,15 @@ def build(stage, base, output):
         # liste complète (#2185). Dans le paquet, pour arriver aussi par mise à jour.
         shutil.copy2(Path(__file__).resolve().parent.parent / "integration/apt/50winlux-appstream",
                      hooks / "50winlux-appstream")
+        # Un fichier que dpkg n'écrirait pas sur une installation existante
+        # serait « missing » pour dpkg --verify, et la mise à jour reviendrait
+        # à la version précédente (#2743) : le paquet n'en contient aucun.
+        rules = dpkg_rules(native)
+        filtered = sorted(str(path.relative_to(package)) for path in package.rglob("*")
+                          if not path.is_dir() and dpkg_filtered(str(path.relative_to(package)), rules))
+        if filtered:
+            raise ValueError("winlux-desktop contient des fichiers exclus par dpkg (dpkg.cfg.d) : "
+                             + ", ".join(filtered[:20]))
         metadata = package / "DEBIAN"; metadata.mkdir()
         installed_kib = (sum(path.lstat().st_size for path in package.rglob("*") if path.is_file() and not path.is_symlink()) + 1023) // 1024
         (metadata / "control").write_text(

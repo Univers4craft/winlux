@@ -25,6 +25,7 @@
 
 use super::com_ole::{IBINDCTX, IRUNNINGOBJECTTABLE};
 use super::com_shell;
+use super::com_typeinfo::Desc;
 use super::layout::widen;
 use super::{call32, rd, wr};
 use crate::dlls::comobj::{guid, guid_str, Guid};
@@ -74,6 +75,16 @@ pub(super) enum A {
     /// de MFCreateStreamDescriptor) ; le nombre d'éléments est l'argument
     /// `I` qui le précède (#2428).
     InArr(&'static Iface),
+    /// DISPPARAMS* d'IDispatch::Invoke : 16 octets et VARIANT de 16 octets
+    /// en x86, 24 et 24 en x64 ; les VARIANT par référence reviennent
+    /// (#2771, `com_disp.rs`).
+    DispParams,
+    /// TYPEATTR** ou FUNCDESC** rendu : image x86 de la structure
+    /// (`com_typeinfo.rs`, #2796).
+    DescOut(Desc),
+    /// TYPEATTR* ou FUNCDESC* rendu par ReleaseTypeAttr / ReleaseFuncDesc :
+    /// l'image x86 est libérée, l'original x64 passe au runtime.
+    DescIn,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -270,20 +281,75 @@ pub(super) static ICREATEERRORINFO: Iface = Iface {
     methods: &[Some(&[I]), Some(&[I]), Some(&[I]), Some(&[I]), Some(&[I])],
 };
 
-/// IDispatch et ITypeLib : seules les méthodes d'IUnknown sont décrites
-/// (VARIANT et DISPPARAMS par valeur viendront avec l'automation).
+/// IDispatch (oaidl.h) : GetTypeInfoCount et Invoke sont décrites
+/// (#2771 : événements DWebBrowserEvents2 rendus à un abonné x86).
+/// GetTypeInfo rend un ITypeInfo non décrit ; GetIDsOfNames prend un
+/// tableau de pointeurs dont le compte suit : non décrites.
+/// Invoke(dispIdMember, riid, lcid, wFlags, pDispParams, pVarResult,
+/// pExcepInfo, puArgErr) : riid est IID_NULL ; EXCEPINFO (32 octets en
+/// x86, 40 en x64) passe tel quel, les appelants du runtime le laissent nul.
 pub(super) static IDISPATCH: Iface = Iface {
     name: "IDispatch",
     iid: ole(0x2_0400),
     parent: Some(&IUNKNOWN),
-    methods: &[None, None, None, None],
+    methods: &[
+        Some(&[I]),                                   // GetTypeInfoCount(UINT*)
+        None,                                         // GetTypeInfo
+        None,                                         // GetIDsOfNames
+        Some(&[I, Iid, I, I, DispParams, Var, I, I]), // Invoke
+    ],
 };
 
+/// ITypeLib (oaidl.h, #2796). TLIBATTR a la même disposition en x86 et en
+/// x64 (aucun pointeur, 32 octets) : son adresse passe telle quelle.
+/// GetTypeComp et FindName (tableaux de pointeurs) restent non décrites.
 pub(super) static ITYPELIB: Iface = Iface {
     name: "ITypeLib",
     iid: ole(0x2_0402),
     parent: Some(&IUNKNOWN),
-    methods: &[None, None, None, None, None, None, None, None, None, None],
+    methods: &[
+        Some(&[]),                             // GetTypeInfoCount
+        Some(&[I, Out(&ITYPEINFO)]),           // GetTypeInfo(index, ppTInfo)
+        Some(&[I, I]),                         // GetTypeInfoType(index, TYPEKIND*)
+        Some(&[I, Out(&ITYPEINFO)]),           // GetTypeInfoOfGuid(REFGUID, ppTinfo)
+        Some(&[OutPtr]),                       // GetLibAttr(TLIBATTR**)
+        None,                                  // GetTypeComp
+        Some(&[I, OutPtr, OutPtr, I, OutPtr]), // GetDocumentation
+        Some(&[I, I, I]),                      // IsName(szNameBuf, lHashVal, BOOL*)
+        None,                                  // FindName
+        Some(&[I]),                            // ReleaseTLibAttr(TLIBATTR*)
+    ],
+};
+
+/// ITypeInfo (oaidl.h, #2796) : ce qu'un puits d'événements lit d'une
+/// dispinterface. TYPEATTR et FUNCDESC sont traduits (`com_typeinfo.rs`) ;
+/// GetVarDesc, GetNames et GetIDsOfNames (tableaux de pointeurs), Invoke,
+/// GetDllEntry, AddressOfMember, CreateInstance restent non décrites.
+pub(super) static ITYPEINFO: Iface = Iface {
+    name: "ITypeInfo",
+    iid: ole(0x2_0401),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[DescOut(Desc::TypeAttr)]),      // GetTypeAttr
+        None,                                  // GetTypeComp
+        Some(&[I, DescOut(Desc::FuncDesc)]),   // GetFuncDesc(index, ppFuncDesc)
+        None,                                  // GetVarDesc
+        None,                                  // GetNames
+        Some(&[I, I]),                         // GetRefTypeOfImplType(index, HREFTYPE*)
+        Some(&[I, I]),                         // GetImplTypeFlags(index, INT*)
+        None,                                  // GetIDsOfNames
+        None,                                  // Invoke
+        Some(&[I, OutPtr, OutPtr, I, OutPtr]), // GetDocumentation
+        None,                                  // GetDllEntry
+        Some(&[I, Out(&ITYPEINFO)]),           // GetRefTypeInfo(hRefType, ppTInfo)
+        None,                                  // AddressOfMember
+        None,                                  // CreateInstance
+        Some(&[I, OutPtr]),                    // GetMops(memid, BSTR*)
+        Some(&[Out(&ITYPELIB), I]),            // GetContainingTypeLib(ppTLib, pIndex)
+        Some(&[DescIn]),                       // ReleaseTypeAttr
+        Some(&[DescIn]),                       // ReleaseFuncDesc
+        None,                                  // ReleaseVarDesc
+    ],
 };
 
 /// IObjectArray : tableau d'objets (éléments retirés d'une liste de
@@ -997,6 +1063,7 @@ static ALL: &[&Iface] = &[
     &ICREATEERRORINFO,
     &IDISPATCH,
     &ITYPELIB,
+    &ITYPEINFO,
     &IOBJECTARRAY,
     &IOBJECTCOLLECTION,
     &ICUSTOMDESTINATIONLIST,
@@ -1036,6 +1103,7 @@ pub(super) fn by_iid(iid: &Guid) -> Option<&'static Iface> {
         .chain(super::com_mf::ALL.iter())
         .chain(super::com_ole::ALL.iter())
         .chain(super::com_mf_chaine::ALL.iter())
+        .chain(super::com_webbrowser::ALL.iter())
         .chain(super::com_winrt::ALL.iter())
         .copied()
         .find(|f| &f.iid == iid)
@@ -1360,7 +1428,8 @@ const VT_RECORD: u16 = 36;
 const VT_BLOB: u16 = 65;
 const VT_BLOB_OBJECT: u16 = 70;
 const VT_ARRAY: u16 = 0x2000;
-const VT_BYREF: u16 = 0x4000;
+pub(super) const VT_BYREF: u16 = 0x4000;
+pub(super) const VT_VARIANT: u16 = 12;
 
 fn variant_has_pointer(vt: u16) -> bool {
     vt & (VT_ARRAY | VT_BYREF) != 0
@@ -1371,7 +1440,7 @@ fn variant_has_pointer(vt: u16) -> bool {
 }
 
 /// VARIANT x86 (16 octets) → x64 (24 octets).
-unsafe fn variant64(src: u32, dst: *mut u8) {
+pub(super) unsafe fn variant64(src: u32, dst: *mut u8) {
     std::ptr::copy_nonoverlapping(src as usize as *const u8, dst, 16);
     std::ptr::write_bytes(dst.add(16), 0, 8);
     let vt = *(dst as *const u16);
@@ -1396,7 +1465,7 @@ unsafe fn variant64(src: u32, dst: *mut u8) {
 }
 
 /// VARIANT x64 → x86.
-unsafe fn variant32(src: *const u8, dst: u32) {
+pub(super) unsafe fn variant32(src: *const u8, dst: u32) {
     let vt = *(src as *const u16);
     std::ptr::copy_nonoverlapping(src, dst as usize as *mut u8, 8);
     if matches!(vt, VT_BLOB | VT_BLOB_OBJECT) {
@@ -1490,6 +1559,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     slots.extend(this);
     let mut p = args;
     let mut iid: Guid = [0; 16];
+    let mut disps64: Vec<super::com_disp::Disp64> = Vec::new();
     for &k in kinds {
         let v = rd(p);
         p += 4;
@@ -1527,6 +1597,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
             }
             InQ => slots.push(to64(v, by_iid(&iid))),
             In(f) => slots.push(to64(v, Some(f))),
+            DescIn => slots.push(super::com_typeinfo::take64(v)),
             InArr(f) => {
                 if v == 0 {
                     slots.push(0);
@@ -1538,6 +1609,13 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 slots.push(t.as_ptr() as u64);
                 arrays.push(t);
             }
+            DispParams => match super::com_disp::to64(v) {
+                Some(d) => {
+                    slots.push(d.addr());
+                    disps64.push(d);
+                }
+                None => slots.push(0),
+            },
             VarIn => {
                 // Le VARIANT occupe quatre cases de la pile x86.
                 temps.push([0; 10]);
@@ -1553,7 +1631,7 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 p += 12;
                 slots.push(t as u64);
             }
-            OutQ | Out(_) | OutPtr | Stat | Var => {
+            OutQ | Out(_) | OutPtr | Stat | Var | DescOut(_) => {
                 if v == 0 {
                     slots.push(0);
                     continue;
@@ -1583,6 +1661,9 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     let mut xmm0 = 0u64;
     let mut r = super::winlux_wow_call64(target, slots.as_ptr(), n, &mut xmm0);
     drop(arrays);
+    for d in &disps64 {
+        super::com_disp::back32(d);
+    }
     for (i, dst, k, f, g) in post {
         let t = temps[i].as_ptr() as *const u8;
         match k {
@@ -1595,6 +1676,14 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 wr(dst, x);
             }
             OutPtr => wr(dst, temps[i][0] as u32),
+            DescOut(d) => {
+                let x = if (r as i32) >= 0 {
+                    super::com_typeinfo::to32(d, temps[i][0])
+                } else {
+                    0
+                };
+                wr(dst, x);
+            }
             Stat => statstg32(t, dst),
             Var => variant32(t, dst),
             _ => {}
@@ -1664,6 +1753,17 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
             );
             return E_NOTIMPL as u64;
         };
+        // TYPEATTR / FUNCDESC d'un ITypeInfo x86 lus par le runtime : non
+        // traduits dans ce sens (#2796).
+        if kinds.iter().any(|k| matches!(k, DescOut(_) | DescIn)) {
+            crate::log_warn!(
+                "wow32",
+                "{} : méthode n° {} d'un objet 32 bits, TYPEATTR/FUNCDESC non traduits vers x64",
+                p.iface.name,
+                m.idx
+            );
+            return E_NOTIMPL as u64;
+        }
         let mut a: Vec<u32> = Vec::with_capacity(kinds.len() * 2 + 1);
         a.push(p.obj);
         // Cases basses (le tas est sous 4 Go) pour les valeurs rendues.
@@ -1674,6 +1774,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let mut arrays: Vec<Vec<u32>> = Vec::new();
         let mut count = 0u32;
         let mut iid: Guid = [0; 16];
+        let mut disps32: Vec<super::com_disp::Disp32> = Vec::new();
         for (i, &k) in kinds.iter().enumerate().take(11) {
             let v = *args.add(i + 1);
             match k {
@@ -1681,6 +1782,8 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     count = v as u32;
                     a.push(v as u32);
                 }
+                // Refusées plus haut.
+                DescOut(_) | DescIn => a.push(0),
                 StrRet | Pidls => {
                     if v == 0 {
                         a.push(0);
@@ -1735,6 +1838,13 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     a.push(t.as_ptr() as usize as u32);
                     arrays.push(t);
                 }
+                DispParams => match super::com_disp::to32(v) {
+                    Some(d) => {
+                        a.push(d.addr());
+                        disps32.push(d);
+                    }
+                    None => a.push(0),
+                },
                 VarIn => {
                     // Case basse : variant32 écrit à une adresse 32 bits.
                     temps.push([0; 10]);
@@ -1782,6 +1892,9 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         let target = rd(rd(p.obj) + 4 * m.idx as u32);
         let r = call32(target as usize, &a) as u32;
         drop(arrays);
+        for d in &disps32 {
+            super::com_disp::back64(d);
+        }
         for (j, dst, k, f) in post {
             let t = temps[j].as_ptr() as *const u8;
             let d = dst as usize as *mut u8;
@@ -1898,6 +2011,10 @@ pub(super) fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&
         ("ole32", "MkParseDisplayName") => k!(In(&IBINDCTX), I, I, Out(&IMONIKER)),
         ("ole32", "CoGetObject") => k!(I, I, Iid, OutQ),
         ("ole32", "OleLoadFromStream") => k!(In(&ISTREAM), Iid, OutQ),
+        // Objet x86 passé aux fonctions d'IRunnableObject (#2765).
+        ("ole32", "OleRun" | "OleIsRunning") => k!(In(&IUNKNOWN)),
+        ("ole32", "OleLockRunning") => k!(In(&IUNKNOWN), I, I),
+        ("ole32", "OleSetContainedObject") => k!(In(&IUNKNOWN), I),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
         ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
         // Éléments du shell (#2428, lot A ; shobjidl_core.h, shlobj_core.h).
