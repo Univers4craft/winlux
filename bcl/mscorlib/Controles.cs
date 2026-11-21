@@ -69,7 +69,7 @@ namespace System.Windows.Forms
         {
             int largeurMax = MaximumSize.Width;
             if (proposedSize.Width > 1 && (largeurMax == 0 || proposedSize.Width < largeurMax)) largeurMax = proposedSize.Width;
-            Size t = Natif.MesurerTexte(IsHandleCreated ? Handle : IntPtr.Zero, Text, largeurMax);
+            Size t = Natif.MesurerTexte(Font, Text, largeurMax);
             return new Size(t.Width, t.Height);
         }
 
@@ -111,7 +111,7 @@ namespace System.Windows.Forms
 
         public override Size GetPreferredSize(Size proposedSize)
         {
-            Size t = Natif.MesurerTexte(IsHandleCreated ? Handle : IntPtr.Zero, Text, 0);
+            Size t = Natif.MesurerTexte(Font, Text, 0);
             // Marges du thème autour du texte, jamais plus petit que la taille par défaut.
             return new Size(Math.Max(75, t.Width + 16), Math.Max(23, t.Height + 10));
         }
@@ -148,6 +148,10 @@ namespace System.Windows.Forms
     }
 
     // ── ProgressBar : fenêtre msctls_progress32 ──
+
+    // Learn « BoundsSpecified Enum ».
+    [Flags]
+    public enum BoundsSpecified { None = 0, X = 1, Y = 2, Location = 3, Width = 4, Height = 8, Size = 12, All = 15 }
 
     public enum ProgressBarStyle { Blocks = 0, Continuous = 1, Marquee = 2 }
 
