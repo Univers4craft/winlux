@@ -1048,9 +1048,19 @@ pub unsafe extern "win64" fn GetSecurityDescriptorDacl(
     1
 }
 
+/// Longueur du descripteur « avec toutes ses structures associées »
+/// (Learn, GetSecurityDescriptorLength). Un descripteur absolu ne range
+/// que des pointeurs : sa longueur est celle de la structure (40 octets en
+/// x64, 20 en x86) plus celle des SID et ACL désignés (#1887). Un
+/// descripteur auto-relatif s'étend jusqu'à la fin de sa dernière partie.
 pub unsafe extern "win64" fn GetSecurityDescriptorLength(sd: *const u8) -> u32 {
     if sd.is_null() {
         return 0;
+    }
+    let control = std::ptr::read_unaligned(sd.add(2) as *const u16);
+    if control & SE_SELF_RELATIVE == 0 {
+        let parts: usize = sd_parts(sd).iter().flatten().map(Vec::len).sum();
+        return (absolute_sd_size(crate::wow32::pointer_size()) + parts) as u32;
     }
     let mut end = 20usize;
     for field in [4usize, 8, 16] {
