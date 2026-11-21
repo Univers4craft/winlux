@@ -14,8 +14,10 @@
 // Mur 5a (#2795) : AutoSize, taille préférée, tailles minimale et maximale,
 // commandes des contrôles enfants (WM_COMMAND), touches (PreProcessMessage,
 // ProcessCmdKey, ProcessDialogKey), AcceptButton et CancelButton ; Label,
-// Button et ProgressBar sont dans Controles.cs. La mise à l'échelle, les
-// polices et les icônes viennent au mur 5b.
+// Button et ProgressBar sont dans Controles.cs. Mur 5b (#2801) : Control.Font
+// (ambiante, WM_SETFONT), Control.Scale et la mise à l'échelle automatique de
+// ContainerControl (AutoScaleMode, AutoScaleDimensions) ; Font est dans
+// Dessin.cs. Les icônes viennent au mur 5c.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -281,14 +283,14 @@ namespace System.Windows.Forms
         public const int GWL_STYLE = -16;
         public const int DT_CALCRECT = 0x400, DT_WORDBREAK = 0x10, DT_NOPREFIX = 0x800, DT_EXPANDTABS = 0x40;
 
-        // Taille du texte dans la police de la fenêtre (WM_GETFONT), ou la
-        // police d'interface par défaut ; largeur limitée et coupure aux mots
-        // quand `largeurMax` > 0.
-        public static Size MesurerTexte(IntPtr hwnd, string texte, int largeurMax)
+        // Taille du texte dans la police donnée (la police d'interface par
+        // défaut sans elle) ; largeur limitée et coupure aux mots quand
+        // `largeurMax` > 0.
+        public static Size MesurerTexte(Font font, string texte, int largeurMax)
         {
             if (string.IsNullOrEmpty(texte)) texte = " ";
             IntPtr hdc = GetDC(IntPtr.Zero);
-            IntPtr police = hwnd != IntPtr.Zero ? SendMessageW(hwnd, 0x0031, IntPtr.Zero, IntPtr.Zero) : IntPtr.Zero;
+            IntPtr police = font != null ? font.Hfont : IntPtr.Zero;
             if (police == IntPtr.Zero) police = GetStockObject(17); // DEFAULT_GUI_FONT
             IntPtr avant = SelectObject(hdc, police);
             IntPtr r = Marshal.AllocHGlobal(16);
@@ -482,6 +484,7 @@ namespace System.Windows.Forms
         private object _tag;
         private bool _autoSize;
         private Size _min, _max;
+        private Font _police;
 
         public Control() { Size d = DefaultSize; _l = d.Width; _h = d.Height; }
 
@@ -498,6 +501,7 @@ namespace System.Windows.Forms
         public event EventHandler HandleCreated;
         public event EventHandler HandleDestroyed;
         public event EventHandler AutoSizeChanged;
+        public event EventHandler FontChanged;
 
         // ── Poignée ──
 
@@ -539,6 +543,8 @@ namespace System.Windows.Forms
             s_enCreation = null;
             if (h == IntPtr.Zero) throw new InvalidOperationException("CreateWindowEx failed");
             if (_handle == IntPtr.Zero) Associer(h);
+            // La police de la fenêtre est celle du Control (WM_SETFONT).
+            Natif.SendMessageW(h, 0x0030, Font.Hfont, IntPtr.Zero);
             // Bornes réelles (CW_USEDEFAULT, cadre ajusté par le système).
             LireBornes();
             if (_enfants != null)
@@ -814,7 +820,63 @@ namespace System.Windows.Forms
         public void ResumeLayout(bool performLayout)
         {
             if (_gelMiseEnPage > 0) _gelMiseEnPage--;
+            if (_gelMiseEnPage == 0) MiseEnPageReprise();
             if (_gelMiseEnPage == 0 && performLayout) PerformLayout();
+        }
+
+        internal virtual void MiseEnPageReprise() { }
+
+        // ── Police (Learn : Control.Font est ambiante) ──
+
+        public static Font DefaultFont { get { return SystemFonts.DefaultFont; } }
+
+        public virtual Font Font
+        {
+            get
+            {
+                if (_police != null) return _police;
+                return _parent != null ? _parent.Font : DefaultFont;
+            }
+            set
+            {
+                Font avant = Font;
+                _police = value;
+                if (!Font.Equals(avant)) PoliceChangee();
+            }
+        }
+
+        internal bool PoliceAmbiante { get { return _police == null; } }
+
+        // La nouvelle police va à la fenêtre et aux enfants qui l'héritent.
+        internal void PoliceChangee()
+        {
+            if (_handle != IntPtr.Zero) Natif.SendMessageW(_handle, 0x0030, Font.Hfont, new IntPtr(1));
+            AjusterTaille();
+            OnFontChanged(EventArgs.Empty);
+            if (_enfants != null)
+                foreach (Control c in _enfants) if (c.PoliceAmbiante) c.PoliceChangee();
+        }
+
+        protected virtual void OnFontChanged(EventArgs e) { EventHandler h = FontChanged; if (h != null) h(this, e); }
+
+        // ── Mise à l'échelle (Learn : Control.Scale, ScaleControl) ──
+
+        public void Scale(SizeF factor)
+        {
+            SuspendLayout();
+            ScaleControl(factor, BoundsSpecified.All);
+            if (_enfants != null)
+                foreach (Control c in _enfants) c.Scale(factor);
+            ResumeLayout(false);
+        }
+
+        internal static int Fois(int v, float f) { return (int)Math.Round(v * f); }
+
+        protected virtual void ScaleControl(SizeF factor, BoundsSpecified specified)
+        {
+            if (_min.Width > 0 || _min.Height > 0) _min = new Size(Fois(_min.Width, factor.Width), Fois(_min.Height, factor.Height));
+            if (_max.Width > 0 || _max.Height > 0) _max = new Size(Fois(_max.Width, factor.Width), Fois(_max.Height, factor.Height));
+            SetBounds(Fois(_x, factor.Width), Fois(_y, factor.Height), Fois(_l, factor.Width), Fois(_h, factor.Height));
         }
 
         public void PerformLayout() { PerformLayout(null, null); }
@@ -844,7 +906,12 @@ namespace System.Windows.Forms
             }
         }
 
-        internal void PoserParent(Control p) { _parent = p; }
+        internal void PoserParent(Control p)
+        {
+            Font avant = _police == null && _parent != null ? _parent.Font : null;
+            _parent = p;
+            if (_police == null && p != null && avant != null && !p.Font.Equals(avant)) PoliceChangee();
+        }
 
         public ControlCollection Controls
         {
@@ -990,7 +1057,98 @@ namespace System.Windows.Forms
 
     public class ContainerControl : ScrollableControl
     {
+        private AutoScaleMode _mode = AutoScaleMode.Inherit;
+        private SizeF _dimensions = SizeF.Empty;
+        private bool _aEchelonner;
+
         public ContainerControl() { }
+
+        public AutoScaleMode AutoScaleMode
+        {
+            get { return _mode; }
+            set { _mode = value; _aEchelonner = true; }
+        }
+
+        public SizeF AutoScaleDimensions
+        {
+            get { return _dimensions; }
+            set
+            {
+                if (value.Width < 0 || value.Height < 0) throw new ArgumentOutOfRangeException("value");
+                _dimensions = value;
+                _aEchelonner = true;
+            }
+        }
+
+        // Inherit : le mode du conteneur parent, None tout en haut.
+        private AutoScaleMode ModeEffectif
+        {
+            get
+            {
+                if (_mode != AutoScaleMode.Inherit) return _mode;
+                for (Control p = Parent; p != null; p = p.Parent)
+                {
+                    ContainerControl c = p as ContainerControl;
+                    if (c != null && c._mode != AutoScaleMode.Inherit) return c._mode;
+                }
+                return AutoScaleMode.None;
+            }
+        }
+
+        // Learn : Font = mesures de la police du conteneur (inférence : la
+        // largeur moyenne des 52 lettres latines et la hauteur de la police,
+        // comme les valeurs 6x13 / 7x15 que le concepteur écrit), Dpi = les
+        // points par pouce de l'écran, None = les dimensions de conception.
+        public SizeF CurrentAutoScaleDimensions
+        {
+            get
+            {
+                switch (ModeEffectif)
+                {
+                    case AutoScaleMode.Font:
+                        int h, interligne; float l;
+                        Gdi.Mesures(Font.Hfont, out h, out interligne, out l);
+                        return new SizeF((float)Math.Round(l), h);
+                    case AutoScaleMode.Dpi:
+                        return new SizeF(Gdi.Dpi(false), Gdi.Dpi(true));
+                    default:
+                        return _dimensions;
+                }
+            }
+        }
+
+        public SizeF AutoScaleFactor
+        {
+            get
+            {
+                SizeF actuel = CurrentAutoScaleDimensions;
+                if (_dimensions.Width <= 0 || _dimensions.Height <= 0 || actuel.Width <= 0 || actuel.Height <= 0)
+                    return new SizeF(1f, 1f);
+                return new SizeF(actuel.Width / _dimensions.Width, actuel.Height / _dimensions.Height);
+            }
+        }
+
+        // Une fois les dimensions de conception posées et la mise en page
+        // reprise : contrôles mis à l'échelle, et les dimensions deviennent
+        // celles de l'écran (pas de seconde mise à l'échelle).
+        public void PerformAutoScale()
+        {
+            _aEchelonner = false;
+            if (ModeEffectif == AutoScaleMode.None || _dimensions.Width <= 0 || _dimensions.Height <= 0) return;
+            SizeF f = AutoScaleFactor;
+            if (f.Width != 1f || f.Height != 1f) Scale(f);
+            _dimensions = CurrentAutoScaleDimensions;
+        }
+
+        internal override void MiseEnPageReprise()
+        {
+            if (_aEchelonner) PerformAutoScale();
+        }
+
+        internal void EchelonnerSiAttendu()
+        {
+            if (_aEchelonner) PerformAutoScale();
+        }
     }
 
     // ── Form ──
@@ -1056,6 +1214,13 @@ namespace System.Windows.Forms
         }
 
         protected override void OnLayout(LayoutEventArgs levent) { base.OnLayout(levent); }
+
+        // Une Form garde sa place ; sa zone cliente est mise à l'échelle.
+        protected override void ScaleControl(SizeF factor, BoundsSpecified specified)
+        {
+            Size c = ClientSize;
+            ClientSize = new Size(Fois(c.Width, factor.Width), Fois(c.Height, factor.Height));
+        }
 
         protected override Size DefaultSize { get { return new Size(300, 300); } }
 
@@ -1155,6 +1320,7 @@ namespace System.Windows.Forms
             if (value && !_chargee)
             {
                 // Learn : Load avant le premier affichage, Shown juste après.
+                EchelonnerSiAttendu();
                 CreateControl();
                 _chargee = true;
                 OnLoad(EventArgs.Empty);
