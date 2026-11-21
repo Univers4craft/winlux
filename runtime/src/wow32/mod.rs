@@ -3004,7 +3004,7 @@ extern "C" fn fault32(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_vo
         }
         let code = crate::crash::report(sig, info, ctx);
         crate::dlls::kernel32::record_exit_code(code);
-        libc::_exit(code as i32);
+        libc::_exit(crate::dlls::kernel32::linux_exit_status(code));
     }
 }
 
