@@ -9213,6 +9213,22 @@ fn exit_code_text(code: u32) -> [u8; 11] {
     text
 }
 
+/// Statut Linux d'un code de sortie Windows. Le noyau ne garde que l'octet
+/// bas du code passé à `_exit` ; sous Windows, GetExitCodeProcess rend le
+/// DWORD entier (Learn, ExitProcess, GetExitCodeProcess). Un code non nul
+/// dont l'octet bas vaut 0 (0x80131500, 0xC0000100, 0x100…) serait lu 0, un
+/// succès : il sort en 1, l'échec générique (EXIT_FAILURE). Les autres
+/// codes gardent leur octet bas (1602 → 66, 3010 → 194). Le code complet
+/// reste dans WINLUX_EXIT_CODE_FILE (#2267). Sûr dans un gestionnaire de
+/// signal (#2758).
+pub const fn linux_exit_status(code: u32) -> i32 {
+    if code != 0 && code & 0xFF == 0 {
+        1
+    } else {
+        code as i32
+    }
+}
+
 /// Écrit le code complet ; sûr dans un gestionnaire de signal (open/write).
 pub fn record_exit_code(code: u32) {
     let Some(path) = EXIT_CODE_FILE.get() else {
@@ -9297,7 +9313,7 @@ pub(crate) fn child_exit_code(pid: u32, status: std::process::ExitStatus) -> u32
 /// puis `exit` (atexit et destructeurs, comme `std::process::exit`).
 pub fn exit_with(code: i32) -> ! {
     record_exit_code(code as u32);
-    std::process::exit(code)
+    std::process::exit(linux_exit_status(code as u32))
 }
 
 #[cfg(test)]
@@ -9354,6 +9370,51 @@ mod tests_code_enfant {
             42
         );
     }
+
+    /// #2758 : un code non nul dont l'octet bas vaut 0 ne sort plus en 0 ;
+    /// les autres gardent leur octet bas.
+    #[test]
+    fn statut_linux_jamais_nul_pour_un_echec() {
+        assert_eq!(linux_exit_status(0), 0);
+        for code in [0x8013_1500, 0xC000_0100, 0x100, 0x1_0000] {
+            assert_eq!(linux_exit_status(code), 1, "{code:#x}");
+        }
+        assert_eq!(linux_exit_status(1602) & 0xFF, 66);
+        assert_eq!(linux_exit_status(3010) & 0xFF, 194);
+        assert_eq!(linux_exit_status(0xC000_0005) & 0xFF, 5);
+        assert_eq!(linux_exit_status(0xFFFF_FFFF) & 0xFF, 255);
+    }
+
+    const ENFANT_SORTIE: &str = "WINLUX_TEST_ENFANT_SORTIE_2758";
+
+    /// Processus enfant de `exitprocess_0x80131500_vu_comme_un_echec`.
+    #[test]
+    #[ignore = "lancé comme processus enfant"]
+    fn enfant_exitprocess_0x80131500() {
+        if std::env::var_os(ENFANT_SORTIE).is_some() {
+            flush_and_exit(0x8013_1500u32 as i32);
+        }
+    }
+
+    /// #2758 : ExitProcess(0x80131500) (COR_E_EXCEPTION), vu d'un shell
+    /// Linux : statut 1, plus 0. Relancé dans un processus enfant, car
+    /// flush_and_exit termine le processus.
+    #[test]
+    fn exitprocess_0x80131500_vu_comme_un_echec() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::tests_code_enfant::enfant_exitprocess_0x80131500",
+                "--test-threads=1",
+                "--include-ignored",
+            ])
+            .env(ENFANT_SORTIE, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(1));
+    }
 }
 
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
@@ -9370,7 +9431,7 @@ pub fn terminate_self(code: u32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
     // SAFETY: _exit termine le processus sans revenir.
-    unsafe { libc::_exit(code as i32) }
+    unsafe { libc::_exit(linux_exit_status(code)) }
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
@@ -9394,7 +9455,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     // SAFETY : sorties vidées ci-dessus, _exit termine tout le processus.
     unsafe {
         libc::fflush(std::ptr::null_mut());
-        libc::_exit(code)
+        libc::_exit(linux_exit_status(code as u32))
     }
 }
 

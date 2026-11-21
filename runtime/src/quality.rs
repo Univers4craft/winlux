@@ -411,7 +411,7 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
             }
         }
 
-        libc::_exit(exception_code as i32);
+        libc::_exit(crate::dlls::kernel32::linux_exit_status(exception_code));
     }
 }
 
