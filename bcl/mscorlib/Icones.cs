@@ -37,6 +37,20 @@ namespace System.Drawing
         public Icon(string fileName, int width, int height) : this(File.ReadAllBytes(fileName), width, height) { }
         public Icon(Icon original, Size size) : this(original, size.Width, size.Height) { }
 
+        // Learn « Icon(Type, String) » : la ressource incorporée de l'assembly
+        // du type, nommée dans son espace de noms (#2838).
+        public Icon(Type type, string resource) : this(Ressource(type, resource), 32, 32) { }
+
+        private static byte[] Ressource(Type type, string resource)
+        {
+            if ((object)type == null) throw new ArgumentNullException("type");
+            if (resource == null) throw new ArgumentNullException("resource");
+            Stream s = type.Assembly.GetManifestResourceStream(type, resource);
+            if (s == null)
+                throw new ArgumentException("Resource '" + resource + "' cannot be found in class '" + type.ToString() + "'.");
+            using (s) return Lire(s);
+        }
+
         public Icon(Icon original, int width, int height)
         {
             if (original == null) throw new ArgumentNullException("original");
