@@ -3,7 +3,7 @@ t = (runtime_dlls / "teams_win32.rs").read_text(encoding="utf-8")
 m = (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
 p = (runtime_dlls / "threadpool.rs").read_text(encoding="utf-8")
 c = (runtime_dlls / "common_apps.rs").read_text(encoding="utf-8")
-ok(".chain(teams_win32::all())" in m, "imports de Teams servis par teams_win32 (#2110)")
+ok("pub mod teams_win32;" in m and "pub fn all(" in t, "imports de Teams servis par teams_win32 (#2110)")
 ok('"ShowWindowAsync" => fn ShowWindowAsync' in t and '"IsGUIThread" => fn IsGUIThread' in t,
    "ShowWindowAsync et IsGUIThread servies (#2110)")
 ok('"CreateThreadpoolCleanupGroup"' in p and '"SetThreadpoolTimerEx"' in p,
