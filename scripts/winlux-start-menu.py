@@ -464,6 +464,7 @@ class Start(Gtk.Application):
         if self.preloading:
             self.preloading = False
             if not self.window: self.build()
+            self.prepare_hidden()
             self.hold()
             return
         if self.window and self.window.get_visible():
@@ -509,6 +510,16 @@ class Start(Gtk.Application):
         # liste dessinée, GTK recalant la position à la nouvelle hauteur.
         self.scroll_top()
         GLib.idle_add(self.scroll_top)
+
+    def prepare_hidden(self):
+        """Préchargement : fait tout de suite, fenêtre cachée, le premier
+        affichage des widgets (styles, tailles, fenêtre X). Laissé au
+        premier appui, il en coûtait 36 à 52 ms contre 4 à 11 ensuite, et ce
+        premier appui préchargé n'était pas deux fois plus rapide qu'un
+        lancement à froid (#2834)."""
+        self.window.get_child().show_all()
+        self.window.realize()
+        self.window.get_preferred_size()
 
     def workarea(self):
         display = self.window.get_display()
