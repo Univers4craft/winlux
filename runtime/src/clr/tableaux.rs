@@ -11,7 +11,7 @@ use super::exceptions::ClrException;
 use super::gc;
 use super::il::{load, store, Interpreter, Value};
 use super::metadata::{self, ElementType};
-use super::tables::{TableId, Token};
+use super::tables::{CodedIndex, TableId, Token};
 use super::types::{self, Kind, TypeId};
 
 /// Données d'un tableau à une dimension : longueur (u64) puis éléments.
@@ -19,6 +19,36 @@ const DATA: usize = 8;
 
 fn length(arr: *mut u8) -> i64 {
     unsafe { *(arr as *const u64) as i64 }
+}
+
+/// Bornes (borne inférieure, longueur) de chaque dimension : une seule,
+/// (0, longueur), pour un tableau à une dimension (#2848).
+fn bounds_of(arr: *mut u8) -> Vec<(i32, i32)> {
+    gc::array_bounds(arr).unwrap_or_else(|| vec![(0, length(arr) as i32)])
+}
+
+/// Rang d'élément, à plat, désigné par un indice par dimension (rangement
+/// ligne par ligne) : ArgumentException si le nombre d'indices n'est pas
+/// le rang, IndexOutOfRangeException hors des bornes (documentation
+/// « Array.GetValue »).
+pub(super) fn flat_index(arr: *mut u8, indices: &[i64]) -> Result<usize, ClrException> {
+    let bounds = bounds_of(arr);
+    if indices.len() != bounds.len() {
+        return Err(ClrException::new(
+            "System",
+            "ArgumentException",
+            "Indices length does not match the array rank.",
+        ));
+    }
+    let mut flat = 0usize;
+    for (&i, &(lo, n)) in indices.iter().zip(&bounds) {
+        let r = i - lo as i64;
+        if r < 0 || r >= n as i64 {
+            return Err(ClrException::index_out_of_range());
+        }
+        flat = flat * n as usize + r as usize;
+    }
+    Ok(flat)
 }
 
 fn null_arg(name: &str) -> ClrException {
@@ -334,7 +364,7 @@ impl Interpreter {
         Ok(Value::Null)
     }
 
-    /// `isinst`/`castclass` vers un type tableau `T[]` (jeton TypeSpec) :
+    /// `isinst`/`castclass` vers un type tableau `T[]` ou `T[,]` (jeton TypeSpec) :
     /// l'objet doit être un tableau dont les éléments conviennent (#2023).
     /// Un tableau de références ne garde pas le type de ses éléments : tout
     /// `U[]` de références est accepté pour un `T[]` de références. Pour les
@@ -351,11 +381,15 @@ impl Interpreter {
                 .to_vec()
         };
         let mut off = 0;
-        let ElementType::SzArray(inner) = metadata::decode_type(&blob, &mut off) else {
-            return None;
+        // `T[,]` demande le même rang ; un `T[]` n'est pas un tableau à
+        // plusieurs dimensions (#2848).
+        let (inner, rank) = match metadata::decode_type(&blob, &mut off) {
+            ElementType::SzArray(inner) => (inner, None),
+            ElementType::Array(inner, rank) => (inner, Some(rank as usize)),
+            _ => return None,
         };
         let actual = gc::type_of(obj)?;
-        if actual != types::TYPE_ARRAY {
+        if actual != types::TYPE_ARRAY || gc::array_bounds(obj).map(|b| b.len()) != rank {
             return Some(false);
         }
         let target = self.resolve_sig(self.current, &inner, &self.current_gen());
@@ -467,53 +501,84 @@ impl Interpreter {
                 _ => return None,
             },
             "CreateInstance" => self.array_create(args),
-            "GetLength" | "get_Length" => {
-                array_arg(args.first(), "this").map(|a| Value::I32(length(a) as i32))
-            }
+            "CreerTableau" => self.array_create_md(args),
+            "get_Length" => array_arg(args.first(), "this").map(|a| Value::I32(length(a) as i32)),
             "get_LongLength" | "GetLongLength" => {
                 array_arg(args.first(), "this").map(|a| Value::I64(length(a)))
             }
-            // Array.GetValue / SetValue (#2008) : élément encadré.
-            "GetValue" | "SetValue" => {
-                let set = name == "SetValue";
+            // Array.GetValue / SetValue (#2008) : élément encadré ; un
+            // indice par dimension, en entiers ou en tableau (#2848).
+            "GetValue" | "SetValue" | "LireElement" | "EcrireElement" => {
+                let set = matches!(name, "SetValue" | "EcrireElement");
                 match array_arg(args.first(), "this") {
                     Err(e) => Err(e),
                     Ok(a) => {
-                        let i = args.get(if set { 2 } else { 1 }).map_or(-1, |v| v.as_i64());
-                        if i < 0 || i >= length(a) {
-                            Err(out_of_range("index"))
-                        } else {
-                            let kind = self.elem_kind(a);
-                            let size = kind.elem_size();
-                            let at = unsafe { a.add(8 + i as usize * size) };
-                            if set {
-                                let v = args.get(1).copied().unwrap_or(Value::Null);
-                                let raw = if kind == Kind::Ref {
-                                    v
-                                } else {
-                                    match self.unbox_elem(a, kind, v) {
-                                        Ok(Some(raw)) => raw,
-                                        Ok(None) => {
-                                            unsafe { std::ptr::write_bytes(at, 0, size) };
-                                            return Some(Ok(Value::Null));
+                        let idx = args.get(if set { 2 } else { 1 }).copied();
+                        let indices = match (name, idx) {
+                            ("LireElement" | "EcrireElement", Some(Value::Ref(t)))
+                                if !t.is_null() =>
+                            {
+                                (0..length(t))
+                                    .map(|i| unsafe {
+                                        *(t.add(DATA + 4 * i as usize) as *const i32)
+                                    } as i64)
+                                    .collect()
+                            }
+                            ("LireElement" | "EcrireElement", _) => {
+                                return Some(Err(null_arg("indices")))
+                            }
+                            (_, i) => vec![i.map_or(-1, |v| v.as_i64())],
+                        };
+                        match flat_index(a, &indices) {
+                            Err(e) => Err(e),
+                            Ok(i) => {
+                                let kind = self.elem_kind(a);
+                                let size = kind.elem_size();
+                                let at = unsafe { a.add(DATA + i * size) };
+                                if set {
+                                    let v = args.get(1).copied().unwrap_or(Value::Null);
+                                    let raw = if kind == Kind::Ref {
+                                        v
+                                    } else {
+                                        match self.unbox_elem(a, kind, v) {
+                                            Ok(Some(raw)) => raw,
+                                            Ok(None) => {
+                                                unsafe { std::ptr::write_bytes(at, 0, size) };
+                                                return Some(Ok(Value::Null));
+                                            }
+                                            Err(e) => return Some(Err(e)),
                                         }
-                                        Err(e) => return Some(Err(e)),
-                                    }
-                                };
-                                store(at, kind, raw);
-                                Ok(Value::Null)
-                            } else {
-                                let v = load(at, kind);
-                                Ok(self.box_elem(a, kind, v))
+                                    };
+                                    store(at, kind, raw);
+                                    Ok(Value::Null)
+                                } else {
+                                    let v = load(at, kind);
+                                    Ok(self.box_elem(a, kind, v))
+                                }
                             }
                         }
                     }
                 }
             }
-            "get_Rank" => Ok(Value::I32(1)),
-            "GetLowerBound" => Ok(Value::I32(0)),
-            "GetUpperBound" => {
-                array_arg(args.first(), "this").map(|a| Value::I32(length(a) as i32 - 1))
+            "get_Rank" => {
+                array_arg(args.first(), "this").map(|a| Value::I32(bounds_of(a).len() as i32))
+            }
+            "GetLength" | "GetLowerBound" | "GetUpperBound" => {
+                match array_arg(args.first(), "this") {
+                    Err(e) => Err(e),
+                    Ok(a) => {
+                        let b = bounds_of(a);
+                        let d = args.get(1).map_or(-1, |v| v.as_i64());
+                        match usize::try_from(d).ok().and_then(|d| b.get(d)) {
+                            None => Err(ClrException::index_out_of_range()),
+                            Some(&(lo, n)) => Ok(Value::I32(match name {
+                                "GetLength" => n,
+                                "GetLowerBound" => lo,
+                                _ => lo.wrapping_add(n).wrapping_sub(1),
+                            })),
+                        }
+                    }
+                }
             }
             _ => return None,
         };
@@ -657,4 +722,173 @@ impl Interpreter {
             gc.alloc_array_of(elem, kind.elem_size(), n as usize)
         })))
     }
+
+    /// CreerTableau(Type, longueurs, bornes inférieures ou null) : tableau
+    /// à plusieurs dimensions (Array.CreateInstance, #2848).
+    fn array_create_md(&mut self, args: &[Value]) -> Result<Value, ClrException> {
+        let [Value::Ref(t), lens, lows] = args else {
+            return Err(null_arg("elementType"));
+        };
+        if t.is_null() {
+            return Err(null_arg("elementType"));
+        }
+        let Some(elem) = super::reflection::type_id_of(*t) else {
+            return Err(ClrException::new(
+                "System",
+                "ArgumentException",
+                "Type must be a type provided by the runtime.\r\nParameter name: elementType",
+            ));
+        };
+        let ints = |v: &Value| -> Option<Vec<i32>> {
+            let p = v.as_ref();
+            (!p.is_null()).then(|| {
+                (0..length(p) as usize)
+                    .map(|i| unsafe { *(p.add(DATA + 4 * i) as *const i32) })
+                    .collect()
+            })
+        };
+        let Some(lens) = ints(lens) else {
+            return Err(null_arg("lengths"));
+        };
+        let lows = ints(lows).unwrap_or_else(|| vec![0; lens.len()]);
+        if lens.is_empty() || lens.len() > gc::MAX_RANK {
+            return Err(ClrException::new(
+                "System",
+                "ArgumentException",
+                "Must provide at least one rank.\r\nParameter name: lengths",
+            ));
+        }
+        if lows.len() != lens.len() {
+            return Err(ClrException::new(
+                "System",
+                "ArgumentException",
+                "The arrays must have the same number of dimensions.\r\nParameter name: lowerBounds",
+            ));
+        }
+        if lens.iter().any(|&n| n < 0) {
+            return Err(out_of_range("lengths"));
+        }
+        let kind = self.kind_of_type(elem);
+        let elem = if kind == Kind::Ref { 0 } else { elem };
+        let bounds: Vec<(i32, i32)> = lows.into_iter().zip(lens).collect();
+        // Une dimension indexée depuis 0 reste un tableau ordinaire.
+        if bounds.len() == 1 && bounds[0].0 == 0 {
+            return Ok(Value::Ref(gc::with_gc(|gc| {
+                gc.alloc_array_of(elem, kind.elem_size(), bounds[0].1 as usize)
+            })));
+        }
+        Ok(Value::Ref(alloc_md(elem, kind, &bounds)?))
+    }
+
+    /// Méthodes que le moteur fournit à un type tableau à plusieurs
+    /// dimensions (ECMA-335 §II.14.2) : constructeurs, Get, Set et Address,
+    /// appelés par un MemberRef dont le parent est une TypeSpec ARRAY.
+    /// `None` si `token` ne désigne pas une telle méthode.
+    pub(super) fn md_array_method(&self, token: u32) -> Option<(TypeId, Kind, u32, String)> {
+        let tok = Token(token);
+        if tok.table() != TableId::MemberRef as u8 {
+            return None;
+        }
+        let mr = self.assembly.get_member_ref(tok.rid());
+        let (parent, prow) = CodedIndex::MemberRefParent.decode(mr.class);
+        if parent != Some(TableId::TypeSpec) {
+            return None;
+        }
+        let blob = self
+            .assembly
+            .get_blob(self.assembly.get_type_spec(prow).signature);
+        let mut off = 0;
+        let ElementType::Array(inner, rank) = metadata::decode_type(blob, &mut off) else {
+            return None;
+        };
+        let elem = self.resolve_sig(self.current, &inner, &self.current_gen());
+        let kind = self.kind_of_type(elem);
+        let elem = if kind == Kind::Ref { 0 } else { elem };
+        let name = self.assembly.get_string(mr.name).to_string();
+        Some((elem, kind, rank, name))
+    }
+
+    /// `newobj T[,]::.ctor` : `rank` longueurs, ou `2 × rank` couples
+    /// (borne inférieure, longueur).
+    pub(super) fn md_array_new(
+        &mut self,
+        elem: TypeId,
+        kind: Kind,
+        rank: u32,
+        args: &[Value],
+    ) -> Result<Value, ClrException> {
+        let rank = rank as usize;
+        let bounds: Vec<(i32, i32)> = if args.len() == rank {
+            args.iter().map(|v| (0, v.as_i64() as i32)).collect()
+        } else if args.len() == 2 * rank {
+            args.chunks(2)
+                .map(|c| (c[0].as_i64() as i32, c[1].as_i64() as i32))
+                .collect()
+        } else {
+            return Err(ClrException::new(
+                "System",
+                "MissingMethodException",
+                "Constructeur de tableau à plusieurs dimensions inconnu.",
+            ));
+        };
+        if bounds.iter().any(|&(_, n)| n < 0) {
+            return Err(ClrException::new(
+                "System",
+                "OverflowException",
+                "Arithmetic operation resulted in an overflow.",
+            ));
+        }
+        Ok(Value::Ref(alloc_md(elem, kind, &bounds)?))
+    }
+
+    /// `T[,]::Get`, `Set` et `Address` : `this`, un indice par dimension,
+    /// puis la valeur pour Set.
+    pub(super) fn md_array_access(
+        &mut self,
+        kind: Kind,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, ClrException> {
+        let arr = match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => *p,
+            _ => return Err(ClrException::null_reference()),
+        };
+        let n = args.len() - 1 - (name == "Set") as usize;
+        let indices: Vec<i64> = args[1..1 + n].iter().map(|v| v.as_i64()).collect();
+        let i = flat_index(arr, &indices)?;
+        let at = unsafe { arr.add(DATA + i * kind.elem_size()) };
+        match name {
+            "Get" => Ok(load(at, kind)),
+            "Set" => {
+                store(at, kind, args[args.len() - 1]);
+                Ok(Value::Null)
+            }
+            "Address" => Ok(Value::Ref(at)),
+            _ => Err(ClrException::new(
+                "System",
+                "MissingMethodException",
+                &format!("Méthode de tableau inconnue : {name}"),
+            )),
+        }
+    }
+}
+
+/// Tableau à plusieurs dimensions ; OutOfMemoryException au-delà de ce
+/// que la mémoire peut tenir.
+fn alloc_md(elem: TypeId, kind: Kind, bounds: &[(i32, i32)]) -> Result<*mut u8, ClrException> {
+    let total = bounds
+        .iter()
+        .try_fold(1usize, |acc, &(_, n)| acc.checked_mul(n as usize))
+        .and_then(|t| t.checked_mul(kind.elem_size()))
+        .filter(|&b| b < u32::MAX as usize / 2);
+    if total.is_none() {
+        return Err(ClrException::new(
+            "System",
+            "OutOfMemoryException",
+            "Array dimensions exceeded supported range.",
+        ));
+    }
+    Ok(gc::with_gc(|gc| {
+        gc.alloc_array_md(elem, kind.elem_size(), bounds)
+    }))
 }
