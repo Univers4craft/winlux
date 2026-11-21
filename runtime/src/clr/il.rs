@@ -1088,10 +1088,14 @@ impl Interpreter {
                 return true;
             };
             // La hiérarchie des types de la bibliothèque intégrée n'est pas
-            // suivie : on accepte.
+            // suivie : on accepte, sauf quand toute celle du vrai type est
+            // connue. Un Int64 n'est pas un BigInteger absent de notre
+            // mscorlib : Newtonsoft teste « is BigInteger » avant de
+            // convertir un entier (#2790).
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
-                || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
+                || reg.is_subclass_of(target, types::TYPE_EXCEPTION)
+                || reg.hierarchy_known(actual);
             !known || reg.is_subclass_of(actual, target)
         })
     }

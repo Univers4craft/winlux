@@ -1,5 +1,5 @@
 // Façade de compilation « System.Windows.Forms » pour les témoins de la BCL
-// Winlux (#2753, #2764). Licence GPL 3. Jamais chargée ni livrée : un témoin
+// Winlux (#2753, #2764, #2795, #2801). Licence GPL 3. Jamais chargée ni livrée : un témoin
 // compilé contre elle appelle MessageBox, Application et Form dans
 // l'assembly « System.Windows.Forms », comme une appli WinForms .NET
 // Framework ; le moteur les trouve dans notre mscorlib (ou, pour MessageBox,
@@ -78,6 +78,7 @@ namespace System.Windows.Forms
         public static void SetCompatibleTextRenderingDefault(bool defaultValue) { throw new InvalidOperationException("façade"); }
         public static void Run(Form mainForm) { throw new InvalidOperationException("façade"); }
         public static void Exit() { throw new InvalidOperationException("façade"); }
+        public static void DoEvents() { throw new InvalidOperationException("façade"); }
     }
 
     public class Control : System.ComponentModel.Component, IWin32Window
@@ -95,11 +96,109 @@ namespace System.Windows.Forms
         public void ResumeLayout(bool performLayout) { throw new InvalidOperationException("façade"); }
         public void PerformLayout() { throw new InvalidOperationException("façade"); }
         protected virtual void OnLayout(LayoutEventArgs levent) { throw new InvalidOperationException("façade"); }
+        public virtual bool AutoSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public virtual System.Drawing.Size MinimumSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public virtual System.Drawing.Size MaximumSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public virtual System.Drawing.Size GetPreferredSize(System.Drawing.Size proposedSize) { throw new InvalidOperationException("façade"); }
+        public System.Drawing.Size PreferredSize { get { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.Point Location { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Width { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Height { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public bool Enabled { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public bool Focused { get { throw new InvalidOperationException("façade"); } }
+        public Control Parent { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public ControlCollection Controls { get { throw new InvalidOperationException("façade"); } }
+        public event EventHandler Click { add { throw new InvalidOperationException("façade"); } remove { throw new InvalidOperationException("façade"); } }
+        public static Control FromHandle(IntPtr handle) { throw new InvalidOperationException("façade"); }
+        public static Keys ModifierKeys { get { throw new InvalidOperationException("façade"); } }
+        public virtual System.Drawing.Font Font { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public static System.Drawing.Font DefaultFont { get { throw new InvalidOperationException("façade"); } }
+        public event EventHandler FontChanged { add { throw new InvalidOperationException("façade"); } remove { throw new InvalidOperationException("façade"); } }
+        public void Scale(System.Drawing.SizeF factor) { throw new InvalidOperationException("façade"); }
+        protected virtual void ScaleControl(System.Drawing.SizeF factor, BoundsSpecified specified) { throw new InvalidOperationException("façade"); }
+        public System.Drawing.Rectangle Bounds { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public Form FindForm() { throw new InvalidOperationException("façade"); }
+        public virtual bool PreProcessMessage(ref Message msg) { throw new InvalidOperationException("façade"); }
+        protected virtual bool ProcessCmdKey(ref Message msg, Keys keyData) { throw new InvalidOperationException("façade"); }
+        protected virtual bool ProcessDialogKey(Keys keyData) { throw new InvalidOperationException("façade"); }
+        protected virtual void OnClick(EventArgs e) { throw new InvalidOperationException("façade"); }
+        public class ControlCollection
+        {
+            public virtual void Add(Control value) { throw new InvalidOperationException("façade"); }
+            public int Count { get { throw new InvalidOperationException("façade"); } }
+        }
+    }
+
+    public struct Message
+    {
+        public IntPtr HWnd { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Msg { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public IntPtr WParam { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public IntPtr LParam { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+    }
+
+    [Flags]
+    public enum Keys { None = 0, Enter = 13, Return = 13, Escape = 27, Tab = 9, A = 65, KeyCode = 0xFFFF, Shift = 0x10000, Control = 0x20000, Alt = 0x40000 }
+
+    public interface IButtonControl
+    {
+        DialogResult DialogResult { get; set; }
+        void NotifyDefault(bool value);
+        void PerformClick();
+    }
+
+    public class Label : Control
+    {
+        public Label() { throw new InvalidOperationException("façade"); }
+        public override bool AutoSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public override System.Drawing.Size GetPreferredSize(System.Drawing.Size proposedSize) { throw new InvalidOperationException("façade"); }
+    }
+
+    public class ButtonBase : Control
+    {
+        protected ButtonBase() { throw new InvalidOperationException("façade"); }
+        public override bool AutoSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public override System.Drawing.Size GetPreferredSize(System.Drawing.Size proposedSize) { throw new InvalidOperationException("façade"); }
+    }
+
+    public class Button : ButtonBase, IButtonControl
+    {
+        public Button() { throw new InvalidOperationException("façade"); }
+        public virtual DialogResult DialogResult { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public virtual void NotifyDefault(bool value) { throw new InvalidOperationException("façade"); }
+        public void PerformClick() { throw new InvalidOperationException("façade"); }
+        protected override void OnClick(EventArgs e) { throw new InvalidOperationException("façade"); }
+    }
+
+    public enum ProgressBarStyle { Blocks = 0, Continuous = 1, Marquee = 2 }
+
+    public class ProgressBar : Control
+    {
+        public ProgressBar() { throw new InvalidOperationException("façade"); }
+        public int Minimum { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Maximum { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Value { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public int Step { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public ProgressBarStyle Style { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public void Increment(int value) { throw new InvalidOperationException("façade"); }
+        public void PerformStep() { throw new InvalidOperationException("façade"); }
     }
 
     public class ScrollableControl : Control { }
 
-    public class ContainerControl : ScrollableControl { }
+    public enum AutoScaleMode { None = 0, Font = 1, Dpi = 2, Inherit = 3 }
+
+    [Flags]
+    public enum BoundsSpecified { None = 0, X = 1, Y = 2, Location = 3, Width = 4, Height = 8, Size = 12, All = 15 }
+
+    public class ContainerControl : ScrollableControl
+    {
+        public AutoScaleMode AutoScaleMode { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.SizeF AutoScaleDimensions { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.SizeF CurrentAutoScaleDimensions { get { throw new InvalidOperationException("façade"); } }
+        public System.Drawing.SizeF AutoScaleFactor { get { throw new InvalidOperationException("façade"); } }
+        public void PerformAutoScale() { throw new InvalidOperationException("façade"); }
+    }
 
     public class Form : ContainerControl
     {
@@ -110,5 +209,13 @@ namespace System.Windows.Forms
         public bool MaximizeBox { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
         public void Close() { throw new InvalidOperationException("façade"); }
         protected virtual void OnFormClosing(FormClosingEventArgs e) { throw new InvalidOperationException("façade"); }
+        public new System.Drawing.Size ClientSize { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public new System.Drawing.Size Size { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public DialogResult DialogResult { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public IButtonControl AcceptButton { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        public IButtonControl CancelButton { get { throw new InvalidOperationException("façade"); } set { throw new InvalidOperationException("façade"); } }
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData) { throw new InvalidOperationException("façade"); }
+        protected override bool ProcessDialogKey(Keys keyData) { throw new InvalidOperationException("façade"); }
+        protected override void OnLayout(LayoutEventArgs levent) { throw new InvalidOperationException("façade"); }
     }
 }

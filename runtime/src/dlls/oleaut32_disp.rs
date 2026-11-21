@@ -188,7 +188,7 @@ unsafe fn argument_slot(vt: u16, var: *const u8) -> u64 {
 pub unsafe extern "win64" fn disp_call_func(
     instance: usize,
     vtable_offset: usize,
-    _cc: u32,
+    cc: u32,
     vt_return: u16,
     count: u32,
     types: *const u16,
@@ -198,9 +198,19 @@ pub unsafe extern "win64" fn disp_call_func(
     if count > 0 && (types.is_null() || args.is_null()) {
         return E_INVALIDARG;
     }
-    // Dispositions x86 (VARIANT de 16 octets…) non traduites ici.
+    // Programme x86 : objet, tableaux et VARIANT de 16 octets en mémoire
+    // x86, appel par call32 (wow32/dispcall.rs, #2800).
     if crate::wow32::active() {
-        return E_NOTIMPL;
+        return crate::wow32::disp_call_func32(
+            instance as u32,
+            vtable_offset as u32,
+            cc,
+            vt_return,
+            count,
+            types as usize as u32,
+            args as usize as u32,
+            result as usize as u32,
+        );
     }
     let target = if instance != 0 {
         if !vtable_offset.is_multiple_of(8) {
