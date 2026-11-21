@@ -34,10 +34,12 @@ mod com_shell;
 mod com_taskschd;
 mod com_typeinfo;
 mod com_webbrowser;
+mod com_winrt;
 mod comctl;
 mod comdlg;
 mod crt;
 mod cxx;
+mod dispcall;
 mod fiber;
 mod kernel;
 
@@ -60,6 +62,7 @@ mod wow64;
 
 pub(crate) use com_audio::iface_to32;
 pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
+pub(crate) use dispcall::disp_call_func32;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
