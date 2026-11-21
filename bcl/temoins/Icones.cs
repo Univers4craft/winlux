@@ -78,14 +78,18 @@ static class Icones
 
         // 5. Form.Icon : par défaut une icône, puis celle posée, gardée une
         // fois la fenêtre créée (WM_SETICON envoyé).
+        // WINLUX_TEMOIN_ATTENDRE : la fenêtre reste ouverte pour que
+        // scripts/test-icone-fenetre.sh lise son _NET_WM_ICON (#2836).
+        bool attendre = Environment.GetEnvironmentVariable("WINLUX_TEMOIN_ATTENDRE") == "1";
         Form f = new Form();
+        f.Text = "Témoin icône";
         if (f.Icon == null || f.Icon.Handle == IntPtr.Zero) return 5;
         f.Icon = grande;
         int code = 0;
         f.Shown += delegate
         {
             code = f.Icon == grande && f.IsHandleCreated ? 200 : 5;
-            f.Close();
+            if (!attendre) f.Close();
         };
         Application.Run(f);
         if (code != 200) return 5;

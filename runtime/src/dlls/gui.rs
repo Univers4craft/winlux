@@ -3229,6 +3229,9 @@ pub trait GuiBackend: Send {
     fn mark_direct3d(&mut self, _xid: u64) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
+    /// Icône de la fenêtre au format _NET_WM_ICON (largeur, hauteur, pixels
+    /// ARGB, une ou plusieurs tailles) ; vide : rien à publier (#2836).
+    fn set_icon(&mut self, _hwnd: usize, _icon: &[u32]) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
     fn set_focus(&mut self, _hwnd: usize) {}
     /// Barre de menus d'une fenêtre de premier niveau : libellés des menus
@@ -4296,9 +4299,47 @@ fn set_window_icon(hwnd: usize, kind: usize, icon: usize) -> usize {
     if kind > 1 || !lock(windows()).contains_key(&hwnd) {
         return 0;
     }
-    let mut icons = lock(window_icons());
-    let slot = icons.entry(hwnd).or_insert([0, 0]);
-    std::mem::replace(&mut slot[kind], icon)
+    let (previous, both) = {
+        let mut icons = lock(window_icons());
+        let slot = icons.entry(hwnd).or_insert([0, 0]);
+        (std::mem::replace(&mut slot[kind], icon), *slot)
+    };
+    // #2836 : le gestionnaire de fenêtres et la barre des tâches montrent
+    // l'icône que l'appli a posée, petite et grande ensemble.
+    let data = net_wm_icon(&both);
+    if !data.is_empty() {
+        with_backend(|b| b.set_icon(hwnd, &data));
+    }
+    previous
+}
+
+/// HICON → _NET_WM_ICON (EWMH « _NET_WM_ICON ») : pour chaque icône connue,
+/// largeur, hauteur puis pixels 0xAARRGGBB, ligne du haut d'abord ; nos
+/// images sont en COLORREF (0xAABBGGRR). Une même icône n'est écrite qu'une
+/// fois.
+fn net_wm_icon(icons: &[usize]) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for &h in icons {
+        if h == 0 || seen.contains(&h) {
+            continue;
+        }
+        seen.push(h);
+        let Some(img) = crate::dlls::icons::icon_image(h) else {
+            continue;
+        };
+        if img.w == 0 || img.h == 0 || img.px.len() != img.w * img.h {
+            continue;
+        }
+        out.push(img.w as u32);
+        out.push(img.h as u32);
+        out.extend(
+            img.px
+                .iter()
+                .map(|&p| (p & 0xFF00_FF00) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF)),
+        );
+    }
+    out
 }
 
 /// WM_GETICON : ICON_SMALL (0), ICON_BIG (1), ou ICON_SMALL2 (2) — la
@@ -5826,6 +5867,19 @@ pub(crate) mod tests {
         for h in [bouton, groupe, popup, haut] {
             destroy_window(h);
         }
+    }
+
+    #[test]
+    fn icone_posee_traduite_pour_net_wm_icon() {
+        // #2836 : COLORREF 0xAABBGGRR → 0xAARRGGBB, largeur et hauteur en
+        // tête, une même icône une seule fois, une icône inconnue ignorée.
+        let h = crate::dlls::icons::new_icon(crate::dlls::icons::Image {
+            w: 2,
+            h: 1,
+            px: vec![0xFF00_0064, 0x8012_3456],
+        });
+        assert_eq!(net_wm_icon(&[h, h]), [2, 1, 0xFF64_0000, 0x8056_3412]);
+        assert!(net_wm_icon(&[0, 0x7777_7777]).is_empty());
     }
 
     #[test]
