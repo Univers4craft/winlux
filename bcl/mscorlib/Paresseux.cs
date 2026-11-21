@@ -11,6 +11,7 @@ namespace System
     {
         public InvalidOperationException() { }
         public InvalidOperationException(string message) : base(message) { }
+        public InvalidOperationException(string message, Exception innerException) : base(message, innerException) { }
     }
 
     public class MissingMemberException : SystemException

@@ -810,6 +810,61 @@ unsafe extern "win64" fn tmpfile_s(out: *mut *mut c_void) -> i32 {
     }
 }
 
+// ---------------------------------------------------------------------
+// Versions non sécurisées (#2139)
+// ---------------------------------------------------------------------
+
+/// `tmpfile` (Learn) : comme `tmpfile_s`, rend le flux ou NULL (errno posé).
+unsafe extern "win64" fn tmpfile() -> *mut c_void {
+    let mut f = std::ptr::null_mut();
+    tmpfile_s(&mut f);
+    f
+}
+
+/// `_rmtmp` (Learn) : ferme les fichiers de `tmpfile`, rend leur nombre.
+unsafe extern "win64" fn rmtmp() -> i32 {
+    super::crt_stdio::close_tmpfiles()
+}
+
+/// `_gcvt(value, digits, buffer)` (Learn) : le tampon de l'appelant doit
+/// suffire (`_CVTBUFSIZE`) ; rend `buffer`, ou NULL sur paramètre invalide.
+unsafe extern "win64" fn gcvt(value: f64, digits: i32, buf: *mut u8) -> *mut u8 {
+    if gcvt_s(buf, CVTBUFSIZE, value, digits) == 0 {
+        buf
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+thread_local! {
+    /// Tampon de `_fcvt`, propre au fil (Learn : un seul tampon statique,
+    /// réécrit à chaque appel).
+    static FCVT: std::cell::UnsafeCell<[u8; CVTBUFSIZE]> =
+        const { std::cell::UnsafeCell::new([0; CVTBUFSIZE]) };
+}
+
+/// `_fcvt(value, count, dec, sign)` (Learn) : chiffres dans un tampon
+/// interne, NULL sur paramètre invalide.
+unsafe extern "win64" fn fcvt(value: f64, count: i32, dec: *mut i32, sign: *mut i32) -> *mut u8 {
+    let buf = FCVT.with(|b| b.get() as *mut u8);
+    if fcvt_s(buf, CVTBUFSIZE, value, count, dec, sign) == 0 {
+        buf
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// `_MAX_PATH` : taille que Learn demande au tampon de `_searchenv`.
+const MAX_PATH: usize = 260;
+
+/// `_searchenv(file, var, out)` (Learn) : chaîne vide si rien n'est trouvé.
+unsafe extern "win64" fn searchenv_ns(file: *const u8, var: *const u8, out: *mut u8) {
+    searchenv(file, var, out, MAX_PATH);
+}
+unsafe extern "win64" fn wsearchenv_ns(file: *const u16, var: *const u16, out: *mut u16) {
+    searchenv(file, var, out, MAX_PATH);
+}
+
 pub fn exports() -> std::collections::HashMap<&'static str, usize> {
     // Les variantes `_l` prennent une locale en dernier argument : la même
     // fonction l'ignore (les arguments en trop ne gênent ni win64 ni cdecl).
@@ -830,6 +885,10 @@ pub fn exports() -> std::collections::HashMap<&'static str, usize> {
         "_gcvt_s" => fn gcvt_s, "_fcvt_s" => fn fcvt_s,
         "_searchenv_s" => fn searchenv_s, "_wsearchenv_s" => fn wsearchenv_s,
         "tmpfile_s" => fn tmpfile_s,
+        // Versions non sécurisées (#2139).
+        "tmpfile" => fn tmpfile, "_rmtmp" => fn rmtmp,
+        "_gcvt" => fn gcvt, "_fcvt" => fn fcvt,
+        "_searchenv" => fn searchenv_ns, "_wsearchenv" => fn wsearchenv_ns,
     }
 }
 
@@ -866,6 +925,12 @@ const NAMES: &[&str] = &[
     "_searchenv_s",
     "_wsearchenv_s",
     "tmpfile_s",
+    "tmpfile",
+    "_rmtmp",
+    "_gcvt",
+    "_fcvt",
+    "_searchenv",
+    "_wsearchenv",
 ];
 
 #[cfg(test)]
