@@ -560,6 +560,196 @@ unsafe fn mbsncat_in(cp: u32, dst: *mut u8, src: *const u8, count: usize, bytes:
     dst
 }
 
+// ---------------------------------------------------------------------
+// Classification `_ismbb*` et `_ismbc*` (#2815)
+// ---------------------------------------------------------------------
+//
+// Learn, pages « _ismbb routines », « _ismbc routines », « _ismbbtrail »,
+// « _ismbchira, _ismbckata », « _ismbcl0, _ismbcl1, _ismbcl2 » et
+// « _ismbclegal, _ismbcsymbol ». Les tests propres au japonais ne valent
+// que pour la page 932 ; ailleurs ils rendent 0. Les octets simples suivent
+// la locale « C » (classes ASCII). Choix faits là où Learn se contredit ou
+// se tait (inférences) :
+// - `_ismbbtrail` : la page de la fonction dit 0x40–0x7E et 0x80–0xFC, le
+//   tableau récapitulatif 0x80–0xEC ; on suit la page de la fonction, qui
+//   s'accorde avec `_ismbclegal` ;
+// - `_ismbcl2` : la page de la fonction dit 0x989F–0xEAA4, le tableau
+//   0xEA9E ; on suit la page de la fonction ;
+// - `_ismbbkalnum` et `_ismbbkpunct` : Learn donne en exemple les
+//   alphanumériques et la ponctuation katakana sans plage ; on prend
+//   0xA6–0xDF (lettres katakana de `_ismbcalpha`) et 0xA1–0xA5 (le reste de
+//   0xA1–0xDF de `_ismbbkprint`).
+
+const SJIS: u32 = 932;
+
+/// Classes servies, pour une page de code donnée.
+#[derive(Clone, Copy)]
+enum Classe {
+    BAlnum,
+    BAlpha,
+    BGraph,
+    BPrint,
+    BPunct,
+    BTrail,
+    BKAlnum,
+    BKana,
+    BKPrint,
+    BKPunct,
+    CAlnum,
+    CAlpha,
+    CDigit,
+    CGraph,
+    CLower,
+    CUpper,
+    CPrint,
+    CPunct,
+    CSpace,
+    CLegal,
+    CSymbol,
+    CHira,
+    CKata,
+    CL0,
+    CL1,
+    CL2,
+}
+
+fn ascii(c: u32) -> Option<u8> {
+    u8::try_from(c).ok().filter(u8::is_ascii)
+}
+
+/// Vrai si `c` appartient à la classe `k` dans la page `cp`.
+fn classe_in(cp: u32, k: Classe, c: u32) -> bool {
+    use Classe::*;
+    let sjis = cp == SJIS;
+    let dans = |lo: u32, hi: u32| (lo..=hi).contains(&c);
+    let asc = |f: fn(&u8) -> bool| ascii(c).is_some_and(|b| f(&b));
+    match k {
+        BKAlnum => sjis && dans(0xA6, 0xDF),
+        BKPunct => sjis && dans(0xA1, 0xA5),
+        BKana | BKPrint => sjis && dans(0xA1, 0xDF),
+        BAlnum => asc(u8::is_ascii_alphanumeric) || classe_in(cp, BKAlnum, c),
+        // isalpha ou `_ismbbkalpha`, ici les lettres katakana (inférence).
+        BAlpha => asc(u8::is_ascii_alphabetic) || classe_in(cp, BKAlnum, c),
+        BPunct => asc(u8::is_ascii_punctuation) || classe_in(cp, BKPunct, c),
+        BPrint => dans(0x20, 0x7E) || classe_in(cp, BKPrint, c),
+        BGraph => c != 0x20 && classe_in(cp, BPrint, c),
+        BTrail => sjis && (dans(0x40, 0x7E) || dans(0x80, 0xFC)),
+        // Sur un octet, la routine `_ismbb*` correspondante (Learn) ; un
+        // caractère double n'entre pas dans ces classes.
+        CAlnum => c <= 0xFF && classe_in(cp, BAlnum, c),
+        CAlpha => c <= 0xFF && classe_in(cp, BAlpha, c),
+        CGraph => c <= 0xFF && classe_in(cp, BGraph, c),
+        CPrint => c <= 0xFF && classe_in(cp, BPrint, c),
+        CPunct => c <= 0xFF && classe_in(cp, BPunct, c),
+        CDigit => dans(0x30, 0x39),
+        CLower => dans(0x61, 0x7A),
+        CUpper => dans(0x41, 0x5A),
+        CSpace => c == 0x20 || dans(0x09, 0x0D),
+        CHira => sjis && dans(0x829F, 0x82F1),
+        CKata => sjis && dans(0x8340, 0x8396),
+        CL0 => sjis && dans(0x8140, 0x889E),
+        CL1 => sjis && dans(0x889F, 0x9872),
+        CL2 => sjis && dans(0x989F, 0xEAA4),
+        CSymbol => sjis && dans(0x8141, 0x81AC),
+        // Tête 0x81–0x9F ou 0xE0–0xFC, queue de `_ismbbtrail` (page 932) ;
+        // ailleurs, tête de la page et queue non nulle (inférence).
+        CLegal => {
+            let (hi, lo) = ((c >> 8) & 0xFF, c & 0xFF);
+            if c > 0xFFFF {
+                false
+            } else if sjis {
+                ((0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi))
+                    && classe_in(cp, BTrail, lo)
+            } else {
+                hi != 0 && lo != 0 && crate::intl::dbcs::is_lead_byte(cp, hi as u8)
+            }
+        }
+    }
+}
+
+fn classe(k: Classe, c: u32) -> i32 {
+    classe_in(codepage(), k, c) as i32
+}
+
+extern "win64" fn ismbbalnum(c: u32) -> i32 {
+    classe(Classe::BAlnum, c)
+}
+extern "win64" fn ismbbalpha(c: u32) -> i32 {
+    classe(Classe::BAlpha, c)
+}
+extern "win64" fn ismbbgraph(c: u32) -> i32 {
+    classe(Classe::BGraph, c)
+}
+extern "win64" fn ismbbprint(c: u32) -> i32 {
+    classe(Classe::BPrint, c)
+}
+extern "win64" fn ismbbpunct(c: u32) -> i32 {
+    classe(Classe::BPunct, c)
+}
+extern "win64" fn ismbbtrail(c: u32) -> i32 {
+    classe(Classe::BTrail, c)
+}
+extern "win64" fn ismbbkalnum(c: u32) -> i32 {
+    classe(Classe::BKAlnum, c)
+}
+extern "win64" fn ismbbkana(c: u32) -> i32 {
+    classe(Classe::BKana, c)
+}
+extern "win64" fn ismbbkprint(c: u32) -> i32 {
+    classe(Classe::BKPrint, c)
+}
+extern "win64" fn ismbbkpunct(c: u32) -> i32 {
+    classe(Classe::BKPunct, c)
+}
+extern "win64" fn ismbcalnum(c: u32) -> i32 {
+    classe(Classe::CAlnum, c)
+}
+extern "win64" fn ismbcalpha(c: u32) -> i32 {
+    classe(Classe::CAlpha, c)
+}
+extern "win64" fn ismbcdigit(c: u32) -> i32 {
+    classe(Classe::CDigit, c)
+}
+extern "win64" fn ismbcgraph(c: u32) -> i32 {
+    classe(Classe::CGraph, c)
+}
+extern "win64" fn ismbclower(c: u32) -> i32 {
+    classe(Classe::CLower, c)
+}
+extern "win64" fn ismbcupper(c: u32) -> i32 {
+    classe(Classe::CUpper, c)
+}
+extern "win64" fn ismbcprint(c: u32) -> i32 {
+    classe(Classe::CPrint, c)
+}
+extern "win64" fn ismbcpunct(c: u32) -> i32 {
+    classe(Classe::CPunct, c)
+}
+extern "win64" fn ismbcspace(c: u32) -> i32 {
+    classe(Classe::CSpace, c)
+}
+extern "win64" fn ismbclegal(c: u32) -> i32 {
+    classe(Classe::CLegal, c)
+}
+extern "win64" fn ismbcsymbol(c: u32) -> i32 {
+    classe(Classe::CSymbol, c)
+}
+extern "win64" fn ismbchira(c: u32) -> i32 {
+    classe(Classe::CHira, c)
+}
+extern "win64" fn ismbckata(c: u32) -> i32 {
+    classe(Classe::CKata, c)
+}
+extern "win64" fn ismbcl0(c: u32) -> i32 {
+    classe(Classe::CL0, c)
+}
+extern "win64" fn ismbcl1(c: u32) -> i32 {
+    classe(Classe::CL1, c)
+}
+extern "win64" fn ismbcl2(c: u32) -> i32 {
+    classe(Classe::CL2, c)
+}
+
 pub fn exports() -> Exports {
     crate::exports! {
         "_mbschr" => fn mbschr, "_mbschr_l" => fn mbschr_l,
@@ -592,6 +782,33 @@ pub fn exports() -> Exports {
         "_mbsncpy" => fn mbsncpy, "_mbsncpy_l" => fn mbsncpy,
         "_mbsncat" => fn mbsncat, "_mbsncat_l" => fn mbsncat,
         "_mbsnbcat" => fn mbsnbcat, "_mbsnbcat_l" => fn mbsnbcat,
+        // #2815 ; les variantes `_l` ignorent leur locale.
+        "_ismbbalnum" => fn ismbbalnum, "_ismbbalnum_l" => fn ismbbalnum,
+        "_ismbbalpha" => fn ismbbalpha, "_ismbbalpha_l" => fn ismbbalpha,
+        "_ismbbgraph" => fn ismbbgraph, "_ismbbgraph_l" => fn ismbbgraph,
+        "_ismbbprint" => fn ismbbprint, "_ismbbprint_l" => fn ismbbprint,
+        "_ismbbpunct" => fn ismbbpunct, "_ismbbpunct_l" => fn ismbbpunct,
+        "_ismbbtrail" => fn ismbbtrail, "_ismbbtrail_l" => fn ismbbtrail,
+        "_ismbbkalnum" => fn ismbbkalnum, "_ismbbkalnum_l" => fn ismbbkalnum,
+        "_ismbbkana" => fn ismbbkana, "_ismbbkana_l" => fn ismbbkana,
+        "_ismbbkprint" => fn ismbbkprint, "_ismbbkprint_l" => fn ismbbkprint,
+        "_ismbbkpunct" => fn ismbbkpunct, "_ismbbkpunct_l" => fn ismbbkpunct,
+        "_ismbcalnum" => fn ismbcalnum, "_ismbcalnum_l" => fn ismbcalnum,
+        "_ismbcalpha" => fn ismbcalpha, "_ismbcalpha_l" => fn ismbcalpha,
+        "_ismbcdigit" => fn ismbcdigit, "_ismbcdigit_l" => fn ismbcdigit,
+        "_ismbcgraph" => fn ismbcgraph, "_ismbcgraph_l" => fn ismbcgraph,
+        "_ismbclower" => fn ismbclower, "_ismbclower_l" => fn ismbclower,
+        "_ismbcupper" => fn ismbcupper, "_ismbcupper_l" => fn ismbcupper,
+        "_ismbcprint" => fn ismbcprint, "_ismbcprint_l" => fn ismbcprint,
+        "_ismbcpunct" => fn ismbcpunct, "_ismbcpunct_l" => fn ismbcpunct,
+        "_ismbcspace" => fn ismbcspace, "_ismbcspace_l" => fn ismbcspace,
+        "_ismbclegal" => fn ismbclegal, "_ismbclegal_l" => fn ismbclegal,
+        "_ismbcsymbol" => fn ismbcsymbol, "_ismbcsymbol_l" => fn ismbcsymbol,
+        "_ismbchira" => fn ismbchira, "_ismbchira_l" => fn ismbchira,
+        "_ismbckata" => fn ismbckata, "_ismbckata_l" => fn ismbckata,
+        "_ismbcl0" => fn ismbcl0, "_ismbcl0_l" => fn ismbcl0,
+        "_ismbcl1" => fn ismbcl1, "_ismbcl1_l" => fn ismbcl1,
+        "_ismbcl2" => fn ismbcl2, "_ismbcl2_l" => fn ismbcl2,
     }
 }
 
