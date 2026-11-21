@@ -4,7 +4,7 @@
 # Array.Copy vérifient l'objet rangé dans un tableau de valeurs.
 clr = runtime_dlls.parent / "clr"
 ok("fn string_units" in (clr / "bcl.rs").read_text(encoding="utf-8")
-   and "gc::type_of(ptr) != Some(TYPE_STRING)" in (clr / "bcl.rs").read_text(encoding="utf-8"),
+   and "fn seule_une_chaine_se_lit_comme_une_chaine(" in (clr / "tests.rs").read_text(encoding="utf-8"),
    "CLR : seule une System.String se lit comme une chaîne (#2037)")
 ok("fn argument_fits" in (clr / "membres.rs").read_text(encoding="utf-8")
    and "fn target_fits" in (clr / "membres.rs").read_text(encoding="utf-8")
