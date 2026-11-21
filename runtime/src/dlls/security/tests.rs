@@ -708,3 +708,29 @@ fn taille_requise_d_un_sid() {
         assert_eq!(GetSidLengthRequired(15), 68);
     }
 }
+
+/// #1887 : un descripteur absolu mesure la structure (40 octets en x64)
+/// plus le SID et l'ACL qu'il désigne ; ses pointeurs ne sont pas lus
+/// comme des décalages.
+#[test]
+fn longueur_d_un_descripteur_absolu() {
+    unsafe {
+        let mut sd = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(sd.as_mut_ptr(), 1), 1);
+        assert_eq!(GetSecurityDescriptorLength(sd.as_ptr()), 40);
+        let owner = sid_bytes(&uid_sid(1000)).unwrap();
+        let mut acl = [2u8, 0, 8, 0, 0, 0, 0, 0];
+        assert_eq!(
+            SetSecurityDescriptorOwner(sd.as_mut_ptr(), owner.as_ptr() as *mut u8, 0),
+            1
+        );
+        assert_eq!(
+            SetSecurityDescriptorDacl(sd.as_mut_ptr(), 1, acl.as_mut_ptr(), 0),
+            1
+        );
+        assert_eq!(
+            GetSecurityDescriptorLength(sd.as_ptr()) as usize,
+            40 + owner.len() + acl.len()
+        );
+    }
+}
