@@ -370,6 +370,28 @@ pub unsafe extern "win64" fn fopen_s(
 /// binaire : créé dans le dossier temporaire de l'hôte puis effacé tout de
 /// suite, il disparaît à sa fermeture ou à la fin du programme. Rend le
 /// `FILE*` ou un code errno.
+/// Flux ouverts par `tmpfile`/`tmpfile_s` et pas encore fermés, pour
+/// `_rmtmp` (#2139).
+fn tmpfiles() -> std::sync::MutexGuard<'static, std::collections::HashSet<usize>> {
+    static T: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    T.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// `_rmtmp` (Learn) : ferme les fichiers temporaires créés par `tmpfile`
+/// et rend leur nombre. Ils sont déjà effacés du disque dès leur création.
+pub(crate) unsafe fn close_tmpfiles() -> i32 {
+    let open: Vec<usize> = tmpfiles().drain().collect();
+    let mut n = 0;
+    for p in open {
+        if fclose(p as *mut c_void) == 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
 pub(crate) fn open_tmpfile() -> Result<*mut c_void, i32> {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir();
@@ -391,7 +413,9 @@ pub(crate) fn open_tmpfile() -> Result<*mut c_void, i32> {
         {
             Ok(f) => {
                 let _ = std::fs::remove_file(&name);
-                return Ok(register(Kind::Disk, Some(f)));
+                let p = register(Kind::Disk, Some(f));
+                tmpfiles().insert(p as usize);
+                return Ok(p);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
@@ -421,6 +445,7 @@ pub unsafe extern "win64" fn fclose(p: *mut c_void) -> i32 {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .remove(&(p as usize));
+    tmpfiles().remove(&(p as usize));
     *s.file
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
