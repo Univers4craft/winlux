@@ -108,8 +108,13 @@ jobs:
       - name: Installer glslang (validation du GLSL traduit depuis DXBC)
         run: sudo apt-get update -q && sudo apt-get install -y -q glslang-tools
 
+      - name: Compiler les tests unitaires
+        run: cargo test -p winlux --no-run
+
+      # Borne de 10 min : un gel fait échouer l'étape avec les piles de
+      # chaque fil au lieu de bloquer la file (#2839, voir #2225).
       - name: Lancer les tests unitaires
-        run: cargo test -p winlux
+        run: scripts/tests-bornes.sh cargo test -p winlux
 
       - name: BCL Winlux en C# et ses témoins (étape 7 du moteur .NET)
         run: |
