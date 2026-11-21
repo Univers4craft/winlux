@@ -819,6 +819,52 @@ impl Assembly {
         InterfaceImplRow { class, interface }
     }
 
+    pub fn get_manifest_resource(&self, row: u32) -> ManifestResourceRow {
+        let d = self.row_data(TableId::ManifestResource, row);
+        let mut o = 0;
+        let offset = self.read_u32_val(d, &mut o);
+        let flags = self.read_u32_val(d, &mut o);
+        let name = self.str_idx(d, &mut o);
+        let implementation = self.coded_idx(CodedIndex::Implementation, d, &mut o);
+        ManifestResourceRow {
+            offset,
+            flags,
+            name,
+            implementation,
+        }
+    }
+
+    /// Noms des ressources de manifeste rangées dans ce fichier
+    /// (Implementation nulle, ECMA-335 §II.22.24), dans l'ordre de la table.
+    pub fn manifest_resource_names(&self) -> Vec<String> {
+        (1..=self.row_count(TableId::ManifestResource))
+            .map(|r| self.get_manifest_resource(r))
+            .filter(|m| m.implementation == 0)
+            .map(|m| self.get_string(m.name).to_string())
+            .collect()
+    }
+
+    /// Octets d'une ressource de manifeste de ce fichier : dans le
+    /// répertoire Resources de l'en-tête CLI (§II.25.3.3, RVA à +24, taille
+    /// à +28), une longueur sur 4 octets puis les données (§II.24.2.4).
+    /// Le nom se compare à la casse près, comme GetManifestResourceStream.
+    pub fn manifest_resource(&self, name: &str) -> Option<&[u8]> {
+        let dir = self.rva_slice(self.clr_header_rva + 24, 8)?;
+        let (rva, size) = (rd32(dir, 0), rd32(dir, 4));
+        if rva == 0 {
+            return None;
+        }
+        let res = self.rva_slice(rva, size as usize)?;
+        (1..=self.row_count(TableId::ManifestResource))
+            .map(|r| self.get_manifest_resource(r))
+            .find(|m| m.implementation == 0 && self.get_string(m.name) == name)
+            .and_then(|m| {
+                let start = m.offset as usize;
+                let len = rd32(res, start) as usize;
+                res.get(start.checked_add(4)?..start.checked_add(4)?.checked_add(len)?)
+            })
+    }
+
     // --- RVA resolution ---
 
     pub fn rva_to_offset(&self, rva: u32) -> Option<usize> {
