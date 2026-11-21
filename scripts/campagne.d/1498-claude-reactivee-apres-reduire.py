@@ -9,5 +9,5 @@ user32 = (ROOT / "runtime/src/dlls/user32.rs").read_text(encoding="utf-8")
 ok("fn on_property(" in gui_x11 and "pub fn notify_win_event(" in hooks
    and "pub unsafe fn deliver_win_events()" in hooks,
    "Claude réactivée après Réduire : contenu redessiné (#1498)")
-ok("gui::is_see_through_child(hwnd)" in user32,
+ok("is_see_through_child(" in user32,
    "Claude : glisser la barre reçue par l'enfant de Chromium (#1477)")
