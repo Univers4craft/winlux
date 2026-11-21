@@ -39,33 +39,89 @@ namespace System
 
     public class Uri
     {
-        private readonly string _original;
-        private readonly string _schema, _hote, _chemin, _requete, _fragment, _utilisateur;
-        private readonly int _port;
-        private readonly bool _portExplicite;
+        private string _original;
+        private string _schema, _hote, _chemin, _requete, _fragment, _utilisateur;
+        private int _port;
+        private bool _portExplicite;
+        // Référence relative (Learn « Uri.IsAbsoluteUri ») : seul le texte
+        // d'origine est gardé (#2844).
+        private bool _relative;
 
         public static readonly string UriSchemeHttp = "http";
         public static readonly string UriSchemeHttps = "https";
         public static readonly string UriSchemeFtp = "ftp";
         public static readonly string UriSchemeFile = "file";
 
+        private Uri() { }
+
         public Uri(string uriString) : this(uriString, UriKind.Absolute) { }
 
         public Uri(string uriString, UriKind uriKind)
         {
             if (uriString == null) throw new ArgumentNullException("uriString");
+            string erreur = Analyser(uriString, uriKind);
+            if (erreur != null) throw new UriFormatException(erreur);
+        }
+
+        // Learn « Uri(Uri, String) » : la référence résolue sur la base
+        // (RFC 3986 §5.2.2).
+        public Uri(Uri baseUri, string relativeUri)
+        {
+            if ((object)baseUri == null) throw new ArgumentNullException("baseUri");
+            if (!baseUri.IsAbsoluteUri) throw new ArgumentOutOfRangeException("baseUri");
+            string erreur = Analyser(Resoudre(baseUri, relativeUri ?? ""), UriKind.Absolute);
+            if (erreur != null) throw new UriFormatException(erreur);
+        }
+
+        public Uri(Uri baseUri, Uri relativeUri)
+            : this(baseUri, (object)relativeUri == null ? null : relativeUri.OriginalString)
+        {
+            if ((object)relativeUri == null) throw new ArgumentNullException("relativeUri");
+        }
+
+        // Learn « Uri.TryCreate » : false au lieu d'une UriFormatException.
+        public static bool TryCreate(string uriString, UriKind uriKind, out Uri result)
+        {
+            result = null;
+            if (uriString == null) return false;
+            Uri u = new Uri();
+            if (u.Analyser(uriString, uriKind) != null) return false;
+            result = u;
+            return true;
+        }
+
+        public static bool TryCreate(Uri baseUri, string relativeUri, out Uri result)
+        {
+            result = null;
+            if ((object)baseUri == null || !baseUri.IsAbsoluteUri || relativeUri == null) return false;
+            return TryCreate(Resoudre(baseUri, relativeUri), UriKind.Absolute, out result);
+        }
+
+        public static bool TryCreate(Uri baseUri, Uri relativeUri, out Uri result)
+        {
+            result = null;
+            if ((object)relativeUri == null) return false;
+            if (relativeUri.IsAbsoluteUri) { result = relativeUri; return true; }
+            return TryCreate(baseUri, relativeUri.OriginalString, out result);
+        }
+
+        // Rend null, ou le message de l'UriFormatException.
+        private string Analyser(string uriString, UriKind uriKind)
+        {
             string s = uriString.Trim();
             int sep = s.IndexOf("://", StringComparison.Ordinal);
-            if (sep <= 0 || uriKind == UriKind.Relative)
-                throw new UriFormatException("Invalid URI: The format of the URI could not be determined.");
+            bool absolue = sep > 0 && SchemaValide(s.Substring(0, sep));
+            if (!absolue)
+            {
+                if (uriKind == UriKind.Absolute || s.IndexOf("://", StringComparison.Ordinal) == 0)
+                    return "Invalid URI: The format of the URI could not be determined.";
+                _original = uriString;
+                _relative = true;
+                return null;
+            }
+            if (uriKind == UriKind.Relative) return "Invalid URI: A relative URI cannot be created because the 'uriString' parameter represents an absolute URI.";
             _original = uriString;
             _schema = s.Substring(0, sep).ToLowerInvariant();
-            for (int i = 0; i < _schema.Length; i++)
-            {
-                char c = _schema[i];
-                if (!(char.IsLetterOrDigit(c) || c == '+' || c == '-' || c == '.') || (i == 0 && !char.IsLetter(c)))
-                    throw new UriFormatException("Invalid URI: The URI scheme is not valid.");
-            }
             string reste = s.Substring(sep + 3);
             int fin = reste.Length;
             foreach (char c in new char[] { '/', '?', '#' })
@@ -84,13 +140,13 @@ namespace System
             {
                 int p;
                 if (!int.TryParse(autorite.Substring(deuxPoints + 1), out p) || p < 0 || p > 65535)
-                    throw new UriFormatException("Invalid URI: Invalid port specified.");
+                    return "Invalid URI: Invalid port specified.";
                 _port = p;
                 _portExplicite = true;
                 autorite = autorite.Substring(0, deuxPoints);
             }
             if (autorite.Length == 0 && _schema != "file")
-                throw new UriFormatException("Invalid URI: The hostname could not be parsed.");
+                return "Invalid URI: The hostname could not be parsed.";
             _hote = autorite.ToLowerInvariant();
             int diese = suite.IndexOf('#');
             _fragment = diese >= 0 ? suite.Substring(diese) : "";
@@ -101,6 +157,79 @@ namespace System
             if (_chemin.Length == 0) _chemin = "/";
             _chemin = _chemin.Replace(" ", "%20");
             _requete = _requete.Replace(" ", "%20");
+            return null;
+        }
+
+        private static bool SchemaValide(string schema)
+        {
+            if (schema.Length == 0) return false;
+            for (int i = 0; i < schema.Length; i++)
+            {
+                char c = schema[i];
+                if (!(char.IsLetterOrDigit(c) || c == '+' || c == '-' || c == '.') || (i == 0 && !char.IsLetter(c)))
+                    return false;
+            }
+            return true;
+        }
+
+        // RFC 3986 §5.2.2 à 5.2.4 : résolution d'une référence sur une base
+        // absolue, en texte.
+        private static string Resoudre(Uri b, string r)
+        {
+            r = r.Trim();
+            int sep = r.IndexOf("://", StringComparison.Ordinal);
+            if (sep > 0 && SchemaValide(r.Substring(0, sep))) return r;
+            string debut = b._schema + "://";
+            if (r.StartsWith("//")) return b._schema + ":" + r;
+            string autorite = (b._utilisateur.Length > 0 ? b._utilisateur + "@" : "") + b.Authority;
+            string fragment = "";
+            int diese = r.IndexOf('#');
+            if (diese >= 0) { fragment = r.Substring(diese); r = r.Substring(0, diese); }
+            string requete = null;
+            int question = r.IndexOf('?');
+            if (question >= 0) { requete = r.Substring(question); r = r.Substring(0, question); }
+            string chemin;
+            if (r.Length == 0)
+            {
+                chemin = b._chemin;
+                if (requete == null) requete = b._requete;
+            }
+            else if (r[0] == '/') chemin = SansPoints(r);
+            else
+            {
+                int barre = b._chemin.LastIndexOf('/');
+                chemin = SansPoints((barre >= 0 ? b._chemin.Substring(0, barre + 1) : "/") + r);
+            }
+            return debut + autorite + chemin + (requete ?? "") + fragment;
+        }
+
+        // RFC 3986 §5.2.4 « remove_dot_segments ».
+        private static string SansPoints(string entree)
+        {
+            System.Text.StringBuilder sortie = new System.Text.StringBuilder();
+            while (entree.Length > 0)
+            {
+                if (entree.StartsWith("../")) entree = entree.Substring(3);
+                else if (entree.StartsWith("./")) entree = entree.Substring(2);
+                else if (entree.StartsWith("/./")) entree = entree.Substring(2);
+                else if (entree == "/.") entree = "/";
+                else if (entree.StartsWith("/../") || entree == "/..")
+                {
+                    entree = entree == "/.." ? "/" : entree.Substring(3);
+                    string s = sortie.ToString();
+                    int i = s.LastIndexOf('/');
+                    sortie.Length = i >= 0 ? i : 0;
+                }
+                else if (entree == "." || entree == "..") entree = "";
+                else
+                {
+                    int i = entree.IndexOf('/', entree[0] == '/' ? 1 : 0);
+                    string segment = i < 0 ? entree : entree.Substring(0, i);
+                    sortie.Append(segment);
+                    entree = i < 0 ? "" : entree.Substring(i);
+                }
+            }
+            return sortie.ToString();
         }
 
         private static int PortParDefaut(string schema)
@@ -114,36 +243,44 @@ namespace System
             }
         }
 
-        public string Scheme { get { return _schema; } }
-        public string Host { get { return _hote; } }
-        public string DnsSafeHost { get { return _hote.Trim('[', ']'); } }
-        public int Port { get { return _port; } }
-        public bool IsDefaultPort { get { return _port == PortParDefaut(_schema); } }
-        public string AbsolutePath { get { return _chemin; } }
-        public string Query { get { return _requete; } }
-        public string Fragment { get { return _fragment; } }
-        public string PathAndQuery { get { return _chemin + _requete; } }
-        public string UserInfo { get { return _utilisateur; } }
+        // Learn : ces propriétés lèvent InvalidOperationException sur une
+        // référence relative.
+        private void Absolue()
+        {
+            if (_relative) throw new InvalidOperationException("This operation is not supported for a relative URI.");
+        }
+
+        public string Scheme { get { Absolue(); return _schema; } }
+        public string Host { get { Absolue(); return _hote; } }
+        public string DnsSafeHost { get { Absolue(); return _hote.Trim('[', ']'); } }
+        public int Port { get { Absolue(); return _port; } }
+        public bool IsDefaultPort { get { Absolue(); return _port == PortParDefaut(_schema); } }
+        public string AbsolutePath { get { Absolue(); return _chemin; } }
+        public string Query { get { Absolue(); return _requete; } }
+        public string Fragment { get { Absolue(); return _fragment; } }
+        public string PathAndQuery { get { Absolue(); return _chemin + _requete; } }
+        public string UserInfo { get { Absolue(); return _utilisateur; } }
         public string OriginalString { get { return _original; } }
-        public bool IsAbsoluteUri { get { return true; } }
-        public bool IsFile { get { return _schema == "file"; } }
-        public bool IsLoopback { get { return _hote == "localhost" || _hote == "127.0.0.1" || _hote == "[::1]"; } }
-        public string LocalPath { get { return IsFile ? Uri.UnescapeDataString(_chemin) : _chemin; } }
+        public bool IsAbsoluteUri { get { return !_relative; } }
+        public bool IsFile { get { Absolue(); return _schema == "file"; } }
+        public bool IsLoopback { get { Absolue(); return _hote == "localhost" || _hote == "127.0.0.1" || _hote == "[::1]"; } }
+        public string LocalPath { get { Absolue(); return IsFile ? Uri.UnescapeDataString(_chemin) : _chemin; } }
 
         public string Authority
         {
-            get { return _portExplicite && !IsDefaultPort ? _hote + ":" + _port : _hote; }
+            get { Absolue(); return _portExplicite && !IsDefaultPort ? _hote + ":" + _port : _hote; }
         }
 
         public string AbsoluteUri
         {
-            get { return _schema + "://" + (_utilisateur.Length > 0 ? _utilisateur + "@" : "") + Authority + _chemin + _requete + _fragment; }
+            get { Absolue(); return _schema + "://" + (_utilisateur.Length > 0 ? _utilisateur + "@" : "") + Authority + _chemin + _requete + _fragment; }
         }
 
         public string[] Segments
         {
             get
             {
+                Absolue();
                 System.Collections.Generic.List<string> l = new System.Collections.Generic.List<string>();
                 int debut = 0;
                 for (int i = 0; i < _chemin.Length; i++)
@@ -180,16 +317,18 @@ namespace System
             return sb.ToString();
         }
 
-        public override string ToString() { return AbsoluteUri; }
+        public override string ToString() { return _relative ? _original : AbsoluteUri; }
 
         public override bool Equals(object comparand)
         {
             Uri u = comparand as Uri;
-            if (u == null && comparand is string) { try { u = new Uri((string)comparand); } catch (UriFormatException) { return false; } }
-            return u != null && u._schema == _schema && u._hote == _hote && u._port == _port && u._chemin == _chemin && u._requete == _requete;
+            if (u == null && comparand is string) { if (!TryCreate((string)comparand, UriKind.RelativeOrAbsolute, out u)) return false; }
+            if (u == null || u._relative != _relative) return false;
+            if (_relative) return u._original == _original;
+            return u._schema == _schema && u._hote == _hote && u._port == _port && u._chemin == _chemin && u._requete == _requete;
         }
 
-        public override int GetHashCode() { return AbsoluteUri.GetHashCode(); }
+        public override int GetHashCode() { return ToString().GetHashCode(); }
 
         public static bool operator ==(Uri a, Uri b) { return (object)a == null ? (object)b == null : a.Equals(b); }
         public static bool operator !=(Uri a, Uri b) { return !(a == b); }
