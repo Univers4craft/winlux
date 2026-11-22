@@ -25,6 +25,17 @@ pub const TLS_EXPANSION_SLOTS: usize = 1024;
 
 static THREAD_TEBS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
 
+/// Annuaire des TEB, lisible depuis un autre processus (#2024) : sous
+/// Windows, NtQueryInformationThread(ThreadBasicInformation) donne le TEB du
+/// fil d'un autre processus, que crashpad lit ensuite. Chez nous un TEB est
+/// une page quelconque : son adresse est publiée ici, et l'adresse de
+/// l'annuaire dans le PEB, à `PEB_WINLUX_TEB_DIR`, au-delà de la fin du PEB
+/// de Windows (moins de 0x800 octets en x64), donc hors de tout champ qu'un
+/// programme lirait. Entrées de 16 octets (tid, TEB) ; tid 0 = libre.
+pub const PEB_WINLUX_TEB_DIR: usize = 0xF00;
+pub const TEB_DIR_SLOTS: usize = 4096;
+static TEB_DIR: AtomicUsize = AtomicUsize::new(0);
+
 pub const PEB_BEING_DEBUGGED: usize = 0x02;
 pub const PEB_IMAGE_BASE: usize = 0x10;
 pub const PEB_PROCESS_PARAMETERS: usize = 0x20;
@@ -420,6 +431,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut command_line_w = cmd_w;
     command_line_w.push(0);
     PEB.store(peb, Ordering::Relaxed);
+    publish_teb_dir();
     if crate::wow32::active() {
         crate::wow32::init_peb32(exe.base);
     } else {
@@ -467,6 +479,7 @@ pub fn init_thread() -> usize {
     if !threads.contains(&teb) {
         threads.push(teb);
     }
+    teb_dir_set(unsafe { libc::gettid() } as u64, teb);
     teb
 }
 
@@ -545,6 +558,163 @@ fn remove_signal_stack() {
     }
 }
 
+/// Annuaire des TEB, alloué au premier fil ; appelé sous le verrou de
+/// `THREAD_TEBS`, comme ses écritures.
+fn teb_dir() -> usize {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d != 0 {
+        return d;
+    }
+    let d = alloc_zeroed(TEB_DIR_SLOTS * 16);
+    TEB_DIR.store(d, Ordering::Release);
+    publish_teb_dir();
+    d
+}
+
+/// Inscrit l'adresse de l'annuaire dans le PEB, s'il existe déjà.
+fn publish_teb_dir() {
+    let (p, d) = (peb(), TEB_DIR.load(Ordering::Acquire));
+    if p != 0 && d != 0 {
+        unsafe { *((p + PEB_WINLUX_TEB_DIR) as *mut usize) = d };
+    }
+}
+
+/// Entrée (tid, TEB) : le TEB d'abord, le tid ensuite, qui la valide pour
+/// un lecteur d'un autre processus.
+fn teb_dir_set(tid: u64, teb: usize) {
+    let d = teb_dir();
+    unsafe {
+        let entries = d as *mut [u64; 2];
+        let free = (0..TEB_DIR_SLOTS).find(|&i| {
+            let e = &*entries.add(i);
+            e[0] == 0 || e[1] == teb as u64
+        });
+        if let Some(i) = free {
+            let e = entries.add(i);
+            std::ptr::write_volatile(&mut (*e)[0], 0);
+            std::ptr::write_volatile(&mut (*e)[1], teb as u64);
+            std::sync::atomic::fence(Ordering::Release);
+            std::ptr::write_volatile(&mut (*e)[0], tid);
+        }
+    }
+}
+
+fn teb_dir_clear(teb: usize) {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d == 0 {
+        return;
+    }
+    unsafe {
+        let entries = d as *mut [u64; 2];
+        for i in 0..TEB_DIR_SLOTS {
+            let e = entries.add(i);
+            if (*e)[1] == teb as u64 {
+                std::ptr::write_volatile(&mut (*e)[0], 0);
+                std::ptr::write_volatile(&mut (*e)[1], 0);
+            }
+        }
+    }
+}
+
+/// TEB d'un fil de ce processus, d'après l'annuaire.
+pub fn teb_of_tid(tid: i32) -> Option<usize> {
+    let d = TEB_DIR.load(Ordering::Acquire);
+    if d == 0 || tid <= 0 {
+        return None;
+    }
+    let _g = THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let entries = d as *const [u64; 2];
+    (0..TEB_DIR_SLOTS)
+        .map(|i| unsafe { *entries.add(i) })
+        .find(|e| e[0] == tid as u64)
+        .map(|e| e[1] as usize)
+}
+
+/// TEB du fil `tid` du processus `pid`, lu par /proc/<pid>/mem dans son
+/// annuaire (#2024). Chaque entrée est vérifiée sur le TEB lui-même (champ
+/// Self et identifiant du fil) : un fil qui finit pendant la lecture ne
+/// donne jamais une adresse fausse.
+pub fn foreign_teb_of_tid(pid: i32, tid: i32) -> Option<usize> {
+    use std::os::unix::fs::FileExt;
+    let mem = std::fs::File::open(format!("/proc/{pid}/mem")).ok()?;
+    teb_in_dir(|at, buf| mem.read_exact_at(buf, at as u64).is_ok(), tid)
+}
+
+/// Recherche du TEB de `tid` dans l'annuaire d'un processus dont la mémoire
+/// se lit par `read(adresse, tampon)`.
+fn teb_in_dir(read: impl Fn(usize, &mut [u8]) -> bool, tid: i32) -> Option<usize> {
+    let word = |at: usize| -> Option<u64> {
+        let mut b = [0u8; 8];
+        read(at, &mut b).then(|| u64::from_le_bytes(b))
+    };
+    let dir = word(PEB_FIXED + PEB_WINLUX_TEB_DIR)? as usize;
+    if dir == 0 || tid <= 0 {
+        return None;
+    }
+    let mut raw = vec![0u8; TEB_DIR_SLOTS * 16];
+    if !read(dir, &mut raw) {
+        return None;
+    }
+    let (entries, _) = raw.as_chunks::<16>();
+    entries
+        .iter()
+        .map(|c| {
+            let (t, teb) = c.split_at(8);
+            (
+                u64::from_le_bytes(t.try_into().unwrap()),
+                u64::from_le_bytes(teb.try_into().unwrap()) as usize,
+            )
+        })
+        .filter(|&(t, teb)| t == tid as u64 && teb != 0)
+        .find(|&(_, teb)| {
+            word(teb + TEB_SELF) == Some(teb as u64) && word(teb + TEB_TID) == Some(tid as u64)
+        })
+        .map(|(_, teb)| teb)
+}
+
+#[cfg(test)]
+mod tests_annuaire_teb {
+    use super::*;
+
+    /// L'annuaire se lit depuis une mémoire étrangère : seule l'entrée dont
+    /// le TEB confirme son adresse et son fil est rendue (#2024).
+    #[test]
+    fn teb_d_un_fil_lu_dans_l_annuaire_d_un_autre_processus() {
+        use std::collections::HashMap;
+        let dir = 0x7000_0000usize;
+        let (vrai, perime) = (0x7100_0000usize, 0x7200_0000usize);
+        let mut mem: HashMap<usize, u8> = HashMap::new();
+        let mut put = |at: usize, v: u64| {
+            for (i, b) in v.to_le_bytes().iter().enumerate() {
+                mem.insert(at + i, *b);
+            }
+        };
+        put(PEB_FIXED + PEB_WINLUX_TEB_DIR, dir as u64);
+        // Entrée périmée (TEB réutilisé par un autre fil), puis la bonne.
+        put(dir, 77);
+        put(dir + 8, perime as u64);
+        put(dir + 16, 77);
+        put(dir + 24, vrai as u64);
+        put(perime + TEB_SELF, perime as u64);
+        put(perime + TEB_TID, 78);
+        put(vrai + TEB_SELF, vrai as u64);
+        put(vrai + TEB_TID, 77);
+        let read = |at: usize, buf: &mut [u8]| {
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = mem.get(&(at + i)).copied().unwrap_or(0);
+            }
+            true
+        };
+        assert_eq!(teb_in_dir(read, 77), Some(vrai));
+        assert_eq!(teb_in_dir(read, 78), None, "fil absent de l'annuaire");
+        let illisible = |_: usize, _: &mut [u8]| false;
+        assert_eq!(teb_in_dir(illisible, 77), None);
+    }
+}
+
 /// Libère le TEB du thread courant (blocs TLS statiques, tableau
 /// d'expansion, pile de signal) et détache GS : plus aucun code Windows ne
 /// tourne sur ce thread.
@@ -559,6 +729,7 @@ pub fn free_current_teb() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         threads.retain(|&x| x != t);
+        teb_dir_clear(t);
     }
     // Programme x86 : TEB 32 bits et entrée de LDT du thread (#232).
     crate::wow32::free_thread(t);
