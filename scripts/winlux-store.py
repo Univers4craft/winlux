@@ -2556,7 +2556,11 @@ def details(key):
              f"size_kb={int(app.size_kb or 0)}", f"homepage={field(app.homepage)}",
              f"source={field(badge(app))}", f"state={app.state}", f"category={app.category}",
              f"icon={local_icon(app, True)}"]
-    for p in app.description[:14]:
+    # Description facultative (docs/STORE.md) : absente ou vide, le résumé
+    # la remplace plutôt qu'une section « Description » vide (#2892).
+    paras = [p for p in app.description if isinstance(p, str) and p.strip()] or (
+        [app.summary] if app.summary else [])
+    for p in paras[:14]:
         lines.append(f"desc={field(p, 700)}")
     lines += [f"release={field(v, 40)}|{field(d, 20)}|{field(t, 300)}" for v, d, t in app.releases[:6]]
     for alt in alts:
