@@ -245,11 +245,15 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+      # Gardés aussi quand le run est vert (#3203) : sans un démarrage réussi
+      # (qemu-uefi32.log…) on ne peut rien comparer à un démarrage qui panique.
       - name: Conserver les journaux de validation
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: validation-logs
+          name: validation-logs-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
           path: |
             build/apt-base/bootstrap.log
             build/browser-vm.*/serial.log
