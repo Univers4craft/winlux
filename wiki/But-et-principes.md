@@ -15,7 +15,7 @@ Beaucoup de gens restent sous Windows pour une seule raison : leurs programmes. 
 
 - **Ce n'est pas une distribution qui embarque Wine.** La couche de compatibilité est écrite de zéro (voir plus bas).
 - **Ce n'est pas une machine virtuelle.** Un `.exe` tourne comme un processus Linux ordinaire, visible dans `ps` et dans le Gestionnaire des tâches.
-- **Ce n'est pas un clone de Windows.** L'ergonomie est reprise, mais pas la marque : aucun logo Windows, aucune application Microsoft, aucun compte Microsoft.
+- **Ce n'est pas un clone de Windows.** L'ergonomie est familière, mais la marque n'est pas reprise : aucun logo Windows, aucune application Microsoft, aucun compte Microsoft.
 - **Ce n'est pas (encore) un remplaçant de Windows prêt pour tout le monde.** C'est une préversion technique. Voir [Limites et problèmes connus](Limites-et-problemes-connus).
 
 ## Les principes
