@@ -271,6 +271,9 @@ const V_OUTDIR2: usize = 31;
 const F_ALL_USER: usize = 1;
 const F_ERROR: usize = 2;
 const F_SILENT: usize = 8;
+/// `exec_flags.alter_reg_view` : SetRegView 64 y met KEY_WOW64_64KEY,
+/// SetRegView 32 KEY_WOW64_32KEY.
+const F_REG_VIEW: usize = 12;
 
 /// Fin anticipée de l'exécution.
 enum Stop {
@@ -580,6 +583,18 @@ impl<'a, 'b> Vm<'a, 'b> {
         }
     }
 
+    /// Clé vue par le script (voir `key_in_view`).
+    fn reg_view(&self, key: String) -> String {
+        key_in_view(key, self.flags[F_REG_VIEW], is_x86_stub(self.stub))
+    }
+
+    /// Lecture dans la vue du script (voir `read_in_view`).
+    fn reg_read_view(&self, key: &str, name: &str) -> Option<(u32, Vec<u8>)> {
+        read_in_view(key, &self.reg_view(key.to_string()), |k| {
+            self.reg_read(k, name)
+        })
+    }
+
     fn reg_read(&self, key: &str, name: &str) -> Option<(u32, Vec<u8>)> {
         if let Some(v) = self.reg.get(&(key.to_lowercase(), name.to_lowercase())) {
             return Some((1, super::utf16z(v)));
@@ -589,7 +604,8 @@ impl<'a, 'b> Vm<'a, 'b> {
     }
 
     fn note_uninstall_key(&mut self, key: &str) {
-        let marker = "software\\microsoft\\windows\\currentversion\\uninstall\\";
+        // Avec ou sans Wow6432Node entre Software et Microsoft (#2883).
+        let marker = "microsoft\\windows\\currentversion\\uninstall\\";
         let lower = key.to_lowercase();
         // Identifiant dans sa casse d'origine quand les positions coïncident.
         let src = if lower.len() == key.len() {
@@ -1156,7 +1172,7 @@ impl<'a, 'b> Vm<'a, 'b> {
                 // EW_DELREG : (réservé), racine, clé, valeur, drapeaux (0 :
                 // DeleteRegValue ; sinon DeleteRegKey, bit 1 : /ifempty).
                 let root = self.hive(p[1]);
-                let key = super::reg_key(root, &self.string(p[2]));
+                let key = self.reg_view(super::reg_key(root, &self.string(p[2])));
                 let name = self.string(p[3]);
                 let only_if_empty = (p[4] >> 1) & 1 != 0;
                 if let Some(inst) = self.inst.as_deref_mut() {
@@ -1174,7 +1190,7 @@ impl<'a, 'b> Vm<'a, 'b> {
             51 => {
                 // EW_WRITEREG
                 let root = self.hive(p[0]);
-                let key = super::reg_key(root, &self.string(p[1]));
+                let key = self.reg_view(super::reg_key(root, &self.string(p[1])));
                 let name = self.string(p[2]);
                 let (kind, bytes, text) = match p[4] {
                     4 => {
@@ -1209,7 +1225,7 @@ impl<'a, 'b> Vm<'a, 'b> {
                 let key = super::reg_key(root, &self.string(p[2]));
                 let name = self.string(p[3]);
                 let want_int = p[4] != 0;
-                match self.reg_read(&key, &name) {
+                match self.reg_read_view(&key, &name) {
                     Some((_, b)) => {
                         let v = if want_int && b.len() == 4 {
                             u32::from_le_bytes([b[0], b[1], b[2], b[3]]).to_string()
@@ -1706,7 +1722,7 @@ fn execute(
         let root = vm.hive(h.int(68));
         let key = super::reg_key(root, &vm.string(reg_key_ptr));
         let name = vm.string(h.int(76));
-        if let Some((_, b)) = vm.reg_read(&key, &name) {
+        if let Some((_, b)) = vm.reg_read_view(&key, &name) {
             let v = super::utf16_text(&b, true);
             if !v.is_empty() {
                 instdir = v.trim_matches('"').trim_end_matches('\\').to_string();
@@ -1758,8 +1774,11 @@ fn execute(
     let get = |vm: &Vm, n: &str| -> String {
         for root in ["hklm", "hkcu"] {
             let k = ukey.replacen("hklm", root, 1);
-            if let Some(v) = vm.reg.get(&(k, n.to_lowercase())) {
-                return v.clone();
+            // Clé écrite dans la vue 32 bits d'abord (#2883).
+            for k in [vm.reg_view(k.clone()).to_lowercase(), k] {
+                if let Some(v) = vm.reg.get(&(k, n.to_lowercase())) {
+                    return v.clone();
+                }
             }
         }
         String::new()
@@ -1812,8 +1831,9 @@ pub fn install(
     inst.manifest.location = dir;
     if let Some(id) = ids.first() {
         inst.manifest.id = id.clone();
+        // Sous Wow6432Node pour un installateur x86 (#2883).
         let uk_m = format!(
-            "software\\microsoft\\windows\\currentversion\\uninstall\\{}",
+            "\\microsoft\\windows\\currentversion\\uninstall\\{}",
             id.to_lowercase()
         );
         // Clé réellement utilisée (HKLM ou HKCU).
@@ -1835,6 +1855,39 @@ fn is_nsexec(dll: &str, func: &str) -> bool {
             func.to_ascii_lowercase().as_str(),
             "exec" | "exectolog" | "exectostack"
         )
+}
+
+/// Clé vue par le script. Comme tout programme 32 bits, un installateur
+/// x86 lit et écrit `HKLM\Software\…` sous Wow6432Node, sauf après
+/// SetRegView 64 ; un installateur x64 y entre par SetRegView 32
+/// (Registry Redirector, #2883). `view` : `exec_flags.alter_reg_view`.
+fn key_in_view(key: String, view: i32, x86: bool) -> String {
+    let v = view as u32;
+    let want32 = v & 0x200 != 0 || (v & 0x100 == 0 && x86);
+    if !want32 {
+        return key;
+    }
+    crate::wow32::wow_path(&key).unwrap_or(key)
+}
+
+/// Lecture de `key` vue comme `view`. Une clé d'éditeur absente de la vue
+/// 32 bits reste introuvable, comme sous Windows : la clé d'une
+/// installation x64 ne décide pas du dossier d'une x86 (#2883). Seules les
+/// clés système (`Software\Microsoft`), que Winlux pose sans double 32
+/// bits, retombent sur la vue 64 bits, comme dans `registry_view`.
+fn read_in_view<T>(key: &str, view: &str, read: impl Fn(&str) -> Option<T>) -> Option<T> {
+    if view != key {
+        if let Some(v) = read(view) {
+            return Some(v);
+        }
+        if !key
+            .to_ascii_lowercase()
+            .starts_with("hklm\\software\\microsoft\\")
+        {
+            return None;
+        }
+    }
+    read(key)
 }
 
 /// Vrai si l'exécutable de l'installateur est un PE x86 (IMAGE_FILE_MACHINE_I386).
@@ -2062,6 +2115,43 @@ mod tests {
         pe[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
         assert!(!is_x86_stub(&pe));
         assert!(!is_x86_stub(b"MZ"));
+    }
+
+    /// Vue du registre d'un installateur (#2883) : la clé d'une
+    /// installation x64 ne décide pas du dossier proposé à une x86.
+    #[test]
+    fn registre_vu_par_un_installateur_x86() {
+        let k = |s: &str| s.to_string();
+        let npp = "hklm\\SOFTWARE\\Notepad++";
+        assert_eq!(
+            key_in_view(k(npp), 0, true),
+            "hklm\\SOFTWARE\\Wow6432Node\\Notepad++"
+        );
+        assert_eq!(key_in_view(k(npp), 0x100, true), npp, "SetRegView 64");
+        assert_eq!(key_in_view(k(npp), 0, false), npp, "installateur x64");
+        assert_eq!(
+            key_in_view(k(npp), 0x200, false),
+            "hklm\\SOFTWARE\\Wow6432Node\\Notepad++",
+            "SetRegView 32"
+        );
+        assert_eq!(
+            key_in_view(k("hkcu\\Software\\X"), 0, true),
+            "hkcu\\Software\\X"
+        );
+
+        // Seule la clé de l'installation x64 existe : introuvable en x86.
+        let x64_only = |key: &str| (!key.contains("Wow6432Node")).then_some(1);
+        let view = key_in_view(k(npp), 0, true);
+        assert_eq!(read_in_view(npp, &view, x64_only), None);
+        assert_eq!(read_in_view(npp, npp, x64_only), Some(1));
+        // Clé système posée par Winlux sans double 32 bits : lue quand même.
+        let cv = "hklm\\Software\\Microsoft\\Windows\\CurrentVersion";
+        let view = key_in_view(k(cv), 0, true);
+        assert_eq!(read_in_view(cv, &view, x64_only), Some(1));
+        // La vue 32 bits gagne quand elle existe.
+        let both = |key: &str| Some(if key.contains("Wow6432Node") { 32 } else { 64 });
+        let view = key_in_view(k(npp), 0, true);
+        assert_eq!(read_in_view(npp, &view, both), Some(32));
     }
 
     #[test]
