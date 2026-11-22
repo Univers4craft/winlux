@@ -438,7 +438,10 @@ ok('"Votre PC": ("Your PC", "Su PC", "Ihr PC")' in hardware_page, "Votre PC : qu
 shell_app = SCRIPTS / "winlux-shell-app.sh"
 for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\home\\damien\\Téléchargements"),
                       ("file:///tmp/Mes%20documents%20%231", "Z:\\tmp\\Mes documents #1")):
-    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
+    # Dossier personnel fixé ailleurs : sur le compte damien, ce chemin part sur C: (#3025).
+    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True,
+                              env={**{k: v for k, v in os.environ.items() if k not in ("WINLUX_DRIVE_C", "WINLUX_HOME")},
+                                   "HOME": "/home/essai-winlux"}).stdout
     ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
 
 # ── Support matériel des PC (audit de la v0.2.17, 2026-11-03) ──────────────
