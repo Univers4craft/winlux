@@ -70,6 +70,9 @@ XML = '''<node><interface name="org.freedesktop.Notifications">
 
 class Notifications:
     def __init__(self):
+        # Temporaire d'avant #3060, né en 0644 : jamais laissé derrière.
+        try: STATE.with_suffix(".tmp").unlink()
+        except OSError: pass
         try: self.history = json.loads(STATE.read_text())[-200:]
         except (OSError, ValueError): self.history = []
         self.sequence = max([item.get("id", 0) for item in self.history] + [0])
@@ -86,11 +89,8 @@ class Notifications:
             Gio.BusNameOwnerFlags.NONE, self.acquired, None, lambda *_: Gtk.main_quit())
 
     def save(self):
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = STATE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.history[-200:], ensure_ascii=False))
-        tmp.chmod(0o600)
-        tmp.replace(STATE)
+        private_state()
+        write_private(STATE, json.dumps(self.history[-200:], ensure_ascii=False))
         write_unseen(unseen_count(self.history))
 
     def mark_seen(self, identity=None):
@@ -259,13 +259,36 @@ def unseen_count(history):
     return sum(1 for item in history if isinstance(item, dict) and item.get("nouvelle"))
 
 
+def private_state():
+    """Dossier d'état du compte en 0700 (#3060), comme private_state de
+    winlux-open : créé sous umask 077 (~/.local/state compris quand il
+    manque), et notre dossier winlux ramené à 0700 s'il existait plus ouvert."""
+    old = os.umask(0o077)
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+    finally:
+        os.umask(old)
+    if STATE.parent.stat().st_mode & 0o077:
+        STATE.parent.chmod(0o700)
+
+
+def write_private(path, text):
+    """Fichier né en 0600 (#3060) : jamais lisible par un autre compte, pas
+    même entre l'écriture et un chmod. Remplacé d'un bloc."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out: out.write(text)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def write_unseen(count):
     """Compteur privé au compte, remplacé d'un bloc (jamais lu à moitié)."""
-    tmp = UNSEEN.with_name(f"{UNSEEN.name}.{os.getpid()}")
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as out: out.write(f"{count}\n")
-        tmp.replace(UNSEEN)
+        write_private(UNSEEN, f"{count}\n")
     except OSError:
         pass
 
