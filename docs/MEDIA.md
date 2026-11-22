@@ -1,7 +1,7 @@
 # Lecteur multimédia et moteur vidéo/audio
 
 Winlux lit la vidéo et l'audio avec un lecteur natif du shell
-(`mediaplayer.exe`, style Windows 11) et un moteur multimédia intégré au
+(`mediaplayer.exe`) et un moteur multimédia intégré au
 runtime (`runtime/src/dlls/winlux_media.rs`). Aucune DLL Windows ni Wine.
 
 ## Ce qui existait avant
