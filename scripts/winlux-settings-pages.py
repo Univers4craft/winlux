@@ -260,6 +260,7 @@ _TR = {
     'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
     'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
+    'Recherche des imprimantes…': ('Looking for printers…', 'Buscando impresoras…', 'Drucker werden gesucht…'),
     'Le service d’impression a refusé la recherche :': ('The print service refused the search:', 'El servicio de impresión rechazó la búsqueda:', 'Der Druckdienst hat die Suche abgelehnt:'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
@@ -2028,6 +2029,42 @@ class ExtraPages:
             try: self.select(self.nav, self.nav.get_selected_row())
             finally: self._rebuilding = False
         return False
+
+    def status_later(self, key, work, shown=None):
+        """État lent à obtenir (CUPS, relais root…) demandé hors du fil GTK
+        (#3021) : la page s'affiche aussitôt avec l'état connu (`shown`, ou
+        le dernier résultat de `work`, None au tout premier affichage), puis
+        se reconstruit si la réponse diffère. Une demande à la fois par clé ;
+        une reconstruction due à une réponse n'en relance aucune."""
+        import threading
+        later = self.__dict__.setdefault("_later", {"running": set(), "known": {}, "answering": False})
+        known = shown if shown is not None else later["known"].get(key)
+        if later["answering"] or key in later["running"]: return known
+        later["running"].add(key)
+        page = self.page
+
+        def finish(value):
+            later["running"].discard(key)
+            later["known"][key] = value
+            if value != known and self.page == page:
+                later["answering"] = True
+                try: self.extra_refresh()
+                finally: later["answering"] = False
+            return False
+
+        def work_then_finish():
+            try: value = work()
+            except Exception: value = None
+            GLib.idle_add(finish, value)
+        threading.Thread(target=work_then_finish, daemon=True).start()
+        return known
+
+    def control_status(self, action, path):
+        """Rafraîchit un fichier d'état par winlux-control sans la tournée
+        `status` complète qui suit chaque action (#3021) : la page ne lit que
+        ce fichier ; l'init relit l'état général toutes les 3 s."""
+        run(["winlux-control", action], timeout=5, env=dict(os.environ, WINLUX_CONTROL_NO_STATUS="1"))
+        return read(path)
 
     # ── Briques communes ──
 
@@ -3888,14 +3925,22 @@ class ExtraPages:
 
     # ── Imprimantes et scanners (CUPS) ──
 
-    def page_printers(self):
+    @staticmethod
+    def printers_state():
+        """(imprimante par défaut, imprimantes) d'après CUPS ; lent quand
+        cupsd tarde à répondre, donc lu hors du fil GTK (#3021)."""
         default = run(["lpstat", "-d"], timeout=3)
         default = default.stdout.split(":", 1)[-1].strip() if default and ":" in default.stdout else ""
         listed = run(["lpstat", "-e"], timeout=3)
-        printers = [name for name in (listed.stdout.split() if listed else [])]
+        return default, tuple(listed.stdout.split() if listed else ())
+
+    def page_printers(self):
+        state = self.status_later("printers", self.printers_state)
+        default, printers = state or ("", ())
         self.section(_t("Imprimantes installées"))
         box = self.card()
-        if not printers: self.hint(_t("Aucune imprimante pour l’instant."), box)
+        if state is None: self.hint(_t("Recherche des imprimantes…"), box)
+        elif not printers: self.hint(_t("Aucune imprimante pour l’instant."), box)
         for name in printers:
             line = Gtk.Box(spacing=6)
             for title, args, show in ((_t("Par défaut"), ["lpoptions", "-d", name], name != default),
@@ -4286,8 +4331,9 @@ class ExtraPages:
         self.show_info(_t("Restauration lancée"), _t("Vos fichiers sont remis en place en arrière-plan. Les fichiers créés depuis la sauvegarde ne sont pas touchés."))
 
     def page_sharing(self):
-        if have("winlux-control"): run(["winlux-control", "share-status"], timeout=5)
         shares = read(RUN / "shares.txt")
+        if have("winlux-control"):
+            shares = self.status_later("share", lambda: self.control_status("share-status", RUN / "shares.txt"), shares)
         info = keyvals(shares)
         if info.get("available") == "1":
             self.section(_t("Dossiers partagés"), _t("Visibles des autres PC (Windows, Mac, Linux) du réseau privé."))
@@ -4315,8 +4361,9 @@ class ExtraPages:
             self.actions(box, [(_t("Partager un dossier…"), pick)])
             self.hint(_t("Droits par compte : clic droit sur le dossier › « Partager ce dossier… »."), box)
         if not have("winlux-transfer") and not run_file("transfer.txt").is_file(): return
-        if have("winlux-control"): run(["winlux-control", "transfer-status"], timeout=5)
         transfer = read(run_file("transfer.txt"))
+        if have("winlux-control"):
+            transfer = self.status_later("transfer", lambda: self.control_status("transfer-status", run_file("transfer.txt")), transfer)
         self.section(_t("Transférer mes réglages"), _t("Un fichier .wlxprofile emporte vos réglages vers un autre PC Winlux."))
         box = self.card()
         targets = [line[7:] for line in transfer.splitlines() if line.startswith("target=")]
