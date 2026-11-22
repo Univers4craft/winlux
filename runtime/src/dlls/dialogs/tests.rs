@@ -263,6 +263,25 @@ fn retour_chariot_seul_coupe_la_ligne_d_une_boite_de_message() {
     );
 }
 
+/// #3010 : la mesure d'un texte entier n'est pas la somme de ses mots
+/// (arrondi au pixel de chaque morceau, crénage). La boîte doit donner à sa
+/// statique une largeur où la statique, qui mesure chaque ligne entière,
+/// coupe le texte au même nombre de lignes que celui prévu pour la hauteur ;
+/// sinon le « ? » final passe sur une ligne coupée.
+#[test]
+fn boite_de_message_meme_coupure_que_sa_statique_3010() {
+    // 6,5 px par caractère, arrondis vers le bas : chaque mot mesuré seul
+    // perd jusqu'à un demi-pixel.
+    let measure = |s: &str| s.chars().count() as i32 * 13 / 2;
+    let text = "Le fichier n'a pas pu être enregistré. Voulez-vous réessayer ?";
+    for max_w in [420, 300, 200, 120] {
+        let (lines, widest) = message_box_wrap(text, max_w, &measure);
+        let shown = crate::dlls::controls::wrap_with(text, widest, &measure);
+        println!("max {max_w} : prévu {lines} ligne(s) sur {widest} px, statique {shown:?}");
+        assert_eq!(shown.len() as i32, lines, "largeur {max_w}");
+    }
+}
+
 #[test]
 fn longue_boite_de_message_tient_dans_l_ecran() {
     // #1161 : la pile d'appels de Paint.NET donnait une boîte de 1492 px.

@@ -516,10 +516,17 @@ fn expand_tabs(text: &str) -> String {
 }
 
 fn wrap(font: usize, text: &str, width: i32) -> Vec<String> {
+    wrap_with(text, width, &|s: &str| measure(font, s).0)
+}
+
+/// Coupure des lignes d'une statique, avec une mesure donnée : chaque ligne
+/// candidate est mesurée entière, comme elle sera dessinée. La boîte de
+/// message calcule sa taille avec cette même coupure (#3010).
+pub(crate) fn wrap_with(text: &str, width: i32, measure: &dyn Fn(&str) -> i32) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in text.split('\n') {
         let raw = raw.trim_end_matches('\r');
-        if width <= 0 || measure(font, raw).0 <= width {
+        if width <= 0 || measure(raw) <= width {
             lines.push(raw.to_string());
             continue;
         }
@@ -530,7 +537,7 @@ fn wrap(font: usize, text: &str, width: i32) -> Vec<String> {
             // DrawText(DT_WORDBREAK) : le couper renvoyait son dernier
             // caractère sur une ligne invisible (empreinte SHA256 tronquée de
             // FileZilla, #951).
-            if line.is_empty() || measure(font, candidate.trim_end()).0 <= width {
+            if line.is_empty() || measure(candidate.trim_end()) <= width {
                 line = candidate;
             } else {
                 lines.push(line.trim_end().to_string());
