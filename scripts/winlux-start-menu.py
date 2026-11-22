@@ -1565,9 +1565,21 @@ def found_in(query, text):
     return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
 
 
+# « Paramètres » dans les quatre langues, repliés : dans une recherche de
+# plusieurs mots (« paramètres son »), ce mot désigne la catégorie et non le
+# titre de la page (#3017).
+SETTINGS_WORDS = ("parametres", "parametre", "settings", "setting", "configuracion", "ajustes", "einstellungen")
+
+
 def settings_for(query):
     """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
-    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés.
+    Le mot « paramètres » accompagné d'autres mots nomme la catégorie : il est
+    retiré avant de chercher la page."""
+    parts = words(query).split()
+    rest = [part for part in parts
+            if not (len(part) >= 4 and any(name.startswith(part) for name in SETTINGS_WORDS))]
+    if rest and len(rest) < len(parts): query = " ".join(rest)
     found = []
     for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
         if found_in(query, label) or found_in(query, french):
