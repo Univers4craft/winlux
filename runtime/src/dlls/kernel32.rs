@@ -10239,8 +10239,8 @@ pub unsafe extern "win64" fn set_waitable_timer(
     h: usize,
     due: *const i64,
     period: i32,
-    _routine: usize,
-    _arg: usize,
+    routine: usize,
+    arg: usize,
     _resume: i32,
 ) -> i32 {
     let Some(generation) = lock(waitable_timers()).get(&h).cloned() else {
@@ -10269,6 +10269,17 @@ pub unsafe extern "win64" fn set_waitable_timer(
     let my_generation = generation.fetch_add(1, Ordering::AcqRel) + 1;
     event.store(&mut lock(&event.signaled), false);
     let period = std::time::Duration::from_millis(period as u64);
+    // pfnCompletionRoutine (Learn, SetWaitableTimer) : appelée par le fil qui
+    // a armé le minuteur, quand il attend en mode alertable, avec
+    // (lpArgToCompletionRoutine, dwTimerLowValue, dwTimerHighValue). DirectSound
+    // de PortAudio (Audacity) ne cadence son traitement que par cette routine :
+    // l'ignorer laissait lecture et enregistrement muets (#3117).
+    let apc = (routine != 0).then(|| {
+        (
+            std::thread::current().id(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    });
     let spawned = std::thread::Builder::new()
         .name("winlux-waitable-timer".into())
         .spawn(move || {
@@ -10285,6 +10296,17 @@ pub unsafe extern "win64" fn set_waitable_timer(
                         w.wake();
                     }
                     event.changed.notify_all();
+                }
+                // Une seule routine en attente par minuteur : un fil qui
+                // n'attend jamais en mode alertable n'accumule rien.
+                if let Some((thread, pending)) = &apc {
+                    if !pending.swap(true, Ordering::AcqRel) {
+                        let at = filetime_now();
+                        queue_apc(
+                            *thread,
+                            Apc::Timer(routine, arg, at as u32, (at >> 32) as u32, pending.clone()),
+                        );
+                    }
                 }
                 if period.is_zero() {
                     return;
@@ -10586,12 +10608,15 @@ pub(crate) fn forget_dir_watcher(h: usize) {
 
 // File d'APC par thread : routines d'achèvement (ReadDirectoryChangesW,
 // ReadFileEx…) et QueueUserAPC, exécutées pendant une attente « alertable ».
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Apc {
     /// PAPCFUNC(param)
     User(usize, usize),
     /// LPOVERLAPPED_COMPLETION_ROUTINE(erreur, octets, overlapped)
     Completion(usize, u32, u32, usize),
+    /// PTIMERAPCROUTINE(argument, heure basse, heure haute) d'un minuteur
+    /// d'attente ; le drapeau dit qu'un appel attend déjà ce fil.
+    Timer(usize, usize, u32, u32, Arc<std::sync::atomic::AtomicBool>),
 }
 static APC_QUEUES: OnceLock<(Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar)> = OnceLock::new();
 fn apc_queues() -> &'static (Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar) {
@@ -10629,6 +10654,11 @@ pub(crate) fn run_apcs() -> bool {
                 Apc::Completion(func, error, bytes, overlapped) => {
                     let f: extern "win64" fn(u32, u32, usize) = std::mem::transmute(func);
                     f(error, bytes, overlapped);
+                }
+                Apc::Timer(func, arg, low, high, pending) => {
+                    pending.store(false, Ordering::Release);
+                    let f: extern "win64" fn(usize, u32, u32) = std::mem::transmute(func);
+                    f(arg, low, high);
                 }
             }
         }
@@ -12075,6 +12105,58 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::copy_keeping_write_time;
+
+    /// #3117 : SetWaitableTimer appelle sa routine de complétion sur le fil
+    /// qui l'a armé, pendant ses attentes alertables, et pas ailleurs ; un
+    /// fil qui n'attend pas en mode alertable n'accumule pas d'appels.
+    #[test]
+    fn minuteur_appelle_sa_routine_en_attente_alertable_3117() {
+        use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        static ARG: AtomicUsize = AtomicUsize::new(0);
+        extern "win64" fn routine(arg: usize, low: u32, high: u32) {
+            assert!(low != 0 || high != 0, "heure du signal attendue");
+            ARG.store(arg, Ordering::Relaxed);
+            CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        unsafe {
+            let t = super::create_waitable_timer_a(0, 0, std::ptr::null());
+            assert_ne!(t, 0);
+            let due: i64 = -20_000; // 2 ms, relatif
+            assert_eq!(
+                super::set_waitable_timer(t, &due, 5, routine as *const () as usize, 0x3117, 0),
+                1
+            );
+            // Attente non alertable : la routine ne doit pas tourner.
+            super::sleep_ex(60, 0);
+            assert_eq!(
+                CALLS.load(Ordering::Relaxed),
+                0,
+                "appel hors attente alertable"
+            );
+            // Attente alertable : la routine tourne, une seule fois pour tout
+            // ce qui s'est accumulé, et l'attente rend WAIT_IO_COMPLETION.
+            assert_eq!(super::sleep_ex(1000, 1), 0xC0);
+            assert_eq!(CALLS.load(Ordering::Relaxed), 1, "appels accumulés");
+            assert_eq!(ARG.load(Ordering::Relaxed), 0x3117);
+            // Le minuteur périodique continue de rappeler.
+            let t0 = std::time::Instant::now();
+            while CALLS.load(Ordering::Relaxed) < 5 {
+                assert!(t0.elapsed().as_secs() < 5, "rappel périodique absent");
+                super::sleep_ex(50, 1);
+            }
+            assert_eq!(super::cancel_waitable_timer(t), 1);
+            super::sleep_ex(30, 1);
+            let n = CALLS.load(Ordering::Relaxed);
+            super::sleep_ex(60, 1);
+            assert_eq!(
+                CALLS.load(Ordering::Relaxed),
+                n,
+                "rappel après CancelWaitableTimer"
+            );
+            super::close_handle(t);
+        }
+    }
 
     #[test]
     fn compare_string_respecte_la_casse_sans_ignorecase() {
