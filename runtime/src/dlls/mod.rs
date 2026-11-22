@@ -229,6 +229,7 @@ pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod package_classes;
+pub mod pathcch;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;
@@ -534,6 +535,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(pathcch::exports());
                     e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
@@ -1943,6 +1945,20 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Reste de la famille PathCch (#2921).
+    "PathCchRemoveFileSpec",
+    "PathCchRemoveBackslash",
+    "PathCchRemoveBackslashEx",
+    "PathCchAddBackslash",
+    "PathCchAddBackslashEx",
+    "PathCchStripToRoot",
+    "PathCchIsRoot",
+    "PathCchFindExtension",
+    "PathCchRemoveExtension",
+    "PathCchAddExtension",
+    "PathCchRenameExtension",
+    "PathCchStripPrefix",
+    "PathIsUNCEx",
     // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
     "CreateAppContainerToken",
 ];
