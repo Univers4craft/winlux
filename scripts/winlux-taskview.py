@@ -282,7 +282,9 @@ def run_view():
             css = Gtk.CssProvider()
             css.load_from_data(b"""
               window { background: rgba(16, 18, 26, 0.86); color: #ecedf5; }
-              .card { background: #2a3040; border-radius: 8px; padding: 8px; }
+              .card { background: #2a3040; border-radius: 8px; padding: 6px; border: 2px solid transparent; }
+              flowboxchild { padding: 0; outline: none; }
+              flowboxchild:focus .card, .desk.focus { border-color: #ecedf5; background: #343b4e; }
               .card:hover { background: #343b4e; }
               .title { font-size: 13px; }
               .hint { color: #adb6c9; font-size: 15px; }
@@ -307,12 +309,20 @@ def run_view():
             # FlowBox centré : GTK lui donne sa largeur naturelle, une seule
             # colonne, et la vue débordait de l'écran (#3066). Les colonnes
             # sont fixées par grid_layout.
-            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True,
+            # Clavier (#3075) : les flèches passent d'une carte à l'autre,
+            # Entrée ou Espace ouvre la fenêtre, Suppr la ferme ; Tab mène
+            # à la bande des bureaux. La souris reste sur les EventBox.
+            self.flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, activate_on_single_click=False,
                                     row_spacing=GAP, column_spacing=GAP, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
             outer.pack_start(self.flow, True, True, 0)
             self.desks = Gtk.Box(spacing=12, halign=Gtk.Align.CENTER)
             outer.pack_end(self.desks, False, False, 0)
+            self.flow.connect("child-activated", lambda _, child: getattr(child.get_child(), "window_id", None)
+                              and self.open_window(child.get_child().window_id))
             self.connect("key-press-event", self.key)
+            # GTK efface l'indicateur de focus au premier affichage : remis
+            # après, sinon la carte choisie au clavier ne se voit pas.
+            self.connect("map-event", lambda *_: GLib.idle_add(self.show_focus))
             self.connect("button-release-event", lambda *_: self.close_view())
             self.refresh()
 
@@ -331,13 +341,37 @@ def run_view():
             self.flow.set_max_children_per_line(columns)
             for window, _, title in shown:
                 self.flow.add(self.window_card(window, title, desks, current, thumb_w, thumb_h))
+            self.desk_events = []
             for number, name, on in desks:
-                self.desks.pack_start(self.desk_card(number, name, on, len(desks)), False, False, 0)
+                card = self.desk_card(number, name, on, len(desks))
+                self.desk_events.append(card)
+                if on: self.current_desk = card
+                self.desks.pack_start(card, False, False, 0)
             add = Gtk.Button(label="+  " + _t("Nouveau bureau"))
             add.get_style_context().add_class("new")
             add.connect("clicked", lambda *_: (new_desktop(), GLib.timeout_add(150, self.refresh_later)))
             self.desks.pack_start(add, False, False, 0)
             self.show_all()
+            first = self.flow.get_child_at_index(0)
+            if shown and first is not None:
+                first.grab_focus()
+            elif getattr(self, "current_desk", None) is not None:
+                self.current_desk.grab_focus()
+
+        def show_focus(self):
+            self.set_focus_visible(True)
+            return False
+
+        def open_window(self, window):
+            self.hide()
+            _run(["wmctrl", "-i", "-a", window])
+            Gtk.main_quit()
+
+        def go_to(self, number):
+            # Choisir un bureau y mène et ferme la vue (#3074).
+            self.hide()
+            _run(["wmctrl", "-s", str(number)])
+            Gtk.main_quit()
 
         def refresh_later(self):
             self.refresh()
@@ -349,6 +383,7 @@ def run_view():
 
         def window_card(self, window, title, desks, current, thumb_w, thumb_h):
             event = Gtk.EventBox()
+            event.window_id = window
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             box.get_style_context().add_class("card")
             event.add(box)
@@ -359,6 +394,7 @@ def run_view():
             close = Gtk.Button(label="✕")
             close.get_style_context().add_class("x")
             close.set_tooltip_text(_t("Fermer"))
+            close.set_can_focus(False)  # au clavier : Suppr sur la carte
             close.connect("clicked", lambda *_: (_run(["wmctrl", "-i", "-c", window]), GLib.timeout_add(300, self.refresh_later)))
             head.pack_start(close, False, False, 0)
             box.pack_start(head, False, False, 0)
@@ -383,9 +419,7 @@ def run_view():
                     menu.popup_at_pointer(event)
                     return True
                 if event.button == 1:
-                    self.hide()
-                    _run(["wmctrl", "-i", "-a", window])
-                    Gtk.main_quit()
+                    self.open_window(window)
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -402,11 +436,17 @@ def run_view():
             box.get_style_context().add_class("desk")
             if on: box.get_style_context().add_class("on")
             event.add(box)
+            event.set_can_focus(True)
+            event.connect("focus-in-event", lambda *_: box.get_style_context().add_class("focus"))
+            event.connect("focus-out-event", lambda *_: box.get_style_context().remove_class("focus"))
+            event.connect("key-press-event", lambda _, key: key.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space)
+                          and (self.go_to(number) or True))
             box.pack_start(Gtk.Label(label=name), False, False, 0)
             if count > 1:
                 close = Gtk.Button(label="✕")
                 close.get_style_context().add_class("x")
                 close.set_tooltip_text(_t("Supprimer le bureau"))
+                close.set_can_focus(False)
                 close.connect("clicked", lambda *_: (remove_desktop(number), GLib.timeout_add(200, self.refresh_later)))
                 box.pack_start(close, False, False, 0)
 
@@ -423,10 +463,7 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                 elif event.button == 1:
-                    # Choisir un bureau y mène et ferme la vue (#3074).
-                    self.hide()
-                    _run(["wmctrl", "-s", str(number)])
-                    Gtk.main_quit()
+                    self.go_to(number)
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -447,6 +484,22 @@ def run_view():
         def key(self, _, event):
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Super_L, Gdk.KEY_Super_R):
                 self.close_view()
+                return True
+            focused = self.get_focus()
+            # Tab : de la grille au bureau courant de la bande, et retour.
+            if event.keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_KP_Tab):
+                if isinstance(focused, Gtk.FlowBoxChild) or focused is None:
+                    target = getattr(self, "current_desk", None)
+                else:
+                    target = self.flow.get_child_at_index(0)
+                    target = target if target is not None and getattr(target.get_child(), "window_id", None) else None
+                if target is not None:
+                    target.grab_focus()
+                    return True
+            if event.keyval == Gdk.KEY_Delete and isinstance(focused, Gtk.FlowBoxChild) \
+                    and getattr(focused.get_child(), "window_id", None):
+                _run(["wmctrl", "-i", "-c", focused.get_child().window_id])
+                GLib.timeout_add(300, self.refresh_later)
                 return True
             return False
 
