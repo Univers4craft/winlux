@@ -939,15 +939,11 @@ pub fn statically_linked_renderer(bytes: &[u8]) -> bool {
         b"GLFW30\0",
         b"G\0L\0F\0W\x003\x000\0\0\0",
     ];
-    let mut rest = bytes;
-    while let Some(i) = rest.iter().position(|&b| b == b'S' || b == b'G') {
-        let tail = &rest[i..];
-        if NEEDLES.iter().any(|n| tail.starts_with(n)) {
-            return true;
-        }
-        rest = &rest[i + 1..];
-    }
-    false
+    // Recherche vectorisée, une passe par nom : l'ancienne boucle octet par
+    // octet coûtait 27 % de l'ouverture de l'Explorateur (#2878).
+    NEEDLES
+        .iter()
+        .any(|needle| crate::search::find(bytes, needle).is_some())
 }
 
 /// Comme `statically_linked_renderer`, limité aux sections de données
