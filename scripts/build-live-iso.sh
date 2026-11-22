@@ -243,6 +243,9 @@ chmod 755 \
 for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_wait taches_compte chromium_compat cabinet_lz delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
+# Calculatrice (calculatrice, chronomètre, minuteur, réveil) au menu Démarrer
+# (#3047) : à côté du lecteur multimédia, avec les applications de Winlux.
+install -D -m 644 "$root/target/x86_64-pc-windows-msvc/release/calc.exe" "$stage/opt/winlux/apps/calc.exe"
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll2.dll" "$stage/opt/winlux/tests/testdll2.dll"
 # Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
