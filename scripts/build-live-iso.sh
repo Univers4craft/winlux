@@ -142,6 +142,15 @@ cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeu
 cp "$root/integration/store-windows-valides.json" "$stage/usr/share/winlux/store-windows-valides.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
 install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
+# Openbox de Winlux (#3064) : boutons Réduire et Agrandir selon le style Win32.
+# Construit ici depuis la source Ubuntu vérifiée, sauf binaire fourni par
+# WINLUX_OPENBOX. Jamais dans /usr/bin, qui reste à Ubuntu.
+openbox_bin=${WINLUX_OPENBOX:-}
+if test -z "$openbox_bin"; then
+    sh "$root/scripts/build-openbox.sh" "$root/build/openbox"
+    openbox_bin=$root/build/openbox/openbox
+fi
+install -D -m 755 "$openbox_bin" "$stage/usr/lib/winlux/openbox/openbox"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie

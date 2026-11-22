@@ -31,6 +31,13 @@ window.inactive.button.unpressed.image.color: #b6adbd
 window.inactive.button.hover.bg: flat solid
 window.inactive.button.hover.bg.color: #414b64
 window.inactive.button.hover.image.color: #ffffff
+# Bouton Réduire ou Agrandir désactivé (#3064) : une fenêtre Win32 qui n'a
+# qu'un des deux styles WS_MINIMIZEBOX et WS_MAXIMIZEBOX montre l'autre grisé,
+# comme Windows. Gris lisible sur la barre sombre comme sur la claire.
+window.active.button.disabled.bg: parentrelative
+window.active.button.disabled.image.color: #8a8494
+window.inactive.button.disabled.bg: parentrelative
+window.inactive.button.disabled.image.color: #6b6676
 window.active.handle.bg: flat solid
 window.active.handle.bg.color: #242a38
 window.inactive.handle.bg: flat solid
