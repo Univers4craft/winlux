@@ -2882,7 +2882,88 @@ fn message_methods() -> Vec<(usize, usize)> {
         (0, args_uri as *const () as usize),
         (1, args_json as *const () as usize),
         (2, args_try_string as *const () as usize),
+        (3, args_additional_objects as *const () as usize),
     ]
+}
+
+// ============================================================
+//  AdditionalObjects : ICoreWebView2ObjectCollectionView vide (#2979)
+// ============================================================
+
+/// ICoreWebView2ObjectCollectionView (WebView2.idl).
+const IID_OBJECT_COLLECTION_VIEW: Guid = super::comobj::guid(
+    0x0f36fd87,
+    0x4f69,
+    0x4415,
+    [0x98, 0xda, 0x88, 0x8f, 0x89, 0xfb, 0x9a, 0x33],
+);
+
+/// Notre pont `window.chrome.webview` ne fournit que `postMessage`, pas
+/// `postMessageWithAdditionalObjects` : la collection est toujours vide.
+/// Un seul objet statique, sans compte de références.
+#[repr(C)]
+struct EmptyObjects {
+    vt: &'static super::comobj::VTable<5>,
+}
+static EMPTY_OBJECTS: EmptyObjects = EmptyObjects {
+    vt: &EMPTY_OBJECTS_VTBL,
+};
+static EMPTY_OBJECTS_VTBL: super::comobj::VTable<5> = super::comobj::VTable([
+    eo_qi as *const (),
+    eo_add_ref as *const (),
+    eo_release as *const (),
+    eo_count as *const (),
+    eo_get_value as *const (),
+]);
+unsafe extern "win64" fn eo_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    match read_guid(iid) {
+        Some(g) if g == IID_OBJECT_COLLECTION_VIEW || g == IID_IUNKNOWN => {
+            *out = this;
+            S_OK
+        }
+        Some(g) => {
+            super::comobj::log_no_interface("ICoreWebView2ObjectCollectionView", &g as *const Guid);
+            *out = 0;
+            E_NOINTERFACE
+        }
+        None => {
+            *out = 0;
+            E_INVALIDARG
+        }
+    }
+}
+extern "win64" fn eo_add_ref(_this: usize) -> u32 {
+    1
+}
+extern "win64" fn eo_release(_this: usize) -> u32 {
+    1
+}
+unsafe extern "win64" fn eo_count(_this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    S_OK
+}
+/// GetValueAtIndex : tout indice est hors de la collection vide
+/// (E_INVALIDARG, inférence nommée : l'IDL ne dit pas quelle erreur).
+unsafe extern "win64" fn eo_get_value(_this: usize, _index: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    E_INVALIDARG
+}
+/// WebMessageReceivedEventArgs2::AdditionalObjects (#2979).
+unsafe extern "win64" fn args_additional_objects(_this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = &EMPTY_OBJECTS as *const EmptyObjects as usize;
+    S_OK
 }
 fn content_loading_methods() -> Vec<(usize, usize)> {
     vec![
@@ -3293,6 +3374,36 @@ mod tests {
         assert_ne!(x, z);
         com_release(a);
         com_release(b);
+    }
+
+    /// #2979 : AdditionalObjects (WebMessageReceivedEventArgs2, entrée 3)
+    /// rend une collection vide, servie entière.
+    #[test]
+    fn objets_joints_aux_messages_2979() {
+        let v = vtable(Family::Message);
+        assert_eq!(v[3 + 3], args_additional_objects as *const () as usize);
+        assert!(MESSAGE_ARGS_SLOTS > 3 + 3);
+        let a = new_com(Family::Message, None, None, Args::default());
+        let mut col = 0usize;
+        unsafe {
+            assert_eq!(args_additional_objects(a, &mut col), S_OK);
+            assert_ne!(col, 0);
+            let mut same = 0usize;
+            assert_eq!(
+                eo_qi(col, IID_OBJECT_COLLECTION_VIEW.as_ptr(), &mut same),
+                S_OK
+            );
+            assert_eq!(same, col);
+            assert_eq!(eo_release(same), 1);
+            let mut n = 9u32;
+            assert_eq!(eo_count(col, &mut n), S_OK);
+            assert_eq!(n, 0);
+            let mut obj = 7usize;
+            assert_eq!(eo_get_value(col, 0, &mut obj), E_INVALIDARG);
+            assert_eq!(obj, 0);
+            assert_eq!(args_additional_objects(a, std::ptr::null_mut()), E_POINTER);
+        }
+        com_release(a);
     }
 
     /// #2975 : NavigationKind (NavigationStartingEventArgs3, entrée 9)
