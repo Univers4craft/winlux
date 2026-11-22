@@ -5648,6 +5648,26 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn set_icon(&mut self, hwnd: usize, icon: &[u32]) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let top = Self::top_xwin(w);
+            if let Ok(Ok(atom)) = self
+                .conn
+                .intern_atom(false, b"_NET_WM_ICON")
+                .map(|c| c.reply())
+            {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    top,
+                    atom.atom,
+                    AtomEnum::CARDINAL,
+                    icon,
+                );
+                let _ = self.conn.flush();
+            }
+        }
+    }
+
     fn set_title(&mut self, hwnd: usize, title: &str) {
         if let Some(w) = self.windows.get(&hwnd) {
             let top = Self::top_xwin(w);

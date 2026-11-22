@@ -250,6 +250,7 @@ pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
+pub mod rstrtmgr;
 pub mod rtti;
 pub mod saisie;
 pub mod sandbox_dlls;
@@ -293,6 +294,7 @@ pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
 pub mod url_security;
+pub mod url_stream;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
@@ -334,6 +336,7 @@ pub mod winmm_mmio;
 pub mod winmm_waveout;
 pub mod winrt_apiinfo;
 pub mod winrt_coreapp;
+pub mod winrt_package_manager;
 pub mod winrt_ui;
 pub mod winrt_uri;
 pub mod winrt_wam;
@@ -1152,6 +1155,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "wevtapi",
                 exports: wevtapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "rstrtmgr",
+                exports: rstrtmgr::exports(),
                 handle: fake_module(),
             },
             Builtin {
