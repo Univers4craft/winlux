@@ -18,7 +18,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
   moteur → runtime (sortie standard)
     {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav", "headers", "kind"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
-    {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
+    {"ev": "nav_completed", "nav", "ok", "status", "error"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
     {"ev": "exec_result", "id", "ok", "json"}   {"ev": "error", "code"}
 
@@ -121,6 +121,20 @@ def navigation_kind(WebKit2, action):
     if kind == T.BACK_FORWARD:
         return 1
     return 2
+
+
+def completion(code):
+    """(IsSuccess, WebErrorStatus) d'une page chargée avec le code HTTP `code` (#2974).
+
+    WebView2.idl : IsSuccess vaut FALSE quand « HTTP server responds with
+    4xx ». WebErrorStatus : 401 → VALID_AUTHENTICATION_CREDENTIALS_REQUIRED
+    (17), 407 → VALID_PROXY_AUTHENTICATION_REQUIRED (18), autre 4xx →
+    UNKNOWN (0), inférence nommée : l'énumération n'a pas d'autre valeur
+    pour une réponse HTTP.
+    """
+    if 400 <= code < 500:
+        return False, {401: 17, 407: 18}.get(code, 0)
+    return True, 0
 
 
 def http_status(view):
@@ -694,7 +708,9 @@ class View:
             emit(ev="history", back=view.can_go_back(), forward=view.can_go_forward())
         elif event == W.FINISHED:
             if not getattr(self, "_failed", False):
-                emit(ev="nav_completed", nav=self.nav, ok=True, status=http_status(view))
+                code = http_status(view)
+                ok, error = completion(code)
+                emit(ev="nav_completed", nav=self.nav, ok=ok, status=code, error=error)
             self._failed = False
 
     def on_failed(self, view, event, uri, error):
