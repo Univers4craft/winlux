@@ -1586,7 +1586,12 @@ def result_order(app, query, state):
     ident = app.get_id() or ""
     when = seen.get(ident)
     when = when if isinstance(when, (int, float)) else 0
-    return (rank(app.get_display_name(), query), indexed(app.get_display_name())[0], -when,
+    name = app.get_display_name()
+    level = rank(name, query)
+    # Milieu de mot (3) et faute de frappe (4) après toute correspondance
+    # exacte, nom ou mots-clés (#3068).
+    if level == 2 and not exact_match(app, query): level = near(query, name) or 2
+    return (level, indexed(name)[0], -when,
             ident.startswith(("winlux-pe-", "winlux-link-")), ident)
 
 
@@ -1623,6 +1628,9 @@ def words(text):
 # au-delà de 20 000 textes. Les noms de fichiers n'y passent pas (cache=False).
 _INDEX = {}
 _QUERY = [(None, [])]
+# Milieu de mot et fautes de frappe : recherche repliée et verdict par nom,
+# pour la frappe en cours (matches puis result_order demandent les deux).
+_NEAR = [(None, [], {})]
 
 
 def indexed(text):
@@ -1705,13 +1713,67 @@ def page_first(apps, pages, query):
     return rank(pages[0][0], query) < rank(apps[0].get_display_name(), query)
 
 
-def matches(app, query):
+def exact_match(app, query):
     """Nom affiché, nom générique ou mot-clé du lanceur (« boutique » trouve le Store)."""
-    if not query: return True
     if found_in(query, app.get_display_name()): return True
     keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
     generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
     return found_in(query, " ".join(list(keywords or []) + [generic or ""]))
+
+
+def matches(app, query):
+    """Correspondance exacte (exact_match), sinon milieu de mot ou faute de
+    frappe dans le nom de l'application (near)."""
+    if not query: return True
+    return exact_match(app, query) or near(query, app.get_display_name()) is not None
+
+
+def one_edit(a, b):
+    """Vrai si a et b diffèrent d'au plus une lettre ajoutée, oubliée,
+    remplacée, ou de deux lettres voisines inversées."""
+    if a == b: return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1: return False
+    i = 0
+    while i < la and i < lb and a[i] == b[i]: i += 1
+    if la == lb:
+        return a[i + 1:] == b[i + 1:] or (i + 1 < la and a[i] == b[i + 1] and a[i + 1] == b[i] and a[i + 2:] == b[i + 2:])
+    return a[i:] == b[i + 1:] if la < lb else a[i + 1:] == b[i:]
+
+
+def near(query, name):
+    """Applications seulement (#3068) : 3 si chaque mot de la recherche est au
+    milieu d'un mot du nom (« pad » dans Mousepad, 3 lettres au moins), 4 s'il
+    faut en plus tolérer une faute de frappe (« outlok » → Outlook, 4 lettres
+    au moins, une lettre de différence avec les 4 premières lettres au moins
+    d'un mot), sinon None.
+    Microsoft annonce la tolérance aux fautes pour les applications sans en
+    donner la règle : les seuils sont les nôtres."""
+    memo = _NEAR[0]
+    if memo[0] != query:
+        memo = (query, words(query).split(), {})
+        _NEAR[0] = memo
+    found = memo[2].get(name, False)
+    if found is not False: return found
+    tokens = indexed(name)[1]
+    level = 3
+    for word in memo[1]:
+        size = len(word)
+        head = (word[:1], word[1:2])
+        if size >= 3 and any(word in token for token in tokens): continue
+        # Une seule lettre de différence : les deux premières lettres du mot
+        # et du début du nom en ont au moins une en commun, à la même place
+        # ou décalée d'un cran. Le filtre évite one_edit() pour presque tous.
+        # Le début du nom comparé a lui aussi 4 lettres au moins : sinon
+        # « rapp » (une lettre en trop devant « app ») trouvait toutes les
+        # « Application… ».
+        if size >= 4 and any(one_edit(word, token[:size + delta]) for token in tokens
+                             if token[:1] in head or token[1:2] in head
+                             for delta in (-1, 0, 1) if size + delta >= 4):
+            level = 4; continue
+        level = None; break
+    memo[2][name] = level
+    return level
 
 
 def auto_pin(state, apps):
