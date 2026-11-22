@@ -320,6 +320,15 @@ impl Window {
             (self.rect.height() - self.menu_bar).max(0),
         )
     }
+
+    /// Zone client vide (largeur ou hauteur nulle) : sa zone de mise à jour
+    /// l'est aussi, et Windows n'envoie WM_PAINT que pour une zone non vide
+    /// (Learn, « The Update Region »). Un Label de Paint.NET de taille nulle
+    /// recevait sinon WM_PAINT et son OnPaint créait une Bitmap 0×N (#2866).
+    fn client_is_empty(&self) -> bool {
+        let r = self.client_rect();
+        r.width() <= 0 || r.height() <= 0
+    }
 }
 
 use super::lock;
@@ -4882,7 +4891,12 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         // délivrer relançait une peinture de trop (#796).
         if m.message == WM_PAINT && m.l_private == SYSTEM_PAINT {
             let mut map = lock(windows());
-            if let Some(w) = map.get_mut(&m.hwnd).filter(|w| !w.needs_paint) {
+            // Une zone client vide n'a rien à peindre : la zone reste
+            // invalidée, et `pending_paint` la sert une fois agrandie.
+            if let Some(w) = map
+                .get_mut(&m.hwnd)
+                .filter(|w| !w.needs_paint || w.client_is_empty())
+            {
                 // Le WM_PAINT quitte la file : sans cela, `request_paint`
                 // le croyait toujours en attente et n'en postait plus aucun.
                 w.paint_queued = false;
@@ -4918,8 +4932,9 @@ pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let order = lock(z_order());
     let candidates = order.iter().copied().chain(map.keys().copied());
     let target = candidates.filter(|h| hwnd == 0 || *h == hwnd).find(|h| {
-        map.get(h)
-            .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
+        map.get(h).is_some_and(|w| {
+            w.owner == tid && w.visible && w.needs_paint && !w.paint_queued && !w.client_is_empty()
+        })
     })?;
     Some(Msg::new(target, WM_PAINT, 0, 0))
 }
@@ -4929,7 +4944,7 @@ pub fn paint_pending_here(hwnd: usize) -> bool {
     let tid = std::thread::current().id();
     lock(windows())
         .get(&hwnd)
-        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint)
+        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.client_is_empty())
 }
 
 /// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
@@ -6750,6 +6765,22 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn pas_de_wm_paint_pour_une_zone_client_vide() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        set_window_rect(hwnd, Rect::from_size(0, 0, 0, 20));
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        assert!(!paint_pending_here(hwnd));
+        // Agrandie, la fenêtre reçoit la peinture restée due.
+        set_window_rect(hwnd, Rect::from_size(0, 0, 80, 20));
+        assert_eq!(pending_paint(hwnd, 0, 0).map(|m| m.hwnd), Some(hwnd));
+        assert!(validate_window(hwnd));
+        destroy_window(hwnd);
     }
 
     #[test]
