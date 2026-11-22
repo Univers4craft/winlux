@@ -5,14 +5,14 @@ Winlux est empilé en quatre couches. Chacune a un rôle précis et un emplaceme
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ 4. BUREAU                                                                │
-│   a) Session native habillée Windows 11 (scripts/, integration/native/)  │
+│   a) Session native, thème Winlux (scripts/, integration/native/)        │
 │      xfdesktop · xfce4-panel · Openbox · Thunar                          │
 │      menu Démarrer GTK · Paramètres GTK · verrouillage · UAC · Bienvenue │
 │   b) Shell PE interne (testexe/src/shell/) : vrais .exe dessinés par le  │
 │      runtime : Explorateur, Gestionnaire des tâches, Regedit, Store…     │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ 3. RUNTIME WINLUX (runtime/, Rust, maison)                               │
-│   chargeur PE32+ · ~100 DLL Windows · CLR .NET · registre · chemins      │
+│   chargeur PE32+/PE32 · ~100 DLL Windows · CLR .NET · registre · chemins │
 │   msiexec · NSIS/Inno · Direct3D→OpenGL/Vulkan · services système        │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ 2. BASE LINUX : Ubuntu 26.04 LTS, apt/dpkg natifs                        │
@@ -50,7 +50,7 @@ C'est le cœur du projet : un seul binaire Rust, `/usr/bin/winlux` (crate `winlu
 
 | Fichier | Rôle |
 |---|---|
-| `runtime/src/pe.rs` | Lecture du format PE32+ : en-têtes, sections, répertoires de données. Un PE 32 bits est reconnu et refusé avec un message explicite. |
+| `runtime/src/pe.rs` | Lecture des formats PE32+ (64 bits) et PE32 (32 bits) : en-têtes, sections, répertoires de données. Les programmes 32 bits passent ensuite par la couche wow32, qui traduit chaque appel entre le code x86 et les DLL de Winlux. |
 | `runtime/src/loader.rs` | Mappage des sections, relocations, imports et imports différés, chargement des DLL réelles livrées avec le programme, TLS et `DllMain`. |
 | `runtime/src/thunks.rs` | Passerelles d'appel entre la convention Windows x64 et le code Rust. |
 | `runtime/src/process.rs`, `launch.rs` | Processus, lancement, environnement, ligne de commande, PEB/TEB (accessibles par le registre `GS`). |
@@ -102,7 +102,7 @@ Winlux a **deux piles d'interface distinctes**, à ne pas confondre :
 
 | | Session native | Shell PE interne |
 |---|---|---|
-| **Ce que c'est** | Des composants Linux habillés Windows 11 | De vrais programmes Windows écrits en Rust `no_std`, compilés en `.exe` et exécutés par le runtime |
+| **Ce que c'est** | Des composants Linux habillés du thème Winlux | De vrais programmes Windows écrits en Rust `no_std`, compilés en `.exe` et exécutés par le runtime |
 | **Code** | `scripts/winlux-start-menu.py`, `winlux-settings.py`, `winlux-settings-pages.py`, `winlux-lock.py`, `winlux-uac.py`, `winlux-welcome.py`… ; configuration dans `integration/native/` | `testexe/src/shell/` : `explorer.rs`, `taskmgr.rs`, `regedit.rs`, `store.rs`, `settings.rs`, `desktop.rs`, `wm.rs`… |
 | **Composants** | xfdesktop (bureau), xfce4-panel (barre des tâches), Openbox (fenêtres), Thunar (service de fichiers D-Bus), menu Démarrer et Paramètres en GTK | Explorateur, Gestionnaire des tâches, Éditeur du Registre, Store, Observateur d'événements, Pare-feu, Planificateur… |
 | **Rôle** | C'est la session de bureau par défaut, installée et en Live | Applications ouvertes depuis la session native ; l'ancien bureau entièrement PE (`gui_demo.exe`) reste disponible pour les tests |
@@ -125,7 +125,7 @@ Détails : [Bureau et applications](Bureau-et-applications).
         ▼
  /usr/bin/winlux setup.exe
         │
-        ├─ pe.rs      lit les en-têtes, refuse un PE 32 bits proprement
+        ├─ pe.rs      lit les en-têtes PE32+ et PE32
         ├─ loader.rs  mappe les sections, relocations, imports, DLL réelles
         ├─ manifeste  requireAdministrator ? ──► fenêtre UAC (winlux-uac)
         ├─ process.rs PEB/TEB, environnement (USERPROFILE, APPDATA…), TLS

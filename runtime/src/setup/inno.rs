@@ -84,7 +84,7 @@ pub fn find_offsets(data: &[u8]) -> Option<(u64, u64)> {
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
+    crate::search::find(hay, needle)
 }
 
 /// Une entrée lue : valeurs dans l'ordre de la disposition.

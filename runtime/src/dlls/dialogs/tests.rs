@@ -383,3 +383,66 @@ fn procedure_remplacee_par_dwlp_dlgproc() {
     );
     gui::destroy_window(dlg);
 }
+
+/// #2854 : MessageBox pose l'icône de son type MB_ICON* dans l'espace
+/// réservé à gauche du texte ; sans MB_ICON*, aucune icône. Échap ferme
+/// encore une boîte « OK » seule malgré ce contrôle de plus.
+#[test]
+fn boite_de_message_affiche_son_icone_2854() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let icone = |dlg: usize| {
+        items(dlg)
+            .into_iter()
+            .find(|&h| gui::window_style(h).unwrap_or(0) & 0x1F == 0x3)
+            .map(|h| unsafe { user32::send_message_w(h, 0x0171, 0, 0) }) // STM_GETICON
+    };
+    for (kind, id) in [
+        (0x10u32, 32513usize),
+        (0x20, 32514),
+        (0x30, 32515),
+        (0x40, 32516),
+    ] {
+        let data = message_box_template("Texte", "Titre", kind, gui::work_area());
+        let dlg = unsafe {
+            create_indirect(
+                0,
+                &data,
+                0,
+                message_box_proc as *const () as usize,
+                kind as isize,
+                true,
+            )
+        };
+        assert_ne!(dlg, 0);
+        let h = icone(dlg).expect("statique SS_ICON") as usize;
+        let attendu = unsafe { crate::dlls::icons::load_icon_w(0, id as *const u16) };
+        assert_eq!(
+            crate::dlls::icons::icon_image(h).map(|i| i.px),
+            crate::dlls::icons::icon_image(attendu).map(|i| i.px),
+            "MB_ICON {kind:#x}"
+        );
+        gui::destroy_window(dlg);
+    }
+    let data = message_box_template("Texte", "Titre", 0, gui::work_area());
+    let dlg =
+        unsafe { create_indirect(0, &data, 0, message_box_proc as *const () as usize, 0, true) };
+    assert_eq!(icone(dlg), None, "MB_OK sans icône");
+    gui::destroy_window(dlg);
+
+    let data = message_box_template("Texte", "Titre", 0x10, gui::work_area());
+    let dlg = unsafe {
+        create_indirect(
+            0,
+            &data,
+            0,
+            message_box_proc as *const () as usize,
+            0x10,
+            true,
+        )
+    };
+    unsafe { user32::send_message_w(dlg, WM_COMMAND, IDCANCEL, 0) };
+    assert!(lock(dialogs())
+        .get(&dlg)
+        .is_some_and(|d| d.ended && d.result == IDOK as isize));
+    gui::destroy_window(dlg);
+}

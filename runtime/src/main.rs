@@ -44,6 +44,7 @@ mod proxy;
 pub mod quality;
 mod registry;
 mod sandbox_fallback;
+mod search;
 mod setup;
 mod tasks;
 mod thunks;
