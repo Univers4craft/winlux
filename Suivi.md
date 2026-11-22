@@ -143,6 +143,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ## DÉJÀ FAIT
 
+- [x] DLL intégrées : image PE construite à la première demande de son HMODULE, dans une case d'adresse fixe par DLL (ntdll et kernel32 d'avance pour le bac à sable de Chromium) ; programme vide x64 14,8 → 10,8 ms, premier pixel de la sonde x64 ~−3 ms, mémoire anonyme −1,5 Mo par programme (#3050).
 - [x] Vue des polices du registre : type d'entrée lu dans le dossier (d_type), forme canonique gardée par dossier ; 3 736 → 1 720 appels système au démarrage du runtime, programme vide x64 15,6 → 13,8 ms (#2951).
 - [x] Programme 32 bits : la relance du runtime (#232) a lieu avant la lecture du registre, lue une seule fois par lancement ; programme vide x86 41,6 → 31,1 ms, premier pixel de la sonde x86 56,3 → 47,5 ms (#2947).
 - [x] `winlux --inspect` projette le programme (`loader::ImageFile`) au lieu de le copier en mémoire : 323 → 149 ms par inspection d'un .exe de 300 Mo (avec #2887), plus d'échec « out of memory » quand la mémoire libre est plus petite que le programme ; `test-inspect-projete.sh` (#2918).

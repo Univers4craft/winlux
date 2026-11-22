@@ -32,12 +32,17 @@
 const PAGE: usize = 0x1000;
 const STUB: usize = 32;
 
-/// Région des images intégrées : même ordre, mêmes tailles, donc mêmes
-/// adresses dans chaque processus (sous le PEB fixe, `process::PEB_FIXED`).
+/// Région des images intégrées (sous le PEB fixe, `process::PEB_FIXED`) :
+/// une case de `SLOT` octets par DLL intégrée, à son rang dans la liste,
+/// donc la même adresse dans chaque processus quel que soit l'ordre dans
+/// lequel les images sont construites à la demande (Gain #3050).
 const IMAGES_FIXED: usize = 0x5FF0_0000_0000;
 const GRANULARITY: usize = 0x10000;
+const SLOT: usize = 0x40_0000;
+const SLOTS: usize = 0x1000;
+/// Image plus grande que sa case : à la suite des cases, dans l'ordre.
 static NEXT_IMAGE: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(IMAGES_FIXED);
+    std::sync::atomic::AtomicUsize::new(IMAGES_FIXED + SLOT * SLOTS);
 
 /// KUSER_SHARED_DATA : adresse publique de la page partagée de Windows.
 pub const SHARED_USER_DATA: usize = 0x7FFE_0000;
@@ -128,7 +133,7 @@ pub unsafe fn redirect_service(info: *const libc::siginfo_t, uc: *mut libc::ucon
 
 /// Réserve `size` octets à la prochaine adresse fixe de la région, ou
 /// ailleurs si elle est prise.
-fn map_image(size: usize) -> *mut libc::c_void {
+fn map_image(size: usize, slot: usize) -> *mut libc::c_void {
     // Programme x86 : tout l'espace au-dessus de 4 Go est réservé, la région
     // fixe n'y est jamais libre et l'image doit de toute façon rester sous
     // 4 Go. Chaque image donnait sinon un avertissement (224 pour un
@@ -146,7 +151,11 @@ fn map_image(size: usize) -> *mut libc::c_void {
         };
     }
     let span = size.div_ceil(GRANULARITY) * GRANULARITY;
-    let want = NEXT_IMAGE.fetch_add(span, std::sync::atomic::Ordering::Relaxed);
+    let want = if span <= SLOT && slot < SLOTS {
+        IMAGES_FIXED + SLOT * slot
+    } else {
+        NEXT_IMAGE.fetch_add(span, std::sync::atomic::Ordering::Relaxed)
+    };
     unsafe {
         let p = libc::mmap(
             want as *mut libc::c_void,
@@ -218,7 +227,8 @@ fn put64(img: &mut [u8], at: usize, v: u64) {
 }
 
 /// Construit l'image de `dll` (nom sans « .dll ») et renvoie son adresse.
-pub fn build(dll: &str, exports: &super::Exports) -> usize {
+/// `slot` : rang de la DLL parmi les DLL intégrées (case d'adresse fixe).
+pub fn build(dll: &str, exports: &super::Exports, slot: usize) -> usize {
     let mut names: Vec<(&str, usize)> = exports
         .iter()
         .filter(|(_, &a)| is_code(a))
@@ -246,7 +256,7 @@ pub fn build(dll: &str, exports: &super::Exports) -> usize {
     let stubs = (export_end + 15) & !15;
     let size = (stubs + STUB * n).div_ceil(PAGE) * PAGE;
 
-    let base = map_image(size);
+    let base = map_image(size, slot);
     if base == libc::MAP_FAILED {
         // Repli : l'ancienne page « MZ » seule.
         return super::fake_module();
@@ -339,6 +349,49 @@ pub fn build(dll: &str, exports: &super::Exports) -> usize {
 
 #[cfg(test)]
 mod tests {
+    /// Images des DLL intégrées construites à la demande (Gain #3050) :
+    /// ntdll et kernel32 dès la première consultation de la liste (le bac à
+    /// sable de Chromium écrit dans l'image ntdll d'un enfant suspendu),
+    /// chaque autre image dans la case fixe de son rang, donc à la même
+    /// adresse dans chaque processus quel que soit l'ordre des demandes, et
+    /// toutes tiennent dans leur case. Le HMODULE rendu est retrouvé par
+    /// `builtin_by_handle` et `builtin_file_path`.
+    #[test]
+    fn images_a_la_demande_dans_leur_case_fixe() {
+        let dlls = super::super::builtins();
+        let images = super::super::builtin_images();
+        for core in ["ntdll", "kernel32"] {
+            let i = dlls
+                .iter()
+                .position(|b| b.name == core)
+                .expect("DLL de base intégrée");
+            assert!(images[i].get().is_some(), "{core} construite d'avance");
+        }
+        for (i, b) in dlls.iter().enumerate() {
+            if dlls.iter().position(|x| x.name == b.name) != Some(i) {
+                continue; // nom en double : la première entrée sert
+            }
+            let h = super::super::module_handle(b.name).expect("HMODULE");
+            assert_eq!(
+                super::super::builtin_by_handle(h),
+                Some(b.name),
+                "{}",
+                b.name
+            );
+            assert!(super::super::builtin_file_path(h).is_some(), "{}", b.name);
+            if b.handle == 0 {
+                assert_eq!(
+                    h,
+                    super::IMAGES_FIXED + super::SLOT * i,
+                    "{} hors de sa case",
+                    b.name
+                );
+                assert_eq!(unsafe { *(h as *const u16) }, 0x5A4D, "{}", b.name);
+            }
+        }
+        assert!(dlls.len() <= super::SLOTS);
+    }
+
     /// Lecture de la table d'exports comme le fait le bac à sable de
     /// Chromium : en-têtes PE, répertoire, recherche par nom.
     unsafe fn manual_lookup(base: usize, wanted: &str) -> Option<usize> {
@@ -375,7 +428,8 @@ mod tests {
         e.insert("WinluxAdd", add as *const () as usize);
         static DATA: u32 = 7;
         e.insert("WinluxData", std::ptr::addr_of!(DATA) as usize);
-        let base = super::build("winluxtest", &e);
+        // Hors des cases des DLL intégrées : à la suite.
+        let base = super::build("winluxtest", &e, usize::MAX);
         unsafe {
             let f = manual_lookup(base, "WinluxAdd").expect("export trouvé");
             assert!(f > base);
