@@ -42,7 +42,7 @@ dont la session est ouverte ne peut pas être supprimé.
 
 Le menu d'alimentation du menu Démarrer propose **Changer d'utilisateur**
 dès qu'un second compte existe : `winlux-lock switch` verrouille la session
-et affiche les comptes en bas à gauche, comme Windows 11. Le mot de passe du
+et affiche les comptes en bas à gauche. Le mot de passe du
 compte choisi est vérifié par le relais root (`winlux-root`, op `switch`),
 qui ouvre ou rejoint sa session (`winlux-sessions switch`) ; la session
 quittée reste verrouillée. Ouvrir la session d'un autre compte sans son mot
@@ -66,7 +66,7 @@ près de la barre des tâches du moniteur courant et se ferment aussi sur Échap
 ou au clic extérieur. Les écritures du curseur sont regroupées sur 120 ms.
 
 Cliquer sur les indicateurs réseau, son ou alimentation, ou Windows+A, ouvre
-le panneau **Réglages rapides** façon Windows 11 (`winlux-popup quick`) :
+le panneau **Réglages rapides** (`winlux-popup quick`) :
 tuiles Wi-Fi (avec le nom du réseau et une flèche vers la liste des réseaux),
 Bluetooth (flèche vers Paramètres › Bluetooth), Mode avion, Économiseur de
 batterie, Éclairage nocturne et Accessibilité ; curseurs de luminosité et de
