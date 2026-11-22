@@ -801,7 +801,9 @@ pub fn find_archive(data: &[u8]) -> Option<usize> {
     let mut i = from;
     while i + 32 <= data.len() {
         let rest = data.get(i..)?;
-        let k = rest.windows(6).position(|w| w == SIGNATURE)?;
+        // Recherche par memchr : octet par octet, elle prenait 42 % du
+        // lancement d'un .exe de 300 Mo à recouvrement (#2878).
+        let k = crate::search::find(rest, SIGNATURE)?;
         let at = i + k;
         let h = data.get(at..at + 32)?;
         let crc = u32::from_le_bytes(h[8..12].try_into().ok()?);

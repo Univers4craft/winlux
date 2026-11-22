@@ -482,7 +482,13 @@ def main(argv):
     bar = Gtk.ProgressBar(margin_top=12)
     progress_page.pack_start(bar, False, False, 0)
     status = text(progress_page, "", dim=True)
+    # Une seule ligne, coupée par « … » à la largeur de la fenêtre : sans
+    # plafond, la largeur naturelle du libellé suivait la ligne d'état et la
+    # fenêtre (non redimensionnable) grandissait jusqu'à sortir de l'écran
+    # (#2893). Le texte entier reste en infobulle et dans le journal.
+    status.set_line_wrap(False)
     status.set_ellipsize(Pango.EllipsizeMode.END)
+    status.set_max_width_chars(1)
     stack.add_named(progress_page, "progress")
 
     # Fin.
@@ -529,6 +535,11 @@ def main(argv):
             GLib.timeout_add(300, lambda: finish.clicked() or False)
         return False
 
+    def show_status(line):
+        status.set_text(line)
+        status.set_tooltip_text(line or None)
+        return False
+
     def work(argv):
         lines = []
         try:
@@ -541,7 +552,7 @@ def main(argv):
                 # Écrite au fil de l'eau : last-launch.log garde la trace
                 # même si l'assistant est tué avant la fin (#2328).
                 print(line, end="", flush=True)
-                GLib.idle_add(status.set_text, line.strip())
+                GLib.idle_add(show_status, line.strip())
             code = full_code(name, proc.wait())
         except OSError as e:
             lines.append(str(e))

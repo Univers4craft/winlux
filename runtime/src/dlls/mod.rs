@@ -294,6 +294,7 @@ pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
 pub mod url_security;
+pub mod url_stream;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
@@ -1760,6 +1761,8 @@ pub fn normalize(dll: &str) -> String {
         || base.starts_with("api-ms-win-security-sddl-l1-")
         || base.starts_with("api-ms-win-security-provider-l1-")
         || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Audacity 4.0.2 (#2902) : SystemFunction036/040/041 (def mingw-w64).
+        || base.starts_with("api-ms-win-security-systemfunctions-l1-")
         // Contrats des services (service-core, -management, -winsvc) : les
         // fonctions du gestionnaire de services d'advapi32 (#1823).
         || base.starts_with("api-ms-win-service-")
@@ -2562,6 +2565,22 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-2.dll",
                 "advapi32",
                 "SetThreadToken",
+            ),
+            // Audacity 4.0.2 (#2902) : contrat systemfunctions.
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction036",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction040",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction041",
             ),
             // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
             (

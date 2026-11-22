@@ -6,7 +6,10 @@
 # qui reste ouvert à la fin; les programmes graphiques sont lancés directement.
 # Les erreurs sont affichées dans une boîte de dialogue lorsque c'est possible.
 set -u
-umask 077
+# Pas d'umask global : le programme Windows lancé ici hérite de l'umask du
+# compte, comme un outil natif ; ses fichiers enregistrés (Bureau,
+# Documents…) ne sont pas plus fermés (#2862). Seul le dossier d'état du
+# lanceur (journal de lancement) reste privé : voir private_state.
 
 winlux=${WINLUX_RUNTIME:-winlux}
 # Code de sortie Windows complet pour un parent Windows (#2267) : un
@@ -34,6 +37,10 @@ read_code_file() {
 }
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
 log="$state/last-launch.log"
+# Dossier d'état créé en 0700 : le journal de lancement reste au compte.
+private_state() {
+    (umask 077 && mkdir -p "$state") 2>/dev/null
+}
 
 show_message() {
     title="Winlux"
@@ -393,7 +400,7 @@ run_wizard() {
     fi
     "$winlux" --setup --info "$exe" >/dev/null 2>&1 || return 1
     cd "$(dirname -- "$exe")" 2>/dev/null || true
-    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    private_state || log=/dev/null
     wizard_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || wizard_code=/dev/null
     WINLUX_EXIT_CODE_FILE=$wizard_code WINLUX_BIN="$winlux" "$wizard" "$exe" >"$log" 2>&1
     status=$?
@@ -411,7 +418,7 @@ run_wizard() {
 case "$exe" in
     *.msix|*.MSIX|*.Msix|*.appx|*.APPX|*.Appx|*.msixbundle|*.MSIXBUNDLE|*.appxbundle|*.APPXBUNDLE)
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         "$winlux" --setup "$exe" >"$log" 2>&1
         status=$?
         # Code 3 : éditeur non vérifié (paquet non signé ou chaîne non
@@ -442,7 +449,7 @@ case "$exe" in
     *.msi|*.MSI|*.Msi)
         run_wizard "$@" || true
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         "$winlux" --msiexec /i "$exe" /qb "$@" >"$log" 2>&1
         status=$?
         if [ "$status" -eq 0 ]; then
@@ -477,7 +484,7 @@ case "$kind" in
     setup|uninstall)
         [ "$kind" = uninstall ] || run_wizard "$@" || true
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         setup_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || setup_code=/dev/null
         WINLUX_EXIT_CODE_FILE=$setup_code "$winlux" "$exe" "$@" >"$log" 2>&1
         status=$?
@@ -520,7 +527,7 @@ if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DE
     open_terminal "$self" --in-terminal "$exe" "$@"
     # A missing terminal must not prevent a compatible batch/GUI-test PE from
     # starting. Interactive console applications still need a terminal.
-    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    private_state || log=/dev/null
     cd "$(dirname -- "$exe")" 2>/dev/null || true
     "$winlux" "$exe" "$@" </dev/null >"$log" 2>&1
     status=$?
@@ -534,7 +541,7 @@ fi
 # Programme graphique (ou console lancée depuis un terminal) : le dossier du
 # programme devient le répertoire courant, comme dans l'explorateur Windows,
 # sauf si un raccourci .lnk en indique un autre.
-mkdir -p "$state" 2>/dev/null || log=/dev/null
+private_state || log=/dev/null
 cd "${WINLUX_WORKDIR:-$(dirname -- "$exe")}" 2>/dev/null || cd "$(dirname -- "$exe")" 2>/dev/null || true
 if [ "$kind" = console ]; then
     exec "$winlux" "$exe" "$@"

@@ -11,7 +11,7 @@ Winlux ouvre les programmes Windows grâce à une couche de compatibilité écri
 |---|---|
 | Programme 64 bits simple (outils, utilitaires, programmes en ligne de commande) | Fonctionne en général |
 | Installateur `.msi`, NSIS ou Inno Setup | Fonctionne |
-| Application .NET qui embarque son propre runtime | Démarre, mais son interface ne s'ouvre pas toujours |
+| Application .NET qui embarque son propre runtime | Démarre ; Paint.NET s'ouvre et dessine, d'autres ne s'ouvrent pas encore |
 | Interfaces WinForms et WPF | Partiel : ScreenToGif et Flow Launcher (WPF) fonctionnent, beaucoup d'autres pas encore |
 | Jeux Direct3D 9, 11 et 12 | Partiel, à valider jeu par jeu |
 | Programme 32 bits | Partiel : PuTTY, 7-Zip et WinSCP en 32 bits fonctionnent, beaucoup d'autres ne s'ouvrent pas encore |
@@ -26,7 +26,7 @@ Le détail fonction par fonction et l'ordre des prochains chantiers sont dans le
 
 ## Ce qui arrive ensuite
 
-Par ordre d'impact sur le nombre de logiciels débloqués : les fonctions Windows les plus demandées, OpenGL et Vulkan pour les applications, les bibliothèques Visual C++ redistribuables, les connexions sécurisées HTTPS, les shaders Direct3D, puis les programmes 32 bits. La [feuille de route](wiki:Feuille-de-route) suit l'avancement.
+Les chantiers de la prochaine version, la v0.3 : que chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un (Office, Teams, Acrobat, Creative Cloud), les applications à base de Chromium et WebView2, WPF, et les programmes 32 bits qui utilisent des objets COM. La [feuille de route](wiki:Feuille-de-route) suit l'avancement.
 
 ## Votre logiciel n'est pas dans la liste ?
 

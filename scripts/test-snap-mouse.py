@@ -43,6 +43,10 @@ assert snap["float_geometry"]((1024, 5), (683, 0, 683, 728), (300, 200, 800, 500
 rank = snap["maximize_button_rank"]
 assert rank("NLIMC") == 1 and rank("NLMIC") == 2 and rank("LC") is None and rank("MLC") is None
 assert all(len(r) == 3 and all(r) for r in snap["_TR"].values())
+inside = snap["inside_position"]
+assert inside((684, 24, 900, 739), (0, 0, 1366, 768)) == (466, 24), "plus large que la moitié droite (#2873)"
+assert inside((0, 400, 683, 500), (0, 0, 1366, 768)) == (0, 268) and inside((5, 5, 300, 200), (0, 0, 1366, 768)) == (5, 5)
+assert inside((0, 0, 2000, 900), (0, 0, 1366, 768)) == (0, 0), "plus grande que l'écran : coin haut gauche"
 for script in ("winlux-user-session.sh", "winlux-native-session.sh"):
     assert "winlux-snap watch" in (HERE / script).read_text(), script
 print("ancrage à la souris (logique) : OK")
@@ -167,6 +171,22 @@ try:
     x("xdotool", "mousemove", "40", "700")
     assert wait(lambda: not x("xdotool", "search", "--name", "^" + snap["_t"]("Dispositions d’ancrage") + "$").split(), 4), \
         "la grille se ferme quand la souris s'éloigne"
+
+    # Largeur minimale plus grande qu'une moitié : ancrée à droite, elle reste
+    # entière à l'écran, bouton Fermer compris (#2873).
+    script = ("import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk;"
+              "w=Gtk.Window(title='ancrage-large'); w.set_size_request(900,500); w.move(100,100);"
+              "w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()")
+    start(sys.executable, "-c", script)
+    wide = wait(lambda: x("xdotool", "search", "--name", "^ancrage-large$").split()[:1])
+    assert wide, "fenêtre large absente"
+    wide = wide[0]
+    time.sleep(0.5)
+    x("wmctrl", "-i", "-a", wide)
+    time.sleep(0.4)
+    subprocess.run([sys.executable, "-B", str(HERE / "winlux-snap.py"), "place", "half:right", wide], env=env)
+    got = wait(lambda: frame(wide) if frame(wide)[0] + frame(wide)[2] <= area[0] + area[2] else None)
+    assert got and got[2] >= 900, f"moitié droite d'une fenêtre de 900 px : hors de l'écran, {frame(wide)}"
 finally:
     for process in reversed(processes):
         process.terminate()
