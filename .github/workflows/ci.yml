@@ -637,6 +637,9 @@ jobs:
       - name: Sortie volontaire sans message de plantage (#2272)
         run: sh scripts/test-sortie-volontaire.sh
 
+      - name: winlux-open lance sans attendre l'enregistrement, une seule inspection (#2889)
+        run: sh scripts/test-winlux-open-rapide.sh
+
       - name: Installer Winlux sur l'hôte Ubuntu (binfmt, ./hello.exe, association, désinstallation, #27)
         run: |
           sudo apt-get install -y -q binfmt-support xdg-utils || { sudo apt-get update -q && sudo apt-get install -y -q binfmt-support xdg-utils; }
@@ -652,6 +655,11 @@ jobs:
 
       - name: Programmes Windows 32 bits (#232)
         run: sh scripts/test-wow32.sh
+
+      - name: Latence d'une application Windows x64/x86 sous Xvfb (#2889)
+        run: |
+          sudo apt-get install -y -q libxtst6 || { sudo apt-get update -q && sudo apt-get install -y -q libxtst6; }
+          xvfb-run -a -s '-screen 0 1280x800x24' sh scripts/test-latence-sonde.sh
 
       - name: Rapport des PE générés
         if: always()
