@@ -283,6 +283,19 @@ pub extern "win64" fn trace_message(_session: u64, _flags: u32, _guid: usize, _n
     6
 }
 
+/// `TraceMessageVa(session, drapeaux, guid, numéro, va_list)` : comme
+/// TraceMessage, aucune session n'existe (contrat
+/// api-ms-win-eventing-classicprovider-l1-1-0, Refs #2902).
+pub extern "win64" fn trace_message_va(
+    _session: u64,
+    _flags: u32,
+    _guid: usize,
+    _number: u16,
+    _args: usize,
+) -> u32 {
+    6
+}
+
 /// GetTraceLoggerHandle : appelé depuis le rappel d'activation, jamais
 /// appelé ici ; 0 (INVALID_PROCESSTRACE_HANDLE côté appelant) avec l'erreur.
 pub extern "win64" fn get_trace_logger_handle(_buffer: usize) -> u64 {
@@ -429,6 +442,7 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "UnregisterTraceGuids" => fn unregister_trace_guids,
         "TraceEvent" => fn trace_event,
         "TraceMessage" => fn trace_message,
+        "TraceMessageVa" => fn trace_message_va,
         "GetTraceLoggerHandle" => fn get_trace_logger_handle,
         "GetTraceEnableFlags" => fn get_trace_enable_flags,
         "GetTraceEnableLevel" => fn get_trace_enable_level,

@@ -159,10 +159,24 @@ fn fonts_in(dir: &Path) -> FontList {
 
 pub fn fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool) {
     let list = fonts_in(dir);
-    add_fonts(data, key, dir, absolute, list);
+    add_fonts(
+        data,
+        key,
+        dir,
+        absolute,
+        list,
+        &crate::paths::VersWindows::new(),
+    );
 }
 
-fn add_fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool, list: FontList) {
+fn add_fonts(
+    data: &mut Data,
+    key: &str,
+    dir: &Path,
+    absolute: bool,
+    list: FontList,
+    vers: &crate::paths::VersWindows,
+) {
     // La clé existe toujours sous Windows, même sans police (#1045).
     data.raw_ensure(key);
     let known: Vec<String> = data
@@ -172,7 +186,7 @@ fn add_fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool, list: FontL
         .collect();
     for (name, file) in list {
         let value = if absolute {
-            crate::paths::to_windows(&dir.join(&file))
+            vers.convert(&dir.join(&file))
         } else {
             file.clone()
         };
@@ -221,7 +235,7 @@ fn system_fonts() -> Vec<(PathBuf, FontList)> {
         };
         let mut files: Vec<String> = entries
             .flatten()
-            .filter(|e| e.path().is_file())
+            .filter(|e| entry_is(e, false))
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|n| {
                 let l = n.to_ascii_lowercase();
@@ -247,6 +261,30 @@ fn system_fonts() -> Vec<(PathBuf, FontList)> {
     out
 }
 
+/// Dossier (`dir`) ou fichier ordinaire, comme `Path::is_dir` / `is_file`
+/// (liens suivis), mais lu dans l'entrée du dossier (d_type) quand ce n'est
+/// pas un lien : un appel système de moins par police, à chaque lancement
+/// de programme (#2951).
+fn entry_is(entry: &std::fs::DirEntry, dir: bool) -> bool {
+    match entry.file_type() {
+        Ok(t) if !t.is_symlink() => {
+            if dir {
+                t.is_dir()
+            } else {
+                t.is_file()
+            }
+        }
+        _ => {
+            let path = entry.path();
+            if dir {
+                path.is_dir()
+            } else {
+                path.is_file()
+            }
+        }
+    }
+}
+
 fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     if depth > 6 || !dir.is_dir() || out.contains(&dir.to_path_buf()) {
         return;
@@ -255,8 +293,8 @@ fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         let mut subs: Vec<PathBuf> = entries
             .flatten()
+            .filter(|e| entry_is(e, true))
             .map(|e| e.path())
-            .filter(|p| p.is_dir())
             .collect();
         subs.sort();
         for sub in subs {
@@ -325,8 +363,10 @@ fn apply(data: &mut Data) {
     );
     let user = crate::paths::to_linux("C:\\AppData\\Local\\Microsoft\\Windows\\Fonts");
     fonts(data, USER_FONTS, &user, true);
+    // Un seul contexte de chemins pour toutes les polices du système.
+    let vers = crate::paths::VersWindows::new();
     for (dir, list) in system_fonts() {
-        add_fonts(data, FONTS, &dir, true, list);
+        add_fonts(data, FONTS, &dir, true, list, &vers);
     }
     gesture_recognizer(data);
     personalize(data);

@@ -109,6 +109,36 @@ Même banc, compte installé avec connexion automatique, bureau visible :
 | 13 : démarrage décalé | 55,3 s | agents de la zone de notification, presse-papiers, lecteurs réseau, économiseur, verrouillage, catalogue, relevé d'état et suivi des écrans attendent le bureau visible |
 | 14-15 : Thunar non attendu, barre non reconstruite | 48,5 s | `align-*` ne réécrit plus `plugin-ids` identique |
 
+## Temps de réponse des applications (#2889)
+
+Exigence de damien (22/11/2026) : quel que soit le type d'application, elle
+répond le plus vite possible. On mesure avant de toucher, de l'extérieur :
+
+- `testc/latence/latence.c` : sonde Win32 (MinGW-w64, x64 et x86), une
+  fenêtre unie rouge qui passe au vert ou au bleu à chaque touche ou clic,
+  Échap pour sortir. Elle n'écrit aucun chiffre.
+- `scripts/mesure-latence.py -- COMMANDE... sonde.exe` : chronomètre côté
+  X11 (XGetImage scruté toutes les 0,2 ms, XTEST pour la touche et le clic),
+  un essai à blanc puis N essais ; médiane, minimum, 90e centile.
+- `scripts/test-latence-sonde.sh` (CI, sous Xvfb) : x64 et x86, en direct et
+  par winlux-open ; échoue seulement sur une régression grossière.
+
+Mesures du 22/11/2026, master affc9fba, conteneur 4 cœurs, Xvfb (médianes) :
+
+| Grandeur | x64 | x86 |
+|---|---|---|
+| Premier pixel, `winlux sonde.exe` | 24 ms | 44 ms |
+| Premier pixel, sous openbox | 33 ms | 54 ms |
+| Premier pixel, par winlux-open (avant #2889) | 100 ms | — |
+| Premier pixel, par winlux-open (après #2889) | 38 ms | 58 ms |
+| Touche → pixel | 0,7 ms | 0,7 ms |
+| Clic → pixel | 0,8 ms (1,1 sous openbox) | 0,7 ms |
+| .exe de 300 Mo, premier pixel (avant #2878) | 1 627 ms | — |
+
+La boucle de messages répond déjà en moins d'une milliseconde ; le temps se
+perd avant la première fenêtre. Ces chiffres viennent d'un conteneur, pas du
+PC de damien : la fiche de banc les refait sur la vraie machine.
+
 ## Mode jeu
 
 Réglage : Paramètres > Processeur > Mode jeu (`GAME_MODE=auto|off` dans

@@ -392,6 +392,8 @@ def nav(lang: str, slug: str, strings: dict) -> str:
         current = slug == target or (target == "guide" and slug in GUIDE)
         aria = ' aria-current="page"' if current else ""
         items.append(f'<li><a href="{target}.html"{aria}>{strings[key]}</a></li>')
+    # Démo jouable dans le navigateur (#2926), dans la langue de la page.
+    items.append(f'<li><a href="../static/demo/index.html?lang={lang}">{strings["nav_demo"]}</a></li>')
     items.append(f'<li><a href="{GITHUB}/wiki" rel="noopener">{strings["nav_wiki"]}</a></li>')
     return "".join(items)
 
