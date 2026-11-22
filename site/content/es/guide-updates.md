@@ -6,17 +6,17 @@ description: Las nuevas versiones de Winlux se instalan desde Configuración, co
 ## Desde Configuración
 
 1. Abra **Configuración › Actualizaciones › Actualización del SO**.
-2. Pulse **«Buscar»**. La página indica la versión instalada y la versión disponible.
-3. Si existe una versión más reciente, pulse **«Instalar»** y siga el progreso.
+2. Pulse **«Buscar actualizaciones»**. Si existe una versión más reciente, la página muestra «Actualización disponible», su tamaño y sus novedades.
+3. Pulse **«Descargar e instalar»** y siga el progreso.
 4. Reinicie cuando le venga bien: Winlux nunca fuerza el reinicio.
 
-![La página Actualización del SO](img:mises-a-jour.jpg "Configuración › Actualizaciones › Actualización del SO: versión instalada, versión disponible, actualizaciones automáticas.")
+![La página Actualización del SO](img:mises-a-jour.jpg "Configuración › Actualizaciones › Actualización del SO: búsqueda, pausa, instalación automática, historial y vuelta a la versión anterior.")
 
-En la misma página, **«Actualizaciones automáticas»** instala las nuevas versiones sin que tenga que intervenir. Los paquetes del sistema base se actualizan en **Configuración › Actualizaciones › Actualización de aplicaciones**.
+En la misma página, **«Instalar automáticamente las nuevas versiones»** las instala sin que tenga que intervenir, fuera de sus horas activas y nunca durante un juego; **«Pausar actualizaciones»** las pone en pausa. Los paquetes del sistema base se actualizan desde la fila **«Software y controladores de Linux»** de la misma página.
 
 ## Lo que protege su sistema
 
-- Cada actualización se descarga de las versiones publicadas del proyecto, y su tamaño y su suma SHA-256 se comprueban antes de instalarla.
+- Cada actualización se descarga de las versiones publicadas del proyecto, y la firma de su descripción, su tamaño y su suma SHA-256 se comprueban antes de instalarla.
 - Justo antes se crea un **punto de restauración**; se conservan los tres últimos.
 - Si el escritorio deja de arrancar bien tras una actualización, Winlux **vuelve por sí solo** a la versión anterior.
 - Sus documentos, sus programas instalados y sus ajustes se conservan.

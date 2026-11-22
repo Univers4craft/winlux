@@ -229,6 +229,7 @@ pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod package_classes;
+pub mod pathcch;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;
@@ -534,6 +535,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(pathcch::exports());
                     e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
@@ -1761,6 +1763,8 @@ pub fn normalize(dll: &str) -> String {
         || base.starts_with("api-ms-win-security-sddl-l1-")
         || base.starts_with("api-ms-win-security-provider-l1-")
         || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Audacity 4.0.2 (#2902) : SystemFunction036/040/041 (def mingw-w64).
+        || base.starts_with("api-ms-win-security-systemfunctions-l1-")
         // Contrats des services (service-core, -management, -winsvc) : les
         // fonctions du gestionnaire de services d'advapi32 (#1823).
         || base.starts_with("api-ms-win-service-")
@@ -1943,6 +1947,20 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Reste de la famille PathCch (#2921).
+    "PathCchRemoveFileSpec",
+    "PathCchRemoveBackslash",
+    "PathCchRemoveBackslashEx",
+    "PathCchAddBackslash",
+    "PathCchAddBackslashEx",
+    "PathCchStripToRoot",
+    "PathCchIsRoot",
+    "PathCchFindExtension",
+    "PathCchRemoveExtension",
+    "PathCchAddExtension",
+    "PathCchRenameExtension",
+    "PathCchStripPrefix",
+    "PathIsUNCEx",
     // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
     "CreateAppContainerToken",
 ];
@@ -2563,6 +2581,22 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-2.dll",
                 "advapi32",
                 "SetThreadToken",
+            ),
+            // Audacity 4.0.2 (#2902) : contrat systemfunctions.
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction036",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction040",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction041",
             ),
             // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
             (

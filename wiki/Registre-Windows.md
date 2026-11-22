@@ -23,14 +23,14 @@ V  <chemin en hexadécimal>  <nom en hexadécimal>  <type>  <données hex>   ←
 ```
 
 - Chemins et noms en UTF-8 avec **leur casse d'origine**, comparés sans tenir compte de la casse (un lecteur externe doit les passer en minuscules pour comparer).
-- Les chaînes (`REG_SZ`, `REG_EXPAND_SZ`, `REG_MULTI_SZ`, types 1, 2 et 7) sont stockées en **UTF-16LE**, comme sous Windows ; les API « A » les convertissent en Windows-1252.
+- Les chaînes (`REG_SZ`, `REG_EXPAND_SZ`, `REG_MULTI_SZ`, types 1, 2 et 7) sont stockées en **UTF-16LE**, comme l'attendent les programmes ; les API « A » les convertissent en Windows-1252.
 - Un ancien fichier `WINLUX-REGISTRY-1` est relu et converti à la première écriture.
 
 ### Racines
 
 Racines stockées : `hkcu`, `hklm`, `hku`, `hkcc`.
 
-**HKEY_CLASSES_ROOT n'est pas stocké** : c'est une **vue fusionnée** de `HKCU\Software\Classes` (prioritaire) puis `HKLM\Software\Classes`, comme sous Windows. Une clé créée sous HKCR va dans HKLM, sauf si elle existe déjà dans HKCU.
+**HKEY_CLASSES_ROOT n'est pas stocké** : c'est une **vue fusionnée** de `HKCU\Software\Classes` (prioritaire) puis `HKLM\Software\Classes`, comme le décrit la documentation publique de l'API. Une clé créée sous HKCR va dans HKLM, sauf si elle existe déjà dans HKCU.
 
 ### Écritures concurrentes
 
@@ -60,7 +60,7 @@ winlux --reg …                            # même chose sans passer par un .ex
 
 ## L'Éditeur du Registre
 
-Application maison du shell (`regedit` dans Démarrer, ou `winlux --regedit`) qui reprend l'éditeur de Windows 11 : arborescence et barre d'adresse, création de tous les types de valeurs, modification DWORD/QWORD en hexadécimal ou décimal, renommage (F2), suppression avec confirmation, recherche (Ctrl+F, F3), import et export `.reg`. Traduit en français, anglais, espagnol et allemand.
+Application maison du shell (`regedit` dans Démarrer, ou `winlux --regedit`) de modification du registre : arborescence et barre d'adresse, création de tous les types de valeurs, modification DWORD/QWORD en hexadécimal ou décimal, renommage (F2), suppression avec confirmation, recherche (Ctrl+F, F3), import et export `.reg`. Traduit en français, anglais, espagnol et allemand.
 
 ## Utilisation par Winlux lui-même
 
