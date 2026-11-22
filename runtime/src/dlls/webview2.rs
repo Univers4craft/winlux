@@ -2817,14 +2817,15 @@ unsafe extern "win64" fn args_status(this: usize, out: *mut i32) -> i32 {
     S_OK
 }
 /// WebErrorStatus d'une fin de navigation : 0 si elle a réussi, sinon
-/// celui que le moteur donne (`error`, #2974), sinon 2 comme avant.
+/// celui que le moteur donne (`error`, #2974, #2980), sinon UNKNOWN (0) :
+/// jamais CERTIFICATE_EXPIRED (2) sans raison (#2980).
 fn web_error_status(ev: &HashMap<String, Val>) -> i32 {
     if get_bool(ev, "ok") {
         0
     } else if ev.contains_key("error") {
         get_num(ev, "error") as i32
     } else {
-        2
+        0
     }
 }
 /// NavigationStartingEventArgs3::NavigationKind (#2975).
@@ -3404,11 +3405,27 @@ mod tests {
             web_error_status(&ev(r#"{"ok":false,"status":401,"error":17}"#)),
             17
         );
-        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 2);
+        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 0);
         assert!(!get_bool(
             &ev(r#"{"ok":false,"status":404,"error":0}"#),
             "ok"
         ));
+    }
+
+    /// #2980 : un échec de navigation garde la cause que le moteur donne,
+    /// et n'est jamais pris pour un certificat expiré sans raison.
+    #[test]
+    fn cause_d_echec_de_navigation_2980() {
+        let ev = |t: &str| parse_flat(t).unwrap();
+        assert_eq!(
+            web_error_status(&ev(r#"{"ok":false,"status":0,"error":13}"#)),
+            13
+        );
+        assert_eq!(
+            web_error_status(&ev(r#"{"ok":false,"status":0,"error":14}"#)),
+            14
+        );
+        assert_eq!(web_error_status(&ev(r#"{"ok":false,"status":0}"#)), 0);
     }
 
     /// #2979 : AdditionalObjects (WebMessageReceivedEventArgs2, entrée 3)
