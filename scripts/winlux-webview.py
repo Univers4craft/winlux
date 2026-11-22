@@ -106,6 +106,20 @@ _TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789"
                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
+def http_status(view):
+    """Code HTTP de la ressource principale, 0 sans requête HTTP (#2966).
+
+    WebView2.idl : HttpStatusCode vaut 0 quand la navigation n'a pas fait
+    de requête HTTP (file://, schéma local) ou n'a reçu aucune réponse.
+    """
+    uri = view.get_uri() or ""
+    if not uri.lower().startswith(("http://", "https://")):
+        return 0
+    resource = view.get_main_resource()
+    response = resource.get_response() if resource is not None else None
+    return response.get_status_code() if response is not None else 0
+
+
 def user_agent_header(value):
     """Agent utilisateur réécrit selon la grammaire de l'en-tête User-Agent.
 
@@ -645,7 +659,7 @@ class View:
             emit(ev="history", back=view.can_go_back(), forward=view.can_go_forward())
         elif event == W.FINISHED:
             if not getattr(self, "_failed", False):
-                emit(ev="nav_completed", nav=self.nav, ok=True, status=200)
+                emit(ev="nav_completed", nav=self.nav, ok=True, status=http_status(view))
             self._failed = False
 
     def on_failed(self, view, event, uri, error):
