@@ -143,6 +143,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ## DÉJÀ FAIT
 
+- [x] Boîte Enregistrer sous : le nom proposé arrive sélectionné, Ctrl+A le sélectionne, la frappe, Retour arrière ou Suppr le remplacent ; test Xvfb `scripts/test-pick-selection.py` (#2852).
 - [x] SHGetKnownFolderPath : les 120 FOLDERID de la page publique KNOWNFOLDERID (hors OneDrive) sont servis, E_INVALIDARG pour un GUID inconnu et E_FAIL pour un dossier virtuel, refus journalisé ; GUID de FOLDERID_Fonts corrigé (#2477).
 - [x] Codes d'erreur : tube sans lecteur → 232 au lieu de 31, errno sans retombée sur le générique 31, test de conformité permanent `conformite_codes_erreur` (#2111).
 - [x] Codes d'erreur : dossier parent absent ou composant fichier → ERROR_PATH_NOT_FOUND (3) au lieu de 2 dans onze fonctions de fichiers (#2112).
