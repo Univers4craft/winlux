@@ -51,6 +51,8 @@ Il faut Linux x86-64. Pour construire l'ISO, voir [Construire l'ISO](Construire-
 5. **Pas de faux succès** : une fonction non implémentée renvoie une erreur claire, jamais une valeur arbitraire.
 6. **`Suivi.md` est la source unique de vérité** des tâches ([AGENTS.md](https://github.com/Univers4craft/winlux/blob/master/AGENTS.md)) : cochez ou ajoutez la tâche dans le même commit que le changement. `TODO.md` et `TRACKING.md` en sont des miroirs. Ce fichier est souvent modifié en parallèle : en cas de conflit, gardez les deux côtés et additionnez les compteurs.
 7. **Qualité** : `cargo fmt`, `cargo clippy -- -D warnings`, tests ajoutés, scripts en LF et exécutables.
+8. **Salle blanche** : seules la documentation publique et les sources à licence permissive servent de référence ; jamais de code Microsoft lu ou désassemblé, ni de code de Wine ou d'une autre réimplémentation. Chaque pull request note la provenance de ce qu'elle implémente ([AGENTS.md](https://github.com/Univers4craft/winlux/blob/master/AGENTS.md), section « Salle blanche »).
+9. **Un défaut, une issue** : chaque bug constaté a son issue en français (reproduction, attendu, constaté, label `urgence:1`, `urgence:2` ou `urgence:3`), et la pull request qui le corrige dit `Fixes #N`, une seule par pull request. Sa vérification va dans `scripts/campagne.d/NNNN-sujet.py` et teste un nom ou un comportement, jamais un fragment de code.
 
 ## Pull requests
 

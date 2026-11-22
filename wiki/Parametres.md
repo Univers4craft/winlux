@@ -1,6 +1,6 @@
 # Paramètres
 
-**Paramètres** est l'application de réglages de Winlux, sur le modèle de celle de Windows 11 : une liste de catégories à gauche avec recherche, des pages défilantes à droite. Dans la session native, c'est une fenêtre GTK (`scripts/winlux-settings.py`, complétée par `scripts/winlux-settings-pages.py`) ; les actions système passent par `winlux-control` et s'exécutent sans bloquer l'interface.
+**Paramètres** est l'application de réglages de Winlux : une liste de catégories à gauche avec recherche, des pages défilantes à droite. Dans la session native, c'est une fenêtre GTK (`scripts/winlux-settings.py`, complétée par `scripts/winlux-settings-pages.py`) ; les actions système passent par `winlux-control` et s'exécutent sans bloquer l'interface.
 
 ## Deux règles
 
