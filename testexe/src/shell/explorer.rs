@@ -2620,6 +2620,17 @@ fn crumb_label<'a>(name: &'a [u8], at_root: bool, in_profile: bool) -> &'a [u8] 
     name
 }
 
+/// Traduit les segments du fil d'Ariane (Ce PC, lecteur, dossiers…) :
+/// « Users » à la racine, puis les dossiers connus du compte. « Users » est
+/// lu avant d'être traduit, sinon en français « Pictures » restait tel quel
+/// (#2874).
+fn translate_crumbs(segs: &mut [(&[u8], usize)]) {
+    let profile = segs.len() > 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
+    for i in 2..segs.len() {
+        segs[i].0 = crumb_label(segs[i].0, i == 2, profile && i == 4);
+    }
+}
+
 unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let p = pal();
     let mut x = a.left + 10;
@@ -2671,10 +2682,7 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     // Noms affichés comme sous Windows (desktop.ini) : Utilisateurs, puis
     // Téléchargements, Images… dans le dossier d'un compte. Le chemin
     // lui-même (C:\Users\nom\Downloads) ne change pas.
-    for i in 2..n {
-        let users = i >= 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
-        segs[i].0 = crumb_label(segs[i].0, i == 2, users && i == 4);
-    }
+    translate_crumbs(&mut segs[..n]);
     // Si tout ne tient pas, on garde les derniers segments.
     let avail = a.right - x - 10;
     let mut first = 0;
