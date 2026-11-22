@@ -118,6 +118,12 @@ pub fn with_charset<R>(wide: bool, f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// Jeu de caractères fixé par l'appel en cours (`with_charset`), s'il y en a
+/// un : un SendMessage confié au fil propriétaire le garde (#2885).
+pub fn current_charset() -> Option<bool> {
+    WIDE.with(|w| w.get())
+}
+
 /// Codage des chaînes du message en cours : celui de l'appel, sinon celui
 /// de la fonction qui a créé la fenêtre.
 pub fn message_is_wide(hwnd: usize) -> bool {
@@ -1642,13 +1648,18 @@ fn keep_caret_visible(hwnd: usize) {
         let shown = displayed(&c.edit, &text);
         let x = measure(font, &shown.chars().take(c.edit.caret).collect::<String>()).0;
         let w = area.width().max(1);
+        // Mesuré avant with_ctl : la mesure prend le verrou du backend, que
+        // la création d'une fenêtre tient en lisant l'état des contrôles
+        // (is_backdrop). Mesurer sous l'état inversait l'ordre des deux
+        // verrous et bloquait deux fils d'interface (#3041).
+        let fits = measure(font, &shown).0 <= w;
         with_ctl(hwnd, |c| {
             if x - c.edit.scroll_x > w - 2 {
                 c.edit.scroll_x = x - w + 2;
             } else if x < c.edit.scroll_x {
                 c.edit.scroll_x = (x - w / 3).max(0);
             }
-            if measure(font, &shown).0 <= w {
+            if fits {
                 c.edit.scroll_x = 0;
             }
         });

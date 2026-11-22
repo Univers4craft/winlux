@@ -48,4 +48,18 @@
 	<patterns>*</patterns>
 	<image-files/>
 </action>
+<action>
+	<icon>application-zip</icon>
+	<name>Extraire tout…</name>
+	<name xml:lang="en">Extract all…</name>
+	<name xml:lang="es">Extraer todo…</name>
+	<name xml:lang="de">Alle extrahieren…</name>
+	<submenu></submenu>
+	<unique-id>1793570335019944-4</unique-id>
+	<command>winlux-shell-app explorer --extraire %f</command>
+	<description></description>
+	<range>1</range>
+	<patterns>*.zip;*.ZIP;*.7z;*.7Z;*.rar;*.RAR;*.tar;*.TAR;*.tgz;*.TGZ;*.tar.gz;*.TAR.GZ;*.txz;*.tar.xz;*.TAR.XZ;*.tbz2;*.tar.bz2;*.TAR.BZ2;*.tzst;*.tar.zst;*.TAR.ZST</patterns>
+	<other-files/>
+</action>
 </actions>

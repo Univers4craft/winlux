@@ -3227,6 +3227,7 @@ mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );
@@ -3347,6 +3348,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );

@@ -12,6 +12,10 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gtk, Gio, GLib
 
 STATE = Path(os.environ.get("XDG_STATE_HOME",Path.home()/".local/state")) / "winlux/notifications.json"
+# Nombre de notifications nouvelles (#3057) : arrivées sans que l'utilisateur
+# les ait vues, ni sur la bulle, ni dans le centre. La pastille de la cloche
+# lit ce petit fichier au lieu de l'historique entier.
+UNSEEN = STATE.with_name("notifications-nouvelles")
 PREF = Path(os.environ.get("XDG_CONFIG_HOME",Path.home()/".config")) / "winlux/do-not-disturb"
 SOUNDS_OFF = PREF.with_name("system-sounds-off")
 SOUNDS = Path(os.environ.get("WINLUX_SOUNDS_DIR", "/usr/share/winlux/sounds"))
@@ -61,11 +65,14 @@ XML = '''<node><interface name="org.freedesktop.Notifications">
 <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
 <signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
 </interface><interface name="org.winlux.Notifications">
-<method name="Clear"/><method name="Dismiss"><arg type="u" direction="in"/></method><method name="Activate"><arg type="u" direction="in"/><arg type="s" direction="in"/></method>
+<method name="Clear"/><method name="MarkSeen"/><method name="Dismiss"><arg type="u" direction="in"/></method><method name="Activate"><arg type="u" direction="in"/><arg type="s" direction="in"/></method>
 </interface></node>'''
 
 class Notifications:
     def __init__(self):
+        # Temporaire d'avant #3060, né en 0644 : jamais laissé derrière.
+        try: STATE.with_suffix(".tmp").unlink()
+        except OSError: pass
         try: self.history = json.loads(STATE.read_text())[-200:]
         except (OSError, ValueError): self.history = []
         self.sequence = max([item.get("id", 0) for item in self.history] + [0])
@@ -82,11 +89,18 @@ class Notifications:
             Gio.BusNameOwnerFlags.NONE, self.acquired, None, lambda *_: Gtk.main_quit())
 
     def save(self):
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = STATE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.history[-200:], ensure_ascii=False))
-        tmp.chmod(0o600)
-        tmp.replace(STATE)
+        private_state()
+        write_private(STATE, json.dumps(self.history[-200:], ensure_ascii=False))
+        write_unseen(unseen_count(self.history))
+
+    def mark_seen(self, identity=None):
+        """Notification vue (bulle cliquée ou fermée), ou toutes (centre ouvert)."""
+        changed = False
+        # Bulle seule, sans historique chargé (test de la bulle) : rien à marquer.
+        for item in getattr(self, "history", ()):
+            if item.get("nouvelle") and identity in (None, item.get("id")):
+                item.pop("nouvelle"); changed = True
+        if changed: self.save()
 
     def acquired(self, connection, _):
         self.bus = connection
@@ -106,6 +120,9 @@ class Notifications:
                 self.toast=None
             self.history = []
             self.save()
+            invocation.return_value(None)
+        elif method == "MarkSeen":
+            self.mark_seen()
             invocation.return_value(None)
         elif method == "Dismiss":
             # Croix d'une notification dans le panneau : retirée de l'historique.
@@ -144,7 +161,7 @@ class Notifications:
             self.live[identity] = (sender, actions[:32])
             self.history = [item for item in self.history if item["id"] != identity]
             self.history.append(dict(id=identity, app=app[:256], title=title[:1024], body=body[:8192],
-                                     actions=actions[:32], time=int(time.time())))
+                                     actions=actions[:32], time=int(time.time()), nouvelle=True))
             self.history = self.history[-200:]
             retained = {item["id"] for item in self.history}
             self.live = {key: value for key, value in self.live.items() if key in retained}
@@ -220,15 +237,60 @@ class Notifications:
                 popup.destroy()
                 self.toast = None
             return False
-        close.connect("clicked", hide)
+        def seen(*_):
+            # Bulle fermée ou cliquée : vue. Bulle expirée : reste nouvelle.
+            # La bulle se ferme d'abord : un disque plein ne la laisse pas affichée.
+            hidden = hide()
+            try: self.mark_seen(identity)
+            except OSError: pass
+            return hidden
+        close.connect("clicked", seen)
         def clicked(_, event):
             live = self.live.get(identity)
             if event.button == 1 and live and "default" in live[1][::2] and getattr(self, "bus", None):
                 self.bus.emit_signal(live[0], "/org/freedesktop/Notifications", "org.freedesktop.Notifications",
                                      "ActionInvoked", GLib.Variant("(us)", (identity, "default")))
-            return hide()
+            return seen()
         events.connect("button-release-event", clicked)
         if timeout!=0:GLib.timeout_add(max(500,min(timeout if timeout>0 else 7000,60000)),hide)
+
+
+def unseen_count(history):
+    return sum(1 for item in history if isinstance(item, dict) and item.get("nouvelle"))
+
+
+def private_state():
+    """Dossier d'état du compte en 0700 (#3060), comme private_state de
+    winlux-open : créé sous umask 077 (~/.local/state compris quand il
+    manque), et notre dossier winlux ramené à 0700 s'il existait plus ouvert."""
+    old = os.umask(0o077)
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+    finally:
+        os.umask(old)
+    if STATE.parent.stat().st_mode & 0o077:
+        STATE.parent.chmod(0o700)
+
+
+def write_private(path, text):
+    """Fichier né en 0600 (#3060) : jamais lisible par un autre compte, pas
+    même entre l'écriture et un chmod. Remplacé d'un bloc."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out: out.write(text)
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_unseen(count):
+    """Compteur privé au compte, remplacé d'un bloc (jamais lu à moitié)."""
+    try:
+        write_private(UNSEEN, f"{count}\n")
+    except OSError:
+        pass
 
 
 TOAST_WIDTH = 364

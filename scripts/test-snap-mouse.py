@@ -40,6 +40,9 @@ assert big[2] == 2 * bar[2], "barre à l'échelle 2 en 4K"
 assert snap["bar_wanted"]((683, 20), monitor, False) and not snap["bar_wanted"]((50, 20), monitor, False)
 assert not snap["bar_wanted"]((683, 100), monitor, False) and snap["bar_wanted"]((683, 100), monitor, True)
 assert snap["float_geometry"]((1024, 5), (683, 0, 683, 728), (300, 200, 800, 500)) == (625, 0, 800, 500)
+assert snap["float_geometry"]((1024, 600), (683, 590, 683, 728), (300, 200, 800, 500), (0, 0, 1366, 728)) == (625, 590, 800, 138), \
+    "décrochée près du bas : hauteur réduite au-dessus de la barre des tâches (#2909)"
+assert snap["float_geometry"]((1024, 5), (683, 0, 683, 728), (300, 200, 800, 500), (0, 0, 1366, 728)) == (625, 0, 800, 500)
 rank = snap["maximize_button_rank"]
 assert rank("NLIMC") == 1 and rank("NLMIC") == 2 and rank("LC") is None and rank("MLC") is None
 assert all(len(r) == 3 and all(r) for r in snap["_TR"].values())
@@ -137,6 +140,18 @@ try:
     assert got and abs(got[3] - before[3]) <= 4, f"décrochée : taille d'avant {before[2:]} attendue, {frame(window)}"
     assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "")
 
+    # Décrochée près du bas : la barre de titre reste sous la souris, même
+    # quand la taille d'avant ne tiendrait plus au-dessus de la barre des
+    # tâches (#2909).
+    drag(window, (0, 400))
+    assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "half:left")
+    low = area[1] + area[3] - before[3] // 2
+    drag(window, (500, low))
+    got = wait(lambda: frame(window) if frame(window)[2] <= before[2] + 4 else None)
+    assert got and got[1] <= low <= got[1] + 30, f"décrochée près du bas : barre de titre sous la souris ({low}), {frame(window)}"
+    assert got[1] + got[3] <= area[1] + area[3] + 4, f"décrochée près du bas : au-dessus de la barre des tâches, {frame(window)}"
+    assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "")
+
     drag(window, (1365, 760))
     got = wait(lambda: frame(window) if abs(frame(window)[2] - area[2] // 2) <= 4 and abs(frame(window)[3] - area[3] // 2) <= 4 else None)
     assert got and got[0] >= area[2] // 2 - 4, f"coin bas droit : quart attendu, {frame(window)}"
@@ -153,6 +168,26 @@ try:
     drag(window, (cell[0] + cell[2] // 2, cell[1] + cell[3] // 2), steps=16)
     got = wait(lambda: frame(window) if abs(frame(window)[2] - area[2] // 3) <= 4 else None)
     assert got and abs(got[0] - area[2] // 3) <= 4, f"barre des dispositions : tiers du milieu attendu, {frame(window)}"
+
+    # Barre de titre dessinée par l'application (_NET_WM_MOVERESIZE, comme
+    # l'Explorateur) : même ancrage au bord, même décrochage (#2907).
+    script = ("import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk, Gdk;"
+              "w=Gtk.Window(title='ancrage-dessinee'); w.set_default_size(500,300); w.move(300,200);"
+              "w.set_decorated(False); w.add_events(Gdk.EventMask.BUTTON_PRESS_MASK);"
+              "w.connect('button-press-event', lambda w,e: (w.begin_move_drag(e.button,int(e.x_root),int(e.y_root),e.time), True)[1]);"
+              "w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()")
+    start(sys.executable, "-c", script)
+    drawn = wait(lambda: x("xdotool", "search", "--name", "^ancrage-dessinee$").split()[:1])
+    assert drawn, "fenêtre sans décoration absente"
+    drawn = drawn[0]
+    time.sleep(0.5)
+    first = frame(drawn)
+    drag(drawn, (0, 400))
+    got = wait(lambda: frame(drawn) if abs(frame(drawn)[2] - area[2] // 2) <= 4 and frame(drawn)[0] <= 2 else None)
+    assert got, f"barre dessinée, bord gauche : moitié attendue, {frame(drawn)}"
+    drag(drawn, (700, 400))
+    got = wait(lambda: frame(drawn) if abs(frame(drawn)[2] - first[2]) <= 4 else None)
+    assert got and not snap["get_prop"](drawn, "_WINLUX_SNAP"), f"barre dessinée, décrochée : taille d'avant attendue, {frame(drawn)}"
 
     # Survol du bouton Agrandir : la grille s'ouvre sans clic.
     x("wmctrl", "-i", "-r", window, "-e", "0,300,200,500,300")

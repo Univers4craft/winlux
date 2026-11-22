@@ -1052,6 +1052,7 @@ def _monitors():
 
 EDGE = 2              # pixels du bord de l'écran qui déclenchent l'ancrage
 CORNER = 0.2          # part de la hauteur de l'écran qui compte comme un coin
+FLOAT_MIN_HEIGHT = 120  # hauteur minimale d'une fenêtre décrochée tout en bas (#2909)
 DRAG_START = 8        # déplacement minimal (pixels) avant de parler de glisser
 BAR_REACH = 72        # distance du haut où la barre des dispositions descend
 HOVER_DELAY = 0.5     # secondes sur le bouton Agrandir avant la grille
@@ -1111,12 +1112,19 @@ def bar_zone(point, cells):
     return None
 
 
-def float_geometry(point, frame, saved):
-    """Fenêtre ancrée décrochée : sa taille d'avant, sous la souris au même endroit relatif."""
+def float_geometry(point, frame, saved, area=None):
+    """Fenêtre ancrée décrochée : sa taille d'avant, sous la souris au même endroit relatif.
+
+    Avec area (zone de travail), la hauteur est réduite pour que le bas ne
+    passe pas sous la barre des tâches : sinon openbox remonte la fenêtre et
+    sa barre de titre quitte la souris (#2909)."""
     px, _ = point
     x, y, w, _ = frame
     _, _, sw, sh = saved
     ratio = (px - x) / w if w else 0.5
+    if area is not None:
+        bottom = area[1] + area[3]
+        if y + sh > bottom: sh = max(FLOAT_MIN_HEIGHT, bottom - y)
     return round(px - sw * min(max(ratio, 0), 1)), y, sw, sh
 
 
@@ -1277,7 +1285,8 @@ def drop(window, zone, point=None):
         try: saved = tuple(int(part) for part in saved.split(","))
         except ValueError: saved = None
         if get_prop(window, "_WINLUX_SNAP") and saved and len(saved) == 4 and frame:
-            geometry = float_geometry(point or (frame[0] + frame[2] // 2, frame[1]), frame, saved)
+            where = point or (frame[0] + frame[2] // 2, frame[1])
+            geometry = float_geometry(where, frame, saved, pick_area(work_areas(), where))
             x, y, w, h = client_geometry(geometry, frame_extents(window))
             _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
         leave_snap(window)
@@ -1393,6 +1402,21 @@ def watch():
         fenêtre cliente sous la souris, sinon None. Vérifié à l'appui, avant tout déplacement."""
         px, py, frame, *_ = x11.pointer()
         if not frame: return None
+        # Barre de titre dessinée par l'application (Explorateur, GTK sans
+        # décoration) : openbox ne met pas de titre, l'application le
+        # déplace par _NET_WM_MOVERESIZE. Le glisser ne compte que si la
+        # fenêtre suit la souris (#2907).
+        drawn = None
+        if not mask & ALT:
+            drawn = client_of(x11, frame)
+            if drawn and frame_extents(drawn)[2] > 4: drawn = None
+        if drawn:
+            kind = _run(["xprop", "-id", drawn, "_NET_WM_WINDOW_TYPE"])
+            if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE(ATOM)" in kind: return None
+            frame_geometry = window_geometry(drawn)
+            if frame_geometry is None: return None
+            return {"window": drawn, "snapped": bool(get_prop(drawn, "_WINLUX_SNAP")),
+                    "start": frame_geometry[:2], "drawn": True}
         if not mask & ALT:
             _, _, title, *_ = x11.pointer(frame)
             title_attributes = x11.attributes(title) if title else None
@@ -1430,7 +1454,13 @@ def watch():
                 state["press"] = (px, py, pressed_on_title(mask))
             press = state["press"]
             if state["drag"] is None and press[2] and abs(px - press[0]) + abs(py - press[1]) >= DRAG_START:
-                state["drag"] = press[2]
+                moving = press[2]
+                if not moving.get("drawn"):
+                    state["drag"] = moving
+                else:
+                    # Un clic dans le contenu ne déplace pas la fenêtre : pas un glisser.
+                    now_at = window_geometry(moving["window"])
+                    if now_at and now_at[:2] != moving["start"]: state["drag"] = moving
             if state["drag"]:
                 monitor, area, scale = monitor_at(point)
                 shown = state["bar"] is not None

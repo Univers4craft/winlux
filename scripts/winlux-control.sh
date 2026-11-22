@@ -60,6 +60,20 @@ save_public() {
     if relayed_session && test "${1%/*}" = "$config"; then return 0; fi
     chmod 644 "$1"
 }
+# Demande de relevé pour la boucle de session (#3126), sans lancer de
+# programme. En root, le fichier est dans /run (755, à root) et non dans
+# /run/winlux, collant : un compte ne peut pas y poser un lien que root
+# suivrait. Un dossier du compte qui n'est pas à lui est ignoré.
+demand_status() {
+    if test "$mine" = "$run"; then
+        test "$uid" = 0 || test -n "$root" || return 0
+        demand="$root/run/winlux-control-demande"
+    else
+        test -O "$mine" || return 0
+        demand="$mine/demande"
+    fi
+    : >"$demand" 2>/dev/null || true
+}
 # Relance de la barre des tâches (xfce4-panel -r). Le panneau relancé
 # abandonne (« There is already a running instance ») s'il trouve encore
 # l'ancien sur le bus de session : sur une machine chargée, la barre
@@ -965,8 +979,9 @@ else
         message "Échec de l’opération. Le journal indique la cause."
     fi
 fi
-# Au démarrage de session, l'init rafraîchit déjà l'état toutes les 3 s :
-# inutile de relancer ici la vingtaine de sondes de status (plusieurs
-# secondes par appel) entre chaque réglage restauré.
-if test "${WINLUX_CONTROL_NO_STATUS:-0}" != 1; then status; fi
+# Sans relevé immédiat (réglages restaurés à l'ouverture de session, pages
+# des Paramètres qui ne veulent pas attendre la vingtaine de sondes) : le
+# relevé est demandé à la boucle de la session, qui le fait dans les 3 s
+# (#3126), comme le faisait l'ancien relevé permanent.
+if test "${WINLUX_CONTROL_NO_STATUS:-0}" != 1; then status; else demand_status; fi
 exit "$result"

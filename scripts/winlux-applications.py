@@ -10,6 +10,7 @@ import ctypes
 import fcntl
 import hashlib
 import json
+import mmap
 import os
 import re
 from pathlib import Path
@@ -129,8 +130,21 @@ def _windows_path(value, home):
     return Path(value) if value.startswith("/") else home / value
 
 def pe_icon(path, index=0):
-    """Rebuild a resource icon as ICO (Windows icon index: N-th group, or -id); do not execute the PE."""
-    data = path.read_bytes() if path.stat().st_size <= 256 * 1024 * 1024 else b""
+    """Rebuild a resource icon as ICO (Windows icon index: N-th group, or -id); do not execute the PE.
+
+    The file is mapped, not read (#3164): only the pages of the headers and of
+    the icon resources are loaded. Reading it whole cost up to its full size in
+    memory and on disk (191 Mo for a 70-byte icon of an installer)."""
+    try:
+        with open(path, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size < 64: return None
+            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                return _pe_icon(data, index)
+    except ValueError as error:
+        if "mmap" in str(error) or "empty file" in str(error): return None
+        raise
+
+def _pe_icon(data, index):
     if len(data) < 64 or data[:2] != b"MZ":
         return None
     def u16(offset): return struct.unpack_from("<H", data, offset)[0]
@@ -1061,6 +1075,30 @@ def watched_inputs():
         except OSError: signature.append((str(path), None, None))
     return tuple(signature)
 
+def refresh_apart():
+    """refresh() dans un processus fils : le démon résident ne garde pas la
+    mémoire de la passe. Relire tout le registre (des dizaines de milliers de
+    chaînes) toutes les 5 minutes fragmentait son tas : 10 Mo au départ, 40 Mo
+    après une trentaine de passes, jamais rendus."""
+    try:
+        pid = os.fork()
+    except OSError:
+        CHANGED.clear()
+        refresh()
+        return
+    if pid == 0:
+        code = 1
+        try:
+            CHANGED.clear()
+            refresh()
+            code = 0
+        except BaseException as error:
+            print(f"Catalogue : {type(error).__name__}: {error}", file=sys.stderr)
+        finally:
+            try: sys.stdout.flush(); sys.stderr.flush()
+            finally: os._exit(code)
+    os.waitpid(pid, 0)
+
 def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
     """Resident catalogue: window icons each tick, refresh() only when an input changed.
 
@@ -1073,8 +1111,7 @@ def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
         try:
             current = watched_inputs()
             if current != signature or time.monotonic() - last_full >= full_pass:
-                CHANGED.clear()
-                refresh()
+                refresh_apart()
                 # refresh() itself touches APPS: read the inputs after it.
                 signature, last_full = watched_inputs(), time.monotonic()
             window_icons()

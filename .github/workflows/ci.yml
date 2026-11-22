@@ -244,6 +244,10 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-carte-verrou.py
       - name: Vérifier Paramètres › Sauvegarde (destination, planification, restauration)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
+      - name: Paramètres › Imprimantes et Partage affichés sans attendre leur état lent (#3021)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-etat-lent.py
+      - name: Paramètres › bytecode des pages dans le cache du compte (Gain #3027)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-pycache.py
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
@@ -811,8 +815,14 @@ jobs:
       - name: Recherche du menu Démarrer sans chemin AppData ni marque Microsoft (#2905)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-appdata.py
 
+      - name: Recherche du menu Démarrer, Meilleur résultat application ou page des Paramètres (#3018)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-meilleur.py
+
       - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
+
+      - name: Menu Démarrer fermé tant que l'écran est verrouillé (#2994)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-verrou.py
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
