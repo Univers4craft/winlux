@@ -142,42 +142,18 @@ fn xdg_user_dir(key: &str) -> Option<PathBuf> {
     parse_user_dirs(&user_dirs_text(), key, &home())
 }
 
-/// Noms que xdg-user-dirs donne aux dossiers connus en français, allemand et
-/// espagnol (langues de l'interface), par nom anglais.
-const KNOWN_LOCALIZED: [(&str, &[&str]); 6] = [
-    ("Desktop", &["Bureau", "Schreibtisch", "Escritorio"]),
-    ("Documents", &["Dokumente", "Documentos"]),
-    ("Downloads", &["Téléchargements", "Descargas"]),
-    ("Music", &["Musique", "Musik", "Música"]),
-    ("Pictures", &["Images", "Bilder", "Imágenes"]),
-    ("Videos", &["Vidéos", "Vídeos"]),
-];
-
-/// Dossier Linux d'un dossier connu : la clé de `user-dirs.dirs`, sinon le
-/// dossier existant au nom anglais ou traduit (un compte français sans la clé
-/// a `~/Images`, pas `~/Pictures`), sinon le nom anglais.
-fn resolve_known(text: &str, key: &str, default: &str, home: &Path) -> PathBuf {
-    if let Some(p) = parse_user_dirs(text, key, home) {
-        return p;
-    }
-    let english = home.join(default);
-    if english.is_dir() {
-        return english;
-    }
-    KNOWN_LOCALIZED
-        .iter()
-        .find(|(en, _)| *en == default)
-        .and_then(|(_, names)| names.iter().map(|n| home.join(n)).find(|p| p.is_dir()))
-        .unwrap_or(english)
-}
-
 /// Tous les dossiers connus : (nom Windows, dossier Linux), en une lecture.
 fn known_folders() -> Vec<(&'static str, PathBuf)> {
     let text = user_dirs_text();
     let home = home();
     KNOWN
         .iter()
-        .map(|(name, key, default)| (*name, resolve_known(&text, key, default, &home)))
+        .map(|(name, key, default)| {
+            (
+                *name,
+                parse_user_dirs(&text, key, &home).unwrap_or_else(|| home.join(default)),
+            )
+        })
         .collect()
 }
 
@@ -207,7 +183,7 @@ pub fn known_folder(windows_name: &str) -> Option<PathBuf> {
     let (_, key, default) = KNOWN
         .iter()
         .find(|(n, _, _)| n.eq_ignore_ascii_case(name))?;
-    Some(resolve_known(&user_dirs_text(), key, default, &home()))
+    Some(xdg_user_dir(key).unwrap_or_else(|| home().join(default)))
 }
 
 /// Dossier public partagé (`C:\Users\Public`).

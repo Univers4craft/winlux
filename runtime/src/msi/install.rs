@@ -69,8 +69,22 @@ fn clean(s: &str) -> String {
 
 /// Dossier « Bureau » de l'utilisateur Linux (XDG), en chemin Windows.
 fn desktop_dir() -> String {
-    // Même résolution que C:\Users\<nom>\Desktop (#2865).
-    let dir = crate::paths::known_folder("Desktop").unwrap_or_else(crate::paths::home);
+    let home = crate::paths::drive_c();
+    let mut dir = home.join("Desktop");
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    if let Ok(text) = std::fs::read_to_string(config.join("user-dirs.dirs")) {
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("XDG_DESKTOP_DIR=") {
+                let v = v.trim_matches('"');
+                let home_s = std::env::var("HOME").unwrap_or_default();
+                dir = PathBuf::from(v.replace("$HOME", &home_s));
+            }
+        }
+    } else if home.join("Bureau").is_dir() {
+        dir = home.join("Bureau");
+    }
     with_slash(crate::paths::to_windows(&dir))
 }
 
