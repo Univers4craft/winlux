@@ -4333,6 +4333,23 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     true
 }
 
+/// Descripteurs qui signalent un message pour le fil appelant : la
+/// connexion X11 et l'éveil de sa file. `None` en headless, où rien n'arrive
+/// de l'hôte. Vrai aussi : un événement déjà lu de la connexion attend.
+pub fn message_wake_fds() -> Option<([i32; 2], bool)> {
+    let (fd, pending) = {
+        let mut b = lock(backend());
+        let fd = b.event_fd()?;
+        (fd, b.poll_pending())
+    };
+    Some(([fd, current_queue().wake.0], pending))
+}
+
+/// Vide l'éveil de la file du fil appelant après un sommeil.
+pub fn drain_queue_wake() {
+    current_queue().wake.drain();
+}
+
 /// Attend que l'un des descripteurs soit lisible (au plus `timeout_ms`) ;
 /// les descripteurs négatifs sont ignorés par `poll`.
 fn poll_fds(fds: &[i32], timeout_ms: u32) {
