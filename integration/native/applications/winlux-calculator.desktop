@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Calculatrice
+Name[en]=Calculator
+Name[es]=Calculadora
+Name[de]=Rechner
+Comment=Calculatrice, chronomètre, minuteur et réveil
+Comment[en]=Calculator, stopwatch, timer and alarm
+Comment[es]=Calculadora, cronómetro, temporizador y alarma
+Comment[de]=Rechner, Stoppuhr, Timer und Wecker
+Keywords=calculatrice;calcul;calculator;calc;calculadora;Rechner;Taschenrechner;chronomètre;minuteur;
+Exec=/usr/bin/winlux /opt/winlux/apps/calc.exe
+Icon=accessories-calculator
+Terminal=false
+StartupNotify=true
+StartupWMClass=calc
+Categories=Utility;Calculator;

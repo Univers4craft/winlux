@@ -220,7 +220,8 @@ def icon_for(path, identity):
 # Winlux's own .exe carry no icon resource: their window gets the Prisme icon of
 # their Start menu entry (#667, #681), the same name as the .desktop's Icon=.
 BUILTIN_APPS = Path("/opt/winlux/apps")
-BUILTIN_ICONS = {"mediaplayer.exe": "multimedia-video-player", "audioplayer.exe": "multimedia-video-player"}
+BUILTIN_ICONS = {"mediaplayer.exe": "multimedia-video-player", "audioplayer.exe": "multimedia-video-player",
+                 "calc.exe": "accessories-calculator"}
 # winlux-shell-app <mode> (WINLUX_SHELL_APP) and `winlux --regedit`.
 SHELL_APP_ICONS = {
     "explorer": "/usr/share/winlux/native/icons/explorer.svg",
