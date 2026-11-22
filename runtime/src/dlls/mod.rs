@@ -1670,6 +1670,11 @@ pub const CONTRATS_VERIFIES: &[(&str, &str)] = &[
     ("api-ms-win-security-appcontainer-l1-1-0", "kernel32"),
     ("api-ms-win-security-base-ansi-l1-1-0", "advapi32"),
     ("api-ms-win-security-provider-ansi-l1-1-0", "advapi32"),
+    ("api-ms-win-eventing-classicprovider-l1-1-0", "advapi32"),
+    ("api-ms-win-mm-time-l1-1-0", "winmm"),
+    ("api-ms-win-security-lsalookup-ansi-l2-1-0", "advapi32"),
+    ("api-ms-win-security-lsalookup-l2-1-0", "advapi32"),
+    ("api-ms-win-security-lsapolicy-l1-1-0", "advapi32"),
 ];
 
 pub fn normalize(dll: &str) -> String {
@@ -2497,6 +2502,68 @@ mod tests {
                     "GetNamedSecurityInfoA",
                     "SetEntriesInAclA",
                     "SetNamedSecurityInfoA",
+                ],
+            ),
+            (
+                "api-ms-win-eventing-classicprovider-l1-1-0",
+                &[
+                    "GetTraceEnableFlags",
+                    "GetTraceEnableLevel",
+                    "GetTraceLoggerHandle",
+                    "RegisterTraceGuidsW",
+                    "TraceEvent",
+                    "TraceMessage",
+                    "TraceMessageVa",
+                    "UnregisterTraceGuids",
+                ],
+            ),
+            (
+                "api-ms-win-mm-time-l1-1-0",
+                &[
+                    "timeBeginPeriod",
+                    "timeEndPeriod",
+                    "timeGetDevCaps",
+                    "timeGetSystemTime",
+                    "timeGetTime",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsalookup-ansi-l2-1-0",
+                &[
+                    "LookupAccountNameA",
+                    "LookupAccountSidA",
+                    "LookupPrivilegeDisplayNameA",
+                    "LookupPrivilegeNameA",
+                    "LookupPrivilegeValueA",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsalookup-l2-1-0",
+                &[
+                    "LookupAccountNameW",
+                    "LookupAccountSidW",
+                    "LookupPrivilegeDisplayNameW",
+                    "LookupPrivilegeNameW",
+                    "LookupPrivilegeValueW",
+                    "LsaEnumerateTrustedDomains",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsapolicy-l1-1-0",
+                &[
+                    "LsaAddAccountRights",
+                    "LsaClose",
+                    "LsaEnumerateAccountRights",
+                    "LsaEnumerateAccountsWithUserRight",
+                    "LsaFreeMemory",
+                    "LsaLookupNames2",
+                    "LsaLookupSids",
+                    "LsaLookupSids2",
+                    "LsaOpenPolicy",
+                    "LsaQueryInformationPolicy",
+                    "LsaRemoveAccountRights",
+                    "LsaRetrievePrivateData",
+                    "LsaSetInformationPolicy",
                 ],
             ),
         ];

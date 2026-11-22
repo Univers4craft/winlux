@@ -520,6 +520,24 @@ pub extern "win64" fn time_get_time() -> u32 {
     crate::dlls::kernel32::get_tick_count()
 }
 
+/// `timeGetSystemTime(MMTIME*, taille)` : l'heure système de timeGetTime,
+/// dans le membre `ms`, avec wType = TIME_MS (page sdk-api ; MMTIME,
+/// TIME_MS et TIMERR_STRUCT : mmsyscom.h et timeapi.h de mingw-w64, domaine
+/// public). Contrat api-ms-win-mm-time-l1-1-0 (Refs #2902). Inférence : un
+/// pointeur nul ou une taille plus petite que MMTIME rend TIMERR_STRUCT,
+/// la page ne nommant que « un code d'erreur ».
+pub unsafe extern "win64" fn time_get_system_time(mmt: *mut u32, size: u32) -> u32 {
+    const TIME_MS: u32 = 1;
+    const TIMERR_STRUCT: u32 = 96 + 33;
+    // UINT wType, puis l'union de 8 octets.
+    if mmt.is_null() || size < 12 {
+        return TIMERR_STRUCT;
+    }
+    std::ptr::write_unaligned(mmt, TIME_MS);
+    std::ptr::write_unaligned(mmt.add(1), time_get_time());
+    0
+}
+
 // ---------------------------------------------------------------------------
 // waveIn* – capture audio via ALSA (Linux), exposée comme l'API Win32
 // ---------------------------------------------------------------------------
@@ -1154,12 +1172,28 @@ pub unsafe extern "win64" fn wave_in_get_error_text_w(err: u32, buf: *mut u16, c
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"mciSendCommandA"=>fn mci_send_command,"mciSendCommandW"=>fn mci_send_command,"mciGetErrorStringA"=>fn mci_get_error_string_a,"mciGetErrorStringW"=>fn mci_get_error_string_w,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close,"waveInGetDevCapsA"=>fn wave_in_get_dev_caps_a,"waveInGetDevCapsW"=>fn wave_in_get_dev_caps_w,"waveInGetPosition"=>fn wave_in_get_position,"waveInGetID"=>fn wave_in_get_id,"waveInMessage"=>fn wave_in_message,"waveInGetErrorTextA"=>fn wave_in_get_error_text_a,"waveInGetErrorTextW"=>fn wave_in_get_error_text_w}
+    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"mciSendCommandA"=>fn mci_send_command,"mciSendCommandW"=>fn mci_send_command,"mciGetErrorStringA"=>fn mci_get_error_string_a,"mciGetErrorStringW"=>fn mci_get_error_string_w,"timeGetTime"=>fn time_get_time,"timeGetSystemTime"=>fn time_get_system_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close,"waveInGetDevCapsA"=>fn wave_in_get_dev_caps_a,"waveInGetDevCapsW"=>fn wave_in_get_dev_caps_w,"waveInGetPosition"=>fn wave_in_get_position,"waveInGetID"=>fn wave_in_get_id,"waveInMessage"=>fn wave_in_message,"waveInGetErrorTextA"=>fn wave_in_get_error_text_a,"waveInGetErrorTextW"=>fn wave_in_get_error_text_w}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// timeGetSystemTime (contrat api-ms-win-mm-time-l1-1-0, Refs #2902) :
+    /// wType = TIME_MS et l'heure de timeGetTime dans `ms`.
+    #[test]
+    fn heure_systeme_mmtime_2902() {
+        let mut mmt = [0xFFFF_FFFFu32; 3];
+        let avant = time_get_time();
+        assert_eq!(unsafe { time_get_system_time(mmt.as_mut_ptr(), 12) }, 0);
+        assert_eq!(mmt[0], 1);
+        assert!(mmt[1] >= avant && mmt[1] - avant < 1000);
+        assert_eq!(unsafe { time_get_system_time(mmt.as_mut_ptr(), 8) }, 129);
+        assert_eq!(
+            unsafe { time_get_system_time(std::ptr::null_mut(), 12) },
+            129
+        );
+    }
 
     fn wave_format(tag: u16, channels: u16, rate: u32, bits: u16) -> [u8; 18] {
         let mut f = [0u8; 18];
