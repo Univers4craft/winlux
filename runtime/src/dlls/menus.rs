@@ -706,8 +706,8 @@ pub fn sync_bar(hwnd: usize, hot: Option<usize>) {
 /// Menu de la barre sous un point écran, par position (None hors barre).
 pub fn bar_hit(hwnd: usize, screen_x: i32, screen_y: i32) -> Option<usize> {
     use crate::dlls::gui;
-    let r = gui::screen_rect(hwnd)?;
-    let (x, y) = (screen_x - r.left, screen_y - r.top);
+    let (ox, oy) = gui::content_origin(hwnd)?;
+    let (x, y) = (screen_x - ox, screen_y - oy);
     if y < 0 || y >= gui::menu_bar_height(hwnd) {
         return None;
     }
@@ -736,7 +736,7 @@ pub fn open_bar_menu(hwnd: usize, index: usize) {
     let Some(slot) = lock(bars()).get(&hwnd).and_then(|b| b.get(index).cloned()) else {
         return;
     };
-    let Some(r) = gui::screen_rect(hwnd) else {
+    let Some((ox, oy)) = gui::content_origin(hwnd) else {
         return;
     };
     unsafe {
@@ -752,8 +752,8 @@ pub fn open_bar_menu(hwnd: usize, index: usize) {
         crate::dlls::controls::popup::track(
             entry.submenu,
             0,
-            r.left + slot.left,
-            r.top + gui::menu_bar_height(hwnd),
+            ox + slot.left,
+            oy + gui::menu_bar_height(hwnd),
             hwnd,
         );
     }
