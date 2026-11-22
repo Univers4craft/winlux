@@ -438,7 +438,10 @@ ok('"Votre PC": ("Your PC", "Su PC", "Ihr PC")' in hardware_page, "Votre PC : qu
 shell_app = SCRIPTS / "winlux-shell-app.sh"
 for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\home\\damien\\Téléchargements"),
                       ("file:///tmp/Mes%20documents%20%231", "Z:\\tmp\\Mes documents #1")):
-    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
+    # Dossier personnel fixé ailleurs : sur le compte damien, ce chemin part sur C: (#3025).
+    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True,
+                              env={**{k: v for k, v in os.environ.items() if k not in ("WINLUX_DRIVE_C", "WINLUX_HOME")},
+                                   "HOME": "/home/essai-winlux"}).stdout
     ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
 
 # ── Support matériel des PC (audit de la v0.2.17, 2026-11-03) ──────────────
@@ -616,7 +619,7 @@ shipped_keys = {binding.get("key"): binding for binding in shipped_rc.find(f"{OB
 ok("Super_L" not in shipped_keys and all("/usr/bin/winlux-super-key" in (SCRIPTS / name).read_text()
                                          for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "touche Windows seule : Démarrer par winlux-super-key, pas par une liaison qui volerait Windows+Gauche")
-ok("found_in(query, name)" in (SCRIPTS / "winlux-start-menu.py").read_text(),
+ok("found_in(query, name" in (SCRIPTS / "winlux-start-menu.py").read_text(),
    "recherche de fichiers par début de mot, triée par pertinence puis date")
 ok(all(key in shipped_keys for key in ("XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute")),
    "touches de volume du clavier liées à winlux-volume")

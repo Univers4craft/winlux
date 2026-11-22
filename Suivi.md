@@ -143,6 +143,8 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ## DÉJÀ FAIT
 
+- [x] Paramètres › Imprimantes et scanners et Partage et transfert : la page s'affiche aussitôt, `lpstat` et `winlux-control share-status`/`transfer-status` (sans la tournée `status`) sont lus hors du fil GTK puis la page se complète ; commandes factices de 0,6 et 1 s sous Xvfb : 1 380 → ~200 ms et 2 210 → ~200 ms ; `test-settings-etat-lent.py` en CI (#3021).
+- [x] Paramètres : bytecode des pages gardé dans le cache du compte (`sys.pycache_prefix`) ; installées dans `/usr/bin`, non inscriptible, elles étaient recompilées à chaque ouverture ; copie installée sous Xvfb, page 11 410 → 208 ms, page 8 512 → 327 ms ; `test-settings-pycache.py` en CI (#3027).
 - [x] Vue des polices du registre : type d'entrée lu dans le dossier (d_type), forme canonique gardée par dossier ; 3 736 → 1 720 appels système au démarrage du runtime, programme vide x64 15,6 → 13,8 ms (#2951).
 - [x] Programme 32 bits : la relance du runtime (#232) a lieu avant la lecture du registre, lue une seule fois par lancement ; programme vide x86 41,6 → 31,1 ms, premier pixel de la sonde x86 56,3 → 47,5 ms (#2947).
 - [x] `winlux --inspect` projette le programme (`loader::ImageFile`) au lieu de le copier en mémoire : 323 → 149 ms par inspection d'un .exe de 300 Mo (avec #2887), plus d'échec « out of memory » quand la mémoire libre est plus petite que le programme ; `test-inspect-projete.sh` (#2918).
