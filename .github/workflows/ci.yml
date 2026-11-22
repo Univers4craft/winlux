@@ -481,6 +481,7 @@ jobs:
           python3 -B scripts/test-store-editeurs.py
           python3 -B scripts/test-store-locale-session.py
           python3 -B scripts/test-store-licence.py
+          python3 -B scripts/test-store-installe-hors-boutique.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
