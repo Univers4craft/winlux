@@ -299,6 +299,31 @@ struct Vm<'a, 'b> {
     /// System::Call Wow64EnableWow64FsRedirection(i0)) : `$SYSDIR` vise
     /// alors System32 (#1800).
     fs_redirect_off: bool,
+    /// Installation sans interface demandée (/S) : les boîtes de message du
+    /// script prennent leur réponse /SD au lieu d'être montrées (#2882).
+    silent: bool,
+}
+
+/// Réponse à une boîte de message du script (`MessageBox`, style NSIS :
+/// drapeaux MB_* et réponse /SD dans les bits 21 à 24). Le manuel NSIS
+/// (4.8.1.41 SilentInstall) : « use MessageBox's /SD to specify a default
+/// for silent installers » ; une installation suivie par l'utilisateur lui
+/// montre donc la boîte (`ask`, drapeaux MB_* seuls) et prend sa réponse.
+fn message_box_answer(style: i32, attended: bool, ask: impl FnOnce(u32) -> i32) -> i32 {
+    if attended {
+        return ask((style & 0x001F_FFFF) as u32);
+    }
+    let sd = (style >> 21) & 0xF;
+    if sd != 0 {
+        return sd;
+    }
+    match style & 0xF {
+        2 => 5,     // Abandonner/Réessayer/Ignorer → Ignorer
+        3 | 4 => 6, // Oui
+        5 => 2,     // Réessayer/Annuler → Annuler
+        6 => 11,    // Continuer
+        _ => 1,     // OK
+    }
 }
 
 fn hex_int(s: &str) -> i64 {
@@ -801,24 +826,26 @@ impl<'a, 'b> Vm<'a, 'b> {
                 }
             }
             22 => {
-                // EW_MESSAGEBOX : réponse par défaut (/SD) ou positive.
+                // EW_MESSAGEBOX : posée à l'utilisateur pendant une
+                // installation qu'il suit (#2882) ; réponse par défaut (/SD)
+                // ou positive seulement sans lui.
                 let style = p[0];
-                let sd = (style >> 21) & 0xF;
-                let v = if sd != 0 {
-                    sd
-                } else {
-                    match style & 0xF {
-                        2 => 5,     // Abandonner/Réessayer/Ignorer → Ignorer
-                        3 | 4 => 6, // Oui
-                        5 => 2,     // Réessayer/Annuler → Annuler
-                        6 => 11,    // Continuer
-                        _ => 1,     // OK
-                    }
-                };
                 let text = self.string(p[1]);
+                let attended = self.inst.is_some() && !self.silent;
+                // Titre : le nom du produit, sinon celui de l'installateur
+                // (le nom n'est pas encore connu dans .onInit).
+                let caption = self
+                    .inst
+                    .as_deref()
+                    .map(|i| i.manifest.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| self.vars[V_EXEFILE].clone());
+                let v = message_box_answer(style, attended, |kind| unsafe {
+                    crate::dlls::dialogs::message_box(0, &text, &caption, kind)
+                });
                 if let Some(inst) = self.inst.as_deref_mut() {
                     inst.log.log(&format!(
-                        "message : {}",
+                        "message : {} (réponse {v})",
                         text.replace("\r\n", " ").replace('\n', " ")
                     ));
                 }
@@ -1695,6 +1722,7 @@ fn execute(
         uninstall_ids: Vec::new(),
         skipped: Vec::new(),
         fs_redirect_off: false,
+        silent: opts.silent,
     };
     vm.flags[F_SILENT] = 1;
     // Dossier par défaut (InstallDir, ou InstallDirRegKey s'il existe).
@@ -2049,6 +2077,26 @@ fn os_info_read(flags: &[i32], spec: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boite_de_message_posee_a_l_utilisateur_present() {
+        // #2882 : MB_YESNO (4) avec /SD IDYES (6 << 21), comme la question
+        // de Notepad++ x86 sur la version x64 déjà installée.
+        let style = 4 | (6 << 21);
+        let mut vu = None;
+        let r = message_box_answer(style, true, |k| {
+            vu = Some(k);
+            7 // IDNO choisi par l'utilisateur
+        });
+        assert_eq!(r, 7, "la réponse de l'utilisateur est retenue");
+        assert_eq!(vu, Some(4), "boîte montrée avec ses seuls drapeaux MB_*");
+        // Sans utilisateur (/S) : /SD, sinon la réponse positive.
+        let jamais = |_| -> i32 { panic!("pas de boîte en silencieux") };
+        assert_eq!(message_box_answer(style, false, jamais), 6);
+        assert_eq!(message_box_answer(4 | (7 << 21), false, jamais), 7);
+        assert_eq!(message_box_answer(4, false, jamais), 6);
+        assert_eq!(message_box_answer(0, false, jamais), 1);
+    }
 
     #[test]
     fn sysdir_d_un_installateur_x86() {
