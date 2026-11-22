@@ -65,7 +65,13 @@ case "${1:-explorer}" in
             esac
             export WINLUX_SETTINGS_PAGE=$2
         fi
-        if test "$1" = explorer && test -n "${2:-}"; then
+        # « Extraire tout… » du clic droit du Bureau : l'Explorateur s'ouvre
+        # sur le dossier de l'archive et l'extrait dans un nouveau dossier.
+        if test "$1" = explorer && test "${2:-}" = --extraire; then
+            test -n "${3:-}" || exit 2
+            WINLUX_SHELL_EXTRACT=$(shell_path "$3") || exit 2
+            export WINLUX_SHELL_EXTRACT
+        elif test "$1" = explorer && test -n "${2:-}"; then
             WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
             export WINLUX_SHELL_PATH
         fi

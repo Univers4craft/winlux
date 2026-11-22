@@ -40,6 +40,8 @@ _TR = {
     'VPN : {name}': ('VPN: {name}', 'VPN: {name}', 'VPN: {name}'),
     'Point d’accès sans fil mobile activé': ('Mobile hotspot on', 'Zona con cobertura inalámbrica móvil activada', 'Mobiler Hotspot ein'),
     'Centre de notifications': ('Notification center', 'Centro de notificaciones', 'Benachrichtigungscenter'),
+    '1 nouvelle notification': ('1 new notification', '1 notificación nueva', '1 neue Benachrichtigung'),
+    '{count} nouvelles notifications': ('{count} new notifications', '{count} notificaciones nuevas', '{count} neue Benachrichtigungen'),
     'Batterie : {level} %': ('Battery: {level}%', 'Batería: {level} %', 'Akku: {level} %'),
     'Batterie : {level} % — en charge': ('Battery: {level}% — charging', 'Batería: {level} % — cargando', 'Akku: {level} % — wird geladen'),
     'Batterie : {level} % — chargée': ('Battery: {level}% — fully charged', 'Batería: {level} % — cargada', 'Akku: {level} % — vollständig geladen'),
@@ -583,11 +585,16 @@ def network_part():
 
 
 def notification_count():
-    """Notifications gardées dans le centre (pastille sur la cloche)."""
-    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "winlux/notifications.json"
+    """Notifications nouvelles, pas encore vues (pastille sur la cloche, #3057).
+
+    Comme Windows 11, la pastille compte ce qui est arrivé depuis la dernière
+    ouverture du centre ; les notifications déjà vues restent dans le centre
+    sans la rallumer. Le démon tient ce compte dans un petit fichier : la
+    barre ne relit plus tout l'historique toutes les deux secondes."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "winlux/notifications-nouvelles"
     try:
-        items = json.loads(state.read_text(encoding="utf-8"))
-        return len(items) if isinstance(items, list) else 0
+        value = state.read_text(encoding="ascii").strip()
+        return int(value) if value.isdigit() else 0
     except (OSError, ValueError):
         return 0
 
@@ -701,6 +708,8 @@ def render(kind, parent=None):
         body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
         tooltip = _t("Centre de notifications")
         if count:
+            tooltip += "\n" + (_t("1 nouvelle notification") if count == 1
+                               else _t("{count} nouvelles notifications").format(count=count))
             # Pastille du nombre de notifications, comme Windows 11 (#703).
             badge = "9+" if count > 9 else str(count)
             accent, on_accent = ("#b69cff", "#1c1a26") if DARK else ("#6a3df0", "#ffffff")
