@@ -6,7 +6,8 @@ registre, lue par `winlux --setup --programs`) compte comme installé sur sa
 fiche : pas de bouton « Installer », jamais de « mise à jour » vers une
 version plus ancienne, et « Désinstaller » passe par son propre désinstalleur
 (`winlux --setup --remove CLÉ`). Une version plus ancienne que celle du
-catalogue est proposée en mise à jour."""
+catalogue est proposée en mise à jour. La version inscrite l'emporte sur celle
+que la Boutique avait notée à sa propre installation (#2999)."""
 import hashlib
 import json
 from pathlib import Path
@@ -95,6 +96,21 @@ exit 0
     store_run("refresh")
     ok(card("local/notepadplusplus")[0] == "a" and card("local/vlc")[0] == "a",
        "nom seulement voisin (« Notepad++Plus », « VLCPlayerPro ») : pas installé")
+
+    # #2999 : la Boutique avait installé la 8.6.9 (store-state.json), puis
+    # la 8.9.9.1 a été installée sans elle : la version inscrite l'emporte.
+    statefile = home / ".local/share/winlux/store-state.json"
+    statefile.parent.mkdir(parents=True, exist_ok=True)
+    statefile.write_text(json.dumps({"windows": {"local/notepadplusplus": {"version": "8.6.9", "name": "Notepad++"}}}))
+    registry(("Notepad++", "Notepad++ (64-bit x64)", "8.9.9.1"))
+    store_run("refresh")
+    ok(card("local/notepadplusplus") == ("i", "8.9.9.1", "8.6.9"),
+       f"réinstallée hors Boutique après la Boutique : version inscrite affichée (#2999) ({card('local/notepadplusplus')})")
+    registry()
+    store_run("refresh")
+    ok(card("local/notepadplusplus") == ("i", "8.6.9", "8.6.9"),
+       f"installée par la Boutique, sans clé Uninstall (portable) : version notée gardée ({card('local/notepadplusplus')})")
+    statefile.unlink()
 
     # Désinstaller passe par le désinstalleur du programme.
     registry(("Notepad++", "Notepad++ (64-bit x64)", "8.9.9.1"))
