@@ -16,7 +16,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
-    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav", "headers"}
+    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav", "headers", "kind"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
     {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
@@ -104,6 +104,23 @@ def _t(text):
 # Caractères d'un « token » HTTP (RFC 9110, §5.6.2).
 _TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789"
                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+
+def navigation_kind(WebKit2, action):
+    """COREWEBVIEW2_NAVIGATION_KIND d'une navigation WebKit (#2975).
+
+    RELOAD (0) pour un rechargement, BACK_OR_FORWARD (1) pour l'historique,
+    NEW_DOCUMENT (2) pour le reste. Un formulaire renvoyé
+    (FORM_RESUBMITTED : rechargement ou historique, WebKit ne dit pas
+    lequel) compte comme un rechargement (inférence nommée).
+    """
+    T = WebKit2.NavigationType
+    kind = action.get_navigation_type() if action is not None else None
+    if kind in (T.RELOAD, T.FORM_RESUBMITTED):
+        return 0
+    if kind == T.BACK_FORWARD:
+        return 1
+    return 2
 
 
 def http_status(view):
@@ -666,7 +683,8 @@ class View:
                 return True
             self.nav += 1
             emit(ev="nav_starting", uri=uri, nav=self.nav,
-                 headers=request_headers(decision.get_navigation_action().get_request()))
+                 headers=request_headers(decision.get_navigation_action().get_request()),
+                 kind=navigation_kind(self.WebKit2, decision.get_navigation_action()))
         return False
 
     def on_load(self, view, event):

@@ -138,6 +138,7 @@ mod gui_cairo;
 mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
+pub mod handle_origin;
 pub mod hid;
 pub mod hid_report;
 pub mod hlsl;
@@ -211,6 +212,7 @@ pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
+pub mod ntdll_atoms;
 pub mod ntdll_file;
 pub mod object_directory;
 pub mod odbc32;
@@ -576,6 +578,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_fs::ntdll_exports());
                     e.extend(kernel32_node::ntdll_exports());
                     e.extend(ntdll_file::exports());
+                    e.extend(ntdll_atoms::exports());
                     for (name, addr) in wpf_native::ntdll_exports() {
                         e.entry(name).or_insert(addr);
                     }

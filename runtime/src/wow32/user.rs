@@ -104,6 +104,28 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
             _ => return None,
         });
     }
+    if n == "comctl32" {
+        // Sous-classement (#2876) : la SUBCLASSPROC x86 reçoit une
+        // passerelle 64 → 32, comme une WNDPROC ; importée par numéro
+        // d'ordre (410 à 413) ou par nom.
+        let name = match func {
+            "#410" => "SetWindowSubclass",
+            "#411" => "GetWindowSubclass",
+            "#412" => "RemoveWindowSubclass",
+            "#413" => "DefSubclassProc",
+            f => f,
+        };
+        let t = crate::dlls::lookup(n, name);
+        return Some(match name {
+            "SetWindowSubclass" => raw(set_window_subclass, t?, 4),
+            "GetWindowSubclass" => raw(get_window_subclass, t?, 4),
+            "RemoveWindowSubclass" => raw(remove_window_subclass, t?, 3),
+            // Message rendu à la procédure suivante : 32 → 64 comme
+            // DefWindowProc.
+            "DefSubclassProc" => spec(send_message, t?, 4, 0),
+            _ => return None,
+        });
+    }
     if n != "user32" {
         return None;
     }
@@ -201,8 +223,32 @@ winlux_wow_wndproc64:
     dispatch = sym wndproc_dispatch,
 );
 
+// Entrée des passerelles SUBCLASSPROC 64 → 32 (#2876) : six arguments
+// win64 (hwnd, msg, wParam, lParam, uIdSubclass, dwRefData), r10d =
+// procédure x86, passée en septième argument de `subclass_dispatch`.
+std::arch::global_asm!(
+    r#"
+    .text
+    .globl winlux_wow_subclass64
+winlux_wow_subclass64:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 64
+    mov rax, qword ptr [rbp + 48]
+    mov qword ptr [rsp + 32], rax
+    mov rax, qword ptr [rbp + 56]
+    mov qword ptr [rsp + 40], rax
+    mov qword ptr [rsp + 48], r10
+    call {dispatch}
+    leave
+    ret
+"#,
+    dispatch = sym subclass_dispatch,
+);
+
 extern "C" {
     fn winlux_wow_wndproc64();
+    fn winlux_wow_subclass64();
 }
 
 #[derive(Default)]
@@ -213,6 +259,9 @@ struct Procs {
     /// Procédure 64 bits → passerelle x86, et l'inverse.
     to32: HashMap<usize, u32>,
     from32: HashMap<u32, usize>,
+    /// SUBCLASSPROC x86 → passerelle 64 bits, et l'inverse (#2876).
+    sub64: HashMap<u32, usize>,
+    sub32: HashMap<usize, u32>,
 }
 
 static PROCS: Mutex<Option<Procs>> = Mutex::new(None);
@@ -245,6 +294,100 @@ pub(super) fn wndproc64(proc32: u32) -> usize {
         p.from64.insert(at, proc32);
         at
     })
+}
+
+/// SUBCLASSPROC appelable en win64 pour la procédure x86 `proc32`, toujours
+/// la même pour une même procédure : GetWindowSubclass et
+/// RemoveWindowSubclass la retrouvent ainsi dans la chaîne (#2876).
+fn subclass64(proc32: u32) -> usize {
+    with_procs(|p| {
+        if let Some(&s) = p.sub64.get(&proc32) {
+            return s;
+        }
+        let mut code = Vec::with_capacity(20);
+        code.extend_from_slice(&[0x41, 0xba]); // mov r10d, imm32
+        code.extend_from_slice(&proc32.to_le_bytes());
+        code.extend_from_slice(&[0x48, 0xb8]); // mov rax, imm64
+        code.extend_from_slice(&(winlux_wow_subclass64 as *const () as usize as u64).to_le_bytes());
+        code.extend_from_slice(&[0xff, 0xe0]); // jmp rax
+        let at = super::alloc_code(&code) as usize;
+        p.sub64.insert(proc32, at);
+        p.sub32.insert(at, proc32);
+        at
+    })
+}
+
+/// SUBCLASSPROC x86 appelée par la chaîne de sous-classement du runtime
+/// (passerelle `subclass64`) : structures converties comme pour une WNDPROC.
+extern "win64" fn subclass_dispatch(
+    hwnd: usize,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+    id: usize,
+    data: usize,
+    proc32: usize,
+) -> isize {
+    if super::teb32_addr() == 0 {
+        crate::process::init_thread();
+    }
+    recv_conv(hwnd, msg, wparam, lparam, &mut |wp, lp| {
+        call32(proc32, &[hwnd as u32, msg, wp, lp, id as u32, data as u32]) as u32
+    }) as i32 as isize
+}
+
+/// SetWindowSubclass(hwnd, pfnSubclass, uIdSubclass, dwRefData).
+extern "win64" fn set_window_subclass(args: u32, target: usize) -> u64 {
+    let proc32 = arg(args, 1);
+    let proc64 = if proc32 == 0 { 0 } else { subclass64(proc32) };
+    call64(
+        target,
+        &[
+            ext(arg(args, 0)) as u64,
+            proc64 as u64,
+            arg(args, 2) as u64,
+            arg(args, 3) as u64,
+        ],
+    ) as u32 as u64
+}
+
+/// GetWindowSubclass(hwnd, pfnSubclass, uIdSubclass, *pdwRefData) :
+/// DWORD_PTR de 4 octets en x86.
+extern "win64" fn get_window_subclass(args: u32, target: usize) -> u64 {
+    let proc32 = arg(args, 1);
+    let out = arg(args, 3);
+    let Some(proc64) = with_procs(|p| p.sub64.get(&proc32).copied()) else {
+        if out != 0 {
+            wr(out, 0);
+        }
+        return 0;
+    };
+    let mut data = 0usize;
+    let r = call64(
+        target,
+        &[
+            ext(arg(args, 0)) as u64,
+            proc64 as u64,
+            arg(args, 2) as u64,
+            std::ptr::addr_of_mut!(data) as u64,
+        ],
+    ) as u32;
+    if out != 0 {
+        wr(out, data as u32);
+    }
+    r as u64
+}
+
+/// RemoveWindowSubclass(hwnd, pfnSubclass, uIdSubclass).
+extern "win64" fn remove_window_subclass(args: u32, target: usize) -> u64 {
+    let proc32 = arg(args, 1);
+    let Some(proc64) = with_procs(|p| p.sub64.get(&proc32).copied()) else {
+        return 0;
+    };
+    call64(
+        target,
+        &[ext(arg(args, 0)) as u64, proc64 as u64, arg(args, 2) as u64],
+    ) as u32 as u64
 }
 
 /// Procédure appelable par le code x86 pour la procédure 64 bits `native`.
@@ -872,7 +1015,12 @@ const TO_WINDOW: u32 = 0x100;
 /// structures étaient converties deux fois).
 fn x86_window(hwnd: usize) -> bool {
     let proc_ = get_ptr(hwnd, GWL_WNDPROC);
-    proc_ != 0 && with_procs(|p| p.from64.contains_key(&proc_))
+    let sub = crate::dlls::common_apps::first_subclass_proc(hwnd);
+    with_procs(|p| {
+        (proc_ != 0 && p.from64.contains_key(&proc_))
+            // SetWindowSubclass x86 (#2876) : même règle que GWL_WNDPROC.
+            || sub.is_some_and(|s| p.sub32.contains_key(&s))
+    })
 }
 
 /// SendMessage, DefWindowProc… : hwnd au rang `s.at`, puis message,
@@ -1239,6 +1387,34 @@ mod tests {
         assert!(fits32(u32::MAX as u64));
         assert!(!fits32(0x1_0000_0000) && !fits32(0x5555_0000_1000));
         assert_eq!(low(-3i64 as u64, "test"), 0xffff_fffd);
+    }
+
+    #[test]
+    fn sous_classement_x86_servi_2876() {
+        // Importées par nom ou par numéro d'ordre (Notepad++), les quatre
+        // fonctions ont leur version x86 : la SUBCLASSPROC passe par une
+        // passerelle 64 → 32 et n'est jamais appelée en win64.
+        for (nom, ordinal) in [
+            ("SetWindowSubclass", "#410"),
+            ("GetWindowSubclass", "#411"),
+            ("RemoveWindowSubclass", "#412"),
+            ("DefSubclassProc", "#413"),
+        ] {
+            assert!(
+                super::super::override_stub("comctl32.dll", nom).is_some(),
+                "{nom}"
+            );
+            assert!(
+                super::super::override_stub("COMCTL32.dll", ordinal).is_some(),
+                "{ordinal}"
+            );
+        }
+        // Une même procédure x86 garde sa passerelle (GetWindowSubclass et
+        // RemoveWindowSubclass la retrouvent dans la chaîne).
+        let a = subclass64(0x0043_ec70);
+        assert_eq!(a, subclass64(0x0043_ec70));
+        assert_ne!(a, subclass64(0x0043_ec80));
+        assert_eq!(with_procs(|p| p.sub32.get(&a).copied()), Some(0x0043_ec70));
     }
 
     #[test]
