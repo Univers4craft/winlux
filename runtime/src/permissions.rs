@@ -103,10 +103,47 @@ struct App {
 }
 
 static APP: OnceLock<App> = OnceLock::new();
-/// Décisions de cette exécution (y compris un refus non mémorisé).
-static SESSION: Mutex<Option<HashMap<Capability, bool>>> = Mutex::new(None);
-/// Une seule fenêtre de demande à la fois par processus.
-static ASKING: Mutex<()> = Mutex::new(());
+/// Décisions de cette exécution, gardées tant que `permissions.tsv` ne
+/// change pas : un blocage fait dans Paramètres s'applique à l'application
+/// déjà ouverte, dès son appel suivant (#1890).
+static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+
+/// Repère du fichier des choix : date, taille et inode (l'écriture passe par
+/// un fichier temporaire renommé). `None` : fichier absent.
+type Stamp = (std::time::SystemTime, u64, u64);
+
+fn stamp_of(path: Option<&Path>) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path?).ok()?;
+    Some((m.modified().ok()?, m.len(), m.ino()))
+}
+
+#[derive(Default)]
+struct Session {
+    stamp: Option<Stamp>,
+    decisions: HashMap<Capability, bool>,
+    /// Capacités déjà demandées par cette exécution : une seule fenêtre.
+    asked: std::collections::HashSet<Capability>,
+}
+
+impl Session {
+    /// Décision gardée, oubliée si le fichier a changé depuis.
+    fn known(&mut self, cap: Capability, stamp: Option<Stamp>) -> Option<bool> {
+        if self.stamp != stamp {
+            self.stamp = stamp;
+            self.decisions.clear();
+        }
+        self.decisions.get(&cap).copied()
+    }
+
+    fn remember(&mut self, cap: Capability, allowed: bool, stamp: Option<Stamp>) {
+        if self.stamp != stamp {
+            self.stamp = stamp;
+            self.decisions.clear();
+        }
+        self.decisions.insert(cap, allowed);
+    }
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -295,9 +332,9 @@ pub fn remembered(text: &str, exe: &Path, cap: Capability, decision: Decision) -
     out
 }
 
-fn remember(exe: &Path, cap: Capability, decision: Decision) {
-    let Some(path) = store_path() else { return };
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+fn remember_in(store: Option<&Path>, exe: &Path, cap: Capability, decision: Decision) {
+    let Some(path) = store else { return };
+    let text = std::fs::read_to_string(path).unwrap_or_default();
     if stored_in(&text, exe, cap) == Some(decision) {
         return;
     }
@@ -306,7 +343,7 @@ fn remember(exe: &Path, cap: Capability, decision: Decision) {
     }
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     if std::fs::write(&tmp, remembered(&text, exe, cap, decision)).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
+        let _ = std::fs::rename(&tmp, path);
     }
 }
 
@@ -438,19 +475,12 @@ fn is_service() -> bool {
     std::env::var_os("WINLUX_SERVICE_NAME").is_some_and(|n| !n.is_empty())
 }
 
-/// Ouvre la fenêtre de demande. `None` : impossible de demander.
-/// `ask`, en notant le fil qui pose la question, pour la viser (#1882).
-fn ask_logged(app: &App, cap: Capability) -> Option<Option<Decision>> {
-    crate::log_info!(
-        "permissions",
-        "question « {} » posée depuis le fil {:?}",
-        cap.key(),
-        std::thread::current().name().unwrap_or("?")
-    );
-    ask(app, cap)
-}
-
-fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
+/// Pose la question sans jamais attendre la réponse (#1890). `None` :
+/// impossible de demander (pas d'assistant ni d'écran). `Some(None)` : la
+/// fenêtre est ouverte à côté et l'appel en cours est refusé ; la fenêtre
+/// enregistre elle-même la réponse dans `permissions.tsv`, que l'appel
+/// suivant relit. `Some(Some(_))` : réponse connue sans fenêtre (service).
+fn ask(app: &App, cap: Capability, helper: Option<&Path>) -> Option<Option<Decision>> {
     // Un service sans fenêtre ne pose pas de question au démarrage de la
     // session (#1620) : refus, mémorisé pour qu'il apparaisse dans
     // Paramètres > Confidentialité et sécurité, où l'utilisateur peut
@@ -464,26 +494,37 @@ fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
         );
         return Some(Some(Decision::Deny));
     }
-    let helper = std::env::var_os("WINLUX_PERMISSION_HELPER")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/bin/winlux-permission"));
-    if !helper.is_file() || std::env::var_os("DISPLAY").is_none() {
-        return None;
-    }
-    let status = std::process::Command::new(&helper)
+    let helper = helper?;
+    crate::log_info!(
+        "permissions",
+        "question « {} » posée depuis le fil {:?}, sans attendre la réponse",
+        cap.key(),
+        std::thread::current().name().unwrap_or("?")
+    );
+    let mut child = std::process::Command::new(helper)
         .arg("ask")
         .arg(cap.key())
         .arg(&app.name)
         .arg(&app.exe)
         .stdin(std::process::Stdio::null())
-        .status()
+        .spawn()
         .ok()?;
-    Some(match status.code() {
-        Some(0) => Some(Decision::Allow),
-        Some(1) => Some(Decision::Deny),
-        // Fenêtre fermée ou délai dépassé : refus pour cette fois seulement.
-        _ => None,
-    })
+    // Le fil de l'application repart tout de suite ; un fil à part ramasse
+    // la fenêtre quand elle se ferme.
+    let _ = std::thread::Builder::new()
+        .name("winlux-permission".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    Some(None)
+}
+
+/// Assistant de demande utilisable : l'outil existe et un écran est là.
+fn helper() -> Option<PathBuf> {
+    let helper = std::env::var_os("WINLUX_PERMISSION_HELPER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/bin/winlux-permission"));
+    (helper.is_file() && std::env::var_os("DISPLAY").is_some()).then_some(helper)
 }
 
 /// Décision déjà mémorisée pour l'application lancée (sans rien demander).
@@ -502,14 +543,19 @@ pub fn not_refused(cap: Capability) -> bool {
     if globally_denied(cap) {
         return false;
     }
-    if let Some(&known) = lock(&SESSION).as_ref().and_then(|m| m.get(&cap)) {
+    let stamp = stamp_of(store_path().as_deref());
+    if let Some(known) = lock(&SESSION)
+        .get_or_insert_with(Session::default)
+        .known(cap, stamp)
+    {
         return known;
     }
     decided(cap) != Some(Decision::Deny)
 }
 
-/// L'application lancée a-t-elle droit à cette capacité ? Peut ouvrir la
-/// fenêtre de demande (le fil appelant attend la réponse).
+/// L'application lancée a-t-elle droit à cette capacité ? Ne fait jamais
+/// attendre l'application (#1890) : une capacité jamais décidée est refusée
+/// tout de suite, et la question est posée à côté.
 pub fn allowed(cap: Capability) -> bool {
     if globally_denied(cap) {
         return false;
@@ -523,42 +569,63 @@ pub fn allowed(cap: Capability) -> bool {
     if app.trusted {
         return implied;
     }
-    if let Some(&known) = lock(&SESSION).as_ref().and_then(|m| m.get(&cap)) {
+    allowed_for(
+        app,
+        cap,
+        store_path().as_deref(),
+        helper().as_deref(),
+        &SESSION,
+    )
+}
+
+/// `allowed`, avec le fichier, l'assistant et la mémoire donnés (testable).
+fn allowed_for(
+    app: &App,
+    cap: Capability,
+    store: Option<&Path>,
+    helper: Option<&Path>,
+    session: &Mutex<Option<Session>>,
+) -> bool {
+    let stamp = stamp_of(store);
+    let mut guard = lock(session);
+    let s = guard.get_or_insert_with(Session::default);
+    if let Some(known) = s.known(cap, stamp) {
         return known;
     }
-    let _asking = lock(&ASKING);
-    if let Some(&known) = lock(&SESSION).as_ref().and_then(|m| m.get(&cap)) {
-        return known;
-    }
-    let text = store_path()
+    let text = store
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
     let result = match stored_in(&text, &app.exe, cap) {
         Some(d) => d == Decision::Allow,
         None if !cap.asks() => {
-            remember(&app.exe, cap, Decision::Allow);
+            remember_in(store, &app.exe, cap, Decision::Allow);
             true
         }
-        None => match ask_logged(app, cap) {
-            Some(Some(d)) => {
-                remember(&app.exe, cap, d);
-                d == Decision::Allow
+        // Une seule question par capacité et par exécution : refusé jusqu'à
+        // la réponse, que la relecture du fichier fera voir.
+        None if s.asked.contains(&cap) => false,
+        None => {
+            s.asked.insert(cap);
+            match ask(app, cap, helper) {
+                Some(Some(d)) => {
+                    remember_in(store, &app.exe, cap, d);
+                    d == Decision::Allow
+                }
+                Some(None) => false,
+                // Impossible de demander (pas d'assistant ni d'écran) : ce
+                // qui touche à la vie privée est refusé plutôt qu'accordé en
+                // silence.
+                None => !matches!(
+                    cap,
+                    Capability::Camera
+                        | Capability::Microphone
+                        | Capability::Screen
+                        | Capability::Input
+                ),
             }
-            Some(None) => false,
-            // Impossible de demander (pas d'assistant ni d'écran) : ce qui
-            // touche à la vie privée est refusé plutôt qu'accordé en silence.
-            None => !matches!(
-                cap,
-                Capability::Camera
-                    | Capability::Microphone
-                    | Capability::Screen
-                    | Capability::Input
-            ),
-        },
+        }
     };
-    lock(&SESSION)
-        .get_or_insert_with(HashMap::new)
-        .insert(cap, result);
+    s.remember(cap, result, stamp_of(store));
     result
 }
 
@@ -785,7 +852,7 @@ mod tests {
             Capability::Camera,
             Capability::Microphone,
         ] {
-            assert_eq!(ask(&app, cap), Some(Some(Decision::Deny)));
+            assert_eq!(ask(&app, cap, None), Some(Some(Decision::Deny)));
         }
         std::env::set_var("WINLUX_SERVICE_NAME", "");
         assert!(!is_service());
@@ -793,6 +860,176 @@ mod tests {
             Some(v) => std::env::set_var("WINLUX_SERVICE_NAME", v),
             None => std::env::remove_var("WINLUX_SERVICE_NAME"),
         }
+    }
+
+    /// Dossier temporaire propre à un test, effacé à la fin.
+    struct DossierDeTest(PathBuf);
+
+    impl DossierDeTest {
+        fn new() -> Self {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("winlux-permissions-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            DossierDeTest(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for DossierDeTest {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn appli_de_test(dir: &Path) -> App {
+        App {
+            exe: dir.join("appli.exe"),
+            name: "appli.exe".into(),
+            dir: dir.to_path_buf(),
+            personal: Vec::new(),
+            granted: Vec::new(),
+            trusted: false,
+        }
+    }
+
+    /// Écrit le fichier des choix comme le font le runtime et Paramètres :
+    /// fichier temporaire, puis renommage.
+    fn ecrire_choix(store: &Path, text: &str) {
+        let tmp = store.with_extension("tmp");
+        std::fs::write(&tmp, text).unwrap();
+        std::fs::rename(&tmp, store).unwrap();
+    }
+
+    fn assistant(dir: &Path, corps: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let helper = dir.join("winlux-permission");
+        std::fs::write(&helper, format!("#!/bin/sh\n{corps}\n")).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        helper
+    }
+
+    #[test]
+    fn la_question_ne_fait_pas_attendre_1890() {
+        let dir = DossierDeTest::new();
+        let app = appli_de_test(dir.path());
+        let store = dir.path().join("permissions.tsv");
+        let compte = dir.path().join("questions");
+        // Une personne qui met 5 s à répondre.
+        let helper = assistant(
+            dir.path(),
+            &format!("echo \"$2\" >> '{}'\nsleep 5", compte.display()),
+        );
+        let session = Mutex::new(None);
+        let debut = std::time::Instant::now();
+        let premier = allowed_for(
+            &app,
+            Capability::Microphone,
+            Some(&store),
+            Some(&helper),
+            &session,
+        );
+        let second = allowed_for(
+            &app,
+            Capability::Microphone,
+            Some(&store),
+            Some(&helper),
+            &session,
+        );
+        let duree = debut.elapsed();
+        assert!(
+            !premier && !second,
+            "refusé tout de suite tant que rien n'est décidé"
+        );
+        assert!(
+            duree < std::time::Duration::from_millis(500),
+            "l'application a attendu la fenêtre : {duree:?}"
+        );
+        // Une seule fenêtre, même si l'application redemande.
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !compte.exists() && std::time::Instant::now() < limite {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let questions = std::fs::read_to_string(&compte).unwrap_or_default();
+        assert_eq!(
+            questions, "microphone\n",
+            "fenêtres ouvertes : {questions:?}"
+        );
+    }
+
+    #[test]
+    fn autorise_dans_la_fenetre_vaut_pour_l_appel_suivant_1890() {
+        let dir = DossierDeTest::new();
+        let app = appli_de_test(dir.path());
+        let store = dir.path().join("permissions.tsv");
+        // La fenêtre enregistre elle-même « Autoriser », comme winlux-permission.
+        let helper = assistant(
+            dir.path(),
+            &format!(
+                "printf 'camera\\tallow\\t%s\\n' \"$4\" > '{0}.t' && mv '{0}.t' '{0}'",
+                store.display()
+            ),
+        );
+        let session = Mutex::new(None);
+        assert!(!allowed_for(
+            &app,
+            Capability::Camera,
+            Some(&store),
+            Some(&helper),
+            &session
+        ));
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !store.exists() && std::time::Instant::now() < limite {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(allowed_for(
+            &app,
+            Capability::Camera,
+            Some(&store),
+            Some(&helper),
+            &session
+        ));
+    }
+
+    #[test]
+    fn blocage_dans_parametres_sans_relancer_1890() {
+        let dir = DossierDeTest::new();
+        let app = appli_de_test(dir.path());
+        let store = dir.path().join("permissions.tsv");
+        let exe = app.exe.display().to_string();
+        ecrire_choix(&store, &format!("microphone\tallow\t{exe}\n"));
+        let session = Mutex::new(None);
+        assert!(allowed_for(
+            &app,
+            Capability::Microphone,
+            Some(&store),
+            None,
+            &session
+        ));
+        // Paramètres > Confidentialité : micro coupé pendant l'enregistrement.
+        ecrire_choix(&store, &format!("microphone\tdeny\t{exe}\n"));
+        assert!(!allowed_for(
+            &app,
+            Capability::Microphone,
+            Some(&store),
+            None,
+            &session
+        ));
+        // Et rendu.
+        ecrire_choix(&store, &format!("microphone\tallow\t{exe}\n"));
+        assert!(allowed_for(
+            &app,
+            Capability::Microphone,
+            Some(&store),
+            None,
+            &session
+        ));
     }
 
     /// Conversion de test : `/c/…` est `C:\…`, le reste est `Z:\…`.
