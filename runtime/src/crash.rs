@@ -687,6 +687,18 @@ unsafe fn write_hex(mut n: usize) {
 /// même format de journal que les fautes, plus un fichier `crash-offer` que
 /// le bureau surveille pour proposer le signalement sans écran bleu.
 pub fn record_failure(exception: &str, detail: &str) {
+    write_failure(exception, 0, detail, true);
+}
+
+/// Exception Windows que ni le programme ni son filtre n'ont prise en charge
+/// (#3183) : même entrée `[CRASH]` avec son vrai code, écrite dans tous les
+/// cas. `offer` : le fichier `crash-offer` n'est déposé que si un lanceur
+/// (winlux-open) attend ce plantage ; sinon la boîte locale le signale déjà.
+pub fn record_unhandled_exception(code: u32, detail: &str, offer: bool) {
+    write_failure("UNHANDLED_EXCEPTION", code, detail, offer);
+}
+
+fn write_failure(exception: &str, code: u32, detail: &str, offer: bool) {
     use std::io::Write;
     let Some(dir) = crate::journal::dir() else {
         return;
@@ -703,7 +715,7 @@ pub fn record_failure(exception: &str, detail: &str) {
         exe
     };
     let mut entry = format!(
-        "[CRASH] ts={ts} sig=0 stop=APPLICATION_FAILURE exception={exception} code=0x0 exe={exe} module=inconnu pid={}\n",
+        "[CRASH] ts={ts} sig=0 stop=APPLICATION_FAILURE exception={exception} code=0x{code:X} exe={exe} module=inconnu pid={}\n",
         std::process::id()
     );
     if !path.is_empty() {
@@ -724,7 +736,128 @@ pub fn record_failure(exception: &str, detail: &str) {
     }
     // Proposition de signalement : dans le dossier du compte, pour que le
     // bureau d'un autre compte ne la voie pas (#633).
-    let _ = std::fs::write(dir.join("crash-offer"), format!("{ts}\n{exe}\n"));
+    if offer {
+        let _ = std::fs::write(dir.join("crash-offer"), format!("{ts}\n{exe}\n"));
+    }
+}
+
+/// SetErrorMode : pas de boîte « Application Error » (Microsoft Learn,
+/// SetErrorMode et UnhandledExceptionFilter).
+pub const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
+/// WerSetFlags : pas d'interface de rapport d'erreurs. Valeur lue dans
+/// windows-rs (MIT, `Win32::System::ErrorReporting`) ; le werapi.h de
+/// mingw-w64 ne la définit pas.
+pub const WER_FAULT_REPORTING_NO_UI: u32 = 0x0020;
+
+/// Faut-il montrer la boîte de plantage locale (#3183) ? Quatre conditions,
+/// toutes nécessaires :
+/// - `marked` faux : aucun lanceur (winlux-open) n'attend ce plantage pour
+///   l'afficher lui-même ;
+/// - un affichage existe (sans DISPLAY ni WAYLAND_DISPLAY : silence total,
+///   pour les passes automatiques) ;
+/// - le programme n'a pas demandé SEM_NOGPFAULTERRORBOX ;
+/// - ni WER_FAULT_REPORTING_NO_UI par WerSetFlags.
+pub fn crash_box_wanted(marked: bool, display: bool, error_mode: u32, wer_flags: u32) -> bool {
+    !marked
+        && display
+        && error_mode & SEM_NOGPFAULTERRORBOX == 0
+        && wer_flags & WER_FAULT_REPORTING_NO_UI == 0
+}
+
+/// Texte de la boîte : ce qui a planté et où est le journal, rien de plus.
+pub fn crash_box_text(
+    lang: &str,
+    exe: &str,
+    code: u32,
+    log: Option<&str>,
+) -> (&'static str, String, &'static str) {
+    let lang = lang.get(..2).unwrap_or("fr");
+    let (title, head, rest, nolog, button) = match lang {
+        "en" => (
+            "Program stopped",
+            "“{exe}” has stopped working.",
+            "Unhandled exception 0x{code}. Details are in {log}.",
+            "Unhandled exception 0x{code}. The details could not be written to the log.",
+            "Close",
+        ),
+        "de" => (
+            "Programm beendet",
+            "„{exe}“ funktioniert nicht mehr.",
+            "Unbehandelte Ausnahme 0x{code}. Details stehen in {log}.",
+            "Unbehandelte Ausnahme 0x{code}. Die Details konnten nicht protokolliert werden.",
+            "Schließen",
+        ),
+        "es" => (
+            "Programa detenido",
+            "«{exe}» ha dejado de funcionar.",
+            "Excepción no controlada 0x{code}. Los detalles están en {log}.",
+            "Excepción no controlada 0x{code}. No se pudieron guardar los detalles en el registro.",
+            "Cerrar",
+        ),
+        _ => (
+            "Programme arrêté",
+            "« {exe} » a cessé de fonctionner.",
+            "Exception 0x{code} non gérée. Le détail est dans {log}.",
+            "Exception 0x{code} non gérée. Le détail n’a pas pu être écrit dans le journal.",
+            "Fermer",
+        ),
+    };
+    let code = format!("{code:08X}");
+    let rest = match log {
+        Some(log) => rest.replace("{log}", log),
+        None => nolog.to_string(),
+    };
+    let text = format!(
+        "{}\n\n{}",
+        head.replace("{exe}", exe),
+        rest.replace("{code}", &code)
+    );
+    (title, text, button)
+}
+
+/// Boîte GTK d'erreur : titre, texte (tête, ligne vide, suite) et bouton en
+/// arguments.
+const CRASH_DIALOG: &str = "import sys\nimport gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\n\
+title, text, button = sys.argv[1], sys.argv[2], sys.argv[3]\nhead, _, rest = text.partition('\\n\\n')\n\
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.NONE, text=head)\n\
+d.add_button(button, Gtk.ResponseType.OK)\nd.set_default_response(Gtk.ResponseType.OK)\n\
+d.set_title(title)\nd.format_secondary_text(rest)\nd.set_keep_above(True)\nd.run()\n";
+
+/// Nom affiché du programme planté.
+pub fn crash_exe_display() -> String {
+    let exe = unsafe { String::from_utf8_lossy(crash_exe_name()).into_owned() };
+    if exe.is_empty() {
+        "unknown".into()
+    } else {
+        exe
+    }
+}
+
+/// Lance la boîte sans l'attendre : le processus planté sort aussitôt avec
+/// son code, la boîte vit à part (son propre groupe, aucun descripteur du
+/// programme). Aucun envoi, aucun réseau : python3 n'affiche que le texte.
+pub fn show_crash_box(code: u32) {
+    use std::os::unix::process::CommandExt;
+    let lang = crate::permissions::interface_lang();
+    let log = crate::journal::dir().map(|d| d.join("crash.log").display().to_string());
+    let (title, text, button) = crash_box_text(&lang, &crash_exe_display(), code, log.as_deref());
+    let mut cmd = std::process::Command::new("python3");
+    cmd.args(["-I", "-c", CRASH_DIALOG, title, &text, button])
+        .env("NO_AT_BRIDGE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    // SAFETY: close_range est un appel système, sûr entre fork et exec. Les
+    // tubes du programme ne doivent pas rester ouverts dans la boîte (un
+    // parent qui lit jusqu'à la fin attendrait sa fermeture).
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32);
+            Ok(())
+        });
+    }
+    let _ = cmd.spawn();
 }
 
 /// Limites qui font refuser la création d'un thread (EAGAIN) : threads du

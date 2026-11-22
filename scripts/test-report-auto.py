@@ -86,6 +86,16 @@ ok(item["signature"].startswith("wlx-") and f"`{item['signature']}`" in item["bo
 ok("alice" not in item["body"] and "Téléchargements" not in item["body"], "rapport en file anonymisé")
 ok("urgence:2-confort" in item["labels"] and "Rapport envoyé automatiquement" in item["body"],
    "étiquette d'urgence et mention de l'envoi automatique")
+# #3183 : une exception logicielle non gérée d'un programme Windows ne part
+# jamais d'elle-même, même envoi automatique activé.
+UNHANDLED = """[CRASH] ts=150 sig=0 stop=APPLICATION_FAILURE exception=UNHANDLED_EXCEPTION code=0xC06D007F exe=setup.exe module=inconnu pid=50
+  path=/home/alice/Téléchargements/setup.exe
+"""
+(tmp / "journal/crash.log").write_text(LOG + UNHANDLED)
+ok(r["auto_enabled"]() and r["collect"]() == 0 and r["queue_size"]() == 2,
+   "exception logicielle non gérée jamais mise en file d'envoi automatique (#3183)")
+ok(r["last_crash"](0).get("exception") == "UNHANDLED_EXCEPTION",
+   "elle reste proposée par « Signaler un problème », envoyée seulement sur un clic (#3183)")
 (tmp / "journal/crash.log").unlink()  # arrêt : /run est vidé
 ok(r["queue_size"]() == 2, "la file survit à l'arrêt (crash.log perdu)")
 

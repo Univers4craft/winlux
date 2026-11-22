@@ -9192,6 +9192,12 @@ pub fn crash_mark_file_init() {
     }
 }
 
+/// Vrai quand un lanceur (winlux-open) attend la marque de plantage et
+/// l'affichera lui-même (#3183).
+pub fn crash_marked() -> bool {
+    CRASH_MARK_FILE.get().is_some()
+}
+
 /// Note que le processus finit sur une exception non gérée (faute matérielle
 /// ou logicielle) ; sûr dans un gestionnaire de signal (open/write).
 pub fn record_crash() {

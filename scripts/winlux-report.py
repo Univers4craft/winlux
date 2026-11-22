@@ -2199,6 +2199,14 @@ def urgency(kind):
     return "urgence:1-quotidien" if kind == "system" else "urgence:2-confort"
 
 
+def auto_sendable(crash):
+    """Une exception logicielle non gérée d'un programme Windows (#3183) ne
+    part jamais d'elle-même : l'accord donné à l'installation couvre les
+    fautes, pas ce que font les logiciels que la personne lance. Elle reste
+    au journal et dans « Signaler un problème », envoyée seulement sur un clic."""
+    return crash.get("exception") != "UNHANDLED_EXCEPTION"
+
+
 def collect():
     """Met en file les plantages pas encore vus ; aucun accès réseau."""
     with Lock("collect.lock"):
@@ -2208,6 +2216,11 @@ def collect():
         for crash in crashes():
             key = f"crash-{crash.get('ts')}-{crash.get('pid')}-{crash.get('exe', '')}"
             if key in known:
+                continue
+            if not auto_sendable(crash):
+                auto_log(f"non mis en file : exception logicielle non gérée ({key})")
+                seen.append(key)
+                known.add(key)
                 continue
             try:
                 enqueue(Report(crash, language="fr"), key)
