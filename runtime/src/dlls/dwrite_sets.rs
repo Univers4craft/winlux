@@ -331,7 +331,7 @@ fn load(f: &FaceInfo) -> Option<Arc<sfnt::Font>> {
     sfnt::load(&f.path, f.index)
 }
 
-unsafe fn put_face(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn put_face(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -351,7 +351,7 @@ unsafe fn put_set(faces: Vec<FaceInfo>, out: *mut *mut c_void) -> i32 {
     put(out, Com::create(SET_VT.ptr(), faces))
 }
 
-unsafe fn put_ref(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
+pub(super) unsafe fn put_ref(f: &FaceInfo, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
