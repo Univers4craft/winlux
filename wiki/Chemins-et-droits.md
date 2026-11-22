@@ -55,7 +55,7 @@ Quand un programme le demande (manifeste `requireAdministrator`, `highestAvailab
 
 ## Autorisations des applications
 
-Comme sous Windows 11, un `.exe` demande la première fois qu'il veut accéder à quelque chose de sensible. Le choix est retenu par programme (`~/.config/winlux/permissions.tsv`) et se change dans **Paramètres › Confidentialité et sécurité**.
+Un `.exe` demande la première fois qu'il veut accéder à quelque chose de sensible. Le choix est retenu par programme (`~/.config/winlux/permissions.tsv`) et se change dans **Paramètres › Confidentialité et sécurité**.
 
 | Autorisation | Où c'est contrôlé | Demandée ? |
 |---|---|---|
@@ -76,7 +76,7 @@ Les comptes sont **locaux uniquement**. Le compte personnel est créé par l'ins
 
 ## Ce qui reste à faire
 
-- Faire tourner le bureau de l'ISO en utilisateur non privilégié, avec une autorisation ciblée pour les actions système (#13).
+- Les fichiers enregistrés par une application Windows sont créés en 0600 au lieu de suivre le masque de l'utilisateur (#2862).
 - Partage d'objets nommés et de fichiers entre processus invités, héritage des handles.
 
 Voir aussi : [Registre Windows](Registre-Windows) · [Réseau et disques](Reseau-et-disques)

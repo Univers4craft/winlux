@@ -5,7 +5,7 @@ description: Holen Sie sich das Installationsabbild der neuesten Version und den
 
 {{download}}
 
-Die Dateien kommen direkt von der Seite der veröffentlichten Versionen des Projekts auf GitHub. Das Abbild heißt etwa `winlux-live-v0.2.21.iso`; es ist rund 1,3 GB groß.
+Die Dateien kommen direkt von der Seite der veröffentlichten Versionen des Projekts auf GitHub. Das Abbild heißt etwa `winlux-live-v0.2.21.iso`; es ist rund 1,4 GB groß.
 
 ## Was Sie brauchen
 

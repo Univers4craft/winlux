@@ -5,7 +5,7 @@ description: Obtenga la imagen de instalación de la última versión y el cread
 
 {{download}}
 
-Los archivos vienen directamente de la página de versiones publicadas del proyecto en GitHub. La imagen se llama, por ejemplo, `winlux-live-v0.2.21.iso`; ocupa unos 1,3 GB.
+Los archivos vienen directamente de la página de versiones publicadas del proyecto en GitHub. La imagen se llama, por ejemplo, `winlux-live-v0.2.21.iso`; ocupa unos 1,4 GB.
 
 ## Lo que necesita
 

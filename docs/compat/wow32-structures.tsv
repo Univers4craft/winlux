@@ -264,6 +264,10 @@ threadpool.rs	Instance	a-verifier
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
+url_stream.rs	Binding	interne	IBinding du runtime passé à OnStartBinding ; x64 seulement, URLOpenStream refuse un rappel x86 (#2869)
+url_stream.rs	FormatEtc	interne	FORMATETC passé à OnDataAvailable ; x64 seulement, URLOpenStream refuse un rappel x86 (#2869)
+url_stream.rs	Rappel	interne	IBindStatusCallback des tests (#2869)
+url_stream.rs	StgMedium	interne	STGMEDIUM passé à OnDataAvailable ; x64 seulement, URLOpenStream refuse un rappel x86 (#2869)
 user32.rs	CbtCreateWnd	interne	HCBT_CREATEWND (#1654), x64 seulement : les crochets WH_CBT x86 restent inertes (wow32 inert_hook)
 user32.rs	NcCalcSizeParams	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)
 user32.rs	WindowPos	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)

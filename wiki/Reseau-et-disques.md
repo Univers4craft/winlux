@@ -14,8 +14,8 @@ Cette page couvre tout ce qui relie Winlux au reste du monde : le réseau, le pa
 
 Le pare-feu Winlux est maison, au-dessus de **nftables** (`winlux --firewall`, application « Pare-feu Winlux » ou `wf.msc`). Référence : [docs/PLANIFICATEUR_PAREFEU.md](https://github.com/Univers4craft/winlux/blob/master/docs/PLANIFICATEUR_PAREFEU.md).
 
-- **Profils** Public, Privé et Domaine, comme sous Windows ; par défaut, l'entrant est bloqué sur un réseau public.
-- **Règles** par port, protocole, programme et profil (`/etc/winlux/firewall.conf`). Les règles de blocage passent avant les autorisations, comme sous Windows.
+- **Profils** Public, Privé et Domaine, ceux que les programmes Windows connaissent ; par défaut, l'entrant est bloqué sur un réseau public.
+- **Règles** par port, protocole, programme et profil (`/etc/winlux/firewall.conf`). Les règles de blocage passent avant les autorisations.
 - **Règles par application** : en entrée, le service ouvre exactement les ports où le programme écoute ; en sortie, les processus du programme sont placés dans un cgroup filtré.
 - **Alerte de sécurité** : quand une application commence à écouter sans règle, le bureau affiche la boîte « Autoriser l'accès / Bloquer », qui crée la règle pour le profil du réseau actuel.
 - Les paquets refusés sont journalisés (`/var/lib/winlux/firewall/blocked.log`).
@@ -66,7 +66,7 @@ Le service `winlux --volumes daemon` monte automatiquement, avec une lettre de l
 | BitLocker | — | jamais : un message explique pourquoi |
 
 - **Même volume, même lettre** (mémorisée par numéro de série).
-- Partitions EFI, réservées, de récupération, swap ou cachées sont ignorées, comme sous Windows.
+- Partitions EFI, réservées, de récupération, swap ou cachées sont ignorées : elles ne reçoivent pas de lettre.
 - **Windows en veille prolongée ou en démarrage rapide** (`hiberfil.sys`) : le volume reste en lecture seule et l'utilisateur est invité à arrêter Windows en maintenant Maj, pour ne pas perdre de données.
 - **Volume « sale »** : lecture seule, et la Gestion des disques propose un bouton **Réparer**.
 - Commandes : `winlux --volumes list`, `scan`, `eject E:`, `repair E:`. `/etc/winlux/volumes.conf` permet de couper le montage automatique.

@@ -479,7 +479,8 @@ pub fn load_bitmap_resource(hmod: usize, name: usize) -> Option<Image> {
     )
 }
 
-/// Icône de repli pour les IDI_* système : une fenêtre stylisée.
+/// Icône de repli pour IDI_APPLICATION et les autres ressources système
+/// sans dessin propre : une fenêtre stylisée.
 fn system_icon(want: usize) -> Image {
     let mut img = Image::blank(want, want);
     let s = want as f32 / 32.0;
@@ -501,6 +502,149 @@ fn system_icon(want: usize) -> Image {
         }
     }
     img
+}
+
+/// Identifiants IDI_* de winuser.h (documentation publique de LoadIcon).
+const IDI_HAND: usize = 32513;
+const IDI_QUESTION: usize = 32514;
+const IDI_EXCLAMATION: usize = 32515;
+const IDI_ASTERISK: usize = 32516;
+const IDI_SHIELD: usize = 32518;
+
+/// Pixel 0xAABBGGRR (ordre des icônes décodées) d'une couleur #RRGGBB.
+const fn bgr(rgb: u32) -> u32 {
+    0xFF00_0000 | ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF)
+}
+
+/// Distance d'un point au segment [a, b].
+fn segment_distance(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
+}
+
+/// Dessin d'une icône système en repère 32 × 32 : pour un point, la couleur
+/// du fond de forme et celle du signe, ou rien hors de la forme.
+type Shape = fn(f32, f32) -> Option<u32>;
+
+fn disc(x: f32, y: f32) -> bool {
+    (x - 16.0).powi(2) + (y - 16.0).powi(2) <= 14.5 * 14.5
+}
+
+/// IDI_ERROR : disque rouge, croix blanche.
+fn error_shape(x: f32, y: f32) -> Option<u32> {
+    if !disc(x, y) {
+        return None;
+    }
+    let cross = segment_distance((x, y), (11.0, 11.0), (21.0, 21.0)) <= 1.4
+        || segment_distance((x, y), (21.0, 11.0), (11.0, 21.0)) <= 1.4;
+    Some(if cross { bgr(0xFFFFFF) } else { bgr(0xC42B1C) })
+}
+
+/// IDI_WARNING : triangle jaune, point d'exclamation foncé.
+fn warning_shape(x: f32, y: f32) -> Option<u32> {
+    // Sommet (16, 3), base de (2, 28) à (30, 28).
+    if !(3.0..=28.0).contains(&y) || (x - 16.0).abs() > (y - 3.0) * 14.0 / 25.0 {
+        return None;
+    }
+    let mark = segment_distance((x, y), (16.0, 11.0), (16.0, 19.5)) <= 1.5
+        || (x - 16.0).powi(2) + (y - 23.5).powi(2) <= 1.7 * 1.7;
+    Some(if mark { bgr(0x1F1F1F) } else { bgr(0xF2C200) })
+}
+
+/// IDI_INFORMATION : disque violet Prisme, « i » blanc.
+fn information_shape(x: f32, y: f32) -> Option<u32> {
+    if !disc(x, y) {
+        return None;
+    }
+    let mark = segment_distance((x, y), (16.0, 14.0), (16.0, 23.0)) <= 1.5
+        || (x - 16.0).powi(2) + (y - 9.5).powi(2) <= 1.8 * 1.8;
+    Some(if mark { bgr(0xFFFFFF) } else { bgr(0x6A3DF0) })
+}
+
+/// IDI_QUESTION : disque violet Prisme, « ? » blanc.
+fn question_shape(x: f32, y: f32) -> Option<u32> {
+    if !disc(x, y) {
+        return None;
+    }
+    // Crochet : arc de cercle de rayon 4,5 autour de (16, 12), du côté
+    // gauche jusqu'au bas droit, puis la tige et le point.
+    let (dx, dy) = (x - 16.0, y - 12.0);
+    let angle = dy.atan2(dx).to_degrees(); // 0 à droite, 90 en bas
+    let on_arc =
+        ((dx * dx + dy * dy).sqrt() - 4.5).abs() <= 1.4 && !(60.0..=180.0).contains(&angle);
+    let mark = on_arc
+        || segment_distance((x, y), (18.2, 16.0), (16.0, 18.0)) <= 1.4
+        || segment_distance((x, y), (16.0, 18.0), (16.0, 19.5)) <= 1.4
+        || (x - 16.0).powi(2) + (y - 23.8).powi(2) <= 1.7 * 1.7;
+    Some(if mark { bgr(0xFFFFFF) } else { bgr(0x6A3DF0) })
+}
+
+/// IDI_SHIELD : écusson aux deux teintes bleues du Prisme.
+fn shield_shape(x: f32, y: f32) -> Option<u32> {
+    if !(3.0..=29.5).contains(&y) {
+        return None;
+    }
+    let half = if y <= 14.0 {
+        11.5
+    } else {
+        11.5 * (1.0 - ((y - 14.0) / 15.5).powi(2)).max(0.0).sqrt()
+    };
+    if (x - 16.0).abs() > half {
+        return None;
+    }
+    Some(if x < 16.0 {
+        bgr(0x22B8F0)
+    } else {
+        bgr(0x125CD6)
+    })
+}
+
+/// Rend une forme à `want` pixels, lissée par sur-échantillonnage 4 × 4.
+fn render_shape(want: usize, shape: Shape) -> Image {
+    let mut img = Image::blank(want, want);
+    let s = 32.0 / want as f32;
+    for y in 0..want {
+        for x in 0..want {
+            let (mut n, mut r, mut g, mut b) = (0u32, 0u32, 0u32, 0u32);
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let fx = (x as f32 + (sx as f32 + 0.5) / 4.0) * s;
+                    let fy = (y as f32 + (sy as f32 + 0.5) / 4.0) * s;
+                    if let Some(c) = shape(fx, fy) {
+                        n += 1;
+                        r += c & 0xFF;
+                        g += (c >> 8) & 0xFF;
+                        b += (c >> 16) & 0xFF;
+                    }
+                }
+            }
+            if n > 0 {
+                let a = n * 255 / 16;
+                img.px[y * want + x] = (a << 24) | ((b / n) << 16) | ((g / n) << 8) | (r / n);
+            }
+        }
+    }
+    img
+}
+
+/// Icône système d'identifiant `id` (LoadIcon(NULL, IDI_*)) : chaque signe
+/// est reconnaissable (#2855) ; les autres identifiants gardent la fenêtre.
+fn system_icon_for(id: usize, want: usize) -> Image {
+    let shape: Shape = match id {
+        IDI_HAND => error_shape,
+        IDI_QUESTION => question_shape,
+        IDI_EXCLAMATION => warning_shape,
+        IDI_ASTERISK => information_shape,
+        IDI_SHIELD => shield_shape,
+        _ => return system_icon(want),
+    };
+    render_shape(want, shape)
 }
 
 unsafe fn wide_name(name: usize, wide: bool) -> (usize, Option<Vec<u16>>) {
@@ -563,7 +707,7 @@ unsafe fn load_image(
             let (w, h) = want(false);
             match load_icon_resource(inst, name, w) {
                 Some(img) => new_icon(fit(img, cx, cy, w, h)),
-                None if inst == 0 && name < 0x10000 => new_icon(system_icon(w)),
+                None if inst == 0 && name < 0x10000 => new_icon(system_icon_for(name, w)),
                 None => {
                     crate::process::set_last_error(1813);
                     0
@@ -1705,6 +1849,45 @@ pub fn comctl32_overrides() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2855 : LoadIcon(NULL, IDI_*) rend un signe distinct par identifiant,
+    /// aux couleurs attendues, à 16 comme à 32 pixels.
+    #[test]
+    fn icones_systeme_distinctes_2855() {
+        let ids = [32512usize, 32513, 32514, 32515, 32516, 32518];
+        for want in [16usize, 32] {
+            let imgs: Vec<Image> = ids.iter().map(|&id| system_icon_for(id, want)).collect();
+            for i in 0..imgs.len() {
+                assert_eq!((imgs[i].w, imgs[i].h), (want, want));
+                for j in i + 1..imgs.len() {
+                    assert_ne!(
+                        imgs[i].px, imgs[j].px,
+                        "IDI {} et {} identiques",
+                        ids[i], ids[j]
+                    );
+                }
+            }
+        }
+        let at = |img: &Image, x: usize, y: usize| img.px[y * img.w + x];
+        let err = system_icon_for(32513, 32);
+        assert_eq!(at(&err, 16, 16), bgr(0xFFFFFF)); // croix blanche au centre
+        assert_eq!(at(&err, 16, 5), bgr(0xC42B1C)); // disque rouge
+        assert_eq!(at(&err, 0, 0) >> 24, 0); // coin transparent
+        let warn = system_icon_for(32515, 32);
+        assert_eq!(at(&warn, 16, 14), bgr(0x1F1F1F)); // point d'exclamation
+        assert_eq!(at(&warn, 12, 22), bgr(0xF2C200)); // triangle jaune
+        let info = system_icon_for(32516, 32);
+        assert_eq!(at(&info, 16, 18), bgr(0xFFFFFF));
+        assert_eq!(at(&info, 8, 16), bgr(0x6A3DF0));
+    }
+
+    /// LoadIconW(NULL, IDI_ERROR) passe par ce dessin.
+    #[test]
+    fn load_icon_idi_error_rend_le_signe_d_erreur_2855() {
+        let h = unsafe { load_icon_w(0, 32513 as *const u16) };
+        let img = icon_image(h).expect("icône");
+        assert_eq!(img.px, system_icon_for(32513, img.w).px);
+    }
 
     /// Flux « IL » tel qu'un programme Delphi l'enregistre (#1165) : bfSize
     /// des deux BMP ne compte que les en-têtes, drapeaux 0x10FF, pixels

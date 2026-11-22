@@ -314,9 +314,45 @@ def snap(window, zone, area=None):
     _run(["wmctrl", "-i", "-r", window, "-b", "remove,maximized_vert,maximized_horz"])
     x, y, w, h = client_geometry(zone_rect(zone, area), frame_extents(window))
     _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
+    keep_on_screen(window, area, zone_rect(zone, area))
     # Changer de case quitte le groupe d'ancrage ; la même case (groupe restauré) le garde.
     if state != zone: leave_group(window)
     set_prop(window, "_WINLUX_SNAP", zone)
+
+
+def inside_position(frame, area):
+    """(x, y) du cadre ramené dans la zone de travail : une fenêtre dont la
+    taille minimale dépasse sa case (Paramètres, 720 px, dans une moitié de
+    1366 px) garde ses boutons à l'écran au lieu de déborder (#2873)."""
+    fx, fy, fw, fh = frame
+    ax, ay, aw, ah = area
+    x = max(ax, min(fx, ax + aw - fw))
+    y = max(ay, min(fy, ay + ah - fh))
+    return x, y
+
+
+def keep_on_screen(window, area, rect):
+    """Après un ancrage, recale la fenêtre qu'openbox a gardée plus grande que
+    sa case rect : on attend que sa taille ne bouge plus, sinon l'ancienne
+    géométrie, pas encore appliquée, serait recalée à tort. Seule une fenêtre
+    dont la taille minimale (WM_NORMAL_HINTS) dépasse la case est concernée."""
+    import time
+    hints = _run(["xprop", "-id", str(window), "WM_NORMAL_HINTS"])
+    minimum = re.search(r"minimum size:\s*(\d+) by (\d+)", hints)
+    if not minimum: return
+    left, right, top, bottom = frame_extents(window)
+    if int(minimum.group(1)) + left + right <= rect[2] and int(minimum.group(2)) + top + bottom <= rect[3]: return
+    last = None
+    for _ in range(20):
+        time.sleep(0.05)
+        frame = window_geometry(window)
+        if frame is None: return
+        if frame == last: break
+        last = frame
+    if last is None or (last[2] <= rect[2] + 4 and last[3] <= rect[3] + 4): return
+    x, y = inside_position(last, area)
+    if (x, y) != last[:2]:
+        _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},-1,-1"])
 
 
 def leave_snap(window):

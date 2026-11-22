@@ -5,7 +5,7 @@ description: Get the installation image of the latest version and the USB drive 
 
 {{download}}
 
-The files come straight from the project's releases page on GitHub. The image is named like `winlux-live-v0.2.21.iso`; it weighs about 1.3 GB.
+The files come straight from the project's releases page on GitHub. The image is named like `winlux-live-v0.2.21.iso`; it weighs about 1.4 GB.
 
 ## What you need
 

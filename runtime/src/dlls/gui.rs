@@ -109,7 +109,11 @@ pub mod theme {
             4 => BG_SURFACE,   // COLOR_MENU
             5 => BG_SURFACE,   // COLOR_WINDOW
             6 => BG_DEEP,      // COLOR_WINDOWFRAME
-            7 | 8 | 9 | 14 | 18 | 23 => TEXT,
+            7 | 8 | 9 | 18 | 23 => TEXT,
+            // Texte d'un élément sélectionné, peint sur COLOR_HIGHLIGHT et
+            // COLOR_MENUHILIGHT (violet Prisme) : blanc, sinon illisible
+            // (#2853, Paint.NET : calques et historique).
+            14 => 0x00FF_FFFF,      // COLOR_HIGHLIGHTTEXT
             10 => ACCENT,           // COLOR_ACTIVEBORDER
             11 => BG_ELEVATED,      // COLOR_INACTIVEBORDER
             12 => BG_DEEP,          // COLOR_APPWORKSPACE
@@ -122,7 +126,7 @@ pub mod theme {
             26 => ACCENT_VIOLET,    // COLOR_HOTLIGHT
             27 => GRADIENT_BOTTOM,  // COLOR_GRADIENTACTIVECAPTION
             28 => BG_ELEVATED,      // COLOR_GRADIENTINACTIVECAPTION
-            29 => HOVER,            // COLOR_MENUHILIGHT
+            29 => ACCENT,           // COLOR_MENUHILIGHT, sous COLOR_HIGHLIGHTTEXT (#2853)
             30 => BG_SURFACE,       // COLOR_MENUBAR
             _ => return None,
         })
@@ -319,6 +323,15 @@ impl Window {
             self.rect.width(),
             (self.rect.height() - self.menu_bar).max(0),
         )
+    }
+
+    /// Zone client vide (largeur ou hauteur nulle) : sa zone de mise à jour
+    /// l'est aussi, et Windows n'envoie WM_PAINT que pour une zone non vide
+    /// (Learn, « The Update Region »). Un Label de Paint.NET de taille nulle
+    /// recevait sinon WM_PAINT et son OnPaint créait une Bitmap 0×N (#2866).
+    fn client_is_empty(&self) -> bool {
+        let r = self.client_rect();
+        r.width() <= 0 || r.height() <= 0
     }
 }
 
@@ -4882,7 +4895,12 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         // délivrer relançait une peinture de trop (#796).
         if m.message == WM_PAINT && m.l_private == SYSTEM_PAINT {
             let mut map = lock(windows());
-            if let Some(w) = map.get_mut(&m.hwnd).filter(|w| !w.needs_paint) {
+            // Une zone client vide n'a rien à peindre : la zone reste
+            // invalidée, et `pending_paint` la sert une fois agrandie.
+            if let Some(w) = map
+                .get_mut(&m.hwnd)
+                .filter(|w| !w.needs_paint || w.client_is_empty())
+            {
                 // Le WM_PAINT quitte la file : sans cela, `request_paint`
                 // le croyait toujours en attente et n'en postait plus aucun.
                 w.paint_queued = false;
@@ -4918,8 +4936,9 @@ pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let order = lock(z_order());
     let candidates = order.iter().copied().chain(map.keys().copied());
     let target = candidates.filter(|h| hwnd == 0 || *h == hwnd).find(|h| {
-        map.get(h)
-            .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
+        map.get(h).is_some_and(|w| {
+            w.owner == tid && w.visible && w.needs_paint && !w.paint_queued && !w.client_is_empty()
+        })
     })?;
     Some(Msg::new(target, WM_PAINT, 0, 0))
 }
@@ -4929,7 +4948,7 @@ pub fn paint_pending_here(hwnd: usize) -> bool {
     let tid = std::thread::current().id();
     lock(windows())
         .get(&hwnd)
-        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint)
+        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.client_is_empty())
 }
 
 /// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
@@ -6463,6 +6482,34 @@ pub(crate) mod tests {
         assert_eq!(object_pen_width(stock(7)), 1); // BLACK_PEN
     }
 
+    /// Rapport de contraste WCAG de deux COLORREF.
+    fn contraste(a: u32, b: u32) -> f64 {
+        let lum = |c: u32| {
+            let ch = |v: u32| {
+                let v = v as f64 / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(c & 0xFF) + 0.7152 * ch((c >> 8) & 0xFF) + 0.0722 * ch((c >> 16) & 0xFF)
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// #2853 : le texte de sélection se lit sur le fond de sélection des
+    /// contrôles (COLOR_HIGHLIGHT) et des menus plats (COLOR_MENUHILIGHT).
+    #[test]
+    fn texte_de_selection_lisible_sur_la_selection_2853() {
+        let texte = theme::system_color(14).expect("COLOR_HIGHLIGHTTEXT");
+        for fond in [13, 29] {
+            let fond = theme::system_color(fond).expect("couleur de sélection");
+            assert!(contraste(texte, fond) >= 4.5, "{texte:06x} sur {fond:06x}");
+        }
+    }
+
     #[test]
     fn pinceau_de_couleur_systeme_est_stable_et_non_supprimable() {
         let color = theme::system_color(29).expect("COLOR_MENUHILIGHT");
@@ -6750,6 +6797,22 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn pas_de_wm_paint_pour_une_zone_client_vide() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        set_window_rect(hwnd, Rect::from_size(0, 0, 0, 20));
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        assert!(!paint_pending_here(hwnd));
+        // Agrandie, la fenêtre reçoit la peinture restée due.
+        set_window_rect(hwnd, Rect::from_size(0, 0, 80, 20));
+        assert_eq!(pending_paint(hwnd, 0, 0).map(|m| m.hwnd), Some(hwnd));
+        assert!(validate_window(hwnd));
+        destroy_window(hwnd);
     }
 
     #[test]
