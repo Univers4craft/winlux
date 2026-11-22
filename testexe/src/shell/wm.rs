@@ -95,7 +95,18 @@ pub unsafe fn native_init() {
             path.as_mut_ptr().cast(),
             path.len() as u32,
         );
-        if n > 0 && (n as usize) < path.len() {
+        let mut archive = [0u8; 1024];
+        let k = GetEnvironmentVariableA(
+            c"WINLUX_SHELL_EXTRACT".as_ptr(),
+            archive.as_mut_ptr().cast(),
+            archive.len() as u32,
+        );
+        // Lue une fois : un Explorateur relancé par celui-ci ne doit pas
+        // extraire l'archive une seconde fois.
+        SetEnvironmentVariableA(c"WINLUX_SHELL_EXTRACT".as_ptr(), core::ptr::null());
+        if k > 0 && (k as usize) < archive.len() {
+            crate::explorer::extract_at(&archive[..k as usize]);
+        } else if n > 0 && (n as usize) < path.len() {
             crate::explorer::open_at(&path[..n as usize]);
         } else {
             crate::explorer::preload();
