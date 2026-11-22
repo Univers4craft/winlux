@@ -244,6 +244,8 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-carte-verrou.py
       - name: Vérifier Paramètres › Sauvegarde (destination, planification, restauration)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
+      - name: Paramètres › Imprimantes et Partage affichés sans attendre leur état lent (#3021)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-etat-lent.py
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
