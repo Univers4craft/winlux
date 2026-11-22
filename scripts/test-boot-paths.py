@@ -64,16 +64,18 @@ assert 'check-iso-boot-paths.sh" "$out"' in build
 for script in ("scripts/build-live-iso.sh", "scripts/install.sh"):
     assert '= "efi-i386" ]; then\n    set winlux_term=console\nelif loadfont' in (project / script).read_text(), script
 assert reset.count('efi-i386\\" ]; then\\n    set winlux_term=console\\nelif loadfont') == 2
-# Mode mixte : sans efi=noruntime, noyau 7.0 planté dans les services UEFI sur
-# un processeur sans pages de 1 Go (Atom) ; reproduit sous QEMU -cpu max,pdpe1gb=off.
+# Mode mixte (#2747) : no5lvl, pas efi=noruntime. Le noyau 7.0 plante dans les
+# services UEFI avec la pagination à 5 niveaux (QEMU -cpu max, LA57), pas sans
+# pages de 1 Go ; efi=noruntime coupait les variables UEFI, donc l'entrée de
+# démarrage que l'installateur doit créer (tablette Acer : « No Bootable Device »).
 import re  # noqa: E402
 for script in ("scripts/build-live-iso.sh", "scripts/install.sh", "scripts/winlux-installer.py", "scripts/winlux-reset.py"):
     text = (project / script).read_text()
-    assert "set winlux_efi_args=efi=noruntime" in text, script
+    assert "set winlux_efi_args=no5lvl" in text and "winlux_efi_args=efi=noruntime" not in text, script
     # #1852 : sans pilote vidéo GRUB sur efi-i386, « Booting in blind mode » et
     # aucun framebuffer pour le noyau (Xorg : « no screens found »).
-    assert text.count("insmod efi_gop") == text.count("set winlux_efi_args=efi=noruntime"), script
-    assert text.count("set gfxpayload=keep") == text.count("set winlux_efi_args=efi=noruntime"), script
+    assert text.count("insmod efi_gop") == text.count("set winlux_efi_args=no5lvl"), script
+    assert text.count("set gfxpayload=keep") == text.count("set winlux_efi_args=no5lvl"), script
     lines = [line for line in text.splitlines() if re.match(r"\s*(f')?\s*linux [^ ]*vmlinuz", line)]
     assert lines and all("winlux_efi_args" in line for line in lines), (script, [line for line in lines if "winlux_efi_args" not in line])
 assert 'ia32_loader "$iso_root"' in (project / "scripts/winlux-secureboot.sh").read_text()
