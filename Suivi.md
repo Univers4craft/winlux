@@ -144,6 +144,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 ## DÉJÀ FAIT
 
 - [x] Vue des polices du registre : type d'entrée lu dans le dossier (d_type), forme canonique gardée par dossier ; 3 736 → 1 720 appels système au démarrage du runtime, programme vide x64 15,6 → 13,8 ms (#2951).
+- [x] Programme 32 bits : la relance du runtime (#232) a lieu avant la lecture du registre, lue une seule fois par lancement ; programme vide x86 41,6 → 31,1 ms, premier pixel de la sonde x86 56,3 → 47,5 ms (#2947).
 - [x] `winlux --inspect` projette le programme (`loader::ImageFile`) au lieu de le copier en mémoire : 323 → 149 ms par inspection d'un .exe de 300 Mo (avec #2887), plus d'échec « out of memory » quand la mémoire libre est plus petite que le programme ; `test-inspect-projete.sh` (#2918).
 - [x] winlux-open : le programme part sans attendre `winlux-applications register` (Python, ~60 ms, désormais en tâche de fond à priorité basse) et n'est inspecté qu'une fois ; premier pixel de la sonde Win32 par double-clic 100 → 39 ms ; sonde `testc/latence/latence.c`, mesure externe `scripts/mesure-latence.py`, `test-latence-sonde.sh` et `test-winlux-open-rapide.sh` en CI (#2889).
 - [x] Site : démo de Winlux jouable dans le navigateur (`site/static/demo/`, lien « Démo » de la navigation) : écran de démarrage Prisme, bureau, barre des tâches, menu Démarrer avec recherche et « Pour vous », Explorateur, ancrage (bords, coins, dispositions, flèches, Assistant), Bloc-notes, Terminal, Paramètres ; simulation sans bibliothèque, quatre langues (#2926).
