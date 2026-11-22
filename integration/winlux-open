@@ -445,9 +445,12 @@ $(tail -n 5 "$log" 2>/dev/null)"
         ;;
 esac
 
-reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
+# Une seule inspection quand le programme est lançable : elle relit tout le
+# fichier, et la seconde (pour la raison d'un refus) n'est utile qu'en cas
+# d'échec.
 kind=$("$winlux" --inspect "$exe" 2>/dev/null)
 if [ -z "$kind" ]; then
+    reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
     case "$reason" in
         *"32 bits"*)
             show_error "« $(basename -- "$exe") » est un programme Windows 32 bits.
@@ -497,8 +500,11 @@ $(tail -n 5 "$log" 2>/dev/null)"
         ;;
 esac
 
+# Mémorisé pour le menu Démarrer (launchers.json) en tâche de fond, à
+# priorité basse : Python mettait ~60 ms avant chaque lancement, la moitié
+# du temps jusqu'à la première fenêtre.
 if command -v winlux-applications >/dev/null 2>&1; then
-    winlux-applications register "$exe" >/dev/null 2>&1 || true
+    (nice -n 10 winlux-applications register "$exe" </dev/null >/dev/null 2>&1 &)
 fi
 
 if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] || [ ! -t 1 ]; }; then
