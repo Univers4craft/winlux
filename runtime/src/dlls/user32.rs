@@ -2020,6 +2020,13 @@ struct NcCalcSizeParams {
 unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
     if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        if window_diag() {
+            eprintln!(
+                "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE non envoyé ({} bits, parent {:#x}) (#3205)",
+                crate::wow32::pointer_size() * 8,
+                gui::window_parent(hwnd).unwrap_or(0)
+            );
+        }
         return;
     }
     let mut pos = WindowPos {
@@ -2038,6 +2045,18 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
     gui::reset_default_nccalcsize();
     send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
     let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    if window_diag() {
+        let r = params.rects[0];
+        eprintln!(
+            "winlux[fenetre] cadre {hwnd:#x} : WM_NCCALCSIZE fenêtre ({},{})-({},{}) → client ({},{})-({},{}), \
+             DefWindowProc {}, cadre maison {own}, légende à elle {}, en couches sans titre {} (#3205)",
+            rect.left, rect.top, rect.right, rect.bottom,
+            r.left, r.top, r.right, r.bottom,
+            gui::default_nccalcsize_seen(),
+            has_own_caption(hwnd),
+            drawn_whole(hwnd)
+        );
+    }
     if !own {
         pending_frame().retain(|(h, _, _)| *h != hwnd);
     }
