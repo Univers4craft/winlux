@@ -137,6 +137,23 @@ pub(super) static IUNKNOWN: Iface = Iface {
     methods: &[Some(&[Iid, OutQ]), Some(&[]), Some(&[])],
 };
 
+/// IAgileObject : interface marqueur, sans méthode propre au-delà
+/// d'IUnknown (windows-rs 0.62.2, MIT, `Win32/System/Com`). Les objets WinRT
+/// du runtime l'acceptent ; un programme x86 qui la demande pour savoir si
+/// un objet est agile la recevait refusée (outil de déploiement d'Office,
+/// #3178).
+pub(super) static IAGILEOBJECT: Iface = Iface {
+    name: "IAgileObject",
+    iid: guid(
+        0x94EA_2B94,
+        0xE9CC,
+        0x49E0,
+        [0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90],
+    ),
+    parent: Some(&IUNKNOWN),
+    methods: &[],
+};
+
 pub(super) static ICLASSFACTORY: Iface = Iface {
     name: "IClassFactory",
     iid: ole(1),
@@ -1059,6 +1076,7 @@ static ALL: &[&Iface] = &[
     &IAUDIOSESSIONCONTROL2,
     &IAUDIOENDPOINTVOLUME,
     &IUNKNOWN,
+    &IAGILEOBJECT,
     &ICLASSFACTORY,
     &IMALLOC,
     &ISEQUENTIALSTREAM,
@@ -2168,6 +2186,22 @@ mod tests {
         assert!(!IMALLOC.derives(&ISTREAM));
         assert_eq!(slots(ISTREAM.method(5).unwrap()), 4);
         assert!(by_iid(&ole(0xC)).is_some_and(|f| std::ptr::eq(f, &ISTREAM)));
+    }
+
+    #[test]
+    fn objet_agile_decrit() {
+        // Outil de déploiement d'Office (#3178) : IAgileObject rendue à un
+        // programme x86, sans autre méthode que celles d'IUnknown.
+        let iid = guid(
+            0x94EA_2B94,
+            0xE9CC,
+            0x49E0,
+            [0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90],
+        );
+        let f = by_iid(&iid).expect("IAgileObject décrite");
+        assert!(std::ptr::eq(f, &IAGILEOBJECT));
+        assert_eq!(f.count(), 3);
+        assert!(f.derives(&IUNKNOWN));
     }
 
     #[test]
