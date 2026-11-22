@@ -85,6 +85,14 @@ pub(super) enum A {
     /// TYPEATTR* ou FUNCDESC* rendu par ReleaseTypeAttr / ReleaseFuncDesc :
     /// l'image x86 est libérée, l'original x64 passe au runtime.
     DescIn,
+    /// Tableau de pointeurs passé (LPOLESTR* d'ITypeInfo::GetIDsOfNames) ;
+    /// le nombre d'éléments est l'argument qui le suit. Il n'est jamais
+    /// réécrit : celui de l'appelant peut être en lecture seule (#2967).
+    InPtrsNext,
+    /// Tableau de pointeurs rendu (BSTR* d'ITypeInfo::GetNames) ; le nombre
+    /// d'éléments est l'argument qui le suit. Relu à l'aller pour que les
+    /// cases que l'appelé ne remplit pas reviennent inchangées (#2967).
+    OutPtrsNext,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -322,8 +330,9 @@ pub(super) static ITYPELIB: Iface = Iface {
 };
 
 /// ITypeInfo (oaidl.h, #2796) : ce qu'un puits d'événements lit d'une
-/// dispinterface. TYPEATTR et FUNCDESC sont traduits (`com_typeinfo.rs`) ;
-/// GetVarDesc, GetNames et GetIDsOfNames (tableaux de pointeurs), Invoke,
+/// dispinterface. TYPEATTR, FUNCDESC et VARDESC sont traduits
+/// (`com_typeinfo.rs`) ; GetNames et GetIDsOfNames passent leur tableau de
+/// pointeurs (#2967). Invoke (refusé en x86 par le runtime lui-même),
 /// GetDllEntry, AddressOfMember, CreateInstance restent non décrites.
 pub(super) static ITYPEINFO: Iface = Iface {
     name: "ITypeInfo",
@@ -333,11 +342,11 @@ pub(super) static ITYPEINFO: Iface = Iface {
         Some(&[DescOut(Desc::TypeAttr)]),      // GetTypeAttr
         None,                                  // GetTypeComp
         Some(&[I, DescOut(Desc::FuncDesc)]),   // GetFuncDesc(index, ppFuncDesc)
-        None,                                  // GetVarDesc
-        None,                                  // GetNames
+        Some(&[I, DescOut(Desc::VarDesc)]),    // GetVarDesc(index, ppVarDesc)
+        Some(&[I, OutPtrsNext, I, I]),         // GetNames(memid, rgBstrNames, cMax, pc)
         Some(&[I, I]),                         // GetRefTypeOfImplType(index, HREFTYPE*)
         Some(&[I, I]),                         // GetImplTypeFlags(index, INT*)
-        None,                                  // GetIDsOfNames
+        Some(&[InPtrsNext, I, I]),             // GetIDsOfNames(rgszNames, cNames, pMemId)
         None,                                  // Invoke
         Some(&[I, OutPtr, OutPtr, I, OutPtr]), // GetDocumentation
         None,                                  // GetDllEntry
@@ -348,7 +357,7 @@ pub(super) static ITYPEINFO: Iface = Iface {
         Some(&[Out(&ITYPELIB), I]),            // GetContainingTypeLib(ppTLib, pIndex)
         Some(&[DescIn]),                       // ReleaseTypeAttr
         Some(&[DescIn]),                       // ReleaseFuncDesc
-        None,                                  // ReleaseVarDesc
+        Some(&[DescIn]),                       // ReleaseVarDesc
     ],
 };
 
@@ -1616,6 +1625,23 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
                 }
                 None => slots.push(0),
             },
+            InPtrsNext | OutPtrsNext => {
+                if v == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                // Le nombre d'éléments est la case suivante de la pile.
+                let n = rd(p).min(4096);
+                let t: Vec<u64> = (0..n.max(1))
+                    .map(|j| if j < n { rd(v + 4 * j) as u64 } else { 0 })
+                    .collect();
+                slots.push(t.as_ptr() as u64);
+                if matches!(k, OutPtrsNext) {
+                    big.push((t, v, k, n));
+                } else {
+                    arrays.push(t);
+                }
+            }
             VarIn => {
                 // Le VARIANT occupe quatre cases de la pile x86.
                 temps.push([0; 10]);
@@ -1753,12 +1779,16 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
             );
             return E_NOTIMPL as u64;
         };
-        // TYPEATTR / FUNCDESC d'un ITypeInfo x86 lus par le runtime : non
-        // traduits dans ce sens (#2796).
-        if kinds.iter().any(|k| matches!(k, DescOut(_) | DescIn)) {
+        // TYPEATTR / FUNCDESC / VARDESC et tableaux de pointeurs d'un
+        // ITypeInfo x86 lus par le runtime : non traduits dans ce sens
+        // (#2796, #2967).
+        if kinds
+            .iter()
+            .any(|k| matches!(k, DescOut(_) | DescIn | InPtrsNext | OutPtrsNext))
+        {
             crate::log_warn!(
                 "wow32",
-                "{} : méthode n° {} d'un objet 32 bits, TYPEATTR/FUNCDESC non traduits vers x64",
+                "{} : méthode n° {} d'un objet 32 bits, structures ou tableaux non traduits vers x64",
                 p.iface.name,
                 m.idx
             );
@@ -1783,7 +1813,7 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                     a.push(v as u32);
                 }
                 // Refusées plus haut.
-                DescOut(_) | DescIn => a.push(0),
+                DescOut(_) | DescIn | InPtrsNext | OutPtrsNext => a.push(0),
                 StrRet | Pidls => {
                     if v == 0 {
                         a.push(0);
@@ -2286,5 +2316,109 @@ mod tests {
         }
         let iid = g(mmd::IID_IPROPERTYSTORE);
         assert!(by_iid(&iid).is_some_and(|f| std::ptr::eq(f, &IPROPERTYSTORE)));
+    }
+
+    /// Pages sous 4 Go, comme la mémoire d'un programme x86.
+    unsafe fn basse(pages: usize) -> u32 {
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            4096 * pages,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+            -1,
+            0,
+        );
+        assert_ne!(p, libc::MAP_FAILED);
+        p as usize as u32
+    }
+
+    /// GetIDsOfNames vu du runtime : chaque nom du tableau x64 est relu.
+    unsafe extern "win64" fn faux_ids(_this: u64, names: *const u64, n: u32, ids: *mut i32) -> u64 {
+        for j in 0..n as usize {
+            let w = *names.add(j) as usize as *const u16;
+            *ids.add(j) = if crate::dlls::wstr(w) == "Navigate" {
+                104
+            } else {
+                -1
+            };
+        }
+        0
+    }
+
+    /// GetNames vu du runtime : deux noms rendus sur trois cases.
+    unsafe extern "win64" fn faux_noms(
+        _this: u64,
+        _memid: u32,
+        names: *mut u64,
+        _max: u32,
+        count: *mut u32,
+    ) -> u64 {
+        *names = 0x0100_0001;
+        *names.add(1) = 0x0100_0002;
+        *count = 2;
+        0
+    }
+
+    /// #2967 : GetIDsOfNames et GetNames d'ITypeInfo depuis une pile x86.
+    /// Le tableau de noms passé est en lecture seule : la passerelle ne
+    /// doit pas le réécrire. Les cases de GetNames que l'appelé ne remplit
+    /// pas reviennent inchangées.
+    #[test]
+    fn tableaux_de_pointeurs_d_itypeinfo_2967() {
+        unsafe {
+            let ids_kinds = ITYPEINFO.method(10).unwrap();
+            let names_kinds = ITYPEINFO.method(7).unwrap();
+            assert!(matches!(ids_kinds, [InPtrsNext, I, I]));
+            assert!(matches!(names_kinds, [I, OutPtrsNext, I, I]));
+            assert!(ITYPEINFO.method(6).is_some(), "GetVarDesc");
+            assert!(ITYPEINFO.method(21).is_some(), "ReleaseVarDesc");
+            assert_eq!(ITYPEINFO.count(), 22);
+
+            let b = basse(2);
+            let ro = b + 4096;
+            // Chaînes et tableau de noms dans la seconde page.
+            let w: Vec<u16> = "Navigate\0Quit\0".encode_utf16().collect();
+            std::ptr::copy_nonoverlapping(w.as_ptr(), (ro + 64) as usize as *mut u16, w.len());
+            wr(ro, ro + 64);
+            wr(ro + 4, ro + 64 + 18);
+            libc::mprotect(ro as usize as *mut libc::c_void, 4096, libc::PROT_READ);
+            // Pile x86 : rgszNames, cNames, pMemId.
+            let (pile, ids) = (b, b + 256);
+            wr(pile, ro);
+            wr(pile + 4, 2);
+            wr(pile + 8, ids);
+            let r = from32(
+                faux_ids as *const () as usize,
+                Some(0x1234),
+                pile,
+                ids_kinds,
+            );
+            assert_eq!(r, 0);
+            assert_eq!(rd(ids) as i32, 104);
+            assert_eq!(rd(ids + 4) as i32, -1);
+
+            // Pile x86 : memid, rgBstrNames, cMaxNames, pcNames.
+            let (noms, compte) = (b + 512, b + 640);
+            for j in 0..3 {
+                wr(noms + 4 * j, 0x5555);
+            }
+            wr(pile, 104);
+            wr(pile + 4, noms);
+            wr(pile + 8, 3);
+            wr(pile + 12, compte);
+            let r = from32(
+                faux_noms as *const () as usize,
+                Some(0x1234),
+                pile,
+                names_kinds,
+            );
+            assert_eq!(r, 0);
+            assert_eq!(rd(compte), 2);
+            assert_eq!(
+                [rd(noms), rd(noms + 4), rd(noms + 8)],
+                [0x0100_0001, 0x0100_0002, 0x5555]
+            );
+            libc::munmap(b as usize as *mut libc::c_void, 8192);
+        }
     }
 }
