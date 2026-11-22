@@ -342,6 +342,7 @@ pub mod winrt_package_manager;
 pub mod winrt_ui;
 pub mod winrt_uri;
 pub mod winrt_wam;
+pub mod winrt_wam_objets;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
