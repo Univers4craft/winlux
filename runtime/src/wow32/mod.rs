@@ -1260,23 +1260,59 @@ pub fn note_export(addr: usize, module: &'static str, path: &'static str) {
 }
 
 struct SigIndex {
-    by_path: HashMap<String, &'static str>,
+    /// Nom de fonction → (module, signature) de chaque déclaration, dans
+    /// l'ordre de SIGS (la dernière d'un même module l'emporte). Clé sans
+    /// allocation : un `format!("{module}::{name}")` par ligne de SIGS
+    /// (~12 000) coûtait près de 2 ms au lancement de chaque programme
+    /// 32 bits (Gain #3073). Les noms de SIGS n'ont jamais de « :: ».
+    by_name_module: HashMap<&'static str, Vec<(&'static str, &'static str)>>,
     /// Nom de fonction → signature, s'il n'y en a qu'une pour ce nom.
     by_name: HashMap<&'static str, Option<&'static str>>,
+}
+
+impl SigIndex {
+    /// Signature du chemin complet `module::name` (ou `name` sans module).
+    fn by_path(&self, full: &str) -> Option<&'static str> {
+        let (module, name) = full.rsplit_once("::").unwrap_or(("", full));
+        self.by_name_module
+            .get(name)?
+            .iter()
+            .rev()
+            .find(|(m, _)| *m == module)
+            .map(|&(_, sig)| sig)
+    }
+
+    /// Signature unique des chemins complets qui finissent par `::path`.
+    fn by_suffix(&self, path: &str) -> Option<&'static str> {
+        let (prefix, name) = path.rsplit_once("::")?;
+        let mut found: Option<(&str, &'static str)> = None;
+        for &(module, sig) in self.by_name_module.get(name)?.iter().rev() {
+            // `module::name` finit par `::prefix::name`.
+            let matches = module
+                .strip_suffix(prefix)
+                .is_some_and(|head| head.ends_with("::"));
+            if !matches {
+                continue;
+            }
+            match found {
+                None => found = Some((module, sig)),
+                Some((m, _)) if m == module => {}
+                Some(_) => return None,
+            }
+        }
+        found.map(|(_, sig)| sig)
+    }
 }
 
 fn sig_index() -> &'static SigIndex {
     static I: OnceLock<SigIndex> = OnceLock::new();
     I.get_or_init(|| {
-        let mut by_path = HashMap::new();
-        let mut by_name: HashMap<&'static str, Option<&'static str>> = HashMap::new();
+        let mut by_name_module: HashMap<&'static str, Vec<(&'static str, &'static str)>> =
+            HashMap::with_capacity(SIGS.len());
+        let mut by_name: HashMap<&'static str, Option<&'static str>> =
+            HashMap::with_capacity(SIGS.len());
         for &(module, name, sig) in SIGS {
-            let key = if module.is_empty() {
-                name.to_string()
-            } else {
-                format!("{module}::{name}")
-            };
-            by_path.insert(key, sig);
+            by_name_module.entry(name).or_default().push((module, sig));
             by_name
                 .entry(name)
                 .and_modify(|s| {
@@ -1286,7 +1322,10 @@ fn sig_index() -> &'static SigIndex {
                 })
                 .or_insert(Some(sig));
         }
-        SigIndex { by_path, by_name }
+        SigIndex {
+            by_name_module,
+            by_name,
+        }
     })
 }
 
@@ -1322,21 +1361,12 @@ fn sig_of_path(module: &str, path: &str) -> Option<&'static str> {
         candidates.push(join("dlls", path));
     }
     for c in &candidates {
-        if let Some(s) = idx.by_path.get(c) {
+        if let Some(s) = idx.by_path(c) {
             return Some(s);
         }
     }
-    if path.contains("::") {
-        let tail = format!("::{path}");
-        let found: Vec<&&str> = idx
-            .by_path
-            .iter()
-            .filter(|(k, _)| k.ends_with(&tail))
-            .map(|(_, v)| v)
-            .collect();
-        if found.len() == 1 {
-            return Some(found[0]);
-        }
+    if let Some(s) = idx.by_suffix(path) {
+        return Some(s);
     }
     let name = path.rsplit("::").next().unwrap_or(path);
     idx.by_name.get(name).copied().flatten()
@@ -3204,6 +3234,50 @@ pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Index des signatures sans allocation (Gain #3073) : mêmes réponses
+    /// que l'ancien index à clés `format!("{module}::{name}")`, pour le
+    /// chemin complet de chaque ligne de SIGS et pour la recherche par fin
+    /// de chemin (une ligne sur 40, l'ancienne recherche parcourant tout).
+    #[test]
+    fn index_des_signatures_identique_a_l_ancien() {
+        let mut old: HashMap<String, &'static str> = HashMap::new();
+        for &(module, name, sig) in SIGS {
+            let key = if module.is_empty() {
+                name.to_string()
+            } else {
+                format!("{module}::{name}")
+            };
+            old.insert(key, sig);
+        }
+        let idx = sig_index();
+        for (key, &sig) in &old {
+            assert_eq!(idx.by_path(key), Some(sig), "{key}");
+        }
+        assert_eq!(idx.by_path("module_absent::CreateFileW"), None);
+        let old_suffix = |path: &str| {
+            let tail = format!("::{path}");
+            let found: Vec<&&str> = old
+                .iter()
+                .filter(|(k, _)| k.ends_with(&tail))
+                .map(|(_, v)| v)
+                .collect();
+            (found.len() == 1).then(|| *found[0])
+        };
+        let mut checked = 0;
+        for (i, &(module, name, _)) in SIGS.iter().enumerate() {
+            if i % 40 != 0 {
+                continue;
+            }
+            let segments: Vec<&str> = module.split("::").collect();
+            for keep in 1..=segments.len().min(3) {
+                let path = format!("{}::{name}", segments[segments.len() - keep..].join("::"));
+                assert_eq!(idx.by_suffix(&path), old_suffix(&path), "{path}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100);
+    }
 
     #[test]
     fn filtre_du_flux_a_plusieurs_motifs() {
