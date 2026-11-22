@@ -1183,11 +1183,6 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
-                name: "gamemode",
-                exports: gamemode::exports(),
-                handle: fake_module(),
-            },
-            Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
                 handle: fake_module(),
