@@ -159,10 +159,24 @@ fn fonts_in(dir: &Path) -> FontList {
 
 pub fn fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool) {
     let list = fonts_in(dir);
-    add_fonts(data, key, dir, absolute, list);
+    add_fonts(
+        data,
+        key,
+        dir,
+        absolute,
+        list,
+        &crate::paths::VersWindows::new(),
+    );
 }
 
-fn add_fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool, list: FontList) {
+fn add_fonts(
+    data: &mut Data,
+    key: &str,
+    dir: &Path,
+    absolute: bool,
+    list: FontList,
+    vers: &crate::paths::VersWindows,
+) {
     // La clé existe toujours sous Windows, même sans police (#1045).
     data.raw_ensure(key);
     let known: Vec<String> = data
@@ -172,7 +186,7 @@ fn add_fonts(data: &mut Data, key: &str, dir: &Path, absolute: bool, list: FontL
         .collect();
     for (name, file) in list {
         let value = if absolute {
-            crate::paths::to_windows(&dir.join(&file))
+            vers.convert(&dir.join(&file))
         } else {
             file.clone()
         };
@@ -325,8 +339,10 @@ fn apply(data: &mut Data) {
     );
     let user = crate::paths::to_linux("C:\\AppData\\Local\\Microsoft\\Windows\\Fonts");
     fonts(data, USER_FONTS, &user, true);
+    // Un seul contexte de chemins pour toutes les polices du système.
+    let vers = crate::paths::VersWindows::new();
     for (dir, list) in system_fonts() {
-        add_fonts(data, FONTS, &dir, true, list);
+        add_fonts(data, FONTS, &dir, true, list, &vers);
     }
     gesture_recognizer(data);
     personalize(data);
