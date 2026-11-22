@@ -2038,6 +2038,12 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // (api-ms-win-core-handle, -realtime) : Qt WebEngine (#1510).
     "CompareObjectHandles",
     "QueryUnbiasedInterruptTimePrecise",
+    // Prises par Chromium dans kernelbase.dll seulement (code BSD :
+    // sandbox/win/src/app_container_base.cc).
+    "AppContainerRegisterSid",
+    "AppContainerUnregisterSid",
+    "AppContainerLookupMoniker",
+    "AppContainerFreeMemory",
     "WakeByAddressAll",
     "WakeByAddressSingle",
     // Douteux (#521) : user32 les exporte ; on les laisse visibles par
