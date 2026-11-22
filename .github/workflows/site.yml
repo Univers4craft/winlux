@@ -15,6 +15,13 @@ on:
       - scripts/test-site.py
       - scripts/test-site-render.js
       - .github/workflows/site.yml
+      # Boutique publiée (#3133)
+      - scripts/winlux-store.py
+      - scripts/winlux-store-confirm.py
+      - scripts/build-store-bundle.py
+      - integration/store-windows-valides.json
+      - integration/store-editeurs.json
+      - integration/store-catalog.txt
   pull_request:
     branches: [master]
     paths:
@@ -40,8 +47,57 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Boutique mise à jour depuis GitHub (#3133) : paquet signé avec la clé
+  # propre à la Boutique, jamais celle des mises à jour de l'OS. Le secret
+  # n'existe que dans l'environnement « boutique » (déploiement limité à
+  # master) et seul ce job le lit : il ne lit que les fichiers du dépôt sur
+  # master, aucun artefact de PR, et n'exécute que deux scripts Python sans
+  # dépendance. Sans secret, rien n'est publié et les PC gardent leur copie.
+  boutique:
+    name: Signer la Boutique
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    environment: boutique
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Construire et signer le paquet
+        env:
+          WINLUX_STORE_SIGNING_KEY: ${{ secrets.WINLUX_STORE_SIGNING_KEY }}
+        run: |
+          set -eu
+          if test -z "$WINLUX_STORE_SIGNING_KEY" || ! test -f integration/native/keys/store-signing.pub; then
+            echo "::warning::Boutique non publiée : secret WINLUX_STORE_SIGNING_KEY (environnement boutique) ou clé publique absent (#3133)"
+            exit 0
+          fi
+          python3 -I scripts/build-store-bundle.py paquet build/boutique
+          graine=$(mktemp)
+          trap 'rm -f "$graine"' EXIT
+          chmod 600 "$graine"
+          printf '%s\n' "$WINLUX_STORE_SIGNING_KEY" >"$graine"
+          python3 -I scripts/winlux-signature.py sign "$graine" build/boutique/MANIFESTE >build/boutique/MANIFESTE.sig
+          python3 -I scripts/winlux-signature.py verify integration/native/keys/store-signing.pub \
+            build/boutique/MANIFESTE build/boutique/MANIFESTE.sig
+          cat build/boutique/MANIFESTE
+
+      - name: Conserver le paquet signé
+        uses: actions/upload-artifact@v4
+        with:
+          name: boutique
+          path: build/boutique
+          if-no-files-found: ignore
+          retention-days: 1
+
   tester:
     name: Construire et tester le site
+    needs: boutique
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -142,6 +198,16 @@ jobs:
           /usr/bin/python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if any(r["images"] for r in d["executions"]) else 1)' \
             build/site/suivi/data.json ||
             { echo "::error::galerie du suivi vide : publication annulée, le site en ligne est conservé (#1871)"; exit 1; }
+
+      # Sans paquet signé (secret absent, job en échec), le site part sans
+      # dossier boutique/ : les PC répondent « hors ligne » et gardent leur copie.
+      - name: Joindre la Boutique signée (#3133)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && needs.boutique.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: boutique
+          path: build/site/boutique
 
       - name: Préparer la publication
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'

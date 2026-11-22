@@ -126,7 +126,19 @@ cp "$root/scripts/winlux-transfer.sh" "$stage/usr/bin/winlux-transfer"
 chmod 755 "$stage/usr/bin/winlux-share" "$stage/usr/bin/winlux-transfer"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
-cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
+# Lanceur (#3133) : la Boutique livrée est dans /usr/lib/winlux ; une version
+# plus récente, signée et posée dans le compte depuis GitHub, la remplace.
+cp "$root/scripts/winlux-store-lanceur.py" "$stage/usr/bin/winlux-store"
+install -D -m 755 "$root/scripts/winlux-store.py" "$stage/usr/lib/winlux/winlux-store.py"
+# Bytecode vérifié par empreinte : le lanceur ne recompile pas le Store
+# (~34 ms) à chaque commande. Ignoré si la version de Python diffère.
+python3 -c 'import py_compile, sys; py_compile.compile(sys.argv[1], doraise=True, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)' \
+    "$stage/usr/lib/winlux/winlux-store.py" || true
+install -D -m 755 "$root/scripts/winlux-boutique-maj.py" "$stage/usr/lib/winlux/winlux-boutique-maj"
+python3 -B "$root/scripts/build-store-bundle.py" livree "$stage/usr/share/winlux/boutique-livree.txt"
+if test -f "$root/integration/native/keys/store-signing.pub"; then
+    install -m 644 "$root/integration/native/keys/store-signing.pub" "$stage/usr/share/winlux/store-signing.pub"
+fi
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
 # Catalogues ajoutés à la main par l'administrateur (aucun livré).
