@@ -286,6 +286,19 @@ pub(super) static IPERSISTSTREAMINIT: Iface = Iface {
     ],
 };
 
+/// IViewObject2 {00000127-0000-0000-C000-000000000046} (oleidl.h, #2972) :
+/// IViewObject plus GetExtent(dwDrawAspect, lindex, DVTARGETDEVICE*,
+/// LPSIZEL), qui pointent des données sans pointeur. Le runtime sert les
+/// deux par la même table (dlls/webbrowser.rs : VO_VT, 10 entrées).
+pub(super) static IVIEWOBJECT2: Iface = Iface {
+    name: "IViewObject2",
+    iid: ole(0x127),
+    parent: Some(&IVIEWOBJECT),
+    methods: &[
+        Some(&[I, I, I, I]), // GetExtent
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
     &IOLECLIENTSITE,
     &IOLEWINDOW,
@@ -298,6 +311,7 @@ pub(super) static ALL: &[&Iface] = &[
     &IADVISESINK,
     &IVIEWOBJECT,
     &IPERSISTSTREAMINIT,
+    &IVIEWOBJECT2,
 ];
 
 #[cfg(test)]
@@ -397,5 +411,19 @@ mod tests {
         );
         assert!(matches!(IPERSISTSTREAMINIT.method(6), Some([In(_), I])));
         assert!(matches!(IPERSISTSTREAMINIT.method(8), Some([])), "InitNew");
+    }
+
+    /// #2972 : IViewObject2, dix entrées comme VO_VT, se retrouve par son
+    /// IID et hérite des méthodes d'IViewObject.
+    #[test]
+    fn view_object2_decrit_2972() {
+        use super::super::com::slots;
+        assert_eq!(IVIEWOBJECT2.count(), 10);
+        assert!(by_iid(&IVIEWOBJECT2.iid).is_some_and(|g| std::ptr::eq(g, &IVIEWOBJECT2)));
+        assert!(IVIEWOBJECT2
+            .parent
+            .is_some_and(|p| std::ptr::eq(p, &IVIEWOBJECT)));
+        assert_eq!(slots(IVIEWOBJECT2.method(9).unwrap()), 4);
+        assert_eq!(slots(IVIEWOBJECT2.method(3).unwrap()), 10, "Draw hérité");
     }
 }
