@@ -30,7 +30,7 @@ first() {
 pref() { value "$config/preferences.conf" "$@"; }
 overlay() { value "$config/overlay.conf" "$@"; }
 # Les jeux lancés par l'utilisateur lisent ce fichier : il reste lisible.
-save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/overlay.conf"; }
+save_overlay() { save_public "$config/overlay.conf" "$1" "$2"; }
 cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$@"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
@@ -51,6 +51,15 @@ save() {
     mv "$tmp" "$file"
 }
 have() { command -v "$1" >/dev/null 2>&1; }
+# Réglage lisible par tous (jeux, services, écran de verrouillage) : 644.
+# Par le relais, winlux-root l'écrit déjà en 644 et le fichier est à root :
+# un chmod lancé par l'utilisateur échouerait et ferait annoncer « Échec de
+# l'opération » pour un réglage pourtant enregistré (#3039).
+save_public() {
+    save "$1" "$2" "$3" || return
+    if relayed_session && test "${1%/*}" = "$config"; then return 0; fi
+    chmod 644 "$1"
+}
 # Relance de la barre des tâches (xfce4-panel -r). Le panneau relancé
 # abandonne (« There is already a running instance ») s'il trouve encore
 # l'ancien sur le bus de session : sur une machine chargée, la barre
@@ -824,16 +833,16 @@ perform() {
         welcome-reset) save "$config/preferences.conf" WELCOME_DONE 0 && save "$config/preferences.conf" WELCOME_STEP 0 ;;
         # Etape atteinte : la visite reprend la ou elle a ete fermee.
         welcome-step-[0-9]|welcome-step-[0-9][0-9]) save "$config/preferences.conf" WELCOME_STEP "${action#welcome-step-}" ;;
-        privacy-telemetry-on|privacy-telemetry-off) save "$config/privacy.conf" TELEMETRY "${action#privacy-telemetry-}" && chmod 644 "$config/privacy.conf" ;;
-        privacy-microphone-allow|privacy-microphone-deny) save "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" && chmod 644 "$config/privacy.conf" ;;
-        privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;
-        privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-telemetry-on|privacy-telemetry-off) save_public "$config/privacy.conf" TELEMETRY "${action#privacy-telemetry-}" ;;
+        privacy-microphone-allow|privacy-microphone-deny) save_public "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" ;;
+        privacy-camera-allow|privacy-camera-deny) save_public "$config/privacy.conf" CAMERA "${action#privacy-camera-}" ;;
+        privacy-location-allow|privacy-location-deny) save_public "$config/privacy.conf" LOCATION "${action#privacy-location-}" ;;
         lock-now) if have winlux-lock; then (setsid winlux-lock now >/dev/null 2>&1 &); else echo 'winlux-lock absent' >&2; return 1; fi ;;
         lock-after-0|lock-after-60|lock-after-180|lock-after-300|lock-after-600|lock-after-900|lock-after-1800|lock-after-3600)
-            save "$config/lock.conf" LOCK_AFTER "${action#lock-after-}" && chmod 644 "$config/lock.conf" ;;
-        lock-resume-on) save "$config/lock.conf" LOCK_ON_RESUME 1 && chmod 644 "$config/lock.conf" ;;
-        lock-resume-off) save "$config/lock.conf" LOCK_ON_RESUME 0 && chmod 644 "$config/lock.conf" ;;
-        privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
+            save_public "$config/lock.conf" LOCK_AFTER "${action#lock-after-}" ;;
+        lock-resume-on) save_public "$config/lock.conf" LOCK_ON_RESUME 1 ;;
+        lock-resume-off) save_public "$config/lock.conf" LOCK_ON_RESUME 0 ;;
+        privacy-history-on|privacy-history-off) save_public "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" ;;
         update-auto-off) winlux-update --auto disable && update_state ;;
         report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
         report-redact-on|report-redact-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "redact=${action#report-redact-}" ;;
