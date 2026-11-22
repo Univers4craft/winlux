@@ -736,6 +736,9 @@ unsafe fn finish_buffer(pwh: *mut u8, notify: &Notify) {
     notify.send(WIM_DATA, pwh as usize);
 }
 
+/// Latence demandée à ALSA pour la capture waveIn (µs), #3119.
+const CAPTURE_LATENCY_US: u32 = 40_000;
+
 fn capture_thread(
     config: RecordConfig,
     notify: Notify,
@@ -760,10 +763,13 @@ fn capture_thread(
     if unsafe { (a.open)(&mut pcm, default.as_ptr(), 1, 0) } < 0 {
         return;
     }
-    // RW_INTERLEAVED=3, rééchantillonnage autorisé, 0,5 s de latence max.
+    // RW_INTERLEAVED=3, rééchantillonnage autorisé, 40 ms de latence : ALSA
+    // découpe en périodes d'environ 10 ms. Avec 0,5 s, chaque lecture rendait
+    // ~125 ms d'un coup, plus que les petits tampons du programme ne peuvent
+    // contenir, et le reste était jeté (#3119).
     let fmt = config.alsa_format();
     let ch = config.channels as u32;
-    if unsafe { (a.set_params)(pcm, fmt, 3, ch, config.rate, 1, 500_000) } < 0 {
+    if unsafe { (a.set_params)(pcm, fmt, 3, ch, config.rate, 1, CAPTURE_LATENCY_US) } < 0 {
         unsafe {
             (a.close)(pcm);
         }
@@ -1217,6 +1223,15 @@ mod tests {
         }
         assert_eq!(b[7], 0);
         assert_eq!(&b[..3], b"Le ");
+    }
+
+    #[test]
+    fn capture_waveIn_en_periodes_courtes_3119() {
+        // ALSA découpe la latence demandée en 4 périodes environ : chaque
+        // lecture doit tenir dans les petits tampons des programmes (PortAudio
+        // MME en donne de 13 ms), sinon le surplus est perdu (#3119).
+        let periode_ms = super::CAPTURE_LATENCY_US / 4 / 1000;
+        assert!(periode_ms <= 10, "période de capture de {periode_ms} ms");
     }
 
     #[test]
