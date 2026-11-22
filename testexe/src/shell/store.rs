@@ -2734,8 +2734,31 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             true
         }
         0x74 => act(Action::Refresh),
+        // Ctrl+V : coller dans la recherche (#2894).
+        0x56 if crate::gfx::key_state(0x11) as u16 & 0x8000 != 0 => paste_search(),
         _ => false,
     }
+}
+
+/// Colle le texte du presse-papiers dans la recherche, comme une zone de
+/// saisie Windows (WM_PASTE) : retours à la ligne et tabulations deviennent
+/// des espaces, ceux de la fin sont retirés.
+unsafe fn paste_search() -> bool {
+    let mut clip = [0u8; 256];
+    let n = crate::cliphist::get_text(&mut clip);
+    let mut end = n;
+    while end > 0 && clip[end - 1] <= b' ' {
+        end -= 1;
+    }
+    if end == 0 {
+        return false;
+    }
+    SEARCH_FOCUS = true;
+    for &c in &clip[..end] {
+        SEARCH.push(&[if c < 0x20 { b' ' } else { c }]);
+    }
+    SCROLL = 0;
+    true
 }
 
 pub unsafe fn tick(_f: &Frame) -> bool {
