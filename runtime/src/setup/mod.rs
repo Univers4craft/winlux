@@ -1441,7 +1441,11 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     // Droits d'administrateur demandés par l'installateur (#2180) : comme
     // sous Windows, la demande d'élévation vient au lancement, avant toute
     // page de l'installateur, contrat compris.
-    if burn::is_bundle_file(exe) || detect_file(exe).is_some() {
+    // Fichier lu une seule fois : chaque lancement d'un .exe ordinaire
+    // le parcourait trois fois en entier (#2878).
+    let bundle = burn::is_bundle_file(exe);
+    let detected = detect_file(exe);
+    if bundle || detected.is_some() {
         if let Err(code) = elevation::require(exe, &[]) {
             return Some(code);
         }
@@ -1449,8 +1453,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     // Contrat de licence ni accepté (assistant) ni couvert par une option
     // silencieuse : sa page s'ouvre, refus = 1602 (#2123). Seulement pour
     // un installateur : un programme ordinaire n'est pas relu (#997).
-    if (burn::is_bundle_file(exe) || matches!(detect_file(exe), Some(Kind::Nsis | Kind::Inno)))
-        && !license::silent_flag(args)
+    if (bundle || matches!(detected, Some(Kind::Nsis | Kind::Inno))) && !license::silent_flag(args)
     {
         if let Some(code) = license::require_acceptance(exe, args) {
             return Some(code);
@@ -1463,7 +1466,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     let kind = if msix::is_package_name(exe) && msix::is_package(exe) {
         Kind::Msix
     } else {
-        detect_file(exe)?
+        detected?
     };
     // Auto-extractible qui lance son propre installateur autour d'un paquet
     // MSI (Paint.NET) : le MSI est installé directement.
