@@ -1075,6 +1075,13 @@ extern "C" {
     ) -> Handle;
     pub fn DefWindowProcA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
+    pub fn MsgWaitForMultipleObjects(
+        count: u32,
+        handles: *const Handle,
+        wait_all: i32,
+        timeout: u32,
+        wake_mask: u32,
+    ) -> u32;
     pub fn GetMessageW(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
     pub fn PeekMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;
     pub fn PeekMessageW(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;

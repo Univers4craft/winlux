@@ -571,10 +571,25 @@ fn place_label(i: usize) -> &'static [u8] {
     }
 }
 
+/// Dossiers personnels résolus une fois, puis gardés : la peinture du volet
+/// de gauche les demandait plus de 70 fois par image (GetFileAttributesW du
+/// nom anglais, absent sur un compte français, puis du nom français).
+/// `watch_places()` les oublie quand le dossier personnel change.
+static mut PLACE_CACHE: [Path; 6] = [EMPTY_PATH; 6];
+static mut PLACE_READY: bool = false;
+
 fn place_path(i: usize) -> Path {
-    let mut p = EMPTY_PATH;
-    user_folder(&mut p, PLACES[i].fr, PLACES[i].en);
-    p
+    unsafe {
+        if !PLACE_READY {
+            for k in 0..PLACES.len() {
+                let mut p = EMPTY_PATH;
+                user_folder(&mut p, PLACES[k].fr, PLACES[k].en);
+                PLACE_CACHE[k] = p;
+            }
+            PLACE_READY = true;
+        }
+        PLACE_CACHE[i]
+    }
 }
 
 fn kind_of(name: &[u8], dir: bool) -> Kind {
@@ -7574,8 +7589,54 @@ unsafe fn watch_drives() -> bool {
     true
 }
 
+/// Dossier personnel modifié (Bureau ou Desktop créé, renommé…) : les
+/// dossiers personnels sont résolus à nouveau.
+static mut PLACES_CHECKED: u32 = 0;
+static mut HOME_STAMP: u64 = 0;
+
+unsafe fn watch_places() -> bool {
+    let now = GetTickCount();
+    if now.wrapping_sub(PLACES_CHECKED) < 1500 {
+        return false;
+    }
+    PLACES_CHECKED = now;
+    let stamp = folder_stamp(b"C:\\");
+    if stamp == HOME_STAMP {
+        return false;
+    }
+    let first = HOME_STAMP == 0;
+    HOME_STAMP = stamp;
+    PLACE_READY = false;
+    !first
+}
+
+/// Cadence de `tick()` voulue par l'Explorateur, en ms : 500 au repos,
+/// plus vite tant qu'un défilement, une vignette ou une copie avance.
+/// (Avant, tout attendait le tic de 500 ms : un cran de molette
+/// défilait par sauts pendant 2,5 s, les vignettes arrivaient après 600 ms.)
+pub unsafe fn tick_ms() -> u32 {
+    if NTABS == 0 {
+        return 500;
+    }
+    for i in 0..NTABS {
+        for which in 0..2 {
+            let pn = &TABS[i].panes[which];
+            if pn.scroll != pn.scroll_target {
+                return 16;
+            }
+        }
+    }
+    if crate::thumbs::waiting() {
+        return 40;
+    }
+    if JOB != 0 || copy::busy() {
+        return 100;
+    }
+    500
+}
+
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let refreshed = watch_folders() | watch_drives();
+    let refreshed = watch_folders() | watch_drives() | watch_places();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
     animating |= copy::tick();
     animating |= crate::sharing::dialog_tick();
