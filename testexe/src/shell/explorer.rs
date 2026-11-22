@@ -642,10 +642,25 @@ fn place_label(i: usize) -> &'static [u8] {
     }
 }
 
+/// Dossiers personnels résolus une fois, puis gardés : la peinture du volet
+/// de gauche les demandait ~70 fois par image, et chaque demande essayait le
+/// nom anglais (absent sur un compte français) puis le nom français.
+/// `watch_places()` les oublie quand le dossier personnel change.
+static mut PLACE_CACHE: [Path; 6] = [EMPTY_PATH; 6];
+static mut PLACE_READY: bool = false;
+
 fn place_path(i: usize) -> Path {
-    let mut p = EMPTY_PATH;
-    user_folder(&mut p, PLACES[i].fr, PLACES[i].en);
-    p
+    unsafe {
+        if !PLACE_READY {
+            for k in 0..PLACES.len() {
+                let mut p = EMPTY_PATH;
+                user_folder(&mut p, PLACES[k].fr, PLACES[k].en);
+                PLACE_CACHE[k] = p;
+            }
+            PLACE_READY = true;
+        }
+        PLACE_CACHE[i]
+    }
 }
 
 fn kind_of(name: &[u8], dir: bool) -> Kind {
@@ -7682,8 +7697,29 @@ pub unsafe fn tick_ms() -> u32 {
     500
 }
 
+/// Dossier personnel modifié (Bureau ou Desktop créé, renommé…) : les
+/// dossiers personnels sont résolus à nouveau.
+static mut PLACES_CHECKED: u32 = 0;
+static mut HOME_STAMP: u64 = 0;
+
+unsafe fn watch_places() -> bool {
+    let now = GetTickCount();
+    if now.wrapping_sub(PLACES_CHECKED) < 1500 {
+        return false;
+    }
+    PLACES_CHECKED = now;
+    let stamp = folder_stamp(b"C:\\");
+    if stamp == HOME_STAMP {
+        return false;
+    }
+    let first = HOME_STAMP == 0;
+    HOME_STAMP = stamp;
+    PLACE_READY = false;
+    !first
+}
+
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let refreshed = watch_folders() | watch_drives();
+    let refreshed = watch_folders() | watch_drives() | watch_places();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
     animating |= copy::tick();
     animating |= crate::sharing::dialog_tick();
@@ -8038,6 +8074,21 @@ unsafe fn big_folder_checks(root: &[u8]) {
     reload(p);
 }
 
+/// Dossiers personnels gardés entre deux dessins, puis résolus à nouveau
+/// quand le dossier personnel change.
+unsafe fn places_cache_checks() {
+    let first = place_path(1);
+    let kept = PLACE_READY && place_path(1).get() == first.get();
+    HOME_STAMP = 1;
+    PLACES_CHECKED = GetTickCount().wrapping_sub(2000);
+    let changed = watch_places() && !PLACE_READY;
+    let again = place_path(1).get() == first.get() && PLACE_READY;
+    check!(
+        kept && changed && again,
+        "Explorateur : dossiers personnels gardes, resolus a nouveau si le dossier personnel change"
+    );
+}
+
 pub unsafe fn regression_checks() {
     // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
     // pas « Ce dossier est introuvable ». Seulement si le test le demande.
@@ -8275,6 +8326,7 @@ pub unsafe fn regression_checks() {
     row_icon_checks();
     pick::regression();
     places_and_hover_checks();
+    places_cache_checks();
     wheel_tick_checks();
     props::regression(root);
     icons::regression();
