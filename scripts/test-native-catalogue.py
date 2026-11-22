@@ -195,13 +195,17 @@ with tempfile.TemporaryDirectory() as temporary:
         calls["ticks"] += 1
         if calls["ticks"] == 2: (home / ".local/share/winlux").mkdir(parents=True, exist_ok=True); (home / ".local/share/winlux/launchers.json").write_text("[]")
         if calls["ticks"] >= 4: raise Stop
-    catalogue.refresh = lambda: calls.__setitem__("refresh", calls["refresh"] + 1)
+    # refresh() tourne dans un processus fils (refresh_apart) : il compte dans un fichier.
+    passes = home / "passes-refresh"
+    passes.write_text("")
+    catalogue.refresh = lambda: passes.open("a").write("x")
     catalogue.window_icons = lambda: calls.__setitem__("icons", calls["icons"] + 1)
     catalogue.time.sleep = tick
     try: catalogue.watch(full_pass=3600)
     except Stop: pass
     finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep = saved
     assert calls["icons"] == 4, calls
+    calls["refresh"] = len(passes.read_text())
     assert calls["refresh"] == 2, f"refresh au démarrage puis une fois après le changement, pas à chaque tour : {calls}"
     (sub / "Programme.lnk").unlink(); sub.rmdir()
 
