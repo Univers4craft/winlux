@@ -997,6 +997,18 @@ pub struct X11Backend {
     pending: Vec<Event>,
     /// Événement supplémentaire issu d'un ConfigureNotify simultanément move/size.
     deferred_events: Vec<PendingEvent>,
+    /// Cadre du gestionnaire autour des fenêtres de premier niveau affichées
+    /// (_NET_FRAME_EXTENTS, pixels physiques : gauche, droite, haut, bas).
+    /// Le rectangle Win32 l'inclut, la fenêtre X est la zone dedans (#2984).
+    extents: HashMap<usize, [i32; 4]>,
+    /// Fenêtres override-redirect : jamais gérées, donc sans cadre.
+    popups: std::collections::HashSet<usize>,
+    /// Le gestionnaire n'a pas répondu à _NET_REQUEST_FRAME_EXTENTS : on ne
+    /// le lui redemande plus (pas d'attente à chaque affichage).
+    extents_unanswered: bool,
+    /// Cadre mesuré par genre de fenêtre (gui::FRAME_*), physique, pour
+    /// AdjustWindowRectEx avant toute fenêtre de ce genre (#3016).
+    kind_extents: HashMap<u8, [i32; 4]>,
     /// Dernière liste de commandes GDI par fenêtre, rejouée à chaque Expose.
     content: HashMap<usize, Vec<DrawCmd>>,
     /// Polices « core » ouvertes à la demande, indexées par les attributs GDI.
@@ -1260,6 +1272,10 @@ impl X11Backend {
             asked_focus: 0,
             pending: Vec::new(),
             deferred_events: Vec::new(),
+            extents: HashMap::new(),
+            popups: std::collections::HashSet::new(),
+            extents_unanswered: false,
+            kind_extents: HashMap::new(),
             content: HashMap::new(),
             fonts: HashMap::new(),
             color_cache: RefCell::new(HashMap::new()),
@@ -3496,6 +3512,214 @@ impl X11Backend {
     /// SIZE_RESTORED ou SIZE_MAXIMIZED au retour. Chromium n'y remet son rendu
     /// en marche qu'ainsi : réactivée, la fenêtre de Claude restait vide
     /// (#1498).
+    /// Lit _NET_FRAME_EXTENTS d'une fenêtre X (pixels physiques).
+    fn read_extents(&self, top: Window) -> Option<[i32; 4]> {
+        let atom = self
+            .conn
+            .intern_atom(false, b"_NET_FRAME_EXTENTS")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let reply = self
+            .conn
+            .get_property(false, top, atom, AtomEnum::CARDINAL, 0, 4)
+            .ok()?
+            .reply()
+            .ok()?;
+        let v: Vec<u32> = reply.value32()?.collect();
+        (v.len() == 4).then(|| [v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32])
+    }
+
+    /// Cadre que le gestionnaire pose sur une fenêtre de premier niveau du
+    /// genre `kind` (gui::FRAME_*) : une fenêtre X sonde, jamais affichée,
+    /// reçoit les mêmes indications que celles de ce genre, puis le cadre
+    /// est demandé par _NET_REQUEST_FRAME_EXTENTS (EWMH), qui vaut pour une
+    /// fenêtre non encore affichée. Mesuré une fois par genre (#3016).
+    fn probe_kind_extents(&mut self, kind: u8) -> [i32; 4] {
+        if let Some(e) = self.kind_extents.get(&kind) {
+            return *e;
+        }
+        let found = self.probe_kind_extents_uncached(kind);
+        // Sans réponse (gestionnaire absent ou muet) : pas de cadre, et on
+        // ne redemande pas à chaque appel.
+        let e = found.unwrap_or([0; 4]);
+        self.kind_extents.insert(kind, e);
+        e
+    }
+
+    fn probe_kind_extents_uncached(&mut self, kind: u8) -> Option<[i32; 4]> {
+        if self.extents_unanswered {
+            return None;
+        }
+        let atom = |conn: &RustConnection, name: &[u8]| {
+            conn.intern_atom(false, name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.atom)
+        };
+        let root = self.conn.setup().roots[self.screen].root;
+        let visual = self.conn.setup().roots[self.screen].root_visual;
+        let probe = self.conn.generate_id().ok()?;
+        self.conn
+            .create_window(
+                0,
+                probe,
+                root,
+                0,
+                0,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                visual,
+                &CreateWindowAux::new(),
+            )
+            .ok()?;
+        if kind == gui::FRAME_BORDER {
+            if let Some(m) = atom(&self.conn, b"_MOTIF_WM_HINTS") {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    probe,
+                    m,
+                    m,
+                    &[2, 0, 2, 0, 0],
+                );
+            }
+        }
+        if kind == gui::FRAME_TOOL {
+            if let (Some(t), Some(v)) = (
+                atom(&self.conn, b"_NET_WM_WINDOW_TYPE"),
+                atom(&self.conn, b"_NET_WM_WINDOW_TYPE_TOOLBAR"),
+            ) {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    probe,
+                    t,
+                    AtomEnum::ATOM,
+                    &[v],
+                );
+            }
+        }
+        let mut found = None;
+        if let Some(request) = atom(&self.conn, b"_NET_REQUEST_FRAME_EXTENTS") {
+            let ev =
+                x11rb::protocol::xproto::ClientMessageEvent::new(32, probe, request, [0u32; 5]);
+            let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+                | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+            let _ = self.conn.send_event(false, root, mask, ev);
+            let _ = self.conn.flush();
+            let start = std::time::Instant::now();
+            while found.is_none() && start.elapsed() < std::time::Duration::from_millis(50) {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+                found = self.read_extents(probe);
+            }
+            if found.is_none() {
+                self.extents_unanswered = true;
+            }
+        }
+        let _ = self.conn.destroy_window(probe);
+        let _ = self.conn.flush();
+        found
+    }
+
+    /// Avant le premier affichage d'une fenêtre de premier niveau : son cadre
+    /// est demandé au gestionnaire (_NET_REQUEST_FRAME_EXTENTS, EWMH) et la
+    /// fenêtre X rétrécie d'autant, pour que le rectangle Win32 demandé par
+    /// le programme soit celui du cadre, comme sous Windows (#2984).
+    fn learn_extents(&mut self, hwnd: usize) {
+        if self.popups.contains(&hwnd) {
+            return;
+        }
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        let top = Self::top_xwin(&w);
+        let mut found = self.read_extents(top);
+        if found.is_none() && !self.extents_unanswered {
+            let root = self.conn.setup().roots[self.screen].root;
+            if let Ok(Ok(request)) = self
+                .conn
+                .intern_atom(false, b"_NET_REQUEST_FRAME_EXTENTS")
+                .map(|c| c.reply())
+            {
+                let ev = x11rb::protocol::xproto::ClientMessageEvent::new(
+                    32,
+                    top,
+                    request.atom,
+                    [0u32; 5],
+                );
+                let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+                    | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+                let _ = self.conn.send_event(false, root, mask, ev);
+                let _ = self.conn.flush();
+                // Le gestionnaire est local : réponse en général sous la
+                // milliseconde. Au-delà de 50 ms, il ne la gère pas.
+                let start = std::time::Instant::now();
+                while found.is_none() && start.elapsed() < std::time::Duration::from_millis(50) {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                    found = self.read_extents(top);
+                }
+                if found.is_none() {
+                    self.extents_unanswered = true;
+                }
+            }
+        }
+        let [l, r, t, b] = found.unwrap_or([0; 4]);
+        self.extents.insert(hwnd, [l, r, t, b]);
+        if l + r + t + b == 0 {
+            return;
+        }
+        // La fenêtre X était à la taille du rectangle Win32 : elle devient
+        // l'intérieur du cadre.
+        let width = (w.width as i32 - l - r).max(1) as u16;
+        let height = (w.height as i32 + w.bar as i32 - t - b).max(1) as u16;
+        if let Some(x) = self.windows.get_mut(&hwnd) {
+            x.width = width;
+            x.height = height.saturating_sub(w.bar).max(1);
+        }
+        let aux = ConfigureWindowAux::new()
+            .width(width as u32)
+            .height(height as u32);
+        let _ = self.conn.configure_window(top, &aux);
+        if w.frame != 0 {
+            let client = ConfigureWindowAux::new()
+                .width(width as u32)
+                .height(height.saturating_sub(w.bar).max(1) as u32);
+            let _ = self.conn.configure_window(w.window, &client);
+        }
+        self.position_hints(top, w.x, w.y, width, height);
+    }
+
+    /// _NET_FRAME_EXTENTS changé par le gestionnaire (agrandie, restaurée,
+    /// décorations retirées) : Winlux en est averti pour garder la zone
+    /// client, et entourer le rectangle Win32 du nouveau cadre.
+    fn extents_changed(&mut self, hwnd: usize, atom: u32) -> Option<PendingEvent> {
+        let w = self.windows.get(&hwnd).copied()?;
+        let ext = self
+            .conn
+            .intern_atom(true, b"_NET_FRAME_EXTENTS")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        if atom != ext || atom == 0 || !self.extents.contains_key(&hwnd) {
+            return None;
+        }
+        let found = self.read_extents(Self::top_xwin(&w)).unwrap_or([0; 4]);
+        if self.extents.get(&hwnd) == Some(&found) {
+            return None;
+        }
+        self.extents.insert(hwnd, found);
+        let [l, r, t, b] = found.map(|v| self.logical(v).clamp(0, 0xFFFF) as isize);
+        Some(PendingEvent {
+            hwnd,
+            message: gui::WM_WINLUX_FRAME,
+            wparam: 0,
+            lparam: l | (r << 16) | (t << 32) | (b << 48),
+        })
+    }
+
     fn on_property(
         &mut self,
         e: x11rb::protocol::xproto::PropertyNotifyEvent,
@@ -3505,6 +3729,10 @@ impl X11Backend {
         if w.child || Self::top_xwin(w) != e.window {
             return None;
         }
+        if let Some(ev) = self.extents_changed(hwnd, e.atom) {
+            return Some(ev);
+        }
+        let w = self.windows.get(&hwnd)?;
         let wm_state = self
             .conn
             .intern_atom(true, b"WM_STATE")
@@ -5140,48 +5368,13 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn frame_extents(&mut self, hwnd: usize) -> Option<[i32; 4]> {
-        let top = Self::top_xwin(self.windows.get(&hwnd)?);
-        let root = self.conn.setup().roots[self.screen].root;
-        let atom = |conn: &RustConnection, name: &[u8]| {
-            conn.intern_atom(false, name)
-                .ok()
-                .and_then(|c| c.reply().ok())
-                .map(|r| r.atom)
-        };
-        let extents = atom(&self.conn, b"_NET_FRAME_EXTENTS")?;
-        let read = |conn: &RustConnection| -> Option<[i32; 4]> {
-            let reply = conn
-                .get_property(false, top, extents, AtomEnum::CARDINAL, 0, 4)
-                .ok()?
-                .reply()
-                .ok()?;
-            let v: Vec<u32> = reply.value32()?.collect();
-            (v.len() == 4).then(|| [v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32])
-        };
-        let found = match read(&self.conn) {
-            Some(v) => Some(v),
-            None => {
-                // Fenêtre pas encore gérée : _NET_REQUEST_FRAME_EXTENTS (EWMH),
-                // le gestionnaire pose la propriété sans afficher la fenêtre.
-                let request = atom(&self.conn, b"_NET_REQUEST_FRAME_EXTENTS")?;
-                let ev =
-                    x11rb::protocol::xproto::ClientMessageEvent::new(32, top, request, [0u32; 5]);
-                let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
-                    | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
-                let _ = self.conn.send_event(false, root, mask, ev);
-                let _ = self.conn.flush();
-                let mut got = None;
-                for _ in 0..20 {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                    got = read(&self.conn);
-                    if got.is_some() {
-                        break;
-                    }
-                }
-                got
-            }
-        }?;
-        Some(found.map(|v| self.logical(v)))
+        let e = self.extents.get(&hwnd).copied()?;
+        Some(e.map(|v| self.logical(v)))
+    }
+
+    fn frame_for_kind(&mut self, kind: u8) -> Option<[i32; 4]> {
+        let e = self.probe_kind_extents(kind);
+        Some(e.map(|v| self.logical(v)))
     }
 
     fn work_area(&mut self) -> Option<Rect> {
@@ -5693,6 +5886,9 @@ impl gui::GuiBackend for X11Backend {
     fn show_window(&mut self, hwnd: usize, show: bool) {
         if let Some(w) = self.windows.get(&hwnd) {
             let top = Self::top_xwin(w);
+            if show && !w.child && !self.extents.contains_key(&hwnd) {
+                self.learn_extents(hwnd);
+            }
             if show {
                 let _ = self.conn.map_window(top);
             } else {
@@ -5764,12 +5960,20 @@ impl gui::GuiBackend for X11Backend {
         let y = self
             .scaled(rect.top)
             .clamp(i16::MIN as i32, i16::MAX as i32);
-        let width = self.scaled(rect.width()).max(1).min(u16::MAX as i32) as u16;
-        let height = self.scaled(rect.height()).max(1).min(u16::MAX as i32) as u16;
+        // Rectangle Win32 = cadre du gestionnaire compris : la fenêtre X
+        // en est l'intérieur. Avec NorthWestGravity, la position demandée
+        // est celle du cadre (#2984).
+        let [el, er, et, eb] = self.extents.get(&hwnd).copied().unwrap_or([0; 4]);
+        let width = (self.scaled(rect.width()) - el - er)
+            .max(1)
+            .min(u16::MAX as i32) as u16;
+        let height = (self.scaled(rect.height()) - et - eb)
+            .max(1)
+            .min(u16::MAX as i32) as u16;
         let (window, frame, bar, child) = match self.windows.get_mut(&hwnd) {
             Some(w) => {
-                w.x = x;
-                w.y = y;
+                w.x = x + el;
+                w.y = y + et;
                 w.width = width;
                 w.height = height.saturating_sub(w.bar).max(1);
                 (w.window, w.frame, w.bar, w.child)
@@ -5825,6 +6029,8 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_popup(&mut self, hwnd: usize) {
+        self.popups.insert(hwnd);
+        self.extents.remove(&hwnd);
         if let Some(w) = self.windows.get(&hwnd) {
             let aux = ChangeWindowAttributesAux::new().override_redirect(1);
             let _ = self.conn.change_window_attributes(Self::top_xwin(w), &aux);
