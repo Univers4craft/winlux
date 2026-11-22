@@ -88,12 +88,6 @@ unsafe fn slot_for(key: u64, size: u32) -> &'static mut Slot {
     s
 }
 
-/// Comme `pending()`, sans l'effacer : l'Explorateur cadence sa boucle
-/// plus vite tant qu'une vignette est en calcul.
-pub unsafe fn waiting() -> bool {
-    PENDING
-}
-
 /// Vrai si une vignette était encore en calcul au dernier affichage : la
 /// boucle de l'Explorateur doit repeindre pour la faire apparaître.
 pub unsafe fn pending() -> bool {

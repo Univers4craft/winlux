@@ -520,27 +520,8 @@ pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
-/// Cadence du tic de la fenêtre native (ms) : 500, ou moins quand
-/// l'Explorateur anime un défilement, attend une vignette ou une copie.
-pub unsafe fn native_tick_ms() -> u32 {
-    if NATIVE_APP == APP_EXPLORER {
-        crate::explorer::tick_ms()
-    } else {
-        500
-    }
-}
-
-static mut NATIVE_SLOW_AT: u32 = 0;
-
 pub unsafe fn native_tick(hwnd: Handle) {
-    // Les fichiers d'état du système et l'accessibilité restent relus
-    // toutes les 500 ms, même quand le tic s'accélère.
-    let now = GetTickCount();
-    let slow = now.wrapping_sub(NATIVE_SLOW_AT) >= 500;
-    if slow {
-        NATIVE_SLOW_AT = now;
-    }
-    let changed = slow && (crate::settings::system_tick() | crate::gfx::a11y_reload());
+    let changed = crate::settings::system_tick() | crate::gfx::a11y_reload();
     if app_tick(NATIVE_APP, &native_frame(hwnd)) || changed {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }

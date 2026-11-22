@@ -1151,7 +1151,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         desktop::tick(hwnd);
                     }
                 } else if wm::native_app().is_some() {
-                    if GetTickCount().wrapping_sub(last_tick) >= wm::native_tick_ms() {
+                    if GetTickCount().wrapping_sub(last_tick) >= 500 {
                         last_tick = GetTickCount();
                         wm::native_tick(hwnd);
                     }
@@ -1163,19 +1163,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         InvalidateRect(hwnd, core::ptr::null(), 0);
                     }
                 }
-                if desktop || gfx::theme_animating() {
-                    Sleep(if desktop { 4 } else { 10 });
-                } else if wm::native_app().is_some() {
-                    // Fenêtre seule (Explorateur…) : on dort jusqu'au prochain
-                    // tic ou jusqu'au premier message, au lieu de 10 ms fixes
-                    // qui retardaient chaque touche de 5 ms en moyenne.
-                    let wait = wm::native_tick_ms()
-                        .saturating_sub(GetTickCount().wrapping_sub(last_tick))
-                        .max(1);
-                    MsgWaitForMultipleObjects(0, core::ptr::null(), 0, wait, 0x04FF);
-                } else {
-                    Sleep(10);
-                }
+                Sleep(if desktop { 4 } else { 10 });
             }
         }
 
