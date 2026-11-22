@@ -773,6 +773,9 @@ pub fn observe_key_message(msg: &Msg) {
         }
         return;
     }
+    if msg.message == WM_KEYDOWN {
+        key_down_removed(msg.hwnd, msg.wparam, msg.lparam);
+    }
     if msg.wparam >= KEY_STATE_COUNT {
         return;
     }
@@ -944,9 +947,53 @@ pub fn set_key_char(hwnd: usize, vk: usize, lparam: isize, ch: Option<u16>) {
     chars.push_back(ch);
 }
 
+/// Traduction d'une pression déjà retirée de la file par le programme : ce
+/// que `TranslateMessage` rendra pour ce message-là (#2870).
+#[derive(Clone, Copy, Debug)]
+struct RemovedKey {
+    /// `None` : rien d'enregistré par le backend (message posté par le
+    /// programme), repli sur la disposition US.
+    ch: Option<Option<u16>>,
+    prefix: Option<u16>,
+}
+
+fn removed_keys() -> &'static Mutex<HashMap<KeyCharKey, RemovedKey>> {
+    static K: OnceLock<Mutex<HashMap<KeyCharKey, RemovedKey>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Un `WM_KEYDOWN` quitte la file (GetMessage, PeekMessage avec PM_REMOVE) :
+/// sa traduction quitte la file des caractères au même moment. Un programme
+/// qui ne traduit pas ce message (raccourci pris par TranslateAccelerator,
+/// comme Ctrl+N dans Notepad++) ne laisse ainsi rien derrière lui ; avant,
+/// le « sans caractère » de Ctrl+N restait en file et la frappe suivante de
+/// « n » le recevait à la place du sien : la lettre était perdue (#2870).
+fn key_down_removed(hwnd: usize, vk: usize, lparam: isize) {
+    let key = KeyCharKey { hwnd, vk, lparam };
+    let ch = {
+        let mut pending = lock(key_chars());
+        let ch = pending.get_mut(&key).and_then(VecDeque::pop_front);
+        if pending.get(&key).is_some_and(VecDeque::is_empty) {
+            pending.remove(&key);
+        }
+        ch
+    };
+    let prefix = lock(key_prefixes()).remove(&key);
+    lock(removed_keys()).insert(key, RemovedKey { ch, prefix });
+}
+
 /// Caractère à synthétiser pour un `WM_KEYDOWN`, consommé une seule fois.
+/// D'abord celui du message retiré de la file (le cas normal), sinon, pour
+/// un message que le programme n'a pas retiré lui-même, la file des
+/// caractères, sinon la disposition US.
 pub fn take_key_char(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
     let key = KeyCharKey { hwnd, vk, lparam };
+    if let Some(removed) = lock(removed_keys()).remove(&key) {
+        return match removed.ch {
+            Some(ch) => ch,
+            None => vk_to_char(vk),
+        };
+    }
     let queued = {
         let mut pending = lock(key_chars());
         let result = pending.get_mut(&key).and_then(VecDeque::pop_front);
@@ -973,10 +1020,15 @@ pub fn set_key_prefix(hwnd: usize, vk: usize, lparam: isize, ch: u16) {
 }
 
 pub fn take_key_prefix(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
-    lock(key_prefixes()).remove(&KeyCharKey { hwnd, vk, lparam })
+    let key = KeyCharKey { hwnd, vk, lparam };
+    if let Some(removed) = lock(removed_keys()).get_mut(&key) {
+        return removed.prefix.take();
+    }
+    lock(key_prefixes()).remove(&key)
 }
 
 fn discard_key_chars(hwnd: usize) {
+    lock(removed_keys()).retain(|key, _| key.hwnd != hwnd);
     lock(key_prefixes()).retain(|key, _| key.hwnd != hwnd);
     lock(key_chars()).retain(|key, _| key.hwnd != hwnd);
 }
@@ -6054,6 +6106,33 @@ pub(crate) mod tests {
         assert_eq!(take_key_char(hwnd, vk, ctrl_lparam), Some(b'a' as u16));
 
         discard_key_chars(hwnd);
+    }
+
+    /// #2870 : Ctrl+N pris par un accélérateur (jamais traduit), puis « n »
+    /// tapé : la lettre produit bien son WM_CHAR. Deux « n » retirés l'un
+    /// après l'autre gardent chacun le leur.
+    #[test]
+    fn une_pression_non_traduite_ne_vole_pas_le_caractere_de_la_suivante() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        let (vk, lparam) = (0x4E, (0x31isize << 16) | 1);
+        // Ctrl+N : aucun caractère ; puis « n », « n ».
+        set_key_char(hwnd, vk, lparam, None);
+        set_key_char(hwnd, vk, lparam, Some(b'n' as u16));
+        set_key_char(hwnd, vk, lparam, Some(b'n' as u16));
+        let key = Msg::new(hwnd, WM_KEYDOWN, vk, lparam);
+        // Ctrl+N retiré de la file puis consommé par TranslateAccelerator.
+        observe_key_message(&key);
+        observe_key_message(&Msg::new(hwnd, WM_KEYUP, vk, lparam | (3 << 30)));
+        for _ in 0..2 {
+            observe_key_message(&key);
+            assert_eq!(unsafe { crate::dlls::user32::translate_message(&key) }, 1);
+            observe_key_message(&Msg::new(hwnd, WM_KEYUP, vk, lparam | (3 << 30)));
+            let ch = take_message(&q, hwnd, WM_CHAR, WM_CHAR).expect("WM_CHAR de « n »");
+            assert_eq!(ch.wparam, b'n' as usize);
+        }
+        assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+        destroy_window(hwnd);
     }
 
     #[test]

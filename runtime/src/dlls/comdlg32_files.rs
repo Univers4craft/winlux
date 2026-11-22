@@ -1165,87 +1165,236 @@ pub(crate) unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i3
         name: initial_name.clone(),
         def_ext: def_ext.clone(),
     };
-    let picked = explorer_app().and_then(|app| pick_with_explorer(owner, &request, &app));
-    let (result, filter) = match picked {
-        Some(Some(chosen)) => chosen,
-        Some(None) => return 0,
-        None => {
-            STATE.with(|s| {
-                *s.borrow_mut() = Some(FileState {
-                    save,
-                    flags,
-                    filters,
-                    filter,
-                    def_ext,
-                    dir,
-                    initial_name,
-                    ..Default::default()
-                })
-            });
-            let r = dialogs::run_builtin(owner, &title, W, H, file_proc as *const () as usize, 0);
-            let st = STATE.with(|s| s.borrow_mut().take()).unwrap_or_default();
-            if r != 1 || st.result.is_empty() {
-                return 0;
+    // Crochet d'une boîte de style Explorateur (OFN_ENABLEHOOK) : il voit
+    // la boîte s'ouvrir, puis valide le nom choisi par CDN_FILEOK (#2936).
+    let hook = FileHook::open(ofn_ptr, flags, owner);
+    let mut refused = 0;
+    let accepted = loop {
+        let picked = explorer_app().and_then(|app| pick_with_explorer(owner, &request, &app));
+        let (result, filter) = match picked {
+            Some(Some(chosen)) => chosen,
+            Some(None) => break 0,
+            None => {
+                STATE.with(|s| {
+                    *s.borrow_mut() = Some(FileState {
+                        save,
+                        flags,
+                        filters: filters.clone(),
+                        filter,
+                        def_ext: def_ext.clone(),
+                        dir: dir.clone(),
+                        initial_name: initial_name.clone(),
+                        ..Default::default()
+                    })
+                });
+                let r =
+                    dialogs::run_builtin(owner, &title, W, H, file_proc as *const () as usize, 0);
+                let st = STATE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+                if r != 1 || st.result.is_empty() {
+                    break 0;
+                }
+                (st.result, st.filter)
             }
-            (st.result, st.filter)
+        };
+        let st = FileState {
+            result,
+            filter,
+            ..Default::default()
+        };
+        let (parts, off, ext) = result_text(&st.result);
+        let need: usize = parts.iter().map(|p| p.chars().count() + 1).sum::<usize>() + 1;
+        if need > max_file as usize {
+            if file_buf != 0 && max_file >= 2 {
+                std::ptr::write_unaligned(file_buf as *mut u16, need.min(0xFFFF) as u16);
+            }
+            set_error(FNERR_BUFFERTOOSMALL);
+            break 0;
+        }
+        // Chaînes séparées par des zéros, double zéro final.
+        let mut pos = 0usize;
+        for p in &parts {
+            let n = p.chars().count();
+            if wide {
+                super::put_text_w(p, (file_buf as *mut u16).add(pos), (n + 1) as u32);
+            } else {
+                super::put_text_a(p, (file_buf as *mut u8).add(pos), (n + 1) as u32);
+            }
+            pos += n + 1;
+        }
+        if wide {
+            *(file_buf as *mut u16).add(pos) = 0;
+        } else {
+            *(file_buf as *mut u8).add(pos) = 0;
+        }
+        wr::<u16>(ofn_ptr, ofn::FILE_OFFSET, off);
+        wr::<u16>(ofn_ptr, ofn::FILE_EXT, ext);
+        wr::<u32>(ofn_ptr, ofn::FILTER_INDEX, st.filter as u32 + 1);
+        // Comme Windows, le dossier courant devient celui du fichier choisi,
+        // sauf avec OFN_NOCHANGEDIR : IrfanView y cherche « l'image suivante »
+        // (#1691).
+        if flags & OFN_NOCHANGEDIR == 0 {
+            if let Some(dir) = st.result.first().and_then(|p| chosen_dir(p)) {
+                let w: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
+                super::kernel32::set_current_directory_w(w.as_ptr());
+            }
+        }
+        let title_buf = rd::<usize>(ofn_ptr, ofn::FILE_TITLE);
+        let max_title = rd::<u32>(ofn_ptr, ofn::MAX_FILE_TITLE);
+        if title_buf != 0 && max_title > 0 && st.result.len() == 1 {
+            let name = st.result[0].rsplit('\\').next().unwrap_or("").to_string();
+            if wide {
+                super::put_text_w(&name, title_buf as *mut u16, max_title);
+            } else {
+                super::put_text_a(&name, title_buf as *mut u8, max_title);
+            }
+        }
+        // CDN_FILEOK : un refus du crochet garde la boîte ouverte (Learn,
+        // « CDN_FILEOK notification code ») ; l'Explorateur est rouvert.
+        if hook.as_ref().is_none_or(|h| h.file_ok(ofn_ptr, file_buf)) {
+            break 1;
+        }
+        refused += 1;
+        if refused >= 8 {
+            break 0;
         }
     };
-    let st = FileState {
-        result,
-        filter,
-        ..Default::default()
-    };
-    let (parts, off, ext) = result_text(&st.result);
-    let need: usize = parts.iter().map(|p| p.chars().count() + 1).sum::<usize>() + 1;
-    if need > max_file as usize {
-        if file_buf != 0 && max_file >= 2 {
-            std::ptr::write_unaligned(file_buf as *mut u16, need.min(0xFFFF) as u16);
-        }
-        set_error(FNERR_BUFFERTOOSMALL);
-        return 0;
+    if let Some(h) = hook {
+        h.close();
     }
-    // Chaînes séparées par des zéros, double zéro final.
-    let mut pos = 0usize;
-    for p in &parts {
-        let n = p.chars().count();
-        if wide {
-            super::put_text_w(p, (file_buf as *mut u16).add(pos), (n + 1) as u32);
-        } else {
-            super::put_text_a(p, (file_buf as *mut u8).add(pos), (n + 1) as u32);
-        }
-        pos += n + 1;
-    }
-    if wide {
-        *(file_buf as *mut u16).add(pos) = 0;
-    } else {
-        *(file_buf as *mut u8).add(pos) = 0;
-    }
-    wr::<u16>(ofn_ptr, ofn::FILE_OFFSET, off);
-    wr::<u16>(ofn_ptr, ofn::FILE_EXT, ext);
-    wr::<u32>(ofn_ptr, ofn::FILTER_INDEX, st.filter as u32 + 1);
-    // Comme Windows, le dossier courant devient celui du fichier choisi,
-    // sauf avec OFN_NOCHANGEDIR : IrfanView y cherche « l'image suivante »
-    // (#1691).
-    if flags & OFN_NOCHANGEDIR == 0 {
-        if let Some(dir) = st.result.first().and_then(|p| chosen_dir(p)) {
-            let w: Vec<u16> = dir.encode_utf16().chain(std::iter::once(0)).collect();
-            super::kernel32::set_current_directory_w(w.as_ptr());
-        }
-    }
-    let title_buf = rd::<usize>(ofn_ptr, ofn::FILE_TITLE);
-    let max_title = rd::<u32>(ofn_ptr, ofn::MAX_FILE_TITLE);
-    if title_buf != 0 && max_title > 0 && st.result.len() == 1 {
-        let name = st.result[0].rsplit('\\').next().unwrap_or("").to_string();
-        if wide {
-            super::put_text_w(&name, title_buf as *mut u16, max_title);
-        } else {
-            super::put_text_a(&name, title_buf as *mut u8, max_title);
-        }
-    }
-    1
+    accepted
 }
 
 const OFN_NOCHANGEDIR: u32 = 0x8;
+const OFN_ENABLEHOOK: u32 = 0x20;
+const OFN_EXPLORER: u32 = 0x0008_0000;
+/// Décalage de `lpfnHook` dans OPENFILENAME 64 bits (après `lCustData`).
+const OFN_HOOK: usize = 120;
+const WM_INITDIALOG: u32 = 0x0110;
+const WM_NOTIFY: u32 = 0x004E;
+/// CDN_FIRST = 0U-601U ; CDN_INITDONE = CDN_FIRST, CDN_FILEOK = CDN_FIRST - 5.
+const CDN_INITDONE: u32 = 0u32.wrapping_sub(601);
+const CDN_FILEOK: u32 = 0u32.wrapping_sub(601).wrapping_sub(5);
+/// DWL_MSGRESULT (DWLP_MSGRESULT) : index 0 des octets de la boîte.
+const DWL_MSGRESULT: i32 = 0;
+
+/// Procédure crochet OFNHookProc d'une boîte « Ouvrir » ou « Enregistrer
+/// sous » de style Explorateur (OFN_EXPLORER | OFN_ENABLEHOOK). D'après
+/// Learn (« OFNHookProc », « Open and Save As Dialog Boxes ») : le crochet
+/// est la procédure d'une boîte enfant de la boîte commune, reçoit
+/// WM_INITDIALOG avec l'OPENFILENAME en lParam, puis CDN_INITDONE, puis
+/// CDN_FILEOK quand l'utilisateur valide un nom, sous forme de WM_NOTIFY
+/// dont lParam pointe un OFNOTIFY. Son premier paramètre est la boîte
+/// enfant, dont GetParent donne la boîte commune. Notre boîte étant
+/// l'Explorateur, une boîte commune et sa boîte enfant cachées tiennent ce
+/// rôle. Sans CDN_FILEOK, une boîte qui ne relit le nom choisi qu'à ce
+/// moment gardait le nom proposé : Paint.NET enregistrait « Sans titre »
+/// dans son dossier de programme (#2936).
+struct FileHook {
+    hook: usize,
+    dialog: usize,
+    child: usize,
+}
+
+impl FileHook {
+    unsafe fn open(ofn_ptr: *mut u8, flags: u32, owner: usize) -> Option<FileHook> {
+        // Programme 32 bits : structure à traduire, le crochet n'est pas
+        // appelé. Une structure sans lpfnHook (OPENFILENAME_NT4 compris)
+        // fait au moins 136 octets en 64 bits.
+        if crate::wow32::pointer_size() != 8
+            || flags & (OFN_ENABLEHOOK | OFN_EXPLORER) != OFN_ENABLEHOOK | OFN_EXPLORER
+            || rd::<u32>(ofn_ptr, ofn::SIZE) < 136
+        {
+            return None;
+        }
+        let hook = rd::<usize>(ofn_ptr, OFN_HOOK);
+        if hook == 0 {
+            return None;
+        }
+        dialogs::ensure_dialog_class();
+        let class: Vec<u16> = dialogs::DIALOG_CLASS
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let create = |style: u32, parent: usize| {
+            user32::create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                style,
+                0,
+                0,
+                0,
+                0,
+                parent,
+                0,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        const WS_POPUP: u32 = 0x8000_0000;
+        const WS_CHILD: u32 = 0x4000_0000;
+        // Boîte commune possédée par la fenêtre du programme, jamais montrée.
+        let dialog = create(WS_POPUP, owner);
+        let child = if dialog != 0 {
+            create(WS_CHILD, dialog)
+        } else {
+            0
+        };
+        if child == 0 {
+            if dialog != 0 {
+                user32::destroy_window(dialog);
+            }
+            return None;
+        }
+        let h = FileHook {
+            hook,
+            dialog,
+            child,
+        };
+        h.call(WM_INITDIALOG, 0, ofn_ptr as isize);
+        h.notify(CDN_INITDONE, ofn_ptr, 0);
+        Some(h)
+    }
+
+    unsafe fn call(&self, msg: u32, wp: usize, lp: isize) -> isize {
+        let f: extern "win64" fn(usize, u32, usize, isize) -> isize =
+            std::mem::transmute(self.hook);
+        f(self.child, msg, wp, lp)
+    }
+
+    /// WM_NOTIFY avec un OFNOTIFY : NMHDR (hwndFrom, idFrom, code), lpOFN,
+    /// pszFile.
+    unsafe fn notify(&self, code: u32, ofn_ptr: *mut u8, file: usize) -> isize {
+        #[repr(C)]
+        struct OfNotify {
+            hwnd_from: usize,
+            id_from: usize,
+            code: u32,
+            lp_ofn: usize,
+            psz_file: usize,
+        }
+        let mut n = OfNotify {
+            hwnd_from: self.dialog,
+            id_from: 0,
+            code,
+            lp_ofn: ofn_ptr as usize,
+            psz_file: file,
+        };
+        self.call(WM_NOTIFY, 0, &mut n as *mut OfNotify as isize)
+    }
+
+    /// CDN_FILEOK : le nom choisi est déjà dans lpstrFile. Le crochet le
+    /// refuse en renvoyant une valeur non nulle avec DWL_MSGRESULT non nul.
+    unsafe fn file_ok(&self, ofn_ptr: *mut u8, file: usize) -> bool {
+        user32::set_window_long_ptr_w(self.child, DWL_MSGRESULT, 0);
+        let r = self.notify(CDN_FILEOK, ofn_ptr, file);
+        r == 0 || user32::get_window_long_ptr_w(self.child, DWL_MSGRESULT) == 0
+    }
+
+    unsafe fn close(self) {
+        user32::destroy_window(self.dialog);
+    }
+}
 
 /// Dossier d'un chemin Windows choisi (`C:\Images\a.png` → `C:\Images`,
 /// `C:\a.png` → `C:\`).
@@ -1303,6 +1452,71 @@ pub unsafe extern "win64" fn get_file_title_w(path: *const u16, buf: *mut u16, c
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2936 : le crochet d'une boîte de style Explorateur reçoit
+    /// WM_INITDIALOG (lParam = OPENFILENAME), CDN_INITDONE puis CDN_FILEOK
+    /// avec le nom choisi déjà dans lpstrFile ; un refus (retour non nul et
+    /// DWL_MSGRESULT non nul) garde la boîte ouverte, et GetParent de la
+    /// boîte enfant donne la boîte commune (hwndFrom).
+    #[test]
+    fn crochet_explorateur_recoit_cdn_fileok() {
+        use std::sync::Mutex;
+        static VUS: Mutex<Vec<(u32, u32, String)>> = Mutex::new(Vec::new());
+        static REFUS: Mutex<bool> = Mutex::new(true);
+        unsafe extern "win64" fn crochet(dlg: usize, msg: u32, _wp: usize, lp: isize) -> isize {
+            let mut code = 0;
+            let mut nom = String::new();
+            if msg == WM_NOTIFY {
+                let n = lp as *const usize;
+                assert_eq!(
+                    user32::get_parent(dlg),
+                    *n,
+                    "hwndFrom = GetParent(boîte enfant)"
+                );
+                code = *(n.add(2)) as u32;
+                let ofn = *n.add(3) as *const u8;
+                nom = crate::dlls::wstr(rd::<usize>(ofn as *mut u8, ofn::FILE) as *const u16);
+            }
+            VUS.lock().unwrap().push((msg, code, nom));
+            if msg == WM_NOTIFY && code == CDN_FILEOK && std::mem::take(&mut *REFUS.lock().unwrap())
+            {
+                user32::set_window_long_ptr_w(dlg, DWL_MSGRESULT, -1);
+                return -1;
+            }
+            0
+        }
+        let _teb = crate::process::test_teb();
+        let mut buf: Vec<u16> = "C:\\Users\\d\\Images\\essai.png\0".encode_utf16().collect();
+        buf.resize(260, 0);
+        let mut ofn_buf = [0u8; 152];
+        let p = ofn_buf.as_mut_ptr();
+        unsafe {
+            wr::<u32>(p, ofn::SIZE, 152);
+            wr::<usize>(p, ofn::FILE, buf.as_mut_ptr() as usize);
+            wr::<u32>(p, ofn::MAX_FILE, 260);
+            wr::<usize>(p, OFN_HOOK, crochet as *const () as usize);
+        }
+        // Sans OFN_EXPLORER, pas de crochet de ce style.
+        assert!(unsafe { FileHook::open(p, OFN_ENABLEHOOK, 0) }.is_none());
+        let h = unsafe { FileHook::open(p, OFN_ENABLEHOOK | OFN_EXPLORER, 0) }.expect("crochet");
+        assert!(
+            !unsafe { h.file_ok(p, buf.as_ptr() as usize) },
+            "refus du crochet"
+        );
+        assert!(
+            unsafe { h.file_ok(p, buf.as_ptr() as usize) },
+            "nom accepté"
+        );
+        unsafe { h.close() };
+        let vus = VUS.lock().unwrap().clone();
+        assert_eq!(vus[0].0, WM_INITDIALOG);
+        assert_eq!((vus[1].0, vus[1].1), (WM_NOTIFY, CDN_INITDONE));
+        assert_eq!(
+            (vus[2].1, vus[2].2.as_str()),
+            (CDN_FILEOK, "C:\\Users\\d\\Images\\essai.png")
+        );
+        assert_eq!(vus.len(), 4);
+    }
 
     /// Dossier courant après un choix (#1691) : celui du fichier choisi.
     #[test]
