@@ -514,6 +514,9 @@ unsafe fn create_window_inner(
             if fixed_size_frame(style) {
                 b.set_resizable(hwnd, false);
             }
+            if let Some((minimize, maximize)) = caption_buttons(style) {
+                b.set_caption_buttons(hwnd, minimize, maximize);
+            }
             // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
             // sous Windows (boîte « Vie privée » de VLC, #1068).
             let owner = owner_top_level(parent);
@@ -2623,7 +2626,11 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
                 publish_shared(hwnd);
                 let style = value as u32;
                 if style & WS_CHILD == 0 {
-                    with_backend(|b| b.set_resizable(hwnd, !fixed_size_frame(style)));
+                    with_backend(|b| {
+                        b.set_resizable(hwnd, !fixed_size_frame(style));
+                        let (minimize, maximize) = caption_buttons(style).unwrap_or((true, true));
+                        b.set_caption_buttons(hwnd, minimize, maximize);
+                    });
                 }
             }
         }
@@ -5842,8 +5849,46 @@ fn fixed_size_frame(style: u32) -> bool {
         && style & (WS_THICKFRAME | WS_MAXIMIZEBOX) == 0
 }
 
+/// Boutons Réduire et Agrandir d'une fenêtre de premier niveau à barre de
+/// titre (#3064), `None` pour une autre fenêtre. D'après « Window Styles »
+/// (Learn), WS_MINIMIZEBOX et WS_MAXIMIZEBOX donnent chacun leur bouton et
+/// exigent WS_SYSMENU ; une fenêtre outil n'a que Fermer de toute façon.
+fn caption_buttons(style: u32) -> Option<(bool, bool)> {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_SYSMENU: u32 = 0x0008_0000;
+    const WS_MINIMIZEBOX: u32 = 0x0002_0000;
+    const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+    if style & WS_CHILD != 0 || style & WS_CAPTION != WS_CAPTION {
+        return None;
+    }
+    let menu = style & WS_SYSMENU != 0;
+    Some((
+        menu && style & WS_MINIMIZEBOX != 0,
+        menu && style & WS_MAXIMIZEBOX != 0,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// #3064 : Réduire et Agrandir suivent WS_MINIMIZEBOX et WS_MAXIMIZEBOX,
+    /// chacun avec WS_SYSMENU ; une fenêtre sans barre de titre ou un enfant
+    /// ne sont pas concernés.
+    #[test]
+    fn boutons_reduire_agrandir_selon_le_style_3064() {
+        use super::caption_buttons;
+        // WS_OVERLAPPEDWINDOW.
+        assert_eq!(caption_buttons(0x00CF_0000), Some((true, true)));
+        // MessageBox : WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME.
+        assert_eq!(caption_buttons(0x80C8_0080), Some((false, false)));
+        // WS_MINIMIZEBOX seul, avec cadre épais.
+        assert_eq!(caption_buttons(0x00CE_0000), Some((true, false)));
+        // Styles des boutons sans WS_SYSMENU : aucun bouton.
+        assert_eq!(caption_buttons(0x00C3_0000), Some((false, false)));
+        // Sans barre de titre, enfant à barre de titre.
+        assert_eq!(caption_buttons(0x8000_0000), None);
+        assert_eq!(caption_buttons(0x40CF_0000), None);
+    }
 
     /// #3011 : une boîte de message ou un dialogue fixe n'est pas
     /// redimensionnable ; une fenêtre principale, une fenêtre avec Agrandir,

@@ -3343,6 +3343,11 @@ pub trait GuiBackend: Send {
     /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
     /// Le programme garde le droit de changer lui-même sa taille.
     fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
+    /// Boutons Réduire et Agrandir de la barre de titre d'une fenêtre de
+    /// premier niveau (WS_MINIMIZEBOX et WS_MAXIMIZEBOX avec WS_SYSMENU,
+    /// #3064). Sans aucun des deux, Fermer seul ; avec un seul, le
+    /// gestionnaire montre l'autre grisé, comme Windows (KB Q130760).
+    fn set_caption_buttons(&mut self, _hwnd: usize, _minimize: bool, _maximize: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
