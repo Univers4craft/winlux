@@ -780,6 +780,10 @@ pub fn exports() -> crate::dlls::Exports {
         "GetEnhMetaFileBits" => fn meta_fail, "SetEnhMetaFileBits" => fn meta_fail,
         "GetEnhMetaFileDescriptionW" => fn meta_fail, "GetEnhMetaFileDescriptionA" => fn meta_fail,
         "GetEnhMetaFilePaletteEntries" => fn meta_fail,
+        // Délai de chargement de chrome.dll (Chromium 160) : sans métafichier
+        // amélioré (CreateEnhMetaFile échoue), ces trois appels échouent aussi.
+        "EnumEnhMetaFile" => fn meta_fail, "GdiComment" => fn meta_fail,
+        "PlayEnhMetaFileRecord" => fn meta_fail,
         "PolyPolygon" => fn poly_polygon, "PolyPolyline" => fn poly_polyline,
         "CreatePolygonRgn" => fn create_polygon_rgn, "CreatePolyPolygonRgn" => fn create_poly_polygon_rgn,
         "ExtCreateRegion" => fn ext_create_region, "GetRegionData" => fn get_region_data,
@@ -803,6 +807,21 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3167 : chrome.dll (Chromium 160) résout d'avance toutes ses
+    /// fonctions de gdi32 chargées en différé ; ces trois-là doivent exister
+    /// et, sans métafichier amélioré, échouer (FALSE) sans rien lire.
+    #[test]
+    fn metafichiers_ameliores_charges_en_differe_par_chromium_3167() {
+        let e = exports();
+        for name in ["EnumEnhMetaFile", "GdiComment", "PlayEnhMetaFileRecord"] {
+            assert!(e.contains_key(name), "gdi32!{name} absente");
+        }
+        let bad = 0x10usize;
+        unsafe {
+            assert_eq!(meta_fail(bad, bad, bad, bad), 0);
+        }
+    }
 
     /// DIB 16x16 en 1 bit par pixel avec sa palette (masques des listes
     /// d'images de la VCL, WinSCP x86 #905), puis 4, 8 et 16 bits.
