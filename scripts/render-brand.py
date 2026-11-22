@@ -174,6 +174,24 @@ def background(w, h, light=False):
     return Image.fromarray(img.clip(0, 255).astype(np.uint8), "RGB")
 
 
+def aurora_stars():
+    """Étoiles du fond « Aurore » sombre : (x, y relatifs, éclat ajouté).
+    Le même tirage sert à l'image et à winlux-fond-anime (#3079), qui fait
+    scintiller les plus brillantes exactement là où l'image les a posées."""
+    rng = np.random.default_rng(3)
+    n = 230
+    su, sv = rng.uniform(0, 1, n), rng.uniform(0, 0.5, n) ** 1.2
+    glow = rng.uniform(40, 150, n)
+    return list(zip(su.tolist(), sv.tolist(), glow.tolist()))
+
+
+def aurora_stars_text():
+    lines = ["# Étoiles de winlux-prisme-aurore (render-brand.py) : x y éclat, x et y",
+             "# relatifs à l'image (0 à 1), éclat de 40 à 150. Lu par winlux-fond-anime."]
+    lines += [f"{a:.6f} {b:.6f} {g:.1f}" for a, b, g in aurora_stars()]
+    return "\n".join(lines) + "\n"
+
+
 def aurora_background(w, h, light=False):
     """Fond « Aurore » : rideaux de lumière violet → cyan au-dessus de
     collines, ciel étoilé la nuit. Tout est proportionnel à la hauteur, si
@@ -214,12 +232,8 @@ def aurora_background(w, h, light=False):
         del base, above, prof, rays, m, t, col
     if not light:
         # Étoiles fixes (même tirage, positions relatives) au-dessus des rideaux.
-        rng = np.random.default_rng(3)
-        n = 230
-        su, sv = rng.uniform(0, 1, n), rng.uniform(0, 0.5, n) ** 1.2
-        glow = rng.uniform(40, 150, n)
         rad = max(1, round(h / 1080))
-        for a, b, g in zip(su, sv, glow):
+        for a, b, g in aurora_stars():
             cx, cy = int(a * w), int(b * h)
             img[max(cy - rad + 1, 0):cy + rad, max(cx - rad + 1, 0):cx + rad] += g
     rng = np.random.default_rng(7)
@@ -317,6 +331,7 @@ def main():
     for name, light in AURORA_NAMES:
         for w, h, suffix in AURORA_SIZES:
             aurora_wallpaper(w, h, light).save(WALL / f"{name}{suffix}.png", optimize=True)
+    (WALL / "winlux-prisme-aurore.etoiles").write_text(aurora_stars_text())
     print("identité Winlux rendue dans", BRAND, "et", WALL)
 
 

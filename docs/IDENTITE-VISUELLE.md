@@ -35,6 +35,14 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
   « Winlux Aurore claire ». Calculé par `render-brand.py` en 1920x1080,
   2560x1440 et 3840x2160 (`winlux-prisme-aurore[-clair][-LxH].png`) ; la
   session et Paramètres prennent la définition la plus proche de l'écran.
+- Fond animé (#3079, désactivé par défaut, Paramètres › Personnalisation ›
+  Arrière-plan) : `winlux-fond-anime` fait scintiller les étoiles les plus
+  brillantes d'« Winlux Aurore » sombre, aux positions exportées par
+  `render-brand.py` dans `winlux-prisme-aurore.etoiles`, et fait passer une
+  étoile filante toutes les 30 à 80 s. Couche transparente sans entrée souris
+  au-dessus de xfdesktop, petits rectangles seulement ; aucune image en plein
+  écran, fenêtre agrandie, économiseur actif, écran éteint ou batterie ≤ 20 %.
+  Coût mesuré par `scripts/mesure-fond-anime.sh`.
 - « Winlux Nuit » et « Winlux Aube » : calculés au pixel dans
   `shell/personalize.rs`, et rendus en PNG pour la session XFCE.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.

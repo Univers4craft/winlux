@@ -450,6 +450,10 @@ _TR = {
     "Arrière-plan": ("Background", "Fondo", "Hintergrund"),
     "Winlux Aurore": ("Winlux Aurora", "Winlux Aurora", "Winlux Polarlicht"),
     "Winlux Aurore claire": ("Winlux Aurora light", "Winlux Aurora clara", "Winlux Polarlicht hell"),
+    "Animer le fond Winlux Aurore": ("Animate the Winlux Aurora background", "Animar el fondo Winlux Aurora", "Hintergrund Winlux Polarlicht animieren"),
+    "Les étoiles de Winlux Aurore scintillent et une étoile filante passe de temps en temps. L’animation s’arrête d’elle-même en plein écran, fenêtre agrandie, écran éteint ou batterie faible.": ("The stars of Winlux Aurora twinkle and a shooting star passes now and then. The animation stops by itself in full screen, with a maximized window, when the screen is off or the battery is low.", "Las estrellas de Winlux Aurora titilan y de vez en cuando pasa una estrella fugaz. La animación se detiene sola en pantalla completa, con una ventana maximizada, con la pantalla apagada o con la batería baja.", "Die Sterne von Winlux Polarlicht funkeln, und ab und zu zieht eine Sternschnuppe vorbei. Die Animation hält von selbst an: im Vollbild, bei maximiertem Fenster, bei ausgeschaltetem Bildschirm oder schwachem Akku."),
+    "Choisissez le fond Winlux Aurore pour voir l’animation.": ("Choose the Winlux Aurora background to see the animation.", "Elija el fondo Winlux Aurora para ver la animación.", "Wählen Sie den Hintergrund Winlux Polarlicht, um die Animation zu sehen."),
+    "Indisponible sans les effets visuels du bureau.": ("Unavailable without the desktop visual effects.", "No disponible sin los efectos visuales del escritorio.", "Ohne die visuellen Effekte des Desktops nicht verfügbar."),
     "Winlux Nuit": ("Winlux Night", "Winlux Noche", "Winlux Nacht"),
     "Winlux Aube": ("Winlux Dawn", "Winlux Amanecer", "Winlux Morgenröte"),
     "Classique": ("Classic", "Clásico", "Klassisch"),
@@ -2316,6 +2320,7 @@ class ExtraPages:
                    _t("Lever et coucher du soleil calculés pour votre fuseau horaire.") if mode == "auto" else None)
         if tool:
             self.wallpaper_modes(box, tool, moods)
+        self.animated_wallpaper(box)
         self.section(_t("Couleur d’accentuation"))
         palette = Gtk.Box(spacing=8)
         for color in ACCENTS:
@@ -2411,6 +2416,23 @@ class ExtraPages:
                     lambda on: update_start_menu_state(for_you=bool(on)),
                     _t("Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré."))
         self.actions(box, [(_t("Effacer l’historique d’utilisation"), lambda: update_start_menu_state(usage=[], recent=[], dismissed=[]))])
+
+    def animated_wallpaper(self, box):
+        """Fond « Winlux Aurore » animé (#3079) : étoiles qui scintillent et
+        étoile filante, coupés dès que le fond est caché. Désactivé par défaut."""
+        if not have("winlux-fond-anime"):
+            return
+        answer = run(["winlux-fond-anime", "status"])
+        state = keyvals(answer.stdout) if answer else {}
+        on = state.get("enabled") == "on"
+        hint = _t("Les étoiles de Winlux Aurore scintillent et une étoile filante passe de temps en temps. "
+                  "L’animation s’arrête d’elle-même en plein écran, fenêtre agrandie, écran éteint ou batterie faible.")
+        if on and state.get("reason") == "autre-fond":
+            hint = _t("Choisissez le fond Winlux Aurore pour voir l’animation.")
+        elif on and state.get("reason") == "sans-compositeur":
+            hint = _t("Indisponible sans les effets visuels du bureau.")
+        self.switch(box, _t("Animer le fond Winlux Aurore"), on,
+                    lambda value: self.tool(["winlux-fond-anime", "enable" if value else "disable"]), hint)
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
