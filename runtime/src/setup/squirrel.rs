@@ -105,6 +105,44 @@ pub fn find_package(data: &[u8]) -> Option<(usize, usize)> {
     (data.get(at..at + 4)? == b"PK\x03\x04").then_some((at, size))
 }
 
+/// Noms des entrées d'un ZIP tenu en mémoire, lus dans son répertoire
+/// central. `None` si la fin du répertoire central est introuvable ou si une
+/// entrée sort de l'archive.
+fn zip_names(zip: &[u8]) -> Option<Vec<String>> {
+    let eocd = (0..zip.len().checked_sub(21)?)
+        .rev()
+        .find(|&i| rd32(zip, i) == Some(0x0605_4b50))?;
+    let count = rd16(zip, eocd + 10)? as usize;
+    let mut at = rd32(zip, eocd + 16)? as usize;
+    let mut names = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        if rd32(zip, at)? != 0x0201_4b50 {
+            return None;
+        }
+        let len = rd16(zip, at + 28)? as usize;
+        let extra = rd16(zip, at + 30)? as usize;
+        let comment = rd16(zip, at + 32)? as usize;
+        let name = zip.get(at + 46..at + 46 + len)?;
+        names.push(String::from_utf8_lossy(name).into_owned());
+        at += 46 + len + extra + comment;
+    }
+    Some(names)
+}
+
+/// Le `Setup.exe` porte-t-il le paquet complet de l'application ? Un
+/// installateur Squirrel « web » (celui de Teams, 1,3 Mo) n'en porte pas et
+/// télécharge son paquet à l'exécution : Winlux ne peut pas l'installer
+/// lui-même et doit le laisser s'exécuter (#3022).
+pub fn carries_full_package(data: &[u8]) -> bool {
+    find_package(data)
+        .and_then(|(at, size)| zip_names(&data[at..at + size]))
+        .is_some_and(|names| {
+            names
+                .iter()
+                .any(|n| n.to_ascii_lowercase().ends_with("-full.nupkg"))
+        })
+}
+
 fn bad(e: impl std::fmt::Display) -> String {
     format!("installateur Squirrel illisible : {e}")
 }
@@ -514,6 +552,26 @@ pub mod tests {
         assert_eq!(&s[at..at + 4], b"PK\x03\x04");
         assert!(find_resource(&s, "DATA", 132).is_none());
         assert_eq!(super::super::detect(&s), Some(super::super::Kind::Squirrel));
+    }
+
+    #[test]
+    fn installateur_web_sans_paquet_execute_normalement_3022() {
+        // Setup.exe complet : reconnu, installé par Winlux.
+        assert!(carries_full_package(&sample_setup()));
+        // Setup.exe web : archive DATA/131 sans -full.nupkg, le paquet est
+        // téléchargé à l'exécution. Il n'est pas un installateur reconnu,
+        // donc il s'exécute comme tout programme.
+        let web = setup_exe(&stored_zip(&[
+            ("Update.exe", b"MZ update"),
+            ("RELEASES", b"x"),
+        ]));
+        assert!(find_package(&web).is_some());
+        assert!(!carries_full_package(&web));
+        assert_eq!(super::super::detect(&web), None);
+        // Archive tronquée : pas de répertoire central lisible.
+        let mut cut = stored_zip(&[("App-1.0.0-full.nupkg", b"x")]);
+        cut.truncate(cut.len() - 22);
+        assert!(!carries_full_package(&setup_exe(&cut)));
     }
 
     #[test]
