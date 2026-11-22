@@ -927,6 +927,9 @@ class Start(Gtk.Application):
         if not self.window or not hasattr(self, "apps"): return
         for widget in self.content.get_children(): widget.destroy()
         query = fold(self.search.get_text().strip())
+        # Recherche changée : le parcours de fichiers en cours s'arrête avant
+        # le calcul des résultats, au lieu de lui disputer le verrou de Python.
+        if query != self.file_query: self.file_generation += 1
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
@@ -949,10 +952,14 @@ class Start(Gtk.Application):
             pages = settings_for(query) if query else []
             if query and query != self.file_query:
                 self.file_query = query
-                self.file_generation += 1
                 self.file_results = []
+                # Parcours par tranches de FILE_SLICE_MS sur la boucle
+                # principale, en priorité « au repos » : une frappe attend au
+                # plus une tranche, et la suivante arrête le parcours périmé.
+                # Dans un fil, il disputait le verrou de Python à l'affichage
+                # (#3049).
                 if len(query) >= 2:
-                    threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+                    GLib.idle_add(self.file_slice, self.find_files(query, self.file_generation))
             for index, app in enumerate(self.results):
                 group = (_t("Meilleur résultat") if index == 0 else _t("Applications")) if query else category(app)
                 if group != previous:
@@ -1338,9 +1345,16 @@ class Start(Gtk.Application):
                 buttons=Gtk.ButtonsType.CLOSE,text=_t("Impossible d’ouvrir ce fichier"),secondary_text=str(error))
             dialog.run();dialog.destroy()
 
+    def file_slice(self, steps):
+        end = time.perf_counter() + FILE_SLICE_MS / 1000
+        for _ in steps:
+            if time.perf_counter() >= end: return True
+        return False
+
     def find_files(self, query, generation):
-        # Bounded name search in visible personal directories. Never follows
-        # directory symlinks or scans the system disks from the UI thread.
+        # Bounded name search in visible personal directories, run in slices
+        # on the main loop (file_slice). Never follows directory
+        # symlinks or scans the system disks.
         # Début de mot comme Windows (#607) : « son » trouve « Son.wav », pas
         # « application-json.png » ni « Personnalisation ». Jusqu'à 300
         # candidats, puis les 30 meilleurs : nom qui commence par la recherche,
@@ -1348,6 +1362,7 @@ class Start(Gtk.Application):
         # la liste avec le premier dossier parcouru).
         matches, visited = [], 0
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
+            yield
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
@@ -1360,16 +1375,23 @@ class Start(Gtk.Application):
                 listed = []
             for name in listed + files:
                 visited += 1
+                if visited % 64 == 0:
+                    yield
+                    # Nouvelle frappe : arrêt sans finir le dossier en cours.
+                    if generation != self.file_generation: return
                 if not name.startswith(".") and found_in(query, name, cache=False): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
             if len(matches) >= 300 or visited >= 30000: break
-        matches = sorted(matches, key=lambda path: (rank(path.name, query, cache=False), -modified(path), fold(path.name)))[:30]
-        def deliver():
-            if generation == self.file_generation:
-                self.file_results = matches
-                self.render()
-            return False
-        GLib.idle_add(deliver)
+        dates = {}
+        for index, path in enumerate(matches):
+            if index % 32 == 0:
+                yield
+                if generation != self.file_generation: return
+            dates[path] = modified(path)
+        matches = sorted(matches, key=lambda path: (rank(path.name, query, cache=False), -dates[path], fold(path.name)))[:30]
+        if generation == self.file_generation:
+            self.file_results = matches
+            self.render()
 
     def menu(self, widget, event, actions):
         if self.window.has_grab():self.window.grab_remove()
@@ -1528,6 +1550,9 @@ class Start(Gtk.Application):
 # Anciennes épingles par défaut remplacées : l'épingle Edge des premières
 # versions devient le « Navigateur » générique (aucune marque imposée).
 RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
+
+# Durée d'une tranche du parcours des fichiers sur la boucle principale (ms).
+FILE_SLICE_MS = 3
 
 
 def rank(text, query, cache=True):
