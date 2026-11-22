@@ -15,6 +15,7 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 const INVALID_HANDLE_VALUE: usize = usize::MAX;
 const ATTR_READONLY: u32 = 0x1;
 const ATTR_HIDDEN: u32 = 0x2;
+const ATTR_SYSTEM: u32 = 0x4;
 const ATTR_DIRECTORY: u32 = 0x10;
 const ATTR_ARCHIVE: u32 = 0x20;
 const ATTR_NORMAL: u32 = 0x80;
@@ -40,6 +41,20 @@ pub(crate) fn no_write_bits(meta: &std::fs::Metadata) -> bool {
     meta.permissions().mode() & 0o222 == 0
 }
 
+/// Lanceur que la session pose à côté d'un raccourci du Bureau
+/// (`winlux-lnk-<16 hex>.desktop`, winlux-applications.py) pour que xfdesktop
+/// l'affiche au nom du programme. Pour les programmes Windows, c'est un
+/// fichier technique, caché et système comme `desktop.ini` : l'Explorateur
+/// et ses Récents n'en montrent que le `.lnk` (#3000).
+pub(crate) fn session_file(name: &[u8]) -> bool {
+    let Some(rest) = name.strip_prefix(b"winlux-lnk-") else {
+        return false;
+    };
+    rest.len() == 16 + ".desktop".len()
+        && rest[..16].iter().all(u8::is_ascii_hexdigit)
+        && rest[16..].eq_ignore_ascii_case(b".desktop")
+}
+
 /// Attributs Windows d'un fichier Linux, et ses métadonnées (cible du lien).
 ///
 /// - Un lien symbolique porte FILE_ATTRIBUTE_REPARSE_POINT, comme sous
@@ -49,6 +64,7 @@ pub(crate) fn no_write_bits(meta: &std::fs::Metadata) -> bool {
 ///   Linux réels), pas seulement « aucun bit w ». Jamais sur un dossier :
 ///   Windows ignore cet attribut pour les dossiers.
 /// - Caché = nom commençant par un point.
+/// - Caché et système = lanceur de la session (`session_file`).
 pub(crate) fn attributes(path: &std::path::Path) -> std::io::Result<(u32, std::fs::Metadata)> {
     let link = std::fs::symlink_metadata(path)?;
     let is_link = link.file_type().is_symlink();
@@ -71,6 +87,12 @@ pub(crate) fn attributes(path: &std::path::Path) -> std::io::Result<(u32, std::f
         .is_some_and(|n| n.to_string_lossy().starts_with('.'))
     {
         a |= ATTR_HIDDEN;
+    }
+    if path
+        .file_name()
+        .is_some_and(|n| session_file(n.as_encoded_bytes()))
+    {
+        a |= ATTR_HIDDEN | ATTR_SYSTEM;
     }
     if meta.is_file() {
         a |= ATTR_ARCHIVE;
@@ -460,6 +482,44 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3000 : le lanceur d'un raccourci du Bureau est caché et système
+    /// pour les programmes Windows ; le raccourci lui-même reste visible.
+    #[test]
+    fn lanceur_de_session_cache_et_systeme() {
+        let dir = std::env::temp_dir().join(format!("winlux-3000-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lanceur = dir.join("winlux-lnk-ea4205e5bdd9be3e.desktop");
+        let lnk = dir.join("Notepad++.lnk");
+        let autre = dir.join("winlux-lnk-notes.desktop");
+        for f in [&lanceur, &lnk, &autre] {
+            std::fs::write(f, b"x").unwrap();
+        }
+        let (a, _) = attributes(&lanceur).unwrap();
+        assert_eq!(a & 0x6, 0x6, "caché et système");
+        let (a, _) = attributes(&lnk).unwrap();
+        assert_eq!(a & 0x6, 0, "le raccourci reste visible");
+        let (a, _) = attributes(&autre).unwrap();
+        assert_eq!(
+            a & 0x6,
+            0,
+            "un fichier de l'utilisateur au nom voisin reste visible"
+        );
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let c = std::ffi::CString::new(lanceur.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::stat(c.as_ptr(), &mut st) }, 0);
+        let w = crate::dlls::ntdll_file::win_stat(
+            &st,
+            Some(b"winlux-lnk-ea4205e5bdd9be3e.desktop"),
+            false,
+        );
+        assert_eq!(
+            w.attributes & 0x6,
+            0x6,
+            "même réponse par NtQueryDirectoryFile"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use std::ffi::CString;
     #[test]
     fn racine_d_un_lecteur_et_non_dossier_courant() {
