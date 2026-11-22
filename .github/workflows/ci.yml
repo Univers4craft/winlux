@@ -618,6 +618,11 @@ jobs:
       - name: Consigne du programme dans les boîtes de fichiers (#2400)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
 
+      - name: Nom du fichier sélectionné et remplacé dans Enregistrer sous (#2852)
+        run: |
+          sudo apt-get install -y -q xvfb xauth xdotool || { sudo apt-get update -q && sudo apt-get install -y -q xvfb xauth xdotool; }
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-selection.py
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
@@ -783,6 +788,9 @@ jobs:
 
       - name: Menu Démarrer préchargé à l'ouverture de session et réveillé par D-Bus
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-preload.py
+
+      - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py

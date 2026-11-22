@@ -294,6 +294,7 @@ pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
 pub mod url_security;
+pub mod url_stream;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;

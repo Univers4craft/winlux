@@ -19,7 +19,7 @@
 Sur la page de la [dernière release](https://github.com/Univers4craft/winlux/releases/latest), téléchargez `winlux-live-<version>.iso` et son fichier `.sha256`, puis vérifiez :
 
 ```sh
-sha256sum -c winlux-live-v0.2.12.iso.sha256
+sha256sum -c winlux-live-v0.2.21.iso.sha256
 ```
 
 ## 2a. Dans une machine virtuelle
@@ -39,7 +39,7 @@ Pour les développeurs, `scripts/create-test-vm.sh` crée et démarre une VM QEM
 L'ISO est hybride : elle s'écrit telle quelle sur une clé USB (avec Balena Etcher, Ventoy, ou en ligne de commande) :
 
 ```sh
-sudo dd if=winlux-live-v0.2.12.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.21.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 > Remplacez `/dev/sdX` par la clé, **pas** par un disque. `dd` efface la cible sans demander.
@@ -74,7 +74,7 @@ La fenêtre **Bienvenue** (`winlux-welcome`) s'ouvre à la première session et 
 
 ## Récupération
 
-**Paramètres › Système › Récupération** (comme Windows 11) :
+**Paramètres › Système › Récupération** :
 
 - **Réinitialiser ce PC** : « Conserver mes fichiers » (comptes et dossiers personnels gardés, système et applications remis d'origine) ou « Tout supprimer » (nouveau compte, nettoyage du lecteur en option). Réinstallation depuis la clé de secours, une ISO ou Internet ; rien n'est effacé avant le redémarrage.
 - **Démarrage avancé** : redémarre une fois sur le menu de secours.
@@ -103,7 +103,7 @@ Détails : [docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/maste
 
 ## Mettre à jour une installation existante
 
-Voir [Publication et mises à jour](Publication-et-mises-a-jour). En résumé : une installation **v0.2.6 ou plus ancienne** doit être réinstallée une fois avec une ISO récente ; une installation **v0.2.12** doit l'être une fois avec l'ISO v0.2.13 ou plus récente ; ensuite, tout se fait depuis Paramètres › Mises à jour.
+Voir [Publication et mises à jour](Publication-et-mises-a-jour). En résumé : une installation **v0.2.6 ou plus ancienne** doit être réinstallée une fois avec une ISO récente ; une installation **v0.2.12** doit l'être une fois avec une ISO récente ; ensuite, tout se fait depuis Paramètres › Mises à jour.
 
 ## Utiliser seulement le runtime sur un Linux existant
 
