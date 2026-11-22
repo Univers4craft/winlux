@@ -2175,13 +2175,15 @@ class Windows(Source):
                 latest = str(a.get("version", ""))
                 # Installé hors de la Boutique (#2890) : le programme inscrit
                 # dans « Applications installées » compte comme installé.
+                # La version inscrite l'emporte sur celle que la Boutique
+                # avait notée : l'application a pu être réinstallée ou mise à
+                # jour sans elle depuis (#2999).
                 registered = ""
-                if not ver:
-                    if programs is None:
-                        programs = registered_programs()
-                    found = next((p for p in programs if program_matches(a["name"], p[1])), None)
-                    if found:
-                        registered, ver = found[0], found[2] or "?"
+                if programs is None:
+                    programs = registered_programs()
+                found = next((p for p in programs if program_matches(a["name"], p[1])), None)
+                if found:
+                    registered, ver = found[0], found[2] or ver or "?"
                 app = App("windows", ref, a["name"], summary=a.get("summary", ""),
                           description=a.get("description") if isinstance(a.get("description"), list)
                           else [a.get("description", "")],

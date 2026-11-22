@@ -1150,8 +1150,10 @@ pub fn handle_path(handle: usize) -> Result<String, i32> {
         .ok_or(ERROR_INVALID_HANDLE)
 }
 
+#[track_caller]
 pub fn new_handle(path: String) -> usize {
     let h = NEXT_HANDLE.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::handle_origin::record(h);
     crate::dlls::lock(&HANDLES)
         .get_or_insert_with(HashMap::new)
         .insert(h, path);
