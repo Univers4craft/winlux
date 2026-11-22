@@ -139,7 +139,33 @@ pub(super) static IITERABLE_USER: Iface = Iface {
     methods: &[Some(&[Out(&IITERATOR_USER)])],
 };
 
+// Windows.UI.ViewManagement.UISettings (#2206), servi par
+// `dlls/ui_settings.rs`. Ordre et paramètres : windows-rs 0.62.2 (MIT),
+// `IUISettings2_Vtbl`. Le f64 et le jeton i64 rendus le sont par un
+// pointeur vers des données sans pointeur (`I`) ; le gestionnaire passé
+// reste `I` : le runtime ne l'appelle jamais (ces réglages ne changent pas
+// pendant la vie du processus) ; le jeton passé par valeur tient 8 octets.
+
+/// IUISettings2 {BAD82401-2721-44F9-BB91-2BB228BE442F} : demandée par
+/// l'outil de déploiement d'Office (x86), refusée jusque-là (#3177).
+pub(super) static IUISETTINGS2: Iface = Iface {
+    name: "IUISettings2",
+    iid: guid(
+        0xBAD8_2401,
+        0x2721,
+        0x44F9,
+        [0xBB, 0x91, 0x2B, 0xB2, 0x28, 0xBE, 0x44, 0x2F],
+    ),
+    parent: Some(&IINSPECTABLE),
+    methods: &[
+        Some(&[I]),    // get_TextScaleFactor(f64*)
+        Some(&[I, I]), // add_TextScaleFactorChanged(handler, EventRegistrationToken*)
+        Some(&[Q]),    // remove_TextScaleFactorChanged(EventRegistrationToken)
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
+    &IUISETTINGS2,
     &IINSPECTABLE,
     &IACTIVATIONFACTORY,
     &IPACKAGEMANAGER,
@@ -159,6 +185,24 @@ mod tests {
     /// runtime par des mandataires. IInspectable a 3 méthodes après
     /// IUnknown, IActivationFactory une de plus (Learn, inspectable.h et
     /// activation.h) ; chacune se retrouve par son IID.
+    /// #3177 : IUISettings2 rendue au code x86, trois méthodes après
+    /// IInspectable ; le jeton retiré passe en 8 octets sur la pile x86.
+    #[test]
+    fn reglages_d_interface_2_decrits() {
+        let iid = guid(
+            0xBAD8_2401,
+            0x2721,
+            0x44F9,
+            [0xBB, 0x91, 0x2B, 0xB2, 0x28, 0xBE, 0x44, 0x2F],
+        );
+        let f = by_iid(&iid).expect("IUISettings2 décrite");
+        assert!(std::ptr::eq(f, &IUISETTINGS2));
+        assert_eq!(f.count(), 9);
+        assert_eq!(slots(f.method(6).unwrap()), 1);
+        assert_eq!(slots(f.method(7).unwrap()), 2);
+        assert_eq!(slots(f.method(8).unwrap()), 2);
+    }
+
     #[test]
     fn winrt_decrit_pour_le_code_x86() {
         assert_eq!(IINSPECTABLE.count(), 6);
