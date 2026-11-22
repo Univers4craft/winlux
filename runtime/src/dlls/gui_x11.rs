@@ -1081,9 +1081,10 @@ pub struct X11Backend {
     owners: HashMap<usize, usize>,
     /// _MOTIF_WM_HINTS de chaque fenêtre de premier niveau : décorations
     /// demandées (MWM_DECOR_*, `None` = laissées au gestionnaire) et
-    /// fenêtre non redimensionnable (#3011). Les deux champs partagent une
+    /// fenêtre non redimensionnable (#3011), boutons Réduire et Agrandir
+    /// voulus quand l'un des deux manque (#3064). Ces champs partagent une
     /// seule propriété X : chaque écriture la recompose entière.
-    mwm: HashMap<usize, (Option<u32>, bool)>,
+    mwm: HashMap<usize, (Option<u32>, bool, Option<(bool, bool)>)>,
 }
 
 impl X11Backend {
@@ -1093,6 +1094,13 @@ impl X11Backend {
     /// _NET_WM_ALLOWED_ACTIONS), mais accepte toujours que le programme
     /// change lui-même la taille (SetWindowPos). Mesuré sous Xvfb (#3011) :
     /// openbox ignore les bits MWM_FUNC_MAXIMIZE et MWM_FUNC_MINIMIZE.
+    ///
+    /// Une barre de titre sans l'un des boutons Réduire ou Agrandir déclare
+    /// ses décorations une à une (bordure, poignées, titre, menu) et ne met
+    /// MWM_DECOR_MINIMIZE ou MWM_DECOR_MAXIMIZE que pour le bouton voulu.
+    /// L'openbox de Winlux les suit comme Windows suit WS_MINIMIZEBOX et
+    /// WS_MAXIMIZEBOX (#3064). Les fonctions ne changent pas : le programme
+    /// réduit toujours lui-même sa fenêtre (ShowWindow).
     fn write_mwm_hints(&mut self, hwnd: usize) {
         const MWM_HINTS_FUNCTIONS: u32 = 1;
         const MWM_HINTS_DECORATIONS: u32 = 2;
@@ -1102,7 +1110,19 @@ impl X11Backend {
             return;
         };
         let top = Self::top_xwin(w);
-        let (decorations, fixed) = self.mwm.get(&hwnd).copied().unwrap_or((None, false));
+        let (decorations, fixed, buttons) =
+            self.mwm.get(&hwnd).copied().unwrap_or((None, false, None));
+        // MWM_DECOR_ALL (1), ou rien de posé : barre de titre complète,
+        // dont seuls les boutons demandés restent.
+        let decorations = match (decorations, buttons) {
+            (None | Some(1), Some((minimize, maximize))) => {
+                const DECOR_FRAME: u32 = 0x02 | 0x04 | 0x08 | 0x10;
+                Some(
+                    DECOR_FRAME | if minimize { 0x20 } else { 0 } | if maximize { 0x40 } else { 0 },
+                )
+            }
+            (d, _) => d,
+        };
         let Ok(Ok(atom)) = self
             .conn
             .intern_atom(false, b"_MOTIF_WM_HINTS")
@@ -6125,7 +6145,7 @@ impl gui::GuiBackend for X11Backend {
             1 => 2,
             _ => 1,
         };
-        self.mwm.entry(hwnd).or_insert((None, false)).0 = Some(decorations);
+        self.mwm.entry(hwnd).or_insert((None, false, None)).0 = Some(decorations);
         self.write_mwm_hints(hwnd);
     }
 
@@ -6133,11 +6153,24 @@ impl gui::GuiBackend for X11Backend {
         if !self.windows.contains_key(&hwnd) {
             return;
         }
-        let entry = self.mwm.entry(hwnd).or_insert((None, false));
+        let entry = self.mwm.entry(hwnd).or_insert((None, false, None));
         if entry.1 == !resizable {
             return;
         }
         entry.1 = !resizable;
+        self.write_mwm_hints(hwnd);
+    }
+
+    fn set_caption_buttons(&mut self, hwnd: usize, minimize: bool, maximize: bool) {
+        if !self.windows.contains_key(&hwnd) {
+            return;
+        }
+        let wanted = (!(minimize && maximize)).then_some((minimize, maximize));
+        let entry = self.mwm.entry(hwnd).or_insert((None, false, None));
+        if entry.2 == wanted {
+            return;
+        }
+        entry.2 = wanted;
         self.write_mwm_hints(hwnd);
     }
 

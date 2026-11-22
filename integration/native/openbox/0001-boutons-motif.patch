@@ -1,0 +1,65 @@
+Description: Winlux : boutons Réduire et Agrandir selon les décorations Motif
+ Une fenêtre qui déclare ses décorations Motif (_MOTIF_WM_HINTS, drapeau
+ MWM_HINTS_DECORATIONS sans MWM_DECOR_ALL) avec une barre de titre suit les
+ bits MWM_DECOR_MINIMIZE et MWM_DECOR_MAXIMIZE comme Windows suit
+ WS_MINIMIZEBOX et WS_MAXIMIZEBOX (KB Q130760 « PRB: Can't Remove Minimize or
+ Maximize Button from Caption Bar ») :
+  - sans aucun des deux, ni Réduire ni Agrandir ne sont placés (Fermer seul :
+    boîte de message, dialogue) ;
+  - avec un seul des deux, les deux sont placés et l'absent est dessiné
+    désactivé ; un clic dessus agit comme sur la barre de titre.
+ Seuls les boutons changent : les fonctions du gestionnaire restent, et le
+ programme peut toujours réduire ou agrandir sa fenêtre lui-même
+ (ShowWindow), car client_iconify et client_maximize vérifient les fonctions
+ (OB_CLIENT_FUNC_*), non les décorations.
+Author: Winlux
+Forwarded: not-needed
+--- a/openbox/client.c
++++ b/openbox/client.c
+@@ -1869,6 +1869,15 @@
+                 else
+                     self->decorations = 0;
+             }
++            /* Winlux : une barre de titre sans MWM_DECOR_MINIMIZE ou
++               MWM_DECOR_MAXIMIZE n'affiche pas ce bouton (fenêtre Win32 sans
++               WS_MINIMIZEBOX ou WS_MAXIMIZEBOX). Seul le bouton disparaît :
++               les fonctions restent, le programme peut toujours réduire ou
++               agrandir sa fenêtre lui-même. */
++            if (! (self->mwmhints.decorations & OB_MWM_DECOR_ICONIFY))
++                self->decorations &= ~OB_FRAME_DECOR_ICONIFY;
++            if (! (self->mwmhints.decorations & OB_MWM_DECOR_MAXIMIZE))
++                self->decorations &= ~OB_FRAME_DECOR_MAXIMIZE;
+         }
+     }
+ 
+--- a/openbox/frame.c
++++ b/openbox/frame.c
+@@ -1810,6 +1810,12 @@
+ 
+ /* is there anything present between us and the label? */
+ static gboolean is_button_present(ObFrame *self, const gchar *lc, gint dir) {
++    /* Winlux : Réduire et Agrandir vont par paire, comme sous Windows
++       (KB Q130760) : si l'un est présent, l'autre est placé aussi et
++       dessiné désactivé ; sans aucun des deux, aucun n'est placé. */
++    if ((*lc == 'I' || *lc == 'M') &&
++        (self->decorations & (OB_FRAME_DECOR_ICONIFY | OB_FRAME_DECOR_MAXIMIZE)))
++        return TRUE;
+     for (; *lc != '\0' && lc >= config_title_layout; lc += dir) {
+         if (*lc == ' ') continue; /* it was invalid */
+         if (*lc == 'N' && self->decorations & OB_FRAME_DECOR_ICON)
+@@ -2244,8 +2250,13 @@
+     if (win == self->innerbrb)          return OB_FRAME_CONTEXT_BRCORNER;
+     if (win == self->ce_br_b)           return OB_FRAME_CONTEXT_BRCORNER;
+     if (win == self->ce_br_r)           return OB_FRAME_CONTEXT_BRCORNER;
+-    if (win == self->max)               return OB_FRAME_CONTEXT_MAXIMIZE;
+-    if (win == self->iconify)           return OB_FRAME_CONTEXT_ICONIFY;
++    /* Winlux : un bouton désactivé ne fait rien de plus que la barre. */
++    if (win == self->max)
++        return (self->decorations & OB_FRAME_DECOR_MAXIMIZE) ?
++            OB_FRAME_CONTEXT_MAXIMIZE : OB_FRAME_CONTEXT_TITLEBAR;
++    if (win == self->iconify)
++        return (self->decorations & OB_FRAME_DECOR_ICONIFY) ?
++            OB_FRAME_CONTEXT_ICONIFY : OB_FRAME_CONTEXT_TITLEBAR;
+     if (win == self->close)             return OB_FRAME_CONTEXT_CLOSE;
+     if (win == self->icon)              return OB_FRAME_CONTEXT_ICON;
+     if (win == self->desk)              return OB_FRAME_CONTEXT_ALLDESKTOPS;
