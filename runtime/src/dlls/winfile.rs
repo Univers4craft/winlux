@@ -41,16 +41,6 @@ pub(crate) fn no_write_bits(meta: &std::fs::Metadata) -> bool {
     meta.permissions().mode() & 0o222 == 0
 }
 
-/// Attributs Windows d'un fichier Linux, et ses métadonnées (cible du lien).
-///
-/// - Un lien symbolique porte FILE_ATTRIBUTE_REPARSE_POINT, comme sous
-///   Windows : les applis prudentes (sauvegarde, désinstallation récursive)
-///   ne descendent pas dedans. Ses autres attributs sont ceux de la cible.
-/// - Lecture seule = l'utilisateur ne peut pas écrire le fichier (droits
-///   Linux réels), pas seulement « aucun bit w ». Jamais sur un dossier :
-///   Windows ignore cet attribut pour les dossiers.
-/// - Caché = nom commençant par un point.
-/// - Caché et système = lanceur de la session (`session_file`).
 /// Lanceur que la session pose à côté d'un raccourci du Bureau
 /// (`winlux-lnk-<16 hex>.desktop`, winlux-applications.py) pour que xfdesktop
 /// l'affiche au nom du programme. Pour les programmes Windows, c'est un
@@ -65,6 +55,16 @@ pub(crate) fn session_file(name: &[u8]) -> bool {
         && rest[16..].eq_ignore_ascii_case(b".desktop")
 }
 
+/// Attributs Windows d'un fichier Linux, et ses métadonnées (cible du lien).
+///
+/// - Un lien symbolique porte FILE_ATTRIBUTE_REPARSE_POINT, comme sous
+///   Windows : les applis prudentes (sauvegarde, désinstallation récursive)
+///   ne descendent pas dedans. Ses autres attributs sont ceux de la cible.
+/// - Lecture seule = l'utilisateur ne peut pas écrire le fichier (droits
+///   Linux réels), pas seulement « aucun bit w ». Jamais sur un dossier :
+///   Windows ignore cet attribut pour les dossiers.
+/// - Caché = nom commençant par un point.
+/// - Caché et système = lanceur de la session (`session_file`).
 pub(crate) fn attributes(path: &std::path::Path) -> std::io::Result<(u32, std::fs::Metadata)> {
     let link = std::fs::symlink_metadata(path)?;
     let is_link = link.file_type().is_symlink();
