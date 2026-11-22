@@ -8,7 +8,11 @@ export WINLUX_BROWSER_CHOOSER
 
 # Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
 # (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,
-# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b.
+# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b. Un chemin
+# du lecteur C: (le dossier personnel, ou WINLUX_DRIVE_C / WINLUX_HOME comme
+# dans le runtime) devient C:\… : l'Explorateur l'affiche alors comme quand
+# on y arrive par le volet de gauche, « Dossier personnel (C:) › Documents »,
+# et non « Système Linux (Z:) › home › damien › Documents » (#3025).
 shell_path() {
     value=$1
     case "$value" in
@@ -24,6 +28,16 @@ if b"\0" in path:
     sys.exit(1)
 sys.stdout.buffer.write(path)
 ' "$value") || return 1 ;;
+    esac
+    drive_c=${WINLUX_DRIVE_C:-${WINLUX_HOME:-${HOME:-}}}
+    drive_c=${drive_c%/}
+    case "$drive_c" in
+        /?*)
+            case "$value" in
+                "$drive_c"|"$drive_c"/*)
+                    printf 'C:\\%s' "${value#"$drive_c"}" | sed 's@/@\\@g; s@^C:\\\\@C:\\@'
+                    return ;;
+            esac ;;
     esac
     case "$value" in
         /*) printf 'Z:%s' "$value" | sed 's@/@\\@g' ;;
