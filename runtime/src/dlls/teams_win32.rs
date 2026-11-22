@@ -114,28 +114,6 @@ extern "win64" fn UnregisterApplicationRecoveryCallback() -> i32 {
     S_OK
 }
 
-/// WerRegisterFile, WerRegisterCustomMetadata,
-/// WerRegisterAdditionalProcess : données à joindre à un rapport d'erreurs
-/// Windows, que Winlux n'envoie pas. Les paramètres sont vérifiés comme la
-/// documentation l'indique.
-unsafe extern "win64" fn WerRegisterFile(path: *const u16, _kind: u32, _flags: u32) -> i32 {
-    if path.is_null() {
-        return E_INVALIDARG;
-    }
-    S_OK
-}
-
-unsafe extern "win64" fn WerRegisterCustomMetadata(key: *const u16, value: *const u16) -> i32 {
-    if key.is_null() || value.is_null() {
-        return E_INVALIDARG;
-    }
-    S_OK
-}
-
-extern "win64" fn WerRegisterAdditionalProcess(_pid: u32, _thread: u32) -> i32 {
-    S_OK
-}
-
 /// Dossier des paquets MSIX installés (`C:\Program Files\WindowsApps`).
 fn windows_apps() -> std::path::PathBuf {
     crate::paths::to_linux("C:\\Program Files\\WindowsApps")
@@ -1182,9 +1160,6 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
                 "GetProcessIdOfThread" => fn GetProcessIdOfThread,
                 "RegisterApplicationRecoveryCallback" => fn RegisterApplicationRecoveryCallback,
                 "UnregisterApplicationRecoveryCallback" => fn UnregisterApplicationRecoveryCallback,
-                "WerRegisterFile" => fn WerRegisterFile,
-                "WerRegisterCustomMetadata" => fn WerRegisterCustomMetadata,
-                "WerRegisterAdditionalProcess" => fn WerRegisterAdditionalProcess,
                 "GetPackagePathByFullName" => fn GetPackagePathByFullName,
                 "FindPackagesByPackageFamily" => fn FindPackagesByPackageFamily,
                 "BindIoCompletionCallback" => fn BindIoCompletionCallback,
