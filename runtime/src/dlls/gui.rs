@@ -495,6 +495,94 @@ pub struct Queue {
     /// Descripteur d'éveil (`eventfd`) : signalé à chaque dépôt pour sortir
     /// un `GetMessage` bloqué dans `poll` sur la connexion X11.
     wake: WakeFd,
+    /// Messages envoyés (SendMessage) par d'autres fils aux fenêtres de ce
+    /// fil, en attente d'être traités par lui (#2885).
+    sent: Mutex<VecDeque<Arc<Sent>>>,
+}
+
+/// Envoi d'un message à la fenêtre d'un autre fil : la procédure s'exécute
+/// sur le fil qui a créé la fenêtre, l'expéditeur attend le résultat
+/// (Learn, SendMessage, #2885).
+pub struct Sent {
+    job: Mutex<Option<SentJob>>,
+    result: Mutex<Option<isize>>,
+    done: Condvar,
+}
+
+type SentJob = Box<dyn FnOnce() -> isize + Send>;
+
+/// Délai au-delà duquel un fil propriétaire qui ne relève jamais ses
+/// messages est contourné : l'expéditeur appelle alors la procédure lui-même,
+/// comme avant #2885, plutôt que de rester bloqué pour toujours.
+const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
+/// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
+/// les attentes de messages et l'attente d'un SendMessage inter-fils.
+pub fn deliver_sent() {
+    let Some(q) = lock(queues()).get(&std::thread::current().id()).cloned() else {
+        return;
+    };
+    loop {
+        let next = lock(&q.sent).pop_front();
+        let Some(sent) = next else {
+            return;
+        };
+        let job = lock(&sent.job).take();
+        if let Some(job) = job {
+            let r = job();
+            *lock(&sent.result) = Some(r);
+            sent.done.notify_all();
+        }
+    }
+}
+
+/// SendMessage vers une fenêtre du fil `owner` depuis un autre fil : `job`
+/// (l'appel de la procédure) est confié au fil propriétaire et le résultat
+/// rendu. Pendant l'attente, l'expéditeur traite les messages qu'on lui
+/// envoie, comme sous Windows, pour que deux fils qui s'envoient des
+/// messages ne se bloquent pas. `Err(job)` : le fil propriétaire n'a pas
+/// relevé ses messages à temps ; l'appelant exécute `job` lui-même.
+pub fn send_to_owner(owner: ThreadId, job: SentJob) -> Result<isize, SentJob> {
+    let q = queue_for(owner);
+    let sent = Arc::new(Sent {
+        job: Mutex::new(Some(job)),
+        result: Mutex::new(None),
+        done: Condvar::new(),
+    });
+    lock(&q.sent).push_back(sent.clone());
+    q.changed.notify_all();
+    q.wake.signal();
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let result = lock(&sent.result);
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+            let (result, _) = sent
+                .done
+                .wait_timeout(result, std::time::Duration::from_millis(1))
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+        }
+        deliver_sent();
+        if start.elapsed() >= SENT_GIVE_UP {
+            // Pas encore pris par le propriétaire : l'expéditeur le reprend.
+            // Déjà pris : il est en cours, on attend sa fin.
+            if let Some(job) = lock(&sent.job).take() {
+                lock(&q.sent).retain(|s| !Arc::ptr_eq(s, &sent));
+                crate::log_warn!(
+                    "fenetres",
+                    "SendMessage inter-fils : le fil propriétaire n'a pas relevé ses messages en {} s, appel direct (#2885)",
+                    SENT_GIVE_UP.as_secs()
+                );
+                return Err(job);
+            }
+        }
+    }
 }
 
 /// `eventfd` non bloquant servant d'éveil à une file de messages.
@@ -537,6 +625,7 @@ fn new_queue() -> Arc<Queue> {
         items: Mutex::new(VecDeque::new()),
         changed: Condvar::new(),
         wake: WakeFd::new(),
+        sent: Mutex::new(VecDeque::new()),
     })
 }
 
@@ -4220,6 +4309,7 @@ pub fn backend_is_interactive() -> bool {
 }
 
 pub fn wait_backend(timeout_ms: u32) -> bool {
+    deliver_sent();
     let fd = {
         let mut b = lock(backend());
         let Some(fd) = b.event_fd() else {
@@ -4233,8 +4323,13 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     // Le verrou du backend est relâché : les autres threads peuvent peindre
     // pendant que celui-ci dort sur la connexion X11 et sur son éveil.
     let q = current_queue();
+    if !lock(&q.sent).is_empty() {
+        deliver_sent();
+        return true;
+    }
     poll_fds(&[fd, q.wake.0], timeout_ms);
     q.wake.drain();
+    deliver_sent();
     true
 }
 
