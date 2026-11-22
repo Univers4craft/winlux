@@ -85,18 +85,53 @@ pub fn peb() -> usize {
     PEB.load(Ordering::Relaxed)
 }
 
-/// Adresse du TEB du thread courant (lue via GS, comme le ferait un programme Windows).
-#[inline]
-pub fn teb() -> usize {
-    // Ne pas lire GS:[0x30] avant l'initialisation du TEB : le processus hôte
-    // Linux a généralement un GS nul, et une lecture absolue à 0x30 segfault.
-    // ARCH_GET_GS vérifie d'abord qu'un TEB Winlux a effectivement été installé.
+thread_local! {
+    /// Base de GS connue pour ce fil ; `usize::MAX` = pas encore lue.
+    /// Const et sans destructeur : lisible jusque dans un gestionnaire de
+    /// signal et pendant la fin du fil.
+    static GS_BASE: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Pose la base de GS du fil courant (ARCH_SET_GS) et tient le cache de
+/// `teb()` à jour. Tout changement de GS passe par ici.
+pub(crate) fn set_gs_base(base: usize) -> bool {
+    // Cache invalidé d'abord : un signal reçu entre les deux relit GS.
+    let _ = GS_BASE.try_with(|c| c.set(usize::MAX));
+    let rc = unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1001, base) };
+    if rc == 0 {
+        let _ = GS_BASE.try_with(|c| c.set(base));
+    }
+    rc == 0
+}
+
+/// Base de GS lue au noyau (ARCH_GET_GS), sans cache.
+fn read_gs_base() -> usize {
     let mut base = 0usize;
     let rc = unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1004, &mut base as *mut usize) };
     if rc != 0 {
         return 0;
     }
     base
+}
+
+/// Adresse du TEB du thread courant (base de GS, comme la verrait un programme Windows).
+#[inline]
+pub fn teb() -> usize {
+    // Ne pas lire GS:[0x30] avant l'initialisation du TEB : le processus hôte
+    // Linux a généralement un GS nul, et une lecture absolue à 0x30 segfault.
+    // La base vient d'un cache par fil : posée par set_gs_base, sinon lue une
+    // fois au noyau à la première utilisation (fil créé hors de notre chemin).
+    // Avant, chaque appel coûtait un arch_prctl (EnterCriticalSection,
+    // GetLastError, GetCurrentThreadId…).
+    match GS_BASE.try_with(|c| c.get()) {
+        Ok(usize::MAX) => {
+            let base = read_gs_base();
+            let _ = GS_BASE.try_with(|c| c.set(base));
+            base
+        }
+        Ok(base) => base,
+        Err(_) => read_gs_base(),
+    }
 }
 
 pub fn set_last_error(code: u32) {
@@ -124,10 +159,7 @@ pub struct TestTeb {
 #[cfg(test)]
 impl Drop for TestTeb {
     fn drop(&mut self) {
-        assert_eq!(
-            unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1001, self.previous) },
-            0
-        );
+        assert!(set_gs_base(self.previous));
     }
 }
 #[cfg(test)]
@@ -137,7 +169,7 @@ pub fn test_teb() -> TestTeb {
     let base = bytes.as_mut_ptr() as usize;
     unsafe {
         *((base + 0x30) as *mut usize) = base;
-        assert_eq!(libc::syscall(libc::SYS_arch_prctl, 0x1001, base), 0);
+        assert!(set_gs_base(base));
     }
     TestTeb {
         previous,
@@ -190,6 +222,26 @@ pub fn quote_arg(a: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::quote_arg;
+
+    /// Le cache de teb() suit chaque changement de GS et rend ce que le noyau
+    /// rend (ARCH_GET_GS), y compris dans un fil qui n'a jamais posé GS.
+    #[test]
+    fn teb_en_cache_suit_la_base_de_gs() {
+        std::thread::spawn(|| {
+            assert_eq!(super::teb(), super::read_gs_base(), "premier appel");
+            let mut a = Box::new([0u8; 4096]);
+            let mut b = Box::new([0u8; 4096]);
+            let (a, b) = (a.as_mut_ptr() as usize, b.as_mut_ptr() as usize);
+            assert!(super::set_gs_base(a));
+            assert_eq!((super::teb(), super::read_gs_base()), (a, a));
+            assert!(super::set_gs_base(b));
+            assert_eq!((super::teb(), super::read_gs_base()), (b, b));
+            assert!(super::set_gs_base(0));
+            assert_eq!((super::teb(), super::read_gs_base()), (0, 0));
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn quote_les_arguments_necessitant_des_guillemets() {
@@ -452,7 +504,7 @@ pub fn init_thread() -> usize {
         *((teb + TEB_TID) as *mut usize) = libc::gettid() as usize;
         *((teb + TEB_PEB) as *mut usize) = peb();
         // ARCH_SET_GS : sous Linux x86-64, glibc utilise FS pour son TLS ; GS est libre.
-        if libc::syscall(libc::SYS_arch_prctl, 0x1001, teb) != 0 {
+        if !set_gs_base(teb) {
             panic!("arch_prctl(ARCH_SET_GS) a échoué");
         }
     }
@@ -564,7 +616,7 @@ pub fn free_current_teb() {
     crate::wow32::free_thread(t);
     unsafe {
         // GS d'abord : un gestionnaire de signal ne doit pas lire un TEB libéré.
-        libc::syscall(libc::SYS_arch_prctl, 0x1001, 0usize);
+        set_gs_base(0);
         let array = *((t + TEB_TLS_POINTER) as *const usize);
         if array != 0 {
             let mods = loader::MODULES.lock().unwrap().clone();
