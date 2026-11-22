@@ -9567,6 +9567,9 @@ unsafe fn fill_find_data_a(data: *mut Win32FindDataA, name: &str, meta: &std::fs
     if name.starts_with('.') {
         d.attributes |= 0x02;
     } // FILE_ATTRIBUTE_HIDDEN
+    if crate::dlls::winfile::session_file(name.as_bytes()) {
+        d.attributes |= 0x06; // HIDDEN | SYSTEM : lanceur de la session (#3000)
+    }
     let size = meta.len();
     d.file_size_low = size as u32;
     d.file_size_high = (size >> 32) as u32;
