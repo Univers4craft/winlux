@@ -130,11 +130,11 @@ TEXT = {
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
 
-EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante\n'
-              '# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).\n'
+EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau\n'
+              '# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).\n'
               'set winlux_efi_args=\n'
               'if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then\n'
-              '    set winlux_efi_args=efi=noruntime\n'
+              '    set winlux_efi_args=no5lvl\n'
               '    # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable\n'
               '    # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).\n'
               '    insmod efi_gop\n'
@@ -949,11 +949,11 @@ def grub_template(search_uuid, root_arg, extra, windows_esp_uuid=None):
                    f'    chainloader /EFI/Microsoft/Boot/bootmgfw.efi\n}}\n')
     timeout, style = (5, "menu") if windows else (1, "hidden")
     return f"""set default=0
-# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
-# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau
+# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).
 set winlux_efi_args=
 if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
-    set winlux_efi_args=efi=noruntime
+    set winlux_efi_args=no5lvl
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop
@@ -1034,7 +1034,7 @@ def repair_boot():
             # ESP partagée avec Windows : dossier et entrée à nous, jamais EFI/BOOT.
             efi_args = ["--bootloader-id=winlux"] if shared else ["--removable", "--no-nvram"]
             if shared and not any(Path("/sys/firmware/efi/efivars").glob("*")):
-                efi_args.append("--no-nvram")  # efi=noruntime (UEFI 32 bits) : pas de variables
+                efi_args.append("--no-nvram")  # services UEFI indisponibles : pas de variables
             failed = None
             for efi_target in efi_grub_targets(not shared):
                 result = run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",

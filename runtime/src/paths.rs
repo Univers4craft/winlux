@@ -791,13 +791,113 @@ fn lexical_absolute(p: &Path) -> PathBuf {
     out
 }
 
-/// `p` relatif à `base` (ou à sa forme canonique, si `base` passe par un lien).
-fn strip_base(p: &Path, base: &Path) -> Option<PathBuf> {
-    if let Ok(r) = p.strip_prefix(base) {
-        return Some(r.to_path_buf());
+/// Un dossier de référence de `to_windows`, et sa forme canonique calculée
+/// au premier besoin seulement (si `base` passe par un lien).
+struct Base {
+    dir: PathBuf,
+    canon: std::cell::OnceCell<Option<PathBuf>>,
+}
+
+impl Base {
+    fn new(dir: PathBuf) -> Self {
+        Base {
+            dir,
+            canon: std::cell::OnceCell::new(),
+        }
     }
-    let canon = std::fs::canonicalize(base).ok()?;
-    p.strip_prefix(canon).ok().map(Path::to_path_buf)
+
+    /// `p` relatif à ce dossier ou à sa forme canonique.
+    fn strip(&self, p: &Path) -> Option<PathBuf> {
+        if let Ok(r) = p.strip_prefix(&self.dir) {
+            return Some(r.to_path_buf());
+        }
+        let canon = self
+            .canon
+            .get_or_init(|| std::fs::canonicalize(&self.dir).ok())
+            .as_ref()?;
+        p.strip_prefix(canon).ok().map(Path::to_path_buf)
+    }
+}
+
+/// Ce que `to_windows` lit sur le disque (lecteurs, dossiers connus, leurs
+/// formes canoniques), lu au premier besoin puis gardé : une série de
+/// chemins (les ~300 polices du système vues par le registre à chaque
+/// lancement) ne relit plus mounts.tsv, user-dirs.dirs ni chaque lien à
+/// chaque chemin, 8 000 appels système avant le premier WinMain.
+pub struct VersWindows {
+    mounts: std::cell::OnceCell<Vec<crate::mounts::Mount>>,
+    home: std::cell::OnceCell<Base>,
+    known: std::cell::OnceCell<Vec<(&'static str, Base)>>,
+    drive_c: std::cell::OnceCell<Base>,
+}
+
+impl Default for VersWindows {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VersWindows {
+    pub fn new() -> Self {
+        VersWindows {
+            mounts: std::cell::OnceCell::new(),
+            home: std::cell::OnceCell::new(),
+            known: std::cell::OnceCell::new(),
+            drive_c: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Chemin Linux → chemin Windows, comme [`to_windows`].
+    pub fn convert(&self, p: &Path) -> String {
+        let abs = lexical_absolute(p);
+        if let Some(s) = self.try_convert(&abs) {
+            return s;
+        }
+        if let Ok(canon) = std::fs::canonicalize(&abs) {
+            if let Some(s) = self.try_convert(&canon) {
+                return s;
+            }
+        }
+        win_join("Z:", abs.strip_prefix("/").unwrap_or(&abs))
+    }
+
+    fn try_convert(&self, abs: &Path) -> Option<String> {
+        for m in self.mounts.get_or_init(crate::mounts::list) {
+            if let Ok(r) = abs.strip_prefix(&m.mountpoint) {
+                return Some(win_join(&format!("{}:", m.letter), r));
+            }
+        }
+        let home = self.home.get_or_init(|| Base::new(home()));
+        let has_home = home.dir != Path::new("/");
+        if has_home {
+            let known = self.known.get_or_init(|| {
+                known_folders()
+                    .into_iter()
+                    .map(|(name, dir)| (name, Base::new(dir)))
+                    .collect()
+            });
+            for (name, dir) in known {
+                if let Some(r) = dir.strip(abs) {
+                    return Some(win_join(&profile_path(name), &r));
+                }
+            }
+            if let Some(r) = home.strip(abs) {
+                if r.starts_with("AppData") {
+                    return Some(win_join(&profile_windows(), &r));
+                }
+            }
+        }
+        let drive_c = self.drive_c.get_or_init(|| Base::new(drive_c()));
+        if let Some(r) = drive_c.strip(abs) {
+            return Some(win_join("C:", &r));
+        }
+        if has_home {
+            if let Some(r) = home.strip(abs) {
+                return Some(win_join(&profile_windows(), &r));
+            }
+        }
+        None
+    }
 }
 
 fn win_join(prefix: &str, rest: &Path) -> String {
@@ -814,51 +914,13 @@ fn win_join(prefix: &str, rest: &Path) -> String {
     s
 }
 
-fn try_to_windows(abs: &Path) -> Option<String> {
-    for m in crate::mounts::list() {
-        if let Ok(r) = abs.strip_prefix(&m.mountpoint) {
-            return Some(win_join(&format!("{}:", m.letter), r));
-        }
-    }
-    let home = home();
-    if home != Path::new("/") {
-        for (name, dir) in known_folders() {
-            if let Some(r) = strip_base(abs, &dir) {
-                return Some(win_join(&profile_path(name), &r));
-            }
-        }
-        if let Some(r) = strip_base(abs, &home) {
-            if r.starts_with("AppData") {
-                return Some(win_join(&profile_windows(), &r));
-            }
-        }
-    }
-    if let Some(r) = strip_base(abs, &drive_c()) {
-        return Some(win_join("C:", &r));
-    }
-    if home != Path::new("/") {
-        if let Some(r) = strip_base(abs, &home) {
-            return Some(win_join(&profile_windows(), &r));
-        }
-    }
-    None
-}
-
 /// Chemin Linux → chemin Windows (`C:\...`, `C:\Users\<nom>\...` ou `Z:\...`).
 ///
 /// Les liens symboliques ne sont pas suivis : une appli qui a ouvert
-/// `C:\Users\moi\Documents\lien\x.txt` retrouve ce même chemin.
+/// `C:\Users\moi\Documents\lien\x.txt` retrouve ce même chemin. Pour une
+/// série de chemins, [`VersWindows`] ne relit le contexte qu'une fois.
 pub fn to_windows(p: &Path) -> String {
-    let abs = lexical_absolute(p);
-    if let Some(s) = try_to_windows(&abs) {
-        return s;
-    }
-    if let Ok(canon) = std::fs::canonicalize(&abs) {
-        if let Some(s) = try_to_windows(&canon) {
-            return s;
-        }
-    }
-    win_join("Z:", abs.strip_prefix("/").unwrap_or(&abs))
+    VersWindows::new().convert(p)
 }
 
 /// Chemin complet Windows, calculé sur le texte comme `GetFullPathName` :

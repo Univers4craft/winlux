@@ -130,13 +130,16 @@ if run reg.exe query 'HKCU\Software\DemoApp\Temporaire' >/dev/null 2>&1; then fa
 # Les noms de clés gardent la casse écrite par le script (#830).
 run reg.exe query 'HKCU\Software\DemoApp' >"$work/reg.txt" 2>&1 || fail "HKCU\Software\DemoApp introuvable"
 grep -q 'Software\\DemoApp\\Réglages$' "$work/reg.txt" || fail "casse des clés perdue : $(cat "$work/reg.txt")"
-run reg.exe query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall' >"$work/reg.txt" 2>&1
+# makensis produit un installateur 32 bits : comme sous Windows, son
+# inscription va dans la vue 32 bits, sous WOW6432Node (#2883).
+run reg.exe query 'HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' >"$work/reg.txt" 2>&1
 grep -q 'Uninstall\\DemoApp$' "$work/reg.txt" || fail "inscription Uninstall en minuscules : $(cat "$work/reg.txt")"
 
 run --setup --list >"$work/list.txt"
 grep -qi "^demoapp	Demo App	2.0	nsis" "$work/list.txt" || fail "Demo App 2.0 absent de la liste"
 grep -qi "^prereqdemo	" "$work/list.txt" || fail "prérequis absent de la liste"
-run --setup --remove "HKLM\\$uk\\DemoApp" >"$work/out.txt" 2>&1 || fail "--remove en échec"
+# La clé que « Applications installées » transmet : celle de la vue 32 bits.
+run --setup --remove "HKLM\\Software\\WOW6432Node\\${uk#Software\\}\\DemoApp" >"$work/out.txt" 2>&1 || fail "--remove en échec"
 test ! -e "$app/nouveau.txt" || fail "désinstallation incomplète"
 test -f "$work/home/Program Files/Prerequis Demo/prereq.txt" || fail "le prérequis est parti avec l'application"
 echo "setup-run : ancien désinstalleur, prérequis NSIS, msiexec et nsExec lancés ; Linux, cmd et adresses ignorés ; désinstallation"

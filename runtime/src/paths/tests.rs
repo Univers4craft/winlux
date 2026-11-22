@@ -172,6 +172,26 @@ fn profil_et_dossiers_connus_suivent_xdg() {
     );
     assert_eq!(to_windows(Path::new("/usr/share")), "Z:\\usr\\share");
     assert_eq!(to_windows(Path::new("/")), "Z:\\");
+    // Un même contexte pour toute une série (polices du registre) rend
+    // exactement ce que rend chaque appel isolé.
+    let vers = VersWindows::new();
+    for chemin in [
+        docs.join("lettre.odt"),
+        env.home.join("Bureau"),
+        env.home.join("AppData/Local/Temp"),
+        env.home.clone(),
+        env.home.join("Program Files/App"),
+        PathBuf::from("/usr/share"),
+        PathBuf::from("/"),
+        docs.join("lettre.odt"),
+    ] {
+        assert_eq!(
+            vers.convert(&chemin),
+            to_windows(&chemin),
+            "{}",
+            chemin.display()
+        );
+    }
 
     let vars = windows_env();
     let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
