@@ -143,6 +143,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ## DÉJÀ FAIT
 
+- [x] Vue des polices du registre : type d'entrée lu dans le dossier (d_type), forme canonique gardée par dossier ; 3 736 → 1 720 appels système au démarrage du runtime, programme vide x64 15,6 → 13,8 ms (#2951).
 - [x] winlux-open : le programme part sans attendre `winlux-applications register` (Python, ~60 ms, désormais en tâche de fond à priorité basse) et n'est inspecté qu'une fois ; premier pixel de la sonde Win32 par double-clic 100 → 39 ms ; sonde `testc/latence/latence.c`, mesure externe `scripts/mesure-latence.py`, `test-latence-sonde.sh` et `test-winlux-open-rapide.sh` en CI (#2889).
 - [x] Site : démo de Winlux jouable dans le navigateur (`site/static/demo/`, lien « Démo » de la navigation) : écran de démarrage Prisme, bureau, barre des tâches, menu Démarrer avec recherche et « Pour vous », Explorateur, ancrage (bords, coins, dispositions, flèches, Assistant), Bloc-notes, Terminal, Paramètres ; simulation sans bibliothèque, quatre langues (#2926).
 - [x] Boîte Enregistrer sous : le nom proposé arrive sélectionné, Ctrl+A le sélectionne, la frappe, Retour arrière ou Suppr le remplacent ; test Xvfb `scripts/test-pick-selection.py` (#2852).
