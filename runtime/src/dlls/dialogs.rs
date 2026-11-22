@@ -1532,9 +1532,46 @@ pub unsafe fn add_control(
     hwnd
 }
 
-unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp: isize) -> isize {
+/// Icône système (IDI_*) d'un type MB_ICON* : MB_ICONHAND, MB_ICONQUESTION,
+/// MB_ICONEXCLAMATION, MB_ICONASTERISK (documentation publique de MessageBox).
+fn message_box_icon(kind: u32) -> Option<usize> {
+    match kind & 0xF0 {
+        0x10 => Some(32513), // IDI_HAND / IDI_ERROR
+        0x20 => Some(32514), // IDI_QUESTION
+        0x30 => Some(32515), // IDI_EXCLAMATION / IDI_WARNING
+        0x40 => Some(32516), // IDI_ASTERISK / IDI_INFORMATION
+        _ => None,
+    }
+}
+
+/// Pose l'icône du type MB_ICON* dans l'espace que le modèle lui réserve à
+/// gauche du texte (#2854) : un statique SS_ICON, sans identifiant.
+unsafe fn message_box_add_icon(dlg: usize, kind: u32) {
+    let Some(id) = message_box_icon(kind) else {
+        return;
+    };
+    let icon = super::icons::load_icon_w(0, id as *const u16);
+    if icon == 0 {
+        return;
+    }
+    let ctl = add_control(dlg, "STATIC", "", 0xFFFF, 0x3, 0, (24, 24, 32, 32)); // SS_ICON
+    if ctl != 0 {
+        user32::send_message_w(ctl, 0x0170, icon, 0); // STM_SETICON
+    }
+}
+
+/// Boutons de la boîte (identifiants IDOK à IDCONTINUE).
+fn message_box_button_count(hwnd: usize) -> usize {
+    items(hwnd)
+        .into_iter()
+        .filter(|&h| (1..=11).contains(&user32::control_id(h)))
+        .count()
+}
+
+unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     match msg {
         WM_INITDIALOG => {
+            message_box_add_icon(hwnd, lp as u32);
             // Le bouton par défaut (MB_DEFBUTTON1 à 4) a le focus à
             // l'ouverture : Entrée le choisit (#2754). Sinon le focus irait
             // au premier bouton et Entrée répondrait « Oui » au lieu de « Non ».
@@ -1554,7 +1591,7 @@ unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp:
                 end_dialog(hwnd, id as isize);
             } else if id == IDCANCEL
                 && user32::get_dlg_item(hwnd, IDOK as i32) != 0
-                && items(hwnd).len() == 2
+                && message_box_button_count(hwnd) == 1
             {
                 end_dialog(hwnd, IDOK as isize);
             }
@@ -1596,7 +1633,7 @@ pub unsafe fn message_box(owner: usize, text: &str, caption: &str, kind: u32) ->
         &data,
         owner,
         message_box_proc as *const () as usize,
-        0,
+        kind as isize,
         true,
     );
     if dlg == 0 {

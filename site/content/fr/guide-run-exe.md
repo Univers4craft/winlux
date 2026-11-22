@@ -7,8 +7,6 @@ description: Double-cliquez sur un .exe, installez un logiciel avec son installa
 
 Double-cliquez sur un fichier `.exe` dans l'Explorateur ou sur le bureau : il s'ouvre directement. Il n'y a rien à installer ni à configurer avant.
 
-![La visite de Winlux : lancer un programme Windows](img:lancer-un-exe.jpg "La visite de premier démarrage montre comment lancer un programme Windows.")
-
 ## Installer un logiciel
 
 1. Téléchargez l'installateur sur le site de l'éditeur (`setup.exe`, `installer.exe` ou `.msi`).
