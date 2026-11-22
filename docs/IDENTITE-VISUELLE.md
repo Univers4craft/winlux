@@ -42,7 +42,8 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
   étoile filante toutes les 30 à 80 s. Couche transparente sans entrée souris
   au-dessus de xfdesktop, petits rectangles seulement ; aucune image en plein
   écran, fenêtre agrandie, économiseur actif, écran éteint ou batterie ≤ 20 %.
-  Coût mesuré par `scripts/mesure-fond-anime.sh`.
+  Coût mesuré par `scripts/mesure-fond-anime.sh` sur le PC de damien : environ
+  1,8 % d'un cœur de plus fond visible (Xorg surtout), rien fond caché.
 - « Winlux Nuit » et « Winlux Aube » : calculés au pixel dans
   `shell/personalize.rs`, et rendus en PNG pour la session XFCE.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.
