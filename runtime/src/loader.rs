@@ -989,10 +989,13 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
         && (find_module_by_name(dll).is_some() || find_dll_file(dll, &importer.path).is_some());
     if dlls::is_builtin(&ndll) && !real_first {
         if importer.pe.x86 {
-            if let Want::Name(n) = want {
-                if let Some(stub) = crate::wow32::override_stub(dll, n) {
-                    return Ok(stub);
-                }
+            let n = match want {
+                Want::Name(n) => n.clone(),
+                // Import par numéro d'ordre (comctl32 #410…, #2876).
+                Want::Ordinal(o) => format!("#{o}"),
+            };
+            if let Some(stub) = crate::wow32::override_stub(dll, &n) {
+                return Ok(stub);
             }
         }
         let found = match want {

@@ -115,6 +115,15 @@ unsafe extern "win64" fn subclass_wndproc(hwnd: usize, msg: u32, wp: usize, lp: 
     r
 }
 
+/// Première procédure de la chaîne de sous-classement de `hwnd` (celle qui
+/// reçoit les messages), pour le pont x86 (#2876).
+pub(crate) fn first_subclass_proc(hwnd: usize) -> Option<usize> {
+    lock(chains())
+        .get(&hwnd)
+        .and_then(|c| c.subs.first())
+        .map(|s| s.proc_)
+}
+
 unsafe extern "win64" fn set_window_subclass(
     hwnd: usize,
     proc_: usize,
