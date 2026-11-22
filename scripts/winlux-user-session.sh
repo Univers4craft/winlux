@@ -214,6 +214,12 @@ if test -x /usr/bin/winlux-rotation; then start rotation.log /usr/bin/winlux-rot
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
 fi
+# Menu Démarrer construit caché quelques secondes après la barre, comme dans
+# la session native : le premier appui sur Windows ne démarre plus Python et
+# GTK à froid. Seule la session native le préchargeait (#2996).
+if test -x /usr/lib/winlux/winlux-start-menu; then
+    start start-menu.log /bin/sh -c 'sleep 3; exec /usr/lib/winlux/winlux-start-menu --preload'
+fi
 # Clavier ou souris USB branché pendant la session : disposition (AZERTY…)
 # et réglages réappliqués, sinon un clavier branché à chaud tape en QWERTY.
 if test -x /usr/bin/winlux-input-watch; then

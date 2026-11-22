@@ -4,6 +4,7 @@
 audio_com.rs	Iface	x86	interface WASAPI (mmdevapi) : mandataire x86 décrit dans wow32/com.rs (IMMDeviceEnumerator…) ; wasapi32.c
 cabinet_lz.rs	FdiNotification	x86	disposition x86 de 40 octets écrite par x86_notification (#1758)
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
+comdlg32_files.rs	OfNotify	interne	OFNOTIFY du crochet OFN_ENABLEHOOK (#2936), x64 seulement : FileHook::open refuse le crochet si pointer_size() != 8 ; en x86 ce serait 20 octets (NMHDR 12 + 2 pointeurs), non servi
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
