@@ -3384,23 +3384,3 @@ pub unsafe fn focus_mouse_down(app: usize, x: i32, y: i32) {
         FOCUS_CURRENT[app] = i as i32;
     }
 }
-
-/// Prototype de mesure (fil « Rendre l'Explorateur plus rapide ») :
-/// WINLUX_EXPLORATEUR_SANS=<lettres> retire une modification pour l'isoler
-/// au banc (w : boucle réveillée par l'entrée, t : tic accéléré, p : dossiers
-/// personnels gardés, m : molette immédiate).
-pub fn proto_off(letter: u8) -> bool {
-    static mut READ: bool = false;
-    static mut OFF: [u8; 8] = [0; 8];
-    unsafe {
-        if !READ {
-            READ = true;
-            let mut buf = [0u8; 8];
-            let n = GetEnvironmentVariableA(c"WINLUX_EXPLORATEUR_SANS".as_ptr(), buf.as_mut_ptr().cast(), 8) as usize;
-            if n < 8 {
-                OFF[..n].copy_from_slice(&buf[..n]);
-            }
-        }
-        OFF.contains(&letter)
-    }
-}

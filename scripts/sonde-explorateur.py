@@ -108,11 +108,6 @@ class X:
         if not self.d.XDamageQueryExtension(self.dpy, ctypes.byref(ev), ctypes.byref(er)):
             sys.exit("sonde : extension DAMAGE absente")
         self.damage_event = ev.value  # XDamageNotify = base + 0
-        # Une fenêtre créée puis détruite aussitôt (cadre d'openbox…) rend
-        # BadWindow sur XSelectInput : le gestionnaire Xlib par défaut tuait
-        # la sonde (banc 2, 22 nov.). Ces erreurs sont ignorées.
-        self._handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda d, e: 0)
-        x.XSetErrorHandler(self._handler)
         self.fd = x.XConnectionNumber(self.dpy)
         self.buf = ctypes.create_string_buffer(192)
         x.XSelectInput(self.dpy, self.root, SubstructureNotifyMask)
@@ -259,16 +254,6 @@ def io(pid):
     return out
 
 
-def cpu_mhz():
-    """Fréquence moyenne et maximale des cœurs juste avant un geste (MHz)."""
-    try:
-        with open("/proc/cpuinfo") as f:
-            v = [float(l.split(":")[1]) for l in f if l.startswith("cpu MHz")]
-        return [round(sum(v) / len(v)), round(max(v))] if v else None
-    except OSError:
-        return None
-
-
 def pid_of(comm):
     for p in os.listdir("/proc"):
         if p.isdigit():
@@ -335,9 +320,6 @@ class Explorer:
         env = dict(os.environ)
         env.update(WINLUX_NATIVE_SHELL="1", WINLUX_SHELL_APP="explorer", WINLUX_RUNTIME=args.runtime)
         env.pop("WINLUX_DESKTOP_DEMO", None)
-        env.pop("WINLUX_EXPLORATEUR_SANS", None)
-        if getattr(args, "sans", None):
-            env["WINLUX_EXPLORATEUR_SANS"] = args.sans
         if folder:
             env["WINLUX_SHELL_PATH"] = windows_path(folder)
         if home:
@@ -418,7 +400,6 @@ class Explorer:
 def gesture(x, ex, action, quiet, limit=5.0, others=()):
     """Exécute `action` et renvoie (1re ms, fin ms, cpu explorateur ms, cpu X ms, io)."""
     x.events(0)  # vide la file avant le geste
-    mhz = cpu_mhz()
     c0 = schedstat(ex.proc.pid)
     o0 = [schedstat(p) if p else None for p in others]
     i0 = io(ex.proc.pid)
@@ -458,7 +439,6 @@ def gesture(x, ex, action, quiet, limit=5.0, others=()):
         "lectures": i1.get("syscr", 0) - i0.get("syscr", 0),
         "ecritures": i1.get("syscw", 0) - i0.get("syscw", 0),
         "ctxsw": i1.get("ctxsw", 0) - i0.get("ctxsw", 0),
-        "mhz": mhz,
     }
 
 
@@ -467,70 +447,6 @@ def summary(rows, key):
     if not vals:
         return "—"
     return f"{statistics.median(vals):.1f} (min {min(vals):.1f}, max {max(vals):.1f})"
-
-
-def court(x, args, others, results, line, safe, petit, big, home):
-    """Passe ciblée : gestes courts répétés, chacun suivi de son retour à l'état
-    de départ, avec une pause de 0,6 s (pas de double-clic involontaire)."""
-    n, q = args.essais, 0.12
-    ex = Explorer(x, args, home, petit)
-    if not ex.wait_open(0.4):
-        sys.exit("sonde : fenêtre de l'Explorateur introuvable")
-    time.sleep(1.0)
-    gx, gy, gw, gh = x.geometry(ex.win)
-
-    def rep(name, before, action, after, quiet=q, limit=5.0):
-        rows = []
-        for _ in range(n):
-            if before:
-                before()
-            time.sleep(0.6)
-            rows.append(gesture(x, ex, safe(ex, action), quiet, limit=limit, others=others))
-            if after:
-                time.sleep(0.2)
-                gesture(x, ex, safe(ex, after), q)
-        line(name, rows)
-
-    rep("flèche Bas (petit)", lambda: gesture(x, ex, safe(ex, lambda: x.key("Home")), q),
-        lambda: x.key("Down"), None)
-    rep("F2, champ de renommage", lambda: gesture(x, ex, safe(ex, lambda: x.key("End")), q),
-        lambda: x.key("F2"), lambda: x.key("Escape"))
-
-    def to_list():
-        x.move(gx + gw // 2 + 60, gy + 220)
-        time.sleep(0.1)
-    rep("clic droit, menu", to_list, lambda: x.button(3), lambda: x.key("Escape"))
-
-    def into_sub():
-        gesture(x, ex, safe(ex, lambda: x.key("Home")), q)
-        gesture(x, ex, safe(ex, lambda: x.key("Return")), q)
-        x.move(gx + 100, gy + 60)
-        time.sleep(0.1)
-        x.move(gx + 103, gy + 64)
-    rep("dossier parent (bouton Haut)", into_sub, lambda: x.button(1), None)
-    ex.close()
-
-    ex = Explorer(x, args, home, big)
-    ex.wait_open(0.4)
-    time.sleep(1.0)
-    gx, gy, gw, gh = x.geometry(ex.win)
-    x.move(gx + gw // 2 + 60, gy + 300)
-    time.sleep(0.3)
-    rep("molette, un cran (défilement terminé)", lambda: gesture(x, ex, safe(ex, lambda: x.key("Home")), 0.7),
-        lambda: x.button(5), None, quiet=0.7, limit=6.0)
-    time.sleep(1.0)
-    c0, o0, i0, t0 = schedstat(ex.proc.pid), [schedstat(p) if p else None for p in others], io(ex.proc.pid), \
-        time.monotonic()
-    time.sleep(10.0)
-    c1, o1, i1, t1 = schedstat(ex.proc.pid), [schedstat(p) if p else None for p in others], io(ex.proc.pid), \
-        time.monotonic()
-    dur = t1 - t0
-    rest = {"cpu_explorateur_pct": None if c0 is None else round((c1 - c0) / 1e7 / dur, 3),
-            "reveils_par_s": round((i1.get("ctxsw", 0) - i0.get("ctxsw", 0)) / dur, 1)}
-    results["repos"] = rest
-    print(f"au repos (10 s)                    CPU expl. {rest['cpu_explorateur_pct']} %, "
-          f"réveils {rest['reveils_par_s']}/s", flush=True)
-    ex.close()
 
 
 def main():
@@ -543,9 +459,6 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--capture")
     ap.add_argument("--home-reel", action="store_true")
-    ap.add_argument("--court", action="store_true",
-                    help="gestes courts seulement, --essais fois chacun (passe ciblée)")
-    ap.add_argument("--sans", help="prototype : modifications retirées (lettres w, t, p, m)")
     ap.add_argument("--forcer-focus", action="store_true",
                     help="Xvfb sans gestionnaire de fenêtres : donne le focus à l'Explorateur")
     args = ap.parse_args()
@@ -588,15 +501,6 @@ def main():
         if args.json:
             with open(args.json, "w") as f:
                 json.dump(results, f, indent=1)
-        return
-
-    if args.court:
-        petit, big, imgs, home = prepare(args.travail, 400)
-        court(x, args, others, results, line, safe, petit, big, home)
-        if args.json:
-            with open(args.json, "w") as f:
-                json.dump(results, f, indent=1)
-        shutil.rmtree(args.travail, ignore_errors=True)
         return
 
     petit, big, imgs, home = prepare(args.travail, args.gros)
