@@ -134,6 +134,10 @@ _TR = {
     'Verrouiller maintenant (Windows+L)': ('Lock now (Windows+L)', 'Bloquear ahora (Windows+L)', 'Jetzt sperren (Windows+L)'),
     'Compte protégé : {account}': ('Protected account: {account}', 'Cuenta protegida: {account}', 'Geschütztes Konto: {account}'),
     'Verrouillage automatique : {delay}': ('Automatic lock: {delay}', 'Bloqueo automático: {delay}', 'Automatische Sperre: {delay}'),
+    'désactivé, le service de verrouillage est arrêté': ('off, the lock service is stopped', 'desactivado, el servicio de bloqueo está detenido', 'aus, der Sperrdienst ist beendet'),
+    'L’écran ne se verrouille plus tout seul. « Relancer le verrouillage » le remet en route avec les réglages ci-dessous.': ('The screen no longer locks by itself. “Restart locking” turns it back on with the settings below.', 'La pantalla ya no se bloquea sola. «Reiniciar el bloqueo» la vuelve a activar con los ajustes de abajo.', 'Der Bildschirm sperrt sich nicht mehr von selbst. „Sperren neu starten“ schaltet es mit den Einstellungen unten wieder ein.'),
+    'Le service de verrouillage est arrêté : ces réglages ne s’appliquent pas tant qu’il n’est pas relancé.': ('The lock service is stopped: these settings do not apply until it is restarted.', 'El servicio de bloqueo está detenido: estos ajustes no se aplican hasta reiniciarlo.', 'Der Sperrdienst ist beendet: Diese Einstellungen gelten erst, wenn er neu gestartet wird.'),
+    'Relancer le verrouillage': ('Restart locking', 'Reiniciar el bloqueo', 'Sperren neu starten'),
     'Mot de passe au réveil : {state}': ('Password on wake: {state}', 'Contraseña al despertar: {state}', 'Kennwort beim Aufwachen: {state}'),
     'oui': ('yes', 'sí', 'ja'),
     'non': ('no', 'no', 'nein'),
@@ -433,12 +437,26 @@ def permission_apps():
     return dict(sorted(apps.items(), key=lambda item: Path(item[0]).name.casefold()))
 
 
+def lock_service_stopped(status):
+    """#3020 : lock.conf n'est qu'un réglage ; sans le service `winlux-lock
+    daemon` rien ne verrouille. Un relevé sans la clé (ancien winlux-lock)
+    garde l'affichage d'avant."""
+    return status.get("lock_service") == "0"
+
+
 def privacy_summary(status):
     try: delay = int(status.get("lock_after", "300"))
     except ValueError: delay = 300
+    stopped = lock_service_stopped(status)
+    automatic = _t("désactivé, le service de verrouillage est arrêté") if stopped else lock_delay_text(delay)
+    # Le verrou avant la veille vient du service d'alimentation (sleep.rs),
+    # pas de ce service : « Mot de passe au réveil » reste le réglage lu.
+    resume = status.get("lock_on_resume", "1") != "0"
     lines = [_t("Compte protégé : {account}").format(account=status.get("lock_account") or "root"),
-             _t("Verrouillage automatique : {delay}").format(delay=lock_delay_text(delay)),
-             _t("Mot de passe au réveil : {state}").format(state=_t("oui") if status.get("lock_on_resume", "1") != "0" else _t("non"))]
+             _t("Verrouillage automatique : {delay}").format(delay=automatic),
+             _t("Mot de passe au réveil : {state}").format(state=_t("oui") if resume else _t("non"))]
+    if stopped:
+        lines.append(_t("L’écran ne se verrouille plus tout seul. « Relancer le verrouillage » le remet en route avec les réglages ci-dessous."))
     if status.get("lock_password") == "0":
         lines.append(_t("Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul."))
     return "\n".join(lines)
@@ -1208,6 +1226,14 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         lock = Gtk.Button(label=_t("Verrouiller maintenant (Windows+L)"), halign=Gtk.Align.START)
         lock.connect("clicked", lambda *_: self.execute("lock-now"))
         self.body.pack_start(lock, False, False, 0)
+        if lock_service_stopped(status):
+            # #3020 : les réglages ci-dessus sont ceux du service, arrêté :
+            # le dire et proposer de le relancer plutôt que d'afficher un
+            # verrouillage qui n'a pas lieu.
+            self.label(_t("Le service de verrouillage est arrêté : ces réglages ne s’appliquent pas tant qu’il n’est pas relancé."))
+            restart = Gtk.Button(label=_t("Relancer le verrouillage"), halign=Gtk.Align.START)
+            restart.connect("clicked", lambda *_: self.execute("lock-service-start"))
+            self.body.pack_start(restart, False, False, 0)
 
     def permission_controls(self):
         """Autorisations des .exe : interrupteurs globaux, puis une carte par application."""

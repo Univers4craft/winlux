@@ -6,7 +6,8 @@ Usage :
   winlux-lock switch    « Changer d'utilisateur » : verrouille et propose les
                         autres comptes (en bas à gauche)
   winlux-lock daemon    verrouille après l'inactivité réglée et au retour de veille
-  winlux-lock status    état lisible par winlux-control (clé=valeur)
+  winlux-lock status    état lisible par winlux-control (clé=valeur) ; lock_service
+                        dit si le service « daemon » de cet écran tourne
 
 Réglages : /etc/winlux/lock.conf
   LOCK_AFTER=300      secondes d'inactivité avant verrouillage (0 : jamais)
@@ -258,6 +259,49 @@ def power_request_pid():
     if not any(os.path.basename(arg.decode(errors="replace")) == "winlux-power" for arg in cmdline[:2]):
         return None
     return pid
+
+
+def _proc_display(proc):
+    """Écran (« :0 » → « », « :1 » → « -1 ») d'un processus, None si illisible."""
+    try:
+        environ = (proc / "environ").read_bytes().split(b"\0")
+    except OSError:
+        return None
+    for item in environ:
+        if item.startswith(b"DISPLAY="):
+            display = item[8:].decode(errors="replace").rpartition(":")[2].split(".")[0]
+            return "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+    return ""
+
+
+def service_pids(proc_root="/proc"):
+    """Processus `winlux-lock daemon` vivants pour cet écran, du compte courant
+    ou de root (la session native le lance en root). Sans eux, lock.conf n'est
+    qu'un réglage écrit : rien ne verrouille (#3020). Un environnement
+    illisible (processus de root vu par le compte) compte pour cet écran."""
+    found = []
+    allowed = {0, os.getuid()}
+    suffix = _screen_suffix()
+    for proc in Path(proc_root).iterdir():
+        if not proc.name.isdigit() or int(proc.name) == os.getpid():
+            continue
+        try:
+            if proc.stat().st_uid not in allowed:
+                continue
+            args = [a.decode(errors="replace") for a in (proc / "cmdline").read_bytes().split(b"\0") if a]
+        except (OSError, ValueError):
+            continue
+        names = [os.path.basename(a) for a in args[:3]]
+        if not any(n in ("winlux-lock", "winlux-lock.py") for n in names) or "daemon" not in args[1:4]:
+            continue
+        display = _proc_display(proc)
+        if display is None or display == suffix:
+            found.append(int(proc.name))
+    return found
+
+
+def service_running():
+    return bool(service_pids())
 
 
 def is_locked():
@@ -537,6 +581,11 @@ def spawn_lock():
 
 
 def daemon():
+    # Un seul service par écran : « Relancer » dans Paramètres ne double pas
+    # un service déjà vivant.
+    if service_pids():
+        print("winlux-lock daemon : déjà lancé pour cet écran", file=sys.stderr)
+        return
     idle_source = XIdle()
     slept_before = suspended_seconds()
     while True:
@@ -562,6 +611,7 @@ def status():
     print(f"lock_account={user}")
     print(f"lock_password={1 if requires_password(user) else 0}")
     print(f"lock_active={1 if is_locked() else 0}")
+    print(f"lock_service={1 if service_running() else 0}")
 
 
 # ── Interface ───────────────────────────────────────────────────────────────

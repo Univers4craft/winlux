@@ -87,7 +87,27 @@ with contextlib.redirect_stdout(out):
     lock["status"]()
 fields = dict(line.split("=", 1) for line in out.getvalue().splitlines())
 assert fields == {"lock_after": "900", "lock_on_resume": "1", "lock_account": "alice",
-                  "lock_password": "1", "lock_active": "0"}, fields
+                  "lock_password": "1", "lock_active": "0", "lock_service": "0"}, fields
+
+# #3020 : service de verrouillage vivant ou non pour cet écran (faux /proc).
+proc = tmp / "proc"
+def fake_process(pid, args, display):
+    entry = proc / str(pid)
+    entry.mkdir(parents=True)
+    (entry / "cmdline").write_bytes(b"\0".join(a.encode() for a in args) + b"\0")
+    (entry / "environ").write_bytes(b"HOME=/home/alice\0" + (f"DISPLAY={display}\0".encode() if display else b""))
+os.environ["DISPLAY"] = ":0"
+proc.mkdir()
+assert lock["service_pids"](str(proc)) == []
+fake_process(101, ["/usr/bin/python3", "/usr/bin/winlux-lock", "now"], ":0")
+fake_process(102, ["/usr/bin/python3", "/usr/bin/winlux-lock", "daemon"], ":1")
+fake_process(103, ["/usr/bin/python3", "/usr/bin/winlux-alarms", "daemon"], ":0")
+assert lock["service_pids"](str(proc)) == [], "verrouillage immédiat, autre écran, autre service"
+fake_process(104, ["/usr/bin/python3", "/usr/bin/winlux-lock", "daemon"], ":0.0")
+assert lock["service_pids"](str(proc)) == [104]
+os.environ["DISPLAY"] = ":1"
+assert lock["service_pids"](str(proc)) == [102]
+os.environ["DISPLAY"] = ":0"
 
 # Nom affiché : nom complet (GECOS) s'il existe, sinon l'identifiant.
 passwd = (tmp / "etc/passwd").read_text()

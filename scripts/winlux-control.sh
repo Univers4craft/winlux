@@ -829,6 +829,9 @@ perform() {
         privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
         lock-now) if have winlux-lock; then (setsid winlux-lock now >/dev/null 2>&1 &); else echo 'winlux-lock absent' >&2; return 1; fi ;;
+        # Service de verrouillage arrete : la page le dit et le relance (#3020).
+        # winlux-lock daemon refuse de se doubler s'il tourne deja pour cet ecran.
+        lock-service-start) if have winlux-lock; then (setsid winlux-lock daemon >>"$mine/lock.log" 2>&1 &); else echo 'winlux-lock absent' >&2; return 1; fi ;;
         lock-after-0|lock-after-60|lock-after-180|lock-after-300|lock-after-600|lock-after-900|lock-after-1800|lock-after-3600)
             save "$config/lock.conf" LOCK_AFTER "${action#lock-after-}" && chmod 644 "$config/lock.conf" ;;
         lock-resume-on) save "$config/lock.conf" LOCK_ON_RESUME 1 && chmod 644 "$config/lock.conf" ;;
