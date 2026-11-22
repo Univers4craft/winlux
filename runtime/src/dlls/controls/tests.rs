@@ -2126,3 +2126,56 @@ fn infobulle_delais_par_defaut_et_reglages() {
     sendw(tip, 0x0413, 0x00FF_00FF, 0);
     assert_eq!(sendw(tip, 0x0416, 0, 0), 0x00FF_00FF);
 }
+
+/// Verrou mort entre deux fils d'interface (#3041) : un fil tape dans un
+/// champ (WM_CHAR, mesure du texte) pendant qu'un autre crée des fenêtres
+/// enfants (backend, puis nature des voisines). Le champ ne doit jamais
+/// mesurer son texte en tenant l'état des contrôles, sinon les deux verrous
+/// se prennent dans l'ordre inverse et les deux fils se bloquent.
+#[test]
+fn saisie_et_creation_de_fenetres_sur_deux_fils_sans_verrou_mort() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let fils: Vec<_> = (0..2)
+        .map(|n| {
+            let stop = stop.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let p = parent_window();
+                if n == 0 {
+                    let e = child(p, "EDIT", "", WS_BORDER | 0x80, 1, (0, 0, 60, 20));
+                    let wp = gui::wnd_proc_of(e).expect("procédure du champ");
+                    let mut k = 0;
+                    while !stop.load(Ordering::SeqCst) {
+                        unsafe { gui::call_wndproc(wp, e, WM_CHAR, 'x' as usize, 0) };
+                        k += 1;
+                        if k % 40 == 0 {
+                            let vide = w("");
+                            unsafe { gui::call_wndproc(wp, e, 0x000C, 0, vide.as_ptr() as isize) };
+                        }
+                    }
+                } else {
+                    let _voisin = child(p, "Static", "v", 0, 1, (0, 0, 10, 10));
+                    while !stop.load(Ordering::SeqCst) {
+                        let c = child(p, "Static", "c", 0, 2, (0, 0, 10, 10));
+                        unsafe { user32::destroy_window(c) };
+                    }
+                }
+                unsafe { user32::destroy_window(p) };
+                let _ = tx.send(n);
+            })
+        })
+        .collect();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    stop.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("un fil reste bloqué : verrou mort entre l'état des contrôles et le backend");
+    }
+    for f in fils {
+        f.join().unwrap();
+    }
+}

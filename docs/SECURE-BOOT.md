@@ -42,18 +42,22 @@ avec Windows, l'installateur pose uniquement le chargeur du mode détecté
 mixte (`CONFIG_EFI_MIXED`). En UEFI 32 bits, le menu GRUB reste en texte : son
 terminal graphique fait planter le noyau 64 bits juste après le chargement
 (reproduit sous QEMU avec OVMF 32 bits et le noyau 7.0 d'Ubuntu 26.04).
-En UEFI 32 bits, chaque entrée du menu ajoute `efi=noruntime` : en mode mixte,
-le noyau 7.0 plante dans les services d'exécution UEFI sur un processeur sans
-pages de 1 Go, ce qui est le cas des Atom (reproduit sous QEMU avec
-`-cpu max,pdpe1gb=off`). Le mode du micrologiciel reste détecté, mais les
-variables UEFI sont inaccessibles. Sur une partition EFI à Winlux, cela ne
-change rien, puisque le chargeur est posé dans `EFI/BOOT`. Sur une partition
-partagée avec Windows, l'installateur pose `EFI/winlux/grubia32.efi` sans
-pouvoir créer l'entrée de démarrage : choisissez ce fichier dans le menu de
-démarrage du micrologiciel, ou installez Winlux sur tout le disque.
-
-La même option évite aussi le plantage sous QEMU avec la pagination à 5 niveaux
-(`-cpu max`, LA57) : les tests UEFI 32 bits gardent donc `-cpu max`.
+En UEFI 32 bits, chaque entrée du menu ajoute `no5lvl` (paramètre documenté du
+noyau : pagination à 4 niveaux) : en mode mixte, le noyau 7.0 plante dans les
+services d'exécution UEFI quand la pagination à 5 niveaux (LA57) est active
+(reproduit sous QEMU avec `-cpu max`, OVMF 32 bits). Les Atom n'ont pas LA57,
+et le manque de pages de 1 Go n'y est pour rien : avec
+`-cpu max,pdpe1gb=off,la57=off` sans option, ou `-cpu max` avec `no5lvl`, le
+noyau lit et écrit les variables UEFI (#2747). Jusqu'à la v0.2.21, ces entrées
+ajoutaient `efi=noruntime`, qui coupait les variables UEFI : l'installateur ne
+pouvait pas créer l'entrée de démarrage « Winlux », et un micrologiciel qui ne
+tente pas `EFI/BOOT/BOOTIA32.EFI` sur le disque interne (tablette Acer à
+micrologiciel Insyde : « No Bootable Device », menu F12 vide) ne démarrait pas
+le système installé. La spécification UEFI (2.10, section 3.1.2) prévoit bien
+cette recherche par défaut sur les supports fixes comme amovibles, mais tous
+les micrologiciels ne la font pas : l'entrée de démarrage reste nécessaire.
+Sur une partition partagée avec Windows, l'installateur pose
+`EFI/winlux/grubia32.efi` et son entrée de démarrage.
 
 Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
 Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est

@@ -125,6 +125,57 @@ extern "win64" fn lsa_no_policy(_a: usize, _b: usize, _c: usize, _d: usize) -> u
     STATUS_INVALID_HANDLE
 }
 
+// Les fonctions suivantes prennent aussi un handle de stratégie, que
+// LsaOpenPolicy ne délivre jamais : même réponse, avec leur nombre exact
+// d'arguments (pages sdk-api ntsecapi ; contrats
+// api-ms-win-security-lsalookup-l2-1-0 et -lsapolicy-l1-1-0, Refs #2902).
+
+/// `LsaEnumerateTrustedDomains(stratégie, &contexte, &tampon, taille, &nombre)`.
+extern "win64" fn lsa_enumerate_trusted_domains(
+    _policy: usize,
+    _context: usize,
+    _buffer: usize,
+    _max: u32,
+    _count: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupNames2(stratégie, drapeaux, nombre, noms, &domaines, &sids)`.
+extern "win64" fn lsa_lookup_names2(
+    _policy: usize,
+    _flags: u32,
+    _count: u32,
+    _names: usize,
+    _domains: usize,
+    _sids: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupSids(stratégie, nombre, sids, &domaines, &noms)`.
+extern "win64" fn lsa_lookup_sids(
+    _policy: usize,
+    _count: u32,
+    _sids: usize,
+    _domains: usize,
+    _names: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupSids2(stratégie, options, nombre, sids, &domaines, &noms)`.
+extern "win64" fn lsa_lookup_sids2(
+    _policy: usize,
+    _options: u32,
+    _count: u32,
+    _sids: usize,
+    _domains: usize,
+    _names: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
 // ── LSA (secur32) ───────────────────────────────────────────────────────
 
 fn lsa_handles() -> &'static Mutex<HashSet<usize>> {
@@ -748,15 +799,126 @@ unsafe extern "win64" fn crypt_set_provider_ex_w(
     if flags & 4 != 0 {
         return 1;
     }
-    let n = wstr(name);
+    set_provider(&wstr(name), kind)
+}
+
+/// Le fournisseur nommé est-il installé pour ce type ? Il est alors déjà
+/// celui par défaut (un seul fournisseur par type).
+fn set_provider(name: &str, kind: u32) -> i32 {
     if PROVIDERS
         .iter()
-        .any(|p| p.1 == kind && p.0.eq_ignore_ascii_case(&n))
+        .any(|p| p.1 == kind && p.0.eq_ignore_ascii_case(name))
     {
         1
     } else {
         fail(0x8009_0013) // NTE_BAD_PROV_TYPE
     }
+}
+
+// Variantes ANSI et CryptSetProvider, pour compléter le contrat
+// api-ms-win-security-cryptoapi-l1-1-0 (pages sdk-api wincrypt, Refs #2902).
+// Les noms des fournisseurs sont en ASCII ; les tailles restent en octets.
+
+/// Copie `text` (ANSI, avec zéro) ; `len` est en octets.
+unsafe fn put_bytes_a(text: &str, out: *mut u8, len: *mut u32) -> i32 {
+    if len.is_null() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let need = text.len() as u32 + 1;
+    if out.is_null() {
+        *len = need;
+        return 1;
+    }
+    if *len < need {
+        *len = need;
+        return fail(ERROR_MORE_DATA);
+    }
+    std::ptr::copy_nonoverlapping(text.as_ptr(), out, text.len());
+    *out.add(text.len()) = 0;
+    *len = need;
+    1
+}
+
+unsafe fn enum_pairs_a(
+    list: &[(&str, u32)],
+    index: u32,
+    kind: *mut u32,
+    name: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    let Some((n, t)) = list.get(index as usize) else {
+        return fail(ERROR_NO_MORE_ITEMS);
+    };
+    if !kind.is_null() {
+        *kind = *t;
+    }
+    put_bytes_a(n, name, len)
+}
+
+unsafe extern "win64" fn crypt_enum_providers_a(
+    index: u32,
+    _reserved: usize,
+    _flags: u32,
+    kind: *mut u32,
+    name: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    enum_pairs_a(&PROVIDERS, index, kind, name, len)
+}
+
+unsafe extern "win64" fn crypt_enum_provider_types_a(
+    index: u32,
+    _reserved: usize,
+    _flags: u32,
+    kind: *mut u32,
+    name: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    enum_pairs_a(&PROVIDER_TYPES, index, kind, name, len)
+}
+
+unsafe extern "win64" fn crypt_get_default_provider_a(
+    kind: u32,
+    _reserved: usize,
+    _flags: u32,
+    name: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    match PROVIDERS.iter().find(|p| p.1 == kind) {
+        Some((n, _)) => put_bytes_a(n, name, len),
+        None => fail(0x8009_0017), // NTE_PROV_TYPE_NOT_DEF
+    }
+}
+
+unsafe extern "win64" fn crypt_set_provider_ex_a(
+    name: *const u8,
+    kind: u32,
+    _reserved: usize,
+    flags: u32,
+) -> i32 {
+    if flags & 4 != 0 {
+        return 1;
+    }
+    if name.is_null() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    set_provider(&cstr(name), kind)
+}
+
+/// `CryptSetProviderW(nom, type)` : fournisseur par défaut de
+/// l'utilisateur, déjà le seul de son type.
+unsafe extern "win64" fn crypt_set_provider_w(name: *const u16, kind: u32) -> i32 {
+    if name.is_null() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    set_provider(&wstr(name), kind)
+}
+
+unsafe extern "win64" fn crypt_set_provider_a(name: *const u8, kind: u32) -> i32 {
+    if name.is_null() {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    set_provider(&cstr(name), kind)
 }
 
 // ── Divers ──────────────────────────────────────────────────────────────
@@ -1161,6 +1323,10 @@ pub fn exports() -> Exports {
         "LsaRemoveAccountRights" => fn lsa_no_policy,
         "LsaRetrievePrivateData" => fn lsa_no_policy,
         "LsaStorePrivateData" => fn lsa_no_policy,
+        "LsaEnumerateTrustedDomains" => fn lsa_enumerate_trusted_domains,
+        "LsaLookupNames2" => fn lsa_lookup_names2,
+        "LsaLookupSids" => fn lsa_lookup_sids,
+        "LsaLookupSids2" => fn lsa_lookup_sids2,
         "OpenEventLogW" => fn open_event_log_w,
         "OpenBackupEventLogW" => fn open_backup_event_log_w,
         "CloseEventLog" => fn close_event_log,
@@ -1213,6 +1379,12 @@ pub fn exports() -> Exports {
         "CryptEnumProviderTypesW" => fn crypt_enum_provider_types_w,
         "CryptGetDefaultProviderW" => fn crypt_get_default_provider_w,
         "CryptSetProviderExW" => fn crypt_set_provider_ex_w,
+        "CryptEnumProvidersA" => fn crypt_enum_providers_a,
+        "CryptEnumProviderTypesA" => fn crypt_enum_provider_types_a,
+        "CryptGetDefaultProviderA" => fn crypt_get_default_provider_a,
+        "CryptSetProviderExA" => fn crypt_set_provider_ex_a,
+        "CryptSetProviderW" => fn crypt_set_provider_w,
+        "CryptSetProviderA" => fn crypt_set_provider_a,
         "InitiateSystemShutdownW" => fn initiate_system_shutdown_w,
         "InitiateSystemShutdownExW" => fn initiate_system_shutdown_ex_w,
         "AbortSystemShutdownW" => fn abort_system_shutdown_w,
@@ -1252,6 +1424,70 @@ pub fn secur32_exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Variantes ANSI des fournisseurs (contrat security-cryptoapi,
+    /// Refs #2902) : mêmes noms que les W, tailles en octets.
+    #[test]
+    fn fournisseurs_ansi_2902() {
+        unsafe {
+            let (mut kind, mut len) = (0u32, 0u32);
+            assert_eq!(
+                crypt_enum_providers_a(0, 0, 0, &mut kind, std::ptr::null_mut(), &mut len),
+                1
+            );
+            assert_eq!(len as usize, PROVIDERS[0].0.len() + 1);
+            let mut buf = vec![0u8; len as usize];
+            assert_eq!(
+                crypt_enum_providers_a(0, 0, 0, &mut kind, buf.as_mut_ptr(), &mut len),
+                1
+            );
+            assert_eq!(&buf[..buf.len() - 1], PROVIDERS[0].0.as_bytes());
+            assert_eq!(kind, PROVIDERS[0].1);
+            let mut court = 3u32;
+            assert_eq!(
+                crypt_enum_providers_a(0, 0, 0, &mut kind, buf.as_mut_ptr(), &mut court),
+                0
+            );
+            assert_eq!(court as usize, buf.len());
+            assert_eq!(
+                crypt_enum_provider_types_a(9, 0, 0, &mut kind, buf.as_mut_ptr(), &mut len),
+                0
+            );
+            let mut len2 = 128u32;
+            let mut b2 = [0u8; 128];
+            assert_eq!(
+                crypt_get_default_provider_a(24, 0, 0, b2.as_mut_ptr(), &mut len2),
+                1
+            );
+            assert_eq!(&b2[..len2 as usize - 1], PROVIDERS[1].0.as_bytes());
+            assert_eq!(
+                crypt_get_default_provider_a(99, 0, 0, b2.as_mut_ptr(), &mut len2),
+                0
+            );
+            let nom = std::ffi::CString::new(PROVIDERS[0].0).unwrap();
+            assert_eq!(crypt_set_provider_a(nom.as_ptr().cast(), 1), 1);
+            assert_eq!(crypt_set_provider_a(nom.as_ptr().cast(), 24), 0);
+            assert_eq!(crypt_set_provider_ex_a(nom.as_ptr().cast(), 1, 0, 0), 1);
+            let w: Vec<u16> = PROVIDERS[1].0.encode_utf16().chain([0]).collect();
+            assert_eq!(crypt_set_provider_w(w.as_ptr(), 24), 1);
+            assert_eq!(crypt_set_provider_w(std::ptr::null(), 24), 0);
+        }
+    }
+
+    /// Aucune stratégie LSA n'est jamais ouverte : les fonctions à handle
+    /// de stratégie ajoutées pour les contrats lsalookup et lsapolicy
+    /// répondent comme les autres (Refs #2902).
+    #[test]
+    fn fonctions_a_strategie_sans_handle_2902() {
+        assert_eq!(
+            lsa_enumerate_trusted_domains(0, 0, 0, 0, 0),
+            STATUS_INVALID_HANDLE
+        );
+        assert_eq!(lsa_lookup_names2(0, 0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_lookup_sids(0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_lookup_sids2(0, 0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_no_policy(0, 0, 0, 0), STATUS_INVALID_HANDLE);
+    }
 
     #[test]
     fn codes_nt_convertis() {

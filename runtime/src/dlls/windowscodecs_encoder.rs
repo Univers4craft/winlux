@@ -5,12 +5,15 @@
 //! cet encodeur : Initialize sur un IStream, CreateNewFrame, SetSize,
 //! SetPixelFormat, WritePixels ou WriteSource, Commit de l'image puis de
 //! l'encodeur. L'ordre des méthodes suit `wincodec.h` (mingw-w64, domaine
-//! public). Le PNG est produit par la caisse `png` en RVBA 8 bits.
+//! public). Le PNG est produit par la caisse `png` en RVBA 8 bits, ou en
+//! couleurs indexées (1, 2, 4 ou 8 bits par pixel) avec la palette donnée
+//! par SetPalette ou par la source (#2938).
 
 use super::{
     add_ref, clip, method, qi_list, read_source, release, Pix, WicRect, CONTAINER_PNG, FMT_BGR24,
     FMT_BGRA32, FMT_GRAY8, FMT_RGB24, FMT_RGBA32, WINCODEC_ERR_COMPONENTNOTFOUND,
-    WINCODEC_ERR_NOTINITIALIZED, WINCODEC_ERR_UNSUPPORTEDOPERATION,
+    WINCODEC_ERR_NOTINITIALIZED, WINCODEC_ERR_PALETTEUNAVAILABLE,
+    WINCODEC_ERR_UNSUPPORTEDOPERATION,
 };
 use crate::dlls::audio_com::{guid, put, Com, VTable, E_INVALIDARG, E_POINTER, S_OK};
 use crate::dlls::ole32::Guid;
@@ -48,6 +51,9 @@ const IID_PROPERTY_BAG2: Guid = guid(
 struct EncoderState {
     /// IStream de destination, tenu jusqu'à la fin de l'encodeur.
     stream: Option<usize>,
+    /// Palette donnée à l'encodeur (IWICBitmapEncoder::SetPalette), en
+    /// WICColor 0xAARRGGBB : celle des images qui n'en ont pas reçu.
+    palette: Option<Vec<u32>>,
     /// PNG de l'image validée par son Commit.
     png: Option<Vec<u8>>,
     frame_created: bool,
@@ -75,8 +81,12 @@ struct FrameState {
     h: u32,
     fmt: Option<Guid>,
     dpi: (f64, f64),
-    /// Lignes reçues, en RVBA 8 bits non prémultiplié.
+    /// Lignes reçues, en RVBA 8 bits non prémultiplié ; pour un format
+    /// indexé, les index tels quels, lignes serrées au bit près (comme un
+    /// PNG : premier pixel dans les bits de poids fort).
     rgba: Vec<u8>,
+    /// Palette de l'image (SetPalette, ou celle d'une source indexée).
+    palette: Option<Vec<u32>>,
     rows: u32,
     committed: bool,
 }
@@ -101,6 +111,85 @@ type FrameObj = Com<Frame>;
 /// n'écrit pas.
 fn native(fmt: &Guid) -> bool {
     [FMT_BGRA32, FMT_RGBA32, FMT_BGR24, FMT_RGB24, FMT_GRAY8].contains(fmt)
+        || index_bits(fmt).is_some()
+}
+
+/// GUID_WICPixelFormat1bppIndexed … 8bppIndexed (wincodec.h) : bits par
+/// pixel. L'encodeur PNG de WIC les écrit tels quels (Learn, « Native Pixel
+/// Formats Overview »), et Paint.NET exige qu'il garde 8bppIndexed (#2938).
+fn index_bits(fmt: &Guid) -> Option<u8> {
+    let base = super::FMT_GRAY8;
+    if fmt.data1 != base.data1
+        || fmt.data2 != base.data2
+        || fmt.data3 != base.data3
+        || fmt.data4[..7] != base.data4[..7]
+    {
+        return None;
+    }
+    match fmt.data4[7] {
+        1 => Some(1),
+        2 => Some(2),
+        3 => Some(4),
+        4 => Some(8),
+        _ => None,
+    }
+}
+
+/// Octets d'une ligne de `w` pixels indexés sur `bits` bits.
+fn index_row(w: u32, bits: u8) -> usize {
+    (w as usize * bits as usize).div_ceil(8)
+}
+
+/// Couleurs d'un IWICPalette quelconque (GetColorCount, GetColors).
+unsafe fn palette_colors(pal: *mut c_void) -> Option<Vec<u32>> {
+    if pal.is_null() {
+        return None;
+    }
+    type Count = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+    type Colors = unsafe extern "win64" fn(*mut c_void, u32, *mut u32, *mut u32) -> i32;
+    let mut n = 0u32;
+    if method::<Count>(pal, 8)(pal, &mut n) < 0 || n == 0 || n > 256 {
+        return None;
+    }
+    let mut colors = vec![0u32; n as usize];
+    let mut got = 0u32;
+    if method::<Colors>(pal, 9)(pal, n, colors.as_mut_ptr(), &mut got) < 0 {
+        return None;
+    }
+    colors.truncate(got.min(n) as usize);
+    (!colors.is_empty()).then_some(colors)
+}
+
+/// Index de la couleur de la palette la plus proche d'un pixel RVBA.
+fn nearest(palette: &[u32], p: &[u8]) -> u8 {
+    let mut best = (u32::MAX, 0usize);
+    for (i, &c) in palette.iter().enumerate() {
+        let q = [(c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8];
+        let d: u32 = p
+            .iter()
+            .zip(q)
+            .map(|(&a, b)| (a as i32 - b as i32).unsigned_abs().pow(2))
+            .sum();
+        if d < best.0 {
+            best = (d, i);
+        }
+    }
+    best.1 as u8
+}
+
+/// Lignes RVBA ramenées aux index de la palette, serrées sur `bits` bits.
+fn to_indices(rgba: &[u8], w: u32, bits: u8, palette: &[u32]) -> Vec<u8> {
+    let row = index_row(w, bits);
+    let rows = rgba.len() / (w as usize * 4).max(1);
+    let mut out = vec![0u8; row * rows];
+    for (y, line) in rgba.chunks_exact(w as usize * 4).enumerate() {
+        for (x, p) in line.as_chunks::<4>().0.iter().enumerate() {
+            let i = nearest(palette, p) & ((1u16 << bits) - 1) as u8;
+            let bit = x * bits as usize;
+            out[y * row + bit / 8] |= i << (8 - bits as usize - bit % 8);
+        }
+    }
+    out
 }
 
 /// CreateEncoder : seul le conteneur PNG est pris en charge.
@@ -178,15 +267,34 @@ unsafe extern "win64" fn encoder_info(_this: *mut EncoderObj, out: *mut *mut c_v
     super::encoder_info_for_container(&CONTAINER_PNG, out)
 }
 
-/// SetColorContexts, SetPalette : sans effet sur un PNG RVBA.
+/// SetColorContexts : sans effet.
 unsafe extern "win64" fn encoder_ignored2(_this: *mut c_void, _a: usize, _b: usize) -> i32 {
-    S_OK
-}
-unsafe extern "win64" fn encoder_ignored1(_this: *mut c_void, _a: usize) -> i32 {
     S_OK
 }
 unsafe extern "win64" fn encoder_unsupported1(_this: *mut c_void, _a: usize) -> i32 {
     WINCODEC_ERR_UNSUPPORTEDOPERATION
+}
+
+/// IWICBitmapEncoder::SetPalette : palette des images indexées (#2938).
+unsafe extern "win64" fn encoder_set_palette(this: *mut EncoderObj, pal: *mut c_void) -> i32 {
+    let Some(colors) = palette_colors(pal) else {
+        return E_INVALIDARG;
+    };
+    crate::dlls::lock(&Com::get(this).state).palette = Some(colors);
+    S_OK
+}
+
+/// IWICBitmapFrameEncode::SetPalette (#2938).
+unsafe extern "win64" fn frame_set_palette(this: *mut FrameObj, pal: *mut c_void) -> i32 {
+    let Some(colors) = palette_colors(pal) else {
+        return E_INVALIDARG;
+    };
+    let mut f = frame(this);
+    if !f.initialized {
+        return WINCODEC_ERR_NOTINITIALIZED;
+    }
+    f.palette = Some(colors);
+    S_OK
 }
 
 unsafe extern "win64" fn encoder_new_frame(
@@ -280,8 +388,8 @@ static ENCODER_VT: VTable<13> = VTable([
     encoder_initialize as *const (),
     encoder_container as *const (),
     encoder_info as *const (),
-    encoder_ignored2 as *const (),     // SetColorContexts
-    encoder_ignored1 as *const (),     // SetPalette
+    encoder_ignored2 as *const (), // SetColorContexts
+    encoder_set_palette as *const (),
     encoder_unsupported1 as *const (), // SetThumbnail
     encoder_unsupported1 as *const (), // SetPreview
     encoder_new_frame as *const (),
@@ -374,6 +482,24 @@ unsafe extern "win64" fn frame_write_pixels(
     if buf.is_null() {
         return E_INVALIDARG;
     }
+    if let Some(bits) = index_bits(&fmt) {
+        // Index tels quels, ligne par ligne (#2938).
+        let used = index_row(f.w, bits);
+        if (stride as usize) < used
+            || (size as u64) < stride as u64 * (lines as u64 - 1) + used as u64
+        {
+            return E_INVALIDARG;
+        }
+        if f.rows + lines > f.h {
+            return WINCODEC_ERR_TOOMANYSCANLINES;
+        }
+        for y in 0..lines as usize {
+            let src = std::slice::from_raw_parts(buf.add(y * stride as usize), used);
+            f.rgba.extend_from_slice(src);
+        }
+        f.rows += lines;
+        return S_OK;
+    }
     let Some(mut pix) = Pix::zeroed(f.w, lines, fmt) else {
         return E_INVALIDARG;
     };
@@ -395,11 +521,103 @@ unsafe extern "win64" fn frame_write_pixels(
     append_rows(&mut f, &rgba, lines)
 }
 
+/// Source indexée : ses index, serrés au bit près, et sa palette.
+unsafe fn read_indexed_source(
+    src: *mut c_void,
+    rect: *const WicRect,
+) -> Result<Option<(u32, u32, Guid, Vec<u8>, Option<Vec<u32>>)>, i32> {
+    if src.is_null() {
+        return Err(E_INVALIDARG);
+    }
+    type GetSize = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut u32) -> i32;
+    type GetFormat = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+    type CopyPalette = unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32;
+    type Copy = unsafe extern "win64" fn(*mut c_void, *const WicRect, u32, u32, *mut u8) -> i32;
+    let mut fmt = Guid::default();
+    let hr = method::<GetFormat>(src, 4)(src, &mut fmt);
+    if hr < 0 {
+        return Err(hr);
+    }
+    let Some(bits) = index_bits(&fmt) else {
+        return Ok(None);
+    };
+    let (mut w, mut h) = (0u32, 0u32);
+    let hr = method::<GetSize>(src, 3)(src, &mut w, &mut h);
+    if hr < 0 {
+        return Err(hr);
+    }
+    let r = match rect.as_ref() {
+        Some(r) => *r,
+        None => WicRect {
+            x: 0,
+            y: 0,
+            w: w as i32,
+            h: h as i32,
+        },
+    };
+    if r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 {
+        return Err(E_INVALIDARG);
+    }
+    let (w, h) = (r.w as u32, r.h as u32);
+    if crate::imaging::check_size(w, h).is_err() {
+        return Err(E_INVALIDARG);
+    }
+    let row = index_row(w, bits);
+    let mut data = vec![0u8; row * h as usize];
+    let hr = method::<Copy>(src, 7)(src, &r, row as u32, data.len() as u32, data.as_mut_ptr());
+    if hr < 0 {
+        return Err(hr);
+    }
+    // CopyPalette dans une palette à nous, puis ses couleurs.
+    let mut pal: *mut c_void = std::ptr::null_mut();
+    let mut colors = None;
+    if super::new_palette(&mut pal) >= 0 && !pal.is_null() {
+        if method::<CopyPalette>(src, 6)(src, pal) >= 0 {
+            colors = palette_colors(pal);
+        }
+        method::<unsafe extern "win64" fn(*mut c_void) -> u32>(pal, 2)(pal);
+    }
+    Ok(Some((w, h, fmt, data, colors)))
+}
+
 unsafe extern "win64" fn frame_write_source(
     this: *mut FrameObj,
     src: *mut c_void,
     rect: *const WicRect,
 ) -> i32 {
+    // Source indexée vers une image du même format : index et palette
+    // gardés tels quels (#2938).
+    match read_indexed_source(src, rect) {
+        Err(hr) => return hr,
+        Ok(Some((w, h, sfmt, data, colors))) => {
+            let mut f = frame(this);
+            if !f.initialized {
+                return WINCODEC_ERR_WRONGSTATE;
+            }
+            if f.w == 0 {
+                (f.w, f.h) = (w, h);
+            }
+            if f.fmt.is_none() {
+                f.fmt = Some(sfmt);
+            }
+            if f.fmt == Some(sfmt) {
+                if w != f.w {
+                    return E_INVALIDARG;
+                }
+                if f.rows + h > f.h {
+                    return WINCODEC_ERR_TOOMANYSCANLINES;
+                }
+                if f.palette.is_none() {
+                    f.palette = colors;
+                }
+                f.rgba.extend_from_slice(&data);
+                f.rows += h;
+                return S_OK;
+            }
+            drop(f);
+        }
+        Ok(None) => {}
+    }
     let mut pix = match read_source(src) {
         Ok(p) => p,
         Err(hr) => return hr,
@@ -429,20 +647,67 @@ unsafe extern "win64" fn frame_write_source(
         return E_INVALIDARG;
     }
     let rgba = pix.to_rgba();
+    if let Some(bits) = f.fmt.as_ref().and_then(index_bits) {
+        // Image indexée : chaque pixel prend la couleur la plus proche de
+        // la palette donnée par SetPalette (#2938).
+        let enc = Com::get(this).encoder;
+        let palette = f
+            .palette
+            .clone()
+            .or_else(|| crate::dlls::lock(&Com::get(enc).state).palette.clone());
+        let Some(palette) = palette else {
+            return WINCODEC_ERR_PALETTEUNAVAILABLE;
+        };
+        if f.rows + pix.h > f.h {
+            return WINCODEC_ERR_TOOMANYSCANLINES;
+        }
+        let idx = to_indices(&rgba, f.w, bits, &palette);
+        f.rgba.extend_from_slice(&idx);
+        f.rows += pix.h;
+        return S_OK;
+    }
     append_rows(&mut f, &rgba, pix.h)
 }
 
 unsafe extern "win64" fn frame_commit(this: *mut FrameObj) -> i32 {
+    let enc_obj = Com::get(this).encoder;
+    let enc_palette = crate::dlls::lock(&Com::get(enc_obj).state).palette.clone();
     let png = {
         let mut f = frame(this);
         if f.committed || f.w == 0 || f.rows < f.h {
             return WINCODEC_ERR_WRONGSTATE;
         }
+        let bits = f.fmt.as_ref().and_then(index_bits);
+        let palette = f.palette.clone().or(enc_palette);
+        if bits.is_some() && palette.is_none() {
+            return WINCODEC_ERR_PALETTEUNAVAILABLE;
+        }
         let mut out = Vec::new();
         {
             let mut enc = png::Encoder::new(&mut out, f.w, f.h);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
+            if let (Some(bits), Some(colors)) = (bits, palette.as_ref()) {
+                // PLTE en RVB, tRNS pour l'alpha s'il n'est pas opaque.
+                enc.set_color(png::ColorType::Indexed);
+                enc.set_depth(match bits {
+                    1 => png::BitDepth::One,
+                    2 => png::BitDepth::Two,
+                    4 => png::BitDepth::Four,
+                    _ => png::BitDepth::Eight,
+                });
+                let n = colors.len().min(1 << bits);
+                let plte: Vec<u8> = colors[..n]
+                    .iter()
+                    .flat_map(|&c| [(c >> 16) as u8, (c >> 8) as u8, c as u8])
+                    .collect();
+                enc.set_palette(plte);
+                let alpha: Vec<u8> = colors[..n].iter().map(|&c| (c >> 24) as u8).collect();
+                if let Some(last) = alpha.iter().rposition(|&a| a != 255) {
+                    enc.set_trns(alpha[..=last].to_vec());
+                }
+            } else {
+                enc.set_color(png::ColorType::Rgba);
+                enc.set_depth(png::BitDepth::Eight);
+            }
             // Résolution : pHYs en pixels par mètre.
             let ppm = |d: f64| (d.max(1.0) / 0.0254).round() as u32;
             enc.set_pixel_dims(Some(png::PixelDimensions {
@@ -461,8 +726,7 @@ unsafe extern "win64" fn frame_commit(this: *mut FrameObj) -> i32 {
         f.rgba = Vec::new();
         out
     };
-    let enc = Com::get(this).encoder;
-    crate::dlls::lock(&Com::get(enc).state).png = Some(png);
+    crate::dlls::lock(&Com::get(enc_obj).state).png = Some(png);
     S_OK
 }
 
@@ -474,8 +738,8 @@ static FRAME_VT: VTable<14> = VTable([
     frame_set_size as *const (),
     frame_set_resolution as *const (),
     frame_set_format as *const (),
-    encoder_ignored2 as *const (),     // SetColorContexts
-    encoder_ignored1 as *const (),     // SetPalette
+    encoder_ignored2 as *const (), // SetColorContexts
+    frame_set_palette as *const (),
     encoder_unsupported1 as *const (), // SetThumbnail
     frame_write_pixels as *const (),
     frame_write_source as *const (),
@@ -651,6 +915,94 @@ mod tests {
             Com::release(enc);
             Com::release(flux);
         }
+    }
+
+    /// #2938 : comme l'encodeur PNG de WIC, SetPixelFormat garde
+    /// 8bppIndexed (Paint.NET l'exige), l'image prend la palette de
+    /// SetPalette et le PNG écrit est indexé, alpha en tRNS. Sans palette,
+    /// Commit rend WINCODEC_ERR_PALETTEUNAVAILABLE.
+    #[test]
+    fn encodeur_png_indexe_8_bits() {
+        unsafe {
+            let encode = |with_palette: bool| -> (i32, Vec<u8>) {
+                let flux = Com::create(
+                    flux::VT.ptr(),
+                    flux::Flux {
+                        data: Mutex::new(Vec::new()),
+                    },
+                );
+                let mut enc = std::ptr::null_mut();
+                assert_eq!(
+                    create_encoder(
+                        std::ptr::null_mut(),
+                        &CONTAINER_PNG,
+                        std::ptr::null(),
+                        &mut enc
+                    ),
+                    S_OK
+                );
+                let enc = enc as *mut EncoderObj;
+                assert_eq!(encoder_initialize(enc, flux.cast(), 2), S_OK);
+                let mut fr = std::ptr::null_mut();
+                assert_eq!(encoder_new_frame(enc, &mut fr, std::ptr::null_mut()), S_OK);
+                let fr = fr as *mut FrameObj;
+                assert_eq!(frame_initialize(fr, std::ptr::null_mut()), S_OK);
+                assert_eq!(frame_set_size(fr, 3, 1), S_OK);
+                let indexed8 = super::super::pixel_format(0x04);
+                let mut fmt = indexed8;
+                assert_eq!(frame_set_format(fr, &mut fmt), S_OK);
+                assert_eq!(fmt, indexed8, "8bppIndexed gardé");
+                if with_palette {
+                    let mut pal: *mut c_void = std::ptr::null_mut();
+                    assert_eq!(super::super::new_palette(&mut pal), S_OK);
+                    // Rouge opaque, vert opaque, bleu à moitié transparent.
+                    let colors: [u32; 3] = [0xFFFF_0000, 0xFF00_FF00, 0x8000_00FF];
+                    let vt = *(pal as *const *const usize);
+                    let init: unsafe extern "win64" fn(*mut c_void, *const u32, u32) -> i32 =
+                        std::mem::transmute(*vt.add(4));
+                    assert_eq!(init(pal, colors.as_ptr(), 3), S_OK);
+                    assert_eq!(frame_set_palette(fr, pal), S_OK);
+                    method::<unsafe extern "win64" fn(*mut c_void) -> u32>(pal, 2)(pal);
+                }
+                let px: [u8; 4] = [2, 0, 1, 0];
+                assert_eq!(frame_write_pixels(fr, 1, 4, 4, px.as_ptr()), S_OK);
+                let hr = frame_commit(fr);
+                if hr == S_OK {
+                    assert_eq!(encoder_commit(enc), S_OK);
+                }
+                let data = crate::dlls::lock(&Com::get(flux).data).clone();
+                Com::release(fr);
+                Com::release(enc);
+                Com::release(flux);
+                (hr, data)
+            };
+            assert_eq!(encode(false).0, WINCODEC_ERR_PALETTEUNAVAILABLE);
+            let (hr, data) = encode(true);
+            assert_eq!(hr, S_OK);
+            let dec = png::Decoder::new(std::io::Cursor::new(data.clone()));
+            let r = dec.read_info().unwrap();
+            assert_eq!(r.info().color_type, png::ColorType::Indexed);
+            assert_eq!(r.info().bit_depth, png::BitDepth::Eight);
+            let mut dec = png::Decoder::new(std::io::Cursor::new(data));
+            dec.set_transformations(png::Transformations::EXPAND);
+            let mut r = dec.read_info().unwrap();
+            let mut buf = vec![0; r.output_buffer_size().unwrap()];
+            r.next_frame(&mut buf).unwrap();
+            assert_eq!(
+                &buf[..12],
+                &[0, 0, 255, 128, 255, 0, 0, 255, 0, 255, 0, 255]
+            );
+        }
+    }
+
+    /// Lignes RVBA ramenées à la palette, serrées sur 1 bit par pixel.
+    #[test]
+    fn index_au_plus_proche_serres_au_bit() {
+        let palette = [0xFF00_0000u32, 0xFFFF_FFFF];
+        let rgba = [250, 250, 250, 255, 3, 3, 3, 255, 200, 200, 200, 255];
+        assert_eq!(to_indices(&rgba, 3, 1, &palette), vec![0b1010_0000]);
+        assert_eq!(index_bits(&super::super::pixel_format(0x03)), Some(4));
+        assert_eq!(index_bits(&FMT_GRAY8), None);
     }
 
     /// Un autre conteneur que PNG est refusé proprement.

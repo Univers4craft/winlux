@@ -119,6 +119,7 @@ pub mod fiber64;
 pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
+pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
@@ -137,6 +138,7 @@ mod gui_cairo;
 mod gui_shared;
 pub mod gui_x11;
 pub mod handle_broker;
+pub mod handle_origin;
 pub mod hid;
 pub mod hid_report;
 pub mod hlsl;
@@ -153,6 +155,7 @@ pub mod inifile;
 pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
+pub mod isolatedcontainer;
 pub(crate) mod jobs;
 pub mod jumplist_com;
 pub mod kernel32;
@@ -209,6 +212,7 @@ pub mod nls;
 pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
+pub mod ntdll_atoms;
 pub mod ntdll_file;
 pub mod object_directory;
 pub mod odbc32;
@@ -227,8 +231,10 @@ pub mod oleaut32_picture;
 pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
+pub mod oobe;
 pub mod opengl32;
 pub mod package_classes;
+pub mod pathcch;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;
@@ -314,8 +320,10 @@ pub mod weak_ref;
 pub mod webbrowser;
 pub mod webservices;
 pub mod webview2;
+pub mod webview2_entetes;
 pub mod webview2_iids;
 pub mod wer;
+pub mod wer_inscriptions;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -340,6 +348,7 @@ pub mod winrt_package_manager;
 pub mod winrt_ui;
 pub mod winrt_uri;
 pub mod winrt_wam;
+pub mod winrt_wam_objets;
 pub mod winspool;
 pub mod wintab32;
 pub mod wintrust;
@@ -460,7 +469,8 @@ pub fn shadowed_exports() -> Vec<String> {
 struct Builtin {
     name: &'static str,
     exports: Exports,
-    /// Image PE minimale servant de HMODULE (voir `pe_image`).
+    /// HMODULE fixé (page « MZ » seule), ou 0 : image PE minimale
+    /// construite à la demande (`builtin_handle`, voir `pe_image`).
     handle: usize,
 }
 
@@ -473,7 +483,8 @@ fn fake_module() -> usize {
 
 fn builtins() -> &'static Vec<Builtin> {
     static B: OnceLock<Vec<Builtin>> = OnceLock::new();
-    B.get_or_init(|| {
+    static CORE: std::sync::Once = std::sync::Once::new();
+    let all = B.get_or_init(|| {
         let crt = {
             let mut e = msvcrt::exports();
             e.extend(crt::exports());
@@ -532,8 +543,11 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(wer_inscriptions::exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(pathcch::exports());
+                    e.extend(oobe::exports());
                     e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
@@ -564,6 +578,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_fs::ntdll_exports());
                     e.extend(kernel32_node::ntdll_exports());
                     e.extend(ntdll_file::exports());
+                    e.extend(ntdll_atoms::exports());
                     for (name, addr) in wpf_native::ntdll_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -1162,6 +1177,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: rstrtmgr::exports(),
                 handle: fake_module(),
             },
+            // Contrat sans DLL hôte documentée : le module porte son nom (Refs #2902).
+            Builtin {
+                name: "api-ms-win-security-isolatedcontainer-l1-1-0",
+                exports: isolatedcontainer::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "gamemode",
+                exports: gamemode::exports(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
@@ -1415,15 +1441,62 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
-        // Chaque DLL intégrée a de vrais en-têtes PE et une table d'exports :
-        // le bac à sable de Chromium lit lui-même celle de ntdll au lieu
-        // d'appeler GetProcAddress (#851), et ses renderers vérifient les
-        // en-têtes PE des modules système avant d'en parcourir les imports
-        // (#852).
-        for b in all.iter_mut() {
-            b.handle = pe_image::build(b.name, &b.exports);
-        }
         all
+    });
+    // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
+    // sable de Chromium écrit dans l'image ntdll d'un enfant suspendu avant
+    // que celui-ci n'ait rien demandé (#767, #851).
+    CORE.call_once(|| {
+        for name in ["ntdll", "kernel32"] {
+            if let Some(i) = all.iter().position(|b| b.name == name) {
+                handle_in(all, i);
+            }
+        }
+    });
+    all
+}
+
+/// HMODULE de la DLL intégrée d'indice `i` dans `builtins()`. Chaque DLL
+/// intégrée sans HMODULE fixé a de vrais en-têtes PE et une table
+/// d'exports : le bac à sable de Chromium lit lui-même celle de ntdll au
+/// lieu d'appeler GetProcAddress (#851), et ses renderers vérifient les
+/// en-têtes PE des modules système avant d'en parcourir les imports (#852).
+/// Cette image n'est construite qu'à la première demande du HMODULE
+/// (Gain #3050) : construire d'avance celles des ~400 DLL intégrées coûtait
+/// des millisecondes et de la mémoire à chaque lancement, pour un programme
+/// qui n'en ouvre que quelques-unes.
+fn builtin_handle(i: usize) -> usize {
+    handle_in(builtins(), i)
+}
+
+fn handle_in(all: &'static [Builtin], i: usize) -> usize {
+    let b = &all[i];
+    if b.handle != 0 {
+        return b.handle;
+    }
+    *images_in(all)[i].get_or_init(|| pe_image::build(b.name, &b.exports, i))
+}
+
+fn builtin_images() -> &'static [OnceLock<usize>] {
+    images_in(builtins())
+}
+
+fn images_in(all: &'static [Builtin]) -> &'static [OnceLock<usize>] {
+    static H: OnceLock<Vec<OnceLock<usize>>> = OnceLock::new();
+    H.get_or_init(|| all.iter().map(|_| OnceLock::new()).collect())
+}
+
+/// Indice de la DLL intégrée qui a ce HMODULE. Une image jamais construite
+/// n'a jamais été donnée au programme : seules les images construites
+/// comptent.
+fn builtin_index_by_handle(h: usize) -> Option<usize> {
+    let images = builtin_images();
+    builtins().iter().enumerate().position(|(i, b)| {
+        if b.handle != 0 {
+            b.handle == h
+        } else {
+            images[i].get() == Some(&h)
+        }
     })
 }
 
@@ -1658,10 +1731,39 @@ fn add_basics(all: &mut [Builtin]) {
 
 /// Nom de DLL normalisé : minuscules, sans « .dll », avec les alias connus
 /// (api-ms-win-crt-* → ucrtbase, kernelbase → kernel32, msvcr120 → msvcrt…).
+/// Contrats API-set rattachés un par un, version exacte (Refs #2902) :
+/// chaque fonction du .def public de mingw-w64 (lib-common) est servie par
+/// l'hôte, et l'hôte est celui que nomment les pages sdk-api de ces
+/// fonctions (req.dll / api_location). Une version suivante du même
+/// contrat n'est pas couverte tant qu'elle n'a pas été vérifiée.
+pub const CONTRATS_VERIFIES: &[(&str, &str)] = &[
+    ("api-ms-win-downlevel-normaliz-l1-1-0", "normaliz"),
+    ("api-ms-win-eventing-consumer-l1-1-0", "advapi32"),
+    ("api-ms-win-eventlog-legacy-l1-1-0", "advapi32"),
+    ("api-ms-win-security-appcontainer-l1-1-0", "kernel32"),
+    ("api-ms-win-security-base-ansi-l1-1-0", "advapi32"),
+    ("api-ms-win-security-provider-ansi-l1-1-0", "advapi32"),
+    ("api-ms-win-eventing-classicprovider-l1-1-0", "advapi32"),
+    ("api-ms-win-mm-time-l1-1-0", "winmm"),
+    ("api-ms-win-security-lsalookup-ansi-l2-1-0", "advapi32"),
+    ("api-ms-win-security-lsalookup-l2-1-0", "advapi32"),
+    ("api-ms-win-security-lsapolicy-l1-1-0", "advapi32"),
+    ("api-ms-win-security-cryptoapi-l1-1-0", "advapi32"),
+    ("api-ms-win-oobe-notification-l1-1-0", "kernel32"),
+    ("api-ms-win-gaming-expandedresources-l1-1-0", "gamemode"),
+];
+
 pub fn normalize(dll: &str) -> String {
     let l = dll.to_ascii_lowercase();
     let l = l.rsplit(['\\', '/']).next().unwrap_or(&l).to_string();
     let base = l.strip_suffix(".dll").unwrap_or(&l);
+    if let Some(&(_, host)) = CONTRATS_VERIFIES.iter().find(|&&(c, _)| c == base) {
+        return host.into();
+    }
+    // l1-1-1 ajoute IsProcessInWDAGContainer au même module (isolatedcontainer.rs).
+    if base == "api-ms-win-security-isolatedcontainer-l1-1-1" {
+        return "api-ms-win-security-isolatedcontainer-l1-1-0".into();
+    }
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
     }
@@ -1761,6 +1863,8 @@ pub fn normalize(dll: &str) -> String {
         || base.starts_with("api-ms-win-security-sddl-l1-")
         || base.starts_with("api-ms-win-security-provider-l1-")
         || base.starts_with("api-ms-win-security-sddl-ansi-l1-")
+        // Audacity 4.0.2 (#2902) : SystemFunction036/040/041 (def mingw-w64).
+        || base.starts_with("api-ms-win-security-systemfunctions-l1-")
         // Contrats des services (service-core, -management, -winsvc) : les
         // fonctions du gestionnaire de services d'advapi32 (#1823).
         || base.starts_with("api-ms-win-service-")
@@ -1943,6 +2047,20 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Reste de la famille PathCch (#2921).
+    "PathCchRemoveFileSpec",
+    "PathCchRemoveBackslash",
+    "PathCchRemoveBackslashEx",
+    "PathCchAddBackslash",
+    "PathCchAddBackslashEx",
+    "PathCchStripToRoot",
+    "PathCchIsRoot",
+    "PathCchFindExtension",
+    "PathCchRemoveExtension",
+    "PathCchAddExtension",
+    "PathCchRenameExtension",
+    "PathCchStripPrefix",
+    "PathIsUNCEx",
     // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
     "CreateAppContainerToken",
 ];
@@ -2106,8 +2224,8 @@ pub fn module_handle(dll: &str) -> Option<usize> {
             return Some(m.base);
         }
     }
-    if let Some(b) = builtins().iter().find(|b| b.name == n) {
-        return Some(b.handle);
+    if let Some(i) = builtins().iter().position(|b| b.name == n) {
+        return Some(builtin_handle(i));
     }
     crate::loader::find_module_by_name(dll).map(|m| m.base)
 }
@@ -2132,7 +2250,7 @@ pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
     if h == kernelbase_handle() {
         return Some("kernel32");
     }
-    builtins().iter().find(|b| b.handle == h).map(|b| b.name)
+    builtin_index_by_handle(h).map(|i| builtins()[i].name)
 }
 
 /// Dossier système vu par le programme : System32, ou SysWOW64 pour un
@@ -2153,7 +2271,7 @@ pub fn builtin_file_path(h: usize) -> Option<String> {
     let name = if h == kernelbase_handle() {
         "KernelBase"
     } else {
-        builtins().iter().find(|b| b.handle == h)?.name
+        builtins()[builtin_index_by_handle(h)?].name
     };
     Some(format!("{}\\{name}.dll", system_dir()))
 }
@@ -2442,6 +2560,193 @@ mod tests {
         assert_eq!(normalize("C:\\Windows\\System32\\MSVCR120.DLL"), "msvcrt");
     }
 
+    /// Chaque fonction du .def mingw-w64 de chaque contrat vérifié se résout
+    /// par le contrat vers l'export de l'hôte (Refs #2902).
+    #[test]
+    fn contrats_verifies_servent_tout_leur_def() {
+        let defs: &[(&str, &[&str])] = &[
+            (
+                "api-ms-win-downlevel-normaliz-l1-1-0",
+                &["IdnToAscii", "IdnToUnicode"],
+            ),
+            (
+                "api-ms-win-eventing-consumer-l1-1-0",
+                &["CloseTrace", "OpenTraceW", "ProcessTrace"],
+            ),
+            (
+                "api-ms-win-eventlog-legacy-l1-1-0",
+                &[
+                    "DeregisterEventSource",
+                    "RegisterEventSourceW",
+                    "ReportEventW",
+                ],
+            ),
+            (
+                "api-ms-win-security-appcontainer-l1-1-0",
+                &["GetAppContainerNamedObjectPath"],
+            ),
+            (
+                "api-ms-win-security-base-ansi-l1-1-0",
+                &["GetFileSecurityA", "SetFileSecurityA"],
+            ),
+            (
+                "api-ms-win-security-provider-ansi-l1-1-0",
+                &[
+                    "GetExplicitEntriesFromAclA",
+                    "GetNamedSecurityInfoA",
+                    "SetEntriesInAclA",
+                    "SetNamedSecurityInfoA",
+                ],
+            ),
+            (
+                "api-ms-win-eventing-classicprovider-l1-1-0",
+                &[
+                    "GetTraceEnableFlags",
+                    "GetTraceEnableLevel",
+                    "GetTraceLoggerHandle",
+                    "RegisterTraceGuidsW",
+                    "TraceEvent",
+                    "TraceMessage",
+                    "TraceMessageVa",
+                    "UnregisterTraceGuids",
+                ],
+            ),
+            (
+                "api-ms-win-mm-time-l1-1-0",
+                &[
+                    "timeBeginPeriod",
+                    "timeEndPeriod",
+                    "timeGetDevCaps",
+                    "timeGetSystemTime",
+                    "timeGetTime",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsalookup-ansi-l2-1-0",
+                &[
+                    "LookupAccountNameA",
+                    "LookupAccountSidA",
+                    "LookupPrivilegeDisplayNameA",
+                    "LookupPrivilegeNameA",
+                    "LookupPrivilegeValueA",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsalookup-l2-1-0",
+                &[
+                    "LookupAccountNameW",
+                    "LookupAccountSidW",
+                    "LookupPrivilegeDisplayNameW",
+                    "LookupPrivilegeNameW",
+                    "LookupPrivilegeValueW",
+                    "LsaEnumerateTrustedDomains",
+                ],
+            ),
+            (
+                "api-ms-win-security-lsapolicy-l1-1-0",
+                &[
+                    "LsaAddAccountRights",
+                    "LsaClose",
+                    "LsaEnumerateAccountRights",
+                    "LsaEnumerateAccountsWithUserRight",
+                    "LsaFreeMemory",
+                    "LsaLookupNames2",
+                    "LsaLookupSids",
+                    "LsaLookupSids2",
+                    "LsaOpenPolicy",
+                    "LsaQueryInformationPolicy",
+                    "LsaRemoveAccountRights",
+                    "LsaRetrievePrivateData",
+                    "LsaSetInformationPolicy",
+                ],
+            ),
+            (
+                "api-ms-win-security-cryptoapi-l1-1-0",
+                &[
+                    "CryptAcquireContextA",
+                    "CryptAcquireContextW",
+                    "CryptContextAddRef",
+                    "CryptCreateHash",
+                    "CryptDecrypt",
+                    "CryptDeriveKey",
+                    "CryptDestroyHash",
+                    "CryptDestroyKey",
+                    "CryptDuplicateHash",
+                    "CryptDuplicateKey",
+                    "CryptEncrypt",
+                    "CryptEnumProvidersA",
+                    "CryptEnumProvidersW",
+                    "CryptEnumProviderTypesA",
+                    "CryptEnumProviderTypesW",
+                    "CryptExportKey",
+                    "CryptGenKey",
+                    "CryptGenRandom",
+                    "CryptGetDefaultProviderA",
+                    "CryptGetDefaultProviderW",
+                    "CryptGetHashParam",
+                    "CryptGetKeyParam",
+                    "CryptGetProvParam",
+                    "CryptGetUserKey",
+                    "CryptHashData",
+                    "CryptHashSessionKey",
+                    "CryptImportKey",
+                    "CryptReleaseContext",
+                    "CryptSetHashParam",
+                    "CryptSetKeyParam",
+                    "CryptSetProviderA",
+                    "CryptSetProviderExA",
+                    "CryptSetProviderExW",
+                    "CryptSetProviderW",
+                    "CryptSetProvParam",
+                    "CryptSignHashA",
+                    "CryptSignHashW",
+                    "CryptVerifySignatureA",
+                    "CryptVerifySignatureW",
+                ],
+            ),
+            (
+                "api-ms-win-oobe-notification-l1-1-0",
+                &[
+                    "OOBEComplete",
+                    "RegisterWaitUntilOOBECompleted",
+                    "UnregisterWaitUntilOOBECompleted",
+                ],
+            ),
+            (
+                "api-ms-win-gaming-expandedresources-l1-1-0",
+                &[
+                    "GetExpandedResourceExclusiveCpuCount",
+                    "HasExpandedResources",
+                    "ReleaseExclusiveCpuSets",
+                ],
+            ),
+        ];
+        assert_eq!(defs.len(), crate::dlls::CONTRATS_VERIFIES.len());
+        for &(contrat, fonctions) in defs {
+            let host = normalize(&format!("{contrat}.dll"));
+            assert_eq!(
+                Some(&(contrat, host.as_str())),
+                crate::dlls::CONTRATS_VERIFIES
+                    .iter()
+                    .find(|&&(c, _)| c == contrat)
+            );
+            for &f in fonctions {
+                let attendu = lookup(&host, f);
+                assert!(attendu.is_some(), "{contrat}!{f}");
+                assert_eq!(
+                    lookup(&normalize(&format!("{contrat}.dll")), f),
+                    attendu,
+                    "{contrat}!{f}"
+                );
+            }
+        }
+        // Versions suivantes incomplètes chez nous : pas rattachées.
+        assert_eq!(
+            normalize("api-ms-win-eventing-consumer-l1-1-1.dll"),
+            "api-ms-win-eventing-consumer-l1-1-1"
+        );
+    }
+
     #[test]
     fn api_sets_reutilisent_leurs_veritables_exports() {
         for (contract, host, symbol) in [
@@ -2563,6 +2868,22 @@ mod tests {
                 "api-ms-win-core-processthreads-l1-1-2.dll",
                 "advapi32",
                 "SetThreadToken",
+            ),
+            // Audacity 4.0.2 (#2902) : contrat systemfunctions.
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction036",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction040",
+            ),
+            (
+                "api-ms-win-security-systemfunctions-l1-1-0.dll",
+                "advapi32",
+                "SystemFunction041",
             ),
             // Spotify.dll (#1832) : contrats appmodel-runtime, job-l2, file-l2.
             (

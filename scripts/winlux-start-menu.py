@@ -167,6 +167,8 @@ _TR = {
     '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Données des programmes': ('Program data', 'Datos de programas', 'Programmdaten'),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
     'Aucune application trouvée': ('No apps found', 'No se encontró ninguna aplicación', 'Keine Apps gefunden'),
     'Recommandations': ('Recommended', 'Recomendaciones', 'Empfohlen'),
@@ -431,6 +433,24 @@ def osk_module():
     return None
 
 
+def screen_locked():
+    """Vrai si winlux-lock tient cet écran : pid vivant dans son marqueur
+    /run/winlux/lock/active (« -1 » pour :1…), comme winlux-power. Le menu
+    s'ouvrait par-dessus l'écran de verrouillage, avec « Souvent ouvert à
+    cette heure-ci », dès qu'un programme l'activait par D-Bus (#2994)."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    suffix = "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+    try:
+        with open(os.environ.get("WINLUX_LOCK_ROOT", "") + "/run/winlux/lock/active" + suffix) as marker:
+            pid = int(marker.read().strip())
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -470,6 +490,9 @@ class Start(Gtk.Application):
         if self.window and self.window.get_visible():
             self.hide()
             return
+        # Écran verrouillé : rien ne s'ouvre par-dessus (#2994).
+        if screen_locked():
+            return
         if not self.window: self.build()
         # Épingles ajoutées par une autre application (Jeux) depuis la
         # dernière ouverture : relues à chaque ouverture.
@@ -478,6 +501,9 @@ class Start(Gtk.Application):
         # Services de la session livrés avec une entrée de menu par leur paquet.
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
                      if listed(app) and app.get_id() not in SESSION_SERVICES}
+        # Textes repliés préparés une fois le menu dessiné (priorité « au
+        # repos », après l'affichage) : la première frappe ne les calcule plus.
+        GLib.idle_add(warm_index, list(self.apps.values()))
         changed = auto_pin(self.state, self.apps)
         changed |= note_new_apps(self.state, self.apps, time.time())
         if changed: self.save()
@@ -807,10 +833,11 @@ class Start(Gtk.Application):
         self.scroll_top()
 
     def first_result(self, *_):
-        # Même ordre que la liste : applications, Paramètres, fichiers.
+        # Même ordre que la liste : Meilleur résultat, applications, Paramètres, fichiers.
         query=fold(self.search.get_text().strip())
         found=settings_for(query) if query else []
-        if self.results:self.launch(self.results[0])
+        if page_first(self.results, found, query):self.open_setting(found[0][1])
+        elif self.results:self.launch(self.results[0])
         elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
@@ -927,8 +954,21 @@ class Start(Gtk.Application):
                 self.file_results = []
                 if len(query) >= 2:
                     threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+            # Une page des Paramètres mieux classée que la première application
+            # devient le Meilleur résultat : « écran » donne la page Écran avant
+            # « Copier le texte de l'écran » (#3018).
+            if page_first(self.results, pages, query):
+                heading = Gtk.Label(label=_t("Meilleur résultat"), xalign=0, margin_top=10)
+                heading.get_style_context().add_class("heading")
+                self.content.pack_start(heading, False, False, 0)
+                label, page = pages[0]
+                button = self.result_button(label, "preferences-system", _t("Paramètres · ") + label)
+                on_click(button, lambda target=page: self.open_setting(target))
+                self.content.pack_start(button, False, False, 0)
+                pages = pages[1:]
+                previous = _t("Meilleur résultat")
             for index, app in enumerate(self.results):
-                group = (_t("Meilleur résultat") if index == 0 else _t("Applications")) if query else category(app)
+                group = (_t("Meilleur résultat") if index == 0 and previous is None else _t("Applications")) if query else category(app)
                 if group != previous:
                     heading = Gtk.Label(label=group, xalign=0, margin_top=10)
                     heading.get_style_context().add_class("heading")
@@ -936,7 +976,7 @@ class Start(Gtk.Application):
                     previous = group
                 # Homonymes (Claude pour Windows et Claude de la Boutique,
                 # #1489) : le repère « .exe » les distingue.
-                self.content.pack_start(self.app_button(app, badge=fold(app.get_display_name()) in twins), False, False, 0)
+                self.content.pack_start(self.app_button(app, badge=indexed(app.get_display_name())[0] in twins), False, False, 0)
             if pages:
                 heading = Gtk.Label(label=_t("Meilleur résultat") if not self.results else _t("Paramètres"), xalign=0, margin_top=10)
                 heading.get_style_context().add_class("heading")
@@ -954,9 +994,9 @@ class Start(Gtk.Application):
                 heading.get_style_context().add_class("heading")
                 self.content.pack_start(heading, False, False, 0)
             for path in self.file_results:
-                relative = str(path.relative_to(Path.home()))
-                folder = str(path.parent.relative_to(Path.home()))
-                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + relative, subtitle="~" if folder == "." else "~/" + folder)
+                place = file_place(path)
+                shown = str(path.relative_to(Path.home())) if place.startswith("~") else place + " › " + path.name
+                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + shown, subtitle=place)
                 on_click(button, lambda target=path: self.open_file(target))
                 button.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
                 self.content.pack_start(button, False, False, 0)
@@ -1134,7 +1174,8 @@ class Start(Gtk.Application):
             recent = recent_files(data_home / "recently-used.xbel", limit=200)
             files = recent[:3]
             opened = {path for path, _, _ in recent}
-            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready())
+            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready(),
+                              done=installers_done())
             data = {"now": now, "files": files, "habits": habit_apps(usage_of(state), now), "todo": todo}
             def deliver():
                 if generation == self.side_generation:
@@ -1324,14 +1365,19 @@ class Start(Gtk.Application):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            # Ses sous-dossiers (« PuTTY (64-bit) ») non plus : ce sont les
+            # groupes du menu, la recherche les montrait comme des dossiers
+            # avec leur chemin AppData (#2905).
+            listed = folders
             if "/Start Menu/Programs" in directory + "/":
                 files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
-            for name in folders + files:
+                listed = []
+            for name in listed + files:
                 visited += 1
-                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if not name.startswith(".") and found_in(query, name, cache=False): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
             if len(matches) >= 300 or visited >= 30000: break
-        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
+        matches = sorted(matches, key=lambda path: (rank(path.name, query, cache=False), -modified(path), fold(path.name)))[:30]
         def deliver():
             if generation == self.file_generation:
                 self.file_results = matches
@@ -1498,9 +1544,9 @@ class Start(Gtk.Application):
 RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
 
 
-def rank(text, query):
+def rank(text, query, cache=True):
     """0 : le nom commence par la recherche ; 1 : un de ses mots ; 2 : ailleurs."""
-    text = fold(text)
+    text = indexed(text)[0] if cache else fold(text)
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
@@ -1515,13 +1561,13 @@ def result_order(app, query, state):
     ident = app.get_id() or ""
     when = seen.get(ident)
     when = when if isinstance(when, (int, float)) else 0
-    return (rank(app.get_display_name(), query), fold(app.get_display_name()), -when,
+    return (rank(app.get_display_name(), query), indexed(app.get_display_name())[0], -when,
             ident.startswith(("winlux-pe-", "winlux-link-")), ident)
 
 
 def homonyms(apps):
     """Noms (repliés) portés par plusieurs applications de la liste."""
-    names = [fold(app.get_display_name()) for app in apps]
+    names = [indexed(app.get_display_name())[0] for app in apps]
     return {name for name in names if names.count(name) > 1}
 
 
@@ -1546,27 +1592,92 @@ def words(text):
     return re.sub(r"[^\w]+|_", " ", fold(text)).strip()
 
 
-def found_in(query, text):
+# Textes du menu (noms, mots-clés des applications, pages des Paramètres)
+# déjà repliés : chaque frappe repliait de nouveau tous les noms, ~10 ms par
+# frappe sous Xvfb pour 150 applications et 43 pages (#3040). Borné : vidé
+# au-delà de 20 000 textes. Les noms de fichiers n'y passent pas (cache=False).
+_INDEX = {}
+_QUERY = [(None, [])]
+
+
+def indexed(text):
+    """(texte replié, ses mots, ses suites de trois mots recollées), en cache."""
+    entry = _INDEX.get(text)
+    if entry is None:
+        if len(_INDEX) > 20000: _INDEX.clear()
+        tokens = tuple(words(text).split())
+        entry = _INDEX[text] = (fold(text), tokens,
+                                tuple("".join(tokens[index:index + 3]) for index in range(len(tokens))))
+    return entry
+
+
+def warm_index(apps):
+    """Remplit le cache des textes repliés : noms et mots-clés des applications
+    (tels que matches() les compose), titres et mots-clés des Paramètres."""
+    for app in apps:
+        indexed(app.get_display_name())
+        keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
+        generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
+        indexed(" ".join(list(keywords or []) + [generic or ""]))
+    for (label, _), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
+        indexed(label); indexed(french); indexed(keywords)
+    return False
+
+
+def found_in(query, text, cache=True):
     """Chaque mot de la recherche commence un mot du texte, dans n'importe quel
     ordre ; « wifi » trouve aussi « Wi-Fi » (mots voisins recollés)."""
-    query, tokens = words(query).split(), words(text).split()
+    # La même recherche est comparée à chaque texte : repliée une seule fois.
+    # Lue et remplacée d'un bloc (tuple) : le fil de la recherche de fichiers
+    # appelle aussi found_in.
+    memo = _QUERY[0]
+    if memo[0] != query:
+        memo = (query, words(query).split())
+        _QUERY[0] = memo
+    query = memo[1]
     if not query: return False
+    if cache:
+        _, tokens, glued = indexed(text)
+    else:
+        tokens = words(text).split()
+        glued = ["".join(tokens[index:index + 3]) for index in range(len(tokens))]
     # Début de mot, comme Windows : « son » trouve Son, pas « personnalisation ».
     if all(any(token.startswith(word) for token in tokens) for word in query): return True
     joined = "".join(query)
-    return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
+    return any(part.startswith(joined) for part in glued)
+
+
+# « Paramètres » dans les quatre langues, repliés : dans une recherche de
+# plusieurs mots (« paramètres son »), ce mot désigne la catégorie et non le
+# titre de la page (#3017).
+SETTINGS_WORDS = ("parametres", "parametre", "settings", "setting", "configuracion", "ajustes", "einstellungen")
 
 
 def settings_for(query):
     """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
-    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés.
+    Le mot « paramètres » accompagné d'autres mots nomme la catégorie : il est
+    retiré avant de chercher la page."""
+    parts = words(query).split()
+    rest = [part for part in parts
+            if not (len(part) >= 4 and any(name.startswith(part) for name in SETTINGS_WORDS))]
+    if rest and len(rest) < len(parts): query = " ".join(rest)
     found = []
     for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
         if found_in(query, label) or found_in(query, french):
             found.append((rank(label, query), label, page))
         elif found_in(query, keywords):
             found.append((3, label, page))
-    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], fold(item[1])))]
+    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], indexed(item[1])[0]))]
+
+
+def page_first(apps, pages, query):
+    """Vrai si la première page des Paramètres trouvée est mieux classée que
+    la première application (rang de rank() strictement meilleur) : elle
+    devient alors le Meilleur résultat. À rang égal, l'application reste en
+    tête (« paramètres » ouvre l'application Paramètres)."""
+    if not (query and pages and apps): return False
+    return rank(pages[0][0], query) < rank(apps[0].get_display_name(), query)
 
 
 def matches(app, query):
@@ -1732,6 +1843,27 @@ def _stamp(text):
         return 0
 
 
+def file_place(path, home=None):
+    """Dossier d'un fichier trouvé, tel que le menu l'affiche : « ~ »,
+    « ~/Documents/Impôts »… Les dossiers de données des programmes Windows
+    (AppData) ont un nom lisible, sans leur chemin interne : la recherche
+    affichait « ~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs »,
+    et aucune marque Microsoft ne doit apparaître à l'écran (#2905)."""
+    home = Path(home or Path.home())
+    try:
+        parts = Path(path).parent.relative_to(home).parts
+    except ValueError:
+        return str(Path(path).parent)
+    if not parts:
+        return "~"
+    if parts[0] == "AppData":
+        if [part.casefold() for part in parts[1:5]] == ["roaming", "microsoft", "windows", "start menu"]:
+            return _t("Menu Démarrer")
+        inner = [part for part in parts[2:] if part.casefold() not in ("microsoft", "windows", "programs")]
+        return _t("Données des programmes") + (" › " + inner[-1] if inner else "")
+    return "~/" + "/".join(parts)
+
+
 # recently-used.xbel déjà lu, par fichier : signature (taille, date) et
 # classement. Le volet « Pour vous » le relisait en entier deux fois à chaque
 # ouverture du menu : avec 1 000 fichiers récents, 270 ms de plus avant que le
@@ -1786,8 +1918,12 @@ def _recent_ranked(path, home):
         application = ""
         for entry in bookmark.iter(namespace + "application"):
             stamp = _stamp(entry.get("modified"))
-            if stamp >= when or not application:
-                application = entry.get("name", "")
+            name = entry.get("name", "")
+            # Le portail de fichiers note sous son propre nom les fichiers
+            # qu'il choisit pour une autre application : ce n'est pas un
+            # programme que la personne a ouvert (#3001).
+            if (stamp >= when or not application) and not name.startswith("xdg-desktop-portal"):
+                application = name
             when = max(when, stamp)
         if target not in found or found[target][1] < when:
             found[target] = (application, when)
@@ -1841,7 +1977,20 @@ def update_ready(state_dir=None, version_file=None):
     return available if available and available != installed else None
 
 
-def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
+def installers_done(state_home=None):
+    """Installateurs menés à bien depuis ce compte, notés par winlux-open
+    (~/.local/state/winlux/installateurs-termines), chemins résolus. Ouvrir
+    un .exe ne passe pas par GTK : sans cette liste, un installateur déjà
+    installé restait « Pas encore installé » (#2903)."""
+    state_home = Path(state_home or os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    try:
+        lines = (state_home / "winlux" / "installateurs-termines").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return set()
+    return {os.path.realpath(line) for line in lines if line.startswith("/")}
+
+
+def todo_items(downloads, opened, dismissed, now, update=None, limit=3, done=frozenset()):
     """Petites choses à faire, chacune avec son action :
     installateur .exe/.msi téléchargé depuis moins d'un mois et jamais ouvert,
     mise à jour de Winlux déjà vérifiée, dossier Téléchargements très chargé."""
@@ -1864,7 +2013,8 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
                 if now - info.st_mtime > OLD_DOWNLOAD_DAYS * DAY: old += 1
                 lowered = fold(name)
                 if (directory == str(downloads) and (lowered.endswith(".msi") or (lowered.endswith(".exe") and any(word in lowered for word in INSTALLER_WORDS)))
-                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened):
+                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened
+                        and os.path.realpath(os.path.join(directory, name)) not in done):
                     installers.append((info.st_mtime, Path(directory, name)))
             if visited > 5000: break
     except OSError:

@@ -312,16 +312,23 @@ pub struct Window {
     /// Hauteur de la barre de menus (0 sans menu) : elle est au-dessus de
     /// la zone client, dans le rectangle de la fenêtre.
     pub menu_bar: i32,
+    /// Cadre posé par le gestionnaire de fenêtres autour d'une fenêtre de
+    /// premier niveau (_NET_FRAME_EXTENTS : gauche, droite, haut, bas). Comme
+    /// sous Windows, il est dans le rectangle de la fenêtre et hors de la
+    /// zone client : une palette de Paint.NET calée sur la zone de travail
+    /// y reste, barre de titre comprise (#2984).
+    pub frame: [i32; 4],
 }
 
 impl Window {
     /// Rectangle client : la zone intérieure, sans décorations.
     pub fn client_rect(&self) -> Rect {
+        let [l, r, t, b] = self.frame;
         Rect::from_size(
             0,
             0,
-            self.rect.width(),
-            (self.rect.height() - self.menu_bar).max(0),
+            (self.rect.width() - l - r).max(0),
+            (self.rect.height() - t - b - self.menu_bar).max(0),
         )
     }
 
@@ -773,6 +780,9 @@ pub fn observe_key_message(msg: &Msg) {
         }
         return;
     }
+    if msg.message == WM_KEYDOWN {
+        key_down_removed(msg.hwnd, msg.wparam, msg.lparam);
+    }
     if msg.wparam >= KEY_STATE_COUNT {
         return;
     }
@@ -944,9 +954,53 @@ pub fn set_key_char(hwnd: usize, vk: usize, lparam: isize, ch: Option<u16>) {
     chars.push_back(ch);
 }
 
+/// Traduction d'une pression déjà retirée de la file par le programme : ce
+/// que `TranslateMessage` rendra pour ce message-là (#2870).
+#[derive(Clone, Copy, Debug)]
+struct RemovedKey {
+    /// `None` : rien d'enregistré par le backend (message posté par le
+    /// programme), repli sur la disposition US.
+    ch: Option<Option<u16>>,
+    prefix: Option<u16>,
+}
+
+fn removed_keys() -> &'static Mutex<HashMap<KeyCharKey, RemovedKey>> {
+    static K: OnceLock<Mutex<HashMap<KeyCharKey, RemovedKey>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Un `WM_KEYDOWN` quitte la file (GetMessage, PeekMessage avec PM_REMOVE) :
+/// sa traduction quitte la file des caractères au même moment. Un programme
+/// qui ne traduit pas ce message (raccourci pris par TranslateAccelerator,
+/// comme Ctrl+N dans Notepad++) ne laisse ainsi rien derrière lui ; avant,
+/// le « sans caractère » de Ctrl+N restait en file et la frappe suivante de
+/// « n » le recevait à la place du sien : la lettre était perdue (#2870).
+fn key_down_removed(hwnd: usize, vk: usize, lparam: isize) {
+    let key = KeyCharKey { hwnd, vk, lparam };
+    let ch = {
+        let mut pending = lock(key_chars());
+        let ch = pending.get_mut(&key).and_then(VecDeque::pop_front);
+        if pending.get(&key).is_some_and(VecDeque::is_empty) {
+            pending.remove(&key);
+        }
+        ch
+    };
+    let prefix = lock(key_prefixes()).remove(&key);
+    lock(removed_keys()).insert(key, RemovedKey { ch, prefix });
+}
+
 /// Caractère à synthétiser pour un `WM_KEYDOWN`, consommé une seule fois.
+/// D'abord celui du message retiré de la file (le cas normal), sinon, pour
+/// un message que le programme n'a pas retiré lui-même, la file des
+/// caractères, sinon la disposition US.
 pub fn take_key_char(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
     let key = KeyCharKey { hwnd, vk, lparam };
+    if let Some(removed) = lock(removed_keys()).remove(&key) {
+        return match removed.ch {
+            Some(ch) => ch,
+            None => vk_to_char(vk),
+        };
+    }
     let queued = {
         let mut pending = lock(key_chars());
         let result = pending.get_mut(&key).and_then(VecDeque::pop_front);
@@ -973,10 +1027,15 @@ pub fn set_key_prefix(hwnd: usize, vk: usize, lparam: isize, ch: u16) {
 }
 
 pub fn take_key_prefix(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
-    lock(key_prefixes()).remove(&KeyCharKey { hwnd, vk, lparam })
+    let key = KeyCharKey { hwnd, vk, lparam };
+    if let Some(removed) = lock(removed_keys()).get_mut(&key) {
+        return removed.prefix.take();
+    }
+    lock(key_prefixes()).remove(&key)
 }
 
 fn discard_key_chars(hwnd: usize) {
+    lock(removed_keys()).retain(|key, _| key.hwnd != hwnd);
     lock(key_prefixes()).retain(|key, _| key.hwnd != hwnd);
     lock(key_chars()).retain(|key, _| key.hwnd != hwnd);
 }
@@ -3279,6 +3338,11 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// Fenêtre de premier niveau que l'utilisateur ne peut ni
+    /// redimensionner ni agrandir (barre de titre sans WS_THICKFRAME ni
+    /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
+    /// Le programme garde le droit de changer lui-même sa taille.
+    fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
@@ -3292,6 +3356,13 @@ pub trait GuiBackend: Send {
     /// Épaisseur du cadre du gestionnaire autour d'une fenêtre de premier
     /// niveau : gauche, droite, haut, bas (_NET_FRAME_EXTENTS, #1752).
     fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        None
+    }
+    /// Cadre que le gestionnaire poserait sur une fenêtre de premier niveau
+    /// du genre `kind` (FRAME_BORDER, FRAME_NORMAL, FRAME_TOOL), en pixels
+    /// logiques : AdjustWindowRectEx en a besoin avant que la fenêtre
+    /// existe (#3016). None : pas de gestionnaire, donc pas de cadre.
+    fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
         None
     }
     /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
@@ -3839,7 +3910,7 @@ fn hover_loop() {
             (fired, stop)
         };
         for (hwnd, (x, y)) in fired {
-            let (left, top) = screen_rect(hwnd).map(|r| (r.left, r.top)).unwrap_or((0, 0));
+            let (left, top) = content_origin(hwnd).unwrap_or((0, 0));
             let lparam = (((y - top) as u16 as usize) << 16) | ((x - left) as u16 as usize);
             post_to_window(hwnd, Msg::new(hwnd, WM_MOUSEHOVER, 0, lparam as isize));
         }
@@ -3885,7 +3956,7 @@ pub fn pump_backend() {
     let events: Vec<(PendingEvent, u32)> = events
         .into_iter()
         .flat_map(|e| {
-            let origin = screen_rect(e.hwnd).map(|r| (r.left, r.top));
+            let origin = content_origin(e.hwnd);
             match origin.and_then(|o| crate::dlls::pointer::pointer_for_mouse(&e, o)) {
                 Some(p) => {
                     let mark = crate::dlls::pointer::promoted_mark(&p);
@@ -3953,6 +4024,12 @@ pub fn pump_backend() {
                 change_active_top(0);
                 activate_app(false);
             }
+            continue;
+        }
+        if e.message == WM_WINLUX_FRAME {
+            let v = e.lparam as u64;
+            let part = |i: u32| ((v >> (16 * i)) & 0xFFFF) as i32;
+            set_frame_keep_client(e.hwnd, [part(0), part(1), part(2), part(3)]);
             continue;
         }
         if e.message == WM_SIZE {
@@ -4222,6 +4299,16 @@ const SYSTEM_PAINT: u32 = 0x5750;
 /// `l_private` d'un WM_SIZE ou WM_MOVE venu du gestionnaire de fenêtres, et
 /// non de SetWindowPos (qui envoie lui-même WM_WINDOWPOSCHANGED).
 pub const BACKEND_GEOMETRY: u32 = 0x5751;
+/// Message interne du backend : le cadre du gestionnaire autour d'une
+/// fenêtre a changé (lParam : gauche, droite, haut, bas sur 16 bits). Jamais
+/// distribué au programme (#2984).
+pub const WM_WINLUX_FRAME: u32 = 0x5752;
+
+/// Genres de cadre d'une fenêtre de premier niveau (#3016) : bordure fine
+/// seule (WS_POPUP sans titre), cadre complet, palette (fenêtre outil).
+pub const FRAME_BORDER: u8 = 1;
+pub const FRAME_NORMAL: u8 = 2;
+pub const FRAME_TOOL: u8 = 3;
 
 /// Fenêtres en cours de destruction : encore dans la table (IsWindow,
 /// GetWindowThreadProcessId…) jusqu'après leur WM_NCDESTROY, comme sous
@@ -4621,9 +4708,48 @@ pub fn get_window_style(hwnd: usize) -> u32 {
 /// Origine de la zone client en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
     let bar = menu_bar_height(hwnd);
-    screen_rect(hwnd)
-        .map(|r| (r.left, r.top + bar))
+    content_origin(hwnd)
+        .map(|(x, y)| (x, y + bar))
         .unwrap_or((0, 0))
+}
+
+/// Coin haut gauche, en coordonnées écran, de ce que Winlux dessine (barre
+/// de menus comprise) : le rectangle de la fenêtre sans le cadre du
+/// gestionnaire de fenêtres (#2984).
+pub fn content_origin(hwnd: usize) -> Option<(i32, i32)> {
+    let [l, _, t, _] = frame_of(hwnd);
+    screen_rect(hwnd).map(|r| (r.left + l, r.top + t))
+}
+
+/// Cadre du gestionnaire autour de la fenêtre (gauche, droite, haut, bas).
+pub fn frame_of(hwnd: usize) -> [i32; 4] {
+    lock(windows()).get(&hwnd).map_or([0; 4], |w| w.frame)
+}
+
+/// Cadre du gestionnaire connu avant l'affichage : le rectangle de la
+/// fenêtre (celui que le programme a demandé) est gardé, la zone client
+/// rétrécit d'autant.
+pub fn set_frame_keep_outer(hwnd: usize, frame: [i32; 4]) {
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        w.frame = frame;
+    }
+}
+
+/// Cadre changé par le gestionnaire sur une fenêtre affichée (agrandie,
+/// restaurée, décorations retirées) : la zone client, celle de la fenêtre
+/// X, ne bouge pas ; le rectangle de la fenêtre l'entoure du nouveau cadre.
+pub fn set_frame_keep_client(hwnd: usize, frame: [i32; 4]) {
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        let [ol, or, ot, ob] = w.frame;
+        let [l, r, t, b] = frame;
+        w.rect = Rect {
+            left: w.rect.left + ol - l,
+            top: w.rect.top + ot - t,
+            right: w.rect.right - or + r,
+            bottom: w.rect.bottom - ob + b,
+        };
+        w.frame = frame;
+    }
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
@@ -4648,10 +4774,11 @@ pub fn screen_rect(hwnd: usize) -> Option<Rect> {
         let Some(parent) = map.get(&cur.parent) else {
             break;
         };
-        rect.left += parent.rect.left;
-        rect.right += parent.rect.left;
-        rect.top += parent.rect.top + parent.menu_bar;
-        rect.bottom += parent.rect.top + parent.menu_bar;
+        let [fl, _, ft, _] = parent.frame;
+        rect.left += parent.rect.left + fl;
+        rect.right += parent.rect.left + fl;
+        rect.top += parent.rect.top + ft + parent.menu_bar;
+        rect.bottom += parent.rect.top + ft + parent.menu_bar;
         cur = parent;
         depth += 1;
     }
@@ -4674,11 +4801,12 @@ pub fn set_window_rect(hwnd: usize, rect: Rect) -> Option<Rect> {
 /// barre de menus.
 fn update_window_size(hwnd: usize, width: i32, height: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
-        window.rect.right = window.rect.left.saturating_add(width);
+        let [l, r, t, b] = window.frame;
+        window.rect.right = window.rect.left.saturating_add(width + l + r);
         window.rect.bottom = window
             .rect
             .top
-            .saturating_add(height)
+            .saturating_add(height + t + b)
             .saturating_add(window.menu_bar);
     }
 }
@@ -4697,6 +4825,8 @@ pub fn set_menu_bar_height(hwnd: usize, height: i32) -> Option<i32> {
 
 fn update_window_position(hwnd: usize, x: i32, y: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
+        // WM_MOVE du backend : origine de la fenêtre X, sous le cadre.
+        let (x, y) = (x - window.frame[0], y - window.frame[2]);
         let width = window.rect.width();
         let height = window.rect.height();
         window.rect.left = x;
@@ -4887,7 +5017,7 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let taken = loop {
         let m = {
             let mut items = lock(&q.items);
-            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            let idx = next_index(&items, hwnd, min, max)?;
             items.remove(idx)?
         };
         // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
@@ -4970,10 +5100,37 @@ pub fn prepend_message(q: &Queue, m: Msg) {
 /// Regarde sans retirer.
 pub fn peek_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let items = lock(&q.items);
-    items
+    next_index(&items, hwnd, min, max).map(|i| items[i])
+}
+
+/// Message clavier ou souris venu du matériel (classe « entrée » de GetMessage).
+fn is_input_message(message: u32) -> bool {
+    (0x0100..=0x0109).contains(&message)
+        || (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+}
+
+/// WM_CHAR, WM_DEADCHAR, WM_SYSCHAR, WM_SYSDEADCHAR : postés par TranslateMessage.
+fn is_char_message(message: u32) -> bool {
+    matches!(message, 0x0102 | 0x0103 | 0x0106 | 0x0107)
+}
+
+/// Rang du prochain message à livrer. GetMessage sert les messages postés
+/// avant les entrées clavier et souris (Learn, GetMessage, Remarques) : le
+/// caractère que TranslateMessage vient de poster passe donc devant la touche
+/// suivante déjà en file, sinon Entrée arrivait avant le « . » tapé juste
+/// avant (#3072). Hors ce cas, l'ordre d'arrivée est gardé.
+fn next_index(items: &VecDeque<Msg>, hwnd: usize, min: u32, max: u32) -> Option<usize> {
+    let mut matching = items
         .iter()
-        .find(|m| match_filter(m, hwnd, min, max))
-        .copied()
+        .enumerate()
+        .filter(|(_, m)| match_filter(m, hwnd, min, max));
+    let (first, m) = matching.next()?;
+    if !is_input_message(m.message) {
+        return Some(first);
+    }
+    let char_after = matching.find(|(_, m)| is_char_message(m.message));
+    Some(char_after.map_or(first, |(i, _)| i))
 }
 
 fn match_filter(m: &Msg, hwnd: usize, min: u32, max: u32) -> bool {
@@ -5202,7 +5359,7 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         WM_RBUTTONUP => {
             let x = lparam as u32 as u16 as i16 as i32;
             let y = (lparam as u32 >> 16) as u16 as i16 as i32;
-            let (ox, oy) = screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            let (ox, oy) = content_origin(hwnd).unwrap_or((0, 0));
             send_context_menu(hwnd, hwnd, pack_point(x + ox, y + oy));
             0
         }
@@ -5869,6 +6026,7 @@ pub(crate) mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );
@@ -5939,6 +6097,7 @@ pub(crate) mod tests {
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            frame: [0; 4],
             painting: false,
         }
     }
@@ -5987,6 +6146,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6054,6 +6214,72 @@ pub(crate) mod tests {
         assert_eq!(take_key_char(hwnd, vk, ctrl_lparam), Some(b'a' as u16));
 
         discard_key_chars(hwnd);
+    }
+
+    /// #2870 : Ctrl+N pris par un accélérateur (jamais traduit), puis « n »
+    /// tapé : la lettre produit bien son WM_CHAR. Deux « n » retirés l'un
+    /// après l'autre gardent chacun le leur.
+    #[test]
+    fn une_pression_non_traduite_ne_vole_pas_le_caractere_de_la_suivante() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        let (vk, lparam) = (0x4E, (0x31isize << 16) | 1);
+        // Ctrl+N : aucun caractère ; puis « n », « n ».
+        set_key_char(hwnd, vk, lparam, None);
+        set_key_char(hwnd, vk, lparam, Some(b'n' as u16));
+        set_key_char(hwnd, vk, lparam, Some(b'n' as u16));
+        let key = Msg::new(hwnd, WM_KEYDOWN, vk, lparam);
+        // Ctrl+N retiré de la file puis consommé par TranslateAccelerator.
+        observe_key_message(&key);
+        observe_key_message(&Msg::new(hwnd, WM_KEYUP, vk, lparam | (3 << 30)));
+        for _ in 0..2 {
+            observe_key_message(&key);
+            assert_eq!(unsafe { crate::dlls::user32::translate_message(&key) }, 1);
+            observe_key_message(&Msg::new(hwnd, WM_KEYUP, vk, lparam | (3 << 30)));
+            let ch = take_message(&q, hwnd, WM_CHAR, WM_CHAR).expect("WM_CHAR de « n »");
+            assert_eq!(ch.wparam, b'n' as usize);
+        }
+        assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+        destroy_window(hwnd);
+    }
+
+    /// #3072 : le WM_CHAR que TranslateMessage poste passe devant la touche
+    /// suivante déjà en file (Entrée), comme les messages postés devant les
+    /// entrées sous Windows. Un autre message posté garde son rang.
+    #[test]
+    fn le_caractere_traduit_passe_devant_la_touche_suivante_deja_en_file() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        let (point, lp_point) = (0xBE, (0x34isize << 16) | 1);
+        let lp_entree = (0x1Cisize << 16) | 1;
+        set_key_char(hwnd, point, lp_point, Some(b'.' as u16));
+        let touche = Msg::new(hwnd, WM_KEYDOWN, point, lp_point);
+        observe_key_message(&touche);
+        // Entrée est arrivée du serveur X avant que l'application traduise « . ».
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        assert_eq!(
+            unsafe { crate::dlls::user32::translate_message(&touche) },
+            1
+        );
+        let vu = peek_message(&q, hwnd, 0, 0).expect("message en file");
+        assert_eq!((vu.message, vu.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("WM_CHAR");
+        assert_eq!((pris.message, pris.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("Entrée");
+        assert_eq!((pris.message, pris.wparam), (WM_KEYDOWN, VK_RETURN));
+        // Un message posté qui n'est pas un caractère reste derrière l'entrée.
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        post_to_window(hwnd, Msg::new(hwnd, 0x0400, 7, 0));
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(WM_KEYDOWN)
+        );
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(0x0400)
+        );
+        discard_key_chars(hwnd);
+        destroy_window(hwnd);
     }
 
     #[test]
@@ -6346,6 +6572,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6408,6 +6635,7 @@ pub(crate) mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                frame: [0; 4],
                 painting: false,
             },
         );
@@ -6799,6 +7027,45 @@ pub(crate) mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
     }
 
+    /// #2984 : le cadre du gestionnaire est dans le rectangle de la fenêtre
+    /// et hors de la zone client, comme sous Windows. Appris avant
+    /// l'affichage, il garde le rectangle demandé ; changé ensuite (fenêtre
+    /// agrandie), il garde la zone client. Le backend rapporte la fenêtre X :
+    /// taille et origine de la zone client.
+    #[test]
+    fn cadre_du_gestionnaire_dans_le_rectangle_de_fenetre() {
+        let hwnd = fenetre_de_test();
+        set_window_rect(hwnd, Rect::from_size(-3, 114, 51, 253));
+        set_frame_keep_outer(hwnd, [2, 2, 39, 7]);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-3, 114, 51, 253)));
+        assert_eq!(
+            window_client_rect(hwnd),
+            Some(Rect::from_size(0, 0, 47, 207))
+        );
+        assert_eq!(content_origin(hwnd), Some((-1, 153)));
+        assert_eq!(window_origin(hwnd), (-1, 153));
+        // WM_MOVE et WM_SIZE du backend : la fenêtre X, sous le cadre.
+        update_window_position(hwnd, -1, 153);
+        update_window_size(hwnd, 47, 207);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-3, 114, 51, 253)));
+        // Agrandie : openbox retire les bordures, la zone client reste.
+        set_frame_keep_client(hwnd, [0, 0, 38, 0]);
+        assert_eq!(window_rect(hwnd), Some(Rect::from_size(-1, 115, 47, 245)));
+        assert_eq!(
+            window_client_rect(hwnd),
+            Some(Rect::from_size(0, 0, 47, 207))
+        );
+        assert_eq!(content_origin(hwnd), Some((-1, 153)));
+        // Un enfant se place dans la zone client du parent.
+        let enfant = fenetre_de_test();
+        set_window_parent(enfant, hwnd);
+        set_window_style(enfant, 0x4000_0000);
+        set_window_rect(enfant, Rect::from_size(5, 6, 10, 10));
+        assert_eq!(screen_rect(enfant), Some(Rect::from_size(4, 159, 10, 10)));
+        destroy_window(enfant);
+        destroy_window(hwnd);
+    }
+
     #[test]
     fn pas_de_wm_paint_pour_une_zone_client_vide() {
         let hwnd = fenetre_de_test();
@@ -6987,6 +7254,7 @@ pub(crate) mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    frame: [0; 4],
                     painting: false,
                 },
             );

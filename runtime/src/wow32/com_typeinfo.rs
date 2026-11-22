@@ -26,6 +26,9 @@
 //! FUNCDESC        88                      52 (lprgscode 4, lprgelemdescParam 8,
 //!                                            funckind 12…, elemdescFunc 32,
 //!                                            wFuncFlags 48)
+//! VARDESC         64                      36 (lpstrSchema 4, oInst/lpvarValue 8,
+//!                                            elemdescVar 12, wVarFlags 28,
+//!                                            varkind 32 ; #2967)
 //! ```
 //!
 //! Les tailles qui dépendent de celle d'un pointeur sont ramenées à
@@ -42,12 +45,17 @@ const VT_CARRAY: u16 = 28;
 const PARAMFLAG_FHASDEFAULT: u16 = 0x20;
 const TKIND_INTERFACE: u32 = 3;
 const TKIND_DISPATCH: u32 = 4;
+/// VARKIND d'une constante : l'union de VARDESC porte lpvarValue.
+const VAR_CONST: u32 = 2;
 
 /// Structure rendue par une méthode d'ITypeInfo.
+/// Les variantes portent le nom des structures d'oaidl.h.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Desc {
     TypeAttr,
     FuncDesc,
+    VarDesc,
 }
 
 /// Images x86 en service : adresse x86 → (tampon, structure x64 d'origine).
@@ -213,6 +221,30 @@ unsafe fn func_desc(src: *const u8) -> Img {
     m
 }
 
+/// VARDESC x64 → image x86 (36 octets, #2967). L'union porte oInst, ou
+/// l'adresse du VARIANT de valeur pour une constante (VAR_CONST).
+unsafe fn var_desc(src: *const u8) -> Img {
+    let mut m = Img::default();
+    let a = m.alloc(36, 4);
+    m.u32(a, at(src, 0));
+    m.u32(a + 4, at::<u64>(src, 8) as u32); // lpstrSchema
+    let kind: u32 = at(src, 60);
+    let value: u64 = at(src, 16);
+    if kind == VAR_CONST {
+        if value != 0 {
+            let t = m.alloc(16, 8);
+            m.variants.push((value, t));
+            m.relocs.push((a + 8, t));
+        }
+    } else {
+        m.u32(a + 8, value as u32); // oInst
+    }
+    m.elem(src.add(24), a + 12);
+    m.u16(a + 28, at(src, 56));
+    m.u32(a + 32, kind);
+    m
+}
+
 /// Structure x64 rendue à `src` → adresse de son image x86 (0 si `src` est
 /// nul).
 pub(super) unsafe fn to32(kind: Desc, src: u64) -> u32 {
@@ -223,6 +255,7 @@ pub(super) unsafe fn to32(kind: Desc, src: u64) -> u32 {
     let img = match kind {
         Desc::TypeAttr => type_attr(p),
         Desc::FuncDesc => func_desc(p),
+        Desc::VarDesc => var_desc(p),
     };
     img.place(src)
 }
@@ -310,6 +343,46 @@ mod tests {
             assert_eq!(r16(x + 54), 0x10, "wTypeFlags");
             assert_eq!(take64(x), t.as_ptr() as u64);
             assert_eq!(take64(x), x as u64, "image déjà rendue");
+        }
+    }
+
+    #[test]
+    fn vardesc_en_disposition_x86_2967() {
+        unsafe {
+            // Variable : memid 7, oInst 12, VT_I4, wVarFlags 0x40,
+            // VAR_PERINSTANCE (0).
+            let mut v = [0u8; 64];
+            v[0..4].copy_from_slice(&7i32.to_le_bytes());
+            v[16..20].copy_from_slice(&12u32.to_le_bytes());
+            v[32..34].copy_from_slice(&3u16.to_le_bytes());
+            v[56..58].copy_from_slice(&0x40u16.to_le_bytes());
+            let x = to32(Desc::VarDesc, v.as_ptr() as u64);
+            assert_ne!(x, 0);
+            assert_eq!(r32(x), 7, "memid");
+            assert_eq!(r32(x + 4), 0, "lpstrSchema");
+            assert_eq!(r32(x + 8), 12, "oInst");
+            assert_eq!(r16(x + 12 + 4), 3, "elemdescVar : VT_I4");
+            assert_eq!(r16(x + 28), 0x40, "wVarFlags");
+            assert_eq!(r32(x + 32), 0, "varkind");
+            assert_eq!(take64(x), v.as_ptr() as u64);
+
+            // Constante : VARIANT x64 VT_I4 = 42 désigné par l'union.
+            let mut var = [0u8; 24];
+            var[0..2].copy_from_slice(&3u16.to_le_bytes());
+            var[8..12].copy_from_slice(&42i32.to_le_bytes());
+            let mut c = [0u8; 64];
+            c[0..4].copy_from_slice(&8i32.to_le_bytes());
+            c[16..24].copy_from_slice(&(var.as_ptr() as u64).to_le_bytes());
+            c[32..34].copy_from_slice(&3u16.to_le_bytes());
+            c[60..64].copy_from_slice(&VAR_CONST.to_le_bytes());
+            let x = to32(Desc::VarDesc, c.as_ptr() as u64);
+            assert_eq!(r32(x), 8);
+            assert_eq!(r32(x + 32), VAR_CONST);
+            let p = r32(x + 8);
+            assert_ne!(p, 0);
+            assert_eq!(r16(p), 3, "VARIANT x86 : VT_I4");
+            assert_eq!(r32(p + 8), 42, "VARIANT x86 : valeur à 8");
+            assert_eq!(take64(x), c.as_ptr() as u64);
         }
     }
 }

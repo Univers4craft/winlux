@@ -61,7 +61,7 @@ def mount_efivarfs(efivars=EFIVARS, run=None):
 
 
 def efi_variables_writable():
-    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    """Faux si le noyau n'a pas les services UEFI (noyau démarré avec efi=noruntime, ou micrologiciel sans variables)."""
     return mount_efivarfs()
 
 
@@ -82,7 +82,7 @@ def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
         efi_log("non créée, efibootmgr absent")
         return False
     if not efi_variables_writable():
-        efi_log(f"non créée, variables UEFI indisponibles ({EFIVARS} vide, efivarfs non monté ou efi=noruntime)")
+        efi_log(f"non créée, variables UEFI indisponibles ({EFIVARS} vide, efivarfs non monté ou services UEFI coupés)")
         return False
     name = os.path.basename(os.path.realpath(esp_partition))
     try:
@@ -5607,32 +5607,29 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            try:
-                subprocess.run(["sync"], timeout=10)
-            except subprocess.TimeoutExpired:
-                pass  # l'init synchronise de toute façon avant de redémarrer
-            # En live, PID 1 est le script /init : « reboot » (systemctl)
-            # ne faisait rien et le bouton fermait seulement l'installateur.
-            # winlux-power sait redémarrer dans les deux cas.
-            # Rien à enregistrer après l'installation : l'étape finale sans
-            # écran signale l'init directement. L'écran « now » (GTK) mourait
-            # parfois en session live après avoir fermé les applications, et
-            # la machine ne redémarrait plus. Il ne sert que si l'init refuse
-            # (mise à jour en cours…), pour afficher la raison.
+            # Rien n'est lancé depuis le média avant le signal à l'init (#2904) :
+            # en session live, tout le système vient du squashfs de la clé ou
+            # de l'ISO, que la page de fin demande de retirer. Un « sync » ou un
+            # winlux-power illisible après l'éjection fermait l'installateur
+            # sans redémarrer, et l'écran Prisme restait affiché.
+            os.sync()
+            # Installateur root sans systemd (session live, ou pkexec sur un
+            # système installé) : l'init shell de Winlux redémarre sur SIGTERM,
+            # vérifie lui-même qu'aucune mise à jour n'est en cours et arme
+            # son garde-fou de 25 s (#399).
+            if os.geteuid() == 0 and not os.path.isdir("/run/systemd/system"):
+                os.kill(1, signal.SIGTERM)
+                self.quit()
+                return
+            # Sinon winlux-power : l'étape finale sans écran d'abord, l'écran
+            # « now » (GTK) seulement si l'arrêt est refusé (mise à jour en
+            # cours…), pour en afficher la raison.
             power = shutil.which("winlux-power")
             if power:
                 try:
                     done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
-                    refused = not done
                 except (OSError, subprocess.SubprocessError):
-                    # Écriture des disques encore longue juste après
-                    # l'installation : le délai expirait et le bouton
-                    # fermait l'installateur sans redémarrer.
-                    done = refused = False
-                if not done and not refused and os.geteuid() == 0:
-                    # Session live (root) : l'init redémarre sur SIGTERM.
-                    os.kill(1, signal.SIGTERM)
-                    done = True
+                    done = False
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
@@ -6130,11 +6127,11 @@ class InstallerApp(Gtk.Application):
         # visible 5 s quand Windows est proposé à côté.
         menu_timeout, menu_style = (5, "menu") if windows_entry else (1, "hidden")
         grub_cfg = f"""set default=0
-# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
-# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau
+# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).
 set winlux_efi_args=
 if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
-    set winlux_efi_args=efi=noruntime
+    set winlux_efi_args=no5lvl
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop
@@ -6184,7 +6181,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
                 if not efi_variables_writable():
-                    # UEFI 32 bits démarré avec efi=noruntime : pas de variables UEFI,
+                    # Services UEFI indisponibles (ancien efi=noruntime, #2747) : pas de variables,
                     # donc pas d'entrée de démarrage (docs/SECURE-BOOT.md).
                     efi_args.append("--no-nvram")
             for efi_target in efi_grub_targets(layout["own_esp"]):

@@ -2166,12 +2166,24 @@ class Windows(Source):
 
     def apps(self, force=False):
         state = load_json(STATE, {}).get("windows", {})
+        programs = None
         out = []
         for prov in self.providers():
             for a in prov.entries(force):
                 ref = f"{prov.id}/{re.sub(r'[^A-Za-z0-9._-]', '_', a['id'])}"
                 ver = (state.get(ref) or {}).get("version", "")
                 latest = str(a.get("version", ""))
+                # Installé hors de la Boutique (#2890) : le programme inscrit
+                # dans « Applications installées » compte comme installé.
+                # La version inscrite l'emporte sur celle que la Boutique
+                # avait notée : l'application a pu être réinstallée ou mise à
+                # jour sans elle depuis (#2999).
+                registered = ""
+                if programs is None:
+                    programs = registered_programs()
+                found = next((p for p in programs if program_matches(a["name"], p[1])), None)
+                if found:
+                    registered, ver = found[0], found[2] or ver or "?"
                 app = App("windows", ref, a["name"], summary=a.get("summary", ""),
                           description=a.get("description") if isinstance(a.get("description"), list)
                           else [a.get("description", "")],
@@ -2182,9 +2194,10 @@ class Windows(Source):
                           releases=[(r.get("version", ""), r.get("date", ""), r.get("notes", ""))
                                     for r in a.get("releases", []) if isinstance(r, dict)][:8],
                           version=ver, available=latest, size_kb=int(a.get("size_kb", 0) or 0),
-                          state="u" if ver and latest and ver != latest else ("i" if ver else "a"),
+                          state="u" if ver and latest and newer(latest, ver) else ("i" if ver else "a"),
                           featured=bool(a.get("featured")))
                 app.installer, app.provider = a["installer"], prov.name
+                app.registered = registered
                 app.tested = prov.id == "valides"
                 out.append(app)
         return out
@@ -2237,7 +2250,15 @@ class Windows(Source):
         state = load_json(STATE, {})
         entry = state.get("windows", {}).get(ref)
         if entry is None:
-            return 2
+            # Installé hors de la Boutique (#2890) : son propre désinstalleur,
+            # par le runtime, comme dans « Applications installées ».
+            app = next((a for a in self.apps() if a.ref == ref), None)
+            if app is None or not getattr(app, "registered", ""):
+                return 2
+            code = run(["winlux", "--setup", "--remove", app.registered], 1800)[0]
+            if code == 0 and have("winlux-applications"):
+                run(["winlux-applications", "refresh"], 120)
+            return code
         if entry.get("msi"):
             code = run(["winlux", "--msiexec", "/x", entry["msi"], "/qn"], 1800)[0]
             if code not in (0, 1605 & 0xFF):
@@ -2262,6 +2283,47 @@ class Windows(Source):
     def update_all(self, progress):
         apps = [a.ref for a in self.apps() if a.state == "u"]
         return self.update(apps, progress) if apps else 0
+
+
+def version_parts(text):
+    return tuple(int(n) for n in re.findall(r"\d+", text or ""))
+
+
+def newer(candidate, installed):
+    """Vrai si `candidate` est plus récente que `installed` (#2890) : jamais
+    de « mise à jour » vers une version plus ancienne. Versions illisibles :
+    seule une différence compte, comme avant."""
+    a, b = version_parts(candidate), version_parts(installed)
+    if not a or not b:
+        return candidate != installed and installed != "?"
+    return a > b
+
+
+def registered_programs():
+    """Programmes inscrits dans le registre de Windows (clés Uninstall), lus
+    par le runtime comme pour « Applications installées » :
+    [(clé, nom, version, éditeur)]."""
+    if not have("winlux"):
+        return []
+    code, out = run(["winlux", "--setup", "--programs"], 30)
+    programs = []
+    for line in out.splitlines() if code == 0 else []:
+        if line.startswith("app="):
+            parts = line[4:].split("\t")
+            if len(parts) >= 4 and parts[0] and parts[1]:
+                programs.append(tuple(parts[:4]))
+    return programs
+
+
+def program_matches(name, display):
+    """« Notepad++ (64-bit x64) », « 7-Zip 24.09 (x64) » : le nom affiché du
+    programme inscrit commence par le nom du catalogue, suivi de rien ou d'un
+    séparateur (pas « VLCPlus » pour « VLC »)."""
+    name, display = name.casefold().strip(), display.casefold().strip()
+    if not name or not display.startswith(name):
+        return False
+    rest = display[len(name):]
+    return not rest or not rest[0].isalnum()
 
 
 def remove_files(entry):
@@ -2556,7 +2618,11 @@ def details(key):
              f"size_kb={int(app.size_kb or 0)}", f"homepage={field(app.homepage)}",
              f"source={field(badge(app))}", f"state={app.state}", f"category={app.category}",
              f"icon={local_icon(app, True)}"]
-    for p in app.description[:14]:
+    # Description facultative (docs/STORE.md) : absente ou vide, le résumé
+    # la remplace plutôt qu'une section « Description » vide (#2892).
+    paras = [p for p in app.description if isinstance(p, str) and p.strip()] or (
+        [app.summary] if app.summary else [])
+    for p in paras[:14]:
         lines.append(f"desc={field(p, 700)}")
     lines += [f"release={field(v, 40)}|{field(d, 20)}|{field(t, 300)}" for v, d, t in app.releases[:6]]
     for alt in alts:

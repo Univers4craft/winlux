@@ -12,6 +12,7 @@ AddVectoredContinueHandler
 AddVectoredExceptionHandler
 AllocConsole
 AllocateUserPhysicalPages
+AppPolicyGetThreadInitializationType
 AreFileApisANSI
 AssignProcessToJobObject
 AttachConsole
@@ -634,6 +635,7 @@ MoveFileWithProgressW
 MulDiv
 MultiByteToWideChar
 NeedCurrentDirectoryForExePathW
+OOBEComplete
 OpenEventA
 OpenEventW
 OpenFile
@@ -750,6 +752,7 @@ RegUnLoadKeyW
 RegisterApplicationRecoveryCallback
 RegisterApplicationRestart
 RegisterWaitForSingleObject
+RegisterWaitUntilOOBECompleted
 ReleaseActCtx
 ReleaseMutex
 ReleaseSRWLockExclusive
@@ -909,6 +912,7 @@ UnregisterApplicationRecoveryCallback
 UnregisterApplicationRestart
 UnregisterWait
 UnregisterWaitEx
+UnregisterWaitUntilOOBECompleted
 UpdateProcThreadAttribute
 UpdateResourceA
 UpdateResourceW
@@ -944,12 +948,20 @@ WakeAllConditionVariable
 WakeConditionVariable
 WerGetFlags
 WerRegisterAdditionalProcess
+WerRegisterAppLocalDump
 WerRegisterCustomMetadata
+WerRegisterExcludedMemoryBlock
 WerRegisterFile
 WerRegisterMemoryBlock
 WerRegisterRuntimeExceptionModule
 WerSetFlags
+WerUnregisterAdditionalProcess
+WerUnregisterAppLocalDump
+WerUnregisterCustomMetadata
+WerUnregisterExcludedMemoryBlock
+WerUnregisterFile
 WerUnregisterMemoryBlock
+WerUnregisterRuntimeExceptionModule
 WideCharToMultiByte
 WinExec
 WinluxArchiveCommit
