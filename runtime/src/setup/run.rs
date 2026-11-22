@@ -384,6 +384,11 @@ pub fn program(file: &str, params: &str, workdir: &str, wait: bool, shell: bool)
     }
 }
 
+/// Début de la phrase de journal d'un programme que l'installation n'a pas
+/// lancé. L'assistant la garde hors de sa ligne d'état et la résume en fin
+/// d'installation, le détail restant au journal (#2895).
+pub const SKIPPED_STEP: &str = "étape sautée : ";
+
 /// Phrase de journal pour une commande et son résultat.
 pub fn describe(what: &str, outcome: &Outcome) -> String {
     match outcome {
@@ -392,8 +397,8 @@ pub fn describe(what: &str, outcome: &Outcome) -> String {
         Outcome::TimedOut => {
             format!("programme toujours en cours, installation poursuivie : {what}")
         }
-        Outcome::Skipped(why) => format!("programme ignoré : {what} ({why})"),
-        Outcome::Failed(why) => format!("programme non lancé : {what} ({why})"),
+        Outcome::Skipped(why) => format!("{SKIPPED_STEP}programme ignoré : {what} ({why})"),
+        Outcome::Failed(why) => format!("{SKIPPED_STEP}programme non lancé : {what} ({why})"),
     }
 }
 
@@ -407,6 +412,19 @@ mod tests {
     }
 
     use super::*;
+
+    /// #2895 : un programme non lancé est marqué « étape sautée » dans le
+    /// journal, un programme lancé ne l'est pas.
+    #[test]
+    fn etape_sautee_marquee_dans_le_journal_2895() {
+        let skipped = describe("rundll32.exe x.dll,F", &Outcome::Skipped("outil".into()));
+        assert!(skipped.starts_with(SKIPPED_STEP), "{skipped}");
+        assert!(skipped.contains("programme ignoré : rundll32.exe x.dll,F"));
+        let failed = describe("a.exe", &Outcome::Failed("absent".into()));
+        assert!(failed.starts_with(SKIPPED_STEP), "{failed}");
+        assert!(!describe("a.exe", &Outcome::Exited(0)).starts_with(SKIPPED_STEP));
+        assert!(!describe("a.exe", &Outcome::Started).starts_with(SKIPPED_STEP));
+    }
 
     #[test]
     fn decoupe_les_lignes_de_commande() {

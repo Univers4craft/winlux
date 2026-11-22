@@ -1134,7 +1134,8 @@ class Start(Gtk.Application):
             recent = recent_files(data_home / "recently-used.xbel", limit=200)
             files = recent[:3]
             opened = {path for path, _, _ in recent}
-            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready())
+            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready(),
+                              done=installers_done())
             data = {"now": now, "files": files, "habits": habit_apps(usage_of(state), now), "todo": todo}
             def deliver():
                 if generation == self.side_generation:
@@ -1841,7 +1842,20 @@ def update_ready(state_dir=None, version_file=None):
     return available if available and available != installed else None
 
 
-def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
+def installers_done(state_home=None):
+    """Installateurs menés à bien depuis ce compte, notés par winlux-open
+    (~/.local/state/winlux/installateurs-termines), chemins résolus. Ouvrir
+    un .exe ne passe pas par GTK : sans cette liste, un installateur déjà
+    installé restait « Pas encore installé » (#2903)."""
+    state_home = Path(state_home or os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    try:
+        lines = (state_home / "winlux" / "installateurs-termines").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return set()
+    return {os.path.realpath(line) for line in lines if line.startswith("/")}
+
+
+def todo_items(downloads, opened, dismissed, now, update=None, limit=3, done=frozenset()):
     """Petites choses à faire, chacune avec son action :
     installateur .exe/.msi téléchargé depuis moins d'un mois et jamais ouvert,
     mise à jour de Winlux déjà vérifiée, dossier Téléchargements très chargé."""
@@ -1864,7 +1878,8 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
                 if now - info.st_mtime > OLD_DOWNLOAD_DAYS * DAY: old += 1
                 lowered = fold(name)
                 if (directory == str(downloads) and (lowered.endswith(".msi") or (lowered.endswith(".exe") and any(word in lowered for word in INSTALLER_WORDS)))
-                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened):
+                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened
+                        and os.path.realpath(os.path.join(directory, name)) not in done):
                     installers.append((info.st_mtime, Path(directory, name)))
             if visited > 5000: break
     except OSError:
