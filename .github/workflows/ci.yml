@@ -656,6 +656,9 @@ jobs:
       - name: Programmes Windows 32 bits (#232)
         run: sh scripts/test-wow32.sh
 
+      - name: winlux --inspect projette un gros .exe au lieu de le copier (#2918)
+        run: sh scripts/test-inspect-projete.sh
+
       - name: Latence d'une application Windows x64/x86 sous Xvfb (#2889)
         run: |
           sudo apt-get install -y -q libxtst6 || { sudo apt-get update -q && sudo apt-get install -y -q libxtst6; }

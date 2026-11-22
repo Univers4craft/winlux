@@ -87,6 +87,7 @@ pub(crate) struct Generic {
     accounts_view: Guid,
     responses_view: Guid,
     string_map: Guid,
+    string_map_view: Guid,
 }
 
 pub(crate) fn generic() -> &'static Generic {
@@ -110,6 +111,9 @@ pub(crate) fn generic() -> &'static Generic {
             string_map: pinterface_iid(
                 "pinterface({3c2925fe-8519-45c1-aa79-197b6718c1c1};string;string)",
             ),
+            string_map_view: pinterface_iid(
+                "pinterface({e480ce40-a338-4ada-adcf-272272e48cb9};string;string)",
+            ),
         }
     })
 }
@@ -122,20 +126,6 @@ const W: usize = std::mem::size_of::<usize>();
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Une ligne de journal par sujet.
-fn not_served(what: &str) -> i32 {
-    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let mut seen = lock(&SEEN);
-    if !seen.iter().any(|m| m == what) {
-        seen.push(what.to_string());
-        crate::log_warn!(
-            "com",
-            "comptes web : {what} pas encore servie (E_NOTIMPL, winrt_wam_objets.rs)"
-        );
-    }
-    E_NOTIMPL
 }
 
 pub(crate) unsafe fn hstr_units(h: usize) -> Vec<u16> {
@@ -444,6 +434,8 @@ struct StrMap {
     v: &'static VTable<13>,
     refs: AtomicU32,
     items: Mutex<BTreeMap<Vec<u16>, Vec<u16>>>,
+    /// Vue figée (IMapView) rendue par GetView, en lecture seule.
+    view: bool,
 }
 
 fn new_str_map() -> usize {
@@ -451,6 +443,7 @@ fn new_str_map() -> usize {
         v: &STR_MAP_VTBL,
         refs: AtomicU32::new(1),
         items: Mutex::new(BTreeMap::new()),
+        view: false,
     })) as usize
 }
 unsafe fn smap<'a>(this: usize) -> &'a StrMap {
@@ -461,7 +454,12 @@ unsafe fn str_map_qi(base: usize, iid: *const u8, out: *mut usize) -> i32 {
         Ok(g) => g,
         Err(hr) => return hr,
     };
-    if iid != generic().string_map && !BASE.contains(&iid) {
+    let own = if smap(base).view {
+        generic().string_map_view
+    } else {
+        generic().string_map
+    };
+    if iid != own && !BASE.contains(&iid) {
         super::comobj::log_no_interface("IMap<String, String>", &iid as *const Guid);
         *out = 0;
         return E_NOINTERFACE;
@@ -474,8 +472,15 @@ unsafe fn str_map_drop(base: usize) {
     drop(Box::from_raw(base as *mut StrMap));
 }
 thunks!(StrMap, str_map_qi, str_map_drop, sm_qi, sm_add, sm_rel, 0);
-unsafe extern "win64" fn str_map_class(_this: usize, out: *mut usize) -> i32 {
-    class_out("Windows.Foundation.Collections.IMap`2<String, String>", out)
+unsafe extern "win64" fn str_map_class(this: usize, out: *mut usize) -> i32 {
+    if smap(this).view {
+        class_out(
+            "Windows.Foundation.Collections.IMapView`2<String, String>",
+            out,
+        )
+    } else {
+        class_out("Windows.Foundation.Collections.IMap`2<String, String>", out)
+    }
 }
 unsafe extern "win64" fn sm_lookup(this: usize, key: usize, out: *mut usize) -> i32 {
     if out.is_null() {
@@ -504,11 +509,28 @@ unsafe extern "win64" fn sm_has_key(this: usize, key: usize, out: *mut u8) -> i3
     *out = lock(&smap(this).items).contains_key(&hstr_units(key)) as u8;
     S_OK
 }
-unsafe extern "win64" fn sm_get_view(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+/// GetView : copie figée du dictionnaire (Learn, IMap.GetView).
+unsafe extern "win64" fn sm_get_view(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
     }
-    not_served("IMap<String, String>.GetView")
+    let items = lock(&smap(this).items).clone();
+    *out = Box::into_raw(Box::new(StrMap {
+        v: &STR_MAP_VIEW_VTBL,
+        refs: AtomicU32::new(1),
+        items: Mutex::new(items),
+        view: true,
+    })) as usize;
+    S_OK
+}
+/// IMapView.Split : une vue qui ne se coupe pas rend deux nuls (Learn).
+unsafe extern "win64" fn smv_split(_this: usize, first: *mut usize, second: *mut usize) -> i32 {
+    if first.is_null() || second.is_null() {
+        return E_POINTER;
+    }
+    *first = 0;
+    *second = 0;
+    S_OK
 }
 unsafe extern "win64" fn sm_insert(this: usize, key: usize, value: usize, out: *mut u8) -> i32 {
     if out.is_null() {
@@ -540,6 +562,20 @@ static STR_MAP_VTBL: VTable<13> = VTable(with::<13>(
         sm_insert as *const (),
         sm_remove as *const (),
         sm_clear as *const (),
+    ],
+));
+/// IMapView<String, String> : Lookup, Size, HasKey, Split.
+static STR_MAP_VIEW_VTBL: VTable<13> = VTable(with::<13>(
+    head!(sm_qi, sm_add, sm_rel, str_map_class),
+    &[
+        sm_lookup as *const (),
+        sm_size as *const (),
+        sm_has_key as *const (),
+        smv_split as *const (),
+        // Au-delà de IMapView : jamais appelées par un client correct.
+        pl_beyond as *const (),
+        pl_beyond as *const (),
+        pl_beyond as *const (),
     ],
 ));
 
@@ -1009,20 +1045,17 @@ unsafe extern "win64" fn pl_status(this: usize, out: *mut i32) -> i32 {
 unsafe extern "win64" fn pl_error(this: usize, out: *mut usize) -> i32 {
     put_ptr(out, plain(this).error)
 }
+/// InvalidateCacheAsync : aucun jeton n'est gardé, il n'y a rien à
+/// effacer ; l'action rendue est déjà terminée.
 unsafe extern "win64" fn pl_invalidate_cache(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    not_served("WebTokenRequestResult.InvalidateCacheAsync")
+    super::composition::completed_action(out as *mut *mut std::ffi::c_void)
 }
 unsafe extern "win64" fn pl_message(this: usize, out: *mut usize) -> i32 {
     hstr_out(&plain(this).message, out)
 }
-unsafe extern "win64" fn pl_error_properties(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    not_served("WebProviderError.Properties")
+/// Properties : le dictionnaire de l'erreur, le même à chaque appel.
+unsafe extern "win64" fn pl_error_properties(this: usize, out: *mut usize) -> i32 {
+    put_ptr(out, plain(this).items)
 }
 /// Entrée au-delà de la dernière méthode de l'interface : jamais appelée
 /// par un client correct.
@@ -1086,7 +1119,8 @@ pub(crate) fn token_result(status: i32, message: &str) -> usize {
                 v: &PROVIDER_ERROR_VTBL,
                 iid: IID_PROVIDER_ERROR,
                 class: CLASS_PROVIDER_ERROR,
-                items: 0,
+                // Properties : dictionnaire vide, gardé par l'erreur.
+                items: new_str_map(),
                 error: 0,
                 status: E_NOTIMPL,
             },
@@ -1262,6 +1296,66 @@ mod tests {
             assert_eq!(get_i(err, 6), E_NOTIMPL);
             assert_eq!(get_h(err, 7), "connexion pas encore servie");
             release(err);
+            release(refused);
+        }
+    }
+
+    #[test]
+    fn vue_proprietes_et_cache_2948() {
+        unsafe {
+            // GetView : vue figée, en lecture seule, qui ne se coupe pas.
+            let map = new_str_map();
+            let ins: unsafe extern "win64" fn(usize, usize, usize, *mut u8) -> i32 =
+                std::mem::transmute(slot(map, 10));
+            let mut replaced = 9u8;
+            assert_eq!(
+                ins(map, hs("authority"), hs("https://x/"), &mut replaced),
+                S_OK
+            );
+            let view = get_p(map, 9);
+            assert_eq!(qi(view, &generic().string_map_view), view);
+            release(view);
+            let q: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> i32 =
+                std::mem::transmute(slot(view, 0));
+            let mut no = 7usize;
+            assert_eq!(
+                q(view, generic().string_map.as_ptr(), &mut no),
+                E_NOINTERFACE
+            );
+            assert_eq!(no, 0);
+            assert_eq!(ins(map, hs("après"), hs("x"), &mut replaced), S_OK);
+            let size: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+                std::mem::transmute(slot(view, 7));
+            let mut n = 0u32;
+            assert_eq!(size(view, &mut n), S_OK);
+            assert_eq!(n, 1);
+            let look: unsafe extern "win64" fn(usize, usize, *mut usize) -> i32 =
+                std::mem::transmute(slot(view, 6));
+            let mut v = 0usize;
+            assert_eq!(look(view, hs("authority"), &mut v), S_OK);
+            assert_eq!(text(v), "https://x/");
+            let split: unsafe extern "win64" fn(usize, *mut usize, *mut usize) -> i32 =
+                std::mem::transmute(slot(view, 9));
+            let (mut a, mut b) = (5usize, 5usize);
+            assert_eq!(split(view, &mut a, &mut b), S_OK);
+            assert_eq!((a, b), (0, 0));
+            release(view);
+            release(map);
+
+            // Properties de l'erreur : le même dictionnaire à chaque appel.
+            let refused = token_result(STATUS_PROVIDER_ERROR, "connexion pas encore servie");
+            let err = get_p(refused, 8);
+            let props = get_p(err, 8);
+            assert_eq!(qi(props, &generic().string_map), props);
+            release(props);
+            assert_eq!(get_p(err, 8), props);
+            release(props);
+            release(props);
+            release(err);
+            // InvalidateCacheAsync : action déjà terminée.
+            let inv = get_p(refused, 9);
+            assert_ne!(inv, 0);
+            release(inv);
             release(refused);
         }
     }
