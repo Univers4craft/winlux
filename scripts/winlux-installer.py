@@ -5607,32 +5607,29 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            try:
-                subprocess.run(["sync"], timeout=10)
-            except subprocess.TimeoutExpired:
-                pass  # l'init synchronise de toute façon avant de redémarrer
-            # En live, PID 1 est le script /init : « reboot » (systemctl)
-            # ne faisait rien et le bouton fermait seulement l'installateur.
-            # winlux-power sait redémarrer dans les deux cas.
-            # Rien à enregistrer après l'installation : l'étape finale sans
-            # écran signale l'init directement. L'écran « now » (GTK) mourait
-            # parfois en session live après avoir fermé les applications, et
-            # la machine ne redémarrait plus. Il ne sert que si l'init refuse
-            # (mise à jour en cours…), pour afficher la raison.
+            # Rien n'est lancé depuis le média avant le signal à l'init (#2904) :
+            # en session live, tout le système vient du squashfs de la clé ou
+            # de l'ISO, que la page de fin demande de retirer. Un « sync » ou un
+            # winlux-power illisible après l'éjection fermait l'installateur
+            # sans redémarrer, et l'écran Prisme restait affiché.
+            os.sync()
+            # Installateur root sans systemd (session live, ou pkexec sur un
+            # système installé) : l'init shell de Winlux redémarre sur SIGTERM,
+            # vérifie lui-même qu'aucune mise à jour n'est en cours et arme
+            # son garde-fou de 25 s (#399).
+            if os.geteuid() == 0 and not os.path.isdir("/run/systemd/system"):
+                os.kill(1, signal.SIGTERM)
+                self.quit()
+                return
+            # Sinon winlux-power : l'étape finale sans écran d'abord, l'écran
+            # « now » (GTK) seulement si l'arrêt est refusé (mise à jour en
+            # cours…), pour en afficher la raison.
             power = shutil.which("winlux-power")
             if power:
                 try:
                     done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
-                    refused = not done
                 except (OSError, subprocess.SubprocessError):
-                    # Écriture des disques encore longue juste après
-                    # l'installation : le délai expirait et le bouton
-                    # fermait l'installateur sans redémarrer.
-                    done = refused = False
-                if not done and not refused and os.geteuid() == 0:
-                    # Session live (root) : l'init redémarre sur SIGTERM.
-                    os.kill(1, signal.SIGTERM)
-                    done = True
+                    done = False
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
