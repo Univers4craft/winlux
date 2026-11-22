@@ -232,9 +232,12 @@ pub fn camera_allowed() -> bool {
 }
 
 /// Caméras branchées, triées par numéro de nœud (aucune si l'utilisateur
-/// a bloqué la caméra).
+/// a bloqué la caméra). Lister n'est pas utiliser : aucune question n'est
+/// posée ici, une application qui inventorie ses périphériques au lancement
+/// ne demande rien (#1733, #3100). La question vient à l'ouverture du flux
+/// (`Stream::open`).
 pub fn cameras() -> Vec<Camera> {
-    if !camera_allowed() {
+    if !crate::permissions::not_refused(crate::permissions::Capability::Camera) {
         return Vec::new();
     }
     let mut nodes: Vec<(u32, PathBuf)> = std::fs::read_dir(video_dir())
