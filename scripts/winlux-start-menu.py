@@ -1815,8 +1815,12 @@ def _recent_ranked(path, home):
         application = ""
         for entry in bookmark.iter(namespace + "application"):
             stamp = _stamp(entry.get("modified"))
-            if stamp >= when or not application:
-                application = entry.get("name", "")
+            name = entry.get("name", "")
+            # Le portail de fichiers note sous son propre nom les fichiers
+            # qu'il choisit pour une autre application : ce n'est pas un
+            # programme que la personne a ouvert (#3001).
+            if (stamp >= when or not application) and not name.startswith("xdg-desktop-portal"):
+                application = name
             when = max(when, stamp)
         if target not in found or found[target][1] < when:
             found[target] = (application, when)
