@@ -22,7 +22,7 @@
 //! - les énumérateurs (EnumVerbs, EnumAdvise) ne sont pas décrits ;
 //! - les méthodes d'IDispatch restent non décrites (automation à venir).
 
-use super::com::{Iface, A, A::*, IDATAOBJECT, IDISPATCH, IMONIKER, IUNKNOWN};
+use super::com::{Iface, A, A::*, IDATAOBJECT, IDISPATCH, IMONIKER, IPERSIST, ISTREAM, IUNKNOWN};
 use crate::dlls::comobj::{guid, Guid};
 
 const NONE: Option<&[A]> = Some(&[]);
@@ -264,6 +264,28 @@ pub(super) static IVIEWOBJECT: Iface = Iface {
     ],
 };
 
+/// IPersistStreamInit {7FD52380-4E07-101B-AE2D-08002B2EC713} (ocidl.h,
+/// #2970) : l'hôte ATL initialise le contrôle par InitNew ou Load juste
+/// après SetClientSite. ULARGE_INTEGER* de GetSizeMax pointe des données
+/// sans pointeur : `I`.
+pub(super) static IPERSISTSTREAMINIT: Iface = Iface {
+    name: "IPersistStreamInit",
+    iid: guid(
+        0x7FD5_2380,
+        0x4E07,
+        0x101B,
+        [0xAE, 0x2D, 0x08, 0x00, 0x2B, 0x2E, 0xC7, 0x13],
+    ),
+    parent: Some(&IPERSIST),
+    methods: &[
+        NONE,                     // IsDirty
+        Some(&[In(&ISTREAM)]),    // Load(IStream*)
+        Some(&[In(&ISTREAM), I]), // Save(IStream*, fClearDirty)
+        ONE,                      // GetSizeMax(ULARGE_INTEGER*)
+        NONE,                     // InitNew
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
     &IOLECLIENTSITE,
     &IOLEWINDOW,
@@ -275,6 +297,7 @@ pub(super) static ALL: &[&Iface] = &[
     &IWEBBROWSER2,
     &IADVISESINK,
     &IVIEWOBJECT,
+    &IPERSISTSTREAMINIT,
 ];
 
 #[cfg(test)]
@@ -351,5 +374,28 @@ mod tests {
         // OnDataChange reste non décrite ; OnViewChange prend deux cases.
         assert!(IADVISESINK.method(3).is_none());
         assert_eq!(slots(IADVISESINK.method(4).unwrap()), 2);
+    }
+
+    /// #2970 : IPersistStreamInit, comme la table du runtime
+    /// (dlls/webbrowser.rs : PS_VT, 9 entrées), se retrouve par son IID ;
+    /// Load reçoit le flux x86 de l'hôte par un mandataire.
+    #[test]
+    fn persist_stream_init_decrit_2970() {
+        assert_eq!(IPERSISTSTREAMINIT.count(), 9);
+        assert!(
+            by_iid(&IPERSISTSTREAMINIT.iid).is_some_and(|g| std::ptr::eq(g, &IPERSISTSTREAMINIT))
+        );
+        for i in 3..9 {
+            assert!(IPERSISTSTREAMINIT.method(i).is_some(), "méthode {i}");
+        }
+        assert!(
+            matches!(IPERSISTSTREAMINIT.method(3), Some([I])),
+            "GetClassID"
+        );
+        assert!(
+            matches!(IPERSISTSTREAMINIT.method(5), Some([In(s)]) if std::ptr::eq(*s, &ISTREAM))
+        );
+        assert!(matches!(IPERSISTSTREAMINIT.method(6), Some([In(_), I])));
+        assert!(matches!(IPERSISTSTREAMINIT.method(8), Some([])), "InitNew");
     }
 }

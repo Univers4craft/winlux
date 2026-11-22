@@ -235,7 +235,7 @@ fn system_fonts() -> Vec<(PathBuf, FontList)> {
         };
         let mut files: Vec<String> = entries
             .flatten()
-            .filter(|e| e.path().is_file())
+            .filter(|e| entry_is(e, false))
             .filter_map(|e| e.file_name().into_string().ok())
             .filter(|n| {
                 let l = n.to_ascii_lowercase();
@@ -261,6 +261,30 @@ fn system_fonts() -> Vec<(PathBuf, FontList)> {
     out
 }
 
+/// Dossier (`dir`) ou fichier ordinaire, comme `Path::is_dir` / `is_file`
+/// (liens suivis), mais lu dans l'entrée du dossier (d_type) quand ce n'est
+/// pas un lien : un appel système de moins par police, à chaque lancement
+/// de programme (#2951).
+fn entry_is(entry: &std::fs::DirEntry, dir: bool) -> bool {
+    match entry.file_type() {
+        Ok(t) if !t.is_symlink() => {
+            if dir {
+                t.is_dir()
+            } else {
+                t.is_file()
+            }
+        }
+        _ => {
+            let path = entry.path();
+            if dir {
+                path.is_dir()
+            } else {
+                path.is_file()
+            }
+        }
+    }
+}
+
 fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     if depth > 6 || !dir.is_dir() || out.contains(&dir.to_path_buf()) {
         return;
@@ -269,8 +293,8 @@ fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         let mut subs: Vec<PathBuf> = entries
             .flatten()
+            .filter(|e| entry_is(e, true))
             .map(|e| e.path())
-            .filter(|p| p.is_dir())
             .collect();
         subs.sort();
         for sub in subs {
