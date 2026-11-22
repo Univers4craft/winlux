@@ -73,7 +73,9 @@ pub fn detect(data: &[u8]) -> Option<Kind> {
     if data.len() < 64 || &data[..2] != b"MZ" {
         return None;
     }
-    if squirrel::find_package(data).is_some() {
+    // Un Setup.exe Squirrel sans paquet complet le télécharge lui-même :
+    // il s'exécute comme tout programme (#3022).
+    if squirrel::carries_full_package(data) {
         return Some(Kind::Squirrel);
     }
     if inno::find_offsets(data).is_some() {
