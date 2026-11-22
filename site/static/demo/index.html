@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Winlux — démo</title>
+<meta name="description" content="Démonstration de Winlux dans le navigateur : une simulation du bureau, rien n'est téléchargé.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/svg+xml" href="../img/logo.svg">
+<link rel="stylesheet" href="demo.css">
+<script src="demo.js" defer></script>
+</head>
+<body>
+<!-- Démo de Winlux (#2926) : simulation en HTML, CSS et JavaScript, sans
+     bibliothèque. Ce n'est pas le système : aucun runtime, aucun téléchargement,
+     rien n'est envoyé. Les couleurs, libellés et dispositions sont repris de
+     runtime/src/bootsplash.rs, scripts/winlux-start-menu.py,
+     scripts/winlux-snap.py et du jeu d'icônes assets/icons/explorateur/. -->
+<div class="bandeau" id="bandeau" role="note">
+  <a class="retour" id="retour" href="../../fr/index.html"><img src="../img/logo.svg" alt="" width="18" height="18"><span data-t="site">Site de Winlux</span></a>
+  <p class="avis"><strong data-t="demo">Démonstration</strong> <span data-t="avis">Une simulation du bureau dans votre navigateur, pas Winlux en train de tourner. Rien n'est téléchargé ni envoyé.</span></p>
+  <div class="langues" role="group" aria-label="Langue">
+    <a href="?lang=fr" data-lang="fr" lang="fr">FR</a><a href="?lang=en" data-lang="en" lang="en">EN</a><a href="?lang=de" data-lang="de" lang="de">DE</a><a href="?lang=es" data-lang="es" lang="es">ES</a>
+  </div>
+</div>
+<div class="ecran" id="ecran" tabindex="-1">
+  <noscript><p class="sans-js">La démo a besoin de JavaScript. / The demo needs JavaScript.</p></noscript>
+</div>
+<div class="mention">
+<div lang="fr"><p class="muted small">Winlux est un logiciel libre indépendant. Il n'est ni affilié à Microsoft ni approuvé par Microsoft ; Windows est une marque de son propriétaire, citée ici uniquement pour décrire la compatibilité avec les programmes .exe.</p></div>
+<div lang="en" hidden><p class="muted small">Winlux is independent free software. It is neither affiliated with nor endorsed by Microsoft; Windows is a trademark of its owner, named here only to describe compatibility with .exe programs.</p></div>
+<div lang="de" hidden><p class="muted small">Winlux ist unabhängige freie Software. Es ist weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke ihres Inhabers und wird hier nur genannt, um die Kompatibilität mit .exe-Programmen zu beschreiben.</p></div>
+<div lang="es" hidden><p class="muted small">Winlux es software libre independiente. No está afiliado a Microsoft ni cuenta con su aprobación; Windows es una marca de su propietario, citada aquí solo para describir la compatibilidad con los programas .exe.</p></div>
+</div>
+</body>
+</html>

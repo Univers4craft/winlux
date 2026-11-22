@@ -116,7 +116,7 @@ const CLASSES_REDIRECTED: [&str; 5] = [
 
 /// Chemin de la vue 32 bits d'une clé `hklm\Software\…`, ou `None` si la clé
 /// est partagée entre les vues.
-fn wow_path(path: &str) -> Option<String> {
+pub fn wow_path(path: &str) -> Option<String> {
     let lower = path.to_ascii_lowercase();
     let rest = lower.strip_prefix("hklm\\software\\")?;
     let first = rest.split('\\').next().unwrap_or("");

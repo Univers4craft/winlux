@@ -475,6 +475,7 @@ jobs:
           sudo apt-get update -q
           sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
+          python3 -B scripts/test-store-description-windows.py
           python3 -B scripts/test-store-declencheurs.py
           python3 -B scripts/test-store-listes-neuves.py
           python3 -B scripts/test-store-appstream-listes.py
@@ -636,6 +637,9 @@ jobs:
       - name: Sortie volontaire sans message de plantage (#2272)
         run: sh scripts/test-sortie-volontaire.sh
 
+      - name: winlux-open lance sans attendre l'enregistrement, une seule inspection (#2889)
+        run: sh scripts/test-winlux-open-rapide.sh
+
       - name: Installer Winlux sur l'hôte Ubuntu (binfmt, ./hello.exe, association, désinstallation, #27)
         run: |
           sudo apt-get install -y -q binfmt-support xdg-utils || { sudo apt-get update -q && sudo apt-get install -y -q binfmt-support xdg-utils; }
@@ -654,6 +658,11 @@ jobs:
 
       - name: winlux --inspect projette un gros .exe au lieu de le copier (#2918)
         run: sh scripts/test-inspect-projete.sh
+
+      - name: Latence d'une application Windows x64/x86 sous Xvfb (#2889)
+        run: |
+          sudo apt-get install -y -q libxtst6 || { sudo apt-get update -q && sudo apt-get install -y -q libxtst6; }
+          xvfb-run -a -s '-screen 0 1280x800x24' sh scripts/test-latence-sonde.sh
 
       - name: Rapport des PE générés
         if: always()
@@ -713,6 +722,9 @@ jobs:
 
       - name: Store, second clic sur « Installer » pendant une installation expliqué dans le bandeau (#2186)
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-store-bandeau-xvfb.py
+
+      - name: Store, Ctrl+V colle le presse-papiers dans la recherche (#2894)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-store-coller-xvfb.py
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py

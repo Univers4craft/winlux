@@ -229,6 +229,7 @@ pub mod oleaut32_typelib;
 pub mod oleaut32_var;
 pub mod opengl32;
 pub mod package_classes;
+pub mod pathcch;
 pub mod pdh;
 pub mod pe_image;
 pub mod pointer;
@@ -316,6 +317,7 @@ pub mod webservices;
 pub mod webview2;
 pub mod webview2_iids;
 pub mod wer;
+pub mod wer_inscriptions;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -532,8 +534,10 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(wer_inscriptions::exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
+                    e.extend(pathcch::exports());
                     e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
@@ -1658,10 +1662,27 @@ fn add_basics(all: &mut [Builtin]) {
 
 /// Nom de DLL normalisé : minuscules, sans « .dll », avec les alias connus
 /// (api-ms-win-crt-* → ucrtbase, kernelbase → kernel32, msvcr120 → msvcrt…).
+/// Contrats API-set rattachés un par un, version exacte (Refs #2902) :
+/// chaque fonction du .def public de mingw-w64 (lib-common) est servie par
+/// l'hôte, et l'hôte est celui que nomment les pages sdk-api de ces
+/// fonctions (req.dll / api_location). Une version suivante du même
+/// contrat n'est pas couverte tant qu'elle n'a pas été vérifiée.
+pub const CONTRATS_VERIFIES: &[(&str, &str)] = &[
+    ("api-ms-win-downlevel-normaliz-l1-1-0", "normaliz"),
+    ("api-ms-win-eventing-consumer-l1-1-0", "advapi32"),
+    ("api-ms-win-eventlog-legacy-l1-1-0", "advapi32"),
+    ("api-ms-win-security-appcontainer-l1-1-0", "kernel32"),
+    ("api-ms-win-security-base-ansi-l1-1-0", "advapi32"),
+    ("api-ms-win-security-provider-ansi-l1-1-0", "advapi32"),
+];
+
 pub fn normalize(dll: &str) -> String {
     let l = dll.to_ascii_lowercase();
     let l = l.rsplit(['\\', '/']).next().unwrap_or(&l).to_string();
     let base = l.strip_suffix(".dll").unwrap_or(&l);
+    if let Some(&(_, host)) = CONTRATS_VERIFIES.iter().find(|&&(c, _)| c == base) {
+        return host.into();
+    }
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
     }
@@ -1945,6 +1966,20 @@ pub const KERNELBASE_ONLY: &[&str] = &[
     // api-ms-win-core-path (KernelBase), pas kernel32 (#1383).
     "PathCchCombineEx",
     "PathCchSkipRoot",
+    // Reste de la famille PathCch (#2921).
+    "PathCchRemoveFileSpec",
+    "PathCchRemoveBackslash",
+    "PathCchRemoveBackslashEx",
+    "PathCchAddBackslash",
+    "PathCchAddBackslashEx",
+    "PathCchStripToRoot",
+    "PathCchIsRoot",
+    "PathCchFindExtension",
+    "PathCchRemoveExtension",
+    "PathCchAddExtension",
+    "PathCchRenameExtension",
+    "PathCchStripPrefix",
+    "PathIsUNCEx",
     // Bac à sable : KernelBase seulement, absent de kernel32-reference (#2496).
     "CreateAppContainerToken",
 ];
@@ -2442,6 +2477,71 @@ mod tests {
         assert_eq!(normalize("KERNELBASE.dll"), "kernel32");
         assert_eq!(normalize("api-ms-win-crt-runtime-l1-1-0.dll"), "ucrtbase");
         assert_eq!(normalize("C:\\Windows\\System32\\MSVCR120.DLL"), "msvcrt");
+    }
+
+    /// Chaque fonction du .def mingw-w64 de chaque contrat vérifié se résout
+    /// par le contrat vers l'export de l'hôte (Refs #2902).
+    #[test]
+    fn contrats_verifies_servent_tout_leur_def() {
+        let defs: &[(&str, &[&str])] = &[
+            (
+                "api-ms-win-downlevel-normaliz-l1-1-0",
+                &["IdnToAscii", "IdnToUnicode"],
+            ),
+            (
+                "api-ms-win-eventing-consumer-l1-1-0",
+                &["CloseTrace", "OpenTraceW", "ProcessTrace"],
+            ),
+            (
+                "api-ms-win-eventlog-legacy-l1-1-0",
+                &[
+                    "DeregisterEventSource",
+                    "RegisterEventSourceW",
+                    "ReportEventW",
+                ],
+            ),
+            (
+                "api-ms-win-security-appcontainer-l1-1-0",
+                &["GetAppContainerNamedObjectPath"],
+            ),
+            (
+                "api-ms-win-security-base-ansi-l1-1-0",
+                &["GetFileSecurityA", "SetFileSecurityA"],
+            ),
+            (
+                "api-ms-win-security-provider-ansi-l1-1-0",
+                &[
+                    "GetExplicitEntriesFromAclA",
+                    "GetNamedSecurityInfoA",
+                    "SetEntriesInAclA",
+                    "SetNamedSecurityInfoA",
+                ],
+            ),
+        ];
+        assert_eq!(defs.len(), crate::dlls::CONTRATS_VERIFIES.len());
+        for &(contrat, fonctions) in defs {
+            let host = normalize(&format!("{contrat}.dll"));
+            assert_eq!(
+                Some(&(contrat, host.as_str())),
+                crate::dlls::CONTRATS_VERIFIES
+                    .iter()
+                    .find(|&&(c, _)| c == contrat)
+            );
+            for &f in fonctions {
+                let attendu = lookup(&host, f);
+                assert!(attendu.is_some(), "{contrat}!{f}");
+                assert_eq!(
+                    lookup(&normalize(&format!("{contrat}.dll")), f),
+                    attendu,
+                    "{contrat}!{f}"
+                );
+            }
+        }
+        // Versions suivantes incomplètes chez nous : pas rattachées.
+        assert_eq!(
+            normalize("api-ms-win-eventing-consumer-l1-1-1.dll"),
+            "api-ms-win-eventing-consumer-l1-1-1"
+        );
     }
 
     #[test]
