@@ -1579,7 +1579,10 @@ fi
 set winlux_root=
 search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4 $winlux_efi_args
+    # Diagnostic de #3199 (panique rare en UEFI 32 bits) : carte mémoire EFI et
+    # journal du noyau complets, sur cette seule entrée, celle que la CI démarre.
+    # À retirer d'un bloc une fois le diagnostic fini.
+    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=7 efi=debug $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
