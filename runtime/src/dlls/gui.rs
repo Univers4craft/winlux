@@ -3474,7 +3474,25 @@ pub trait GuiBackend: Send {
 
 struct HeadlessBackend;
 
+#[cfg(test)]
+thread_local! {
+    /// Cadre de gestionnaire simulé pour les tests du fil courant : sans
+    /// affichage, aucun gestionnaire ne pose de cadre.
+    pub static TEST_FRAME: std::cell::Cell<Option<[i32; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(not(test))]
 impl GuiBackend for HeadlessBackend {}
+
+#[cfg(test)]
+impl GuiBackend for HeadlessBackend {
+    fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+    fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+}
 
 /// Construit le backend : X11 si `DISPLAY` est présent et qu'on n'a pas forcé
 /// `WINLUX_GUI=headless`; sinon headless. Retombe sur headless si la connexion

@@ -842,18 +842,28 @@ fn run(opts: Options) -> Option<Options> {
         dark: shell_dark(),
         hwnd: 0,
     });
+    // VISIBLE | CAPTION | SYSMENU, WS_EX_DLGMODALFRAME.
+    const STYLE: u32 = 0x1000_0000 | 0x00C0_0000 | 0x0008_0000;
+    const EX_STYLE: u32 = 0x0000_0001;
+    // W x H est la zone client où la boîte se dessine ; le rectangle de la
+    // fenêtre comprend en plus le cadre du gestionnaire (#2984), sinon les
+    // boutons Imprimer et Annuler sortent par le bas (#3145).
+    let mut outer = Rect::from_size(0, 0, W, H);
+    // SAFETY: rectangle local valide le temps de l'appel.
+    unsafe { crate::dlls::user32::adjust_window_rect_ex(&mut outer, STYLE, 0, EX_STYLE) };
+    let (ow, oh) = (outer.width(), outer.height());
     // SAFETY: structures locales valides le temps des appels.
     let hwnd = unsafe {
         crate::dlls::user32::register_class_w(&wc);
         crate::dlls::user32::create_window_ex_w(
-            0x0000_0001, // WS_EX_DLGMODALFRAME
+            EX_STYLE,
             class.as_ptr(),
             title.as_ptr(),
-            0x1000_0000 | 0x00C0_0000 | 0x0008_0000, // VISIBLE | CAPTION | SYSMENU
-            ((sw - W) / 2).max(0),
-            ((sh - H) / 2).max(0),
-            W,
-            H,
+            STYLE,
+            ((sw - ow) / 2).max(0),
+            ((sh - oh) / 2).max(0),
+            ow,
+            oh,
             0,
             0,
             0,
