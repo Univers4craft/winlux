@@ -7,8 +7,6 @@ description: Haga doble clic en un .exe, instale programas con su instalador y a
 
 Haga doble clic en un archivo `.exe` en el Explorador o en el escritorio: se abre directamente. No hay nada que instalar ni configurar antes.
 
-![El recorrido de Winlux: abrir un programa de Windows](img:lancer-un-exe.jpg "El recorrido del primer arranque muestra cómo abrir un programa de Windows.")
-
 ## Instalar un programa
 
 1. Descargue el instalador desde el sitio del editor (`setup.exe`, `installer.exe` o `.msi`).

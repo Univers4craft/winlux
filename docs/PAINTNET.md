@@ -1,5 +1,11 @@
 # Paint.NET sur Winlux
 
+> **État au 22 novembre 2026 : Paint.NET s'installe, s'ouvre et dessine** depuis
+> la v0.2.21 (notes de version, #2755). Restent des défauts d'affichage, dont la
+> vignette de l'onglet d'image (#2557), et l'installeur web officiel, dont le
+> téléchargeur doit s'exécuter lui-même (#2752). La suite de ce document est
+> l'historique des mesures, à partir du 02/11/2026.
+
 État au 02/11/2026, mesuré avec Paint.NET 5.1.12 portable x64.
 
 ## Résumé

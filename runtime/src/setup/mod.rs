@@ -134,6 +134,10 @@ pub struct Options {
     /// L'utilisateur a confirmé l'installation d'un paquet MSIX dont
     /// l'éditeur n'est pas vérifié (`--allow-unverified`).
     pub allow_unverified: bool,
+    /// Installation sans interface (/S, /SILENT, /VERYSILENT,
+    /// /SUPPRESSMSGBOXES) : les boîtes de message de l'installateur ne sont
+    /// pas montrées (#2882).
+    pub silent: bool,
 }
 
 fn clean(s: &str) -> String {
@@ -901,8 +905,12 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
     }
     inst.ensure_desktop();
     // Réinstallation : les fichiers de l'ancienne version absents de la
-    // nouvelle sont retirés, le reste est conservé.
-    if let Some(old) = Manifest::find(&inst.manifest.id) {
+    // nouvelle sont retirés, le reste est conservé. Seulement au même
+    // endroit : une installation ailleurs (Notepad++ x86 à côté du x64)
+    // n'efface pas l'autre (#2882).
+    if let Some(old) = Manifest::find(&inst.manifest.id)
+        .filter(|old| same_location(&old.location, &inst.manifest.location))
+    {
         let keep: HashSet<&PathBuf> = inst.manifest.files.iter().collect();
         for f in old.files.iter().filter(|f| !keep.contains(f)) {
             let _ = std::fs::remove_file(f);
@@ -917,6 +925,14 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
     let m = inst.finish()?;
     eprintln!("setup : {name} est installé.");
     Ok(m)
+}
+
+/// Même dossier d'installation (chemins Windows, sans tenir compte de la
+/// casse ni de la barre finale). Un dossier inconnu compte comme le même :
+/// la réinstallation garde alors son nettoyage habituel.
+fn same_location(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.trim().trim_end_matches('\\').to_ascii_lowercase();
+    a.trim().is_empty() || b.trim().is_empty() || norm(a) == norm(b)
 }
 
 /// Met à jour les lanceurs du menu et du Bureau (winlux-applications) après
@@ -1141,7 +1157,15 @@ pub fn cli(args: &[String]) -> i32 {
                 return 0;
             }
             "/s" | "/silent" | "/verysilent" | "/sp-" | "/suppressmsgboxes" | "/norestart"
-            | "--quiet" => log.quiet = lower == "--quiet",
+            | "--quiet" => {
+                log.quiet = lower == "--quiet";
+                if matches!(
+                    lower.as_str(),
+                    "/s" | "/silent" | "/verysilent" | "/suppressmsgboxes"
+                ) {
+                    opts.silent = true;
+                }
+            }
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
             "--desktop" => opts.desktop = true,
             "--allow-unverified" => opts.allow_unverified = true,
@@ -1230,6 +1254,21 @@ pub fn le_u64(d: &[u8], off: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reinstallation_seulement_au_meme_endroit() {
+        // #2882 : Notepad++ x86 dans Program Files (x86) ne nettoie pas le
+        // Notepad++ x64 de Program Files, même identifiant.
+        assert!(!same_location(
+            "C:\\Program Files\\Notepad++",
+            "C:\\Program Files (x86)\\Notepad++"
+        ));
+        assert!(same_location(
+            "C:\\Program Files\\Notepad++\\",
+            "c:\\program files\\notepad++"
+        ));
+        assert!(same_location("", "C:\\Program Files\\Notepad++"));
+    }
 
     #[test]
     fn wildcards() {

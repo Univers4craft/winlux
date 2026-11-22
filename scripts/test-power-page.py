@@ -141,7 +141,7 @@ for tool in sorted(HERE.glob("winlux-*.py")):
 explorer = (ROOT / "testexe/src/shell/explorer.rs").read_text(encoding="latin-1")
 check('fn crumb_label' in explorer and 'b"Utilisateurs", b"Users", b"Usuarios", b"Benutzer"' in explorer,
       "segment « Users » localisé")
-check("segs[i].0 = crumb_label(segs[i].0, i == 2, users && i == 4);" in explorer, "dossiers du compte localisés dans le chemin")
+check("fn translate_crumbs" in explorer, "dossiers du compte localisés dans le chemin (#2874)")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)

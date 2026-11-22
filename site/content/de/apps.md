@@ -11,7 +11,7 @@ Winlux öffnet Windows-Programme dank einer von Grund auf geschriebenen Kompatib
 |---|---|
 | Einfaches 64-Bit-Programm (Werkzeuge, Hilfsprogramme, Kommandozeilenprogramme) | Funktioniert in der Regel |
 | Installationsprogramm `.msi`, NSIS oder Inno Setup | Funktioniert |
-| .NET-Anwendung, die ihre eigene Laufzeit mitbringt | Startet, aber ihre Oberfläche öffnet sich nicht immer |
+| .NET-Anwendung, die ihre eigene Laufzeit mitbringt | Startet; Paint.NET öffnet sich und zeichnet, andere öffnen sich noch nicht |
 | Oberflächen mit WinForms und WPF | Teilweise: ScreenToGif und Flow Launcher (WPF) funktionieren, viele andere noch nicht |
 | Spiele mit Direct3D 9, 11 und 12 | Teilweise, Spiel für Spiel zu prüfen |
 | 32-Bit-Programm | Teilweise: PuTTY, 7-Zip und WinSCP in 32 Bit funktionieren, viele andere öffnen sich noch nicht |
@@ -26,7 +26,7 @@ Die Einzelheiten Funktion für Funktion und die Reihenfolge der nächsten Arbeit
 
 ## Was als Nächstes kommt
 
-Nach Wirkung auf die Zahl der freigeschalteten Programme: die meistgefragten Windows-Funktionen, OpenGL und Vulkan für Anwendungen, die Visual-C++-Laufzeitbibliotheken, sichere HTTPS-Verbindungen, Direct3D-Shader, dann 32-Bit-Programme. Die [Roadmap](wiki:Feuille-de-route) verfolgt den Fortschritt.
+Die Arbeiten für die nächste Version, v0.3: Jedes getestete Programm installiert sich und öffnet sein erstes Fenster, bis zum Anmeldebildschirm, wenn es einen hat (Office, Teams, Acrobat, Creative Cloud), Anwendungen auf Chromium- und WebView2-Basis, WPF und 32-Bit-Programme, die COM-Objekte verwenden. Die [Roadmap](wiki:Feuille-de-route) verfolgt den Fortschritt.
 
 ## Ihre Software steht nicht auf der Liste?
 
