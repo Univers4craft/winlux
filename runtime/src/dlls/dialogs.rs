@@ -530,7 +530,7 @@ unsafe fn call_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     controls::with_charset(wide, || gui::call_wndproc(proc_addr, hwnd, msg, wp, lp))
 }
 
-fn ensure_dialog_class() {
+pub(crate) fn ensure_dialog_class() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         gui::register_class(

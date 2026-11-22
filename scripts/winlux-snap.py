@@ -1052,6 +1052,7 @@ def _monitors():
 
 EDGE = 2              # pixels du bord de l'écran qui déclenchent l'ancrage
 CORNER = 0.2          # part de la hauteur de l'écran qui compte comme un coin
+FLOAT_MIN_HEIGHT = 120  # hauteur minimale d'une fenêtre décrochée tout en bas (#2909)
 DRAG_START = 8        # déplacement minimal (pixels) avant de parler de glisser
 BAR_REACH = 72        # distance du haut où la barre des dispositions descend
 HOVER_DELAY = 0.5     # secondes sur le bouton Agrandir avant la grille
@@ -1111,12 +1112,19 @@ def bar_zone(point, cells):
     return None
 
 
-def float_geometry(point, frame, saved):
-    """Fenêtre ancrée décrochée : sa taille d'avant, sous la souris au même endroit relatif."""
+def float_geometry(point, frame, saved, area=None):
+    """Fenêtre ancrée décrochée : sa taille d'avant, sous la souris au même endroit relatif.
+
+    Avec area (zone de travail), la hauteur est réduite pour que le bas ne
+    passe pas sous la barre des tâches : sinon openbox remonte la fenêtre et
+    sa barre de titre quitte la souris (#2909)."""
     px, _ = point
     x, y, w, _ = frame
     _, _, sw, sh = saved
     ratio = (px - x) / w if w else 0.5
+    if area is not None:
+        bottom = area[1] + area[3]
+        if y + sh > bottom: sh = max(FLOAT_MIN_HEIGHT, bottom - y)
     return round(px - sw * min(max(ratio, 0), 1)), y, sw, sh
 
 
@@ -1277,7 +1285,8 @@ def drop(window, zone, point=None):
         try: saved = tuple(int(part) for part in saved.split(","))
         except ValueError: saved = None
         if get_prop(window, "_WINLUX_SNAP") and saved and len(saved) == 4 and frame:
-            geometry = float_geometry(point or (frame[0] + frame[2] // 2, frame[1]), frame, saved)
+            where = point or (frame[0] + frame[2] // 2, frame[1])
+            geometry = float_geometry(where, frame, saved, pick_area(work_areas(), where))
             x, y, w, h = client_geometry(geometry, frame_extents(window))
             _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
         leave_snap(window)
