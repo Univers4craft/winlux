@@ -96,7 +96,8 @@ class Notifications:
     def mark_seen(self, identity=None):
         """Notification vue (bulle cliquée ou fermée), ou toutes (centre ouvert)."""
         changed = False
-        for item in self.history:
+        # Bulle seule, sans historique chargé (test de la bulle) : rien à marquer.
+        for item in getattr(self, "history", ()):
             if item.get("nouvelle") and identity in (None, item.get("id")):
                 item.pop("nouvelle"); changed = True
         if changed: self.save()
@@ -238,8 +239,11 @@ class Notifications:
             return False
         def seen(*_):
             # Bulle fermée ou cliquée : vue. Bulle expirée : reste nouvelle.
-            self.mark_seen(identity)
-            return hide()
+            # La bulle se ferme d'abord : un disque plein ne la laisse pas affichée.
+            hidden = hide()
+            try: self.mark_seen(identity)
+            except OSError: pass
+            return hidden
         close.connect("clicked", seen)
         def clicked(_, event):
             live = self.live.get(identity)
