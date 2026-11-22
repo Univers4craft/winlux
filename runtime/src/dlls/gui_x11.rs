@@ -3543,6 +3543,15 @@ impl X11Backend {
             // Zone client sous la barre : suivie à partir du cadre.
             return None;
         }
+        if child {
+            // Un contrôle enfant n'est placé que par SetWindowPos/MoveWindow,
+            // qui tiennent déjà la table à jour et envoient WM_SIZE/WM_MOVE.
+            // Son ConfigureNotify n'est que l'écho de la requête : une taille
+            // X ne descend pas sous 1, et un écho en retard est périmé. Le
+            // relayer donnait 196x1 à un libellé mis en hauteur 0, qui
+            // recevait alors WM_PAINT et faisait planter Paint.NET (#2992).
+            return None;
+        }
         let window = if frame != 0 { frame } else { window };
         // Avec une barre de menus, la zone client prend la hauteur restante.
         let client_h = e.height.saturating_sub(bar).max(1);

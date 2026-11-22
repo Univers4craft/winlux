@@ -5,10 +5,17 @@ unset WINLUX_DESKTOP_DEMO
 # Demande du choix du navigateur propre au compte (#2243), lue par Paramètres PE.
 WINLUX_BROWSER_CHOOSER="Z:\\run\\winlux\\browser-chooser-$(id -u)"
 export WINLUX_BROWSER_CHOOSER
+# Runtime : celui de WINLUX_RUNTIME quand il est posé (passes « par
+# chemin » avec un binaire frais), comme winlux-open ; sinon l'installé (#2987).
+runtime=${WINLUX_RUNTIME:-/usr/bin/winlux}
 
 # Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
 # (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,
-# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b.
+# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b. Un chemin
+# du lecteur C: (le dossier personnel, ou WINLUX_DRIVE_C / WINLUX_HOME comme
+# dans le runtime) devient C:\… : l'Explorateur l'affiche alors comme quand
+# on y arrive par le volet de gauche, « Dossier personnel (C:) › Documents »,
+# et non « Système Linux (Z:) › home › damien › Documents » (#3025).
 shell_path() {
     value=$1
     case "$value" in
@@ -24,6 +31,16 @@ if b"\0" in path:
     sys.exit(1)
 sys.stdout.buffer.write(path)
 ' "$value") || return 1 ;;
+    esac
+    drive_c=${WINLUX_DRIVE_C:-${WINLUX_HOME:-${HOME:-}}}
+    drive_c=${drive_c%/}
+    case "$drive_c" in
+        /?*)
+            case "$value" in
+                "$drive_c"|"$drive_c"/*)
+                    printf 'C:\\%s' "${value#"$drive_c"}" | sed 's@/@\\@g; s@^C:\\\\@C:\\@'
+                    return ;;
+            esac ;;
     esac
     case "$value" in
         /*) printf 'Z:%s' "$value" | sed 's@/@\\@g' ;;
@@ -55,7 +72,7 @@ case "${1:-explorer}" in
         if test "$1" = settings && test "${WINLUX_LEGACY_SETTINGS:-0}" != 1; then
             exec /usr/bin/python3 /usr/bin/winlux-settings
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     store|fonts|programs|taskschd|firewall|welcome|regedit|taskmgr|eventviewer|msinfo32)
         export WINLUX_SHELL_APP=$1
         # Bureau natif : « Installer ou désinstaller des programmes » est la page
@@ -89,7 +106,7 @@ case "${1:-explorer}" in
                 fi
             done
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     notepad)
         # Bloc-notes du shell PE, seul et dans sa fenêtre (#1027), avec un
         # fichier facultatif. « editor » reste l'éditeur de la session native.
@@ -98,7 +115,7 @@ case "${1:-explorer}" in
             WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
             export WINLUX_SHELL_PATH
         fi
-        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+        exec "$runtime" /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
     *) echo 'Application Winlux inconnue' >&2; exit 2 ;;
 esac

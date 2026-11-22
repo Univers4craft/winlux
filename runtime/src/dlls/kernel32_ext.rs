@@ -3,8 +3,6 @@
 //! attentes alertables, notifications de ressources, fonctionnalités XSAVE
 //! et jetons de thread.
 
-use std::ffi::c_void;
-
 use crate::process::set_last_error;
 
 const ERROR_INVALID_PARAMETER: u32 = 87;
@@ -131,29 +129,9 @@ pub extern "win64" fn get_enabled_xstate_features() -> u64 {
     3
 }
 
-/// WerRegisterRuntimeExceptionModule : pas de rapport d'erreur Windows ;
-/// l'enregistrement est accepté (S_OK) et sans effet.
-pub extern "win64" fn wer_register_runtime_exception_module(
-    _dll: *const u16,
-    _ctx: *mut c_void,
-) -> i32 {
-    0
-}
-
 /// IsSystemResumeAutomatic : Winlux ne signale aucune sortie de veille
 /// automatique ; FALSE (#1874).
 pub extern "win64" fn is_system_resume_automatic() -> i32 {
-    0
-}
-
-/// WerRegisterMemoryBlock : pas de rapport d'erreur Windows ; le bloc
-/// n'est pas retenu et l'enregistrement réussit (S_OK, #1874).
-pub extern "win64" fn wer_register_memory_block(_addr: *mut c_void, _size: u32) -> i32 {
-    0
-}
-
-/// WerUnregisterMemoryBlock : pendant de la précédente, S_OK.
-pub extern "win64" fn wer_unregister_memory_block(_addr: *mut c_void) -> i32 {
     0
 }
 
@@ -481,10 +459,7 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "CreateMemoryResourceNotification" => fn create_memory_resource_notification,
         "QueryMemoryResourceNotification" => fn query_memory_resource_notification,
         "GetEnabledXStateFeatures" => fn get_enabled_xstate_features,
-        "WerRegisterRuntimeExceptionModule" => fn wer_register_runtime_exception_module,
         "IsSystemResumeAutomatic" => fn is_system_resume_automatic,
-        "WerRegisterMemoryBlock" => fn wer_register_memory_block,
-        "WerUnregisterMemoryBlock" => fn wer_unregister_memory_block,
         "FlushProcessWriteBuffers" => fn flush_process_write_buffers,
         "VerSetConditionMask" => fn ver_set_condition_mask,
         "VerifyVersionInfoW" => fn verify_version_info_w,
@@ -533,11 +508,17 @@ mod tests {
         ] {
             assert!(crate::dlls::lookup("kernel32", f).is_some(), "{f}");
         }
-        let mut x = 0u8;
-        let p = &mut x as *mut u8 as *mut c_void;
+        let x = 0u8;
+        let p = &x as *const u8 as usize;
         assert_eq!(is_system_resume_automatic(), 0);
-        assert_eq!(wer_register_memory_block(p, 1), 0);
-        assert_eq!(wer_unregister_memory_block(p), 0);
+        assert_eq!(
+            crate::dlls::wer_inscriptions::wer_register_memory_block(p, 1),
+            0
+        );
+        assert_eq!(
+            crate::dlls::wer_inscriptions::wer_unregister_memory_block(p),
+            0
+        );
     }
 
     #[test]

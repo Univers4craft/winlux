@@ -4,6 +4,7 @@
 audio_com.rs	Iface	x86	interface WASAPI (mmdevapi) : mandataire x86 décrit dans wow32/com.rs (IMMDeviceEnumerator…) ; wasapi32.c
 cabinet_lz.rs	FdiNotification	x86	disposition x86 de 40 octets écrite par x86_notification (#1758)
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
+comdlg32_files.rs	OfNotify	interne	OFNOTIFY du crochet OFN_ENABLEHOOK (#2936), x64 seulement : FileHook::open refuse le crochet si pointer_size() != 8 ; en x86 ce serait 20 octets (NMHDR 12 + 2 pointeurs), non servi
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
 comdlg32_ui.rs	LvItemW	a-verifier	
@@ -34,6 +35,7 @@ coremessaging.rs	Controller	a-verifier
 coremessaging.rs	Handler	a-verifier	
 coremessaging.rs	Queue	a-verifier	
 coremessaging.rs	Timer	a-verifier	
+credentials.rs	CredentialW64	x86	disposition x86 CredentialW32 (52 octets) choisie par wow32::pointer_size ; tests credentialw_x86_2955 et tableau_credentialw_x86_2955 (#2955)
 crt_runtime.rs	Lconv	a-verifier	
 crt_runtime.rs	LocaleInfo	a-verifier	
 crt_runtime.rs	LocalePointers	a-verifier	
@@ -257,6 +259,7 @@ shell_ordinaux.rs	Obj	interne	test unitaire
 shell_ordinaux.rs	QiTab	x86	QITAB x86 = 8 octets (dwOffset à +4), x64 = 16 (à +8), mesurés ; QISearch lit la disposition de l'appelant et appelle l'AddRef x86 (#2476) ; test table_qitab_x86
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
+storage_settings.rs	KidsIter	a-verifier	parcours WinRT de ApplicationDataContainer.Containers (#2962), servi aux programmes x64
 taskbarlist_com.rs	Obj	a-verifier	
 taskschd.rs	Obj	a-verifier	
 teams_win32.rs	AssocReg	a-verifier	
@@ -325,6 +328,9 @@ winrt_coreapp.rs	IterObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.Co
 winrt_coreapp.rs	PairObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winrt_coreapp.rs	SetObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winrt_coreapp.rs	ViewObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_wam.rs	Op	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
+winrt_wam_objets.rs	Plain	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
+winrt_wam_objets.rs	Request	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
 wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)

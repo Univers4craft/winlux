@@ -656,6 +656,9 @@ jobs:
       - name: Programmes Windows 32 bits (#232)
         run: sh scripts/test-wow32.sh
 
+      - name: winlux --inspect projette un gros .exe au lieu de le copier (#2918)
+        run: sh scripts/test-inspect-projete.sh
+
       - name: Latence d'une application Windows x64/x86 sous Xvfb (#2889)
         run: |
           sudo apt-get install -y -q libxtst6 || { sudo apt-get update -q && sudo apt-get install -y -q libxtst6; }
@@ -720,8 +723,14 @@ jobs:
       - name: Store, second clic sur « Installer » pendant une installation expliqué dans le bandeau (#2186)
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-store-bandeau-xvfb.py
 
+      - name: Store, Ctrl+V colle le presse-papiers dans la recherche (#2894)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-store-coller-xvfb.py
+
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: Applications du shell, aucune ligne de test sur la sortie standard (#2896)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-sortie-muette-xvfb.py
 
       - name: Barre des tâches sans infobulle « (genmon) » ni trait doublé à côté de Démarrer
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-panel-tooltips.py --barre
@@ -799,8 +808,14 @@ jobs:
       - name: Menu Démarrer préchargé à l'ouverture de session et réveillé par D-Bus
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-preload.py
 
+      - name: Recherche du menu Démarrer sans chemin AppData ni marque Microsoft (#2905)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-appdata.py
+
       - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
+
+      - name: Menu Démarrer fermé tant que l'écran est verrouillé (#2994)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-verrou.py
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py

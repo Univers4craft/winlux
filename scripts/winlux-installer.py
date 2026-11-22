@@ -61,7 +61,7 @@ def mount_efivarfs(efivars=EFIVARS, run=None):
 
 
 def efi_variables_writable():
-    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    """Faux si le noyau n'a pas les services UEFI (noyau démarré avec efi=noruntime, ou micrologiciel sans variables)."""
     return mount_efivarfs()
 
 
@@ -82,7 +82,7 @@ def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
         efi_log("non créée, efibootmgr absent")
         return False
     if not efi_variables_writable():
-        efi_log(f"non créée, variables UEFI indisponibles ({EFIVARS} vide, efivarfs non monté ou efi=noruntime)")
+        efi_log(f"non créée, variables UEFI indisponibles ({EFIVARS} vide, efivarfs non monté ou services UEFI coupés)")
         return False
     name = os.path.basename(os.path.realpath(esp_partition))
     try:
@@ -6127,11 +6127,11 @@ class InstallerApp(Gtk.Application):
         # visible 5 s quand Windows est proposé à côté.
         menu_timeout, menu_style = (5, "menu") if windows_entry else (1, "hidden")
         grub_cfg = f"""set default=0
-# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
-# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau
+# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).
 set winlux_efi_args=
 if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
-    set winlux_efi_args=efi=noruntime
+    set winlux_efi_args=no5lvl
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop
@@ -6181,7 +6181,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
                 if not efi_variables_writable():
-                    # UEFI 32 bits démarré avec efi=noruntime : pas de variables UEFI,
+                    # Services UEFI indisponibles (ancien efi=noruntime, #2747) : pas de variables,
                     # donc pas d'entrée de démarrage (docs/SECURE-BOOT.md).
                     efi_args.append("--no-nvram")
             for efi_target in efi_grub_targets(layout["own_esp"]):

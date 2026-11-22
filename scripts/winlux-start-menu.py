@@ -167,6 +167,8 @@ _TR = {
     '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Données des programmes': ('Program data', 'Datos de programas', 'Programmdaten'),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
     'Aucune application trouvée': ('No apps found', 'No se encontró ninguna aplicación', 'Keine Apps gefunden'),
     'Recommandations': ('Recommended', 'Recomendaciones', 'Empfohlen'),
@@ -431,6 +433,24 @@ def osk_module():
     return None
 
 
+def screen_locked():
+    """Vrai si winlux-lock tient cet écran : pid vivant dans son marqueur
+    /run/winlux/lock/active (« -1 » pour :1…), comme winlux-power. Le menu
+    s'ouvrait par-dessus l'écran de verrouillage, avec « Souvent ouvert à
+    cette heure-ci », dès qu'un programme l'activait par D-Bus (#2994)."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    suffix = "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+    try:
+        with open(os.environ.get("WINLUX_LOCK_ROOT", "") + "/run/winlux/lock/active" + suffix) as marker:
+            pid = int(marker.read().strip())
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -469,6 +489,9 @@ class Start(Gtk.Application):
             return
         if self.window and self.window.get_visible():
             self.hide()
+            return
+        # Écran verrouillé : rien ne s'ouvre par-dessus (#2994).
+        if screen_locked():
             return
         if not self.window: self.build()
         # Épingles ajoutées par une autre application (Jeux) depuis la
@@ -954,9 +977,9 @@ class Start(Gtk.Application):
                 heading.get_style_context().add_class("heading")
                 self.content.pack_start(heading, False, False, 0)
             for path in self.file_results:
-                relative = str(path.relative_to(Path.home()))
-                folder = str(path.parent.relative_to(Path.home()))
-                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + relative, subtitle="~" if folder == "." else "~/" + folder)
+                place = file_place(path)
+                shown = str(path.relative_to(Path.home())) if place.startswith("~") else place + " › " + path.name
+                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + shown, subtitle=place)
                 on_click(button, lambda target=path: self.open_file(target))
                 button.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
                 self.content.pack_start(button, False, False, 0)
@@ -1134,7 +1157,8 @@ class Start(Gtk.Application):
             recent = recent_files(data_home / "recently-used.xbel", limit=200)
             files = recent[:3]
             opened = {path for path, _, _ in recent}
-            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready())
+            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready(),
+                              done=installers_done())
             data = {"now": now, "files": files, "habits": habit_apps(usage_of(state), now), "todo": todo}
             def deliver():
                 if generation == self.side_generation:
@@ -1324,9 +1348,14 @@ class Start(Gtk.Application):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            # Ses sous-dossiers (« PuTTY (64-bit) ») non plus : ce sont les
+            # groupes du menu, la recherche les montrait comme des dossiers
+            # avec leur chemin AppData (#2905).
+            listed = folders
             if "/Start Menu/Programs" in directory + "/":
                 files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
-            for name in folders + files:
+                listed = []
+            for name in listed + files:
                 visited += 1
                 if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
@@ -1557,9 +1586,21 @@ def found_in(query, text):
     return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
 
 
+# « Paramètres » dans les quatre langues, repliés : dans une recherche de
+# plusieurs mots (« paramètres son »), ce mot désigne la catégorie et non le
+# titre de la page (#3017).
+SETTINGS_WORDS = ("parametres", "parametre", "settings", "setting", "configuracion", "ajustes", "einstellungen")
+
+
 def settings_for(query):
     """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
-    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés.
+    Le mot « paramètres » accompagné d'autres mots nomme la catégorie : il est
+    retiré avant de chercher la page."""
+    parts = words(query).split()
+    rest = [part for part in parts
+            if not (len(part) >= 4 and any(name.startswith(part) for name in SETTINGS_WORDS))]
+    if rest and len(rest) < len(parts): query = " ".join(rest)
     found = []
     for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
         if found_in(query, label) or found_in(query, french):
@@ -1732,6 +1773,27 @@ def _stamp(text):
         return 0
 
 
+def file_place(path, home=None):
+    """Dossier d'un fichier trouvé, tel que le menu l'affiche : « ~ »,
+    « ~/Documents/Impôts »… Les dossiers de données des programmes Windows
+    (AppData) ont un nom lisible, sans leur chemin interne : la recherche
+    affichait « ~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs »,
+    et aucune marque Microsoft ne doit apparaître à l'écran (#2905)."""
+    home = Path(home or Path.home())
+    try:
+        parts = Path(path).parent.relative_to(home).parts
+    except ValueError:
+        return str(Path(path).parent)
+    if not parts:
+        return "~"
+    if parts[0] == "AppData":
+        if [part.casefold() for part in parts[1:5]] == ["roaming", "microsoft", "windows", "start menu"]:
+            return _t("Menu Démarrer")
+        inner = [part for part in parts[2:] if part.casefold() not in ("microsoft", "windows", "programs")]
+        return _t("Données des programmes") + (" › " + inner[-1] if inner else "")
+    return "~/" + "/".join(parts)
+
+
 # recently-used.xbel déjà lu, par fichier : signature (taille, date) et
 # classement. Le volet « Pour vous » le relisait en entier deux fois à chaque
 # ouverture du menu : avec 1 000 fichiers récents, 270 ms de plus avant que le
@@ -1786,8 +1848,12 @@ def _recent_ranked(path, home):
         application = ""
         for entry in bookmark.iter(namespace + "application"):
             stamp = _stamp(entry.get("modified"))
-            if stamp >= when or not application:
-                application = entry.get("name", "")
+            name = entry.get("name", "")
+            # Le portail de fichiers note sous son propre nom les fichiers
+            # qu'il choisit pour une autre application : ce n'est pas un
+            # programme que la personne a ouvert (#3001).
+            if (stamp >= when or not application) and not name.startswith("xdg-desktop-portal"):
+                application = name
             when = max(when, stamp)
         if target not in found or found[target][1] < when:
             found[target] = (application, when)
@@ -1841,7 +1907,20 @@ def update_ready(state_dir=None, version_file=None):
     return available if available and available != installed else None
 
 
-def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
+def installers_done(state_home=None):
+    """Installateurs menés à bien depuis ce compte, notés par winlux-open
+    (~/.local/state/winlux/installateurs-termines), chemins résolus. Ouvrir
+    un .exe ne passe pas par GTK : sans cette liste, un installateur déjà
+    installé restait « Pas encore installé » (#2903)."""
+    state_home = Path(state_home or os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    try:
+        lines = (state_home / "winlux" / "installateurs-termines").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return set()
+    return {os.path.realpath(line) for line in lines if line.startswith("/")}
+
+
+def todo_items(downloads, opened, dismissed, now, update=None, limit=3, done=frozenset()):
     """Petites choses à faire, chacune avec son action :
     installateur .exe/.msi téléchargé depuis moins d'un mois et jamais ouvert,
     mise à jour de Winlux déjà vérifiée, dossier Téléchargements très chargé."""
@@ -1864,7 +1943,8 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
                 if now - info.st_mtime > OLD_DOWNLOAD_DAYS * DAY: old += 1
                 lowered = fold(name)
                 if (directory == str(downloads) and (lowered.endswith(".msi") or (lowered.endswith(".exe") and any(word in lowered for word in INSTALLER_WORDS)))
-                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened):
+                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened
+                        and os.path.realpath(os.path.join(directory, name)) not in done):
                     installers.append((info.st_mtime, Path(directory, name)))
             if visited > 5000: break
     except OSError:

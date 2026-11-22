@@ -280,8 +280,6 @@ fn main() {
             dlls::kernel32::exit_with(code);
         }
     }
-    // Variables d'environnement Windows écrites par les installateurs.
-    msi::extra::apply_registry_environment();
     // Projeté plutôt que lu : rien n'est copié en mémoire (#997).
     let source = match loader::ImageFile::open(&exe) {
         Ok(bytes) => bytes,
@@ -291,11 +289,15 @@ fn main() {
         }
     };
     // Programme x86 : relancé tout de suite si la mémoire haute n'a pas
-    // été réservée avant le premier malloc (#232).
+    // été réservée avant le premier malloc (#232). Avant la lecture du
+    // registre : le processus relancé la refait, et la vue des polices
+    // qu'elle construit était jetée (#2947).
     let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
     if x86 {
         wow32::reexec_if_needed();
     }
+    // Variables d'environnement Windows écrites par les installateurs.
+    msi::extra::apply_registry_environment();
     registry::backup();
     paths::install_windows_env();
     // PROCESSOR_ARCHITECTURE, ProgramFiles… d'un processus 32 ou 64 bits.
@@ -511,7 +513,10 @@ fn is_real_pe(path: &std::path::Path) -> bool {
 /// donnent `setup` et leurs désinstalleurs connus `uninstall` : souvent en
 /// 32 bits, ils s'installent quand même puisque leur code n'est pas exécuté.
 fn inspect(exe: &std::path::Path) -> i32 {
-    let source = match std::fs::read(exe) {
+    // Projeté, pas lu : winlux-open inspecte chaque programme avant de le
+    // lancer, et la copie entière d'un .exe de 300 Mo en mémoire passait
+    // avant sa première fenêtre (#2918).
+    let source = match loader::ImageFile::open(exe) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("lecture impossible de {} : {error}", exe.display());

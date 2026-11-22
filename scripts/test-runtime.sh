@@ -110,4 +110,11 @@ if [ "$(id -u)" -ne 0 ]; then
     test "$actual" -eq 199 || { echo "uac_suite refusé : code $actual attendu 199" >&2; exit 1; }
     echo "  OK     programme non démarré après refus"
 fi
+# Contrôle enfant en hauteur 0 : GetClientRect la relit telle quelle (#2992).
+# Sous X, le même PE passe aussi par scripts/test-libelle-vide.sh.
+printf '\n== libelle_vide_suite ==\n'
+WINLUX_GUI=headless "$runtime" "$testdir/libelle_vide_suite.exe" || {
+    echo "libelle_vide_suite : hauteur 0 non conservée" >&2
+    exit 1
+}
 echo "Tous les tests runtime passent."

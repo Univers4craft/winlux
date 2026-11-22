@@ -85,7 +85,7 @@
 - [x] Ajouter un test synthétique exerçant effectivement la résolution d’un import différé. _(source: TODO.md)_
 - [x] Ajouter une CI pour `cargo check`, les builds des `.exe` de test et les tests sous Winlux. _(source: TODO.md)_
 - [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`. _(source: TODO.md)_
-- [x] Ajouter une base de thème visuel inspirée de Windows 11. _(source: TODO.md)_
+- [x] Ajouter une base de thème visuel maison. _(source: TODO.md)_
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur. _(source: TODO.md)_
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés. _(source: TODO.md)_
 - [x] Ajouter une licence GPL-3.0-or-later. _(source: TODO.md)_
@@ -98,7 +98,7 @@
 - [x] Charger les vraies icônes PNG des applications depuis leurs fichiers _(source: TODO.md)_
 - [x] Charger un exécutable PE32+ x86-64. _(source: TODO.md)_
 - [x] Construire automatiquement l’arborescence de staging. _(source: TODO.md)_
-- [x] Construire le noyau fenêtres/messages (`gui.rs`) : classes, table HWND, file par thread, appel du `WndProc` invité et palette claire inspirée de Windows 11, avec un test PE `gui_suite.exe` (séquence WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY). _(source: TODO.md)_
+- [x] Construire le noyau fenêtres/messages (`gui.rs`) : classes, table HWND, file par thread, appel du `WndProc` invité et palette claire maison, avec un test PE `gui_suite.exe` (séquence WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY). _(source: TODO.md)_
 - [x] Construire une base Linux minimale en initramfs pour l’ISO de validation. _(source: TODO.md)_
 - [x] Continuer la CRT : locale, `_snscanf` et formats positionnels. (_snscanf ajouté, formats positionnels en attente) _(source: TODO.md)_
 - [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle. _(source: TODO.md)_
@@ -145,7 +145,7 @@
 - [x] Poursuivre le rendu X11 : décorations/titre maison si absence de WM; compléter GDI (autres formats DIB/bitmap, ROP restants, polices/métriques complètes et texte sur DC mémoire). (ROP SRCERASE/NOTSRCERASE/MERGEPAINT/PATCOPY/PATPAINT/DSTCOPY ajoutés, métriques de police améliorées) _(source: TODO.md)_
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer. _(source: TODO.md)_
 - [x] Publier ISO, sommes, paquet, manifeste et notes dans les préversions système existantes (notamment preview.4). _(source: TODO.md)_
-- [x] Refaire l’interface du bureau façon Windows 11 : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles. _(source: TODO.md)_
+- [x] Refaire l’interface du bureau : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles. _(source: TODO.md)_
 - [x] Relier le noyau à un backend X11 réel (`gui_x11.rs`, x11rb) : vraies fenêtres, surfaces claires et accent bleu rendus côté serveur, événements X traduits en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→`WM_SIZE`, souris, clavier X11→`VK_*`/`WM_KEYDOWN`/`WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` produit `WM_CHAR` (ASCII/Latin-1 et BMP) ; tracé GDI et saisie vérifiés par `gui_demo.exe` sous Xvfb. Backend *headless* conservé pour les tests (`WINLUX_GUI=headless`). _(source: TODO.md)_
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux. _(source: TODO.md)_
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback). _(source: TODO.md)_
