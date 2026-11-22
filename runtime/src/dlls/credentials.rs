@@ -577,9 +577,31 @@ pub unsafe extern "win64" fn CredIsMarshaledCredentialW(text: *const u16) -> i32
     i32::from(unmarshal(&wide_opt(text)).is_some_and(|(k, _)| (1..=3).contains(&k)))
 }
 
-/// CertCredential (1) : CERT_CREDENTIAL_INFO, empreinte de 20 octets ;
-/// UsernameTargetCredential (2) : un nom d'utilisateur ;
-/// BinaryBlobCredential (3) : un bloc d'octets.
+/// Octets d'une structure à marshaler, lue avec des pointeurs de `ptr`
+/// octets. CertCredential (1) : CERT_CREDENTIAL_INFO, empreinte de 20
+/// octets ; UsernameTargetCredential (2) : USERNAME_TARGET_CREDENTIAL_INFO,
+/// un pointeur vers le nom ; BinaryBlobCredential (3) : un bloc d'octets.
+/// La structure du type 3 n'est décrite ni par la page sdk-api de
+/// CRED_MARSHAL_TYPE ni par wincred.h de mingw-w64 : elle n'est lue qu'en
+/// x64, où Winlux l'a toujours servie ainsi, et refusée en x86 plutôt que
+/// devinée (#2959).
+unsafe fn marshal_input(kind: u32, cred: *const u8, ptr: usize) -> Option<Vec<u8>> {
+    match kind {
+        1 => Some(std::slice::from_raw_parts(cred.add(4), 20).to_vec()),
+        2 => Some(wide_opt(get_ptr(cred, ptr) as *const u16).into_bytes()),
+        3 if ptr == 8 => {
+            let n = (cred as *const u32).read_unaligned() as usize;
+            let p = get_ptr(cred.add(8), 8) as *const u8;
+            Some(if p.is_null() {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(p, n).to_vec()
+            })
+        }
+        _ => None,
+    }
+}
+
 pub unsafe extern "win64" fn CredMarshalCredentialW(
     kind: u32,
     cred: *const u8,
@@ -589,22 +611,10 @@ pub unsafe extern "win64" fn CredMarshalCredentialW(
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let data: Vec<u8> = match kind {
-        1 => std::slice::from_raw_parts(cred.add(4), 20).to_vec(),
-        2 => wide_opt((cred as *const *const u16).read_unaligned()).into_bytes(),
-        3 => {
-            let n = (cred as *const u32).read_unaligned() as usize;
-            let p = (cred.add(8) as *const *const u8).read_unaligned();
-            if p.is_null() {
-                Vec::new()
-            } else {
-                std::slice::from_raw_parts(p, n).to_vec()
-            }
-        }
-        _ => {
-            crate::process::set_last_error(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
+    let ptr = crate::wow32::pointer_size();
+    let Some(data) = marshal_input(kind, cred, ptr) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
     };
     let w = wide_bytes(&marshal(kind, &data));
     let p = libc::calloc(1, w.len()) as *mut u8;
@@ -613,8 +623,46 @@ pub unsafe extern "win64" fn CredMarshalCredentialW(
         return 0;
     }
     std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
-    *out = p as *mut u16;
+    put_ptr(out as *mut u8, p as usize, ptr);
     1
+}
+
+/// Structure rendue par CredUnmarshalCredentialW pour le type `k`, avec
+/// des pointeurs de `ptr` octets, en un bloc libéré par CredFree. Le type 3
+/// est refusé en x86 (voir `marshal_input`).
+unsafe fn unmarshal_output(k: u32, data: &[u8], ptr: usize) -> Option<*mut u8> {
+    let block: Vec<u8> = match k {
+        1 if data.len() == 20 => {
+            let mut b = 24u32.to_le_bytes().to_vec();
+            b.extend_from_slice(data);
+            b
+        }
+        2 => {
+            // Pointeur vers le nom placé juste après.
+            let mut b = vec![0u8; ptr];
+            b.extend(wide_bytes(&String::from_utf8_lossy(data)));
+            b
+        }
+        3 if ptr == 8 => {
+            let mut b = (data.len() as u32).to_le_bytes().to_vec();
+            b.extend_from_slice(&[0; 4]);
+            b.extend_from_slice(&[0; 8]);
+            b.extend_from_slice(data);
+            b
+        }
+        _ => return None,
+    };
+    let p = libc::calloc(1, block.len().max(8)) as *mut u8;
+    if p.is_null() {
+        return None;
+    }
+    std::ptr::copy_nonoverlapping(block.as_ptr(), p, block.len());
+    match k {
+        2 => put_ptr(p, p.add(ptr) as usize, ptr),
+        3 => put_ptr(p.add(8), p.add(16) as usize, 8),
+        _ => {}
+    }
+    Some(p)
 }
 
 pub unsafe extern "win64" fn CredUnmarshalCredentialW(
@@ -626,47 +674,17 @@ pub unsafe extern "win64" fn CredUnmarshalCredentialW(
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let ptr = crate::wow32::pointer_size();
     let Some((k, data)) = unmarshal(&wide_opt(text)) else {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let block: Vec<u8> = match k {
-        1 if data.len() == 20 => {
-            let mut b = 24u32.to_le_bytes().to_vec();
-            b.extend_from_slice(&data);
-            b
-        }
-        2 => {
-            // Pointeur vers le nom placé juste après.
-            let mut b = vec![0u8; 8];
-            b.extend(wide_bytes(&String::from_utf8_lossy(&data)));
-            b
-        }
-        3 => {
-            let mut b = (data.len() as u32).to_le_bytes().to_vec();
-            b.extend_from_slice(&[0; 4]);
-            b.extend_from_slice(&[0; 8]);
-            b.extend_from_slice(&data);
-            b
-        }
-        _ => {
-            crate::process::set_last_error(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
-    };
-    let p = libc::calloc(1, block.len().max(8)) as *mut u8;
-    if p.is_null() {
-        crate::process::set_last_error(8);
+    let Some(p) = unmarshal_output(k, &data, ptr) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
-    }
-    std::ptr::copy_nonoverlapping(block.as_ptr(), p, block.len());
-    match k {
-        2 => (p as *mut *mut u8).write_unaligned(p.add(8)),
-        3 => (p.add(8) as *mut *mut u8).write_unaligned(p.add(16)),
-        _ => {}
-    }
+    };
     *kind = k;
-    *out = p;
+    put_ptr(out as *mut u8, p as usize, ptr);
     1
 }
 
@@ -811,6 +829,68 @@ mod tests {
             let kind = (block.add(8 + size + lay.kind) as *const u32).read_unaligned();
             assert_eq!(kind, 1);
             libc::free(block as *mut libc::c_void);
+        }
+    }
+
+    /// USERNAME_TARGET_CREDENTIAL_INFO d'un programme 32 bits : un seul
+    /// pointeur de 4 octets, suivi ici d'octets parasites qui ne doivent
+    /// pas être lus (#2959).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn marshal_nom_x86_2959() {
+        unsafe {
+            let mem = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            ) as *mut u8;
+            assert_ne!(mem as *mut libc::c_void, libc::MAP_FAILED);
+            let name = wide_bytes("damien");
+            std::ptr::copy_nonoverlapping(name.as_ptr(), mem.add(64), name.len());
+            (mem as *mut u32).write_unaligned(mem.add(64) as usize as u32);
+            (mem.add(4) as *mut u32).write_unaligned(0xdead_beef);
+            let data = marshal_input(2, mem, 4).unwrap();
+            assert_eq!(data, b"damien");
+            libc::munmap(mem as *mut libc::c_void, 4096);
+        }
+    }
+
+    /// Le bloc rendu en x86 : le nom commence à +4, désigné par un pointeur
+    /// de 4 octets.
+    #[test]
+    fn unmarshal_nom_x86_2959() {
+        unsafe {
+            let p = unmarshal_output(2, b"damien", 4).unwrap();
+            let at = (p as *const u32).read_unaligned() as usize;
+            assert_eq!(at, (p as usize + 4) & 0xffff_ffff);
+            assert_eq!(crate::dlls::wstr(p.add(4) as *const u16), "damien");
+            libc::free(p as *mut libc::c_void);
+            let p = unmarshal_output(2, b"damien", 8).unwrap();
+            assert_eq!(get_ptr(p, 8), p as usize + 8);
+            libc::free(p as *mut libc::c_void);
+        }
+    }
+
+    /// Type 3 non documenté : refusé en x86 plutôt que deviné, servi en x64.
+    #[test]
+    fn blob_refuse_en_x86_2959() {
+        unsafe {
+            assert!(unmarshal_output(3, b"abc", 4).is_none());
+            let blob = *b"abc";
+            let mut info = [0u8; 16];
+            info[..4].copy_from_slice(&3u32.to_le_bytes());
+            info[8..].copy_from_slice(&(blob.as_ptr() as u64).to_le_bytes());
+            assert!(marshal_input(3, info.as_ptr(), 4).is_none());
+            assert_eq!(marshal_input(3, info.as_ptr(), 8).unwrap(), b"abc");
+            let p = unmarshal_output(3, b"abc", 8).unwrap();
+            assert_eq!(
+                std::slice::from_raw_parts(get_ptr(p.add(8), 8) as *const u8, 3),
+                b"abc"
+            );
+            libc::free(p as *mut libc::c_void);
         }
     }
 }
