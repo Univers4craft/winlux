@@ -1759,6 +1759,7 @@ def file_place(path, home=None):
         return _t("Données des programmes") + (" › " + inner[-1] if inner else "")
     return "~/" + "/".join(parts)
 
+
 # recently-used.xbel déjà lu, par fichier : signature (taille, date) et
 # classement. Le volet « Pour vous » le relisait en entier deux fois à chaque
 # ouverture du menu : avec 1 000 fichiers récents, 270 ms de plus avant que le
