@@ -160,7 +160,7 @@ impl Interpreter {
                 .get(*n as usize)
                 .copied()
                 .unwrap_or(types::TYPE_OBJECT),
-            E::SzArray(_) | E::Array(_) => types::TYPE_ARRAY,
+            E::SzArray(_) | E::Array(..) => types::TYPE_ARRAY,
         }
     }
 
@@ -411,7 +411,7 @@ impl Interpreter {
             E::R4 => Kind::R4,
             E::R8 => Kind::R8,
             E::IntPtr | E::UIntPtr | E::Ptr(_) | E::ByRef(_) | E::FnPtr => Kind::I,
-            E::String | E::Object | E::Class(_) | E::SzArray(_) | E::Array(_) => Kind::Ref,
+            E::String | E::Object | E::Class(_) | E::SzArray(_) | E::Array(..) => Kind::Ref,
             E::GenericInst(inner, _) if matches!(**inner, E::Class(_)) => Kind::Ref,
             E::Void | E::TypedByRef | E::Sentinel => Kind::Ref,
             E::ValueType(_) | E::GenericInst(..) | E::Var(_) | E::MVar(_) => {

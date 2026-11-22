@@ -2977,8 +2977,8 @@ const DC_EXTRA: [*const (); 63] = [
     nothing as *const (),                              // 112 DrawSvgGlyphRun
     unsupported!("GetColorBitmapGlyphImage"),          // 113
     unsupported!("GetSvgGlyphImage"),                  // 114
-    unsupported!("CreateSvgDocument"),                 // 115
-    nothing as *const (),                              // 116 DrawSvgDocument
+    super::svgdoc::create_svg_document as *const (),   // 115 CreateSvgDocument
+    super::svgdoc::draw_svg_document as *const (),     // 116 DrawSvgDocument
     dc_color_context_dxgi as *const (),                // 117 CreateColorContextFromDxgiColorSpace
     dc_color_context_simple as *const (), // 118 CreateColorContextFromSimpleColorProfile
     dc_blend_image as *const (),          // 119 BlendImage

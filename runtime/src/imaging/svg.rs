@@ -1603,3 +1603,26 @@ pub fn render(svg: &Svg, view: &Mat, cv: &mut Canvas) {
         }
     }
 }
+
+/// Rastérise un document SVG en pixels BGRA prémultipliés `w`×`h` (Direct2D
+/// DrawSvgDocument, #2719). `fit` met le document à l'échelle de la zone
+/// quand sa racine ne fixe pas de taille absolue.
+pub fn render_bgra(data: &[u8], w: usize, h: usize, fit: bool) -> Option<Vec<u8>> {
+    let svg = parse(data)?;
+    if w == 0 || h == 0 {
+        return Some(Vec::new());
+    }
+    let view = if fit && svg.w > 0.0 && svg.h > 0.0 {
+        Mat([w as f32 / svg.w, 0.0, 0.0, h as f32 / svg.h, 0.0, 0.0])
+    } else {
+        Mat::ID
+    };
+    let mut cv = Canvas::new(w, h);
+    render(&svg, &view, &mut cv);
+    let mut out = Vec::with_capacity(w * h * 4);
+    for p in &cv.px {
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        out.extend_from_slice(&[c(p[2]), c(p[1]), c(p[0]), c(p[3])]);
+    }
+    Some(out)
+}

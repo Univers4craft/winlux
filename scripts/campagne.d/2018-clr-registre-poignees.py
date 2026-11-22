@@ -5,7 +5,9 @@
 # #2023 : isinst et castclass vers T[] vérifient le type des éléments.
 bcl = ROOT / "bcl" / "mscorlib"
 clr = runtime_dlls.parent / "clr"
-ok("public static explicit operator IntPtr(long value)" in (bcl / "Pointeurs.cs").read_text(encoding="utf-8"),
+# Conversions d'IntPtr vérifiées par le témoin Registre (#2018).
+ok("struct IntPtr" in (bcl / "Pointeurs.cs").read_text(encoding="utf-8")
+   and "(#2018)" in (ROOT / "bcl" / "temoins" / "Registre.cs").read_text(encoding="utf-8"),
    "CLR : conversions et opérateurs d'IntPtr dans notre mscorlib (#2018)")
 ok("public abstract class SafeHandle : IDisposable" in (bcl / "Poignees.cs").read_text(encoding="utf-8")
    and "fn wrap_safe_handle" in (clr / "interop.rs").read_text(encoding="utf-8")

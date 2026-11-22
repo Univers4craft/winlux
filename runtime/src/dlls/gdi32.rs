@@ -3122,6 +3122,7 @@ mod foreign_window_tests {
                 xid,
                 style: 0x8400_0000, // WS_POPUP | WS_CLIPSIBLINGS
                 ex_style: 0,
+                ..Default::default()
             },
         ) {
             return;

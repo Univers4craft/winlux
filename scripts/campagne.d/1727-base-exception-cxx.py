@@ -3,5 +3,6 @@
 seh_src = (runtime_dlls / "seh.rs").read_text(encoding="utf-8")
 debut = seh_src.index("pub fn module_base(")
 corps = seh_src[debut:seh_src.index("\n}\n", debut)]
-ok("try_lock" not in corps and "crate::dlls::lock(&crate::loader::MODULES)" in corps,
+# Noms : pas de try_lock dans module_base, qui lit loader::MODULES (#2711).
+ok("try_lock" not in corps and "loader::MODULES" in corps,
    "exception C++ : base d'image trouvée même pendant un chargement de DLL (#1727)")

@@ -53,6 +53,92 @@ namespace System
         [MethodImpl(MethodImplOptions.InternalCall)]
         public extern void SetValue(object value, long index);
 
+        // Tableaux à plusieurs dimensions (#2848) : le moteur range les
+        // éléments ligne par ligne et sert ces trois appels internes.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Array CreerTableau(Type elementType, int[] lengths, int[] lowerBounds);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern object LireElement(int[] indices);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern void EcrireElement(object value, int[] indices);
+
+        public static Array CreateInstance(Type elementType, int length1, int length2)
+        {
+            return CreerTableau(elementType, new int[] { length1, length2 }, null);
+        }
+
+        public static Array CreateInstance(Type elementType, int length1, int length2, int length3)
+        {
+            return CreerTableau(elementType, new int[] { length1, length2, length3 }, null);
+        }
+
+        public static Array CreateInstance(Type elementType, params int[] lengths)
+        {
+            if (lengths == null) throw new ArgumentNullException("lengths");
+            return CreerTableau(elementType, lengths, null);
+        }
+
+        public static Array CreateInstance(Type elementType, params long[] lengths)
+        {
+            return CreerTableau(elementType, VersEntiers(lengths, "lengths"), null);
+        }
+
+        public static Array CreateInstance(Type elementType, int[] lengths, int[] lowerBounds)
+        {
+            if (lengths == null) throw new ArgumentNullException("lengths");
+            if (lowerBounds == null) throw new ArgumentNullException("lowerBounds");
+            return CreerTableau(elementType, lengths, lowerBounds);
+        }
+
+        public object GetValue(int index1, int index2) { return LireElement(new int[] { index1, index2 }); }
+
+        public object GetValue(int index1, int index2, int index3) { return LireElement(new int[] { index1, index2, index3 }); }
+
+        public object GetValue(params int[] indices)
+        {
+            if (indices == null) throw new ArgumentNullException("indices");
+            return LireElement(indices);
+        }
+
+        public object GetValue(long index1, long index2) { return LireElement(VersEntiers(new long[] { index1, index2 }, "index")); }
+
+        public object GetValue(long index1, long index2, long index3) { return LireElement(VersEntiers(new long[] { index1, index2, index3 }, "index")); }
+
+        public object GetValue(params long[] indices) { return LireElement(VersEntiers(indices, "indices")); }
+
+        public void SetValue(object value, int index1, int index2) { EcrireElement(value, new int[] { index1, index2 }); }
+
+        public void SetValue(object value, int index1, int index2, int index3) { EcrireElement(value, new int[] { index1, index2, index3 }); }
+
+        public void SetValue(object value, params int[] indices)
+        {
+            if (indices == null) throw new ArgumentNullException("indices");
+            EcrireElement(value, indices);
+        }
+
+        public void SetValue(object value, long index1, long index2) { EcrireElement(value, VersEntiers(new long[] { index1, index2 }, "index")); }
+
+        public void SetValue(object value, long index1, long index2, long index3) { EcrireElement(value, VersEntiers(new long[] { index1, index2, index3 }, "index")); }
+
+        public void SetValue(object value, params long[] indices) { EcrireElement(value, VersEntiers(indices, "indices")); }
+
+        // Indices et longueurs 64 bits : hors de l'intervalle d'un int,
+        // ArgumentOutOfRangeException (documentation « Array.GetValue »).
+        private static int[] VersEntiers(long[] valeurs, string nom)
+        {
+            if (valeurs == null) throw new ArgumentNullException(nom);
+            int[] r = new int[valeurs.Length];
+            for (int i = 0; i < valeurs.Length; i++)
+            {
+                if (valeurs[i] < int.MinValue || valeurs[i] > int.MaxValue)
+                    throw new ArgumentOutOfRangeException(nom);
+                r[i] = (int)valeurs[i];
+            }
+            return r;
+        }
+
         [MethodImpl(MethodImplOptions.InternalCall)]
         public extern object Clone();
 

@@ -48,8 +48,24 @@ pub fn sha1(parts: &[&[u8]]) -> [u8; 20] {
     let mut msg: Vec<u8> = parts.concat();
     let len = msg.len() as u64;
     md_pad(len, &mut msg);
-    let mut h: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+    let mut h = SHA1_IV;
     for block in msg.as_chunks::<64>().0 {
+        sha1_compress(&mut h, block);
+    }
+    let mut out = [0u8; 20];
+    for (i, v) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    out
+}
+
+/// État initial de SHA-1 (FIPS 180-4, 5.3.1).
+pub const SHA1_IV: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+
+/// Un bloc de 64 octets de SHA-1 (FIPS 180-4, 6.1.2), pour le calcul au fil
+/// de l'eau (BCryptHashData, CryptHashData).
+pub fn sha1_compress(h: &mut [u32; 5], block: &[u8; 64]) {
+    {
         let mut w = [0u32; 80];
         for i in 0..16 {
             w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
@@ -57,7 +73,7 @@ pub fn sha1(parts: &[&[u8]]) -> [u8; 20] {
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
         }
-        let [mut a, mut b, mut c, mut d, mut e] = h;
+        let [mut a, mut b, mut c, mut d, mut e] = *h;
         for (i, &wi) in w.iter().enumerate() {
             let (f, k) = match i {
                 0..=19 => ((b & c) | (!b & d), 0x5A827999),
@@ -81,11 +97,6 @@ pub fn sha1(parts: &[&[u8]]) -> [u8; 20] {
             *x = x.wrapping_add(y);
         }
     }
-    let mut out = [0u8; 20];
-    for (i, v) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
-    }
-    out
 }
 
 const SHA256_K: [u32; 64] = [
@@ -103,11 +114,25 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut msg: Vec<u8> = parts.concat();
     let len = msg.len() as u64;
     md_pad(len, &mut msg);
-    let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
+    let mut h = SHA256_IV;
     for block in msg.as_chunks::<64>().0 {
+        sha256_compress(&mut h, block);
+    }
+    let mut out = [0u8; 32];
+    for (i, v) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
+    }
+    out
+}
+
+/// État initial de SHA-256 (FIPS 180-4, 5.3.3).
+pub const SHA256_IV: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+/// Un bloc de 64 octets de SHA-256 (FIPS 180-4, 6.2.2).
+pub fn sha256_compress(h: &mut [u32; 8], block: &[u8; 64]) {
+    {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
@@ -120,7 +145,7 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
-        let mut v = h;
+        let mut v = *h;
         for i in 0..64 {
             let [a, b, c, d, e, f, g, hh] = v;
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
@@ -139,11 +164,6 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
             *x = x.wrapping_add(y);
         }
     }
-    let mut out = [0u8; 32];
-    for (i, v) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------

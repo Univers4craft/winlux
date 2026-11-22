@@ -119,7 +119,7 @@ namespace System
 
     internal sealed class RuntimeType : Type { }
 
-    public sealed class Version
+    public sealed class Version : ICloneable, IComparable, IComparable<Version>, IEquatable<Version>
     {
         private readonly int _major;
         private readonly int _minor;
@@ -150,6 +150,107 @@ namespace System
             if (revision < 0)
                 throw new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
             _revision = revision;
+        }
+
+        // Learn « Version(String) » : comme Parse.
+        public Version(string version)
+        {
+            Version v = Parse(version);
+            _major = v._major;
+            _minor = v._minor;
+            _build = v._build;
+            _revision = v._revision;
+        }
+
+        // Learn « Version.Parse » : 2 à 4 composants séparés par des points,
+        // chacun un Int32 (espaces et signe admis, comme Int32.Parse en
+        // culture invariante) et positif.
+        public static Version Parse(string input)
+        {
+            if (input == null) throw new ArgumentNullException("input");
+            Version v;
+            Exception e = Lire(input, out v);
+            if (e != null) throw e;
+            return v;
+        }
+
+        public static bool TryParse(string input, out Version result)
+        {
+            if (input == null) { result = null; return false; }
+            return Lire(input, out result) == null;
+        }
+
+        private static Exception Lire(string texte, out Version v)
+        {
+            v = null;
+            string[] parts = texte.Split('.');
+            if (parts.Length < 2 || parts.Length > 4) return new ArgumentException("Version string portion was too short or too long.", "input");
+            int[] n = new int[4];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                Exception e = Composant(parts[i], out n[i]);
+                if (e != null) return e;
+                if (n[i] < 0) return new ArgumentOutOfRangeException("version", "Version's parameters must be greater than or equal to zero.");
+            }
+            switch (parts.Length)
+            {
+                case 2: v = new Version(n[0], n[1]); break;
+                case 3: v = new Version(n[0], n[1], n[2]); break;
+                default: v = new Version(n[0], n[1], n[2], n[3]); break;
+            }
+            return null;
+        }
+
+        private static Exception Composant(string s, out int valeur)
+        {
+            valeur = 0;
+            s = s.Trim();
+            int i = 0;
+            bool negatif = false;
+            if (s.Length > 0 && (s[0] == '+' || s[0] == '-')) { negatif = s[0] == '-'; i = 1; }
+            if (i >= s.Length) return new FormatException("Input string was not in a correct format.");
+            long total = 0;
+            for (; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c < '0' || c > '9') return new FormatException("Input string was not in a correct format.");
+                total = total * 10 + (c - '0');
+                if (total > 2147483648L) return new OverflowException("Value was either too large or too small for an Int32.");
+            }
+            if (negatif) total = -total;
+            if (total > int.MaxValue) return new OverflowException("Value was either too large or too small for an Int32.");
+            valeur = (int)total;
+            return null;
+        }
+
+        public object Clone()
+        {
+            if (_build < 0) return new Version(_major, _minor);
+            if (_revision < 0) return new Version(_major, _minor, _build);
+            return new Version(_major, _minor, _build, _revision);
+        }
+
+        public int CompareTo(object version)
+        {
+            if (version == null) return 1;
+            Version v = version as Version;
+            if ((object)v == null) throw new ArgumentException("Object must be of type Version.");
+            return CompareTo(v);
+        }
+
+        // Learn « Version.ToString(Int32) » : les fieldCount premiers
+        // composants, ArgumentException au-delà de ceux définis.
+        public string ToString(int fieldCount)
+        {
+            int definis = _build < 0 ? 2 : _revision < 0 ? 3 : 4;
+            if (fieldCount < 0 || fieldCount > definis)
+                throw new ArgumentException("Argument must be between 0 and " + definis + ".", "fieldCount");
+            if (fieldCount == 0) return string.Empty;
+            string s = _major.ToString();
+            if (fieldCount >= 2) s = string.Concat(s, ".", _minor);
+            if (fieldCount >= 3) s = string.Concat(s, ".", _build);
+            if (fieldCount == 4) s = string.Concat(s, ".", _revision);
+            return s;
         }
 
         public int Major { get { return _major; } }
@@ -356,6 +457,37 @@ namespace System.Reflection
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private extern int GetVersionPart(int index);
+
+        // Ressources de manifeste (#2824, Learn « GetManifestResourceStream ») :
+        // le moteur lit la table ManifestResource et le répertoire Resources.
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern byte[] LireRessource(string name);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private extern string[] NomsRessources();
+
+        public virtual System.IO.Stream GetManifestResourceStream(string name)
+        {
+            if (name == null) throw new ArgumentNullException("name");
+            if (name.Length == 0) throw new ArgumentException("String cannot have zero length.", "name");
+            byte[] octets = LireRessource(name);
+            return octets == null ? null : new System.IO.MemoryStream(octets, false);
+        }
+
+        // Learn : le nom est préfixé par l'espace de noms du type, s'il en a un.
+        public virtual System.IO.Stream GetManifestResourceStream(Type type, string name)
+        {
+            if ((object)type == null && name == null) throw new ArgumentNullException("type");
+            string ns = (object)type == null ? null : type.Namespace;
+            if (string.IsNullOrEmpty(ns)) return GetManifestResourceStream(name);
+            return GetManifestResourceStream(name == null ? ns : ns + "." + name);
+        }
+
+        public virtual string[] GetManifestResourceNames()
+        {
+            string[] n = NomsRessources();
+            return n ?? new string[0];
+        }
 
         public virtual AssemblyName GetName()
         {

@@ -43,6 +43,9 @@ mod v11;
 #[path = "d2d1_brush.rs"]
 mod brushes;
 
+#[path = "d2d1_svg.rs"]
+mod svgdoc;
+
 /// Table de 120 relais « this = [this + 8], saut vers ([this + 16])[i] »
 /// pour les vues d'interface (ID2D1DeviceContext d'une ancienne cible,
 /// IDWriteTextFormat3 d'une mise en page).
@@ -182,6 +185,7 @@ struct ColorF {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 struct RoundedRect {
     rect: RectF,
     rx: f32,
@@ -189,6 +193,7 @@ struct RoundedRect {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Ellipse {
     x: f32,
     y: f32,
@@ -293,9 +298,27 @@ unsafe fn new_geometry(
     path: Path,
     out: *mut *mut c_void,
 ) -> i32 {
+    new_shape_geometry(f, kind, Shape::None, path, out)
+}
+
+/// Géométrie d'un genre donné, avec la table de son interface : une forme
+/// simple n'a pas Open ni Stream d'ID2D1PathGeometry (#2724).
+unsafe fn new_shape_geometry(
+    f: *mut FactoryObj,
+    kind: GeomKind,
+    shape: Shape,
+    path: Path,
+    out: *mut *mut c_void,
+) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
+    let vt = match kind {
+        GeomKind::Rect => RECT_VT.ptr(),
+        GeomKind::RoundedRect => ROUNDED_RECT_VT.ptr(),
+        GeomKind::Ellipse => ELLIPSE_VT.ptr(),
+        _ => GEOMETRY_VT.ptr(),
+    };
     let g = Geometry {
         kind,
         path: Mutex::new(path),
@@ -303,8 +326,9 @@ unsafe fn new_geometry(
         open: Mutex::new(false),
         sources: Vec::new(),
         transform: Matrix::IDENTITY,
+        shape,
     };
-    put(out, new_res(f, GEOMETRY_VT.ptr(), g))
+    put(out, new_res(f, vt, g))
 }
 
 /// CreateGeometryGroup(fillMode, geometries, count, out) : les figures des
@@ -348,6 +372,7 @@ unsafe extern "win64" fn create_geometry_group(
         open: Mutex::new(false),
         sources,
         transform: Matrix::IDENTITY,
+        shape: Shape::None,
     };
     put(out, new_res(this, GROUP_VT.ptr(), g))
 }
@@ -383,6 +408,7 @@ unsafe extern "win64" fn create_transformed_geometry(
         open: Mutex::new(false),
         sources: vec![src],
         transform: m,
+        shape: Shape::None,
     };
     put(out, new_res(this, TRANSFORMED_VT.ptr(), g))
 }
@@ -396,7 +422,8 @@ unsafe extern "win64" fn create_rect_geometry(
         return E_INVALIDARG;
     }
     let r = *r;
-    new_geometry(this, GeomKind::Rect, Path::rect(r.l, r.t, r.r, r.b), out)
+    let p = Path::rect(r.l, r.t, r.r, r.b);
+    new_shape_geometry(this, GeomKind::Rect, Shape::Rect(r), p, out)
 }
 
 unsafe extern "win64" fn create_rounded_rect_geometry(
@@ -407,9 +434,9 @@ unsafe extern "win64" fn create_rounded_rect_geometry(
     if r.is_null() {
         return E_INVALIDARG;
     }
-    let r = &*r;
+    let r = *r;
     let p = Path::rounded_rect(r.rect.l, r.rect.t, r.rect.r, r.rect.b, r.rx, r.ry, 4.0);
-    new_geometry(this, GeomKind::RoundedRect, p, out)
+    new_shape_geometry(this, GeomKind::RoundedRect, Shape::RoundedRect(r), p, out)
 }
 
 unsafe extern "win64" fn create_ellipse_geometry(
@@ -420,13 +447,9 @@ unsafe extern "win64" fn create_ellipse_geometry(
     if e.is_null() {
         return E_INVALIDARG;
     }
-    let e = &*e;
-    new_geometry(
-        this,
-        GeomKind::Ellipse,
-        Path::ellipse(e.x, e.y, e.rx, e.ry, 4.0),
-        out,
-    )
+    let e = *e;
+    let p = Path::ellipse(e.x, e.y, e.rx, e.ry, 4.0);
+    new_shape_geometry(this, GeomKind::Ellipse, Shape::Ellipse(e), p, out)
 }
 
 unsafe extern "win64" fn create_path_geometry(this: *mut FactoryObj, out: *mut *mut c_void) -> i32 {
@@ -732,6 +755,18 @@ struct Geometry {
     sources: Vec<*mut c_void>,
     /// Transformation d'une géométrie transformée.
     transform: Matrix,
+    /// Forme de création d'un rectangle, rectangle arrondi ou ellipse,
+    /// rendue telle quelle par GetRect, GetRoundedRect et GetEllipse (#2724).
+    shape: Shape,
+}
+
+/// Paramètres de création d'une forme simple.
+#[derive(Clone, Copy)]
+enum Shape {
+    None,
+    Rect(RectF),
+    RoundedRect(RoundedRect),
+    Ellipse(Ellipse),
 }
 
 impl Drop for Geometry {
@@ -1107,7 +1142,20 @@ unsafe fn is_geometry(p: *mut c_void) -> bool {
         return false;
     }
     let vt = *(p as *const *const ());
-    vt == GEOMETRY_VT.ptr() || vt == GROUP_VT.ptr() || vt == TRANSFORMED_VT.ptr()
+    is_geometry_vt(vt)
+}
+
+/// Une des tables des géométries de Winlux.
+fn is_geometry_vt(vt: *const ()) -> bool {
+    [
+        GEOMETRY_VT.ptr(),
+        RECT_VT.ptr(),
+        ROUNDED_RECT_VT.ptr(),
+        ELLIPSE_VT.ptr(),
+        GROUP_VT.ptr(),
+        TRANSFORMED_VT.ptr(),
+    ]
+    .contains(&vt)
 }
 
 /// CombineWithGeometry(entrée, mode, transform de l'entrée, tolérance,
@@ -1257,6 +1305,27 @@ geometry_vtable!(
         group_sources as *const ()
     ]
 );
+/// ID2D1RectangleGeometry::GetRect, ID2D1RoundedRectangleGeometry::
+/// GetRoundedRect et ID2D1EllipseGeometry::GetEllipse (Learn, d2d1.h) :
+/// la forme donnée à la création (#2724).
+unsafe extern "win64" fn rect_get(this: *mut GeometryObj, out: *mut RectF) {
+    if let (false, Shape::Rect(r)) = (out.is_null(), Com::get(this).data.shape) {
+        *out = r;
+    }
+}
+unsafe extern "win64" fn rounded_rect_get(this: *mut GeometryObj, out: *mut RoundedRect) {
+    if let (false, Shape::RoundedRect(r)) = (out.is_null(), Com::get(this).data.shape) {
+        *out = r;
+    }
+}
+unsafe extern "win64" fn ellipse_get(this: *mut GeometryObj, out: *mut Ellipse) {
+    if let (false, Shape::Ellipse(e)) = (out.is_null(), Com::get(this).data.shape) {
+        *out = e;
+    }
+}
+geometry_vtable!(RECT_VT, 18, [rect_get as *const ()]);
+geometry_vtable!(ROUNDED_RECT_VT, 18, [rounded_rect_get as *const ()]);
+geometry_vtable!(ELLIPSE_VT, 18, [ellipse_get as *const ()]);
 geometry_vtable!(
     TRANSFORMED_VT,
     19,
@@ -1266,8 +1335,8 @@ geometry_vtable!(
     ]
 );
 
-/// Table commune : ID2D1Geometry (17 entrées) puis, pour un chemin,
-/// Open, Stream, GetSegmentCount et GetFigureCount.
+/// Chemin : ID2D1Geometry (17 entrées) puis Open, Stream, GetSegmentCount
+/// et GetFigureCount. Les formes simples ont leur propre table (#2724).
 static GEOMETRY_VT: VTable<22> = VTable([
     geometry_qi as *const (),
     add_ref::<Res<Geometry>> as *const (),
@@ -1286,7 +1355,7 @@ static GEOMETRY_VT: VTable<22> = VTable([
     geometry_length as *const (),
     geometry_point_at_length as *const (),
     geometry_widen as *const (),
-    path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
+    path_open as *const (),
     path_stream as *const (),
     path_figure_count as *const (), // GetSegmentCount (approché)
     path_figure_count as *const (),
@@ -2758,7 +2827,7 @@ unsafe fn geometry_of(g: *mut c_void) -> Option<(Path, FillRule)> {
         return None;
     }
     let vt = *(g as *const *const ());
-    if vt != GEOMETRY_VT.ptr() && vt != GROUP_VT.ptr() && vt != TRANSFORMED_VT.ptr() {
+    if !is_geometry_vt(vt) {
         return None;
     }
     let geo = &Com::get(g as *mut GeometryObj).data;
@@ -4774,6 +4843,80 @@ mod tests {
             for o in [grp, a, b] {
                 release_obj(o);
             }
+            Com::release(f);
+        }
+    }
+
+    /// #2724 : GetRect, GetRoundedRect et GetEllipse (emplacement 17, après
+    /// les 17 entrées d'ID2D1Geometry) rendent la forme de création, sans
+    /// ouvrir ni vider la géométrie comme le faisait Open du chemin.
+    #[test]
+    fn formes_simples_rendent_leur_forme() {
+        unsafe {
+            let f = Com::create(FACTORY_VT.ptr(), Factory);
+            type Create<T> =
+                unsafe extern "win64" fn(*mut c_void, *const T, *mut *mut c_void) -> i32;
+            type Get<T> = unsafe extern "win64" fn(*mut c_void, *mut T);
+            type Bounds = unsafe extern "win64" fn(*mut c_void, *const Matrix, *mut RectF) -> i32;
+            let bounds = |g: *mut c_void| {
+                let mut r = RectF::default();
+                assert_eq!(method::<Bounds>(g, 4)(g, std::ptr::null(), &mut r), S_OK);
+                r
+            };
+            let mut g = std::ptr::null_mut();
+            let r = RectF {
+                l: 1.0,
+                t: 2.0,
+                r: 30.0,
+                b: 40.0,
+            };
+            assert_eq!(
+                method::<Create<RectF>>(f.cast(), 5)(f.cast(), &r, &mut g),
+                S_OK
+            );
+            let mut lu = RectF::default();
+            method::<Get<RectF>>(g, 17)(g, &mut lu);
+            assert_eq!((lu.l, lu.t, lu.r, lu.b), (1.0, 2.0, 30.0, 40.0));
+            // La géométrie n'est ni vidée ni ouverte.
+            let b = bounds(g);
+            assert_eq!((b.l, b.t, b.r, b.b), (1.0, 2.0, 30.0, 40.0));
+            assert!(!*crate::dlls::lock(
+                &Com::get(g as *mut GeometryObj).data.open
+            ));
+            assert!(is_geometry(g));
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 2)(g);
+
+            let rr = RoundedRect {
+                rect: r,
+                rx: 3.0,
+                ry: 4.0,
+            };
+            assert_eq!(
+                method::<Create<RoundedRect>>(f.cast(), 6)(f.cast(), &rr, &mut g),
+                S_OK
+            );
+            let mut lu = RoundedRect::default();
+            method::<Get<RoundedRect>>(g, 17)(g, &mut lu);
+            assert_eq!((lu.rect.l, lu.rect.b, lu.rx, lu.ry), (1.0, 40.0, 3.0, 4.0));
+            assert!(is_geometry(g));
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 2)(g);
+
+            let e = Ellipse {
+                x: 10.0,
+                y: 20.0,
+                rx: 5.0,
+                ry: 6.0,
+            };
+            assert_eq!(
+                method::<Create<Ellipse>>(f.cast(), 7)(f.cast(), &e, &mut g),
+                S_OK
+            );
+            let mut lu = Ellipse::default();
+            method::<Get<Ellipse>>(g, 17)(g, &mut lu);
+            assert_eq!((lu.x, lu.y, lu.rx, lu.ry), (10.0, 20.0, 5.0, 6.0));
+            let b = bounds(g);
+            assert!((b.l - 5.0).abs() < 0.01 && (b.b - 26.0).abs() < 0.01);
+            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(g, 2)(g);
             Com::release(f);
         }
     }

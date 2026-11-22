@@ -170,6 +170,24 @@ pub(crate) fn mark_overlapped_handle(h: usize) {
 pub(crate) fn is_overlapped_handle(h: usize) -> bool {
     lock(overlapped_handles()).contains(&h)
 }
+/// Tubes en mode non bloquant (PIPE_NOWAIT, par CreateNamedPipe ou
+/// SetNamedPipeHandleState) : ReadFile rend la main tout de suite, avec
+/// ERROR_NO_DATA quand le tube est vide (#2786).
+static NOWAIT_PIPES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+fn nowait_pipes() -> &'static Mutex<HashSet<usize>> {
+    NOWAIT_PIPES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+const PIPE_NOWAIT: u32 = 1;
+fn set_pipe_nowait(h: usize, nowait: bool) {
+    if nowait {
+        lock(nowait_pipes()).insert(h);
+    } else {
+        lock(nowait_pipes()).remove(&h);
+    }
+}
+fn is_nowait_pipe(h: usize) -> bool {
+    lock(nowait_pipes()).contains(&h)
+}
 struct IoResult {
     done: bool,
     /// Internal, InternalHigh et hEvent sont à jour : GetOverlappedResult
@@ -941,6 +959,9 @@ pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
         .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
     if is_overlapped_handle(handle) {
         lock(overlapped_handles()).insert(new_h);
+    }
+    if is_nowait_pipe(handle) {
+        set_pipe_nowait(new_h, true);
     }
     Some(new_h)
 }
@@ -2301,6 +2322,23 @@ pub unsafe extern "win64" fn read_file(
                 return 0;
             }
             return 1;
+        }
+    }
+    // PIPE_NOWAIT : « ReadFile, WriteFile, and ConnectNamedPipe always
+    // return immediately » (CreateNamedPipe, Learn) ; un tube vide rend
+    // ERROR_NO_DATA. Bloquer ici figeait le fil de lecture de Creative
+    // Cloud, qui attend ainsi la réponse de son enfant élevé (#2786).
+    if is_nowait_pipe(h) {
+        if let Some(fd) = fd_of_handle(h) {
+            let mut p = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if libc::poll(&mut p, 1, 0) == 0 {
+                crate::process::set_last_error(232);
+                return 0;
+            }
         }
     }
     if h == (-10isize) as usize {
@@ -3765,6 +3803,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         return 0;
     }
     note_renders_itself(n);
+    if super::atlthunk::hidden_for_x86(n) {
+        crate::process::set_last_error(126);
+        return 0;
+    }
     let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
@@ -7060,7 +7102,7 @@ unsafe fn create_process_common(
         d.launched(c.id());
     }
     if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
-        crate::sandbox_fallback::note_child(c.id(), &line);
+        crate::sandbox_fallback::note_child(c.id(), &line, same_base.is_some());
         // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
         // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
         // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP
@@ -7557,6 +7599,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
+        set_pipe_nowait(handle, false);
         forget_dir_watcher(handle);
         if let Some((path, dev, ino)) = doomed {
             // Le nom doit toujours désigner le même fichier : jamais un
@@ -9170,6 +9213,22 @@ fn exit_code_text(code: u32) -> [u8; 11] {
     text
 }
 
+/// Statut Linux d'un code de sortie Windows. Le noyau ne garde que l'octet
+/// bas du code passé à `_exit` ; sous Windows, GetExitCodeProcess rend le
+/// DWORD entier (Learn, ExitProcess, GetExitCodeProcess). Un code non nul
+/// dont l'octet bas vaut 0 (0x80131500, 0xC0000100, 0x100…) serait lu 0, un
+/// succès : il sort en 1, l'échec générique (EXIT_FAILURE). Les autres
+/// codes gardent leur octet bas (1602 → 66, 3010 → 194). Le code complet
+/// reste dans WINLUX_EXIT_CODE_FILE (#2267). Sûr dans un gestionnaire de
+/// signal (#2758).
+pub const fn linux_exit_status(code: u32) -> i32 {
+    if code != 0 && code & 0xFF == 0 {
+        1
+    } else {
+        code as i32
+    }
+}
+
 /// Écrit le code complet ; sûr dans un gestionnaire de signal (open/write).
 pub fn record_exit_code(code: u32) {
     let Some(path) = EXIT_CODE_FILE.get() else {
@@ -9254,7 +9313,7 @@ pub(crate) fn child_exit_code(pid: u32, status: std::process::ExitStatus) -> u32
 /// puis `exit` (atexit et destructeurs, comme `std::process::exit`).
 pub fn exit_with(code: i32) -> ! {
     record_exit_code(code as u32);
-    std::process::exit(code)
+    std::process::exit(linux_exit_status(code as u32))
 }
 
 #[cfg(test)]
@@ -9311,6 +9370,51 @@ mod tests_code_enfant {
             42
         );
     }
+
+    /// #2758 : un code non nul dont l'octet bas vaut 0 ne sort plus en 0 ;
+    /// les autres gardent leur octet bas.
+    #[test]
+    fn statut_linux_jamais_nul_pour_un_echec() {
+        assert_eq!(linux_exit_status(0), 0);
+        for code in [0x8013_1500, 0xC000_0100, 0x100, 0x1_0000] {
+            assert_eq!(linux_exit_status(code), 1, "{code:#x}");
+        }
+        assert_eq!(linux_exit_status(1602) & 0xFF, 66);
+        assert_eq!(linux_exit_status(3010) & 0xFF, 194);
+        assert_eq!(linux_exit_status(0xC000_0005) & 0xFF, 5);
+        assert_eq!(linux_exit_status(0xFFFF_FFFF) & 0xFF, 255);
+    }
+
+    const ENFANT_SORTIE: &str = "WINLUX_TEST_ENFANT_SORTIE_2758";
+
+    /// Processus enfant de `exitprocess_0x80131500_vu_comme_un_echec`.
+    #[test]
+    #[ignore = "lancé comme processus enfant"]
+    fn enfant_exitprocess_0x80131500() {
+        if std::env::var_os(ENFANT_SORTIE).is_some() {
+            flush_and_exit(0x8013_1500u32 as i32);
+        }
+    }
+
+    /// #2758 : ExitProcess(0x80131500) (COR_E_EXCEPTION), vu d'un shell
+    /// Linux : statut 1, plus 0. Relancé dans un processus enfant, car
+    /// flush_and_exit termine le processus.
+    #[test]
+    fn exitprocess_0x80131500_vu_comme_un_echec() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dlls::kernel32::tests_code_enfant::enfant_exitprocess_0x80131500",
+                "--test-threads=1",
+                "--include-ignored",
+            ])
+            .env(ENFANT_SORTIE, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(1));
+    }
 }
 
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
@@ -9327,7 +9431,7 @@ pub fn terminate_self(code: u32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
     // SAFETY: _exit termine le processus sans revenir.
-    unsafe { libc::_exit(code as i32) }
+    unsafe { libc::_exit(linux_exit_status(code)) }
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
@@ -9351,7 +9455,7 @@ pub fn flush_and_exit(code: i32) -> ! {
     // SAFETY : sorties vidées ci-dessus, _exit termine tout le processus.
     unsafe {
         libc::fflush(std::ptr::null_mut());
-        libc::_exit(code)
+        libc::_exit(linux_exit_status(code as u32))
     }
 }
 
@@ -10876,14 +10980,23 @@ pub unsafe extern "win64" fn create_named_pipe_a(
     max: u32,
     _out_size: u32,
     _in_size: u32,
-    _timeout: u32,
+    timeout: u32,
     _sa: usize,
 ) -> usize {
     if name.is_null() {
         crate::process::set_last_error(123);
         return usize::MAX;
     }
-    let h = crate::dlls::named_pipes::create(&crate::dlls::cstr(name), open_mode, pipe_mode, max);
+    let h = crate::dlls::named_pipes::create(
+        &crate::dlls::cstr(name),
+        open_mode,
+        pipe_mode,
+        max,
+        timeout,
+    );
+    if h != usize::MAX && pipe_mode & PIPE_NOWAIT != 0 {
+        set_pipe_nowait(h, true);
+    }
     crate::dlls::inherit::from_security_attributes(h, _sa);
     h
 }
@@ -11831,6 +11944,9 @@ pub unsafe extern "win64" fn set_named_pipe_handle_state(
     _max_collect: *const u32,
     _timeout: *const u32,
 ) -> i32 {
+    if !_mode.is_null() {
+        set_pipe_nowait(_h, *_mode & PIPE_NOWAIT != 0);
+    }
     1
 }
 

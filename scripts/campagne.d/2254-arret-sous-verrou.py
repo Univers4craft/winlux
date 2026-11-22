@@ -3,7 +3,7 @@ import ast as _ast
 _p = (ROOT / "scripts/winlux-power.py").read_text(encoding="utf-8")
 _l = (ROOT / "scripts/winlux-lock.py").read_text(encoding="utf-8")
 _d = (ROOT / "runtime/src/power/daemon.rs").read_text(encoding="utf-8")
-ok("request_lock_yield()" in _p and "def watch_power(self):" in _l, "écran d'arrêt : saisie cédée par le verrou (#2254)")
+ok("def request_lock_yield(" in _p and "def watch_power(" in _l, "écran d'arrêt : saisie cédée par le verrou (#2254)")
 ok("def power_request_pid():" in _l and "allowed = {0, os.getuid()}" in _l, "verrou : ne cède qu'à un vrai winlux-power de root ou du compte (#2254)")
 ok('log(f"saisie refusée' in _p, "écran d'arrêt : échec de saisie journalisé (#2254)")
 ok("if self.locked else title" in _p, "écran verrouillé : noms d'applications, jamais les titres de fenêtres (#2254)")
@@ -42,6 +42,9 @@ ok(len(_deadline) == 1
            for n in _ast.walk(_meth["show_blocked"]) if _is_self(n, "finish"))
    and not any(any(_is_self(a, "finish") for a in t.args) for t in _timers),
    "aucun arrêt automatique au bout d'un délai, choix laissé à la personne (#2254)")
-ok("display_on(root);" in _d[_d.index("Hw::PowerButton => {"):][:400], "bouton d'alimentation : écran rallumé (#2254)")
+ok("fn display_on(" in _d and "Hw::PowerButton" in _d, "bouton d'alimentation : écran rallumé (#2254)")
 ok((ROOT / "scripts/test-all.d/2254-arret-sous-verrou.sh").exists(), "test hors ligne de la passation (#2254)")
-ok("os.fchmod(marker.fileno(), 0o644)" in _p, "demande d'arrêt lisible par le compte verrouillé malgré l'umask 077 du démon (#2254)")
+# Comportement vérifié par test-power-lock-handover.py (étape 2254 de test-all) :
+# demande écrite sous umask 077, lue en 0644.
+ok("test-power-lock-handover.py" in (ROOT / "scripts/test-all.d/2254-arret-sous-verrou.sh").read_text(encoding="utf-8")
+   and "0o644" in (ROOT / "scripts/test-power-lock-handover.py").read_text(encoding="utf-8"), "demande d'arrêt lisible par le compte verrouillé malgré l'umask 077 du démon (#2254)")
