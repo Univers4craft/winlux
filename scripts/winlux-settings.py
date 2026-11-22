@@ -595,6 +595,26 @@ def localize_update_text(text):
         lines.append(line)
     return "\n".join(lines)
 
+def demand_status():
+    """Demande un relevé d'état (#3126) : winlux-control ne tourne plus toutes
+    les 3 s pour rien, seulement quand une fenêtre qui lit control.txt le
+    demande. Fichier du compte (control-<uid>, que lui seul peut écrire), jamais
+    suivi s'il est un lien ; une demande perdue ne coûte qu'un relevé en retard."""
+    uid = os.getuid()
+    path = os.environ.get("WINLUX_CONTROL_DEMAND") or (
+        f"/run/winlux/control-{uid}/demande" if uid else "/run/winlux-control-demande")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    except OSError:
+        return
+    try:
+        os.utime(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def read(name):
     try: return Path(name).read_text(errors="replace")
     except OSError: return ""
@@ -938,6 +958,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         page_frame.set_name("content-frame")
         page_frame.pack_start(self.body, True, True, 0)
         scroll.add(page_frame)
+        demand_status()
         self.open_page(self.current)
         GLib.timeout_add(1000, self.poll)
         self.show_all()
@@ -1360,6 +1381,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if not wanted: self.screen_cookie = None
 
     def poll(self):
+        # Fenêtre ouverte : l'état affiché reste frais (≤ 3 s), comme avant.
+        demand_status()
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
         if self.page == 2: self.refresh_network_hero(status)

@@ -1263,10 +1263,18 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
     # Session du compte : son bureau publie lui-même l'état et suit les écrans.
     if test -z "$desktop_user"; then
+    # Relevé à l'ouverture, puis seulement à la demande d'une fenêtre qui
+    # le lit (Paramètres, bureau PE) : un bureau immobile ne lance plus
+    # rien toutes les 3 s (#3126). Fichiers dans /run (à root), jamais dans
+    # /run/winlux collant où un compte pourrait poser un lien.
     (
+        DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
+        : >/run/winlux-control-demande-servie 2>/dev/null || true
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
             /bin/busybox sleep 3
+            test /run/winlux-control-demande -nt /run/winlux-control-demande-servie || continue
+            : >/run/winlux-control-demande-servie 2>/dev/null || true
+            DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
         done
     ) &
     # Écrans : branchement à chaud, capot et taille de la fenêtre VM (QEMU

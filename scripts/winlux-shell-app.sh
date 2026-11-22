@@ -5,6 +5,12 @@ unset WINLUX_DESKTOP_DEMO
 # Demande du choix du navigateur propre au compte (#2243), lue par Paramètres PE.
 WINLUX_BROWSER_CHOOSER="Z:\\run\\winlux\\browser-chooser-$(id -u)"
 export WINLUX_BROWSER_CHOOSER
+# Demande de relevé d'état du compte (#3126) : le bureau et les Paramètres PE
+# la réécrivent tant qu'ils affichent l'état (en root : dans /run, pas dans
+# /run/winlux collant).
+if test "$(id -u)" = 0; then WINLUX_CONTROL_DEMAND_PE='Z:\run\winlux-control-demande'
+else WINLUX_CONTROL_DEMAND_PE="Z:\\run\\winlux\\control-$(id -u)\\demande"; fi
+export WINLUX_CONTROL_DEMAND_PE
 # Runtime : celui de WINLUX_RUNTIME quand il est posé (passes « par
 # chemin » avec un binaire frais), comme winlux-open ; sinon l'installé (#2987).
 runtime=${WINLUX_RUNTIME:-/usr/bin/winlux}
