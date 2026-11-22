@@ -580,7 +580,7 @@ static mut PLACE_READY: bool = false;
 
 fn place_path(i: usize) -> Path {
     unsafe {
-        if !PLACE_READY {
+        if !PLACE_READY || crate::gfx::proto_off(b'p') {
             for k in 0..PLACES.len() {
                 let mut p = EMPTY_PATH;
                 user_folder(&mut p, PLACES[k].fr, PLACES[k].en);
@@ -6777,6 +6777,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         let c = cells(&r);
                         let max = (content_height(pn, &r, &c) - (r.bottom - r.top)).max(0);
                         pn.scroll_target = pn.scroll_target.clamp(0, max);
+                        // Un cran part tout de suite, sans animation : avant,
+                        // la liste ne bougeait qu'au tic suivant (#3155).
+                        if !crate::gfx::proto_off(b'm') {
+                            pn.scroll = pn.scroll_target;
+                        }
                     }
                     update_hover(&geo, x, y);
                     return true;
@@ -7615,7 +7620,7 @@ unsafe fn watch_places() -> bool {
 /// (Avant, tout attendait le tic de 500 ms : un cran de molette
 /// défilait par sauts pendant 2,5 s, les vignettes arrivaient après 600 ms.)
 pub unsafe fn tick_ms() -> u32 {
-    if NTABS == 0 {
+    if NTABS == 0 || crate::gfx::proto_off(b't') {
         return 500;
     }
     for i in 0..NTABS {

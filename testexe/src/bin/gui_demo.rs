@@ -1163,7 +1163,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         InvalidateRect(hwnd, core::ptr::null(), 0);
                     }
                 }
-                if desktop || gfx::theme_animating() {
+                if desktop || gfx::theme_animating() || gfx::proto_off(b'w') {
                     Sleep(if desktop { 4 } else { 10 });
                 } else if wm::native_app().is_some() {
                     // Fenêtre seule (Explorateur…) : on dort jusqu'au prochain
