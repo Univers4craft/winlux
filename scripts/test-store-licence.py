@@ -129,7 +129,10 @@ with tempfile.TemporaryDirectory() as tmp:
     # présente lui-même le contrat ; la Boutique ne le demande pas une seconde fois.
     (home / "jeu.exe").write_bytes(b"MZ")
     code, calls, _ = store_run("install-file", str(home / "jeu.exe"))
-    ok(code == 0 and calls == [f"winlux {home}/jeu.exe"], f"fichier .exe avec interface : contrat laissé au runtime ({calls})")
+    # La lecture des programmes inscrits (winlux --setup --programs, #2999)
+    # ne lance rien : seuls comptent l'installateur et l'assistant.
+    launched = [c for c in calls if c != "winlux --setup --programs"]
+    ok(code == 0 and launched == [f"winlux {home}/jeu.exe"], f"fichier .exe avec interface : contrat laissé au runtime ({calls})")
     code, calls, progress = store_run("install-file", str(home / "jeu.exe"), RUNTIME_CODE=str(1602 % 256))
     ok(code != 0 and progress.get("message") == REFUSED["fr"],
        f"refus devant la page du runtime (66) dit comme un refus ({progress.get('message')!r})")
