@@ -1545,7 +1545,7 @@ fn big_len(k: A, count: u32) -> usize {
 
 /// Appelle la fonction win64 `target` avec les arguments x86 lus à `args`
 /// (et `this` 64 bits en tête s'il y en a un).
-unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u64 {
+pub(super) unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u64 {
     // Cases temporaires : capacité fixée, leurs adresses ne bougent pas.
     let mut temps: Vec<[u64; 10]> = Vec::with_capacity(kinds.len());
     let mut post: Vec<(usize, u32, A, Option<&'static Iface>, Guid)> = Vec::new();
