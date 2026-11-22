@@ -465,6 +465,7 @@ unsafe fn create_window_inner(
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            frame: [0; 4],
             painting: false,
         },
     );
@@ -604,11 +605,6 @@ unsafe fn create_window_inner(
     let initial = rect;
     let rect = gui::window_rect(hwnd).unwrap_or(rect);
     let shown = gui::is_window_visible(hwnd);
-    // WM_SIZE donne la zone client : la barre de menus en est retirée.
-    let (w, h) = (
-        rect.width(),
-        (rect.height() - gui::menu_bar_height(hwnd)).max(0),
-    );
     with_backend(|b| {
         if rect != initial {
             b.set_window_rect(hwnd, rect);
@@ -617,7 +613,14 @@ unsafe fn create_window_inner(
             b.show_window(hwnd, true);
         }
     });
+    if shown && !empty_top_level(hwnd) {
+        sync_frame(hwnd);
+    }
     let visible = shown;
+    // WM_SIZE donne la zone client : sans la barre de menus ni le cadre du
+    // gestionnaire (#2984).
+    let client = gui::window_client_rect(hwnd).unwrap_or(rect);
+    let (w, h) = (client.width(), client.height());
 
     // WM_SIZE puis, si visible, demande de peinture.
     gui::post_to_window(
@@ -1089,9 +1092,9 @@ unsafe fn caption_click(
     } else {
         return None;
     };
-    let origin = gui::screen_rect(hwnd)?;
-    let x = origin.left + (lparam as u32 as u16 as i16 as i32);
-    let y = origin.top + ((lparam as u32 >> 16) as u16 as i16 as i32);
+    let (ox, oy) = gui::content_origin(hwnd)?;
+    let x = ox + (lparam as u32 as u16 as i16 as i32);
+    let y = oy + ((lparam as u32 >> 16) as u16 as i16 as i32);
     let screen = pack_i16_pair(x, y);
     let hit = send_message_w(top, 0x0084, 0, screen);
     if window_diag() {
@@ -1302,6 +1305,9 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     // SW_MAXIMIZE (3) donne une taille à la fenêtre : elle est montrée.
     let map = cmd != gui::SW_HIDE && (cmd == 3 || !empty_top_level(hwnd));
     with_backend(|b| b.show_window(hwnd, map));
+    if map {
+        sync_frame(hwnd);
+    }
     if was != show {
         publish_shared(hwnd);
     }
@@ -1331,6 +1337,21 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         w::notify_win_event(event, hwnd);
     }
     was as i32
+}
+
+/// Cadre du gestionnaire appris au premier affichage d'une fenêtre de
+/// premier niveau (possédée ou non) : le rectangle demandé par le programme
+/// le comprend, et la zone client est l'intérieur, comme sous Windows
+/// (#2984).
+fn sync_frame(hwnd: usize) {
+    if gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0) {
+        return;
+    }
+    let mut frame = None;
+    with_backend(|b| frame = b.frame_extents(hwnd));
+    if let Some(frame) = frame.filter(|f| *f != gui::frame_of(hwnd)) {
+        gui::set_frame_keep_outer(hwnd, frame);
+    }
 }
 
 /// Fenêtre de premier niveau à barre de titre affichée : si son cadre
@@ -1366,15 +1387,9 @@ unsafe fn fit_to_work_area(hwnd: usize) {
     };
     let work = super::monitors::work_rect(&monitor.rect, &gui::work_area());
     let resizable = style & WS_THICKFRAME != 0;
-    // Loin des bords, même avec un cadre épais : le gestionnaire n'est pas
-    // interrogé.
-    if super::monitors::fit_in_work_area(&rect, &work, [64; 4], resizable) == rect {
-        return;
-    }
-    let mut frame = None;
-    with_backend(|b| frame = b.frame_extents(hwnd));
-    let fitted =
-        super::monitors::fit_in_work_area(&rect, &work, frame.unwrap_or([0; 4]), resizable);
+    // Le rectangle de la fenêtre comprend déjà le cadre du gestionnaire
+    // (#2984) : rien à ajouter autour.
+    let fitted = super::monitors::fit_in_work_area(&rect, &work, [0; 4], resizable);
     if fitted == rect {
         return;
     }
@@ -1758,6 +1773,9 @@ pub unsafe extern "win64" fn set_window_pos(
         visibility_changed = !gui::set_visible(hwnd, true);
         let map = !empty_top_level(hwnd);
         with_backend(|backend| backend.show_window(hwnd, map));
+        if map {
+            sync_frame(hwnd);
+        }
     } else if flags & SWP_HIDEWINDOW != 0 {
         visibility_changed = gui::set_visible(hwnd, false);
         with_backend(|backend| backend.show_window(hwnd, false));
@@ -1780,9 +1798,17 @@ pub unsafe extern "win64" fn set_window_pos(
     // puis hauteur) retombait à 160x160 quand ils étaient postés (#2044).
     // Une fenêtre qui ne passe pas WM_WINDOWPOSCHANGED à DefWindowProc les
     // reçoit postés, comme avant.
-    let size_msg =
-        resized.then(|| pack_i16_pair(width, (height - gui::menu_bar_height(hwnd)).max(0)));
-    let move_msg = moved.then(|| pack_i16_pair(left, top));
+    // WM_SIZE : la zone client, sans barre de menus ni cadre (#2984).
+    let size_msg = resized.then(|| {
+        let c = gui::window_client_rect(hwnd).unwrap_or_default();
+        pack_i16_pair(c.width(), c.height())
+    });
+    // WM_MOVE : origine de la zone client, sous le cadre du gestionnaire
+    // pour une fenêtre de premier niveau (Learn, « WM_MOVE »).
+    let move_msg = moved.then(|| {
+        let [l, _, t, _] = gui::frame_of(hwnd);
+        pack_i16_pair(left + l, top + t)
+    });
     let mut pending = None;
     if moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0 {
         let mut done = flags;
@@ -2812,18 +2838,32 @@ pub unsafe extern "win64" fn adjust_window_rect_ex(
     rect: *mut Rect,
     style: u32,
     menu: i32,
-    _ex_style: u32,
+    ex_style: u32,
 ) -> i32 {
     if rect.is_null() {
         return 0;
     }
-    // Une fenêtre de premier niveau n'a pas de cadre à elle : la barre de
-    // titre et les bords sont ceux du gestionnaire de fenêtres, hors du
-    // rectangle (GetWindowRect = zone client + barre de menus). Annoncer des
-    // marges faisait calculer à Qt (VLC) une zone client plus petite que la
-    // fenêtre, avec une bande noire à droite et en bas.
+    // Fenêtre de premier niveau : son cadre est celui que le gestionnaire
+    // de fenêtres pose, et GetClientRect en est l'intérieur (#2984). Le
+    // même cadre est annoncé ici, sinon un programme qui fixe sa zone
+    // client par ce calcul (WinForms ClientSize) la trouve plus petite,
+    // la recalcule et boucle (boîte de progression de Paint.NET, #3016).
+    // Learn, « AdjustWindowRectEx » : la taille du rectangle de fenêtre
+    // pour une zone client voulue.
     const WS_CHILD: u32 = 0x4000_0000;
     if style & WS_CHILD == 0 {
+        let [l, r, t, b] = match frame_kind(style, ex_style) {
+            Some(kind) => {
+                let mut e = None;
+                with_backend(|be| e = be.frame_for_kind(kind));
+                e.unwrap_or([0; 4])
+            }
+            None => [0; 4],
+        };
+        (*rect).left -= l;
+        (*rect).right += r;
+        (*rect).top -= t;
+        (*rect).bottom += b;
         if menu != 0 {
             (*rect).top -= crate::dlls::menus::BAR_HEIGHT;
         }
@@ -3314,9 +3354,9 @@ pub unsafe extern "win64" fn screen_to_client(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::screen_rect(hwnd) {
-        (*point).x -= r.left;
-        (*point).y -= r.top;
+    if let Some((ox, oy)) = gui::content_origin(hwnd) {
+        (*point).x -= ox;
+        (*point).y -= oy;
         1
     } else {
         0
@@ -3327,9 +3367,9 @@ pub unsafe extern "win64" fn client_to_screen(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::screen_rect(hwnd) {
-        (*point).x += r.left;
-        (*point).y += r.top;
+    if let Some((ox, oy)) = gui::content_origin(hwnd) {
+        (*point).x += ox;
+        (*point).y += oy;
         1
     } else {
         0
@@ -4080,12 +4120,12 @@ pub unsafe extern "win64" fn map_window_points(
     let from_offset = if from == 0 {
         (0i32, 0i32)
     } else {
-        gui::screen_rect(from).map_or((0, 0), |r| (r.left, r.top))
+        gui::content_origin(from).unwrap_or((0, 0))
     };
     let to_offset = if to == 0 {
         (0i32, 0i32)
     } else {
-        gui::screen_rect(to).map_or((0, 0), |r| (r.left, r.top))
+        gui::content_origin(to).unwrap_or((0, 0))
     };
     let dx = from_offset.0 - to_offset.0;
     let dy = from_offset.1 - to_offset.1;
@@ -5751,6 +5791,22 @@ fn captioned_tool_window(style: u32, ex_style: u32) -> bool {
     style & WS_CAPTION == WS_CAPTION && style & WS_CHILD == 0 && ex_style & WS_EX_TOOLWINDOW != 0
 }
 
+/// Genre de cadre que le gestionnaire pose sur une fenêtre de premier
+/// niveau de ce style, selon les mêmes règles que CreateWindowEx (menu
+/// surgissant, fenêtre en couches sans titre, WS_POPUP sans titre, palette).
+/// None : aucun cadre (#3016).
+fn frame_kind(style: u32, ex_style: u32) -> Option<u8> {
+    if floating_popup(style, ex_style) || layered_without_caption(style, ex_style) {
+        return None;
+    }
+    match popup_decorations(style) {
+        Some(0) => None,
+        Some(_) => Some(gui::FRAME_BORDER),
+        None if captioned_tool_window(style, ex_style) => Some(gui::FRAME_TOOL),
+        None => Some(gui::FRAME_NORMAL),
+    }
+}
+
 fn popup_decorations(style: u32) -> Option<u8> {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
@@ -6005,11 +6061,12 @@ mod tests {
 
     /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
     /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
-    /// Le cadre des fenêtres de premier niveau appartient au gestionnaire de
-    /// fenêtres : AdjustWindowRectEx n'ajoute que la barre de menus, sinon
-    /// Qt (VLC) dessine une zone client plus petite que la fenêtre.
+    /// Le cadre des fenêtres de premier niveau est celui du gestionnaire de
+    /// fenêtres : sans gestionnaire, AdjustWindowRectEx n'ajoute que la
+    /// barre de menus (sous openbox, palette_suite vérifie qu'il annonce le
+    /// cadre réel, #3016).
     #[test]
-    fn adjust_window_rect_sans_cadre_pour_le_premier_niveau() {
+    fn adjust_window_rect_sans_gestionnaire_pour_le_premier_niveau() {
         let mut r = Rect::from_size(0, 0, 884, 513);
         unsafe { adjust_window_rect_ex(&mut r, 0x00CF_0000, 0, 0) };
         assert_eq!(r, Rect::from_size(0, 0, 884, 513));
