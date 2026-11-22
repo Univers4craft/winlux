@@ -2588,8 +2588,78 @@ pub unsafe extern "win64" fn LookupPrivilegeDisplayNameW(
     }
 }
 
+/// Comme `put_name_w`, en octets : les noms et libellés des privilèges
+/// sont en ASCII, la taille en TCHAR est donc la même.
+unsafe fn put_name_a(s: &str, buf: *mut u8, len: *mut u32) -> bool {
+    let fits = !buf.is_null() && (*len as usize) > s.len();
+    if fits {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), buf, s.len());
+        *buf.add(s.len()) = 0;
+        *len = s.len() as u32;
+    } else {
+        *len = s.len() as u32 + 1;
+    }
+    fits
+}
+
+/// `LookupPrivilegeNameA` : version ANSI de LookupPrivilegeNameW (contrat
+/// api-ms-win-security-lsalookup-ansi-l2-1-0, Refs #2902).
+pub unsafe extern "win64" fn LookupPrivilegeNameA(
+    _system: *const u8,
+    luid: *const u32,
+    name: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    if luid.is_null() || len.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let low = std::ptr::read_unaligned(luid);
+    let Some(p) = PRIVILEGES.iter().find(|p| privilege_luid(p) == Some(low)) else {
+        crate::process::set_last_error(1313); // ERROR_NO_SUCH_PRIVILEGE
+        return 0;
+    };
+    if put_name_a(p, name, len) {
+        1
+    } else {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        0
+    }
+}
+
+/// `LookupPrivilegeDisplayNameA` : version ANSI de
+/// LookupPrivilegeDisplayNameW (Refs #2902).
+pub unsafe extern "win64" fn LookupPrivilegeDisplayNameA(
+    _system: *const u8,
+    name: *const u8,
+    out: *mut u8,
+    len: *mut u32,
+    lang: *mut u32,
+) -> i32 {
+    if len.is_null() || name.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let n = crate::dlls::cstr(name);
+    let Some(i) = PRIVILEGES.iter().position(|p| p.eq_ignore_ascii_case(&n)) else {
+        crate::process::set_last_error(1313);
+        return 0;
+    };
+    if !lang.is_null() {
+        *lang = 0x0409;
+    }
+    if put_name_a(PRIVILEGE_DISPLAY[i], out, len) {
+        1
+    } else {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        0
+    }
+}
+
 pub fn releve_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "LookupPrivilegeNameA" => fn LookupPrivilegeNameA,
+        "LookupPrivilegeDisplayNameA" => fn LookupPrivilegeDisplayNameA,
         "AddAccessDeniedAceEx" => fn AddAccessDeniedAceEx,
         "AddAuditAccessAce" => fn AddAuditAccessAce,
         "AddAuditAccessAceEx" => fn AddAuditAccessAceEx,

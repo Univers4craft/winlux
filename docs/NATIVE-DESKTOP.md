@@ -41,7 +41,7 @@ groupé après validation des chemins. Les vérifications de sécurité et la
 sauvegarde de restauration sont conservées.
 
 La session interactive associe Openbox (fenêtres), xfdesktop (bureau),
-xfce4-panel (tâches et indicateurs) et un menu GTK inspiré de Windows 11. Les composants sont
+xfce4-panel (tâches et indicateurs) et un menu GTK maison. Les composants sont
 préparés depuis les dépôts Ubuntu signés, dans un répertoire isolé : aucun
 paquet n'est installé sur l'hôte par le script de préparation.
 
@@ -58,7 +58,7 @@ paquet n'est installé sur l'hôte par le script de préparation.
   avec catégories et défilement, les applications récemment lancées et l'alimentation. Le clic
   droit ouvre une application, l'épingle ou crée son raccourci sur le bureau.
   Les épingles sont conservées dans `~/.config/winlux/start.json`. L'apparence
-  reprend la disposition Windows 11, avec une implémentation propre à Winlux.
+  et l'implémentation sont propres à Winlux.
   Les PE sont découverts dans les raccourcis
   Windows et le registre, ou enregistrés par `winlux-open` au premier lancement.
   Les icônes embarquées sont extraites quand elles existent. Un programme présent
@@ -76,8 +76,8 @@ XScreenSaver ne verrouille rien : c'est le rôle de `winlux-lock`.
 
 ## Écran de verrouillage
 
-`winlux-lock` (scripts/winlux-lock.py) affiche un écran de verrouillage au
-style de Windows 11 : heure et date sur le fond d'écran, puis, au premier
+`winlux-lock` (scripts/winlux-lock.py) affiche un écran de verrouillage :
+heure et date sur le fond d'écran, puis, au premier
 appui ou clic, l'avatar, le nom du compte et le champ mot de passe sur un fond
 flouté. Il couvre tous les écrans et prend clavier et souris, donc les
 raccourcis du bureau sont inactifs tant qu'il est affiché. Après cinq erreurs,
@@ -132,7 +132,7 @@ la saisie est bloquée trente secondes.
 
 ## Autorisations des applications Windows
 
-Comme sous Windows 11, une application `.exe` demande la première fois
+Une application `.exe` demande la première fois
 qu'elle veut accéder à quelque chose de sensible. La fenêtre
 `winlux-permission ask` (Autoriser / Ne pas autoriser, refus par défaut au
 clavier, fermée sans réponse au bout de deux minutes) explique en une phrase

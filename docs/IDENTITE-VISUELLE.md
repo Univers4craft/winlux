@@ -1,6 +1,6 @@
 # Identité visuelle Winlux
 
-Winlux garde l'ergonomie de Windows 11 mais n'utilise **aucune marque
+Winlux a une ergonomie familière mais n'utilise **aucune marque
 Microsoft** : ni le logo à quatre carreaux, ni ses couleurs, ni ses fonds.
 Tout ce qui suit est créé dans le dépôt et versionné (issue #170).
 

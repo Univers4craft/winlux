@@ -513,7 +513,10 @@ fn is_real_pe(path: &std::path::Path) -> bool {
 /// donnent `setup` et leurs désinstalleurs connus `uninstall` : souvent en
 /// 32 bits, ils s'installent quand même puisque leur code n'est pas exécuté.
 fn inspect(exe: &std::path::Path) -> i32 {
-    let source = match std::fs::read(exe) {
+    // Projeté, pas lu : winlux-open inspecte chaque programme avant de le
+    // lancer, et la copie entière d'un .exe de 300 Mo en mémoire passait
+    // avant sa première fenêtre (#2918).
+    let source = match loader::ImageFile::open(exe) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("lecture impossible de {} : {error}", exe.display());

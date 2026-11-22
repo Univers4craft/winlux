@@ -1035,8 +1035,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
             class_name: class.as_ptr(),
             icon_sm: core::ptr::null_mut(),
         };
+        // Lignes de test (OK/ECHEC) seulement pour la démo et les tests : le
+        // bureau et les applications du shell (Boutique…) n'écrivent rien sur
+        // la sortie standard (#2896).
+        let report = !(desktop || wm::native_app().is_some());
         let atom = RegisterClassExA(&wc);
-        check!(atom != 0, "RegisterClassExA");
+        if report {
+            check!(atom != 0, "RegisterClassExA");
+        }
 
         let title = if desktop {
             c"Winlux Desktop"
@@ -1106,7 +1112,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
             core::ptr::null_mut(),
             core::ptr::null_mut(),
         );
-        check!(!hwnd.is_null(), "CreateWindowExA demo");
+        if report {
+            check!(!hwnd.is_null(), "CreateWindowExA demo");
+        }
         ShowWindow(hwnd, SW_SHOWNORMAL);
         UpdateWindow(hwnd);
         if wm::native_app().is_some() {
@@ -1159,53 +1167,57 @@ pub extern "C" fn mainCRTStartup() -> ! {
             }
         }
 
-        check!(GOT_PAINT >= 1, "WM_PAINT via PeekMessage");
-        if GOT_SIZE > 1 {
-            check!(
-                CLIENT_SIZE_MATCH != 0,
-                "GetClientRect synchronise avec ConfigureNotify"
-            );
-        }
-        if GOT_MOVE > 0 {
-            check!(
-                WINDOW_POSITION_MATCH != 0,
-                "GetWindowRect synchronise avec ConfigureNotify"
-            );
-        }
-        if GOT_CHAR > 0 {
-            check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
-        }
-        if GOT_KEYDOWN > 0 {
-            check!(
-                THREAD_KEY_STATE_MATCH != 0,
-                "GetKeyState reflète WM_KEYDOWN"
-            );
-            check!(
-                KEYBOARD_STATE_MATCH != 0,
-                "GetKeyboardState reflète WM_KEYDOWN"
-            );
-            check!(
-                ASYNC_KEY_PRESSED != 0,
-                "GetAsyncKeyState détecte la pression"
-            );
-        }
-        if GOT_KEYUP > 0 {
-            check!(THREAD_KEY_UP_CLEAR != 0, "GetKeyState reflète WM_KEYUP");
-        }
-        if GOT_FOCUS > 0 {
-            if GOT_KILLFOCUS > 0 {
+        if report {
+            check!(GOT_PAINT >= 1, "WM_PAINT via PeekMessage");
+            if GOT_SIZE > 1 {
                 check!(
-                    GOT_KILLFOCUS >= 1,
-                    "WM_KILLFOCUS traduit depuis FocusOut X11"
+                    CLIENT_SIZE_MATCH != 0,
+                    "GetClientRect synchronise avec ConfigureNotify"
                 );
-            } else {
-                check!(GetFocus() == hwnd, "GetFocus synchronise avec FocusIn X11");
+            }
+            if GOT_MOVE > 0 {
+                check!(
+                    WINDOW_POSITION_MATCH != 0,
+                    "GetWindowRect synchronise avec ConfigureNotify"
+                );
+            }
+            if GOT_CHAR > 0 {
+                check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
+            }
+            if GOT_KEYDOWN > 0 {
+                check!(
+                    THREAD_KEY_STATE_MATCH != 0,
+                    "GetKeyState reflète WM_KEYDOWN"
+                );
+                check!(
+                    KEYBOARD_STATE_MATCH != 0,
+                    "GetKeyboardState reflète WM_KEYDOWN"
+                );
+                check!(
+                    ASYNC_KEY_PRESSED != 0,
+                    "GetAsyncKeyState détecte la pression"
+                );
+            }
+            if GOT_KEYUP > 0 {
+                check!(THREAD_KEY_UP_CLEAR != 0, "GetKeyState reflète WM_KEYUP");
+            }
+            if GOT_FOCUS > 0 {
+                if GOT_KILLFOCUS > 0 {
+                    check!(
+                        GOT_KILLFOCUS >= 1,
+                        "WM_KILLFOCUS traduit depuis FocusOut X11"
+                    );
+                } else {
+                    check!(GetFocus() == hwnd, "GetFocus synchronise avec FocusIn X11");
+                }
             }
         }
         if GOT_DESTROY == 0 {
             DestroyWindow(hwnd);
         }
-        check!(GOT_DESTROY >= 1, "WM_DESTROY destruction");
+        if report {
+            check!(GOT_DESTROY >= 1, "WM_DESTROY destruction");
+        }
         finish()
     }
 }
