@@ -109,7 +109,11 @@ pub mod theme {
             4 => BG_SURFACE,   // COLOR_MENU
             5 => BG_SURFACE,   // COLOR_WINDOW
             6 => BG_DEEP,      // COLOR_WINDOWFRAME
-            7 | 8 | 9 | 14 | 18 | 23 => TEXT,
+            7 | 8 | 9 | 18 | 23 => TEXT,
+            // Texte d'un élément sélectionné, peint sur COLOR_HIGHLIGHT et
+            // COLOR_MENUHILIGHT (violet Prisme) : blanc, sinon illisible
+            // (#2853, Paint.NET : calques et historique).
+            14 => 0x00FF_FFFF,      // COLOR_HIGHLIGHTTEXT
             10 => ACCENT,           // COLOR_ACTIVEBORDER
             11 => BG_ELEVATED,      // COLOR_INACTIVEBORDER
             12 => BG_DEEP,          // COLOR_APPWORKSPACE
@@ -122,7 +126,7 @@ pub mod theme {
             26 => ACCENT_VIOLET,    // COLOR_HOTLIGHT
             27 => GRADIENT_BOTTOM,  // COLOR_GRADIENTACTIVECAPTION
             28 => BG_ELEVATED,      // COLOR_GRADIENTINACTIVECAPTION
-            29 => HOVER,            // COLOR_MENUHILIGHT
+            29 => ACCENT,           // COLOR_MENUHILIGHT, sous COLOR_HIGHLIGHTTEXT (#2853)
             30 => BG_SURFACE,       // COLOR_MENUBAR
             _ => return None,
         })
@@ -6461,6 +6465,34 @@ pub(crate) mod tests {
         assert_eq!(object_color(stock(0)), Some(0x00FF_FFFF)); // WHITE_BRUSH
         assert_eq!(object_color(stock(5)), None); // NULL_BRUSH
         assert_eq!(object_pen_width(stock(7)), 1); // BLACK_PEN
+    }
+
+    /// Rapport de contraste WCAG de deux COLORREF.
+    fn contraste(a: u32, b: u32) -> f64 {
+        let lum = |c: u32| {
+            let ch = |v: u32| {
+                let v = v as f64 / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(c & 0xFF) + 0.7152 * ch((c >> 8) & 0xFF) + 0.0722 * ch((c >> 16) & 0xFF)
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// #2853 : le texte de sélection se lit sur le fond de sélection des
+    /// contrôles (COLOR_HIGHLIGHT) et des menus plats (COLOR_MENUHILIGHT).
+    #[test]
+    fn texte_de_selection_lisible_sur_la_selection_2853() {
+        let texte = theme::system_color(14).expect("COLOR_HIGHLIGHTTEXT");
+        for fond in [13, 29] {
+            let fond = theme::system_color(fond).expect("couleur de sélection");
+            assert!(contraste(texte, fond) >= 4.5, "{texte:06x} sur {fond:06x}");
+        }
     }
 
     #[test]
