@@ -498,6 +498,31 @@ pub(crate) fn number(s: &[u8]) -> u32 {
         })
 }
 
+static mut LAST_DEMAND: u32 = 0;
+
+/// Le relevé d'état n'est plus refait toutes les 3 s pour rien (#3126) :
+/// le bureau PE, qui l'affiche en continu, le demande au plus toutes les
+/// 2 s en réécrivant le fichier de demande du compte (chemin donné par
+/// winlux-shell-app, sous la forme Z:\…).
+unsafe fn demand_status(now: u32) {
+    if LAST_DEMAND != 0 && now.wrapping_sub(LAST_DEMAND) < 2000 {
+        return;
+    }
+    LAST_DEMAND = now;
+    let mut path = [0u8; 128];
+    let n = GetEnvironmentVariableA(c"WINLUX_CONTROL_DEMAND_PE".as_ptr(), path.as_mut_ptr().cast(), 127) as usize;
+    if n == 0 || n >= 127 {
+        return;
+    }
+    let h = CreateFileA(path.as_ptr().cast(), 0x4000_0000, 7, core::ptr::null_mut(), 2, 0, core::ptr::null_mut());
+    if h as isize == -1 || h.is_null() {
+        return;
+    }
+    let mut written = 0;
+    WriteFile(h, b"1".as_ptr(), 1, &mut written, core::ptr::null_mut());
+    CloseHandle(h);
+}
+
 /// Telemetrie reelle pour la barre, meme quand Parametres est ferme.
 pub unsafe fn system_tick() -> bool {
     let now = GetTickCount();
@@ -505,6 +530,7 @@ pub unsafe fn system_tick() -> bool {
         return false;
     }
     LAST_POLL = now;
+    demand_status(now);
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
     // Demande propre au compte (#2243) : son chemin vient de winlux-shell-app.
     let mut chooser = [0u8; 96];
