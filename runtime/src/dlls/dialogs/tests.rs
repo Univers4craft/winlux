@@ -446,3 +446,60 @@ fn boite_de_message_affiche_son_icone_2854() {
         .is_some_and(|d| d.ended && d.result == IDOK as isize));
     gui::destroy_window(dlg);
 }
+
+#[test]
+fn boite_agrandie_du_cadre_du_gestionnaire_3145() {
+    // Le modèle donne la zone client ; le rectangle de la boîte comprend le
+    // cadre du gestionnaire (#2984). Sans agrandissement, Acrobat perdait
+    // son bouton OK sous le bas de la fenêtre X (boîte 769x201, X 765x160).
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe extern "win64" fn proc_(_h: usize, msg: u32, _wp: usize, _lp: isize) -> isize {
+        (msg == WM_INITDIALOG) as isize
+    }
+    let frame = [2, 2, 39, 2];
+    gui::TEST_FRAME.with(|f| f.set(Some(frame)));
+    let data = template(false);
+    let dlg = unsafe {
+        create_dialog_indirect_param_w(0, data.as_ptr(), 0, proc_ as *const () as usize, 0)
+    };
+    assert_ne!(dlg, 0);
+    unsafe { user32::show_window(dlg, 5) };
+    let mut want = Rect::from_size(0, 0, 200, 80);
+    let mut window = Rect::default();
+    let mut client = Rect::default();
+    let mut ok = Rect::default();
+    unsafe {
+        map_dialog_rect(dlg, &mut want);
+        user32::get_window_rect(dlg, &mut window);
+        user32::get_client_rect(dlg, &mut client);
+        user32::get_window_rect(user32::get_dlg_item(dlg, 2), &mut ok);
+    }
+    gui::TEST_FRAME.with(|f| f.set(None));
+    eprintln!(
+        "      modèle {}x{}, fenêtre {}x{}, client {}x{}, bouton Annuler {:?}",
+        want.width(),
+        want.height(),
+        window.width(),
+        window.height(),
+        client.width(),
+        client.height(),
+        ok
+    );
+    assert_eq!(
+        (client.width(), client.height()),
+        (want.width(), want.height()),
+        "zone client = modèle"
+    );
+    assert_eq!(window.width(), want.width() + frame[0] + frame[1]);
+    assert_eq!(window.height(), want.height() + frame[2] + frame[3]);
+    let mut corner = gui::Point {
+        x: ok.right,
+        y: ok.bottom,
+    };
+    unsafe { user32::screen_to_client(dlg, &mut corner) };
+    assert!(
+        corner.x <= client.right && corner.y <= client.bottom,
+        "dernier bouton dans la zone client"
+    );
+    gui::destroy_window(dlg);
+}
