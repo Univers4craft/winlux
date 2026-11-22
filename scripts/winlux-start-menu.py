@@ -167,6 +167,8 @@ _TR = {
     '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Données des programmes': ('Program data', 'Datos de programas', 'Programmdaten'),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
     'Aucune application trouvée': ('No apps found', 'No se encontró ninguna aplicación', 'Keine Apps gefunden'),
     'Recommandations': ('Recommended', 'Recomendaciones', 'Empfohlen'),
@@ -485,7 +487,6 @@ class Start(Gtk.Application):
         self.open_category = None
         self.search.set_text("")
         self.render()
-        self.refresh_side()
         # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
         # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
         # premier appui et se trouvait en partie dessous.
@@ -502,6 +503,9 @@ class Start(Gtk.Application):
         self.menu_left = taskbar_on_left()
         self.place(keyboard_shown)
         self.window.show_all()
+        # Volet « Pour vous » : dessiné tout de suite avec ce qui est connu,
+        # mis à jour une fois le menu affiché.
+        self.refresh_side()
         self.window.present()
         self.search.grab_focus()
         # Comme Windows 11, chaque ouverture repart du haut de la liste : la
@@ -952,9 +956,9 @@ class Start(Gtk.Application):
                 heading.get_style_context().add_class("heading")
                 self.content.pack_start(heading, False, False, 0)
             for path in self.file_results:
-                relative = str(path.relative_to(Path.home()))
-                folder = str(path.parent.relative_to(Path.home()))
-                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + relative, subtitle="~" if folder == "." else "~/" + folder)
+                place = file_place(path)
+                shown = str(path.relative_to(Path.home())) if place.startswith("~") else place + " › " + path.name
+                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + shown, subtitle=place)
                 on_click(button, lambda target=path: self.open_file(target))
                 button.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
                 self.content.pack_start(button, False, False, 0)
@@ -1129,9 +1133,11 @@ class Start(Gtk.Application):
         def work():
             now = time.time()
             data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
-            files = recent_files(data_home / "recently-used.xbel", limit=3)
-            opened = {path for path, _, _ in recent_files(data_home / "recently-used.xbel", limit=200)}
-            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready())
+            recent = recent_files(data_home / "recently-used.xbel", limit=200)
+            files = recent[:3]
+            opened = {path for path, _, _ in recent}
+            todo = todo_items(downloads_dir(), opened, set(state.get("dismissed", [])), now, update_ready(),
+                              done=installers_done())
             data = {"now": now, "files": files, "habits": habit_apps(usage_of(state), now), "todo": todo}
             def deliver():
                 if generation == self.side_generation:
@@ -1139,8 +1145,19 @@ class Start(Gtk.Application):
                     self.render_side()
                 return False
             GLib.idle_add(deliver)
-        threading.Thread(target=work, daemon=True).start()
         self.render_side()
+        # Calcul lancé une fois le menu dessiné : le fil de calcul et GTK se
+        # partagent le même Python, et le menu attendait sinon son tour pour
+        # se dessiner (#2858).
+        clock = self.window.get_frame_clock() if self.window and self.window.get_visible() else None
+        if clock is None:
+            threading.Thread(target=work, daemon=True).start()
+            return
+        def painted(*_):
+            clock.disconnect(handler)
+            threading.Thread(target=work, daemon=True).start()
+        handler = clock.connect("after-paint", painted)
+        self.window.queue_draw()
 
     def side_section(self, title):
         label = Gtk.Label(label=title, xalign=0)
@@ -1310,9 +1327,14 @@ class Start(Gtk.Application):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            # Ses sous-dossiers (« PuTTY (64-bit) ») non plus : ce sont les
+            # groupes du menu, la recherche les montrait comme des dossiers
+            # avec leur chemin AppData (#2905).
+            listed = folders
             if "/Start Menu/Programs" in directory + "/":
                 files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
-            for name in folders + files:
+                listed = []
+            for name in listed + files:
                 visited += 1
                 if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
@@ -1718,13 +1740,62 @@ def _stamp(text):
         return 0
 
 
+def file_place(path, home=None):
+    """Dossier d'un fichier trouvé, tel que le menu l'affiche : « ~ »,
+    « ~/Documents/Impôts »… Les dossiers de données des programmes Windows
+    (AppData) ont un nom lisible, sans leur chemin interne : la recherche
+    affichait « ~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs »,
+    et aucune marque Microsoft ne doit apparaître à l'écran (#2905)."""
+    home = Path(home or Path.home())
+    try:
+        parts = Path(path).parent.relative_to(home).parts
+    except ValueError:
+        return str(Path(path).parent)
+    if not parts:
+        return "~"
+    if parts[0] == "AppData":
+        if [part.casefold() for part in parts[1:5]] == ["roaming", "microsoft", "windows", "start menu"]:
+            return _t("Menu Démarrer")
+        inner = [part for part in parts[2:] if part.casefold() not in ("microsoft", "windows", "programs")]
+        return _t("Données des programmes") + (" › " + inner[-1] if inner else "")
+    return "~/" + "/".join(parts)
+
+
+# recently-used.xbel déjà lu, par fichier : signature (taille, date) et
+# classement. Le volet « Pour vous » le relisait en entier deux fois à chaque
+# ouverture du menu : avec 1 000 fichiers récents, 270 ms de plus avant que le
+# menu s'affiche, Python du menu bloqué pendant ce temps (#2858).
+_RECENT_CACHE = {}
+
+
 def recent_files(path, limit=3, home=None):
     """Derniers fichiers ouverts d'après GTK (recently-used.xbel) : chemin,
     application qui l'a ouvert, horodatage. Fichiers disparus, cachés ou hors
-    du dossier personnel écartés."""
+    du dossier personnel écartés. Le fichier n'est relu que s'il a changé ;
+    l'existence des fichiers, elle, est vérifiée à chaque appel."""
+    home = Path(home or Path.home())
+    try:
+        info = os.stat(path)
+    except OSError:
+        return []
+    key = (str(path), str(home))
+    signature = (info.st_mtime_ns, info.st_size, info.st_ino)
+    cached = _RECENT_CACHE.get(key)
+    if cached is None or cached[0] != signature:
+        cached = (signature, _recent_ranked(path, home))
+        _RECENT_CACHE[key] = cached
+    found = []
+    for target, application, when in cached[1]:
+        if len(found) >= limit: break
+        if target.is_file(): found.append((target, application, when))
+    return found
+
+
+def _recent_ranked(path, home):
+    """Toutes les entrées de recently-used.xbel du dossier personnel, la plus
+    récente d'abord, sans vérifier que le fichier existe encore."""
     import urllib.parse
     import xml.etree.ElementTree as ET
-    home = Path(home or Path.home())
     try:
         root = ET.parse(path).getroot()
     except (OSError, ET.ParseError):
@@ -1739,7 +1810,7 @@ def recent_files(path, limit=3, home=None):
             relative = target.relative_to(home)
         except ValueError:
             continue
-        if any(part.startswith(".") for part in relative.parts) or not target.is_file(): continue
+        if any(part.startswith(".") for part in relative.parts): continue
         when = max(_stamp(bookmark.get(key)) for key in ("added", "modified", "visited"))
         application = ""
         for entry in bookmark.iter(namespace + "application"):
@@ -1750,7 +1821,7 @@ def recent_files(path, limit=3, home=None):
         if target not in found or found[target][1] < when:
             found[target] = (application, when)
     ranked = sorted(found.items(), key=lambda item: -item[1][1])
-    return [(target, application, when) for target, (application, when) in ranked[:limit]]
+    return [(target, application, when) for target, (application, when) in ranked]
 
 
 def ago(when, now):
@@ -1799,7 +1870,20 @@ def update_ready(state_dir=None, version_file=None):
     return available if available and available != installed else None
 
 
-def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
+def installers_done(state_home=None):
+    """Installateurs menés à bien depuis ce compte, notés par winlux-open
+    (~/.local/state/winlux/installateurs-termines), chemins résolus. Ouvrir
+    un .exe ne passe pas par GTK : sans cette liste, un installateur déjà
+    installé restait « Pas encore installé » (#2903)."""
+    state_home = Path(state_home or os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    try:
+        lines = (state_home / "winlux" / "installateurs-termines").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return set()
+    return {os.path.realpath(line) for line in lines if line.startswith("/")}
+
+
+def todo_items(downloads, opened, dismissed, now, update=None, limit=3, done=frozenset()):
     """Petites choses à faire, chacune avec son action :
     installateur .exe/.msi téléchargé depuis moins d'un mois et jamais ouvert,
     mise à jour de Winlux déjà vérifiée, dossier Téléchargements très chargé."""
@@ -1814,15 +1898,17 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
             for name in files:
                 visited += 1
                 if visited > 5000: break
-                path = Path(directory, name)
-                try: info = path.lstat()
+                # os.lstat sur le texte du chemin : un Path par fichier coûtait
+                # autant que l'appel système lui-même (5 000 fichiers parcourus).
+                try: info = os.lstat(os.path.join(directory, name))
                 except OSError: continue
                 total += info.st_size
                 if now - info.st_mtime > OLD_DOWNLOAD_DAYS * DAY: old += 1
                 lowered = fold(name)
                 if (directory == str(downloads) and (lowered.endswith(".msi") or (lowered.endswith(".exe") and any(word in lowered for word in INSTALLER_WORDS)))
-                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and path not in opened):
-                    installers.append((info.st_mtime, path))
+                        and now - info.st_mtime <= INSTALLER_DAYS * DAY and Path(directory, name) not in opened
+                        and os.path.realpath(os.path.join(directory, name)) not in done):
+                    installers.append((info.st_mtime, Path(directory, name)))
             if visited > 5000: break
     except OSError:
         pass

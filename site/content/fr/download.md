@@ -5,7 +5,7 @@ description: Récupérez l'image d'installation de la dernière version, le cré
 
 {{download}}
 
-Les fichiers viennent directement de la page des versions publiées du projet sur GitHub. Le nom de l'image ressemble à `winlux-live-v0.2.21.iso` ; elle pèse environ 1,3 Go.
+Les fichiers viennent directement de la page des versions publiées du projet sur GitHub. Le nom de l'image ressemble à `winlux-live-v0.2.21.iso` ; elle pèse environ 1,4 Go.
 
 ## Ce qu'il faut
 

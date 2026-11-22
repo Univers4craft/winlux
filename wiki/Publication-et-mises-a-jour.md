@@ -4,8 +4,15 @@
 
 | Version | Date | Points marquants |
 |---|---|---|
-| **v0.2.13** | en préparation | Changement rapide d'utilisateur corrigé, impression, son PipeWire, lecteurs réseau SMB/NFS par le noyau, outil de mise à jour réparé, manifeste publié avec chaque version et repli sur l'API des releases GitHub. |
-| **[v0.2.12](https://github.com/Univers4craft/winlux/releases/tag/v0.2.12)** | 1er novembre 2026 | **Première version sur la base Ubuntu 26.04 avec APT natif.** Installateur graphique complet, Secure Boot, mode récupération, verrouillage, autorisations, quatre langues, lecteur multimédia FFmpeg, Direct3D 9/11/12, CLR maison, msiexec… ISO de 1,92 Gio. Remplace les tags v0.2.7 à v0.2.11, qui n'ont produit aucune release. |
+| **v0.3** | en préparation | Le prochain numéro après la v0.2.21. Objectif : chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un. |
+| **[v0.2.21](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21)** | 17 novembre 2026 | OBS Studio, Paint.NET, Pythonwin et Notepad++ jusqu'à leur fenêtre, contrat de licence toujours montré avant d'installer, signatures Authenticode vérifiées, programmes 32 bits bien plus complets, Boutique refaite, contrôle parental, pare-feu par application, connexion par code PIN et empreinte. ISO de 1,4 Go. |
+| [v0.2.20](https://github.com/Univers4craft/winlux/releases/tag/v0.2.20) | 8 novembre 2026 | Premiers programmes Windows 32 bits (x86). |
+| [v0.2.19](https://github.com/Univers4craft/winlux/releases/tag/v0.2.19) | 4 novembre 2026 | Heure juste dès l'installation, point de restauration avant chaque mise à jour. |
+| [v0.2.16](https://github.com/Univers4craft/winlux/releases/tag/v0.2.16) à [v0.2.18](https://github.com/Univers4craft/winlux/releases/tag/v0.2.18) | 3 novembre 2026 | Démarrage en UEFI 32 bits (tablettes), page Wi-Fi, pilotes de vrais PC, WPA2 et WPA3. |
+| [v0.2.15](https://github.com/Univers4craft/winlux/releases/tag/v0.2.15) | 2 novembre 2026 | Plus aucun navigateur dans l'image : l'utilisateur choisit le sien. Les ISO précédentes, qui en contenaient un, sont retirées. |
+| [v0.2.14](https://github.com/Univers4craft/winlux/releases/tag/v0.2.14) | 2 novembre 2026 | Le bureau et les `.exe` tournent sous le compte de l'utilisateur, plus en root. |
+| [v0.2.13](https://github.com/Univers4craft/winlux/releases/tag/v0.2.13) | 1er novembre 2026 | Outil de mise à jour réparé ; à partir de cette version, tout se met à jour depuis Paramètres. |
+| [v0.2.12](https://github.com/Univers4craft/winlux/releases/tag/v0.2.12) | 1er novembre 2026 | **Première version sur la base Ubuntu 26.04 avec APT natif.** Remplace les tags v0.2.7 à v0.2.11, qui n'ont produit aucune release. |
 | [v0.2.6](https://github.com/Univers4craft/winlux/releases/tag/v0.2.6) | 30 octobre 2026 | Dernière version sur l'ancienne base (sans APT) : applications natives, raccourcis globaux. |
 | v0.2.3 à v0.2.5 | octobre 2026 | Premières releases système complètes, bureau et Paramètres. |
 | v0.2.0-preview.2 à .15 | octobre 2026 | Préversions du runtime et du bureau. |
@@ -16,11 +23,9 @@ Les notes de chaque version sont dans [`docs/releases/`](https://github.com/Univ
 
 > **Une seule réinstallation, selon votre version.**
 >
-> - **v0.2.6 ou plus ancienne** : la v0.2.12 change toute la base du système (passage à Ubuntu 26.04 avec APT). Une installation ancienne ne peut pas être convertie en place ; son outil de mise à jour le dit et propose de réinstaller avec la nouvelle ISO.
-> - **v0.2.12** : son outil de mise à jour transmet à APT un fichier temporaire que celui-ci refuse, si bien qu'il ne peut installer aucune mise à jour. Le défaut est corrigé dans la v0.2.13, mais un outil installé ne peut pas se corriger lui-même : il faudra **réinstaller une fois avec l'ISO v0.2.13**.
+> - **v0.2.6 ou plus ancienne** : la v0.2.12 change toute la base du système (passage à Ubuntu 26.04 avec APT). Une installation ancienne ne peut pas être convertie en place ; son outil de mise à jour le dit et propose de réinstaller avec une ISO récente.
+> - **v0.2.12** : son outil de mise à jour ne peut installer aucune mise à jour (APT refuse le fichier temporaire qu'il lui passe). Le défaut est corrigé depuis la v0.2.13, mais un outil installé ne peut pas se corriger lui-même : il faut **réinstaller une fois avec une ISO récente**.
 > - **À partir de la v0.2.13**, les mises à jour se font depuis Paramètres, sans réinstaller.
->
-> Les notes publiées de la v0.2.12 promettent à tort une mise à jour sans réinstallation ; elles seront corrigées à la publication de la v0.2.13.
 
 ## Mettre à jour un système installé
 
@@ -41,7 +46,7 @@ Les mises à jour des paquets Ubuntu eux-mêmes passent par Paramètres › Mise
 ### Comment ça marche
 
 1. L'outil interroge la **dernière release publique** du dépôt GitHub (jamais les commits de `master`, jamais les brouillons ni les préversions), par son URL publique, **sans jeton ni compte**.
-2. Il lit le **manifeste** (format 3, `backend=apt`, `base=ubuntu-resolute`) : nom, version, taille et SHA-256 du paquet `winlux-desktop-<version>.deb`. À partir de la v0.2.13, si le manifeste manque, l'outil se rabat sur l'API des releases GitHub (nom du fichier, taille, somme de contrôle).
+2. Il lit le **manifeste** (format 3, `backend=apt`, `base=ubuntu-resolute`) : nom, version, taille et SHA-256 du paquet `winlux-desktop-<version>.deb`. Quand la clé publique de signature est installée, un manifeste absent ou non signé fait refuser la mise à jour ; seul un système plus ancien, sans cette clé, se rabat sur l'API des releases GitHub (nom du fichier, taille, somme de contrôle).
 3. Il vérifie l'espace disque, télécharge, contrôle la taille et le SHA-256.
 4. Il crée un **point de restauration** (`winlux-restore`, les trois derniers sont gardés), puis installe le paquet avec APT (`--no-remove`, configurations locales conservées).
 5. Il vérifie les fichiers installés (`dpkg --verify`), répare ou revient en arrière en cas d'écart.
@@ -49,21 +54,21 @@ Les mises à jour des paquets Ubuntu eux-mêmes passent par Paramètres › Mise
 
 Vos documents, vos applications installées et la base `dpkg` sont conservés. Les arrêts normaux sont différés pendant l'installation.
 
-### Ce qui manque encore
+### Signature et deux emplacements système
 
-- Les mises à jour sont vérifiées par SHA-256 mais **pas encore signées** (signature Ed25519 prévue).
-- Il n'y a pas encore de **partitions système A/B** : une coupure de courant au mauvais moment reste un risque, couvert seulement par APT (`dpkg --configure -a`) et le mode récupération.
+- Le manifeste de chaque version est **signé en Ed25519** (`winlux-update-manifest.txt.sig`) ; l'outil refuse un manifeste dont la signature ne correspond pas, avant toute vérification de taille et de SHA-256.
+- La mise à jour est préparée dans un **second emplacement système** (`/.winlux-ab/b`), puis activée au démarrage. Si la nouvelle version ne démarre pas, Winlux revient seul à la précédente. Les documents, les comptes et le registre restent communs aux deux emplacements.
 
-Conception cible : [docs/AB_UPDATES.md](https://github.com/Univers4craft/winlux/blob/master/docs/AB_UPDATES.md).
+Détail de la mise en œuvre : [docs/AB_UPDATES.md](https://github.com/Univers4craft/winlux/blob/master/docs/AB_UPDATES.md).
 
 ## Publier une nouvelle version
 
 Le processus est entièrement automatisé par [`.github/workflows/release.yml`](https://github.com/Univers4craft/winlux/blob/master/.github/workflows/release.yml), déclenché par un tag.
 
 1. **Préparer** sur une branche puis fusionner dans `master` :
-   - mettre le numéro dans [`VERSION`](https://github.com/Univers4craft/winlux/blob/master/VERSION) (par exemple `v0.2.13`) ;
-   - écrire les notes dans `docs/releases/v0.2.13.md` (24 Kio au plus : elles deviennent aussi les notes affichées dans Paramètres).
-2. **Pousser le tag** `v0.2.13` sur le commit de `master`. Le tag doit correspondre à `VERSION`. Les tags `v*-preview.*` sont exclus.
+   - mettre le numéro dans [`VERSION`](https://github.com/Univers4craft/winlux/blob/master/VERSION) (par exemple `v0.3`) ;
+   - écrire les notes dans `docs/releases/v0.3.md` (24 Kio au plus : elles deviennent aussi les notes affichées dans Paramètres).
+2. **Pousser le tag** `v0.3` sur le commit de `master`. Le tag doit correspondre à `VERSION`. Les tags `v*-preview.*` sont exclus.
 3. **Le workflow** (runner Ubuntu 26.04, KVM activé) :
    1. vérifie la version ;
    2. libère de l'espace disque sur le runner ;
@@ -72,7 +77,7 @@ Le processus est entièrement automatisé par [`.github/workflows/release.yml`](
    5. prépare la base Ubuntu dans une VM jetable et **construit l'ISO** (squashfs xz, taille contrôlée sous la limite de 2 Gio des fichiers de release GitHub) ;
    6. **valide en VM** : navigateurs, bureau natif (fenêtres, édition, menu, captures), ISO en BIOS et UEFI, installation sur disque, **mise à jour depuis la version précédente** ;
    7. construit le paquet de mise à jour (`build-update-bundle.sh --system`) et le manifeste ;
-   8. calcule les sommes SHA-256 et **publie la release** : ISO, `.deb`, manifeste, sommes.
+   8. calcule les sommes SHA-256, signe le manifeste et **publie la release** : ISO, `.deb`, manifeste et sa signature, notes, liste des sources GPL (`sources-gpl.tsv`), créateur de clé USB et sommes.
 4. Les journaux de validation restent disponibles comme artefacts du workflow.
 
 Une version ratée **ne réutilise jamais son tag** : on passe au numéro suivant (c'est pourquoi v0.2.7 à v0.2.11 n'ont pas de release).

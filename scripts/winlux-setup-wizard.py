@@ -135,7 +135,16 @@ _TR = {
          "Die Datei wird vor der Installation geprüft. Ohne Ihre Zustimmung wird nichts heruntergeladen."),
     "Télécharger et installer": ("Download and install", "Descargar e instalar", "Herunterladen und installieren"),
     "Précédent": ("Back", "Atrás", "Zurück"),
+    "Winlux a sauté {count} étape(s) propre(s) à Windows : des programmes que l'installateur lance sous Windows et que Winlux ne lance pas. Si le programme installé ne fonctionne pas comme prévu, le détail ci-dessous et le journal indiquent lesquelles.":
+        ("Winlux skipped {count} Windows-specific step(s): programs the installer runs on Windows that Winlux does not run. If the installed program does not work as expected, the details below and the log show which ones.",
+         "Winlux omitió {count} paso(s) propio(s) de Windows: programas que el instalador ejecuta en Windows y que Winlux no ejecuta. Si el programa instalado no funciona como se espera, el detalle de abajo y el registro indican cuáles.",
+         "Winlux hat {count} Windows-spezifische(n) Schritt(e) übersprungen: Programme, die das Installationsprogramm unter Windows startet und Winlux nicht. Falls das installierte Programm nicht wie erwartet funktioniert, zeigen die Details unten und das Protokoll, welche."),
+    "Étapes sautées": ("Skipped steps", "Pasos omitidos", "Übersprungene Schritte"),
 }
+
+# Début d'une ligne de journal du runtime pour un programme non lancé
+# (SKIPPED_STEP de runtime/src/setup/run.rs, #2895).
+SKIPPED_STEP = "setup : étape sautée : "
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
 
@@ -482,7 +491,13 @@ def main(argv):
     bar = Gtk.ProgressBar(margin_top=12)
     progress_page.pack_start(bar, False, False, 0)
     status = text(progress_page, "", dim=True)
+    # Une seule ligne, coupée par « … » à la largeur de la fenêtre : sans
+    # plafond, la largeur naturelle du libellé suivait la ligne d'état et la
+    # fenêtre (non redimensionnable) grandissait jusqu'à sortir de l'écran
+    # (#2893). Le texte entier reste en infobulle et dans le journal.
+    status.set_line_wrap(False)
     status.set_ellipsize(Pango.EllipsizeMode.END)
+    status.set_max_width_chars(1)
     stack.add_named(progress_page, "progress")
 
     # Fin.
@@ -493,6 +508,18 @@ def main(argv):
     scroll = Gtk.ScrolledWindow(vexpand=True, no_show_all=True)
     scroll.add(log_view)
     done_page.pack_start(scroll, True, True, 0)
+    # Étapes sautées (#2895) : une phrase compréhensible, et chaque ligne du
+    # journal à portée d'un clic, jamais supprimée.
+    skipped_text = text(done_page, "")
+    skipped_text.set_no_show_all(True)
+    # Phrase coupée en lignes à la largeur de la fenêtre, sans l'élargir (#2893).
+    skipped_text.set_max_width_chars(1)
+    skipped_view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+    skipped_scroll = Gtk.ScrolledWindow(vexpand=True, min_content_height=80)
+    skipped_scroll.add(skipped_view)
+    skipped_box = Gtk.Expander(label=tr("Étapes sautées"), no_show_all=True)
+    skipped_box.add(skipped_scroll)
+    done_page.pack_start(skipped_box, True, True, 0)
     stack.add_named(done_page, "done")
 
     cancel = Gtk.Button(label=tr("Annuler"))
@@ -514,6 +541,22 @@ def main(argv):
             # Seulement si l'installation a posé ou refait un lanceur.
             if menu_entries() != state["menu"]:
                 done_text.set_text(tr("Vous le trouverez dans le menu Démarrer."))
+            skipped = [line.strip()[len(SKIPPED_STEP):] for line in output.splitlines()
+                       if line.strip().startswith(SKIPPED_STEP)]
+            if skipped:
+                summary = tr("Winlux a sauté {count} étape(s) propre(s) à Windows : des programmes que "
+                             "l'installateur lance sous Windows et que Winlux ne lance pas. Si le programme "
+                             "installé ne fonctionne pas comme prévu, le détail ci-dessous et le journal "
+                             "indiquent lesquelles.", count=len(skipped))
+                skipped_text.set_text(summary)
+                skipped_text.show()
+                skipped_view.get_buffer().set_text("\n".join(skipped))
+                # no_show_all : show_all() n'aurait aucun effet sur le volet.
+                skipped_scroll.show_all()
+                skipped_box.show()
+                trace_line("fin : " + summary)
+                trace_line("détail : %d ligne(s), volet %s" % (
+                    len(skipped), "visible" if skipped_box.get_visible() else "caché"))
         else:
             title, cause = failure_message(code)
             # Aussi dans la sortie, donc dans last-launch.log.
@@ -529,6 +572,16 @@ def main(argv):
             GLib.timeout_add(300, lambda: finish.clicked() or False)
         return False
 
+    def show_status(line):
+        # La ligne d'état ne montre que l'avancement : une étape sautée va au
+        # journal et au résumé de fin (#2895).
+        if line.startswith(SKIPPED_STEP):
+            return False
+        status.set_text(line)
+        status.set_tooltip_text(line or None)
+        trace_line("état : " + line)
+        return False
+
     def work(argv):
         lines = []
         try:
@@ -541,7 +594,7 @@ def main(argv):
                 # Écrite au fil de l'eau : last-launch.log garde la trace
                 # même si l'assistant est tué avant la fin (#2328).
                 print(line, end="", flush=True)
-                GLib.idle_add(status.set_text, line.strip())
+                GLib.idle_add(show_status, line.strip())
             code = full_code(name, proc.wait())
         except OSError as e:
             lines.append(str(e))
@@ -555,6 +608,11 @@ def main(argv):
                 GLib.idle_add(ask_download, argv, fields)
                 return
         GLib.idle_add(finished, code, output)
+
+    def trace_line(line):
+        if os.environ.get("WINLUX_SETUP_WIZARD_TRACE"):
+            with open(os.environ["WINLUX_SETUP_WIZARD_TRACE"], "a", encoding="utf-8") as f:
+                f.write(line + "\n")
 
     def trace(argv):
         if os.environ.get("WINLUX_SETUP_WIZARD_TRACE"):

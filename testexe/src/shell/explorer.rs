@@ -2620,6 +2620,17 @@ fn crumb_label<'a>(name: &'a [u8], at_root: bool, in_profile: bool) -> &'a [u8] 
     name
 }
 
+/// Traduit les segments du fil d'Ariane (Ce PC, lecteur, dossiers…) :
+/// « Users » à la racine, puis les dossiers connus du compte. « Users » est
+/// lu avant d'être traduit, sinon en français « Pictures » restait tel quel
+/// (#2874).
+fn translate_crumbs(segs: &mut [(&[u8], usize)]) {
+    let profile = segs.len() > 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
+    for i in 2..segs.len() {
+        segs[i].0 = crumb_label(segs[i].0, i == 2, profile && i == 4);
+    }
+}
+
 unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let p = pal();
     let mut x = a.left + 10;
@@ -2671,10 +2682,7 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     // Noms affichés comme sous Windows (desktop.ini) : Utilisateurs, puis
     // Téléchargements, Images… dans le dossier d'un compte. Le chemin
     // lui-même (C:\Users\nom\Downloads) ne change pas.
-    for i in 2..n {
-        let users = i >= 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
-        segs[i].0 = crumb_label(segs[i].0, i == 2, users && i == 4);
-    }
+    translate_crumbs(&mut segs[..n]);
     // Si tout ne tient pas, on garde les derniers segments.
     let avail = a.right - x - 10;
     let mut first = 0;
@@ -7078,6 +7086,8 @@ unsafe fn window_shortcut(vk: u32, control: bool) -> bool {
         0x4C if control => focus_address(),
         0x46 if control => FOCUS = Focus::Search,
         0x41 if control && FOCUS == Focus::Address => ADDRESS_SELECTED = true,
+        // Ctrl+A dans « Nom du fichier » de la boîte Enregistrer sous (#2852).
+        0x41 if control && FOCUS == Focus::FileName => pick::NAME_SELECTED = pick::NAME.len > 0,
         0x41 if control && FOCUS == Focus::Rename => {
             RENAME_FRESH = true;
             RENAME_TAIL = 0;
@@ -7150,11 +7160,19 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             if ch != 22 {
                 crate::cliphist::set_text(fl.get());
             }
-            if ch == 24 || (ch == 22 && (RENAME_FRESH || (FOCUS == Focus::Address && ADDRESS_SELECTED))) {
+            if ch == 24
+                || (ch == 22
+                    && (RENAME_FRESH
+                        || (FOCUS == Focus::Address && ADDRESS_SELECTED)
+                        || (FOCUS == Focus::FileName && pick::NAME_SELECTED)))
+            {
                 fl.len = 0;
                 RENAME_FRESH = false;
                 RENAME_TAIL = 0;
                 ADDRESS_SELECTED = false;
+            }
+            if FOCUS == Focus::FileName {
+                pick::NAME_SELECTED = false;
             }
             if ch == 22 {
                 let mut buf = [0u8; 1024];
@@ -7180,6 +7198,24 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             ADDRESS_SELECTED = false;
             if ch == 8 {
                 return true;
+            }
+        }
+        // Nom du fichier sélectionné : la frappe le remplace, Retour arrière
+        // l'efface ; une autre touche (Fin, flèches) ôte la sélection (#2852).
+        if FOCUS == Focus::FileName && pick::NAME_SELECTED {
+            if ch == 8 || ch >= 32 {
+                pick::NAME_SELECTED = false;
+                fl.len = 0;
+                if ch == 8 {
+                    return true;
+                }
+            } else if ch == 0 && matches!(vk, 0x23 | 0x24 | 0x25 | 0x27 | 0x2E) {
+                pick::NAME_SELECTED = false;
+                if vk == 0x2E {
+                    // Suppr : le texte sélectionné est effacé.
+                    fl.len = 0;
+                    return true;
+                }
             }
         }
         if ch >= 32 && ansi_char(ch).is_none() {

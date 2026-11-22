@@ -220,11 +220,11 @@ fi'
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
-# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
-# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau
+# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).
 set winlux_efi_args=
 if [ "\${grub_platform}-\${grub_cpu}" = "efi-i386" ]; then
-    set winlux_efi_args=efi=noruntime
+    set winlux_efi_args=no5lvl
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop

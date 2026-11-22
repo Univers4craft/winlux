@@ -125,6 +125,57 @@ extern "win64" fn lsa_no_policy(_a: usize, _b: usize, _c: usize, _d: usize) -> u
     STATUS_INVALID_HANDLE
 }
 
+// Les fonctions suivantes prennent aussi un handle de stratégie, que
+// LsaOpenPolicy ne délivre jamais : même réponse, avec leur nombre exact
+// d'arguments (pages sdk-api ntsecapi ; contrats
+// api-ms-win-security-lsalookup-l2-1-0 et -lsapolicy-l1-1-0, Refs #2902).
+
+/// `LsaEnumerateTrustedDomains(stratégie, &contexte, &tampon, taille, &nombre)`.
+extern "win64" fn lsa_enumerate_trusted_domains(
+    _policy: usize,
+    _context: usize,
+    _buffer: usize,
+    _max: u32,
+    _count: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupNames2(stratégie, drapeaux, nombre, noms, &domaines, &sids)`.
+extern "win64" fn lsa_lookup_names2(
+    _policy: usize,
+    _flags: u32,
+    _count: u32,
+    _names: usize,
+    _domains: usize,
+    _sids: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupSids(stratégie, nombre, sids, &domaines, &noms)`.
+extern "win64" fn lsa_lookup_sids(
+    _policy: usize,
+    _count: u32,
+    _sids: usize,
+    _domains: usize,
+    _names: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
+/// `LsaLookupSids2(stratégie, options, nombre, sids, &domaines, &noms)`.
+extern "win64" fn lsa_lookup_sids2(
+    _policy: usize,
+    _options: u32,
+    _count: u32,
+    _sids: usize,
+    _domains: usize,
+    _names: usize,
+) -> u32 {
+    STATUS_INVALID_HANDLE
+}
+
 // ── LSA (secur32) ───────────────────────────────────────────────────────
 
 fn lsa_handles() -> &'static Mutex<HashSet<usize>> {
@@ -1161,6 +1212,10 @@ pub fn exports() -> Exports {
         "LsaRemoveAccountRights" => fn lsa_no_policy,
         "LsaRetrievePrivateData" => fn lsa_no_policy,
         "LsaStorePrivateData" => fn lsa_no_policy,
+        "LsaEnumerateTrustedDomains" => fn lsa_enumerate_trusted_domains,
+        "LsaLookupNames2" => fn lsa_lookup_names2,
+        "LsaLookupSids" => fn lsa_lookup_sids,
+        "LsaLookupSids2" => fn lsa_lookup_sids2,
         "OpenEventLogW" => fn open_event_log_w,
         "OpenBackupEventLogW" => fn open_backup_event_log_w,
         "CloseEventLog" => fn close_event_log,
@@ -1252,6 +1307,21 @@ pub fn secur32_exports() -> Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Aucune stratégie LSA n'est jamais ouverte : les fonctions à handle
+    /// de stratégie ajoutées pour les contrats lsalookup et lsapolicy
+    /// répondent comme les autres (Refs #2902).
+    #[test]
+    fn fonctions_a_strategie_sans_handle_2902() {
+        assert_eq!(
+            lsa_enumerate_trusted_domains(0, 0, 0, 0, 0),
+            STATUS_INVALID_HANDLE
+        );
+        assert_eq!(lsa_lookup_names2(0, 0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_lookup_sids(0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_lookup_sids2(0, 0, 0, 0, 0, 0), STATUS_INVALID_HANDLE);
+        assert_eq!(lsa_no_policy(0, 0, 0, 0), STATUS_INVALID_HANDLE);
+    }
 
     #[test]
     fn codes_nt_convertis() {

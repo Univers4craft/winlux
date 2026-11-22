@@ -3,10 +3,10 @@ title: Software and games
 description: The Windows software and games that install and launch in Winlux, checked one by one, and the ones still in progress.
 ---
 
-Every program on this page was installed from its official website, in its Windows version, then launched and used in Winlux on our test bench. The list is updated after every check.
+Every program on this page was downloaded from its publisher's official website, in its Windows version, then installed and launched in Winlux on our test bench. The list is updated after every check.
 
 > [!note]
-> List drawn up on 10 November 2026. Some rows apply to the next test version, not yet published.
+> List drawn up on 22 November 2026, from the published v0.2.21 release and the checks made since. Some rows apply to the next version, v0.3, not yet published.
 
 ## Software that works
 
@@ -15,7 +15,9 @@ Every program on this page was installed from its official website, in its Windo
 | VLC | Multimedia | Installs, plays videos and music |
 | Audacity 3.6 | Multimedia | Installs and uninstalls cleanly, opens and is usable |
 | ScreenToGif | Multimedia | Opens and records the screen |
-| 7-Zip (64 and 32 bit) | Files | Installs, opens and creates archives; in a console, `7z.exe` still exits with code 5 ([#1479](issue:1479)) |
+| OBS Studio | Multimedia | Opens its window with the preview ([#2262](issue:2262), [#2313](issue:2313)) |
+| Paint.NET 5.1 | Image | Installs (Winlux fetches the full package from the publisher), opens and draws; the web installer's downloader does not finish yet ([#2752](issue:2752)) |
+| 7-Zip (64 and 32 bit) | Files | Installs, opens and creates archives, in a window as well as in a console |
 | Notepad++ 8.6 | Documents | Installs and uninstalls cleanly, edits files |
 | SumatraPDF 3.6 | Documents | Opens and displays PDF files |
 | Flow Launcher | Tools | Installs and searches for programs and files |
@@ -23,6 +25,7 @@ Every program on this page was installed from its official website, in its Windo
 | FileZilla | Network | Installs and transfers files over FTP and SFTP |
 | WinSCP (32 bit) | Network | Launches and transfers files over SFTP |
 | Claude Code | Development | Installs and works in the terminal |
+| Pythonwin | Development | Opens its main window ([#1785](issue:1785)) |
 
 ## Games that work
 
@@ -43,9 +46,13 @@ Every program on this page was installed from its official website, in its Windo
 
 | Software | Status |
 |---|---|
-| Claude for Windows | Installs, opens, minimizes and closes; the “Maximize” button ([#1476](issue:1476)) and moving by the title bar ([#1477](issue:1477)) do not work yet |
-| Paint.NET 5.1 | Installs and uninstalls; opening the main window is being checked ([#138](issue:138)) |
-| Steam | Installs and downloads its client, does not connect yet ([#285](issue:285)) and sometimes crashes when closing ([#1440](issue:1440)) |
+| Office | The deployment tool downloads Office and checks its signatures; the installation does not finish yet ([#2740](issue:2740)) |
+| Adobe Acrobat Reader | Installs; the application is not usable yet ([#236](issue:236)) |
+| Teams | Installs and starts, without reaching the sign-in screen ([#2511](issue:2511), [#2726](issue:2726)) |
+| Adobe Creative Cloud | The installer starts and reaches the publisher's servers, its window does not show yet ([#2784](issue:2784)) |
+| OneDrive | The installer does not start yet ([#2851](issue:2851)) |
+| Claude for Windows | Installs and opens; the maximize and move defects are fixed, the whole app still needs a new check |
+| Steam | Installs and downloads its client, does not connect yet ([#285](issue:285)) |
 | IrfanView | Not fully tried yet ([#488](issue:488)) |
 | Photoshop | Not fully tried yet |
 

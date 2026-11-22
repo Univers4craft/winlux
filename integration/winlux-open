@@ -6,7 +6,10 @@
 # qui reste ouvert à la fin; les programmes graphiques sont lancés directement.
 # Les erreurs sont affichées dans une boîte de dialogue lorsque c'est possible.
 set -u
-umask 077
+# Pas d'umask global : le programme Windows lancé ici hérite de l'umask du
+# compte, comme un outil natif ; ses fichiers enregistrés (Bureau,
+# Documents…) ne sont pas plus fermés (#2862). Seul le dossier d'état du
+# lanceur (journal de lancement) reste privé : voir private_state.
 
 winlux=${WINLUX_RUNTIME:-winlux}
 # Code de sortie Windows complet pour un parent Windows (#2267) : un
@@ -34,6 +37,10 @@ read_code_file() {
 }
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
 log="$state/last-launch.log"
+# Dossier d'état créé en 0700 : le journal de lancement reste au compte.
+private_state() {
+    (umask 077 && mkdir -p "$state") 2>/dev/null
+}
 
 show_message() {
     title="Winlux"
@@ -354,6 +361,17 @@ EOF_ARGS
         ;;
 esac
 
+# Installateur mené à bien : noté pour le compte, le menu Démarrer ne le
+# propose plus dans « À faire » (« Pas encore installé », #2903). Une
+# ligne par chemin, les 200 derniers.
+note_installer() {
+    private_state || return 0
+    done_list="$state/installateurs-termines"
+    { grep -Fxv -- "$exe" "$done_list" 2>/dev/null; printf '%s\n' "$exe"; } | tail -n 200 >"$done_list.tmp" \
+        && mv -f "$done_list.tmp" "$done_list"
+    return 0
+}
+
 # Nom de l'appli installée, lu dans le journal du runtime (« setup : Claude
 # est installé. ») ; à défaut, le nom du fichier de l'installateur.
 installed_name() {
@@ -382,12 +400,13 @@ run_wizard() {
     fi
     "$winlux" --setup --info "$exe" >/dev/null 2>&1 || return 1
     cd "$(dirname -- "$exe")" 2>/dev/null || true
-    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    private_state || log=/dev/null
     wizard_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || wizard_code=/dev/null
     WINLUX_EXIT_CODE_FILE=$wizard_code WINLUX_BIN="$winlux" "$wizard" "$exe" >"$log" 2>&1
     status=$?
     [ "$wizard_code" = /dev/null ] || full_code=$(read_code_file "$wizard_code")
     if [ "$status" -eq 0 ] || [ "$full_code" = 0x00000BC2 ]; then
+        note_installer
         command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
         exit 0
     fi
@@ -399,7 +418,7 @@ run_wizard() {
 case "$exe" in
     *.msix|*.MSIX|*.Msix|*.appx|*.APPX|*.Appx|*.msixbundle|*.MSIXBUNDLE|*.appxbundle|*.APPXBUNDLE)
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         "$winlux" --setup "$exe" >"$log" 2>&1
         status=$?
         # Code 3 : éditeur non vérifié (paquet non signé ou chaîne non
@@ -430,10 +449,11 @@ case "$exe" in
     *.msi|*.MSI|*.Msi)
         run_wizard "$@" || true
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         "$winlux" --msiexec /i "$exe" /qb "$@" >"$log" 2>&1
         status=$?
         if [ "$status" -eq 0 ]; then
+            note_installer
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             show_message "« $(installed_name) » est installé." info
         else
@@ -445,9 +465,12 @@ $(tail -n 5 "$log" 2>/dev/null)"
         ;;
 esac
 
-reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
+# Une seule inspection quand le programme est lançable : elle relit tout le
+# fichier, et la seconde (pour la raison d'un refus) n'est utile qu'en cas
+# d'échec.
 kind=$("$winlux" --inspect "$exe" 2>/dev/null)
 if [ -z "$kind" ]; then
+    reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
     case "$reason" in
         *"32 bits"*)
             show_error "« $(basename -- "$exe") » est un programme Windows 32 bits.
@@ -464,7 +487,7 @@ case "$kind" in
     setup|uninstall)
         [ "$kind" = uninstall ] || run_wizard "$@" || true
         cd "$(dirname -- "$exe")" 2>/dev/null || true
-        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        private_state || log=/dev/null
         setup_code=$(mktemp "${TMPDIR:-/tmp}/winlux-code.XXXXXX" 2>/dev/null) || setup_code=/dev/null
         WINLUX_EXIT_CODE_FILE=$setup_code "$winlux" "$exe" "$@" >"$log" 2>&1
         status=$?
@@ -485,6 +508,7 @@ case "$kind" in
             if [ "$kind" = uninstall ]; then
                 show_message "Le programme est désinstallé." info
             else
+                note_installer
                 show_message "« $(installed_name) » est installé." info
             fi
             exit 0
@@ -497,8 +521,11 @@ $(tail -n 5 "$log" 2>/dev/null)"
         ;;
 esac
 
+# Mémorisé pour le menu Démarrer (launchers.json) en tâche de fond, à
+# priorité basse : Python mettait ~60 ms avant chaque lancement, la moitié
+# du temps jusqu'à la première fenêtre.
 if command -v winlux-applications >/dev/null 2>&1; then
-    winlux-applications register "$exe" >/dev/null 2>&1 || true
+    (nice -n 10 winlux-applications register "$exe" </dev/null >/dev/null 2>&1 &)
 fi
 
 if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] || [ ! -t 1 ]; }; then
@@ -506,7 +533,7 @@ if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DE
     open_terminal "$self" --in-terminal "$exe" "$@"
     # A missing terminal must not prevent a compatible batch/GUI-test PE from
     # starting. Interactive console applications still need a terminal.
-    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    private_state || log=/dev/null
     cd "$(dirname -- "$exe")" 2>/dev/null || true
     "$winlux" "$exe" "$@" </dev/null >"$log" 2>&1
     status=$?
@@ -520,7 +547,7 @@ fi
 # Programme graphique (ou console lancée depuis un terminal) : le dossier du
 # programme devient le répertoire courant, comme dans l'explorateur Windows,
 # sauf si un raccourci .lnk en indique un autre.
-mkdir -p "$state" 2>/dev/null || log=/dev/null
+private_state || log=/dev/null
 cd "${WINLUX_WORKDIR:-$(dirname -- "$exe")}" 2>/dev/null || cd "$(dirname -- "$exe")" 2>/dev/null || true
 if [ "$kind" = console ]; then
     exec "$winlux" "$exe" "$@"

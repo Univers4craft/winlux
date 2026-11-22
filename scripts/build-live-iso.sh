@@ -583,7 +583,7 @@ if test -d /sys/fs/cgroup && ! /bin/busybox grep -q ' /sys/fs/cgroup cgroup2 ' /
 fi
 # Variables UEFI (efibootmgr, entrée « Winlux » de l'installateur) : sans
 # efivarfs, efibootmgr répond « EFI variables are not supported ». Échoue
-# sans bruit avec efi=noruntime (UEFI 32 bits) ou au démarrage BIOS.
+# sans bruit au démarrage BIOS ou si les services UEFI sont coupés.
 if test -d /sys/firmware/efi/efivars && ! /bin/busybox grep -q ' /sys/firmware/efi/efivars ' /proc/mounts; then
     /bin/busybox mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
 fi
@@ -1524,11 +1524,11 @@ sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
-# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+# UEFI 32 bits (mode mixte) : no5lvl, pagination à 4 niveaux. Avec LA57, le noyau
+# 64 bits plante dans les services UEFI ; sans eux, aucune entrée de démarrage (#2747).
 set winlux_efi_args=
 if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
-    set winlux_efi_args=efi=noruntime
+    set winlux_efi_args=no5lvl
     # Pilote vidéo GRUB obligatoire même en menu texte : sans lui, « no suitable
     # video mode found / Booting in blind mode » et le noyau n’a aucun écran (#1852).
     insmod efi_gop

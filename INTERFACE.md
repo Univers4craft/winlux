@@ -1,7 +1,7 @@
 # Interface et expérience du bureau Winlux
 
 La session interactive utilise désormais Openbox, xfdesktop, le panneau Xfce et
-un menu GTK inspiré de Windows 11. Explorer et Paramètres restent des applications PE du runtime, ouvertes
+un menu GTK maison. Explorer et Paramètres restent des applications PE du runtime, ouvertes
 dans des fenêtres indépendantes. L'ancien shell GDI dans `testexe/src/shell/`
 reste disponible pour les tests ; les constats historiques ci-dessous le
 concernent lorsqu'ils décrivent ses trois icônes ou son menu dessiné.
