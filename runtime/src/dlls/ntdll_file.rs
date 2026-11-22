@@ -111,6 +111,10 @@ pub(crate) fn win_stat(st: &libc::stat, name: Option<&[u8]>, is_link: bool) -> W
     if name.is_some_and(|n| n.len() > 1 && n[0] == b'.' && n != b"..") {
         attributes |= FILE_ATTRIBUTE_HIDDEN;
     }
+    // Lanceur de la session à côté d'un raccourci du Bureau (#3000).
+    if name.is_some_and(crate::dlls::winfile::session_file) {
+        attributes |= FILE_ATTRIBUTE_HIDDEN | 0x4; // FILE_ATTRIBUTE_SYSTEM
+    }
     if is_link {
         attributes |= FILE_ATTRIBUTE_REPARSE_POINT;
     }

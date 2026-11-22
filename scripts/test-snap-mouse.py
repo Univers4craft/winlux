@@ -40,6 +40,9 @@ assert big[2] == 2 * bar[2], "barre à l'échelle 2 en 4K"
 assert snap["bar_wanted"]((683, 20), monitor, False) and not snap["bar_wanted"]((50, 20), monitor, False)
 assert not snap["bar_wanted"]((683, 100), monitor, False) and snap["bar_wanted"]((683, 100), monitor, True)
 assert snap["float_geometry"]((1024, 5), (683, 0, 683, 728), (300, 200, 800, 500)) == (625, 0, 800, 500)
+assert snap["float_geometry"]((1024, 600), (683, 590, 683, 728), (300, 200, 800, 500), (0, 0, 1366, 728)) == (625, 590, 800, 138), \
+    "décrochée près du bas : hauteur réduite au-dessus de la barre des tâches (#2909)"
+assert snap["float_geometry"]((1024, 5), (683, 0, 683, 728), (300, 200, 800, 500), (0, 0, 1366, 728)) == (625, 0, 800, 500)
 rank = snap["maximize_button_rank"]
 assert rank("NLIMC") == 1 and rank("NLMIC") == 2 and rank("LC") is None and rank("MLC") is None
 assert all(len(r) == 3 and all(r) for r in snap["_TR"].values())
@@ -135,6 +138,18 @@ try:
     drag(window, (700, 400))
     got = wait(lambda: frame(window) if abs(frame(window)[2] - before[2]) <= 4 else None)
     assert got and abs(got[3] - before[3]) <= 4, f"décrochée : taille d'avant {before[2:]} attendue, {frame(window)}"
+    assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "")
+
+    # Décrochée près du bas : la barre de titre reste sous la souris, même
+    # quand la taille d'avant ne tiendrait plus au-dessus de la barre des
+    # tâches (#2909).
+    drag(window, (0, 400))
+    assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "half:left")
+    low = area[1] + area[3] - before[3] // 2
+    drag(window, (500, low))
+    got = wait(lambda: frame(window) if frame(window)[2] <= before[2] + 4 else None)
+    assert got and got[1] <= low <= got[1] + 30, f"décrochée près du bas : barre de titre sous la souris ({low}), {frame(window)}"
+    assert got[1] + got[3] <= area[1] + area[3] + 4, f"décrochée près du bas : au-dessus de la barre des tâches, {frame(window)}"
     assert wait(lambda: snap["get_prop"](window, "_WINLUX_SNAP") == "")
 
     drag(window, (1365, 760))
