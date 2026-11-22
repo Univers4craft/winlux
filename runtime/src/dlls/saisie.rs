@@ -837,7 +837,12 @@ pub fn inject(events: &[Event]) -> Result<(), u32> {
         crate::trace!("saisie simulée refusée : l'écran est verrouillé");
         return Err(ERROR_ACCESS_DENIED);
     }
-    if !crate::permissions::allowed(crate::permissions::Capability::Input) {
+    // Jamais décidée : la question part sur un fil à part et cet appel est
+    // refusé comme avant, sans que le fil de l'application attende la
+    // fenêtre (#3099) ; après « Autoriser », l'appel suivant passe.
+    if crate::permissions::allowed_without_waiting(crate::permissions::Capability::Input)
+        != Some(true)
+    {
         crate::trace!("saisie simulée refusée : autorisation « input » non accordée");
         return Err(ERROR_ACCESS_DENIED);
     }
