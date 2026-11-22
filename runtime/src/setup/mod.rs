@@ -136,6 +136,67 @@ pub struct Options {
     pub allow_unverified: bool,
 }
 
+/// Programme (.exe, .dll…) chargé par un processus vivant : Windows refuse
+/// de le rouvrir en écriture (ERROR_SHARING_VIOLATION), et l'installateur
+/// demande alors de fermer le programme. Le réécrire sur place changerait
+/// les pages projetées sous le programme ouvert, qui planterait et perdrait
+/// le travail en cours (#2900). `ask` rend vrai pour réessayer : avec un
+/// écran, la personne est invitée à fermer le programme (Annuler par
+/// défaut) ; sans écran, ou sur Annuler, l'écriture est refusée.
+fn wait_image_free(path: &Path, ask: &mut dyn FnMut(&str) -> bool) -> std::io::Result<()> {
+    while crate::image_lock::in_use(path) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        crate::trace!(
+            "installation : {} en cours d'exécution, écriture suspendue",
+            path.display()
+        );
+        if !ask(&name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ResourceBusy,
+                format!(
+                    "{} est en cours d'exécution (ERROR_SHARING_VIOLATION)",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Texte de la boîte « programme ouvert », dans la langue de l'interface.
+fn close_prompt(lang: &str, name: &str) -> (&'static str, String) {
+    match lang.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("en") => (
+            "Program in use",
+            format!("{name} is running.\n\nClose it, then click Retry to continue the installation, or Cancel to stop it."),
+        ),
+        Some("de") => (
+            "Programm wird verwendet",
+            format!("{name} wird ausgeführt.\n\nSchließen Sie das Programm und klicken Sie auf „Wiederholen“, um die Installation fortzusetzen, oder auf „Abbrechen“, um sie zu beenden."),
+        ),
+        Some("es") => (
+            "Programa en uso",
+            format!("{name} se está ejecutando.\n\nCiérrelo y haga clic en Reintentar para continuar la instalación, o en Cancelar para detenerla."),
+        ),
+        _ => (
+            "Programme en cours d'utilisation",
+            format!("{name} est ouvert.\n\nFermez-le, puis cliquez sur Réessayer pour poursuivre l'installation, ou sur Annuler pour l'arrêter."),
+        ),
+    }
+}
+
+/// Réessayer (vrai) ou Annuler (faux, le choix par défaut).
+fn ask_close(name: &str) -> bool {
+    let (caption, text) = close_prompt(&crate::permissions::interface_lang(), name);
+    // MB_RETRYCANCEL | MB_ICONWARNING | MB_DEFBUTTON2
+    let answer =
+        unsafe { crate::dlls::dialogs::message_box(0, &text, caption, 0x5 | 0x30 | 0x100) };
+    answer == 4
+}
+
 fn clean(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
@@ -526,6 +587,9 @@ impl Installer {
         } else {
             self.created.push(path.clone());
         }
+        wait_image_free(&path, &mut |name| {
+            crate::dlls::gui::backend_is_interactive() && ask_close(name)
+        })?;
         let f = std::fs::File::create(&path)?;
         self.note_file(&path);
         Ok((path, f))
@@ -1230,6 +1294,50 @@ pub fn le_u64(d: &[u8], off: usize) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un programme ouvert n'est jamais réécrit sur place : l'installation
+    /// attend qu'il soit fermé, ou s'arrête sur Annuler (#2900).
+    #[test]
+    fn programme_ouvert_jamais_reecrit() {
+        use std::os::fd::AsRawFd;
+        let root = std::env::temp_dir().join(format!("winlux-setup-ouvert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let exe = root.join("Editeur.exe");
+        std::fs::write(&exe, b"MZ ancienne version").unwrap();
+        // Le programme « tourne » : son image est tenue comme par le chargeur.
+        let held = std::fs::File::open(&exe).unwrap();
+        assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_SH) }, 0);
+
+        let mut asked = Vec::new();
+        let err = wait_image_free(&exe, &mut |n| {
+            asked.push(n.to_string());
+            false
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ResourceBusy);
+        assert_eq!(
+            asked,
+            ["Editeur.exe"],
+            "la personne est prévenue, par son nom"
+        );
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZ ancienne version");
+
+        // Fermé pendant que la boîte est ouverte, puis Réessayer.
+        let mut held = Some(held);
+        wait_image_free(&exe, &mut |_| {
+            held.take();
+            true
+        })
+        .unwrap();
+        // Un document n'est jamais concerné.
+        let doc = root.join("notes.txt");
+        std::fs::write(&doc, b"x").unwrap();
+        let tenu = std::fs::File::open(&doc).unwrap();
+        unsafe { libc::flock(tenu.as_raw_fd(), libc::LOCK_SH) };
+        wait_image_free(&doc, &mut |_| panic!("aucune question pour un document")).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn wildcards() {

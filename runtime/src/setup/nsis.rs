@@ -777,6 +777,14 @@ impl<'a, 'b> Vm<'a, 'b> {
                                     if let Some(inst) = self.inst.as_deref_mut() {
                                         inst.log.log(&format!("{name} : {err}"));
                                     }
+                                    // Programme ouvert que la personne n'a pas
+                                    // fermé : « Abandonner » de la boîte
+                                    // d'erreur de NSIS, l'installation
+                                    // s'arrête au lieu de sauter le fichier
+                                    // (#2900).
+                                    if err.kind() == std::io::ErrorKind::ResourceBusy {
+                                        return Err(Stop::Abort);
+                                    }
                                     if overwrite == 2 {
                                         self.error();
                                     }
