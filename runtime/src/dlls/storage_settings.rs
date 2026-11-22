@@ -31,7 +31,10 @@
 //!   enregistrées ; une autre valeur (tableau, `ApplicationDataCompositeValue`,
 //!   objet de l'application) reste en mémoire pour ce lancement, et le
 //!   journal le dit une fois, sans nommer le réglage ;
-//! - `Containers` n'est pas encore servi (E_NOTIMPL, journalisé une fois).
+//! - `Containers` rend une vue figée des sous-conteneurs au moment de
+//!   l'appel (IMapView et son parcours, #2962) ; un conteneur supprimé
+//!   ensuite reste dans la vue, et son `Values` rend alors
+//!   HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND).
 //!
 //! Sources : la documentation publique citée ; identifiants d'interface et
 //! ordre des méthodes tels que les publie windows-rs 0.58 (licence MIT,
@@ -43,11 +46,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::comobj::{
-    guid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
+    guid, pinterface_iid, read_guid, Guid, VTable, E_INVALIDARG, E_NOINTERFACE, IID_IUNKNOWN, S_OK,
 };
 
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
-const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
+const E_BOUNDS: i32 = 0x8000_000Bu32 as i32;
 /// HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND).
 pub(crate) const E_FILE_NOT_FOUND: i32 = 0x8007_0002u32 as i32;
 
@@ -206,6 +209,15 @@ impl Store {
 
     fn exists(&self, path: &ContainerPath) -> bool {
         lock(&self.sets).contains_key(path)
+    }
+
+    /// Noms des sous-conteneurs directs de `path`, dans l'ordre des noms.
+    fn children(&self, path: &ContainerPath) -> Vec<Vec<u16>> {
+        lock(&self.sets)
+            .keys()
+            .filter(|k| k.len() == path.len() + 1 && k[..path.len()] == path[..])
+            .map(|k| k[path.len()].clone())
+            .collect()
     }
 
     /// Ensemble du conteneur, retenu une fois de plus.
@@ -440,12 +452,14 @@ unsafe extern "win64" fn c_values(this: usize, out: *mut usize) -> i32 {
         }
     }
 }
-unsafe extern "win64" fn c_containers(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+/// Containers : vue figée des sous-conteneurs (#2962).
+unsafe extern "win64" fn c_containers(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
     }
-    warn_once("Containers pas encore servie (E_NOTIMPL)");
-    E_NOTIMPL
+    let c = cont(this);
+    *out = new_kids(c.store, c.path.clone());
+    S_OK
 }
 
 /// Chemin du sous-conteneur `name`, ou E_INVALIDARG.
@@ -530,6 +544,418 @@ static CLOSABLE_VTBL: VTable<7> = VTable([
     class_name as *const (),
     trust_level as *const (),
     x_close as *const (),
+]);
+
+// ============================================================
+//  Containers : IMapView<String, ApplicationDataContainer>, son parcours
+//  (IIterable, IIterator) et ses paires (IKeyValuePair) (#2962)
+// ============================================================
+
+/// Interfaces paramétrées de la vue des sous-conteneurs.
+struct KidsIids {
+    view: Guid,
+    iterable: Guid,
+    iterator: Guid,
+    pair: Guid,
+}
+
+fn kids_iids() -> &'static KidsIids {
+    static I: OnceLock<KidsIids> = OnceLock::new();
+    I.get_or_init(|| {
+        let rc =
+            "rc(Windows.Storage.ApplicationDataContainer;{c5aefd1e-f467-40ba-8566-ab640a441e1d})";
+        let pair = format!("pinterface({{02b51929-c1c4-4a7e-8940-0312b5c18500}};string;{rc})");
+        KidsIids {
+            view: pinterface_iid(&format!(
+                "pinterface({{e480ce40-a338-4ada-adcf-272272e48cb9}};string;{rc})"
+            )),
+            iterable: pinterface_iid(&format!(
+                "pinterface({{faa585ea-6214-4217-afda-7f46de5869b3}};{pair})"
+            )),
+            iterator: pinterface_iid(&format!(
+                "pinterface({{6a79e863-4300-459a-9966-cbb660963ee1}};{pair})"
+            )),
+            pair: pinterface_iid(&pair),
+        }
+    })
+}
+
+const BASE_IIDS: [Guid; 3] = [IID_IUNKNOWN, IID_IINSPECTABLE, IID_IAGILEOBJECT];
+
+unsafe fn hstr_class(name: &str, out: *mut usize) -> i32 {
+    let w: Vec<u16> = name.encode_utf16().collect();
+    hstr_out(&w, out)
+}
+
+/// Vue : IMapView (entrée 0) et IIterable (entrée 8).
+#[repr(C)]
+struct Kids {
+    vt: &'static VTable<10>,
+    vt_iter: &'static VTable<7>,
+    refs: AtomicU32,
+    store: &'static Store,
+    parent: ContainerPath,
+    names: Vec<Vec<u16>>,
+}
+
+fn new_kids(store: &'static Store, parent: ContainerPath) -> usize {
+    let names = store.children(&parent);
+    Box::into_raw(Box::new(Kids {
+        vt: &KIDS_VTBL,
+        vt_iter: &KIDS_ITERABLE_VTBL,
+        refs: AtomicU32::new(1),
+        store,
+        parent,
+        names,
+    })) as usize
+}
+
+unsafe fn kids<'a>(base: usize) -> &'a Kids {
+    &*(base as *const Kids)
+}
+
+impl Kids {
+    fn child(&self, name: &[u16]) -> usize {
+        let mut p = self.parent.clone();
+        p.push(name.to_vec());
+        new_container(self.store, p)
+    }
+}
+
+unsafe fn kids_qi(base: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Some(iid) = read_guid(iid) else {
+        *out = 0;
+        return E_INVALIDARG;
+    };
+    *out = if iid == kids_iids().iterable {
+        base + 8
+    } else if iid == kids_iids().view || BASE_IIDS.contains(&iid) {
+        base
+    } else {
+        super::comobj::log_no_interface("ApplicationDataContainer.Containers", &iid as *const Guid);
+        0
+    };
+    if *out == 0 {
+        return E_NOINTERFACE;
+    }
+    kids(base).refs.fetch_add(1, Ordering::SeqCst);
+    S_OK
+}
+unsafe fn kids_release(base: usize) -> u32 {
+    let n = kids(base).refs.fetch_sub(1, Ordering::SeqCst) - 1;
+    if n == 0 {
+        drop(Box::from_raw(base as *mut Kids));
+    }
+    n
+}
+unsafe extern "win64" fn k_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    kids_qi(this, iid, out)
+}
+unsafe extern "win64" fn k_add_ref(this: usize) -> u32 {
+    kids(this).refs.fetch_add(1, Ordering::SeqCst) + 1
+}
+unsafe extern "win64" fn k_release(this: usize) -> u32 {
+    kids_release(this)
+}
+unsafe extern "win64" fn ki_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    kids_qi(this - 8, iid, out)
+}
+unsafe extern "win64" fn ki_add_ref(this: usize) -> u32 {
+    kids(this - 8).refs.fetch_add(1, Ordering::SeqCst) + 1
+}
+unsafe extern "win64" fn ki_release(this: usize) -> u32 {
+    kids_release(this - 8)
+}
+unsafe extern "win64" fn k_class(_this: usize, out: *mut usize) -> i32 {
+    hstr_class(
+        "Windows.Foundation.Collections.IMapView`2<String, Windows.Storage.ApplicationDataContainer>",
+        out,
+    )
+}
+unsafe extern "win64" fn k_lookup(this: usize, key: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let k = kids(this);
+    let name = hstr_in(key);
+    if k.names.contains(&name) {
+        *out = k.child(&name);
+        S_OK
+    } else {
+        *out = 0;
+        E_BOUNDS
+    }
+}
+unsafe extern "win64" fn k_size(this: usize, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = kids(this).names.len() as u32;
+    S_OK
+}
+unsafe extern "win64" fn k_has_key(this: usize, key: usize, out: *mut u8) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = kids(this).names.contains(&hstr_in(key)) as u8;
+    S_OK
+}
+/// Split : une vue qui ne se coupe pas rend deux nuls (Learn, IMapView.Split).
+unsafe extern "win64" fn k_split(_this: usize, first: *mut usize, second: *mut usize) -> i32 {
+    if first.is_null() || second.is_null() {
+        return E_POINTER;
+    }
+    *first = 0;
+    *second = 0;
+    S_OK
+}
+unsafe extern "win64" fn ki_first(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let base = this - 8;
+    kids(base).refs.fetch_add(1, Ordering::SeqCst);
+    *out = Box::into_raw(Box::new(KidsIter {
+        vt: &KIDS_ITERATOR_VTBL,
+        refs: AtomicU32::new(1),
+        view: base,
+        pos: AtomicU32::new(0),
+    })) as usize;
+    S_OK
+}
+
+static KIDS_VTBL: VTable<10> = VTable([
+    k_qi as *const (),
+    k_add_ref as *const (),
+    k_release as *const (),
+    get_iids as *const (),
+    k_class as *const (),
+    trust_level as *const (),
+    k_lookup as *const (),
+    k_size as *const (),
+    k_has_key as *const (),
+    k_split as *const (),
+]);
+static KIDS_ITERABLE_VTBL: VTable<7> = VTable([
+    ki_qi as *const (),
+    ki_add_ref as *const (),
+    ki_release as *const (),
+    get_iids as *const (),
+    k_class as *const (),
+    trust_level as *const (),
+    ki_first as *const (),
+]);
+
+/// Parcours de la vue : il garde la vue et la position.
+#[repr(C)]
+struct KidsIter {
+    vt: &'static VTable<10>,
+    refs: AtomicU32,
+    view: usize,
+    pos: AtomicU32,
+}
+
+unsafe fn kiter<'a>(this: usize) -> &'a KidsIter {
+    &*(this as *const KidsIter)
+}
+unsafe extern "win64" fn it_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Some(iid) = read_guid(iid) else {
+        *out = 0;
+        return E_INVALIDARG;
+    };
+    if iid != kids_iids().iterator && !BASE_IIDS.contains(&iid) {
+        super::comobj::log_no_interface(
+            "ApplicationDataContainer.Containers (parcours)",
+            &iid as *const Guid,
+        );
+        *out = 0;
+        return E_NOINTERFACE;
+    }
+    kiter(this).refs.fetch_add(1, Ordering::SeqCst);
+    *out = this;
+    S_OK
+}
+unsafe extern "win64" fn it_add_ref(this: usize) -> u32 {
+    kiter(this).refs.fetch_add(1, Ordering::SeqCst) + 1
+}
+unsafe extern "win64" fn it_release(this: usize) -> u32 {
+    let n = kiter(this).refs.fetch_sub(1, Ordering::SeqCst) - 1;
+    if n == 0 {
+        let it = Box::from_raw(this as *mut KidsIter);
+        kids_release(it.view);
+    }
+    n
+}
+unsafe extern "win64" fn it_class(_this: usize, out: *mut usize) -> i32 {
+    hstr_class(
+        "Windows.Foundation.Collections.IIterator`1<Windows.Foundation.Collections.IKeyValuePair`2<String, Windows.Storage.ApplicationDataContainer>>",
+        out,
+    )
+}
+unsafe fn it_pair(it: &KidsIter, i: usize) -> Option<usize> {
+    let k = kids(it.view);
+    let name = k.names.get(i)?;
+    let mut p = k.parent.clone();
+    p.push(name.clone());
+    Some(Box::into_raw(Box::new(KidsPair {
+        vt: &KIDS_PAIR_VTBL,
+        refs: AtomicU32::new(1),
+        store: k.store,
+        path: p,
+    })) as usize)
+}
+unsafe extern "win64" fn it_current(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let it = kiter(this);
+    match it_pair(it, it.pos.load(Ordering::SeqCst) as usize) {
+        Some(p) => {
+            *out = p;
+            S_OK
+        }
+        None => {
+            *out = 0;
+            E_BOUNDS
+        }
+    }
+}
+unsafe extern "win64" fn it_has_current(this: usize, out: *mut u8) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let it = kiter(this);
+    *out = ((it.pos.load(Ordering::SeqCst) as usize) < kids(it.view).names.len()) as u8;
+    S_OK
+}
+unsafe extern "win64" fn it_move_next(this: usize, out: *mut u8) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let it = kiter(this);
+    let len = kids(it.view).names.len();
+    let pos = it.pos.load(Ordering::SeqCst) as usize;
+    if pos >= len {
+        *out = 0;
+        return E_BOUNDS;
+    }
+    it.pos.store((pos + 1) as u32, Ordering::SeqCst);
+    *out = (pos + 1 < len) as u8;
+    S_OK
+}
+unsafe extern "win64" fn it_get_many(
+    this: usize,
+    capacity: u32,
+    items: *mut usize,
+    actual: *mut u32,
+) -> i32 {
+    if actual.is_null() || (items.is_null() && capacity > 0) {
+        return E_POINTER;
+    }
+    let it = kiter(this);
+    let mut n = 0u32;
+    while n < capacity {
+        let pos = it.pos.load(Ordering::SeqCst) as usize;
+        let Some(p) = it_pair(it, pos) else {
+            break;
+        };
+        *items.add(n as usize) = p;
+        it.pos.store((pos + 1) as u32, Ordering::SeqCst);
+        n += 1;
+    }
+    *actual = n;
+    S_OK
+}
+
+static KIDS_ITERATOR_VTBL: VTable<10> = VTable([
+    it_qi as *const (),
+    it_add_ref as *const (),
+    it_release as *const (),
+    get_iids as *const (),
+    it_class as *const (),
+    trust_level as *const (),
+    it_current as *const (),
+    it_has_current as *const (),
+    it_move_next as *const (),
+    it_get_many as *const (),
+]);
+
+/// Paire (nom, sous-conteneur).
+#[repr(C)]
+struct KidsPair {
+    vt: &'static VTable<8>,
+    refs: AtomicU32,
+    store: &'static Store,
+    path: ContainerPath,
+}
+
+unsafe fn kpair<'a>(this: usize) -> &'a KidsPair {
+    &*(this as *const KidsPair)
+}
+unsafe extern "win64" fn pr_qi(this: usize, iid: *const u8, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Some(iid) = read_guid(iid) else {
+        *out = 0;
+        return E_INVALIDARG;
+    };
+    if iid != kids_iids().pair && !BASE_IIDS.contains(&iid) {
+        super::comobj::log_no_interface(
+            "ApplicationDataContainer.Containers (paire)",
+            &iid as *const Guid,
+        );
+        *out = 0;
+        return E_NOINTERFACE;
+    }
+    kpair(this).refs.fetch_add(1, Ordering::SeqCst);
+    *out = this;
+    S_OK
+}
+unsafe extern "win64" fn pr_add_ref(this: usize) -> u32 {
+    kpair(this).refs.fetch_add(1, Ordering::SeqCst) + 1
+}
+unsafe extern "win64" fn pr_release(this: usize) -> u32 {
+    let n = kpair(this).refs.fetch_sub(1, Ordering::SeqCst) - 1;
+    if n == 0 {
+        drop(Box::from_raw(this as *mut KidsPair));
+    }
+    n
+}
+unsafe extern "win64" fn pr_class(_this: usize, out: *mut usize) -> i32 {
+    hstr_class(
+        "Windows.Foundation.Collections.IKeyValuePair`2<String, Windows.Storage.ApplicationDataContainer>",
+        out,
+    )
+}
+unsafe extern "win64" fn pr_key(this: usize, out: *mut usize) -> i32 {
+    let empty = Vec::new();
+    hstr_out(kpair(this).path.last().unwrap_or(&empty), out)
+}
+unsafe extern "win64" fn pr_value(this: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let p = kpair(this);
+    *out = new_container(p.store, p.path.clone());
+    S_OK
+}
+
+static KIDS_PAIR_VTBL: VTable<8> = VTable([
+    pr_qi as *const (),
+    pr_add_ref as *const (),
+    pr_release as *const (),
+    get_iids as *const (),
+    pr_class as *const (),
+    trust_level as *const (),
+    pr_key as *const (),
+    pr_value as *const (),
 ]);
 
 #[cfg(test)]
@@ -711,6 +1137,131 @@ mod tests {
         );
         std::fs::write(&file, "autre chose\nv / 0062 4 7\n").unwrap();
         assert!(reread(&file).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sous_conteneurs_listes_par_containers_2962() {
+        let dir = std::env::temp_dir().join(format!("winlux-conteneurs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("winlux-local.txt");
+        let text = |h: usize| unsafe {
+            String::from_utf16_lossy(super::super::electron_win32::hstring_slice(h))
+        };
+        unsafe {
+            let root = root_container(&file, 0);
+            let mut sub = 0usize;
+            for n in ["b", "a"] {
+                assert_eq!(
+                    c_create_container(root, hs(n), DISPOSITION_ALWAYS, &mut sub),
+                    S_OK
+                );
+                c_release(sub);
+            }
+            // Un petit-enfant n'est pas listé à la racine.
+            assert_eq!(
+                c_create_container(root, hs("a"), DISPOSITION_EXISTING, &mut sub),
+                S_OK
+            );
+            let mut deep = 0usize;
+            assert_eq!(
+                c_create_container(sub, hs("c"), DISPOSITION_ALWAYS, &mut deep),
+                S_OK
+            );
+            c_release(deep);
+
+            // Containers (entrée 9) : IMapView des deux enfants.
+            let mut view = 0usize;
+            assert_eq!(c_containers(root, &mut view), S_OK);
+            let qi: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> i32 = call(view, 0);
+            let mut same = 0usize;
+            assert_eq!(qi(view, kids_iids().view.as_ptr(), &mut same), S_OK);
+            assert_eq!(same, view);
+            k_release(same);
+            let mut n = 0u32;
+            assert_eq!(k_size(view, &mut n), S_OK);
+            assert_eq!(n, 2);
+            let mut has = 9u8;
+            assert_eq!(k_has_key(view, hs("a"), &mut has), S_OK);
+            assert_eq!(has, 1);
+            assert_eq!(k_has_key(view, hs("c"), &mut has), S_OK);
+            assert_eq!(has, 0);
+            let mut child = 0usize;
+            assert_eq!(k_lookup(view, hs("absent"), &mut child), E_BOUNDS);
+            assert_eq!(child, 0);
+            assert_eq!(k_lookup(view, hs("b"), &mut child), S_OK);
+            let mut name = 0usize;
+            assert_eq!(c_name(child, &mut name), S_OK);
+            assert_eq!(text(name), "b");
+            c_release(child);
+            let (mut f, mut g) = (5usize, 5usize);
+            assert_eq!(k_split(view, &mut f, &mut g), S_OK);
+            assert_eq!((f, g), (0, 0));
+
+            // Le sous-conteneur « a » liste son propre enfant.
+            let mut sub_view = 0usize;
+            assert_eq!(c_containers(sub, &mut sub_view), S_OK);
+            assert_eq!(k_size(sub_view, &mut n), S_OK);
+            assert_eq!(n, 1);
+            k_release(sub_view);
+            c_release(sub);
+
+            // Parcours : IIterable, puis des paires (nom, conteneur) dans
+            // l'ordre des noms.
+            let mut iterable = 0usize;
+            assert_eq!(qi(view, kids_iids().iterable.as_ptr(), &mut iterable), S_OK);
+            assert_eq!(iterable, view + 8);
+            let mut it = 0usize;
+            assert_eq!(ki_first(iterable, &mut it), S_OK);
+            ki_release(iterable);
+            let mut names = Vec::new();
+            loop {
+                let mut cur = 9u8;
+                assert_eq!(it_has_current(it, &mut cur), S_OK);
+                if cur == 0 {
+                    break;
+                }
+                let mut pair = 0usize;
+                assert_eq!(it_current(it, &mut pair), S_OK);
+                let mut same = 0usize;
+                assert_eq!(pr_qi(pair, kids_iids().pair.as_ptr(), &mut same), S_OK);
+                pr_release(same);
+                let mut key = 0usize;
+                assert_eq!(pr_key(pair, &mut key), S_OK);
+                let mut value = 0usize;
+                assert_eq!(pr_value(pair, &mut value), S_OK);
+                let mut vname = 0usize;
+                assert_eq!(c_name(value, &mut vname), S_OK);
+                assert_eq!(text(vname), text(key));
+                names.push(text(key));
+                c_release(value);
+                assert_eq!(pr_release(pair), 0);
+                let mut more = 9u8;
+                assert_eq!(it_move_next(it, &mut more), S_OK);
+            }
+            assert_eq!(names, ["a", "b"]);
+            let mut pair = 7usize;
+            assert_eq!(it_current(it, &mut pair), E_BOUNDS);
+            assert_eq!(pair, 0);
+            assert_eq!(it_release(it), 0);
+
+            // GetMany depuis un nouveau parcours.
+            let mut it2 = 0usize;
+            assert_eq!(ki_first(view + 8, &mut it2), S_OK);
+            let mut items = [0usize; 4];
+            let mut got = 0u32;
+            assert_eq!(it_get_many(it2, 4, items.as_mut_ptr(), &mut got), S_OK);
+            assert_eq!(got, 2);
+            for p in &items[..2] {
+                pr_release(*p);
+            }
+            assert_eq!(it_release(it2), 0);
+
+            // Le parcours rendu, la vue ne garde plus que sa référence.
+            assert_eq!(k_release(view), 0);
+            c_release(root);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
