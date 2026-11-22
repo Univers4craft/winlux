@@ -82,6 +82,7 @@ RESOLV = Path(ROOT + "/etc/resolv.conf")
 NFT = os.environ.get("WINLUX_PARENTAL_NFT", "nft")
 RELAY_SOCKET = os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")
 SELF = os.path.abspath(__file__)
+LOADER = "/usr/lib/winlux/winlux-python"
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 ADMIN_GROUPS = ("sudo", "wheel", "admin")
@@ -1973,7 +1974,9 @@ def main(argv):
 
             def log(text):
                 print(time.strftime("%Y-%m-%d %H:%M:%S"), "supervision :", text, flush=True)
-            return supervise([sys.executable, "-B", SELF, "daemon"], log)
+            # Le service aussi depuis son bytecode en cache (#3107), comme les démons de la session.
+            loader = [LOADER] if os.access(LOADER, os.X_OK) else []
+            return supervise([sys.executable, "-B", *loader, SELF, "daemon"], log)
         if command == "status" and not rest:
             user = peer()
             state = state_of(user)

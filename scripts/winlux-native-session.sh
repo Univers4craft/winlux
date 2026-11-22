@@ -12,6 +12,10 @@ export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
 # Liens web des programmes qui lisent $BROWSER (outils en ligne de commande,
 # Python webbrowser) : le navigateur installé, comme xdg-open et les .exe.
 export BROWSER="${BROWSER:-/usr/bin/winlux-browser}"
+# Démons Python résidents lancés depuis leur bytecode en cache (#3107) : sans
+# lui, chacun garde toute la session la mémoire de sa propre compilation.
+py=
+if test -x /usr/lib/winlux/winlux-python; then py=/usr/lib/winlux/winlux-python; fi
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 # Winlux uses its own init, so start hardware daemons directly instead of
@@ -132,7 +136,7 @@ esac
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
-/usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+$py /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
 # Fond d'écran fixé avant la barre des tâches : le bureau arrive avec lui.
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
 # Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
@@ -188,14 +192,14 @@ if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux
 # (winlux-user-session.sh). Sans eux, Windows+V restait vide, les alarmes de
 # l'Horloge ne sonnaient pas fenêtre fermée et l'éclairage nocturne ne
 # s'appliquait pas.
-if test -x /usr/bin/winlux-clipboard; then /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
-if test -x /usr/bin/winlux-alarms; then /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
-if test -x /usr/bin/winlux-ambiance; then /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
-if test -x /usr/bin/winlux-snap; then /usr/bin/winlux-snap watch >/run/winlux/snap-watch.log 2>&1 & fi
+if test -x /usr/bin/winlux-clipboard; then $py /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
+if test -x /usr/bin/winlux-alarms; then $py /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
+if test -x /usr/bin/winlux-ambiance; then $py /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
+if test -x /usr/bin/winlux-snap; then $py /usr/bin/winlux-snap watch >/run/winlux/snap-watch.log 2>&1 & fi
 # Écran gardé allumé pendant l'installation d'une mise à jour (#634).
-if test -x /usr/bin/winlux-screensaver-inhibit; then /usr/bin/winlux-screensaver-inhibit watch-updates >/run/winlux/update-screen.log 2>&1 & fi
+if test -x /usr/bin/winlux-screensaver-inhibit; then $py /usr/bin/winlux-screensaver-inhibit watch-updates >/run/winlux/update-screen.log 2>&1 & fi
 # Touche Windows seule : ouvre ou ferme Démarrer (#605).
-if test -x /usr/bin/winlux-super-key; then /usr/bin/winlux-super-key >/run/winlux/super-key.log 2>&1 & fi
+if test -x /usr/bin/winlux-super-key; then $py /usr/bin/winlux-super-key >/run/winlux/super-key.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
@@ -235,7 +239,7 @@ if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk
 # Un seul processus résident, en basse priorité : il refait le catalogue
 # quand un raccourci, le registre ou un navigateur change, au lieu de tout
 # relire toutes les 5 s (#214). Son journal est borné par lui-même.
-nice -n 10 /usr/bin/winlux-applications watch </dev/null >>/run/winlux/applications.log 2>&1 &
+nice -n 10 $py /usr/bin/winlux-applications watch </dev/null >>/run/winlux/applications.log 2>&1 &
 echo $! > /run/winlux/catalogue.pid
 # Demandes ponctuelles des navigateurs : deux tests de fichier, pas de Python.
 (
@@ -261,7 +265,7 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
     # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
     # openbox, seul lu par les règles de picom (#582).
     if test -x /usr/bin/winlux-maximized-watch; then
-        /usr/bin/winlux-maximized-watch >/run/winlux/maximized-watch.log 2>&1 &
+        $py /usr/bin/winlux-maximized-watch >/run/winlux/maximized-watch.log 2>&1 &
     fi
     # Le bureau (xfdesktop) est lancé ensuite par l'init : son arrivée laissait
     # noires les fenêtres déjà ouvertes (Bienvenue au premier démarrage).
@@ -332,6 +336,6 @@ fi
 echo $! > /run/winlux/screensaver.pid
 # Verrouillage après inactivité et au retour de veille (Paramètres > Confidentialité et sécurité).
 if ! { test -f /run/winlux/lock-daemon.pid && kill -0 "$(cat /run/winlux/lock-daemon.pid)" 2>/dev/null; }; then
-    /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
+    $py /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
     echo $! > /run/winlux/lock-daemon.pid
 fi

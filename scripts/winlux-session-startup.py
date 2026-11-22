@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Launch explicit per-user XDG startup applications once per session."""
 from pathlib import Path
+import os
 import shutil
 from gi.repository import Gio, GLib
 
@@ -33,7 +34,10 @@ if shutil.which("winlux-report"):
 # Envoi automatique des plantages (#438) : attend 2 minutes, priorité
 # minimale, aucune fenêtre ; ne fait rien si l'envoi est coupé dans Paramètres.
 if shutil.which("winlux-report"):
-    try:Gio.Subprocess.new(["winlux-report","--background"],
+    # Depuis son bytecode en cache (#3107) : le service attend des heures.
+    command=["winlux-report","--background"]
+    if os.access("/usr/lib/winlux/winlux-python",os.X_OK):command=["/usr/lib/winlux/winlux-python",shutil.which("winlux-report"),"--background"]
+    try:Gio.Subprocess.new(command,
                            Gio.SubprocessFlags.STDOUT_SILENCE|Gio.SubprocessFlags.STDERR_SILENCE)
     except GLib.Error as error:print(f"winlux-report: {error}")
 

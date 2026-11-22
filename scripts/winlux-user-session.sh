@@ -34,6 +34,10 @@ if test -z "${LANG:-}"; then
 fi
 primary=${WINLUX_PRIMARY_SESSION:-0}
 logs=${WINLUX_SESSION_LOGS:-"$XDG_RUNTIME_DIR/winlux"}
+# Démons Python résidents lancés depuis leur bytecode en cache (#3107) : sans
+# lui, chacun garde toute la session la mémoire de sa propre compilation.
+py=
+if test -x /usr/lib/winlux/winlux-python; then py=/usr/lib/winlux/winlux-python; fi
 mkdir -p "$logs"
 cd "$HOME" 2>/dev/null || true
 
@@ -202,7 +206,7 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HO
     compositor_pid=$!
     # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
     # openbox, seul lu par les règles de picom (#582).
-    if test -x /usr/bin/winlux-maximized-watch; then start maximized-watch.log /usr/bin/winlux-maximized-watch; fi
+    if test -x /usr/bin/winlux-maximized-watch; then start maximized-watch.log $py /usr/bin/winlux-maximized-watch; fi
 fi
 # Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
 # de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
@@ -226,7 +230,7 @@ if test -x /usr/bin/winlux-input-watch; then
     start input-watch.log /usr/bin/winlux-input-watch
 fi
 if test -x /usr/bin/winlux-notifications; then
-    start notifications.log /usr/bin/winlux-notifications
+    start notifications.log $py /usr/bin/winlux-notifications
 fi
 # Préférences de l'utilisateur : alignement de la barre, souris, processeur,
 # restaurées en arrière-plan pendant que le bureau s'affiche.
@@ -291,7 +295,7 @@ wait_desktop() {
     # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux.
     if test -x /usr/bin/winlux; then start clipboard-bridge.log /usr/bin/winlux --clipboard-bridge; fi
     # Historique du presse-papiers (Windows + V).
-    if test -x /usr/bin/winlux-clipboard; then start clipboard-history.log /usr/bin/winlux-clipboard daemon; fi
+    if test -x /usr/bin/winlux-clipboard; then start clipboard-history.log $py /usr/bin/winlux-clipboard daemon; fi
     # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
     if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
     if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
@@ -333,24 +337,24 @@ wait_desktop() {
         fi
     fi
     # Horloge : alarmes, minuteurs et fin des sessions de concentration, même fenêtre fermée.
-    if test -x /usr/bin/winlux-alarms; then start alarms.log /usr/bin/winlux-alarms daemon; fi
+    if test -x /usr/bin/winlux-alarms; then start alarms.log $py /usr/bin/winlux-alarms daemon; fi
     # Éclairage nocturne : planning et couleurs de l'écran (rien sans rampe gamma).
-    if test -x /usr/bin/winlux-ambiance; then start ambiance.log /usr/bin/winlux-ambiance daemon; fi
+    if test -x /usr/bin/winlux-ambiance; then start ambiance.log $py /usr/bin/winlux-ambiance daemon; fi
     # Ancrage à la souris : bords, coins, barre des dispositions, survol d'Agrandir (#460).
-    if test -x /usr/bin/winlux-snap; then start snap-watch.log /usr/bin/winlux-snap watch; fi
+    if test -x /usr/bin/winlux-snap; then start snap-watch.log $py /usr/bin/winlux-snap watch; fi
     # Écran gardé allumé pendant l'installation d'une mise à jour, même automatique (#634).
-    if test -x /usr/bin/winlux-screensaver-inhibit; then start update-screen.log /usr/bin/winlux-screensaver-inhibit watch-updates; fi
+    if test -x /usr/bin/winlux-screensaver-inhibit; then start update-screen.log $py /usr/bin/winlux-screensaver-inhibit watch-updates; fi
     # Touche Windows seule : ouvre ou ferme Démarrer, sans gêner Windows+Gauche (#605).
-    if test -x /usr/bin/winlux-super-key; then start super-key.log /usr/bin/winlux-super-key; fi
+    if test -x /usr/bin/winlux-super-key; then start super-key.log $py /usr/bin/winlux-super-key; fi
     # Verrouillage après inactivité et au retour de veille.
-    if test -x /usr/bin/winlux-lock; then start lock.log /usr/bin/winlux-lock daemon; fi
+    if test -x /usr/bin/winlux-lock; then start lock.log $py /usr/bin/winlux-lock daemon; fi
     # Catalogue des applications (raccourcis .lnk, programmes installés) et
     # relevé d'état en basse priorité : ils ne passent jamais devant le bureau.
     status_nice=
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
     # Catalogue résident : refait seulement quand un raccourci, le registre ou
     # un navigateur change, au lieu de relancer Python toutes les 5 s (#214).
-    $status_nice /usr/bin/winlux-applications watch </dev/null >>"$logs/catalogue.log" 2>&1 &
+    $status_nice $py /usr/bin/winlux-applications watch </dev/null >>"$logs/catalogue.log" 2>&1 &
     pids="$pids $!"
     (
         while :; do

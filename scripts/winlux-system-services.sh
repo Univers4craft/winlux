@@ -5,6 +5,10 @@
 # en root, ou session du compte sur un système installé) ne lance que ce
 # qui appartient à l'utilisateur.
 set -eu
+# Démons Python résidents lancés depuis leur bytecode en cache (#3107) : sans
+# lui, chacun garde toute la session la mémoire de sa propre compilation.
+py=
+if test -x /usr/lib/winlux/winlux-python; then py=/usr/lib/winlux/winlux-python; fi
 # L'init tourne en umask 077 : les services lancés ici (NetworkManager,
 # polkit…) écriraient des fichiers illisibles par le compte du bureau, dont
 # /etc/resolv.conf (aucun nom résolu depuis le compte, « connecté mais rien
@@ -172,12 +176,12 @@ fi
 # démon la règle par SNTP dès que le réseau répond (désactivable dans
 # Paramètres > Heure et langue), avant toute vérification TLS du bureau.
 if test -x /usr/bin/winlux-certificates; then
-    /usr/bin/winlux-certificates time-daemon >/run/winlux/time-sync.log 2>&1 &
+    $py /usr/bin/winlux-certificates time-daemon >/run/winlux/time-sync.log 2>&1 &
 fi
 # Contrôle parental (#661) : temps d'écran, applications et sites bloqués des
 # comptes surveillés. Un seul service (il le vérifie lui-même) ; journal hors
 # du dossier collant /run/winlux, qu'un compte ne peut pas préparer (#633).
 # Sans systemd, « supervise » le relance s'il s'arrête (#2247).
 if test -x /usr/bin/winlux-parental && test "$(id -u)" = 0; then
-    setsid /usr/bin/winlux-parental supervise >>/run/winlux-parental.log 2>&1 &
+    setsid $py /usr/bin/winlux-parental supervise >>/run/winlux-parental.log 2>&1 &
 fi

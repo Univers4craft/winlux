@@ -30,7 +30,12 @@ case "${1:-}" in
             { while IFS= read -r line; do printf '%s\n' "$line"; done <"$out/out-$1"; } 2>/dev/null && exit 0
         fi
         if test "${WINLUX_TRAY_NO_SERVE:-0}" != 1; then
-            setsid -f "$tray" serve </dev/null >/dev/null 2>&1
+            # Depuis son bytecode en cache (#3107) ; le nom du processus reste winlux-tray.
+            if test "$tray" = /usr/lib/winlux/winlux-tray && test -x /usr/lib/winlux/winlux-python; then
+                setsid -f /usr/lib/winlux/winlux-python "$tray" serve </dev/null >/dev/null 2>&1
+            else
+                setsid -f "$tray" serve </dev/null >/dev/null 2>&1
+            fi
         fi
         ;;
 esac
