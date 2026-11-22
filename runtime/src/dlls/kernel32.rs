@@ -2851,7 +2851,10 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
     }
 }
 fn get_temp_file_name(directory: &str, prefix: &str, unique: u32) -> Result<(String, u32), u32> {
-    if prefix.len() > 3 || prefix.contains(['\\', '/']) {
+    // Learn : « up to the first three characters » du préfixe sont gardés ;
+    // un préfixe plus long n'est pas une erreur (#2988).
+    let prefix: String = prefix.chars().take(3).collect();
+    if prefix.contains(['\\', '/']) {
         return Err(87);
     }
     let dir = crate::paths::to_linux(directory);
@@ -13607,6 +13610,39 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// #2988 : seuls les trois premiers caractères du préfixe sont gardés
+    /// (Learn, GetTempFileNameW) ; un préfixe long ou accentué n'est pas
+    /// refusé, un préfixe vide reste permis.
+    #[test]
+    fn prefixe_de_fichier_temporaire_tronque_2988() {
+        let d = std::env::temp_dir().join(format!("winlux-2988-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let dir = crate::paths::to_windows(&d);
+        let nom = |p: &str| {
+            let (path, id) = super::get_temp_file_name(&dir, p, 0).unwrap();
+            assert_ne!(id, 0);
+            let f = crate::paths::to_linux(&path);
+            assert!(f.is_file(), "{path}");
+            f.file_name().unwrap().to_string_lossy().into_owned()
+        };
+        let long = nom("setup");
+        println!("préfixe long : {long}");
+        assert!(
+            long.starts_with("set") && !long.starts_with("setu"),
+            "{long}"
+        );
+        let accents = nom("éèàù");
+        println!("préfixe accentué : {accents}");
+        assert!(
+            accents.starts_with("éèà") && !accents.starts_with("éèàù"),
+            "{accents}"
+        );
+        let vide = nom("");
+        assert!(vide.ends_with(".tmp"), "{vide}");
+        assert_eq!(super::get_temp_file_name(&dir, "a\\b", 0), Err(87));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 
