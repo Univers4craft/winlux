@@ -22,6 +22,10 @@ os.symlink(project / "scripts/winlux-snap.py", Path(shims.name) / "winlux-snap")
 manager_env = dict(os.environ, PATH=shims.name + os.pathsep + os.environ.get("PATH", ""), WINLUX_SNAP_ASSIST="0")
 manager = subprocess.Popen(["openbox", "--sm-disable", "--config-file", str(project / "integration/native/config/openbox/rc.xml")],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=manager_env)
+# Comme les scripts de session : une fenêtre affichée pendant le démarrage
+# d'openbox ne doit pas attendre un autre événement X (#3190).
+wake = subprocess.Popen(["sh", str(project / "scripts/winlux-wm-reveil.sh"), str(manager.pid)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 window = module["Settings"]()
 failures = []
 # The title follows the interface language since #145.
@@ -84,6 +88,7 @@ def check():
 threading.Thread(target=check, daemon=True).start()
 try: Gtk.main()
 finally:
+    wake.kill(); wake.wait()
     manager.terminate()
     _, diagnostics = manager.communicate(timeout=5)
     if failures and diagnostics: print(diagnostics)

@@ -81,6 +81,9 @@ test -e "$early_done" || early_services
 # Gestionnaire de fenêtres lancé d'emblée : il est prêt quand la barre arrive.
 /usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
+# Une fenêtre affichée pendant le démarrage d'openbox ne doit pas attendre un
+# autre événement X (#3190) : réveils tant qu'il démarre.
+if test -x /usr/bin/winlux-wm-reveil; then (/usr/bin/winlux-wm-reveil "$(cat /run/winlux/window-manager.pid)" </dev/null >/dev/null 2>&1 &); fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
