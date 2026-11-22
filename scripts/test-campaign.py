@@ -619,7 +619,7 @@ shipped_keys = {binding.get("key"): binding for binding in shipped_rc.find(f"{OB
 ok("Super_L" not in shipped_keys and all("/usr/bin/winlux-super-key" in (SCRIPTS / name).read_text()
                                          for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "touche Windows seule : Démarrer par winlux-super-key, pas par une liaison qui volerait Windows+Gauche")
-ok("found_in(query, name)" in (SCRIPTS / "winlux-start-menu.py").read_text(),
+ok("found_in(query, name" in (SCRIPTS / "winlux-start-menu.py").read_text(),
    "recherche de fichiers par début de mot, triée par pertinence puis date")
 ok(all(key in shipped_keys for key in ("XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute")),
    "touches de volume du clavier liées à winlux-volume")
