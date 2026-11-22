@@ -167,6 +167,8 @@ _TR = {
     '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Données des programmes': ('Program data', 'Datos de programas', 'Programmdaten'),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
     'Aucune application trouvée': ('No apps found', 'No se encontró ninguna aplicación', 'Keine Apps gefunden'),
     'Recommandations': ('Recommended', 'Recomendaciones', 'Empfohlen'),
@@ -952,9 +954,9 @@ class Start(Gtk.Application):
                 heading.get_style_context().add_class("heading")
                 self.content.pack_start(heading, False, False, 0)
             for path in self.file_results:
-                relative = str(path.relative_to(Path.home()))
-                folder = str(path.parent.relative_to(Path.home()))
-                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + relative, subtitle="~" if folder == "." else "~/" + folder)
+                place = file_place(path)
+                shown = str(path.relative_to(Path.home())) if place.startswith("~") else place + " › " + path.name
+                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + shown, subtitle=place)
                 on_click(button, lambda target=path: self.open_file(target))
                 button.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
                 self.content.pack_start(button, False, False, 0)
@@ -1310,9 +1312,14 @@ class Start(Gtk.Application):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            # Ses sous-dossiers (« PuTTY (64-bit) ») non plus : ce sont les
+            # groupes du menu, la recherche les montrait comme des dossiers
+            # avec leur chemin AppData (#2905).
+            listed = folders
             if "/Start Menu/Programs" in directory + "/":
                 files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
-            for name in folders + files:
+                listed = []
+            for name in listed + files:
                 visited += 1
                 if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
                 if len(matches) >= 300 or visited >= 30000: break
@@ -1716,6 +1723,27 @@ def _stamp(text):
         return int(datetime.datetime.fromisoformat(text).timestamp())
     except ValueError:
         return 0
+
+
+def file_place(path, home=None):
+    """Dossier d'un fichier trouvé, tel que le menu l'affiche : « ~ »,
+    « ~/Documents/Impôts »… Les dossiers de données des programmes Windows
+    (AppData) ont un nom lisible, sans leur chemin interne : la recherche
+    affichait « ~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs »,
+    et aucune marque Microsoft ne doit apparaître à l'écran (#2905)."""
+    home = Path(home or Path.home())
+    try:
+        parts = Path(path).parent.relative_to(home).parts
+    except ValueError:
+        return str(Path(path).parent)
+    if not parts:
+        return "~"
+    if parts[0] == "AppData":
+        if [part.casefold() for part in parts[1:5]] == ["roaming", "microsoft", "windows", "start menu"]:
+            return _t("Menu Démarrer")
+        inner = [part for part in parts[2:] if part.casefold() not in ("microsoft", "windows", "programs")]
+        return _t("Données des programmes") + (" › " + inner[-1] if inner else "")
+    return "~/" + "/".join(parts)
 
 
 def recent_files(path, limit=3, home=None):

@@ -784,6 +784,9 @@ jobs:
       - name: Menu Démarrer préchargé à l'ouverture de session et réveillé par D-Bus
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-preload.py
 
+      - name: Recherche du menu Démarrer sans chemin AppData ni marque Microsoft (#2905)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-appdata.py
+
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
 
