@@ -24,6 +24,7 @@
 
 mod com;
 mod com_audio;
+mod com_disp;
 mod com_mf;
 mod com_mf_chaine;
 mod com_netfw;
@@ -31,10 +32,14 @@ mod com_nlm;
 mod com_ole;
 mod com_shell;
 mod com_taskschd;
+mod com_typeinfo;
+mod com_webbrowser;
+mod com_winrt;
 mod comctl;
 mod comdlg;
 mod crt;
 mod cxx;
+mod dispcall;
 mod fiber;
 mod kernel;
 
@@ -57,6 +62,7 @@ mod wow64;
 
 pub(crate) use com_audio::iface_to32;
 pub(crate) use com_mf_chaine::IID_IMFACTIVATE;
+pub(crate) use dispcall::disp_call_func32;
 pub use wow64::{
     apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
 };
@@ -3001,7 +3007,7 @@ extern "C" fn fault32(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_vo
         }
         let code = crate::crash::report(sig, info, ctx);
         crate::dlls::kernel32::record_exit_code(code);
-        libc::_exit(code as i32);
+        libc::_exit(crate::dlls::kernel32::linux_exit_status(code));
     }
 }
 

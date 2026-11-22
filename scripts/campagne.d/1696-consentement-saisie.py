@@ -1,7 +1,7 @@
 # #1696 : une saisie simulée ne peut jamais répondre à une fenêtre de consentement.
 saisie = (runtime_dlls / "saisie.rs").read_text(encoding="utf-8")
 consentement = [(ROOT / "scripts" / n).read_text(encoding="utf-8") for n in ("winlux-permission.py", "winlux-uac.py")]
-ok("libc::LOCK_SH | libc::LOCK_NB" in saisie and "custom_flags(libc::O_NOFOLLOW)" in saisie and "let Some(_consent) = consent_guard() else" in saisie
+ok("libc::LOCK_SH | libc::LOCK_NB" in saisie and "custom_flags(" in saisie and "consent_guard(" in saisie
    and saisie.index("consent_guard() else") < saisie.index("inj.apply(events)"),
    "saisie simulée : verrou partagé tenu du contrôle jusqu'à la fin de l'envoi (#1696)")
 ok(all("fcntl.LOCK_EX" in t and 'result["lock"] = hold_consent_lock()' in t

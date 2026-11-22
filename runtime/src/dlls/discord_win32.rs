@@ -280,9 +280,15 @@ const CMSG_SIGNED: u32 = 2;
 const CMSG_TYPE_PARAM: u32 = 1;
 const CMSG_CONTENT_PARAM: u32 = 2;
 const CMSG_SIGNER_COUNT_PARAM: u32 = 5;
+const CMSG_SIGNER_INFO_PARAM: u32 = 6;
 const CMSG_CERT_COUNT_PARAM: u32 = 11;
 const CMSG_CERT_PARAM: u32 = 12;
 const CRYPT_E_INVALID_MSG_TYPE: u32 = 0x8009_1010;
+/// CMSG_SIGNER_AUTH_ATTR_PARAM et CMSG_SIGNER_UNAUTH_ATTR_PARAM
+/// (wincrypt.h, windows-rs) ; CRYPT_E_ATTRIBUTES_MISSING (winerror.h).
+const CMSG_SIGNER_AUTH_ATTR_PARAM: u32 = 9;
+const CMSG_SIGNER_UNAUTH_ATTR_PARAM: u32 = 10;
+const CRYPT_E_ATTRIBUTES_MISSING: u32 = 0x8009_100F;
 const CRYPT_E_STREAM_MSG_NOT_READY: u32 = 0x8009_1011;
 const CRYPT_E_ASN1_BADTAG: u32 = 0x8009_3104;
 const CRYPT_E_INVALID_INDEX: u32 = 0x8009_1008;
@@ -353,6 +359,21 @@ unsafe extern "win64" fn CryptMsgUpdate(msg: usize, data: *const u8, len: u32, l
     1
 }
 
+/// Message déjà décodé à partir d'un SignedData complet, comme après
+/// CryptMsgOpenToDecode puis CryptMsgUpdate final (CryptQueryObject, #2685).
+pub(crate) fn open_decoded(der: &[u8]) -> Option<usize> {
+    let decoded = crate::setup::appx_signature::signed_data_parts(der)?;
+    let h = NEXT_MSG.fetch_add(8, Ordering::Relaxed);
+    lock().insert(
+        h,
+        Msg {
+            data: der.to_vec(),
+            decoded: Some(decoded),
+        },
+    );
+    Some(h)
+}
+
 /// Le handle vient-il de CryptMsgOpenToDecode ?
 pub(crate) fn is_decode_msg(msg: usize) -> bool {
     lock().contains_key(&msg)
@@ -379,7 +400,7 @@ unsafe fn give(bytes: &[u8], data: *mut c_void, len: *mut u32) -> i32 {
 }
 
 /// CryptMsgGetParam d'un message décodé : type, contenu, nombre de
-/// signataires et de certificats, certificat n.
+/// signataires et de certificats, certificat n, SignerInfo n.
 pub(crate) unsafe fn get_param(
     msg: usize,
     ty: u32,
@@ -405,6 +426,63 @@ pub(crate) unsafe fn get_param(
         CMSG_CONTENT_PARAM => give(content, data, len),
         CMSG_SIGNER_COUNT_PARAM => give(&1u32.to_le_bytes(), data, len),
         CMSG_CERT_COUNT_PARAM => give(&(certs.len() as u32).to_le_bytes(), data, len),
+        CMSG_SIGNER_INFO_PARAM => {
+            let p = crate::wow32::pointer_size();
+            match super::crypt32_signer::signer_info(&m.data, index as usize, p) {
+                Some((bytes, fixups)) => {
+                    let need = bytes.len() as u32;
+                    if data.is_null() {
+                        *len = need;
+                        return 1;
+                    }
+                    if *len < need {
+                        *len = need;
+                        set_last_error(ERROR_MORE_DATA);
+                        return 0;
+                    }
+                    super::crypt32_signer::write_packed(&bytes, &fixups, p, data.cast());
+                    *len = need;
+                    1
+                }
+                None => {
+                    set_last_error(CRYPT_E_INVALID_INDEX);
+                    0
+                }
+            }
+        }
+        CMSG_SIGNER_AUTH_ATTR_PARAM | CMSG_SIGNER_UNAUTH_ATTR_PARAM => {
+            // CRYPT_ATTRIBUTES du signataire (#2705) : l'outil de
+            // déploiement d'Office lit les attributs non authentifiés
+            // (contre-signature, signature imbriquée) après le nom du
+            // signataire.
+            let p = crate::wow32::pointer_size();
+            let unauth = ty == CMSG_SIGNER_UNAUTH_ATTR_PARAM;
+            match super::crypt32_signer::signer_attrs(&m.data, index as usize, p, unauth) {
+                Some(Some((bytes, fixups))) => {
+                    let need = bytes.len() as u32;
+                    if data.is_null() {
+                        *len = need;
+                        return 1;
+                    }
+                    if *len < need {
+                        *len = need;
+                        set_last_error(ERROR_MORE_DATA);
+                        return 0;
+                    }
+                    super::crypt32_signer::write_packed(&bytes, &fixups, p, data.cast());
+                    *len = need;
+                    1
+                }
+                Some(None) => {
+                    set_last_error(CRYPT_E_ATTRIBUTES_MISSING);
+                    0
+                }
+                None => {
+                    set_last_error(CRYPT_E_INVALID_INDEX);
+                    0
+                }
+            }
+        }
         CMSG_CERT_PARAM => match certs.get(index as usize) {
             Some(c) => give(c, data, len),
             None => {

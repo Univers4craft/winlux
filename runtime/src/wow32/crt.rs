@@ -548,6 +548,37 @@ const FORMATS: &[FmtRow] = &[
     ("swscanf_s", b"ii", 1, true, true, false, false),
     ("_snscanf_s", b"iii", 2, false, true, false, false),
     ("_snwscanf_s", b"iii", 2, true, true, false, false),
+    // Variantes _l (#2137) : la locale suit le format.
+    ("_printf_s_l", b"ii", 0, false, false, false, false),
+    ("_wprintf_s_l", b"ii", 0, true, false, false, false),
+    ("_fprintf_s_l", b"iii", 1, false, false, false, false),
+    ("_fwprintf_s_l", b"iii", 1, true, false, false, false),
+    ("_sprintf_s_l", b"iiii", 2, false, false, false, false),
+    ("_swprintf_s_l", b"iiii", 2, true, false, false, false),
+    ("_snprintf_s_l", b"iiiii", 3, false, false, false, false),
+    ("_snwprintf_s_l", b"iiiii", 3, true, false, false, false),
+    ("_cprintf_s_l", b"ii", 0, false, false, false, false),
+    ("_cwprintf_s_l", b"ii", 0, true, false, false, false),
+    ("_vprintf_s_l", b"ii", 0, false, false, true, false),
+    ("_vwprintf_s_l", b"ii", 0, true, false, true, false),
+    ("_vfprintf_s_l", b"iii", 1, false, false, true, false),
+    ("_vfwprintf_s_l", b"iii", 1, true, false, true, false),
+    ("_vsprintf_s_l", b"iiii", 2, false, false, true, false),
+    ("_vswprintf_s_l", b"iiii", 2, true, false, true, false),
+    ("_vsnprintf_s_l", b"iiiii", 3, false, false, true, false),
+    ("_vsnwprintf_s_l", b"iiiii", 3, true, false, true, false),
+    ("_vcprintf_s_l", b"ii", 0, false, false, true, false),
+    ("_vcwprintf_s_l", b"ii", 0, true, false, true, false),
+    ("_scanf_s_l", b"ii", 0, false, true, false, false),
+    ("_wscanf_s_l", b"ii", 0, true, true, false, false),
+    ("_cscanf_s_l", b"ii", 0, false, true, false, false),
+    ("_cwscanf_s_l", b"ii", 0, true, true, false, false),
+    ("_fscanf_s_l", b"iii", 1, false, true, false, false),
+    ("_fwscanf_s_l", b"iii", 1, true, true, false, false),
+    ("_sscanf_s_l", b"iii", 1, false, true, false, false),
+    ("_swscanf_s_l", b"iii", 1, true, true, false, false),
+    ("_snscanf_s_l", b"iiii", 2, false, true, false, false),
+    ("_snwscanf_s_l", b"iiii", 2, true, true, false, false),
     // Sans passerelle x86 jusqu'ici (#2367).
     ("_snscanf", b"iii", 2, false, true, false, false),
     ("_swprintf_c", b"iii", 2, true, false, false, false),
@@ -781,7 +812,7 @@ fn fmt_override(dll: &str, func: &str) -> Option<Override> {
         wide,
         scan,
         va,
-        secure: scan && func.ends_with("_s"),
+        secure: scan && (func.ends_with("_s") || func.ends_with("_s_l")),
     }));
     let slots: usize = fixed
         .iter()
@@ -2228,6 +2259,22 @@ mod tests {
             std::ptr::copy_nonoverlapping(buf.as_ptr(), low as *mut u32, buf.len());
         }
         convert_args(&f, low as u32, scan, false)
+    }
+
+    /// #2137 : chaque variante `_l` sécurisée a sa passerelle x86, avec la
+    /// locale juste après le format, et ses lectures restent « _s ».
+    #[test]
+    fn variantes_l_securisees_ont_leur_passerelle() {
+        let rows: Vec<_> = FORMATS.iter().filter(|r| r.0.ends_with("_s_l")).collect();
+        assert_eq!(rows.len(), 30);
+        for r in rows {
+            let (name, fixed, fmt, ..) = *r;
+            assert_eq!(fixed.len(), fmt + 2, "{name} : locale après le format");
+            assert!(
+                matches!(fmt_override("msvcrt", name), Some(Override::Raw { .. })),
+                "{name}"
+            );
+        }
     }
 
     #[test]

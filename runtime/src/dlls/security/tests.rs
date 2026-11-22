@@ -422,6 +422,36 @@ fn comptes_bien_connus_resolus() {
     }
 }
 
+/// #2792 : une seule variable pour les deux tailles (Creative Cloud) : les
+/// tailles d'entrée (257) suffisent, l'appel réussit.
+#[test]
+fn tailles_partagees_de_lookup_account_sid_2792() {
+    let mut sid = [0u8; 68];
+    let mut size = sid.len() as u32;
+    // WinLocalSystemSid (22) : S-1-5-18, « NT AUTHORITY\SYSTEM ».
+    assert_eq!(
+        unsafe { CreateWellKnownSid(22, std::ptr::null(), sid.as_mut_ptr(), &mut size) },
+        1
+    );
+    let (mut n, mut d) = ([0u16; 257], [0u16; 257]);
+    let (mut len, mut u) = (257u32, 0u32);
+    let p: *mut u32 = &mut len;
+    let ok = unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            sid.as_ptr(),
+            n.as_mut_ptr(),
+            p,
+            d.as_mut_ptr(),
+            p,
+            &mut u,
+        )
+    };
+    assert_eq!(ok, 1);
+    assert_eq!(String::from_utf16_lossy(&n[..6]), "SYSTEM");
+    assert_eq!(String::from_utf16_lossy(&d[..12]), "NT AUTHORITY");
+}
+
 /// SECURITY_DESCRIPTOR absolu d'un programme x86 : 20 octets, pointeurs sur
 /// 4 octets aux décalages 4, 8, 12, 16. Rien n'est écrit au-delà
 /// (SteamService.exe, #1881).
@@ -676,5 +706,31 @@ fn taille_requise_d_un_sid() {
     unsafe {
         assert_eq!(GetSidLengthRequired(2), 16);
         assert_eq!(GetSidLengthRequired(15), 68);
+    }
+}
+
+/// #1887 : un descripteur absolu mesure la structure (40 octets en x64)
+/// plus le SID et l'ACL qu'il désigne ; ses pointeurs ne sont pas lus
+/// comme des décalages.
+#[test]
+fn longueur_d_un_descripteur_absolu() {
+    unsafe {
+        let mut sd = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(sd.as_mut_ptr(), 1), 1);
+        assert_eq!(GetSecurityDescriptorLength(sd.as_ptr()), 40);
+        let owner = sid_bytes(&uid_sid(1000)).unwrap();
+        let mut acl = [2u8, 0, 8, 0, 0, 0, 0, 0];
+        assert_eq!(
+            SetSecurityDescriptorOwner(sd.as_mut_ptr(), owner.as_ptr() as *mut u8, 0),
+            1
+        );
+        assert_eq!(
+            SetSecurityDescriptorDacl(sd.as_mut_ptr(), 1, acl.as_mut_ptr(), 0),
+            1
+        );
+        assert_eq!(
+            GetSecurityDescriptorLength(sd.as_ptr()) as usize,
+            40 + owner.len() + acl.len()
+        );
     }
 }

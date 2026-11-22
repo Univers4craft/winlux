@@ -12,6 +12,12 @@ const OBJ_ALIGN: usize = 8;
 const MARK_BIT: u32 = 1;
 /// Objet construit comme délégué (ECMA-335 §II.14.6).
 const DELEGATE_BIT: u32 = 2;
+/// Rang d'un tableau à plusieurs dimensions (bits 8 à 15 des marques ; 0
+/// pour un tableau à une dimension indexé depuis 0).
+const RANK_SHIFT: u32 = 8;
+const RANK_MASK: u32 = 0xFF << RANK_SHIFT;
+/// Rang maximal d'un tableau (documentation « Array Class » : 32).
+pub const MAX_RANK: usize = 32;
 const HEADER: usize = std::mem::size_of::<ObjHeader>();
 
 #[repr(C)]
@@ -67,6 +73,35 @@ impl GcHeap {
     pub fn alloc_array_of(&mut self, elem: u32, elem_size: usize, length: usize) -> *mut u8 {
         let ptr = self.alloc_array(super::types::TYPE_ARRAY, elem_size, length);
         unsafe { (*(ptr.sub(HEADER) as *mut ObjHeader)).extra = elem };
+        ptr
+    }
+
+    /// Tableau à plusieurs dimensions (#2848) : même disposition qu'un
+    /// tableau à une dimension (nombre total d'éléments à +0, éléments
+    /// rangés ligne par ligne à +8), pour que Copy, Clear, Length et
+    /// l'énumération le parcourent à plat comme le fait .NET ; les bornes
+    /// (borne inférieure i32, longueur i32 par dimension) sont rangées à la
+    /// fin de l'objet et le rang dans les marques.
+    pub fn alloc_array_md(
+        &mut self,
+        elem: u32,
+        elem_size: usize,
+        bounds: &[(i32, i32)],
+    ) -> *mut u8 {
+        let total: usize = bounds.iter().map(|&(_, n)| n.max(0) as usize).product();
+        let data = align_up(8 + elem_size * total, OBJ_ALIGN) + bounds.len() * 8;
+        let ptr = self.alloc(super::types::TYPE_ARRAY, data);
+        unsafe {
+            *(ptr as *mut u64) = total as u64;
+            let hdr = &mut *(ptr.sub(HEADER) as *mut ObjHeader);
+            hdr.extra = elem;
+            hdr.flags |= ((bounds.len() as u32) << RANK_SHIFT) & RANK_MASK;
+            let end = ptr.add(hdr.size as usize - HEADER - bounds.len() * 8) as *mut i32;
+            for (d, &(lo, n)) in bounds.iter().enumerate() {
+                *end.add(2 * d) = lo;
+                *end.add(2 * d + 1) = n;
+            }
+        }
         ptr
     }
 
@@ -182,6 +217,25 @@ pub fn array_elem_type(ptr: *mut u8) -> u32 {
         return 0;
     }
     unsafe { (*(ptr.sub(HEADER) as *const ObjHeader)).extra }
+}
+
+/// Bornes (borne inférieure, longueur) de chaque dimension d'un tableau
+/// créé par `alloc_array_md`, ou `None` pour un tableau à une dimension.
+pub fn array_bounds(ptr: *mut u8) -> Option<Vec<(i32, i32)>> {
+    if ptr.is_null() {
+        return None;
+    }
+    let hdr = unsafe { &*(ptr.sub(HEADER) as *const ObjHeader) };
+    let rank = ((hdr.flags & RANK_MASK) >> RANK_SHIFT) as usize;
+    if rank == 0 {
+        return None;
+    }
+    let end = unsafe { ptr.add(hdr.size as usize - HEADER - rank * 8) as *const i32 };
+    Some(
+        (0..rank)
+            .map(|d| unsafe { (*end.add(2 * d), *end.add(2 * d + 1)) })
+            .collect(),
+    )
 }
 
 pub fn type_of(ptr: *mut u8) -> Option<u32> {

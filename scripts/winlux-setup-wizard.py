@@ -19,8 +19,15 @@ Usage : winlux-setup-wizard FICHIER [--runtime CHEMIN] [--contrat-seulement]
 lancée directement (`winlux setup.exe`, `msiexec /i` sans /q) : 0 si
 l'utilisateur accepte (le runtime installe alors), 1602 sinon.
 Code de sortie : celui de l'installation, 1602 si l'utilisateur annule.
+Installeur web (#896, #2750) : le runtime rend 4 sans `--allow-download` et
+décrit le paquet officiel (lignes `download.*`). L'assistant pose alors la
+question (paquet, version, éditeur, source, fichier, empreinte SHA-256),
+« Annuler » par défaut ; sur « Télécharger et installer » il relance avec
+`--allow-download`, sinon rien n'est téléchargé et il rend 1602.
 WINLUX_SETUP_WIZARD_AUTO=1 enchaîne les pages sans clic (tests) ; devant un
-contrat il annule, sauf avec WINLUX_SETUP_WIZARD_AUTO_LICENCE=accepte.
+contrat il annule, sauf avec WINLUX_SETUP_WIZARD_AUTO_LICENCE=accepte ;
+devant un téléchargement il refuse, sauf avec
+WINLUX_SETUP_WIZARD_AUTO_TELECHARGEMENT=accepte.
 """
 import os
 import subprocess
@@ -31,6 +38,8 @@ from pathlib import Path
 
 ROOT = os.environ.get("WINLUX_ROOT", "")
 CANCELLED = 1602
+# Code du runtime : téléchargement à confirmer (runtime/src/setup/web.rs).
+NEEDS_CONSENT = 4
 
 
 def interface_lang():
@@ -102,6 +111,29 @@ _TR = {
                                                           "No acepto los términos del contrato de licencia",
                                                           "Ich akzeptiere die Bedingungen des Lizenzvertrags nicht"),
     "Suivant": ("Next", "Siguiente", "Weiter"),
+    "Téléchargement nécessaire": ("Download required", "Descarga necesaria", "Download erforderlich"),
+    "Cet installeur ne contient qu'un téléchargeur, que Winlux ne sait pas encore exécuter.":
+        ("This installer only contains a downloader, which Winlux cannot run yet.",
+         "Este instalador solo contiene un programa de descarga que Winlux aún no puede ejecutar.",
+         "Dieses Installationsprogramm enthält nur einen Downloader, den Winlux noch nicht ausführen kann."),
+    "Winlux peut télécharger à la place le paquet officiel complet :":
+        ("Winlux can download the official full package instead:",
+         "Winlux puede descargar en su lugar el paquete oficial completo:",
+         "Winlux kann stattdessen das offizielle vollständige Paket herunterladen:"),
+    "{name} {version}, publié par {publisher}":
+        ("{name} {version}, published by {publisher}", "{name} {version}, publicado por {publisher}",
+         "{name} {version}, veröffentlicht von {publisher}"),
+    "Fichier : {file}": ("File: {file}", "Archivo: {file}", "Datei: {file}"),
+    "Source : {source} ({size} Mo)": ("Source: {source} ({size} MB)", "Origen: {source} ({size} MB)",
+                                      "Quelle: {source} ({size} MB)"),
+    "Empreinte SHA-256 attendue : {sha256}": ("Expected SHA-256 fingerprint: {sha256}",
+                                              "Huella SHA-256 esperada: {sha256}",
+                                              "Erwarteter SHA-256-Fingerabdruck: {sha256}"),
+    "Le fichier est vérifié avant l'installation. Sans votre accord, rien n'est téléchargé.":
+        ("The file is checked before installation. Nothing is downloaded without your consent.",
+         "El archivo se comprueba antes de instalarlo. No se descarga nada sin su consentimiento.",
+         "Die Datei wird vor der Installation geprüft. Ohne Ihre Zustimmung wird nichts heruntergeladen."),
+    "Télécharger et installer": ("Download and install", "Descargar e instalar", "Herunterladen und installieren"),
     "Précédent": ("Back", "Atrás", "Zurück"),
 }
 _COLUMN = {"en": 0, "es": 1, "de": 2}
@@ -151,6 +183,69 @@ def read_info(runtime, path):
     kind, name, version, publisher, folder = parts[:5]
     return {"kind": kind, "name": name or Path(path).stem, "version": version,
             "publisher": publisher, "folder": folder}
+
+
+def download_fields(output):
+    """Lignes `download.*` écrites par le runtime (#896), ou None si un champ manque."""
+    fields = {}
+    for line in output.splitlines():
+        if line.startswith("download.") and "=" in line:
+            key, value = line[len("download."):].split("=", 1)
+            fields.setdefault(key.strip(), value.strip())
+    needed = ("name", "version", "publisher", "source", "file", "size_mb", "sha256")
+    return fields if all(fields.get(k) for k in needed) else None
+
+
+def download_text(fields):
+    """Texte de la question : ce qui sera téléchargé, par qui et d'où (#2750)."""
+    return "\n".join((
+        tr("Cet installeur ne contient qu'un téléchargeur, que Winlux ne sait pas encore exécuter."),
+        "",
+        tr("Winlux peut télécharger à la place le paquet officiel complet :"),
+        tr("{name} {version}, publié par {publisher}", name=fields["name"], version=fields["version"],
+           publisher=fields["publisher"]),
+        tr("Fichier : {file}", file=fields["file"]),
+        tr("Source : {source} ({size} Mo)", source=fields["source"], size=fields["size_mb"]),
+        tr("Empreinte SHA-256 attendue : {sha256}", sha256=fields["sha256"]),
+        "",
+        tr("Le fichier est vérifié avant l'installation. Sans votre accord, rien n'est téléchargé."),
+    ))
+
+
+def confirm_download(parent, fields):
+    """Accord avant téléchargement (#2750) : True seulement sur « Télécharger
+    et installer ». « Annuler » est le bouton par défaut, en couleur d'accent,
+    avec son cadre de focus dès l'ouverture : Entrée, Échap ou la croix refusent."""
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+    dialog = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.QUESTION,
+                               text=tr("Téléchargement nécessaire"))
+    dialog.set_title(tr("Téléchargement nécessaire"))
+    dialog.format_secondary_text(download_text(fields))
+    for child in dialog.get_message_area().get_children():
+        if isinstance(child, Gtk.Label):
+            child.set_selectable(True)  # fichier, source et empreinte copiables
+    cancel = dialog.add_button(tr("Annuler"), Gtk.ResponseType.CANCEL)
+    dialog.add_button(tr("Télécharger et installer"), Gtk.ResponseType.OK)
+    dialog.set_default_response(Gtk.ResponseType.CANCEL)
+    dialog.set_keep_above(True)
+    cancel.get_style_context().add_class("suggested-action")
+    cancel.set_can_default(True)
+    cancel.grab_default()
+    cancel.grab_focus()
+    # GTK efface le cadre de focus à l'affichage : reposé au « map ».
+    dialog.connect("map", lambda d: d.set_focus_visible(True))
+    answer = dialog.run()
+    dialog.destroy()
+    return answer == Gtk.ResponseType.OK
+
+
+def with_download(argv):
+    """Même commande, téléchargement autorisé (après l'accord seulement)."""
+    argv = list(argv)
+    argv.insert(argv.index("--setup") + 1, "--allow-download")
+    return argv
 
 
 def read_license(runtime, path):
@@ -452,7 +547,35 @@ def main(argv):
             lines.append(str(e))
             print(e, flush=True)
             code = 1
-        GLib.idle_add(finished, code, "".join(lines))
+        output = "".join(lines)
+        # Installeur web : le runtime attend l'accord de téléchargement (#2750).
+        if code == NEEDS_CONSENT and "--setup" in argv and "--allow-download" not in argv:
+            fields = download_fields(output)
+            if fields:
+                GLib.idle_add(ask_download, argv, fields)
+                return
+        GLib.idle_add(finished, code, output)
+
+    def trace(argv):
+        if os.environ.get("WINLUX_SETUP_WIZARD_TRACE"):
+            with open(os.environ["WINLUX_SETUP_WIZARD_TRACE"], "a", encoding="utf-8") as f:
+                f.write("\n".join(argv) + "\n")
+
+    def ask_download(argv, fields):
+        if auto:
+            accepted = os.environ.get("WINLUX_SETUP_WIZARD_AUTO_TELECHARGEMENT") == "accepte"
+        else:
+            accepted = confirm_download(win, fields)
+        if not accepted:
+            # Rien n'est téléchargé ni installé : comme Annuler.
+            print("Téléchargement refusé : rien n'a été installé.", flush=True)
+            state["code"] = CANCELLED
+            win.destroy()
+            return False
+        argv = with_download(argv)
+        trace(argv)
+        threading.Thread(target=work, args=(argv,), daemon=True).start()
+        return False
 
     def pulse():
         if stack.get_visible_child_name() != "progress":
@@ -463,7 +586,8 @@ def main(argv):
     def start(_button):
         argv = command(runtime, path, info, folder_entry.get_text().strip() or None, desktop.get_active())
         if os.environ.get("WINLUX_SETUP_WIZARD_TRACE"):
-            Path(os.environ["WINLUX_SETUP_WIZARD_TRACE"]).write_text("\n".join(argv) + "\n")
+            Path(os.environ["WINLUX_SETUP_WIZARD_TRACE"]).write_text("")
+        trace(argv)
         state["menu"] = menu_entries()
         install.hide()
         cancel.set_sensitive(False)

@@ -15,7 +15,7 @@
 //! l'environnement), par une fenêtre cachée et son WndProc, comme les
 //! rappels de WebView2 arrivent dans la boucle de messages.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -2361,6 +2361,9 @@ fn cdp_result(method: &str, target: (&str, &str, &str)) -> Option<String> {
         // Chrome DevTools) ; .disable (#2647).
         "Log.enable" | "Runtime.enable" | "Network.enable" | "Page.enable" | "Log.disable"
         | "Runtime.disable" | "Network.disable" | "Page.disable" => Some("{}".into()),
+        // HeapProfiler.collectGarbage rend un objet vide ; WebKitGTK n'a pas
+        // de ramasse-miettes déclenché par l'hôte : accepté sans effet (#2653).
+        "HeapProfiler.collectGarbage" => Some("{}".into()),
         // Target.getTargets : une seule cible, la page de la vue.
         "Target.getTargets" => {
             let (id, title, url) = target;
@@ -2375,10 +2378,36 @@ fn cdp_result(method: &str, target: (&str, &str, &str)) -> Option<String> {
     }
 }
 
+/// Commandes DevTools refusées par CallDevToolsProtocolMethod, notées une
+/// fois chacune dans le journal pour qu'une trace dise laquelle manque
+/// (#2643). Seul le nom de la commande est noté, jamais ses paramètres, qui
+/// peuvent porter des données de la page ; un nom qui n'a pas la forme
+/// `Domaine.méthode` du protocole est remplacé.
+fn cdp_refusals() -> &'static Mutex<BTreeSet<String>> {
+    static R: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+fn cdp_refused(method: &str) {
+    let lisible = !method.is_empty()
+        && method.len() <= 80
+        && method
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+    let nom = if lisible { method } else { "(nom illisible)" };
+    if super::lock(cdp_refusals()).insert(nom.to_string()) {
+        crate::log_warn!(
+            "webview2",
+            "CallDevToolsProtocolMethod : commande {nom} refusée (E_NOTIMPL, #2643)"
+        );
+    }
+}
+
 /// ICoreWebView2::CallDevToolsProtocolMethod (#2643) : les commandes de
 /// `cdp_result` répondent par le rappel asynchrone Invoke(HRESULT, LPCWSTR),
 /// sur la boucle de messages comme les autres rappels. Les autres restent
-/// refusées (E_NOTIMPL, webview2.rs) : Winlux n'a pas de canal DevTools.
+/// refusées (E_NOTIMPL) : Winlux n'a pas de canal DevTools ; leur nom est
+/// noté une fois dans le journal (`cdp_refused`).
 unsafe extern "win64" fn web_call_cdp(
     this: usize,
     method: *const u16,
@@ -2393,7 +2422,9 @@ unsafe extern "win64" fn web_call_cdp(
         (st.title.clone(), st.source.clone())
     });
     let id = format!("{this:016X}");
-    let Some(json) = cdp_result(&wstr(method), (&id, &title, &url)) else {
+    let method = wstr(method);
+    let Some(json) = cdp_result(&method, (&id, &title, &url)) else {
+        cdp_refused(&method);
         return E_NOTIMPL;
     };
     if handler == 0 {
@@ -3458,10 +3489,21 @@ mod tests {
                 web_call_cdp(view, other.as_ptr(), empty.as_ptr(), handler),
                 E_NOTIMPL
             );
+            // La commande refusée est notée par son nom, et un nom qui n'a
+            // pas la forme du protocole est remplacé.
+            assert!(super::super::lock(cdp_refusals()).contains("Debugger.enable"));
+            let bizarre = w("Debugger.enable\n{\"x\":1}");
+            assert_eq!(
+                web_call_cdp(view, bizarre.as_ptr(), empty.as_ptr(), handler),
+                E_NOTIMPL
+            );
+            assert!(super::super::lock(cdp_refusals()).contains("(nom illisible)"));
+            assert!(!super::super::lock(cdp_refusals()).contains("Network.enable"));
             assert_eq!(
                 web_call_cdp(view, enable.as_ptr(), empty.as_ptr(), handler),
                 S_OK
             );
+            assert!(!super::super::lock(cdp_refusals()).contains("Network.enable"));
             assert!(super::super::lock(&GOT).is_none());
             run_jobs(dispatcher);
             assert_eq!(*super::super::lock(&GOT), Some((S_OK, "{}".to_string())));
@@ -3488,6 +3530,15 @@ mod tests {
         for m in ["Network.disable", "Log.disable", "Runtime.disable"] {
             assert_eq!(cdp_result(m, ("a", "", "")).as_deref(), Some("{}"), "{m}");
         }
+    }
+
+    /// #2653 : HeapProfiler.collectGarbage répond par un objet vide.
+    #[test]
+    fn devtools_ramasse_miettes_2653() {
+        assert_eq!(
+            cdp_result("HeapProfiler.collectGarbage", ("a", "", "")).as_deref(),
+            Some("{}")
+        );
     }
 
     /// #2635 : les filtres avec types de source se retiennent et se

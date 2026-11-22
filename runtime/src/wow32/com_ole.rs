@@ -77,7 +77,31 @@ pub(super) static IGLOBALOPTIONS: Iface = Iface {
     ],
 };
 
-pub(super) static ALL: &[&Iface] = &[&IBINDCTX, &IRUNNINGOBJECTTABLE, &IGLOBALOPTIONS];
+/// IRunnableObject {00000126-0000-0000-C000-000000000046} (#2765).
+/// OleRun, OleIsRunning, OleLockRunning et OleSetContainedObject
+/// (`dlls/ole32_embed.rs`) la demandent à l'objet reçu puis l'appellent.
+/// GetRunningClass(LPCLSID) écrit un GUID, donnée sans pointeur ;
+/// Run(LPBINDCTX) ; IsRunning() ; LockRunning(BOOL, BOOL) ;
+/// SetContainedObject(BOOL).
+pub(super) static IRUNNABLEOBJECT: Iface = Iface {
+    name: "IRunnableObject",
+    iid: ole(0x126),
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),             // GetRunningClass(LPCLSID)
+        Some(&[In(&IBINDCTX)]), // Run(LPBINDCTX)
+        Some(&[]),              // IsRunning
+        Some(&[I, I]),          // LockRunning(fLock, fLastUnlockCloses)
+        Some(&[I]),             // SetContainedObject(fContained)
+    ],
+};
+
+pub(super) static ALL: &[&Iface] = &[
+    &IBINDCTX,
+    &IRUNNINGOBJECTTABLE,
+    &IGLOBALOPTIONS,
+    &IRUNNABLEOBJECT,
+];
 
 #[cfg(test)]
 mod tests {
@@ -108,6 +132,28 @@ mod tests {
         assert!(by_iid(&ole(0x15B)).is_some_and(|f| std::ptr::eq(f, &IGLOBALOPTIONS)));
         assert!(matches!(IGLOBALOPTIONS.method(3), Some([I, I])));
         assert!(matches!(IGLOBALOPTIONS.method(4), Some([I, OutPtr])));
+    }
+
+    /// #2765 : l'installeur de Creative Cloud (x86) passe son propre objet
+    /// à OleRun ; le runtime lisait sa table de fonctions x86 comme une
+    /// table win64 et fautait. L'objet reçoit maintenant un mandataire.
+    #[test]
+    fn objet_executable_x86_passe_par_un_mandataire() {
+        assert_eq!(IRUNNABLEOBJECT.count(), 8);
+        assert!(by_iid(&ole(0x126)).is_some_and(|f| std::ptr::eq(f, &IRUNNABLEOBJECT)));
+        assert!(matches!(IRUNNABLEOBJECT.method(4), Some([In(f)]) if std::ptr::eq(*f, &IBINDCTX)));
+        for f in [
+            "OleRun",
+            "OleIsRunning",
+            "OleLockRunning",
+            "OleSetContainedObject",
+        ] {
+            let (k, r) = api_kinds("ole32", f).unwrap_or_else(|| panic!("{f} non décrite"));
+            assert!(r.is_none(), "{f}");
+            assert!(matches!(k[0], In(u) if std::ptr::eq(u, &IUNKNOWN)), "{f}");
+            let octets = super::super::stdcall_bytes("ole32", f).unwrap_or_else(|| panic!("{f}"));
+            assert_eq!(slots(k) * 4, octets as usize, "{f}");
+        }
     }
 
     #[test]

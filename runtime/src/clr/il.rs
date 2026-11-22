@@ -572,12 +572,16 @@ impl Interpreter {
         let Some(frame) = self.frames.last() else {
             return format!("IL_{offset:04x}");
         };
-        let owner = self.domain[self.current]
-            .method_owner
-            .get(frame.method as usize)
+        // La méthode du cadre appartient à son assembly, pas forcément à
+        // l'assembly courante : une méthode interne de mscorlib appelée
+        // depuis une autre assembly n'empile pas de cadre (#2780).
+        let owner = self
+            .domain
+            .get(frame.asm)
+            .and_then(|d| d.method_owner.get(frame.method as usize))
             .copied()
             .unwrap_or(0);
-        let a = &self.assembly;
+        let a = self.assembly_at(frame.asm);
         let name = a.get_string(a.get_method_def(frame.method).name);
         if owner == 0 {
             return format!("{name} IL_{offset:04x}");
@@ -644,13 +648,34 @@ impl Interpreter {
         let name = self.method_name(token);
         let params = self.get_method_sig(token).param_types;
         let argc = params.len();
-        let iface = match target {
-            Target::Managed(asm, row) => self.interface_of(*asm, *row),
-            _ => None,
+        let (iface, declared) = match target {
+            Target::Managed(asm, row) => {
+                let owner = self.domain[*asm]
+                    .method_owner
+                    .get(*row as usize)
+                    .copied()
+                    .unwrap_or(0);
+                (
+                    self.interface_of(*asm, *row),
+                    (owner != 0).then_some((*asm, owner)),
+                )
+            }
+            _ => (None, None),
         };
         let found = types::with_types(|reg| {
             let (asm, tok, decl) =
                 reg.find_override_of(type_id, &name, argc, iface.as_deref(), &params)?;
+            // Une redéfinition se trouve dans le type qui déclare la méthode
+            // appelée ou plus bas, jamais au-dessus : sinon une méthode
+            // virtuelle de même nom d'une base (Collection<T>.Contains)
+            // prendrait la place de KeyedCollection.Contains(TKey) (#2785).
+            // Une méthode d'interface, elle, est implémentée hors de cette
+            // chaîne.
+            if let (Some(declared), None) = (declared, &iface) {
+                if !reg.def_in_chain(decl, declared) {
+                    return None;
+                }
+            }
             Some((
                 asm,
                 tok,
@@ -827,6 +852,27 @@ impl Interpreter {
         }
         let result = bcl::dispatch_internal_call(namespace, class, name, &args, params);
         self.pins.truncate(pinned);
+        if result.is_none() {
+            // Le nom seul ne suffit pas quand l'appli rattrape l'exception
+            // (#2780) : l'appelant et le type réel de `this` disent qui
+            // appelle et sur quel objet.
+            let caller = self.frames.last().map_or(0, |f| f.ip);
+            let this = match args.first() {
+                Some(Value::Ref(p)) if !p.is_null() && params.len() < args.len() => gc::type_of(*p)
+                    .and_then(|id| types::with_types(|reg| reg.get(id).map(|t| t.full_name())))
+                    .unwrap_or_else(|| "?".into()),
+                _ => "(statique)".into(),
+            };
+            crate::log_warn!(
+                "clr",
+                "méthode introuvable {}.{}::{} appelée par {}, this : {}",
+                namespace,
+                class,
+                name,
+                self.location(caller),
+                this
+            );
+        }
         result.ok_or_else(|| {
             exception(
                 "MissingMethodException",
@@ -1042,10 +1088,14 @@ impl Interpreter {
                 return true;
             };
             // La hiérarchie des types de la bibliothèque intégrée n'est pas
-            // suivie : on accepte.
+            // suivie : on accepte, sauf quand toute celle du vrai type est
+            // connue. Un Int64 n'est pas un BigInteger absent de notre
+            // mscorlib : Newtonsoft teste « is BigInteger » avant de
+            // convertir un entier (#2790).
             let known = t.def.is_some()
                 || target < types::TYPE_EXCEPTION
-                || reg.is_subclass_of(target, types::TYPE_EXCEPTION);
+                || reg.is_subclass_of(target, types::TYPE_EXCEPTION)
+                || reg.hierarchy_known(actual);
             !known || reg.is_subclass_of(actual, target)
         })
     }
@@ -1652,6 +1702,15 @@ impl Interpreter {
                     .len()
                     .saturating_sub(sig.param_types.len() + sig.has_this() as usize);
                 let mut args = f.eval_stack.split_off(split);
+                // Get, Set et Address d'un tableau à plusieurs dimensions :
+                // le moteur les fournit (ECMA-335 §II.14.2, #2848).
+                if let Some((_, kind, _, name)) = self.md_array_method(token) {
+                    let v = self.md_array_access(kind, &name, &args)?;
+                    if !matches!(sig.ret_type, ElementType::Void) {
+                        push!(v);
+                    }
+                    return Ok(StepResult::Continue);
+                }
                 let mut callee = self.resolve_callee(token);
                 let mut virtual_call = op == O::Callvirt;
                 if let (Some(ct), Some(this)) = (constrained, args.first().copied()) {
@@ -1713,6 +1772,14 @@ impl Interpreter {
                 let token = tok1();
                 frame!().ip = next_ip;
                 let sig = self.get_method_sig(token);
+                if let Some((elem, kind, rank, _)) = self.md_array_method(token) {
+                    let f = frame!();
+                    let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
+                    let args = f.eval_stack.split_off(split);
+                    let arr = self.md_array_new(elem, kind, rank, &args)?;
+                    push!(arr);
+                    return Ok(StepResult::Continue);
+                }
                 let callee = self.resolve_callee(token);
                 let type_id = match &callee.target {
                     Target::Managed(asm, row) => {

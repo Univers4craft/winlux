@@ -41,7 +41,7 @@ crt_runtime.rs	OnexitTable	a-verifier
 crt_ucrt.rs	Empty	a-verifier	
 crypt32.rs	AlgId	a-verifier	CRYPT_ALGORITHM_IDENTIFIER 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
 crypt32.rs	BitBlob	a-verifier	CRYPT_BIT_BLOB 12 octets en x86 (24 en x64) : recopié dans Cert.info32 ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
-crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
+crypt32.rs	Blob	a-verifier	CRYPT_*_BLOB 8 octets en x86 (16 en x64) : recopiés dans Cert.info32 ; para de CertFindCertificateInStore lu par read_ptr ; pName de CertNameToStrW/A et le blob de CryptQueryObject lus à la taille de pointeur par blob_slice (#2698) ; les autres entrées (CertCreateSelfSignCertificate, encodage) restent en x64 (#1667)
 crypt32.rs	CertContext	x86	CERT_CONTEXT 20 octets en x86 (40 en x64) : vue Cert.view remplie par fill_view (#1667) ; test condensat_et_certificat_auto_signe
 crypt32.rs	CertInfo	x86	CERT_INFO 112 octets en x86 (208 en x64) : Cert.info32 (#1667) ; test condensat_et_certificat_auto_signe
 crypt32.rs	Chain	x86	chaîne Winlux : la vue de tête est x86 pour un programme 32 bits (#1708)
@@ -58,6 +58,7 @@ d2d1_1.rs	ContextView	a-verifier
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d2d1_effects.rs	Facette	interne	test unitaire (#1319)
 d2d1_effects.rs	Imp	interne	test unitaire (#1206)
+d2d1_svg.rs	FakeStream	interne	test unitaire (#2719)
 d3d10.rs	Dev	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
 d3d10.rs	Mapped	interne	D3D11_MAPPED_SUBRESOURCE rendu par Direct3D 11 (disposition 64 bits) ; recopié en x86 par tex2d_map, d3d1032.c n° 10-13
 d3d10.rs	Obj	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
@@ -219,6 +220,7 @@ ole32.rs	StatStg	a-verifier
 ole32_embed.rs	EnumObj	interne	IEnumSTATDATA des porte-avis (#1236), x64 seulement
 ole32_embed.rs	HolderObj	interne	IOleAdviseHolder/IDataAdviseHolder (#1236), x64 seulement
 ole32_embed/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1236)
+ole32_ftm.rs	Ftm	interne	marshaleur libre (#2674) ; un appelant x86 le reçoit enveloppé par wow32/com.rs (Out IUNKNOWN), jamais sa disposition
 ole32_inplace/tests.rs	Objet	interne	objet OLE d'essai des tests unitaires (#1109)
 ole32_lot_c.rs	AgileRef	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 ole32_lot_c/tests.rs	Probe	interne	test unitaire
@@ -236,8 +238,8 @@ oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais 
 oleaut32_picture.rs	Font	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 oleaut32_picture.rs	Picture	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
 oleaut32_record.rs	RecordInfo	a-verifier	objet COM du lot C (#1511), vtable x64 ; appelants x86 non servis
-oleaut32_typelib.rs	InfoObj	interne	ICreateTypeInfo2/ITypeInfo de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
-oleaut32_typelib.rs	LibObj	interne	ICreateTypeLib2/ITypeLib de CreateTypeLib2 (#1108), x64 seulement (refusé si wow32 actif)
+oleaut32_typelib.rs	InfoObj	x86	ITypeInfo vu par un programme x86 par le mandataire ITYPEINFO de wow32/com.rs ; TYPEATTR et FUNCDESC traduits par wow32/com_typeinfo.rs (#2796) ; ICreateTypeInfo2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
+oleaut32_typelib.rs	LibObj	x86	ITypeLib vu par un programme x86 par le mandataire ITYPELIB de wow32/com.rs (LoadRegTypeLib, #2796 ; TLIBATTR sans pointeur, même disposition) ; ICreateTypeLib2 reste x64 (CreateTypeLib2 refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 rtti.rs	StdException	interne	std::bad_typeid lancée par __RTtypeid en x64 seulement (x86 : avertissement, rien n'est lancé)
@@ -304,6 +306,10 @@ vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
 vulkan1.rs	Callback	a-verifier	
 vulkan1.rs	Xlib	a-verifier	
 wbem.rs	Com	interne	objet WMI du runtime (locator, services, énumérateur, objet) ; en x86, la passerelle COM (wow32/com.rs, IWBEM*) l'enveloppe (wmi32.exe, #1198)
+webbrowser.rs	Browser	a-verifier	contrôle navigateur web (CLSID_WebBrowser) servi en x64 ; appelants x86 pas encore pris en charge (#2228)
+webbrowser.rs	DispParams	interne	DISPPARAMS des événements DWebBrowserEvents2, passé aux abonnés x64 du contrôle (#2228)
+webbrowser/document.rs	Document	a-verifier	document du contrôle navigateur (IHTMLDocument2, IPersistStreamInit) servi en x64 ; appelants x86 pas encore pris en charge (#2228)
+webbrowser/tests.rs	Sink	interne	test unitaire
 webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
@@ -311,6 +317,10 @@ winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)
 wininet.rs	UrlComponents	x86	URL_COMPONENTSA/W de 60 octets lu et réécrit par from_x86/write_x86 ; test url_components_x86 et crt32.c n° 46 (#2554) ; aussi pour WinHttpCrackUrl, crt32.c n° 47 (#2574)
 winlux_media.rs	OpenOptions	a-verifier	
 winmm_waveout.rs	WaveHdr	a-verifier	
+winrt_coreapp.rs	IterObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	PairObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	SetObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_coreapp.rs	ViewObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
 wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)

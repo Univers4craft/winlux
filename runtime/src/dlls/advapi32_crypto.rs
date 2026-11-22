@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const NTE_BAD_ALGID: u32 = 0x8009_0008;
+const NTE_NO_MEMORY: u32 = 0x8009_000E;
 const NTE_BAD_HASH: u32 = 0x8009_0002;
 const NTE_BAD_TYPE: u32 = 0x8009_000A;
 const ERROR_MORE_DATA: u32 = 234;
@@ -36,7 +37,12 @@ const SIMPLEBLOB: u8 = 1;
 #[derive(Default)]
 struct Hash {
     algid: u32,
+    /// Octets gardés tels quels, seulement tant qu'aucun calcul au fil de
+    /// l'eau n'est possible (MD4, HMAC avant HP_HMAC_INFO).
     data: Vec<u8>,
+    /// Condensat au fil de l'eau : un état de taille fixe, quelle que soit
+    /// la quantité condensée (#2738).
+    flux: Option<super::condensat::Condensat>,
     /// Fournisseur qui a créé le condensat (CryptSignHash signe avec sa clé).
     prov: usize,
     /// Clé d'un HMAC (CALG_HMAC) ; l'algorithme interne vient de HP_HMAC_INFO.
@@ -170,6 +176,10 @@ pub(crate) fn hash_value(h: usize) -> Option<(u32, Vec<u8>, usize)> {
 fn digest(h: &Hash) -> Option<Vec<u8>> {
     if let Some(v) = &h.fixed {
         return Some(v.clone());
+    }
+    // Lire la valeur ne clôt pas le condensat : on termine une copie.
+    if let Some(c) = &h.flux {
+        return c.try_clone()?.finish();
     }
     if let Some(key) = &h.hmac {
         return hmac(h.algid, key, &h.data);
@@ -342,10 +352,26 @@ pub unsafe extern "win64" fn crypt_hash_data(
             set_last_error(ERROR_INVALID_PARAMETER);
             return 0;
         }
-        st.data
-            .extend_from_slice(std::slice::from_raw_parts(data, len as usize));
+        feed(st, std::slice::from_raw_parts(data, len as usize));
     }
     1
+}
+
+/// Ajoute des octets au condensat, au fil de l'eau dès que l'algorithme
+/// (et, pour un HMAC, l'algorithme interne) est connu (#2738).
+fn feed(st: &mut Hash, bytes: &[u8]) {
+    if st.flux.is_none() {
+        if let Some(mut c) = bcrypt_alg(st.algid)
+            .and_then(|a| super::condensat::Condensat::new(a, st.hmac.as_deref()))
+        {
+            c.update(&std::mem::take(&mut st.data));
+            st.flux = Some(c);
+        }
+    }
+    match &mut st.flux {
+        Some(c) => c.update(bytes),
+        None => st.data.extend_from_slice(bytes),
+    }
 }
 
 /// CryptHashSessionKey : ajoute au condensat les octets de la clé de
@@ -365,7 +391,7 @@ pub unsafe extern "win64" fn crypt_hash_session_key(h: usize, key: usize, flags:
         set_last_error(NTE_BAD_HASH);
         return 0;
     };
-    st.data.extend_from_slice(&bytes);
+    feed(st, &bytes);
     1
 }
 
@@ -438,9 +464,20 @@ pub unsafe extern "win64" fn crypt_duplicate_hash(
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let flux = match &st.flux {
+        Some(c) => match c.try_clone() {
+            Some(c) => Some(c),
+            None => {
+                set_last_error(NTE_NO_MEMORY);
+                return 0;
+            }
+        },
+        None => None,
+    };
     let copy = Hash {
         algid: st.algid,
         data: st.data.clone(),
+        flux,
         prov: st.prov,
         hmac: st.hmac.clone(),
         fixed: st.fixed.clone(),

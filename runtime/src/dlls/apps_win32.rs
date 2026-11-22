@@ -2557,7 +2557,11 @@ mod tests {
         let opener = bin.join("xdg-open");
         std::fs::write(
             &opener,
-            format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", log.display()),
+            // Écrit puis renomme : le test ne voit jamais un journal vide (#2661).
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$1\" > '{0}.tmp' && /bin/mv '{0}.tmp' '{0}'\n",
+                log.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2574,7 +2578,7 @@ mod tests {
                     0
                 );
                 il_free(p);
-                for _ in 0..200 {
+                for _ in 0..1000 {
                     if log.exists() {
                         break;
                     }

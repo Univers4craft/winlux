@@ -45,4 +45,4 @@ if test "$rc" -ne 0; then
     echo "webview2 : échec, code $rc (voir testc/msvc/webview2_msvc.c)" >&2
     exit 1
 fi
-echo "webview2 : environnement, contrôleur, messages, ExecuteScript et hôte virtuel sur WebKitGTK"
+echo "webview2 : environnement, contrôleur, window.open, messages, ExecuteScript et hôte virtuel sur WebKitGTK"

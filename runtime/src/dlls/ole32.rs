@@ -951,6 +951,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Contrôle navigateur web « Shell.Explorer » (#2228).
+        if let Some(hr) = super::webbrowser::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Bouton de la barre des tâches : progression, icône superposée (#1434).
         if let Some(hr) = super::taskbarlist_com::create_builtin(&guid, &iid, out) {
             return hr;
@@ -1168,17 +1172,7 @@ unsafe fn create_from_registry(guid: &Guid, iid: &Guid, out: *mut *mut c_void) -
     Some(result)
 }
 
-// ---------- CoCreateFreeThreadedMarshaler ----------
-
-pub unsafe extern "win64" fn co_create_free_threaded_marshaler(
-    _outer: usize,
-    ppunk: *mut *mut c_void,
-) -> i32 {
-    if !ppunk.is_null() {
-        *ppunk = std::ptr::null_mut();
-    }
-    S_OK
-}
+// CoCreateFreeThreadedMarshaler : ole32_ftm.rs (#2674).
 
 // ---------- ProgIDFromCLSID / CLSIDFromProgID ----------
 
@@ -1225,6 +1219,11 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
         None => {
             // Classes intégrées sans clé HKCR : MSXML (#1758).
             if let Some(g) = super::msxml::clsid_for_prog_id(&name) {
+                *clsid = g;
+                return S_OK;
+            }
+            // Contrôle navigateur web « Shell.Explorer » (#2228).
+            if let Some(g) = super::webbrowser::clsid_for_prog_id(&name) {
                 *clsid = g;
                 return S_OK;
             }
@@ -1826,7 +1825,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateInstance"=>fn co_create_instance,"CoCreateInstanceEx"=>fn co_create_instance_ex,
         "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object,
         "CoGetClassObject"=>fn co_get_class_object,
-        "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
+        "CoCreateFreeThreadedMarshaler"=>fn super::ole32_ftm::co_create_free_threaded_marshaler,
         "ProgIDFromCLSID"=>fn prog_id_from_clsid,"CLSIDFromProgID"=>fn clsid_from_prog_id,
         "CoGetMalloc"=>fn co_get_malloc,
         "CoLockObjectExternal"=>fn ole_s_ok,
