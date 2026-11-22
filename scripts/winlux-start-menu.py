@@ -433,6 +433,24 @@ def osk_module():
     return None
 
 
+def screen_locked():
+    """Vrai si winlux-lock tient cet écran : pid vivant dans son marqueur
+    /run/winlux/lock/active (« -1 » pour :1…), comme winlux-power. Le menu
+    s'ouvrait par-dessus l'écran de verrouillage, avec « Souvent ouvert à
+    cette heure-ci », dès qu'un programme l'activait par D-Bus (#2994)."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    suffix = "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+    try:
+        with open(os.environ.get("WINLUX_LOCK_ROOT", "") + "/run/winlux/lock/active" + suffix) as marker:
+            pid = int(marker.read().strip())
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -471,6 +489,9 @@ class Start(Gtk.Application):
             return
         if self.window and self.window.get_visible():
             self.hide()
+            return
+        # Écran verrouillé : rien ne s'ouvre par-dessus (#2994).
+        if screen_locked():
             return
         if not self.window: self.build()
         # Épingles ajoutées par une autre application (Jeux) depuis la
@@ -1838,8 +1859,12 @@ def _recent_ranked(path, home):
         application = ""
         for entry in bookmark.iter(namespace + "application"):
             stamp = _stamp(entry.get("modified"))
-            if stamp >= when or not application:
-                application = entry.get("name", "")
+            name = entry.get("name", "")
+            # Le portail de fichiers note sous son propre nom les fichiers
+            # qu'il choisit pour une autre application : ce n'est pas un
+            # programme que la personne a ouvert (#3001).
+            if (stamp >= when or not application) and not name.startswith("xdg-desktop-portal"):
+                application = name
             when = max(when, stamp)
         if target not in found or found[target][1] < when:
             found[target] = (application, when)

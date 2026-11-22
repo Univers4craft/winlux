@@ -174,6 +174,7 @@ fn create(name: Option<String>) -> usize {
         }
     }
     let h = NEXT_JOB.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::handle_origin::record(h);
     all.insert(
         h,
         Job {

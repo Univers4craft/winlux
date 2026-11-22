@@ -853,10 +853,16 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
 /// `OVERLAPPED.hEvent` dit « pas de paquet au port de complétion ». Avec un
 /// numéro impair, la fin d'une E/S signalait le handle voisin et l'événement
 /// attendu ne l'était jamais (#1360).
+///
+/// Avec `WINLUX_DIAG_HANDLES=1`, l'appelant est noté (#3004).
+#[track_caller]
 fn next_handle() -> usize {
-    NEXT_HANDLE.fetch_add(4, Ordering::Relaxed)
+    let h = NEXT_HANDLE.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::handle_origin::record(h);
+    h
 }
 /// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
+#[track_caller]
 pub(crate) fn new_handle_number() -> usize {
     next_handle()
 }
@@ -933,6 +939,7 @@ pub(crate) fn foreign_process(pid: i32) -> SyncHandle {
         changed: Condvar::new(),
     }))
 }
+#[track_caller]
 pub(crate) fn insert_file(file: File) -> usize {
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -2851,7 +2858,10 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
     }
 }
 fn get_temp_file_name(directory: &str, prefix: &str, unique: u32) -> Result<(String, u32), u32> {
-    if prefix.len() > 3 || prefix.contains(['\\', '/']) {
+    // Learn : « up to the first three characters » du préfixe sont gardés ;
+    // un préfixe plus long n'est pas une erreur (#2988).
+    let prefix: String = prefix.chars().take(3).collect();
+    if prefix.contains(['\\', '/']) {
         return Err(87);
     }
     let dir = crate::paths::to_linux(directory);
@@ -9567,6 +9577,9 @@ unsafe fn fill_find_data_a(data: *mut Win32FindDataA, name: &str, meta: &std::fs
     if name.starts_with('.') {
         d.attributes |= 0x02;
     } // FILE_ATTRIBUTE_HIDDEN
+    if crate::dlls::winfile::session_file(name.as_bytes()) {
+        d.attributes |= 0x06; // HIDDEN | SYSTEM : lanceur de la session (#3000)
+    }
     let size = meta.len();
     d.file_size_low = size as u32;
     d.file_size_high = (size >> 32) as u32;
@@ -11628,6 +11641,7 @@ unsafe fn duplicate_local(
         if !dst_handle.is_null() {
             *dst_handle = 0;
         }
+        crate::dlls::handle_origin::refused(src_handle, "DuplicateHandle");
         crate::process::set_last_error(6);
         return 0;
     };
@@ -13607,6 +13621,39 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// #2988 : seuls les trois premiers caractères du préfixe sont gardés
+    /// (Learn, GetTempFileNameW) ; un préfixe long ou accentué n'est pas
+    /// refusé, un préfixe vide reste permis.
+    #[test]
+    fn prefixe_de_fichier_temporaire_tronque_2988() {
+        let d = std::env::temp_dir().join(format!("winlux-2988-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let dir = crate::paths::to_windows(&d);
+        let nom = |p: &str| {
+            let (path, id) = super::get_temp_file_name(&dir, p, 0).unwrap();
+            assert_ne!(id, 0);
+            let f = crate::paths::to_linux(&path);
+            assert!(f.is_file(), "{path}");
+            f.file_name().unwrap().to_string_lossy().into_owned()
+        };
+        let long = nom("setup");
+        println!("préfixe long : {long}");
+        assert!(
+            long.starts_with("set") && !long.starts_with("setu"),
+            "{long}"
+        );
+        let accents = nom("éèàù");
+        println!("préfixe accentué : {accents}");
+        assert!(
+            accents.starts_with("éèà") && !accents.starts_with("éèàù"),
+            "{accents}"
+        );
+        let vide = nom("");
+        assert!(vide.ends_with(".tmp"), "{vide}");
+        assert_eq!(super::get_temp_file_name(&dir, "a\\b", 0), Err(87));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 
