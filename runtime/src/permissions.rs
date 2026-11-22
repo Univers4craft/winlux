@@ -17,7 +17,9 @@
 //!   comportement d'avant s'applique : accès autorisé, rien n'est mémorisé.
 //!
 //! Mémoire des choix : `~/.config/winlux/permissions.tsv`, une ligne par
-//! décision : `capacité<TAB>allow|deny<TAB>chemin absolu du .exe`.
+//! décision : `capacité<TAB>allow|deny<TAB>chemin absolu du .exe`. Une
+//! décision vaut pour toute l'application, identifiée par son dossier
+//! d'installation (`app_folder`, #1889).
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -194,13 +196,80 @@ fn store_path() -> Option<PathBuf> {
     Some(config.join("winlux/permissions.tsv"))
 }
 
-/// Décision mémorisée pour cette application et cette capacité.
+/// Dossier qui identifie l'application d'un .exe, d'après son chemin
+/// Windows (#1889, `docs/AUTORISATIONS-APPLICATIONS.md` §2.1, règle 2) : le
+/// premier dossier sous `Program Files`, `Program Files (x86)`,
+/// `AppData\Local\Programs`, `AppData\Local` ou `AppData\Roaming`, en
+/// minuscules. `…\Discord\app-1.0.9213\Discord.exe` et
+/// `…\Discord\Update.exe` sont ainsi la même application, et un choix
+/// survit au passage à `app-1.0.9214`.
+///
+/// Un dossier `Microsoft` regroupe plusieurs applications (`Microsoft\Teams`,
+/// `Microsoft\OneDrive`, `Microsoft\Edge`) : l'identité descend d'un
+/// niveau. Les dossiers partagés (`Common Files`, `WindowsApps`, `Temp`,
+/// `Packages`) n'identifient rien, et un .exe posé directement à la racine
+/// non plus : `None`, l'application est alors le .exe lui-même (règle 3).
+pub fn app_folder(windows: &str) -> Option<String> {
+    let low: Vec<String> = windows
+        .split(['\\', '/'])
+        .filter(|c| !c.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let at = |i: usize| low.get(i).map(String::as_str);
+    if at(0) != Some("c:") {
+        return None;
+    }
+    let mut depth = match at(1) {
+        Some("program files" | "program files (x86)") => 2,
+        Some("users") if at(3) == Some("appdata") => match (at(4), at(5)) {
+            (Some("local"), Some("programs")) => 6,
+            (Some("local" | "roaming"), _) => 5,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match at(depth) {
+        Some("common files" | "windowsapps" | "temp" | "packages") => return None,
+        Some("microsoft") => depth += 1,
+        _ => {}
+    }
+    // Le dossier, puis au moins le .exe en dessous.
+    if low.len() < depth + 2 {
+        return None;
+    }
+    Some(low[..=depth].join("\\"))
+}
+
+/// Décision mémorisée pour cette application et cette capacité. Une ligne
+/// vaut pour toute l'application (#1889) : celle d'un autre .exe du même
+/// dossier d'application compte aussi, et la plus récente l'emporte. Le
+/// fichier garde son format (une ligne par .exe), lu tel quel par
+/// `winlux-permission` et Paramètres.
 pub fn stored_in(text: &str, exe: &Path, cap: Capability) -> Option<Decision> {
+    let conv = crate::paths::VersWindows::new();
+    stored_for_app(text, exe, cap, |p| conv.convert(p))
+}
+
+/// `stored_in`, avec la conversion en chemin Windows donnée (testable).
+fn stored_for_app(
+    text: &str,
+    exe: &Path,
+    cap: Capability,
+    to_windows: impl Fn(&Path) -> String,
+) -> Option<Decision> {
+    let folder = app_folder(&to_windows(exe));
     let exe = exe.to_string_lossy();
     text.lines().rev().find_map(|line| {
         let mut f = line.splitn(3, '\t');
         let (c, d, p) = (f.next()?, f.next()?, f.next()?);
-        if c != cap.key() || p != exe {
+        if c != cap.key() {
+            return None;
+        }
+        let same_app = p == exe
+            || folder
+                .as_ref()
+                .is_some_and(|dir| app_folder(&to_windows(Path::new(p))).as_ref() == Some(dir));
+        if !same_app {
             return None;
         }
         match d {
@@ -723,6 +792,112 @@ mod tests {
         match saved {
             Some(v) => std::env::set_var("WINLUX_SERVICE_NAME", v),
             None => std::env::remove_var("WINLUX_SERVICE_NAME"),
+        }
+    }
+
+    /// Conversion de test : `/c/…` est `C:\…`, le reste est `Z:\…`.
+    fn vers_windows_test(p: &Path) -> String {
+        let s = p.to_string_lossy();
+        match s.strip_prefix("/c/") {
+            Some(rest) => format!("C:\\{}", rest.replace('/', "\\")),
+            None => format!("Z:{}", s.replace('/', "\\")),
+        }
+    }
+
+    #[test]
+    fn dossier_application_1889() {
+        let cas = [
+            (
+                r"C:\Users\a\AppData\Local\Discord\app-1.0.9213\Discord.exe",
+                Some(r"c:\users\a\appdata\local\discord"),
+            ),
+            (
+                r"C:\Users\a\AppData\Local\Discord\Update.exe",
+                Some(r"c:\users\a\appdata\local\discord"),
+            ),
+            (
+                r"C:\Program Files (x86)\Steam\bin\cef\cef.win7x64\steamwebhelper.exe",
+                Some(r"c:\program files (x86)\steam"),
+            ),
+            (
+                r"C:\Users\a\AppData\Local\Programs\Zoom\bin\Zoom.exe",
+                Some(r"c:\users\a\appdata\local\programs\zoom"),
+            ),
+            (
+                r"C:\Users\a\AppData\Roaming\Spotify\Spotify.exe",
+                Some(r"c:\users\a\appdata\roaming\spotify"),
+            ),
+            // Un dossier Microsoft regroupe plusieurs applications.
+            (
+                r"C:\Users\a\AppData\Local\Microsoft\Teams\current\Teams.exe",
+                Some(r"c:\users\a\appdata\local\microsoft\teams"),
+            ),
+            (
+                r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\msedgewebview2.exe",
+                Some(r"c:\program files (x86)\microsoft\edgewebview"),
+            ),
+            // Dossiers partagés, .exe à la racine, programme portable : le .exe seul.
+            (r"C:\Program Files\Common Files\Outil\outil.exe", None),
+            (r"C:\Users\a\AppData\Local\Temp\setup.exe", None),
+            (r"C:\Program Files\outil.exe", None),
+            (r"C:\Users\a\AppData\Local\Microsoft\outil.exe", None),
+            (r"C:\Users\a\Téléchargements\Setup.exe", None),
+            (r"Z:\home\a\Jeux\jeu.exe", None),
+        ];
+        for (chemin, attendu) in cas {
+            assert_eq!(app_folder(chemin).as_deref(), attendu, "{chemin}");
+        }
+    }
+
+    #[test]
+    fn choix_garde_apres_mise_a_jour_squirrel_1889() {
+        let ancien = Path::new("/c/Users/a/AppData/Local/Discord/app-1.0.9213/Discord.exe");
+        let nouveau = Path::new("/c/Users/a/AppData/Local/Discord/app-1.0.9214/Discord.exe");
+        let text = remembered("", ancien, Capability::Microphone, Decision::Deny);
+        assert_eq!(
+            stored_for_app(&text, nouveau, Capability::Microphone, vers_windows_test),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            stored_for_app(&text, nouveau, Capability::Camera, vers_windows_test),
+            None
+        );
+    }
+
+    #[test]
+    fn un_choix_vaut_pour_tous_les_exe_de_steam_1889() {
+        let steam = Path::new("/c/Program Files (x86)/Steam/steam.exe");
+        let aide = Path::new("/c/Program Files (x86)/Steam/bin/cef/cef.win7x64/steamwebhelper.exe");
+        // Ligne ancienne de l'aide (accordé), puis blocage de steam.exe dans
+        // Paramètres : la décision la plus récente vaut pour toute l'application.
+        let text = remembered("", aide, Capability::Microphone, Decision::Allow);
+        let text = remembered(&text, steam, Capability::Microphone, Decision::Deny);
+        assert_eq!(
+            stored_for_app(&text, aide, Capability::Microphone, vers_windows_test),
+            Some(Decision::Deny)
+        );
+    }
+
+    #[test]
+    fn programme_portable_reste_seul_1889() {
+        let setup = Path::new("/c/Users/a/Téléchargements/Setup.exe");
+        let autre = Path::new("/c/Users/a/Téléchargements/Autre.exe");
+        let zoom = Path::new("/c/Users/a/AppData/Local/Programs/Zoom/bin/Zoom.exe");
+        let teams = Path::new("/c/Users/a/AppData/Local/Microsoft/Teams/current/Teams.exe");
+        let onedrive = Path::new("/c/Users/a/AppData/Local/Microsoft/OneDrive/OneDrive.exe");
+        let text = remembered("", setup, Capability::Camera, Decision::Allow);
+        let text = remembered(&text, zoom, Capability::Camera, Decision::Allow);
+        let text = remembered(&text, teams, Capability::Camera, Decision::Allow);
+        assert_eq!(
+            stored_for_app(&text, setup, Capability::Camera, vers_windows_test),
+            Some(Decision::Allow)
+        );
+        for exe in [autre, onedrive] {
+            assert_eq!(
+                stored_for_app(&text, exe, Capability::Camera, vers_windows_test),
+                None,
+                "{exe:?}"
+            );
         }
     }
 
