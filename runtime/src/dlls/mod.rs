@@ -469,7 +469,8 @@ pub fn shadowed_exports() -> Vec<String> {
 struct Builtin {
     name: &'static str,
     exports: Exports,
-    /// Image PE minimale servant de HMODULE (voir `pe_image`).
+    /// HMODULE fixé (page « MZ » seule), ou 0 : image PE minimale
+    /// construite à la demande (`builtin_handle`, voir `pe_image`).
     handle: usize,
 }
 
@@ -482,7 +483,8 @@ fn fake_module() -> usize {
 
 fn builtins() -> &'static Vec<Builtin> {
     static B: OnceLock<Vec<Builtin>> = OnceLock::new();
-    B.get_or_init(|| {
+    static CORE: std::sync::Once = std::sync::Once::new();
+    let all = B.get_or_init(|| {
         let crt = {
             let mut e = msvcrt::exports();
             e.extend(crt::exports());
@@ -1439,15 +1441,62 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             });
         }
-        // Chaque DLL intégrée a de vrais en-têtes PE et une table d'exports :
-        // le bac à sable de Chromium lit lui-même celle de ntdll au lieu
-        // d'appeler GetProcAddress (#851), et ses renderers vérifient les
-        // en-têtes PE des modules système avant d'en parcourir les imports
-        // (#852).
-        for b in all.iter_mut() {
-            b.handle = pe_image::build(b.name, &b.exports);
-        }
         all
+    });
+    // ntdll et kernel32 tout de suite, comme avant le Gain #3050 : le bac à
+    // sable de Chromium écrit dans l'image ntdll d'un enfant suspendu avant
+    // que celui-ci n'ait rien demandé (#767, #851).
+    CORE.call_once(|| {
+        for name in ["ntdll", "kernel32"] {
+            if let Some(i) = all.iter().position(|b| b.name == name) {
+                handle_in(all, i);
+            }
+        }
+    });
+    all
+}
+
+/// HMODULE de la DLL intégrée d'indice `i` dans `builtins()`. Chaque DLL
+/// intégrée sans HMODULE fixé a de vrais en-têtes PE et une table
+/// d'exports : le bac à sable de Chromium lit lui-même celle de ntdll au
+/// lieu d'appeler GetProcAddress (#851), et ses renderers vérifient les
+/// en-têtes PE des modules système avant d'en parcourir les imports (#852).
+/// Cette image n'est construite qu'à la première demande du HMODULE
+/// (Gain #3050) : construire d'avance celles des ~400 DLL intégrées coûtait
+/// des millisecondes et de la mémoire à chaque lancement, pour un programme
+/// qui n'en ouvre que quelques-unes.
+fn builtin_handle(i: usize) -> usize {
+    handle_in(builtins(), i)
+}
+
+fn handle_in(all: &'static [Builtin], i: usize) -> usize {
+    let b = &all[i];
+    if b.handle != 0 {
+        return b.handle;
+    }
+    *images_in(all)[i].get_or_init(|| pe_image::build(b.name, &b.exports, i))
+}
+
+fn builtin_images() -> &'static [OnceLock<usize>] {
+    images_in(builtins())
+}
+
+fn images_in(all: &'static [Builtin]) -> &'static [OnceLock<usize>] {
+    static H: OnceLock<Vec<OnceLock<usize>>> = OnceLock::new();
+    H.get_or_init(|| all.iter().map(|_| OnceLock::new()).collect())
+}
+
+/// Indice de la DLL intégrée qui a ce HMODULE. Une image jamais construite
+/// n'a jamais été donnée au programme : seules les images construites
+/// comptent.
+fn builtin_index_by_handle(h: usize) -> Option<usize> {
+    let images = builtin_images();
+    builtins().iter().enumerate().position(|(i, b)| {
+        if b.handle != 0 {
+            b.handle == h
+        } else {
+            images[i].get() == Some(&h)
+        }
     })
 }
 
@@ -2175,8 +2224,8 @@ pub fn module_handle(dll: &str) -> Option<usize> {
             return Some(m.base);
         }
     }
-    if let Some(b) = builtins().iter().find(|b| b.name == n) {
-        return Some(b.handle);
+    if let Some(i) = builtins().iter().position(|b| b.name == n) {
+        return Some(builtin_handle(i));
     }
     crate::loader::find_module_by_name(dll).map(|m| m.base)
 }
@@ -2201,7 +2250,7 @@ pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
     if h == kernelbase_handle() {
         return Some("kernel32");
     }
-    builtins().iter().find(|b| b.handle == h).map(|b| b.name)
+    builtin_index_by_handle(h).map(|i| builtins()[i].name)
 }
 
 /// Dossier système vu par le programme : System32, ou SysWOW64 pour un
@@ -2222,7 +2271,7 @@ pub fn builtin_file_path(h: usize) -> Option<String> {
     let name = if h == kernelbase_handle() {
         "KernelBase"
     } else {
-        builtins().iter().find(|b| b.handle == h)?.name
+        builtins()[builtin_index_by_handle(h)?].name
     };
     Some(format!("{}\\{name}.dll", system_dir()))
 }
