@@ -268,6 +268,15 @@ impl WPath {
     pub fn is_empty(&self) -> bool {
         self.n == 0
     }
+    /// Nom de fichier en UTF-16, sans perte (titre de la fenêtre, #3087).
+    pub fn file_name_wide(&self) -> &[u16] {
+        let start = self.w[..self.n]
+            .iter()
+            .rposition(|&c| c == b'\\' as u16 || c == b'/' as u16)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        &self.w[start..self.n]
+    }
     /// Nom de fichier affichable (Windows-1252, « ? » hors plage).
     pub fn file_name(&self, out: &mut Buf<160>) {
         out.clear();
@@ -706,7 +715,7 @@ pub unsafe fn open_file(path: &WPath, refresh_list: bool) {
     let n = WinluxMediaProbe(PATH.ptr(), raw.as_mut_ptr(), raw.len() as u32);
     let mut name = Buf::<160>::new();
     PATH.file_name(&mut name);
-    set_window_title(name.get());
+    set_window_title(PATH.file_name_wide());
     if n < 0 {
         parse_info(b"");
         toast(tr(S_UNREADABLE), b"");
@@ -736,15 +745,18 @@ pub unsafe fn open_file(path: &WPath, refresh_list: bool) {
     start(resume, false);
 }
 
-unsafe fn set_window_title(name: &[u8]) {
+/// Titre « nom - Lecteur multimédia » : le nom reste en UTF-16 (’, CJK…),
+/// seul le libellé traduit vient du texte Windows-1252 du shell (#3087).
+unsafe fn set_window_title(name: &[u16]) {
     if HWND.is_null() {
         return;
     }
     let mut w = [0u16; 260];
     let mut n = 0;
-    for &c in name.iter().chain(b" - ".iter()).chain(tr(S_TITLE).iter()) {
+    let label = b" - ".iter().chain(tr(S_TITLE).iter()).map(|&c| c as u16);
+    for c in name.iter().copied().chain(label) {
         if n < w.len() - 1 {
-            w[n] = c as u16;
+            w[n] = c;
             n += 1;
         }
     }
@@ -2512,7 +2524,7 @@ pub unsafe fn init(hwnd: Handle, path: &WPath) {
     if !path.is_empty() {
         open_file(path, true);
     } else {
-        set_window_title(b"");
+        set_window_title(&[]);
     }
 }
 
