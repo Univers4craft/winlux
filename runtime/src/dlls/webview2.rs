@@ -285,6 +285,8 @@ struct Args {
     /// Code HTTP de la navigation (NavigationCompleted, #2966), 0 sans
     /// requête HTTP ni réponse.
     http_status: i32,
+    /// En-têtes de la requête (NavigationStarting, #2964).
+    headers: Vec<(String, String)>,
     ok: bool,
     status: i32,
     json: String,
@@ -1620,12 +1622,15 @@ impl View {
             }
             "nav_starting" => {
                 let uri = self.public_uri(&get_str(&ev, "uri").unwrap_or_default());
+                let headers =
+                    super::webview2_entetes::parse(&get_str(&ev, "headers").unwrap_or_default());
                 self.fire_args(
                     "NavigationStarting",
                     Family::NavStarting,
                     Args {
                         uri,
                         nav,
+                        headers,
                         ..Default::default()
                     },
                 );
@@ -2824,12 +2829,13 @@ unsafe extern "win64" fn args_try_string(this: usize, out: *mut *mut u16) -> i32
         }
     }
 }
-unsafe extern "win64" fn args_null_out(_this: usize, out: *mut usize) -> i32 {
+/// RequestHeaders de NavigationStarting (#2964) : une copie des en-têtes.
+unsafe extern "win64" fn args_request_headers(this: usize, out: *mut usize) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
-    *out = 0;
-    E_NOTIMPL
+    *out = super::webview2_entetes::new_request_headers(args(this).headers.clone());
+    S_OK
 }
 
 fn nav_starting_methods() -> Vec<(usize, usize)> {
@@ -2837,7 +2843,7 @@ fn nav_starting_methods() -> Vec<(usize, usize)> {
         (0, args_uri as *const () as usize),
         (1, get_false as *const () as usize),
         (2, get_false as *const () as usize),
-        (3, args_null_out as *const () as usize),
+        (3, args_request_headers as *const () as usize),
         (4, get_false as *const () as usize),
         (5, ok1 as *const () as usize),
         (6, args_nav_id as *const () as usize),

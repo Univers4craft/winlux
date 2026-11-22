@@ -16,7 +16,7 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
-    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav"}
+    {"ev": "ready", "xid", "user_agent"}   {"ev": "nav_starting", "uri", "nav", "headers"}
     {"ev": "content_loading", "nav"}   {"ev": "source", "uri"}
     {"ev": "nav_completed", "nav", "ok", "status"}   {"ev": "title", "title"}
     {"ev": "history", "back", "forward"}   {"ev": "message", "json", "string"}
@@ -118,6 +118,22 @@ def http_status(view):
     resource = view.get_main_resource()
     response = resource.get_response() if resource is not None else None
     return response.get_status_code() if response is not None else 0
+
+
+def request_headers(request):
+    """En-têtes de la requête, « Nom: valeur » une ligne chacun (#2964).
+
+    WebKit n'en porte souvent aucun au moment de la décision de navigation.
+    Une ligne coupée (retour à la ligne dans un nom ou une valeur) est
+    écartée : elle ne se relirait pas.
+    """
+    headers = request.get_http_headers() if request is not None else None
+    if headers is None:
+        return ""
+    lines = []
+    headers.foreach(lambda name, value, *_: lines.append((name, value)))
+    return "\n".join(f"{n}: {v}" for n, v in lines
+                     if n and "\n" not in n + v and "\r" not in n + v and ":" not in n)
 
 
 def user_agent_header(value):
@@ -649,7 +665,8 @@ class View:
                 self.view.load_uri(local)
                 return True
             self.nav += 1
-            emit(ev="nav_starting", uri=uri, nav=self.nav)
+            emit(ev="nav_starting", uri=uri, nav=self.nav,
+                 headers=request_headers(decision.get_navigation_action().get_request()))
         return False
 
     def on_load(self, view, event):
