@@ -1061,6 +1061,30 @@ def watched_inputs():
         except OSError: signature.append((str(path), None, None))
     return tuple(signature)
 
+def refresh_apart():
+    """refresh() dans un processus fils : le démon résident ne garde pas la
+    mémoire de la passe. Relire tout le registre (des dizaines de milliers de
+    chaînes) toutes les 5 minutes fragmentait son tas : 10 Mo au départ, 40 Mo
+    après une trentaine de passes, jamais rendus."""
+    try:
+        pid = os.fork()
+    except OSError:
+        CHANGED.clear()
+        refresh()
+        return
+    if pid == 0:
+        code = 1
+        try:
+            CHANGED.clear()
+            refresh()
+            code = 0
+        except BaseException as error:
+            print(f"Catalogue : {type(error).__name__}: {error}", file=sys.stderr)
+        finally:
+            try: sys.stdout.flush(); sys.stderr.flush()
+            finally: os._exit(code)
+    os.waitpid(pid, 0)
+
 def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
     """Resident catalogue: window icons each tick, refresh() only when an input changed.
 
@@ -1073,8 +1097,7 @@ def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
         try:
             current = watched_inputs()
             if current != signature or time.monotonic() - last_full >= full_pass:
-                CHANGED.clear()
-                refresh()
+                refresh_apart()
                 # refresh() itself touches APPS: read the inputs after it.
                 signature, last_full = watched_inputs(), time.monotonic()
             window_icons()

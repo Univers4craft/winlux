@@ -126,6 +126,8 @@ struct Session {
     decisions: HashMap<Capability, bool>,
     /// Capacités déjà demandées par cette exécution : une seule fenêtre.
     asked: std::collections::HashSet<Capability>,
+    /// Questions posées sur un fil à part et pas encore répondues (#3099).
+    pending: std::collections::HashSet<Capability>,
 }
 
 impl Session {
@@ -611,6 +613,94 @@ pub fn allowed(cap: Capability) -> bool {
         &SESSION,
         ASK_LIMIT,
     )
+}
+
+/// Comme `allowed`, sans jamais faire attendre le fil appelant (#3099), sur
+/// le modèle du micro WASAPI (#1882) : une décision connue (choix mémorisé,
+/// interrupteur global, programme de Winlux, service, aucun écran pour
+/// demander) est rendue tout de suite. Une capacité jamais décidée rend
+/// `None` : la question est posée sur un fil à part, une seule fois, et
+/// l'appelant fait comme pour un refus. Dès que la personne a autorisé,
+/// l'appel suivant passe ; un refus reste un refus.
+pub fn allowed_without_waiting(cap: Capability) -> Option<bool> {
+    if !cap.asks() || globally_denied(cap) {
+        return Some(allowed(cap));
+    }
+    let implied = cap != Capability::Input;
+    let Some(app) = APP.get() else {
+        return Some(implied);
+    };
+    if app.trusted {
+        return Some(implied);
+    }
+    without_waiting_for(app, cap, store_path(), helper(), &SESSION, ASK_LIMIT)
+}
+
+/// `allowed_without_waiting`, avec le fichier, l'assistant et la mémoire
+/// donnés (testable).
+fn without_waiting_for(
+    app: &'static App,
+    cap: Capability,
+    store: Option<PathBuf>,
+    helper: Option<PathBuf>,
+    session: &'static Mutex<Option<Session>>,
+    limit: std::time::Duration,
+) -> Option<bool> {
+    let known = lock(session)
+        .get_or_insert_with(Session::default)
+        .known(cap, stamp_of(store.as_deref()));
+    if let Some(known) = known {
+        return Some(known);
+    }
+    let text = store
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    if let Some(d) = stored_in(&text, &app.exe, cap) {
+        return Some(d == Decision::Allow);
+    }
+    // Sans fenêtre possible (service, pas d'écran), `allowed` répond sans
+    // attendre.
+    if is_service() || helper.is_none() {
+        return Some(allowed_for(
+            app,
+            cap,
+            store.as_deref(),
+            helper.as_deref(),
+            session,
+            limit,
+        ));
+    }
+    let first = lock(session)
+        .get_or_insert_with(Session::default)
+        .pending
+        .insert(cap);
+    if first {
+        let spawned = std::thread::Builder::new()
+            .name("winlux-permission".into())
+            .spawn(move || {
+                allowed_for(
+                    app,
+                    cap,
+                    store.as_deref(),
+                    helper.as_deref(),
+                    session,
+                    limit,
+                );
+                lock(session)
+                    .get_or_insert_with(Session::default)
+                    .pending
+                    .remove(&cap);
+            })
+            .is_ok();
+        if !spawned {
+            lock(session)
+                .get_or_insert_with(Session::default)
+                .pending
+                .remove(&cap);
+        }
+    }
+    None
 }
 
 /// `allowed`, avec le fichier, l'assistant et la mémoire donnés (testable).
@@ -1113,6 +1203,124 @@ mod tests {
             );
             assert!(camera.join().unwrap());
         });
+    }
+
+    fn statique<T>(v: T) -> &'static T {
+        Box::leak(Box::new(v))
+    }
+
+    #[test]
+    fn question_sur_un_fil_a_part_sans_attendre_3099() {
+        let dir = DossierDeTest::new();
+        let app = statique(appli_de_test(dir.path()));
+        let store = dir.path().join("permissions.tsv");
+        let compte = dir.path().join("questions");
+        // La personne met 1 s à répondre, puis autorise.
+        let helper = assistant(
+            dir.path(),
+            &format!(
+                "echo \"$2\" >> '{}'\nsleep 1\nprintf 'camera\\tallow\\t%s\\n' \"$4\" > '{1}.t' && mv '{1}.t' '{1}'",
+                compte.display(),
+                store.display()
+            ),
+        );
+        let session = statique(Mutex::new(None));
+        let debut = std::time::Instant::now();
+        for _ in 0..5 {
+            assert_eq!(
+                without_waiting_for(
+                    app,
+                    Capability::Camera,
+                    Some(store.clone()),
+                    Some(helper.clone()),
+                    session,
+                    ASK_LIMIT
+                ),
+                None,
+                "pas encore de réponse : l'appelant fait comme pour un refus"
+            );
+        }
+        let duree = debut.elapsed();
+        assert!(
+            duree < std::time::Duration::from_millis(500),
+            "l'appelant a attendu : {duree:?}"
+        );
+        // Après « Autoriser », l'appel suivant passe.
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut accorde = None;
+        while std::time::Instant::now() < limite {
+            accorde = without_waiting_for(
+                app,
+                Capability::Camera,
+                Some(store.clone()),
+                Some(helper.clone()),
+                session,
+                ASK_LIMIT,
+            );
+            if accorde.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(accorde, Some(true));
+        let questions = std::fs::read_to_string(&compte).unwrap_or_default();
+        assert_eq!(questions, "camera\n", "une seule fenêtre : {questions:?}");
+    }
+
+    #[test]
+    fn un_refus_reste_un_refus_sans_attendre_3099() {
+        let dir = DossierDeTest::new();
+        let app = statique(appli_de_test(dir.path()));
+        let store = dir.path().join("permissions.tsv");
+        let exe = app.exe.display().to_string();
+        ecrire_choix(&store, &format!("input\tdeny\t{exe}\n"));
+        let helper = assistant(dir.path(), "sleep 30");
+        let session = statique(Mutex::new(None));
+        let debut = std::time::Instant::now();
+        assert_eq!(
+            without_waiting_for(
+                app,
+                Capability::Input,
+                Some(store.clone()),
+                Some(helper.clone()),
+                session,
+                ASK_LIMIT
+            ),
+            Some(false)
+        );
+        // Fenêtre refusée sans réponse : refus aussi, sans attendre.
+        let store2 = dir.path().join("vide.tsv");
+        let helper2 = assistant(dir.path(), "exit 1");
+        let session2 = statique(Mutex::new(None));
+        assert_eq!(
+            without_waiting_for(
+                app,
+                Capability::Screen,
+                Some(store2.clone()),
+                Some(helper2.clone()),
+                session2,
+                ASK_LIMIT
+            ),
+            None
+        );
+        assert!(debut.elapsed() < std::time::Duration::from_millis(500));
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut apres = None;
+        while std::time::Instant::now() < limite {
+            apres = without_waiting_for(
+                app,
+                Capability::Screen,
+                Some(store2.clone()),
+                Some(helper2.clone()),
+                session2,
+                ASK_LIMIT,
+            );
+            if apres.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(apres, Some(false), "« Refuser » : refusé ensuite aussi");
     }
 
     #[test]

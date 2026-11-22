@@ -651,7 +651,7 @@ type EnumProc = unsafe extern "win64" fn(*const c_void, *const c_void, u32, isiz
 /// équivalente (#1670) : CreateFont les remplace déjà, et un programme qui
 /// vérifie leur présence par EnumFontFamiliesEx (la couche vgui de Steam)
 /// ne doit pas conclure qu'aucune police n'existe.
-const WINDOWS_FAMILIES: &[&str] = &[
+pub(crate) const WINDOWS_FAMILIES: &[&str] = &[
     "Arial",
     "Calibri",
     "Cambria",

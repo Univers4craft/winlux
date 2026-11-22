@@ -406,8 +406,41 @@ pub struct Transform {
 
 impl Transform {
     pub fn new(src: Shaper, dst: Shaper) -> Option<Transform> {
-        let m = mul3(&invert3(&dst.matrix)?, &src.matrix);
+        Self::new_scaled(src, dst, [1.0; 3])
+    }
+
+    /// Transformation dont l'espace de connexion XYZ est multiplié, composante
+    /// par composante, par `scale` entre les deux profils : le rapport des
+    /// blancs du support pour l'intention colorimétrique absolue (ICC.1 §D.1).
+    pub fn new_scaled(src: Shaper, dst: Shaper, scale: [f32; 3]) -> Option<Transform> {
+        let mut s = src.matrix;
+        for (row, k) in s.iter_mut().zip(scale) {
+            for v in row.iter_mut() {
+                *v *= k;
+            }
+        }
+        let m = mul3(&invert3(&dst.matrix)?, &s);
         Some(Transform { src, dst, m })
+    }
+
+    /// Courbes du profil source (encodé → linéaire).
+    pub fn source_curves(&self) -> &[Curve; 3] {
+        &self.src.curves
+    }
+
+    /// Courbes du profil de destination.
+    pub fn dest_curves(&self) -> &[Curve; 3] {
+        &self.dst.curves
+    }
+
+    /// Valeurs linéaires de destination, non bornées, de valeurs linéaires
+    /// source : hors de 0..1, la couleur sort de la gamme de destination.
+    pub fn linear(&self, lin: [f32; 3]) -> [f32; 3] {
+        let mut out = [0f32; 3];
+        for (i, o) in out.iter_mut().enumerate() {
+            *o = (0..3).map(|k| self.m[i][k] * lin[k]).sum();
+        }
+        out
     }
 
     /// Convertit une couleur RVB encodée (0..1) du profil source au profil
@@ -418,13 +451,14 @@ impl Transform {
             self.src.curves[1].eval(rgb[1]),
             self.src.curves[2].eval(rgb[2]),
         ];
-        let mut out = [0f32; 3];
-        for (i, o) in out.iter_mut().enumerate() {
-            let v: f32 = (0..3).map(|k| self.m[i][k] * lin[k]).sum();
-            *o = self.dst.curves[i].invert(v.clamp(0.0, 1.0));
-        }
-        out
+        let v = self.linear(lin);
+        [0, 1, 2].map(|i| self.dst.curves[i].invert(v[i].clamp(0.0, 1.0)))
     }
+}
+
+/// Blanc du support (balise `wtpt`), en XYZ.
+pub fn media_white(p: &[u8]) -> Option<[f32; 3]> {
+    read_xyz(tag(p, b"wtpt")?)
 }
 
 #[cfg(test)]
