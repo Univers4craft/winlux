@@ -12,7 +12,9 @@
 # La liste comparée est celle du noyau ET celle du serveur X (xinput) : le
 # noyau voit le clavier avant que X ne l'ajoute (pilote, udev), parfois plus
 # d'une seconde avant. Réappliquer sur le seul changement du noyau laissait le
-# clavier arrivé ensuite dans X avec la disposition par défaut (QWERTY).
+# clavier arrivé ensuite dans X avec la disposition par défaut (QWERTY). La
+# liste de X n'est relue que dans les secondes qui suivent un changement du
+# noyau : au repos, aucun programme n'est lancé (#3130).
 #
 #   winlux-input-watch           surveille (session graphique, $DISPLAY)
 #   winlux-input-watch --once    réapplique une fois
@@ -30,13 +32,20 @@ apply() {
     if command -v winlux-mouse >/dev/null 2>&1; then winlux-mouse apply >/dev/null 2>&1 || true; fi
 }
 
-devices() {
-    # Noms et gestionnaires seulement : les compteurs ne changent pas la liste.
-    {
-        grep -E '^(N|H):' "$root/proc/bus/input/devices" 2>/dev/null
-        xinput list --id-only 2>/dev/null
-    } | cksum
+# Liste du noyau (noms et gestionnaires seulement : les compteurs ne changent
+# pas la liste), lue sans lancer de programme : elle est relue à chaque tour.
+kernel_devices() {
+    kernel=
+    test -r "$root/proc/bus/input/devices" || return 0
+    while IFS= read -r line || test -n "$line"; do
+        case $line in N:*|H:*) kernel="$kernel$line
+" ;; esac
+    done <"$root/proc/bus/input/devices"
 }
+# Liste du serveur X : elle demande xinput (un programme et un aller-retour X).
+x_devices() { xinput list --id-only 2>/dev/null; }
+# Secondes depuis le démarrage, sans programme.
+now_seconds() { read -r up _ </proc/uptime 2>/dev/null || up=0; now=${up%%.*}; }
 
 if test "${1:-}" = --once; then
     apply
@@ -46,13 +55,35 @@ fi
 lock="${XDG_RUNTIME_DIR:-/tmp}/winlux-input-watch-$(printf '%s' "${DISPLAY:-none}" | tr -c 'A-Za-z0-9' '_').pid"
 if test -r "$lock" && kill -0 "$(cat "$lock" 2>/dev/null)" 2>/dev/null; then exit 0; fi
 echo $$ >"$lock" 2>/dev/null || true
-last=$(devices)
+# Au repos, seule la liste du noyau est relue (#3130) : xinput, grep et cksum
+# toutes les 2 s faisaient cinq programmes et un réveil de X par tour. Après
+# un changement du noyau, la liste de X est suivie à chaque tour pendant
+# WATCH_X secondes, le temps que X ajoute le périphérique (plus d'une seconde
+# parfois), et la disposition est réappliquée quand elle change.
+watch_x=${WINLUX_INPUT_WATCH_X:-15}
+kernel_devices
+last_kernel=$kernel
+last_x=$(x_devices)
+x_until=0
 while sleep "$interval"; do
-    now=$(devices)
-    if test "$now" != "$last"; then
+    kernel_devices
+    if test "$kernel" != "$last_kernel"; then
+        last_kernel=$kernel
         # Le serveur X ajoute le périphérique juste après le noyau.
         sleep 1
         apply
-        last=$(devices)
+        last_x=$(x_devices)
+        now_seconds
+        x_until=$((now + watch_x))
+        continue
+    fi
+    test "$x_until" -gt 0 || continue
+    now_seconds
+    if test "$now" -gt "$x_until"; then x_until=0; continue; fi
+    x=$(x_devices)
+    if test "$x" != "$last_x"; then
+        sleep 1
+        apply
+        last_x=$(x_devices)
     fi
 done
