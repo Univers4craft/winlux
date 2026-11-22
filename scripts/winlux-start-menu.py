@@ -509,8 +509,11 @@ class Start(Gtk.Application):
         if changed: self.save()
         self.all_apps = False
         self.open_category = None
-        self.search.set_text("")
-        self.render()
+        # La liste est construite une seule fois, par place() plus bas : vider
+        # une recherche restée tapée ne la reconstruit pas, et un render() ici
+        # était refait aussitôt par place(), pour rien (#3217).
+        with self.search.handler_block(self.search_changed):
+            self.search.set_text("")
         # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
         # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
         # premier appui et se trouvait en partie dessous.
@@ -671,7 +674,7 @@ class Start(Gtk.Application):
         self.body = body
         self.left.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
-        self.search.connect("search-changed", lambda *_: self.render())
+        self.search_changed = self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         search_row = Gtk.Box(spacing=8)
         search_row.pack_start(self.search, True, True, 0)
