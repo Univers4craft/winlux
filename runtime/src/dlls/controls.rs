@@ -118,6 +118,12 @@ pub fn with_charset<R>(wide: bool, f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// Jeu de caractères fixé par l'appel en cours (`with_charset`), s'il y en a
+/// un : un SendMessage confié au fil propriétaire le garde (#2885).
+pub fn current_charset() -> Option<bool> {
+    WIDE.with(|w| w.get())
+}
+
 /// Codage des chaînes du message en cours : celui de l'appel, sinon celui
 /// de la fonction qui a créé la fenêtre.
 pub fn message_is_wide(hwnd: usize) -> bool {
