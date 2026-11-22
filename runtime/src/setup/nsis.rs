@@ -17,9 +17,22 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// Position de l'en-tête NSIS (`firstheader`), alignée sur 512 octets.
+///
+/// L'en-tête suit l'amorce (exehead), à une position multiple de 512 octets
+/// dans les données qui suivent l'image PE. On ne le cherche plus jusqu'à
+/// la fin du fichier, ce qui faisait lire tout .exe à son lancement (#3189),
+/// mais dans `super::AFTER_IMAGE` octets après l'image. La position « juste
+/// après l'amorce » est une inférence : la description publique du crate
+/// `nsis` (docs.rs, header/mod.rs) dit seulement « usually at a 512-byte aligned
+/// offset » dans les données qui suivent l'image, et note que certains
+/// installateurs glissent des octets entre l'image et l'en-tête ; la marge
+/// couvre ce cas. Avec makensis 3.09, l'en-tête est exactement à la fin
+/// de l'image (scripts/test-detection-sans-lecture.sh).
 pub fn find_header(data: &[u8]) -> Option<usize> {
-    let mut off = 512;
-    while off + 28 <= data.len() {
+    let image = super::pe_end(data)?;
+    let mut off = (image / 512 * 512).max(512);
+    let stop = image.saturating_add(super::AFTER_IMAGE).min(data.len());
+    while off + 28 <= data.len() && off < stop {
         if data[off + 4..off + 8] == [0xEF, 0xBE, 0xAD, 0xDE]
             && &data[off + 8..off + 20] == b"NullsoftInst"
         {
