@@ -1260,6 +1260,14 @@ class Popup(Gtk.Application):
         try:history=json.loads(text or "[]")
         except ValueError:history=[]
         if not isinstance(history,list):history=[]
+        # Centre ouvert : tout ce qu'il montre est vu, la pastille s'éteint (#3057).
+        if self.window and self.window.get_visible() and any(isinstance(item,dict) and item.get("nouvelle") for item in history):
+            try:
+                Gio.bus_get_sync(Gio.BusType.SESSION,None).call("org.freedesktop.Notifications",
+                    "/org/freedesktop/Notifications","org.winlux.Notifications","MarkSeen",
+                    None,None,Gio.DBusCallFlags.NONE,3000,None,None,None)
+            except GLib.Error:
+                pass
         for child in self.cards.get_children():self.cards.remove(child)
         for item in reversed(history[-50:]):
             if isinstance(item,dict):self.cards.pack_start(self.notification_card(item),False,False,0)

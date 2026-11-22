@@ -855,9 +855,10 @@ try:
         shutil.copyfile(source / "config/Thunar/uca.xml", uca)
 except (OSError, UnicodeDecodeError):
     pass
-# Actions Thunar livrées après coup (#279 renommage, #280 texte d'une image) :
+# Actions Thunar livrées après coup (#279 renommage, #280 texte d'une image,
+# « Extraire tout… » des archives) :
 # ajoutées une fois aux actions déjà copiées, sans toucher aux actions personnelles.
-UCA_ADDED = ("winlux-rename", "winlux-ocr")
+UCA_ADDED = ("winlux-rename", "winlux-ocr", "winlux-shell-app explorer --extraire")
 def migrate_uca(uca, shipped_file):
     if not uca.is_file(): return
     try:

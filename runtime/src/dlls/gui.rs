@@ -53,6 +53,9 @@ pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
+pub const WM_SYSKEYDOWN: u32 = 0x0104;
+pub const WM_SYSKEYUP: u32 = 0x0105;
+pub const WM_SYSCHAR: u32 = 0x0106;
 #[allow(dead_code)]
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
@@ -492,6 +495,94 @@ pub struct Queue {
     /// Descripteur d'éveil (`eventfd`) : signalé à chaque dépôt pour sortir
     /// un `GetMessage` bloqué dans `poll` sur la connexion X11.
     wake: WakeFd,
+    /// Messages envoyés (SendMessage) par d'autres fils aux fenêtres de ce
+    /// fil, en attente d'être traités par lui (#2885).
+    sent: Mutex<VecDeque<Arc<Sent>>>,
+}
+
+/// Envoi d'un message à la fenêtre d'un autre fil : la procédure s'exécute
+/// sur le fil qui a créé la fenêtre, l'expéditeur attend le résultat
+/// (Learn, SendMessage, #2885).
+pub struct Sent {
+    job: Mutex<Option<SentJob>>,
+    result: Mutex<Option<isize>>,
+    done: Condvar,
+}
+
+type SentJob = Box<dyn FnOnce() -> isize + Send>;
+
+/// Délai au-delà duquel un fil propriétaire qui ne relève jamais ses
+/// messages est contourné : l'expéditeur appelle alors la procédure lui-même,
+/// comme avant #2885, plutôt que de rester bloqué pour toujours.
+const SENT_GIVE_UP: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Traite les messages que d'autres fils ont envoyés aux fenêtres du fil
+/// appelant. Appelé là où Windows les délivre : GetMessage, PeekMessage,
+/// les attentes de messages et l'attente d'un SendMessage inter-fils.
+pub fn deliver_sent() {
+    let Some(q) = lock(queues()).get(&std::thread::current().id()).cloned() else {
+        return;
+    };
+    loop {
+        let next = lock(&q.sent).pop_front();
+        let Some(sent) = next else {
+            return;
+        };
+        let job = lock(&sent.job).take();
+        if let Some(job) = job {
+            let r = job();
+            *lock(&sent.result) = Some(r);
+            sent.done.notify_all();
+        }
+    }
+}
+
+/// SendMessage vers une fenêtre du fil `owner` depuis un autre fil : `job`
+/// (l'appel de la procédure) est confié au fil propriétaire et le résultat
+/// rendu. Pendant l'attente, l'expéditeur traite les messages qu'on lui
+/// envoie, comme sous Windows, pour que deux fils qui s'envoient des
+/// messages ne se bloquent pas. `Err(job)` : le fil propriétaire n'a pas
+/// relevé ses messages à temps ; l'appelant exécute `job` lui-même.
+pub fn send_to_owner(owner: ThreadId, job: SentJob) -> Result<isize, SentJob> {
+    let q = queue_for(owner);
+    let sent = Arc::new(Sent {
+        job: Mutex::new(Some(job)),
+        result: Mutex::new(None),
+        done: Condvar::new(),
+    });
+    lock(&q.sent).push_back(sent.clone());
+    q.changed.notify_all();
+    q.wake.signal();
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let result = lock(&sent.result);
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+            let (result, _) = sent
+                .done
+                .wait_timeout(result, std::time::Duration::from_millis(1))
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(r) = *result {
+                return Ok(r);
+            }
+        }
+        deliver_sent();
+        if start.elapsed() >= SENT_GIVE_UP {
+            // Pas encore pris par le propriétaire : l'expéditeur le reprend.
+            // Déjà pris : il est en cours, on attend sa fin.
+            if let Some(job) = lock(&sent.job).take() {
+                lock(&q.sent).retain(|s| !Arc::ptr_eq(s, &sent));
+                crate::log_warn!(
+                    "fenetres",
+                    "SendMessage inter-fils : le fil propriétaire n'a pas relevé ses messages en {} s, appel direct (#2885)",
+                    SENT_GIVE_UP.as_secs()
+                );
+                return Err(job);
+            }
+        }
+    }
 }
 
 /// `eventfd` non bloquant servant d'éveil à une file de messages.
@@ -534,6 +625,7 @@ fn new_queue() -> Arc<Queue> {
         items: Mutex::new(VecDeque::new()),
         changed: Condvar::new(),
         wake: WakeFd::new(),
+        sent: Mutex::new(VecDeque::new()),
     })
 }
 
@@ -780,7 +872,7 @@ pub fn observe_key_message(msg: &Msg) {
         }
         return;
     }
-    if msg.message == WM_KEYDOWN {
+    if matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) {
         key_down_removed(msg.hwnd, msg.wparam, msg.lparam);
     }
     if msg.wparam >= KEY_STATE_COUNT {
@@ -3471,7 +3563,25 @@ pub trait GuiBackend: Send {
 
 struct HeadlessBackend;
 
+#[cfg(test)]
+thread_local! {
+    /// Cadre de gestionnaire simulé pour les tests du fil courant : sans
+    /// affichage, aucun gestionnaire ne pose de cadre.
+    pub static TEST_FRAME: std::cell::Cell<Option<[i32; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(not(test))]
 impl GuiBackend for HeadlessBackend {}
+
+#[cfg(test)]
+impl GuiBackend for HeadlessBackend {
+    fn frame_extents(&mut self, _hwnd: usize) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+    fn frame_for_kind(&mut self, _kind: u8) -> Option<[i32; 4]> {
+        TEST_FRAME.with(|f| f.get())
+    }
+}
 
 /// Construit le backend : X11 si `DISPLAY` est présent et qu'on n'a pas forcé
 /// `WINLUX_GUI=headless`; sinon headless. Retombe sur headless si la connexion
@@ -4199,6 +4309,7 @@ pub fn backend_is_interactive() -> bool {
 }
 
 pub fn wait_backend(timeout_ms: u32) -> bool {
+    deliver_sent();
     let fd = {
         let mut b = lock(backend());
         let Some(fd) = b.event_fd() else {
@@ -4212,8 +4323,13 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     // Le verrou du backend est relâché : les autres threads peuvent peindre
     // pendant que celui-ci dort sur la connexion X11 et sur son éveil.
     let q = current_queue();
+    if !lock(&q.sent).is_empty() {
+        deliver_sent();
+        return true;
+    }
     poll_fds(&[fd, q.wake.0], timeout_ms);
     q.wake.drain();
+    deliver_sent();
     true
 }
 
@@ -5176,6 +5292,20 @@ pub fn default_nccalcsize_seen() -> bool {
 }
 
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
+/// Fenêtre de premier niveau d'une fenêtre : on remonte les parents tant que
+/// la fenêtre est un enfant (WS_CHILD).
+fn top_level_window(hwnd: usize) -> usize {
+    let mut current = hwnd;
+    for _ in 0..64 {
+        let child = window_style(current).is_some_and(|s| s & 0x4000_0000 != 0);
+        match window_parent(current) {
+            Some(parent) if child && parent != 0 => current = parent,
+            _ => break,
+        }
+    }
+    current
+}
+
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     crate::dlls::pointer::on_default(message);
     match message {
@@ -5370,6 +5500,14 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         }
         WM_KEYDOWN | 0x0104 if wparam == 0x79 && get_key_state(0x10) < 0 => {
             send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        // Alt+F4 (WM_SYSKEYDOWN, VK_F4, Alt tenu : bit 29) : WM_SYSCOMMAND
+        // SC_CLOSE à la fenêtre de premier niveau, qui finit en WM_CLOSE
+        // (Learn : WM_SYSCOMMAND, SC_CLOSE ; #3054).
+        WM_SYSKEYDOWN if wparam == 0x73 && lparam & (1 << 29) != 0 => {
+            let top = top_level_window(hwnd);
+            unsafe { crate::dlls::user32::send_message_w(top, 0x0112, 0xF060, 0) };
             0
         }
         0x0101 if wparam == 0x5D => {
@@ -6240,6 +6378,46 @@ pub(crate) mod tests {
             assert_eq!(ch.wparam, b'n' as usize);
         }
         assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+        destroy_window(hwnd);
+    }
+
+    extern "win64" fn wnd_proc_par_defaut(
+        hwnd: usize,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        def_window_proc(hwnd, msg, wparam, lparam)
+    }
+
+    /// #3054 : une frappe système (Alt tenu) donne WM_SYSCHAR, jamais
+    /// WM_CHAR, et Alt+F4 reçu par la fenêtre la ferme par SC_CLOSE puis
+    /// WM_CLOSE, comme DefWindowProc de Windows.
+    #[test]
+    fn alt_lettre_donne_wm_syschar_et_alt_f4_ferme_la_fenetre() {
+        let hwnd = fenetre_de_test();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_par_defaut;
+        set_wnd_proc(hwnd, proc_addr as usize);
+        let q = current_queue();
+        let alt = 1 << 29;
+
+        let alt_f = (33isize << 16) | 1 | alt;
+        set_key_char(hwnd, 0x46, alt_f, Some(b'f' as u16));
+        let key = Msg::new(hwnd, WM_SYSKEYDOWN, 0x46, alt_f);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&key) }, 1);
+        let ch = take_message(&q, hwnd, WM_SYSCHAR, WM_SYSCHAR).expect("WM_SYSCHAR généré");
+        assert_eq!(ch.wparam, b'f' as usize);
+        assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+
+        // F4 seul ne ferme rien ; Alt+F4 poste WM_CLOSE.
+        def_window_proc(hwnd, WM_SYSKEYDOWN, 0x73, (62isize << 16) | 1);
+        assert!(take_message(&q, hwnd, WM_CLOSE, WM_CLOSE).is_none());
+        def_window_proc(hwnd, WM_SYSKEYDOWN, 0x73, (62isize << 16) | 1 | alt);
+        assert!(
+            take_message(&q, hwnd, WM_CLOSE, WM_CLOSE).is_some(),
+            "Alt+F4 doit poster WM_CLOSE"
+        );
+
         destroy_window(hwnd);
     }
 
