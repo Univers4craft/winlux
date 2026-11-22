@@ -12,22 +12,25 @@
 //! Elle « contains core methods for obtaining tokens from web account
 //! providers ».
 //!
-//! Winlux n'a aucun fournisseur de comptes web : il ne connaît aucun compte
-//! et ne délivre aucun jeton. La classe répond exactement cela, sans
-//! fournisseur ni compte inventé :
-//! - `FindAccountProviderAsync`, ses variantes `WithAuthority` et `ForUser`,
-//!   et `FindSystemAccountProviderAsync` et ses variantes : opération
-//!   terminée dont le résultat est nul (aucun fournisseur trouvé).
-//!   Déduction : Learn dit seulement qu'en cas de succès le résultat
-//!   « contains a WebAccountProvider object representing the found web
-//!   account provider » ; il ne dit pas ce que rend une recherche vaine, et
-//!   un résultat nul est la seule réponse qui n'invente rien ;
+//! Winlux sert le fournisseur de comptes Microsoft (#2511, étape 1 du plan
+//! validé par damien le 22 novembre), encore sans réseau, sans compte et
+//! sans jeton (objets dans `winrt_wam_objets.rs`) :
+//! - `FindAccountProviderAsync("https://login.microsoft.com")`, avec ou sans
+//!   autorité `common`, `organizations` ou `consumers` (nom seul ou adresse
+//!   `https://login.microsoftonline.com/<nom>`), et sa variante `ForUser` :
+//!   ce fournisseur ;
+//! - tout autre fournisseur (dont « https://login.windows.local », comptes
+//!   de domaine) et `FindSystemAccountProviderAsync` : opération terminée
+//!   de résultat nul (aucun fournisseur). Déduction : Learn ne dit pas ce
+//!   que rend une recherche vaine, et un résultat nul n'invente rien ;
+//! - `FindAllAccountsAsync` sur ce fournisseur : aucun compte (statut
+//!   Success, liste vide) ;
+//! - `GetTokenSilentlyAsync` d'une requête sur ce fournisseur :
+//!   `UserInteractionRequired`, puisqu'aucun compte n'est connecté ;
+//! - `RequestTokenAsync` : `ProviderError` (E_NOTIMPL), la fenêtre de
+//!   connexion n'étant pas encore servie (étape 2) ;
 //! - `FindAccountAsync` : opération terminée, résultat nul (aucun compte) ;
-//! - `GetTokenSilentlyAsync`, `RequestTokenAsync` et leurs variantes
-//!   `WithWebAccount`, `FindAllAccountsAsync` et `FindAllAccountsWithClientIdAsync` :
-//!   E_INVALIDARG. Leur argument (une requête, qui porte un fournisseur, ou un
-//!   fournisseur) ne peut venir que d'un fournisseur que Winlux aurait rendu,
-//!   et il n'en rend aucun ;
+//! - une requête ou un fournisseur qui ne vient pas de Winlux : E_INVALIDARG ;
 //! - `IWebAuthenticationCoreManagerStatics3` (seulement
 //!   `CreateWebAccountMonitor`) n'est pas servie : sa QI est refusée et
 //!   journalisée.
@@ -114,6 +117,8 @@ struct Op {
     /// IID de l'interface IAsyncOperation<T> servie.
     iid: Guid,
     completed: AtomicU32,
+    /// Résultat retenu (une référence), ou nul.
+    result: usize,
 }
 
 const PTR: usize = std::mem::size_of::<usize>();
@@ -122,9 +127,11 @@ unsafe fn op_of(this: usize, info: bool) -> *mut Op {
     (if info { this - PTR } else { this }) as *mut Op
 }
 
-/// Nouvelle opération : rend son interface IAsyncOperation<T>.
-unsafe fn new_op(iid: Guid, out: *mut usize) -> i32 {
+/// Nouvelle opération : rend son interface IAsyncOperation<T>. Elle
+/// reprend la référence de `result`.
+unsafe fn new_op(iid: Guid, result: usize, out: *mut usize) -> i32 {
     if out.is_null() {
+        super::winrt_wam_objets::release(result);
         return E_POINTER;
     }
     let op = Box::into_raw(Box::new(Op {
@@ -133,6 +140,7 @@ unsafe fn new_op(iid: Guid, out: *mut usize) -> i32 {
         refs: AtomicU32::new(1),
         iid,
         completed: AtomicU32::new(0),
+        result,
     }));
     *out = op as usize;
     S_OK
@@ -162,7 +170,8 @@ unsafe fn op_qi(op: *mut Op, iid: *const u8, out: *mut usize) -> i32 {
 unsafe fn op_release(op: *mut Op) -> u32 {
     let n = (*op).refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if n == 0 {
-        drop(Box::from_raw(op));
+        let op = Box::from_raw(op);
+        super::winrt_wam_objets::release(op.result);
     }
     n
 }
@@ -234,12 +243,14 @@ unsafe extern "win64" fn op_get_completed(_this: usize, out: *mut usize) -> i32 
     *out = 0;
     S_OK
 }
-/// GetResults : aucun fournisseur ni compte, résultat nul.
-unsafe extern "win64" fn op_get_results(_this: usize, out: *mut usize) -> i32 {
+/// GetResults : le résultat retenu (une référence de plus), ou nul.
+unsafe extern "win64" fn op_get_results(this: usize, out: *mut usize) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
-    *out = 0;
+    let r = (*op_of(this, false)).result;
+    super::winrt_wam_objets::add_ref(r);
+    *out = r;
     S_OK
 }
 
@@ -372,51 +383,112 @@ unsafe extern "win64" fn fac_activate(_this: usize, out: *mut usize) -> i32 {
     E_NOTIMPL
 }
 
+/// Fournisseur de comptes Microsoft servi par Winlux.
+const MICROSOFT: &str = "https://login.microsoft.com";
+
+/// Autorité acceptée pour le fournisseur Microsoft : vide, ou `common`,
+/// `organizations`, `consumers`, en nom seul ou en dernier segment d'une
+/// adresse.
+fn microsoft_authority(authority: &str) -> bool {
+    let last = authority
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    authority.is_empty() || ["common", "organizations", "consumers"].contains(&last)
+}
+
+/// Recherche de fournisseur : le fournisseur Microsoft, ou aucun.
+unsafe fn find(call: String, id: usize, authority: usize, out: *mut usize) -> i32 {
+    let id_text = hstr_in(id);
+    let auth_text = if authority == 0 {
+        String::new()
+    } else {
+        hstr_in(authority)
+    };
+    if id_text == MICROSOFT && microsoft_authority(&auth_text) {
+        note(format!("{call} → fournisseur Microsoft (sans compte)"));
+        let auth: Vec<u16> = auth_text.encode_utf16().collect();
+        let id: Vec<u16> = id_text.encode_utf16().collect();
+        return new_op(
+            IID_OP_PROVIDER,
+            super::winrt_wam_objets::new_provider(&id, &auth),
+            out,
+        );
+    }
+    no_provider(call, out)
+}
+
 /// Aucun fournisseur : opération terminée, résultat nul.
 unsafe fn no_provider(call: String, out: *mut usize) -> i32 {
     note(format!("{call} → aucun fournisseur"));
-    new_op(IID_OP_PROVIDER, out)
+    new_op(IID_OP_PROVIDER, 0, out)
 }
 
-/// Argument qui ne peut venir que d'un fournisseur rendu par Winlux.
+/// Argument qui ne vient pas d'un fournisseur rendu par Winlux.
 unsafe fn refused(call: &str, out: *mut usize) -> i32 {
     if !out.is_null() {
         *out = 0;
     }
-    note(format!("{call} → E_INVALIDARG (aucun fournisseur servi)"));
+    note(format!("{call} → E_INVALIDARG (fournisseur inconnu)"));
     E_INVALIDARG
 }
 
-unsafe extern "win64" fn get_token_silently(_t: usize, _req: usize, out: *mut usize) -> i32 {
-    refused("GetTokenSilentlyAsync", out)
+/// Demande de jeton : `UserInteractionRequired` en silence (aucun compte),
+/// `ProviderError` pour une connexion (pas encore servie).
+unsafe fn token(call: &str, request: usize, silent: bool, out: *mut usize) -> i32 {
+    let ours = request != 0 && super::winrt_wam_objets::request_provider(request).is_some();
+    if !ours {
+        return refused(call, out);
+    }
+    use super::winrt_wam_objets as o;
+    let result = if silent {
+        note(format!("{call} → UserInteractionRequired (aucun compte)"));
+        o::token_result(o::STATUS_USER_INTERACTION_REQUIRED, "")
+    } else {
+        note(format!(
+            "{call} → ProviderError (connexion pas encore servie)"
+        ));
+        o::token_result(
+            o::STATUS_PROVIDER_ERROR,
+            "La connexion n'est pas encore servie par Winlux.",
+        )
+    };
+    new_op(o::generic().op_token, result, out)
+}
+
+unsafe extern "win64" fn get_token_silently(_t: usize, req: usize, out: *mut usize) -> i32 {
+    token("GetTokenSilentlyAsync", req, true, out)
 }
 unsafe extern "win64" fn get_token_silently_account(
     _t: usize,
-    _req: usize,
+    req: usize,
     _acc: usize,
     out: *mut usize,
 ) -> i32 {
-    refused("GetTokenSilentlyAsync(compte)", out)
+    token("GetTokenSilentlyAsync(compte)", req, true, out)
 }
-unsafe extern "win64" fn request_token(_t: usize, _req: usize, out: *mut usize) -> i32 {
-    refused("RequestTokenAsync", out)
+unsafe extern "win64" fn request_token(_t: usize, req: usize, out: *mut usize) -> i32 {
+    token("RequestTokenAsync", req, false, out)
 }
 unsafe extern "win64" fn request_token_account(
     _t: usize,
-    _req: usize,
+    req: usize,
     _acc: usize,
     out: *mut usize,
 ) -> i32 {
-    refused("RequestTokenAsync(compte)", out)
+    token("RequestTokenAsync(compte)", req, false, out)
 }
 /// FindAccountAsync : aucun compte.
 unsafe extern "win64" fn find_account(_t: usize, _prov: usize, _id: usize, out: *mut usize) -> i32 {
     note("FindAccountAsync → aucun compte".to_string());
-    new_op(IID_OP_ACCOUNT, out)
+    new_op(IID_OP_ACCOUNT, 0, out)
 }
 unsafe extern "win64" fn find_provider(_t: usize, id: usize, out: *mut usize) -> i32 {
-    no_provider(
+    find(
         format!("FindAccountProviderAsync(« {} »)", hstr_in(id)),
+        id,
+        0,
         out,
     )
 }
@@ -426,12 +498,14 @@ unsafe extern "win64" fn find_provider_authority(
     auth: usize,
     out: *mut usize,
 ) -> i32 {
-    no_provider(
+    find(
         format!(
             "FindAccountProviderAsync(« {} », « {} »)",
             hstr_in(id),
             hstr_in(auth)
         ),
+        id,
+        auth,
         out,
     )
 }
@@ -442,25 +516,36 @@ unsafe extern "win64" fn find_provider_user(
     _user: usize,
     out: *mut usize,
 ) -> i32 {
-    no_provider(
+    find(
         format!(
             "FindAccountProviderAsync(« {} », « {} », utilisateur)",
             hstr_in(id),
             hstr_in(auth)
         ),
+        id,
+        auth,
         out,
     )
 }
-unsafe extern "win64" fn find_all_accounts(_t: usize, _prov: usize, out: *mut usize) -> i32 {
-    refused("FindAllAccountsAsync", out)
+/// FindAllAccountsAsync : aucun compte connu du fournisseur Microsoft.
+unsafe fn all_accounts(call: &str, provider: usize, out: *mut usize) -> i32 {
+    use super::winrt_wam_objets as o;
+    if provider == 0 || o::provider_info(provider).is_none() {
+        return refused(call, out);
+    }
+    note(format!("{call} → aucun compte"));
+    new_op(o::generic().op_find_all, o::no_accounts(), out)
+}
+unsafe extern "win64" fn find_all_accounts(_t: usize, prov: usize, out: *mut usize) -> i32 {
+    all_accounts("FindAllAccountsAsync", prov, out)
 }
 unsafe extern "win64" fn find_all_accounts_client(
     _t: usize,
-    _prov: usize,
+    prov: usize,
     _client: usize,
     out: *mut usize,
 ) -> i32 {
-    refused("FindAllAccountsAsync(clientId)", out)
+    all_accounts("FindAllAccountsAsync(clientId)", prov, out)
 }
 unsafe extern "win64" fn find_system_provider(_t: usize, id: usize, out: *mut usize) -> i32 {
     no_provider(
@@ -562,7 +647,7 @@ static STATICS4_VTBL: VTable<11> = VTable(with::<11>(
 /// une autre classe.
 pub unsafe fn activation_factory(class: &str, iid: *const u8, out: *mut usize) -> Option<i32> {
     if class != CLASS {
-        return None;
+        return super::winrt_wam_objets::activation_factory(class, iid, out);
     }
     Some(fac_qi(0, iid, out))
 }
@@ -672,12 +757,15 @@ mod tests {
             assert_eq!(LAST_STATUS.load(Ordering::SeqCst), COMPLETED as u32);
             assert_eq!(put(op, handler), E_ILLEGAL_DELEGATE_ASSIGNMENT);
             assert_eq!(CALLS.load(Ordering::SeqCst), 1);
-            // GetResults (entrée 8) : aucun fournisseur.
+            // GetResults (entrée 8) : le fournisseur Microsoft, sans compte.
             type Get = unsafe extern "win64" fn(usize, *mut usize) -> i32;
             let get: Get = std::mem::transmute(slot(op, 8));
-            let mut r = 7usize;
-            assert_eq!(get(op, &mut r), S_OK);
-            assert_eq!(r, 0);
+            let mut provider = 0usize;
+            assert_eq!(get(op, &mut provider), S_OK);
+            assert_eq!(
+                super::super::winrt_wam_objets::provider_info(provider),
+                Some(("https://login.microsoft.com".into(), "organizations".into()))
+            );
             type Rel = unsafe extern "win64" fn(usize) -> u32;
             let rel_info: Rel = std::mem::transmute(slot(info, 2));
             assert_eq!(rel_info(info), 2);
@@ -694,16 +782,79 @@ mod tests {
             let rel: Rel = std::mem::transmute(slot(op, 2));
             assert_eq!(rel(op), 0);
 
-            // RequestTokenAsync (entrée 8 de Statics) : refusée, rien rendu.
+            // Autre fournisseur : opération terminée, aucun résultat.
+            let f2: Find2 = std::mem::transmute(slot(st, 12));
+            let mut op = 0usize;
+            assert_eq!(
+                f2(
+                    st,
+                    hs("https://login.windows.local"),
+                    hs("organizations"),
+                    &mut op
+                ),
+                S_OK
+            );
+            let get: Get = std::mem::transmute(slot(op, 8));
+            let mut r = 7usize;
+            assert_eq!(get(op, &mut r), S_OK);
+            assert_eq!(r, 0);
+            let rel: Rel = std::mem::transmute(slot(op, 2));
+            assert_eq!(rel(op), 0);
+
+            // Requête créée par la fabrique sur le fournisseur Microsoft.
+            use super::super::winrt_wam_objets as o;
+            let mut fac = 0usize;
+            let iid_factory = g(0x6CF2_141C, 0x0FF0, 0x4C67, 0xB84F_99DD_BE4A_72C9);
+            assert_eq!(
+                activation_factory(o::CLASS_REQUEST, iid_factory.as_ptr(), &mut fac),
+                Some(S_OK)
+            );
+            type Create = unsafe extern "win64" fn(usize, usize, usize, usize, *mut usize) -> i32;
+            let create: Create = std::mem::transmute(slot(fac, 6));
+            let mut request = 0usize;
+            assert_eq!(
+                create(fac, provider, hs("openid"), hs("client"), &mut request),
+                S_OK
+            );
+            let status_of = |op: usize| -> i32 {
+                let get: Get = std::mem::transmute(slot(op, 8));
+                let mut res = 0usize;
+                assert_eq!(get(op, &mut res), S_OK);
+                assert_ne!(res, 0);
+                let st: Out32 = std::mem::transmute(slot(res, 7));
+                let mut s = -1i32;
+                assert_eq!(st(res, &mut s), S_OK);
+                o::release(res);
+                let rel: Rel = std::mem::transmute(slot(op, 2));
+                assert_eq!(rel(op), 0);
+                s
+            };
+
+            // GetTokenSilentlyAsync (entrée 6 de Statics) : interaction requise.
+            let f: Find1 = std::mem::transmute(slot(st, 6));
+            let mut op = 0usize;
+            assert_eq!(f(st, request, &mut op), S_OK);
+            assert_eq!(status_of(op), o::STATUS_USER_INTERACTION_REQUIRED);
+            // RequestTokenAsync (entrée 8 de Statics) : erreur du fournisseur.
             let f: Find1 = std::mem::transmute(slot(st, 8));
+            let mut op = 0usize;
+            assert_eq!(f(st, request, &mut op), S_OK);
+            assert_eq!(status_of(op), o::STATUS_PROVIDER_ERROR);
+            // Une requête étrangère est refusée, rien rendu.
             let mut op = 5usize;
-            assert_eq!(f(st, 1, &mut op), E_INVALIDARG);
+            assert_eq!(f(st, handler, &mut op), E_INVALIDARG);
             assert_eq!(op, 0);
-            // FindAllAccountsAsync (entrée 6 de Statics4) : refusée.
+
+            // FindAllAccountsAsync (entrée 6 de Statics4) : aucun compte.
             let f: Find1 = std::mem::transmute(slot(st4, 6));
+            let mut op = 0usize;
+            assert_eq!(f(st4, provider, &mut op), S_OK);
+            assert_eq!(status_of(op), 0); // FindAllWebAccountsStatus.Success
             let mut op = 5usize;
-            assert_eq!(f(st4, 1, &mut op), E_INVALIDARG);
+            assert_eq!(f(st4, handler, &mut op), E_INVALIDARG);
             assert_eq!(op, 0);
+            o::release(request);
+            o::release(provider);
         }
     }
 }

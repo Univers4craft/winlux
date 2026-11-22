@@ -365,7 +365,7 @@ esac
 # propose plus dans « À faire » (« Pas encore installé », #2903). Une
 # ligne par chemin, les 200 derniers.
 note_installer() {
-    mkdir -p "$state" 2>/dev/null || return 0
+    private_state || return 0
     done_list="$state/installateurs-termines"
     { grep -Fxv -- "$exe" "$done_list" 2>/dev/null; printf '%s\n' "$exe"; } | tail -n 200 >"$done_list.tmp" \
         && mv -f "$done_list.tmp" "$done_list"
