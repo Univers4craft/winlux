@@ -246,6 +246,8 @@ jobs:
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-backup-page.py
       - name: Paramètres › Imprimantes et Partage affichés sans attendre leur état lent (#3021)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-etat-lent.py
+      - name: Paramètres › bytecode des pages dans le cache du compte (Gain #3027)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-pycache.py
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
