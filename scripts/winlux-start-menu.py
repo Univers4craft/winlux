@@ -154,7 +154,7 @@ _TR = {
     'Jeux bibliothèque temps de jeu': ('Games library play time', 'Juegos biblioteca tiempo de juego', 'Spiele Bibliothek Spielzeit'),
     'Développement': ('Development', 'Desarrollo', 'Entwicklung'),
     'Système': ('System', 'Sistema', 'System'),
-    'Accessoires': ('Accessories', 'Accesorios', 'Zubehör'),
+    'Outils': ('Tools', 'Herramientas', 'Werkzeuge'),
     'Autres applications': ('Other apps', 'Otras aplicaciones', 'Weitere Apps'),
     'Démarrer Winlux': ('Winlux Start', 'Inicio de Winlux', 'Winlux-Start'),
     'Applications, fichiers et paramètres': ('Apps, files and settings', 'Aplicaciones, archivos y configuración', 'Apps, Dateien und Einstellungen'),
@@ -307,8 +307,12 @@ def category(app):
     for key, label in [("Settings", _t("Paramètres")), ("Network", "Internet"),
                        ("Office", _t("Bureautique")), ("Graphics", _t("Graphisme")),
                        ("AudioVideo", _t("Audio et vidéo")), ("Game", _t("Jeux")),
-                       ("Development", _t("Développement")), ("System", _t("Système")),
-                       ("Utility", _t("Accessoires"))]:
+                       ("Development", _t("Développement")),
+                       # Catégorie « Outils » comme « Utilitaires et outils » de
+                       # Windows 11 (#3048) : le terminal y est rangé avant que
+                       # « System » ne l'envoie dans Système.
+                       ("TerminalEmulator", _t("Outils")), ("System", _t("Système")),
+                       ("Utility", _t("Outils"))]:
         if key in categories: return label
     return _t("Autres applications")
 
@@ -1950,7 +1954,7 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3, done=fro
 VIEWS = (("categories", "Catégories"), ("grid", "Grille"), ("list", "Liste A–Z"))
 # Ordre des cartes de « Toutes les applications » ; les autres catégories suivent.
 CATEGORY_ORDER = ("Bureautique", "Internet", "Programmes Windows", "Audio et vidéo", "Graphisme", "Jeux",
-                  "Accessoires", "Développement", "Système", "Paramètres", "Autres applications")
+                  "Outils", "Développement", "Système", "Paramètres", "Autres applications")
 NEW_APP_DAYS = 7
 
 
