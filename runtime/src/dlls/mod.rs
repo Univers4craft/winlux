@@ -250,6 +250,7 @@ pub mod msvcp140_ppl;
 pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
+pub mod rstrtmgr;
 pub mod rtti;
 pub mod saisie;
 pub mod sandbox_dlls;
@@ -1153,6 +1154,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "wevtapi",
                 exports: wevtapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "rstrtmgr",
+                exports: rstrtmgr::exports(),
                 handle: fake_module(),
             },
             Builtin {
