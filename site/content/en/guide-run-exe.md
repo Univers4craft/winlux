@@ -7,8 +7,6 @@ description: Double-click an .exe, install software with its installer, and set 
 
 Double-click an `.exe` file in Explorer or on the desktop: it opens straight away. There is nothing to install or configure first.
 
-![The Winlux tour: running a Windows program](img:lancer-un-exe.jpg "The first-start tour shows how to run a Windows program.")
-
 ## Install software
 
 1. Download the installer from the publisher's website (`setup.exe`, `installer.exe` or `.msi`).

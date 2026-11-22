@@ -1,6 +1,6 @@
 # Bureau et applications
 
-Le bureau de Winlux reprend l'ergonomie de Windows 11 avec sa propre identité visuelle (« Prisme »). Il repose sur deux piles distinctes, décrites dans [Architecture](Architecture) : la **session native** (composants Linux habillés) et le **shell PE** (vrais `.exe` maison exécutés par le runtime).
+Le bureau de Winlux a une ergonomie familière et sa propre identité visuelle (« Prisme »). Il repose sur deux piles distinctes, décrites dans [Architecture](Architecture) : la **session native** (composants Linux habillés) et le **shell PE** (vrais `.exe` maison exécutés par le runtime).
 
 ## La session native
 
@@ -68,7 +68,7 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 | Raccourci ou endroit | Fonction |
 |---|---|
 | **Windows + .** ou **Windows + ;** | Sélecteur d'emojis, kaomojis et symboles ; recherche sans accents dans la langue du bureau et en anglais ; le choix est tapé dans la fenêtre active. Les emojis en couleur se téléchargent au premier usage (10 Mo). |
-| **Windows + flèches**, **Windows + Z** | Ancrage comme Windows 11 : moitiés, quarts, agrandir, taille d'avant ; l'Assistant d'ancrage remplit ensuite la place libre avec les autres fenêtres (aperçu ou icône et titre) : un clic ou Entrée en place une, les flèches passent de l'une à l'autre, Échap ferme ; après un coin, il propose les quarts encore libres l'un après l'autre, et ne propose pas une place déjà occupée par une fenêtre ancrée. Les fenêtres ancrées ensemble forment un **groupe d'ancrage** : survoler le bouton de l'une d'elles dans la barre des tâches montre le groupe, un clic remet toutes ses fenêtres au premier plan, chacune à sa place (même réduites). Windows + Z ou clic droit sur Agrandir : cinq dispositions (moitiés, deux tiers, trois colonnes, quarts). Windows + Maj + flèche : écran voisin. À la souris : glisser une fenêtre par sa barre de titre jusqu'au bord gauche ou droit (moitié), un coin (quart) ou le haut (plein écran) ; près du haut, au centre, la barre des dispositions descend, on y lâche la fenêtre dans une case. Une fenêtre ancrée qu'on décroche reprend sa taille. Laisser la souris sur Agrandir ouvre les dispositions. |
+| **Windows + flèches**, **Windows + Z** | Ancrage : moitiés, quarts, agrandir, taille d'avant ; l'Assistant d'ancrage remplit ensuite la place libre avec les autres fenêtres (aperçu ou icône et titre) : un clic ou Entrée en place une, les flèches passent de l'une à l'autre, Échap ferme ; après un coin, il propose les quarts encore libres l'un après l'autre, et ne propose pas une place déjà occupée par une fenêtre ancrée. Les fenêtres ancrées ensemble forment un **groupe d'ancrage** : survoler le bouton de l'une d'elles dans la barre des tâches montre le groupe, un clic remet toutes ses fenêtres au premier plan, chacune à sa place (même réduites). Windows + Z ou clic droit sur Agrandir : cinq dispositions (moitiés, deux tiers, trois colonnes, quarts). Windows + Maj + flèche : écran voisin. À la souris : glisser une fenêtre par sa barre de titre jusqu'au bord gauche ou droit (moitié), un coin (quart) ou le haut (plein écran) ; près du haut, au centre, la barre des dispositions descend, on y lâche la fenêtre dans une case. Une fenêtre ancrée qu'on décroche reprend sa taille. Laisser la souris sur Agrandir ouvre les dispositions. |
 | **Windows + Tab** | Vue des tâches : aperçus des fenêtres, bureaux virtuels (nouveau, renommer, supprimer, déplacer une fenêtre par clic droit). Windows + Ctrl + D crée un bureau, Windows + Ctrl + F4 le ferme, Windows + Ctrl + ← / → passe de l'un à l'autre, Windows + Ctrl + Maj + ← / → y emmène la fenêtre active. Le bouton Vue des tâches, juste après Démarrer, ouvre la même vue ; la barre ne montre que les fenêtres du bureau en cours. |
 | **Windows + I**, **S**, **R**, **X**, **P** | Paramètres ; recherche du menu Démarrer ; boîte Exécuter (cmd, notepad, control, taskmgr, regedit, appwiz.cpl…, dossiers, adresses Internet, historique) ; menu d'accès rapide (Applications installées, Gestionnaire de périphériques, Terminal, Gestionnaire des tâches, Arrêter…) ; options d'affichage. |
 | **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
@@ -86,7 +86,7 @@ Les applications Linux s'installent normalement (`apt`, Store, Flatpak, Snap, Ap
 
 ## Échelle d'affichage
 
-Le runtime choisit l'échelle comme Windows (paliers de 100 à 300 %) : réglage `Xft.dpi` s'il existe, sinon taille physique de l'écran lue dans l'EDID par RandR, sinon définition. Les applications maison et les programmes Windows sont ainsi lisibles du petit portable à l'écran 4K.
+Le runtime choisit l'échelle par paliers, de 100 à 300 % comme l'attendent les programmes Windows : réglage `Xft.dpi` s'il existe, sinon taille physique de l'écran lue dans l'EDID par RandR, sinon définition. Les applications maison et les programmes Windows sont ainsi lisibles du petit portable à l'écran 4K.
 
 ## Langues
 
@@ -94,9 +94,7 @@ Le bureau, l'Explorateur, les Paramètres, l'écran de verrouillage et les appli
 
 ## Ce qui reste à faire
 
-- Corbeille complète (restaurer, vider) et barre de progression des copies (#10, #11).
 - Navigation au clavier (Tab) dans toutes les fenêtres du shell.
-- Dans la session native : ancrage en glissant une fenêtre au bord de l'écran, animations.
-- Écran de chargement du noyau, sons système et jeu d'icônes à l'identité Prisme (#170).
+- Finitions suivies chacune par son issue, par exemple le texte des éléments sélectionnés dans les applications (#2853), les icônes de `MessageBox` (#2854) ou la place du bouton Démarrer au lancement (#2742).
 
 Voir aussi : [Paramètres](Parametres) · [INTERFACE.md](https://github.com/Univers4craft/winlux/blob/master/INTERFACE.md) · [docs/NATIVE-DESKTOP.md](https://github.com/Univers4craft/winlux/blob/master/docs/NATIVE-DESKTOP.md)
