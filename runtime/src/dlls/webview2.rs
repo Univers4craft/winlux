@@ -287,6 +287,8 @@ struct Args {
     http_status: i32,
     /// En-têtes de la requête (NavigationStarting, #2964).
     headers: Vec<(String, String)>,
+    /// COREWEBVIEW2_NAVIGATION_KIND (NavigationStarting, #2975).
+    nav_kind: i32,
     ok: bool,
     status: i32,
     json: String,
@@ -1624,6 +1626,12 @@ impl View {
                 let uri = self.public_uri(&get_str(&ev, "uri").unwrap_or_default());
                 let headers =
                     super::webview2_entetes::parse(&get_str(&ev, "headers").unwrap_or_default());
+                // Sans « kind » (moteur ancien) : nouveau document (2).
+                let nav_kind = if ev.contains_key("kind") {
+                    get_num(&ev, "kind") as i32
+                } else {
+                    2
+                };
                 self.fire_args(
                     "NavigationStarting",
                     Family::NavStarting,
@@ -1631,6 +1639,7 @@ impl View {
                         uri,
                         nav,
                         headers,
+                        nav_kind,
                         ..Default::default()
                     },
                 );
@@ -2807,6 +2816,14 @@ unsafe extern "win64" fn args_status(this: usize, out: *mut i32) -> i32 {
     *out = args(this).status;
     S_OK
 }
+/// NavigationStartingEventArgs3::NavigationKind (#2975).
+unsafe extern "win64" fn args_nav_kind(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = args(this).nav_kind;
+    S_OK
+}
 /// NavigationCompletedEventArgs2::HttpStatusCode (#2966).
 unsafe extern "win64" fn args_http_status(this: usize, out: *mut i32) -> i32 {
     if out.is_null() {
@@ -2847,6 +2864,9 @@ fn nav_starting_methods() -> Vec<(usize, usize)> {
         (4, get_false as *const () as usize),
         (5, ok1 as *const () as usize),
         (6, args_nav_id as *const () as usize),
+        // 7 et 8 : AdditionalAllowedFrameAncestors (Args2), pas servis :
+        // WebKit ne laisse pas appliquer frame-ancestors (E_NOTIMPL).
+        (9, args_nav_kind as *const () as usize),
     ]
 }
 fn nav_completed_methods() -> Vec<(usize, usize)> {
@@ -3273,6 +3293,33 @@ mod tests {
         assert_ne!(x, z);
         com_release(a);
         com_release(b);
+    }
+
+    /// #2975 : NavigationKind (NavigationStartingEventArgs3, entrée 9)
+    /// rend le type que le moteur a transmis.
+    #[test]
+    fn type_de_navigation_2975() {
+        let v = vtable(Family::NavStarting);
+        assert_eq!(v[3 + 9], args_nav_kind as *const () as usize);
+        assert!(NAV_STARTING_ARGS_SLOTS > 3 + 9);
+        for kind in [0, 1, 2] {
+            let a = new_com(
+                Family::NavStarting,
+                None,
+                None,
+                Args {
+                    nav_kind: kind,
+                    ..Default::default()
+                },
+            );
+            let mut got = -1i32;
+            unsafe {
+                assert_eq!(args_nav_kind(a, &mut got), S_OK);
+                assert_eq!(args_nav_kind(a, std::ptr::null_mut()), E_POINTER);
+            }
+            assert_eq!(got, kind);
+            com_release(a);
+        }
     }
 
     /// #2966 : HttpStatusCode (NavigationCompletedEventArgs2, entrée 3)
