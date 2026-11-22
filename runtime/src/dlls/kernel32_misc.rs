@@ -1164,6 +1164,22 @@ fn package_arch(arch: &str) -> u32 {
     }
 }
 
+/// `AppPolicyGetThreadInitializationType` (appmodel.h ; kernel32 d'après
+/// `api_location` de sdk-api et le kernel32.def de mingw-w64, #3096) : un
+/// programme de bureau n'a aucune initialisation WinRT à faire au début d'un
+/// fil, `AppPolicyThreadInitializationType_None` (0). Jeton ou pointeur nul :
+/// ERROR_INVALID_PARAMETER, comme le dit Learn.
+pub unsafe extern "win64" fn app_policy_get_thread_initialization_type(
+    process_token: usize,
+    policy: *mut u32,
+) -> u32 {
+    if process_token == 0 || policy.is_null() {
+        return 87; // ERROR_INVALID_PARAMETER
+    }
+    *policy = 0; // AppPolicyThreadInitializationType_None
+    0
+}
+
 /// `GetCurrentPackageId` : structure PACKAGE_ID (48 octets en 64 bits)
 /// suivie de ses chaînes, dans le même tampon.
 pub unsafe extern "win64" fn get_current_package_id(len: *mut u32, buf: *mut u8) -> u32 {
@@ -1697,6 +1713,7 @@ pub fn exports() -> crate::dlls::Exports {
         "FormatMessageA" => fn format_message_a, "FormatMessageW" => fn format_message_w, "LocalFree" => fn local_free,
         "LocalAlloc" => fn local_alloc, "LocalReAlloc" => fn local_realloc, "LocalLock" => fn local_lock,
         "LocalUnlock" => fn local_unlock, "LocalSize" => fn local_size,
+        "AppPolicyGetThreadInitializationType" => fn app_policy_get_thread_initialization_type,
         "GetCurrentPackageId" => fn get_current_package_id,
         "GetCurrentPackageFullName" => fn get_current_package_full_name,
         "GetCurrentPackageFamilyName" => fn get_current_package_family_name,
@@ -2025,6 +2042,33 @@ mod tests {
             assert_eq!(wow, 0);
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn politique_d_initialisation_des_fils_3096() {
+        let mut policy = 7u32;
+        unsafe {
+            // GetCurrentProcessToken() vaut le pseudo-handle -4.
+            assert_eq!(
+                app_policy_get_thread_initialization_type(-4isize as usize, &mut policy),
+                0
+            );
+            assert_eq!(policy, 0, "AppPolicyThreadInitializationType_None");
+            assert_eq!(
+                app_policy_get_thread_initialization_type(0, &mut policy),
+                87
+            );
+            assert_eq!(
+                app_policy_get_thread_initialization_type(-4isize as usize, std::ptr::null_mut()),
+                87
+            );
+        }
+        assert!(crate::dlls::builtins()
+            .iter()
+            .find(|b| b.name == "kernel32")
+            .expect("kernel32 intégrée")
+            .exports
+            .contains_key("AppPolicyGetThreadInitializationType"));
     }
 
     #[test]
