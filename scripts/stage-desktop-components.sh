@@ -148,6 +148,9 @@ done
 mkdir -p "$stage/usr/lib/winlux"
 cp --remove-destination "$project/scripts/winlux-tray.py" "$stage/usr/lib/winlux/winlux-tray"
 chmod 755 "$stage/usr/lib/winlux/winlux-tray"
+# Démons Python lancés depuis leur bytecode en cache (#3107).
+cp --remove-destination "$project/scripts/winlux-python.py" "$stage/usr/lib/winlux/winlux-python"
+chmod 755 "$stage/usr/lib/winlux/winlux-python"
 cp --remove-destination "$project/scripts/mesure-barre-taches.sh" "$stage/usr/lib/winlux/mesure-barre-taches.sh"
 chmod 755 "$stage/usr/lib/winlux/mesure-barre-taches.sh"
 # Menu Démarrer : /usr/bin/winlux-start-menu le réveille par D-Bus
