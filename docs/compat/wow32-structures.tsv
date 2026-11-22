@@ -34,6 +34,7 @@ coremessaging.rs	Controller	a-verifier
 coremessaging.rs	Handler	a-verifier	
 coremessaging.rs	Queue	a-verifier	
 coremessaging.rs	Timer	a-verifier	
+credentials.rs	CredentialW64	x86	disposition x86 CredentialW32 (52 octets) choisie par wow32::pointer_size ; tests credentialw_x86_2955 et tableau_credentialw_x86_2955 (#2955)
 crt_runtime.rs	Lconv	a-verifier	
 crt_runtime.rs	LocaleInfo	a-verifier	
 crt_runtime.rs	LocalePointers	a-verifier	

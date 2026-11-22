@@ -119,6 +119,7 @@ pub mod fiber64;
 pub mod fil_trace;
 pub mod filedialog_com;
 pub mod ftp_apps;
+pub mod gamemode;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
@@ -153,6 +154,7 @@ pub mod inifile;
 pub mod integrity_policy;
 pub mod iphlpapi;
 pub mod ipp;
+pub mod isolatedcontainer;
 pub(crate) mod jobs;
 pub mod jumplist_com;
 pub mod kernel32;
@@ -227,6 +229,7 @@ pub mod oleaut32_picture;
 pub mod oleaut32_record;
 pub mod oleaut32_typelib;
 pub mod oleaut32_var;
+pub mod oobe;
 pub mod opengl32;
 pub mod package_classes;
 pub mod pathcch;
@@ -539,6 +542,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
                     e.extend(pathcch::exports());
+                    e.extend(oobe::exports());
                     e.extend(security::kernelbase_exports());
                     e.extend(kernel32_releve::exports());
                     for (name, addr) in kernel32_legacy::exports() {
@@ -1167,6 +1171,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: rstrtmgr::exports(),
                 handle: fake_module(),
             },
+            // Contrat sans DLL hôte documentée : le module porte son nom (Refs #2902).
+            Builtin {
+                name: "api-ms-win-security-isolatedcontainer-l1-1-0",
+                exports: isolatedcontainer::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "gamemode",
+                exports: gamemode::exports(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "query",
                 exports: sysdlls::query_exports(),
@@ -1681,6 +1696,8 @@ pub const CONTRATS_VERIFIES: &[(&str, &str)] = &[
     ("api-ms-win-security-lsalookup-l2-1-0", "advapi32"),
     ("api-ms-win-security-lsapolicy-l1-1-0", "advapi32"),
     ("api-ms-win-security-cryptoapi-l1-1-0", "advapi32"),
+    ("api-ms-win-oobe-notification-l1-1-0", "kernel32"),
+    ("api-ms-win-gaming-expandedresources-l1-1-0", "gamemode"),
 ];
 
 pub fn normalize(dll: &str) -> String {
@@ -1689,6 +1706,10 @@ pub fn normalize(dll: &str) -> String {
     let base = l.strip_suffix(".dll").unwrap_or(&l);
     if let Some(&(_, host)) = CONTRATS_VERIFIES.iter().find(|&&(c, _)| c == base) {
         return host.into();
+    }
+    // l1-1-1 ajoute IsProcessInWDAGContainer au même module (isolatedcontainer.rs).
+    if base == "api-ms-win-security-isolatedcontainer-l1-1-1" {
+        return "api-ms-win-security-isolatedcontainer-l1-1-0".into();
     }
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
@@ -2628,6 +2649,22 @@ mod tests {
                     "CryptSignHashW",
                     "CryptVerifySignatureA",
                     "CryptVerifySignatureW",
+                ],
+            ),
+            (
+                "api-ms-win-oobe-notification-l1-1-0",
+                &[
+                    "OOBEComplete",
+                    "RegisterWaitUntilOOBECompleted",
+                    "UnregisterWaitUntilOOBECompleted",
+                ],
+            ),
+            (
+                "api-ms-win-gaming-expandedresources-l1-1-0",
+                &[
+                    "GetExpandedResourceExclusiveCpuCount",
+                    "HasExpandedResources",
+                    "ReleaseExclusiveCpuSets",
                 ],
             ),
         ];
