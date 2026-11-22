@@ -57,30 +57,62 @@ const OFFSET_TABLE_ID: &[u8; 12] = b"rDlPtS\xcd\xe6\xd7\x7b\x0b\x2a";
 const WIN_VERSION: u32 = (10 << 24) | 19045;
 
 /// Positions des zones `setup-0` et `setup-1` dans l'exécutable.
+///
+/// La table « rDlPtS » n'est pas cherchée dans tout le fichier (ce qui le
+/// faisait lire en entier au lancement de chaque programme, #3189). Comme
+/// le fait innoextract (zlib, loader/offsets.cpp) : avant Inno 5.1.5, un
+/// pointeur à la position 0x30 (mot « Inno », position de la table, puis
+/// son complément) ; depuis 5.1.5, la table est la ressource 11111 de
+/// l'exécutable. Elle est cherchée dans la section des ressources, quel que
+/// soit le type sous lequel elle est rangée.
 pub fn find_offsets(data: &[u8]) -> Option<(u64, u64)> {
-    let mut start = 0;
-    while let Some(i) = find(&data[start..], OFFSET_TABLE_ID) {
-        let at = start + i;
-        start = at + 1;
-        let version = le_u32(data, at + 12)?;
-        let (o0, o1, crc_at) = match version {
-            1 => (
-                le_u32(data, at + 32)? as u64,
-                le_u32(data, at + 36)? as u64,
-                at + 40,
-            ),
-            2 => (le_u64(data, at + 40)?, le_u64(data, at + 48)?, at + 60),
-            _ => continue,
-        };
-        let crc = le_u32(data, crc_at)?;
-        if crate::archive::crc32::crc32(&data[at..crc_at]) != crc {
-            continue;
+    const LOADER_HEADER_OFFSET: usize = 0x30;
+    const LOADER_HEADER_MAGIC: u32 = 0x6f6e_6e49;
+    if le_u32(data, LOADER_HEADER_OFFSET) == Some(LOADER_HEADER_MAGIC) {
+        if let (Some(at), Some(not)) = (
+            le_u32(data, LOADER_HEADER_OFFSET + 4),
+            le_u32(data, LOADER_HEADER_OFFSET + 8),
+        ) {
+            if at == !not {
+                if let Some(found) = table_at(data, at as usize) {
+                    return Some(found);
+                }
+            }
         }
-        if (o0 as usize) < data.len() {
-            return Some((o0, o1));
+    }
+    let (from, to) = super::resource_section(data)?;
+    let section = &data[from..to];
+    let mut start = 0;
+    while let Some(i) = find(&section[start..], OFFSET_TABLE_ID) {
+        let at = from + start + i;
+        start += i + 1;
+        if let Some(found) = table_at(data, at) {
+            return Some(found);
         }
     }
     None
+}
+
+/// Table de positions à `at` (identifiant, version, CRC vérifiés).
+fn table_at(data: &[u8], at: usize) -> Option<(u64, u64)> {
+    if data.get(at..at + OFFSET_TABLE_ID.len())? != OFFSET_TABLE_ID {
+        return None;
+    }
+    let version = le_u32(data, at + 12)?;
+    let (o0, o1, crc_at) = match version {
+        1 => (
+            le_u32(data, at + 32)? as u64,
+            le_u32(data, at + 36)? as u64,
+            at + 40,
+        ),
+        2 => (le_u64(data, at + 40)?, le_u64(data, at + 48)?, at + 60),
+        _ => return None,
+    };
+    let crc = le_u32(data, crc_at)?;
+    if crate::archive::crc32::crc32(&data[at..crc_at]) != crc {
+        return None;
+    }
+    ((o0 as usize) < data.len()).then_some((o0, o1))
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
