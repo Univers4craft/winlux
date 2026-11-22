@@ -1017,13 +1017,38 @@ pub unsafe extern "win64" fn HeapQueryInformation(
     1
 }
 
-pub unsafe extern "win64" fn GetNamedPipeProcessId(_pipe: usize, pid: *mut u32) -> i32 {
+/// `GetNamedPipeClientProcessId` / `GetNamedPipeServerProcessId` : le pid
+/// du processus à l'autre bout du tube (sdk-api). Nos tubes sont des
+/// sockets Unix : SO_PEERCRED donne le processus qui s'est connecté (client
+/// d'un autre processus) ou celui qui a créé la paire (instance locale ou
+/// cédée à un enfant). Crashpad refusait chaque enfant de Chromium, qui
+/// recevait le pid du gestionnaire lui-même (#3230).
+pub unsafe extern "win64" fn GetNamedPipeProcessId(pipe: usize, pid: *mut u32) -> i32 {
     if pid.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    *pid = libc::getpid() as u32;
+    *pid = crate::dlls::kernel32::fd_of_handle(pipe)
+        .and_then(peer_pid)
+        .unwrap_or_else(|| libc::getpid() as u32);
     1
+}
+
+/// Pid du processus à l'autre bout d'une socket Unix.
+fn peer_pid(fd: i32) -> Option<u32> {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY : cred et len sont à nous et de la bonne taille.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (rc == 0 && cred.pid > 0).then_some(cred.pid as u32)
 }
 
 pub unsafe extern "win64" fn fail_not_supported() -> i32 {
@@ -1447,5 +1472,67 @@ mod fils_windows_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(!crate::process::teb_known(teb), "TEB jamais libéré");
+    }
+}
+
+#[cfg(test)]
+mod pid_client_tube_tests {
+    use std::os::fd::{AsRawFd, OwnedFd};
+
+    /// #3230 : GetNamedPipeClientProcessId rend le pid du processus client,
+    /// pas celui de l'appelant. Crashpad compare ce pid à celui que
+    /// l'enfant déclare et coupait sinon la connexion (erreur 109).
+    #[test]
+    fn pid_du_client_d_un_tube_venu_d_un_autre_processus_3230() {
+        let _teb = crate::process::test_teb();
+        let dir = std::env::temp_dir().join(format!("winlux-3230-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        // Adresse préparée avant fork : l'enfant n'alloue rien.
+        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (d, s) in addr.sun_path.iter_mut().zip(path.to_str().unwrap().bytes()) {
+            *d = s as libc::c_char;
+        }
+        let len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        // SAFETY : l'enfant n'appelle que socket, connect, read et _exit.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            unsafe {
+                let s = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+                libc::connect(s, (&addr as *const libc::sockaddr_un).cast(), len);
+                let mut b = [0u8; 1];
+                libc::read(s, b.as_mut_ptr().cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        let (stream, _) = listener.accept().unwrap();
+        let h = crate::dlls::kernel32::insert_file(std::fs::File::from(OwnedFd::from(stream)));
+        let mut pid = 0u32;
+        assert_eq!(unsafe { super::GetNamedPipeProcessId(h, &mut pid) }, 1);
+        assert_eq!(pid, child as u32, "pid du client");
+        assert_ne!(pid, std::process::id());
+        let fd = crate::dlls::kernel32::fd_of_handle(h).unwrap();
+        unsafe {
+            libc::write(fd, b"x".as_ptr().cast(), 1);
+            libc::waitpid(child, std::ptr::null_mut(), 0);
+        }
+        // Instance locale : le client est ce processus.
+        let server = crate::dlls::named_pipes::create(
+            &format!("\\\\.\\pipe\\winlux-3230-{}", std::process::id()),
+            3,
+            6,
+            1,
+            0,
+        );
+        assert_ne!(server, usize::MAX);
+        let mut pid = 0u32;
+        assert_eq!(unsafe { super::GetNamedPipeProcessId(server, &mut pid) }, 1);
+        assert_eq!(pid, std::process::id());
+        let _ = listener.as_raw_fd();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
