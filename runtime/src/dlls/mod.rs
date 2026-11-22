@@ -317,6 +317,7 @@ pub mod webservices;
 pub mod webview2;
 pub mod webview2_iids;
 pub mod wer;
+pub mod wer_inscriptions;
 pub mod wevtapi;
 pub mod wic_pixels;
 pub mod win32_basics;
@@ -533,6 +534,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(wer_inscriptions::exports());
                     e.extend(normaliz::kernel32_exports());
                     e.extend(kernel32_path::exports());
                     e.extend(pathcch::exports());
