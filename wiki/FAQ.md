@@ -14,7 +14,7 @@ Non. Aucun composant de Windows n'est nécessaire ni fourni.
 
 ### Mon programme va-t-il marcher ?
 
-Ça dépend des API qu'il utilise. Les programmes console et Win32 simples, les installateurs MSI, NSIS et Inno Setup marchent souvent ; les gros logiciels (WPF, WinForms, Photoshop, jeux récents) pas encore, et les programmes 32 bits sont refusés. Le plus simple est d'essayer dans la session Live et de [signaler](Comment-contribuer) ce qui manque. Détails : [Compatibilité des applications](Compatibilite-des-applications).
+Ça dépend des API qu'il utilise. Les programmes console et Win32 simples, en 64 comme en 32 bits, et les installateurs MSI, NSIS et Inno Setup marchent souvent ; OBS Studio et Paint.NET s'ouvrent. Les gros logiciels comme Office, Teams, Acrobat ou Creative Cloud, les applications Chromium et WPF ne vont pas encore au bout. Le plus simple est d'essayer dans la session Live et de [signaler](Comment-contribuer) ce qui manque. Détails : [Compatibilité des applications](Compatibilite-des-applications).
 
 ### Où sont mes fichiers ?
 
@@ -42,7 +42,7 @@ Oui, l'installateur sait réduire la partition Windows et proposer les deux syst
 
 ### Comment mettre à jour ?
 
-Paramètres › Mises à jour. Attention : depuis la v0.2.6 ou la v0.2.12, une réinstallation unique est nécessaire. Voir [Publication et mises à jour](Publication-et-mises-a-jour).
+Paramètres › Mises à jour › Mise à jour OS. Une installation v0.2.13 ou plus récente se met à jour sans réinstaller ; une installation v0.2.12 ou plus ancienne doit être réinstallée une fois avec une ISO récente. Voir [Publication et mises à jour](Publication-et-mises-a-jour).
 
 ### Winlux envoie-t-il des données ?
 

@@ -1,13 +1,13 @@
 # Wiki de Winlux
 
-> **Winlux est un système d'exploitation sur noyau Linux où les programmes Windows (`.exe`) se lancent d'un double-clic, grâce à une couche de compatibilité écrite de zéro en Rust, sans Wine et sans machine virtuelle Windows cachée. Son bureau reprend l'ergonomie de Windows 11, avec sa propre identité visuelle, « Prisme ».**
+> **Winlux est un système d'exploitation sur noyau Linux où les programmes Windows (`.exe`) se lancent d'un double-clic, grâce à une couche de compatibilité écrite de zéro en Rust, sans Wine et sans machine virtuelle Windows cachée. Son bureau a une ergonomie familière et sa propre identité visuelle, « Prisme ».**
 
 Ce wiki explique ce qu'est Winlux, pourquoi il existe, comment il est construit, ce qui fonctionne aujourd'hui et ce qui reste à faire. Il décrit l'état réel du code sur la branche `master` : quand une fonction est partielle ou en cours, c'est écrit.
 
 | | |
 |---|---|
-| **Dernière version publiée** | [v0.2.14](https://github.com/Univers4craft/winlux/releases/tag/v0.2.14) (2 novembre 2026) |
-| **En préparation** | v0.2.15 |
+| **Dernière version publiée** | [v0.2.21](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21) (17 novembre 2026) |
+| **En préparation** | v0.3 |
 | **Statut** | Préversion technique : à tester en machine virtuelle d'abord |
 | **Licence** | GPL 3 ou ultérieure |
 | **Dépôt** | [Univers4craft/winlux](https://github.com/Univers4craft/winlux) |
@@ -26,7 +26,7 @@ Ce wiki explique ce qu'est Winlux, pourquoi il existe, comment il est construit,
 5. [Registre Windows](Registre-Windows) : le registre partagé, son format, `reg.exe` et `regedit`.
 6. [Chemins et droits](Chemins-et-droits) : `C:\` ↔ `/home`, lettres de lecteur, droits des fichiers, UAC et autorisations des applications.
 7. [Réseau et disques](Reseau-et-disques) : réseau, pare-feu, partage de dossiers, lecteurs réseau, clés USB et partitions Windows.
-8. [Paramètres](Parametres) : les 29 pages de Paramètres et la règle « masqué plutôt que grisé ».
+8. [Paramètres](Parametres) : les pages de Paramètres et la règle « masqué plutôt que grisé ».
 
 ### Installer et maintenir
 

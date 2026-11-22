@@ -3,10 +3,10 @@ title: Logiciels et jeux
 description: Les logiciels et les jeux Windows qui s'installent et se lancent dans Winlux, vérifiés un par un, et ceux qui sont encore en cours.
 ---
 
-Chaque logiciel de cette page a été installé depuis son site officiel, dans sa version Windows, puis lancé et utilisé dans Winlux sur notre banc de test. La liste est mise à jour à chaque vérification.
+Chaque logiciel de cette page a été téléchargé sur le site officiel de son éditeur, dans sa version Windows, puis installé et lancé dans Winlux sur notre banc de test. La liste est mise à jour à chaque vérification.
 
 > [!note]
-> Liste établie le 10 novembre 2026. Certaines lignes concernent la prochaine version de test, pas encore publiée.
+> Liste établie le 22 novembre 2026, d'après la version publiée v0.2.21 et les vérifications faites depuis. Certaines lignes concernent la prochaine version, la v0.3, pas encore publiée.
 
 ## Logiciels qui fonctionnent
 
@@ -15,7 +15,9 @@ Chaque logiciel de cette page a été installé depuis son site officiel, dans s
 | VLC | Multimédia | S'installe, lit vidéos et musique |
 | Audacity 3.6 | Multimédia | S'installe et se désinstalle proprement, s'ouvre et s'utilise |
 | ScreenToGif | Multimédia | S'ouvre et enregistre l'écran |
-| 7-Zip (64 et 32 bits) | Fichiers | S'installe, ouvre et crée des archives ; en console, `7z.exe` sort encore avec le code 5 ([#1479](issue:1479)) |
+| OBS Studio | Multimédia | Ouvre sa fenêtre avec l'aperçu ([#2262](issue:2262), [#2313](issue:2313)) |
+| Paint.NET 5.1 | Image | S'installe (Winlux récupère le paquet complet chez l'éditeur), s'ouvre et dessine ; le téléchargeur de l'installeur web ne va pas encore au bout ([#2752](issue:2752)) |
+| 7-Zip (64 et 32 bits) | Fichiers | S'installe, ouvre et crée des archives, en fenêtre comme en console |
 | Notepad++ 8.6 | Documents | S'installe et se désinstalle proprement, édite des fichiers |
 | SumatraPDF 3.6 | Documents | Ouvre et affiche les PDF |
 | Flow Launcher | Outils | S'installe et recherche des programmes et des fichiers |
@@ -23,6 +25,7 @@ Chaque logiciel de cette page a été installé depuis son site officiel, dans s
 | FileZilla | Réseau | S'installe et transfère des fichiers en FTP et SFTP |
 | WinSCP (32 bits) | Réseau | Se lance et transfère des fichiers en SFTP |
 | Claude Code | Développement | S'installe et fonctionne dans le terminal |
+| Pythonwin | Développement | Ouvre sa fenêtre principale ([#1785](issue:1785)) |
 
 ## Jeux qui fonctionnent
 
@@ -43,9 +46,13 @@ Chaque logiciel de cette page a été installé depuis son site officiel, dans s
 
 | Logiciel | Où on en est |
 |---|---|
-| Claude pour Windows | S'installe, s'ouvre, se réduit et se ferme ; le bouton « Agrandir » ([#1476](issue:1476)) et le déplacement par la barre de titre ([#1477](issue:1477)) ne fonctionnent pas encore |
-| Paint.NET 5.1 | S'installe et se désinstalle ; l'ouverture de la fenêtre principale est en cours de vérification ([#138](issue:138)) |
-| Steam | S'installe et télécharge son client, ne se connecte pas encore ([#285](issue:285)) et plante parfois en se fermant ([#1440](issue:1440)) |
+| Office | L'outil de déploiement télécharge Office et vérifie ses signatures ; l'installation ne va pas encore au bout ([#2740](issue:2740)) |
+| Adobe Acrobat Reader | S'installe ; l'application ne s'utilise pas encore ([#236](issue:236)) |
+| Teams | S'installe et démarre, sans atteindre l'écran de connexion ([#2511](issue:2511), [#2726](issue:2726)) |
+| Adobe Creative Cloud | L'installeur démarre et joint les serveurs de l'éditeur, sa fenêtre ne s'affiche pas encore ([#2784](issue:2784)) |
+| OneDrive | L'installeur ne démarre pas encore ([#2851](issue:2851)) |
+| Claude pour Windows | S'installe et s'ouvre ; les défauts d'agrandissement et de déplacement sont corrigés, l'ensemble reste à revérifier |
+| Steam | S'installe et télécharge son client, ne se connecte pas encore ([#285](issue:285)) |
 | IrfanView | Pas encore essayé jusqu'au bout ([#488](issue:488)) |
 | Photoshop | Pas encore essayé jusqu'au bout |
 

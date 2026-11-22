@@ -27,7 +27,7 @@
 ---
 
 > [!IMPORTANT]
-> **Winlux est un projet en cours, en préversion technique.** Il démarre, s'installe et se met à jour, et une quinzaine de logiciels Windows courants fonctionnent déjà (VLC, 7-Zip, Notepad++, Audacity, FileZilla, PuTTY…), mais **tous les `.exe` ne se lancent pas**. Les gros logiciels comme Paint.NET, Steam ou Photoshop avancent sans être encore utilisables de bout en bout. Testez-le d'abord dans une machine virtuelle, ou sur un PC qui ne contient pas de données importantes.
+> **Winlux est un projet en cours, en préversion technique.** Il démarre, s'installe et se met à jour, et plus d'une quinzaine de logiciels et de jeux Windows courants s'ouvrent déjà (VLC, 7-Zip, Notepad++, Audacity, FileZilla, PuTTY, OBS Studio, Paint.NET…), mais **tous les `.exe` ne se lancent pas**. Office, Acrobat, Teams, Creative Cloud et Steam s'installent ou démarrent sans aller encore au bout. Testez-le d'abord dans une machine virtuelle, ou sur un PC qui ne contient pas de données importantes.
 
 ## Sommaire
 
@@ -53,10 +53,10 @@
 Winlux est un système d'exploitation complet, distribué sous forme d'**ISO installable**, qui réunit trois choses :
 
 1. **Un vrai noyau Linux** et une base Ubuntu 26.04 LTS avec `apt` et `dpkg` natifs. Les logiciels Linux s'installent et fonctionnent normalement.
-2. **Une couche de compatibilité Windows écrite de zéro en Rust** (le *runtime* Winlux) : elle charge directement les exécutables Windows 64 bits (format PE32+) et leur fournit les DLL Windows dont ils ont besoin (`kernel32`, `user32`, `gdi32`, `ntdll`, `advapi32`, `ole32`, `ws2_32`, Direct3D, etc.), réimplémentées au-dessus de Linux.
+2. **Une couche de compatibilité Windows écrite de zéro en Rust** (le *runtime* Winlux) : elle charge directement les exécutables Windows 64 bits (format PE32+) et 32 bits (PE32) et leur fournit les DLL Windows dont ils ont besoin (`kernel32`, `user32`, `gdi32`, `ntdll`, `advapi32`, `ole32`, `ws2_32`, Direct3D, etc.), réimplémentées au-dessus de Linux.
 3. **Un bureau à l'ergonomie familière** : menu Démarrer centré (ou à gauche), barre des tâches, Explorateur, Paramètres, écran de verrouillage, gestionnaire des tâches, sans aucun logo ni marque Microsoft.
 
-**Le but** : qu'un utilisateur habitué à Windows puisse double-cliquer sur un `.exe` n'importe où (bureau, clé USB, dossier Téléchargements) et qu'il s'ouvre, comme sous Windows, tout en profitant d'un système Linux avec un accès complet à ses fichiers. Il n'y a **qu'un seul noyau** : aucune machine virtuelle Windows ne tourne en arrière-plan, et aucune licence Windows n'est nécessaire.
+**Le but** : qu'un utilisateur habitué à Windows puisse double-cliquer sur un `.exe` n'importe où (bureau, clé USB, dossier Téléchargements) et qu'il s'ouvre directement, tout en profitant d'un système Linux avec un accès complet à ses fichiers. Il n'y a **qu'un seul noyau** : aucune machine virtuelle Windows ne tourne en arrière-plan, et aucune licence Windows n'est nécessaire.
 
 ## Les principes du projet
 
@@ -75,12 +75,12 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.21**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21) (16 novembre 2026) : OBS Studio, Paint.NET, Notepad++, VLC et Audacity jusqu'à leur fenêtre, contrat de licence toujours montré avant d'installer, signatures Authenticode vérifiées, programmes 32 bits bien plus complets, Boutique refaite, contrôle parental, pare-feu par application, connexion par code PIN et empreinte. Office se télécharge mais ne s'installe pas encore ; Acrobat et Teams s'installent mais ne vont pas encore au bout. Notes complètes : [docs/releases/v0.2.21.md](docs/releases/v0.2.21.md). |
-| **En cours** | La prochaine version publiée sera la **v0.3** : Office, Acrobat et Teams jusqu'à leur fenêtre de connexion, autorisations par application, écran tactile. |
+| **Dernière version publiée** | [**v0.2.21**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.21) (17 novembre 2026) : OBS Studio, Paint.NET, Notepad++, VLC et Audacity jusqu'à leur fenêtre, contrat de licence toujours montré avant d'installer, signatures Authenticode vérifiées, programmes 32 bits bien plus complets, Boutique refaite, contrôle parental, pare-feu par application, connexion par code PIN et empreinte. Office se télécharge mais ne s'installe pas encore ; Acrobat et Teams s'installent mais ne vont pas encore au bout. Notes complètes : [docs/releases/v0.2.21.md](docs/releases/v0.2.21.md). |
+| **En cours** | La prochaine version publiée sera la **v0.3**. Depuis la v0.2.21, `master` a reçu le pont WinRT pour les programmes 32 bits, `DispCallFunc` en 32 bits, une grande partie de WinForms dans le moteur .NET maison (fenêtres, contrôles, polices, icônes), `System.Net`, `System.IO.Compression` et les fonctions de chaînes multioctets du CRT. Le but de la v0.3 : chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
-| **Programmes Windows** | Exécutables **64 bits** et **32 bits** (x86, depuis la v0.2.20, encore partiel : PuTTY, 7-Zip et WinSCP 32 bits fonctionnent, Steam et Python 32 bits pas encore). Les programmes .NET passent par le CLR maison ou par le runtime qu'ils embarquent. |
+| **Programmes Windows** | Exécutables **64 bits** et **32 bits** (x86, depuis la v0.2.20, encore partiel : PuTTY, 7-Zip et WinSCP 32 bits fonctionnent, Steam ne va pas encore au bout). Les programmes .NET passent par le CLR maison ou par le runtime qu'ils embarquent. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
-| **Matériel réel** | Chaque ISO est installée et testée en machine virtuelle (QEMU/KVM, VirtualBox, VMware) et sur un vrai PC portable. La validation sur une large gamme de PC reste à faire. |
+| **Matériel réel** | Chaque ISO est testée en machine virtuelle (QEMU/KVM) avant publication, puis sur de vrais PC du projet, dont une tablette en UEFI 32 bits. La validation sur une large gamme de PC reste à faire. |
 
 > [!WARNING]
 > **Mise à jour depuis une ancienne version.** Une installation **v0.2.13 ou plus récente** se met à jour directement. Une installation **v0.2.6 ou plus ancienne** ne peut pas passer à la nouvelle base en place : il faut la **réinstaller une fois** avec l'ISO récente. Une installation **v0.2.12** doit aussi être réinstallée une fois avec l'ISO v0.2.13 ou plus récente, car l'outil de mise à jour de la v0.2.12 contient un défaut qui l'empêche d'installer quoi que ce soit (corrigé dans la v0.2.13). Ensuite, les mises à jour se font depuis **Paramètres › Mise à jour OS**, sans réinstaller. Vos documents ne sont pas concernés par ce défaut, mais sauvegardez-les avant toute réinstallation.
@@ -96,7 +96,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 │  Éditeur du Registre, Store, Observateur d'événements…                 │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Runtime Winlux (Rust, maison)            │ Applications Linux          │
-│  Chargeur PE32+, PEB/TEB, TLS, SEH       │  apt / dpkg, .deb, Flatpak, │
+│  Chargeur PE32+ et PE32, PEB/TEB, TLS    │  apt / dpkg, .deb, Flatpak, │
 │  ~100 DLL Windows réimplémentées         │  Snap, AppImage             │
 │  Registre, chemins C:\ ↔ /home, UAC      │                             │
 │  CLR .NET maison, msiexec, NSIS/Inno     │                             │
@@ -125,17 +125,18 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 
 ### Logiciels Windows vérifiés
 
-Ces logiciels, dans leur version Windows officielle, ont été installés et utilisés sur Winlux, au banc de test en VM :
+Ces logiciels, dans leur version Windows officielle téléchargée chez leur éditeur, ont été installés et lancés sur Winlux, au banc de test :
 
 | Catégorie | Logiciels |
 |---|---|
-| Multimédia | **VLC**, **Audacity**, **ScreenToGif** |
+| Multimédia | **VLC**, **Audacity**, **ScreenToGif**, **OBS Studio** (fenêtre et aperçu) |
+| Image | **Paint.NET** (s'installe, s'ouvre et dessine) |
 | Fichiers et documents | **7-Zip**, **Notepad++**, **SumatraPDF**, **Flow Launcher** |
 | Réseau | **PuTTY** (64 et 32 bits), **FileZilla**, **WinSCP** (32 bits) |
-| Développement | **Claude Code** |
+| Développement | **Claude Code**, **Pythonwin** |
 | Jeux | **Warzone 2100** (Direct3D 11), **SuperTuxKart 1.5** (version Windows), **Xonotic** (OpenGL/WGL) |
 
-**En cours, pas encore utilisables de bout en bout** : Paint.NET (le runtime .NET, Direct2D, WIC et la composition démarrent, il reste des fonctions manquantes avant que la fenêtre s'ouvre), Steam (il s'installe et télécharge son client, mais ne passe pas encore en ligne), le client Claude pour Windows (il démarre, son affichage reste à valider), Photoshop (pas encore testé jusqu'au bout). Chaque blocage a son issue sur GitHub.
+**En cours, pas encore utilisables de bout en bout** : Office (l'outil de déploiement télécharge Office et vérifie ses signatures, l'installation ne va pas encore au bout, #2740), Adobe Acrobat Reader (il s'installe, l'application ne s'utilise pas encore, #236), Teams (il démarre sans atteindre l'écran de connexion, #2511, #2726), Adobe Creative Cloud (son installeur ne montre pas encore sa fenêtre, #2784), l'installeur web de Paint.NET (#2752), Steam (il s'installe et télécharge son client, mais ne passe pas encore en ligne, #285). Chaque blocage a son issue sur GitHub.
 
 ### Système et installation
 
@@ -154,7 +155,7 @@ Ces logiciels, dans leur version Windows officielle, ont été installés et uti
 - Barre des tâches centrée ou alignée à gauche, zone de notification avec les icônes des applications Windows (`Shell_NotifyIcon`), réglages rapides réseau et volume.
 - **Explorateur** (application maison) : onglets, double volet, recherche, tri, copier/couper/coller, corbeille, ouverture des **archives ZIP, 7z, RAR et tar**, « Extraire tout », partage de dossier en un clic droit.
 - Bureau avec glisser-déposer et « Coller » ; un `.exe` posé sur le bureau garde son icône.
-- **Paramètres** : 29 pages, dont Système, Réseau, Son, Écran, Personnalisation, Bluetooth, Alimentation et batterie, Graphismes, Processeur, Confidentialité et sécurité, Lecteurs réseau, Imprimantes, Partage et transfert, Mises à jour… ([détail](wiki/Parametres.md)).
+- **Paramètres** : plus de quarante pages, dont Réseau, Wi-Fi, VPN, Son, Écran, Personnalisation, Bluetooth, Alimentation et batterie, Graphismes, Comptes, Contrôle parental, Confidentialité et sécurité, Certificats, Lecteurs réseau, Imprimantes, Sauvegarde, Récupération, Mise à jour OS… ([détail](wiki/Parametres.md)).
 - Écran de verrouillage (Windows+L, inactivité, réveil), fenêtre **UAC** pour les programmes qui demandent les droits administrateur, **autorisations par application** (caméra, micro, capture d'écran, dossiers personnels).
 - Applications intégrées : Gestionnaire des tâches (Ctrl+Maj+Échap), Éditeur du Registre, Observateur d'événements, Informations système, Planificateur de tâches, Pare-feu, Gestion des disques, Nettoyage de disque, Store, Gestionnaire de polices, Terminal, lecteur multimédia (FFmpeg), visionneuse d'images, lecteur PDF, calculatrice, capture d'écran et enregistrement, historique du presse-papiers (Windows+V), enregistreur vocal, post-it.
 - Accessibilité : loupe, Narrateur, contraste élevé, aides clavier.
@@ -178,13 +179,10 @@ Ce qu'il reste à faire, mesuré et classé par impact, est dans [docs/COMPATIBI
 
 Liste honnête des limites actuelles, tenue à jour dans [Suivi.md](Suivi.md) :
 
-- **Programmes 32 bits** : beaucoup démarrent, mais pas tous ; Steam et Python 32 bits butent encore sur des fonctions manquantes.
-- **Gros logiciels** : Paint.NET n'ouvre pas encore sa fenêtre ([docs/PAINTNET.md](docs/PAINTNET.md)) ; Steam ne passe pas encore en ligne ; le client Claude pour Windows démarre mais son affichage reste à valider ([docs/CLAUDE-CHATGPT-WINDOWS.md](docs/CLAUDE-CHATGPT-WINDOWS.md)) ; Photoshop et les jeux Direct3D récents ne sont pas utilisables. Le CLR .NET maison reste un prototype : les applications .NET qui embarquent leur propre runtime vont beaucoup plus loin que celles qui comptent sur lui.
-- **COM et vidéo** : la couverture COM suffit à VLC et à Paint.NET jusqu'où ils vont, mais pas encore à tous les logiciels. **Media Foundation et DirectShow** ne décodent pas encore toute la vidéo pour les `.exe` (le lecteur multimédia intégré, lui, lit tous les formats).
-- **Processus** : `FreeLibrary` laisse la DLL en mémoire jusqu'à la fin du processus.
-- **Sécurité** : le bureau de l'ISO doit encore passer en utilisateur non privilégié.
-- **Bureau** : taille maximale et purge automatique de la corbeille, navigation clavier à compléter, finitions visuelles en cours.
-- **Matériel réel** : veille, capot de portable, débranchement d'un écran externe et large gamme de PC encore à valider.
+- **Programmes 32 bits** : beaucoup démarrent, mais pas tous. La frontière entre le code 32 bits et nos DLL est la première source de défauts (structures à la mauvaise taille, interfaces COM sans mandataire, #2428).
+- **Gros logiciels** : Office, Acrobat, Teams, Creative Cloud et Steam ne vont pas encore au bout (voir plus haut). Les applications à base de Chromium (Electron, WebView2) restent en cours (#236), le contrôle WebBrowser n'exécute pas encore de script (#2784), et WPF n'est pas encore là (#268). Le moteur .NET maison progresse mur par mur : les applications .NET qui embarquent leur propre runtime vont plus loin que celles qui comptent sur lui.
+- **Anti-triche** : les anti-triche en mode noyau sont refusés à l'installation, avec un message clair ; ils ne seront jamais imités.
+- **Matériel réel** : la tablette en UEFI 32 bits ne trouve pas encore le système installé sur son disque interne (#2747), l'écran tactile manque parfois un appui (#2749) ; la veille, le capot de portable et une large gamme de PC restent à valider.
 
 ## Installer Winlux
 
@@ -267,7 +265,7 @@ sh scripts/test-all.sh                   # compilation, tests Rust, PE et script
 sh scripts/test-all.sh --rapide          # sans compilation ni PE (quelques minutes)
 ```
 
-Les défauts trouvés en VM pendant la campagne de tests v0.2.13 ont chacun leur vérification dans `scripts/test-campaign.py`. Une nouvelle vérification va dans son propre fichier `scripts/campagne.d/NNNN-sujet.py` (NNNN = numéro de l'issue, modèle : `0000-dossier-charge.py`), que `test-campaign.py` charge à la fin. Ainsi deux PR n'ajoutent plus leurs lignes au même endroit, et ne se mettent plus en conflit. De même, une nouvelle étape de `scripts/test-all.sh` va dans `scripts/test-all.d/NNNN-sujet.sh` (modèle : `0000-dossier-charge.sh`), qui appelle `step` ou `skip`.
+Chaque défaut trouvé au banc de test a sa vérification de campagne, chargée par `scripts/test-campaign.py`. Une nouvelle vérification va dans son propre fichier `scripts/campagne.d/NNNN-sujet.py` (NNNN = numéro de l'issue, modèle : `0000-dossier-charge.py`) et vérifie un nom ou un comportement, jamais un fragment de code. Ainsi deux PR n'ajoutent plus leurs lignes au même endroit, et ne se mettent plus en conflit. De même, une nouvelle étape de `scripts/test-all.sh` va dans `scripts/test-all.d/NNNN-sujet.sh` (modèle : `0000-dossier-charge.sh`), qui appelle `step` ou `skip`.
 
 La construction de l'ISO demande un hôte **Ubuntu 26.04** avec KVM : elle prépare la base Ubuntu officielle dans une VM jetable, puis assemble l'image. Elle est normalement faite par le workflow de publication. Les commandes, variables et pièges connus sont dans [docs/BUILD.md](docs/BUILD.md), [docs/NATIVE-APT.md](docs/NATIVE-APT.md) et la page [Construire l'ISO](wiki/Construire-l-ISO.md) du wiki.
 

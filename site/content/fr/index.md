@@ -1,7 +1,7 @@
 ---
 title: Accueil
 headline: Les programmes Windows, d'un double-clic, sur Linux
-lead: Winlux est un système d'exploitation libre sur noyau Linux. Vos fichiers `.exe` s'ouvrent d'un double-clic, dans un bureau qui ressemble à celui que vous connaissez, sans machine virtuelle cachée et sans couche de compatibilité empruntée.
+lead: Winlux est un système d'exploitation libre sur noyau Linux. Vos fichiers `.exe` s'ouvrent d'un double-clic, dans un bureau à l'ergonomie familière, sans machine virtuelle cachée et sans couche de compatibilité empruntée.
 description: Winlux, le système libre sur noyau Linux qui ouvre les programmes Windows d'un double-clic. Téléchargement, guide d'installation et applications testées.
 ---
 
@@ -52,6 +52,6 @@ Ce qui fonctionne déjà, ce qui ne fonctionne pas encore, et comment nous le si
 
 ## Où en est le projet
 
-Winlux est une **préversion technique** : le bureau, l'installateur, les mises à jour et beaucoup de programmes Windows 64 bits fonctionnent, mais tous les logiciels ne s'ouvrent pas encore. Les programmes 32 bits, les jeux récents en Direct3D 11 et les applications .NET de bureau (WinForms, WPF) font partie des chantiers en cours. La liste complète est tenue à jour dans le [wiki](wiki:Limites-et-problemes-connus).
+Winlux est une **préversion technique**. La dernière version publiée est la v0.2.21 ; la prochaine sera la v0.3. Le bureau, l'installateur, les mises à jour et beaucoup de programmes Windows 64 et 32 bits fonctionnent, mais tous les logiciels ne s'ouvrent pas encore. Les gros logiciels comme Office, Teams, Acrobat ou Creative Cloud, les applications à base de Chromium et WPF font partie des chantiers en cours. La liste complète est tenue à jour dans le [wiki](wiki:Limites-et-problemes-connus).
 
 Ce site s'adresse à celles et ceux qui découvrent Winlux. Pour comprendre comment il est construit, lisez le [wiki technique](wiki:Home).
