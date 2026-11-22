@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Capture d’écran
+Name[en]=Screenshot
+Name[es]=Captura de pantalla
+Name[de]=Bildschirmfoto
+Comment=Capturer une zone, une fenêtre ou tout l’écran (Windows + Maj + S, Impr. écran)
+Comment[en]=Capture an area, a window or the whole screen (Windows + Shift + S, Print Screen)
+Comment[es]=Capturar una zona, una ventana o toda la pantalla (Windows + Mayús + S, Impr Pant)
+Comment[de]=Einen Bereich, ein Fenster oder den ganzen Bildschirm aufnehmen (Windows + Umschalt + S, Druck)
+Keywords=capture;écran;ecran;screenshot;snip;impr;print;captura;pantalla;Bildschirmfoto;Screenshot;
+Exec=/usr/bin/winlux-capture
+Icon=winlux-capture
+Categories=Utility;
+Terminal=false
