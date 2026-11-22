@@ -57,6 +57,11 @@ static mut CUR: usize = 0;
 /// Motif tapé dans « Nom du fichier » (`*.log`), prioritaire sur le type.
 static mut TYPED: Field = EMPTY_FIELD;
 pub(super) static mut NAME: Field = EMPTY_FIELD;
+/// « Nom du fichier » entièrement sélectionné : la frappe suivante le
+/// remplace. Un contrôle d'édition qui reçoit le focus dans une boîte de
+/// dialogue sélectionne tout son texte (Microsoft Learn, *Dialog Box
+/// Programming Considerations*) ; Ctrl+A fait de même (#2852).
+pub(super) static mut NAME_SELECTED: bool = false;
 static mut DEFEXT: [u8; 32] = [0; 32];
 static mut DEFEXT_LEN: usize = 0;
 static mut RESULT: [u16; PATH_LEN + NAME_LEN + 2] = [0; PATH_LEN + NAME_LEN + 2];
@@ -359,12 +364,15 @@ unsafe fn sync_from_selection() {
         SIG = sig;
         SIG_READY = true;
         FOCUS = Focus::FileName;
+        // Le nom proposé (« nouveau 1.txt ») arrive sélectionné (#2852).
+        NAME_SELECTED = NAME.len > 0;
         return;
     }
     if sig == SIG {
         return;
     }
     SIG = sig;
+    NAME_SELECTED = false;
     if FOLDER {
         // Le dossier sélectionné devient le choix ; aucun, le dossier affiché.
         NAME = EMPTY_FIELD;
@@ -721,6 +729,10 @@ pub(super) unsafe fn draw(g: &mut Gfx, s: &Rect) {
     let active = FOCUS == Focus::FileName;
     field_box(g, &l.name, active);
     let w = l.name.right - l.name.left - 24;
+    if active && NAME_SELECTED {
+        let sw = text_width(NAME.get(), 13).min(w);
+        fill(g.hdc, g.b, l.name.left + 10, l.name.top + 5, l.name.left + 14 + sw, l.name.bottom - 5, p.selected);
+    }
     text_fit(g.hdc, g.f.body, 13, p.text, l.name.left + 12, l.name.top + 8, NAME.get(), w);
     if active && GetTickCount() / 530 % 2 == 0 {
         let cx = l.name.left + 12 + text_width(NAME.get(), 13).min(w);
@@ -863,7 +875,9 @@ pub(super) unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame, status: &Rect) 
     }
     if down {
         if inside(&l.name, x, y) {
+            // Un clic place le point d'insertion : la sélection disparaît.
             FOCUS = Focus::FileName;
+            NAME_SELECTED = false;
         } else if inside(&l.kind, x, y) {
             LIST_OPEN = true;
         } else if inside(&l.ok, x, y) {
@@ -926,6 +940,8 @@ pub(super) unsafe fn key(vk: u32, ch: u16) -> bool {
     // Tab : du nom à la liste et retour.
     if ch == 9 {
         FOCUS = if FOCUS == Focus::FileName { Focus::List } else { Focus::FileName };
+        // Tab vers le champ : il reçoit le focus, son texte est sélectionné (#2852).
+        NAME_SELECTED = FOCUS == Focus::FileName && NAME.len > 0;
         return true;
     }
     false

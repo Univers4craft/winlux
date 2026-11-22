@@ -618,6 +618,11 @@ jobs:
       - name: Consigne du programme dans les boîtes de fichiers (#2400)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-consigne.py
 
+      - name: Nom du fichier sélectionné et remplacé dans Enregistrer sous (#2852)
+        run: |
+          sudo apt-get install -y -q xvfb xauth xdotool || { sudo apt-get update -q && sudo apt-get install -y -q xvfb xauth xdotool; }
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pick-selection.py
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
