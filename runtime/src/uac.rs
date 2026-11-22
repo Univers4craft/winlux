@@ -15,8 +15,9 @@
 //! inscriptibles sans root.
 //!
 //! Compte administrateur : l'élévation est accordée **sans question** (règle
-//! de damien, #1739 : un double-clic lance l'application). La signature de
-//! l'éditeur et l'élévation sont consignées au journal. Compte standard
+//! de damien, #1739 : un double-clic lance l'application). L'élévation est
+//! consignée au journal ; la signature n'est examinée que pour la fenêtre,
+//! qui affiche l'éditeur (#3172). Compte standard
 //! (enfant, invité) : la fenêtre demande le mot de passe d'un
 //! administrateur, comme sous Windows ; c'est un contrôle d'accès entre
 //! comptes, pas une question de confort.
@@ -100,9 +101,9 @@ fn ask(exe: &Path, admin_capable: bool) -> Answer {
         Ok("deny") => return Answer::Refused,
         _ => {}
     }
-    use crate::setup::appx_signature::{examine_pe, Signature};
-    let signature = examine_pe(exe);
-    crate::log_info!("uac", "signature de {} : {signature:?}", exe.display());
+    // Aucune fenêtre : rien ne dépend de la signature. L'examiner lisait tout
+    // l'installateur, puis le copiait pour le condensat, avant son lancement
+    // (pic de deux fois sa taille, 0,4 s pour 191 Mo, #3172).
     if !shows_dialog(admin_capable) {
         return Answer::Allowed;
     }
@@ -111,6 +112,9 @@ fn ask(exe: &Path, admin_capable: bool) -> Answer {
     let Some(helper) = helper().filter(|_| has_display) else {
         return Answer::Unavailable;
     };
+    use crate::setup::appx_signature::{examine_pe, Signature};
+    let signature = examine_pe(exe);
+    crate::log_info!("uac", "signature de {} : {signature:?}", exe.display());
     let name = exe
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -280,5 +284,50 @@ mod tests {
     fn fenetre_seulement_pour_un_compte_standard() {
         assert!(!shows_dialog(true));
         assert!(shows_dialog(false));
+    }
+
+    /// #3172 : un administrateur ne voit aucune fenêtre, donc rien de
+    /// l'installateur n'est lu avant son lancement. Fichier creux de 64 Mo :
+    /// moins de 1 Mo lu par ce fil, réponse immédiate.
+    #[test]
+    fn administrateur_lance_sans_lire_l_installateur_3172() {
+        if std::env::var_os("WINLUX_UAC").is_some() {
+            return;
+        }
+        fn lus() -> u64 {
+            std::fs::read_to_string("/proc/thread-self/io")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("rchar:"))
+                        .and_then(|l| l[6..].trim().parse().ok())
+                })
+                .unwrap_or(0)
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-uac-3172-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("Setup.exe");
+        let mut head = vec![0u8; 0x200];
+        head[..2].copy_from_slice(b"MZ");
+        std::fs::write(&exe, &head).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&exe)
+            .unwrap()
+            .set_len(64 << 20)
+            .unwrap();
+        let before = lus();
+        let start = std::time::Instant::now();
+        let answer = ask(&exe, true);
+        let elapsed = start.elapsed();
+        let read = lus() - before;
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("administrateur : {answer:?}, {read} octets lus, {elapsed:?}");
+        assert_eq!(answer, Answer::Allowed);
+        assert!(read < 1 << 20, "{read} octets lus avant le lancement");
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "{elapsed:?}"
+        );
     }
 }
