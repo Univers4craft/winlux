@@ -209,7 +209,39 @@ def grid_layout(count, width, height):
     return columns, thumb_h * THUMB_MAX[0] // THUMB_MAX[1], thumb_h
 
 
+def _pid_file():
+    """Fichier de la vue ouverte, propre au compte (#3074)."""
+    folder = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/winlux-{os.getuid()}"
+    display = "".join(c for c in os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0] if c.isdigit()) or "0"
+    return os.path.join(folder, f"winlux-taskview-{display}.pid")
+
+
+def running_view(path):
+    """Pid d'une vue des tâches encore vivante, sinon None."""
+    try:
+        with open(path, encoding="ascii") as handle:
+            pid = int(handle.read().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            command = handle.read()
+    except (OSError, ValueError):
+        return None
+    return pid if pid != os.getpid() and b"winlux-taskview" in command else None
+
+
 def run_view():
+    # Une seule vue par écran (#3074) : un second appel ferme la première.
+    path = _pid_file()
+    other = running_view(path)
+    if other is not None:
+        try: os.kill(other, 15)
+        except OSError: pass
+        return 0
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, "w", encoding="ascii") as handle:
+            handle.write(f"{os.getpid()}\n")
+    except OSError:
+        pass
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
@@ -237,6 +269,10 @@ def run_view():
             self.set_decorated(False)
             self.set_keep_above(True)
             self.set_skip_taskbar_hint(True)
+            # Sur tous les bureaux (#3074) : « Nouveau bureau » ou la suppression
+            # du bureau courant changent de bureau, la vue doit suivre au lieu
+            # de rester cachée sur l'ancien, hors de portée d'Échap.
+            self.stick()
             screen = self.get_screen()
             visual = screen.get_rgba_visual()
             if visual is not None and screen.is_composited(): self.set_visual(visual)
@@ -387,8 +423,10 @@ def run_view():
                     menu.show_all()
                     menu.popup_at_pointer(event)
                 elif event.button == 1:
+                    # Choisir un bureau y mène et ferme la vue (#3074).
+                    self.hide()
                     _run(["wmctrl", "-s", str(number)])
-                    GLib.timeout_add(150, self.refresh_later)
+                    Gtk.main_quit()
                 return True
             event.connect("button-release-event", clicked)
             return event
@@ -416,9 +454,16 @@ def run_view():
             Gtk.main_quit()
             return True
 
+    import signal
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda: (Gtk.main_quit(), False)[1])
     view = View()
     view.present()
-    Gtk.main()
+    try:
+        Gtk.main()
+    finally:
+        if running_view(path) is None:
+            try: os.unlink(path)
+            except OSError: pass
     return 0
 
 

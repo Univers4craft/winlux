@@ -8,7 +8,8 @@
 //   5. molette : WM_MOUSEWHEEL vers le bas ;
 //   6. keybd_event(VK_B) : WM_CHAR « b ».
 // Avec « refus » sur la ligne de commande : l'autorisation n'est pas
-// accordée, SendInput rend 0 et ERROR_ACCESS_DENIED (test 7).
+// accordée, SendInput rend 0 et ERROR_ACCESS_DENIED (test 7), tout de suite,
+// même si la fenêtre de demande met du temps à répondre (test 8, #3099).
 // Code de sortie : 0 si tout passe, sinon le numéro du premier test raté.
 typedef unsigned int u32;
 typedef unsigned short u16;
@@ -145,7 +146,12 @@ void entry(void) {
     if (has(GetCommandLineW(), refus)) {
         in[0] = key(0x41, 0, 0);
         SetLastError(0);
+        u32 start = GetTickCount();
         if (SendInput(1, in, sizeof(Input)) != 0 || GetLastError() != 5) ExitProcess(7);
+        // Refusé tout de suite, jamais après une fenêtre de demande (#3099).
+        if (GetTickCount() - start > 2000) ExitProcess(8);
+        // L'application continue : la fenêtre de demande a le temps de partir.
+        pump(1000);
         ExitProcess(0);
     }
 
