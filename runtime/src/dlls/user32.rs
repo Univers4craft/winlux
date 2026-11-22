@@ -511,6 +511,9 @@ unsafe fn create_window_inner(
             } else if let Some(level) = popup_decorations(style) {
                 b.set_decorations(hwnd, level);
             }
+            if fixed_size_frame(style) {
+                b.set_resizable(hwnd, false);
+            }
             // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
             // sous Windows (boîte « Vie privée » de VLC, #1068).
             let owner = owner_top_level(parent);
@@ -2623,6 +2626,10 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
         GWL_STYLE => {
             if gui::set_window_style(hwnd, value as u32).is_some_and(|o| o != value as u32) {
                 publish_shared(hwnd);
+                let style = value as u32;
+                if style & WS_CHILD == 0 {
+                    with_backend(|b| b.set_resizable(hwnd, !fixed_size_frame(style)));
+                }
             }
         }
         GWL_EXSTYLE => {
@@ -5826,8 +5833,42 @@ fn popup_decorations(style: u32) -> Option<u8> {
     ))
 }
 
+/// Fenêtre de premier niveau à barre de titre que l'utilisateur ne peut ni
+/// redimensionner ni agrandir (#3011). D'après « Window Styles » (Learn),
+/// le cadre de redimensionnement vient de WS_THICKFRAME et le bouton
+/// Agrandir de WS_MAXIMIZEBOX : une boîte de message (WS_POPUP |
+/// WS_CAPTION | WS_SYSMENU | DS_MODALFRAME) n'a ni l'un ni l'autre.
+fn fixed_size_frame(style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+    style & WS_CHILD == 0
+        && style & WS_CAPTION == WS_CAPTION
+        && style & (WS_THICKFRAME | WS_MAXIMIZEBOX) == 0
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// #3011 : une boîte de message ou un dialogue fixe n'est pas
+    /// redimensionnable ; une fenêtre principale, une fenêtre avec Agrandir,
+    /// une fenêtre sans barre de titre ou un enfant gardent leur cadre.
+    #[test]
+    fn cadre_fixe_sans_bouton_agrandir_3011() {
+        use super::fixed_size_frame;
+        // MessageBox : WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME.
+        assert!(fixed_size_frame(0x80C8_0080));
+        // Dialogue WS_CAPTION | WS_SYSMENU sans cadre épais.
+        assert!(fixed_size_frame(0x00C8_0000));
+        // WS_OVERLAPPEDWINDOW.
+        assert!(!fixed_size_frame(0x00CF_0000));
+        // Barre de titre et Agrandir, sans cadre épais.
+        assert!(!fixed_size_frame(0x00C9_0000));
+        // WS_POPUP sans barre de titre (menu, fenêtre dessinée par l'appli).
+        assert!(!fixed_size_frame(0x8000_0000));
+        // Enfant à barre de titre (MDI).
+        assert!(!fixed_size_frame(0x40C0_0000));
+    }
 
     /// #1761 : une palette flottante (WS_CAPTION + WS_EX_TOOLWINDOW) est une
     /// fenêtre outil ; une fenêtre ordinaire, un enfant ou un menu non.

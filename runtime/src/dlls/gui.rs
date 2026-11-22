@@ -3341,6 +3341,11 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// Fenêtre de premier niveau que l'utilisateur ne peut ni
+    /// redimensionner ni agrandir (barre de titre sans WS_THICKFRAME ni
+    /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
+    /// Le programme garde le droit de changer lui-même sa taille.
+    fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
@@ -5015,7 +5020,7 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let taken = loop {
         let m = {
             let mut items = lock(&q.items);
-            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            let idx = next_index(&items, hwnd, min, max)?;
             items.remove(idx)?
         };
         // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
@@ -5098,10 +5103,37 @@ pub fn prepend_message(q: &Queue, m: Msg) {
 /// Regarde sans retirer.
 pub fn peek_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let items = lock(&q.items);
-    items
+    next_index(&items, hwnd, min, max).map(|i| items[i])
+}
+
+/// Message clavier ou souris venu du matériel (classe « entrée » de GetMessage).
+fn is_input_message(message: u32) -> bool {
+    (0x0100..=0x0109).contains(&message)
+        || (0x0200..=0x020E).contains(&message)
+        || (0x00A0..=0x00AD).contains(&message)
+}
+
+/// WM_CHAR, WM_DEADCHAR, WM_SYSCHAR, WM_SYSDEADCHAR : postés par TranslateMessage.
+fn is_char_message(message: u32) -> bool {
+    matches!(message, 0x0102 | 0x0103 | 0x0106 | 0x0107)
+}
+
+/// Rang du prochain message à livrer. GetMessage sert les messages postés
+/// avant les entrées clavier et souris (Learn, GetMessage, Remarques) : le
+/// caractère que TranslateMessage vient de poster passe donc devant la touche
+/// suivante déjà en file, sinon Entrée arrivait avant le « . » tapé juste
+/// avant (#3072). Hors ce cas, l'ordre d'arrivée est gardé.
+fn next_index(items: &VecDeque<Msg>, hwnd: usize, min: u32, max: u32) -> Option<usize> {
+    let mut matching = items
         .iter()
-        .find(|m| match_filter(m, hwnd, min, max))
-        .copied()
+        .enumerate()
+        .filter(|(_, m)| match_filter(m, hwnd, min, max));
+    let (first, m) = matching.next()?;
+    if !is_input_message(m.message) {
+        return Some(first);
+    }
+    let char_after = matching.find(|(_, m)| is_char_message(m.message));
+    Some(char_after.map_or(first, |(i, _)| i))
 }
 
 fn match_filter(m: &Msg, hwnd: usize, min: u32, max: u32) -> bool {
@@ -6273,6 +6305,45 @@ pub(crate) mod tests {
             "Alt+F4 doit poster WM_CLOSE"
         );
 
+        destroy_window(hwnd);
+    }
+
+    /// #3072 : le WM_CHAR que TranslateMessage poste passe devant la touche
+    /// suivante déjà en file (Entrée), comme les messages postés devant les
+    /// entrées sous Windows. Un autre message posté garde son rang.
+    #[test]
+    fn le_caractere_traduit_passe_devant_la_touche_suivante_deja_en_file() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        let (point, lp_point) = (0xBE, (0x34isize << 16) | 1);
+        let lp_entree = (0x1Cisize << 16) | 1;
+        set_key_char(hwnd, point, lp_point, Some(b'.' as u16));
+        let touche = Msg::new(hwnd, WM_KEYDOWN, point, lp_point);
+        observe_key_message(&touche);
+        // Entrée est arrivée du serveur X avant que l'application traduise « . ».
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        assert_eq!(
+            unsafe { crate::dlls::user32::translate_message(&touche) },
+            1
+        );
+        let vu = peek_message(&q, hwnd, 0, 0).expect("message en file");
+        assert_eq!((vu.message, vu.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("WM_CHAR");
+        assert_eq!((pris.message, pris.wparam), (WM_CHAR, b'.' as usize));
+        let pris = take_message(&q, hwnd, 0, 0).expect("Entrée");
+        assert_eq!((pris.message, pris.wparam), (WM_KEYDOWN, VK_RETURN));
+        // Un message posté qui n'est pas un caractère reste derrière l'entrée.
+        post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, VK_RETURN, lp_entree));
+        post_to_window(hwnd, Msg::new(hwnd, 0x0400, 7, 0));
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(WM_KEYDOWN)
+        );
+        assert_eq!(
+            take_message(&q, hwnd, 0, 0).map(|m| m.message),
+            Some(0x0400)
+        );
+        discard_key_chars(hwnd);
         destroy_window(hwnd);
     }
 
