@@ -9,8 +9,10 @@ Learn (« Window Styles ») et la KB Q130760 de Microsoft, Windows montre :
 Les boutons sont les sous-fenêtres carrées visibles du cadre d'openbox
 (disposition « LIMC », sans icône), de gauche à droite. Un bouton grisé est
 dessiné avec une couleur « disabled » du thème Winlux. La fonction Réduire
-reste offerte (_NET_WM_ALLOWED_ACTIONS) : le programme peut toujours réduire
-sa fenêtre lui-même.
+reste offerte (_NET_WM_ALLOWED_ACTIONS), et le programme réduit toujours
+lui-même sa fenêtre sans bouton Réduire : relancé avec « reduire », il appelle
+ShowWindow(BoutonsFixe, SW_MINIMIZE) et la fenêtre doit passer à l'état
+iconique (WM_STATE), seul risque de régression de ce correctif.
 
     WINLUX_OPENBOX=build/openbox/openbox python3 scripts/test-openbox-boutons.py
 """
@@ -149,6 +151,24 @@ def main():
             print("BoutonsFixe :", actions.strip())
             if "_NET_WM_ACTION_MINIMIZE" not in actions:
                 print("ÉCHEC : le programme doit pouvoir encore réduire sa fenêtre (ShowWindow)"); fail = 1
+            # ShowWindow(SW_MINIMIZE) sur une fenêtre sans bouton Réduire.
+            program.kill(); program.wait()
+            for _ in range(50):
+                if not frame_of("BoutonsFixe")[0]:
+                    break
+                time.sleep(0.1)
+            program = subprocess.Popen([str(WINLUX), str(exe), "reduire"], cwd=work, stdout=out, stderr=out)
+            procs.append(program)
+            state = ""
+            for _ in range(100):
+                client = frame_of("BoutonsFixe")[1]
+                state = run("xprop", "-id", client, "WM_STATE").stdout if client else ""
+                if "Iconic" in state:
+                    break
+                time.sleep(0.1)
+            print("BoutonsFixe après ShowWindow(SW_MINIMIZE) :", " ".join(state.split()))
+            if "Iconic" not in state:
+                print("ÉCHEC : ShowWindow(SW_MINIMIZE) ne réduit plus une fenêtre sans bouton Réduire"); fail = 1
             if fail:
                 print((work / "out.txt").read_text(errors="replace")[-2000:]); return 1
             print("Boutons Réduire et Agrandir selon le style Win32 (#3064)")

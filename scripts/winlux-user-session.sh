@@ -81,11 +81,14 @@ if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$
 
 # Gestionnaire de fenêtres lancé tout de suite : il démarre pendant le son
 # et le service de fichiers, attendu seulement avant la barre des tâches.
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
 rc="$HOME/.config/openbox/rc.xml"
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
 if test -f "$rc"; then
-    /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
 else
-    /usr/bin/openbox --sm-disable >"$logs/window-manager.log" 2>&1 &
+    "$wm" --sm-disable >"$logs/window-manager.log" 2>&1 &
 fi
 wm_pid=$!
 pids="$pids $wm_pid"

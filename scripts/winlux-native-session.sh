@@ -79,15 +79,10 @@ if test -e "$early_failed"; then
 fi
 test -e "$early_done" || early_services
 # Gestionnaire de fenêtres lancé d'emblée : il est prêt quand la barre arrive.
-# L'openbox de Winlux (boutons Réduire et Agrandir selon le style Win32,
-# #3064) ; celui d'Ubuntu s'il manque ou ne démarre plus, par exemple si
-# une mise à jour d'Ubuntu changeait ses bibliothèques.
-window_manager=/usr/lib/winlux/openbox/openbox
-if ! test -x "$window_manager" || ! "$window_manager" --version >/dev/null 2>&1; then
-    echo "openbox de Winlux indisponible : openbox d'Ubuntu" >&2
-    window_manager=/usr/bin/openbox
-fi
-"$window_manager" --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
+# Openbox de Winlux, ou celui d'Ubuntu en repli (#3064).
+wm=/usr/lib/winlux/winlux-openbox
+test -x "$wm" || wm=/usr/bin/openbox
+"$wm" --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.

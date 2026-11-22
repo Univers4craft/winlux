@@ -151,6 +151,7 @@ if test -z "$openbox_bin"; then
     openbox_bin=$root/build/openbox/openbox
 fi
 install -D -m 755 "$openbox_bin" "$stage/usr/lib/winlux/openbox/openbox"
+install -D -m 755 "$root/scripts/winlux-openbox.sh" "$stage/usr/lib/winlux/winlux-openbox"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
