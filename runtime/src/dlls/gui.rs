@@ -5483,9 +5483,10 @@ pub fn enum_top_level_windows() -> Vec<usize> {
 /// Fenêtres de premier niveau de **tous** les processus du compte, du
 /// sommet vers le fond (EnumWindows, GetWindow, FindWindow, #2046), sans
 /// les fenêtres message-only. L'ordre est celui du gestionnaire de fenêtres
-/// (`_NET_CLIENT_LIST_STACKING`) ; viennent ensuite les fenêtres qu'il ne
-/// gère pas (cachées) : celles de ce processus dans son ordre Z, puis celles
-/// des autres, la plus récente d'abord.
+/// (`_NET_CLIENT_LIST_STACKING`), sous nos fenêtres surgissantes visibles
+/// qu'il ne gère pas (override-redirect, #3110) ; viennent ensuite les
+/// fenêtres qu'il ne gère pas (cachées) : celles de ce processus dans son
+/// ordre Z, puis celles des autres, la plus récente d'abord.
 pub fn all_top_level_windows() -> Vec<usize> {
     let own: Vec<usize> = enum_top_level_windows()
         .into_iter()
@@ -5498,15 +5499,24 @@ pub fn all_top_level_windows() -> Vec<usize> {
         stacking = b.client_stacking();
         own_tops = own.iter().map(|&h| b.native_top_window(h)).collect();
     });
-    merge_z_order(&stacking, &own, &own_tops, &foreign)
+    let own_shown: Vec<bool> = own.iter().map(|&h| is_window_visible(h)).collect();
+    merge_z_order(&stacking, &own, &own_tops, &own_shown, &foreign)
 }
 
 /// Fusion de l'ordre Z (voir `all_top_level_windows`). `stacking` va du
-/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`.
+/// fond vers le sommet ; `own_tops[i]` est la fenêtre X11 gérée de `own[i]`,
+/// `own_shown[i]` dit si elle est visible.
+///
+/// Une fenêtre à nous visible mais absente de la pile du gestionnaire est
+/// une fenêtre surgissante override-redirect (menu, liste déroulante) :
+/// affichée au-dessus des fenêtres gérées, elle passe en tête. Classée
+/// après elles, WindowFromPoint rendait la fenêtre principale pour un point
+/// du menu de Qt, qui livrait le clic à la mauvaise fenêtre (#3110).
 fn merge_z_order(
     stacking: &[u64],
     own: &[usize],
     own_tops: &[Option<u64>],
+    own_shown: &[bool],
     foreign: &[super::gui_shared::Listed],
 ) -> Vec<usize> {
     let rank: HashMap<u64, usize> = stacking
@@ -5515,8 +5525,9 @@ fn merge_z_order(
         .filter(|(_, &x)| x != 0)
         .map(|(i, &x)| (x, i))
         .collect();
-    // Clé : (0, sommet d'abord) pour les fenêtres gérées, (1, ordre) pour
-    // les nôtres non gérées, (2, HWND décroissant) pour les autres.
+    // Clé : (0, ordre) pour les nôtres visibles non gérées (surgissantes),
+    // (1, sommet d'abord) pour les fenêtres gérées, (2, ordre) pour les
+    // nôtres cachées, (3, HWND décroissant) pour les autres.
     let mut keyed: Vec<((u8, usize), usize)> = Vec::with_capacity(own.len() + foreign.len());
     for (i, &h) in own.iter().enumerate() {
         let key = match own_tops
@@ -5525,16 +5536,17 @@ fn merge_z_order(
             .flatten()
             .and_then(|x| rank.get(&x))
         {
-            Some(&r) => (0, usize::MAX - r),
-            None => (1, i),
+            Some(&r) => (1, usize::MAX - r),
+            None if own_shown.get(i).copied().unwrap_or(false) => (0, i),
+            None => (2, i),
         };
         keyed.push((key, h));
     }
     for l in foreign {
         let top = if l.f.top != 0 { l.f.top } else { l.f.xid };
         let key = match rank.get(&top) {
-            Some(&r) => (0, usize::MAX - r),
-            None => (2, usize::MAX - l.hwnd),
+            Some(&r) => (1, usize::MAX - r),
+            None => (3, usize::MAX - l.hwnd),
         };
         keyed.push((key, l.hwnd));
     }
@@ -7428,14 +7440,32 @@ mod tests_survol {
             listed(0x5_0002, 0),
             listed(0x5_0003, 0x77),
         ];
+        let hidden = [false; 4];
         assert_eq!(
-            merge_z_order(&stacking, &own, &own_tops, &foreign),
+            merge_z_order(&stacking, &own, &own_tops, &hidden, &foreign),
             vec![0x4_0002, 0x5_0001, 0x4_0001, 0x4_0003, 0x4_0004, 0x5_0003, 0x5_0002]
         );
         // Sans serveur X : notre ordre, puis les autres.
         assert_eq!(
-            merge_z_order(&[], &own[..2], &[None, None], &foreign[..1]),
+            merge_z_order(&[], &own[..2], &[None, None], &hidden[..2], &foreign[..1]),
             vec![0x4_0001, 0x4_0002, 0x5_0001]
+        );
+    }
+
+    /// #3110 : un menu override-redirect visible (absent de la pile du
+    /// gestionnaire) passe au-dessus de la fenêtre principale gérée ; une
+    /// fenêtre cachée non gérée reste dessous.
+    #[test]
+    fn menu_surgissant_visible_au_dessus_des_fenetres_gerees() {
+        use super::merge_z_order;
+        let stacking = [0x10, 0x11];
+        // Principale gérée, menu visible non géré, fenêtre cachée.
+        let own = [0x4_0001, 0x4_0002, 0x4_0003];
+        let own_tops = [Some(0x11), None, None];
+        let shown = [true, true, false];
+        assert_eq!(
+            merge_z_order(&stacking, &own, &own_tops, &shown, &[]),
+            vec![0x4_0002, 0x4_0001, 0x4_0003]
         );
     }
 
