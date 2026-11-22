@@ -62,6 +62,11 @@ for name in hello exitcode p1_suite dll_import dll_deps ntdll_exports register_w
         # Magasin des tâches sous une racine jetable, jamais le vrai (#2230).
         mkdir -p "$power_root/taches"
         WINLUX_ADMIN_ROOT="$power_root/taches" WINLUX_GUI=headless "$runtime" "$exe"
+    elif [ "$name" = fil_etranger ]; then
+        # L'enfant écrit fil_etranger.tid dans le dossier courant : un dossier
+        # jetable, car celui du test live peut être en lecture seule.
+        mkdir -p "$power_root/fil_etranger"
+        (cd "$power_root/fil_etranger" && WINLUX_GUI=headless "$runtime" "$exe")
     elif [ "$name" = winpaths ]; then
         WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" WINLUX_WINPATHS_KEEP=1 \
             WINLUX_GUI=headless "$runtime" "$exe"
