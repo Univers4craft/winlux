@@ -354,6 +354,17 @@ EOF_ARGS
         ;;
 esac
 
+# Installateur mené à bien : noté pour le compte, le menu Démarrer ne le
+# propose plus dans « À faire » (« Pas encore installé », #2903). Une
+# ligne par chemin, les 200 derniers.
+note_installer() {
+    mkdir -p "$state" 2>/dev/null || return 0
+    done_list="$state/installateurs-termines"
+    { grep -Fxv -- "$exe" "$done_list" 2>/dev/null; printf '%s\n' "$exe"; } | tail -n 200 >"$done_list.tmp" \
+        && mv -f "$done_list.tmp" "$done_list"
+    return 0
+}
+
 # Nom de l'appli installée, lu dans le journal du runtime (« setup : Claude
 # est installé. ») ; à défaut, le nom du fichier de l'installateur.
 installed_name() {
@@ -388,6 +399,7 @@ run_wizard() {
     status=$?
     [ "$wizard_code" = /dev/null ] || full_code=$(read_code_file "$wizard_code")
     if [ "$status" -eq 0 ] || [ "$full_code" = 0x00000BC2 ]; then
+        note_installer
         command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
         exit 0
     fi
@@ -434,6 +446,7 @@ case "$exe" in
         "$winlux" --msiexec /i "$exe" /qb "$@" >"$log" 2>&1
         status=$?
         if [ "$status" -eq 0 ]; then
+            note_installer
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             show_message "« $(installed_name) » est installé." info
         else
@@ -485,6 +498,7 @@ case "$kind" in
             if [ "$kind" = uninstall ]; then
                 show_message "Le programme est désinstallé." info
             else
+                note_installer
                 show_message "« $(installed_name) » est installé." info
             fi
             exit 0
