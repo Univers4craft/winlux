@@ -11926,6 +11926,9 @@ unsafe fn duplicate_local(
     } else if let Some(h) = crate::dlls::electron_win32::duplicate_user_object(src_handle) {
         // Station de fenêtres ou bureau (#2443).
         Some(h)
+    } else if let Some(h) = crate::dlls::object_directory::duplicate(src_handle) {
+        // Répertoire d'objets ouvert par NtOpenDirectoryObject (#3004).
+        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le
