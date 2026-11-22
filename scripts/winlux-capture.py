@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Capture d'écran (Windows + Maj + S, Impr. écran), comme l'outil de Windows 11.
+"""Capture d'écran (Windows + Maj + S, Impr. écran).
 
 L'écran se fige et s'assombrit ; une barre en haut choisit le mode
 (rectangle, fenêtre, plein écran). La capture est copiée dans le
