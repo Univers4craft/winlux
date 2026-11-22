@@ -282,6 +282,9 @@ impl Family {
 struct Args {
     uri: String,
     nav: u64,
+    /// Code HTTP de la navigation (NavigationCompleted, #2966), 0 sans
+    /// requête HTTP ni réponse.
+    http_status: i32,
     /// En-têtes de la requête (NavigationStarting, #2964).
     headers: Vec<(String, String)>,
     ok: bool,
@@ -1674,6 +1677,7 @@ impl View {
                     nav,
                     ok: get_bool(&ev, "ok"),
                     status: if get_bool(&ev, "ok") { 0 } else { 2 },
+                    http_status: get_num(&ev, "status") as i32,
                     ..Default::default()
                 },
             ),
@@ -2803,6 +2807,14 @@ unsafe extern "win64" fn args_status(this: usize, out: *mut i32) -> i32 {
     *out = args(this).status;
     S_OK
 }
+/// NavigationCompletedEventArgs2::HttpStatusCode (#2966).
+unsafe extern "win64" fn args_http_status(this: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = args(this).http_status;
+    S_OK
+}
 unsafe extern "win64" fn args_json(this: usize, out: *mut *mut u16) -> i32 {
     co_string(&args(this).json, out)
 }
@@ -2842,6 +2854,7 @@ fn nav_completed_methods() -> Vec<(usize, usize)> {
         (0, args_ok as *const () as usize),
         (1, args_status as *const () as usize),
         (2, args_nav_id as *const () as usize),
+        (3, args_http_status as *const () as usize),
     ]
 }
 fn message_methods() -> Vec<(usize, usize)> {
@@ -3260,6 +3273,36 @@ mod tests {
         assert_ne!(x, z);
         com_release(a);
         com_release(b);
+    }
+
+    /// #2966 : HttpStatusCode (NavigationCompletedEventArgs2, entrée 3)
+    /// rend le code que le moteur a lu, 0 sans requête HTTP.
+    #[test]
+    fn code_http_de_navigation_2966() {
+        let v = vtable(Family::NavCompleted);
+        assert_eq!(v[3 + 3], args_http_status as *const () as usize);
+        assert!(NAV_COMPLETED_ARGS_SLOTS > 3 + 3);
+        let ev = parse_flat(r#"{"ev":"nav_completed","nav":2,"ok":true,"status":404}"#).unwrap();
+        assert_eq!(get_num(&ev, "status") as i32, 404);
+        for code in [404, 200, 0] {
+            let a = new_com(
+                Family::NavCompleted,
+                None,
+                None,
+                Args {
+                    ok: true,
+                    http_status: code,
+                    ..Default::default()
+                },
+            );
+            let mut got = -1i32;
+            unsafe {
+                assert_eq!(args_http_status(a, &mut got), S_OK);
+                assert_eq!(args_http_status(a, std::ptr::null_mut()), E_POINTER);
+            }
+            assert_eq!(got, code);
+            com_release(a);
+        }
     }
 
     /// #2637 : le gestionnaire de cookies crée, range, rend et retire les
