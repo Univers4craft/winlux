@@ -63,6 +63,33 @@ pub(crate) fn is_directory(h: usize) -> bool {
     path_of(h).is_some()
 }
 
+/// DuplicateHandle (#3004) : un nouveau numéro pour le même répertoire.
+/// Fermer l'un ne ferme pas l'autre. Le broker du bac à sable de Chromium
+/// ouvre un répertoire puis en donne une copie à son enfant.
+#[track_caller]
+pub(crate) fn duplicate(h: usize) -> Option<usize> {
+    let path = path_of(h)?;
+    let copy = crate::dlls::kernel32::new_handle_number();
+    lock().get_or_insert_with(HashMap::new).insert(copy, path);
+    Some(copy)
+}
+
+/// Chemin à transmettre à un autre processus (`inherit::describe`, #3004).
+pub(crate) fn export(h: usize) -> Option<String> {
+    path_of(h)
+}
+
+/// Reprend dans ce processus, au numéro `h`, un répertoire transmis par un
+/// autre (`inherit::adopt_one`, #3004). Seul un chemin que ce module sait
+/// ouvrir est repris.
+pub(crate) fn adopt(h: usize, path: String) -> bool {
+    if !known(&path) {
+        return false;
+    }
+    lock().get_or_insert_with(HashMap::new).insert(h, path);
+    true
+}
+
 /// Nom lu dans OBJECT_ATTRIBUTES (x64 : RootDirectory +0x8, ObjectName +0x10).
 unsafe fn requested(attrs: *const u8) -> Result<String, i32> {
     if attrs.is_null() {
@@ -170,6 +197,47 @@ mod tests {
         assert!(!is_directory(h));
         assert_eq!(crate::dlls::kernel32::close_handle(h2), 1);
         assert!(!is_directory(h2));
+    }
+
+    /// #3004 : DuplicateHandle d'un répertoire rend un handle distinct vers
+    /// le même chemin ; fermer l'original ne ferme pas la copie ; la copie
+    /// se décrit et se reprend comme dans un autre processus.
+    #[test]
+    fn copie_d_un_repertoire_d_objets_3004() {
+        let name = wide("\\Sessions\\1\\BaseNamedObjects");
+        let (mut us, mut oa) = ([0u8; 16], [0u8; 48]);
+        attributes(0, &name, &mut us, &mut oa);
+        let mut h = 0usize;
+        let st = unsafe { nt_open_directory_object(&mut h, 0xF, oa.as_ptr()) };
+        assert_eq!(st, STATUS_SUCCESS);
+
+        let mut copie = 0usize;
+        let me = crate::dlls::kernel32::get_current_process();
+        let ok = unsafe { crate::dlls::kernel32::duplicate_handle(me, h, me, &mut copie, 0, 0, 2) };
+        assert_eq!(ok, 1, "DuplicateHandle d'un répertoire d'objets");
+        assert_ne!(copie, h);
+        assert_eq!(
+            crate::dlls::kernel32::object_type_name(copie),
+            Some("Directory")
+        );
+        assert_eq!(crate::dlls::kernel32::close_handle(h), 1);
+        assert!(!is_directory(h));
+        assert_eq!(
+            export(copie).as_deref(),
+            Some("\\Sessions\\1\\BaseNamedObjects")
+        );
+
+        let (desc, fds) = crate::dlls::inherit::describe(copie, false).expect("transmissible");
+        assert!(fds.is_empty());
+        assert!(close(copie));
+        let repris = crate::dlls::inherit::adopt_one(&desc, 0, |_| None).expect("repris");
+        assert_eq!(repris, copie);
+        assert!(is_directory(repris));
+        assert!(close(repris));
+
+        // Un chemin que Winlux ne sait pas ouvrir n'est pas repris.
+        assert!(!adopt(0x7ff0_1000, "\\Inexistant".into()));
+        assert!(!is_directory(0x7ff0_1000));
     }
 
     #[test]

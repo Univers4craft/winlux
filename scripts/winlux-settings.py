@@ -12,6 +12,15 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, Gtk, GLib
 
+# Bytecode des pages dans le cache du compte (Gain #3027) : installées dans
+# /usr/bin, non inscriptible, winlux-settings-pages et la dizaine de pages
+# livrées à part étaient recompilées à chaque ouverture (~140 ms). Python
+# relit le source quand il a changé ; sans cache inscriptible, rien ne change.
+# Après GTK : les modules du système gardent leur bytecode installé.
+if sys.pycache_prefix is None:
+    sys.pycache_prefix = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+                                      "winlux", "pycache")
+
 
 _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
 
