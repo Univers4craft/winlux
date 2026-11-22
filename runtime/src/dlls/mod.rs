@@ -318,6 +318,7 @@ pub mod weak_ref;
 pub mod webbrowser;
 pub mod webservices;
 pub mod webview2;
+pub mod webview2_entetes;
 pub mod webview2_iids;
 pub mod wer;
 pub mod wer_inscriptions;
