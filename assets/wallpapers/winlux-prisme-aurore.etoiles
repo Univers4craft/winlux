@@ -1,5 +1,7 @@
 # Étoiles de winlux-prisme-aurore (render-brand.py) : x y éclat, x et y
 # relatifs à l'image (0 à 1), éclat de 40 à 150. Lu par winlux-fond-anime.
+# Lignes « empreinte x y r g b » : couleur moyenne de l'image Aurore sombre
+# en ces points, pour la reconnaître quel que soit le nom du fichier.
 0.085649 0.094538 60.6
 0.236811 0.376798 126.8
 0.801274 0.067717 45.0
@@ -230,3 +232,23 @@
 0.434180 0.103720 75.1
 0.435799 0.325708 52.8
 0.562361 0.008889 131.9
+empreinte 0.10 0.15 22.1 21.2 49.9
+empreinte 0.30 0.15 32.0 34.0 67.7
+empreinte 0.50 0.15 39.2 42.5 86.2
+empreinte 0.70 0.15 31.4 43.0 73.1
+empreinte 0.90 0.15 19.4 29.5 53.0
+empreinte 0.10 0.55 45.9 39.5 98.3
+empreinte 0.30 0.55 64.6 67.2 147.2
+empreinte 0.50 0.55 85.2 108.2 210.4
+empreinte 0.70 0.55 61.2 117.8 209.0
+empreinte 0.90 0.55 34.8 80.3 134.9
+empreinte 0.10 0.72 34.3 26.5 88.6
+empreinte 0.30 0.72 15.5 12.2 48.4
+empreinte 0.50 0.72 17.6 13.3 52.7
+empreinte 0.70 0.72 15.7 11.9 48.4
+empreinte 0.90 0.72 16.0 14.0 51.0
+empreinte 0.10 0.90 19.4 14.3 56.6
+empreinte 0.30 0.90 19.4 14.2 56.6
+empreinte 0.50 0.90 19.3 14.3 56.7
+empreinte 0.70 0.90 19.3 14.2 56.6
+empreinte 0.90 0.90 19.4 14.2 56.6

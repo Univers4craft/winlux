@@ -152,7 +152,8 @@ env = dict(os.environ, XDG_CONFIG_HOME=str(work / "config"), WINLUX_FOND_ANIME_X
 
 
 def wallpaper(name):
-    xfconf.write_text(f"/backdrop/screen0/monitorscreen/workspace0/last-image   /usr/share/winlux/wallpapers/{name}\n")
+    path = name if name.startswith("/") else f"/usr/share/winlux/wallpapers/{name}"
+    xfconf.write_text(f"/backdrop/screen0/monitorscreen/workspace0/last-image   {path}\n")
 
 
 def cli(*args):
@@ -217,6 +218,27 @@ def wait_running(seconds=5):
 
 
 try:
+    # Installation par défaut : la session pose /usr/share/winlux/wallpaper.bmp,
+    # copie d'Aurore faite par build-live-iso.sh avec ImageMagick ; elle doit
+    # être reconnue par son contenu, pas par son nom.
+    if subprocess.run(["sh", "-c", "command -v convert"], capture_output=True).returncode == 0:
+        walls = ROOT / "assets" / "wallpapers"
+        for source, target in (("winlux-prisme-aurore.png", "wallpaper.bmp"), ("winlux-prisme-nuit.png", "nuit.bmp")):
+            subprocess.run(["convert", str(walls / source), "-filter", "Lanczos", "-resize", "1920x1080^", "-gravity",
+                            "center", "-extent", "1920x1080", "-type", "TrueColor", "BMP3:" + str(work / target)], check=True)
+        (work / "config" / "winlux").mkdir(parents=True, exist_ok=True)
+        (work / "config" / "winlux" / "fond-anime.conf").write_text("ANIMATION=on\n")
+        compositor(True)
+        wallpaper(str(work / "wallpaper.bmp"))
+        check(cli("status").get("reason") == "aurore",
+              "copie wallpaper.bmp de l'installation reconnue comme Aurore par son contenu (#3079)")
+        wallpaper(str(work / "nuit.bmp"))
+        check(cli("status").get("reason") == "autre-fond", "Winlux Nuit en BMP n'est pas prise pour Aurore (#3079)")
+        compositor(False)
+        (work / "config" / "winlux" / "fond-anime.conf").unlink()
+    else:
+        print("  (copie BMP non vérifiée ici : ImageMagick absent ; voir le test unitaire)", flush=True)
+
     wallpaper("winlux-prisme-aurore.png")
     state = cli("status")
     check(state.get("enabled") == "off" and state.get("running") == "no", "désactivé par défaut, rien ne tourne (#3079)")

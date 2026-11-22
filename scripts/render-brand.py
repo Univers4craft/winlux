@@ -185,10 +185,31 @@ def aurora_stars():
     return list(zip(su.tolist(), sv.tolist(), glow.tolist()))
 
 
-def aurora_stars_text():
+# Points où winlux-fond-anime reconnaît l'image Aurore sombre par son contenu,
+# quel que soit son nom (l'installation pose une copie wallpaper.bmp, #3079) :
+# loin des étoiles et du logo, couleur moyenne d'un carré de 1 % de la hauteur.
+FINGERPRINT_POINTS = [(u, v) for v in (0.15, 0.55, 0.72, 0.9) for u in (0.1, 0.3, 0.5, 0.7, 0.9)]
+
+
+def aurora_fingerprint(img):
+    a = np.asarray(img.convert("RGB"), dtype=np.float64)
+    h, w = a.shape[:2]
+    half = max(2, round(h * 0.005))
+    out = []
+    for u, v in FINGERPRINT_POINTS:
+        x, y = round(u * (w - 1)), round(v * (h - 1))
+        block = a[max(0, y - half):y + half + 1, max(0, x - half):x + half + 1].reshape(-1, 3).mean(0)
+        out.append((u, v, *block))
+    return out
+
+
+def aurora_stars_text(img):
     lines = ["# Étoiles de winlux-prisme-aurore (render-brand.py) : x y éclat, x et y",
-             "# relatifs à l'image (0 à 1), éclat de 40 à 150. Lu par winlux-fond-anime."]
+             "# relatifs à l'image (0 à 1), éclat de 40 à 150. Lu par winlux-fond-anime.",
+             "# Lignes « empreinte x y r g b » : couleur moyenne de l'image Aurore sombre",
+             "# en ces points, pour la reconnaître quel que soit le nom du fichier."]
     lines += [f"{a:.6f} {b:.6f} {g:.1f}" for a, b, g in aurora_stars()]
+    lines += [f"empreinte {u:.2f} {v:.2f} {r:.1f} {g:.1f} {b:.1f}" for u, v, r, g, b in aurora_fingerprint(img)]
     return "\n".join(lines) + "\n"
 
 
@@ -331,7 +352,7 @@ def main():
     for name, light in AURORA_NAMES:
         for w, h, suffix in AURORA_SIZES:
             aurora_wallpaper(w, h, light).save(WALL / f"{name}{suffix}.png", optimize=True)
-    (WALL / "winlux-prisme-aurore.etoiles").write_text(aurora_stars_text())
+    (WALL / "winlux-prisme-aurore.etoiles").write_text(aurora_stars_text(Image.open(WALL / "winlux-prisme-aurore.png")))
     print("identité Winlux rendue dans", BRAND, "et", WALL)
 
 

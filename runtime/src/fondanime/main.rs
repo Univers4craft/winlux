@@ -136,7 +136,7 @@ fn load_stars() -> Vec<Star> {
             .split_whitespace()
             .filter_map(|x| x.parse().ok())
             .collect();
-        if f.len() < 3 || f[2] < TWINKLE_MIN_GLOW {
+        if f.len() != 3 || line.starts_with("empreinte") || f[2] < TWINKLE_MIN_GLOW {
             continue;
         }
         let (u, v) = (f[0], f[1]);
@@ -167,11 +167,157 @@ fn xfconf_desktop() -> String {
         .unwrap_or_default()
 }
 
+/// Empreinte de l'image Aurore sombre : (x, y relatifs, r, g, b) moyens,
+/// lignes « empreinte » du fichier des étoiles (render-brand.py).
+fn load_fingerprint() -> Vec<[f64; 5]> {
+    let path = std::env::var("WINLUX_FOND_ANIME_ETOILES").unwrap_or_else(|_| STARS_FILE.into());
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("empreinte"))
+        .filter_map(|l| {
+            let f: Vec<f64> = l
+                .split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            (f.len() == 5).then(|| [f[0], f[1], f[2], f[3], f[4]])
+        })
+        .collect()
+}
+
+/// Image décodée en RGB 8 bits, ligne du haut d'abord.
+struct Picture {
+    w: usize,
+    h: usize,
+    rgb: Vec<u8>,
+}
+
+impl Picture {
+    /// BMP non compressé 24 ou 32 bits : celui que pose l'installation
+    /// (/usr/share/winlux/wallpaper.bmp, tiré d'Aurore par build-live-iso.sh).
+    fn bmp(data: &[u8]) -> Option<Picture> {
+        let u16_at = |o: usize| data.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+        let u32_at = |o: usize| {
+            data.get(o..o + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        if data.get(0..2)? != b"BM" {
+            return None;
+        }
+        let offset = u32_at(10)? as usize;
+        let w = u32_at(18)? as i32;
+        let raw_h = u32_at(22)? as i32;
+        let bpp = u16_at(28)? as usize;
+        let compression = u32_at(30)?;
+        if w <= 0
+            || raw_h == 0
+            || !(bpp == 24 || bpp == 32)
+            || !(compression == 0 || compression == 3)
+        {
+            return None;
+        }
+        let (w, h) = (w as usize, raw_h.unsigned_abs() as usize);
+        let stride = (w * bpp).div_ceil(32) * 4;
+        let mut rgb = vec![0u8; w * h * 3];
+        for y in 0..h {
+            let src_y = if raw_h > 0 { h - 1 - y } else { y };
+            let row = data.get(offset + src_y * stride..offset + src_y * stride + w * bpp / 8)?;
+            for x in 0..w {
+                let p = &row[x * bpp / 8..];
+                rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[p[2], p[1], p[0]]);
+            }
+        }
+        Some(Picture { w, h, rgb })
+    }
+
+    fn png(data: &[u8]) -> Option<Picture> {
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
+        decoder.set_transformations(png::Transformations::normalize_to_color8());
+        let mut reader = decoder.read_info().ok()?;
+        let mut buf = vec![0u8; reader.output_buffer_size()?];
+        let info = reader.next_frame(&mut buf).ok()?;
+        let channels = match info.color_type {
+            png::ColorType::Rgb => 3,
+            png::ColorType::Rgba => 4,
+            png::ColorType::Grayscale => 1,
+            png::ColorType::GrayscaleAlpha => 2,
+            _ => return None,
+        };
+        let (w, h) = (info.width as usize, info.height as usize);
+        let mut rgb = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                let p = &buf[y * info.line_size + x * channels..];
+                let (r, g, b) = if channels >= 3 {
+                    (p[0], p[1], p[2])
+                } else {
+                    (p[0], p[0], p[0])
+                };
+                rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[r, g, b]);
+            }
+        }
+        Some(Picture { w, h, rgb })
+    }
+
+    fn open(path: &str) -> Option<Picture> {
+        let data = std::fs::read(path).ok()?;
+        if data.starts_with(b"BM") {
+            Picture::bmp(&data)
+        } else if data.starts_with(b"\x89PNG") {
+            Picture::png(&data)
+        } else {
+            None
+        }
+    }
+
+    /// Couleur moyenne d'un carré de 1 % de la hauteur autour de (u, v).
+    fn mean(&self, u: f64, v: f64) -> [f64; 3] {
+        let half = ((self.h as f64 * 0.005).round() as i64).max(2);
+        let cx = (u * (self.w - 1) as f64).round() as i64;
+        let cy = (v * (self.h - 1) as f64).round() as i64;
+        let mut sum = [0f64; 3];
+        let mut n = 0f64;
+        for y in (cy - half).max(0)..=(cy + half).min(self.h as i64 - 1) {
+            for x in (cx - half).max(0)..=(cx + half).min(self.w as i64 - 1) {
+                let k = (y as usize * self.w + x as usize) * 3;
+                for (c, total) in sum.iter_mut().enumerate() {
+                    *total += self.rgb[k + c] as f64;
+                }
+                n += 1.0;
+            }
+        }
+        sum.map(|s| s / n.max(1.0))
+    }
+}
+
+/// L'image ressemble-t-elle à Aurore sombre ? Écart moyen de 6 au plus sur
+/// 0-255 et aucun point à plus de 20 : « Winlux Nuit », la plus proche,
+/// est à 22 de moyenne, une définition 1440p ou 4K d'Aurore à moins de 0,2.
+fn matches_fingerprint(picture: &Picture, fingerprint: &[[f64; 5]]) -> bool {
+    if fingerprint.is_empty() {
+        return false;
+    }
+    let mut total = 0.0;
+    for f in fingerprint {
+        let m = picture.mean(f[0], f[1]);
+        let d = (0..3).map(|c| (m[c] - f[2 + c]).abs()).sum::<f64>() / 3.0;
+        if d > 20.0 {
+            return false;
+        }
+        total += d;
+    }
+    total / fingerprint.len() as f64 <= 6.0
+}
+
 /// « Winlux Aurore » sombre, quelle que soit sa définition ; pas la claire,
-/// qui n'a pas d'étoiles.
+/// qui n'a pas d'étoiles. Reconnue par son nom, sinon par son contenu :
+/// l'installation pose une copie au nom neutre, /usr/share/winlux/wallpaper.bmp.
 fn is_aurora(image: &str) -> bool {
     let name = image.rsplit('/').next().unwrap_or("");
-    name.starts_with("winlux-prisme-aurore") && !name.starts_with("winlux-prisme-aurore-clair")
+    if name.starts_with("winlux-prisme-aurore") {
+        return !name.starts_with("winlux-prisme-aurore-clair");
+    }
+    Picture::open(image).is_some_and(|p| matches_fingerprint(&p, &load_fingerprint()))
 }
 
 /// Image affichée par xfdesktop sur l'écran `monitor` (nom RandR), au bureau
@@ -1272,6 +1418,66 @@ mod tests {
             "/usr/share/winlux/wallpapers/winlux-prisme-aurore-clair.png"
         ));
         assert!(!is_aurora("/home/a/winlux-prisme-nuit.png"));
+    }
+
+    fn assets() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/wallpapers")
+    }
+
+    /// La copie BMP posée par l'installation, et toute image renommée, sont
+    /// reconnues par leur contenu ; les autres fonds Winlux ne le sont pas.
+    #[test]
+    fn aurore_reconnue_par_son_contenu_3079() {
+        std::env::set_var(
+            "WINLUX_FOND_ANIME_ETOILES",
+            assets().join("winlux-prisme-aurore.etoiles"),
+        );
+        let empreinte = load_fingerprint();
+        assert_eq!(empreinte.len(), 20);
+        let ouvre = |n: &str| Picture::open(assets().join(n).to_str().unwrap()).unwrap();
+        for n in [
+            "winlux-prisme-aurore.png",
+            "winlux-prisme-aurore-2560x1440.png",
+            "winlux-prisme-aurore-3840x2160.png",
+        ] {
+            assert!(matches_fingerprint(&ouvre(n), &empreinte), "{n}");
+        }
+        for n in [
+            "winlux-prisme-aurore-clair.png",
+            "winlux-prisme-nuit.png",
+            "winlux-prisme-aube.png",
+        ] {
+            assert!(!matches_fingerprint(&ouvre(n), &empreinte), "{n}");
+        }
+        // BMP 24 bits de bas en haut, comme convert BMP3 et ffmpeg bgr24.
+        let p = ouvre("winlux-prisme-aurore.png");
+        let stride = (p.w * 3).div_ceil(4) * 4;
+        let mut bmp = Vec::new();
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&((54 + stride * p.h) as u32).to_le_bytes());
+        bmp.extend_from_slice(&[0, 0, 0, 0]);
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&(p.w as i32).to_le_bytes());
+        bmp.extend_from_slice(&(p.h as i32).to_le_bytes());
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 24]);
+        for y in (0..p.h).rev() {
+            let mut row = vec![0u8; stride];
+            for x in 0..p.w {
+                let k = (y * p.w + x) * 3;
+                row[x * 3..x * 3 + 3].copy_from_slice(&[p.rgb[k + 2], p.rgb[k + 1], p.rgb[k]]);
+            }
+            bmp.extend_from_slice(&row);
+        }
+        let dir = std::env::temp_dir().join(format!("fond-anime-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wallpaper.bmp");
+        std::fs::write(&path, &bmp).unwrap();
+        assert!(is_aurora(path.to_str().unwrap()), "copie wallpaper.bmp");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

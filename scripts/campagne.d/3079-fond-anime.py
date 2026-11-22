@@ -14,10 +14,14 @@ for _nom in ("désactivé par défaut, rien ne tourne (#3079)",
              "batterie à 15 % sur batterie : aucune image dessinée (#3079)",
              "autre fond (Aurore claire) : l'animation s'arrête d'elle-même (#3079)",
              "compositeur arrêté : l'animation s'arrête d'elle-même (#3079)",
-             "désactivé dans Paramètres : l'animation s'arrête (#3079)"):
+             "désactivé dans Paramètres : l'animation s'arrête (#3079)",
+             "copie wallpaper.bmp de l'installation reconnue comme Aurore par son contenu (#3079)"):
     ok(_nom in _t, "test du fond animé : " + _nom)
 ok("scripts/test-fond-anime.py" in _ci, "la CI lance le test du fond animé (#3079)")
 ok("def animated_wallpaper" in _p and '"Animer le fond Winlux Aurore": (' in _p,
    "Paramètres › Personnalisation affiche l'interrupteur du fond animé, traduit (#3079)")
+_r = (ROOT / "runtime/src/fondanime/main.rs").read_text(encoding="utf-8")
+ok("fn aurore_reconnue_par_son_contenu_3079" in _r,
+   "test unitaire : la copie wallpaper.bmp d'Aurore est reconnue par son contenu (#3079)")
 ok((ROOT / "assets/wallpapers/winlux-prisme-aurore.etoiles").is_file(),
    "étoiles du fond Aurore livrées pour l'animation (#3079)")
