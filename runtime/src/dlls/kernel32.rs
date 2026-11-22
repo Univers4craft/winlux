@@ -6429,6 +6429,11 @@ pub extern "win64" fn suspend_thread(h: usize) -> u32 {
         crate::process::set_last_error(6);
         return u32::MAX;
     };
+    if t.is_foreign() {
+        // Fil d'un autre processus (#2024) : refus net, jamais un faux succès.
+        crate::process::set_last_error(5);
+        return u32::MAX;
+    }
     {
         let mut s = lock(&t.state);
         if s.finished {
@@ -6468,6 +6473,11 @@ pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        // Registres d'un fil d'un autre processus : pas lus d'ici (#2024).
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         super::thread_ctl::get_own_context(ctx);
         return 1;
@@ -6495,6 +6505,10 @@ pub unsafe extern "win64" fn set_thread_context(h: usize, ctx: *const u8) -> i32
         crate::process::set_last_error(6);
         return 0;
     };
+    if t.is_foreign() {
+        crate::process::set_last_error(5);
+        return 0;
+    }
     if is_current(&t) {
         let flags = (ctx.add(0x30) as *const u32).read_unaligned();
         if flags & 0x1 != 0 {
@@ -6557,6 +6571,20 @@ fn foreign_thread_pid(tid: i32) -> Option<i32> {
         return None;
     }
     let status = std::fs::read_to_string(format!("/proc/{tid}/status")).ok()?;
+    let pid = foreign_thread_owner(
+        &status,
+        unsafe { libc::getuid() },
+        std::process::id() as i32,
+    )?;
+    std::path::Path::new(&format!("/proc/{pid}/task/{tid}"))
+        .exists()
+        .then_some(pid)
+}
+
+/// Garde-fou de sécurité de #2024 : le processus (Tgid) du fil décrit par
+/// `status`, seulement si son uid réel est `my_uid` et que ce n'est pas le
+/// processus courant. Un fil d'un autre compte ne s'ouvre jamais.
+fn foreign_thread_owner(status: &str, my_uid: u32, my_pid: i32) -> Option<i32> {
     let field = |name: &str| -> Option<u32> {
         status
             .lines()
@@ -6568,12 +6596,7 @@ fn foreign_thread_pid(tid: i32) -> Option<i32> {
     };
     let pid = field("Tgid:")? as i32;
     let uid = field("Uid:")?;
-    if uid != unsafe { libc::getuid() } || pid == std::process::id() as i32 {
-        return None;
-    }
-    std::path::Path::new(&format!("/proc/{pid}/task/{tid}"))
-        .exists()
-        .then_some(pid)
+    (uid == my_uid && pid != my_pid).then_some(pid)
 }
 
 impl ThreadObject {
@@ -7665,6 +7688,10 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
         return u32::MAX;
     };
     match obj {
+        SyncHandle::Thread(t) if t.is_foreign() => {
+            crate::process::set_last_error(5);
+            u32::MAX
+        }
         SyncHandle::Thread(t) => {
             let _gate = sync_gate();
             let mut s = lock(&t.state);
@@ -13861,6 +13888,12 @@ mod tests {
         let q = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
         assert_eq!(q(0) as u32, 0x103, "STATUS_PENDING tant qu'il tourne");
         assert_eq!((q(16), q(24)), (pid as u64, pid as u64), "ClientId");
+        // Ni suspension ni registres d'ici : refus net (ERROR_ACCESS_DENIED).
+        assert_eq!(suspend_thread(h), u32::MAX);
+        assert_eq!(resume_thread(h), u32::MAX);
+        let mut ctx = vec![0u8; 1232];
+        assert_eq!(unsafe { get_thread_context(h, ctx.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { set_thread_context(h, ctx.as_ptr()) }, 0);
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(wait_for_single_object(h, 5_000), 0, "fin du fil vue");
@@ -13870,6 +13903,51 @@ mod tests {
         close_handle(h);
         // Fil inexistant : refus, comme avant.
         assert_eq!(open_thread(0x1F03FF, 0, i32::MAX as u32 - 7), 0);
+    }
+
+    /// Garde-fou de sécurité de #2024 : le fil d'un processus d'un autre
+    /// compte ne s'ouvre jamais, celui du même compte oui.
+    #[test]
+    fn open_thread_refuse_le_fil_d_un_autre_compte() {
+        let status = |uid: u32| {
+            format!("Name:\tx\nTgid:\t4242\nPid:\t4243\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+        };
+        assert_eq!(foreign_thread_owner(&status(1000), 1000, 1), Some(4242));
+        assert_eq!(
+            foreign_thread_owner(&status(1001), 1000, 1),
+            None,
+            "autre compte"
+        );
+        assert_eq!(foreign_thread_owner(&status(0), 1000, 1), None, "root");
+        assert_eq!(
+            foreign_thread_owner(&status(1000), 1000, 4242),
+            None,
+            "soi-même"
+        );
+        assert_eq!(
+            foreign_thread_owner("Name:\tx\n", 1000, 1),
+            None,
+            "illisible"
+        );
+        // En root (conteneur) : un vrai processus d'un autre compte.
+        if unsafe { libc::getuid() } == 0 {
+            use std::os::unix::process::CommandExt;
+            init();
+            let mut child = std::process::Command::new("sleep")
+                .arg("30")
+                .uid(65534)
+                .gid(65534)
+                .spawn()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(
+                open_thread(0x1F03FF, 0, child.id()),
+                0,
+                "fil d'un autre compte"
+            );
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
     }
 
     /// ThreadBasicInformation d'un fil de ce processus : son vrai TEB.

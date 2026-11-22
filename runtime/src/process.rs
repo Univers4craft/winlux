@@ -32,6 +32,10 @@ static THREAD_TEBS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
 /// l'annuaire dans le PEB, à `PEB_WINLUX_TEB_DIR`, au-delà de la fin du PEB
 /// de Windows (moins de 0x800 octets en x64), donc hors de tout champ qu'un
 /// programme lirait. Entrées de 16 octets (tid, TEB) ; tid 0 = libre.
+///
+/// Zone propre à Winlux : de 0xF00 à la fin de la page du PEB (0x1000), hors
+/// du PEB documenté. Ne jamais y placer un champ du PEB de Windows, et ne
+/// jamais y mettre autre chose que l'adresse de cet annuaire.
 pub const PEB_WINLUX_TEB_DIR: usize = 0xF00;
 pub const TEB_DIR_SLOTS: usize = 4096;
 static TEB_DIR: AtomicUsize = AtomicUsize::new(0);
