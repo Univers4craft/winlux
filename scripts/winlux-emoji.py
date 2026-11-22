@@ -104,6 +104,25 @@ STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "
 RECENT = STATE / "emoji-recent"
 RECENT_MAX = 24
 
+def private_state_dir(folder):
+    """Dossier d'état privé au compte (#3082), comme private_state de
+    winlux-open : chaque dossier manquant naît en 0700, et le dossier winlux
+    partagé par nos outils est ramené à 0700 s'il existait plus ouvert. Le
+    premier outil lancé ne le crée plus en 0755 pour tous les autres."""
+    folder = Path(folder)
+    missing, probe = [], folder
+    while not probe.exists() and probe != probe.parent:
+        missing.append(probe); probe = probe.parent
+    for directory in reversed(missing):
+        try: os.mkdir(directory, 0o700)
+        except FileExistsError: pass
+    for directory in (folder, *folder.parents):
+        if directory.name == "winlux":
+            if directory.stat().st_mode & 0o077: directory.chmod(0o700)
+            break
+    return folder
+
+
 
 def data_path():
     if os.environ.get("WINLUX_EMOJI_DATA"): return Path(os.environ["WINLUX_EMOJI_DATA"])
@@ -159,7 +178,7 @@ def recent_load():
 def recent_add(char):
     chars = [char] + [item for item in recent_load() if item != char]
     try:
-        STATE.mkdir(parents=True, exist_ok=True)
+        private_state_dir(STATE)
         RECENT.write_text("\n".join(chars[:RECENT_MAX]) + "\n", encoding="utf-8")
     except OSError:
         pass

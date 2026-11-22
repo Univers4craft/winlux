@@ -239,6 +239,21 @@ def _t(text):
 
 
 STATE = Path.home() / ".config/winlux/start.json"
+
+def write_private_text(path, text):
+    """Fichier né en 0600 (#3082), jamais lisible par un autre compte, puis
+    substitué d'un bloc."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out: out.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try: tmp.unlink()
+        except OSError: pass
+        raise
+
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 # Pages des Paramètres trouvées par la recherche (#461) : titre de la page et
@@ -475,10 +490,9 @@ class Start(Gtk.Application):
         self.state["pins"] = migrate_pins(self.state.get("pins", DEFAULTS))
 
     def save(self):
+        # Programmes récents : privés au compte (#3082).
         STATE.parent.mkdir(parents=True, exist_ok=True)
-        temporary = STATE.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, ensure_ascii=False))
-        temporary.replace(STATE)
+        write_private_text(STATE, json.dumps(self.state, ensure_ascii=False))
 
     def do_activate(self):
         if self.preloading:

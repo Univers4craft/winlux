@@ -66,6 +66,25 @@ def state_file():
     base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
     return base / "winlux/colors"
 
+def private_state_dir(folder):
+    """Dossier d'état privé au compte (#3082), comme private_state de
+    winlux-open : chaque dossier manquant naît en 0700, et le dossier winlux
+    partagé par nos outils est ramené à 0700 s'il existait plus ouvert. Le
+    premier outil lancé ne le crée plus en 0755 pour tous les autres."""
+    folder = Path(folder)
+    missing, probe = [], folder
+    while not probe.exists() and probe != probe.parent:
+        missing.append(probe); probe = probe.parent
+    for directory in reversed(missing):
+        try: os.mkdir(directory, 0o700)
+        except FileExistsError: pass
+    for directory in (folder, *folder.parents):
+        if directory.name == "winlux":
+            if directory.stat().st_mode & 0o077: directory.chmod(0o700)
+            break
+    return folder
+
+
 
 # ── Couleurs ────────────────────────────────────────────────────────────────
 
@@ -109,7 +128,7 @@ def load_history():
 def save_history(history):
     path = state_file()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        private_state_dir(path.parent)
         path.write_text("".join(c + "\n" for c in history), encoding="utf-8")
     except OSError:
         pass

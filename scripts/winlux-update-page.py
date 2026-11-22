@@ -141,6 +141,25 @@ def _t(text):
 
 
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
+
+def private_state_dir(folder):
+    """Dossier d'état privé au compte (#3082), comme private_state de
+    winlux-open : chaque dossier manquant naît en 0700, et le dossier winlux
+    partagé par nos outils est ramené à 0700 s'il existait plus ouvert. Le
+    premier outil lancé ne le crée plus en 0755 pour tous les autres."""
+    folder = Path(folder)
+    missing, probe = [], folder
+    while not probe.exists() and probe != probe.parent:
+        missing.append(probe); probe = probe.parent
+    for directory in reversed(missing):
+        try: os.mkdir(directory, 0o700)
+        except FileExistsError: pass
+    for directory in (folder, *folder.parents):
+        if directory.name == "winlux":
+            if directory.stat().st_mode & 0o077: directory.chmod(0o700)
+            break
+    return folder
+
 STATE_DIR = Path(os.environ.get("WINLUX_UPDATE_STATE_DIR", "/var/lib/winlux"))
 PAUSE_WEEKS = (1, 2, 3, 4, 5)
 # Étapes affichées, dans l'ordre du moteur (download → point → apt → dpkg --verify → ready).
@@ -838,7 +857,7 @@ def notify(seen_file=None):
     key = f"{notice.get('kind')}:{notice.get('version')}"
     already = read(seen_file).strip() == key
     # Toujours réécrit : la session ne relance Python que si l'avis est plus récent.
-    seen_file.parent.mkdir(parents=True, exist_ok=True)
+    private_state_dir(seen_file.parent)
     seen_file.write_text(key + "\n")
     if message is None or already: return 0
     _, GLib, _, _ = _gtk()

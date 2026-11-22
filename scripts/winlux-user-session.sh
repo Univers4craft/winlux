@@ -35,6 +35,11 @@ fi
 primary=${WINLUX_PRIMARY_SESSION:-0}
 logs=${WINLUX_SESSION_LOGS:-"$XDG_RUNTIME_DIR/winlux"}
 mkdir -p "$logs"
+# Dossier d'état partagé par nos outils (#3082) : privé au compte, créé ici
+# en 0700 avant qu'un outil ne le crée en 0755 pour tous les autres.
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/winlux
+(umask 077 && mkdir -p "$state_dir") 2>/dev/null
+chmod 700 "$state_dir" 2>/dev/null || true
 cd "$HOME" 2>/dev/null || true
 
 pids=
