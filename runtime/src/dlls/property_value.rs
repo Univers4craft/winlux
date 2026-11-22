@@ -734,6 +734,131 @@ static STATICS_VTBL: VTable<45> = VTable([
     st_array as *const (),
 ]);
 
+// ============================================================
+//  Écriture et relecture d'une valeur emballée (#2194)
+// ============================================================
+
+/// Base d'un objet emballé par Winlux, depuis son IPropertyValue (+0) ou
+/// son IReference<T> (+8) ; `None` pour tout autre objet.
+unsafe fn own_boxed(obj: usize) -> Option<usize> {
+    if obj == 0 {
+        return None;
+    }
+    let vt = *(obj as *const usize);
+    if vt == &VALUE_VTBL as *const _ as usize {
+        Some(obj)
+    } else if vt == &REFERENCE_VTBL as *const _ as usize {
+        Some(obj - 8)
+    } else {
+        None
+    }
+}
+
+fn hex_units(units: &[u16]) -> String {
+    units.iter().map(|u| format!("{u:04x}")).collect()
+}
+
+fn units_of_hex(s: &str) -> Option<Vec<u16>> {
+    if !s.len().is_multiple_of(4) || !s.is_ascii() {
+        return None;
+    }
+    (0..s.len())
+        .step_by(4)
+        .map(|i| u16::from_str_radix(&s[i..i + 4], 16).ok())
+        .collect()
+}
+
+fn f32s(v: &[f32]) -> String {
+    v.iter()
+        .map(|f| format!("{:08x}", f.to_bits()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn f32s_of(s: &str, n: usize) -> Option<Vec<f32>> {
+    let v: Option<Vec<f32>> = s
+        .split(',')
+        .map(|p| u32::from_str_radix(p, 16).ok().map(f32::from_bits))
+        .collect();
+    v.filter(|v| v.len() == n)
+}
+
+/// Texte d'une valeur emballée par Winlux : `<PropertyType> <contenu>`, sur
+/// une ligne, sans espace dans le contenu. `None` pour un objet qui n'est
+/// pas une valeur emballée par Winlux (tableau, objet de l'application…).
+pub(crate) unsafe fn encode(obj: usize) -> Option<String> {
+    let val = &boxed(own_boxed(obj)?).val;
+    let body = match val {
+        Val::U8(v) => v.to_string(),
+        Val::I16(v) => v.to_string(),
+        Val::U16(v) => v.to_string(),
+        Val::I32(v) => v.to_string(),
+        Val::U32(v) => v.to_string(),
+        Val::I64(v) => v.to_string(),
+        Val::U64(v) => v.to_string(),
+        Val::F32(v) => format!("{:08x}", v.to_bits()),
+        Val::F64(v) => format!("{:016x}", v.to_bits()),
+        Val::Char16(v) => v.to_string(),
+        Val::Bool(v) => (*v as u8).to_string(),
+        // Une chaîne vide s'écrit « - » pour que la ligne garde trois champs.
+        Val::Str(v) if v.is_empty() => "-".to_string(),
+        Val::Str(v) => hex_units(v),
+        Val::DateTime(v) | Val::TimeSpan(v) => v.to_string(),
+        Val::Guid(g) => g.iter().map(|b| format!("{b:02x}")).collect(),
+        Val::Point(p) | Val::Size(p) => f32s(p),
+        Val::Rect(r) => f32s(r),
+    };
+    Some(format!("{} {body}", val.property_type()))
+}
+
+/// Objet IPropertyValue (une référence) relu depuis le texte d'`encode`.
+pub(crate) fn decode(text: &str) -> Option<usize> {
+    let (ty, body) = text.split_once(' ')?;
+    let val = match ty.parse::<i32>().ok()? {
+        1 => Val::U8(body.parse().ok()?),
+        2 => Val::I16(body.parse().ok()?),
+        3 => Val::U16(body.parse().ok()?),
+        4 => Val::I32(body.parse().ok()?),
+        5 => Val::U32(body.parse().ok()?),
+        6 => Val::I64(body.parse().ok()?),
+        7 => Val::U64(body.parse().ok()?),
+        8 => Val::F32(f32::from_bits(u32::from_str_radix(body, 16).ok()?)),
+        9 => Val::F64(f64::from_bits(u64::from_str_radix(body, 16).ok()?)),
+        10 => Val::Char16(body.parse().ok()?),
+        11 => Val::Bool(match body {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        }),
+        12 if body == "-" => Val::Str(Vec::new()),
+        12 => Val::Str(units_of_hex(body)?),
+        14 => Val::DateTime(body.parse().ok()?),
+        15 => Val::TimeSpan(body.parse().ok()?),
+        16 => {
+            let b = units_of_hex(body).filter(|u| u.len() == 8)?;
+            let mut g = [0u8; 16];
+            for (i, u) in b.iter().enumerate() {
+                g[2 * i..2 * i + 2].copy_from_slice(&u.to_be_bytes());
+            }
+            Val::Guid(g)
+        }
+        17 => {
+            let v = f32s_of(body, 2)?;
+            Val::Point([v[0], v[1]])
+        }
+        18 => {
+            let v = f32s_of(body, 2)?;
+            Val::Size([v[0], v[1]])
+        }
+        19 => {
+            let v = f32s_of(body, 4)?;
+            Val::Rect([v[0], v[1], v[2], v[3]])
+        }
+        _ => return None,
+    };
+    Some(new_boxed(val))
+}
+
 /// `RoGetActivationFactory` pour `Windows.Foundation.PropertyValue`, `None`
 /// pour une autre classe. La classe n'a pas de constructeur : sous
 /// IActivationFactory, la fabrique n'est pas servie (E_NOINTERFACE).

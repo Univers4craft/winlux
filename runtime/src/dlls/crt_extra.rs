@@ -490,9 +490,15 @@ unsafe extern "win64" fn wctob(wc: u32) -> i32 {
         -1
     }
 }
-/// Pages ANSI à un octet : pas d'octet de tête de caractère double.
-extern "win64" fn ismbblead(_c: u32) -> i32 {
-    0
+/// Octet de tête d'un caractère double sur la page `cp` (Learn,
+/// « _ismbblead » : 0x81–0x9F et 0xE0–0xFC en 932 ; aucun sur une page
+/// à un octet) (#2831).
+fn ismbblead_in(cp: u32, c: u32) -> bool {
+    c <= 0xFF && crate::intl::dbcs::is_lead_byte(cp, c as u8)
+}
+extern "win64" fn ismbblead(c: u32) -> i32 {
+    let cp = crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP);
+    ismbblead_in(cp, c) as i32
 }
 
 // ---------- Classes de caractères ----------
@@ -1706,6 +1712,19 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ismbblead_suit_la_page_de_code() {
+        for c in [0x81, 0x9F, 0xE0, 0xFC] {
+            assert!(ismbblead_in(932, c), "{c:#x}");
+        }
+        for c in [0x00, 0x41, 0x80, 0xA0, 0xDF, 0xFD, 0xFF, 0x181] {
+            assert!(!ismbblead_in(932, c), "{c:#x}");
+        }
+        for c in [0x81, 0xE0, 0xFC] {
+            assert!(!ismbblead_in(1252, c), "{c:#x}");
+        }
+    }
 
     #[test]
     fn stat64_a_la_disposition_de_windows() {

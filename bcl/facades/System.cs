@@ -15,6 +15,25 @@ namespace System.Diagnostics
         public long ElapsedTicks { get { throw new InvalidOperationException("façade"); } }
         public bool IsRunning { get { throw new InvalidOperationException("façade"); } }
     }
+
+    public sealed class FileVersionInfo
+    {
+        public static FileVersionInfo GetVersionInfo(string fileName) { throw new InvalidOperationException("façade"); }
+        public string FileName { get { throw new InvalidOperationException("façade"); } }
+        public string FileVersion { get { throw new InvalidOperationException("façade"); } }
+        public string ProductVersion { get { throw new InvalidOperationException("façade"); } }
+        public string CompanyName { get { throw new InvalidOperationException("façade"); } }
+        public string ProductName { get { throw new InvalidOperationException("façade"); } }
+        public string FileDescription { get { throw new InvalidOperationException("façade"); } }
+        public string LegalCopyright { get { throw new InvalidOperationException("façade"); } }
+        public string OriginalFilename { get { throw new InvalidOperationException("façade"); } }
+        public int FileMajorPart { get { throw new InvalidOperationException("façade"); } }
+        public int FileMinorPart { get { throw new InvalidOperationException("façade"); } }
+        public int FileBuildPart { get { throw new InvalidOperationException("façade"); } }
+        public int FilePrivatePart { get { throw new InvalidOperationException("façade"); } }
+        public int ProductMajorPart { get { throw new InvalidOperationException("façade"); } }
+        public bool IsDebug { get { throw new InvalidOperationException("façade"); } }
+    }
 }
 
 namespace System
@@ -27,7 +46,21 @@ namespace System
         public int Port { get { throw new InvalidOperationException("façade"); } }
         public string PathAndQuery { get { throw new InvalidOperationException("façade"); } }
         public string AbsoluteUri { get { throw new InvalidOperationException("façade"); } }
+        public Uri(string uriString, UriKind uriKind) { throw new InvalidOperationException("façade"); }
+        public Uri(Uri baseUri, string relativeUri) { throw new InvalidOperationException("façade"); }
+        public Uri(Uri baseUri, Uri relativeUri) { throw new InvalidOperationException("façade"); }
+        public static bool TryCreate(string uriString, UriKind uriKind, out Uri result) { throw new InvalidOperationException("façade"); }
+        public static bool TryCreate(Uri baseUri, string relativeUri, out Uri result) { throw new InvalidOperationException("façade"); }
+        public static bool TryCreate(Uri baseUri, Uri relativeUri, out Uri result) { throw new InvalidOperationException("façade"); }
+        public bool IsAbsoluteUri { get { throw new InvalidOperationException("façade"); } }
+        public string OriginalString { get { throw new InvalidOperationException("façade"); } }
+        public static bool operator ==(Uri a, Uri b) { throw new InvalidOperationException("façade"); }
+        public static bool operator !=(Uri a, Uri b) { throw new InvalidOperationException("façade"); }
+        public override bool Equals(object o) { throw new InvalidOperationException("façade"); }
+        public override int GetHashCode() { throw new InvalidOperationException("façade"); }
     }
+
+    public enum UriKind { RelativeOrAbsolute = 0, Absolute = 1, Relative = 2 }
 
     public class UriFormatException : FormatException { }
 }

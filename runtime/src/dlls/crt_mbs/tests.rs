@@ -185,3 +185,34 @@ fn mbslwr_mbsset_mbstok() {
         assert_eq!(mbctolower(0x955C), 0x955C);
     }
 }
+
+/// #2815 : bornes des plages de Learn, en page 932 et hors de la page 932.
+#[test]
+fn classification_ismbb_ismbc() {
+    use Classe::*;
+    let oui = |k, c| classe_in(SJIS, k, c);
+    // Katakana d'un octet.
+    assert!(oui(BKana, 0xA1) && oui(BKana, 0xDF) && !oui(BKana, 0xA0) && !oui(BKana, 0xE0));
+    assert!(oui(BKPunct, 0xA5) && !oui(BKPunct, 0xA6));
+    assert!(oui(BKAlnum, 0xA6) && oui(BAlpha, 0xDF) && oui(BAlnum, b'7' as u32));
+    assert!(oui(BPrint, 0x20) && !oui(BGraph, 0x20) && oui(BGraph, 0xB1));
+    assert!(oui(BPunct, b'!' as u32) && !oui(BPunct, b'a' as u32));
+    // Octets de queue : 0x40–0x7E, 0x80–0xFC.
+    assert!(oui(BTrail, 0x40) && oui(BTrail, 0x7E) && !oui(BTrail, 0x7F));
+    assert!(oui(BTrail, 0x80) && oui(BTrail, 0xFC) && !oui(BTrail, 0xFD));
+    // Caractères doubles.
+    assert!(oui(CHira, 0x829F) && oui(CHira, 0x82F1) && !oui(CHira, 0x82F2));
+    assert!(oui(CKata, 0x8340) && oui(CKata, 0x8396) && !oui(CKata, 0x8397));
+    assert!(oui(CL0, 0x889E) && oui(CL1, 0x889F) && oui(CL1, 0x9872));
+    assert!(oui(CL2, 0x989F) && oui(CL2, 0xEAA4) && !oui(CL2, 0xEAA5));
+    assert!(oui(CSymbol, 0x8141) && oui(CSymbol, 0x81AC) && !oui(CSymbol, 0x81AD));
+    assert!(oui(CLegal, 0x955C) && !oui(CLegal, 0x957F) && !oui(CLegal, 0xA05C));
+    // Un octet : la routine _ismbb ; un caractère double : non.
+    assert!(oui(CAlpha, 0xB1) && !oui(CAlpha, 0x8260));
+    assert!(oui(CDigit, b'0' as u32) && !oui(CDigit, 0x824F));
+    assert!(oui(CSpace, 0x0D) && oui(CUpper, b'Z' as u32) && oui(CLower, b'a' as u32));
+    // Hors page 932 : rien de japonais.
+    assert!(!classe_in(ANSI, BKana, 0xB1) && !classe_in(ANSI, CHira, 0x82A0));
+    assert!(!classe_in(ANSI, BTrail, 0x5C) && !classe_in(ANSI, CLegal, 0x955C));
+    assert!(classe_in(ANSI, BAlpha, b'q' as u32) && !classe_in(ANSI, BAlpha, 0xE9));
+}

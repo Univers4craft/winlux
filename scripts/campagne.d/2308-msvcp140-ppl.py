@@ -1,6 +1,6 @@
 # msvcp140 : appui de <ppltasks.h> documenté par la MS STL (journaux, contexte, GetCurrentThreadId) (#2308).
 _m = (ROOT / "runtime/src/dlls/mod.rs").read_text()
-ok("m.extend(msvcp140_ppl::exports());" in _m,
+ok("pub mod msvcp140_ppl;" in _m and "msvcp140_ppl::exports" in _m,
    "msvcp140 sert l'appui des tâches PPL (#2308)")
 _p = (ROOT / "runtime/src/dlls/msvcp140_ppl.rs").read_text()
 ok(_p.count("@_TaskEventLogger@details@Concurrency@@") == 6

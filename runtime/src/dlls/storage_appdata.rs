@@ -20,9 +20,12 @@
 //! GetPublisherCacheFolder (#2524) rend le sous-dossier déclaré du dossier
 //! partagé de l'éditeur, `%LOCALAPPDATA%\Publishers\<éditeur>\<nom>`.
 //!
+//! LocalSettings et RoamingSettings (#2194) rendent le conteneur racine des
+//! réglages enregistrés du paquet (`storage_settings.rs`).
+//!
 //! Pas encore servis (E_NOTIMPL, journalisé une fois par méthode) : les
 //! méthodes asynchrones (StorageFolder, ClearAsync,
-//! ClearPublisherCacheFolderAsync…), LocalSettings et RoamingSettings.
+//! ClearPublisherCacheFolderAsync…).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -447,16 +450,56 @@ extern "win64" fn ad_clear_async(_this: usize) -> i32 {
     not_implemented("ClearAsync")
 }
 unsafe extern "win64" fn ad_local_settings(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    not_implemented("LocalSettings")
+    settings_getter(0, out)
 }
 unsafe extern "win64" fn ad_roaming_settings(_this: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    settings_getter(1, out)
+}
+
+/// Fichier des réglages d'une localité (0 Local, 1 Roaming) du paquet,
+/// dans son dossier `Settings`, réservé au compte (0700) (#2194).
+fn settings_file_in(
+    root: &std::path::Path,
+    family: &str,
+    locality: i32,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let family_dir = root.join(family);
+    let dir = family_dir.join("Settings");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    for d in [&family_dir, &dir] {
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
     }
-    not_implemented("RoamingSettings")
+    Ok(dir.join(if locality == 0 {
+        "winlux-local.txt"
+    } else {
+        "winlux-roaming.txt"
+    }))
+}
+
+/// LocalSettings et RoamingSettings : le conteneur racine des réglages
+/// enregistrés du paquet (#2194, `storage_settings.rs`).
+unsafe fn settings_getter(locality: i32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    let Some(family) = current_family() else {
+        return E_NO_PACKAGE;
+    };
+    match settings_file_in(&packages_root(), &family, locality) {
+        Ok(file) => {
+            *out = super::storage_settings::root_container(&file, locality);
+            S_OK
+        }
+        Err(e) => {
+            crate::log_warn!("com", "ApplicationData : dossier Settings non créé : {e}");
+            E_ACCESS_DENIED
+        }
+    }
 }
 unsafe extern "win64" fn ad_local_folder(_this: usize, out: *mut usize) -> i32 {
     folder_getter(Kind::Local, out)
@@ -742,7 +785,37 @@ mod tests {
             assert_eq!(cur, 0);
             let mut folder = 1usize;
             assert_eq!(ad_local_folder(app_data_base(), &mut folder), E_NO_PACKAGE);
+            // Les réglages aussi (#2194).
+            let mut settings = 1usize;
+            assert_eq!(
+                ad_local_settings(app_data_base(), &mut settings),
+                E_NO_PACKAGE
+            );
+            assert_eq!(settings, 0);
+            settings = 1;
+            assert_eq!(
+                ad_roaming_settings(app_data_base(), &mut settings),
+                E_NO_PACKAGE
+            );
+            assert_eq!(settings, 0);
         }
+    }
+
+    #[test]
+    fn dossier_settings_reserve_au_compte_2194() {
+        let root = std::env::temp_dir().join(format!("winlux-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let local = settings_file_in(&root, "Fam_x", 0).unwrap();
+        let roaming = settings_file_in(&root, "Fam_x", 1).unwrap();
+        assert_eq!(local, root.join("Fam_x/Settings/winlux-local.txt"));
+        assert_eq!(roaming, root.join("Fam_x/Settings/winlux-roaming.txt"));
+        for d in [root.join("Fam_x"), root.join("Fam_x/Settings")] {
+            assert_eq!(
+                std::fs::metadata(d).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -761,7 +834,8 @@ mod tests {
             assert_eq!(ad_version(base, &mut v), S_OK);
             assert_eq!(v, 0);
             let mut settings = 1usize;
-            assert_eq!(call_get(base, 10, &mut settings), E_NOTIMPL);
+            // LocalSettings (rang 10) : servi depuis #2194, hors paquet ici.
+            assert_eq!(call_get(base, 10, &mut settings), E_NO_PACKAGE);
             assert_eq!(settings, 0);
             assert_eq!(
                 app_data_qi(IID_STORAGE_ITEM.as_ptr(), &mut p),

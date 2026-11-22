@@ -819,6 +819,52 @@ impl Assembly {
         InterfaceImplRow { class, interface }
     }
 
+    pub fn get_manifest_resource(&self, row: u32) -> ManifestResourceRow {
+        let d = self.row_data(TableId::ManifestResource, row);
+        let mut o = 0;
+        let offset = self.read_u32_val(d, &mut o);
+        let flags = self.read_u32_val(d, &mut o);
+        let name = self.str_idx(d, &mut o);
+        let implementation = self.coded_idx(CodedIndex::Implementation, d, &mut o);
+        ManifestResourceRow {
+            offset,
+            flags,
+            name,
+            implementation,
+        }
+    }
+
+    /// Noms des ressources de manifeste rangées dans ce fichier
+    /// (Implementation nulle, ECMA-335 §II.22.24), dans l'ordre de la table.
+    pub fn manifest_resource_names(&self) -> Vec<String> {
+        (1..=self.row_count(TableId::ManifestResource))
+            .map(|r| self.get_manifest_resource(r))
+            .filter(|m| m.implementation == 0)
+            .map(|m| self.get_string(m.name).to_string())
+            .collect()
+    }
+
+    /// Octets d'une ressource de manifeste de ce fichier : dans le
+    /// répertoire Resources de l'en-tête CLI (§II.25.3.3, RVA à +24, taille
+    /// à +28), une longueur sur 4 octets puis les données (§II.24.2.4).
+    /// Le nom se compare à la casse près, comme GetManifestResourceStream.
+    pub fn manifest_resource(&self, name: &str) -> Option<&[u8]> {
+        let dir = self.rva_slice(self.clr_header_rva + 24, 8)?;
+        let (rva, size) = (rd32(dir, 0), rd32(dir, 4));
+        if rva == 0 {
+            return None;
+        }
+        let res = self.rva_slice(rva, size as usize)?;
+        (1..=self.row_count(TableId::ManifestResource))
+            .map(|r| self.get_manifest_resource(r))
+            .find(|m| m.implementation == 0 && self.get_string(m.name) == name)
+            .and_then(|m| {
+                let start = m.offset as usize;
+                let len = rd32(res, start) as usize;
+                res.get(start.checked_add(4)?..start.checked_add(4)?.checked_add(len)?)
+            })
+    }
+
     // --- RVA resolution ---
 
     pub fn rva_to_offset(&self, rva: u32) -> Option<usize> {
@@ -1057,7 +1103,9 @@ pub enum ElementType {
     ValueType(u32),
     Class(u32),
     Var(u32),
-    Array(Box<ElementType>),
+    /// Tableau à plusieurs dimensions (ou à bornes) : type d'élément et rang
+    /// de l'ArrayShape (ECMA-335 §II.23.2.13).
+    Array(Box<ElementType>, u32),
     GenericInst(Box<ElementType>, Vec<ElementType>),
     TypedByRef,
     IntPtr,
@@ -1127,8 +1175,20 @@ fn decode_type_depth(blob: &[u8], off: &mut usize, depth: u32) -> ElementType {
             ElementType::Var(idx)
         }
         0x14 => {
+            // ARRAY Type ArrayShape : Rank, NumSizes, Size*, NumLoBounds,
+            // LoBound* (§II.23.2.13). La forme se lit en entier, sinon la
+            // suite de la signature est décalée.
             let inner = decode_type(blob, off);
-            ElementType::Array(Box::new(inner))
+            let rank = decode_compressed_u32(blob, off);
+            let sizes = bounded_count(decode_compressed_u32(blob, off), blob, *off);
+            for _ in 0..sizes {
+                decode_compressed_u32(blob, off);
+            }
+            let bornes = bounded_count(decode_compressed_u32(blob, off), blob, *off);
+            for _ in 0..bornes {
+                decode_compressed_u32(blob, off);
+            }
+            ElementType::Array(Box::new(inner), rank)
         }
         0x15 => {
             let inner = decode_type(blob, off);
@@ -1216,4 +1276,36 @@ pub fn decode_locals_sig(blob: &[u8]) -> Vec<ElementType> {
         types.push(decode_type(blob, &mut off));
     }
     types
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `void M(int[,], int)` : la forme du tableau (rang 2, deux bornes
+    /// inférieures 0) est lue en entier, sinon le second paramètre se lit
+    /// dans la forme (#2848, ECMA-335 §II.23.2.13).
+    #[test]
+    fn signature_array_lit_sa_forme() {
+        let blob = [
+            0x00, 0x02, 0x01, 0x14, 0x08, 0x02, 0x00, 0x02, 0x00, 0x00, 0x08,
+        ];
+        let sig = decode_method_sig(&blob);
+        assert_eq!(
+            sig.param_types,
+            vec![
+                ElementType::Array(Box::new(ElementType::I4), 2),
+                ElementType::I4
+            ]
+        );
+        // Tailles et bornes données : string[2..3, 4] (rang 2, une taille,
+        // une borne inférieure 2 codée signée).
+        let blob = [0x14, 0x0E, 0x02, 0x01, 0x02, 0x01, 0x04, 0x08];
+        let mut off = 0;
+        assert_eq!(
+            decode_type(&blob, &mut off),
+            ElementType::Array(Box::new(ElementType::String), 2)
+        );
+        assert_eq!(decode_type(&blob, &mut off), ElementType::I4);
+    }
 }

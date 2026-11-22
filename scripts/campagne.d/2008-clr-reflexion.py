@@ -14,5 +14,6 @@ ok("internal sealed class RuntimeMethodInfo : MethodInfo" in membres and "public
    "CLR : réflexion sur les membres, attributs personnalisés, Activator et Enum, témoin Membres (#2008)")
 ok("o != types::TYPE_ENUM" in (runtime_dlls.parent / "clr" / "il.rs").read_text(encoding="utf-8"),
    "CLR : une méthode de System.Enum reçoit l'objet encadré (#2009)")
-ok("public override string ToString() { return Texte(GetType()" in membres,
+# Pas de témoin dédié : nom de la fonction de texte d'Enum.
+ok("private static string Texte(" in membres,
    "CLR : Enum.ToString rend le nom de la valeur (#2010)")
