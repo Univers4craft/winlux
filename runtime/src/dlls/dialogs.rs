@@ -1327,29 +1327,17 @@ fn clip_to_work_area(monitor: Rect, work: Rect) -> Rect {
 /// message coupé aux espaces à `max_w` pixels. Un mot plus long que la
 /// ligne en occupe une à lui seul.
 fn message_box_wrap(text: &str, max_w: i32, measure: &dyn Fn(&str) -> i32) -> (i32, i32) {
-    let space = measure(" ");
-    let mut lines = 0;
-    let mut widest = 0;
-    for raw in text.split('\n') {
-        let mut cur = 0;
-        let mut first = true;
-        for word in raw.trim_end_matches('\r').split(' ') {
-            let w = measure(word);
-            if first {
-                cur = w;
-                first = false;
-            } else if cur + space + w <= max_w {
-                cur += space + w;
-            } else {
-                lines += 1;
-                widest = widest.max(cur.min(max_w));
-                cur = w;
-            }
-        }
-        lines += 1;
-        widest = widest.max(cur.min(max_w));
-    }
-    (lines, widest)
+    // Même coupure que la statique qui affichera le texte, chaque ligne
+    // mesurée entière : additionner les mots mesurés un à un donnait une
+    // largeur trop courte de quelques pixels, et la statique renvoyait le
+    // dernier mot sur une ligne coupée (#3010).
+    let lines = super::controls::wrap_with(text, max_w, measure);
+    let widest = lines
+        .iter()
+        .map(|l| measure(l).min(max_w))
+        .max()
+        .unwrap_or(0);
+    (lines.len() as i32, widest)
 }
 
 /// Construit un DLGTEMPLATE en mémoire pour une boîte de message.
