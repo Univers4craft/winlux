@@ -6,42 +6,40 @@ Cette page dit ce que le runtime Winlux sait faire pour un programme Windows, ce
 
 ## En résumé
 
+État au 22 novembre 2026 (dernière version publiée : v0.2.21 ; la liste des logiciels vérifiés un par un est sur le [site](https://univers4craft.github.io/winlux/fr/software.html)).
+
 | Type de programme | État |
 |---|---|
-| Programme console 64 bits (C, C++, Rust, Go…) | **Fonctionne en général**, si ses imports sont implémentés. |
-| Programme graphique Win32/GDI 64 bits simple | **Fonctionne souvent** : fenêtres, menus, dialogues communs, GDI, polices. |
-| Installateur `.msi` | **Fonctionne** avec le `msiexec` intégré (sans actions personnalisées DLL/EXE/script). |
-| Installateur NSIS ou Inno Setup | **Fonctionne** : testé avec Notepad++, WinMerge, ShareX, Audacity (installation en 1 à 4 secondes). |
-| Programme .NET simple (console, BCL de base) | **Fonctionne** avec le CLR maison, dans ses limites (voir plus bas). |
-| Application .NET autonome (livre son `coreclr.dll`) | **Démarre** son propre runtime ; Paint.NET va jusqu'au code managé mais ne s'ouvre pas encore. |
-| WinForms, WPF | **Pas encore.** |
-| Jeux Direct3D 9/11/12 | **Partiel** : traduction maison vers OpenGL/Vulkan, à valider sur vrais GPU et vrais jeux. |
-| Programme 32 bits (PE32) | **Non pris en charge** : refusé avec un message clair. |
-| Pilotes Windows (`.sys`), antivirus, anti-triche noyau | **Hors périmètre** : il n'y a pas de noyau Windows. |
-| Paquets MSIX / Store Microsoft | **Non pris en charge.** |
+| Programme console 64 ou 32 bits (C, C++, Rust, Go…) | **Fonctionne en général**, si ses imports sont implémentés. |
+| Programme graphique Win32/GDI simple, 64 ou 32 bits | **Fonctionne souvent** : fenêtres, menus, dialogues communs, GDI, polices. |
+| Installateur `.msi`, NSIS, Inno Setup, Burn, auto-extractible 7-Zip | **Fonctionne** : le contrat de licence est toujours montré avant d'installer, un refus n'installe rien, les actions personnalisées EXE et DLL s'exécutent. |
+| Programme .NET Framework (sans runtime embarqué) | **Partiel** : notre moteur .NET couvre collections, LINQ, async/await, réflexion, fichiers, registre, processus, et une partie de WinForms (fenêtres, étiquettes, boutons, barres de progression, polices, icônes). |
+| Application .NET autonome (livre son `coreclr.dll`) | **Démarre** son propre runtime ; Paint.NET s'ouvre et dessine, une application WinForms autonome simple s'ouvre. |
+| WPF | **Partiel** : une application WPF autonome simple s'ouvre, mais le rendu est incomplet (#268). |
+| Jeux Direct3D 9/11/12, OpenGL, Vulkan | **Partiel** : Warzone 2100, SuperTuxKart et Xonotic se jouent ; à valider jeu par jeu et sur de vrais GPU. |
+| Applications Chromium, Electron, WebView2 | **En cours** (#236). |
+| Paquets MSIX / AppX | **Installation, raccourcis et désinstallation** (#272). |
+| Pilotes Windows (`.sys`), antivirus, anti-triche noyau | **Hors périmètre** : il n'y a pas de noyau Windows. Un anti-triche noyau est refusé à l'installation, avec un message clair. |
 
-## Ce qui reste pour presque tout faire tourner
+## Ce qui bloque encore les gros logiciels
 
-L'état des lieux mesuré (21 vrais logiciels, 1 834 fonctions et 73 DLL qui manquent, classés par nombre d'applications bloquées) est dans [docs/COMPATIBILITE.md](https://github.com/Univers4craft/winlux/blob/master/docs/COMPATIBILITE.md). En résumé, par ordre d'impact :
+La v0.3 vise que chaque logiciel testé s'installe et ouvre sa première fenêtre, jusqu'à l'écran de connexion quand il en a un. Les blocages actuels, chacun avec son issue :
 
-1. Les fonctions Win32 de base les plus demandées et les petites DLL absentes (`imm32`, `psapi`, `msimg32`…) : #14, #26.
-2. OpenGL et Vulkan pour les applis : #233.
-3. Le dossier System32 et les redistribuables Visual C++ : #234.
-4. HTTPS et sécurité (Schannel, certificats, WinINet) : #235.
-5. Les shaders Direct3D 10/11/12 : #137.
-6. Les programmes 32 bits : #232.
-7. Chromium, Electron et WebView2 : #236.
-8. WinForms et WPF : #22, #138.
-9. Les anciens DirectX et le MIDI : #237.
+1. **Office** : l'outil de déploiement télécharge Office et vérifie ses signatures, l'installation ne va pas encore au bout (#2740).
+2. **Teams** : il démarre sans atteindre l'écran de connexion (#2511, #2726).
+3. **Acrobat Reader** et les applications Chromium : #236.
+4. **Creative Cloud** : le contrôle WebBrowser n'exécute pas encore les scripts de sa page (#2784).
+5. **Programmes 32 bits** : la frontière entre le code x86 et nos DLL est la première source de défauts ; des interfaces COM rendues au code 32 bits n'ont pas encore de mandataire (#2428).
+6. **Installeur web de Paint.NET** : son téléchargeur WinForms doit s'exécuter lui-même (#2752).
 
-Pour mesurer un logiciel précis : `winlux --exports > exports.tsv`, puis `python3 scripts/compat-imports.py exports.tsv DOSSIER_DU_LOGICIEL`.
+L'état des lieux mesuré, fonction par fonction et DLL par DLL, est dans [docs/COMPATIBILITE.md](https://github.com/Univers4craft/winlux/blob/master/docs/COMPATIBILITE.md). Pour mesurer un logiciel précis : `winlux --exports > exports.tsv`, puis `python3 scripts/compat-imports.py exports.tsv DOSSIER_DU_LOGICIEL`.
 
 ## Le chargeur
 
-- Format **PE32+ x86-64** : sections, relocations, imports par nom et par ordinal, imports différés, ressources, manifestes (élévation, DPI).
+- Formats **PE32+ x86-64** et **PE32 x86** (les programmes 32 bits tournent dans le même processus, par la couche wow32, sans bibliothèques i386) : sections, relocations, imports par nom et par ordinal, imports différés, ressources, manifestes (élévation, DPI).
 - **DLL réelles** livrées avec le programme : chargées avec `LoadLibraryA/W`, `GetProcAddress`, callbacks TLS et `DllMain`.
 - **Contrats API-set** (`api-ms-win-*`) redirigés vers les modules correspondants.
-- **Exceptions** : SEH x64 (`RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`), exceptions C++ MSVC (`_CxxThrowException`, `__CxxFrameHandler3`, `__C_specific_handler` pour `__try/__except/__finally`), exceptions MinGW via `libgcc`/`libstdc++`. `__CxxFrameHandler4` est à venir.
+- **Exceptions** : SEH x64 (`RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`), exceptions C++ MSVC (`_CxxThrowException`, `__CxxFrameHandler3`, `__C_specific_handler` pour `__try/__except/__finally`), `__CxxFrameHandler4`, exceptions MinGW via `libgcc`/`libstdc++`.
 - **Politique des imports manquants** : par défaut, un import non implémenté **arrête le programme** proprement, l'inscrit dans le journal et propose un signalement. `WINLUX_MISSING=ignore` permet de continuer pour diagnostiquer (avec un risque de résultats faux).
 
 ## Système, fichiers et processus
@@ -61,7 +59,7 @@ Pour mesurer un logiciel précis : `winlux --exports > exports.tsv`, puis `pytho
 - **Deux backends** : X11 (vraies fenêtres sur le serveur X, texte Xft, échelle DPI commune) et *headless* (sans affichage, pour les tests).
 - **GDI** : pinceaux, plumes, polices, `BitBlt`/`StretchBlt`, DIB 1 à 32 bits, `CreateDIBSection`, rendu en double tampon. Les régions et certaines opérations raster restent à faire.
 - **comctl32 / comdlg32** : contrôles communs et boîtes Ouvrir, Enregistrer, Imprimer.
-- **Direct2D 1.0** (logiciel, maison) : géométries, chemins, pinceaux unis, bitmaps, anticrénelage, transformations, découpe. `ID2D1DeviceContext` et dégradés à venir.
+- **Direct2D** (logiciel, maison) : géométries, chemins, pinceaux unis et dégradés, bitmaps, anticrénelage, transformations, découpe, contextes de périphérique (`ID2D1DeviceContext`) utilisés par Paint.NET.
 - **DirectWrite** (maison) : lecture des contours TrueType sans dépendance, polices système et de remplacement, mise en page du texte. Mise en forme OpenType et polices CFF à venir.
 - **WIC** : BMP, PNG, JPEG, GIF, TIFF, WebP… avec les décodeurs maison de `runtime/src/imaging/`.
 
@@ -79,7 +77,7 @@ Pour mesurer un logiciel précis : `winlux --exports > exports.tsv`, puis `pytho
 - **Son** : waveOut/waveIn, PlaySound, DirectSound, WASAPI (`mmdevapi`), XAudio2, vers **PipeWire** (volume par application) ou ALSA en repli ([docs/AUDIO.md](https://github.com/Univers4craft/winlux/blob/master/docs/AUDIO.md)).
 - **Webcam** par Media Foundation (capture V4L2), **micro** par waveIn/DirectSound/WASAPI, soumis aux [autorisations](Chemins-et-droits).
 - **Impression** : `winspool` et `comdlg32` maison ; les DC imprimante GDI sont rendus en PDF et envoyés à CUPS par IPP, ou enregistrés par l'imprimante virtuelle « Imprimer en PDF (Winlux) ».
-- **Limite** : Media Foundation et DirectShow ne décodent pas encore la vidéo pour les `.exe` (le lecteur multimédia intégré, lui, s'appuie sur FFmpeg et lit tous les formats courants).
+- **Limite** : Media Foundation et DirectShow ne décodent pas encore toute la vidéo pour les `.exe` (le lecteur multimédia intégré, lui, s'appuie sur FFmpeg et lit tous les formats courants).
 
 ## Réseau
 
@@ -89,31 +87,26 @@ Winsock (TCP, UDP, IPv6, multicast, `getaddrinfo`), WinHTTP et `iphlpapi`. Les p
 
 Winlux a deux chemins d'exécution pour le code managé :
 
-1. **Le CLR maison** (`runtime/src/clr/`), pour les assemblies et les applications qui n'embarquent pas leur runtime : lecture des métadonnées, interpréteur CIL, ramasse-miettes, exceptions .NET, appels virtuels, BCL minimale (Console, Math, String, Environment, File, Path…) et P/Invoke vers les DLL intégrées. Il accepte les assemblies 32 et 64 bits. **Limites** : pas encore de génériques de la BCL (`List<T>`, `Dictionary`), de délégués ni de LINQ ; structures traitées comme des références ; paramètres flottants refusés en P/Invoke.
-2. **Le runtime embarqué par l'application** : une application .NET autonome qui livre son `coreclr.dll` à côté de son lanceur (comme Paint.NET) est lancée par son lanceur natif, qui charge ce runtime comme sous Windows. Rien n'est téléchargé.
+1. **Le moteur .NET maison** (`runtime/src/clr/`), pour les assemblies et les applications qui n'embarquent pas leur runtime (.NET Framework) : lecture des métadonnées, interpréteur CIL, ramasse-miettes, exceptions .NET, génériques, délégués, LINQ, async/await, réflexion et P/Invoke vers les DLL intégrées. Sa bibliothèque de base (`mscorlib` maison) couvre les collections, les fichiers, le registre, les processus, `System.Net` sur notre WinHTTP, `System.IO.Compression`, et une partie de WinForms et de `System.Drawing`. Il accepte les assemblies 32 et 64 bits. **Limites** : WinForms reste partiel et WPF absent de ce chemin ; une méthode qui manque lève `MissingMethodException`, et `WINLUX_CLR_MANQUANTS=<fichier>` en dresse la liste avec l'appelant.
+2. **Le runtime embarqué par l'application** : une application .NET autonome qui livre son `coreclr.dll` à côté de son lanceur (comme Paint.NET) est lancée par son lanceur natif, qui charge ce runtime lui-même. Rien n'est téléchargé.
 
 Aucun runtime .NET Linux (`dotnet`, Mono) n'est nécessaire.
 
 ### Le cas Paint.NET
 
-Paint.NET 5.1.12 est l'application de référence pour .NET de bureau (issue #138, [docs/PAINTNET.md](https://github.com/Univers4craft/winlux/blob/master/docs/PAINTNET.md)). Aujourd'hui : son lanceur traverse `hostfxr` et `hostpolicy`, `coreclr` s'initialise, charge la bibliothèque de base et l'assembly principale, puis s'arrête sur une exception interne. Il reste notamment `__CxxFrameHandler4`, puis WPF. **Paint.NET ne s'ouvre donc pas encore.**
+Paint.NET 5.1 est l'application de référence pour .NET de bureau (issue #138, [docs/PAINTNET.md](https://github.com/Univers4craft/winlux/blob/master/docs/PAINTNET.md)). Depuis la v0.2.21, il s'installe, s'ouvre et dessine avec le runtime qu'il embarque, Direct2D, DirectWrite et WIC maison. Restent des défauts d'affichage, comme la vignette de l'onglet d'image (#2557), et son installeur web, dont le téléchargeur WinForms passe par notre moteur .NET maison (#2752).
 
 ## Installer des logiciels Windows
 
-- **`.msi`** : `msiexec` intégré (`/i`, `/x`, `/qn`, propriétés, CAB avec LZX…). Pas encore d'actions personnalisées, de `.mst`, de `.msp` ([docs/MSIEXEC.md](https://github.com/Univers4craft/winlux/blob/master/docs/MSIEXEC.md)).
-- **NSIS 3 et Inno Setup** : contenu extrait et installé directement, raccourcis, clé `Uninstall`, désinstallation ([docs/SETUP-EXE.md](https://github.com/Univers4craft/winlux/blob/master/docs/SETUP-EXE.md)).
+- **`.msi`** : `msiexec` intégré (`/i`, `/x`, `/qn`, propriétés, CAB avec LZX…), actions personnalisées EXE et DLL, actions WiX ([docs/MSIEXEC.md](https://github.com/Univers4craft/winlux/blob/master/docs/MSIEXEC.md)).
+- **NSIS 3, Inno Setup, Burn, auto-extractibles 7-Zip** : l'assistant de l'installeur s'affiche, avec son contrat de licence ; raccourcis, clé `Uninstall`, désinstallation ([docs/SETUP-EXE.md](https://github.com/Univers4craft/winlux/blob/master/docs/SETUP-EXE.md)).
+- **Signatures** : la signature Authenticode d'un programme, d'un paquet MSIX ou d'un cabinet est vérifiée, horodatage compris ; l'invite d'élévation nomme l'éditeur lu dans la signature.
 - **Store** : la source « Windows » s'appuie sur le catalogue Scoop Extras (installateurs officiels des éditeurs, sommes de contrôle vérifiées).
 - **Applications installées** (`appwiz.cpl`) liste les programmes et les désinstalle avec le bon outil.
 
 ## Applications testées
 
-| Application | Résultat |
-|---|---|
-| Notepad++ 8.6.9, WinMerge 2.16, ShareX 16.1, Audacity 3.6 | Installateurs NSIS/Inno : installés et désinstallés proprement. |
-| Applications maison du shell (Explorateur, Gestionnaire des tâches, Regedit…) | Fonctionnent : ce sont des `.exe` exécutés par le runtime à chaque session. |
-| Paint.NET 5.1.12 | Le runtime embarqué démarre, l'interface ne s'ouvre pas encore. |
-| ChatGPT et Claude pour Windows | Ne démarrent pas encore ([docs/CLAUDE-CHATGPT-WINDOWS.md](https://github.com/Univers4craft/winlux/blob/master/docs/CLAUDE-CHATGPT-WINDOWS.md), [docs/CHATGPT-WINDOWS.md](https://github.com/Univers4craft/winlux/blob/master/docs/CHATGPT-WINDOWS.md)). |
-| Photoshop | Non pris en charge. |
+La liste à jour des logiciels et des jeux vérifiés un par un au banc de test, avec leurs issues, est sur la page [Logiciels et jeux](https://univers4craft.github.io/winlux/fr/software.html) du site. En bref : VLC, Audacity, ScreenToGif, OBS Studio, Paint.NET, 7-Zip, Notepad++, SumatraPDF, Flow Launcher, PuTTY, FileZilla, WinSCP, Claude Code et Pythonwin s'ouvrent ; Office, Teams, Acrobat, Creative Cloud et Steam sont en cours.
 
 ## Diagnostiquer un programme qui ne marche pas
 
@@ -124,16 +117,13 @@ winlux --inspect programme.exe               # en-têtes, imports, dépendances
 ```
 
 1. Si le programme s'arrête sur **« import manquant »**, le nom de la DLL et de la fonction sont dans le message et dans l'Observateur d'événements.
-2. **« programme Windows 32 bits »** : le binaire est en PE32, non pris en charge.
-3. Après un plantage, Winlux propose **« Signaler un problème »**, qui prépare une issue GitHub avec la cause probable, la version et le journal, données personnelles masquées.
+2. Après un plantage, Winlux propose **« Signaler un problème »**, qui prépare une issue GitHub avec la cause probable, la version et le journal, données personnelles masquées.
 
 ## Ce qui reste à faire
 
-- WinForms puis WPF (et `__CxxFrameHandler4`) pour les applications .NET de bureau.
-- Génériques, délégués et LINQ dans le CLR maison.
-- COM : activation depuis le registre, serveurs hors processus, automatisation.
-- Media Foundation/DirectShow branchés sur le moteur multimédia du runtime.
-- Héritage des handles, objets nommés partagés entre processus, `FreeLibrary` réel, `StartServiceCtrlDispatcher`.
-- Programmes 32 bits.
+- Les blocages des gros logiciels listés plus haut (Office, Teams, Acrobat, Creative Cloud, installeur web de Paint.NET).
+- Chromium, Electron et WebView2 (#236) ; WPF complet (#268) ; un vrai runtime .NET Framework pour WinForms et WPF (#22).
+- Mandataires COM pour les programmes 32 bits (#2428) ; serveurs COM hors processus déclarés comme service (#2575).
+- Les fonctions encore absentes que chaque bench signale, une issue par fonction ou par famille.
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus) · [Feuille de route](Feuille-de-route)
