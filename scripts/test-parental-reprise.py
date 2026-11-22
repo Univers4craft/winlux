@@ -51,14 +51,20 @@ check(oct(lib.FROZEN_FILE.stat().st_mode & 0o777) == "0o600" and oct(lib.STATE_D
       "état du service privé (dossier 0700, fichier 0600)")
 
 # Écran de blocage laissé par ce premier service (orphelin : son parent a disparu).
+# Le faux écran passe par deux execve (sh puis setsid puis python) : pendant un
+# execve, /proc/PID/cmdline se lit vide un court instant, et l'écran n'est alors
+# reconnu par personne (#2929). On attend qu'il ait fini de démarrer : il crée
+# lui-même un fichier témoin une fois devenu le programme python définitif.
+ready = work / "ecran-pret"
 leftover = subprocess.run(["sh", "-c", 'setsid "$@" >/dev/null 2>&1 & echo $!', "sh", sys.executable, "-c",
-                           "import time; time.sleep(120)", str(TOOL), "screen", "bob", ":7"],
+                           "import sys, time; open(sys.argv[-5], 'w').close(); time.sleep(120)",
+                           str(ready), str(TOOL), "screen", "bob", ":7"],
                           capture_output=True, text=True).stdout.strip()
 leftover = int(leftover)
-for _ in range(50):
-    if "screen" in Path(f"/proc/{leftover}/cmdline").read_bytes().decode(errors="replace"):
-        break
-    time.sleep(0.1)
+deadline = time.monotonic() + 30
+while not ready.exists() and time.monotonic() < deadline:
+    time.sleep(0.05)
+check(ready.exists(), "faux écran laissé par le service précédent démarré")
 check(leftover in lib.stale_screens(), "écran laissé par le service précédent reconnu")
 
 # 2. Service relancé : dégel du compte, écran orphelin fermé, état remis à zéro.
