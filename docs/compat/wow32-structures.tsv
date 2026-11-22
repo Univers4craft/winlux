@@ -325,6 +325,9 @@ winrt_coreapp.rs	IterObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.Co
 winrt_coreapp.rs	PairObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winrt_coreapp.rs	SetObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
 winrt_coreapp.rs	ViewObj	a-verifier	objet WinRT Windows.ApplicationModel.Core.CoreApplication et son PropertySet (#2681), servi aux programmes x64
+winrt_wam.rs	Op	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
+winrt_wam_objets.rs	Plain	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
+winrt_wam_objets.rs	Request	a-verifier	objet WinRT du gestionnaire de comptes web (WebAuthenticationCoreManager, #2935), servi aux programmes x64
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
 wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)

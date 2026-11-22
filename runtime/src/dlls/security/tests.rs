@@ -734,3 +734,80 @@ fn longueur_d_un_descripteur_absolu() {
         );
     }
 }
+
+/// Versions ANSI servies par api-ms-win-security-lsalookup-ansi-l2 (Refs #2902) :
+/// mêmes noms que les versions W, taille requise nul compris si le tampon
+/// est trop court.
+#[test]
+fn noms_de_privileges_ansi_2902() {
+    unsafe {
+        let mut luid = [0u32; 2];
+        assert_ne!(
+            LookupPrivilegeValueA(
+                std::ptr::null(),
+                c"SeShutdownPrivilege".as_ptr().cast(),
+                luid.as_mut_ptr()
+            ),
+            0
+        );
+        let mut buf = [0u8; 64];
+        let mut len = buf.len() as u32;
+        assert_ne!(
+            LookupPrivilegeNameA(std::ptr::null(), luid.as_ptr(), buf.as_mut_ptr(), &mut len),
+            0
+        );
+        assert_eq!(&buf[..len as usize], b"SeShutdownPrivilege");
+        assert_eq!(buf[len as usize], 0);
+        let mut court = 4u32;
+        assert_eq!(
+            LookupPrivilegeNameA(
+                std::ptr::null(),
+                luid.as_ptr(),
+                buf.as_mut_ptr(),
+                &mut court
+            ),
+            0
+        );
+        assert_eq!(court, 20);
+
+        let (mut wlen, mut lang) = (64u32, 0u32);
+        let mut w = [0u16; 64];
+        let nom_w: Vec<u16> = "SeShutdownPrivilege\0".encode_utf16().collect();
+        assert_ne!(
+            LookupPrivilegeDisplayNameW(
+                std::ptr::null(),
+                nom_w.as_ptr(),
+                w.as_mut_ptr(),
+                &mut wlen,
+                &mut lang
+            ),
+            0
+        );
+        let mut alen = buf.len() as u32;
+        assert_ne!(
+            LookupPrivilegeDisplayNameA(
+                std::ptr::null(),
+                c"SeShutdownPrivilege".as_ptr().cast(),
+                buf.as_mut_ptr(),
+                &mut alen,
+                &mut lang
+            ),
+            0
+        );
+        assert_eq!(alen, wlen);
+        assert_eq!(
+            String::from_utf8_lossy(&buf[..alen as usize]),
+            String::from_utf16_lossy(&w[..wlen as usize])
+        );
+        assert_eq!(
+            LookupPrivilegeDisplayNameA(
+                std::ptr::null(),
+                c"Inconnu".as_ptr().cast(),
+                buf.as_mut_ptr(),
+                &mut alen,
+                &mut lang
+            ),
+            0
+        );
+    }
+}

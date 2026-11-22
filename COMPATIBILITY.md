@@ -150,7 +150,7 @@ messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
 `DispatchMessage` complète (testée par `gui_suite.exe` et `gui_demo.exe`).
 Deux backends sont disponibles : *headless* (par défaut, aucun affichage, sert
 aux tests) et **X11** (`gui_x11.rs`), qui crée de vraies fenêtres sur le serveur
-X, rend une palette claire inspirée de Windows 11 avec accent bleu et traduit
+X, rend une palette claire maison avec accent bleu et traduit
 les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→
 `WM_SIZE`, boutons et mouvements de souris, keysyms→`VK_*`/`WM_KEYDOWN`/
 `WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` publie les

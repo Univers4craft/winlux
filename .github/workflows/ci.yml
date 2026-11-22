@@ -726,6 +726,9 @@ jobs:
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
 
+      - name: Applications du shell, aucune ligne de test sur la sortie standard (#2896)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-sortie-muette-xvfb.py
+
       - name: Barre des tâches sans infobulle « (genmon) » ni trait doublé à côté de Démarrer
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-panel-tooltips.py --barre
 
@@ -801,6 +804,9 @@ jobs:
 
       - name: Menu Démarrer préchargé à l'ouverture de session et réveillé par D-Bus
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-preload.py
+
+      - name: Recherche du menu Démarrer sans chemin AppData ni marque Microsoft (#2905)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search-appdata.py
 
       - name: Menu Démarrer préchargé, ouverture indépendante de l'historique (mesure, #2858)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-ouverture.py
