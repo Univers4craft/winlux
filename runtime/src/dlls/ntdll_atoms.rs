@@ -3,7 +3,7 @@
 //!
 //! Le bac à sable d'Acrobat Reader, du même type que celui de Chromium (#236),
 //! cherche NtAddAtomEx dans ntdll avant de poser ses interceptions dans le
-//! ntdll de son moteur de rendu. Comme elle était introuvable, il posait 24
+//! ntdll de son moteur de rendu. Comme elle était introuvable, il posait 12
 //! interceptions puis tuait l'enfant (passes BD et BE du banc 2, 16 nov.).
 //!
 //! Provenance : la seule source permise trouvée est le `ntdll.def` i686 de
