@@ -1,7 +1,6 @@
 # Récupération : réinitialiser ce PC, clé de secours, menu de secours
 
-Tout est dans **Paramètres › Système › Récupération** (page 31), comme sous
-Windows 11 ; les opérations passent par `winlux-reset` (`scripts/winlux-reset.py`),
+Tout est dans **Paramètres › Système › Récupération** (page 31) ; les opérations passent par `winlux-reset` (`scripts/winlux-reset.py`),
 en root via le relais `winlux-root` et le Contrôle de compte d'utilisateur.
 Une option impossible sur la machine n'apparaît pas : pas de réinitialisation
 ni de démarrage avancé dans le Live, pas de clé de secours sans `parted`,

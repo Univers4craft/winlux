@@ -73,7 +73,7 @@ sys.stderr = real_stderr
 log = logged.getvalue()
 assert "Entrée UEFI : « Winlux » créée vers \\EFI\\BOOT\\BOOTX64.EFI (/dev/nvme0n1, partition 2)" in log, log
 assert "Entrée UEFI : non créée, variables UEFI indisponibles" in log and "efivarfs non monté" in log, log
-print("sans variables UEFI (efi=noruntime) : rien, le chemin de secours suffit ; la raison est tracée")
+print("sans variables UEFI : rien, le chemin de secours suffit ; la raison est tracée")
 
 # efivarfs absent (v0.2.19 : « EFI variables are not supported ») : monté par l'installateur.
 mount_ns = {"os": os, "subprocess": subprocess}

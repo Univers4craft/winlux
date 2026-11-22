@@ -1,7 +1,7 @@
 ---
 title: Home
 headline: Windows programs, one double-click away, on Linux
-lead: Winlux is a free operating system built on the Linux kernel. Your `.exe` files open with a double-click, on a desktop that looks like the one you know, with no hidden virtual machine and no borrowed compatibility layer.
+lead: Winlux is a free operating system built on the Linux kernel. Your `.exe` files open with a double-click, on a desktop with a familiar layout, with no hidden virtual machine and no borrowed compatibility layer.
 description: Winlux, the free Linux-kernel system that opens Windows programs with a double-click. Download, installation guide and tested applications.
 ---
 
@@ -52,6 +52,6 @@ What already works, what does not work yet, and how to tell us. [Tested applicat
 
 ## Where the project stands
 
-Winlux is a **technical preview**: the desktop, the installer, updates and many 64-bit Windows programs work, but not every piece of software opens yet. 32-bit programs, recent Direct3D 11 games and .NET desktop applications (WinForms, WPF) are among the work in progress. The full list is kept up to date in the [wiki](wiki:Limites-et-problemes-connus).
+Winlux is a **technical preview**. The latest published version is v0.2.21; the next one will be v0.3. The desktop, the installer, updates and many 64-bit and 32-bit Windows programs work, but not every piece of software opens yet. Large programs such as Office, Teams, Acrobat or Creative Cloud, Chromium-based applications and WPF are among the work in progress. The full list is kept up to date in the [wiki](wiki:Limites-et-problemes-connus).
 
 This website is for people discovering Winlux. To understand how it is built, read the [technical wiki](wiki:Home) (in French).
