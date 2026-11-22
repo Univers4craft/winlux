@@ -1067,9 +1067,59 @@ pub struct X11Backend {
     /// Fenêtre possédée → propriétaire. openbox ne relève pas un
     /// transitoire avec sa propriétaire : Winlux le fait lui-même (#1068).
     owners: HashMap<usize, usize>,
+    /// _MOTIF_WM_HINTS de chaque fenêtre de premier niveau : décorations
+    /// demandées (MWM_DECOR_*, `None` = laissées au gestionnaire) et
+    /// fenêtre non redimensionnable (#3011). Les deux champs partagent une
+    /// seule propriété X : chaque écriture la recompose entière.
+    mwm: HashMap<usize, (Option<u32>, bool)>,
 }
 
 impl X11Backend {
+    /// Écrit `_MOTIF_WM_HINTS` depuis `mwm`. Une fenêtre fixe déclare ses
+    /// fonctions sans MWM_FUNC_RESIZE : openbox 3.6 retire alors
+    /// « Redimensionner » et « Agrandir » (barre de titre et
+    /// _NET_WM_ALLOWED_ACTIONS), mais accepte toujours que le programme
+    /// change lui-même la taille (SetWindowPos). Mesuré sous Xvfb (#3011) :
+    /// openbox ignore les bits MWM_FUNC_MAXIMIZE et MWM_FUNC_MINIMIZE.
+    fn write_mwm_hints(&mut self, hwnd: usize) {
+        const MWM_HINTS_FUNCTIONS: u32 = 1;
+        const MWM_HINTS_DECORATIONS: u32 = 2;
+        // MOVE | MINIMIZE | MAXIMIZE | CLOSE, sans RESIZE (MwmUtil.h).
+        const FUNCTIONS_FIXED: u32 = 0x04 | 0x08 | 0x10 | 0x20;
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        let top = Self::top_xwin(w);
+        let (decorations, fixed) = self.mwm.get(&hwnd).copied().unwrap_or((None, false));
+        let Ok(Ok(atom)) = self
+            .conn
+            .intern_atom(false, b"_MOTIF_WM_HINTS")
+            .map(|c| c.reply())
+        else {
+            return;
+        };
+        let mut flags = 0;
+        if decorations.is_some() {
+            flags |= MWM_HINTS_DECORATIONS;
+        }
+        if fixed {
+            flags |= MWM_HINTS_FUNCTIONS;
+        }
+        if flags == 0 {
+            let _ = self.conn.delete_property(top, atom.atom);
+        } else {
+            let functions = if fixed { FUNCTIONS_FIXED } else { 0 };
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                top,
+                atom.atom,
+                atom.atom,
+                &[flags, functions, decorations.unwrap_or(0), 0, 0],
+            );
+        }
+        let _ = self.conn.flush();
+    }
+
     /// _NET_WM_WINDOW_TYPE (EWMH) d'une fenêtre de premier niveau.
     fn set_window_type(&mut self, hwnd: usize, name: &[u8]) {
         let Some(w) = self.windows.get(&hwnd) else {
@@ -1289,6 +1339,7 @@ impl X11Backend {
             last_click: None,
             xdnd,
             owners: HashMap::new(),
+            mwm: HashMap::new(),
         })
     }
 
@@ -5608,6 +5659,7 @@ impl gui::GuiBackend for X11Backend {
         self.see_through.remove(&hwnd);
         self.iconic.remove(&hwnd);
         self.owners.remove(&hwnd);
+        self.mwm.remove(&hwnd);
         self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
         self.menu_bars.remove(&hwnd);
@@ -5794,31 +5846,29 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_decorations(&mut self, hwnd: usize, level: u8) {
-        let Some(w) = self.windows.get(&hwnd) else {
+        if !self.windows.contains_key(&hwnd) {
             return;
-        };
-        let top = Self::top_xwin(w);
-        let Ok(Ok(atom)) = self
-            .conn
-            .intern_atom(false, b"_MOTIF_WM_HINTS")
-            .map(|c| c.reply())
-        else {
-            return;
-        };
+        }
         // MWM_HINTS_DECORATIONS ; MWM_DECOR_ALL (1) ou MWM_DECOR_BORDER (2).
         let decorations = match level {
             0 => 0,
             1 => 2,
             _ => 1,
         };
-        let _ = self.conn.change_property32(
-            x11rb::protocol::xproto::PropMode::REPLACE,
-            top,
-            atom.atom,
-            atom.atom,
-            &[2, 0, decorations, 0, 0],
-        );
-        let _ = self.conn.flush();
+        self.mwm.entry(hwnd).or_insert((None, false)).0 = Some(decorations);
+        self.write_mwm_hints(hwnd);
+    }
+
+    fn set_resizable(&mut self, hwnd: usize, resizable: bool) {
+        if !self.windows.contains_key(&hwnd) {
+            return;
+        }
+        let entry = self.mwm.entry(hwnd).or_insert((None, false));
+        if entry.1 == !resizable {
+            return;
+        }
+        entry.1 = !resizable;
+        self.write_mwm_hints(hwnd);
     }
 
     fn set_owner(&mut self, hwnd: usize, owner: usize) {

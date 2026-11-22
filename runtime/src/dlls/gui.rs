@@ -3279,6 +3279,11 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// Fenêtre de premier niveau que l'utilisateur ne peut ni
+    /// redimensionner ni agrandir (barre de titre sans WS_THICKFRAME ni
+    /// WS_MAXIMIZEBOX, #3011) : le gestionnaire retire son bouton Agrandir.
+    /// Le programme garde le droit de changer lui-même sa taille.
+    fn set_resizable(&mut self, _hwnd: usize, _resizable: bool) {}
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
