@@ -1642,13 +1642,18 @@ fn keep_caret_visible(hwnd: usize) {
         let shown = displayed(&c.edit, &text);
         let x = measure(font, &shown.chars().take(c.edit.caret).collect::<String>()).0;
         let w = area.width().max(1);
+        // Mesuré avant with_ctl : la mesure prend le verrou du backend, que
+        // la création d'une fenêtre tient en lisant l'état des contrôles
+        // (is_backdrop). Mesurer sous l'état inversait l'ordre des deux
+        // verrous et bloquait deux fils d'interface (#3041).
+        let fits = measure(font, &shown).0 <= w;
         with_ctl(hwnd, |c| {
             if x - c.edit.scroll_x > w - 2 {
                 c.edit.scroll_x = x - w + 2;
             } else if x < c.edit.scroll_x {
                 c.edit.scroll_x = (x - w / 3).max(0);
             }
-            if measure(font, &shown).0 <= w {
+            if fits {
                 c.edit.scroll_x = 0;
             }
         });
