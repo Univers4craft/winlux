@@ -480,3 +480,38 @@ fn dossiers_systeme_presents_sur_un_profil_neuf() {
     // Deuxième appel : rien ne change, rien n'échoue.
     ensure_system_folders();
 }
+
+#[test]
+fn dossiers_connus_francais_sans_cle_xdg() {
+    // #2865 : user-dirs.dirs sans XDG_PICTURES_DIR, compte français dont
+    // le dossier s'appelle Images : C:\Users\<nom>\Pictures est ~/Images,
+    // dans les deux sens.
+    let env = Env::new("connus-fr");
+    for d in ["Images", "Musique", "Vidéos"] {
+        std::fs::create_dir_all(env.home.join(d)).unwrap();
+    }
+    let p = env.profile();
+    assert_eq!(to_linux(&format!("{p}\\Pictures")), env.home.join("Images"));
+    assert_eq!(
+        to_linux(&format!("{p}\\My Pictures\\a.png")),
+        env.home.join("Images/a.png")
+    );
+    assert_eq!(to_linux(&format!("{p}\\Videos")), env.home.join("Vidéos"));
+    assert_eq!(
+        to_windows(&env.home.join("Images/a.png")),
+        format!("{p}\\Pictures\\a.png")
+    );
+    // XDG_MUSIC_DIR="$HOME/" est désactivé : le dossier traduit sert.
+    assert_eq!(known_folder("Music"), Some(env.home.join("Musique")));
+    // La clé XDG reste prioritaire, et le nom anglais existant aussi.
+    assert_eq!(known_folder("Desktop"), Some(env.home.join("Bureau")));
+    std::fs::create_dir_all(env.home.join("Pictures")).unwrap();
+    assert_eq!(known_folder("Pictures"), Some(env.home.join("Pictures")));
+    // Ni l'un ni l'autre : le nom anglais, comme avant.
+    assert_eq!(
+        known_folder("Downloads"),
+        Some(env.home.join("Téléchargements"))
+    );
+    std::fs::remove_dir_all(env.home.join("Vidéos")).unwrap();
+    assert_eq!(known_folder("Videos"), Some(env.home.join("Videos")));
+}
