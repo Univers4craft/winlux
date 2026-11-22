@@ -739,6 +739,31 @@ _TR = {
     'Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.': ('The sign-ins to your accounts are kept in your home folder, readable only by you.', 'Los inicios de sesión de sus cuentas se guardan en su carpeta personal, legibles solo por usted.', 'Die Anmeldungen bei Ihren Konten werden in Ihrem persönlichen Ordner gespeichert, nur für Sie lesbar.'),
     'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
     'Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant.': ('Winlux neither ships nor imposes any store. The ones you turn on are added to the Store: what they need is downloaded from the publisher and checked, then the store appears in the Start menu. Without a connection, it is added at the next startup.', 'Winlux no incluye ni impone ninguna tienda. Las que active se añaden a la Tienda: lo necesario se descarga del editor y se comprueba, y la tienda aparece en el menú Inicio. Sin conexión, se añade en el siguiente arranque.', 'Winlux liefert und erzwingt keinen Store. Die von Ihnen aktivierten werden dem Store hinzugefügt: Das Nötige wird beim Herausgeber heruntergeladen und geprüft, dann erscheint der Store im Startmenü. Ohne Verbindung wird er beim nächsten Start hinzugefügt.'),
+    'Mises à jour du Store': ('Store updates', 'Actualizaciones de la Tienda', 'Store-Updates'),
+    'Le Store peut se mettre à jour depuis GitHub, dans votre compte et sans mot de passe. Chaque version est signée par Winlux et vérifiée avant d’être utilisée ; sinon, le Store livré avec le système reste utilisé.': ('The Store can update itself from GitHub, in your account and without a password. Each version is signed by Winlux and checked before it is used; otherwise the Store shipped with the system stays in use.', 'La Tienda puede actualizarse desde GitHub, en su cuenta y sin contraseña. Cada versión está firmada por Winlux y se comprueba antes de usarla; si no, se sigue usando la Tienda incluida en el sistema.', 'Der Store kann sich aus GitHub aktualisieren, in Ihrem Konto und ohne Passwort. Jede Version ist von Winlux signiert und wird vor der Verwendung geprüft; andernfalls bleibt der mit dem System gelieferte Store in Gebrauch.'),
+    'Version {n} téléchargée depuis GitHub': ('Version {n} downloaded from GitHub', 'Versión {n} descargada de GitHub', 'Version {n}, von GitHub heruntergeladen'),
+    'Version livrée avec le système': ('Version shipped with the system', 'Versión incluida en el sistema', 'Mit dem System gelieferte Version'),
+    'Version utilisée': ('Version in use', 'Versión en uso', 'Verwendete Version'),
+    'La version {n} n’a pas démarré : le Store livré est utilisé à sa place.': ('Version {n} did not start: the shipped Store is used instead.', 'La versión {n} no se inició: se usa en su lugar la Tienda incluida.', 'Version {n} ist nicht gestartet: Stattdessen wird der gelieferte Store verwendet.'),
+    'Rechercher au lancement du Store': ('Check when the Store opens', 'Buscar al abrir la Tienda', 'Beim Öffnen des Stores suchen'),
+    'Au plus une fois toutes les 6 heures. Seule la description signée est lue ; une bulle signale une nouvelle version, rien n’est installé sans votre accord.': ('At most once every 6 hours. Only the signed description is read; a notification announces a new version, nothing is installed without your consent.', 'Como máximo una vez cada 6 horas. Solo se lee la descripción firmada; una notificación anuncia una nueva versión, no se instala nada sin su permiso.', 'Höchstens alle 6 Stunden. Nur die signierte Beschreibung wird gelesen; eine Benachrichtigung meldet eine neue Version, nichts wird ohne Ihre Zustimmung installiert.'),
+    'Rechercher maintenant': ('Check now', 'Buscar ahora', 'Jetzt suchen'),
+    'Installer la mise à jour': ('Install the update', 'Instalar la actualización', 'Update installieren'),
+    'Revenir à la version précédente': ('Go back to the previous version', 'Volver a la versión anterior', 'Zur vorherigen Version zurückkehren'),
+    'Revenir à la version livrée': ('Go back to the shipped version', 'Volver a la versión incluida', 'Zur gelieferten Version zurückkehren'),
+    'Le Store est à jour.': ('The Store is up to date.', 'La Tienda está actualizada.', 'Der Store ist aktuell.'),
+    'La version {n} du Store est disponible. Cliquez sur « Installer la mise à jour » pour voir sa source et son empreinte avant de l’installer.': ('Store version {n} is available. Click “Install the update” to see its source and fingerprint before installing it.', 'La versión {n} de la Tienda está disponible. Haga clic en «Instalar la actualización» para ver su origen y su huella antes de instalarla.', 'Store-Version {n} ist verfügbar. Klicken Sie auf „Update installieren“, um Quelle und Fingerabdruck vor der Installation zu sehen.'),
+    'La version {n} du Store est installée. Elle sera utilisée à la prochaine ouverture du Store.': ('Store version {n} is installed. It will be used the next time the Store opens.', 'La versión {n} de la Tienda está instalada. Se usará la próxima vez que se abra la Tienda.', 'Store-Version {n} ist installiert. Sie wird beim nächsten Öffnen des Stores verwendet.'),
+    'C’est fait. Le changement sera visible à la prochaine ouverture du Store.': ('Done. The change will show the next time the Store opens.', 'Hecho. El cambio se verá la próxima vez que se abra la Tienda.', 'Erledigt. Die Änderung ist beim nächsten Öffnen des Stores sichtbar.'),
+    'GitHub ne répond pas ou vous n’êtes pas connecté. Le Store actuel est gardé.': ('GitHub is not responding or you are offline. The current Store is kept.', 'GitHub no responde o no tiene conexión. Se conserva la Tienda actual.', 'GitHub antwortet nicht oder Sie sind offline. Der aktuelle Store bleibt erhalten.'),
+    'La signature de la version publiée ne correspond pas à la clé de Winlux : rien n’a été installé.': ('The signature of the published version does not match the Winlux key: nothing was installed.', 'La firma de la versión publicada no coincide con la clave de Winlux: no se instaló nada.', 'Die Signatur der veröffentlichten Version passt nicht zum Winlux-Schlüssel: Es wurde nichts installiert.'),
+    'Un fichier téléchargé ne correspond pas à son empreinte SHA-256 : rien n’a été installé.': ('A downloaded file does not match its SHA-256 fingerprint: nothing was installed.', 'Un archivo descargado no coincide con su huella SHA-256: no se instaló nada.', 'Eine heruntergeladene Datei passt nicht zu ihrem SHA-256-Fingerabdruck: Es wurde nichts installiert.'),
+    'La description publiée est illisible : rien n’a été installé.': ('The published description is unreadable: nothing was installed.', 'La descripción publicada es ilegible: no se instaló nada.', 'Die veröffentlichte Beschreibung ist unlesbar: Es wurde nichts installiert.'),
+    'La version publiée est plus ancienne que celle utilisée : rien n’a été installé.': ('The published version is older than the one in use: nothing was installed.', 'La versión publicada es más antigua que la que está en uso: no se instaló nada.', 'Die veröffentlichte Version ist älter als die verwendete: Es wurde nichts installiert.'),
+    'La clé de vérification du Store manque sur ce PC : les mises à jour depuis GitHub sont impossibles.': ('The Store verification key is missing on this PC: updates from GitHub are not possible.', 'Falta en este equipo la clave de verificación de la Tienda: no es posible actualizar desde GitHub.', 'Der Prüfschlüssel des Stores fehlt auf diesem PC: Updates von GitHub sind nicht möglich.'),
+    'Aucune version précédente n’est gardée.': ('No previous version is kept.', 'No se conserva ninguna versión anterior.', 'Es wird keine vorherige Version aufbewahrt.'),
+    'Mise à jour du Store refusée': ('Store update refused', 'Actualización de la Tienda rechazada', 'Store-Update abgelehnt'),
+    'Source : {source}': ('Source: {source}', 'Origen: {source}', 'Quelle: {source}'),
     'Logiciels Windows': ('Windows software', 'Programas de Windows', 'Windows-Programme'),
     'Logiciels Linux': ('Linux software', 'Programas de Linux', 'Linux-Programme'),
     'En attente du réseau : ajoutée au prochain démarrage.': ('Waiting for the network: added at the next startup.', 'Esperando la red: se añadirá en el próximo arranque.', 'Wartet auf das Netzwerk: wird beim nächsten Start hinzugefügt.'),
@@ -1950,6 +1975,26 @@ def installed_apps_module():
             except Exception:
                 return None
     return None
+
+
+def store_launcher_module():
+    """Lanceur du Store (#3133) : ses propres règles disent quelle copie tourne."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    candidate = os.environ.get("WINLUX_STORE_LANCEUR", "/usr/bin/winlux-store")
+    try:
+        loader = SourceFileLoader("winlux_store_lanceur", candidate)
+        spec = importlib.util.spec_from_loader("winlux_store_lanceur", loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+    except Exception:
+        return None
+    return module if hasattr(module, "copie_du_compte") else None
+
+
+def store_update_tool():
+    tool = os.environ.get("WINLUX_BOUTIQUE_MAJ", "/usr/lib/winlux/winlux-boutique-maj")
+    return tool if os.access(tool, os.X_OK) else None
 
 
 _PARENTAL = []
@@ -4399,6 +4444,77 @@ class ExtraPages:
                         lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
         self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
 
+    def store_update_section(self):
+        """Mises à jour du Store depuis GitHub (#3133) : réglage visible, rien
+        n'est téléchargé sans clic, retours en arrière au choix de l'utilisateur."""
+        if store_update_tool() is None: return
+        launcher = store_launcher_module()
+        if launcher is None: return
+        self.section(_t("Mises à jour du Store"), _t("Le Store peut se mettre à jour depuis GitHub, dans votre compte et sans mot de passe. Chaque version est signée par Winlux et vérifiée avant d’être utilisée ; sinon, le Store livré avec le système reste utilisé."))
+        box = self.card()
+        delivered = launcher.numero_livree()
+        used = launcher.copie_du_compte()
+        if used:
+            keys = launcher.lire_cles(os.path.join(used[0], "MANIFESTE")) or {}
+            version = _t("Version {n} téléchargée depuis GitHub").format(n=keys.get("numero", "?"))
+            commit = keys.get("commit", "")[:12]
+            if commit: version += f" ({commit})"
+        else:
+            version = _t("Version livrée avec le système") + (f" ({delivered})" if delivered else "")
+        self.row(box, _t("Version utilisée"), None, version)
+        failed = launcher.echecs(launcher.dossier())
+        if failed:
+            self.hint(_t("La version {n} n’a pas démarré : le Store livré est utilisé à sa place.").format(n=", ".join(sorted(failed))), box)
+        self.switch(box, _t("Rechercher au lancement du Store"), launcher.reglage_auto(),
+                    lambda on: self.store_update(["auto", "oui" if on else "non"], quiet=True),
+                    _t("Au plus une fois toutes les 6 heures. Seule la description signée est lue ; une bulle signale une nouvelle version, rien n’est installé sans votre accord."))
+        base = launcher.dossier()
+        previous = ""
+        try:
+            previous = os.readlink(os.path.join(base, "precedente"))
+        except OSError:
+            pass
+        self.actions(box, [(_t("Rechercher maintenant"), lambda: self.store_update(["rechercher"])),
+                           (_t("Installer la mise à jour"), lambda: self.store_update(["installer"])),
+                           (_t("Revenir à la version précédente"), lambda: self.store_update(["precedente"]), bool(previous.isdigit())),
+                           (_t("Revenir à la version livrée"), lambda: self.store_update(["livree"]), bool(used))])
+
+    def store_update(self, args, quiet=False):
+        """winlux-boutique-maj hors du fil GTK ; son verdict « resultat= » est traduit ici."""
+        tool = store_update_tool()
+        if tool is None: return
+        try:
+            process = subprocess.Popen([tool, *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except OSError as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+            return
+        messages = {
+            "a_jour": _t("Le Store est à jour."),
+            "disponible": _t("La version {n} du Store est disponible. Cliquez sur « Installer la mise à jour » pour voir sa source et son empreinte avant de l’installer."),
+            "pose": _t("La version {n} du Store est installée. Elle sera utilisée à la prochaine ouverture du Store."),
+            "fait": _t("C’est fait. Le changement sera visible à la prochaine ouverture du Store."),
+            "hors_ligne": _t("GitHub ne répond pas ou vous n’êtes pas connecté. Le Store actuel est gardé."),
+            "signature": _t("La signature de la version publiée ne correspond pas à la clé de Winlux : rien n’a été installé."),
+            "empreinte": _t("Un fichier téléchargé ne correspond pas à son empreinte SHA-256 : rien n’a été installé."),
+            "invalide": _t("La description publiée est illisible : rien n’a été installé."),
+            "ancien": _t("La version publiée est plus ancienne que celle utilisée : rien n’a été installé."),
+            "cle_absente": _t("La clé de vérification du Store manque sur ce PC : les mises à jour depuis GitHub sont impossibles."),
+            "aucune": _t("Aucune version précédente n’est gardée."),
+        }
+
+        def wait():
+            if process.poll() is None: return True
+            keys = keyvals(process.stdout.read() or "")
+            result = keys.get("resultat", "")
+            text = messages.get(result, "").replace("{n}", keys.get("numero", "?"))
+            if result in ("signature", "empreinte", "invalide", "cle_absente"):
+                self.show_error(_t("Mise à jour du Store refusée"), text + "\n" + _t("Source : {source}").format(source=keys.get("source", "")))
+            elif text and not quiet and result != "annule":
+                self.show_info(_t("Mises à jour du Store"), text)
+            self.extra_refresh()
+            return False
+        GLib.timeout_add(200, wait)
+
     def page_installed(self):
         """Applications installées (#722) : tout ce qui est installé, Linux et
         Windows, avec recherche, tri, taille et Désinstaller."""
@@ -4426,6 +4542,7 @@ class ExtraPages:
             self.row(box, _t("Applications installées"), None, _t("Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation."))
             self.actions(box, [(_t("Voir les applications installées"), lambda: self.open_page(PAGE_INSTALLED))])
         self.store_catalogs_section()
+        self.store_update_section()
         panel = default_apps_panel(self)
         if panel is not None:
             self.section(_t("Applications par défaut"))

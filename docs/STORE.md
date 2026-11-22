@@ -270,6 +270,69 @@ licence non accepté : rien n'a été installé. ». Un `.exe` ouvert par
 « Installer un fichier » garde son interface : le runtime présente lui-même le
 contrat, et un refus (1602, vu 66 sur 8 bits) est dit de la même façon.
 
+### Mise à jour du Store depuis GitHub (#3133)
+
+Le Store peut se mettre à jour depuis GitHub, dans le compte de l'utilisateur
+et sans mot de passe. Seul le Store est concerné : le binaire `winlux` et le
+reste du système suivent la mise à jour de l'OS.
+
+- **Publication.** À chaque push sur master, le job « Signer la Boutique » de
+  `site.yml` assemble le paquet avec `scripts/build-store-bundle.py`. Le paquet
+  contient `winlux-store.py`, `winlux-store-confirm.py`,
+  `store-windows-valides.json`, `store-editeurs.json` et `store-catalog.txt`.
+  Il est publié sur `https://univers4craft.github.io/winlux/boutique/`. Le
+  `MANIFESTE` donne :
+  - un numéro monotone, le nombre de commits de master en first-parent ;
+  - le commit ;
+  - la version attendue du lanceur ;
+  - pour chaque fichier, son SHA-256, sa taille et son nom.
+- **Signature.** Le manifeste est signé en Ed25519 par une clé propre au Store.
+  La graine est dans le secret `WINLUX_STORE_SIGNING_KEY` de l'environnement
+  GitHub « boutique », limité à master. La clé publique
+  `integration/native/keys/store-signing.pub` est copiée en
+  `/usr/share/winlux/store-signing.pub`. La clé des mises à jour de l'OS
+  (`WINLUX_UPDATE_SIGNING_KEY`) ne sert jamais ici. Le job qui signe ne lit
+  que les fichiers du dépôt, sur master. Sans secret, rien n'est publié.
+- **Pose.** `winlux-boutique-maj installer` (dans `/usr/lib/winlux`) est lancé
+  par Paramètres > Applications > Boutiques de logiciels > « Installer la mise
+  à jour ». La confirmation nomme le paquet, la version, l'éditeur, la source
+  et le SHA-256 du manifeste, avec Annuler par défaut. L'outil vérifie ensuite
+  la signature, puis le SHA-256 et la taille de chaque fichier. Il refuse un
+  numéro qui ne dépasse pas celui de la copie active ou de la copie livrée. La
+  pose se fait dans `~/.local/share/winlux/boutique/<numéro>/` : dossier de
+  préparation, rename, puis remplacement atomique du lien `actuelle`. La
+  version d'avant reste en `precedente`.
+- **Lancement.** `/usr/bin/winlux-store` est le lanceur
+  (`scripts/winlux-store-lanceur.py`). La Boutique livrée est
+  `/usr/lib/winlux/winlux-store.py`, avec le numéro de sa version dans
+  `/usr/share/winlux/boutique-livree.txt`. Le lanceur exécute la copie du
+  compte seulement si toutes ces conditions tiennent :
+  - le processus n'est pas root ;
+  - la copie appartient au compte, sans écriture pour le groupe ni les autres ;
+  - son numéro dépasse celui de la livrée ;
+  - chaque fichier a la taille et le SHA-256 du manifeste.
+
+  Si la copie ne se charge pas, la livrée prend le relais et l'échec est noté
+  (fichier `echecs`, montré dans les Paramètres). Aucune question n'est posée
+  au lancement (#1733). Les installations passent toujours par winlux-root et
+  sa confirmation : une copie tirée de GitHub ne peut rien faire que le compte
+  ne puisse déjà faire.
+- **Recherche au lancement.** Le réglage « Rechercher au lancement du Store »
+  est visible dans les Paramètres et activé par défaut. À l'ouverture du Store,
+  au plus une fois toutes les 6 h, seuls `MANIFESTE` et `MANIFESTE.sig` sont
+  lus. Une version nouvelle n'est signalée que par une bulle, une seule fois.
+  Rien n'est téléchargé sans clic.
+- **Retours en arrière.** « Revenir à la version précédente » et « Revenir à
+  la version livrée » sont le choix de l'utilisateur, donc permis même vers un
+  numéro plus ancien.
+- **Pannes.** Sans réseau ou si GitHub ne répond pas en 10 s, la version
+  courante est gardée. Un fichier corrompu, une signature fausse ou un ancien
+  numéro sont refusés net : la source est nommée et rien n'est posé.
+- **Coût.** Le contrôle de la copie par le lanceur coûte environ 0,25 ms
+  (217 Kio hachés). Le bytecode du Store est gardé, vérifié par l'empreinte
+  de la source, ce qui évite à chaque commande les ~34 ms de compilation de
+  `winlux-store.py`.
+
 ## Gestionnaire de polices
 
 L'application **Polices** liste les polices fontconfig (système et
