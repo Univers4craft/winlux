@@ -686,6 +686,8 @@ QueryDosDeviceW
 QueryFullProcessImageNameA
 QueryFullProcessImageNameW
 QueryInformationJobObject
+QueryInterruptTime
+QueryInterruptTimePrecise
 QueryMemoryResourceNotification
 QueryPerformanceCounter
 QueryPerformanceFrequency

@@ -1817,21 +1817,112 @@ unsafe extern "win64" fn terminate_thread(handle: usize, code: u32) -> i32 {
 /// LPTIMECALLBACK(uTimerID, uMsg, dwUser, dw1, dw2).
 type TimeCallback = unsafe extern "win64" fn(u32, u32, usize, usize, usize);
 
-struct MmTimer {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    worker: std::sync::Arc<std::sync::OnceLock<std::thread::ThreadId>>,
-}
-
-fn mm_timers() -> &'static std::sync::Mutex<std::collections::HashMap<u32, MmTimer>> {
-    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, MmTimer>>> =
-        std::sync::OnceLock::new();
-    T.get_or_init(Default::default)
-}
-
 const TIME_PERIODIC: u32 = 1;
 const TIME_CALLBACK_EVENT_SET: u32 = 0x10;
 const TIME_CALLBACK_EVENT_PULSE: u32 = 0x20;
+
+/// Un minuteur multimédia armé par timeSetEvent.
+struct MmTimer {
+    due: std::time::Instant,
+    period: std::time::Duration,
+    callback: usize,
+    user: usize,
+    flags: u32,
+}
+
+/// Tous les minuteurs du processus et le fil unique qui les sert (#3118).
+/// Avant, chaque timeSetEvent créait un fil Windows complet (TEB, rappels
+/// DLL_THREAD_ATTACH) jamais détaché ni libéré à la fin d'un minuteur à coup
+/// unique : Qt en réarme une quarantaine par seconde, Audacity perdait ainsi
+/// environ 8 Mo/s dès son lancement.
+struct MmTimers {
+    timers: std::collections::HashMap<u32, MmTimer>,
+    /// Minuteur dont le rappel tourne en ce moment (timeKillEvent l'attend).
+    running: Option<u32>,
+    worker: Option<std::thread::ThreadId>,
+    started: bool,
+}
+
+fn mm_state() -> &'static (std::sync::Mutex<MmTimers>, std::sync::Condvar) {
+    static T: std::sync::OnceLock<(std::sync::Mutex<MmTimers>, std::sync::Condvar)> =
+        std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        (
+            std::sync::Mutex::new(MmTimers {
+                timers: std::collections::HashMap::new(),
+                running: None,
+                worker: None,
+                started: false,
+            }),
+            std::sync::Condvar::new(),
+        )
+    })
+}
+
+fn mm_lock() -> std::sync::MutexGuard<'static, MmTimers> {
+    mm_state().0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Fil des minuteurs : attend l'échéance la plus proche, appelle le
+/// rappel hors verrou, réarme un minuteur périodique, oublie un minuteur à
+/// coup unique (Learn, timeSetEvent : seul TIME_PERIODIC demande
+/// timeKillEvent).
+fn mm_worker() {
+    crate::process::thread_attach_current();
+    let (_, cv) = mm_state();
+    let mut st = mm_lock();
+    st.worker = Some(std::thread::current().id());
+    loop {
+        let now = std::time::Instant::now();
+        let next = st
+            .timers
+            .iter()
+            .min_by_key(|(_, t)| t.due)
+            .map(|(&id, t)| (id, t.due));
+        let Some((id, due)) = next else {
+            st = cv.wait(st).unwrap_or_else(|e| e.into_inner());
+            continue;
+        };
+        if due > now {
+            st = cv
+                .wait_timeout(st, due - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+            continue;
+        }
+        let Some(t) = st.timers.get_mut(&id) else {
+            continue;
+        };
+        let (callback, user, flags) = (t.callback, t.user, t.flags);
+        if flags & TIME_PERIODIC != 0 {
+            // Rattrapage sans rafale : l'échéance suivante part de maintenant
+            // si le rappel a pris du retard.
+            t.due += t.period;
+            if t.due < now {
+                t.due = now;
+            }
+        } else {
+            st.timers.remove(&id);
+        }
+        st.running = Some(id);
+        drop(st);
+        unsafe {
+            if flags & TIME_CALLBACK_EVENT_SET != 0 {
+                api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
+            } else if flags & TIME_CALLBACK_EVENT_PULSE != 0 {
+                if api!("kernel32", "PulseEvent", fn(usize) -> i32, callback).is_none() {
+                    api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
+                }
+            } else {
+                let f: TimeCallback = std::mem::transmute(callback);
+                f(id, 0, user, 0, 0);
+            }
+        }
+        st = mm_lock();
+        st.running = None;
+        cv.notify_all();
+    }
+}
 
 /// timeGetDevCaps : de 1 ms à 1 000 000 ms, comme Windows.
 unsafe extern "win64" fn time_get_dev_caps(caps: *mut u32, size: u32) -> u32 {
@@ -1843,8 +1934,8 @@ unsafe extern "win64" fn time_get_dev_caps(caps: *mut u32, size: u32) -> u32 {
     0
 }
 
-/// timeSetEvent : un fil Windows par minuteur appelle la fonction (ou
-/// signale l'événement) à l'échéance, une fois ou périodiquement.
+/// timeSetEvent : le fil des minuteurs appelle la fonction (ou signale
+/// l'événement) à l'échéance, une fois ou périodiquement.
 unsafe extern "win64" fn time_set_event(
     delay: u32,
     _resolution: u32,
@@ -1866,74 +1957,45 @@ unsafe extern "win64" fn time_set_event(
         callback
     };
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let worker = std::sync::Arc::new(std::sync::OnceLock::new());
-    let (stop2, worker2) = (stop.clone(), worker.clone());
     let period = std::time::Duration::from_millis(delay as u64);
-    let thread = std::thread::spawn(move || {
-        let _ = worker2.set(std::thread::current().id());
-        crate::process::thread_attach_current();
-        let mut next = std::time::Instant::now() + period;
-        loop {
-            while let Some(left) = next.checked_duration_since(std::time::Instant::now()) {
-                if stop2.load(std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
-                std::thread::sleep(left.min(std::time::Duration::from_millis(5)));
-            }
-            if stop2.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            if flags & TIME_CALLBACK_EVENT_SET != 0 {
-                api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
-            } else if flags & TIME_CALLBACK_EVENT_PULSE != 0 {
-                if api!("kernel32", "PulseEvent", fn(usize) -> i32, callback).is_none() {
-                    api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
-                }
-            } else {
-                let f: TimeCallback = std::mem::transmute(callback);
-                f(id, 0, user, 0, 0);
-            }
-            if flags & TIME_PERIODIC == 0 {
-                return;
-            }
-            // Rattrapage sans rafale : l'échéance suivante part de maintenant
-            // si le rappel a duré plus d'une période.
-            next += period;
-            let now = std::time::Instant::now();
-            if next < now {
-                next = now;
-            }
+    let mut st = mm_lock();
+    if !st.started {
+        if std::thread::Builder::new()
+            .name("winlux-mm-timers".into())
+            .spawn(mm_worker)
+            .is_err()
+        {
+            return 0;
         }
-    });
-    mm_timers()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(
-            id,
-            MmTimer {
-                stop,
-                thread: Some(thread),
-                worker,
-            },
-        );
+        st.started = true;
+    }
+    st.timers.insert(
+        id,
+        MmTimer {
+            due: std::time::Instant::now() + period,
+            period,
+            callback,
+            user,
+            flags,
+        },
+    );
+    mm_state().1.notify_all();
     id
 }
 
 /// timeKillEvent : arrête le minuteur et attend la fin d'un rappel en cours
-/// (sauf depuis ce rappel lui-même).
+/// (sauf depuis le fil des minuteurs lui-même).
 extern "win64" fn time_kill_event(id: u32) -> u32 {
-    let Some(mut t) = mm_timers()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&id)
-    else {
+    let (_, cv) = mm_state();
+    let mut st = mm_lock();
+    let known = st.timers.remove(&id).is_some() || st.running == Some(id);
+    if !known {
         return 11; // MMSYSERR_INVALPARAM
-    };
-    t.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    if t.worker.get() != Some(&std::thread::current().id()) {
-        if let Some(h) = t.thread.take() {
-            let _ = h.join();
+    }
+    cv.notify_all();
+    if st.worker != Some(std::thread::current().id()) {
+        while st.running == Some(id) {
+            st = cv.wait(st).unwrap_or_else(|e| e.into_inner());
         }
     }
     0
@@ -2623,6 +2685,43 @@ mod tests {
         assert_eq!(HITS.load(std::sync::atomic::Ordering::SeqCst), n, "arrêté");
         assert_eq!(time_kill_event(9999), 11);
         assert_eq!(caps, [1, 1_000_000]);
+    }
+
+    /// #3118 : un minuteur à coup unique ne laisse rien derrière lui (ni
+    /// entrée, ni fil), et tous les minuteurs partagent un seul fil.
+    #[test]
+    fn minuteurs_a_coup_unique_ne_laissent_rien_3118() {
+        static HITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        unsafe extern "win64" fn once(_id: u32, _m: u32, _u: usize, _a: usize, _b: usize) {
+            HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let fils = || std::fs::read_dir("/proc/self/task").map_or(0, |d| d.count());
+        let cb: TimeCallback = once;
+        // Premier minuteur : démarre le fil partagé.
+        unsafe { assert_ne!(time_set_event(1, 1, cb as usize, 0, 0), 0) };
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let avant = fils();
+        let mut ids = Vec::new();
+        for _ in 0..200 {
+            ids.push(unsafe { time_set_event(1, 1, cb as usize, 0, 0) });
+            assert!(fils() <= avant + 2, "un fil par minuteur");
+        }
+        let t0 = std::time::Instant::now();
+        while HITS.load(std::sync::atomic::Ordering::SeqCst) < 201 {
+            assert!(t0.elapsed().as_secs() < 5, "rappels manquants");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let reste: Vec<u32> = ids
+            .iter()
+            .copied()
+            .filter(|id| mm_lock().timers.contains_key(id))
+            .collect();
+        assert!(
+            reste.is_empty(),
+            "minuteurs à coup unique gardés : {reste:?}"
+        );
+        // Un minuteur déjà échu n'existe plus.
+        assert_eq!(time_kill_event(ids[0]), 11);
     }
 
     #[test]
