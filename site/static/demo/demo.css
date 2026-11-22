@@ -1,0 +1,338 @@
+/* Démo de Winlux (#2926). Couleurs reprises du système :
+   menu Démarrer (scripts/winlux-start-menu.py, palettes « dark » / « light »),
+   barre des tâches (#1c1a26 / #f3f0f9), dispositions d'ancrage
+   (scripts/winlux-snap.py), écran de démarrage Prisme (runtime/src/bootsplash.rs). */
+
+:root {
+  --bg: #242238; --fg: #f7f5ff; --border: #4f4570; --field: #171624; --dim: #bdb6da;
+  --hover: #433b60; --footer: #1d1a2d; --accent: #b69cff; --selected: #7c4dff; --on-selected: #fff;
+  --side: #1d1a2d; --card: #2b2843; --card-hover: #3b3458; --chip: #352f52;
+  --barre: #1c1a26; --barre-fg: #f7f5ff; --fenetre: #201e2e; --titre: #1d1a2d; --contenu: #262338;
+  --ombre: 0 12px 40px rgba(0, 0, 0, .45);
+  --police: system-ui, -apple-system, "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", sans-serif;
+  --fond: url("aurore.jpg");
+  color-scheme: dark;
+}
+:root[data-theme="clair"] {
+  --bg: #f6f4fc; --fg: #1f1b2e; --border: #d3cbee; --field: #fff; --dim: #5a5374;
+  --hover: #e4ddf7; --footer: #ebe7f6; --accent: #6a3df0; --selected: #6a3df0; --on-selected: #fff;
+  --side: #ece8f8; --card: #fff; --card-hover: #f1ecff; --chip: #e6dffd;
+  --barre: #f3f0f9; --barre-fg: #1f1b2e; --fenetre: #fbfaff; --titre: #ece8f8; --contenu: #fff;
+  --ombre: 0 12px 40px rgba(40, 20, 90, .25);
+  --fond: url("aurore-clair.jpg");
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column; background: #0b0a12; color: #f7f5ff;
+  font: 14px/1.35 var(--police); overflow: hidden; -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+img { display: block; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Bandeau : dit au visiteur que c'est une démonstration ──────────────── */
+.bandeau {
+  display: flex; align-items: center; gap: 14px; padding: 6px 12px; min-height: 40px;
+  background: #15131f; border-bottom: 1px solid #2f2a45; color: #e9e5fb; font-size: 13px; z-index: 5;
+}
+.bandeau a { color: inherit; text-decoration: none; }
+.retour { display: flex; align-items: center; gap: 7px; font-weight: 600; white-space: nowrap; }
+.retour:hover span { text-decoration: underline; }
+.avis { margin: 0; flex: 1; min-width: 0; color: #c9c2e6; }
+.avis strong { color: #fff; background: #6a3df0; border-radius: 4px; padding: 1px 6px; margin-right: 6px; font-size: 12px; }
+.langues { display: flex; gap: 2px; }
+.langues a { padding: 3px 7px; border-radius: 4px; font-size: 12px; color: #c9c2e6; }
+.langues a:hover { background: #2a2540; }
+.langues a[aria-current] { background: #2f2850; color: #fff; font-weight: 600; }
+.mention { background: #15131f; padding: 3px 12px; }
+.mention p { margin: 0; color: #8f88ad; font-size: 11px; }
+.sans-js { padding: 40px; text-align: center; }
+
+/* ── Écran ──────────────────────────────────────────────────────────────── */
+.ecran {
+  position: relative; flex: 1; overflow: hidden; outline: none; user-select: none; -webkit-user-select: none;
+  background: #0d0b1c var(--fond) center / cover no-repeat; color: var(--fg);
+}
+
+/* Écran de démarrage Prisme : noir, halo violet elliptique derrière le logo,
+   cercle de cinq points qui accélèrent puis ralentissent (cycle 2,2 s). */
+.demarrage {
+  position: absolute; inset: 0; z-index: 100; background: #000; cursor: pointer;
+  transition: opacity .35s ease;
+}
+.demarrage .halo {
+  position: absolute; left: 50%; top: calc(50% - var(--logo) / 2 - 30px);
+  width: calc(var(--logo) * 7.5); height: calc(var(--logo) * 5.625); transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, #2e1c70, rgba(46, 28, 112, .55) 35%, rgba(46, 28, 112, .15) 70%, transparent);
+}
+.demarrage { --logo: clamp(72px, 11vh, 160px); }
+.demarrage .logo { position: absolute; left: 50%; top: calc(50% - var(--logo) - 30px); width: var(--logo); height: var(--logo); transform: translateX(-50%); }
+.demarrage .points { position: absolute; left: 50%; top: calc(50% + 70px); width: 0; height: 0; }
+.demarrage .points i {
+  position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: #f2f2f2;
+  transform-origin: 3px 3px; animation: tour 2.2s infinite;
+}
+.demarrage .points i:nth-child(2) { animation-delay: .11s; }
+.demarrage .points i:nth-child(3) { animation-delay: .22s; }
+.demarrage .points i:nth-child(4) { animation-delay: .33s; }
+.demarrage .points i:nth-child(5) { animation-delay: .44s; }
+@keyframes tour {
+  0% { transform: rotate(270deg) translateX(22px); opacity: 1; animation-timing-function: cubic-bezier(.5, 0, .5, 1); }
+  88% { transform: rotate(990deg) translateX(22px); opacity: 1; }
+  88.1%, 100% { transform: rotate(990deg) translateX(22px); opacity: 0; }
+}
+.demarrage .passer { position: absolute; bottom: 18px; width: 100%; text-align: center; color: #6c6585; font-size: 12px; }
+.demarrage.fini { opacity: 0; pointer-events: none; }
+.eteint { position: absolute; inset: 0; z-index: 100; background: #000; display: grid; place-items: center; }
+.eteint button { color: #cfc8ef; border: 1px solid #3b3458; border-radius: 6px; padding: 10px 18px; background: #15131f; }
+.eteint button:hover { background: #2a2540; }
+.verrou {
+  position: absolute; inset: 0; z-index: 90; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 9vh;
+  background: rgba(10, 8, 24, .35) var(--fond) center / cover; color: #fff; cursor: pointer; text-shadow: 0 2px 12px rgba(0, 0, 0, .5);
+}
+.verrou .heure { font-size: clamp(56px, 12vh, 104px); font-weight: 300; line-height: 1; }
+.verrou .date { font-size: 20px; margin-top: 8px; }
+.verrou .indice { position: absolute; bottom: 70px; font-size: 13px; opacity: .85; }
+
+/* ── Icônes du bureau ───────────────────────────────────────────────────── */
+.bureau { position: absolute; inset: 0 0 48px 0; padding: 8px; display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; gap: 4px; }
+.icone-bureau {
+  width: 84px; padding: 6px 4px; border-radius: 4px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  color: #fff; font-size: 12px; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); border: 1px solid transparent;
+}
+.icone-bureau img { width: 40px; height: 40px; }
+.icone-bureau:hover { background: rgba(255, 255, 255, .12); }
+.icone-bureau:focus-visible, .icone-bureau.choisie { background: rgba(124, 77, 255, .35); border-color: rgba(182, 156, 255, .6); outline: none; }
+
+/* ── Barre des tâches ───────────────────────────────────────────────────── */
+.barre {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 48px; z-index: 60; display: flex; align-items: center;
+  background: var(--barre); color: var(--barre-fg); border-top: 1px solid rgba(255, 255, 255, .06);
+}
+:root[data-theme="clair"] .barre { border-top-color: #ddd6f1; }
+.barre .centre { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; height: 100%; align-items: center; }
+.bouton-barre {
+  position: relative; width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center;
+}
+.bouton-barre:hover, .bouton-barre.ouvert-menu { background: rgba(255, 255, 255, .09); }
+:root[data-theme="clair"] .bouton-barre:hover, :root[data-theme="clair"] .bouton-barre.ouvert-menu { background: rgba(60, 30, 140, .08); }
+.bouton-barre img, .bouton-barre svg, .bouton-barre .ico-svg { width: 24px; height: 24px; }
+.bouton-barre::after {
+  content: ""; position: absolute; bottom: 2px; left: 50%; height: 3px; width: 0; border-radius: 2px;
+  background: var(--dim); transform: translateX(-50%); transition: width .15s;
+}
+.bouton-barre.lance::after { width: 6px; }
+.bouton-barre.actif::after { width: 16px; background: var(--accent); }
+.bouton-barre.actif { background: rgba(255, 255, 255, .06); }
+.barre .droite { margin-left: auto; display: flex; align-items: center; gap: 2px; padding-right: 8px; height: 100%; font-size: 12px; }
+.zone { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-radius: 6px; }
+.zone:hover { background: rgba(255, 255, 255, .09); }
+.zone svg { width: 16px; height: 16px; }
+.horloge { text-align: right; line-height: 1.25; }
+
+/* ── Menu Démarrer : deux volets, le menu et « Pour vous » ──────────────── */
+.menu-demarrer {
+  position: absolute; z-index: 70; bottom: 56px; left: 50%; transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
+  display: flex; width: min(900px, calc(100% - 16px)); height: min(640px, calc(100% - 72px));
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--ombre); overflow: hidden;
+  transition: opacity .12s ease, transform .16s cubic-bezier(.2, .8, .2, 1);
+}
+.menu-demarrer.ouvert { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.menu-demarrer .principal { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.menu-demarrer .recherche { margin: 22px 24px 8px; position: relative; }
+.menu-demarrer .recherche svg { position: absolute; left: 13px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--dim); }
+.menu-demarrer input {
+  width: 100%; border-radius: 18px; background: var(--field); color: var(--fg); padding: 9px 14px 9px 38px; border: 1px solid var(--border); font: inherit; outline: none;
+}
+.menu-demarrer input:focus { border-color: var(--accent); }
+.entete { display: flex; align-items: center; justify-content: space-between; margin: 10px 28px 6px; }
+.entete h2 { font-size: 14px; margin: 0; font-weight: 700; }
+.entete button { font-size: 12px; padding: 5px 10px; border-radius: 6px; background: var(--chip); }
+.entete button:hover { background: var(--hover); }
+.liste { flex: 1; overflow: auto; padding: 0 16px 8px; }
+.grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 2px; }
+.appli {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px; border-radius: 6px; font-size: 12px; text-align: center;
+}
+.appli:hover, .ligne:hover, .appli:focus-visible, .ligne:focus-visible, .ligne.premier { background: var(--hover); outline: none; }
+.appli .ico, .ligne .ico { width: 32px; height: 32px; display: grid; place-items: center; flex: none; }
+.appli .ico img, .appli .ico svg, .ligne .ico img, .ligne .ico svg { width: 32px; height: 32px; }
+.appli span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ligne { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 6px; width: 100%; text-align: left; }
+.ligne .txt { min-width: 0; display: flex; flex-direction: column; }
+.ligne .txt b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dim { color: var(--dim); font-size: 12px; }
+.lettre { font-size: 12px; font-weight: 700; color: var(--accent); margin: 10px 10px 2px; }
+.vide { padding: 24px 12px; color: var(--dim); }
+.pied { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--footer); border-top: 1px solid var(--border); }
+.compte { display: flex; align-items: center; gap: 10px; padding: 4px 8px; border-radius: 6px; }
+.avatar { width: 34px; height: 34px; border-radius: 17px; background: var(--selected); color: var(--on-selected); display: grid; place-items: center; font-weight: 700; }
+.alim { width: 36px; height: 36px; border-radius: 6px; display: grid; place-items: center; }
+.alim:hover, .compte:hover { background: var(--hover); }
+.alim svg { width: 20px; height: 20px; }
+.menu-alim {
+  position: absolute; z-index: 75; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px; box-shadow: var(--ombre); min-width: 190px;
+}
+.menu-alim button { display: block; width: 100%; text-align: left; padding: 8px 18px 8px 12px; border-radius: 4px; }
+.menu-alim button:hover, .menu-alim button:focus-visible { background: var(--hover); outline: none; }
+.pour-vous { width: 340px; flex: none; background: var(--side); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; }
+.pour-vous .haut { display: flex; align-items: center; gap: 6px; margin: 22px 14px 6px 18px; }
+.pour-vous .haut h2 { flex: 1; font-size: 14px; margin: 0; }
+.etincelle { color: var(--accent); }
+.pour-vous .haut button { font-size: 12px; padding: 4px 8px; border-radius: 6px; }
+.pour-vous .haut button:hover { background: var(--hover); }
+.pour-vous .corps { padding: 0 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.section { font-size: 12px; font-weight: 700; margin: 10px 2px 0; color: var(--fg); }
+.tuiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.carte { background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+.tuiles .appli { min-height: 76px; }
+.tuiles .appli:hover { background: var(--card-hover); }
+.pourquoi { text-align: center; }
+.accent { color: var(--accent); font-size: 12px; font-weight: 600; }
+.vie-privee { display: flex; gap: 8px; margin: 12px 16px 16px 18px; }
+.vie-privee svg { flex: none; width: 14px; height: 14px; color: var(--dim); margin-top: 2px; }
+
+/* ── Fenêtres ───────────────────────────────────────────────────────────── */
+.fenetre {
+  position: absolute; display: flex; flex-direction: column; min-width: 280px; min-height: 180px;
+  background: var(--fenetre); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--ombre); overflow: hidden;
+}
+.fenetre.anime { transition: left .16s ease, top .16s ease, width .16s ease, height .16s ease, border-radius .16s; }
+.fenetre.agrandie, .fenetre.ancree { border-radius: 0; }
+.fenetre.ancree { box-shadow: 0 0 0 1px rgba(0, 0, 0, .25); }
+.fenetre:not(.active) .titre { color: var(--dim); }
+.fenetre.reduite { display: none; }
+.titre { display: flex; align-items: center; height: 36px; background: var(--titre); flex: none; touch-action: none; cursor: default; }
+.titre .ico { width: 16px; height: 16px; margin: 0 8px 0 12px; flex: none; }
+.titre .ico img { width: 16px; height: 16px; }
+.titre .ico svg { width: 16px; height: 16px; }
+.titre .nom { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.titre button { width: 46px; height: 36px; display: grid; place-items: center; }
+.titre button svg { width: 10px; height: 10px; }
+.titre button:hover { background: var(--hover); }
+.titre button.fermer:hover { background: #c42b1c; color: #fff; }
+.contenu { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--contenu); }
+.poignee { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; touch-action: none; }
+.fenetre.agrandie .poignee, .fenetre.ancree .poignee { display: none; }
+
+/* Aperçu de l'ancrage et grille des dispositions. */
+.apercu {
+  position: absolute; z-index: 55; pointer-events: none; border-radius: 8px; margin: 6px;
+  background: rgba(124, 77, 255, .22); border: 2px solid rgba(182, 156, 255, .8); transition: all .12s ease;
+}
+.dispositions {
+  position: absolute; z-index: 80; display: flex; gap: 10px; padding: 12px; border-radius: 8px;
+  background: #202430; border: 1px solid #3c4458; box-shadow: var(--ombre); color: #ecedf5;
+}
+.dispositions.en-haut { left: 50%; top: 8px; transform: translateX(-50%); }
+.disposition { position: relative; width: 84px; height: 54px; background: #2a3040; border-radius: 6px; }
+.case {
+  position: absolute; background: #3a4254; border: 1px solid #56607a; border-radius: 4px;
+}
+.case:hover, .case.vise { background: #6a3df0; border-color: #b8b0ff; }
+.assistant {
+  position: absolute; z-index: 58; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 12px; padding: 16px;
+  background: rgba(24, 27, 38, .94); border: 1px solid #56607a; border-radius: 8px; color: #ecedf5; margin: 6px;
+}
+.assistant p { width: 100%; text-align: center; margin: 0 0 4px; color: #adb6c9; font-size: 12px; }
+.assistant button {
+  width: 168px; padding: 10px; border-radius: 6px; background: #2a3040; border: 1px solid #48536b; color: #ecedf5;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.assistant button:hover, .assistant button:focus-visible { background: #343b4e; border-color: #b69cff; outline: none; }
+.assistant .mini { width: 100%; height: 64px; border-radius: 4px; background: #1f2330; display: grid; place-items: center; }
+.assistant .mini img, .assistant .mini svg { width: 32px; height: 32px; }
+
+/* ── Explorateur ────────────────────────────────────────────────────────── */
+.barre-outils { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--titre); border-bottom: 1px solid var(--border); }
+.barre-outils button { width: 30px; height: 30px; border-radius: 6px; display: grid; place-items: center; }
+.barre-outils button:hover:not(:disabled) { background: var(--hover); }
+.barre-outils button:disabled { opacity: .35; cursor: default; }
+.barre-outils svg { width: 16px; height: 16px; }
+.adresse {
+  flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 6px;
+  background: var(--field); border: 1px solid var(--border); font-size: 12px; white-space: nowrap; overflow: hidden;
+}
+.adresse img { width: 16px; height: 16px; }
+.explo { flex: 1; min-height: 0; display: flex; }
+.volet { width: 190px; flex: none; padding: 8px 6px; border-right: 1px solid var(--border); overflow: auto; }
+.volet button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 4px; font-size: 13px; text-align: left; }
+.volet button img { width: 20px; height: 20px; }
+.volet button:hover { background: var(--hover); }
+.volet button.ici { background: var(--chip); box-shadow: inset 3px 0 0 var(--accent); }
+.volet hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
+.vue { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px; }
+.vue h3 { font-size: 13px; margin: 6px 0 8px; }
+.mosaique { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 4px; margin-bottom: 10px; }
+.element { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px; border-radius: 6px; font-size: 12px; text-align: center; border: 1px solid transparent; }
+.element img { width: 48px; height: 48px; }
+.element:hover { background: var(--hover); }
+.element:focus-visible, .element.choisi { background: var(--chip); border-color: var(--accent); outline: none; }
+.element span { max-width: 100%; overflow-wrap: anywhere; }
+.lecteurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.lecteur { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); text-align: left; }
+.lecteur:hover { background: var(--card-hover); }
+.lecteur img { width: 40px; height: 40px; }
+.lecteur .jauge { height: 5px; border-radius: 3px; background: var(--chip); margin: 5px 0 3px; overflow: hidden; }
+.lecteur .jauge i { display: block; height: 100%; background: var(--selected); }
+.etat { padding: 4px 12px; font-size: 12px; color: var(--dim); border-top: 1px solid var(--border); }
+
+/* ── Bloc-notes, Terminal, Paramètres, programme .exe ───────────────────── */
+.menus { display: flex; gap: 2px; padding: 2px 6px; background: var(--titre); font-size: 13px; }
+.menus button { padding: 4px 10px; border-radius: 4px; }
+.menus button:hover { background: var(--hover); }
+.texte {
+  flex: 1; width: 100%; resize: none; border: 0; outline: none; padding: 10px 14px; background: var(--contenu); color: var(--fg);
+  font: 14px/1.5 ui-monospace, "DejaVu Sans Mono", "Noto Sans Mono", monospace; user-select: text;
+}
+.terminal {
+  flex: 1; overflow: auto; padding: 10px 12px; background: #0f0d18; color: #e6e1fa; user-select: text;
+  font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", "Noto Sans Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.terminal .invite { color: #b69cff; }
+.terminal .ok { color: #7de8ff; }
+.terminal input { background: none; border: 0; outline: none; color: inherit; font: inherit; width: 60%; padding: 0; }
+.parametres { flex: 1; display: flex; min-height: 0; }
+.parametres nav { width: 200px; flex: none; padding: 12px 8px; border-right: 1px solid var(--border); }
+.parametres nav button { display: block; width: 100%; text-align: left; padding: 8px 10px; border-radius: 6px; }
+.parametres nav button.ici { background: var(--chip); box-shadow: inset 3px 0 0 var(--accent); }
+.parametres .page { flex: 1; overflow: auto; padding: 18px 22px; }
+.parametres h3 { margin: 0 0 14px; font-size: 20px; font-weight: 600; }
+.reglage { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); margin-bottom: 8px; }
+.choix { display: flex; gap: 6px; flex-wrap: wrap; }
+.choix button { padding: 6px 12px; border-radius: 6px; background: var(--chip); }
+.choix button[aria-pressed="true"] { background: var(--selected); color: var(--on-selected); }
+.fonds { display: flex; gap: 8px; }
+.fonds button { width: 92px; height: 52px; border-radius: 6px; background-size: cover; background-position: center; border: 2px solid transparent; }
+.fonds button[aria-pressed="true"] { border-color: var(--accent); }
+.pastilles { display: flex; gap: 8px; }
+.pastilles button { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; }
+.pastilles button[aria-pressed="true"] { border-color: var(--fg); }
+.programme { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 18px; text-align: center; }
+.programme .grand { font-size: 18px; font-weight: 600; }
+.programme button { padding: 7px 22px; border-radius: 6px; background: var(--selected); color: var(--on-selected); }
+.apropos { flex: 1; overflow: auto; padding: 18px 22px; }
+.apropos img { margin-bottom: 10px; }
+.apropos p { margin: 0 0 10px; }
+.apropos a { color: var(--accent); }
+
+/* ── Petit écran : fenêtres agrandies, menu plein écran, pas d'ancrage ─── */
+@media (max-width: 720px) {
+  .avis span { display: none; }
+  .bandeau { gap: 8px; }
+  .pour-vous { display: none; }
+  .menu-demarrer { width: calc(100% - 8px); height: calc(100% - 64px); }
+  .volet { display: none; }
+  .parametres nav { width: 120px; }
+  .barre .droite .zone:not(.horloge) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fenetre.anime, .menu-demarrer, .apercu, .demarrage { transition: none; }
+}
+.ico-svg { display: grid; place-items: center; width: 100%; height: 100%; }
+.ico-svg svg { width: 100%; height: 100%; }

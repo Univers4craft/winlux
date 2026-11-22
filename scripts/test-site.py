@@ -238,6 +238,7 @@ def check_build(out: Path) -> set[str]:
             if value.startswith("mailto:"):
                 continue
             target, anchor = urldefrag(value)
+            target = target.split("?", 1)[0]  # ?lang= de la démo (#2926)
             dest = path if not target else (path.parent / unquote(target)).resolve()
             if not dest.is_file():
                 fail(f"{rel} : lien cassé {value}")
