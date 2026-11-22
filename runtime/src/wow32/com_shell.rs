@@ -102,11 +102,73 @@ pub(super) static ISERVICEPROVIDER: Iface = Iface {
     ],
 };
 
+/// ITaskbarList {56FDF342-FD6D-11D0-958A-006097C9A090} et ses dérivées
+/// 2, 3 et 4 (shobjidl_core.h, #2973) : bouton d'un programme dans la barre
+/// des tâches (`dlls/taskbarlist_com.rs`, une table de 22 entrées pour les
+/// quatre). HWND, HICON, HIMAGELIST, TBPFLAG, STPFLAG et BOOL sont `I`.
+/// SetProgressValue prend deux ULONGLONG : deux cases de 8 octets (`Q`).
+/// LPTHUMBBUTTON (HICON de la taille d'un pointeur), LPCWSTR et RECT*
+/// passent tels quels : le runtime les accepte sans les lire.
+pub(super) static ITASKBARLIST: Iface = Iface {
+    name: "ITaskbarList",
+    iid: crate::dlls::taskbarlist_com::IID_ITASKBAR_LIST,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[]),  // HrInit
+        Some(&[I]), // AddTab(hwnd)
+        Some(&[I]), // DeleteTab(hwnd)
+        Some(&[I]), // ActivateTab(hwnd)
+        Some(&[I]), // SetActiveAlt(hwnd)
+    ],
+};
+
+pub(super) static ITASKBARLIST2: Iface = Iface {
+    name: "ITaskbarList2",
+    iid: crate::dlls::taskbarlist_com::IID_ITASKBAR_LIST2,
+    parent: Some(&ITASKBARLIST),
+    methods: &[
+        Some(&[I, I]), // MarkFullscreenWindow(hwnd, fFullscreen)
+    ],
+};
+
+pub(super) static ITASKBARLIST3: Iface = Iface {
+    name: "ITaskbarList3",
+    iid: crate::dlls::taskbarlist_com::IID_ITASKBAR_LIST3,
+    parent: Some(&ITASKBARLIST2),
+    methods: &[
+        Some(&[I, Q, Q]), // SetProgressValue(hwnd, ullCompleted, ullTotal)
+        Some(&[I, I]),    // SetProgressState(hwnd, tbpFlags)
+        Some(&[I, I]),    // RegisterTab(hwndTab, hwndMDI)
+        Some(&[I]),       // UnregisterTab(hwndTab)
+        Some(&[I, I]),    // SetTabOrder(hwndTab, hwndInsertBefore)
+        Some(&[I, I, I]), // SetTabActive(hwndTab, hwndMDI, dwReserved)
+        Some(&[I, I, I]), // ThumbBarAddButtons(hwnd, cButtons, pButton)
+        Some(&[I, I, I]), // ThumbBarUpdateButtons(hwnd, cButtons, pButton)
+        Some(&[I, I]),    // ThumbBarSetImageList(hwnd, himl)
+        Some(&[I, I, I]), // SetOverlayIcon(hwnd, hIcon, pszDescription)
+        Some(&[I, I]),    // SetThumbnailTooltip(hwnd, pszTip)
+        Some(&[I, I]),    // SetThumbnailClip(hwnd, prcClip)
+    ],
+};
+
+pub(super) static ITASKBARLIST4: Iface = Iface {
+    name: "ITaskbarList4",
+    iid: crate::dlls::taskbarlist_com::IID_ITASKBAR_LIST4,
+    parent: Some(&ITASKBARLIST3),
+    methods: &[
+        Some(&[I, I]), // SetTabProperties(hwndTab, stpFlags)
+    ],
+};
+
 pub(super) static ALL: &[&Iface] = &[
     &ISHELLITEM,
     &ISHELLITEMARRAY,
     &IQUERYASSOCIATIONS,
     &ISERVICEPROVIDER,
+    &ITASKBARLIST,
+    &ITASKBARLIST2,
+    &ITASKBARLIST3,
+    &ITASKBARLIST4,
 ];
 
 #[cfg(test)]
@@ -190,5 +252,64 @@ mod tests {
         // AssocCreate reçoit son CLSID par valeur : quatre cases x86.
         let (k, _) = api_kinds("shlwapi", "AssocCreate").unwrap();
         assert!(matches!(k[0], GuidIn));
+    }
+
+    /// #2973 : la liste des boutons de la barre des tâches, décrite en
+    /// chaîne comme la table du runtime (22 entrées), et SetProgressValue
+    /// appelé de bout en bout depuis une pile x86 : les deux ULONGLONG
+    /// arrivent entiers (moitiés hautes comprises).
+    #[test]
+    fn liste_de_la_barre_des_taches_2973() {
+        use super::super::com::{by_iid, from32};
+        use crate::dlls::taskbarlist_com as tb;
+        assert_eq!(ITASKBARLIST.count(), 8);
+        assert_eq!(ITASKBARLIST2.count(), 9);
+        assert_eq!(ITASKBARLIST3.count(), 21);
+        assert_eq!(ITASKBARLIST4.count(), 22);
+        for f in [
+            &ITASKBARLIST,
+            &ITASKBARLIST2,
+            &ITASKBARLIST3,
+            &ITASKBARLIST4,
+        ] {
+            assert!(
+                by_iid(&f.iid).is_some_and(|g| std::ptr::eq(g, f)),
+                "{}",
+                f.name
+            );
+            assert!((3..f.count()).all(|i| f.method(i).is_some()), "{}", f.name);
+        }
+        assert_eq!(slots(ITASKBARLIST3.method(9).unwrap()), 5);
+        unsafe {
+            let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+            let clsid =
+                &*(&tb::CLSID_TASKBAR_LIST as *const Guid as *const crate::dlls::ole32::Guid);
+            let iid = &*(&tb::IID_ITASKBAR_LIST3 as *const Guid as *const crate::dlls::ole32::Guid);
+            assert_eq!(tb::create_builtin(clsid, iid, &mut obj), Some(0));
+            let vt = *(obj as *const *const usize);
+            let pile = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_32BIT,
+                -1,
+                0,
+            );
+            assert_ne!(pile, libc::MAP_FAILED);
+            let a = pile as *mut u32;
+            // hwnd, ullCompleted = 1 << 32, ullTotal = 4 << 32.
+            for (i, v) in [0x2973_0001u32, 0, 1, 0, 4].iter().enumerate() {
+                *a.add(i) = *v;
+            }
+            let r = from32(
+                *vt.add(9),
+                Some(obj as u64),
+                a as usize as u32,
+                ITASKBARLIST3.method(9).unwrap(),
+            );
+            assert_eq!(r, 0);
+            assert_eq!(tb::progress(0x2973_0001).map(|p| p.permille), Some(250));
+            libc::munmap(pile, 4096);
+        }
     }
 }
